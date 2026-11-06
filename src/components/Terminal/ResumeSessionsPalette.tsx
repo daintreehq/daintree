@@ -16,6 +16,7 @@ import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 import { HighlightedText, findMatchIndices } from "@/components/ui/HighlightedText";
 import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
+import { CalendarClock } from "@/components/icons";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useResumeSessionsPalette } from "@/hooks/useResumeSessionsPalette";
 import { useResumeAgentSession } from "@/hooks/useResumeAgentSession";
@@ -71,7 +72,14 @@ function groupBy(
 function closedAtForCollisions(items: readonly ResumeSessionItem[]): Map<string, string> {
   const closedAt = new Map<string, string>();
   const lookalikes = groupBy(items, (item) =>
-    [item.session.agentId, item.title, item.location, item.modelName, item.timeAgo].join("\u0000")
+    [
+      item.session.agentId,
+      item.title,
+      item.location,
+      item.schedule?.label,
+      item.modelName,
+      item.timeAgo,
+    ].join("\u0000")
   ).filter((group) => group.length > 1);
   for (const group of lookalikes) {
     for (const sameMinute of groupBy(group, (item) =>
@@ -107,8 +115,12 @@ function ResumeSessionRow({
   itemRef,
 }: ResumeSessionRowProps) {
   // Location first: it is the stronger identifier, and the one that must
-  // survive when a long branch name pushes the line into its ellipsis.
-  const meta = [item.location, item.modelName, closedAt].filter(Boolean).join(" · ");
+  // survive when a long branch name pushes the line into its ellipsis. A
+  // scheduled run's schedule follows it, behind the schedule mark.
+  const scheduleLabel = item.schedule?.label;
+  const lead = item.location ?? "";
+  const rest = [item.modelName, closedAt].filter(Boolean).join(" · ");
+  const meta = [item.location, scheduleLabel, item.modelName, closedAt].filter(Boolean).join(" · ");
   const optionId = `resume-session-option-${item.id}`;
   return (
     <button
@@ -182,7 +194,22 @@ function ResumeSessionRow({
         {meta && (
           <TruncatedTooltip content={meta} focusable={false}>
             <div id={`${optionId}-meta`} className="text-xs text-text-secondary truncate">
-              {meta}
+              {scheduleLabel === undefined ? (
+                meta
+              ) : (
+                <>
+                  {lead && `${lead} · `}
+                  <CalendarClock
+                    className="mr-1 inline-block h-3 w-3 align-[-0.125em]"
+                    aria-hidden="true"
+                  />
+                  {item.schedule?.name != null && (
+                    <span className="sr-only">Scheduled run of </span>
+                  )}
+                  {scheduleLabel}
+                  {rest && ` · ${rest}`}
+                </>
+              )}
             </div>
           </TruncatedTooltip>
         )}

@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { setPtyClientRef } from "../../../window/serviceRefs.js";
 import type { PtyClient } from "../../PtyClient.js";
-import { mkdtemp, mkdir, rm, writeFile } from "fs/promises";
+import { chmod, mkdtemp, mkdir, rm, utimes, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 
@@ -15,37 +15,41 @@ afterEach(() => {
   setPtyClientRef(null);
 });
 
-const { deriveProjectSlug, __resetClaudeSubagentProbeCache } =
+const { deriveProjectSlug, __resetClaudeSubagentCaches } =
   await import("../ClaudeSubagentReader.js");
 const { listClaudeSubagents, readClaudeSubagentTranscript } =
   await import("../ClaudeSubagentService.js");
+const { SUBAGENT_LIST_LIMIT } = await import("../../../../shared/types/ipc/agentSubagents.js");
 
 const SESSION = "1ad2578c-b710-4302-90c1-b222c4c29aa2";
 const CWD = "/Users/x/Projects/demo";
 
+/** The store the host says the pane launched against. */
 let root: string;
-let previousConfigDir: string | undefined;
 
 beforeEach(async () => {
-  __resetClaudeSubagentProbeCache();
+  __resetClaudeSubagentCaches();
   getTerminalAsync.mockReset();
   root = await mkdtemp(path.join(tmpdir(), "claude-subagent-service-"));
-  previousConfigDir = process.env.CLAUDE_CONFIG_DIR;
-  process.env.CLAUDE_CONFIG_DIR = root;
 });
 
 afterEach(async () => {
-  if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
-  else process.env.CLAUDE_CONFIG_DIR = previousConfigDir;
   await rm(root, { recursive: true, force: true });
 });
 
 function claudeTerminal(overrides: Record<string, unknown> = {}) {
-  return { id: "t1", launchAgentId: "claude", cwd: CWD, agentSessionId: SESSION, ...overrides };
+  return {
+    id: "t1",
+    launchAgentId: "claude",
+    cwd: CWD,
+    agentSessionId: SESSION,
+    claudeConfigDir: root,
+    ...overrides,
+  };
 }
 
-async function seedChild(id: string, lines: string[]): Promise<string> {
-  const dir = path.join(root, "projects", deriveProjectSlug(CWD), SESSION, "subagents");
+async function seedChild(id: string, lines: string[], store = root): Promise<string> {
+  const dir = path.join(store, "projects", deriveProjectSlug(CWD), SESSION, "subagents");
   await mkdir(dir, { recursive: true });
   await writeFile(path.join(dir, `agent-${id}.jsonl`), lines.join("\n") + "\n", "utf8");
   return dir;
@@ -155,6 +159,21 @@ describe("listClaudeSubagents", () => {
     });
   });
 
+  it("lists a first child on the poll after an empty answer", async () => {
+    getTerminalAsync.mockResolvedValue(claudeTerminal());
+    // Running and recorded, with nothing delegated yet.
+    const projectDir = path.join(root, "projects", deriveProjectSlug(CWD));
+    await mkdir(projectDir, { recursive: true });
+    await writeFile(path.join(projectDir, `${SESSION}.jsonl`), TASK + "\n", "utf8");
+
+    const before = await listClaudeSubagents("t1");
+    expect(before.status === "ok" && before.subagents).toEqual([]);
+
+    await seedChild("aaa1", [TASK]);
+    const after = await listClaudeSubagents("t1");
+    expect(after.status === "ok" && after.subagents.map((child) => child.id)).toEqual(["aaa1"]);
+  });
+
   it("keys the parent off the assigned session id rather than guessing from the folder", async () => {
     getTerminalAsync.mockResolvedValue(claudeTerminal());
     await seedChild("aaa1", [TASK, REPLY]);
@@ -165,6 +184,107 @@ describe("listClaudeSubagents", () => {
 
     const result = await listClaudeSubagents("t1");
     expect(result.status === "ok" && result.subagents.map((child) => child.id)).toEqual(["aaa1"]);
+  });
+});
+
+describe("the store a pane launched against (#16269)", () => {
+  let accountDir: string;
+  let previousConfigDir: string | undefined;
+
+  beforeEach(async () => {
+    accountDir = await mkdtemp(path.join(tmpdir(), "claude-subagent-account-"));
+    // Daintree's own environment names the other store, which the old lookup
+    // read for every pane. Nothing here may come from it.
+    previousConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = root;
+  });
+
+  afterEach(async () => {
+    if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previousConfigDir;
+    await rm(accountDir, { recursive: true, force: true });
+  });
+
+  it("lists an account pane's children from the account's store, not Daintree's own", async () => {
+    getTerminalAsync.mockResolvedValue(claudeTerminal({ claudeConfigDir: accountDir }));
+    await seedChild("acc1", [TASK, REPLY], accountDir);
+    // Same session id in Daintree's store: nothing there is this pane's.
+    await seedChild("def1", [TASK, REPLY], root);
+
+    const result = await listClaudeSubagents("t1");
+    expect(result.status === "ok" && result.subagents.map((child) => child.id)).toEqual(["acc1"]);
+  });
+
+  it("reads an account pane's transcript from the account's store", async () => {
+    getTerminalAsync.mockResolvedValue(claudeTerminal({ claudeConfigDir: accountDir }));
+    await seedChild("acc1", [TASK, REPLY], accountDir);
+    await seedChild("def1", [TASK, REPLY], root);
+
+    await expect(readClaudeSubagentTranscript("t1", "acc1")).resolves.toMatchObject({
+      status: "ok",
+      subagentId: "acc1",
+      messages: [
+        { role: "task", text: "Run the suite" },
+        { role: "reply", text: "all green" },
+      ],
+    });
+    await expect(readClaudeSubagentTranscript("t1", "def1")).resolves.toEqual({
+      status: "unavailable",
+      reason: "subagent-not-found",
+    });
+  });
+
+  it("never falls back to Daintree's store when the account's holds nothing for the session", async () => {
+    getTerminalAsync.mockResolvedValue(claudeTerminal({ claudeConfigDir: accountDir }));
+    await seedChild("def1", [TASK, REPLY], root);
+
+    await expect(listClaudeSubagents("t1")).resolves.toEqual({
+      status: "ok",
+      provider: "claude",
+      parentId: SESSION,
+      subagents: [],
+    });
+    await expect(readClaudeSubagentTranscript("t1", "def1")).resolves.toEqual({
+      status: "unavailable",
+      reason: "no-session",
+    });
+  });
+
+  it("follows the pane to a new store when the same terminal id relaunches under another account", async () => {
+    await seedChild("acc1", [TASK, REPLY], accountDir);
+    await seedChild("def1", [TASK, REPLY], root);
+
+    getTerminalAsync.mockResolvedValue(claudeTerminal({ claudeConfigDir: accountDir }));
+    const first = await listClaudeSubagents("t1");
+    expect(first.status === "ok" && first.subagents.map((child) => child.id)).toEqual(["acc1"]);
+
+    getTerminalAsync.mockResolvedValue(claudeTerminal());
+    const second = await listClaudeSubagents("t1");
+    expect(second.status === "ok" && second.subagents.map((child) => child.id)).toEqual(["def1"]);
+  });
+
+  it("says the store is unknown rather than listing nothing when the host can't name it", async () => {
+    getTerminalAsync.mockResolvedValue(claudeTerminal({ claudeConfigDir: undefined }));
+    await seedChild("def1", [TASK, REPLY], root);
+
+    await expect(listClaudeSubagents("t1")).resolves.toEqual({
+      status: "unavailable",
+      reason: "store-unknown",
+    });
+    await expect(readClaudeSubagentTranscript("t1", "def1")).resolves.toEqual({
+      status: "unavailable",
+      reason: "store-unknown",
+    });
+  });
+
+  it("still refuses a terminal that isn't running Claude before asking about its store", async () => {
+    getTerminalAsync.mockResolvedValue(
+      claudeTerminal({ launchAgentId: "codex", claudeConfigDir: undefined })
+    );
+    await expect(listClaudeSubagents("t1")).resolves.toEqual({
+      status: "unavailable",
+      reason: "provider-mismatch",
+    });
   });
 });
 
@@ -225,4 +345,56 @@ describe("readClaudeSubagentTranscript", () => {
       reason: "no-session",
     });
   });
+
+  /** One more child than the list shows, `c0000` the oldest; returns each transcript's path. */
+  async function seedPastTheLimit(): Promise<string[]> {
+    const files: string[] = [];
+    for (let index = 0; index <= SUBAGENT_LIST_LIMIT; index += 1) {
+      const id = `c${String(index).padStart(4, "0")}`;
+      const dir = await seedChild(id, [TASK, REPLY]);
+      const file = path.join(dir, `agent-${id}.jsonl`);
+      const at = new Date((1_700_000_000 + index) * 1000);
+      await utimes(file, at, at);
+      files.push(file);
+    }
+    return files;
+  }
+
+  it("refuses a child that exists but falls below the list it was offered from", async () => {
+    getTerminalAsync.mockResolvedValue(claudeTerminal());
+    await seedPastTheLimit();
+
+    await expect(readClaudeSubagentTranscript("t1", "c0000")).resolves.toEqual({
+      status: "unavailable",
+      reason: "subagent-not-found",
+    });
+    await expect(readClaudeSubagentTranscript("t1", "c0001")).resolves.toMatchObject({
+      status: "ok",
+    });
+  });
+
+  const enforcesModeBits = process.platform !== "win32" && process.getuid?.() !== 0;
+
+  it.skipIf(!enforcesModeBits)(
+    "accepts a child promoted into the list when a newer one cannot be read",
+    async () => {
+      getTerminalAsync.mockResolvedValue(claudeTerminal());
+      const files = await seedPastTheLimit();
+      const newest = files.at(-1) as string;
+      await expect(readClaudeSubagentTranscript("t1", "c0000")).resolves.toEqual({
+        status: "unavailable",
+        reason: "subagent-not-found",
+      });
+
+      await chmod(newest, 0o000);
+      try {
+        await expect(readClaudeSubagentTranscript("t1", "c0000")).resolves.toMatchObject({
+          status: "ok",
+          subagentId: "c0000",
+        });
+      } finally {
+        await chmod(newest, 0o600);
+      }
+    }
+  );
 });

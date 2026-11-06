@@ -105,6 +105,8 @@ const DEFAULT_CLICKED_TTL_MS = 60 * 60 * 1000;
 const MAX_CLICKED_PER_ENDPOINT = 64;
 const MAX_GRANT_ENDPOINTS = 256;
 const MAX_ERROR_TEXT = 1024;
+// A Shell or link that is only busy gets the close notice again, a little later each time.
+const STREAM_CLOSED_RETRY_MS = [100, 300, 900];
 
 interface SessionFiles {
   session: LinkSession;
@@ -124,7 +126,15 @@ interface HostStream {
   projectId: string;
   reader: ReadableStreamDefaultReader<Uint8Array>;
   leftover: Uint8Array | null;
-  busy: boolean;
+  /** Pulls the Shell may have in flight at once; above one, they name their sequence. */
+  depth: number;
+  /** Pulls running now: reading, or waiting for their slice to be acknowledged. */
+  pulling: number;
+  /** Settles when the pull in front has read its slice: reads never overlap. */
+  turn: Promise<void>;
+  nextSequence: number;
+  /** The body has been read to its end. */
+  ended: boolean;
   controller: AbortController;
   idleTimer: ReturnType<typeof setTimeout> | null;
   /** Returns the buffered bytes this stream's body holds to the shared budget. */
@@ -517,7 +527,8 @@ export class HostFileService {
         FileCancelPayloadSchema,
         ({ streamId }) => {
           const stream = this.streams.get(streamId);
-          if (stream && stream.owner === created) this.closeStream(stream);
+          // The Shell's own cancel: nothing to tell it.
+          if (stream && stream.owner === created) this.closeStream(stream, false);
           return null;
         }
       ),
@@ -853,7 +864,14 @@ export class HostFileService {
         projectId: admitted.projectId,
         reader: response.body.getReader(),
         leftover: null,
-        busy: false,
+        depth: Math.min(
+          payload.pullDepth ?? 1,
+          this.options.maxConcurrentPulls ?? DEFAULT_MAX_CONCURRENT_PULLS
+        ),
+        pulling: 0,
+        turn: Promise.resolve(),
+        nextSequence: 0,
+        ended: false,
         controller: new AbortController(),
         idleTimer: null,
         release,
@@ -862,7 +880,13 @@ export class HostFileService {
       this.streams.set(stream.id, stream);
       files.streams.add(stream.id);
       this.touch(stream);
-      return { status: response.status, headers, text: null, streamId: stream.id };
+      return {
+        status: response.status,
+        headers,
+        text: null,
+        streamId: stream.id,
+        ...(payload.pullDepth !== undefined ? { pullDepth: stream.depth } : {}),
+      };
     } finally {
       files.requests--;
       files.pendingStreams--;
@@ -870,25 +894,52 @@ export class HostFileService {
     }
   }
 
+  /**
+   * The next slice of a stream, sent as its own verified transfer; answered
+   * once the Shell has acknowledged it. A stream read with several pulls in
+   * flight reads its slices strictly in the order the pulls arrived (each
+   * names its sequence), while their transfers overlap, so the next slice is
+   * already crossing the link while the last one waits for its acknowledgement.
+   */
   private async handlePull(files: SessionFiles, payload: FilePullPayload): Promise<FilePullResult> {
     const stream = this.streams.get(payload.streamId);
     if (!stream || stream.owner !== files) {
       throw new AppError({ code: "NOT_FOUND", message: "The preview stream is closed" });
     }
-    if (stream.busy) {
+    if (stream.pulling >= stream.depth) {
       throw new AppError({
         code: "VALIDATION",
-        message: "A pull is already running on this stream",
+        message:
+          stream.depth === 1
+            ? "A pull is already running on this stream"
+            : "Too many pulls in flight on this stream",
       });
+    }
+    if (stream.depth > 1 && payload.sequence !== stream.nextSequence) {
+      // Slices out of order would reach the preview in the wrong order: fail closed.
+      this.closeStream(stream);
+      throw new AppError({ code: "VALIDATION", message: "A pull arrived out of order" });
     }
     if (files.pulls >= (this.options.maxConcurrentPulls ?? DEFAULT_MAX_CONCURRENT_PULLS)) {
       throw new AppError({ code: "RATE_LIMITED", message: "Too many preview reads in flight" });
     }
-    stream.busy = true;
+    stream.pulling++;
+    stream.nextSequence++;
     files.pulls++;
     if (stream.idleTimer) clearTimeout(stream.idleTimer);
     stream.idleTimer = null;
+    const inFront = stream.turn;
+    let passTurn!: () => void;
+    stream.turn = new Promise<void>((resolve) => {
+      passTurn = resolve;
+    });
     try {
+      await inFront;
+      if (this.streams.get(stream.id) !== stream) {
+        throw new AppError({ code: "CANCELLED", message: "The preview stream was revoked" });
+      }
+      // A pull already in flight when the body ran out: nothing more to send.
+      if (stream.ended) return { bytes: 0, done: true };
       const limit = Math.min(payload.maxBytes, PULL_MAX_BYTES);
       const chunks: Uint8Array[] = [];
       let total = 0;
@@ -915,6 +966,8 @@ export class HostFileService {
       if (this.streams.get(stream.id) !== stream) {
         throw new AppError({ code: "CANCELLED", message: "The preview stream was revoked" });
       }
+      if (done) stream.ended = true;
+      passTurn();
       if (total > 0) {
         await files.session.transfers.send(bytesTransferSource(concat(chunks, total)), {
           name: "preview",
@@ -922,15 +975,18 @@ export class HostFileService {
           signal: stream.controller.signal,
         });
       }
-      if (done) this.closeStream(stream);
+      // With several pulls in flight the Shell may still hold slices it has
+      // not passed on; the stream stays revocable until it cancels or idles out.
+      if (done && stream.depth === 1) this.closeStream(stream);
       return { bytes: total, done };
     } catch (error) {
       this.closeStream(stream);
       throw error;
     } finally {
-      stream.busy = false;
+      passTurn();
+      stream.pulling--;
       files.pulls--;
-      if (this.streams.get(stream.id) === stream) this.touch(stream);
+      if (this.streams.get(stream.id) === stream && stream.pulling === 0) this.touch(stream);
     }
   }
 
@@ -1038,7 +1094,12 @@ export class HostFileService {
     stream.idleTimer.unref?.();
   }
 
-  private closeStream(stream: HostStream): void {
+  /**
+   * End a stream: its transfers abort and its body is let go. A Shell reading
+   * with several pulls in flight is told, unless it asked, so it drops the
+   * slices it holds instead of passing them on after the stream was revoked.
+   */
+  private closeStream(stream: HostStream, notifyShell = true): void {
     if (this.streams.get(stream.id) !== stream) return;
     this.streams.delete(stream.id);
     stream.owner.streams.delete(stream.id);
@@ -1047,6 +1108,31 @@ export class HostFileService {
     stream.controller.abort();
     stream.release();
     void stream.reader.cancel().catch(() => {});
+    if (notifyShell && stream.depth > 1) this.noticeStreamClosed(stream.owner.session, stream.id);
+  }
+
+  /**
+   * Tell the Shell a stream it reads ahead on is gone. Unheard, it could still
+   * pass on slices of a revoked stream, so a notice refused only for being
+   * busy is sent again, and a link that still can't carry it is dropped,
+   * which stops every body read over it.
+   */
+  private noticeStreamClosed(session: LinkSession, streamId: string, attempt = 0): void {
+    if (!session.isOpen) return;
+    void session.call(FileLinkMethod.STREAM_CLOSED, { streamId }).catch((error: unknown) => {
+      if (!session.isOpen) return;
+      const retryMs = STREAM_CLOSED_RETRY_MS[attempt];
+      // A call's error comes back rebuilt from the envelope: a plain Error carrying its code.
+      const busy = (error as { code?: unknown } | null)?.code === "RATE_LIMITED";
+      if (busy && retryMs !== undefined) {
+        setTimeout(
+          () => this.noticeStreamClosed(session, streamId, attempt + 1),
+          retryMs
+        ).unref?.();
+        return;
+      }
+      session.close("preview stream close notice failed");
+    });
   }
 
   private revokeWhere(match: (entry: HostStream | HostDownload) => boolean): void {

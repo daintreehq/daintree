@@ -25,6 +25,10 @@ import { logError } from "@/utils/logger";
 import { StopProjectConfirmDialog } from "./components/Project/StopProjectConfirmDialog";
 import { useProjectSleepConfirmStore } from "@/store/projectSleepConfirmStore";
 import { cancelRecipeRunConfirmations } from "@/store/recipeRunConfirmStore";
+import {
+  cancelScheduleRunConfirmations,
+  useScheduleRunConfirmStore,
+} from "@/store/scheduleRunConfirmStore";
 import { usePilotStore } from "@/store/pilotStore";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useScratchStore } from "@/store/scratchStore";
@@ -36,7 +40,7 @@ import { PostHydrationListeners } from "./components/PostHydrationListeners";
 import { HostFilePickerMount } from "./components/HostFilePicker/HostFilePickerMount";
 import { HostSwitchMount } from "./components/HostSwitch/HostSwitchMount";
 import { HostsOverviewMount } from "./components/Hosts/Overview/HostsOverviewMount";
-import { PanelTransitionOverlay } from "./components/Panel";
+import { MaximizeFlights, PanelTransitionOverlay } from "./components/Panel";
 import { usePluginManagerStore } from "./store";
 import { actionService } from "./services/ActionService";
 import {
@@ -63,6 +67,7 @@ import {
   LazyPluginConfirmDialog,
   LazyLayoutApplyConfirmDialog,
   LazyRecipeRunConfirmDialog,
+  LazyScheduleRunConfirmDialog,
   LazyPluginArchiveInstallConfirmDialog,
   LazyPluginMcpConfirmDialog,
   LazyPluginQuickPickDialog,
@@ -167,8 +172,12 @@ interface ModalHostLayerProps {
   shouldMountGitInitDialog: boolean;
   effectiveGitInitPath: string | null;
   effectiveGitInitIdentity: ProjectCreationIdentity | null;
+  effectiveGitInitGroupId: string | null;
   gitInitDialogStep: NonGitFolderStep;
-  handleGitInitSuccess: (identity?: ProjectCreationIdentity) => Promise<void>;
+  handleGitInitSuccess: (
+    identity?: ProjectCreationIdentity,
+    groupId?: string | null
+  ) => Promise<void>;
   openWithoutGit: () => Promise<void>;
   closeGitInitDialog: () => void;
   createFolderDialogOpen: boolean;
@@ -179,7 +188,7 @@ interface ModalHostLayerProps {
   handleCloneSuccess: (
     clonedPath: string,
     identity?: ProjectCreationIdentity,
-    options?: { disposition?: ProjectOpenDisposition }
+    options?: { disposition?: ProjectOpenDisposition; groupId?: string }
   ) => Promise<void>;
   closeCloneRepoDialog: () => void;
   reEntrySummary: ReEntrySummaryState;
@@ -268,6 +277,7 @@ export function ModalHostLayer({
   shouldMountGitInitDialog,
   effectiveGitInitPath,
   effectiveGitInitIdentity,
+  effectiveGitInitGroupId,
   gitInitDialogStep,
   handleGitInitSuccess,
   openWithoutGit,
@@ -289,6 +299,8 @@ export function ModalHostLayer({
   const hasProjectGroupDialog = useProjectGroupsStore((s) => s.dialog !== null);
   const isCanopyOpen = useCanopyStore((s) => s.isOpen);
   const hasScratch = useScratchStore((s) => s.currentScratch !== null);
+  // Each Run now question retries a dialog that failed, so none waits on a fallback.
+  const scheduleRunConfirmKey = useScheduleRunConfirmStore((s) => s.current?.requestId ?? "");
 
   // Both palette activation paths (click and Enter) launch the same way, and
   // through the same seam the dock uses, so a kind can't behave differently
@@ -507,6 +519,7 @@ export function ModalHostLayer({
               results={projectSwitcherPalette.results}
               browseBands={projectSwitcherPalette.browseBands}
               selectedIndex={projectSwitcherPalette.selectedIndex}
+              cycleRequest={projectSwitcherPalette.cycleRequest}
               onQueryChange={projectSwitcherPalette.setQuery}
               onSelectPrevious={projectSwitcherPalette.selectPrevious}
               onSelectNext={projectSwitcherPalette.selectNext}
@@ -853,6 +866,19 @@ export function ModalHostLayer({
         </ErrorBoundary>
       )}
       {isStateLoaded && (
+        <ErrorBoundary
+          variant="component"
+          componentName="ScheduleRunConfirmDialog"
+          resetKeys={[scheduleRunConfirmKey]}
+          // A Run now waits on this dialog; one that can't render backs it out.
+          onError={() => cancelScheduleRunConfirmations()}
+        >
+          <Suspense fallback={null}>
+            <LazyScheduleRunConfirmDialog />
+          </Suspense>
+        </ErrorBoundary>
+      )}
+      {isStateLoaded && (
         <ErrorBoundary variant="component" componentName="PluginConfirmPromptDialog">
           <Suspense fallback={null}>
             <LazyPluginConfirmPromptDialog />
@@ -897,6 +923,7 @@ export function ModalHostLayer({
               directoryPath={effectiveGitInitPath}
               initialStep={gitInitDialogStep}
               initialIdentity={effectiveGitInitIdentity}
+              initialGroupId={effectiveGitInitGroupId}
               onOpenWithoutGit={openWithoutGit}
               onInitSuccess={handleGitInitSuccess}
               onCancel={closeGitInitDialog}
@@ -937,6 +964,7 @@ export function ModalHostLayer({
       </ErrorBoundary>
 
       <PanelTransitionOverlay />
+      <MaximizeFlights />
       {isStateLoaded && (
         <ErrorBoundary
           variant="component"

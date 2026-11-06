@@ -921,6 +921,19 @@ describe("external tool surface budget (#11585)", () => {
     }
   });
 
+  // The user-preset writes (#16047): every in-app session at core, the
+  // assistant and an agent pane alike, each call confirmed; never an api-key
+  // caller, whose surface is capped.
+  it("offers the user-preset writes in-app at core and never externally", () => {
+    for (const id of ["agent.createPreset", "agent.updatePreset", "agent.deletePreset"]) {
+      expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(id);
+      expect(isTierPermitted("core", id, true)).toBe(true);
+      expect(isTierPermitted("core", id, false)).toBe(true);
+      expect(isTierPermitted("external", id)).toBe(false);
+      expect(TIER_ALLOWLISTS.external.has(id)).toBe(false);
+    }
+  });
+
   // A cut PR that quietly widens is the failure #10710 documents, so assert the
   // direction outright rather than trusting the id list to be read carefully.
   // The comparison is against `full` as an agent pane sees it — the same

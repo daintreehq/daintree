@@ -11,7 +11,11 @@ import type { PanelTitleMode, TerminalFirstPrompt } from "../../../shared/types/
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { PLAIN_SHELL_SCROLLBACK_MAX } from "../../../shared/config/scrollback.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { ProcessDetector, type DetectionResult } from "../ProcessDetector.js";
+import {
+  ProcessDetector,
+  type AgentProcessObservation,
+  type DetectionResult,
+} from "../ProcessDetector.js";
 import type { ProcessTreeCache } from "../ProcessTreeCache.js";
 import type { ImagePathProbe } from "./ImagePathProbe.js";
 import type { ActivityStateMetadata } from "../ActivityMonitor.js";
@@ -31,11 +35,16 @@ import type { TerminalSubmissionRecord } from "../../../shared/types/terminalSub
 import { AgentOutputForwarder } from "./AgentOutputForwarder.js";
 import { TerminalInputController } from "./TerminalInputController.js";
 import { HandbackTracker } from "./HandbackTracker.js";
+import { SubmissionOutputLedger } from "./SubmissionOutputLedger.js";
 import { findHandback, keepFirstObservation, rawHandbackText } from "./HandbackDetector.js";
+import { reportRunHandback } from "./runHandback.js";
 import { PtyDataPipeline } from "./PtyDataPipeline.js";
+import { resolveLaunchClaudeConfigDir } from "../claude/claudeConfigDir.js";
 import { PreservedSnapshotCapture } from "./PreservedSnapshotCapture.js";
 import { events } from "../events.js";
 import { hasRateLimitMessage } from "./WaitingReasonClassifier.js";
+import { resolveResetsAt, scanClaudeUsageMessages } from "./ClaudeUsageWarnings.js";
+import type { ClaudeUsageWindow } from "../../../shared/types/ipc/agentQuota.js";
 import { AgentSpawnedSchema } from "../../schemas/agent.js";
 import { destroyPty, type PooledPtyDataHandoff, type PtyPool } from "../PtyPool.js";
 import { TERMINAL_SESSION_PERSISTENCE_ENABLED } from "./terminalSessionPersistence.js";
@@ -71,7 +80,10 @@ import { TerminalExitObservers, type TerminalExitArgs } from "./TerminalExitObse
 import { TerminalExitHandler } from "./TerminalExitHandler.js";
 import { gracefulShutdown as runGracefulShutdown } from "./TerminalGracefulShutdown.js";
 import { handleAgentDetection as runHandleAgentDetection } from "./TerminalAgentDetection.js";
+import { offerAgentRunArgvSession } from "./agentRunArgv.js";
 import { TerminalProcessLifecycle } from "./TerminalProcessLifecycle.js";
+import { readScheduledRunRef } from "../../../shared/utils/scheduledRunProvenance.js";
+import { stampPromptInput } from "../../../shared/utils/terminalInputProvenance.js";
 import {
   createVisibleContentSnapshot,
   type VisibleContentSnapshot,
@@ -174,6 +186,11 @@ export class TerminalProcess {
   private analysis!: AnalysisBackend;
   private inThreadAnalysis: InThreadAnalysisBackend | null = null;
   private processDetector: ProcessDetector | null = null;
+  // The run (`generation:incarnation`) whose argv was already read: argv never
+  // changes while a run lives, so one read per run is the whole story.
+  private argvReadRun: string | undefined;
+  // The agent process last seen, and the run it was seen in.
+  private agentProcessSeen: { pid: number; run: string } | undefined;
   private headlineGenerator = new ActivityHeadlineGenerator();
   private lastDetectedProcessIconId: string | undefined;
 
@@ -186,6 +203,8 @@ export class TerminalProcess {
   private gracefulShutdownInFlight: Promise<string | null> | null = null;
   private gracefulCaptureLease: GracefulCaptureLease | null = null;
   private writeQueue!: WriteQueue;
+  /** Output after each tokened submission's Enter, by token (#16210). */
+  private readonly submissionOutputs = new SubmissionOutputLedger();
   private inputController!: TerminalInputController;
   private ptyDataPipeline!: PtyDataPipeline;
   private preservedSnapshotCapture!: PreservedSnapshotCapture;
@@ -226,6 +245,14 @@ export class TerminalProcess {
    * appearance, reset when the banner goes.
    */
   private rateLimitFallbackDecided = false;
+  /**
+   * The Claude Code usage message last observed per limit (#15727), so one that
+   * stays on screen, or blinks out for a repaint, is a single observation.
+   */
+  private readonly claudeUsageSeen = new Map<
+    ClaudeUsageWindow,
+    { key: string; visible: boolean; lastSeenAt: number }
+  >();
   /** True only while the exit path settles the mirror's last frame. */
   private samplingFinalFrame = false;
 
@@ -235,8 +262,8 @@ export class TerminalProcess {
 
   /**
    * True when an agent is currently observed in this PTY. Used to drive
-   * chrome-level decisions (OSC color responder ownership, output fan-out to
-   * agent:output listeners). Detection wins, and durable launch affinity keeps
+   * chrome-level decisions (OSC color responder ownership, the agent output
+   * ring and, for the Assistant, agent:output). Detection wins, and durable launch affinity keeps
    * cold-launched/restored agents wired until an explicit exit signal arrives.
    */
   private get isAgentLive(): boolean {
@@ -377,11 +404,16 @@ export class TerminalProcess {
       analysisEnabled: hasLaunchHint,
       agentLaunchFlags: options.agentLaunchFlags,
       agentModelId: options.agentModelId,
+      scheduledRun: readScheduledRunRef(options.scheduledRun),
       // Recorded as the record is built, before the PTY can emit a byte
       // (#11782). The id is knowable up front for agents that accept one at
       // launch, and writing it here — rather than at teardown — is what lets it
       // survive a kill path that never runs `gracefulShutdown()` at all.
       agentSessionId: options.agentSessionId,
+      // Every terminal, not only Claude launches: `claude` typed into a plain
+      // shell inherits the same env. Read off the env the PTY really got, so an
+      // account's folder and Daintree's own override both land here (#16269).
+      claudeConfigDir: resolveLaunchClaudeConfigDir(spawnContext.env),
       worktreeId: options.worktreeId,
       agentPresetId: options.agentPresetId,
       agentPresetColor: options.agentPresetColor,
@@ -419,7 +451,10 @@ export class TerminalProcess {
       this.analysis = this.inThreadAnalysis;
     }
     if (options.handbackCode !== undefined) {
-      this.ensureHandbackTracker().registerDelivered(options.handbackCode);
+      this.ensureHandbackTracker().registerDelivered(
+        options.handbackCode,
+        options.handbackInstruction
+      );
     }
 
     // NOTE: The headless responder is intentionally NOT installed for agent
@@ -606,6 +641,9 @@ export class TerminalProcess {
         deps.processTreeCache,
         Boolean(this.terminalInfo.launchAgentId),
         deps.imagePathProbe ?? null
+      );
+      this.processDetector.setAgentProcessObserver((observation, cbSpawnedAt) =>
+        this.handleAgentProcessObservation(observation, cbSpawnedAt)
       );
       this.terminalInfo.processDetector = this.processDetector;
       this.processDetector.start();
@@ -974,6 +1012,10 @@ export class TerminalProcess {
       analysisEnabled: t.analysisEnabled,
       lastInputTime: t.lastInputTime,
       lastTypedInputAt: t.lastTypedInputAt,
+      lastOwnedInput: t.lastOwnedInput,
+      lastForeignInputAt: t.lastForeignInputAt,
+      lastOwnedPromptInput: t.lastOwnedPromptInput,
+      lastForeignPromptInputAt: t.lastForeignPromptInputAt,
       lastOutputTime: t.lastOutputTime,
       lastCheckTime: t.lastCheckTime,
       detectedAgentId: t.detectedAgentId,
@@ -984,8 +1026,10 @@ export class TerminalProcess {
       activityTier: this._activityTier,
       hasPty,
       agentSessionId: t.agentSessionId,
+      claudeConfigDir: t.claudeConfigDir,
       agentLaunchFlags: t.agentLaunchFlags,
       agentModelId: t.agentModelId,
+      scheduledRun: t.scheduledRun,
       spawnArgs: t.spawnArgs,
       exitCode: t.exitCode,
       exitSignal: t.exitSignal,
@@ -1005,6 +1049,14 @@ export class TerminalProcess {
   }
 
   /** True when an agent is currently observed running in this PTY. */
+  /**
+   * A graceful shutdown is quitting its agent now: the PTY still runs, but
+   * nothing new should be typed in, since the run is on its way out.
+   */
+  isGracefullyClosing(): boolean {
+    return this.gracefulShutdownInFlight !== null;
+  }
+
   isAgentCurrentlyLive(): boolean {
     return this.isAgentLive;
   }
@@ -1090,8 +1142,8 @@ export class TerminalProcess {
     return this.inputController.tryWrite(data, traceId);
   }
 
-  write(data: string, traceId?: string): void {
-    this.inputController.write(data, traceId);
+  write(data: string, traceId?: string, inputOwner?: string): void {
+    this.inputController.write(data, traceId, inputOwner);
   }
 
   /**
@@ -1106,6 +1158,10 @@ export class TerminalProcess {
    * `firstPrompt` is offered as the run's first-prompt record (#15521) once
    * the Enter is written, and only to an agent: a send to the shell an agent
    * left behind was never its prompt.
+   *
+   * `handbackInstruction` is `run` when the instruction in `text` offers
+   * `needs-you` as well (#16171), so its marker is looked for in both forms
+   * and the capture that retires the code is reported to Main.
    */
   submit(
     text: string,
@@ -1113,15 +1169,24 @@ export class TerminalProcess {
     handbackCode?: string,
     guard?: TerminalSubmitGuard,
     imagePaths?: readonly string[],
-    firstPrompt?: FirstPromptCandidate
+    firstPrompt?: FirstPromptCandidate,
+    handbackInstruction?: "run",
+    promptOwner?: string
   ): void {
     const tracker =
       handbackCode !== undefined ? this.ensureHandbackTracker() : this.terminalInfo.handbackTracker;
-    const onTrackerWritten = tracker?.noteSubmission(handbackCode, token);
+    const onTrackerWritten = tracker?.noteSubmission(handbackCode, token, handbackInstruction);
     const onPtyWritten = (): void => {
       this.terminalInfo.lastHandback = undefined;
       this.terminalInfo.lastHandbackUnpublished = false;
+      // An assistant's prompt, as written (#16187): what another held for
+      // this worker before it is overtaken.
+      if (promptOwner !== undefined) {
+        stampPromptInput(this.terminalInfo, Date.now(), promptOwner);
+      }
       onTrackerWritten?.();
+      // Only a tokened send can ever be read back, so only one is captured.
+      if (token !== undefined) this.startSubmissionCapture(token, text);
       if (firstPrompt !== undefined && this.isAgentLive) {
         this.callbacks.onFirstPromptWritten?.(this.id, {
           ...firstPrompt,
@@ -1131,6 +1196,16 @@ export class TerminalProcess {
       }
     };
     this.inputController.submit(text, token, onPtyWritten, guard, imagePaths);
+  }
+
+  private startSubmissionCapture(token: string, text: string): void {
+    const ledger = this.submissionOutputs;
+    const captureId = ledger.begin(token);
+    const started = this.analysis.startSubmissionCapture(captureId, text, (id, output) =>
+      ledger.publish(id, output)
+    );
+    // No mirror reads this terminal's output, so nothing was observed.
+    if (!started) ledger.forget(token);
   }
 
   private ensureHandbackTracker(): HandbackTracker {
@@ -1155,7 +1230,10 @@ export class TerminalProcess {
   }
 
   getSubmission(token: string): TerminalSubmissionRecord | undefined {
-    return this.writeQueue.getSubmission(token);
+    const record = this.writeQueue.getSubmission(token);
+    if (record?.phase !== "pty_written") return record;
+    const output = this.submissionOutputs.read(token);
+    return output === undefined ? record : { ...record, output };
   }
 
   hasPendingSubmission(): boolean {
@@ -1166,6 +1244,10 @@ export class TerminalProcess {
     return this.analysis.observedSince();
   }
 
+  isBracketedPasteMode(): boolean {
+    return this.analysis.isBracketedPasteMode();
+  }
+
   /**
    * Stage `text` into the terminal's input WITHOUT submitting it — the no-Enter
    * counterpart to {@link submit}. Reuses the same bracketed-paste / soft-newline
@@ -1174,13 +1256,18 @@ export class TerminalProcess {
    * (bracketed paste when supported, soft newlines otherwise) so a stray `\n`
    * can't trigger the shell-submit detection in {@link write} and auto-execute a
    * line. Trailing newlines in `text` are dropped — staging never submits. Used
-   * by `host.sendToActiveAgent(text, { submit: false })` (#10558).
+   * by `host.sendToActiveAgent(text, { submit: false })` (#10558). The write
+   * waits its turn in the submit lane, behind every submission already
+   * accepted (#15554).
    */
   stage(text: string): void {
     this.inputController.stage(text);
   }
 
   private async performSubmit(text: string, ctx: SubmitExecutionContext): Promise<void> {
+    // What this terminal shows from here answers this submission, not the one
+    // before it.
+    this.analysis.closeSubmissionCapture();
     await this.inputController.performSubmit(text, ctx);
   }
 
@@ -1650,6 +1737,9 @@ export class TerminalProcess {
         Boolean(this.terminalInfo.launchAgentId),
         this.deps.imagePathProbe ?? null
       );
+      this.processDetector.setAgentProcessObserver((observation, cbSpawnedAt) =>
+        this.handleAgentProcessObservation(observation, cbSpawnedAt)
+      );
       this.terminalInfo.processDetector = this.processDetector;
       this.processDetector.start();
     }
@@ -1694,7 +1784,8 @@ export class TerminalProcess {
   }
 
   setSabModeEnabled(_enabled: boolean): void {
-    // No-op: SAB mode is always used, flow control handled by pty-host.ts
+    // No-op: the SAB transport is disabled and MessagePort carries terminal output.
+    // Flow control is handled by pty-host.ts.
   }
 
   // xterm 6.0 actively resizes the buffer when scrollback shrinks (verified in headless-scrollback-trim.test.ts).
@@ -1733,6 +1824,7 @@ export class TerminalProcess {
     const wonTeardown = this.teardown("dispose");
     this.semanticBufferManager.dispose();
     this.disposeHeadless();
+    this.submissionOutputs.dispose();
 
     // The root-inclusive kill signals the shell PID, which is only safe while
     // that PID still belongs to our shell. After a *natural* exit it does not:
@@ -1843,6 +1935,7 @@ export class TerminalProcess {
       this.terminalInfo.lastOutputChangeAt = now;
     }
     this.observeRateLimitBanner(lines, now);
+    this.observeClaudeUsage(lines, now);
     this.observeHandback(now);
   }
 
@@ -1875,10 +1968,21 @@ export class TerminalProcess {
       now
     );
     if (hit === undefined) return;
-    const changed = tracker.noteReported(hit.code, hit.handback.message, hit.handback.truncated);
+    const changed = tracker.noteReported(
+      hit.code,
+      hit.handback.message,
+      hit.handback.truncated,
+      hit.report
+    );
     // Retired outside `working` even when the capture repeats one already
     // reported, or the code would stay open until the next submission.
-    if (t.agentState !== "working") tracker.retire(hit.code);
+    if (t.agentState !== "working") {
+      tracker.retire(hit.code);
+      // A scheduled run takes the capture that retires its code (#15982): a
+      // marker drafted while the agent still works waits for the settle,
+      // which has the last look, so a close policy never ends a reply.
+      reportRunHandback(t, hit, now);
+    }
     if (!changed) return;
     const handback = keepFirstObservation(t.lastHandback, hit.handback);
     t.lastHandback = handback;
@@ -1887,6 +1991,7 @@ export class TerminalProcess {
       terminalId: this.id,
       handback,
       code: hit.code,
+      ...(t.lastStateChange !== undefined ? { lastStateChange: t.lastStateChange } : {}),
       timestamp: now,
     });
   }
@@ -1906,6 +2011,9 @@ export class TerminalProcess {
       (this.samplingFinalFrame &&
         (t.detectedAgentId !== undefined || t.launchAgentId !== undefined));
     const visible = hasAgent && hasRateLimitMessage(lines);
+    // The pane's own memory takes every appearance (#16136): only the event is
+    // throttled, and a limit hit again within the cooldown is still a limit.
+    if (visible && !this.rateLimitBannerVisible) t.usageLimitObservedAt = now;
     // The cooldown absorbs a TUI repaint that blanks the banner for one frame,
     // which would otherwise read as a fresh appearance each time.
     if (
@@ -1922,6 +2030,53 @@ export class TerminalProcess {
     }
     this.rateLimitBannerVisible = visible;
     this.trackRateLimitSettle(visible, lines);
+  }
+
+  /**
+   * Report a Claude Code usage message this pane shows (#15727): the limit it
+   * names, what it says about use and when it resets, never the line itself.
+   * One is observed when it shows or changes, and again only once it has been
+   * off screen for the cooldown, so `observedAt` is when the pane showed what
+   * it says.
+   */
+  private observeClaudeUsage(lines: readonly string[], now: number): void {
+    const seen = this.claudeUsageSeen;
+    // The rate-limit banner's liveness rule, for Claude Code alone: a detected
+    // agent outranks the launch, and a shell its agent left is never read.
+    const isClaude =
+      getLiveAgentId(this.terminalInfo) === "claude" &&
+      (this.isAgentLive || this.samplingFinalFrame);
+    if (!isClaude) {
+      if (seen.size > 0) seen.clear();
+      return;
+    }
+    const visible = new Set<ClaudeUsageWindow>();
+    // Read off the PTY itself: it keeps its width after exit, where the
+    // geometry read answers null, and the final frame is read after exit.
+    const cols = readPtyDimension(() => this.terminalInfo.ptyProcess.cols, null) ?? undefined;
+    for (const message of scanClaudeUsageMessages(lines, cols)) {
+      visible.add(message.window);
+      const key = `${message.statement}|${message.usedPercent}|${message.resetText}`;
+      const last = seen.get(message.window);
+      const fresh =
+        last === undefined ||
+        last.key !== key ||
+        (!last.visible && now - last.lastSeenAt >= RATE_LIMIT_OBSERVATION_COOLDOWN_MS);
+      seen.set(message.window, { key, visible: true, lastSeenAt: now });
+      if (!fresh) continue;
+      events.emit("agent:claude-usage-observed", {
+        terminalId: this.id,
+        window: message.window,
+        statement: message.statement,
+        usedPercent: message.usedPercent,
+        resetsAt: resolveResetsAt(message.resetText, now),
+        observedAt: now,
+        timestamp: now,
+      });
+    }
+    for (const [window, last] of seen) {
+      if (!visible.has(window)) last.visible = false;
+    }
   }
 
   /**
@@ -2023,6 +2178,10 @@ export class TerminalProcess {
     this.ptyDataDisposable = dataHandoff ? dataHandoff.takeOver(onData) : ptyProcess.onData(onData);
 
     ptyProcess.onExit(({ exitCode, signal }) => {
+      // Ahead of the exit's final snapshot, which the worker answers after
+      // this, so a capture ends on the last frame whether or not the mirror
+      // is kept for a preserved snapshot.
+      this.analysis.closeSubmissionCapture();
       this.exitHandler.handleExit(ptyProcess, exitCode, signal);
     });
   }
@@ -2035,6 +2194,30 @@ export class TerminalProcess {
   private emitDataDirect(data: string): void {
     this.emittedBytes += Buffer.byteLength(data, "utf8");
     this.callbacks.emitData(this.id, data, this.emittedBytes);
+  }
+
+  /**
+   * The census process behind the committed agent, every detection pass. Read
+   * once per run, and only once this record has promoted the same agent, so
+   * the run's incarnation is already the one the process belongs to.
+   *
+   * A census taken before the last run's process went away can still list it
+   * when a typed command promotes the next run at once; that row belongs to
+   * the run it was first seen in, and must not spend this run's one read.
+   */
+  handleAgentProcessObservation(observation: AgentProcessObservation, spawnedAt: number): void {
+    const info = this.terminalInfo;
+    if (info.spawnedAt !== spawnedAt || info.wasKilled || info.isExited) return;
+    if (info.detectedAgentId !== observation.agentType) return;
+    const run = `${info.launchGeneration ?? "?"}:${info.agentIncarnation}`;
+    if (observation.pid !== undefined) {
+      const seen = this.agentProcessSeen;
+      if (seen?.pid === observation.pid && seen.run !== run) return;
+      this.agentProcessSeen = { pid: observation.pid, run };
+    }
+    if (this.argvReadRun === run) return;
+    this.argvReadRun = run;
+    offerAgentRunArgvSession(this.id, info, observation, this.identityWatcher.submittedCommandText);
   }
 
   handleAgentDetection(result: DetectionResult, spawnedAt: number): void {

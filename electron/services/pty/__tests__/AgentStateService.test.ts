@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AgentStateService } from "../AgentStateService.js";
+import { AgentStateService, USAGE_LIMIT_WORK_HOLD_MS } from "../AgentStateService.js";
 import { events } from "../../events.js";
 import { HandbackTracker } from "../HandbackTracker.js";
 import type { TerminalInfo } from "../types.js";
+import type { WaitingReason } from "../../../../shared/types/agent.js";
 import { buildHandbackInstruction } from "../../../../shared/utils/handback.js";
 import * as detector from "../HandbackDetector.js";
+import {
+  ASSISTANT_SEND_GATE,
+  evaluateWakeGate,
+} from "../../../../shared/utils/terminalWakeGate.js";
 
 vi.mock("../HandbackDetector.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../HandbackDetector.js")>();
@@ -299,7 +304,7 @@ describe("AgentStateService", () => {
     expect(stateChanges[0]?.waitingReason).toBe("prompt");
   });
 
-  it("does not emit state changes for waitingReason-only updates", () => {
+  it("does not emit a waitingReason change that comes through the FSM", () => {
     const service = new AgentStateService();
     const terminal = createTerminal({ agentState: "waiting" });
     terminal.waitingReason = "prompt";
@@ -364,6 +369,133 @@ describe("AgentStateService", () => {
     expect(terminal.waitingReason).toBe("question");
     expect(stateChanges).toHaveLength(1);
     expect(stateChanges[0]?.waitingReason).toBe("question");
+  });
+
+  describe("reason-only updates (#16093)", () => {
+    function settledOnError(waitingReason: WaitingReason = "error") {
+      const service = new AgentStateService();
+      const terminal = createTerminal({
+        agentState: "waiting",
+        waitingReason,
+        lastStateChange: 1_000,
+        detectedAgentId: "claude",
+        hasPty: true,
+      } as Partial<TerminalInfo>);
+      const stateChanges: Array<Record<string, unknown>> = [];
+      const activityEvents: unknown[] = [];
+      events.on("agent:state-changed", (payload) => {
+        stateChanges.push({ ...payload });
+      });
+      events.on("terminal:activity", (payload) => activityEvents.push(payload));
+      return { service, terminal, stateChanges, activityEvents };
+    }
+
+    it.each([
+      ["error", "prompt"],
+      ["prompt", "error"],
+      ["question", "approval"],
+    ] as const)("publishes %s → %s as a waiting → waiting change", (from, to) => {
+      const { service, terminal, stateChanges, activityEvents } = settledOnError(from);
+
+      service.handleActivityState(terminal, "idle", {
+        trigger: "pattern",
+        waitingReason: to,
+        rereadAt: 5_000,
+      });
+
+      expect(terminal.agentState).toBe("waiting");
+      expect(terminal.waitingReason).toBe(to);
+      expect(terminal.lastStateChange).toBe(5_000);
+      expect(stateChanges).toEqual([
+        expect.objectContaining({
+          terminalId: terminal.id,
+          state: "waiting",
+          previousState: "waiting",
+          waitingReason: to,
+          timestamp: 5_000,
+          trigger: "heuristic",
+          confidence: 0.9,
+          agentIncarnation: 0,
+        }),
+      ]);
+      expect(activityEvents).toHaveLength(1);
+    });
+
+    it("admits a send typed after the error settle once the prompt is re-read", () => {
+      const { service, terminal } = settledOnError();
+      // Escape pressed into the limit screen.
+      terminal.lastTypedInputAt = 2_000;
+      expect(evaluateWakeGate(terminal, ASSISTANT_SEND_GATE)).toEqual({
+        kind: "blocked",
+        reason: "error",
+      });
+
+      service.handleActivityState(terminal, "idle", {
+        trigger: "pattern",
+        waitingReason: "prompt",
+        rereadAt: 3_500,
+      });
+
+      expect(evaluateWakeGate(terminal, ASSISTANT_SEND_GATE)).toEqual({ kind: "ready" });
+    });
+
+    it("still holds a send for input that landed after the screen was read", () => {
+      const { service, terminal } = settledOnError();
+      terminal.lastTypedInputAt = 4_000;
+
+      service.updateWaitingReason(terminal, "prompt", 3_500);
+
+      expect(terminal.waitingReason).toBe("prompt");
+      expect(evaluateWakeGate(terminal, ASSISTANT_SEND_GATE)).toEqual({
+        kind: "hold",
+        reason: "typing",
+      });
+    });
+
+    it.each([
+      ["the agent is not waiting", { agentState: "working" as const }, "prompt" as const, 5_000],
+      ["the reason is unchanged", {}, "error" as const, 5_000],
+      [
+        "a later settle already read the screen",
+        { lastStateChange: 6_000 },
+        "prompt" as const,
+        5_000,
+      ],
+      [
+        "the read is no newer than the last settle",
+        { lastStateChange: 5_000 },
+        "prompt" as const,
+        5_000,
+      ],
+    ])("changes nothing when %s", (_label, overrides, reason, observedAt) => {
+      const { service, terminal, stateChanges, activityEvents } = settledOnError();
+      Object.assign(terminal, overrides);
+      const before = { ...terminal };
+
+      expect(service.updateWaitingReason(terminal, reason, observedAt)).toBe(false);
+
+      expect(terminal.agentState).toBe(before.agentState);
+      expect(terminal.waitingReason).toBe(before.waitingReason);
+      expect(terminal.lastStateChange).toBe(before.lastStateChange);
+      expect(stateChanges).toHaveLength(0);
+      expect(activityEvents).toHaveLength(0);
+    });
+
+    it("never drives a transition, even for an agent that is not waiting", () => {
+      const { service, terminal, stateChanges } = settledOnError();
+      terminal.agentState = "working";
+      terminal.waitingReason = undefined;
+
+      service.handleActivityState(terminal, "idle", {
+        trigger: "pattern",
+        waitingReason: "prompt",
+        rereadAt: 5_000,
+      });
+
+      expect(terminal.agentState).toBe("working");
+      expect(terminal.waitingReason).toBeUndefined();
+      expect(stateChanges).toHaveLength(0);
+    });
   });
 
   // #5773 — Runtime-detected agents (plain terminals where a CLI was detected
@@ -1273,11 +1405,75 @@ describe("AgentStateService handback detection (#12488)", () => {
 
     const expected = {
       message: "fixed the race in the retry loop",
+      report: "done",
       observedAt: terminal.lastStateChange,
       truncated: false,
     };
     expect(payloads[0]?.lastHandback).toEqual(expected);
     expect(terminal.lastHandback).toEqual(expected);
+  });
+
+  it("publishes a needs-you marker on an ordinary request, with no report to the runs (#16190)", () => {
+    const service = new AgentStateService();
+    const terminal = askedTerminal([
+      "⏺ Pushed.",
+      `  DAINTREE-NEEDS-YOU-${CODE}: approve the deployment END-${CODE}`,
+      "> ",
+    ]);
+    const payloads = capturePayloads();
+    const reports: unknown[] = [];
+    events.on("agent:run-handback-observed", (payload) => reports.push(payload));
+
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+
+    const expected = {
+      message: "approve the deployment",
+      report: "needs-you",
+      observedAt: terminal.lastStateChange,
+      truncated: false,
+    };
+    expect(payloads[0]?.lastHandback).toEqual(expected);
+    expect(terminal.lastHandback).toEqual(expected);
+    expect(reports).toEqual([]);
+  });
+
+  it("reports a scheduled run's launch marker to Main with its incarnation (#15982)", () => {
+    const service = new AgentStateService();
+    const tracker = new HandbackTracker(() => [
+      `> Triage ${buildHandbackInstruction(CODE, "run")}`,
+      `  DAINTREE-NEEDS-YOU-${CODE}: two labels need a call END-${CODE}`,
+    ]);
+    tracker.registerDelivered(CODE, "run");
+    const terminal = createTerminal({ handbackTracker: tracker, spawnedAt: 4_200 });
+    const reports: unknown[] = [];
+    events.on("agent:run-handback-observed", (payload) => reports.push(payload));
+
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+
+    expect(reports).toEqual([
+      {
+        terminalId: "term-1",
+        spawnedAt: 4_200,
+        code: CODE,
+        report: "needs-you",
+        message: "two labels need a call",
+        truncated: false,
+        observedAt: terminal.lastStateChange,
+        timestamp: terminal.lastStateChange,
+      },
+    ]);
+  });
+
+  it("reports no ordinary request's marker as a run's", () => {
+    const service = new AgentStateService();
+    const terminal = askedTerminal([ECHO, `  ${MARKER}`]);
+    const reports: unknown[] = [];
+    events.on("agent:run-handback-observed", (payload) => reports.push(payload));
+
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+
+    expect(terminal.lastHandback?.message).toBe("fixed the race in the retry loop");
+    expect(reports).toEqual([]);
   });
 
   it("carries the submission token of the request that asked", () => {
@@ -1322,7 +1518,12 @@ describe("AgentStateService handback detection (#12488)", () => {
 
   it("keeps the first observation of a capture already seen mid-turn (#13128)", () => {
     const service = new AgentStateService();
-    const early = { message: "fixed the race in the retry loop", observedAt: 1, truncated: false };
+    const early = {
+      message: "fixed the race in the retry loop",
+      report: "done" as const,
+      observedAt: 1,
+      truncated: false,
+    };
     const terminal = askedTerminal([MARKER], {
       lastHandback: early,
       lastHandbackUnpublished: true,
@@ -1338,7 +1539,12 @@ describe("AgentStateService handback detection (#12488)", () => {
 
   it("keeps the first observation when the capture changed since mid-turn", () => {
     const service = new AgentStateService();
-    const early = { message: "fixed the race", observedAt: 1, truncated: false };
+    const early = {
+      message: "fixed the race",
+      report: "done" as const,
+      observedAt: 1,
+      truncated: false,
+    };
     const terminal = askedTerminal([MARKER], {
       lastHandback: early,
       lastHandbackUnpublished: true,
@@ -1348,9 +1554,28 @@ describe("AgentStateService handback detection (#12488)", () => {
 
     expect(terminal.lastHandback).toEqual({
       message: "fixed the race in the retry loop",
+      report: "done",
       observedAt: 1,
       truncated: false,
     });
+  });
+
+  it("takes a report that changed since mid-turn, keeping the first observation", () => {
+    const service = new AgentStateService();
+    const early = {
+      message: "fixed the race in the retry loop",
+      report: "done" as const,
+      observedAt: 1,
+      truncated: false,
+    };
+    const terminal = askedTerminal(
+      [`DAINTREE-NEEDS-YOU-${CODE}: fixed the race in the retry loop END-${CODE}`],
+      { lastHandback: early, lastHandbackUnpublished: true }
+    );
+
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+
+    expect(terminal.lastHandback).toEqual({ ...early, report: "needs-you" });
   });
 
   it("publishes nothing for the echoed instruction and keeps waiting", () => {
@@ -1477,5 +1702,124 @@ describe("AgentStateService handback detection (#12488)", () => {
     expect(detector.findHandback).not.toHaveBeenCalled();
     expect(terminal.lastHandback).toBeUndefined();
     expect(payloads.every((p) => p.lastHandback === undefined)).toBe(true);
+  });
+});
+
+describe("usage-limit memory (#16136)", () => {
+  const BANNER_AT = 1_000_000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(BANNER_AT);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    events.removeAllListeners();
+  });
+
+  function limitedPane(overrides: Partial<TerminalInfo> = {}) {
+    const terminal = createTerminal({
+      agentState: "waiting",
+      lastStateChange: BANNER_AT,
+      lastOutputChangeAt: BANNER_AT,
+      ...overrides,
+    });
+    terminal.usageLimitObservedAt = BANNER_AT;
+    return terminal;
+  }
+
+  /**
+   * A turn whose screen kept changing for `changingFor`, settled `settleAfter`
+   * from its start: the monitor's quiet debounce runs past the last change.
+   */
+  function turn(
+    service: AgentStateService,
+    terminal: TerminalInfo,
+    changingFor: number,
+    waitingReason: WaitingReason,
+    settleAfter = changingFor + 8_000
+  ) {
+    service.updateAgentState(terminal, { type: "input" });
+    terminal.lastOutputChangeAt = Date.now() + changingFor;
+    vi.advanceTimersByTime(settleAfter);
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, waitingReason);
+  }
+
+  it("holds while the pane sits on the limit, however long", () => {
+    const service = new AgentStateService();
+    const terminal = limitedPane({ agentState: "working", lastStateChange: BANNER_AT - 60_000 });
+
+    vi.advanceTimersByTime(10_000);
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "error");
+    vi.advanceTimersByTime(8 * 60 * 60_000);
+    service.updateAgentState(terminal, { type: "watchdog-timeout" });
+
+    expect(terminal.usageLimitObservedAt).toBe(BANNER_AT);
+  });
+
+  it("goes once a turn kept the screen changing past the hold and settled cleanly", () => {
+    const service = new AgentStateService();
+    const terminal = limitedPane();
+
+    vi.advanceTimersByTime(60_000);
+    turn(service, terminal, USAGE_LIMIT_WORK_HOLD_MS, "prompt");
+
+    expect(terminal.usageLimitObservedAt).toBeUndefined();
+  });
+
+  it("holds through a turn that hits the limit again", () => {
+    const service = new AgentStateService();
+    const terminal = limitedPane();
+
+    turn(service, terminal, 30_000, "error");
+
+    expect(terminal.usageLimitObservedAt).toBe(BANNER_AT);
+  });
+
+  it("holds through a local command that draws once, however late the settle", () => {
+    const service = new AgentStateService();
+    const terminal = limitedPane();
+
+    vi.advanceTimersByTime(60_000);
+    turn(service, terminal, 300, "prompt", 9_000);
+
+    expect(terminal.usageLimitObservedAt).toBe(BANNER_AT);
+  });
+
+  it("counts a limit retried and lifted within one turn", () => {
+    const service = new AgentStateService();
+    const terminal = limitedPane({ agentState: "working", lastStateChange: BANNER_AT - 5_000 });
+
+    terminal.lastOutputChangeAt = BANNER_AT + USAGE_LIMIT_WORK_HOLD_MS;
+    vi.advanceTimersByTime(10_000);
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+
+    expect(terminal.usageLimitObservedAt).toBeUndefined();
+  });
+
+  it("measures the hold from the banner when it lands mid-turn", () => {
+    const service = new AgentStateService();
+    const terminal = limitedPane({ agentState: "working", lastStateChange: BANNER_AT - 60_000 });
+
+    terminal.lastOutputChangeAt = BANNER_AT + USAGE_LIMIT_WORK_HOLD_MS - 1;
+    vi.advanceTimersByTime(10_000);
+    service.updateAgentState(terminal, { type: "prompt" }, "activity", 1.0, "prompt");
+
+    expect(terminal.usageLimitObservedAt).toBe(BANNER_AT);
+  });
+
+  it("keeps it through an exit and a new session in the pane, on the same account", () => {
+    const service = new AgentStateService();
+    const terminal = limitedPane();
+
+    service.updateAgentState(terminal, { type: "input" });
+    terminal.lastOutputChangeAt = Date.now() + 30_000;
+    vi.advanceTimersByTime(40_000);
+    service.updateAgentState(terminal, { type: "exit", code: 0 });
+    service.updateAgentState(terminal, { type: "respawn" });
+
+    expect(terminal.agentState).toBe("idle");
+    expect(terminal.usageLimitObservedAt).toBe(BANNER_AT);
   });
 });

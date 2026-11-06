@@ -1,10 +1,24 @@
 import { events } from "../events.js";
-import { OUTPUT_BUFFER_SIZE } from "./types.js";
+import { OUTPUT_BUFFER_SIZE, type TerminalInfo } from "./types.js";
 
 // Coalescing window for host→main agent:output forwarding. Pending output is
 // flushed synchronously before any agent state transition (and on exit) so
 // turn-outcome classification still sees the tail in order.
 const AGENT_OUTPUT_FLUSH_INTERVAL_MS = 50;
+
+/**
+ * Whether this terminal's raw output is forwarded to Main as `agent:output`.
+ *
+ * Main's only reader of those bytes is the Assistant's turn-outcome
+ * classifier, which drops output from any terminal not bound to a help
+ * session (#15667). The binding is made before the PTY is spawned and is
+ * sealed onto the record as `isAssistantTerminal`, including on a tokenless
+ * restart and a pty-host crash replay, so every other agent terminal would
+ * only cost Main a deserialize per chunk for bytes it throws away.
+ */
+export function forwardsAgentOutput(terminal: Pick<TerminalInfo, "isAssistantTerminal">): boolean {
+  return terminal.isAssistantTerminal === true;
+}
 
 export interface AgentOutputForwarderHost {
   readonly terminalId: string;

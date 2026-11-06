@@ -1,5 +1,15 @@
 // @vitest-environment jsdom
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import { act, renderHook } from "@testing-library/react";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -10,6 +20,8 @@ import {
   createCorrectionReview,
 } from "../../inputEditorExtensions/correctionReview";
 import { addImageChip, imageChipField, readImageChipPaths } from "../../inputEditorExtensions";
+import { createCaretTracker } from "../../inputEditorExtensions/caretTracker";
+import { makeDraftKey } from "@/lib/draftKey";
 
 // Enter while dictating, end to end through the real voice service, both real
 // stores and a real editor: the send waits for the passage's correction to land
@@ -74,11 +86,13 @@ import {
   useDictationRangeStore,
 } from "@/store/dictationRangeStore";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
+import { VOICE_SEND_REFUSED_MESSAGE } from "@/services/voiceSendDiagnostics";
+import { logInfo } from "@/utils/logger";
 import { planVoiceDraftSend, type VoiceDraftSend } from "@/services/voiceDraftSend";
 import { useVoiceWaitSubmit } from "../useVoiceWaitSubmit";
 
 type DeltaPayload = { text: string; itemId?: string };
-type CompletePayload = { text: string; willCorrect: boolean; itemId?: string };
+type CompletePayload = { text: string; willCorrect: boolean; itemId?: string; send?: boolean };
 type CorrectResult = {
   action: "no_change" | "replace";
   correctedText: string;
@@ -202,7 +216,16 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
 
   const isEditable = () => view.state.facet(EditorView.editable);
 
-  function renderComposer(options: { extensions?: Extension[]; holdSend?: boolean } = {}) {
+  function renderComposer(
+    options: {
+      extensions?: Extension[];
+      // A send the composer refuses (an upload still on its way): at once, once
+      // it answers, by failing, or when the test lets its answer through.
+      holdSend?: boolean | "later" | "reject" | (() => Promise<boolean>);
+      duringSend?: () => void;
+      isDisabled?: () => boolean;
+    } = {}
+  ) {
     const compartment = new Compartment();
     // The editor still shows the raw transcript: a store write only reaches it
     // on the next render, which the hook has to beat (#9172).
@@ -219,6 +242,10 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
     // leaves. A held send is one the composer refuses (an upload still on its
     // way).
     const sendFromEditor = vi.fn((_handBack?: unknown, voiceSend?: VoiceDraftSend) => {
+      options.duringSend?.();
+      if (typeof options.holdSend === "function") return options.holdSend();
+      if (options.holdSend === "later") return Promise.resolve(false);
+      if (options.holdSend === "reject") return Promise.reject(new Error("upload failed"));
       if (options.holdSend) return false;
       voiceRecordingService.discardPendingCorrections(PANEL_ID, voiceSend?.sessions);
       const doc = view.state.doc.toString();
@@ -236,6 +263,7 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
         editorViewRef: { current: view },
         editableCompartmentRef: { current: compartment },
         sendFromEditor,
+        isDisabled: options.isDisabled,
       })
     );
     return result;
@@ -329,6 +357,14 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
     const pending = deferred<CorrectResult>();
     correct.mockReturnValueOnce(pending.promise);
     dictate(PANEL_ID, "hello wrld");
+    await act(async () => {
+      await voiceRecordingService.stop();
+    });
+    // A newer dictation comes and goes while the cleanup is still out; one
+    // that began during the wait would reopen the send instead (#15703).
+    const voice = useVoiceRecordingStore.getState();
+    voice.beginSession({ panelId: PANEL_ID }, "session-next");
+    voice.finishSession();
     const result = renderComposer({
       extensions: [createComposerHistory(), createCorrectionReview()],
       holdSend: true,
@@ -337,7 +373,6 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
     await act(async () => {
       result.current.startVoiceWaitSubmit();
     });
-    useVoiceRecordingStore.getState().beginSession({ panelId: PANEL_ID }, "session-next");
     await act(async () => {
       pending.resolve({ action: "replace", correctedText: "Hello world." });
     });
@@ -564,165 +599,620 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
     expect(sent).toEqual(["Hello world."]);
   });
 
-  it("keeps a dictation started on the same panel during the wait out of the send (#14804)", async () => {
-    const pending = deferred<CorrectResult>();
-    correct.mockReturnValueOnce(pending.promise);
-    dictate(PANEL_ID, "hello wrld");
-    const result = renderComposer();
+  describe("a dictation started in the draft while its send waits (#15703)", () => {
+    /**
+     * Enter on a passage whose cleanup is held, then the dictation key again in
+     * the same composer, its first words landing straight away.
+     */
+    async function reopenSend(options: { extensions?: Extension[]; beforeSend?: () => void } = {}) {
+      const first = deferred<CorrectResult>();
+      correct.mockReturnValueOnce(first.promise);
+      dictate(PANEL_ID, "hello wrld");
+      const result = renderComposer(options);
+      options.beforeSend?.();
+      await act(async () => {
+        result.current.startVoiceWaitSubmit();
+      });
+      act(() => {
+        dictate(PANEL_ID, "and the next part");
+      });
+      return { result, first };
+    }
 
-    await act(async () => {
-      result.current.startVoiceWaitSubmit();
-    });
-    // The dictation key again straight away, for the next prompt: its first
-    // words land while the send still waits on the cleanup.
-    act(() => {
-      dictate(PANEL_ID, "these are the next prompt");
-    });
-    expect(sent).toEqual([]);
+    const landFirst = (first: ReturnType<typeof deferred<CorrectResult>>) =>
+      act(async () => {
+        first.resolve({ action: "replace", correctedText: "Hello world." });
+      });
 
-    await act(async () => {
-      pending.resolve({ action: "replace", correctedText: "Hello world." });
-    });
+    it("calls the send off as Escape does, and the first cleanup still lands in the draft", async () => {
+      const { result, first } = await reopenSend();
 
-    expect(sent).toEqual(["Hello world."]);
-    expect(draft(PANEL_ID)).toBe("these are the next prompt");
+      expect(result.current.voiceSubmitOutcome?.kind).toBe("reopened");
+      expect(result.current.voiceSubmitPhase).toBeNull();
+      expect(useTerminalInputStore.getState().isVoiceSubmitting(PANEL_ID)).toBe(false);
+      expect(isEditable()).toBe(true);
 
-    // Still recording, its later words join the ones it kept.
-    act(() => {
-      callbacks.complete!({ text: "and the rest", willCorrect: false, itemId: "item-late" });
-    });
-    expect(draft(PANEL_ID)).toBe("these are the next prompt and the rest");
-  });
+      await landFirst(first);
 
-  it("doesn't wait for a dictation started and stopped during the wait, and its cleanup lands on what it kept", async () => {
-    const pending = deferred<CorrectResult>();
-    const later = deferred<CorrectResult>();
-    correct.mockReturnValueOnce(pending.promise).mockReturnValueOnce(later.promise);
-    dictate(PANEL_ID, "hello wrld");
-    const result = renderComposer();
-
-    await act(async () => {
-      result.current.startVoiceWaitSubmit();
-    });
-    await act(async () => {
-      dictate(PANEL_ID, "the nxt prompt");
-      await voiceRecordingService.stop();
-    });
-    expect(correct).toHaveBeenLastCalledWith(
-      expect.objectContaining({ rawText: "the nxt prompt" })
-    );
-
-    await act(async () => {
-      pending.resolve({ action: "replace", correctedText: "Hello world." });
-    });
-    expect(sent).toEqual(["Hello world."]);
-    expect(draft(PANEL_ID)).toBe("the nxt prompt");
-
-    await act(async () => {
-      later.resolve({ action: "replace", correctedText: "The next prompt." });
-    });
-    expect(draft(PANEL_ID)).toBe("The next prompt.");
-    expect(sent).toEqual(["Hello world."]);
-  });
-
-  it("keeps a newer dictation's words out of the send when its cleanup lands first", async () => {
-    const pending = deferred<CorrectResult>();
-    const later = deferred<CorrectResult>();
-    correct.mockReturnValueOnce(pending.promise).mockReturnValueOnce(later.promise);
-    dictate(PANEL_ID, "hello wrld");
-    const result = renderComposer();
-
-    await act(async () => {
-      result.current.startVoiceWaitSubmit();
-    });
-    await act(async () => {
-      dictate(PANEL_ID, "the nxt prompt");
-      await voiceRecordingService.stop();
-    });
-    await act(async () => {
-      later.resolve({ action: "replace", correctedText: "The next prompt." });
-    });
-    expect(draft(PANEL_ID)).toBe("hello wrld The next prompt.");
-    expect(sent).toEqual([]);
-
-    await act(async () => {
-      pending.resolve({ action: "replace", correctedText: "Hello world." });
-    });
-    expect(sent).toEqual(["Hello world."]);
-    expect(draft(PANEL_ID)).toBe("The next prompt.");
-  });
-
-  it("sends only what the stopped dictation left at a second Enter, keeping the newer one's words", async () => {
-    const pending = deferred<CorrectResult>();
-    correct.mockReturnValueOnce(pending.promise);
-    dictate(PANEL_ID, "hello wrld");
-    const result = renderComposer();
-
-    await act(async () => {
-      result.current.startVoiceWaitSubmit();
-    });
-    act(() => {
-      dictate(PANEL_ID, "these are the next prompt");
-    });
-    await act(async () => {
-      pressKey("Enter");
+      expect(sent).toEqual([]);
+      expect(draft(PANEL_ID)).toBe("Hello world. and the next part");
     });
 
-    expect(sent).toEqual(["hello wrld"]);
-    expect(draft(PANEL_ID)).toBe("these are the next prompt");
-    await act(async () => {
-      pending.resolve({ action: "replace", correctedText: "Hello world." });
-    });
-    expect(draft(PANEL_ID)).toBe("these are the next prompt");
-  });
+    it("reopens at the dictation key's press, before its session begins", async () => {
+      const first = deferred<CorrectResult>();
+      correct.mockReturnValueOnce(first.promise);
+      dictate(PANEL_ID, "hello wrld");
+      const result = renderComposer();
 
-  it("lets Escape take back a newer dictation it held back, as if nothing came before it", async () => {
-    const pending = deferred<CorrectResult>();
-    correct.mockReturnValueOnce(pending.promise);
-    dictate(PANEL_ID, "hello wrld");
-    const result = renderComposer();
+      await act(async () => {
+        result.current.startVoiceWaitSubmit();
+      });
+      act(() => {
+        useVoiceRecordingStore.getState().setArming({ panelId: PANEL_ID });
+      });
 
-    await act(async () => {
-      result.current.startVoiceWaitSubmit();
+      expect(result.current.voiceSubmitOutcome?.kind).toBe("reopened");
+      await landFirst(first);
+      expect(sent).toEqual([]);
     });
-    act(() => {
-      dictate(PANEL_ID, "these are the next prompt");
-    });
-    await act(async () => {
-      pending.resolve({ action: "replace", correctedText: "Hello world." });
-    });
-    expect(draft(PANEL_ID)).toBe("these are the next prompt");
 
-    expect(sent).toEqual(["Hello world."]);
+    describe("the summary of the session that reopened it (#15704)", () => {
+      // The service is a singleton, so its spy keeps the calls of earlier tests.
+      const reopened = () => vi.spyOn(voiceRecordingService, "noteSendReopened").mockClear();
 
-    // The space it was written with went with the sent prompt, and none of
-    // its words count as edited for it.
-    await act(async () => {
+      it("names the session that began in the draft", async () => {
+        const noted = reopened();
+        await reopenSend();
+
+        const session =
+          useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.dictationSessionId;
+        expect(session).toEqual(expect.any(String));
+        expect(noted.mock.calls).toEqual([[{ sessionId: session }]]);
+      });
+
+      it("names the armed target when the key's press reopened it, before its session exists", async () => {
+        const noted = reopened();
+        const first = deferred<CorrectResult>();
+        correct.mockReturnValueOnce(first.promise);
+        dictate(PANEL_ID, "hello wrld");
+        const result = renderComposer();
+        await act(async () => {
+          result.current.startVoiceWaitSubmit();
+        });
+
+        const armed = { panelId: PANEL_ID };
+        act(() => {
+          useVoiceRecordingStore.getState().setArming(armed);
+        });
+
+        expect(noted).toHaveBeenCalledTimes(1);
+        const [by] = noted.mock.calls[0]!;
+        // The very object the key armed: that identity is what carries the note to its session.
+        expect("target" in by && by.target).toBe(armed);
+        await landFirst(first);
+      });
+
+      it("names nothing for a dictation on another panel, which leaves the send alone", async () => {
+        const noted = reopened();
+        const first = deferred<CorrectResult>();
+        correct.mockReturnValueOnce(first.promise);
+        dictate(PANEL_ID, "hello wrld");
+        const result = renderComposer();
+        await act(async () => {
+          result.current.startVoiceWaitSubmit();
+        });
+        act(() => {
+          useVoiceRecordingStore.getState().setArming({ panelId: "panel-2" });
+        });
+
+        expect(noted).not.toHaveBeenCalled();
+        await landFirst(first);
+        expect(sent).toEqual(["Hello world."]);
+      });
+
+      it("names nothing for a send nothing reopened", async () => {
+        const noted = reopened();
+        dictate(PANEL_ID, "hello wrld");
+        correct.mockResolvedValueOnce({ action: "no_change", correctedText: "" });
+        const result = renderComposer();
+        await act(async () => {
+          result.current.startVoiceWaitSubmit();
+        });
+
+        expect(noted).not.toHaveBeenCalled();
+        expect(sent).toEqual(["hello wrld"]);
+      });
+    });
+
+    it("leaves the send alone for a dictation key pressed on another panel (#14611)", async () => {
+      const first = deferred<CorrectResult>();
+      correct.mockReturnValueOnce(first.promise);
+      dictate(PANEL_ID, "hello wrld");
+      const result = renderComposer();
+
+      await act(async () => {
+        result.current.startVoiceWaitSubmit();
+      });
+      act(() => {
+        useVoiceRecordingStore.getState().setArming({ panelId: "panel-2" });
+      });
+
+      expect(result.current.voiceSubmitPhase).toBe("polishing");
+      await landFirst(first);
+      expect(sent).toEqual(["Hello world."]);
+    });
+
+    it("sends both passages as one prompt at Enter (#14804)", async () => {
+      const { result, first } = await reopenSend();
+      await landFirst(first);
+      // Still recording, its later words join the draft.
+      act(() => {
+        callbacks.complete!({ text: "and the rest", willCorrect: false, itemId: "item-late" });
+      });
+      correct.mockResolvedValueOnce({ action: "no_change", correctedText: "" });
+
+      await act(async () => {
+        result.current.startVoiceWaitSubmit();
+      });
+
+      expect(sent).toEqual(["Hello world. and the next part and the rest"]);
+      expect(useVoiceRecordingStore.getState().status).toBe("idle");
+    });
+
+    it.each([
+      ["the new passage's", "second"],
+      ["the first passage's", "first"],
+    ] as const)("waits at Enter for both cleanups, %s landing first", async (_, landsFirst) => {
+      const { result, first } = await reopenSend();
+      const second = deferred<CorrectResult>();
+      correct.mockReturnValueOnce(second.promise);
+      const landSecond = () =>
+        act(async () => {
+          second.resolve({ action: "replace", correctedText: "And the next part." });
+        });
+
+      await act(async () => {
+        result.current.startVoiceWaitSubmit();
+      });
+      expect(correct).toHaveBeenLastCalledWith(
+        expect.objectContaining({ rawText: "and the next part" })
+      );
+      await (landsFirst === "second" ? landSecond() : landFirst(first));
+      expect(sent).toEqual([]);
+      expect(result.current.voiceSubmitPhase).toBe("polishing");
+
+      await (landsFirst === "second" ? landFirst(first) : landSecond());
+
+      expect(sent).toEqual(["Hello world. And the next part."]);
+    });
+
+    it("sends both from the session panel's Send", async () => {
+      const { first } = await reopenSend();
+      act(() => {
+        useVoiceRecordingStore.getState().setStatus("recording");
+      });
+      correct.mockResolvedValueOnce({ action: "no_change", correctedText: "" });
+
+      await act(async () => {
+        await voiceRecordingService.stopAndSend();
+      });
+      expect(useVoiceRecordingStore.getState().status).toBe("idle");
+      expect(sent).toEqual([]);
+
+      await landFirst(first);
+
+      expect(sent).toEqual(["Hello world. and the next part"]);
+    });
+
+    it("sends both at a spoken send", async () => {
+      const { first } = await reopenSend();
+      act(() => {
+        useVoiceRecordingStore.getState().setStatus("recording");
+      });
+      correct.mockResolvedValueOnce({ action: "no_change", correctedText: "" });
+
+      // Main has already taken "send it" off the utterance.
+      await act(async () => {
+        callbacks.complete!({
+          text: "and that is all",
+          willCorrect: false,
+          itemId: "item-send",
+          send: true,
+        });
+      });
+      expect(useVoiceRecordingStore.getState().status).toBe("idle");
+      expect(sent).toEqual([]);
+
+      await landFirst(first);
+
+      expect(sent).toEqual(["Hello world. and the next part and that is all"]);
+    });
+
+    it("leaves both passages unsent when the dictation stops without a send", async () => {
+      const { first } = await reopenSend();
+      const second = deferred<CorrectResult>();
+      correct.mockReturnValueOnce(second.promise);
+
+      await act(async () => {
+        await voiceRecordingService.stop();
+      });
+      await landFirst(first);
+      await act(async () => {
+        second.resolve({ action: "replace", correctedText: "And the next part." });
+      });
+
+      expect(sent).toEqual([]);
+      expect(draft(PANEL_ID)).toBe("Hello world. And the next part.");
+    });
+
+    it("lets Escape take back only the new dictation, leaving the first passage unsent", async () => {
+      const { first } = await reopenSend();
+      await landFirst(first);
+
       // The first press asks for a second (#14927).
-      expect(voiceRecordingService.handleEscape(PANEL_ID)).toBe(true);
-      expect(voiceRecordingService.handleEscape(PANEL_ID)).toBe(true);
+      await act(async () => {
+        expect(voiceRecordingService.handleEscape(PANEL_ID)).toBe(true);
+        expect(voiceRecordingService.handleEscape(PANEL_ID)).toBe(true);
+      });
+
+      expect(draft(PANEL_ID)).toBe("Hello world.");
+      expect(sent).toEqual([]);
     });
-    expect(draft(PANEL_ID)).toBe("");
+
+    it("writes after the first passage, not over a selection left in it", async () => {
+      await reopenSend({
+        extensions: [createCaretTracker(() => makeDraftKey(PANEL_ID, undefined))],
+        beforeSend: () => {
+          view.focus();
+          view.dispatch({ selection: { anchor: 6, head: 10 } });
+        },
+      });
+
+      expect(draft(PANEL_ID)).toBe("hello wrld and the next part");
+    });
+
+    it("reopens a spoken send waiting on a short prompt, which the next send takes whole", async () => {
+      const pending = deferred<CorrectResult>();
+      correct.mockReturnValueOnce(pending.promise);
+      dictate(PANEL_ID, "fix it");
+      const result = renderComposer();
+
+      await act(async () => {
+        result.current.startVoiceWaitSubmit({ spoken: true });
+      });
+      act(() => {
+        dictate(PANEL_ID, "these are the next prompt");
+      });
+      expect(result.current.voiceSubmitOutcome?.kind).toBe("reopened");
+      expect(isEditable()).toBe(true);
+      await act(async () => {
+        pending.resolve({ action: "replace", correctedText: "Fix it." });
+      });
+      expect(sent).toEqual([]);
+      expect(draft(PANEL_ID)).toBe("Fix it. these are the next prompt");
+
+      correct.mockResolvedValueOnce({ action: "no_change", correctedText: "" });
+      await act(async () => {
+        result.current.startVoiceWaitSubmit();
+      });
+
+      expect(sent).toEqual(["Fix it. these are the next prompt"]);
+    });
+
+    it("leaves a send alone from the moment the composer takes its text", async () => {
+      const pending = deferred<CorrectResult>();
+      correct.mockReturnValueOnce(pending.promise);
+      dictate(PANEL_ID, "hello wrld");
+      // The dictation key lands while the composer is taking the text.
+      const result = renderComposer({
+        duringSend: () => dictate(PANEL_ID, "the next prompt"),
+      });
+
+      await act(async () => {
+        result.current.startVoiceWaitSubmit();
+      });
+      await act(async () => {
+        pending.resolve({ action: "replace", correctedText: "Hello world." });
+      });
+
+      expect(sent).toEqual(["Hello world."]);
+      expect(result.current.voiceSubmitOutcome?.kind).toBe("sent");
+    });
+
+    describe("a start already under way at Enter", () => {
+      /** The dictation key, then Enter before its session begins, then the session. */
+      async function enterWhileArming() {
+        const first = deferred<CorrectResult>();
+        correct.mockReturnValueOnce(first.promise);
+        dictate(PANEL_ID, "hello wrld");
+        await act(async () => {
+          await voiceRecordingService.stop();
+        });
+        const result = renderComposer();
+        act(() => {
+          useVoiceRecordingStore.getState().setArming({ panelId: PANEL_ID });
+        });
+        await act(async () => {
+          result.current.startVoiceWaitSubmit();
+        });
+        act(() => {
+          dictate(PANEL_ID, "the next prompt");
+          useVoiceRecordingStore.getState().setStatus("recording");
+        });
+        return { result, first };
+      }
+
+      it("holds its dictation back for the next prompt, as Enter before it began would (#14804)", async () => {
+        const { result, first } = await enterWhileArming();
+        expect(result.current.voiceSubmitPhase).toBe("polishing");
+
+        await landFirst(first);
+
+        expect(sent).toEqual(["Hello world."]);
+        expect(draft(PANEL_ID)).toBe("the next prompt");
+      });
+
+      it("reopens the send for a send from that dictation, which takes both", async () => {
+        const { result, first } = await enterWhileArming();
+        const noted = vi.spyOn(voiceRecordingService, "noteSendReopened").mockClear();
+        correct.mockResolvedValueOnce({ action: "no_change", correctedText: "" });
+
+        await act(async () => {
+          await voiceRecordingService.stopAndSend();
+        });
+        expect(useVoiceRecordingStore.getState().status).toBe("idle");
+        expect(result.current.voiceSubmitPhase).toBe("polishing");
+        // The send that took both says it was that dictation which reopened the wait.
+        expect(noted).toHaveBeenCalledTimes(1);
+        expect(noted).toHaveBeenCalledWith({ sessionId: expect.any(String) });
+
+        await landFirst(first);
+
+        expect(sent).toEqual(["Hello world. the next prompt"]);
+      });
+    });
   });
 
-  it("holds back a spoken send whose own prompt is too short, whatever the newer dictation adds", async () => {
-    const pending = deferred<CorrectResult>();
-    correct.mockReturnValueOnce(pending.promise);
-    dictate(PANEL_ID, "fix it");
-    const result = renderComposer();
-
-    await act(async () => {
-      result.current.startVoiceWaitSubmit({ spoken: true });
-    });
-    act(() => {
-      dictate(PANEL_ID, "these are the next prompt");
-    });
-    await act(async () => {
-      pending.resolve({ action: "replace", correctedText: "Fix it." });
+  describe("a send request that goes nowhere leaves a line (#15704)", () => {
+    beforeEach(() => {
+      vi.mocked(logInfo).mockClear();
     });
 
-    expect(sent).toEqual([]);
-    expect(draft(PANEL_ID)).toBe("Fix it. these are the next prompt");
+    const refusals = () =>
+      vi
+        .mocked(logInfo)
+        .mock.calls.filter(([message]) => message === VOICE_SEND_REFUSED_MESSAGE)
+        .map(([, context]) => context);
+    const sessionIn = () =>
+      useVoiceRecordingStore.getState().panelBuffers[PANEL_ID]?.dictationSessionId ?? null;
+
+    it("says nothing when the send goes", async () => {
+      dictate(PANEL_ID, "hello wrld");
+      correct.mockResolvedValueOnce({ action: "no_change", correctedText: "" });
+      const result = renderComposer();
+
+      await act(async () => {
+        result.current.startVoiceWaitSubmit();
+      });
+
+      expect(sent).toEqual(["hello wrld"]);
+      expect(refusals()).toEqual([]);
+    });
+
+    it.each([
+      ["Enter", undefined, "enter"],
+      ["the session panel's Send", { asker: "session_panel_send" } as const, "session_panel_send"],
+    ])("says who asked when %s finds the send already waiting", async (_name, options, asker) => {
+      const pending = deferred<CorrectResult>();
+      correct.mockReturnValueOnce(pending.promise);
+      dictate(PANEL_ID, "hello wrld");
+      const result = renderComposer();
+      await act(async () => {
+        result.current.startVoiceWaitSubmit();
+      });
+
+      await act(async () => {
+        result.current.startVoiceWaitSubmit(options);
+      });
+
+      expect(refusals()).toEqual([
+        { asker, reason: "already_waiting", panelId: PANEL_ID, sessionId: sessionIn() },
+      ]);
+      // The first send is untouched, and goes once.
+      expect(result.current.voiceSubmitPhase).toBe("polishing");
+      await act(async () => {
+        pending.resolve({ action: "replace", correctedText: "Hello world." });
+      });
+      expect(sent).toEqual(["Hello world."]);
+      expect(refusals()).toHaveLength(1);
+    });
+
+    it("says there is no dictation when the stop-and-send key lands on a send that is waiting", async () => {
+      const pending = deferred<CorrectResult>();
+      correct.mockReturnValueOnce(pending.promise);
+      dictate(PANEL_ID, "hello wrld");
+      const result = renderComposer();
+      await act(async () => {
+        result.current.startVoiceWaitSubmit();
+      });
+
+      await act(async () => {
+        await voiceRecordingService.stopAndSend();
+      });
+
+      expect(refusals()).toEqual([
+        {
+          asker: "stop_and_send_key",
+          reason: "no_session",
+          panelId: null,
+          sessionId: null,
+        },
+      ]);
+      await act(async () => {
+        pending.resolve({ action: "replace", correctedText: "Hello world." });
+      });
+      expect(sent).toEqual(["Hello world."]);
+    });
+
+    it("says a spoken send is too short once its cleanup has landed", async () => {
+      const pending = deferred<CorrectResult>();
+      correct.mockReturnValueOnce(pending.promise);
+      dictate(PANEL_ID, "fix it");
+      const result = renderComposer();
+      await act(async () => {
+        result.current.startVoiceWaitSubmit({ spoken: true, asker: "spoken_send" });
+      });
+      expect(refusals()).toEqual([]);
+
+      await act(async () => {
+        pending.resolve({ action: "replace", correctedText: "Fix it." });
+      });
+
+      expect(sent).toEqual([]);
+      expect(refusals()).toEqual([
+        {
+          asker: "spoken_send",
+          reason: "draft_too_short",
+          panelId: PANEL_ID,
+          sessionId: sessionIn(),
+        },
+      ]);
+    });
+
+    it("says a spoken send found nothing in the draft once its cleanup has landed", async () => {
+      const pending = deferred<CorrectResult>();
+      correct.mockReturnValueOnce(pending.promise);
+      dictate(PANEL_ID, "fix it");
+      const result = renderComposer();
+      await act(async () => {
+        result.current.startVoiceWaitSubmit({ spoken: true, asker: "spoken_send" });
+      });
+      useTerminalInputStore.getState().setDraftInput(PANEL_ID, "");
+
+      await act(async () => {
+        pending.resolve({ action: "replace", correctedText: "Fix it." });
+      });
+
+      expect(sent).toEqual([]);
+      expect(refusals()).toEqual([
+        { asker: "spoken_send", reason: "draft_empty", panelId: PANEL_ID, sessionId: sessionIn() },
+      ]);
+    });
+
+    it.each([
+      ["at once", true, "send_held"],
+      ["when its answer comes", "later", "send_held"],
+      ["by failing", "reject", "send_failed"],
+    ] as const)("says the composer held the send back %s", async (_name, holdSend, reason) => {
+      correct.mockResolvedValueOnce({ action: "no_change", correctedText: "" });
+      dictate(PANEL_ID, "hello wrld");
+      const result = renderComposer({ holdSend });
+
+      await act(async () => {
+        result.current.startVoiceWaitSubmit();
+      });
+
+      expect(sent).toEqual([]);
+      expect(refusals()).toEqual([
+        { asker: "enter", reason, panelId: PANEL_ID, sessionId: sessionIn() },
+      ]);
+    });
+
+    it("names the session the request was made against when the composer answers after a newer dictation began", async () => {
+      correct.mockResolvedValueOnce({ action: "no_change", correctedText: "" });
+      dictate(PANEL_ID, "hello wrld");
+      const answer = deferred<boolean>();
+      const result = renderComposer({ holdSend: () => answer.promise });
+      await act(async () => {
+        result.current.startVoiceWaitSubmit();
+      });
+      const requested = sessionIn();
+      act(() => {
+        dictate(PANEL_ID, "and the next prompt");
+      });
+      expect(sessionIn()).not.toBe(requested);
+      expect(refusals()).toEqual([]);
+
+      await act(async () => {
+        answer.resolve(false);
+      });
+
+      expect(refusals()).toEqual([
+        { asker: "enter", reason: "send_held", panelId: PANEL_ID, sessionId: requested },
+      ]);
+    });
+
+    it("says nothing for an attempt whose wait was cleared from under it", async () => {
+      const pending = deferred<CorrectResult>();
+      correct.mockReturnValueOnce(pending.promise);
+      dictate(PANEL_ID, "hello wrld");
+      const result = renderComposer();
+      await act(async () => {
+        result.current.startVoiceWaitSubmit();
+      });
+
+      // As removing the panel does: the flag goes, the attempt is not told.
+      act(() => {
+        useTerminalInputStore.getState().setVoiceSubmitting(PANEL_ID, false);
+      });
+      await act(async () => {
+        pending.resolve({ action: "replace", correctedText: "Hello world." });
+      });
+
+      expect(sent).toEqual([]);
+      expect(refusals()).toEqual([]);
+    });
+
+    it("says a disabled composer wouldn't send, though the dictation stops", async () => {
+      dictate(PANEL_ID, "hello wrld");
+      renderComposer({ isDisabled: () => true });
+      act(() => {
+        useVoiceRecordingStore.getState().setStatus("recording");
+      });
+      const session = sessionIn();
+
+      await act(async () => {
+        await voiceRecordingService.stopAndSend({ asker: "session_panel_send" });
+      });
+
+      expect(sent).toEqual([]);
+      expect(useVoiceRecordingStore.getState().status).toBe("idle");
+      expect(refusals()).toEqual([
+        {
+          asker: "session_panel_send",
+          reason: "composer_disabled",
+          panelId: PANEL_ID,
+          sessionId: session,
+        },
+      ]);
+    });
+
+    it("says it was a spoken send that a disabled composer wouldn't send", async () => {
+      dictate(PANEL_ID, "hello wrld and some more words");
+      renderComposer({ isDisabled: () => true });
+      act(() => {
+        useVoiceRecordingStore.getState().setStatus("recording");
+      });
+
+      await act(async () => {
+        callbacks.complete!({
+          text: "and that is all",
+          willCorrect: false,
+          itemId: "item-send",
+          send: true,
+        });
+      });
+
+      expect(sent).toEqual([]);
+      expect(refusals()).toEqual([
+        {
+          asker: "spoken_send",
+          reason: "composer_disabled",
+          panelId: PANEL_ID,
+          sessionId: expect.any(String),
+        },
+      ]);
+    });
   });
 
   describe("keeping what it held back once the send has gone", () => {
@@ -749,6 +1239,35 @@ describe("useVoiceWaitSubmit with a real correction pass (#14611, #14780)", () =
         "these are the next prompt and the rest"
       );
       expect(draft(PANEL_ID)).toBe("these are the next prompt and the rest");
+    });
+
+    it("leaves a draft another screen took control of to its driver (#15919)", async () => {
+      const PROJECT = "project-1";
+      const projectDraft = () => useTerminalInputStore.getState().getDraftInput(PANEL_ID, PROJECT);
+      const dictateInProject = (text: string) => {
+        useVoiceRecordingStore.getState().beginSession({ panelId: PANEL_ID, projectId: PROJECT });
+        const itemId = `item-${++itemSeq}`;
+        callbacks.delta!({ text, itemId });
+        callbacks.complete!({ text, willCorrect: false, itemId });
+      };
+      dictateInProject("hello wrld");
+      const sessions = voiceRecordingService.sendSessions(PANEL_ID, PROJECT);
+      dictateInProject("these are the next prompt");
+      const send = planVoiceDraftSend(
+        { panelId: PANEL_ID, projectId: PROJECT },
+        projectDraft(),
+        useDictationRangeStore.getState().listDictations(PANEL_ID, PROJECT),
+        sessions
+      );
+      expect(send.text).toBe("hello wrld");
+      const before = projectDraft();
+
+      const { setLeaseInputBlock } = await import("@/services/terminal/inputGate");
+      onTestFinished(() => setLeaseInputBlock(null));
+      setLeaseInputBlock({ kind: "driven-elsewhere", driverName: "Studio Mac" });
+
+      expect(voiceRecordingService.keepHeldBackDictation(send)).toBeNull();
+      expect(projectDraft()).toBe(before);
     });
 
     it("leaves the draft alone once the sent text itself changed", () => {

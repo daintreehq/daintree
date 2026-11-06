@@ -53,6 +53,12 @@ import type { GuestOriginPolicy } from "../sitePreview/originPolicy.js";
 import { extractorAssetId, type CoreGuestAssetLoader } from "./guestAssets.js";
 import { EXTRACTOR_INSTALL_STATUS } from "./guestChannel.js";
 import {
+  buildServedMarkupSource,
+  SERVED_MARKUP_TIMEOUT_MS,
+  servedMarkupFrom,
+  type ServedMarkup,
+} from "./servedMarkup.js";
+import {
   buildBootstrapSource,
   buildExtractorRemoveSource,
   buildExtractorSource,
@@ -514,7 +520,57 @@ export class CoreGuest {
       this.extractors.set(framework, "unavailable");
       return;
     }
-    await this.runInstall(epoch, framework, buildExtractorSource({ channel, framework, body }));
+    // Astro's dev toolbar takes the source stamps off the live elements, so its
+    // extractor also gets the markup as served. Nothing else pays for the read.
+    let served: ServedMarkup | null | undefined;
+    if (framework === "astro") {
+      const target = this.mainWorldTarget();
+      served = target === null ? null : await this.readServed();
+      if (!this.isCurrent(epoch)) return;
+      // Read in another document than the one the install is going into.
+      if (this.mainWorldTarget() !== target) served = null;
+    }
+    await this.runInstall(
+      epoch,
+      framework,
+      buildExtractorSource({ channel, framework, body, served })
+    );
+  }
+
+  /**
+   * The markup as served, fetched from the picker's own world, or null when it
+   * could not be read in time; never throws.
+   */
+  private async readServed(): Promise<ServedMarkup | null> {
+    const contextId = this.contextId;
+    if (contextId === null) return null;
+    const read = this.deps
+      .send("Runtime.evaluate", {
+        expression: buildServedMarkupSource(),
+        contextId,
+        awaitPromise: true,
+        returnByValue: true,
+        timeout: this.deps.evaluateTimeoutMs,
+      })
+      .then(
+        (evaluated) => servedMarkupFrom((evaluated as EvaluateResult | undefined)?.result?.value),
+        () => null
+      );
+    const setTimer =
+      this.deps.setTimer ??
+      ((callback: () => void, ms: number) => setTimeout(callback, ms).unref?.());
+    const clearTimer =
+      this.deps.clearTimer ?? ((handle: unknown) => clearTimeout(handle as NodeJS.Timeout));
+    let timer: unknown = null;
+    // The guest aborts its own fetch at the same deadline; an answer after it is ignored.
+    const deadline = new Promise<null>((resolve) => {
+      timer = setTimer(() => resolve(null), SERVED_MARKUP_TIMEOUT_MS);
+    });
+    try {
+      return await Promise.race([read, deadline]);
+    } finally {
+      clearTimer(timer);
+    }
   }
 
   /**

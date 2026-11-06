@@ -33,6 +33,7 @@ import {
   resolveHostTmpDir,
   setHostPlatformInfo,
 } from "../useHostPlatform";
+import { Copy } from "lucide-react";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { resolveAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 import { TerminalHostSuffix } from "@/components/Terminal/TerminalHostSuffix";
@@ -138,10 +139,14 @@ describe("a remote window", () => {
 
   it("offers to copy the host path instead of revealing it", () => {
     expect(hostFileManagerRevealLabel()).toBe("Copy host path");
+    // Wears the copy glyph and confirms the copy: main writes the clipboard and
+    // nothing on screen changes.
     expect(revealCopy()).toEqual({
       label: "Copy host path",
       errorTitle: "Couldn't copy host path",
       retryAriaLabel: "Retry copying host path",
+      icon: Copy,
+      copiedAnnouncement: "Host path copied",
     });
   });
 

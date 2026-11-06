@@ -1,0 +1,558 @@
+// @vitest-environment jsdom
+/**
+ * An attachment still being prepared holds the composer's send, and one whose
+ * draft is gone by the time it is ready never lands in the next draft
+ * unannounced (#15599).
+ */
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { act, cleanup, render, renderHook } from "@testing-library/react";
+import { EditorView, runScopeHandlers } from "@codemirror/view";
+import type { PtyPanelData } from "@shared/types/panel";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
+import { createWorktreeStore, setCurrentViewStore } from "@/store/createWorktreeStore";
+import { usePanelStore } from "@/store/panelStore";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { initBuiltInPanelKinds } from "@/panels/registry";
+import { setRemoteMaterializer } from "@/services/materialize";
+import { usePromptHistoryPalette } from "@/hooks/usePromptHistoryPalette";
+import { HybridInputBar, type HybridInputBarProps } from "../HybridInputBar";
+import {
+  _resetPendingUploadsForTests,
+  composerUploadSurface,
+  getHeldBackAttachments,
+  hasPendingUploads,
+  holdBackAttachments,
+} from "../uploads/pendingUploads";
+import { routePaneDrop } from "../uploads/paneDropRouting";
+import { HeldBackAttachmentsBanner } from "../uploads/HeldBackAttachmentsBanner";
+
+const WT_ID = "/repo/wt";
+const SHOT = "/tmp/shot.png";
+const originalElectron = Object.getOwnPropertyDescriptor(window, "electron");
+
+// jsdom has no layout: CodeMirror measures text through Range rects it lacks.
+const originalRangeRects = Object.getOwnPropertyDescriptor(Range.prototype, "getClientRects");
+const originalRangeBounds = Range.prototype.getBoundingClientRect;
+beforeAll(() => {
+  Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value: () => [] });
+  Range.prototype.getBoundingClientRect = () => new DOMRect();
+});
+afterAll(() => {
+  if (originalRangeRects)
+    Object.defineProperty(Range.prototype, "getClientRects", originalRangeRects);
+  else delete (Range.prototype as Partial<Range>).getClientRects;
+  Range.prototype.getBoundingClientRect = originalRangeBounds;
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+let pickAttachments: ReturnType<typeof vi.fn<() => Promise<string[]>>>;
+let thumbnailFromPath: ReturnType<
+  typeof vi.fn<(filePath: string) => Promise<{ thumbnailDataUrl: string }>>
+>;
+
+beforeEach(() => {
+  initBuiltInPanelKinds();
+  setCurrentViewStore(createWorktreeStore());
+  const panel = {
+    id: "term-1",
+    title: "claude",
+    kind: "terminal",
+    cwd: WT_ID,
+    cols: 120,
+    rows: 40,
+    worktreeId: WT_ID,
+    location: "grid",
+    hasPty: true,
+    detectedAgentId: "claude",
+    launchAgentId: "claude",
+    agentState: "waiting",
+    runtimeStatus: "running",
+  } as PtyPanelData;
+  usePanelStore.setState({
+    panelsById: { [panel.id]: panel },
+    panelIds: [panel.id],
+    panelIdsByWorktreeId: { [WT_ID]: [panel.id] },
+    focusedId: panel.id,
+  });
+  useTerminalInputStore.setState({ draftInputs: new Map(), hybridInputAutoFocus: false });
+  pickAttachments = vi.fn<() => Promise<string[]>>(async () => [SHOT]);
+  thumbnailFromPath = vi.fn<(filePath: string) => Promise<{ thumbnailDataUrl: string }>>(
+    async () => ({ thumbnailDataUrl: "data:image/png;base64,x" })
+  );
+  Object.defineProperty(window, "electron", {
+    configurable: true,
+    writable: true,
+    value: {
+      clipboard: { pickAttachments, thumbnailFromPath },
+      notification: { playUiEvent: vi.fn().mockResolvedValue(undefined) },
+      runHistory: { append: vi.fn().mockResolvedValue(undefined) },
+    },
+  });
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  setRemoteMaterializer(null);
+  delete window.__DAINTREE_HOST_ID__;
+  _resetPendingUploadsForTests();
+  if (originalElectron) Object.defineProperty(window, "electron", originalElectron);
+  else delete (window as { electron?: unknown }).electron;
+  document.body.innerHTML = "";
+});
+
+async function mount(props: Partial<HybridInputBarProps> = {}) {
+  const onSend = vi.fn<HybridInputBarProps["onSend"]>(() => Promise.resolve(true));
+  const result = render(
+    <TooltipProvider>
+      <WorktreeStoreContext.Provider value={createWorktreeStore()}>
+        <HybridInputBar
+          terminalId="term-1"
+          cwd={WT_ID}
+          agentId="claude"
+          onSend={onSend}
+          {...props}
+        />
+      </WorktreeStoreContext.Provider>
+    </TooltipProvider>
+  );
+  await act(async () => {});
+  const view = EditorView.findFromDOM(result.container.querySelector<HTMLElement>(".cm-editor")!)!;
+  view.contentDOM.focus();
+
+  const type = async (text: string) => {
+    await act(async () => {
+      const end = view.state.doc.length;
+      view.dispatch({
+        changes: { from: end, insert: text },
+        selection: { anchor: end + text.length },
+        userEvent: "input.type",
+      });
+    });
+  };
+  const press = async (key: string) => {
+    await act(async () => {
+      runScopeHandlers(view, new KeyboardEvent("keydown", { key }), "editor");
+    });
+  };
+  const pressEnter = () => press("Enter");
+  const settle = async () => {
+    await act(async () => {
+      for (let i = 0; i < 10; i += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+  };
+  const attach = async () => {
+    const button = result.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Attach files"]'
+    )!;
+    await act(async () => {
+      button.click();
+    });
+    await settle();
+  };
+  const heldBack = () =>
+    result.container.querySelector<HTMLElement>('[data-testid="held-back-attachments"]');
+  return { view, onSend, type, press, pressEnter, settle, attach, heldBack };
+}
+
+describe("HybridInputBar while an attachment is being prepared (#15599)", () => {
+  it("refuses to send until the image chip is in the draft", async () => {
+    const thumbnail = deferred<{ thumbnailDataUrl: string }>();
+    thumbnailFromPath.mockReturnValue(thumbnail.promise);
+    const { view, onSend, type, pressEnter, settle, attach } = await mount();
+    await type("look at this ");
+    await attach();
+    expect(thumbnailFromPath).toHaveBeenCalledWith(SHOT);
+
+    await pressEnter();
+    await settle();
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(view.state.doc.toString()).toBe("look at this ");
+
+    await act(async () => thumbnail.resolve({ thumbnailDataUrl: "data:image/png;base64,x" }));
+    await settle();
+    expect(view.state.doc.toString()).toBe(`look at this ${SHOT} `);
+
+    await pressEnter();
+    await settle();
+
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend.mock.calls[0]![0].text).toContain(SHOT);
+    expect(onSend.mock.calls[0]![0].imagePaths).toEqual([SHOT]);
+  });
+
+  it("refuses to send in a remote window after the upload settles, until the thumbnail is back", async () => {
+    window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+    const uploaded = "/srv/inbox/shot.png";
+    const upload = deferred<void>();
+    setRemoteMaterializer(async () => {
+      await upload.promise;
+      return { hostPath: uploaded, displayName: "shot.png", bytes: 3 };
+    });
+    const thumbnail = deferred<{ thumbnailDataUrl: string }>();
+    thumbnailFromPath.mockReturnValue(thumbnail.promise);
+    const { view, onSend, type, pressEnter, settle } = await mount();
+    await type("look at this ");
+
+    await act(async () => {
+      routePaneDrop("term-1", "hybridInput", [
+        { kind: "local", path: SHOT, name: "shot.png", size: 3 },
+      ]);
+    });
+    expect(hasPendingUploads(composerUploadSurface("term-1"))).toBe(true);
+    await act(async () => upload.resolve());
+    await settle();
+    expect(hasPendingUploads(composerUploadSurface("term-1"))).toBe(false);
+    expect(thumbnailFromPath).toHaveBeenCalledWith(uploaded);
+
+    await pressEnter();
+    await settle();
+    expect(onSend).not.toHaveBeenCalled();
+    expect(view.state.doc.toString()).toBe("look at this ");
+
+    await act(async () => thumbnail.resolve({ thumbnailDataUrl: "data:image/png;base64,x" }));
+    await settle();
+    expect(view.state.doc.toString()).toBe(`look at this ${uploaded} `);
+
+    await pressEnter();
+    await settle();
+    expect(onSend).toHaveBeenCalledTimes(1);
+    expect(onSend.mock.calls[0]![0].imagePaths).toEqual([uploaded]);
+  });
+
+  it("keeps the order of a multi-file attach, and falls back to a file chip for a failed thumbnail", async () => {
+    pickAttachments.mockResolvedValue(["/tmp/a.png", `${WT_ID}/notes.md`, "/tmp/b.png"]);
+    const first = deferred<{ thumbnailDataUrl: string }>();
+    thumbnailFromPath.mockReturnValueOnce(first.promise);
+    thumbnailFromPath.mockRejectedValueOnce(new Error("outside allowed roots"));
+    const { view, onSend, type, pressEnter, settle, attach } = await mount();
+    await type("see ");
+    await attach();
+
+    await pressEnter();
+    await settle();
+    expect(onSend).not.toHaveBeenCalled();
+
+    await act(async () => first.resolve({ thumbnailDataUrl: "data:image/png;base64,x" }));
+    await settle();
+    expect(view.state.doc.toString()).toBe("see /tmp/a.png @notes.md @/tmp/b.png ");
+
+    await pressEnter();
+    await settle();
+    expect(onSend).toHaveBeenCalledTimes(1);
+    // Only the image that kept its thumbnail goes as one; the other is a file.
+    expect(onSend.mock.calls[0]![0].imagePaths).toEqual(["/tmp/a.png"]);
+  });
+
+  it("forwards no Enter from an empty draft while an image dropped on it is prepared", async () => {
+    const onSendKey = vi.fn();
+    const thumbnail = deferred<{ thumbnailDataUrl: string }>();
+    thumbnailFromPath.mockReturnValue(thumbnail.promise);
+    const { view, onSend, pressEnter, settle, attach } = await mount({ onSendKey });
+    await attach();
+
+    await pressEnter();
+    await settle();
+    expect(onSendKey).not.toHaveBeenCalled();
+    expect(onSend).not.toHaveBeenCalled();
+
+    await act(async () => thumbnail.resolve({ thumbnailDataUrl: "data:image/png;base64,x" }));
+    await settle();
+    expect(view.state.doc.toString()).toBe(`${SHOT} `);
+  });
+
+  it("forwards no Enter that arrives as a line-break input on an empty draft while one is prepared", async () => {
+    const onSendKey = vi.fn();
+    const thumbnail = deferred<{ thumbnailDataUrl: string }>();
+    thumbnailFromPath.mockReturnValue(thumbnail.promise);
+    const { view, settle, attach } = await mount({ onSendKey });
+    await attach();
+
+    await act(async () => {
+      view.contentDOM.dispatchEvent(
+        new InputEvent("beforeinput", {
+          inputType: "insertLineBreak",
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+    });
+    await settle();
+    expect(onSendKey).not.toHaveBeenCalled();
+
+    await act(async () => thumbnail.resolve({ thumbnailDataUrl: "data:image/png;base64,x" }));
+    await settle();
+    await act(async () => {
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" } });
+    });
+    await act(async () => {
+      view.contentDOM.dispatchEvent(
+        new InputEvent("beforeinput", {
+          inputType: "insertLineBreak",
+          bubbles: true,
+          cancelable: true,
+        })
+      );
+    });
+    expect(onSendKey).toHaveBeenCalledWith("enter");
+  });
+
+  it("runs no slash command from the menu while an attachment is prepared", async () => {
+    const thumbnail = deferred<{ thumbnailDataUrl: string }>();
+    thumbnailFromPath.mockReturnValue(thumbnail.promise);
+    const { view, onSend, type, pressEnter, settle, attach } = await mount();
+    await attach();
+    await type("/compa");
+    await settle();
+    expect(document.querySelector('[role="option"][aria-selected="true"]')?.textContent).toContain(
+      "/compact"
+    );
+
+    await pressEnter();
+    await settle();
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(view.state.doc.toString()).toBe("/compa");
+    await act(async () => thumbnail.resolve({ thumbnailDataUrl: "data:image/png;base64,x" }));
+    await settle();
+  });
+});
+
+describe("HybridInputBar when an attachment outlives its draft (#15599)", () => {
+  it("holds it back with a note instead of adding it to the next draft, and adds it on request", async () => {
+    const submit = deferred<boolean>();
+    const submitText = vi.fn<NonNullable<HybridInputBarProps["submitText"]>>(() => submit.promise);
+    const thumbnail = deferred<{ thumbnailDataUrl: string }>();
+    thumbnailFromPath.mockReturnValue(thumbnail.promise);
+    const { view, type, pressEnter, settle, attach, heldBack } = await mount({ submitText });
+
+    // A send already on its way when the image is attached: nothing held the
+    // composer then, so nothing can stop the send clearing the draft.
+    await type("first message");
+    await pressEnter();
+    await settle();
+    expect(submitText).toHaveBeenCalledTimes(1);
+    await attach();
+    await act(async () => submit.resolve(true));
+    await settle();
+    expect(view.state.doc.toString()).toBe("");
+
+    await type("the next one");
+    await act(async () => thumbnail.resolve({ thumbnailDataUrl: "data:image/png;base64,x" }));
+    await settle();
+
+    expect(view.state.doc.toString()).toBe("the next one");
+    const note = heldBack();
+    expect(note?.textContent).toContain("shot.png wasn't added");
+
+    const add = Array.from(note!.querySelectorAll("button")).find(
+      (button) => button.textContent === "Add to draft"
+    )!;
+    await act(async () => add.click());
+    await settle();
+
+    expect(view.state.doc.toString()).toBe(`the next one ${SHOT} `);
+    expect(heldBack()).toBeNull();
+  });
+
+  it("keeps the held-back attachment when adding it to the draft fails", async () => {
+    const submit = deferred<boolean>();
+    const thumbnail = deferred<{ thumbnailDataUrl: string }>();
+    thumbnailFromPath.mockReturnValue(thumbnail.promise);
+    const { view, type, pressEnter, settle, attach, heldBack } = await mount({
+      submitText: () => submit.promise,
+    });
+    await type("first message");
+    await pressEnter();
+    await settle();
+    await attach();
+    await act(async () => submit.resolve(true));
+    await settle();
+    await act(async () => thumbnail.resolve({ thumbnailDataUrl: "data:image/png;base64,x" }));
+    await settle();
+    const addButton = () =>
+      Array.from(heldBack()!.querySelectorAll("button")).find(
+        (button) => button.textContent === "Add to draft"
+      )!;
+
+    const dispatch = vi.spyOn(view, "dispatch").mockImplementationOnce(() => {
+      throw new Error("view destroyed");
+    });
+    await act(async () => addButton().click());
+    await settle();
+    expect(heldBack()?.textContent).toContain("shot.png wasn't added");
+    expect(view.state.doc.toString()).toBe("");
+
+    dispatch.mockRestore();
+    await act(async () => addButton().click());
+    await settle();
+    expect(view.state.doc.toString()).toBe(`${SHOT} `);
+    expect(heldBack()).toBeNull();
+  });
+
+  it("drops the held-back attachment when dismissed", async () => {
+    const submit = deferred<boolean>();
+    const thumbnail = deferred<{ thumbnailDataUrl: string }>();
+    thumbnailFromPath.mockReturnValue(thumbnail.promise);
+    const { view, type, pressEnter, settle, attach, heldBack } = await mount({
+      submitText: () => submit.promise,
+    });
+    await type("first message");
+    await pressEnter();
+    await settle();
+    await attach();
+    await act(async () => submit.resolve(true));
+    await settle();
+    await act(async () => thumbnail.resolve({ thumbnailDataUrl: "data:image/png;base64,x" }));
+    await settle();
+
+    const discard = heldBack()!.querySelector<HTMLButtonElement>(
+      'button[aria-label="Discard shot.png"]'
+    )!;
+    await act(async () => discard.click());
+    await settle();
+
+    expect(heldBack()).toBeNull();
+    expect(view.state.doc.toString()).toBe("");
+  });
+});
+
+describe("HybridInputBar's draft boundaries for an attachment on its way (#15599)", () => {
+  // A shell's composer: an agent's takes an empty ArrowUp for its own TUI.
+  it("holds back an attachment that resolves after a prompt is recalled with the arrow key", async () => {
+    const thumbnail = deferred<{ thumbnailDataUrl: string }>();
+    const { view, onSend, type, press, pressEnter, settle, attach, heldBack } = await mount({
+      agentId: undefined,
+    });
+    await type("earlier prompt");
+    await pressEnter();
+    await settle();
+    expect(onSend).toHaveBeenCalledTimes(1);
+
+    thumbnailFromPath.mockReturnValue(thumbnail.promise);
+    await attach();
+    await press("ArrowUp");
+    await settle();
+    expect(view.state.doc.toString()).toBe("earlier prompt");
+
+    await act(async () => thumbnail.resolve({ thumbnailDataUrl: "data:image/png;base64,x" }));
+    await settle();
+
+    expect(view.state.doc.toString()).toBe("earlier prompt");
+    expect(heldBack()?.textContent).toContain("shot.png wasn't added");
+  });
+
+  it("holds back an attachment that resolves after a prompt is recalled from the history palette", async () => {
+    const thumbnail = deferred<{ thumbnailDataUrl: string }>();
+    thumbnailFromPath.mockReturnValue(thumbnail.promise);
+    const { view, settle, attach, heldBack } = await mount();
+    const palette = renderHook(() =>
+      usePromptHistoryPalette({ terminalId: "term-1", projectId: undefined })
+    );
+    await attach();
+
+    await act(async () => {
+      palette.result.current.selectEntry({
+        id: "p1",
+        prompt: "recalled prompt",
+        agentId: "claude",
+        addedAt: 1,
+      });
+    });
+    await settle();
+    expect(view.state.doc.toString()).toBe("recalled prompt");
+
+    await act(async () => thumbnail.resolve({ thumbnailDataUrl: "data:image/png;base64,x" }));
+    await settle();
+
+    expect(view.state.doc.toString()).toBe("recalled prompt");
+    expect(heldBack()?.textContent).toContain("shot.png wasn't added");
+  });
+});
+
+describe("HybridInputBar's draft boundaries, recalled text and other panes (#15599)", () => {
+  function recallInto(terminalId: string, prompt: string) {
+    const palette = renderHook(() => usePromptHistoryPalette({ terminalId, projectId: undefined }));
+    act(() => {
+      palette.result.current.selectEntry({ id: "p1", prompt, agentId: "claude", addedAt: 1 });
+    });
+  }
+
+  it("holds back an attachment whose draft is recalled again, word for word", async () => {
+    const thumbnail = deferred<{ thumbnailDataUrl: string }>();
+    thumbnailFromPath.mockReturnValue(thumbnail.promise);
+    const { view, type, settle, attach, heldBack } = await mount();
+    await type("same words");
+    await attach();
+
+    recallInto("term-1", "same words");
+    await settle();
+    await act(async () => thumbnail.resolve({ thumbnailDataUrl: "data:image/png;base64,x" }));
+    await settle();
+
+    expect(view.state.doc.toString()).toBe("same words");
+    expect(heldBack()?.textContent).toContain("shot.png wasn't added");
+  });
+
+  it("leaves an attachment for this pane alone when another pane's prompt is recalled", async () => {
+    const other = { ...usePanelStore.getState().panelsById["term-1"]!, id: "term-2" };
+    usePanelStore.setState((state) => ({
+      panelsById: { ...state.panelsById, "term-2": other },
+      panelIds: [...state.panelIds, "term-2"],
+      panelIdsByWorktreeId: { [WT_ID]: ["term-1", "term-2"] },
+    }));
+    const thumbnail = deferred<{ thumbnailDataUrl: string }>();
+    thumbnailFromPath.mockReturnValue(thumbnail.promise);
+    const { view, type, settle, attach, heldBack } = await mount();
+    render(
+      <TooltipProvider>
+        <WorktreeStoreContext.Provider value={createWorktreeStore()}>
+          <HybridInputBar terminalId="term-2" cwd={WT_ID} agentId="claude" onSend={vi.fn()} />
+        </WorktreeStoreContext.Provider>
+      </TooltipProvider>
+    );
+    await settle();
+    await type("look at this ");
+    await attach();
+
+    recallInto("term-2", "recalled over there");
+    await settle();
+    await act(async () => thumbnail.resolve({ thumbnailDataUrl: "data:image/png;base64,x" }));
+    await settle();
+
+    expect(view.state.doc.toString()).toBe(`look at this ${SHOT} `);
+    expect(heldBack()).toBeNull();
+  });
+});
+
+describe("HeldBackAttachmentsBanner", () => {
+  it("keeps what was held back when it couldn't be added", async () => {
+    const shot = { type: "image", filePath: SHOT, thumbnailDataUrl: "data:x" } as const;
+    holdBackAttachments("composer:term-1", [shot]);
+    const { container } = render(
+      <TooltipProvider>
+        <HeldBackAttachmentsBanner surface="composer:term-1" onAdd={() => false} />
+      </TooltipProvider>
+    );
+    const add = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Add to draft"
+    )!;
+
+    await act(async () => add.click());
+
+    expect(getHeldBackAttachments("composer:term-1")).toEqual([shot]);
+    expect(container.textContent).toContain("shot.png wasn't added");
+  });
+});

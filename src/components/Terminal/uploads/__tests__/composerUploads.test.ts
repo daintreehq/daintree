@@ -181,11 +181,13 @@ describe("the attach menu's two sources", () => {
     );
   });
 
-  it("inserts host paths from the host picker without any transfer", async () => {
+  // Nothing is uploaded, but an image's thumbnail still comes from the host,
+  // and the composer's send waits for it (#15599).
+  it("inserts host paths from the host picker, on the composer's surface", async () => {
     pickHostPaths.mockResolvedValueOnce(["/srv/proj/README.md"]);
     const { result } = renderHook(() => {
       const ref = useRef<EditorView | null>(view);
-      return useAttachFromHost(ref, "/srv/proj");
+      return useAttachFromHost(ref, "/srv/proj", "composer:t1");
     });
     await act(async () => {
       await result.current();
@@ -203,7 +205,8 @@ describe("the attach menu's two sources", () => {
           filePath: "/srv/proj/README.md",
         }),
       ],
-      "/srv/proj"
+      "/srv/proj",
+      { uploadSurface: "composer:t1" }
     );
   });
 

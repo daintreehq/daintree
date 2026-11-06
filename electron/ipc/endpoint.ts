@@ -42,6 +42,16 @@ export function isDeviceAnswerEndpointId(endpointId: string): boolean {
 }
 
 /**
+ * The caller a viewless action's host calls run as: this machine acting for
+ * one project with no renderer behind it. Never registered.
+ */
+export const VIEWLESS_ENDPOINT_PREFIX = "viewless:";
+
+export function isViewlessEndpointId(endpointId: string): boolean {
+  return endpointId.startsWith(VIEWLESS_ENDPOINT_PREFIX);
+}
+
+/**
  * Whether `endpointId` is one of a link session's views. SessionHost names a
  * remote endpoint `remote:<sessionId>:<clientEndpointId>`; the session id is
  * the host's own, unlike the client id a HELLO merely claims.
@@ -56,6 +66,16 @@ export function isSessionEndpoint(sessionId: string, endpointId: string): boolea
  * need an answer go through {@link ClientEndpoint.request}.
  */
 export type HostFrame = { type: "event"; channel: string; args: unknown[] };
+
+/**
+ * Endpoints that reach their renderers the same way (one remote Shell's link
+ * session), so a push meant for every one of them is sent once and fanned out
+ * on the far side rather than sent once per endpoint.
+ */
+export interface EndpointGroup {
+  /** Push `frame` to every endpoint of the group, as if each had been sent it. */
+  sendToAll(frame: HostFrame): void;
+}
 
 export interface EndpointRequestOptions {
   timeoutMs?: number;
@@ -114,6 +134,8 @@ export interface ClientEndpoint {
   readonly linkSessionId?: string;
   /** Why a remote view's endpoint closed, once it has; absent for a local view. */
   readonly closeCause?: RemoteEndpointCloseCause | null;
+  /** Shared by every endpoint of a remote view's link session; absent for a local view. */
+  readonly group?: EndpointGroup;
 }
 
 /**

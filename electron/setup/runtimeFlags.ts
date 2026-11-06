@@ -133,7 +133,6 @@ export const isE2ESkipFirstRunDialogs = getIsE2ESkipFirstRunDialogs();
 export const isE2EFaultMode = getIsE2EFaultMode();
 export const isE2EDeferRendererLoad = getIsE2EDeferRendererLoad();
 export const isE2EBackgroundWindows = getIsE2EBackgroundWindows();
-export const isE2EDisableCachedViewCpuThrottle = getIsE2EDisableCachedViewCpuThrottle();
 export const isE2EFakeMicrophone = getIsE2EFakeMicrophone();
 export const e2eCrashDumpsDir = getE2ECrashDumpsDir();
 export const e2eSideloadPluginDir = getE2ESideloadPluginDir();

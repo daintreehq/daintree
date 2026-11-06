@@ -162,6 +162,59 @@ describe("PtyClient first prompt (#15521)", () => {
     client.dispose();
   });
 
+  it("sends an armed terminal's decorated prompt and keeps the caller's text as the record (#16171)", () => {
+    const { client } = readyClient();
+    client.spawn("t1", agentOptions);
+    client.setSubmitDecorator((_id, text, code) =>
+      code === "skip00"
+        ? null
+        : {
+            text: appendHandbackInstruction(text, "armed0", "run"),
+            handbackCode: "armed0",
+            handbackInstruction: "run",
+          }
+    );
+
+    // A notice that is nobody's prompt stays one when it is decorated.
+    client.submit("t1", "A worker finished", undefined, undefined, undefined, undefined, null);
+    client.submit("t1", "Fix the login bug");
+    client.submit("t1", "Plain", undefined, "skip00");
+    // Already carrying the instruction, so never decorated twice.
+    client.submit("t1", "Instruction", undefined, "self00", undefined, undefined, null, "run");
+
+    expect(
+      submitMessages(mockChild).map((m) => {
+        const msg = m as SubmitMessage & { handbackCode?: string; handbackInstruction?: string };
+        return {
+          text: msg.text,
+          code: msg.handbackCode,
+          instruction: msg.handbackInstruction,
+          firstPrompt: msg.firstPrompt?.text,
+        };
+      })
+    ).toEqual([
+      {
+        text: appendHandbackInstruction("A worker finished", "armed0", "run"),
+        code: "armed0",
+        instruction: "run",
+        firstPrompt: undefined,
+      },
+      {
+        text: appendHandbackInstruction("Fix the login bug", "armed0", "run"),
+        code: "armed0",
+        instruction: "run",
+        firstPrompt: "Fix the login bug",
+      },
+      { text: "Plain", code: "skip00", instruction: undefined, firstPrompt: "Plain" },
+      { text: "Instruction", code: "self00", instruction: "run", firstPrompt: undefined },
+    ]);
+
+    client.setSubmitDecorator(null);
+    client.submit("t1", "After");
+    expect(submitMessages(mockChild).at(-1)?.text).toBe("After");
+    client.dispose();
+  });
+
   it("never offers a send to a run that has its record or isn't an agent", () => {
     const { client } = readyClient();
     client.spawn("launched", { ...agentOptions, hasFirstPrompt: true });

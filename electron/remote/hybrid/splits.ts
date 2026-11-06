@@ -8,7 +8,11 @@ import type {
   ProjectSwitchResult,
   ProjectSwitchTrace,
 } from "../../../shared/types/ipc/project.js";
-import type { EditorConfig, EditorGetConfigResult } from "../../../shared/types/editor.js";
+import {
+  resolveEffectiveEditor,
+  type EditorConfig,
+  type EditorGetConfigResult,
+} from "../../../shared/types/editor.js";
 import type { SystemOpenInEditorFallback } from "../../../shared/types/ipc/system.js";
 import type { ScratchSwitchPayload } from "../../../shared/types/ipc/scratch.js";
 import type { Scratch } from "../../../shared/types/scratch.js";
@@ -154,14 +158,23 @@ const terminalConfigGet: HybridSplit = async ({ local, remote }) => {
   return mergeByOwnership(device, host, TERMINAL_CONFIG_FIELD_OWNERSHIP);
 };
 
-/** Which project's editor preference is the host's; which editors exist is this machine's. */
+/**
+ * A project's own editor choice is the host's; which editors exist, and the
+ * default for projects without a choice, are this machine's, where the editor
+ * launches. Only the host's project field is read, so an older host's answer
+ * still works and the host's own default never reaches this machine.
+ */
 const editorGetConfig: HybridSplit = async ({ local, remote }) => {
   const [device, host] = (await Promise.all([local([undefined]), remote()])) as [
     EditorGetConfigResult,
     EditorGetConfigResult,
   ];
+  const preferredEditor = host.preferredEditor ?? null;
+  const defaultEditor = device.defaultEditor ?? null;
   return {
-    preferredEditor: host.preferredEditor,
+    preferredEditor,
+    defaultEditor,
+    effectiveEditor: resolveEffectiveEditor(preferredEditor, defaultEditor),
     discoveredEditors: device.discoveredEditors,
   } satisfies EditorGetConfigResult;
 };
@@ -199,11 +212,12 @@ interface SwitchOptions {
 }
 
 /**
- * The host activates the project (saves the outgoing layout, starts or wakes
- * its workspace and holds it for the view); this Shell then shows it, in a
- * view keyed to that host, and does what a local switch does for the view it
- * lands on: hands it the focus intent and tells it, and only it, that it was
- * switched to.
+ * The host accepts the switch, answering once its repository check passes
+ * while the outgoing layout's save and the project's workspace start carry
+ * on; this Shell then shows it, in a view keyed to that host, whose own
+ * endpoint holds the project there, and does what a local switch does for the
+ * view it lands on: hands it the focus intent and tells it, and only it, that
+ * it was switched to.
  */
 const projectSwitch: HybridSplit = async ({ hostId, webContentsId, args, remote }) => {
   const result = (await remote()) as ProjectSwitchResult;
@@ -223,10 +237,16 @@ const projectSwitch: HybridSplit = async ({ hostId, webContentsId, args, remote 
   // Before the swap, as a local switch records it: the view consumes it on activation.
   if (options.focusIntent) pvm?.setPendingFocusIntent(key, options.focusIntent);
   // The view's own project switch words its failure itself, as a local one does.
+  // The host's answer names the project's path there, so it isn't asked again.
   const shown = await client.switchWindowHost(
     senderContext(webContentsId),
     { hostId, projectId, newWindow: false },
-    { failureOnScreen: false }
+    {
+      failureOnScreen: false,
+      ...(result.project?.id === projectId && result.project.path
+        ? { known: { path: result.project.path, name: result.project.name } }
+        : {}),
+    }
   );
   // The asking view is still on screen unless this window really moved: a
   // window that already had the project came forward, or a newer navigation
@@ -283,7 +303,12 @@ const scratchSwitch: HybridSplit = async ({ hostId, webContentsId, args, remote 
   const shown = await client.switchWindowHost(
     senderContext(webContentsId),
     { hostId, projectId: scratch.id, newWindow: false },
-    { requesterReports: false, failureOnScreen: false }
+    {
+      requesterReports: false,
+      failureOnScreen: false,
+      // The host's answer names the scratch's path there, so it isn't asked again.
+      ...(scratch.path ? { known: { path: scratch.path, name: scratch.name || scratch.id } } : {}),
+    }
   );
   // Another window had it and came forward, or a newer navigation here won:
   // the asking view still shows what it showed, so it must not adopt the scratch.
@@ -357,8 +382,11 @@ export function buildRemoteEditorUrl(
  * No editor here can open the host's file, so its path goes to this
  * machine's clipboard instead, and the window says so, naming the host.
  */
-function copyHostPathInstead(hostId: HostId, hostPath: string): SystemOpenInEditorFallback {
-  clipboard.writeText(hostPath);
+async function copyHostPathInstead(
+  hostId: HostId,
+  hostPath: string
+): Promise<SystemOpenInEditorFallback> {
+  await clipboard.writeText(hostPath);
   return { outcome: "copied-host-path", path: hostPath, hostName: hostLabel(hostId) };
 }
 
@@ -381,17 +409,19 @@ const openInEditor: HybridSplit = async ({ hostId, args, remote }) => {
   const descriptor = hostDescriptor(hostId);
   if (!descriptor) return copyHostPathInstead(hostId, hostPath);
 
-  let editorId: EditorConfig["id"] | null = null;
+  let preferredEditor: EditorConfig | null = null;
   if (typeof payload.projectId === "string" && payload.projectId) {
     try {
       const config = (await remote(CHANNELS.EDITOR_GET_CONFIG, [
         payload.projectId,
       ])) as EditorGetConfigResult;
-      editorId = config.preferredEditor?.id ?? null;
+      preferredEditor = config.preferredEditor ?? null;
     } catch {
-      // No preference readable: the default editor still gets a chance.
+      // No preference readable: this machine's default still gets a chance.
     }
   }
+  const { readDefaultEditor } = await import("../../services/defaultEditor.js");
+  const editorId = resolveEffectiveEditor(preferredEditor, readDefaultEditor())?.id ?? null;
 
   // The editor's own remote: SSH for an ssh host, WSL for a distro on this PC.
   const sshTarget = sshTargetOf(descriptor.connection);
@@ -440,7 +470,7 @@ const copyHostPath: HybridSplit = async ({ hostId, args }) => {
     shell.showItemInFolder(windowsPath);
     return undefined;
   }
-  clipboard.writeText(targetPath);
+  await clipboard.writeText(targetPath);
   return undefined;
 };
 
@@ -515,6 +545,7 @@ export const HYBRID_SPLITS: Readonly<Record<string, HybridSplit>> = {
   [CHANNELS.TERMINAL_CONFIG_GET]: terminalConfigGet,
   [CHANNELS.EDITOR_GET_CONFIG]: editorGetConfig,
   [CHANNELS.EDITOR_SET_CONFIG]: remoteOnly,
+  [CHANNELS.EDITOR_CLEAR_PROJECT_PREFERENCE]: remoteOnly,
   [CHANNELS.PROJECT_SWITCH]: projectSwitch,
   [CHANNELS.PROJECT_REOPEN]: projectSwitch,
   [CHANNELS.PROJECT_GET_CURRENT]: remoteOnly,
@@ -595,6 +626,7 @@ export const HYBRID_HOST_LEGS: readonly string[] = [
   CHANNELS.TERMINAL_CONFIG_GET,
   CHANNELS.EDITOR_GET_CONFIG,
   CHANNELS.EDITOR_SET_CONFIG,
+  CHANNELS.EDITOR_CLEAR_PROJECT_PREFERENCE,
   CHANNELS.PROJECT_SWITCH,
   CHANNELS.PROJECT_REOPEN,
   CHANNELS.PROJECT_GET_CURRENT,

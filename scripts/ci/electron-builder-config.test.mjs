@@ -1,8 +1,13 @@
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import buildConfig from "../../electron-builder.config.cjs";
-import { APP_ASAR_ROOT_ENTRIES } from "../afterPack.cjs";
+import { APP_ASAR_ROOT_ENTRIES, AVR_VAD_V5_MODEL } from "../afterPack.cjs";
+
+const require = createRequire(import.meta.url);
 
 const repoFile = (relativePath) =>
   readFile(new URL(`../../${relativePath}`, import.meta.url), "utf8");
@@ -85,18 +90,19 @@ describe("electron-builder config — platform files overrides (#11475)", () => 
     }
   });
 
-  it("limits each platform's own patterns to dropping foreign prebuilds", async () => {
+  it("limits each platform's own patterns to dropping foreign native binaries", async () => {
     const config = await buildConfig();
-    // The only intended per-platform divergence is shedding better-sqlite3's
-    // other-OS prebuilds. Anything else — especially a negation aimed at a
-    // packed root — has to be a deliberate edit here, because afterPack.cjs
-    // only sees the resulting archive and cannot tell why a root vanished.
+    // The only intended per-platform divergence is shedding the other OSes'
+    // better-sqlite3 prebuilds and onnxruntime-node runtimes (#15670). Anything
+    // else — especially a negation aimed at a packed root — has to be a
+    // deliberate edit here, because afterPack.cjs only sees the resulting
+    // archive and cannot tell why a root vanished.
     for (const platform of PLATFORMS) {
       const own = config[platform].files.slice(config.files.length);
       expect(own.length, `${platform}.files adds no patterns of its own`).toBeGreaterThan(0);
       for (const pattern of own) {
         expect(pattern, `${platform}.files pattern "${pattern}"`).toMatch(
-          /^!node_modules\/better-sqlite3\/prebuilds\//
+          /^!node_modules\/(better-sqlite3\/prebuilds|onnxruntime-node\/bin)\//
         );
         // Foreign *platforms* only — never a CPU arch (#11829). A pattern is
         // compiled once per platform, and the two trees the macOS universal
@@ -126,6 +132,188 @@ describe("electron-builder config — platform files overrides (#11475)", () => 
         );
       }
     }
+  });
+});
+
+describe("electron-builder config — files inside kept packages (#15671)", () => {
+  // The matcher electron-builder itself applies while copying node_modules,
+  // resolved through electron-builder so it is the copy the build loads. It
+  // keeps only the negations from `files`, prepends `**/*`, and expands a bare
+  // directory pattern to its contents, so restating that here would test a
+  // copy of the rules rather than the rules.
+  const requireFromBuilder = createRequire(require.resolve("electron-builder"));
+  const { getNodeModuleFileMatcher } = requireFromBuilder("app-builder-lib/out/fileMatcher.js");
+  const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
+
+  const PLATFORMS = [
+    { key: "mac", os: "darwin", onnx: "darwin/arm64/libonnxruntime.1.dylib" },
+    { key: "win", os: "win32", onnx: "win32/x64/onnxruntime.dll" },
+    { key: "linux", os: "linux", onnx: "linux/x64/libonnxruntime.so.1" },
+  ];
+
+  const nodeModuleFilter = (config, platformKey) =>
+    getNodeModuleFileMatcher(
+      repoRoot,
+      path.join(repoRoot, "out"),
+      (pattern) => pattern,
+      config[platformKey],
+      { config, debugLogger: { isEnabled: false } }
+    ).createFilter();
+
+  /**
+   * Whether the `files` patterns let a node_modules path through. The copier
+   * walks each package from its own root (a nested dependency is a package of
+   * its own) and never descends into a directory the filter rejects, so every
+   * directory below that root has to pass as well as the file. This covers the
+   * patterns only: electron-builder's default excludes (`binding.gyp`, `.cc`)
+   * are not modelled, so no fixture below relies on one.
+   */
+  const ships = (filter, relativePath) => {
+    const packageRoot = relativePath.match(/^(.*node_modules\/(?:@[^/]+\/)?[^/]+)\//)[1];
+    const below = relativePath.slice(packageRoot.length + 1).split("/");
+    for (let depth = 1; depth <= below.length; depth++) {
+      const isDirectory = depth < below.length;
+      const stat = {
+        moduleFullFilePath: [packageRoot, ...below.slice(0, depth)].join("/"),
+        isDirectory: () => isDirectory,
+      };
+      if (!filter(path.join(repoRoot, stat.moduleFullFilePath), stat)) return false;
+    }
+    return true;
+  };
+
+  const DROPPED = [
+    "node_modules/avr-vad/silero_vad_v5.onnx",
+    "node_modules/avr-vad/silero_vad_legacy.onnx",
+    "node_modules/avr-vad/dist/silero_vad_legacy.onnx",
+    "node_modules/better-sqlite3/deps/sqlite3/sqlite3.c",
+    "node_modules/better-sqlite3/deps/sqlite3/sqlite3.h",
+    "node_modules/better-sqlite3/deps/sqlite3/sqlite3ext.h",
+    "node_modules/better-sqlite3/deps/sqlite3.gyp",
+    "node_modules/better-sqlite3/deps/common.gypi",
+    "node_modules/better-sqlite3/src/objects/database.cpp",
+    "node_modules/better-sqlite3/src/objects/database.hpp",
+    "node_modules/node-pty/src/win/conpty.h",
+    "node_modules/node-pty/node_modules/node-addon-api/napi.h",
+    "node_modules/node-pty/node_modules/node-addon-api/nothing.c",
+    "node_modules/@parcel/watcher/src/Backend.hh",
+    "node_modules/@parcel/watcher/node_modules/node-addon-api/napi-inl.h",
+    "node_modules/node-addon-api/napi.h",
+    "node_modules/posix-pty-reaper/src/supervisor.c",
+    // Both ship only `.cc` sources and `binding.gyp` today, which electron-builder
+    // already drops; a header added later is the case the scope covers.
+    "node_modules/win-job-object/src/win_job_object.h",
+    "node_modules/mac-phys-footprint/src/mac_phys_footprint.h",
+  ];
+
+  // What the loaders resolve at runtime, plus the manifests and licenses that
+  // ride with them.
+  const KEPT = [
+    AVR_VAD_V5_MODEL,
+    "node_modules/avr-vad/dist/index.js",
+    "node_modules/avr-vad/package.json",
+    "node_modules/avr-vad/LICENSE.md",
+    "node_modules/better-sqlite3/lib/index.js",
+    "node_modules/better-sqlite3/lib/binding.js",
+    "node_modules/better-sqlite3/package.json",
+    "node_modules/better-sqlite3/LICENSE",
+    "node_modules/node-pty/lib/index.js",
+    "node_modules/node-pty/build/Release/pty.node",
+    "node_modules/node-pty/build/Release/spawn-helper",
+    "node_modules/node-pty/node_modules/node-addon-api/package.json",
+    "node_modules/node-pty/node_modules/node-addon-api/LICENSE.md",
+    "node_modules/@parcel/watcher/index.js",
+    "node_modules/@parcel/watcher/build/Release/watcher.node",
+    "node_modules/posix-pty-reaper/build/Release/daintree_pty_supervisor",
+    "node_modules/win-job-object/index.cjs",
+    "node_modules/win-job-object/build/Release/win_job_object.node",
+    "node_modules/win-job-object/bin/win32-x64-146/win_job_object.node",
+    "node_modules/mac-phys-footprint/build/Release/mac_phys_footprint.node",
+    "node_modules/onnxruntime-node/dist/binding.js",
+  ];
+
+  it("drops the unreachable VAD models and the native build sources on every platform", async () => {
+    const config = await buildConfig();
+    for (const { key } of PLATFORMS) {
+      const filter = nodeModuleFilter(config, key);
+      for (const file of DROPPED) {
+        expect(ships(filter, file), `${key} ships ${file}`).toBe(false);
+      }
+    }
+  });
+
+  it("keeps everything the native loaders resolve at runtime", async () => {
+    const config = await buildConfig();
+    for (const { key, os, onnx } of PLATFORMS) {
+      const filter = nodeModuleFilter(config, key);
+      const platformFiles = [
+        `node_modules/better-sqlite3/prebuilds/${os}-x64.node`,
+        `node_modules/onnxruntime-node/bin/napi-v6/${path.posix.dirname(onnx)}/onnxruntime_binding.node`,
+        `node_modules/onnxruntime-node/bin/napi-v6/${onnx}`,
+      ];
+      for (const file of [...KEPT, ...platformFiles]) {
+        expect(ships(filter, file), `${key} drops ${file}`).toBe(true);
+      }
+    }
+  });
+
+  it("keeps the model the installed avr-vad actually reads", async () => {
+    // The patterns above and the afterPack guard both assume avr-vad's entry
+    // point reads the v5 model from its own directory. An avr-vad upgrade that
+    // moves either one has to fail here before a package ships without VAD.
+    const packageJson = require.resolve("avr-vad/package.json");
+    const entry = require.resolve("avr-vad");
+    const entryDir = path.relative(path.dirname(packageJson), path.dirname(entry));
+    const model = path.posix.join("node_modules/avr-vad", entryDir, "silero_vad_v5.onnx");
+
+    expect(model).toBe(AVR_VAD_V5_MODEL);
+    expect(existsSync(path.join(path.dirname(entry), "silero_vad_v5.onnx"))).toBe(true);
+    expect(await readFile(entry, "utf8")).toContain("${__dirname}/silero_vad_v5.onnx");
+  });
+
+  const onnxRoot = path.dirname(require.resolve("onnxruntime-node/package.json"));
+  const { version: onnxVersion } = require("onnxruntime-node/package.json");
+  const MAC_DARWIN_ARM64 = "bin/napi-v6/darwin/arm64";
+  const MAC_RUNTIME_COPY = `${MAC_DARWIN_ARM64}/libonnxruntime.${onnxVersion}.dylib`;
+
+  /** Every file under the installed onnxruntime-node's bin/, relative to the package. */
+  const installedOnnxBinaries = () =>
+    readdirSync(path.join(onnxRoot, "bin"), { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile())
+      .map((entry) =>
+        path.relative(onnxRoot, path.join(entry.parentPath, entry.name)).split(path.sep).join("/")
+      );
+
+  it("ships each platform only its own onnxruntime-node runtimes (#15670)", async () => {
+    // Walks the installed package, so whatever a new onnxruntime-node release
+    // adds is judged too. Every arch of the target OS passes: shedding the
+    // foreign arch is afterPack's job, since no pattern can tell a universal
+    // merge input from a standalone pack.
+    const config = await buildConfig();
+    const binaries = installedOnnxBinaries();
+    expect(binaries).toContain(MAC_RUNTIME_COPY);
+    for (const { key, os } of PLATFORMS) {
+      const filter = nodeModuleFilter(config, key);
+      for (const file of binaries) {
+        const own = file.split("/")[2] === os && file !== MAC_RUNTIME_COPY;
+        expect(ships(filter, `node_modules/onnxruntime-node/${file}`), `${key}: ${file}`).toBe(own);
+      }
+    }
+  });
+
+  it("drops the mac runtime's versioned name only while nothing could load it (#15670)", () => {
+    // The mac exclusion names the installed version exactly, so an upgrade
+    // fails here first and the copy is re-checked rather than assumed: it has
+    // to be byte-identical to the library the binding links, and the binding
+    // must not name it.
+    const read = (file) => readFileSync(path.join(onnxRoot, MAC_DARWIN_ARM64, file));
+    const binding = read("onnxruntime_binding.node");
+
+    expect(read(path.posix.basename(MAC_RUNTIME_COPY)).equals(read("libonnxruntime.1.dylib"))).toBe(
+      true
+    );
+    expect(binding.includes("@rpath/libonnxruntime.1.dylib")).toBe(true);
+    expect(binding.includes(path.posix.basename(MAC_RUNTIME_COPY))).toBe(false);
   });
 });
 

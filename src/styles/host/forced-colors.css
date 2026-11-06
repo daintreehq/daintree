@@ -52,6 +52,13 @@
     color: CanvasText !important;
   }
 
+  /* The canvas home's glyphs are inked the same way (the resume row's history
+     mark, the recipe cards' play and pin, the pulse strip's chevron), and they
+     greyed out the same way. The chevron is the strip's only expand cue. */
+  [data-canvas-home] :is(svg.text-text-primary, svg.text-text-secondary, .search-field-icon) {
+    color: CanvasText !important;
+  }
+
   /* A separator is a 1px background, which forced colours paint as Canvas, so
      a menu's sections ran together. Drawn as a border it survives. */
   [role="menu"] [role="separator"] {
@@ -251,9 +258,22 @@
      terminal holds the keys; once its own composer takes them, the composer's
      ring says so and the pane edge steps down to the system ink, rather than
      two Highlight perimeters nesting. */
-  .terminal-selected:has([data-composer-state] .cm-content:focus-visible) {
-    outline-color: CanvasText;
+  /* With its own composer holding the keys, a pane's edge steps all the way
+     down to the plain system border: a 2px CanvasText outline is what an
+     unfocused waiting pane wears. */
+  .terminal-selected:not(.panel-state-failed, .panel-state-waiting):has(
+      [data-composer-state] .cm-content:focus-visible
+    ) {
+    outline: none;
     border-color: CanvasText;
+  }
+
+  /* The state ring overlay is a box-shadow the UA drops; the outlines below
+     carry the state instead. */
+  .panel-state-waiting::after,
+  .panel-state-failed::after,
+  .panel-state-working::after {
+    display: none;
   }
 
   .assistant-focused:has([data-composer-state] .cm-content:focus-visible) {
@@ -272,18 +292,50 @@
   }
 
   .panel-state-waiting {
+    border-color: CanvasText;
+    outline: 2px solid CanvasText;
+    outline-offset: -2px;
+  }
+
+  .terminal-selected.panel-state-waiting,
+  .terminal-selected.panel-state-waiting:focus-visible {
     border-color: Highlight;
     outline: 2px solid Highlight;
     outline-offset: -2px;
   }
 
-  .panel-state-working {
-    border-color: Highlight;
-    animation: none;
+  /* State edges are CanvasText, so Highlight still means only "focus here":
+     waiting is solid, failed dashed, so they differ by shape. A focused state
+     pane keeps its line style in Highlight. */
+  .panel-state-failed {
+    border-color: CanvasText;
+    outline: 2px dashed CanvasText;
+    outline-offset: -2px;
   }
 
-  .panel-state-hibernated {
+  .terminal-selected.panel-state-failed,
+  .terminal-selected.panel-state-failed:focus-visible {
+    border-color: Highlight;
+    outline: 2px dashed Highlight;
+    outline-offset: -2px;
+  }
+
+  /* The global focus ring sets a solid outline with !important; a focused
+     failed root keeps its dashed shape so it never reads as waiting. */
+  .terminal-selected.panel-state-failed:focus-visible {
+    outline-style: dashed !important;
+  }
+
+  .panel-state-exited {
     border-color: GrayText;
+  }
+
+  /* Highlight is kept for focus; the opt-in working edge is a dotted line. */
+  .panel-state-working {
+    border-color: CanvasText;
+    outline: 1px dotted CanvasText;
+    outline-offset: -2px;
+    animation: none;
   }
 
   .panel-voice-dictation-locked,
@@ -313,13 +365,15 @@
      and the engine paints that transparent outline in CanvasText. Every row of
      every menu came out boxed, so the highlighted one was the only row that did
      NOT look different. Canvas gives back the invisibility on the rows that are
-     not highlighted; the rule below outlines the one that is. */
+     not highlighted; the rule below outlines the one that is. An open submenu's
+     parent row is exempt too: once focus moves into the submenu it is no longer
+     highlighted, and this rule outranks its own `Highlight` outline below. */
   :is(
       [role="menuitem"],
       [role="menuitemcheckbox"],
       [role="menuitemradio"],
       [role="option"]
-    ).outline-hidden:not([data-highlighted]):not(:focus-visible) {
+    ).outline-hidden:not([data-highlighted]):not([data-state="open"]):not(:focus-visible) {
     outline-color: Canvas;
   }
 
@@ -846,13 +900,8 @@
 
   /* The forge status stripe paints with background colours, which are forced
      to Canvas, and its loading band is a gradient, which is dropped, so every
-     state vanished. Error rests in full ink; loading is a still GrayText bar.
-     The counters' em-dashes and the warning glyph still tell the two apart.
-     !important because performance mode pins the loading tint with it. */
-  .forge-status-error {
-    background-color: CanvasText !important;
-  }
-
+     state vanished. Loading is a still GrayText bar. !important because
+     performance mode pins the loading tint with it. */
   .forge-status-loading {
     background-color: GrayText !important;
   }
@@ -864,7 +913,6 @@
   /* The blanket button frame above draws each counter's bottom edge in the row
      just under the bar, which fused the two into one heavy border. One more
      row of lift keeps a Canvas gap between them. */
-  .forge-status-error,
   .forge-status-loading {
     bottom: 2px;
   }

@@ -62,8 +62,18 @@ export interface WorktreeChanges {
   rootPath: string;
   /** List of individual file changes */
   changes: FileChangeDetail[];
-  /** Total count of changed files */
+  /**
+   * Total count of changed files, including untracked files left out of
+   * {@link changes}: `changes.length + (omittedUntrackedCount ?? 0)`.
+   */
   changedFileCount: number;
+  /**
+   * Untracked files git status reported that are not in {@link changes}.
+   * Per-file enrichment (stat, line count) is capped, the count is not, so the
+   * untracked total is the listed untracked rows plus this. Absent means zero;
+   * line totals and `latestFileMtime` cover the listed rows only.
+   */
+  omittedUntrackedCount?: number;
   /** Total lines inserted across all files */
   totalInsertions?: number;
   /** Total lines deleted across all files */
@@ -231,6 +241,24 @@ export interface GitPushCommitPreview {
    * where no tip could be read — so `0` there is "unmeasured", not "level".
    */
   behind: number;
+  /**
+   * The commit the named branch pointed at when every range above was measured.
+   * The rows, `total` and `behind` all describe this commit, so an approval of
+   * the preview is an approval of publishing exactly this commit (#15646).
+   */
+  headOid: string;
+}
+
+/**
+ * What a push confirm put in front of the approver: this branch, at this
+ * commit, going to this destination. Handed to the push so it refuses rather
+ * than publishing anything else when the worktree moved while the confirm was
+ * open (#15646).
+ */
+export interface GitPushReview {
+  branch: string;
+  headOid: string;
+  destination: GitPushDestination;
 }
 
 /**
@@ -448,8 +476,25 @@ export interface CreateWorktreeOptions {
    * implement either policy, because checking a name reserves nothing.
    *
    * Ignored when `useExistingBranch` is set — reuse is not a collision.
+   *
+   * With `fetchBase`, `suffix` never reuses an existing branch: it sits at
+   * whatever commit it was left at, which is exactly the stale start the
+   * caller asked to avoid. A collision always suffixes instead.
    */
   collisionPolicy?: WorktreeBranchCollisionPolicy;
+  /**
+   * Fetch the base from its remote as part of the create and start the new
+   * branch at the commit that fetch brought back (#15733). A remote base
+   * (`fromRemote`) is fetched as named; a local base is fetched from its
+   * upstream, and the local branch itself is left where it is. A failed fetch
+   * fails the create with git's reason, and nothing falls back to the
+   * last-fetched ref.
+   *
+   * The branch is created from that commit, not from the ref, so it has no
+   * upstream even when it shares the remote branch's name. The commit comes
+   * back as `startCommit`. Refused beside `useExistingBranch`.
+   */
+  fetchBase?: boolean;
 }
 
 /**

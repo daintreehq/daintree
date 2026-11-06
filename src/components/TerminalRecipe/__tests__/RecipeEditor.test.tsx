@@ -474,4 +474,107 @@ describe("RecipeEditor", () => {
       );
     });
   });
+
+  describe("When done (#16172)", () => {
+    const AGENT: TerminalRecipe = {
+      ...RECIPE,
+      terminals: [{ type: "claude", title: "Reviewer", initialPrompt: "Review", env: {} }],
+    };
+    const pick = async (id: string, label: string) => {
+      fireEvent.keyDown(document.getElementById(id)!, { key: "ArrowDown" });
+      const option = await screen.findByRole("option", { name: label });
+      await act(async () => {
+        option.click();
+      });
+    };
+    const save = async () => {
+      await act(async () => {
+        screen.getByRole("button", { name: "Update recipe" }).click();
+      });
+      return updateRecipe.mock.calls.at(-1)?.[1].terminals ?? [];
+    };
+
+    it("saves the choice picked for an agent step, and nothing for keep", async () => {
+      renderEditor(AGENT);
+      expect(document.getElementById("terminal-when-done-help-0")?.textContent).not.toContain(
+        "filled-in"
+      );
+      expect(document.getElementById("terminal-when-done-0")?.textContent).toBe(
+        "Keep open (default)"
+      );
+
+      await pick("terminal-when-done-0", "Close, keeping the session");
+      expect((await save())[0]?.whenDone).toBe("close");
+
+      await pick("terminal-when-done-0", "Move to background");
+      expect((await save())[0]?.whenDone).toBe("background");
+
+      await pick("terminal-when-done-0", "Keep open (default)");
+      expect((await save())[0]?.whenDone).toBeUndefined();
+    });
+
+    it("carries the choice to another agent", async () => {
+      renderEditor({ ...AGENT, terminals: [{ ...AGENT.terminals[0]!, whenDone: "close" }] });
+      await pick("terminal-type-0", "Codex");
+      expect((await save())[0]).toMatchObject({ type: "codex", whenDone: "close" });
+    });
+
+    it("says a prompt led by a variable is armed only if it fills in as a task", () => {
+      renderEditor({
+        ...AGENT,
+        terminals: [{ type: "claude", title: "Path", initialPrompt: "{{worktree_path}}", env: {} }],
+      });
+      expect(document.getElementById("terminal-when-done-0")!.hasAttribute("disabled")).toBe(false);
+      expect(document.getElementById("terminal-when-done-help-0")?.textContent).toContain(
+        "if the filled-in prompt isn't empty or a slash command"
+      );
+    });
+
+    it("names why a slash-command prompt can't set it", () => {
+      renderEditor({
+        ...AGENT,
+        terminals: [
+          { type: "codex", title: "Merge", initialPrompt: "/prompts:merge-prs", env: {} },
+        ],
+      });
+      expect(document.getElementById("terminal-when-done-0")!.hasAttribute("disabled")).toBe(true);
+      expect(document.getElementById("terminal-when-done-help-0")?.textContent).toContain(
+        "slash command"
+      );
+    });
+
+    it("offers it only once the step has a prompt, pointing at the terminal menu until then", () => {
+      renderEditor({
+        ...AGENT,
+        terminals: [{ type: "claude", title: "Idle", whenDone: "close", env: {} }],
+      });
+      const trigger = document.getElementById("terminal-when-done-0")!;
+      expect(trigger.hasAttribute("disabled")).toBe(true);
+      expect(trigger.textContent).toBe("Keep open (default)");
+      expect(document.getElementById("terminal-when-done-help-0")?.textContent).toContain(
+        "terminal menu"
+      );
+
+      fireEvent.change(document.getElementById("terminal-initial-prompt-0")!, {
+        target: { value: "Review" },
+      });
+      expect(trigger.hasAttribute("disabled")).toBe(false);
+      expect(trigger.textContent).toBe("Close, keeping the session");
+    });
+
+    it("leaves a step that stops being an agent unarmed, and brings the choice back with it", async () => {
+      renderEditor({
+        ...AGENT,
+        terminals: [{ ...AGENT.terminals[0]!, whenDone: "background" }],
+      });
+      await pick("terminal-type-0", "Terminal");
+      expect(document.getElementById("terminal-when-done-0")).toBeNull();
+      expect((await save())[0]?.whenDone).toBeUndefined();
+
+      await pick("terminal-type-0", "Claude");
+      expect(document.getElementById("terminal-when-done-0")?.textContent).toBe(
+        "Move to background"
+      );
+    });
+  });
 });

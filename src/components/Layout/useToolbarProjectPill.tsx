@@ -38,6 +38,11 @@ export function useToolbarProjectPill({
     void actionService.dispatch("project.settings.open", undefined, { source: "user" });
   }, [projectSwitcher]);
 
+  const handleOpenSchedules = useCallback(() => {
+    projectSwitcher.close();
+    void actionService.dispatch("schedules.open", undefined, { source: "user" });
+  }, [projectSwitcher]);
+
   const handleStopProject = useCallback(
     (projectId: string) => {
       void projectSwitcher.stopProject(projectId);
@@ -255,6 +260,7 @@ export function useToolbarProjectPill({
 
   return {
     handleOpenProjectSettings,
+    handleOpenSchedules,
     handleStopProject,
     handleCloseProject,
     handleSleepProject,

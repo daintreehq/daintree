@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, useRef } from "react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { WorktreeFilterPopover } from "./WorktreeFilterPopover";
@@ -102,6 +103,7 @@ export function WorktreeSidebarSearchBar({
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
   const internalRef = useRef<HTMLInputElement | null>(null);
   const prevHasActiveFiltersRef = useRef(hasActiveFiltersValue);
+  const previousQueryRef = useRef(query);
 
   // Sync the instant `liveQuery` and cancel any pending persistence write when
   // the persisted `query` changes from outside this input (hydration,
@@ -109,6 +111,9 @@ export function WorktreeSidebarSearchBar({
   // changes when the debounce commits, at which point `liveQuery` already
   // matches, so this is a no-op.
   useEffect(() => {
+    // Mounting another search surface must preserve text awaiting persistence.
+    if (previousQueryRef.current === query) return;
+    previousQueryRef.current = query;
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
       debounceRef.current = null;
@@ -312,13 +317,16 @@ export function WorktreeSidebarSearchBar({
               </span>
             )}
             {showClearAll && (
-              <button
-                type="button"
+              // A link-styled button, so it reads as the way out rather than as
+              // more of the status text beside it, on a 24px target that
+              // reaches into the line's own padding.
+              <Button
+                variant="link"
                 onClick={handleClearAll}
-                className="ml-auto shrink-0 rounded-[var(--radius-sm)] text-2xs text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+                className="-my-1 -mr-1 ml-auto min-h-6 shrink-0 px-1 text-2xs"
               >
                 Clear all
-              </button>
+              </Button>
             )}
           </div>
           {filterSummaryText && (

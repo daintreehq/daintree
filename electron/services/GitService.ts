@@ -22,6 +22,8 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+const LOCAL_BRANCH_REF_PREFIX = "refs/heads/";
+
 export type HeadFileReadResult =
   | { ok: true; content: Buffer; version?: string }
   | { ok: true; unchanged: true; version: string }
@@ -43,6 +45,24 @@ const OBJECT_ID_RE = /^([0-9a-f]{40}|[0-9a-f]{64})$/i;
 // One `ls-tree -l -z` record: `<mode> <type> <oid> <size>\t<path>`, where size
 // is `-` for trees.
 const LS_TREE_ENTRY_RE = /^[0-7]+ ([a-z]+) ([0-9a-f]{40}|[0-9a-f]{64}) +(\d+|-)\t(.*)$/s;
+
+// One `ls-files --stage -z` record: `<mode> <oid> <stage>\t<path>`.
+const LS_FILES_STAGE_ENTRY_RE = /^([0-7]+) ([0-9a-f]{40}|[0-9a-f]{64}) ([0-3])\t(.*)$/s;
+
+// A gitlink names a commit in another repository, never a blob in this one.
+const GITLINK_MODE = "160000";
+
+/** The index's merged (stage 0) entry for `treePath`, null when absent; throws on output it can't parse. */
+function findIndexEntry(listing: string, treePath: string): { mode: string; oid: string } | null {
+  for (const record of listing.split("\0")) {
+    if (record === "") continue;
+    const match = LS_FILES_STAGE_ENTRY_RE.exec(record);
+    if (!match) throw new Error("Unexpected ls-files output");
+    if (match[4] !== treePath || match[3] !== "0") continue;
+    return { mode: match[1]!, oid: match[2]!.toLowerCase() };
+  }
+  return null;
+}
 
 /** The listing's entry for `treePath`, null when absent; throws on output it can't parse. */
 function findTreeEntry(
@@ -523,6 +543,48 @@ export class GitService {
   }
 
   /**
+   * Read a file's staged blob: the index's stage-0 entry, read by id exactly
+   * as `readFileAtHead` reads a tree entry, so the same size gate and
+   * known-version skip apply. An unmerged path has no single staged version
+   * and reads as absent.
+   */
+  async readFileInIndex(
+    filePath: string,
+    maxBytes: number,
+    options: HeadFileReadOptions = {}
+  ): Promise<HeadFileReadResult> {
+    const treePath = this.normalizeTreePath(filePath);
+    const git = await this.getGit();
+    const op = "read-file-in-index";
+
+    // `--literal-pathspecs` for the same reason as `ls-tree` above; `--` keeps
+    // a leading-dash path from parsing as an option.
+    let listing: string;
+    try {
+      listing = await git.raw(["--literal-pathspecs", "ls-files", "--stage", "-z", "--", treePath]);
+    } catch (error) {
+      throw toGitOperationError(error, { cwd: this.rootPath, op });
+    }
+
+    let entry: ReturnType<typeof findIndexEntry>;
+    try {
+      entry = findIndexEntry(listing, treePath);
+    } catch (error) {
+      throw toGitOperationError(error, { cwd: this.rootPath, op });
+    }
+    if (!entry || entry.mode === GITLINK_MODE) {
+      return { ok: false, reason: "NOT_FOUND" };
+    }
+    const version = entry.oid;
+    if (version === options.knownVersion) {
+      return { ok: true, unchanged: true, version };
+    }
+
+    const result = await this.readBlobAtSpec(git, entry.oid, maxBytes, op, options.beforeRead);
+    return result.ok ? { ...result, version } : result;
+  }
+
+  /**
    * Read the last committed version of a file that no longer exists at HEAD —
    * the blob from the newest commit whose tree still contains the path.
    * Renames are not followed (`rev-list` has no `--follow`), matching
@@ -599,7 +661,8 @@ export class GitService {
     branch2: string,
     filePath?: string,
     useMergeBase?: boolean,
-    ignoreWhitespace?: boolean
+    ignoreWhitespace?: boolean,
+    contextLines?: number
   ): Promise<CrossWorktreeDiffResult | string> {
     // Validate before the equality fast-path so an invalid argv-shaped name
     // is rejected unconditionally — not silently accepted when both inputs
@@ -641,6 +704,7 @@ export class GitService {
             // submodule's own files (#12309).
             "--submodule=short",
             ...(ignoreWhitespace ? ["--ignore-all-space"] : []),
+            ...(contextLines !== undefined ? [`--unified=${contextLines}`] : []),
             "--end-of-options",
             range,
             "--",
@@ -853,10 +917,38 @@ export class GitService {
     }, "repairWorktrees");
   }
 
+  /**
+   * Names only, and only under `refs/heads/`: with packed refs git seeks
+   * straight to that prefix, so the cost follows the local branches instead of
+   * every remote-tracking ref and tip commit that `listBranches()` reads
+   * (#15663). The candidate name is never passed to git.
+   */
+  private async listLocalBranchNames(): Promise<Set<string>> {
+    try {
+      const git = await this.getGit();
+      const raw = await git.raw(["for-each-ref", "--format=%(refname)", LOCAL_BRANCH_REF_PREFIX]);
+      const names = new Set<string>();
+      for (const line of raw.split("\n")) {
+        // Only a CR comes off: git allows Unicode whitespace (NBSP) in refnames.
+        const ref = line.endsWith("\r") ? line.slice(0, -1) : line;
+        if (ref.startsWith(LOCAL_BRANCH_REF_PREFIX)) {
+          names.add(ref.slice(LOCAL_BRANCH_REF_PREFIX.length));
+        }
+      }
+      return names;
+    } catch (error) {
+      logError("Failed to list local branch names", {
+        error: formatErrorMessage(error, "unknown error"),
+      });
+      throw toGitOperationError(error, { cwd: this.rootPath, op: "list-branches" });
+    }
+  }
+
   async findAvailableBranchName(baseName: string): Promise<string> {
-    const branches = await this.listBranches();
-    // Only check local branches for conflicts (remote branches don't prevent local creation)
-    const localBranchNames = new Set(branches.filter((b) => !b.remote).map((b) => b.name));
+    // Only local branches conflict: a remote-only branch of the same name doesn't
+    // prevent local creation. Advisory: `git worktree add -b` still rejects a
+    // branch created after this check.
+    const localBranchNames = await this.listLocalBranchNames();
 
     if (!localBranchNames.has(baseName)) {
       return baseName;

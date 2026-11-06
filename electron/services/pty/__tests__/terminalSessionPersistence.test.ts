@@ -20,6 +20,11 @@ import {
   readAndDeleteHibernatedMarker,
   getHibernatedMarkerPath,
 } from "../terminalSessionPersistence.js";
+import {
+  DECISIONS_DEPLOY_TERMINAL_PREFIX,
+  DECISIONS_REMOVE_TERMINAL_PREFIX,
+} from "../../../../shared/config/terminalScreenPersistence.js";
+import { HOST_THROWAWAY_TERMINAL_PREFIX } from "../../../../shared/config/hostThrowaway.js";
 
 const { Terminal } = headless;
 const { SerializeAddon } = serialize;
@@ -107,6 +112,23 @@ describe("terminalSessionPersistence", () => {
     expect(warnSpy.mock.calls[1][0]).toMatch(/term-async/);
 
     warnSpy.mockRestore();
+  });
+
+  it.each([
+    ["a relay deploy", `${DECISIONS_DEPLOY_TERMINAL_PREFIX}1`],
+    ["a relay removal", `${DECISIONS_REMOVE_TERMINAL_PREFIX}1`],
+    ["a throwaway run", `${HOST_THROWAWAY_TERMINAL_PREFIX}1`],
+  ])("never writes %s's screen, by either writer", async (_label, id) => {
+    const screen = { data: "  Claim secret  0123456789abcdef0123456789abcdef", cols: 80, rows: 24 };
+    const sessionDir = path.join(userDataDir, "terminal-sessions");
+
+    persistSessionSnapshotSync(id, screen);
+    await persistSessionSnapshotAsync(id, screen);
+    // Not even the directory: the gate runs before any filesystem work.
+    expect(fs.existsSync(sessionDir)).toBe(false);
+
+    persistSessionSnapshotSync("term-ordinary", screen);
+    expect(fs.readdirSync(sessionDir)).toEqual(["term-ordinary.restore"]);
   });
 
   // chmod is a POSIX no-op on Windows, so the mode-bit assertions only run there.
@@ -414,6 +436,43 @@ describe("terminalSessionPersistence", () => {
   describe("replay window vs. concurrent resize (#11552)", () => {
     const drain = (terminal: HeadlessTerminal): Promise<void> =>
       new Promise<void>((resolve) => terminal.write("", () => resolve()));
+
+    it.each([10, 20])(
+      "keeps restored history through ConPTY's first %i-row frame",
+      async (rows) => {
+        const id = `term-conpty-${rows}`;
+        const marker = "PREVIOUS_SESSION_OUTPUT";
+        persistSessionSnapshotSync(id, { data: marker, cols: 80, rows: 10 });
+        const mirror = new Terminal({ cols: 80, rows, scrollback: 200, allowProposedApi: true });
+        const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+        try {
+          Object.defineProperty(process, "platform", { value: "win32" });
+          expect(restoreSessionFromFile(mirror, id).restored).toBe(true);
+        } finally {
+          Object.defineProperty(process, "platform", platform);
+        }
+        try {
+          await drain(mirror);
+          const prompt = "PS C:\\repo> ";
+          // ConPTY clears every row and homes its first prompt to its own empty console.
+          mirror.write(
+            `\x1b[?25l\x1b[H${"\x1b[K\r\n".repeat(rows - 1)}\x1b[K\x1b[H${prompt}\x1b[?25h`
+          );
+          await drain(mirror);
+          const buffer = mirror.buffer.active;
+          const text = Array.from(
+            { length: buffer.length },
+            (_, i) => buffer.getLine(i)?.translateToString(true) ?? ""
+          ).join("\n");
+          expect(text).toContain(marker);
+          expect(text).toContain("Session restored");
+          expect(buffer.getLine(buffer.baseY)?.translateToString(true)).toBe(prompt);
+          expect([buffer.cursorX, buffer.cursorY]).toEqual([prompt.length, 0]);
+        } finally {
+          mirror.dispose();
+        }
+      }
+    );
 
     // Written without a trailing newline so the cursor is parked inside a
     // wrapped group — where an agent leaves it between repaints.

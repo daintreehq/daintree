@@ -1,4 +1,6 @@
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
+import type { Project } from "../../../shared/types/project.js";
+import type { ScheduledRunRef } from "../../../shared/types/scheduledRunRef.js";
 import { sanitizeAgentToolbarPins } from "../../../shared/types/ipc/agentToolbarPins.js";
 import { PLUGIN_WORKTREE_DELETE_NOTES_TIMEOUT_MS } from "../../../shared/config/pluginBudgets.js";
 import {
@@ -147,17 +149,76 @@ export async function spawnHostAssistantLive(
   return spawnHostAssistant(project, spec, deps);
 }
 
+/** Reopen a saved agent session as a pane of its worktree (#16000); see `resumeAgentSessionAsPane`. */
+export async function resumeAgentSessionAsPaneLive(
+  request: import("./viewlessAgentResume.js").AgentSessionPaneRequest
+): Promise<import("./viewlessAgentResume.js").AgentSessionPaneResult> {
+  const [{ resumeAgentSessionAsPane }, { spawnAndConfirm }, { getPtyClient }, { stat }, deps] =
+    await Promise.all([
+      import("./viewlessAgentResume.js"),
+      import("../assistants/assistantLaunch.js"),
+      import("../../window/serviceRefs.js"),
+      import("node:fs/promises"),
+      loadLiveDeps(),
+    ]);
+  return resumeAgentSessionAsPane(request, deps, {
+    isDirectory: async (path) => (await stat(path)).isDirectory(),
+    confirmSpawn: (terminalId, spawn) =>
+      spawnAndConfirm(
+        getPtyClient(),
+        async () => {
+          await spawn();
+          return true;
+        },
+        terminalId
+      ),
+  });
+}
+
+/** Wait for an agent main launched or found to be at rest (#16000); see `waitForAgentAtPrompt`. */
+export async function waitForAgentAtPromptLive(
+  terminalId: string,
+  options: { timeoutMs: number; signal?: AbortSignal; promptOnly?: boolean }
+): Promise<import("./agentPromptWait.js").AgentPromptWaitResult> {
+  const { waitForAgentAtPrompt } = await import("./agentPromptWait.js");
+  return waitForAgentAtPrompt(terminalId, options);
+}
+
+/**
+ * Launch a scheduled run's agent in a project no view shows (#15978): the
+ * generic launch, with the run as provenance that only this entry can pass.
+ */
+export async function runScheduledAgentLaunchLive(
+  project: Project,
+  request: {
+    args: object;
+    scheduledRun: ScheduledRunRef;
+  }
+): Promise<ActionDispatchResult> {
+  const [{ runAgentLaunch }, deps] = await Promise.all([
+    import("./viewlessAgents.js"),
+    loadLiveDeps(),
+  ]);
+  return runAgentLaunch(
+    { workspaceId: project.id, actionId: "agent.launch", args: request.args, confirmed: true },
+    project,
+    deps,
+    { scheduledRun: request.scheduledRun }
+  );
+}
+
 /** Restart a terminal of a project no frontend is attached to (#14703); see `restartTerminalWithoutView`. */
 export async function restartTerminalWithoutViewLive(
   projectId: string,
   terminalId: string,
-  isCurrent: () => boolean
+  isCurrent: () => boolean,
+  beforeChange?: () => void
 ): Promise<import("./viewlessTerminalRestart.js").ViewlessRestartOutcome> {
   const [{ restartTerminalWithoutView }, deps] = await Promise.all([
     import("./viewlessTerminalRestart.js"),
     loadLiveDeps(),
   ]);
-  return restartTerminalWithoutView(projectId, terminalId, deps, isCurrent);
+  return restartTerminalWithoutView(projectId, terminalId, deps, isCurrent, beforeChange);
 }
 
 /** The workspace identity a viewless result is stamped with, when it is a project. */

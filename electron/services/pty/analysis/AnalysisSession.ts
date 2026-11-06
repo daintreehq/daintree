@@ -14,6 +14,7 @@ import { ActivityMonitor, type ProcessStateValidator } from "../../ActivityMonit
 import { buildActivityMonitorOptions, buildPatternConfig } from "../terminalActivityPatterns.js";
 import { installHeadlessResponder } from "../headlessResponder.js";
 import { Osc94Parser } from "../Osc94Parser.js";
+import { ParseBarrier, SubmissionCaptureHost } from "../SubmissionOutputCapture.js";
 import { SynchronizedFrameDetector } from "../SynchronizedFrameDetector.js";
 import {
   mirrorNeedsResize,
@@ -31,6 +32,7 @@ import {
 } from "../AgentActivityTemperature.js";
 import {
   readCursorLine,
+  readLastNLines,
   readVisibleActivityLines,
   readViewportNonEmptyLines,
   ViewportSnapshotCache,
@@ -106,15 +108,21 @@ export class AnalysisSession {
   private agentOutputNoteTimer: NodeJS.Timeout | null = null;
 
   private digestTimer: NodeJS.Timeout | null = null;
+  private reportedBracketedPasteMode = false;
   private pendingAckBytes = 0;
   private ackTimer: NodeJS.Timeout | null = null;
   private disposed = false;
+  private readonly submissionCaptures: SubmissionCaptureHost;
+  private readonly parseBarrier = new ParseBarrier();
 
   constructor(spec: AnalysisCreateSpec, emit: Emit) {
     this.terminalId = spec.terminalId;
     this.spawnedAt = spec.spawnedAt;
     this.epoch = spec.epoch;
     this.emit = emit;
+    this.submissionCaptures = new SubmissionCaptureHost((captureId, output) =>
+      this.emit({ type: "submission-capture", terminalId: this.terminalId, captureId, output })
+    );
 
     const terminal = new HeadlessTerminal({
       cols: spec.cols,
@@ -147,6 +155,7 @@ export class AnalysisSession {
         this.scheduleDigest();
       }
     }
+    if (spec.bracketedPasteMode) this.feedPrelude("\x1b[?2004h");
   }
 
   feedChunk(
@@ -170,6 +179,7 @@ export class AnalysisSession {
       this.ensureResponder();
     }
 
+    const parsed = this.parseBarrier.noteFed();
     this.headlessTerminal.write(data, () => {
       this.parserTail.feed(data);
       // xterm's onRender event fires before this callback and invalidates only
@@ -177,15 +187,41 @@ export class AnalysisSession {
       // fresh without forcing every unchanged row through comparison again.
       this.noteProcessed(data.length);
       this.noteAgentOutputActivity();
+      this.submissionCaptures.sync();
+      parsed();
       this.scheduleDigest();
     });
   }
 
   feedPrelude(data: string): void {
     if (this.disposed || !this.headlessTerminal) return;
+    const parsed = this.parseBarrier.noteFed();
     this.headlessTerminal.write(data, () => {
       this.parserTail.feed(data);
+      this.submissionCaptures.sync();
+      parsed();
       this.scheduleDigest();
+    });
+  }
+
+  /**
+   * Start a submission's output capture (#16210) once everything fed before
+   * this message has parsed, and before anything fed after it.
+   */
+  startSubmissionCapture(captureId: number, text: string): void {
+    const terminal = this.headlessTerminal;
+    if (this.disposed || !terminal) return;
+    this.parseBarrier.after(() => {
+      if (!this.disposed && this.headlessTerminal === terminal) {
+        this.submissionCaptures.start(terminal, captureId, text);
+      }
+    });
+  }
+
+  closeSubmissionCapture(): void {
+    if (this.disposed) return;
+    this.parseBarrier.after(() => {
+      if (!this.disposed) this.submissionCaptures.close();
     });
   }
 
@@ -276,6 +312,7 @@ export class AnalysisSession {
       {
         ...buildActivityMonitorOptions(spec.agentId, {
           getVisibleLines: (n) => readVisibleActivityLines(this.headlessTerminal ?? undefined, n),
+          getLastTextLines: (n) => readLastNLines(this.headlessTerminal ?? undefined, n),
           getVisibleContentSnapshot: (n) =>
             this.viewportSnapshotCache.read(this.headlessTerminal ?? undefined, n),
           getCursorLine: () => readCursorLine(this.headlessTerminal ?? undefined),
@@ -417,6 +454,8 @@ export class AnalysisSession {
     // still drain the host's outstanding counter (an overflow-reset `create`
     // frees this session while its backend stays registered).
     this.flushAck();
+    this.submissionCaptures.dispose();
+    this.parseBarrier.reset();
     this.disposed = true;
     this.stopMonitor();
     if (this.agentOutputNoteTimer) {
@@ -637,17 +676,33 @@ export class AnalysisSession {
   }
 
   private scheduleDigest(): void {
-    if (this.disposed || this.digestTimer) return;
+    if (this.disposed) return;
+    // A paste-mode flip skips the throttle: context injection admits its
+    // destination on this mode, and a stale "on" would let it paste into a
+    // program that just turned bracketed paste off.
+    if (this.headlessTerminal?.modes.bracketedPasteMode !== this.reportedBracketedPasteMode) {
+      if (this.digestTimer) clearTimeout(this.digestTimer);
+      this.digestTimer = null;
+      this.emitDigest();
+      return;
+    }
+    if (this.digestTimer) return;
     this.digestTimer = setTimeout(() => {
       this.digestTimer = null;
-      if (this.disposed || !this.headlessTerminal) return;
-      this.emit({
-        type: "viewport",
-        terminalId: this.terminalId,
-        lines: readViewportNonEmptyLines(this.headlessTerminal),
-        cursorLine: readCursorLine(this.headlessTerminal),
-      });
+      this.emitDigest();
     }, VIEWPORT_DIGEST_THROTTLE_MS);
     this.digestTimer.unref?.();
+  }
+
+  private emitDigest(): void {
+    if (this.disposed || !this.headlessTerminal) return;
+    this.reportedBracketedPasteMode = this.headlessTerminal.modes.bracketedPasteMode;
+    this.emit({
+      type: "viewport",
+      terminalId: this.terminalId,
+      lines: readViewportNonEmptyLines(this.headlessTerminal),
+      cursorLine: readCursorLine(this.headlessTerminal),
+      bracketedPasteMode: this.reportedBracketedPasteMode,
+    });
   }
 }

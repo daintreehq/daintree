@@ -76,6 +76,37 @@ export const STATUS_TEXT_INKS = {
 
 export const STATUS_TEXT_CONTRAST = { minimum: 4.5, washOpacity: 0.15 } as const;
 
+// The project switcher's status sentences ("2 running", "1 agent unread") are small
+// text in an activity hue. The activity inks are graphical, held to 3:1 for the
+// spinners, rings and dots beside them, so each sentence hue gets a text-grade twin
+// lifted the way the status letters' are (#15866).
+export const ACTIVITY_TEXT_INKS = {
+  "activity-working": "activity-working-text",
+  "activity-waiting": "activity-waiting-text",
+  "activity-completed": "activity-completed-text",
+} as const satisfies Partial<Record<AppThemeTokenKey, AppThemeTokenKey>>;
+
+export const ACTIVITY_TEXT_MIN_CONTRAST = 4.5;
+
+// The graphical status inks (dots, icons, borders) hold the 3:1 non-text floor on
+// every surface they sit on. Exported because the colour-vision modes fit the
+// status inks they swap in to this same contract (#15580).
+export const STATUS_INK_CONTRAST = {
+  minimum: 3.0,
+  inks: ["status-success", "status-warning", "status-danger", "status-info"],
+  surfaces: [
+    "surface-panel",
+    "surface-grid",
+    "surface-sidebar",
+    "surface-canvas",
+    "surface-panel-elevated",
+  ],
+} as const satisfies {
+  minimum: number;
+  inks: readonly AppThemeTokenKey[];
+  surfaces: readonly AppThemeTokenKey[];
+};
+
 const CONTRAST_PAIRS: Array<{
   foreground: AppThemeTokenKey;
   background: AppThemeTokenKey;
@@ -127,26 +158,13 @@ const CONTRAST_PAIRS: Array<{
   // dark links are bright by construction (and arashiyama's deliberate 4.38 must
   // not regress).
   { foreground: "text-link", background: "surface-canvas", minimum: 4.5, appliesTo: "light" },
-  { foreground: "status-success", background: "surface-panel", minimum: 3.0 },
-  { foreground: "status-success", background: "surface-grid", minimum: 3.0 },
-  { foreground: "status-success", background: "surface-sidebar", minimum: 3.0 },
-  { foreground: "status-success", background: "surface-canvas", minimum: 3.0 },
-  { foreground: "status-success", background: "surface-panel-elevated", minimum: 3.0 },
-  { foreground: "status-warning", background: "surface-panel", minimum: 3.0 },
-  { foreground: "status-warning", background: "surface-grid", minimum: 3.0 },
-  { foreground: "status-warning", background: "surface-sidebar", minimum: 3.0 },
-  { foreground: "status-warning", background: "surface-canvas", minimum: 3.0 },
-  { foreground: "status-warning", background: "surface-panel-elevated", minimum: 3.0 },
-  { foreground: "status-danger", background: "surface-panel", minimum: 3.0 },
-  { foreground: "status-danger", background: "surface-grid", minimum: 3.0 },
-  { foreground: "status-danger", background: "surface-sidebar", minimum: 3.0 },
-  { foreground: "status-danger", background: "surface-canvas", minimum: 3.0 },
-  { foreground: "status-danger", background: "surface-panel-elevated", minimum: 3.0 },
-  { foreground: "status-info", background: "surface-panel", minimum: 3.0 },
-  { foreground: "status-info", background: "surface-grid", minimum: 3.0 },
-  { foreground: "status-info", background: "surface-sidebar", minimum: 3.0 },
-  { foreground: "status-info", background: "surface-canvas", minimum: 3.0 },
-  { foreground: "status-info", background: "surface-panel-elevated", minimum: 3.0 },
+  ...STATUS_INK_CONTRAST.inks.flatMap((foreground) =>
+    STATUS_INK_CONTRAST.surfaces.map((background) => ({
+      foreground,
+      background,
+      minimum: STATUS_INK_CONTRAST.minimum,
+    }))
+  ),
   ACCENT_CONTRAST_PAIR,
   // The high-contrast neutral CTA — the standard dialog primary action (#11963) — fills
   // itself with the theme's own body-text colour and paints its label in the inverse.
@@ -235,15 +253,24 @@ export function relativeLuminance(hex: string): number {
     // 6-digit (#rrggbb) or 8-digit (#rrggbbaa): take first 6 chars, drop alpha for static analysis.
     rgb = clean.slice(0, 6);
   }
-  const red = hexToLinear(parseInt(rgb.slice(0, 2), 16));
-  const green = hexToLinear(parseInt(rgb.slice(2, 4), 16));
-  const blue = hexToLinear(parseInt(rgb.slice(4, 6), 16));
-  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+  return relativeLuminanceOfRgb(
+    parseInt(rgb.slice(0, 2), 16),
+    parseInt(rgb.slice(2, 4), 16),
+    parseInt(rgb.slice(4, 6), 16)
+  );
+}
+
+/** `relativeLuminance` for 0–255 channels, skipping the hex round trip. */
+export function relativeLuminanceOfRgb(red: number, green: number, blue: number): number {
+  return 0.2126 * hexToLinear(red) + 0.7152 * hexToLinear(green) + 0.0722 * hexToLinear(blue);
 }
 
 export function contrastRatio(foreground: string, background: string): number {
-  const l1 = relativeLuminance(foreground);
-  const l2 = relativeLuminance(background);
+  return contrastRatioFromLuminance(relativeLuminance(foreground), relativeLuminance(background));
+}
+
+/** `contrastRatio` for luminances already measured, so a search can reuse them. */
+export function contrastRatioFromLuminance(l1: number, l2: number): number {
   const lighter = Math.max(l1, l2);
   const darker = Math.min(l1, l2);
   return (lighter + 0.05) / (darker + 0.05);
@@ -356,6 +383,9 @@ const LEGIBILITY_SKIP_TOKENS: ReadonlySet<AppThemeTokenKey> = new Set(["terminal
 
 const PRIMARY_LEGIBILITY_FLOOR = 0.55;
 const STANDARD_LEGIBILITY_FLOOR = 0.18;
+// The OKLab lightness gap every ANSI ink keeps from terminal-background. Exported
+// because the colour-vision modes fit the ANSI inks they swap in to it.
+export const TERMINAL_ANSI_LIGHTNESS_FLOOR = STANDARD_LEGIBILITY_FLOOR;
 // De-emphasized roles (comment, quote) get the same floor at current calibration
 // but use a separate constant so the floor can be relaxed independently later.
 const SOFT_LEGIBILITY_FLOOR = 0.18;
@@ -372,10 +402,24 @@ const DISTINCTNESS_FLOOR = 0.03;
 // → AA 4.5:1; de-emphasized roles (comment, quote) get a relaxed legible floor.
 const SYNTAX_CANVAS_MIN_CONTRAST = 4.5;
 const SYNTAX_CANVAS_SOFT_MIN_CONTRAST = 3.0;
-const SYNTAX_CANVAS_SURFACE: AppThemeTokenKey = "surface-canvas";
+export const SYNTAX_CANVAS_SURFACE: AppThemeTokenKey = "surface-canvas";
 // Roles that aren't legibility-bearing foreground code text on the canvas:
 // chip is a fill/badge, not a glyph color, so it's excluded from the render check.
 const SYNTAX_CANVAS_SKIP: ReadonlySet<AppThemeTokenKey> = new Set(["syntax-chip"]);
+
+// Each syntax role painted as code on the canvas, with the floor it holds there.
+// Exported because the colour-vision modes fit the syntax inks they swap in to
+// the same floors (#15580).
+export const SYNTAX_CANVAS_FLOORS: ReadonlyArray<readonly [AppThemeTokenKey, number]> =
+  TERMINAL_SYNTAX_ROLES.filter((role) => !SYNTAX_CANVAS_SKIP.has(role)).map(
+    (role) =>
+      [
+        role,
+        SOFT_LEGIBILITY_ROLES.has(role)
+          ? SYNTAX_CANVAS_SOFT_MIN_CONTRAST
+          : SYNTAX_CANVAS_MIN_CONTRAST,
+      ] as const
+  );
 
 interface DistinctnessPair {
   a: AppThemeTokenKey;
@@ -465,14 +509,10 @@ function getTerminalSyntaxWarnings(scheme: AppColorScheme): AppThemeValidationWa
   // passes the dark-terminal check can be invisible on the canvas it renders on.
   const canvas = scheme.tokens[SYNTAX_CANVAS_SURFACE];
   if (typeof canvas === "string" && isHexColor(canvas)) {
-    for (const tokenKey of TERMINAL_SYNTAX_ROLES) {
-      if (SYNTAX_CANVAS_SKIP.has(tokenKey)) continue;
+    for (const [tokenKey, floor] of SYNTAX_CANVAS_FLOORS) {
       const fg = scheme.tokens[tokenKey];
       if (typeof fg !== "string" || !isHexColor(fg)) continue; // terminal loop already reported non-hex/missing
       const ratio = contrastRatio(fg, canvas);
-      const floor = SOFT_LEGIBILITY_ROLES.has(tokenKey)
-        ? SYNTAX_CANVAS_SOFT_MIN_CONTRAST
-        : SYNTAX_CANVAS_MIN_CONTRAST;
       if (ratio < floor) {
         warnings.push({
           kind: "terminal-legibility",
@@ -642,10 +682,12 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
   // The outline drawn on a highlighted row (focus ring, increased-contrast
   // outline) against the highlight fill and the surface around it.
   warnings.push(...getPaletteSelectionWarnings(scheme));
+  warnings.push(...getPanelRowSelectionWarnings(scheme));
   warnings.push(...getRecentActivityDotWarnings(scheme));
   warnings.push(...getDestructiveButtonWarnings(scheme));
   warnings.push(...getDiffTextContrastWarnings(scheme));
   warnings.push(...getStatusTextWarnings(scheme));
+  warnings.push(...getActivityTextWarnings(scheme));
 
   // Terminal ANSI / syntax legibility and distinctness — OKLab-based because
   // the terminal background is always dark and WCAG ratios are unreliable there.
@@ -684,20 +726,55 @@ const DARK_PALETTE_SURFACE_OPACITY = 0.94;
 
 // Every colour the palette surface can actually render as, worst case last.
 function resolvePaletteSurfaces(scheme: AppColorScheme): string[] | null {
-  if (scheme.type === "light") {
-    const elevated = scheme.tokens["surface-panel-elevated"];
-    return isHexColor(elevated) ? [elevated] : null;
+  const surfaces = collectPaletteSurfaces(scheme.tokens, scheme.type);
+  return surfaces && surfaces.map((surface) => surface.hex);
+}
+
+function collectPaletteSurfaces(
+  tokens: Partial<Record<AppThemeTokenKey, string>>,
+  type: "dark" | "light"
+): Array<{ label: string; hex: string }> | null {
+  if (type === "light") {
+    const elevated = tokens["surface-panel-elevated"];
+    return typeof elevated === "string" && isHexColor(elevated)
+      ? [{ label: "the palette surface", hex: elevated }]
+      : null;
   }
-  const sidebar = scheme.tokens["surface-sidebar"];
-  if (!isHexColor(sidebar)) return null;
+  const sidebar = tokens["surface-sidebar"];
+  if (typeof sidebar !== "string" || !isHexColor(sidebar)) return null;
   // The solid sidebar stays in the running: performance mode and
   // `prefers-contrast: more` both drop the material and render it opaque.
-  return [
-    sidebar,
-    ...DARK_PALETTE_BACKDROPS.map((key) => scheme.tokens[key])
-      .filter(isHexColor)
-      .map((backdrop) => blendOverBackground(sidebar, backdrop, DARK_PALETTE_SURFACE_OPACITY)),
-  ];
+  const surfaces = [{ label: "the palette surface", hex: sidebar }];
+  for (const key of DARK_PALETTE_BACKDROPS) {
+    const backdrop = tokens[key];
+    if (typeof backdrop !== "string" || !isHexColor(backdrop)) continue;
+    surfaces.push({
+      label: `the palette surface over ${key}`,
+      hex: blendOverBackground(sidebar, backdrop, DARK_PALETTE_SURFACE_OPACITY),
+    });
+  }
+  return surfaces;
+}
+
+/**
+ * Every backdrop a project switcher row can paint on: the palette surface at rest,
+ * and `overlay-highlight` over it when the row holds the cursor. Empty when the
+ * surface or the fill isn't a colour this math can composite.
+ */
+export function resolvePaletteRowBackdrops(
+  tokens: Partial<Record<AppThemeTokenKey, string>>,
+  type: "dark" | "light"
+): Array<{ label: string; hex: string }> {
+  const surfaces = collectPaletteSurfaces(tokens, type);
+  const fill = tokens["overlay-highlight"];
+  if (!surfaces || typeof fill !== "string") return [];
+  const rows: Array<{ label: string; hex: string }> = [];
+  for (const surface of surfaces) {
+    const highlighted = resolveOverBackdrop(fill, surface.hex);
+    if (highlighted === null) return [];
+    rows.push(surface, { label: `the highlighted row on ${surface.label}`, hex: highlighted });
+  }
+  return rows;
 }
 
 const SELECTION_OUTLINE_MIN_CONTRAST = 3.0;
@@ -1053,6 +1130,58 @@ function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidation
   return warnings;
 }
 
+// The same outline on a highlighted row that sits on a panel rather than the
+// palette: list-detail rows, the file lists and the worktree overview paint the
+// one fill and take the one increased-contrast outline. Dark panels are lighter
+// than the sidebar the palette is scored on, so the fill and the outline close
+// in on each other there. A panel surface the palette check already scored
+// (light themes float the palette on `surface-panel-elevated`) is skipped, so
+// one pair of pixels never reports twice.
+const PANEL_ROW_SURFACES = ["surface-panel", "surface-panel-elevated"] as const;
+
+function getPanelRowSelectionWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
+  const warnings: AppThemeValidationWarning[] = [];
+  const outlineToken = scheme.tokens["selection-outline"];
+  const fillToken = scheme.tokens["overlay-highlight"];
+  // Compared as pixels, so `#FFFFFF` and `#fff` are the one surface they paint.
+  const pixel = (hex: string) => `${hexToRgb(hex).join(",")}/${splitHexAlpha(hex)?.opacity ?? 1}`;
+  const scored = new Set((resolvePaletteSurfaces(scheme) ?? []).map(pixel));
+
+  for (const key of PANEL_ROW_SURFACES) {
+    const surface = scheme.tokens[key];
+    if (!isHexColor(surface)) {
+      warnings.push({
+        kind: "unevaluable",
+        message: `Cannot evaluate panel row selection contrast: ${key}="${surface}" is not a hex color`,
+      });
+      continue;
+    }
+    if (scored.has(pixel(surface))) continue;
+    const fill = resolveOverBackdrop(fillToken, surface);
+    const outline = fill === null ? null : resolveOverBackdrop(outlineToken, fill);
+    if (fill === null || outline === null) {
+      warnings.push({
+        kind: "unevaluable",
+        message: `Cannot evaluate panel row selection contrast on ${key}: overlay-highlight="${fillToken}" or selection-outline="${outlineToken}" is neither hex nor rgba()`,
+      });
+      continue;
+    }
+    for (const [label, against] of [
+      [`the highlight fill on ${key}`, fill],
+      [`${key} around a highlighted row`, surface],
+    ] as const) {
+      const ratio = contrastRatio(outline, against);
+      if (ratio < SELECTION_OUTLINE_MIN_CONTRAST) {
+        warnings.push({
+          kind: "low-contrast",
+          message: `selection-outline against ${label} is ${ratio.toFixed(2)}:1; target is ${SELECTION_OUTLINE_MIN_CONTRAST.toFixed(1)}:1 (WCAG 1.4.11 Non-text Contrast)`,
+        });
+      }
+    }
+  }
+  return warnings;
+}
+
 function getDestructiveButtonWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
   const { foreground, fills, minimum } = DESTRUCTIVE_BUTTON_CONTRAST;
   const label = scheme.tokens[foreground];
@@ -1103,11 +1232,12 @@ function getDestructiveButtonWarnings(scheme: AppColorScheme): AppThemeValidatio
  */
 export function resolveStatusTextBackdrops(
   graphical: string,
-  tokens: Partial<Record<AppThemeTokenKey, string>>
+  tokens: Partial<Record<AppThemeTokenKey, string>>,
+  // The churn rows, when the caller already resolved them from these tokens.
+  rows: ReadonlyArray<{ label: string; hex: string }> = resolveDiffTextBackdrops(tokens)
 ): Array<{ label: string; hex: string }> {
-  const rows = resolveDiffTextBackdrops(tokens);
   const wash = parseTranslucent(graphical);
-  if (!wash) return rows;
+  if (!wash) return [...rows];
   const opacity = STATUS_TEXT_CONTRAST.washOpacity * wash.opacity;
   return rows.flatMap((row) => [
     row,
@@ -1155,6 +1285,59 @@ function getStatusTextWarnings(scheme: AppColorScheme): AppThemeValidationWarnin
       warnings.push({
         kind: "low-contrast",
         message: `${textKey} on ${worst.label} is ${worst.ratio.toFixed(2)}:1; target is ${minimum.toFixed(1)}:1`,
+      });
+    }
+  }
+  return warnings;
+}
+
+/**
+ * Every backdrop an activity sentence can paint on: the rows status text shares
+ * with the churn counts, plus the project switcher's own rows, whose dark palette
+ * surface is a translucent material none of the display surfaces spell.
+ */
+export function resolveActivityTextBackdrops(
+  tokens: Partial<Record<AppThemeTokenKey, string>>,
+  type: "dark" | "light"
+): Array<{ label: string; hex: string }> {
+  return [...resolveDiffTextBackdrops(tokens), ...resolvePaletteRowBackdrops(tokens, type)];
+}
+
+/**
+ * The activity sentence inks hold AA on every backdrop they paint on. Fills the
+ * math can't composite are already named by the churn and recent-activity gates,
+ * which measure the same rows.
+ */
+function getActivityTextWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
+  const warnings: AppThemeValidationWarning[] = [];
+  const backdrops = resolveActivityTextBackdrops(scheme.tokens, scheme.type);
+  if (backdrops.length === 0) {
+    warnings.push({
+      kind: "unevaluable",
+      message: "Cannot evaluate activity text contrast: no row backdrop is a hex color",
+    });
+    return warnings;
+  }
+  for (const textKey of Object.values(ACTIVITY_TEXT_INKS)) {
+    const ink = scheme.tokens[textKey];
+    let worst: { label: string; ratio: number } | null = null;
+    for (const backdrop of backdrops) {
+      const painted = resolveOverBackdrop(ink, backdrop.hex);
+      if (painted === null) {
+        warnings.push({
+          kind: "unevaluable",
+          message: `Cannot evaluate ${textKey} contrast: ${textKey}="${ink}" is neither hex nor rgba()`,
+        });
+        worst = null;
+        break;
+      }
+      const ratio = contrastRatio(painted, backdrop.hex);
+      if (worst === null || ratio < worst.ratio) worst = { label: backdrop.label, ratio };
+    }
+    if (worst && worst.ratio < ACTIVITY_TEXT_MIN_CONTRAST) {
+      warnings.push({
+        kind: "low-contrast",
+        message: `${textKey} on ${worst.label} is ${worst.ratio.toFixed(2)}:1; target is ${ACTIVITY_TEXT_MIN_CONTRAST.toFixed(1)}:1`,
       });
     }
   }

@@ -200,10 +200,12 @@ function reportReservedTourCueNames(raw: unknown, ctx: z.RefinementCtx): void {
   });
 }
 
-// `docs` and `runbooks` would name a plugin's server `daintree-docs` or
-// `daintree-runbooks`, the Daintree Assistant's own servers. Excluded in the
-// pattern itself, not a refinement, so the generated JSON Schema rejects them too.
-const PLUGIN_MCP_NAME_PATTERN = /^(?!(?:docs|runbooks)$)[a-z0-9][a-z0-9-]{0,15}$/;
+// `docs`, `runbooks` and `decisions` would name a plugin's server
+// `daintree-docs`, `daintree-runbooks` or `daintree-decisions`: the Daintree
+// Assistant's own servers, and the one agents ask the person through. Excluded
+// in the pattern itself, not a refinement, so the generated JSON Schema
+// rejects them too.
+const PLUGIN_MCP_NAME_PATTERN = /^(?!(?:docs|runbooks|decisions)$)[a-z0-9][a-z0-9-]{0,15}$/;
 
 /**
  * The manifest object with every field's own validation and defaults. The
@@ -233,7 +235,7 @@ export function buildPluginManifestObjectSchema() {
       .string()
       .regex(PLUGIN_MCP_NAME_PATTERN, {
         error:
-          'mcpName must be 1-16 lowercase letters, digits or hyphens, starting with a letter or digit, and not "docs" or "runbooks"',
+          'mcpName must be 1-16 lowercase letters, digits or hyphens, starting with a letter or digit, and not "docs", "runbooks" or "decisions"',
       })
       .optional(),
     description: z.string().optional(),

@@ -3,7 +3,11 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { quotePowerShellArg } from "../../../shared/utils/shellEscape.js";
+import { generateAgentCommand } from "../../../shared/types/agentSettings.js";
+import {
+  quotePowerShellArg,
+  setAgentCommandDialectResolver,
+} from "../../../shared/utils/shellEscape.js";
 import {
   buildWindowsAgentLaunchScript,
   isWindowsAgentExecutableFor,
@@ -38,6 +42,24 @@ describe("Windows agent argv", () => {
   it("decodes every source literal into the original argv token", () => {
     const command = `& ${quotePowerShellArg("C:\\O’Brien\\agent.exe")} ${values.map(quotePowerShellArg).join(" ")}`;
     expect(parseWindowsAgentCommand(command)).toEqual(["C:\\O’Brien\\agent.exe", ...values]);
+  });
+
+  it("decodes a generated command's preset args into the preset's own elements (#15638)", () => {
+    const presetArgs = ["--system-prompt", "two words", "  padded  ", "it's fine"];
+    setAgentCommandDialectResolver(() => "windows");
+    try {
+      const command = generateAgentCommand(
+        `& ${quotePowerShellArg("C:\\agent.exe")}`,
+        {},
+        "claude",
+        {
+          presetArgs,
+        }
+      );
+      expect(parseWindowsAgentCommand(command)).toEqual(["C:\\agent.exe", ...presetArgs]);
+    } finally {
+      setAgentCommandDialectResolver(null);
+    }
   });
 
   it("preserves inert fused options that command generation leaves bare", () => {
@@ -142,6 +164,50 @@ describe("Windows agent argv", () => {
         `$start.Arguments = '"C:\\tools\\claude.js" "%PATH% & \\"quotes\\" ^caret"'`
       );
       expect(script.some((line) => line.includes("$start.Environment"))).toBe(false);
+    });
+
+    it("lets the pane choose between a Claude resume and a fresh assignment (#12371)", async () => {
+      const id = "679459a4-dfef-4f75-a556-2846e53898af";
+      const options = shims(
+        {
+          "C:\\tools\\claude.cmd": '@echo off\r\nnode "%~dp0claude.js" %*\r\n',
+          "C:\\tools\\claude.js": "",
+          "C:\\nodejs\\node.exe": "",
+        },
+        { PATH: "C:\\tools;C:\\nodejs" }
+      );
+      const command = `claude --resume ${id}`;
+      const executable = await resolveWindowsAgentExecutable(command, options);
+      const script = lines(
+        buildWindowsAgentLaunchScript(command, executable, options.env, {
+          assignedCommand: `claude --session-id ${id}`,
+          sessionId: id,
+        })
+      );
+      expect(script).toContain(`$start.Arguments = '"C:\\tools\\claude.js" "--resume" "${id}"'`);
+      expect(script).toContain(
+        `if ($claudeTranscript.Count -eq 0 -and $claudeStoreListed) { $start.Arguments = '"C:\\tools\\claude.js" "--session-id" "${id}"' }`
+      );
+      expect(
+        script.indexOf(`$start.Arguments = '"C:\\tools\\claude.js" "--resume" "${id}"'`)
+      ).toBeLessThan(script.findIndex((line) => line.startsWith("if ($claudeTranscript.Count")));
+    });
+
+    it("keeps the resume for a batch file only cmd.exe can run (#12371)", async () => {
+      const id = "679459a4-dfef-4f75-a556-2846e53898af";
+      const options = shims({
+        "C:\\tools\\claude.cmd": "@set CLAUDE_CONFIG_DIR=D:\\other\r\n@claude-real %*",
+      });
+      const command = `claude --resume ${id}`;
+      const executable = await resolveWindowsAgentExecutable(command, options);
+      const script = lines(
+        buildWindowsAgentLaunchScript(command, executable, options.env, {
+          assignedCommand: `claude --session-id ${id}`,
+          sessionId: id,
+        })
+      );
+      expect(script.some((line) => line.includes("$claudeConfig"))).toBe(false);
+      expect(script.some((line) => line.includes("--session-id"))).toBe(false);
     });
 
     it("runs an unrecognised shim through cmd.exe only with inert arguments", async () => {
@@ -331,3 +397,79 @@ for (const host of ["powershell.exe", "pwsh.exe"]) {
     }, 30000);
   });
 }
+
+describe.skipIf(process.platform !== "win32")("Claude resume chosen in the pane", () => {
+  const id = "34904eb1-924c-467b-87af-133782ef5f42";
+
+  type Store = { transcript: "none" | "visible" | "hidden"; via: "config-dir" | "userprofile" };
+
+  async function receivedArgs({ transcript, via }: Store): Promise<string[]> {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "daintree claude resume "));
+    try {
+      const claudeDir = path.join(dir, via === "config-dir" ? "store" : ".claude");
+      const project = path.join(claudeDir, "projects", "C--dev-app");
+      mkdirSync(project, { recursive: true });
+      if (transcript !== "none") writeFileSync(path.join(project, `${id}.jsonl`), "{}\n");
+      if (transcript === "hidden") execFileSync("attrib", ["+h", project], { windowsHide: true });
+      const probe = path.join(dir, "probe.cjs");
+      writeFileSync(probe, "process.stdout.write(JSON.stringify(process.argv.slice(2)))");
+      const base = `${quotePowerShellArg(process.execPath)} ${quotePowerShellArg(probe)}`;
+      const command = `${base} --resume ${id}`;
+      const executable = await resolveWindowsAgentExecutable(command, { env: process.env });
+      const launch = buildWindowsAgentLaunchScript(command, executable, process.env, {
+        assignedCommand: `${base} --session-id ${id}`,
+        sessionId: id,
+      });
+      const store =
+        via === "config-dir"
+          ? `$env:CLAUDE_CONFIG_DIR = ${quotePowerShellArg(claudeDir)}`
+          : `Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue; $env:USERPROFILE = ${quotePowerShellArg(dir)}`;
+      const script = `${store}; ${launch}; exit $LASTEXITCODE`;
+      const output = execFileSync(
+        "powershell.exe",
+        [
+          "-NoLogo",
+          "-NoProfile",
+          "-EncodedCommand",
+          Buffer.from(script, "utf16le").toString("base64"),
+        ],
+        { encoding: "utf8", timeout: 15000, windowsHide: true }
+      );
+      return JSON.parse(output) as string[];
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it("resumes when the pane's store has the transcript", async () => {
+    expect(await receivedArgs({ transcript: "visible", via: "config-dir" })).toEqual([
+      "--resume",
+      id,
+    ]);
+  }, 30000);
+
+  it("assigns the id afresh when the pane's store has none", async () => {
+    expect(await receivedArgs({ transcript: "none", via: "config-dir" })).toEqual([
+      "--session-id",
+      id,
+    ]);
+  }, 30000);
+
+  it("finds a transcript in a hidden project folder", async () => {
+    expect(await receivedArgs({ transcript: "hidden", via: "config-dir" })).toEqual([
+      "--resume",
+      id,
+    ]);
+  }, 30000);
+
+  it("reads the store under USERPROFILE when CLAUDE_CONFIG_DIR is unset", async () => {
+    expect(await receivedArgs({ transcript: "visible", via: "userprofile" })).toEqual([
+      "--resume",
+      id,
+    ]);
+    expect(await receivedArgs({ transcript: "none", via: "userprofile" })).toEqual([
+      "--session-id",
+      id,
+    ]);
+  }, 60000);
+});

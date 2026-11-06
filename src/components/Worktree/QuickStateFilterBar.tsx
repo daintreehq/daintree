@@ -50,7 +50,7 @@ const FILTER_TOOLTIPS: Record<QuickStateFilter, string> = {
   all: "All",
   working: "Working: an agent is working",
   waiting: "Attention: an agent is asking for an approval, an answer or a fix",
-  finished: "Finished: no agent working or asking for anything",
+  finished: "Finished: an agent handed back, or the pull request merged",
 };
 
 interface QuickStateFilterBarProps {
@@ -145,7 +145,15 @@ export function QuickStateFilterBar({
           // Still at zero, which the glyph rule allows: spinning an empty bucket
           // would claim work that isn't happening.
           const isSpinningWorking = option.value === "working" && workingActive;
-          const isFinishedUnread = option.value === "finished" && finishedUnseen > 0;
+          // The unread disc only when every finished worktree is unread, so
+          // the count beside it is honest; otherwise the segment keeps its own
+          // finished ring and the accessible name says how many are unread. A
+          // glyph-only segment whose glyph changed identity could not be learned.
+          const isFinishedUnread =
+            option.value === "finished" &&
+            finishedUnseen > 0 &&
+            rawCount !== undefined &&
+            finishedUnseen >= rawCount;
           const Icon = isSpinningWorking
             ? SpinnerCircle
             : isFinishedUnread
@@ -178,7 +186,13 @@ export function QuickStateFilterBar({
                   }}
                   // A second click on the active segment clears back to All — the
                   // sidebar's long-standing shortcut out of a filter, kept as is.
-                  onClick={() => onChange(isActive ? "all" : option.value)}
+                  onClick={(e) => {
+                    onChange(isActive ? "all" : option.value);
+                    // From the keyboard, the checked segment moves with the
+                    // choice: Space on the active one returns to All, and focus
+                    // left behind on a now-unchecked radio had no tab stop.
+                    if (isActive && e.detail === 0) refs.current.get("all")?.focus();
+                  }}
                   className={cn(
                     "inline-flex items-center justify-center gap-1 min-w-0 px-2 py-1.5 transition-colors",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
@@ -191,7 +205,7 @@ export function QuickStateFilterBar({
                     isActive
                       ? // Fallback keeps themes without the var byte-identical.
                         "bg-[var(--worktree-quick-state-active-bg,var(--color-overlay-subtle))] shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]"
-                      : "hover:bg-tint/[0.04]"
+                      : "hover:bg-overlay-soft"
                   )}
                 >
                   {Icon && visual ? (
@@ -243,7 +257,10 @@ export function QuickStateFilterBar({
           );
         })}
       </div>
-      {trailing && <div className="flex shrink-0 border-l border-border-default">{trailing}</div>}
+      {/* Set apart from the radiogroup rather than drawn as a fifth cell: a
+          bordered cell with a bare glyph and no count read as a segment whose
+          number had been cut off. A button beside the bar, not a member. */}
+      {trailing && <div className="flex shrink-0 items-center px-1">{trailing}</div>}
     </div>
   );
 }

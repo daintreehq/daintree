@@ -76,6 +76,20 @@ const UPSTREAM_BRANCH = "release/topic";
 const UPSTREAM_REF = `refs/remotes/${UPSTREAM_REMOTE}/${UPSTREAM_BRANCH}`;
 
 const FOR_EACH_REF = `refs/heads/${LOCAL_BRANCH}\u0000${REMOTE}\u0000${PUSH_REF}`;
+
+/**
+ * The single-branch push argv every push path ends with (#15556): no tags or
+ * submodule pushes ride along, and both sides of the refspec are fully
+ * qualified so neither can resolve to a tag.
+ */
+function singleBranchArgs(remote: string, localBranch: string, remoteBranch: string): string[] {
+  return [
+    "--no-follow-tags",
+    "--recurse-submodules=no",
+    remote,
+    `refs/heads/${localBranch}:refs/heads/${remoteBranch}`,
+  ];
+}
 const FOR_EACH_REF_UPSTREAM = `refs/heads/${LOCAL_BRANCH}\u0000${UPSTREAM_REMOTE}\u0000${UPSTREAM_REF}`;
 
 /**
@@ -142,49 +156,53 @@ describe("git push — resolved destination", () => {
 
     await getHandler("git:push")(FAKE_EVENT, { cwd: CWD, setUpstream: true });
 
+    expect(git.push).toHaveBeenCalledTimes(1);
     expect(git.push).toHaveBeenCalledWith([
       "--set-upstream",
-      REMOTE,
-      `${LOCAL_BRANCH}:${REMOTE_BRANCH}`,
+      ...singleBranchArgs(REMOTE, LOCAL_BRANCH, REMOTE_BRANCH),
     ]);
     expect(git.push).not.toHaveBeenCalledWith(
       expect.arrayContaining(["origin"]) as unknown as string[]
     );
   });
 
-  it("leaves the plain push a zero-argument call so git's own tracking config wins", async () => {
+  it("pushes only the branch, to the resolved destination, never as a bare push", async () => {
+    // A bare `git push` sends whatever push.default, remote.<name>.push or a
+    // mirror remote say — more than the one branch the confirm showed.
     const git = makeGit();
     createAuthenticatedGitMock.mockResolvedValue(git);
 
     await getHandler("git:push")(FAKE_EVENT, { cwd: CWD });
 
-    expect(git.push).toHaveBeenCalledWith();
+    expect(git.push).toHaveBeenCalledTimes(1);
+    expect(git.push).toHaveBeenCalledWith(singleBranchArgs(REMOTE, LOCAL_BRANCH, REMOTE_BRANCH));
   });
 
-  it("re-pushes with the resolved remote when the plain push reports no upstream", async () => {
-    let attempt = 0;
-    const push = vi.fn(async () => {
-      attempt += 1;
-      if (attempt === 1) throw new Error("fatal: The current branch topic has no upstream branch");
-      return undefined;
-    });
-    createAuthenticatedGitMock.mockResolvedValue(makeGit({ push }));
+  it("establishes tracking in the same push when the branch has no configuration", async () => {
+    // The fresh-worktree-branch state: git names no push remote and the
+    // branch tracks nothing, so the sole remote is the destination. An
+    // explicit push never fails for want of an upstream, so tracking has to
+    // be asked for up front rather than recovered from that failure.
+    const unconfigured = `refs/heads/${LOCAL_BRANCH}\u0000\u0000\u0000`;
+    const git = makeGit(
+      { getRemotes: vi.fn(async () => [{ name: REMOTE, refs: { fetch: "", push: "" } }]) },
+      unconfigured
+    );
+    createAuthenticatedGitMock.mockResolvedValue(git);
 
     await getHandler("git:push")(FAKE_EVENT, { cwd: CWD });
 
-    expect(push).toHaveBeenNthCalledWith(1);
-    expect(push).toHaveBeenNthCalledWith(2, [
+    expect(git.push).toHaveBeenCalledTimes(1);
+    expect(git.push).toHaveBeenCalledWith([
       "--set-upstream",
-      REMOTE,
-      `${LOCAL_BRANCH}:${REMOTE_BRANCH}`,
+      ...singleBranchArgs(REMOTE, LOCAL_BRANCH, LOCAL_BRANCH),
     ]);
   });
 
   it("repairs the tracking config in the same push when the upstream names another branch", async () => {
     // `worktree add -b topic --track origin/develop` state: git reports a push
-    // remote with no push ref, so a plain push fails on the name mismatch —
-    // and fails with a message the "no upstream branch" recovery below does
-    // not match. The explicit form both lands the push and rewrites the config.
+    // remote with no push ref. The push goes to the same-name branch the
+    // confirm showed, and rewrites the tracking config that broke it.
     const mistracked = `refs/heads/${LOCAL_BRANCH}\u0000origin\u0000\u0000refs/remotes/origin/develop`;
     const git = makeGit(
       { getRemotes: vi.fn(async () => [{ name: "origin", refs: { fetch: "", push: "" } }]) },
@@ -194,15 +212,14 @@ describe("git push — resolved destination", () => {
 
     await getHandler("git:push")(FAKE_EVENT, { cwd: CWD });
 
-    expect(git.push).not.toHaveBeenCalledWith();
+    expect(git.push).toHaveBeenCalledTimes(1);
     expect(git.push).toHaveBeenCalledWith([
       "--set-upstream",
-      "origin",
-      `${LOCAL_BRANCH}:${LOCAL_BRANCH}`,
+      ...singleBranchArgs("origin", LOCAL_BRANCH, LOCAL_BRANCH),
     ]);
   });
 
-  it("propagates a non-upstream push failure without retrying", async () => {
+  it("propagates a push failure without retrying", async () => {
     const push = vi.fn(async () => {
       throw new Error("fatal: Authentication failed");
     });
@@ -302,9 +319,11 @@ describe("git force-push-with-lease — resolved destination", () => {
       leaseSha: LEASE,
     });
 
-    expect(git.push).toHaveBeenCalledWith(REMOTE, `${LOCAL_BRANCH}:${REMOTE_BRANCH}`, [
-      `--force-with-lease=${REMOTE_BRANCH}:${LEASE}`,
+    expect(git.push).toHaveBeenCalledTimes(1);
+    expect(git.push).toHaveBeenCalledWith([
+      `--force-with-lease=refs/heads/${REMOTE_BRANCH}:${LEASE}`,
       "--force-if-includes",
+      ...singleBranchArgs(REMOTE, LOCAL_BRANCH, REMOTE_BRANCH),
     ]);
   });
 });
@@ -327,10 +346,38 @@ describe("git force-push-with-lease — upstream repair", () => {
       leaseSha: LEASE,
     });
 
-    expect(git.push).toHaveBeenCalledWith("origin", `${LOCAL_BRANCH}:${LOCAL_BRANCH}`, [
-      `--force-with-lease=${LOCAL_BRANCH}:${LEASE}`,
+    expect(git.push).toHaveBeenCalledTimes(1);
+    expect(git.push).toHaveBeenCalledWith([
+      `--force-with-lease=refs/heads/${LOCAL_BRANCH}:${LEASE}`,
       "--force-if-includes",
       "--set-upstream",
+      ...singleBranchArgs("origin", LOCAL_BRANCH, LOCAL_BRANCH),
+    ]);
+  });
+
+  it("establishes tracking on the force-push of a branch with no configuration", async () => {
+    // A fresh branch whose name already exists on the remote: the push that
+    // would have set its upstream is rejected, so the force-push is the one
+    // that lands, and it must write the same tracking.
+    const unconfigured = `refs/heads/${LOCAL_BRANCH}\u0000\u0000\u0000`;
+    const git = makeGit(
+      { getRemotes: vi.fn(async () => [{ name: "origin", refs: { fetch: "", push: "" } }]) },
+      unconfigured
+    );
+    createAuthenticatedGitMock.mockResolvedValue(git);
+
+    await getHandler("git:force-push-with-lease")(FAKE_EVENT, {
+      cwd: CWD,
+      branchName: LOCAL_BRANCH,
+      leaseSha: LEASE,
+    });
+
+    expect(git.push).toHaveBeenCalledTimes(1);
+    expect(git.push).toHaveBeenCalledWith([
+      `--force-with-lease=refs/heads/${LOCAL_BRANCH}:${LEASE}`,
+      "--force-if-includes",
+      "--set-upstream",
+      ...singleBranchArgs("origin", LOCAL_BRANCH, LOCAL_BRANCH),
     ]);
   });
 
@@ -346,9 +393,8 @@ describe("git force-push-with-lease — upstream repair", () => {
       leaseSha: LEASE,
     });
 
+    expect(git.push).toHaveBeenCalledTimes(1);
     expect(git.push).toHaveBeenCalledWith(
-      REMOTE,
-      `${LOCAL_BRANCH}:${REMOTE_BRANCH}`,
       expect.not.arrayContaining(["--set-upstream"]) as unknown as string[]
     );
   });
@@ -399,6 +445,8 @@ describe("list-push-commits — publish range", () => {
   const LOCAL_REF = `refs/heads/${LOCAL_BRANCH}`;
   /** A 40-hex sha, so `readRemoteBranchTip` accepts the ls-remote line. */
   const REMOTE_TIP = "0123456789abcdef0123456789abcdef01234567";
+  /** What the branch resolves to: every local endpoint is this, never the ref. */
+  const LOCAL_TIP = "89abcdef0123456789abcdef0123456789abcdef";
 
   /**
    * A git double for the preview's two probes. `knownRefs` decides what
@@ -409,7 +457,10 @@ describe("list-push-commits — publish range", () => {
   function makePreviewGit(opts: {
     knownRefs?: string[];
     lsRemote?: () => Promise<string>;
+    /** Successive answers for the branch's own ref; the last one repeats. */
+    localTips?: Array<string | null>;
   }): FakeGit {
+    const localTips = [...(opts.localTips ?? [LOCAL_TIP])];
     const knownRefs = new Set(opts.knownRefs ?? []);
     const git = makeGit({
       log: vi.fn(async () => ({
@@ -420,6 +471,11 @@ describe("list-push-commits — publish range", () => {
     git.raw = vi.fn(async (args: string[]) => {
       if (args[0] === "rev-parse") {
         const ref = (args[3] ?? "").replace(/\^\{commit\}$/, "");
+        if (ref === LOCAL_REF) {
+          const tip = localTips.length > 1 ? localTips.shift()! : localTips[0]!;
+          if (tip === null) throw new Error("fatal: bad revision");
+          return `${tip}\n`;
+        }
         if (!knownRefs.has(ref)) throw new Error("fatal: bad revision");
         return `${REMOTE_TIP}\n`;
       }
@@ -443,7 +499,7 @@ describe("list-push-commits — publish range", () => {
       cwd: CWD,
       branchName: LOCAL_BRANCH,
       limit: 5,
-    }) as Promise<{ rangeBasis: string; total: number; destination: unknown }>;
+    }) as Promise<{ rangeBasis: string; total: number; destination: unknown; headOid: string }>;
   }
 
   it("ranges from the destination's tracking ref up to the named branch", async () => {
@@ -453,9 +509,10 @@ describe("list-push-commits — publish range", () => {
 
     // The range runs remote..local, the opposite direction from the discard
     // preview above: these are the commits the push would ADD.
-    expect(git.log).toHaveBeenCalledWith(["--max-count=5", `${PUSH_REF}..${LOCAL_REF}`]);
-    expect(git.raw).toHaveBeenCalledWith(["rev-list", "--count", `${PUSH_REF}..${LOCAL_REF}`]);
+    expect(git.log).toHaveBeenCalledWith(["--max-count=5", `${PUSH_REF}..${LOCAL_TIP}`]);
+    expect(git.raw).toHaveBeenCalledWith(["rev-list", "--count", `${PUSH_REF}..${LOCAL_TIP}`]);
     expect(result.rangeBasis).toBe("tracked");
+    expect(result.headOid).toBe(LOCAL_TIP);
     expect(result.destination).toEqual({ remote: REMOTE, branch: REMOTE_BRANCH });
     // A tracking ref we hold is a settled answer; nothing justifies the network.
     expect(argvOf(git.raw).some((args) => args[0] === "ls-remote")).toBe(false);
@@ -476,7 +533,7 @@ describe("list-push-commits — publish range", () => {
       REMOTE,
       `refs/heads/${REMOTE_BRANCH}`,
     ]);
-    expect(git.log).toHaveBeenCalledWith(["--max-count=5", LOCAL_REF]);
+    expect(git.log).toHaveBeenCalledWith(["--max-count=5", LOCAL_TIP]);
     expect(result.rangeBasis).toBe("creates");
   });
 
@@ -488,7 +545,7 @@ describe("list-push-commits — publish range", () => {
 
     const result = await listPushCommits(git);
 
-    expect(git.log).toHaveBeenCalledWith(["--max-count=5", `${REMOTE_TIP}..${LOCAL_REF}`]);
+    expect(git.log).toHaveBeenCalledWith(["--max-count=5", `${REMOTE_TIP}..${LOCAL_TIP}`]);
     expect(result.rangeBasis).toBe("tracked");
   });
 
@@ -504,7 +561,7 @@ describe("list-push-commits — publish range", () => {
     // remote — an over-count would read as commits this push publishes.
     expect(git.log).toHaveBeenCalledWith([
       "--max-count=5",
-      LOCAL_REF,
+      LOCAL_TIP,
       "--not",
       `--remotes=${REMOTE}`,
     ]);
@@ -523,7 +580,7 @@ describe("list-push-commits — publish range", () => {
     expect(git.raw).toHaveBeenCalledWith([
       "rev-list",
       "--count",
-      LOCAL_REF,
+      LOCAL_TIP,
       "--not",
       `--remotes=${REMOTE}`,
     ]);
@@ -537,7 +594,7 @@ describe("list-push-commits — publish range", () => {
 
     const result = (await listPushCommits(git)) as unknown as { behind: number };
 
-    expect(git.raw).toHaveBeenCalledWith(["rev-list", "--count", `${LOCAL_REF}..${PUSH_REF}`]);
+    expect(git.raw).toHaveBeenCalledWith(["rev-list", "--count", `${LOCAL_TIP}..${PUSH_REF}`]);
     expect(result.behind).toBe(7);
   });
 
@@ -552,9 +609,39 @@ describe("list-push-commits — publish range", () => {
 
     expect(result.behind).toBe(0);
     const countsFromBranch = argvOf(git.raw).filter(
-      (argv) => argv[0] === "rev-list" && argv.some((a) => a.startsWith(`${LOCAL_REF}..`))
+      (argv) => argv[0] === "rev-list" && argv.some((a) => a.startsWith(`${LOCAL_TIP}..`))
     );
     expect(countsFromBranch).toHaveLength(0);
+  });
+
+  // The tip is what an approval pins the push to (#15646), so the rows, the
+  // count and the lead must all describe that one commit — a commit landing on
+  // the branch between two reads must not be counted against a pin that lacks it.
+  it("measures every range from the one tip it read, even if the branch moves mid-read", async () => {
+    const MOVED_TIP = "fedcba9876543210fedcba9876543210fedcba98";
+    const git = makePreviewGit({ knownRefs: [PUSH_REF], localTips: [LOCAL_TIP, MOVED_TIP] });
+
+    const result = await listPushCommits(git);
+
+    expect(result.headOid).toBe(LOCAL_TIP);
+    // Exactly the three reads the preview makes — rows, tail count, lead —
+    // each against the one tip, and the branch itself resolved only once.
+    expect(argvOf(git.log)).toEqual([["--max-count=5", `${PUSH_REF}..${LOCAL_TIP}`]]);
+    expect(argvOf(git.raw).filter((args) => args[0] === "rev-list")).toEqual([
+      ["rev-list", "--count", `${PUSH_REF}..${LOCAL_TIP}`],
+      ["rev-list", "--count", `${LOCAL_TIP}..${PUSH_REF}`],
+    ]);
+    const branchReads = argvOf(git.raw).filter(
+      (args) => args[0] === "rev-parse" && args.some((a) => a.startsWith(LOCAL_REF))
+    );
+    expect(branchReads).toHaveLength(1);
+  });
+
+  it("refuses to preview a branch that resolves to no commit", async () => {
+    const git = makePreviewGit({ knownRefs: [PUSH_REF], localTips: [null] });
+
+    await expect(listPushCommits(git)).rejects.toThrow(/\[GitError\|pathspec-invalid\|/);
+    expect(git.log).not.toHaveBeenCalled();
   });
 });
 
@@ -920,6 +1007,14 @@ describe("git:get-staging-status — push and pull destinations", () => {
 
 describe("git push as an operation", () => {
   const FOR_EACH_REF = "refs/heads/topic\u0000origin\u0000refs/remotes/origin/topic";
+  const TIP = "a".repeat(40);
+  /** A review this double's repository satisfies: `topic` at `TIP`, to `origin/topic`. */
+  const REVIEW = {
+    expectedBranch: "topic",
+    expectedHeadOid: TIP,
+    expectedRemote: "origin",
+    expectedRemoteBranch: "topic",
+  };
 
   type ProgressFn = (data: {
     stage: string;
@@ -953,7 +1048,11 @@ describe("git push as an operation", () => {
         return {
           revparse: vi.fn(async () => "topic\n"),
           raw: vi.fn(async (args: string[]) =>
-            args[0] === "for-each-ref" ? `${FOR_EACH_REF}\n` : ""
+            args[0] === "for-each-ref"
+              ? `${FOR_EACH_REF}\n`
+              : args[0] === "rev-parse"
+                ? `${TIP}\n`
+                : ""
           ),
           getRemotes: vi.fn(async () => [{ name: "origin", refs: { fetch: "", push: "" } }]),
           push: vi.fn(
@@ -1002,6 +1101,63 @@ describe("git push as an operation", () => {
     await expect(push({ opId: "op-other", setUpstream: true })).rejects.toMatchObject({
       code: "VALIDATION",
     });
+    releasePush();
+    await first;
+    expect(pushCalls).toBe(1);
+  });
+
+  // A review is part of what was asked for (#15646): a push approved under one
+  // review must never be answered with the outcome of a push run under another.
+  it("refuses to join a running push that carries a different review", async () => {
+    const first = push({ opId: "op-first" });
+    await pushStarted();
+    await expect(
+      push({
+        opId: "op-reviewed",
+        expectedBranch: "topic",
+        expectedHeadOid: "a".repeat(40),
+        expectedRemote: "origin",
+        expectedRemoteBranch: "topic",
+      })
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    releasePush();
+    await first;
+    expect(pushCalls).toBe(1);
+  });
+
+  it("joins a second caller whose review is identical", async () => {
+    const first = push({ opId: "op-first", ...REVIEW });
+    await pushStarted();
+    const second = push({ opId: "op-join", ...REVIEW });
+    releasePush();
+    await Promise.all([first, second]);
+    expect(pushCalls).toBe(1);
+  });
+
+  for (const [field, value] of [
+    ["expectedBranch", "other"],
+    ["expectedHeadOid", "b".repeat(40)],
+    ["expectedRemote", "fork"],
+    ["expectedRemoteBranch", "elsewhere"],
+  ] as const) {
+    it(`refuses to join a running reviewed push whose review differs in ${field}`, async () => {
+      const first = push({ opId: "op-first", ...REVIEW });
+      await pushStarted();
+      await expect(push({ opId: "op-other", ...REVIEW, [field]: value })).rejects.toMatchObject({
+        code: "VALIDATION",
+      });
+      releasePush();
+      await first;
+      expect(pushCalls).toBe(1);
+    });
+  }
+
+  it("refuses a partial review before it could join a running push", async () => {
+    const first = push({ opId: "op-first" });
+    await pushStarted();
+    await expect(push({ opId: "op-first", expectedBranch: "topic" })).rejects.toThrow(
+      /Invalid push review/
+    );
     releasePush();
     await first;
     expect(pushCalls).toBe(1);

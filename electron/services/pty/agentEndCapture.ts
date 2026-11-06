@@ -7,6 +7,7 @@ import { events } from "../events.js";
 import { resolveCaptureBranch, trackAgentSessionCapture } from "./agentSessionCaptureDelivery.js";
 import { createSessionIdMatcher, tailMatchesPattern } from "./sessionIdCapture.js";
 import type { TerminalInfo } from "./types.js";
+import { scheduledRunForRecord } from "../../../shared/utils/scheduledRunProvenance.js";
 
 const logger = createLogger("pty:AgentEndCapture");
 
@@ -105,10 +106,19 @@ export function captureAgentEndSession(args: AgentEndCaptureArgs): AgentEndObser
       getEffectiveAgentConfig(agentId)?.capabilities?.selfUpdateSuccessPattern,
       { tailLines: CAPTURE_SCAN_LINES, tailChars: CAPTURE_SCAN_CHARS }
     );
+  const agentResume = getEffectiveAgentConfig(agentId)?.resume;
+  const resumeRefused =
+    launchedRun &&
+    agentResume?.kind === "session-id" &&
+    tailMatchesPattern(recentOutput, agentResume.refusalPattern, {
+      tailLines: CAPTURE_SCAN_LINES,
+      tailChars: CAPTURE_SCAN_CHARS,
+    });
   const observe = (resumeHintSeen: boolean): AgentEndObservation => ({
     launchedRun,
     resumeHintSeen,
     selfUpdateSucceeded,
+    resumeRefused,
   });
 
   const logOutcome = (outcome: AgentEndCaptureOutcome): void => {
@@ -120,6 +130,7 @@ export function captureAgentEndSession(args: AgentEndCaptureArgs): AgentEndObser
       outcome,
       captured: outcome === "captured" || outcome === "preassigned" || outcome === "launch-id",
       selfUpdateSucceeded,
+      resumeRefused,
     });
   };
 
@@ -130,7 +141,7 @@ export function captureAgentEndSession(args: AgentEndCaptureArgs): AgentEndObser
     return observe(false);
   }
 
-  const resume = getEffectiveAgentConfig(agentId)?.resume;
+  const resume = agentResume;
   if (resume?.kind !== "session-id") {
     logOutcome("no-resume-config");
     return observe(false);
@@ -211,8 +222,14 @@ function emitCapture(
     projectId: terminal.projectId ?? null,
     // Flags and model describe the agent Daintree launched. A different agent
     // the user started by hand in the same pane must not inherit them.
+    // So does the scheduled run, which a later hand-started run of the same CLI
+    // (a respawn in this PTY) doesn't take either.
     ...(agentId === terminal.launchAgentId
-      ? { agentLaunchFlags: terminal.agentLaunchFlags, agentModelId: terminal.agentModelId }
+      ? {
+          agentLaunchFlags: terminal.agentLaunchFlags,
+          agentModelId: terminal.agentModelId,
+          ...scheduledRunForRecord(terminal),
+        }
       : {}),
     cwd: cwd || undefined,
     closedBy: "exit" as const,
@@ -229,6 +246,12 @@ function emitCapture(
   // including one a Daintree-initiated close captured. `null` is the journal's
   // explicit fail-open, leaving sessionId dedupe to collapse true duplicates.
   const launchGeneration = boundary === "exit" ? terminal.launchGeneration : null;
+  // The run itself, read now: the branch lookup below yields, and a run
+  // started in the meantime would otherwise claim this farewell.
+  const run =
+    typeof terminal.launchGeneration === "number"
+      ? { launchGeneration: terminal.launchGeneration, agentIncarnation: terminal.agentIncarnation }
+      : undefined;
 
   const delivery = (async () => {
     try {
@@ -242,6 +265,7 @@ function emitCapture(
         launchGeneration,
         boundary,
         record: { ...record, ...(branch ? { branch } : {}) },
+        ...(run ? { run } : {}),
       });
     } catch (error) {
       // `events.emit` fans out synchronously with no per-listener guard, so a

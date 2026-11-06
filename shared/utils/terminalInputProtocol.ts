@@ -132,7 +132,10 @@ export function formatWithBracketedPaste(text: string): string {
  * branch and not the other: the clipboard, the send-to-agent palette and 'send
  * to help' each reached a parser raw until #12441, and each was its own
  * hand-written copy of this expression. A new injection path picks up both
- * branches by calling this, or it is not using the paste boundary at all.
+ * branches by calling this, or it is not using the paste boundary at all. The
+ * one exception is CopyTree's inject, which streams the same wrapper chunk by
+ * chunk (`writeBracketedPaste` in `electron/ipc/handlers/copyTree.ts`): its
+ * payload is too large to hold twice, and it refuses unwrapped destinations.
  *
  * The mode is the caller's to supply and has no default — the safe value
  * differs per destination, and a wrong guess is silent.

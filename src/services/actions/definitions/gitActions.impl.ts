@@ -27,7 +27,7 @@ import {
   GIT_PAGE_LIMIT_MAX,
   GIT_SUBJECT_MAX_BYTES,
 } from "@shared/config/gitReadLimits";
-import type { ConflictedFileEntry, StagingFileEntry } from "@shared/types/git";
+import type { ConflictedFileEntry, GitPushReview, StagingFileEntry } from "@shared/types/git";
 import { projectPulseForAction } from "@shared/utils/pulseProjection";
 import { z } from "zod";
 import { mintRemoteOperationId } from "@/clients/operationsClient";
@@ -427,9 +427,26 @@ export const gitActionRuns = {
     // branch/commit preview in its own modal. Re-requesting here would
     // double-prompt, and this store resolves only from a renderer dialog no
     // headless MCP client can click — so the push would hang forever (#11538).
+    //
+    // Either way the push carries what the confirm SHOWED, not merely that it
+    // was approved: the branch, its commit and the destination (#15646). Agents
+    // keep working in the worktree while a confirm is open, and without the
+    // review the push publishes whatever the branch holds by the time it runs.
+    let review: GitPushReview | undefined;
     if (ctx.dispatchSource !== "agent") {
-      const confirmed = await useGitPushConfirmStore.getState().requestConfirmation(resolvedCwd);
-      if (!confirmed) return;
+      const result = await useGitPushConfirmStore.getState().requestConfirmation(resolvedCwd);
+      if (!result.confirmed) return;
+      review = result.review;
+    } else if (ctx.hostApprovedPush) {
+      // Absent for a standing automation grant, which previews nothing and so
+      // has nothing to pin. Present but naming another worktree is an approval
+      // for a different push, never one to spend here.
+      if (ctx.hostApprovedPush.cwd !== resolvedCwd) {
+        throw new Error(
+          "Push refused: the approval was for a different worktree than this push would run in. Nothing was pushed."
+        );
+      }
+      review = ctx.hostApprovedPush.review;
     }
     // A rejection is the ONLY moment a `--force-with-lease` SHA may be read
     // (#7822), and `handlePush` is the only thing that reads it — inside its
@@ -446,9 +463,11 @@ export const gitActionRuns = {
       return await runHostOperation(
         opId,
         () =>
-          opId
-            ? window.electron.git.push(resolvedCwd, setUpstream, opId)
-            : window.electron.git.push(resolvedCwd, setUpstream),
+          review
+            ? window.electron.git.push(resolvedCwd, setUpstream, opId, review)
+            : opId
+              ? window.electron.git.push(resolvedCwd, setUpstream, opId)
+              : window.electron.git.push(resolvedCwd, setUpstream),
         { fromResult: () => undefined }
       );
     } catch (error) {

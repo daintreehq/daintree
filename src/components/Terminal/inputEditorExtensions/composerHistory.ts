@@ -20,7 +20,9 @@ import {
   undo,
   undoDepth,
 } from "@codemirror/commands";
+import { advanceComposerDraft } from "./composerDraftGeneration";
 import { correctionLandingEffects, outsideWrite, type CorrectionReview } from "./correctionReview";
+import { lockedHistoryCommand } from "./pendingLock";
 
 interface ChipEntryRange {
   from: number;
@@ -36,23 +38,28 @@ const whileEditable =
   (view) =>
     view.state.facet(EditorView.editable) && command(view);
 
+// Neither can take back or redo a step that changes words still being
+// corrected (#15874).
+const composerUndo = whileEditable(lockedHistoryCommand(undo));
+const composerRedo = whileEditable(lockedHistoryCommand(redo));
+
 // `historyKeymap` minus its selection-only undo (Mod-u, Alt-u): moving the
 // caret back through old selections is not an edit, and those keys are free
 // for the app.
 const composerHistoryKeymap = keymap.of([
-  { key: "Mod-z", run: whileEditable(undo), preventDefault: true },
-  { key: "Mod-y", mac: "Mod-Shift-z", run: whileEditable(redo), preventDefault: true },
-  { linux: "Ctrl-Shift-z", run: whileEditable(redo), preventDefault: true },
+  { key: "Mod-z", run: composerUndo, preventDefault: true },
+  { key: "Mod-y", mac: "Mod-Shift-z", run: composerRedo, preventDefault: true },
+  { linux: "Ctrl-Shift-z", run: composerRedo, preventDefault: true },
 ]);
 
-// The same lock for the Edit menu's Undo, which reaches the editor as a
+// The same locks for the Edit menu's Undo, which reaches the editor as a
 // `beforeinput` that `history()` would otherwise run unguarded.
 const lockedNativeHistory = Prec.highest(
   EditorView.domEventHandlers({
     beforeinput(event, view) {
       if (event.inputType !== "historyUndo" && event.inputType !== "historyRedo") return false;
-      if (view.state.facet(EditorView.editable)) return false;
       event.preventDefault();
+      (event.inputType === "historyUndo" ? composerUndo : composerRedo)(view);
       return true;
     },
   })
@@ -132,6 +139,9 @@ export function selectionAfterOutsideWrite(
  * a prompt that already went out or text that belongs somewhere else.
  */
 export function clearComposerHistory(view: EditorView): void {
+  // Ahead of the early returns: a draft with nothing to undo is still a
+  // different draft.
+  advanceComposerDraft(view);
   if (historyCompartment.get(view.state) === undefined) return;
   if (undoDepth(view.state) === 0 && redoDepth(view.state) === 0) return;
   view.dispatch({ effects: historyCompartment.reconfigure([]) });

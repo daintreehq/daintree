@@ -18,6 +18,8 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
+import { useTerminalWhenDoneStore } from "@/store/terminalWhenDoneStore";
+import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 import {
   getPanelKindRegistrySnapshot,
@@ -40,7 +42,6 @@ import { resolveSelectedFilePath } from "@/services/terminal/filePathDetection";
 import { resolveWorktreePathScope } from "@shared/utils/path";
 import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
 import { actionService } from "@/services/ActionService";
-import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
 import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
 import type { WhenClauseContext } from "@shared/utils/whenClause";
@@ -49,6 +50,10 @@ import {
   RestartOnPresetConfirmDialog,
   type RestartOnPresetRequest,
 } from "@/components/Terminal/RestartOnPreset";
+import {
+  RestartOnAccountConfirmDialog,
+  type RestartOnAccountRequest,
+} from "@/components/Terminal/RestartOnAccount";
 import { DestructiveConsequence } from "@/components/Terminal/TerminalDestructiveActionConfirmDialog";
 import { TerminalHandOverDialog, useOrchestratorCandidates } from "./TerminalHandOver";
 import {
@@ -385,8 +390,11 @@ function TerminalContextMenuBody({
 
   const isWatched = usePanelStore((state) => state.watchedPanels.has(terminalId));
   const isArmed = useFleetArmingStore((s) => s.armedIds.has(terminalId));
+  // Read only while the menu is live, so a closed menu pays nothing for it.
+  const whenDoneChoice = useTerminalWhenDoneStore((s) =>
+    isMenuLive ? s.choices[terminalId] : undefined
+  );
   const fleetSize = useFleetArmingStore((s) => s.armedIds.size);
-  const isHibernated = useIsHibernated(terminalId);
   const isVoiceLockedHere = useVoiceRecordingStore((s) => s.lockedTarget?.panelId === terminalId);
   const hybridInputEnabled = useTerminalInputStore((s) => isMenuLive && s.hybridInputEnabled);
   const recentVoiceTargets = useVoiceRecordingStore((s) => s.recentTargets);
@@ -441,6 +449,9 @@ function TerminalContextMenuBody({
   const [restartOnPresetRequest, setRestartOnPresetRequest] =
     useState<RestartOnPresetRequest | null>(null);
   const closeRestartOnPreset = useCallback(() => setRestartOnPresetRequest(null), []);
+  const [restartOnAccountRequest, setRestartOnAccountRequest] =
+    useState<RestartOnAccountRequest | null>(null);
+  const closeRestartOnAccount = useCallback(() => setRestartOnAccountRequest(null), []);
 
   // Recent dictation targets surfaced in the context menu must resolve to a
   // live, non-trashed PTY panel that isn't the current one. Persisted entries
@@ -833,6 +844,11 @@ function TerminalContextMenuBody({
         onClose={closeRestartOnPreset}
         sourceRef={sourceRef}
       />
+      <RestartOnAccountConfirmDialog
+        request={restartOnAccountRequest}
+        onClose={closeRestartOnAccount}
+        sourceRef={sourceRef}
+      />
       {handOverRequest !== null && (
         <TerminalHandOverDialog
           key={handOverRequest.id}
@@ -875,6 +891,9 @@ function TerminalContextMenuBody({
             fleetRun={fleetRun}
             detectedAgentId={terminal.detectedAgentId}
             isWatched={isWatched}
+            whenDone={
+              terminalPty && !isEphemeralPanel(terminal) ? (whenDoneChoice ?? "keep") : undefined
+            }
             onRequestPark={handleRequestPark}
             onAction={handleAction}
           />
@@ -884,7 +903,6 @@ function TerminalContextMenuBody({
             terminalId={terminalId}
             terminalPty={terminalPty}
             hasPty={hasPty}
-            isHibernated={isHibernated}
             isPaused={isPaused}
             isInputLocked={terminal.isInputLocked}
             isVoiceLockedHere={isVoiceLockedHere}
@@ -896,6 +914,7 @@ function TerminalContextMenuBody({
             orchestratorCandidateIds={orchestratorCandidateIds}
             onRequestHandOver={handleRequestHandOver}
             onRequestRestartOnPreset={setRestartOnPresetRequest}
+            onRequestRestartOnAccount={setRestartOnAccountRequest}
             onAction={handleAction}
           />
           {/* Other plugins' rows sit above the identity group, never after

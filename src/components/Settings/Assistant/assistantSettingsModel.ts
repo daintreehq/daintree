@@ -113,6 +113,9 @@ export const SETTING_LABEL: Record<keyof HelpAssistantSettings, string> = {
   acceptRemoteControl: "Let other machines' assistants work here",
 };
 
+// Where a close held by an unsaved custom-args draft lands: the Launch options section.
+export const ASSISTANT_LAUNCH_SECTION_ID = "assistant-launch-options";
+
 export interface SaveFailure {
   group: SaveGroup;
   patch: Partial<HelpAssistantSettings>;

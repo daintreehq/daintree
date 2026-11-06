@@ -13,6 +13,7 @@ import {
   type LinkTransport,
 } from "../transport.js";
 import { FrameDecoder, Lane, encodeFrame, type LinkFrame } from "../../link/frames.js";
+import { fragmentFrame } from "../../link/messageFragments.js";
 import {
   ControlKind,
   EventKind,
@@ -391,6 +392,76 @@ describe("LinkClient backoff", () => {
     }
   });
 
+  it("asks the transport not to start a host that said it is restarting, until the restart's grace is out", async () => {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "m.sock");
+    const server = net.createServer((socket) => {
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          if (frame.kind !== ControlKind.HELLO) continue;
+          const reject: LinkMessage = {
+            lane: Lane.CONTROL,
+            kind: ControlKind.REJECT,
+            body: { reason: "shutting-down", handshake: null, detail: null },
+          };
+          socket.write(encodeFrame(messageToFrame(reject)));
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    const direct = createDirectTransport({ socketPath, token: "t" });
+    const mayStart: Array<boolean | undefined> = [];
+    const transport: LinkTransport = {
+      async open(signal, options) {
+        mayStart.push(options?.mayStart);
+        // On its way down the host removed its discovery file.
+        if (mayStart.length > 1) {
+          throw new HostModeOffError("Daintree isn't running in Host mode there (no host.json).");
+        }
+        return direct.open(signal);
+      },
+    };
+    let offset = 0;
+    const now = () => Date.now() + offset;
+    const failed = (dials: number) =>
+      waitFor(() => mayStart.length >= dials && client!.getState().status === "unreachable");
+    try {
+      client = new LinkClient({
+        transport,
+        handshake: TEST_HANDSHAKE,
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+        backoff: { initialMs: 60_000, maxMs: 60_000, jitter: 0 },
+        now,
+      });
+      client.start();
+      await failed(1);
+      expect(client.restartAnnounced).toBe(true);
+      // The restart's own one-second retries may dial in between: every one is held back too.
+      for (let retry = 0; retry < 3; retry++) {
+        const dialled = mayStart.length;
+        client.retryNow();
+        await failed(dialled + 1);
+      }
+      expect(mayStart[0]).toBe(true);
+      expect(mayStart.length).toBeGreaterThanOrEqual(4);
+      expect(mayStart.slice(1).every((value) => value === false)).toBe(true);
+
+      // Not back within the grace: whatever is there now may be started.
+      offset = 2 * 60_000;
+      const before = mayStart.length;
+      client.retryNow();
+      await failed(before + 1);
+      expect(mayStart[before]).toBe(true);
+    } finally {
+      await client?.stop();
+      client = null;
+      server.close();
+      await removeTempDir(dir);
+    }
+  });
+
   it("hears a GOODBYE in place of the WELCOME and keeps retrying a fresh link through Host mode off", async () => {
     const dir = await makeTempDir();
     const socketPath = path.join(dir, "w.sock");
@@ -671,33 +742,111 @@ describe("LinkClient session start", () => {
   });
 });
 
-describe("LinkClient stop", () => {
-  it("lets its GOODBYE reach the host before letting go of a slow transport", async () => {
-    const dir = await makeTempDir();
-    const socketPath = path.join(dir, "h.sock");
-    const seen: number[] = [];
-    const server = net.createServer((socket) => {
-      const decoder = new FrameDecoder();
-      socket.on("data", (chunk: Buffer) => {
+describe("LinkClient message fragments (#15892)", () => {
+  const BIG = "f".repeat(200_000);
+
+  /**
+   * A host in memory that answers HELLO with WELCOME and a fragmented event in
+   * one push, so the client reads them all in a single chunk, before anything
+   * has attached to the session.
+   */
+  function inMemoryHost(hostOffers: boolean) {
+    const decoder = new FrameDecoder();
+    const received: LinkFrame[] = [];
+    const socket: Duplex = new Duplex({
+      read() {},
+      write(chunk: Buffer, _encoding, callback) {
         for (const frame of decoder.push(chunk)) {
-          seen.push(frame.kind);
-          if (frame.kind === ControlKind.HELLO) {
-            const welcome: LinkMessage = {
-              lane: Lane.CONTROL,
-              kind: ControlKind.WELCOME,
-              body: { handshake: TEST_HANDSHAKE, hostName: "h", sessionId: "s1", resumed: false },
-            };
-            socket.write(encodeFrame(messageToFrame(welcome)));
-          }
-          // A host ends the link on a GOODBYE, as HostServer does.
-          if (frame.kind === ControlKind.GOODBYE) socket.end();
+          received.push(frame);
+          if (frame.lane !== Lane.CONTROL || frame.kind !== ControlKind.HELLO) continue;
+          const welcome = messageToFrame({
+            lane: Lane.CONTROL,
+            kind: ControlKind.WELCOME,
+            body: {
+              handshake: TEST_HANDSHAKE,
+              hostName: "h",
+              sessionId: "s1",
+              resumed: false,
+              ...(hostOffers ? { messageFragments: true } : {}),
+            },
+          });
+          const event = messageToFrame({
+            lane: Lane.EVENTS,
+            kind: EventKind.EVENT,
+            body: { endpointId: null, channel: "x:big", args: [BIG] },
+          });
+          socket.push(
+            Buffer.concat(
+              [welcome, ...fragmentFrame(event, 1)].map((f) => Buffer.from(encodeFrame(f)))
+            )
+          );
         }
-      });
+        callback();
+      },
+      // Ends when the client does, as a host closing its side would.
+      final(callback) {
+        socket.push(null);
+        callback();
+      },
     });
-    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
-    // Every write leaves a moment late, so the GOODBYE is still queued when
-    // the stop disposes the transport, which destroys its socket at once.
-    const slow: LinkTransport = {
+    const transport: LinkTransport = {
+      async open() {
+        return { socket, token: "t", dispose: async () => void socket.destroy() };
+      },
+    };
+    return { transport, received };
+  }
+
+  it.each([
+    ["a host that offers them", true],
+    ["an older host that doesn't", false],
+  ])(
+    "offers them in its HELLO, holds them read with WELCOME, and sends them only to %s",
+    async (_name, hostOffers) => {
+      const host = inMemoryHost(hostOffers);
+      const events: unknown[] = [];
+      client = new LinkClient({
+        transport: host.transport,
+        handshake: TEST_HANDSHAKE,
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+      });
+      client.onSession(({ session }) => {
+        session.on(Lane.EVENTS, EventKind.EVENT, (body) => events.push(body));
+        session.post({
+          lane: Lane.EVENTS,
+          kind: EventKind.EVENT,
+          body: { endpointId: null, channel: "x:reply", args: [BIG] },
+        });
+      });
+      client.start();
+      await waitFor(() => events.length > 0);
+      const hello = host.received.find((f) => f.kind === ControlKind.HELLO)!;
+      expect(frameToMessage(hello).body).toMatchObject({ messageFragments: true });
+      expect(events).toEqual([{ endpointId: null, channel: "x:big", args: [BIG] }]);
+
+      await waitFor(() =>
+        host.received.some((f) => f.lane === Lane.EVENTS && f.kind === EventKind.EVENT)
+      );
+      const sent = host.received.filter((f) => f.lane === Lane.EVENTS);
+      if (hostOffers) {
+        expect(sent.length).toBeGreaterThan(1);
+        expect(sent.every((f) => f.streamId !== 0)).toBe(true);
+      } else {
+        expect(sent).toHaveLength(1);
+        expect(frameToMessage(sent[0]!).body).toMatchObject({ channel: "x:reply" });
+      }
+    }
+  );
+});
+
+describe("LinkClient stop", () => {
+  /**
+   * Every write leaves a moment late, so a GOODBYE is still queued when a
+   * stop disposes the transport, which destroys its socket at once.
+   */
+  function slowTransport(socketPath: string): LinkTransport {
+    return {
       async open() {
         const raw = net.connect(socketPath);
         await new Promise<void>((resolve, reject) => {
@@ -722,9 +871,34 @@ describe("LinkClient stop", () => {
         return { socket, token: "t", dispose: async () => void socket.destroy() };
       },
     };
+  }
+
+  it("lets its GOODBYE reach the host before letting go of a slow transport", async () => {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "h.sock");
+    const seen: number[] = [];
+    const server = net.createServer((socket) => {
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          seen.push(frame.kind);
+          if (frame.kind === ControlKind.HELLO) {
+            const welcome: LinkMessage = {
+              lane: Lane.CONTROL,
+              kind: ControlKind.WELCOME,
+              body: { handshake: TEST_HANDSHAKE, hostName: "h", sessionId: "s1", resumed: false },
+            };
+            socket.write(encodeFrame(messageToFrame(welcome)));
+          }
+          // A host ends the link on a GOODBYE, as HostServer does.
+          if (frame.kind === ControlKind.GOODBYE) socket.end();
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
     try {
       client = new LinkClient({
-        transport: slow,
+        transport: slowTransport(socketPath),
         handshake: TEST_HANDSHAKE,
         client: { clientId: "c", clientName: "n", platform: "linux" },
         session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
@@ -733,7 +907,43 @@ describe("LinkClient stop", () => {
       await waitFor(() => client!.getState().status === "connected");
       await client.stop();
       client = null;
-      await waitFor(() => seen.includes(ControlKind.GOODBYE));
+      // A stop that has returned has let its GOODBYE reach the host.
+      expect(seen).toContain(ControlKind.GOODBYE);
+    } finally {
+      server.close();
+      await removeTempDir(dir);
+    }
+  });
+
+  it("lets its GOODBYE reach the host before letting go of a slow transport, stopped mid-handshake (#15877)", async () => {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "h.sock");
+    // A host that may already have resumed a session on the HELLO, and hasn't answered yet.
+    const seen: number[] = [];
+    const server = net.createServer((socket) => {
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          seen.push(frame.kind);
+          if (frame.kind === ControlKind.GOODBYE) socket.end();
+        }
+      });
+      socket.on("error", () => {});
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    try {
+      client = new LinkClient({
+        transport: slowTransport(socketPath),
+        handshake: TEST_HANDSHAKE,
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+      });
+      client.start();
+      await waitFor(() => seen.includes(ControlKind.HELLO));
+      await client.stop();
+      client = null;
+      // A stop that has returned has let its GOODBYE reach the host.
+      expect(seen).toContain(ControlKind.GOODBYE);
     } finally {
       server.close();
       await removeTempDir(dir);
@@ -1243,11 +1453,16 @@ describe("LinkClient retry during an attempt (#13926)", () => {
     // A host that reads HELLO and never answers it.
     const accepted: net.Socket[] = [];
     let hellos = 0;
+    const goodbyes: number[] = [];
     const server = net.createServer((socket) => {
-      accepted.push(socket);
+      const index = accepted.push(socket) - 1;
+      goodbyes[index] = 0;
       const decoder = new FrameDecoder();
       socket.on("data", (chunk: Buffer) => {
-        for (const frame of decoder.push(chunk)) if (frame.kind === ControlKind.HELLO) hellos++;
+        for (const frame of decoder.push(chunk)) {
+          if (frame.kind === ControlKind.HELLO) hellos++;
+          if (frame.kind === ControlKind.GOODBYE) goodbyes[index]!++;
+        }
       });
       socket.on("error", () => {});
     });
@@ -1291,11 +1506,267 @@ describe("LinkClient retry during an attempt (#13926)", () => {
       // Late enough for the abandoned handshakes to have settled and let go too.
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(disposes).toEqual([1, 1]);
+      // The host may have resumed a session on either HELLO: the restart leaves
+      // it for the next dial, and only the stop ends it (#15877).
+      await waitFor(() => goodbyes[1] === 1);
+      expect(goodbyes).toEqual([0, 1]);
     } finally {
       await client?.stop();
       for (const socket of accepted) socket.destroy();
       server.close();
       await removeTempDir(dir);
     }
+  });
+});
+
+describe("LinkClient connections opened from what earlier links learned (#15895)", () => {
+  type Answer = "welcome" | "unauthorized" | "busy" | "close" | "goodbye";
+
+  /**
+   * A host that answers each HELLO with the next of `answers` (the last one
+   * repeats), reached by a transport that marks its opens `remembered`: every
+   * one but a fresh dial's ("plain"), none, or all of them. `holdFresh` keeps
+   * a fresh open waiting until its dial is cancelled.
+   */
+  async function rememberingHost(
+    answers: Answer[],
+    options: { remember?: "plain" | "never" | "always"; holdFresh?: boolean } = {}
+  ) {
+    const dir = await makeTempDir();
+    const socketPath = path.join(dir, "k.sock");
+    let hellos = 0;
+    const server = net.createServer((socket) => {
+      const decoder = new FrameDecoder();
+      socket.on("data", (chunk: Buffer) => {
+        for (const frame of decoder.push(chunk)) {
+          if (frame.kind !== ControlKind.HELLO) continue;
+          const answer = answers[Math.min(hellos, answers.length - 1)]!;
+          hellos++;
+          if (answer === "close") {
+            socket.destroy();
+            return;
+          }
+          const message: LinkMessage =
+            answer === "welcome"
+              ? {
+                  lane: Lane.CONTROL,
+                  kind: ControlKind.WELCOME,
+                  body: {
+                    handshake: TEST_HANDSHAKE,
+                    hostName: "h",
+                    sessionId: "s1",
+                    resumed: false,
+                  },
+                }
+              : answer === "goodbye"
+                ? { lane: Lane.CONTROL, kind: ControlKind.GOODBYE, body: { reason: "going away" } }
+                : {
+                    lane: Lane.CONTROL,
+                    kind: ControlKind.REJECT,
+                    body: { reason: answer, handshake: null, detail: null },
+                  };
+          socket.write(encodeFrame(messageToFrame(message)));
+          if (answer === "goodbye") socket.end();
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    const direct = createDirectTransport({ socketPath, token: "t" });
+    const opens: boolean[] = [];
+    const signals: AbortSignal[] = [];
+    let settled = 0;
+    const remember = options.remember ?? "plain";
+    const transport: LinkTransport = {
+      async open(signal, openOptions) {
+        const fresh = openOptions?.fresh === true;
+        opens.push(fresh);
+        signals.push(signal);
+        try {
+          if (fresh && options.holdFresh) {
+            await new Promise((resolve) =>
+              signal.addEventListener("abort", resolve, { once: true })
+            );
+            throw new TransportError("Connection cancelled", null);
+          }
+          const connection = await direct.open(signal);
+          const remembered = remember === "always" || (remember === "plain" && !fresh);
+          return remembered ? { ...connection, remembered: true as const } : connection;
+        } finally {
+          settled++;
+        }
+      },
+    };
+    return {
+      transport,
+      opens,
+      signals,
+      settled: () => settled,
+      hellos: () => hellos,
+      async close() {
+        server.close();
+        await removeTempDir(dir);
+      },
+    };
+  }
+
+  const linkOver = (transport: LinkTransport, states: LinkClientState[]) => {
+    const link = new LinkClient({
+      transport,
+      handshake: TEST_HANDSHAKE,
+      client: { clientId: "c", clientName: "n", platform: "linux" },
+      session: { pingIntervalMs: 0, idleTimeoutMs: 0 },
+      backoff: { initialMs: 60_000, maxMs: 60_000, jitter: 0 },
+      now: () => 1_000,
+      quietAfterMs: 0,
+    });
+    link.onStateChange((state) => states.push(state));
+    return link;
+  };
+
+  it("dials afresh within the same attempt when the host refuses the token it remembered", async () => {
+    const host = await rememberingHost(["unauthorized", "welcome"]);
+    const states: LinkClientState[] = [];
+    try {
+      client = linkOver(host.transport, states);
+      client.start();
+      await waitFor(() => client!.getState().status === "connected");
+      expect(host.opens).toEqual([false, true]);
+      // No failure in between, and no second attempt either.
+      expect(states.some((state) => state.status === "unreachable")).toBe(false);
+      expect(states.filter((state) => state.status === "connecting")).toEqual([
+        { status: "connecting", attempt: 1 },
+      ]);
+    } finally {
+      await client?.stop();
+      client = null;
+      await host.close();
+    }
+  });
+
+  it("dials afresh once when a remembered link closes unanswered, then backs off as before", async () => {
+    for (const answers of [["close"], ["unauthorized"]] as Answer[][]) {
+      const host = await rememberingHost(answers);
+      const states: LinkClientState[] = [];
+      try {
+        client = linkOver(host.transport, states);
+        client.start();
+        await waitFor(() => client!.getState().status === "unreachable");
+        expect(host.opens).toEqual([false, true]);
+        expect(client.getState()).toMatchObject({ retryAt: 61_000 });
+        if (answers[0] === "unauthorized") {
+          expect(client.getState()).toMatchObject({
+            detail: "Host refused the connection: unauthorized",
+            // The host's Daintree said it (#16170).
+            answered: true,
+          });
+        } else {
+          // Closed with nothing said: nothing shows the host's Daintree was there.
+          expect(client.getState()).not.toHaveProperty("answered");
+        }
+      } finally {
+        await client?.stop();
+        client = null;
+        await host.close();
+      }
+    }
+  });
+
+  it("dials afresh only for a remembered connection, and only once", async () => {
+    // Read from the host just now: the refusal is the host's answer.
+    const unremembered = await rememberingHost(["unauthorized"], { remember: "never" });
+    try {
+      client = linkOver(unremembered.transport, []);
+      client.start();
+      await waitFor(() => client!.getState().status === "unreachable");
+      expect(unremembered.opens).toEqual([false]);
+    } finally {
+      await client?.stop();
+      client = null;
+      await unremembered.close();
+    }
+
+    // A fresh dial that still comes back remembered isn't dialled a third time.
+    const always = await rememberingHost(["unauthorized"], { remember: "always" });
+    try {
+      client = linkOver(always.transport, []);
+      client.start();
+      await waitFor(() => client!.getState().status === "unreachable");
+      expect(always.opens).toEqual([false, true]);
+      // The attempt is over: asking again dials again.
+      client.retryNow();
+      await waitFor(() => always.opens.length === 4);
+      expect(always.opens).toEqual([false, true, false, true]);
+    } finally {
+      await client?.stop();
+      client = null;
+      await always.close();
+    }
+  });
+
+  it("takes any other answer from the host as its own", async () => {
+    for (const [answer, detail] of [
+      ["busy", "Host refused the connection: busy"],
+      ["goodbye", "going away"],
+    ] as const) {
+      const host = await rememberingHost([answer]);
+      try {
+        client = linkOver(host.transport, []);
+        client.start();
+        await waitFor(() => client!.getState().status === "unreachable");
+        expect(host.opens).toEqual([false]);
+        expect(client.getState()).toMatchObject({ detail, answered: true });
+      } finally {
+        await client?.stop();
+        client = null;
+        await host.close();
+      }
+    }
+  });
+
+  it("holds the attempt through the fresh dial, and a stop cancels it", async () => {
+    const host = await rememberingHost(["unauthorized"], { holdFresh: true });
+    const states: LinkClientState[] = [];
+    try {
+      client = linkOver(host.transport, states);
+      client.start();
+      await waitFor(() => host.opens.length === 2);
+      // A dial is under way: asking for the link again starts no other.
+      client.retryNow();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(host.opens).toEqual([false, true]);
+      await client.stop();
+      expect(host.signals[1]!.aborted).toBe(true);
+      await waitFor(() => host.settled() === 2);
+      expect(client.getState()).toEqual({ status: "disconnected" });
+      expect(host.opens).toEqual([false, true]);
+      expect(states.some((state) => state.status === "unreachable")).toBe(false);
+    } finally {
+      await client?.stop();
+      client = null;
+      await host.close();
+    }
+  });
+
+  it("dials afresh on a person's Retry, and only then", async () => {
+    const fresh: Array<boolean | undefined> = [];
+    const transport: LinkTransport = {
+      async open(_signal, options) {
+        fresh.push(options?.fresh);
+        throw new TransportError("unreachable", "Connection timed out");
+      },
+    };
+    client = new LinkClient({
+      transport,
+      handshake: TEST_HANDSHAKE,
+      client: { clientId: "c", clientName: "n", platform: "linux" },
+      backoff: { initialMs: 60_000, maxMs: 60_000, jitter: 0 },
+    });
+    client.start();
+    await waitFor(() => fresh.length === 1 && client!.getState().status === "unreachable");
+    client.retryNow({ restart: true });
+    await waitFor(() => fresh.length === 2 && client!.getState().status === "unreachable");
+    client.retryNow();
+    await waitFor(() => fresh.length === 3 && client!.getState().status === "unreachable");
+    expect(fresh).toEqual([undefined, true, undefined]);
   });
 });

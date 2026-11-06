@@ -85,8 +85,8 @@ const get = vi.fn<(payload: { projectId: string }) => Promise<DriveLeaseView>>()
 const takeOver = vi.fn<(payload: { projectId: string }) => Promise<DriveLeaseView>>();
 const isInUse = vi.fn<() => Promise<boolean>>();
 
-// Mounted the way useGlobalBannerPriority mounts them: the connection sync owns
-// the lease IPC and the banner mirrors what it applied.
+// Mounted the way the app mounts them: the connection sync owns the lease IPC
+// and the banner mirrors what it applied.
 function Harness() {
   useHostConnectionSync();
   useDriveLeaseSync();

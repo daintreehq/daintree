@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getEffectiveAgentConfig, setUserRegistry } from "../../config/agentRegistry.js";
-import type { AgentSettings } from "../../types/agentSettings.js";
+import {
+  buildLaunchCommandFromFlags,
+  stripAssignedSessionIdArgs,
+  type AgentSettings,
+} from "../../types/agentSettings.js";
 import { buildAgentLaunchPlan, type AgentLaunchPlanInput } from "../agentLaunchPlan.js";
 
 function input(overrides: Partial<AgentLaunchPlanInput> = {}): AgentLaunchPlanInput {
@@ -80,6 +84,23 @@ describe("buildAgentLaunchPlan", () => {
       })
     );
 
+    expect(onStalePreset).toHaveBeenCalledExactlyOnceWith("agent");
+  });
+
+  it("drops a saved Vibe Plan default, whose agent Vibe 3 removed, instead of launching it (#15568)", async () => {
+    const onStalePreset = vi.fn();
+    const plan = await buildAgentLaunchPlan(
+      input({
+        agentId: "mistral",
+        agentConfig: getEffectiveAgentConfig("mistral"),
+        settings: { agents: { mistral: { presetId: "plan" } } } as unknown as AgentSettings,
+        onStalePreset,
+      })
+    );
+
+    expect(plan.preset).toBeUndefined();
+    expect(plan.command).toBeDefined();
+    expect(plan.command).not.toContain("--agent");
     expect(onStalePreset).toHaveBeenCalledExactlyOnceWith("agent");
   });
 
@@ -204,13 +225,15 @@ describe("buildAgentLaunchPlan", () => {
           input({
             agentId: "mistral",
             agentConfig: getEffectiveAgentConfig("mistral"),
-            settings: { agents: { mistral: { presetId: "plan" } } } as unknown as AgentSettings,
+            settings: {
+              agents: { mistral: { presetId: "accept-edits" } },
+            } as unknown as AgentSettings,
             presetInventory: { ccr: true, project },
           })
         );
 
-      expect((await mistral(false)).unloadedPresetId).toBe("plan");
-      expect((await mistral(true)).preset?.id).toBe("plan");
+      expect((await mistral(false)).unloadedPresetId).toBe("accept-edits");
+      expect((await mistral(true)).preset?.id).toBe("accept-edits");
     });
 
     it("never holds a custom match, which nothing unread can outrank", async () => {
@@ -354,6 +377,62 @@ describe("buildAgentLaunchPlan", () => {
     expect(plan.preset?.id).toBe("scoped");
   });
 
+  describe("a Vibe launch that asks for a model (#15569)", () => {
+    const vibe = (options: AgentLaunchPlanInput["options"]) =>
+      buildAgentLaunchPlan(
+        input({ agentId: "mistral", agentConfig: getEffectiveAgentConfig("mistral"), options })
+      );
+
+    it("claims no model for an interactive launch, whose command can't select one", async () => {
+      const plan = await vibe({ modelId: "devstral-small", prompt: "Fix the bug" });
+
+      expect(plan.command).not.toContain("--model");
+      expect(plan.launchFlags).not.toContain("--model");
+      expect(plan.modelId).toBeUndefined();
+      expect(plan.title).toBe("Mistral Vibe");
+    });
+
+    it("selects and records the model for a headless run, but never persists it for replay", async () => {
+      const plan = await vibe({
+        modelId: "devstral-small",
+        prompt: "Fix the bug",
+        interactive: false,
+      });
+
+      expect(plan.command).toContain("--model devstral-small --prompt");
+      expect(plan.modelId).toBe("devstral-small");
+      expect(plan.title).toBe("Mistral Vibe (Small)");
+      expect(plan.launchFlags).not.toContain("--model");
+    });
+
+    it("keeps a caller's own --model on a headless run's command, not in its replay flags", async () => {
+      const plan = await vibe({
+        prompt: "Fix the bug",
+        interactive: false,
+        agentLaunchFlags: ["--model", "devstral-2", "--agent", "auto-approve"],
+      });
+
+      expect(plan.command).toContain("--model devstral-2");
+      expect(plan.launchFlags).toEqual(["--trust", "--agent", "auto-approve"]);
+      expect(plan.callerLaunchFlags).toEqual(["--agent", "auto-approve"]);
+    });
+
+    it("claims no model for a headless launch with no prompt, which runs interactive", async () => {
+      const plan = await vibe({ modelId: "devstral-small", prompt: "  ", interactive: false });
+
+      expect(plan.command).not.toContain("--model");
+      expect(plan.modelId).toBeUndefined();
+    });
+
+    it("leaves other agents' interactive model selection as it was", async () => {
+      const plan = await buildAgentLaunchPlan(input({ options: { modelId: "opus" } }));
+
+      expect(plan.command).toContain("--model opus");
+      expect(plan.launchFlags).toEqual(expect.arrayContaining(["--model", "opus"]));
+      expect(plan.modelId).toBe("opus");
+    });
+  });
+
   it("layers the caller's environment over the agent's and the preset's", async () => {
     const plan = await buildAgentLaunchPlan(
       input({
@@ -377,6 +456,25 @@ describe("buildAgentLaunchPlan", () => {
     expect(plan.command?.endsWith("--model opus")).toBe(true);
     expect(plan.launchFlags?.slice(-2)).toEqual(["--model", "opus"]);
     expect(plan.callerLaunchFlags).toEqual(["--model", "opus"]);
+  });
+
+  it("launches a multi-word preset element as one argument, as its resume flags replay it (#15638)", async () => {
+    const plan = await buildAgentLaunchPlan(
+      input({
+        settings: settingsWith({
+          presetId: "prompted",
+          customPresets: [
+            { id: "prompted", name: "Prompted", args: ["--system-prompt", "two words"] },
+          ],
+        }),
+      })
+    );
+
+    expect(plan.command).toContain("--system-prompt 'two words'");
+    expect(plan.launchFlags).toEqual(["--system-prompt", "two words"]);
+    expect(stripAssignedSessionIdArgs(plan.command!, "claude")).toBe(
+      buildLaunchCommandFromFlags("claude", "claude", plan.launchFlags!)
+    );
   });
 
   it("mints a fresh session id per launch and runs the command it was resolved to", async () => {
@@ -404,5 +502,220 @@ describe("buildAgentLaunchPlan", () => {
     expect(plan.command).toBeUndefined();
     expect(plan.assignedSessionId).toBeUndefined();
     expect(plan.title).toBe("Terminal");
+  });
+});
+
+describe("accounts (#16040)", () => {
+  const COMPANY = { id: "company", name: "Company", configDir: "/Users/me/.claude-company" };
+  const PERSONAL = { id: "personal", name: "Personal", configDir: "/Users/me/.claude-personal" };
+
+  it("sets the account's folder after the preset's env, so the account wins for its own variable", async () => {
+    const plan = await buildAgentLaunchPlan(
+      input({
+        settings: settingsWith({
+          accounts: [COMPANY],
+          accountId: "company",
+          presetId: "zai",
+          customPresets: [
+            {
+              id: "zai",
+              name: "Z.ai",
+              env: { ANTHROPIC_BASE_URL: "https://api.z.ai", CLAUDE_CONFIG_DIR: "/legacy" },
+            },
+          ],
+        }),
+        options: { env: { DAINTREE_MCP_TOKEN: "t", claude_config_dir: "/caller" } },
+      })
+    );
+
+    expect(plan.account?.id).toBe("company");
+    expect(plan.preset?.id).toBe("zai");
+    expect(plan.env).toEqual({
+      ANTHROPIC_BASE_URL: "https://api.z.ai",
+      DAINTREE_MCP_TOKEN: "t",
+      CLAUDE_CONFIG_DIR: COMPANY.configDir,
+    });
+  });
+
+  it("prefers the worktree's account over the agent's, and the caller's over both", async () => {
+    const settings = settingsWith({
+      accounts: [COMPANY, PERSONAL],
+      accountId: "personal",
+      worktreeAccounts: { "/repo-wt/a": "company" },
+    });
+
+    const scoped = await buildAgentLaunchPlan(input({ settings }));
+    expect(scoped.account?.id).toBe("company");
+
+    const elsewhere = await buildAgentLaunchPlan(input({ settings, worktreeId: "/repo-wt/b" }));
+    expect(elsewhere.account?.id).toBe("personal");
+
+    const requested = await buildAgentLaunchPlan(
+      input({ settings, options: { accountId: "personal" } })
+    );
+    expect(requested.account?.id).toBe("personal");
+    expect(requested.env?.CLAUDE_CONFIG_DIR).toBe(PERSONAL.configDir);
+  });
+
+  it("launches on the default login for an explicit null and for a worktree saved as null", async () => {
+    const settings = settingsWith({
+      accounts: [COMPANY],
+      accountId: "company",
+      worktreeAccounts: { "/repo-wt/a": null },
+    });
+
+    const scoped = await buildAgentLaunchPlan(input({ settings }));
+    expect(scoped.account).toBeUndefined();
+    expect(scoped.env?.CLAUDE_CONFIG_DIR).toBeUndefined();
+
+    const explicit = await buildAgentLaunchPlan(
+      input({ settings, worktreeId: "/repo-wt/b", options: { accountId: null } })
+    );
+    expect(explicit.account).toBeUndefined();
+  });
+
+  it("refuses a launch whose account is gone instead of running it on another login", async () => {
+    const getCliDetail = vi.fn(async () => undefined);
+    const plan = await buildAgentLaunchPlan(
+      input({
+        settings: settingsWith({ accounts: [COMPANY], accountId: "removed" }),
+        getCliDetail,
+      })
+    );
+
+    expect(plan.missingAccountId).toBe("removed");
+    expect(plan.command).toBeUndefined();
+    expect(plan.env).toBeUndefined();
+    expect(getCliDetail).not.toHaveBeenCalled();
+  });
+
+  describe("a preset's pinned account (#16133)", () => {
+    const pinnedPresets = [
+      { id: "work", name: "Work", accountId: "company", env: { CLAUDE_CONFIG_DIR: "/legacy" } },
+      { id: "plain", name: "Plain" },
+    ];
+
+    it("launches the preset on its pin over the agent's default, the account's folder last", async () => {
+      const plan = await buildAgentLaunchPlan(
+        input({
+          settings: settingsWith({
+            accounts: [COMPANY, PERSONAL],
+            accountId: "personal",
+            presetId: "work",
+            customPresets: pinnedPresets,
+          }),
+        })
+      );
+
+      expect(plan.preset?.id).toBe("work");
+      expect(plan.account?.id).toBe("company");
+      expect(plan.env).toEqual({ CLAUDE_CONFIG_DIR: COMPANY.configDir });
+    });
+
+    it("yields the pin to the launch's choice and to the worktree's", async () => {
+      const settings = settingsWith({
+        accounts: [COMPANY, PERSONAL],
+        presetId: "work",
+        customPresets: pinnedPresets,
+        worktreeAccounts: { "/repo-wt/a": "personal", "/repo-wt/c": null },
+      });
+
+      const worktree = await buildAgentLaunchPlan(input({ settings }));
+      expect(worktree.account?.id).toBe("personal");
+
+      const defaultLogin = await buildAgentLaunchPlan(
+        input({ settings, worktreeId: "/repo-wt/c" })
+      );
+      expect(defaultLogin.account).toBeUndefined();
+      // The preset's own env is all that remains: no account folder is laid over it.
+      expect(defaultLogin.env).toEqual({ CLAUDE_CONFIG_DIR: "/legacy" });
+
+      const requested = await buildAgentLaunchPlan(
+        input({ settings, worktreeId: "/repo-wt/b", options: { accountId: "personal" } })
+      );
+      expect(requested.account?.id).toBe("personal");
+
+      const pinned = await buildAgentLaunchPlan(input({ settings, worktreeId: "/repo-wt/b" }));
+      expect(pinned.account?.id).toBe("company");
+    });
+
+    it("reads the pin of the preset the launch settled on, after a stale worktree pick falls back", async () => {
+      const plan = await buildAgentLaunchPlan(
+        input({
+          settings: settingsWith({
+            accounts: [COMPANY],
+            presetId: "work",
+            worktreePresets: { "/repo-wt/a": "deleted" },
+            customPresets: pinnedPresets,
+          }),
+        })
+      );
+
+      expect(plan.preset?.id).toBe("work");
+      expect(plan.account?.id).toBe("company");
+    });
+
+    it("leaves the pin out of a launch of another preset or of the bare agent", async () => {
+      const settings = settingsWith({
+        accounts: [COMPANY, PERSONAL],
+        accountId: "personal",
+        presetId: "work",
+        customPresets: pinnedPresets,
+      });
+
+      const plain = await buildAgentLaunchPlan(input({ settings, options: { presetId: "plain" } }));
+      expect(plain.account?.id).toBe("personal");
+
+      const bare = await buildAgentLaunchPlan(input({ settings, options: { presetId: null } }));
+      expect(bare.account?.id).toBe("personal");
+    });
+
+    it("refuses a launch whose pinned account is gone, before probing the CLI", async () => {
+      const getCliDetail = vi.fn(async () => undefined);
+      const plan = await buildAgentLaunchPlan(
+        input({
+          settings: settingsWith({
+            accounts: [COMPANY],
+            accountId: "company",
+            presetId: "gone-pin",
+            customPresets: [{ id: "gone-pin", name: "Gone", accountId: "removed" }],
+          }),
+          getCliDetail,
+        })
+      );
+
+      expect(plan.missingAccountId).toBe("removed");
+      expect(plan.command).toBeUndefined();
+      expect(plan.env).toBeUndefined();
+      expect(getCliDetail).not.toHaveBeenCalled();
+    });
+
+    it("takes no pin from a repository's preset", async () => {
+      const plan = await buildAgentLaunchPlan(
+        input({
+          settings: settingsWith({ accounts: [COMPANY], presetId: "shared" }),
+          projectPresets: [{ id: "shared", name: "Shared", accountId: "company" }],
+        })
+      );
+
+      expect(plan.preset?.id).toBe("shared");
+      expect(plan.account).toBeUndefined();
+      expect(plan.missingAccountId).toBeUndefined();
+    });
+  });
+
+  it("ignores accounts for an agent whose CLI can't hold one per launch", async () => {
+    const plan = await buildAgentLaunchPlan(
+      input({
+        agentId: "cursor",
+        agentConfig: getEffectiveAgentConfig("cursor"),
+        settings: {
+          agents: { cursor: { accounts: [COMPANY], accountId: "company" } },
+        } as unknown as AgentSettings,
+      })
+    );
+
+    expect(plan.missingAccountId).toBeUndefined();
+    expect(plan.account).toBeUndefined();
   });
 });

@@ -15,17 +15,25 @@ import { logError } from "../utils/logger.js";
 const CURRENT_SCRATCH_KEY = "currentScratchId";
 
 /**
- * Drop the scratch's persisted panel state, which lives under the shared
- * `projects/<id>/` state layout (#11484). Imported lazily: `ProjectStore` is a
- * heavyweight singleton that constructs itself at module eval, and statically
- * importing it here would drag it into every suite that touches a scratch.
+ * Drop what the scratch left outside its directory: its panel state, under the
+ * shared `projects/<id>/` state layout (#11484), and its saved window bounds.
+ * Each is dropped whether or not the other was. Imported lazily: `ProjectStore`
+ * is a heavyweight singleton that constructs itself at module eval, and
+ * windowState.ts brings Electron and the settings store, either of which would
+ * be dragged into every suite that touches a scratch.
  */
-export async function removeScratchStateDir(scratchId: string): Promise<void> {
+export async function removeScratchPersistedState(scratchId: string): Promise<void> {
   try {
     const { projectStore } = await import("./ProjectStore.js");
     await projectStore.removeWorkspaceStateDir(scratchId);
   } catch (error) {
     logError(`[ScratchStore] Failed to remove scratch state directory for ${scratchId}`, error);
+  }
+  try {
+    const { pruneWindowStateForScratch } = await import("../windowState.js");
+    pruneWindowStateForScratch(scratchId);
+  } catch (error) {
+    logError(`[ScratchStore] Failed to drop saved window bounds for ${scratchId}`, error);
   }
 }
 
@@ -183,6 +191,34 @@ export class ScratchStore {
     db.delete(scratchesTable).where(eq(scratchesTable.id, scratchId)).run();
   }
 
+  /**
+   * Moves each scratch's `last_opened` up to when the cleanup sweep last saw it
+   * held open (#15614). Never moves it back, skips tombstoned rows and ids that
+   * are not scratches, and leaves the current pointer alone: being on screen in
+   * some window is not a switch to it.
+   */
+  touchScratches(lastSeenAt: ReadonlyMap<string, number>): void {
+    const db = getSharedDb();
+    db.transaction(
+      (tx) => {
+        for (const [scratchId, at] of lastSeenAt) {
+          if (!isValidScratchId(scratchId) || !Number.isFinite(at)) continue;
+          tx.update(scratchesTable)
+            .set({ lastOpened: at })
+            .where(
+              and(
+                eq(scratchesTable.id, scratchId),
+                isNull(scratchesTable.deletedAt),
+                lt(scratchesTable.lastOpened, at)
+              )
+            )
+            .run();
+        }
+      },
+      { behavior: "immediate" }
+    );
+  }
+
   updateScratch(
     scratchId: string,
     updates: Partial<Pick<Scratch, "name" | "lastOpened">>
@@ -331,7 +367,7 @@ export class ScratchStore {
       }
     }
 
-    await removeScratchStateDir(scratchId);
+    await removeScratchPersistedState(scratchId);
     this.hardDeleteScratch(scratchId);
   }
 

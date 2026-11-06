@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { ATTACH_STDIO_FLAG } from "../host/attachStdio.js";
@@ -21,6 +22,7 @@ import {
   TransportError,
   connectUnixSocket,
   isSshAccessDenied,
+  type LinkOpenOptions,
   type LinkTransport,
   type LinkTransportConnection,
 } from "./transport.js";
@@ -35,9 +37,10 @@ const logger = createLogger("main:sshTransport");
  * or agent settings. One ControlMaster connection per host is shared by the
  * probe, the discovery read and the socket forward.
  *
- *   1. `ssh <target> 'uname -s; id -u; echo "$HOME"'` to derive where the
- *      host's discovery file lives on that machine.
- *   2. `ssh <target> cat <discovery file>` for the socket path and token.
+ *   1. `ssh <target> 'echo; uname -s; id -u; echo "$HOME"'` to derive where
+ *      the host's discovery file lives on that machine.
+ *   2. `ssh <target> sh -c '...cat...' sh <discovery file>` for the socket
+ *      path and token, framed by markers.
  *   3. `ssh -O forward -L <local.sock>:<remote.sock> <target>` through that
  *      master (or, with no master, a dedicated `ssh -N -L`), then dial
  *      local.sock.
@@ -83,12 +86,15 @@ export interface SshTransportOptions {
   /** Remote userData directory name on macOS (the packaged app's by default). */
   macAppDirName?: string;
   /**
-   * Called once when ssh reached the host but Daintree there didn't answer:
-   * start it if it can be (installed, Host mode last on), resolving true when
-   * the link should be tried again. Rejects with why it couldn't start.
+   * Called once when ssh reached the host but Daintree there didn't answer,
+   * unless the dial says the host may not be started: start it if it can be
+   * (installed, Host mode last on), resolving true when the link should be
+   * tried again. Rejects with why it couldn't start.
    */
   ensureRunning?: (signal: AbortSignal) => Promise<boolean>;
   linuxDirName?: string;
+  /** The ssh config files a remembered route depends on; the user's and the system's unless given. */
+  sshConfigFiles?: string[];
 }
 
 export interface RemoteProbe {
@@ -288,11 +294,24 @@ export function sshCommonArgs(controlPath: string, controlPersist = "10m"): stri
   ];
 }
 
-export const PROBE_COMMAND = 'uname -s; id -u; echo "$HOME"';
+/** The leading newline keeps a startup file's unterminated output off `uname`'s line. */
+export const PROBE_COMMAND = 'echo; uname -s; id -u; echo "$HOME"';
 
 export function buildProbeArgs(target: string, controlPath: string, persist?: string): string[] {
   return [...sshCommonArgs(controlPath, persist), "--", target, PROBE_COMMAND];
 }
+
+const DISCOVERY_START = "@@dt:discovery";
+const DISCOVERY_END = "@@dt:discovery-end";
+/** The read's status for a missing file: cat's message for it is in the host's locale. */
+const NO_DISCOVERY_FILE_EXIT = 3;
+
+/**
+ * Prints the file between marker lines, so whatever the user's shell startup
+ * files print around it is left out. The path arrives as `$1`, never spliced
+ * into the script, so it is quoted once for the login shell, whichever it is.
+ */
+const DISCOVERY_READ_SCRIPT = `if [ -e "$1" ]; then echo; echo ${DISCOVERY_START}; cat -- "$1" || exit 1; echo; echo ${DISCOVERY_END}; else exit ${NO_DISCOVERY_FILE_EXIT}; fi`;
 
 export function buildCatArgs(
   target: string,
@@ -303,7 +322,23 @@ export function buildCatArgs(
   if (!isSafeRemotePath(filePath)) {
     throw new TransportError(`Refusing to read an unusual remote path: ${filePath}`, null);
   }
-  return [...sshCommonArgs(controlPath, persist), "--", target, `cat -- ${shellQuote(filePath)}`];
+  return [
+    ...sshCommonArgs(controlPath, persist),
+    "--",
+    target,
+    `sh -c ${shellQuote(DISCOVERY_READ_SCRIPT)} sh ${shellQuote(filePath)}`,
+  ];
+}
+
+/** The discovery file from the read's output; null unless it arrived whole between its markers. */
+export function parseDiscoveryRead(stdout: string): HostDiscoveryInfo | null {
+  const startMarker = `\n${DISCOVERY_START}\n`;
+  const start = stdout.lastIndexOf(startMarker);
+  if (start === -1) return null;
+  const from = start + startMarker.length;
+  const end = stdout.indexOf(`\n${DISCOVERY_END}\n`, from);
+  if (end === -1) return null;
+  return parseDiscoveryInfo(stdout.slice(from, end));
 }
 
 /** `ssh -G` prints the control path with its `%` tokens expanded. */
@@ -641,12 +676,60 @@ function collect(stream: Readable | null, cap: number, keepTail: boolean): () =>
   };
 }
 
+/** ssh exited non-zero: `code` is the remote command's status, or 255 when ssh itself failed. */
+class SshExitError extends TransportError {
+  constructor(
+    readonly code: number | null,
+    detail: string
+  ) {
+    super("ssh failed", detail);
+  }
+}
+
 function stderrDetail(stderr: string, fallback: string): string {
   const trimmed = stderr.trim();
   return trimmed.length > 0 ? trimmed : fallback;
 }
 
 type StreamLocalState = "unverified" | "works" | "refused";
+
+/**
+ * What an open learned that the next one can reuse: the host's discovery
+ * file, checked, and the master's expanded control path. Neither changes
+ * while the host's Daintree and the master stay up.
+ */
+interface KnownHost {
+  info: HostDiscoveryInfo;
+  /** From `ssh -G`; undefined until a forward needed it. */
+  resolvedControlPath?: string | null;
+  /** {@link sshConfigStamp} from before the dial that learned this. */
+  configStamp: string;
+}
+
+/**
+ * How the ssh config files stood. A remembered route is only good while they
+ * are unchanged: after an edit (an alias re-pointed, say) the next dial runs
+ * in full, as every dial did before, instead of carrying on by the control
+ * path the old config expanded to. Files they `Include` aren't covered; a
+ * person's Retry dials afresh whatever they say.
+ */
+async function sshConfigStamp(files: readonly string[]): Promise<string> {
+  const stamps = await Promise.all(
+    files.map(async (file) => {
+      try {
+        const stat = await fs.stat(file);
+        return `${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+      } catch {
+        return "-";
+      }
+    })
+  );
+  return stamps.join("|");
+}
+
+function defaultSshConfigFiles(): string[] {
+  return [path.join(os.homedir(), ".ssh", "config"), "/etc/ssh/ssh_config"];
+}
 
 const SSH_TIMED_OUT = "ssh did not finish in time";
 
@@ -660,6 +743,13 @@ export class SshTransport implements LinkTransport {
    */
   private streamLocal: StreamLocalState = "unverified";
   private lastRoute: "forward" | "attach-stdio" | null = null;
+  /**
+   * Kept from the last open that reached the host through the master or the
+   * bridge, so a reconnect skips the probe, the discovery read and `ssh -G`.
+   * Dropped as soon as it fails to reach the host; a token the host no
+   * longer takes is the link's to notice (`remembered` on the connection).
+   */
+  private known: KnownHost | null = null;
 
   constructor(private readonly options: SshTransportOptions) {
     if (!isValidSshTarget(options.target)) {
@@ -674,14 +764,33 @@ export class SshTransport implements LinkTransport {
     return this.lastRoute;
   }
 
-  async open(signal: AbortSignal): Promise<LinkTransportConnection> {
+  async open(signal: AbortSignal, options?: LinkOpenOptions): Promise<LinkTransportConnection> {
+    if (options?.fresh) {
+      this.known = null;
+      this.streamLocal = "unverified";
+    }
+    let known = this.known;
+    if (known && known.configStamp !== (await this.configStamp())) {
+      this.known = known = null;
+    }
+    if (known) {
+      try {
+        const connection = await this.openKnown(known, signal);
+        connection.remembered = true;
+        return connection;
+      } catch (error) {
+        if (signal.aborted) throw error;
+        // It no longer reaches the host that way: dial as the first time, whose failures say why.
+        if (this.known === known) this.known = null;
+      }
+    }
     let reached = false;
     try {
       return await this.openOnce(signal, () => (reached = true));
     } catch (error) {
       // ssh itself failing (unreachable, refused key) is not Daintree being down.
       const ensureRunning = this.options.ensureRunning;
-      if (!reached || !ensureRunning || signal.aborted) throw error;
+      if (!reached || !ensureRunning || options?.mayStart === false || signal.aborted) throw error;
       if (error instanceof DiscoveryRejectedError) throw error;
       if (!(await ensureRunning(signal))) throw error;
       return this.openOnce(signal, () => {});
@@ -693,6 +802,8 @@ export class SshTransport implements LinkTransport {
     onReached: () => void
   ): Promise<LinkTransportConnection> {
     const { target, clientDir } = this.options;
+    // Before anything is read: a change made during this dial shows on the next one.
+    const configStamp = await this.configStamp();
     await fs.mkdir(clientDir, { recursive: true, mode: 0o700 });
     await fs.chmod(clientDir, 0o700);
     const controlPath = controlPathFor(clientDir, target);
@@ -733,14 +844,14 @@ export class SshTransport implements LinkTransport {
       signal
     ).catch((error: unknown) => {
       // The host answered, and Daintree writes this file while it listens: none there is no Host mode.
-      if (error instanceof TransportError && /No such file or directory/.test(error.detail ?? "")) {
+      if (error instanceof SshExitError && error.code === NO_DISCOVERY_FILE_EXIT) {
         throw new HostModeOffError(
           `Daintree isn't running in Host mode there (no ${path.posix.basename(location.discoveryPath)}).`
         );
       }
       throw error;
     });
-    const info = parseDiscoveryInfo(cat.stdout);
+    const info = parseDiscoveryRead(cat.stdout);
     if (!info) throw new TransportError("Host discovery file is not valid", null);
     // The host writes its socket beside the discovery file, so anything else
     // is a path the host chose for us to hand to ssh: refuse it.
@@ -749,6 +860,38 @@ export class SshTransport implements LinkTransport {
         `The host's discovery file names a socket at ${info.socketPath}, not beside it at ${location.socketPath}`
       );
     }
+    return this.reach(controlPath, info, null, configStamp, signal);
+  }
+
+  private configStamp(): Promise<string> {
+    return sshConfigStamp(this.options.sshConfigFiles ?? defaultSshConfigFiles());
+  }
+
+  /** Straight to the route an earlier open found, through the master it left running. */
+  private openKnown(known: KnownHost, signal: AbortSignal): Promise<LinkTransportConnection> {
+    const { target, clientDir } = this.options;
+    const controlPath = controlPathFor(clientDir, target);
+    noteSshMaster(target, controlPath, (timeoutMs) => this.exitMaster(controlPath, timeoutMs));
+    return this.reach(controlPath, known.info, known, known.configStamp, signal);
+  }
+
+  /**
+   * Open the link from discovery details already checked: over the attach
+   * bridge where ssh can't or won't forward the socket, otherwise through a
+   * forward. `known` is what an earlier open remembered, null on a dial that
+   * just read them.
+   */
+  private async reach(
+    controlPath: string,
+    info: HostDiscoveryInfo,
+    known: KnownHost | null,
+    configStamp: string,
+    signal: AbortSignal
+  ): Promise<LinkTransportConnection> {
+    const remember = (resolvedControlPath: string | null | undefined) => {
+      // An open a Retry abandoned may finish after the Retry's own dial learned newer details.
+      if (!signal.aborted) this.known = { info, resolvedControlPath, configStamp };
+    };
     const remoteSocket = info.socketPath;
     // A home folder with ":", "${" or "%" in its name puts them in the socket
     // path, which ssh would read as forwarding syntax. The attach bridge
@@ -761,6 +904,7 @@ export class SshTransport implements LinkTransport {
       }
       const connection = await this.openOverStdio(controlPath, info, signal);
       this.lastRoute = "attach-stdio";
+      remember(known?.resolvedControlPath);
       return connection;
     }
 
@@ -778,11 +922,14 @@ export class SshTransport implements LinkTransport {
       connection.socket.once("close", () => {
         if (this.streamLocal === "refused") this.streamLocal = "unverified";
       });
+      remember(known?.resolvedControlPath);
       return connection;
     }
-    const connection = await this.openForward(controlPath, remoteSocket, info.token, signal);
+    const forward = await this.openForward(controlPath, remoteSocket, info.token, known, signal);
     this.lastRoute = "forward";
-    return connection;
+    // A dedicated forward leaves no master to forward through next time.
+    if (forward.viaMaster) remember(forward.resolvedControlPath);
+    return forward.connection;
   }
 
   /**
@@ -844,12 +991,23 @@ export class SshTransport implements LinkTransport {
     }
   }
 
+  /**
+   * The socket forward, through the master when it takes it. With `known`,
+   * it asks only the master by the path `ssh -G` gave before: a master that
+   * is gone fails it, so the dial that follows starts one again rather than
+   * settling for a dedicated forward.
+   */
   private async openForward(
     controlPath: string,
     remoteSocket: string,
     token: string,
+    known: KnownHost | null,
     signal: AbortSignal
-  ): Promise<LinkTransportConnection> {
+  ): Promise<{
+    connection: LinkTransportConnection;
+    viaMaster: boolean;
+    resolvedControlPath: string | null;
+  }> {
     const { target, clientDir } = this.options;
     const localSocket = localForwardPathFor(clientDir, target);
     if (Buffer.byteLength(localSocket) > maxSocketPathBytes() || localSocket.includes(":")) {
@@ -858,7 +1016,10 @@ export class SshTransport implements LinkTransport {
     await fs.rm(localSocket, { force: true });
 
     let dispose: () => Promise<void>;
-    const resolved = await this.resolveControlPath(controlPath, signal);
+    const resolved =
+      known?.resolvedControlPath !== undefined
+        ? known.resolvedControlPath
+        : await this.resolveControlPath(controlPath, signal);
     const cancelViaMaster = async () => {
       await this.run(
         buildCancelArgs(target, controlPath, localSocket, remoteSocket, resolved),
@@ -882,10 +1043,13 @@ export class SshTransport implements LinkTransport {
         throw err;
       }
     } else {
-      if (signal.aborted) {
-        // Cancelled mid-request (a Retry, a stop): the master may hold the forward all the same.
+      if (signal.aborted || known) {
+        // Cancelled mid-request (a Retry, a stop), or refused by a master that
+        // may be going: it may hold the forward all the same.
         await cancelViaMaster();
-        throw new TransportError("Connection cancelled", null);
+        throw signal.aborted
+          ? new TransportError("Connection cancelled", null)
+          : new TransportError("The ssh master didn't take the forward", null);
       }
       const forward = await this.startForward(
         buildForwardArgs(target, localSocket, remoteSocket),
@@ -909,7 +1073,7 @@ export class SshTransport implements LinkTransport {
     socket.once("close", () => {
       if (socket.bytesRead === 0 && this.streamLocal === "works") this.streamLocal = "unverified";
     });
-    return { socket, token, dispose };
+    return { connection: { socket, token, dispose }, viaMaster, resolvedControlPath: resolved };
   }
 
   private exitMaster(controlPath: string, timeoutMs: number): Promise<void> {
@@ -973,8 +1137,8 @@ export class SshTransport implements LinkTransport {
             if (code === 0) resolve({ code, stdout: stdout(), stderr: stderr() });
             else {
               reject(
-                new TransportError(
-                  "ssh failed",
+                new SshExitError(
+                  code,
                   stderrDetail(stderr(), `ssh exited with code ${String(code)}`)
                 )
               );

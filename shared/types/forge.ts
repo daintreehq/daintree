@@ -272,6 +272,13 @@ export interface RepoMetadata {
   topics?: string[];
   /** How pull requests may merge here, when the provider reports it. */
   mergeSettings?: RepoMergeSettings;
+  /**
+   * `false`: the provider never reports what the host's in-app merge previews
+   * (a PR's merge status, head commit and commits, and these merge settings),
+   * so the host offers no in-app merge and links to the forge instead. Absent
+   * or `true`: a read missing those fields is treated as transient.
+   */
+  mergePreviewSupported?: boolean;
   /** Opaque freshness token the host round-trips; see {@link FetchOptions}. */
   freshnessToken?: string;
   /** `true` when unchanged since `ifNotChangedSince`; see {@link FetchOptions}. */
@@ -290,8 +297,11 @@ export interface RepoMergeSettings {
 }
 
 /**
- * Paged-listing options. All fields advisory — providers ignore options they
- * do not support. `cursor` is opaque and provider-defined.
+ * Paged-listing options. Advisory — providers ignore options they do not
+ * support — except ordering: a provider that can't serve `sort` `"created"` /
+ * `"updated"` in the requested `direction` refuses it by name rather than
+ * return a page in some other order (#15604). `cursor` is opaque and
+ * provider-defined.
  */
 export interface ListOptions {
   /**
@@ -1789,6 +1799,14 @@ export interface CredentialField {
 export interface RegisteredForgeProvider {
   pluginId: string;
   contribution: ForgeProviderContribution;
+  /**
+   * Set when the provider is registered but can't run, with the reason to show
+   * beside it. Today that is a provider declared by an installed plugin: those
+   * activate in the plugin worker, where `host.registerForgeProvider` binds
+   * nothing, so only built-in plugins can back a forge provider. Absent means
+   * runnable, even before the plugin's `activate()` has bound an impl.
+   */
+  unavailableReason?: string;
 }
 
 /**
@@ -1932,6 +1950,8 @@ export interface ForgeProviderDescriptor {
 export interface ForgeProviderEntry {
   pluginId: string;
   contribution: ForgeProviderContribution;
+  /** See {@link RegisteredForgeProvider.unavailableReason}. */
+  unavailableReason?: string;
 }
 
 /**

@@ -22,13 +22,16 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { useScopedSelectAll } from "@/hooks/useScopedSelectAll";
 import { cn } from "@/lib/utils";
 import type { MarkdownFontSize } from "@/store/preferencesStore";
+import { markdownDiffClient } from "@/services/MarkdownDiffService";
 import {
   buildMarkdownDiff,
   type MarkdownBlock,
   type MarkdownBlockChange,
   type MarkdownDiffFailure,
+  type MarkdownDiffResult,
   type TextRange,
 } from "./markdownBlockDiff";
+import { RenderedMarkdownDiffSkeleton } from "./RenderedMarkdownDiffSkeleton";
 import "@/components/Markdown/MarkdownDocument.css";
 import "./RenderedMarkdownDiff.css";
 
@@ -63,21 +66,55 @@ export interface RenderedMarkdownDiffProps {
    */
   attemptKey: string;
   /**
+   * The admission slot this view's off-thread comparisons share. Stable for the
+   * host's lifetime — a pane id, never a file — so stepping through a review
+   * supersedes the previous file's comparison instead of queueing behind it,
+   * even when the view unmounts between files while a source read is pending.
+   */
+  requestKey: string;
+  /**
    * Reports whether the engine could build a rendered view from these inputs.
    * The host cannot know in advance — a patch that won't reconstruct looks like
    * any other — so it keeps the segment live and falls back to the source diff
-   * on the verdict.
+   * on the verdict. Never reported while a comparison is still being built.
    */
   onVerdict?: (reason: MarkdownDiffFailure | null, forAttempt: string) => void;
   /**
    * How many discrete changes the document holds, so the host can offer a
-   * counter and a stepper. A modified pair is ONE change, not two.
+   * counter and a stepper. A modified pair is ONE change, not two. Stamped with
+   * the attempt it counts and never reported while a comparison is pending, so
+   * the host can't step through the previous document's changes.
    *
    * Reported rather than derived by the host because the host has a patch and
    * this component has the model — and the two disagree by design: a patch hunk
    * is a run of lines, a change here is a block the reader can point at.
    */
-  onChangeCount?: (count: number) => void;
+  onChangeCount?: (count: number, forAttempt: string) => void;
+}
+
+/**
+ * The largest document built synchronously during render.
+ *
+ * Below this the whole engine costs a few milliseconds — the issue's 9 KB
+ * README measured ~6 ms — which is less than a worker round trip plus the
+ * blank frame an asynchronous build puts between one file and the next. Above
+ * it, cost grows with the two full parses (~40 ms at 67 KB, 130-300 ms at
+ * 200-330 KB) and the build moves to the worker. Measured on the larger of the
+ * patch and the new side: one of the two always holds the whole document, and a
+ * modified file's patch can be tiny while its source is not.
+ */
+const IN_RENDER_BUILD_MAX_CHARS = 16 * 1024;
+
+function buildsInRender(diff: string, newSource: string | undefined): boolean {
+  return Math.max(diff.length, newSource?.length ?? 0) <= IN_RENDER_BUILD_MAX_CHARS;
+}
+
+/** An off-thread outcome, stamped with the exact inputs it was built from. */
+interface SettledBuild {
+  diff: string;
+  newSource: string | undefined;
+  status: GitStatus;
+  outcome: { kind: "result"; result: MarkdownDiffResult } | { kind: "error"; error: unknown };
 }
 
 /**
@@ -347,34 +384,71 @@ export function RenderedMarkdownDiff({
   cacheBust,
   fontSize,
   attemptKey,
+  requestKey,
   onVerdict,
   onChangeCount,
 }: RenderedMarkdownDiffProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   useScopedSelectAll(rootRef);
 
-  // Reconstruction, parsing and both LCS passes run here and nowhere else. The
-  // React Compiler memoizes component output, not synchronous work in a render
-  // body, so without this the whole pipeline would re-run on every keystroke
-  // that re-renders the panel.
-  const result = useMemo(
-    () => buildMarkdownDiff({ diff, newSource, status }),
-    [diff, newSource, status]
+  // Reconstruction, parsing and both LCS passes run in exactly one of two
+  // places. A small document builds here, memoized because the React Compiler
+  // memoizes component output, not synchronous work in a render body — without
+  // it the pipeline would re-run on every keystroke that re-renders the panel.
+  const inRender = buildsInRender(diff, newSource);
+  const inRenderResult = useMemo(
+    () => (inRender ? buildMarkdownDiff({ diff, newSource, status }) : null),
+    [inRender, diff, newSource, status]
   );
 
-  const reason = result.ok ? null : result.reason;
+  // A larger one builds on the worker. Its outcome is stamped with the inputs it
+  // was built from and read only while they are still the current ones, so a
+  // late answer for a previous file or patch can never stand in for this one.
+  const [settled, setSettled] = useState<SettledBuild | null>(null);
   useEffect(() => {
-    onVerdict?.(reason, attemptKey);
+    if (inRender) return;
+    const controller = new AbortController();
+    const settle = (outcome: SettledBuild["outcome"]) => {
+      if (!controller.signal.aborted) setSettled({ diff, newSource, status, outcome });
+    };
+    markdownDiffClient.build(requestKey, { diff, newSource, status }, controller.signal).then(
+      (result) => {
+        if (result) settle({ kind: "result", result });
+      },
+      (error: unknown) => settle({ kind: "error", error })
+    );
+    return () => controller.abort();
+  }, [inRender, requestKey, diff, newSource, status]);
+  const current =
+    settled?.diff === diff && settled.newSource === newSource && settled.status === status
+      ? settled.outcome
+      : null;
+
+  // Null while the worker is still building: no verdict and no count go up,
+  // because the host must not read a comparison it hasn't got as a successful
+  // or an identical one.
+  const result = inRenderResult ?? (current?.kind === "result" ? current.result : null);
+
+  const reason = result === null ? undefined : result.ok ? null : result.reason;
+  useEffect(() => {
+    if (reason !== undefined) onVerdict?.(reason, attemptKey);
   }, [onVerdict, reason, attemptKey]);
 
   const { sections, changeCount } = useMemo(
-    () => (result.ok ? toSections(result.model.changes) : { sections: [], changeCount: 0 }),
+    () => (result?.ok ? toSections(result.model.changes) : { sections: [], changeCount: 0 }),
     [result]
   );
 
+  const counted = result !== null;
   useEffect(() => {
-    onChangeCount?.(changeCount);
-  }, [onChangeCount, changeCount]);
+    if (!counted) return;
+    onChangeCount?.(changeCount, attemptKey);
+    // Withdrawn as soon as it stops describing what is mounted — on unmount, or
+    // as the next comparison starts. The host keys counts by attempt, and a
+    // refresh or a layout switch can remount this view on the very same attempt
+    // while its build is still pending; the old count must not come back with it.
+    return () => onChangeCount?.(0, attemptKey);
+  }, [onChangeCount, counted, changeCount, attemptKey]);
 
   // Which folded runs the reader has opened. Keyed by run id rather than index
   // so re-rendering the same document keeps them open; a new document produces
@@ -398,6 +472,12 @@ export function RenderedMarkdownDiff({
     fontSize === undefined
       ? undefined
       : { "--markdown-font-size": MARKDOWN_FONT_SIZE_TOKEN[fontSize] };
+
+  // An engine that throws reaches the pane's error boundary, as it did when it
+  // threw inside the render-time build.
+  if (current?.kind === "error") throw current.error;
+
+  if (result === null) return <RenderedMarkdownDiffSkeleton />;
 
   // The host swaps back to the source diff on the verdict; render nothing in
   // the frame between.

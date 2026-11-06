@@ -1,4 +1,4 @@
-// eager-import-allow: reads/writes the run-history ring via the lazy audit-logs store inside the persistence callbacks, invoked from runHistory IPC handlers (not at boot)
+// eager-import-allow: reads/writes the run-history ring in SQLite audit_rings inside the persistence callbacks, invoked from runHistory IPC handlers (not at boot)
 import type { RunHistoryRecord } from "../../../shared/types/ipc/runHistory.js";
 import { RUN_HISTORY_DEFAULT_MAX_RECORDS } from "../../../shared/types/ipc/runHistory.js";
 import { CHANNELS } from "../../ipc/channels.js";
@@ -12,8 +12,8 @@ import { RunHistoryLog } from "./runHistoryLog.js";
  * window's renderer, so the ring accumulates cross-window — a module-level
  * singleton, never per-window. The pure {@link RunHistoryLog} class lives in
  * `runHistoryLog.ts` (store-free, unit-testable); this thin wrapper wires it to
- * the audit-logs store (migration023 moved the ring out of config.json),
- * mirroring `forgeAuditService`.
+ * the `runHistoryRecords` ring in SQLite `audit_rings`, mirroring
+ * `forgeAuditService`.
  */
 function readRecords(): unknown {
   return auditRingStore.readAll("runHistoryRecords");

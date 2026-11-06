@@ -116,6 +116,8 @@ export interface ForgeCIStatusSummary {
 export type ForgeRepoMetadataPayload = RepoMetadata & {
   /** The provider implements `autoMerge` (arm or cancel "merge when ready"). */
   autoMergeSupported: boolean;
+  /** Display name of the provider that answered ("GitHub", "GitLab"), for copy that names the forge. */
+  providerName?: string;
 };
 
 /**
@@ -207,6 +209,14 @@ export interface ForgeRepositoryStats {
    * provider split the issue count off the code forge's.
    */
   repoKey?: string;
+  /**
+   * Where the provider's counts came from: a forge read (`network`), its
+   * short-lived memory cache, or its disk copy. Absent when the provider
+   * doesn't say. A replayed reading may predate one another host already
+   * reported, so a Shell lets it fill its shared record but never replace one
+   * (#15546).
+   */
+  countsSource?: "network" | "memory-cache" | "disk";
 }
 
 /**

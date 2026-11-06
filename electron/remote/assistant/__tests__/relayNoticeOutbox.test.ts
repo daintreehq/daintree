@@ -67,11 +67,15 @@ function harness() {
   };
 }
 
+/** The host's `lastStateChange` for the state a notice reports, on the host's clock. */
+const TRANSITION_AT = Date.parse("2026-10-18T09:58:12.345Z");
+
 const notice = (terminalId = "t-1", callId = "call-1"): RelayedNotice => ({
   helpSessionId: "help-1",
   callId,
   terminalId,
   observation: { kind: "state", state: "waiting", waitingReason: "prompt", handback: false },
+  lastTransitionAt: TRANSITION_AT,
 });
 
 const sentIds = (payloads: RelayNoticesPayload[]) =>
@@ -110,6 +114,7 @@ describe("RelayNoticeOutbox (#13500, #13930)", () => {
               waitingReason: "prompt",
               handback: false,
             },
+            lastTransitionAt: TRANSITION_AT,
           },
         ],
       },
@@ -192,7 +197,10 @@ describe("RelayNoticeOutbox (#13500, #13930)", () => {
       Promise.reject(Object.assign(new Error("lost"), { code: "OUTCOME_UNKNOWN" }))
     );
     h.attach(link.ctx);
-    h.outbox.enqueue("sender-a", [notice()]);
+    const queued = notice();
+    h.outbox.enqueue("sender-a", [queued]);
+    // Whatever becomes of the object handed in, the queued notice keeps what it said.
+    queued.lastTransitionAt = 0;
     await vi.advanceTimersByTimeAsync(0);
     expect(link.payloads).toHaveLength(1);
 
@@ -201,8 +209,22 @@ describe("RelayNoticeOutbox (#13500, #13930)", () => {
     h.attach(next.ctx);
     await vi.advanceTimersByTimeAsync(0);
     expect(sentIds(next.payloads)).toEqual(sentIds(link.payloads));
+    // The resend reports the state it was queued with, not whatever is current now.
+    expect(next.payloads[0]!.notices[0]!.lastTransitionAt).toBe(TRANSITION_AT);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(next.payloads).toHaveLength(1);
+    h.outbox.dispose();
+  });
+
+  it("sends a notice no transition matches with null, not a time of its own", async () => {
+    const h = harness();
+    const link = fakeSession("link-1");
+    h.attach(link.ctx);
+    h.outbox.enqueue("sender-a", [
+      { ...notice(), observation: { kind: "closed" }, lastTransitionAt: null },
+    ]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(link.payloads[0]!.notices[0]!.lastTransitionAt).toBeNull();
     h.outbox.dispose();
   });
 

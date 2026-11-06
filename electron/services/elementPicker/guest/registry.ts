@@ -98,6 +98,8 @@ export interface ExtractorHostApi {
   channel: string;
   framework: string;
   installed: boolean;
+  /** The markup the dev server served, read back by the host; only an extractor that asks for it gets it. */
+  served?: unknown;
 }
 
 interface Registry {

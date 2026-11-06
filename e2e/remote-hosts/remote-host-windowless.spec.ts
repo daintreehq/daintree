@@ -483,21 +483,29 @@ test.describe.serial("Remote hosts: a windowless Host started with --host-mode",
     await waitForTerminalText(last, "again=169", 30_000);
   });
 
-  test("5. a terminal lost in the windowless Host restart reads as ended, and restarts on the Host", async () => {
+  test("5. a restored terminal accepts input, exits, and restarts on the Host", async () => {
     const top = run.remotePage!;
     expect(run.firstTerminalId).toBeTruthy();
-    const lost = top.locator(`[data-panel-id="${run.firstTerminalId}"]`);
-    await waitForTerminalText(lost, "The host no longer has this terminal", 30_000);
-    await expect(lost.getByText("[exited]", { exact: true })).toBeVisible({ timeout: 10_000 });
+    const restored = top.locator(`[data-panel-id="${run.firstTerminalId}"]`);
+    // The Host now restores its saved shell. Prove this is live output, then
+    // end that process so the restart still exercises an ended remote pane.
+    await waitForTerminalReady(top, restored, 60_000);
+    await runTerminalCommand(top, restored, 'echo "restored=$((15*15))"');
+    await waitForTerminalText(restored, "restored=225", 30_000);
+    // A non-zero exit keeps the pane available for its restart action.
+    await runTerminalCommand(top, restored, "exit 7");
+    await expect(restored.getByText("[exit 7]", { exact: true })).toBeVisible({ timeout: 10_000 });
 
-    const overflowBtn = lost.locator(SEL.panel.overflowMenu).first();
-    await lost.hover();
+    const overflowBtn = restored.locator(SEL.panel.overflowMenu).first();
+    await restored.hover();
     await overflowBtn.click();
     await top.locator(SEL.panel.restart).first().click();
 
-    await expect(lost.getByText("[exited]", { exact: true })).toHaveCount(0, { timeout: 30_000 });
-    await waitForTerminalReady(top, lost, 60_000);
-    await runTerminalCommand(top, lost, 'echo "revived=$((14*14))"');
-    await waitForTerminalText(lost, "revived=196", 30_000);
+    await expect(restored.getByText("[exit 7]", { exact: true })).toHaveCount(0, {
+      timeout: 30_000,
+    });
+    await waitForTerminalReady(top, restored, 60_000);
+    await runTerminalCommand(top, restored, 'echo "revived=$((14*14))"');
+    await waitForTerminalText(restored, "revived=196", 30_000);
   });
 });

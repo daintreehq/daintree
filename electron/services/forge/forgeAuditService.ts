@@ -1,4 +1,4 @@
-// eager-import-allow: reads/writes the forgeAudit store key via store.get/set inside the audit callbacks, invoked from forge IPC handlers (not at boot)
+// eager-import-allow: reads/writes the forgeAudit config flags via store.get/set inside the audit callbacks, invoked from forge IPC handlers (not at boot)
 import type { ForgeAuditResult, ForgeProviderMethodName } from "../../../shared/types/ipc/forge.js";
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "../../../shared/types/ipc/forge.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -14,8 +14,9 @@ export { summarizeForgeArgs } from "./auditLog.js";
  * any window's IPC, so the audit ring accumulates cross-window — a module-level
  * singleton, never per-window (lesson #4624). The pure {@link ForgeAuditService}
  * class lives in `auditLog.ts` (store-free, unit-testable); this thin wrapper
- * wires it to the `forgeAudit` store key, mirroring `McpServerService`'s
- * separation of the class from its persistence callbacks.
+ * wires its flags to the `forgeAudit` config.json slice and its ring to SQLite
+ * `audit_rings`, mirroring `McpServerService`'s separation of the class from
+ * its persistence callbacks.
  */
 const FORGE_AUDIT_CONFIG_DEFAULTS = {
   auditEnabled: true,
@@ -29,16 +30,16 @@ function getConfig(): Record<string, unknown> {
 }
 
 function persistConfig(patch: Record<string, unknown>): void {
-  // Flags only — the ring is persisted via `forgeAuditLogStore` since
-  // migration023. The spread merge keeps a legacy `auditLog` carryover intact
-  // for installs where the migration deferred (audit-logs store not durable).
+  // Flags only — the ring is persisted via `forgeAuditLogStore`. The spread
+  // merge keeps a legacy `auditLog` carryover intact until the boot import
+  // (legacyAuditRingImport) moves it into SQLite.
   const current = store.get("forgeAudit") ?? FORGE_AUDIT_CONFIG_DEFAULTS;
   store.set("forgeAudit", { ...current, ...patch });
 }
 
-// Persists the ring in the dedicated audit-logs store so config.json stays
-// small and audit appends never re-serialize it. `auditEnabled` /
-// `auditMaxRecords` stay in config.json (`forgeAudit`).
+// Persists the ring in SQLite `audit_rings` so config.json stays small and
+// audit appends never re-serialize it. `auditEnabled` / `auditMaxRecords` stay
+// in config.json (`forgeAudit`).
 const forgeAuditLogStore: ForgeAuditLogStore = {
   read: () => auditRingStore.readAll("forgeAuditLog"),
   write: (records, options) =>

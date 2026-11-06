@@ -95,6 +95,7 @@ import {
   activateProjectOnHost,
   getHostResidentProject,
   isProjectHeldOnHost,
+  noteRemoteSwitchOnHost,
   releaseProjectOnHost,
 } from "../ProjectSwitchService.js";
 import {
@@ -629,6 +630,21 @@ describe("Host activation for a remote view", () => {
     await vi.waitFor(() => expect(pluginServiceMock.onProjectOpened).toHaveBeenCalledTimes(2));
     expect(pluginServiceMock.onProjectOpened).toHaveBeenNthCalledWith(2, "project-new", "/tmp/new");
     expect(ws.loadProject).toHaveBeenCalledTimes(1);
+  });
+
+  it("records a switch's plugin open, status and MRU without holding it for any view", async () => {
+    noteRemoteSwitchOnHost(project);
+
+    await vi.waitFor(() =>
+      expect(pluginServiceMock.onProjectOpened).toHaveBeenCalledWith("project-new", "/tmp/new")
+    );
+    expect(projectStoreMock.recordRemoteActivation).toHaveBeenCalledWith("project-new");
+    expect(sendToRendererMock).toHaveBeenCalledWith(
+      CHANNELS.PROJECT_UPDATED,
+      expect.objectContaining({ id: "project-new" })
+    );
+    expect(getHostResidentProject(-4)).toBeNull();
+    expect(projectStoreMock.setCurrentProject).not.toHaveBeenCalled();
   });
 
   it("drops residency when the load fails so a retry starts over", async () => {

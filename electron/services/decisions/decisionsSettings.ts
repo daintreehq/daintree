@@ -1,0 +1,250 @@
+import {
+  DECISIONS_MODEL_ADAPTERS,
+  DECISIONS_SETUP_CHECK_STEPS,
+  type DecisionsModelAdapter,
+  type DecisionsRecoveryKitRecord,
+  type DecisionsSettings,
+  type DecisionsSetupCheckRecord,
+  type DecisionsSetupCheckStep,
+} from "../../../shared/types/decisions.js";
+import {
+  DEFAULT_QUESTION_EXPIRY_MS,
+  isQuestionExpiryChoice,
+} from "../../../shared/config/decisionsQuestionExpiry.js";
+import { askHumanAgentIds } from "../../../shared/config/decisionsAskHumanAgents.js";
+
+/** The relay protocol's id shape: what a relay mints for installations and devices. */
+const RELAY_ID = /^[A-Za-z0-9_-]{8,64}$/;
+
+const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1"]);
+
+/** Plain http to this computer, the one http relay the client library accepts: one under development. */
+export function isLoopbackHttp(url: URL): boolean {
+  return url.protocol === "http:" && LOOPBACK_HOSTNAMES.has(url.hostname);
+}
+
+/** The slice of the settings store these touch; the app's `store` is one. */
+export interface DecisionsStore {
+  get(key: "decisions"): unknown;
+  set(key: "decisions", value: DecisionsSettings): void;
+}
+
+export function defaultDecisionsSettings(): DecisionsSettings {
+  return {
+    enabled: false,
+    relayOrigin: null,
+    installationId: null,
+    deviceId: null,
+    hostId: null,
+    proxyAllowlisted: false,
+    defaultQuestionExpiryMs: DEFAULT_QUESTION_EXPIRY_MS,
+    consentedAt: null,
+    revokedAt: null,
+    recoveryKit: null,
+    autoEnrollHosts: true,
+    setupCheck: null,
+    modelLearning: false,
+    modelAdapter: null,
+    modelConsentedAt: null,
+    askHumanAgents: [],
+    terminalSnapshots: false,
+    terminalSnapshotsConsentedAt: null,
+  };
+}
+
+/**
+ * A relay origin the client library would accept, reduced to the origin: https,
+ * or plain http on loopback for a relay under development. Anything else, a
+ * path, query or userinfo included, never survives a load.
+ */
+export function normalizeRelayOrigin(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  let url: URL;
+  try {
+    url = new URL(value.trim());
+  } catch {
+    return null;
+  }
+  const secure = url.protocol === "https:";
+  if (!secure && !isLoopbackHttp(url)) return null;
+  return url.origin;
+}
+
+/** A consent or revocation time is a positive epoch-ms number; anything else is none. */
+export function consentTime(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
+/** An id in the shape a relay mints, so the setting's sanitiser keeps it. */
+export function isRelayId(value: unknown): value is string {
+  return typeof value === "string" && RELAY_ID.test(value);
+}
+
+function relayId(value: unknown): string | null {
+  return isRelayId(value) ? value : null;
+}
+
+/**
+ * A recovery kit verification that reads whole and names the identity the
+ * setting records; anything else is no verification, which leaves setup
+ * unfinished without turning Decisions off.
+ */
+function recoveryKitRecord(
+  value: unknown,
+  identity: Pick<DecisionsSettings, "relayOrigin" | "installationId" | "deviceId">
+): DecisionsRecoveryKitRecord | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const record = value as Partial<Record<keyof DecisionsRecoveryKitRecord, unknown>>;
+  const verifiedAt = consentTime(record.verifiedAt);
+  const relayOrigin = normalizeRelayOrigin(record.relayOrigin);
+  if (
+    verifiedAt === null ||
+    relayOrigin === null ||
+    relayOrigin !== identity.relayOrigin ||
+    record.installationId !== identity.installationId ||
+    record.deviceId !== identity.deviceId ||
+    !isRelayId(record.installationId) ||
+    !isRelayId(record.deviceId)
+  ) {
+    return null;
+  }
+  return {
+    verifiedAt,
+    relayOrigin,
+    installationId: record.installationId,
+    deviceId: record.deviceId,
+  };
+}
+
+type RecordedRelay = Pick<DecisionsSettings, "relayOrigin" | "installationId" | "deviceId">;
+
+/** Whether a record's relay and ids are the identity the setting records, read whole. */
+function namesIdentity(
+  record: { relayOrigin?: unknown; installationId?: unknown; deviceId?: unknown },
+  identity: RecordedRelay
+): record is { relayOrigin: string; installationId: string; deviceId: string } {
+  const relayOrigin = normalizeRelayOrigin(record.relayOrigin);
+  return (
+    relayOrigin !== null &&
+    relayOrigin === identity.relayOrigin &&
+    record.installationId === identity.installationId &&
+    record.deviceId === identity.deviceId &&
+    isRelayId(record.installationId) &&
+    isRelayId(record.deviceId)
+  );
+}
+
+/** One of the CLIs the decision model knows by name; anything else is none chosen. */
+function modelAdapter(value: unknown): DecisionsModelAdapter | null {
+  return (DECISIONS_MODEL_ADAPTERS as readonly unknown[]).includes(value)
+    ? (value as DecisionsModelAdapter)
+    : null;
+}
+
+function isSetupCheckStep(value: unknown): value is DecisionsSetupCheckStep {
+  return (DECISIONS_SETUP_CHECK_STEPS as readonly unknown[]).includes(value);
+}
+
+/**
+ * A finished setup check (#16024) that reads whole and names the identity
+ * the setting records; anything else is no check, which leaves setup
+ * unfinished without turning Decisions off.
+ */
+function setupCheckRecord(
+  value: unknown,
+  identity: RecordedRelay
+): DecisionsSetupCheckRecord | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const record = value as Partial<Record<keyof DecisionsSetupCheckRecord, unknown>>;
+  const checkedAt = consentTime(record.checkedAt);
+  const failedStep =
+    record.failedStep === null
+      ? null
+      : isSetupCheckStep(record.failedStep)
+        ? record.failedStep
+        : undefined;
+  if (checkedAt === null || failedStep === undefined || !namesIdentity(record, identity)) {
+    return null;
+  }
+  return {
+    checkedAt,
+    relayOrigin: normalizeRelayOrigin(record.relayOrigin)!,
+    installationId: record.installationId,
+    deviceId: record.deviceId,
+    failedStep,
+  };
+}
+
+/** Absent is a relay not set up yet; anything else that didn't read is damage. */
+function unreadable(value: unknown, read: string | null): boolean {
+  return value !== undefined && value !== null && read === null;
+}
+
+/**
+ * What was on disk, with anything malformed read as its default and anything
+ * unknown dropped, so a value nobody declared (a secret included) never
+ * survives a rewrite. A relay origin or id that is there but unreadable turns
+ * Decisions off; an unread one is just not set up yet. Never throws.
+ */
+export function sanitizeDecisionsSettings(raw: unknown): DecisionsSettings {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return defaultDecisionsSettings();
+  }
+  const value = raw as Partial<Record<keyof DecisionsSettings, unknown>>;
+  const relayOrigin = normalizeRelayOrigin(value.relayOrigin);
+  const installationId = relayId(value.installationId);
+  const deviceId = relayId(value.deviceId);
+  const hostId = relayId(value.hostId);
+  const damaged =
+    unreadable(value.relayOrigin, relayOrigin) ||
+    unreadable(value.installationId, installationId) ||
+    unreadable(value.deviceId, deviceId) ||
+    unreadable(value.hostId, hostId);
+  // A revocation belongs to the identity it was observed for, so it goes with
+  // the relay's ids; without them there is nothing it could still refer to.
+  const identified = relayOrigin !== null && installationId !== null && deviceId !== null;
+  const modelConsentedAt = consentTime(value.modelConsentedAt);
+  const terminalSnapshotsConsentedAt = consentTime(value.terminalSnapshotsConsentedAt);
+  return {
+    enabled: value.enabled === true && !damaged,
+    relayOrigin,
+    installationId,
+    deviceId,
+    hostId,
+    proxyAllowlisted: value.proxyAllowlisted === true,
+    // Only a choice Settings offers survives, so the library never refuses one; null is "never".
+    defaultQuestionExpiryMs: isQuestionExpiryChoice(value.defaultQuestionExpiryMs)
+      ? value.defaultQuestionExpiryMs
+      : DEFAULT_QUESTION_EXPIRY_MS,
+    consentedAt: consentTime(value.consentedAt),
+    revokedAt: identified ? consentTime(value.revokedAt) : null,
+    recoveryKit: recoveryKitRecord(value.recoveryKit, { relayOrigin, installationId, deviceId }),
+    // On unless turned off: a setting saved before the field existed enrolls.
+    autoEnrollHosts: value.autoEnrollHosts !== false,
+    setupCheck: setupCheckRecord(value.setupCheck, { relayOrigin, installationId, deviceId }),
+    // Learning keeps the person's answers, so it is on only once they agreed to that.
+    modelLearning: value.modelLearning === true && modelConsentedAt !== null,
+    modelAdapter: modelAdapter(value.modelAdapter),
+    modelConsentedAt,
+    askHumanAgents: askHumanAgentIds(value.askHumanAgents),
+    // Snapshots send what is on a screen, so they are on only once the person
+    // agreed to that; Decisions' own consent doesn't cover them.
+    terminalSnapshots: value.terminalSnapshots === true && terminalSnapshotsConsentedAt !== null,
+    terminalSnapshotsConsentedAt,
+  };
+}
+
+/** The setting as every reader sees it. Reading never writes. */
+export function readDecisionsSettings(store: DecisionsStore): DecisionsSettings {
+  return sanitizeDecisionsSettings(store.get("decisions"));
+}
+
+/** Replaces the whole setting with its sanitised form, and returns what was stored. */
+export function writeDecisionsSettings(
+  store: DecisionsStore,
+  next: DecisionsSettings
+): DecisionsSettings {
+  const stored = sanitizeDecisionsSettings(next);
+  store.set("decisions", stored);
+  return stored;
+}

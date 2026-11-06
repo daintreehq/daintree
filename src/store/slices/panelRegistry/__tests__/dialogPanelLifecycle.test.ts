@@ -65,6 +65,7 @@ vi.mock("../../../persistence/panelPersistence", () => ({
 const { usePanelStore } = await import("../../../panelStore");
 const { usePanelLimitStore } = await import("../../../panelLimitStore");
 const { countPanelsTowardLimit } = await import("../panelCount");
+const { reservePanelSlots } = await import("../panelSlotReservations");
 
 function makeFilePanel(id: string, overrides: Partial<FilePanelData> = {}): PanelInstance {
   return {
@@ -230,6 +231,21 @@ describe("dialog panel ephemeral lifecycle", () => {
       expect(notifyMock).toHaveBeenCalledWith(
         expect.objectContaining({ title: "Panel limit reached" })
       );
+    });
+
+    it("refuses to take a slot a spawn in flight was granted (#15607)", () => {
+      usePanelLimitStore.setState({ hardLimit: 2 });
+      seed([
+        makeFilePanel("grid-1"),
+        makeFilePanel("dialog-1", { location: "dialog", excludeFromPersistence: true }),
+      ]);
+      const grant = reservePanelSlots(1);
+
+      expect(usePanelStore.getState().promoteDialogPanelToGrid("dialog-1")).toBe(false);
+      expect(usePanelStore.getState().panelsById["dialog-1"]?.location).toBe("dialog");
+
+      grant.release();
+      expect(usePanelStore.getState().promoteDialogPanelToGrid("dialog-1")).toBe(true);
     });
 
     it("refuses a non-file dialog without calling it a file (#11666)", () => {

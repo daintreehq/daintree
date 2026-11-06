@@ -214,6 +214,48 @@ describe("Terminal Entry Validation Schemas", () => {
         expect(result.success && result.data.spawnedBy).toBeUndefined();
       });
 
+      // #15977 — a scheduled run's ids ride beside the source; a malformed pair
+      // costs the attribution, never the pane.
+      it("keeps a scheduled run's ids, and drops ones that don't read without failing the entry", () => {
+        const run = { scheduleId: "schedule-1", runId: "run-1" };
+        const kept = TerminalSnapshotSchema.safeParse({
+          ...base,
+          spawnedBy: "schedule",
+          scheduledRun: run,
+        });
+        expect(kept.success && kept.data).toMatchObject({
+          spawnedBy: "schedule",
+          scheduledRun: run,
+        });
+
+        const absent = TerminalSnapshotSchema.safeParse(base);
+        expect(absent.success && "scheduledRun" in absent.data).toBe(false);
+
+        for (const scheduledRun of [{ scheduleId: "schedule-1" }, "run-1", { runId: 7 }]) {
+          const result = TerminalSnapshotSchema.safeParse({
+            ...base,
+            spawnedBy: "schedule",
+            scheduledRun,
+          });
+          expect(result.success).toBe(true);
+          expect(result.success && result.data.scheduledRun).toBeUndefined();
+        }
+
+        const global = AppStateTerminalEntrySchema.safeParse({
+          ...base,
+          spawnedBy: "schedule",
+          scheduledRun: run,
+        });
+        expect(global.success && global.data.scheduledRun).toEqual(run);
+        const brokenGlobal = AppStateTerminalEntrySchema.safeParse({
+          ...base,
+          spawnedBy: "schedule",
+          scheduledRun: { scheduleId: "schedule-1" },
+        });
+        expect(brokenGlobal.success).toBe(true);
+        expect(brokenGlobal.success && brokenGlobal.data.scheduledRun).toBeUndefined();
+      });
+
       it("normalizes the spawn source on the legacy global entry schema too", () => {
         const globalBase = { id: "g1", title: "Terminal", cwd: "/Users/test", location: "grid" };
         const valid = AppStateTerminalEntrySchema.safeParse({
@@ -821,5 +863,29 @@ describe("portable project plugin kinds (#12280)", () => {
     expect(
       TerminalSnapshotSchema.safeParse({ ...projectPanel, kindRef: { origin: "project" } }).success
     ).toBe(true);
+  });
+});
+
+describe("panel persona emoji (#16213)", () => {
+  const panel = {
+    id: "t1",
+    title: "Claude",
+    kind: "terminal",
+    cwd: "/repo",
+    location: "grid",
+  };
+
+  it("keeps one emoji as saved, and adds none to a panel that has none", () => {
+    const parsed = TerminalSnapshotSchema.safeParse({ ...panel, displayEmoji: "👩‍💻" });
+    expect(parsed.success && parsed.data.displayEmoji).toBe("👩‍💻");
+    const bare = TerminalSnapshotSchema.safeParse(panel);
+    expect(bare.success).toBe(true);
+    expect(bare.success && "displayEmoji" in bare.data).toBe(false);
+  });
+
+  it.each([42, "fox", "🦊🐶"])("drops a damaged emoji %j and keeps the panel", (displayEmoji) => {
+    const parsed = TerminalSnapshotSchema.safeParse({ ...panel, displayEmoji });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.displayEmoji).toBeUndefined();
   });
 });

@@ -3,6 +3,9 @@ import {
   hexToRgb,
   hexToLinear,
   contrastRatio,
+  contrastRatioFromLuminance,
+  relativeLuminance,
+  relativeLuminanceOfRgb,
   parseRgba,
   blendOverBackground,
 } from "./contrast.js";
@@ -120,18 +123,13 @@ function oklabToLinear(L: number, a: number, b: number): [number, number, number
 
 const inGamut = (channels: number[]) => channels.every((c) => c >= -1e-4 && c <= 1 + 1e-4);
 
-function linearToHexByte(value: number): string {
+function linearToByte(value: number): number {
   const c = value <= 0.0031308 ? value * 12.92 : 1.055 * value ** (1 / 2.4) - 0.055;
-  return Math.round(Math.min(1, Math.max(0, c)) * 255)
-    .toString(16)
-    .padStart(2, "0");
+  return Math.round(Math.min(1, Math.max(0, c)) * 255);
 }
 
-/**
- * The hex for an OKLCH colour, keeping as much of its chroma as sRGB can show
- * at that lightness and hue. The inverse of `hexToOklch`.
- */
-export function oklchToHex({ l, c, h }: OklchColor): string {
+/** The 0–255 channels `oklchToHex` spells, so a search can measure them unformatted. */
+function oklchToRgb({ l, c, h }: OklchColor): [number, number, number] {
   const a = c * Math.cos((h * Math.PI) / 180);
   const b = c * Math.sin((h * Math.PI) / 180);
   let keep = 1;
@@ -145,8 +143,17 @@ export function oklchToHex({ l, c, h }: OklchColor): string {
     }
     keep = lo;
   }
-  return `#${oklabToLinear(l, a * keep, b * keep)
-    .map(linearToHexByte)
+  const [red, green, blue] = oklabToLinear(l, a * keep, b * keep);
+  return [linearToByte(red), linearToByte(green), linearToByte(blue)];
+}
+
+/**
+ * The hex for an OKLCH colour, keeping as much of its chroma as sRGB can show
+ * at that lightness and hue. The inverse of `hexToOklch`.
+ */
+export function oklchToHex(color: OklchColor): string {
+  return `#${oklchToRgb(color)
+    .map((channel) => channel.toString(16).padStart(2, "0"))
     .join("")}`;
 }
 
@@ -178,16 +185,22 @@ export function liftToContrast(
 ): string {
   const start = OPAQUE_HEX.test(ink.trim()) ? hexToOklch(ink.trim()) : null;
   if (!start) return ink;
-  const reads = (hex: string) =>
-    backdrops.every((backdrop) => contrastRatio(hex, backdrop) >= minimum);
-  if (reads(ink.trim())) return ink;
-  const at = (l: number) => oklchToHex({ ...start, l });
+  // Every built-in theme runs this search at module load, ~60 candidates
+  // against up to 60 backdrops, so each luminance is taken once and candidates
+  // are measured as bytes, never formatted to hex and parsed back (#15673).
+  const backdropLuminances = backdrops.map(relativeLuminance);
+  const clears = (luminance: number) =>
+    backdropLuminances.every(
+      (backdrop) => contrastRatioFromLuminance(luminance, backdrop) >= minimum
+    );
+  if (clears(relativeLuminance(ink.trim()))) return ink;
+  const reads = (l: number) => clears(relativeLuminanceOfRgb(...oklchToRgb({ ...start, l })));
   const end = type === "dark" ? 1 : 0;
   let near = start.l;
   let far: number | null = null;
   for (let step = 1; step <= LIFT_SCAN_STEPS; step++) {
     const l = start.l + ((end - start.l) * step) / LIFT_SCAN_STEPS;
-    if (reads(at(l))) {
+    if (reads(l)) {
       far = l;
       break;
     }
@@ -197,10 +210,10 @@ export function liftToContrast(
   let pass = far;
   for (let step = 0; step < 24; step++) {
     const mid = (near + pass) / 2;
-    if (reads(at(mid))) pass = mid;
+    if (reads(mid)) pass = mid;
     else near = mid;
   }
-  return at(pass);
+  return oklchToHex({ ...start, l: pass });
 }
 
 // --- Distance ---

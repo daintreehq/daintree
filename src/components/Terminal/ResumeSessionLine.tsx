@@ -1,5 +1,4 @@
 import { useMemo } from "react";
-import { History } from "@/components/icons";
 import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
 import { actionService } from "@/services/ActionService";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -35,6 +34,9 @@ export function ResumeSessionLine() {
 
   const primary = resumable[0];
   const extraCount = resumable.length - 1;
+  const meta = primary
+    ? [primary.location, primary.modelName].filter((part): part is string => !!part).join(" · ")
+    : "";
 
   if (!hasLoaded || !primary) return null;
 
@@ -45,11 +47,10 @@ export function ResumeSessionLine() {
   };
 
   return (
-    // Hugs its content (centered) rather than stretching to the column width —
-    // a stretched row strands "+N more" at the far edge, visually orphaned
-    // from the session it extends. The width cap now comes from the launcher
-    // column, which owns the single measure every band shares.
-    <div className="flex w-full items-center justify-center gap-1">
+    // Left-aligned on the column's edge, like the chip row above and the pulse
+    // strip below. The `px-3` inset puts the agent glyph on the same line as the
+    // chips' glyphs and the pulse strip's; "+N more…" takes the right edge.
+    <div className="flex w-full min-w-0 items-center justify-start gap-1">
       {/* Persistent and hoverable: this discloses clipped content rather than
           a transient hint, so the app-wide 2.5s auto-dismiss and the
           non-hoverable default would take it away mid-read (WCAG 2.2
@@ -70,36 +71,44 @@ export function ResumeSessionLine() {
             // and risk breaking Label in Name. Below the narrow breakpoint the
             // description is dropped from the row entirely, and the tooltip is
             // then the only place it survives.
-            className="group flex min-w-0 cursor-pointer items-center gap-2.5 rounded-[var(--radius-md)] px-2.5 py-1.5 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+            className="group flex h-8 min-w-0 cursor-pointer items-center gap-2.5 rounded-[var(--radius-md)] px-3 text-left transition-colors hover:bg-overlay-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
           >
-            <History className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
             <span className="shrink-0">
               <PanelKindIcon iconId={primary.iconId} color={primary.color} size={15} />
-              <span className="sr-only">{primary.agentName} </span>
             </span>
-            <span className="truncate text-sm text-text-secondary group-hover:text-text-primary">
-              {primary.name}
-            </span>
-            {primary.description && (
-              // Shrinkable (no shrink-0): a long worktree/branch description must
-              // truncate inside the column's measure, not push the row past it.
-              //
-              // And below the launcher's narrow breakpoint it is dropped outright.
-              // Sharing the row down there truncated BOTH halves at once — a task
-              // title cut mid-word beside a model name cut mid-word, neither of
-              // them readable. The title is what identifies the session; the model
-              // and location are still on the row this line opens.
-              <span className="min-w-0 truncate text-xs text-text-secondary @max-[31rem]/launcher:hidden">
-                {primary.description}
+            {/* The title is what identifies the session, so it is the one thing
+                here in primary ink, and it has first claim on the width. */}
+            <span className="min-w-0 truncate text-sm text-text-primary">{primary.name}</span>
+            {/* The agent, for a listener, after the label rather than before it
+                ("Claude Resume: …" stuttered), and only when the label does not
+                already name it ("Resume Claude session"). */}
+            {!primary.name.includes(primary.agentName) && (
+              <span className="sr-only">, {primary.agentName}</span>
+            )}
+            {/* Recency first and never clipped: it is what tells this session
+                from last Tuesday's, and as the description's last token it was
+                the first thing truncation threw away. */}
+            <span className="shrink-0 text-xs text-text-secondary">{primary.timeAgo}</span>
+            {meta && (
+              // Zero basis, growing into what the title and the time leave, so
+              // it can never take width from either; the tooltip carries it
+              // whole. Below the launcher's narrow breakpoint it is dropped
+              // outright rather than truncating both halves of the row at once.
+              <span className="-ml-1 min-w-0 flex-[1_1_0%] truncate text-xs text-text-secondary @max-[31rem]/launcher:hidden">
+                <span aria-hidden="true" className="mr-1.5">
+                  ·
+                </span>
+                {meta}
               </span>
             )}
           </button>
         </TooltipTrigger>
         <TooltipContent side="top">
           <span className="font-medium">{primary.name}</span>
-          {primary.description && (
-            <span className="ml-1 text-text-secondary">{primary.description}</span>
-          )}
+          {/* The row's own order: recency, then where and with what. */}
+          <span className="ml-1 text-text-secondary">
+            {[primary.timeAgo, meta].filter(Boolean).join(" · ")}
+          </span>
         </TooltipContent>
       </Tooltip>
       {extraCount > 0 && (
@@ -107,15 +116,19 @@ export function ResumeSessionLine() {
           variant="ghost"
           size="sm"
           onClick={openLauncher}
-          className="shrink-0 px-2"
+          // `ml-auto`: on the column's right edge in every state, where the
+          // surface keeps each band's secondary action (Manage recipes, the
+          // pulse's counts). Left to follow the description it landed wherever
+          // the strings ended, and read as one more fact about the session.
+          className="ml-auto h-8 shrink-0 px-2"
           // Opens with the visible string verbatim, `+` included. WCAG 2.2
           // SC 2.5.3 (Label in Name) wants what is on the control to appear in
           // its accessible name, so a speech-input user can say what they read;
           // "Browse 2 more resumable sessions" contained "2 more" but not
           // "+2 more", and the control they can see is the one they cannot say.
-          aria-label={`+${extraCount} more — browse resumable ${pluralNoun(extraCount, "session")}`}
+          aria-label={`+${extraCount} more… — browse resumable ${pluralNoun(extraCount, "session")}`}
         >
-          +{extraCount} more
+          +{extraCount} more…
         </Button>
       )}
     </div>

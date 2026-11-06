@@ -20,7 +20,11 @@ import {
   createDaintreeTokens,
   normalizeAppColorScheme,
 } from "../themes.js";
-import { RED_GREEN_OVERRIDES, BLUE_YELLOW_OVERRIDES } from "../colorVisionOverrides.js";
+import {
+  RED_GREEN_OVERRIDES,
+  BLUE_YELLOW_OVERRIDES,
+  getColorVisionWrites,
+} from "../colorVisionOverrides.js";
 import { APP_THEME_TOKEN_KEYS, EXTENSION_KEYS, type AppThemeTokenKey } from "../types.js";
 
 // Minimal hex-only engine input covering createDaintreeTokens' required Pick.
@@ -976,13 +980,9 @@ describe("border-input", () => {
 
   // `TypedNameConfirmInput` puts its field in a `bg-status-danger/10` well on the
   // dialog surface. On a dark theme the wash lifts that surface toward the edge,
-  // and the colour-vision overrides swap `status-danger` app-wide, so the well
-  // has to hold under them too.
+  // and the colour-vision modes swap `status-danger` app-wide, so the well has
+  // to hold under the danger ink each mode writes on this theme too.
   const DANGER_WELL_ALPHA = 0.1;
-  const COLOR_VISION_OVERRIDES = {
-    "red-green": RED_GREEN_OVERRIDES,
-    "blue-yellow": BLUE_YELLOW_OVERRIDES,
-  };
   const dialogSurface = (scheme: (typeof BUILT_IN_APP_SCHEMES)[number]) => {
     const ref = APP_THEME_POLARITY_VARIABLES[scheme.type]["--theme-surface-dialog"];
     const token = ref?.match(/^var\(--theme-([a-z-]+)\)$/)?.[1];
@@ -994,9 +994,11 @@ describe("border-input", () => {
     "clears 3:1 on $id inside the destructive-confirm well",
     (scheme) => {
       const dangers: Array<[string, string]> = [["status-danger", scheme.tokens["status-danger"]]];
-      for (const [mode, overrides] of Object.entries(COLOR_VISION_OVERRIDES)) {
-        const danger = overrides["--theme-status-danger"];
-        if (danger) dangers.push([`${mode} status-danger`, danger]);
+      for (const mode of ["red-green", "blue-yellow"] as const) {
+        const danger =
+          getColorVisionWrites(mode, scheme)["--theme-status-danger"] ??
+          scheme.tokens["status-danger"];
+        dangers.push([`${mode} status-danger`, danger]);
       }
       for (const [label, danger] of dangers) {
         const well = blendOverBackground(danger, dialogSurface(scheme), DANGER_WELL_ALPHA);

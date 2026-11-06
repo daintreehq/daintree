@@ -2,6 +2,15 @@ import { describe, expect, it } from "vitest";
 import { extractNoticeReply, extractReply } from "../noticeReply.js";
 
 describe("extracting a reply", () => {
+  it("marks the suggested next prompt of the agent the screen is read for (#16189)", () => {
+    const screen = "⏺ Merged.\r\n────────\r\n❯ \x1b[2mmerge #2079 when green\x1b[22m\r\n────────";
+    expect(extractReply(screen, 10, false, undefined, "claude").reply?.text).toBe(
+      "⏺ Merged.\n────────\n❯ [suggested by Claude Code: merge #2079 when green]\n────────"
+    );
+    // With no agent named there is no rule to read the box by.
+    expect(extractReply(screen, 10, false).reply?.text).toContain("❯ merge #2079 when green");
+  });
+
   it("ends the quote at the agent's handback marker, dropping the chrome below", () => {
     const screen = [
       "› Tell me a fact. End with: DAINTREE-DONE-abc123: <summary> END-abc123",
@@ -106,6 +115,54 @@ describe("extracting a reply", () => {
     const extracted = extractReply(screen, 40, true);
     expect(extracted.reachedHandback).toBe(true);
     expect(extracted.reply?.text.endsWith("Voted A END-abc123")).toBe(true);
+  });
+
+  it("ends the quote at a needs-you marker as at a done one (#16190)", () => {
+    const screen = [
+      "• Pushed. The deploy job waits for a reviewer.",
+      "DAINTREE-NEEDS-YOU-abc123: approve the deployment END-abc123",
+      "",
+      "› Ask Codex to do anything",
+    ].join("\n");
+    const extracted = extractReply(screen, 40, {
+      message: "approve the deployment",
+      code: "abc123",
+    });
+    expect(extracted.reachedHandback).toBe(true);
+    expect(extracted.reply?.text.endsWith("approve the deployment END-abc123")).toBe(true);
+  });
+
+  it("ends at a marker wrapped at any of its hyphens, the way Codex wraps", () => {
+    const marker = "DAINTREE-NEEDS-YOU-abc123: sign in to gh END-abc123";
+    for (const cut of [
+      "DAINTREE-".length,
+      "DAINTREE-NEEDS-".length,
+      "DAINTREE-NEEDS-YOU-".length,
+    ]) {
+      const screen = [
+        "• Sign in with gh auth login, then tell me.",
+        marker.slice(0, cut),
+        `  ${marker.slice(cut)}`,
+        "› Ask",
+      ].join("\n");
+      const extracted = extractReply(screen, 40, { message: "sign in to gh", code: "abc123" });
+      expect(extracted.reachedHandback, marker.slice(0, cut)).toBe(true);
+      expect(extracted.reply?.text.startsWith("• Sign in")).toBe(true);
+      expect(extracted.reply?.text).not.toContain("› Ask");
+    }
+  });
+
+  it("never takes a marker below the closing one as its opening", () => {
+    const screen = [
+      "• Reply.",
+      "DAINTREE-DONE-abc123: shipped the",
+      "  fix END-abc123",
+      "  ⠋ DAINTREE-DONE-abc123: shipped",
+      "› Ask",
+    ].join("\n");
+    const extracted = extractReply(screen, 40, { message: "shipped the fix", code: "abc123" });
+    expect(extracted.reachedHandback).toBe(true);
+    expect(extracted.reply?.text.endsWith("fix END-abc123")).toBe(true);
   });
 
   it("tells two turns with the same summary apart by the marker's code", () => {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { HostWorktreeEntry } from "@shared/types/ipc/hostMetrics";
 import type { HostMenuRow } from "../hostModel";
 import type { ProjectHost } from "../projectHosts";
@@ -98,7 +98,14 @@ describe("hostRowTooltip", () => {
       { connection: { status: "disconnected" }, lastSeenAt: NOW - 3 * 3_600_000 },
       { away: "Not connected" }
     );
-    expect(hostRowLabel(host, null)).toBe("studio-01, not connected");
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(NOW);
+      // The row shows no words for a dropped link, so its spoken name carries the last sighting too.
+      expect(hostRowLabel(host, null)).toBe("studio-01, not connected · last seen 3 hours ago");
+    } finally {
+      vi.useRealTimers();
+    }
     expect(hostRowTooltip(host, summarizeHostProject(entries), "Cmd", NOW).lines).toEqual([
       "Not connected · last seen 3 hours ago",
     ]);

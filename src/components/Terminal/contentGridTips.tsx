@@ -14,6 +14,19 @@ import type { BuiltInAgentId } from "@shared/config/agentIds";
 // HCI: surface 3–5 unlearned tips at a time; 4 balances variety vs cognitive load.
 const ROTATING_TIP_SUBSET_SIZE = 4;
 
+// Tips the canvas home never rotates in. Most teach a control the same screen
+// already prints: the palette's ⌘N, the New terminal chip, the agent chips with
+// their chords, and the recipe band's own Create and Manage. One acts on the
+// focused terminal, which a grid with no panels does not have.
+const CANVAS_HOME_EXCLUDED_TIPS = new Set([
+  "panel-palette",
+  "new-terminal",
+  "launch-claude",
+  "launch-gemini",
+  "recipes",
+  "context-injection",
+]);
+
 export interface TipEntry {
   id: string;
   message: React.ReactNode;
@@ -32,11 +45,11 @@ export const TIPS: TipEntry[] = [
     message: <>Open the quick switcher to jump between open panels</>,
     messageWithShortcut: (shortcut) => (
       <>
-        Press <KbdChord shortcut={shortcut} /> to jump between open panels
+        Press <KbdChord shortcut={shortcut} density="bare" /> to jump between open panels
       </>
     ),
     actionId: "nav.quickSwitcher",
-    actionLabel: "Open quick switcher",
+    actionLabel: "Open quick switcher…",
     requiresShortcut: true,
   },
   {
@@ -44,7 +57,8 @@ export const TIPS: TipEntry[] = [
     message: <>Open a new terminal in this worktree</>,
     messageWithShortcut: (shortcut) => (
       <>
-        Press <KbdChord shortcut={shortcut} /> to open a new terminal in this worktree
+        Press <KbdChord shortcut={shortcut} density="bare" /> to open a new terminal in this
+        worktree
       </>
     ),
     actionId: "terminal.new",
@@ -58,12 +72,12 @@ export const TIPS: TipEntry[] = [
     ),
     messageWithShortcut: (shortcut) => (
       <>
-        Press <KbdChord shortcut={shortcut} /> to open the panel palette — add terminals, file
-        browsers, web browsers, or dev previews
+        Press <KbdChord shortcut={shortcut} density="bare" /> to open the panel palette — add
+        terminals, file browsers, web browsers, or dev previews
       </>
     ),
     actionId: "panel.palette",
-    actionLabel: "Open panel palette",
+    actionLabel: "Open panel palette…",
     requiresShortcut: true,
   },
   {
@@ -71,7 +85,8 @@ export const TIPS: TipEntry[] = [
     message: <>Launch a Claude agent in this worktree</>,
     messageWithShortcut: (shortcut) => (
       <>
-        Press <KbdChord shortcut={shortcut} /> to launch a Claude agent in this worktree
+        Press <KbdChord shortcut={shortcut} density="bare" /> to launch a Claude agent in this
+        worktree
       </>
     ),
     // `agent.claude`, NOT `agent.terminal`. The tip says "launch a Claude
@@ -86,7 +101,7 @@ export const TIPS: TipEntry[] = [
     // user unbinds it, `requiresShortcut` hides the tip rather than letting it
     // fall back to a chord for a different action.
     actionId: "agent.claude",
-    actionLabel: "Launch agent",
+    actionLabel: "Launch Claude",
     requiresShortcut: true,
     requiredAgents: ["claude"],
   },
@@ -95,12 +110,13 @@ export const TIPS: TipEntry[] = [
     message: <>Launch a Gemini agent in this worktree</>,
     messageWithShortcut: (shortcut) => (
       <>
-        Press <KbdChord shortcut={shortcut} /> to launch a Gemini agent in this worktree
+        Press <KbdChord shortcut={shortcut} density="bare" /> to launch a Gemini agent in this
+        worktree
       </>
     ),
     // Same correction as the Claude tip above.
     actionId: "agent.gemini",
-    actionLabel: "Launch agent",
+    actionLabel: "Launch Gemini",
     requiresShortcut: true,
     requiredAgents: ["gemini"],
   },
@@ -109,8 +125,8 @@ export const TIPS: TipEntry[] = [
     message: <>Inject the project file tree into the focused terminal</>,
     messageWithShortcut: (shortcut) => (
       <>
-        Press <KbdChord shortcut={shortcut} /> to inject the project file tree into the focused
-        terminal
+        Press <KbdChord shortcut={shortcut} density="bare" /> to inject the project file tree into
+        the focused terminal
       </>
     ),
     actionId: "terminal.inject",
@@ -122,12 +138,11 @@ export const TIPS: TipEntry[] = [
     message: <>Open the command palette to search all available commands</>,
     messageWithShortcut: (shortcut) => (
       <>
-        Press <KbdChord shortcut={shortcut} /> to open the command palette and search all available
-        commands
+        Press <KbdChord shortcut={shortcut} density="bare" /> to search every command
       </>
     ),
     actionId: "action.palette.open",
-    actionLabel: "Open command palette",
+    actionLabel: "Open command palette…",
     requiresShortcut: true,
   },
   {
@@ -135,11 +150,11 @@ export const TIPS: TipEntry[] = [
     message: <>Open the worktree palette to switch branches</>,
     messageWithShortcut: (shortcut) => (
       <>
-        Press <KbdChord shortcut={shortcut} /> to open the worktree palette and switch branches
+        Press <KbdChord shortcut={shortcut} density="bare" /> to switch branches
       </>
     ),
     actionId: "worktree.openPalette",
-    actionLabel: "Open worktree palette",
+    actionLabel: "Open worktree palette…",
     requiresShortcut: true,
   },
   {
@@ -147,13 +162,12 @@ export const TIPS: TipEntry[] = [
     message: <>Open the worktrees overview to manage all your branches</>,
     messageWithShortcut: (shortcut) => (
       <>
-        Press <KbdChord shortcut={shortcut} /> to open the worktrees overview and manage all your
-        branches
+        Press <KbdChord shortcut={shortcut} density="bare" /> to see every worktree
       </>
     ),
     actionId: "worktree.overview.open",
     shortcutActionId: "worktree.overview",
-    actionLabel: "Open worktrees overview",
+    actionLabel: "Open worktrees overview…",
     requiresShortcut: true,
   },
   {
@@ -161,29 +175,29 @@ export const TIPS: TipEntry[] = [
     message: <>Switch between available AI agents from the agent switcher</>,
     messageWithShortcut: (shortcut) => (
       <>
-        Press <KbdChord shortcut={shortcut} /> to quickly switch between available AI agents
+        Press <KbdChord shortcut={shortcut} density="bare" /> to switch agents
       </>
     ),
     actionId: "agent.palette",
-    actionLabel: "Open agent switcher",
+    actionLabel: "Open agent switcher…",
     requiresShortcut: true,
   },
   {
     id: "recipes",
     message: <>Create a recipe to run multi-terminal workflows with a single click</>,
     actionId: "recipe.manager.open",
-    actionLabel: "Open recipes",
+    actionLabel: "Open recipes…",
   },
   {
     id: "new-worktree",
     message: <>Create a new worktree to isolate each task on its own branch</>,
     messageWithShortcut: (shortcut) => (
       <>
-        Press <KbdChord shortcut={shortcut} /> to create a new worktree
+        Press <KbdChord shortcut={shortcut} density="bare" /> to create a new worktree
       </>
     ),
     actionId: "worktree.createDialog.open",
-    actionLabel: "New worktree",
+    actionLabel: "New worktree…",
   },
 ];
 
@@ -208,6 +222,7 @@ export function RotatingTip() {
     () =>
       TIPS.filter(
         (tip) =>
+          !CANVAS_HOME_EXCLUDED_TIPS.has(tip.id) &&
           (!tip.requiredAgents ||
             tip.requiredAgents.some((a) => isAgentLaunchable(availability[a]))) &&
           // Mirrors WelcomeScreen's SHORTCUT_TIPS filter: never teach a combo
@@ -228,9 +243,17 @@ export function RotatingTip() {
     // (e.g. worktree-overview: ⌘⌥R → "worktree.overview", click → ".open") still
     // counts toward "used" when the user invokes it via keyboard.
     const lookupKey = (tipEntry: TipEntry) => tipEntry.shortcutActionId ?? tipEntry.actionId ?? "";
-    const prioritized = [...filteredTips]
-      .sort((a, b) => (counts[lookupKey(a)] ?? 0) - (counts[lookupKey(b)] ?? 0))
-      .slice(0, ROTATING_TIP_SUBSET_SIZE);
+    // Ties are shuffled before the cut. A stable sort on all-zero counts kept
+    // the catalog's first four forever, so a new user never met the rest.
+    const prioritized = filteredTips
+      .map((tipEntry) => ({ tipEntry, tiebreak: Math.random() }))
+      .sort(
+        (a, b) =>
+          (counts[lookupKey(a.tipEntry)] ?? 0) - (counts[lookupKey(b.tipEntry)] ?? 0) ||
+          a.tiebreak - b.tiebreak
+      )
+      .slice(0, ROTATING_TIP_SUBSET_SIZE)
+      .map(({ tipEntry }) => tipEntry);
     // Pick randomly within the unused-bias subset so per-mount variety doesn't
     // require a module-level counter (which leaks between tests, see #4754).
     const index = Math.floor(Math.random() * prioritized.length);
@@ -248,34 +271,35 @@ export function RotatingTip() {
       // it entirely. Exactly the trap `.lessons/11180.md` documents for the
       // sections above. The marker class snaps it to rest with the sections
       // around it under reduced motion, so the stagger stays one piece.
-      <div className="launcher-section-enter flex flex-col items-center gap-2 motion-safe:animate-in motion-safe:fade-in motion-safe:[--tw-animation-duration:var(--duration-200)]">
-        <p className="text-xs text-text-secondary text-center">
-          Tip: <LiveTipMessage tip={tip} />
-        </p>
+      <p className="launcher-section-enter px-3 text-xs text-text-secondary motion-safe:animate-in motion-safe:fade-in motion-safe:[--tw-animation-duration:var(--duration-200)]">
+        Tip: <LiveTipMessage tip={tip} />
         {tip.actionId && tip.actionLabel && (
-          <Button
-            variant="link"
-            onClick={() =>
-              void actionService.dispatch(tip.actionId!, undefined, { source: "user" })
-            }
-            // `tip-action` opts this control out of the button-border rules
-            // that BOTH accessibility media modes apply. Without it the tip's
-            // link grows a pill in `forced-colors: active` and in
-            // `prefers-contrast: more` and reads as another action on the
-            // surface — the one thing teaching content must never do. The
-            // standing underline is the affordance in every mode, so nothing
-            // is lost by dropping the frame.
-            //
-            // A standing underline, not a hover-only one. Rendered as bare
-            // centred text at the same size and colour as the sentence above
-            // it, the only control that names the user's actual goal read as a
-            // second sentence — an affordance nobody could see was there.
-            className="tip-action text-xs"
-          >
-            {tip.actionLabel}
-          </Button>
+          <>
+            <span aria-hidden="true" className="mx-1.5">
+              ·
+            </span>
+            <Button
+              variant="link"
+              onClick={() =>
+                void actionService.dispatch(tip.actionId!, undefined, { source: "user" })
+              }
+              // `tip-action` opts this control out of the button-border rules
+              // that BOTH accessibility media modes apply. Without it the tip's
+              // link grows a pill in `forced-colors: active` and in
+              // `prefers-contrast: more` and reads as another action on the
+              // surface — the one thing teaching content must never do. The
+              // standing underline is the affordance in every mode.
+              //
+              // Inline after the sentence, on the column's left rail like every
+              // band above it. Centred on a second line it was the one band
+              // with its own axis, and the link read as a second sentence.
+              className="tip-action text-xs"
+            >
+              {tip.actionLabel}
+            </Button>
+          </>
         )}
-      </div>
+      </p>
     );
   }
 
@@ -287,9 +311,8 @@ export function RotatingTip() {
   // first paint (#7671). `invisible` keeps the box in layout flow without
   // showing skeleton noise — the tip is sub-Doherty so a flash isn't needed.
   return (
-    <div className="flex flex-col items-center gap-2 invisible" aria-hidden="true">
-      <p className="text-xs">&nbsp;</p>
-      <span className="text-xs px-1">&nbsp;</span>
-    </div>
+    <p className="invisible px-3 text-xs" aria-hidden="true">
+      &nbsp;
+    </p>
   );
 }

@@ -199,6 +199,13 @@ function handlePortReset(id: string, snapshot: SerializedTerminalSnapshot | null
   portAckGenerations.set(id, currentPortAckGeneration(id) + 1);
   earlyDataBuffer.delete(id);
   earlyDataBufferBytes.delete(id);
+  // Tells the host where its acks for output before the reset end, so it
+  // knows the next ones are for output after it.
+  try {
+    messagePort?.postMessage({ type: "reset-ack", id });
+  } catch {
+    // Port closed: the host falls back to counting acks.
+  }
 
   if (resetCallbacks.size > 0) {
     for (const cb of resetCallbacks) {
@@ -520,17 +527,31 @@ export const terminalClient = {
    * `handbackCode` rides along when the caller asked for a handback (#12488);
    * its instruction must already be in `text`. Passed only when present, so an
    * ordinary submit crosses the bridge exactly as before.
+   *
+   * `guard: "no-choice-dialog"` refuses the text while the agent is observed
+   * waiting on a choice dialog (#16209), which would take it.
    */
   submit: (
     id: string,
     text: string,
     submissionToken?: string,
-    handbackCode?: string
+    handbackCode?: string,
+    guard?: "no-choice-dialog"
   ): Promise<void> => {
     const blocked = getTerminalInputBlock();
     if (blocked) {
       noteRefusedInput(id);
       return Promise.reject(terminalInputBlockedError(blocked));
+    }
+    if (guard !== undefined) {
+      return window.electron.terminal.submit(
+        id,
+        text,
+        submissionToken,
+        handbackCode,
+        undefined,
+        guard
+      );
     }
     return handbackCode === undefined
       ? window.electron.terminal.submit(id, text, submissionToken)

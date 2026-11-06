@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../../utils/storeValues.js";
 import type { Migration } from "../StoreMigrations.js";
 
 export const migration011: Migration = {
@@ -25,7 +26,7 @@ export const migration011: Migration = {
 
     if (Object.keys(changes).length > 0) {
       console.log("[Migration 011] Applying minimal soundscape defaults:", Object.keys(changes));
-      store.set("notificationSettings", { ...settings, ...changes });
+      setRawStoreValue(store, "notificationSettings", { ...settings, ...changes });
     } else {
       console.log("[Migration 011] Settings already match minimal defaults, skipping");
     }

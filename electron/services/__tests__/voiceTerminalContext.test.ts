@@ -9,6 +9,7 @@ import {
   boundTerminalOutput,
   readTerminalContextForCorrection,
   readTerminalOutputForCorrection,
+  redactRecentPrompts,
 } from "../voiceTerminalContext.js";
 import type { PtyClient } from "../PtyClient.js";
 import { CURSOR_GAP } from "../voiceKeytermSecrets.js";
@@ -101,6 +102,66 @@ describe("boundTerminalOutput", () => {
   it("is null when nothing readable remains", () => {
     expect(boundTerminalOutput([])).toBeNull();
     expect(boundTerminalOutput(["", "   ", ""])).toBeNull();
+  });
+});
+
+describe("redactRecentPrompts (#15596)", () => {
+  const KEY = `sk-proj-${"Q2w3E4r5".repeat(3)}`;
+
+  it("passes prompts with nothing to withhold through exactly, in order", () => {
+    const prompts = ["Measure gpt-6.1-terra against Luna", "Fix the  tests\r\n\r\n\r\nthen push  "];
+    expect(redactRecentPrompts(prompts)).toEqual({
+      prompts,
+      withheldPrompts: 0,
+      withheldLines: 0,
+    });
+  });
+
+  it("drops a prompt whose only line held a credential", () => {
+    expect(redactRecentPrompts(["first", `use this key: ${KEY}`, "last"])).toEqual({
+      prompts: ["first", "last"],
+      withheldPrompts: 1,
+      withheldLines: 1,
+    });
+  });
+
+  it("empties every line of a wrapped key and folds the gap it leaves", () => {
+    const wrapped = [
+      "Deploy staging with",
+      `OPENAI_API_KEY=${KEY}`,
+      "a7f3k9m2x8v1",
+      "zq8wplmn",
+      "",
+      "then run it",
+    ];
+    const { prompts, withheldLines } = redactRecentPrompts([wrapped.join("\n")]);
+    expect(prompts).toEqual(["Deploy staging with\n\nthen run it"]);
+    expect(withheldLines).toBe(3);
+  });
+
+  it("judges each prompt alone, so a value one ends without leaves the next alone", () => {
+    expect(
+      redactRecentPrompts(["the password:", "hunter2 is the name of the branch"]).prompts
+    ).toEqual(["hunter2 is the name of the branch"]);
+  });
+
+  it("withholds a credential colour codes split from its name, as the screen's would be", () => {
+    expect(redactRecentPrompts(["\x1b[36mpassword\x1b[39m: hunter2\n\nkept"]).prompts).toEqual([
+      "kept",
+    ]);
+  });
+
+  it("blanks an opaque ID or a bare credential name, as the screen's would be", () => {
+    expect(
+      redactRecentPrompts(["revert 3f9a1c2e7b4d and set OPENAI_API_KEY first"]).prompts
+    ).toEqual(["revert   and set   first"]);
+  });
+
+  it("gives the same text for the same prompt, whatever comes before it", () => {
+    const prompt = `Deploy with\nTOKEN=${KEY}\n\nthen tag it`;
+    const alone = redactRecentPrompts([prompt]).prompts;
+    const after = redactRecentPrompts(["earlier", `password: ${KEY}`, prompt]).prompts;
+    expect(after.slice(1)).toEqual(alone);
   });
 });
 

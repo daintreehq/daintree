@@ -1,4 +1,4 @@
-import { Clock, type LucideIcon, RefreshCw, WifiOff } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { InlineStatusBanner, type InlineStatusBannerSeverity } from "./InlineStatusBanner";
 import { boundedErrorText } from "@/utils/errorText";
 import type { TerminalReconnectError } from "@/types";
@@ -15,13 +15,14 @@ export interface ReconnectErrorBannerProps {
 interface ReconnectBannerConfig {
   title: string;
   severity: InlineStatusBannerSeverity;
-  icon: LucideIcon;
 }
 
+// The title says it is about reconnecting, so the glyph is the severity's own:
+// a failure and a timeout must differ by shape, not only by tint.
 const RECONNECT_BANNER_CONFIG = {
-  timeout: { title: "Reconnection timed out", severity: "warning", icon: Clock },
-  not_found: { title: "Previous session not found", severity: "error", icon: WifiOff },
-  error: { title: "Reconnection failed", severity: "error", icon: WifiOff },
+  timeout: { title: "Reconnection timed out", severity: "warning" },
+  not_found: { title: "Previous session not found", severity: "error" },
+  error: { title: "Reconnection failed", severity: "error" },
 } as const satisfies Record<TerminalReconnectError["type"], ReconnectBannerConfig>;
 
 export function ReconnectErrorBanner({
@@ -50,7 +51,6 @@ export function ReconnectErrorBanner({
   if (config.severity === "error") {
     return (
       <InlineStatusBanner
-        icon={config.icon}
         title={config.title}
         description={boundedErrorText(error.message)}
         severity="error"
@@ -63,7 +63,6 @@ export function ReconnectErrorBanner({
 
   return (
     <InlineStatusBanner
-      icon={config.icon}
       title={config.title}
       description={boundedErrorText(error.message)}
       severity={config.severity}

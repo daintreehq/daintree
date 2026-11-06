@@ -6,7 +6,11 @@ import { app } from "electron";
 import fs from "node:fs";
 import path from "path";
 import { getWritesSuppressed } from "../diskPressureState.js";
-import { tightenFilePermissionsSync, OWNER_RW_FILE_MODE } from "../../utils/fs.js";
+import {
+  tightenFilePermissionsSync,
+  resilientAtomicWriteFileSync,
+  OWNER_RW_FILE_MODE,
+} from "../../utils/fs.js";
 import * as schema from "./schema.js";
 import { installSqliteRunStatementCache } from "./sqliteRunStatementCache.js";
 import type { DatabaseRecovery } from "../../../shared/types/ipc/app.js";
@@ -28,6 +32,51 @@ export function getDbPath(): string {
 
 export function getBackupPath(): string {
   return getDbPath() + ".backup";
+}
+
+// A running session that confirms corruption cannot recover — the database is
+// open — so it records the verdict here for the next boot, which would otherwise
+// only run the cheap probe after a clean exit and reopen the corrupt file. Kept
+// outside the "", "-wal", "-shm" family that attemptRecovery quarantines.
+function getRecoveryMarkerPath(dbPath: string): string {
+  return dbPath + ".corruption-pending";
+}
+
+/** Fails closed: a marker that cannot be inspected counts as pending. */
+export function isRecoveryPending(dbPath: string): boolean {
+  try {
+    fs.statSync(getRecoveryMarkerPath(dbPath));
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    console.warn("[DB] Could not inspect the pending-recovery marker:", error);
+    return true;
+  }
+}
+
+export function markRecoveryPending(dbPath: string): void {
+  try {
+    resilientAtomicWriteFileSync(
+      getRecoveryMarkerPath(dbPath),
+      `${new Date().toISOString()}\n`,
+      "utf-8",
+      { mode: OWNER_RW_FILE_MODE }
+    );
+  } catch (error) {
+    console.error(
+      "[DB] Could not record pending recovery — the next clean-exit boot may not re-check the database:",
+      error
+    );
+  }
+}
+
+export function clearRecoveryPending(dbPath: string): void {
+  try {
+    fs.unlinkSync(getRecoveryMarkerPath(dbPath));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    console.warn("[DB] Could not clear the pending-recovery marker:", error);
+  }
 }
 
 export function getMigrationsFolder(): string {
@@ -167,9 +216,10 @@ export function openDb(
 /**
  * Probe the database for corruption. When `fullCheck` is false (default on
  * clean-exit boots), runs a cheap `PRAGMA schema_version` open instead of the
- * O(database-size) `PRAGMA quick_check`. Corruption only occurs after crashes
- * or power loss, so the full scan is gated on unclean-exit detection and
- * deferred on clean boots to the idle maintenance tick.
+ * O(database-size) `PRAGMA quick_check`. The cheap open misses page-level
+ * corruption, so clean boots defer the full scan to the idle maintenance tick,
+ * and a corruption verdict that tick confirms is carried to the next boot by
+ * `markRecoveryPending()`.
  */
 export function probeDb(dbPath: string, fullCheck = true): boolean {
   if (!fs.existsSync(dbPath)) return true; // no file = fresh start, not corruption

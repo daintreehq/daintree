@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ExecuteCloneOptions } from "../../../ipc/handlers/projectCrud/gitClone.js";
 import { AppError, GitOperationError } from "../../../utils/errorTypes.js";
-import { localPlacementAuthority } from "../service.js";
+import { localPlacementAuthority, ProjectAcrossHostsService } from "../service.js";
 import { aliasRemote, commit, git, makeBare, makeRepo, tempRoot } from "./gitFixtures.js";
-import { createTestHost, plainClone, settled } from "./testService.js";
+import { createTestHost, listConfigRemotes, plainClone, settled } from "./testService.js";
 
 let root: string;
 let bare: string;
@@ -319,17 +319,23 @@ describe("opening a project the host already has", () => {
     const existing = path.join(root, "studio-g-wt");
     git(clone, ["worktree", "add", "-q", existing, "feature/host-chip"]);
     const project = host.addProject(clone);
+    const noteChange = vi.fn();
 
-    const opened = await host.service.open({
-      projectId: project.id,
-      path: clone,
-      remoteUrls: [URL],
-      branch,
-      branchRemoteUrl: URL,
-    });
+    const opened = await host.service.open(
+      {
+        projectId: project.id,
+        path: clone,
+        remoteUrls: [URL],
+        branch,
+        branchRemoteUrl: URL,
+      },
+      { assertMayPlace: () => undefined, noteChange }
+    );
     expect(opened.worktreePath).toBe(existing);
     expect(host.createWorktree).not.toHaveBeenCalled();
     expect(host.focusWorktree).toHaveBeenCalledWith(project.id, existing);
+    // Focusing it changes the project's saved active worktree (#15918).
+    expect(noteChange).toHaveBeenCalledWith(project.id);
   });
 
   it("opens the branch in its own worktree when it is on the remote, with no second question", async () => {
@@ -938,16 +944,23 @@ describe("placing a worktree asked for on another host", () => {
       isHostLocal: clientId === "local",
       acquiredAt: 0,
     });
+    const noteSessionChange = vi.fn();
+    const lease = (held: ReturnType<typeof holder> | null) => ({
+      getHolder: () => held,
+      noteSessionChange,
+    });
     expect(() => localPlacementAuthority(null).assertMayPlace("p")).not.toThrow();
-    expect(() =>
-      localPlacementAuthority({ getHolder: () => null }).assertMayPlace("p")
-    ).not.toThrow();
-    expect(() =>
-      localPlacementAuthority({ getHolder: () => holder("local") }).assertMayPlace("p")
-    ).not.toThrow();
-    expect(() =>
-      localPlacementAuthority({ getHolder: () => holder("client-b") }).assertMayPlace("p")
-    ).toThrow(expect.objectContaining({ code: "DRIVEN_ELSEWHERE" }));
+    expect(() => localPlacementAuthority(lease(null)).assertMayPlace("p")).not.toThrow();
+    expect(() => localPlacementAuthority(lease(holder("local"))).assertMayPlace("p")).not.toThrow();
+    // A placement let through is this machine changing the project (#15918).
+    expect(noteSessionChange.mock.calls).toEqual([
+      ["p", null],
+      ["p", null],
+    ]);
+    expect(() => localPlacementAuthority(lease(holder("client-b"))).assertMayPlace("p")).toThrow(
+      expect.objectContaining({ code: "DRIVEN_ELSEWHERE" })
+    );
+    expect(noteSessionChange).toHaveBeenCalledTimes(2);
   });
 
   it("says a recipe the host's copy lacks won't run, and refuses an occupied or escaping path", async () => {
@@ -1037,5 +1050,85 @@ describe("identify", () => {
     expect(identity.committedProjectId).toBeNull();
     expect(identity.remotes).toHaveLength(1);
     expect(identity.remotes[0]!.url).not.toContain("secret");
+  });
+});
+
+describe("remote reads across lookups", () => {
+  const OTHER_URL = "https://example.test/daintreehq/other.git";
+
+  function countedHost(name: string) {
+    const host = createTestHost(root, name);
+    const reads: string[] = [];
+    const service = new ProjectAcrossHostsService(host.deps, async (repoPath) => {
+      reads.push(repoPath);
+      return listConfigRemotes(repoPath);
+    });
+    return { host, service, reads };
+  }
+
+  it("reads each registered project's remotes once for lookups close together", async () => {
+    const { host, service, reads } = countedHost("reads-a");
+    const repos = [
+      makeRepo(root, "reads-a-1", URL),
+      makeRepo(root, "reads-a-2", URL),
+      makeRepo(root, "reads-a-3", OTHER_URL),
+    ];
+    for (const repo of repos) host.addProject(repo);
+    const payload = { remoteUrls: [URL], committedProjectId: null };
+
+    const first = await service.find(payload);
+    const second = await service.find(payload);
+    const [third, fourth] = await Promise.all([service.find(payload), service.find(payload)]);
+
+    expect(first.map((m) => m.path).sort()).toEqual([repos[0], repos[1]].sort());
+    for (const later of [second, third, fourth]) expect(later).toEqual(first);
+    expect(reads.sort()).toEqual([...repos].sort());
+  });
+
+  it("reflects a changed remote, a new project and a removed one on the next lookup", async () => {
+    const { host, service, reads } = countedHost("reads-b");
+    const kept = makeRepo(root, "reads-b-kept", URL);
+    const changed = makeRepo(root, "reads-b-changed", URL);
+    host.addProject(kept);
+    host.addProject(changed);
+    const payload = { remoteUrls: [URL], committedProjectId: null };
+    expect((await service.find(payload)).map((m) => m.path).sort()).toEqual([kept, changed].sort());
+
+    git(changed, ["remote", "set-url", "origin", OTHER_URL]);
+    reads.length = 0;
+    expect((await service.find(payload)).map((m) => m.path)).toEqual([kept]);
+    expect(reads).toEqual([changed]);
+    const moved = await service.find({ remoteUrls: [OTHER_URL], committedProjectId: null });
+    expect(moved.map((m) => m.path)).toEqual([changed]);
+    expect(reads).toEqual([changed]);
+
+    const added = makeRepo(root, "reads-b-added", URL);
+    host.addProject(added);
+    host.projects.splice(
+      host.projects.findIndex((p) => p.path === kept),
+      1
+    );
+    reads.length = 0;
+    expect((await service.find(payload)).map((m) => m.path)).toEqual([added]);
+    expect(reads).toEqual([added]);
+  });
+
+  it("shares readings between identify and find, while acting on a remote reads it fresh", async () => {
+    const { host, service, reads } = countedHost("reads-c");
+    const repo = makeRepo(root, "reads-c-repo", URL);
+    const project = host.addProject(repo);
+
+    const identity = await service.identify({ projectId: project.id });
+    await service.identify({ projectId: project.id });
+    await service.find({ remoteUrls: [URL], committedProjectId: null });
+    expect(identity.remotes.map((r) => r.url)).toEqual([URL]);
+    expect(reads).toEqual([repo]);
+
+    await service.describeSource({ projectId: project.id, worktreePath: null, skipBranch: true });
+    expect(reads).toEqual([repo, repo]);
+    expect(
+      (await service.match({ remoteUrls: [URL], committedProjectId: null })).map((m) => m.path)
+    ).toEqual([repo]);
+    expect(reads).toEqual([repo, repo, repo]);
   });
 });

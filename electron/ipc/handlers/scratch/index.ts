@@ -19,6 +19,7 @@ import { getWindowForWebContents } from "../../../window/webContentsRegistry.js"
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { getProjectHistory } from "../../../services/ProjectHistoryService.js";
 import { supersedePendingHostSwitch } from "../../../window/windowHost.js";
+import { claimProjectActivation } from "../../../window/projectActivationClaims.js";
 import { addProjectByPath } from "../projectCrud/crud.js";
 import { gracefulTeardownAndJournalProject } from "../../../services/pty/projectSessionJournal.js";
 import { createHardenedGit } from "../../../utils/hardenedGit.js";
@@ -140,50 +141,58 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
           // workspace. Mirrors the project:switch flow where `setCurrentProject` is
           // only called after `pvm.switchTo()` resolves.
           supersedePendingHostSwitch(senderWindow?.id);
-
-          let activeView: WebContentsView | null = null;
-          if (pvm) {
-            // Recorded BEFORE switchTo, matching project:switch: the cached-view
-            // fast path reads it synchronously, and the cold-start path reads it
-            // once the paint gate resolves. Without this a run opened from the
-            // fleet overview lands in the right scratch but on whatever panel
-            // happened to be focused last.
-            if (options?.focusIntent) {
-              pvm.setPendingFocusIntent(scratchId, options.focusIntent);
-            }
-            const result = await pvm.switchTo(scratchId, scratch.path);
-            activeView = result.view;
-          }
-
-          // Fold the completed switch into this window's history, outgoing
-          // first so the workspace being left sits directly behind the scratch
-          // and becomes the toggle target. Recorded after the swap has
-          // committed, matching `project:switch`: a switch that threw never
-          // happened and must not move the toggle.
-          //
-          // `ctx.projectId` is the sender view's own binding, captured at IPC
-          // entry — not `projectStore.getCurrentProjectId()`, which names
-          // whichever window switched most recently and is already null on the
-          // way from one scratch to another (#11936). The scratch itself is
-          // recorded too: it is a workspace like any other, so the way back
-          // into it is the same entry that leads back out.
-          const departingWorkspaceId = ctx.projectId;
           const scratchWindowId = senderWindow?.id ?? deps.mainWindow?.id;
-          if (scratchWindowId !== undefined) {
-            const history = getProjectHistory(scratchWindowId);
-            if (departingWorkspaceId) history.record(departingWorkspaceId);
-            history.record(scratchId);
-          }
 
-          // Now commit canonical pointers, the manifest, menu, PTY workspace and port.
-          return activateScratchInWindow({
-            scratch,
-            windowId: senderWindow?.id ?? deps.mainWindow?.id,
-            window: senderWindow,
-            view: activeView?.webContents ?? ctx.event?.sender,
-            windowRegistry: deps.windowRegistry,
-            ptyClient: deps.ptyClient,
-          });
+          // Claimed like project:switch's target, until the pointers below are
+          // committed: while the switch waits on the window's queue the scratch
+          // has no view yet, and the cleanup sweep must still see it held (#15614).
+          const releaseClaim = claimProjectActivation(scratchId, scratchWindowId);
+          try {
+            let activeView: WebContentsView | null = null;
+            if (pvm) {
+              // Recorded BEFORE switchTo, matching project:switch: the cached-view
+              // fast path reads it synchronously, and the cold-start path reads it
+              // once the paint gate resolves. Without this a run opened from the
+              // fleet overview lands in the right scratch but on whatever panel
+              // happened to be focused last.
+              if (options?.focusIntent) {
+                pvm.setPendingFocusIntent(scratchId, options.focusIntent);
+              }
+              const result = await pvm.switchTo(scratchId, scratch.path);
+              activeView = result.view;
+            }
+
+            // Fold the completed switch into this window's history, outgoing
+            // first so the workspace being left sits directly behind the scratch
+            // and becomes the toggle target. Recorded after the swap has
+            // committed, matching `project:switch`: a switch that threw never
+            // happened and must not move the toggle.
+            //
+            // `ctx.projectId` is the sender view's own binding, captured at IPC
+            // entry — not `projectStore.getCurrentProjectId()`, which names
+            // whichever window switched most recently and is already null on the
+            // way from one scratch to another (#11936). The scratch itself is
+            // recorded too: it is a workspace like any other, so the way back
+            // into it is the same entry that leads back out.
+            const departingWorkspaceId = ctx.projectId;
+            if (scratchWindowId !== undefined) {
+              const history = getProjectHistory(scratchWindowId);
+              if (departingWorkspaceId) history.record(departingWorkspaceId);
+              history.record(scratchId);
+            }
+
+            // Now commit canonical pointers, the manifest, menu, PTY workspace and port.
+            return activateScratchInWindow({
+              scratch,
+              windowId: scratchWindowId,
+              window: senderWindow,
+              view: activeView?.webContents ?? ctx.event?.sender,
+              windowRegistry: deps.windowRegistry,
+              ptyClient: deps.ptyClient,
+            });
+          } finally {
+            releaseClaim();
+          }
         },
         { withContext: true }
       ),

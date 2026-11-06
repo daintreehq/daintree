@@ -70,6 +70,10 @@ vi.mock("../keybindingOverridesStore.js", () => ({
         (mockStore.get("keybindingOverrides.overrides") ?? {}) as Record<string, unknown>
       ).filter(([actionId]) => !actionId.startsWith("plugin."))
     ),
+  saveKeybindingOverrides: (overrides: Record<string, string[]>) => {
+    mockStore.set("keybindingOverrides.overrides", overrides);
+    return { revision: 1, overrides };
+  },
 }));
 vi.mock("../getSoundService.js", () => ({ getAllowedSoundFiles: async () => new Set<string>() }));
 vi.mock("../ProjectStore.js", () => ({ projectStore: mockProjectStore }));

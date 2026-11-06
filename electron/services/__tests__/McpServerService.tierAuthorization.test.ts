@@ -1007,6 +1007,12 @@ describe("McpServerService", () => {
         description: "Remove a worktree this MCP session created",
         danger: "confirm",
       }),
+      createManifestEntry({
+        id: "worktree.retireOwned" as ActionId,
+        title: "Retire Owned Worktree",
+        description: "Close this session's panes in a worktree it created, then delete it",
+        danger: "confirm",
+      }),
       // Full-only (#12214): re-running project plugin discovery restarts
       // running code, so a core session must not reach it.
       createManifestEntry({
@@ -1063,6 +1069,20 @@ describe("McpServerService", () => {
         description: "Respawn an agent this MCP session created on another preset",
         danger: "confirm",
       }),
+      ...(
+        [
+          ["agent.createPreset", "Create Launch Preset"],
+          ["agent.updatePreset", "Edit Launch Preset"],
+          ["agent.deletePreset", "Remove Launch Preset"],
+        ] as const
+      ).map(([id, title]) =>
+        createManifestEntry({
+          id: id as ActionId,
+          title,
+          description: `${title}.`,
+          danger: "confirm",
+        })
+      ),
       createManifestEntry({
         id: "terminal.sendKeysOwned" as ActionId,
         title: "Press Keys in Owned Terminal",
@@ -1079,6 +1099,11 @@ describe("McpServerService", () => {
         description: "Launch several agents with one prompt",
       }),
       createManifestEntry({
+        id: "agent.launchInNewWorktree" as ActionId,
+        title: "Create Worktree and Launch Agent",
+        description: "Create a worktree and launch an agent in it once setup is ready",
+      }),
+      createManifestEntry({
         id: "terminal.sendCommandMany" as ActionId,
         title: "Submit to Several Terminals",
         description: "Send each terminal its own message",
@@ -1087,6 +1112,11 @@ describe("McpServerService", () => {
         id: "terminal.closeMany" as ActionId,
         title: "Close Several Terminals",
         description: "Close several terminals",
+      }),
+      createManifestEntry({
+        id: "terminal.waitForExit" as ActionId,
+        title: "Wait for Closed Terminals to Exit",
+        description: "Wait for the processes of terminals this MCP session closed to exit",
       }),
       createManifestEntry({
         id: "terminal.readLastMessageOwned" as ActionId,
@@ -1367,6 +1397,12 @@ describe("McpServerService", () => {
         id: "terminal.notifyWhenIdle" as ActionId,
         title: "Notify When Terminal Is Idle",
         description: "Notify When Terminal Is Idle for this pane.",
+      }),
+      // Withdraws a message held for a busy worker (#16187), beside the notices.
+      createManifestEntry({
+        id: "terminal.cancelQueuedSend" as ActionId,
+        title: "Cancel Held Terminal Message",
+        description: "Cancel a held terminal message.",
       }),
       // Session continuity + recipe-editor handoffs from #11908. The resume is
       // on the full set; the bookmark and recipe-editor handoffs are on neither

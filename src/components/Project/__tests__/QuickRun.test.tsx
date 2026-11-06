@@ -2,6 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { Component, StrictMode, type ReactNode } from "react";
 import { render, screen, fireEvent, act } from "@testing-library/react";
 
 // Provide localStorage stub for jsdom
@@ -91,6 +92,8 @@ vi.mock("@/components/Project/RunningTaskList", () => ({
 }));
 
 import { QuickRun } from "../QuickRun";
+import { resetQuickRunHistoryForTests } from "../quickRunHistory";
+import { setPermanentFallbackHandler } from "@/store/persistence/safeStorage";
 import { QuickRunToggle, useQuickRunExpanded } from "../QuickRunToggle";
 
 /** The panel as the sidebar footer mounts it: only while its toggle is open. */
@@ -130,6 +133,7 @@ describe("QuickRun", () => {
     // The disclosure persists per project, so one test opening the panel would
     // otherwise hand the next test an already-open one.
     localStorage.clear();
+    resetQuickRunHistoryForTests();
   });
 
   /**
@@ -328,6 +332,28 @@ describe("QuickRun", () => {
     expect(lit()).toBe(rows[0]);
   });
 
+  it("leaves Enter, Tab and Escape to the IME mid-composition, then runs on a plain Enter", async () => {
+    seedHistory("npm test");
+    render(<Footer projectId="test-project" />);
+    const input = openPanel() as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "np" } });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+
+    for (const init of [{ isComposing: true }, { keyCode: 229 }]) {
+      for (const key of ["Enter", "Tab", "Escape"]) {
+        expect(fireEvent.keyDown(input, { key, ...init })).toBe(true);
+      }
+    }
+    expect(mockAddTerminal).not.toHaveBeenCalled();
+    expect(input.value).toBe("np");
+    expect(input.getAttribute("aria-expanded")).toBe("true");
+
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    expect(mockAddTerminal).toHaveBeenCalledTimes(1);
+  });
+
   it("dismisses suggestions on Escape without leaving the field", () => {
     localStorage.setItem(
       "daintree_cmd_history_test-project",
@@ -521,6 +547,332 @@ describe("QuickRun", () => {
     } finally {
       settingsMock.runCommands = [];
     }
+  });
+
+  describe("commands that differ only in quoting or in whitespace inside quotes", () => {
+    // Pairs a shell reads differently, each of which the old folding made one command.
+    const PAIRS: Array<[string, string]> = [
+      ["'$SHELL'", "$SHELL"],
+      ["echo '$HOME'", 'echo "$HOME"'],
+      ["rm '*.log'", "rm *.log"],
+      ["printf 'a  b'", "printf 'a b'"],
+    ];
+
+    const commandsListed = () => commandOptions().map((o) => o.getAttribute("data-command"));
+    const bandOf = (option: HTMLElement) => {
+      const all = screen.getAllByRole("option");
+      return all
+        .slice(0, all.indexOf(option))
+        .reverse()
+        .find((o) => o.getAttribute("aria-disabled") === "true")
+        ?.getAttribute("aria-label");
+    };
+
+    it("runs what was typed, not a quoted history row that looks the same once quotes are dropped", async () => {
+      seedHistory("'$SHELL'");
+      mockAddTerminal.mockResolvedValue(undefined);
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.change(input, { target: { value: "$SHELL" } });
+
+      const [typed, quoted] = commandOptions();
+      expect(typed!.getAttribute("data-command")).toBe("$SHELL");
+      expect(typed!.textContent).toMatch(/^Run/);
+      expect(quoted!.getAttribute("data-command")).toBe("'$SHELL'");
+      expect(document.getElementById(input.getAttribute("aria-activedescendant")!)).toBe(typed);
+
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
+      expect(mockAddTerminal).toHaveBeenCalledTimes(1);
+      expect(mockAddTerminal).toHaveBeenCalledWith(expect.objectContaining({ command: "$SHELL" }));
+    });
+
+    it("lights the row that is exactly what was typed when a quoted spelling sits above it", async () => {
+      seedHistory("'$SHELL'", "$SHELL");
+      mockAddTerminal.mockResolvedValue(undefined);
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.change(input, { target: { value: "$SHELL" } });
+
+      expect(commandsListed()).toEqual(["'$SHELL'", "$SHELL"]);
+      expect(document.getElementById(input.getAttribute("aria-activedescendant")!)).toBe(
+        commandOptions()[1]
+      );
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
+      expect(mockAddTerminal).toHaveBeenCalledWith(expect.objectContaining({ command: "$SHELL" }));
+    });
+
+    it("runs the quoted command when it is the typed one, even with the unquoted spelling in history", async () => {
+      seedHistory("$SHELL");
+      mockAddTerminal.mockResolvedValue(undefined);
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.change(input, { target: { value: "'$SHELL'" } });
+
+      expect(commandsListed()[0]).toBe("'$SHELL'");
+      await act(async () => {
+        fireEvent.keyDown(input, { key: "Enter" });
+      });
+      expect(mockAddTerminal).toHaveBeenCalledWith(
+        expect.objectContaining({ command: "'$SHELL'" })
+      );
+    });
+
+    it("completes a row that differs from the typed text only by its quotes", () => {
+      seedHistory("'$SHELL'");
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.change(input, { target: { value: "$SHELL" } });
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+
+      expect(document.getElementById(input.getAttribute("aria-activedescendant")!)).toBe(
+        commandOptions()[1]
+      );
+      expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(false);
+      expect(screen.getByDisplayValue("'$SHELL'")).toBe(input);
+      expect(mockAddTerminal).not.toHaveBeenCalled();
+      // The field now holds the lit command, so the next Tab moves on as usual.
+      expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(true);
+    });
+
+    it("keeps a completed pin lit, with its own settings, when its saved text has space around it", async () => {
+      settingsMock.runCommands = [
+        { id: "s", name: "Ready", command: "echo ready ", preferredLocation: "dock" },
+      ];
+      mockAddTerminal.mockResolvedValue(undefined);
+      try {
+        render(<Footer projectId="test-project" />);
+        const input = openPanel();
+        fireEvent.change(input, { target: { value: "echo" } });
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(false);
+
+        // No second "Run echo ready" row beside the pin it was completed from.
+        expect(commandsListed()).toEqual(["echo ready "]);
+        const lit = document.getElementById(input.getAttribute("aria-activedescendant")!);
+        expect(lit).toBe(commandOptions()[0]);
+        expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(true);
+
+        await act(async () => {
+          fireEvent.keyDown(input, { key: "Enter" });
+        });
+        expect(mockAddTerminal).toHaveBeenCalledWith(
+          expect.objectContaining({ command: "echo ready ", location: "dock" })
+        );
+      } finally {
+        settingsMock.runCommands = [];
+      }
+    });
+
+    describe("when a pin's saved text and a history entry differ only by surrounding space", () => {
+      beforeEach(() => {
+        settingsMock.runCommands = [
+          { id: "s", name: "Ready", command: "echo ready ", preferredLocation: "dock" },
+        ];
+        seedHistory("echo ready");
+        mockAddTerminal.mockResolvedValue(undefined);
+      });
+      afterEach(() => {
+        settingsMock.runCommands = [];
+      });
+
+      it("runs the history entry a Tab completed, not the pin it trims equal to", async () => {
+        render(<Footer projectId="test-project" />);
+        const input = openPanel();
+        fireEvent.change(input, { target: { value: "echo" } });
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(false);
+
+        expect(commandsListed()).toEqual(["echo ready ", "echo ready"]);
+        expect(document.getElementById(input.getAttribute("aria-activedescendant")!)).toBe(
+          commandOptions()[1]
+        );
+        await act(async () => {
+          fireEvent.keyDown(input, { key: "Enter" });
+        });
+        expect(mockAddTerminal).toHaveBeenCalledWith(
+          expect.objectContaining({ command: "echo ready", location: "grid" })
+        );
+      });
+
+      it.each([
+        ["with the list open", false],
+        ["with the list shut", true],
+      ])("runs the entry that is exactly what was typed, %s", async (_label, shut) => {
+        render(<Footer projectId="test-project" />);
+        const input = openPanel();
+        fireEvent.change(input, { target: { value: "echo ready" } });
+        if (shut) fireEvent.keyDown(input, { key: "Escape" });
+
+        await act(async () => {
+          fireEvent.keyDown(input, { key: "Enter" });
+        });
+        expect(mockAddTerminal).toHaveBeenCalledWith(
+          expect.objectContaining({ command: "echo ready", location: "grid" })
+        );
+      });
+    });
+
+    it.each(PAIRS)("keeps %s and %s as two suggestions", (first, second) => {
+      seedHistory(first, second);
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+
+      expect(commandsListed()).toEqual([first, second]);
+    });
+
+    it("still collapses a history entry stored twice, without losing the spelling beside it", () => {
+      seedHistory("'$SHELL'", "$SHELL", "$SHELL");
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+
+      expect(commandsListed()).toEqual(["'$SHELL'", "$SHELL"]);
+    });
+
+    it.each(PAIRS)("leaves both %s and %s recallable once each has run", async (first, second) => {
+      mockAddTerminal.mockResolvedValue(undefined);
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      for (const command of [first, second]) {
+        fireEvent.change(input, { target: { value: command } });
+        await act(async () => {
+          fireEvent.keyDown(input, { key: "Enter" });
+        });
+      }
+      expect(mockAddTerminal).toHaveBeenCalledTimes(2);
+      expect(mockAddTerminal.mock.calls.map(([panel]) => panel.command)).toEqual([first, second]);
+
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      expect(commandsListed()).toEqual([second, first]);
+    });
+
+    it.each([
+      [
+        "a pinned command",
+        () => {
+          settingsMock.runCommands = [{ id: "s", name: "Shell", command: "'$SHELL'" }];
+        },
+      ],
+      [
+        "a detected script",
+        () => {
+          settingsMock.allDetectedRunners = [{ id: "r", name: "shell", command: "'$SHELL'" }];
+        },
+      ],
+    ])(
+      "runs what was typed, not %s that looks the same once quotes are dropped",
+      async (_source, arrange) => {
+        arrange();
+        mockAddTerminal.mockResolvedValue(undefined);
+        try {
+          render(<Footer projectId="test-project" />);
+          const input = openPanel();
+          fireEvent.change(input, { target: { value: "$SHELL" } });
+
+          expect(commandsListed()).toEqual(["$SHELL", "'$SHELL'"]);
+          await act(async () => {
+            fireEvent.click(screen.getByRole("button", { name: "Run" }));
+          });
+          expect(mockAddTerminal).toHaveBeenCalledWith(
+            expect.objectContaining({ command: "$SHELL" })
+          );
+        } finally {
+          settingsMock.allDetectedRunners = [];
+          settingsMock.runCommands = [];
+        }
+      }
+    );
+
+    it("keeps a pin written with quotes apart from the detected script, and unpins the text it was saved as", () => {
+      settingsMock.runCommands = [{ id: "s", name: "Tests", command: 'npm run "test"' }];
+      settingsMock.allDetectedRunners = [{ id: "r", name: "test", command: "npm run test" }];
+      try {
+        render(<Footer projectId="test-project" />);
+        const input = openPanel();
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+
+        expect(commandsListed()).toEqual(['npm run "test"', "npm run test"]);
+        fireEvent.keyDown(input, { key: "π", code: "KeyP", altKey: true });
+        expect(settingsMock.removeFromSaved).toHaveBeenCalledWith('npm run "test"');
+      } finally {
+        settingsMock.allDetectedRunners = [];
+        settingsMock.runCommands = [];
+        settingsMock.removeFromSaved.mockReset();
+      }
+    });
+
+    it("still shows a pin and the detected script it matches as one pinned row", () => {
+      settingsMock.runCommands = [{ id: "s", name: "Tests", command: "npm run test" }];
+      settingsMock.allDetectedRunners = [{ id: "r", name: "test", command: "npm run test" }];
+      try {
+        render(<Footer projectId="test-project" />);
+        const input = openPanel();
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+
+        expect(commandsListed()).toEqual(["npm run test"]);
+        expect(bandOf(commandOptions()[0]!)).toBe("Pinned");
+      } finally {
+        settingsMock.allDetectedRunners = [];
+        settingsMock.runCommands = [];
+      }
+    });
+
+    it("takes a detected script's pinned name and settings from the pin that is exactly its text", () => {
+      settingsMock.runCommands = [
+        { id: "q", name: "Quoted", command: 'npm run "test"' },
+        { id: "e", name: "Exact", command: "npm run test", preferredLocation: "dock" },
+      ];
+      settingsMock.allDetectedRunners = [{ id: "r", name: "test", command: "npm run test" }];
+      try {
+        render(<Footer projectId="test-project" />);
+        const input = openPanel();
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+
+        expect(commandsListed()).toEqual(["npm run test", 'npm run "test"']);
+        const [exact, quoted] = commandOptions();
+        expect(exact!.textContent).toContain("Exact");
+        expect(quoted!.textContent).toContain("Quoted");
+        const summary = document.getElementById(exact!.getAttribute("aria-describedby")!)!;
+        expect(summary.textContent).toContain("Dock");
+      } finally {
+        settingsMock.allDetectedRunners = [];
+        settingsMock.runCommands = [];
+      }
+    });
+
+    it.each([
+      [
+        "a pinned command",
+        () => {
+          settingsMock.runCommands = [{ id: "s", name: "Wipe", command: "rm *.log" }];
+        },
+      ],
+      [
+        "a detected script",
+        () => {
+          settingsMock.allDetectedRunners = [{ id: "r", name: "wipe", command: "rm *.log" }];
+        },
+      ],
+    ])("keeps %s apart from a history entry that differs only by quoting", (_source, arrange) => {
+      arrange();
+      seedHistory("rm '*.log'");
+      try {
+        render(<Footer projectId="test-project" />);
+        const input = openPanel();
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+
+        expect(commandsListed()).toEqual(["rm *.log", "rm '*.log'"]);
+      } finally {
+        settingsMock.allDetectedRunners = [];
+        settingsMock.runCommands = [];
+      }
+    });
   });
 
   it("describes the lit row with what running it will do", () => {
@@ -828,6 +1180,205 @@ describe("QuickRun", () => {
         expect.objectContaining({ command: "npm test" })
       );
       expect(screen.queryByRole("alert")).toBeNull();
+    });
+  });
+
+  describe("when the history can't be read or saved", () => {
+    /** What AppLayout's section boundary does to the sidebar when a render throws. */
+    class SectionBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+      state = { failed: false };
+      static getDerivedStateFromError() {
+        return { failed: true };
+      }
+      render() {
+        return this.state.failed ? <div data-testid="section-fallback" /> : this.props.children;
+      }
+    }
+
+    const quotaError = () => new DOMException("The quota has been exceeded.", "QuotaExceededError");
+    const accessDenied = () => new DOMException("Access is denied.", "SecurityError");
+
+    const degradedNotice = vi.fn();
+    // A structural failure parks writes in a memory map shared by the whole module,
+    // so each test uses a project of its own rather than inheriting the last one's.
+    let projectNumber = 0;
+    let projectId: string;
+    let historyKey: string;
+    let autoRestartKey: string;
+    let historyWrites: string[];
+
+    /** Makes the history key's reads or writes fail, recording every attempted write. */
+    function failHistory(method: "getItem" | "setItem", error: () => Error) {
+      if (method === "getItem") {
+        vi.spyOn(localStorage, "getItem").mockImplementation((key) => {
+          if (key === historyKey) throw error();
+          return storageMap.get(key) ?? null;
+        });
+        return;
+      }
+      vi.spyOn(localStorage, "setItem").mockImplementation((key, value) => {
+        if (key === historyKey) {
+          historyWrites.push(value);
+          throw error();
+        }
+        storageMap.set(key, value);
+      });
+    }
+
+    function renderFooter(strict = false) {
+      const tree = (
+        <SectionBoundary>
+          <Footer projectId={projectId} />
+        </SectionBoundary>
+      );
+      return render(strict ? <StrictMode>{tree}</StrictMode> : tree);
+    }
+
+    async function launch(command: string) {
+      mockAddTerminal.mockResolvedValue(undefined);
+      typeAndEnter(command);
+      await act(async () => {});
+    }
+
+    function recentCommands() {
+      fireEvent.keyDown(screen.getByPlaceholderText("Run a command"), { key: "ArrowDown" });
+      return commandOptions().map((o) => o.textContent);
+    }
+
+    beforeEach(() => {
+      projectId = `history-failure-${++projectNumber}`;
+      historyKey = `daintree_cmd_history_${projectId}`;
+      autoRestartKey = `daintree_quickrun_autorestart_${projectId}`;
+      historyWrites = [];
+      setPermanentFallbackHandler(degradedNotice);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      setPermanentFallbackHandler(null);
+      degradedNotice.mockReset();
+      vi.restoreAllMocks();
+    });
+
+    it("renders when reading the stored history throws, and points at the degraded-storage notice", async () => {
+      failHistory("getItem", accessDenied);
+      renderFooter();
+
+      expect(screen.queryByTestId("section-fallback")).toBeNull();
+      expect(openPanel()).not.toBeNull();
+      expect(degradedNotice).toHaveBeenCalledTimes(1);
+
+      await launch("npm test");
+      expect(recentCommands()).toEqual([expect.stringContaining("npm test")]);
+    });
+
+    it("keeps a launch that succeeded when saving its history hits the storage quota", async () => {
+      failHistory("setItem", quotaError);
+      setupPendingTerminal();
+      renderFooter();
+
+      typeAndEnter("npm test");
+      // Recording waits for the terminal to exist.
+      expect(historyWrites).toEqual([]);
+      await act(async () => resolveTerminal());
+
+      expect(historyWrites).toHaveLength(1);
+      expect(screen.queryByTestId("section-fallback")).toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect((screen.getByPlaceholderText("Run a command") as HTMLInputElement).value).toBe("");
+      expect(recentCommands()).toEqual([expect.stringContaining("npm test")]);
+      // A full quota is transient; storage is still healthy, so no degraded-storage notice.
+      expect(degradedNotice).not.toHaveBeenCalled();
+    });
+
+    it("records nothing for a launch that failed", async () => {
+      failHistory("setItem", quotaError);
+      setupPendingTerminal();
+      renderFooter();
+
+      typeAndEnter("npm test");
+      await act(async () => rejectTerminal(new Error("spawn failed")));
+
+      expect(screen.getByRole("alert")).not.toBeNull();
+      expect(historyWrites).toEqual([]);
+      expect(storageMap.has(historyKey)).toBe(false);
+    });
+
+    it("keeps a command the quota refused when the panel is closed and reopened", async () => {
+      failHistory("setItem", quotaError);
+      renderFooter();
+      await launch("npm test");
+
+      fireEvent.click(screen.getByRole("button", { name: /run command/i }));
+      expect(screen.queryByPlaceholderText("Run a command")).toBeNull();
+      openPanel();
+
+      expect(recentCommands()).toEqual([expect.stringContaining("npm test")]);
+    });
+
+    it("keeps history in memory and raises the notice once when storage fails structurally", async () => {
+      failHistory("setItem", accessDenied);
+      renderFooter();
+
+      await launch("npm test");
+      await launch("npm run lint");
+
+      expect(screen.queryByTestId("section-fallback")).toBeNull();
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(recentCommands()).toEqual([
+        expect.stringContaining("npm run lint"),
+        expect.stringContaining("npm test"),
+      ]);
+      expect(degradedNotice).toHaveBeenCalledTimes(1);
+      // Once storage is known broken, it isn't hit again.
+      expect(historyWrites).toHaveLength(1);
+    });
+
+    it("writes the history once per launch under StrictMode, not once per updater run", async () => {
+      const setItem = vi.spyOn(localStorage, "setItem");
+      renderFooter(true);
+
+      await launch("npm test");
+
+      expect(setItem.mock.calls.filter(([key]) => key === historyKey)).toHaveLength(1);
+      expect(recentCommands()).toEqual([expect.stringContaining("npm test")]);
+    });
+
+    it("writes the auto-restart choice once per toggle under StrictMode", () => {
+      const setItem = vi.spyOn(localStorage, "setItem");
+      renderFooter(true);
+      openPanel();
+      const toggle = screen.getByRole("button", { name: "Auto-restart" });
+
+      fireEvent.click(toggle);
+      expect(toggle.getAttribute("aria-pressed")).toBe("true");
+      fireEvent.click(toggle);
+      expect(toggle.getAttribute("aria-pressed")).toBe("false");
+
+      expect(setItem.mock.calls.filter(([key]) => key === autoRestartKey)).toEqual([
+        [autoRestartKey, "true"],
+        [autoRestartKey, "false"],
+      ]);
+    });
+
+    it("starts from an empty history when the stored one is malformed", () => {
+      for (const stored of [
+        "{not json",
+        JSON.stringify([null]),
+        JSON.stringify([{ command: 7, timestamp: 1 }]),
+        JSON.stringify({ command: "npm test", timestamp: 1 }),
+      ]) {
+        storageMap.set(historyKey, stored);
+        const view = renderFooter();
+        fireEvent.keyDown(openPanel(), { key: "ArrowDown" });
+
+        expect(screen.queryByTestId("section-fallback")).toBeNull();
+        expect(screen.queryAllByRole("option")).toEqual([]);
+        expect(storageMap.has(historyKey)).toBe(false);
+        view.unmount();
+        resetQuickRunHistoryForTests();
+      }
     });
   });
 

@@ -3,11 +3,13 @@ import type { DispatchEnvelope } from "./shared.js";
 import { MCP_SSE_IDLE_TIMEOUT_MS, RESOURCE_NOT_OWNED_CODE } from "./shared.js";
 import { parseLastMessageReadArgs, type LastMessageReadArgs } from "./lastMessageArgs.js";
 import {
+  assistantPrincipalOf,
   extractOwnedResourcesFromDispatch,
   type OwnedResourceKind,
   type OwnedResourceRecord,
 } from "./resourceOwnership.js";
 import type { TerminalAdoptionRecord } from "./terminalAdoption.js";
+import { noteAssistantToolAnswer } from "../scheduledRuns/assistantWorkerLaunches.js";
 import type { OwnedMainExecutors, SessionServerDeps } from "./sessionServerDepsContract.js";
 import { isHandedBackUntouched } from "./sessionServerDepsContract.js";
 import { TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL } from "./sessionToolIds.js";
@@ -122,20 +124,34 @@ export const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
     acceptsAdoption: false,
   },
   // Moves a pane this session launched to another preset of its agent
-  // (#14369). The pane survives, so the record stays; but the conversation
-  // ends as surely as on a close, so a handed-over pane is refused like one.
-  // Only the preset is forwarded: `confirmed` never is, so the approval is the
-  // host's and the model cannot supply its own.
+  // (#14369). The pane survives, so the record stays; but the run ends as
+  // surely as on a close, so a handed-over pane is refused like one. The
+  // preset and whether to keep the conversation (#16045) are forwarded:
+  // `confirmed` never is, so the approval is the host's and the model cannot
+  // supply its own.
   "terminal.restartOnPresetOwned": {
     resourceKind: "terminal",
     executor: "renderer",
     delegateTo: "terminal.restartOnPreset",
     idArg: "terminalId",
-    forwardArgs: ["presetId"],
+    forwardArgs: ["presetId", "keepConversation"],
     releasesOwnership: false,
     acceptsAdoption: false,
   },
   "worktree.deleteOwned": {
+    resourceKind: "worktree",
+    executor: "renderer",
+    delegateTo: "worktree.delete",
+    idArg: "worktreeId",
+    releasesOwnership: true,
+    acceptsAdoption: false,
+  },
+  // The owned delete with its preconditions run first (#15737): clean and
+  // pushed, no one else's process, this session's panes closed and their
+  // processes gone. Main runs those before this delegate, which is the same
+  // `worktree.delete` the owned delete sends, so the confirmation and its
+  // preview are the same. `timeoutMs` is main's and never forwarded.
+  "worktree.retireOwned": {
     resourceKind: "worktree",
     executor: "renderer",
     delegateTo: "worktree.delete",
@@ -330,7 +346,7 @@ export function filterTerminalListToOwned(
  * `terminal.close`'s documented "nothing closed" answer, and the ownership
  * release must be able to tell that apart from a real close.
  */
-function closedIdsInclude(result: unknown, id: string): boolean {
+export function closedIdsInclude(result: unknown, id: string): boolean {
   if (typeof result !== "object" || result === null || Array.isArray(result)) return false;
   const closedIds = (result as { closedIds?: unknown }).closedIds;
   return Array.isArray(closedIds) && closedIds.includes(id);
@@ -578,6 +594,48 @@ export async function dispatchOwnedResource(
 }
 
 /**
+ * Note what a close reported closed, under the owner the call was admitted
+ * with (#15728): the authority `terminal.waitForExit` checks, which outlives
+ * the creation record `terminal.closeOwned` releases. Read from the close's
+ * own result, never its arguments, so an empty `closedIds` notes nothing. A
+ * session that lost its transport mid-close notes nothing either, as with a
+ * creation. `generationOf` names the incarnation each close reached, read
+ * before the close was sent where the call named it.
+ */
+export function noteClosedTerminals(
+  call: {
+    readonly sessionId: string;
+    readonly sessionStore: Pick<
+      SessionStore,
+      "resourceOwnership" | "hasLiveTransport" | "sessionWorkspaceMap"
+    >;
+    readonly ownershipOwner: string;
+  },
+  envelope: DispatchEnvelope,
+  generationOf: (terminalId: string) => number | undefined
+): void {
+  const { sessionId, sessionStore, ownershipOwner } = call;
+  if (!envelope.result.ok) return;
+  const result = envelope.result.result;
+  if (typeof result !== "object" || result === null || Array.isArray(result)) return;
+  const closedIds = (result as { closedIds?: unknown }).closedIds;
+  if (!Array.isArray(closedIds) || closedIds.length === 0) return;
+  if (
+    !sessionStore.resourceOwnership.isPrincipalOwner(ownershipOwner) &&
+    !sessionStore.hasLiveTransport(sessionId)
+  ) {
+    return;
+  }
+  sessionStore.resourceOwnership.noteClosed(
+    ownershipOwner,
+    closedIds
+      .filter((id): id is string => typeof id === "string" && id.length > 0)
+      .map((terminalId) => ({ terminalId, launchGeneration: generationOf(terminalId) })),
+    envelope.dispatchedWorkspace?.workspaceId ?? sessionStore.sessionWorkspaceMap.get(sessionId)
+  );
+}
+
+/**
  * Fold a completed dispatch into the session's ownership ledger (#11909):
  * record what it created, and release what it cleaned up.
  *
@@ -598,9 +656,17 @@ export function recordOwnershipFromDispatch(
     readonly actionId: string;
     readonly sessionStore: Pick<
       SessionStore,
-      "resourceOwnership" | "terminalAdoption" | "workerCreations" | "hasLiveTransport"
+      | "resourceOwnership"
+      | "terminalAdoption"
+      | "workerCreations"
+      | "hasLiveTransport"
+      | "sessionWorkspaceMap"
     >;
     readonly ownershipOwner: string;
+    /** What the caller asked, for a scheduled run's record of the agent it named (#16169). */
+    readonly args?: unknown;
+    /** When the call was made; absent, now. */
+    readonly askedAt?: number;
   },
   owned: {
     readonly ownedResource: OwnedResourceTool | undefined;
@@ -630,6 +696,24 @@ export function recordOwnershipFromDispatch(
   }
   const drafts = extractOwnedResourcesFromDispatch(actionId, envelope.result);
   if (drafts.length === 0) return;
+  // A launch that happened is a fact about a schedule's run whatever the
+  // session's authority is now (#16169); the run history decides whether the
+  // session is one a schedule started.
+  const principal = assistantPrincipalOf(ownershipOwner);
+  if (principal?.kind === "help" && envelope.result.ok) {
+    noteAssistantToolAnswer({
+      helpSessionId: principal.helpSessionId,
+      tool: actionId,
+      args: call.args,
+      result: envelope.result.result,
+      hostId: null,
+      hostName: null,
+      projectId:
+        envelope.dispatchedWorkspace?.workspaceId ??
+        sessionStore.sessionWorkspaceMap.get(sessionId),
+      askedAt: call.askedAt ?? Date.now(),
+    });
+  }
   // Liveness guard, mirroring the dedup completion hook below: a creation
   // admitted before the session was revoked can land after
   // `clearSessionBinding` already dropped the ledger. Writing then would

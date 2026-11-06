@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { ASSISTANT_SLOTS, MAX_ASSISTANT_SLOTS } from "../../config/assistantSlots.js";
 import {
+  AgentDirectoryLiveEntrySchema,
+  AgentDirectoryResumableEntrySchema,
+  AgentDirectorySubjectSchema,
+  agentDirectoryForLanes,
   AGENT_DIRECTORY_BYTES_MAX,
   AGENT_DIRECTORY_LABEL_MAX,
   cutAgentLabel,
@@ -96,5 +101,100 @@ describe("cutAgentLabel", () => {
     expect(cutAgentLabel("y".repeat(500))?.length).toBe(AGENT_DIRECTORY_LABEL_MAX);
     expect(cutAgentLabel("   ")).toBeNull();
     expect(cutAgentLabel(undefined)).toBeNull();
+  });
+});
+
+describe("AgentDirectoryLiveEntrySchema handback (#16190)", () => {
+  it("takes the marker's report beside its time, and an older host's entry without one", () => {
+    const withReport = { ...entry(0), handback: { observedAt: 5, report: "needs-you" } };
+    expect(AgentDirectoryLiveEntrySchema.parse(withReport).handback).toEqual({
+      observedAt: 5,
+      report: "needs-you",
+    });
+    const older = { ...entry(0), handback: { observedAt: 5 } };
+    expect(AgentDirectoryLiveEntrySchema.parse(older).handback).toEqual({ observedAt: 5 });
+  });
+
+  it("refuses a report that is neither marker, and drops a summary a host sent", () => {
+    const unknown = { ...entry(0), handback: { observedAt: 5, report: "approve" } };
+    expect(AgentDirectoryLiveEntrySchema.safeParse(unknown).success).toBe(false);
+    const withText = { ...entry(0), handback: { observedAt: 5, report: "done", message: "x" } };
+    expect(AgentDirectoryLiveEntrySchema.parse(withText).handback).toEqual({
+      observedAt: 5,
+      report: "done",
+    });
+  });
+});
+
+describe("assistant lanes (#16218)", () => {
+  const subject = (lane: unknown) => ({
+    hostId: "local",
+    scope: { kind: "project", projectId: "p" },
+    terminalId: "t",
+    incarnation: 1,
+    lane,
+  });
+  const resumable = (lane: unknown) => ({
+    state: "resumable",
+    role: "assistant",
+    hostId: "local",
+    scope: { kind: "project", projectId: "p" },
+    lane,
+    agentId: "claude",
+    capturedAt: 1,
+  });
+
+  it("names every lane a project can hold, live or waiting to resume", () => {
+    for (const lane of ASSISTANT_SLOTS) {
+      expect(AgentDirectorySubjectSchema.safeParse(subject(lane)).success).toBe(true);
+      expect(AgentDirectoryResumableEntrySchema.safeParse(resumable(lane)).success).toBe(true);
+    }
+  });
+
+  it("refuses a lane past the ceiling, below zero or between slots", () => {
+    for (const lane of [MAX_ASSISTANT_SLOTS, -1, 1.5, "1", null]) {
+      expect(AgentDirectorySubjectSchema.safeParse(subject(lane)).success).toBe(false);
+      expect(AgentDirectoryResumableEntrySchema.safeParse(resumable(lane)).success).toBe(false);
+    }
+  });
+});
+
+describe("agentDirectoryForLanes (#16218)", () => {
+  const assistant = (lane: number): AgentDirectoryLiveEntry => ({
+    ...entry(lane),
+    role: "assistant",
+    subject: { ...entry(lane).subject, lane },
+    attached: true,
+  });
+  const directory = (entries: AgentDirectory["entries"]): AgentDirectory => ({
+    coverage: "ok",
+    observedAt: 1,
+    complete: true,
+    omitted: 1,
+    entries,
+  });
+
+  it("leaves out entries in lanes past the count, live or resumable, and counts them", () => {
+    const resumable = {
+      state: "resumable" as const,
+      role: "assistant" as const,
+      hostId: "local",
+      scope: { kind: "project" as const, projectId: "p" },
+      lane: 4,
+      agentId: null,
+      capturedAt: 1,
+    };
+    const fitted = agentDirectoryForLanes(
+      directory([entry(9), assistant(2), assistant(3), resumable]),
+      3
+    );
+    // A worker names no lane and always stays.
+    expect(fitted.entries).toEqual([entry(9), assistant(2)]);
+    expect(fitted.omitted).toBe(3);
+  });
+
+  it("returns a directory with nothing past the count unchanged", () => {
+    const within = directory([entry(0), assistant(0), assistant(2)]);
+    expect(agentDirectoryForLanes(within, 3)).toBe(within);
   });
 });

@@ -16,6 +16,7 @@ import {
 import { usePanelStore } from "@/store";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { actionService } from "@/services/ActionService";
+import { schedulesClient } from "@/clients/schedulesClient";
 import { notify } from "@/lib/notify";
 import { UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { MAX_ASSISTANT_SLOTS, assistantSlotKey } from "@shared/config/assistantSlots";
@@ -89,29 +90,16 @@ export function useHelpSessionLanes({
   // that restarts is the one the request named rather than whichever is in front
   // when the user confirms.
   const [pendingRestart, setPendingRestart] = useState<PendingRestart | null>(null);
-  // Where the restart confirm hands focus back: a tab menu's item is gone by the
-  // time the dialog closes, but the lane's tab survives a restart. A ref because
-  // the dialog resolves it after its exit animation, once the pending slot is
-  // already cleared.
-  const restartFocusSlotRef = useRef<number | null>(null);
   // The lane a tab's close is waiting on confirmation for (#12108). Only a
   // conversation the app can't bring back asks (#15385); every other close acts
   // at once and offers the way back instead.
   const [pendingCloseSlot, setPendingCloseSlot] = useState<number | null>(null);
   const [pendingCloseCost, setPendingCloseCost] = useState<PendingCloseCost | null>(null);
-  // The lane focus should land on once a confirmed close removes a background
-  // lane: its neighbour, the following one first. Null when the lane being
-  // closed is the selected one — focus then follows the store's new selection.
-  const [pendingCloseSuccessor, setPendingCloseSuccessor] = useState<number | null>(null);
-  // The lane the confirm was asked about, kept past its answer: the dialog
-  // resolves its focus target after the exit animation, by when the pending slot
-  // is cleared, and a cancelled close has to land back on this lane's tab.
-  const closeFocusSlotRef = useRef<number | null>(null);
 
   // --- Parallel lanes (#12108) -------------------------------------------
-  // One base for the whole tablist/tabpanel relationship. Both ends have to name
-  // the same ids and neither can hold a ref to the other, so the panel owns the
-  // base and both sides derive from it.
+  // One base for the strip's ids and the body named from them. Both ends have to
+  // name the same ids and neither can hold a ref to the other, so the panel owns
+  // the base and both sides derive from it.
   const tabIdBase = useId();
   const sessionBodyId = `${tabIdBase}-body`;
   const openSlots = useHelpPanelStore(useShallow(selectOpenSlots));
@@ -204,6 +192,7 @@ export function useHelpSessionLanes({
           agentState: laneAgentStates[index],
           agentId: laneAgentIds[index] ?? null,
           canRestart: laneIsLive[index] || pausedLane?.slot === slot,
+          isLive: laneIsLive[index],
         };
       }),
     [openSlots, laneAgentStates, laneTaskTitles, laneAgentIds, laneIsLive, pausedLane]
@@ -243,6 +232,32 @@ export function useHelpSessionLanes({
       cancelled = true;
     };
   }, [activeWorkspaceId, openSlots.length, terminalId]);
+
+  // A schedule's Assistant (#16169) is started by main, with no view: as its
+  // run is recorded, its lane gets a tab here too, which takes it over when
+  // opened. Only adds tabs; a lane's own tab is never closed or replaced.
+  useEffect(() => {
+    // Optional-chained like the lane listing: a missing binding adds no tabs.
+    if (!activeWorkspaceId || !window.electron?.events?.on) return;
+    let disposed = false;
+    const unsubscribe = schedulesClient.onRunsChanged(({ projectId }) => {
+      if (projectId !== activeWorkspaceId) return;
+      const listing = window.electron.help.listPendingHibernationSlots?.(activeWorkspaceId);
+      void listing
+        ?.then((slots) => {
+          if (disposed) return;
+          const store = useHelpPanelStore.getState();
+          for (const slot of slots) store.ensureSlot(slot);
+        })
+        .catch((err) => {
+          logWarn("HelpPanel: failed to list lanes after a scheduled run changed", err);
+        });
+    });
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, [activeWorkspaceId]);
 
   const handleOpenParallelSession = useCallback((): number | null => {
     const slot = useHelpPanelStore.getState().openSlot();
@@ -411,25 +426,18 @@ export function useHelpSessionLanes({
     (slot: number) => {
       const lane = readLaneForClose(slot);
       if (lane.needsConfirm) {
-        const index = sessionTabs.findIndex((tab) => tab.slot === slot);
-        const successor =
-          slot === activeSlot
-            ? null
-            : (sessionTabs[index + 1]?.slot ?? sessionTabs[index - 1]?.slot ?? null);
-        setPendingCloseSuccessor(successor);
         setPendingCloseCost({
           working: lane.working,
           agentId: lane.agentId,
           dormant: lane.dormant,
           sole: sessionTabs.length === 1,
         });
-        closeFocusSlotRef.current = slot;
         setPendingCloseSlot(slot);
         return;
       }
       closeSlotNow(slot);
     },
-    [readLaneForClose, closeSlotNow, sessionTabs, activeSlot]
+    [readLaneForClose, closeSlotNow, sessionTabs]
   );
 
   const handleConfirmCloseSlot = useCallback(() => {
@@ -477,13 +485,11 @@ export function useHelpSessionLanes({
       const lane = selectSlot(useHelpPanelStore.getState(), slot);
       if (!lane.terminalId && pausedLane?.slot === slot) {
         // Always asks: the captured conversation is exactly what a restart discards.
-        restartFocusSlotRef.current = slot;
         setPendingRestart({ slot, paused: pausedLane });
         return;
       }
       if (!lane.terminalId || !lane.agentId) return;
       if (laneNeedsDiscardConfirm(slot)) {
-        restartFocusSlotRef.current = slot;
         setPendingRestart({ slot, paused: null });
         return;
       }
@@ -508,34 +514,14 @@ export function useHelpSessionLanes({
     setPendingRestart(null);
   }, []);
 
-  const resolveRestartFocusTarget = useCallback(
-    () =>
-      restartFocusSlotRef.current === null
-        ? null
-        : (panelRef.current?.querySelector<HTMLElement>(
-            `[role="tab"][data-slot="${restartFocusSlotRef.current}"]`
-          ) ?? null),
+  // Both confirms hand focus back to the strip's picker, the one control that stands
+  // for every lane and outlives any of them.
+  const resolveSessionPicker = useCallback(
+    () => panelRef.current?.querySelector<HTMLElement>("[data-session-picker]") ?? null,
     [panelRef]
   );
-
-  const resolveCloseFocusTarget = useCallback(() => {
-    const panel = panelRef.current;
-    if (!panel) return null;
-    // Cancelled: the lane is still there. A tab menu's item can't take focus back,
-    // and its neighbour is not where the user was.
-    const kept =
-      closeFocusSlotRef.current === null
-        ? null
-        : panel.querySelector<HTMLElement>(
-            `[role="tab"][data-slot="${closeFocusSlotRef.current}"]`
-          );
-    if (kept) return kept;
-    const successor =
-      pendingCloseSuccessor === null
-        ? null
-        : panel.querySelector<HTMLElement>(`[role="tab"][data-slot="${pendingCloseSuccessor}"]`);
-    return successor ?? panel.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
-  }, [panelRef, pendingCloseSuccessor]);
+  const resolveRestartFocusTarget = resolveSessionPicker;
+  const resolveCloseFocusTarget = resolveSessionPicker;
 
   return {
     tabIdBase,

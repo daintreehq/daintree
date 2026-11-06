@@ -90,6 +90,9 @@ export const theme: BuiltInThemeSource = {
     },
   },
   tokens: {
+    // Parted from the working green it would otherwise share through
+    // `status-success`, as in bondi (#15866): ΔE 0.101.
+    "activity-completed": "#3C5C32",
     "accent-muted": "rgba(139,109,8,0.30)",
     "accent-soft": "rgba(139,109,8,0.18)",
     // Solid so the field edge clears 3:1 on every surface a field sits on
@@ -104,7 +107,7 @@ export const theme: BuiltInThemeSource = {
     "overlay-hover": "rgba(50,38,24,0.08)",
     // Derived 3% is sub-threshold over near-white surfaces.
     "overlay-soft": "rgba(50,38,24,0.055)",
-    // Opaque elevate-to-select for menu/palette rows on white popovers.
+    // Opaque elevate-to-select plane (armed toolbar controls, settings scope).
     "overlay-raised": "#EDEADF",
     // GitHub-brand defaults fail AA on the near-white panel.
     "pr-merged": "#7644CC",

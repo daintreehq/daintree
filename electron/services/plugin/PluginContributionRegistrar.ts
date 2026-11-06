@@ -473,7 +473,9 @@ export class PluginContributionRegistrar {
     // keeps idle plugins from holding live subprocesses they never use.
 
     if (manifest.contributes.forgeProviders.length > 0) {
-      registerForgeProviders(pluginId, manifest.contributes.forgeProviders);
+      registerForgeProviders(pluginId, manifest.contributes.forgeProviders, {
+        builtin: plugin.isBuiltin,
+      });
       // Wake workspace-hosts whose PR polling paused on a "no provider
       // matches" resolution so they re-evaluate against the new descriptor
       // (#9997). Covers both the startup scan and runtime install/enable.
@@ -723,6 +725,20 @@ export class PluginContributionRegistrar {
         );
       }
       this.deps.themesChanged(pluginId, "registered");
+    }
+    // An installed plugin activates in the worker, whose
+    // `host.registerForgeProvider` resolves without binding anything, so its
+    // providers are listed as unavailable. Logged after the commit because the
+    // plugin log only accepts the committed instance.
+    if (!plugin.isBuiltin) {
+      for (const provider of manifest.contributes.forgeProviders) {
+        this.deps.recordPluginLog(
+          plugin,
+          pluginId,
+          "warn",
+          `Forge provider "${provider.id}" is listed as unavailable: forge providers currently run only as built-in plugins, so host.registerForgeProvider() from an installed plugin binds no implementation.`
+        );
+      }
     }
 
     // The host's read-only database endpoint, bound with the plugin rather than

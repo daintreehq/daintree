@@ -345,7 +345,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
       >
         {title && (
           <div className="flex h-7 shrink-0 items-center justify-between gap-2 border-b border-tint/5 px-2">
-            <span className={PALETTE_SECTION_LABEL_CLASS}>{title}</span>
+            <span className={cn(PALETTE_SECTION_LABEL_CLASS, "min-w-0 truncate")}>{title}</span>
             {keyHints.length > 0 ? (
               <span
                 aria-hidden="true"
@@ -407,10 +407,10 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
               // Enter won't act on a stale row, so it doesn't wear the selection.
               const isSelected = idx === selectedIndex && !isRowStale;
               const isPath = item.descriptionKind === "path";
-              const descriptionClass = cn(
-                "min-w-0 text-3xs leading-4",
-                isSelected ? "text-text-primary" : "text-text-secondary"
-              );
+              // The description stays a step under the token on the lit row
+              // too: the row's highlight lifts the token, and lifting both
+              // made the two one undifferentiated line.
+              const descriptionClass = "min-w-0 text-3xs leading-4 text-text-secondary";
               const band =
                 item.group !== undefined && item.group !== items[idx - 1]?.group
                   ? item.group

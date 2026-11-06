@@ -1,6 +1,7 @@
 import { BrowserWindow, session, webContents } from "electron";
 import type { HandlerDependencies } from "../ipc/types.js";
 import { sendToRenderer } from "../ipc/handlers.js";
+import { broadcastToRemoteEndpoints } from "../ipc/utils.js";
 import {
   clearPortHolderWebContentsIfCurrent,
   getAppWebContents,
@@ -13,6 +14,7 @@ import { distributePortsToView, releaseAllTerminalWorkerPorts } from "./portDist
 import { resolveInitialCanvasBackgroundColor } from "./skeletonCss.js";
 import { PtyClient } from "../services/PtyClient.js";
 import { startTerminalLifecycleObserver } from "../services/pty/TerminalLifecycleObserver.js";
+import { startScheduledRunFacts } from "../services/scheduledRuns/index.js";
 import type { MainProcessWatchdogClient } from "../services/MainProcessWatchdogClient.js";
 import { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import { AgentVersionService } from "../services/AgentVersionService.js";
@@ -21,8 +23,7 @@ import { AgentUpdateHandler } from "../services/AgentUpdateHandler.js";
 import { PortalManager } from "../services/PortalManager.js";
 import { EventBuffer } from "../services/EventBuffer.js";
 import { CHANNELS } from "../ipc/channels.js";
-import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
-import { createApplicationMenu, rebuildApplicationMenuIfPluginVisibilityChanged } from "../menu.js";
+import { createApplicationMenu, rebuildApplicationMenuIfStale } from "../menu.js";
 import { onPluginToursChanged } from "../services/plugin/PluginTourRegistry.js";
 import { onProjectPresenceChanged } from "./projectPresenceChanges.js";
 import { ProjectSwitchService } from "../services/ProjectSwitchService.js";
@@ -69,15 +70,7 @@ export function __resetPerWindowInitForTests(): void {
  * stay as they are; a remote view has no window here to loop over.
  */
 function pushHostEventToRemoteViews(name: string, payload: unknown): void {
-  const registry = getEndpointRegistry();
-  if (!registry.hasRemote()) return;
-  for (const endpoint of registry.getRemote()) {
-    try {
-      endpoint.send({ type: "event", channel: CHANNELS.EVENTS_PUSH, args: [{ name, payload }] });
-    } catch {
-      // A closing link must not break delivery to the remaining endpoints.
-    }
-  }
+  broadcastToRemoteEndpoints(CHANNELS.EVENTS_PUSH, [{ name, payload }]);
 }
 
 /**
@@ -111,6 +104,9 @@ export async function initPerWindowServices(
   registerDeferredTask({
     name: `cli-availability-check:${win.id}`,
     run: async () => {
+      // The last-window close leaves queued tasks to drain (#15562), so a
+      // window can be gone before its own task starts.
+      if (win.isDestroyed()) return;
       if (
         reusableAvailability &&
         cliService.getFreshAvailability(CLI_AVAILABILITY_REUSE_MS) === reusableAvailability
@@ -144,6 +140,9 @@ export async function initPerWindowServices(
     registerDeferredTask({
       name: `plugin-menu-rebuild:${win.id}`,
       run: async () => {
+        // Leaves `pluginMenuInitSettled` unset, so a replacement window opened
+        // before plugin init settles still queues its own rebuild.
+        if (win.isDestroyed()) return;
         try {
           const { pluginService } = await import("../services/PluginService.js");
           await pluginService.waitForCatalog();
@@ -164,8 +163,10 @@ export async function initPerWindowServices(
   // change also signals. Plugin menu items and tours are filtered by this
   // window's project too (#13765), so a project switch or a focus change may
   // call for a different menu; those rebuild only when it actually differs,
-  // since a rebuild dismisses a menu the user has open. Debounced: one plugin
-  // load or unload can change the tour set several times in a tick.
+  // since a rebuild dismisses a menu the user has open. A window registering or
+  // unregistering signals presence too, which is how the Window menu's list of
+  // open windows (off macOS) gains or loses an item. Debounced: one plugin load
+  // or unload can change the tour set several times in a tick.
   let pluginMenuRebuild: ReturnType<typeof setTimeout> | null = null;
   let pluginMenuRebuildForced = false;
   const schedulePluginMenuRebuild = (force: boolean): void => {
@@ -184,7 +185,7 @@ export async function initPerWindowServices(
       if (focused ? focused !== win : !forced) return;
       try {
         if (forced) createApplicationMenu(win, cliService);
-        else rebuildApplicationMenuIfPluginVisibilityChanged(win, cliService);
+        else rebuildApplicationMenuIfStale(win, cliService);
       } catch (err) {
         console.error("[MAIN] Plugin menu rebuild failed:", err);
       }
@@ -397,6 +398,9 @@ export function ensureCriticalServices(windowRegistry: WindowRegistry | undefine
   // plugin's terminal-lifecycle feed (#13814) can attribute each terminal's
   // exit, trash and restore to the project it launched in.
   startTerminalLifecycleObserver(ptyClient);
+  // Before any spawn, so a scheduled run that exits within milliseconds of
+  // spawning still has its exit recorded (#15976).
+  startScheduledRunFacts(ptyClient);
   // The host's memory-leak policy decides restarts itself, with or without a
   // view on the project (#14703).
   void import("../services/memoryLeakAutoRestartLive.js")

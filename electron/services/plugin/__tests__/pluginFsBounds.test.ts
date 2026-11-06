@@ -1,7 +1,8 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "fs/promises";
-import { rmSync, symlinkSync } from "node:fs";
+import { closeSync, constants, openSync, rmSync, symlinkSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import os from "os";
 import path from "path";
@@ -281,5 +282,108 @@ describe("host.fs.writeFile while queued behind another writer", () => {
     expect(caught?.code).toBe("TARGET_UNAVAILABLE");
     expect(caught?.currentRevision).toBeUndefined();
     expect(await fs.readFile(target, "utf-8")).toBe("v1");
+  });
+});
+
+/**
+ * #15584: a FIFO with no writer at the path of a single-file read. A blocking
+ * open would sit on a libuv threadpool thread until some writer appeared, so
+ * each of these must settle on its own.
+ */
+describe.skipIf(process.platform === "win32")("host.fs single-file reads of a FIFO", () => {
+  let fifo: string;
+  let fifos: string[];
+
+  const makeFifo = (target: string) => {
+    execFileSync("mkfifo", [target]);
+    fifos.push(target);
+  };
+
+  beforeEach(() => {
+    fifos = [];
+    fifo = path.join(root, "pipe.md");
+    makeFifo(fifo);
+  });
+
+  afterEach(() => {
+    // A read that did block would hold its thread for the rest of the run; a
+    // writer opening and closing the other end releases it with EOF. With no
+    // reader waiting the open fails with ENXIO, which is the expected case.
+    for (const target of fifos) {
+      try {
+        closeSync(openSync(target, constants.O_WRONLY | constants.O_NONBLOCK));
+      } catch {
+        // no reader was waiting
+      }
+    }
+  });
+
+  it.each<"readFile" | "readFileBytes" | "readFileWithRevision">([
+    "readFile",
+    "readFileBytes",
+    "readFileWithRevision",
+  ])("%s refuses it without waiting for a writer", async (name) => {
+    const { api } = harness(root, path.join(base, "data"));
+    await expect(api[name](fifo)).rejects.toMatchObject({
+      code: "TARGET_UNAVAILABLE",
+      message: expect.stringMatching(/^TARGET_UNAVAILABLE:.*not a regular file/),
+    });
+  });
+
+  it("writeFile's revision compare refuses it, leaves it standing and frees the path", async () => {
+    const h = harness(root, path.join(base, "data"));
+    const caught = await h.api.writeFile(fifo, "after", { expectedRevision: sha("") }).then(
+      () => null,
+      (error: unknown) => error as Error & { code?: string; currentRevision?: string }
+    );
+    expect(caught?.code).toBe("TARGET_UNAVAILABLE");
+    expect(caught?.message).toMatch(/not a regular file/);
+    expect(caught?.currentRevision).toBeUndefined();
+    expect(h.deps.safeAppendAudit).not.toHaveBeenCalled();
+    expect((await fs.lstat(fifo)).isFIFO()).toBe(true);
+    // The refusal happened inside the path's write lock; it must not hold it.
+    await expect(runExclusive(fifo, async () => "free")).resolves.toBe("free");
+  });
+
+  it("refuses a regular file swapped for one just before the open", async () => {
+    // Swapped at the open itself, so anything checked on the path beforehand
+    // still saw a regular file: only the opened descriptor shows the FIFO.
+    const { api } = harness(root, path.join(base, "data"));
+    const target = path.join(root, "notes.md");
+    await fs.writeFile(target, "mine");
+    const realOpen = fs.open.bind(fs);
+    let swapped = false;
+    vi.spyOn(fs, "open").mockImplementation(((file, flags, mode) => {
+      if (file === target && !swapped) {
+        swapped = true;
+        rmSync(target);
+        makeFifo(target);
+      }
+      return realOpen(file, flags, mode);
+    }) as typeof fs.open);
+    await expect(api.readFile(target)).rejects.toMatchObject({
+      code: "TARGET_UNAVAILABLE",
+      message: expect.stringMatching(/not a regular file/),
+    });
+    expect(swapped).toBe(true);
+  });
+
+  it("refuses a device", async () => {
+    const { api } = harness("/dev", path.join(base, "data"));
+    await expect(api.readFileBytes("/dev/null")).rejects.toMatchObject({
+      code: "TARGET_UNAVAILABLE",
+    });
+  });
+
+  it("still fails a directory with Node's own error", async () => {
+    const { api } = harness(root, path.join(base, "data"));
+    const dir = path.join(root, "sub");
+    await fs.mkdir(dir);
+    for (const read of [api.readFile, api.readFileBytes, api.readFileWithRevision]) {
+      await expect(read(dir)).rejects.toMatchObject({ code: "EISDIR" });
+    }
+    await expect(api.writeFile(dir, "x", { expectedRevision: sha("") })).rejects.toMatchObject({
+      code: "EISDIR",
+    });
   });
 });

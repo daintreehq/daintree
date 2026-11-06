@@ -90,6 +90,7 @@ const AGENT_CONFIG_DIRS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   [".goose", new Set<string>()],
   [".grok", new Set<string>()],
   [".kimi", new Set<string>()],
+  [".kimi-code", new Set<string>()],
   [".kiro", new Set(["steering"])],
   [".qwen", new Set<string>()],
   [".vibe", new Set<string>()],

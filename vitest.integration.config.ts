@@ -13,13 +13,17 @@ export default defineConfig(({ mode }) => {
     },
     resolve: {
       alias: {
-        "@": path.resolve(__dirname, "./src"),
-        "@shared": path.resolve(__dirname, "./shared"),
+        "@": path.resolve(import.meta.dirname, "./src"),
+        "@shared": path.resolve(import.meta.dirname, "./shared"),
       },
     },
     test: {
       globals: true,
+      clearMocks: false,
       environment: "node",
+      // Same isolation guards as the unit config (temp DAINTREE_USER_DATA, Canopy
+      // scrubbing, process-kill guard), minus its DOM-only priming.
+      setupFiles: ["./vitest.integration.setup.ts"],
       // Only include integration tests
       include: ["**/*.integration.test.{js,ts}"],
       exclude: ["node_modules", "dist", "dist-electron", "dist-typecheck", "build", "release"],

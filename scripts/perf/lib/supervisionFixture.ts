@@ -795,6 +795,7 @@ export const session = bridge.session;
 export const net = bridge.net;
 export const nativeTheme = bridge.nativeTheme;
 export const nativeImage = bridge.nativeImage;
+export const ClipboardItem = bridge.ClipboardItem;
 export const powerMonitor = bridge.powerMonitor;
 export const safeStorage = bridge.safeStorage;
 export const systemPreferences = bridge.systemPreferences;

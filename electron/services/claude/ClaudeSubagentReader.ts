@@ -34,7 +34,6 @@
 import { createReadStream } from "fs";
 import { lstat, open, readdir, realpath, stat } from "fs/promises";
 import { createInterface } from "readline";
-import os from "os";
 import path from "path";
 import {
   SUBAGENT_LIST_LIMIT,
@@ -72,30 +71,31 @@ const TRANSCRIPT_MAX_BYTES = 8 * 1024 * 1024;
 const META_FIELD_MAX_CHARS = 500;
 /** Concurrent per-child reads. A session can hold dozens of children; opening them all at once helps nobody. */
 const LIST_CONCURRENCY = 8;
-/** Parsed-probe entries retained across calls, keyed by file identity. */
-const PROBE_CACHE_MAX = 256;
+/**
+ * What the probe and sidecar caches may hold across calls. Sized for the
+ * workloads the poll actually meets: twenty polled sessions of thirteen shown
+ * children each, or one session showing its fifty, with room to spare. Only
+ * shown rows are cached, so a session's size past the list limit costs nothing.
+ */
+const PROBE_CACHE_MAX_ENTRIES = 512;
+const PROBE_CACHE_MAX_BYTES = 4 * 1024 * 1024;
+const META_CACHE_MAX_ENTRIES = 512;
+const META_CACHE_MAX_BYTES = 2 * 1024 * 1024;
+/** Map, object and fingerprint cost charged per cache entry beyond its strings. */
+const CACHE_ENTRY_OVERHEAD_BYTES = 256;
+/**
+ * An entry used within this long is still being polled, so it is never evicted
+ * to make room for another. Several poll intervals, so a delayed tick doesn't
+ * cool a session that is still on screen.
+ */
+const CACHE_WARM_MS = 30_000;
+/** Scan-found session locations retained across calls, keyed by store and session id. */
+export const CLAUDE_SUBAGENT_LOCATION_CACHE_MAX = 256;
 
 /** Injection seam for tests: a config root and a clock, nothing else. */
 export interface ClaudeSubagentReaderOptions {
   configDir?: string;
   now?: () => number;
-}
-
-/**
- * `CLAUDE_CONFIG_DIR` is a real override the CLI honours, and this repo already
- * treats it as one when discovering commands and skills. Never sourced from the
- * renderer — the process environment is the only input.
- *
- * Known limitation: this reads Daintree's own environment, not the terminal's.
- * A project preset or the user's shell can export a different
- * `CLAUDE_CONFIG_DIR` to the agent alone, and that store is invisible here —
- * the list comes back empty rather than wrong. Closing it means recording the
- * effective value on the pty-host terminal record at spawn.
- */
-export function resolveClaudeConfigDir(env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.CLAUDE_CONFIG_DIR?.trim();
-  if (override) return path.resolve(override);
-  return path.join(os.homedir(), ".claude");
 }
 
 /**
@@ -137,6 +137,55 @@ export function isSafeSubagentId(value: string): boolean {
 }
 
 /**
+ * The project directory the fallback scan last found each session's children
+ * under, by entry name. Only a place a `subagents/` directory was actually
+ * seen is kept, never an absence, so nothing here can hide a child that appears
+ * later. Every reuse is verified afresh, containment included, before it is
+ * returned.
+ */
+const scannedLocations = new Map<string, string>();
+
+function rememberLocation(key: string, entry: string): void {
+  // Re-inserted so the map's order is recency of use, not of discovery.
+  scannedLocations.delete(key);
+  scannedLocations.set(key, entry);
+  while (scannedLocations.size > CLAUDE_SUBAGENT_LOCATION_CACHE_MAX) {
+    const oldest = scannedLocations.keys().next().value;
+    if (oldest === undefined) break;
+    scannedLocations.delete(oldest);
+  }
+}
+
+/**
+ * Whether `projectDir` holds this session's own transcript, as a plain file in
+ * a directory that really is inside the store.
+ *
+ * Claude Code writes `<sid>.jsonl` and `<sid>/subagents/` under the same
+ * project directory, and relocating a session (`/cd`, entering or leaving a
+ * worktree) renames both across together. So a transcript here means any child
+ * this session spawns will appear here too, and no other project directory
+ * needs searching. It only ever spares a scan; it never names a path to read.
+ *
+ * The one split Claude Code can leave is a relocation whose second rename
+ * fails, stranding existing children in the old directory. A location the scan
+ * already found is checked before this, so that case still resolves whenever
+ * those children were seen before the move.
+ */
+async function holdsSessionTranscript(
+  projectDir: string,
+  parentSessionId: string,
+  rootReal: string
+): Promise<boolean> {
+  try {
+    const stats = await lstat(path.join(projectDir, `${parentSessionId}.jsonl`));
+    if (!stats.isFile()) return false;
+  } catch {
+    return false;
+  }
+  return isContainedDirectory(projectDir, rootReal);
+}
+
+/**
  * Locate a session's `subagents/` directory.
  *
  * The derived slug is tried first because it is one `stat`. When it misses —
@@ -144,14 +193,20 @@ export function isSafeSubagentId(value: string): boolean {
  * verified — the projects root is scanned for the directory holding this exact
  * session id. That is the part worth trusting: the id was minted by Daintree at
  * launch, so a directory named after it is this terminal's and no one else's.
+ *
+ * The scan costs one `stat` per project directory the user has ever run Claude
+ * in, and this runs on every subagent poll, so two things spare it (#15669).
+ * A session that has simply not delegated yet keeps its transcript under the
+ * derived slug, and that is enough to know the answer is "nothing yet". A
+ * session the scan did find is looked for there first next time.
  */
 export async function findSubagentsDir(
   cwd: string,
   parentSessionId: string,
-  options: ClaudeSubagentReaderOptions = {}
+  options: ClaudeSubagentReaderOptions & { configDir: string }
 ): Promise<string | null> {
   if (!isSafeSessionId(parentSessionId)) return null;
-  const projectsRoot = path.join(options.configDir ?? resolveClaudeConfigDir(), "projects");
+  const projectsRoot = path.join(options.configDir, "projects");
   // Resolved once so a user who symlinks their whole config dir still matches,
   // while a symlink planted *inside* it cannot point the read somewhere else.
   // A store that is there but unreadable is a failure worth reporting, not an
@@ -164,8 +219,25 @@ export async function findSubagentsDir(
     throw error;
   }
 
-  const direct = path.join(projectsRoot, deriveProjectSlug(cwd), parentSessionId, "subagents");
+  const derivedDir = path.join(projectsRoot, deriveProjectSlug(cwd));
+  const direct = path.join(derivedDir, parentSessionId, "subagents");
   if (await isContainedDirectory(direct, rootReal)) return direct;
+
+  // Keyed on the resolved store, so a different `CLAUDE_CONFIG_DIR` never
+  // reuses another store's answer, while the path handed back is still built
+  // under the root the caller named.
+  const locationKey = `${rootReal}\0${parentSessionId}`;
+  const remembered = scannedLocations.get(locationKey);
+  if (remembered !== undefined) {
+    const candidate = path.join(projectsRoot, remembered, parentSessionId, "subagents");
+    if (await isContainedDirectory(candidate, rootReal)) {
+      rememberLocation(locationKey, remembered);
+      return candidate;
+    }
+    scannedLocations.delete(locationKey);
+  }
+
+  if (await holdsSessionTranscript(derivedDir, parentSessionId, rootReal)) return null;
 
   let entries: string[];
   try {
@@ -179,7 +251,10 @@ export async function findSubagentsDir(
     // traversal-shaped name is skipped rather than resolved.
     if (entry === "." || entry === ".." || entry.includes(path.sep)) continue;
     const candidate = path.join(projectsRoot, entry, parentSessionId, "subagents");
-    if (await isContainedDirectory(candidate, rootReal)) return candidate;
+    if (await isContainedDirectory(candidate, rootReal)) {
+      rememberLocation(locationKey, entry);
+      return candidate;
+    }
   }
   return null;
 }
@@ -201,11 +276,24 @@ export async function isContainedDirectory(target: string, rootReal: string): Pr
   return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
 
-async function regularFileMtime(target: string): Promise<number | null> {
+interface FileIdentity {
+  mtime: number;
+  /** Size and mtime alone repeat across an atomic replace; inode and ctime don't. */
+  fingerprint: string;
+}
+
+/** A plain file's identity, or null for a missing file, a symlink, or anything else. */
+async function regularFileIdentity(target: string): Promise<FileIdentity | null> {
   try {
-    // `lstat` for the same reason as the transcript: a sidecar is a plain file.
+    // `lstat`, not `stat`: `stat` follows the link and reports the target, so
+    // a symlink pointing at another session's file would pass an `isFile`
+    // check on the thing it points at.
     const stats = await lstat(target);
-    return stats.isFile() ? Math.round(stats.mtimeMs) : null;
+    if (!stats.isFile()) return null;
+    return {
+      mtime: Math.round(stats.mtimeMs),
+      fingerprint: `${stats.mtimeMs}:${stats.size}:${stats.ino}:${stats.ctimeMs}`,
+    };
   } catch {
     return null;
   }
@@ -235,10 +323,26 @@ const EMPTY_META: SubagentMeta = {
   createdAt: null,
 };
 
+/**
+ * A copy that owns its characters. V8 can keep a slice as a view into the
+ * string it was cut from, so a capped field or preview headed for a cache
+ * would otherwise hold the whole original while being charged for the slice.
+ * UTF-16 in and out, so lone surrogates survive the copy unchanged.
+ */
+function detached(value: string): string {
+  return Buffer.from(value, "utf16le").toString("utf16le");
+}
+
 function asText(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed.slice(0, META_FIELD_MAX_CHARS) : null;
+}
+
+/** `asText` for a field that will be cached, copied once when the sidecar is parsed. */
+function ownedText(value: unknown): string | null {
+  const text = asText(value);
+  return text === null ? null : detached(text);
 }
 
 /**
@@ -270,10 +374,10 @@ export function parseSubagentMeta(raw: string, createdAt: number | null): Subage
   const meta = parsed as Record<string, unknown>;
   const depth = meta.spawnDepth;
   return {
-    agentType: asText(meta.agentType),
+    agentType: ownedText(meta.agentType),
     // Present only when the caller supplied one, which is often not the case.
-    description: asText(meta.description),
-    model: asText(meta.model),
+    description: ownedText(meta.description),
+    model: ownedText(meta.model),
     depth: typeof depth === "number" && Number.isFinite(depth) ? depth : null,
     createdAt,
   };
@@ -366,17 +470,35 @@ export function inferStatus(
   now: number,
   partialTail = false
 ): AgentSubagentStatus {
+  return statusFor(classifyLast(last), updatedAt, now, partialTail);
+}
+
+/** All of the last record that status depends on, so a cache can hold this instead of the record. */
+type LastRecordKind = "none" | "ended" | "open";
+
+function classifyLast(last: ParsedRecord | null): LastRecordKind {
+  if (!last) return "none";
+  if (last.type === "assistant") {
+    const stop = last.message?.stop_reason;
+    if (typeof stop === "string" && TERMINAL_STOP_REASONS.has(stop)) return "ended";
+  }
+  return "open";
+}
+
+function statusFor(
+  last: LastRecordKind,
+  updatedAt: number,
+  now: number,
+  partialTail: boolean
+): AgentSubagentStatus {
   const recentlyActive = now - updatedAt <= CLAUDE_SUBAGENT_ACTIVE_WINDOW_MS;
   // Something was mid-write when we looked, so whatever came before it is not
   // this child's last word.
   if (partialTail) {
     return recentlyActive ? { type: "working" } : { type: "unknown", reason: "stale" };
   }
-  if (!last) return { type: "unknown", reason: "unrecognized" };
-  if (last.type === "assistant") {
-    const stop = last.message?.stop_reason;
-    if (typeof stop === "string" && TERMINAL_STOP_REASONS.has(stop)) return { type: "completed" };
-  }
+  if (last === "none") return { type: "unknown", reason: "unrecognized" };
+  if (last === "ended") return { type: "completed" };
   if (recentlyActive) return { type: "working" };
   return { type: "unknown", reason: "stale" };
 }
@@ -388,29 +510,130 @@ interface Probe {
   partialTail: boolean;
 }
 
-interface CachedProbe extends Probe {
+/**
+ * What a row needs from a probe, without the parsed records behind it: those
+ * can each be a 128 KiB message, and holding hundreds of them is what kept the
+ * old cache from being bounded by bytes. Status stays a function of the clock,
+ * so it is derived from this on every call rather than stored.
+ */
+interface ProbeSummary {
+  preview: string;
+  firstTimestamp: number | null;
+  last: LastRecordKind;
+  partialTail: boolean;
+}
+
+function summarizeProbe(probe: Probe): ProbeSummary {
+  return {
+    preview: detached(
+      recordText(probe.first?.message ?? null).slice(0, SUBAGENT_MESSAGE_MAX_CHARS)
+    ),
+    firstTimestamp: probe.first?.timestamp ?? null,
+    last: classifyLast(probe.last),
+    partialTail: probe.partialTail,
+  };
+}
+
+interface CacheSlot<T> {
   fingerprint: string;
+  value: T;
+  bytes: number;
+  touchedAt: number;
 }
 
 /**
- * Most children in a session are finished and will never change again, so the
- * probe they need is worth keeping. Keyed on mtime+size, which is what
- * `list` already had to `stat` — a child that writes another line simply misses.
+ * A file-identity cache that survives being polled in a loop larger than itself.
+ *
+ * Plain FIFO or LRU eviction fails all at once under the poll: every list walks
+ * the same files in the same order, so once they outnumber the cache each
+ * insert evicts exactly the entry the next poll needs, and the hit rate drops
+ * from all to none. Here an entry used within `CACHE_WARM_MS` is never evicted
+ * to admit another. When everything held is warm the newcomer goes uncached,
+ * so what the cache does hold keeps hitting and only the overflow is re-read.
+ * Entries nobody polls any more go cold and are the first to go.
  */
-const probeCache = new Map<string, CachedProbe>();
+export class WarmCache<T> {
+  private readonly slots = new Map<string, CacheSlot<T>>();
+  private totalBytes = 0;
 
-function rememberProbe(key: string, fingerprint: string, probe: Probe): void {
-  probeCache.set(key, { ...probe, fingerprint });
-  while (probeCache.size > PROBE_CACHE_MAX) {
-    const oldest = probeCache.keys().next().value;
-    if (oldest === undefined) break;
-    probeCache.delete(oldest);
+  constructor(
+    private readonly maxEntries: number,
+    private readonly maxBytes: number
+  ) {}
+
+  get(key: string, fingerprint: string, now: number): T | undefined {
+    const slot = this.slots.get(key);
+    if (!slot) return undefined;
+    if (slot.fingerprint !== fingerprint) {
+      this.delete(key);
+      return undefined;
+    }
+    // Re-inserted so the map's order stays least-recently-used first.
+    this.slots.delete(key);
+    slot.touchedAt = now;
+    this.slots.set(key, slot);
+    return slot.value;
+  }
+
+  set(key: string, fingerprint: string, value: T, bytes: number, now: number): void {
+    this.delete(key);
+    if (bytes > this.maxBytes) return;
+    while (this.slots.size >= this.maxEntries || this.totalBytes + bytes > this.maxBytes) {
+      const oldest = this.slots.entries().next().value;
+      if (!oldest) break;
+      if (now - oldest[1].touchedAt < CACHE_WARM_MS) return;
+      this.delete(oldest[0]);
+    }
+    this.slots.set(key, { fingerprint, value, bytes, touchedAt: now });
+    this.totalBytes += bytes;
+  }
+
+  delete(key: string): void {
+    const slot = this.slots.get(key);
+    if (!slot) return;
+    this.slots.delete(key);
+    this.totalBytes -= slot.bytes;
+  }
+
+  clear(): void {
+    this.slots.clear();
+    this.totalBytes = 0;
+  }
+
+  stats(): { entries: number; bytes: number } {
+    return { entries: this.slots.size, bytes: this.totalBytes };
   }
 }
 
-/** Test-only: the probe cache is module state and outlives any one reader call. */
-export function __resetClaudeSubagentProbeCache(): void {
+/** JavaScript strings are UTF-16, so two bytes a character is the floor of what one holds. */
+function stringBytes(...values: Array<string | null>): number {
+  let chars = 0;
+  for (const value of values) chars += value?.length ?? 0;
+  return chars * 2;
+}
+
+/**
+ * Most children in a session are finished and will never change again, so
+ * the probe and the sidecar each needs are worth keeping. Both are keyed on
+ * the `lstat` identity `list` already takes, so a child that writes another
+ * line, or a sidecar that is replaced or appears late, simply misses.
+ */
+const probeCache = new WarmCache<ProbeSummary>(PROBE_CACHE_MAX_ENTRIES, PROBE_CACHE_MAX_BYTES);
+const metaCache = new WarmCache<SubagentMeta>(META_CACHE_MAX_ENTRIES, META_CACHE_MAX_BYTES);
+
+/** Test-only: both caches are module state and outlive any one reader call. */
+export function __resetClaudeSubagentCaches(): void {
   probeCache.clear();
+  metaCache.clear();
+  scannedLocations.clear();
+}
+
+/** Test-only: what the caches currently retain. */
+export function __claudeSubagentCacheStats(): {
+  probes: { entries: number; bytes: number };
+  sidecars: { entries: number; bytes: number };
+} {
+  return { probes: probeCache.stats(), sidecars: metaCache.stats() };
 }
 
 /**
@@ -534,88 +757,139 @@ export async function listSubagentsInDir(
     if (match?.[1] && isSafeSubagentId(match[1])) ids.push(match[1]);
   }
 
-  const children = await mapPool(ids, LIST_CONCURRENCY, async (id) => {
-    const file = path.join(dir, `agent-${id}.jsonl`);
-    let size: number;
-    let updatedAt: number;
-    let ino: number;
-    let ctime: number;
-    try {
-      // `lstat`, not `stat`: `stat` follows the link and reports the target,
-      // so a symlink pointing at another session's transcript would pass an
-      // `isFile` check on the thing it points at. A real transcript is a plain
-      // file that Claude Code wrote here.
-      const stats = await lstat(file);
-      if (!stats.isFile()) return null;
-      size = stats.size;
-      updatedAt = Math.round(stats.mtimeMs);
-      ino = stats.ino;
-      ctime = Math.round(stats.ctimeMs);
-    } catch {
-      // One child vanishing mid-list costs its row; the directory read below is
-      // what decides whether the store as a whole is readable.
-      return null;
-    }
+  // Every input to the order comes from the transcript's own `lstat`, so the
+  // whole directory is ranked before anything is opened, and only the rows
+  // that make the list are probed. A session with hundreds of children pays
+  // one `lstat` for each child past the limit and nothing more.
+  const ranked = await mapPool(ids, LIST_CONCURRENCY, (id) => statChild(dir, id));
+  const candidates = ranked
+    .filter((child): child is ChildStat => child !== null)
+    .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
 
-    const meta = await readMeta(path.join(dir, `agent-${id}.meta.json`));
-
-    // Size and mtime alone can repeat across an atomic replace; the inode and
-    // ctime are what make the fingerprint about *this* file.
-    const fingerprint = `${updatedAt}:${size}:${ino}:${ctime}`;
-    const cached = probeCache.get(file);
-    let probe: Probe;
-    if (cached && cached.fingerprint === fingerprint) {
-      probe = { first: cached.first, last: cached.last, partialTail: cached.partialTail };
-    } else {
-      try {
-        probe = await probeTranscript(file, size);
-      } catch {
-        return null;
-      }
-      rememberProbe(file, fingerprint, probe);
-    }
-
-    return {
-      id,
-      // The description the parent wrote is a real label; the agent type is a
-      // category. Preferring the former is why a row reads "Run the palette
-      // suite" instead of "General purpose" thirty times over.
-      label: meta.description,
-      role: humanizeAgentType(meta.agentType),
-      preview: recordText(probe.first?.message ?? null).slice(0, SUBAGENT_MESSAGE_MAX_CHARS),
-      model: meta.model,
-      depth: meta.depth,
-      status: inferStatus(probe.last, updatedAt, now, probe.partialTail),
-      // The sidecar is written once at spawn and never rewritten, so its mtime
-      // is a clean birth time; the transcript's own first record is the
-      // fallback when there is no sidecar.
-      createdAt: meta.createdAt ?? probe.first?.timestamp ?? 0,
-      updatedAt,
-    } satisfies AgentSubagent;
-  });
-
-  return children
-    .filter((child): child is AgentSubagent => child !== null)
-    .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id))
-    .slice(0, SUBAGENT_LIST_LIMIT);
+  // A candidate whose probe fails costs its row, as it always has, and the
+  // next one down takes its place: each pass asks for exactly the rows still
+  // missing, so the list is only probed past its length when something failed.
+  // Retention age runs on a monotonic clock: `now` is the status clock, a wall
+  // clock a test can pin and the system can step.
+  const touchedAt = performance.now();
+  const rows: AgentSubagent[] = [];
+  let cursor = 0;
+  while (rows.length < SUBAGENT_LIST_LIMIT && cursor < candidates.length) {
+    const batch = candidates.slice(cursor, cursor + SUBAGENT_LIST_LIMIT - rows.length);
+    cursor += batch.length;
+    const built = await mapPool(batch, LIST_CONCURRENCY, (child) =>
+      buildRow(dir, child, now, touchedAt)
+    );
+    for (const row of built) if (row) rows.push(row);
+  }
+  return rows;
 }
 
-async function readMeta(file: string): Promise<SubagentMeta> {
-  const createdAt = await regularFileMtime(file);
+interface ChildStat {
+  id: string;
+  file: string;
+  size: number;
+  updatedAt: number;
+  fingerprint: string;
+}
+
+async function statChild(dir: string, id: string): Promise<ChildStat | null> {
+  const file = path.join(dir, `agent-${id}.jsonl`);
+  try {
+    // `lstat`, not `stat`: `stat` follows the link and reports the target,
+    // so a symlink pointing at another session's transcript would pass an
+    // `isFile` check on the thing it points at. A real transcript is a plain
+    // file that Claude Code wrote here.
+    const stats = await lstat(file);
+    if (!stats.isFile()) return null;
+    return {
+      id,
+      file,
+      size: stats.size,
+      updatedAt: Math.round(stats.mtimeMs),
+      // Size and mtime alone can repeat across an atomic replace; the inode and
+      // ctime are what make the fingerprint about *this* file.
+      fingerprint: `${stats.mtimeMs}:${stats.size}:${stats.ino}:${stats.ctimeMs}`,
+    };
+  } catch {
+    // One child vanishing mid-list costs its row; the directory read above is
+    // what decides whether the store as a whole is readable.
+    return null;
+  }
+}
+
+async function buildRow(
+  dir: string,
+  child: ChildStat,
+  now: number,
+  touchedAt: number
+): Promise<AgentSubagent | null> {
+  let probe = probeCache.get(child.file, child.fingerprint, touchedAt);
+  if (!probe) {
+    try {
+      probe = summarizeProbe(await probeTranscript(child.file, child.size));
+    } catch {
+      return null;
+    }
+    probeCache.set(
+      child.file,
+      child.fingerprint,
+      probe,
+      CACHE_ENTRY_OVERHEAD_BYTES + stringBytes(child.file, child.fingerprint, probe.preview),
+      touchedAt
+    );
+  }
+
+  const meta = await readMeta(path.join(dir, `agent-${child.id}.meta.json`), touchedAt);
+
+  return {
+    id: child.id,
+    // The description the parent wrote is a real label; the agent type is a
+    // category. Preferring the former is why a row reads "Run the palette
+    // suite" instead of "General purpose" thirty times over.
+    label: meta.description,
+    role: humanizeAgentType(meta.agentType),
+    preview: probe.preview,
+    model: meta.model,
+    depth: meta.depth,
+    status: statusFor(probe.last, child.updatedAt, now, probe.partialTail),
+    // The sidecar is written once at spawn and never rewritten, so its mtime
+    // is a clean birth time; the transcript's own first record is the
+    // fallback when there is no sidecar.
+    createdAt: meta.createdAt ?? probe.firstTimestamp ?? 0,
+    updatedAt: child.updatedAt,
+  } satisfies AgentSubagent;
+}
+
+async function readMeta(file: string, touchedAt: number): Promise<SubagentMeta> {
+  const identity = await regularFileIdentity(file);
   // No sidecar at all is normal for a child spawned without one.
-  if (createdAt === null) return EMPTY_META;
+  if (identity === null) return EMPTY_META;
+  const cached = metaCache.get(file, identity.fingerprint, touchedAt);
+  if (cached) return cached;
+  let meta: SubagentMeta;
   try {
     const handle = await open(file, "r");
     try {
       const buffer = Buffer.alloc(META_MAX_BYTES);
       const { bytesRead } = await handle.read(buffer, 0, META_MAX_BYTES, 0);
-      return parseSubagentMeta(buffer.subarray(0, bytesRead).toString("utf8"), createdAt);
+      meta = parseSubagentMeta(buffer.subarray(0, bytesRead).toString("utf8"), identity.mtime);
     } finally {
       await handle.close();
     }
   } catch {
-    return { ...EMPTY_META, createdAt };
+    // Not remembered: a read that failed says nothing lasting about the file.
+    return { ...EMPTY_META, createdAt: identity.mtime };
   }
+  metaCache.set(
+    file,
+    identity.fingerprint,
+    meta,
+    CACHE_ENTRY_OVERHEAD_BYTES +
+      stringBytes(file, identity.fingerprint, meta.agentType, meta.description, meta.model),
+    touchedAt
+  );
+  return meta;
 }
 
 export interface TranscriptRead {

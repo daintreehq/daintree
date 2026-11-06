@@ -5,6 +5,12 @@ import type { SimpleGit } from "simple-git";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorktreeMonitor } from "../WorktreeMonitor.js";
 import type { Worktree } from "../../../shared/types/worktree.js";
+import type { WorktreeChanges } from "../../../shared/types/git.js";
+import {
+  beginDiffStatPass,
+  clearWorktreeDiffStatCache,
+  getWorktreeDiffStatCacheStats,
+} from "../../utils/worktreeDiffStatCache.js";
 /** The private sweep, reachable for spying. */
 type SweepHost = { sweepPrunableWorktreeEntries: () => Promise<void> };
 
@@ -364,6 +370,59 @@ describe("WorkspaceService external worktree removal", () => {
       expect(service["monitors"].has(TEST_WORKTREE_PATH)).toBe(false);
     });
 
+    function publishDiffStats(root: string, cwd: string = root): void {
+      const pass = beginDiffStatPass(root, cwd);
+      pass.keepTracked(
+        pathResolve(root, "a.ts"),
+        { headOid: "head", statusCode: " M", mtimeMs: 1, size: 1 },
+        { insertions: 1, deletions: 0 }
+      );
+      pass.publish();
+    }
+
+    function retains(root: string): boolean {
+      return (
+        beginDiffStatPass(root).lookupTracked(pathResolve(root, "a.ts"), {
+          headOid: "head",
+          statusCode: " M",
+          mtimeMs: 1,
+          size: 1,
+        }) !== undefined
+      );
+    }
+
+    it("releases the removed worktree's retained diff stats under its canonical root", () => {
+      clearWorktreeDiffStatCache();
+      const canonicalRoot = pathResolve("/private/test/worktree");
+      const sibling = pathResolve("/test/sibling");
+      const monitor = createAndRegisterMonitor();
+      (monitor as unknown as { worktreeChanges: Partial<WorktreeChanges> }).worktreeChanges = {
+        rootPath: canonicalRoot,
+        changes: [],
+      };
+      publishDiffStats(canonicalRoot);
+      publishDiffStats(sibling);
+
+      service["handleExternalWorktreeRemoval"](TEST_WORKTREE_PATH);
+
+      expect(retains(canonicalRoot)).toBe(false);
+      expect(retains(sibling)).toBe(true);
+      clearWorktreeDiffStatCache();
+    });
+
+    it("releases diff stats a pass retained under the canonical root before the monitor stored a snapshot", () => {
+      clearWorktreeDiffStatCache();
+      const canonicalRoot = pathResolve("/private/test/worktree");
+      createAndRegisterMonitor();
+      publishDiffStats(canonicalRoot, TEST_WORKTREE_PATH);
+
+      service["handleExternalWorktreeRemoval"](TEST_WORKTREE_PATH);
+
+      expect(retains(canonicalRoot)).toBe(false);
+      expect(getWorktreeDiffStatCacheStats().worktrees).toBe(0);
+      clearWorktreeDiffStatCache();
+    });
+
     it("does not remove main worktree", () => {
       createAndRegisterMonitor({ isMainWorktree: true });
 
@@ -441,6 +500,43 @@ describe("WorkspaceService external worktree removal", () => {
       expect(mockSendEvent).not.toHaveBeenCalledWith(
         expect.objectContaining({ type: "worktree-removed" })
       );
+    });
+
+    it("drops a removed monitor's late updates, before and after the path is re-created (#15630)", async () => {
+      const busUpdates = vi.fn();
+      mockEvents.on("sys:worktree:update", busUpdates);
+      try {
+        await service["addNewWorktreeMonitor"](createTestWorktree(), false, true);
+        const first = service["monitors"].get(TEST_WORKTREE_PATH)!;
+        service["removeMonitor"](TEST_WORKTREE_PATH);
+        mockSendEvent.mockClear();
+        busUpdates.mockClear();
+
+        // Both routes a late pass or a service-side refresh would publish by.
+        first["callbacks"].onUpdate(first.getSnapshot());
+        service["emitUpdate"](first);
+
+        const published = expect.objectContaining({
+          type: expect.stringMatching(/^worktree-(update|tick)$/),
+        });
+        expect(mockSendEvent).not.toHaveBeenCalledWith(published);
+        expect(busUpdates).not.toHaveBeenCalled();
+
+        await service["addNewWorktreeMonitor"](createTestWorktree(), false, true);
+        const second = service["monitors"].get(TEST_WORKTREE_PATH)!;
+        mockSendEvent.mockClear();
+        busUpdates.mockClear();
+
+        first["callbacks"].onUpdate(first.getSnapshot());
+        expect(mockSendEvent).not.toHaveBeenCalledWith(published);
+        expect(busUpdates).not.toHaveBeenCalled();
+
+        second["callbacks"].onUpdate(second.getSnapshot());
+        expect(mockSendEvent).toHaveBeenCalledWith(published);
+        expect(busUpdates).toHaveBeenCalledTimes(1);
+      } finally {
+        mockEvents.off("sys:worktree:update", busUpdates);
+      }
     });
 
     it("installs one monitor when two adds for the same path overlap", async () => {

@@ -7,12 +7,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { encodeFrame, FrameDecoder, Lane, type LinkFrame } from "../../link/frames.js";
 import {
   ControlKind,
+  EventKind,
   frameToMessage,
   messageToFrame,
   type LinkMessage,
 } from "../../link/messages.js";
 import { LinkClient, type LinkClientState } from "../../client/LinkClient.js";
-import { createDirectTransport } from "../../client/transport.js";
+import { createDirectTransport, type LinkTransport } from "../../client/transport.js";
 import { HostServer, MAX_PENDING_HANDSHAKES, type HostSessionContext } from "../HostServer.js";
 import { HANDSHAKE_MAX_FRAME_BYTES } from "../../link/session.js";
 import {
@@ -34,6 +35,7 @@ let root: string;
 let location: HostSocketLocation;
 const servers: HostServer[] = [];
 const clients: LinkClient[] = [];
+const cleanups: Array<() => void> = [];
 
 beforeEach(async () => {
   logBuffer.clear();
@@ -45,6 +47,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   for (const c of clients.splice(0)) await c.stop();
   for (const s of servers.splice(0)) await s.close();
+  for (const cleanup of cleanups.splice(0)) cleanup();
   await removeTempDir(root);
 });
 
@@ -170,6 +173,83 @@ function closedSocket(socket: net.Socket): Promise<void> {
   });
 }
 
+/**
+ * Dials the host directly, except that after `stall()` the next dial reaches a
+ * host stalled under memory pressure: what the Shell sends sits unread until
+ * `deliver()`, then reaches the host in the order it was sent, its end
+ * included. Dials after the stalled one wait for `resume()`.
+ */
+async function stallingTransport() {
+  const direct = createDirectTransport({ discoveryPath: location.discoveryPath });
+  const proxyPath = path.join(root, "stall.sock");
+  const sockets: net.Socket[] = [];
+  let held: { chunks: Buffer[]; ended: boolean } | null = null;
+  const proxy = net.createServer((socket) => {
+    sockets.push(socket);
+    const entry = { chunks: [] as Buffer[], ended: false };
+    held = entry;
+    socket.on("data", (chunk: Buffer) => entry.chunks.push(chunk));
+    socket.on("end", () => (entry.ended = true));
+    socket.on("error", () => {});
+  });
+  cleanups.push(() => {
+    for (const socket of sockets) socket.destroy();
+    proxy.close();
+  });
+  await new Promise<void>((resolve) => proxy.listen(proxyPath, resolve));
+  let stallNext = false;
+  let lastStalled = false;
+  let resumed: Promise<void> = Promise.resolve();
+  let resume = () => {};
+  const transport: LinkTransport = {
+    async open(signal) {
+      lastStalled = stallNext;
+      if (stallNext) {
+        stallNext = false;
+        const info = (await readDiscoveryFile(location.discoveryPath))!;
+        return createDirectTransport({ socketPath: proxyPath, token: info.token }).open(signal);
+      }
+      await new Promise<void>((resolve, reject) => {
+        void resumed.then(resolve);
+        signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true });
+      });
+      return direct.open(signal);
+    },
+  };
+  return {
+    transport,
+    stall() {
+      stallNext = true;
+      resumed = new Promise((resolve) => (resume = resolve));
+    },
+    /** Whether the latest dial is the one that reaches the stalled host. */
+    lastDialStalled: () => lastStalled,
+    /** What the stalled dial has sent so far. */
+    sent(): LinkMessage[] {
+      const decoder = new FrameDecoder();
+      return (held?.chunks ?? []).flatMap((chunk) =>
+        decoder.push(chunk).map((frame) => frameToMessage(frame)!)
+      );
+    },
+    /** The Shell has closed its end of the stalled dial. */
+    abandoned: () => held?.ended === true,
+    /** The host catches up on the stalled dial and reads it to its end. */
+    async deliver() {
+      const entry = held!;
+      const upstream = net.connect(location.socketPath);
+      sockets.push(upstream);
+      upstream.on("error", () => {});
+      upstream.resume();
+      await new Promise<void>((resolve) => upstream.once("connect", resolve));
+      for (const chunk of entry.chunks) upstream.write(chunk);
+      if (entry.ended) upstream.end();
+      await closedSocket(upstream);
+    },
+    /** Dials after the stalled one go. */
+    resume: () => resume(),
+  };
+}
+
 describe("HostServer socket and discovery", () => {
   it("binds an owner-only socket and advertises it in an owner-only discovery file", async () => {
     const server = await startServer();
@@ -293,6 +373,7 @@ describe("HostServer authentication", () => {
     expect(seen[0]).toMatchObject({
       resumed: false,
       client: { clientId: "client-a", clientName: "greg-mbp" },
+      buildMismatch: null,
     });
 
     seen[0]!.session.setInvokeHandler(async (msg) => ({
@@ -303,6 +384,95 @@ describe("HostServer authentication", () => {
     const env = await client.session!.invoke("e1", "project:get-all", []);
     expect(env).toEqual({ __daintreeIpcEnvelope: true, ok: true, data: "project:get-all" });
   });
+
+  it.each([
+    ["the lanes a Shell names", 6, 6],
+    ["nothing from an older Shell", undefined, undefined],
+    ["nothing for a count it can't read, rather than refusing the Shell", "lots", undefined],
+  ])("keeps %s as the lanes it may send (#16218)", async (_name, offered, kept) => {
+    const server = await startServer();
+    const seen: HostSessionContext[] = [];
+    server.onSession((ctx) => seen.push(ctx));
+    const raw = await rawConnect();
+    raw.socket.write(
+      encodeFrame(
+        messageToFrame({
+          lane: Lane.CONTROL,
+          kind: ControlKind.HELLO,
+          body: {
+            handshake: TEST_HANDSHAKE,
+            token: server.token,
+            client: {
+              clientId: "c-lanes",
+              clientName: "n",
+              platform: "linux",
+              // Typed or not, the wire carries whatever a peer sends.
+              ...(offered === undefined ? {} : { assistantSlots: offered as number }),
+            },
+            resumeSessionId: null,
+          },
+        })
+      )
+    );
+    await waitFor(() => seen.length === 1);
+    expect(seen[0]!.client.assistantSlots).toBe(kept);
+    raw.socket.destroy();
+  });
+
+  it.each([
+    ["a Shell that offers them", true],
+    ["an older Shell that doesn't", false],
+  ])(
+    "offers message fragments in its WELCOME and sends them only to %s (#15892)",
+    async (_name, shellOffers) => {
+      const server = await startServer();
+      const seen: HostSessionContext[] = [];
+      server.onSession((ctx) => seen.push(ctx));
+      const raw = await rawConnect();
+      raw.socket.write(
+        encodeFrame(
+          messageToFrame({
+            lane: Lane.CONTROL,
+            kind: ControlKind.HELLO,
+            body: {
+              handshake: TEST_HANDSHAKE,
+              token: server.token,
+              client: { clientId: "c-frag", clientName: "n", platform: "linux" },
+              resumeSessionId: null,
+              ...(shellOffers ? { messageFragments: true } : {}),
+            },
+          })
+        )
+      );
+      await waitFor(() =>
+        raw.frames.some((f) => f.lane === Lane.CONTROL && f.kind === ControlKind.WELCOME)
+      );
+      expect(seen).toHaveLength(1);
+      const welcome = raw.frames
+        .map((frame) => frameToMessage(frame))
+        .find((m) => m.kind === ControlKind.WELCOME)!;
+      expect(welcome.body).toMatchObject({ messageFragments: true });
+
+      const big = "r".repeat(200_000);
+      seen[0]!.session.post({
+        lane: Lane.EVENTS,
+        kind: EventKind.EVENT,
+        body: { endpointId: null, channel: "x:big", args: [big] },
+      });
+      await waitFor(() =>
+        raw.frames.some((f) => f.lane === Lane.EVENTS && f.kind === EventKind.EVENT)
+      );
+      const events = raw.frames.filter((f) => f.lane === Lane.EVENTS);
+      if (shellOffers) {
+        expect(events.length).toBeGreaterThan(1);
+        expect(events.every((f) => f.streamId !== 0)).toBe(true);
+      } else {
+        expect(events).toHaveLength(1);
+        expect(frameToMessage(events[0]!).body).toMatchObject({ args: [big] });
+      }
+      raw.socket.destroy();
+    }
+  );
 
   it("logs a Shell retrying into the same refusal once, and again after it gets a session", async () => {
     const server = await startServer();
@@ -567,6 +737,21 @@ describe("HostServer session resume", () => {
       buildMismatch: { kind: "version", local: TEST_HANDSHAKE.version, remote: "0.9.0" },
     });
   });
+
+  it.each([
+    ["version", { version: "0.9.0" }, "version", TEST_HANDSHAKE.version, "0.9.0"],
+    ["commit", { commit: "0ther" }, "commit", TEST_HANDSHAKE.commit, "0ther"],
+  ] as const)(
+    "tells the session a Shell on another %s which way the builds differ",
+    async (_name, shellDiffers, kind, local, remote) => {
+      const server = await startServer();
+      const seen: HostSessionContext[] = [];
+      server.onSession((ctx) => seen.push(ctx));
+      const client = startClient(server, { handshake: { ...TEST_HANDSHAKE, ...shellDiffers } });
+      await waitFor(() => seen.length === 1 && client.getState().status === "connected");
+      expect(seen[0]!.buildMismatch).toEqual({ kind, local, remote });
+    }
+  );
 
   it("logs a link's life on both ends with the session id, and never a credential", async () => {
     const server = await startServer({ resumeGraceMs: 60_000 });
@@ -1036,8 +1221,8 @@ describe("HostServer session resume", () => {
     server.onSessionExpired((info) => expired.push(info.sessionId));
     const client = startClient(server);
     await waitFor(() => seen.length === 1);
-    // The host has its session before the client has read WELCOME; a client
-    // stopped before then just drops the dial, with no GOODBYE to send.
+    // The host has its session before the client has read WELCOME; this is
+    // the stop of a connected Shell, not of one still dialling.
     await waitFor(() => client.getState().status === "connected");
     await client.stop();
     await waitFor(() => expired.length === 1);
@@ -1052,6 +1237,86 @@ describe("HostServer session resume", () => {
     const closed = new Promise((r) => session.onClose(r));
     await server.close();
     await expect(closed).resolves.toEqual({ reason: "shutting-down", by: "remote" });
+  });
+});
+
+describe("HostServer and a Shell that gives up on a resume handshake (#15877)", () => {
+  /** A connected Shell loses its link, and its redial, asking to resume, reaches a stalled host. */
+  async function resumeIntoAStall(options: { stalledDialGivesUpAfterMs?: number } = {}) {
+    const server = await startServer({ resumeGraceMs: 60_000 });
+    const seen: HostSessionContext[] = [];
+    const detached: string[] = [];
+    const expired: Array<{ sessionId: string; cause: string }> = [];
+    server.onSession((ctx) => seen.push(ctx));
+    server.onSessionDetached((info) => detached.push(info.sessionId));
+    server.onSessionExpired((info) =>
+      expired.push({ sessionId: info.sessionId, cause: info.cause })
+    );
+    const stalling = await stallingTransport();
+    const client = startClient(server, {
+      transport: stalling.transport,
+      session: {
+        pingIntervalMs: 0,
+        idleTimeoutMs: 0,
+        // Read per dial: only the one that reaches the stalled host gives up
+        // early, so CI load can't time out the healthy dials around it.
+        get handshakeTimeoutMs() {
+          return stalling.lastDialStalled()
+            ? (options.stalledDialGivesUpAfterMs ?? 10_000)
+            : 10_000;
+        },
+      },
+    });
+    const states: LinkClientState[] = [];
+    client.onStateChange((state) => states.push(state));
+    await waitFor(() => seen.length === 1 && client.getState().status === "connected");
+    const sessionId = seen[0]!.sessionId;
+    stalling.stall();
+    (seen[0]!.session as unknown as { socket: net.Socket }).socket.destroy();
+    await waitFor(() => stalling.sent().length > 0);
+    expect(stalling.sent()[0]).toMatchObject({
+      kind: ControlKind.HELLO,
+      body: { resumeSessionId: sessionId },
+    });
+    return { client, stalling, sessionId, seen, detached, expired, states };
+  }
+
+  /** The host catches up on the abandoned dial, and the Shell's next dial goes through. */
+  async function catchUp(run: Awaited<ReturnType<typeof resumeIntoAStall>>) {
+    await waitFor(() => run.stalling.abandoned());
+    await run.stalling.deliver();
+    // It resumed the session on the abandoned HELLO and lost that link in turn.
+    await waitFor(() => run.seen.length === 2 && run.detached.length === 2);
+    expect(run.seen[1]).toMatchObject({ sessionId: run.sessionId, resumed: true });
+    run.stalling.resume();
+  }
+
+  it("keeps the session a timed-out handshake resumed, for the next dial to resume", async () => {
+    const run = await resumeIntoAStall({ stalledDialGivesUpAfterMs: 100 });
+    await catchUp(run);
+    expect(run.states).toContainEqual(
+      expect.objectContaining({ status: "unreachable", detail: "handshake timed out" })
+    );
+    await waitFor(() => run.seen.length === 3 && run.client.getState().status === "connected");
+    expect(run.seen[2]).toMatchObject({ sessionId: run.sessionId, resumed: true });
+    expect(run.expired).toEqual([]);
+  });
+
+  it("keeps the session a handshake abandoned for a restart resumed, for the next dial to resume", async () => {
+    const run = await resumeIntoAStall();
+    run.client.retryNow({ restart: true });
+    await catchUp(run);
+    await waitFor(() => run.seen.length === 3 && run.client.getState().status === "connected");
+    expect(run.seen[2]).toMatchObject({ sessionId: run.sessionId, resumed: true });
+    expect(run.expired).toEqual([]);
+  });
+
+  it("still ends the session at once when the Shell is stopped during a resume handshake", async () => {
+    const run = await resumeIntoAStall();
+    await run.client.stop();
+    await catchUp(run);
+    await waitFor(() => run.expired.length === 1);
+    expect(run.expired).toEqual([{ sessionId: run.sessionId, cause: "goodbye" }]);
   });
 });
 

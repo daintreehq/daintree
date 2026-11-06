@@ -93,6 +93,42 @@ export function detectPrompt(
   return { isPrompt: false, confidence: 0 };
 }
 
+// A row that is nothing but a rule: one of those Claude Code draws above and
+// below its input row, or the top or bottom edge of an older boxed input.
+const COMPOSER_FRAME_ROW = /^\s*[╭╰┌└]?[─━]{3,}[╮╯┐┘]?\s*$/;
+
+/**
+ * The row of `lines` that is an agent's input row, empty, inside its frame
+ * (#16093). Only the lowest framed region on screen is read, and only when it
+ * is a single row: a prompt pattern with nothing typed before or after it.
+ * A draft (on one row or several), a selector row ("❯ 1. Yes") or a banner
+ * behind a pointer ("❯ You've hit…") there means none, and a frame higher up,
+ * such as one quoted in the transcript, is never taken in its place.
+ */
+export function findEmptyComposerRow(
+  lines: readonly string[],
+  promptPatterns: readonly RegExp[]
+): number | undefined {
+  const clean = lines.map((line) => stripAnsi(line));
+  let bottom = clean.length - 1;
+  while (bottom >= 0 && !COMPOSER_FRAME_ROW.test(clean[bottom]!)) bottom--;
+  const rowIndex = bottom - 1;
+  if (rowIndex < 1 || !COMPOSER_FRAME_ROW.test(clean[rowIndex - 1]!)) return undefined;
+  const row = clean[rowIndex]!.replace(/^\s*[│┃]/, "").replace(/[│┃]\s*$/, "");
+  for (const pattern of promptPatterns) {
+    const match = row.match(pattern);
+    if (
+      match?.index !== undefined &&
+      match[0].trim().length > 0 &&
+      row.slice(0, match.index).trim() === "" &&
+      row.slice(match.index + match[0].length).trim() === ""
+    ) {
+      return rowIndex;
+    }
+  }
+  return undefined;
+}
+
 const LEXEME_BRACKET_CONFIRM = /[[(]\s*[yY](?:es)?\s*\/\s*[nN](?:o)?\s*[\])]/;
 const LEXEME_TRAILING_QUESTION = /\?\s*$/;
 const LEXEME_KEYWORD_COLON =

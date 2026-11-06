@@ -1,3 +1,5 @@
+import type { MouseEvent } from "react";
+
 /**
  * The keyboard ring every focusable control in a terminal pane's header wears —
  * the chips beside the title as well as the pane's own buttons (`PanelHeader`
@@ -9,12 +11,11 @@ export const HEADER_CHIP_FOCUS_CLASS =
   "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary";
 
 /**
- * Every chip in a pane header's row — finished, hibernated, queued, driven-by,
+ * Every chip in a pane header's row — finished, queued, driven-by,
  * rate limit, notices, subagents, the running command, the worktree branch and
  * plugin badges — shares this box, so the row reads as one line of metadata at
  * one height instead of three sizes jostling beside the title. A chip keeps its
- * own ink and, where it says something (the hibernated dash, the worktree's
- * colour), its own edge; the size, padding and shape are not negotiable.
+ * own ink and, where it says something (the worktree's colour), its own edge; the size, padding and shape are not negotiable.
  *
  * 11px, one step under the pane title and the same size as the resource
  * readout at the end of the row, so metadata never outweighs the name it
@@ -36,3 +37,18 @@ export const HEADER_CHIP_SURFACE = "border-divider bg-overlay-soft text-text-sec
  */
 export const HEADER_CHIP_TRIGGER_CLASS =
   "transition-colors duration-150 ease-out hover:bg-overlay-medium aria-expanded:bg-overlay-medium";
+
+/**
+ * Wraps a header chip that opens a popover, so pressing it leaves the pane's
+ * selection where it was. A click anywhere in a pane selects it unless the
+ * click was default-prevented (`ContentPanel`), and selecting a pane sends the
+ * keyboard to its home surface, which closes a non-modal popover the moment it
+ * opens: on any pane but the focused one, the chip did nothing. Only clicks on
+ * the chip itself are held back; clicks in the portalled popover are left
+ * alone, so its own links and controls keep their defaults.
+ */
+export function holdPaneSelection(event: MouseEvent<HTMLElement>): void {
+  if (event.target instanceof Node && event.currentTarget.contains(event.target)) {
+    event.preventDefault();
+  }
+}

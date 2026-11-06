@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WindowStateTracking } from "../windowState.js";
+import { folderlessBoundsKey } from "../window/windowBoundsKeys.js";
 
 type Rect = { x: number; y: number; width: number; height: number };
 
@@ -100,6 +101,8 @@ type FakeWindow = InstanceType<typeof fakes.FakeWindow>;
 
 let createWindowWithState: typeof import("../windowState.js").createWindowWithState;
 let disposeWindowStateTracking: typeof import("../windowState.js").disposeWindowStateTracking;
+let pruneWindowStateForScratch: typeof import("../windowState.js").pruneWindowStateForScratch;
+let pruneWindowStatesForHost: typeof import("../windowState.js").pruneWindowStatesForHost;
 
 const originalPlatform = process.platform;
 function setPlatform(value: NodeJS.Platform) {
@@ -117,14 +120,19 @@ function open(projectPath?: string, tracking?: WindowStateTracking): FakeWindow 
 
 function occupiedBy(...windows: FakeWindow[]): WindowStateTracking {
   return {
-    getShownProjectPath: () => null,
+    getShownBoundsKey: () => null,
     getOccupiedBounds: () => windows.map((w) => w.getNormalBounds()),
   };
 }
 
 beforeEach(async () => {
   vi.resetModules();
-  ({ createWindowWithState, disposeWindowStateTracking } = await import("../windowState.js"));
+  ({
+    createWindowWithState,
+    disposeWindowStateTracking,
+    pruneWindowStateForScratch,
+    pruneWindowStatesForHost,
+  } = await import("../windowState.js"));
   fakes.FakeWindow.created.length = 0;
   fakes.store.state = {};
   Object.assign(fakes.workArea, { x: 0, y: 0, width: 1920, height: 1200 });
@@ -239,7 +247,7 @@ describe("placing restored windows", () => {
 describe("saving under the project the window shows", () => {
   function tracking(shown: { path: string | null }, listeners: Array<() => void> = []) {
     return {
-      getShownProjectPath: vi.fn(() => shown.path),
+      getShownBoundsKey: vi.fn(() => shown.path),
       onShownProjectChange: vi.fn((listener: () => void) => {
         listeners.push(listener);
         return () => {
@@ -358,6 +366,127 @@ describe("saving under the project the window shows", () => {
 
     expect(daintreeListeners).toHaveLength(0);
     expect(helloWebListeners).toHaveLength(1);
+  });
+});
+
+describe("windows on a host's project or a scratch", () => {
+  const HOST_PROJECT = "a".repeat(64);
+  const ON_BUILD_BOX = folderlessBoundsKey(`build-box:${HOST_PROJECT}`)!;
+  const ON_GPU_BOX = folderlessBoundsKey(`gpu-box:${HOST_PROJECT}`)!;
+  const SCRATCH_ID = "3f2b8c1e-4d5a-4b6c-8d7e-9f0a1b2c3d4e";
+  const SCRATCH = folderlessBoundsKey(SCRATCH_ID)!;
+
+  function showing(key: string) {
+    return {
+      getShownBoundsKey: () => key,
+      getOccupiedBounds: () => fakes.FakeWindow.created.map((w) => w.getNormalBounds()),
+    } satisfies WindowStateTracking;
+  }
+
+  it("brings each back where it was, not beside whichever window moved last", () => {
+    const placed: Record<string, Rect> = {
+      [ON_BUILD_BOX]: { x: 900, y: 0, width: 1000, height: 700 },
+      [ON_GPU_BOX]: { x: 1000, y: 400, width: 900, height: 600 },
+      [SCRATCH]: { x: 200, y: 600, width: 800, height: 500 },
+      [DAINTREE]: { x: 5, y: 56, width: 956, height: 1053 },
+    };
+    // The local window moves and closes last, holding the last-saved bounds.
+    for (const key of [ON_BUILD_BOX, ON_GPU_BOX, SCRATCH, DAINTREE]) {
+      const win = open(key, showing(key));
+      win.bounds = { ...placed[key]! };
+      win.emit("close");
+    }
+    fakes.FakeWindow.created.length = 0;
+
+    const reopened = [DAINTREE, ON_BUILD_BOX, ON_GPU_BOX, SCRATCH].map((key) => ({
+      key,
+      win: open(key, showing(key)),
+    }));
+
+    for (const { key, win } of reopened) expect(win.getBounds()).toEqual(placed[key]);
+  });
+
+  it("brings a host window back maximized when it closed maximized", () => {
+    const win = open(ON_BUILD_BOX, showing(ON_BUILD_BOX));
+    win.maximized = true;
+    win.emit("close");
+    open(DAINTREE, showing(DAINTREE)).emit("close");
+
+    const reopened = open(ON_BUILD_BOX, showing(ON_BUILD_BOX));
+    // Linux maximizes a hidden window once it is revealed.
+    reopened.emit("show");
+
+    expect(reopened.maximize).toHaveBeenCalledTimes(1);
+  });
+
+  it("doesn't write back a deleted scratch's bounds from a move made before it was deleted", () => {
+    vi.useFakeTimers();
+    const shown = { key: SCRATCH as string | null };
+    const listeners: Array<() => void> = [];
+    const win = open(SCRATCH, {
+      getShownBoundsKey: () => shown.key,
+      onShownProjectChange: (listener) => {
+        listeners.push(listener);
+        return () => {};
+      },
+    });
+    // Seen showing the scratch, so a later switch flushes a pending move under it.
+    for (const listener of listeners) listener();
+    win.bounds = { ...win.bounds, x: 640 };
+    win.emit("move");
+
+    pruneWindowStateForScratch(SCRATCH_ID);
+    shown.key = null;
+    for (const listener of listeners) listener();
+    vi.advanceTimersByTime(1000);
+    win.emit("close");
+
+    expect(fakes.store.state[SCRATCH]).toBeUndefined();
+    expect(fakes.store.state.__legacy__).toMatchObject({ x: 640 });
+  });
+
+  it("stops saving under a host's project once the picker gives up waiting for it", () => {
+    const hostBounds = { x: 900, y: 0, width: 1000, height: 700, isMaximized: false };
+    fakes.store.state = { [ON_BUILD_BOX]: hostBounds };
+    // Not registered yet when created, so it names nothing until the restore is noted.
+    const shown = { key: null as string | null };
+    const listeners: Array<() => void> = [];
+    const win = open(ON_BUILD_BOX, {
+      getShownBoundsKey: () => shown.key,
+      onShownProjectChange: (listener) => {
+        listeners.push(listener);
+        return () => {};
+      },
+    });
+
+    shown.key = ON_BUILD_BOX;
+    for (const listener of listeners) listener();
+    // The host's project is open in another window, so this one stays a picker.
+    shown.key = null;
+    for (const listener of listeners) listener();
+    win.bounds = { ...win.bounds, x: 40 };
+    win.emit("close");
+
+    expect(fakes.store.state[ON_BUILD_BOX]).toEqual(hostBounds);
+    expect(fakes.store.state.__legacy__).toMatchObject({ x: 40 });
+  });
+
+  it("stops saving under a removed host's project from a window that never showed it", () => {
+    const win = open(ON_BUILD_BOX, { getShownBoundsKey: () => null });
+
+    pruneWindowStatesForHost("build-box");
+    win.emit("close");
+
+    expect(Object.keys(fakes.store.state)).toEqual(["__legacy__"]);
+  });
+
+  it("keeps saving under the other workspaces a prune doesn't name", () => {
+    const win = open(ON_GPU_BOX, { getShownBoundsKey: () => null });
+
+    pruneWindowStatesForHost("build-box");
+    win.emit("close");
+
+    expect(fakes.store.state[ON_GPU_BOX]).toBeDefined();
   });
 });
 

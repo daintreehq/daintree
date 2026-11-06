@@ -908,7 +908,7 @@ export function VoiceInputSettingsTab({ isActive = true }: VoiceInputSettingsTab
       {settings.enabled && (
         <SettingsSection
           title="AI text correction"
-          description={`Short dictations are corrected when you stop; long ones are corrected a stretch at a time as you go. The cleanup model fixes technical terms, punctuation and filler words, resolves self-corrections, and lays out spoken lists. The text, the prompts you recently sent from the same terminal, the terminal's recent output with credential-like lines removed, the repository's package, folder and dependency names, and the worktree's issue or PR title are sent to ${CLEANUP_PROVIDER_PRIVACY[cleanupProvider]}.`}
+          description={`Short dictations are corrected when you stop; long ones are corrected a stretch at a time as you go. The cleanup model fixes technical terms, punctuation and filler words, resolves self-corrections, and lays out spoken lists. The text, the prompts you recently sent from the same terminal and its recent output (both with credential-like lines removed), the repository's package, folder and dependency names, and the worktree's issue or PR title are sent to ${CLEANUP_PROVIDER_PRIVACY[cleanupProvider]}.`}
           id="voice-ai-correction"
         >
           {saveError("correction")}

@@ -102,10 +102,16 @@ export interface ViewlessTerminalRecord {
   worktreeId?: string;
   launchAgentId?: string;
   detectedAgentId?: string;
+  /** The conversation the agent was launched or resumed with, as the spawn recorded it. */
+  agentSessionId?: string;
+  /** New agent sessions observed taking the PTY over after the launched one exited (#12535). */
+  agentIncarnation?: number;
   agentState?: AgentState | string;
   waitingReason?: WaitingReason;
   everDetectedAgent?: boolean;
   isTrashed?: boolean;
+  /** Its agent is being quit by a graceful shutdown. */
+  isClosing?: boolean;
   isExited?: boolean;
   hasPty?: boolean;
   isAssistantTerminal?: boolean;
@@ -275,10 +281,12 @@ export interface ViewlessApprovalAsk {
 /**
  * The person's answer. An approval covers this call until `deadline` (this
  * host's clock), and nothing after it: a change the call has not reached by
- * then is refused.
+ * then is refused. `skip-preference` marks one nobody was asked for, under the
+ * asking assistant's own "Never ask" (#15698), which covers the call the same way.
  */
 export type ViewlessApprovalDecision =
-  { decision: "approved"; deadline: number } | { decision: "rejected" | "timeout" | "unavailable" };
+  | { decision: "approved"; deadline: number; authorization?: "skip-preference" }
+  | { decision: "rejected" | "timeout" | "unavailable" };
 
 /** A preview to put to the person, or the answer the call gets without asking. */
 export type ViewlessApprovalPreview =
@@ -461,18 +469,27 @@ async function runTerminalSendCommand(
       const handbackCode = mintHandbackCode();
       await deps.invoke<void>(project.id, CHANNELS.TERMINAL_SUBMIT, [
         terminalId,
-        appendHandbackInstruction(command, handbackCode),
+        appendHandbackInstruction(command, handbackCode, "run"),
         submissionToken,
         handbackCode,
+        undefined,
+        "no-choice-dialog",
       ]);
     } else {
       await deps.invoke<void>(project.id, CHANNELS.TERMINAL_SUBMIT, [
         terminalId,
         command,
         submissionToken,
+        undefined,
+        undefined,
+        "no-choice-dialog",
       ]);
     }
   } catch (err) {
+    // The view's action reports a send into a choice dialog under its own code (#16209).
+    if (err instanceof Error && (err as { code?: unknown }).code === "TERMINAL_CHOICE_DIALOG") {
+      return failure("TERMINAL_CHOICE_DIALOG", err.message);
+    }
     return failure("EXECUTION_ERROR", formatErrorMessage(err, "Failed to submit to terminal"));
   }
 

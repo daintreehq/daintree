@@ -2,10 +2,14 @@ import { cn } from "@/lib/utils";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { SearchablePalette } from "@/components/ui/SearchablePalette";
 import { KbdChord } from "@/components/ui/Kbd";
+import { FolderGit2 } from "@/components/icons";
+import { PaletteCurrentLabel } from "@/components/ui/PaletteCurrentLabel";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
-import { useTruncationDetection } from "@/hooks/useTruncationDetection";
-import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { HighlightedText, substringMatchIndices } from "@/components/ui/HighlightedText";
+import { remapPathRanges, shortenPath } from "@/lib/pathTail";
+import { TailKeepingText } from "@/components/ui/TailKeepingText";
+import { PathTail } from "@/components/ui/PathTail";
 import type { WorktreeState } from "@/types";
 
 interface WorktreeListItemProps {
@@ -17,6 +21,22 @@ interface WorktreeListItemProps {
   onHover: () => void;
 }
 
+/**
+ * What the row says beside the name, when that adds anything. A linked
+ * worktree is named by its branch (`WorktreeListService.mapToWorktrees`), so
+ * printing the branch again spent half the line repeating the name and
+ * truncated both copies of a long one. The main worktree is named by its folder
+ * and keeps its branch; a detached one says so, with the commit it sits on.
+ */
+function worktreeQualifier(worktree: WorktreeState): string | null {
+  if (worktree.isDetached) {
+    const head = worktree.head?.slice(0, 7);
+    return head ? `detached at ${head}` : "detached";
+  }
+  if (worktree.branch && worktree.branch !== worktree.name) return worktree.branch;
+  return null;
+}
+
 function WorktreeListItem({
   worktree,
   query,
@@ -25,62 +45,66 @@ function WorktreeListItem({
   onClick,
   onHover,
 }: WorktreeListItemProps) {
-  const { ref, isTruncated } = useTruncationDetection();
+  const qualifier = worktreeQualifier(worktree);
+  // The tail, as in the quick switcher: the prefix every worktree shares is
+  // what an end-truncated path used to spend its whole line on.
+  const path = shortenPath(worktree.path);
 
   return (
-    <TruncatedTooltip content={worktree.path} isTruncated={isTruncated}>
-      <button
-        type="button"
-        tabIndex={-1}
-        onPointerDown={(e) => e.preventDefault()}
-        id={`worktree-option-${worktree.id}`}
-        onPointerMove={onHover}
-        onClick={onClick}
-        className={cn(
-          // Was a hand-rolled copy of the shared row and drifted out of step
-          // with it; takes the selected treatment from the family now.
-          PALETTE_ROW_CLASS,
-          // No resting fill: a backplate on every row read as stacked cards, and
-          // the cursor had to out-shout its neighbours instead of being the only
-          // lit row. Same shape as every full-screen palette's two-line row.
-          "group w-full text-left px-3 py-2 rounded-[var(--radius-md)] flex flex-col gap-0.5"
-        )}
-        // The cursor is aria-selected; the worktree you are in is aria-current
-        // and says "Current" in words. A check is the mark for a chosen value,
-        // and switching worktrees is navigation, not a value pick.
-        aria-selected={isSelected}
-        aria-current={isActive ? "true" : undefined}
-        role="option"
-      >
-        <div className="flex items-center justify-between gap-2 text-sm">
-          {/* Both sides truncate: branch names have no length worth trusting,
-              so no tier is wide enough to make this unnecessary. */}
-          <span className="font-medium text-text-primary truncate">
-            <HighlightedText
-              text={worktree.name}
-              indices={substringMatchIndices(worktree.name, query)}
-            />
-          </span>
-          <div className="flex items-center gap-2 min-w-0 text-xs text-text-secondary">
-            {worktree.branch && (
-              <span className="font-mono text-text-secondary truncate">
-                <HighlightedText
-                  text={worktree.branch}
-                  indices={substringMatchIndices(worktree.branch, query)}
-                />
-              </span>
-            )}
-            {isActive && <span className="shrink-0">Current</span>}
-          </div>
+    <button
+      type="button"
+      tabIndex={-1}
+      onPointerDown={(e) => e.preventDefault()}
+      id={`worktree-option-${worktree.id}`}
+      onPointerMove={onHover}
+      onClick={onClick}
+      className={cn(
+        PALETTE_ROW_CLASS,
+        // No resting fill: a backplate on every row read as stacked cards, and
+        // the cursor had to out-shout its neighbours instead of being the only
+        // lit row. The quick switcher's anatomy, so a worktree reads the same in
+        // both places.
+        "group w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left text-text-secondary"
+      )}
+      // The cursor is aria-selected; the worktree you are in is aria-current
+      // and says "Current" in words. A check is the mark for a chosen value,
+      // and switching worktrees is navigation, not a value pick.
+      aria-selected={isSelected}
+      aria-current={isActive ? "true" : undefined}
+      role="option"
+    >
+      <FolderGit2 className="w-4 h-4 shrink-0 text-text-secondary" aria-hidden="true" />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-baseline gap-2 min-w-0">
+          <TailKeepingText
+            text={worktree.name}
+            indices={substringMatchIndices(worktree.name, query)}
+            className="text-sm font-medium text-text-primary"
+          />
+          {qualifier && (
+            <span className="shrink-0 font-mono text-xs text-text-secondary">
+              <span className="sr-only">, </span>
+              <HighlightedText text={qualifier} indices={substringMatchIndices(qualifier, query)} />
+            </span>
+          )}
+          {isActive && <span className="sr-only">, current</span>}
         </div>
-        <div
-          ref={ref}
-          className="font-mono text-2xs text-text-secondary truncate transition-colors group-aria-selected:text-text-primary"
-        >
-          {worktree.path}
-        </div>
-      </button>
-    </TruncatedTooltip>
+        <Tooltip autoDismiss={false}>
+          <TooltipTrigger asChild>
+            <div className="mt-0.5 flex min-w-0 text-xs text-text-secondary">
+              <PathTail
+                className="block min-w-0"
+                indices={remapPathRanges(substringMatchIndices(worktree.path, query), path.start)}
+              >
+                {path.text}
+              </PathTail>
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{worktree.path}</TooltipContent>
+        </Tooltip>
+      </div>
+      {isActive && <PaletteCurrentLabel />}
+    </button>
   );
 }
 
@@ -151,7 +175,7 @@ export function WorktreePalette({
           onHover={() => onHoverIndex(index)}
         />
       )}
-      label="Worktree switcher"
+      label="Switch worktree"
       shortcut={worktreePaletteShortcut}
       ariaLabel="Worktree palette"
       searchPlaceholder="Search worktrees"

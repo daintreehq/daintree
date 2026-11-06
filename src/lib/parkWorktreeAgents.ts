@@ -2,6 +2,7 @@ import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { notify } from "@/lib/notify";
+import { indexFleetRuns } from "@/lib/worktreeAgentBuckets";
 import { pluralize } from "@/lib/pluralize";
 
 export type BulkParkVerb = "park" | "unpark";
@@ -28,7 +29,7 @@ export function resetBulkParkPacing(): void {
 }
 
 function needsVerb(snapshot: FleetSnapshot | null, runId: string, verb: BulkParkVerb): boolean {
-  const run = snapshot?.runs.find((r) => r.runId === runId);
+  const run = indexFleetRuns(snapshot?.runs).get(runId);
   if (run === undefined) return false;
   // Main rejects a park over retained data; an unpark needs no healthy view.
   if (verb === "park" && snapshot?.degraded) return false;
@@ -48,6 +49,27 @@ export function selectParkTargets(
   verb: BulkParkVerb
 ): string[] {
   return terminalIds.filter((id) => needsVerb(snapshot, id, verb));
+}
+
+export interface ParkCounts {
+  /** Runs Unpark would change. */
+  parked: number;
+  /** Runs Park would change. */
+  unparked: number;
+}
+
+/** Both menu counts in one pass, the same sets `selectParkTargets` returns. */
+export function countParkTargets(
+  snapshot: FleetSnapshot | null,
+  terminalIds: readonly string[]
+): ParkCounts {
+  let parked = 0;
+  let unparked = 0;
+  for (const id of terminalIds) {
+    if (needsVerb(snapshot, id, "unpark")) parked++;
+    else if (needsVerb(snapshot, id, "park")) unparked++;
+  }
+  return { parked, unparked };
 }
 
 export interface BulkParkDeps {

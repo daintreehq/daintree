@@ -61,6 +61,7 @@ export const WorktreeChangesSchema = z.object({
   rootPath: z.string().min(1),
   changes: z.array(GitStatusEntrySchema),
   changedFileCount: z.number().int().nonnegative(),
+  omittedUntrackedCount: z.number().int().nonnegative().optional(),
   totalInsertions: z.number().int().nonnegative().optional(),
   totalDeletions: z.number().int().nonnegative().optional(),
   insertions: z.number().int().nonnegative().optional(),

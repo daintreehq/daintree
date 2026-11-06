@@ -51,15 +51,18 @@ import { getLinuxWindowIconOption } from "./linuxWindowIcon.js";
 import { showWindowInactive } from "./showWindowInactive.js";
 import { seedTitleBarOverlay } from "./titleBarOverlay.js";
 import { readLastActiveProjectIdentitySync } from "../services/persistence/readLastProjectId.js";
-import { appWindowStateTracking, resolveBoundsProjectPath } from "./windowStateTracking.js";
+import { appWindowStateTracking, resolveBoundsKey } from "./windowStateTracking.js";
 import { attachRendererConsoleCapture } from "./rendererConsoleCapture.js";
 import { attachRendererEditContextMenu } from "./rendererEditContextMenu.js";
 import { markPerformance } from "../utils/performance.js";
 import { registerProtocolsForSession, getDistPath } from "../setup/protocols.js";
+import { gateHtmlPreviewWebviewAttach } from "../setup/htmlPreviewSession.js";
 import { isDemoMode, isSmokeTest } from "../setup/environment.js";
 import { isE2EDeferRendererLoad, isE2EMode } from "../setup/runtimeFlags.js";
 import { SMOKE_BOOT_TIMEOUT_MS } from "../services/smokeTest.js";
 import { attachAppViewRendererGoneHandler } from "./appViewRendererGone.js";
+import { getDefaultAppEntryUrl, recordAppEntryUrl } from "./appEntryUrl.js";
+import type { PrepareWindowRecreation } from "./windowRecreation.js";
 
 /**
  * This window's own ProjectViewManager. Resolve it at call time and never
@@ -143,12 +146,18 @@ function registerWindowIpcHandlers(onCreateWindow?: CreateWindowHandler): void {
 }
 
 export interface SetupBrowserWindowOptions {
-  onRecreateWindow?: () => Promise<void>;
+  prepareWindowRecreation?: PrepareWindowRecreation;
   onCreateWindow?: CreateWindowHandler;
   projectPath?: string | null;
   /** Last-active projectId read synchronously from DB before window creation.
    *  Used to assign the correct session partition to the initial view. */
   initialProjectId?: string;
+  /**
+   * The host's project (`<hostId>:<projectId>`) a restored window was showing.
+   * The window opens on this machine's picker, and its bounds come from the
+   * host's project, where it moves once Remote Hosts is up.
+   */
+  remoteWorkspaceKey?: string;
   /**
    * How the reveal gate maps the window (#11492). "showInactive" is for the
    * background windows of a startup restore: they come up after the window the
@@ -173,10 +182,11 @@ export function setupBrowserWindow(
   options: SetupBrowserWindowOptions = {}
 ): CreateWindowResult {
   const {
-    onRecreateWindow,
+    prepareWindowRecreation,
     onCreateWindow,
     projectPath,
     initialProjectId,
+    remoteWorkspaceKey,
     revealMode = "show",
   } = options;
   let smokeTestTimer: ReturnType<typeof setTimeout> | undefined;
@@ -242,7 +252,7 @@ export function setupBrowserWindow(
       ...getLinuxWindowIconOption(),
       backgroundColor: windowBg,
     },
-    resolveBoundsProjectPath(projectPath, initialProjectId),
+    resolveBoundsKey(projectPath, initialProjectId ?? remoteWorkspaceKey),
     appWindowStateTracking
   );
   markPerformance(PERF_MARKS.MAIN_WINDOW_CREATED);
@@ -453,15 +463,16 @@ export function setupBrowserWindow(
     });
 
     const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
+    const entryUrl = `${getDefaultAppEntryUrl()}${qs}`;
+    // The recovery page's reload restores this, query and all (#16258).
+    recordAppEntryUrl(appWebContents, entryUrl);
     console.log(`[MAIN] Loading renderer (${reason})...`);
     if (process.env.NODE_ENV === "development") {
-      const devServerUrl = getDevServerUrl();
-      console.log(`[MAIN] Loading Vite dev server at ${devServerUrl}${qs}`);
-      appWebContents.loadURL(`${devServerUrl}${qs}`);
+      console.log(`[MAIN] Loading Vite dev server at ${entryUrl}`);
     } else {
       console.log("[MAIN] Loading production build via app:// protocol");
-      appWebContents.loadURL(`app://daintree/index.html${qs}`);
     }
+    appWebContents.loadURL(entryUrl);
   };
 
   // Window open handler — on the app view's webContents
@@ -503,6 +514,15 @@ export function setupBrowserWindow(
 
   // Harden webview security — on the app view's webContents
   appWebContents.on("will-attach-webview", (event, webPreferences, params) => {
+    const preview = gateHtmlPreviewWebviewAttach(webPreferences, params);
+    if (preview !== "not-preview") {
+      if (preview === "refused") {
+        console.warn(`[MAIN] Blocked HTML preview webview: partition=${params.partition}`);
+        event.preventDefault();
+      }
+      return;
+    }
+
     const isAllowedLocalhostUrl = isWebviewSrcAllowed(appWebContents.id, params.src);
     const partition = params.partition ?? "";
     const isValidPartition =
@@ -563,7 +583,7 @@ export function setupBrowserWindow(
     appWebContents,
     getProjectViewManager: () => getProjectViewManagerFor(win),
     getRecoveryUrl,
-    onRecreateWindow,
+    prepareWindowRecreation,
   });
 
   // Fullscreen events

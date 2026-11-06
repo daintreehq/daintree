@@ -143,6 +143,35 @@ describe("createSessionServerDeps", () => {
     expect(sessionDeps.readClosedPanelProcess).toBe(readClosedPanelProcess);
   });
 
+  // #15729: an owned worktree delete refuses outright without it; #15737: a
+  // retirement refuses outright without the git reader.
+  it("hands a local and a relayed session the terminal process and git readers", () => {
+    const deps = fakeSource();
+    const readTerminalProcesses = vi.fn();
+    const readWorktreeGit = vi.fn();
+    (deps as { readTerminalProcesses?: unknown }).readTerminalProcesses = readTerminalProcesses;
+    (deps as { readWorktreeGit?: unknown }).readWorktreeGit = readWorktreeGit;
+
+    for (const capture of [
+      {},
+      {
+        relay: {
+          linkSessionId: "link-1",
+          senderId: "shell-1",
+          helpSessionId: "help-1",
+          shellName: "Shell",
+        },
+      },
+    ]) {
+      const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
+        sessionId: "s",
+        ...capture,
+      });
+      expect(sessionDeps.readTerminalProcesses).toBe(readTerminalProcesses);
+      expect(sessionDeps.readWorktreeGit).toBe(readWorktreeGit);
+    }
+  });
+
   // #14552: the target narrows discovery for the global Assistant only if the flag reaches the session.
   it.each([
     ["the global Assistant's", { global: true as const }, true],
@@ -160,6 +189,58 @@ describe("createSessionServerDeps", () => {
     });
 
     expect(sessionDeps.relay?.global).toBe(expected);
+  });
+
+  // #15698: the Shell's view can only match a dispatch to its own call if the call is named.
+  it("names the Shell's own call on each of a relay session's dispatches, and only its own", async () => {
+    const bound = (relay?: Record<string, unknown>) => {
+      const deps = fakeSource();
+      const dispatchActionForWorkspace = vi.fn(async () => ({
+        result: { ok: true, result: null },
+      }));
+      (deps as { dispatchActionForWorkspace?: unknown }).dispatchActionForWorkspace =
+        dispatchActionForWorkspace;
+      const sessionDeps = createSessionServerDeps(deps, mutableHost().host, {
+        sessionId: "s",
+        workspaceBinding: { workspaceId: WS_A },
+        ...(relay ? { relay: relay as never } : {}),
+      });
+      const relays = () =>
+        dispatchActionForWorkspace.mock.calls.map(
+          (call) => ((call as unknown[])[5] as { relay?: { call?: unknown } } | undefined)?.relay
+        );
+      return { sessionDeps, relays };
+    };
+    const caller = {
+      linkSessionId: "link-1",
+      senderId: "shell-1",
+      helpSessionId: "help-1",
+      shellName: "Shell",
+    };
+
+    for (const relay of [caller, { ...caller, local: true as const }]) {
+      const { sessionDeps, relays } = bound(relay);
+      const del = { worktreeId: "/wt" };
+      await sessionDeps.dispatchAction("worktree.delete", del, false, undefined, "call-1");
+      await sessionDeps.dispatchAction("worktree.delete", del, false, undefined, "call-2");
+      await sessionDeps.dispatchAction("worktree.delete", del, false);
+      const [first, second, unnamed] = relays();
+      expect(first?.call).toEqual({ callId: "call-1", helpSessionId: "help-1" });
+      expect(second?.call).toEqual({ callId: "call-2", helpSessionId: "help-1" });
+      expect(unnamed).toBeDefined();
+      expect(unnamed).not.toHaveProperty("call");
+    }
+
+    // A session that isn't relayed carries no relay, whatever id reaches it.
+    const { sessionDeps, relays } = bound();
+    await sessionDeps.dispatchAction(
+      "worktree.delete",
+      { worktreeId: "/wt" },
+      false,
+      undefined,
+      "call-1"
+    );
+    expect(relays()).toEqual([undefined]);
   });
 
   // #14551: only a relay caller its Shell's runtime named global is handed the
@@ -186,6 +267,7 @@ describe("createSessionServerDeps", () => {
         projectId: "p",
         terminalId: "t",
         generation: 1,
+        inputOwner: "principal-a",
         authorize: () => {},
       };
 
@@ -194,6 +276,7 @@ describe("createSessionServerDeps", () => {
         prompt: vi.fn(async () => `${tag}:prompt`),
         keys: vi.fn(async () => `${tag}:keys`),
         interrupt: vi.fn(async () => `${tag}:interrupt`),
+        reveal: vi.fn(async () => `${tag}:reveal`),
       });
       const bind = (steer: ReturnType<typeof steerOf> | undefined) => {
         state.binding = {
@@ -204,29 +287,34 @@ describe("createSessionServerDeps", () => {
       };
       const prompt = { command: "go", handback: false, machineName: "m" };
       const keys = { keys: ["Enter"] };
+      const show = vi.fn(async () => "shown");
       const steer = sessionDeps.globalSteer!;
       const callAll = () =>
         Promise.all([
           steer.prompt(target, prompt),
           steer.keys(target, keys),
           steer.interrupt(target),
+          steer.reveal(target, show),
         ]);
 
       // Unbound, every call is refused, never run some other way.
       await expect(steer.prompt(target, prompt)).rejects.toMatchObject(refused);
       await expect(steer.keys(target, keys)).rejects.toMatchObject(refused);
       await expect(steer.interrupt(target)).rejects.toMatchObject(refused);
+      await expect(steer.reveal(target, show)).rejects.toMatchObject(refused);
+      expect(show).not.toHaveBeenCalled();
 
       const first = steerOf("a");
       bind(first);
-      await expect(callAll()).resolves.toEqual(["a:prompt", "a:keys", "a:interrupt"]);
+      await expect(callAll()).resolves.toEqual(["a:prompt", "a:keys", "a:interrupt", "a:reveal"]);
       expect(first.prompt).toHaveBeenCalledWith(target, prompt);
       expect(first.keys).toHaveBeenCalledWith(target, keys);
       expect(first.interrupt).toHaveBeenCalledWith(target);
+      expect(first.reveal).toHaveBeenCalledWith(target, show);
 
       // Replaced, then gone: each call reads the binding as it finds it.
       bind(steerOf("b"));
-      await expect(callAll()).resolves.toEqual(["b:prompt", "b:keys", "b:interrupt"]);
+      await expect(callAll()).resolves.toEqual(["b:prompt", "b:keys", "b:interrupt", "b:reveal"]);
       bind(undefined);
       await expect(steer.keys(target, keys)).rejects.toMatchObject(refused);
     }

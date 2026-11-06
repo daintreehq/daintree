@@ -16,10 +16,10 @@ const { hostList, dispatch } = vi.hoisted(() => ({
 
 vi.mock("../../hostList", () => ({
   useHostList: () => hostList,
+  useHostFigures: () => hostList,
   hasRemoteHosts: (state: { hosts: unknown[] }) => state.hosts.length > 0,
 }));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
-vi.mock("../hostMetricsFeed", () => ({ startHostMetricsFeed: () => () => {} }));
 
 import { useHostMetricsStore } from "@/store/hostMetricsStore";
 import { clientPlatform, localHostLabel } from "../../hostModel";

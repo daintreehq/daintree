@@ -46,6 +46,10 @@ export function PanelTabList({
 }: PanelTabListProps) {
   const performanceMode = document.body.dataset.performanceMode === "true";
   const isParked = (tab: TabInfo) => !tab.isActive && (hiddenTabIds?.has(tab.id) ?? false);
+  // The active tab is never parked, so in a strip narrower than it the strip's
+  // edge cuts it mid-word. Fading the last 16px of that edge makes
+  // the cut read as "more to the right" rather than as a broken render.
+  const activeIsCut = tabs.some((tab) => tab.isActive && (hiddenTabIds?.has(tab.id) ?? false));
 
   return (
     // [data-no-dnd] opts the whole tab strip out of the outer panel-move drag
@@ -61,7 +65,14 @@ export function PanelTabList({
         // element changes — otherwise it keeps watching the old, detached tabs.
         key={performanceMode ? "static" : "animated"}
         ref={tabListRef}
-        className="flex items-stretch min-w-0 overflow-x-auto scrollbar-none relative"
+        // What the maximized readout must clear: the strip's own content, not
+        // the flex-1 frame around it, which always spans the bar.
+        data-readout-obstacle=""
+        className={cn(
+          "flex items-stretch min-w-0 overflow-x-auto scrollbar-none relative",
+          activeIsCut &&
+            "[mask-image:linear-gradient(to_right,black_calc(100%-16px),transparent)] contrast-more:[mask-image:none] forced-colors:[mask-image:none]"
+        )}
         role="tablist"
         aria-label="Panel tabs"
         onKeyDown={onKeyDown}
@@ -104,6 +115,7 @@ export function PanelTabList({
               // 14px glyph in the 24px target, like the window controls
               // at the other end of the same bar.
               className="shrink-0 self-center focus-visible:outline-offset-[-2px] [&_svg]:size-3.5"
+              data-readout-obstacle=""
               aria-label="Duplicate panel as new tab"
             >
               <Plus aria-hidden="true" />
@@ -112,7 +124,13 @@ export function PanelTabList({
           <TooltipContent side="bottom">{addTabTooltipContent}</TooltipContent>
         </Tooltip>
       )}
-      {overflowTrigger && <div className="flex items-center">{overflowTrigger}</div>}
+      {overflowTrigger && (
+        // ml-1: the window controls' 4px step, so "+" and the chevron read as
+        // two targets rather than one wide one.
+        <div className="ml-1 flex items-center" data-readout-obstacle="">
+          {overflowTrigger}
+        </div>
+      )}
     </div>
   );
 }

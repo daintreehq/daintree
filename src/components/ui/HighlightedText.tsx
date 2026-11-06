@@ -44,7 +44,17 @@ export function HighlightedText({ text, indices }: HighlightedTextProps) {
       // no metrics, and it is the same idiom document search already uses in
       // the terminal, diff and code viewers, which keep the
       // `search-highlight-*` tokens for exactly that job.
-      <span key={i} className="bg-overlay-medium text-text-primary">
+      //
+      // The underline is what carries the match. The band is about 1.1:1
+      // against both the resting row and the highlighted one, so on a title —
+      // already primary ink — it was the only cue and nearly invisible. An
+      // underline changes no metrics either, and it survives forced colours,
+      // where the band is dropped. Two pixels down, not three: a name set
+      // `leading-tight` inside `truncate` clips anything lower.
+      <span
+        key={i}
+        className="bg-overlay-medium text-text-primary underline decoration-text-secondary decoration-1 underline-offset-2"
+      >
         {text.substring(start, end + 1)}
       </span>
     );
@@ -95,4 +105,25 @@ export function findMatchIndices(
   key: string
 ): readonly [number, number][] | undefined {
   return matches?.find((m) => m.key === key)?.indices;
+}
+
+/**
+ * Each word of the query found literally in the text, for lists that match
+ * word by word (plugin search rows, other hosts' projects) rather than through
+ * a Fuse index. Single characters are skipped, as the Fuse match index skips
+ * them, so a one-letter word doesn't sprinkle bands across a row.
+ */
+export function wordMatchIndices(
+  text: string,
+  query: string | undefined
+): readonly [number, number][] | undefined {
+  const words = (query ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter((word) => word.length >= 2);
+  const ranges: [number, number][] = [];
+  for (const word of words) {
+    for (const range of substringMatchIndices(text, word) ?? []) ranges.push([range[0], range[1]]);
+  }
+  return ranges.length > 0 ? ranges : undefined;
 }

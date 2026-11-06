@@ -64,6 +64,7 @@ export class CrashLoopGuardService {
   private relaunchAllowed = true;
   private initialized = false;
   private crashCount = 0;
+  private previousExitClean = true;
   private lastCrashAt: number | undefined;
   private quarantinedStatePath: string | null = null;
 
@@ -85,6 +86,8 @@ export class CrashLoopGuardService {
 
     const state = this.readState();
     const now = Date.now();
+
+    this.previousExitClean = state.cleanExit;
 
     if (!state.cleanExit) {
       const recentLaunches = state.launches.filter((ts) => now - ts < CRASH_WINDOW_MS);
@@ -140,6 +143,16 @@ export class CrashLoopGuardService {
 
   getCrashCount(): number {
     return this.crashCount;
+  }
+
+  /**
+   * Whether the previous session reached `markCleanExit()`, however long it
+   * ran. Unlike `getCrashCount()`, which only counts launches inside
+   * `CRASH_WINDOW_MS`, a session that died hours after launch still reports
+   * false here.
+   */
+  wasPreviousExitClean(): boolean {
+    return this.previousExitClean;
   }
 
   getLastCrashTimestamp(): number | undefined {

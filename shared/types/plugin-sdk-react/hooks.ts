@@ -8,7 +8,11 @@ import type { MouseEvent } from "react";
  * resolves with the validated channel result on success, or `undefined` if
  * the host rejected the call (the rejection is surfaced via `error`). Only
  * the latest `invoke()` updates `loading` / `error` — stale earlier calls are
- * dropped to keep concurrent invocations coherent.
+ * dropped to keep concurrent invocations coherent. Changing `pluginId` or
+ * `channel` also supersedes calls made against the previous target: they
+ * resolve `undefined` and leave `loading`, `error` and `disconnected` alone.
+ * The change resets `loading` / `error` for the new target (a call already
+ * started on it keeps its own) and keeps `disconnected`.
  */
 export interface UseHostChannelResult<TArgs, TResult> {
   invoke: (args: TArgs) => Promise<TResult | undefined>;
@@ -277,6 +281,10 @@ export interface UseDisclosureOptions {
   /** Controlled. Pair with `onOpenChange`. */
   open?: boolean;
   defaultOpen?: boolean;
+  /**
+   * Hears each requested change from what is rendered. A controlled owner can
+   * decline one by keeping `open` as it is, and still hears the next.
+   */
   onOpenChange?: (open: boolean) => void;
 }
 

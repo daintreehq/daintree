@@ -25,7 +25,6 @@ import type {
   SnapshotFleetSavedScope,
 } from "../../shared/types/project.js";
 import { normalizeDaintreeMcpTier } from "../../shared/types/project.js";
-import type { CommandOverride } from "../../shared/types/commands.js";
 import type { NotificationSettings } from "../../shared/types/ipc/api.js";
 import { normalizeProviderId } from "../../shared/utils/forgeProviderIds.js";
 import { sanitizeDictionary } from "../../shared/utils/voiceDictionary.js";
@@ -193,33 +192,6 @@ function decodeFleetSavedScopes(raw: unknown): FleetSavedScope[] | undefined {
     }
   }
   return out.length > 0 ? out : undefined;
-}
-
-function decodeCommandOverrides(raw: unknown): CommandOverride[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
-  const valid: CommandOverride[] = [];
-  for (const entry of raw) {
-    if (!entry || typeof entry !== "object") continue;
-    const o = entry as Record<string, unknown>;
-    if (typeof o.commandId !== "string") continue;
-    if (
-      o.defaults !== undefined &&
-      (o.defaults === null || typeof o.defaults !== "object" || Array.isArray(o.defaults))
-    ) {
-      continue;
-    }
-    if (o.disabled !== undefined && typeof o.disabled !== "boolean") continue;
-    if (o.prompt !== undefined && (typeof o.prompt !== "string" || o.prompt.trim() === "")) {
-      continue;
-    }
-    valid.push({
-      commandId: o.commandId,
-      defaults: o.defaults as Record<string, unknown> | undefined,
-      disabled: o.disabled as boolean | undefined,
-      prompt: o.prompt as string | undefined,
-    });
-  }
-  return valid.length > 0 ? valid : undefined;
 }
 
 function decodeResourceEnvironment(raw: unknown): ResourceEnvironment | undefined {
@@ -461,7 +433,6 @@ export function decode(raw: unknown): ProjectSettingsDecodeResult {
     turbopackEnabled:
       typeof migrated.turbopackEnabled === "boolean" ? migrated.turbopackEnabled : undefined,
     copyTreeSettings: decodeCopyTreeSettings(migrated.copyTreeSettings),
-    commandOverrides: decodeCommandOverrides(migrated.commandOverrides),
     preferredEditor: decodePreferredEditor(migrated.preferredEditor),
     branchPrefixMode: decodeBranchPrefixMode(migrated.branchPrefixMode),
     branchPrefixCustom:
@@ -547,6 +518,8 @@ export function encodeEnvelope(settings: ProjectSettings): Record<string, unknow
   // Removed exit-snapshot feature (#10850/#10855): drop any stale opt-out flag a
   // passthrough save payload might still carry so it never re-lands on disk.
   delete persistable.exitSnapshotExcluded;
+  // Removed command registry (#15759): same for its per-project overrides.
+  delete persistable.commandOverrides;
   delete persistable._schemaVersion;
 
   return {
@@ -583,7 +556,6 @@ export const ProjectSettingsSaveSchema = z
     devServerLoadTimeout: z.number().optional(),
     turbopackEnabled: z.boolean().optional(),
     copyTreeSettings: z.unknown().optional(),
-    commandOverrides: z.array(z.unknown()).optional(),
     gitInitDefaults: z.unknown().optional(),
     preferredEditor: z.unknown().optional(),
     preferredImageViewer: z.unknown().optional(),

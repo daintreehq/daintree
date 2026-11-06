@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { z } from "zod";
 import { CHANNELS } from "../../ipc/channels.js";
 import type { ActionDispatchResult } from "../../../shared/types/actions.js";
 import type { PanelSnapshot, Project } from "../../../shared/types/project.js";
+import type { ScheduledRunRef } from "../../../shared/types/panel.js";
 import type { ResolvedModelCatalog } from "../../../shared/types/ipc/agentCapabilities.js";
 import { LAUNCH_CONTEXT_AGENT_IDS } from "../../../shared/config/agentLaunchContext.js";
 import {
@@ -17,8 +17,6 @@ import {
   buildResumeCommand,
   type AgentSettings,
 } from "../../../shared/types/agentSettings.js";
-import { NotifyReplyLinesSchema } from "../../../shared/types/terminalNotify.js";
-import { WaitForReplySchema, WaitSecondsSchema } from "../../../shared/types/replyWait.js";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability.js";
 import { resolveAgentLaunchBaseCommandFor } from "../../../shared/utils/agentLaunchCommand.js";
 import {
@@ -26,6 +24,7 @@ import {
   buildLaunchIdentity,
 } from "../../../shared/utils/agentLaunchPlan.js";
 import {
+  launchModelRefusal,
   resolveAgentLaunchKind,
   unknownAgentIdMessage,
 } from "../../../shared/utils/agentLaunchValidation.js";
@@ -37,7 +36,6 @@ import {
 import {
   hasSystemPromptOverride,
   resolveSystemPromptArgs,
-  SYSTEM_PROMPT_MAX_LENGTH,
 } from "../../../shared/utils/agentSystemPrompt.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { appendHandbackInstruction, mintHandbackCode } from "../../../shared/utils/handback.js";
@@ -54,47 +52,46 @@ import {
   mergeTerminalLaunchEnv,
   spawnSourceForMcpOrigin,
 } from "../../../shared/utils/terminalLaunchOptions.js";
+import { launchSpawnProvenance } from "../../../shared/utils/scheduledRunProvenance.js";
 import type { ViewlessActionRequest, ViewlessDeps } from "./ViewlessActionExecutor.js";
 import { recordViewlessTerminal } from "./projectStateAuthoring.js";
 import { countProjectPanels } from "./viewlessTerminals.js";
 import { readProjectWorktrees } from "./viewlessWorktrees.js";
-import { AgentListModelsArgsSchema, AgentListPresetsArgsSchema } from "./viewlessArgsSchemas.js";
+import {
+  AgentLaunchArgsSchema,
+  AgentListModelsArgsSchema,
+  AgentListPresetsArgsSchema,
+} from "./viewlessArgsSchemas.js";
 import {
   viewlessFailure as failure,
   viewlessSuccess as success,
   viewlessValidationFailure as validationFailure,
 } from "./viewlessResult.js";
 
-/** The renderer action's arguments; the UI-only ones are accepted and have no effect here. */
-const AgentLaunchArgsSchema = z.object({
-  agentId: z.string().min(1),
-  location: z.enum(["grid", "dock", "overlay", "background"]).optional(),
-  cwd: z.string().optional(),
-  worktreeId: z.string().optional(),
-  prompt: z.string().optional(),
-  handback: z.boolean().optional(),
-  notify: z.boolean().optional(),
-  replyLines: NotifyReplyLinesSchema,
-  waitForReply: WaitForReplySchema,
-  waitSeconds: WaitSecondsSchema,
-  systemPrompt: z.string().max(SYSTEM_PROMPT_MAX_LENGTH).optional(),
-  interactive: z.boolean().optional(),
-  model: z.string().optional(),
-  presetId: z.string().nullable().optional(),
-  activateDockOnCreate: z.boolean().optional(),
-  env: z.record(z.string(), z.string()).optional(),
-  excludeFromPersistence: z.boolean().optional(),
-  removeOnExit: z.boolean().optional(),
-  agentLaunchFlags: z.array(z.string()).optional(),
-  spawnedBy: z.unknown().optional(),
-  focusPolicy: z.unknown().optional(),
-  requestedId: z.string().optional(),
-  force: z.boolean().optional(),
-  name: z.string().max(200).optional(),
-});
-
 /** Launch ids the launcher always turns into a panel, never an agent. */
 const PANEL_LAUNCH_IDS: ReadonlySet<string> = new Set(["browser", "dev-preview"]);
+
+/**
+ * The launch-time context an agent pane's MCP session replays (#12486),
+ * pointed at the pane itself, as a view captures it. None for an agent whose
+ * MCP session replays no context.
+ */
+export function paneLaunchContext(
+  agentId: string,
+  projectId: string,
+  worktreeId: string | null,
+  terminalId: string,
+  title: string
+) {
+  if (!LAUNCH_CONTEXT_AGENT_IDS.has(agentId)) return undefined;
+  return {
+    projectId,
+    ...(worktreeId !== null ? { activeWorktreeId: worktreeId, focusedWorktreeId: worktreeId } : {}),
+    focusedTerminalId: terminalId,
+    focusedTerminalKind: "terminal" as const,
+    focusedTerminalTitle: title,
+  };
+}
 
 /** A launch that started nothing, in the shape the action's output schema requires. */
 function declined(
@@ -176,6 +173,20 @@ async function readPresetSources(
 }
 
 /**
+ * What main's own caller of {@link runAgentLaunch} adds to a launch, beside the
+ * request: never read from `request.args`, so the generic viewless executor,
+ * which serves MCP, can't set any of it.
+ */
+export interface ViewlessLaunchContext {
+  /**
+   * The scheduled run this launch is for (#15977): the terminal is spawned
+   * `spawnedBy: "schedule"` with the run's ids, on the PTY and in the saved
+   * layout, in place of the source the session's origin would give it.
+   */
+  scheduledRun?: ScheduledRunRef;
+}
+
+/**
  * Start an agent, or a plain shell, in a project with no frontend attached
  * (#13495): the same validation the view's action applies, the same launch
  * plan its launcher builds, spawned through the same handler, and recorded in
@@ -189,7 +200,8 @@ async function readPresetSources(
 export async function runAgentLaunch(
   request: ViewlessActionRequest,
   project: Project,
-  deps: ViewlessDeps
+  deps: ViewlessDeps,
+  launch: ViewlessLaunchContext = {}
 ): Promise<ActionDispatchResult> {
   const parsed = AgentLaunchArgsSchema.safeParse(request.args);
   if (!parsed.success) return validationFailure(request.actionId, parsed.error);
@@ -242,6 +254,13 @@ export async function runAgentLaunch(
       "agentLaunchFlags already sets this agent's system-prompt instruction. Pass it in systemPrompt or agentLaunchFlags, not both."
     );
   }
+  const modelRefusal = launchModelRefusal(agentId, {
+    model: args.model,
+    interactive: args.interactive,
+    prompt: args.prompt,
+    agentLaunchFlags: args.agentLaunchFlags,
+  });
+  if (modelRefusal) return failure("VALIDATION_ERROR", modelRefusal);
   if (args.handback === true && (args.prompt === undefined || args.prompt.trim() === "")) {
     return failure(
       "VALIDATION_ERROR",
@@ -340,10 +359,11 @@ export async function runAgentLaunch(
     presetInventory,
     options: {
       presetId: args.presetId,
+      accountId: args.accountId,
       env: args.env,
       prompt:
         handbackCode !== undefined && args.prompt !== undefined
-          ? appendHandbackInstruction(args.prompt, handbackCode)
+          ? appendHandbackInstruction(args.prompt, handbackCode, "run")
           : args.prompt,
       interactive: args.interactive,
       modelId: args.model,
@@ -370,6 +390,8 @@ export async function runAgentLaunch(
   // The disk reads already finished, so an unread source here failed: nothing
   // will arrive to wait for.
   if (plan.unloadedPresetId !== undefined) return declined("presets-loading", null, identity);
+  // Never on another account than the one chosen (#16040): that bills someone else.
+  if (plan.missingAccountId !== undefined) return declined("spawn-failed", null, identity);
   if (isAgent && !plan.command) return declined("spawn-failed", null, identity);
   // A CLI that cannot launch would only start and fail. A view opens its setup
   // diagnostic panel instead; with no view, the result says why nothing ran.
@@ -385,26 +407,19 @@ export async function runAgentLaunch(
   const id = args.requestedId || `terminal-${randomUUID()}`;
   const location =
     args.location === "dock" ? "dock" : args.location === "background" ? "background" : "grid";
-  const spawnedBy = spawnSourceForMcpOrigin(request.sessionOrigin);
+  const provenance = launchSpawnProvenance(
+    spawnSourceForMcpOrigin(request.sessionOrigin),
+    launch.scheduledRun
+  );
   const layers = await deps.getLaunchEnvLayers(project.id).catch((err: unknown) => {
     console.warn("[Viewless] Could not read environment variables for a launch:", err);
     return null;
   });
   const env = mergeTerminalLaunchEnv(layers?.global, layers?.project, plan.env);
   const launchAgentId = isAgent ? agentId : undefined;
-  // The launch-time context an agent pane's MCP session replays (#12486),
-  // pointed at the pane itself, as a view captures it.
   const actionContext =
-    launchAgentId !== undefined && LAUNCH_CONTEXT_AGENT_IDS.has(launchAgentId)
-      ? {
-          projectId: project.id,
-          ...(worktreeId !== null
-            ? { activeWorktreeId: worktreeId, focusedWorktreeId: worktreeId }
-            : {}),
-          focusedTerminalId: id,
-          focusedTerminalKind: "terminal" as const,
-          focusedTerminalTitle: plan.title,
-        }
+    launchAgentId !== undefined
+      ? paneLaunchContext(launchAgentId, project.id, worktreeId, id, plan.title)
       : undefined;
 
   // Only an agent is handed the prompt as its launch argument, recorded as the
@@ -431,7 +446,7 @@ export async function runAgentLaunch(
           ? {
               launchAgentId,
               agentLaunchFlags: plan.launchFlags,
-              agentModelId: args.model,
+              agentModelId: plan.modelId,
               agentSessionId: plan.assignedSessionId,
               agentPresetId: plan.preset?.id,
               agentPresetColor: plan.preset?.color,
@@ -441,6 +456,7 @@ export async function runAgentLaunch(
         ...(handbackCode !== undefined ? { handbackCode } : {}),
         ...(firstPrompt !== undefined ? { hasFirstPrompt: true } : {}),
         ...(actionContext !== undefined ? { actionContext } : {}),
+        ...(provenance.scheduledRun !== undefined ? { scheduledRun: provenance.scheduledRun } : {}),
       },
     ]);
   } catch (err) {
@@ -459,12 +475,13 @@ export async function runAgentLaunch(
     agentSessionId: plan.assignedSessionId,
     agentLaunchFlags: plan.launchFlags,
     callerLaunchFlags: plan.callerLaunchFlags,
-    agentModelId: args.model,
+    agentModelId: plan.modelId,
     agentPresetId: plan.preset?.id,
     agentPresetColor: plan.preset?.color,
     originalPresetId: plan.preset?.id,
     env: plan.env,
-    spawnedBy,
+    agentAccountId: plan.account?.id,
+    ...provenance,
     ...(firstPrompt && { firstPrompt }),
   };
   const snapshot: PanelSnapshot = {
@@ -518,10 +535,16 @@ export async function spawnHostAssistant(
     agentLaunchFlags: string[];
     /** Reopen this exact conversation instead of starting one (#14159); never "the latest". */
     resumeAgentSessionId?: string;
+    /**
+     * A schedule's run (#16169): the prompt gets the run's handback
+     * instruction, and the spawn handler registers the run from this spawn.
+     */
+    scheduledRun?: ScheduledRunRef;
   },
   deps: ViewlessDeps
 ): Promise<boolean> {
   const { agentId } = spec;
+  const handbackCode = spec.scheduledRun !== undefined ? mintHandbackCode() : undefined;
   const { settings, ccrPresets, projectPresets, presetInventory } = await readPresetSources(
     agentId,
     project.path,
@@ -538,7 +561,10 @@ export async function spawnHostAssistant(
     presetInventory,
     options: {
       env: spec.env,
-      prompt: spec.prompt,
+      prompt:
+        handbackCode !== undefined
+          ? appendHandbackInstruction(spec.prompt, handbackCode, "run")
+          : spec.prompt,
       ...(spec.agentLaunchFlags.length > 0 ? { agentLaunchFlags: spec.agentLaunchFlags } : {}),
     },
     shellDialect: deps.hostPlatform.shellDialect,
@@ -596,6 +622,8 @@ export async function spawnHostAssistant(
         agentPresetId: plan.preset?.id,
         agentPresetColor: plan.preset?.color,
         originalAgentPresetId: plan.preset?.id,
+        ...(handbackCode !== undefined ? { handbackCode } : {}),
+        ...(spec.scheduledRun !== undefined ? { scheduledRun: spec.scheduledRun } : {}),
       },
     ]);
     return true;

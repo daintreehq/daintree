@@ -77,8 +77,8 @@ const FLEET_RUN_OUTCOME_STATUSES: ReadonlySet<string> = new Set([
 /**
  * Pure, store-free ring buffer for durable run-history records. Persistence is
  * injected via the `saveRecords` / `readRecords` callbacks so the class stays
- * unit-testable (mirrors `ForgeAuditService`'s separation from the store key).
- * The wiring to the `runHistory` electron-store key lives in
+ * unit-testable (mirrors `ForgeAuditService`'s separation from its store).
+ * The wiring to the `runHistoryRecords` ring in SQLite lives in
  * `runHistoryService.ts`.
  */
 export class RunHistoryLog {

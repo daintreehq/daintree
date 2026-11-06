@@ -76,15 +76,15 @@ export function registerAssistantControlActions(actions: ActionRegistry): void {
 
   actions.set("agent.readQuota", () => ({
     id: "agent.readQuota",
-    title: "Read Codex quota",
+    title: "Read agent quota",
     description:
-      "Read this machine's Codex account quota, as Codex reports it: how much of each rate-limit window is used and when it resets.",
+      "Read this machine's Codex quota as Codex reports it, and the last Claude Code usage-limit message per limit its panes showed (not a live reading).",
     category: "agent",
     kind: "query",
     danger: "safe",
     denyPluginDispatch: true,
     scope: "renderer",
-    keywords: ["codex", "quota", "usage", "limit"],
+    keywords: ["codex", "claude", "quota", "usage", "limit"],
     palette: { mode: "hidden" },
     argsSchema: AgentReadQuotaArgsSchema,
     resultSchema: AgentReadQuotaResultSchema,

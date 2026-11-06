@@ -11,7 +11,11 @@ import {
 } from "culori";
 import { BUILT_IN_APP_SCHEMES } from "../themes.js";
 import { WORKTREE_COLOR_PALETTE } from "../worktreeColors.js";
-import { RED_GREEN_OVERRIDES, BLUE_YELLOW_OVERRIDES } from "../colorVisionOverrides.js";
+import {
+  RED_GREEN_OVERRIDES,
+  BLUE_YELLOW_OVERRIDES,
+  getColorVisionWrites,
+} from "../colorVisionOverrides.js";
 import type { AppThemeTokenKey } from "../types.js";
 
 // eslint-disable-next-line react-hooks/rules-of-hooks -- culori config, not a React hook
@@ -349,6 +353,123 @@ describe("palette distinguishability", () => {
     testOverrideMap("RED_GREEN_OVERRIDES", RED_GREEN_UNIQUE, ["protanopia", "deuteranopia"]);
 
     testOverrideMap("BLUE_YELLOW_OVERRIDES", BLUE_YELLOW_UNIQUE, ["tritanopia"]);
+  });
+
+  describe("CVD writes fitted to each theme (#15580)", () => {
+    // A mode fits its syntax and status inks to each theme's surfaces before
+    // writing them, which moves each along lightness and can shed chroma, so the
+    // colours it actually paints are measured here, theme by theme.
+    const MODES = [
+      ["red-green", RED_GREEN_OVERRIDES, ["protanopia", "deuteranopia"]],
+      ["blue-yellow", BLUE_YELLOW_OVERRIDES, ["tritanopia"]],
+    ] as const;
+    const signalTokens = (map: Record<string, string>) =>
+      Object.keys(map).filter(
+        (token) => !token.endsWith("-surface") && !token.endsWith("-background")
+      );
+
+    // Seeds that differ only in lightness can meet once both are fitted to the
+    // same floor. Each pair allowed to meet is named here with why that is
+    // acceptable, so any other collapse, on any theme, still fails.
+    const CONVERGENT_PAIRS: Record<(typeof MODES)[number][0], ReadonlyArray<readonly string[]>> = {
+      "red-green": [],
+      "blue-yellow": [
+        // Sky blue and blue, 7.8° apart in hue: on a light canvas both darken to
+        // 4.5:1 and meet. Red-green paints function, number and link in one blue
+        // by design, and the terminal's blue is never set on the editor canvas.
+        ["--theme-syntax-function", "--theme-syntax-link"],
+        ["--theme-syntax-function", "--theme-terminal-blue"],
+        // Two greys fitted to different floors on different surfaces that land
+        // together on highlands: the info glyph in chrome and code punctuation.
+        ["--theme-status-info", "--theme-syntax-punctuation"],
+        ["--theme-status-info", "--theme-syntax-operator"],
+      ],
+    };
+    const mayConverge = (mode: (typeof MODES)[number][0], a: string, b: string) =>
+      CONVERGENT_PAIRS[mode].some(([x, y]) => (x === a && y === b) || (x === b && y === a));
+
+    function collapsedPairs(
+      label: string,
+      colors: ReadonlyArray<{ token: string; value: string; seed?: string }>,
+      deficiencies: readonly Deficiency[],
+      exempt: (a: string, b: string) => boolean = () => false
+    ): string[] {
+      const failures: string[] = [];
+      for (const deficiency of deficiencies) {
+        const filter = cvdFilter(deficiency);
+        const simulated = colors.map(({ token, value, seed }) => {
+          const parsed = parseColor(value);
+          if (!parsed) failures.push(`${label}: could not parse ${token}=${value}`);
+          return { token, value, seed, color: parsed ? filter(parsed) : undefined };
+        });
+        for (let i = 0; i < simulated.length; i++) {
+          for (let j = i + 1; j < simulated.length; j++) {
+            const a = simulated[i]!;
+            const b = simulated[j]!;
+            if (!a.color || !b.color) continue;
+            // One hex in the map is one colour by design (the static block dedupes them).
+            if (a.seed !== undefined && a.seed === b.seed) continue;
+            if (exempt(a.token, b.token)) continue;
+            const d = differenceEuclidean("oklab")(a.color, b.color);
+            if (d < JND_FLOOR) {
+              failures.push(
+                `${label} ${deficiency}: ${a.token} ${a.value} - ${b.token} ${b.value} = ${d.toFixed(4)}`
+              );
+            }
+          }
+        }
+      }
+      return failures;
+    }
+
+    for (const [mode, overrides, deficiencies] of MODES) {
+      it(`${mode}: fitted override colours stay apart on every built-in theme`, () => {
+        const failures = BUILT_IN_APP_SCHEMES.flatMap((scheme) => {
+          const writes = getColorVisionWrites(mode, scheme);
+          const colors = signalTokens(overrides).map((token) => ({
+            token,
+            value: writes[token]!,
+            seed: normHex(overrides[token]!),
+          }));
+          return collapsedPairs(`${mode} on ${scheme.id}`, colors, deficiencies, (a, b) =>
+            mayConverge(mode, a, b)
+          );
+        });
+        expect(failures, failures.join("\n")).toEqual([]);
+      });
+
+      it(`${mode}: every pair allowed to converge still does somewhere`, () => {
+        const collapsed = BUILT_IN_APP_SCHEMES.flatMap((scheme) => {
+          const writes = getColorVisionWrites(mode, scheme);
+          const colors = signalTokens(overrides).map((token) => ({
+            token,
+            value: writes[token]!,
+            seed: normHex(overrides[token]!),
+          }));
+          return collapsedPairs(scheme.id, colors, deficiencies);
+        });
+        for (const [a, b] of CONVERGENT_PAIRS[mode]) {
+          const pair = new RegExp(`(${a} .* - ${b} |${b} .* - ${a} )`);
+          expect(
+            collapsed.some((line) => pair.test(line)),
+            `${a} / ${b} no longer converges anywhere; drop it from CONVERGENT_PAIRS`
+          ).toBe(true);
+        }
+      });
+
+      it(`${mode}: the four status inks it leaves on screen stay apart on every built-in theme`, () => {
+        const failures = BUILT_IN_APP_SCHEMES.flatMap((scheme) => {
+          const writes = getColorVisionWrites(mode, scheme);
+          // Every pair is measured here: the four are one signal set, whatever their seeds.
+          const colors = STATUS_TOKENS.map((token) => ({
+            token,
+            value: writes[`--theme-${token}`] ?? scheme.tokens[token],
+          }));
+          return collapsedPairs(`${mode} on ${scheme.id}`, colors, deficiencies);
+        });
+        expect(failures, failures.join("\n")).toEqual([]);
+      });
+    }
   });
 
   describe("CVD diff token coverage", () => {

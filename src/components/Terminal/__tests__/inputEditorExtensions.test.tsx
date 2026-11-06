@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, onTestFinished, vi } from "vitest";
 
 // jsdom does not implement Trusted Types — mock the renderer policy module
 // with a pass-through so chip widgets that call setTrustedInnerHTML in
@@ -224,6 +224,23 @@ describe("createAutoSize integration", () => {
       expect(view.dom.style.height).toBe("10px");
 
       view.destroy();
+    });
+
+    it("shows a preview placed outside the draft at its end, and takes the next edit (#15716)", () => {
+      const { view } = mountInterim(25);
+      onTestFinished(() => view.destroy());
+      const preview = (pos: number) => setInterimText.of({ text: "next words", pos });
+      view.dispatch({ effects: preview(312) });
+      expect(view.state.field(interimWidgetField)).toEqual({ text: "next words", pos: null });
+      view.dispatch({ effects: preview(-1) });
+      expect(view.state.field(interimWidgetField)).toEqual({ text: "next words", pos: null });
+
+      // Measured against the text the same transaction writes, its end included.
+      view.dispatch({ changes: { from: 0, insert: "so " }, effects: preview(3) });
+      expect(view.state.doc.toString()).toBe("so ");
+      expect(view.state.field(interimWidgetField).pos).toBe(3);
+      view.dispatch({ effects: preview(0) });
+      expect(view.state.field(interimWidgetField).pos).toBe(0);
     });
 
     it("keeps its height when interim text is committed to the draft", () => {
@@ -1765,7 +1782,7 @@ describe("buildInputBarTheme", () => {
     }
   });
 
-  it("floors chip pills at the content line-height rather than pinning a fixed height", () => {
+  it("floors chip pills so pill and margin fill the content line, without pinning a height", () => {
     const css = readGeneratedCss([buildInputBarTheme(theme)]);
     const contentLineHeight = parseDeclarations(extractRuleBody(css, ".cm-content"))["line-height"];
     expect(contentLineHeight).toBeDefined();
@@ -1783,10 +1800,17 @@ describe("buildInputBarTheme", () => {
       for (const prop of ["height", "block-size", "max-height", "max-block-size"]) {
         expect(decls[prop], `${selector} must not pin its block size via ${prop}`).toBeUndefined();
       }
-      // The floor preserves the single-line size, so it has to track the
-      // editor's line-height instead of drifting from it.
-      expect(decls["min-height"], `${selector} should floor at the content line-height`).toBe(
-        contentLineHeight
+      // The floor plus the vertical margin preserves the single-line size, so
+      // it has to track the editor's line-height instead of drifting from it;
+      // the margin is the channel between pills on adjacent rows.
+      const marginBlock = parseFloat((decls["margin"] ?? "0").split(/\s+/)[0]!);
+      expect(marginBlock, `${selector} should leave a channel between rows`).toBeGreaterThan(0);
+      expect(
+        parseFloat(decls["min-height"]!) + 2 * marginBlock,
+        `${selector} should fill the content line-height with its margin`
+      ).toBe(parseFloat(contentLineHeight!));
+      expect(decls["line-height"], `${selector} should set its own line at the floor`).toBe(
+        decls["min-height"]
       );
     }
   });

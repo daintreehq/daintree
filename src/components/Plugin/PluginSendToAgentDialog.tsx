@@ -14,6 +14,7 @@ import { usePluginPromptStore } from "@/store/pluginPromptStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 import { usePanelStore } from "@/store/panelStore";
+import { useRunFleetBand } from "@/hooks/useRunFleetBand";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useAgentPreferencesStore } from "@/store/agentPreferencesStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -51,16 +52,28 @@ type PickerMode = "pick" | "branch";
 /**
  * What the last agent output looked like, in the Fleet picker's badge. An
  * observation off the terminal, not a guarantee — the picker still drafts into
- * a working agent, and the draft waits for the user either way.
+ * a working agent, and the draft waits for the user either way. The words stay
+ * observed; only the waiting hue is the fleet's, kept for a run Canopy read
+ * asking the user something they haven't seen.
  */
-function ObservedStateBadge({ state }: { state: AgentState | undefined }) {
+function ObservedStateBadge({
+  terminalId,
+  state,
+}: {
+  terminalId: string;
+  state: AgentState | undefined;
+}) {
+  const band = useRunFleetBand(terminalId);
   if (state !== "waiting" && state !== "working") return null;
   const waiting = state === "waiting";
   return (
     <Badge
       size="xs"
       tone="outline"
-      className={cn("shrink-0", waiting ? "text-state-waiting" : "text-text-secondary")}
+      className={cn(
+        "shrink-0",
+        waiting && band === "needs-you" ? "text-state-waiting" : "text-text-secondary"
+      )}
       data-state={state}
     >
       {waiting ? "Last seen waiting" : "Last seen working"}
@@ -318,7 +331,9 @@ export function PluginSendToAgentDialog() {
           detail = row.pane.canDraft
             ? (getAgentConfig(row.pane.agentId)?.name ?? row.pane.agentId)
             : ROW_REFUSAL_LABEL[row.pane.draftRefusal ?? "not-agent"];
-          badge = row.pane.canDraft ? <ObservedStateBadge state={row.pane.observedState} /> : null;
+          badge = row.pane.canDraft ? (
+            <ObservedStateBadge terminalId={row.pane.terminalId} state={row.pane.observedState} />
+          ) : null;
           break;
         }
         case "new-here":

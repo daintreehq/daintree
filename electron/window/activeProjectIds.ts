@@ -129,3 +129,52 @@ function collect(
 
   return activeIds;
 }
+
+export interface HeldWorkspaceSources {
+  projectViewManagers: ProjectViewManagersProvider;
+  /** The workspace each connected remote Shell view is bound to, shown or cached. */
+  remoteViewWorkspaceIds: () => Iterable<string | null>;
+  /** Workspaces with at least one tracked terminal. */
+  liveTerminalWorkspaceIds: () => Iterable<string>;
+  /**
+   * Workspaces a window has committed to before its manager has a view: a
+   * window reserved for its initial workspace, or a claimed switch still
+   * waiting on the window's queue.
+   */
+  openingWorkspaceIds: () => Iterable<string>;
+  /**
+   * Workspaces still to be restored: the background-restore queue's, and the
+   * persisted open-window manifest's. The manifest covers a later window of a
+   * launch's fleet, which has neither a view nor a reservation while the
+   * windows before it come up, and in a launch that never rewrites it, the
+   * windows the next launch will restore.
+   */
+  restoringWorkspaceIds: () => Iterable<string>;
+}
+
+/**
+ * Every workspace something in the app still holds: shown, cached or bridged in
+ * any window, bound to a remote Shell view, running a terminal, being opened,
+ * or being restored (#15614).
+ *
+ * The broadest of these collectors, and the only strict one: a source that
+ * fails to answer throws instead of being skipped, because its caller deletes
+ * what this set leaves out.
+ */
+export function collectHeldWorkspaceIds(sources: HeldWorkspaceSources): Set<string> {
+  const ids = new Set<string>();
+  for (const manager of sources.projectViewManagers()) {
+    const activeId = manager.getActiveProjectId();
+    if (activeId) ids.add(activeId);
+    const outgoingId = manager.getOutgoingBridgeProjectId();
+    if (outgoingId) ids.add(outgoingId);
+    for (const entry of manager.getAllViews()) ids.add(entry.projectId);
+  }
+  for (const id of sources.remoteViewWorkspaceIds()) {
+    if (id) ids.add(id);
+  }
+  for (const id of sources.liveTerminalWorkspaceIds()) ids.add(id);
+  for (const id of sources.openingWorkspaceIds()) ids.add(id);
+  for (const id of sources.restoringWorkspaceIds()) ids.add(id);
+  return ids;
+}

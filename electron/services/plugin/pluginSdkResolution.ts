@@ -103,9 +103,10 @@ export function createPluginSdkResolveHook(sdkDir: string): ResolveHookSync {
  * Install the fallback for this process. `registerHooks` runs the hook
  * in-thread and synchronously — no loader worker and no separate hook module
  * to ship — and covers `require()` as well as `import`. The API is not yet
- * marked stable in Node 24 (Electron 42's runtime) and the tests run it under
- * the repo's Node 22, so an Electron upgrade should be checked against a real
- * plugin worker; the bootstrap treats a throw here as losing only the fallback.
+ * marked stable in Node 24 (Electron 42's runtime), so
+ * `pluginSdkResolution.electron.test.ts` runs the bootstrap under the Electron
+ * binary's own Node on every PR, which an Electron upgrade has to pass; the
+ * bootstrap treats a throw here as losing only the fallback.
  */
 export function installPluginSdkResolution(sdkDir: string): void {
   registerHooks({ resolve: createPluginSdkResolveHook(sdkDir) });

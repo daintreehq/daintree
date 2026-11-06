@@ -22,6 +22,18 @@ export interface ResolvedGitPushDestination extends GitPushDestination {
    * is invoked, not what the renderer renders.
    */
   requiresUpstreamRepair?: boolean;
+  /**
+   * The branch tracks nothing, and the push should give it tracking to the
+   * destination above: either git named no push remote and the destination is
+   * the repository's only remote (a freshly created worktree branch), or git's
+   * own `push.autoSetupRemote` would have set it. The push names its refspec
+   * explicitly, which switches off both of git's own routes to tracking — the
+   * "no upstream" failure the caller used to recover from, and auto-setup — so
+   * the caller passes `--set-upstream` instead.
+   *
+   * Main-process-only, like {@link requiresUpstreamRepair}.
+   */
+  establishesUpstream?: boolean;
 }
 
 export type GitPushDestinationResolution =
@@ -222,7 +234,7 @@ async function resolvePushFromFields(
   const upstreamRef = upstreamRefField ?? "";
 
   if (!remote) {
-    return resolveUnconfigured(remotes, branchName);
+    return resolveUnconfigured(remotes, branchName, upstreamRef);
   }
   if (!isSafeRemoteName(remote)) {
     return { status: "unresolved", reason: "unsafe-remote" };
@@ -263,8 +275,76 @@ async function resolvePushFromFields(
       // simply fails and the force-push CTA stays suppressed, which is the safe
       // direction.
       remoteTrackingRef: `${REMOTE_TRACKING_PREFIX}${remote}/${remoteBranch}`,
+      ...(!upstreamRef && (await autoSetupRemoteApplies(git, branchName, remote))
+        ? { establishesUpstream: true }
+        : {}),
     },
   };
+}
+
+/**
+ * True when git's own default push would give an untracked branch its upstream,
+ * by the same rules `builtin/push.c` applies: `push.autoSetupRemote` is on (the
+ * flag is only ever switched on, so a later `false` does not clear an earlier
+ * `true`), `push.default` honours it (all but `matching` and `nothing`), the
+ * remote has no push refspecs of its own (those bypass default-push setup), and
+ * the branch has no merge config alongside a branch remote (git keeps merge
+ * config only with a remote, and then counts it as tracked even when no fetch
+ * refspec maps it to a ref, so `%(upstream)` alone would miss it).
+ *
+ * A failed read answers false. Unlike {@link hasDefaultSimplePushConfig}, this
+ * never decides where a push goes or what it sends, only whether tracking is
+ * written afterwards, so leaving it unwritten is the harmless direction.
+ */
+async function autoSetupRemoteApplies(
+  git: Pick<SimpleGit, "raw">,
+  branchName: string,
+  remote: string
+): Promise<boolean> {
+  let out: string;
+  try {
+    out = await git.raw(["config", "--list", "-z"]);
+  } catch {
+    return false;
+  }
+
+  let autoSetup = false;
+  let pushDefault: string | null = null;
+  let hasMerge = false;
+  let hasBranchRemote = false;
+  for (const entry of out.split("\u0000")) {
+    if (!entry) continue;
+    const newline = entry.indexOf("\n");
+    const key = newline === -1 ? entry : entry.slice(0, newline);
+    const value = newline === -1 ? null : entry.slice(newline + 1);
+    const lower = key.toLowerCase();
+    if (lower === "push.autosetupremote") {
+      // A key with no `=` at all is git's spelling of true.
+      if (value === null || isGitTrue(value)) autoSetup = true;
+    } else if (lower === "push.default") {
+      pushDefault = (value ?? "").trim().toLowerCase();
+    } else if (lower.startsWith("branch.") && lower.endsWith(".merge")) {
+      // Section and variable names are case-insensitive; the subsection isn't.
+      if (key.slice("branch.".length, -".merge".length) === branchName) hasMerge = true;
+    } else if (lower.startsWith("branch.") && lower.endsWith(".remote")) {
+      if (key.slice("branch.".length, -".remote".length) === branchName) hasBranchRemote = true;
+    } else if (lower.startsWith("remote.") && lower.endsWith(".push")) {
+      if (key.slice("remote.".length, -".push".length) === remote) return false;
+    }
+  }
+  if (hasMerge && hasBranchRemote) return false;
+  return autoSetup && pushDefault !== "matching" && pushDefault !== "nothing";
+}
+
+/**
+ * git's boolean: a word, or any integer it accepts (decimal or hex, with an
+ * optional k/m/g unit) that is not zero.
+ */
+function isGitTrue(raw: string): boolean {
+  const value = raw.trim().toLowerCase();
+  if (value === "true" || value === "yes" || value === "on") return true;
+  const number = /^[+-]?(?:0x([0-9a-f]+)|(\d+))[kmg]?$/.exec(value);
+  return number !== null && /[1-9a-f]/.test(number[1] ?? number[2] ?? "");
 }
 
 /** The one `push.default` value under which the recovery below is git's own intent. */
@@ -384,10 +464,14 @@ async function hasDefaultSimplePushConfig(git: Pick<SimpleGit, "raw">): Promise<
  * the D2 confirm renders it for approval before anything is written. Two or more
  * is a real ambiguity, and picking `origin` by name there is precisely the bug
  * #11746 reports — so it fails closed even when an `origin` exists.
+ *
+ * An existing upstream is never overwritten: tracking is only established for a
+ * branch that has none.
  */
 function resolveUnconfigured(
   remotes: readonly string[],
-  branchName: string
+  branchName: string,
+  upstreamRef: string
 ): GitPushDestinationResolution {
   if (remotes.length !== 1) {
     return { status: "unresolved", reason: remotes.length === 0 ? "not-configured" : "ambiguous" };
@@ -402,6 +486,7 @@ function resolveUnconfigured(
       remote,
       branch: branchName,
       remoteTrackingRef: `${REMOTE_TRACKING_PREFIX}${remote}/${branchName}`,
+      ...(upstreamRef ? {} : { establishesUpstream: true }),
     },
   };
 }

@@ -67,6 +67,7 @@ import type {
 } from "@shared/types/browser";
 import { logError } from "@/utils/logger";
 import { CopyButton } from "@/components/ui/CopyButton";
+import { InlineError } from "@/components/ui/field";
 import { copyWithToast } from "@/lib/copyWithToast";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { useResizeObserverRaf } from "@/hooks/useResizeObserverRaf";
@@ -1129,12 +1130,12 @@ export function BrowserToolbar({
                 id={errorId}
                 role="alert"
                 className={cn(
-                  "absolute left-0 mt-2 max-w-full text-xs text-status-error surface-overlay shadow-overlay border border-status-error rounded-[var(--radius-md)] px-2 py-1 z-10",
+                  "absolute left-0 mt-2 max-w-full surface-overlay shadow-overlay border border-border-default rounded-[var(--radius-md)] px-2 py-1 z-10",
                   ANCHORED_MOTION_CLASS
                 )}
                 style={ANCHORED_ENTER_STYLE}
               >
-                {error}
+                <InlineError>{error}</InlineError>
               </div>
             )}
           </form>

@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Keyboard, RefreshCw } from "lucide-react";
+import { Globe, Keyboard, RefreshCw } from "lucide-react";
 import { formatWaitAge } from "@/lib/projectRowStatus";
 import { Telescope } from "@/components/icons";
 import { useCanopyStore } from "@/store/canopyStore";
@@ -40,7 +40,7 @@ import { Callout } from "@/components/ui/Callout";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
 import { isWorkerEntry } from "./canopyInboxProjection";
-import { CanopyCard, canopyCardDomId } from "./CanopyCard";
+import { CanopyCard, REPLY_GO_TO_TERMINAL, canopyCardDomId } from "./CanopyCard";
 import { CanopyRow } from "./CanopyRow";
 import { CanopyRowMenu } from "./CanopyRowMenu";
 import { SectionBar } from "./CanopySectionBar";
@@ -65,6 +65,7 @@ import { useCanopyInboxFocus } from "./useCanopyInboxFocus";
 import { useCanopyInboxUndo } from "./useCanopyInboxUndo";
 import { useCanopyInboxActions } from "./useCanopyInboxActions";
 import { useCanopyInboxKeyboard } from "./useCanopyInboxKeyboard";
+import { canopyCardKeys, useCanopyKeyboardPlace } from "./useCanopyKeyboardPlace";
 import {
   NO_CANOPY_REPLY,
   isCanopyReplyTarget,
@@ -78,6 +79,9 @@ import { restoreInItsProject } from "./canopyRestoreElsewhere";
 import type { CanopyTrashItem } from "./canopyTrash";
 import { parseAllHostsKey } from "./canopyAllHosts";
 import { CanopyAssistantPane, CanopyAssistantRow } from "./CanopyAssistantList";
+import { CanopyDetailSplit } from "./CanopyDetailSplit";
+import { CanopyGlobalAssistant } from "./CanopyGlobalAssistant";
+import { isOwnGlobalAssistant } from "./useCanopyInboxFilters";
 import { canopyAssistantDomId } from "./openAssistantItem";
 import { CANOPY_ROLE_FILTERS, type CanopyRoleFilter } from "./canopyAssistants";
 import { isFullAgentDirectory } from "@shared/types/agentDirectory";
@@ -294,8 +298,8 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
   }, [hostListed, setHostId]);
   useOverlayClaim("canopy", isOpen);
   // A view put in the background — another project shown in its place — can
-  // be seen by no one: an inbox left open there would acknowledge asks nobody
-  // saw, keep its pages held back, and hold an agent's terminal at its size.
+  // be seen by no one: an inbox left open there would keep its pages held
+  // back, and hold an agent's terminal at its size.
   useEffect(() => {
     if (!isOpen) return;
     // Already there: opened by a key while the panel's code loaded, and the
@@ -547,6 +551,7 @@ function CanopyShortcuts() {
           label: "In a reply: send, then go to the next agent below that needs you or is unread",
         },
         { keys: ["Shift+Enter"], label: "New line in a reply" },
+        { keys: [REPLY_GO_TO_TERMINAL], label: "In a reply: go to terminal" },
         { keys: ["Escape"], label: "Back to the list from a reply" },
         ...(paneClose
           ? [
@@ -610,6 +615,12 @@ function CanopyShortcuts() {
   );
 }
 
+/** Dictation while the keyboard is in the docked global assistant: said, and sent nowhere. */
+const DOCKED_GLOBAL_DICTATION: CanopyReplyDictation = {
+  ok: false,
+  message: "Dictation goes to an agent's reply. Click the reply to dictate into it.",
+};
+
 function CanopyInbox({
   restoreOpener,
   hostId,
@@ -632,6 +643,7 @@ function CanopyInbox({
 }) {
   const isOpen = useCanopyStore((s) => s.isOpen);
   const close = useCanopyStore((s) => s.close);
+  const setGlobalDocked = useCanopyStore((s) => s.setGlobalDocked);
   const {
     otherHost,
     everyHost,
@@ -694,6 +706,8 @@ function CanopyInbox({
     seeAssistantHandback,
     assistantItems,
     assistantAsks,
+    globalDocked,
+    globalItem,
     workOf,
     showWorkOf,
     workPartial,
@@ -716,8 +730,6 @@ function CanopyInbox({
     workerNavigation,
     firstAssistant,
     listRef,
-    scrollerRef,
-    acknowledgeOpened,
     onlyReadMatch,
   } = useCanopyInboxFilters({
     isOpen,
@@ -812,10 +824,6 @@ function CanopyInbox({
     seeAssistantHandback,
   });
 
-  const openedRunId = focusedItem?.runId ?? null;
-  useLayoutEffect(() => {
-    if (openedRunId !== null) acknowledgeOpened(openedRunId);
-  }, [openedRunId, acknowledgeOpened]);
   useLayoutEffect(() => placeOrder(), [placeOrder, orderWake]);
   const { reserveUndo, undoReads, undoLine } = useCanopyInboxUndo({ hostId, api });
 
@@ -879,10 +887,16 @@ function CanopyInbox({
   // is in Canopy; with no agent's pane showing, nowhere, never the grid behind.
   const dictationRef = useRef<() => CanopyReplyDictation>(() => NO_CANOPY_REPLY);
   useEffect(() => {
-    dictationRef.current = () =>
-      (selectedAssistant === null && focusedItem !== null
-        ? detailRef.current?.dictation()
-        : undefined) ?? NO_CANOPY_REPLY;
+    dictationRef.current = () => {
+      // Typing to the docked global assistant: a dictation there must not
+      // land in the agent's reply beside it.
+      if (document.activeElement?.closest("[data-canopy-global]")) return DOCKED_GLOBAL_DICTATION;
+      return (
+        (selectedAssistant === null && focusedItem !== null
+          ? detailRef.current?.dictation()
+          : undefined) ?? NO_CANOPY_REPLY
+      );
+    };
   });
   useEffect(() => registerCanopyReplyDictation(() => dictationRef.current()), []);
   // The row a dictation is writing its reply into, wherever the selection has
@@ -1073,30 +1087,37 @@ function CanopyInbox({
     else focusAssistantNow(last.item.id);
   };
 
-  const { onAssistantKeyDown, onAgentStepKeyDownCapture, onNavigationKeyDown, onSearchKeyDown } =
-    useCanopyInboxKeyboard({
-      visible,
-      listed,
-      shownAssistants,
-      navigation: projection.navigation,
-      focusedIndex,
-      activeIndex,
-      focusedItem,
-      selectedAssistant,
-      searchRef,
-      detailRef,
-      selectNow,
-      focusCardNow,
-      openPaneNow,
-      focusAssistantNow,
-      selectAssistant,
-      openAssistant,
-      onOpen: handlers.onOpen,
-      askRename,
-      toggleRead,
-      markAllRead,
-      onPastEnd: () => trashRef.current?.focusHeader() ?? false,
-    });
+  const {
+    onAssistantKeyDown,
+    onAgentStepKeyDownCapture,
+    onNavigationKeyDown,
+    onSearchKeyDown,
+    searchOpens,
+  } = useCanopyInboxKeyboard({
+    visible,
+    listed,
+    shownAssistants,
+    navigation: projection.navigation,
+    focusedIndex,
+    activeIndex,
+    focusedItem,
+    selectedAssistant,
+    searchRef,
+    detailRef,
+    selectNow,
+    focusCardNow,
+    openPaneNow,
+    focusAssistantNow,
+    selectAssistant,
+    openAssistant,
+    onOpen: handlers.onOpen,
+    askRename,
+    toggleRead,
+    markAllRead,
+    onPastEnd: () => trashRef.current?.focusHeader() ?? false,
+  });
+  // The keys the open card names are the ones that act from where the keyboard is.
+  const keyboardAt = useCanopyKeyboardPlace(isOpen);
 
   // What the panel can say about another host before it has its agents.
   const hostSummary =
@@ -1374,6 +1395,9 @@ function CanopyInbox({
   // With assistants to list, or only assistants asked for, the list shows
   // even when no worker runs.
   // The relationship filter keeps the list, and its banner, up even with nothing in it.
+  // The global assistant's own row in the pane, or the assistant docked beside the agent.
+  const selectedGlobal = selectedAssistant !== null && isOwnGlobalAssistant(selectedAssistant);
+  const globalPaneShown = globalDocked || selectedGlobal;
   const listsAssistants =
     (assistantsShown && (assistantItems.length > 0 || !workersShown)) || workOf !== null;
   // A trash, or the undo line of one just made, keeps the list up with no
@@ -1461,6 +1485,24 @@ function CanopyInbox({
           ]}
         />
       )}
+      {/* The global assistant beside the agents (#16214): off until turned on,
+          and kept as it was left. */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Global assistant"
+            aria-controls={globalPaneShown ? "canopy-global-dock" : undefined}
+            pressed={globalDocked}
+            data-testid="canopy-global-toggle"
+            onClick={() => setGlobalDocked(!globalDocked)}
+          >
+            <Globe />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Global assistant</TooltipContent>
+      </Tooltip>
       <CanopyShortcuts />
       {/* Nothing is read while the reader is off, so there is nothing to refresh;
           its slot stays, so the filters don't move when reading turns on or off. */}
@@ -1701,7 +1743,7 @@ function CanopyInbox({
               </Callout>
             </div>
           )}
-        {!hostHeld && (items.length > 0 || listsAssistants || listsTrash) && (
+        {!hostHeld && (items.length > 0 || listsAssistants || listsTrash || globalDocked) && (
           // An inbox: what needs you down a sidebar, most urgent first, the rest
           // folded away beneath it, and the selected agent's own terminal beside
           // it, drawn as its pane.
@@ -1716,6 +1758,7 @@ function CanopyInbox({
                   onChange={(event) => setQuery(event.target.value)}
                   onClear={() => setQuery("")}
                   onKeyDown={onSearchKeyDown}
+                  data-canopy-search=""
                   placeholder="Search agents and their terminals"
                   aria-label="Search agents"
                   role="combobox"
@@ -1742,7 +1785,6 @@ function CanopyInbox({
                 />
               </div>
               <div
-                ref={scrollerRef}
                 className="canopy-inbox flex min-h-0 flex-1 flex-col overflow-y-auto select-none"
                 data-canopy-list=""
                 // Its rows have menus of their own: the app's Shift+F10 stands down here.
@@ -2110,8 +2152,21 @@ function CanopyInbox({
             </CanopyListColumn>
             {/* Inset on every side: the top one puts the place line level with the
                 search beside it, and the card's top with the Inbox bar's. */}
-            <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-surface-canvas p-2">
-              {selectedAssistant !== null ? (
+            <CanopyDetailSplit
+              dock={
+                globalPaneShown ? (
+                  <CanopyGlobalAssistant
+                    item={selectedGlobal ? selectedAssistant : globalItem}
+                    refusal={assistantRefusal}
+                    workOf={workOf?.assistantId ?? null}
+                    // Docked, the agent beside it stays selected.
+                    onOpen={(item) => openAssistant(item, !selectedGlobal)}
+                    onShowWork={showWork}
+                  />
+                ) : null
+              }
+            >
+              {selectedGlobal ? null : selectedAssistant !== null ? (
                 <CanopyAssistantPane
                   key={selectedAssistant.id}
                   item={selectedAssistant}
@@ -2157,6 +2212,11 @@ function CanopyInbox({
                       terminalApi={terminalApi}
                       workLabel={workLabelOf(focusedItem)}
                       moveOnTo={moveOnTo}
+                      keysFrom={canopyCardKeys(
+                        keyboardAt,
+                        focusedItem.runId,
+                        searchOpens?.runId ?? null
+                      )}
                       reading={!readerOff}
                       reconnecting={
                         everyHost
@@ -2207,7 +2267,7 @@ function CanopyInbox({
                   )}
                 </>
               )}
-            </div>
+            </CanopyDetailSplit>
           </div>
         )}
         {!hostHeld &&
@@ -2215,7 +2275,8 @@ function CanopyInbox({
           !fleet.degraded &&
           items.length === 0 &&
           !listsAssistants &&
-          !listsTrash && (
+          !listsTrash &&
+          !globalDocked && (
             <div className="flex flex-1 flex-col items-center justify-center gap-3">
               {scope === "project" && fleet.runs.length > 0 ? (
                 <>
@@ -2244,15 +2305,20 @@ function CanopyInbox({
               )}
             </div>
           )}
-        {offerReading && !hostHeld && items.length === 0 && !listsAssistants && !listsTrash && (
-          <CanopyStatusBar
-            host={otherHost ? hostName : null}
-            model={undefined}
-            reader={undefined}
-            waiting={undefined}
-            offer={offerReading}
-          />
-        )}
+        {offerReading &&
+          !hostHeld &&
+          items.length === 0 &&
+          !listsAssistants &&
+          !listsTrash &&
+          !globalDocked && (
+            <CanopyStatusBar
+              host={otherHost ? hostName : null}
+              model={undefined}
+              reader={undefined}
+              waiting={undefined}
+              offer={offerReading}
+            />
+          )}
       </div>
       {parkRunId !== null && (
         <Suspense fallback={null}>

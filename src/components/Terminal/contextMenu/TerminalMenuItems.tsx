@@ -1,6 +1,6 @@
 import type React from "react";
 import { isMac } from "@/lib/platform";
-import { revealCopy } from "@/components/FileViewer/revealCopy";
+import { useRevealCopy } from "@/components/FileViewer/revealCopy";
 import {
   AGENT_SNOOZE_DURATION_OPTIONS,
   AGENT_SNOOZE_LABEL,
@@ -14,16 +14,23 @@ import type { PluginPanelMenuItem } from "@/components/Panel/genericPanelMenu";
 import { pluginMenuCommandId } from "@/components/Panel/genericPanelMenu";
 import {
   ContextMenuItem,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
   ContextMenuSeparator,
   ContextMenuShortcut,
   ContextMenuSub,
   ContextMenuSubContent,
   ContextMenuSubTrigger,
 } from "@/components/ui/context-menu";
+import type { TerminalWhenDone } from "@shared/types/ipc/terminalWhenDone";
 import {
   RestartOnPresetSubmenu,
   type RestartOnPresetRequest,
 } from "@/components/Terminal/RestartOnPreset";
+import {
+  RestartOnAccountSubmenu,
+  type RestartOnAccountRequest,
+} from "@/components/Terminal/RestartOnAccount";
 import { SelectedFileMenuItems } from "../SelectedFileMenuItems";
 import { TerminalHandOverMenuItems } from "../TerminalHandOver";
 import {
@@ -54,9 +61,15 @@ import {
   Trash2,
   Unlock,
 } from "lucide-react";
-import { CirclePause, FolderOpen, FolderTree } from "@/components/icons";
+import { CirclePause, FlagTriangleRight, FolderTree } from "@/components/icons";
 import { ICON_CLASS, type MenuActionHandler } from "./menuShared";
 import type { useFleetRunMenuState } from "./useFleetRunMenuState";
+
+const WHEN_DONE_ROWS: ReadonlyArray<{ choice: TerminalWhenDone; label: string }> = [
+  { choice: "keep", label: "Keep open" },
+  { choice: "background", label: "Move to background" },
+  { choice: "close", label: "Close, keeping the session" },
+];
 
 /** Copy, paste and what the pointer or the selection found in the output. */
 export function TerminalSelectionMenuItems({
@@ -95,6 +108,7 @@ export function TerminalSelectionMenuItems({
 }) {
   const mac = isMac();
   const clipboardCombos = terminalClipboardCombos(mac);
+  const reveal = useRevealCopy();
   return (
     <>
       <ContextMenuItem
@@ -178,8 +192,8 @@ export function TerminalSelectionMenuItems({
             />
           )}
           <ContextMenuItem onSelect={() => onAction(`reveal-in-finder:${hoveredFilePath}`)}>
-            <FolderOpen className={ICON_CLASS} aria-hidden="true" />
-            {revealCopy().label}
+            <reveal.icon className={ICON_CLASS} aria-hidden="true" />
+            {reveal.label}
           </ContextMenuItem>
         </>
       )}
@@ -208,6 +222,7 @@ export function TerminalFleetMenuItems({
   fleetRun,
   detectedAgentId,
   isWatched,
+  whenDone,
   onRequestPark,
   onAction,
 }: {
@@ -217,6 +232,8 @@ export function TerminalFleetMenuItems({
   fleetRun: ReturnType<typeof useFleetRunMenuState>;
   detectedAgentId: string | undefined;
   isWatched: boolean;
+  /** The pane's When done choice (#16171); absent where it can't be armed. */
+  whenDone?: TerminalWhenDone;
   onRequestPark: () => void;
   onAction: MenuActionHandler;
 }) {
@@ -336,6 +353,29 @@ export function TerminalFleetMenuItems({
           </ContextMenuSubContent>
         </ContextMenuSub>
       )}
+      {detectedAgentId && whenDone !== undefined && (
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>
+            <FlagTriangleRight className={ICON_CLASS} aria-hidden="true" />
+            When done
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent>
+            {/* Each pick acts, the current one too: picking it again renews
+                the agent's instruction. */}
+            <ContextMenuRadioGroup value={whenDone}>
+              {WHEN_DONE_ROWS.map((row) => (
+                <ContextMenuRadioItem
+                  key={row.choice}
+                  value={row.choice}
+                  onSelect={() => onAction(`when-done:${row.choice}`)}
+                >
+                  {row.label}
+                </ContextMenuRadioItem>
+              ))}
+            </ContextMenuRadioGroup>
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+      )}
       <ContextMenuSeparator />
     </>
   );
@@ -350,7 +390,6 @@ export function TerminalSessionMenuItems({
   terminalId,
   terminalPty,
   hasPty,
-  isHibernated,
   isPaused,
   isInputLocked,
   isVoiceLockedHere,
@@ -359,12 +398,12 @@ export function TerminalSessionMenuItems({
   orchestratorCandidateIds,
   onRequestHandOver,
   onRequestRestartOnPreset,
+  onRequestRestartOnAccount,
   onAction,
 }: {
   terminalId: string;
   terminalPty: PtyPanelData | undefined;
   hasPty: boolean;
-  isHibernated: boolean;
   isPaused: boolean;
   isInputLocked: boolean | undefined;
   isVoiceLockedHere: boolean;
@@ -374,6 +413,7 @@ export function TerminalSessionMenuItems({
   orchestratorCandidateIds: readonly string[];
   onRequestHandOver: (orchestratorPaneId: string) => void;
   onRequestRestartOnPreset: (request: RestartOnPresetRequest) => void;
+  onRequestRestartOnAccount: (request: RestartOnAccountRequest) => void;
   onAction: MenuActionHandler;
 }) {
   return (
@@ -397,7 +437,7 @@ export function TerminalSessionMenuItems({
         </ContextMenuSubTrigger>
         <ContextMenuSubContent>
           {hasPty && (
-            <ContextMenuItem disabled={isHibernated} onSelect={() => onAction("redraw")}>
+            <ContextMenuItem onSelect={() => onAction("redraw")}>
               <RefreshCw className={ICON_CLASS} aria-hidden="true" />
               Redraw terminal
             </ContextMenuItem>
@@ -406,12 +446,27 @@ export function TerminalSessionMenuItems({
             <RestartOnPresetSubmenu
               agentId={terminalPty.launchAgentId}
               currentPresetId={terminalPty.agentPresetId}
+              accountBound={terminalPty.agentAccountId !== undefined}
               onPick={(preset) =>
                 onRequestRestartOnPreset({
                   terminalId,
                   terminalTitle: terminalPty.title,
                   agentWorking: terminalHasRunningAgentSession(terminalPty),
                   preset,
+                })
+              }
+            />
+          )}
+          {terminalPty?.launchAgentId && !terminalPty.restoreRecovery && (
+            <RestartOnAccountSubmenu
+              agentId={terminalPty.launchAgentId}
+              currentAccountId={terminalPty.agentAccountId}
+              onPick={(account) =>
+                onRequestRestartOnAccount({
+                  terminalId,
+                  terminalTitle: terminalPty.title,
+                  agentWorking: terminalHasRunningAgentSession(terminalPty),
+                  account,
                 })
               }
             />

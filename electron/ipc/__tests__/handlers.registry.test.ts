@@ -47,11 +47,9 @@ const registerMocks = vi.hoisted(() => ({
   registerKeybindingHandlers: vi.fn(),
   registerWorktreeConfigHandlers: vi.fn(),
   registerNotificationHandlers: vi.fn(),
-  registerGeminiHandlers: vi.fn(),
   registerCodexHandlers: vi.fn(),
   registerEventsHandlers: vi.fn(),
   registerDevPreviewHandlers: vi.fn(),
-  registerCommandHandlers: vi.fn(),
   registerAppAgentHandlers: vi.fn(),
   registerAgentCapabilitiesHandlers: vi.fn(),
   registerCliHandlers: vi.fn(),
@@ -179,9 +177,6 @@ vi.mock("../handlers/worktreeConfig.js", () => ({
 vi.mock("../handlers/notifications.js", () => ({
   registerNotificationHandlers: registerMocks.registerNotificationHandlers,
 }));
-vi.mock("../handlers/gemini.js", () => ({
-  registerGeminiHandlers: registerMocks.registerGeminiHandlers,
-}));
 vi.mock("../handlers/codex.js", () => ({
   registerCodexHandlers: registerMocks.registerCodexHandlers,
 }));
@@ -190,9 +185,6 @@ vi.mock("../handlers/events.js", () => ({
 }));
 vi.mock("../handlers/devPreview.js", () => ({
   registerDevPreviewHandlers: registerMocks.registerDevPreviewHandlers,
-}));
-vi.mock("../handlers/commands.js", () => ({
-  registerCommandHandlers: registerMocks.registerCommandHandlers,
 }));
 vi.mock("../handlers/appAgent.js", () => ({
   registerAppAgentHandlers: registerMocks.registerAppAgentHandlers,

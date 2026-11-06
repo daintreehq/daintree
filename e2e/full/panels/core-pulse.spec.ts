@@ -240,10 +240,11 @@ test.describe("Panels: Project Pulse and light theme", () => {
 
         const showDetails = window
           .locator(SEL.worktree.mainCard)
-          .getByRole("button", { name: "Show details" });
-        if (await showDetails.isVisible()) {
+          .getByRole("button", { name: /^Details for worktree/ });
+        if ((await showDetails.getAttribute("aria-expanded")) !== "true") {
           await showDetails.click();
         }
+        await expect(showDetails).toHaveAttribute("aria-expanded", "true");
 
         const metrics = await getThemeChromeMetrics(window, { projectName: LIGHT_THEME_PROJECT });
 

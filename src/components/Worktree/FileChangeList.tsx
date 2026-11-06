@@ -52,6 +52,11 @@ interface FileChangeListProps {
   maxVisible?: number;
   rootPath: string;
   isStale?: boolean;
+  /**
+   * Changed files counted without a row in `changes` (untracked files past the
+   * producer's enrichment cap), so the tail states the real remainder.
+   */
+  unlistedCount?: number;
   /** Extra classes for the scroll container (surface, radius, padding). */
   className?: string;
 }
@@ -309,7 +314,10 @@ function FileChangeRow({
 }
 
 export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListProps>(
-  function FileChangeList({ changes, maxVisible = 8, rootPath, isStale = false, className }, ref) {
+  function FileChangeList(
+    { changes, maxVisible = 8, rootPath, isStale = false, unlistedCount = 0, className },
+    ref
+  ) {
     const [diffPanelId, setDiffPanelId] = useState<string | null>(null);
     const worktreeId = useWorktreeIdForPath(rootPath);
     // The shared file-row menu, built once for the list and rendered per row.
@@ -354,7 +362,8 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
       () => sortedChanges.slice(0, maxVisible),
       [sortedChanges, maxVisible]
     );
-    const remainingCount = Math.max(0, sortedChanges.length - maxVisible);
+    const remainingCount =
+      Math.max(0, sortedChanges.length - maxVisible) + Math.max(0, unlistedCount);
     const decorationColumn = useMemo((): DecorationColumn | null => {
       let widest = 0;
       for (const change of visibleChanges) {
@@ -502,7 +511,9 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
       () => groupedChanges.flatMap((group) => group.files.map(getWorkingTreeChangeKey)),
       [groupedChanges]
     );
-    const roving = useRovingRows({ keys: rovingKeys });
+    // Nested in the sidebar card's row controls: an arrow past either end
+    // steps on to the next worktree.
+    const roving = useRovingRows({ keys: rovingKeys, releaseAtEdges: true });
 
     if (changes.length === 0) {
       return null;
@@ -524,6 +535,9 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
           isStale && "surface-stale"
         )}
         aria-busy={isStale || undefined}
+        // One stop for an enclosing keyboard model (the sidebar card's row
+        // controls) however its rows are grouped into folders.
+        data-roving-list=""
         onKeyDown={roving.onKeyDown}
       >
         {groupedChanges.map((group) => (
@@ -596,7 +610,7 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
             {remainingFiles.length > 0 && (
               <span className="ml-1 opacity-75">
                 ({remainingFiles.map((f) => basename(f.relativePath)).join(", ")}
-                {sortedChanges.length > maxVisible + 2 && ", …"})
+                {remainingCount > remainingFiles.length && ", …"})
               </span>
             )}
           </div>

@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import type { AgentState, WaitingReason } from "@shared/types/agent";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
+import type { UnseenAsk } from "@/lib/fleetAttention";
 import { isAgentTerminal } from "@/utils/terminalType";
-import { isHandBackWait } from "@/lib/handBackPresentation";
+import { isNeedsYouPane, isUnseenAskPane } from "@/lib/paneSessionPresentation";
 
 type BlockedState = "waiting" | null;
 
-const DEBOUNCE_MS = 800;
+/** How long a pane must stay waiting before its blocked edge draws. */
+export const BLOCKED_DEBOUNCE_MS = 800;
 
 function toBlockedState(agentState: AgentState | undefined): BlockedState {
   if (agentState === "waiting") return "waiting";
@@ -23,6 +25,7 @@ type AgentStateSource = {
   launchAgentId?: string;
   runtimeStatus?: string;
   exitCode?: number | null;
+  isRestarting?: boolean;
 };
 
 function hasRuntimeAgentIdentity(panel: AgentStateSource): boolean {
@@ -98,7 +101,7 @@ export function useDockBlockedState(agentState: AgentState | undefined): Blocked
         // Entering blocked from non-blocked — delay
         timerRef.current = setTimeout(() => {
           setDebouncedState(rawState);
-        }, DEBOUNCE_MS);
+        }, BLOCKED_DEBOUNCE_MS);
       }
     } else {
       // Leaving blocked state — clear immediately
@@ -120,36 +123,46 @@ export function useDockBlockedState(agentState: AgentState | undefined): Blocked
   return debouncedState;
 }
 
-const NO_HAND_BACKS: ReadonlySet<string> = new Set();
-
-/** A hand-back sits at its prompt without asking for anything, so it is no wait. */
-function isGroupHandBack(panel: AgentStateSource, handBackRunIds: ReadonlySet<string>): boolean {
-  return panel.id !== undefined && isHandBackWait(handBackRunIds, { ...panel, id: panel.id });
-}
-
+/**
+ * The state a docked group's chip edge takes from its members: waiting when
+ * any agent tab is one the fleet places in `needs-you` and its pane still
+ * shows stopped. A prompt that asks nothing, a hand-back, an error wait and a
+ * terminal demoted from its agent don't edge it.
+ */
 export function getGroupBlockedAgentState(
   panels: ReadonlyArray<AgentStateSource>,
-  handBackRunIds: ReadonlySet<string> = NO_HAND_BACKS
+  needsYouRunIds: ReadonlySet<string>
 ): AgentState | undefined {
   for (const panel of panels) {
-    if (isGroupHandBack(panel, handBackRunIds)) continue;
-    if (getDockDisplayAgentState(panel) === "waiting") return "waiting";
+    if (panel.id === undefined || !hasRuntimeAgentIdentity(panel)) continue;
+    if (isNeedsYouPane(needsYouRunIds, { ...panel, id: panel.id })) return "waiting";
   }
   return undefined;
 }
 
+/**
+ * The state a grid tab group's edge takes from its members. Waiting is a hidden
+ * tab whose stop the fleet reads as an outstanding ask (`runUnseenAsk`) — the
+ * shown tab draws its own — and working is any member at work.
+ */
 export function getGroupAmbientAgentState(
   panels: ReadonlyArray<AgentStateSource>,
-  handBackRunIds: ReadonlySet<string> = NO_HAND_BACKS
+  unseenAsks: ReadonlyMap<string, UnseenAsk>,
+  shownPanelId?: string
 ): AgentState | undefined {
   let hasWaiting = false;
   let hasWorking = false;
 
   for (const panel of panels) {
-    if (isGroupHandBack(panel, handBackRunIds)) continue;
-    const state = getDockDisplayAgentState(panel);
-    if (state === "waiting") hasWaiting = true;
-    else if (state === "working") hasWorking = true;
+    if (
+      panel.id !== undefined &&
+      panel.id !== shownPanelId &&
+      isUnseenAskPane(unseenAsks.get(panel.id), panel)
+    ) {
+      hasWaiting = true;
+    } else if (getDockDisplayAgentState(panel) === "working") {
+      hasWorking = true;
+    }
   }
 
   if (hasWaiting) return "waiting";

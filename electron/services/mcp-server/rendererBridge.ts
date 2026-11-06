@@ -8,6 +8,7 @@ import { onWithContext } from "../../ipc/utils.js";
 import {
   MCP_DISPATCH_ACTION_METHOD,
   MCP_GET_MANIFEST_METHOD,
+  isMcpHostRoutingEnabled,
   resolveMcpDriveTarget,
 } from "./driveTarget.js";
 import { relayWriteStanding } from "./relayWriteRule.js";
@@ -47,6 +48,10 @@ import type {
 } from "../../../shared/types/ipc/mcpServer.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { maskTerminalInOtherProject } from "../../../shared/utils/terminalInOtherProject.js";
+import {
+  matchesTerminalLocationFilter,
+  type TerminalLocationFilter,
+} from "../../../shared/utils/terminalLocationFilter.js";
 import type {
   PendingRequest,
   DispatchHold,
@@ -64,6 +69,8 @@ import {
   MCP_CONFIRM_DECISION_MS,
   MCP_CONFIRM_HOLD_GRACE_MS,
   MCP_CONFIRM_QUEUE_HOLD_MS,
+  MCP_REMOTE_CONFIRM_MARGIN_MS,
+  MCP_REMOTE_DISPATCH_TIMEOUT_MS,
 } from "../../../shared/config/mcpConfirmWindow.js";
 
 /**
@@ -188,9 +195,9 @@ function matchesFilters(terminal: HostStartedTerminal, filters: Record<string, u
   if (typeof filters.worktreeId === "string" && filters.worktreeId !== terminal.worktreeId) {
     return false;
   }
-  return typeof filters.location === "string"
-    ? filters.location === terminal.location
-    : terminal.location !== "background";
+  const location =
+    typeof filters.location === "string" ? (filters.location as TerminalLocationFilter) : undefined;
+  return matchesTerminalLocationFilter(terminal.location, location);
 }
 
 /**
@@ -956,6 +963,7 @@ export function createRendererBridge(
       | "authorization"
       | "hostPreview"
       | "fixedDeadline"
+      | "holdUntil"
       | "requester"
     >
   ): Promise<DispatchEnvelope> {
@@ -999,6 +1007,7 @@ export function createRendererBridge(
       | "authorization"
       | "hostPreview"
       | "fixedDeadline"
+      | "holdUntil"
       | "requester"
     >
   ): Promise<DispatchEnvelope> {
@@ -1011,13 +1020,28 @@ export function createRendererBridge(
         return;
       }
 
+      const startedAt = Date.now();
+      const capAt = Math.min(
+        approval?.fixedDeadline === true ? startedAt + MCP_DISPATCH_TIMEOUT_MS : Infinity,
+        approval?.holdUntil ?? Infinity
+      );
+      const deadlineAt = Math.min(startedAt + MCP_DISPATCH_TIMEOUT_MS, capAt);
+      if (deadlineAt <= startedAt) {
+        // Whoever times it has already given up: sent now, it could run unseen.
+        reject(
+          new Error(
+            `Action dispatch timed out: ${actionId} — its deadline passed before it was sent`
+          )
+        );
+        return;
+      }
+
       const requestId = randomUUID();
       const webContentsId = webContents.id;
-      const startedAt = Date.now();
       const hold: DispatchHold = {
         phase: "dispatched",
-        deadlineAt: startedAt + MCP_DISPATCH_TIMEOUT_MS,
-        extendable: approval?.fixedDeadline !== true,
+        deadlineAt,
+        capAt,
         expire: () => {
           const pending = pendingDispatches.get(requestId);
           if (pending?.hold !== hold) return;
@@ -1041,7 +1065,7 @@ export function createRendererBridge(
           );
         },
       };
-      const timer = setTimeout(hold.expire, MCP_DISPATCH_TIMEOUT_MS);
+      const timer = setTimeout(hold.expire, deadlineAt - startedAt);
 
       const onDestroyed = () => {
         const pending = pendingDispatches.get(requestId);
@@ -1097,6 +1121,10 @@ export function createRendererBridge(
             // Only on this local send: another machine's view has none of
             // this machine's panes to look the id up in.
             ...(approval?.requester ? { requester: approval.requester } : {}),
+            // When this call ends unless the view reports a confirm (#15648),
+            // capped by whoever is timing it. Also local-only: it is an
+            // instant on this machine's clock, which another machine's isn't.
+            dispatchDeadlineAt: hold.deadlineAt,
           });
         } catch (err) {
           clearTimeout(pendingDispatches.get(requestId)?.timer ?? timer);
@@ -1322,6 +1350,7 @@ export function createRendererBridge(
       | "authorization"
       | "hostPreview"
       | "fixedDeadline"
+      | "holdUntil"
       | "requester"
     >,
     callerInfo?: McpBearerIdentity
@@ -1449,6 +1478,18 @@ export function createRendererBridge(
   }
 
   /**
+   * A caller on this machine changing a project no view here shows is never
+   * refused for it, but the lease hears of each change, as of a relayed one:
+   * the project's last driver no longer comes back to it as it left it.
+   */
+  function noteHostChange(workspaceId: string): (changed: boolean) => null {
+    return () => {
+      resolveMcpDriveTarget(workspaceId, { linkSessionId: null });
+      return null;
+    };
+  }
+
+  /**
    * The same check for this host's own assistant running with no view
    * (#13511), with no Shell whose view could drive for it: only a project
    * nobody drives is one it may change.
@@ -1544,6 +1585,7 @@ export function createRendererBridge(
       result?: { ok?: unknown };
       confirmationDecision?: unknown;
       approvalScope?: unknown;
+      authorization?: unknown;
     } | null;
     if (
       payload === null ||
@@ -1564,6 +1606,9 @@ export function createRendererBridge(
       ...(confirmationDecision === "approved" && payload.approvalScope === "session"
         ? { approvalScope: "session" as const }
         : {}),
+      ...(confirmationDecision === undefined && payload.authorization === "skip-preference"
+        ? { authorization: "skip-preference" as const }
+        : {}),
     };
   }
 
@@ -1576,6 +1621,24 @@ export function createRendererBridge(
     sessionOrigin: McpSessionOrigin,
     options: WorkspaceDispatchOptions
   ): Promise<DispatchEnvelope> {
+    // Long enough for a whole confirmation in the driving view, inside the
+    // relayed call's own deadline when it has one (#15699). The view is told,
+    // and holds its dialog inside this less the trip back; a call that never
+    // asks still ends there at the plain deadline, and so does every call
+    // a Shell too old to read it holds.
+    const holdBudgetMs = Math.floor(
+      Math.min(
+        MCP_REMOTE_DISPATCH_TIMEOUT_MS,
+        options.holdUntil !== undefined ? options.holdUntil - Date.now() : Infinity
+      )
+    );
+    // A Shell too old to read the budget holds the plain deadline whatever it
+    // is told, so a shorter wait here could give up on a dialog it still runs.
+    if (holdBudgetMs < MCP_DISPATCH_TIMEOUT_MS + MCP_REMOTE_CONFIRM_MARGIN_MS) {
+      throw new Error(
+        `Action dispatch timed out: ${actionId} — too little of the call's deadline was left to send it`
+      );
+    }
     let answer: unknown;
     try {
       answer = await endpoint.request(
@@ -1592,8 +1655,11 @@ export function createRendererBridge(
           ),
           // Display only: the Shell's dialog says its own assistant asked, through this host.
           ...(options.relay ? { relayed: true } : {}),
+          // The Shell's own call, for it to match before its own preference skips the dialog (#15698).
+          ...(options.relay?.call ? { relayCall: options.relay.call } : {}),
+          holdBudgetMs,
         },
-        { timeoutMs: MCP_DISPATCH_TIMEOUT_MS }
+        { timeoutMs: holdBudgetMs }
       );
     } catch (err) {
       if (isEndpointGone(err)) throw new WorkspaceBindingError(workspaceId, "not-found");
@@ -1619,7 +1685,11 @@ export function createRendererBridge(
     confirmed: boolean,
     sessionOrigin: McpSessionOrigin,
     options: WorkspaceDispatchOptions,
-    checkWrite = options.relay ? relayWriteCheck(workspaceId, options.relay) : undefined
+    checkWrite = options.relay
+      ? relayWriteCheck(workspaceId, options.relay)
+      : isMcpHostRoutingEnabled()
+        ? noteHostChange(workspaceId)
+        : undefined
   ): Promise<DispatchEnvelope> {
     if (options.approvalOnly) throw new WorkspaceBindingError(workspaceId, "not-found");
     if (!hasViewlessImplementation(actionId)) {
@@ -1628,6 +1698,7 @@ export function createRendererBridge(
     const relay = options.relay;
     const askRelay = relay?.requestApproval;
     let confirmationDecision: DispatchEnvelope["confirmationDecision"];
+    let authorization: DispatchEnvelope["authorization"];
     const result = await runViewlessAction({
       workspaceId,
       actionId,
@@ -1644,7 +1715,12 @@ export function createRendererBridge(
         ? {
             requestApproval: async (ask: ViewlessApprovalAsk) => {
               const answer = await askRelay(ask);
-              if (answer.decision !== "unavailable") confirmationDecision = answer.decision;
+              // The Shell's own "Never ask" ran it, not a person's approval (#15698).
+              if (answer.decision === "approved" && answer.authorization === "skip-preference") {
+                authorization = answer.authorization;
+              } else if (answer.decision !== "unavailable") {
+                confirmationDecision = answer.decision;
+              }
               return answer;
             },
           }
@@ -1655,6 +1731,7 @@ export function createRendererBridge(
     return {
       result,
       ...(confirmationDecision !== undefined ? { confirmationDecision } : {}),
+      ...(authorization !== undefined ? { authorization } : {}),
       ...(dispatchedWorkspace ? { dispatchedWorkspace } : {}),
     };
   }
@@ -2102,18 +2179,22 @@ export function createRendererBridge(
     }
     if (HOLD_PHASE_ORDER[phase] > HOLD_PHASE_ORDER[hold.phase]) {
       hold.phase = phase;
-      if (hold.extendable) {
-        // The decision window and the run each start afresh when they begin,
-        // so neither is charged for the wait before it; only the queue is
-        // capped from where the call already stood.
-        hold.deadlineAt =
-          phase === "queued"
-            ? Math.max(hold.deadlineAt, now + MCP_CONFIRM_QUEUE_HOLD_MS)
-            : phase === "shown"
-              ? now + MCP_CONFIRM_DECISION_MS + MCP_CONFIRM_HOLD_GRACE_MS
-              : now + MCP_DISPATCH_TIMEOUT_MS;
+      // The decision window and the run each start afresh when they begin,
+      // so neither is charged for the wait before it; only the queue is
+      // capped from where the call already stood. None outlasts whoever is
+      // timing the call (#15699).
+      const deadlineAt = Math.min(
+        hold.capAt,
+        phase === "queued"
+          ? Math.max(hold.deadlineAt, now + MCP_CONFIRM_QUEUE_HOLD_MS)
+          : phase === "shown"
+            ? now + MCP_CONFIRM_DECISION_MS + MCP_CONFIRM_HOLD_GRACE_MS
+            : now + MCP_DISPATCH_TIMEOUT_MS
+      );
+      if (deadlineAt !== hold.deadlineAt) {
+        hold.deadlineAt = deadlineAt;
         clearTimeout(pending.timer);
-        pending.timer = setTimeout(hold.expire, hold.deadlineAt - now);
+        pending.timer = setTimeout(hold.expire, deadlineAt - now);
       }
     }
     return { held: true, remainingMs: hold.deadlineAt - now };

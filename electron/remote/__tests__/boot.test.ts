@@ -38,6 +38,7 @@ const m = vi.hoisted(() => {
 
   const clientOpenedListeners = new Set<(hostId: string, info: unknown) => void>();
   const clientClosedListeners = new Set<(hostId: string, info: unknown) => void>();
+  const sessionAttachedListeners = new Set<(hostId: string, info: { resumed: boolean }) => void>();
   const viewHosts = new Map<number, string>();
   const clientHooks: {
     current: {
@@ -68,6 +69,10 @@ const m = vi.hoisted(() => {
     hostForView: (id: number) => viewHosts.get(id) ?? null,
     manager: {
       onSessionOpened: vi.fn((_l: unknown) => () => {}),
+      onSessionAttached: vi.fn((l: (hostId: string, info: { resumed: boolean }) => void) => {
+        sessionAttachedListeners.add(l);
+        return () => sessionAttachedListeners.delete(l);
+      }),
       touch: vi.fn((_hostId: string) => {}),
       hold: vi.fn((_hostId: string) => () => {}),
       addUseCheck: vi.fn((_check: unknown) => () => {}),
@@ -89,6 +94,7 @@ const m = vi.hoisted(() => {
   const lease = {
     noteEndpointClient: vi.fn(),
     noteEndpointTransport: vi.fn(),
+    noteSessionChange: vi.fn(),
     getDriveTarget: vi.fn((_projectId: string) => ({ kind: "vacant" }) as unknown),
     onChange: vi.fn((l: (state: unknown) => void) => {
       leaseListeners.add(l);
@@ -98,7 +104,9 @@ const m = vi.hoisted(() => {
   const viewFilter: { current: ((id: number, ch: string, args: unknown[]) => boolean) | null } = {
     current: null,
   };
-  const mcpResolver: { current: ((projectId: string) => unknown) | null } = { current: null };
+  const mcpResolver: {
+    current: ((projectId: string, change?: { linkSessionId: string | null }) => unknown) | null;
+  } = { current: null };
   const remoteViewHooks: { current: unknown } = { current: null };
 
   return {
@@ -122,6 +130,7 @@ const m = vi.hoisted(() => {
     installHostFileClient: vi.fn(),
     installHostUploadClient: vi.fn(),
     uninstallHostUploadClient: vi.fn(() => record("uninstall host upload client")),
+    sweepFolderPacks: vi.fn(async () => 0),
     installClipboardSplits: vi.fn(() => record("install clipboard splits")),
     uninstallClipboardSplits: vi.fn(() => record("uninstall clipboard splits")),
     installHostUploadService: vi.fn(),
@@ -162,10 +171,12 @@ const m = vi.hoisted(() => {
     installNotificationPolicyPush: vi.fn(() => vi.fn()),
     installNotificationPolicyHost: vi.fn(() => vi.fn()),
     acceptLocalPushForRemoteView: vi.fn((channel: string) => channel === "shell:ok"),
+    releaseHostNotifications: vi.fn(),
     uninstallViewRequests: vi.fn(),
     uninstallWorktreeRedelivery: vi.fn(),
     clientOpenedListeners,
     clientClosedListeners,
+    sessionAttachedListeners,
     viewHosts,
     clientHooks,
     remoteViewHooks,
@@ -301,7 +312,7 @@ vi.mock("../../services/DriveLeaseService.js", () => ({
   createDriveLeaseGate: () => () => null,
 }));
 vi.mock("../../services/mcp-server/driveTarget.js", () => ({
-  setMcpDriveTargetResolver: vi.fn((resolver: (projectId: string) => unknown) => {
+  setMcpDriveTargetResolver: vi.fn((resolver: typeof m.mcpResolver.current) => {
     m.mcpResolver.current = resolver;
     return () => {
       m.mcpResolver.current = null;
@@ -315,6 +326,7 @@ vi.mock("../hybrid/index.js", () => ({
   installNotificationPolicyPush: m.installNotificationPolicyPush,
   installNotificationPolicyHost: m.installNotificationPolicyHost,
   acceptLocalPushForRemoteView: m.acceptLocalPushForRemoteView,
+  releaseHostNotifications: m.releaseHostNotifications,
   ViewVisibilityReporter: vi.fn(function ViewVisibilityReporter() {
     return m.visibility;
   }),
@@ -329,10 +341,14 @@ vi.mock("../files/clientInstall.js", () => ({
   }),
 }));
 vi.mock("../files/uploadClient.js", () => ({
-  installHostUploadClient: vi.fn((feed: unknown, hostForView: unknown) => {
-    m.installHostUploadClient(feed, hostForView);
+  installHostUploadClient: vi.fn((feed: unknown, hostForView: unknown, packDir: unknown) => {
+    m.installHostUploadClient(feed, hostForView, packDir);
     return m.uninstallHostUploadClient;
   }),
+}));
+vi.mock("../files/localFolderPack.js", () => ({
+  folderPackDir: (userData: string) => `packs-of:${userData}`,
+  sweepFolderPacks: m.sweepFolderPacks,
 }));
 vi.mock("../hybrid/clipboard.js", () => ({
   installClipboardSplits: vi.fn(() => {
@@ -425,7 +441,9 @@ vi.mock("../projects/hostInstall.js", () => ({
 }));
 const metrics = vi.hoisted(() => ({
   installHostMetricsClient: vi.fn((_options: unknown) => () => {}),
-  installHostMetricsHost: vi.fn(async (_server: unknown) => () => {}),
+  installHostMetricsHost: vi.fn(
+    async (_server: unknown, _acceptsRemoteControl: unknown) => () => {}
+  ),
 }));
 vi.mock("../metrics/clientInstall.js", () => ({
   installHostMetricsClient: metrics.installHostMetricsClient,
@@ -461,6 +479,24 @@ vi.mock("../deviceAnswer/hostInstall.js", () => ({
   installDeviceAnswerHost: vi.fn((server: unknown) => {
     deviceAnswer.installDeviceAnswerHost(server);
     return deviceAnswer.uninstallHost;
+  }),
+}));
+const decisionsHosts = vi.hoisted(() => ({
+  uninstallClient: vi.fn(),
+  uninstallHost: vi.fn(),
+  installDecisionsHostsClient: vi.fn(),
+  installDecisionsHost: vi.fn(),
+}));
+vi.mock("../decisions/clientInstall.js", () => ({
+  installDecisionsHostsClient: vi.fn((deps: unknown) => {
+    decisionsHosts.installDecisionsHostsClient(deps);
+    return decisionsHosts.uninstallClient;
+  }),
+}));
+vi.mock("../decisions/hostInstall.js", () => ({
+  installDecisionsHost: vi.fn((server: unknown) => {
+    decisionsHosts.installDecisionsHost(server);
+    return decisionsHosts.uninstallHost;
   }),
 }));
 const voicePane = vi.hoisted(() => ({
@@ -579,6 +615,7 @@ beforeEach(() => {
   m.transportListeners.clear();
   m.clientOpenedListeners.clear();
   m.clientClosedListeners.clear();
+  m.sessionAttachedListeners.clear();
   m.viewHosts.clear();
   m.clientHooks.current = {};
   m.remoteViewHooks.current = null;
@@ -714,11 +751,43 @@ describe("startRemoteHosts", () => {
       summary,
     } as never);
     await startRemoteHosts({ hostMode: false });
-    registerRemoteService("hostMetrics", { receiptOf } as never);
+    registerRemoteService("hostMetrics", { receiptOf, cameOn: () => null } as never);
     const [deps] = control.installHostControl.mock.calls[0] as [
       { observeHosts(): Array<Record<string, unknown>> },
     ];
     expect(deps.observeHosts()[0]).toMatchObject({ summary, summaryReceipt: receipt });
+    await stopRemoteHosts();
+  });
+
+  it("hands host control whether each host's summary came on its open link (#15736)", async () => {
+    const summary = { sampledAt: 1 };
+    const current = { isOpen: true };
+    const cameOn = vi.fn((held: object, session: unknown) =>
+      held === summary ? session === current : null
+    );
+    m.hostEntries.push({
+      descriptor: { id: "control-on", name: "studio-01", lastSeenAt: 5 },
+      connection: { status: "connected", rttMs: null },
+      summary,
+    } as never);
+    await startRemoteHosts({ hostMode: false });
+    registerRemoteService("hostMetrics", { receiptOf: () => null, cameOn } as never);
+    const [deps] = control.installHostControl.mock.calls[0] as [
+      { observeHosts(): Array<Record<string, unknown>> },
+    ];
+    expect(deps.observeHosts()[0]).toMatchObject({ summaryFromCurrentLink: false });
+    expect(cameOn).toHaveBeenLastCalledWith(summary, null);
+
+    m.client.sessionFor.mockReturnValueOnce(current);
+    expect(deps.observeHosts()[0]).toMatchObject({
+      connection: { status: "connected" },
+      summaryFromCurrentLink: true,
+    });
+    expect(m.client.sessionFor).toHaveBeenLastCalledWith("control-on");
+
+    // A summary that came on no link says nothing either way.
+    cameOn.mockReturnValue(null);
+    expect(deps.observeHosts()[0]).not.toHaveProperty("summaryFromCurrentLink");
     await stopRemoteHosts();
   });
 
@@ -803,13 +872,17 @@ describe("startRemoteHosts", () => {
     await startRemoteHosts({ hostMode: false });
     expect(m.installHostUploadClient).not.toHaveBeenCalled();
     expect(m.installClipboardSplits).not.toHaveBeenCalled();
+    // Archives a crashed launch left go at start, whether or not a host is used.
+    expect(m.sweepFolderPacks).toHaveBeenCalledExactlyOnceWith("packs-of:/tmp/daintree-user-data");
 
     m.clientHooks.current.onFirstUse?.();
     expect(m.installHostUploadClient).toHaveBeenCalledTimes(1);
-    const [feed, hostForView] = m.installHostUploadClient.mock.calls[0] as [
+    const [feed, hostForView, packDir] = m.installHostUploadClient.mock.calls[0] as [
       { onEndpointOpened: unknown; onEndpointClosed: unknown },
       (id: number) => unknown,
+      string,
     ];
+    expect(packDir).toBe("packs-of:/tmp/daintree-user-data");
     expect(feed.onEndpointOpened).toBe(m.client.onEndpointOpened);
     expect(feed.onEndpointClosed).toBe(m.client.onEndpointClosed);
     m.viewHosts.set(11, "studio-01");
@@ -979,6 +1052,24 @@ describe("startRemoteHosts", () => {
     expect(m.detachClientWorktreeRelayFor).toHaveBeenCalledWith(11, "studio-01", "view-11");
   });
 
+  it("takes down a host's banners once nothing on it can close them, and keeps them across a resume", async () => {
+    await startRemoteHosts({ hostMode: false });
+    m.clientHooks.current.onFirstUse?.();
+    for (const l of m.clientClosedListeners) {
+      l("studio-01", { webContentsId: 11, endpointId: "view-11" });
+    }
+    expect(m.releaseHostNotifications).toHaveBeenCalledWith("studio-01", 11);
+
+    m.releaseHostNotifications.mockClear();
+    for (const l of m.sessionAttachedListeners) l("studio-01", { resumed: true });
+    expect(m.releaseHostNotifications).not.toHaveBeenCalled();
+    for (const l of m.sessionAttachedListeners) l("studio-01", { resumed: false });
+    expect(m.releaseHostNotifications).toHaveBeenCalledWith("studio-01");
+
+    await stopRemoteHosts();
+    expect(m.sessionAttachedListeners.size).toBe(0);
+  });
+
   it("retires the local pair when a remote view is shown, and re-posts a cached view's worktree port", async () => {
     await startRemoteHosts({ hostMode: false });
     const wc = { id: 11 };
@@ -1059,7 +1150,7 @@ describe("startRemoteHosts", () => {
     ]);
     expect(m.initRemoteHostsHost).toHaveBeenCalledWith(m.server);
     // Every attached Shell gets this host's summaries.
-    expect(metrics.installHostMetricsHost).toHaveBeenCalledWith(m.server);
+    expect(metrics.installHostMetricsHost).toHaveBeenCalledWith(m.server, expect.any(Function));
     // And can read its Canopy from a view bound elsewhere.
     expect(canopy.installCanopyHost).toHaveBeenCalledWith(m.server);
     expect(getRemoteService("hostServer")).toBe(m.server);
@@ -1094,6 +1185,15 @@ describe("startRemoteHosts", () => {
     const hostMode = getRemoteService("hostMode")!;
     await hostMode.startListening();
     expect(m.admitHybridHostLegs).toHaveBeenCalledTimes(1);
+    // The notification sink hears the same resumes, to send the closes it owes.
+    const legs = (m.admitHybridHostLegs.mock.calls[0] as unknown[])[0] as {
+      onTransportChange: (l: (ids: string[], attached: boolean) => void) => () => void;
+    };
+    const heard = vi.fn();
+    const stopHearing = legs.onTransportChange(heard);
+    for (const l of m.transportListeners) l(["remote:s1:view-11"], true);
+    expect(heard).toHaveBeenCalledWith(["remote:s1:view-11"], true);
+    stopHearing();
     expect(m.mcpResolver.current?.("proj-1")).toEqual({ state: "vacant" });
     for (const l of m.transportListeners) l(["remote:s1:view-11"], false);
     expect(m.lease.noteEndpointTransport).toHaveBeenCalledWith(["remote:s1:view-11"], false);
@@ -1169,6 +1269,25 @@ describe("startRemoteHosts", () => {
 
     await stopRemoteHosts();
     expect(deviceAnswer.uninstallClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers its hosts to Decisions enrollment from start, and lets a Shell enroll this host only while listening", async () => {
+    await startRemoteHosts({ hostMode: false });
+    expect(decisionsHosts.installDecisionsHostsClient).toHaveBeenCalledWith({
+      registry: m.client.registry,
+      manager: m.client.manager,
+      sessionFor: m.client.sessionFor,
+    });
+    expect(decisionsHosts.installDecisionsHost).not.toHaveBeenCalled();
+
+    const hostMode = getRemoteService("hostMode")!;
+    await hostMode.startListening();
+    expect(decisionsHosts.installDecisionsHost).toHaveBeenCalledWith(m.server);
+    await hostMode.stopListening();
+    expect(decisionsHosts.uninstallHost).toHaveBeenCalledTimes(1);
+
+    await stopRemoteHosts();
+    expect(decisionsHosts.uninstallClient).toHaveBeenCalledTimes(1);
   });
 
   it("reads a host's pane for dictation from start, and answers a Shell's only while listening", async () => {
@@ -1301,6 +1420,18 @@ describe("startRemoteHosts", () => {
     m.lease.getDriveTarget.mockReturnValueOnce({ kind: "reserved", holder: {} });
     expect(m.mcpResolver.current?.("proj-1")).toEqual({ state: "unavailable", reason: "reserved" });
     expect(m.mcpResolver.current?.("proj-2")).toEqual({ state: "vacant" });
+    expect(m.lease.noteSessionChange).not.toHaveBeenCalled();
+    // Asked for a change the host makes itself while nobody drives, the lease hears of it.
+    expect(m.mcpResolver.current?.("proj-2", { linkSessionId: "s1" })).toEqual({ state: "vacant" });
+    expect(m.lease.noteSessionChange).toHaveBeenCalledWith("proj-2", "s1");
+    expect(m.mcpResolver.current?.("proj-2", { linkSessionId: null })).toEqual({ state: "vacant" });
+    expect(m.lease.noteSessionChange).toHaveBeenLastCalledWith("proj-2", null);
+    // Nothing is changed where someone drives, or holds the project while away.
+    m.lease.getDriveTarget.mockReturnValueOnce({ kind: "live", holder: {}, endpoint });
+    m.mcpResolver.current?.("proj-1", { linkSessionId: null });
+    m.lease.getDriveTarget.mockReturnValueOnce({ kind: "reserved", holder: {} });
+    m.mcpResolver.current?.("proj-1", { linkSessionId: "s1" });
+    expect(m.lease.noteSessionChange).toHaveBeenCalledTimes(2);
 
     await stopRemoteHosts();
     expect(m.mcpResolver.current).toBeNull();
@@ -1355,6 +1486,42 @@ describe("startRemoteHosts", () => {
     await expect(starting).resolves.toBeUndefined();
     await stopping;
     expect(m.server.close).toHaveBeenCalled();
+  });
+
+  it("starts no listener when a stop lands while the Host role is still loading (#15888)", async () => {
+    const init = m.initRemoteHostsClient.getMockImplementation()!;
+    let stopping: Promise<void> | undefined;
+    m.initRemoteHostsClient.mockImplementationOnce((hooks) => {
+      // After the Shell is up, before the Host role's module has loaded.
+      queueMicrotask(() => {
+        stopping = stopRemoteHosts();
+      });
+      return init(hooks);
+    });
+
+    await startRemoteHosts({ hostMode: true });
+    await stopping;
+
+    expect(stopping).toBeDefined();
+    expect(m.server.listen).not.toHaveBeenCalled();
+    expect(getRemoteService("hostMode")).toBeUndefined();
+  });
+
+  it("goes no further once a quit begins mid-start, before the quit's stop reaches it (#15888)", async () => {
+    let quitting = false;
+    m.isWorkspaceClientStarting.mockReturnValueOnce(true);
+    m.ensureWorkspaceClient.mockImplementationOnce(async () => {
+      quitting = true;
+      return {};
+    });
+
+    await startRemoteHosts({ hostMode: true, halted: () => quitting });
+
+    expect(m.ensureWorkspaceClient).toHaveBeenCalledTimes(1);
+    expect(m.initRemoteHostsClient).not.toHaveBeenCalled();
+    expect(m.client.client.connect).not.toHaveBeenCalled();
+    expect(m.server.listen).not.toHaveBeenCalled();
+    expect(getRemoteService("hostMode")).toBeUndefined();
   });
 
   it("undoes what host setup registered when a later step throws", async () => {

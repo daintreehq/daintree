@@ -7,6 +7,7 @@ export const UTF8_BOM = "\uFEFF";
 const SETTINGS_FILENAME = "settings.json";
 const RECIPES_FILENAME = "recipes.json";
 const COPY_TREE_HISTORY_FILENAME = "copy-tree-history.json";
+const SCHEDULES_FILENAME = "schedules.json";
 
 const STATE_FILENAME = "state.json";
 
@@ -123,4 +124,15 @@ export function copyTreeHistoryFilePath(
   const stateDir = getProjectStateDir(projectsConfigDir, projectId);
   if (!stateDir) return null;
   return path.join(stateDir, COPY_TREE_HISTORY_FILENAME);
+}
+
+/**
+ * A project's schedules (#15975). Only a project has them: a scratch shares the
+ * state-directory namespace but runs no agent unattended.
+ */
+export function schedulesFilePath(projectsConfigDir: string, projectId: string): string | null {
+  if (!isValidProjectId(projectId)) return null;
+  const stateDir = getProjectStateDir(projectsConfigDir, projectId);
+  if (!stateDir) return null;
+  return path.join(stateDir, SCHEDULES_FILENAME);
 }

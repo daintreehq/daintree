@@ -40,6 +40,7 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "terminal.killAll",
   "terminal.restart",
   "terminal.restartOnPreset",
+  "terminal.restartOnAccount",
   "terminal.restartAll",
   "terminal.startHeld",
   "terminal.arm",
@@ -57,16 +58,21 @@ const EXPECTED_CONFIRM_DANGER = new Set([
   "portal.links.remove",
   "keybinding.resetAll",
   "logs.clear",
+  "eventInspector.clear",
   "project.remove",
   "project.sleep",
   "project.restart",
   "project.sleepIdle",
+  "schedules.runNow",
   "recipe.delete",
   "recipe.run",
   "devPreview.restartAndClearCache",
   "devPreview.reinstallAndRestart",
   "artifact.applyPatch",
   "agentSettings.reset",
+  "agent.createPreset",
+  "agent.updatePreset",
+  "agent.deletePreset",
   "app.importConfig",
   "forge.createPR",
   "forge.closePR",
@@ -97,6 +103,7 @@ const CONFIRMED_WIRED = [
   "terminal.killAll",
   "terminal.restart",
   "terminal.restartOnPreset",
+  "terminal.restartOnAccount",
   "terminal.restartAll",
   "worktree.delete",
   "worktree.sessions.endAll",
@@ -107,6 +114,7 @@ const CONFIRMED_WIRED = [
   "worktree.resource.openOnHost",
   "keybinding.resetAll",
   "logs.clear",
+  "eventInspector.clear",
   "recipe.delete",
   "devPreview.restartAndClearCache",
   "devPreview.reinstallAndRestart",
@@ -147,6 +155,7 @@ const BYPASS_WIRED = new Set([
   "project.sleep", // deferred-promise via projectSleepConfirmStore; ProjectSleepConfirmDialog resolves it
   "project.sleepIdle", // same store and dialog
   "project.restart", // same store and dialog
+  "schedules.runNow", // deferred-promise via scheduleRunConfirmStore; ScheduleRunConfirmDialog resolves it
   "terminal.arm", // agent/MCP-only confirm gate (#11346); palette-hidden, user arming goes through the fleet ribbon (not ActionService), so no user-side ConfirmDialog to co-locate
   "recipe.run", // agent-dispatch only; no user-side ConfirmDialog (danger:"confirm" gates MCP only)
   // Agent/MCP-only batch kill (#12123); palette-hidden because it acts only on
@@ -160,6 +169,12 @@ const BYPASS_WIRED = new Set([
   "terminal.startHeld",
   "artifact.applyPatch", // ConfirmDialog in ArtifactOverlay.tsx; dispatch in useArtifacts.ts (ID not co-located)
   "agentSettings.reset", // agent/MCP-only; palette-hidden, configured from Settings via client (danger:"confirm" gates agent dispatch only)
+  // User-preset writes (#16047): agent/MCP-only and palette-hidden. Settings edits
+  // presets through the store, not ActionService, so the confirm is the generic
+  // McpConfirmDialog with the exact change previewed, and there is nothing to co-locate.
+  "agent.createPreset",
+  "agent.updatePreset",
+  "agent.deletePreset",
   // Forge PR write actions are agent/MCP-only (issue #10654); danger:"confirm"
   // gates agent dispatch — no user-side ConfirmDialog to co-locate.
   "forge.createPR",

@@ -75,6 +75,7 @@ describe("useFleetMirror", () => {
       isFleetFollower: false,
       disabled: false,
       lastEmittedValueRef: { current: "hello" } as any,
+      syncedDraftRef: { current: "hello" } as any,
       ...overrides,
     };
   }

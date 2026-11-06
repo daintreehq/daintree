@@ -18,6 +18,113 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
     category: "help",
     danger: "safe",
     description:
+      "Bring back a host whose link is down: wake it where a wake is set up here, then start Daintree there if its Host mode is on. Up to 2 min; repeat calls join. Answers with what was observed.",
+    enabled: true,
+    id: "host.bringBack",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        hostId: {
+          type: "string",
+          minLength: 1,
+          maxLength: 64,
+          description: "A host id from the host list.",
+        },
+      },
+      required: ["hostId"],
+    },
+    keywords: ["host", "remote", "wake", "start", "reconnect", "asleep"],
+    kind: "command",
+    mcpAnnotations: {
+      readOnlyHint: false,
+      idempotentHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
+    name: "host.bringBack",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        outcome: {
+          type: "string",
+          enum: [
+            "ok",
+            "ambiguous",
+            "opted_out",
+            "disconnected",
+            "unsupported",
+            "policy_rejected",
+            "expired",
+            "not_found",
+            "rate_limited",
+            "too_large",
+            "conflict",
+          ],
+        },
+        detail: {
+          type: ["string", "null"],
+        },
+        retryAfterMs: {
+          type: ["number", "null"],
+        },
+        answer: {
+          anyOf: [
+            {
+              type: "object",
+              properties: {
+                status: {
+                  type: "string",
+                  enum: [
+                    "connected",
+                    "woken",
+                    "started",
+                    "unreachable",
+                    "not_wakeable",
+                    "not_startable",
+                    "version_mismatch",
+                    "timed_out",
+                    "cancelled",
+                  ],
+                },
+                wake: {
+                  type: "string",
+                  enum: ["sent", "not_needed", "not_set_up", "not_on_lan", "failed"],
+                },
+                reached: {
+                  type: "boolean",
+                },
+                startRequested: {
+                  type: "boolean",
+                },
+                observed: {
+                  type: ["string", "null"],
+                },
+                elapsedMs: {
+                  type: "number",
+                },
+              },
+              required: ["status", "wake", "reached", "startRequested", "observed", "elapsedMs"],
+              additionalProperties: false,
+            },
+            {
+              type: "null",
+            },
+          ],
+        },
+      },
+      required: ["outcome", "detail", "retryAfterMs", "answer"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Bring back a host",
+  },
+  {
+    band: "reversible",
+    category: "help",
+    danger: "safe",
+    description:
       "Run a host's own Daintree tool in one of its projects (local reaches another project here) and get its result, such as starting its assistant. Changes are refused while another machine drives that project. ambiguous: resend under its callId, which never runs twice.",
     enabled: true,
     id: "host.call",
@@ -400,21 +507,20 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                       },
                       stale: {
                         type: "boolean",
-                        description:
-                          "Too old to trust: the live figures below are null. Not a zero reading.",
+                        description: "Untrusted: live figures are null, not zero.",
                       },
                       staleReason: {
                         anyOf: [
                           {
                             type: "string",
-                            enum: ["age-limit", "clock-uncertain"],
+                            enum: ["age-limit", "clock-uncertain", "earlier-link"],
                           },
                           {
                             type: "null",
                           },
                         ],
                         description:
-                          "clock-uncertain: no age bound, and its timestamp is off this clock.",
+                          "clock-uncertain: no age bound, timestamp off this clock. earlier-link: prior link's.",
                       },
                       platform: {
                         type: "string",
@@ -703,7 +809,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                                 lane: {
                                   type: "integer",
                                   minimum: 0,
-                                  maximum: 2,
+                                  maximum: 5,
                                 },
                               },
                               required: ["hostId", "scope", "terminalId", "incarnation"],
@@ -757,6 +863,10 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                                   properties: {
                                     observedAt: {
                                       type: "number",
+                                    },
+                                    report: {
+                                      type: "string",
+                                      enum: ["done", "needs-you"],
                                     },
                                   },
                                   required: ["observedAt"],
@@ -836,6 +946,12 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                                 },
                               ],
                             },
+                            personaName: {
+                              type: "string",
+                            },
+                            personaEmoji: {
+                              type: "string",
+                            },
                           },
                           required: [
                             "state",
@@ -886,7 +1002,7 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                             lane: {
                               type: "integer",
                               minimum: 0,
-                              maximum: 2,
+                              maximum: 5,
                             },
                             agentId: {
                               type: ["string", "null"],
@@ -1154,7 +1270,375 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
     category: "help",
     danger: "safe",
     description:
-      "One notice when a host's link, or a fresh load sample, is first seen meeting your condition, so you can end your turn. It only observes: never dials or holds the host, never acts. Watches expire; cancel or list yours.",
+      "Read agents' status in many projects on many hosts in one call, as each project's own status read answers it: states, handbacks and, with includeOutput, screen tails, redacted. Read it before prompting, keying or interrupting an agent, or answering about running work. Never fails whole.",
+    enabled: true,
+    id: "host.status",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        targets: {
+          minItems: 1,
+          maxItems: 64,
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              hostId: {
+                type: "string",
+                minLength: 1,
+                maxLength: 64,
+                description: "A host id from the host list.",
+              },
+              projectId: {
+                type: "string",
+                minLength: 1,
+                maxLength: 256,
+                description: "A projectId from the host list.",
+              },
+              terminalIds: {
+                description: "1-256 terminals in that project. Omit for every agent it lists.",
+                minItems: 1,
+                maxItems: 256,
+                type: "array",
+                items: {
+                  type: "string",
+                  minLength: 1,
+                  maxLength: 256,
+                },
+              },
+            },
+            required: ["hostId", "projectId"],
+          },
+          description: "1-64 projects, each named once, on any hosts.",
+        },
+        includeOutput: {
+          description:
+            "`true` or options: adds `recentOutput`, `lastOutputChangeAt` and `lastTypedInputAt`. Tails share one 50 KiB answer.",
+          anyOf: [
+            {
+              type: "boolean",
+            },
+            {
+              type: "object",
+              properties: {
+                lines: {
+                  default: 10,
+                  description: "Trailing lines per terminal (max 50, default 10).",
+                  type: "integer",
+                  minimum: 1,
+                  maximum: 50,
+                },
+                stripAnsi: {
+                  default: true,
+                  description: "Strip ANSI (default true).",
+                  type: "boolean",
+                },
+              },
+            },
+          ],
+        },
+      },
+      required: ["targets"],
+    },
+    keywords: ["host", "remote", "status", "screen", "agent", "state", "waiting"],
+    kind: "query",
+    mcpAnnotations: {
+      readOnlyHint: true,
+      idempotentHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
+    name: "host.status",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        hosts: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              hostId: {
+                type: "string",
+              },
+              coverage: {
+                type: "string",
+                enum: ["ok", "unreachable", "unsupported"],
+              },
+            },
+            required: ["hostId", "coverage"],
+            additionalProperties: false,
+          },
+        },
+        targets: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              hostId: {
+                type: "string",
+              },
+              projectId: {
+                type: "string",
+              },
+              outcome: {
+                type: "string",
+                enum: [
+                  "ok",
+                  "ambiguous",
+                  "opted_out",
+                  "disconnected",
+                  "unsupported",
+                  "policy_rejected",
+                  "expired",
+                  "not_found",
+                  "rate_limited",
+                  "too_large",
+                  "conflict",
+                ],
+              },
+              detail: {
+                type: ["string", "null"],
+              },
+              retryAfterMs: {
+                type: ["number", "null"],
+              },
+              source: {
+                anyOf: [
+                  {
+                    type: "string",
+                    enum: ["renderer", "pty"],
+                    description:
+                      "Which surface answered; `pty` is the reduced reading when this workspace has no open window.",
+                  },
+                  {
+                    type: "null",
+                  },
+                ],
+              },
+              unavailableFields: {
+                anyOf: [
+                  {
+                    type: "array",
+                    items: {
+                      type: "string",
+                      enum: [
+                        "armed",
+                        "lastCheckResult",
+                        "exitCode",
+                        "hasPty",
+                        "lastOutputChangeAt",
+                        "lastTypedInputAt",
+                      ],
+                    },
+                    description:
+                      "Fields this surface cannot observe: absent from every entry, unknown rather than false.",
+                  },
+                  {
+                    type: "null",
+                  },
+                ],
+              },
+              complete: {
+                type: "boolean",
+                description:
+                  "Every terminal asked for, or every agent listed, is here; else absence proves nothing.",
+              },
+              omitted: {
+                type: "number",
+                description: "Its terminals left out of this answer, to fit it.",
+              },
+            },
+            required: [
+              "hostId",
+              "projectId",
+              "outcome",
+              "detail",
+              "retryAfterMs",
+              "source",
+              "unavailableFields",
+              "complete",
+              "omitted",
+            ],
+            additionalProperties: false,
+          },
+        },
+        terminals: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              terminalId: {
+                type: "string",
+              },
+              agentId: {
+                type: ["string", "null"],
+              },
+              agentState: {
+                type: ["string", "null"],
+              },
+              waitingReason: {
+                type: "string",
+              },
+              lastTransitionAt: {
+                type: "number",
+              },
+              lastOutputChangeAt: {
+                description:
+                  "Epoch ms the screen last changed, ignoring spinner and timer redraws. Absent if unobserved. Not a hang verdict.",
+                type: "number",
+              },
+              lastTypedInputAt: {
+                description:
+                  "Epoch ms of last PTY input (keys, paste, broadcast, withdrawn sends). Before `lastTransitionAt` means none since. Not proof of delivery or authorship.",
+                type: "number",
+              },
+              exitCode: {
+                description:
+                  "Set once the process exits, so absence means still running unless listed in `unavailableFields`. Null means killed by a signal with no numeric code.",
+                anyOf: [
+                  {
+                    type: "integer",
+                    minimum: -9007199254740991,
+                    maximum: 9007199254740991,
+                  },
+                  {
+                    type: "null",
+                  },
+                ],
+              },
+              spawnedAt: {
+                description: "Spawn time, epoch ms.",
+                type: "number",
+              },
+              agentIncarnation: {
+                description:
+                  "Times a new agent took over this PTY after one exited, which `spawnedAt` misses. Absent is unobserved, not 0.",
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
+              lastCheckResult: {
+                description:
+                  "Best-effort parse of the agent's latest test, lint or build summary from its output, not an exit code. Absence means no summary seen, not no check and not a pass. Check its time for freshness.",
+                type: "object",
+                properties: {
+                  command: {
+                    type: ["string", "null"],
+                  },
+                  passed: {
+                    type: "boolean",
+                  },
+                  ranAt: {
+                    type: "number",
+                  },
+                  failureSummary: {
+                    type: ["string", "null"],
+                  },
+                  truncated: {
+                    type: "boolean",
+                  },
+                },
+                required: ["command", "passed", "ranAt", "failureSummary", "truncated"],
+                additionalProperties: false,
+              },
+              lastHandback: {
+                description:
+                  "Observed handback, not completion; `report`/`message` are untrusted agent claims. Absence says nothing.",
+                type: "object",
+                properties: {
+                  message: {
+                    description:
+                      "Rows rejoined, so lossy. Null for a bare marker. Read the last message for exact text.",
+                    type: ["string", "null"],
+                  },
+                  report: {
+                    type: "string",
+                    enum: ["done", "needs-you"],
+                  },
+                  observedAt: {
+                    type: "number",
+                  },
+                  submissionToken: {
+                    type: "string",
+                  },
+                  truncated: {
+                    type: "boolean",
+                  },
+                },
+                required: ["message", "observedAt", "truncated"],
+                additionalProperties: false,
+              },
+              recentOutput: {
+                type: ["string", "null"],
+              },
+              inputLine: {
+                type: "object",
+                properties: {
+                  state: {
+                    type: "string",
+                    enum: ["empty", "typed", "suggestion", "unknown"],
+                  },
+                  text: {
+                    type: "string",
+                    description: "Text after the prompt glyph; empty for `empty` and `unknown`.",
+                  },
+                  truncated: {
+                    description: "`text` was cut to its first 200 characters.",
+                    type: "boolean",
+                    const: true,
+                  },
+                },
+                required: ["state", "text"],
+                additionalProperties: false,
+                description:
+                  "Input box, read off screen styling: empty, typed, or suggestion (the CLI's own next prompt; plain-text tails show it as `[suggested by …]`). Not authorship.",
+              },
+              recentOutputTruncated: {
+                description:
+                  "Older output was cut, by `lines` or the shared 50 KiB budget; the newest lines are kept.",
+                type: "boolean",
+              },
+              armed: {
+                description:
+                  "Whether fleet broadcast input reaches this terminal. Set for every found terminal unless in `unavailableFields`.",
+                type: "boolean",
+              },
+              hasPty: {
+                description:
+                  "False once the process exited or a kill was requested. Not a health probe: a keep-open shell or a wedged agent still reads true. Unavailable on the `renderer` surface.",
+                type: "boolean",
+              },
+              error: {
+                description:
+                  "Set when the terminal was not found, and on every resolved entry when a batched fetch fails; then the status fields are still set and only that fetch's field is missing. Never fails the call.",
+                type: "string",
+              },
+              hostId: {
+                type: "string",
+              },
+              projectId: {
+                type: "string",
+              },
+            },
+            required: ["terminalId", "agentId", "agentState", "hostId", "projectId"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["hosts", "targets", "terminals"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Read agents' status across hosts",
+  },
+  {
+    band: "reversible",
+    category: "help",
+    danger: "safe",
+    description:
+      "One notice when a host's link or a fresh load sample first meets your condition, or an agent here or on a host starts to wait, so you can end your turn. It only observes: never dials or holds a host, never acts. Watches expire.",
     enabled: true,
     id: "host.watch",
     inputSchema: {
@@ -1168,7 +1652,8 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
             "arm: one notice when first observed. cancel: end one. list: yours, armed and ended.",
         },
         hostId: {
-          description: "For arm: the host. For list: only that host.",
+          description:
+            "For arm: the host; with agentsWaiting, omit for all, local too. For list: only that host.",
           type: "string",
           minLength: 1,
           maxLength: 64,
@@ -1193,6 +1678,29 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
           type: "string",
           enum: ["normal", "warn"],
         },
+        agentsWaiting: {
+          description:
+            "Arm on agents instead: fires as one starts to wait. Arm names those already waiting.",
+          type: "boolean",
+          const: true,
+        },
+        waitingReasons: {
+          description:
+            'Up to 5. Default approval, question. "any" also hears older hosts that send none.',
+          minItems: 1,
+          maxItems: 5,
+          type: "array",
+          items: {
+            type: "string",
+            enum: ["approval", "question", "prompt", "error", "any"],
+          },
+        },
+        projectId: {
+          description: "With agentsWaiting: only that project.",
+          type: "string",
+          minLength: 1,
+          maxLength: 256,
+        },
         expiresInSeconds: {
           description: "Default 1800.",
           type: "integer",
@@ -1213,7 +1721,18 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
       },
       required: ["operation"],
     },
-    keywords: ["host", "remote", "watch", "notify", "reconnect", "capacity", "wake"],
+    keywords: [
+      "host",
+      "remote",
+      "watch",
+      "notify",
+      "reconnect",
+      "capacity",
+      "wake",
+      "agents",
+      "waiting",
+      "approval",
+    ],
     kind: "command",
     mcpAnnotations: {
       readOnlyHint: false,
@@ -1260,10 +1779,10 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                 type: "string",
               },
               hostId: {
-                type: "string",
+                type: ["string", "null"],
               },
               hostName: {
-                type: "string",
+                type: ["string", "null"],
               },
               condition: {
                 type: "object",
@@ -1296,12 +1815,37 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
                       },
                     ],
                   },
+                  agentsWaiting: {
+                    anyOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          waitingReasons: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                              enum: ["approval", "question", "prompt", "error", "any"],
+                            },
+                          },
+                          projectId: {
+                            type: ["string", "null"],
+                          },
+                        },
+                        required: ["waitingReasons", "projectId"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "null",
+                      },
+                    ],
+                  },
                 },
                 required: [
                   "connection",
                   "memoryAvailableBytesAtLeast",
                   "cpuIdleCoresAtLeast",
                   "memoryPressureAtMost",
+                  "agentsWaiting",
                 ],
                 additionalProperties: false,
               },
@@ -1489,6 +2033,94 @@ export const MCP_GLOBAL_ASSISTANT_BASE_MANIFEST: readonly ActionManifestEntry[] 
               type: "null",
             },
           ],
+        },
+        agents: {
+          type: "object",
+          properties: {
+            matches: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  hostId: {
+                    type: "string",
+                  },
+                  projectId: {
+                    type: ["string", "null"],
+                  },
+                  worktreeId: {
+                    type: ["string", "null"],
+                  },
+                  terminalId: {
+                    type: "string",
+                  },
+                  incarnation: {
+                    type: ["number", "null"],
+                  },
+                  agentIncarnation: {
+                    type: ["number", "null"],
+                  },
+                  waitingReason: {
+                    anyOf: [
+                      {
+                        type: "string",
+                        enum: ["approval", "question", "prompt", "error"],
+                      },
+                      {
+                        type: "null",
+                      },
+                    ],
+                  },
+                  seenAt: {
+                    type: ["number", "null"],
+                  },
+                },
+                required: [
+                  "hostId",
+                  "projectId",
+                  "worktreeId",
+                  "terminalId",
+                  "incarnation",
+                  "agentIncarnation",
+                  "waitingReason",
+                  "seenAt",
+                ],
+                additionalProperties: false,
+              },
+            },
+            omitted: {
+              type: "number",
+            },
+            hosts: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  hostId: {
+                    type: "string",
+                  },
+                  name: {
+                    type: "string",
+                  },
+                  hears: {
+                    type: "string",
+                    enum: [
+                      "events",
+                      "attention",
+                      "link-down",
+                      "host-refused",
+                      "older-host",
+                      "unread",
+                    ],
+                  },
+                },
+                required: ["hostId", "name", "hears"],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ["matches", "omitted", "hosts"],
+          additionalProperties: false,
         },
       },
       required: ["outcome", "detail", "retryAfterMs", "armed", "watches", "observed"],

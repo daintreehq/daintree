@@ -64,11 +64,16 @@ export const config: AgentConfig = {
       "Requires Python >= 3.12 (the curl installer bootstraps uv-managed Python automatically)",
     ],
   },
+  // Vibe's `--model` takes an alias from the user's config.toml, and these are
+  // the aliases its default config ships. A models.dev provider id isn't one.
   models: [
     { id: "devstral-2", name: "Devstral 2", shortLabel: "Devstral" },
     { id: "devstral-small", name: "Devstral Small", shortLabel: "Small" },
     { id: "local", name: "Local (llama.cpp)", shortLabel: "Local" },
   ],
+  curatedModels: true,
+  // `--model` arrived in 3.0.4 for headless runs only (`--prompt`, new session).
+  modelSelection: "new-headless-session",
   capabilities: {
     scrollback: 10000,
     launchMcp: { format: "vibe-mcp-servers-env" },
@@ -128,6 +133,7 @@ export const config: AgentConfig = {
     configPathsAll: [".vibe/.env", ".vibe/config.toml"],
     envVar: "MISTRAL_API_KEY",
   },
+  account: { kind: "api-key", keyVars: ["MISTRAL_API_KEY"] },
   prerequisites: [
     {
       tool: "vibe",
@@ -137,14 +143,11 @@ export const config: AgentConfig = {
       installUrl: "https://github.com/mistralai/mistral-vibe",
     },
   ],
+  // No Plan preset: Vibe 3.0 removed the `plan` agent, and `--agent plan` fails
+  // at startup unless the user wrote their own, whose permissions Daintree can't
+  // vouch for.
   presets: [
     { id: "default", name: "Default" },
-    {
-      id: "plan",
-      name: "Plan",
-      args: ["--agent", "plan"],
-      description: "Read-only exploration",
-    },
     {
       id: "accept-edits",
       name: "Accept edits",

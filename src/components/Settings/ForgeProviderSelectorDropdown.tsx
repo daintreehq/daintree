@@ -1,7 +1,8 @@
 import type { ComponentType } from "react";
 import { GitBranch, Settings2 } from "lucide-react";
-import { GitHubIcon, GitLabIcon, LinearIcon } from "@/components/icons/brands";
+import { BeadsIcon, GitHubIcon, GitLabIcon, LinearIcon } from "@/components/icons/brands";
 import {
+  BUILTIN_BEADS_PROVIDER_ID,
   BUILTIN_GITHUB_PROVIDER_ID,
   BUILTIN_GITLAB_PROVIDER_ID,
   BUILTIN_LINEAR_PROVIDER_ID,
@@ -13,6 +14,8 @@ export interface ForgeProviderOption {
   id: string;
   name: string;
   pluginId: string;
+  /** Registered but can't run (an installed plugin's provider). */
+  unavailable?: boolean;
 }
 
 type ProviderIcon = ComponentType<{ size?: number; className?: string }>;
@@ -21,6 +24,7 @@ const BRAND_ICONS: Record<string, ProviderIcon> = {
   [BUILTIN_GITHUB_PROVIDER_ID]: GitHubIcon,
   [BUILTIN_GITLAB_PROVIDER_ID]: GitLabIcon,
   [BUILTIN_LINEAR_PROVIDER_ID]: LinearIcon,
+  [BUILTIN_BEADS_PROVIDER_ID]: BeadsIcon,
 };
 
 /** A forge's own mark where we have one; a generic branch for third-party providers. */
@@ -88,7 +92,14 @@ export function ForgeProviderSelectorDropdown({
         return (
           <>
             <Icon size={16} className="shrink-0 text-text-secondary" />
-            <span className="flex-1 min-w-0 truncate">{item.name}</span>
+            {item.unavailable ? (
+              <div className="flex-1 min-w-0">
+                <div className="truncate">{item.name}</div>
+                <div className="text-xs text-text-secondary truncate">Unavailable</div>
+              </div>
+            ) : (
+              <span className="flex-1 min-w-0 truncate">{item.name}</span>
+            )}
           </>
         );
       }}

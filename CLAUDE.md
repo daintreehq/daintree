@@ -43,7 +43,7 @@ Path-scoped rules in `.claude/rules/` load the detail for stores and persistence
 - `.daintree/recipes/*.json` are intentionally tracked: never remove or gitignore them. `.planning/` is private, gitignored, and rejected by the pre-commit hook.
 - Use the `gh` CLI for all GitHub operations; plain HTTP fetches fail on auth.
 - Skip issues labelled `human-review` (not solvable autonomously) and `monitoring` (blocked on an external event).
-- A fresh worktree needs its `node_modules` symlink and a build before the app starts. Never `npm ci` inside a worktree; it wipes the shared install.
+- Daintree's worktree setup links a new worktree's `node_modules` to the main checkout's and fails when that shared install doesn't match the worktree's `package-lock.json`; the fix is `npm ci` in the main checkout, never inside a worktree (it wipes the shared install). A worktree made outside Daintree needs `DAINTREE_PROJECT_ROOT=<main checkout> node scripts/link-shared-node-modules.mjs`, and every worktree needs a build before the app starts. Details and per-machine approval: `docs/development.md#worktrees`.
 - `npm run fix` reformats repo-wide; fix your own files by hand when a PR must stay scoped.
 - Rebuilding while the app is running poisons its lazy chunks: the single-instance lock refocuses the old window and its imports 404.
 

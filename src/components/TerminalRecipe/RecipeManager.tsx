@@ -53,7 +53,9 @@ import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { WorktreeSnapshot } from "@shared/types/workspace-host";
 import { pluralize } from "@/lib/pluralize";
+import { inRepoDisplayRecipes, projectLocalRecipes } from "@shared/utils/recipeListing";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { TEAM_SCOPE_DETAIL } from "./recipeScopeCopy";
 
 const EMPTY_WORKTREES = new Map<string, WorktreeSnapshot>();
 /** How long the filter query must settle before its result count is announced. */
@@ -88,9 +90,20 @@ export function RecipeManager({
   onCreateRecipe,
 }: RecipeManagerProps) {
   const globalRecipes = useRecipeStore((s) => s.globalRecipes);
-  const projectRecipes = useRecipeStore((s) => s.projectRecipes);
-  const inRepoRecipes = useRecipeStore((s) => s.inRepoRecipes);
+  const storedProjectRecipes = useRecipeStore((s) => s.projectRecipes);
+  const storedInRepoRecipes = useRecipeStore((s) => s.inRepoRecipes);
   const pluginRecipes = useRecipeStore((s) => s.pluginRecipes);
+  // The machine-local store also holds a mirror of every team recipe: the team
+  // row is that recipe (its edit then carries the env values the canonical file
+  // leaves out), and the machine-local section lists the rest, as mergeRecipes does.
+  const projectRecipes = useMemo(
+    () => projectLocalRecipes(storedProjectRecipes, storedInRepoRecipes),
+    [storedProjectRecipes, storedInRepoRecipes]
+  );
+  const inRepoRecipes = useMemo(
+    () => inRepoDisplayRecipes(storedProjectRecipes, storedInRepoRecipes),
+    [storedProjectRecipes, storedInRepoRecipes]
+  );
 
   // Derive which project recipes are shadowed by in-repo recipes
   const inRepoNames = useMemo(() => new Set(inRepoRecipes.map((r) => r.name)), [inRepoRecipes]);
@@ -101,6 +114,9 @@ export function RecipeManager({
   const updateRecipe = useRecipeStore((s) => s.updateRecipe);
   const createRecipe = useRecipeStore((s) => s.createRecipe);
   const currentProject = useProjectStore((s) => s.currentProject);
+  // Same test as the editor, so a New that promises a team recipe is only
+  // offered when the editor can save one.
+  const hasProject = !!currentProject?.id;
   const worktrees = useWorktreeStoreOptional((s) => s.worktrees, EMPTY_WORKTREES);
   const [filter, setFilter] = useState("");
   const [filterMinHeight, setFilterMinHeight] = useState<number | null>(null);
@@ -511,8 +527,9 @@ export function RecipeManager({
     trailing?: React.ReactNode;
   }) => {
     const visible = recipes.filter(matches);
-    // Plugin and team sources only exist once something is in them; the two
-    // user-owned sources always show, so "where would a new one go" has an answer.
+    // Plugin and legacy project sources only exist once something is in them; a
+    // section with an empty line always shows, so "where would a new one go"
+    // has an answer.
     if (visible.length === 0 && (isFiltering || !emptyLine)) return null;
     return (
       <section key={id} aria-labelledby={`recipe-section-${id}`} className="mb-5 last:mb-0">
@@ -566,28 +583,33 @@ export function RecipeManager({
       onNew: () => onCreateRecipe("global"),
       newLabel: "New global recipe",
     }),
+    // Where a new recipe in a project goes (createRecipe stores it as a file in
+    // the repository), so its New sits here and the section shows while empty.
+    renderSection({
+      id: "team",
+      icon: GitBranch,
+      title: "Team recipes",
+      description: TEAM_SCOPE_DETAIL,
+      recipes: inRepoRecipes,
+      emptyLine: hasProject
+        ? "None yet. A new team recipe is a file in your repository, so it shows up in git status."
+        : undefined,
+      onNew: hasProject ? () => onCreateRecipe("project") : undefined,
+      newLabel: "New team recipe",
+    }),
+    // Nothing creates a machine-local project recipe any more; the section holds
+    // only older ones, so it appears once it has one and offers no New.
     renderSection({
       id: "project",
       icon: FolderOpen,
       title: "Project recipes",
-      description: "Yours, in this project only",
+      description: "On this machine, in this project only. Save one as a team recipe to share it.",
       recipes: projectRecipes,
-      emptyLine:
-        "None yet. A project recipe stays on this machine until you save it as a team recipe.",
-      onNew: () => onCreateRecipe("project"),
-      newLabel: "New project recipe",
       trailing: currentProject && (
         <span className="truncate text-xs font-normal text-text-secondary">
           {currentProject.emoji} {currentProject.name}
         </span>
       ),
-    }),
-    renderSection({
-      id: "team",
-      icon: GitBranch,
-      title: "Team recipes",
-      description: "Committed to .daintree/recipes/ and shared with everyone on the repo",
-      recipes: inRepoRecipes,
     }),
     renderSection({
       id: "plugin",
@@ -626,15 +648,17 @@ export function RecipeManager({
                     ref={emptyStateActionRef}
                     variant="contrast"
                     size="sm"
-                    onClick={() => onCreateRecipe("project")}
+                    onClick={() => onCreateRecipe(hasProject ? "project" : "global")}
                   >
                     <Plus />
-                    New project recipe
+                    {hasProject ? "New team recipe" : "New global recipe"}
                   </Button>
                   <div className="flex flex-wrap justify-center gap-1">
-                    <Button variant="ghost" size="sm" onClick={() => onCreateRecipe("global")}>
-                      New global recipe
-                    </Button>
+                    {hasProject && (
+                      <Button variant="ghost" size="sm" onClick={() => onCreateRecipe("global")}>
+                        New global recipe
+                      </Button>
+                    )}
                     <Button variant="ghost" size="sm" onClick={() => setShowImportDialog(true)}>
                       Import from clipboard
                     </Button>

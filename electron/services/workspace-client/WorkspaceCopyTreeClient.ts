@@ -3,6 +3,7 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { type ProcessEntry, type CopyTreeProgressCallback } from "./types.js";
 import type { WorkspaceHostProcess } from "../WorkspaceHostProcess.js";
 import type { CopyTreeOptions, CopyTreeResult, FileTreeNode } from "../../../shared/types/ipc.js";
+import type { CopyTreeOperationOwner, CopyTreeOwnerPredicate } from "../copyTreeOperationOwner.js";
 
 export interface WorkspaceCopyTreeClientDeps {
   resolveHostForPath: (targetPath: string) => WorkspaceHostProcess | undefined;
@@ -15,6 +16,7 @@ export class WorkspaceCopyTreeClient {
 
   readonly copyTreeProgressCallbacks = new Map<string, CopyTreeProgressCallback>();
   readonly activeCopyTreeOperations = new Map<string, string>(); // operationId → rootPath
+  private readonly operationOwners = new Map<string, CopyTreeOperationOwner>();
 
   constructor(deps: WorkspaceCopyTreeClientDeps) {
     this.resolveHostForPath = deps.resolveHostForPath;
@@ -30,7 +32,8 @@ export class WorkspaceCopyTreeClient {
     rootPath: string,
     options?: CopyTreeOptions,
     onProgress?: CopyTreeProgressCallback,
-    outputPath?: string
+    outputPath?: string,
+    owner?: CopyTreeOperationOwner
   ): Promise<CopyTreeResult> {
     const host = this.resolveHostForPath(rootPath);
     if (!host) throw new Error("No workspace host for path");
@@ -41,7 +44,7 @@ export class WorkspaceCopyTreeClient {
     if (onProgress) {
       this.copyTreeProgressCallbacks.set(operationId, onProgress);
     }
-    this.activeCopyTreeOperations.set(operationId, rootPath);
+    this.track(operationId, rootPath, owner);
 
     try {
       const result = await host.sendWithResponse<{ result: CopyTreeResult }>(
@@ -58,7 +61,7 @@ export class WorkspaceCopyTreeClient {
       return result.result;
     } finally {
       this.copyTreeProgressCallbacks.delete(operationId);
-      this.activeCopyTreeOperations.delete(operationId);
+      this.untrack(operationId);
     }
   }
 
@@ -70,12 +73,13 @@ export class WorkspaceCopyTreeClient {
     }
 
     this.copyTreeProgressCallbacks.delete(operationId);
-    this.activeCopyTreeOperations.delete(operationId);
+    this.untrack(operationId);
   }
 
   async testConfig(
     rootPath: string,
-    options?: CopyTreeOptions
+    options?: CopyTreeOptions,
+    owner?: CopyTreeOperationOwner
   ): Promise<import("../../../shared/types/index.js").CopyTreeTestConfigResult> {
     const host = this.resolveHostForPath(rootPath);
     if (!host) {
@@ -89,7 +93,7 @@ export class WorkspaceCopyTreeClient {
     const requestId = host.generateRequestId();
     const operationId = crypto.randomUUID();
 
-    this.activeCopyTreeOperations.set(operationId, rootPath);
+    this.track(operationId, rootPath, owner);
 
     try {
       const result = await host.sendWithResponse<{
@@ -112,7 +116,7 @@ export class WorkspaceCopyTreeClient {
         error: formatErrorMessage(error, "Failed to generate context"),
       };
     } finally {
-      this.activeCopyTreeOperations.delete(operationId);
+      this.untrack(operationId);
     }
   }
 
@@ -120,14 +124,15 @@ export class WorkspaceCopyTreeClient {
    * List a directory as the context sees it — a CopyTree dry run decides what
    * is in, so the listing and the generated bundle can't disagree (#11439).
    *
-   * Tracked in `activeCopyTreeOperations` like the other CopyTree work so a
-   * cancel-all reclaims a listing still walking the tree.
+   * Tracked in `activeCopyTreeOperations` like the other CopyTree work so its
+   * owner's cancel-all reclaims a listing still walking the tree.
    */
   async getContextFileTree(
     rootPath: string,
     dirPath?: string,
     options?: CopyTreeOptions,
-    includeExcluded?: boolean
+    includeExcluded?: boolean,
+    owner?: CopyTreeOperationOwner
   ): Promise<FileTreeNode[]> {
     const host = this.resolveHostForPath(rootPath);
     if (!host) throw new Error("No workspace host for path");
@@ -135,7 +140,7 @@ export class WorkspaceCopyTreeClient {
     const requestId = host.generateRequestId();
     const operationId = crypto.randomUUID();
 
-    this.activeCopyTreeOperations.set(operationId, rootPath);
+    this.track(operationId, rootPath, owner);
 
     try {
       const result = await host.sendWithResponse<{
@@ -159,22 +164,42 @@ export class WorkspaceCopyTreeClient {
       }
       return result.nodes;
     } finally {
-      this.activeCopyTreeOperations.delete(operationId);
+      this.untrack(operationId);
     }
   }
 
-  cancelAllContext(): void {
+  /**
+   * Cancel every operation whose owner `matches`, on every host: the id alone
+   * says nothing of which host runs it. One started with no owner never matches.
+   */
+  cancelAllContext(matches: CopyTreeOwnerPredicate): void {
+    const selected: string[] = [];
     for (const operationId of this.activeCopyTreeOperations.keys()) {
+      const owner = this.operationOwners.get(operationId);
+      if (owner && matches(owner)) selected.push(operationId);
+    }
+    for (const operationId of selected) {
       for (const entry of this.iterateEntries()) {
         entry.host.send({ type: "copytree:cancel", operationId });
       }
+      this.copyTreeProgressCallbacks.delete(operationId);
+      this.untrack(operationId);
     }
-    this.copyTreeProgressCallbacks.clear();
-    this.activeCopyTreeOperations.clear();
   }
 
   dispose(): void {
     this.copyTreeProgressCallbacks.clear();
     this.activeCopyTreeOperations.clear();
+    this.operationOwners.clear();
+  }
+
+  private track(operationId: string, rootPath: string, owner?: CopyTreeOperationOwner): void {
+    this.activeCopyTreeOperations.set(operationId, rootPath);
+    if (owner) this.operationOwners.set(operationId, owner);
+  }
+
+  private untrack(operationId: string): void {
+    this.activeCopyTreeOperations.delete(operationId);
+    this.operationOwners.delete(operationId);
   }
 }

@@ -54,12 +54,13 @@ async function loadRecipesViaSettings(window: Page): Promise<void> {
   await expect(window.locator(SEL.projectSettings.heading)).not.toBeVisible({ timeout: T_SHORT });
 }
 
-// Creates a project recipe through the RecipeManager → editor flow. The manager
-// closes itself when the editor opens (handleRecipeManagerCreate), so callers
-// reopen it afterward if they need the resulting row.
-async function createProjectRecipe(window: Page, name: string): Promise<void> {
+// Creates a team recipe (a file in .daintree/recipes/) through the RecipeManager
+// → editor flow. The manager closes itself when the editor opens
+// (handleRecipeManagerCreate), so callers reopen it afterward if they need the
+// resulting row.
+async function createTeamRecipe(window: Page, name: string): Promise<void> {
   const manager = await openRecipeManager(window);
-  await manager.locator(SEL.recipeManager.newProjectRecipeButton).first().click({ force: true });
+  await manager.locator(SEL.recipeManager.newTeamRecipeButton).first().click({ force: true });
 
   const editor = getRecipeEditor(window);
   await expect(editor).toBeVisible({ timeout: T_MEDIUM });
@@ -133,7 +134,7 @@ test.describe("Recipe & onboarding coverage (#9597)", () => {
 
     test("export copies recipe JSON to the clipboard", async () => {
       const { app, window } = ctx;
-      await createProjectRecipe(window, "Export Me");
+      await createTeamRecipe(window, "Export Me");
 
       const manager = await openRecipeManager(window);
       await app.evaluate(({ clipboard }) => clipboard.writeText(""));
@@ -196,10 +197,7 @@ test.describe("Recipe & onboarding coverage (#9597)", () => {
 
       // Create a recipe with an agent terminal type.
       const manager = await openRecipeManager(window);
-      await manager
-        .locator(SEL.recipeManager.newProjectRecipeButton)
-        .first()
-        .click({ force: true });
+      await manager.locator(SEL.recipeManager.newTeamRecipeButton).first().click({ force: true });
 
       const editor = getRecipeEditor(window);
       await expect(editor).toBeVisible({ timeout: T_MEDIUM });
@@ -230,10 +228,7 @@ test.describe("Recipe & onboarding coverage (#9597)", () => {
     test("variable preview renders unresolved tokens for an agent prompt", async () => {
       const { window } = ctx;
       const manager = await openRecipeManager(window);
-      await manager
-        .locator(SEL.recipeManager.newProjectRecipeButton)
-        .first()
-        .click({ force: true });
+      await manager.locator(SEL.recipeManager.newTeamRecipeButton).first().click({ force: true });
 
       const editor = getRecipeEditor(window);
       await expect(editor).toBeVisible({ timeout: T_MEDIUM });

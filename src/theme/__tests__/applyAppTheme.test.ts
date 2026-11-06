@@ -2,7 +2,10 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  ACTIVITY_TEXT_INKS,
+  ACTIVITY_TEXT_MIN_CONTRAST,
   APP_THEME_TOKEN_KEYS,
+  BUILT_IN_APP_SCHEMES,
   DIFF_TEXT_MIN_CONTRAST,
   STATUS_TEXT_CONTRAST,
   STATUS_TEXT_INKS,
@@ -10,7 +13,9 @@ import {
   getAppThemeById,
   getAppThemeCssVariables,
   hexToOklch,
+  isHexColor,
   normalizeAppColorScheme,
+  resolveActivityTextBackdrops,
   resolveDiffTextBackdrops,
   resolveStatusTextBackdrops,
   type AppColorScheme,
@@ -395,7 +400,10 @@ describe("applyColorVisionMode status text inks", () => {
       }
       expect(ink, text).not.toBe(scheme.tokens[text]);
       expectOnHue(ink, hue, text);
-      for (const backdrop of resolveStatusTextBackdrops(hue, scheme.tokens)) {
+      // The letter's wash is the status ink the mode paints, fitted to this theme.
+      const painted = root.style.getPropertyValue(`--theme-${status}`);
+      expect(isHexColor(painted), `${status} is written as hex`).toBe(true);
+      for (const backdrop of resolveStatusTextBackdrops(painted, scheme.tokens)) {
         expect(
           contrastRatio(ink, backdrop.hex),
           `${text} on ${backdrop.label}`
@@ -415,6 +423,68 @@ describe("applyColorVisionMode status text inks", () => {
     applyColorVisionMode(root, "default", scheme);
 
     for (const text of Object.values(STATUS_TEXT_INKS)) {
+      expect(root.style.getPropertyValue(`--theme-${text}`), text).toBe(scheme.tokens[text]);
+    }
+  });
+});
+
+describe("applyColorVisionMode activity text inks", () => {
+  // The switcher's status sentences paint the text-grade twin of their activity
+  // hue, so a mode that swaps that hue lifts the sentence again (#15866).
+
+  it.each(
+    (["red-green", "blue-yellow"] as const).flatMap((mode) =>
+      BUILT_IN_APP_SCHEMES.map((scheme) => [mode, scheme.id] as const)
+    )
+  )("%s lifts the sentences it recolours on %s", (mode, id) => {
+    const overrides = mode === "red-green" ? RED_GREEN_OVERRIDES : BLUE_YELLOW_OVERRIDES;
+    const scheme = getAppThemeById(id)!;
+    const root = document.createElement("div");
+    applyAppThemeToRoot(root, scheme);
+    applyColorVisionMode(root, mode, scheme);
+
+    const recoloured = Object.entries(ACTIVITY_TEXT_INKS).filter(([activity, text]) => {
+      const hue = overrides[`--theme-${activity}`];
+      const ink = root.style.getPropertyValue(`--theme-${text}`);
+      if (!hue) {
+        expect(ink, text).toBe(scheme.tokens[text]);
+        return false;
+      }
+      expect(ink, text).not.toBe(scheme.tokens[text]);
+      const lifted = hexToOklch(ink)!;
+      const source = hexToOklch(hue)!;
+      if (source.c < 0.005) {
+        expect(lifted.c, `${text} stays neutral`).toBeLessThan(0.005);
+      } else {
+        const angle = Math.abs(lifted.h - source.h) % 360;
+        expect(Math.min(angle, 360 - angle), `${text} hue`).toBeLessThan(2.5);
+      }
+      for (const backdrop of resolveActivityTextBackdrops(scheme.tokens, scheme.type)) {
+        expect(
+          contrastRatio(ink, backdrop.hex),
+          `${text} on ${backdrop.label}`
+        ).toBeGreaterThanOrEqual(ACTIVITY_TEXT_MIN_CONTRAST);
+      }
+      return true;
+    });
+    expect(recoloured.length).toBeGreaterThan(0);
+  });
+
+  it("returning to default restores the theme's own inks", () => {
+    const scheme = getAppThemeById("bondi")!;
+    const root = document.createElement("div");
+    applyAppThemeToRoot(root, scheme);
+    applyColorVisionMode(root, "red-green", scheme);
+    expect(root.style.getPropertyValue("--theme-activity-working-text")).not.toBe(
+      scheme.tokens["activity-working-text"]
+    );
+    applyColorVisionMode(root, "blue-yellow", scheme);
+    expect(root.style.getPropertyValue("--theme-activity-waiting-text")).not.toBe(
+      scheme.tokens["activity-waiting-text"]
+    );
+    applyColorVisionMode(root, "default", scheme);
+
+    for (const text of Object.values(ACTIVITY_TEXT_INKS)) {
       expect(root.style.getPropertyValue(`--theme-${text}`), text).toBe(scheme.tokens[text]);
     }
   });

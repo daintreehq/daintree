@@ -77,6 +77,50 @@ describe("useRecipePicker", () => {
     expect(result.current.selectedRecipeId).toBe("recipe-2");
   });
 
+  describe("a Retry's recipe", () => {
+    const recipes = [makeRecipe("recipe-1"), makeRecipe("recipe-2")];
+    const remembered = {
+      ...defaultArgs,
+      startingLayoutRecipes: recipes,
+      defaultRecipeId: "recipe-1",
+      lastSelectedWorktreeRecipeId: "recipe-1",
+      initialRecipeId: "recipe-1",
+    };
+
+    it.each([
+      ["No recipe", null],
+      ["a cloned layout", CLONE_LAYOUT_ID],
+      ["a listed recipe", "recipe-2"],
+    ])("keeps %s over the initial, remembered and default recipe", (_label, restoredRecipeId) => {
+      const { result } = renderHook(() => useRecipePicker({ ...remembered, restoredRecipeId }));
+      expect(result.current.selectedRecipeId).toBe(restoredRecipeId);
+    });
+
+    it("waits for its recipe to load rather than settling on the remembered one", () => {
+      const { result, rerender } = renderHook(
+        (props: { startingLayoutRecipes: TerminalRecipe[] }) =>
+          useRecipePicker({ ...remembered, ...props, restoredRecipeId: "recipe-2" }),
+        { initialProps: { startingLayoutRecipes: [makeRecipe("recipe-1")] } }
+      );
+      expect(result.current.selectedRecipeId).toBe("recipe-1");
+
+      rerender({ startingLayoutRecipes: recipes });
+      expect(result.current.selectedRecipeId).toBe("recipe-2");
+    });
+
+    it("lands on its recipe when the same refresh drops the one it was waiting on", () => {
+      const { result, rerender } = renderHook(
+        (props: { startingLayoutRecipes: TerminalRecipe[] }) =>
+          useRecipePicker({ ...remembered, ...props, restoredRecipeId: "recipe-2" }),
+        { initialProps: { startingLayoutRecipes: [makeRecipe("recipe-1")] } }
+      );
+      expect(result.current.selectedRecipeId).toBe("recipe-1");
+
+      rerender({ startingLayoutRecipes: [makeRecipe("recipe-2")] });
+      expect(result.current.selectedRecipeId).toBe("recipe-2");
+    });
+  });
+
   it("does not invalidate CLONE_LAYOUT_ID as stale", () => {
     const setter = vi.fn();
     const { result, rerender } = renderHook((props) => useRecipePicker(props), {
@@ -99,6 +143,71 @@ describe("useRecipePicker", () => {
     const { result } = renderHook(() => useRecipePicker({ ...defaultArgs, isOpen: false }));
     // Default state is null (no auto-selection runs when closed)
     expect(result.current.selectedRecipeId).toBe(null);
+  });
+
+  it("selects initialRecipeId over a remembered recipe", () => {
+    const recipes = [makeRecipe("recipe-1"), makeRecipe("recipe-2")];
+    const { result } = renderHook(() =>
+      useRecipePicker({
+        ...defaultArgs,
+        startingLayoutRecipes: recipes,
+        lastSelectedWorktreeRecipeId: "recipe-1",
+        initialRecipeId: "recipe-2",
+      })
+    );
+    expect(result.current.selectedRecipeId).toBe("recipe-2");
+  });
+
+  it("clears a stale remembered recipe and falls back to the project default", () => {
+    const setter = vi.fn();
+    const { result } = renderHook(() =>
+      useRecipePicker({
+        ...defaultArgs,
+        startingLayoutRecipes: [makeRecipe("project-default")],
+        defaultRecipeId: "project-default",
+        lastSelectedWorktreeRecipeId: "deleted-recipe",
+        setLastSelectedWorktreeRecipeIdByProject: setter,
+      })
+    );
+    expect(setter).toHaveBeenCalledWith("test-project", undefined);
+    expect(result.current.selectedRecipeId).toBe("project-default");
+  });
+
+  it("reseeds from the memory it is handed when a kept-mounted picker reopens (#16283)", () => {
+    const recipes = [makeRecipe("issue-recipe")];
+    const bareSetter = vi.fn();
+    const issueSetter = vi.fn();
+    const { result, rerender } = renderHook((props) => useRecipePicker(props), {
+      initialProps: {
+        ...defaultArgs,
+        startingLayoutRecipes: recipes,
+        lastSelectedWorktreeRecipeId: "issue-recipe" as string | null | undefined,
+        setLastSelectedWorktreeRecipeIdByProject: issueSetter,
+      },
+    });
+    expect(result.current.selectedRecipeId).toBe("issue-recipe");
+    act(() => {
+      result.current.recipeSelectionTouchedRef.current = true;
+      result.current.setSelectedRecipeId(CLONE_LAYOUT_ID);
+    });
+
+    rerender({
+      ...defaultArgs,
+      isOpen: false,
+      startingLayoutRecipes: recipes,
+      lastSelectedWorktreeRecipeId: null,
+      setLastSelectedWorktreeRecipeIdByProject: bareSetter,
+    });
+    rerender({
+      ...defaultArgs,
+      startingLayoutRecipes: recipes,
+      lastSelectedWorktreeRecipeId: null,
+      setLastSelectedWorktreeRecipeIdByProject: bareSetter,
+    });
+
+    expect(result.current.selectedRecipeId).toBeNull();
+    expect(bareSetter).not.toHaveBeenCalled();
+    expect(issueSetter).not.toHaveBeenCalled();
   });
 
   it("clears stale lastSelected and falls back to clone", () => {

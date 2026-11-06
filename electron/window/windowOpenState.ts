@@ -92,6 +92,17 @@ export function reserveWindowForOpen(
   };
 }
 
+/** Every workspace an in-flight open has reserved a window for. */
+export function getReservedWorkspaceIds(): string[] {
+  const ids: string[] = [];
+  for (const held of reservations.values()) {
+    for (const { projectId } of held) {
+      if (projectId) ids.push(projectId);
+    }
+  }
+  return ids;
+}
+
 /**
  * Whether an open holds the window: one in flight, or a folder whose open
  * settled without binding a workspace (its git-init prompt or failure is on

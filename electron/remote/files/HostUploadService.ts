@@ -9,7 +9,7 @@ import type { TransferSink } from "../link/transfer.js";
 import { copyInto, NEW_FILE_FLAGS } from "./exclusiveCopy.js";
 import { componentsBelow, openDirectoryBeneath, type HeldDirectory } from "./hostContainment.js";
 import type { HostFileEndpoint } from "./HostFileService.js";
-import { HostInbox, sanitizeInboxName, truncateName } from "./hostInbox.js";
+import { HostInbox, sanitizeInboxName, truncateName, type InboxReservation } from "./hostInbox.js";
 import {
   UPLOAD_SINK_PREFIX,
   UploadLinkMethod,
@@ -134,7 +134,11 @@ interface PendingUpload {
   destination: PreparedDestination;
   /** The project's drive lease when admitted: a takeover voids the upload. */
   leaseId: number | null;
+  /** The inbox room its part file needs, held until the file is placed or given up. */
+  reservation: InboxReservation;
   expiresAt: number;
+  /** Drops it when no bytes come, so its reservation never outlives it. */
+  expiry: ReturnType<typeof setTimeout>;
 }
 
 interface SessionUploads {
@@ -218,7 +222,11 @@ function operationInUse(): AppError {
 
 export class HostUploadService {
   private readonly sessions = new WeakMap<LinkSession, SessionUploads>();
-  private readonly subscriptions = new Map<string, { dispose(): void }>();
+  /** Per endpoint, its close watch and every link it was attached on (a resumed link reuses it). */
+  private readonly subscriptions = new Map<
+    string,
+    { dispose(): void; sessions: Set<SessionUploads> }
+  >();
   private readonly replaceGrants = new Map<string, ReplaceGrant>();
   /** By Shell client and operation id. */
   private readonly operations = new Map<string, OperationRecord>();
@@ -236,21 +244,27 @@ export class HostUploadService {
     if (this.disposed) return;
     const uploads = this.sessionUploads(session);
     uploads.endpoints.set(endpoint.clientEndpointId, endpoint);
-    if (!this.subscriptions.has(endpoint.endpointId)) {
-      this.subscriptions.set(
-        endpoint.endpointId,
-        endpoint.onClose(() => {
-          this.subscriptions.delete(endpoint.endpointId);
-          uploads.endpoints.delete(endpoint.clientEndpointId);
-          for (const [token, pending] of uploads.pending) {
-            if (pending.endpoint === endpoint) this.dropPending(uploads, token);
-          }
-          for (const [token, grant] of this.replaceGrants) {
-            if (grant.endpointId === endpoint.endpointId) this.replaceGrants.delete(token);
-          }
-        })
-      );
+    const existing = this.subscriptions.get(endpoint.endpointId);
+    if (existing) {
+      existing.sessions.add(uploads);
+      return;
     }
+    const sessions = new Set([uploads]);
+    const watch = endpoint.onClose(() => {
+      this.subscriptions.delete(endpoint.endpointId);
+      for (const attached of sessions) {
+        if (attached.endpoints.get(endpoint.clientEndpointId) === endpoint) {
+          attached.endpoints.delete(endpoint.clientEndpointId);
+        }
+        for (const [token, pending] of attached.pending) {
+          if (pending.endpoint === endpoint) this.dropPending(attached, token);
+        }
+      }
+      for (const [token, grant] of this.replaceGrants) {
+        if (grant.endpointId === endpoint.endpointId) this.replaceGrants.delete(token);
+      }
+    });
+    this.subscriptions.set(endpoint.endpointId, { dispose: () => watch.dispose(), sessions });
   }
 
   /** The project's drive lease changed: uploads admitted under the old one stop. */
@@ -267,7 +281,13 @@ export class HostUploadService {
     for (const subscription of this.subscriptions.values()) subscription.dispose();
     this.subscriptions.clear();
     this.replaceGrants.clear();
-    for (const [key, record] of this.operations) this.forgetOperation(key, record);
+    for (const [key, record] of this.operations) {
+      // A prepared upload holds inbox room until it is dropped.
+      if (record.pendingIn !== null && record.pendingToken !== null) {
+        this.dropPending(record.pendingIn, record.pendingToken);
+      }
+      this.forgetOperation(key, record);
+    }
     this.operations.clear();
   }
 
@@ -292,6 +312,9 @@ export class HostUploadService {
       session.onClose(() => {
         for (const dispose of created.unregister.splice(0)) dispose();
         for (const token of [...created.pending.keys()]) this.dropPending(created, token);
+        // Every watch, not only those of the endpoints it holds now: one it held before may outlive it.
+        for (const subscription of this.subscriptions.values())
+          subscription.sessions.delete(created);
       })
     );
     this.sessions.set(session, created);
@@ -566,6 +589,9 @@ export class HostUploadService {
     record.reservedIn = uploads;
 
     let destination: PreparedDestination;
+    // The part file is written in the inbox wherever the file goes. Held
+    // there, so folder uploads under way count it and it counts them.
+    let reservation: InboxReservation | null;
     if (payload.destination.kind === "inbox") {
       const { bucket } = payload.destination;
       await this.options.inbox.ensure();
@@ -580,9 +606,8 @@ export class HostUploadService {
         this.options.onInboxFile?.(endpoint, projectId, duplicate);
         return { status: "duplicate", hostPath: duplicate };
       }
-      if (!(await this.hasRoom(this.options.inbox.root, payload.size))) {
-        return { status: "refused", reason: "no-space" };
-      }
+      reservation = await this.options.inbox.reserve(payload.size);
+      if (reservation === null) return { status: "refused", reason: "no-space" };
       destination = { kind: "inbox", bucket };
     } else {
       const { directory, replaceToken } = payload.destination;
@@ -635,10 +660,10 @@ export class HostUploadService {
           // The file it named is gone: this becomes a plain add, and the token is spent.
           this.replaceGrants.delete(replaceToken);
         }
-        if (
-          !(await this.hasRoom(this.options.inbox.root, payload.size)) ||
-          !(await this.hasRoom(held.canonicalPath, payload.size))
-        ) {
+        reservation = (await this.hasRoom(held.canonicalPath, payload.size))
+          ? await this.options.inbox.reserve(payload.size)
+          : null;
+        if (reservation === null) {
           if (replace) this.releaseGrant(replace.token, payload.opId);
           return { status: "refused", reason: "no-space" };
         }
@@ -656,32 +681,43 @@ export class HostUploadService {
       }
     }
 
-    // The link may have closed (or the endpoint lost the project) while the
-    // checks above ran; its close already swept pending uploads, so record none.
-    if (this.disposed || !uploads.session.isOpen) throw notInProject();
-    // Expired while it ran: the id is no longer this prepare's to use.
-    if (this.operations.get(opKey) !== record) return { status: "refused", reason: "busy" };
-    this.admit(uploads, payload.endpointId);
-    const token = crypto.randomBytes(16).toString("hex");
-    uploads.preparing.delete(record);
-    record.reservedIn = null;
-    record.state = "prepared";
-    record.expiresAt = Date.now() + this.abandonAfterMs();
-    record.pendingToken = token;
-    record.pendingIn = uploads;
-    uploads.pending.set(token, {
-      opId: payload.opId,
-      opKey,
-      endpoint,
-      projectId,
-      name: payload.name,
-      size: payload.size,
-      sha256: payload.sha256,
-      destination,
-      leaseId: this.leaseIdFor(projectId),
-      expiresAt: Date.now() + (this.options.pendingTtlMs ?? DEFAULT_PENDING_TTL_MS),
-    });
-    return { status: "ready", token };
+    let pendingHolds = false;
+    try {
+      // The link may have closed (or the endpoint lost the project) while the
+      // checks above ran; its close already swept pending uploads, so record none.
+      if (this.disposed || !uploads.session.isOpen) throw notInProject();
+      // Expired while it ran: the id is no longer this prepare's to use.
+      if (this.operations.get(opKey) !== record) return { status: "refused", reason: "busy" };
+      this.admit(uploads, payload.endpointId);
+      const token = crypto.randomBytes(16).toString("hex");
+      uploads.preparing.delete(record);
+      record.reservedIn = null;
+      record.state = "prepared";
+      record.expiresAt = Date.now() + this.abandonAfterMs();
+      record.pendingToken = token;
+      record.pendingIn = uploads;
+      const ttl = this.options.pendingTtlMs ?? DEFAULT_PENDING_TTL_MS;
+      const expiry = setTimeout(() => this.dropPending(uploads, token), ttl);
+      expiry.unref?.();
+      uploads.pending.set(token, {
+        opId: payload.opId,
+        opKey,
+        endpoint,
+        projectId,
+        name: payload.name,
+        size: payload.size,
+        sha256: payload.sha256,
+        destination,
+        leaseId: this.leaseIdFor(projectId),
+        reservation,
+        expiresAt: Date.now() + ttl,
+        expiry,
+      });
+      pendingHolds = true;
+      return { status: "ready", token };
+    } finally {
+      if (!pendingHolds) reservation.release();
+    }
   }
 
   private releaseGrant(token: string, opId: string): void {
@@ -694,6 +730,8 @@ export class HostUploadService {
     const pending = uploads.pending.get(token);
     if (!pending) return;
     uploads.pending.delete(token);
+    clearTimeout(pending.expiry);
+    pending.reservation.release();
     if (pending.destination.kind === "worktree" && pending.destination.replace) {
       this.releaseGrant(pending.destination.replace.token, pending.opId);
     }
@@ -721,8 +759,10 @@ export class HostUploadService {
     const pending = uploads.pending.get(token);
     if (!pending) throw new Error("No upload was prepared for this destination");
     uploads.pending.delete(token);
+    clearTimeout(pending.expiry);
     const record = this.operations.get(pending.opKey);
     const failed = () => {
+      pending.reservation.release();
       if (pending.destination.kind === "worktree" && pending.destination.replace) {
         this.releaseGrant(pending.destination.replace.token, pending.opId);
       }
@@ -801,6 +841,8 @@ export class HostUploadService {
     const settleOutcome = (hostPath: string | null) => {
       if (settledOutcome) return;
       settledOutcome = true;
+      // The part is placed or gone by now, so the disk itself tells the next prepare.
+      pending.reservation.release();
       this.inFlight.delete(inFlight);
       if (pending.destination.kind === "worktree" && pending.destination.replace) {
         const { token: grantToken } = pending.destination.replace;

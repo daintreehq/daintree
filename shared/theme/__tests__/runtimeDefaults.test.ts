@@ -137,6 +137,41 @@ describe("scrollbar-track default — subtle gutter tint", () => {
   });
 });
 
+describe("overlay-highlight on light — its own wash, not the raised plane (#16184)", () => {
+  const lightPalette = (): ThemePalette => ({
+    ...makePaletteWithoutTerminal(),
+    type: "light",
+    surfaces: {
+      grid: "#dcdcdc",
+      sidebar: "#e8e8e8",
+      canvas: "#f0f0f0",
+      panel: "#f8f8f8",
+      elevated: "#ffffff",
+    },
+    text: { primary: "#1a1a1a", secondary: "#4a4a4a", muted: "#5a5a5a", inverse: "#ffffff" },
+  });
+
+  it("a theme that retunes overlay-raised leaves the highlight where the engine put it", () => {
+    const plain = normalizeAppColorScheme({ type: "light", palette: lightPalette() });
+    const raised = normalizeAppColorScheme({
+      type: "light",
+      palette: lightPalette(),
+      tokens: { "overlay-raised": "#e8e8e8" },
+    });
+    expect(raised.tokens["overlay-raised"]).toBe("#e8e8e8");
+    expect(raised.tokens["overlay-highlight"]).toBe(plain.tokens["overlay-highlight"]);
+  });
+
+  it("an explicit overlay-highlight still wins", () => {
+    const scheme = normalizeAppColorScheme({
+      type: "light",
+      palette: lightPalette(),
+      tokens: { "overlay-raised": "#e8e8e8", "overlay-highlight": "#dddddd" },
+    });
+    expect(scheme.tokens["overlay-highlight"]).toBe("#dddddd");
+  });
+});
+
 describe("scrim-blur defaults — material lengths, themeable per scheme", () => {
   it("every built-in theme resolves both scrim blur tokens as non-negative px lengths", () => {
     for (const scheme of BUILT_IN_APP_SCHEMES) {

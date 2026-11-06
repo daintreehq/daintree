@@ -47,6 +47,7 @@ const PTY_FIELD_CLASSIFICATION = {
   kind: false,
   title: false,
   titleMode: false,
+  displayEmoji: false,
   location: false,
   backgroundRestoreLocation: false,
   // Boot-time dock stopgap (#13907) — written by the base serialization layer.
@@ -70,6 +71,9 @@ const PTY_FIELD_CLASSIFICATION = {
   agentModelId: true,
   agentPresetId: true,
   agentPresetColor: true,
+  // The account the pane launched on (#16040), written beside the env that
+  // holds its folder.
+  agentAccountId: true,
   originalPresetId: true,
   // Captured launch env replayed on restore so a session keeps its provider
   // environment (#10922); sanitized on the serialize/restore boundary.
@@ -121,6 +125,9 @@ const PTY_FIELD_CLASSIFICATION = {
   // Live offer to reopen an ended launch's conversation (#13226) — a prompt
   // about a process that no longer exists after a restart.
   agentResumeOffer: false,
+  // Live match between a conversation-keeping preset switch and its run's end
+  // (#16045) — about a process that no longer exists after a restart.
+  presetSwitchResume: false,
   restartError: false,
   reconnectError: false,
   scrollbackRestoreError: false,
@@ -151,11 +158,15 @@ const PTY_FIELD_CLASSIFICATION = {
   everDetectedAgent: false,
   detectedAgentId: false,
   spawnedBy: true,
+  // Written only beside `spawnedBy: "schedule"` (#15977), as the fixture has it.
+  scheduledRun: true,
   focusPolicy: false,
   excludeFromPersistence: false,
   removeOnExit: false,
   startedAt: false,
-  exitCode: false,
+  // Written only while the pane shows a natural exit (#15941), so a reload
+  // restores the exit instead of a new process.
+  exitCode: true,
   // Session-preserving teardown mark (#13841) — describes the exit that just
   // happened; the restored pane gets a new process, so nothing to persist.
   sessionPreservingExit: false,
@@ -186,6 +197,7 @@ const BROWSER_FIELD_CLASSIFICATION = {
   kind: false,
   title: false,
   titleMode: false,
+  displayEmoji: false,
   location: false,
   backgroundRestoreLocation: false,
   // Boot-time dock stopgap (#13907) — written by the base serialization layer.
@@ -218,6 +230,7 @@ const DEV_PREVIEW_FIELD_CLASSIFICATION = {
   kind: false,
   title: false,
   titleMode: false,
+  displayEmoji: false,
   location: false,
   backgroundRestoreLocation: false,
   // Boot-time dock stopgap (#13907) — written by the base serialization layer.
@@ -266,6 +279,7 @@ const FILE_FIELD_CLASSIFICATION = {
   kind: false,
   title: false,
   titleMode: false,
+  displayEmoji: false,
   location: false,
   backgroundRestoreLocation: false,
   // Boot-time dock stopgap (#13907) — written by the base serialization layer.
@@ -305,6 +319,7 @@ const DIFF_FIELD_CLASSIFICATION = {
   kind: false,
   title: false,
   titleMode: false,
+  displayEmoji: false,
   location: false,
   backgroundRestoreLocation: false,
   // Boot-time dock stopgap (#13907) — written by the base serialization layer.
@@ -342,6 +357,7 @@ const FILE_BROWSER_FIELD_CLASSIFICATION = {
   kind: false,
   title: false,
   titleMode: false,
+  displayEmoji: false,
   location: false,
   backgroundRestoreLocation: false,
   // Boot-time dock stopgap (#13907) — written by the base serialization layer.
@@ -450,9 +466,11 @@ const terminalFixture: PtySerializeInput = {
   agentLaunchFlags: ["--resume", "--effort", "high"],
   callerLaunchFlags: ["--effort", "high"],
   agentModelId: "claude-3-5-sonnet",
-  spawnedBy: "quickrun",
+  spawnedBy: "schedule",
+  scheduledRun: { scheduleId: "schedule-1", runId: "run-1" },
   agentPresetId: "blue-provider",
   agentPresetColor: "#3366ff",
+  agentAccountId: "company",
   originalPresetId: "primary-provider",
   env: { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic" },
   isUsingFallback: true,
@@ -471,6 +489,8 @@ const terminalFixture: PtySerializeInput = {
   scratchpad: { content: "- check CI", collapsed: true, width: 320 },
   firstPrompt: { text: "Fix the flaky test", via: "launch", at: 1_700_000_000_004 },
   worktreeMoveNotice: { destinationWorktreeId: "wt-feature" },
+  runtimeStatus: "exited",
+  exitCode: 3,
   createdAt: 1_700_000_000_000,
   lastActiveAt: 1_700_000_000_001,
 };
@@ -667,6 +687,7 @@ describe("panel serializer field coverage", () => {
     expect(output).not.toHaveProperty("agentSessionId");
     expect(output).not.toHaveProperty("agentState");
     expect(output).not.toHaveProperty("lastStateChange");
+    expect(output).not.toHaveProperty("exitCode");
   });
 
   it("browser serializer covers every persisted browser field", () => {

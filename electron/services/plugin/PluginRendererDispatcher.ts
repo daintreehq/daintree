@@ -20,6 +20,7 @@ import type {
 } from "../../../shared/types/actions.js";
 import type { PluginAgentPane } from "../../../shared/types/plugin.js";
 import { maskTerminalInOtherProject } from "../../../shared/utils/terminalInOtherProject.js";
+import type { HostApprovedPluginPresetLaunch } from "../../../shared/utils/agentPresetLaunchConsent.js";
 import { isLocalHostId, parseHostScopedKey } from "../../../shared/types/remoteHosts.js";
 import { z } from "zod";
 
@@ -236,7 +237,8 @@ export class PluginRendererDispatcher {
     actionId: string,
     args: unknown,
     projectId?: PluginTargetProjectId,
-    pluginId?: string
+    pluginId?: string,
+    approvedPresetLaunch?: HostApprovedPluginPresetLaunch
   ): Promise<ActionDispatchResult> {
     if (this.deps.isDisposed()) {
       return Promise.resolve({
@@ -251,6 +253,8 @@ export class PluginRendererDispatcher {
     // project, which may be on another machine, or nowhere at all.
     const frontend = this.routedFrontend(projectId, pluginId);
     if (frontend?.kind === "remote") {
+      // A preset approval has no remote form: the driving view refuses the
+      // launch as it would without one, which is the closed direction (#16324).
       const routed = this.dispatchToEndpoint(frontend.endpoint, pluginId!, actionId, args);
       // The same uniform miss a local bound dispatch gets (#13120).
       return projectId != null ? routed.then(maskTerminalInOtherProject) : routed;
@@ -281,7 +285,13 @@ export class PluginRendererDispatcher {
         },
       });
     }
-    const sent = this.sendDispatchToWebContents(webContents, actionId, args, pluginId);
+    const sent = this.sendDispatchToWebContents(
+      webContents,
+      actionId,
+      args,
+      pluginId,
+      approvedPresetLaunch
+    );
     // A project-bound plugin gets the uniform miss for a terminal in another
     // project, as a bound MCP session does (#13120).
     return projectId != null ? sent.then(maskTerminalInOtherProject) : sent;
@@ -360,7 +370,8 @@ export class PluginRendererDispatcher {
     webContents: Electron.WebContents,
     actionId: string,
     args: unknown,
-    pluginId?: string
+    pluginId?: string,
+    approvedPresetLaunch?: HostApprovedPluginPresetLaunch
   ): Promise<ActionDispatchResult> {
     return new Promise((resolve) => {
       if (this.deps.isDisposed()) {
@@ -430,6 +441,7 @@ export class PluginRendererDispatcher {
               actionId,
               args,
               ...(pluginId !== undefined ? { pluginId } : {}),
+              ...(approvedPresetLaunch !== undefined ? { approvedPresetLaunch } : {}),
             });
           } catch {
             clearTimeout(timer);

@@ -26,7 +26,7 @@ export const CAPTURE_DELIVERY_BUDGET_MS = 750;
 export const CAPTURE_PERSISTENCE_DRAIN_BUDGET_MS = 1_500;
 
 // Room the chain keeps after the PTY host exit wait (#13167) for IPC cleanup,
-// the database drains and the VAD drain that follow it. The wait itself is
+// the database drains and the VAD and Canopy reader drains that follow it. The wait itself is
 // capped to whatever of CLEANUP_TIMEOUT_MS is left minus this, so a slow host
 // costs the supervisor disarm, never a dirty exit.
 export const POST_PTY_TEARDOWN_RESERVE_MS = 2_000;
@@ -37,6 +37,12 @@ export const POST_PTY_TEARDOWN_RESERVE_MS = 2_000;
 // is harmless to Main — the VAD is its own process — and only costs the child
 // a clean release.
 export const VAD_DRAIN_BUDGET_MS = 1_000;
+
+// The same bounded wait for a retiring Canopy reader process (#15538), which
+// IPC cleanup retires mid-read the way it retires the VAD. It runs alongside
+// the VAD drain, so the two share the reserve rather than adding to it, and a
+// miss still meets the reader's own SIGKILL backstop.
+export const CANOPY_READER_DRAIN_BUDGET_MS = 1_000;
 
 // Bounds the post-cleanup tail — the telemetry flush and perf-trace flush that run
 // AFTER the cleanup race resolves and are therefore NOT covered by

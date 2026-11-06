@@ -10,10 +10,8 @@
 import { z } from "zod";
 import type { ActionDefinition } from "../../shared/types/actions.js";
 import type { ActionRegistry } from "../../src/services/actions/actionTypes.js";
-import {
-  BUILT_IN_ACTION_IDS,
-  DENY_PLUGIN_DISPATCH_ACTION_IDS,
-} from "../../shared/config/actionIds.js";
+import { DENY_PLUGIN_DISPATCH_ACTION_IDS } from "../../shared/config/actionIds.js";
+import { isBuiltInActionId } from "../../shared/utils/builtInActionIds.js";
 
 /** Top-level argument names, marking the required ones. Empty when the action takes none. */
 function argSummary(def: ActionDefinition): string {
@@ -51,10 +49,12 @@ export function renderPluginActionsDoc(registry: ActionRegistry): string {
 
   const rows: Array<{ id: string; category: string; title: string; danger: string; args: string }> =
     [];
-  for (const id of BUILT_IN_ACTION_IDS) {
-    if (denied.has(id)) continue;
-    const factory = registry.get(id);
-    if (!factory) continue;
+  // Walks the registry, not an id table: built-in ids are split between
+  // `BUILT_IN_ACTION_IDS` and the keybinding-driven `KEY_ACTION_VALUES`, and a
+  // plugin sees and dispatches both. `isBuiltInActionId` spans both tables, so
+  // an id registered by a plugin can never land on a page about built-ins.
+  for (const [id, factory] of registry) {
+    if (!isBuiltInActionId(id) || denied.has(id)) continue;
     const def = factory();
     // A plugin's dispatch is refused for `restricted` whatever its tier, so
     // listing one would be listing something that cannot be called.
@@ -87,7 +87,7 @@ export function renderPluginActionsDoc(registry: ActionRegistry): string {
   );
   lines.push("");
   lines.push(
-    "`canDispatch` sees only the id, and some `safe` actions are refused for particular arguments. `terminal.new` with `command` or `cwd` is raised to `confirm` for a plugin and refused; without either it opens a plain terminal. `agent.launch` with non-empty `agentLaunchFlags`, `env` or `systemPrompt`, any `presetId`, or a `prompt` or `model` starting with `-` is raised to `confirm` for a plugin and refused, since those choose how the agent runs rather than give it a task; with a prompt, a `cwd` or a model name it launches as usual. `worktree.createWithRecipe` and `workflow.startWorkOnIssue` fail when the arguments carry a `recipeId`, so a plugin cannot start a recipe's terminals through them (and `recipe.run` is `confirm`). `file.showItemInFolder` fails when `allowOutsideRoots` is set. `session.bookmark.promote`, `session.bookmark.rename` and `session.bookmark.delete` fail when the dispatch has no project in scope, and when the session does not belong to that project. Each of these resolves `{ ok: false }` with an error rather than running."
+    "`canDispatch` sees only the id, and some `safe` actions are refused for particular arguments. `terminal.new` with `command` or `cwd` is raised to `confirm` for a plugin and refused; without either it opens a plain terminal. `agent.launch` with non-empty `agentLaunchFlags`, `env` or `systemPrompt`, any `presetId`, or a `prompt` or `model` starting with `-` is raised to `confirm` for a plugin and refused, since those choose how the agent runs rather than give it a task; with a prompt, a `cwd` or a model name it launches as usual. The one exception is a `presetId` naming one of the person's presets with none of the others, from a plugin that declares `agent:launch-preset`: the first launch on each preset asks the person, showing what the preset and its fallbacks turn on, and the grant ends when any of them changes or the person revokes it in the plugin's Permissions. A denied or unanswered prompt rejects `dispatch` with a `PERMISSION_REQUIRED:` error rather than resolving `{ ok: false }`, and in Host mode the prompt can't be shown, so the launch is refused. `presetId: null` stays refused. `worktree.createWithRecipe` and `workflow.startWorkOnIssue` fail when the arguments carry a `recipeId`, so a plugin cannot start a recipe's terminals through them (and `recipe.run` is `confirm`). `file.showItemInFolder` fails when `allowOutsideRoots` is set. `session.bookmark.promote`, `session.bookmark.rename` and `session.bookmark.delete` fail when the dispatch has no project in scope, and when the session does not belong to that project. Each of these resolves `{ ok: false }` with an error rather than running."
   );
   lines.push("");
   lines.push(

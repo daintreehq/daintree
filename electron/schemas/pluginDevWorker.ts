@@ -254,6 +254,7 @@ export const PluginWorkerToHostMessageSchema = z.union([
       method: HostNotifyMethodSchema,
       params: OpaquePayload,
       registrationKey: z.string().optional(),
+      invocationId: CorrelationId.optional(),
     }),
     z.object({
       type: z.literal("subscribe"),

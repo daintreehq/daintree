@@ -254,6 +254,35 @@ describe("restoreClosedTerminals", () => {
     );
   });
 
+  // #15977: a rollback brings a scheduled run's pane back still the run's.
+  it("brings back who started the terminal and the scheduled run it belongs to", async () => {
+    const run = { scheduleId: "schedule-1", runId: "run-1" };
+    seed([
+      ptyPanel({
+        id: "agent",
+        cwd: "/repo/wt",
+        launchAgentId: "claude",
+        command: "claude",
+        spawnedBy: "schedule",
+        scheduledRun: run,
+      }),
+      ptyPanel({ id: "other", cwd: "/repo/wt", spawnedBy: "palette", scheduledRun: run }),
+    ]);
+    const snapshots = captureWorktreeTerminalSnapshot("wt-1");
+
+    await restoreClosedTerminals(snapshots);
+
+    const byId = new Map(
+      addPanelMock.mock.calls.map(([options]) => {
+        const launched = options as { requestedId?: string; scheduledRun?: unknown };
+        return [launched.requestedId, launched] as const;
+      })
+    );
+    expect(byId.get("agent")).toMatchObject({ spawnedBy: "schedule", scheduledRun: run });
+    expect(byId.get("other")).toMatchObject({ spawnedBy: "palette" });
+    expect(byId.get("other")?.scheduledRun).toBeUndefined();
+  });
+
   it("relaunches a plain terminal with its stored command and never builds a resume command", async () => {
     await restoreClosedTerminals([{ id: "plain", location: "grid", command: undefined }]);
     expect(buildResumeCommandMock).not.toHaveBeenCalled();

@@ -124,11 +124,13 @@ describe('contributes.forgeProviders under "scope": "project"', () => {
       contributes: { forgeProviders: [forgeProvider] },
     });
     const message = messageForCode(result, "forge_provider_project_scope_forbidden") ?? "";
-    // The refusal must explain WHY, matching the runtime refusal in
-    // pluginDevWorkerHostProxy.registerForgeProvider.
+    // The refusal must explain WHY, matching the worker's registerForgeProvider
+    // in pluginDevWorkerContributionFacet.ts, which binds nothing.
     expect(message).toContain("synchronous");
     expect(message).toMatch(/worker/i);
     expect(message).toContain("parseRemote");
+    expect(message).toContain("binds no implementation");
+    expect(message).not.toContain("refuse");
   });
 
   it("accepts a project plugin with an empty forgeProviders array", () => {

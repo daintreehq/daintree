@@ -732,7 +732,7 @@ describe("GlobalBannerCoordinator — missing prerequisite slot (#11763)", () =>
 
   it("names the tools collectively when more than one is missing", () => {
     useMissingPrerequisiteStore.setState({
-      missing: [missingGit(), missingGit({ tool: "node", label: "Node.js" })],
+      missing: [missingGit(), missingGit({ tool: "other-tool", label: "Other tool" })],
     });
 
     render(<GlobalBannerCoordinator />);

@@ -126,8 +126,13 @@
       color var(--duration-150) ease-out;
   }
 
-  button.search-field:hover {
+  /* Keyboard focus lifts the label exactly as hover does. Without it the
+     focus-visible state changed only the 1px edge, which on dark themes is a
+     small step, while the pointer state got the brighter label too. */
+  button.search-field:hover,
+  button.search-field:focus-visible {
     color: var(--theme-text-primary);
+    --search-field-icon: var(--theme-text-primary);
   }
 
   button.search-field:focus-visible {
@@ -151,6 +156,7 @@
     /* Secondary, not muted: this glyph is what identifies the field, and
        text-muted has no dark-theme contrast floor. */
     color: var(--search-field-icon, var(--theme-text-secondary));
+    transition: color var(--duration-150) ease-out;
   }
 
   .search-field[data-size="compact"] .search-field-icon {
@@ -226,15 +232,21 @@
       border: none !important;
     }
 
+    /* One pixel, like every other mode: the generic "2px border on every
+       button" rule would otherwise widen the palette's button-drawn field, and
+       the family's subtle edge is an owner ruling. Contrast comes from the ink.
+       !important because this file is layered and that rule is not. */
     .search-field {
       border-color: var(--theme-border-input);
+      border-width: 1px !important;
     }
 
+    /* Focus steps the one-pixel edge up to primary ink and keeps the wash; no
+       second outline, which drew a doubled 2px perimeter. */
     .search-field:has(.search-field-input:focus-visible),
     button.search-field:focus-visible {
       border-color: var(--theme-text-primary);
-      outline: 1px solid var(--theme-text-primary);
-      outline-offset: 0;
+      outline: none;
     }
   }
 

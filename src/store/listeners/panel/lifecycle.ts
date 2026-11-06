@@ -1,6 +1,8 @@
 import type { TerminalStatusPayload } from "@shared/types";
 import type { TerminalReliabilityMetricPayload } from "@shared/types/pty-host";
 import { isPtyPanel } from "@shared/types/panel";
+import { presetLaunchContent } from "@shared/utils/agentPresetLaunchConsent";
+import { fallbackHopApproved } from "@/services/plugin/pluginPresetLaunchApprovals";
 import { terminalRegistryController } from "@/controllers";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -9,6 +11,11 @@ import { isAgentTerminal } from "@/utils/terminalType";
 import { logInfo, logError } from "@/utils/logger";
 import { isTerminalRestarting } from "@/store/restartExitSuppression";
 import { usePanelStore, type PanelGridState } from "@/store/panelStore";
+import { saveNormalized } from "@/store/slices/panelRegistry/persistence";
+import {
+  deferPersistToBatchEnd,
+  isHydrationBatchActive,
+} from "@/store/slices/panelRegistry/hydrationBatch";
 import { useUIStore } from "@/store/uiStore";
 
 /**
@@ -21,6 +28,15 @@ const canopyRestores = new Set<string>();
 function overlayHoldsKeyboard(): boolean {
   return useUIStore.getState().overlayStack.length > 0;
 }
+
+function persistExit(): void {
+  if (isHydrationBatchActive()) {
+    deferPersistToBatchEnd();
+    return;
+  }
+  const { panelsById, panelIds } = usePanelStore.getState();
+  saveNormalized(panelsById, panelIds);
+}
 import {
   enqueueFlowStatusUpdate,
   enqueueHeldDurationUpdate,
@@ -29,6 +45,7 @@ import {
 } from "@/store/panelStatusBuffer";
 import { DisposableStore, toDisposable } from "@/utils/disposable";
 import { getMergedPresets } from "@/config/agents";
+import { supportsConversationKeepingSwitch } from "@shared/types/agentSettings";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
@@ -86,16 +103,22 @@ export async function handleFallbackTriggered(data: {
   // (#14370): a hop ends a live conversation, which a team-shared project file
   // can't agree to for them. Nothing is said otherwise, or once the chain runs
   // out, because the pane's rate-limit chip already shows the limit.
+  let keepConversation = false;
   if (reason === "rate-limit") {
     // Resolved like any other preset (sanitized, first id wins), from the
     // user's own presets alone.
-    const optedIn =
-      getMergedPresets(agentId, entry.customPresets, [], []).find((p) => p.id === originalPresetId)
-        ?.fallbackOnRateLimit === true;
+    const ownOriginal = getMergedPresets(agentId, entry.customPresets, [], []).find(
+      (p) => p.id === originalPresetId
+    );
+    const optedIn = ownOriginal?.fallbackOnRateLimit === true;
     if (!optedIn || !nextPresetId) {
       fallbackInFlight.delete(terminalId);
       return;
     }
+    // The same consent boundary for keeping the conversation (#16045).
+    keepConversation =
+      ownOriginal?.keepConversationOnRateLimit === true &&
+      supportsConversationKeepingSwitch(agentId);
   }
 
   const fromPreset = mergedPresets.find((p) => p.id === fromPresetId);
@@ -169,6 +192,34 @@ export async function handleFallbackTriggered(data: {
     return;
   }
 
+  // A pane a plugin launched on an approved preset hops only to a fallback the
+  // person approved with it, as it was then (#16324).
+  if (!fallbackHopApproved(terminalId, nextPresetId, presetLaunchContent(nextPreset))) {
+    notify({
+      type: "error",
+      priority: "high",
+      title: "Fallback preset changed",
+      message: `"${nextPreset.name}" changed after the plugin's launch on ${fromName} was approved, so the terminal didn't switch to it. Restart the terminal to continue.`,
+      duration: 12000,
+      supersedeKey: fallbackSupersedeKey,
+      context: { ...fallbackAddress },
+      action: {
+        label: "Open agent settings",
+        actionId: "app.settings.openTab",
+        actionArgs: { tab: "agents" },
+        onClick: () => {
+          void actionService.dispatch(
+            "app.settings.openTab",
+            { tab: "agents" },
+            { source: "user" }
+          );
+        },
+      },
+    });
+    fallbackInFlight.delete(terminalId);
+    return;
+  }
+
   try {
     logInfo("[TerminalStore] Activating fallback preset", {
       terminalId,
@@ -178,9 +229,10 @@ export async function handleFallbackTriggered(data: {
       reason,
     });
 
-    const result = await usePanelStore
-      .getState()
-      .activateFallbackPreset(terminalId, nextPresetId, originalPresetId);
+    const activate = usePanelStore.getState().activateFallbackPreset;
+    const result = keepConversation
+      ? await activate(terminalId, nextPresetId, originalPresetId, { keepConversation: true })
+      : await activate(terminalId, nextPresetId, originalPresetId);
 
     if (result.success) {
       notify({
@@ -193,7 +245,9 @@ export async function handleFallbackTriggered(data: {
           reason === "auth"
             ? `${fromName} authentication failed — now running "${nextPreset.name}".`
             : reason === "rate-limit"
-              ? `${fromName} hit its usage limit — now running "${nextPreset.name}" in a new conversation.`
+              ? result.resumedSessionId
+                ? `${fromName} hit its usage limit — now reopening this conversation on "${nextPreset.name}".`
+                : `${fromName} hit its usage limit — now running "${nextPreset.name}" in a new conversation.`
               : `${fromName} unreachable — now running "${nextPreset.name}".`,
         supersedeKey: fallbackSupersedeKey,
         context: { ...fallbackAddress },
@@ -487,6 +541,11 @@ export function setupLifecycleListeners(): DisposableStore {
         });
 
         state.setRuntimeStatus(id, "exited");
+
+        // A kept pane shows this exit from now on, so the layout records it
+        // (#15941): a reload brings the exit back rather than a new process.
+        // A trashed or removed pane saves itself on the way out.
+        if (!sessionPreservingExit) persistExit();
 
         // If already trashed, this is TTL expiry cleanup - permanently remove
         if (terminal.location === "trash") {

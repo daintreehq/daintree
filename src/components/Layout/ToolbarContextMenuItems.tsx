@@ -1,4 +1,4 @@
-import { EyeOff, Unplug } from "lucide-react";
+import { EyeOff, PinOff } from "lucide-react";
 import {
   ContextMenuActionItem,
   ContextMenuItem,
@@ -92,7 +92,7 @@ export function ToolbarContextMenuItems({
         </DropdownMenuActionItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={handleUnpin}>
-          <Unplug data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+          <PinOff data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
           {TOOLBAR_UNPIN_LABEL}
         </DropdownMenuItem>
         {handleHideInProject && (
@@ -113,7 +113,7 @@ export function ToolbarContextMenuItems({
       </ContextMenuActionItem>
       <ContextMenuSeparator />
       <ContextMenuItem onSelect={handleUnpin}>
-        <Unplug data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+        <PinOff data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
         {TOOLBAR_UNPIN_LABEL}
       </ContextMenuItem>
       {handleHideInProject && (

@@ -26,6 +26,7 @@ import {
 } from "../../../services/plugin/projectLayoutSeeds.js";
 import { relaunchApp } from "../../../lifecycle/appRelaunch.js";
 import { getDatabaseMaintenanceService } from "../../../services/DatabaseMaintenanceService.js";
+import { noteDatabaseNoticeRendererReady } from "../../../services/databaseBackupNotice.js";
 import { USAGE_WINDOW_MS, MAX_USES_PER_ENTRY } from "../../../../shared/utils/actionUsage.js";
 
 export const CRASH_CRITICAL_FIELDS = new Set([
@@ -64,6 +65,7 @@ import { getPanelSuspectLedger } from "../../../services/PanelSuspectLedgerServi
 import { inferKind } from "../../../../shared/utils/inferPanelKind.js";
 import { broadcastToRenderer, typedHandle, typedHandleWithContext } from "../../utils.js";
 import { signalFirstInteractive } from "../../../window/deferredInitQueue.js";
+import { releaseReloadNotice } from "../../../window/rendererReloadNotice.js";
 import { markPerformance } from "../../../utils/performance.js";
 import { PERF_MARKS } from "../../../../shared/perf/marks.js";
 import { readHydrateTerminalConfig } from "../../../services/AppHydrationService.js";
@@ -249,6 +251,25 @@ function withoutUndrivenHostFields(
 }
 
 /** Whether `projectId` has yet to have its first-open layout seed decided (#13782). */
+/**
+ * Give back the plugin launch records an earlier run left for the panes this
+ * hydrate restores (#16240). The ledger lives with the plugin host, off the
+ * startup graph, so it loads only once a record exists for it to restore.
+ */
+function admitRestoredPluginLaunchesFor(
+  terminals: ReadonlyArray<{ id?: unknown; launchedByPluginId?: unknown }>
+): void {
+  if (terminals.length === 0) return;
+  const stored = store.get("pluginLaunchedAgents");
+  if (stored === null || typeof stored !== "object" || Object.keys(stored).length === 0) return;
+  const panes = terminals.map(({ id, launchedByPluginId }) => ({ id, launchedByPluginId }));
+  void import("../../../services/plugin/pluginLaunchStore.js")
+    .then(({ admitRestoredPluginLaunchesFromStore }) => admitRestoredPluginLaunchesFromStore(panes))
+    .catch((error: unknown) => {
+      console.error("[AppHydrate] Failed to restore plugin launch records:", error);
+    });
+}
+
 function isLayoutSeedUndecided(projectId: string): boolean {
   try {
     return getProjectLayoutSeed(projectId) === null;
@@ -510,8 +531,11 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     let draftInputsToUse: Record<string, string> | undefined;
 
     if (workspaceId) {
-      const { state: projectState, quarantinedPath } =
-        await projectStore.getProjectStateWithRecovery(workspaceId);
+      const {
+        state: projectState,
+        quarantinedPath,
+        unreadableInPlace,
+      } = await projectStore.getProjectStateWithRecovery(workspaceId);
       projectStateQuarantinedPath = quarantinedPath;
       if (currentProject !== null) {
         // Read before this hydrate writes the project's fresh state below. A
@@ -586,6 +610,14 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             `[AppHydrate] Migrated focusMode (${focusModeToUse}) to per-project state for ${currentProject?.name}`
           );
         }
+      } else if (unreadableInPlace && !hasCrashRestoreTerminals) {
+        // state.json is still there but could neither be read nor moved aside,
+        // so this null is not a project without history: seeding it, or
+        // migrating legacy panels into it, would write over the only copy.
+        // Hydrate empty; saves stay refused until a read can use or move it.
+        console.warn(
+          `[AppHydrate] State for ${workspaceId} is unreadable and still in place; hydrating empty without writing`
+        );
       } else if (
         canInheritLegacyWorkspaceState &&
         globalAppState.terminals &&
@@ -603,8 +635,10 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         );
         terminalsSource = "migration";
 
-        // Migrate terminals to per-project state with kind inference
-        if (terminalsToUse.length > 0) {
+        // Migrate terminals to per-project state with kind inference. A crash
+        // restore over an unreadable file still shows its panels, but writes
+        // nothing until a read can use or move that file.
+        if (!unreadableInPlace && terminalsToUse.length > 0) {
           // Saved held: the hold above found no per-project panes to hold.
           const migratedTerminals = holdTerminalsForHostEnds(
             terminalsToUse.map(
@@ -647,7 +681,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
           console.log(
             `[AppHydrate] Migrated ${migratedTerminals.length} terminals and focusMode to per-project state`
           );
-        } else {
+        } else if (!unreadableInPlace) {
           // Normalize legacy focusPanelState
           const normalizedFocusPanelState = globalAppState.focusPanelState
             ? {
@@ -866,9 +900,21 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       userAgentRegistry: loadSanitizedUserAgentRegistry(),
     };
   };
-  handlers.push(typedHandleWithContext(CHANNELS.APP_HYDRATE, handleAppHydrate));
+  handlers.push(
+    typedHandleWithContext(CHANNELS.APP_HYDRATE, async (ctx: IpcContext) => {
+      const hydrate = await handleAppHydrate(ctx);
+      admitRestoredPluginLaunchesFor(hydrate.appState.terminals);
+      return hydrate;
+    })
+  );
 
-  const handleAppBoot = async (ctx: IpcContext) => composeBootResult(await handleAppHydrate(ctx));
+  const handleAppBoot = async (ctx: IpcContext) => {
+    const boot = composeBootResult(await handleAppHydrate(ctx));
+    // A pending crash throws this payload away and restores from the hydrate
+    // that follows the user's choice, so only that one hands panes back.
+    if (boot.crashPending === null) admitRestoredPluginLaunchesFor(boot.appState.terminals);
+    return boot;
+  };
   handlers.push(typedHandleWithContext(CHANNELS.APP_BOOT, handleAppBoot));
 
   const handleAppGetState = async () => {
@@ -1257,6 +1303,10 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         webContentsId: ctx.webContentsId,
       });
       signalFirstInteractive(ctx.webContentsId);
+      // A backup suspension raised while no window could show it waits for this one.
+      noteDatabaseNoticeRendererReady(ctx.webContentsId);
+      // So does the notice explaining why this view just reloaded.
+      if (ctx.event) releaseReloadNotice(ctx.event.sender);
       // Close the cold-start timeline for a view this window's manager
       // cold-started (input-ready log + trace mark); no-op for warm views.
       // Same per-window resolution as APP_VIEW_PAINTED below.

@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostMetricsEvent } from "@shared/types/ipc/hostMetrics";
 import type { HostDescriptor } from "@shared/types/remoteHosts";
 import { _resetHostListForTesting } from "../../hostList";
-import { _resetHostMetricsFeedForTesting } from "../hostMetricsFeed";
+import { _resetHostAttentionFeedForTesting } from "../hostMetricsFeed";
 import { HostsOverviewMount } from "../HostsOverviewMount";
 import { LazyOtherHostsWorktrees, LazyWorktreePlacementRow } from "../LazyHostOverviewParts";
 
@@ -82,7 +82,7 @@ describe("with no host added", () => {
   afterEach(() => {
     client.dispose();
     _resetHostListForTesting();
-    _resetHostMetricsFeedForTesting();
+    _resetHostAttentionFeedForTesting();
     vi.clearAllMocks();
   });
 
@@ -100,14 +100,15 @@ describe("with no host added", () => {
         <LazyOtherHostsWorktrees onNavigate={() => {}} />
       </>
     );
-    // The overview's lazy host mounts and its summary feed asks whether hosts are in use.
+    // The overview's lazy host mounts; closed, it follows no summaries and asks nothing about them.
     await act(async () => {
       await vi.dynamicImportSettled();
     });
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
-    expect(bridge.remoteHosts.isInUse).toHaveBeenCalled();
+    expect(bridge.hostMetrics.onEvent).toHaveBeenCalled();
+    expect(bridge.remoteHosts.isInUse).not.toHaveBeenCalled();
 
     expect(bridge.remoteHosts.list).toHaveBeenCalled();
     expect(container.querySelector('[data-testid="worktree-host-select"]')).toBeNull();

@@ -121,6 +121,11 @@ export const theme: BuiltInThemeSource = {
     },
     strategy: {
       shadowStyle: "light",
+      // The cream panel neutralises the engine's default status wash: an
+      // error band rendered the same tint as a neutral strip. Pane banners
+      // carry severity in the band and the glyph alone, so the band has to
+      // read as its hue.
+      statusSurfaceOpacity: 1.85,
       materialBlur: 12,
       materialSaturation: 115,
       // The granular tile replaces the universal photographic noise.
@@ -132,6 +137,12 @@ export const theme: BuiltInThemeSource = {
     },
   },
   tokens: {
+    // Completed falls back to `status-success`, which is the working green here,
+    // so a project with runs going and runs finished-unread drew its two-tone
+    // mark as one disc (#15866). Same hue, a step deeper and duller, the way
+    // table-mountain and hokkaido already part the two: ΔE 0.093 from working,
+    // and the lightness step survives a red-green reading where chroma doesn't.
+    "activity-completed": "#29543E",
     "accent-muted": "rgba(0,78,107,0.30)",
     // Bondi's selection vocabulary is "elevate to white, mark with a rail" — it
     // never fills with accent. `accent-soft`'s single consumer is QuickRun's
@@ -182,11 +193,9 @@ export const theme: BuiltInThemeSource = {
     "overlay-hover": "rgba(50,46,38,0.08)",
     // Derived 3% is sub-threshold over near-white surfaces.
     "overlay-soft": "rgba(50,46,38,0.055)",
-    // The keyboard-current row in palettes and menus (overlay-highlight derives
-    // from this). Those rows sit on white popovers, where there is nothing
-    // lighter to elevate to, so the row steps DOWN into sand. #F6F0E7 was
-    // 1.13:1 against the white and easy to lose mid-list; this is 1.24:1, the
-    // weight light IDE quick-pick rows carry.
+    // Opaque elevate-to-select plane (armed toolbar controls, settings scope).
+    // Over white there is nothing lighter to elevate to, so the plane steps
+    // DOWN into sand, 1.24:1 against the white.
     "overlay-raised": "#EEE6D8",
     // Forge chips and glyphs in resting chrome. The engine defaults are
     // GitHub's brand hexes (#176E31, #CF222E, #7544CC): a fourth green and a

@@ -3,7 +3,8 @@
 // every view registers at boot (#14273). Nothing here may import
 // terminalQueryActions.ts at runtime.
 import type { ActionContext } from "@shared/types/actions";
-import { readTailSnapshot, tailCapturedOutput } from "@shared/utils/artifactParser";
+import { readTailSnapshot } from "@shared/utils/artifactParser";
+import { captureTerminalTail } from "@shared/utils/terminalInputLine";
 import {
   boundTerminalStatusOutput,
   fitTerminalOutputResult,
@@ -35,12 +36,16 @@ import { appendHandbackInstruction, mintHandbackCode } from "@shared/utils/handb
 import { buildTerminalSendCommandReceipt } from "@shared/utils/terminalSendCommandResult";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
+import {
+  matchesTerminalLocationFilter,
+  type TerminalLocationFilter,
+} from "@shared/utils/terminalLocationFilter";
 
 export const terminalQueryActionRuns = {
   "terminal.list": async (args: unknown) => {
     const { worktreeId, location, owned, terminalId, includeClientMetadata } = (args ?? {}) as {
       worktreeId?: string;
-      location?: "grid" | "dock" | "trash" | "background";
+      location?: TerminalLocationFilter;
       owned?: boolean;
       terminalId?: string;
       includeClientMetadata?: boolean;
@@ -79,13 +84,7 @@ export const terminalQueryActionRuns = {
       terminals = terminals.filter((t) => t.id === terminalId);
     }
 
-    // Filter by location if specified
-    if (location) {
-      terminals = terminals.filter((t) => t.location === location);
-    } else {
-      // By default, exclude trashed and backgrounded terminals
-      terminals = terminals.filter((t) => t.location !== "trash" && t.location !== "background");
-    }
+    terminals = terminals.filter((t) => matchesTerminalLocationFilter(t.location, location));
 
     // Return essential metadata only (avoid returning full PTY buffers)
     const result = terminals.map((t) => ({
@@ -162,18 +161,21 @@ export const terminalQueryActionRuns = {
     // Collapse blank padding BEFORE tailing so the last N lines are real
     // content, not the blank region bottom-padding TUIs (e.g. Codex) leave
     // below their composer (#10763). truncated/lineCount track normalized
-    // content, so trailing padding never reads as "output omitted".
-    const { content, lineCount, truncated } = tailCapturedOutput(
+    // content, so trailing padding never reads as "output omitted". The input
+    // box is read off the same screen (#16189).
+    const panel = usePanelStore.getState().panelsById[terminalId];
+    const { content, lineCount, truncated, inputLine } = captureTerminalTail(
       serializedState.data,
       effectiveMaxLines,
-      stripAnsi
+      stripAnsi,
+      panel && isPtyPanel(panel) ? (panel.detectedAgentId ?? panel.launchAgentId) : undefined
     );
 
     // Fit under the response cap here, keeping the newest lines (#12450).
     // Left to the transport, an oversized tail is cut from the end — the
     // newest lines — into JSON that will not parse, and reported as an error.
     return fitTerminalOutputResult(
-      { terminalId, content, lineCount, truncated },
+      { terminalId, content, lineCount, truncated, inputLine },
       MCP_RESPONSE_TEXT_MAX_BYTES
     );
   },
@@ -187,7 +189,7 @@ export const terminalQueryActionRuns = {
     } = (args ?? {}) as {
       terminalIds?: string[];
       worktreeId?: string;
-      location?: "grid" | "dock" | "trash" | "background";
+      location?: TerminalLocationFilter;
       includeOutput?: boolean | { lines?: number; stripAnsi?: boolean };
       submissionToken?: string;
     };
@@ -234,11 +236,7 @@ export const terminalQueryActionRuns = {
       if (worktreeId) {
         terminals = terminals.filter((t) => t.worktreeId === worktreeId);
       }
-      if (location) {
-        terminals = terminals.filter((t) => t.location === location);
-      } else {
-        terminals = terminals.filter((t) => t.location !== "trash" && t.location !== "background");
-      }
+      terminals = terminals.filter((t) => matchesTerminalLocationFilter(t.location, location));
 
       for (const t of terminals) {
         resolved.push({ id: t.id, terminal: t });
@@ -367,7 +365,14 @@ export const terminalQueryActionRuns = {
         } else if (submissions !== null) {
           const lookup = submissions[terminal.id] ?? { status: "unreadable" as const };
           if (lookup.status === "found") {
-            entry.submission = lookup.record;
+            // The captured output is terminal text (#16210), held back from
+            // plugins for the same reason `includeOutput` is.
+            if (ctx?.dispatchSource === "plugin" && lookup.record.output !== undefined) {
+              const { output: _withheld, ...record } = lookup.record;
+              entry.submission = record;
+            } else {
+              entry.submission = lookup.record;
+            }
           } else if (lookup.status === "absent") {
             // The terminal WAS read and holds nothing, so absence is
             // evidence and `unknown` is a claim we can make.
@@ -397,8 +402,14 @@ export const terminalQueryActionRuns = {
             // Normalize before tailing (#10763) — see terminal.getOutput.
             // Without this, a bottom-padding TUI's blank rows fill the small
             // last-N window and recentOutput reads as empty even when idle.
-            const tail = tailCapturedOutput(serialized.data, effectiveLines, stripAnsi);
+            const tail = captureTerminalTail(
+              serialized.data,
+              effectiveLines,
+              stripAnsi,
+              entry.agentId
+            );
             entry.recentOutput = tail.content;
+            entry.inputLine = tail.inputLine;
             if (tail.truncated) entry.recentOutputTruncated = true;
           }
         }
@@ -506,19 +517,30 @@ export const terminalQueryActionRuns = {
     const submissionToken = crypto.randomUUID();
 
     // Send command via submit (handles bracketed paste). Resolving means
-    // queued, not written — which is exactly why the token exists.
+    // queued, not written — which is exactly why the token exists. Refused
+    // while the agent is observed at a choice dialog, which would take the
+    // text (#16209); main reads the host's latest observation, and the host
+    // checks again when the line reaches the lane.
+    // `ActionService` reports that refusal under its own code.
     if (handback === true) {
       // The code never leaves Daintree: the caller reads the marker back as
       // `lastHandback`, so the receipt below still echoes its own text.
       const handbackCode = mintHandbackCode();
       await terminalClient.submit(
         terminalId,
-        appendHandbackInstruction(command, handbackCode),
+        appendHandbackInstruction(command, handbackCode, "run"),
         submissionToken,
-        handbackCode
+        handbackCode,
+        "no-choice-dialog"
       );
     } else {
-      await terminalClient.submit(terminalId, command, submissionToken);
+      await terminalClient.submit(
+        terminalId,
+        command,
+        submissionToken,
+        undefined,
+        "no-choice-dialog"
+      );
     }
 
     // A clear message so the AI model knows not to repeat this action, with

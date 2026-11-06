@@ -8,6 +8,13 @@ import {
   type OpenRun,
 } from "../HostCallRuntime.js";
 import { MAX_RELAY_ARGS_BYTES, MAX_RELAY_RUN_MS, type McpCallAnswer } from "../linkMethods.js";
+import { DEFAULT_TERMINAL_EXIT_WAIT_MS } from "../../../../shared/types/terminalExitWait.js";
+import {
+  MCP_DISPATCH_TIMEOUT_MS,
+  MCP_REMOTE_CONFIRM_MARGIN_MS,
+  MCP_REMOTE_DISPATCH_TIMEOUT_MS,
+} from "../../../../shared/config/mcpConfirmWindow.js";
+import { LAUNCH_SETUP_WAIT_DEFAULT_MS } from "../../../../shared/utils/launchInNewWorktree.js";
 
 const RUN_A: OpenRun = {
   projectId: "proj-1",
@@ -92,6 +99,41 @@ describe("HostCallRuntime host.call (#13493)", () => {
       });
       expect(relayCall).not.toHaveBeenCalled();
     });
+  });
+
+  it("tells each host it asked to hold a message that its session ended, once (#16187)", async () => {
+    const throwawayRelease = vi.fn(async () => {});
+    runtime = new HostCallRuntime({
+      getSessionLane: (id) => lanes.get(id) ?? null,
+      callerRun: (id) => runs.get(id) ?? null,
+      client: () => ({ relayCall, throwawayRelease }) as never,
+      hosts: () => [host(), host({ hostId: "laptop", name: "laptop" })],
+      inLocalView: (id) => localViews.has(id),
+      controlEnabled: () => true,
+      newId: () => `00000000-0000-4000-8000-00000000000${++ids}`,
+    });
+    const send = (hostId: string, args: Record<string, unknown>) =>
+      runtime.call(
+        "a",
+        {
+          hostId,
+          projectId: "proj-2",
+          tool: "terminal.sendCommandOwned",
+          args: { terminalId: "t-1", command: "go", generation: 1, ...args },
+        },
+        { tier: "core" }
+      );
+    await send("studio", { whenBusy: "queue" });
+    await send("studio", { whenBusy: "queue" });
+    // A send that holds nothing leaves its host nothing to drop.
+    await send("laptop", {});
+
+    runtime.endHelpSession("a");
+    expect(throwawayRelease).toHaveBeenCalledTimes(1);
+    expect(throwawayRelease).toHaveBeenCalledWith("studio", { helpSessionId: "a" });
+
+    runtime.endHelpSession("a");
+    expect(throwawayRelease).toHaveBeenCalledTimes(1);
   });
 
   it("sends the call with a fresh callId, the caller's help session and tier, and returns the host's result", async () => {
@@ -311,12 +353,124 @@ describe("HostCallRuntime host.call (#13493)", () => {
       ["other", false],
     ]);
   });
+
+  it("reports an answered call with where it ran and when it was asked, for a schedule's run (#16169)", async () => {
+    const noteAnswered = vi.fn();
+    const launched: McpCallAnswer = {
+      status: "done",
+      result: { isError: false, structured: { launched: true, terminalId: "t-w" }, text: null },
+    };
+    let answer!: (value: McpCallAnswer) => void;
+    relayCall
+      .mockReturnValueOnce(new Promise<McpCallAnswer>((resolve) => (answer = resolve)))
+      .mockResolvedValueOnce({ status: "refused", reason: "control-off" })
+      .mockResolvedValueOnce(launched);
+    let clock = 5_000;
+    runtime = new HostCallRuntime({
+      getSessionLane: (id) => lanes.get(id) ?? null,
+      callerRun: (id) => runs.get(id) ?? null,
+      client: () => ({ relayCall }) as never,
+      hosts: () => hosts,
+      inLocalView: (id) => localViews.has(id),
+      controlEnabled: (hostId) => control.has(hostId),
+      newId: () => `00000000-0000-4000-8000-00000000000${++ids}`,
+      now: () => clock,
+      noteAnswered,
+    });
+    const launch = { ...CALL, tool: "agent.launch", args: { agentId: "codex" } };
+
+    const first = runtime.call("a", launch, { tier: "full" });
+    await vi.waitFor(() => expect(relayCall).toHaveBeenCalledTimes(1));
+    // The answer comes later: the call still dates from when it was sent.
+    clock = 9_000;
+    answer(launched);
+    const settled = await first;
+    expect(noteAnswered).toHaveBeenCalledWith({
+      helpSessionId: "a",
+      hostId: "studio",
+      hostName: "studio-01",
+      projectId: "proj-2",
+      tool: "agent.launch",
+      args: { agentId: "codex" },
+      structured: { launched: true, terminalId: "t-w" },
+      askedAt: 5_000,
+    });
+
+    // A refused call ran nothing, so it says nothing.
+    await runtime.call("a", launch, { tier: "full" });
+    expect(noteAnswered).toHaveBeenCalledTimes(1);
+
+    // A resend that gets the answer back still dates from the first send.
+    if (!settled.ok || settled.value.callId === null) throw new Error("not sent");
+    noteAnswered.mockClear();
+    clock = 20_000;
+    await runtime.call("a", { ...launch, callId: settled.value.callId }, { tier: "full" });
+    expect(noteAnswered).toHaveBeenCalledTimes(1);
+    expect(noteAnswered).toHaveBeenCalledWith(expect.objectContaining({ askedAt: 5_000 }));
+
+    // So does a retry under the caller's own id, once nothing here holds the call.
+    const ownId = "00000000-0000-4000-8000-0000000000aa";
+    relayCall.mockResolvedValueOnce(launched).mockResolvedValueOnce(launched);
+    clock = 30_000;
+    await runtime.call("a", { ...launch, newCallId: ownId }, { tier: "full" });
+    noteAnswered.mockClear();
+    clock = 40_000;
+    await runtime.call("a", { ...launch, newCallId: ownId }, { tier: "full" });
+    expect(noteAnswered).toHaveBeenCalledTimes(1);
+    expect(noteAnswered).toHaveBeenCalledWith(expect.objectContaining({ askedAt: 30_000 }));
+
+    // The same id on another host is another call, with a time of its own.
+    hosts = [host(), host({ hostId: "other", name: "other-01" })];
+    control.add("other");
+    relayCall.mockResolvedValueOnce(launched);
+    noteAnswered.mockClear();
+    clock = 50_000;
+    await runtime.call("a", { ...launch, hostId: "other", newCallId: ownId }, { tier: "full" });
+    expect(noteAnswered).toHaveBeenCalledWith(
+      expect.objectContaining({ hostId: "other", askedAt: 50_000 })
+    );
+  });
 });
 
 describe("relayRunMs", () => {
   it("gives a call at least the time a dispatch and a confirmation take", () => {
     expect(relayRunMs("terminal.list", {})).toBe(relayRunMs("terminal.list", { timeoutMs: 1 }));
     expect(relayRunMs("terminal.list", {})).toBeGreaterThanOrEqual(60_000);
+  });
+
+  it("outlasts the host's whole wait on a confirmation here, with room for the answer (#15699)", () => {
+    // The host's MCP call runs for runMs; its wait on this Shell's dialog ends inside that.
+    expect(relayRunMs("worktree.delete", {}) - MCP_REMOTE_CONFIRM_MARGIN_MS).toBeGreaterThan(
+      MCP_REMOTE_DISPATCH_TIMEOUT_MS
+    );
+    // A short wait the call asks for doesn't shorten it.
+    expect(relayRunMs("worktree.delete", { timeoutMs: 5_000 })).toBe(
+      relayRunMs("worktree.delete", {})
+    );
+  });
+
+  it("gives a retirement its exit wait and then a whole confirmation (#15737)", () => {
+    // The wait runs before the delete's confirmation, so neither may eat the other's time.
+    expect(relayRunMs("worktree.retireOwned", { timeoutMs: 60_000 })).toBeGreaterThan(
+      60_000 + MCP_REMOTE_DISPATCH_TIMEOUT_MS
+    );
+    // Every millisecond of wait it asks for is added, and none asked means the default wait.
+    expect(
+      relayRunMs("worktree.retireOwned", { timeoutMs: 50_000 }) -
+        relayRunMs("worktree.retireOwned", { timeoutMs: 20_000 })
+    ).toBe(30_000);
+    expect(relayRunMs("worktree.retireOwned", {})).toBe(
+      relayRunMs("worktree.retireOwned", { timeoutMs: DEFAULT_TERMINAL_EXIT_WAIT_MS })
+    );
+  });
+
+  it("leaves a call that never asks anyone its own floor", () => {
+    expect(relayRunMs("throwaway.launch", {}, 90_000)).toBe(90_000);
+    expect(relayRunMs("throwaway.launch", { timeoutMs: 1_000 }, 90_000)).toBe(90_000);
+    expect(relayRunMs("throwaway.launch", {}, 90_000)).toBeLessThan(
+      relayRunMs("throwaway.launch", {})
+    );
+    expect(relayRunMs("throwaway.launch", { timeoutMs: 600_000 }, 90_000)).toBeGreaterThan(600_000);
   });
 
   it("runs past the longest wait the call's own arguments ask for", () => {
@@ -326,6 +480,30 @@ describe("relayRunMs", () => {
     );
     // A check with no timeout of its own runs to its default.
     expect(relayRunMs("project.runCheck", {})).toBeGreaterThan(relayRunMs("terminal.list", {}));
+  });
+
+  it("gives a new-worktree launch its setup wait and its reply wait back to back (#15738)", () => {
+    expect(
+      relayRunMs("agent.launchInNewWorktree", {
+        setupTimeoutMs: 400_000,
+        waitForReply: true,
+        waitSeconds: 1_200,
+      })
+    ).toBeGreaterThan(400_000 + 1_200_000);
+    // With no budget named, the setup wait it will still run counts.
+    expect(
+      relayRunMs("agent.launchInNewWorktree", { waitForReply: true, waitSeconds: 1_200 })
+    ).toBeGreaterThan(LAUNCH_SETUP_WAIT_DEFAULT_MS + 1_200_000);
+    // Each wait moves it by exactly its own length: summed, not the larger.
+    const at = (setupTimeoutMs: number, waitSeconds: number) =>
+      relayRunMs("agent.launchInNewWorktree", { setupTimeoutMs, waitForReply: true, waitSeconds });
+    expect(at(500_000, 1_200) - at(400_000, 1_200)).toBe(100_000);
+    expect(at(400_000, 1_300) - at(400_000, 1_200)).toBe(100_000);
+    // A setup wait alone, and room for the create and launch dispatches around it.
+    expect(relayRunMs("agent.launchInNewWorktree", { setupTimeoutMs: 600_000 })).toBeGreaterThan(
+      600_000 + 2 * MCP_DISPATCH_TIMEOUT_MS
+    );
+    expect(at(600_000, 1_800)).toBeLessThan(MAX_RELAY_RUN_MS);
   });
 
   it("never asks the host for more than it allows", () => {

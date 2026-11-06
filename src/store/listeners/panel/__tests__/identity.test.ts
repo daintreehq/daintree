@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel } from "@shared/types/panel";
 import type {
   AgentState,
   AgentStateChangePayload,
@@ -79,6 +80,9 @@ vi.mock("@/store/createWorktreeStore", () => ({
     };
   },
 }));
+
+const handleAgentEndMock = vi.hoisted(() => vi.fn());
+vi.mock("@/services/terminal/agentEndRecovery", () => ({ handleAgentEnd: handleAgentEndMock }));
 
 import { setupIdentityListeners, _resetChangedFileBaseline } from "../identity";
 import { notify } from "@/lib/notify";
@@ -548,6 +552,11 @@ describe("identity listener — agentIncarnation sync (#12535)", () => {
   it("follows the host downward after a pty-host replay restarts the count", () => {
     setupPanel({ agentState: "idle", agentIncarnation: 2 });
     const d = setupIdentityListeners();
+    const written: string[] = [];
+    const off = usePanelStore.subscribe((state) => {
+      const panel = state.panelsById["term-1"];
+      if (panel && isPtyPanel(panel)) written.push(`${panel.agentState}:${panel.agentIncarnation}`);
+    });
 
     // The replacement record starts at zero. A panel that held 2 forward would
     // go on naming a session that no longer exists.
@@ -559,10 +568,13 @@ describe("identity listener — agentIncarnation sync (#12535)", () => {
         agentIncarnation: 0,
       })
     );
+    off();
 
     expect(usePanelStore.getState().panelsById["term-1"]).toMatchObject({
       agentIncarnation: 0,
     });
+    // The new state is never readable beside its predecessor's count.
+    expect(written).not.toContain("working:2");
 
     d.dispose();
   });
@@ -579,4 +591,105 @@ describe("identity listener — agentIncarnation sync (#12535)", () => {
 
     d.dispose();
   });
+});
+
+describe("identity listener — a host whose clock runs behind this machine's (#16062)", () => {
+  const HOST_LAG_MS = 60_000;
+
+  it("takes the host's working report after this machine stamped its own overlay", () => {
+    const hostNow = Date.now() - HOST_LAG_MS;
+    setupPanel();
+    const d = setupIdentityListeners();
+    emitState(makePayload({ state: "waiting", previousState: "working", timestamp: hostNow }));
+
+    // A composer draft puts the pane in directing and leaving it reverts to the
+    // last reported state, both stamped with this machine's clock.
+    usePanelStore.getState().updateAgentState("term-1", "directing");
+    usePanelStore.getState().updateAgentState("term-1", "waiting");
+
+    emitState(
+      makePayload({ state: "working", previousState: "waiting", timestamp: hostNow + 5_000 })
+    );
+
+    expect(usePanelStore.getState().panelsById["term-1"]).toMatchObject({
+      agentState: "working",
+      lastStateChange: hostNow + 5_000,
+    });
+    d.dispose();
+  });
+
+  it("records a waiting report it keeps off a directing pane, so nothing older follows it", () => {
+    const hostNow = Date.now() - HOST_LAG_MS;
+    setupPanel({ agentState: "directing" });
+    const d = setupIdentityListeners();
+
+    emitState(
+      makePayload({ state: "waiting", previousState: "working", timestamp: hostNow + 10_000 })
+    );
+    expect(usePanelStore.getState().panelsById["term-1"]).toMatchObject({
+      agentState: "directing",
+      lastAgentObservation: { agentState: "waiting", at: hostNow + 10_000 },
+    });
+
+    emitState(
+      makePayload({ state: "working", previousState: "waiting", timestamp: hostNow + 5_000 })
+    );
+    expect(usePanelStore.getState().panelsById["term-1"]).toMatchObject({
+      agentState: "directing",
+    });
+    d.dispose();
+  });
+
+  it("still drops a report from before the state the host last reported", () => {
+    const hostNow = Date.now() - HOST_LAG_MS;
+    setupPanel();
+    const d = setupIdentityListeners();
+    emitState(
+      makePayload({ state: "waiting", previousState: "working", timestamp: hostNow + 10_000 })
+    );
+    emitState(
+      makePayload({ state: "working", previousState: "waiting", timestamp: hostNow + 5_000 })
+    );
+
+    expect(usePanelStore.getState().panelsById["term-1"]).toMatchObject({
+      agentState: "waiting",
+    });
+    d.dispose();
+  });
+});
+
+describe("identity listener — a launched run's end (#16045)", () => {
+  it.each([
+    ["a pane never restarted", undefined, 0],
+    ["a restarted pane", 3, 3],
+  ])(
+    "hands recovery the restart count the run ended on, for %s",
+    async (_label, restartKey, expected) => {
+      handleAgentEndMock.mockClear();
+      setupPanel({ launchAgentId: "codex", detectedAgentId: "codex", restartKey });
+      const d = setupIdentityListeners();
+
+      const payload = {
+        terminalId: "term-1",
+        agentType: "codex",
+        timestamp: nextTimestamp(),
+        exitKind: "subcommand",
+        agentEnd: {
+          launchedRun: true,
+          resumeHintSeen: false,
+          selfUpdateSucceeded: false,
+          resumeRefused: true,
+        },
+      };
+      for (const cb of onAgentExitedHandlers) cb(payload);
+      // A switch lands while recovery loads.
+      const panel = usePanelStore.getState().panelsById["term-1"];
+      if (!panel || !isPtyPanel(panel)) throw new Error("pane missing");
+      usePanelStore.setState({ panelsById: { "term-1": { ...panel, restartKey: expected + 1 } } });
+
+      await vi.waitFor(() => expect(handleAgentEndMock).toHaveBeenCalledTimes(1));
+      expect(handleAgentEndMock).toHaveBeenCalledWith(payload, expected);
+      d.dispose();
+    }
+  );
 });

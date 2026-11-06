@@ -225,7 +225,7 @@ export function escapeShellArgOptional(arg: string, platform?: "windows" | "posi
 
 // Mirrored deny-list used by `sanitizeCustomArgs` (electron/ipc/handlers/helpAssistant.ts)
 // and the `customFlags` / `args` validation in src/config/agents.ts. Values flow into
-// whitespace-split tokens that are appended to the launch command, so any character
+// argv tokens that are appended to the launch command, so any character
 // that could break out of the flag list is rejected as defense-in-depth (the real
 // boundary is node-pty with no shell layer). `$(` and `${` are matched as substrings
 // to avoid over-blocking legitimate bare `$` in flag values.

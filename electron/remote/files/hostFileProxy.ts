@@ -11,7 +11,7 @@ import { isPreviewRefusal, PREVIEW_REFUSAL_HEADER } from "../../../shared/types/
 import { AppError } from "../../utils/errorTypes.js";
 import type { ClientFileTransport } from "./ClientFileTransport.js";
 import { getMimeType } from "../../utils/appProtocol.js";
-import { PULL_MAX_BYTES, type FileRequestPayload } from "./linkMethods.js";
+import type { FileRequestPayload } from "./linkMethods.js";
 
 const DIGITS = /^\d{1,15}$/;
 const RANGE = /^bytes (\d{1,15})-(\d{1,15})\/(\d{1,15}|\*)$/;
@@ -119,9 +119,9 @@ export interface HostFileProxyViews {
  * Answer a remote window's `daintree-file|media|pdf://host/<hostId>/<cap>/…`
  * request from that host, under the authority of the one view whose capability
  * the URL carries (a protocol request names no sender of its own). The host
- * runs its own handler and the body arrives in verified slices, pulled only as
- * fast as the consumer reads, so a large video costs a slice of memory here,
- * never the file.
+ * runs its own handler and the body arrives in verified slices, pulled a
+ * bounded few ahead of the consumer, so a large video costs a few slices of
+ * memory here, never the file.
  */
 export function createHostFileProxy(
   transport: ClientFileTransport,
@@ -209,11 +209,15 @@ export function createHostFileProxy(
     // Never more than the host said it would send, nor than a local preview may be.
     const limit = Math.min(declared ?? Infinity, ceiling ?? Infinity);
     let received = 0;
+    const source = transport.openBody(hostId, streamId, {
+      pullDepth: answer.pullDepth,
+      expectedBytes: declared,
+    });
     const body = new ReadableStream<Uint8Array>(
       {
         async pull(controller) {
           try {
-            const { bytes, done } = await transport.pull(hostId, streamId, PULL_MAX_BYTES);
+            const { bytes, done } = await source.read();
             received += bytes.byteLength;
             if (received > limit) throw new Error("The host sent more than the preview allows");
             if (bytes.byteLength > 0) controller.enqueue(bytes);
@@ -224,12 +228,12 @@ export function createHostFileProxy(
               controller.close();
             }
           } catch (error) {
-            void transport.cancelStream(hostId, streamId);
+            source.cancel();
             controller.error(error);
           }
         },
         cancel() {
-          void transport.cancelStream(hostId, streamId);
+          source.cancel();
         },
       },
       { highWaterMark: 0 }

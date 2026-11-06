@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { bench, describe, vi } from "vitest";
+import { test, describe, vi } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { activityWrites, focusWrites, measureCalls, seedPanels } from "./panelSubscriberFixture";
 
@@ -13,19 +13,7 @@ vi.mock("@shared/types/panel", async (importOriginal) => ({
 vi.mock("@/store/accessibilityAnnouncerStore", () => ({
   useAnnouncerStore: { getState: () => ({ announce: () => {} }) },
 }));
-vi.mock("@/services/TerminalInstanceService", () => ({
-  createTerminalPaintPlane: () => ({
-    isHibernated: () => false,
-    subscribeHibernation: () => () => {},
-  }),
-}));
-
 import { useAccessibilityAnnouncements } from "../useAccessibilityAnnouncements";
-import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
-
-// The service mock never evaluates the real module, so nothing registers it.
-await loadTerminalService();
-
 seedPanels(true);
 renderHook(() => useAccessibilityAnnouncements());
 
@@ -34,6 +22,10 @@ process.stderr.write(
 );
 
 describe("useAccessibilityAnnouncements subscriber (50 panels / 10 worktrees)", () => {
-  bench("1000 updateActivity writes", activityWrites);
-  bench("1000 focus-only writes", focusWrites);
+  test("1000 updateActivity writes", async ({ bench }) => {
+    await bench("1000 updateActivity writes", activityWrites).run();
+  });
+  test("1000 focus-only writes", async ({ bench }) => {
+    await bench("1000 focus-only writes", focusWrites).run();
+  });
 });

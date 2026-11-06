@@ -399,6 +399,11 @@ export function WorktreeOverviewModal({
     setSelectedIds(new Set());
   }, []);
 
+  const selectOnly = useCallback((ids: readonly string[]) => {
+    selectionAnchorRef.current = null;
+    setSelectedIds(new Set(ids));
+  }, []);
+
   const activateWorktree = useCallback(
     (worktreeId: string) => {
       onSelectWorktree(worktreeId);
@@ -422,6 +427,7 @@ export function WorktreeOverviewModal({
     selectedIds,
     worktreeMap,
     clearSelection,
+    selectOnly,
   });
 
   // D1 close-sessions confirm. The id set is snapshotted at click time (lesson

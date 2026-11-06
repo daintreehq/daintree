@@ -186,8 +186,44 @@ describe("buildResumeLatestCommand", () => {
   });
 
   it("returns undefined for a rolling-history agent whose only way back is a picker", () => {
-    // Interpreter declares empty args rather than a picker that would block the PTY.
-    expect(buildResumeLatestCommand("interpreter")).toBeUndefined();
+    // Empty args stand in for a picker that would sit on the restored PTY.
+    setUserRegistry({
+      "picker-only": {
+        id: "picker-only",
+        name: "Picker Only",
+        command: "picker-only",
+        color: "#ffffff",
+        iconId: "custom",
+        supportsContextInjection: false,
+        resume: { kind: "rolling-history", args: () => [] },
+      },
+    });
+    try {
+      expect(buildResumeLatestCommand("picker-only")).toBeUndefined();
+      // Control: the same agent with resume flags does get a command.
+      setUserRegistry({
+        "picker-only": {
+          id: "picker-only",
+          name: "Picker Only",
+          command: "picker-only",
+          color: "#ffffff",
+          iconId: "custom",
+          supportsContextInjection: false,
+          resume: { kind: "rolling-history", args: () => ["--continue"] },
+        },
+      });
+      expect(buildResumeLatestCommand("picker-only")).toBe("picker-only --continue");
+    } finally {
+      setUserRegistry({});
+    }
+  });
+
+  it("resumes Open Interpreter's latest session in the folder with resume --last", () => {
+    // The Rust product, not the Python CLI whose only way back was a picker (#15567).
+    expect(buildResumeLatestCommand("interpreter")).toBe("interpreter resume --last");
+    expect(buildResumeLatestCommand("interpreter", ["-m", "o4"])).toBe(
+      "interpreter -m 'o4' resume --last"
+    );
   });
 
   it("returns undefined for a named-target agent, whose args need the target", () => {
@@ -353,6 +389,19 @@ describe("buildAgentLaunchFlags", () => {
   it("does not include --model flag when modelId is not provided", () => {
     const flags = buildAgentLaunchFlags({}, "claude");
     expect(flags).not.toContain("--model");
+  });
+
+  it("never persists --model for Mistral Vibe, whose restart and resume reject or ignore it (#15569)", () => {
+    const flags = buildAgentLaunchFlags({}, "mistral", { modelId: "devstral-small" });
+    expect(flags).toEqual(["--trust"]);
+  });
+
+  it("never persists a Vibe --model a preset or recipe adds either (#15569)", () => {
+    const flags = buildAgentLaunchFlags({}, "mistral", {
+      presetArgs: ["--model", "devstral-2", "--agent", "accept-edits"],
+      recipeArgs: "--model=local",
+    });
+    expect(flags).toEqual(["--trust", "--agent", "accept-edits"]);
   });
 });
 
@@ -617,6 +666,46 @@ describe("generateAgentCommand with modelId", () => {
     const promptIdx = cmd.indexOf("Fix the bug");
     expect(modelIdx).toBeLessThan(promptIdx);
   });
+
+  describe("Mistral Vibe (#15569)", () => {
+    forcePosixPlatform();
+
+    it("leaves --model off an interactive launch, which Vibe ignores or rejects", () => {
+      const bare = generateAgentCommand("vibe", {}, "mistral", { modelId: "devstral-small" });
+      const seeded = generateAgentCommand("vibe", {}, "mistral", {
+        modelId: "devstral-small",
+        initialPrompt: "Fix the bug",
+      });
+      expect(bare).toBe("vibe --trust");
+      expect(seeded).toBe("vibe --trust 'Fix the bug'");
+    });
+
+    it("drops a --model a preset, recipe or settings flag adds to an interactive launch", () => {
+      const cmd = generateAgentCommand("vibe", { customFlags: "--model=local" }, "mistral", {
+        presetArgs: ["--model", "devstral-2", "--agent", "accept-edits"],
+        recipeArgs: "--model devstral-small",
+      });
+      expect(cmd).toBe("vibe --trust --agent 'accept-edits'");
+    });
+
+    it("keeps a preset's --model on a headless launch, where Vibe takes it", () => {
+      const cmd = generateAgentCommand("vibe", {}, "mistral", {
+        presetArgs: ["--model", "devstral-2"],
+        initialPrompt: "Fix the bug",
+        interactive: false,
+      });
+      expect(cmd).toBe("vibe --trust --model 'devstral-2' --prompt 'Fix the bug'");
+    });
+
+    it("passes --model to a headless launch, ahead of --prompt", () => {
+      const cmd = generateAgentCommand("vibe", {}, "mistral", {
+        modelId: "devstral-small",
+        initialPrompt: "Fix the bug",
+        interactive: false,
+      });
+      expect(cmd).toBe("vibe --trust --model devstral-small --prompt 'Fix the bug'");
+    });
+  });
 });
 
 describe("generateAgentCommand with recipeArgs", () => {
@@ -667,6 +756,197 @@ describe("generateAgentCommand with recipeArgs", () => {
     const recipeIdx = cmd.indexOf("--recipe-flag");
     const promptIdx = cmd.indexOf("Do the thing");
     expect(recipeIdx).toBeLessThan(promptIdx);
+  });
+});
+
+describe("quoted launch arguments (#15637)", () => {
+  forcePosixPlatform();
+
+  const spacedPath = "/tmp/project with spaces/config.json";
+
+  it("keeps a quoted spaced value in recipe args as one argument", () => {
+    const cmd = generateAgentCommand("claude", {}, "claude", {
+      recipeArgs: `--config "${spacedPath}"`,
+    });
+    expect(cmd).toBe(`claude --config '${spacedPath}'`);
+  });
+
+  it("keeps a quoted spaced value in custom flags as one argument", () => {
+    const cmd = generateAgentCommand(
+      "claude",
+      { customFlags: `--add-dir "/Users/me/My Project" --append-system-prompt 'be terse'` },
+      "claude"
+    );
+    expect(cmd).toBe("claude --add-dir '/Users/me/My Project' --append-system-prompt 'be terse'");
+  });
+
+  it("persists quoted custom flags as the argv the launch command used", () => {
+    const entry = { customFlags: `--config "${spacedPath}" --verbose` };
+    expect(generateAgentFlags(entry, "claude")).toEqual(["--config", spacedPath, "--verbose"]);
+    const flags = buildAgentLaunchFlags(entry, "claude");
+    expect(flags).toEqual(["--config", spacedPath, "--verbose"]);
+    expect(generateAgentCommand("claude", entry, "claude")).toBe(
+      buildLaunchCommandFromFlags("claude", "claude", flags)
+    );
+  });
+
+  it("persists recipe args where the launch command puts them", () => {
+    const entry = { customFlags: "--custom-flag", dangerousEnabled: true };
+    const options = {
+      presetArgs: ["--preset-flag"],
+      recipeArgs: `--config "${spacedPath}"`,
+    };
+    const flags = buildAgentLaunchFlags(entry, "claude", options);
+    expect(flags).toEqual([
+      "--preset-flag",
+      "--config",
+      spacedPath,
+      "--dangerously-skip-permissions",
+      "--custom-flag",
+    ]);
+    expect(generateAgentCommand("claude", entry, "claude", options)).toBe(
+      buildLaunchCommandFromFlags("claude", "claude", flags)
+    );
+  });
+
+  it("keeps an empty quoted argument and an apostrophe inside double quotes", () => {
+    const cmd = generateAgentCommand("claude", {}, "claude", {
+      recipeArgs: `--prefix "" --name "O'Brien"`,
+    });
+    expect(cmd).toBe("claude --prefix '' --name 'O'\\''Brien'");
+  });
+
+  it("keeps a quoted Windows path whole with its backslashes for PowerShell", () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    const cmd = generateAgentCommand(
+      "claude",
+      { customFlags: `--add-dir "C:\\Users\\O'Brien\\My Project"` },
+      "claude",
+      { recipeArgs: `--config 'C:\\Program Files\\cfg.json'` }
+    );
+    expect(cmd).toBe(
+      "claude --config 'C:\\Program Files\\cfg.json' --add-dir 'C:\\Users\\O''Brien\\My Project'"
+    );
+  });
+
+  it("recognises a quoted clipboard directory in custom flags as already shared", () => {
+    const dir = "/tmp/my clipboard";
+    const customFlags = `--include-directories "${dir}"`;
+    const flags = generateAgentFlags({ customFlags }, "gemini", { clipboardDirectory: dir });
+    expect(flags.filter((flag) => flag === "--include-directories")).toHaveLength(1);
+    expect(flags).toContain(dir);
+    expect(
+      generateAgentFlags({ customFlags, shareClipboardDirectory: false }, "gemini", {
+        clipboardDirectory: dir,
+      })
+    ).toEqual(["--include-directories", dir]);
+  });
+
+  it("keeps the whitespace split for text with an unclosed quote", () => {
+    const entry = { customFlags: "--name O'Brien --verbose" };
+    expect(generateAgentFlags(entry, "claude")).toEqual(["--name", "O'Brien", "--verbose"]);
+    expect(
+      generateAgentCommand("claude", {}, "claude", { recipeArgs: `--title "draft --yolo` })
+    ).toBe(`claude --title '"draft' --yolo`);
+  });
+
+  it("cleans control characters on the unclosed-quote path too", () => {
+    const recipeArgs = "--name O'Brien --label a\u001bb\u007f";
+    expect(generateAgentFlags({ customFlags: recipeArgs }, "claude")).toEqual([
+      "--name",
+      "O'Brien",
+      "--label",
+      "a b ",
+    ]);
+    expect(buildAgentLaunchFlags({}, "claude", { recipeArgs })).toEqual([
+      "--name",
+      "O'Brien",
+      "--label",
+      "a b ",
+    ]);
+    expect(generateAgentCommand("claude", {}, "claude", { recipeArgs })).not.toMatch(
+      // eslint-disable-next-line no-control-regex
+      /[\x00-\x1F\x7F]/
+    );
+  });
+
+  it("turns a control character inside a quoted value into a space", () => {
+    const entry = { customFlags: '--append-system-prompt "first\nsecond\tthird"' };
+    expect(generateAgentFlags(entry, "claude")).toEqual([
+      "--append-system-prompt",
+      "first second third",
+    ]);
+    expect(generateAgentCommand("claude", {}, "claude", { recipeArgs: '--label "a\r\nb"' })).toBe(
+      "claude --label 'a b'"
+    );
+  });
+
+  it("leaves an explicit recipe decoration override in the persisted flags", () => {
+    const entry = { decorativeEffects: true };
+    const options = { recipeArgs: "-c tui.whimsy=false" };
+    const flags = buildAgentLaunchFlags(entry, "codex", options);
+    expect(flags).toEqual(expect.arrayContaining(["-c", "tui.whimsy=false"]));
+    expect(generateAgentCommand("codex", entry, "codex", options)).toBe(
+      buildLaunchCommandFromFlags("codex", "codex", flags)
+    );
+  });
+
+  it("leaves unquoted arguments exactly as the whitespace split did", () => {
+    expect(
+      generateAgentCommand("claude", { customFlags: "  --verbose   --debug " }, "claude", {
+        recipeArgs: " --model   opus --yolo ",
+      })
+    ).toBe("claude --model 'opus' --yolo --verbose --debug");
+  });
+});
+
+describe("generateAgentCommand with presetArgs (#15638)", () => {
+  forcePosixPlatform();
+
+  it("keeps a multi-word preset element as one quoted argument", () => {
+    const cmd = generateAgentCommand("claude", {}, "claude", {
+      presetArgs: ["--system-prompt", "two words"],
+    });
+    expect(cmd).toBe("claude --system-prompt 'two words'");
+  });
+
+  it("quotes non-flag preset elements and leaves safe options bare", () => {
+    const cmd = generateAgentCommand("claude", {}, "claude", {
+      presetArgs: ["--provider", "blue", "--verbose"],
+    });
+    expect(cmd).toBe("claude --provider 'blue' --verbose");
+  });
+
+  it("produces the same argv as the persisted launch flags replayed on resume", () => {
+    const presetArgs = ["--system-prompt", "be concise and direct", "--verbose"];
+    const launch = generateAgentCommand("claude", {}, "claude", { presetArgs });
+    const flags = buildAgentLaunchFlags({}, "claude", { presetArgs });
+    expect(launch).toBe(buildLaunchCommandFromFlags("claude", "claude", flags));
+  });
+
+  it("places preset args after --model and before recipe args", () => {
+    const cmd = generateAgentCommand("claude", {}, "claude", {
+      modelId: "claude-opus-4-6",
+      presetArgs: ["--append-system-prompt", "stay terse"],
+      recipeArgs: "--recipe-flag",
+    });
+    expect(cmd).toBe(
+      "claude --model claude-opus-4-6 --append-system-prompt 'stay terse' --recipe-flag"
+    );
+  });
+
+  it("produces no change for an empty preset args array", () => {
+    const base = generateAgentCommand("claude", {}, "claude");
+    expect(generateAgentCommand("claude", {}, "claude", { presetArgs: [] })).toBe(base);
+  });
+
+  it("keeps fused, padded, whitespace-only and apostrophe elements exactly as given", () => {
+    const presetArgs = ["--label=two words", "  padded  ", " ", "it's fine"];
+    const cmd = generateAgentCommand("claude", {}, "claude", { presetArgs });
+    expect(cmd).toBe("claude '--label=two words' '  padded  ' ' ' 'it'\\''s fine'");
+    const flags = buildAgentLaunchFlags({}, "claude", { presetArgs });
+    expect(flags).toEqual(presetArgs);
+    expect(cmd).toBe(buildLaunchCommandFromFlags("claude", "claude", flags));
   });
 });
 
@@ -901,6 +1181,57 @@ describe("reconcileBypassFlags", () => {
     expect(stripped).toEqual(["--model"]);
     const readded = reconcileBypassFlags(["--model"], "claude", true, "--custom-skip");
     expect(readded).toContain("--custom-skip");
+  });
+
+  it("replaces Open Interpreter's retired Python flag captured in a snapshot (#15567)", () => {
+    const current = DEFAULT_DANGEROUS_ARGS.interpreter as string;
+    expect(current).not.toBe("--auto_run");
+    // A pane captured under the old default must not relaunch with a flag the
+    // Rust CLI rejects: dropped when bypass is off, swapped in place when on.
+    expect(reconcileBypassFlags(["--auto_run", "-m", "o4"], "interpreter", false)).toEqual([
+      "-m",
+      "o4",
+    ]);
+    expect(reconcileBypassFlags(["--auto_run", "-m", "o4"], "interpreter", true)).toEqual([
+      current,
+      "-m",
+      "o4",
+    ]);
+    // Another agent's flag of the same spelling is not touched.
+    expect(reconcileBypassFlags(["--auto_run"], "aider", false)).toEqual(["--auto_run"]);
+  });
+
+  it("resolves bypass args for a custom agent whose id names an Object.prototype member", () => {
+    expect(
+      generateAgentFlags({ dangerousArgs: "--approve", dangerousMode: "on" }, "toString")
+    ).toEqual(["--approve"]);
+    expect(reconcileBypassFlags(["--approve", "-v"], "toString", false, "--approve")).toEqual([
+      "-v",
+    ]);
+    expect(reconcileBypassFlags(["-v"], "constructor", true, "--approve")).toEqual([
+      "-v",
+      "--approve",
+    ]);
+    // With nothing written there is no default to inherit from the prototype.
+    expect(generateAgentFlags({ dangerousMode: "on" }, "toString")).toEqual([]);
+  });
+
+  it("reads Open Interpreter's retired flag in settings as unset (#15567)", () => {
+    // An old config bundle can bring the Python default back after migration 042.
+    const current = DEFAULT_DANGEROUS_ARGS.interpreter as string;
+    expect(reconcileBypassFlags(["--auto_run"], "interpreter", true, "--auto_run")).toEqual([
+      current,
+    ]);
+    expect(
+      generateAgentFlags({ dangerousArgs: "--auto_run", dangerousMode: "on" }, "interpreter")
+    ).toEqual([current]);
+    // A value the user wrote themselves still wins.
+    expect(
+      generateAgentFlags(
+        { dangerousArgs: "--auto_run --verbose", dangerousMode: "on" },
+        "interpreter"
+      )
+    ).toEqual(["--auto_run", "--verbose"]);
   });
 
   it("does not mutate the input array", () => {

@@ -6,6 +6,61 @@
  * above but keeps theme colors (the user wants more contrast, not a
  * system-color repaint). */
 @media (prefers-contrast: more) {
+  /* The toolbar's capsules take the same ink as the buttons around them
+     (`text-secondary`, held to 4.5:1, see the frame rule below): left on
+     border-strong (1.2-1.5:1) the project pill — the strip's anchor — was the
+     faintest edge on it. The stats capsule owns one frame and its own segment
+     rules; the inner segments are buttons and would otherwise each draw a
+     second box inside it. */
+  .toolbar-project-pill,
+  .toolbar-project-chip,
+  .toolbar-stats {
+    --_border: var(--theme-text-secondary);
+  }
+
+  .toolbar-stats {
+    --_divider: var(--theme-text-secondary);
+    border-width: 2px;
+  }
+
+  .toolbar-stats > button[data-stat-segment] {
+    border-width: 0;
+  }
+
+  /* Open, the pill's edge steps up rather than back to border-strong; an open
+     stats segment's inset edge, and every armed toolbar control's frame, do
+     the same, so "this one is open" stays a contrast step and not a tint. */
+  .toolbar-project-pill:is([aria-expanded="true"], [data-state="open"]) {
+    border-color: var(--theme-text-primary);
+  }
+
+  .toolbar-stat-pill[aria-expanded="true"]::after {
+    border-width: 2px;
+    border-color: var(--theme-text-primary);
+  }
+
+  :is(.toolbar-icon-button, .toolbar-agent-button):is(
+      [aria-expanded="true"],
+      [aria-pressed="true"],
+      [data-state="open"]
+    ):not([data-sidebar-toggle]) {
+    border-color: var(--theme-text-primary);
+  }
+
+  /* Group dividers stay visible between framed buttons. */
+  .toolbar-divider {
+    background-color: var(--theme-text-secondary);
+  }
+
+  /* A preset split is one control: one frame, one seam. */
+  .toolbar-agent-split > button:first-child {
+    border-inline-end-width: 0;
+  }
+
+  .toolbar-agent-split .toolbar-agent-split-toggle::before {
+    display: none;
+  }
+
   /* Every quick-state glyph at full strength; the digit still says "empty". */
   .quick-state-glyph-empty {
     opacity: 1;
@@ -19,9 +74,33 @@
     background-color: color-mix(in oklab, var(--theme-tint) 20%, transparent);
   }
 
+  /* Width alone keeps the default's deliberately quiet ink, so the edge
+     also steps up to a neutral that clears 3:1 against the grid. */
   .terminal-selected,
   .terminal-focused {
     border-width: 2px;
+    border-color: color-mix(in oklab, var(--theme-text-primary) 72%, var(--theme-border-strong));
+  }
+
+  .terminal-selected:focus-visible {
+    outline-color: color-mix(in oklab, var(--theme-text-primary) 72%, var(--theme-border-strong));
+  }
+
+  /* The stronger focus ink above must not repaint a state edge: a focused
+     pane that is waiting or has failed keeps its state ink. */
+  .terminal-selected.panel-state-waiting {
+    border-color: color-mix(in oklab, var(--color-activity-waiting) 85%, transparent);
+  }
+
+  .terminal-selected.panel-state-failed {
+    border-color: color-mix(in oklab, var(--color-status-error) 85%, transparent);
+  }
+
+  .terminal-selected.panel-state-waiting,
+  .terminal-selected.panel-state-failed {
+    box-shadow:
+      0 0 0 1px var(--color-grid-bg),
+      0 0 0 3px color-mix(in oklab, var(--theme-text-primary) 85%, var(--color-grid-bg));
   }
 
   /* The focused root's ring stands in for the border, so it takes the
@@ -82,8 +161,9 @@
 
   .panel-state-compiling,
   .panel-state-waiting,
+  .panel-state-failed,
   .panel-state-working,
-  .panel-state-hibernated,
+  .panel-state-exited,
   .panel-voice-dictation-locked,
   .panel-state-arming {
     border-width: 2px;
@@ -93,26 +173,53 @@
      mark there is — right for everyday lists, not for a user whose whole
      request is "more contrast". Here every family outlines it: palette rows
      (the aria-activedescendant cursor and list-detail selection alike), the
-     forge and commit rows' cursor, and the
-     Radix menu, context-menu and select rows, whether the pointer or the keys
-     put the highlight there. `selection-outline` because it is the one ink held
-     to 3:1 against both the highlight fill and the surface around it
-     (`getPaletteSelectionWarnings`). Width and style are spelled out rather
+     forge and commit rows' cursor, the Radix menu, context-menu and select
+     rows, whether the pointer or the keys put the highlight there, a submenu's
+     parent row, which keeps the fill while focus is inside the submenu, and
+     the worktree overview's bulk membership. `selection-outline` because it is
+     the one ink held to 3:1 against both the highlight fill and the surface
+     around it, on the palette and on the panels (`getPaletteSelectionWarnings`,
+     `getPanelRowSelectionWarnings`). Width and style are spelled out rather
      than using the shorthand so a keyboard-focused row still takes the 3px
-     focus width below. */
-  .palette-row[aria-selected="true"],
-  .palette-row[data-selected="true"],
-  .forge-row[data-active="true"],
-  [data-highlighted]:is(
-    [role="menuitem"],
-    [role="menuitemcheckbox"],
-    [role="menuitemradio"],
-    [role="option"]
-  ) {
-    outline-style: solid;
-    outline-width: 2px;
-    outline-color: var(--color-selection-outline);
-    outline-offset: -2px;
+     focus width below.
+
+     Guarded by `forced-colors: none` because Chromium reports
+     `prefers-contrast: more` alongside `forced-colors: active` on a Windows
+     high-contrast palette, and this block comes later: unguarded, its theme ink
+     would replace the forced-colors block's `Highlight` outline on the same
+     rows. */
+  @media (forced-colors: none) {
+    .palette-row[aria-selected="true"],
+    .palette-row[data-selected="true"],
+    .forge-row[data-active="true"],
+    [data-highlighted]:is(
+      [role="menuitem"],
+      [role="menuitemcheckbox"],
+      [role="menuitemradio"],
+      [role="option"]
+    ),
+    [role="menuitem"][data-state="open"],
+    [role="gridcell"][aria-selected="true"][data-worktree-overview-cell] {
+      outline-style: solid;
+      outline-width: 2px;
+      outline-color: var(--color-selection-outline);
+      outline-offset: -2px;
+    }
+
+    /* The overview cursor is an accent outline on the cell, and the membership
+       outline above takes that property on a selected cell, so the cursor would
+       vanish into the selection. Drawn inside it instead, on a box that has no
+       other use and no effect on layout; the cell's real border is the row
+       divider. Gated on the grid's focus, like the cursor itself. */
+    [role="grid"]:focus
+      [data-worktree-overview-cell][data-overview-cursor="true"][aria-selected="true"]::after {
+      content: "";
+      position: absolute;
+      inset: 4px;
+      border: 2px solid var(--color-accent-primary);
+      border-radius: inherit;
+      pointer-events: none;
+    }
   }
 
   .palette-row[aria-selected="true"]:focus-visible,
@@ -230,6 +337,14 @@
     border-width: 1px;
     border-style: solid;
     border-color: var(--color-text-primary);
+  }
+
+  /* The canvas home's ribbon draws a quiet day as an outline and an active day
+     as a fill. On its 6px cells the rim above covered more than half of every
+     active cell, so both read as the same white-rimmed box; an active day stays
+     a solid fill here and the outline stays the quiet day's. */
+  .pulse-mini-ribbon .pulse-heat-cell[data-heat-level] {
+    border-width: 0;
   }
 
   /* File-browser type icons (issue #11596). Entry icons paint in the secondary

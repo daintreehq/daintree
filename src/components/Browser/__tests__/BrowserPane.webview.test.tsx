@@ -3,6 +3,9 @@ import { act, render } from "@testing-library/react";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import type { BrowserPaneProps } from "../BrowserPane";
 import { BrowserPane } from "../BrowserPane";
+import { GridGroupAttentionContext } from "@/components/Panel/gridGroupAttention";
+import { GridGroupTabReorderContext } from "@/components/Panel/gridGroupTabReorder";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { SKELETON_HINT_FIRST_THRESHOLD_MS } from "@/components/ui/Skeleton";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
@@ -180,21 +183,42 @@ vi.mock("@/lib/notify", () => ({
   notify: notifyMock,
 }));
 
-vi.mock("@/components/Panel", () => ({
-  ContentPanel: (props: {
-    children: React.ReactNode;
-    toolbar?: React.ReactNode;
-    [key: string]: unknown;
-  }) => {
-    contentPanelPropsSpy(props);
-    return (
-      <div data-testid="content-panel">
-        {props.toolbar}
-        {props.children}
-      </div>
-    );
-  },
-}));
+vi.mock("@/components/Panel", async () => {
+  // Reads its tab group's edge and reorder the way the real ContentPanel does.
+  const { useGridGroupAttention } = await import("@/components/Panel/gridGroupAttention");
+  const { useGridGroupTabReorder } = await import("@/components/Panel/gridGroupTabReorder");
+  return {
+    ContentPanel: (props: {
+      id: string;
+      location?: "grid" | "dock" | "dialog";
+      tabs?: Array<{ id: string }>;
+      children: React.ReactNode;
+      toolbar?: React.ReactNode;
+      [key: string]: unknown;
+    }) => {
+      contentPanelPropsSpy(props);
+      const attention = useGridGroupAttention(props.id, props.location ?? "grid");
+      const reorder = useGridGroupTabReorder(props.id, props.location ?? "grid");
+      return (
+        <div
+          data-testid="content-panel"
+          data-group-ambient={attention?.ambientAgentState}
+          data-group-failed={attention?.hiddenTabFailed || undefined}
+        >
+          <span
+            data-testid="group-reorder"
+            data-group-id={reorder?.groupId}
+            onClick={() =>
+              reorder?.onTabReorder([...(props.tabs ?? [])].reverse().map((t) => t.id))
+            }
+          />
+          {props.toolbar}
+          {props.children}
+        </div>
+      );
+    },
+  };
+});
 
 function emitWebviewEvent(
   webview: MockWebviewElement,
@@ -306,6 +330,55 @@ describe("BrowserPane webview lifecycle regression", () => {
     document.createElement = originalCreateElement;
     vi.runOnlyPendingTimers();
     vi.useRealTimers();
+  });
+
+  it("draws its tab group's edge for a hidden tab's ask and failure (#16151)", () => {
+    const { getByTestId, rerender } = render(
+      <GridGroupAttentionContext.Provider
+        value={{ panelId: baseProps.id, ambientAgentState: "waiting", hiddenTabFailed: true }}
+      >
+        <BrowserPane {...baseProps} />
+      </GridGroupAttentionContext.Provider>
+    );
+    const panel = getByTestId("content-panel");
+    expect(panel.getAttribute("data-group-ambient")).toBe("waiting");
+    expect(panel.getAttribute("data-group-failed")).toBe("true");
+
+    rerender(
+      <GridGroupAttentionContext.Provider
+        value={{ panelId: "other", ambientAgentState: "waiting", hiddenTabFailed: true }}
+      >
+        <BrowserPane {...baseProps} />
+      </GridGroupAttentionContext.Provider>
+    );
+    expect(getByTestId("content-panel").hasAttribute("data-group-ambient")).toBe(false);
+    expect(getByTestId("content-panel").hasAttribute("data-group-failed")).toBe(false);
+  });
+
+  it("reorders its tab group's tabs from its own strip (#16160)", () => {
+    const tabs = [baseProps.id, "t-2"].map((id) => ({
+      id,
+      title: id,
+      chrome: deriveTerminalChrome(),
+      kind: id === baseProps.id ? "browser" : "terminal",
+      isActive: id === baseProps.id,
+    }));
+    const onTabReorder = vi.fn();
+    const inGroup = (panelId: string) => (
+      <GridGroupTabReorderContext.Provider value={{ panelId, groupId: "g-1", onTabReorder }}>
+        <BrowserPane {...baseProps} tabs={tabs} />
+      </GridGroupTabReorderContext.Provider>
+    );
+    const { getByTestId, rerender } = render(inGroup(baseProps.id));
+    expect(getByTestId("group-reorder").getAttribute("data-group-id")).toBe("g-1");
+    act(() => getByTestId("group-reorder").click());
+    expect(onTabReorder).toHaveBeenCalledWith(["t-2", baseProps.id]);
+
+    onTabReorder.mockClear();
+    rerender(inGroup("other"));
+    expect(getByTestId("group-reorder").hasAttribute("data-group-id")).toBe(false);
+    act(() => getByTestId("group-reorder").click());
+    expect(onTabReorder).not.toHaveBeenCalled();
   });
 
   it("renders webview with allowpopups attribute for target=_blank support", () => {

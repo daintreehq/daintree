@@ -36,6 +36,7 @@ import { DisclosureChevron } from "./DisclosureChevron";
 import { DISCLOSURE_TOGGLE_CLASS, StackLocation, StackTrace } from "./StackTrace";
 import { stripV8StackTail } from "./stackFrames";
 import { RowKeyboardFocusContext } from "./rowFocusTooltip";
+import { pruneToLiveRows, reconcileCollapsedGroups, scanArrivedRows } from "./consoleRowState";
 import type { CdpRemoteArg } from "@shared/types/ipc/webviewConsole";
 
 interface ConsolePanelProps {
@@ -452,9 +453,10 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
     }
   }, [allMessages, objectViews]);
 
-  // Auto-collapse startGroupCollapsed entries — scan only newly-arrived messages.
-  // Track the last-seen tail message id (not array index) so the cursor survives
-  // 500-cap eviction, where the array length stays the same but new ids land at the end.
+  // Auto-collapse newly arrived startGroupCollapsed rows, and let fold and
+  // stack state go with rows that leave the buffer. Pruning runs on every
+  // buffer change, hidden or filtered alike, so the state stays bounded by the
+  // live rows however long the pane stays open.
   useEffect(() => {
     if (allMessages.length === 0) {
       lastSeenTailIdRef.current = null;
@@ -465,43 +467,10 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
     }
     setWasCleared(false);
 
-    const newTail = allMessages[allMessages.length - 1]!;
-    if (newTail.id === lastSeenTailIdRef.current) return;
-
-    const lastSeenTailId = lastSeenTailIdRef.current;
-    let firstNewIdx = allMessages.length;
-    if (lastSeenTailId === null) {
-      firstNewIdx = 0;
-    } else {
-      while (firstNewIdx > 0 && allMessages[firstNewIdx - 1]!.id > lastSeenTailId) {
-        firstNewIdx--;
-      }
-    }
-    lastSeenTailIdRef.current = newTail.id;
-
-    if (firstNewIdx >= allMessages.length) return;
-
-    let newIds: number[] | null = null;
-    for (let i = firstNewIdx; i < allMessages.length; i++) {
-      const msg = allMessages[i]!;
-      if (msg.cdpType === "startGroupCollapsed") {
-        (newIds ??= []).push(msg.id);
-      }
-    }
-
-    if (newIds === null) return;
-    const ids = newIds;
-    setCollapsedGroups((prev) => {
-      const merged = new Set(prev);
-      let changed = false;
-      for (const id of ids) {
-        if (!merged.has(id)) {
-          merged.add(id);
-          changed = true;
-        }
-      }
-      return changed ? merged : prev;
-    });
+    const { tailId, collapsedIds } = scanArrivedRows(allMessages, lastSeenTailIdRef.current);
+    lastSeenTailIdRef.current = tailId;
+    setCollapsedGroups((prev) => reconcileCollapsedGroups(prev, allMessages, collapsedIds));
+    setStackViews((prev) => pruneToLiveRows(prev, allMessages));
   }, [allMessages]);
 
   const { errorCount, warnCount } = counts;

@@ -80,6 +80,14 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
 
   // Sent project-scoped by the MCP terminal-notify service.
   "terminal:notify-state": "external",
+  // Sent project-scoped by the Decisions service, only while it runs.
+  "terminal:decision-state": "external",
+  // Sent to this machine's own windows by the Decisions service, only while it is loaded.
+  "decisions:status-changed": "external",
+  // The same, when the relay's paired devices or its key changed (#16010).
+  "decisions:devices-changed": "external",
+  // The setup check's progress (#16024), to this machine's own windows.
+  "decisions:setup-check-changed": "external",
 
   // Agent session journaled (relayed from TypedEventBus; emitted by the main
   // close paths and bridged from the pty-host's trash-expiry capture)
@@ -143,6 +151,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "project-groups:update": "external",
   "run-history:update": "external",
   "copy-tree-history:update": "external",
+  "scheduled-runs:changed": "external",
   "plugin:deep-link": "external",
   "plugin:archive-install-intent": "external",
   "terminal:exit": "external",

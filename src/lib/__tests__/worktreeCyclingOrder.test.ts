@@ -524,7 +524,12 @@ describe("getVisibleWorktreesForCycling", () => {
           waitingReason: "prompt",
           handBack: { stoppedAt: 1 },
         },
-        { runId: "a-approval", agentState: "waiting", waitingReason: "approval" },
+        {
+          runId: "a-approval",
+          agentState: "waiting",
+          waitingReason: "approval",
+          canopy: { kind: "asked", quote: "Run the migration?", readAt: 1, seen: false },
+        },
       ]);
     });
 

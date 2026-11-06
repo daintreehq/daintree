@@ -108,10 +108,6 @@ vi.mock("@/hooks/useSidebarWorktreeOrder", () => ({
   useSidebarWorktreeOrder: () => worktreeList.current,
 }));
 
-vi.mock("@/hooks/useIsHibernated", () => ({
-  useIsHibernated: () => false,
-}));
-
 const contributedItems = vi.hoisted(() => ({
   current: [] as Array<{ pluginId: string; item: { actionId: string; label: string } }>,
 }));

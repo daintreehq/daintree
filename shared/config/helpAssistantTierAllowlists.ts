@@ -75,6 +75,10 @@ export const CORE_TIER_TOOLS = [
   // a worktree the calling session created and refuses everything else
   // (#11909).
   "worktree.deleteOwned",
+  // The owned delete with its checks run first, in one call (#15737): clean
+  // and pushed, no one else's process there, this session's panes closed and
+  // their processes gone. Owned for every origin, like the delete it ends in.
+  "worktree.retireOwned",
   // `worktree.createWithRecipe` takes a recipe id, and nothing else says what
   // the ids are.
   "recipe.list",
@@ -98,12 +102,21 @@ export const CORE_TIER_TOOLS = [
   "agent.launch",
   // One prompt to every named agent in one call, each run as `agent.launch`.
   "agent.launchMany",
+  // A new worktree and its agent in one call, run as its create, setup wait
+  // and launch; core because `worktree.waitUntilReady` is (#15738).
+  "agent.launchInNewWorktree",
   // `agent.launch` accepts user- and plugin-contributed agent ids; only Daintree
   // knows the effective registry and live launchability.
   "agent.listAvailable",
   // Preset ids are generated, merged from settings, `.daintree/presets/` and
   // CCR discovery; without this the launch argument is undiscoverable (#11859).
   "agent.listPresets",
+  // The user's own presets, written as Settings writes them (#16047). Each is
+  // `danger: "confirm"` with the exact change previewed, so the person approves
+  // it here; repository, CCR and built-in presets stay read-only.
+  "agent.createPreset",
+  "agent.updatePreset",
+  "agent.deletePreset",
   // Model ids come from each CLI's own catalog and change with its releases, so
   // a model the user names ("use Sol") is resolved here rather than from a slug
   // the prompt would have to carry (#13437).
@@ -128,6 +141,9 @@ export const CORE_TIER_TOOLS = [
   // into the caller's own prompt when the terminal stops working. The send
   // tools' `notify` flag does the same for the prompt they carry.
   "terminal.notifyWhenIdle",
+  // Withdraws a message held for a busy worker (#16187). Only the global
+  // Assistant's relayed sessions ever hold one; for any other it finds none.
+  "terminal.cancelQueuedSend",
   // Stop a turn without losing the conversation (#12338).
   "terminal.interruptOwned",
   // Answers a CLI's own dialog (trust, permission, a selection) that a
@@ -138,6 +154,10 @@ export const CORE_TIER_TOOLS = [
   "terminal.close",
   // Several closes in one call, each run as the close above (owned for a pane).
   "terminal.closeMany",
+  // Waits for the processes of panels this session closed to exit, and can end
+  // their trash grace early (#15728). Only what this session closed, so it
+  // needs no owned twin.
+  "terminal.waitForExit",
   // Moves a pane this session launched to another preset of its agent, after
   // the user confirms (#14369). Owned for every origin: the unscoped
   // `terminal.restartOnPreset` is on no tier.
@@ -180,6 +200,12 @@ export const CORE_TIER_TOOLS = [
   // One notice when a host's link or capacity is first seen meeting a
   // condition (#14463): passive, and it acts on nothing when it fires.
   "host.watch",
+  // Waking a host whose link is down and starting Daintree there where its
+  // Host mode is on (#16170): never its settings.
+  "host.bringBack",
+  // `terminal.getStatus` across projects and hosts in one answer (#16191): a
+  // read, at the tier `terminal.getStatus` itself is.
+  "host.status",
   // Logs meant for someone else go through the review the user trims and saves
   // themselves, not an archive the assistant builds from the raw log folder
   // (#12882). Reserved to the assistant below; off the external list.
@@ -327,6 +353,8 @@ export const RENDERER_OWNED_ORIGIN_ONLY_TOOLS = [
   "host.ensureProject",
   "host.settings",
   "host.watch",
+  "host.bringBack",
+  "host.status",
   // A shell command is the assistant's to run, never a worker pane's (#13495).
   "project.runCommand",
 ] as const satisfies readonly BuiltInActionId[];
@@ -376,14 +404,15 @@ export const HELP_TIER_CUMULATIVE: Record<HelpAssistantTier, readonly string[]> 
  *
  * Operational risk, not minimum tier. The preview intersects this list with the
  * tier being previewed, so the same tool is called out wherever it first
- * becomes reachable. The first three run project-defined teardown — arbitrary
+ * becomes reachable. The first four run project-defined teardown — arbitrary
  * commands from `.daintree/config.json`, and resource teardown that can destroy
- * a remote devbox. The two delete variants then remove the tree as well. The
+ * a remote devbox. The three delete variants then remove the tree as well. The
  * last runs whatever command the assistant chooses.
  */
 export const HIGH_BLAST_RADIUS_TOOLS: readonly string[] = [
   "worktree.delete",
   "worktree.deleteOwned",
+  "worktree.retireOwned",
   "worktree.resource.teardown",
   "project.runCommand",
 ];

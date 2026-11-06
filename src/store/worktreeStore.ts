@@ -35,9 +35,8 @@ interface CreateDialogState {
   initialIssue: Issue | null;
   initialPR: PR | null;
   initialRecipeId: string | null;
-  initialBranchInput: string | null;
-  initialAgentId: string | null;
-  initialPrompt: string | null;
+  /** A failed creation's request, when this opening is its Retry. */
+  restoreDraft: PendingCreationDraft | null;
   onCreated?: (worktreeId: string) => void;
   /**
    * The panel kind of the project plugin's `worktreeCreate` view this opening
@@ -50,16 +49,31 @@ interface CreateDialogState {
   openingId?: number;
 }
 
-/** What a failed creation's Retry reopens the dialog with. The prompt stays in memory only. */
+/**
+ * The request a creation was submitted with, so its Retry reopens the dialog
+ * as it was rather than at the defaults. In memory only, like the prompt it
+ * carries.
+ */
 export interface PendingCreationDraft {
+  path: string;
+  branch: string;
+  issue?: Issue | null;
+  /**
+   * Whether the original dialog was opened for an issue, which picks the
+   * remembered setup it reads and writes — not whether an issue got linked.
+   */
+  openedForIssue?: boolean;
+  pr?: PR | null;
+  baseBranch?: string;
+  branchMode?: "new" | "existing";
+  fromRemote?: boolean;
+  worktreeMode?: string;
   recipeId?: string | null;
   agentId?: string | null;
   prompt?: string;
 }
 
 export interface PendingCreation extends PendingCreationDraft {
-  path: string;
-  branch: string;
   startedAt: number;
   status: "creating" | "error";
   error?: string;
@@ -376,10 +390,12 @@ interface WorktreeSelectionState {
   ) => void;
   setPendingWorktree: (id: string | null) => void;
   applyPendingWorktreeSelection: (worktreeId: string) => void;
-  addPendingCreation: (path: string, meta: { branch: string } & PendingCreationDraft) => void;
+  addPendingCreation: (path: string, meta: Omit<PendingCreationDraft, "path">) => void;
   resolvePendingCreation: (path: string) => void;
   failPendingCreation: (path: string, error: string) => void;
   dismissPendingCreation: (path: string) => void;
+  /** Takes the failed row down and reopens the create dialog with its request. */
+  retryPendingCreation: (path: string) => void;
   addDeletedWorktree: (worktree: DeletedWorktree) => void;
   dismissDeletedWorktree: (worktreeId: string) => void;
   setDeletedWorktreeCleanupState: (
@@ -407,9 +423,7 @@ interface WorktreeSelectionState {
     initialIssue?: Issue | null,
     options?: {
       initialRecipeId?: string | null;
-      initialBranchInput?: string | null;
-      initialAgentId?: string | null;
-      initialPrompt?: string | null;
+      restoreDraft?: PendingCreationDraft | null;
       onCreated?: (worktreeId: string) => void;
       surfacePanelKindId?: string;
     }
@@ -448,6 +462,7 @@ let lastPersistedMruEpoch = 0;
 
 let lastPersistedMruList: string[] | undefined;
 let pendingPersistMruList: string[] | undefined;
+let pendingPersistMruWrite: Promise<void> = Promise.resolve();
 let mruPersistVersion = 0;
 let mruRecordingSuppressed = false;
 
@@ -471,21 +486,28 @@ function mruListsEqual(a: string[] | undefined, b: string[]): boolean {
 const MRU_WRITE_KEY = "app-state:mruList";
 const ACTIVE_WORKTREE_WRITE_KEY = "app-state:activeWorktreeId";
 
-export function persistMruList(list: string[]): void {
+/**
+ * Resolves once the write this list needs has settled — sent, held for replay,
+ * or failed and logged — so a caller holding the view open can wait for it.
+ * Never rejects.
+ */
+export function persistMruList(list: string[]): Promise<void> {
   const epoch = getHostOwnedStateEpoch();
   const acknowledged = lastPersistedMruEpoch === epoch ? lastPersistedMruList : undefined;
   // On its way already: that write stays the one to hold if the link loses it.
-  if (pendingPersistMruList !== undefined && mruListsEqual(pendingPersistMruList, list)) return;
+  if (pendingPersistMruList !== undefined && mruListsEqual(pendingPersistMruList, list)) {
+    return pendingPersistMruWrite;
+  }
   if (pendingPersistMruList === undefined && mruListsEqual(acknowledged, list)) {
     // The host has it: anything held from before is older.
     supersedeDeferredHostOwnedWrite(MRU_WRITE_KEY);
-    return;
+    return Promise.resolve();
   }
 
   pendingPersistMruList = list;
   const requestVersion = ++mruPersistVersion;
 
-  void loadClientsModule()
+  const write = loadClientsModule()
     .then(({ appClient }) =>
       sendHostOwnedWrite(
         MRU_WRITE_KEY,
@@ -513,6 +535,8 @@ export function persistMruList(list: string[]): void {
         details: { listLength: list.length },
       });
     });
+  pendingPersistMruWrite = write;
+  return write;
 }
 
 function loadClientsModule(): Promise<ClientsModule> {
@@ -799,9 +823,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     initialIssue: null,
     initialPR: null,
     initialRecipeId: null,
-    initialBranchInput: null,
-    initialAgentId: null,
-    initialPrompt: null,
+    restoreDraft: null,
     onCreated: undefined,
   },
   bulkCreateDialog: {
@@ -980,7 +1002,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       // Record worktree MRU on explicit selection (suppressed during hydration)
       if (!mruRecordingSuppressed) {
         usePanelStore.getState().recordMru(`worktree:${id}`);
-        persistMruList(usePanelStore.getState().mruList);
+        void persistMruList(usePanelStore.getState().mruList);
       }
     }
 
@@ -1083,6 +1105,15 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       next.delete(key);
       return { pendingCreations: next };
     });
+  },
+
+  retryPendingCreation: (path) => {
+    const key = findPendingCreationKey(get().pendingCreations, path);
+    const entry = key === undefined ? undefined : get().pendingCreations.get(key);
+    if (!entry) return;
+    const { startedAt: _startedAt, status: _status, error: _error, ...draft } = entry;
+    get().dismissPendingCreation(entry.path);
+    get().openCreateDialog(draft.issue ?? null, { restoreDraft: draft });
   },
 
   addDeletedWorktree: (worktree) => {
@@ -1244,11 +1275,9 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
       createDialog: {
         isOpen: true,
         initialIssue,
-        initialPR: null,
+        initialPR: options?.restoreDraft?.pr ?? null,
         initialRecipeId: options?.initialRecipeId ?? null,
-        initialBranchInput: options?.initialBranchInput ?? null,
-        initialAgentId: options?.initialAgentId ?? null,
-        initialPrompt: options?.initialPrompt ?? null,
+        restoreDraft: options?.restoreDraft ?? null,
         onCreated: options?.onCreated,
         surfacePanelKindId: options?.surfacePanelKindId,
         openingId: ++createDialogOpenings,
@@ -1292,9 +1321,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
         initialIssue: null,
         initialPR: pr,
         initialRecipeId: null,
-        initialBranchInput: null,
-        initialAgentId: null,
-        initialPrompt: null,
+        restoreDraft: null,
         onCreated: undefined,
       },
     });
@@ -1307,9 +1334,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
         initialIssue: null,
         initialPR: null,
         initialRecipeId: null,
-        initialBranchInput: null,
-        initialAgentId: null,
-        initialPrompt: null,
+        restoreDraft: null,
         onCreated: undefined,
       },
     }),
@@ -1560,9 +1585,7 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
         initialIssue: null,
         initialPR: null,
         initialRecipeId: null,
-        initialBranchInput: null,
-        initialAgentId: null,
-        initialPrompt: null,
+        restoreDraft: null,
         onCreated: undefined,
       },
       bulkCreateDialog: {

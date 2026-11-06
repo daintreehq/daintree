@@ -30,9 +30,14 @@ import { evictDeadView, getAvailableMemoryMb } from "./ProjectViewEvictionContro
 import { deliverPowerPolicy } from "./powerPolicyDelivery.js";
 import { logError, logWarn } from "../utils/logger.js";
 import { isWebviewSrcAllowed } from "./webviewSrcGate.js";
+import { gateHtmlPreviewWebviewAttach } from "../setup/htmlPreviewSession.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { ViewEntry } from "./ProjectViewManagerTypes.js";
-import { rendererReloadNotice } from "./rendererReloadNotice.js";
+import {
+  dropReloadNotice,
+  holdReloadNotice,
+  rendererReloadNotice,
+} from "./rendererReloadNotice.js";
 import { getTerminationIntent } from "../services/processTerminationIntent.js";
 import {
   forgetRendererDocumentState,
@@ -90,6 +95,17 @@ export function setupViewHandlers(
     webPreferences: Electron.WebPreferences,
     params: Record<string, string>
   ) => {
+    const preview = gateHtmlPreviewWebviewAttach(webPreferences, params);
+    if (preview !== "not-preview") {
+      if (preview === "refused") {
+        console.warn(
+          `[ProjectViewManager] Blocked HTML preview webview: partition=${params.partition}`
+        );
+        event.preventDefault();
+      }
+      return;
+    }
+
     const isAllowedLocalhostUrl = isWebviewSrcAllowed(wc.id, params.src);
     const partition = params.partition ?? "";
     const isValidPartition =
@@ -156,6 +172,7 @@ export function setupViewHandlers(
     // A dead renderer never reports `responsive`, and its last input snapshot
     // belongs to the document that died with it.
     forgetRendererDocumentState(wc.id);
+    dropReloadNotice(wc);
     if (details.reason === "clean-exit") return;
 
     const projectId = host.webContentsToProject.get(wc.id);
@@ -241,9 +258,7 @@ export function setupViewHandlers(
     // memory pressure are not a sign of a looping crash bug.
     if (details.reason === "memory-eviction") {
       if (projectId && projectId === host.activeProjectId) {
-        notifyError(new Error("A project view was reloaded due to memory pressure."), {
-          source: "renderer-crash",
-        });
+        holdReloadNotice(wc, "A project view was reloaded due to memory pressure.");
         setImmediate(() => {
           if (!wc.isDestroyed()) wc.reload();
         });
@@ -276,8 +291,7 @@ export function setupViewHandlers(
     }
     crashTimestamps.push(now);
 
-    if (crashTimestamps.length >= CRASH_LOOP_THRESHOLD) {
-      console.error("[ProjectViewManager] Crash loop detected, loading recovery page");
+    const loadRecoveryPage = () => {
       setImmediate(() => {
         if (wc.isDestroyed()) return;
         const params = new URLSearchParams({
@@ -302,36 +316,53 @@ export function setupViewHandlers(
           wc.loadURL(`app://daintree/recovery.html?${params}`);
         }
       });
-    } else if (isProbableOom && host.onRecreateWindow) {
-      console.warn("[ProjectViewManager] OOM crash, destroying and recreating window");
-      notifyError(new Error("A project view ran out of memory and the window was recreated."), {
-        source: "renderer-crash",
-      });
-      setImmediate(() => {
-        // Increment the guard before `destroy()` — Electron emits
-        // `window-all-closed` synchronously inside the destroy call.
-        beginWindowRecreating();
-        if (!win.isDestroyed()) win.destroy();
-        host.onRecreateWindow!()
-          .catch((err) => {
-            console.error("[ProjectViewManager] Failed to recreate window after OOM:", err);
-          })
-          .finally(() => {
-            endWindowRecreating();
-            // The suppressed `window-all-closed` event must be replayed if
-            // the recreation failed — otherwise on non-darwin the process
-            // hangs headless with no windows and no quit path. Skip when
-            // another OOM recreate is still in flight or any window remains
-            // (the natural `window-all-closed` path will cover those cases).
-            if (
-              !isWindowRecreating() &&
-              process.platform !== "darwin" &&
-              BrowserWindow.getAllWindows().length === 0
-            ) {
-              app.quit();
-            }
-          });
-      });
+    };
+
+    if (crashTimestamps.length >= CRASH_LOOP_THRESHOLD) {
+      console.error("[ProjectViewManager] Crash loop detected, loading recovery page");
+      loadRecoveryPage();
+    } else if (isProbableOom && host.prepareWindowRecreation) {
+      // Captured now, while the window still holds its views: destroying it
+      // disposes everything that knows what it was showing (#15564). The
+      // OOM budget lives there too, since this entry's crash history dies
+      // with the window and the replacement starts a fresh one (#15647).
+      const recreateWindow = host.prepareWindowRecreation();
+      if (!recreateWindow) {
+        console.error("[ProjectViewManager] OOM crash loop detected, loading recovery page");
+        loadRecoveryPage();
+      } else {
+        console.warn("[ProjectViewManager] OOM crash, destroying and recreating window");
+        notifyError(new Error("A project view ran out of memory and the window was recreated."), {
+          source: "renderer-crash",
+        });
+        setImmediate(() => {
+          // Increment the guard before `destroy()` — Electron emits
+          // `window-all-closed` synchronously inside the destroy call.
+          beginWindowRecreating();
+          if (!win.isDestroyed()) win.destroy();
+          recreateWindow()
+            .catch((err) => {
+              console.error("[ProjectViewManager] Failed to recreate window after OOM:", err);
+            })
+            .finally(() => {
+              endWindowRecreating();
+              // The suppressed `window-all-closed` event must be replayed if
+              // the recreation failed — otherwise on non-darwin the process
+              // hangs headless with no windows and no quit path. Replayed, not
+              // a bare quit, so a process that stays up without windows (an
+              // OS launch, a scheduled run still open) does. Skip when another
+              // OOM recreate is still in flight or any window remains (the
+              // natural `window-all-closed` path will cover those cases).
+              if (
+                !isWindowRecreating() &&
+                process.platform !== "darwin" &&
+                BrowserWindow.getAllWindows().length === 0
+              ) {
+                app.emit("window-all-closed");
+              }
+            });
+        });
+      }
     } else if (projectId && projectId !== host.activeProjectId && crashEntry?.state === "cached") {
       // A crashed cached view has no user-visible reason to be resurrected
       // in the background — evict it and let the next visit cold-start
@@ -343,17 +374,11 @@ export function setupViewHandlers(
     } else {
       console.log("[ProjectViewManager] Renderer crash, auto-reloading view");
       if (projectId && projectId === host.activeProjectId) {
-        notifyError(
-          new Error(
-            rendererReloadNotice(
-              "A project view",
-              details.reason,
-              getTerminationIntent({ webContentsId: wc.id })
-            )
-          ),
-          {
-            source: "renderer-crash",
-          }
+        const intent = getTerminationIntent({ webContentsId: wc.id });
+        holdReloadNotice(
+          wc,
+          rendererReloadNotice("A project view", details.reason, intent),
+          intent ? "info" : "warning"
         );
       }
       setImmediate(() => {

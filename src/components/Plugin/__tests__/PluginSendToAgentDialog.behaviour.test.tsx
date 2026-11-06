@@ -108,6 +108,8 @@ vi.mock("@/services/agentHandoff/launchForHandoff", async (importOriginal) => ({
 import { PluginSendToAgentDialog } from "../PluginSendToAgentDialog";
 import { usePluginPromptStore, type PendingUiPrompt } from "@/store/pluginPromptStore";
 import type { PluginSendToAgentRequest } from "@shared/types/pluginUiPrompt";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import type { FleetRunRow } from "@shared/types/ipc/fleet";
 
 function agentPanel(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -190,7 +192,21 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   usePluginPromptStore.getState().reset();
+  useFleetSnapshotStore.setState({ snapshot: null });
 });
+
+function pushFleet(runs: Array<Partial<FleetRunRow> & { runId: string }>): void {
+  act(() =>
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        runs: runs.map((run) => ({ workspaceId: "p1", spawnedAt: 0, cwd: "/repo", ...run })),
+        changedAt: 0,
+        degraded: false,
+        lastSuccessfulAt: null,
+      },
+    })
+  );
+}
 
 describe("PluginSendToAgentDialog", () => {
   it("opens on an agent in the worktree the plugin named, over the focused one", () => {
@@ -293,6 +309,38 @@ describe("PluginSendToAgentDialog", () => {
     setPanels(agentPanel("feat-1", { worktreeId: "wt-feat", agentState: "working" }));
     open();
     expect(option("feat-1").textContent).toContain("Last seen working");
+  });
+
+  // The words stay observed; only the waiting hue is the fleet's, for a run
+  // Canopy read asking that the user hasn't seen (#16059).
+  it("keeps a wait's observed words and gives the waiting hue only to needs-you", () => {
+    setPanels(
+      agentPanel("main-1", { agentState: "waiting", waitingReason: "prompt" }),
+      agentPanel("feat-1", { worktreeId: "wt-feat", agentState: "waiting" })
+    );
+    const ask = { kind: "asked", quote: "Ship it?", readAt: 0, seen: false } as const;
+    pushFleet([
+      { runId: "main-1", agentState: "waiting", waitingReason: "prompt" },
+      { runId: "feat-1", agentState: "waiting", waitingReason: "question", canopy: ask },
+    ]);
+    open();
+    const badge = (id: string) => option(id).querySelector<HTMLElement>('[data-state="waiting"]');
+
+    expect(badge("main-1")?.textContent).toBe("Last seen waiting");
+    expect(badge("main-1")?.className).not.toContain("text-state-waiting");
+    expect(badge("feat-1")?.textContent).toBe("Last seen waiting");
+    expect(badge("feat-1")?.className).toContain("text-state-waiting");
+
+    pushFleet([
+      { runId: "main-1", agentState: "waiting", waitingReason: "prompt" },
+      {
+        runId: "feat-1",
+        agentState: "waiting",
+        waitingReason: "question",
+        canopy: { ...ask, seen: true },
+      },
+    ]);
+    expect(badge("feat-1")?.className).not.toContain("text-state-waiting");
   });
 
   it("offers no creation rows while the input bar is off", () => {

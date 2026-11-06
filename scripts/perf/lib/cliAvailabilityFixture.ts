@@ -398,7 +398,14 @@ function candidateAuthPaths(config: AgentConfig): string[] {
   const check = config.authCheck;
   if (check === undefined) return [];
   const platform = process.platform as "darwin" | "linux" | "win32";
-  return [...(check.configPaths?.[platform] ?? []), ...(check.configPathsAll ?? [])];
+  // The default root only: clearAuthEnvironment removes the variable that
+  // would relocate it.
+  const folder = config.account?.kind === "config-folder" ? config.account : undefined;
+  const homePaths =
+    folder && check.configHomePaths
+      ? check.configHomePaths.map((relative) => `${folder.defaultDir}/${relative}`)
+      : [];
+  return [...(check.configPaths?.[platform] ?? []), ...(check.configPathsAll ?? []), ...homePaths];
 }
 
 /** Every env var any agent treats as proof of auth. */
@@ -408,6 +415,19 @@ export function authEnvVars(registry: Record<string, AgentConfig>): string[] {
     const envVar = config.authCheck?.envVar;
     if (envVar === undefined) continue;
     for (const name of Array.isArray(envVar) ? envVar : [envVar]) names.add(name);
+  }
+  return [...names];
+}
+
+/**
+ * Env vars that move an agent's config root (`KIMI_CODE_HOME`, `CODEX_HOME`).
+ * Not proof of auth, but a developer's own value would send the probe to their
+ * real credentials instead of the synthetic HOME.
+ */
+export function configHomeEnvVars(registry: Record<string, AgentConfig>): string[] {
+  const names = new Set<string>();
+  for (const config of Object.values(registry)) {
+    if (config.account?.kind === "config-folder") names.add(config.account.envVar);
   }
   return [...names];
 }
@@ -430,6 +450,7 @@ let plantedAuthPaths: Set<string> | null = null;
  */
 function clearAuthEnvironment(registry: Record<string, AgentConfig>): void {
   for (const name of authEnvVars(registry)) delete process.env[name];
+  for (const name of configHomeEnvVars(registry)) delete process.env[name];
 }
 
 /**
@@ -910,6 +931,10 @@ export function authHermeticityMisses(modules: CliModules): number {
   let misses = 0;
 
   for (const name of authEnvVars(modules.registry)) {
+    if (process.env[name] !== undefined) misses += 1;
+  }
+  // A surviving config-root variable sends the probe outside synthetic HOME.
+  for (const name of configHomeEnvVars(modules.registry)) {
     if (process.env[name] !== undefined) misses += 1;
   }
   for (const relative of planted) {

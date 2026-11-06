@@ -114,6 +114,8 @@ export const CHANNELS = {
 
   EDITOR_GET_CONFIG: "editor:get-config",
   EDITOR_SET_CONFIG: "editor:set-config",
+  EDITOR_SET_DEFAULT: "editor:set-default",
+  EDITOR_CLEAR_PROJECT_PREFERENCE: "editor:clear-project-preference",
   EDITOR_DISCOVER: "editor:discover",
 
   PAINT_SURFACE_CREATE: "paint-surface:create",
@@ -190,6 +192,8 @@ export const CHANNELS = {
   APP_VIEW_REVEALED: "app:view-revealed",
   APP_VIEW_WARM_ACTIVATED: "app:view-warm-activated",
   APP_VIEW_CACHED: "app:view-cached",
+  APP_VIEW_CACHED_FLUSH_ARMED: "app:view-cached-flush-armed",
+  APP_VIEW_CACHED_FLUSHED: "app:view-cached-flushed",
   APP_DISMISS_ROSETTA_WARNING: "app:dismiss-rosetta-warning",
   MENU_ACTION: "menu:action",
   MENU_SHOW_CONTEXT: "menu:show-context",
@@ -514,6 +518,7 @@ export const CHANNELS = {
   KEYBINDING_RESET_ALL: "keybinding:reset-all",
   KEYBINDING_EXPORT_PROFILE: "keybinding:export-profile",
   KEYBINDING_IMPORT_PROFILE: "keybinding:import-profile",
+  KEYBINDING_OVERRIDES_CHANGED: "keybinding:overrides-changed",
 
   CONFIG_BUNDLE_EXPORT: "config-bundle:export",
   CONFIG_BUNDLE_PREVIEW_IMPORT: "config-bundle:preview-import",
@@ -575,9 +580,6 @@ export const CHANNELS = {
 
   SLASH_COMMANDS_LIST: "slash-commands:list",
 
-  GEMINI_GET_STATUS: "gemini:get-status",
-  GEMINI_ENABLE_ALTERNATE_BUFFER: "gemini:enable-alternate-buffer",
-
   CODEX_LIST_SUBAGENTS: "codex:list-subagents",
   CODEX_READ_SUBAGENT_TRANSCRIPT: "codex:read-subagent-transcript",
   CODEX_RESOLVE_RESUME_LATEST_SESSION: "codex:resolve-resume-latest-session",
@@ -589,6 +591,8 @@ export const CHANNELS = {
   CLAUDE_LIST_SUBAGENTS: "claude:list-subagents",
   CLAUDE_READ_SUBAGENT_TRANSCRIPT: "claude:read-subagent-transcript",
   CLAUDE_FIND_REPLY_SPAN: "claude:find-reply-span",
+
+  TERMINAL_SESSION_FILE_GET: "terminal-session-file:get",
 
   DEV_PREVIEW_ENSURE: "dev-preview:ensure",
   DEV_PREVIEW_RESTART: "dev-preview:restart",
@@ -628,13 +632,9 @@ export const CHANNELS = {
   ELEMENT_PICKER_RESOLVE: "element-picker:resolve",
   ELEMENT_PICKER_DESCRIBE_PROJECT: "element-picker:describe-project",
   ELEMENT_PICKER_SOURCE_REVISIONS: "element-picker:source-revisions",
+  ELEMENT_PICKER_HOLD_SOURCES: "element-picker:hold-sources",
   ELEMENT_PICKER_EVENT: "element-picker:event",
   ELEMENT_PICKER_SOURCE_CHANGED: "element-picker:source-changed",
-
-  COMMANDS_LIST: "commands:list",
-  COMMANDS_GET: "commands:get",
-  COMMANDS_EXECUTE: "commands:execute",
-  COMMANDS_GET_BUILDER: "commands:get-builder",
 
   APP_AGENT_GET_CONFIG: "app-agent:get-config",
   APP_AGENT_SET_CONFIG: "app-agent:set-config",
@@ -677,9 +677,12 @@ export const CHANNELS = {
   HELP_GLOBAL_ASSISTANT_DETACH: "help:global-assistant-detach",
   HELP_GLOBAL_ASSISTANT_CLAIM_INPUT: "help:global-assistant-claim-input",
   HELP_GLOBAL_ASSISTANT_RELEASE_INPUT: "help:global-assistant-release-input",
+  HELP_GLOBAL_ASSISTANT_INPUT_ELIGIBLE: "help:global-assistant-input-eligible",
   HELP_GLOBAL_ASSISTANT_RESTART: "help:global-assistant-restart",
   HELP_GLOBAL_ASSISTANT_DISCARD: "help:global-assistant-discard",
   HELP_GLOBAL_ASSISTANT_CHANGED: "help:global-assistant-changed",
+  HELP_WINDOW_GLOBAL_ASSISTANT_PANEL: "help:window-global-assistant-panel",
+  HELP_REPORT_WINDOW_GLOBAL_ASSISTANT_PANEL: "help:report-window-global-assistant-panel",
 
   CLIPBOARD_SAVE_IMAGE: "clipboard:save-image",
   CLIPBOARD_THUMBNAIL_FROM_PATH: "clipboard:thumbnail-from-path",
@@ -700,7 +703,7 @@ export const CHANNELS = {
   APP_THEME_SET_PREFERRED_LIGHT_SCHEME: "app-theme:set-preferred-light-scheme",
   APP_THEME_SET_RECENT_SCHEME_IDS: "app-theme:set-recent-scheme-ids",
   APP_THEME_SET_ACCENT_COLOR_OVERRIDE: "app-theme:set-accent-color-override",
-  APP_THEME_SYSTEM_APPEARANCE_CHANGED: "app-theme:system-appearance-changed",
+  APP_THEME_CHANGED: "app-theme:changed",
 
   WINDOW_CHROME_SET_BANNER_SEVERITY: "window-chrome:set-banner-severity",
 
@@ -957,6 +960,9 @@ export const CHANNELS = {
   HELP_ASSISTANT_GET_SETTINGS: "help-assistant:get-settings",
   HELP_ASSISTANT_SET_SETTINGS: "help-assistant:set-settings",
   HELP_ASSISTANT_GET_LIVE_SESSION_STATUS: "help-assistant:get-live-session-status",
+  HELP_ASSISTANT_GET_IDENTITIES: "help-assistant:get-identities",
+  HELP_ASSISTANT_SET_IDENTITY: "help-assistant:set-identity",
+  HELP_ASSISTANT_IDENTITIES_CHANGED: "help-assistant:identities-changed",
 
   // Onboarding channels
   ONBOARDING_GET: "onboarding:get",
@@ -1094,6 +1100,7 @@ export const CHANNELS = {
   FORGE_CLASSIFY_PUSH_ERROR: "forge:classify-push-error",
   FORGE_GET_REPO_STATS: "forge:get-repo-stats",
   FORGE_GET_FIRST_PAGE_CACHE: "forge:get-first-page-cache",
+  FORGE_GET_REPO_KEY: "forge:get-repo-key",
   FORGE_GET_PROJECT_HEALTH: "forge:get-project-health",
   FORGE_GET_ISSUE_TOOLTIP: "forge:get-issue-tooltip",
   FORGE_GET_PR_TOOLTIP: "forge:get-pr-tooltip",
@@ -1150,6 +1157,14 @@ export const CHANNELS = {
   // Copy-tree run history (#11732). Read-only: the main process records a run
   // where it completes, so there is no append channel to forge entries through.
   COPY_TREE_HISTORY_GET_RECORDS: "copy-tree-history:get-records",
+
+  // Scheduled-run history (#15976). Read-only: main registers runs and records
+  // the facts on them.
+  SCHEDULED_RUNS_LIST_BY_PROJECT: "scheduled-runs:list-by-project",
+  SCHEDULED_RUNS_LIST_BY_SCHEDULE: "scheduled-runs:list-by-schedule",
+  // Runs that settled with no window open, for a view's notification inbox (#15983).
+  SCHEDULED_RUNS_TAKE_INBOX: "scheduled-runs:take-inbox",
+  SCHEDULED_RUNS_ACK_INBOX: "scheduled-runs:ack-inbox",
 
   // Plugin channels
   PLUGIN_LIST: "plugin:list",
@@ -1414,6 +1429,10 @@ export const CHANNELS = {
   // Every instance id with that switch on, so each view can join reports
   // against it without one read per plugin.
   PLUGIN_CAPABILITY_LIST_PANEL_ATTENTION: "plugin-capability:list-panel-attention",
+  // The presets a plugin may launch agents on (#16324), one grant each, and
+  // withdrawing one. Grants are made only by the first-use prompt.
+  PLUGIN_CAPABILITY_LIST_PRESET_GRANTS: "plugin-capability:list-preset-grants",
+  PLUGIN_CAPABILITY_REVOKE_PRESET_GRANT: "plugin-capability:revoke-preset-grant",
 
   // Plugin managed-process channels (#9234) — child processes spawned by a
   // plugin via `host.process.spawn` (gated on `shell:exec`). `list` is the
@@ -1443,6 +1462,10 @@ export const CHANNELS = {
   AGENT_TOOLBAR_PINS_GET: "agent-toolbar-pins:get",
   AGENT_TOOLBAR_PINS_SET: "agent-toolbar-pins:set",
   AGENT_TOOLBAR_PINS_CHANGED: "agent-toolbar-pins:changed",
+
+  // An agent's accounts (#16040)
+  AGENT_ACCOUNTS_ADD: "agent-accounts:add",
+  AGENT_ACCOUNTS_REMOVE: "agent-accounts:remove",
 
   // Per-project presentation profile (#13771)
   PROJECT_PRESENTATION_GET: "project-presentation:get",
@@ -1478,6 +1501,111 @@ export const CHANNELS = {
   REVIEW_MARKS_COMPARE: "review-marks:compare",
   REVIEW_MARKS_FILE_SINCE: "review-marks:file-since",
   REVIEW_MARKS_CHANGED: "review-marks:changed",
+
+  // The sender project's schedules (#15975)
+  SCHEDULES_LIST: "schedules:list",
+  SCHEDULES_CREATE: "schedules:create",
+  SCHEDULES_UPDATE: "schedules:update",
+  SCHEDULES_SET_ENABLED: "schedules:set-enabled",
+  SCHEDULES_SET_SWITCHES: "schedules:set-switches",
+  SCHEDULES_REMOVE: "schedules:remove",
+  SCHEDULES_CHANGED: "schedules:changed",
+  SCHEDULES_RUN_NOW: "schedules:run-now",
+  SCHEDULES_OS_JOB_STATUS: "schedules:os-job-status",
+  SCHEDULES_REPAIR_OS_JOB: "schedules:repair-os-job",
+  // Main asks the view showing a project to launch a scheduled run (#15978)
+  SCHEDULES_LAUNCH_REQUEST: "schedules:launch-request",
+  SCHEDULES_LAUNCH_RESPONSE: "schedules:launch-response",
+  // Main asks the views holding a run's pane to apply its done policy (#15982)
+  SCHEDULES_FINISH_REQUEST: "schedules:finish-request",
+  SCHEDULES_RUN_CLOSED: "schedules:run-closed",
+
+  // An agent terminal's When done choice (#16171)
+  TERMINAL_WHEN_DONE_SET: "terminal-when-done:set",
+  TERMINAL_WHEN_DONE_LIST: "terminal-when-done:list",
+  TERMINAL_WHEN_DONE_CHANGED: "terminal-when-done:changed",
+  // Main asks the views of a project to move or remove an armed terminal's pane
+  TERMINAL_WHEN_DONE_FINISH_REQUEST: "terminal-when-done:finish-request",
+  // Main asks each view whether someone is using a pane before moving it
+  TERMINAL_WHEN_DONE_IN_USE_QUERY: "terminal-when-done:in-use-query",
+  TERMINAL_WHEN_DONE_IN_USE_REPLY: "terminal-when-done:in-use-reply",
+
+  // Decisions, as main observes it (#16001). The owner's machine only.
+  DECISIONS_GET_STATUS: "decisions:get-status",
+  // One pane's Decisions state, for its chrome to show on mount (#16016).
+  // Read from the machine that owns the pane.
+  DECISIONS_GET_PANE_STATE: "decisions:get-pane-state",
+  DECISIONS_SET_ENABLED: "decisions:set-enabled",
+  // A relay URL's unsigned health and protocol check (#16005), from main.
+  DECISIONS_CHECK_RELAY: "decisions:check-relay",
+  // Claiming a relay, restoring an identity from a recovery kit, and removing
+  // this computer's identity (#16006), all in main.
+  DECISIONS_CLAIM_RELAY: "decisions:claim-relay",
+  // The guided relay deploy's host channel and the relay it created (#16199):
+  // opening the channel, dropping one no pane connected to, and claiming
+  // the relay with the claim secret main holds from it.
+  DECISIONS_PREPARE_RELAY_DEPLOY: "decisions:prepare-relay-deploy",
+  DECISIONS_CANCEL_RELAY_DEPLOY: "decisions:cancel-relay-deploy",
+  DECISIONS_CLAIM_DEPLOYED_RELAY: "decisions:claim-deployed-relay",
+  DECISIONS_RESTORE_IDENTITY: "decisions:restore-identity",
+  DECISIONS_DISCONNECT_RELAY: "decisions:disconnect-relay",
+  // Watching a guided removal of the relay from Cloudflare (#16202), so its
+  // record goes once the removal's terminal exits 0.
+  DECISIONS_START_RELAY_REMOVAL: "decisions:start-relay-removal",
+  // The devices paired with this computer's relay identity, and pairing a
+  // phone through a one-time invitation and matching digits (#16009).
+  DECISIONS_LIST_DEVICES: "decisions:list-devices",
+  DECISIONS_START_PAIRING: "decisions:start-pairing",
+  DECISIONS_GET_PAIRING: "decisions:get-pairing",
+  DECISIONS_APPROVE_PAIRING: "decisions:approve-pairing",
+  DECISIONS_DECLINE_PAIRING: "decisions:decline-pairing",
+  // Exporting the decision history, and deleting the relay's stored content
+  // or this computer's Decisions data (#16025), all in main.
+  DECISIONS_EXPORT_DATA: "decisions:export-data",
+  DECISIONS_DELETE_RELAY_DATA: "decisions:delete-relay-data",
+  DECISIONS_DELETE_LOCAL_DATA: "decisions:delete-local-data",
+  // The trusted workflow gates, read-only, the proxy allowlist (#16013) and
+  // the default question expiry (#16122).
+  DECISIONS_GET_POLICY: "decisions:get-policy",
+  DECISIONS_SET_PROXY_ALLOWLISTED: "decisions:set-proxy-allowlisted",
+  DECISIONS_SET_DEFAULT_QUESTION_EXPIRY: "decisions:set-default-question-expiry",
+  DECISIONS_SET_AGENT_ASK_HUMAN: "decisions:set-agent-ask-human",
+  // Whether the phone may show the asking pane's title, state and last lines (#16228).
+  DECISIONS_SET_TERMINAL_SNAPSHOTS: "decisions:set-terminal-snapshots",
+  // Which terminals a view's hybrid input holds a draft for, which an answer waits behind (#16282).
+  DECISIONS_REPORT_COMPOSER_DRAFTS: "decisions:report-composer-drafts",
+  // Saving a recovery kit through a save dialog, and verifying a saved one (#16007).
+  DECISIONS_EXPORT_RECOVERY_KIT: "decisions:export-recovery-kit",
+  DECISIONS_VERIFY_RECOVERY_KIT: "decisions:verify-recovery-kit",
+  // Revoking a paired device, and rotating the content key without revoking
+  // anyone (#16010).
+  DECISIONS_REVOKE_DEVICE: "decisions:revoke-device",
+  DECISIONS_ROTATE_KEYS: "decisions:rotate-keys",
+  // Remote Hosts enrolled as Decisions devices (#16021): what each shows,
+  // Enroll on one, and automatic enrollment's switch.
+  DECISIONS_LIST_HOSTS: "decisions:list-hosts",
+  DECISIONS_ENROLL_HOST: "decisions:enroll-host",
+  DECISIONS_SET_AUTO_ENROLL_HOSTS: "decisions:set-auto-enroll-hosts",
+  // The setup check: the whole loop, run against the relay set up here, and
+  // called off (#16024).
+  DECISIONS_START_SETUP_CHECK: "decisions:start-setup-check",
+  DECISIONS_GET_SETUP_CHECK: "decisions:get-setup-check",
+  DECISIONS_CANCEL_SETUP_CHECK: "decisions:cancel-setup-check",
+  // Answers that need a person (#16020): the list, copying one, resuming
+  // its agent, choosing another pane, and marking it handled.
+  DECISIONS_LIST_ATTENTION: "decisions:list-attention",
+  DECISIONS_COPY_ANSWER: "decisions:copy-answer",
+  DECISIONS_RESUME_ANSWER: "decisions:resume-answer",
+  DECISIONS_LIST_ANSWER_DESTINATIONS: "decisions:list-answer-destinations",
+  DECISIONS_REASSIGN_ANSWER: "decisions:reassign-answer",
+  DECISIONS_MARK_ANSWER_HANDLED: "decisions:mark-answer-handled",
+  // The decision model's settings, evaluation and history (#16027).
+  DECISIONS_GET_MODEL: "decisions:get-model",
+  DECISIONS_SET_MODEL: "decisions:set-model",
+  DECISIONS_START_MODEL_EVALUATION: "decisions:start-model-evaluation",
+  DECISIONS_CANCEL_MODEL_EVALUATION: "decisions:cancel-model-evaluation",
+  DECISIONS_SET_MODEL_THRESHOLD: "decisions:set-model-threshold",
+  DECISIONS_CLEAR_MODEL_HISTORY: "decisions:clear-model-history",
 
   // Per-service connectivity channels
   CONNECTIVITY_GET_STATE: "connectivity:get-state",
@@ -1532,6 +1660,7 @@ export const CHANNELS = {
   REMOTE_HOSTS_FORGET: "remote-hosts:forget",
   REMOTE_HOSTS_CONNECT: "remote-hosts:connect",
   REMOTE_HOSTS_DISCONNECT: "remote-hosts:disconnect",
+  REMOTE_HOSTS_BRING_BACK: "remote-hosts:bring-back",
   REMOTE_HOSTS_GET_WINDOW_HOST: "remote-hosts:get-window-host",
   REMOTE_HOSTS_TAKE_PROJECT_OFFER: "remote-hosts:take-project-offer",
   REMOTE_HOSTS_SWITCH_WINDOW_HOST: "remote-hosts:switch-window-host",
@@ -1591,6 +1720,8 @@ export const CHANNELS = {
   FILE_TRANSFER_ANSWER_HOST_PICK: "file-transfer:answer-host-pick",
   FILE_TRANSFER_GET_PREVIEW_CAPABILITY: "file-transfer:get-preview-capability",
   FILE_TRANSFER_STAT_LOCAL_FILE: "file-transfer:stat-local-file",
+  FILE_TRANSFER_SUMMARIZE_LOCAL_FOLDER: "file-transfer:summarize-local-folder",
+  FILE_TRANSFER_UPLOAD_LOCAL_FOLDER: "file-transfer:upload-local-folder",
   FILE_TRANSFER_GET_UPLOAD_PREFERENCES: "file-transfer:get-upload-preferences",
   FILE_TRANSFER_SET_UPLOAD_PREFERENCES: "file-transfer:set-upload-preferences",
   FILE_TRANSFER_EVENT: "file-transfer:event",

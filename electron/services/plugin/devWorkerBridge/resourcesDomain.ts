@@ -7,6 +7,7 @@ import {
   pluginTaskAbortCause,
 } from "../../../../shared/utils/pluginTasks.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
+import { killPluginProcessForHost } from "../pluginInternalApprovers.js";
 import type {
   PluginArtifactDownloadRequest,
   PluginArtifactImportSource,
@@ -223,10 +224,12 @@ export class ResourcesDomain {
       // Disposed or reloaded while the spawn was settling — the worker that
       // requested it is gone — or the worker gave up on the call (a cancel
       // or its deadline, #13410) and will never learn this handle's id;
-      // kill the orphan rather than leak it.
+      // kill the orphan rather than leak it. The host's own kill: this call's
+      // caller may have lost the project meanwhile, and the orphan is still
+      // the host's to clean up.
       if (this.ctx.isDisposed() || generation !== this.ctx.generation() || signal.aborted) {
         try {
-          handle.kill();
+          killPluginProcessForHost(handle);
         } catch {
           // best-effort
         }
@@ -420,7 +423,7 @@ export class ResourcesDomain {
   disposeProcessHandles(): void {
     for (const handle of this.processHandles.values()) {
       try {
-        handle.kill();
+        killPluginProcessForHost(handle);
       } catch {
         // best-effort
       }

@@ -33,6 +33,7 @@ import type { KeyAction } from "../keymap.js";
 import type { TerminalExitContext } from "../terminal.js";
 import type {
   KeybindingImportResult,
+  KeybindingOverridesSnapshot,
   MicPermissionStatus,
   NotificationSettings,
   VoiceCleanupFailure,
@@ -293,6 +294,13 @@ export interface MainProcessToastPayload {
    * `"watch"` always shows both an in-app toast and an OS native notification.
    */
   priority?: "high" | "low" | "watch";
+  /**
+   * Threaded through to `notify({ urgent })`: shown even during quiet hours
+   * and the startup quiet period. Only for a notice that loses its point if it
+   * waits, such as confirmed database corruption. Never set for a plugin's
+   * toast.
+   */
+  urgent?: boolean;
   action?: {
     label: string;
     /** IPC channel to invoke when the action button is clicked */
@@ -1049,19 +1057,19 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
   // Keybinding channels
   "keybinding:get-overrides": {
     args: [];
-    result: Record<KeyAction, string[]>;
+    result: KeybindingOverridesSnapshot;
   };
   "keybinding:set-override": {
     args: [payload: { actionId: KeyAction; combo: string[] }];
-    result: void;
+    result: KeybindingOverridesSnapshot;
   };
   "keybinding:remove-override": {
     args: [actionId: KeyAction];
-    result: void;
+    result: KeybindingOverridesSnapshot;
   };
   "keybinding:reset-all": {
     args: [];
-    result: void;
+    result: KeybindingOverridesSnapshot;
   };
   "keybinding:export-profile": {
     args: [];
@@ -1555,6 +1563,8 @@ export interface IpcEventMap {
   "remote-hosts:event": import("./remoteHosts.js").RemoteHostsEvent;
   "host-mode:event": import("./hostMode.js").HostModeEvent;
   "device-answer:event": import("./deviceAnswer.js").DeviceAnswerEvent;
+  /** Every assistant persona as stored, after any write (#16213). */
+  "help-assistant:identities-changed": import("../displayIdentity.js").AssistantIdentities;
   "drive-lease:event": import("./driveLease.js").DriveLeaseEvent;
   "operations:event": import("./operations.js").OperationsEvent;
   "file-transfer:event": import("./fileTransfer.js").FileTransferEvent;
@@ -1607,6 +1617,14 @@ export interface IpcEventMap {
   "terminal:canopy-size-holds-changed": string[];
   // A pane's pending terminal notices changed; project-scoped send.
   "terminal:notify-state": import("../terminalNotify.js").PaneNotifyState;
+  // A pane's Decisions questions or answers changed; project-scoped send.
+  "terminal:decision-state": import("../decisions.js").PaneDecisionState;
+  // This machine's Decisions status changed, relay connection included; sent to its own windows only.
+  "decisions:status-changed": import("../decisions.js").DecisionsStatus;
+  // The relay's paired devices or its key changed; Settings reads the list again. Its own windows only.
+  "decisions:devices-changed": null;
+  // The setup check's progress (#16024). Its own windows only.
+  "decisions:setup-check-changed": import("../decisions.js").DecisionsSetupCheckRun;
   "terminal:reliability-metric": TerminalReliabilityMetricPayload;
   "terminal:resource-metrics": { metrics: TerminalResourceBatchPayload; timestamp: number };
   "terminal:broadcast-write-result": BroadcastWriteResultPayload;
@@ -1720,6 +1738,36 @@ export interface IpcEventMap {
   // The sender project's review marks changed (#14584); main sends them to every view of that project.
   "review-marks:changed": import("./reviewMarks.js").ReviewMarksSnapshot;
 
+  // The sender project's schedules changed (#15975); main sends them to every local view of that project.
+  "schedules:changed": import("./schedules.js").SchedulesSnapshot;
+
+  /**
+   * Main asks the view showing a project to launch a scheduled run (#15978)
+   * and awaits a renderer `ipcRenderer.send` reply on
+   * `CHANNELS.SCHEDULES_LAUNCH_RESPONSE`, correlated by `requestId`. The
+   * response channel is a renderer→main fire-and-forget send tracked in
+   * `DEAD_CHANNEL_ALLOWLIST` in channelDrift.test.ts.
+   */
+  "schedules:launch-request": import("./schedules.js").ScheduledLaunchViewRequest;
+
+  // Main asks every local view of a project to move or remove a scheduled run's pane by its done policy (#15982).
+  "schedules:finish-request": import("./schedules.js").ScheduledRunFinishRequest;
+  // Main closed a scheduled run's terminal to replace it (#15980); a view showing the project drops its pane.
+  "schedules:run-closed": import("./schedules.js").ScheduledRunClosedPush;
+
+  // An agent terminal's When done choice changed (#16171); main sends it to every view of that project.
+  "terminal-when-done:changed": import("./terminalWhenDone.js").TerminalWhenDoneChange;
+  // Main asks every local view of a project to move or remove an armed terminal's pane (#16171).
+  "terminal-when-done:finish-request": import("./terminalWhenDone.js").TerminalWhenDoneFinishRequest;
+  /**
+   * Main asks a view whether someone is using a pane before moving it (#16171)
+   * and awaits a renderer `ipcRenderer.send` reply on
+   * `CHANNELS.TERMINAL_WHEN_DONE_IN_USE_REPLY`, correlated by `requestId`. The
+   * reply channel is a renderer→main fire-and-forget send tracked in
+   * `DEAD_CHANNEL_ALLOWLIST` in channelDrift.test.ts.
+   */
+  "terminal-when-done:in-use-query": import("./terminalWhenDone.js").TerminalWhenDoneInUseQuery;
+
   /**
    * MCP server runtime-state transition. Distinct from
    * `connectivity:service-changed` because the renderer needs the derived
@@ -1760,6 +1808,8 @@ export interface IpcEventMap {
     authorization?: import("./mcpServer.js").McpDispatchAuthorization;
     /** The pane or Assistant tab that sent the call (#14992); set only by main. */
     requester?: import("./mcpServer.js").McpRequester;
+    /** Main's deadline for the call as sent, epoch ms (#15648); set only by main. */
+    dispatchDeadlineAt?: number;
   };
 
   /**
@@ -1777,6 +1827,8 @@ export interface IpcEventMap {
     args: unknown;
     /** The calling plugin, from its host's closure; absent for host-internal dispatches. */
     pluginId?: string;
+    /** Main's consent for an `agent.launch` on one preset (#16324); never from the plugin. */
+    approvedPresetLaunch?: import("../../utils/agentPresetLaunchConsent.js").HostApprovedPluginPresetLaunch;
   };
 
   /**
@@ -2193,7 +2245,8 @@ export interface IpcEventMap {
   "idle-background:closed": IdleBackgroundClosedPayload;
 
   // App theme events
-  "app-theme:system-appearance-changed": { isDark: boolean; schemeId: string };
+  // The persisted global settings, after any view or the OS changed them
+  "app-theme:changed": AppThemeConfig;
 
   // Config reload events
   "app:config-reloaded": void;
@@ -2211,7 +2264,9 @@ export interface IpcEventMap {
   // resume event on reattach, so this is the renderer's deterministic trigger
   // to run the wake fan-out whose completion releases the warm paint gate.
   "app:view-warm-activated": { switchId?: string } | undefined;
-  "app:view-cached": void;
+  // Carries a flush id only when main is holding the view for the renderer's
+  // cached-edge flush, which the renderer echoes back once it settles (#15633).
+  "app:view-cached": { flushId: string } | undefined;
 
   // Privacy events
   "privacy:telemetry-consent-changed": {
@@ -2237,6 +2292,9 @@ export interface IpcEventMap {
 
   // This machine's saved grid layout changed (#14700)
   "app:panel-grid-config-changed": import("../config.js").PanelGridConfig;
+
+  // This machine's saved keybinding overrides, the whole map (#15579)
+  "keybinding:overrides-changed": KeybindingOverridesSnapshot;
 
   // A saved terminal-config change, one owner's fields each (#14699)
   "terminal-config:device-changed": Partial<import("./config.js").TerminalConfig>;
@@ -2528,6 +2586,11 @@ export interface IpcEventMap {
     records: import("./copyTreeHistory.js").CopyTreeHistoryRecord[];
   };
 
+  // Scheduled-run history changed (main → renderer, #15976). Sent only to views
+  // bound to `projectId`; carries which schedules changed, and the view reads
+  // their runs again.
+  "scheduled-runs:changed": import("./scheduledRuns.js").ScheduledRunsChangedPayload;
+
   // `daintree://` deep-link intent (main → renderer, #9559). Delivered to the
   // primary window once it has painted; the renderer opens the Plugin Manager
   // (URL pre-filled for install, or scrolled to the plugin for open). Routing
@@ -2710,6 +2773,8 @@ export type IpcEventBusMap = Pick<
   | "run-history:update"
   // Copy-tree run history changed (project-scoped send)
   | "copy-tree-history:update"
+  // Scheduled-run history changed (project-scoped send)
+  | "scheduled-runs:changed"
   // Plugin deep-link intent (targeted at the primary window)
   | "plugin:deep-link"
   // Double-clicked `.dntr` archive awaiting confirmation (targeted at the primary window)
@@ -2733,6 +2798,11 @@ export type IpcEventBusMap = Pick<
   | "terminal:adoptions-changed"
   | "terminal:canopy-size-holds-changed"
   | "terminal:notify-state"
+  | "terminal:decision-state"
+  // This machine's Decisions status (local windows only)
+  | "decisions:status-changed"
+  | "decisions:devices-changed"
+  | "decisions:setup-check-changed"
   // Agent session journaled — resume surfaces refetch (global broadcast)
   | "agent-session:recorded"
   // A gated park auto-released — the ready-again hand-back (global broadcast)

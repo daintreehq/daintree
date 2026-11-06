@@ -1881,6 +1881,80 @@ describe("spawnedBy propagation", () => {
   });
 });
 
+// A scheduled run's pane keeps its schedule and run across a restart (#15977),
+// and only ever as a pair.
+describe("scheduled run provenance across a restore", () => {
+  const RUN = { scheduleId: "schedule-1", runId: "run-1" };
+  const builders = [
+    [
+      "backend match",
+      (saved: SavedSnapshot) =>
+        buildArgsForBackendTerminal({ id: "t1", cwd: "/p", kind: "terminal" }, saved, "/p"),
+    ],
+    [
+      "reconnect fallback",
+      (saved: SavedSnapshot) =>
+        buildArgsForReconnectedFallback({ id: "t1", cwd: "/p" }, saved, "/p"),
+    ],
+    [
+      "respawn",
+      (saved: SavedSnapshot) => buildArgsForRespawn(saved, "terminal", "/p", {}, false, undefined),
+    ],
+  ] as const;
+
+  it.each(builders)("survives save -> disk -> %s -> save", (_label, build) => {
+    const snapshot = serializePtyPanel({
+      id: "t1",
+      title: "Nightly",
+      kind: "terminal",
+      launchAgentId: "claude",
+      command: "claude",
+      agentSessionId: "sess-1",
+      cwd: "/p",
+      location: "grid",
+      cols: 80,
+      rows: 24,
+      spawnedBy: "schedule",
+      scheduledRun: RUN,
+    } as PtyPanelData);
+    expect(snapshot).toMatchObject({ spawnedBy: "schedule", scheduledRun: RUN });
+
+    const onDisk = JSON.parse(JSON.stringify({ ...snapshot, id: "t1", location: "grid" }));
+    const args = build(onDisk);
+    // Premise: the builder brought back an agent pane, not a bare shell.
+    expect(args.launchAgentId).toBe("claude");
+    expect(args).toMatchObject({ spawnedBy: "schedule", scheduledRun: RUN });
+
+    const restored = {
+      id: "t1",
+      title: args.title ?? "Nightly",
+      kind: "terminal",
+      cwd: args.cwd,
+      location: "grid",
+      cols: 80,
+      rows: 24,
+      spawnedBy: args.spawnedBy,
+      scheduledRun: args.scheduledRun,
+    } as PtyPanelData;
+    expect(serializePtyPanel(restored)).toMatchObject({
+      spawnedBy: "schedule",
+      scheduledRun: RUN,
+    });
+  });
+
+  it.each(builders)("drops a half pair from disk on a %s", (_label, build) => {
+    const base = { id: "t1", kind: "terminal" as const, cwd: "/p", location: "grid" };
+
+    const sourceOnly = build({ ...base, spawnedBy: "schedule" });
+    expect(sourceOnly.spawnedBy).toBeUndefined();
+    expect(sourceOnly.scheduledRun).toBeUndefined();
+
+    const strayRun = build({ ...base, spawnedBy: "palette", scheduledRun: RUN });
+    expect(strayRun.spawnedBy).toBe("palette");
+    expect(strayRun.scheduledRun).toBeUndefined();
+  });
+});
+
 // Regression for #5765: the sticky everDetectedAgent flag must survive every
 // reconnect/hydration builder so a reload doesn't drop it and then expose the
 // original trash-on-exit bug.
@@ -2430,6 +2504,123 @@ describe("buildArgsForReconnectedFallback — extensionState", () => {
       "/p"
     );
     expect(result.extensionState).toEqual(extState);
+  });
+});
+
+describe("buildArgsForRespawn — a pane saved showing its exit (#15941)", () => {
+  function respawn(saved: Record<string, unknown>, mintFreshTerminalId = false) {
+    return buildArgsForRespawn(
+      { id: "t1", kind: "terminal", cwd: "/p", location: "grid", ...saved } as SavedTerminalData,
+      "terminal",
+      "/p",
+      { agents: {} },
+      mintFreshTerminalId,
+      undefined
+    );
+  }
+
+  it("restores a plain terminal's exit instead of a new process", () => {
+    const panel = {
+      id: "t1",
+      kind: "terminal",
+      title: "Dev server",
+      cwd: "/p",
+      location: "grid",
+      command: "npm run dev",
+      runtimeStatus: "exited",
+      exitCode: 3,
+    } as PtyPanelData;
+
+    const result = respawn({ title: "Dev server", ...serializePtyPanel(panel) });
+
+    expect(result.restoredExitCode).toBe(3);
+    expect(result.command).toBe("npm run dev");
+    // Nothing is rebuilt, so restore claims no disposition for it.
+    expect(result.restoreProvenance).toBeUndefined();
+  });
+
+  it("keeps a clean exit, since zero is a code", () => {
+    expect(respawn({ exitCode: 0 }).restoredExitCode).toBe(0);
+  });
+
+  it("restores the exit under a fresh id too, since nothing starts either way", () => {
+    const result = respawn({ exitCode: 2 }, true);
+    expect(result.requestedId).toBeUndefined();
+    expect(result.restoredExitCode).toBe(2);
+  });
+
+  it("keeps a negative code, which a process can report", () => {
+    expect(respawn({ exitCode: -1 }).restoredExitCode).toBe(-1);
+  });
+
+  it("ignores a saved value that was never an exit code", () => {
+    for (const exitCode of ["3", 1.5, Number.NaN, Number.POSITIVE_INFINITY, null, true]) {
+      const result = respawn({ exitCode });
+      expect(result.restoredExitCode).toBeUndefined();
+      expect(result.restoreProvenance?.disposition).toBe("fresh");
+    }
+  });
+
+  it("leaves an agent pane on its resume path", () => {
+    const result = respawn({
+      launchAgentId: "claude",
+      title: "Claude",
+      agentSessionId: "sess-1",
+      exitCode: 1,
+    });
+    expect(result.command).toBe("claude --resume sess-1");
+    expect(result.agentSessionId).toBe("sess-1");
+    expect(result.restoreProvenance?.disposition).toBe("resume");
+    expect(result.restoredExitCode).toBeUndefined();
+  });
+
+  it("leaves a dev preview to start its server again", () => {
+    const result = buildArgsForRespawn(
+      { id: "t1", kind: "dev-preview", cwd: "/p", location: "grid", exitCode: 1 },
+      "dev-preview",
+      "/p",
+      { agents: {} },
+      false,
+      undefined
+    );
+    expect(result.restoredExitCode).toBeUndefined();
+  });
+
+  it("starts a terminal with no saved exit as before", () => {
+    expect(respawn({}).restoredExitCode).toBeUndefined();
+  });
+});
+
+describe("buildArgsForBackendTerminal — a host record with no process left (#15941)", () => {
+  const saved = { id: "t1", kind: "terminal" as const, cwd: "/p", location: "grid", exitCode: 0 };
+
+  it("reattaches a plain terminal showing the exit it saved", () => {
+    const result = buildArgsForBackendTerminal({ id: "t1", cwd: "/p", hasPty: false }, saved, "/p");
+    expect(result.existingId).toBe("t1");
+    expect(result.restoredExitCode).toBe(0);
+  });
+
+  it("reattaches a live one as live, whatever the snapshot says", () => {
+    const result = buildArgsForBackendTerminal({ id: "t1", cwd: "/p", hasPty: true }, saved, "/p");
+    expect(result.restoredExitCode).toBeUndefined();
+  });
+
+  it("claims no exit it never saw", () => {
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", cwd: "/p", hasPty: false },
+      { ...saved, exitCode: undefined },
+      "/p"
+    );
+    expect(result.restoredExitCode).toBeUndefined();
+  });
+
+  it("leaves an agent's record to the agent paths", () => {
+    const result = buildArgsForBackendTerminal(
+      { id: "t1", cwd: "/p", hasPty: false, launchAgentId: "claude" },
+      saved,
+      "/p"
+    );
+    expect(result.restoredExitCode).toBeUndefined();
   });
 });
 
@@ -3066,7 +3257,7 @@ describe("adversarial: behavioral overrides flow through to generateAgentCommand
     expect(entry.customFlags).toBe("--base-flag");
   });
 
-  it("preset.args are joined and passed as presetArgs option", () => {
+  it("preset.args are passed as presetArgs element by element (#15638)", () => {
     getMergedPresetMock.mockReturnValue({
       id: "user-x",
       name: "WithArgs",
@@ -3074,7 +3265,7 @@ describe("adversarial: behavioral overrides flow through to generateAgentCommand
     });
     buildArgsForRespawn(BASE, "agent", "/p", { agents: { claude: {} } }, false, undefined);
     const opts = generateAgentCommandMock.mock.calls[0]![3] as Record<string, unknown>;
-    expect(opts.presetArgs).toBe("--system-prompt be concise");
+    expect(opts.presetArgs).toEqual(["--system-prompt", "be concise"]);
   });
 
   it("no preset → generateAgentCommand receives unmodified base entry", () => {

@@ -8,12 +8,18 @@ vi.mock("electron", () => ({
 
 import { EndpointRegistryImpl } from "../../../ipc/endpointRegistry.js";
 import { DriveLeaseService } from "../../../services/DriveLeaseService.js";
-import type { EndpointInvocation, RemoteSessionExpiryCause } from "../../../ipc/endpoint.js";
+import type {
+  EndpointGroup,
+  EndpointInvocation,
+  RemoteSessionExpiryCause,
+} from "../../../ipc/endpoint.js";
 import { logBuffer } from "../../../services/LogBuffer.js";
 import { wrapSuccess } from "../../../../shared/utils/ipcErrorSerialization.js";
 import type { IpcEnvelope } from "../../../../shared/types/ipc/errors.js";
+import { CHANNELS } from "../../../ipc/channels.js";
+import type { HandshakeMismatch } from "../../../../shared/types/remoteHosts.js";
 import { Lane } from "../../link/frames.js";
-import { ControlKind } from "../../link/messages.js";
+import { ControlKind, EventKind } from "../../link/messages.js";
 import type { EnqueueResult } from "../../link/scheduler.js";
 import type { LinkSession } from "../../link/session.js";
 import type { HostSessionContext, HostSessionExpired } from "../HostServer.js";
@@ -107,12 +113,19 @@ function fakeServer() {
       expiredListeners.add(l);
       return () => expiredListeners.delete(l);
     },
-    attach(sessionId: string, link: ReturnType<typeof fakeLink>, resumed = false, clientId = "c1") {
+    attach(
+      sessionId: string,
+      link: ReturnType<typeof fakeLink>,
+      resumed = false,
+      clientId = "c1",
+      buildMismatch: HandshakeMismatch | null = null
+    ) {
       const ctx = {
         sessionId,
         resumed,
         client: { clientId, clientName: "greg-mbp", platform: "darwin" as const },
         session: link as unknown as LinkSession,
+        buildMismatch,
       };
       for (const l of sessionListeners) l(ctx);
     },
@@ -195,6 +208,41 @@ describe("SessionHost", () => {
     link.emit(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, { endpointId: "view-1" });
     expect(counts.at(-1)).toBe(0);
     expect(host.attachedCount).toBe(0);
+  });
+
+  it("serves views only while a live link has one open, untouched or not (#15907)", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    // A summary-only link reads no view's answers.
+    expect(host.servesViews).toBe(false);
+    open(link, "view-1", "p");
+    expect(host.servesViews).toBe(true);
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(host.attachedCount).toBe(0);
+    expect(host.servesViews).toBe(true);
+
+    link.emit(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, { endpointId: "view-1" });
+    expect(host.servesViews).toBe(false);
+
+    open(link, "view-2", "p");
+    link.drop();
+    // Its views are kept for the Shell, but nothing can read their answers.
+    expect(registry.getRemote()).toHaveLength(1);
+    expect(host.servesViews).toBe(false);
+    const handshaking = fakeLink();
+    handshaking.isOpen = false;
+    server.attach("s1", handshaking, true);
+    expect(host.servesViews).toBe(false);
+    server.attach("s1", fakeLink(), true);
+    expect(host.servesViews).toBe(true);
+
+    const other = fakeLink();
+    server.attach("s2", other);
+    open(other, "view-1", "q");
+    server.expire("s1");
+    expect(host.servesViews).toBe(true);
+    host.dispose();
+    expect(host.servesViews).toBe(false);
   });
 
   it("stops holding the host awake once a window has gone unused, and resumes on input", () => {
@@ -484,6 +532,427 @@ describe("SessionHost", () => {
     link.drop();
     expect(handle.link()).toBeNull();
   });
+});
+
+describe("SessionHost: one push for every view of a session (#15902)", () => {
+  // A host-locality channel: a same-build Shell would discard anything else on arrival (#15901).
+  const frame = {
+    type: "event" as const,
+    channel: CHANNELS.WORKTREE_ACTIVATED,
+    args: [{ worktreeId: "w" }],
+  };
+  const events = (link: ReturnType<typeof fakeLink>) =>
+    link.posted.filter((m) => m.lane === Lane.EVENTS && m.kind === EventKind.EVENT);
+  const addressed = (link: ReturnType<typeof fakeLink>) =>
+    events(link).map((m) => (m.body as { endpointId: unknown }).endpointId);
+
+  it("posts one EVENT addressed to the whole session, and none to another session", () => {
+    const one = fakeLink();
+    const two = fakeLink();
+    server.attach("s1", one);
+    server.attach("s2", two, false, "c2");
+    open(one, "view-1", "p1");
+    open(one, "view-2", "p2");
+    open(two, "view-1", "p1");
+    const [a, b] = registry.getRemote().filter((e) => e.clientId === "c1");
+    const other = registry.getRemote().find((e) => e.clientId === "c2")!;
+    expect(a!.group).toBeDefined();
+    expect(b!.group).toBe(a!.group);
+    expect(other.group).not.toBe(a!.group);
+
+    a!.group!.sendToAll(frame);
+
+    expect(events(one)).toEqual([
+      {
+        lane: Lane.EVENTS,
+        kind: EventKind.EVENT,
+        body: { endpointId: null, channel: frame.channel, args: frame.args },
+      },
+    ]);
+    expect(events(two)).toEqual([]);
+  });
+
+  it("keeps the group of a resumed session, so its views still share one push", () => {
+    const first = fakeLink();
+    server.attach("s1", first);
+    open(first, "view-1", "p1");
+    const group = registry.getRemote()[0]!.group;
+    first.drop();
+    const second = fakeLink();
+    server.attach("s1", second, true);
+    open(second, "view-2", "p1");
+
+    const [kept, added] = registry.getRemote();
+    expect(kept!.group).toBe(group);
+    expect(added!.group).toBe(group);
+    group!.sendToAll(frame);
+    expect(addressed(second)).toEqual([null]);
+  });
+
+  it("goes quiet once its session expires, leaving a new session under the id its own group", () => {
+    const first = fakeLink();
+    server.attach("s1", first);
+    open(first, "view-1", "p1");
+    const expired = registry.getRemote()[0]!.group!;
+    server.expire("s1");
+
+    const second = fakeLink();
+    server.attach("s1", second);
+    open(second, "view-1", "p1");
+    expired.sendToAll(frame);
+    expect(addressed(second)).toEqual([]);
+
+    const current = registry.getRemote()[0]!.group!;
+    expect(current).not.toBe(expired);
+    current.sendToAll(frame);
+    expect(addressed(second)).toEqual([null]);
+  });
+
+  it("owes each view it was meant for a repaint when it is dropped with the link not open", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+    const group = registry.getRemote()[0]!.group!;
+    // Not open, and no close heard: only the drop itself owes the views anything.
+    link.isOpen = false;
+
+    group.sendToAll(frame);
+    expect(events(link)).toEqual([]);
+
+    link.isOpen = true;
+    link.tick();
+    expect(link.calls).toEqual([
+      {
+        method: LinkMethod.ENDPOINT_RESYNC,
+        payload: { endpointIds: ["view-1", "view-2"], reason: "reattached" },
+      },
+    ]);
+  });
+
+  it("addresses each endpoint for the rest of a session that refused a view at the cap", () => {
+    const first = fakeLink();
+    server.attach("s1", first);
+    open(first, "view-1", "p1");
+    open(first, "view-2", "p1");
+    open(first, "view-3", "p1");
+    const group = registry.getRemote()[0]!.group!;
+
+    group.sendToAll(frame);
+    // The Shell would hand a session-wide event to view-3 too, which has no endpoint here.
+    expect(addressed(first)).toEqual(["view-1", "view-2"]);
+
+    // Room below the cap doesn't open view-3, which the Shell still holds.
+    first.emit(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, { endpointId: "view-1" });
+    first.posted.length = 0;
+    group.sendToAll(frame);
+    expect(addressed(first)).toEqual(["view-2"]);
+
+    // A resumed link forgets the refusal until the Shell repeats view-3's open.
+    first.drop();
+    const second = fakeLink();
+    server.attach("s1", second, true);
+    group.sendToAll(frame);
+    expect(addressed(second)).toEqual(["view-2"]);
+  });
+
+  it("keeps one push for a session filled to the cap without turning a view away", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p1");
+
+    registry.getRemote()[0]!.group!.sendToAll(frame);
+    expect(addressed(link)).toEqual([null]);
+  });
+
+  it("owes every view of the session a repaint when the event can't be sent", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+    const group = registry.getRemote()[0]!.group!;
+    link.post = vi.fn(() => {
+      throw new Error("frame too large");
+    });
+
+    group.sendToAll(frame);
+
+    expect(link.calls).toEqual([
+      {
+        method: LinkMethod.ENDPOINT_RESYNC,
+        payload: { endpointIds: ["view-1", "view-2"], reason: "overflow" },
+      },
+    ]);
+  });
+
+  it("owes a repaint only to the view an addressed event that can't be sent was for", () => {
+    const link = fakeLink();
+    const other = fakeLink();
+    server.attach("s1", link);
+    server.attach("s2", other, false, "c2");
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+    open(other, "view-1", "p1");
+    link.post = vi.fn(() => {
+      throw new Error("frame too large");
+    });
+
+    registry
+      .getForProject("p1")
+      .find((e) => e.clientId === "c1")!
+      .send(frame);
+
+    expect(link.calls).toEqual([
+      {
+        method: LinkMethod.ENDPOINT_RESYNC,
+        payload: { endpointIds: ["view-1"], reason: "overflow" },
+      },
+    ]);
+    expect(other.calls).toEqual([]);
+  });
+
+  it("owes a view opened mid-resync the session-wide events it missed", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    const group = registry.getRemote()[0]!.group!;
+    link.postResult = "refused";
+    group.sendToAll(frame);
+    link.postResult = "queued";
+    link.queued = 10;
+    link.tick();
+    // Opened after the resync began, so only the dropped event owes it one.
+    open(link, "view-2", "p2");
+
+    group.sendToAll(frame);
+    link.queued = 0;
+    link.tick();
+
+    expect(link.calls).toEqual([
+      {
+        method: LinkMethod.ENDPOINT_RESYNC,
+        payload: { endpointIds: ["view-1", "view-2"], reason: "overflow" },
+      },
+    ]);
+  });
+
+  it("drops session-wide events while the Shell resyncs, then resumes them", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+    const group = registry.getRemote()[0]!.group!;
+
+    link.postResult = "refused";
+    group.sendToAll(frame);
+    link.postResult = "queued";
+    const posted = link.posted.length;
+    group.sendToAll(frame);
+    expect(link.posted).toHaveLength(posted);
+
+    link.tick();
+    expect(link.calls).toEqual([
+      {
+        method: LinkMethod.ENDPOINT_RESYNC,
+        payload: { endpointIds: ["view-1", "view-2"], reason: "overflow" },
+      },
+    ]);
+    group.sendToAll(frame);
+    expect(link.posted).toHaveLength(posted + 1);
+  });
+
+  it("resyncs the session when session-wide events keep its lane over high water", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+    const group = registry.getRemote()[0]!.group!;
+
+    link.postResult = "over-high-water";
+    link.queued = 5_000;
+    group.sendToAll(frame);
+    vi.advanceTimersByTime(100);
+    link.queued = 0;
+    link.postResult = "queued";
+    link.tick();
+
+    expect(link.calls).toEqual([
+      {
+        method: LinkMethod.ENDPOINT_RESYNC,
+        payload: { endpointIds: ["view-1", "view-2"], reason: "overflow" },
+      },
+    ]);
+  });
+
+  it("posts nothing for a session with no open endpoint", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    const group = registry.getRemote()[0]!.group!;
+    link.emit(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, { endpointId: "view-1" });
+
+    group.sendToAll(frame);
+    expect(events(link)).toEqual([]);
+  });
+});
+
+describe("SessionHost: pushes a Shell would discard by locality (#15901)", () => {
+  /** What a host broadcast does: one session-wide event per link session's group. */
+  function broadcast(channel: string, args: unknown[]) {
+    const frame = { type: "event" as const, channel, args };
+    const groups = new Set<EndpointGroup>();
+    for (const endpoint of registry.getRemote()) {
+      if (!endpoint.group) endpoint.send(frame);
+      else if (!groups.has(endpoint.group)) {
+        groups.add(endpoint.group);
+        endpoint.group.sendToAll(frame);
+      }
+    }
+  }
+
+  const eventFrames = (link: ReturnType<typeof fakeLink>) =>
+    link.posted
+      .filter((m) => m.lane === Lane.EVENTS && m.kind === EventKind.EVENT)
+      .map((m) => m.body as { endpointId: string | null; channel: string; args: unknown[] });
+
+  it("sends no EVENT frame for a shell-locality broadcast and still sends a host-locality one", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+
+    broadcast(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, [{ percent: 40 }]);
+    expect(eventFrames(link)).toEqual([]);
+
+    broadcast(CHANNELS.TERMINAL_DATA, ["t1", "hi"]);
+    expect(eventFrames(link).map((f) => [f.endpointId, f.channel])).toEqual([
+      [null, CHANNELS.TERMINAL_DATA],
+    ]);
+  });
+
+  it("keeps a shell-locality push addressed to one view off the link too", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+    open(link, "view-2", "p2");
+    const endpoint = registry.getForProject("p1")[0]!;
+
+    endpoint.send({ type: "event", channel: CHANNELS.UPDATE_DOWNLOAD_PROGRESS, args: [{}] });
+    endpoint.send({ type: "event", channel: CHANNELS.TERMINAL_DATA, args: ["t1", "hi"] });
+    expect(eventFrames(link).map((f) => [f.endpointId, f.channel])).toEqual([
+      ["view-1", CHANNELS.TERMINAL_DATA],
+    ]);
+  });
+
+  it("decides events:push by event name and hybrid channels by the half the host owns", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+
+    broadcast(CHANNELS.EVENTS_PUSH, [{ name: "sound:cancel", payload: {} }]);
+    broadcast(CHANNELS.KEEP_AWAKE_STATE_CHANGED, [{ active: true }]);
+    broadcast(CHANNELS.EVENTS_PUSH, [{ name: "agent-session:recorded", payload: {} }]);
+    broadcast(CHANNELS.APP_CONFIG_RELOADED, []);
+
+    expect(eventFrames(link).map((f) => f.channel)).toEqual([
+      CHANNELS.EVENTS_PUSH,
+      CHANNELS.APP_CONFIG_RELOADED,
+    ]);
+    expect(eventFrames(link)[0]!.args[0]).toMatchObject({ name: "agent-session:recorded" });
+  });
+
+  it("sends nothing a matching Shell would drop as unclassified, and keeps plugin pushes", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+
+    broadcast("made:up", []);
+    broadcast(CHANNELS.EVENTS_PUSH, [{ name: "made:up", payload: {} }]);
+    broadcast(CHANNELS.EVENTS_PUSH, ["not an envelope"]);
+    broadcast("plugin:acme:status", [{ ok: true }]);
+
+    expect(eventFrames(link).map((f) => f.channel)).toEqual(["plugin:acme:status"]);
+  });
+
+  it("keeps a discarded push off a backed-up lane, so it starts no resync", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+
+    link.postResult = "refused";
+    broadcast(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, [{ percent: 40 }]);
+    link.postResult = "over-high-water";
+    link.queued = 5_000;
+    broadcast(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, [{ percent: 41 }]);
+    vi.advanceTimersByTime(100);
+
+    link.postResult = "queued";
+    link.queued = 0;
+    broadcast(CHANNELS.TERMINAL_DATA, ["t1", "hi"]);
+    link.tick();
+    expect(eventFrames(link).map((f) => f.channel)).toEqual([CHANNELS.TERMINAL_DATA]);
+    expect(link.calls).toEqual([]);
+  });
+
+  it("owes no resync for a discarded push that met a closing link", () => {
+    const link = fakeLink();
+    server.attach("s1", link);
+    open(link, "view-1", "p1");
+
+    // Closed but not yet reported closed: drop() would mark every endpoint stale itself.
+    link.isOpen = false;
+    broadcast(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, [{ percent: 40 }]);
+    link.isOpen = true;
+    link.tick();
+    expect(link.calls).toEqual([]);
+
+    broadcast(CHANNELS.TERMINAL_DATA, ["t1", "hi"]);
+    expect(eventFrames(link).map((f) => f.channel)).toEqual([CHANNELS.TERMINAL_DATA]);
+  });
+
+  it("follows the build of the Shell's latest attach across resumes", () => {
+    const mismatch: HandshakeMismatch = { kind: "version", local: "1.2.3", remote: "1.2.4" };
+    const sent = (link: ReturnType<typeof fakeLink>) => {
+      broadcast(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, [{ percent: 40 }]);
+      return eventFrames(link).length;
+    };
+    const first = fakeLink();
+    server.attach("s1", first);
+    open(first, "view-1", "p1");
+    expect(sent(first)).toBe(0);
+
+    first.drop();
+    const second = fakeLink();
+    server.attach("s1", second, true, "c1", mismatch);
+    expect(sent(second)).toBe(1);
+
+    second.drop();
+    const third = fakeLink();
+    server.attach("s1", third, true);
+    expect(sent(third)).toBe(0);
+  });
+
+  it.each<[string, HandshakeMismatch]>([
+    ["version", { kind: "version", local: "1.2.3", remote: "1.2.4" }],
+    ["commit", { kind: "commit", local: "abc", remote: "def" }],
+  ])(
+    "keeps sending everything to a Shell on another %s, whose own tables decide",
+    (_, mismatch) => {
+      const link = fakeLink();
+      server.attach("s1", link, false, "c1", mismatch);
+      open(link, "view-1", "p1");
+
+      broadcast(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, [{ percent: 40 }]);
+      broadcast(CHANNELS.EVENTS_PUSH, [{ name: "made:up", payload: {} }]);
+      broadcast(CHANNELS.TERMINAL_DATA, ["t1", "hi"]);
+      expect(eventFrames(link).map((f) => f.channel)).toEqual([
+        CHANNELS.UPDATE_DOWNLOAD_PROGRESS,
+        CHANNELS.EVENTS_PUSH,
+        CHANNELS.TERMINAL_DATA,
+      ]);
+    }
+  );
 });
 
 describe("SessionHost: endpoint changes a dropped link lost (#13917)", () => {

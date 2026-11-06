@@ -17,6 +17,13 @@ export interface WakeGateSnapshot {
   hasPty?: boolean;
   /** Closed to the trash: the PTY lives on for undo, but nobody is looking at it. */
   isTrashed?: boolean;
+  /** Its agent is being quit: the PTY still runs, but the run is on its way out. */
+  isClosing?: boolean;
+  /**
+   * A view's hybrid input holds text for this terminal (#16282), as main last
+   * heard. Read only by a gate that asks for it; the pty-host never has it.
+   */
+  hasComposerDraft?: boolean;
 }
 
 /** Why a wake is held: it goes out at the pane's next settle. */
@@ -43,6 +50,11 @@ export interface WakeGateOptions {
    * selectors and errors are classified separately and still block.
    */
   acceptQuestion?: boolean;
+  /**
+   * Someone writing in the hybrid input holds the line (#16282), though the
+   * draft is a separate editor that a typed line never merges with.
+   */
+  holdForComposerDraft?: boolean;
 }
 
 /**
@@ -51,12 +63,50 @@ export interface WakeGateOptions {
  */
 export const ASSISTANT_SEND_GATE: WakeGateOptions = { acceptWorking: false, acceptQuestion: true };
 
+/**
+ * Only an agent waiting at its own prompt: never mid-turn, whatever its CLI
+ * queues, and never at a question, which a line typed there would read as the
+ * reply to. A held steer waits for exactly that.
+ */
+export const EXACT_PROMPT_GATE: WakeGateOptions = { acceptWorking: false, acceptQuestion: false };
+
 /** The gate options for the agent running in a terminal. */
 export function wakeGateOptionsFor(agentId: string | undefined): WakeGateOptions {
   if (agentId === undefined) return {};
   return {
     acceptWorking: getEffectiveAgentConfig(agentId)?.capabilities?.queuesInputWhileWorking === true,
   };
+}
+
+/**
+ * The gate a Decisions answer or follow-up asks (#16282): an empty composer.
+ * Mid-turn for a CLI that queues input, and at a question asked in prose,
+ * which is what the answer is for; never on a draft, in the CLI's line or the
+ * hybrid input, and never at a selector or an error.
+ */
+export function decisionGateOptionsFor(agentId: string | undefined): WakeGateOptions {
+  return { ...wakeGateOptionsFor(agentId), acceptQuestion: true, holdForComposerDraft: true };
+}
+
+/**
+ * Whether the terminal's agent was last observed waiting on a choice dialog
+ * (#16209): a selector, not its prompt, so a line typed there picks an option
+ * or is lost. Only a live agent pane can be; a shell, or a pane whose agent
+ * has gone, takes a send as it always has.
+ */
+export function isAtChoiceDialog(snapshot: WakeGateSnapshot): boolean {
+  return (
+    snapshot.detectedAgentId !== undefined &&
+    snapshot.isExited !== true &&
+    snapshot.hasPty !== false &&
+    snapshot.agentState === "waiting" &&
+    snapshot.waitingReason === "approval"
+  );
+}
+
+/** What a refused send says, wherever it was refused. */
+export function choiceDialogRefusalMessage(terminalId: string): string {
+  return `Terminal '${terminalId}' was last observed waiting on a choice dialog, which would take the text. Nothing was sent. Read its screen and answer it with keys. A dialog closed into a draft reads this way until the input row is empty or the agent next settles.`;
 }
 
 /**
@@ -72,7 +122,12 @@ export function evaluateWakeGate(
   snapshot: WakeGateSnapshot,
   options: WakeGateOptions = {}
 ): WakeGateVerdict {
-  if (snapshot.isExited === true || snapshot.hasPty === false || snapshot.isTrashed === true) {
+  if (
+    snapshot.isExited === true ||
+    snapshot.hasPty === false ||
+    snapshot.isTrashed === true ||
+    snapshot.isClosing === true
+  ) {
     return { kind: "blocked", reason: "no-agent" };
   }
   if (snapshot.detectedAgentId === undefined) {
@@ -90,7 +145,7 @@ export function evaluateWakeGate(
     ) {
       return { kind: "hold", reason: "typing" };
     }
-    return { kind: "ready" };
+    return draftVerdict(snapshot, options);
   }
   if (snapshot.agentState !== "waiting") {
     return { kind: "blocked", reason: "not-at-prompt" };
@@ -113,5 +168,11 @@ export function evaluateWakeGate(
   ) {
     return { kind: "hold", reason: "typing" };
   }
-  return { kind: "ready" };
+  return draftVerdict(snapshot, options);
+}
+
+function draftVerdict(snapshot: WakeGateSnapshot, options: WakeGateOptions): WakeGateVerdict {
+  return options.holdForComposerDraft === true && snapshot.hasComposerDraft === true
+    ? { kind: "hold", reason: "typing" }
+    : { kind: "ready" };
 }

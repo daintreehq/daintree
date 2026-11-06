@@ -15,6 +15,7 @@ import { SettingsInput } from "./SettingsInput";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
+import { AssistantIdentitySection } from "./Assistant/AssistantIdentitySection";
 import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
 import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
 import { resolveAssistantModelId } from "@shared/config/agentRegistry";
@@ -42,6 +43,7 @@ import { AssistantExternalClientsSection } from "./Assistant/AssistantExternalCl
 import { AssistantPrivacySection } from "./Assistant/AssistantPrivacySection";
 import { SessionLiveStatusCard } from "./Assistant/SessionLiveStatusCard";
 import {
+  ASSISTANT_LAUNCH_SECTION_ID,
   DEFAULT_SETTINGS,
   SETTING_LABEL,
   patchedKeys,
@@ -198,7 +200,10 @@ export function DaintreeAssistantSettingsTab() {
     saveFailure,
     persist,
     displayedCustomArgs,
-    setPendingCustomArgs,
+    editCustomArgs,
+    resetCustomArgs,
+    customArgsError,
+    retryCustomArgs,
     mcpStatus,
     retryMcpStatus,
     updateApiKey,
@@ -359,7 +364,7 @@ export function DaintreeAssistantSettingsTab() {
   };
 
   const handleCustomArgsChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setPendingCustomArgs(event.target.value);
+    editCustomArgs(event.target.value);
   };
 
   const handleGoToMcpSettings = () => {
@@ -564,6 +569,8 @@ export function DaintreeAssistantSettingsTab() {
         )}
       </SettingsSection>
 
+      <AssistantIdentitySection />
+
       {/* All three are read once, when the session is provisioned. */}
       <SettingsSection
         title="Behavior"
@@ -722,10 +729,18 @@ export function DaintreeAssistantSettingsTab() {
       />
 
       <SettingsSection
+        id={ASSISTANT_LAUNCH_SECTION_ID}
         title="Launch options"
         description="Changes apply to new assistant sessions."
       >
         {saveError("launch")}
+        {customArgsError !== null && (
+          <SettingsLoadErrorBanner
+            title="Couldn't save custom CLI args"
+            message="New sessions keep launching with the last saved args until these save."
+            onRetry={retryCustomArgs}
+          />
+        )}
         <SettingsGroup>
           <SettingsInput
             label="Custom CLI args"
@@ -739,12 +754,10 @@ export function DaintreeAssistantSettingsTab() {
             className="font-mono"
             value={displayedCustomArgs}
             onChange={handleCustomArgsChange}
+            error={customArgsError ?? undefined}
             disabled={settingsUnavailable}
             isModified={displayedCustomArgs !== DEFAULT_SETTINGS.customArgs}
-            onReset={() => {
-              setPendingCustomArgs(null);
-              void persist({ customArgs: DEFAULT_SETTINGS.customArgs });
-            }}
+            onReset={resetCustomArgs}
           />
           <SettingsSelect
             label="Hibernate after"

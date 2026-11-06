@@ -1,142 +1,106 @@
-# Release Workflow
+# Workflows
 
-Automated build and publish workflow for Daintree releases to Cloudflare R2.
+The release runbook is [`docs/release.md`](../../docs/release.md): signing, notarization, dry runs, R2 publishing and recovery. This file maps the workflow files and lists the one-time repository setup they depend on. To ship a release, use the `release` skill (`.claude/skills/release/`).
+
+## Workflow files
+
+| File | Purpose |
+| --- | --- |
+| `release-macos.yml` | App release for macOS (universal build, Developer ID signing, notarization, R2 publish) |
+| `release-linux.yml` | App release for Linux (x64 and arm64, R2 publish) |
+| `release-windows.yml` | App release for Windows (x64 and arm64 NSIS installers, x64 Store package, R2 publish, Microsoft Store submission) |
+| `release-packages.yml` | npm publish for the plugin-ecosystem packages, triggered by per-package tags (not `v*`) |
+| `nightly-publish.yml` | Nightly macOS and Linux builds published to the nightly update channel; no unit or E2E suites, launch smoke tests still run |
+| `ci.yml` | Checks and tests on pushes and pull requests to `main` and `develop` |
+| `e2e.yml`, `e2e-single.yml` | Reusable E2E runner (core smoke and the `full-*` buckets) and the single-spec runner |
+| `stabilize.yml` | On-demand cross-platform validation, driven by the `stabilize` skill |
+| `perf-ab.yml`, `pattern-discovery.yml`, `stale-quarantine.yml`, `test-ratio.yml` | Supporting automation; each file's header says what it does |
+
+## Release shape
+
+Pushing a `v*` tag starts `release-macos.yml`, `release-linux.yml` and `release-windows.yml` as three independent runs. Each runs its own checks, unit tests, E2E buckets and build, then publishes to R2 as soon as its own pipeline is green. There is no cross-OS gate: one OS can ship while another has failed, and a failed OS delays only itself.
+
+Within one OS, `publish-daintree` (the shared `.github/actions/publish-daintree` action) uploads binaries first with `public, max-age=31536000, immutable`, verifies they are reachable, then uploads the channel metadata (`latest*.yml`, or `rc*` / `beta*` for prereleases) last with `no-cache, no-store, must-revalidate`, so clients never see metadata pointing at missing binaries.
+
+To recover one OS, wait for its run to finish and re-run only that run's failed jobs (`gh run rerun <run-id> --failed`). A re-run keeps its original commit, and an OS that already published a version never republishes it. `docs/release.md` and `.claude/skills/release/references/ci-and-recovery.md` cover when to re-run, re-tag or cut a patch.
+
+Manual dispatch inputs:
+
+| Input | Workflows | Effect |
+| --- | --- | --- |
+| `dry_run` | macOS, Linux, Windows, `release-packages.yml` | Runs the pipeline without publishing to R2, the website, the Microsoft Store or npm |
+| `skip_notarization` | macOS | Skips notarization (helper re-signing still runs in the `afterSign` hook), for when Apple's service is down |
+| `smoke_artifact_run_id` | Windows | Smoke-tests the artifact of an earlier Windows run without rebuilding |
+| `force_publish` | Windows | Publishes from a branch dispatch; see `ci-and-recovery.md` before using it |
 
 ## Setup
 
-### 1. Create R2 Bucket
+### 1. Create the R2 bucket
 
 1. Go to Cloudflare dashboard → R2
 2. Create a bucket (e.g., `daintree-updates`)
 3. Enable **Public Access** on the bucket
-4. Note the public URL (e.g., `https://pub-<hash>.r2.dev` or custom domain)
+4. Note the public URL (e.g., `https://pub-<hash>.r2.dev` or a custom domain)
 
-### 2. Create R2 API Token
+### 2. Create an R2 API token
 
 1. Cloudflare dashboard → R2 → **Manage R2 API Tokens**
 2. **Create API token** with **Object Read & Write** permissions
 3. Copy the **Access Key ID** and **Secret Access Key** (shown once)
 
-### 3. Configure GitHub Secrets
+### 3. Configure GitHub secrets
 
-Add these secrets in **Settings → Secrets and variables → Actions**:
+Add these in **Settings → Secrets and variables → Actions**.
 
-| Secret | Value | Example |
+R2 (read by the three per-OS release workflows and `nightly-publish.yml`):
+
+| Secret                 | Value                                           |
+| ---------------------- | ----------------------------------------------- |
+| `R2_ENDPOINT`          | `https://<account-id>.r2.cloudflarestorage.com` |
+| `DAINTREE_R2_BUCKET`   | Bucket name, e.g. `daintree-updates`            |
+| `R2_ACCESS_KEY_ID`     | R2 API token access key                         |
+| `R2_SECRET_ACCESS_KEY` | R2 API token secret                             |
+
+Other secrets the release and nightly workflows read:
+
+| Secret | Used by | Purpose |
 | --- | --- | --- |
-| `R2_ENDPOINT` | R2 S3-compatible endpoint | `https://<account-id>.r2.cloudflarestorage.com` |
-| `R2_BUCKET` | Bucket name | `daintree-updates` |
-| `R2_ACCESS_KEY_ID` | R2 API token access key | (from step 2) |
-| `R2_SECRET_ACCESS_KEY` | R2 API token secret | (from step 2) |
+| `MAC_CERTS`, `MAC_CERTS_PASSWORD` | macOS release, nightly | Developer ID Application certificate (base64 .p12) and its password |
+| `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER` | macOS release, nightly | App Store Connect API key for notarization |
+| `APPLE_TEAM_ID` | macOS release, nightly | Apple Team ID |
+| `WEBSITE_WEBHOOK_SECRET` | Release publish jobs | Notifies the website of a new release |
+| `SENTRY_DSN` | Release builds | Error reporting DSN baked into the build |
+| `PARTNER_CENTER_TENANT_ID`, `PARTNER_CENTER_SELLER_ID`, `PARTNER_CENTER_CLIENT_ID`, `PARTNER_CENTER_CLIENT_SECRET`, `STORE_PRODUCT_ID` | Windows release | Microsoft Store submission; skipped with a notice unless all five exist (see [`docs/distribution/microsoft-store.md`](../../docs/distribution/microsoft-store.md)) |
 
-### 4. Update package.json
+### 4. Publish URL
 
-Ensure the `publish` URL matches your R2 public URL:
+The auto-update feed is configured in [`electron-builder.config.cjs`](../../electron-builder.config.cjs), not `package.json`. It publishes to `https://updates.daintree.org/releases/` for stable builds and `https://updates.daintree.org/nightly/` when the version contains `-nightly`, and sets the `rc` or `beta` channel from the version string. To publish elsewhere, change the URL constants in that file, and the hardcoded live-feed URLs in `.github/actions/publish-daintree/action.yml`, `scripts/ci/check-version-monotonic.mjs` and `nightly-publish.yml`, so they all match the public URL of your bucket.
 
-```json
-"publish": [
-  {
-    "provider": "generic",
-    "url": "https://your-r2-public-url/releases/"
-  }
-]
-```
+## Code signing
 
-## Releasing
-
-1. Update version in `package.json`
-2. Commit: `git commit -am "release: vX.Y.Z"`
-3. Tag: `git tag vX.Y.Z`
-4. Push: `git push origin main --tags`
-
-The workflow will:
-
-- Run release checks, unit tests, the `core` smoke gate, all seven `full-*` domain buckets in parallel (terminal, worktree, presets, platform, panels, resilience, plugins) before packaging
-- Build for macOS, Windows, and Linux in parallel
-- Validate update metadata files are present
-- Upload binaries to R2 with long cache headers
-- Upload metadata files with no-cache headers
-
-## Known Limitations
-
-### macOS Auto-Updates
-
-**macOS builds are currently unsigned.** macOS auto-updates require:
-
-- Code signing certificate from Apple Developer account
-- Notarization with Apple
-
-**What this means:**
-
-- macOS users will see "unidentified developer" warnings
-- Auto-updates may not work on macOS until signing is configured
-
-**To enable macOS auto-updates:**
-
-1. Obtain Apple Developer certificates
-2. Add secrets to GitHub:
-   - `MAC_CERTS` - Base64-encoded .p12 certificate
-   - `MAC_CERTS_PASSWORD` - Certificate password
-   - `APPLE_ID` - Apple ID email
-   - `APPLE_APP_SPECIFIC_PASSWORD` - App-specific password
-   - `APPLE_TEAM_ID` - Team ID from developer account
-
-3. The cert import + notarize steps already run unconditionally in `release-macos.yml`; once the secrets above are set they take effect on the next tagged release (no workflow edit needed)
-4. Set `forceCodeSigning: true` in `package.json`
-
-### Windows Code Signing
-
-Windows builds are also unsigned. Users will see SmartScreen warnings until signing is configured.
+- **macOS** builds are signed with a Developer ID Application certificate and notarized on every release and nightly build unless the macOS `skip_notarization` input is set. `forceCodeSigning` is already `true` in `electron-builder.config.cjs`. Notarization runs through the `afterSign` hook `scripts/notarize-macos.cjs` using the App Store Connect API key secrets, not an Apple ID password. Details are in `docs/release.md`.
+- **Windows** installers are not Authenticode-signed: neither `release-windows.yml` nor `electron-builder.config.cjs` configures a certificate, so the NSIS installers can trigger SmartScreen warnings. Microsoft re-signs the Store package after certification (`docs/distribution/microsoft-store.md`).
 
 ## Troubleshooting
 
 ### Version mismatch error
 
-If you see "Tag version does not match package.json version":
+If a build fails with "Tag version (<tag version>) does not match package.json version (<package version>)":
 
 - Ensure `package.json` version matches the git tag (without the `v` prefix)
-- Example: tag `v1.2.3` requires `"version": "1.2.3"` in package.json
+- Example: tag `v1.2.3` requires `"version": "1.2.3"` in `package.json`
 
-### Missing metadata files
+### Missing update metadata
 
-If builds fail with "Missing release/latest\*.yml":
+If a build fails with "Missing release/latest\*.yml" (or `latest-mac.yml`, `latest-linux*.yml`):
 
-- Check electron-builder configuration in `package.json`
+- Check the `mac`, `win`, `linux` and `nsis` targets in `electron-builder.config.cjs`
 - Ensure targets include both installers and update-friendly formats (zip for macOS, nsis for Windows)
 
 ### AWS CLI errors
 
-All GitHub-hosted runners have AWS CLI pre-installed. If you see AWS CLI errors:
+All GitHub-hosted runners have the AWS CLI installed. If a publish step reports AWS CLI errors:
 
-- Verify R2 secrets are correctly set
-- Check R2 endpoint format: `https://<account-id>.r2.cloudflarestorage.com`
-- Ensure bucket name matches exactly
-
-## Architecture
-
-### Release Stages
-
-The workflow gates release packaging before any artifacts are produced:
-
-1. **Quality gate stage**:
-   - Checks and unit tests run on Linux
-   - `core` smoke, the seven `full-*` domain buckets (terminal, worktree, presets, platform, panels, resilience, plugins) fanned out as a matrix, run before packaging. Each `full-*` bucket auto-shards inside `e2e.yml` (#8053), so Windows `full-*` gates the Windows release too. Broader pre-release cross-platform validation is the on-demand `stabilize.yml` workflow (driven by the `stabilize` skill), not a scheduled nightly.
-
-2. **Build stage** (parallel matrix):
-   - macOS, Windows, Linux build in parallel
-   - Each validates its update metadata
-   - Uploads to GitHub Actions artifacts
-
-3. **Publish stage** (single job):
-   - Runs only after all builds succeed
-   - Downloads all artifacts
-   - Uploads binaries first (with long cache)
-   - Uploads metadata last (no cache)
-
-This ensures users never see incomplete releases or transient 404s.
-
-### Cache Headers
-
-- **Binaries** (`*.dmg`, `*.exe`, etc.): `public, max-age=31536000, immutable`
-  - Cached for 1 year (versioned filenames)
-- **Metadata** (`latest*.yml`): `no-cache, no-store, must-revalidate`
-  - Never cached (checked on every update check)
+- Verify the R2 secrets are set, including `DAINTREE_R2_BUCKET`
+- Check the endpoint format: `https://<account-id>.r2.cloudflarestorage.com`
+- Ensure the bucket name matches exactly

@@ -9,8 +9,8 @@ import {
   useRef,
   useState,
 } from "react";
-import { EditorView } from "@codemirror/view";
-import { EditorSelection, Transaction } from "@codemirror/state";
+import { EditorView, type ViewUpdate } from "@codemirror/view";
+import { EditorSelection, Transaction, type ChangeSet } from "@codemirror/state";
 import { isolateHistory } from "@codemirror/commands";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentState } from "@/types";
@@ -20,6 +20,8 @@ import { useFileAutocomplete } from "@/hooks/useFileAutocomplete";
 import { useSlashCommandAutocomplete } from "@/hooks/useSlashCommandAutocomplete";
 import { useSlashCommandList } from "@/hooks/useSlashCommandList";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { useDictationRangeStore } from "@/store/dictationRangeStore";
+import type { TextChange } from "@/lib/textRangeMapping";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { AutocompleteMenu, getComboboxState, type AutocompleteItem } from "./AutocompleteMenu";
 import {
@@ -30,6 +32,7 @@ import {
 } from "./hybridInputParsing";
 import { splitContextProviderQuery } from "@shared/utils/pluginContextReference";
 import type { ContextProviderItem } from "@shared/types/pluginContextProvider";
+import { isActiveVoiceSession } from "@shared/types/voice";
 import { usePluginContextProvidersStore } from "@/store/pluginContextProvidersStore";
 import { useContextProviderSearch } from "./hooks/useContextProviderSearch";
 import { useForgeReferenceMarks } from "./hooks/useForgeReferenceMarks";
@@ -82,9 +85,12 @@ import {
 } from "./hooks/useVoiceWaitSubmit";
 import {
   COMPOSER_BORDER_CAPTION_CLASS,
+  VOICE_SEND_REOPENED_CAPTION,
   VoiceSubmitProgress,
   correctionStreamShare,
   voiceSubmitWaitCaption,
+  voiceSubmitWaitStatus,
+  type VoiceSubmitWaitKeys,
 } from "./VoiceSubmitProgress";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import {
@@ -109,13 +115,26 @@ import { useEditorCompartments } from "./hooks/useEditorCompartments";
 import { useAutocompleteItems } from "./hooks/useAutocompleteItems";
 import { useDragDrop } from "./hooks/useDragDrop";
 import { useAttachFiles, useAttachFromHost } from "./hooks/useAttachFiles";
-import { fileAttachmentEntryFromSource, insertFileAttachments } from "./fileAttachments";
+import {
+  fileAttachmentEntryFromSource,
+  insertFileAttachments,
+  insertPreparedAttachments,
+} from "./fileAttachments";
 import {
   composerUploadSurface,
-  hasPendingUploads,
+  isComposerSendHeld,
   isolatedComposerUploadSurface,
+  takeHeldBackAttachments,
+  type PreparedAttachment,
 } from "./uploads/pendingUploads";
-import { CROSS_HOST_CONTEXT_REFUSAL, tryComposerFleetBroadcast } from "./composerFleetBroadcast";
+import { HeldBackAttachmentsBanner } from "./uploads/HeldBackAttachmentsBanner";
+import { advanceComposerDraft } from "./inputEditorExtensions/composerDraftGeneration";
+import {
+  CROSS_HOST_CONTEXT_REFUSAL,
+  CROSS_HOST_IMAGE_REFUSAL,
+  type CrossHostRefusal,
+  tryComposerFleetBroadcast,
+} from "./composerFleetBroadcast";
 import { PendingUploadChips } from "./uploads/PendingUploadChips";
 import { LazyUploadConfirmHost } from "./uploads/LazyUploadConfirmHost";
 import { registerPaneDropTarget } from "./uploads/paneDropRouting";
@@ -169,11 +188,16 @@ import {
   selectionAfterOutsideWrite,
   readImageChipPaths,
   replayLandedCorrection,
+  userEdit,
 } from "./inputEditorExtensions";
 import {
   isLatestDictation,
   outsideWriteChange,
+  peekLandedCorrection,
+  rebaseCorrectionBaseline,
+  registerComposerDraftWriter,
   takeLandedCorrection,
+  typedPastCorrection,
 } from "@/services/voiceCorrectionLanding";
 import {
   SCRATCH_REFUSAL_CAPTION,
@@ -254,6 +278,8 @@ export interface HybridInputBarProps {
   agentState?: AgentState;
   restartKey?: number;
   disabled?: boolean;
+  /** Said by an empty composer while `disabled`, in place of "Ask …". */
+  disabledPlaceholder?: string;
   /**
    * Another screen drives the project: the draft shown is the driver's, read
    * back from the host, so this bar never writes its text to the draft store.
@@ -330,6 +356,8 @@ interface LatestState {
   ) => string | null;
   isVoiceActiveForPanel: boolean;
   isExpanded: boolean;
+  /** Whose attachments still on their way hold an Enter on an empty draft too. */
+  uploadSurface: string;
   modEnterSend?: () => ComposerSendRoute;
   altChords?: readonly string[];
 }
@@ -339,9 +367,64 @@ interface HybridInputE2EController {
   getText: () => string;
 }
 
+/** The editor's changes from the draft `before` to the draft `after`. */
+interface EditorEdits {
+  before: string;
+  after: string;
+  changes: ChangeSet;
+}
+
+/**
+ * `edits` carried through `update`: started again from the draft the store
+ * holds while the editor shows it, extended while the editor is ahead of it,
+ * and lost when they no longer join up.
+ */
+function nextEditorEdits(
+  edits: EditorEdits | null,
+  stored: string,
+  update: ViewUpdate,
+  next: string
+): EditorEdits | null {
+  const start = update.startState.doc.toString();
+  if (stored === start) return { before: start, after: next, changes: update.changes };
+  if (edits?.after !== start) return null;
+  return { before: edits.before, after: next, changes: edits.changes.compose(update.changes) };
+}
+
+/**
+ * Spells `edits` out to the range store just ahead of the composer writing
+ * `draft` over `stored`, when they are the changes between the two. A diff of
+ * the drafts places text typed in front of dictated words inside them when it
+ * starts with their first letter (`/f` before `fix`), and the passage would
+ * read as edited, dropping its correction (#15874). Declared at the write, as
+ * every draft write elsewhere clears what was declared before it.
+ */
+function expectEditorEdits(
+  edits: EditorEdits | null,
+  panelId: string,
+  projectId: string | undefined,
+  stored: string,
+  draft: string
+): void {
+  if (!edits || stored === draft || edits.before !== stored || edits.after !== draft) return;
+  const changes: TextChange[] = [];
+  edits.changes.iterChanges((from, to, _fromB, _toB, inserted) => {
+    changes.push({ from, to, insert: inserted.toString() });
+  });
+  useDictationRangeStore.getState().expectDraftChange(panelId, projectId, stored, draft, changes);
+}
+
 type ApplyEditorValue = (
   nextValue: string,
-  options?: { selection?: EditorSelection; focus?: boolean; resetHistory?: boolean }
+  options?: {
+    selection?: EditorSelection;
+    focus?: boolean;
+    resetHistory?: boolean;
+    /** The one edit that turns the current draft into `nextValue`, applied as just that. */
+    change?: TextChange;
+    /** The user's own edit (a completion), refused by words still being corrected. */
+    userEdit?: boolean;
+  }
 ) => void;
 
 const EMPTY_STALE_KEYS: ReadonlySet<string> = new Set<string>();
@@ -372,14 +455,25 @@ function editorOwnsDomFocus(view: EditorView): boolean {
  * Editor. Shared so the two drop targets cannot drift apart again (#12570).
  */
 const SEND_HELD_STATUS = "Not sent. The draft is still here.";
+/** The `❯` and trailing controls of an unavailable composer: inactive, one family. */
+const DISABLED_CONTROL_MIX = "45%";
+const DISABLED_CONTROL_INK = "color-mix(in oklab, var(--ib-fg) 45%, var(--ib-bg))";
 const SPOKEN_SEND_TOO_SHORT_CAPTION = "Too short to send by voice · Enter to send";
-const CROSS_HOST_CONTEXT_CAPTION = "Not sent · Context can't reach another host";
+const CROSS_HOST_CAPTION: Record<CrossHostRefusal, string> = {
+  context: "Not sent · Context can't reach another host",
+  image: "Not sent · Images can't reach another host",
+};
+const CROSS_HOST_STATUS: Record<CrossHostRefusal, string> = {
+  context: CROSS_HOST_CONTEXT_REFUSAL,
+  image: CROSS_HOST_IMAGE_REFUSAL,
+};
 const SPOKEN_SEND_TOO_SHORT_STATUS =
   "Not sent: a voice send needs three or more words. Press Enter to send the reply.";
 const VOICE_SUBMIT_OUTCOME_STATUS: Record<VoiceSubmitOutcome["kind"], string> = {
   sending: "Sending…",
   sent: "Sent",
   cancelled: "Send cancelled",
+  reopened: "Send reopened. This dictation adds to it, and the next send takes it all.",
   held: SEND_HELD_STATUS,
 };
 const VOICE_SEND_UNCLEANED_STATUS: Record<VoiceSendCleanup, string> = {
@@ -430,6 +524,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       restartKey = 0,
       disabled = false,
       followsDriver = false,
+      disabledPlaceholder,
       className,
       isolated = false,
       otherHostId,
@@ -476,7 +571,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // while the Assistant holds the keyboard, though `focusedId` stays pinned.
     // Routing and fleet keep reading `isFocusedTerminal`.
     const isAssistantActive = useMacroFocusStore((s) => s.focusedRegion === "assistant");
-    const showSelectedChrome = selected ?? (isFocusedTerminal && !isAssistantActive);
+    // An unavailable composer never takes the lift: it is not where the
+    // keyboard will go, so it reads as a field at rest with its inks stepped
+    // down (`shellVars`).
+    const showSelectedChrome = !disabled && (selected ?? (isFocusedTerminal && !isAssistantActive));
     const canopyOpen = useCanopyStore((s) => s.isOpen);
     const hasStash = useTerminalInputStore((s) => {
       const key = projectId ? `${projectId}:${terminalId}` : terminalId;
@@ -503,6 +601,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const listboxId = useId();
     const rootRef = useRef<HTMLDivElement | null>(null);
     const lastEmittedValueRef = useRef<string>(value);
+    // The draft the store held when this composer last wrote it or brought the
+    // editor to it. A store reading otherwise holds an outside write the editor
+    // hasn't shown yet (#15873).
+    const syncedDraftRef = useRef<string>(value);
+    // The editor's changes since it last showed what the store holds (#15874).
+    const editsSinceStoredRef = useRef<EditorEdits | null>(null);
     const focusGenerationRef = useRef(0);
     const [activeCompletionContext, setActiveCompletionContext] =
       useState<ActiveCompletionContext | null>(null);
@@ -657,7 +761,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       [resetDragState]
     );
     const handleAttachFiles = useAttachFiles(editorViewRef, cwd, uploadSurface);
-    const handleAttachFromHost = useAttachFromHost(editorViewRef, cwd);
+    const handleAttachFromHost = useAttachFromHost(editorViewRef, cwd, uploadSurface);
+    // Held back for this composer's draft, so gone with the composer.
+    useEffect(() => () => void takeHeldBackAttachments(uploadSurface), [uploadSurface]);
+    const addHeldBackAttachments = (attachments: readonly PreparedAttachment[]): boolean => {
+      const view = editorViewRef.current;
+      if (!view || !insertPreparedAttachments(view, attachments, readCwd())) return false;
+      view.focus();
+      return true;
+    };
 
     // A drop on this pane's agent terminal lands here when a click on the
     // terminal would focus the bar — in the pane's own composer, never Canopy's
@@ -686,7 +798,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const { imagePasteExtension, filePasteExtension, plainPasteKeymap } = usePasteExtensions(
       cwd,
       uploadSurface,
-      thisMachineOff
+      thisMachineOff,
+      editorViewRef
     );
 
     useEffect(() => {
@@ -705,6 +818,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const draft = getDraftInput(terminalId, projectId);
       setValue(draft);
       lastEmittedValueRef.current = draft;
+      syncedDraftRef.current = draft;
       setActiveCompletionContext(null);
       setSelectedIndex(0);
       lastQueryRef.current = "";
@@ -741,7 +855,24 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // The primary owns a follower's draft slot. Writing its local value here
       // can overwrite a newer mirrored keystroke before the editor catches up.
       if (followsDriver || wasFollowing || isFleetFollower || wasFleetFollower) return;
+      // A correction was placed in this text, or in typing written through
+      // before it: written back, the value would take the correction out
+      // again. The sync below brings the editor to it first (#15873).
+      if (
+        value !== useTerminalInputStore.getState().getDraftInput(terminalId, projectId) &&
+        peekLandedCorrection(terminalId, projectId)
+      ) {
+        return;
+      }
+      expectEditorEdits(
+        editsSinceStoredRef.current,
+        terminalId,
+        projectId,
+        useTerminalInputStore.getState().getDraftInput(terminalId, projectId),
+        value
+      );
       setDraftInput(terminalId, value, projectId);
+      syncedDraftRef.current = value;
     }, [terminalId, value, projectId, setDraftInput, followsDriver, isFleetFollower]);
 
     const { isApplyingExternalValueRef } = useFleetMirror({
@@ -754,6 +885,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       isFleetFollower,
       disabled,
       lastEmittedValueRef,
+      syncedDraftRef,
       isolated,
     });
 
@@ -778,6 +910,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       if (voiceSessionStatus) return voiceSessionStatus;
       // The live meter at the start of the empty draft says it's listening.
       if (isVoiceListeningChrome) return "";
+      if (disabled && disabledPlaceholder) return disabledPlaceholder;
       const agentName = agentId ? getAgentConfig(agentId)?.name : null;
       return agentName ? `Ask ${agentName}` : "Ask anything";
     })();
@@ -991,6 +1124,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         isExpanded,
         modEnterSend,
         altChords,
+        uploadSurface,
       };
     });
 
@@ -1017,6 +1151,24 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       setActiveCompletionContext,
     });
 
+    // Written through now and spelled out: a diff of the two drafts can put
+    // a completion's text inside the dictated words it was typed against,
+    // which would read as an edit to them (#15872). Only while this composer
+    // owns the draft and the store still holds what the edit was made on.
+    const writeDraftEdit = (
+      before: string,
+      after: string,
+      changes: TextChange | readonly TextChange[]
+    ) => {
+      if (followsDriver || isFleetFollower) return;
+      const inputStore = useTerminalInputStore.getState();
+      if (inputStore.getDraftInput(terminalId, projectId) !== before) return;
+      useDictationRangeStore
+        .getState()
+        .expectDraftChange(terminalId, projectId, before, after, changes);
+      inputStore.setDraftInput(terminalId, after, projectId);
+    };
+
     const applyEditorValue: ApplyEditorValue = (nextValue, options) => {
       if (lastEmittedValueRef.current !== nextValue) {
         lastEmittedValueRef.current = nextValue;
@@ -1031,14 +1183,32 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         if (options?.focus) view.focus();
         return;
       }
+      const change = options?.change;
+      const exact =
+        shouldChangeDoc &&
+        change !== undefined &&
+        current.slice(0, change.from) + change.insert + current.slice(change.to) === nextValue
+          ? change
+          : null;
       if (shouldChangeDoc) isApplyingExternalValueRef.current = true;
       view.dispatch({
         ...(shouldChangeDoc
-          ? { changes: { from: 0, to: view.state.doc.length, insert: nextValue } }
+          ? { changes: exact ?? { from: 0, to: view.state.doc.length, insert: nextValue } }
           : {}),
         ...(shouldChangeSelection ? { selection: options?.selection } : {}),
         scrollIntoView: true,
+        ...(options?.userEdit ? { annotations: userEdit.of(true) } : {}),
       });
+      if (shouldChangeDoc && view.state.doc.toString() === current) {
+        // Refused (#15874): the draft stays as it was, and nothing syncs the
+        // refused value back in.
+        isApplyingExternalValueRef.current = false;
+        lastEmittedValueRef.current = current;
+        setValue(current);
+        if (options?.focus) view.focus();
+        return;
+      }
+      if (exact) writeDraftEdit(current, nextValue, exact);
       if (options?.resetHistory) clearComposerHistory(view);
       if (options?.focus) view.focus();
     };
@@ -1078,9 +1248,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           // Written through at once: a send waiting on the rewrite reads the
           // draft store, which would otherwise catch up only on the next render.
           return view
-            ? captureRewriteSelection(view, (doc) =>
-                useTerminalInputStore.getState().setDraftInput(terminalId, doc, projectId)
-              )
+            ? captureRewriteSelection(view, (doc) => {
+                const inputs = useTerminalInputStore.getState();
+                const stored = inputs.getDraftInput(terminalId, projectId);
+                expectEditorEdits(editsSinceStoredRef.current, terminalId, projectId, stored, doc);
+                inputs.setDraftInput(terminalId, doc, projectId);
+              })
             : null;
         },
       });
@@ -1103,6 +1276,27 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // that the editor does not show yet.
     const appliedExternalDraftRevisionRef = useRef(externalDraftRevision);
 
+    // Typing a render ahead of the store, written through for a correction to
+    // be placed in the text this composer shows (#15873).
+    useEffect(
+      () =>
+        registerComposerDraftWriter(terminalId, projectId, () => {
+          const view = editorViewRef.current;
+          // Another screen's or the fleet primary's draft: the store holds it.
+          if (!view || wasFollowingDriverRef.current || wasFleetFollowerRef.current) return;
+          const inputs = useTerminalInputStore.getState();
+          const stored = inputs.getDraftInput(terminalId, projectId);
+          const shown = view.state.doc.toString();
+          // Ahead by typing only over the draft this composer left: anything
+          // else is an outside write the editor is behind.
+          if (shown === stored || stored !== syncedDraftRef.current) return;
+          expectEditorEdits(editsSinceStoredRef.current, terminalId, projectId, stored, shown);
+          inputs.setDraftInput(terminalId, shown, projectId);
+          syncedDraftRef.current = shown;
+        }),
+      [terminalId, projectId]
+    );
+
     useEffect(() => {
       const appliedBefore = appliedExternalDraftRevisionRef.current;
       appliedExternalDraftRevisionRef.current = externalDraftRevision;
@@ -1116,12 +1310,26 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       );
       const view = editorViewRef.current;
       if (!view) return;
+      // A recalled prompt is another draft, even one that reads the same.
+      const replacedAt = inputState.replacedDraftRevisions.get(makeDraftKey(terminalId, projectId));
+      if (replacedAt !== undefined && replacedAt > appliedBefore) advanceComposerDraft(view);
       const landed = takeLandedCorrection(terminalId, projectId, draft);
       const reviewed = landed !== null && isLatestDictation(voiceId, landed);
       const scratched = takeScratchLanded(terminalId, projectId, draft);
+      const shown = view.state.doc.toString();
+      if (typedPastCorrection(shown, draft, landed, syncedDraftRef.current)) {
+        // The editor and its caret stay as typed; the draft takes them back.
+        rebaseCorrectionBaseline(voiceId, landed, "raw");
+        setValue(shown);
+        lastEmittedValueRef.current = shown;
+        inputState.setDraftInput(terminalId, shown, projectId);
+        syncedDraftRef.current = shown;
+        return;
+      }
+      syncedDraftRef.current = draft;
       // Only what differs is replaced, so an append leaves the image and
       // file chips already in the draft attached.
-      const change = outsideWriteChange(view.state.doc.toString(), draft, landed);
+      const change = outsideWriteChange(shown, draft, landed);
       if (change !== null) {
         setValue(draft);
         lastEmittedValueRef.current = draft;
@@ -1235,7 +1443,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       terminalId: string;
       refused: boolean;
       tooShort?: true;
-      crossHostContext?: true;
+      crossHost?: CrossHostRefusal;
       retires?: VoiceScratchRefusal | VoiceFileReferenceNote | null;
     } | null>(null);
     const dropSendRefusal = (dictationKeepsReply = false) =>
@@ -1273,9 +1481,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       const retires = standingVoiceNote(voiceId);
       setSendNote({ terminalId, refused: true, tooShort: true, retires });
     }, [terminalId, voiceId]);
-    const noteCrossHostContextRefusal = () => {
+    const noteCrossHostRefusal = (reason: CrossHostRefusal) => {
       ++submitAttemptRef.current;
-      setSendNote({ terminalId, refused: true, crossHostContext: true });
+      setSendNote({ terminalId, refused: true, crossHost: reason });
     };
 
     // Every way this composer sends — Enter, a picked slash command, a prompt
@@ -1325,8 +1533,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       route?: ComposerSendRoute,
       departed?: DepartedComposerSend
     ): boolean | Promise<boolean> => {
-      // An upload still on its way would leave its reference out of what is sent.
-      if (hasPendingUploads(uploadSurface)) return false;
+      // An attachment still on its way would be left out of what is sent.
+      if (isComposerSendHeld(uploadSurface)) return false;
       // The send takes the draft as it stands. A dictation correction still on
       // its way must not rewrite it mid-send, or land on the next draft (#14611).
       // One for words a dictated send holds back still lands on them (#14804).
@@ -1376,6 +1584,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         ? () => unchanged() || (!editorAheadOfStore() && voiceRecordingService.holdsBackFrom(split))
         : unchanged;
 
+      // A chip whose path the text no longer spells is left out, as the editor's own are.
+      // Read before the fleet is asked: it attaches them too (#15600).
+      const imagePaths = (departed ? departed.imagePaths : readImageChipPaths(view)).filter(
+        (path) => text.includes(path)
+      );
+
       // A fleet send settles a batch, or another host, later: what was typed
       // since stays, as on a single-pane send. One the fleet turned down took
       // nothing.
@@ -1395,17 +1609,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           // draft since takes the store's word for what is left.
           if (departed) useTerminalInputStore.getState().bumpExternalDraftRevision();
         },
-        () => {
+        (reason) => {
           refused = true;
-          noteCrossHostContextRefusal();
-        }
+          noteCrossHostRefusal(reason);
+        },
+        imagePaths
       );
       if (intercepted) return !refused;
 
-      // A chip whose path the text no longer spells is left out, as the editor's own are.
-      const imagePaths = departed
-        ? departed.imagePaths.filter((path) => text.includes(path))
-        : readImageChipPaths(view);
       return sendText(text, {
         imagePaths,
         isDraftUnchanged,
@@ -1432,6 +1643,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       voiceSubmitPhase,
       voiceSubmitWait,
       voiceSubmitOutcome,
+      voiceWaitKeys,
     } = useVoiceWaitSubmit({
       terminalId,
       projectId,
@@ -1447,6 +1659,21 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       isDisabled: () => disabledRef.current,
       onSpokenSendTooShort: noteSpokenSendTooShort,
     });
+    // The stop-and-send key sends a wait it started as it stands, from
+    // anywhere in the page, unless a dictation running elsewhere takes the
+    // press first.
+    const stopAndSendCombo = useEffectiveCombo("voiceInput.stopAndSend");
+    const voiceSessionTakesStopAndSend = useVoiceRecordingStore(
+      (s) => s.activeTarget !== null && s.status !== "finishing" && isActiveVoiceSession(s.status)
+    );
+    const voiceSubmitKeys: VoiceSubmitWaitKeys = {
+      enter: voiceWaitKeys.enter,
+      escape: voiceWaitKeys.escape,
+      skip:
+        voiceSubmitWait?.byStopAndSend && voiceWaitKeys.page && !voiceSessionTakesStopAndSend
+          ? (stopAndSendCombo ?? null)
+          : null,
+    };
     // The editor locks and the shell changes the moment a voice send starts;
     // what it is waiting on is only told once the wait outlasts the inline
     // gate, so a send that goes at once says nothing more.
@@ -1479,6 +1706,27 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     ) {
       setAnnouncedVoiceAttempt(voiceSubmitAttempt);
     }
+    // A send the dictation started here reopened says so while that dictation
+    // is under way, its start included: the earlier words are still to go,
+    // with the new ones (#15703). Once it ends, the draft shows what is left.
+    const isVoicePendingHere = useVoiceRecordingStore(
+      (s) => s.pendingTarget?.panelId === voiceId && !(thisMachineOff && !voiceTarget)
+    );
+    const isDictatingHere = isVoiceActiveForPanel || isVoicePendingHere;
+    const reopenedVoiceAttempt =
+      voiceSubmitOutcome?.kind === "reopened" ? voiceSubmitOutcome.attempt : null;
+    const [retiredReopenAttempt, setRetiredReopenAttempt] = useState<number | null>(null);
+    if (
+      reopenedVoiceAttempt !== null &&
+      reopenedVoiceAttempt !== retiredReopenAttempt &&
+      !isDictatingHere
+    ) {
+      setRetiredReopenAttempt(reopenedVoiceAttempt);
+    }
+    const isSendReopened =
+      reopenedVoiceAttempt !== null &&
+      reopenedVoiceAttempt !== retiredReopenAttempt &&
+      isDictatingHere;
     // The wait's progress and its receipt own the shell's top border while on
     // screen, so the focus ring, which would run through the caption, waits.
     const [isVoiceSubmitPresenting, setIsVoiceSubmitPresenting] = useState(false);
@@ -1498,13 +1746,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const isSendRefused = ownSendNote?.refused === true;
     const sendRefusedCaption = ownSendNote?.tooShort
       ? SPOKEN_SEND_TOO_SHORT_CAPTION
-      : ownSendNote?.crossHostContext
-        ? CROSS_HOST_CONTEXT_CAPTION
+      : ownSendNote?.crossHost
+        ? CROSS_HOST_CAPTION[ownSendNote.crossHost]
         : "Not sent";
     const sendRefusedStatus = ownSendNote?.tooShort
       ? SPOKEN_SEND_TOO_SHORT_STATUS
-      : ownSendNote?.crossHostContext
-        ? CROSS_HOST_CONTEXT_REFUSAL
+      : ownSendNote?.crossHost
+        ? CROSS_HOST_STATUS[ownSendNote.crossHost]
         : SEND_HELD_STATUS;
     // A refused send retires the voice note it found on the border, never a
     // newer one. One the send took outlives it: it says what went out.
@@ -1558,6 +1806,27 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       !showSendRefusedCaption &&
       !showScratchRefusalCaption &&
       !showFileReferenceCaption;
+    const showSendReopenedCaption =
+      isSendReopened &&
+      !isVoiceSubmitting &&
+      !isVoiceSubmitPresenting &&
+      !showVoiceSessionCaption &&
+      !showSendRefusedCaption &&
+      !showScratchRefusalCaption &&
+      !showFileReferenceCaption;
+    // A draft hides the placeholder that says why the composer is unavailable,
+    // so the border carries it instead, as it does a voice session's state.
+    const showDisabledCaption =
+      disabled &&
+      !!disabledPlaceholder &&
+      value.length > 0 &&
+      !isVoiceSubmitting &&
+      !isVoiceSubmitPresenting &&
+      !showVoiceSessionCaption &&
+      !showSendReopenedCaption &&
+      !showSendRefusedCaption &&
+      !showScratchRefusalCaption &&
+      !showFileReferenceCaption;
 
     const voiceSlotRef = useRef<HTMLSpanElement>(null);
     const voiceSlotFocusedRef = useRef(false);
@@ -1575,17 +1844,21 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // unannounced, as its receipt does.
     const voiceSendUncleaned =
       voiceSubmitOutcome?.kind === "sent" ? voiceSubmitOutcome.cleanup : undefined;
+    // A reopened send is told however short its wait was, for as long as its
+    // note shows: nothing else says the earlier words haven't gone (#15703).
     const voiceSubmitStatus = voiceSubmitWait
       ? showVoiceSubmitStatus
-        ? voiceSubmitWait.phase === "polishing"
-          ? "Polishing dictation. Press Enter to send it as dictated, or Escape to cancel the send."
-          : "Finishing dictation. Press Escape to cancel the send."
+        ? voiceSubmitWaitStatus(voiceSubmitWait, voiceSubmitKeys)
         : ""
       : voiceSendUncleaned
         ? VOICE_SEND_UNCLEANED_STATUS[voiceSendUncleaned]
-        : voiceSubmitOutcome?.attempt === announcedVoiceAttempt
-          ? VOICE_SUBMIT_OUTCOME_STATUS[voiceSubmitOutcome.kind]
-          : "";
+        : voiceSubmitOutcome?.kind === "reopened"
+          ? isSendReopened
+            ? VOICE_SUBMIT_OUTCOME_STATUS.reopened
+            : ""
+          : voiceSubmitOutcome?.attempt === announcedVoiceAttempt
+            ? VOICE_SUBMIT_OUTCOME_STATUS[voiceSubmitOutcome.kind]
+            : "";
     // Heard from whichever host holds the editor: a send from the Expanded
     // Editor waits there, and a live region outside its modal goes unheard.
     const voiceSubmitAnnouncer = (
@@ -1599,7 +1872,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const expandedSubmitLabel =
       voiceSubmitWait && showVoiceSubmitStatus ? (
         <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
-          {voiceSubmitWaitCaption(voiceSubmitWait)}
+          {voiceSubmitWaitCaption(voiceSubmitWait, voiceSubmitKeys)}
         </span>
       ) : showScratchRefusalCaption ? (
         <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
@@ -1611,6 +1884,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           className="ml-auto mr-3 min-w-0 truncate text-xs text-text-secondary"
         >
           {unresolvedFileReferencesCaption(fileReferenceNote.references)}
+        </span>
+      ) : isSendReopened ? (
+        <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
+          {VOICE_SEND_REOPENED_CAPTION}
         </span>
       ) : isSendRefused ? (
         <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
@@ -1733,6 +2010,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         latest.projectId
       );
       if (result !== null) {
+        // A different draft: an attachment still on its way was meant for the
+        // one this replaces.
+        if (view) advanceComposerDraft(view);
         applyEditorValue(result, {
           selection: EditorSelection.create([EditorSelection.cursor(result.length)]),
           focus: true,
@@ -1749,26 +2029,39 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // The menu takes Enter before the keymap asks whether the composer is
       // disabled, and the fleet would never ask.
       if (!latest || latest.disabled) return;
-      // An upload still on its way would leave its reference out, as on Enter.
-      if (hasPendingUploads(uploadSurface)) return;
+      // An attachment still on its way would be left out, as on Enter.
+      if (isComposerSendHeld(uploadSurface)) return;
       // The editor still reads the partial token: only that leaves the draft.
       const isDraftUnchanged = guardSentDraft(latest.projectId);
-      const intercepted = tryComposerFleetBroadcast(isFocusedTerminal, terminalId, text, () => {
-        if (!isDraftUnchanged()) return;
-        clearDraftInput(terminalId, projectId);
-        resetEditorDoc();
-      });
-      if (!intercepted) void sendText(text);
+      // The draft's images go with the command, as on Enter (#15600).
+      const imagePaths = readImageChipPaths(editorViewRef.current).filter((path) =>
+        text.includes(path)
+      );
+      const intercepted = tryComposerFleetBroadcast(
+        isFocusedTerminal,
+        terminalId,
+        text,
+        () => {
+          if (!isDraftUnchanged()) return;
+          clearDraftInput(terminalId, projectId);
+          resetEditorDoc();
+        },
+        noteCrossHostRefusal,
+        imagePaths
+      );
+      if (!intercepted) void sendText(text, { imagePaths });
     };
 
     // The `/` token a template was picked with, as an undo step of its own: a
     // pick made straight after typing the token would otherwise merge with
     // that typing.
     const cutTemplateToken = (view: EditorView, cut: DraftSpan) => {
+      const before = view.state.doc.toString();
       view.dispatch({
         changes: cut,
         annotations: [isolateHistory.of("full"), Transaction.userEvent.of("delete")],
       });
+      writeDraftEdit(before, view.state.doc.toString(), { ...cut, insert: "" });
     };
 
     // A template fills an empty draft and goes after a written one; routing it
@@ -1801,14 +2094,19 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // and undo steps already there are untouched. Either way the write is an
       // undo step of its own, or one undo straight after a quick pick would
       // take the typed token and the template back together.
+      const edits: TextChange[] = written
+        ? [
+            ...(cut ? [{ ...cut, insert: "" }] : []),
+            { from: doc.length, to: doc.length, insert: next.slice(draft.length) },
+          ]
+        : [{ from: 0, to: doc.length, insert: next }];
       view.dispatch({
-        changes: written
-          ? [...(cut ? [cut] : []), { from: doc.length, insert: next.slice(draft.length) }]
-          : { from: 0, to: doc.length, insert: next },
+        changes: edits,
         selection: EditorSelection.cursor(next.length),
         scrollIntoView: true,
         annotations: [isolateHistory.of("full"), Transaction.userEvent.of("input.paste")],
       });
+      writeDraftEdit(doc, view.state.doc.toString(), edits);
       view.focus();
     };
 
@@ -1949,6 +2247,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         // change the draft the note was about too.
         dropSendRefusal(
           next.trim() !== "" && update.transactions.every((tr) => tr.annotation(dictationWrite))
+        );
+        // Every change the editor makes, a completion included: the composer
+        // writing them later says where they were made.
+        editsSinceStoredRef.current = nextEditorEdits(
+          editsSinceStoredRef.current,
+          useTerminalInputStore.getState().getDraftInput(terminalId, projectId),
+          update,
+          next
         );
         if (next === lastEmittedValueRef.current) return false;
         lastEmittedValueRef.current = next;
@@ -2108,7 +2414,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // Sync external value changes to editor doc
     useEffect(() => {
       const view = editorViewRef.current;
-      if (!view) return;
+      // A render behind: the editor already shows a newer value.
+      if (!view || value !== lastEmittedValueRef.current) return;
       const current = view.state.doc.toString();
       if (value === current) return;
       isApplyingExternalValueRef.current = true;
@@ -2141,11 +2448,22 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         : inputBarColors.shellHoverBg,
       "--ib-shadow": inputBarColors.shellShadow,
       "--ib-focus-ring": inputBarColors.shellFocusRing,
-      "--ib-marker": showSelectedChrome ? inputBarColors.markerSelected : inputBarColors.marker,
-      "--ib-control-mix": inputBarColors.controlMix,
-      "--ib-placeholder": showSelectedChrome
-        ? inputBarColors.placeholderSelected
-        : inputBarColors.placeholder,
+      // An unavailable composer is dimmed by its inks, not by opacity: an
+      // opacity dim also halved the one line that says why (its reason, or
+      // its draft), which then read under 4.5:1 on every palette. The `❯` and
+      // the controls step down to an inactive ink together, as one family;
+      // the words keep the resting placeholder's fitted ink.
+      "--ib-marker": disabled
+        ? DISABLED_CONTROL_INK
+        : showSelectedChrome
+          ? inputBarColors.markerSelected
+          : inputBarColors.marker,
+      "--ib-control-mix": disabled ? DISABLED_CONTROL_MIX : inputBarColors.controlMix,
+      "--ib-placeholder": disabled
+        ? inputBarColors.placeholder
+        : showSelectedChrome
+          ? inputBarColors.placeholderSelected
+          : inputBarColors.placeholder,
       "--ib-placeholder-more": inputBarColors.placeholderMore,
       "--ib-interim": inputBarColors.interim,
       "--ib-accent": inputBarColors.accent,
@@ -2216,6 +2534,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         style={{ backgroundColor: inputBarColors.background, ...shellVars }}
       >
         {isRemote && <PendingUploadChips surface={uploadSurface} className="mb-1.5" />}
+        <HeldBackAttachmentsBanner
+          surface={uploadSurface}
+          disabled={disabled}
+          onAdd={addHeldBackAttachments}
+          className="mb-1.5"
+        />
         {/* Outside the shell, which is busy for the whole wait: a live region
             inside it would hold its announcements until the send. */}
         {!isExpanded && voiceSubmitAnnouncer}
@@ -2236,7 +2560,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               // draft length. `data-composer-rail` is one text line of extra
               // foot (`useComposerMeasure`): the row the trailing controls take
               // when the draft's last row leaves them no room beside it.
-              "flex w-full items-end gap-x-1.5 rounded-md border py-2 data-[composer-rail]:pb-7 transition-[border-color,background-color,box-shadow] duration-150 ease-out",
+              "flex w-full items-end gap-x-0.75 rounded-md border py-2 data-[composer-rail]:pb-7 transition-[border-color,background-color,box-shadow] duration-150 ease-out",
               !isSpecialState && [
                 "bg-[var(--ib-bg)] border-[var(--ib-border)] shadow-[var(--ib-shadow)]",
                 "hover:border-[var(--ib-border-hover)] hover:bg-[var(--ib-hover-bg)]",
@@ -2246,12 +2570,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 // control's own ring, not the composer taking the keyboard.
                 !isVoiceSubmitPresenting &&
                   "has-[.cm-content:focus-visible]:outline-2 has-[.cm-content:focus-visible]:outline-offset-2 has-[.cm-content:focus-visible]:outline-[var(--ib-focus-ring)]",
-              ],
-              // The one dim for an unavailable composer. Its controls take
-              // `disabled` and add no opacity of their own: a second dim inside
-              // this one compounds (60% × 50% left the paperclip at 30% beside a
-              // picker at 60%), so the row stops reading as one family.
-              disabled && "opacity-50"
+              ]
             )}
             data-voice-active={isVoiceListeningChrome ? "true" : undefined}
             data-fleet-armed={isFleetPrimary ? "true" : undefined}
@@ -2279,6 +2598,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             <VoiceSubmitProgress
               key={voiceSubmitAttempt}
               wait={voiceSubmitWait}
+              keys={voiceSubmitKeys}
               outcome={voiceSubmitOutcome}
               streamed={voiceCorrectionStreamed}
               onPresentChange={setIsVoiceSubmitPresenting}
@@ -2296,6 +2616,20 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 className={COMPOSER_BORDER_CAPTION_CLASS}
               >
                 {voiceSessionStatus}
+              </div>
+            )}
+            {showDisabledCaption && (
+              <div data-disabled-caption="" className={COMPOSER_BORDER_CAPTION_CLASS}>
+                {disabledPlaceholder}
+              </div>
+            )}
+            {showSendReopenedCaption && (
+              <div
+                aria-hidden="true"
+                data-send-reopened-caption=""
+                className={COMPOSER_BORDER_CAPTION_CLASS}
+              >
+                {VOICE_SEND_REOPENED_CAPTION}
               </div>
             )}
             {showSendRefusedCaption && (
@@ -2450,7 +2784,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                       }
                     }}
                     className={cn("w-full min-h-[20px]", disabled && "pointer-events-none")}
-                    style={{ color: inputBarColors.textInk }}
+                    style={{
+                      color: disabled ? inputBarColors.placeholder : inputBarColors.textInk,
+                    }}
                   />
                 </div>
               </ContextMenuTrigger>
@@ -2730,6 +3066,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                   // its own dictation takes.
                   {...(isolated ? { "data-keybindings-isolated": "" } : {})}
                   {...(isolated && voiceTarget ? { [DICTATION_OWNER_ATTR]: "" } : {})}
+                  // Portalled out of the pane, so it names the pane it writes
+                  // to: a When done choice leaves a pane being typed for (#16171).
+                  data-composer-terminal-id={terminalId}
                   className="flex-1 min-h-[200px] overflow-auto text-text-primary p-4"
                 />
               </ContextMenuTrigger>

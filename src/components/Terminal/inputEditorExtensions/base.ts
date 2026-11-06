@@ -1,5 +1,5 @@
 import { EditorView, Decoration, WidgetType, keymap, placeholder } from "@codemirror/view";
-import type { DecorationSet } from "@codemirror/view";
+import type { DecorationSet, ViewUpdate } from "@codemirror/view";
 import type { ChangeDesc, EditorSelection, Extension, Range } from "@codemirror/state";
 import { StateField, StateEffect, Prec } from "@codemirror/state";
 import { insertNewline } from "@codemirror/commands";
@@ -12,6 +12,7 @@ import {
   EASE_OUT_EXPO,
 } from "@/lib/animationUtils";
 import { createTrustedHTML, setTrustedInnerHTML } from "@/lib/trustedTypesPolicy";
+import { userEdit } from "./userEdit";
 
 const MAX_TEXTAREA_HEIGHT_PX = 160;
 const LINE_HEIGHT_PX = 20;
@@ -24,8 +25,12 @@ const INLINE_CHIP_BASE = {
   display: "inline-flex",
   alignItems: "center",
   // minHeight, not height: a wrapped label has to grow the pill rather than
-  // spill out of its painted background. Single-line chips still land on 20px.
-  minHeight: "20px",
+  // spill out of its painted background. 18px plus a 1px margin either side
+  // keeps the 20px line, and leaves a 2px channel between pills on adjacent
+  // rows, which otherwise met edge to edge and read as one block.
+  minHeight: "18px",
+  lineHeight: "18px",
+  margin: "1px 0",
   // top, not bottom: a wrapped pill is taller than the line box, and adjacent
   // text should sit on its first row rather than its last. Identical for
   // single-line chips, whose height already equals the line box.
@@ -72,11 +77,14 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         fontFamily: "var(--font-mono, monospace)",
         fontSize: "var(--text-xs)",
         lineHeight: "20px",
-        padding: "0 4px 0 0",
-        caretColor: c.accent,
+        // 3px on the left so a staged reference at the start of a line has
+        // its frame's room inside the editor's clip; the shell's gap gives the
+        // 3px back, so the text sits where it did.
+        padding: "0 4px 0 3px",
+        caretColor: c.caretInk,
       },
       "&.cm-focused .cm-cursor": {
-        borderLeft: `2px solid ${c.accent}`,
+        borderLeft: `2px solid ${c.caretInk}`,
       },
       "& .cm-selectionBackground": {
         backgroundColor: `color-mix(in oklab, ${c.accent} 25%, transparent) !important`,
@@ -85,15 +93,19 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         backgroundColor: `color-mix(in oklab, ${c.accent} 45%, transparent) !important`,
       },
       ".cm-dropCursor": {
-        borderLeftColor: c.accent,
+        borderLeftColor: c.caretInk,
       },
       // The shell sets `--ib-placeholder` per state; the expanded editor
       // portals out of the shell and takes the resting ink.
       ".cm-placeholder": {
         color: `var(--ib-placeholder, ${c.placeholder})`,
       },
+      // The app's scrollbar inks are tuned for app surfaces; the composer keeps
+      // the terminal's polarity, so its thumb takes the draft's own ink and
+      // the track stays the shell's fill.
       ".cm-scroller": {
         overflow: "hidden",
+        scrollbarColor: `${c.scrollThumb} transparent`,
       },
       ".cm-line": {
         padding: "0",
@@ -243,8 +255,41 @@ export function buildInputBarTheme(theme: ITheme): Extension {
       // the box so the staged chip keeps its geometry.
       ".cm-chip-pending-delete": {
         background: `color-mix(in oklab, ${c.foreground} ${CHIP_STAGED_MIX}%, ${c.shellBg})`,
-        outline: `1px solid color-mix(in oklab, ${c.foreground} 55%, ${c.shellBg})`,
+        outline: `1px solid ${c.chipStagedBorder}`,
         outlineOffset: "-1px",
+      },
+      // A literal reference has no padding of its own, so an inset contour ran
+      // through its first and last glyphs. Its staged frame is drawn behind the
+      // text instead (below), the same rounded box as a pill's, so nothing
+      // moves; the underline goes, as the frame now says what the token is.
+      ".cm-file-chip.cm-chip-pending-delete, .cm-slash-command-chip.cm-chip-pending-delete": {
+        position: "relative",
+        zIndex: "0",
+        background: "transparent",
+        outline: "none",
+        textDecorationLine: "none",
+      },
+      // The pill's 18px box inside the 20px line, so the editor's clip never
+      // cuts it, reaching 3px past the glyphs into the space either side
+      // (`.cm-content`'s left padding keeps that room at the start of a line).
+      // A border, not a shadow, so forced colours keep the contour.
+      ".cm-file-chip.cm-chip-pending-delete::before, .cm-slash-command-chip.cm-chip-pending-delete::before":
+        {
+          content: '""',
+          position: "absolute",
+          inset: "1px -3px",
+          zIndex: "-1",
+          boxSizing: "border-box",
+          borderRadius: "var(--radius-xs)",
+          background: `color-mix(in oklab, ${c.foreground} ${CHIP_STAGED_MIX}%, ${c.shellBg})`,
+          border: `1px solid ${c.chipStagedBorder}`,
+          pointerEvents: "none",
+        },
+      // While a chip is staged its contour says where the caret is; drawn as
+      // well, the caret sat inside a literal's frame. As specific as
+      // CodeMirror's own focused-cursor rule, which would otherwise show it.
+      "&.cm-chip-staging.cm-focused > .cm-scroller > .cm-cursorLayer .cm-cursor": {
+        display: "none",
       },
       "&.cm-chip-staging .cm-selectionBackground": {
         background: "transparent !important",
@@ -270,6 +315,12 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         textDecorationThickness: "2px",
         textUnderlineOffset: "3px",
         transition: `text-decoration-color ${UI_ANIMATION_DURATION}ms ease-out`,
+      },
+      // Words still being corrected refused an edit (#15874): washed for a
+      // moment in the draft's own ink, the rewrite streaming over them too.
+      ".cm-voice-pending-refused": {
+        backgroundColor: `color-mix(in oklab, ${c.foreground} ${CHIP_STAGED_MIX}%, transparent)`,
+        borderRadius: "var(--radius-xs)",
       },
       // The pending underline's hue, drawn solid once the correction has
       // landed, and only under what it changed.
@@ -385,6 +436,7 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         ".cm-voice-caret::before": { border: "1px solid CanvasText", width: "1px" },
         ".cm-voice-caret::after": { width: "0", borderLeft: "3px solid Highlight" },
         '.cm-voice-caret[data-phase="held"]::after': { borderLeftColor: "GrayText" },
+        ".cm-voice-pending-refused": { outline: "1px solid CanvasText" },
       },
     },
     { dark: true }
@@ -484,8 +536,12 @@ export const interimWidgetField = StateField.define<InterimPreview>({
     }
     for (const effect of tr.effects) {
       if (effect.is(setInterimText)) {
-        const preview =
+        let preview =
           typeof effect.value === "string" ? { text: effect.value, pos: null } : effect.value;
+        // A position outside this text shows the preview at the end instead (#15716).
+        if (preview.pos !== null && (preview.pos < 0 || preview.pos > tr.newDoc.length)) {
+          preview = { ...preview, pos: null };
+        }
         next =
           preview.text === next.text && preview.pos === next.pos && preview.trail === next.trail
             ? next
@@ -717,13 +773,36 @@ export function computeAutoSize(
   return { next, shouldScroll: snapped > maxHeightPx };
 }
 
+/**
+ * Set on the editor's element, with the geometry event, when the draft since
+ * the last measure was emptied or replaced whole: the shell's rail latch is
+ * for one draft, and a draft that never measured as empty (select all and
+ * type, or a keystroke landing before the frame that measures the clear) is
+ * still a new one. The shell reads and clears it (`useComposerMeasure`).
+ */
+export const COMPOSER_DRAFT_RESET_ATTR = "data-composer-draft-reset";
+
+function replacesDraft(update: ViewUpdate): boolean {
+  if (!update.docChanged) return false;
+  if (update.state.doc.length === 0) return true;
+  const startLength = update.startState.doc.length;
+  if (startLength === 0) return false;
+  let whole = false;
+  update.changes.iterChangedRanges((fromA, toA) => {
+    if (fromA === 0 && toA === startLength) whole = true;
+  });
+  return whole;
+}
+
 export function createAutoSize(config: AutoSizeConfig = {}) {
   const configLineHeightPx = config.lineHeightPx;
   const maxHeightPx = config.maxHeightPx ?? MAX_TEXTAREA_HEIGHT_PX;
   let lastHeight = 0;
   let lastOverflowY = "";
+  let draftReset = false;
 
   return EditorView.updateListener.of((update) => {
+    if (replacesDraft(update)) draftReset = true;
     // Interim dictation is an effect-only change to a widget on an otherwise
     // empty doc, so none of the layout flags fire for it (#13103).
     // A streamed cleanup's rewrite is the same: its words can change the
@@ -777,6 +856,10 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
         // The draft's rows are laid out and sized as of this write, so this is
         // the moment the composer shell can read where they end — in the same
         // frame as the text, before it paints.
+        if (draftReset) {
+          draftReset = false;
+          view.dom.setAttribute(COMPOSER_DRAFT_RESET_ATTR, "");
+        }
         view.dom.dispatchEvent(new Event(COMPOSER_GEOMETRY_EVENT, { bubbles: true }));
       },
     });
@@ -947,6 +1030,7 @@ export function createPlainPasteKeymap(): Extension {
             view.dispatch({
               changes: { from, to, insert: text },
               selection: { anchor: from + text.length },
+              annotations: userEdit.of(true),
             });
           });
           return true;
@@ -986,7 +1070,7 @@ export function createChipRemoveControl(onRemove: () => void): HTMLElement {
 export function removeChipRange(view: EditorView, from: number, to: number): void {
   const doc = view.state.doc.toString();
   const deleteTo = to < doc.length && doc[to] === " " ? to + 1 : to;
-  view.dispatch({ changes: { from, to: deleteTo, insert: "" } });
+  view.dispatch({ changes: { from, to: deleteTo, insert: "" }, annotations: userEdit.of(true) });
   view.focus();
 }
 

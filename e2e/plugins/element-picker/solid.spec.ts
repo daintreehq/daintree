@@ -29,7 +29,7 @@ test.describe.serial("Element Picker on a Solid dev server", () => {
     await selectInPreview(ctx, "h1", "h1");
     await expectNotTraced(ctx.window, "src/App.jsx");
     await expect(selectedElement(ctx.window)).toContainText(
-      "The page reported no source for this element"
+      "The page didn't say where it's written."
     );
   });
 });

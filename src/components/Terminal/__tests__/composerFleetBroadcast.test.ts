@@ -10,9 +10,11 @@ import {
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useFleetRunStore } from "@/store/fleetRunStore";
 import { usePanelStore } from "@/store/panelStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import type { PtyPanelData } from "@shared/types/panel";
 
 const submitMock = vi.fn<(id: string, text: string) => Promise<void>>();
+const submitWithImagesMock = vi.fn<(id: string, text: string, paths: string[]) => Promise<void>>();
 const submitCrossHostMock = vi.fn<(key: string, text: string) => Promise<void>>();
 
 vi.mock("@/clients", async (importOriginal) => {
@@ -22,6 +24,8 @@ vi.mock("@/clients", async (importOriginal) => {
     terminalClient: {
       ...actual.terminalClient,
       submit: (id: string, text: string) => submitMock(id, text),
+      submitWithImages: (id: string, text: string, paths: string[]) =>
+        submitWithImagesMock(id, text, paths),
     },
   };
 });
@@ -38,7 +42,7 @@ import {
   _resetCrossHostFleetForTesting,
   armCrossHostTarget,
 } from "@/components/Fleet/crossHostFleet";
-import { tryComposerFleetBroadcast } from "../composerFleetBroadcast";
+import { CROSS_HOST_IMAGE_REFUSAL, tryComposerFleetBroadcast } from "../composerFleetBroadcast";
 
 function armLocal(id: string): void {
   const panel = {
@@ -62,6 +66,8 @@ function armLocal(id: string): void {
 beforeEach(() => {
   submitMock.mockReset().mockResolvedValue(undefined);
   submitCrossHostMock.mockReset().mockResolvedValue(undefined);
+  submitWithImagesMock.mockReset().mockResolvedValue(undefined);
+  useAnnouncerStore.setState({ polite: null, assertive: null, nextId: 1 });
   useFleetArmingStore.setState({
     armedIds: new Set<string>(),
     armOrder: [],
@@ -126,12 +132,73 @@ describe("Enter in an armed composer", () => {
     await Promise.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(onRefused).toHaveBeenCalledTimes(1);
+    expect(onRefused).toHaveBeenCalledWith("context");
     expect(onSent).not.toHaveBeenCalled();
     expect(submitMock).not.toHaveBeenCalled();
     expect(submitCrossHostMock).not.toHaveBeenCalled();
     // What was set up for this send waits for the next one.
     expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({
       "t-1": "Review @diff here",
+    });
+  });
+
+  describe("with image chips (#15600)", () => {
+    const IMAGE = "/tmp/daintree/shot.png";
+
+    function armRemote(): string {
+      armCrossHostTarget({
+        hostId: "studio-01",
+        hostName: "studio-01",
+        terminalId: "remote-1",
+        title: "remote agent",
+      });
+      return useFleetArmingStore.getState().crossHostTargets[0]!.key;
+    }
+
+    it("sends nothing, and says why, when an image would reach an agent on another host", async () => {
+      armLocal("t-1");
+      armRemote();
+      useFleetTargetOverridesStore.getState().setPayloadOverride("t-1", `mine ${IMAGE}`);
+      const onSent = vi.fn();
+      const onRefused = vi.fn();
+      expect(
+        tryComposerFleetBroadcast(true, "t-1", `see ${IMAGE}`, onSent, onRefused, [IMAGE])
+      ).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(onRefused).toHaveBeenCalledWith("image");
+      expect(onSent).not.toHaveBeenCalled();
+      expect(submitMock).not.toHaveBeenCalled();
+      expect(submitWithImagesMock).not.toHaveBeenCalled();
+      expect(submitCrossHostMock).not.toHaveBeenCalled();
+      expect(useFleetTargetOverridesStore.getState().payloadOverrides).toEqual({
+        "t-1": `mine ${IMAGE}`,
+      });
+    });
+
+    it("says why aloud when no one asked to be told", () => {
+      armLocal("t-1");
+      armRemote();
+      expect(
+        tryComposerFleetBroadcast(true, "t-1", `see ${IMAGE}`, vi.fn(), undefined, [IMAGE])
+      ).toBe(true);
+      expect(useAnnouncerStore.getState().polite?.msg).toBe(CROSS_HOST_IMAGE_REFUSAL);
+      expect(submitCrossHostMock).not.toHaveBeenCalled();
+    });
+
+    it("attaches the image here and lets the send go once the other host's agent is skipped", async () => {
+      armLocal("t-1");
+      useFleetTargetOverridesStore.getState().setSkipped(armRemote(), true);
+      const onRefused = vi.fn();
+      expect(
+        tryComposerFleetBroadcast(true, "t-1", `see ${IMAGE}`, vi.fn(), onRefused, [IMAGE])
+      ).toBe(true);
+      await vi.waitFor(() => expect(submitWithImagesMock).toHaveBeenCalled());
+
+      expect(onRefused).not.toHaveBeenCalled();
+      expect(submitWithImagesMock.mock.calls).toEqual([["t-1", `see ${IMAGE}`, [IMAGE]]]);
+      expect(submitMock).not.toHaveBeenCalled();
+      expect(submitCrossHostMock).not.toHaveBeenCalled();
     });
   });
 

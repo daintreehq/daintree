@@ -59,6 +59,20 @@ const MIGRATED_FILES = [
   "src/components/Project/ProjectSwitcherConfirmDialogs.tsx",
   "src/components/Project/paletteTiles.tsx",
   "src/panels/dev-preview/element-picker/InspectorNotice.tsx",
+  "src/components/Settings/Decisions/DecisionsDeleteLocalDialog.tsx",
+  "src/components/Settings/Decisions/DecisionsDeleteRelayDialog.tsx",
+  "src/components/Settings/Decisions/DecisionsDisconnectDialog.tsx",
+  "src/components/Settings/Decisions/DecisionsExportDialog.tsx",
+  "src/components/Settings/Decisions/DecisionsModelClearDialog.tsx",
+  "src/components/Settings/Decisions/DecisionsRevokeDeviceDialog.tsx",
+  "src/components/Settings/Hosts/AddHostDialog.tsx",
+  "src/components/Settings/Hosts/ChangeHostTargetDialog.tsx",
+  "src/components/Settings/Hosts/HostDetail.tsx",
+  "src/components/Settings/Hosts/HostsSettingsTab.tsx",
+  "src/components/Browser/BrowserToolbar.tsx",
+  "src/components/Terminal/TerminalNotifyChip.tsx",
+  "src/components/Project/ProjectGroupMenus.tsx",
+  "src/components/Plugin/ProjectPluginIndicator.tsx",
 ];
 
 /**
@@ -70,10 +84,6 @@ const EXEMPT: Record<string, string[]> = {
   "src/components/Setup/SystemRequirementsSection.tsx": [
     "flex items-center gap-1.5 ml-auto text-2xs text-status-error",
     "flex items-center gap-1.5 ml-auto text-2xs text-status-warning",
-  ],
-  // A destructive row button ("Delete all"), not a message.
-  "src/components/Project/ProjectSwitcherScratchSection.tsx": [
-    "text-xs font-medium text-status-error transition-colors hover:bg-status-error/10",
   ],
   // Raw setup output behind a "Show details" disclosure: a log, not a callout.
   "src/components/Worktree/WorktreeCard/WorktreeDetailsSection.tsx": [

@@ -76,6 +76,12 @@ vi.mock("@/clients", () => ({
   terminalClient: { getHostAgentLimit: () => getHostAgentLimit() },
 }));
 
+const getCurrentLaunchCliDetail = vi.hoisted(() => vi.fn());
+vi.mock("@/utils/agentLaunchCommand", async (importActual) => ({
+  ...(await importActual<object>()),
+  getCurrentLaunchCliDetail: (id: string) => getCurrentLaunchCliDetail(id),
+}));
+
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
   logWarn: vi.fn(),
@@ -100,6 +106,8 @@ function setElectron(available: boolean): void {
 describe("useAgentLauncher — declined launches name their reason (#13382)", () => {
   beforeEach(() => {
     addPanel.mockReset();
+    getCurrentLaunchCliDetail.mockReset();
+    getCurrentLaunchCliDetail.mockResolvedValue(undefined);
     setElectron(true);
   });
 
@@ -154,6 +162,25 @@ describe("useAgentLauncher — declined launches name their reason (#13382)", ()
       reason: "panel-limit",
       panelLimit: SNAPSHOT,
     });
+  });
+
+  it("declines a scheduled run whose agent CLI can't launch, opening no setup pane (#15978)", async () => {
+    getCurrentLaunchCliDetail.mockResolvedValue({ state: "missing" });
+    const onDecline = vi.fn();
+    const { result } = renderHook(() => useAgentLauncher());
+
+    let launched: unknown;
+    await act(async () => {
+      launched = await result.current.launchAgent("claude", {
+        prompt: "Triage.",
+        scheduledRun: { scheduleId: "schedule-1", runId: "run-1" },
+        onDecline,
+      });
+    });
+
+    expect(launched).toBeNull();
+    expect(onDecline).toHaveBeenCalledExactlyOnceWith({ reason: "missing-cli", panelLimit: null });
+    expect(addPanel).not.toHaveBeenCalled();
   });
 
   it("reports spawn-failed when addPanel declines for any other reason", async () => {
@@ -280,6 +307,49 @@ describe("useAgentLauncher — the launching plugin (#14017)", () => {
 
     expect(addPanel).toHaveBeenCalledOnce();
     expect(addPanel.mock.calls[0]?.[0]).not.toHaveProperty("launchedByPluginId");
+  });
+});
+
+describe("useAgentLauncher — a scheduled run (#15977)", () => {
+  const RUN = { scheduleId: "schedule-1", runId: "run-1" };
+
+  beforeEach(() => {
+    addPanel.mockReset();
+    addPanel.mockResolvedValue("terminal-1");
+    setElectron(true);
+  });
+
+  afterEach(() => {
+    setElectron(false);
+  });
+
+  it("marks the pane with the schedule and its run, over the source it was given", async () => {
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      await result.current.launchAgent("claude", {
+        force: true,
+        spawnedBy: "mcp",
+        scheduledRun: RUN,
+      });
+    });
+
+    expect(addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ spawnedBy: "schedule", scheduledRun: RUN }),
+      expect.anything()
+    );
+  });
+
+  it("never stamps a schedule source that came without its run", async () => {
+    const { result } = renderHook(() => useAgentLauncher());
+
+    await act(async () => {
+      await result.current.launchAgent("claude", { force: true, spawnedBy: "schedule" });
+    });
+
+    const options = addPanel.mock.calls[0]?.[0];
+    expect(options).not.toHaveProperty("spawnedBy");
+    expect(options).not.toHaveProperty("scheduledRun");
   });
 });
 

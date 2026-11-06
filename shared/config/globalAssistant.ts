@@ -1,7 +1,9 @@
 import {
+  HOST_BRING_BACK_TOOL,
   HOST_CALL_TOOL,
   HOST_LIST_TOOL,
   HOST_SETTINGS_TOOL,
+  HOST_STATUS_TOOL,
   HOST_WATCH_TOOL,
 } from "../types/hostControl.js";
 
@@ -29,17 +31,23 @@ export function isGlobalAssistantId(projectId: string): boolean {
  * project, so every project tool reaches it only through `host.call`, where
  * the target host admits it as it would another machine's assistant: the owned
  * tools alone act, on what it launched there or was handed, save that a prompt,
- * keys and an interrupt also reach an agent it didn't launch (#14551). `host.ensureProject`
+ * keys and an interrupt also reach an agent it didn't launch (#14551), and a
+ * reveal shows the person that agent's panel (#16096). `host.ensureProject`
  * acts on the caller's own project, which it has none of. `host.settings`
  * names hosts, never a project, and every change it makes the person approves.
  * `host.watch` names a host and only listens, so the coordinator that held
- * work for one hears when it comes back (#14463).
+ * work for one hears when it comes back (#14463), and `host.bringBack` names
+ * one to wake or start where the person set that up (#16170). `host.status`
+ * reads `terminal.getStatus` in many projects on many hosts at once, each as
+ * `host.call` would read it there (#16191).
  */
 export const GLOBAL_ASSISTANT_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_LIST_TOOL,
   HOST_CALL_TOOL,
   HOST_SETTINGS_TOOL,
   HOST_WATCH_TOOL,
+  HOST_BRING_BACK_TOOL,
+  HOST_STATUS_TOOL,
 ]);
 
 /**
@@ -55,10 +63,13 @@ export const GLOBAL_ASSISTANT_READINESS_TOOL = HOST_LIST_TOOL;
  * own, and the owned forms that reach only what it launched or was handed.
  * The target widens `terminal.sendCommandOwned`, `terminal.sendKeysOwned` and
  * `terminal.interruptOwned` to any agent worker for it (#14551), held to the
- * run it names and never over a person's input; every other owned form keeps
- * the ledger.
+ * run it names and never over a person's input, and its send runs a slash
+ * command only as one of the agent's fixed forms (#16101); `terminal.revealOwned`
+ * reaches the same workers through the same checks, which writes nothing and so
+ * waits on no one (#16096); every other owned form keeps the ledger.
  * `worktree.resource.teardown` and `recipe.run` are here on purpose: both are
- * `danger: "confirm"`, so the person approves each run.
+ * `danger: "confirm"`, so the person approves each run. So are the user-preset
+ * writes (#16047), each previewed as the exact change.
  */
 export const GLOBAL_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "actions.getContext",
@@ -74,12 +85,14 @@ export const GLOBAL_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "worktree.waitUntilReady",
   "worktree.waitForPullRequest",
   "worktree.deleteOwned",
+  "worktree.retireOwned",
   "worktree.resource.status",
   "worktree.resource.teardown",
   "recipe.list",
   "recipe.run",
   "agent.launch",
   "agent.launchMany",
+  "agent.launchInNewWorktree",
   "agent.listAvailable",
   "agent.listPresets",
   "agent.listModels",
@@ -99,12 +112,17 @@ export const GLOBAL_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "terminal.interruptOwned",
   "terminal.closeOwned",
   "terminal.closeMany",
+  "terminal.waitForExit",
   "terminal.restartOnPresetOwned",
+  "agent.createPreset",
+  "agent.updatePreset",
+  "agent.deletePreset",
   "terminal.revealOwned",
   "terminal.placeOwned",
   "terminal.waitUntilIdle",
   "terminal.waitUntilIdleBatch",
   "terminal.notifyWhenIdle",
+  "terminal.cancelQueuedSend",
   "slashCommands.list",
   "workflow.startWorkOnIssue",
   "workflow.prepBranchForReview",

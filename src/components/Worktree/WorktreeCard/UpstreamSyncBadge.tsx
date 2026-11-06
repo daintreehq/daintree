@@ -44,6 +44,21 @@ interface UpstreamSyncBadgeProps {
 
 const FLASH_DURATION_MS = 250;
 
+/**
+ * A drift count: the hue on the arrow, the number in the line's own ink.
+ * Status hues miss 4.5:1 as text on several themes, and as a shape they only
+ * owe 3:1, so the glyph carries the direction's colour and the figure stays
+ * readable everywhere.
+ */
+function Count({ arrow, value }: { arrow: "↑" | "↓"; value: number | null | undefined }) {
+  return (
+    <span className="shrink-0 text-text-secondary">
+      <span className={arrow === "↑" ? "text-status-success" : "text-status-warning"}>{arrow}</span>
+      {value}
+    </span>
+  );
+}
+
 export function UpstreamSyncBadge({
   aheadCount,
   behindCount,
@@ -247,12 +262,8 @@ export function UpstreamSyncBadge({
 
   const line = (
     <>
-      {showUpstreamDelta && hasAhead && (
-        <span className="text-status-success shrink-0">↑{aheadCount}</span>
-      )}
-      {showUpstreamDelta && hasBehind && (
-        <span className="text-status-warning shrink-0">↓{behindCount}</span>
-      )}
+      {showUpstreamDelta && hasAhead && <Count arrow="↑" value={aheadCount} />}
+      {showUpstreamDelta && hasBehind && <Count arrow="↓" value={behindCount} />}
       {showBaseSegment && (
         <>
           {/* `text-secondary`, not `text-muted`: this names the branch the
@@ -273,12 +284,8 @@ export function UpstreamSyncBadge({
           <span className="text-text-secondary min-w-0 truncate" data-testid="upstream-sync-base">
             {showBaseDivergence ? "Δ" : "≡"} {baseBranchName}
           </span>
-          {displayedBaseAhead != null && (
-            <span className="text-status-success shrink-0">↑{displayedBaseAhead}</span>
-          )}
-          {displayedBaseBehind != null && (
-            <span className="text-status-warning shrink-0">↓{displayedBaseBehind}</span>
-          )}
+          {displayedBaseAhead != null && <Count arrow="↑" value={displayedBaseAhead} />}
+          {displayedBaseBehind != null && <Count arrow="↓" value={displayedBaseBehind} />}
         </>
       )}
       {/* Same tier as the branch name — never text-muted. Known on its own
@@ -343,7 +350,7 @@ export function UpstreamSyncBadge({
             type="button"
             onClick={handleRetryClick}
             data-no-dnd
-            className="group flex items-center w-fit max-w-full min-w-0 -my-1 py-1 text-left text-3xs font-mono tabular-nums cursor-pointer rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+            className="group flex items-center w-fit max-w-full min-w-0 -mx-1 -my-1 px-1 py-1 text-left text-3xs font-mono tabular-nums cursor-pointer rounded-[var(--radius-sm)] transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
             data-testid="upstream-sync-indicator"
             data-fetch-auth-failed="true"
             aria-label={`Git authentication failed — click to retry${

@@ -4,8 +4,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   _resetPendingUploadsForTests,
+  getHeldBackAttachments,
   getPendingUploads,
   hasPendingUploads,
+  holdBackAttachments,
+  holdComposerSend,
+  isComposerSendHeld,
+  takeHeldBackAttachments,
   trackUpload,
   UPLOAD_PROGRESS_DELAY_MS,
 } from "../pendingUploads";
@@ -88,6 +93,76 @@ describe("pending uploads", () => {
   });
 });
 
+describe("a composer's attachments (#15599)", () => {
+  beforeEach(() => {
+    _resetPendingUploadsForTests();
+  });
+
+  it("holds the send through an upload and past it, until every hold is released", async () => {
+    let finish!: () => void;
+    const releaseFirst = holdComposerSend("composer:t1");
+    const releaseSecond = holdComposerSend("composer:t1");
+    const upload = trackUpload(
+      "composer:t1",
+      "shot.png",
+      () => new Promise<void>((resolve) => (finish = resolve))
+    );
+    expect(isComposerSendHeld("composer:t1")).toBe(true);
+
+    finish();
+    await upload;
+    // The thumbnail is still to come: no chip, but no send either.
+    expect(hasPendingUploads("composer:t1")).toBe(false);
+    expect(getPendingUploads("composer:t1")).toEqual([]);
+    expect(isComposerSendHeld("composer:t1")).toBe(true);
+
+    releaseFirst();
+    releaseFirst();
+    expect(isComposerSendHeld("composer:t1")).toBe(true);
+    releaseSecond();
+    expect(isComposerSendHeld("composer:t1")).toBe(false);
+  });
+
+  it("holds the send for an upload alone, with no preparation hold", async () => {
+    let finish!: () => void;
+    const upload = trackUpload(
+      "composer:t1",
+      "shot.png",
+      () => new Promise<void>((resolve) => (finish = resolve))
+    );
+    expect(isComposerSendHeld("composer:t1")).toBe(true);
+    finish();
+    await upload;
+    expect(isComposerSendHeld("composer:t1")).toBe(false);
+  });
+
+  it("holds only its own composer", () => {
+    holdComposerSend("composer:t1");
+    expect(isComposerSendHeld("composer:t1")).toBe(true);
+    expect(isComposerSendHeld("composer:t2")).toBe(false);
+    expect(isComposerSendHeld("isolated-composer:t1")).toBe(false);
+  });
+
+  it("keeps held-back attachments in the order they came until they are taken", () => {
+    const shot = { type: "image", filePath: "/tmp/shot.png", thumbnailDataUrl: "data:x" } as const;
+    const notes = {
+      type: "file",
+      filePath: "/tmp/notes.md",
+      fileName: "notes.md",
+      fileSize: 3,
+    } as const;
+    const later = { ...notes, filePath: "/tmp/later.md", fileName: "later.md" };
+    holdBackAttachments("composer:t1", [shot, notes]);
+    holdBackAttachments("composer:t1", [later]);
+    holdBackAttachments("composer:t1", []);
+    expect(getHeldBackAttachments("composer:t2")).toEqual([]);
+
+    expect(takeHeldBackAttachments("composer:t1")).toEqual([shot, notes, later]);
+    expect(getHeldBackAttachments("composer:t1")).toEqual([]);
+    expect(takeHeldBackAttachments("composer:t1")).toEqual([]);
+  });
+});
+
 describe("upload questions", () => {
   beforeEach(() => {
     _resetUploadConfirmForTests();
@@ -124,6 +199,69 @@ describe("upload questions", () => {
     const pending = askUploadQuestion({ kind: "large", name: "a", bytes: 1, hostLabel: "h" });
     release();
     await expect(pending).resolves.toBe(false);
+  });
+
+  describe("withdrawn by the upload's signal", () => {
+    const large = (name: string) => ({ kind: "large", name, bytes: 1, hostLabel: "h" }) as const;
+
+    it("closes the question showing and shows the next, answering no", async () => {
+      registerUploadConfirmHost(Symbol("only"));
+      const controller = new AbortController();
+      const first = askUploadQuestion(large("a"), { signal: controller.signal });
+      const second = askUploadQuestion(large("b"));
+      expect(currentUploadQuestion()?.question).toMatchObject({ name: "a" });
+
+      controller.abort();
+      await expect(first).resolves.toBe(false);
+      expect(currentUploadQuestion()?.question).toMatchObject({ name: "b" });
+      currentUploadQuestion()!.answer(true);
+      await expect(second).resolves.toBe(true);
+    });
+
+    it("takes a waiting question out of the line, leaving the one showing", async () => {
+      registerUploadConfirmHost(Symbol("only"));
+      const controller = new AbortController();
+      const showing = askUploadQuestion(large("a"));
+      const waiting = askUploadQuestion(large("b"), { signal: controller.signal });
+
+      controller.abort();
+      await expect(waiting).resolves.toBe(false);
+      expect(currentUploadQuestion()?.question).toMatchObject({ name: "a" });
+      currentUploadQuestion()!.answer(true);
+      await expect(showing).resolves.toBe(true);
+      expect(currentUploadQuestion()).toBeNull();
+    });
+
+    it("never asks once the signal has aborted", async () => {
+      registerUploadConfirmHost(Symbol("only"));
+      const controller = new AbortController();
+      controller.abort();
+      await expect(askUploadQuestion(large("a"), { signal: controller.signal })).resolves.toBe(
+        false
+      );
+      expect(currentUploadQuestion()).toBeNull();
+    });
+
+    it("lets go of the signal once answered", async () => {
+      registerUploadConfirmHost(Symbol("only"));
+      const controller = new AbortController();
+      const add = vi.spyOn(controller.signal, "addEventListener");
+      const remove = vi.spyOn(controller.signal, "removeEventListener");
+      const asked = askUploadQuestion(large("a"), { signal: controller.signal });
+      currentUploadQuestion()!.answer(true);
+      await asked;
+      const [type, listener] = add.mock.calls[0]!;
+      expect(remove).toHaveBeenCalledWith(type, listener);
+    });
+
+    it("keeps the first answer when the signal aborts after it", async () => {
+      registerUploadConfirmHost(Symbol("only"));
+      const controller = new AbortController();
+      const asked = askUploadQuestion(large("a"), { signal: controller.signal });
+      currentUploadQuestion()!.answer(true);
+      controller.abort();
+      await expect(asked).resolves.toBe(true);
+    });
   });
 });
 

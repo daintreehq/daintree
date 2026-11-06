@@ -12,6 +12,8 @@ import { SessionStore } from "../sessionStore.js";
 import { RelayDrivenElsewhereError } from "../rendererBridge.js";
 import { RELAY_CALL_ID_META_KEY } from "../shared.js";
 import { relayNoticePane, type OwnPane, type TerminalNotifyHandlers } from "../terminalNotify.js";
+import { relayOwnershipPrincipal } from "../resourceOwnership.js";
+import type { HostCallContext } from "../hostControlTools.js";
 
 function entry(
   id: string,
@@ -41,6 +43,8 @@ const MANIFEST = [
   entry("host.call", "command"),
   entry("help.displayImage", "command"),
   entry("terminal.notifyWhenIdle", "command"),
+  entry("terminal.closeOwned", "command"),
+  entry("terminal.waitForExit", "command"),
 ];
 
 interface Harness {
@@ -61,16 +65,18 @@ afterEach(async () => {
 async function relayed(
   tier: "core" | "full",
   overrides: Partial<SessionServerDeps> = {},
-  relay: boolean = true
+  relay: boolean = true,
+  bound: { store?: SessionStore; sessionId?: string; projectId?: string } = {}
 ): Promise<Harness> {
-  const store = new SessionStore(() => {});
-  const sessionId = "relay-session";
+  const store = bound.store ?? new SessionStore(() => {});
+  const sessionId = bound.sessionId ?? "relay-session";
+  const projectId = bound.projectId ?? "project-1";
   store.sessionTierMap.set(sessionId, tier);
   store.sessionOriginMap.set(sessionId, "external");
-  store.sessionWorkspaceMap.set(sessionId, "project-1");
+  store.sessionWorkspaceMap.set(sessionId, projectId);
   const deps: SessionServerDeps = {
     sessionStore: store,
-    workspaceBinding: { workspaceId: "project-1" },
+    workspaceBinding: { workspaceId: projectId },
     requestManifest: vi.fn().mockResolvedValue(MANIFEST),
     dispatchAction: vi.fn().mockResolvedValue({ result: { ok: true, result: { ran: true } } }),
     handleWaitUntilIdle: vi.fn(),
@@ -110,6 +116,7 @@ async function relayed(
     deps,
     close: async () => {
       await client.close();
+      if (bound.store !== undefined) return;
       store.drain();
       store.grantCache.dispose();
     },
@@ -122,6 +129,81 @@ function errorCode(result: { content: unknown }): string {
   const [first] = result.content as Array<{ text: string }>;
   return (JSON.parse(first!.text) as { code: string }).code;
 }
+
+describe("waiting on a relayed close (#15728)", () => {
+  // One Shell assistant's sessions on this host share a relay principal, one
+  // per project it drives here, so a close in one project must not let a
+  // session in another end that panel's grace past the first project's drive rule.
+  it("asks the drive rule of the project a panel was closed in, not the asking session's", async () => {
+    const store = new SessionStore(() => {});
+    const principal = relayOwnershipPrincipal("shell-1", "help-1");
+    // The contract: null while this Shell drives the bound project and a named
+    // project is that one.
+    const refuseWriteFor = (bound: string) =>
+      vi.fn((projectId: string | undefined) =>
+        projectId === undefined || projectId === bound
+          ? null
+          : { code: "VALIDATION_ERROR", message: `This call can only act in project ${bound}.` }
+      );
+    const waitForClosedPanelExits = vi.fn(async () => ({
+      processes: [{ terminalId: "t-1", outcome: "running" as const, graceEnded: true }],
+    }));
+    const inA = await relayed(
+      "core",
+      {
+        relay: { shellName: "greg-mbp", refuseWrite: refuseWriteFor("project-1") },
+        waitForClosedPanelExits,
+        terminalGenerationOf: () => 4,
+        dispatchAction: vi.fn().mockResolvedValue({
+          result: { ok: true, result: { closedIds: ["t-1"] } },
+          dispatchedWorkspace: { kind: "project", workspaceId: "project-1", workspacePath: "/a" },
+        }),
+      },
+      true,
+      { store, sessionId: "relay-a", projectId: "project-1" }
+    );
+    const inB = await relayed(
+      "core",
+      {
+        relay: { shellName: "greg-mbp", refuseWrite: refuseWriteFor("project-2") },
+        waitForClosedPanelExits,
+      },
+      true,
+      { store, sessionId: "relay-b", projectId: "project-2" }
+    );
+    store.resourceOwnership.bindPrincipal("relay-a", principal);
+    store.resourceOwnership.bindPrincipal("relay-b", principal);
+    store.resourceOwnership.record(store.resourceOwnership.ownerOf("relay-a"), [
+      { kind: "terminal", id: "t-1" },
+    ]);
+
+    const closed = await inA.client.callTool({
+      name: "terminal.closeOwned",
+      arguments: { terminalId: "t-1" },
+    });
+    expect(closed.isError).not.toBe(true);
+
+    const fromB = await inB.client.callTool({
+      name: "terminal.waitForExit",
+      arguments: { terminalIds: ["t-1"], endGrace: true },
+    });
+    expect(errorCode(fromB as { content: unknown })).toBe("VALIDATION_ERROR");
+    expect(waitForClosedPanelExits).not.toHaveBeenCalled();
+
+    const fromA = await inA.client.callTool({
+      name: "terminal.waitForExit",
+      arguments: { terminalIds: ["t-1"], endGrace: true },
+    });
+    expect(fromA.isError).not.toBe(true);
+    expect(waitForClosedPanelExits).toHaveBeenCalledExactlyOnceWith(
+      [{ terminalId: "t-1", launchGeneration: 4 }],
+      expect.objectContaining({ endGrace: true })
+    );
+
+    store.drain();
+    store.grantCache.dispose();
+  });
+});
 
 describe("a relayed session (#13493)", () => {
   it("is live for its tier only while the relay holds its transport", async () => {
@@ -404,6 +486,57 @@ describe("a relayed session (#13493)", () => {
     );
   });
 
+  it("records a call its Shell ran under its own assistant's Never ask as that, not as unasked (#15698)", async () => {
+    // A recipe makes an agent's create confirm-gated.
+    const manifest = [...MANIFEST, entry("worktree.createWithRecipe", "command")];
+    const skipped = {
+      result: { ok: true, result: { ran: true } },
+      authorization: "skip-preference",
+    };
+    const answering = (answer: unknown) => ({
+      requestManifest: vi.fn().mockResolvedValue(manifest),
+      getCachedManifest: vi.fn(() => manifest),
+      dispatchAction: vi.fn().mockResolvedValue(answer),
+    });
+    const create = (harness: Harness) =>
+      harness.client.callTool({
+        name: "worktree.createWithRecipe",
+        arguments: { recipeId: "inrepo-work" },
+        _meta: { [RELAY_CALL_ID_META_KEY]: "call-123" },
+      });
+    const recorded = (harness: Harness) =>
+      (harness.deps.appendAuditRecord as ReturnType<typeof vi.fn>).mock.calls.map(
+        ([record]) => record as Record<string, unknown>
+      );
+
+    const relay = await relayed("full", answering(skipped));
+    await create(relay);
+    // Its Shell's answer that says no skip records none.
+    const asked = await relayed("full", answering({ result: { ok: true, result: { ran: true } } }));
+    await create(asked);
+    // The same answer for a session that isn't relayed speaks for nobody's preference.
+    const plain = await relayed("full", answering(skipped), false);
+    await create(plain);
+
+    expect(relay.deps.dispatchAction).toHaveBeenCalledWith(
+      "worktree.createWithRecipe",
+      expect.objectContaining({ recipeId: "inrepo-work" }),
+      false,
+      undefined,
+      "call-123"
+    );
+    expect(recorded(relay)).toEqual([
+      expect.objectContaining({
+        toolId: "worktree.createWithRecipe",
+        authorization: "skip-preference",
+      }),
+    ]);
+    expect(recorded(asked)).toHaveLength(1);
+    expect(recorded(asked)[0]).not.toHaveProperty("authorization");
+    expect(recorded(plain)).toHaveLength(1);
+    expect(recorded(plain)[0]).not.toHaveProperty("authorization");
+  });
+
   it("ignores a callId on a session that isn't relayed", async () => {
     const plain = await relayed("core", {}, false);
     await plain.client.callTool({
@@ -476,7 +609,79 @@ describe("host.call on this machine's own assistant session (#13493)", () => {
     const result = await client.callTool({ name: "host.call", arguments: args });
     expect(result.isError).not.toBe(true);
     expect(result.structuredContent).toMatchObject({ outcome: "ok", callId: "c1" });
-    expect(run).toHaveBeenCalledWith("host.call", args, { tier: "full" });
+    expect(run).toHaveBeenCalledWith("host.call", args, {
+      tier: "full",
+      noteSkipPreference: expect.any(Function),
+    });
+  });
+
+  it("records a host.call whose call ran there under this machine's own Never ask (#15698)", async () => {
+    const store = new SessionStore(() => {});
+    const sessionId = "help-transport";
+    store.sessionTierMap.set(sessionId, "full");
+    store.sessionOriginMap.set(sessionId, "help");
+    store.sessionHelpIdMap.set(sessionId, "help-1");
+    let skipOnCall = true;
+    const run = vi.fn(async (_tool: string, _args: unknown, context?: HostCallContext) => {
+      if (skipOnCall) context?.noteSkipPreference?.();
+      return {
+        ok: true as const,
+        value: {
+          outcome: "ok" as const,
+          detail: null,
+          retryAfterMs: null,
+          callId: "c1",
+          result: { isError: false, structured: {}, text: null },
+        },
+      };
+    });
+    const appendAuditRecord = vi.fn();
+    const server = createSessionServer(sessionId, {
+      sessionStore: store,
+      requestManifest: vi.fn().mockResolvedValue(MANIFEST),
+      dispatchAction: vi.fn(),
+      handleWaitUntilIdle: vi.fn(),
+      handleWaitUntilIdleBatch: vi.fn(),
+      handleSkillsSearch: vi.fn(() => ({ skills: [] })),
+      handleSkillsLoad: vi.fn(),
+      handleProjectRunCheck: vi.fn(),
+      handleProjectRunCommand: vi.fn(),
+      handleTerminalGetStatusViewless: vi.fn(),
+      handleTerminalReadLastMessageOwned: vi.fn(),
+      isTerminalIdInUse: vi.fn(() => false),
+      appendAuditRecord,
+      getCachedManifest: vi.fn(() => MANIFEST),
+      hostControl: { isCallReachable: () => true, run },
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    store.relaySessions.set(sessionId, { transport: serverTransport, server });
+    const client = new Client({ name: "test", version: "1.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    open.push({
+      client,
+      store,
+      deps: {} as SessionServerDeps,
+      close: async () => {
+        await client.close();
+        store.drain();
+        store.grantCache.dispose();
+      },
+    });
+
+    const args = {
+      hostId: "studio",
+      projectId: "p",
+      tool: "worktree.deleteOwned",
+      args: { worktreeId: "/wt/x" },
+    };
+    await client.callTool({ name: "host.call", arguments: args });
+    skipOnCall = false;
+    await client.callTool({ name: "host.call", arguments: args });
+
+    const [skipped, asked] = appendAuditRecord.mock.calls.map(([record]) => record);
+    expect(skipped).toMatchObject({ toolId: "host.call", authorization: "skip-preference" });
+    expect(asked).toMatchObject({ toolId: "host.call" });
+    expect(asked).not.toHaveProperty("authorization");
   });
 });
 

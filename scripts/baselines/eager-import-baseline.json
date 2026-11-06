@@ -11,7 +11,6 @@
     "electron/ipc/handlers/demo.ts",
     "electron/ipc/handlers/devPreview.ts",
     "electron/ipc/handlers/deviceAnswer.ts",
-    "electron/ipc/handlers/diagnostics.ts",
     "electron/ipc/handlers/fileTransfer.ts",
     "electron/ipc/handlers/forgeRecommendation.ts",
     "electron/ipc/handlers/forgeResolution.ts",
@@ -245,16 +244,6 @@
       "file": "electron/ipc/handlers/devPreview.ts",
       "line": 160,
       "pattern": "sync-store-get"
-    },
-    {
-      "file": "electron/ipc/handlers/diagnostics.ts",
-      "line": 213,
-      "pattern": "sync-fs"
-    },
-    {
-      "file": "electron/ipc/handlers/diagnostics.ts",
-      "line": 220,
-      "pattern": "sync-fs"
     },
     {
       "file": "electron/ipc/handlers/fileTransfer.ts",

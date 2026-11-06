@@ -43,6 +43,7 @@ import type {
   UpdateHostPayload,
   WindowHostInfo,
 } from "../../../shared/types/ipc/remoteHosts.js";
+import type { HostBringBackAnswer } from "../../../shared/types/hostWake.js";
 
 function requireHostId(payload: unknown): string {
   const hostId = (payload as { hostId?: unknown } | null)?.hostId;
@@ -126,6 +127,12 @@ export const remoteHostsNamespace = defineIpcNamespace({
       REMOTE_HOSTS_METHOD_CHANNELS.disconnect,
       async (payload: { hostId: string }): Promise<void> =>
         requireRemoteService("remoteHostsClient").disconnect(payload)
+    ),
+    // Wake it if it can be woken, start Daintree there if it can be started, and say what happened (#16170).
+    bringBack: op(
+      REMOTE_HOSTS_METHOD_CHANNELS.bringBack,
+      async (payload: { hostId: string }): Promise<HostBringBackAnswer> =>
+        requireRemoteService("hostBringBack").bringBack(requireHostId(payload))
     ),
     getWindowHost: op(
       REMOTE_HOSTS_METHOD_CHANNELS.getWindowHost,

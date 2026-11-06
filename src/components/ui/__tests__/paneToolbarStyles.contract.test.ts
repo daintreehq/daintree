@@ -1,4 +1,5 @@
-import { readFileSync, readdirSync, statSync } from "fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
 import path from "path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
@@ -44,6 +45,9 @@ const RADIUS_EXCEPTIONS: Record<string, number> = {
 
 function classStrings(file: string): string[] {
   const text = readFileSync(file, "utf8");
+  // Escapes can spell the class without the literal substring, so those files
+  // still need parsing. Most source files need neither an AST nor its walk.
+  if (!text.includes("toolbar-icon-button") && !text.includes("\\")) return [];
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const out: string[] = [];
   const visit = (node: ts.Node) => {
@@ -59,9 +63,10 @@ function classStrings(file: string): string[] {
 }
 
 function tsxFiles(dir: string): string[] {
-  return readdirSync(dir).flatMap((name) => {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const { name } = entry;
     const full = path.join(dir, name);
-    if (statSync(full).isDirectory()) {
+    if (entry.isDirectory() || (entry.isSymbolicLink() && statSync(full).isDirectory())) {
       return name === "__tests__" || name === "__preview__" ? [] : tsxFiles(full);
     }
     return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) ? [full] : [];
@@ -73,6 +78,27 @@ const radiusTokens = (s: string) =>
   tokens(s).filter((t) => t === "rounded" || /^rounded-(xs|sm|md|lg|xl|\[var\(--radius-)/.test(t));
 
 describe("pane toolbar icon button contract", () => {
+  it("finds toolbar classes written literally, with escapes, or across continued lines", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "daintree-toolbar-contract-"));
+    const file = path.join(dir, "fixture.tsx");
+    try {
+      for (const spelling of [
+        "toolbar-icon-button",
+        "toolbar\\u002dicon-button",
+        "toolbar-\\\nicon-button",
+      ]) {
+        writeFileSync(file, `const cls = '${spelling} disabled:opacity-40';`);
+        expect(classStrings(file)).toEqual(["toolbar-icon-button disabled:opacity-40"]);
+      }
+      writeFileSync(file, "// toolbar-icon-button\nconst label = 'Unrelated';");
+      expect(classStrings(file)).toEqual([]);
+      writeFileSync(file, "const label = 'Unrelated';");
+      expect(classStrings(file)).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("the shared strings sit on Button's corner and carry no disabled utility", () => {
     for (const cls of [PANE_TOOLBAR_ICON_BUTTON_CLASS, PANE_TOOLBAR_TEXT_BUTTON_CLASS]) {
       expect(radiusTokens(cls)).toEqual(["rounded-[var(--radius-md)]"]);

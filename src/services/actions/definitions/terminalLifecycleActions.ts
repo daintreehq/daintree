@@ -2,6 +2,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext, ActionSource } from "@shared/types/actions";
 import { z } from "zod";
 import { PanelCloseResultSchema } from "@shared/types/panelClose";
+import { RunGenerationArgSchema } from "@shared/types/assistantControl";
 import { flushOptimisticCloses, requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 import { usePanelStore } from "@/store/panelStore";
 import { isEphemeralPanel } from "@/store/slices/panelRegistry/panelCount";
@@ -9,7 +10,16 @@ import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBindi
 import { isForegroundDispatch } from "./dispatchSource";
 import { PanelPlacementResultSchema, throwTerminalMiss } from "./terminalPlacement";
 import { TerminalRestoredSchema } from "./schemas";
+import { TERMINAL_WHEN_DONE_CHOICES } from "@shared/types/ipc/terminalWhenDone";
+import { terminalWhenDoneClient } from "@/clients/terminalWhenDoneClient";
 import {
+  AGENT_SESSION_FILE_AGENT_IDS,
+  AGENT_SESSION_FILE_OBSERVATIONS,
+  AGENT_SESSION_FILE_UNKNOWN_REASONS,
+} from "@shared/types/agentSessionFile";
+import {
+  KeepConversationArgSchema,
+  RestartOnAccountArgsSchema,
   RestartOnPresetArgsSchema,
   SetHoldOnRestartArgsSchema,
   StartHeldArgsSchema,
@@ -21,8 +31,8 @@ const RestartOnPresetResultSchema = z.object({
   terminalId: z.string().describe("The pane, respawned in place."),
   agentPresetId: z.string().describe("Preset it now runs on."),
   agentSessionIdCleared: z
-    .literal(true)
-    .describe("A new conversation started: re-send anything the agent still needs."),
+    .boolean()
+    .describe("false: asked to reopen it; true: re-send the brief."),
 });
 
 /**
@@ -263,6 +273,7 @@ export function registerTerminalLifecycleActions(
     palette: { mode: "hidden" },
     argsSchema: z.object({
       terminalId: z.string().min(1).describe("Panel `id` this session created or was handed."),
+      generation: RunGenerationArgSchema,
     }),
     run: async () => {
       throw new Error(
@@ -407,13 +418,13 @@ export function registerTerminalLifecycleActions(
     id: "terminal.restartOnPreset",
     title: "Restart agent on preset",
     description:
-      "Respawn an agent terminal in place on another preset of the same agent. Always starts a new conversation and discards the scrollback, so it runs only when confirmed.",
+      "Respawn an agent terminal in place on another preset of the same agent. Starts a new conversation unless keepConversation, and discards the scrollback, so it runs only when confirmed.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
     scope: "renderer",
     dangerRationale:
-      "Ends the agent's conversation and respawns it on another preset. Scrollback is lost.",
+      "Interrupts the agent and respawns it on another preset, in a new conversation unless asked to keep it. Scrollback is lost.",
     keywords: ["preset", "account", "switch", "relaunch", "rate limit"],
     // Needs a preset the palette has no way to ask for; the pane menu and the
     // rate-limit chip carry their own picker and confirm.
@@ -422,6 +433,36 @@ export function registerTerminalLifecycleActions(
     resultSchema: RestartOnPresetResultSchema,
     run: (args: unknown, ctx: ActionContext) =>
       runTerminalLifecycleAction("terminal.restartOnPreset", args, ctx),
+  }));
+
+  actions.set("terminal.restartOnAccount", () => ({
+    id: "terminal.restartOnAccount",
+    title: "Restart agent on account",
+    description:
+      "Respawn an agent terminal in place on another of its agent's accounts, keeping its preset. Starts a new conversation unless keepConversation, and discards the scrollback, so it runs only when confirmed.",
+    category: "terminal",
+    kind: "command",
+    danger: "confirm",
+    scope: "renderer",
+    dangerRationale:
+      "Interrupts the agent and respawns it on another account, in a new conversation unless asked to keep it. Scrollback is lost.",
+    keywords: ["account", "login", "switch", "relaunch", "rate limit"],
+    // Needs an account the palette has no way to ask for; the pane menu and
+    // the rate-limit chip carry their own picker and confirm.
+    palette: { mode: "hidden" },
+    argsSchema: RestartOnAccountArgsSchema,
+    resultSchema: z.object({
+      terminalId: z.string().describe("The pane, respawned in place."),
+      agentAccountId: z
+        .string()
+        .nullable()
+        .describe("Account it now runs on; null is the CLI's default login."),
+      agentSessionIdCleared: z
+        .boolean()
+        .describe("false: asked to reopen it; true: re-send the brief."),
+    }),
+    run: (args: unknown, ctx: ActionContext) =>
+      runTerminalLifecycleAction("terminal.restartOnAccount", args, ctx),
   }));
 
   // Manifest-only, executed in the MCP main process like `terminal.closeOwned`
@@ -433,14 +474,14 @@ export function registerTerminalLifecycleActions(
     id: "terminal.restartOnPresetOwned",
     title: "Move owned agent to another preset",
     description:
-      "Respawn an agent panel this session launched on another preset of its agent, in place, after the user confirms: for an agent that hit a plan limit. Its conversation and scrollback are lost. Panels it was handed are refused.",
+      "Move a panel this session launched (not a handed one) to another preset once the user confirms. Scrollback is lost; keepConversation resumes its id, which the CLI may refuse.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
     denyPluginDispatch: true,
     scope: "renderer",
     dangerRationale:
-      "Ends the agent's conversation and respawns it on another preset. Scrollback is lost.",
+      "Interrupts the agent and respawns it on another preset, in a new conversation unless asked to keep it. Scrollback is lost.",
     keywords: ["preset", "account", "rate limit", "owned"],
     // Hidden for the same reason as `terminal.closeOwned`: only the MCP
     // main-process path can reach it.
@@ -451,6 +492,7 @@ export function registerTerminalLifecycleActions(
         .min(1)
         .describe("Panel `id` this session got when launching it. Required."),
       presetId: z.string().min(1).describe("A preset `id` of the panel's own agent."),
+      keepConversation: KeepConversationArgSchema,
     }),
     resultSchema: RestartOnPresetResultSchema,
     mcpOutputSchema: true,
@@ -587,6 +629,48 @@ export function registerTerminalLifecycleActions(
       runTerminalLifecycleAction("terminal.info.get", args, ctx),
   }));
 
+  // What a plugin carrying a conversation into another agent's CLI can't find
+  // on its own (#16097). Plugins only: the path locates a whole conversation,
+  // and nothing an MCP client does needs it.
+  actions.set("terminal.sessionFile.get", () => ({
+    id: "terminal.sessionFile.get",
+    title: "Get agent session file",
+    description:
+      "Plugins only: the session file the Codex or Claude Code agent in a terminal is writing, and how that was seen. Answers unknown with a reason instead of guessing.",
+    category: "terminal",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    palette: { mode: "hidden" },
+    mcpVisibility: "hidden",
+    argsSchema: z.object({
+      terminalId: z
+        .string()
+        .trim()
+        .min(1)
+        .max(128)
+        .describe("Terminal panel id in this project. Required; no focus fallback."),
+    }),
+    resultSchema: z.object({
+      status: z.enum(["observed", "unknown"]),
+      agentId: z.enum(AGENT_SESSION_FILE_AGENT_IDS).optional(),
+      sessionId: z.string().optional(),
+      path: z
+        .string()
+        .optional()
+        .describe("Absolute path on this machine. The CLI's own file: read it, never write it."),
+      observedBy: z
+        .enum(AGENT_SESSION_FILE_OBSERVATIONS)
+        .optional()
+        .describe(
+          "'open-for-writing': the terminal's process holds it open (Codex). 'recorded-session-id': the transcript of the session id Daintree recorded (Claude Code), so a session the CLI switched to by itself isn't seen."
+        ),
+      reason: z.enum(AGENT_SESSION_FILE_UNKNOWN_REASONS).optional(),
+    }),
+    run: (args: unknown, ctx: ActionContext) =>
+      runTerminalLifecycleAction("terminal.sessionFile.get", args, ctx),
+  }));
+
   // The plugin-side half of "Resume agents after restart" (#13509, #14017): a
   // plugin that knows its run is over can keep the pane from resuming without
   // the user changing a setting that covers every agent.
@@ -619,6 +703,27 @@ export function registerTerminalLifecycleActions(
     argsSchema: z.object({ terminalId: z.string().optional() }),
     run: (args: unknown, ctx: ActionContext) =>
       runTerminalLifecycleAction("terminal.toggleInputLock", args, ctx),
+  }));
+
+  actions.set("terminal.setWhenDone", () => ({
+    id: "terminal.setWhenDone",
+    title: "Set when done",
+    description:
+      "Choose what an agent terminal does once its agent reports done: keep it, move it to the background, or close it with its session resumable. Arming sends the agent the handback instruction.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    // Arming sends the agent text, which belongs behind a plugin's input capability.
+    denyPluginDispatch: true,
+    keywords: ["handback", "finished", "auto close", "background", "complete"],
+    argsSchema: z.object({
+      terminalId: z.string().min(1).describe("The agent terminal."),
+      choice: z.enum(TERMINAL_WHEN_DONE_CHOICES).describe("keep is the default and disarms."),
+    }),
+    run: async ({ terminalId, choice }) => {
+      await terminalWhenDoneClient.set(terminalId, choice);
+    },
   }));
 
   actions.set("terminal.forceResume", () => ({

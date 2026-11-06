@@ -5,8 +5,10 @@ import {
   SECTION_LABELS,
   applyReplacements,
   applyReplacementsCounted,
+  computeTimeWindowStart,
   filterLogEntriesByTime,
   filterSections,
+  getTimeWindowIds,
   PREBUILT_REDACTIONS,
   type ReplacementRule,
 } from "../diagnosticsTransform.js";
@@ -188,6 +190,32 @@ describe("filterLogEntriesByTime", () => {
     expect(filterLogEntriesByTime({ logs: { error: "failed" } }, 100)).toEqual({
       logs: { error: "failed" },
     });
+  });
+});
+
+describe("time windows", () => {
+  const boundaries = {
+    appLaunchTimestamp: 7_000,
+    versionFirstRun: { version: "0.39.0", firstRunAtMs: 4_000 },
+    oldestRetainedLogMs: 3_000,
+  };
+
+  it("offers the update window only once a version change has been observed", () => {
+    expect(getTimeWindowIds(boundaries)).toContain("update");
+    expect(getTimeWindowIds({ versionFirstRun: null })).not.toContain("update");
+  });
+
+  it("resolves each window against the given now and the review's boundaries", () => {
+    const now = 10_000_000;
+    expect(
+      getTimeWindowIds(boundaries).map((id) => computeTimeWindowStart(id, boundaries, now))
+    ).toEqual([now - 5 * 60_000, now - 30 * 60_000, 7_000, 4_000, null]);
+  });
+
+  it("widens the update window to full history once rotation cut into the version's logs", () => {
+    expect(
+      computeTimeWindowStart("update", { ...boundaries, oldestRetainedLogMs: 4_500 }, 10_000_000)
+    ).toBeNull();
   });
 });
 

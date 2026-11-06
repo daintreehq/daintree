@@ -11,9 +11,12 @@ import {
   useState,
 } from "react";
 import { DiffStat } from "@/components/ui/DiffStat";
+import { cn } from "@/lib/utils";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import type {
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
   ReactElement,
   ReactNode,
   Ref,
@@ -56,6 +59,7 @@ import {
   MessageSquarePlus,
   UnfoldVertical,
 } from "lucide-react";
+import { flushSync } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { join } from "@shared/utils/path";
 import { getLanguageForFile } from "@/components/FileViewer/languageUtils";
@@ -74,6 +78,7 @@ import {
   estimateHunksBytes,
 } from "./diffCollapseUtils";
 import { detectMovedLines } from "./diffMovedUtils";
+import { useStagedDiffRows } from "./useStagedDiffRows";
 import { computeSearchRanges, computeTrailingWsRanges } from "./diffTokenRanges";
 import type { SideRanges } from "./diffTokenRanges";
 import { isLanguageFailed } from "./diffRefractor";
@@ -155,9 +160,9 @@ export interface DiffViewerProps {
   /** Case-insensitive plain-text query; matches render as .diff-search-match spans */
   searchQuery?: string;
   onRetry?: () => void;
-  /** Fired whenever rendered hunk rows change (collapse toggles, context expansion, progressive reveal), so consumers can re-scan the live DOM */
+  /** Fired whenever rendered hunk rows change (collapse toggles, context expansion, progressive reveal, each staged batch of a large file), so consumers can re-scan the live DOM */
   onToggleCollapse?: () => void;
-  /** Fired after a file's token pass commits (highlighting, search marks) — the signal that .diff-search-match spans are scannable */
+  /** Fired after each commit of a file's token pass (highlighting, search marks) — the signal that .diff-search-match spans are scannable. A large file's pass lands in batches; the last call has every row highlighted. */
   onTokensRendered?: () => void;
   /**
    * Enables review notes for a local diff of this worktree. Omit for diffs
@@ -177,6 +182,23 @@ export interface DiffViewerProps {
   renderHunkActions?: (hunk: HunkData, index: number, file: DiffViewerHunkFile) => ReactNode;
   /** Draws the file header's Open button. Defaults to true. */
   openInEditor?: boolean;
+  /** A control before the path in the file header, such as a host's file-list toggle. */
+  headerLeading?: ReactNode;
+  /** Host controls at the end of the file header, after the file's own stats and actions. */
+  headerActions?: ReactNode;
+  /**
+   * Names for the two sides of the comparison, drawn under the file header so
+   * the reader can tell which column (or which marker, in unified) is which
+   * without looking back at wherever the comparison was chosen.
+   */
+  sideLabels?: DiffViewerSideLabels;
+}
+
+export interface DiffViewerSideLabels {
+  /** The old side: removed lines and the left column. */
+  old: { role: string; name: string };
+  /** The new side: added lines and the right column. */
+  new: { role: string; name: string };
 }
 
 /** The file a hunk handed to `renderHunkActions` belongs to, as the patch names it. */
@@ -480,6 +502,9 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
     language,
     renderHunkActions,
     openInEditor = true,
+    headerLeading,
+    headerActions,
+    sideLabels,
   },
   ref
 ) {
@@ -488,7 +513,13 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
   // the sentinel branches below take `rootRef` directly, since an error or
   // "no changes" pane is just as exposed to the fallback as a rendered diff.
   const rootRef = useRef<HTMLDivElement | null>(null);
-  useScopedSelectAll(rootRef);
+  // Rows of a giant hunk mount a batch per frame; selecting all of them
+  // mid-stage would copy only those already mounted, so Select All finishes
+  // every file's stage synchronously first.
+  const [stageFlush, setStageFlush] = useState(0);
+  useScopedSelectAll(rootRef, true, "surface", () => {
+    flushSync(() => setStageFlush((count) => count + 1));
+  });
   // Compose, never replace, and mirror ContentPanel's React 19 handling: a
   // callback ref may return a cleanup, and React then skips the usual `null`
   // call — so that cleanup has to be propagated or the caller's teardown never
@@ -686,17 +717,23 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
           fullFile={effectiveFullFile}
           onToggleCollapse={onToggleCollapse}
           onTokensRendered={onTokensRendered}
+          stageFlush={stageFlush}
           annotations={annotations}
           language={language}
           renderHunkActions={renderHunkActions}
           openInEditor={openInEditor}
+          headerLeading={headerLeading}
+          headerActions={headerActions}
+          sideLabels={sideLabels}
         />
       ))}
     </div>
   );
 });
 
-const EXPAND_STEP = 50;
+// The step most diff viewers settle on: enough to show the rest of a short
+// function, small enough that one click never buries the hunk it opened from.
+const EXPAND_STEP = 20;
 const EXPAND_ALL_MAX = 60;
 const INITIAL_VISIBLE_HUNKS = 30;
 const SHOW_MORE_HUNKS_STEP = 60;
@@ -789,6 +826,75 @@ function HunkHeader({ hunk, gapStart, hiddenCount, onExpand, actions }: HunkHead
   );
 }
 
+/** A file header's path: the directory stepped down, the file name at full strength. */
+export function DiffFilePath({ path }: { path: string }) {
+  const slash = path.lastIndexOf("/");
+  return (
+    <TruncatedTooltip content={path}>
+      <span className="min-w-0 flex-1 truncate text-text-primary">
+        {slash === -1 ? (
+          path
+        ) : (
+          <>
+            <span className="text-text-secondary">{path.slice(0, slash + 1)}</span>
+            <span className="text-text-primary">{path.slice(slash + 1)}</span>
+          </>
+        )}
+      </span>
+    </TruncatedTooltip>
+  );
+}
+
+/** Split renders a modify, rename or copy as two columns; an add or delete has one side. */
+function isTwoColumnDiff(diffType: DiffType): boolean {
+  return diffType === "modify" || diffType === "rename" || diffType === "copy";
+}
+
+/**
+ * The comparison's two sides, named. Over a two-column split each name sits
+ * over its own column (the centered split gives each pane exactly half the
+ * width, gutters included, so an even grid lands on the divider); otherwise
+ * both share one line, keyed to the gutter markers that carry the side in
+ * unified view.
+ */
+function DiffSideLabels({ labels, columns }: { labels: DiffViewerSideLabels; columns: boolean }) {
+  const side = (which: "old" | "new") => {
+    const { role, name } = labels[which];
+    return (
+      <span className="flex min-w-0 items-baseline gap-1.5">
+        <span className="shrink-0 font-mono text-text-secondary" aria-hidden="true">
+          {which === "old" ? "\u2212" : "+"}
+        </span>
+        <span className="shrink-0 text-text-secondary">{role}</span>
+        <TruncatedTooltip content={name}>
+          <span className="min-w-0 truncate font-mono text-text-primary">{name}</span>
+        </TruncatedTooltip>
+      </span>
+    );
+  };
+  return (
+    <div
+      data-testid="diff-side-labels"
+      className={cn(
+        "border-b border-border-default bg-surface-canvas text-2xs",
+        columns ? "grid grid-cols-2" : "flex items-center gap-4 px-3 py-1"
+      )}
+    >
+      {columns ? (
+        <>
+          <div className="min-w-0 px-3 py-1">{side("old")}</div>
+          <div className="min-w-0 border-l border-border-default px-3 py-1">{side("new")}</div>
+        </>
+      ) : (
+        <>
+          {side("old")}
+          {side("new")}
+        </>
+      )}
+    </div>
+  );
+}
+
 interface FileDiffProps {
   file: ReturnType<typeof parseDiff>[0];
   /** Raw unified-diff text for just this file, when sliceable from the input */
@@ -807,14 +913,33 @@ interface FileDiffProps {
   onToggleCollapse?: () => void;
   /** Fired after this file's token pass commits */
   onTokensRendered?: () => void;
+  /** Bumped to finish any staged mount at once (Select All needs every row in the DOM) */
+  stageFlush: number;
   annotations?: DiffViewerAnnotations;
   language?: string;
   renderHunkActions?: (hunk: HunkData, index: number, file: DiffViewerHunkFile) => ReactNode;
   openInEditor: boolean;
+  headerLeading?: ReactNode;
+  headerActions?: ReactNode;
+  sideLabels?: DiffViewerSideLabels;
 }
 
 const EMPTY_NOTES: readonly DiffNote[] = [];
+const EMPTY_HUNKS: HunkData[] = [];
 const EMPTY_KEYS: string[] = [];
+
+interface PendingHeaderFocus {
+  file: FileDiffProps["file"];
+  oldSource: string[] | null;
+  /** An old-side line the hunk whose header gets focus holds. */
+  line: number;
+}
+
+interface ExpandedHunks {
+  file: FileDiffProps["file"];
+  oldSource: string[] | null;
+  hunks: HunkData[];
+}
 
 type DiffNoteDraft =
   { kind: "file" } | { kind: "lines"; side: DiffNoteSide; startLine: number; endLine: number };
@@ -830,10 +955,14 @@ function FileDiff({
   fullFile,
   onToggleCollapse,
   onTokensRendered,
+  stageFlush,
   annotations,
   language: languageOverride,
   renderHunkActions,
   openInEditor,
+  headerLeading,
+  headerActions,
+  sideLabels,
 }: FileDiffProps) {
   const relPath = getFilePath(file);
   const language = useMemo(() => {
@@ -855,13 +984,17 @@ function FileDiff({
     setIsCollapsed(collapseDecision.collapse);
   }, [collapseDecision.collapse]);
 
-  // Manual per-gap expansion. Reset when the file changes, and when the source
-  // changes under it — context revealed from a previous revision must not
-  // survive into a newly loaded one.
-  const [hunks, setHunks] = useState<HunkData[]>(file.hunks ?? []);
-  useEffect(() => {
-    setHunks(file.hunks ?? []);
-  }, [file, oldSource]);
+  // Manual per-gap expansion, owned by the file and source it was made from:
+  // context revealed from a previous revision must not survive into a newly
+  // loaded one. Derived during render rather than reset by an effect, so a new
+  // file's first render already sees its own hunks — the staged mount sizes
+  // its first batch from them, and a render over the previous file's rows
+  // would let a file that grew from small to giant mount whole.
+  const [expanded, setExpanded] = useState<ExpandedHunks | null>(null);
+  const hunks: HunkData[] =
+    expanded !== null && expanded.file === file && expanded.oldSource === oldSource
+      ? expanded.hunks
+      : (file.hunks ?? EMPTY_HUNKS);
 
   // Full file is derived from the file's own hunks rather than folded into
   // `hunks`, so toggling it off restores whatever the user had manually
@@ -1118,22 +1251,39 @@ function FileDiff({
     extraRanges
   );
 
+  // Rows and their tokens reach the table a bounded batch per frame once the
+  // set outgrows one batch (see useStagedDiffRows). Everything that describes
+  // the diff (notes, tokens, gutter width, scroll range) still reads the full
+  // visible set; only what the table renders is staged.
+  const stageOwner = useMemo(
+    () => ({ file, fullFile, viewType, isCollapsed }),
+    [file, fullFile, viewType, isCollapsed]
+  );
+  const {
+    mountedHunks,
+    tokens: displayTokens,
+    allRowsMounted,
+    extend: extendStage,
+  } = useStagedDiffRows(visibleHunks, tokens, stageOwner, stageFlush, !isCollapsed);
+
+  // Per committed token change, staged slices included: consumers re-scan
+  // the live DOM, and the last call lands with the pass complete.
   useEffect(() => {
     onTokensRendered?.();
-  }, [tokens, onTokensRendered]);
+  }, [displayTokens, onTokensRendered]);
 
   // Single notification point for the rendered row set changing — manual gap
-  // expansion, progressive reveal, the full-file scope, and a source arriving
-  // after the diff all land here, so each fires exactly once and none can be
+  // expansion, progressive reveal, each staged batch, the full-file scope, and
+  // a source arriving after the diff all land here, so each fires exactly once and none can be
   // forgotten. Collapse/expand is separate: it changes visibility, not rows,
   // and notifies from its own handler. The first commit is the initial render
   // rather than a transition, so the ref starts already-notified.
-  const lastNotifiedHunksRef = useRef(visibleHunks);
+  const lastNotifiedHunksRef = useRef(mountedHunks);
   useEffect(() => {
-    if (lastNotifiedHunksRef.current === visibleHunks) return;
-    lastNotifiedHunksRef.current = visibleHunks;
+    if (lastNotifiedHunksRef.current === mountedHunks) return;
+    lastNotifiedHunksRef.current = mountedHunks;
     onToggleCollapse?.();
-  }, [visibleHunks, onToggleCollapse]);
+  }, [mountedHunks, onToggleCollapse]);
 
   // Gutter columns get an explicit width sized to the widest line number plus
   // the +/- marker, published as a CSS var that also positions the second
@@ -1157,10 +1307,7 @@ function FileDiff({
   // two-column tables — add/delete files render a single full-width side
   // ("monotonous" in react-diff-view), and wrap mode has no horizontal
   // overflow at all.
-  const isCenteredSplit =
-    viewType === "split" &&
-    !wrapLines &&
-    (diffType === "modify" || diffType === "rename" || diffType === "copy");
+  const isCenteredSplit = viewType === "split" && !wrapLines && isTwoColumnDiff(diffType);
 
   // Longest rendered line in monospace columns, sizing the shared scrollbar's
   // range (published as --diff-max-line in ch units).
@@ -1302,12 +1449,20 @@ function FileDiff({
     }
     const source = native ?? proxy;
     const measure = () => {
+      // Read before writing: a staged mount grows the table, and so fires this
+      // observer, once per batch, and a write ahead of the read would force a
+      // fresh layout each time. The width itself rarely moves, so it is only
+      // written when it did.
+      const overflow = source.scrollWidth > source.clientWidth + 1;
       // Ordered: the proxy's scroll range has to match the content before the
       // offset is mirrored into it, or the write clamps against a stale width.
       if (native) {
-        proxy.style.setProperty("--diff-native-scroll-width", `${native.scrollWidth}px`);
+        const width = `${native.scrollWidth}px`;
+        if (proxy.style.getPropertyValue("--diff-native-scroll-width") !== width) {
+          proxy.style.setProperty("--diff-native-scroll-width", width);
+        }
       }
-      setHasHOverflow(source.scrollWidth > source.clientWidth + 1);
+      setHasHOverflow(overflow);
       if (native) syncNativeHScroll("content");
     };
     measure();
@@ -1326,6 +1481,33 @@ function FileDiff({
     maxLineCols,
     syncNativeHScroll,
   ]);
+
+  // Split view scopes a selection to the code column it started in: on
+  // mousedown react-diff-view writes `user-select` onto the cells of every row
+  // that exists at that moment. Rows a staged mount adds afterwards would carry
+  // no restriction, and a drag through them would copy the other column too,
+  // so the chosen side is mirrored onto the region where CSS
+  // (DiffViewer.lines.css) applies the same rule to late rows.
+  const scopesColumnSelection = viewType === "split" && isTwoColumnDiff(diffType);
+  const handleColumnSelect = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || !(event.target instanceof Element)) return;
+    const cell = event.target.closest(".diff-code");
+    const row = cell?.parentElement;
+    if (!cell || !row) return;
+    const index = Array.from(row.children).indexOf(cell);
+    if (index !== 1 && index !== 3) return;
+    event.currentTarget.dataset.diffSelectSide = index === 1 ? "old" : "new";
+  };
+
+  // The recorded side belongs to the table it was chosen in. React reuses the
+  // region element across files, layouts and scopes (a revisionless patch keeps
+  // its key), and a stale side would disable selection on whatever column
+  // happens to sit there next.
+  useLayoutEffect(() => {
+    for (const element of [regionRef.current, nativeScrollerRef.current]) {
+      if (element) delete element.dataset.diffSelectSide;
+    }
+  }, [stageOwner, scopesColumnSelection]);
 
   // Arrow-key horizontal scrolling parity with the focusable native scroller
   // used by the other view modes.
@@ -1389,24 +1571,37 @@ function FileDiff({
   // focus would drop to the body. The hunk is remembered by an old-side line
   // it holds, and the keyboard handed to the header of whichever hunk holds
   // that line afterwards.
-  const pendingHeaderLineRef = useRef<number | null>(null);
+  const pendingHeaderLineRef = useRef<PendingHeaderFocus | null>(null);
   useLayoutEffect(() => {
-    const line = pendingHeaderLineRef.current;
-    if (line === null) return;
-    pendingHeaderLineRef.current = null;
+    const pending = pendingHeaderLineRef.current;
+    if (pending === null) return;
     const active = document.activeElement;
-    if (active && active !== document.body && active.isConnected) return;
     const region = regionRef.current ?? nativeScrollerRef.current;
-    if (!region) return;
+    // A line only means something against the file and source it came from;
+    // a refresh while the hand-off waited makes it point at unrelated code.
+    const stale = pending.file !== file || pending.oldSource !== oldSource;
+    if (stale || (active && active !== document.body && active.isConnected) || !region) {
+      pendingHeaderLineRef.current = null;
+      return;
+    }
+    const { line } = pending;
     let index = visibleHunks.findIndex(
       (hunk) => hunk.oldStart <= line && line < hunk.oldStart + Math.max(hunk.oldLines, 1)
     );
     if (index === -1) index = visibleHunks.findIndex((hunk) => hunk.oldStart >= line);
     const headers = region.querySelectorAll<HTMLElement>(".diff-hunk-header-inner");
+    // Mid-stage the header can sit past the mounted prefix (the expansion grew
+    // the rows above it), and the trailing expander isn't drawn yet: keep the
+    // hand-off until a later batch mounts it.
+    if (!allRowsMounted && (index === -1 || index >= headers.length)) return;
+    pendingHeaderLineRef.current = null;
     const header = index === -1 ? headers[headers.length - 1] : headers[index];
     const target = header?.querySelector<HTMLElement>("button") ?? region;
+    // A hand-off, not a move the user made: the expander they pressed is gone,
+    // and its replacement's tooltip must not open over the code they revealed.
+    armTooltipFocusSuppression();
     target.focus({ preventScroll: true });
-  }, [visibleHunks]);
+  }, [visibleHunks, mountedHunks, allRowsMounted, file, oldSource]);
 
   const handleExpandContext = useCallback(
     (start: number, end: number) => {
@@ -1419,21 +1614,27 @@ function FileDiff({
         // A header past the last hunk is the trailing expander: its gap ends
         // the file, so the last hunk is the one it grows.
         const hunk = index === -1 ? undefined : (visibleHunks[index] ?? visibleHunks.at(-1));
-        pendingHeaderLineRef.current = hunk ? hunk.oldStart : null;
+        pendingHeaderLineRef.current = hunk ? { file, oldSource, line: hunk.oldStart } : null;
       }
-      setHunks((prev) => {
+      setExpanded((prev) => {
+        const base =
+          prev !== null && prev.file === file && prev.oldSource === oldSource
+            ? prev.hunks
+            : (file.hunks ?? EMPTY_HUNKS);
         try {
-          return expandFromRawCode(prev, oldSource, start, end);
+          return { file, oldSource, hunks: expandFromRawCode(base, oldSource, start, end) };
         } catch {
           return prev;
         }
       });
     },
-    [oldSource, visibleHunks]
+    [file, oldSource, visibleHunks]
   );
 
   const handleShowMoreHunks = () => {
     setVisibleHunkCount((count) => count + SHOW_MORE_HUNKS_STEP);
+    // Revealed hunks join the stage behind the rows already mounted.
+    extendStage();
   };
 
   const fileStyle: CSSProperties & Record<"--diff-gutter-width" | "--diff-max-line", string> = {
@@ -1443,7 +1644,7 @@ function FileDiff({
   };
 
   const oldTotalLines = oldSource?.length ?? null;
-  const allHunksVisible = hiddenHunkCount === 0;
+  const allHunksVisible = hiddenHunkCount === 0 && allRowsMounted;
   const lastVisibleHunk = visibleHunks[visibleHunks.length - 1];
   const trailingGapStart = lastVisibleHunk
     ? lastVisibleHunk.oldStart + lastVisibleHunk.oldLines
@@ -1453,12 +1654,16 @@ function FileDiff({
       ? Math.max(0, oldTotalLines - trailingGapStart + 1)
       : 0;
 
-  const renderHunkRows = (rendered: HunkData[]): ReactElement[] => {
+  // `mounted` is the staged prefix of `visibleHunks`: its last hunk may be cut
+  // short, so headers (and the copy button and host actions in them) always
+  // take the whole hunk from `visibleHunks` at the same index.
+  const renderHunkRows = (mounted: HunkData[]): ReactElement[] => {
     const rows: ReactElement[] = [];
-    for (let i = 0; i < rendered.length; i++) {
-      const hunk = rendered[i];
-      if (!hunk) continue;
-      const previous = (i === 0 ? null : rendered[i - 1]) ?? null;
+    for (let i = 0; i < mounted.length; i++) {
+      const hunk = visibleHunks[i];
+      const mountedHunk = mounted[i];
+      if (!hunk || !mountedHunk) continue;
+      const previous = (i === 0 ? null : visibleHunks[i - 1]) ?? null;
       const hiddenCount = Math.max(0, getCollapsedLinesCountBetween(previous, hunk));
       const gapStart = previous ? previous.oldStart + previous.oldLines : 1;
       rows.push(
@@ -1476,7 +1681,7 @@ function FileDiff({
           />
         </Decoration>
       );
-      rows.push(<Hunk key={`${hunk.oldStart}-${hunk.newStart}`} hunk={hunk} />);
+      rows.push(<Hunk key={`${hunk.oldStart}-${hunk.newStart}`} hunk={mountedHunk} />);
     }
     if (trailingHiddenCount > 0 && trailingGapStart !== null && oldTotalLines !== null) {
       rows.push(
@@ -1530,8 +1735,8 @@ function FileDiff({
       <Diff
         viewType={viewType}
         diffType={diffType}
-        hunks={visibleHunks}
-        tokens={tokens ?? undefined}
+        hunks={mountedHunks}
+        tokens={displayTokens ?? undefined}
         renderGutter={renderGutter}
         renderToken={renderTokenWithInvisibles}
         generateLineClassName={generateLineClassName}
@@ -1542,7 +1747,7 @@ function FileDiff({
       >
         {renderHunkRows}
       </Diff>
-      {hiddenHunkCount > 0 && (
+      {hiddenHunkCount > 0 && allRowsMounted && (
         <button
           type="button"
           onClick={handleShowMoreHunks}
@@ -1577,77 +1782,81 @@ function FileDiff({
   return (
     <div className="mb-2" style={fileStyle} data-diff-file="">
       {relPath && (
-        <div className="sticky top-0 z-10 flex items-center justify-between px-3 py-1.5 bg-surface-sidebar border-b border-border-default text-xs font-mono">
-          <TruncatedTooltip content={relPath}>
-            <span className="truncate text-text-primary">
-              {relPath.includes("/") ? (
-                <>
-                  <span className="text-text-secondary">
-                    {relPath.slice(0, relPath.lastIndexOf("/") + 1)}
-                  </span>
-                  <span className="text-text-primary">
-                    {relPath.slice(relPath.lastIndexOf("/") + 1)}
-                  </span>
-                </>
-              ) : (
-                relPath
+        <div className="sticky top-0 z-10">
+          <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-surface-sidebar border-b border-border-default text-xs font-mono">
+            {headerLeading != null && headerLeading !== false && (
+              <div className="-ml-1.5 flex shrink-0 items-center">{headerLeading}</div>
+            )}
+            <DiffFilePath path={relPath} />
+            {langLoadFailed && (
+              <span
+                className="text-xs text-text-secondary"
+                role="status"
+                data-testid="diff-plain-text-badge"
+              >
+                Plain text
+              </span>
+            )}
+            {!langLoadFailed && isLargeRender && !isCollapsed && (
+              <span className="text-xs text-text-secondary" data-testid="diff-highlight-off-badge">
+                {fullFile ? "Highlighting off for large file" : "Highlighting off for large diff"}
+              </span>
+            )}
+            <div className="flex items-center gap-2 shrink-0 text-text-secondary">
+              <DiffStat insertions={additions} deletions={deletions} />
+              {notesEnabled && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      onClick={() => {
+                        rememberDraftOpener();
+                        setNoteDraft({ kind: "file" });
+                      }}
+                      aria-label="Add file note"
+                      data-note-file-add=""
+                      // The copy beside it is a CopyButton; one glyph size per row.
+                      className="shrink-0 [&_svg]:size-3.5"
+                    >
+                      <MessageSquarePlus aria-hidden="true" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Add file note</TooltipContent>
+                </Tooltip>
               )}
-            </span>
-          </TruncatedTooltip>
-          {langLoadFailed && (
-            <span
-              className="text-xs text-text-muted"
-              role="status"
-              data-testid="diff-plain-text-badge"
-            >
-              Plain text
-            </span>
-          )}
-          {!langLoadFailed && isLargeRender && !isCollapsed && (
-            <span className="text-xs text-text-muted" data-testid="diff-highlight-off-badge">
-              {fullFile ? "Highlighting off for large file" : "Highlighting off for large diff"}
-            </span>
-          )}
-          <div className="flex items-center gap-2 shrink-0 text-text-secondary">
-            <DiffStat insertions={additions} deletions={deletions} />
-            {notesEnabled && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    onClick={() => {
-                      rememberDraftOpener();
-                      setNoteDraft({ kind: "file" });
-                    }}
-                    aria-label="Add file note"
-                    data-note-file-add=""
-                    // The copy beside it is a CopyButton; one glyph size per row.
-                    className="shrink-0 [&_svg]:size-3.5"
-                  >
-                    <MessageSquarePlus aria-hidden="true" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Add file note</TooltipContent>
-              </Tooltip>
-            )}
-            {rawText && (
-              <CopyButton text={rawText} aria-label="Copy file diff" tooltipSide="bottom" />
-            )}
-            {absolutePath && openInEditor && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="ghost" size="xs" onClick={handleOpenInEditor}>
-                    <ExternalLink />
-                    Open
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  Open in editor{firstHunkLine ? ` at line ${firstHunkLine}` : ""}
-                </TooltipContent>
-              </Tooltip>
-            )}
+              {rawText && (
+                <CopyButton text={rawText} aria-label="Copy file diff" tooltipSide="bottom" />
+              )}
+              {absolutePath && openInEditor && (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="xs" onClick={handleOpenInEditor}>
+                      <ExternalLink />
+                      Open
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    Open in editor{firstHunkLine ? ` at line ${firstHunkLine}` : ""}
+                  </TooltipContent>
+                </Tooltip>
+              )}
+              {/* Last, against the edge: the file's own stat and actions change
+                  width from file to file, and a host's stepper placed before
+                  them would slide out from under the pointer on every step. */}
+              {headerActions != null && headerActions !== false && (
+                <div className="flex items-center gap-2 border-l border-border-default pl-2 font-sans">
+                  {headerActions}
+                </div>
+              )}
+            </div>
           </div>
+          {sideLabels && (
+            <DiffSideLabels
+              labels={sideLabels}
+              columns={viewType === "split" && isTwoColumnDiff(diffType) && !isCollapsed}
+            />
+          )}
         </div>
       )}
       {notesEnabled && (detachedNotes.length > 0 || draftPlacement?.anchor.kind === "file") && (
@@ -1698,6 +1907,7 @@ function FileDiff({
             role="region"
             aria-label={relPath || "Diff"}
             onKeyDown={handleRegionKeyDown}
+            onMouseDown={scopesColumnSelection ? handleColumnSelect : undefined}
           >
             {diffBody}
             {hScrollbar}
@@ -1719,6 +1929,7 @@ function FileDiff({
               role="region"
               aria-label={relPath || "Diff"}
               onScroll={usesNativeHScrollProxy ? handleNativeHScroll : undefined}
+              onMouseDown={scopesColumnSelection ? handleColumnSelect : undefined}
             >
               {diffBody}
             </div>

@@ -18,9 +18,10 @@ import { useResourceMonitoringStore } from "./resourceMonitoringStore";
 import { useVoiceRecordingStore } from "./voiceRecordingStore";
 import { subscribeDictationRangeTracking } from "./dictationRangeStore";
 import { subscribeRecentDictationsSync } from "@/services/recentDictations";
-import { trackComposerSurface } from "@/lib/composerSurface";
+import { forgetComposerSurfacePane, trackComposerSurface } from "@/lib/composerSurface";
 import { usePluginPanelBadgeStore } from "./pluginPanelBadgeStore";
 import { usePluginPanelActivityStore } from "./pluginPanelActivityStore";
+import { observePanelFailures, usePanelFailureStore } from "./panelFailureStore";
 import { usePluginPanelAttentionStore } from "./pluginPanelAttentionStore";
 import { usePluginPanelToolbarStore } from "./pluginPanelToolbarStore";
 import { usePluginPanelMenuStore } from "./pluginPanelMenuStore";
@@ -54,6 +55,7 @@ import {
   setFleetArmedIdsAccessor,
   setFleetLastArmedIdAccessor,
   setProjectHomeExitAccessor,
+  setProjectHomePresentedAccessor,
   setPanelMaximizeAccessor,
   resetStoreAccessorsForTesting,
 } from "./storeAccessors";
@@ -72,8 +74,14 @@ import { initAgentDefaultsSync } from "@/services/agentDefaultsSync";
 import { initTerminalConfigSync } from "@/services/terminalConfigSync";
 import { initAgentSettingsSync } from "@/services/agentSettingsSync";
 import { initPanelGridConfigSync } from "@/services/panelGridConfigSync";
+import { initKeybindingOverridesSync } from "@/services/keybindingOverridesSync";
 import { initAgentToolbarPinsSync } from "@/services/agentToolbarPinsSync";
-import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
+import { initAssistantIdentitySync } from "@/services/assistantIdentitySync";
+import {
+  isProjectViewCached,
+  subscribeProjectViewCachedFlush,
+  subscribeProjectViewLifecycle,
+} from "@/lib/viewCacheState";
 
 // Thunk form: read the live mruList at fire time, not at schedule time. A
 // snapshot captured at schedule time could be stale by the time the debounce
@@ -162,6 +170,7 @@ export function initStoreOrchestrator(): () => void {
     const fallback = applicationDefaultRoute(useProjectPluginStore.getState().application);
     if (selectProjectMainAreaRoute(home, fallback) === "home") home.showGrid();
   });
+  setProjectHomePresentedAccessor(() => useProjectHomeStore.getState().presented);
   setPanelMaximizeAccessor({
     isMaximized: () => usePanelStore.getState().maximizedId !== null,
     exit: () => usePanelStore.getState().exitMaximize(),
@@ -428,6 +437,20 @@ export function initStoreOrchestrator(): () => void {
     )
   );
 
+  // 2b. Failure occurrences for the red pane edge (#16140): every panel record
+  //     write is read for the failures it shows, here rather than in the pane,
+  //     so a failure that ends and comes back on an unmounted tab still counts
+  //     as new. Seeded with what the store already holds.
+  observePanelFailures(usePanelStore.getState().panelsById);
+  disposables.add(
+    toDisposable(
+      usePanelStore.subscribe(
+        (state) => state.panelsById,
+        (panelsById, prevPanelsById) => observePanelFailures(panelsById, prevPanelsById)
+      )
+    )
+  );
+
   // 3. Terminal-removal cleanup: when terminals are removed, clean up
   //    input store, console capture store, and worktree focus tracking.
   //    Selector pulls both `panelIds` (for diff) and `panelsById` (to read
@@ -463,6 +486,8 @@ export function initStoreOrchestrator(): () => void {
             usePluginPanelBadgeStore.getState().removePanel(removedId);
             // Activity reports and their seen marks, keyed the same way (#13820).
             usePluginPanelActivityStore.getState().removePanel(removedId);
+            // Its failure occurrences and their seen marks (#16140).
+            usePanelFailureStore.getState().removePanel(removedId);
             // A park or snooze on its attention row (#13821).
             usePluginPanelAttentionStore.getState().removePanel(removedId);
             // Header button states are keyed the same way and leak the same way.
@@ -480,6 +505,7 @@ export function initStoreOrchestrator(): () => void {
             useVoiceRecordingStore.getState().clearLockedTarget(removedId);
             unregisterInputController(removedId);
             forgetPanelActivity(removedId);
+            forgetComposerSurfacePane(removedId);
             // Drop the renderer-side artifact store entry so content strings
             // don't pin the dead panel's heap for the rest of the renderer
             // lifetime (#10023). The hook listener Set is owned by each
@@ -694,6 +720,8 @@ export function initStoreOrchestrator(): () => void {
 
   // 6. This machine's toolbar agent pins (#14702), kept current across views.
   disposables.add(toDisposable(initAgentToolbarPinsSync()));
+  // The assistants' names and emoji (#16213), kept current across views.
+  disposables.add(toDisposable(initAssistantIdentitySync()));
 
   // 7. The Daintree Assistant and the web chat Portal share the right edge, so
   //    only one is open at a time: opening either closes the other. Keyed on the
@@ -718,26 +746,30 @@ export function initStoreOrchestrator(): () => void {
     )
   );
 
-  // 8. Flush the MRU debounce before the view is torn down. The 150ms debounce
-  //    above strands the latest MRU write if the user switches projects, closes
-  //    the window, or quits within the debounce window. `visibilitychange`
-  //    fires on WebContentsView detach while the renderer is still alive and
-  //    IPC channels are open, so the async persist completes (#9914). Mirrors
-  //    the `pagehide` flush in `optimisticPanelClose.ts`, but uses
-  //    `visibilitychange` because `persistMruList` is async IPC, which would
-  //    not complete in the late `pagehide` teardown window.
+  // 8. Flush the MRU debounce once nobody can see this view, or its latest
+  //    write is stranded when the user switches projects, closes the window,
+  //    or quits within the debounce window (#9914). A project switch caches
+  //    the view, which fires no `visibilitychange` (a cached view reports
+  //    "visible" forever, see `viewCacheState`), so main's cached edge is the
+  //    cue there; main keeps the view unfrozen and resident until the persist
+  //    settles, within a bounded wait (#15651). Hiding or minimizing the
+  //    window still flips `document.hidden`. Not `pagehide` like
+  //    `optimisticPanelClose.ts`: `persistMruList` is async IPC, which would
+  //    not complete in the late teardown window.
+  const flushMru = () => debouncedPersistMruList.flush();
   if (typeof document !== "undefined") {
     const handleVisibilityChange = () => {
       if (!document.hidden) return;
-      void debouncedPersistMruList.flush();
+      void flushMru();
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
     disposables.add(
       toDisposable(() => document.removeEventListener("visibilitychange", handleVisibilityChange))
     );
-    // Cover the race where the document is already hidden at init time.
-    if (document.hidden) void debouncedPersistMruList.flush();
   }
+  disposables.add(toDisposable(subscribeProjectViewCachedFlush(flushMru)));
+  // Both signals are edges: cover a view already hidden or cached at init.
+  if (isViewUnobservable()) void flushMru();
 
   // Focused panel kind for `host.onDidChangeFocusedPanel` (#13221). Main
   // combines it with window and Portal focus, which it observes itself.
@@ -752,6 +784,9 @@ export function initStoreOrchestrator(): () => void {
   // Agent settings from the host and the grid layout from this machine (#14700).
   disposables.add(toDisposable(initAgentSettingsSync()));
   disposables.add(toDisposable(initPanelGridConfigSync()));
+
+  // This machine's keyboard shortcuts, as any of its views saved them (#15579).
+  disposables.add(toDisposable(initKeybindingOverridesSync()));
 
   cleanupFn = () => {
     disposables.dispose();

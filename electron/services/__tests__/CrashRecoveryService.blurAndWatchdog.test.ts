@@ -1407,6 +1407,70 @@ describe("CrashRecoveryService renderer deaths and per-project layouts (#12884)"
     });
   });
 
+  describe("workspaces a fresh start clears (#16257)", () => {
+    const PROJECT_C = "c".repeat(64);
+    const SCRATCH = "0f8b6c1e-2d3a-4b5c-9d7e-1a2b3c4d5e6f";
+
+    function crashWith(liveIds: string[]): CrashRecoveryService {
+      appMock.isPackaged = true;
+      const crashed = makeService();
+      crashed.setLiveWorkspaceIdsProvider(() => liveIds);
+      crashed.initialize();
+      crashed.takeBackup();
+      const next = makeService();
+      next.initialize();
+      return next;
+    }
+
+    it("names every captured workspace, one with no panels and a scratch included", () => {
+      writeProjectState(PROJECT_A, [{ id: "t1", kind: "terminal" }]);
+      writeProjectState(PROJECT_B, []);
+      writeProjectState(SCRATCH, [{ id: "s1", kind: "terminal" }]);
+      writeProjectState(PROJECT_C, [{ id: "c1", kind: "terminal" }]);
+      const svc = crashWith([PROJECT_A, PROJECT_B, SCRATCH]);
+
+      expect(svc.getSnapshotWorkspaceIds().sort()).toEqual([PROJECT_A, PROJECT_B, SCRATCH].sort());
+    });
+
+    it("names none when no backup survived, even once this session writes its own", () => {
+      writeProjectState(PROJECT_A, [{ id: "t1", kind: "terminal" }]);
+      appMock.isPackaged = true;
+      makeService().initialize();
+      const svc = makeService();
+      svc.setLiveWorkspaceIdsProvider(() => [PROJECT_A]);
+      svc.initialize();
+      expect(svc.getPendingCrash()).not.toBeNull();
+
+      // The dialog listed nothing; this session's first backup tick must not
+      // become the scope of the fresh start.
+      svc.takeBackup();
+
+      expect(svc.getSnapshotWorkspaceIds()).toEqual([]);
+    });
+
+    it("names none for a legacy snapshot with only the global panel list", () => {
+      storeMock.get.mockImplementation((key: string) =>
+        key === "appState" ? { terminals: [{ id: "g1", kind: "terminal" }] } : undefined
+      );
+      const svc = crashWith([]);
+
+      expect(svc.getBackupPanelCount()).toBe(1);
+      expect(svc.getSnapshotWorkspaceIds()).toEqual([]);
+    });
+
+    it("skips entries that are not a workspace's layout", () => {
+      writeProjectState(PROJECT_A, [{ id: "t1", kind: "terminal" }]);
+      const svc = crashWith([PROJECT_A]);
+      const internals = svc as unknown as {
+        cachedBackupSnapshot: { projectLayouts: Record<string, unknown> };
+      };
+      internals.cachedBackupSnapshot.projectLayouts["../outside"] = [];
+      internals.cachedBackupSnapshot.projectLayouts[PROJECT_B] = { terminals: [] };
+
+      expect(svc.getSnapshotWorkspaceIds()).toEqual([PROJECT_A]);
+    });
+  });
+
   describe("restoring after a watchdog kill (#14382)", () => {
     const agentPane = {
       id: "g1",

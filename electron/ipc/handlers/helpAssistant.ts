@@ -16,9 +16,20 @@ import {
   normalizeHelpAssistantTier,
 } from "../../../shared/config/helpAssistantTierAllowlists.js";
 import { hasShellMetachar } from "../../../shared/utils/shellEscape.js";
+import { AppError } from "../../utils/errorTypes.js";
 import { isHelpAssistantDaintreeConfirmations as isValidDaintreeConfirmations } from "../../../shared/utils/assistantDaintreeConfirmations.js";
 import { applyModelIdPatch, sanitizeModelIdMap } from "../../utils/helpAssistantModels.js";
 import type * as McpServerServiceModule from "../../services/McpServerService.js";
+import type {
+  AssistantIdentities,
+  SetAssistantIdentityRequest,
+} from "../../../shared/types/displayIdentity.js";
+import {
+  readAssistantIdentities,
+  writeAssistantIdentity,
+} from "../../services/assistantIdentity.js";
+import { CHANNELS } from "../channels.js";
+import { broadcastToRenderer } from "../utils.js";
 
 type McpServerSingleton = typeof McpServerServiceModule.mcpServerService;
 
@@ -32,6 +43,8 @@ async function getMcpServerService(): Promise<McpServerSingleton> {
 }
 
 const CUSTOM_ARGS_MAX_LEN = 10000;
+const CUSTOM_ARGS_REFUSED_MESSAGE =
+  "Custom CLI args can't contain these characters: ; | & > < $( ${ ` \\";
 
 const HELP_ASSISTANT_DEFAULTS: HelpAssistantSettings = {
   docSearch: true,
@@ -183,6 +196,19 @@ export const helpAssistantNamespace = defineIpcNamespace({
       HELP_ASSISTANT_METHOD_CHANNELS.setSettings,
       async (patch: Partial<HelpAssistantSettings>): Promise<void> => {
         if (!patch || typeof patch !== "object") return;
+        // A refused value is reported before anything in the patch is written:
+        // resolving after skipping it read as a save the renderer couldn't tell apart.
+        let sanitizedCustomArgs: string | undefined;
+        if (typeof patch.customArgs === "string") {
+          sanitizedCustomArgs = sanitizeCustomArgs(patch.customArgs);
+          if (sanitizedCustomArgs === undefined) {
+            throw new AppError({
+              code: "VALIDATION",
+              message: CUSTOM_ARGS_REFUSED_MESSAGE,
+              userMessage: CUSTOM_ARGS_REFUSED_MESSAGE,
+            });
+          }
+        }
         let daintreeControlTurnedOn = false;
         let auditRetentionWritten: HelpAssistantAuditRetention | null = null;
         let wrote = false;
@@ -206,9 +232,8 @@ export const helpAssistantNamespace = defineIpcNamespace({
           }
           let storedValue: unknown = value;
           if (field === "customArgs") {
-            const sanitized = sanitizeCustomArgs(value);
-            if (sanitized === undefined) continue;
-            storedValue = sanitized;
+            if (sanitizedCustomArgs === undefined) continue;
+            storedValue = sanitizedCustomArgs;
           }
           if (field === "modelIds") {
             // Merged per agent against what's stored, never a whole-map
@@ -288,6 +313,19 @@ export const helpAssistantNamespace = defineIpcNamespace({
         };
       },
       { withContext: true }
+    ),
+    getIdentities: op(
+      HELP_ASSISTANT_METHOD_CHANNELS.getIdentities,
+      async (): Promise<AssistantIdentities> => readAssistantIdentities()
+    ),
+    setIdentity: op(
+      HELP_ASSISTANT_METHOD_CHANNELS.setIdentity,
+      async (request: SetAssistantIdentityRequest): Promise<AssistantIdentities> => {
+        const identities = writeAssistantIdentity(request);
+        // Every view names the assistant, and only the one that saved knows it changed.
+        broadcastToRenderer(CHANNELS.HELP_ASSISTANT_IDENTITIES_CHANGED, identities);
+        return identities;
+      }
     ),
   },
 });

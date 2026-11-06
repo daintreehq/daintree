@@ -31,6 +31,13 @@ import type {
 import { SessionStore } from "./mcp-server/sessionStore.js";
 import { readClosedPanelProcess } from "./mcp-server/closedPanelProcesses.js";
 import {
+  resolveClosedTerminalGeneration,
+  waitForClosedPanelExits,
+} from "./mcp-server/closedPanelExits.js";
+import { getLifecycleLedger } from "./pty/lifecycleLedger.js";
+import { readPtyTerminalProcesses } from "./mcp-server/worktreeProcessGuard.js";
+import { readWorktreeGitObservation } from "./mcp-server/worktreeRetirementGit.js";
+import {
   helpOwnershipPrincipal,
   principalOwnerKey,
   relayOwnershipPrincipal,
@@ -62,8 +69,12 @@ import {
   helpNotifyKey,
   paneNotifyKey,
   relayNotifyKey,
+  workerNotifyKey,
   type LaneWake,
+  type OwnPane,
 } from "./mcp-server/terminalNotify.js";
+import { WorkerSteerQueue } from "./assistants/WorkerSteerQueue.js";
+import type { ListenerRoute } from "./mcp-server/listenerHold.js";
 import { ReplyWaiterService } from "./mcp-server/replyWaiter.js";
 import { createApprovalWake } from "./mcp-server/approvalWake.js";
 import type { AssistantApproval } from "./mcp-server/noticeFormat.js";
@@ -98,6 +109,7 @@ import type {
 } from "./mcp-server/shared.js";
 import type { ActionManifestEntry } from "../../shared/types/actions.js";
 import { events } from "./events.js";
+import { readClaudeUsageObservations } from "./claude/ClaudeUsageObservations.js";
 import { wireMcpServerToConnectivityRegistry } from "./connectivity/index.js";
 
 // PluginService is loaded lazily, like every other main-side caller: it pulls in
@@ -163,6 +175,39 @@ export type { HelpTokenValidator } from "./mcp-server/shared.js";
 export type McpAuthClass = import("./mcp-server/shared.js").McpAuthClass;
 export type McpTier = import("./mcp-server/shared.js").McpTier;
 type HelpAssistantTier = import("../../shared/types/ipc/maps.js").HelpAssistantTier;
+export type { ListenerRoute } from "./mcp-server/listenerHold.js";
+
+/**
+ * A feature's hold on the loopback listener and the terminal wake engine
+ * (#15999), from {@link McpServerService.holdListener}.
+ */
+export interface McpListenerHold {
+  /** The listener's port while it is open for this hold; null otherwise. */
+  readonly port: number | null;
+  /**
+   * Queue a wake on `pane`'s notice line, accepted whether or not the server
+   * is on; outcomes reach `wake.report` as {@link McpServerService.queueLaneWake}'s do.
+   */
+  queueWake(pane: OwnPane, projectId: string, wake: LaneWake): void;
+  /** Idempotent. Ends the hold's queued wakes and, with the server off, closes a listener only it held. */
+  release(): Promise<void>;
+}
+
+/**
+ * A feature's hold on the terminal wake engine alone (#16017), from
+ * {@link McpServerService.holdWakes}: no listener, no route.
+ */
+export interface McpWakeHold {
+  /** As {@link McpListenerHold.queueWake}. */
+  queueWake(pane: OwnPane, projectId: string, wake: LaneWake): void;
+  /**
+   * Ends the hold's wakes still waiting to be typed, each reporting why, and
+   * takes no more; a line already submitted settles before `release`.
+   */
+  cancelQueued(): void;
+  /** Idempotent. Ends the hold's wakes, each reporting why. */
+  release(): void;
+}
 
 export class McpServerService {
   // Mutable reference updated by start(); read by bridge's getActiveProjectWebContents.
@@ -174,6 +219,10 @@ export class McpServerService {
   private readonly httpLifecycle: HttpLifecycle;
   /** Notices an orchestrating pane asked for, and the lines that deliver them. */
   private readonly terminalNotify: TerminalNotifyService;
+  /** Prompts the global Assistant held for a busy worker's next prompt (#16187), on its notice line. */
+  private readonly workerSteerQueue: WorkerSteerQueue;
+  /** A pane's launch principal, whichever bearers it holds: the key its notices are held under. */
+  private workerPrincipalResolver: ((paneId: string) => string | null) | null = null;
   private readonly replyWaiter: ReplyWaiterService;
   /**
    * Resolver injected by `HelpSessionService` after construction. Returns
@@ -209,6 +258,10 @@ export class McpServerService {
    * instances, cannot leak leases into one another.
    */
   private readonly viewLeases = new WorkspaceViewLeaseRegistry();
+  /** Live holds' wake scopes, ended at shutdown along with everything else. */
+  private readonly heldWakeScopes = new Set<() => void>();
+  /** Bumped by each shutdown, so a hold still opening across one is refused. */
+  private shutdowns = 0;
   private readonly statusListeners = new Set<(running: boolean) => void>();
   private readonly runtimeStateListeners = new Set<(snapshot: McpRuntimeSnapshot) => void>();
 
@@ -337,7 +390,7 @@ export class McpServerService {
       onTrashed: (listener) => events.on("terminal:trashed", (payload) => listener(payload.id)),
       onHandbackObserved: (listener) =>
         events.on("agent:handback-observed", (payload) =>
-          listener(payload.terminalId, payload.handback, payload.code)
+          listener(payload.terminalId, payload.handback, payload.code, payload.lastStateChange)
         ),
       isEnabled: () => this.isEnabled(),
       publish: (projectId, state) =>
@@ -345,6 +398,23 @@ export class McpServerService {
           name: "terminal:notify-state",
           payload: state,
         }),
+    });
+
+    this.workerSteerQueue = new WorkerSteerQueue({
+      enqueueWake: (pane, projectId, wake) =>
+        this.terminalNotify.enqueueWake(pane, projectId, wake),
+      // The worker's own line, so a notice it arms later joins this one
+      // rather than replacing it.
+      paneFor: (terminalId) => {
+        const principal = this.workerPrincipalResolver?.(terminalId) ?? null;
+        return {
+          key: principal !== null ? paneNotifyKey(principal) : workerNotifyKey(terminalId),
+          terminalId,
+        };
+      },
+      getLiveGeneration: (terminalId) => getPtyClient()?.getLiveGeneration(terminalId) ?? null,
+      getTerminalProjectId: (terminalId) =>
+        getPtyClient()?.getTerminalProjectId(terminalId) ?? null,
     });
 
     this.replyWaiter = new ReplyWaiterService({
@@ -464,6 +534,7 @@ export class McpServerService {
         const { readCodexQuota } = await import("./codex/CodexQuotaService.js");
         return readCodexQuota();
       },
+      readClaudeUsage: readClaudeUsageObservations,
       handleTerminalReadLastMessageOwned: (terminalId, options, signal) =>
         handleTerminalReadLastMessageOwned(terminalId, options, signal),
       // The pty-host's own spawn tracking spans every view, which is what a
@@ -493,9 +564,49 @@ export class McpServerService {
           const client = getPtyClient();
           return client ? client.getTerminalAsync(id, undefined, { strict: true }) : null;
         }),
+      readTerminalProcesses: () => readPtyTerminalProcesses(getPtyClient()),
+      readWorktreeGit: (worktreePath, signal) => readWorktreeGitObservation(worktreePath, signal),
+      terminalGenerationOf: (terminalId) => {
+        const client = getPtyClient();
+        if (!client) return undefined;
+        return resolveClosedTerminalGeneration(terminalId, {
+          liveGeneration: (id) => client.getLiveGeneration(id),
+          latestExitGeneration: (id) => client.recentExits.latestGeneration(id),
+          ledgerEntry: (id) => getLifecycleLedger().getEntry(id),
+        });
+      },
+      // Running ones, and ones whose exit main kept, which a panel may still show.
+      trackedTerminalIds: () => {
+        const client = getPtyClient();
+        return client
+          ? [...new Set([...client.getTrackedTerminalIds(), ...client.recentExits.terminalIds()])]
+          : [];
+      },
+      // From exits main kept and the host's own records, never a guess: a
+      // record gone with no exit seen, or a host that never answered, is
+      // unknown.
+      waitForClosedPanelExits: (targets, options) => {
+        const client = getPtyClient();
+        if (!client) {
+          return Promise.resolve({
+            processes: targets.map(({ terminalId }) => ({
+              terminalId,
+              outcome: "unknown" as const,
+              ...(options.endGrace ? { graceEnded: false } : {}),
+            })),
+          });
+        }
+        return waitForClosedPanelExits(targets, options, {
+          findExit: (id, generation) => client.recentExits.find(id, generation),
+          onExit: (listener) => client.recentExits.onExit(listener),
+          readRecord: (id) => client.getTerminalAsync(id, undefined, { strict: true }),
+          endTrashGrace: (id, generation) => client.endTrashGrace(id, generation),
+        });
+      },
       isAgentPaneInWorkspace: (terminalId, workspaceId) =>
         isAgentPaneInWorkspace(getPtyClient(), terminalId, workspaceId),
       terminalNotify: this.terminalNotify,
+      workerSteerQueue: this.workerSteerQueue,
       replyWaiter: this.replyWaiter,
       getCachedManifest: () => this.bridge.getCachedManifest(),
       getCachedManifestForWebContents: (id) => this.bridge.getCachedManifestForWebContents(id),
@@ -567,6 +678,7 @@ export class McpServerService {
     });
   }
 
+  /** The control surface is served. A listener open only for holds is not running. */
   get isRunning(): boolean {
     return this.httpLifecycle.isRunning;
   }
@@ -623,6 +735,15 @@ export class McpServerService {
 
   setPaneTerminalResolver(resolver: PaneTerminalResolver | null): void {
     this.httpLifecycle.setPaneTerminalResolver(resolver);
+  }
+
+  setWorkerPrincipalResolver(resolver: ((paneId: string) => string | null) | null): void {
+    this.workerPrincipalResolver = resolver;
+  }
+
+  /** Where the global Assistant's prompts for busy workers are held (#16187). */
+  getWorkerSteerQueue(): WorkerSteerQueue {
+    return this.workerSteerQueue;
   }
 
   setHelpSessionTerminalResolver(resolver: HelpSessionTerminalResolver | null): void {
@@ -1005,7 +1126,8 @@ export class McpServerService {
         this.emitRuntimeStateChange();
       }
     } else if (!enabled && (this.isRunning || this.httpLifecycle.isStartInFlight)) {
-      this.terminalNotify.disposeAll();
+      // A feature's scoped wakes, and the listener it holds, outlast the server.
+      this.terminalNotify.disposeUnscoped();
       // `stop()` awaits any in-flight `start()` before closing, so a disable
       // that races a slow start still tears the server down instead of
       // leaving it listening after the user turned it off.
@@ -1013,7 +1135,7 @@ export class McpServerService {
     } else if (wasEnabled !== enabled) {
       if (!enabled) {
         // Lane wakes can be queued while the server isn't listening.
-        this.terminalNotify.disposeAll();
+        this.terminalNotify.disposeUnscoped();
         this.httpLifecycle.setLastError(null);
       }
       this.emitRuntimeStateChange();
@@ -1021,12 +1143,9 @@ export class McpServerService {
   }
 
   async setPort(port: number | null): Promise<void> {
-    const wasEnabled = this.getConfig().enabled;
     this.persistConfig({ port });
-    if (wasEnabled && this.isRunning) {
-      await this.httpLifecycle.stop();
-      if (this._registry) await this.httpLifecycle.start(this._registry);
-    }
+    // Open for the server or only for holds, the listener moves to the new port.
+    if (this.httpLifecycle.isListening) await this.httpLifecycle.rebind();
   }
 
   private rotateInFlight: Promise<string> | null = null;
@@ -1087,12 +1206,62 @@ export class McpServerService {
     return this.isRunning;
   }
 
+  /**
+   * Hold the loopback listener open for a feature's route, and let the feature
+   * queue terminal wakes, whether or not the MCP server is on (#15999). With
+   * the server off, `/mcp`, `/sse` and the plugin routes find nothing there and
+   * no notice is armed or typed: only this route and these wakes go on.
+   */
+  async holdListener(id: string, route: ListenerRoute): Promise<McpListenerHold> {
+    const shutdowns = this.shutdowns;
+    const listener = await this.httpLifecycle.holdListener(id, route);
+    if (this.shutdowns !== shutdowns) {
+      await listener.release();
+      throw new Error(`The listener hold "${id}" ended while it was being opened`);
+    }
+    const wakes = this.holdWakes();
+    return {
+      get port() {
+        return listener.port;
+      },
+      queueWake: wakes.queueWake,
+      release: async () => {
+        wakes.release();
+        await listener.release();
+      },
+    };
+  }
+
+  /**
+   * Let a feature queue terminal wakes whether or not the MCP server is on,
+   * without opening the listener: Decisions types answers into panes with no
+   * route of its own (#16017). Quitting ends the hold with the server.
+   */
+  holdWakes(): McpWakeHold {
+    const wakes = this.terminalNotify.openWakeScope();
+    const endWakes = () => wakes.release();
+    this.heldWakeScopes.add(endWakes);
+    return {
+      queueWake: (pane, projectId, wake) => wakes.enqueueWake(pane, projectId, wake),
+      cancelQueued: () => wakes.cancelQueued(),
+      release: () => {
+        this.heldWakeScopes.delete(endWakes);
+        wakes.release();
+      },
+    };
+  }
+
+  /** The app is quitting: every hold ends with the server. */
   async stop(): Promise<void> {
+    this.shutdowns++;
+    for (const endWakes of [...this.heldWakeScopes]) endWakes();
+    this.heldWakeScopes.clear();
     // Nothing could read the observations a wake would point at.
+    this.workerSteerQueue.dispose();
     this.terminalNotify.disposeAll();
     // Open waits return what they have rather than hang on a server going away.
     this.replyWaiter.dispose();
-    await this.httpLifecycle.stop();
+    await this.httpLifecycle.shutdown();
     // The stop rejects every pending request, so the leases those requests own
     // have no one left to release them. Holding them would pin their views
     // against eviction for renderers that will never answer (#11790).
@@ -1509,6 +1678,22 @@ export class McpServerService {
     this.sessionStore.resourceOwnership.revokePrincipal(principal);
     this.sessionStore.terminalAdoption.revokePrincipal(principal);
     this.terminalNotify.revokeOwner(relayNotifyKey(principal));
+    // Held for a worker by the session that ended, never typed for its successor
+    // (#14161), under the owner key its calls held them by.
+    this.workerSteerQueue.revokePrincipal(principalOwnerKey(principal));
+  }
+
+  /**
+   * Remote Hosts: another machine's assistant session ended (#16187). Its
+   * held prompts go now, rather than when its hold here lapses, so none is
+   * typed after the session that wrote it is gone.
+   */
+  endRelayHeldSends(senderId: string, helpSessionId: string): void {
+    // Fenced: a call of that session still being admitted holds nothing after this.
+    this.workerSteerQueue.revokePrincipal(
+      principalOwnerKey(relayOwnershipPrincipal(senderId, helpSessionId)),
+      { fence: true }
+    );
   }
 
   /**

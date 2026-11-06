@@ -49,6 +49,7 @@ const KNOWN_TERMINAL_FIELDS = {
   args: true,
   devCommand: true,
   exitBehavior: true,
+  whenDone: true,
   agentModelId: true,
   agentLaunchFlags: true,
   location: true,

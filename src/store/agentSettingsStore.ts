@@ -1,5 +1,11 @@
 import { create } from "zustand";
-import type { AgentSettings, AgentSettingsEntry, ResumeOnRestart } from "@shared/types";
+import type {
+  AgentAccount,
+  AgentSettings,
+  AgentSettingsEntry,
+  ResumeOnRestart,
+} from "@shared/types";
+import type { AddAgentAccountRequest } from "@shared/types/ipc/agentAccounts";
 import { agentSettingsClient } from "@/clients";
 import { getSafeBootPromise } from "@/lib/bootPromise";
 import { DEFAULT_AGENT_SETTINGS } from "@shared/types";
@@ -51,7 +57,12 @@ interface AgentSettingsState {
 
 interface AgentSettingsActions {
   initialize: () => Promise<void>;
-  refresh: () => Promise<void>;
+  /**
+   * Read the saved settings again. `read` stands in for the host read when
+   * the answer comes from elsewhere (a resync's hydrate answer); the read
+   * still counts from when this was called.
+   */
+  refresh: (read?: () => Promise<AgentSettings | undefined>) => Promise<void>;
   /** Take a saved slice another view (or this one) just wrote (#14700). */
   applySaved: (raw: AgentSettings) => void;
   updateAgent: (agentId: string, updates: Partial<AgentSettingsEntry>) => Promise<void>;
@@ -82,6 +93,20 @@ interface AgentSettingsActions {
     worktreeId: string,
     presetId: string | null | undefined
   ) => Promise<void>;
+  /**
+   * Set or clear the worktree-scoped account (#16040), as
+   * `updateWorktreePreset` does for presets: `undefined` inherits the agent's
+   * default again, `null` is the default login in this worktree alone.
+   */
+  updateWorktreeAccount: (
+    agentId: string,
+    worktreeId: string,
+    accountId: string | null | undefined
+  ) => Promise<void>;
+  /** Make or check the account's folder in main and save it; resolves to the saved account. */
+  addAccount: (request: AddAgentAccountRequest) => Promise<AgentAccount>;
+  /** Forget an account and every choice that named it. Its folder stays. */
+  removeAccount: (agentId: string, accountId: string) => Promise<void>;
   reset: (agentId?: string) => Promise<void>;
 }
 
@@ -288,7 +313,7 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
     });
   },
 
-  refresh: async () => {
+  refresh: async (read) => {
     const myEpoch = ++normalizeEpoch;
     const heardAtStart = savedChangesHeard;
     set({ error: null });
@@ -297,7 +322,7 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
       // config reloads) — drop the client's value cache so this read and
       // every later get() see post-change data, not a pre-change snapshot.
       agentSettingsClient.invalidate();
-      const raw = (await agentSettingsClient.get()) ?? DEFAULT_AGENT_SETTINGS;
+      const raw = (await (read ?? agentSettingsClient.get)()) ?? DEFAULT_AGENT_SETTINGS;
       if (myEpoch !== normalizeEpoch || heardAtStart !== savedChangesHeard) return;
       set({ settings: takeSaved(normalizeSaved(raw)) });
     } catch (e) {
@@ -438,6 +463,54 @@ export const useAgentSettingsStore = create<AgentSettingsStore>()((set, get) => 
         },
       };
     });
+  },
+
+  updateWorktreeAccount: async (
+    agentId: string,
+    worktreeId: string,
+    accountId: string | null | undefined
+  ) => {
+    if (!worktreeId) return;
+    const withChoice = (current: Record<string, string | null> | undefined) => {
+      const next: Record<string, string | null> = { ...current };
+      if (accountId === undefined) delete next[worktreeId];
+      else next[worktreeId] = accountId;
+      return Object.keys(next).length > 0 ? next : undefined;
+    };
+    const current = get().settings?.agents?.[agentId]?.worktreeAccounts;
+    await writeAgentEntry(
+      set,
+      get,
+      agentId,
+      { worktreeAccounts: withChoice(current) },
+      (settings) => {
+        const entry = settings.agents[agentId];
+        return {
+          ...settings,
+          agents: {
+            ...settings.agents,
+            [agentId]: { ...entry, worktreeAccounts: withChoice(entry?.worktreeAccounts) },
+          },
+        };
+      }
+    );
+  },
+
+  addAccount: async (request: AddAgentAccountRequest) => {
+    ++normalizeEpoch;
+    const heardAtStart = savedChangesHeard;
+    const { account, settings } = await agentSettingsClient.addAccount(request);
+    const next = settleWrite(normalizeSaved(settings), heardAtStart);
+    if (next) set({ settings: next });
+    return account;
+  },
+
+  removeAccount: async (agentId: string, accountId: string) => {
+    ++normalizeEpoch;
+    const heardAtStart = savedChangesHeard;
+    const settings = await agentSettingsClient.removeAccount(agentId, accountId);
+    const next = settleWrite(normalizeSaved(settings), heardAtStart);
+    if (next) set({ settings: next });
   },
 
   reset: async (agentId?: string) => {

@@ -92,17 +92,18 @@ export function clearGpuAngleFallbackFlag(userDataPath: string): void {
   }
 }
 
-// Issue #10065: GPU-mitigation exits (soft ANGLE fallback, nuclear disable,
-// and their respective crash-loop hard-stops) all go through `app.exit(0)`
-// which skips the `before-quit` cleanup chain. Without the three clean-exit
-// markers, the next boot treats the deliberate relaunch as a crash:
-// `running.lock` is left on disk, `crash-loop-state.json` keeps
-// `cleanExit: false` (accumulating strikes toward safe mode), and
-// `PanelSuspectLedger` never advances its decay counters. Mirror the
-// AutoUpdater #9638 pattern: each marker in its own try/catch so a single
-// failure cannot skip the next (lesson #7158). Markers are synchronous
-// `writeFileSync` calls, so they commit before any `app.relaunch()` or
-// `app.exit(0)` we return to.
+// Issue #10065: the crash-loop hard-stops end with a bare `app.exit(0)`, which
+// skips the shutdown chain. Without the three clean-exit markers, the next boot
+// treats the deliberate stop as a crash: `running.lock` is left on disk,
+// `crash-loop-state.json` keeps `cleanExit: false` (accumulating strikes toward
+// safe mode), and `PanelSuspectLedger` never advances its decay counters. Each
+// marker sits in its own try/catch so a single failure cannot skip the next
+// (lesson #7158). They are synchronous writes, so they commit before the exit.
+//
+// The relaunch branches must NOT call this (#16273): `relaunchApp` runs the
+// shutdown chain, which writes these same markers once it settles clean and
+// leaves `running.lock` behind when it times out. Writing them first would
+// report a wedged or crashed relaunch as a clean exit.
 type GpuMitigationPath = "angle-fallback" | "nuclear-disable";
 
 function writeCleanGpuMitigationMarkers(path: GpuMitigationPath): void {
@@ -255,15 +256,14 @@ class GpuCrashMonitorService {
           return;
         }
         logger.warn("gpu-crash-soft-fallback", { crashCount: effectiveCount });
-        writeCleanGpuMitigationMarkers("angle-fallback");
         // Session-preserving restart (#12320): the mitigation is not the user's
         // doing, so the session they lose to it is pure collateral. Captures
         // agent sessions and strips inherited launch targeting on the way out.
         //
-        // No telemetry close or exit here: `relaunchApp` owns both, after the
-        // capture chain settles. Doing them inline would race that chain and
-        // exit before a single agent session was persisted — the exact loss
-        // this path was changed to stop.
+        // No markers, telemetry close or exit here: `relaunchApp` and the
+        // shutdown chain it runs own all three, after that chain settles. Doing
+        // them inline would race the chain and exit before a single agent
+        // session was persisted — the exact loss this path was changed to stop.
         relaunchApp("gpu-mitigation");
         return;
       }
@@ -299,15 +299,14 @@ class GpuCrashMonitorService {
           return;
         }
         logger.warn("gpu-crash-nuclear-disable", { crashCount: effectiveCount });
-        writeCleanGpuMitigationMarkers("nuclear-disable");
         // Session-preserving restart (#12320): the mitigation is not the user's
         // doing, so the session they lose to it is pure collateral. Captures
         // agent sessions and strips inherited launch targeting on the way out.
         //
-        // No telemetry close or exit here: `relaunchApp` owns both, after the
-        // capture chain settles. Doing them inline would race that chain and
-        // exit before a single agent session was persisted — the exact loss
-        // this path was changed to stop.
+        // No markers, telemetry close or exit here: `relaunchApp` and the
+        // shutdown chain it runs own all three, after that chain settles. Doing
+        // them inline would race the chain and exit before a single agent
+        // session was persisted — the exact loss this path was changed to stop.
         relaunchApp("gpu-mitigation");
       }
     });
@@ -349,8 +348,9 @@ function logStartupGpuStatus(): void {
   startupGpuListenerBound = true;
   let settleTimer: ReturnType<typeof setTimeout> | null = null;
   let reported = false;
+  let ready = false;
   const emit = (): void => {
-    if (startupGpuStatusLogged) return;
+    if (!ready || startupGpuStatusLogged) return;
     // The deadline logs what's there, but only a report settles the status a
     // later read may keep for the session.
     if (reported) markGpuInfoSettled();
@@ -376,22 +376,32 @@ function logStartupGpuStatus(): void {
     settleTimer = setTimeout(emit, STARTUP_GPU_STATUS_SETTLE_MS);
     settleTimer.unref?.();
   });
-  setTimeout(emit, STARTUP_GPU_STATUS_DEADLINE_MS).unref?.();
+  // Chromium 156 rejects GPU initialization before its browser main loop is
+  // ready. Keep crash/report listeners early, but defer every native GPU read.
+  void app.whenReady().then(() => {
+    ready = true;
+    setTimeout(emit, STARTUP_GPU_STATUS_DEADLINE_MS).unref?.();
+    if (reported) {
+      if (settleTimer) clearTimeout(settleTimer);
+      settleTimer = setTimeout(emit, STARTUP_GPU_STATUS_SETTLE_MS);
+      settleTimer.unref?.();
+    }
 
-  // getGPUInfo can hang on some drivers (and is absent in some test/host
-  // environments) — guard + bound it so diagnostics never wedge boot.
-  if (typeof app.getGPUInfo !== "function") return;
-  void withTimeout(app.getGPUInfo("basic"), 5000, "gpu-info-timeout")
-    .then((info) => {
-      const renderer = (info as { auxAttributes?: { renderer?: string } } | null)?.auxAttributes
-        ?.renderer;
-      if (typeof renderer === "string" && renderer.length > 0) {
-        logger.info("gpu-startup-renderer", { renderer });
-      }
-    })
-    .catch(() => {
-      /* timeout/unavailable — the status log is the durable trace */
-    });
+    // getGPUInfo can hang on some drivers (and is absent in some test/host
+    // environments) — guard + bound it so diagnostics never wedge boot.
+    if (typeof app.getGPUInfo !== "function") return;
+    return withTimeout(app.getGPUInfo("basic"), 5000, "gpu-info-timeout")
+      .then((info) => {
+        const renderer = (info as { auxAttributes?: { renderer?: string } } | null)?.auxAttributes
+          ?.renderer;
+        if (typeof renderer === "string" && renderer.length > 0) {
+          logger.info("gpu-startup-renderer", { renderer });
+        }
+      })
+      .catch(() => {
+        /* timeout/unavailable — the status log is the durable trace */
+      });
+  });
 }
 
 export function initializeGpuCrashMonitor(): GpuCrashMonitorService {

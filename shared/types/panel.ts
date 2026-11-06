@@ -4,6 +4,7 @@ import type { TerminalHandback } from "./handback.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { BrowserHistory } from "./browser.js";
 import type { GitStatus, DiffChangeSetEntry } from "./git.js";
+import type { ScheduledRunRef } from "./scheduledRunRef.js";
 import {
   BUILT_IN_PANEL_KINDS,
   panelKindIsDockable,
@@ -189,6 +190,11 @@ export type TerminalRuntimeStatus = PersistableFlowStatus | "background" | "exit
  * the user did not ask for directly; `mcp` is an arbitrary external client.
  * Collapsing them left a terminal the user never started looking identical to
  * one they did.
+ *
+ * `schedule` is Daintree's scheduler launching a scheduled run (#15977). It
+ * always travels with a `ScheduledRunRef` and is never caller-settable:
+ * action arguments validate against the narrower caller list, so an MCP or
+ * plugin caller can't claim it.
  */
 export const TERMINAL_SPAWN_SOURCES = [
   "quickrun",
@@ -197,9 +203,12 @@ export const TERMINAL_SPAWN_SOURCES = [
   "palette",
   "mcp",
   "assistant",
+  "schedule",
 ] as const;
 
 export type TerminalSpawnSource = (typeof TERMINAL_SPAWN_SOURCES)[number];
+
+export type { ScheduledRunRef };
 
 /** Focus policy for newly-created panels — orthogonal to provenance. */
 export type AddPanelFocusPolicy = "auto" | "preserve" | "take";
@@ -308,6 +317,8 @@ interface BasePanelData {
   title: string;
   /** How the title is owned. Absent = "default". */
   titleMode?: PanelTitleMode;
+  /** The emoji the person gave this panel as a persona (#16213); absent when none. Display only. */
+  displayEmoji?: string;
   /** Location in the UI - grid (main view) or dock (minimized) */
   location: PanelLocation;
   /**
@@ -389,6 +400,68 @@ interface BasePanelData {
 export interface AgentResumeOffer {
   agentId: string;
   sessionId?: string;
+}
+
+/**
+ * The launch a pane ran before a preset or account switch that kept its
+ * conversation, which "Back" puts back to reopen the conversation where it was.
+ */
+export type PresetSwitchPriorLaunch = Pick<
+  PtyPanelData,
+  | "agentPresetId"
+  | "agentPresetColor"
+  | "originalPresetId"
+  | "isUsingFallback"
+  | "fallbackChainIndex"
+  | "command"
+  | "agentLaunchFlags"
+  | "callerLaunchFlags"
+  | "agentModelId"
+  | "env"
+  | "agentAccountId"
+  | "conversationCwd"
+> & { cwd: string };
+
+/** The launch fields of `panel` a preset switch replaces, in the shape "Back" restores. */
+export function presetSwitchLaunchOf(panel: PtyPanelData): PresetSwitchPriorLaunch {
+  return {
+    agentPresetId: panel.agentPresetId,
+    agentPresetColor: panel.agentPresetColor,
+    originalPresetId: panel.originalPresetId,
+    isUsingFallback: panel.isUsingFallback,
+    fallbackChainIndex: panel.fallbackChainIndex,
+    command: panel.command,
+    agentLaunchFlags: panel.agentLaunchFlags,
+    callerLaunchFlags: panel.callerLaunchFlags,
+    agentModelId: panel.agentModelId,
+    env: panel.env,
+    agentAccountId: panel.agentAccountId,
+    conversationCwd: panel.conversationCwd,
+    cwd: panel.cwd,
+  };
+}
+
+/**
+ * What a conversation-keeping switch moved the pane onto: another preset
+ * (#16045), or another account with the preset kept (#16135). A `null`
+ * account is the CLI's default login.
+ */
+export type ConversationSwitchTarget =
+  { kind: "preset"; presetId: string } | { kind: "account"; accountId: string | null };
+
+/**
+ * A preset or account switch that asked the CLI to reopen the pane's
+ * conversation (#16045, #16135), held while the run it launched lives so the
+ * CLI's own refusal can be told apart from any other end. Transient like
+ * `agentResumeOffer`.
+ */
+export interface PresetSwitchResume {
+  agentId: string;
+  sessionId: string;
+  target: ConversationSwitchTarget;
+  prior: PresetSwitchPriorLaunch;
+  /** The run printed its CLI's refusal; the pane offers a way out either side. */
+  refused?: true;
 }
 
 export interface PanelWorktreeMoveNotice {
@@ -742,8 +815,16 @@ export interface PtyPanelData extends BasePanelData {
   agentPresetId?: string;
   /** Preset brand color (hex) captured at launch time; overridden by live settings lookup */
   agentPresetColor?: string;
+  /**
+   * The account this pane launched on (#16040), recorded rather than resolved
+   * again later: a relaunch keeps its folder, read back from `env`. Absent is
+   * the CLI's default login. Persisted.
+   */
+  agentAccountId?: string;
   /** Origin that spawned this terminal */
   spawnedBy?: TerminalSpawnSource;
+  /** The scheduled run this terminal was launched for; present exactly when `spawnedBy` is `"schedule"`. */
+  scheduledRun?: ScheduledRunRef;
   /** Focus policy applied when this panel was created. */
   focusPolicy?: AddPanelFocusPolicy;
   /**
@@ -753,7 +834,11 @@ export interface PtyPanelData extends BasePanelData {
   removeOnExit?: boolean;
   /** Timestamp when this terminal was created */
   startedAt?: number;
-  /** Exit code from the last process exit */
+  /**
+   * Exit code from the last process exit. Persisted while the pane shows a
+   * natural exit (#15941), so a reload doesn't bring it back as a live shell;
+   * cleared by a restart.
+   */
   exitCode?: number;
   /**
    * The last exit came from a session-preserving project teardown (sleep,
@@ -822,6 +907,13 @@ export interface PtyPanelData extends BasePanelData {
    * `sessionLostOnRestore`.
    */
   agentResumeOffer?: AgentResumeOffer;
+  /**
+   * Live-only: a preset switch kept this pane's conversation and the run it
+   * launched hasn't ended yet, or ended on its CLI's refusal (#16045). Cleared
+   * by any other end of that run, by a restart, by a new agent starting in the
+   * pane, and by dismissal. Never serialized.
+   */
+  presetSwitchResume?: PresetSwitchResume;
   /**
    * Directory this pane's conversation began in, recorded only once the pane
    * runs somewhere else (#12434) — a pane moved onto another worktree resumes
@@ -1287,6 +1379,8 @@ export interface TerminalInstance {
   title: string;
   /** How the title is owned. Absent = "default". */
   titleMode?: PanelTitleMode;
+  /** The emoji the person gave this panel as a persona (#16213); absent when none. Display only. */
+  displayEmoji?: string;
   /** Last meaningful OSC title observed from the running agent — survives the trash window for display. */
   lastObservedTitle?: string;
   /** Working directory - only present for PTY panels */
@@ -1392,8 +1486,16 @@ export interface TerminalInstance {
   agentPresetId?: string;
   /** Preset brand color (hex) captured at launch time; overridden by live settings lookup */
   agentPresetColor?: string;
+  /**
+   * The account this pane launched on (#16040), recorded rather than resolved
+   * again later: a relaunch keeps its folder, read back from `env`. Absent is
+   * the CLI's default login. Persisted.
+   */
+  agentAccountId?: string;
   /** Origin that spawned this terminal */
   spawnedBy?: TerminalSpawnSource;
+  /** The scheduled run this terminal was launched for; present exactly when `spawnedBy` is `"schedule"`. */
+  scheduledRun?: ScheduledRunRef;
   /** Focus policy applied when this panel was created. */
   focusPolicy?: AddPanelFocusPolicy;
   /**
@@ -1405,7 +1507,11 @@ export interface TerminalInstance {
   excludeFromPersistence?: boolean;
   /** Timestamp when this terminal was created */
   startedAt?: number;
-  /** Exit code from the last process exit */
+  /**
+   * Exit code from the last process exit. Persisted while the pane shows a
+   * natural exit (#15941), so a reload doesn't bring it back as a live shell;
+   * cleared by a restart.
+   */
   exitCode?: number;
   /**
    * The last exit came from a session-preserving project teardown (sleep,

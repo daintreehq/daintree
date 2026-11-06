@@ -166,6 +166,21 @@ const CREATE_TABLES_SQL = `
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS scheduled_runs (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    schedule_id TEXT NOT NULL,
+    occurrence_key TEXT,
+    terminal_id TEXT,
+    live INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    record TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS schedule_evaluation_points (
+    schedule_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    evaluated_through INTEGER NOT NULL
+  );
 `;
 
 let sqlite: Database.Database;
@@ -201,8 +216,8 @@ vi.mock("../ProjectSettingsManager.js", () => ({
   ProjectSettingsManager: class {
     deleteAllEnvForProject() {}
     migrateEnvForProject() {}
-    getEffectiveNotificationSettings() {
-      return {};
+    getEffectiveNotificationSettings(...args: unknown[]) {
+      return { forwarded: args };
     }
   },
 }));
@@ -235,8 +250,13 @@ vi.mock("../projectQuarantineCleanup.js", () => ({
 }));
 
 import { ProjectStore } from "../ProjectStore.js";
+import {
+  _resetScheduledRunAdmissionForTest,
+  reserveScheduledLaunch,
+} from "../scheduledRuns/scheduledRunAdmission.js";
 import { setWritesSuppressed, resetWritesSuppressedForTesting } from "../diskPressureState.js";
 import { getMruProjects } from "../../../shared/utils/projectMru.js";
+import { events } from "../events.js";
 
 describe("ProjectStore.getAllProjects reconciliation", () => {
   let store: ProjectStore;
@@ -720,6 +740,32 @@ describe("ProjectStore disk pressure suppression", () => {
     expect(row?.frecencyScore).toBeGreaterThan(seededFrecencyScore - 0.01);
     // lastOpened still tracks the real open, debounced or not.
     expect(row?.lastOpened).toBeGreaterThan(justLeft);
+  });
+});
+
+describe("ProjectStore.getEffectiveNotificationSettings (#15635)", () => {
+  beforeEach(() => {
+    sqlite = new Database(":memory:");
+    sqlite.exec(CREATE_TABLES_SQL);
+    db = drizzle(sqlite, { schema });
+    db.insert(schema.appState).values({ key: "currentProjectId", value: "current" }).run();
+  });
+
+  afterEach(() => {
+    sqlite.close();
+  });
+
+  it("asks for the named project's overrides, never the current one's", () => {
+    const store = new ProjectStore();
+    const shell = { waitingEnabled: false };
+
+    expect(store.getCurrentProjectId()).toBe("current");
+    expect(store.getEffectiveNotificationSettings("other", shell)).toEqual({
+      forwarded: ["other", shell],
+    });
+    expect(store.getEffectiveNotificationSettings(null)).toEqual({
+      forwarded: [null, undefined],
+    });
   });
 });
 
@@ -1624,4 +1670,230 @@ describe("ProjectStore.addProject permission failures", () => {
       expect(gitBehavior.constructed).toBe(0);
     }
   );
+});
+
+describe("ProjectStore.onProjectRegistryChanged", () => {
+  let store: ProjectStore;
+  let alphaDir: string;
+  let betaDir: string;
+  let alphaId: string;
+
+  beforeEach(async () => {
+    alphaDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-reg-a-"));
+    betaDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-reg-b-"));
+    const { generateProjectId } = await import("../projectStorePaths.js");
+    const alphaCanonical = await fs.promises.realpath(alphaDir);
+    alphaId = generateProjectId(alphaCanonical);
+
+    sqlite = new Database(":memory:");
+    sqlite.exec(CREATE_TABLES_SQL);
+    db = drizzle(sqlite, { schema });
+    db.insert(schema.projects)
+      .values({
+        id: alphaId,
+        path: alphaCanonical,
+        name: "Alpha",
+        emoji: "🌲",
+        lastOpened: Date.now(),
+        status: "closed",
+        frecencyScore: 1,
+        lastAccessedAt: Date.now(),
+      })
+      .run();
+    store = new ProjectStore();
+  });
+
+  afterEach(() => {
+    resetWritesSuppressedForTesting();
+    sqlite.close();
+    fs.rmSync(alphaDir, { recursive: true, force: true });
+    fs.rmSync(betaDir, { recursive: true, force: true });
+  });
+
+  it("fires for a project added or removed, and not for one reopened or already gone", async () => {
+    const heard = vi.fn();
+    store.onProjectRegistryChanged(heard);
+
+    await store.addProject(alphaDir);
+    expect(heard).not.toHaveBeenCalled();
+
+    const beta = await store.addProject(betaDir);
+    expect(heard).toHaveBeenCalledTimes(1);
+
+    await store.removeProject(beta.id);
+    expect(heard).toHaveBeenCalledTimes(2);
+
+    await store.removeProject(beta.id);
+    expect(heard).toHaveBeenCalledTimes(2);
+  });
+
+  it("removes a project's scheduled-run history with it, and only its own", async () => {
+    const beta = await store.addProject(betaDir);
+    const insertRun = sqlite.prepare(
+      "INSERT INTO scheduled_runs (id, project_id, schedule_id, live, created_at, record) VALUES (?, ?, 'schedule', 0, 0, '{}')"
+    );
+    insertRun.run("beta-run", beta.id);
+    insertRun.run("alpha-run", alphaId);
+    const insertPoint = sqlite.prepare(
+      "INSERT INTO schedule_evaluation_points (schedule_id, project_id, evaluated_through) VALUES (?, ?, 0)"
+    );
+    insertPoint.run("beta-schedule", beta.id);
+    insertPoint.run("alpha-schedule", alphaId);
+
+    const deleted = vi.fn();
+    const committedFirst: boolean[] = [];
+    const offDeleted = events.on("scheduled-runs:deleted", (payload) => {
+      committedFirst.push(!sqlite.inTransaction);
+      deleted(payload);
+    });
+    await store.removeProject(beta.id);
+    offDeleted();
+
+    const left = sqlite.prepare("SELECT id FROM scheduled_runs").pluck().all();
+    expect(left).toEqual(["alpha-run"]);
+    const points = sqlite
+      .prepare("SELECT schedule_id FROM schedule_evaluation_points")
+      .pluck()
+      .all();
+    expect(points).toEqual(["alpha-schedule"]);
+    // Their runs will never end, so the deletion itself is announced.
+    expect(deleted).toHaveBeenCalledTimes(1);
+    expect(deleted).toHaveBeenCalledWith({
+      projectId: beta.id,
+      scheduleId: null,
+      timestamp: expect.any(Number),
+    });
+    // A rollback would bring the runs back, so it is announced once committed.
+    expect(committedFirst).toEqual([true]);
+  });
+
+  it("announces no deleted run history for a project that had none, or kept it", async () => {
+    const beta = await store.addProject(betaDir);
+    const deleted = vi.fn();
+    const offDeleted = events.on("scheduled-runs:deleted", deleted);
+
+    await store.removeProject(beta.id);
+    const gamma = await store.addProject(betaDir);
+    sqlite.exec("DROP TABLE scheduled_runs");
+    await expect(store.removeProject(gamma.id)).rejects.toThrow(/scheduled_runs/);
+    offDeleted();
+
+    expect(deleted).not.toHaveBeenCalled();
+  });
+
+  it("keeps the project when its run history can't be removed with it", async () => {
+    const beta = await store.addProject(betaDir);
+    const heard = vi.fn();
+    store.onProjectRegistryChanged(heard);
+    sqlite.exec("DROP TABLE scheduled_runs");
+
+    await expect(store.removeProject(beta.id)).rejects.toThrow(/scheduled_runs/);
+    expect(store.getProjectById(beta.id)).not.toBeNull();
+    expect(heard).not.toHaveBeenCalled();
+  });
+
+  it("fires for a change to where a project is or what it is called, never for its status or ranking", () => {
+    const heard = vi.fn();
+    store.onProjectRegistryChanged(heard);
+
+    store.updateProject(alphaId, { status: "active", pinned: true, frecencyScore: 4 });
+    store.updateProjectStatus(alphaId, "background");
+    expect(heard).not.toHaveBeenCalled();
+
+    store.updateProject(alphaId, { name: "Alpha 2" });
+    store.updateProject(alphaId, { path: betaDir });
+    store.updateProject(alphaId, { gitBacked: false });
+    expect(heard).toHaveBeenCalledTimes(3);
+  });
+
+  it("stops after unsubscribing, and a listener that throws neither fails the write nor silences the rest", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const gone = vi.fn();
+    const heard = vi.fn();
+    store.onProjectRegistryChanged(() => {
+      throw new Error("listener broke");
+    });
+    store.onProjectRegistryChanged(gone)();
+    store.onProjectRegistryChanged(heard);
+
+    expect(store.updateProject(alphaId, { name: "Renamed" }).name).toBe("Renamed");
+    expect(heard).toHaveBeenCalledTimes(1);
+    expect(gone).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalled();
+  });
+});
+
+describe("ProjectStore schedules (#15975)", () => {
+  let store: ProjectStore;
+  let repoDir: string;
+  let projectId: string;
+
+  beforeEach(async () => {
+    repoDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-sched-repo-"));
+    sqlite = new Database(":memory:");
+    sqlite.exec(CREATE_TABLES_SQL);
+    db = drizzle(sqlite, { schema });
+    store = new ProjectStore();
+    projectId = (await store.addProject(repoDir)).id;
+  });
+
+  afterEach(async () => {
+    resetWritesSuppressedForTesting();
+    if (store.getProjectById(projectId)) await store.removeProject(projectId);
+    sqlite.close();
+    fs.rmSync(repoDir, { recursive: true, force: true });
+  });
+
+  function schedulesFile(): string {
+    const stateDir = getProjectStateDir(
+      path.join("/tmp/daintree-reconciliation-test", "projects"),
+      projectId
+    );
+    if (!stateDir) throw new Error("expected a state directory");
+    return path.join(stateDir, "schedules.json");
+  }
+
+  it("cancels a scheduled launch still waiting to spawn when its schedule or project goes (#15978)", async () => {
+    const input = { name: "Nightly", launch: { agentId: "claude", prompt: "Go." } };
+    const first = await store.schedules.create(projectId, input);
+    const second = await store.schedules.create(projectId, input);
+    if (first.status !== "saved" || second.status !== "saved") throw new Error("expected saved");
+    const reserve = (scheduleId: string, runId: string) =>
+      reserveScheduledLaunch({
+        runId,
+        scheduleId,
+        projectId,
+        terminalId: `terminal-${runId}`,
+        agentId: "claude",
+        admit: () => {},
+      });
+    const ofFirst = reserve(first.schedule.id, "run-1");
+    const ofSecond = reserve(second.schedule.id, "run-2");
+
+    await store.schedules.remove(projectId, first.schedule.id);
+    expect(ofFirst.state()).toEqual({ kind: "cancelled" });
+    expect(ofSecond.state().kind).toBe("pending");
+
+    await store.removeProject(projectId);
+    expect(ofSecond.state()).toEqual({ kind: "cancelled" });
+    _resetScheduledRunAdmissionForTest();
+  });
+
+  it("removing a project deletes its schedules, tells listeners, and refuses later writes", async () => {
+    const input = { name: "Nightly", launch: { agentId: "claude", prompt: "Go." } };
+    expect((await store.schedules.create(projectId, input)).status).toBe("saved");
+    expect(fs.existsSync(schedulesFile())).toBe(true);
+    const heard = vi.fn();
+    store.schedules.subscribe(heard);
+
+    await store.removeProject(projectId);
+
+    expect(fs.existsSync(schedulesFile())).toBe(false);
+    expect(fs.existsSync(path.dirname(schedulesFile()))).toBe(false);
+    expect(heard).toHaveBeenCalledWith(expect.objectContaining({ projectId, schedules: [] }));
+    await expect(store.schedules.create(projectId, input)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    expect(fs.existsSync(path.dirname(schedulesFile()))).toBe(false);
+  });
 });

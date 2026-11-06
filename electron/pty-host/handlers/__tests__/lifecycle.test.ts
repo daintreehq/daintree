@@ -23,6 +23,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     getSerializedStateAsync: vi.fn(async () => STATE_PAYLOAD),
     getSerializedState: vi.fn(() => STATE_PAYLOAD),
     isInTrash: vi.fn(() => false),
+    isClosing: vi.fn(() => false),
     getActivityTier: vi.fn(() => "active" as const),
     setAnalysisEnabled: vi.fn(),
     setSabMode: vi.fn(),
@@ -324,6 +325,20 @@ describe("lifecycle spawn — terminal-pid gating and deferred retry (#10787)", 
   function getMock(ctx: HostContext) {
     return ctx.ptyManager.getTerminal as ReturnType<typeof vi.fn>;
   }
+
+  it("names the incarnation that spawned on its spawn result (#15976)", () => {
+    const ctx = makeCtx();
+    getMock(ctx).mockReturnValue({ ...termInfo(1234), spawnedAt: 5_000 });
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({ type: "spawn", id: "t1", options: { launchGeneration: 3 } });
+
+    expect(ctx.sendEvent).toHaveBeenCalledWith({
+      type: "spawn-result",
+      id: "t1",
+      result: { success: true, id: "t1", launchGeneration: 3, spawnedAt: 5_000 },
+    });
+  });
 
   it("emits terminal-pid immediately when the PID is valid (no retry)", () => {
     const ctx = makeCtx();

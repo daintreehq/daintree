@@ -38,6 +38,7 @@ import type { ActionDefinition, ActionId } from "@shared/types/actions";
 import { AGENT_LAUNCH_CONFIG_DISPATCH_DANGER_RATIONALE } from "../actions/effectiveDanger";
 import { ConfirmationStagedError } from "../actions/confirmationStaged";
 import { TerminalInOtherProjectError } from "@shared/utils/terminalInOtherProject";
+import { ConfirmationTimeoutError } from "../actions/confirmationTimeout";
 
 describe("ActionService", () => {
   let service: ActionService;
@@ -516,6 +517,75 @@ describe("ActionService", () => {
       ).toBe("safe");
     });
 
+    it("lets a plugin launch on a preset main approved, and only that launch (#16324)", async () => {
+      const mockRun = vi.fn().mockResolvedValue(undefined);
+      service.register({
+        id: "agent.launch" as ActionId,
+        title: "Launch agent",
+        description:
+          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
+        category: "agent",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        argsSchema: z.object({
+          agentId: z.string(),
+          prompt: z.string().optional(),
+          presetId: z.string().nullable().optional(),
+          env: z.record(z.string(), z.string()).optional(),
+          agentLaunchFlags: z.array(z.string()).optional(),
+        }),
+        run: mockRun,
+      });
+      const approval = {
+        agentId: "claude",
+        presetId: "zai",
+        source: "custom" as const,
+        content: "[1]",
+        fallbacks: [],
+      };
+
+      const approved = await service.dispatch(
+        "agent.launch",
+        { agentId: "claude", presetId: "zai", prompt: "Plan it" },
+        { source: "plugin", callerPluginId: "beads", hostApprovedPluginPresetLaunch: approval }
+      );
+      expect(approved.ok).toBe(true);
+      expect(mockRun).toHaveBeenCalledTimes(1);
+      // The run sees the approval it is held to, stamped by the dispatch.
+      expect(mockRun.mock.calls[0]![1].hostApprovedPluginPresetLaunch).toEqual(approval);
+
+      const refusedVariants = [
+        // No approval: today's refusal, word for word.
+        { args: { agentId: "claude", presetId: "zai" }, approval: undefined },
+        { args: { agentId: "claude", presetId: "other" }, approval },
+        { args: { agentId: "codex", presetId: "zai" }, approval },
+        { args: { agentId: "claude", presetId: "zai", env: { X: "1" } }, approval },
+        { args: { agentId: "claude", presetId: "zai", agentLaunchFlags: ["--yolo"] }, approval },
+        { args: { agentId: "claude", presetId: null }, approval },
+      ];
+      for (const { args, approval: offered } of refusedVariants) {
+        const blocked = await service.dispatch("agent.launch", args, {
+          source: "plugin",
+          ...(offered ? { hostApprovedPluginPresetLaunch: offered } : {}),
+        });
+        expect(blocked.ok).toBe(false);
+        if (!blocked.ok) {
+          expect(blocked.error.code).toBe("CONFIRMATION_REQUIRED");
+          expect(blocked.error.message).toMatch(/agentLaunchFlags, env, systemPrompt, presetId/);
+        }
+      }
+      expect(mockRun).toHaveBeenCalledTimes(1);
+
+      // Another source never carries the plugin approval into the run.
+      await service.dispatch(
+        "agent.launch",
+        { agentId: "claude", presetId: "zai" },
+        { source: "user", hostApprovedPluginPresetLaunch: approval }
+      );
+      expect(mockRun.mock.calls[1]![1].hostApprovedPluginPresetLaunch).toBeUndefined();
+    });
+
     it("leaves the same action ungated for an agent dispatch that names no recipe (#11860)", async () => {
       const mockRun = vi.fn().mockResolvedValue(undefined);
       service.register({
@@ -955,6 +1025,138 @@ describe("ActionService", () => {
         );
       });
 
+      // The deadline (#15648): an action that waits on a person gives up at
+      // it, so a caller able to plant or stretch one could launch after the
+      // agent was told the call timed out.
+      it("stamps ctx.dispatchDeadlineAt from the options, and never from a contextOverride", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(mockRun));
+
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          contextOverride: { dispatchDeadlineAt: 9_999_999_999_999 },
+          dispatchDeadlineAt: 1_000,
+        });
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          contextOverride: { dispatchDeadlineAt: 9_999_999_999_999 },
+        });
+
+        expect(mockRun.mock.calls.map(([, ctx]) => ctx.dispatchDeadlineAt)).toEqual([
+          1_000,
+          undefined,
+        ]);
+      });
+
+      // The push half (#15646): what a confirm showed, which `git.push` pins
+      // the push to. A caller able to plant one could pin a push to a review
+      // nobody saw, so it rides on the options alone.
+      it("stamps ctx.hostApprovedPush from the dispatch options, and never from a contextOverride", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(mockRun));
+        const approval = {
+          cwd: "/repo",
+          review: {
+            branch: "topic",
+            headOid: "a".repeat(40),
+            destination: { remote: "origin", branch: "topic" },
+          },
+        };
+
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          hostApprovedPush: approval,
+        });
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          contextOverride: { hostApprovedPush: approval },
+        });
+        const forged = { ...approval, review: { ...approval.review, headOid: "b".repeat(40) } };
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          hostApprovedPush: approval,
+          contextOverride: { hostApprovedPush: forged },
+        });
+
+        expect(mockRun).toHaveBeenNthCalledWith(
+          1,
+          undefined,
+          expect.objectContaining({ hostApprovedPush: approval })
+        );
+        expect(mockRun).toHaveBeenNthCalledWith(
+          2,
+          undefined,
+          expect.objectContaining({ hostApprovedPush: undefined })
+        );
+        expect(mockRun).toHaveBeenNthCalledWith(
+          3,
+          undefined,
+          expect.objectContaining({ hostApprovedPush: approval })
+        );
+      });
+
+      // The preset half (#16047): the change a confirm showed, which a preset
+      // write holds its final plan to. Options only, like the push.
+      it("stamps ctx.hostApprovedPresetWrite from the dispatch options, and never from a contextOverride", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(mockRun));
+        const options = { source: "agent", confirmed: true } as const;
+
+        await service.dispatch("actions.list", undefined, {
+          ...options,
+          hostApprovedPresetWrite: "shown",
+        });
+        await service.dispatch("actions.list", undefined, {
+          ...options,
+          contextOverride: { hostApprovedPresetWrite: "forged" },
+        });
+        await service.dispatch("actions.list", undefined, {
+          ...options,
+          hostApprovedPresetWrite: "shown",
+          contextOverride: { hostApprovedPresetWrite: "forged" },
+        });
+
+        for (const [call, expected] of [
+          [1, "shown"],
+          [2, undefined],
+          [3, "shown"],
+        ] as const) {
+          expect(mockRun).toHaveBeenNthCalledWith(
+            call,
+            undefined,
+            expect.objectContaining({ hostApprovedPresetWrite: expected })
+          );
+        }
+      });
+
+      // The scheduled run (#15977) is what marks a launch `spawnedBy:
+      // "schedule"`, so only the host's own dispatch options may carry it.
+      it("stamps ctx.scheduledRun from the dispatch options, and never from a contextOverride", async () => {
+        const mockRun = vi.fn().mockResolvedValue(undefined);
+        service.register(confirmAction(mockRun));
+        const run = { scheduleId: "schedule-1", runId: "run-1" };
+        const forged = { scheduleId: "schedule-2", runId: "run-2" };
+
+        await service.dispatch("actions.list", undefined, {
+          source: "user",
+          confirmed: true,
+          scheduledRun: run,
+          contextOverride: { scheduledRun: forged },
+        });
+        await service.dispatch("actions.list", undefined, {
+          source: "agent",
+          confirmed: true,
+          contextOverride: { scheduledRun: forged },
+        });
+
+        expect(mockRun.mock.calls.map(([, ctx]) => ctx.scheduledRun)).toEqual([run, undefined]);
+      });
+
       it("overwrites a contextOverride that claims per-target approvals nobody gave", async () => {
         const mockRun = vi.fn().mockResolvedValue(undefined);
         service.register(confirmAction(mockRun));
@@ -1038,6 +1240,47 @@ describe("ActionService", () => {
           undefined,
           expect.objectContaining({ callerPluginId: undefined })
         );
+      });
+    });
+
+    it("maps ConfirmationTimeoutError to CONFIRMATION_TIMEOUT (#15648)", async () => {
+      service.register({
+        id: "actions.list" as ActionId,
+        title: "Test Action",
+        description: "A test action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        run: vi.fn().mockRejectedValue(new ConfirmationTimeoutError("Recipe launch failed: late")),
+      });
+
+      const result = await service.dispatch("actions.list", undefined, { source: "agent" });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "CONFIRMATION_TIMEOUT", message: "Recipe launch failed: late" },
+      });
+    });
+
+    it("reports main's refusal of a send into a choice dialog under its own code (#16209)", async () => {
+      const refusal = "Terminal 't1' was observed waiting on a choice dialog. Nothing was sent.";
+      service.register({
+        id: "actions.list" as ActionId,
+        title: "Test Action",
+        description: "A test action",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        run: vi.fn().mockRejectedValue(new Error(`[AppError|TERMINAL_CHOICE_DIALOG] ${refusal}`)),
+      });
+
+      const result = await service.dispatch("actions.list", undefined, { source: "agent" });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "TERMINAL_CHOICE_DIALOG", message: refusal },
       });
     });
 

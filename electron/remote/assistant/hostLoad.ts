@@ -21,9 +21,14 @@ const hundredths = (value: number): number => Math.round(value * 100) / 100;
  * producer's own meanings (the overview's derivations), with anything
  * unmeasured, stale or from an older host left null rather than zero. Stale
  * samples keep only what hardware fixes. `sampledAt` stays the host's own
- * clock, for provenance; the age is the freshness verdict's.
+ * clock, for provenance; the age is the freshness verdict's. A Windows Shell's
+ * sample of itself has no platform the assistant's contract names, so it is null.
  */
-export function projectHostLoad(summary: HostMetricsSummary, freshness: SampleFreshness): HostLoad {
+export function projectHostLoad(
+  summary: HostMetricsSummary,
+  freshness: SampleFreshness
+): HostLoad | null {
+  if (summary.platform === "win32") return null;
   const { stale } = freshness;
   const usable = !stale;
   const cores = finiteOrNull(summary.cpuLogicalCoreCount);

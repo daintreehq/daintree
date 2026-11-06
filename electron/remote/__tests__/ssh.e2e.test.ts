@@ -122,10 +122,10 @@ import {
   buildCatArgs,
   buildProbeArgs,
   controlPathFor,
+  parseDiscoveryRead,
   parseProbeOutput,
   SshTransport,
 } from "../client/sshTransport.js";
-import { parseDiscoveryInfo } from "../host/discoveryFile.js";
 import { remoteHostSocketLocation, type HostSocketLocation } from "../host/hostSocketPath.js";
 import { requireRemoteService } from "../runtime.js";
 import { getClientTerminalRelay } from "../terminal/clientAttach.js";
@@ -337,7 +337,7 @@ describe.skipIf(!ENABLED)(
           buildCatArgs(SSH_ALIAS, controlPath, location.discoveryPath)
         );
         expect(cat.code, cat.stderr).toBe(0);
-        const info = parseDiscoveryInfo(cat.stdout);
+        const info = parseDiscoveryRead(cat.stdout);
         expect(info).toMatchObject({
           version: 1,
           socketPath: location.socketPath,

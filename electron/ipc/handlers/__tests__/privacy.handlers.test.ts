@@ -120,6 +120,22 @@ describe("PRIVACY_RESET_ALL_DATA handler", () => {
       args: expect.arrayContaining(["--reset-data"]),
     });
   });
+  it("comes back with a window after a reset in a Daintree an OS job started", async () => {
+    const argv = process.argv;
+    process.argv = [...argv, "--run-due-schedules"];
+    try {
+      registerPrivacyHandlers();
+      const handler = ipcMainMock._handlers.get("privacy:reset-all-data")!;
+
+      await handler();
+
+      const { args } = appMock.relaunch.mock.calls.at(-1)![0] as { args: string[] };
+      expect(args).toContain("--reset-data");
+      expect(args).not.toContain("--run-due-schedules");
+    } finally {
+      process.argv = argv;
+    }
+  });
 });
 
 describe("registerPrivacyHandlers", () => {

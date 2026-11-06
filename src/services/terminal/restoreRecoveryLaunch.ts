@@ -83,6 +83,7 @@ export function buildRestoreRecoveryLaunchOptions(
     launchAgentId: agentId,
     title: panel.title,
     titleMode: panel.titleMode,
+    ...(panel.displayEmoji && { displayEmoji: panel.displayEmoji }),
     // An agent that reopens a conversation only where it began resumes there;
     // a fresh start runs where the pane now lives (#13509).
     cwd:
@@ -107,10 +108,12 @@ export function buildRestoreRecoveryLaunchOptions(
     // The launch env was captured when the pane first ran (#10922) and carries
     // any redirected CODEX_HOME — the profile its conversations live under.
     env: panel.env,
+    agentAccountId: panel.agentAccountId,
     extensionState: panel.extensionState,
     extensionStateVersion: panel.extensionStateVersion,
     pluginId: panel.pluginId,
     spawnedBy: panel.spawnedBy,
+    scheduledRun: panel.scheduledRun,
     // The pane leaves its hold the way the user chose, still the pane restore
     // brought back, with what was last seen before it (#14017).
     restoreProvenance: panel.restoreProvenance && {

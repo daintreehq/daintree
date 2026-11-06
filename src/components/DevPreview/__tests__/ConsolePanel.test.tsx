@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
 import { ConsolePanel, serializeConsoleMessage, serializeConsoleMessages } from "../ConsolePanel";
 import {
   useConsoleCaptureStore,
@@ -10,22 +10,65 @@ import {
   type ConsoleMessage,
 } from "@/store/consoleCaptureStore";
 import type { SerializedConsoleRow } from "@shared/types/ipc/webviewConsole";
+import { MAX_CONSOLE_ROWS } from "@shared/config/devPreviewConsole";
+import { pruneToLiveRows, reconcileCollapsedGroups } from "../consoleRowState";
 
-vi.mock("react-virtuoso", () => ({
-  Virtuoso: ({
-    data,
-    itemContent,
-  }: {
-    data: unknown[];
-    itemContent: (index: number, item: unknown) => React.ReactNode;
-  }) => (
-    <div data-testid="virtuoso">
-      {data.map((item, i) => (
-        <div key={i}>{itemContent(i, item)}</div>
-      ))}
-    </div>
-  ),
+// Call-through spies: what these return is the state the panel keeps.
+vi.mock("../consoleRowState", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../consoleRowState")>();
+  return {
+    ...actual,
+    reconcileCollapsedGroups: vi.fn(actual.reconcileCollapsedGroups),
+    pruneToLiveRows: vi.fn(actual.pruneToLiveRows),
+  };
+});
+
+// Renders every row unless a test narrows the viewport, which unmounts the
+// rows outside it the way scrolling a virtualized list does.
+const viewport = vi.hoisted(() => ({
+  shows: null as ((item: { id: number }) => boolean) | null,
+  rerenders: new Set<() => void>(),
 }));
+
+vi.mock("react-virtuoso", async () => {
+  const { useEffect, useReducer } = await import("react");
+  return {
+    Virtuoso: function Virtuoso({
+      data,
+      itemContent,
+      computeItemKey,
+    }: {
+      data: { id: number }[];
+      itemContent: (index: number, item: { id: number }) => React.ReactNode;
+      computeItemKey?: (index: number, item: { id: number }) => React.Key;
+    }) {
+      const [, rerender] = useReducer((n: number) => n + 1, 0);
+      useEffect(() => {
+        viewport.rerenders.add(rerender);
+        return () => {
+          viewport.rerenders.delete(rerender);
+        };
+      }, []);
+      const shows = viewport.shows;
+      return (
+        <div data-testid="virtuoso">
+          {data.map((item, i) =>
+            shows && !shows(item) ? null : (
+              <div key={computeItemKey ? computeItemKey(i, item) : i}>{itemContent(i, item)}</div>
+            )
+          )}
+        </div>
+      );
+    },
+  };
+});
+
+function scrollViewport(shows: ((item: { id: number }) => boolean) | null): void {
+  act(() => {
+    viewport.shows = shows;
+    for (const rerender of viewport.rerenders) rerender();
+  });
+}
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -40,10 +83,17 @@ const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(und
 
 let nextId = 1;
 
-function seedConsoleRow(overrides: Partial<SerializedConsoleRow> = {}): void {
+function seedConsoleRow(overrides: Partial<SerializedConsoleRow> = {}): number {
+  const id = enqueueConsoleRow(overrides);
+  flushConsoleCaptureBuffer();
+  return id;
+}
+
+function enqueueConsoleRow(overrides: Partial<SerializedConsoleRow> = {}): number {
   const level = overrides.level ?? "log";
+  const id = nextId++;
   const row: SerializedConsoleRow = {
-    id: nextId++,
+    id,
     paneId: mockPaneId,
     level,
     cdpType: level,
@@ -55,7 +105,7 @@ function seedConsoleRow(overrides: Partial<SerializedConsoleRow> = {}): void {
     ...overrides,
   };
   useConsoleCaptureStore.getState().addStructuredMessage(row);
-  flushConsoleCaptureBuffer();
+  return id;
 }
 
 function makeMessage(overrides: Partial<ConsoleMessage> = {}): ConsoleMessage {
@@ -83,6 +133,7 @@ function renderPanel() {
 beforeEach(() => {
   vi.clearAllMocks();
   nextId = 1;
+  viewport.shows = null;
   useConsoleCaptureStore.setState({ messages: new Map(), counters: new Map() });
   Object.defineProperty(navigator, "clipboard", {
     value: { writeText },
@@ -441,5 +492,122 @@ describe("stack traces", () => {
     fireEvent.change(filter, { target: { value: "no such row" } });
     fireEvent.change(filter, { target: { value: "" } });
     expect(screen.getByText("beginWork").closest("[hidden]")).toBeNull();
+  });
+});
+
+describe("row state across the buffer cap", () => {
+  const frame = {
+    functionName: "render",
+    url: "http://localhost:5173/src/render.ts",
+    lineNumber: 1,
+    columnNumber: 1,
+  };
+
+  function enqueueLoggedEvent(): number {
+    const id = enqueueConsoleRow({
+      cdpType: "startGroupCollapsed",
+      summaryText: `event ${nextId}`,
+    });
+    enqueueConsoleRow({ summaryText: "event payload", groupDepth: 1 });
+    return id;
+  }
+
+  it("keeps fold and stack state for live rows while collapsed groups stream past the cap", () => {
+    // Older rows ahead of the user's, so eviction reaches them first.
+    const evictedStackRow = enqueueConsoleRow({
+      level: "error",
+      summaryText: "evicted stack row",
+      stackTrace: { callFrames: [frame] },
+    });
+    for (let i = 0; i < 100; i++) enqueueLoggedEvent();
+    const expandedGroup = enqueueConsoleRow({
+      cdpType: "startGroupCollapsed",
+      summaryText: "expanded by user",
+    });
+    const expandedChild = enqueueConsoleRow({ summaryText: "inside expanded", groupDepth: 1 });
+    const foldedGroup = enqueueConsoleRow({ cdpType: "startGroup", summaryText: "folded by user" });
+    const foldedChild = enqueueConsoleRow({ summaryText: "inside folded", groupDepth: 1 });
+    const stackRow = enqueueConsoleRow({
+      level: "error",
+      summaryText: "stack row",
+      stackTrace: { callFrames: [frame] },
+    });
+    flushConsoleCaptureBuffer();
+    const userRows = new Set([expandedGroup, expandedChild, foldedGroup, foldedChild, stackRow]);
+    const showUserRows = (item: { id: number }) => userRows.has(item.id);
+    viewport.shows = (item) => showUserRows(item) || item.id === evictedStackRow;
+    renderPanel();
+
+    fireEvent.click(screen.getByRole("button", { name: "expanded by user" }));
+    fireEvent.click(screen.getByRole("button", { name: "folded by user" }));
+    const stackToggles = screen.getAllByRole("button", { name: /stack trace/i });
+    expect(stackToggles).toHaveLength(2);
+    for (const toggle of stackToggles) fireEvent.click(toggle);
+
+    const expectUserState = () => {
+      expect(
+        screen.getByRole("button", { name: "expanded by user" }).getAttribute("aria-expanded")
+      ).toBe("true");
+      expect(screen.queryByText("inside expanded")).not.toBeNull();
+      expect(
+        screen.getByRole("button", { name: "folded by user" }).getAttribute("aria-expanded")
+      ).toBe("false");
+      expect(screen.queryByText("inside folded")).toBeNull();
+      expect(
+        screen.getByRole("button", { name: /stack trace/i }).getAttribute("aria-expanded")
+      ).toBe("true");
+    };
+
+    // Four frames of a collapsed logger push the buffer past its cap.
+    let newestGroup = 0;
+    for (let frameIdx = 0; frameIdx < 4; frameIdx++) {
+      act(() => {
+        for (let i = 0; i < 50; i++) newestGroup = enqueueLoggedEvent();
+        flushConsoleCaptureBuffer();
+      });
+    }
+    const live = useConsoleCaptureStore.getState().getMessages(mockPaneId);
+    expect(live).toHaveLength(MAX_CONSOLE_ROWS);
+    expect(live[0]!.id).toBeGreaterThan(evictedStackRow);
+    expect(live.some((msg) => msg.id === expandedGroup)).toBe(true);
+
+    // The state the panel now holds covers live rows only, and keeps the
+    // user's choices for the rows that survived.
+    const liveIds = new Set(live.map((msg) => msg.id));
+    const collapsedState = vi.mocked(reconcileCollapsedGroups).mock.results.at(-1)!
+      .value as Set<number>;
+    expect(collapsedState.size).toBeLessThanOrEqual(live.length);
+    for (const id of collapsedState) expect(liveIds.has(id)).toBe(true);
+    expect(collapsedState.has(foldedGroup)).toBe(true);
+    expect(collapsedState.has(expandedGroup)).toBe(false);
+    expect(collapsedState.has(newestGroup)).toBe(true);
+    const stackState = vi.mocked(pruneToLiveRows).mock.results.at(-1)!.value as Map<
+      number,
+      unknown
+    >;
+    expect([...stackState.keys()]).toEqual([stackRow]);
+
+    // Groups arriving after eviction began still open collapsed.
+    scrollViewport((item) => item.id >= newestGroup);
+    expect(
+      screen.getByRole("button", { name: `event ${newestGroup}` }).getAttribute("aria-expanded")
+    ).toBe("false");
+    expect(screen.queryByText("event payload")).toBeNull();
+    expect(screen.queryByText("expanded by user")).toBeNull();
+
+    // Scrolled back into view, the user's rows come back as they were left.
+    scrollViewport(showUserRows);
+    expectUserState();
+
+    const search = screen.getByLabelText("Filter console messages");
+    fireEvent.change(search, { target: { value: "no such row" } });
+    expect(screen.queryByText("expanded by user")).toBeNull();
+    fireEvent.change(search, { target: { value: "" } });
+    expectUserState();
+
+    fireEvent.click(screen.getByRole("radio", { name: /^Errors/ }));
+    expect(screen.queryByText("folded by user")).toBeNull();
+    fireEvent.click(screen.getByRole("radio", { name: /^All/ }));
+    expectUserState();
   });
 });

@@ -927,6 +927,7 @@ Keybindings also see the focus and UI keys:
 | `sidebarVisible` | boolean | The worktree sidebar is currently visible. |
 | `canopyHidden` | boolean | The user hid Canopy; its panel cannot open. |
 | `dictationActive` | boolean | Voice dictation is starting, running, paused or finishing, in this view or another. |
+| `voiceSendWaiting` | boolean | A prompt sent with Stop and send (its key or the session panel's Send) is still waiting on its dictation's cleanup in this view. |
 
 The `presentation*` keys come from the project's presentation profile, which the user sets in Project settings → General → Features, and → Launcher for the two launcher keys. A repository can suggest one by committing `.daintree/presentation.json` — `{ "features": { "forgeStats": "hidden", "gitDetail": "demoted" } }` — and the suggestion applies only once the user accepts it when the project opens. Daintree reads that file and never writes it, unknown features and levels are ignored, and no plugin API changes a level.
 
@@ -1862,7 +1863,7 @@ The file holds a `palette` in the same shape as Daintree's built-in theme source
 
 Validation is strict. A missing palette field, an unknown key, a token or extension outside the registered sets, or a value that isn't a single CSS value refuses the theme rather than being dropped. A theme can't load anything: the only resource a value may carry is an embedded `url("data:image/…")` texture, like the built-in grain.
 
-**The contrast checks are a gate, not a warning.** A theme is offered only if it passes every check an imported theme is warned about: the text, accent, status, terminal, syntax and overlay contrast pairs that Daintree's built-in themes are held to. A pair the checks can't evaluate fails too. That covers a non-hex value, and a light theme that leaves the engine's `color-mix()` overlay tokens in place. Set those tokens to hex values, as the built-in light themes do. A refused theme never appears in Appearance, and the reason is written to the plugin's log in the Plugin Manager. The plugin's other contributions are unaffected.
+**The contrast checks are a gate, not a warning.** A theme is offered only if it passes every check an imported theme is warned about: the text, accent, status, activity text, terminal, syntax and overlay contrast pairs that Daintree's built-in themes are held to. A pair the checks can't evaluate fails too. That covers a non-hex value, and a light theme that leaves the engine's `color-mix()` overlay tokens in place. Set those tokens to hex values, as the built-in light themes do. A refused theme never appears in Appearance, and the reason is written to the plugin's log in the Plugin Manager. The plugin's other contributions are unaffected.
 
 A plugin theme is chosen directly. It can't be the theme for a "Match system appearance" slot. The selected theme's palette is saved with the choice, so it paints on the first frame after a restart, before any plugin has loaded. If the plugin is disabled, uninstalled or blocked, or an update stops offering the theme, Daintree switches to the user's preferred built-in theme of the same polarity and says so.
 

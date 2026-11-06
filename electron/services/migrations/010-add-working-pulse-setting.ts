@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../../utils/storeValues.js";
 import type { Migration } from "../StoreMigrations.js";
 
 export const migration010: Migration = {
@@ -17,7 +18,7 @@ export const migration010: Migration = {
     }
 
     console.log("[Migration 010] Adding workingPulseEnabled and workingPulseSoundFile");
-    store.set("notificationSettings", {
+    setRawStoreValue(store, "notificationSettings", {
       ...settings,
       workingPulseEnabled: false,
       workingPulseSoundFile: "pulse.wav",

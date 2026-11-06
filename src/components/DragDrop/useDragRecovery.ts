@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
+import { dispatchDragCancelEscape } from "@/lib/dragCancelEscape";
 
 /**
  * Grace period after the pointer leaves the host document before a live mouse
@@ -71,15 +72,10 @@ export function useDragRecovery(): {
   useEffect(() => {
     // Leaves liveDragRef set: a successful cancel lands in finishDrag via
     // onDragCancel, and an unheard Escape must not block a later retry.
-    // Dispatched on body, not document: capture-phase key handlers cast
-    // event.target to HTMLElement (`.closest`), which a Document target
-    // would break. It still bubbles to dnd-kit's document-level listener.
     const recover = () => {
       clearGraceTimer();
       if (liveDragRef.current !== "mouse") return;
-      document.body.dispatchEvent(
-        new KeyboardEvent("keydown", { code: "Escape", bubbles: true, cancelable: true })
-      );
+      dispatchDragCancelEscape();
     };
 
     const handleMouseOut = (event: MouseEvent) => {

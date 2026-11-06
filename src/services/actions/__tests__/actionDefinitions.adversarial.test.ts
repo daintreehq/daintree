@@ -86,6 +86,7 @@ const mocks = vi.hoisted(() => {
   };
 
   const terminalInstanceService = {
+    get: vi.fn(() => undefined),
     wake: vi.fn(),
     resetRenderer: vi.fn(),
     destroy: vi.fn(),
@@ -372,9 +373,7 @@ beforeEach(() => {
       initialIssue: null,
       initialPR: null,
       initialRecipeId: null,
-      initialBranchInput: null,
-      initialAgentId: null,
-      initialPrompt: null,
+      restoreDraft: null,
     },
     crossDiffDialog: { isOpen: false, initialWorktreeId: null },
     _policyGeneration: 0,
@@ -475,7 +474,7 @@ describe("terminal action hardening", () => {
     // The whole call list, not `toHaveBeenCalledWith` — that matcher passes on
     // a repeated matching call, which is the very thing this test is named for.
     expect(mocks.terminalClient.submit.mock.calls).toEqual([
-      ["term-ok", "git status", submissionToken],
+      ["term-ok", "git status", submissionToken, undefined, "no-choice-dialog"],
     ]);
     expect(result).toMatchObject({
       sent: true,
@@ -506,8 +505,8 @@ describe("terminal action hardening", () => {
     // two submissions and must stay separately answerable.
     expect(second.submissionToken).not.toBe(first.submissionToken);
     expect(mocks.terminalClient.submit.mock.calls).toEqual([
-      ["term-ok", "git status", first.submissionToken],
-      ["term-ok", "git status", second.submissionToken],
+      ["term-ok", "git status", first.submissionToken, undefined, "no-choice-dialog"],
+      ["term-ok", "git status", second.submissionToken, undefined, "no-choice-dialog"],
     ]);
   });
 
@@ -531,7 +530,13 @@ describe("terminal action hardening", () => {
       {} as never
     )) as { command: string; submissionToken: string };
 
-    expect(mocks.terminalClient.submit).toHaveBeenCalledWith("term-ok", huge, expect.any(String));
+    expect(mocks.terminalClient.submit).toHaveBeenCalledWith(
+      "term-ok",
+      huge,
+      expect.any(String),
+      undefined,
+      "no-choice-dialog"
+    );
     expect(result.submissionToken).toEqual(expect.any(String));
     expect(result.command.length).toBeLessThanOrEqual(1024);
     expect(JSON.stringify(result).length).toBeLessThan(50 * 1024);
@@ -1401,6 +1406,47 @@ describe("worktree action hardening", () => {
 
     expect(onInject).not.toHaveBeenCalled();
   });
+
+  describe("worktree.inject into a locked pane (#15644)", () => {
+    function lockPane(isInputLocked: boolean): void {
+      usePanelStore.setState({
+        panelsById: {
+          "term-1": { id: "term-1", kind: "terminal", isInputLocked } as never,
+        },
+      });
+    }
+
+    it("refuses an agent before anything is generated", async () => {
+      lockPane(true);
+      const onInject = vi.fn();
+      const inject = buildRegistry(registerWorktreeActions, { onInject }).get("worktree.inject")!();
+
+      const attempt = inject.run(undefined, {
+        focusedTerminalId: "term-1",
+        activeWorktreeId: "wt-1",
+        dispatchSource: "agent",
+      } as never);
+
+      await expect(attempt).rejects.toBeInstanceOf(UnactionableTargetError);
+      await expect(attempt).rejects.toThrow(/input is locked/);
+      expect(onInject).not.toHaveBeenCalled();
+    });
+
+    it("hands a person's request on a locked pane to the injection, with the pane it checked", async () => {
+      // The hook refuses it there, on the surface a person sees.
+      lockPane(true);
+      const onInject = vi.fn();
+      const inject = buildRegistry(registerWorktreeActions, { onInject }).get("worktree.inject")!();
+
+      await inject.run(undefined, {
+        focusedTerminalId: "term-1",
+        activeWorktreeId: "wt-1",
+        dispatchSource: "user",
+      } as never);
+
+      expect(onInject).toHaveBeenCalledWith("wt-1", "term-1");
+    });
+  });
 });
 
 describe("worktree cycling respects sidebar order", () => {
@@ -1698,10 +1744,13 @@ describe("terminal.sendCommand handback (#12488)", () => {
       expect.stringMatching(/^Fix the bug\n\n/),
       stringField(first, "submissionToken"),
       code,
+      "no-choice-dialog",
     ]);
-    expect(String(calls[0]?.[1]).endsWith(`DAINTREE-DONE-${code}: <summary> END-${code}`)).toBe(
-      true
-    );
+    // Both markers are offered, needs-you last (#16190).
+    expect(String(calls[0]?.[1])).toContain(`DAINTREE-DONE-${code}: <summary> END-${code}`);
+    expect(
+      String(calls[0]?.[1]).endsWith(`DAINTREE-NEEDS-YOU-${code}: <summary> END-${code}`)
+    ).toBe(true);
     // A second send mints its own code.
     expect(calls[1]?.[3]).not.toBe(code);
     // The caller never sees the code or the instruction.
@@ -1737,7 +1786,7 @@ describe("terminal.sendCommand handback (#12488)", () => {
     );
 
     expect(mocks.terminalClient.submit.mock.calls).toEqual([
-      ["agent", "status", stringField(result, "submissionToken")],
+      ["agent", "status", stringField(result, "submissionToken"), undefined, "no-choice-dialog"],
     ]);
   });
 });

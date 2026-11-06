@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * Subscribe/unsubscribe through the real preload bridge. Every renderer event
@@ -53,6 +53,8 @@ interface PluginBridge {
 
 interface AppBridge {
   isViewCached: () => boolean;
+  onViewCached: (cb: () => void) => () => void;
+  onViewCachedFlush: (cb: () => unknown) => () => void;
   onPanelGridConfigChanged: (cb: (payload: unknown) => void) => () => void;
 }
 
@@ -65,12 +67,30 @@ interface TerminalConfigBridge {
 }
 
 const originalWindow = (globalThis as { window?: unknown }).window;
+// The renderer globals the cached-edge idle GC reaches for (#15680). Idle
+// callbacks run only when a test says so, standing in for an idle period or a
+// thaw running whatever is still queued.
+const idleGlobals = ["document", "requestIdleCallback", "cancelIdleCallback", "gc"] as const;
+const originalIdleGlobals = idleGlobals.map(
+  (key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const
+);
+const fakeDocument = new EventTarget();
+const fakeGc = vi.fn();
+const idleCallbacks = new Map<number, () => void>();
+let nextIdleHandle = 1;
+const runIdleCallbacks = () => {
+  const due = [...idleCallbacks.values()];
+  idleCallbacks.clear();
+  for (const callback of due) callback();
+};
 let terminal: TerminalBridge;
 let plugin: PluginBridge;
 let projectPresentation: ProjectPresentationBridge;
+let schedules: ProjectPresentationBridge;
 let app: AppBridge;
 let terminalConfig: TerminalConfigBridge;
 let agentSettings: { onChanged: (cb: (settings: unknown) => void) => () => void };
+let keybinding: { onOverridesChanged: (cb: (overrides: unknown) => void) => () => void };
 
 beforeAll(async () => {
   const fakeWindow = {
@@ -80,6 +100,16 @@ beforeAll(async () => {
   } as Record<string, unknown>;
   fakeWindow.top = fakeWindow;
   (globalThis as { window?: unknown }).window = fakeWindow;
+  Object.assign(globalThis, {
+    document: fakeDocument,
+    requestIdleCallback: (callback: () => void) => {
+      const handle = nextIdleHandle++;
+      idleCallbacks.set(handle, callback);
+      return handle;
+    },
+    cancelIdleCallback: (handle: number) => idleCallbacks.delete(handle),
+    gc: fakeGc,
+  });
 
   const bundle = await build({
     entryPoints: [PRELOAD_CTS],
@@ -105,8 +135,10 @@ beforeAll(async () => {
         terminal?: TerminalBridge;
         plugin?: PluginBridge;
         projectPresentation?: ProjectPresentationBridge;
+        schedules?: ProjectPresentationBridge;
         terminalConfig?: TerminalConfigBridge;
         agentSettings?: typeof agentSettings;
+        keybinding?: typeof keybinding;
         app?: AppBridge;
       }
     | undefined;
@@ -114,13 +146,19 @@ beforeAll(async () => {
   terminal = api!.terminal!;
   plugin = api!.plugin!;
   projectPresentation = api!.projectPresentation!;
+  schedules = api!.schedules!;
   app = api!.app!;
   terminalConfig = api!.terminalConfig!;
   agentSettings = api!.agentSettings!;
+  keybinding = api!.keybinding!;
 });
 
 afterAll(() => {
   (globalThis as { window?: unknown }).window = originalWindow;
+  for (const [key, descriptor] of originalIdleGlobals) {
+    if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+    else delete (globalThis as Record<string, unknown>)[key];
+  }
 });
 
 describe("preload event subscriptions", () => {
@@ -147,10 +185,11 @@ describe("preload event subscriptions", () => {
     for (const channel of channels) expect(ipcRenderer.listenerCount(channel)).toBe(0);
   });
 
-  it("hands on each saved agent settings and grid change until disposed (#14700)", () => {
+  it("hands on each saved agent settings, grid and shortcut change until disposed (#14700, #15579)", () => {
     const pushes: Array<[string, (cb: (payload: unknown) => void) => () => void]> = [
       ["agent-settings:changed", agentSettings.onChanged],
       ["app:panel-grid-config-changed", app.onPanelGridConfigChanged],
+      ["keybinding:overrides-changed", keybinding.onOverridesChanged],
     ];
     for (const [channel, subscribe] of pushes) {
       const received: unknown[] = [];
@@ -339,8 +378,20 @@ describe("preload event subscriptions", () => {
     expect(ipcRenderer.listenerCount("project-presentation:changed")).toBe(0);
   });
 
+  it("delivers each schedules:changed push once and detaches on dispose", () => {
+    const received: unknown[] = [];
+    const dispose = schedules.onChanged((payload) => received.push(payload));
+    ipcRenderer.emit("schedules:changed", {}, { projectId: "p1", schedules: [], revision: 1 });
+    expect(received).toEqual([{ projectId: "p1", schedules: [], revision: 1 }]);
+
+    dispose();
+    ipcRenderer.emit("schedules:changed", {}, { projectId: "p1", schedules: [], revision: 2 });
+    expect(received).toHaveLength(1);
+    expect(ipcRenderer.listenerCount("schedules:changed")).toBe(0);
+  });
+
   it("drops Blink's memory cache once a view has stayed cached for a moment", () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     try {
       fakeElectron.webFrame.clearCache.mockClear();
 
@@ -360,7 +411,7 @@ describe("preload event subscriptions", () => {
   });
 
   it("never clears the cache of a view that became active again first", () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     try {
       fakeElectron.webFrame.clearCache.mockClear();
 
@@ -383,8 +434,239 @@ describe("preload event subscriptions", () => {
     }
   });
 
+  describe("cached-edge idle GC (#15680)", () => {
+    const freeze = () => fakeDocument.dispatchEvent(new Event("freeze"));
+    // Faking every timer would swap out the idle-callback stand-in too.
+    const fakeTimeoutsOnly = () => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+    beforeEach(() => {
+      fakeGc.mockClear();
+      fakeElectron.webFrame.clearCache.mockClear();
+      idleCallbacks.clear();
+    });
+    afterEach(() => {
+      ipcRenderer.emit("app:view-warm-activated", {});
+    });
+
+    it("collects in the first idle period while the view is still cached", () => {
+      ipcRenderer.emit("app:view-cached", {});
+      expect(fakeGc).not.toHaveBeenCalled();
+
+      runIdleCallbacks();
+      expect(fakeGc).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops a pending collection once the view is active again", () => {
+      for (const channel of ["app:view-warm-activated", "app:view-revealed"]) {
+        ipcRenderer.emit("app:view-cached", {});
+        expect(idleCallbacks.size).toBe(1);
+        ipcRenderer.emit(channel, {});
+        expect(idleCallbacks.size).toBe(0);
+      }
+      runIdleCallbacks();
+      expect(fakeGc).not.toHaveBeenCalled();
+    });
+
+    it("checks again when it runs, so one already dispatched as the view returns collects nothing", () => {
+      ipcRenderer.emit("app:view-cached", {});
+      const [dispatched] = [...idleCallbacks.values()];
+      ipcRenderer.emit("app:view-warm-activated", {});
+
+      dispatched!();
+      expect(fakeGc).not.toHaveBeenCalled();
+    });
+
+    it("flushes, answers main and reaches the view's cached listeners even when scheduling the reclaim throws", async () => {
+      ipcRenderer.send.mockClear();
+      const flush = vi.fn();
+      const offFlush = app.onViewCachedFlush(flush);
+      const onCached = vi.fn();
+      const offCached = app.onViewCached(onCached);
+      const globals = globalThis as Record<string, unknown>;
+      const schedule = globals.requestIdleCallback;
+      globals.requestIdleCallback = () => {
+        throw new Error("renderer tearing down");
+      };
+      try {
+        ipcRenderer.emit("app:view-cached", {}, { flushId: "reclaim-threw" });
+        expect(flush).toHaveBeenCalledTimes(1);
+        expect(onCached).toHaveBeenCalledTimes(1);
+        await vi.waitFor(() =>
+          expect(ipcRenderer.send).toHaveBeenCalledWith("app:view-cached-flushed", "reclaim-threw")
+        );
+      } finally {
+        globals.requestIdleCallback = schedule;
+        offFlush();
+        offCached();
+      }
+    });
+
+    it("keeps one pending collection through a cache storm", () => {
+      ipcRenderer.emit("app:view-cached", {});
+      ipcRenderer.emit("app:view-cached", {});
+      expect(idleCallbacks.size).toBe(1);
+
+      runIdleCallbacks();
+      expect(fakeGc).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops the collection and the cache clear when a freeze lands, so the thaw that activation causes runs neither", () => {
+      fakeTimeoutsOnly();
+      try {
+        ipcRenderer.emit("app:view-cached", {});
+        expect(idleCallbacks.size).toBe(1);
+
+        freeze();
+        // A thaw runs whatever is still queued before warm-activated is handled.
+        runIdleCallbacks();
+        vi.advanceTimersByTime(10_000);
+        expect(fakeGc).not.toHaveBeenCalled();
+        expect(fakeElectron.webFrame.clearCache).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("schedules nothing for a cached signal handled after the freeze, until the view has been active again", async () => {
+      fakeTimeoutsOnly();
+      ipcRenderer.send.mockClear();
+      const flush = vi.fn();
+      const offFlush = app.onViewCachedFlush(flush);
+      try {
+        // IPC still runs in a frozen renderer, so the signal can trail the freeze.
+        freeze();
+        ipcRenderer.emit("app:view-cached", {}, { flushId: "after-freeze" });
+        expect(app.isViewCached()).toBe(true);
+        expect(flush).toHaveBeenCalledTimes(1);
+        expect(idleCallbacks.size).toBe(0);
+        // A thaw that isn't an activation (efficiency exit, a dispatch) keeps it suppressed.
+        fakeDocument.dispatchEvent(new Event("resume"));
+        ipcRenderer.emit("app:view-cached", {});
+        expect(idleCallbacks.size).toBe(0);
+        vi.advanceTimersByTime(10_000);
+        expect(fakeElectron.webFrame.clearCache).not.toHaveBeenCalled();
+        await vi.waitFor(() =>
+          expect(ipcRenderer.send).toHaveBeenCalledWith("app:view-cached-flushed", "after-freeze")
+        );
+
+        ipcRenderer.emit("app:view-warm-activated", {});
+        ipcRenderer.emit("app:view-cached", {});
+        runIdleCallbacks();
+        expect(fakeGc).toHaveBeenCalledTimes(1);
+        vi.advanceTimersByTime(2_000);
+        expect(fakeElectron.webFrame.clearCache).toHaveBeenCalledTimes(1);
+      } finally {
+        offFlush();
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe("cached-edge flush (#15633)", () => {
+    const sentOn = (channel: string) =>
+      ipcRenderer.send.mock.calls.filter(([sent]) => sent === channel).map(([, arg]) => arg);
+    const flushed = () => sentOn("app:view-cached-flushed");
+
+    beforeEach(() => ipcRenderer.send.mockClear());
+
+    it("tells main when the first flush is registered and when the last one goes", () => {
+      const offA = app.onViewCachedFlush(() => {});
+      const offB = app.onViewCachedFlush(() => {});
+      expect(sentOn("app:view-cached-flush-armed")).toEqual([true]);
+
+      offA();
+      offA();
+      expect(sentOn("app:view-cached-flush-armed")).toEqual([true]);
+      offB();
+      expect(sentOn("app:view-cached-flush-armed")).toEqual([true, false]);
+    });
+
+    it("keeps the other registration when the same function is registered twice", async () => {
+      const flush = vi.fn();
+      const offFirst = app.onViewCachedFlush(flush);
+      const offSecond = app.onViewCachedFlush(flush);
+      offFirst();
+      expect(sentOn("app:view-cached-flush-armed")).toEqual([true]);
+
+      ipcRenderer.emit("app:view-cached", {}, { flushId: "dup" });
+      expect(flush).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(flushed()).toEqual(["dup"]));
+
+      offSecond();
+      expect(sentOn("app:view-cached-flush-armed")).toEqual([true, false]);
+      ipcRenderer.emit("app:view-warm-activated", {});
+    });
+
+    it("answers main's flush id only once every flush has settled", async () => {
+      let finishSlow!: () => void;
+      const slow = vi.fn(() => new Promise<void>((resolve) => (finishSlow = resolve)));
+      const failing = vi.fn(() => Promise.reject(new Error("save failed")));
+      const throwing = vi.fn(() => {
+        throw new Error("boom");
+      });
+      const offs = [slow, failing, throwing].map((flush) => app.onViewCachedFlush(flush));
+      try {
+        ipcRenderer.emit("app:view-cached", {}, { flushId: "edge-1" });
+        expect(slow).toHaveBeenCalledTimes(1);
+        expect(failing).toHaveBeenCalledTimes(1);
+        expect(throwing).toHaveBeenCalledTimes(1);
+
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(flushed()).toEqual([]);
+
+        finishSlow();
+        await vi.waitFor(() => expect(flushed()).toEqual(["edge-1"]));
+      } finally {
+        for (const off of offs) off();
+        ipcRenderer.emit("app:view-warm-activated", {});
+      }
+    });
+
+    it("answers at once with nothing registered, and keeps a started flush after unsubscribing", async () => {
+      ipcRenderer.emit("app:view-cached", {}, { flushId: "empty" });
+      await vi.waitFor(() => expect(flushed()).toEqual(["empty"]));
+
+      let finish!: () => void;
+      const off = app.onViewCachedFlush(() => new Promise<void>((resolve) => (finish = resolve)));
+      ipcRenderer.emit("app:view-cached", {}, { flushId: "held" });
+      off();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(flushed()).toEqual(["empty"]);
+
+      finish();
+      await vi.waitFor(() => expect(flushed()).toEqual(["empty", "held"]));
+      ipcRenderer.emit("app:view-warm-activated", {});
+    });
+
+    it("still flushes on an edge main isn't holding, without answering it", async () => {
+      const unhandled = vi.fn();
+      process.on("unhandledRejection", unhandled);
+      const flush = vi.fn();
+      const offs = [
+        app.onViewCachedFlush(flush),
+        app.onViewCachedFlush(() => Promise.reject(new Error("save failed"))),
+        app.onViewCachedFlush(() => {
+          throw new Error("boom");
+        }),
+      ];
+      try {
+        ipcRenderer.emit("app:view-cached", {});
+        for (const off of offs) off();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      } finally {
+        process.off("unhandledRejection", unhandled);
+      }
+
+      expect(unhandled).not.toHaveBeenCalled();
+      expect(flush).toHaveBeenCalledTimes(1);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(flushed()).toEqual([]);
+      ipcRenderer.emit("app:view-warm-activated", {});
+    });
+  });
+
   it("still latches the cached state when clearing the cache throws", () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     try {
       fakeElectron.webFrame.clearCache.mockImplementationOnce(() => {
         throw new Error("renderer tearing down");

@@ -5,10 +5,10 @@ import { registerFixtureProject, registerPickerSession } from "../helpers/picker
 import { selectInPreview, selectedElement } from "../helpers/previewDriver";
 
 /**
- * The Element Picker on a Vue 3 + Vite app. Picking works on any page; tracing
- * waits on #13888, which adds Vue's extractor to the core catalog, and then
- * reaches a file only: a stock Vue build names each component's file and
- * nothing finer.
+ * The Element Picker on a Vue 3 + Vite app. A stock Vue build names each
+ * component's file (`type.__file`) and nothing finer, so a pick traces to a
+ * file only: a line needs `vite-plugin-vue-inspector`, which this site leaves
+ * out.
  */
 const projectDir = registerFixtureProject(() => createSiteProject(VUE_VITE));
 
@@ -25,7 +25,7 @@ test.describe.serial("Element Picker on a Vue + Vite dev server", () => {
     await selectInPreview(session(), "h1", "h1");
   });
 
-  test.fixme("a heading traces to its component's file, with no line (#13888)", async () => {
+  test("a heading traces to its component's file, with no line", async () => {
     const ctx = session();
     await selectInPreview(ctx, "h1", APP_FILE);
     await expect(selectedElement(ctx.window)).not.toContainText(`${APP_FILE}:`);

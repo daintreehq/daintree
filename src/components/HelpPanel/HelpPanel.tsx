@@ -87,6 +87,11 @@ import { CLOSE_CONFIRM_AGENT_STATES } from "@shared/types/agent";
 import { isPtyPanel } from "@shared/types/panel";
 import type { PinnedActionContextSnapshot } from "@shared/types/ipc/help";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import {
+  useGlobalAssistantIdentity,
+  useProjectAssistantIdentity,
+} from "@/store/assistantIdentityStore";
+import { displayIdentityName } from "@shared/utils/displayIdentity";
 
 // Loaded on first open: the picker reads the panel store and the agents'
 // history, none of which the panel needs until someone asks for it.
@@ -568,7 +573,9 @@ export function HelpPanel({
   const [autoResumeAgentId, setAutoResumeAgentId] = useState<string | null>(null);
   const coldResumeArmedRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!activeWorkspaceId || terminalId || !isReadyToLaunch) return;
+    // A lane resumes when it's the one on screen. Global can be on screen as
+    // a cold view opens, brought by the project switch that opened it (#16099).
+    if (!activeWorkspaceId || terminalId || !isReadyToLaunch || globalSelected) return;
     if (coldResumeArmedRef.current === activeWorkspaceId) return;
     const peek = window.electron.help.peekPendingHibernation?.(activeWorkspaceId, activeSlot);
     if (!peek) return;
@@ -587,7 +594,7 @@ export function HelpPanel({
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspaceId, activeSlot, terminalId, isReadyToLaunch, setOpen]);
+  }, [activeWorkspaceId, activeSlot, terminalId, isReadyToLaunch, globalSelected, setOpen]);
 
   // Fire the captured resume once the panel has opened. The `!terminalId` guard
   // covers two cases: a DevTools reload that still holds a live session, and the
@@ -601,14 +608,14 @@ export function HelpPanel({
   // or a stale peek), the controller aborts instead of fresh-launching a blank
   // session that would displace the resumed backend (#10815).
   useEffect(() => {
-    if (!autoResumeAgentId || !isOpen) return;
+    if (!autoResumeAgentId || !isOpen || globalSelected) return;
     if (terminalId) {
       setAutoResumeAgentId(null);
       return;
     }
     controller.launch({ agentId: autoResumeAgentId, replaceExisting: true, resumeOnly: true });
     setAutoResumeAgentId(null);
-  }, [autoResumeAgentId, isOpen, terminalId, controller]);
+  }, [autoResumeAgentId, isOpen, globalSelected, terminalId, controller]);
 
   // Lifecycle is NOT driven from here (#12108). Every open lane — the active
   // one included — is armed by its own `HelpSessionLaneRuntime` below.
@@ -835,8 +842,8 @@ export function HelpPanel({
   const restartDescription = usePastSessionsNote(
     pendingRestartSlot !== null,
     pendingRestartPaused && !pendingRestartPaused.live
-      ? "This tab starts a new conversation"
-      : "The agent stops and this tab starts a new conversation",
+      ? "This session starts a new conversation"
+      : "The agent stops and this session starts a new conversation",
     pendingRestartPaused?.agentId ?? pendingRestartLaneAgentId
   );
   const endSessionDescription = usePastSessionsNote(
@@ -852,7 +859,7 @@ export function HelpPanel({
   // The conversation being left is the running agent's, not the pick's.
   const agentSwitchDescription = usePastSessionsNote(
     showAgentSwitchConfirm,
-    "The current agent stops and the new one starts in this tab",
+    "The current agent stops and the new one starts in this session",
     agentId
   );
 
@@ -871,9 +878,12 @@ export function HelpPanel({
   }, []);
   const projectActivity = useMemo(() => summarizeLaneActivity(sessionTabs), [sessionTabs]);
   const globalAgentState = useGlobalAssistantActivity(isOpen && isVisible && !globalSelected);
+  const projectIdentity = useProjectAssistantIdentity(activeWorkspaceId);
+  const globalIdentity = useGlobalAssistantIdentity();
+  const globalAssistantName = displayIdentityName(globalIdentity, "Global assistant");
   const globalActivity = useMemo(
-    () => summarizeLaneActivity([{ label: "Global assistant", agentState: globalAgentState }]),
-    [globalAgentState]
+    () => summarizeLaneActivity([{ label: globalAssistantName, agentState: globalAgentState }]),
+    [globalAssistantName, globalAgentState]
   );
   // The header slot the global pane draws its agent and menu into.
   const [globalControlsHost, setGlobalControlsHost] = useState<HTMLDivElement | null>(null);
@@ -1027,6 +1037,28 @@ export function HelpPanel({
       replaceExisting: true,
     });
   }, [activeWorkspaceId, handleOpenParallelSession, launchableAgentId]);
+
+  // A lane with nothing in it yet is where "New session" starts, rather than opening
+  // a second lane and leaving this one empty behind it. A captured conversation counts
+  // as something before its peek has resolved, and so does a version gate, which sits
+  // at `idle` while it blocks.
+  const activeLaneCaptured = useHelpPanelStore((s) =>
+    activeWorkspaceId
+      ? assistantSlotKey(activeWorkspaceId, activeSlot) in s.hibernateSessions
+      : false
+  );
+  const activeLaneEmpty =
+    !terminalId &&
+    !pausedLane &&
+    !resumableAgentId &&
+    !activeLaneCaptured &&
+    session.phase === "idle" &&
+    !session.assistantVersionTooOld &&
+    !session.isCheckingVersion;
+  const handleStripNewSession = useCallback(() => {
+    if (activeLaneEmpty) handleStartAssistant();
+    else handleNewSession();
+  }, [activeLaneEmpty, handleStartAssistant, handleNewSession]);
 
   // A starter never submits into a live session: if one has appeared since the
   // card rendered, the prompt lands in its input as a draft for the user to send.
@@ -1182,6 +1214,8 @@ export function HelpPanel({
         globalControlsRef={setGlobalControlsHost}
         projectActivity={projectActivity}
         globalActivity={globalActivity}
+        projectIdentity={projectIdentity}
+        globalIdentity={globalIdentity}
         canRestartConversation={
           !globalSelected && (Boolean(terminalId && agentId) || pausedLane !== null)
         }
@@ -1212,16 +1246,14 @@ export function HelpPanel({
           onSelect={handleSelectSlot}
           onClose={handleCloseSlot}
           onRestart={handleRestartSlot}
-          // The strip is the only home for this action now. It used to live in the
-          // header's overflow menu as well, which put the one findable route to a
-          // second session two clicks behind an ellipsis.
-          canOpenSession={canOpenParallelSession}
-          onOpenSession={handleNewSession}
+          // The strip's menu is the one home for a new session. An empty lane starts
+          // in place, so it needs an agent to start rather than a free slot.
+          canOpenSession={activeLaneEmpty ? Boolean(launchableAgentId) : canOpenParallelSession}
+          onOpenSession={handleStripNewSession}
           newSessionAgentIds={supportedInstalledAgentIds}
           canOpenSessionWithAgent={canStartSessionWithAgent}
           onOpenSessionWithAgent={handleOpenSessionWithAgent}
           idBase={tabIdBase}
-          panelId={sessionBodyId}
         />
       )}
 
@@ -1244,20 +1276,18 @@ export function HelpPanel({
         />
       ))}
 
-      {/* Content — the strip's `tabpanel`. Named by whichever tab is selected, so the
-          relationship the tablist claims through `aria-controls` actually resolves.
+      {/* Content — a region named by the session the strip's picker shows, or by the
+          global run's name.
 
-          No `tabIndex` of its own. The pattern asks for one only on a panel with nothing
-          focusable inside it, and every state this body settles into has something: the
-          terminal's textarea, the empty state's starter prompts, a banner's recovery
-          action. The launching skeleton is the one exception, and giving the body a
+          No `tabIndex` of its own: every state this body settles into has something
+          focusable (the terminal's textarea, the empty state's starter prompts, a
+          banner's recovery action). The launching skeleton is the one exception, and a
           permanent tab stop to cover a state that lasts under a second would cost every
           keyboard user an extra stop on the way past the terminal, forever. */}
       <div
         id={sessionBodyId}
-        // The strip's panel only while the strip is there; the global run has no tab.
-        role={globalSelected ? "region" : "tabpanel"}
-        aria-label={globalSelected ? "Global assistant" : undefined}
+        role="region"
+        aria-label={globalSelected ? globalAssistantName : undefined}
         aria-labelledby={globalSelected ? undefined : helpSessionTabId(tabIdBase, activeSlot)}
         className="flex-1 flex flex-col min-h-0 relative"
       >

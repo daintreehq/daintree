@@ -152,6 +152,13 @@ function confirmManifestEntry(overrides: Partial<ActionManifestEntry> = {}): Act
   };
 }
 
+/** What the default git preview fixture shows: `main` at one commit, to `origin/main`. */
+const MAIN_PUSH_REVIEW = {
+  branch: "main",
+  headOid: "a".repeat(40),
+  destination: { remote: "origin", branch: "main" },
+};
+
 describe("useMcpBridge", () => {
   let manifestHandler: ((requestId: string) => void) | undefined;
   let dispatchHandler:
@@ -170,6 +177,7 @@ describe("useMcpBridge", () => {
         authorization?: "tier" | "user" | "session-grant" | "native-grant" | "skip-preference";
         requester?:
           { kind: "pane"; terminalId: string } | { kind: "assistant"; helpSessionId: string };
+        dispatchDeadlineAt?: number;
       }) => void | Promise<void>)
     | undefined;
   let cleanupManifest: ReturnType<typeof vi.fn>;
@@ -193,6 +201,7 @@ describe("useMcpBridge", () => {
       destination: { remote: "origin", branch: "main" },
       pullSource: { remote: "origin", branch: "main" },
       commits: [],
+      pushReview: MAIN_PUSH_REVIEW,
     });
     __resetMcpConfirmStoreForTesting();
     manifestHandler = undefined;
@@ -278,7 +287,7 @@ describe("useMcpBridge", () => {
     expect(mocks.dispatch).toHaveBeenCalledWith(
       "actions.list",
       { limit: 10 },
-      { source: "agent", confirmed: undefined }
+      { source: "agent", confirmed: undefined, dispatchDeadlineAt: expect.any(Number) }
     );
     expect(sendDispatchActionResponse).toHaveBeenCalledWith({
       requestId: "req-safe",
@@ -323,6 +332,7 @@ describe("useMcpBridge", () => {
       { query: "x" },
       {
         source: "agent",
+        dispatchDeadlineAt: expect.any(Number),
         confirmed: undefined,
         contextOverride: expect.objectContaining({
           activeWorktreeId: "wt-new",
@@ -391,7 +401,12 @@ describe("useMcpBridge", () => {
     expect(mocks.dispatch).toHaveBeenCalledWith(
       "terminal.inject",
       { text: "ls" },
-      { source: "agent", confirmed: undefined, contextOverride: boundContext }
+      {
+        source: "agent",
+        confirmed: undefined,
+        contextOverride: boundContext,
+        dispatchDeadlineAt: expect.any(Number),
+      }
     );
   });
 
@@ -423,6 +438,7 @@ describe("useMcpBridge", () => {
       { query: "x" },
       {
         source: "agent",
+        dispatchDeadlineAt: expect.any(Number),
         confirmed: undefined,
         contextOverride: {
           projectId: "p1",
@@ -458,7 +474,12 @@ describe("useMcpBridge", () => {
     expect(mocks.dispatch).toHaveBeenCalledWith(
       "files.search",
       { query: "x" },
-      { source: "agent", confirmed: undefined, contextOverride: snapshot }
+      {
+        source: "agent",
+        confirmed: undefined,
+        contextOverride: snapshot,
+        dispatchDeadlineAt: expect.any(Number),
+      }
     );
   });
 
@@ -477,7 +498,12 @@ describe("useMcpBridge", () => {
     expect(mocks.dispatch).toHaveBeenCalledWith(
       "actions.list",
       { limit: 3 },
-      { source: "agent", confirmed: undefined, contextOverride: undefined }
+      {
+        source: "agent",
+        confirmed: undefined,
+        contextOverride: undefined,
+        dispatchDeadlineAt: expect.any(Number),
+      }
     );
   });
 
@@ -533,7 +559,7 @@ describe("useMcpBridge", () => {
     expect(mocks.dispatch).toHaveBeenCalledWith(
       "worktree.delete",
       { worktreeId: "wt-1" },
-      { source: "agent", confirmed: true }
+      { source: "agent", confirmed: true, dispatchDeadlineAt: expect.any(Number) }
     );
     expect(sendDispatchActionResponse).toHaveBeenCalledWith({
       requestId: "req-confirm",
@@ -613,7 +639,12 @@ describe("useMcpBridge", () => {
     expect(mocks.dispatch).toHaveBeenCalledWith(
       "worktree.delete",
       { worktreeId: "wt-1" },
-      { source: "agent", confirmed: true, contextOverride: boundContext }
+      {
+        source: "agent",
+        confirmed: true,
+        contextOverride: boundContext,
+        dispatchDeadlineAt: expect.any(Number),
+      }
     );
   });
 
@@ -1010,7 +1041,7 @@ describe("useMcpBridge", () => {
     expect(mocks.dispatch).toHaveBeenCalledWith(
       "worktree.delete",
       { worktreeId: "wt-4" },
-      { source: "agent", confirmed: true }
+      { source: "agent", confirmed: true, dispatchDeadlineAt: expect.any(Number) }
     );
     expect(sendDispatchActionResponse).toHaveBeenCalledWith({
       requestId: "req-pre-confirmed",
@@ -1075,7 +1106,7 @@ describe("useMcpBridge", () => {
         expect(mocks.dispatch).toHaveBeenCalledWith(
           "agent.launch",
           { agentId: "claude", spawnedBy: expectedSource, focusPolicy: "preserve" },
-          { source: "agent", confirmed: undefined }
+          { source: "agent", confirmed: undefined, dispatchDeadlineAt: expect.any(Number) }
         );
       }
     );
@@ -1099,7 +1130,7 @@ describe("useMcpBridge", () => {
       expect(mocks.dispatch).toHaveBeenCalledWith(
         "agent.launch",
         { agentId: "claude", spawnedBy: "mcp", focusPolicy: "preserve" },
-        { source: "agent", confirmed: undefined }
+        { source: "agent", confirmed: undefined, dispatchDeadlineAt: expect.any(Number) }
       );
     });
 
@@ -1129,7 +1160,7 @@ describe("useMcpBridge", () => {
       expect(mocks.dispatch).toHaveBeenCalledWith(
         "recipe.run",
         { recipeId: "recipe-1", spawnedBy: "assistant", focusPolicy: "preserve" },
-        { source: "agent", confirmed: true }
+        { source: "agent", confirmed: true, dispatchDeadlineAt: expect.any(Number) }
       );
     });
 
@@ -1163,7 +1194,7 @@ describe("useMcpBridge", () => {
       expect(mocks.dispatch).toHaveBeenCalledWith(
         "actions.list",
         { query: "worktree" },
-        { source: "agent", confirmed: undefined }
+        { source: "agent", confirmed: undefined, dispatchDeadlineAt: expect.any(Number) }
       );
     });
   });
@@ -1186,7 +1217,7 @@ describe("useMcpBridge", () => {
       expect(mocks.dispatch).toHaveBeenCalledWith(
         "workflow.startWorkOnIssue",
         { issueNumber: 6959, agentId: "claude", spawnedBy: "mcp", focusPolicy: "preserve" },
-        { source: "agent", confirmed: undefined }
+        { source: "agent", confirmed: undefined, dispatchDeadlineAt: expect.any(Number) }
       );
     });
 
@@ -1210,13 +1241,13 @@ describe("useMcpBridge", () => {
         1,
         "recipe.run",
         { recipeId: "recipe-1", spawnedBy: "mcp", focusPolicy: "preserve" },
-        { source: "agent", confirmed: undefined }
+        { source: "agent", confirmed: undefined, dispatchDeadlineAt: expect.any(Number) }
       );
       expect(mocks.dispatch).toHaveBeenNthCalledWith(
         2,
         "terminal.new",
         { spawnedBy: "mcp", focusPolicy: "preserve" },
-        { source: "agent", confirmed: undefined }
+        { source: "agent", confirmed: undefined, dispatchDeadlineAt: expect.any(Number) }
       );
     });
 
@@ -1239,7 +1270,7 @@ describe("useMcpBridge", () => {
       expect(mocks.dispatch).toHaveBeenCalledWith(
         "agent.claude",
         { spawnedBy: "mcp", focusPolicy: "preserve" },
-        { source: "agent", confirmed: undefined }
+        { source: "agent", confirmed: undefined, dispatchDeadlineAt: expect.any(Number) }
       );
     });
   });
@@ -1953,6 +1984,115 @@ describe("useMcpBridge", () => {
     }
   });
 
+  describe("dispatch deadline handed to the action (#15648)", () => {
+    // Shorter than a fresh 30s from receipt, as a thawed view or a capped
+    // remote hold leaves it, and one already gone: either is passed on as sent.
+    it.each([
+      ["a short", 7_000],
+      ["an already passed", -1],
+    ])("passes a pre-authorized dispatch %s deadline main sent", async (_label, offsetMs) => {
+      mocks.get.mockReturnValue(confirmManifestEntry());
+      mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+      const sentDeadlineAt = Date.now() + offsetMs;
+
+      renderHook(() => useMcpBridge());
+      await dispatchHandler?.({
+        requestId: "req-sent-deadline",
+        actionId: "worktree.delete",
+        args: { worktreeId: "wt-4" },
+        confirmed: true,
+        dispatchDeadlineAt: sentDeadlineAt,
+      });
+
+      expect(mocks.dispatch).toHaveBeenCalledWith(
+        "worktree.delete",
+        { worktreeId: "wt-4" },
+        expect.objectContaining({ dispatchDeadlineAt: sentDeadlineAt })
+      );
+    });
+
+    it("falls back to 30s from receipt when main sends no deadline", async () => {
+      mocks.get.mockReturnValue(safeManifestEntry());
+      mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+      const start = Date.now();
+      vi.spyOn(Date, "now").mockImplementation(() => start);
+
+      try {
+        renderHook(() => useMcpBridge());
+        await dispatchHandler?.({
+          requestId: "req-no-deadline",
+          actionId: "actions.list",
+          args: { limit: 10 },
+        });
+
+        expect(mocks.dispatch).toHaveBeenCalledWith(
+          "actions.list",
+          { limit: 10 },
+          expect.objectContaining({ dispatchDeadlineAt: start + MCP_DISPATCH_TIMEOUT_MS })
+        );
+      } finally {
+        vi.mocked(Date.now).mockRestore();
+      }
+    });
+
+    it("starts a confirmation's first deadline from the one main sent", async () => {
+      cleanForceDeleteTarget();
+      holdDispatch.mockImplementation(() => new Promise(() => {}));
+      const sentDeadlineAt = Date.now() + 12_000;
+
+      renderHook(() => useMcpBridge());
+      void dispatchHandler?.({
+        requestId: "req-sent-wait",
+        actionId: "worktree.delete",
+        args: { worktreeId: "wt-1", force: true },
+        dispatchDeadlineAt: sentDeadlineAt,
+      });
+
+      await vi.waitFor(() => {
+        expect(useMcpConfirmStore.getState().current?.deadlineAt).toBe(sentDeadlineAt);
+      });
+    });
+
+    it("replaces it with the run main granted once an approval is accepted", async () => {
+      mocks.get.mockReturnValue(confirmManifestEntry());
+      mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+      const start = Date.now();
+      let elapsed = 0;
+      vi.spyOn(Date, "now").mockImplementation(() => start + elapsed);
+      // A capped call's run is shorter than the plain 30s; that is what counts.
+      const grantedRunMs = 7_000;
+      holdDispatch.mockImplementation(
+        async ({ phase }: { phase: keyof typeof HOLD_GRANTS_MS }) => ({
+          held: true,
+          remainingMs: phase === "approved" ? grantedRunMs : HOLD_GRANTS_MS[phase],
+        })
+      );
+
+      try {
+        renderHook(() => useMcpBridge());
+        const dispatched = dispatchHandler?.({
+          requestId: "req-run-deadline",
+          actionId: "worktree.delete",
+          args: { worktreeId: "wt-1" },
+          dispatchDeadlineAt: start + MCP_DISPATCH_TIMEOUT_MS,
+        });
+        await Promise.resolve();
+        // Approved well after the first deadline, inside the window main held.
+        elapsed = 80_000;
+        useMcpConfirmStore.getState().resolveCurrent("approved");
+        await dispatched;
+
+        expect(mocks.dispatch).toHaveBeenCalledWith(
+          "worktree.delete",
+          { worktreeId: "wt-1" },
+          expect.objectContaining({ dispatchDeadlineAt: start + 80_000 + grantedRunMs })
+        );
+      } finally {
+        vi.mocked(Date.now).mockRestore();
+      }
+    });
+  });
+
   it("drops a teardown-racing force delete without dispatching or answering (#12115)", async () => {
     mocks.get.mockReturnValue(confirmManifestEntry());
     mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
@@ -2102,10 +2242,121 @@ describe("useMcpBridge", () => {
     );
   });
 
+  // The approval covers the branch, commit and destination the modal showed,
+  // and the push is pinned to them (#15646): an agent committing into the
+  // worktree while the modal is open must not ride along under it.
+  it("hands git.push the branch, commit and destination the approver was shown", async () => {
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: true, result: undefined });
+    const shown = {
+      branch: "feature/x",
+      headOid: "b".repeat(40),
+      destination: { remote: "fork", branch: "feature/x" },
+    };
+    mocks.buildGitPreview.mockResolvedValue({
+      branch: "feature/x",
+      destination: shown.destination,
+      pullSource: { remote: "origin", branch: "feature/x" },
+      commits: [{ hash: "abcdef1234", message: "Fix the thing", author: "Ada" }],
+      pushReview: shown,
+    });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-pinned",
+      actionId: "git.push",
+      args: { cwd: "/repo" },
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+    });
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "git.push",
+      { cwd: "/repo" },
+      expect.objectContaining({
+        source: "agent",
+        confirmed: true,
+        hostApprovedPush: { cwd: "/repo", review: shown },
+      })
+    );
+  });
+
+  // A standing grant previews nothing, so there is no review to pin: it keeps
+  // pushing the worktree as it stands, exactly as before.
+  it("pins nothing on a pre-granted git.push, which raised no preview", async () => {
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: true, result: undefined });
+
+    renderHook(() => useMcpBridge());
+
+    await dispatchHandler?.({
+      requestId: "req-granted",
+      actionId: "git.push",
+      args: { cwd: "/repo" },
+      confirmed: true,
+    });
+
+    expect(mocks.buildGitPreview).not.toHaveBeenCalled();
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "git.push",
+      { cwd: "/repo" },
+      expect.objectContaining({ source: "agent", confirmed: true })
+    );
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "git.push",
+      { cwd: "/repo" },
+      expect.not.objectContaining({ hostApprovedPush: expect.anything() })
+    );
+  });
+
+  // Two path spellings that contradict each other can never be valid. They get
+  // no preview, and must reach the action's validation to be told so, rather
+  // than a refusal that asks for a fresh confirmation which can't help.
+  it("lets contradictory path spellings through to validation rather than refusing them", async () => {
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: false, error: { code: "VALIDATION_ERROR" } });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-contradictory",
+      actionId: "git.push",
+      args: { cwd: "/a", worktreePath: "/b" },
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.requestId).toBe("req-contradictory");
+    });
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.buildGitPreview).not.toHaveBeenCalled();
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "git.push",
+      { cwd: "/a", worktreePath: "/b" },
+      expect.objectContaining({ source: "agent" })
+    );
+  });
+
   // The whole point of #11538 is that nothing can leave a destructive dispatch
   // permanently unapprovable. A failed preview fetch must still clear
   // previewPending and say so, rather than stranding the modal until timeout.
-  it("clears previewPending and warns when the git preview fetch fails", async () => {
+  //
+  // The click stays available, but a push approved on a preview that read
+  // nothing is refused rather than run (#15646): the approval names no branch,
+  // commit or destination, and a push may only publish what one did.
+  it("clears previewPending and warns when the git preview fetch fails, then refuses the push", async () => {
     mocks.get.mockReturnValue(
       confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
     );
@@ -2128,7 +2379,96 @@ describe("useMcpBridge", () => {
 
     useMcpConfirmStore.getState().resolveCurrent("approved");
     await dispatched;
-    expect(mocks.dispatch).toHaveBeenCalled();
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: "req-fail",
+        confirmationDecision: "approved",
+        result: expect.objectContaining({
+          ok: false,
+          error: expect.objectContaining({ code: "CONFIRMATION_REQUIRED" }),
+        }),
+      })
+    );
+  });
+
+  it("refuses an approved push whose preview measured no push range", async () => {
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: true, result: undefined });
+    // Detached HEAD: nothing to measure, so nothing to pin.
+    mocks.buildGitPreview.mockResolvedValue({
+      branch: null,
+      destination: null,
+      pullSource: null,
+      commits: [],
+      pushReview: null,
+    });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-unmeasured",
+      actionId: "git.push",
+      args: { cwd: "/repo" },
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+    });
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: "req-unmeasured",
+        confirmationDecision: "approved",
+        result: expect.objectContaining({
+          ok: false,
+          error: expect.objectContaining({ code: "CONFIRMATION_REQUIRED" }),
+        }),
+      })
+    );
+  });
+
+  // A worktree id this view hadn't indexed when the modal opened gets no
+  // preview; by the click it may resolve, and the push would then run on a
+  // worktree nobody was shown. The approval covers nothing, so it is refused.
+  it("refuses an approved push whose worktree only resolved after the modal opened", async () => {
+    setWorktreePathIndexAccessor(() => new Map());
+    mocks.get.mockReturnValue(
+      confirmManifestEntry({ id: "git.push", name: "git.push", title: "Push" })
+    );
+    mocks.dispatch.mockResolvedValue({ ok: true, result: undefined });
+
+    renderHook(() => useMcpBridge());
+
+    const dispatched = dispatchHandler?.({
+      requestId: "req-late-worktree",
+      actionId: "git.push",
+      args: { worktreeId: "wt-new" },
+    });
+
+    await vi.waitFor(() => {
+      expect(useMcpConfirmStore.getState().current?.requestId).toBe("req-late-worktree");
+    });
+    expect(mocks.buildGitPreview).not.toHaveBeenCalled();
+    setWorktreePathIndexAccessor(() => new Map([["wt-new", "/repo/new"]]));
+    useMcpConfirmStore.getState().resolveCurrent("approved");
+    await dispatched;
+
+    expect(mocks.dispatch).not.toHaveBeenCalled();
+    expect(sendDispatchActionResponse).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestId: "req-late-worktree",
+        result: expect.objectContaining({
+          ok: false,
+          error: expect.objectContaining({ code: "CONFIRMATION_REQUIRED" }),
+        }),
+      })
+    );
   });
 
   it("previews and pins git.pullRebase the same way as git.push (#11538)", async () => {
@@ -3541,6 +3881,41 @@ describe("buildMcpConfirmPreview (#11343, #11538)", () => {
       force: false,
     });
     expect(lines).toEqual(["⚠ Could not verify current changes — proceed with caution."]);
+  });
+
+  it("offers the push review it previewed, and only for a push", async () => {
+    const shown = {
+      branch: "main",
+      headOid: "d".repeat(40),
+      destination: { remote: "origin", branch: "main" },
+    };
+    mocks.buildGitPreview.mockResolvedValue({
+      branch: "main",
+      destination: shown.destination,
+      pullSource: { remote: "origin", branch: "main" },
+      commits: [],
+      pushReview: shown,
+    });
+
+    const push = await buildMcpConfirmPreview({ kind: "gitPush", cwd: "/repo" });
+    expect(push.approvedPush).toEqual({ cwd: "/repo", review: shown });
+
+    const rebase = await buildMcpConfirmPreview({ kind: "gitPullRebase", cwd: "/repo" });
+    expect(rebase.approvedPush).toBeUndefined();
+
+    mocks.buildGitPreview.mockResolvedValue({
+      branch: null,
+      destination: null,
+      pullSource: null,
+      commits: [],
+      pushReview: null,
+    });
+    const unmeasured = await buildMcpConfirmPreview({ kind: "gitPush", cwd: "/repo" });
+    expect(unmeasured.approvedPush).toBeUndefined();
+
+    mocks.buildGitPreview.mockRejectedValue(new Error("git exploded"));
+    const failed = await buildMcpConfirmPreview({ kind: "gitPush", cwd: "/repo" });
+    expect(failed.approvedPush).toBeUndefined();
   });
 
   it("distinguishes an empty branch from an unverifiable one for git targets", async () => {

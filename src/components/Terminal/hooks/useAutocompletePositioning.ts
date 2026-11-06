@@ -115,7 +115,9 @@ export function useAutocompletePositioning({
     const maxHeight = Math.max(0, shellRect.top - MENU_SHELL_GAP_PX - minTop);
 
     setMenuPlacement((current) => {
-      const next = { left: left - shellRect.left, maxWidth, maxHeight };
+      // `left` is a client x; the menu is positioned against the shell's
+      // padding box, which starts inside its border.
+      const next = { left: left - shellRect.left - shell.clientLeft, maxWidth, maxHeight };
       return current.left === next.left &&
         current.maxWidth === next.maxWidth &&
         current.maxHeight === next.maxHeight

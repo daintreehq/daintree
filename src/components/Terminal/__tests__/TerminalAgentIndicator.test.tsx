@@ -40,18 +40,17 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 vi.mock("@/components/Worktree/terminalStateConfig", () => {
-  const mockIcon = (props: React.SVGProps<SVGSVGElement>) => (
-    <svg data-testid="state-icon" {...props} />
+  // One icon per state, marked with it, so a test can tell which glyph drew.
+  const glyphFor = (state: string) =>
+    function MockGlyph(props: React.SVGProps<SVGSVGElement>) {
+      return <svg data-testid="state-icon" data-glyph={state} {...props} />;
+    };
+  const mockIcon = glyphFor("unknown");
+  const STATE_ICONS: Record<string, typeof mockIcon> = Object.fromEntries(
+    ["working", "waiting", "directing", "idle", "completed", "exited", "unread", "blocked"].map(
+      (state) => [state, glyphFor(state)]
+    )
   );
-  const STATE_ICONS: Record<string, typeof mockIcon> = {
-    working: mockIcon,
-    waiting: mockIcon,
-    directing: mockIcon,
-    idle: mockIcon,
-    completed: mockIcon,
-    exited: mockIcon,
-    unread: mockIcon,
-  };
   const STATE_COLORS: Record<string, string> = {
     working: "text-working",
     waiting: "text-waiting",
@@ -60,6 +59,7 @@ vi.mock("@/components/Worktree/terminalStateConfig", () => {
     completed: "text-completed",
     exited: "text-exited",
     unread: "text-unread",
+    blocked: "text-blocked",
   };
   const STATE_LABELS: Record<string, string> = {
     working: "working",
@@ -69,6 +69,7 @@ vi.mock("@/components/Worktree/terminalStateConfig", () => {
     completed: "finished",
     exited: "exited",
     unread: "unread",
+    blocked: "blocked",
   };
   return {
     STATE_ICONS,
@@ -125,6 +126,28 @@ function setHandBack(handBack: FleetRunRow["handBack"], overrides: Partial<Fleet
   });
 }
 
+/** The fleet's row for t1 with no hand-back: the band comes from the overrides alone. */
+function setRun(overrides: Partial<FleetRunRow>) {
+  setHandBack(undefined, overrides);
+}
+
+const UNREAD_ASK = { kind: "asked", quote: "Run npm test?", readAt: 1, seen: false } as const;
+
+/** Which state's glyph the chip drew, read off the mocked icon. */
+const drawnGlyph = () =>
+  screen
+    .queryByRole("status")
+    ?.querySelector("[data-testid='state-icon']")
+    ?.getAttribute("data-glyph") ?? null;
+
+/** The waiting ring without the amber an unread ask wears. */
+function expectGreyWaitingRing(name: string | RegExp = /^Agent state: waiting/) {
+  const chip = screen.getByRole("status", { name });
+  expect(drawnGlyph()).toBe("waiting");
+  expect(chip.className).not.toContain("text-waiting");
+  return chip;
+}
+
 beforeEach(() => {
   useFleetSnapshotStore.setState({ snapshot: null });
   mockTerminal = { id: "t1" };
@@ -170,6 +193,7 @@ describe("TerminalAgentIndicator — glyph and tooltip", () => {
       stateChangeConfidence: 1,
       waitingReason: "approval",
     };
+    setRun({ waitingReason: "approval", canopy: UNREAD_ASK });
 
     render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
 
@@ -187,6 +211,7 @@ describe("TerminalAgentIndicator — glyph and tooltip", () => {
       stateChangeConfidence: 1,
       waitingReason: "prompt",
     };
+    setRun({ waitingReason: "prompt", canopy: UNREAD_ASK });
 
     render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
 
@@ -217,6 +242,7 @@ describe("TerminalAgentIndicator — glyph and tooltip", () => {
       stateChangeTrigger: "ai-classification",
       stateChangeConfidence: 0.95,
     };
+    setRun({ canopy: UNREAD_ASK });
 
     render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
 
@@ -306,20 +332,26 @@ describe("TerminalAgentIndicator — glyph and tooltip", () => {
     expect(agentTooltip!.textContent).not.toContain("45s");
   });
 
-  it("renders no chip when idle", () => {
+  it("draws the idle glyph when idle", () => {
     mockTerminal = { id: "t1" };
 
     render(<TerminalAgentIndicator id="t1" agentState="idle" />);
 
-    expect(screen.queryByRole("status", { name: /agent state/i })).toBeNull();
+    expect(screen.getByRole("status", { name: "Agent state: idle" })).toBeTruthy();
+    expect(drawnGlyph()).toBe("idle");
   });
 
-  it("renders no glyph when completed without a session cost", () => {
+  it("draws a finished or exited agent's glyph with no session cost on record", () => {
     mockTerminal = { id: "t1" };
 
-    render(<TerminalAgentIndicator id="t1" agentState="completed" />);
+    const { rerender } = render(<TerminalAgentIndicator id="t1" agentState="completed" />);
+    expect(screen.getByRole("status", { name: "Agent state: finished" })).toBeTruthy();
+    expect(drawnGlyph()).toBe("completed");
 
-    expect(screen.queryByRole("status", { name: /agent state/i })).toBeNull();
+    rerender(<TerminalAgentIndicator id="t1" agentState="exited" isExited exitCode={0} />);
+    expect(screen.getByRole("status", { name: "Agent state: exited" })).toBeTruthy();
+    expect(drawnGlyph()).toBe("exited");
+    expect(screen.getByTestId("tooltip-content").textContent).toContain("Exit code: 0");
   });
 
   it("keeps the settled glyph while there is a session cost, and leaves the cost to the row", () => {
@@ -358,15 +390,161 @@ describe("TerminalAgentIndicator — glyph and tooltip", () => {
     expect(screen.getByTestId("tooltip-content").textContent).toContain("Observed: finished");
   });
 
-  it("keeps an approval wait amber whatever the hand-back says", () => {
+  it("draws an approval wait amber only on an unread Canopy ask, whatever the hand-back says", () => {
     mockTerminal = { id: "t1", agentState: "waiting", waitingReason: "approval" };
-    setHandBack({ stoppedAt: 1, seenAt: 2 });
+    // The patterns' guess with no reading is unread news, never the amber ring.
+    setRun({ waitingReason: "approval", wait: { stoppedAt: 1 } });
+    const { rerender } = render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+    expect(screen.getByRole("status", { name: /^Agent state: unread/ }).className).not.toContain(
+      "text-waiting"
+    );
 
-    render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
-
+    act(() =>
+      setHandBack({ stoppedAt: 1, seenAt: 2 }, { waitingReason: "approval", canopy: UNREAD_ASK })
+    );
+    rerender(<TerminalAgentIndicator id="t1" agentState="waiting" />);
     const chip = screen.getByRole("status", { name: /^Agent state: waiting/ });
     expect(chip.className).toContain("text-waiting");
     expect(chip.className).not.toMatch(/\b(bg|border)-/);
+  });
+
+  it("draws a grey waiting ring for a prompt that asks nothing, or before the fleet has reported", () => {
+    mockTerminal = { id: "t1", agentState: "waiting", waitingReason: "prompt" };
+    const { rerender } = render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+    expectGreyWaitingRing("Agent state: waiting");
+
+    // A restored agent at its prompt: no hand-back record, no reading.
+    act(() => setRun({ waitingReason: "prompt" }));
+    rerender(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+    expectGreyWaitingRing("Agent state: waiting");
+
+    // A live agent the patterns call idle is drawn waiting by the header's fold.
+    mockTerminal = { id: "t1", agentState: "idle" };
+    act(() => setRun({ agentState: "idle" }));
+    rerender(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+    expectGreyWaitingRing("Agent state: waiting");
+  });
+
+  it("draws the grey ring for a fleet snapshot that doesn't list this run yet", () => {
+    mockTerminal = { id: "t1", agentState: "waiting", waitingReason: "question" };
+    setHandBack(undefined, { runId: "another-run", canopy: UNREAD_ASK });
+
+    render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+
+    expectGreyWaitingRing("Agent state: waiting (question)");
+  });
+
+  it("greys the ring once the ask is seen, and brings the amber back for a new one", () => {
+    mockTerminal = { id: "t1", agentState: "completed" };
+    // Canopy may read an ask on a finished turn; the header folds it to waiting.
+    setRun({ agentState: "completed", canopy: UNREAD_ASK });
+    const { rerender } = render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+    expect(screen.getByRole("status", { name: /^Agent state: waiting/ }).className).toContain(
+      "text-waiting"
+    );
+
+    act(() => setRun({ agentState: "completed", canopy: { ...UNREAD_ASK, seen: true } }));
+    rerender(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+    expectGreyWaitingRing();
+
+    act(() => setRun({ agentState: "completed", canopy: { ...UNREAD_ASK, readAt: 5 } }));
+    rerender(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+    expect(screen.getByRole("status", { name: /^Agent state: waiting/ }).className).toContain(
+      "text-waiting"
+    );
+  });
+
+  it("keeps a seen question reading as waiting on the user, with its reason", () => {
+    mockTerminal = { id: "t1", agentState: "waiting", waitingReason: "question" };
+    setRun({ waitingReason: "question", canopy: { ...UNREAD_ASK, seen: true } });
+
+    render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+
+    expectGreyWaitingRing("Agent state: waiting (question)");
+    expect(screen.getByTestId("tooltip-content").textContent).toContain(
+      "State: waiting (question)"
+    );
+  });
+
+  it.each([
+    ["parked", { park: { parkedAt: 1 } }],
+    ["snoozed", { snooze: { snoozedAt: 1 } }],
+  ] as const)(
+    "draws a %s run's wait as the grey ring, even over an unread ask",
+    (_label, record) => {
+      mockTerminal = { id: "t1", agentState: "waiting", waitingReason: "approval" };
+      setRun({ waitingReason: "approval", canopy: UNREAD_ASK, ...record });
+
+      render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+
+      expectGreyWaitingRing("Agent state: waiting (approval)");
+    }
+  );
+
+  it("draws a restarting pane idle rather than waiting, before the band catches up", () => {
+    mockTerminal = { id: "t1", agentState: "waiting", waitingReason: "question" };
+    setRun({ waitingReason: "question", canopy: UNREAD_ASK });
+    const { rerender } = render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+    expect(screen.getByRole("status", { name: /^Agent state: waiting/ })).toBeTruthy();
+
+    mockTerminal = { ...mockTerminal, isRestarting: true };
+    rerender(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+    const chip = screen.getByRole("status", { name: "Agent state: idle" });
+    expect(drawnGlyph()).toBe("idle");
+    expect(chip.className).not.toContain("text-waiting");
+  });
+
+  it("draws an error wait blocked before the fleet reports it, and while the band lags", () => {
+    mockTerminal = { id: "t1", agentState: "waiting", waitingReason: "error" };
+    const { rerender } = render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+    expect(screen.getByRole("status", { name: "Agent state: blocked (error)" })).toBeTruthy();
+    expect(drawnGlyph()).toBe("blocked");
+
+    // The band still has the run working; the pane heard the error first.
+    act(() => setRun({ agentState: "working" }));
+    rerender(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+    expect(screen.getByRole("status", { name: "Agent state: blocked (error)" })).toBeTruthy();
+  });
+
+  it("draws an error wait blocked when the store holds no observation of its own", () => {
+    mockTerminal = { id: "t1", waitingReason: "error" };
+
+    render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+
+    expect(screen.getByRole("status", { name: "Agent state: blocked (error)" })).toBeTruthy();
+    expect(drawnGlyph()).toBe("blocked");
+  });
+
+  it("leaves a stale error reason out of a wait the pane no longer observes as one", () => {
+    // Folded to waiting from idle: the leftover reason describes an older wait.
+    mockTerminal = { id: "t1", agentState: "idle", waitingReason: "error" };
+
+    render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+
+    expectGreyWaitingRing("Agent state: waiting");
+    expect(screen.getByTestId("tooltip-content").textContent).not.toContain("(error)");
+  });
+
+  it("draws an error wait as blocked, never as the waiting ring", () => {
+    mockTerminal = { id: "t1", agentState: "waiting", waitingReason: "error" };
+    setRun({ waitingReason: "error" });
+
+    render(<TerminalAgentIndicator id="t1" agentState="waiting" />);
+
+    const chip = screen.getByRole("status", { name: "Agent state: blocked (error)" });
+    expect(chip.className).toContain("text-blocked");
+    expect(chip.className).not.toContain("text-waiting");
+    expect(screen.getByTestId("tooltip-content").textContent).toContain("Observed: waiting");
+  });
+
+  it("keeps work in flight as observed whatever the band still says", () => {
+    mockTerminal = { id: "t1", agentState: "working" };
+    // The band is polled; the pane hears the reply that set the agent working first.
+    setRun({ agentState: "completed", canopy: UNREAD_ASK });
+
+    render(<TerminalAgentIndicator id="t1" agentState="working" />);
+
+    expect(screen.getByRole("status", { name: "Agent state: working" })).toBeTruthy();
   });
 
   it("marks the glyph with a dot for this terminal's undismissed errors only", () => {

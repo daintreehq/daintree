@@ -810,7 +810,7 @@ export function GeneralTab({
                             />
                           ) : (
                             <span className="flex-1 text-sm text-text-primary">{name}</span>
-                          )}
+                          )}{" "}
                           {status && (
                             <span
                               data-agent-status={status.label}
@@ -1329,7 +1329,7 @@ export function GeneralTab({
               <SettingsSwitchCard
                 id="general-grid-agent-highlights"
                 title="Grid panel agent highlights"
-                subtitle="Show waiting and working borders on grid panels — failed borders always show"
+                subtitle="Show working borders on grid panels — waiting and failed borders always show"
                 isEnabled={showGridAgentHighlights}
                 onChange={() =>
                   void actionService.dispatch(

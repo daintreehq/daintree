@@ -318,11 +318,11 @@ interface HostResidency {
 const hostResidency = new Map<number, HostResidency>();
 
 /**
- * The Host half of activating a project for a view on a remote Shell, shared
- * by that view's first attachment, a switch and a reopen: start the
- * project's workspace host if none is running (the same `loadProject` a local
- * activation uses, so a cold project comes up rather than only a warm one
- * being foregrounded), hold it resident for the view, and record the
+ * The Host half of activating a project for a view on a remote Shell, run
+ * under that view's own endpoint handle by its residency and its Retry: start
+ * the project's workspace host if none is running (the same `loadProject` a
+ * local activation uses, so a cold project comes up rather than only a warm
+ * one being foregrounded), hold it resident for the view, and record the
  * activity. Repeat calls for the project the view already holds share the
  * first load. Rejects when the workspace host cannot load; the view's
  * residency is then dropped so a retry starts over.
@@ -374,6 +374,18 @@ function isResidencyHeld(
   residency: HostResidency
 ): boolean {
   return !residency.settled || workspace.isWindowAttached(residentId, residency.path);
+}
+
+/**
+ * A view on a remote Shell is switching to this project: the plugin open and
+ * the status and MRU record a switch is, holding nothing. The switch arrives
+ * on the endpoint of the view being left, so the project is held by the
+ * incoming view's own endpoint instead, when it opens or, for a view the
+ * Shell kept cached, already.
+ */
+export function noteRemoteSwitchOnHost(project: Pick<Project, "id" | "path">): void {
+  notifyProjectPluginsOpened(project.id, project.path);
+  markProjectActiveOnHost(project.id);
 }
 
 /** Whether a remote view still holds `projectId` resident here, its host included. */

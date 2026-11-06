@@ -255,10 +255,12 @@ describe("tip catalog — sentence case", () => {
     const source = readFileSync(resolve(LAUNCHER_DIR, "contentGridTips.tsx"), "utf-8");
     const labels = [...source.matchAll(/actionLabel:\s*"([^"]+)"/g)].map((m) => m[1]!);
     expect(labels.length).toBeGreaterThan(0);
+    // Agent names are proper nouns and keep their capital ("Launch Claude").
+    const productName = /\s(?:Claude|Gemini)\b/g;
     for (const label of labels) {
       // Sentence case per CLAUDE.md's microcopy rule: one leading capital, and
-      // no capitalised word after it (no product name appears in these today).
-      expect(label, label).not.toMatch(/\s[A-Z]/);
+      // no capitalised word after it other than a product name.
+      expect(label.replace(productName, ""), label).not.toMatch(/\s[A-Z]/);
     }
   });
 });

@@ -58,6 +58,7 @@ vi.mock("@/components/ui/AppDialog", () => {
 });
 
 vi.mock("../DiffViewer", () => ({
+  DiffFilePath: ({ path }: { path: string }) => <span>{path}</span>,
   DiffViewer: ({ diff }: { diff: string }) => <div data-testid="diff-viewer">{diff}</div>,
 }));
 
@@ -117,6 +118,11 @@ function listCalls() {
   return mockCompareWorktrees.mock.calls.filter((c) => c[3] === undefined);
 }
 
+/** The diff reads for one file, leaving out the whole-file read its context comes from. */
+function diffCalls(path: string) {
+  return mockCompareWorktrees.mock.calls.filter((c) => c[3] === path && c[6] === undefined);
+}
+
 async function openFile(view: ReturnType<typeof render>, path: string) {
   fireEvent.change(screen.getByLabelText("Compare"), { target: { value: "wt-right" } });
   await waitFor(() => expect(fileRow(path)).toBeTruthy());
@@ -171,9 +177,7 @@ describe("CrossWorktreeDiff when a worktree snapshot updates", () => {
     expect(fileRow("b.ts")?.getAttribute("aria-current")).toBe("true");
 
     await act(async () => list.resolve(listResponse()));
-    await waitFor(() =>
-      expect(mockCompareWorktrees.mock.calls.filter((c) => c[3] === "b.ts").length).toBe(2)
-    );
+    await waitFor(() => expect(diffCalls("b.ts").length).toBe(2));
     expect(screen.getByTestId("diff-viewer").textContent).toBe("diff v1");
 
     await act(async () => diff.resolve("diff v2"));
@@ -197,9 +201,7 @@ describe("CrossWorktreeDiff when a worktree snapshot updates", () => {
     );
     setWorktrees({ worktreeChanges: { headOid: "fff" } });
     view.rerender(tree());
-    await waitFor(() =>
-      expect(mockCompareWorktrees.mock.calls.filter((c) => c[3] === "b.ts").length).toBe(2)
-    );
+    await waitFor(() => expect(diffCalls("b.ts").length).toBe(2));
     await act(async () => {});
     expect(screen.queryByText("Couldn't load this diff")).toBeNull();
     expect(screen.getByTestId("diff-viewer").textContent).toBe("diff v1");
@@ -207,16 +209,27 @@ describe("CrossWorktreeDiff when a worktree snapshot updates", () => {
 
   it("still reports a diff failure when a refresh replaces a diff that never loaded", async () => {
     const view = render(tree());
-    let diffCalls = 0;
-    mockCompareWorktrees.mockImplementation((_path, _b1, _b2, filePath?: string) => {
-      if (filePath === undefined) return Promise.resolve(listResponse());
-      diffCalls++;
-      return diffCalls === 1 ? new Promise(() => {}) : Promise.reject(new Error("boom"));
-    });
+    let bDiffCalls = 0;
+    mockCompareWorktrees.mockImplementation(
+      (
+        _path,
+        _b1,
+        _b2,
+        filePath?: string,
+        _mergeBase?: boolean,
+        _ws?: boolean,
+        context?: number
+      ) => {
+        if (filePath === undefined) return Promise.resolve(listResponse());
+        if (filePath !== "b.ts" || context !== undefined) return Promise.resolve(diffText);
+        bDiffCalls++;
+        return bDiffCalls === 1 ? new Promise(() => {}) : Promise.reject(new Error("boom"));
+      }
+    );
     fireEvent.change(screen.getByLabelText("Compare"), { target: { value: "wt-right" } });
     await waitFor(() => expect(fileRow("b.ts")).toBeTruthy());
     fireEvent.click(fileRow("b.ts")!);
-    await waitFor(() => expect(diffCalls).toBe(1));
+    await waitFor(() => expect(bDiffCalls).toBe(1));
 
     setWorktrees({}, { worktreeChanges: { headOid: "ggg" } });
     view.rerender(tree());
@@ -245,9 +258,9 @@ describe("CrossWorktreeDiff when a worktree snapshot updates", () => {
     setWorktrees({}, { branch: "other" });
     view.rerender(tree());
 
-    expect(await screen.findByText(PICK_PROMPT)).toBeTruthy();
+    // A new comparison, not a refresh: it lands on its first file, not the old one.
+    await waitFor(() => expect(fileRow("a.ts")?.getAttribute("aria-current")).toBe("true"));
     expect(fileRow("b.ts")?.getAttribute("aria-current")).toBeNull();
-    expect(screen.queryByTestId("diff-viewer")).toBeNull();
     expect(mockCompareWorktrees).toHaveBeenCalledWith("/wt/wt-left", "main", "other");
   });
 

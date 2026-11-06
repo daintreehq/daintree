@@ -336,12 +336,13 @@ function FontSampleRow({ fontFamily, fontSize }: { fontFamily: string; fontSize:
   const selectedSchemeId = useTerminalColorSchemeStore((s) => s.selectedSchemeId);
   const customSchemes = useTerminalColorSchemeStore((s) => s.customSchemes);
   const appScheme = useAppThemeStore(resolveCommittedScheme);
+  const colorVisionMode = useAppThemeStore((s) => s.colorVisionMode);
 
   const scheme = useMemo(() => {
     const all = [...BUILT_IN_SCHEMES, ...customSchemes];
     const selected = all.find((s) => s.id === selectedSchemeId) ?? BUILT_IN_SCHEMES[0]!;
-    return resolveSchemeForPreview(selected, appScheme);
-  }, [selectedSchemeId, customSchemes, appScheme]);
+    return resolveSchemeForPreview(selected, appScheme, colorVisionMode);
+  }, [selectedSchemeId, customSchemes, appScheme, colorVisionMode]);
 
   return (
     <SettingsRow

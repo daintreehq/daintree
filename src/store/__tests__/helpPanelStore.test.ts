@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HELP_PANEL_DEFAULT_WIDTH, HELP_PANEL_MAX_WIDTH } from "../helpPanelStore";
-import { assistantSlotKey as slotKey } from "../../../shared/config/assistantSlots";
+import {
+  ASSISTANT_SLOTS,
+  assistantSlotKey as slotKey,
+} from "../../../shared/config/assistantSlots";
 
 const agentDefaultsClientMock = vi.hoisted(() => ({
   set: vi.fn<(patch: Record<string, unknown>) => Promise<Record<string, unknown>>>(),
@@ -611,6 +614,92 @@ describe("helpPanelStore persistence migration", () => {
       expect(persisted).not.toHaveProperty("globalSelected");
       expect(persisted).not.toHaveProperty("globalTarget");
     });
+
+    describe("a window's panel carried over a project switch (#16099)", () => {
+      it("shows Global in one update, without asking for the keyboard", async () => {
+        installLocalStorage({});
+        const { useHelpPanelStore: store } = await import("../helpPanelStore");
+        store.getState().openSlot();
+        store.getState().requestFocus();
+        const focusRequest = store.getState().focusRequest;
+        const seen: Array<{ isOpen: boolean; globalSelected: boolean }> = [];
+        const off = store.subscribe((s) =>
+          seen.push({ isOpen: s.isOpen, globalSelected: s.globalSelected })
+        );
+
+        store.getState().applyWindowGlobalPanel({ showing: true, target });
+        off();
+
+        // Never an open panel on a project lane, which that lane could launch into.
+        expect(seen).toEqual([{ isOpen: true, globalSelected: true }]);
+        // The lane behind it is kept to come back to.
+        expect(store.getState()).toMatchObject({
+          globalTarget: target,
+          activeSlot: 1,
+          focusRequest,
+          globalFocusHandledThrough: focusRequest,
+        });
+        const persisted: unknown = store.persist.getOptions().partialize?.(store.getState());
+        expect(persisted).not.toHaveProperty("globalFocusHandledThrough");
+        expect(persisted).not.toHaveProperty("isOpen");
+      });
+
+      it("leaves a panel already showing the same run untouched", async () => {
+        installLocalStorage({});
+        const { useHelpPanelStore: store } = await import("../helpPanelStore");
+        store.getState().selectGlobal(target);
+        store.getState().setOpen(true);
+        store.getState().requestFocus();
+        const before = store.getState();
+
+        store.getState().applyWindowGlobalPanel({ showing: true, target: { ...target } });
+
+        expect(store.getState()).toBe(before);
+        // A successor run, or following whichever runs, is another target, and is taken.
+        store.getState().applyWindowGlobalPanel({
+          showing: true,
+          target: { ...target, incarnation: 3 },
+        });
+        expect(store.getState().globalTarget).toMatchObject({ incarnation: 3 });
+        store.getState().applyWindowGlobalPanel({ showing: true, target: null });
+        expect(store.getState().globalTarget).toBeNull();
+        const following = store.getState();
+        store.getState().applyWindowGlobalPanel({ showing: true, target: null });
+        expect(store.getState()).toBe(following);
+      });
+
+      it("closes Global the window closed, keeping it selected for the next open", async () => {
+        installLocalStorage({});
+        const { useHelpPanelStore: store } = await import("../helpPanelStore");
+        store.getState().selectGlobal(target);
+        store.getState().setOpen(true);
+
+        store.getState().applyWindowGlobalPanel({ showing: false, target: null });
+
+        expect(store.getState()).toMatchObject({
+          isOpen: false,
+          globalSelected: true,
+          globalTarget: target,
+        });
+      });
+
+      it("never opens or closes this project's own lane, and ignores no record", async () => {
+        installLocalStorage({});
+        const { useHelpPanelStore: store } = await import("../helpPanelStore");
+        store.getState().setOpen(true);
+        const laneOpen = store.getState();
+
+        store.getState().applyWindowGlobalPanel({ showing: false, target: null });
+        expect(store.getState()).toBe(laneOpen);
+        store.getState().applyWindowGlobalPanel(null);
+        expect(store.getState()).toBe(laneOpen);
+
+        store.getState().setOpen(false);
+        const closed = store.getState();
+        store.getState().applyWindowGlobalPanel({ showing: false, target: null });
+        expect(store.getState()).toBe(closed);
+      });
+    });
   });
 
   describe("assistant lanes (#12108)", () => {
@@ -629,7 +718,9 @@ describe("helpPanelStore persistence migration", () => {
       }
 
       // Slot 0 exists from the start, so the first call takes 1.
-      expect(opened.slice(0, MAX_SLOTS - 1)).toEqual([1, 2].slice(0, MAX_SLOTS - 1));
+      expect(opened.slice(0, MAX_SLOTS - 1)).toEqual(
+        Array.from({ length: MAX_SLOTS - 1 }, (_, i) => i + 1)
+      );
       // Refuses rather than reusing a lane — reuse would displace a session the
       // user never named.
       expect(opened[opened.length - 1]).toBeNull();
@@ -1624,9 +1715,12 @@ describe("selectHasRoomForSession (#13442)", () => {
     store.setState({ sessions: { 0: lane({ terminalId: "t0" }) }, hibernateSessions: {} });
     expect(selectHasRoomForSession(store.getState(), "p1")).toBe(true);
 
+    // Every slot open, so only the empty tab is room.
     store.setState({
       sessions: {
-        0: lane({ terminalId: "t0" }),
+        ...Object.fromEntries(
+          ASSISTANT_SLOTS.map((slot) => [slot, lane({ terminalId: `t${slot}` })])
+        ),
         1: lane({ sessionId: "s1" }),
         2: lane(),
       },
@@ -1637,7 +1731,13 @@ describe("selectHasRoomForSession (#13442)", () => {
   it("finds none once every tab holds a session or a conversation waiting to resume", async () => {
     const { useHelpPanelStore: store, selectHasRoomForSession } = await import("../helpPanelStore");
     store.setState({
-      sessions: { 0: lane({ terminalId: "t0" }), 1: lane({ sessionId: "s1" }), 2: lane() },
+      sessions: {
+        ...Object.fromEntries(
+          ASSISTANT_SLOTS.map((slot) => [slot, lane({ terminalId: `t${slot}` })])
+        ),
+        1: lane({ sessionId: "s1" }),
+        2: lane(),
+      },
       hibernateSessions: {
         [slotKey("p1", 2)]: { sessionId: "kept", cwd: "/help.codex", agentId: "codex" },
       },

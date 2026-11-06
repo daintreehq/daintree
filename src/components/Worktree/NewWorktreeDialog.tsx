@@ -31,7 +31,7 @@ import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { logError } from "@/utils/logger";
 import { extractClosingIssueNumber } from "@/utils/closingIssueRef";
 import { useProjectStore } from "@/store/projectStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useWorktreeSelectionStore, type PendingCreationDraft } from "@/store/worktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -138,9 +138,8 @@ interface NewWorktreeDialogProps {
   initialIssue?: Issue | null;
   initialPR?: PR | null;
   initialRecipeId?: string | null;
-  initialBranchInput?: string | null;
-  initialAgentId?: string | null;
-  initialPrompt?: string | null;
+  /** A failed creation's request, which a Retry reopens the dialog with. */
+  restoreDraft?: PendingCreationDraft | null;
 }
 
 export function NewWorktreeDialog({
@@ -151,9 +150,7 @@ export function NewWorktreeDialog({
   initialIssue,
   initialPR,
   initialRecipeId,
-  initialBranchInput,
-  initialAgentId,
-  initialPrompt,
+  restoreDraft,
 }: NewWorktreeDialogProps) {
   const [branches, setBranches] = useState<BranchInfo[]>([]);
   const [loading, setLoading] = useState(false);
@@ -178,17 +175,29 @@ export function NewWorktreeDialog({
 
   const assignWorktreeToSelf = usePreferencesStore((s) => s.assignWorktreeToSelf);
   const setAssignWorktreeToSelf = usePreferencesStore((s) => s.setAssignWorktreeToSelf);
-  const lastSelectedWorktreeRecipeIdByProject = usePreferencesStore(
-    (s) => s.lastSelectedWorktreeRecipeIdByProject
+  // Issue and bare creates each remember their own setup. The mode is how the
+  // dialog was opened, not whether an issue gets linked inside it — for a
+  // Retry, how the failed request's dialog was opened.
+  const isIssueCreate = restoreDraft ? restoreDraft.openedForIssue === true : Boolean(initialIssue);
+  const lastSelectedWorktreeRecipeIdByProject = usePreferencesStore((s) =>
+    isIssueCreate
+      ? s.lastSelectedIssueWorktreeRecipeIdByProject
+      : s.lastSelectedWorktreeRecipeIdByProject
   );
-  const setLastSelectedWorktreeRecipeIdByProject = usePreferencesStore(
-    (s) => s.setLastSelectedWorktreeRecipeIdByProject
+  const setLastSelectedWorktreeRecipeIdByProject = usePreferencesStore((s) =>
+    isIssueCreate
+      ? s.setLastSelectedIssueWorktreeRecipeIdByProject
+      : s.setLastSelectedWorktreeRecipeIdByProject
   );
-  const lastSelectedWorktreeAgentIdByProject = usePreferencesStore(
-    (s) => s.lastSelectedWorktreeAgentIdByProject
+  const lastSelectedWorktreeAgentIdByProject = usePreferencesStore((s) =>
+    isIssueCreate
+      ? s.lastSelectedIssueWorktreeAgentIdByProject
+      : s.lastSelectedWorktreeAgentIdByProject
   );
-  const setLastSelectedWorktreeAgentIdByProject = usePreferencesStore(
-    (s) => s.setLastSelectedWorktreeAgentIdByProject
+  const setLastSelectedWorktreeAgentIdByProject = usePreferencesStore((s) =>
+    isIssueCreate
+      ? s.setLastSelectedIssueWorktreeAgentIdByProject
+      : s.setLastSelectedWorktreeAgentIdByProject
   );
   // Flattened to `[branch, id, name] x N` so the selector stays shallow-comparable
   // while still carrying the owning worktree's identity. One source for both the
@@ -289,6 +298,11 @@ export function NewWorktreeDialog({
     configuredBranchPrefix,
   });
 
+  // An existing-branch create names its branch in the existing picker, so only
+  // a new branch goes back into the input.
+  const restoredBranchInput =
+    restoreDraft && restoreDraft.branchMode !== "existing" ? restoreDraft.branch : null;
+
   // Retry-prefill: when the sidebar's error placeholder reopens the dialog with
   // a remembered branch, seed the input AFTER useBranchInput's reset runs.
   // Marking the touched ref blocks the auto-prefix and auto-slug effects so
@@ -300,15 +314,14 @@ export function NewWorktreeDialog({
       return;
     }
     if (appliedInitialBranchRef.current) return;
-    if (!initialBranchInput) return;
+    if (!restoredBranchInput) return;
     appliedInitialBranchRef.current = true;
-    setBranchInput(initialBranchInput);
+    setBranchInput(restoredBranchInput);
     branchInputTouchedRef.current = true;
-  }, [isOpen, initialBranchInput, setBranchInput, branchInputTouchedRef]);
+  }, [isOpen, restoredBranchInput, setBranchInput, branchInputTouchedRef]);
 
-  // Seeded once per open. A Retry always carries a prompt (possibly empty), and
-  // its agent — including an explicit "No agent" — wins over the project's
-  // remembered one.
+  // Seeded once per open. A Retry's agent — including an explicit "No agent" —
+  // wins over the project's remembered one.
   const appliedAgentDraftRef = useRef(false);
   useEffect(() => {
     if (!isOpen) {
@@ -317,13 +330,12 @@ export function NewWorktreeDialog({
     }
     if (appliedAgentDraftRef.current || !projectId) return;
     appliedAgentDraftRef.current = true;
-    const isRetryDraft = initialPrompt !== null && initialPrompt !== undefined;
     setFirstAgentId(
-      isRetryDraft ? (initialAgentId ?? null) : (lastSelectedWorktreeAgentId ?? null)
+      restoreDraft ? (restoreDraft.agentId ?? null) : (lastSelectedWorktreeAgentId ?? null)
     );
-    setFirstPrompt(initialPrompt ?? "");
+    setFirstPrompt(restoreDraft?.prompt ?? "");
     setAgentPickerOpen(false);
-  }, [isOpen, projectId, initialAgentId, initialPrompt, lastSelectedWorktreeAgentId]);
+  }, [isOpen, projectId, restoreDraft, lastSelectedWorktreeAgentId]);
 
   const isExistingMode = branchMode === "existing" && !initialPR;
 
@@ -346,6 +358,8 @@ export function NewWorktreeDialog({
     isOpen,
     skipAvailabilityCheck: isExistingMode,
     overrideBranchName: isExistingMode ? (selectedExistingBranch ?? "") : undefined,
+    restoredBranch: restoreDraft?.branch,
+    restoredPath: restoreDraft?.path,
   });
 
   const onSelectBranch = useCallback(
@@ -449,6 +463,7 @@ export function NewWorktreeDialog({
     lastSelectedWorktreeRecipeId,
     projectId,
     initialRecipeId,
+    restoredRecipeId: restoreDraft ? (restoreDraft.recipeId ?? null) : undefined,
     setLastSelectedWorktreeRecipeIdByProject,
   });
 
@@ -502,14 +517,22 @@ export function NewWorktreeDialog({
     baseBranchTouchedRef.current = false;
     if (!isRefetch) {
       resetErrors();
-      setBranchMode("new");
-      setSelectedExistingBranch(null);
-      setWorktreeMode("local");
+      const restoredExisting = restoreDraft?.branchMode === "existing";
+      setBranchMode(restoredExisting ? "existing" : "new");
+      setSelectedExistingBranch(restoredExisting ? restoreDraft.branch : null);
+      setWorktreeMode(restoreDraft?.worktreeMode ?? "local");
     }
     // resetErrors() is NOT called here — touched refs are managed by individual hooks
 
+    // A Retry's base stands in for the derived default; a PR's head is still
+    // resolved below, as it was for the original submit.
+    const seedBaseBranch = (list: BranchInfo[]) =>
+      restoreDraft?.baseBranch
+        ? { name: restoreDraft.baseBranch, fromRemote: restoreDraft.fromRemote ?? false }
+        : deriveDefaultBaseBranch(list);
+
     if (cached) {
-      const seed = deriveDefaultBaseBranch(cached);
+      const seed = seedBaseBranch(cached);
       setBaseBranch(seed.name);
       setFromRemote(seed.fromRemote);
     }
@@ -592,7 +615,7 @@ export function NewWorktreeDialog({
             }
           }
         } else if (!baseBranchTouchedRef.current) {
-          const next = deriveDefaultBaseBranch(branchList);
+          const next = seedBaseBranch(branchList);
           setBaseBranch(next.name);
           setFromRemote(next.fromRemote);
         }
@@ -621,6 +644,7 @@ export function NewWorktreeDialog({
     rootPath,
     initialIssue,
     initialPR,
+    restoreDraft,
     branchLoadAttempt,
     setFromRemote,
     setValidationError,
@@ -632,14 +656,15 @@ export function NewWorktreeDialog({
   // Initialize worktreeMode when projectSettings loads asynchronously
   const settingsDefaultMode = projectSettings?.defaultWorktreeMode;
   const settingsResourceEnvs = projectSettings?.resourceEnvironments;
+  // A Retry keeps the environment it was submitted with, local included.
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || restoreDraft) return;
     const defaultMode = settingsDefaultMode ?? "local";
     const envKeys = Object.keys(settingsResourceEnvs ?? {});
     if (defaultMode !== "local" && envKeys.includes(defaultMode)) {
       setWorktreeMode(defaultMode);
     }
-  }, [isOpen, settingsDefaultMode, settingsResourceEnvs]);
+  }, [isOpen, restoreDraft, settingsDefaultMode, settingsResourceEnvs]);
 
   // Focus new branch input after loading
   useEffect(() => {
@@ -650,6 +675,8 @@ export function NewWorktreeDialog({
 
   // --- Form dirty check and dismiss guard ---
   const formDirty = useMemo(() => {
+    // Retry took the failed row down, so this dialog holds the only copy of it.
+    if (restoreDraft) return true;
     if (selectedExistingBranch !== null) return true;
     if (errors.touchedFields.branchInput && branchInput.trim()) return true;
     if (errors.touchedFields.issue && selectedIssue !== null) return true;
@@ -661,6 +688,7 @@ export function NewWorktreeDialog({
     if (firstPrompt.trim()) return true;
     return false;
   }, [
+    restoreDraft,
     firstPrompt,
     branchInput,
     worktreePath,
@@ -819,6 +847,13 @@ export function NewWorktreeDialog({
     if (placeholderPath) {
       selectionStore.addPendingCreation(placeholderPath, {
         branch: fullBranchName,
+        issue: snapIssue,
+        openedForIssue: isIssueCreate,
+        pr: snapInitialPR ?? null,
+        baseBranch: snapBaseBranch,
+        branchMode: snapBranchMode,
+        fromRemote: snapFromRemote,
+        worktreeMode: snapWorktreeMode,
         recipeId: snapRecipeId,
         agentId: snapFirstAgent?.id ?? null,
         prompt: snapFirstPrompt,

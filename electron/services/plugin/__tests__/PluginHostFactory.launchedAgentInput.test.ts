@@ -62,7 +62,14 @@ vi.mock("../../forge/forgeCredentialUtils.js", () => ({
 }));
 
 import { createHost, type PluginHostFactoryDeps } from "../PluginHostFactory.js";
-import { _resetPluginLaunchesForTests, forgetPluginLaunches } from "../pluginLaunchedAgents.js";
+import {
+  _resetPluginLaunchesForTests,
+  admitRestoredPluginLaunches,
+  attachPluginLaunchPersistence,
+  forgetPluginLaunches,
+  type PluginLaunchPersistence,
+  type StoredPluginLaunch,
+} from "../pluginLaunchedAgents.js";
 import {
   UNBOUND_PLUGIN_HOST_BINDING,
   type PluginHostBinding,
@@ -639,4 +646,74 @@ describe("host.agents input on agents the plugin launched (#14018)", () => {
       expect(consentMock.ensureAllowed).not.toHaveBeenCalled();
     }
   );
+});
+
+describe("host.agents input after Daintree restarts (#16240)", () => {
+  let disk: Record<string, StoredPluginLaunch> | undefined;
+  const persistence: PluginLaunchPersistence = {
+    load: () => disk,
+    save: (records) => {
+      disk = structuredClone(records);
+    },
+  };
+
+  /** Quit and start again: memory goes, the disk and the restored pane stay. */
+  function restart(): void {
+    _resetPluginLaunchesForTests();
+    attachPluginLaunchPersistence(persistence);
+  }
+
+  beforeEach(() => {
+    disk = undefined;
+    attachPluginLaunchPersistence(persistence);
+  });
+
+  afterEach(() => {
+    _resetPluginLaunchesForTests();
+  });
+
+  it("interrupts, presses keys and submits to an agent restore resumed under its id", async () => {
+    const h = makeHarness();
+    await launch(h);
+    restart();
+    await expect(hostFor(h).agents.interrupt("t-1")).resolves.toEqual({ status: "not-found" });
+
+    admitRestoredPluginLaunches([{ id: "t-1", launchedByPluginId: PLUGIN_ID }]);
+    expect((await hostFor(h).agents.interrupt("t-1")).status).toBe("sent");
+    expect(pty.batchDoubleEscape).toHaveBeenCalledWith(["t-1"]);
+    await expect(hostFor(h).agents.sendKeys("t-1", { keys: ["Enter"] })).resolves.toEqual({
+      status: "sent",
+      keys: ["Enter"],
+    });
+    await expect(hostFor(h).agents.submit("t-1", "continue")).resolves.toEqual({
+      status: "sent",
+    });
+    expect(pty.submit).toHaveBeenCalledWith("t-1", "continue");
+  });
+
+  it("stays not-found for a pane the plugin launched under its own requestedId", async () => {
+    const h = makeHarness();
+    await launch(h, { args: { agentId: "claude", requestedId: "t-1" } });
+    restart();
+    admitRestoredPluginLaunches([{ id: "t-1", launchedByPluginId: PLUGIN_ID }]);
+    await expect(hostFor(h).agents.interrupt("t-1")).resolves.toEqual({ status: "not-found" });
+  });
+
+  it("stays not-found once the plugin's reach ended before the restart", async () => {
+    const h = makeHarness();
+    await launch(h);
+    forgetPluginLaunches(PLUGIN_ID);
+    restart();
+    admitRestoredPluginLaunches([{ id: "t-1", launchedByPluginId: PLUGIN_ID }]);
+    await expect(hostFor(h).agents.interrupt("t-1")).resolves.toEqual({ status: "not-found" });
+  });
+
+  it("gives another plugin nothing on the restored pane", async () => {
+    const h = makeHarness();
+    await launch(h);
+    restart();
+    admitRestoredPluginLaunches([{ id: "t-1", launchedByPluginId: PLUGIN_ID }]);
+    const other = createHost(h.deps, OTHER_PLUGIN_ID, UNBOUND_PLUGIN_HOST_BINDING).host;
+    await expect(other.agents.interrupt("t-1")).resolves.toEqual({ status: "not-found" });
+  });
 });

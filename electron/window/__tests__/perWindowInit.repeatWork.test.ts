@@ -106,7 +106,7 @@ vi.mock("../../services/ProjectSwitchService.js", () => ({
 }));
 vi.mock("../../menu.js", () => ({
   createApplicationMenu: createApplicationMenuMock,
-  rebuildApplicationMenuIfPluginVisibilityChanged: rebuildMenuIfChangedMock,
+  rebuildApplicationMenuIfStale: rebuildMenuIfChangedMock,
 }));
 vi.mock("../../services/plugin/PluginTourRegistry.js", () => ({
   onPluginToursChanged: vi.fn((listener: () => void) => {
@@ -231,6 +231,26 @@ describe("initPerWindowServices repeated work across windows", () => {
     expect(second.menuWindowIds).toEqual([1, 2]);
     const third = await openWindow(3);
     expect(third.menus).toBe(0);
+  });
+
+  it("skips the queued work of a window closed before it ran, leaving its replacement's", async () => {
+    let destroyed = false;
+    const closing = { ...fakeWindow(1), isDestroyed: () => destroyed } as unknown as BrowserWindow;
+    await initPerWindowServices(closing, fakeContext(1), undefined);
+    destroyed = true;
+    signalFirstInteractive(1);
+    await settle();
+    expect(probeCount()).toBe(0);
+
+    // Settled before the replacement opens: had the closed window's rebuild
+    // waited on the catalog, plugin init would count as settled and the
+    // replacement would queue no rebuild of its own.
+    pluginInit.resolve();
+    await settle();
+    const replacement = await openWindow(2);
+
+    expect(replacement.probes).toBeGreaterThanOrEqual(agentCount);
+    expect(replacement.menuWindowIds).toEqual([2, 2]);
   });
 
   it("re-probes for a window opened after the reuse window has passed", async () => {

@@ -137,7 +137,7 @@ function activatePluginNotification(page: PluginNotificationPage): void {
  */
 export function pagePluginNotification(page: PluginNotificationPage): boolean {
   if (page.replaceKey !== undefined) retirePluginNotification(page.replaceKey);
-  const settings = projectStore.getEffectiveNotificationSettings();
+  const settings = projectStore.getEffectiveNotificationSettings(page.projectId);
   if (settings.enabled === false) return false;
   if (isScheduledQuietNow(settings) || agentNotificationService.isSessionMuted()) return false;
   if (isPluginSurfaceInFront(page.projectId)) return false;

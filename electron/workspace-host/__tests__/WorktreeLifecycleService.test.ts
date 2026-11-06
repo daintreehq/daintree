@@ -824,6 +824,172 @@ describe("WorktreeLifecycleService", () => {
       expect(result.error).toContain("docker compose up -d");
     });
 
+    describe("failure summary (#15734)", () => {
+      const run = (commands: string[], readFailureSummary = true) =>
+        service.runCommands(commands, {
+          cwd: "/wt",
+          env: {},
+          onProgress: vi.fn(),
+          readFailureSummary,
+        });
+
+      it("reads the failing command's last line after DAINTREE_SETUP_ERROR:, leaving the error as it was", async () => {
+        mockSpawn.mockReturnValue(
+          makeFakeProcessWithOutput("checking\nDAINTREE_SETUP_ERROR:  install drifted \n\n", 1)
+        );
+
+        const result = await run(["node check.mjs"]);
+
+        expect(result.failureSummary).toBe("install drifted");
+        expect(result.error).toBe("Command exited with code 1: node check.mjs");
+      });
+
+      it("reads nothing unless asked, so other phases' results are unchanged", async () => {
+        mockSpawn.mockReturnValue(makeFakeProcessWithOutput("DAINTREE_SETUP_ERROR: drifted\n", 1));
+
+        const result = await run(["node check.mjs"], false);
+
+        expect(result).not.toHaveProperty("failureSummary");
+      });
+
+      it("reads a summary split across output chunks and stderr", async () => {
+        mockSpawn.mockReturnValue(
+          makeFakeProcessWithOutput(["progress\nDAINTREE_SETUP", "_ERROR: half "], 1, "and half\n")
+        );
+
+        expect((await run(["node check.mjs"])).failureSummary).toBe("half and half");
+      });
+
+      it("ignores a summary that isn't the last line, or an earlier command's", async () => {
+        mockSpawn.mockReturnValueOnce(
+          makeFakeProcessWithOutput("DAINTREE_SETUP_ERROR: not last\nmore output\n", 1)
+        );
+        expect((await run(["node check.mjs"])).failureSummary).toBeUndefined();
+
+        mockSpawn
+          .mockReturnValueOnce(makeFakeProcessWithOutput("DAINTREE_SETUP_ERROR: earlier\n", 0))
+          .mockReturnValueOnce(makeFakeProcessWithOutput("", 1));
+        expect((await run(["node first.mjs", "node second.mjs"])).failureSummary).toBeUndefined();
+      });
+
+      it("drops control characters, scrubs secrets and caps the summary", async () => {
+        const token = `ghp_${"a".repeat(36)}`;
+        mockSpawn.mockReturnValueOnce(
+          makeFakeProcessWithOutput(`DAINTREE_SETUP_ERROR: bad\u0007 token ${token}\n`, 1)
+        );
+        const scrubbed = (await run(["node check.mjs"])).failureSummary ?? "";
+        expect(scrubbed.startsWith("bad token ")).toBe(true);
+        expect(scrubbed).not.toContain(token);
+        expect(scrubbed.includes(String.fromCharCode(7))).toBe(false);
+
+        mockSpawn.mockReturnValueOnce(
+          makeFakeProcessWithOutput(`DAINTREE_SETUP_ERROR: ${"x".repeat(900)}\n`, 1)
+        );
+        const capped = (await run(["node check.mjs"])).failureSummary ?? "";
+        expect(capped).toHaveLength(500);
+        expect(capped.endsWith("…")).toBe(true);
+      });
+
+      it("keeps words a control character separated apart, so a token after one is still scrubbed", async () => {
+        const token = `ghp_${"b".repeat(36)}`;
+        mockSpawn.mockReturnValue(
+          makeFakeProcessWithOutput(`DAINTREE_SETUP_ERROR: token\u0007${token}\n`, 1)
+        );
+
+        expect((await run(["node check.mjs"])).failureSummary).toBe("token [REDACTED]");
+      });
+
+      it("scrubs the raw line, where a control character can sit inside a token", async () => {
+        mockSpawn.mockReturnValue(
+          makeFakeProcessWithOutput(
+            "DAINTREE_SETUP_ERROR: see https://x.test/cb?access_token=abc\u0007defghij\n",
+            1
+          )
+        );
+
+        expect((await run(["node check.mjs"])).failureSummary).not.toContain("defghij");
+      });
+
+      it("scrubs again once control characters are spaces, which some patterns need", async () => {
+        mockSpawn.mockReturnValue(
+          makeFakeProcessWithOutput(`DAINTREE_SETUP_ERROR: Bearer\u0007${"t".repeat(24)}\n`, 1)
+        );
+
+        expect((await run(["node check.mjs"])).failureSummary).not.toContain("t".repeat(24));
+      });
+
+      it("caps by code point, never splitting an emoji", async () => {
+        mockSpawn.mockReturnValue(
+          makeFakeProcessWithOutput(`DAINTREE_SETUP_ERROR: ${"🙂".repeat(600)}\n`, 1)
+        );
+
+        const summary = (await run(["node check.mjs"])).failureSummary ?? "";
+
+        expect(Array.from(summary)).toHaveLength(500);
+        expect(summary).toBe(`${"🙂".repeat(499)}…`);
+      });
+
+      it("ignores a prefix that only looks like a line start because the scan window cut there", async () => {
+        const prefix = "DAINTREE_SETUP_ERROR:";
+        mockSpawn.mockReturnValue(
+          // The last 4096 characters are exactly the prefix, the x's and the newline.
+          makeFakeProcessWithOutput(`junk${prefix}${"x".repeat(4096 - prefix.length - 1)}\n`, 1)
+        );
+
+        expect((await run(["node check.mjs"])).failureSummary).toBeUndefined();
+      });
+
+      it("ignores what a timed-out command prints after the timeout marker", async () => {
+        const originalPlatform = process.platform;
+        // The Windows kill path is mocked, so no real signal goes anywhere.
+        Object.defineProperty(process, "platform", { value: "win32" });
+        vi.useFakeTimers();
+        try {
+          const listeners: Record<string, ((...args: unknown[]) => void)[]> = {};
+          let onStdout: ((chunk: Buffer) => void) | undefined;
+          mockSpawn.mockReturnValue({
+            pid: 12345,
+            stdout: {
+              on: vi.fn((event: string, cb: (chunk: Buffer) => void) => {
+                if (event === "data") onStdout = cb;
+              }),
+            },
+            stderr: { on: vi.fn() },
+            on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+              listeners[event] ??= [];
+              listeners[event].push(cb);
+            }),
+            kill: vi.fn(),
+          });
+
+          const resultPromise = service.runCommands(["node slow.mjs"], {
+            cwd: "/wt",
+            env: {},
+            timeoutMs: 1000,
+            onProgress: vi.fn(),
+            readFailureSummary: true,
+          });
+          vi.advanceTimersByTime(1001);
+          onStdout?.(Buffer.from("DAINTREE_SETUP_ERROR: late\n"));
+          listeners["close"]?.forEach((cb) => cb(1, null));
+          const result = await resultPromise;
+
+          expect(result.timedOut).toBe(true);
+          expect(result.output).toContain("DAINTREE_SETUP_ERROR: late");
+          expect(result.failureSummary).toBeUndefined();
+        } finally {
+          vi.useRealTimers();
+          Object.defineProperty(process, "platform", { value: originalPlatform });
+        }
+      });
+
+      it("reads nothing from a marker with no summary after it", async () => {
+        mockSpawn.mockReturnValue(makeFakeProcessWithOutput("DAINTREE_SETUP_ERROR:   \n", 1));
+
+        expect((await run(["node check.mjs"])).failureSummary).toBeUndefined();
+      });
+    });
+
     it("reports progress correctly for resource command sequences", async () => {
       mockSpawn.mockImplementation(() => makeFakeProcess(0));
 
@@ -1501,6 +1667,56 @@ describe("WorktreeLifecycleService", () => {
       const result = await service.runLifecycleSetup("wt-1", "/wt", makeCtx(monitor), true);
 
       expect(result).toEqual({ shouldProvision: false, needsApproval: false });
+    });
+
+    it("adds the failing setup command's own summary to the setup error (#15734)", async () => {
+      mockAccess.mockImplementation(async (p: unknown) => {
+        if (n(p as string).endsWith("/root/.daintree/config.json")) return undefined;
+        throw new Error("ENOENT");
+      });
+      mockReadFile.mockResolvedValue(
+        JSON.stringify({ setup: ["node scripts/link-shared-node-modules.mjs"] }) as never
+      );
+      mockSpawn.mockImplementation(() => {
+        const listeners: Record<string, ((...args: unknown[]) => void)[]> = {};
+        let onStdout: ((chunk: Buffer) => void) | undefined;
+        setTimeout(() => {
+          onStdout?.(Buffer.from("DAINTREE_SETUP_ERROR: Run `npm ci` in /root.\n"));
+          listeners["close"]?.forEach((cb) => cb(1, null));
+        }, 0);
+        return {
+          pid: 1234,
+          stdout: {
+            on: vi.fn((event: string, cb: (chunk: Buffer) => void) => {
+              if (event === "data") onStdout = cb;
+            }),
+          },
+          stderr: { on: vi.fn() },
+          on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+            listeners[event] ??= [];
+            listeners[event].push(cb);
+          }),
+          kill: vi.fn(),
+        } as never;
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const monitor = makeFakeMonitor();
+      await service.runLifecycleSetup("wt-1", "/wt", makeCtx(monitor), false);
+
+      expect(monitor.lifecycleStatus).toMatchObject({
+        phase: "setup",
+        state: "failed",
+        error:
+          "Run `npm ci` in /root. (Command exited with code 1: node scripts/link-shared-node-modules.mjs)",
+      });
+      // The summary is command output, so it stays out of the log.
+      expect(warn).toHaveBeenCalledWith(
+        "[WorktreeLifecycle] Setup failed for worktree wt-1:",
+        "Command exited with code 1: node scripts/link-shared-node-modules.mjs"
+      );
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("npm ci");
+      warn.mockRestore();
     });
 
     it("returns shouldProvision=false when no config exists", async () => {

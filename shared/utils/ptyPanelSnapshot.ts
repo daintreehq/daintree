@@ -1,4 +1,5 @@
 import { sanitizeAgentEnv } from "./agentPresets.js";
+import { readSpawnProvenance } from "./scheduledRunProvenance.js";
 import { stripAssignedSessionIdArgs } from "../types/agentSettings.js";
 import type { PtyPanelData } from "../types/panel.js";
 import type { PanelSnapshot } from "../types/project.js";
@@ -29,8 +30,10 @@ export type PtySnapshotSource = Pick<
   | "env"
   | "agentModelId"
   | "spawnedBy"
+  | "scheduledRun"
   | "agentPresetId"
   | "agentPresetColor"
+  | "agentAccountId"
   | "originalPresetId"
   | "isUsingFallback"
   | "fallbackChainIndex"
@@ -44,6 +47,9 @@ export type PtySnapshotSource = Pick<
   | "firstPrompt"
   | "agentState"
   | "lastStateChange"
+  | "runtimeStatus"
+  | "exitCode"
+  | "sessionPreservingExit"
 >;
 
 export function serializePtyPanel(t: PtySnapshotSource): Partial<PanelSnapshot> {
@@ -61,6 +67,13 @@ export function serializePtyPanel(t: PtySnapshotSource): Partial<PanelSnapshot> 
   // stale session id or agent state would let the next restore launch what the
   // hold is keeping back (#12434).
   const held = t.restoreRecovery !== undefined;
+  // Only an exit the pane still shows (#15941). A session-preserving teardown
+  // is restored with a new process, and an exit with no code was never seen.
+  const shownExit =
+    t.runtimeStatus === "exited" &&
+    t.sessionPreservingExit !== true &&
+    !held &&
+    Number.isInteger(t.exitCode);
   return {
     launchAgentId: t.launchAgentId,
     cwd: t.cwd,
@@ -72,9 +85,13 @@ export function serializePtyPanel(t: PtySnapshotSource): Partial<PanelSnapshot> 
       t.callerLaunchFlags?.length && { callerLaunchFlags: t.callerLaunchFlags }),
     ...(env && { env }),
     ...(t.agentModelId && { agentModelId: t.agentModelId }),
-    ...(t.spawnedBy && { spawnedBy: t.spawnedBy }),
+    // Written as a pair or not at all (#15977).
+    ...readSpawnProvenance(t.spawnedBy, t.scheduledRun),
     ...(t.agentPresetId && { agentPresetId: t.agentPresetId }),
     ...(t.agentPresetColor && { agentPresetColor: t.agentPresetColor }),
+    // Only beside the env that holds its folder: without it a relaunch has
+    // nothing to put the pane back on (#16040).
+    ...(t.agentAccountId && env && { agentAccountId: t.agentAccountId }),
     ...(t.originalPresetId && { originalPresetId: t.originalPresetId }),
     ...(t.isUsingFallback && { isUsingFallback: true }),
     ...(typeof t.fallbackChainIndex === "number" && { fallbackChainIndex: t.fallbackChainIndex }),
@@ -101,5 +118,6 @@ export function serializePtyPanel(t: PtySnapshotSource): Partial<PanelSnapshot> 
     // indicator on the next reload (issue #5832).
     ...(t.agentState && t.agentState !== "directing" && !held && { agentState: t.agentState }),
     ...(t.lastStateChange !== undefined && !held && { lastStateChange: t.lastStateChange }),
+    ...(shownExit && { exitCode: t.exitCode }),
   };
 }

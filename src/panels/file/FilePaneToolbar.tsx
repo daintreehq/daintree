@@ -10,7 +10,7 @@ import {
   XCircle,
 } from "lucide-react";
 import type { FileViewMode } from "@shared/types/panel";
-import { FolderOpen, FolderTree } from "@/components/icons";
+import { FolderTree } from "@/components/icons";
 import {
   MarkdownTextSizeControl,
   MarkdownTextSizeMenuItems,
@@ -24,6 +24,7 @@ import { getFileTypeIcon } from "@/panels/file-browser/fileTypeIcons";
 import { saveHostFileLabel } from "@/services/hostFileSave";
 import { FileViewerToolbar, TOOLBAR_ICON_CLASS } from "@/components/FileViewer/FileViewerToolbar";
 import type { RevealCopy } from "@/components/FileViewer/revealCopy";
+import { runTransientReveal } from "@/components/FileViewer/revealFeedback";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { FileEditorDefaultNotice } from "@/components/Plugin/FileEditorDefaultNotice";
@@ -225,12 +226,11 @@ export function FilePaneToolbar({
                 )}
                 {/* Reveal is always offered, even for a file the viewer can't
                     render — the OS file manager is then the only way forward. */}
-                <FileViewerToolbar.IconButton
-                  label={reveal.label}
-                  onClick={() => void handleOpenExternal("reveal")}
-                >
-                  <FolderOpen className={TOOLBAR_ICON_CLASS} />
-                </FileViewerToolbar.IconButton>
+                <FileViewerToolbar.RevealButton
+                  reveal={reveal}
+                  path={filePath}
+                  onReveal={() => handleOpenExternal("reveal")}
+                />
                 <FileViewerToolbar.IconButton
                   label={
                     savesPageInstead
@@ -301,8 +301,10 @@ export function FilePaneToolbar({
                       Show in file browser
                     </DropdownMenuItem>
                   )}
-                  <DropdownMenuItem onSelect={() => void handleOpenExternal("reveal")}>
-                    <FolderOpen className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+                  <DropdownMenuItem
+                    onSelect={() => runTransientReveal(reveal, () => handleOpenExternal("reveal"))}
+                  >
+                    <reveal.icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
                     {reveal.label}
                   </DropdownMenuItem>
                   <DropdownMenuItem onSelect={onRunOpenTarget}>
@@ -366,7 +368,12 @@ export function FilePaneToolbar({
             variant: "dangerFilled",
             loading: showRetrySpinner,
             disabled: isErrorTargetPending,
-            onClick: () => void handleOpenExternal(externalError.target),
+            // A retried copy confirms like the first attempt would have; the
+            // banner it came from unmounts on success.
+            onClick: () =>
+              externalError.target === "reveal"
+                ? runTransientReveal(reveal, () => handleOpenExternal("reveal"))
+                : void handleOpenExternal(externalError.target),
             ariaLabel: errorCopy.retryAriaLabel,
           }}
           onClose={dismissExternalError}

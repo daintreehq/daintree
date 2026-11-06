@@ -115,6 +115,18 @@ describe("pluginServerKeysFor", () => {
     expectSafe(keys);
   });
 
+  it("never names a plugin daintree-decisions, the server agents ask the person through", () => {
+    const keys = pluginServerKeysFor([
+      installed("acme.decisions"),
+      installed("zeta.notes", "decisions"),
+    ]);
+
+    expect(keys.get("acme.decisions")).toBe(`daintree-decisio-${hash("global\0acme.decisions")}`);
+    expect(keys.get("zeta.notes")).toBe(`daintree-decisio-${hash("global\0zeta.notes")}`);
+    expect([...keys.values()]).not.toContain("daintree-decisions");
+    expectSafe(keys);
+  });
+
   it("leaves room for a 32-character tool name inside Claude's 64-character limit", () => {
     const keys = pluginServerKeysFor([
       installed("acme.an-extremely-long-plugin-manifest-name"),

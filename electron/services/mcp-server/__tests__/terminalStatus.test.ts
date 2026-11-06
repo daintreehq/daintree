@@ -459,6 +459,45 @@ describe("buildViewlessTerminalStatus results", () => {
     expect(result.terminals[0]).not.toHaveProperty("recentOutput");
   });
 
+  it("reads the input box by the agent the record reports, as the view's answer does (#16189)", async () => {
+    const screen =
+      "⏺ Done.\r\n────────\r\n❯ \x1b[2mopen the PR\x1b[22m\r\n────────\r\n  ? for shortcuts";
+    const typed = "⏺ Done.\r\n────────\r\n❯ open the PR\r\n────────\r\n  ? for shortcuts";
+    const result = await buildViewlessTerminalStatus(
+      deps(
+        [
+          // Detection outranks the launch, as the entry's own `agentId` does.
+          record({ id: "detected", launchAgentId: "codex", detectedAgentId: "claude" }),
+          record({ id: "typed" }),
+          record({ id: "codex", launchAgentId: "codex" }),
+          record({ id: "gone" }),
+        ],
+        {
+          serialized: {
+            detected: { data: screen },
+            typed: { data: typed },
+            codex: { data: screen },
+            gone: null,
+          },
+        }
+      ),
+      WORKSPACE,
+      { terminalIds: ["detected", "typed", "codex", "gone"], includeOutput: {} }
+    );
+
+    const [detected, typedEntry, codex, gone] = result.terminals;
+    expect(detected?.inputLine).toEqual({ state: "suggestion", text: "open the PR" });
+    expect(detected?.recentOutput).toContain("\n❯ [suggested by Claude Code: open the PR]\n");
+    expect(typedEntry?.inputLine).toEqual({ state: "typed", text: "open the PR" });
+    expect(typedEntry?.recentOutput).toContain("\n❯ open the PR\n");
+    // An agent with no declared rule reads as unknown, its tail as drawn.
+    expect(codex?.inputLine).toEqual({ state: "unknown", text: "" });
+    expect(codex?.recentOutput).toContain("\n❯ open the PR\n");
+    // No screen was read, so there is no box to report.
+    expect(gone?.recentOutput).toBeNull();
+    expect(gone).not.toHaveProperty("inputLine");
+  });
+
   it("tails the requested number of lines when output is asked for", async () => {
     const d = deps([record()], { serialized: { "t-1": { data: "one\ntwo\nthree\n" } } });
 

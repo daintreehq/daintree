@@ -831,11 +831,19 @@ export const SELF_GATED_TOOLS: ReadonlySet<string> = new Set([
   "terminal.restartOnPresetOwned",
   "terminal.readLastMessageOwned",
   "worktree.deleteOwned",
+  "worktree.retireOwned",
+  // Waits only for panels this session closed (#15728): an argument-free probe
+  // names none, and its correct refusal is not a miss.
+  "terminal.waitForExit",
   "help.displayImage",
   // Terminal notices answer only a caller with a pane of its own, which no
   // perf session has. Their admit/refuse grading lives in
   // `sessionServer.notices.test.ts` rather than PERF-283.
   "terminal.notifyWhenIdle",
+  // Withdraws a message only the session that held it can name (#16187): an
+  // argument-free probe names none, and its refusal is not a miss. Its
+  // admit/refuse grading lives in `sessionServer.globalSteer.test.ts`.
+  "terminal.cancelQueuedSend",
   // Batch tools validate and expand their arguments in main and run each item
   // as its single call, so a battery of argument-free probes only reads their
   // refusal. The items are the calls above; `sessionServer.notices.test.ts` grades the
@@ -843,6 +851,8 @@ export const SELF_GATED_TOOLS: ReadonlySet<string> = new Set([
   "agent.launchMany",
   "terminal.sendCommandMany",
   "terminal.closeMany",
+  // Validated in main and run as its create, wait and launch, the same way.
+  "agent.launchInNewWorktree",
 ]);
 
 /** The workspace a bound session is pinned to in these scenarios. */

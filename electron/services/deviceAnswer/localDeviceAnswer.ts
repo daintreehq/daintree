@@ -6,7 +6,13 @@ import { scratchStore } from "../ScratchStore.js";
 import { planListedChoice } from "../../../shared/utils/terminalChoice.js";
 import { answerRefused, answerRunByLabel } from "../terminalAnswer.js";
 import { redactSecrets } from "../redactSecrets.js";
-import { isRunStillWaiting, listWaitingRuns, type WaitingRunView } from "./deviceAnswerRuns.js";
+import {
+  isRunStillWaiting,
+  listWaitingRuns,
+  type WaitingRunRef,
+  type WaitingRuns,
+} from "./deviceAnswerRuns.js";
+import { questionIdOf } from "./questionId.js";
 
 /**
  * Who a device's answer stands as in this machine's drive lease. It is only
@@ -24,31 +30,38 @@ function drivesRun(standing: DeviceLeaseStanding, runId: string): boolean {
 
 const DRIVEN_ELSEWHERE = "This project is being driven from another screen. Nothing was pressed.";
 
-/** This machine's waiting runs, as a paired device is shown them. */
-export function listLocalWaitingRuns(): Promise<WaitingRunView[]> {
-  return listWaitingRuns({
-    fleet: () => getFleetSnapshotServiceRef()?.getLastBroadcast() ?? null,
-    pty: () => getPtyClient(),
-    projectName: (workspaceId) =>
-      projectStore.getProjectById(workspaceId)?.name ??
-      scratchStore.getScratchById(workspaceId)?.name ??
-      null,
-  });
+/** This machine's waiting runs, as a paired device is shown them, with `read` read first. */
+export function listLocalWaitingRuns(
+  options: { read?: WaitingRunRef | null } = {}
+): Promise<WaitingRuns> {
+  return listWaitingRuns(
+    {
+      fleet: () => getFleetSnapshotServiceRef()?.getLastBroadcast() ?? null,
+      pty: () => getPtyClient(),
+      projectName: (workspaceId) =>
+        projectStore.getProjectById(workspaceId)?.name ??
+        scratchStore.getScratchById(workspaceId)?.name ??
+        null,
+    },
+    options
+  );
 }
 
 /**
  * Press the option labelled `label` in one of this machine's runs, for a
- * device standing as `standing`. The same rules hold whether the device is
- * paired here or with a Shell attached to this host.
+ * device standing as `standing`, only while the screen still asks the
+ * question `questionId` was listed for. The same rules hold whether the
+ * device is paired here or with a Shell attached to this host.
  */
 export async function answerLocalRun(request: {
   standing: DeviceLeaseStanding;
   runId: string;
   spawnedAt: number;
   label: string;
+  questionId: string;
   stillAllowed: () => string | null;
 }): Promise<void> {
-  const { standing, runId, spawnedAt, label, stillAllowed } = request;
+  const { standing, runId, spawnedAt, label, questionId, stillAllowed } = request;
   const pty = getPtyClient();
   if (!pty) throw answerRefused("Daintree's terminals aren't running. Nothing was pressed.");
   const fleet = getFleetSnapshotServiceRef()?.getLastBroadcast() ?? null;
@@ -64,6 +77,11 @@ export async function answerLocalRun(request: {
     // Only an option of the list on screen now, never text near a composer,
     // matched as the device was sent it and pressed from the list as drawn.
     plan: (screen, wanted) => planListedChoice(screen, wanted, redactSecrets),
+    // The run waiting is not enough: a later question can offer the same labels.
+    checkQuestion: (question) =>
+      questionIdOf(runId, spawnedAt, question) === questionId
+        ? null
+        : "The question changed since this device showed it.",
     stillAllowed: () => {
       const refusal = stillAllowed();
       if (refusal !== null) return refusal;

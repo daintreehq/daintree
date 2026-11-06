@@ -11,7 +11,6 @@ import React, {
 import {
   Bell,
   BellOff,
-  Check,
   ChevronDown,
   CirclePlay,
   CopyPlus,
@@ -43,6 +42,7 @@ import {
   KeyboardSensor,
   TouchSensor,
   type DragEndEvent,
+  type DragStartEvent,
   type UniqueIdentifier,
 } from "@dnd-kit/core";
 import {
@@ -56,12 +56,14 @@ import {
   PrimaryMouseSensor,
   TOUCH_SENSOR_OPTIONS,
 } from "@/components/DragDrop/dragActivation";
+import { useNestedDragGuard } from "@/components/DragDrop/useNestedDragGuard";
 import { PanelTabList } from "./PanelTabList";
 import { inlineRenameFieldClassName, inlineRenameFieldInputProps } from "./inlineRenameField";
 import { focusPaneWhenStripCloses, revealTabInStrip } from "@/components/ui/document-tab";
 import { isTabCloseKey, useKeyboardTabClose } from "@/hooks/useKeyboardTabClose";
 import type { PanelKind } from "@/types";
 import { cn } from "@/lib/utils";
+import { pluralNoun, pluralize } from "@/lib/pluralize";
 import { formatShortcutForTooltip } from "@/lib/platform";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -69,18 +71,12 @@ import { SurfaceHeader, SURFACE_HEADER_FOCUS_LIFT_CLASS } from "@/components/ui/
 import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
 import { Button } from "@/components/ui/button";
 import { AnimatedLabel } from "@/components/ui/AnimatedLabel";
-import {
-  STATE_COLORS,
-  STATE_ICONS,
-  getEffectiveStateColor,
-  getEffectiveStateIcon,
-  getEffectiveStateLabel,
-} from "@/components/Worktree/terminalStateConfig";
+import { STATE_COLORS, STATE_ICONS } from "@/components/Worktree/terminalStateConfig";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { PluginPanelBadges } from "@/components/Panel/PluginPanelBadges";
 import { PluginPanelActivityIndicator } from "@/components/Panel/PluginPanelActivity";
 import { TerminalPluginStatusChips } from "@/components/Terminal/TerminalPluginStatusChips";
-import { BellDot, FolderGit2, NotebookPen } from "@/components/icons";
+import { BellDot, FolderGit2, NotebookPen, SmilePlus } from "@/components/icons";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { makeSortableAnnouncements } from "@/components/DragDrop/sortableAnnouncements";
 import {
@@ -89,8 +85,8 @@ import {
   useEffectiveCombo,
   useTabOverflow,
 } from "@/hooks";
-import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { TerminalHostSuffix } from "@/components/Terminal/TerminalHostSuffix";
+import { TerminalScheduleChip } from "@/components/Terminal/TerminalScheduleChip";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { usePanelStore } from "@/store/panelStore";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
@@ -105,8 +101,12 @@ import { PopoverAnchor } from "@/components/ui/popover";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { TabButton, type TabInfo } from "./TabButton";
-import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
-import { isAskingWait } from "@/lib/handBackPresentation";
+import { PanelEmojiDialog } from "./PanelEmojiDialog";
+import { withDisplayEmoji } from "@shared/utils/displayIdentity";
+import { HiddenTabMenuItem } from "./HiddenTabMenuItem";
+import { useFleetBandRunIds } from "@/hooks/useRunFleetBand";
+import { NEEDS_YOU_BANDS } from "@/lib/fleetAttention";
+import { isNeedsYouPane } from "@/lib/paneSessionPresentation";
 import { SortableTabButton } from "./SortableTabButton";
 import { TAB_DRAG_MODIFIERS } from "./tabDragModifiers";
 import { MoveToWorktreePicker } from "./MoveToWorktreePicker";
@@ -163,15 +163,75 @@ import { HEADER_CHIP_CLASS } from "@/components/Terminal/terminalHeaderChip";
 /**
  * The window controls keep `icon-xs`'s 24px target but draw a 14px glyph, the
  * size of the kind icon at the other end of the bar; `icon-xs`'s own 12px reads
- * as fine print beside it and made maximize and dock hard to tell apart.
+ * as fine print beside it and made maximize and dock hard to tell apart. The
+ * ring is inset like the title's and the tabs': outset, a 24px target's ring
+ * fills the 32px bar edge to edge and the bar's clip shaves it.
  */
-const CONTROL_ICON = "[&_svg]:size-3.5";
+const CONTROL_ICON = "[&_svg]:size-3.5 focus-visible:-outline-offset-2";
 
 /**
  * A task turn after a menu's close hook: the menu primitive restores focus in
  * that same hook, so work that moves focus elsewhere starts after it lands.
  */
 const AFTER_MENU_FOCUS_RESTORE_MS = 0;
+
+/** Space kept between the maximized readout and anything it might meet. */
+const READOUT_CLEARANCE_PX = 12;
+
+/**
+ * Whether the maximized readout, centred over the whole bar, clears everything
+ * the bar lays out around it: the identity group, the metadata, the tab strip,
+ * a plugin toolbar, the status box and the controls, each marked
+ * `data-readout-obstacle`. The readout is absolute, so hiding it never moves
+ * what it is measured against. The status box counts even when empty: it is
+ * reserved space a status can appear in.
+ */
+function useReadoutClearance(
+  readoutRef: React.RefObject<HTMLDivElement | null>,
+  active: boolean
+): boolean {
+  const [clear, setClear] = useState(true);
+  useLayoutEffect(() => {
+    const readout = readoutRef.current;
+    const bar = readout?.parentElement;
+    if (!active || !readout || !bar || typeof ResizeObserver === "undefined") {
+      setClear(true);
+      return;
+    }
+    const measure = () => {
+      const r = readout.getBoundingClientRect();
+      const blocked = Array.from(bar.querySelectorAll<HTMLElement>("[data-readout-obstacle]")).some(
+        (el) => {
+          const o = el.getBoundingClientRect();
+          return (
+            o.width > 0 &&
+            o.right + READOUT_CLEARANCE_PX > r.left &&
+            o.left - READOUT_CLEARANCE_PX < r.right
+          );
+        }
+      );
+      setClear(!blocked);
+    };
+    const resizes = new ResizeObserver(measure);
+    // Obstacles come and go (a chip, a tab strip), so the set is re-observed
+    // whenever the bar's tree changes rather than once at mount.
+    const observeAll = () => {
+      resizes.disconnect();
+      resizes.observe(bar);
+      resizes.observe(readout);
+      bar.querySelectorAll("[data-readout-obstacle]").forEach((el) => resizes.observe(el));
+      measure();
+    };
+    observeAll();
+    const mutations = new MutationObserver(observeAll);
+    mutations.observe(bar, { childList: true, subtree: true });
+    return () => {
+      mutations.disconnect();
+      resizes.disconnect();
+    };
+  }, [active, readoutRef]);
+  return clear;
+}
 
 export interface PanelHeaderProps {
   id: string;
@@ -333,12 +393,10 @@ function PanelHeaderComponent({
   const dragHandle = useDragHandle();
 
   // The window controls are one toolbar: one Tab stop per pane, arrows within.
-  // Six panes cost six presses to cross, not twenty-four.
-  // Not in the dock: a dock preview is hosted inside a Radix popover, and the
-  // hook excludes controls under a popper wrapper (it means an open menu),
-  // which would leave a dock header with no Tab stop at all.
+  // Six panes cost six presses to cross, not twenty-four. A dock preview's
+  // header gets the same contract inside its popover.
   const controlsRef = useRef<HTMLDivElement | null>(null);
-  const handleControlsKeyDown = useToolbarRoving(controlsRef, location !== "dock");
+  const handleControlsKeyDown = useToolbarRoving(controlsRef);
   const pendingTabFocusRef = useRef<number | null>(null);
   useEffect(
     () => () => {
@@ -362,7 +420,9 @@ function PanelHeaderComponent({
 
   // Get background activity stats for Zen Mode header
   const { activeCount, workingCount, waitingCount } = useBackgroundPanelStats(id, isMaximized);
-  const handBackRunIds = useHandBackRunIds();
+  const readoutRef = useRef<HTMLDivElement | null>(null);
+  const readoutClear = useReadoutClearance(readoutRef, isMaximized && activeCount > 0);
+  const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
 
   // Check if panel has dangerous launch flags
   const hasDangerousFlags = (() => {
@@ -433,7 +493,6 @@ function PanelHeaderComponent({
   const collapseScratchpad = usePanelStore((state) => state.collapseScratchpad);
   const scratchpadToggleLabel =
     scratchpadState === "collapsed" ? "Show scratchpad" : "Hide scratchpad";
-  const isHibernated = useIsHibernated(id);
 
   // Read from the subscribed snapshot, not the registry helpers: a plugin
   // registering, dropping or re-flagging its kind has to reach this header.
@@ -456,6 +515,19 @@ function PanelHeaderComponent({
   // The panel's own worktree, not the selected one: a panel can sit in a
   // worktree other than the one the sidebar has active.
   const currentWorktreeId = usePanelStore((state) => state.panelsById[id]?.worktreeId);
+  const displayEmoji = usePanelStore((state) => state.panelsById[id]?.displayEmoji);
+  // Which panel the emoji dialog was opened for, kept and dropped as the move
+  // picker's is below, so a header that goes on to speak for another panel
+  // never retargets an open dialog.
+  const [emojiDialogPanelId, setEmojiDialogPanelId] = useState<string | null>(null);
+  if (emojiDialogPanelId !== null && emojiDialogPanelId !== id) {
+    setEmojiDialogPanelId(null);
+  }
+  // Mounted on first use, so a header that never opens it carries no picker.
+  const [hasOpenedEmojiDialog, setHasOpenedEmojiDialog] = useState(false);
+  // Opened from the menu's close hook, as the move picker is: opened from the
+  // item, the menu's focus return would land behind the dialog.
+  const pendingEmojiDialogRef = useRef<string | null>(null);
   // The kind the panel was created as. A PTY-backed plugin panel renders
   // through TerminalPane, which hands this header "terminal", but only the
   // stored kind says whether Duplicate has a recipe to run.
@@ -564,6 +636,7 @@ function PanelHeaderComponent({
     // hook below never runs for that close; drop the intent rather than let it
     // open the picker on some later, unrelated close.
     pendingMovePickerRef.current = null;
+    pendingEmojiDialogRef.current = null;
     pendingMenuDispatchRef.current = null;
   };
   const handleOverflowMenuCloseAutoFocus = (event: Event) => {
@@ -577,6 +650,17 @@ function PanelHeaderComponent({
           source: "menu",
         });
       }, AFTER_MENU_FOCUS_RESTORE_MS);
+      return;
+    }
+    const pendingEmojiPanelId = pendingEmojiDialogRef.current;
+    pendingEmojiDialogRef.current = null;
+    if (pendingEmojiPanelId !== null) {
+      if (pendingEmojiPanelId !== id) return;
+      // The dialog focuses its own search field and hands focus back to the
+      // button when it closes.
+      event.preventDefault();
+      setHasOpenedEmojiDialog(true);
+      setEmojiDialogPanelId(id);
       return;
     }
     const pendingPanelId = pendingMovePickerRef.current;
@@ -686,7 +770,11 @@ function PanelHeaderComponent({
       panelPty?.agentState === "waiting" ||
       panelPty?.agentState === "exited"
     ) {
-      fireWatchNotification(id, panel?.title ?? id, panelPty.agentState);
+      fireWatchNotification(
+        id,
+        withDisplayEmoji(panel?.title ?? id, panel?.displayEmoji),
+        panelPty.agentState
+      );
     } else {
       watchPanel(id);
     }
@@ -857,17 +945,26 @@ function PanelHeaderComponent({
   // While a tab drag is live (keyboard pickup), the tablist arrow handler must
   // not also move focus/selection — dnd-kit's sensor owns the arrow keys.
   const isTabDragActiveRef = useRef(false);
-  const handleTabDragStart = useCallback(() => {
-    isTabDragActiveRef.current = true;
-  }, []);
+  // DndProvider never sees a strip drag, so the strip raises the webview shield
+  // itself: a tab dragged down over a browser pane's page must not lose its drop.
+  const { beginDrag: beginTabDrag, finishDrag: finishTabDrag } = useNestedDragGuard();
+  const handleTabDragStart = useCallback(
+    (event: DragStartEvent) => {
+      isTabDragActiveRef.current = true;
+      beginTabDrag(event.activatorEvent);
+    },
+    [beginTabDrag]
+  );
   const handleTabDragCancel = useCallback(() => {
     isTabDragActiveRef.current = false;
-  }, []);
+    finishTabDrag();
+  }, [finishTabDrag]);
 
   // Handle tab reorder drag end
   const handleTabDragEnd = useCallback(
     (event: DragEndEvent) => {
       isTabDragActiveRef.current = false;
+      finishTabDrag();
       const { active, over } = event;
       if (!over || active.id === over.id || !tabs || !onTabReorder) return;
 
@@ -883,7 +980,7 @@ function PanelHeaderComponent({
         onTabReorder(newOrder);
       }
     },
-    [tabs, onTabReorder]
+    [tabs, onTabReorder, finishTabDrag]
   );
 
   // APG tabs with manual activation, like every document tab strip: arrows and
@@ -943,21 +1040,24 @@ function PanelHeaderComponent({
   // A tab you cannot see can still be the one asking for you. The trigger wears
   // the same waiting mark the hidden tab would, so the strip never hides an
   // agent that needs input behind a bare chevron.
-  // A hand-back is not asking for anything, so it does not mark the chevron.
-  // Read off the panels themselves: an approval the renderer has just observed
-  // must count even while the fleet still holds the earlier hand-back.
+  // Only the fleet's needs-you band counts, the same call the pane's own edge
+  // makes: a prompt or a hand-back asks nothing, and a tab whose agent has
+  // gone back to work since the reading no longer asks either.
   const hiddenWaitingCount = usePanelStore((state) => {
     let count = 0;
     for (const tab of hiddenTabs) {
+      // A cut active tab is listed in the menu but is on screen, with its own
+      // glyph at the far right; it is not hidden work.
+      if (tab.isActive) continue;
       const panel = state.panelsById[tab.id];
-      if (panel && isPtyPanel(panel) && isAskingWait(handBackRunIds, panel)) count++;
+      if (panel && isPtyPanel(panel) && isNeedsYouPane(needsYouRunIds, panel)) count++;
     }
     return count;
   });
   const hiddenTabsLabel =
     hiddenWaitingCount > 0
-      ? `Show ${hiddenTabs.length} hidden tabs, ${hiddenWaitingCount} waiting for input`
-      : `Show ${hiddenTabs.length} hidden tabs`;
+      ? `Show ${pluralize(hiddenTabs.length, "hidden tab")}, ${hiddenWaitingCount} waiting for input`
+      : `Show ${pluralize(hiddenTabs.length, "hidden tab")}`;
   const overflowTrigger = hiddenTabs.length > 0 && (
     <DropdownMenu>
       <Tooltip>
@@ -990,49 +1090,9 @@ function PanelHeaderComponent({
         align="end"
         className="min-w-[200px] max-w-[320px] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto"
       >
-        {hiddenTabs.map((tab) => {
-          const StateIcon = tab.agentState ? getEffectiveStateIcon(tab.agentState) : null;
-          return (
-            <DropdownMenuItem
-              key={tab.id}
-              onSelect={() => onTabClick?.(tab.id)}
-              aria-current={tab.isActive ? "true" : undefined}
-              // The tab on screen takes the committed-value check, as in the
-              // docked tab-group menu, not weight alone.
-              className={cn(tab.isActive && "font-medium")}
-            >
-              <span className="shrink-0 mr-2 inline-flex items-center justify-center w-3.5 h-3.5">
-                <TerminalIcon
-                  kind={tab.kind}
-                  chrome={tab.chrome}
-                  className="w-3.5 h-3.5"
-                  brandColor={tab.presetColor ?? tab.chrome.color}
-                />
-              </span>
-              <span className="mr-3 truncate">{tab.title}</span>
-              {StateIcon && tab.agentState && (
-                <span className="sr-only">, {getEffectiveStateLabel(tab.agentState)}</span>
-              )}
-              {tab.isActive && (
-                <Check
-                  className="ml-auto h-3.5 w-3.5 shrink-0 text-text-secondary"
-                  aria-hidden="true"
-                />
-              )}
-              {StateIcon && tab.agentState && (
-                <StateIcon
-                  className={cn(
-                    tab.isActive ? "ml-1.5" : "ml-auto",
-                    "h-3 w-3 shrink-0",
-                    getEffectiveStateColor(tab.agentState),
-                    tab.agentState === "working" && "animate-spin-slow motion-reduce:animate-none"
-                  )}
-                  aria-hidden="true"
-                />
-              )}
-            </DropdownMenuItem>
-          );
-        })}
+        {hiddenTabs.map((tab) => (
+          <HiddenTabMenuItem key={tab.id} tab={tab} onSelect={() => onTabClick?.(tab.id)} />
+        ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -1166,6 +1226,7 @@ function PanelHeaderComponent({
                       hasDangerousFlags={tab.hasDangerousFlags}
                       tabPanelId={tabPanelId}
                       menuLocation={location}
+                      isStripFocused={location === "dock" || isFocused}
                       onClick={() => onTabClick?.(tab.id)}
                       onClose={() => onTabClose?.(tab.id)}
                       onRename={
@@ -1206,6 +1267,7 @@ function PanelHeaderComponent({
                   hasDangerousFlags={tab.hasDangerousFlags}
                   tabPanelId={tabPanelId}
                   menuLocation={location}
+                  isStripFocused={location === "dock" || isFocused}
                   onClick={() => onTabClick?.(tab.id)}
                   onClose={() => onTabClose?.(tab.id)}
                   onRename={onTabRename ? (newTitle) => onTabRename(tab.id, newTitle) : undefined}
@@ -1219,14 +1281,22 @@ function PanelHeaderComponent({
           // px-1 -mx-1 reserves 4px inside the clip on both sides: the rename
           // field extends that far past the title's box, and without the room its
           // own edge is what gets clipped when the title is the last item.
-          <div className="-mx-1 flex min-w-0 items-center gap-2 self-stretch overflow-hidden px-1">
+          <div
+            data-readout-obstacle=""
+            className="-mx-1 flex min-w-0 items-center gap-2 self-stretch overflow-hidden px-1"
+          >
             {/* The pane you are working in wears its agent's real brand colour;
               the ones you are not sit a step back. `data-brand-active` goes on
               the glyph's own wrapper rather than the header so it cannot leak
               onto the tab strip, where selection is each tab's to signal. */}
             <span
               data-brand-active={isFocused || isSelected || undefined}
-              className="shrink-0 flex items-center justify-center w-3.5 h-3.5 text-text-primary"
+              // A monochrome kind glyph takes the title's ink step, so a
+              // shell's mark never outshines the name beside it.
+              className={cn(
+                "shrink-0 flex items-center justify-center w-3.5 h-3.5",
+                isFocused || isSelected ? "text-text-primary" : "text-text-secondary"
+              )}
             >
               <TerminalIcon
                 kind={kind}
@@ -1235,6 +1305,17 @@ function PanelHeaderComponent({
                 brandColor={presetColor ?? chrome.color}
               />
             </span>
+            {displayEmoji && (
+              // The persona the person gave the pane; the brand mark beside it
+              // still says which agent runs it.
+              <span
+                aria-hidden="true"
+                data-testid="panel-persona-emoji"
+                className="-ml-1 shrink-0 select-none text-xs leading-6"
+              >
+                {displayEmoji}
+              </span>
+            )}
 
             {isEditingTitle ? (
               // The field takes exactly the box the static title had: an
@@ -1242,10 +1323,10 @@ function PanelHeaderComponent({
               // it, so nothing beside it moves when editing starts and ends.
               // px-1 is paid back with -mx-1 so the first glyph stays put.
               // Chrome-free by ruling (#7926): the lift is the cue.
-              <div className="grid min-w-0 shrink" data-testid="panel-title-edit-box">
+              <div className="grid min-w-[6ch] shrink" data-testid="panel-title-edit-box">
                 <span
                   aria-hidden="true"
-                  className="invisible col-start-1 row-start-1 block h-6 min-w-[6ch] truncate text-xs font-medium leading-6"
+                  className="invisible col-start-1 row-start-1 block h-6 min-w-[6ch] truncate font-sans text-xs font-medium leading-6"
                 >
                   {titleContent}
                 </span>
@@ -1275,17 +1356,22 @@ function PanelHeaderComponent({
                 />
               </div>
             ) : (
-              <div className="flex items-center gap-2 min-w-0">
+              // The 6ch floor sits on the flex item itself: on the title alone,
+              // a squeezed wrapper let the title paint over the marks after it.
+              <div className="flex min-w-[6ch] items-center">
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <span
                       ref={titleRef}
                       className={cn(
-                        // min-w-[6ch]: the title is the last thing to yield —
+                        // A 6ch floor (plus the ring padding it pays back) —
+                        // the title is the last thing to yield —
                         // a badge or a queue count never squeezes it to nothing.
                         // The ring is declared here rather than left to the UA
                         // default so it matches the controls beside it.
-                        "text-xs font-medium font-sans select-none transition-colors block truncate min-w-[6ch] min-h-6 leading-6 rounded-sm",
+                        // px-1 -mx-1 gives the inset ring room to clear the
+                        // first and last letters without moving them.
+                        "-mx-1 px-1 text-xs font-medium font-sans select-none transition-colors block truncate min-w-[calc(6ch+0.5rem)] min-h-6 leading-6 rounded-sm",
                         onTitleChange &&
                           "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
                         isFocused || isSelected ? "text-text-primary" : "text-text-secondary",
@@ -1316,6 +1402,8 @@ function PanelHeaderComponent({
 
             {hasPty && <TerminalHostSuffix />}
 
+            {hasPty && <TerminalScheduleChip terminalId={id} />}
+
             {hasDangerousFlags && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -1334,15 +1422,22 @@ function PanelHeaderComponent({
               </Tooltip>
             )}
 
+            {/* Primary ink on any pane: its job is to be found on one that has
+                lost focus while dictation still goes into it. */}
             {isDictationTarget && (
-              <span
-                role="img"
-                className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-text-primary"
-                aria-label="Dictation is going into this panel"
-                data-testid="panel-dictation-mark"
-              >
-                <Mic className="h-3.5 w-3.5" aria-hidden="true" />
-              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    role="img"
+                    className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-text-primary"
+                    aria-label="Dictation is going into this panel"
+                    data-testid="panel-dictation-mark"
+                  >
+                    <Mic className="h-3.5 w-3.5" aria-hidden="true" />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Dictation is going into this panel</TooltipContent>
+              </Tooltip>
             )}
 
             {isFleetFailed && (
@@ -1394,13 +1489,22 @@ function PanelHeaderComponent({
 
             {/* Watch status indicator — non-interactive, shown when actively watching */}
             {showWatchButton && isWatched && (
-              <span
-                role="status"
-                aria-label="Watching — waiting for agent completion"
-                className="text-text-secondary cursor-default"
-              >
-                <BellDot className="w-3 h-3 animate-pulse motion-reduce:animate-none" />
-              </span>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    role="status"
+                    aria-label="Watching — waiting for agent completion"
+                    className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-text-secondary"
+                  >
+                    {/* Static: a pulse dips the mark under 3:1 at its trough, and
+                        the only motion in the bar belongs to the agent glyph. */}
+                    <BellDot className="w-3.5 h-3.5" aria-hidden="true" />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  Watching — waiting for agent completion
+                </TooltipContent>
+              </Tooltip>
             )}
 
             {/* What the owning plugin reports it is doing (host.setPanelActivity) */}
@@ -1465,9 +1569,18 @@ function PanelHeaderComponent({
                     onPointerDown={(e) => e.stopPropagation()}
                     // Revealed by hover or by keyboard focus anywhere in the
                     // header, so a keyboard user on the title can find it.
+                    // -mx-1 keeps the 24px target but holds only 16px of the row
+                    // while hidden, so the title it follows keeps those 8px.
+                    // Held in place but gone while the title is being renamed:
+                    // flush against the field, a click meant for the caret
+                    // would land on it and duplicate the pane mid-edit.
+                    tabIndex={isEditingTitle ? -1 : undefined}
                     className={cn(
                       CONTROL_ICON,
-                      "shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 @max-[420px]/header:hidden"
+                      "-mx-1 shrink-0 @max-[420px]/header:hidden",
+                      isEditingTitle
+                        ? "invisible pointer-events-none"
+                        : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
                     )}
                     aria-label="Duplicate panel as new tab"
                     aria-keyshortcuts={duplicateAriaShortcut}
@@ -1486,6 +1599,18 @@ function PanelHeaderComponent({
           </div>
         )}
 
+        {/* A tab group's titles are in the strip; the active pane's schedule
+            follows it, ahead of that pane's metadata, and the maximized readout
+            keeps clear of it as it does of the strip. */}
+        {hasTabs && hasPty && (
+          <div
+            data-readout-obstacle=""
+            className="flex min-w-0 shrink-[2] items-center empty:hidden"
+          >
+            <TerminalScheduleChip terminalId={id} />
+          </div>
+        )}
+
         {headerContent != null && (
           // Keeps its full width until it would take more than half the region,
           // then clips from the telemetry end instead of squeezing the title to
@@ -1493,45 +1618,63 @@ function PanelHeaderComponent({
           // gives that padding back so the spacing to the controls is unchanged.
           <div
             data-testid="panel-header-content"
-            className="-mr-1 ml-auto flex max-w-[50%] shrink-0 items-center gap-1.5 self-stretch overflow-hidden whitespace-nowrap px-1"
+            data-readout-obstacle=""
+            className="-mr-1 ml-auto flex max-w-[50%] shrink-0 items-center gap-1.5 self-stretch overflow-hidden whitespace-nowrap px-1 empty:hidden"
           >
             {headerContent}
           </div>
         )}
       </div>
 
-      {/* Centered Zen Mode indicator (only visible when maximized) */}
+      {/* Centered Zen Mode readout (only when maximized): what the grid it hides
+          is doing. Ordinary sentence-case metadata in secondary ink, so it never
+          outweighs the pane's own title; the state glyphs carry the colour,
+          which state-hued text could not do legibly on every theme. Each count
+          and its noun share one run of text, a word space apart. It stands
+          aside whenever it would meet the title, the metadata or the controls:
+          the pane's own header outranks a summary of the others. */}
       {isMaximized && activeCount > 0 && (
         <div
-          className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-3 text-text-secondary select-none pointer-events-none"
+          ref={readoutRef}
+          className={cn(
+            "absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-3 whitespace-nowrap text-xs text-text-secondary select-none pointer-events-none @max-[720px]/header:hidden",
+            !readoutClear && "invisible"
+          )}
           role="status"
           aria-live="polite"
         >
-          <div className="flex items-center gap-1.5 text-2xs uppercase tracking-wider font-semibold whitespace-nowrap">
+          <span className="flex items-center gap-1.5 tabular-nums">
             <Grid2X2 className="w-3 h-3 shrink-0" aria-hidden="true" />
-            <span className="tabular-nums inline-flex items-center gap-1">
-              <AnimatedLabel label={String(activeCount)} textClassName="tabular-nums" /> Background
+            <span className="whitespace-pre">
+              <AnimatedLabel label={String(activeCount)} textClassName="tabular-nums" />{" "}
+              {pluralNoun(activeCount, "other pane")}
             </span>
-            {workingCount > 0 && (
-              <span
-                className={cn("flex items-center gap-1 tabular-nums ml-1", STATE_COLORS.working)}
-              >
-                <STATE_ICONS.working
-                  className="w-3 h-3 animate-spin-slow motion-reduce:animate-none"
-                  aria-hidden="true"
-                />
+          </span>
+          {workingCount > 0 && (
+            <span className="flex items-center gap-1.5 tabular-nums">
+              <STATE_ICONS.working
+                className={cn(
+                  "w-3 h-3 shrink-0 animate-spin-slow motion-reduce:animate-none",
+                  STATE_COLORS.working
+                )}
+                aria-hidden="true"
+              />
+              <span className="whitespace-pre">
                 <AnimatedLabel label={String(workingCount)} textClassName="tabular-nums" /> working
               </span>
-            )}
-            {waitingCount > 0 && (
-              <span
-                className={cn("flex items-center gap-1 tabular-nums ml-1", STATE_COLORS.waiting)}
-              >
-                <STATE_ICONS.waiting className="w-3 h-3" aria-hidden="true" />
+            </span>
+          )}
+          {waitingCount > 0 && (
+            <span className="flex items-center gap-1.5 tabular-nums">
+              <STATE_ICONS.waiting
+                className={cn("w-3 h-3 shrink-0", STATE_COLORS.waiting)}
+                aria-hidden="true"
+              />
+              <span className="whitespace-pre">
                 <AnimatedLabel label={String(waitingCount)} textClassName="tabular-nums" /> waiting
               </span>
-            )}
-          </div>
+            </span>
+          )}
         </div>
       )}
 
@@ -1542,6 +1685,7 @@ function PanelHeaderComponent({
         // size, so a status coming or going cannot move the controls.
         <div
           data-testid="panel-header-status"
+          data-readout-obstacle=""
           className="ml-1.5 flex h-5 w-5 shrink-0 items-center justify-center"
         >
           {headerStatus}
@@ -1555,7 +1699,13 @@ function PanelHeaderComponent({
         aria-orientation="horizontal"
         onKeyDown={handleControlsKeyDown}
         data-testid="panel-header-controls"
-        className="ml-1.5 flex shrink-0 items-center gap-1"
+        data-readout-obstacle=""
+        // A status beside the controls sits a step further out than their own
+        // rhythm, as the agent glyph does, so it never reads as a fifth button.
+        className={cn(
+          "flex shrink-0 items-center gap-1",
+          headerStatus !== undefined ? "ml-2.5" : "ml-1.5"
+        )}
       >
         {/* Marks a terminal that has notes and toggles them (#12835). Only a
             scratchpad with notes collapses, so an empty one never shows it. */}
@@ -1595,7 +1745,13 @@ function PanelHeaderComponent({
                       ref={overflowButtonRef}
                       variant="ghost"
                       size="icon-xs"
-                      className={CONTROL_ICON}
+                      // Holds its hover look while its menu is open, as the
+                      // header chips that open popovers do, so the pane that
+                      // owns the menu stays marked.
+                      className={cn(
+                        CONTROL_ICON,
+                        "aria-expanded:bg-overlay-hover aria-expanded:text-text-primary"
+                      )}
                       onPointerDown={(e) => e.stopPropagation()}
                       aria-label="More panel actions"
                     >
@@ -1640,7 +1796,6 @@ function PanelHeaderComponent({
                   {/* Session group */}
                   {hasPty && (
                     <DropdownMenuItem
-                      disabled={isHibernated}
                       onSelect={() =>
                         void actionService.dispatch(
                           "terminal.redraw",
@@ -1706,6 +1861,18 @@ function PanelHeaderComponent({
                     <Pencil className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                     Rename
                   </DropdownMenuItem>
+                  {/* An agent that has exited keeps its emoji, and the way to change it. */}
+                  {(chrome.isAgent || displayEmoji) && (
+                    <DropdownMenuItem
+                      onSelect={() => {
+                        pendingEmojiDialogRef.current = id;
+                      }}
+                      data-testid="panel-choose-emoji"
+                    >
+                      <SmilePlus className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      {displayEmoji ? "Change emoji…" : "Choose emoji…"}
+                    </DropdownMenuItem>
+                  )}
                   {(scratchpadState === "hidden" || scratchpadState === "collapsed") && (
                     <DropdownMenuItem
                       onSelect={() => showScratchpad(id)}
@@ -1865,6 +2032,9 @@ function PanelHeaderComponent({
               <Button
                 variant="ghost"
                 size="sm"
+                // The maximized bar's one labelled control keeps the icon controls'
+                // 24px height, 14px glyph and inset ring beside them.
+                className={cn(CONTROL_ICON, "h-6 px-2")}
                 onClick={(e) => {
                   e.stopPropagation();
                   onFocus();
@@ -1928,10 +2098,14 @@ function PanelHeaderComponent({
               }}
               onPointerDown={(e) => e.stopPropagation()}
               // Quiet at rest like its neighbours; the destructive hue arrives
-              // only on hover and focus, where it names what the click does.
+              // only on hover and focus, where it names what the click does. The
+              // ring stays the app's one focus colour, as on a tab's close. In
+              // a dock preview the click only dismisses the preview, so it stays
+              // a neutral control there.
               className={cn(
                 CONTROL_ICON,
-                "hover:bg-status-error/15 hover:text-status-error focus-visible:bg-status-error/15 focus-visible:text-status-error focus-visible:outline-status-error"
+                location !== "dock" &&
+                  "hover:bg-status-error/15 hover:text-status-error focus-visible:bg-status-error/15 focus-visible:text-status-error"
               )}
               data-testid="panel-close"
               aria-label={formatShortcutForTooltip(
@@ -2004,6 +2178,15 @@ function PanelHeaderComponent({
           isOpen={isMovePickerOpen}
           onOpenChange={handleMovePickerOpenChange}
           returnFocusRef={overflowButtonRef}
+        />
+      )}
+      {hasOpenedEmojiDialog && (
+        <PanelEmojiDialog
+          panelId={emojiDialogPanelId ?? id}
+          title={title}
+          isOpen={emojiDialogPanelId !== null}
+          onClose={() => setEmojiDialogPanelId(null)}
+          restoreFocusTo={overflowButtonRef}
         />
       )}
     </AppPalettePopover>

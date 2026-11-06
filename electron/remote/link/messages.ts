@@ -79,6 +79,11 @@ export interface LinkClientInfo {
    * (or two installs on one) can share. Absent from older Shells.
    */
   deviceId?: string;
+  /**
+   * How many assistant lanes this Shell's build can name (#16218), so a host
+   * sends it none higher. Absent from older Shells, which read three.
+   */
+  assistantSlots?: number;
 }
 
 export interface HelloMessage {
@@ -92,6 +97,11 @@ export interface HelloMessage {
    * travels in lease and summary records other Shells see; this never does.
    */
   resumeSecret?: string | null;
+  /**
+   * This Shell reads message fragments (#15892), so the host may cut a large
+   * message into them. Absent from older Shells, which get whole frames.
+   */
+  messageFragments?: boolean;
 }
 
 export interface WelcomeMessage {
@@ -114,6 +124,11 @@ export interface WelcomeMessage {
    * before it.
    */
   previousEnd?: HostPreviousEnd;
+  /**
+   * This host reads message fragments (#15892), so the Shell may cut a large
+   * message into them. Absent from older hosts, which get whole frames.
+   */
+  messageFragments?: boolean;
 }
 
 export type RejectReason =

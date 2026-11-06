@@ -38,12 +38,13 @@ interface SplitSetting {
 export type SettingEntry = SettingDeclaration | SplitSetting;
 
 /**
- * One place settings are kept: an electron-store file by its `name`, or the
- * renderer's web storage by key. A renderer key ending in `*` declares every
- * key that starts with what precedes it.
+ * One place settings are kept: an electron-store file by its `name`, the
+ * renderer's web storage by key, or a file in each project's local state
+ * directory by its name. A renderer key ending in `*` declares every key that
+ * starts with what precedes it.
  */
 interface SettingStore {
-  readonly kind: "electron-store" | "localStorage" | "sessionStorage";
+  readonly kind: "electron-store" | "localStorage" | "sessionStorage" | "project-state-file";
   readonly entries: Readonly<Record<string, SettingEntry>>;
 }
 
@@ -183,6 +184,7 @@ export const SETTING_CATALOG = {
       projectPluginTrust: hostPerProject,
       projectPluginVisibility: hostGlobalOrProject,
       pluginProjectInstances: hostPerProject,
+      pluginLaunchedAgents: host,
       projectSurfaceChoices: hostPerProject,
       projectFileEditorChoices: hostPerProject,
       projectLayoutSeeds: hostPerProject,
@@ -207,7 +209,36 @@ export const SETTING_CATALOG = {
       hostMode: device,
       // This machine's own listener and the devices paired to it.
       deviceAnswer: device,
+      // Decisions: the switch and the relay are the owner's, so a remote window
+      // edits this machine's, and a Host never holds its own (#15996). Each field
+      // declares its owner so a field added later has to choose one.
+      decisions: {
+        fields: {
+          enabled: device,
+          relayOrigin: device,
+          installationId: device,
+          deviceId: device,
+          hostId: device,
+          proxyAllowlisted: device,
+          defaultQuestionExpiryMs: device,
+          consentedAt: device,
+          revokedAt: device,
+          recoveryKit: device,
+          autoEnrollHosts: device,
+          setupCheck: device,
+          modelLearning: device,
+          modelAdapter: device,
+          modelConsentedAt: device,
+          askHumanAgents: device,
+          terminalSnapshots: device,
+          terminalSnapshotsConsentedAt: device,
+        },
+      },
+      // An enrolled Host's own record of its enrollment, kept on the Host itself.
+      decisionsHost: device,
       remoteHostsPreferences: device,
+      // The editor launches on the machine you sit at, so its fallback is that machine's.
+      defaultEditor: device,
       // What this machine lets a host's plugins do with its clipboard.
       remoteHostPluginClipboardGrants: devicePerHost,
       // Which host plugins may run their view code on this machine, and what code.
@@ -262,17 +293,18 @@ export const SETTING_CATALOG = {
       "daintree-canopy-scope": device,
       "daintree-canopy-all-hosts": device,
       "daintree-canopy-order": device,
-      "daintree-canopy-acknowledged": device,
       "daintree-canopy-role": device,
       "daintree-canopy-assistant-handbacks": device,
       "daintree-canopy-reading-offer-dismissed": device,
+      "daintree-canopy-pane-offer-dismissed": device,
       "daintree-canopy-list-width": device,
+      "daintree-canopy-global-docked": device,
+      "daintree-canopy-dock-width": device,
       "daintree:cliAvailability:v3": device,
       "daintree:fleet-selection-hint-dismissed": device,
       "daintree:host-build-noticed:*": devicePerHost,
       "daintree:plugin-view-state:*": deviceGlobalOrProject,
-      "daintree:repo-stats:obs:*": device,
-      "daintree:repo-stats:alias:*": devicePerHost,
+      "daintree:repo-stats:origin:*": device,
       "daintree_cmd_history_*": devicePerProject,
       "daintree_quickrun_autorestart_*": devicePerProject,
       "daintree_quickrun_expanded_*": devicePerProject,
@@ -289,6 +321,15 @@ export const SETTING_CATALOG = {
     kind: "sessionStorage",
     entries: {
       "daintree:host-open-claim:*": devicePerProject,
+    },
+  },
+  // Files main keeps per project in the machine-local state directory, never in
+  // the repository, so they stay with the machine that holds the project.
+  "project-state-files": {
+    kind: "project-state-file",
+    entries: {
+      // Agents run on a schedule by this machine (#15975).
+      schedules: hostPerProject,
     },
   },
 } as const satisfies Readonly<Record<string, SettingStore>>;
@@ -352,6 +393,18 @@ export function rendererStorageDeclaration(key: string): SettingDeclaration | un
     }
   }
   return undefined;
+}
+
+/** A file main keeps in each project's local state directory, by its name. */
+export type ProjectStateFile = keyof (typeof SETTING_CATALOG)["project-state-files"]["entries"] &
+  string;
+
+export function projectStateFileOwner(file: string): SettingOwner {
+  const declaration = own<SettingEntry>(SETTING_CATALOG["project-state-files"].entries, file);
+  if (!declaration || "fields" in declaration) {
+    throw new Error(`No project state file is declared as "${file}"`);
+  }
+  return declaration.owner;
 }
 
 export function rendererStorageOwner(key: string): SettingOwner {

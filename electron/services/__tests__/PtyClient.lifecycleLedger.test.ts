@@ -205,6 +205,24 @@ describe("PtyClient lifecycle ledger", () => {
     expect(ledger.recordJournal("t1", 2, "sess-after-crash").accepted).toBe(true);
   });
 
+  it("reports the incarnation a crashed host took with it before replaying the terminal (#15976)", () => {
+    const client = createReadyClient();
+    const lost = vi.fn();
+    client.on("incarnation-lost", lost);
+    client.spawn("t1", baseOptions);
+
+    const restartedChild = createMockChild();
+    shared.forkMock.mockReturnValue(restartedChild);
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(200);
+    expect(lost).not.toHaveBeenCalled();
+    restartedChild.emit("message", { type: "ready" });
+
+    expect(lost).toHaveBeenCalledExactlyOnceWith({ terminalId: "t1", launchGeneration: 1 });
+    expect(spawnMessages(restartedChild)[0]?.options.launchGeneration).toBe(2);
+  });
+
   it("re-injects postSpawnInput on crash respawn so wrapper-less shells resume (#11339)", () => {
     const client = createReadyClient();
     // A command launch on a shell that can't host a startup wrapper (fish,
@@ -234,9 +252,12 @@ describe("PtyClient lifecycle ledger", () => {
 
   it("delivers a launch's handback code once, never on a crash respawn (#12488)", () => {
     const client = createReadyClient();
-    client.spawn("t1", { ...baseOptions, handbackCode: "k7f3qa" });
+    client.spawn("t1", { ...baseOptions, handbackCode: "k7f3qa", handbackInstruction: "run" });
 
-    expect(spawnMessages(mockChild)[0]!.options.handbackCode).toBe("k7f3qa");
+    expect(spawnMessages(mockChild)[0]!.options).toMatchObject({
+      handbackCode: "k7f3qa",
+      handbackInstruction: "run",
+    });
 
     const restartedChild = createMockChild();
     shared.forkMock.mockReturnValue(restartedChild);
@@ -247,8 +268,10 @@ describe("PtyClient lifecycle ledger", () => {
 
     const replayed = spawnMessages(restartedChild);
     expect(replayed).toHaveLength(1);
-    // The request died with its host, so the replayed launch carries none.
+    // The request died with its host, so the replayed launch carries none,
+    // and is no scheduled run's report either (#15982).
     expect(replayed[0]!.options).not.toHaveProperty("handbackCode");
+    expect(replayed[0]!.options).not.toHaveProperty("handbackInstruction");
   });
 
   it("replays wrapper args verbatim on crash respawn — a resume survives (#11339)", () => {
@@ -325,6 +348,78 @@ describe("PtyClient lifecycle ledger", () => {
     expect(ledger.getEntry("t1")?.exitCode).toBe(0);
     expect(onExit).toHaveBeenCalledExactlyOnceWith("t1", 0, undefined, undefined);
     expect(client.hasTerminal("t1")).toBe(false);
+  });
+
+  it("keeps each incarnation's exit after the host forgets it, for a wait on a closed panel (#15728)", () => {
+    const client = createReadyClient();
+
+    client.spawn("t1", baseOptions);
+    client.kill("t1");
+    client.spawn("t1", baseOptions);
+    mockChild.emit("message", {
+      type: "exit",
+      id: "t1",
+      exitCode: 0,
+      signal: 9,
+      launchGeneration: 1,
+    });
+
+    expect(client.recentExits.find("t1", 1)).toMatchObject({ exitCode: 0, signal: 9 });
+    expect(client.recentExits.find("t1", 2)).toBeUndefined();
+
+    mockChild.emit("message", { type: "exit", id: "t1", exitCode: 3, launchGeneration: 2 });
+    expect(client.hasTerminal("t1")).toBe(false);
+    expect(client.recentExits.find("t1", 2)?.exitCode).toBe(3);
+  });
+
+  it("reports every incarnation's exit by its spawn time, a superseded one's included (#15976)", () => {
+    const client = createReadyClient();
+    const facts = vi.fn();
+    client.on("incarnation-exit", facts);
+
+    client.spawn("t1", baseOptions);
+    client.kill("t1");
+    client.spawn("t1", baseOptions);
+    mockChild.emit("message", {
+      type: "exit",
+      id: "t1",
+      exitCode: 0,
+      signal: 15,
+      launchGeneration: 1,
+      spawnedAt: 1_000,
+    });
+    mockChild.emit("message", {
+      type: "exit",
+      id: "t1",
+      exitCode: 2,
+      signal: 0,
+      launchGeneration: 2,
+      spawnedAt: 2_000,
+    });
+
+    // The killed incarnation's exit is marked stopped; its successor's own exit isn't (#16202).
+    expect(facts.mock.calls).toEqual([
+      [{ terminalId: "t1", spawnedAt: 1_000, exitCode: 0, signal: 15, stopped: true }],
+      [{ terminalId: "t1", spawnedAt: 2_000, exitCode: 2, signal: 0 }],
+    ]);
+  });
+
+  it("asks the host to end one incarnation's trash grace and answers what it did (#15728)", async () => {
+    const client = createReadyClient();
+    client.spawn("t1", baseOptions);
+
+    const answer = client.endTrashGrace("t1", 1);
+    const request = mockChild.postMessage.mock.calls
+      .map((call: unknown[]) => call[0] as { type?: string; requestId?: string })
+      .find((message) => message.type === "end-trash-grace");
+    expect(request).toMatchObject({ id: "t1", expectedGeneration: 1 });
+    mockChild.emit("message", {
+      type: "end-trash-grace-result",
+      requestId: request!.requestId,
+      status: "started",
+    });
+
+    await expect(answer).resolves.toBe("started");
   });
 
   it("consumes restart suppression once and disarms it when a successor launches", () => {

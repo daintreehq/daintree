@@ -282,7 +282,7 @@ function ChipGrid<T extends string>({
           {showAll
             ? "Show fewer"
             : hiddenAllDead
-              ? `${hiddenCount} with no matches`
+              ? `${hiddenCount} more, none match`
               : `${hiddenCount} more`}
         </Button>
       )}
@@ -357,7 +357,6 @@ export function WorktreeFilterPopover({
     hasAgentFilter,
     activityFilters,
     devServerFilters,
-    quickStateFilter,
     setQuery,
     setOrderBy,
     setGroupByType,
@@ -387,7 +386,6 @@ export function WorktreeFilterPopover({
       hasAgentFilter: state.hasAgentFilter,
       activityFilters: state.activityFilters,
       devServerFilters: state.devServerFilters,
-      quickStateFilter: state.quickStateFilter,
       setQuery: state.setQuery,
       setOrderBy: state.setOrderBy,
       setGroupByType: state.setGroupByType,
@@ -422,8 +420,7 @@ export function WorktreeFilterPopover({
     sessionFilters.size +
     (hasAgentFilter ? 1 : 0) +
     activityFilters.size +
-    devServerFilters.size +
-    (quickStateFilter !== "all" ? 1 : 0);
+    devServerFilters.size;
   const fullFilterCount = facetFilterCount + (hasQuery ? 1 : 0);
   const filterCount = hideSearchInput ? facetFilterCount : fullFilterCount;
   const showBadge = filterCount > 0;

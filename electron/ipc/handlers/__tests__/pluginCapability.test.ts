@@ -94,7 +94,9 @@ import {
   handleGetPanelAttention,
   handleGetProjectTargeting,
   handleListPanelAttention,
+  handleListPresetGrants,
   handleResolveConsent,
+  handleRevokePresetGrant,
   handleSetOsNotifications,
   handleGetWorktreeDeleteNotes,
   handleSetWorktreeDeleteNotes,
@@ -187,6 +189,66 @@ describe("pluginCapability consent bridge — routing (#11708)", () => {
     });
     await expect(settled).resolves.toEqual({ ok: true });
 
+    dispose();
+  });
+
+  it("pushes a preset prompt with the whole summary, and a grant on approval (#16324)", async () => {
+    const dispose = registerPluginCapabilityHandlers();
+    const summary = {
+      agentId: "claude",
+      agentName: "Claude",
+      presetId: "zai",
+      presetName: "Z.ai",
+      source: "custom" as const,
+      args: ["--model", "glm"],
+      dangerousMode: "on" as const,
+      skipsPermissions: true,
+      envNames: ["TOKEN"],
+      fallbacks: [],
+      fallbackOnRateLimit: false,
+    };
+    const settled = getPluginCapabilityConsentService().ensurePresetLaunchAllowed(
+      "acme.x",
+      "Acme",
+      summary,
+      "f1",
+      ["agent:launch-preset"],
+      "global"
+    );
+    const pushed = harness!.appWebContents.send.mock.calls[0][1] as {
+      payload: { requestId: string; capability: string; preset?: unknown };
+    };
+    expect(pushed.payload.capability).toBe("agent:launch-preset");
+    expect(pushed.payload.preset).toEqual(summary);
+
+    await handleAcknowledgeConsent(ctx(harness!.appWebContents.id), {
+      requestId: pushed.payload.requestId,
+    });
+    await handleResolveConsent(ctx(harness!.appWebContents.id), {
+      requestId: pushed.payload.requestId,
+      decision: "approved-and-pin",
+    });
+    await expect(settled).resolves.toBeUndefined();
+    expect(await handleListPresetGrants({ pluginId: "acme.x" })).toEqual([
+      expect.objectContaining({ presetId: "zai", presetName: "Z.ai", scopeKey: "global" }),
+    ]);
+    await handleRevokePresetGrant({
+      pluginId: "acme.x",
+      agentId: "claude",
+      presetId: "zai",
+      source: "custom",
+      scopeKey: "global",
+    });
+    expect(await handleListPresetGrants({ pluginId: "acme.x" })).toEqual([]);
+    await expect(
+      handleRevokePresetGrant({
+        pluginId: "acme.x",
+        agentId: "claude",
+        presetId: "zai",
+        source: "elsewhere" as never,
+        scopeKey: "global",
+      })
+    ).rejects.toThrow();
     dispose();
   });
 
@@ -894,6 +956,40 @@ describe("pluginCapability consent bridge — Host mode routing", () => {
     await expect(offer()).resolves.toBe(false);
 
     expect(harness!.appWebContents.send).not.toHaveBeenCalled();
+    expect(getPluginCapabilityConsentStore().list()).toEqual([]);
+    dispose();
+  });
+
+  it("never asks a remote frontend about a preset, whose wire can't carry its summary (#16324)", async () => {
+    const request = vi.fn(async () => "approved-and-pin");
+    frontend = {
+      kind: "remote",
+      endpoint: { request, isClosed: () => false } as unknown as ClientEndpoint,
+    };
+    const dispose = registerPluginCapabilityHandlers();
+    await expect(
+      getPluginCapabilityConsentService().ensurePresetLaunchAllowed(
+        "acme.x",
+        "Acme",
+        {
+          agentId: "claude",
+          agentName: "Claude",
+          presetId: "zai",
+          presetName: "Z.ai",
+          source: "custom",
+          args: [],
+          dangerousMode: "on",
+          skipsPermissions: true,
+          envNames: [],
+          fallbacks: [],
+          fallbackOnRateLimit: false,
+        },
+        "f1",
+        ["agent:launch-preset"],
+        "global"
+      )
+    ).rejects.toThrow(/^PERMISSION_REQUIRED:/);
+    expect(request).not.toHaveBeenCalled();
     expect(getPluginCapabilityConsentStore().list()).toEqual([]);
     dispose();
   });

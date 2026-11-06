@@ -35,6 +35,7 @@ export const SECTION_SETTINGS = {
   assistiveTechnology: ["terminalConfig.screenReaderMode"],
   worktreePathPattern: ["worktreeConfig"],
   clientPreferences: ["storage:daintree-preferences"],
+  worktreeSidebar: ["storage:daintree-worktree-filters*"],
   toolbarLayout: ["storage:daintree-toolbar-preferences"],
   pluginSilences: ["pluginNotificationSilences"],
   hardwareAcceleration: ["gpu"],

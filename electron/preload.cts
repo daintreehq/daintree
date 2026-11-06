@@ -34,6 +34,8 @@ import type {
 } from "../shared/types/ipc/mcpServer.js";
 import type { ActionContext, ActionDispatchResult } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
+import type { KeybindingOverridesSnapshot } from "../shared/types/ipc/api.js";
+import type { GitPushReview } from "../shared/types/git.js";
 import type { PluginPerfSnapshot } from "../shared/types/pluginMetrics.js";
 import type { PluginRendererMetricsEnvelope } from "../shared/types/ipc/pluginMetrics.js";
 import { CHANNELS } from "./ipc/channels.js";
@@ -57,7 +59,6 @@ import { buildAccessibilityPreloadBindings } from "./ipc/handlers/accessibility.
 import { buildConfigBundlePreloadBindings } from "./ipc/handlers/configBundle.preload.js";
 import { buildHelpPreloadBindings } from "./ipc/handlers/help.preload.js";
 import { buildEventInspectorPreloadBindings } from "./ipc/handlers/eventInspector.preload.js";
-import { buildCommandsPreloadBindings } from "./ipc/handlers/commands.preload.js";
 import { buildPortalPreloadBindings } from "./ipc/handlers/portal.preload.js";
 import { buildDevPreviewPreloadBindings } from "./ipc/handlers/devPreview.preload.js";
 import { buildPluginPreloadBindings } from "./ipc/handlers/plugin.preload.js";
@@ -74,9 +75,10 @@ import { buildForgeAuditPreloadBindings } from "./ipc/handlers/forgeAudit.preloa
 import { buildProjectGroupsPreloadBindings } from "./ipc/handlers/projectGroups.preload.js";
 import { buildRunHistoryPreloadBindings } from "./ipc/handlers/runHistory.preload.js";
 import { buildCopyTreeHistoryPreloadBindings } from "./ipc/handlers/copyTreeHistory.preload.js";
-import { buildGeminiPreloadBindings } from "./ipc/handlers/gemini.preload.js";
+import { buildScheduledRunsPreloadBindings } from "./ipc/handlers/scheduledRuns.preload.js";
 import { buildCodexPreloadBindings } from "./ipc/handlers/codex.preload.js";
 import { buildClaudePreloadBindings } from "./ipc/handlers/claude.preload.js";
+import { buildTerminalSessionFilePreloadBindings } from "./ipc/handlers/terminalSessionFile.preload.js";
 import { buildVoiceDictionaryPreloadBindings } from "./ipc/handlers/voiceDictionary.preload.js";
 import { buildRecentDictationsPreloadBindings } from "./ipc/handlers/recentDictations.preload.js";
 import { buildOnboardingPreloadBindings } from "./ipc/handlers/onboarding.preload.js";
@@ -107,6 +109,8 @@ import { buildProjectPresentationPreloadBindings } from "./ipc/handlers/projectP
 import { buildProjectThemePreloadBindings } from "./ipc/handlers/projectTheme.preload.js";
 import { buildWorktreeTitlesPreloadBindings } from "./ipc/handlers/worktreeTitles.preload.js";
 import { buildReviewMarksPreloadBindings } from "./ipc/handlers/reviewMarks.preload.js";
+import { buildSchedulesPreloadBindings } from "./ipc/handlers/schedules.preload.js";
+import { buildDecisionsPreloadBindings } from "./ipc/handlers/decisions.preload.js";
 import { buildDiffMediaPreloadBindings } from "./ipc/handlers/diffMedia.preload.js";
 import { buildFileDocumentPreloadBindings } from "./ipc/handlers/fileDocument.preload.js";
 import { buildFileBrowserPreloadBindings } from "./ipc/handlers/fileBrowser.preload.js";
@@ -115,6 +119,7 @@ import { buildSessionRestorePreloadBindings } from "./ipc/handlers/sessionRestor
 import { buildWindowOpeningPreloadBindings } from "./ipc/handlers/windowOpening.preload.js";
 import { buildKeepAwakePreloadBindings } from "./ipc/handlers/keepAwake.preload.js";
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
+import { buildTerminalWhenDonePreloadBindings } from "./ipc/handlers/terminalWhenDone.preload.js";
 import { buildIdleBackgroundAutoClosePreloadBindings } from "./ipc/handlers/idleBackgroundAutoClose.preload.js";
 import { buildSystemSleepPreloadBindings } from "./ipc/handlers/systemSleep.preload.js";
 import { buildAppVersionInfoPreloadBindings } from "./ipc/handlers/appVersionInfo.preload.js";
@@ -132,6 +137,7 @@ import { buildPluginAgentMcpPreloadBindings } from "./ipc/handlers/pluginAgentMc
 import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.preload.js";
 import { buildAgentDefaultsPreloadBindings } from "./ipc/handlers/agentDefaults.preload.js";
 import { buildAgentToolbarPinsPreloadBindings } from "./ipc/handlers/agentToolbarPins.preload.js";
+import { buildAgentAccountsPreloadBindings } from "./ipc/handlers/agentAccounts.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
 import { buildWindowChromePreloadBindings } from "./ipc/handlers/windowChrome.preload.js";
 import { buildFleetPreloadBindings } from "./ipc/handlers/fleet.preload.js";
@@ -157,6 +163,7 @@ import type {
   CopyTreeOptions,
   CopyTreeProgress,
   CopyTreeRunSource,
+  CopyTreeStopReason,
   CopyTreeTestConfigOptions,
   AppState,
   LogEntry,
@@ -198,7 +205,7 @@ import type {
   VoiceSessionEndReason,
   VoiceStopRequest,
 } from "../shared/types/index.js";
-import type { ColorVisionMode, AppColorScheme } from "../shared/types/appTheme.js";
+import type { ColorVisionMode, AppColorScheme, AppThemeConfig } from "../shared/types/appTheme.js";
 import type { VoiceSessionReport } from "../shared/types/voiceSessionSummary.js";
 import type {
   WorktreePortAction,
@@ -223,6 +230,7 @@ import type {
 } from "../shared/types/ipc/elementPicker.js";
 import type { TerminalActivityPayload } from "../shared/types/terminal.js";
 import type { PaneNotifyState } from "../shared/types/terminalNotify.js";
+import type { PaneDecisionState } from "../shared/types/decisions.js";
 import type {
   TerminalStatusPayload,
   TerminalSubmitStatusPayload,
@@ -682,14 +690,39 @@ let _viewCached = false;
 // map. Dropping it saves ~30 MB per cached view, and the view stays smaller
 // after it returns (#14219). Live images and fonts are held by their elements.
 // clearCache() also raises critical memory pressure in this renderer, so it
-// waits out a quick switch back and never runs once the view is active again,
-// including when a freeze held the cached signal until the next activation.
+// waits out a quick switch back and never runs once the view is active again.
 // A view the efficiency profile freezes inside the delay keeps its cache.
 const CACHED_VIEW_CACHE_CLEAR_DELAY_MS = 2_000;
 let _cacheClearTimer: ReturnType<typeof setTimeout> | null = null;
-ipcRenderer.on(CHANNELS.APP_VIEW_CACHED, () => {
-  _viewCached = true;
-  if (_cacheClearTimer !== null) clearTimeout(_cacheClearTimer);
+// A full collection of what the view left behind in the foreground, run in its
+// first idle period after caching, while nobody is looking at it. Renderers get
+// `gc` from `--expose-gc` (main.ts), in this world as well as the page's.
+const CACHED_VIEW_GC_IDLE_TIMEOUT_MS = 1_000;
+let _cachedViewGcHandle: number | null = null;
+// Set by the page's `freeze` event, cleared when the view is active again. A
+// frozen renderer's overdue timers and idle callbacks run the moment
+// activation thaws it, ahead of the warm-activated IPC that would clear
+// `_viewCached` (#15680), so cached-time reclaim is cancelled when the freeze
+// lands and never scheduled after one. IPC still runs while frozen, so a
+// cached signal can arrive after the freeze. Nothing marks the thaw itself:
+// `resume` does not fire for main's CDP unfreeze. The main-side purge session
+// still collects a view that stays cached.
+let _viewFrozenSinceActive = false;
+
+function cancelCachedViewReclaim(): void {
+  if (_cacheClearTimer !== null) {
+    clearTimeout(_cacheClearTimer);
+    _cacheClearTimer = null;
+  }
+  if (_cachedViewGcHandle !== null) {
+    if (typeof cancelIdleCallback === "function") cancelIdleCallback(_cachedViewGcHandle);
+    _cachedViewGcHandle = null;
+  }
+}
+
+function scheduleCachedViewReclaim(): void {
+  cancelCachedViewReclaim();
+  if (_viewFrozenSinceActive) return;
   _cacheClearTimer = setTimeout(() => {
     _cacheClearTimer = null;
     if (!_viewCached) return;
@@ -699,16 +732,65 @@ ipcRenderer.on(CHANNELS.APP_VIEW_CACHED, () => {
       // Best-effort reclaim; a renderer mid-teardown has nothing to free.
     }
   }, CACHED_VIEW_CACHE_CLEAR_DELAY_MS);
+  const gc = (globalThis as { gc?: () => void }).gc;
+  if (typeof gc !== "function" || typeof requestIdleCallback !== "function") return;
+  _cachedViewGcHandle = requestIdleCallback(
+    () => {
+      _cachedViewGcHandle = null;
+      if (!_viewCached) return;
+      gc();
+    },
+    { timeout: CACHED_VIEW_GC_IDLE_TIMEOUT_MS }
+  );
+}
+
+function onViewActiveAgain(): void {
+  _viewCached = false;
+  _viewFrozenSinceActive = false;
+  cancelCachedViewReclaim();
+}
+
+// Suites that evaluate this bundle against a bare fake `window` have no DOM.
+if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+  document.addEventListener("freeze", () => {
+    _viewFrozenSinceActive = true;
+    cancelCachedViewReclaim();
+  });
+}
+/**
+ * Work that persists unsaved edits when this view is cached (#15633), run here
+ * rather than by `_typedOn` subscribers so their promises can be awaited. Main
+ * holds the view unfrozen and resident only while this is non-empty, and lets
+ * go when the edge's flush id comes back.
+ */
+const _viewCachedFlushers = new Set<() => unknown>();
+ipcRenderer.on(CHANNELS.APP_VIEW_CACHED, (_event, payload?: { flushId?: unknown }) => {
+  _viewCached = true;
+  const flushes = Array.from(_viewCachedFlushers, (flush) => {
+    try {
+      return flush();
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  });
+  // Settled even when main isn't waiting, so a failed flush never goes unhandled.
+  const flushId = payload?.flushId;
+  void Promise.allSettled(flushes).then(() => {
+    if (typeof flushId === "string") ipcRenderer.send(CHANNELS.APP_VIEW_CACHED_FLUSHED, flushId);
+  });
+  // Best-effort and last: it must never keep the edits from flushing, main from
+  // hearing back, or the view's own cached-edge listeners from running.
+  try {
+    scheduleCachedViewReclaim();
+  } catch {
+    // A renderer mid-teardown has nothing worth reclaiming.
+  }
 });
 // Warm activation — not reveal — owns the clear: main only sends
 // APP_VIEW_REVEALED while the view is still the active project, so a superseded
 // switch delivers warm-activated alone. Reveal clears too, defensively.
-ipcRenderer.on(CHANNELS.APP_VIEW_WARM_ACTIVATED, () => {
-  _viewCached = false;
-});
-ipcRenderer.on(CHANNELS.APP_VIEW_REVEALED, () => {
-  _viewCached = false;
-});
+ipcRenderer.on(CHANNELS.APP_VIEW_WARM_ACTIVATED, onViewActiveAgain);
+ipcRenderer.on(CHANNELS.APP_VIEW_REVEALED, onViewActiveAgain);
 
 // Wired eagerly at creation: see createEventBus.
 const { on: _eventBusOn } = createEventBus(ipcRenderer);
@@ -856,18 +938,29 @@ function buildElectronApi(): ElectronAPI {
         text: string,
         submissionToken?: string,
         handbackCode?: string,
-        imagePaths?: string[]
+        imagePaths?: string[],
+        guard?: "no-choice-dialog"
       ) =>
-        imagePaths === undefined
-          ? _unwrappingInvoke(CHANNELS.TERMINAL_SUBMIT, id, text, submissionToken, handbackCode)
-          : _unwrappingInvoke(
+        guard !== undefined
+          ? _unwrappingInvoke(
               CHANNELS.TERMINAL_SUBMIT,
               id,
               text,
               submissionToken,
               handbackCode,
-              imagePaths
-            ),
+              imagePaths,
+              guard
+            )
+          : imagePaths === undefined
+            ? _unwrappingInvoke(CHANNELS.TERMINAL_SUBMIT, id, text, submissionToken, handbackCode)
+            : _unwrappingInvoke(
+                CHANNELS.TERMINAL_SUBMIT,
+                id,
+                text,
+                submissionToken,
+                handbackCode,
+                imagePaths
+              ),
 
       /**
        * Resolve one submission token across several terminals (#12337). A
@@ -1007,6 +1100,9 @@ function buildElectronApi(): ElectronAPI {
 
       onNotifyState: (callback: (data: PaneNotifyState) => void): (() => void) =>
         _eventBusOn("terminal:notify-state", callback),
+
+      onDecisionState: (callback: (data: PaneDecisionState) => void): (() => void) =>
+        _eventBusOn("terminal:decision-state", callback),
 
       onReliabilityMetric: (
         callback: (data: TerminalReliabilityMetricPayload) => void
@@ -1203,8 +1299,8 @@ function buildElectronApi(): ElectronAPI {
 
       isAvailable: () => _unwrappingInvoke(CHANNELS.COPYTREE_AVAILABLE),
 
-      cancel: (injectionId?: string) =>
-        _unwrappingInvoke(CHANNELS.COPYTREE_CANCEL, { injectionId }),
+      cancel: (injectionId?: string, reason?: CopyTreeStopReason) =>
+        _unwrappingInvoke(CHANNELS.COPYTREE_CANCEL, { injectionId, reason }),
 
       getFileTree: (worktreeId: string, dirPath?: string, includeExcluded?: boolean) =>
         _unwrappingInvoke(CHANNELS.COPYTREE_GET_FILE_TREE, {
@@ -1407,6 +1503,20 @@ function buildElectronApi(): ElectronAPI {
         _typedOn(CHANNELS.APP_VIEW_WARM_ACTIVATED, callback),
       onViewCached: (callback: () => void) => _typedOn(CHANNELS.APP_VIEW_CACHED, callback),
       isViewCached: () => _viewCached,
+      onViewCachedFlush: (callback: () => unknown) => {
+        // Wrapped so registering the same function twice still unsubscribes each.
+        const flush = () => callback();
+        _viewCachedFlushers.add(flush);
+        if (_viewCachedFlushers.size === 1) {
+          ipcRenderer.send(CHANNELS.APP_VIEW_CACHED_FLUSH_ARMED, true);
+        }
+        return () => {
+          if (!_viewCachedFlushers.delete(flush)) return;
+          if (_viewCachedFlushers.size === 0) {
+            ipcRenderer.send(CHANNELS.APP_VIEW_CACHED_FLUSH_ARMED, false);
+          }
+        };
+      },
     },
 
     menu: buildMenuPreloadBindings(_unwrappingInvoke),
@@ -1859,6 +1969,9 @@ function buildElectronApi(): ElectronAPI {
         _typedOn(CHANNELS.AGENT_TOOLBAR_PINS_CHANGED, callback),
     },
 
+    // An agent's accounts (#16040)
+    agentAccounts: buildAgentAccountsPreloadBindings(_unwrappingInvoke),
+
     // Per-service connectivity API
     connectivity: {
       ...buildConnectivityPreloadBindings(_unwrappingInvoke),
@@ -1905,6 +2018,53 @@ function buildElectronApi(): ElectronAPI {
       onChanged: (callback: (snapshot: IpcEventMap["review-marks:changed"]) => void) =>
         _typedOn(CHANNELS.REVIEW_MARKS_CHANGED, callback),
     },
+
+    // The sender project's schedules (#15975)
+    schedules: {
+      ...buildSchedulesPreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: (snapshot: IpcEventMap["schedules:changed"]) => void) =>
+        _typedOn(CHANNELS.SCHEDULES_CHANGED, callback),
+
+      onLaunchRequest: (callback: (request: IpcEventMap["schedules:launch-request"]) => void) =>
+        _typedOn(CHANNELS.SCHEDULES_LAUNCH_REQUEST, callback),
+
+      onRunClosed: (callback: (push: IpcEventMap["schedules:run-closed"]) => void) =>
+        _typedOn(CHANNELS.SCHEDULES_RUN_CLOSED, callback),
+
+      sendLaunchResponse: (
+        response: import("../shared/types/ipc/schedules.js").ScheduledLaunchViewResponse
+      ) => {
+        ipcRenderer.send(CHANNELS.SCHEDULES_LAUNCH_RESPONSE, response);
+      },
+
+      onFinishRequest: (callback: (request: IpcEventMap["schedules:finish-request"]) => void) =>
+        _typedOn(CHANNELS.SCHEDULES_FINISH_REQUEST, callback),
+    },
+
+    // An agent terminal's When done choice (#16171)
+    terminalWhenDone: {
+      ...buildTerminalWhenDonePreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: (change: IpcEventMap["terminal-when-done:changed"]) => void) =>
+        _typedOn(CHANNELS.TERMINAL_WHEN_DONE_CHANGED, callback),
+
+      onFinishRequest: (
+        callback: (request: IpcEventMap["terminal-when-done:finish-request"]) => void
+      ) => _typedOn(CHANNELS.TERMINAL_WHEN_DONE_FINISH_REQUEST, callback),
+
+      onInUseQuery: (callback: (query: IpcEventMap["terminal-when-done:in-use-query"]) => void) =>
+        _typedOn(CHANNELS.TERMINAL_WHEN_DONE_IN_USE_QUERY, callback),
+
+      sendInUseReply: (
+        reply: import("../shared/types/ipc/terminalWhenDone.js").TerminalWhenDoneInUseReply
+      ) => {
+        ipcRenderer.send(CHANNELS.TERMINAL_WHEN_DONE_IN_USE_REPLY, reply);
+      },
+    },
+
+    // Decisions, as main observes it (#16001)
+    decisions: buildDecisionsPreloadBindings(_unwrappingInvoke),
 
     // Dev Preview API
     devPreview: {
@@ -1988,8 +2148,20 @@ function buildElectronApi(): ElectronAPI {
       commit: (cwd: string, message: string) =>
         _unwrappingInvoke(CHANNELS.GIT_COMMIT, { cwd, message }),
 
-      push: (cwd: string, setUpstream?: boolean, opId?: string) =>
-        _unwrappingInvoke(CHANNELS.GIT_PUSH, { cwd, setUpstream, opId }),
+      push: (cwd: string, setUpstream?: boolean, opId?: string, review?: GitPushReview) =>
+        _unwrappingInvoke(CHANNELS.GIT_PUSH, {
+          cwd,
+          setUpstream,
+          opId,
+          ...(review
+            ? {
+                expectedBranch: review.branch,
+                expectedHeadOid: review.headOid,
+                expectedRemote: review.destination.remote,
+                expectedRemoteBranch: review.destination.branch,
+              }
+            : {}),
+        }),
 
       pullRebase: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_PULL_REBASE, { cwd }),
 
@@ -2066,7 +2238,8 @@ function buildElectronApi(): ElectronAPI {
         branch2: string,
         filePath?: string,
         useMergeBase?: boolean,
-        ignoreWhitespace?: boolean
+        ignoreWhitespace?: boolean,
+        contextLines?: number
       ) =>
         _unwrappingInvoke(CHANNELS.GIT_COMPARE_WORKTREES, {
           cwd,
@@ -2075,6 +2248,7 @@ function buildElectronApi(): ElectronAPI {
           filePath,
           useMergeBase,
           ignoreWhitespace,
+          contextLines,
         }),
 
       getUsername: (cwd: string) => _unwrappingInvoke(CHANNELS.GIT_GET_USERNAME, cwd),
@@ -2332,6 +2506,9 @@ function buildElectronApi(): ElectronAPI {
       exportProfile: () => _unwrappingInvoke(CHANNELS.KEYBINDING_EXPORT_PROFILE),
 
       importProfile: () => _unwrappingInvoke(CHANNELS.KEYBINDING_IMPORT_PROFILE),
+
+      onOverridesChanged: (callback: (snapshot: KeybindingOverridesSnapshot) => void) =>
+        _typedOn(CHANNELS.KEYBINDING_OVERRIDES_CHANGED, callback),
     },
 
     // Worktree Config API
@@ -2428,8 +2605,8 @@ function buildElectronApi(): ElectronAPI {
       onWatchNavigate: (
         callback: (context: { panelId: string; panelTitle: string; worktreeId?: string }) => void
       ) => _typedOn(CHANNELS.NOTIFICATION_WATCH_NAVIGATE, callback),
-      syncWatchedPanels: (panelIds: string[]) =>
-        ipcRenderer.send(CHANNELS.NOTIFICATION_SYNC_WATCHED, panelIds),
+      syncWatchedPanels: (panelIds: string[], context?: { activeWorktreeId: string | null }) =>
+        ipcRenderer.send(CHANNELS.NOTIFICATION_SYNC_WATCHED, panelIds, context),
       acknowledgeWaiting: (terminalId: string) =>
         ipcRenderer.send(CHANNELS.NOTIFICATION_WAITING_ACKNOWLEDGE, { terminalId }),
       acknowledgeWorkingPulse: (terminalId: string) =>
@@ -2511,10 +2688,9 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.STORE_UPDATE_SET_SETTINGS, enabled),
     },
 
-    // Gemini API
-    gemini: buildGeminiPreloadBindings(_unwrappingInvoke),
     codex: buildCodexPreloadBindings(_unwrappingInvoke),
     claude: buildClaudePreloadBindings(_unwrappingInvoke),
+    terminalSessionFile: buildTerminalSessionFilePreloadBindings(_unwrappingInvoke),
 
     // Daintree CLI install API
     cli: buildCliPreloadBindings(_unwrappingInvoke),
@@ -2525,9 +2701,6 @@ function buildElectronApi(): ElectronAPI {
 
     // Per-project consent for plugin agent tools. Renderer-only by design.
     pluginAgentMcp: buildPluginAgentMcpPreloadBindings(_unwrappingInvoke),
-
-    // Commands API
-    commands: buildCommandsPreloadBindings(_unwrappingInvoke),
 
     // App Agent API - Configuration and API key management
     appAgent: {
@@ -2661,9 +2834,8 @@ function buildElectronApi(): ElectronAPI {
       setAccentColorOverride: (color: string | null) =>
         _unwrappingInvoke(CHANNELS.APP_THEME_SET_ACCENT_COLOR_OVERRIDE, color),
 
-      onSystemAppearanceChanged: (
-        callback: (payload: { isDark: boolean; schemeId: string }) => void
-      ) => _typedOn(CHANNELS.APP_THEME_SYSTEM_APPEARANCE_CHANGED, callback),
+      onChanged: (callback: (config: AppThemeConfig) => void) =>
+        _typedOn(CHANNELS.APP_THEME_CHANGED, callback),
     },
 
     telemetry: (() => {
@@ -2884,6 +3056,8 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.FORGE_GET_REPO_STATS, payload),
       getFirstPageCache: (payload: { cwd: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_FIRST_PAGE_CACHE, payload),
+      getRepoKey: (payload: { cwd: string }) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_REPO_KEY, payload),
       getProjectHealth: (payload: { cwd: string; bypassCache?: boolean }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_PROJECT_HEALTH, payload),
       getIssueTooltip: (
@@ -2977,6 +3151,7 @@ function buildElectronApi(): ElectronAPI {
     projectGroups: buildProjectGroupsPreloadBindings(_unwrappingInvoke),
     runHistory: buildRunHistoryPreloadBindings(_unwrappingInvoke),
     copyTreeHistory: buildCopyTreeHistoryPreloadBindings(_unwrappingInvoke),
+    scheduledRuns: buildScheduledRunsPreloadBindings(_unwrappingInvoke),
 
     // Voice Input API
     voiceInput: {
@@ -3125,7 +3300,12 @@ function buildElectronApi(): ElectronAPI {
         _typedOn(CHANNELS.MCP_TURN_OUTCOME_ALERT, callback),
     },
 
-    helpAssistant: buildHelpAssistantPreloadBindings(_unwrappingInvoke),
+    helpAssistant: {
+      ...buildHelpAssistantPreloadBindings(_unwrappingInvoke),
+      onIdentitiesChanged: (
+        callback: (identities: IpcEventMap["help-assistant:identities-changed"]) => void
+      ) => _typedOn("help-assistant:identities-changed", callback),
+    },
 
     mcpBridge: {
       onGetManifestRequest: (callback: (requestId: string) => void) =>
@@ -3152,6 +3332,7 @@ function buildElectronApi(): ElectronAPI {
           hostPreview?: McpHostPreview;
           authorization?: McpDispatchAuthorization;
           requester?: McpRequester;
+          dispatchDeadlineAt?: number;
         }) => void
       ) => _typedOn(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, callback),
 
@@ -3172,6 +3353,13 @@ function buildElectronApi(): ElectronAPI {
           actionId: string;
           args?: unknown;
           pluginId?: string;
+          approvedPresetLaunch?: {
+            agentId: string;
+            presetId: string;
+            source: "custom" | "project" | "ccr" | "registry";
+            content: string;
+            fallbacks: Array<[string, string]>;
+          };
         }) => void
       ) => _typedOn(CHANNELS.PLUGIN_DISPATCH_ACTION_REQUEST, callback),
 

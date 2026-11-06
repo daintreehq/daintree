@@ -36,21 +36,43 @@ export const config: AgentConfig = {
   usageUrl: "https://github.com/features/copilot",
   externalLinks: [{ label: "Billing settings", url: "https://github.com/settings/billing" }],
   contextWindow: 160_000,
+  // The only source of Copilot's model IDs: it is multi-provider, so models.dev
+  // can't speak for it, and the CLI has no catalog command. Pinned IDs go stale
+  // as GitHub retires models, and `--model` errors on a retired one, so keep
+  // this in step with the "Supported models" table of the Copilot CLI reference
+  // (docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference).
+  // Omitting `--model` is the CLI default and is not an entry. Claude Sonnet
+  // 4.6 stays out although annual-plan subscribers keep it: the CLI reference
+  // does not list it.
   models: [
-    { id: "claude-sonnet-4.6", name: "Claude Sonnet 4.6", shortLabel: "Sonnet 4.6" },
-    { id: "claude-opus-4.6", name: "Claude Opus 4.6", shortLabel: "Opus 4.6" },
+    { id: "claude-sonnet-5.5", name: "Claude Sonnet 5.5", shortLabel: "Sonnet 5.5" },
+    { id: "claude-opus-5.5", name: "Claude Opus 5.5", shortLabel: "Opus 5.5" },
+    { id: "claude-haiku-5.5", name: "Claude Haiku 5.5", shortLabel: "Haiku 5.5" },
     { id: "claude-haiku-4.5", name: "Claude Haiku 4.5", shortLabel: "Haiku 4.5" },
-    { id: "claude-sonnet-4.5", name: "Claude Sonnet 4.5", shortLabel: "Sonnet 4.5" },
-    { id: "claude-opus-4.5", name: "Claude Opus 4.5", shortLabel: "Opus 4.5" },
-    { id: "gpt-5.4", name: "GPT-5.4", shortLabel: "GPT-5.4" },
+    { id: "gpt-6.1-sol", name: "GPT-6.1 Sol", shortLabel: "GPT-6.1 Sol" },
+    { id: "gpt-6-astra", name: "GPT-6 Astra", shortLabel: "GPT-6 Astra" },
+    { id: "gpt-6-luna", name: "GPT-6 Luna", shortLabel: "GPT-6 Luna" },
     { id: "gpt-5.3-codex", name: "GPT-5.3 Codex", shortLabel: "GPT-5.3" },
-    { id: "gpt-5.2", name: "GPT-5.2", shortLabel: "GPT-5.2" },
-    { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", shortLabel: "5.4 Mini" },
-    { id: "gpt-5-mini", name: "GPT-5 Mini", shortLabel: "5 Mini" },
-    { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", shortLabel: "Gem 2.5 Pro" },
-    { id: "gemini-3-pro-preview", name: "Gemini 3 Pro", shortLabel: "Gem 3 Pro" },
-    { id: "gemini-3.1-pro-preview", name: "Gemini 3.1 Pro", shortLabel: "Gem 3.1 Pro" },
+    { id: "gemini-3.8-flash", name: "Gemini 3.8 Flash", shortLabel: "Gem 3.8 Flash" },
   ],
+  // Earlier bundled IDs GitHub has deprecated, from its changelog. Panes and
+  // recipes that saved one relaunch without it, with a notice naming it,
+  // because `--model <retired id>` fails the launch.
+  retiredModels: {
+    "gemini-3-pro-preview": "2026-03-26",
+    "gpt-5.2": "2026-06-05",
+    "gemini-2.5-pro": "2026-07-31",
+    "gemini-3.1-pro-preview": "2026-09-01",
+    "claude-opus-4.5": "2026-09-01",
+    "claude-opus-4.6": "2026-09-01",
+    "claude-sonnet-4.5": "2026-09-01",
+    // Individual annual-plan subscribers keep it, everyone else is refused; the
+    // drop's notice names it, so a subscriber sees what changed.
+    "claude-sonnet-4.6": "2026-09-01",
+    "gpt-5.4": "2026-10-19",
+    "gpt-5.4-mini": "2026-10-19",
+    "gpt-5-mini": "2026-10-19",
+  },
   version: {
     args: ["--version"],
     npmPackage: "@github/copilot",
@@ -137,6 +159,7 @@ export const config: AgentConfig = {
     // users get `authConfirmed: false` but remain launchable.
     configPathsAll: [".copilot/config.json"],
   },
+  account: { kind: "fixed" },
   prerequisites: [
     {
       tool: "copilot",

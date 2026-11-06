@@ -514,7 +514,8 @@ export function inheritedUserData(): boolean {
  * `CrashRecoveryService` rewrites wholesale (`store.set("appState", ...)`), so
  * it is the honest payload for an atomic-write measurement. The legacy
  * `audit-logs.json` store is NOT: its rings moved to SQLite (`auditRingStore`),
- * and only migrations 022/023 still touch the JSON file.
+ * and only migrations 022/023 and the boot import that archives it
+ * (`legacyAuditRingImport`) still touch the JSON file.
  */
 export function appStateSnapshot(panelCount: number): Record<string, unknown> {
   return {

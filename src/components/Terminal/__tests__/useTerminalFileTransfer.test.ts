@@ -115,6 +115,17 @@ import {
   terminalUploadSurface,
 } from "../uploads/pendingUploads";
 import { _resetCtrlVImagePasteForTests, getClipboardImagePaster } from "../uploads/ctrlVImagePaste";
+import {
+  _resetUploadConfirmForTests,
+  askUploadQuestion,
+  currentUploadQuestion,
+  registerUploadConfirmHost,
+} from "../uploads/uploadConfirm";
+import { createRemoteMaterializer } from "@/services/remoteMaterializer";
+import type {
+  LocalFolderSummaryResult,
+  UploadLocalFolderResult,
+} from "@shared/types/ipc/fileTransfer";
 import type { MaterializeResult, MaterializeSource } from "@shared/types/remoteHosts";
 import type { TransferSource } from "@/lib/transferSources";
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
@@ -363,8 +374,10 @@ describe("useTerminalFileTransfer hook", () => {
       "term-1",
       `${quoteLaunchArgOptional("/tmp/daintree-clipboard/clipboard-123-abc.png")} `
     );
+    // Lands on its own once saved, like a drop, so it can't make another
+    // transfer still landing here look overtaken by the user.
     expect(terminalInstanceService.notifyUserInput).toHaveBeenCalledWith("term-1", "", {
-      automatic: false,
+      automatic: true,
     });
     expect(event.defaultPrevented).toBe(true);
   });
@@ -468,7 +481,7 @@ describe("useTerminalFileTransfer hook", () => {
     expect(terminalInstanceService.notifyUserInput).not.toHaveBeenCalled();
   });
 
-  it("re-reads the agent identity across the save, not the one at paste time", async () => {
+  it("offers rather than types the path when an agent took over during the save", async () => {
     let releaseSave: (value: SavedImage) => void = () => {};
     vi.mocked(window.electron.clipboard.saveImage).mockReturnValue(
       new Promise<SavedImage>((resolve) => {
@@ -483,7 +496,8 @@ describe("useTerminalFileTransfer hook", () => {
       container.dispatchEvent(makePasteEvent(true));
     });
 
-    // …but an agent is detected before the image finishes saving.
+    // …but an agent is detected before the image finishes saving, so the
+    // path was meant for a program that is no longer there.
     rerender({ detectedAgentId: "claude" });
 
     await act(async () => {
@@ -491,7 +505,13 @@ describe("useTerminalFileTransfer hook", () => {
       await settle();
     });
 
-    expect(lastWrittenPayload()).toBe(`${formatAtFileToken("/tmp/shot.png")} `);
+    expect(terminalClient.write).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "The agent in the terminal changed before the transfer finished.",
+        inboxMessage: expect.stringContaining("/tmp/shot.png"),
+      })
+    );
   });
 
   it("unmounting while the image is still saving suppresses the write", async () => {
@@ -947,9 +967,47 @@ describe("useTerminalFileTransfer hook", () => {
         await vi.advanceTimersByTimeAsync(1000);
       });
 
-      expect(payloads()[0]).toBe(
-        formatWithBracketedPaste("/tmp/daintree-clipboard/clipboard-123-abc.png")
-      );
+      expect(payloads()).toEqual([
+        formatWithBracketedPaste("/tmp/daintree-clipboard/clipboard-123-abc.png"),
+        formatWithBracketedPaste(" "),
+      ]);
+    });
+
+    it("offers a pasted screenshot still queued behind a drop once the user types", async () => {
+      renderFileTransferHook({ detectedAgentId: "claude" });
+      await dropFiles([fileAt("a.png", "/Users/test/a.png")]);
+      await pasteImage();
+      terminalInstanceService.notifyUserInput("term-1", "x");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+
+      expect(payloads()).toEqual([formatWithBracketedPaste("/Users/test/a.png")]);
+      expect(notify).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(notify).mock.calls[0]![0]).toMatchObject({
+        message: "The terminal's input changed before the transfer finished.",
+        inboxMessage: expect.stringMatching(/\/tmp\/daintree-clipboard\/clipboard-123-abc\.png$/),
+      });
+    });
+
+    it("stops a pasted screenshot's trailing space once the agent changes after its path", async () => {
+      const { rerender } = renderFileTransferHook({ detectedAgentId: "claude" });
+      await act(async () => {
+        await expect(getClipboardImagePaster("term-1")!()).resolves.toBe("inserted");
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      rerender({ detectedAgentId: "codex" });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+
+      expect(payloads()).toEqual([
+        formatWithBracketedPaste("/tmp/daintree-clipboard/clipboard-123-abc.png"),
+      ]);
+      // The image already landed; there is nothing left to offer.
+      expect(notify).not.toHaveBeenCalled();
     });
 
     it("keeps the @ token for an agent without a verified image protocol", async () => {
@@ -1699,22 +1757,22 @@ describe("useTerminalFileTransfer hook", () => {
       }
     });
 
-    describe("a drop that lands after the terminal moved on", () => {
-      function notice() {
-        const calls = vi.mocked(notify).mock.calls;
-        const payload = calls[calls.length - 1]![0];
-        return {
-          title: payload.title,
-          message: payload.message,
-          labels: (payload.actions ?? []).map((action) => action.label),
-          act: (label: string) =>
-            act(async () => {
-              await (payload.actions ?? []).find((action) => action.label === label)!.onClick();
-              await settle();
-            }),
-        };
-      }
+    function notice() {
+      const calls = vi.mocked(notify).mock.calls;
+      const payload = calls[calls.length - 1]![0];
+      return {
+        title: payload.title,
+        message: payload.message,
+        labels: (payload.actions ?? []).map((action) => action.label),
+        act: (label: string) =>
+          act(async () => {
+            await (payload.actions ?? []).find((action) => action.label === label)!.onClick();
+            await settle();
+          }),
+      };
+    }
 
+    describe("a drop that lands after the terminal moved on", () => {
       it("offers the path instead of typing it when the agent changed", async () => {
         const { release } = holdMaterialize();
         const { rerender } = renderFileTransferHook({ cwdProvider: () => CWD });
@@ -1886,6 +1944,191 @@ describe("useTerminalFileTransfer hook", () => {
 
         expect(lastWrittenPayload().trimEnd()).toBe("@src/App.tsx");
         expect(notify).not.toHaveBeenCalled();
+      });
+    });
+
+    // A clipboard image crosses the same link a drop does, through either the
+    // DOM paste event or the paster the paste keys call, so it lands under the
+    // same rules. Only the key route reports an outcome; the event has none.
+    interface StartedPaste {
+      reports: (outcome: "inserted" | "failed") => Promise<void>;
+    }
+    const pasteThroughEvent = async (): Promise<StartedPaste> => {
+      await pasteImage();
+      return { reports: async () => {} };
+    };
+    const pasteThroughKey = async (): Promise<StartedPaste> => {
+      const outcome = getClipboardImagePaster("term-1")!();
+      await act(async () => {
+        await settle();
+      });
+      return { reports: (expected) => expect(outcome).resolves.toBe(expected) };
+    };
+
+    describe.each([
+      { route: "the paste event", paste: pasteThroughEvent },
+      { route: "a paste key", paste: pasteThroughKey },
+    ])("a clipboard image pasted through $route that lands late", ({ paste }) => {
+      const CLIP = "/tmp/daintree-clipboard/clip.png";
+
+      afterEach(() => {
+        _resetCtrlVImagePasteForTests();
+      });
+
+      it("types the path when the terminal is still the one it was pasted into", async () => {
+        const { release } = holdMaterialize();
+        renderFileTransferHook({ detectedAgentId: "claude" });
+        const pasted = await paste();
+        await release();
+
+        expect(lastWrittenPayload()).toBe(`${formatAtFileToken(CLIP)} `);
+        expect(notify).not.toHaveBeenCalled();
+        await pasted.reports("inserted");
+      });
+
+      it("offers the path instead of typing it when the user typed meanwhile", async () => {
+        const { release } = holdMaterialize();
+        const onInput = vi.fn();
+        renderFileTransferHook({ detectedAgentId: "claude", onInput });
+        const pasted = await paste();
+
+        terminalInstanceService.notifyUserInput("term-1", "x");
+        await release();
+
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        expect(onInput).not.toHaveBeenCalled();
+        expect(notice()).toMatchObject({
+          title: "File not inserted",
+          message: "The terminal's input changed before the transfer finished.",
+          labels: ["Insert path", "Copy path"],
+        });
+        await pasted.reports("failed");
+        await notice().act("Copy path");
+        expect(copyWithToast).toHaveBeenCalledWith("Path", CLIP);
+      });
+
+      it("offers the path when the agent exited to a shell meanwhile", async () => {
+        const { release } = holdMaterialize();
+        const { rerender } = renderFileTransferHook({ launchAgentId: "claude" });
+        const pasted = await paste();
+
+        rerender({ launchAgentId: "claude", agentState: "exited" });
+        await release();
+
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        expect(notice().message).toBe(
+          "The agent in the terminal changed before the transfer finished."
+        );
+        await pasted.reports("failed");
+      });
+
+      it("offers the path when another agent took the terminal meanwhile", async () => {
+        const { release } = holdMaterialize();
+        const { rerender } = renderFileTransferHook({ detectedAgentId: "claude" });
+        const pasted = await paste();
+
+        rerender({ detectedAgentId: "codex" });
+        await release();
+
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        expect(notice().message).toBe(
+          "The agent in the terminal changed before the transfer finished."
+        );
+        await pasted.reports("failed");
+      });
+
+      it("offers the path when the agent restarted under the same name", async () => {
+        panelState.panelsById = { "term-1": { restartKey: 1 } };
+        const { release } = holdMaterialize();
+        renderFileTransferHook({ detectedAgentId: "claude" });
+        const pasted = await paste();
+
+        panelState.panelsById = { "term-1": { restartKey: 2 } };
+        await release();
+
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        expect(notice().message).toBe(
+          "The agent in the terminal changed before the transfer finished."
+        );
+        await pasted.reports("failed");
+      });
+
+      it("offers the path when the pane moved to another worktree", async () => {
+        panelState.panelsById = { "term-1": { worktreeId: "wt-a" } };
+        const { release } = holdMaterialize();
+        renderFileTransferHook({ detectedAgentId: "claude" });
+        const pasted = await paste();
+
+        panelState.panelsById = { "term-1": { worktreeId: "wt-b" } };
+        await release();
+
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        expect(notice().message).toBe(
+          "The terminal moved to another worktree before the transfer finished."
+        );
+        await pasted.reports("failed");
+      });
+
+      it("only offers a copy once the PTY has exited", async () => {
+        panelState.panelsById = { "term-1": { hasPty: true } };
+        const { release } = holdMaterialize();
+        renderFileTransferHook({ detectedAgentId: "claude" });
+        const pasted = await paste();
+
+        panelState.panelsById = { "term-1": { hasPty: false, runtimeStatus: "exited" } };
+        await release();
+
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        expect(notice()).toMatchObject({
+          message: "The terminal isn't taking input.",
+          labels: ["Copy path"],
+        });
+        await pasted.reports("failed");
+      });
+
+      it("inserts the offered path, formatted for what runs now, when asked", async () => {
+        const { release } = holdMaterialize();
+        const { rerender } = renderFileTransferHook({ detectedAgentId: "claude" });
+        const pasted = await paste();
+        rerender({});
+        await release();
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        await pasted.reports("failed");
+
+        await notice().act("Insert path");
+
+        expect(terminalClient.write).toHaveBeenCalledTimes(1);
+        expect(lastWrittenPayload()).toBe(`${quoteLaunchArgOptional(CLIP)} `);
+      });
+
+      it("offers the path when the input locked and unlocked again meanwhile", async () => {
+        const { release } = holdMaterialize();
+        const { rerender } = renderFileTransferHook({ detectedAgentId: "claude" });
+        const pasted = await paste();
+
+        rerender({ detectedAgentId: "claude", isInputLocked: true });
+        rerender({ detectedAgentId: "claude", isInputLocked: false });
+        await release();
+
+        expect(terminalClient.write).not.toHaveBeenCalled();
+        expect(notice()).toMatchObject({
+          message: "The terminal was locked before the transfer finished.",
+          labels: ["Insert path", "Copy path"],
+        });
+        await pasted.reports("failed");
+      });
+
+      it("still types the path when only the cwd moved", async () => {
+        const { release } = holdMaterialize(() => `${CWD}/shots/clip.png`);
+        let cwd = "/srv/elsewhere";
+        renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => cwd });
+        const pasted = await paste();
+        cwd = CWD;
+        await release();
+
+        expect(lastWrittenPayload().trimEnd()).toBe("@shots/clip.png");
+        expect(notify).not.toHaveBeenCalled();
+        await pasted.reports("inserted");
       });
     });
   });
@@ -2357,6 +2600,130 @@ describe("useTerminalFileTransfer hook", () => {
       });
       expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(false);
       expect(terminalClient.write).not.toHaveBeenCalled();
+    });
+
+    describe("a folder dropped from this machine", () => {
+      // A name a shell would split, so a plain shell's spelling has to quote it.
+      const FOLDER_HOST_PATH = "/tmp/daintree-inbox/files/20261105-a1/Q3 designs";
+
+      beforeEach(() => {
+        _resetUploadConfirmForTests();
+        registerUploadConfirmHost(Symbol("host"));
+      });
+
+      /** The view's real remote materializer over a fake bridge where every path is a folder. */
+      function installFolderSends() {
+        const fileTransfer = {
+          statLocalFile: vi.fn(async () => ({ size: 96, isDirectory: true })),
+          uploadLocalFile: vi.fn(),
+          uploadBytes: vi.fn(),
+          summarizeLocalFolder: vi.fn(async (): Promise<LocalFolderSummaryResult> => ({
+            status: "ready",
+            summary: {
+              rootName: "Q3 designs",
+              totals: { fileCount: 2, folderCount: 1, totalBytes: 30 },
+              lowerBound: false,
+              hidden: { fileCount: 0, folderCount: 0, totalBytes: 0, paths: [] },
+              largest: [],
+              notCopied: { count: 0, items: [] },
+            },
+            handle: "fedcba9876543210fedcba9876543210",
+          })),
+          uploadLocalFolder: vi.fn(async (): Promise<UploadLocalFolderResult> => ({
+            status: "sent",
+            hostPath: FOLDER_HOST_PATH,
+            totals: { fileCount: 2, folderCount: 1, totalBytes: 30 },
+          })),
+          cancel: vi.fn(async () => {}),
+          onEvent: () => () => {},
+        };
+        let opIds = 0;
+        setRemoteMaterializer(
+          createRemoteMaterializer({
+            hostId: "studio-01",
+            hostLabel: () => "studio-01",
+            localLabel: "This Mac",
+            fileTransfer,
+            saveClipboardImage: vi.fn(),
+            confirmLargeUpload: vi.fn(async () => true),
+            confirmReplace: vi.fn(async () => true),
+            confirmFolder: (request, signal) =>
+              askUploadQuestion({ kind: "folder", ...request }, signal ? { signal } : {}),
+            addToProjectKey: "Option",
+            reportFailure: vi.fn(),
+            mintOperationId: () => `op-${++opIds}`,
+          })
+        );
+        return fileTransfer;
+      }
+
+      /** Answers the folder question; a yes waits for the path to be typed. */
+      async function answerFolderQuestion(yes: boolean) {
+        await vi.waitFor(() => expect(currentUploadQuestion()?.question.kind).toBe("folder"));
+        await act(async () => {
+          currentUploadQuestion()!.answer(yes);
+          await vi.waitFor(() =>
+            yes
+              ? expect(terminalClient.write).toHaveBeenCalled()
+              : expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(false)
+          );
+          await settle();
+        });
+      }
+
+      it("types an agent the folder's host path as an @ token once it is sent", async () => {
+        installFolderSends();
+        renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => "/srv/proj" });
+        await dropFiles([fileAt("Q3 designs", "/Users/me/Q3 designs")]);
+        expect(terminalClient.write).not.toHaveBeenCalled();
+
+        await answerFolderQuestion(true);
+        expect(lastWrittenPayload().trimEnd()).toBe(formatAtFileToken(FOLDER_HOST_PATH));
+      });
+
+      it("types a plain shell the folder's shell-quoted host path", async () => {
+        installFolderSends();
+        renderFileTransferHook({});
+        await dropFiles([fileAt("Q3 designs", "/Users/me/Q3 designs")]);
+        await answerFolderQuestion(true);
+        expect(lastWrittenPayload()).toBe(`${quoteLaunchArgOptional(FOLDER_HOST_PATH)} `);
+        expect(lastWrittenPayload()).not.toBe(`${FOLDER_HOST_PATH} `);
+      });
+
+      it("types nothing when the question is closed", async () => {
+        const fileTransfer = installFolderSends();
+        renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => "/srv/proj" });
+        await dropFiles([fileAt("Q3 designs", "/Users/me/Q3 designs")]);
+        await answerFolderQuestion(false);
+        expect(fileTransfer.uploadLocalFolder).not.toHaveBeenCalled();
+        expect(terminalClient.write).not.toHaveBeenCalled();
+      });
+
+      it("types nothing when its chip is cancelled while the question is open", async () => {
+        const fileTransfer = installFolderSends();
+        renderFileTransferHook({});
+        await dropFiles([fileAt("Q3 designs", "/Users/me/Q3 designs")]);
+        await vi.waitFor(() => expect(currentUploadQuestion()?.question.kind).toBe("folder"));
+        await act(async () => {
+          getPendingUploads(terminalUploadSurface("term-1"))[0]!.cancel();
+          await settle();
+        });
+        expect(currentUploadQuestion()).toBeNull();
+        expect(fileTransfer.uploadLocalFolder).not.toHaveBeenCalled();
+        expect(hasPendingUploads(terminalUploadSurface("term-1"))).toBe(false);
+        expect(terminalClient.write).not.toHaveBeenCalled();
+      });
+    });
+  });
+
+  describe("a folder dropped in a window on this machine", () => {
+    it("types the local folder in as it always has, without asking", async () => {
+      _resetUploadConfirmForTests();
+      registerUploadConfirmHost(Symbol("host"));
+      renderFileTransferHook({ detectedAgentId: "claude", cwdProvider: () => CWD });
+      await dropFiles([fileAt("designs", `${CWD}/designs`)]);
+      expect(currentUploadQuestion()).toBeNull();
+      expect(lastWrittenPayload().trimEnd()).toBe("@designs");
     });
   });
 

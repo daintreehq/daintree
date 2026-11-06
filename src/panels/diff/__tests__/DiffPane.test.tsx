@@ -12,14 +12,41 @@ import type { DiffChangeSetEntry } from "@shared/types/git";
 
 // A fragment, so the toolbar stays a sibling of the keydown host rather than
 // wrapping it — the stepping shortcuts bubble through the same subtree as before.
-vi.mock("@/components/Panel/ContentPanel", () => ({
-  ContentPanel: (props: { toolbar?: ReactNode; children?: ReactNode }) => (
-    <>
-      {props.toolbar}
-      {props.children}
-    </>
-  ),
-}));
+// It reads its tab group's edge and reorder the way the real ContentPanel does.
+vi.mock("@/components/Panel/ContentPanel", async () => {
+  const { useGridGroupAttention } = await import("@/components/Panel/gridGroupAttention");
+  const { useGridGroupTabReorder } = await import("@/components/Panel/gridGroupTabReorder");
+  return {
+    ContentPanel: (props: {
+      id: string;
+      location?: "grid" | "dock" | "dialog";
+      tabs?: Array<{ id: string }>;
+      toolbar?: ReactNode;
+      children?: ReactNode;
+    }) => {
+      const attention = useGridGroupAttention(props.id, props.location ?? "grid");
+      const reorder = useGridGroupTabReorder(props.id, props.location ?? "grid");
+      return (
+        <>
+          <span
+            data-testid="group-edge"
+            data-group-ambient={attention?.ambientAgentState}
+            data-group-failed={attention?.hiddenTabFailed || undefined}
+          />
+          <span
+            data-testid="group-reorder"
+            data-group-id={reorder?.groupId}
+            onClick={() =>
+              reorder?.onTabReorder([...(props.tabs ?? [])].reverse().map((t) => t.id))
+            }
+          />
+          {props.toolbar}
+          {props.children}
+        </>
+      );
+    },
+  };
+});
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -45,15 +72,31 @@ vi.mock("@/components/Worktree/DiffViewer", () => ({
 
 // The rendered layout pulls react-markdown behind a lazy boundary; these tests
 // exercise the toolbar's plumbing, not the renderer, so it stays a stub.
+interface RenderedMockProps {
+  newSource?: string;
+  status: string;
+  attemptKey: string;
+  requestKey: string;
+  onChangeCount?: (count: number, forAttempt: string) => void;
+}
+// The latest props the stub was rendered with, so a test can report up through
+// the same callbacks the real view uses.
+const { renderedProps } = vi.hoisted(() => ({
+  renderedProps: { current: null as RenderedMockProps | null },
+}));
 vi.mock("@/components/Worktree/RenderedMarkdownDiff", () => ({
-  RenderedMarkdownDiff: (props: { newSource?: string; status: string; attemptKey: string }) => (
-    <div
-      data-testid="rendered-markdown-mock"
-      data-has-source={String(props.newSource !== undefined)}
-      data-status={props.status}
-      data-attempt-key={props.attemptKey}
-    />
-  ),
+  RenderedMarkdownDiff: (props: RenderedMockProps) => {
+    renderedProps.current = props;
+    return (
+      <div
+        data-testid="rendered-markdown-mock"
+        data-has-source={String(props.newSource !== undefined)}
+        data-status={props.status}
+        data-attempt-key={props.attemptKey}
+        data-request-key={props.requestKey}
+      />
+    );
+  },
 }));
 
 // Controllable so a test can put the pane in image mode; `beforeEach` returns it
@@ -63,7 +106,9 @@ const { isImageDiffCandidateMock } = vi.hoisted(() => ({
     vi.fn<typeof import("@/components/FileViewer/ImageDiffViewer").isImageDiffCandidate>(),
 }));
 vi.mock("@/components/FileViewer/ImageDiffViewer", () => ({
-  ImageDiffViewer: () => <div data-testid="image-diff-mock" />,
+  ImageDiffViewer: (props: { side?: string }) => (
+    <div data-testid="image-diff-mock" data-side={props.side ?? "none"} />
+  ),
   isImageDiffCandidate: isImageDiffCandidateMock,
 }));
 vi.mock("@/components/ui/EmptyState", () => ({
@@ -160,6 +205,9 @@ function sourceEnabledCalls(): boolean[] {
 }
 
 import { DiffPane } from "../DiffPane";
+import { GridGroupAttentionContext } from "@/components/Panel/gridGroupAttention";
+import { GridGroupTabReorderContext } from "@/components/Panel/gridGroupTabReorder";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { actionService } from "@/services/ActionService";
 
 const PANEL_ID = "diff-1";
@@ -482,6 +530,87 @@ describe("DiffPane — file stepping", () => {
   });
 });
 
+describe("DiffPane — tab group edges (#16151)", () => {
+  function inGroup(panelId: string) {
+    return (
+      <GridGroupAttentionContext.Provider
+        value={{ panelId, ambientAgentState: "waiting", hiddenTabFailed: true }}
+      >
+        <DiffPane
+          id={PANEL_ID}
+          title="pane"
+          isFocused={false}
+          location="grid"
+          worktreeId={WORKTREE_ID}
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </GridGroupAttentionContext.Provider>
+    );
+  }
+
+  it("draws its tab group's edge for a hidden tab's ask and failure", () => {
+    seedPanel({ filePath: "a.ts", fileStatus: "modified", changeSet: [entry("a.ts")] });
+    const { rerender } = render(inGroup(PANEL_ID));
+    const edge = () => screen.getByTestId("group-edge");
+    expect(edge().getAttribute("data-group-ambient")).toBe("waiting");
+    expect(edge().getAttribute("data-group-failed")).toBe("true");
+
+    rerender(inGroup("other"));
+    expect(edge().hasAttribute("data-group-ambient")).toBe(false);
+    expect(edge().hasAttribute("data-group-failed")).toBe(false);
+  });
+});
+
+describe("DiffPane — tab reorder (#16160)", () => {
+  const tabs = ["diff-1", "t-2"].map((id) => ({
+    id,
+    title: id,
+    chrome: deriveTerminalChrome(),
+    kind: id === PANEL_ID ? "diff" : "terminal",
+    isActive: id === PANEL_ID,
+  }));
+
+  function inGroup(panelId: string, onTabReorder: (order: string[]) => void) {
+    return (
+      <GridGroupTabReorderContext.Provider value={{ panelId, groupId: "g-1", onTabReorder }}>
+        <DiffPane
+          id={PANEL_ID}
+          title="pane"
+          isFocused={false}
+          location="grid"
+          worktreeId={WORKTREE_ID}
+          onFocus={() => {}}
+          onClose={() => {}}
+          tabs={tabs}
+        />
+      </GridGroupTabReorderContext.Provider>
+    );
+  }
+
+  it("reorders its tab group's tabs from its own strip", () => {
+    seedPanel({ filePath: "a.ts", fileStatus: "modified", changeSet: [entry("a.ts")] });
+    const onTabReorder = vi.fn();
+    render(inGroup(PANEL_ID, onTabReorder));
+    const probe = screen.getByTestId("group-reorder");
+    expect(probe.getAttribute("data-group-id")).toBe("g-1");
+
+    fireEvent.click(probe);
+    expect(onTabReorder).toHaveBeenCalledWith(["t-2", "diff-1"]);
+  });
+
+  it("takes no reorder meant for another tab", () => {
+    seedPanel({ filePath: "a.ts", fileStatus: "modified", changeSet: [entry("a.ts")] });
+    const onTabReorder = vi.fn();
+    render(inGroup("other", onTabReorder));
+    const probe = screen.getByTestId("group-reorder");
+    expect(probe.hasAttribute("data-group-id")).toBe(false);
+
+    fireEvent.click(probe);
+    expect(onTabReorder).not.toHaveBeenCalled();
+  });
+});
+
 describe("DiffPane — workspace chrome", () => {
   it("renders the sidebar only once the change set holds more than one file", () => {
     seedPanel({ filePath: "a.ts", fileStatus: "modified", changeSet: [entry("a.ts")] });
@@ -537,9 +666,59 @@ describe("DiffPane — content-aware toolbar", () => {
     expect(screen.getByLabelText("Refresh")).toBeTruthy();
   });
 
+  it("hands each twin of a partially staged image its own side of the index", () => {
+    isImageDiffCandidateMock.mockReturnValue(true);
+    const changeSet: DiffChangeSetEntry[] = [
+      { path: "logo.png", status: "modified", viewedKey: "staged:logo.png", side: "staged" },
+      { path: "logo.png", status: "modified", viewedKey: "unstaged:logo.png", side: "unstaged" },
+    ];
+    const sideFor = (viewedKey: string) => {
+      cleanup();
+      seedPanel({ filePath: "logo.png", fileStatus: "modified", viewedKey, changeSet });
+      renderPane();
+      return screen.getByTestId("image-diff-mock").getAttribute("data-side");
+    };
+
+    expect(sideFor("staged:logo.png")).toBe("staged");
+    expect(sideFor("unstaged:logo.png")).toBe("unstaged");
+  });
+
+  it("names no side for a plain working-tree image, even beside sided entries", () => {
+    isImageDiffCandidateMock.mockReturnValue(true);
+    seedPanel({ filePath: "logo.png", fileStatus: "modified", changeSet: [entry("logo.png")] });
+    renderPane();
+    expect(screen.getByTestId("image-diff-mock").getAttribute("data-side")).toBe("none");
+
+    // The open file isn't in the set, so no entry's side is its own.
+    cleanup();
+    seedPanel({
+      filePath: "logo.png",
+      fileStatus: "modified",
+      changeSet: [{ ...entry("other.png"), side: "staged" }],
+    });
+    renderPane();
+    expect(screen.getByTestId("image-diff-mock").getAttribute("data-side")).toBe("none");
+  });
+
+  it.each(["staged", "unstaged"] as const)(
+    "keeps a %s panel's own side over its entry's",
+    (diffSource) => {
+      isImageDiffCandidateMock.mockReturnValue(true);
+      const entrySide = diffSource === "staged" ? "unstaged" : "staged";
+      seedPanel({
+        filePath: "logo.png",
+        fileStatus: "modified",
+        diffSource,
+        changeSet: [{ ...entry("logo.png"), side: entrySide }],
+      });
+      renderPane();
+      expect(screen.getByTestId("image-diff-mock").getAttribute("data-side")).toBe(diffSource);
+    }
+  );
+
   it("keeps them for a base-branch image, which the text viewer still handles", () => {
-    // ImageDiffViewer compares the working tree against HEAD, so it has nothing
-    // to show for a base-branch comparison — those stay on DiffViewer whatever
+    // ImageDiffViewer compares local versions (HEAD, the index, the working
+    // tree), so it has nothing to show for a base-branch comparison — those stay on DiffViewer whatever
     // the extension. Gating the toolbar on candidacy alone would strip the
     // controls off a body that is still the text viewer.
     isImageDiffCandidateMock.mockReturnValue(true);
@@ -1353,6 +1532,77 @@ describe("DiffPane — rendered Markdown layout (#12171)", () => {
 
     const second = await screen.findByTestId("rendered-markdown-mock");
     expect(second.getAttribute("data-attempt-key")).not.toBe(firstAttempt);
+  });
+
+  it("steps only through the change count reported for the attempt on screen", async () => {
+    preferences.diffMarkdownRendered = true;
+    useDiffFileSourceMock.mockReturnValue({ source: "# Guide\n", errorCode: null });
+    seedPanel({ filePath: "docs/guide.md", fileStatus: "modified" });
+    const { rerender } = renderPane();
+
+    const first = await screen.findByTestId("rendered-markdown-mock");
+    const firstAttempt = first.getAttribute("data-attempt-key") ?? "";
+    act(() => renderedProps.current?.onChangeCount?.(3, firstAttempt));
+    expect(screen.getByText("1 of 3")).toBeTruthy();
+
+    // The source moves on. The view reports nothing until its new comparison is
+    // built, so the first document's three changes must not stay steppable.
+    useDiffFileSourceMock.mockReturnValue({ source: "# Guide edited\n", errorCode: null });
+    rerender(paneElement());
+    const second = await screen.findByTestId("rendered-markdown-mock");
+    const secondAttempt = second.getAttribute("data-attempt-key") ?? "";
+    expect(secondAttempt).not.toBe(firstAttempt);
+    expect(screen.queryByRole("group", { name: "Changes" })).toBe(null);
+
+    // A count for the old attempt arriving late is not this one's either.
+    act(() => renderedProps.current?.onChangeCount?.(3, firstAttempt));
+    expect(screen.queryByRole("group", { name: "Changes" })).toBe(null);
+
+    act(() => renderedProps.current?.onChangeCount?.(2, secondAttempt));
+    expect(screen.getByText("1 of 2")).toBeTruthy();
+  });
+
+  it("keeps one comparison slot per pane: stable across files, distinct between panes", async () => {
+    preferences.diffMarkdownRendered = true;
+    useDiffFileSourceMock.mockReturnValue({ source: "# Guide\n", errorCode: null });
+    seedPanel({ filePath: "docs/guide.md", fileStatus: "modified" });
+    const { rerender, unmount } = renderPane();
+    const requestKey = (await screen.findByTestId("rendered-markdown-mock")).getAttribute(
+      "data-request-key"
+    );
+    expect(requestKey).toBeTruthy();
+
+    // Stepping to another file supersedes the last one's comparison only if
+    // both are filed under the same key.
+    seedPanel({ filePath: "docs/other.md", fileStatus: "modified" });
+    rerender(paneElement());
+    const next = await screen.findByTestId("rendered-markdown-mock");
+    expect(next.getAttribute("data-attempt-key")).toContain("docs/other.md");
+    expect(next.getAttribute("data-request-key")).toBe(requestKey);
+    unmount();
+
+    // A second pane must not supersede the first one's comparison.
+    panelsById["diff-2"] = {
+      id: "diff-2",
+      kind: "diff",
+      diffSource: "working-tree",
+      filePath: "docs/guide.md",
+      fileStatus: "modified",
+    };
+    render(
+      <DiffPane
+        id="diff-2"
+        title="pane"
+        isFocused
+        location="dialog"
+        worktreeId={WORKTREE_ID}
+        onFocus={() => {}}
+        onClose={() => {}}
+      />
+    );
+    const other = await screen.findByTestId("rendered-markdown-mock");
+    expect(other.getAttribute("data-request-key")).toBeTruthy();
+    expect(other.getAttribute("data-request-key")).not.toBe(requestKey);
   });
 });
 

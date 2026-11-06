@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useInsertionEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { jsx, jsxs } from "react/jsx-runtime";
 function getPluginHostBridge() {
 	const bridge = globalThis.electron?.plugin;
@@ -39,13 +39,31 @@ function useHostChannel(pluginId, channel) {
 	const [error, setError] = useState(null);
 	const [disconnected, setDisconnected] = useState(false);
 	const callIdRef = useRef(0);
-	useEffect(() => {
+	const committedTargetRef = useRef({
+		pluginId,
+		channel
+	});
+	const resetPendingRef = useRef(false);
+	useInsertionEffect(() => {
+		const committed = committedTargetRef.current;
+		if (committed.pluginId === pluginId && committed.channel === channel) return;
+		committedTargetRef.current = {
+			pluginId,
+			channel
+		};
+		callIdRef.current += 1;
+		resetPendingRef.current = true;
+	}, [pluginId, channel]);
+	useLayoutEffect(() => {
+		if (!resetPendingRef.current) return;
+		resetPendingRef.current = false;
 		setLoading(false);
 		setError(null);
 	}, [pluginId, channel]);
 	return {
 		invoke: useCallback(async (args) => {
 			const callId = ++callIdRef.current;
+			resetPendingRef.current = false;
 			setLoading(true);
 			setError(null);
 			try {

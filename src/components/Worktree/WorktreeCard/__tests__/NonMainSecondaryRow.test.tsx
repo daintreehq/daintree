@@ -71,6 +71,8 @@ interface RenderOverrides {
   hasCustomTitle?: boolean;
   hasPlanFile?: boolean;
   quietGit?: boolean;
+  variant?: "sidebar" | "grid";
+  density?: "comfortable" | "compact";
 }
 
 function renderRow(overrides: RenderOverrides = {}) {
@@ -80,7 +82,6 @@ function renderRow(overrides: RenderOverrides = {}) {
         worktree={overrides.worktree ?? baseWorktree}
         branchLabel="feature/test"
         isActive
-        underlineOnHover={false}
         hasUpstreamDelta={overrides.hasUpstreamDelta ?? false}
         hasAuthFailedSignIn={overrides.hasAuthFailedSignIn ?? false}
         hasDisplayTitle={overrides.hasDisplayTitle ?? false}
@@ -88,6 +89,8 @@ function renderRow(overrides: RenderOverrides = {}) {
         hasCustomTitle={overrides.hasCustomTitle}
         hasPlanFile={overrides.hasPlanFile ?? false}
         quietGit={overrides.quietGit}
+        variant={overrides.variant}
+        density={overrides.density}
         badges={{ onOpenPlan: vi.fn() }}
       />
     </TooltipProvider>
@@ -128,6 +131,8 @@ describe("NonMainSecondaryRow → PRBadge circuit-breaker wiring", () => {
 });
 
 describe("NonMainSecondaryRow → badge ordering by alarm tier", () => {
+  // The grid keeps the sync line on the card, so the ordering contract lives
+  // there; the sidebar moves ambient drift into Details (see below).
   beforeEach(() => {
     prBadgeProps.length = 0;
     upstreamBadgeProps.length = 0;
@@ -136,6 +141,7 @@ describe("NonMainSecondaryRow → badge ordering by alarm tier", () => {
 
   it("renders PR before UpstreamSync when no alarms are active", () => {
     const { container } = renderRow({
+      variant: "grid",
       worktree: { ...baseWorktree, behindCount: 0, fetchAuthFailed: false } as WorktreeState,
       hasUpstreamDelta: true,
     });
@@ -151,6 +157,7 @@ describe("NonMainSecondaryRow → badge ordering by alarm tier", () => {
 
   it("PR stays first when CI failed (PR is the salient alarm)", () => {
     const { container } = renderRow({
+      variant: "grid",
       worktree: {
         ...baseWorktree,
         behindCount: 3,
@@ -170,6 +177,7 @@ describe("NonMainSecondaryRow → badge ordering by alarm tier", () => {
 
   it("UpstreamSync moves before PR when auth-failed (auth > healthy PR)", () => {
     const { container } = renderRow({
+      variant: "grid",
       worktree: {
         ...baseWorktree,
         fetchAuthFailed: true,
@@ -190,6 +198,7 @@ describe("NonMainSecondaryRow → badge ordering by alarm tier", () => {
 
   it("UpstreamSync moves before PR when behindCount > 0 (no CI failure)", () => {
     const { container } = renderRow({
+      variant: "grid",
       worktree: { ...baseWorktree, behindCount: 5 } as WorktreeState,
       hasUpstreamDelta: true,
     });
@@ -203,26 +212,47 @@ describe("NonMainSecondaryRow → badge ordering by alarm tier", () => {
     expect(upIdx).toBeLessThan(prIdx);
   });
 
-  it("PR-originated: suppresses the subordinate PR badge and shows the linked issue", () => {
+  it("PR-originated: the source PR is its own reference here, beside the linked issue", () => {
     issueBadgeProps.length = 0;
-    const { queryByTestId } = renderRow({
+    prBadgeProps.length = 0;
+    renderRow({
+      variant: "grid",
       worktree: {
         ...baseWorktree,
         sourcePrNumber: 42,
+        // A title the reference could repeat, so leaving it off is a decision.
+        prTitle: "Fix the login flow",
         issueNumber: 123,
       } as WorktreeState,
       hasDisplayTitle: true,
       isPrOriginated: true,
     });
-    // PR is the headline above — no subordinate PR badge here.
-    expect(queryByTestId("pr-badge")).toBeNull();
+    // The headline above shows the PR's title as words (#15864), so the PR
+    // opens from a reference of its own: the source PR, once, by number.
+    expect(prBadgeProps.map((p) => p.prNumber)).toEqual([42]);
+    expect(prBadgeProps[0]?.prTitle).toBeUndefined();
     // The linked issue surfaces in the secondary row even though hasDisplayTitle is true.
     expect(issueBadgeProps.at(-1)?.issueNumber).toBe(123);
   });
 
+  it("issue headline: the issue opens from a number-only reference in the stack (#15864)", () => {
+    issueBadgeProps.length = 0;
+    renderRow({
+      variant: "grid",
+      worktree: { ...baseWorktree, issueNumber: 123, issueTitle: "Fix login" } as WorktreeState,
+      hasDisplayTitle: true,
+      isPrOriginated: false,
+    });
+    expect(issueBadgeProps.map((p) => p.issueNumber)).toEqual([123]);
+    // The title is already the headline; the reference does not repeat it.
+    expect(issueBadgeProps[0]?.issueTitle).toBeUndefined();
+  });
+
   it("PR-originated with no linked issue: renders no issue badge", () => {
     issueBadgeProps.length = 0;
+    prBadgeProps.length = 0;
     const { queryByTestId } = renderRow({
+      variant: "grid",
       worktree: {
         ...baseWorktree,
         sourcePrNumber: 10,
@@ -232,11 +262,12 @@ describe("NonMainSecondaryRow → badge ordering by alarm tier", () => {
       isPrOriginated: true,
     });
     expect(queryByTestId("issue-badge")).toBeNull();
-    expect(queryByTestId("pr-badge")).toBeNull();
+    expect(prBadgeProps.map((p) => p.prNumber)).toEqual([10]);
   });
 });
 
 describe("NonMainSecondaryRow — base relationship without drift", () => {
+  // Grid: the sidebar card leaves an in-sync or drifting line to Details.
   function changesWith(tracking: string | null): WorktreeChanges {
     return {
       worktreeId: "wt-1",
@@ -265,7 +296,11 @@ describe("NonMainSecondaryRow — base relationship without drift", () => {
   });
 
   it("mounts the sync badge for an in-sync branch, on the base name alone", () => {
-    const { queryByTestId } = renderRow({ worktree: onBase(), hasUpstreamDelta: false });
+    const { queryByTestId } = renderRow({
+      variant: "grid",
+      worktree: onBase(),
+      hasUpstreamDelta: false,
+    });
     expect(queryByTestId("upstream-sync-badge")).not.toBeNull();
   });
 
@@ -274,6 +309,7 @@ describe("NonMainSecondaryRow — base relationship without drift", () => {
   // decides whether that is worth a line.
   it("still mounts the badge with no base branch once a status pass has run", () => {
     const { queryByTestId } = renderRow({
+      variant: "grid",
       worktree: onBase({ baseBranchName: null }),
       hasUpstreamDelta: false,
     });
@@ -282,16 +318,20 @@ describe("NonMainSecondaryRow — base relationship without drift", () => {
   });
 
   it("derives the no-upstream marker from the tracking ref, not from absent counts", () => {
-    renderRow({ worktree: onBase() });
+    renderRow({ variant: "grid", worktree: onBase() });
     expect(upstreamBadgeProps.at(-1)?.hasNoUpstream).toBe(true);
 
     upstreamBadgeProps.length = 0;
-    renderRow({ worktree: onBase({ worktreeChanges: changesWith("origin/feature/test") }) });
+    renderRow({
+      variant: "grid",
+      worktree: onBase({ worktreeChanges: changesWith("origin/feature/test") }),
+    });
     expect(upstreamBadgeProps.at(-1)?.hasNoUpstream).toBe(false);
   });
 
   it("does not describe a detached HEAD as a branch sitting on its base", () => {
     const { queryByTestId } = renderRow({
+      variant: "grid",
       worktree: onBase({ isDetached: true }),
       hasUpstreamDelta: false,
     });
@@ -300,6 +340,7 @@ describe("NonMainSecondaryRow — base relationship without drift", () => {
 
   it("still shows a detached HEAD's drift, without calling it an unpushed branch", () => {
     const { queryByTestId } = renderRow({
+      variant: "grid",
       worktree: onBase({ isDetached: true, baseAheadCount: 3 }),
       hasUpstreamDelta: true,
     });
@@ -309,6 +350,7 @@ describe("NonMainSecondaryRow — base relationship without drift", () => {
 
   it("does not claim a missing upstream before any status snapshot has landed", () => {
     renderRow({
+      variant: "grid",
       worktree: {
         ...baseWorktree,
         worktreeChanges: null,
@@ -322,6 +364,7 @@ describe("NonMainSecondaryRow — base relationship without drift", () => {
 });
 
 describe("NonMainSecondaryRow — a fetch mounts the sync line even with nothing to count", () => {
+  // Grid: the sidebar keeps only a failed fetch on the card (see below).
   beforeEach(() => {
     upstreamBadgeProps.length = 0;
   });
@@ -335,17 +378,24 @@ describe("NonMainSecondaryRow — a fetch mounts the sync line even with nothing
     // anything to say (no upstream, say), so the row lets it try.
     ["a completed fetch", { lastFetchedAt: 1 }],
   ])("mounts for %s", (_label, failure) => {
-    renderRow({ worktree: { ...baseWorktree, baseBranchName: null, ...failure } as WorktreeState });
+    renderRow({
+      variant: "grid",
+      worktree: { ...baseWorktree, baseBranchName: null, ...failure } as WorktreeState,
+    });
     expect(upstreamBadgeProps).not.toHaveLength(0);
   });
 
   it("stays unmounted with nothing to say and nothing wrong", () => {
-    renderRow({ worktree: { ...baseWorktree, baseBranchName: null } as WorktreeState });
+    renderRow({
+      variant: "grid",
+      worktree: { ...baseWorktree, baseBranchName: null } as WorktreeState,
+    });
     expect(upstreamBadgeProps).toHaveLength(0);
   });
 });
 
 describe("NonMainSecondaryRow — quiet git detail (#13777)", () => {
+  // Grid: the sidebar moves ambient drift into Details in every profile.
   const tracked: WorktreeChanges = {
     worktreeId: "wt-1",
     rootPath: "/repo",
@@ -378,6 +428,7 @@ describe("NonMainSecondaryRow — quiet git detail (#13777)", () => {
 
   it("draws today's branch, issue, PR and sync lines when shown", () => {
     const { queryByTestId, queryByText } = renderRow({
+      variant: "grid",
       worktree: syncedWorktree,
       hasDisplayTitle: true,
       hasCustomTitle: true,
@@ -391,6 +442,7 @@ describe("NonMainSecondaryRow — quiet git detail (#13777)", () => {
 
   it("drops the branch, issue, at-rest PR and in-sync line when quiet", () => {
     const { queryByTestId, queryByText } = renderRow({
+      variant: "grid",
       worktree: syncedWorktree,
       hasDisplayTitle: true,
       hasCustomTitle: true,
@@ -405,6 +457,7 @@ describe("NonMainSecondaryRow — quiet git detail (#13777)", () => {
 
   it("keeps a failing PR when quiet", () => {
     const { queryByTestId } = renderRow({
+      variant: "grid",
       worktree: withPr({ ciStatus: failing }),
       quietGit: true,
     });
@@ -414,6 +467,7 @@ describe("NonMainSecondaryRow — quiet git detail (#13777)", () => {
 
   it("drops a PR whose head moved with no merge armed, which is no warning", () => {
     const { queryByTestId } = renderRow({
+      variant: "grid",
       worktree: withPr({ headMovedWhileArmed: true }),
       quietGit: true,
     });
@@ -423,6 +477,7 @@ describe("NonMainSecondaryRow — quiet git detail (#13777)", () => {
 
   it("keeps a PR whose head moved under an armed merge when quiet", () => {
     const { queryByTestId } = renderRow({
+      variant: "grid",
       worktree: withPr({
         mergeIntent: { kind: "auto-merge", method: null, enabledAt: null },
         headMovedWhileArmed: true,
@@ -435,6 +490,7 @@ describe("NonMainSecondaryRow — quiet git detail (#13777)", () => {
 
   it("keeps the failing PR a custom title displaced when quiet", () => {
     const { queryAllByTestId } = renderRow({
+      variant: "grid",
       worktree: {
         ...withPr({ ciStatus: failing }),
         sourcePrNumber: 42,
@@ -454,6 +510,7 @@ describe("NonMainSecondaryRow — quiet git detail (#13777)", () => {
     ["after a refused sign-in", { fetchAuthFailed: true }, { hasAuthFailedSignIn: true }],
   ])("keeps the sync line %s when quiet", (_label, fields, overrides) => {
     const { queryByTestId } = renderRow({
+      variant: "grid",
       worktree: { ...syncedWorktree, ...fields } as WorktreeState,
       quietGit: true,
       ...overrides,
@@ -464,11 +521,92 @@ describe("NonMainSecondaryRow — quiet git detail (#13777)", () => {
 
   it("keeps the plan file, which is not git detail", () => {
     const { container } = renderRow({
+      variant: "grid",
       worktree: { ...syncedWorktree, planFilePath: "PLAN.md" } as WorktreeState,
       hasPlanFile: true,
       quietGit: true,
     });
 
     expect(container.textContent).toContain("PLAN.md");
+  });
+});
+
+describe("NonMainSecondaryRow — sidebar identity row", () => {
+  beforeEach(() => {
+    upstreamBadgeProps.length = 0;
+  });
+
+  it("keeps upstream drift on the identity row and leaves the base relationship to Details", () => {
+    const { container } = renderRow({
+      hasDisplayTitle: true,
+      hasUpstreamDelta: true,
+      worktree: {
+        ...baseWorktree,
+        aheadCount: 2,
+        behindCount: 3,
+        baseBranchName: "develop",
+        baseBehindCount: 6,
+      } as WorktreeState,
+    });
+    expect(upstreamBadgeProps).toHaveLength(1);
+    expect(upstreamBadgeProps[0]).toMatchObject({ aheadCount: 2, behindCount: 3 });
+    expect(upstreamBadgeProps[0]?.baseBranchName).toBeUndefined();
+    expect(container.textContent).toContain("feature/test");
+  });
+
+  it("leaves drift against the base alone to Details", () => {
+    renderRow({
+      hasDisplayTitle: true,
+      hasUpstreamDelta: true,
+      worktree: { ...baseWorktree, baseBranchName: "develop", baseBehindCount: 6 } as WorktreeState,
+    });
+    expect(upstreamBadgeProps).toHaveLength(0);
+  });
+
+  it("keeps a failed fetch on the card", () => {
+    renderRow({
+      hasDisplayTitle: true,
+      worktree: { ...baseWorktree, fetchNetworkFailed: true } as WorktreeState,
+    });
+    expect(upstreamBadgeProps).not.toHaveLength(0);
+  });
+});
+
+describe("NonMainSecondaryRow — comfortable sidebar sync line", () => {
+  beforeEach(() => {
+    upstreamBadgeProps.length = 0;
+  });
+
+  it("gives the sync line no row while the branch is level with its upstream and base", () => {
+    renderRow({
+      density: "comfortable",
+      hasDisplayTitle: true,
+      worktree: {
+        ...baseWorktree,
+        baseBranchName: "develop",
+        lastFetchedAt: 1,
+      } as WorktreeState,
+    });
+    expect(upstreamBadgeProps).toHaveLength(0);
+  });
+
+  it("gives drift against the base a row, with the base named", () => {
+    renderRow({
+      density: "comfortable",
+      hasDisplayTitle: true,
+      hasUpstreamDelta: true,
+      worktree: { ...baseWorktree, baseBranchName: "develop", baseBehindCount: 6 } as WorktreeState,
+    });
+    expect(upstreamBadgeProps).toHaveLength(1);
+    expect(upstreamBadgeProps[0]?.baseBranchName).toBe("develop");
+  });
+
+  it("gives a failed fetch a row even with no drift", () => {
+    renderRow({
+      density: "comfortable",
+      hasDisplayTitle: true,
+      worktree: { ...baseWorktree, fetchNetworkFailed: true } as WorktreeState,
+    });
+    expect(upstreamBadgeProps).toHaveLength(1);
   });
 });

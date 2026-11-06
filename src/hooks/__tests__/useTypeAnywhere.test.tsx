@@ -304,6 +304,21 @@ describe("useTypeAnywhere", () => {
       expect(draftOf("a1")).toBe("");
     });
 
+    // A destructive AppDialog without a preview is an alertdialog; its initial
+    // focus is on Cancel, which is not useful focus.
+    it("refuses a key typed over a destructive alertdialog's Cancel", () => {
+      document.body.innerHTML = `<div role="alertdialog" aria-modal="true"><button id="cancel">Cancel</button></div>`;
+      renderHook(() => useTypeAnywhere());
+
+      const e = new KeyboardEvent("keydown", { key: "y", bubbles: true, cancelable: true });
+      act(() => {
+        document.getElementById("cancel")!.dispatchEvent(e);
+      });
+
+      expect(e.defaultPrevented).toBe(false);
+      expect(draftOf("a1")).toBe("");
+    });
+
     // A page's dialog blocks only its own pane (#15037): it keeps the keys
     // typed at it, and the rest of the window rescues as usual.
     it("refuses a keystroke aimed at a page dialog", () => {

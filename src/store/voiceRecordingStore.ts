@@ -407,6 +407,12 @@ interface VoiceRecordingState {
   /** Label of the mic the current session captures from; null when unknown or idle. */
   micDeviceLabel: string | null;
   micNotice: VoiceMicNotice | null;
+  /**
+   * The dictation (by its buffer's `dictationSessionId`) whose draft another
+   * screen took control of: its words are kept for recovery, never written or
+   * previewed there. Cleared when the next session begins.
+   */
+  draftDetachedSessionId: string | null;
   panelBuffers: Record<string, VoiceTranscriptBuffer>;
   announcement: VoiceAnnouncement | null;
   setConfigured: (isConfigured: boolean) => void;
@@ -417,6 +423,7 @@ interface VoiceRecordingState {
   setMicSignal: (signal: VoiceMicSignal) => void;
   setMicDeviceLabel: (label: string | null) => void;
   setMicNotice: (notice: VoiceMicNotice | null) => void;
+  detachSessionDraft: (dictationSessionId: string) => void;
   /** Clears the notice only if it is still `notice`, so a newer one survives a stale dismiss. */
   dismissMicNotice: (notice: VoiceMicNotice) => void;
   setArming: (target: VoiceRecordingTarget) => void;
@@ -512,6 +519,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       micSignal: "pending",
       micDeviceLabel: null,
       micNotice: null,
+      draftDetachedSessionId: null,
       panelBuffers: {},
       announcement: null,
 
@@ -550,6 +558,8 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
       setMicDeviceLabel: (micDeviceLabel) => set({ micDeviceLabel }),
 
       setMicNotice: (micNotice) => set({ micNotice }),
+
+      detachSessionDraft: (draftDetachedSessionId) => set({ draftDetachedSessionId }),
 
       dismissMicNotice: (notice) =>
         set((state) => (state.micNotice === notice ? { micNotice: null } : state)),
@@ -592,6 +602,7 @@ export const useVoiceRecordingStore = create<VoiceRecordingState>()(
           micSignal: "pending",
           micDeviceLabel: null,
           micNotice: null,
+          draftDetachedSessionId: null,
           panelBuffers: {
             ...state.panelBuffers,
             [target.panelId]: {

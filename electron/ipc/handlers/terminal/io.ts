@@ -29,6 +29,10 @@ import { onWithContext } from "../../utils.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { isHandbackCode } from "../../../../shared/utils/handback.js";
 import {
+  choiceDialogRefusalMessage,
+  isAtChoiceDialog,
+} from "../../../../shared/utils/terminalWakeGate.js";
+import {
   isImageAttachmentPath,
   MAX_SUBMIT_IMAGE_PATHS,
 } from "../../../../shared/utils/imageAttachmentInput.js";
@@ -179,11 +183,19 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     text: string,
     submissionToken?: string,
     handbackCode?: string,
-    imagePaths?: string[]
+    imagePaths?: string[],
+    guard?: "no-choice-dialog"
   ): Promise<void> => {
     try {
       if (typeof id !== "string" || typeof text !== "string") {
         throw new Error("Invalid terminal submit parameters");
+      }
+      if (guard !== undefined && guard !== "no-choice-dialog") {
+        throw new AppError({
+          code: "VALIDATION",
+          message: 'guard must be "no-choice-dialog" when given',
+          context: { terminalId: id },
+        });
       }
       // The token is the caller's own correlator (#12337) and is echoed into
       // the pty-host untouched, so bound its shape here rather than trusting
@@ -270,8 +282,19 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
           context: { terminalId: id },
         });
       }
+      // Refused with its own code while the host's latest reading is a choice
+      // dialog (#16209); the host checks again when the line reaches the lane.
+      if (guard !== undefined && isAtChoiceDialog(info)) {
+        throw new AppError({
+          code: "TERMINAL_CHOICE_DIALOG",
+          message: choiceDialogRefusalMessage(id),
+          context: { terminalId: id },
+        });
+      }
       if (imagePaths !== undefined && imagePaths.length > 0) {
-        ptyClient.submit(id, text, submissionToken, handbackCode, undefined, imagePaths);
+        ptyClient.submit(id, text, submissionToken, handbackCode, guard, imagePaths);
+      } else if (guard !== undefined) {
+        ptyClient.submit(id, text, submissionToken, handbackCode, guard);
       } else {
         ptyClient.submit(id, text, submissionToken, handbackCode);
       }
@@ -425,6 +448,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       const normalized = normalizeObservedTitle(title);
       if (!normalized) return;
       ptyClient.updateObservedTitle(id, normalized);
+      events.emit("terminal:observed-title-changed", { id, timestamp: Date.now() });
     } catch (error) {
       console.error("[IPC] Error handling observed title update:", error);
     }

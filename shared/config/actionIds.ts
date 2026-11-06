@@ -14,6 +14,7 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.sendCommandOwned",
   "terminal.sendCommandMany",
   "terminal.closeMany",
+  "terminal.waitForExit",
   "terminal.waitUntilIdle",
   "terminal.waitUntilIdleBatch",
   "terminal.readLastMessageOwned",
@@ -21,6 +22,7 @@ export const BUILT_IN_ACTION_IDS = [
 
   // -- terminalNotifyActions --
   "terminal.notifyWhenIdle",
+  "terminal.cancelQueuedSend",
 
   // -- terminalMetaActions --
   "terminal.setClientMetadata",
@@ -46,6 +48,7 @@ export const BUILT_IN_ACTION_IDS = [
   "worktree.create",
   "worktree.delete",
   "worktree.deleteOwned",
+  "worktree.retireOwned",
   "worktree.listBranches",
   "worktree.getDefaultPath",
   "worktree.reveal",
@@ -329,6 +332,10 @@ export const BUILT_IN_ACTION_IDS = [
   "project.settings.open",
   "project.cloneRepo",
 
+  // -- scheduleActions --
+  "schedules.open",
+  "schedules.runNow",
+
   // -- hostActions (registered only where Remote Hosts is supported) --
   "host.switch",
   "host.add",
@@ -398,6 +405,7 @@ export const BUILT_IN_ACTION_IDS = [
   // -- agentActions --
   "agent.launch",
   "agent.launchMany",
+  "agent.launchInNewWorktree",
   "agent.terminal",
   "agent.focusNextWaiting",
   "agent.focusNextWorking",
@@ -407,6 +415,9 @@ export const BUILT_IN_ACTION_IDS = [
   "agent.listToolbar",
   "agent.listAvailable",
   "agent.listPresets",
+  "agent.createPreset",
+  "agent.updatePreset",
+  "agent.deletePreset",
   "agent.listModels",
   "agentSessionHistory.list",
   "agentSessionHistory.resume",
@@ -433,11 +444,13 @@ export const BUILT_IN_ACTION_IDS = [
   // -- terminalLifecycleActions --
   "terminal.restart",
   "terminal.restartOnPreset",
+  "terminal.restartOnAccount",
   "terminal.restartOnPresetOwned",
   "terminal.startHeld",
   "terminal.redraw",
   "terminal.forceResume",
   "terminal.toggleInputLock",
+  "terminal.setWhenDone",
   "terminal.viewInfo",
   "terminal.restartService",
   "watchdog.restart",
@@ -500,6 +513,7 @@ export const BUILT_IN_ACTION_IDS = [
   // -- terminalInfoActions --
   "terminal.info.open",
   "terminal.info.get",
+  "terminal.sessionFile.get",
   "terminal.setHoldOnRestart",
 
   // -- browserActions --
@@ -581,6 +595,8 @@ export const BUILT_IN_ACTION_IDS = [
   "host.ensureProject",
   "host.settings",
   "host.watch",
+  "host.bringBack",
+  "host.status",
 
   // -- uiActions --
   "ui.sidebar.resetWidth",
@@ -657,6 +673,10 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "project.runCheck",
   // Runs a shell command the caller names; held to Daintree's own assistants.
   "project.runCommand",
+  // Launches an agent with a schedule's preset, which a plugin's launch may not choose (#15978).
+  "schedules.runNow",
+  // Arming types the handback instruction into the agent, and close ends it (#16171).
+  "terminal.setWhenDone",
   // Reloading a project's plugins unloads and re-runs every one of them,
   // including whichever plugin made the call. Nothing a plugin declares grants
   // it authority over its siblings, and self-unloading mid-dispatch is not a
@@ -678,12 +698,23 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "terminal.sendCommandMany",
   "terminal.closeMany",
   "agent.launchMany",
+  // Runs its create, wait and launch as single calls through main's MCP gate.
+  "agent.launchInNewWorktree",
   "terminal.readLastMessageOwned",
   // Main checks ownership before dispatching it; nothing in its `run()` does.
   "terminal.restartOnPresetOwned",
   // Main-process only, keyed on the caller's MCP credential: a plugin dispatch
   // has no pane to notify.
   "terminal.notifyWhenIdle",
+  // Main-process only, keyed on the principal that held the message (#16187):
+  // a plugin dispatch held none.
+  "terminal.cancelQueuedSend",
+  // Main-process only, keyed on what the caller's MCP credential closed (#15728):
+  // a plugin dispatch closed nothing to wait for.
+  "terminal.waitForExit",
+  // Main-process only, keyed on what the caller's MCP credential created
+  // (#15737): a plugin dispatch created no worktree to retire.
+  "worktree.retireOwned",
   // Main-process only, for an assistant caller: a plugin is no assistant (#13496).
   "assistant.list",
   "assistant.start",
@@ -694,10 +725,16 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "host.ensureProject",
   "host.settings",
   "host.watch",
+  "host.bringBack",
+  "host.status",
   // Replays the user's last action as a keybinding, which would carry a plugin
   // past every other entry in this list (#13494).
   "action.repeatLast",
   // Persists custom flags, bypass mode and presets into every later launch of
   // that agent: the configuration a plugin's own agent.launch is refused (#13762).
   "agentSettings.set",
+  // The same configuration one preset at a time (#16047).
+  "agent.createPreset",
+  "agent.updatePreset",
+  "agent.deletePreset",
 ] as const satisfies readonly BuiltInRuntimeActionId[];

@@ -9,6 +9,22 @@ import {
 } from "../projectSettingsCodec.js";
 
 describe("decode", () => {
+  it.each([
+    ["a list of overrides", [{ commandId: "retired:one", disabled: true }]],
+    ["a malformed value", "not-a-list"],
+  ])("ignores the retired commandOverrides key holding %s (#15759)", (_label, value) => {
+    const result = decode({
+      _schemaVersion: PROJECT_SETTINGS_SCHEMA_VERSION,
+      runCommands: [],
+      devServerCommand: "npm run dev",
+      commandOverrides: value,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect("commandOverrides" in result.settings).toBe(false);
+    expect(result.settings.devServerCommand).toBe("npm run dev");
+  });
+
   it("repairs a stored vocabulary into entries, dropping what has no term", () => {
     const result = decode({
       runCommands: [],
@@ -366,6 +382,18 @@ describe("encodeEnvelope", () => {
     expect(enc.exposeDaintreeMcpToAgents).toBeUndefined();
     expect(enc.githubRemote).toBeUndefined();
     expect(enc.forgeRemote).toBe("upstream");
+  });
+
+  it("strips a retired commandOverrides key a passthrough save payload still carries (#15759)", () => {
+    const parsed = ProjectSettingsSaveSchema.safeParse({
+      runCommands: [],
+      commandOverrides: "not-a-list",
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    const enc = encodeEnvelope(parsed.data as unknown as Parameters<typeof encodeEnvelope>[0]);
+    expect(enc.commandOverrides).toBeUndefined();
+    expect(enc.runCommands).toEqual([]);
   });
 
   it("strips agentInstructions so the runtime helper never reaches disk", () => {

@@ -117,9 +117,15 @@ import {
 import { HostLinkStatus } from "./Hosts/HostLinkStatus";
 import { requestHostSettings } from "./Hosts/hostSettingsRequests";
 import { hostEnvDrafts } from "./Hosts/hostEnvDrafts";
+import type { SettingsTabClose } from "./settingsTabClose";
+import { availableSearchEntries, isSettingsTabAvailable } from "./settingsTabAvailability";
 
 let rememberedTab: SettingsTab = "general";
 let rememberedProjectTab: SettingsTab = "project:general";
+
+// The project form's save error, above every project page: a close the form
+// couldn't save lands here, since the form isn't one page's draft.
+const PROJECT_SAVE_ERROR_ID = "project-settings-save-error";
 
 // Hover-intent delay before speculatively mounting a settings tab's lazy
 // panel. Short enough that the panel's IPC reads are usually settled by the
@@ -134,8 +140,8 @@ let cachedVersionInfo: AppVersionInfo | null = null;
 // Lowercase the first letter so the label reads naturally mid-sentence
 // ("Requires voice input"), unless it starts with an initialism like
 // MCP / AI / API — those stay uppercase.
-function midSentenceLabel(label: string): string {
-  if (/^[A-Z]{2,}/.test(label)) return label;
+function midSentenceLabel({ label, keepCase }: { label: string; keepCase?: boolean }): string {
+  if (keepCase || /^[A-Z]{2,}/.test(label)) return label;
   return label.charAt(0).toLowerCase() + label.slice(1);
 }
 
@@ -276,7 +282,14 @@ function SettingsDialogInner({
   const isOpenRef = useRef(isOpen);
   useEffect(() => {
     isOpenRef.current = isOpen;
+    // Reopened before the exit finished: that close's follow-up hears it didn't close.
+    if (isOpen) {
+      const cancelled = afterCloseRef.current;
+      afterCloseRef.current = null;
+      cancelled?.(false);
+    }
   }, [isOpen]);
+  const afterCloseRef = useRef<((closed: boolean) => void) | null>(null);
 
   const hasProject = !!projectId;
 
@@ -340,6 +353,7 @@ function SettingsDialogInner({
   const [hiddenSettingBanner, setHiddenSettingBanner] = useState<{
     label: string;
     settingId: string;
+    keepCase?: boolean;
   } | null>(null);
 
   // Deep-link: scroll to a specific section after navigating.
@@ -515,14 +529,22 @@ function SettingsDialogInner({
   const flushRegistry = useContext(SettingsFlushContext);
   const flushAllTabs = flushRegistry?.flushAll;
 
-  // Coalesced: a visibility change landing mid-close would otherwise re-issue
+  // Coalesced: a cache or hide landing mid-close would otherwise re-issue
   // every registered tab flusher alongside the one already in flight.
   const flushInFlightRef = useRef<Promise<FailedSettingsFlush[]> | null>(null);
   const flushDialog = () => {
     if (flushInFlightRef.current) return flushInFlightRef.current;
     const pending = (async () => {
       const failed = flushAllTabs ? await flushAllTabs() : [];
-      await projectForm.flush();
+      if (await projectForm.flush()) {
+        // The project page shown, else the one last shown: that is where the
+        // edit was made, and every project page carries the form's error.
+        const tab =
+          scopeForTab(activeTabRef.current) === "project"
+            ? activeTabRef.current
+            : rememberedProjectTab;
+        return [...failed, { tab, landOn: PROJECT_SAVE_ERROR_ID }];
+      }
       return failed;
     })();
     flushInFlightRef.current = pending;
@@ -531,11 +553,12 @@ function SettingsDialogInner({
     });
   };
 
-  // Electron 41 WebContentsView detach (project switch, window close) does not
-  // fire beforeunload — visibilitychange is the reliable signal. Flushing on
-  // hide ensures debounced autosaves and per-tab dirty state persist before
-  // the view is evicted. A hide can't be held open, so a page that couldn't
-  // save is left as it is.
+  // A project switch caches this view without beforeunload or
+  // visibilitychange, so main's cached signal is what triggers this; minimizing
+  // still arrives as a hide. Either way the debounced autosave and each tab's
+  // dirty draft persist before the view can be frozen or evicted, and main
+  // waits for the whole sequence on the cached edge. Unlike a close, neither
+  // keeps Settings open, so a page that couldn't save is left as it is.
   useFlushOnHide(async () => {
     await flushDialog();
   }, isOpen);
@@ -563,7 +586,8 @@ function SettingsDialogInner({
   // Filtered in the keystroke's own render, not behind useDeferredValue: the
   // index is ~150 entries and a pass costs about a millisecond, so deferring
   // it only painted the search mode a frame before its results.
-  const searchIndex = usePluginSettingsSearchIndex(isOpen);
+  const fullSearchIndex = usePluginSettingsSearchIndex(isOpen);
+  const searchIndex = useMemo(() => availableSearchEntries(fullSearchIndex), [fullSearchIndex]);
   const searchResults = useMemo(
     () =>
       filterSettings(searchIndex, searchQuery, {
@@ -604,14 +628,18 @@ function SettingsDialogInner({
   // What a gated result depends on, held until its landing reports whether the setting
   // was actually on the page. Showing the note up front claimed the setting was hidden
   // even when its parent was already on.
-  const pendingRequirementRef = useRef<{ settingId: string; label: string } | null>(null);
+  const pendingRequirementRef = useRef<{
+    settingId: string;
+    label: string;
+    keepCase?: boolean;
+  } | null>(null);
 
   // A page whose close-time save didn't go through keeps Settings open on its
   // draft and error, rather than closing as if it had saved: the user fixes it
   // or uses that page's Discard. The page shown wins over others that failed.
   const flushBeforeClose = async () => {
-    // A hide flush still running took its list of drafts when it started, so one
-    // made since isn't in it: let it finish, then flush again for the close.
+    // A cache or hide flush still running took its list of drafts when it
+    // started, so one made since isn't in it: let it finish, then flush again.
     const lifecycleFlush = flushInFlightRef.current;
     if (lifecycleFlush) await lifecycleFlush;
     const failed = await flushDialog();
@@ -640,8 +668,11 @@ function SettingsDialogInner({
   };
 
   // Everything that could cover the page goes: search, another machine's page,
-  // the hidden-setting note. Its tab is already mounted, since only a mounted
+  // the hidden-setting note. A page's tab is already mounted, since only a mounted
   // tab registers a flush, so the switch can't suspend and needs no transition.
+  // The project form's failure can name a project page that unmounted when the
+  // user left project scope, so it is marked visited to mount again; every tab
+  // is preloaded at idle, so that doesn't suspend either.
   const revealFailedFlush = ({ tab, landOn }: FailedSettingsFlush) => {
     const scope = scopeForTab(tab);
     // Judged by the scope the page is in, not the one shown: a close from project
@@ -653,17 +684,22 @@ function SettingsDialogInner({
     setSearchQuery("");
     setHiddenSettingBanner(null);
     pendingRequirementRef.current = null;
+    markTabVisited(tab);
     setActiveScope(scope);
     setActiveTab(tab);
     setScrollToSection(landOn);
   };
 
   // Handed to tab content via the registry's `needsOnClose` flag. That route
-  // never passes through onBeforeClose, so it keeps its own flush — no tab
-  // invokes it today (AppThemePicker only tests it for presence), but a caller
-  // that did would otherwise close without persisting.
-  const handleClose = async () => {
-    if (await flushBeforeClose()) onClose();
+  // never passes through onBeforeClose, so it keeps its own flush, or a caller
+  // would close without persisting. `afterClose` hears once the dialog has gone
+  // and handed focus back, so what it opens can take focus; a held close runs
+  // nothing and answers false (`SettingsTabClose`).
+  const handleClose: SettingsTabClose = async (afterClose) => {
+    if (!(await flushBeforeClose())) return false;
+    afterCloseRef.current = afterClose ?? null;
+    onClose();
+    return true;
   };
 
   // A plugin's setting lives in the plugin manager or Project settings → Plugins,
@@ -695,7 +731,7 @@ function SettingsDialogInner({
 
   const handleResultClick = (
     { tab, subtab, sectionId }: SettingsNavTarget,
-    requiresEnabled?: { settingId: string; label: string },
+    requiresEnabled?: { settingId: string; label: string; keepCase?: boolean },
     plugin?: SettingsSearchEntry["plugin"]
   ) => {
     if (plugin) {
@@ -935,6 +971,9 @@ function SettingsDialogInner({
         setTargetHostId(null);
         hostEnvDrafts.clear();
         setCloseHeldBy(null);
+        const afterClose = afterCloseRef.current;
+        afterCloseRef.current = null;
+        afterClose?.(true);
       }}
       size="4xl"
       // Search owns first focus (below), not the first tabbable — which was the scope
@@ -1201,9 +1240,14 @@ function SettingsDialogInner({
                 )}
                 {projectForm.projectAutoSaveError && (
                   <SettingsLoadErrorBanner
+                    id={PROJECT_SAVE_ERROR_ID}
                     title={`Couldn't save settings for ${projectLabel}`}
                     message={projectForm.projectAutoSaveError}
+                    announceKey={projectForm.projectAutoSaveFailures}
                     onRetry={() => void projectForm.saveNow()}
+                    // A close stays open while the edit won't save, so there has to
+                    // be a way to give the edit up and close.
+                    onDiscard={projectForm.discardUnsavedChanges}
                   />
                 )}
                 {showProjectLoading && (
@@ -1305,7 +1349,7 @@ function SettingsDialogInner({
                             }
                           }}
                         >
-                          {midSentenceLabel(hiddenSettingBanner.label)}
+                          {midSentenceLabel(hiddenSettingBanner)}
                         </Button>{" "}
                         is on
                       </p>
@@ -1381,7 +1425,9 @@ function SettingsDialogInner({
                   {/* Project settings panels */}
                   {activeScope === "project" && projectId && (
                     <>
-                      {SETTINGS_REGISTRY.filter((e) => e.scope === "project").map((entry) => {
+                      {SETTINGS_REGISTRY.filter(
+                        (e) => e.scope === "project" && isSettingsTabAvailable(e.id)
+                      ).map((entry) => {
                         const tabId = entry.id as SettingsTab;
                         const isActive = activeTab === tabId;
                         return (
@@ -1407,6 +1453,7 @@ function SettingsDialogInner({
                                   isActive={isActive && !panelsHidden}
                                   scrollToSectionId={scrollToSection}
                                   onScrollToSectionHandled={handleScrollToSectionHandled}
+                                  onClose={handleClose}
                                 />
                               </Suspense>
                             )}
@@ -1443,7 +1490,7 @@ function LazyTabContentImpl({
   entry: LazySettingsTabEntry;
   activeSubtabs: Partial<Record<SettingsTab, string>>;
   setActiveSubtabs: React.Dispatch<React.SetStateAction<Partial<Record<SettingsTab, string>>>>;
-  onClose?: () => void;
+  onClose?: SettingsTabClose;
   onSettingsChange?: () => void;
   isActive: boolean;
   scrollToSectionId: string | null;
@@ -1490,6 +1537,7 @@ function ProjectFormTabContent({
   isActive,
   scrollToSectionId,
   onScrollToSectionHandled,
+  onClose,
 }: {
   entry: LazySettingsTabEntry;
   projectForm: ProjectSettingsFormContext;
@@ -1501,6 +1549,8 @@ function ProjectFormTabContent({
   isActive: boolean;
   scrollToSectionId: string | null;
   onScrollToSectionHandled: (id: string, landed: boolean) => void;
+  /** Handed on only to a tab registered with `needsOnClose`. */
+  onClose: SettingsTabClose;
 }) {
   useSettingsScrollToSection(
     isActive,
@@ -1562,6 +1612,7 @@ function ProjectFormTabContent({
           settings={projectForm.projectSettings}
           isOpen={isOpen}
           onFlush={projectForm.saveNow}
+          projectSaveFailed={projectForm.projectAutoSaveError !== null}
           projectLabel={projectLabel}
           globalEnvironmentVariables={globalEnvVars}
         />
@@ -1613,12 +1664,12 @@ function ProjectFormTabContent({
         />
       );
 
-    case "project:commands":
+    case "project:schedules":
       return (
         <LazyComp
-          projectId={projectId}
-          overrides={projectForm.commandOverrides}
-          onChange={projectForm.setCommandOverrides}
+          isOpen={isOpen}
+          isActive={isActive}
+          onClose={entry.needsOnClose ? onClose : undefined}
         />
       );
 
@@ -2346,7 +2397,7 @@ interface SearchResultsProps {
   cleanQuery: string;
   onResultClick: (
     target: SettingsNavTarget,
-    requiresEnabled?: { settingId: string; label: string },
+    requiresEnabled?: { settingId: string; label: string; keepCase?: boolean },
     plugin?: SettingsSearchEntry["plugin"]
   ) => void;
   activeIndex?: number;
@@ -2513,7 +2564,7 @@ export function SearchResults({
                       // parent is on right now, and plain text so it cannot be read as a
                       // second scope chip.
                       <span className="ml-auto shrink-0 text-3xs text-text-secondary">
-                        Only when {midSentenceLabel(result.requiresEnabled.label)} is on
+                        Only when {midSentenceLabel(result.requiresEnabled)} is on
                       </span>
                     )}
                   </div>

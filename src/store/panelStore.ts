@@ -1302,7 +1302,7 @@ export const usePanelStore = create<PanelGridState>()(
       resetWithoutKilling: async (_options) => {
         const state = get();
 
-        flushPanelPersistence();
+        void flushPanelPersistence();
 
         const allTerminalIds = [...state.panelIds];
         peekTerminalService()?.suppressResizesDuringProjectSwitch(
@@ -1348,7 +1348,7 @@ export const usePanelStore = create<PanelGridState>()(
       detachTerminalsForProjectSwitch: () => {
         const state = get();
 
-        flushPanelPersistence();
+        void flushPanelPersistence();
 
         const allTerminalIds = [...state.panelIds];
         peekTerminalService()?.suppressResizesDuringProjectSwitch(

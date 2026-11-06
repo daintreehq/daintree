@@ -63,11 +63,13 @@ export function useToolbarRoving(
   const controls = useCallback((): HTMLElement[] => {
     const root = ref.current;
     if (!root) return [];
-    return Array.from(root.querySelectorAll<HTMLElement>(CONTROL_SELECTOR)).filter(
-      // A control inside an open portalled menu is not part of this row.
-      (element) =>
-        element.closest("[data-radix-popper-content-wrapper]") === null && isToolbarItem(element)
-    );
+    return Array.from(root.querySelectorAll<HTMLElement>(CONTROL_SELECTOR)).filter((element) => {
+      // A control inside an open portalled menu is not part of this row. A
+      // toolbar that itself lives in a popper (a dock preview) shares that
+      // wrapper with its own controls, so only a wrapper inside the row counts.
+      const popper = element.closest("[data-radix-popper-content-wrapper]");
+      return (popper === null || popper.contains(root)) && isToolbarItem(element);
+    });
   }, [ref]);
 
   // Give the row's single tab stop to `active` and take it from everyone else.

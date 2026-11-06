@@ -664,18 +664,16 @@ describe("WelcomeScreen", () => {
     expect(screen.getByText("Pull a repo from a Git URL")).toBeTruthy();
   });
 
-  it("groups quick actions in an accessible region with described cards", () => {
+  it("groups quick actions with every visible word in their accessible names", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
     const group = screen.getByTestId("quick-actions");
     expect(group.getAttribute("role")).toBe("group");
 
-    const openFolder = screen.getByText("Open project").closest("button")!;
-    const describedBy = openFolder.getAttribute("aria-describedby");
-    expect(describedBy).toBe("qa-desc-open-folder");
-    expect(document.getElementById(describedBy!)?.textContent).toBe(
-      "Open an existing project on your machine"
-    );
+    const openFolder = screen.getByRole("button", {
+      name: "Open project Open an existing project on your machine",
+    });
+    expect(openFolder.getAttribute("aria-describedby")).toBeNull();
   });
 
   it("calls addProject when Open project is clicked", () => {

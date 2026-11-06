@@ -400,6 +400,150 @@ describe("HostControlLinkClient.agents (#14455)", () => {
   });
 });
 
+describe("HostControlLinkClient.agentsOnOpenLink (#16188)", () => {
+  const DIRECTORY = { coverage: "ok", observedAt: 7, complete: true, omitted: 0, entries: [] };
+
+  function passive(options: { open: boolean; kept: string | null }) {
+    const calls: string[] = [];
+    const session = {
+      isOpen: options.open,
+      call: vi.fn(async (method: string) => {
+        calls.push(method);
+        return method === AssistantLinkMethod.AGENTS
+          ? { status: "done", directory: DIRECTORY, waitingEvents: true }
+          : null;
+      }),
+    } as unknown as LinkSession;
+    const dialing = vi.fn(async () => session);
+    const mint = vi.fn(() => CREDENTIAL);
+    const relay = new HostControlLinkClient({
+      credential: mint,
+      existingCredential: () => options.kept,
+      session: dialing,
+      openSession: () => session,
+      onSessionOpened: () => () => {},
+    });
+    return { relay, calls, dialing, mint };
+  }
+
+  it("reads over a link already open with the credential already kept, and says it sends waits", async () => {
+    const { relay, calls, dialing, mint } = passive({ open: true, kept: CREDENTIAL });
+    await expect(relay.agentsOnOpenLink("studio", {}, 5_000)).resolves.toEqual({
+      status: "done",
+      directory: DIRECTORY,
+      waitingEvents: true,
+    });
+    expect(calls).toEqual([AssistantLinkMethod.AUTHENTICATE, AssistantLinkMethod.AGENTS]);
+    // Proven once per link.
+    await relay.agentsOnOpenLink("studio", {});
+    expect(calls.filter((method) => method === AssistantLinkMethod.AUTHENTICATE)).toHaveLength(1);
+    expect(dialing).not.toHaveBeenCalled();
+    expect(mint).not.toHaveBeenCalled();
+  });
+
+  it("never dials a link that isn't open, nor mints a credential none was kept for", async () => {
+    const down = passive({ open: false, kept: CREDENTIAL });
+    await expect(down.relay.agentsOnOpenLink("studio", {})).rejects.toMatchObject({
+      code: "HOST_DISCONNECTED",
+    });
+    const stranger = passive({ open: true, kept: null });
+    await expect(stranger.relay.agentsOnOpenLink("studio", {})).rejects.toMatchObject({
+      code: "HOST_DISCONNECTED",
+    });
+    for (const { calls, dialing, mint } of [down, stranger]) {
+      expect(calls).toEqual([]);
+      expect(dialing).not.toHaveBeenCalled();
+      expect(mint).not.toHaveBeenCalled();
+    }
+  });
+});
+
+describe("HostControlLinkClient.status (#16191)", () => {
+  const STATUS = {
+    helpSessionId: "help-1",
+    tier: "core" as const,
+    projects: [{ projectId: "p1" }, { projectId: "p2", terminalIds: ["t-2"] }],
+    includeOutput: null,
+  };
+  const DONE = { status: "done", projectId: "p1", result: null, complete: true, omitted: 0 };
+
+  it("proves the sender, then asks once for every project with what is left of the wait", async () => {
+    vi.useFakeTimers();
+    try {
+      // Proving the sender takes 2 s of the 5 s wait.
+      const { relay, calls } = client((method) =>
+        method === AssistantLinkMethod.AUTHENTICATE
+          ? new Promise((resolve) => setTimeout(() => resolve(null), 2_000))
+          : { status: "done", projects: [DONE] }
+      );
+      const pending = relay.status("studio", STATUS, 5_000);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(pending).resolves.toEqual({ status: "done", projects: [DONE] });
+      expect(calls.map((call) => call.method)).toEqual([
+        AssistantLinkMethod.AUTHENTICATE,
+        AssistantLinkMethod.STATUS,
+      ]);
+      expect(calls[1]).toMatchObject({
+        payload: { ...STATUS, runMs: 3_000 },
+        timeoutMs: 3_000,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads a project it can't parse as that project unreadable, keeping the rest", async () => {
+    const { relay } = client((method) =>
+      method === AssistantLinkMethod.STATUS
+        ? {
+            status: "done",
+            projects: [
+              DONE,
+              // A failure this Shell doesn't know, a status a newer host added, and a garbled read.
+              { status: "failed", projectId: "p2", reason: "a reason from later" },
+              { status: "postponed", projectId: "p3", until: 9 },
+              {
+                status: "done",
+                projectId: "p4",
+                result: { terminals: "everything", source: "pty", unavailableFields: [] },
+                complete: true,
+                omitted: 0,
+              },
+            ],
+          }
+        : null
+    );
+    await expect(relay.status("studio", STATUS, 5_000)).resolves.toEqual({
+      status: "done",
+      projects: [
+        DONE,
+        { status: "failed", projectId: "p2", reason: "unreadable" },
+        { status: "failed", projectId: "p3", reason: "unreadable" },
+        { status: "failed", projectId: "p4", reason: "unreadable" },
+      ],
+    });
+  });
+
+  it("names a host from before it unsupported, and an answer it can't read at all invalid", async () => {
+    const old = client((method) => {
+      if (method === AssistantLinkMethod.STATUS) {
+        throw new AppError({ code: "UNSUPPORTED", message: "Unknown method" });
+      }
+      return null;
+    });
+    await expect(old.relay.status("studio", STATUS, 5_000)).rejects.toMatchObject({
+      code: "UNSUPPORTED",
+    });
+
+    const garbled = client((method) =>
+      method === AssistantLinkMethod.STATUS ? { status: "done", projects: "everything" } : null
+    );
+    await expect(garbled.relay.status("studio", STATUS, 5_000)).rejects.toMatchObject({
+      code: "INTERNAL",
+    });
+  });
+});
+
 describe("HostControlLinkClient relay notices (#13500)", () => {
   type Receiver = RelayNoticeReceiver;
 
@@ -649,11 +793,36 @@ describe("HostControlLinkClient relay approvals (#13501)", () => {
     relay.dispose();
   });
 
+  it("hands on an ask that says how long the host waits, with the wait (#15699)", async () => {
+    const receiveApproval = vi.fn(
+      async (_hostId: string, payload: RelayApprovePayload): Promise<RelayApproveAnswer> => ({
+        approvalId: payload.approvalId,
+        argsHash: payload.argsHash,
+        decision: "approved",
+      })
+    );
+    const { relay, handlers } = opened({ receiveApproval });
+    const timed = { ...ASK, holdBudgetMs: 200_000 };
+
+    await expect(handlers.get(AssistantLinkMethod.RELAY_APPROVE_TIMED)!(timed)).resolves.toEqual({
+      approvalId: "approval-1",
+      argsHash: ASK.argsHash,
+      decision: "approved",
+    });
+    expect(receiveApproval).toHaveBeenCalledWith("studio", timed);
+    // The wait is the timed ask's whole point: one without it isn't read.
+    expect(() => handlers.get(AssistantLinkMethod.RELAY_APPROVE_TIMED)!(ASK)).toThrow();
+    relay.dispose();
+  });
+
   it("refuses an ask with nobody to put it to, approving nothing", async () => {
     const { relay, handlers } = opened();
     expect(await handlers.get(AssistantLinkMethod.RELAY_APPROVE)!(ASK)).toMatchObject({
       decision: "refused",
     });
+    expect(
+      await handlers.get(AssistantLinkMethod.RELAY_APPROVE_TIMED)!({ ...ASK, holdBudgetMs: 1_000 })
+    ).toMatchObject({ decision: "refused" });
     relay.dispose();
   });
 

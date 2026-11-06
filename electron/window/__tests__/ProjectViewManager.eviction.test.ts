@@ -67,8 +67,11 @@ vi.mock("electron", () => {
       isPackaged: false,
       commandLine: { appendSwitch: vi.fn() },
       getAppMetrics: () => mockGetAppMetrics(),
+      quit: vi.fn(),
+      emit: vi.fn(),
     },
-    BrowserWindow: vi.fn(),
+    // Read after an OOM rebuild settles, to replay a quit the destroy swallowed.
+    BrowserWindow: Object.assign(vi.fn(), { getAllWindows: vi.fn(() => []) }),
     WebContentsView: MockWebContentsView,
     session: { fromPartition: vi.fn(() => ({ protocol: { handle: vi.fn() } })) },
     ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
@@ -177,6 +180,11 @@ vi.mock("../../utils/webContentsLifecycle.js", () => ({
   unthrottleCpuWebContents: vi.fn().mockResolvedValue(undefined),
 }));
 
+// An OOM rebuild saves the window manifest; the real store reaches better-sqlite3.
+vi.mock("../../services/persistence/windowManifestStore.js", () => ({
+  writeOpenWindowsManifest: vi.fn(),
+}));
+
 vi.mock("../../utils/logger.js", () => ({
   logDebug: vi.fn(),
   logInfo: vi.fn(),
@@ -242,6 +250,8 @@ const remoteMcpBindingLive = (webContentsId: number): boolean =>
   boundRemoteViews.has(webContentsId);
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
+import { createWindowRecreation } from "../windowRecreation.js";
+import type { WindowContext, WindowRegistry } from "../WindowRegistry.js";
 import { events } from "../../services/events.js";
 import { logDebug, logInfo } from "../../utils/logger.js";
 import { forgetBlinkSample, forgetEluSample } from "../../services/ProcessMemoryMonitor.js";
@@ -278,6 +288,18 @@ import {
   _resetDictationViewHoldsForTests,
   holdDictationView,
 } from "../../services/voice/dictationViewHold.js";
+import {
+  _resetCachedViewFlushForTests,
+  isCachedViewFlushPending,
+  recordCachedViewFlushArmed,
+  settleCachedViewFlush,
+} from "../../services/cachedViewFlush.js";
+import { CHANNELS } from "../../ipc/channels.js";
+import {
+  holdReloadNotice,
+  releaseReloadNotice,
+  resetReloadNoticesForTest,
+} from "../rendererReloadNotice.js";
 
 // The shared snapshot is module-level state; without a reset, a test could be
 // served metrics cached by the previous test's differently-mocked sweep.
@@ -406,6 +428,23 @@ describe("ProjectViewManager — eviction safety", () => {
       expect(wcB.reload).toHaveBeenCalledTimes(1);
       expect(wcB.close).not.toHaveBeenCalled();
       expect(manager.getAllViews().map((v) => v.projectId)).toContain("proj-b");
+
+      // The notice waits for the reloaded page's first-interactive.
+      const toastSends = () =>
+        wcB.send.mock.calls.filter(([channel]) => channel === CHANNELS.NOTIFICATION_SHOW_TOAST);
+      expect(toastSends()).toEqual([]);
+      releaseReloadNotice(wcB as never);
+      expect(toastSends()).toEqual([
+        [
+          CHANNELS.NOTIFICATION_SHOW_TOAST,
+          {
+            type: "warning",
+            message: "A project view was reloaded due to memory pressure.",
+            urgent: true,
+          },
+        ],
+      ]);
+      resetReloadNoticesForTest();
     });
 
     it("a crashed cached view is evicted instead of auto-reloaded", async () => {
@@ -415,6 +454,8 @@ describe("ProjectViewManager — eviction safety", () => {
         .webContents as unknown as ReturnType<typeof createMockWebContents>;
       await manager.switchTo("proj-c", "/path/c");
       await flushImmediates();
+      // Left by an earlier reload that never reported in.
+      holdReloadNotice(wcB as never, "A project view crashed and was automatically reloaded.");
 
       emitProcessGone(wcB, "crashed");
       await flushImmediates();
@@ -422,6 +463,12 @@ describe("ProjectViewManager — eviction safety", () => {
       expect(wcB.reload).not.toHaveBeenCalled();
       expect(wcB.close).toHaveBeenCalled();
       expect(manager.getAllViews().map((v) => v.projectId)).not.toContain("proj-b");
+      // Evicted, not reloaded: the stale notice goes with it.
+      releaseReloadNotice(wcB as never);
+      expect(
+        wcB.send.mock.calls.filter(([channel]) => channel === CHANNELS.NOTIFICATION_SHOW_TOAST)
+      ).toEqual([]);
+      resetReloadNoticesForTest();
     });
 
     it("a crashed ACTIVE view still auto-reloads", async () => {
@@ -435,6 +482,75 @@ describe("ProjectViewManager — eviction safety", () => {
 
       expect(wcB.reload).toHaveBeenCalledTimes(1);
       expect(manager.getAllViews().map((v) => v.projectId)).toContain("proj-b");
+
+      const toastSends = () =>
+        wcB.send.mock.calls.filter(([channel]) => channel === CHANNELS.NOTIFICATION_SHOW_TOAST);
+      expect(toastSends()).toEqual([]);
+      releaseReloadNotice(wcB as never);
+      expect(toastSends()).toEqual([
+        [
+          CHANNELS.NOTIFICATION_SHOW_TOAST,
+          {
+            type: "warning",
+            message: "A project view crashed and was automatically reloaded.",
+            urgent: true,
+          },
+        ],
+      ]);
+      resetReloadNoticesForTest();
+    });
+
+    it("rebuilds a window whose view died of OOM onto the project it switched to (#15564)", async () => {
+      const createWindow = vi.fn(async () => "ok" as const);
+      // Destroying the window disposes its manager, as the registry's teardown does.
+      const oomWin = { ...createMockWindow(), destroy: vi.fn(() => oomManager.dispose()) };
+      const ctx = {
+        windowId: 1,
+        browserWindow: { isDestroyed: () => false, isFocused: () => true },
+        services: {
+          get projectViewManager() {
+            return oomManager;
+          },
+        },
+      } as unknown as WindowContext;
+      const registry = {
+        focusOrder: () => [ctx],
+        getByWindowId: (id: number) => (id === 1 ? ctx : undefined),
+      } as unknown as WindowRegistry;
+      const recreation = createWindowRecreation({
+        windowRegistry: registry,
+        getWindowId: () => 1,
+        createWindow,
+      });
+      const oomManager: ProjectViewManager = new ProjectViewManager(oomWin as never, {
+        dirname: "/test",
+        paintGateTimeoutMs: 0,
+        paintGateHardTimeoutMs: 0,
+        warmPaintGateTimeoutMs: 0,
+        warmPaintGateHardTimeoutMs: 0,
+        cachedProjectViews: 3,
+        assistantBackendsForProject,
+        isTerminalLive,
+        prepareWindowRecreation: recreation.prepare,
+      });
+
+      await oomManager.switchTo("proj-a", "/path/a");
+      await flushImmediates();
+      await oomManager.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      const wcB = oomManager.getAllViews().find((v) => v.projectId === "proj-b")!.view
+        .webContents as unknown as ReturnType<typeof createMockWebContents>;
+
+      emitProcessGone(wcB, "oom");
+      await flushImmediates();
+      await flushImmediates();
+
+      expect(oomWin.destroy).toHaveBeenCalledTimes(1);
+      expect(createWindow).toHaveBeenCalledTimes(1);
+      expect(createWindow).toHaveBeenCalledWith(
+        "proj-b",
+        expect.objectContaining({ backgroundProjectIds: ["proj-a"] })
+      );
     });
   });
 
@@ -4454,6 +4570,89 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
     });
   });
 
+  describe("views still flushing unsaved edits on their cached edge (#15633)", () => {
+    beforeEach(() => _resetCachedViewFlushForTests());
+    afterEach(() => _resetCachedViewFlushForTests());
+
+    const wcFor = (mgr: ProjectViewManager, projectId: string) =>
+      mgr.getAllViews().find((v) => v.projectId === projectId)!.view.webContents;
+    const flushIdSentTo = (wc: Electron.WebContents) =>
+      (
+        vi
+          .mocked(wc.send)
+          .mock.calls.filter(([channel]) => channel === CHANNELS.APP_VIEW_CACHED)
+          .at(-1)?.[1] as { flushId?: string } | undefined
+      )?.flushId;
+
+    /** proj-a and proj-b cached, proj-c active; proj-b was left with Settings open. */
+    async function seedWithFlushingView(mgr: ProjectViewManager) {
+      const wcA = createMockWebContents();
+      mgr.registerInitialView(
+        { webContents: wcA, setBounds: vi.fn() } as never,
+        "proj-a",
+        "/path/a"
+      );
+      await mgr.switchTo("proj-b", "/path/b");
+      await flushImmediates();
+      recordCachedViewFlushArmed(wcFor(mgr, "proj-b"), true);
+      await mgr.switchTo("proj-c", "/path/c");
+      await flushImmediates();
+      return wcFor(mgr, "proj-b");
+    }
+
+    it("keeps the view until its flush has reached main, then reclaims it", async () => {
+      const mgr = makeManager(3);
+      const wcB = await seedWithFlushingView(mgr);
+      expect(isCachedViewFlushPending(wcB)).toBe(true);
+
+      mgr.setCachedViewLimit(1);
+
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-b", "proj-c"]);
+      expect(evictedProjectIds()).toEqual(["proj-a"]);
+      expect(skippedLog()?.flushHeldProjectIds).toEqual(["proj-b"]);
+      expect(wcB.close).not.toHaveBeenCalled();
+
+      // The renderer answers only once its last save step has returned from main.
+      settleCachedViewFlush(wcB, flushIdSentTo(wcB));
+      await flushImmediates();
+
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+      expect(wcB.close).toHaveBeenCalled();
+    });
+
+    it("keeps it through the forced reclaim", async () => {
+      const mgr = makeManager(3);
+      mgr.setMemoryPressurePolicy(BAND);
+      setAvailableMb(2500);
+      await seedWithFlushingView(mgr);
+
+      mgr.reclaimCachedViewsUnderPressure();
+
+      expect(evictedProjectIds()).toEqual(["proj-a"]);
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-b", "proj-c"]);
+    });
+
+    it("won't hand it to another window mid-flush", async () => {
+      const mgr = makeManager(3);
+      const wcB = await seedWithFlushingView(mgr);
+
+      expect(mgr.releaseCachedView("proj-b")).toBe(false);
+      expect(mgr.canReleaseCachedView("proj-a")).toBe(true);
+
+      settleCachedViewFlush(wcB, flushIdSentTo(wcB));
+      expect(mgr.canReleaseCachedView("proj-b")).toBe(true);
+    });
+
+    it("holds nothing for a view whose renderer has no flush registered", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+
+      expect(isCachedViewFlushPending(wcFor(mgr, "proj-b"))).toBe(false);
+      mgr.setCachedViewLimit(1);
+      expect(mgr.getAllViews().map((v) => v.projectId)).toEqual(["proj-c"]);
+    });
+  });
+
   describe("quiet bound sessions", () => {
     it("evicts an active-agent view before a quiet bound one", async () => {
       // An agent view is cheap to lose — its PTY lives in the pty-host and
@@ -4559,6 +4758,9 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
   // sleep could take the view a dispatch was waiting on, leaving that session
   // failing SESSION_BINDING_GONE until the project reopened.
   describe("destroying a view for an automatic sleep", () => {
+    beforeEach(() => _resetDictationViewHoldsForTests());
+    afterEach(() => _resetDictationViewHoldsForTests());
+
     it("leaves a view alone while a dispatch is in flight against it", async () => {
       const mgr = makeManager(3);
       await seedThreeViews(mgr);
@@ -4604,6 +4806,19 @@ describe("ProjectViewManager — MCP bound sessions and dispatch leases (#11790)
     it("reads a project it holds no view for as unprotected", () => {
       const mgr = makeManager(3);
       expect(mgr.isMcpDispatchProtected("proj-z")).toBe(false);
+      expect(mgr.isDictationHeld("proj-z")).toBe(false);
+    });
+
+    it("reports a view a dictation still needs until its hold lifts (#15920)", async () => {
+      const mgr = makeManager(3);
+      await seedThreeViews(mgr);
+      const release = holdDictationView(webContentsIdFor(mgr, "proj-a"));
+
+      expect(mgr.isDictationHeld("proj-a")).toBe(true);
+      expect(mgr.isDictationHeld("proj-b")).toBe(false);
+
+      release();
+      expect(mgr.isDictationHeld("proj-a")).toBe(false);
     });
   });
 

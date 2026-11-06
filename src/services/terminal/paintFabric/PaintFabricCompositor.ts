@@ -36,14 +36,7 @@ interface PaintFabricCompositorOptions {
 // move) stay stranded on the old surface and silently never fire again
 // (Phase 1 watch-list: "subscription rebinding on placement").
 interface TrackedSubscription {
-  kind:
-    | "unseenOutput"
-    | "hibernation"
-    | "agentState"
-    | "exit"
-    | "altBuffer"
-    | "paddingPaint"
-    | "postCompleteHook";
+  kind: "unseenOutput" | "agentState" | "exit" | "altBuffer" | "paddingPaint" | "postCompleteHook";
   plane: TerminalPaintPlane;
   resubscribe: (plane: TerminalPaintPlane) => () => void;
   unsubscribe: () => void;
@@ -608,7 +601,7 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
 
   // The remaining sync reads return documented safe defaults for view-owned
   // terminals: hover/selection are DOM-local concerns the surface view
-  // handles on its own side, and renderer-internal flags (hibernation, WebGL
+  // handles on its own side, and renderer-internal flags (WebGL
   // activity, alt-buffer) read as inactive until the wiring front extends the
   // mirror to carry the ones that prove load-bearing cross-view.
   getHoveredLinkText(id: string): string | null {
@@ -957,12 +950,6 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     );
   }
 
-  subscribeHibernation(id: string, listener: () => void): () => void {
-    return this.trackSubscription(id, "hibernation", (plane) =>
-      plane.subscribeHibernation(id, listener)
-    );
-  }
-
   // Aggregate (batch-scoped) listeners are compositor-owned: one logical
   // state change notifies each listener exactly once, however many surfaces
   // exist. Per-surface forwarders (registerSurface) route plane-internal
@@ -1192,11 +1179,6 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
 
   addExitListener(id: string, cb: (exitCode: number | null) => void): () => void {
     return this.trackSubscription(id, "exit", (plane) => plane.addExitListener(id, cb));
-  }
-
-  isHibernated(id: string): boolean {
-    if (this.isViewOwned(id)) return false;
-    return this.plane(id).isHibernated(id);
   }
 
   isWebGLActive(id: string): boolean {

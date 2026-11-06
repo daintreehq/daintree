@@ -2,11 +2,23 @@ import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
 import {
   FLEET_BANDS,
   bandForRun,
+  isAgentReportedNeed,
   runCanopyPlacement,
+  runUnseenAsk,
   type FleetBand,
+  type UnseenAsk,
 } from "@shared/utils/fleetBands";
+import { isHandBackStop } from "@shared/utils/runHandBack";
 
-export { FLEET_BANDS, bandForRun, runCanopyPlacement, type FleetBand };
+export {
+  FLEET_BANDS,
+  bandForRun,
+  isAgentReportedNeed,
+  runCanopyPlacement,
+  runUnseenAsk,
+  type FleetBand,
+  type UnseenAsk,
+};
 
 /** Bands that constitute a demand on the user — the ones an idle fleet has none of. */
 export const DEMAND_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>([
@@ -84,6 +96,67 @@ export function fleetBandRunKey(
 }
 
 /**
+ * The one band the amber glyph and the counts stand for: a stopped run whose
+ * agent printed that it needs the user, or a Canopy reading of an ask the user
+ * hasn't seen. The pane edge reads the wider {@link runUnseenAsk}.
+ */
+export const NEEDS_YOU_BANDS: ReadonlySet<FleetBand> = new Set<FleetBand>(["needs-you"]);
+
+const NO_UNSEEN_ASKS: ReadonlyMap<string, UnseenAsk> = new Map();
+const unseenAskCache = new WeakMap<FleetSnapshot, ReadonlyMap<string, UnseenAsk>>();
+
+/**
+ * Every run whose current stop is an outstanding ask, by run id (the terminal
+ * id), with whose ask it is: what the pane edge draws amber for.
+ * Cached per snapshot and empty before the first one. Each snapshot reads a
+ * new map, so a selector over it compares shallowly.
+ */
+export function fleetUnseenAsks(snapshot: FleetSnapshot | null): ReadonlyMap<string, UnseenAsk> {
+  if (snapshot === null) return NO_UNSEEN_ASKS;
+  let asks = unseenAskCache.get(snapshot);
+  if (asks === undefined) {
+    const byRun = new Map<string, UnseenAsk>();
+    for (const run of snapshot.runs) {
+      const ask = runUnseenAsk(run);
+      if (ask !== undefined) byRun.set(run.runId, ask);
+    }
+    asks = byRun.size === 0 ? NO_UNSEEN_ASKS : byRun;
+    unseenAskCache.set(snapshot, asks);
+  }
+  return asks;
+}
+
+/** One run's unseen ask (`runId` is the terminal id); undefined before the snapshot arrives. */
+export function fleetUnseenAskForRun(
+  snapshot: FleetSnapshot | null,
+  runId: string
+): UnseenAsk | undefined {
+  return fleetUnseenAsks(snapshot).get(runId);
+}
+
+const bandIndexCache = new WeakMap<FleetSnapshot, Map<string, FleetBand>>();
+
+/**
+ * One run's band (`runId` is the terminal id). Undefined until the snapshot
+ * arrives and for a run it doesn't hold: without the fleet's park, hand-back
+ * and Canopy facts nothing can be placed, and a guess from the panel would
+ * read every prompt as a question.
+ */
+export function fleetBandForRun(
+  snapshot: FleetSnapshot | null,
+  runId: string
+): FleetBand | undefined {
+  if (snapshot === null) return undefined;
+  let index = bandIndexCache.get(snapshot);
+  if (index === undefined) {
+    index = new Map();
+    for (const run of snapshot.runs) index.set(run.runId, bandForRun(run));
+    bandIndexCache.set(snapshot, index);
+  }
+  return index.get(runId);
+}
+
+/**
  * The band's own name for what the run is doing.
  *
  * Derived from the band rather than re-read from `agentState` so the visible
@@ -155,18 +228,15 @@ export function bandTimestamp(run: FleetRunRow, band: FleetBand): number | undef
     }
     case "review":
     case "done":
-      // Dated from the stop itself, not the slide into `waiting` after it. A
-      // question wait Canopy read as asking nothing is its own stop; the
-      // record, if any, is an earlier one.
-      if (runCanopyPlacement(run)?.kind === "not-asking") return run.since;
-      return run.handBack?.stoppedAt ?? run.since;
     case "needs-you":
-      // An ask Canopy read on a hand-back is as old as the stop it was asked
-      // at: the slide from `completed` into a prompt wait would otherwise make
-      // an outstanding question look new and sort it under fresher demands.
-      return runCanopyPlacement(run)?.kind === "asked"
-        ? (run.handBack?.stoppedAt ?? run.since)
-        : run.since;
+      // Dated from the stop itself, not the slide into `waiting` after it: an
+      // outstanding question would otherwise look new and sort under fresher
+      // demands. An approval or question wait is its own stop, and a hand-back
+      // record the run carries then is an earlier one.
+      if (run.agentState !== undefined && isHandBackStop(run.agentState, run.waitingReason)) {
+        return run.handBack?.stoppedAt ?? run.since;
+      }
+      return run.wait?.stoppedAt ?? run.since;
     default:
       return run.since;
   }

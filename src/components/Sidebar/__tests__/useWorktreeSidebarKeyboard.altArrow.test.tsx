@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { render, fireEvent } from "@testing-library/react";
+import { render, fireEvent, act } from "@testing-library/react";
 import { useRef, useState } from "react";
 import type { VirtuosoHandle } from "react-virtuoso";
 import {
@@ -249,10 +249,12 @@ describe("useWorktreeSidebarKeyboard — pinned rows in navigation", () => {
 });
 
 describe("useWorktreeSidebarKeyboard — keyboard cursor exposure", () => {
+  // The cursor shows only while the grid holds keyboard focus: a focus that a
+  // pointer press caused does not count (see the pointer test below).
   it("exposes keyboardCursorId tracking the active row in list mode", () => {
     const { getByTestId } = render(<Harness items={ITEMS} />);
     const grid = getByTestId("grid");
-    fireEvent.focus(grid); // seeds wt1
+    act(() => grid.focus()); // seeds wt1
     expect(grid.getAttribute("data-cursor-id")).toBe("wt1");
     fireEvent.keyDown(grid, { key: "ArrowDown" });
     expect(grid.getAttribute("data-cursor-id")).toBe("wt2");
@@ -267,6 +269,31 @@ describe("useWorktreeSidebarKeyboard — keyboard cursor exposure", () => {
     expect(container.querySelectorAll('[data-keyboard-cursor="true"]')).toHaveLength(0);
     fireEvent.keyDown(getByTestId("tb-wt1-1"), { key: "Escape" }); // back to list mode
     expect(grid.getAttribute("data-cursor-id")).toBe("wt1");
+  });
+
+  it("shows no cursor when the grid takes focus from the pointer", () => {
+    const { getByTestId, container } = render(<Harness items={ITEMS} />);
+    const grid = getByTestId("grid");
+    // The hook tells pointer focus from keyboard focus by the press that
+    // preceded it, not by `:focus-visible`.
+    act(() => {
+      fireEvent.pointerDown(grid);
+      grid.focus();
+    });
+    expect(grid.getAttribute("data-cursor-id")).toBe("");
+    expect(container.querySelectorAll('[data-keyboard-cursor="true"]')).toHaveLength(0);
+  });
+
+  it("drops the cursor once focus leaves the grid", () => {
+    const outside = document.createElement("button");
+    document.body.appendChild(outside);
+    const { getByTestId } = render(<Harness items={ITEMS} />);
+    const grid = getByTestId("grid");
+    act(() => grid.focus());
+    expect(grid.getAttribute("data-cursor-id")).toBe("wt1");
+    act(() => outside.focus());
+    expect(grid.getAttribute("data-cursor-id")).toBe("");
+    outside.remove();
   });
 });
 

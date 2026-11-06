@@ -42,6 +42,16 @@ describe("appProtocol utilities", () => {
       expect(getMimeType("PHOTO.AVIF")).toBe("image/avif");
     });
 
+    it("types every font format a plugin view can @font-face as a font (#16286)", () => {
+      // plugin:// serves nosniff, so a format left to the octet-stream fallback
+      // is refused by the font loader even though font-src admits the URL.
+      for (const file of ["a.woff", "a.woff2", "a.ttf", "a.otf", "A.OTF"]) {
+        expect(getMimeType(`view/fonts/${file}`)).toBe(
+          `font/${path.extname(file).slice(1).toLowerCase()}`
+        );
+      }
+    });
+
     it("should return video MIME types for containers Chromium plays natively", () => {
       // Drives the daintree-file:// handler's video-vs-buffered routing AND the
       // Content-Type on streamed responses — nosniff makes a wrong type fatal.

@@ -44,6 +44,9 @@ const ClientInfoSchema = z.object({
   clientName: z.string().max(256),
   platform: z.enum(["darwin", "linux", "win32"]),
   deviceId: id.optional(),
+  // One this side cannot read is dropped rather than refusing the HELLO: the
+  // host then sends the lanes every Shell reads.
+  assistantSlots: z.number().int().min(1).max(1024).optional().catch(undefined),
 });
 
 export const HelloSchema = z.object({
@@ -52,6 +55,7 @@ export const HelloSchema = z.object({
   client: ClientInfoSchema,
   resumeSessionId: id.nullable(),
   resumeSecret: z.string().max(256).nullable().optional(),
+  messageFragments: z.boolean().optional(),
 });
 
 const WelcomeSchema = z.object({
@@ -61,6 +65,7 @@ const WelcomeSchema = z.object({
   resumed: z.boolean(),
   resumeSecret: z.string().max(256).optional(),
   hostLaunchId: id.optional(),
+  messageFragments: z.boolean().optional(),
   // One this side cannot read (a cause added after it) is dropped rather than
   // failing the WELCOME: the session matters more than saying why the last one ended.
   previousEnd: z
@@ -161,6 +166,7 @@ const HostSummarySchema = z.object({
   thermal: z.enum(["nominal", "fair", "serious", "critical"]).nullable(),
   cpuPressure: z.number().finite().nullable(),
   agentsObserved: z.object({ working: count, waiting: count, idle: count }).nullable(),
+  agentAttention: z.object({ waiting: count, blocked: count, idle: count }).optional(),
   projectCount: count.nullable(),
   worktreeCount: count.nullable(),
   driver: DriveLeaseHolderSchema.nullable(),
@@ -316,6 +322,11 @@ const BODY_SCHEMAS: Record<number, Record<number, z.ZodType>> = {
     [BulkKind.TRANSFER_ACK]: TransferAckSchema,
   },
 };
+
+/** Whether a lane carries a structured (encoded) message of this kind. */
+export function isStructuredKind(lane: number, kind: number): boolean {
+  return BODY_SCHEMAS[lane]?.[kind] !== undefined;
+}
 
 export class LinkValidationError extends Error {
   constructor(message: string) {

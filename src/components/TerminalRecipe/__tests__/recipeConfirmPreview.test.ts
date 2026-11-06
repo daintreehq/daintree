@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { formatRecipePreviewLines, recipeOriginLabel } from "../recipeConfirmPreview";
+import {
+  describeTerminal,
+  formatRecipePreviewLines,
+  recipeOriginLabel,
+} from "../recipeConfirmPreview";
 import type { TerminalRecipe } from "@shared/types";
 
 const recipe = (overrides: Partial<TerminalRecipe> = {}): TerminalRecipe => ({
@@ -182,5 +186,36 @@ describe("plugin panel steps and system prompts in the preview (#13797)", () => 
     );
     expect(lines).toContain("1. $ (the project's dev command)");
     expect(lines).toContain("2. $ vite");
+  });
+});
+
+describe("When done in the preview (#16172)", () => {
+  it("names a step's choice in the pane menu's words, only where the launch arms it", () => {
+    expect(
+      describeTerminal({ type: "claude", initialPrompt: "Review", whenDone: "close" })
+    ).toContain("when done: close, keeping the session");
+    expect(
+      describeTerminal({ type: "claude", initialPrompt: "Review", whenDone: "background" })
+    ).toContain("when done: move to background");
+    // A prompt led by a variable is armed only if it fills in as a task.
+    expect(
+      describeTerminal({ type: "claude", initialPrompt: "{{worktree_path}}", whenDone: "close" })
+    ).toContain(
+      "when done: close, keeping the session (if the filled-in prompt isn't empty or a slash command)"
+    );
+    // No prompt, a blank one or a slash command arms nothing; a shell step never is.
+    for (const initialPrompt of [undefined, "   ", "/prompts:merge-prs"]) {
+      expect(
+        describeTerminal({ type: "claude", initialPrompt, whenDone: "close" }).join("\n")
+      ).not.toContain("when done");
+    }
+    expect(
+      describeTerminal({
+        type: "terminal",
+        command: "ls",
+        initialPrompt: "x",
+        whenDone: "close",
+      }).join("\n")
+    ).not.toContain("when done");
   });
 });

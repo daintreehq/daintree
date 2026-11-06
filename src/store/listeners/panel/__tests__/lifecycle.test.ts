@@ -89,6 +89,12 @@ import { notify } from "@/lib/notify";
 import { flushPanelStatusBuffer, enqueueFlowStatusUpdate } from "@/store/panelStatusBuffer";
 import { isPtyPanel } from "@shared/types/panel";
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+import { panelPersistence } from "@/store/persistence/panelPersistence";
+import {
+  beginBatch,
+  resetBatchState,
+  takeDeferredPersist,
+} from "@/store/slices/panelRegistry/hydrationBatch";
 
 const terminalInstanceService = await loadTerminalService();
 
@@ -338,6 +344,57 @@ describe("handleFallbackTriggered — activation failure", () => {
   });
 });
 
+describe("handleFallbackTriggered — a pane a plugin launched on an approved preset (#16324)", () => {
+  const primary = { id: "preset-1", name: "Primary", fallbacks: ["preset-2"] };
+  const fallback = { id: "preset-2", name: "Fallback", env: { TOKEN: "approved" } };
+  const original = usePanelStore.getState().activateFallbackPreset;
+
+  async function approveThenHop(fallbackNow: typeof fallback) {
+    const { presetLaunchContent } = await import("@shared/utils/agentPresetLaunchConsent");
+    const { getMergedPresets } = await import("@shared/utils/agentPresets");
+    const approvals = await import("@/services/plugin/pluginPresetLaunchApprovals");
+    const approvedFallback = getMergedPresets("testAgent", [primary, fallback]).find(
+      (preset) => preset.id === "preset-2"
+    )!;
+    approvals.rememberApprovedPresetLaunch("term-1", {
+      agentId: "testAgent",
+      presetId: "preset-1",
+      source: "custom",
+      content: "[]",
+      fallbacks: [["preset-2", presetLaunchContent(approvedFallback)]],
+    });
+    useAgentSettingsStore.setState({
+      settings: { agents: { testAgent: { customPresets: [primary, fallbackNow] } } },
+    });
+    setupPanel({ agentPresetId: "preset-1", fallbackChainIndex: 0 });
+    const activate = vi.fn(async () => ({ success: true }));
+    usePanelStore.setState({ activateFallbackPreset: activate });
+    await handleFallbackTriggered({
+      terminalId: "term-1",
+      agentId: "testAgent",
+      fromPresetId: "preset-1",
+      reason: "connection",
+    });
+    approvals.forgetApprovedPresetLaunch("term-1");
+    return activate;
+  }
+
+  afterEach(() => {
+    usePanelStore.setState({ activateFallbackPreset: original });
+  });
+
+  it("hops to a fallback that is as it was approved", async () => {
+    const activate = await approveThenHop(fallback);
+    expect(activate).toHaveBeenCalledOnce();
+  });
+
+  it("holds the hop, and says so, when the fallback changed since the approval", async () => {
+    const activate = await approveThenHop({ ...fallback, env: { TOKEN: "swapped" } });
+    expect(activate).not.toHaveBeenCalled();
+    expect(vi.mocked(notify).mock.lastCall![0].title).toBe("Fallback preset changed");
+  });
+});
+
 describe("handleFallbackTriggered — rate limits (#14370)", () => {
   const original = usePanelStore.getState().activateFallbackPreset;
   afterEach(() => {
@@ -485,6 +542,142 @@ describe("handleFallbackTriggered — rate limits (#14370)", () => {
     const activate = setupChain({ fallbackOnRateLimit: true });
     await trigger();
     expect(activate).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("handleFallbackTriggered — keeping the conversation on a usage limit (#16045)", () => {
+  const original = usePanelStore.getState().activateFallbackPreset;
+  afterEach(() => {
+    usePanelStore.setState({ activateFallbackPreset: original });
+  });
+
+  function setupCodexChain(
+    primary: Record<string, unknown>,
+    result: Record<string, unknown> = { success: true, resumedSessionId: "thread-1" }
+  ): ReturnType<typeof vi.fn> {
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: {
+          codex: {
+            customPresets: [
+              { id: "preset-1", name: "Personal", fallbacks: ["preset-2"], ...primary },
+              { id: "preset-2", name: "Company" },
+            ],
+          },
+        },
+      },
+    });
+    setupPanel({ launchAgentId: "codex" });
+    const activate = vi.fn().mockResolvedValue(result);
+    usePanelStore.setState({ activateFallbackPreset: activate });
+    return activate;
+  }
+
+  function trigger(reason: "rate-limit" | "connection" = "rate-limit") {
+    return handleFallbackTriggered({
+      terminalId: "term-1",
+      agentId: "codex",
+      fromPresetId: "preset-1",
+      reason,
+    });
+  }
+
+  it("asks the next preset to reopen the conversation when the user's preset says so", async () => {
+    const activate = setupCodexChain({
+      fallbackOnRateLimit: true,
+      keepConversationOnRateLimit: true,
+    });
+
+    await trigger();
+
+    expect(activate).toHaveBeenCalledWith("term-1", "preset-2", "preset-1", {
+      keepConversation: true,
+    });
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("reopening this conversation") })
+    );
+  });
+
+  it("starts a new conversation on a hop the preset didn't ask to keep", async () => {
+    const activate = setupCodexChain({ fallbackOnRateLimit: true }, { success: true });
+
+    await trigger();
+
+    expect(activate).toHaveBeenCalledWith("term-1", "preset-2", "preset-1");
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("in a new conversation") })
+    );
+  });
+
+  it("keeps the connection fallback a new conversation whatever the preset says", async () => {
+    const activate = setupCodexChain(
+      { fallbackOnRateLimit: true, keepConversationOnRateLimit: true },
+      { success: true }
+    );
+
+    await trigger("connection");
+
+    expect(activate).toHaveBeenCalledWith("term-1", "preset-2", "preset-1");
+  });
+
+  it("takes no consent from a team-shared project preset", async () => {
+    const activate = setupCodexChain({}, { success: true });
+    useAgentSettingsStore.setState({
+      settings: { agents: { codex: { customPresets: [{ id: "preset-2", name: "Company" }] } } },
+    });
+    useProjectPresetsStore.setState({
+      presetsByAgent: {
+        codex: [
+          {
+            id: "preset-1",
+            name: "Shared",
+            fallbacks: ["preset-2"],
+            fallbackOnRateLimit: true,
+            keepConversationOnRateLimit: true,
+          },
+        ],
+      },
+    });
+    try {
+      await trigger();
+    } finally {
+      useProjectPresetsStore.setState({ presetsByAgent: {} });
+    }
+
+    expect(activate).not.toHaveBeenCalled();
+  });
+
+  it("starts a new conversation for an agent whose refusal isn't recognised", async () => {
+    useAgentSettingsStore.setState({
+      settings: {
+        agents: {
+          testAgent: {
+            customPresets: [
+              {
+                id: "preset-1",
+                name: "Primary",
+                fallbacks: ["preset-2"],
+                fallbackOnRateLimit: true,
+                keepConversationOnRateLimit: true,
+              },
+              { id: "preset-2", name: "Second account" },
+            ],
+          },
+        },
+      },
+    });
+    setupPanel();
+    const activate = vi.fn().mockResolvedValue({ success: true });
+    usePanelStore.setState({ activateFallbackPreset: activate });
+
+    await handleFallbackTriggered({
+      terminalId: "term-1",
+      agentId: "testAgent",
+      fromPresetId: "preset-1",
+      reason: "rate-limit",
+    });
+
+    expect(activate).toHaveBeenCalledWith("term-1", "preset-2", "preset-1");
   });
 });
 
@@ -1316,6 +1509,81 @@ describe("onExit — session-preserving teardown (#13841)", () => {
 
     onExit("shell", 0);
     expect(getShell()?.sessionPreservingExit).toBeUndefined();
+  });
+});
+
+describe("onExit — the shown exit is saved with the layout (#15941)", () => {
+  function getExitHandler(): ExitHandler {
+    exitHandlers.length = 0;
+    setupLifecycleListeners();
+    const handler = exitHandlers.at(-1);
+    if (!handler) throw new Error("onExit handler was not registered");
+    return handler;
+  }
+
+  function savedShell(save: ReturnType<typeof vi.spyOn>) {
+    const terminals = save.mock.lastCall?.[0] as Array<Record<string, unknown>> | undefined;
+    return terminals?.find((t) => t.id === "shell");
+  }
+
+  function setupShell(overrides: Record<string, unknown> = {}) {
+    usePanelStore.setState({
+      panelsById: {
+        shell: {
+          id: "shell",
+          kind: "terminal",
+          title: "Shell",
+          cwd: "/tmp",
+          cols: 80,
+          rows: 24,
+          location: "grid" as const,
+          ...overrides,
+        },
+      },
+      panelIds: ["shell"],
+    });
+  }
+
+  it("saves a kept pane with its exit, so a reload restores the exit", () => {
+    const save = vi.spyOn(panelPersistence, "save").mockImplementation(() => {});
+    try {
+      setupShell();
+
+      getExitHandler()("shell", 3);
+
+      expect(savedShell(save)).toMatchObject({ runtimeStatus: "exited", exitCode: 3 });
+    } finally {
+      save.mockRestore();
+    }
+  });
+
+  it("leaves the save to the end of a hydration batch, whose panel list is still partial", () => {
+    const save = vi.spyOn(panelPersistence, "save").mockImplementation(() => {});
+    beginBatch();
+    try {
+      setupShell();
+
+      getExitHandler()("shell", 3);
+
+      expect(save).not.toHaveBeenCalled();
+      expect(takeDeferredPersist()).toBe(true);
+    } finally {
+      resetBatchState();
+      save.mockRestore();
+    }
+  });
+
+  it("saves nothing for a session-preserving teardown, which restores a new process", () => {
+    const save = vi.spyOn(panelPersistence, "save").mockImplementation(() => {});
+    try {
+      setupShell();
+
+      getExitHandler()("shell", 1, { preserveSession: true });
+
+      expect(save).not.toHaveBeenCalled();
+    } finally {
+      save.mockRestore();
+    }
   });
 });
 

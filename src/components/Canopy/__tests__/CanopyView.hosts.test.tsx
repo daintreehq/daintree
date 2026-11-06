@@ -39,6 +39,7 @@ vi.mock("@/lib/remoteHosts", () => ({
 }));
 vi.mock("@/components/Hosts/hostList", () => ({
   useHostList: () => ({ hosts: state.hosts, localSummary: state.localSummary }),
+  useHostFigures: () => ({ hosts: state.hosts, localSummary: state.localSummary }),
   getHostListSnapshot: () => ({ hosts: state.hosts, localSummary: state.localSummary }),
   hasRemoteHosts: (list: { hosts: HostListEntry[] }) => list.hosts.length > 0,
 }));
@@ -110,6 +111,7 @@ function summary(hostId: string, waiting: number, working: number): HostMetricsS
     thermal: null,
     cpuPressure: null,
     agentsObserved: { working, waiting, idle: 0 },
+    agentAttention: { waiting, blocked: 0, idle: 0 },
     projectCount: 1,
     worktreeCount: 1,
     driver: null,

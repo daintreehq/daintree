@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { usePanelStore, type AddPanelOptions } from "@/store/panelStore";
 import { exitProjectHome } from "@/store/storeAccessors";
 import type { PanelLimitSnapshot } from "@/store/panelLimitStore";
-import type { PtyPanelData } from "@shared/types/panel";
+import type { PtyPanelData, ScheduledRunRef } from "@shared/types/panel";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -29,6 +29,7 @@ import type {
   AddPanelFocusPolicy,
 } from "@shared/types";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
+import { launchSpawnProvenance } from "@shared/utils/scheduledRunProvenance";
 import { findEquivalentMissingCliGate } from "@/utils/missingCliGate";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import {
@@ -52,6 +53,13 @@ import {
 } from "@/hooks/useHostPlatform";
 import { agentClipboardDirectory } from "@shared/types/agentSettings";
 import { buildFirstPrompt } from "@shared/utils/firstPrompt";
+import {
+  presetLaunchContent,
+  presetLaunchMatchesApproval,
+  resolvePresetLaunchParts,
+  type HostApprovedPluginPresetLaunch,
+} from "@shared/utils/agentPresetLaunchConsent";
+import { rememberApprovedPresetLaunch } from "@/services/plugin/pluginPresetLaunchApprovals";
 
 export { resolveAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 export { buildLaunchIdentity, type LaunchAgentIdentity };
@@ -176,6 +184,12 @@ export interface LaunchAgentOptions {
   interactive?: boolean;
   modelId?: string;
   presetId?: string | null;
+  /**
+   * The account to launch on (#16040). `null` is the CLI's default login;
+   * omitted, the worktree's account applies, else the preset's pinned
+   * account, else the agent's default.
+   */
+  accountId?: string | null;
   /** Bypass the availability gate and always attempt to spawn. */
   force?: boolean;
   /**
@@ -216,10 +230,22 @@ export interface LaunchAgentOptions {
    */
   spawnedBy?: TerminalSpawnSource;
   /**
+   * The scheduled run this launch is for (#15977). Makes the pane
+   * `spawnedBy: "schedule"` with the run's ids, whatever `spawnedBy` says.
+   * Only ever `ActionContext.scheduledRun`.
+   */
+  scheduledRun?: ScheduledRunRef;
+  /**
    * The plugin whose dispatch launched this agent (#14017), stamped as the
    * pane's `launchedByPluginId`. Only ever `ActionContext.callerPluginId`.
    */
   launchedByPluginId?: string;
+  /**
+   * The preset a person approved this plugin launch on (#16324). Only ever
+   * `ActionContext.hostApprovedPluginPresetLaunch`. The launch refuses unless
+   * the preset it resolves has exactly the approved content.
+   */
+  approvedPluginPreset?: HostApprovedPluginPresetLaunch;
   /**
    * Focus policy for the new panel. `"preserve"` keeps focus where it is
    * (background/MCP spawns). Omitted defaults to the resolved policy from
@@ -250,7 +276,12 @@ export interface LaunchAgentOptions {
 
 /** Why `launchAgent` resolved to `null` without throwing. */
 export type LaunchDeclineReason =
-  "panel-limit" | "already-launching" | "spawn-failed" | "unavailable" | "presets-loading";
+  | "panel-limit"
+  | "already-launching"
+  | "spawn-failed"
+  | "unavailable"
+  | "presets-loading"
+  | "missing-cli";
 
 export interface LaunchDecline {
   reason: LaunchDeclineReason;
@@ -286,6 +317,36 @@ function notifyPresetsLoading(
     context: { eventKind: "agent", ...(worktreeId ? { worktreeId } : {}) },
     urgent: true,
     replaceKey: `launch-presets-loading:${agentId}`,
+    action: {
+      label: "Open settings",
+      actionId: "app.settings.openTab",
+      actionArgs: target,
+      onClick: () => {
+        void import("@/services/ActionService").then(({ actionService }) =>
+          actionService.dispatch("app.settings.openTab", target, { source: "user" })
+        );
+      },
+    },
+  });
+}
+
+/**
+ * Why a launch on a removed account didn't start: running on another account
+ * than the one chosen bills someone else, so it isn't swapped silently.
+ */
+function notifyAccountMissing(
+  agentId: string,
+  agentName: string,
+  worktreeId: string | null | undefined
+): void {
+  const target = { tab: "agents", subtab: agentId, sectionId: "agents-accounts" } as const;
+  notify({
+    type: "error",
+    title: `Couldn't start ${agentName}`,
+    message: "The account it's set to launch on was removed. Choose another account and try again.",
+    context: { eventKind: "agent", ...(worktreeId ? { worktreeId } : {}) },
+    urgent: true,
+    replaceKey: `launch-account-missing:${agentId}`,
     action: {
       label: "Open settings",
       actionId: "app.settings.openTab",
@@ -567,6 +628,37 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           },
         });
         if (plan.unloadedPresetId !== undefined) return declinePresetsLoading();
+        // Checked after every await the plan makes, against the preset it will
+        // launch on: the person approved that content, and a preset that
+        // changed since, or a different one, runs on nobody's say-so (#16324).
+        const approvedPreset = launchOptions?.approvedPluginPreset;
+        if (approvedPreset !== undefined) {
+          const sources = presetSources();
+          const matches =
+            approvedPreset.agentId === agentId &&
+            plan.preset?.id === approvedPreset.presetId &&
+            presetLaunchContent(plan.preset) === approvedPreset.content &&
+            presetLaunchMatchesApproval(
+              approvedPreset,
+              resolvePresetLaunchParts(
+                agentId,
+                approvedPreset.presetId,
+                sources.settings?.agents?.[agentId]?.customPresets,
+                sources.ccrPresets,
+                sources.projectPresets
+              )
+            );
+          if (!matches) {
+            throw new Error(
+              `The preset "${approvedPreset.presetId}" isn't the one that was approved for this plugin: it changed or isn't available here. Launch again to be asked about it as it is now.`
+            );
+          }
+        }
+        if (plan.missingAccountId !== undefined) {
+          logWarn(`Declined a launch of ${agentId}: its account no longer exists`);
+          notifyAccountMissing(agentId, agentConfig?.name ?? agentId, effectiveWorktreeId);
+          return decline("spawn-failed");
+        }
         const { command, assignedSessionId, preset } = plan;
         const cachedLaunchCliDetail = plan.cliDetail;
 
@@ -584,7 +676,10 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               Date.now()
             )
           : undefined;
-        const spawnedBy = launchOptions?.spawnedBy;
+        const provenance = launchSpawnProvenance(
+          launchOptions?.spawnedBy,
+          launchOptions?.scheduledRun
+        );
         const focusPolicy =
           launchOptions?.focusPolicy ?? (isMcpSpawnFocusSuppressed() ? "preserve" : undefined);
 
@@ -600,17 +695,18 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               location: launchOptions?.location,
               agentLaunchFlags: plan.launchFlags,
               callerLaunchFlags: plan.callerLaunchFlags,
-              agentModelId: launchOptions?.modelId,
+              agentModelId: plan.modelId,
               agentSessionId: assignedSessionId,
               handbackCode: launchOptions?.handbackCode,
               ...(firstPrompt && { launchPrompt: firstPrompt }),
               agentPresetId: preset?.id,
               agentPresetColor: preset?.color,
+              agentAccountId: plan.account?.id,
               env: plan.env,
               activateDockOnCreate: launchOptions?.activateDockOnCreate,
               excludeFromPersistence: launchOptions?.excludeFromPersistence,
               removeOnExit: launchOptions?.removeOnExit,
-              spawnedBy,
+              ...provenance,
               launchedByPluginId: launchOptions?.launchedByPluginId,
               focusPolicy,
               requestedId: launchOptions?.requestedId,
@@ -626,7 +722,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               activateDockOnCreate: launchOptions?.activateDockOnCreate,
               excludeFromPersistence: launchOptions?.excludeFromPersistence,
               removeOnExit: launchOptions?.removeOnExit,
-              spawnedBy,
+              ...provenance,
               focusPolicy,
               requestedId: launchOptions?.requestedId,
             };
@@ -642,6 +738,12 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           const launchCliDetail =
             cachedLaunchCliDetail ?? (await getCurrentLaunchCliDetail(agentId));
           if (launchCliDetail && !isAgentLaunchable(launchCliDetail.state)) {
+            // A scheduled run fails with the reason, as it does with no window,
+            // rather than leaving a setup pane in a grid nobody may be watching.
+            if (launchOptions?.scheduledRun) {
+              logWarn(`Declined a scheduled launch of ${agentId}: its CLI can't launch`);
+              return decline("missing-cli");
+            }
             const gateId = `terminal-${crypto.randomUUID()}`;
             const gatePanel: PtyPanelData = {
               id: gateId,
@@ -657,9 +759,13 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               command: command as string | undefined,
               agentLaunchFlags: plan.launchFlags,
               callerLaunchFlags: plan.callerLaunchFlags,
-              agentModelId: launchOptions?.modelId,
+              agentModelId: plan.modelId,
               agentPresetId: preset?.id,
               agentPresetColor: preset?.color,
+              agentAccountId: plan.account?.id,
+              // The folder the account is, kept with it so a reload restores
+              // the gate's launch on that account, not the default login.
+              ...(plan.account && plan.env && { env: plan.env }),
               spawnStatus: "missing-cli",
               // "Run anyway" replays the gate's command, prompt included, so
               // the gate holds the launch's record for it. Review Hub shows
@@ -670,7 +776,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               extensionState: plan.env ? { presetEnv: plan.env } : undefined,
               excludeFromPersistence: launchOptions?.excludeFromPersistence,
               removeOnExit: launchOptions?.removeOnExit,
-              spawnedBy,
+              ...provenance,
               focusPolicy,
             };
             // Resolved inside the updater, read after it: the gate may reuse a
@@ -750,6 +856,10 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           markRendererPerformance("agentlaunch.addpanel", { agentId });
           const terminalId = await addPanel(options, addPanelCommit);
           if (!terminalId) return declineAddPanel();
+          // A fallback hop on this pane is held to what was approved with it.
+          if (launchOptions?.approvedPluginPreset) {
+            rememberApprovedPresetLaunch(terminalId, launchOptions.approvedPluginPreset);
+          }
           const rawLocation = usePanelStore.getState().panelsById[terminalId]?.location ?? "grid";
           // "background" only when the caller parked it: a panel the user
           // backgrounded in the meantime still reports where the launch put it.

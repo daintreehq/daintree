@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -12,10 +12,6 @@ const dialogMock = vi.hoisted(() => ({
 const shellMock = vi.hoisted(() => ({
   openPath: vi.fn(async () => ""),
   showItemInFolder: vi.fn(),
-}));
-
-const browserWindowMock = vi.hoisted(() => ({
-  fromWebContents: vi.fn<() => null | { isDestroyed: () => boolean }>(() => null),
 }));
 
 const fsMock = vi.hoisted(() => ({
@@ -39,7 +35,7 @@ vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
   dialog: dialogMock,
   shell: shellMock,
-  BrowserWindow: browserWindowMock,
+  BrowserWindow: { fromWebContents: vi.fn(() => null) },
 }));
 
 vi.mock("node:fs", () => fsMock);
@@ -88,6 +84,7 @@ vi.mock("../../../../shared/config/devServer.js", async () => {
 });
 
 import { registerRecoveryHandlers } from "../recovery.js";
+import { recordAppEntryUrl } from "../../../window/appEntryUrl.js";
 import type { HandlerDependencies } from "../../types.js";
 
 function getHandlerFn(channelName: string): (...args: unknown[]) => unknown {
@@ -99,13 +96,33 @@ function getHandlerFn(channelName: string): (...args: unknown[]) => unknown {
 const TRUSTED_RECOVERY_URL = "app://daintree/recovery.html";
 const UNTRUSTED_URL = "https://evil.com/recovery.html";
 const MAIN_RENDERER_URL = "app://daintree/index.html";
+const PROD_RECOVERY_URL = "app://daintree/recovery.html?reason=crashed&exitCode=1";
+const PROD_STARTUP_VIEW_URL = "app://daintree/index.html?projectId=project-a";
 
-const SENDER = { id: 1 };
+// Vitest runs with NODE_ENV=development, so the default app URL is the dev server.
+const DEV_APP_URL = "http://localhost:5173";
+const STARTUP_VIEW_URL = "http://localhost:5173/?projectId=project-a";
 
-function buildEvent(url: string | null) {
+function buildSender(id = 1) {
+  return {
+    id,
+    isDestroyed: vi.fn(() => false),
+    loadURL: vi.fn<(url: string) => Promise<void>>(async () => undefined),
+  };
+}
+
+function recordEntry(sender: ReturnType<typeof buildSender>, url: string) {
+  recordAppEntryUrl(sender as unknown as Electron.WebContents, url);
+}
+
+function buildWindow() {
+  return { isDestroyed: vi.fn(() => false), loadURL: vi.fn() };
+}
+
+function buildEvent(url: string | null, sender: object = buildSender()) {
   return {
     senderFrame: url === null ? null : { url },
-    sender: SENDER,
+    sender,
   };
 }
 
@@ -115,7 +132,6 @@ describe("registerRecoveryHandlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     shellMock.openPath.mockResolvedValue("");
-    browserWindowMock.fromWebContents.mockReturnValue(null);
     fsMock.promises.access.mockResolvedValue(undefined);
     fsMock.promises.writeFile.mockResolvedValue(undefined);
     fsMock.promises.mkdir.mockResolvedValue(undefined);
@@ -123,88 +139,51 @@ describe("registerRecoveryHandlers", () => {
   });
 
   describe("recovery:reload-app", () => {
-    function buildWindow() {
-      return {
-        isDestroyed: vi.fn(() => false),
-        loadURL: vi.fn(),
-      } as unknown as { isDestroyed: () => boolean; loadURL: ReturnType<typeof vi.fn> };
-    }
-
     it("rejects untrusted sender and does not call loadURL", async () => {
-      const win = buildWindow();
-      const localDeps = { mainWindow: win } as unknown as HandlerDependencies;
-      registerRecoveryHandlers(localDeps);
-      const handler = getHandlerFn("recovery:reload-app");
-
-      await expect(handler(buildEvent(UNTRUSTED_URL))).rejects.toThrow(
-        "recovery:reload-app rejected: untrusted sender"
-      );
-      expect(win.loadURL).not.toHaveBeenCalled();
-    });
-
-    it("rejects the main renderer URL (not the recovery page)", async () => {
-      const win = buildWindow();
-      const localDeps = { mainWindow: win } as unknown as HandlerDependencies;
-      registerRecoveryHandlers(localDeps);
-      const handler = getHandlerFn("recovery:reload-app");
-
-      await expect(handler(buildEvent(MAIN_RENDERER_URL))).rejects.toThrow(
-        "recovery:reload-app rejected: untrusted sender"
-      );
-      expect(win.loadURL).not.toHaveBeenCalled();
-    });
-
-    it("rejects missing senderFrame", async () => {
-      const win = buildWindow();
-      const localDeps = { mainWindow: win } as unknown as HandlerDependencies;
-      registerRecoveryHandlers(localDeps);
-      const handler = getHandlerFn("recovery:reload-app");
-
-      await expect(handler(buildEvent(null))).rejects.toThrow(
-        "recovery:reload-app rejected: untrusted sender"
-      );
-      expect(win.loadURL).not.toHaveBeenCalled();
-    });
-
-    it("calls loadURL on the primary window when sender is the recovery page", async () => {
-      const win = buildWindow();
-      const localDeps = { mainWindow: win } as unknown as HandlerDependencies;
-      registerRecoveryHandlers(localDeps);
-      const handler = getHandlerFn("recovery:reload-app");
-
-      await handler(buildEvent(TRUSTED_RECOVERY_URL));
-
-      expect(win.loadURL).toHaveBeenCalledTimes(1);
-      expect(win.loadURL).toHaveBeenCalledWith("http://localhost:5173");
-    });
-
-    it("is a no-op when the window is destroyed", async () => {
-      const win = buildWindow();
-      win.isDestroyed = vi.fn(() => true);
-      const localDeps = { mainWindow: win } as unknown as HandlerDependencies;
-      registerRecoveryHandlers(localDeps);
-      const handler = getHandlerFn("recovery:reload-app");
-
-      await expect(handler(buildEvent(TRUSTED_RECOVERY_URL))).resolves.toBeUndefined();
-      expect(win.loadURL).not.toHaveBeenCalled();
-    });
-
-    it("is a no-op when no window is available", async () => {
+      const sender = buildSender();
       registerRecoveryHandlers(deps);
       const handler = getHandlerFn("recovery:reload-app");
 
-      await expect(handler(buildEvent(TRUSTED_RECOVERY_URL))).resolves.toBeUndefined();
+      await expect(handler(buildEvent(UNTRUSTED_URL, sender))).rejects.toThrow(
+        "recovery:reload-app rejected: untrusted sender"
+      );
+      expect(sender.loadURL).not.toHaveBeenCalled();
+    });
+
+    it("rejects the main renderer URL (not the recovery page)", async () => {
+      const sender = buildSender();
+      registerRecoveryHandlers(deps);
+      const handler = getHandlerFn("recovery:reload-app");
+
+      await expect(handler(buildEvent(MAIN_RENDERER_URL, sender))).rejects.toThrow(
+        "recovery:reload-app rejected: untrusted sender"
+      );
+      expect(sender.loadURL).not.toHaveBeenCalled();
+    });
+
+    it("rejects missing senderFrame", async () => {
+      const sender = buildSender();
+      registerRecoveryHandlers(deps);
+      const handler = getHandlerFn("recovery:reload-app");
+
+      await expect(handler(buildEvent(null, sender))).rejects.toThrow(
+        "recovery:reload-app rejected: untrusted sender"
+      );
+      expect(sender.loadURL).not.toHaveBeenCalled();
+    });
+
+    it("is a no-op when the sender's webContents is destroyed", async () => {
+      const sender = buildSender();
+      sender.isDestroyed.mockReturnValue(true);
+      registerRecoveryHandlers(deps);
+      const handler = getHandlerFn("recovery:reload-app");
+
+      await expect(handler(buildEvent(TRUSTED_RECOVERY_URL, sender))).resolves.toBeUndefined();
+      expect(sender.loadURL).not.toHaveBeenCalled();
     });
   });
 
   describe("recovery:reset-and-reload", () => {
-    function buildWindow() {
-      return {
-        isDestroyed: vi.fn(() => false),
-        loadURL: vi.fn(),
-      } as unknown as { isDestroyed: () => boolean; loadURL: ReturnType<typeof vi.fn> };
-    }
-
     it("rejects untrusted sender and does not reset state or reload", async () => {
       const { getCrashRecoveryService: getCrash } =
         await import("../../../services/CrashRecoveryService.js");
@@ -213,19 +192,18 @@ describe("registerRecoveryHandlers", () => {
         resetToFresh: resetMock,
       } as unknown as ReturnType<typeof getCrash>);
 
-      const win = buildWindow();
-      const localDeps = { mainWindow: win } as unknown as HandlerDependencies;
-      registerRecoveryHandlers(localDeps);
+      const sender = buildSender();
+      registerRecoveryHandlers(deps);
       const handler = getHandlerFn("recovery:reset-and-reload");
 
-      await expect(handler(buildEvent(UNTRUSTED_URL))).rejects.toThrow(
+      await expect(handler(buildEvent(UNTRUSTED_URL, sender))).rejects.toThrow(
         "recovery:reset-and-reload rejected: untrusted sender"
       );
       expect(resetMock).not.toHaveBeenCalled();
-      expect(win.loadURL).not.toHaveBeenCalled();
+      expect(sender.loadURL).not.toHaveBeenCalled();
     });
 
-    it("resets state, clears the pending crash, then reloads the app when sender is the recovery page", async () => {
+    it("resets state, clears the pending crash, then reloads the sending view", async () => {
       const { getCrashRecoveryService: getCrash } =
         await import("../../../services/CrashRecoveryService.js");
       const resetMock = vi.fn();
@@ -235,28 +213,34 @@ describe("registerRecoveryHandlers", () => {
         clearPendingCrash: clearMock,
       } as unknown as ReturnType<typeof getCrash>);
 
-      const win = buildWindow();
-      const localDeps = { mainWindow: win } as unknown as HandlerDependencies;
+      const primary = buildWindow();
+      const sender = buildSender();
+      recordEntry(sender, STARTUP_VIEW_URL);
+      const localDeps = {
+        mainWindow: primary,
+        windowRegistry: { getPrimary: () => ({ browserWindow: primary }) },
+      } as unknown as HandlerDependencies;
       registerRecoveryHandlers(localDeps);
       const handler = getHandlerFn("recovery:reset-and-reload");
 
-      await handler(buildEvent(TRUSTED_RECOVERY_URL));
+      await handler(buildEvent(TRUSTED_RECOVERY_URL, sender));
 
       expect(resetMock).toHaveBeenCalledTimes(1);
       // Without clearing the in-memory record, the reload's app:boot re-reads
       // it and re-presents the dialog with the backup already gone (#10809).
       expect(clearMock).toHaveBeenCalledTimes(1);
-      expect(win.loadURL).toHaveBeenCalledTimes(1);
-      expect(win.loadURL).toHaveBeenCalledWith("http://localhost:5173");
+      expect(sender.loadURL).toHaveBeenCalledTimes(1);
+      expect(sender.loadURL).toHaveBeenCalledWith(STARTUP_VIEW_URL);
+      expect(primary.loadURL).not.toHaveBeenCalled();
       expect(resetMock.mock.invocationCallOrder[0]).toBeLessThan(
         clearMock.mock.invocationCallOrder[0]
       );
       expect(clearMock.mock.invocationCallOrder[0]).toBeLessThan(
-        win.loadURL.mock.invocationCallOrder[0]
+        sender.loadURL.mock.invocationCallOrder[0]
       );
     });
 
-    it("is a no-op when the window is destroyed", async () => {
+    it("does not reset when the sender's webContents is destroyed", async () => {
       const { getCrashRecoveryService: getCrash } =
         await import("../../../services/CrashRecoveryService.js");
       const resetMock = vi.fn();
@@ -264,17 +248,113 @@ describe("registerRecoveryHandlers", () => {
         resetToFresh: resetMock,
       } as unknown as ReturnType<typeof getCrash>);
 
-      const win = buildWindow();
-      win.isDestroyed = vi.fn(() => true);
-      const localDeps = { mainWindow: win } as unknown as HandlerDependencies;
-      registerRecoveryHandlers(localDeps);
+      const sender = buildSender();
+      sender.isDestroyed.mockReturnValue(true);
+      registerRecoveryHandlers(deps);
       const handler = getHandlerFn("recovery:reset-and-reload");
 
-      await expect(handler(buildEvent(TRUSTED_RECOVERY_URL))).resolves.toBeUndefined();
+      await expect(handler(buildEvent(TRUSTED_RECOVERY_URL, sender))).resolves.toBeUndefined();
       expect(resetMock).not.toHaveBeenCalled();
-      expect(win.loadURL).not.toHaveBeenCalled();
+      expect(sender.loadURL).not.toHaveBeenCalled();
     });
   });
+
+  describe.each(["recovery:reload-app", "recovery:reset-and-reload"])(
+    "%s on a valid recovery page",
+    (channel) => {
+      beforeEach(async () => {
+        const { getCrashRecoveryService: getCrash } =
+          await import("../../../services/CrashRecoveryService.js");
+        vi.mocked(getCrash).mockReturnValue({
+          resetToFresh: vi.fn(),
+          clearPendingCrash: vi.fn(),
+        } as unknown as ReturnType<typeof getCrash>);
+      });
+
+      it("loads the default entry into the view showing the page, not the primary window", async () => {
+        const primary = buildWindow();
+        const sender = buildSender();
+        const localDeps = {
+          mainWindow: primary,
+          windowRegistry: { getPrimary: () => ({ browserWindow: primary }) },
+        } as unknown as HandlerDependencies;
+        registerRecoveryHandlers(localDeps);
+        const handler = getHandlerFn(channel);
+
+        await handler(buildEvent(TRUSTED_RECOVERY_URL, sender));
+
+        expect(sender.loadURL).toHaveBeenCalledTimes(1);
+        expect(sender.loadURL).toHaveBeenCalledWith(DEV_APP_URL);
+        expect(primary.loadURL).not.toHaveBeenCalled();
+      });
+
+      it("restores each view's own recorded entry URL", async () => {
+        const startupView = buildSender(1);
+        recordEntry(startupView, STARTUP_VIEW_URL);
+        const otherWindowView = buildSender(2);
+        recordEntry(otherWindowView, "http://localhost:5173/?projectId=project-b");
+        const unrecordedView = buildSender(3);
+        registerRecoveryHandlers(deps);
+        const handler = getHandlerFn(channel);
+
+        await handler(buildEvent(TRUSTED_RECOVERY_URL, startupView));
+        await handler(buildEvent(TRUSTED_RECOVERY_URL, otherWindowView));
+        await handler(buildEvent(TRUSTED_RECOVERY_URL, unrecordedView));
+
+        expect(startupView.loadURL).toHaveBeenCalledExactlyOnceWith(STARTUP_VIEW_URL);
+        expect(otherWindowView.loadURL).toHaveBeenCalledExactlyOnceWith(
+          "http://localhost:5173/?projectId=project-b"
+        );
+        expect(unrecordedView.loadURL).toHaveBeenCalledExactlyOnceWith(DEV_APP_URL);
+      });
+
+      it("logs a rejected navigation instead of leaving it unhandled", async () => {
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        try {
+          const sender = buildSender();
+          sender.loadURL.mockRejectedValueOnce(new Error("ERR_FAILED"));
+          registerRecoveryHandlers(deps);
+          const handler = getHandlerFn(channel);
+
+          await expect(handler(buildEvent(TRUSTED_RECOVERY_URL, sender))).resolves.toBeUndefined();
+          await vi.waitFor(() =>
+            expect(errorSpy).toHaveBeenCalledWith(
+              expect.stringContaining("failed to load"),
+              expect.objectContaining({ message: "ERR_FAILED" })
+            )
+          );
+        } finally {
+          errorSpy.mockRestore();
+        }
+      });
+
+      describe("in production", () => {
+        beforeEach(() => vi.stubEnv("NODE_ENV", "production"));
+        afterEach(() => vi.unstubAllEnvs());
+
+        it("restores the project-scoped app:// entry URL", async () => {
+          const sender = buildSender();
+          recordEntry(sender, PROD_STARTUP_VIEW_URL);
+          registerRecoveryHandlers(deps);
+          const handler = getHandlerFn(channel);
+
+          await handler(buildEvent(PROD_RECOVERY_URL, sender));
+
+          expect(sender.loadURL).toHaveBeenCalledWith(PROD_STARTUP_VIEW_URL);
+        });
+
+        it("loads the static app:// entry into a view with no recorded URL", async () => {
+          const sender = buildSender();
+          registerRecoveryHandlers(deps);
+          const handler = getHandlerFn(channel);
+
+          await handler(buildEvent(PROD_RECOVERY_URL, sender));
+
+          expect(sender.loadURL).toHaveBeenCalledWith(MAIN_RENDERER_URL);
+        });
+      });
+    }
+  );
 
   describe("recovery:export-diagnostics", () => {
     it("rejects untrusted sender and does not collect diagnostics, show dialog, or write file", async () => {
@@ -334,14 +414,21 @@ describe("registerRecoveryHandlers", () => {
       expect(shellMock.showItemInFolder).not.toHaveBeenCalled();
     });
 
-    it("parents the save dialog to the sender's BrowserWindow when available", async () => {
+    it("parents the save dialog to the window that owns the sending view", async () => {
+      const { getWindowForWebContents } = await import("../../../window/webContentsRegistry.js");
       const parentWin = { isDestroyed: vi.fn(() => false) };
-      browserWindowMock.fromWebContents.mockReturnValue(parentWin);
+      const primary = { isDestroyed: vi.fn(() => false) };
+      vi.mocked(getWindowForWebContents).mockReturnValueOnce(
+        parentWin as unknown as ReturnType<typeof getWindowForWebContents>
+      );
+      const localDeps = {
+        windowRegistry: { getPrimary: () => ({ browserWindow: primary }) },
+      } as unknown as HandlerDependencies;
       dialogMock.showSaveDialog.mockResolvedValue({
         canceled: false,
         filePath: "/tmp/diagnostics.json",
       });
-      registerRecoveryHandlers(deps);
+      registerRecoveryHandlers(localDeps);
       const handler = getHandlerFn("recovery:export-diagnostics");
 
       await handler(buildEvent(TRUSTED_RECOVERY_URL));

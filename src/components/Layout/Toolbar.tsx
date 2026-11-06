@@ -23,9 +23,9 @@ import {
   Check,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import { BrandSurface, FolderTree, Folders } from "@/components/icons";
+import { BrandSurface, CalendarClock, FolderTree, Folders } from "@/components/icons";
 import { buildPluginToolbarMeta } from "./pluginToolbarMeta";
-import { getToolbarDividerAfterIds } from "./toolbarButtonGrouping";
+import { getToolbarDividerAfterIds, toolbarDividerRun } from "./toolbarButtonGrouping";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { ToolbarButtonsContextMenu } from "./ToolbarButtonsContextMenu";
 import { cn } from "@/lib/utils";
@@ -40,17 +40,24 @@ import {
 } from "./PluginTrayButton";
 import { LAUNCHER_PANEL_ITEMS } from "./launcherPanelItems";
 import { deriveAgentAttentionStates } from "@/lib/agentAttentionStates";
-import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
+import { useFleetBandRunIds } from "@/hooks/useRunFleetBand";
+import { NEEDS_YOU_BANDS } from "@/lib/fleetAttention";
+import { isRemoteWindow } from "@/hooks/useHostPlatform";
 import { DockLaunchButton } from "./DockLaunchButton";
 import { useRecipeStore } from "@/store/recipeStore";
 import { useLauncherData } from "./useLauncherData";
 import {
   activateDockLaunchItem,
+  panelPrecondition,
   useDockLaunchModel,
   type ActivateDockLaunchItemContext,
   type DockLaunchAgentOptions,
 } from "./dockLaunchItems";
-import { buildLauncherToolbarMeta, useLauncherToolbarCatalog } from "./launcherToolbarCatalog";
+import {
+  buildLauncherToolbarMeta,
+  collidingRecipeNames,
+  useLauncherToolbarCatalog,
+} from "./launcherToolbarCatalog";
 import { LauncherToolbarButton } from "./LauncherToolbarButton";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
@@ -65,7 +72,11 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
-import { useToolbarOverflow, withDemotedOverflow } from "@/hooks/useToolbarOverflow";
+import {
+  useToolbarOverflow,
+  withDemotedOverflow,
+  withLitSignalPriorities,
+} from "@/hooks/useToolbarOverflow";
 import { useProjectToolbarOverlay, useResolvedPresentation } from "@/hooks/useResolvedPresentation";
 import { useWorktreeActions } from "@/hooks/useWorktreeActions";
 import { useWindowFullscreen } from "@/hooks/useWindowFullscreen";
@@ -78,6 +89,7 @@ import {
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
+import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 import { activeWorkspaceIdentity } from "@/lib/workspaceIdentity";
 import { usePreferencesStore, useToolbarPreferencesStore, useVoiceRecordingStore } from "@/store";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
@@ -138,18 +150,9 @@ import { useToolbarOverflowStatus } from "./useToolbarOverflowStatus";
 import { useToolbarOverflowEviction } from "./useToolbarOverflowEviction";
 import { useToolbarCustomization } from "./useToolbarCustomization";
 import { useToolbarProjectPill } from "./useToolbarProjectPill";
+import { ForgeStatsPlaceholder } from "./ForgeStatsPlaceholder";
 
 export { OVERFLOW_MENU_META } from "./ToolbarOverflowMenu";
-
-function ForgeStatsPlaceholder() {
-  return (
-    <div className="toolbar-stats app-no-drag relative mr-2 flex h-8 w-[13rem] shrink-0 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,var(--radius-md))] border opacity-0 pointer-events-none">
-      <div data-stat-segment="" className="h-8 flex-1" />
-      <div data-stat-segment="" className="h-8 flex-1" />
-      <div data-stat-segment="" className="h-8 flex-1" />
-    </div>
-  );
-}
 
 // The same box as the `size="icon"` button it stands in for, so the overflow
 // budget and the row height it reserves are the button's, not 4px more.
@@ -198,7 +201,14 @@ export function Toolbar({
   // resolves to hidden at any level: it has nothing to count.
   const presentation = useResolvedPresentation();
   const forgeStatsLevel = presentation.forgeStats;
-  const forgeStatsHidden = currentProject !== null && forgeStatsLevel === "hidden";
+  // This view's own workspace, not the broadcast `currentProject`, which a
+  // scratch never gets: once the view resolves to a workspace without a
+  // repository the slot goes, rather than holding its placeholder for good
+  // (#15931). Until the view resolves either way, the placeholder stays.
+  const workspaceRoot = useWorkspaceRoot();
+  const forgeStatsHidden =
+    workspaceRoot?.isGitBacked === false ||
+    (currentProject !== null && forgeStatsLevel === "hidden");
   // "Use this project's toolbar" (#13783): demoted buttons fold into `…`,
   // explicitly shown ones and promoted plugin buttons claim a slot. All of it
   // is applied at the render boundary; the app-wide layout is never written.
@@ -243,6 +253,13 @@ export function Toolbar({
   const branchName = activeWorktree?.branch;
   const watcherDegraded = useWorktreeStore((state) => state.watcherDegraded);
   const topologyWatcherDark = useWorktreeStore((state) => state.topologyWatcherDark);
+  // The Problems button's own wording for the two, so its row in `…` and the
+  // trigger's name say what the button would.
+  const watcherStatus = watcherDegraded
+    ? "File watching degraded"
+    : topologyWatcherDark
+      ? "Worktree list may be stale"
+      : null;
   // Read here as well as in the indicator, so its arrival or departure re-renders
   // the toolbar and the roving tab-stop sync below sees the item list change.
   const hostMemoryPauseVisible = useHostMemoryPauseStore((state) => state.visible);
@@ -259,10 +276,10 @@ export function Toolbar({
   // derivation so the overflow dot matches the visible agent button; computed
   // inside useShallow so agent ticks that don't change a pip state don't
   // re-render the whole toolbar (issue #7451 pattern).
-  const handBackRunIds = useHandBackRunIds();
+  const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
   const agentAttentionStates = usePanelStore(
     useShallow((s) =>
-      deriveAgentAttentionStates(s.panelsById, s.panelIds, activeWorktreeId, handBackRunIds)
+      deriveAgentAttentionStates(s.panelsById, s.panelIds, activeWorktreeId, needsYouRunIds)
     )
   );
 
@@ -344,8 +361,11 @@ export function Toolbar({
     [clearCopyTreeNotice]
   );
 
+  // A session another view is running counts too: the button is where this
+  // view reveals, pauses or stops it.
   const hasActiveVoiceRecording = useVoiceRecordingStore(
     (state) =>
+      state.sessionElsewhere !== null ||
       state.lockedTarget !== null ||
       state.pendingTarget !== null ||
       (state.activeTarget !== null &&
@@ -368,6 +388,7 @@ export function Toolbar({
   // nearest visible item to preserve keyboard navigation (WCAG 2.4.3).
   const prevFocusedToolbarItemRef = useRef<HTMLElement | null>(null);
   const forgeStatsRef = useRef<ForgeStatsHandle>(null);
+  const [forgeDataUnavailable, setForgeDataUnavailable] = useState(false);
 
   const { handleCopyTree, handleCopyTreeWithOptions } = useWorktreeActions();
   const sidebarShortcut = useEffectiveCombo("nav.toggleSidebar");
@@ -431,11 +452,13 @@ export function Toolbar({
         "agent.launch",
         // `null` is the explicit-default sentinel and must survive into the
         // payload; `undefined` must leave the key off so the saved preset still
-        // resolves. A `!= null` test here would collapse the two. A plugin
+        // resolves. A `!= null` test here would collapse the two, for the
+        // account (`null` is the default login) as for the preset. A plugin
         // launch entry adds its first turn and nothing else.
         {
           agentId,
           ...(presetId !== undefined ? { presetId } : {}),
+          ...(options?.accountId !== undefined ? { accountId: options.accountId } : {}),
           ...(options?.prompt !== undefined ? { prompt: options.prompt } : {}),
         },
         { source: "user" }
@@ -446,6 +469,7 @@ export function Toolbar({
 
   const {
     handleOpenProjectSettings,
+    handleOpenSchedules,
     handleStopProject,
     handleCloseProject,
     handleSleepProject,
@@ -638,6 +662,49 @@ export function Toolbar({
     }
   });
 
+  // A child can add or drop a control without the toolbar rendering — the
+  // Forge capsule's rate-limit and PR-detection segments, a plugin button — and
+  // a native button arrives with its own default Tab stop. Re-sync the roving
+  // stops whenever the strip's controls change underneath it, so it stays one
+  // Tab stop. The focus redirect stays with the layout effect above.
+  useEffect(() => {
+    const root = toolbarRef.current;
+    if (!root) return;
+    let frame = 0;
+    const observer = new MutationObserver(() => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const items = getToolbarItems();
+        if (items.length === 0) return;
+        const focusedIndex = items.findIndex((el) => el === document.activeElement);
+        const index =
+          focusedIndex !== -1
+            ? focusedIndex
+            : Math.min(activeToolbarIndexRef.current, items.length - 1);
+        activeToolbarIndexRef.current = index;
+        syncToolbarTabStops(items, index);
+        // A focused control a child removed on its own drops focus to <body>
+        // with no toolbar render to catch it; hand it to the nearest
+        // survivor so arrow navigation still works.
+        const prev = prevFocusedToolbarItemRef.current;
+        if (prev && !items.includes(prev)) {
+          prevFocusedToolbarItemRef.current = null;
+          if (document.activeElement === document.body) items[index]?.focus();
+        }
+      });
+    });
+    observer.observe(root, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["disabled", "aria-hidden"],
+    });
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(frame);
+    };
+  }, [getToolbarItems, syncToolbarTabStops]);
+
   const handleToolbarFocusCapture = useCallback(
     (e: React.FocusEvent<HTMLElement>) => {
       const target = e.target as HTMLElement;
@@ -651,6 +718,33 @@ export function Toolbar({
     },
     [getToolbarItems, syncToolbarTabStops]
   );
+
+  // Focus that leaves the strip for somewhere else lets go of the last item.
+  // Without this, a button focused once and since left — the user clicked
+  // into a terminal, or onto empty canvas — still counted as "the focused
+  // item" when a narrowing window later evicted it, and the redirect below
+  // dragged focus, its ring and its tooltip onto the `…` trigger unasked.
+  // A blur to nowhere is checked a frame later: an eviction blurs to nowhere
+  // too, and the layout effect has handled that one by then.
+  const handleToolbarBlurCapture = useCallback((e: React.FocusEvent<HTMLElement>) => {
+    const next = e.relatedTarget as Node | null;
+    if (next && toolbarRef.current?.contains(next)) return;
+    const left = e.target as HTMLElement;
+    if (next) {
+      if (prevFocusedToolbarItemRef.current === left) prevFocusedToolbarItemRef.current = null;
+      return;
+    }
+    requestAnimationFrame(() => {
+      if (
+        prevFocusedToolbarItemRef.current === left &&
+        document.activeElement !== left &&
+        left.isConnected &&
+        left.closest('[aria-hidden="true"]') === null
+      ) {
+        prevFocusedToolbarItemRef.current = null;
+      }
+    });
+  }, []);
 
   const handleToolbarKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLElement>) => {
@@ -724,6 +818,10 @@ export function Toolbar({
   const launcherCatalog = useLauncherToolbarCatalog(
     launcherModel.searchItems,
     currentRecipeProjectId
+  );
+  const recipeNameCollisions = useMemo(
+    () => collidingRecipeNames(launcherCatalog),
+    [launcherCatalog]
   );
   const launcherActivationContext = useMemo<ActivateDockLaunchItemContext>(
     () => ({
@@ -936,7 +1034,7 @@ export function Toolbar({
       },
       "voice-recording": {
         // Slot is always available so the right-aligned items keep a stable
-        // footprint when a session starts/stops. The button itself returns
+        // footprint when a session starts/stops (#8176). The button itself returns
         // an invisible placeholder when inactive (mirrors DevServerPlaceholder).
         render: () => <VoiceRecordingToolbarButton key="voice-recording" data-toolbar-item="" />,
         isAvailable: true,
@@ -944,19 +1042,20 @@ export function Toolbar({
       "forge-stats": {
         // The button owns its own shape now: full three-segment pill with a
         // resolved forge provider, commits-only without one (commit count is
-        // local git data). Placeholder (not removal) when no project: the
-        // slot's no-drag rectangle must exist on first paint regardless
-        // (PROJECT_SCOPED_TOOLBAR_IDS).
+        // local git data). Placeholder (not removal) while no project has
+        // resolved: the slot's no-drag rectangle must exist on first paint
+        // regardless (PROJECT_SCOPED_TOOLBAR_IDS).
         // A profile that hides the pill drops its slot from the row instead
         // (see `isButtonShownOnToolbar`), so the button — and its stats
-        // polling — never mounts. A workspace with no repository always
-        // resolves to hidden, so polling never starts for it (#11405).
+        // polling — never mounts. A workspace with no repository, a scratch
+        // included, always drops it, so polling never starts for it (#11405).
         render: () =>
           currentProject && forgeStatsLevel !== "hidden" ? (
             <ForgeStatsToolbarButton
               key="forge-stats"
               ref={forgeStatsRef}
               currentProject={currentProject}
+              onDataUnavailableChange={setForgeDataUnavailable}
               data-toolbar-item=""
             />
           ) : (
@@ -1023,8 +1122,7 @@ export function Toolbar({
                           aria-disabled={!canCopyTree || undefined}
                           aria-busy={isCopyingTree || undefined}
                           className={cn(
-                            "toolbar-icon-button relative",
-                            "text-text-primary",
+                            toolbarIconButtonClass,
                             "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                           )}
                           aria-label={isCopyingTree ? "Copying…" : "Copy context"}
@@ -1175,6 +1273,9 @@ export function Toolbar({
                 key={entry.buttonId}
                 entry={entry}
                 activationContext={launcherActivationContext}
+                showScope={
+                  entry.item.category === "recipe" && recipeNameCollisions.has(entry.item.name)
+                }
                 data-toolbar-item=""
               />
             ),
@@ -1195,6 +1296,7 @@ export function Toolbar({
       launchAgentFromToolbar,
       launcherCatalog,
       launcherActivationContext,
+      recipeNameCollisions,
       sidebarShortcut,
       sidebarAriaShortcut,
       sidebarHintHover,
@@ -1268,6 +1370,41 @@ export function Toolbar({
     hasActiveVoiceRecording,
   });
 
+  // The left `…` lives inside the left row, after its last visible button: its
+  // 32px plus the 4px margin and 2px row gap that put it 6px clear, as the
+  // right side's trigger sits. A demoted button or the branch row keeps it up
+  // whatever the width.
+  const leftTriggerPinned =
+    branchOverflowRow !== null || availableLeftIds.some((id) => demotedIds.has(id));
+  const leftOverflowTrigger = useMemo(
+    () => ({ reserve: 38, pinned: leftTriggerPinned }),
+    [leftTriggerPinned]
+  );
+
+  // Where the hairlines fall, which the overflow budget has to count the same
+  // way the render draws them.
+  const resolveDividerRun = useCallback(
+    (id: AnyToolbarButtonId) => toolbarDividerRun(resolveToolbarGroup(id)),
+    [resolveToolbarGroup]
+  );
+
+  // A button carrying a live signal holds its place on the strip while it is
+  // lit: a squeezed window keeps Problems with errors and Canopy with an urgent
+  // ask, and evicts a quiet tool in their place. Unread is ambient, so the bell
+  // keeps its own tier — above the tools, below a lit error. Unlit, they fall
+  // back to their ordinary tier.
+  const overflowPriorities = useMemo(
+    () =>
+      withLitSignalPriorities({
+        problems: errorCount > 0 || watcherDegraded || topologyWatcherDark,
+        canopy: canopyUrgentCount > 0,
+        ...Object.fromEntries(
+          [...agentAttentionStates].map(([agentId, state]) => [agentId, state === "waiting"])
+        ),
+      }),
+    [errorCount, watcherDegraded, topologyWatcherDark, canopyUrgentCount, agentAttentionStates]
+  );
+
   const {
     leftVisible,
     leftOverflow: measuredLeftOverflow,
@@ -1279,7 +1416,9 @@ export function Toolbar({
     measuredLeftIds,
     measuredRightIds,
     pinnedIds,
-    resolveToolbarGroup
+    resolveDividerRun,
+    overflowPriorities,
+    leftOverflowTrigger
   );
   const leftOverflow = useMemo(
     () => withDemotedOverflow(availableLeftIds, measuredLeftOverflow, demotedIds),
@@ -1301,8 +1440,14 @@ export function Toolbar({
     leftOverflow,
     rightOverflow,
     hasActiveVoiceRecording,
+    hasProject: currentProject !== null,
     errorCount,
     canopyUrgentCount,
+    watcherStatus,
+    forgeUnavailableObservation:
+      forgeDataUnavailable && forgeStatsLevel !== "hidden"
+        ? `${forgeProviderName ?? "Repository"} data unavailable`
+        : null,
     pluginConfigs,
     pinnedButtons,
   });
@@ -1337,7 +1482,7 @@ export function Toolbar({
     const dividerAfter = getToolbarDividerAfterIds(
       available,
       (id) => visibleSet.has(id),
-      resolveToolbarGroup
+      resolveDividerRun
     );
 
     const elements: React.ReactNode[] = [];
@@ -1475,6 +1620,24 @@ export function Toolbar({
 
   // Mirrors the launcher's own row gates so an inlined overflow row degrades
   // the same way the launcher row does rather than silently opening nothing.
+  // A pinned launcher row that can't launch right now stays on the toolbar,
+  // disabled with its reason; overflowing it must not quietly re-enable it.
+  // The two built-in panel buttons with a precondition carry the launcher row's
+  // own gate and wording for it.
+  const overflowUnavailableReasons = useMemo(() => {
+    const reasons: Partial<Record<string, string>> = {};
+    for (const entry of launcherCatalog.values()) {
+      const reason = entry.item.disabled?.reason;
+      if (reason !== undefined) reasons[entry.buttonId] = reason;
+    }
+    const preconditions = { hasWorkspace, hasProject: currentProject !== null };
+    const fileBrowser = panelPrecondition("file-browser", preconditions)?.reason;
+    const devPreview = panelPrecondition("dev-preview", preconditions)?.reason;
+    if (fileBrowser !== undefined) reasons["file-browser"] = fileBrowser;
+    if (devPreview !== undefined) reasons["dev-server"] = devPreview;
+    return reasons;
+  }, [launcherCatalog, hasWorkspace, currentProject]);
+
   const panelTrayDisabled: Partial<Record<string, boolean>> = {
     "file-browser": !hasWorkspace,
     "dev-server": !currentProject,
@@ -1500,7 +1663,8 @@ export function Toolbar({
     side: "left" | "right",
     severity: OverflowBadgeSeverity,
     agentObservations: readonly string[],
-    branchRow: OverflowMenuProps["branchRow"] = null
+    branchRow: OverflowMenuProps["branchRow"] = null,
+    triggerClassName?: string
   ) => (
     <OverflowMenu
       overflowIds={overflowIds}
@@ -1509,11 +1673,13 @@ export function Toolbar({
       errorCount={errorCount}
       notificationUnreadCount={notificationUnreadCount}
       canopyUrgentCount={canopyUrgentCount}
+      watcherStatus={watcherStatus}
       agentObservations={agentObservations}
       agentAttentionStates={agentAttentionStates}
       canCopyTree={canCopyTree}
       forgeStatsRef={forgeStatsRef}
       forgeProviderName={forgeProviderName}
+      forgeDataUnavailable={forgeDataUnavailable}
       overflowActions={overflowActions}
       dynamicOverflowMeta={dynamicOverflowMeta}
       pluginTrayGroups={pluginTrayGroups}
@@ -1523,6 +1689,9 @@ export function Toolbar({
       panelTrayDisabled={panelTrayDisabled}
       keybindingById={OVERFLOW_KEYBINDING_BY_ID}
       branchRow={branchRow}
+      resolveGroup={resolveDividerRun}
+      unavailableReasonById={overflowUnavailableReasons}
+      triggerClassName={triggerClassName}
     />
   );
 
@@ -1545,6 +1714,7 @@ export function Toolbar({
             aria-label="Main toolbar"
             onKeyDown={handleToolbarKeyDown}
             onFocusCapture={handleToolbarFocusCapture}
+            onBlurCapture={handleToolbarBlurCapture}
             // A window working on another machine shows it as light behind the
             // project pill and host chip (toolbar/surface.css), so the difference reads
             // before anything is read.
@@ -1597,14 +1767,17 @@ export function Toolbar({
                 className="toolbar-measured-row flex flex-1 min-w-0 items-center gap-0.5"
               >
                 {renderGroupedButtons(effectiveLeftButtons, leftVisibleSet)}
+                {renderOverflowMenu(
+                  visibleLeftOverflow,
+                  "left",
+                  leftMenuSeverity,
+                  leftObservations,
+                  branchOverflowRow,
+                  // Clear of the last visible button; with none left, the
+                  // group's own gap already spaces it from the divider.
+                  leftVisible.length > 0 ? "ml-1" : undefined
+                )}
               </div>
-              {renderOverflowMenu(
-                visibleLeftOverflow,
-                "left",
-                leftMenuSeverity,
-                leftObservations,
-                branchOverflowRow
-              )}
             </div>
 
             {/* CENTER GROUP - Grid-centered, shrinks gracefully on narrow windows */}
@@ -1640,6 +1813,7 @@ export function Toolbar({
                         results={projectSwitcher.results}
                         browseBands={projectSwitcher.browseBands}
                         selectedIndex={projectSwitcher.selectedIndex}
+                        cycleRequest={projectSwitcher.cycleRequest}
                         onQueryChange={projectSwitcher.setQuery}
                         onSelectPrevious={projectSwitcher.selectPrevious}
                         onSelectNext={projectSwitcher.selectNext}
@@ -1744,6 +1918,12 @@ export function Toolbar({
                         <Settings data-menu-icon className="mr-2 h-3.5 w-3.5" />
                         Project settings…
                       </ContextMenuItem>
+                      {!isRemoteWindow() && (
+                        <ContextMenuItem onSelect={handleOpenSchedules}>
+                          <CalendarClock data-menu-icon className="mr-2 h-3.5 w-3.5" />
+                          Schedules…
+                        </ContextMenuItem>
+                      )}
                       <ProjectPluginMenuItems projectId={currentProject.id} />
                       {activeSearchableProject && activeProjectHasProcesses && (
                         <ContextMenuItem

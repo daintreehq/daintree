@@ -6,6 +6,7 @@ export {
   setPendingAIRanges,
   pendingAIField,
   COMPOSER_GEOMETRY_EVENT,
+  COMPOSER_DRAFT_RESET_ATTR,
   computeAutoSize,
   createAutoSize,
   createCustomKeymap,
@@ -17,7 +18,10 @@ export {
   VOICE_CARET_LEVEL_PROPERTY,
 } from "./base";
 export { minimalDocChange } from "@/lib/textRangeMapping";
+export { pendingLock } from "./pendingLock";
+export { userEdit } from "./userEdit";
 export { createCaretTracker } from "./caretTracker";
+export { completionBoundary, completionBoundaryAt } from "./completionBoundary";
 export {
   dictationFollow,
   dictationFollowField,

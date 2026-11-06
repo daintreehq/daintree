@@ -268,6 +268,11 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             "One of the user's saved launch presets. Explicit null ignores the default preset.",
           type: ["string", "null"],
         },
+        accountId: {
+          description:
+            "One of the agent's saved accounts. Explicit null uses the CLI's default login.",
+          type: ["string", "null"],
+        },
         activateDockOnCreate: {
           description: "Open the sidebar dock when placing the agent there.",
           type: "boolean",
@@ -1473,6 +1478,28 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           description:
             "True when older output was left out, by `maxLines` or the 50 KiB response budget; the newest lines are kept.",
         },
+        inputLine: {
+          type: "object",
+          properties: {
+            state: {
+              type: "string",
+              enum: ["empty", "typed", "suggestion", "unknown"],
+            },
+            text: {
+              type: "string",
+              description: "Text after the prompt glyph; empty for `empty` and `unknown`.",
+            },
+            truncated: {
+              description: "`text` was cut to its first 200 characters.",
+              type: "boolean",
+              const: true,
+            },
+          },
+          required: ["state", "text"],
+          additionalProperties: false,
+          description:
+            "Input box, read off screen styling: empty, typed, or suggestion (the CLI's own next prompt; plain-text tails show it as `[suggested by …]`). Not authorship.",
+        },
         error: {
           type: "string",
         },
@@ -1510,9 +1537,9 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
         },
         location: {
-          description: "Filter by location. Default: all but trash and background.",
+          description: "Omit to skip trash and background; `all` includes them.",
           type: "string",
-          enum: ["grid", "dock", "trash", "background"],
+          enum: ["grid", "dock", "trash", "background", "all"],
         },
         submissionToken: {
           description:
@@ -1521,9 +1548,15 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           minLength: 1,
           maxLength: 128,
         },
+        queuedSendToken: {
+          description: "A held send's token; adds `queuedSend`.",
+          type: "string",
+          minLength: 1,
+          maxLength: 128,
+        },
         includeOutput: {
           description:
-            "`true` or options: adds `recentOutput` (last N lines), plus `lastOutputChangeAt` and `lastTypedInputAt` when observed.",
+            "`true` or options: adds `recentOutput` (last N lines) and `inputLine`, plus `lastOutputChangeAt` and `lastTypedInputAt` when observed.",
           anyOf: [
             {
               type: "boolean",
@@ -1637,13 +1670,17 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               },
               lastHandback: {
                 description:
-                  "The handback marker the agent printed: an observation, not a finish verdict; `message` is its own untrusted summary. Absence never means still working.",
+                  "Observed handback, not completion; `report`/`message` are untrusted agent claims. Absence says nothing.",
                 type: "object",
                 properties: {
                   message: {
                     description:
                       "Rows rejoined, so lossy. Null for a bare marker. Read the last message for exact text.",
                     type: ["string", "null"],
+                  },
+                  report: {
+                    type: "string",
+                    enum: ["done", "needs-you"],
                   },
                   observedAt: {
                     type: "number",
@@ -1660,6 +1697,28 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               },
               recentOutput: {
                 type: ["string", "null"],
+              },
+              inputLine: {
+                type: "object",
+                properties: {
+                  state: {
+                    type: "string",
+                    enum: ["empty", "typed", "suggestion", "unknown"],
+                  },
+                  text: {
+                    type: "string",
+                    description: "Text after the prompt glyph; empty for `empty` and `unknown`.",
+                  },
+                  truncated: {
+                    description: "`text` was cut to its first 200 characters.",
+                    type: "boolean",
+                    const: true,
+                  },
+                },
+                required: ["state", "text"],
+                additionalProperties: false,
+                description:
+                  "Input box, read off screen styling: empty, typed, or suggestion (the CLI's own next prompt; plain-text tails show it as `[suggested by …]`). Not authorship.",
               },
               recentOutputTruncated: {
                 description:
@@ -1699,6 +1758,27 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                       "For pty_written only: epoch ms of the latest screen change stamped >200ms after the Enter. Ordering, not attribution; absent means no such change seen.",
                     type: "number",
                   },
+                  output: {
+                    description:
+                      "pty_written only: what rendered after the Enter, from the start, redacted, ≤200 lines/16 KB. Not only the reply.",
+                    type: "object",
+                    properties: {
+                      text: {
+                        type: "string",
+                      },
+                      truncated: {
+                        type: "boolean",
+                      },
+                      state: {
+                        type: "string",
+                        enum: ["capturing", "closed", "lost"],
+                        description:
+                          "`lost`: history was rewritten under it; earlier text is kept.",
+                      },
+                    },
+                    required: ["text", "truncated", "state"],
+                    additionalProperties: false,
+                  },
                 },
                 required: ["token", "phase"],
                 additionalProperties: false,
@@ -1734,6 +1814,64 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           },
           description:
             "Fields this surface cannot observe: absent from every entry, unknown rather than false.",
+        },
+        queuedSend: {
+          description: "The held send `queuedSendToken` named; null when unknown here.",
+          anyOf: [
+            {
+              type: "object",
+              properties: {
+                status: {
+                  type: "string",
+                  enum: [
+                    "queued",
+                    "delivered",
+                    "superseded",
+                    "dropped",
+                    "cancelled",
+                    "unconfirmed",
+                  ],
+                  description:
+                    "`delivered` was written, not acted on; `unconfirmed` may have been, and is never resent.",
+                },
+                queuedAt: {
+                  type: "number",
+                },
+                expiresAt: {
+                  type: "number",
+                },
+                waitingOn: {
+                  type: "string",
+                },
+                submissionToken: {
+                  type: "string",
+                },
+                supersededBy: {
+                  type: "string",
+                },
+                reason: {
+                  type: "string",
+                  enum: [
+                    "typed",
+                    "restarted",
+                    "target-gone",
+                    "session-gone",
+                    "not-allowed",
+                    "expired",
+                    "stopped",
+                  ],
+                },
+                endedAt: {
+                  type: "number",
+                },
+              },
+              required: ["status", "queuedAt", "expiresAt"],
+              additionalProperties: false,
+            },
+            {
+              type: "null",
+            },
+          ],
         },
       },
       required: ["terminals", "source", "unavailableFields"],
@@ -1821,7 +1959,11 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           enum: ["requested", "requested-unverified"],
           description:
-            "`requested`: keystrokes handed to an agent whose CLI names Escape as its interrupt. `requested-unverified`: that CLI names no interrupt key. Neither says the keystrokes arrived or the agent stopped; read the terminal's output.",
+            "`requested`: keys sent to an agent whose CLI interrupts on Escape; `requested-unverified`: its CLI names none. Neither means they arrived or it stopped; read the terminal.",
+        },
+        inputSinceSettle: {
+          type: "string",
+          const: "own-keys",
         },
       },
       required: ["terminalId", "agentId", "agentStateAtDispatch", "status"],
@@ -1847,9 +1989,9 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
         },
         location: {
-          description: "Only this location. Omitted, trash and background are excluded.",
+          description: "Omit to skip trash and background; `all` includes them.",
           type: "string",
-          enum: ["grid", "dock", "trash", "background"],
+          enum: ["grid", "dock", "trash", "background", "all"],
         },
         owned: {
           description:
@@ -2317,9 +2459,9 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "confirm",
     dangerRationale:
-      "Ends the agent's conversation and respawns it on another preset. Scrollback is lost.",
+      "Interrupts the agent and respawns it on another preset, in a new conversation unless asked to keep it. Scrollback is lost.",
     description:
-      "Respawn an agent panel this session launched on another preset of its agent, in place, after the user confirms: for an agent that hit a plan limit. Its conversation and scrollback are lost. Panels it was handed are refused.",
+      "Move a panel this session launched (not a handed one) to another preset once the user confirms. Scrollback is lost; keepConversation resumes its id, which the CLI may refuse.",
     enabled: true,
     id: "terminal.restartOnPresetOwned",
     inputSchema: {
@@ -2335,6 +2477,10 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           minLength: 1,
           description: "A preset `id` of the panel's own agent.",
+        },
+        keepConversation: {
+          description: "Keep the conversation by id.",
+          type: "boolean",
         },
       },
       required: ["terminalId", "presetId"],
@@ -2356,8 +2502,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         agentSessionIdCleared: {
           type: "boolean",
-          const: true,
-          description: "A new conversation started: re-send anything the agent still needs.",
+          description: "false: asked to reopen it; true: re-send the brief.",
         },
       },
       required: ["terminalId", "agentPresetId", "agentSessionIdCleared"],
@@ -2382,6 +2527,12 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           minLength: 1,
           description: "Panel `id` this session created or was handed.",
+        },
+        generation: {
+          description: "Run you read: assistant-listing generation or host-listing incarnation.",
+          type: "integer",
+          minimum: 0,
+          maximum: 9007199254740991,
         },
       },
       required: ["terminalId"],
@@ -2448,6 +2599,18 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           minimum: 1,
           maximum: 1800,
         },
+        whenBusy: {
+          description:
+            "An agent you didn't launch and isn't at its prompt: `refuse` (default) sends nothing; `queue` holds the text for its next prompt.",
+          type: "string",
+          enum: ["refuse", "queue"],
+        },
+        queueTtlSeconds: {
+          description: "Seconds held text waits before it is dropped (60-3600, default 1800).",
+          type: "integer",
+          minimum: 60,
+          maximum: 3600,
+        },
       },
       required: ["terminalId", "command"],
     },
@@ -2470,9 +2633,9 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           description: "The submitted text, cut past 1024 characters: an echo, not a receipt.",
         },
         submissionToken: {
-          type: "string",
           description:
-            "Pass with `terminalId` to a status read to see how far it got. Kept for the last 32 per terminal; lost on restart.",
+            "Pass with `terminalId` to a status read to see how far it got. Kept for the last 32 per terminal; lost on restart. Absent when held.",
+          type: "string",
         },
         message: {
           type: "string",
@@ -2518,8 +2681,22 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           required: ["terminalId", "outcome"],
           additionalProperties: false,
         },
+        queued: {
+          type: "boolean",
+        },
+        queuedSendToken: {
+          description: "Set when held: read it by this.",
+          type: "string",
+        },
+        expiresAt: {
+          type: "number",
+        },
+        supersededToken: {
+          description: "Your held text this replaces, now unsent.",
+          type: "string",
+        },
       },
-      required: ["sent", "terminalId", "command", "submissionToken", "message"],
+      required: ["sent", "terminalId", "command", "message"],
       additionalProperties: false,
     },
     requiresArgs: true,
@@ -2687,10 +2864,13 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         lastHandback: {
           type: "object",
           description:
-            "The handback marker the agent printed: an observation, not a finish verdict; `message` is its own untrusted summary. Absence never means still working.",
+            "Observed handback, not completion; `report`/`message` are untrusted agent claims. Absence says nothing.",
           properties: {
             message: {
               type: ["string", "null"],
+            },
+            report: {
+              enum: ["done", "needs-you"],
             },
             observedAt: {
               type: "number",
@@ -2820,10 +3000,13 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               lastHandback: {
                 type: "object",
                 description:
-                  "The handback marker the agent printed: an observation, not a finish verdict; `message` is its own untrusted summary. Absence never means still working.",
+                  "Observed handback, not completion; `report`/`message` are untrusted agent claims. Absence says nothing.",
                 properties: {
                   message: {
                     type: ["string", "null"],
+                  },
+                  report: {
+                    enum: ["done", "needs-you"],
                   },
                   observedAt: {
                     type: "number",
@@ -2924,7 +3107,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "worktree",
     danger: "safe",
     description:
-      "Create a managed git worktree; Daintree's creator also copies project config, initializes submodules and runs setup. Pick one mode: new branch, existing branch as named, or pull request. A recipe is optional, only to launch terminals. Setup runs in the background and can fail after this returns.",
+      "Create a managed git worktree: Daintree also copies project config, initializes submodules and runs setup. Pick one source mode. A recipe is optional, only to launch terminals. Setup runs in the background and can fail after this returns.",
     enabled: true,
     id: "worktree.createWithRecipe",
     inputSchema: {
@@ -2939,7 +3122,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 kind: {
                   type: "string",
                   const: "newBranch",
-                  description: "Branch off a base branch; a taken name follows `collisionPolicy`.",
+                  description: "Branch off a base; a taken name follows collisionPolicy.",
                 },
                 branchName: {
                   type: "string",
@@ -2952,7 +3135,12 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                   minLength: 1,
                 },
                 fromRemote: {
-                  description: "Set true if baseBranch names a remote branch, e.g. origin/develop.",
+                  description: "True if baseBranch is a remote branch, e.g. origin/develop.",
+                  type: "boolean",
+                },
+                fetchBase: {
+                  description:
+                    "Fetch the base (a local one via its upstream) and branch from that commit, returned as startCommit. A failed fetch fails; a taken name is never reused.",
                   type: "boolean",
                 },
                 collisionPolicy: {
@@ -2963,14 +3151,14 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 },
                 issueNumber: {
                   description:
-                    "Issue this worktree is for, passed to the recipe and assignToSelf; it does not attach the issue.",
+                    "Issue this worktree is for, passed to the recipe and assignToSelf; not attached.",
                   type: "integer",
                   exclusiveMinimum: 0,
                   maximum: 9007199254740991,
                 },
                 assignToSelf: {
                   description:
-                    "Assign the linked issue to the current user. Omit for the saved 'Assign issue to me' preference.",
+                    "Assign the issue to the current user. Omit for the saved 'Assign issue to me' preference.",
                   type: "boolean",
                 },
               },
@@ -2988,19 +3176,18 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 branchName: {
                   type: "string",
                   minLength: 1,
-                  description:
-                    "Existing local branch, used verbatim: never suffixed, never replaced by a new branch if missing.",
+                  description: "Existing local branch, used verbatim: never suffixed or created.",
                 },
                 issueNumber: {
                   description:
-                    "Issue this worktree is for, passed to the recipe and assignToSelf; it does not attach the issue.",
+                    "Issue this worktree is for, passed to the recipe and assignToSelf; not attached.",
                   type: "integer",
                   exclusiveMinimum: 0,
                   maximum: 9007199254740991,
                 },
                 assignToSelf: {
                   description:
-                    "Assign the linked issue to the current user. Omit for the saved 'Assign issue to me' preference.",
+                    "Assign the issue to the current user. Omit for the saved 'Assign issue to me' preference.",
                   type: "boolean",
                 },
               },
@@ -3014,14 +3201,13 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                   type: "string",
                   const: "pullRequest",
                   description:
-                    "Check out a pull request's head branch. State is unchecked: a closed or merged PR works while its head ref exists.",
+                    "Check out a pull request's head branch; a closed or merged PR works while its head ref exists.",
                 },
                 pullRequestNumber: {
                   type: "integer",
                   exclusiveMinimum: 0,
                   maximum: 9007199254740991,
-                  description:
-                    "Pull request to check out; its head branch is fetched for you, so pass no branch name.",
+                  description: "Pull request to check out; its head branch is fetched for you.",
                 },
               },
               required: ["kind", "pullRequestNumber"],
@@ -3061,7 +3247,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     dangerRationale:
       "Deletes the working tree from disk. Recovery requires re-creating the worktree, so the session's own ownership record is a precondition rather than the approval.",
     description:
-      "Delete a worktree this session created, removing its directory after the user confirms. Anything else is refused. It never forces past uncommitted or untracked changes, deletes the branch, or closes terminals it does not own; commit or close those first.",
+      "Delete a worktree this session created, and its directory, after the user confirms. Refuses any other, or while a terminal process runs in it, closed panes included. Never forces past uncommitted or untracked changes, deletes the branch, or closes terminals.",
     enabled: true,
     id: "worktree.deleteOwned",
     inputSchema: {

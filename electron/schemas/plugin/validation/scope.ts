@@ -104,22 +104,24 @@ export function validateWorksWith(manifest: ParsedPluginManifest, ctx: z.Refinem
   }
 }
 
-// A project-local plugin runs out-of-process in the plugin worker, and
-// `host.registerForgeProvider` is unavailable there: forge providers
-// require synchronous host methods (`parseRemote`, the URL builders) that
-// cannot cross the worker's async message port — see the same refusal in
-// `pluginDevWorkerHostProxy.registerForgeProvider`. The contribution
-// would register a descriptor that can never be given an implementation,
-// so the provider would sit in Preferences permanently unbacked. Reject
-// the declaration rather than ship a forge provider that cannot work.
+// A project-local plugin runs out-of-process in the plugin worker, where
+// `host.registerForgeProvider` binds nothing: it logs a warning and resolves
+// a no-op disposer (`pluginDevWorkerContributionFacet.ts`), because forge
+// providers require synchronous host methods (`parseRemote`, the URL
+// builders) that cannot cross the worker's async message port. The
+// contribution would register a descriptor that can never be given an
+// implementation. Reject the declaration rather than ship a forge provider
+// that cannot work.
 //
 // Deliberately scoped to `scope: "project"` and not to every non-builtin
 // origin, even though `PluginService.activatePlugin` routes user plugins
 // through the same worker and so leaves their forge providers equally
 // unbacked. That is a pre-existing gap with shipped manifests behind it;
 // widening the rule would reject plugins that install today, which is its
-// own decision with its own migration. Project scope is new surface, so
-// it starts closed.
+// own decision with its own migration. Those providers are instead listed
+// as unavailable (`forgeProviderRegistry`'s `unavailableReason`), can't be
+// picked in Settings, and fail forge calls with that reason. Project scope
+// is new surface, so it starts closed.
 export function validateProjectRuntimeContributions(
   manifest: ParsedPluginManifest,
   ctx: z.RefinementCtx,
@@ -131,7 +133,7 @@ export function validateProjectRuntimeContributions(
       code: z.ZodIssueCode.custom,
       path: ["contributes", "forgeProviders"],
       message:
-        'contributes.forgeProviders is not available to a "scope": "project" plugin — forge providers need synchronous host methods (parseRemote, URL builders) that cannot cross the plugin worker\'s async message port, so host.registerForgeProvider would refuse the implementation and the provider could never resolve.',
+        'contributes.forgeProviders is not available to a "scope": "project" plugin — forge providers need synchronous host methods (parseRemote, URL builders) that cannot cross the plugin worker\'s async message port, so the worker\'s host.registerForgeProvider binds no implementation and the provider could never resolve.',
       params: { errorCode: "forge_provider_project_scope_forbidden" },
     });
   }

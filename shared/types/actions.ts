@@ -2,6 +2,9 @@ import type { BuiltInKeyAction } from "./keymap.js";
 import type { BuiltInRuntimeActionId } from "../config/actionIds.js";
 import type { z } from "zod";
 import type { CopyTreeRunSource } from "./ipc/copyTreeHistory.js";
+import type { GitPushReview } from "./git.js";
+import type { ScheduledRunRef } from "./scheduledRunRef.js";
+import type { HostApprovedPluginPresetLaunch } from "../utils/agentPresetLaunchConsent.js";
 
 export type ActionSource = "user" | "keybinding" | "menu" | "agent" | "context-menu" | "plugin";
 
@@ -207,12 +210,65 @@ export interface ActionContext {
    */
   hostApprovedRecipeRun?: HostApprovedRecipeRun;
   /**
+   * The push a human approved in the host confirm dialog (#15646). Set by
+   * `ActionService.dispatch` from {@link ActionDispatchOptions.hostApprovedPush}
+   * on the same terms as {@link hostApprovedRecipeRun}: host-only, never on any
+   * `argsSchema`, and stamped over whatever a `contextOverride` claimed.
+   *
+   * Present means the dialog showed this branch at this commit going to this
+   * destination, and `git.push` hands exactly that to the push, which refuses if
+   * the worktree has moved since. Absent means no dialog previewed this push —
+   * an unconfirmed call or a standing automation grant — and the push runs on
+   * the worktree as it is, as it always has for those.
+   */
+  hostApprovedPush?: HostApprovedPush;
+  /**
+   * The user-preset write a human approved in the host confirm dialog (#16047),
+   * as the fingerprint of the change it previewed. Set by
+   * `ActionService.dispatch` from
+   * {@link ActionDispatchOptions.hostApprovedPresetWrite} on the same terms as
+   * {@link hostApprovedPush}. The write refuses when its own plan, made after
+   * every await, no longer matches. Absent means no dialog previewed it (a
+   * grant or the skip preference), and it is written as planned.
+   */
+  hostApprovedPresetWrite?: string;
+  /**
+   * When main gives up on the agent dispatch running this action, as epoch ms
+   * on this machine's clock (#15648). Set by `ActionService.dispatch` from
+   * {@link ActionDispatchOptions.dispatchDeadlineAt} on the same terms as
+   * {@link hostApprovedRecipeRun}: host-only, stamped over whatever a
+   * `contextOverride` claimed, and deliberately left out of the launch-time
+   * `ActionContextSchema` snapshot, since one call's deadline means nothing to
+   * the next.
+   *
+   * Past it the caller has already been told the call timed out, so an action
+   * that would start something after waiting on a person (a recipe's
+   * panel-limit confirm) must give up instead. Absent for every dispatch with
+   * no deadline behind it.
+   */
+  dispatchDeadlineAt?: number;
+  /**
    * The plugin behind a `"plugin"` dispatch, stamped by `ActionService.dispatch`
    * from {@link ActionDispatchOptions.callerPluginId} and absent for every other
    * source, so a `contextOverride` can't claim one. Lets an action hold a plugin
    * to its own contributions (`layout.apply`, #13780).
    */
   callerPluginId?: string;
+  /**
+   * The preset a person approved this plugin's launch on (#16324), stamped by
+   * `ActionService.dispatch` from
+   * {@link ActionDispatchOptions.hostApprovedPluginPresetLaunch} for `"plugin"`
+   * dispatches only. The launch refuses unless the preset it resolves has
+   * exactly the approved content.
+   */
+  hostApprovedPluginPresetLaunch?: HostApprovedPluginPresetLaunch;
+  /**
+   * The scheduled run a launch is for (#15977), stamped by
+   * `ActionService.dispatch` from {@link ActionDispatchOptions.scheduledRun}
+   * over whatever a `contextOverride` carried. Host-only: it is what marks a
+   * terminal `spawnedBy: "schedule"`, which no action argument can claim.
+   */
+  scheduledRun?: ScheduledRunRef;
 }
 
 /**
@@ -238,6 +294,17 @@ export interface ActionContext {
  * something else, so the run reports every index as a failure and the caller
  * asks again (#8331).
  */
+/**
+ * A push a host confirmation previewed and a human approved (#15646): the
+ * worktree it was read in, and the branch, commit and destination it showed.
+ * `cwd` rides along so the action can refuse an approval for one worktree
+ * being spent on another.
+ */
+export interface HostApprovedPush {
+  cwd: string;
+  review: GitPushReview;
+}
+
 export interface HostApprovedRecipeRun {
   /** The recipe the dialog previewed, after shadow resolution (#8725). */
   recipeId: string;
@@ -549,6 +616,12 @@ export type ActionErrorCode =
    * see this code — main collapses it into the ordinary miss for them.
    */
   | "TERMINAL_IN_OTHER_PROJECT"
+  /**
+   * A send was refused because the terminal's agent was last observed waiting
+   * on a choice dialog (#16209): text typed there picks an option or is lost.
+   * Nothing was sent. Answer the dialog with keys, or send once it is gone.
+   */
+  | "TERMINAL_CHOICE_DIALOG"
   | "INVALID_URL"
   /**
    * A plugin on a remote host dispatched an action while no frontend drives
@@ -597,6 +670,26 @@ export interface ActionDispatchOptions {
    */
   hostApprovedRecipeRun?: HostApprovedRecipeRun;
   /**
+   * Trusted record of the push a host confirmation previewed and a human
+   * approved — NOT a client-supplied value. See
+   * {@link ActionContext.hostApprovedPush}. Set only by the MCP renderer bridge,
+   * from the preview the approver actually read.
+   */
+  hostApprovedPush?: HostApprovedPush;
+  /**
+   * Trusted fingerprint of the user-preset write a host confirmation previewed
+   * and a human approved — NOT a client-supplied value. See
+   * {@link ActionContext.hostApprovedPresetWrite}. Set only by the MCP renderer
+   * bridge.
+   */
+  hostApprovedPresetWrite?: string;
+  /**
+   * Main's deadline for the MCP dispatch this runs — NOT a client-supplied
+   * value. See {@link ActionContext.dispatchDeadlineAt}. Set only by the MCP
+   * renderer bridge, from the deadline main sent or the run budget it granted.
+   */
+  dispatchDeadlineAt?: number;
+  /**
    * The plugin making a `source: "plugin"` dispatch — NOT a plugin-supplied
    * value. Set by the host from the plugin host's own closure (the
    * `host.dispatch` bridge) or the view it rendered (the plugin kit). It
@@ -605,6 +698,20 @@ export interface ActionDispatchOptions {
    * other source.
    */
   callerPluginId?: string;
+  /**
+   * Main's consent for a plugin's `agent.launch` on one preset (#16324) — NOT
+   * a plugin-supplied value. Set only by the plugin bridge, from the dispatch
+   * envelope main built after the person approved the preset. Ignored for
+   * every other source.
+   */
+  hostApprovedPluginPresetLaunch?: HostApprovedPluginPresetLaunch;
+  /**
+   * The scheduled run a launch is for (#15977) — NOT a client- or
+   * plugin-supplied value. Set only by Daintree's own scheduled launch, and by
+   * a pane continuing a launch that already carried one. The MCP and plugin
+   * bridges never set it. See {@link ActionContext.scheduledRun}.
+   */
+  scheduledRun?: ScheduledRunRef;
 }
 
 export interface ActionDispatchPayload {

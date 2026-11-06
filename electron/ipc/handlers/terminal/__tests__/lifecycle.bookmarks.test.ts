@@ -197,6 +197,21 @@ describe("prepareBookmark handler", () => {
     expect(result).toEqual({ record });
   });
 
+  it("names a scheduled run's ids on the bookmark record (#15977)", async () => {
+    const run = { scheduleId: "schedule-1", runId: "run-1" };
+    ptyClient.getTerminalAsync.mockResolvedValue({ ...agentInfo, scheduledRun: run });
+    ptyClient.gracefulKill.mockResolvedValue("sess-abc");
+    m.journalAgentSessionRecord.mockResolvedValue({ sessionId: "sess-abc" });
+    register();
+
+    await handlerFor(CHANNELS.AGENT_SESSION_PREPARE_BOOKMARK)(
+      {},
+      { terminalId: "term-1", label: "L" }
+    );
+
+    expect(m.journalAgentSessionRecord.mock.calls[0][0].scheduledRun).toEqual(run);
+  });
+
   it("rejects NOT_BOOKMARKABLE for a non-agent terminal", async () => {
     ptyClient.getTerminalAsync.mockResolvedValue({ id: "term-9", cwd: "/repo" });
     register();

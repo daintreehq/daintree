@@ -89,6 +89,7 @@ const {
     // above project this same flat object as that lane.
     activeSlot: 0,
     sessions: {} as Record<number, unknown>,
+    globalSelected: false,
     isOpen: true,
     width: 380,
     terminalId: null as string | null,
@@ -175,6 +176,9 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   ),
   DropdownMenuSeparator: () => <hr />,
   DropdownMenuCheckboxItem: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuRadioGroup: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuRadioItem: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuMeta: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
 }));
 
 // The session tabs' per-lane menu is incidental here, and the real primitive
@@ -285,6 +289,8 @@ vi.mock("@/utils/logger", () => ({
 vi.mock("@/utils/safeFireAndForget", () => ({
   safeFireAndForget: (promise: Promise<unknown>) => promise,
 }));
+
+vi.mock("../GlobalAssistantPane", () => ({ GlobalAssistantPane: () => null }));
 
 vi.mock("@/store/helpPanelStore", () => {
   const store = (selector?: (state: typeof helpPanelState) => unknown) =>
@@ -472,6 +478,7 @@ function agentIconMarkerIn(container: Element | null): string | null {
 }
 
 function resetState() {
+  helpPanelState.globalSelected = false;
   helpPanelState.isOpen = true;
   helpPanelState.width = 380;
   helpPanelState.terminalId = null;
@@ -1331,6 +1338,116 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     );
   });
 
+  it("resumes a lane only once it is the one on screen, never behind Global (#16099)", async () => {
+    // A cold view a project switch opened with Global on screen: the lane's
+    // captured session waits until the person turns to that lane.
+    helpPanelState.globalSelected = true;
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.terminalId = null;
+    helpPanelState.hibernateSessions = {
+      [slotKey("proj-1", 0)]: { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
+    };
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockProvisionSession.mockResolvedValue({
+      sessionId: "fresh-session",
+      sessionPath: "/tmp/help/proj-1",
+      token: "tok",
+      mcpUrl: "http://localhost:1234",
+      windowId: 1,
+    });
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("resumed-term-1");
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+      panelWasOpen: true,
+    });
+    mockTakePendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+      claimId: "claim-1",
+    });
+
+    let view: ReturnType<typeof render> | undefined;
+    await act(async () => {
+      view = render(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+    expect(helpPanelState.setOpen).not.toHaveBeenCalled();
+    expect(mockTakePendingHibernation).not.toHaveBeenCalled();
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+
+    helpPanelState.globalSelected = false;
+    await act(async () => {
+      view!.rerender(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "claude --resume abc-123" })
+    );
+  });
+
+  it("holds an armed resume while Global is on screen and fires it once back on the lane (#16099)", async () => {
+    // Armed on the lane with the panel still closed, then Global is chosen
+    // before the panel opens: nothing launches behind it.
+    helpPanelState.isOpen = false;
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.terminalId = null;
+    helpPanelState.hibernateSessions = {
+      [slotKey("proj-1", 0)]: { sessionId: "abc-123", cwd: "/tmp/help/proj-1", agentId: "claude" },
+    };
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockProvisionSession.mockResolvedValue({
+      sessionId: "fresh-session",
+      sessionPath: "/tmp/help/proj-1",
+      token: "tok",
+      mcpUrl: "http://localhost:1234",
+      windowId: 1,
+    });
+    panelStoreState.addPanel = vi.fn().mockResolvedValue("resumed-term-1");
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+      panelWasOpen: true,
+    });
+    mockTakePendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+      claimId: "claim-1",
+    });
+
+    let view: ReturnType<typeof render> | undefined;
+    await act(async () => {
+      view = render(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+    expect(helpPanelState.setOpen).toHaveBeenCalledWith(true);
+
+    helpPanelState.globalSelected = true;
+    helpPanelState.isOpen = true;
+    await act(async () => {
+      view!.rerender(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+    expect(mockTakePendingHibernation).not.toHaveBeenCalled();
+    expect(panelStoreState.addPanel).not.toHaveBeenCalled();
+
+    helpPanelState.globalSelected = false;
+    await act(async () => {
+      view!.rerender(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+    expect(panelStoreState.addPanel).toHaveBeenCalledTimes(1);
+    expect(panelStoreState.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "claude --resume abc-123" })
+    );
+  });
+
   it("consumes the pending entry via takePendingHibernation and RESUMES (peek→take→resume handoff)", async () => {
     // The cold-restore peek is non-consuming; the real handoff is the
     // controller's atomic takePendingHibernation, which seeds the hibernate slot
@@ -2146,11 +2263,14 @@ describe("HelpPanel — assistant header state indicator", () => {
     expect(announcer.getAttribute("data-agent-state")).toBe("working");
     expect(announcer.getAttribute("role")).toBe("status");
     expect(announcer.textContent).toBe("Assistant is working");
-    // Exactly one working marker on screen, and it belongs to a tab — not zero (the
-    // state would be invisible) and not two (the header would be drawing it again).
-    const markers = container.querySelectorAll(".animate-spin-slow");
-    expect(markers).toHaveLength(1);
-    expect(markers[0]!.closest('[role="tab"]')).not.toBeNull();
+    // Exactly one working marker on the closed strip, on the session picker: not zero
+    // (the state would be invisible) and not two (the header drawing it again). The
+    // mocked menu renders its rows inline, so only the trigger and the header count.
+    const markers = Array.from(container.querySelectorAll(".animate-spin-slow"));
+    const onPicker = markers.filter((m) => m.closest("[data-session-picker]"));
+    const outsideStrip = markers.filter((m) => !m.closest("[data-session-strip]"));
+    expect(onPicker).toHaveLength(1);
+    expect(outsideStrip).toHaveLength(0);
   });
 
   it("announces nothing for idle, completed, or exited states", () => {
@@ -2253,5 +2373,43 @@ describe("HelpPanel — cold-view lane restore (#12108)", () => {
 
     expect(mockListPendingHibernationSlots).not.toHaveBeenCalled();
     expect(helpPanelState.ensureSlot).not.toHaveBeenCalled();
+  });
+
+  it("adds a tab for the lane a schedule's Assistant started in, as its run is recorded (#16169)", async () => {
+    helpPanelState.terminalId = "term-live";
+    helpPanelState.agentId = "claude";
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    const listeners: Array<(payload: { projectId: string; scheduleIds: string[] }) => void> = [];
+    const electron = (window as unknown as { electron: Record<string, unknown> }).electron;
+    electron.events = {
+      on: vi.fn((channel: string, listener: (typeof listeners)[number]) => {
+        if (channel === "scheduled-runs:changed") listeners.push(listener);
+        return () => listeners.splice(listeners.indexOf(listener), 1);
+      }),
+    };
+    mockListPendingHibernationSlots.mockResolvedValue([1]);
+
+    try {
+      await act(async () => {
+        render(<HelpPanel width={380} />);
+      });
+      await flushAsyncWork();
+      expect(mockListPendingHibernationSlots).not.toHaveBeenCalled();
+
+      await act(async () => {
+        for (const listener of listeners) listener({ projectId: "other", scheduleIds: ["s"] });
+      });
+      await flushAsyncWork();
+      expect(mockListPendingHibernationSlots).not.toHaveBeenCalled();
+
+      await act(async () => {
+        for (const listener of listeners) listener({ projectId: "proj-1", scheduleIds: ["s"] });
+      });
+      await flushAsyncWork();
+      expect(mockListPendingHibernationSlots).toHaveBeenCalledWith("proj-1");
+      expect(helpPanelState.ensureSlot).toHaveBeenCalledWith(1);
+    } finally {
+      delete electron.events;
+    }
   });
 });

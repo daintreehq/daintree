@@ -27,18 +27,23 @@ const ZERO: Record<AgentState, number> = {
 /**
  * The states the cluster can actually be handed: what
  * `getTerminalAgentDisplayState` passes through, plus the settled and unread
- * marks a hand-back draws.
+ * marks a hand-back draws and the blocked mark of an error wait.
  */
-const REACHABLE = ["working", "directing", "waiting", "unread", "completed"] as const;
+const REACHABLE = ["working", "directing", "blocked", "waiting", "unread", "completed"] as const;
 const ALL_REACHABLE = { working: 1, directing: 1, waiting: 1, completed: 1 };
 
 /** The drawn glyph: an svg ring, or the CSS-drawn spinner box. */
 const glyphOf = (seg: Element): Element => seg.querySelector("svg, [data-glyph-box]")!;
 
-function renderCluster(byState: Partial<Record<AgentState, number>>, total?: number, unread = 0) {
+function renderCluster(
+  byState: Partial<Record<AgentState, number>>,
+  total?: number,
+  unread = 0,
+  blocked = 0
+) {
   const counts = { ...ZERO, ...byState };
-  const sum = total ?? Object.values(counts).reduce((a, b) => a + b, 0) + unread;
-  const summary = summarizeSessionStates(counts, sum, unread);
+  const sum = total ?? Object.values(counts).reduce((a, b) => a + b, 0) + unread + blocked;
+  const summary = summarizeSessionStates(counts, sum, unread, blocked);
   render(
     <TooltipProvider delayDuration={0}>
       <button type="button">
@@ -101,6 +106,17 @@ describe("summarizeSessionStates", () => {
     expect(breakdown).toBe("1 waiting, 2 unread, 2 finished");
     expect(visibleStates.map((v) => v.state)).toEqual(["waiting", "unread", "completed"]);
   });
+
+  it("names error waits blocked, apart from waiting and ranked above it", () => {
+    const { breakdown, visibleStates } = summarizeSessionStates(
+      { ...ZERO, working: 1, waiting: 1 },
+      4,
+      0,
+      2
+    );
+    expect(breakdown).toBe("1 working, 2 blocked, 1 waiting");
+    expect(visibleStates.map((v) => v.state)).toEqual(["working", "blocked", "waiting"]);
+  });
 });
 
 describe("CollapsedSessionIndicators", () => {
@@ -135,7 +151,7 @@ describe("CollapsedSessionIndicators", () => {
   });
 
   it("gives every reachable state its own glyph shape, so forced colors can still tell them apart", () => {
-    const { segments } = renderCluster(ALL_REACHABLE, undefined, 1);
+    const { segments } = renderCluster(ALL_REACHABLE, undefined, 1, 1);
     expect(segments.map((s) => s.dataset.state).sort()).toEqual([...REACHABLE].sort());
     const shapes = segments.map((seg) => {
       const glyph = glyphOf(seg);
@@ -181,7 +197,7 @@ describe("CollapsedSessionIndicators", () => {
     const stateHues = new Set<string>(
       REACHABLE.map((state) => SESSION_COLORS[state]).filter((c) => !isNeutral(c))
     );
-    const { segments } = renderCluster(ALL_REACHABLE, undefined, 1);
+    const { segments } = renderCluster(ALL_REACHABLE, undefined, 1, 1);
     for (const seg of segments) {
       const count = seg.querySelector(".tabular-nums")!;
       const inherited = [seg, count].flatMap((el) => (el.getAttribute("class") ?? "").split(/\s+/));
@@ -201,6 +217,27 @@ describe("CollapsedSessionIndicators", () => {
       expect(hued[0]!.tagName.toLowerCase()).not.toBe("svg");
       expect(hued[0]!.contains(glyphOf(seg))).toBe(true);
     }
+  });
+
+  it("keeps the blocked group on a cramped row when nothing is waiting", () => {
+    const summary = summarizeSessionStates({ ...ZERO, working: 2 }, 3, 0, 1);
+    render(
+      <TooltipProvider delayDuration={0}>
+        <CollapsedSessionIndicators
+          visibleStates={summary.visibleStates}
+          sessionAriaLabel={summary.label}
+          secondaryClassName="secondary"
+        />
+      </TooltipProvider>
+    );
+    const segments = Array.from(
+      screen
+        .getByTestId("collapsed-session-indicators")
+        .querySelectorAll<HTMLElement>("[data-state]")
+    );
+    // Drawn last, at the ring's x, and the one segment a cramped row keeps.
+    expect(segments.map((s) => s.dataset.state)).toEqual(["working", "blocked"]);
+    expect(segments.map((s) => s.classList.contains("secondary"))).toEqual([true, false]);
   });
 
   it("puts the full name, total included, in the tooltip", async () => {

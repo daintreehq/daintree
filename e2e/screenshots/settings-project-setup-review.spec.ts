@@ -453,9 +453,9 @@ async function captureValidation(page: Page): Promise<void> {
     const p = panel(page, "project:variables");
     const add = p.getByRole("button", { name: "Add variable" });
     await add.click();
-    await p.getByLabel("Environment variable name").last().fill("2FAST_MODE");
+    await p.getByLabel("Name of variable").last().fill("2FAST_MODE");
     await add.click();
-    await p.getByLabel("Environment variable name").last().fill("DATABASE_URL");
+    await p.getByLabel("Name of variable").last().fill("DATABASE_URL");
     await p.getByRole("button", { name: "Save", exact: true }).click();
     await capturePage(page, "validation", "project:variables", [
       "Start with a letter or underscore",
@@ -468,8 +468,8 @@ async function captureValidation(page: Page): Promise<void> {
     await openSettingsAt(page, "environment");
     const p = panel(page, "environment");
     await p.getByRole("button", { name: "Add variable" }).first().click();
-    await p.getByLabel("Environment variable name").last().fill("MY-KEY");
-    await p.getByLabel("Environment variable value").last().fill("on");
+    await p.getByLabel("Name of variable").last().fill("MY-KEY");
+    await p.getByLabel("Value of").last().fill("on");
     await p.getByRole("button", { name: "Save", exact: true }).click();
     await capturePage(page, "validation", "environment", ["Start with a letter or underscore"]);
     await p.getByRole("button", { name: "Discard" }).click();

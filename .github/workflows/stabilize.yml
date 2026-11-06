@@ -9,9 +9,10 @@ name: Stabilize
 # the skill reads to distinguish real regressions from E2E flakes and to scope
 # intelligent re-runs (job re-run with `--test-list`, or `e2e-single.yml`).
 #
-# What it runs: check (typecheck/lint/format), unit, integration, build + smoke,
-# and the full Playwright surface — core, all seven full-* buckets, and
-# the nightly memory-leak suite — across the platforms selected by `platform`.
+# What it runs: check (typecheck/lint/format), unit, the perf scenario liveness
+# guard, integration, build + smoke, and the full Playwright surface — core, all
+# seven full-* buckets, and the nightly memory-leak suite — across the platforms
+# selected by `platform`.
 # Nightly BINARY publishing has moved to `nightly-publish.yml`; this workflow
 # never publishes. knip is NOT here: it is a static, OS-agnostic report the
 # skill runs once on the local Mac.
@@ -43,7 +44,7 @@ on:
           - non-windows
           - macos
       only:
-        description: "Scoped re-run: space- or comma-separated pieces to run; empty = everything. Pieces: check test build integration core full-terminal full-worktree full-presets full-platform full-panels full-resilience full-plugins nightly. Aliases: full (all seven full-* buckets), e2e (every E2E suite). Example: `test full-terminal`."
+        description: "Scoped re-run: space- or comma-separated pieces to run; empty = everything. Pieces: check test perf-liveness build integration core full-terminal full-worktree full-presets full-platform full-panels full-resilience full-plugins nightly. Aliases: full (all seven full-* buckets), e2e (every E2E suite). Example: `test full-terminal`."
         type: string
         default: ""
       test_files:
@@ -88,10 +89,11 @@ jobs:
         env:
           ONLY: ${{ inputs.only }}
           PLATFORM: ${{ inputs.platform || 'linux-windows' }}
+          TEST_FILES: ${{ inputs.test_files }}
         run: |
           set -euo pipefail
           ALL_FULL="full-terminal full-worktree full-presets full-platform full-panels full-resilience full-plugins"
-          ALL="check test build integration core $ALL_FULL nightly"
+          ALL="check test perf-liveness build integration core $ALL_FULL nightly"
           # No globbing: tokens are compared as literals, never expanded.
           set -f
           TOKENS=$(tr -s ',[:space:]' ' ' <<< "$ONLY")
@@ -126,6 +128,15 @@ jobs:
             *)             INTEGRATION=$(has integration) ;;
           esac
 
+          # The liveness guard leaves the unit shards only to keep it off their
+          # tail. A focused test_files run replaces the whole unit surface, so it
+          # leaves the guard out too unless `only` names it.
+          if [ -n "$TEST_FILES" ] && [ "$EXPLICIT" = false ]; then
+            LIVENESS=false
+          else
+            LIVENESS=$(has perf-liveness)
+          fi
+
           FULL_SUITES=$(for s in $ALL_FULL; do if [ "$(has "$s")" = true ]; then echo "$s"; fi; done | jq -R . | jq -sc .)
           RUN_FULL=$(jq 'length > 0' <<< "$FULL_SUITES")
           RUN_E2E=false
@@ -134,10 +145,12 @@ jobs:
           fi
 
           EXPECTED=$(jq -nc \
-            --argjson check "$(has check)" --argjson test "$(has test)" --argjson build "$(has build)" \
+            --argjson check "$(has check)" --argjson test "$(has test)" --argjson liveness "$LIVENESS" \
+            --argjson build "$(has build)" \
             --argjson integration "$INTEGRATION" --argjson e2ebuild "$RUN_E2E" --argjson core "$(has core)" \
             --argjson full "$RUN_FULL" --argjson nightly "$(has nightly)" \
-            '{"matrix-setup": true, check: $check, test: $test, build: $build, "integration-test": $integration,
+            '{"matrix-setup": true, check: $check, test: $test, "perf-liveness": $liveness, build: $build,
+              "integration-test": $integration,
               "e2e-build": $e2ebuild, "e2e-core": $core, "e2e-full": $full, "e2e-nightly": $nightly}')
 
           # A selection that resolves to nothing (e.g. `only=integration` on a
@@ -258,9 +271,17 @@ jobs:
         if: matrix.os != 'windows-2022'
         run: node scripts/ci/npm-ci-retry.mjs
 
+      # The binary pluginSdkResolution.electron.test.ts runs under; Electron's
+      # npm package only downloads it on first use.
+      - name: Provision Electron binary
+        run: node scripts/ci/verify-electron-install.mjs
+
+      # The perf liveness guard runs in its own job below, as in ci.yml: it
+      # spawns a child per scenario, one at a time on Windows, and inside a
+      # shard it took over 20 minutes beside Vitest's own workers.
       - name: Test (shard)
         if: inputs.test_files == ''
-        run: npm run test -- --shard=${{ matrix.shard }}/${{ matrix.shards }}
+        run: npm run test -- --shard=${{ matrix.shard }}/${{ matrix.shards }} --exclude scripts/perf/__tests__/scenarioLiveness.test.ts
 
       - name: Test focused files
         if: inputs.test_files != ''
@@ -274,6 +295,50 @@ jobs:
             [[ "$file" != -* && -f "$file" && ( "$file" == *.test.ts || "$file" == *.test.tsx || "$file" == *.test.mjs ) ]] || exit 1
           done
           npm run test -- "${files[@]}"
+
+  # Drives every perf scenario's run() once in a child process. The timeout
+  # covers the install plus the file's own 30-minute bracket on Windows, so a
+  # hung scenario is reported by the test rather than cut off by the runner.
+  perf-liveness:
+    needs: matrix-setup
+    if: fromJSON(needs.matrix-setup.outputs.expected)['perf-liveness']
+    runs-on: ${{ matrix.os }}
+    name: Perf scenario liveness (${{ matrix.name }})
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.matrix-setup.outputs.matrix) }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          # Ubuntu packages only: unrelated third-party indexes can be inconsistent.
+          test -s /etc/apt/sources.list
+          sudo apt-get -o Dir::Etc::sourceparts=- update
+          sudo apt-get -o Dir::Etc::sourceparts=- install -y libarchive-tools
+
+      - name: Install dependencies (Windows)
+        if: matrix.os == 'windows-2022'
+        run: node scripts/ci/npm-ci-retry.mjs
+        env:
+          npm_config_msvs_version: "2022"
+
+      - name: Install dependencies
+        if: matrix.os != 'windows-2022'
+        run: node scripts/ci/npm-ci-retry.mjs
+
+      - name: Test (perf scenario liveness)
+        run: npx vitest run scripts/perf/__tests__/scenarioLiveness.test.ts
 
   # Production build + launch smoke on each platform. No packaging, signing, or
   # publishing here — that surface lives in the release dry-runs
@@ -580,6 +645,7 @@ jobs:
         matrix-setup,
         check,
         test,
+        perf-liveness,
         build,
         integration-test,
         e2e-build,

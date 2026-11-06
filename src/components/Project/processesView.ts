@@ -24,6 +24,9 @@ export interface TerminalGroup {
 
 const UNOWNED_KEY = "\u0000unowned";
 
+/** The key of the "No project" group, which sorts last whatever it weighs. */
+export const UNOWNED_GROUP_KEY = UNOWNED_KEY;
+
 /** What the row is, as observed — the launch hint only when nothing was detected. */
 export function describeTerminalKind(terminal: ProcessInventoryTerminal): string {
   if (terminal.isAssistantTerminal) return "Assistant";
@@ -102,6 +105,11 @@ function rowMetric(row: ProjectProcessRow, sort: ProcessSort): number {
   return (sort === "cpu" ? row.closed.cpuPercent : row.closed.memoryKb) ?? -1;
 }
 
+/** A group's heaviest row under the sort, or -1 when nothing in it was sampled. */
+export function groupTopMetric(group: ProjectProcessGroup, sort: ProcessSort): number {
+  return group.rows.length > 0 ? rowMetric(group.rows[0]!, sort) : -1;
+}
+
 /**
  * Everything a project owns in one place: named projects first, "No project"
  * last, live terminals and closed leftovers ranked together by memory.
@@ -136,10 +144,12 @@ export function groupProcessesByProject(
       ...group.closed.map((closed) => ({ kind: "closed" as const, closed })),
     ].sort((a, b) => rowMetric(b, sort) - rowMetric(a, sort));
   }
+  // Ranked by each group's heaviest row, so the heaviest thing running is the
+  // first row under the sort, not wherever its project falls alphabetically.
   return [...groups.values()].sort((a, b) => {
     if (a.key === UNOWNED_KEY) return 1;
     if (b.key === UNOWNED_KEY) return -1;
-    return a.label.localeCompare(b.label);
+    return groupTopMetric(b, sort) - groupTopMetric(a, sort) || a.label.localeCompare(b.label);
   });
 }
 
@@ -181,7 +191,9 @@ export function unaccountedCores(
     if (process.cpuPercent === null) return null;
     listedPercent += process.cpuPercent;
   }
-  return Math.max(0, hostBusyCores - listedPercent / 100);
+  const remainder = hostBusyCores - listedPercent / 100;
+  // Below a tenth of a core the rows account for everything a reading can show.
+  return remainder < 0.05 ? null : remainder;
 }
 
 export function formatApproxMemory(memoryKb: number): string {
@@ -248,17 +260,69 @@ export function indexTerminalBuffers(
   return out;
 }
 
-/** "Buffer ~25 MB est. · 10,000 + 40 lines × 182 cols", aged when not current. */
+/**
+ * "Buffer ~25 MB est. · 10,000 lines + 40 alternate × 182 cols", aged when not
+ * current: the whole reading, for the row's detail rather than its cell.
+ */
 export function describeTerminalBuffer(reading: TerminalBufferReading): string {
   const lines =
     reading.alternateLines > 0
-      ? `${reading.normalLines.toLocaleString()} + ${pluralize(reading.alternateLines, "line")}`
+      ? `${pluralize(reading.normalLines, "line")} + ${reading.alternateLines.toLocaleString()} alternate`
       : pluralize(reading.normalLines, "line");
   const copies = reading.copies > 1 ? ` · ${reading.copies} windows` : "";
   const base = `Buffer ${formatBufferEstimate(reading.estimatedBytes)} est.${copies} · ${lines} × ${reading.cols} cols`;
   return reading.status === "last-known" && reading.ageMs !== null
     ? `${base} · from ${formatAgo(reading.ageMs)}`
     : base;
+}
+
+/**
+ * A memory reading for a table cell, where the column says it is sampled: the
+ * figure alone ("973 MB", "1.2 GB"), never rounded down to nothing.
+ */
+export function formatMemoryCell(memoryKb: number): string {
+  if (!Number.isFinite(memoryKb) || memoryKb < 0) return "—";
+  const mb = memoryKb / 1024;
+  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
+  return `${Math.max(1, Math.round(mb))} MB`;
+}
+
+/**
+ * A tree's CPU for a table cell, in cores to one decimal so the column's
+ * points line up: "0.3", "0.0", "<0.1" for a trace that rounds away.
+ */
+export function formatCpuCell(cpuPercent: number): string {
+  const cores = cpuPercent / 100;
+  if (!Number.isFinite(cores) || cores < 0) return "—";
+  const rounded = Math.round(cores * 10) / 10;
+  if (rounded === 0 && cores > 0) return "<0.1";
+  return rounded.toFixed(1);
+}
+
+/** A buffer estimate for a table cell: "14 MB", "<1 MB", "1.1 GB". */
+export function formatBufferCell(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "—";
+  return formatBufferEstimate(bytes).replace(/^~/, "");
+}
+
+/** The last path segment of a working directory, which is how a worktree is named on disk. */
+export function cwdLeaf(cwd: string): string | null {
+  const leaf = cwd
+    .replace(/[\\/]+$/, "")
+    .split(/[\\/]/)
+    .pop();
+  return leaf && leaf !== "~" ? leaf : null;
+}
+
+/**
+ * A process's name as a reader would say it, or null when `comm` carries none:
+ * Claude Code retitles its process to ".", and ps brackets a name it couldn't
+ * read ("(node)"). Both used to lead the row's process list as punctuation.
+ */
+export function processName(comm: string): string | null {
+  const base = (comm.trim().split(/[\\/]/).pop() ?? "").replace(/^\((.*)\)$/, "$1").trim();
+  if (base === "" || base === "." || base === "..") return null;
+  return base;
 }
 
 /** A process tree's ps %cpu, where 100 is one core. */
@@ -273,8 +337,8 @@ export function formatCpu(cpuPercent: number): string {
 export function describeMembers(sample: ProcessTreeSample, limit = 4): string {
   const names: string[] = [];
   for (const member of [...sample.members].sort((a, b) => b.memoryKb - a.memoryKb)) {
-    const name = member.comm.split(/[\\/]/).pop() || member.comm;
-    if (!names.includes(name)) names.push(name);
+    const name = processName(member.comm);
+    if (name !== null && !names.includes(name)) names.push(name);
   }
   const shown = names.slice(0, limit);
   const hidden = sample.processCount - shown.length;
@@ -373,7 +437,7 @@ export function describeClosedMembers(
 ): string {
   const names: string[] = [];
   for (const process of processes) {
-    const name = process.comm || `PID ${process.pid}`;
+    const name = processName(process.comm) ?? `PID ${process.pid}`;
     if (!names.includes(name)) names.push(name);
   }
   const shown = names.slice(0, limit);
@@ -420,7 +484,7 @@ export function describeCleanupReport(report: ProcessCleanupReport | null): {
   }
   if (report.stillRunning > 0) {
     parts.push(
-      `${pluralize(report.stillRunning, "process was", "processes were")} still running after being signalled.`
+      `${pluralize(report.stillRunning, "process was", "processes were")} still running after being asked to stop.`
     );
   }
   if (report.unchecked > 0) {

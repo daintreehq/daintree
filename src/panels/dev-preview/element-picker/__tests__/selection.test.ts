@@ -6,6 +6,7 @@ import {
   componentsOf,
   elementPlace,
   heldPaths,
+  heldSourceOrder,
   isTraced,
   isUnresolvedScope,
   matchScope,
@@ -186,6 +187,25 @@ describe("what a request cites", () => {
   it("watches every file a claim is held in, revisioned or not", () => {
     expect([...heldPaths(react())].sort()).toEqual(["src/Dashboard.tsx", "src/SaveButton.tsx"]);
     expect([...heldPaths(svelte())].sort()).toEqual([CARD_FILE, FILE].sort());
+  });
+
+  it("ranks the element's own file ahead of the rest, selection by selection, each file once", () => {
+    // A claim the host placed in the component's file, listed before the element's own.
+    const first: ResolutionResult = {
+      state: "verified",
+      candidateId: "other",
+      claim: "template-location",
+      target: { file: { workspaceId: WORKSPACE, path: CARD_FILE }, location: null },
+      fileRevision: CARD_REVISION,
+    };
+    const selection = picked([svelteObservation()], { "el-1": [first, ...svelteResults()] });
+    expect([...heldPaths(selection)][0]).toBe(CARD_FILE);
+    expect(heldSourceOrder([selection])).toEqual([FILE, CARD_FILE]);
+
+    const order = heldSourceOrder([react(), selection, svelte()]);
+    expect(order[0]).toBe(elementPlace(react())!.path);
+    expect(order.slice(0, 2).sort()).toEqual(["src/Dashboard.tsx", "src/SaveButton.tsx"]);
+    expect(order.slice(2)).toEqual([FILE, CARD_FILE]);
   });
 
   it("proves neither of two reads of one file that disagree", () => {

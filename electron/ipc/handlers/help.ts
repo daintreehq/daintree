@@ -792,6 +792,11 @@ export const helpNamespace = defineIpcNamespace({
       globalAssistant.handleReleaseGlobalAssistantInput,
       { withContext: true }
     ),
+    setGlobalAssistantInputEligible: op(
+      HELP_METHOD_CHANNELS.setGlobalAssistantInputEligible,
+      globalAssistant.handleSetGlobalAssistantInputEligible,
+      { withContext: true }
+    ),
     restartGlobalAssistant: op(
       HELP_METHOD_CHANNELS.restartGlobalAssistant,
       globalAssistant.handleRestartGlobalAssistant,
@@ -800,6 +805,16 @@ export const helpNamespace = defineIpcNamespace({
     discardGlobalAssistant: op(
       HELP_METHOD_CHANNELS.discardGlobalAssistant,
       globalAssistant.handleDiscardGlobalAssistant,
+      { withContext: true }
+    ),
+    getWindowGlobalAssistantPanel: op(
+      HELP_METHOD_CHANNELS.getWindowGlobalAssistantPanel,
+      globalAssistant.handleGetWindowGlobalAssistantPanel,
+      { withContext: true }
+    ),
+    reportWindowGlobalAssistantPanel: op(
+      HELP_METHOD_CHANNELS.reportWindowGlobalAssistantPanel,
+      globalAssistant.handleReportWindowGlobalAssistantPanel,
       { withContext: true }
     ),
     getPinnedActionContext: op(

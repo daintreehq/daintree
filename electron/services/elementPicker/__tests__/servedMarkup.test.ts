@@ -1,0 +1,117 @@
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  buildServedMarkupSource,
+  MAX_SERVED_MARKUP_BYTES,
+  SERVED_MARKUP_TIMEOUT_MS,
+  servedMarkupFrom,
+} from "../servedMarkup.js";
+
+const HTML = '<h1 data-astro-source-loc="6:9">Shop</h1>';
+
+/** Runs the source as the guest would, against a stubbed `fetch`. */
+async function runInGuest(answer: (url: string, init: RequestInit) => Promise<Response>) {
+  const requests: Array<{ url: string; init: RequestInit }> = [];
+  vi.stubGlobal("fetch", (url: string, init: RequestInit) => {
+    requests.push({ url, init });
+    return answer(url, init);
+  });
+  const value = (await new Function(`return ${buildServedMarkupSource()}`)()) as unknown;
+  return { value, requests };
+}
+
+const html = (body: BodyInit, type = "text/html; charset=utf-8", status = 200) =>
+  Promise.resolve(new Response(body, { status, headers: { "content-type": type } }));
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  history.replaceState(null, "", "/");
+});
+
+describe("the served-markup fetch", () => {
+  it("asks the document's own URL once more, without its fragment, with the page's cookies", async () => {
+    history.replaceState(null, "", "/shop?page=2#top");
+    const { value, requests } = await runInGuest(() => html(HTML));
+    const url = `${location.origin}/shop?page=2`;
+    expect(value).toEqual({ url, html: HTML });
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.url).toBe(url);
+    expect(requests[0]!.init).toMatchObject({
+      credentials: "same-origin",
+      redirect: "error",
+      cache: "no-store",
+    });
+  });
+
+  it("abandons the fetch in the guest at the deadline main stops waiting at", async () => {
+    const deadline = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+    const pending = runInGuest(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+        })
+    );
+    expect(timeout).toHaveBeenCalledWith(SERVED_MARKUP_TIMEOUT_MS);
+    deadline.abort(new DOMException("The operation timed out.", "TimeoutError"));
+    expect((await pending).value).toBeNull();
+  });
+
+  it("decodes the markup as the document itself was decoded", async () => {
+    Object.defineProperty(document, "characterSet", { value: "windows-1252", configurable: true });
+    try {
+      const bytes = new Uint8Array([0x43, 0x61, 0x66, 0xe9]);
+      const { value } = await runInGuest(() => html(bytes, "text/html"));
+      expect(value).toMatchObject({ html: "Café" });
+    } finally {
+      delete (document as unknown as Record<string, unknown>).characterSet;
+    }
+  });
+
+  it("answers nothing for a response that is not an OK HTML page, or a fetch that fails", async () => {
+    for (const answer of [
+      () => html(HTML, "application/json"),
+      () => html("missing", "text/html", 404),
+      () => Promise.reject(new TypeError("Failed to fetch")),
+    ]) {
+      expect((await runInGuest(answer)).value).toBeNull();
+    }
+  });
+
+  it("stops reading past the byte cap rather than cut the markup down", async () => {
+    const chunk = new Uint8Array(64 * 1024).fill(97);
+    let sent = 0;
+    let cancelled = false;
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        sent += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    expect((await runInGuest(() => html(endless))).value).toBeNull();
+    expect(sent).toBeLessThanOrEqual(MAX_SERVED_MARKUP_BYTES + 2 * chunk.byteLength);
+    await vi.waitFor(() => expect(cancelled).toBe(true));
+  });
+});
+
+describe("servedMarkupFrom", () => {
+  it("takes only markup of a page served over HTTP, within the cap", () => {
+    const url = "http://127.0.0.1:4321/shop";
+    expect(servedMarkupFrom({ url, html: HTML })).toEqual({ url, html: HTML });
+    for (const value of [
+      null,
+      "markup",
+      { url },
+      { url: "file:///proj/index.html", html: HTML },
+      { url: `${url}#top`, html: HTML },
+      // Under the cap in characters, over it in UTF-8 bytes.
+      { url, html: "é".repeat(MAX_SERVED_MARKUP_BYTES / 2 + 1) },
+    ]) {
+      expect(servedMarkupFrom(value)).toBeNull();
+    }
+  });
+});

@@ -78,12 +78,16 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
 }));
 
 import { FleetArmingRibbon } from "../FleetArmingRibbon";
+import { runManagedFleetBroadcast } from "../fleetEnterBroadcast";
+import { terminalClient } from "@/clients";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useFleetPendingActionStore } from "@/store/fleetPendingActionStore";
 import { useFleetBroadcastProgressStore } from "@/store/fleetBroadcastProgressStore";
 import { useFleetPickerSessionStore } from "@/store/fleetPickerSessionStore";
 import { useFleetRunStore, type FleetRun, type FleetRunTarget } from "@/store/fleetRunStore";
 import { usePanelStore } from "@/store/panelStore";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import type { ProjectSettings } from "@shared/types/project";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -118,7 +122,21 @@ function resetStores() {
   useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-1", isFleetScopeActive: false });
   useWorktreeFilterStore.setState({ quickStateFilter: "all" });
   useAnnouncerStore.setState({ polite: null, assertive: null });
+  useFleetSnapshotStore.setState({ snapshot: null });
   resetEscapeStack();
+}
+
+function pushFleet(runs: Array<Partial<FleetRunRow> & { runId: string }>): void {
+  act(() =>
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        runs: runs.map((run) => ({ workspaceId: "p1", spawnedAt: 0, cwd: "/repo", ...run })),
+        changedAt: 0,
+        degraded: false,
+        lastSuccessfulAt: null,
+      },
+    })
+  );
 }
 
 function seed(terminals: PtyPanelData[]): void {
@@ -235,12 +253,53 @@ describe("FleetArmingRibbon", () => {
     render(<FleetArmingRibbon />);
     fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
     expect(screen.getByTestId("fleet-pane-state-t1-working").textContent).toBe("Working");
-    expect(screen.getByTestId("fleet-pane-state-t2-waiting").textContent).toBe("Waiting");
+    // No fleet report yet: the wait is only what the terminal showed.
+    expect(screen.getByTestId("fleet-pane-state-t2-waiting").textContent).toBe("Last seen waiting");
     expect(screen.getByTestId("fleet-pane-state-t3-exited").textContent).toBe("Exited");
     // idle / completed / directing render no badge — verify by absence
     expect(screen.queryByTestId("fleet-pane-state-t4-idle")).toBeNull();
     expect(screen.queryByTestId("fleet-pane-state-t5-completed")).toBeNull();
     expect(screen.queryByTestId("fleet-pane-state-t6-directing")).toBeNull();
+  });
+
+  // Amber and "Waiting" are the fleet's needs-you alone (#16059): a wait the
+  // fleet places anywhere else keeps a neutral badge in its band's words, and
+  // follows the band as it moves without the pane changing.
+  it("draws a waiting pane's badge from its fleet band", () => {
+    seed([
+      { ...makeAgent("t1", "waiting"), title: "alpha" } as PtyPanelData,
+      { ...makeAgent("t2", "waiting"), title: "beta" } as PtyPanelData,
+    ]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const ask = { kind: "asked", quote: "Ship it?", readAt: 0, seen: false } as const;
+    pushFleet([
+      { runId: "t1", agentState: "waiting", waitingReason: "question", canopy: ask },
+      { runId: "t2", agentState: "waiting", waitingReason: "prompt" },
+    ]);
+    render(<FleetArmingRibbon />);
+    fireEvent.click(screen.getByTestId("fleet-armed-count-chip"));
+
+    const asking = screen.getByTestId("fleet-pane-state-t1-waiting");
+    const prompt = screen.getByTestId("fleet-pane-state-t2-waiting");
+    expect(asking.textContent).toBe("Waiting");
+    expect(asking.className).toContain("text-state-waiting");
+    expect(prompt.textContent).toBe("Idle");
+    expect(prompt.className).not.toContain("text-state-waiting");
+
+    // Looking at the ask settles it: the same pane leaves amber.
+    pushFleet([
+      {
+        runId: "t1",
+        agentState: "waiting",
+        waitingReason: "question",
+        canopy: { ...ask, seen: true },
+      },
+      { runId: "t2", agentState: "waiting", waitingReason: "prompt" },
+    ]);
+    expect(screen.getByTestId("fleet-pane-state-t1-waiting").textContent).toBe("Idle");
+    expect(screen.getByTestId("fleet-pane-state-t1-waiting").className).not.toContain(
+      "text-state-waiting"
+    );
   });
 
   it("renders one badge per pane when multiple panes share the same state", () => {
@@ -740,6 +799,28 @@ describe("FleetArmingRibbon", () => {
     try {
       fireEvent.keyDown(helper, { key: "Escape" });
       fireEvent.keyDown(helper, { key: "Escape" });
+      expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
+    } finally {
+      dialog.remove();
+    }
+    dispatchSpy.mockRestore();
+  });
+
+  it("bare Escape Escape inside a destructive alertdialog leaves the fleet alone", async () => {
+    seed([makeAgent("t1", "working"), makeAgent("t2", "working")]);
+    useFleetArmingStore.getState().armIds(["t1", "t2"]);
+    const actionServiceModule = await import("@/services/ActionService");
+    const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+    render(<FleetArmingRibbon />);
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "alertdialog");
+    dialog.setAttribute("aria-modal", "true");
+    dialog.innerHTML = "<button>Cancel</button>";
+    document.body.appendChild(dialog);
+    const cancel = dialog.querySelector("button")!;
+    try {
+      fireEvent.keyDown(cancel, { key: "Escape" });
+      fireEvent.keyDown(cancel, { key: "Escape" });
       expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
     } finally {
       dialog.remove();
@@ -1766,4 +1847,73 @@ describe("fleets with agents on other hosts", () => {
     expect(save().getAttribute("aria-disabled")).toBe("true");
     expect(screen.getByDisplayValue("Mixed")).toBe(screen.getByTestId("fleet-save-form-name"));
   });
+});
+
+describe("FleetArmingRibbon — exiting during a send (#15560)", () => {
+  beforeEach(() => {
+    resetStores();
+    useFleetBroadcastProgressStore.setState({
+      completed: 0,
+      total: 0,
+      failed: 0,
+      isActive: false,
+      cancelled: false,
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const exits: Array<[string, () => void]> = [
+    ["the leading Exit button", () => fireEvent.click(screen.getByTestId("fleet-leading-exit"))],
+    ["the trailing Exit button", () => fireEvent.click(screen.getByTestId("fleet-exit"))],
+    [
+      "Escape on a ribbon control",
+      () => {
+        const exit = screen.getByTestId("fleet-exit");
+        exit.focus();
+        fireEvent.keyDown(exit, { key: "Escape" });
+      },
+    ],
+  ];
+
+  it.each(exits)(
+    "cancels the batches still to go when the fleet is exited with %s",
+    async (_name, exitFleet) => {
+      const ids = Array.from({ length: 7 }, (_, i) => `t${i}`);
+      seed(ids.map((id) => makeAgent(id)));
+      useFleetArmingStore.getState().armIds(ids);
+      const inFlight: Array<() => void> = [];
+      const submit = vi.spyOn(terminalClient, "submit").mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            inFlight.push(resolve);
+          })
+      );
+      render(<FleetArmingRibbon />);
+
+      let sending!: ReturnType<typeof runManagedFleetBroadcast>;
+      act(() => {
+        sending = runManagedFleetBroadcast("x".repeat(120_000), ids);
+      });
+      expect(inFlight).toHaveLength(5);
+
+      act(exitFleet);
+      expect(useFleetArmingStore.getState().armedIds.size).toBe(0);
+      const result = await act(async () => {
+        for (const land of inFlight.splice(0)) land();
+        return sending;
+      });
+
+      expect(result.cancelled).toBe(true);
+      expect(result.successCount).toBe(5);
+      expect(result.skippedCount).toBe(2);
+      expect(submit.mock.calls.map((call) => call[0])).toEqual(ids.slice(0, 5));
+      expect(useFleetBroadcastProgressStore.getState()).toMatchObject({
+        isActive: false,
+        cancelled: true,
+      });
+    }
+  );
 });

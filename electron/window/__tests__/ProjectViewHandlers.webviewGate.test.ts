@@ -45,6 +45,18 @@ const loggerMock = vi.hoisted(() => ({
 }));
 vi.mock("../../utils/logger.js", () => loggerMock);
 
+const previewGate = vi.hoisted(() => ({
+  verdict: "not-preview" as "not-preview" | "allowed" | "refused",
+}));
+vi.mock("../../setup/htmlPreviewSession.js", () => ({
+  // Stamps the preferences it was handed, so a test can tell the real object
+  // reached the gate and its hardening reached the caller.
+  gateHtmlPreviewWebviewAttach: vi.fn((webPreferences: Electron.WebPreferences) => {
+    if (previewGate.verdict === "allowed") webPreferences.partition = "stamped-by-preview-gate";
+    return previewGate.verdict;
+  }),
+}));
+
 import {
   isWebviewSrcAllowed,
   setRemoteWebviewSrcGate,
@@ -510,8 +522,58 @@ function setup() {
   setupViewHandlers(host, { webContents: wc } as never, entry);
   const fire = (reason: string, exitCode: number) =>
     listeners.get("render-process-gone")!({}, { reason, exitCode });
-  return { fire };
+  const attach = (params: Record<string, string>, webPreferences: Electron.WebPreferences = {}) => {
+    const preventDefault = vi.fn();
+    listeners.get("will-attach-webview")!({ preventDefault }, webPreferences, params);
+    return { refused: preventDefault.mock.calls.length > 0, webPreferences };
+  };
+  return { fire, attach };
 }
+
+describe("ProjectViewHandlers webview attach (#15793)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    previewGate.verdict = "not-preview";
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  it("hands the preview gate the real attach and keeps what it hardened", async () => {
+    previewGate.verdict = "allowed";
+    const { gateHtmlPreviewWebviewAttach } = await import("../../setup/htmlPreviewSession.js");
+    const { attach } = setup();
+    const params = { src: "daintree-html://tok/index.html", partition: "daintree-html-preview" };
+    const webPreferences: Electron.WebPreferences = { preload: "/evil.js" };
+
+    const result = attach(params, webPreferences);
+
+    expect(gateHtmlPreviewWebviewAttach).toHaveBeenCalledWith(webPreferences, params);
+    expect(result.refused).toBe(false);
+    // The host's own rule never ran over it: that would have refused this src,
+    // dropped the preload and overwritten the partition with the requested one.
+    expect(result.webPreferences.partition).toBe("stamped-by-preview-gate");
+    expect(result.webPreferences.preload).toBe("/evil.js");
+  });
+
+  it("refuses what the preview gate refuses, even where the localhost rule would allow it", () => {
+    previewGate.verdict = "refused";
+    const { attach } = setup();
+
+    const result = attach({ src: "http://localhost:3000/", partition: "persist:browser-default" });
+
+    expect(result.refused).toBe(true);
+  });
+
+  it("keeps the localhost rule for everything that isn't a preview", () => {
+    const { attach } = setup();
+
+    expect(
+      attach({ src: "http://localhost:3000/", partition: "persist:browser-default" }).refused
+    ).toBe(false);
+    expect(
+      attach({ src: "https://example.com/", partition: "persist:browser-default" }).refused
+    ).toBe(true);
+  });
+});
 
 describe("ProjectViewHandlers render-process-gone recording (#12884)", () => {
   beforeEach(() => {

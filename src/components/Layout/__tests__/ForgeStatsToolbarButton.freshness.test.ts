@@ -385,11 +385,13 @@ describe("ForgeStatsToolbarButton list-count badge wiring", () => {
     expect(source).toMatch(
       /prCountRefreshedAt\s*=\s*stats\?\.prCountRefreshedAt\s*\?\?\s*statsRecencyFallback/
     );
+    // While the counts are the Shell's shared record (#15546) the list count
+    // sits out, so every view of the repository shows the same number.
     expect(source).toMatch(
-      /issueDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*issueCount,\s*issueCountRefreshedAt,\s*issueListCount,\s*issueListHasMore,\s*issueListTimestamp\b/
+      /issueDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*issueCount,\s*issueCountRefreshedAt,\s*sharedCounts\s*\?\s*null\s*:\s*issueListCount,\s*issueListHasMore,\s*issueListTimestamp\b/
     );
     expect(source).toMatch(
-      /prDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*prCount,\s*prCountRefreshedAt,\s*prListCount,\s*prListHasMore,\s*prListTimestamp\b/
+      /prDisplayCount[\s\S]{0,80}?=\s*resolveForgeDisplayCount\(\s*prCount,\s*prCountRefreshedAt,\s*sharedCounts\s*\?\s*null\s*:\s*prListCount,\s*prListHasMore,\s*prListTimestamp\b/
     );
   });
 
@@ -435,9 +437,13 @@ describe("ForgeStatsToolbarButton list-count badge wiring", () => {
 
   it("uses the exact display count in the issue + PR aria-labels and tooltips", () => {
     // The badge is compacted; names and tooltips carry the exact figure.
-    expect(source).toContain("${formatExactCount(issueDisplayCount)} open issues");
-    expect(source).toContain("${formatExactCount(prDisplayCount)} open pull requests");
-    expect(source).toContain("${formatExactCount(prDisplayCount)} open PRs");
+    expect(source).toContain(
+      '${formatExactCountNoun(issueDisplayCount, "open issue", "open issues")}'
+    );
+    expect(source).toContain(
+      '${formatExactCountNoun(prDisplayCount, "open pull request", "open pull requests")}'
+    );
+    expect(source).toContain('${formatExactCountNoun(prDisplayCount, "open PR", "open PRs")}');
   });
 
   it("resets the list counts + timestamps via a project-path effect (issue #9741)", () => {

@@ -66,3 +66,8 @@ export function getPendingActivationProjectIds(windowId: number): string[] {
   }
   return ids;
 }
+
+/** Every workspace some window has a claimed activation in flight for. */
+export function getAllPendingActivationIds(): string[] {
+  return [...pendingActivations.keys()];
+}

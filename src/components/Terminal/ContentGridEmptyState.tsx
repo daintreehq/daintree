@@ -23,7 +23,9 @@ import { TourInviteCard } from "@/components/Tour/TourInviteCard";
 import { useProjectWelcomeStore } from "@/store/projectWelcomeStore";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 
-const PATH_TRUNCATE_LENGTH = 52;
+// Sized to the narrow canvas's measure: past it the line's own CSS truncation
+// adds a second ellipsis and eats the tail, the part of the path that orients.
+const PATH_TRUNCATE_LENGTH = 56;
 
 // The column's single measure. Every band fills it rather than choosing its
 // own, so the stack has ONE pair of edges instead of the four it used to
@@ -240,9 +242,12 @@ export function ContentGridEmptyState({
     ? `detached at ${shortSha(activeWorktreeHead)}`
     : activeWorktreeBranch || null;
   const BranchGlyph = isDetachedLabel ? GitCommitHorizontal : GitBranch;
-  const pathLabel = activeWorktreePath
-    ? middleTruncatePath(formatPath(activeWorktreePath, homeDir), PATH_TRUNCATE_LENGTH)
-    : null;
+  // A scratch's folder is app storage (a temp path ending in a UUID), not
+  // something the user chose or recognises; only a project's path orients.
+  const pathLabel =
+    hasProjectContext && activeWorktreePath
+      ? middleTruncatePath(formatPath(activeWorktreePath, homeDir), PATH_TRUNCATE_LENGTH)
+      : null;
   const hasWorkspaceIdentity = Boolean(workspaceName);
 
   const handleOpenProjectSettings = () => {
@@ -292,7 +297,11 @@ export function ContentGridEmptyState({
           `@container/launcher` lets the bands below respond to the CANVAS
           width rather than the window's: this surface sits beside a sidebar and
           inside a grid, so a viewport breakpoint describes the wrong box. */}
-      <div className="relative h-full w-full overflow-y-auto">
+      {/* `scrollbar-gutter: stable both-edges`: the column is centred, so a
+          classic scrollbar arriving (the pulse expanded, a long recipe list, the
+          tip landing after hydration) used to slide every band sideways by
+          half its width. Overlay scrollbars reserve nothing either way. */}
+      <div className="relative h-full w-full overflow-y-auto [scrollbar-gutter:stable_both-edges]">
         <div className="flex min-h-full flex-col items-center p-8">
           {/* A fixed, shrinkable top gutter — not `my-auto` on the column, and
               certainly not `justify-center`. Centring the whole stack made the
@@ -311,8 +320,14 @@ export function ContentGridEmptyState({
           <div aria-hidden="true" className="w-full shrink basis-4" />
           <section
             aria-label={workspaceName ? `${workspaceName} — workspace home` : "Workspace home"}
+            data-canvas-home
+            // One band gap for the whole column, not a margin per band: a band
+            // that resolves to nothing (no resume, no tip) used to leave its
+            // margin behind, so the rhythm drifted between 10, 24, 34 and 48px
+            // depending on what rendered. Wrappers whose child returns null are
+            // `empty:hidden`, so they drop out of the gap as well.
             className={cn(
-              "@container/launcher flex w-full shrink-0 flex-col items-center",
+              "@container/launcher flex w-full shrink-0 flex-col items-center gap-6",
               LAUNCHER_MEASURE
             )}
           >
@@ -326,43 +341,63 @@ export function ContentGridEmptyState({
               // empty air and buys the same launch position in every kind of
               // workspace, which is the whole point of anchoring it.
               //
-              // 9.25rem, not the 8.5rem this first shipped with: the tallest
-              // form actually measures ~145px (mark 56 + mb-3 12 + name line 32
-              // + gap 6 + branch line 20 + gap 2 + path line 16), so 136px was
-              // eight short. A project OVERFLOWED the reserve while a scratch
-              // sat inside it, and the palette rendered 9px lower in a project
-              // than in a scratch — the exact drift the reserve exists to
-              // prevent, just moved from "which bands resolved" to "which kind
-              // of workspace". Every line here is `truncate`, so the tallest
-              // form is a fixed height and this can be an exact number.
+              // The tallest form measures 140px (mark 56 + mb-3 12 + name line
+              // 28 + gap 6 + branch line 20 + gap 2 + path line 16). An earlier
+              // reserve sat eight short of its form, so a project OVERFLOWED it
+              // while a scratch sat inside, and the palette rendered lower in a
+              // project than in a scratch — the drift the reserve exists to
+              // prevent. Every line here is `truncate`, so the tallest form is
+              // a fixed height and this must stay the exact sum.
               <div
                 className={cn(
-                  "mb-6 flex min-h-[9.25rem] flex-col items-center justify-end text-center",
+                  // `w-full`: as a centred flex child it sized to its content,
+                  // so a long name pushed past the column and none of the
+                  // `truncate`s below ever ran.
+                  "flex w-full min-h-[8.75rem] flex-col items-center justify-end text-center",
                   SECTION_ENTRY
                 )}
               >
                 <div className="mb-3">{identityMark}</div>
                 {hasWorkspaceIdentity ? (
-                  <div className="flex flex-col items-center gap-1.5 min-w-0 max-w-full">
+                  <div className="flex w-full flex-col items-center gap-1.5 min-w-0">
                     {/* The name stays centered under the mark; the gear is
                         pulled out of flow (absolute, just past the name) so its
-                        hidden footprint never shifts the lockup off-axis. */}
-                    <div className="group relative flex items-center min-w-0 max-w-full">
-                      <h3 className="text-2xl font-semibold text-text-primary tracking-tight truncate max-w-full">
-                        {projectEmoji ? (
-                          // The name outweighs the emoji — the text is the
-                          // identity, the emoji is seasoning.
-                          <span className="mr-2 text-lg align-middle" aria-hidden="true">
-                            {projectEmoji}
-                          </span>
-                        ) : null}
-                        {workspaceName}
-                      </h3>
+                        hidden footprint never shifts the lockup off-axis. With
+                        the gear, the name keeps 2rem clear on BOTH sides, so the
+                        gear stays inside the measure and the name stays centred. */}
+                    <div
+                      className={cn(
+                        "group relative flex items-center min-w-0",
+                        hasProjectContext ? "max-w-[calc(100%-4rem)]" : "max-w-full"
+                      )}
+                    >
+                      {/* A long name truncates inside the measure; the full name is
+                          disclosed on hover the way the path below is. */}
+                      <TruncatedTooltip content={workspaceName}>
+                        {/* `text-xl font-medium`: the name confirms where you
+                            are; at 2xl semibold it was the heaviest text on a
+                            screen whose job is launching, and outweighed the
+                            palette it sits above. */}
+                        <h3 className="text-xl font-medium text-text-primary tracking-tight truncate max-w-full">
+                          {projectEmoji ? (
+                            // The name outweighs the emoji — the text is the
+                            // identity, the emoji is seasoning.
+                            <span className="mr-2 text-base align-middle" aria-hidden="true">
+                              {projectEmoji}
+                            </span>
+                          ) : null}
+                          {workspaceName}
+                        </h3>
+                      </TruncatedTooltip>
                       {hasProjectContext && (
                         <button
                           type="button"
                           onClick={handleOpenProjectSettings}
-                          className="absolute left-full top-1/2 ml-1.5 -translate-y-1/2 shrink-0 rounded-full p-1 text-text-secondary opacity-0 transition-opacity hover:bg-overlay-subtle hover:text-text-primary group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+                          // 26px target (p-1.5 around 14px). The `before:` strip
+                          // bridges the 4px gap to the name, so the pointer
+                          // never leaves the group on its way to the gear and
+                          // the gear does not fade out under it.
+                          className="absolute left-full top-1/2 ml-1 -translate-y-1/2 shrink-0 rounded-full p-1.5 text-text-secondary opacity-0 transition-opacity duration-150 ease-out before:absolute before:inset-y-0 before:-left-1 before:w-1 before:content-[''] hover:bg-overlay-subtle hover:text-text-primary group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                           aria-label="Project settings"
                         >
                           <Settings className="h-3.5 w-3.5" />
@@ -392,7 +427,7 @@ export function ContentGridEmptyState({
                     )}
                   </div>
                 ) : (
-                  <h3 className="text-xl font-semibold text-text-primary tracking-tight truncate max-w-full">
+                  <h3 className="text-xl font-medium text-text-primary tracking-tight truncate max-w-full">
                     {activeWorktreeName || "Daintree"}
                   </h3>
                 )}
@@ -465,35 +500,21 @@ export function ContentGridEmptyState({
                 supposed to express. */}
             {hasLaunchTarget && (
               <div
-                className={cn(
-                  "mb-6 w-full flex justify-center",
-                  SECTION_ENTRY,
-                  SECTION_ENTRY_DELAY_1
-                )}
+                className={cn("w-full flex justify-center", SECTION_ENTRY, SECTION_ENTRY_DELAY_1)}
               >
                 <LauncherQuickActions />
               </div>
             )}
 
             {hasLaunchTarget && (
-              <div
-                className={cn(
-                  "mb-2.5 w-full flex justify-center",
-                  SECTION_ENTRY,
-                  SECTION_ENTRY_DELAY_2
-                )}
-              >
+              <div className={cn("w-full flex empty:hidden", SECTION_ENTRY, SECTION_ENTRY_DELAY_2)}>
                 <ResumeSessionLine />
               </div>
             )}
 
             {hasLaunchTarget && recipesProjectId !== null && !recipesLoading && (
               <div
-                className={cn(
-                  "mb-6 w-full flex justify-center",
-                  SECTION_ENTRY,
-                  SECTION_ENTRY_DELAY_3
-                )}
+                className={cn("w-full flex justify-center", SECTION_ENTRY, SECTION_ENTRY_DELAY_3)}
               >
                 <RecipeRunner activeWorktreeId={activeWorktreeId} defaultCwd={defaultCwd} />
               </div>
@@ -520,11 +541,8 @@ export function ContentGridEmptyState({
 
             {hasLaunchTarget && hasProjectContext && hasEverLaunchedAgent && (
               <div
-                className={cn(
-                  "flex flex-col items-center gap-4 mt-6",
-                  SECTION_ENTRY,
-                  SECTION_ENTRY_DELAY_5
-                )}
+                // On the left rail with every other band below identity.
+                className={cn("flex w-full empty:hidden", SECTION_ENTRY, SECTION_ENTRY_DELAY_5)}
               >
                 <RotatingTip />
               </div>
@@ -541,7 +559,7 @@ export function ContentGridEmptyState({
                     ?.focus(options)
                 }
                 className={cn(
-                  "mt-6 flex w-full justify-center",
+                  "flex w-full justify-center",
                   LAUNCHER_MEASURE,
                   SECTION_ENTRY,
                   SECTION_ENTRY_DELAY_6

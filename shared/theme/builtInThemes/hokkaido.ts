@@ -39,11 +39,13 @@ export const theme: BuiltInThemeSource = {
       info: "#3A6FC0",
     },
     activity: {
-      active: "#2E8A66",
+      active: "#2B805F",
       idle: "#6C7494",
-      working: "#2E8A66",
+      // ≥ 3:1 as glyphs on a highlighted sidebar row (the hosts section's
+      // counts), where the highlight darkens the lavender.
+      working: "#2B805F",
       // working/waiting stay deuteranope-separable by luminance.
-      waiting: "#A57A10",
+      waiting: "#99710F",
     },
     // Cold near-neutral ink — the wash ladder must never read as grime on the
     // hued field.
@@ -119,7 +121,7 @@ export const theme: BuiltInThemeSource = {
     "overlay-hover": "rgba(44,44,59,0.08)",
     // Derived 3% is sub-threshold over near-white surfaces.
     "overlay-soft": "rgba(44,44,59,0.055)",
-    // Opaque elevate-to-select for menu/palette rows on white popovers.
+    // Opaque elevate-to-select plane (armed toolbar controls, settings scope).
     "overlay-raised": "#E9E8F1",
     // Engine pr-merged sits too close to the violet accent — shifted to plum;
     // draft slate re-inked onto the field temperature.
@@ -138,6 +140,9 @@ export const theme: BuiltInThemeSource = {
     "search-match-badge-text": "#27539A",
     "search-selected-result-border": "#3A6FC0",
     "search-selected-result-icon": "#27539A",
+    // Derived would be text-primary @53%, which measures 2.98:1 against the
+    // highlighted row on the lavender sidebar, under the 3:1 its outline owes.
+    "selection-outline": "rgba(40,38,48,0.55)",
     // Blue shadow ink, short spreads — the contact edge dominates; the engine
     // "light" single penumbra has no contact edge on a near-white field.
     "shadow-ambient": "0 1px 2px rgba(44,48,78,0.12), 0 4px 12px rgba(44,48,78,0.08)",
@@ -209,10 +214,6 @@ export const theme: BuiltInThemeSource = {
     "sidebar-card-shadow": "0 1px 2px rgba(44,48,78,0.05)",
     "sidebar-active-bg": "#FFFFFF",
     "sidebar-hover-bg": "#F9F8FC",
-    // The raised plane (#E9E8F1) is the sidebar lavender itself, so a
-    // highlighted row on the sidebar vanished; it lifts to white like the
-    // active worktree and the settings nav.
-    "sidebar-row-highlight-bg": "#FFFFFF",
     "toolbar-agent-hover-bg": "rgba(40,38,48,0.06)",
     "toolbar-control-hover-bg": "rgba(40,38,48,0.06)",
     // Accent restraint: hover affordance is the bg, not an accent foreground.

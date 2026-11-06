@@ -54,6 +54,7 @@ let _getFleetLastArmedId: (() => string | null) | null = null;
 let _getAgentSettingsEntry: ((agentId: string) => AgentSettingsEntry | undefined) | null = null;
 let _getGlobalUseAltScreen: (() => boolean | undefined) | null = null;
 let _exitProjectHome: (() => void) | null = null;
+let _isProjectHomePresented: (() => boolean) | null = null;
 let _panelMaximize: { isMaximized: () => boolean; exit: () => void } | null = null;
 
 export function setAgentSettingsEntryAccessor(
@@ -266,6 +267,19 @@ export function exitProjectHome(): void {
   _exitProjectHome?.();
 }
 
+export function setProjectHomePresentedAccessor(getter: () => boolean): void {
+  _isProjectHomePresented = getter;
+}
+
+/**
+ * Whether this view's Home is drawing in place of the grid right now, so no
+ * grid panel is on screen. A split shows the grid and reads false. `false`
+ * until registered.
+ */
+export function isProjectHomePresented(): boolean {
+  return _isProjectHomePresented?.() ?? false;
+}
+
 export function setPanelMaximizeAccessor(accessor: {
   isMaximized: () => boolean;
   exit: () => void;
@@ -298,5 +312,6 @@ export function resetStoreAccessorsForTesting(): void {
   _getFleetArmedIds = null;
   _getFleetLastArmedId = null;
   _exitProjectHome = null;
+  _isProjectHomePresented = null;
   _panelMaximize = null;
 }

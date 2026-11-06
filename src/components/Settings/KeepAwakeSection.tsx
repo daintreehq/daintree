@@ -75,9 +75,11 @@ export function KeepAwakeSection() {
         <span role="status">
           {state === null
             ? "Whether Daintree keeps this machine awake while agents work"
-            : state.isBlocking
-              ? "Daintree is keeping this machine awake right now"
-              : "Daintree isn't keeping this machine awake right now"}
+            : state.isDisplayBlocking
+              ? "Daintree is keeping this machine and its display awake for a scheduled run"
+              : state.isBlocking
+                ? "Daintree is keeping this machine awake right now"
+                : "Daintree isn't keeping this machine awake right now"}
         </span>
       }
       id="general-keep-awake"
@@ -94,7 +96,7 @@ export function KeepAwakeSection() {
       <SettingsGroup>
         <SettingsSwitchCard
           title="Keep awake while agents work"
-          subtitle="Holds off idle sleep while an agent is working — the display can still turn off"
+          subtitle="Holds off idle sleep while an agent is working, and keeps the display on through a scheduled run"
           isEnabled={config.enabled}
           onChange={() => void save({ enabled: !config.enabled })}
           disabled={locked}

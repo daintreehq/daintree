@@ -121,7 +121,7 @@ function resolveLocalStorage(): StateStorage | undefined {
  * - `quota`    — transient quota error; primary unchanged, backup must NOT advance.
  * - `memory`   — written only to the in-memory fallback; nothing durable to back up.
  */
-type ResilientWriteResult = "durable" | "quota" | "memory";
+export type ResilientWriteResult = "durable" | "quota" | "memory";
 
 /**
  * Resilient storage augmented with best-effort backup operations. The backup
@@ -510,7 +510,10 @@ export function createSafeJSONStorage<T>(options?: SafeJSONStorageOptions<T>): P
 export function createDebouncedSafeJSONStorage<T>(
   delayMs: number,
   options?: SafeJSONStorageOptions<T>
-): PersistStorage<T> {
+): PersistStorage<T> & {
+  /** Writes the key's pending value now, through the same merge a timer's write takes. */
+  flush(name: string): void;
+} {
   const raw = createResilientStorage(resolveLocalStorage());
   const writer = createPersistWriter(raw, options?.mergeOnWrite);
   // Retain the typed incoming value (not just its serialized form) so a
@@ -532,6 +535,7 @@ export function createDebouncedSafeJSONStorage<T>(
   };
 
   return {
+    flush,
     getItem: (name) => {
       // Flush any pending write so reads-after-writes are coherent.
       flush(name);
@@ -572,4 +576,29 @@ export function readLocalStorageItemSafely(name: string): string | null {
   } catch {
     return null;
   }
+}
+
+export interface SafeStringStorage {
+  getItem: (name: string) => string | null;
+  setItem: (name: string, value: string) => ResilientWriteResult;
+  removeItem: (name: string) => void;
+}
+
+/**
+ * Plain-string storage for renderer state kept under its own keys rather than
+ * through zustand `persist`. It applies the same policy as the persisted
+ * stores, so none of its calls throw: a quota error skips that write and leaves
+ * storage active, and any other failure moves this adapter to memory for good
+ * and raises the shared "Settings won't be saved" notice.
+ */
+export function createSafeStringStorage(): SafeStringStorage {
+  const raw = createResilientStorage(resolveLocalStorage());
+  return {
+    getItem: (name) => {
+      const value = raw.getItem(name);
+      return value instanceof Promise ? null : value;
+    },
+    setItem: raw.setItem,
+    removeItem: raw.removeItem,
+  };
 }

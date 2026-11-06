@@ -16,13 +16,13 @@ declare const ComponentChainSchema: z.ZodObject<{
     components: z.ZodArray<z.ZodObject<{
         componentId: z.ZodString;
         framework: z.ZodUnion<readonly [z.ZodEnum<{
-            svelte: "svelte";
-            react: "react";
-            vue: "vue";
-            angular: "angular";
-            astro: "astro";
-            preact: "preact";
-            solid: "solid";
+            readonly svelte: "svelte";
+            readonly react: "react";
+            readonly vue: "vue";
+            readonly angular: "angular";
+            readonly astro: "astro";
+            readonly preact: "preact";
+            readonly solid: "solid";
         }>, z.ZodString]>;
         name: z.ZodNullable<z.ZodObject<{
             value: z.ZodString;
@@ -39,9 +39,9 @@ declare const ComponentChainSchema: z.ZodObject<{
             }, z.core.$strict>], "kind">;
         }, z.core.$strict>>;
         environment: z.ZodEnum<{
-            unknown: "unknown";
-            client: "client";
-            server: "server";
+            readonly client: "client";
+            readonly server: "server";
+            readonly unknown: "unknown";
         }>;
         renderParentId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
         ownerId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
@@ -61,13 +61,13 @@ declare const ComponentChainSchema: z.ZodObject<{
             }, z.core.$strict>;
             candidateId: z.ZodString;
             framework: z.ZodUnion<readonly [z.ZodEnum<{
-                svelte: "svelte";
-                react: "react";
-                vue: "vue";
-                angular: "angular";
-                astro: "astro";
-                preact: "preact";
-                solid: "solid";
+                readonly svelte: "svelte";
+                readonly react: "react";
+                readonly vue: "vue";
+                readonly angular: "angular";
+                readonly astro: "astro";
+                readonly preact: "preact";
+                readonly solid: "solid";
             }>, z.ZodString]>;
             extraction: z.ZodDiscriminatedUnion<[z.ZodObject<{
                 kind: z.ZodLiteral<"runtime-field">;
@@ -96,13 +96,13 @@ declare const ComponentChainSchema: z.ZodObject<{
             }, z.core.$strict>;
             candidateId: z.ZodString;
             framework: z.ZodUnion<readonly [z.ZodEnum<{
-                svelte: "svelte";
-                react: "react";
-                vue: "vue";
-                angular: "angular";
-                astro: "astro";
-                preact: "preact";
-                solid: "solid";
+                readonly svelte: "svelte";
+                readonly react: "react";
+                readonly vue: "vue";
+                readonly angular: "angular";
+                readonly astro: "astro";
+                readonly preact: "preact";
+                readonly solid: "solid";
             }>, z.ZodString]>;
             extraction: z.ZodDiscriminatedUnion<[z.ZodObject<{
                 kind: z.ZodLiteral<"runtime-field">;
@@ -131,13 +131,13 @@ declare const ComponentChainSchema: z.ZodObject<{
             }, z.core.$strict>;
             candidateId: z.ZodString;
             framework: z.ZodUnion<readonly [z.ZodEnum<{
-                svelte: "svelte";
-                react: "react";
-                vue: "vue";
-                angular: "angular";
-                astro: "astro";
-                preact: "preact";
-                solid: "solid";
+                readonly svelte: "svelte";
+                readonly react: "react";
+                readonly vue: "vue";
+                readonly angular: "angular";
+                readonly astro: "astro";
+                readonly preact: "preact";
+                readonly solid: "solid";
             }>, z.ZodString]>;
             extraction: z.ZodDiscriminatedUnion<[z.ZodObject<{
                 kind: z.ZodLiteral<"runtime-field">;
@@ -166,13 +166,13 @@ declare const ComponentChainSchema: z.ZodObject<{
             }, z.core.$strict>>;
             candidateId: z.ZodString;
             framework: z.ZodUnion<readonly [z.ZodEnum<{
-                svelte: "svelte";
-                react: "react";
-                vue: "vue";
-                angular: "angular";
-                astro: "astro";
-                preact: "preact";
-                solid: "solid";
+                readonly svelte: "svelte";
+                readonly react: "react";
+                readonly vue: "vue";
+                readonly angular: "angular";
+                readonly astro: "astro";
+                readonly preact: "preact";
+                readonly solid: "solid";
             }>, z.ZodString]>;
             extraction: z.ZodDiscriminatedUnion<[z.ZodObject<{
                 kind: z.ZodLiteral<"runtime-field">;
@@ -190,13 +190,13 @@ declare const ComponentChainSchema: z.ZodObject<{
         }, z.core.$strict>, z.ZodObject<{
             candidateId: z.ZodString;
             framework: z.ZodUnion<readonly [z.ZodEnum<{
-                svelte: "svelte";
-                react: "react";
-                vue: "vue";
-                angular: "angular";
-                astro: "astro";
-                preact: "preact";
-                solid: "solid";
+                readonly svelte: "svelte";
+                readonly react: "react";
+                readonly vue: "vue";
+                readonly angular: "angular";
+                readonly astro: "astro";
+                readonly preact: "preact";
+                readonly solid: "solid";
             }>, z.ZodString]>;
             extraction: z.ZodDiscriminatedUnion<[z.ZodObject<{
                 kind: z.ZodLiteral<"runtime-field">;
@@ -240,13 +240,13 @@ declare const FrameworkEvidenceSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
 }, z.core.$strict>, z.ZodObject<{
     kind: z.ZodLiteral<"generic">;
     framework: z.ZodUnion<readonly [z.ZodEnum<{
-        svelte: "svelte";
-        react: "react";
-        vue: "vue";
-        angular: "angular";
-        astro: "astro";
-        preact: "preact";
-        solid: "solid";
+        readonly svelte: "svelte";
+        readonly react: "react";
+        readonly vue: "vue";
+        readonly angular: "angular";
+        readonly astro: "astro";
+        readonly preact: "preact";
+        readonly solid: "solid";
     }>, z.ZodString]>;
     fields: z.ZodArray<z.ZodObject<{
         name: z.ZodString;
@@ -263,10 +263,10 @@ declare const CapabilitiesSchema: z.ZodObject<{
     }, z.core.$strict>, z.ZodObject<{
         state: z.ZodLiteral<"unavailable">;
         reason: z.ZodEnum<{
-            unmapped: "unmapped";
-            "not-exposed": "not-exposed";
-            "production-build": "production-build";
-            "no-framework": "no-framework";
+            readonly "not-exposed": "not-exposed";
+            readonly "production-build": "production-build";
+            readonly "no-framework": "no-framework";
+            readonly unmapped: "unmapped";
         }>;
     }, z.core.$strict>], "state">;
     chain: z.ZodDiscriminatedUnion<[z.ZodObject<{
@@ -276,10 +276,10 @@ declare const CapabilitiesSchema: z.ZodObject<{
     }, z.core.$strict>, z.ZodObject<{
         state: z.ZodLiteral<"unavailable">;
         reason: z.ZodEnum<{
-            unmapped: "unmapped";
-            "not-exposed": "not-exposed";
-            "production-build": "production-build";
-            "no-framework": "no-framework";
+            readonly "not-exposed": "not-exposed";
+            readonly "production-build": "production-build";
+            readonly "no-framework": "no-framework";
+            readonly unmapped: "unmapped";
         }>;
     }, z.core.$strict>], "state">;
     componentSelection: z.ZodDiscriminatedUnion<[z.ZodObject<{
@@ -289,10 +289,10 @@ declare const CapabilitiesSchema: z.ZodObject<{
     }, z.core.$strict>, z.ZodObject<{
         state: z.ZodLiteral<"unavailable">;
         reason: z.ZodEnum<{
-            unmapped: "unmapped";
-            "not-exposed": "not-exposed";
-            "production-build": "production-build";
-            "no-framework": "no-framework";
+            readonly "not-exposed": "not-exposed";
+            readonly "production-build": "production-build";
+            readonly "no-framework": "no-framework";
+            readonly unmapped: "unmapped";
         }>;
     }, z.core.$strict>], "state">;
     file: z.ZodDiscriminatedUnion<[z.ZodObject<{
@@ -302,10 +302,10 @@ declare const CapabilitiesSchema: z.ZodObject<{
     }, z.core.$strict>, z.ZodObject<{
         state: z.ZodLiteral<"unavailable">;
         reason: z.ZodEnum<{
-            unmapped: "unmapped";
-            "not-exposed": "not-exposed";
-            "production-build": "production-build";
-            "no-framework": "no-framework";
+            readonly "not-exposed": "not-exposed";
+            readonly "production-build": "production-build";
+            readonly "no-framework": "no-framework";
+            readonly unmapped: "unmapped";
         }>;
     }, z.core.$strict>], "state">;
     line: z.ZodDiscriminatedUnion<[z.ZodObject<{
@@ -315,10 +315,10 @@ declare const CapabilitiesSchema: z.ZodObject<{
     }, z.core.$strict>, z.ZodObject<{
         state: z.ZodLiteral<"unavailable">;
         reason: z.ZodEnum<{
-            unmapped: "unmapped";
-            "not-exposed": "not-exposed";
-            "production-build": "production-build";
-            "no-framework": "no-framework";
+            readonly "not-exposed": "not-exposed";
+            readonly "production-build": "production-build";
+            readonly "no-framework": "no-framework";
+            readonly unmapped: "unmapped";
         }>;
     }, z.core.$strict>], "state">;
     exactRange: z.ZodDiscriminatedUnion<[z.ZodObject<{
@@ -328,10 +328,10 @@ declare const CapabilitiesSchema: z.ZodObject<{
     }, z.core.$strict>, z.ZodObject<{
         state: z.ZodLiteral<"unavailable">;
         reason: z.ZodEnum<{
-            unmapped: "unmapped";
-            "not-exposed": "not-exposed";
-            "production-build": "production-build";
-            "no-framework": "no-framework";
+            readonly "not-exposed": "not-exposed";
+            readonly "production-build": "production-build";
+            readonly "no-framework": "no-framework";
+            readonly unmapped: "unmapped";
         }>;
     }, z.core.$strict>], "state">;
 }, z.core.$strict>;
@@ -363,13 +363,13 @@ declare const SourceCandidateSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
     }, z.core.$strict>;
     candidateId: z.ZodString;
     framework: z.ZodUnion<readonly [z.ZodEnum<{
-        svelte: "svelte";
-        react: "react";
-        vue: "vue";
-        angular: "angular";
-        astro: "astro";
-        preact: "preact";
-        solid: "solid";
+        readonly svelte: "svelte";
+        readonly react: "react";
+        readonly vue: "vue";
+        readonly angular: "angular";
+        readonly astro: "astro";
+        readonly preact: "preact";
+        readonly solid: "solid";
     }>, z.ZodString]>;
     extraction: z.ZodDiscriminatedUnion<[z.ZodObject<{
         kind: z.ZodLiteral<"runtime-field">;
@@ -398,13 +398,13 @@ declare const SourceCandidateSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
     }, z.core.$strict>;
     candidateId: z.ZodString;
     framework: z.ZodUnion<readonly [z.ZodEnum<{
-        svelte: "svelte";
-        react: "react";
-        vue: "vue";
-        angular: "angular";
-        astro: "astro";
-        preact: "preact";
-        solid: "solid";
+        readonly svelte: "svelte";
+        readonly react: "react";
+        readonly vue: "vue";
+        readonly angular: "angular";
+        readonly astro: "astro";
+        readonly preact: "preact";
+        readonly solid: "solid";
     }>, z.ZodString]>;
     extraction: z.ZodDiscriminatedUnion<[z.ZodObject<{
         kind: z.ZodLiteral<"runtime-field">;
@@ -433,13 +433,13 @@ declare const SourceCandidateSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
     }, z.core.$strict>;
     candidateId: z.ZodString;
     framework: z.ZodUnion<readonly [z.ZodEnum<{
-        svelte: "svelte";
-        react: "react";
-        vue: "vue";
-        angular: "angular";
-        astro: "astro";
-        preact: "preact";
-        solid: "solid";
+        readonly svelte: "svelte";
+        readonly react: "react";
+        readonly vue: "vue";
+        readonly angular: "angular";
+        readonly astro: "astro";
+        readonly preact: "preact";
+        readonly solid: "solid";
     }>, z.ZodString]>;
     extraction: z.ZodDiscriminatedUnion<[z.ZodObject<{
         kind: z.ZodLiteral<"runtime-field">;
@@ -468,13 +468,13 @@ declare const SourceCandidateSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
     }, z.core.$strict>>;
     candidateId: z.ZodString;
     framework: z.ZodUnion<readonly [z.ZodEnum<{
-        svelte: "svelte";
-        react: "react";
-        vue: "vue";
-        angular: "angular";
-        astro: "astro";
-        preact: "preact";
-        solid: "solid";
+        readonly svelte: "svelte";
+        readonly react: "react";
+        readonly vue: "vue";
+        readonly angular: "angular";
+        readonly astro: "astro";
+        readonly preact: "preact";
+        readonly solid: "solid";
     }>, z.ZodString]>;
     extraction: z.ZodDiscriminatedUnion<[z.ZodObject<{
         kind: z.ZodLiteral<"runtime-field">;
@@ -492,13 +492,13 @@ declare const SourceCandidateSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
 }, z.core.$strict>, z.ZodObject<{
     candidateId: z.ZodString;
     framework: z.ZodUnion<readonly [z.ZodEnum<{
-        svelte: "svelte";
-        react: "react";
-        vue: "vue";
-        angular: "angular";
-        astro: "astro";
-        preact: "preact";
-        solid: "solid";
+        readonly svelte: "svelte";
+        readonly react: "react";
+        readonly vue: "vue";
+        readonly angular: "angular";
+        readonly astro: "astro";
+        readonly preact: "preact";
+        readonly solid: "solid";
     }>, z.ZodString]>;
     extraction: z.ZodDiscriminatedUnion<[z.ZodObject<{
         kind: z.ZodLiteral<"runtime-field">;
@@ -535,13 +535,14 @@ declare const SourceFileRefSchema: z.ZodObject<{
 }, z.core.$strict>;
 type SourceFileRef = z.infer<typeof SourceFileRefSchema>;
 declare const UnavailableReasonSchema: z.ZodEnum<{
-    "file-missing": "file-missing";
-    "outside-workspace": "outside-workspace";
-    "map-missing": "map-missing";
-    mismatch: "mismatch";
-    unsupported: "unsupported";
-    "budget-exhausted": "budget-exhausted";
-    cancelled: "cancelled";
+    readonly "outside-workspace": "outside-workspace";
+    readonly "file-missing": "file-missing";
+    readonly "map-missing": "map-missing";
+    /** The file was read and the claim does not hold in it. */
+    readonly mismatch: "mismatch";
+    readonly unsupported: "unsupported";
+    readonly "budget-exhausted": "budget-exhausted";
+    readonly cancelled: "cancelled";
 }>;
 type UnavailableReason = z.infer<typeof UnavailableReasonSchema>;
 /**
@@ -583,11 +584,11 @@ declare const ResolutionResultSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
     fileRevision: z.ZodNullable<z.ZodString>;
     candidateId: z.ZodString;
     claim: z.ZodEnum<{
-        "element-creation": "element-creation";
-        "component-invocation": "component-invocation";
-        "component-definition": "component-definition";
-        "template-location": "template-location";
-        "file-hint": "file-hint";
+        readonly "element-creation": "element-creation";
+        readonly "component-invocation": "component-invocation";
+        readonly "component-definition": "component-definition";
+        readonly "template-location": "template-location";
+        readonly "file-hint": "file-hint";
     }>;
 }, z.core.$strict>, z.ZodObject<{
     state: z.ZodLiteral<"mapped">;
@@ -613,18 +614,18 @@ declare const ResolutionResultSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
         mapUrl: z.ZodNullable<z.ZodString>;
         mapRevision: z.ZodString;
         sourceCheck: z.ZodEnum<{
-            matches: "matches";
-            differs: "differs";
-            unchecked: "unchecked";
+            readonly matches: "matches";
+            readonly differs: "differs";
+            readonly unchecked: "unchecked";
         }>;
     }, z.core.$strict>;
     candidateId: z.ZodString;
     claim: z.ZodEnum<{
-        "element-creation": "element-creation";
-        "component-invocation": "component-invocation";
-        "component-definition": "component-definition";
-        "template-location": "template-location";
-        "file-hint": "file-hint";
+        readonly "element-creation": "element-creation";
+        readonly "component-invocation": "component-invocation";
+        readonly "component-definition": "component-definition";
+        readonly "template-location": "template-location";
+        readonly "file-hint": "file-hint";
     }>;
 }, z.core.$strict>, z.ZodObject<{
     state: z.ZodLiteral<"verified">;
@@ -650,9 +651,9 @@ declare const ResolutionResultSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
         mapUrl: z.ZodNullable<z.ZodString>;
         mapRevision: z.ZodString;
         sourceCheck: z.ZodEnum<{
-            matches: "matches";
-            differs: "differs";
-            unchecked: "unchecked";
+            readonly matches: "matches";
+            readonly differs: "differs";
+            readonly unchecked: "unchecked";
         }>;
     }, z.core.$strict>>;
     placedBy: z.ZodOptional<z.ZodLiteral<"structure">>;
@@ -666,11 +667,11 @@ declare const ResolutionResultSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
     }, z.core.$strict>>;
     candidateId: z.ZodString;
     claim: z.ZodEnum<{
-        "element-creation": "element-creation";
-        "component-invocation": "component-invocation";
-        "component-definition": "component-definition";
-        "template-location": "template-location";
-        "file-hint": "file-hint";
+        readonly "element-creation": "element-creation";
+        readonly "component-invocation": "component-invocation";
+        readonly "component-definition": "component-definition";
+        readonly "template-location": "template-location";
+        readonly "file-hint": "file-hint";
     }>;
 }, z.core.$strict>, z.ZodObject<{
     alternatives: z.ZodArray<z.ZodDiscriminatedUnion<[z.ZodObject<{
@@ -717,9 +718,9 @@ declare const ResolutionResultSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
             mapUrl: z.ZodNullable<z.ZodString>;
             mapRevision: z.ZodString;
             sourceCheck: z.ZodEnum<{
-                matches: "matches";
-                differs: "differs";
-                unchecked: "unchecked";
+                readonly matches: "matches";
+                readonly differs: "differs";
+                readonly unchecked: "unchecked";
             }>;
         }, z.core.$strict>;
     }, z.core.$strict>, z.ZodObject<{
@@ -746,20 +747,20 @@ declare const ResolutionResultSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
             mapUrl: z.ZodNullable<z.ZodString>;
             mapRevision: z.ZodString;
             sourceCheck: z.ZodEnum<{
-                matches: "matches";
-                differs: "differs";
-                unchecked: "unchecked";
+                readonly matches: "matches";
+                readonly differs: "differs";
+                readonly unchecked: "unchecked";
             }>;
         }, z.core.$strict>>;
         placedBy: z.ZodOptional<z.ZodLiteral<"structure">>;
     }, z.core.$strict>], "state">>;
     candidateId: z.ZodString;
     claim: z.ZodEnum<{
-        "element-creation": "element-creation";
-        "component-invocation": "component-invocation";
-        "component-definition": "component-definition";
-        "template-location": "template-location";
-        "file-hint": "file-hint";
+        readonly "element-creation": "element-creation";
+        readonly "component-invocation": "component-invocation";
+        readonly "component-definition": "component-definition";
+        readonly "template-location": "template-location";
+        readonly "file-hint": "file-hint";
     }>;
     state: z.ZodLiteral<"ambiguous">;
 }, z.core.$strict>, z.ZodObject<{
@@ -807,9 +808,9 @@ declare const ResolutionResultSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
             mapUrl: z.ZodNullable<z.ZodString>;
             mapRevision: z.ZodString;
             sourceCheck: z.ZodEnum<{
-                matches: "matches";
-                differs: "differs";
-                unchecked: "unchecked";
+                readonly matches: "matches";
+                readonly differs: "differs";
+                readonly unchecked: "unchecked";
             }>;
         }, z.core.$strict>;
     }, z.core.$strict>, z.ZodObject<{
@@ -836,38 +837,39 @@ declare const ResolutionResultSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
             mapUrl: z.ZodNullable<z.ZodString>;
             mapRevision: z.ZodString;
             sourceCheck: z.ZodEnum<{
-                matches: "matches";
-                differs: "differs";
-                unchecked: "unchecked";
+                readonly matches: "matches";
+                readonly differs: "differs";
+                readonly unchecked: "unchecked";
             }>;
         }, z.core.$strict>>;
         placedBy: z.ZodOptional<z.ZodLiteral<"structure">>;
     }, z.core.$strict>], "state">;
     currentFileRevision: z.ZodNullable<z.ZodString>;
     reason: z.ZodEnum<{
-        "file-changed": "file-changed";
-        "file-missing": "file-missing";
-        "map-changed": "map-changed";
-        "document-changed": "document-changed";
+        readonly "file-changed": "file-changed";
+        readonly "file-missing": "file-missing";
+        readonly "map-changed": "map-changed";
+        readonly "document-changed": "document-changed";
     }>;
     candidateId: z.ZodString;
     claim: z.ZodEnum<{
-        "element-creation": "element-creation";
-        "component-invocation": "component-invocation";
-        "component-definition": "component-definition";
-        "template-location": "template-location";
-        "file-hint": "file-hint";
+        readonly "element-creation": "element-creation";
+        readonly "component-invocation": "component-invocation";
+        readonly "component-definition": "component-definition";
+        readonly "template-location": "template-location";
+        readonly "file-hint": "file-hint";
     }>;
     state: z.ZodLiteral<"stale">;
 }, z.core.$strict>, z.ZodObject<{
     reason: z.ZodEnum<{
-        "file-missing": "file-missing";
-        "outside-workspace": "outside-workspace";
-        "map-missing": "map-missing";
-        mismatch: "mismatch";
-        unsupported: "unsupported";
-        "budget-exhausted": "budget-exhausted";
-        cancelled: "cancelled";
+        readonly "outside-workspace": "outside-workspace";
+        readonly "file-missing": "file-missing";
+        readonly "map-missing": "map-missing";
+        /** The file was read and the claim does not hold in it. */
+        readonly mismatch: "mismatch";
+        readonly unsupported: "unsupported";
+        readonly "budget-exhausted": "budget-exhausted";
+        readonly cancelled: "cancelled";
     }>;
     read: z.ZodOptional<z.ZodObject<{
         file: z.ZodObject<{
@@ -878,11 +880,11 @@ declare const ResolutionResultSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
     }, z.core.$strict>>;
     candidateId: z.ZodString;
     claim: z.ZodEnum<{
-        "element-creation": "element-creation";
-        "component-invocation": "component-invocation";
-        "component-definition": "component-definition";
-        "template-location": "template-location";
-        "file-hint": "file-hint";
+        readonly "element-creation": "element-creation";
+        readonly "component-invocation": "component-invocation";
+        readonly "component-definition": "component-definition";
+        readonly "template-location": "template-location";
+        readonly "file-hint": "file-hint";
     }>;
     state: z.ZodLiteral<"unavailable">;
 }, z.core.$strict>], "state">;
@@ -925,20 +927,20 @@ declare const ResolveRequestSchema: z.ZodObject<{
         }, z.core.$strict>>;
         detections: z.ZodArray<z.ZodObject<{
             framework: z.ZodUnion<readonly [z.ZodEnum<{
-                svelte: "svelte";
-                react: "react";
-                vue: "vue";
-                angular: "angular";
-                astro: "astro";
-                preact: "preact";
-                solid: "solid";
+                readonly svelte: "svelte";
+                readonly react: "react";
+                readonly vue: "vue";
+                readonly angular: "angular";
+                readonly astro: "astro";
+                readonly preact: "preact";
+                readonly solid: "solid";
             }>, z.ZodString]>;
             signals: z.ZodArray<z.ZodObject<{
                 via: z.ZodEnum<{
-                    attribute: "attribute";
-                    global: "global";
-                    expando: "expando";
-                    "document-sample": "document-sample";
+                    readonly global: "global";
+                    readonly expando: "expando";
+                    readonly attribute: "attribute";
+                    readonly "document-sample": "document-sample";
                 }>;
                 name: z.ZodString;
             }, z.core.$strict>>;
@@ -948,13 +950,13 @@ declare const ResolveRequestSchema: z.ZodObject<{
             components: z.ZodArray<z.ZodObject<{
                 componentId: z.ZodString;
                 framework: z.ZodUnion<readonly [z.ZodEnum<{
-                    svelte: "svelte";
-                    react: "react";
-                    vue: "vue";
-                    angular: "angular";
-                    astro: "astro";
-                    preact: "preact";
-                    solid: "solid";
+                    readonly svelte: "svelte";
+                    readonly react: "react";
+                    readonly vue: "vue";
+                    readonly angular: "angular";
+                    readonly astro: "astro";
+                    readonly preact: "preact";
+                    readonly solid: "solid";
                 }>, z.ZodString]>;
                 name: z.ZodNullable<z.ZodObject<{
                     value: z.ZodString;
@@ -971,9 +973,9 @@ declare const ResolveRequestSchema: z.ZodObject<{
                     }, z.core.$strict>], "kind">;
                 }, z.core.$strict>>;
                 environment: z.ZodEnum<{
-                    unknown: "unknown";
-                    client: "client";
-                    server: "server";
+                    readonly client: "client";
+                    readonly server: "server";
+                    readonly unknown: "unknown";
                 }>;
                 renderParentId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
                 ownerId: z.ZodOptional<z.ZodNullable<z.ZodString>>;
@@ -993,13 +995,13 @@ declare const ResolveRequestSchema: z.ZodObject<{
                     }, z.core.$strict>;
                     candidateId: z.ZodString;
                     framework: z.ZodUnion<readonly [z.ZodEnum<{
-                        svelte: "svelte";
-                        react: "react";
-                        vue: "vue";
-                        angular: "angular";
-                        astro: "astro";
-                        preact: "preact";
-                        solid: "solid";
+                        readonly svelte: "svelte";
+                        readonly react: "react";
+                        readonly vue: "vue";
+                        readonly angular: "angular";
+                        readonly astro: "astro";
+                        readonly preact: "preact";
+                        readonly solid: "solid";
                     }>, z.ZodString]>;
                     extraction: z.ZodDiscriminatedUnion<[z.ZodObject<{
                         kind: z.ZodLiteral<"runtime-field">;
@@ -1028,13 +1030,13 @@ declare const ResolveRequestSchema: z.ZodObject<{
                     }, z.core.$strict>;
                     candidateId: z.ZodString;
                     framework: z.ZodUnion<readonly [z.ZodEnum<{
-                        svelte: "svelte";
-                        react: "react";
-                        vue: "vue";
-                        angular: "angular";
-                        astro: "astro";
-                        preact: "preact";
-                        solid: "solid";
+                        readonly svelte: "svelte";
+                        readonly react: "react";
+                        readonly vue: "vue";
+                        readonly angular: "angular";
+                        readonly astro: "astro";
+                        readonly preact: "preact";
+                        readonly solid: "solid";
                     }>, z.ZodString]>;
                     extraction: z.ZodDiscriminatedUnion<[z.ZodObject<{
                         kind: z.ZodLiteral<"runtime-field">;
@@ -1063,13 +1065,13 @@ declare const ResolveRequestSchema: z.ZodObject<{
                     }, z.core.$strict>;
                     candidateId: z.ZodString;
                     framework: z.ZodUnion<readonly [z.ZodEnum<{
-                        svelte: "svelte";
-                        react: "react";
-                        vue: "vue";
-                        angular: "angular";
-                        astro: "astro";
-                        preact: "preact";
-                        solid: "solid";
+                        readonly svelte: "svelte";
+                        readonly react: "react";
+                        readonly vue: "vue";
+                        readonly angular: "angular";
+                        readonly astro: "astro";
+                        readonly preact: "preact";
+                        readonly solid: "solid";
                     }>, z.ZodString]>;
                     extraction: z.ZodDiscriminatedUnion<[z.ZodObject<{
                         kind: z.ZodLiteral<"runtime-field">;
@@ -1098,13 +1100,13 @@ declare const ResolveRequestSchema: z.ZodObject<{
                     }, z.core.$strict>>;
                     candidateId: z.ZodString;
                     framework: z.ZodUnion<readonly [z.ZodEnum<{
-                        svelte: "svelte";
-                        react: "react";
-                        vue: "vue";
-                        angular: "angular";
-                        astro: "astro";
-                        preact: "preact";
-                        solid: "solid";
+                        readonly svelte: "svelte";
+                        readonly react: "react";
+                        readonly vue: "vue";
+                        readonly angular: "angular";
+                        readonly astro: "astro";
+                        readonly preact: "preact";
+                        readonly solid: "solid";
                     }>, z.ZodString]>;
                     extraction: z.ZodDiscriminatedUnion<[z.ZodObject<{
                         kind: z.ZodLiteral<"runtime-field">;
@@ -1122,13 +1124,13 @@ declare const ResolveRequestSchema: z.ZodObject<{
                 }, z.core.$strict>, z.ZodObject<{
                     candidateId: z.ZodString;
                     framework: z.ZodUnion<readonly [z.ZodEnum<{
-                        svelte: "svelte";
-                        react: "react";
-                        vue: "vue";
-                        angular: "angular";
-                        astro: "astro";
-                        preact: "preact";
-                        solid: "solid";
+                        readonly svelte: "svelte";
+                        readonly react: "react";
+                        readonly vue: "vue";
+                        readonly angular: "angular";
+                        readonly astro: "astro";
+                        readonly preact: "preact";
+                        readonly solid: "solid";
                     }>, z.ZodString]>;
                     extraction: z.ZodDiscriminatedUnion<[z.ZodObject<{
                         kind: z.ZodLiteral<"runtime-field">;
@@ -1161,13 +1163,13 @@ declare const ResolveRequestSchema: z.ZodObject<{
             }, z.core.$strict>;
             candidateId: z.ZodString;
             framework: z.ZodUnion<readonly [z.ZodEnum<{
-                svelte: "svelte";
-                react: "react";
-                vue: "vue";
-                angular: "angular";
-                astro: "astro";
-                preact: "preact";
-                solid: "solid";
+                readonly svelte: "svelte";
+                readonly react: "react";
+                readonly vue: "vue";
+                readonly angular: "angular";
+                readonly astro: "astro";
+                readonly preact: "preact";
+                readonly solid: "solid";
             }>, z.ZodString]>;
             extraction: z.ZodDiscriminatedUnion<[z.ZodObject<{
                 kind: z.ZodLiteral<"runtime-field">;
@@ -1196,13 +1198,13 @@ declare const ResolveRequestSchema: z.ZodObject<{
             }, z.core.$strict>;
             candidateId: z.ZodString;
             framework: z.ZodUnion<readonly [z.ZodEnum<{
-                svelte: "svelte";
-                react: "react";
-                vue: "vue";
-                angular: "angular";
-                astro: "astro";
-                preact: "preact";
-                solid: "solid";
+                readonly svelte: "svelte";
+                readonly react: "react";
+                readonly vue: "vue";
+                readonly angular: "angular";
+                readonly astro: "astro";
+                readonly preact: "preact";
+                readonly solid: "solid";
             }>, z.ZodString]>;
             extraction: z.ZodDiscriminatedUnion<[z.ZodObject<{
                 kind: z.ZodLiteral<"runtime-field">;
@@ -1231,13 +1233,13 @@ declare const ResolveRequestSchema: z.ZodObject<{
             }, z.core.$strict>;
             candidateId: z.ZodString;
             framework: z.ZodUnion<readonly [z.ZodEnum<{
-                svelte: "svelte";
-                react: "react";
-                vue: "vue";
-                angular: "angular";
-                astro: "astro";
-                preact: "preact";
-                solid: "solid";
+                readonly svelte: "svelte";
+                readonly react: "react";
+                readonly vue: "vue";
+                readonly angular: "angular";
+                readonly astro: "astro";
+                readonly preact: "preact";
+                readonly solid: "solid";
             }>, z.ZodString]>;
             extraction: z.ZodDiscriminatedUnion<[z.ZodObject<{
                 kind: z.ZodLiteral<"runtime-field">;
@@ -1266,13 +1268,13 @@ declare const ResolveRequestSchema: z.ZodObject<{
             }, z.core.$strict>>;
             candidateId: z.ZodString;
             framework: z.ZodUnion<readonly [z.ZodEnum<{
-                svelte: "svelte";
-                react: "react";
-                vue: "vue";
-                angular: "angular";
-                astro: "astro";
-                preact: "preact";
-                solid: "solid";
+                readonly svelte: "svelte";
+                readonly react: "react";
+                readonly vue: "vue";
+                readonly angular: "angular";
+                readonly astro: "astro";
+                readonly preact: "preact";
+                readonly solid: "solid";
             }>, z.ZodString]>;
             extraction: z.ZodDiscriminatedUnion<[z.ZodObject<{
                 kind: z.ZodLiteral<"runtime-field">;
@@ -1290,13 +1292,13 @@ declare const ResolveRequestSchema: z.ZodObject<{
         }, z.core.$strict>, z.ZodObject<{
             candidateId: z.ZodString;
             framework: z.ZodUnion<readonly [z.ZodEnum<{
-                svelte: "svelte";
-                react: "react";
-                vue: "vue";
-                angular: "angular";
-                astro: "astro";
-                preact: "preact";
-                solid: "solid";
+                readonly svelte: "svelte";
+                readonly react: "react";
+                readonly vue: "vue";
+                readonly angular: "angular";
+                readonly astro: "astro";
+                readonly preact: "preact";
+                readonly solid: "solid";
             }>, z.ZodString]>;
             extraction: z.ZodDiscriminatedUnion<[z.ZodObject<{
                 kind: z.ZodLiteral<"runtime-field">;
@@ -1320,10 +1322,10 @@ declare const ResolveRequestSchema: z.ZodObject<{
             }, z.core.$strict>, z.ZodObject<{
                 state: z.ZodLiteral<"unavailable">;
                 reason: z.ZodEnum<{
-                    unmapped: "unmapped";
-                    "not-exposed": "not-exposed";
-                    "production-build": "production-build";
-                    "no-framework": "no-framework";
+                    readonly "not-exposed": "not-exposed";
+                    readonly "production-build": "production-build";
+                    readonly "no-framework": "no-framework";
+                    readonly unmapped: "unmapped";
                 }>;
             }, z.core.$strict>], "state">;
             chain: z.ZodDiscriminatedUnion<[z.ZodObject<{
@@ -1333,10 +1335,10 @@ declare const ResolveRequestSchema: z.ZodObject<{
             }, z.core.$strict>, z.ZodObject<{
                 state: z.ZodLiteral<"unavailable">;
                 reason: z.ZodEnum<{
-                    unmapped: "unmapped";
-                    "not-exposed": "not-exposed";
-                    "production-build": "production-build";
-                    "no-framework": "no-framework";
+                    readonly "not-exposed": "not-exposed";
+                    readonly "production-build": "production-build";
+                    readonly "no-framework": "no-framework";
+                    readonly unmapped: "unmapped";
                 }>;
             }, z.core.$strict>], "state">;
             componentSelection: z.ZodDiscriminatedUnion<[z.ZodObject<{
@@ -1346,10 +1348,10 @@ declare const ResolveRequestSchema: z.ZodObject<{
             }, z.core.$strict>, z.ZodObject<{
                 state: z.ZodLiteral<"unavailable">;
                 reason: z.ZodEnum<{
-                    unmapped: "unmapped";
-                    "not-exposed": "not-exposed";
-                    "production-build": "production-build";
-                    "no-framework": "no-framework";
+                    readonly "not-exposed": "not-exposed";
+                    readonly "production-build": "production-build";
+                    readonly "no-framework": "no-framework";
+                    readonly unmapped: "unmapped";
                 }>;
             }, z.core.$strict>], "state">;
             file: z.ZodDiscriminatedUnion<[z.ZodObject<{
@@ -1359,10 +1361,10 @@ declare const ResolveRequestSchema: z.ZodObject<{
             }, z.core.$strict>, z.ZodObject<{
                 state: z.ZodLiteral<"unavailable">;
                 reason: z.ZodEnum<{
-                    unmapped: "unmapped";
-                    "not-exposed": "not-exposed";
-                    "production-build": "production-build";
-                    "no-framework": "no-framework";
+                    readonly "not-exposed": "not-exposed";
+                    readonly "production-build": "production-build";
+                    readonly "no-framework": "no-framework";
+                    readonly unmapped: "unmapped";
                 }>;
             }, z.core.$strict>], "state">;
             line: z.ZodDiscriminatedUnion<[z.ZodObject<{
@@ -1372,10 +1374,10 @@ declare const ResolveRequestSchema: z.ZodObject<{
             }, z.core.$strict>, z.ZodObject<{
                 state: z.ZodLiteral<"unavailable">;
                 reason: z.ZodEnum<{
-                    unmapped: "unmapped";
-                    "not-exposed": "not-exposed";
-                    "production-build": "production-build";
-                    "no-framework": "no-framework";
+                    readonly "not-exposed": "not-exposed";
+                    readonly "production-build": "production-build";
+                    readonly "no-framework": "no-framework";
+                    readonly unmapped: "unmapped";
                 }>;
             }, z.core.$strict>], "state">;
             exactRange: z.ZodDiscriminatedUnion<[z.ZodObject<{
@@ -1385,10 +1387,10 @@ declare const ResolveRequestSchema: z.ZodObject<{
             }, z.core.$strict>, z.ZodObject<{
                 state: z.ZodLiteral<"unavailable">;
                 reason: z.ZodEnum<{
-                    unmapped: "unmapped";
-                    "not-exposed": "not-exposed";
-                    "production-build": "production-build";
-                    "no-framework": "no-framework";
+                    readonly "not-exposed": "not-exposed";
+                    readonly "production-build": "production-build";
+                    readonly "no-framework": "no-framework";
+                    readonly unmapped: "unmapped";
                 }>;
             }, z.core.$strict>], "state">;
         }, z.core.$strict>;
@@ -1415,13 +1417,13 @@ declare const ResolveRequestSchema: z.ZodObject<{
         }, z.core.$strict>, z.ZodObject<{
             kind: z.ZodLiteral<"generic">;
             framework: z.ZodUnion<readonly [z.ZodEnum<{
-                svelte: "svelte";
-                react: "react";
-                vue: "vue";
-                angular: "angular";
-                astro: "astro";
-                preact: "preact";
-                solid: "solid";
+                readonly svelte: "svelte";
+                readonly react: "react";
+                readonly vue: "vue";
+                readonly angular: "angular";
+                readonly astro: "astro";
+                readonly preact: "preact";
+                readonly solid: "solid";
             }>, z.ZodString]>;
             fields: z.ZodArray<z.ZodObject<{
                 name: z.ZodString;
@@ -1473,11 +1475,11 @@ declare const ResolveResponseSchema: z.ZodObject<{
             fileRevision: z.ZodNullable<z.ZodString>;
             candidateId: z.ZodString;
             claim: z.ZodEnum<{
-                "element-creation": "element-creation";
-                "component-invocation": "component-invocation";
-                "component-definition": "component-definition";
-                "template-location": "template-location";
-                "file-hint": "file-hint";
+                readonly "element-creation": "element-creation";
+                readonly "component-invocation": "component-invocation";
+                readonly "component-definition": "component-definition";
+                readonly "template-location": "template-location";
+                readonly "file-hint": "file-hint";
             }>;
         }, z.core.$strict>, z.ZodObject<{
             state: z.ZodLiteral<"mapped">;
@@ -1503,18 +1505,18 @@ declare const ResolveResponseSchema: z.ZodObject<{
                 mapUrl: z.ZodNullable<z.ZodString>;
                 mapRevision: z.ZodString;
                 sourceCheck: z.ZodEnum<{
-                    matches: "matches";
-                    differs: "differs";
-                    unchecked: "unchecked";
+                    readonly matches: "matches";
+                    readonly differs: "differs";
+                    readonly unchecked: "unchecked";
                 }>;
             }, z.core.$strict>;
             candidateId: z.ZodString;
             claim: z.ZodEnum<{
-                "element-creation": "element-creation";
-                "component-invocation": "component-invocation";
-                "component-definition": "component-definition";
-                "template-location": "template-location";
-                "file-hint": "file-hint";
+                readonly "element-creation": "element-creation";
+                readonly "component-invocation": "component-invocation";
+                readonly "component-definition": "component-definition";
+                readonly "template-location": "template-location";
+                readonly "file-hint": "file-hint";
             }>;
         }, z.core.$strict>, z.ZodObject<{
             state: z.ZodLiteral<"verified">;
@@ -1540,9 +1542,9 @@ declare const ResolveResponseSchema: z.ZodObject<{
                 mapUrl: z.ZodNullable<z.ZodString>;
                 mapRevision: z.ZodString;
                 sourceCheck: z.ZodEnum<{
-                    matches: "matches";
-                    differs: "differs";
-                    unchecked: "unchecked";
+                    readonly matches: "matches";
+                    readonly differs: "differs";
+                    readonly unchecked: "unchecked";
                 }>;
             }, z.core.$strict>>;
             placedBy: z.ZodOptional<z.ZodLiteral<"structure">>;
@@ -1556,11 +1558,11 @@ declare const ResolveResponseSchema: z.ZodObject<{
             }, z.core.$strict>>;
             candidateId: z.ZodString;
             claim: z.ZodEnum<{
-                "element-creation": "element-creation";
-                "component-invocation": "component-invocation";
-                "component-definition": "component-definition";
-                "template-location": "template-location";
-                "file-hint": "file-hint";
+                readonly "element-creation": "element-creation";
+                readonly "component-invocation": "component-invocation";
+                readonly "component-definition": "component-definition";
+                readonly "template-location": "template-location";
+                readonly "file-hint": "file-hint";
             }>;
         }, z.core.$strict>, z.ZodObject<{
             alternatives: z.ZodArray<z.ZodDiscriminatedUnion<[z.ZodObject<{
@@ -1607,9 +1609,9 @@ declare const ResolveResponseSchema: z.ZodObject<{
                     mapUrl: z.ZodNullable<z.ZodString>;
                     mapRevision: z.ZodString;
                     sourceCheck: z.ZodEnum<{
-                        matches: "matches";
-                        differs: "differs";
-                        unchecked: "unchecked";
+                        readonly matches: "matches";
+                        readonly differs: "differs";
+                        readonly unchecked: "unchecked";
                     }>;
                 }, z.core.$strict>;
             }, z.core.$strict>, z.ZodObject<{
@@ -1636,20 +1638,20 @@ declare const ResolveResponseSchema: z.ZodObject<{
                     mapUrl: z.ZodNullable<z.ZodString>;
                     mapRevision: z.ZodString;
                     sourceCheck: z.ZodEnum<{
-                        matches: "matches";
-                        differs: "differs";
-                        unchecked: "unchecked";
+                        readonly matches: "matches";
+                        readonly differs: "differs";
+                        readonly unchecked: "unchecked";
                     }>;
                 }, z.core.$strict>>;
                 placedBy: z.ZodOptional<z.ZodLiteral<"structure">>;
             }, z.core.$strict>], "state">>;
             candidateId: z.ZodString;
             claim: z.ZodEnum<{
-                "element-creation": "element-creation";
-                "component-invocation": "component-invocation";
-                "component-definition": "component-definition";
-                "template-location": "template-location";
-                "file-hint": "file-hint";
+                readonly "element-creation": "element-creation";
+                readonly "component-invocation": "component-invocation";
+                readonly "component-definition": "component-definition";
+                readonly "template-location": "template-location";
+                readonly "file-hint": "file-hint";
             }>;
             state: z.ZodLiteral<"ambiguous">;
         }, z.core.$strict>, z.ZodObject<{
@@ -1697,9 +1699,9 @@ declare const ResolveResponseSchema: z.ZodObject<{
                     mapUrl: z.ZodNullable<z.ZodString>;
                     mapRevision: z.ZodString;
                     sourceCheck: z.ZodEnum<{
-                        matches: "matches";
-                        differs: "differs";
-                        unchecked: "unchecked";
+                        readonly matches: "matches";
+                        readonly differs: "differs";
+                        readonly unchecked: "unchecked";
                     }>;
                 }, z.core.$strict>;
             }, z.core.$strict>, z.ZodObject<{
@@ -1726,38 +1728,38 @@ declare const ResolveResponseSchema: z.ZodObject<{
                     mapUrl: z.ZodNullable<z.ZodString>;
                     mapRevision: z.ZodString;
                     sourceCheck: z.ZodEnum<{
-                        matches: "matches";
-                        differs: "differs";
-                        unchecked: "unchecked";
+                        readonly matches: "matches";
+                        readonly differs: "differs";
+                        readonly unchecked: "unchecked";
                     }>;
                 }, z.core.$strict>>;
                 placedBy: z.ZodOptional<z.ZodLiteral<"structure">>;
             }, z.core.$strict>], "state">;
             currentFileRevision: z.ZodNullable<z.ZodString>;
             reason: z.ZodEnum<{
-                "file-changed": "file-changed";
-                "file-missing": "file-missing";
-                "map-changed": "map-changed";
-                "document-changed": "document-changed";
+                readonly "file-changed": "file-changed";
+                readonly "file-missing": "file-missing";
+                readonly "map-changed": "map-changed";
+                readonly "document-changed": "document-changed";
             }>;
             candidateId: z.ZodString;
             claim: z.ZodEnum<{
-                "element-creation": "element-creation";
-                "component-invocation": "component-invocation";
-                "component-definition": "component-definition";
-                "template-location": "template-location";
-                "file-hint": "file-hint";
+                readonly "element-creation": "element-creation";
+                readonly "component-invocation": "component-invocation";
+                readonly "component-definition": "component-definition";
+                readonly "template-location": "template-location";
+                readonly "file-hint": "file-hint";
             }>;
             state: z.ZodLiteral<"stale">;
         }, z.core.$strict>, z.ZodObject<{
             reason: z.ZodEnum<{
-                "file-missing": "file-missing";
-                "outside-workspace": "outside-workspace";
-                "map-missing": "map-missing";
-                mismatch: "mismatch";
-                unsupported: "unsupported";
-                "budget-exhausted": "budget-exhausted";
-                cancelled: "cancelled";
+                readonly "outside-workspace": "outside-workspace";
+                readonly "file-missing": "file-missing";
+                readonly "map-missing": "map-missing";
+                readonly mismatch: "mismatch";
+                readonly unsupported: "unsupported";
+                readonly "budget-exhausted": "budget-exhausted";
+                readonly cancelled: "cancelled";
             }>;
             read: z.ZodOptional<z.ZodObject<{
                 file: z.ZodObject<{
@@ -1768,11 +1770,11 @@ declare const ResolveResponseSchema: z.ZodObject<{
             }, z.core.$strict>>;
             candidateId: z.ZodString;
             claim: z.ZodEnum<{
-                "element-creation": "element-creation";
-                "component-invocation": "component-invocation";
-                "component-definition": "component-definition";
-                "template-location": "template-location";
-                "file-hint": "file-hint";
+                readonly "element-creation": "element-creation";
+                readonly "component-invocation": "component-invocation";
+                readonly "component-definition": "component-definition";
+                readonly "template-location": "template-location";
+                readonly "file-hint": "file-hint";
             }>;
             state: z.ZodLiteral<"unavailable">;
         }, z.core.$strict>], "state">>;
@@ -1947,4 +1949,5 @@ type ElementPickerResolverFactory = (providerId: string) => ElementPickerResolve
  */
 declare function defineElementPickerResolver(factory: ElementPickerResolverFactory): ElementPickerResolverFactory;
 
-export { type ElementPickerContribution, type ElementPickerExtractor, type ElementPickerExtractorFactory, type ElementPickerNotice, type ElementPickerOwnership, type ElementPickerPhase, type ElementPickerRefs, type ElementPickerResolver, type ElementPickerResolverFactory, type FileRevision, type MapSourceLocation, type ResolutionResult, type ResolveRequest, type ResolveResponse, type ResolverSourceAccess, type RevisionedSource, type RevisionedSourceMap, type SourceAccessResult, type SourceFileRef, type UnavailableReason, defineElementPickerExtractor, defineElementPickerResolver };
+export { defineElementPickerExtractor, defineElementPickerResolver };
+export type { ElementPickerContribution, ElementPickerExtractor, ElementPickerExtractorFactory, ElementPickerNotice, ElementPickerOwnership, ElementPickerPhase, ElementPickerRefs, ElementPickerResolver, ElementPickerResolverFactory, FileRevision, MapSourceLocation, ResolutionResult, ResolveRequest, ResolveResponse, ResolverSourceAccess, RevisionedSource, RevisionedSourceMap, SourceAccessResult, SourceFileRef, UnavailableReason };

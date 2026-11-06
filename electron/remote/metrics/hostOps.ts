@@ -285,20 +285,21 @@ function worktreeKey(projectId: string, worktreeId: string): string {
 
 /**
  * Every agent in each worktree as this host's fleet placed it, most urgent
- * first, keyed by project and worktree. Canopy's reading is left out: another
- * machine is shown what this host observed, never an interpretation of it.
- * Equal bands settle on the lowest run id, so the order is stable.
+ * first, keyed by project and worktree. Placed by this host's own fleet rules:
+ * what it observed, the needs-you markers its agents printed, and its own
+ * Canopy reading when it reads, so a host from before a rule places by the ones
+ * it has. The observed state rides beside the band unchanged. Equal bands
+ * settle on the lowest run id, so the order is stable.
  */
 export function observeWorktreeRuns(runs: readonly FleetRunRow[]): Map<string, HostWorktreeRun[]> {
   const out = new Map<string, HostWorktreeRun[]>();
   for (const run of runs) {
     if (!run.worktreeId) continue;
-    const { canopy: _canopy, ...observed } = run;
     const key = worktreeKey(run.workspaceId, run.worktreeId);
     const held = out.get(key) ?? [];
     held.push({
       terminalId: run.runId,
-      band: bandForRun(observed),
+      band: bandForRun(run),
       agentState: run.agentState ?? null,
     });
     out.set(key, held);
@@ -338,6 +339,15 @@ export function onLocalWorktreesMaybeChanged(listener: () => void): () => void {
     for (const off of offs) off();
     offFleet?.();
   };
+}
+
+/**
+ * Be told whenever which projects this machine has may have changed: one was
+ * added or removed, or moved, renamed or changed its git backing. The only
+ * thing that changes which of them another machine's project matches here.
+ */
+export function onLocalProjectsChanged(listener: () => void): () => void {
+  return projectStore.onProjectRegistryChanged(listener);
 }
 
 /** Every worktree of this host's open projects. */

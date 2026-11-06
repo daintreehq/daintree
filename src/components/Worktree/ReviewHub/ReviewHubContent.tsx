@@ -290,6 +290,16 @@ export function ReviewHubContent({
     },
     [worktreePath]
   );
+  // Stepping back out of a history recall returns the seed it covered as a
+  // seed, and the recalled message stored in its place goes (#7884, #15574).
+  const isCommitMessageSeed = commitDraft === undefined && commitMessage !== "";
+  const restoreCommitSeed = useCallback(
+    (message: string) => {
+      useReviewCommitDraftStore.getState().setDraft(worktreePath, "");
+      setCommitSeed(message === "" ? null : { worktreePath, message });
+    },
+    [worktreePath]
+  );
   // Only the draft that was committed goes: the hub can close, reopen and be
   // typed into again, or move to another worktree, while a commit and push run.
   const dropCommittedMessage = useCallback((committedPath: string, message: string) => {
@@ -1297,8 +1307,10 @@ export function ReviewHubContent({
       fileStatus: GitStatus,
       e: React.MouseEvent
     ) => {
-      const files = section === "staged" ? status?.staged : status?.unstaged;
-      if (e.shiftKey && files && selectionSection === section && selectionAnchorRef.current) {
+      // The drawn rows, not the raw status: a range must cover exactly what sits
+      // between the anchor and the click on screen, never filtered-out or hidden files.
+      const files = section === "staged" ? derivedStaged : derivedUnstaged;
+      if (e.shiftKey && selectionSection === section && selectionAnchorRef.current) {
         const anchorIdx = files.findIndex((f) => f.path === selectionAnchorRef.current);
         const clickIdx = files.findIndex((f) => f.path === filePath);
         if (anchorIdx !== -1 && clickIdx !== -1) {
@@ -1311,6 +1323,15 @@ export function ReviewHubContent({
           }
           setSelectedPaths(range);
           setSelectionSection(section);
+          return;
+        }
+        if (anchorIdx === -1 && clickIdx !== -1) {
+          // The anchor was hidden by a later filter or view change, so there is no drawn
+          // range to extend. Start over from the clicked row rather than falling through to
+          // a plain click, which would drop the selection and open a diff.
+          setSelectedPaths(new Set([filePath]));
+          setSelectionSection(section);
+          selectionAnchorRef.current = filePath;
           return;
         }
       }
@@ -1344,7 +1365,8 @@ export function ReviewHubContent({
       );
     },
     [
-      status,
+      derivedStaged,
+      derivedUnstaged,
       selectionSection,
       openFileDiff,
       setSelectedPaths,
@@ -2254,10 +2276,13 @@ export function ReviewHubContent({
               hasConflicts={hasConflicts}
               hasRemote={status.hasRemote}
               pushDestination={status.pushDestination}
+              onPushDestinationChanged={() => debouncedBgRefreshRef.current?.()}
               worktreePath={worktreePath}
               currentBranch={status.currentBranch}
               commitMessage={commitMessage}
               onCommitMessageChange={handleCommitMessageChange}
+              isCommitMessageSeed={isCommitMessageSeed}
+              onRestoreCommitSeed={restoreCommitSeed}
               onCommit={handleCommit}
               onCommitAndPush={handleCommitAndPush}
               onFocusBlocker={handleFocusBlocker}

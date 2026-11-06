@@ -91,7 +91,9 @@ export interface WorktreeSetupStatus {
    * One-line failure summary. Deliberately NOT the setup script's output: this
    * field rides every worktree snapshot and reaches model context through
    * `worktree.list`, while `lifecycleStatus.output` carries up to 8 KiB of
-   * arbitrary command output and stays where it is.
+   * arbitrary command output and stays where it is. The one exception is a
+   * line the failing command deliberately ends on to explain itself
+   * (`SETUP_FAILURE_SUMMARY_PREFIX`), scrubbed and capped.
    */
   error?: string;
   /**
@@ -656,6 +658,12 @@ export interface WorktreeCreateResult {
    * only when the host answered without it.
    */
   setupState: WorktreeSetupState | "unknown";
+  /**
+   * The full id of the commit the new branch started at, present only when
+   * the create was asked to `fetchBase` and did. It names the start, not the
+   * branch's tip by the time anyone reads it.
+   */
+  startCommit?: string;
 }
 
 export interface WorktreeListResult {

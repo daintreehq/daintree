@@ -669,18 +669,88 @@ describe("worktreeStore", () => {
       expect(entry?.prompt).toBe("fix the login bug");
     });
 
-    it("openCreateDialog carries the agent draft and closing clears it", () => {
-      useWorktreeSelectionStore.getState().openCreateDialog(null, {
-        initialAgentId: "claude",
-        initialPrompt: "fix the login bug",
-      });
+    it("openCreateDialog carries a restore draft and closing clears it", () => {
+      const restoreDraft = {
+        path: "/abs/path",
+        branch: "feature/foo",
+        agentId: "claude",
+        prompt: "fix the login bug",
+      };
+      useWorktreeSelectionStore.getState().openCreateDialog(null, { restoreDraft });
       let dialog = useWorktreeSelectionStore.getState().createDialog;
-      expect(dialog.initialAgentId).toBe("claude");
-      expect(dialog.initialPrompt).toBe("fix the login bug");
+      expect(dialog.restoreDraft).toEqual(restoreDraft);
       useWorktreeSelectionStore.getState().closeCreateDialog();
       dialog = useWorktreeSelectionStore.getState().createDialog;
-      expect(dialog.initialAgentId).toBeNull();
-      expect(dialog.initialPrompt).toBeNull();
+      expect(dialog.restoreDraft).toBeNull();
+    });
+
+    it("retryPendingCreation reopens the dialog with the whole failed request", () => {
+      const issue = makeIssue({ number: 42 });
+      const pr = makePR({ number: 7, headRef: "feature/pr-head" });
+      const request = {
+        branch: "feature/foo",
+        issue,
+        pr,
+        baseBranch: "origin/release",
+        branchMode: "existing" as const,
+        fromRemote: true,
+        worktreeMode: "docker",
+        recipeId: null,
+        agentId: "claude",
+        prompt: "fix the login bug",
+      };
+      const store = useWorktreeSelectionStore.getState();
+      store.addPendingCreation("/abs/path", request);
+      store.failPendingCreation("/abs/path", "fatal: boom");
+      store.addPendingCreation("/abs/other", { branch: "feature/other" });
+
+      useWorktreeSelectionStore.getState().retryPendingCreation("/abs/path");
+
+      const state = useWorktreeSelectionStore.getState();
+      expect(state.pendingCreations.has("/abs/path")).toBe(false);
+      expect(state.pendingCreations.has("/abs/other")).toBe(true);
+      expect(state.createDialog.isOpen).toBe(true);
+      expect(state.createDialog.initialIssue).toBe(issue);
+      expect(state.createDialog.initialPR).toBe(pr);
+      // Row bookkeeping stays behind: the dialog gets the request and nothing else.
+      expect(state.createDialog.restoreDraft).toEqual({ path: "/abs/path", ...request });
+    });
+
+    it("retryPendingCreation leaves other rows and a closed dialog alone for an unknown path", () => {
+      useWorktreeSelectionStore
+        .getState()
+        .addPendingCreation("/abs/path", { branch: "feature/foo" });
+      useWorktreeSelectionStore.getState().retryPendingCreation("/unknown");
+      const state = useWorktreeSelectionStore.getState();
+      expect(state.createDialog.isOpen).toBe(false);
+      expect(state.pendingCreations.has("/abs/path")).toBe(true);
+    });
+
+    // Straight from the Retry, with no close between, so the opening itself has
+    // to drop the draft.
+    it.each([
+      ["an ordinary opening", () => useWorktreeSelectionStore.getState().openCreateDialog(null)],
+      [
+        "a PR opening",
+        () => useWorktreeSelectionStore.getState().openCreateDialogForPR(makePR({ number: 3 })),
+      ],
+    ])("%s after a Retry starts without its draft", (_label, open) => {
+      const store = useWorktreeSelectionStore.getState();
+      store.addPendingCreation("/abs/path", {
+        branch: "feature/foo",
+        issue: makeIssue(),
+        pr: makePR({ number: 7 }),
+      });
+      store.failPendingCreation("/abs/path", "boom");
+      useWorktreeSelectionStore.getState().retryPendingCreation("/abs/path");
+      expect(useWorktreeSelectionStore.getState().createDialog.restoreDraft).not.toBeNull();
+
+      open();
+
+      const dialog = useWorktreeSelectionStore.getState().createDialog;
+      expect(dialog.restoreDraft).toBeNull();
+      expect(dialog.initialIssue).toBeNull();
+      expect(dialog.initialPR?.number).not.toBe(7);
     });
 
     it("resolvePendingCreation removes the entry", () => {
@@ -1809,7 +1879,7 @@ describe("worktreeStore", () => {
     it("makes no active-worktree or MRU save while another screen drives the project", async () => {
       setLeaseInputBlock({ kind: "driven-elsewhere", driverName: "laptop", projectId: "proj-1" });
       useWorktreeSelectionStore.getState().setActiveWorktree(id("wt"));
-      persistMruList([id("mru")]);
+      void persistMruList([id("mru")]);
       await drain();
       expect(appSetStateMock).not.toHaveBeenCalled();
       expect(logErrorWithContextMock).not.toHaveBeenCalled();
@@ -1820,7 +1890,7 @@ describe("worktreeStore", () => {
         appError("DRIVEN_ELSEWHERE", "app:set-state changes proj-1, which another window drives")
       );
       useWorktreeSelectionStore.getState().setActiveWorktree(id("wt"));
-      persistMruList([id("mru")]);
+      void persistMruList([id("mru")]);
       await drain();
       expect(appSetStateMock).toHaveBeenCalledTimes(2);
       expect(logErrorWithContextMock).not.toHaveBeenCalled();
@@ -1838,7 +1908,7 @@ describe("worktreeStore", () => {
       // The first write went out as the link dropped; the second waits for it.
       setHostInputBlock(null);
       useWorktreeSelectionStore.getState().setActiveWorktree(first);
-      persistMruList(list);
+      void persistMruList(list);
       await drain();
       setHostInputBlock({ kind: "disconnected", hostName: "e2e-host" });
       useWorktreeSelectionStore.getState().setActiveWorktree(second);
@@ -1857,11 +1927,39 @@ describe("worktreeStore", () => {
       expect(mruWrites()).toEqual([list, list]);
     });
 
+    it("resolves once the MRU write settles, and a repeat of the pending list waits on that write (#15651)", async () => {
+      let release!: () => void;
+      appSetStateMock.mockImplementationOnce(() => new Promise<void>((r) => (release = r)));
+      const list = [id("mru")];
+      let firstSettled = false;
+      let repeatSettled = false;
+      void persistMruList(list).then(() => (firstSettled = true));
+      void persistMruList([...list]).then(() => (repeatSettled = true));
+      await drain();
+      expect(mruWrites()).toEqual([list]);
+      expect(firstSettled).toBe(false);
+      expect(repeatSettled).toBe(false);
+
+      release();
+      await drain();
+      expect(firstSettled).toBe(true);
+      expect(repeatSettled).toBe(true);
+    });
+
+    it("resolves rather than rejects when the MRU write fails", async () => {
+      appSetStateMock.mockRejectedValueOnce(new Error("EACCES"));
+      await expect(persistMruList([id("mru")])).resolves.toBeUndefined();
+      expect(logErrorWithContextMock).toHaveBeenCalledWith(
+        expect.any(Error),
+        expect.objectContaining({ operation: "persist_mru_list" })
+      );
+    });
+
     it("drops a save held through a reconnect when someone else took the project over", async () => {
       const wt = id("wt");
       setHostInputBlock({ kind: "disconnected", hostName: "e2e-host" });
       useWorktreeSelectionStore.getState().setActiveWorktree(wt);
-      persistMruList([id("mru")]);
+      void persistMruList([id("mru")]);
       await drain();
       // The lease refresh after reconnecting learns of the takeover.
       setHostOwnedWriteFlushBarrier(async () =>

@@ -229,6 +229,7 @@ vi.mock("@/components/ui/AppPaletteDialog", () => ({
 import { DockLaunchButton } from "../DockLaunchButton";
 import type { DockLaunchAgent } from "../dockLaunchItems";
 import { usePanelStore } from "@/store/panelStore";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 
 const AGENT_IDS = [
   "claude",
@@ -282,6 +283,21 @@ function seedPanels() {
     panelIds.push(id);
   });
   panelStore.setState({ panelsById, panelIds });
+  // Every run carries an unread Canopy ask, so a pane flipped to a stop is
+  // amber and one flipped back to work is not — the pip follows the panel.
+  useFleetSnapshotStore.getState().applySnapshot({
+    runs: panelIds.map((runId) => ({
+      runId,
+      workspaceId: "p1",
+      spawnedAt: 1,
+      cwd: "/repo",
+      agentState: "waiting" as const,
+      canopy: { kind: "asked" as const, quote: "Run it?", readAt: 1, seen: false },
+    })),
+    changedAt: 2,
+    degraded: false,
+    lastSuccessfulAt: 2,
+  });
 }
 
 /** One `updateAgentState` write: a new panel object and a new `panelsById`. */

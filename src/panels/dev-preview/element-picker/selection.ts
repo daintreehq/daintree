@@ -472,6 +472,22 @@ export function heldPaths(selection: PickedSelection): Set<string> {
   return paths;
 }
 
+/**
+ * The files a run of selections holds, most important first, for the source
+ * tracker to keep watching: each selection's own element file, then the rest
+ * of its files, selection by selection in the order given. Each file once,
+ * at its first place.
+ */
+export function heldSourceOrder(selections: readonly PickedSelection[]): string[] {
+  const order = new Set<string>();
+  for (const selection of selections) {
+    const own = elementPlace(selection);
+    if (own !== null) order.add(own.path);
+    for (const path of heldPaths(selection)) order.add(path);
+  }
+  return [...order];
+}
+
 /* -------------------------------------------------------------------------- */
 /* The request                                                                */
 /* -------------------------------------------------------------------------- */

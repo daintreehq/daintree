@@ -4,6 +4,7 @@ import { findCoordinationHold, type CoordinationHoldSources } from "../coordinat
 function sources(overrides: Partial<CoordinationHoldSources> = {}): CoordinationHoldSources {
   const owners: Record<string, string> = { a1: "proj-a", a2: "proj-a", b1: "proj-b" };
   return {
+    hasUnsettledScheduledRun: () => false,
     projectOfTerminal: (id) => owners[id] ?? null,
     waitingRunProjectIds: () => [],
     unseenHandBackRunIds: () => [],
@@ -17,6 +18,12 @@ function sources(overrides: Partial<CoordinationHoldSources> = {}): Coordination
 describe("findCoordinationHold", () => {
   it("holds nothing when no source has pending work", () => {
     expect(findCoordinationHold("proj-a", sources())).toBeNull();
+  });
+
+  it("names an unsettled scheduled run in the project, and only that project", () => {
+    const s = sources({ hasUnsettledScheduledRun: (projectId) => projectId === "proj-a" });
+    expect(findCoordinationHold("proj-a", s)).toBe("scheduled-run");
+    expect(findCoordinationHold("proj-b", s)).toBeNull();
   });
 
   it("names a waiting run in the project, and only that project", () => {

@@ -5,10 +5,13 @@ import {
   gitSpawnMark,
   gitSpawnsSince,
   installGitSpawnCounter,
+  recordGitProcessLifetimes,
   spawnObserverMisses,
 } from "../lib/gitPipelineFixture";
 import {
   addTrackedPath,
+  COLLATOR_TIE_PATHS,
+  getFileSearchEmptyQueryFixture,
   getFileSearchFixture,
   getFileSearchRetentionRepos,
   GIT_ONLY_SENTINEL,
@@ -19,6 +22,7 @@ import {
   RETENTION_REPO_COUNT,
   TYPED_FILE_QUERIES,
   withClockOffsetAsync,
+  type FileSearchModule,
   type FileSearchRepo,
 } from "../lib/fileSearchFixture";
 
@@ -26,9 +30,10 @@ import {
 // the real FileSearchService. Two costs the user feels, measured separately
 // because they have different fixes:
 //
-//   * COLD (PERF-192): with no cached path list, the first keystroke pays for
-//     `git ls-files` plus the directory-set build and sort. Nothing renders
-//     until it resolves, so this IS the picker's open latency.
+//   * COLD (PERF-192/199): with no cached path list, the first keystroke pays
+//     for `git ls-files` plus the directory-set and scoring-array build, and an
+//     empty query (how both pickers open) also ranks the shortest paths.
+//     Nothing renders until it resolves, so this IS the picker's open latency.
 //   * WARM (PERF-190/191): every subsequent keystroke re-scans the whole cached
 //     list through `scorePath` and re-heaps the top 50. This is the typing
 //     latency, and it scales linearly with repo size.
@@ -198,6 +203,125 @@ async function collectAndSettle(): Promise<void> {
   }
 }
 
+/** The pages the pickers open on: the `@` completion's 50 and the file pane's 100. */
+const EMPTY_QUERY_OPEN_LIMITS = [50, 100] as const;
+
+/** Every page the oracle holds against the full sort, smallest first. */
+const EMPTY_QUERY_ORACLE_LIMITS = [1, 50, 100] as const;
+
+/**
+ * The directory entry `loadGitFiles` synthesises for the sentinel. The
+ * filesystem walker skips `dist` outright, and at five characters it sits in
+ * every empty-query page, so its presence is what an empty query can show in
+ * place of the sentinel file itself.
+ */
+const GIT_ONLY_DIRECTORY = "dist/";
+
+const oracleCollator = new Intl.Collator();
+
+/**
+ * The empty-query ranking as the service has always defined it: every path,
+ * by length then locale, with paths the collator calls equal left in listing
+ * order by the stable sort. Written out here rather than imported, so a change
+ * to the service's ranking cannot also move the reference it is checked
+ * against.
+ */
+function fullLengthRanking(files: readonly string[]): string[] {
+  return [...files].sort((a, b) => a.length - b.length || oracleCollator.compare(a, b));
+}
+
+function samePage(actual: readonly string[], expected: readonly string[]): boolean {
+  return actual.length === expected.length && actual.every((file, i) => file === expected[i]);
+}
+
+/**
+ * The planted ties must arrive intact, still be ties, land inside the largest
+ * page, and be listed in an order raw string comparison would not give.
+ * Otherwise the oracle passes without ever having compared two paths the
+ * collator cannot order, or cannot tell listing order from a raw-string
+ * tie-break.
+ */
+function collatorTieMisses(index: readonly string[], topPage: readonly string[]): number {
+  let misses = 0;
+  const first = COLLATOR_TIE_PATHS[0];
+  for (const tie of COLLATOR_TIE_PATHS) {
+    if (!index.includes(tie) || !topPage.includes(tie)) misses += 1;
+    if (tie.length !== first.length || oracleCollator.compare(tie, first) !== 0) misses += 1;
+  }
+  const ties: readonly string[] = COLLATOR_TIE_PATHS;
+  const listed = index.filter((file) => ties.includes(file));
+  const byRawString = [...listed].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  if (samePage(listed, byRawString)) misses += 1;
+  return misses;
+}
+
+interface EmptyQueryColdOpen {
+  coldMs: number;
+  gitProcessMs: number;
+  postGitMs: number;
+  indexEntryCount: number;
+  rankingMisses: number;
+  gitPathListMisses: number;
+  timingMisses: number;
+  tieFixtureMisses: number;
+}
+
+/**
+ * One cold empty-query open, split at the git child's `close`: before it is the
+ * subprocess, after it is everything the service does on this thread once the
+ * output arrives — decoding, the NUL parse, the directory set, the scoring
+ * arrays and the ranking. Then, outside the timing, the oracle: the returned
+ * page and a warm page at each oracle limit, against the full ranking of the
+ * very listing that page was cut from.
+ */
+async function coldEmptyQueryOpen(
+  service: FileSearchModule["fileSearchService"],
+  repo: FileSearchRepo,
+  limit: number
+): Promise<EmptyQueryColdOpen> {
+  service.invalidate(repo.path);
+
+  let results: string[] = [];
+  let resolvedAtMs = 0;
+  const startMs = performance.now();
+  const lifetimes = await recordGitProcessLifetimes(async () => {
+    results = await service.search({ cwd: repo.path, query: "", limit });
+    resolvedAtMs = performance.now();
+  });
+  const coldMs = resolvedAtMs - startMs;
+
+  const listings = lifetimes.filter((lifetime) => lifetime.subcommand === "ls-files");
+  const listing = listings.length === 1 ? listings[0]! : null;
+  const closedAtMs = listing?.exitCode === 0 ? listing.closedAtMs : null;
+  const timingMisses = listing !== null && closedAtMs !== null ? 0 : 1;
+
+  // Marked before the listing is read: a reload anywhere in the oracle would
+  // check the pages against a different listing than the cold one came from.
+  const warmMark = gitSpawnMark();
+  const index = await service.listFiles(repo.path);
+  const ranking = fullLengthRanking(index);
+  let rankingMisses = samePage(results, ranking.slice(0, limit)) ? 0 : 1;
+  for (const oracleLimit of EMPTY_QUERY_ORACLE_LIMITS) {
+    const page = await service.search({ cwd: repo.path, query: "", limit: oracleLimit });
+    if (!samePage(page, ranking.slice(0, oracleLimit))) rankingMisses += 1;
+  }
+  rankingMisses += gitSpawnsSince(warmMark).bySubcommand["ls-files"] ?? 0;
+
+  const gitPathListMisses =
+    (listings.length > 0 ? 0 : 1) + (results.includes(GIT_ONLY_DIRECTORY) ? 0 : 1);
+
+  return {
+    coldMs,
+    gitProcessMs: listing && closedAtMs !== null ? closedAtMs - listing.spawnedAtMs : 0,
+    postGitMs: closedAtMs !== null ? resolvedAtMs - closedAtMs : 0,
+    indexEntryCount: index.length,
+    rankingMisses,
+    gitPathListMisses,
+    timingMisses,
+    tieFixtureMisses: collatorTieMisses(index, ranking.slice(0, FULL_LISTING_LIMIT)),
+  };
+}
+
 export const fileSearchScenarios: PerfScenario[] = [
   {
     id: "PERF-190",
@@ -297,7 +421,7 @@ export const fileSearchScenarios: PerfScenario[] = [
     name: "File Picker Cold Open - Git Path List Build",
     description:
       "Drops the cached path list and times the first search: real `git ls-files --cached --others " +
-      "--exclude-standard`, NUL parse, ancestor-directory set build and length sort, at both repo " +
+      "--exclude-standard`, NUL parse, ancestor-directory set and scoring-array build, at both repo " +
       "scales. This is the wait between pressing `@` and the picker showing anything. Asserts a git " +
       "subprocess actually spawned and that the results contain a file only the git listing can " +
       "return (gitPathListMisses) — without both, a broken git path degrades to the filesystem " +
@@ -365,6 +489,90 @@ export const fileSearchScenarios: PerfScenario[] = [
         notes:
           gitPathListMisses > 0
             ? "the cold open was served warm or by the filesystem walker — these are not git ls-files timings"
+            : undefined,
+      };
+    },
+  },
+  {
+    id: "PERF-199",
+    name: "File Picker Cold Open - Empty Query",
+    description:
+      "Both pickers open on an empty query: the file pane at limit 100, the `@` completion at 50. " +
+      "Drops the cached path list before each of four opens (~12,000 and ~51,200 tracked paths, at " +
+      "each limit) and splits each at the `git ls-files` child's close: gitProcessMs is the " +
+      "subprocess, postGitMs everything the service then does on the thread that serves every " +
+      "terminal's IPC — decode, NUL parse, directory set, scoring arrays and the empty-query " +
+      "ranking. rankingMisses holds the cold page, and warm pages at limits 1, 50 and 100, against " +
+      "a full length-then-locale sort of the same listing, which carries paths of one length the " +
+      "collator calls equal, listed in an order a raw-string tie-break would not give " +
+      "(tieFixtureMisses proves they arrived, made the page and kept that order). " +
+      "gitPathListMisses proves each open spawned the listing and returned the `dist/` entry the " +
+      "filesystem walker cannot produce.",
+    tier: "heavy",
+    modes: ["smoke", "ci", "nightly"],
+    iterations: { smoke: 4, ci: 8, nightly: 12 },
+    warmups: 1,
+    correctness: [
+      "rankingMisses",
+      "gitPathListMisses",
+      "timingMisses",
+      "tieFixtureMisses",
+      "spawnObserverMisses",
+    ],
+    workloadFloors: { monorepoIndexEntryCount: 12_000, scaledIndexEntryCount: 51_200 },
+    async run() {
+      const fixture = getFileSearchEmptyQueryFixture();
+      const { fileSearchService } = await loadFileSearchModule();
+      // Before any measurement: the probe starts a child of its own.
+      const observerMisses = spawnObserverMisses();
+
+      const metrics: Record<string, number> = {};
+      let durationMs = 0;
+      let rankingMisses = 0;
+      let gitPathListMisses = 0;
+      let timingMisses = 0;
+      let tieFixtureMisses = 0;
+
+      try {
+        for (const [key, repo] of [
+          ["monorepo", fixture.monorepo],
+          ["scaled", fixture.scaled],
+        ] as const) {
+          for (const limit of EMPTY_QUERY_OPEN_LIMITS) {
+            const open = await coldEmptyQueryOpen(fileSearchService, repo, limit);
+            durationMs += open.coldMs;
+            metrics[`${key}Limit${limit}ColdMs`] = open.coldMs;
+            metrics[`${key}Limit${limit}GitMs`] = open.gitProcessMs;
+            metrics[`${key}Limit${limit}PostGitMs`] = open.postGitMs;
+            // The smaller of the two opens, so the floor holds for both.
+            metrics[`${key}IndexEntryCount`] = Math.min(
+              metrics[`${key}IndexEntryCount`] ?? Number.POSITIVE_INFINITY,
+              open.indexEntryCount
+            );
+            rankingMisses += open.rankingMisses;
+            gitPathListMisses += open.gitPathListMisses;
+            timingMisses += open.timingMisses;
+            tieFixtureMisses += open.tieFixtureMisses;
+          }
+        }
+      } finally {
+        fileSearchService.invalidate(fixture.monorepo.path);
+        fileSearchService.invalidate(fixture.scaled.path);
+      }
+
+      return {
+        durationMs,
+        metrics: {
+          ...metrics,
+          rankingMisses,
+          gitPathListMisses,
+          timingMisses,
+          tieFixtureMisses,
+          spawnObserverMisses: observerMisses,
+        },
+        notes:
+          rankingMisses + gitPathListMisses + timingMisses + tieFixtureMisses > 0
+            ? "an empty-query page diverged from the full sort, an open was not a git listing, or its subprocess timing was not captured — these timings are not the claimed path"
             : undefined,
       };
     },
@@ -522,7 +730,7 @@ export const fileSearchScenarios: PerfScenario[] = [
       "Holds a full cache — 30 distinct worktrees, ~3,200 tracked paths each — then expires it and " +
       "sweeps, reporting the heap the indexes were still holding. `Cache.get` only drops the key it " +
       "was asked for and `set` only evicts past maxSize, so before the sweep existed an expired " +
-      "entry's files, normalizedFiles, basenameStarts and sorted copy stayed resident until " +
+      "entry's files, normalizedFiles, basenameStarts and empty-query page stayed resident until " +
       "something happened to read that exact cwd again. Expiry is simulated by offsetting Date.now() " +
       "past the TTL; the sweep is the shipped timer body, not a copy. Heap readings are " +
       "machine-dependent and taken after a forced GC — a signal about what the cache releases, never " +
@@ -560,7 +768,7 @@ export const fileSearchScenarios: PerfScenario[] = [
       let smallestListing = Number.POSITIVE_INFINITY;
       for (const repo of repos) {
         // Two shapes per worktree so the optional allocations an entry can grow
-        // — the sorted copy behind an empty query, the candidate index list —
+        // — the page behind an empty query, the candidate index list —
         // are represented in what is being held.
         const listed = await fileSearchService.search({
           cwd: repo.path,

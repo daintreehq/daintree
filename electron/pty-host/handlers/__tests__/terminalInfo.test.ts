@@ -6,6 +6,7 @@ import type { PtyHostTerminalInfo } from "../../../../shared/types/pty-host.js";
 function createCtx(overrides: Partial<HostContext> = {}): HostContext {
   const ptyManager = {
     isInTrash: vi.fn(() => false),
+    isClosing: vi.fn(() => false),
     getActivityTier: vi.fn(() => "active" as const),
     getSubmission: vi.fn(() => undefined),
     hasPendingSubmission: vi.fn(() => false),
@@ -96,6 +97,37 @@ describe("mapTerminalInfo", () => {
     expect(mapTerminalInfo(makeTerminal(), ctx).isAssistantTerminal).toBeUndefined();
   });
 
+  it("reports a scheduled run's ids back to main, which stamps them on the session record", () => {
+    // #15977: main's kill, shutdown and project-close captures read the run only
+    // through this mapper.
+    const ctx = createCtx();
+    const run = { scheduleId: "schedule-1", runId: "run-1" };
+    expect(mapTerminalInfo(makeTerminal({ scheduledRun: run }), ctx).scheduledRun).toEqual(run);
+    expect(mapTerminalInfo(makeTerminal(), ctx).scheduledRun).toBeUndefined();
+  });
+
+  it("reports the Claude store the launch env named, and nothing when it named none it could resolve", () => {
+    // #16269: the subagent reader trusts only this field for which store a pane
+    // writes to; dropped here, every account pane reads as store-unknown.
+    const ctx = createCtx();
+    expect(
+      mapTerminalInfo(makeTerminal({ claudeConfigDir: "/accounts/work" }), ctx).claudeConfigDir
+    ).toBe("/accounts/work");
+    expect(mapTerminalInfo(makeTerminal(), ctx).claudeConfigDir).toBeUndefined();
+  });
+
+  it("reports a terminal whose agent a graceful shutdown is quitting as closing, though it still has a PTY", () => {
+    const ctx = createCtx();
+    (ctx.ptyManager.isClosing as ReturnType<typeof vi.fn>).mockImplementation(
+      (id: string) => id === "term-1"
+    );
+    const result = mapTerminalInfo(makeTerminal({ id: "term-1" }), ctx);
+    expect(result.isClosing).toBe(true);
+    expect(result.hasPty).toBe(true);
+    expect(mapTerminalInfo(makeTerminal({ id: "term-2" }), ctx).isClosing).toBe(false);
+    expect(ctx.ptyManager.isClosing).toHaveBeenCalledWith("term-2");
+  });
+
   it("derives isTrashed from ptyManager.isInTrash, not the raw record", () => {
     // Lesson #4753: the in-memory TerminalInfo object never carries a
     // populated `isTrashed` field; trash status lives in PtyManager's
@@ -105,6 +137,8 @@ describe("mapTerminalInfo", () => {
     const ctx = createCtx({
       ptyManager: {
         isInTrash,
+        isClosing: vi.fn(() => false),
+        getTrashExpiresAt: vi.fn(() => undefined),
         getActivityTier: vi.fn(() => "active" as const),
         hasPendingSubmission: vi.fn(() => false),
         analysisObservedSince: vi.fn(() => 1_000),
@@ -118,6 +152,29 @@ describe("mapTerminalInfo", () => {
     expect(isInTrash).toHaveBeenCalledWith("term-1");
   });
 
+  it("reads a trashed terminal's grace expiry off the registry for the bulk queries", () => {
+    // Only `get-terminal` hands in a record augmented with the expiry; the
+    // bulk families pass the raw record, which never carries it (#15729).
+    const getTrashExpiresAt = vi.fn((id: string) => (id === "term-1" ? 42_000 : undefined));
+    const ptyManager = {
+      isInTrash: vi.fn((id: string) => id === "term-1"),
+      isClosing: vi.fn(() => false),
+      getTrashExpiresAt,
+      getActivityTier: vi.fn(() => "active" as const),
+      hasPendingSubmission: vi.fn(() => false),
+      analysisObservedSince: vi.fn(() => 1_000),
+    } as unknown as HostContext["ptyManager"];
+    const ctx = createCtx({ ptyManager });
+
+    expect(mapTerminalInfo(makeTerminal({ id: "term-1" }), ctx).trashExpiresAt).toBe(42_000);
+    expect(mapTerminalInfo(makeTerminal({ id: "term-2" }), ctx).trashExpiresAt).toBeUndefined();
+    expect(getTrashExpiresAt).not.toHaveBeenCalledWith("term-2");
+    // An augmented record's own expiry stands.
+    expect(
+      mapTerminalInfo(makeTerminal({ id: "term-1", trashExpiresAt: 7_000 }), ctx).trashExpiresAt
+    ).toBe(7_000);
+  });
+
   it("ignores a stale isTrashed flag on the raw terminal record", () => {
     // Even if the raw record carries a misleading `isTrashed: true`, the
     // mapper must defer to the PtyManager registry so the IPC payload
@@ -125,6 +182,7 @@ describe("mapTerminalInfo", () => {
     const ctx = createCtx({
       ptyManager: {
         isInTrash: vi.fn(() => false),
+        isClosing: vi.fn(() => false),
         getActivityTier: vi.fn(() => "active" as const),
         hasPendingSubmission: vi.fn(() => false),
         analysisObservedSince: vi.fn(() => 1_000),
@@ -172,6 +230,23 @@ describe("mapTerminalInfo", () => {
     expect(result.lastOutputTime).toBe(222);
   });
 
+  it("forwards whose typed input it holds, so an assistant's next call can tell its own keys (#16094)", () => {
+    const ctx = createCtx();
+    const result = mapTerminalInfo(
+      makeTerminal({
+        lastTypedInputAt: 30,
+        lastOwnedInput: { owner: "principal-a", at: 30 },
+        lastForeignInputAt: 20,
+      }),
+      ctx
+    );
+    expect(result).toMatchObject({
+      lastTypedInputAt: 30,
+      lastOwnedInput: { owner: "principal-a", at: 30 },
+      lastForeignInputAt: 20,
+    });
+  });
+
   it("forwards worktreeId so fleet rows keep their worktree attribution (#12078)", () => {
     // FleetSnapshotService copies worktreeId onto every FleetRunRow and the
     // palette groups on it; a dropped field files every agent under the single
@@ -197,6 +272,7 @@ describe("mapTerminalInfo", () => {
     const ctx = createCtx({
       ptyManager: {
         isInTrash: vi.fn(() => false),
+        isClosing: vi.fn(() => false),
         getActivityTier: vi.fn(() => "active" as const),
         hasPendingSubmission,
         analysisObservedSince: vi.fn(() => 1_000),
@@ -213,6 +289,7 @@ describe("mapTerminalInfo", () => {
     const ctx = createCtx({
       ptyManager: {
         isInTrash: vi.fn(() => false),
+        isClosing: vi.fn(() => false),
         getActivityTier: vi.fn(() => "active" as const),
         hasPendingSubmission: vi.fn(() => false),
         analysisObservedSince: vi.fn((id: string) => (id === "detached" ? null : 4_200)),
@@ -304,6 +381,7 @@ describe("mapTerminalInfo submission projection (#12337)", () => {
     return createCtx({
       ptyManager: {
         isInTrash: vi.fn(() => false),
+        isClosing: vi.fn(() => false),
         getActivityTier: vi.fn(() => "active" as const),
         getSubmission,
         hasPendingSubmission: vi.fn(() => false),

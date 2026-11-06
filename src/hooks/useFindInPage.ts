@@ -31,6 +31,9 @@ export function useFindInPage(
   const isComposingRef = useRef(false);
   const latestRequestIdRef = useRef<number | null>(null);
 
+  // Electron's `findNext: true` starts a new find session, and `false` steps
+  // through the current one. A step sent with no session open gets no
+  // `found-in-page` reply at all, so a new query must start a session.
   const safeFind = useCallback(
     (text: string, opts: { forward?: boolean; findNext?: boolean; matchCase?: boolean }) => {
       if (!webviewElement || !isWebviewReady || !text) return;
@@ -87,25 +90,25 @@ export function useFindInPage(
         return;
       }
       if (!isComposingRef.current) {
-        safeFind(q, { findNext: false });
+        safeFind(q, { findNext: true });
       }
     },
     [safeFind, safeStopFind]
   );
 
   const goNext = useCallback(() => {
-    if (query) safeFind(query, { forward: true, findNext: true });
+    if (query) safeFind(query, { forward: true, findNext: false });
   }, [query, safeFind]);
 
   const goPrev = useCallback(() => {
-    if (query) safeFind(query, { forward: false, findNext: true });
+    if (query) safeFind(query, { forward: false, findNext: false });
   }, [query, safeFind]);
 
   const toggleMatchCase = useCallback(() => {
     const next = !matchCase;
     setMatchCase(next);
     if (query && isOpen) {
-      safeFind(query, { findNext: false, matchCase: next });
+      safeFind(query, { findNext: true, matchCase: next });
     }
   }, [query, isOpen, matchCase, safeFind]);
 
@@ -133,7 +136,7 @@ export function useFindInPage(
 
     const handler = (event: Electron.DidNavigateInPageEvent) => {
       if (!event.isMainFrame) return;
-      safeFind(query, { findNext: false });
+      safeFind(query, { findNext: true });
     };
 
     webviewElement.addEventListener("did-navigate-in-page", handler as unknown as EventListener);
@@ -156,7 +159,7 @@ export function useFindInPage(
     latestRequestIdRef.current = null;
     setActiveMatch(0);
     setMatchCount(0);
-    if (query && !isComposingRef.current) safeFind(query, { findNext: false });
+    if (query && !isComposingRef.current) safeFind(query, { findNext: true });
   }, [webviewElement, isWebviewReady, isOpen, query, safeFind]);
 
   // Listen for daintree:find-in-panel (Cmd+F from keybinding when renderer has focus)

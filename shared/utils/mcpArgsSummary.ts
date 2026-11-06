@@ -19,7 +19,8 @@ export const MCP_ARGS_SUMMARY_LIMIT = 300;
  * Applies at the single-level summarization site only; nested objects
  * already collapse to `<object>`.
  */
-const SENSITIVE_KEY_PATTERN = /(?:token|secret|password|auth|key|credential|bearer|api[_-]?key)/i;
+const SENSITIVE_KEY_PATTERN =
+  /(?:token|secret|password|passphrase|auth|key|credential|bearer|api[_-]?key)/i;
 
 const REDACTED_PLACEHOLDER = "<redacted>";
 

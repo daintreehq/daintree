@@ -149,17 +149,6 @@ export function isDaintreeError(error: unknown): error is DaintreeError {
   return error instanceof DaintreeError;
 }
 
-export function isPermissionError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  const code = (error as NodeJS.ErrnoException).code;
-  return code === "EACCES" || code === "EPERM";
-}
-
-export function isNotFoundError(error: unknown): boolean {
-  if (!error || typeof error !== "object") return false;
-  return (error as NodeJS.ErrnoException).code === "ENOENT";
-}
-
 export function isTransientError(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const code = (error as NodeJS.ErrnoException).code;
@@ -185,6 +174,7 @@ export function getRetryability(error: unknown, gitReason?: GitOperationReason):
       // user installs Git.
       case "auth-failed":
       case "config-missing":
+      case "push-config-unsupported":
       case "dubious-ownership":
       case "git-not-installed":
         return "user-gated";
@@ -197,6 +187,7 @@ export function getRetryability(error: unknown, gitReason?: GitOperationReason):
       case "conflict-unresolved":
       case "push-rejected-outdated":
       case "push-rejected-policy":
+      case "push-review-stale":
       case "pathspec-invalid":
       case "lfs-missing":
       case "lfs-quota-exceeded":

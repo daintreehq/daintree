@@ -11,9 +11,6 @@
  */
 export const SEARCH_PROVIDER_KEYWORD_PATTERN = /^[a-z][a-z0-9-]{0,23}$/;
 
-/** The palette prefix characters a keyword can never begin with or contain. */
-export const SEARCH_PROVIDER_RESERVED_PREFIXES: readonly string[] = [">", "@", "#", ":", "/"];
-
 /** The icon a provider and its results get when the manifest names none. */
 export const SEARCH_PROVIDER_DEFAULT_ICON_ID = "search";
 

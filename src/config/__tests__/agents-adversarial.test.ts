@@ -210,6 +210,17 @@ describe("Adversarial: preset.args injection (Bug — unsanitized args array)", 
     ]);
     expect(result[0]!.args).toEqual(["--model", "claude-opus-4-6", "--verbose"]);
   });
+
+  it("keeps a multi-word element whole and flattens its control characters to one space (#15638)", () => {
+    const result = getMergedPresets("claude", [
+      {
+        id: "f1",
+        name: "Prompted",
+        args: ["--system-prompt", "one\r\n\ntwo\tthree\vfour\ffive\x7fsix  seven", " "],
+      },
+    ]);
+    expect(result[0]!.args).toEqual(["--system-prompt", "one two three four five six  seven", " "]);
+  });
 });
 
 // ── adversarial: validatePreset whitespace-only name (Bug — check before trim) ──
@@ -321,6 +332,48 @@ describe("Preset fallback chain sanitization", () => {
       ["on", true],
       ["string", undefined],
       ["off", undefined],
+    ]);
+  });
+
+  it("keeps the usage-limit conversation opt-in only when it is exactly true (#16045)", () => {
+    const stringy = { id: "string", name: "String" };
+    Reflect.set(stringy, "keepConversationOnRateLimit", "true");
+    const result = getMergedPresets("codex", [
+      { id: "on", name: "On", keepConversationOnRateLimit: true },
+      stringy,
+      { id: "off", name: "Off", keepConversationOnRateLimit: false },
+    ]);
+    expect(
+      result
+        .filter((p) => ["on", "string", "off"].includes(p.id))
+        .map((p) => [p.id, p.keepConversationOnRateLimit])
+    ).toEqual([
+      ["on", true],
+      ["string", undefined],
+      ["off", undefined],
+    ]);
+  });
+
+  it("keeps a well-formed pinned account on the user's own presets alone (#16133)", () => {
+    const numeric = { id: "numeric", name: "Numeric" };
+    Reflect.set(numeric, "accountId", 7);
+    const result = getMergedPresets(
+      "codex",
+      [
+        // An id no account answers to stays, so its launch is refused rather than moved.
+        { id: "dangling", name: "Dangling", accountId: "removed-account" },
+        { id: "spaced", name: "Spaced", accountId: "not an id" },
+        numeric,
+      ],
+      [{ id: "ccr-route", name: "Route", accountId: "company" }],
+      [{ id: "shared", name: "Shared", accountId: "company" }]
+    );
+    expect(result.map((p) => [p.id, p.accountId])).toEqual([
+      ["dangling", "removed-account"],
+      ["spaced", undefined],
+      ["numeric", undefined],
+      ["shared", undefined],
+      ["ccr-route", undefined],
     ]);
   });
 

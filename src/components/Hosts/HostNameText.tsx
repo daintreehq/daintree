@@ -27,7 +27,15 @@ export function HostNameText({
   return (
     <span className={cn("flex min-w-0", className)} title={title ? name : undefined}>
       {nameHead && (
-        <span className={cn("truncate", nameHead.length > 4 ? headFloor : "shrink-0")}>
+        // The floor only for a head long enough to need it: a short head in a
+        // proportional face can be narrower than 4ch, and the floor then
+        // opened a gap inside the name ("build -east-02").
+        <span
+          className={cn(
+            "truncate",
+            nameHead.length > 7 ? headFloor : nameHead.length > 4 ? "min-w-0" : "shrink-0"
+          )}
+        >
           {nameHead}
         </span>
       )}

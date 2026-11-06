@@ -15,9 +15,6 @@ import {
 import { useProjectPresence } from "./hostProjects";
 import { isLive } from "./Overview/overviewModel";
 
-/** The least time between asking the other hosts again whether they have this project. */
-export const PRESENCE_RECHECK_MS = 3_000;
-
 /**
  * Whether the host has this project: as it last said, "unknown" when it
  * couldn't be asked (or never has been while its link was up), "pending" while
@@ -132,9 +129,9 @@ export function useProjectHosts(projectId: string | null): ProjectHost[] {
     current && !isTalking(current)
       ? []
       : rows.filter((row) => !row.isCurrent && isTalking(row)).map((row) => row.hostId);
-  // Bumped when a host with no match says its list changed: it may have this project now.
-  const [presenceRevision, setPresenceRevision] = useState(0);
-  const presence = useProjectPresence(projectId ?? "", askable, presenceRevision);
+  // Asked again only of a host that says its projects changed: its worktrees
+  // and agents moving can't change whether it has this project.
+  const presence = useProjectPresence(projectId ?? "", askable);
 
   const matches = new Map<HostId, readonly string[]>();
   for (const hostId of askable) {
@@ -148,7 +145,6 @@ export function useProjectHosts(projectId: string | null): ProjectHost[] {
     }
   }
   const key = matchKey(matches);
-  const unmatchedKey = askable.filter((hostId) => !matches.has(hostId)).join("\n");
   // Only a connected answer of "none" forgets a host; one that couldn't be asked keeps its match.
   const absentKey = askable
     .filter((hostId) => presence.get(hostId)?.projects?.length === 0)
@@ -179,46 +175,13 @@ export function useProjectHosts(projectId: string | null): ProjectHost[] {
   const readKey = matchKey(readable);
 
   useEffect(() => {
-    if (unmatchedKey === "") return;
-    const api = window.electron?.hostMetrics;
-    if (!api) return;
-    const unmatched = new Set(unmatchedKey.split("\n"));
-    // Once at the first change, then at most once a window: a busy host must
-    // not restart the lookup faster than it can answer.
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    let heldBack = false;
-    const settle = (): void => {
-      timer = null;
-      if (!heldBack) return;
-      heldBack = false;
-      setPresenceRevision((revision) => revision + 1);
-      timer = setTimeout(settle, PRESENCE_RECHECK_MS);
-    };
-    const off = api.onEvent((event) => {
-      if (event.type !== "worktrees" || !unmatched.has(event.hostId)) return;
-      if (timer !== null) {
-        heldBack = true;
-        return;
-      }
-      setPresenceRevision((revision) => revision + 1);
-      timer = setTimeout(settle, PRESENCE_RECHECK_MS);
-    });
-    return () => {
-      off();
-      if (timer !== null) clearTimeout(timer);
-    };
-  }, [unmatchedKey]);
-
-  useEffect(() => {
     const matched = parseMatchKey(readKey);
     if (matched.size === 0) return;
     const api = window.electron?.hostMetrics;
     if (!api) return;
-    const ownHostId = getViewHostId() ?? LOCAL_HOST_ID;
     let live = true;
     // Only the newest read for a host may land: a slow one never overwrites a later answer.
     const latest = new Map<HostId, number>();
-    const rechecked = new Map<HostId, number>();
     const read = (hostId: HostId): void => {
       const projectIds = matched.get(hostId);
       if (!projectIds) return;
@@ -229,18 +192,11 @@ export function useProjectHosts(projectId: string | null): ProjectHost[] {
         .then((entries) => {
           if (!live || latest.get(hostId) !== seq) return;
           const mine = entries.filter((entry) => projectIds.has(entry.projectId));
+          // Nothing of this project listed means it isn't open there; whether
+          // it is still there is the host's projects to say, not its worktrees.
           setLists((previous) =>
             new Map(previous).set(hostId, { ids: [...projectIds].join(","), entries: mine })
           );
-          // Nothing of this project listed: it may have closed there, or gone.
-          // Asking again is what tells "not open" from "no longer there".
-          if (mine.length === 0 && hostId !== ownHostId) {
-            const now = Date.now();
-            if (now - (rechecked.get(hostId) ?? 0) >= PRESENCE_RECHECK_MS) {
-              rechecked.set(hostId, now);
-              setPresenceRevision((revision) => revision + 1);
-            }
-          }
         })
         .catch((error: unknown) => {
           logWarn("[Hosts] Couldn't list a host's worktrees", { hostId, error });

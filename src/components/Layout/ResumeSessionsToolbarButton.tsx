@@ -7,10 +7,10 @@ import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { actionService } from "@/services/ActionService";
+import { toolbarIconButtonClass } from "./toolbarItemClasses";
 
 const RESUME_ACTION_ID = "terminal.resumeSessions" as const;
 const RESUME_LABEL = "Resume session";
-const toolbarIconButtonClass = "toolbar-icon-button text-text-primary relative";
 
 interface ResumeSessionsToolbarButtonProps {
   "data-toolbar-item"?: string;

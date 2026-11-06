@@ -80,6 +80,88 @@ export type GuardedFetchResult =
 /** Spec-aligned cap (RFC 7231 recommends a limit; browsers default to ~20). */
 const MAX_REDIRECT_HOPS = 5;
 
+type LookupAnswer = Array<{ address: string }>;
+type Deliver<T> = (value: T) => void;
+
+/**
+ * `dns.lookup` is a blocking `getaddrinfo` on libuv's threadpool, which main's
+ * `fs` work shares, and nothing can cancel it: a caller that gives up only
+ * stops waiting. So a lookup stays tracked by hostname until it settles: a
+ * retry of the same host joins it instead of starting another, and no more
+ * than {@link MAX_RUNNING_LOOKUPS} run at once, so cancelled downloads against
+ * a stalled resolver can't fill the pool. Callers wait in removable sets
+ * rather than on the lookup's promise, so one that aborts leaves nothing
+ * behind. Nothing is cached: an entry leaves the map when its lookup settles.
+ */
+const runningLookups = new Map<string, Set<Deliver<LookupAnswer | null>>>();
+const MAX_RUNNING_LOOKUPS = 2;
+const lookupSlotWaiters = new Set<Deliver<void>>();
+
+/** Wait for a value through `listeners`, or reject with `signal.reason` once it aborts. */
+function subscribe<T>(listeners: Set<Deliver<T>>, signal: AbortSignal | undefined): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason);
+      return;
+    }
+    const onAbort = () => {
+      listeners.delete(deliver);
+      reject(signal!.reason);
+    };
+    const deliver: Deliver<T> = (value) => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve(value);
+    };
+    listeners.add(deliver);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function deliverAll<T>(listeners: Set<Deliver<T>>, value: T): void {
+  const waiting = [...listeners];
+  listeners.clear();
+  for (const deliver of waiting) deliver(value);
+}
+
+/** Every A/AAAA answer for `hostname`, or `null` when the lookup failed. */
+async function lookupAll(
+  hostname: string,
+  signal: AbortSignal | undefined
+): Promise<LookupAnswer | null> {
+  for (;;) {
+    signal?.throwIfAborted();
+    const running = runningLookups.get(hostname);
+    if (running) return subscribe(running, signal);
+    if (runningLookups.size < MAX_RUNNING_LOOKUPS) break;
+    await subscribe(lookupSlotWaiters, signal);
+  }
+  const listeners = new Set<Deliver<LookupAnswer | null>>();
+  runningLookups.set(hostname, listeners);
+  const answer = subscribe(listeners, signal);
+  const settle = (records: LookupAnswer | null) => {
+    runningLookups.delete(hostname);
+    deliverAll(listeners, records);
+    // Every waiter rechecks: one may now join a lookup for its own host, and
+    // the rest go back to waiting.
+    deliverAll(lookupSlotWaiters, undefined);
+  };
+  new Promise<LookupAnswer>((resolve) => resolve(dns.lookup(hostname, { all: true }))).then(
+    settle,
+    () => settle(null)
+  );
+  return answer;
+}
+
+/** One signal that aborts when either does, for a hop whose init carries its own. */
+function hopSignal(
+  base: AbortSignal | null | undefined,
+  hop: AbortSignal | null | undefined
+): AbortSignal | undefined {
+  if (!base) return hop ?? undefined;
+  if (!hop || hop === base) return base;
+  return AbortSignal.any([base, hop]);
+}
+
 /**
  * Resolve `hostname` and report whether ANY answer is a private/loopback/
  * link-local IP. Closes the DNS-rebinding TOCTOU the literal-host guard can't
@@ -89,7 +171,9 @@ const MAX_REDIRECT_HOPS = 5;
  * answer can't sneak one private address past a public one.
  *
  * Resolution *failure* is not a private-host signal — return false and let
- * `net.fetch` surface the real network error in the caller's vocabulary.
+ * `net.fetch` surface the real network error in the caller's vocabulary. An
+ * aborted `signal` is not a failure: the call rejects with `signal.reason` the
+ * moment it fires, though the lookup itself runs on until it settles.
  *
  * A hairline TOCTOU remains: `net.fetch` re-resolves DNS independently, so a
  * TTL-0 record flipped between this lookup and the connect could still differ.
@@ -98,14 +182,14 @@ const MAX_REDIRECT_HOPS = 5;
  * check shrinks the window to that sub-millisecond race for the local-attacker
  * threat model the SSRF guard targets.
  */
-export async function resolvesToPrivateAddress(hostname: string): Promise<boolean> {
-  let records: Array<{ address: string }>;
-  try {
-    records = await dns.lookup(hostname, { all: true });
-  } catch {
-    return false;
-  }
-  return records.some((r) => isPrivateOrLoopbackHostname(r.address));
+export async function resolvesToPrivateAddress(
+  hostname: string,
+  signal?: AbortSignal
+): Promise<boolean> {
+  const records = await lookupAll(hostname, signal);
+  // An answer and an abort can land in the same tick; the abort wins.
+  signal?.throwIfAborted();
+  return records !== null && records.some((r) => isPrivateOrLoopbackHostname(r.address));
 }
 
 /**
@@ -124,8 +208,12 @@ export async function resolvesToPrivateAddress(hostname: string): Promise<boolea
  * resolver Electron's net stack doesn't expose.
  *
  * The caller still owns the timeout/size signal — it's threaded through every
- * hop via `init.signal`. Non-redirect responses (including the final 2xx and
- * any 4xx/5xx) are returned as-is for the caller to inspect.
+ * hop via `init.signal`, and it governs each hop's DNS check as well as its
+ * fetch: once it aborts, the call rejects with `signal.reason` and no further
+ * `netFetch` starts, so a caller tells a user cancel from a deadline the same
+ * way whichever step was running. A signal from `hops.initFor` joins it for
+ * that hop rather than replacing it. Non-redirect responses (including the final
+ * 2xx and any 4xx/5xx) are returned as-is for the caller to inspect.
  *
  * `isAllowedHost`, when given, must accept every hop's hostname — a caller
  * bound to a declared host list refuses a redirect off it before connecting.
@@ -145,6 +233,7 @@ export async function fetchWithPrivateHostGuard(
 ): Promise<GuardedFetchResult> {
   let currentUrl = url;
   for (let hop = 0; hop <= MAX_REDIRECT_HOPS; hop++) {
+    init.signal?.throwIfAborted();
     // Parse the current hop once to enforce two invariants before connecting:
     // (1) it must stay https — a redirect that downgrades to http would deliver
     // the archive over cleartext (MITM-substitutable); (2) re-validate the
@@ -168,11 +257,17 @@ export async function fetchWithPrivateHostGuard(
     if (hops?.isAllowedUrl && (!parsedHop || !hops.isAllowedUrl(parsedHop))) {
       return { ok: false, reason: "disallowed-host" };
     }
-    if (parsedHop && (await resolvesToPrivateAddress(parsedHop.hostname))) {
+    const hopInit = hops?.initFor && parsedHop ? hops.initFor(parsedHop) : init;
+    const signal = hopSignal(init.signal, hopInit.signal);
+    if (parsedHop && (await resolvesToPrivateAddress(parsedHop.hostname, signal))) {
       return { ok: false, reason: "private-host" };
     }
-    const hopInit = hops?.initFor && parsedHop ? hops.initFor(parsedHop) : init;
-    const response = await netFetch(currentUrl, { ...hopInit, redirect: "manual" });
+    signal?.throwIfAborted();
+    const response = await netFetch(currentUrl, {
+      ...hopInit,
+      ...(signal ? { signal } : {}),
+      redirect: "manual",
+    });
     // Electron surfaces a manual-mode redirect as an opaqueredirect/3xx with a
     // populated Location header; a normal response has no Location to follow.
     const location =

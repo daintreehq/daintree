@@ -47,7 +47,11 @@ export type SourceTarget = z.infer<typeof SourceTargetSchema>;
  * content for the source or the file could not be read under the budget; it
  * never implies a match.
  */
-export const SourceContentCheckSchema = z.enum(["matches", "differs", "unchecked"]);
+export const SourceContentCheckSchema = z.enum({
+  matches: "matches",
+  differs: "differs",
+  unchecked: "unchecked",
+});
 export type SourceContentCheck = z.infer<typeof SourceContentCheckSchema>;
 
 /**
@@ -66,24 +70,24 @@ export type SourceMapProvenance = z.infer<typeof SourceMapProvenanceSchema>;
 
 export const RESOLUTION_LIMITS = { alternatives: 8 } as const;
 
-export const StaleReasonSchema = z.enum([
-  "file-changed",
-  "file-missing",
-  "map-changed",
-  "document-changed",
-]);
+export const StaleReasonSchema = z.enum({
+  "file-changed": "file-changed",
+  "file-missing": "file-missing",
+  "map-changed": "map-changed",
+  "document-changed": "document-changed",
+});
 export type StaleReason = z.infer<typeof StaleReasonSchema>;
 
-export const UnavailableReasonSchema = z.enum([
-  "outside-workspace",
-  "file-missing",
-  "map-missing",
+export const UnavailableReasonSchema = z.enum({
+  "outside-workspace": "outside-workspace",
+  "file-missing": "file-missing",
+  "map-missing": "map-missing",
   /** The file was read and the claim does not hold in it. */
-  "mismatch",
-  "unsupported",
-  "budget-exhausted",
-  "cancelled",
-]);
+  mismatch: "mismatch",
+  unsupported: "unsupported",
+  "budget-exhausted": "budget-exhausted",
+  cancelled: "cancelled",
+});
 export type UnavailableReason = z.infer<typeof UnavailableReasonSchema>;
 
 const claimFields = { candidateId: PickerIdSchema, claim: SourceClaimKindSchema };

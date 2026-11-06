@@ -1,12 +1,15 @@
 import { AppError } from "../../utils/errorTypes.js";
+import { createLogger } from "../../utils/logger.js";
 import type { LinkSession } from "../link/session.js";
 import type { MetricsSessionContext, MetricsSessionSource } from "../metrics/hostMetricsHost.js";
 import {
   AGENT_DIRECTORY_BYTES_MAX,
+  agentDirectoryForLanes,
   fitAgentDirectory,
   unreadAgentDirectory,
   type AgentDirectory,
 } from "../../../shared/types/agentDirectory.js";
+import { remoteReadableAssistantSlots } from "../../../shared/config/assistantSlots.js";
 import {
   AgentsPayloadSchema,
   AssistantLinkMethod,
@@ -15,9 +18,12 @@ import {
   type McpCallAnswer,
   type McpCallPayload,
   RelayNoticeStatusPayloadSchema,
+  StatusPayloadSchema,
+  type StatusAnswer,
   ThrowawayCallPayloadSchema,
   ThrowawayReleasePayloadSchema,
 } from "./linkMethods.js";
+import { readProjectStatuses, STATUS_READ_TOOL } from "./projectStatusRead.js";
 import {
   createMcpRelayExecutor,
   type McpRelayExecutorDeps,
@@ -35,11 +41,15 @@ export {
   type RelayMcpSessionSpec,
 } from "./mcpRelayExecutor.js";
 
+const logger = createLogger("main:hostMcpRelay");
+
 export interface HostMcpRelayDeps extends Omit<McpRelayExecutorDeps, "waitingNoticeCalls"> {
   /** Read at each call: the sender host registers it with the authenticate call. */
   senders(): Pick<SenderSessions, "senderOf" | "senderOfSessionId"> | undefined;
   /** This host's throwaway runs (#14445), read at each call; absent or null, they are off. */
   throwawayRuns?(): HostThrowawayExecutor | null;
+  /** A Shell's assistant session ended: the messages it held for workers here go (#16187). */
+  endHeldSends?(senderId: string, helpSessionId: string): void;
   /**
    * This host's own agent directory (#14455), the one its own `host.list`
    * reads; absent, a Shell asking for it is told this host can't say.
@@ -52,6 +62,12 @@ export interface HostMcpRelaySource extends MetricsSessionSource {
   onSessionDetached?(listener: (info: { sessionId: string }) => void): () => void;
   onSessionExpired(listener: (info: { sessionId: string }) => void): () => void;
 }
+
+/**
+ * How long before its deadline a STATUS read answers with what it has, so the
+ * answer is back before the Shell stops waiting for it.
+ */
+const STATUS_ANSWER_MARGIN_MS = 250;
 
 /**
  * How long a Shell's throwaway runs outlast its last link dropping (#14447):
@@ -148,6 +164,29 @@ export function installHostMcpRelay(
     linkSessions.set(sessionId, session);
     if (wired.has(session)) return;
     wired.add(session);
+    // One spec for each principal and project, whichever method it came by:
+    // sessions are kept by who they act for, so a read opens the one a call reuses.
+    const specFor = (
+      senderId: string,
+      target: { helpSessionId: string; projectId: string; tier: "core" | "full" },
+      global: boolean
+    ): RelayMcpSessionSpec => ({
+      linkSessionId: sessionId,
+      senderId,
+      helpSessionId: target.helpSessionId,
+      projectId: target.projectId,
+      tier: target.tier,
+      shellName: client?.clientName || "Remote Shell",
+      ...(global ? { global: true as const } : {}),
+      deliverNotices: (fired) => notices.enqueue(senderId, fired),
+      // Asked over whichever session is live for this link when the call needs it.
+      requestApproval: (ask) =>
+        askShellApproval(liveLink(sessionId), {
+          ...ask,
+          helpSessionId: target.helpSessionId,
+          projectId: target.projectId,
+        }),
+    });
     const relayCall =
       (global: boolean) =>
       async (payload: McpCallPayload): Promise<McpCallAnswer> => {
@@ -156,24 +195,7 @@ export function installHostMcpRelay(
         if (!senderId) throw noSender();
         // This session proved the sender, so what waited for it can go over it.
         notices.flushSender(senderId);
-        const spec: RelayMcpSessionSpec = {
-          linkSessionId: sessionId,
-          senderId,
-          helpSessionId: payload.helpSessionId,
-          projectId: payload.projectId,
-          tier: payload.tier,
-          shellName: client?.clientName || "Remote Shell",
-          ...(global ? { global: true as const } : {}),
-          deliverNotices: (fired) => notices.enqueue(senderId, fired),
-          // Asked over whichever session is live for this link when the call needs it.
-          requestApproval: (ask) =>
-            askShellApproval(liveLink(sessionId), {
-              ...ask,
-              helpSessionId: payload.helpSessionId,
-              projectId: payload.projectId,
-            }),
-        };
-        return runner.call(spec, payload);
+        return runner.call(specFor(senderId, payload, global), payload);
       };
     session.registerCallHandler(
       AssistantLinkMethod.MCP_CALL,
@@ -210,6 +232,12 @@ export function installHostMcpRelay(
         deps
           .throwawayRuns?.()
           ?.endOwner({ senderId, helpSessionId: payload.helpSessionId }, "session-ended");
+        // Sent when the session ends, so what it held for a worker goes with it.
+        try {
+          deps.endHeldSends?.(senderId, payload.helpSessionId);
+        } catch (error) {
+          logger.warn("Couldn't drop an ended session's held messages", { error });
+        }
         return {};
       }
     );
@@ -237,8 +265,54 @@ export function installHostMcpRelay(
         }
         return {
           status: "done",
-          directory: fitAgentDirectory(directory, AGENT_DIRECTORY_BYTES_MAX),
+          directory: fitAgentDirectory(
+            agentDirectoryForLanes(directory, remoteReadableAssistantSlots(client.assistantSlots)),
+            AGENT_DIRECTORY_BYTES_MAX
+          ),
+          // Its metrics host sends every attached Shell its agents' waits (#16188).
+          waitingEvents: true,
         };
+      }
+    );
+    // `host.status` (#16191): each project read in the session its own MCP_CALL
+    // would be admitted to, and what the screens showed redacted here.
+    session.registerCallHandler(
+      AssistantLinkMethod.STATUS,
+      StatusPayloadSchema,
+      async (payload): Promise<StatusAnswer> => {
+        if (disposed) throw noSender();
+        const senderId = deps.senders()?.senderOf(session);
+        if (!senderId) throw noSender();
+        notices.flushSender(senderId);
+        if (!deps.acceptsRemoteControl()) return { status: "refused", reason: "control-off" };
+        const read = deps.readAgents;
+        const projects = await readProjectStatuses(
+          {
+            getStatus: (projectId, args, runMs) =>
+              runner.read(
+                specFor(
+                  senderId,
+                  { helpSessionId: payload.helpSessionId, projectId, tier: payload.tier },
+                  payload.global === true
+                ),
+                { tool: STATUS_READ_TOOL, args, runMs }
+              ),
+            ...(read ? { readAgents: (projectId) => read({ projectId }) } : {}),
+            hasProject: deps.hasProject,
+            ...(deps.now ? { now: deps.now } : {}),
+          },
+          payload.projects,
+          payload.includeOutput,
+          Math.max(0, payload.runMs - STATUS_ANSWER_MARGIN_MS)
+        );
+        // Consent withdrawn while it was read: what was read isn't sent.
+        if (disposed || !deps.acceptsRemoteControl()) {
+          return { status: "refused", reason: "control-off" };
+        }
+        // Tails are shared out once, on the Shell, across every host's terminals:
+        // each project's read is already held to one MCP result, and the link
+        // carries a long answer in fragments.
+        return { status: "done", projects };
       }
     );
     session.registerCallHandler(

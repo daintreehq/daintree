@@ -7,6 +7,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useSearchablePalette, type UseSearchablePaletteReturn } from "./useSearchablePalette";
 import { actionService } from "@/services/ActionService";
+import { worktreeClient } from "@/clients";
 import { getAutoAssign } from "@shared/types/project";
 import { detectPrefixFromIssue, buildBranchName } from "@/components/Worktree/branchPrefixUtils";
 import { isStartingLayoutRecipe } from "@/components/Worktree/hooks/useRecipePicker";
@@ -14,8 +15,10 @@ import { generateBranchSlug } from "@/utils/textParsing";
 import { issueBranchName } from "@shared/utils/issueBranchName";
 import { linkProviderIssue } from "@/utils/linkProviderIssue";
 import { notify } from "@/lib/notify";
+import { latestUndoOnly, UNDO_ACTION_LABEL, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 export type QuickCreateItem =
   | (TerminalRecipe & { _kind: "recipe" })
@@ -212,44 +215,76 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
             // doesn't redirect the un-assign DELETE at a different repo.
             const snapRootPath = useProjectStore.getState().currentProject?.path ?? null;
 
-            // Sticky toast surface lets users click Undo more than once before
-            // the first invocation resolves; guard so worktree.delete and the
-            // un-assign each fire at most once per success toast.
-            const undoFiredRef = { current: false };
+            const keepWorktree = (message: string): void => {
+              notify({
+                type: "warning",
+                title: "Couldn't undo worktree creation",
+                message,
+                // A reply to the click, so it toasts rather than taking
+                // uiFeedback's inbox-only default.
+                priority: "high",
+                context: { worktreeId: createdWorktreeId, eventKind: "uiFeedback" },
+              });
+            };
+
+            // Undo may only take back a worktree nothing has written to yet: the
+            // recipe's agents can start writing within seconds, and a force
+            // delete would destroy that work with no preview (#16264). So it
+            // refuses anything a fresh status shows, then asks for a plain
+            // delete, so whatever lands after the read meets the same host
+            // refusal as a plain delete from the dialog. `latestUndoOnly` keeps
+            // it single-use.
+            const undo = latestUndoOnly(`quick-create:${createdWorktreeId}`, async () => {
+              const changes = await worktreeClient
+                .getFreshChanges(createdWorktreeId)
+                .catch((err: unknown) => {
+                  logError("Undo: failed to read worktree changes", err);
+                  return null;
+                });
+              if (!changes) {
+                keepWorktree(
+                  `Couldn't check ${branch} for changes, so it wasn't deleted. Use Delete worktree on its card instead.`
+                );
+                return;
+              }
+              if (changes.changedFileCount > 0) {
+                keepWorktree(
+                  `${branch} has uncommitted changes or untracked files, so it wasn't deleted. To review them first, use Delete worktree on its card.`
+                );
+                return;
+              }
+
+              const deleteResult = await actionService.dispatch(
+                "worktree.delete",
+                { worktreeId: createdWorktreeId },
+                { source: "user" }
+              );
+              if (!deleteResult.ok) {
+                // The worktree is still there, so the assignment stays too:
+                // stripping it alone leaves a worktree on an unassigned issue.
+                keepWorktree(formatErrorMessage(deleteResult.error, "Failed to delete worktree"));
+                return;
+              }
+              if (wasAssigned && issueNumber && assignedUsername && snapRootPath) {
+                const unassignResult = await actionService.dispatch(
+                  "forge.unassignIssue",
+                  { cwd: snapRootPath, issueNumber, username: assignedUsername },
+                  { source: "user" }
+                );
+                if (!unassignResult.ok) {
+                  // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+                  notify({
+                    type: "warning",
+                    title: "Couldn't undo assignment",
+                    message: `${formatErrorMessage(unassignResult.error, "Failed to unassign issue")} — you can unassign manually on the forge`,
+                    context: { worktreeId: createdWorktreeId },
+                  });
+                }
+              }
+            });
             const undoOnClick = (): void => {
-              if (undoFiredRef.current) return;
-              undoFiredRef.current = true;
-              void (async () => {
-                try {
-                  await actionService.dispatch(
-                    "worktree.delete",
-                    { worktreeId: createdWorktreeId, force: true },
-                    { source: "user" }
-                  );
-                } catch (err) {
-                  // Half-rollback guard: if delete failed the worktree is still
-                  // live, so don't strip the assignment too — that leaves the
-                  // user with a worktree on an unassigned issue.
-                  logError("Undo: failed to delete worktree", err);
-                  return;
-                }
-                if (wasAssigned && issueNumber && assignedUsername && snapRootPath) {
-                  const unassignResult = await actionService.dispatch(
-                    "forge.unassignIssue",
-                    { cwd: snapRootPath, issueNumber, username: assignedUsername },
-                    { source: "user" }
-                  );
-                  if (!unassignResult.ok) {
-                    // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-                    notify({
-                      type: "warning",
-                      title: "Couldn't undo assignment",
-                      message: `${formatErrorMessage(unassignResult.error, "Failed to unassign issue")} — you can unassign manually on the forge`,
-                      context: { worktreeId: createdWorktreeId },
-                    });
-                  }
-                }
-              })();
+              const pending = undo();
+              if (pending) safeFireAndForget(pending, { context: "Quick-create Undo" });
             };
 
             if (assignmentError) {
@@ -274,17 +309,11 @@ export function useQuickCreatePalette(): UseQuickCreatePaletteReturn {
               // worktree-lifecycle events (e.g. teardown) supersede this row
               // cleanly instead of stacking unrelated entries.
               correlationId: createdWorktreeId,
-              action: {
-                label: "Undo",
-                onClick: undoOnClick,
-                // The toast surface fires `onClick` (full delete + un-assign);
-                // the inbox-row fallback at NotificationCenterEntry.tsx only
-                // dispatches `actionId`, so it stays delete-only — matching
-                // pre-fix behavior rather than a silent regression. The toast
-                // is the primary undo surface (sticky during the action stack).
-                actionId: "worktree.delete",
-                actionArgs: { worktreeId: createdWorktreeId, force: true },
-              },
+              duration: UNDO_TOAST_DURATION_MS,
+              // No `actionId`: the inbox row can only replay a stored action, at
+              // any later time and without the change check or the un-assign,
+              // so the toast's own Undo is the only one.
+              action: { label: UNDO_ACTION_LABEL, onClick: undoOnClick },
             });
           } else {
             // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok

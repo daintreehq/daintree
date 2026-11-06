@@ -19,7 +19,7 @@ import type {
 import type { GitStatus, DiffChangeSetEntry } from "./git.js";
 import type { BrowserHistory } from "./browser.js";
 import type { AgentState, AgentId, WaitingReason } from "./agent.js";
-import type { TerminalSpawnSource, AddPanelFocusPolicy } from "./panel.js";
+import type { TerminalSpawnSource, AddPanelFocusPolicy, ScheduledRunRef } from "./panel.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { ActionContext } from "./actions.js";
 import type { TerminalGeometry } from "./terminal.js";
@@ -30,6 +30,8 @@ export interface AddPanelOptionsBase {
   title?: string;
   /** How the title is owned. Absent defaults to "default". */
   titleMode?: PanelTitleMode;
+  /** The emoji the person gave this panel as a persona (#16213); absent when none. Display only. */
+  displayEmoji?: string;
   worktreeId?: string;
   /**
    * How `worktreeId` was determined: `"explicit"` (caller/user chose it, the
@@ -94,6 +96,8 @@ export interface AddPanelOptionsBase {
   pluginId?: string;
   /** Origin that spawned this terminal */
   spawnedBy?: TerminalSpawnSource;
+  /** See `PtyPanelData.scheduledRun`. Only a trusted scheduled launch sets it. */
+  scheduledRun?: ScheduledRunRef;
   /**
    * Focus policy for the new panel. `"auto"` (default) suppresses focus change
    * only when the assistant has keyboard focus. `"preserve"` always keeps focus
@@ -175,6 +179,12 @@ export interface AddPanelOptionsBase {
    * spawn and never stored on the panel — a restart does not re-ask.
    */
   handbackCode?: string;
+  /**
+   * A recipe step's When done (#16172), with `handbackCode` naming the request
+   * its launch prompt carries. Handed to the spawn and never stored on the
+   * panel, so only this launch is armed.
+   */
+  whenDone?: "background" | "close";
   /** Process-level flags captured at launch time, persisted for session resume */
   agentLaunchFlags?: string[];
   /**
@@ -206,6 +216,8 @@ export interface AddPanelOptionsBase {
   agentPresetId?: string;
   /** Preset brand color (hex) captured at launch time, for the panel's own mark */
   agentPresetColor?: string;
+  /** The account the launch runs on (#16040); its folder is in `env`. */
+  agentAccountId?: string;
   /** Original user-selected preset ID; immutable across fallback hops. */
   originalPresetId?: string;
   /** Whether this panel is currently running on a fallback preset. */
@@ -246,6 +258,13 @@ export interface AddPanelOptionsBase {
    * seen to exit: someone got there first.
    */
   replacesLostTerminal?: number;
+  /**
+   * PTY-only. Restore of a pane whose process had exited with this code
+   * (#15941): the pane commits exited, as the exit left it, and nothing is
+   * spawned until the user restarts it. With `existingId`, the host record it
+   * reattaches to has no process left. Ignored for a hold.
+   */
+  restoredExitCode?: number;
   /** PTY-only. See `PtyPanelData.restoreProvenance`. */
   restoreProvenance?: TerminalRestoreProvenance;
   /** PTY-only. See `PtyPanelData.lastAgentObservation`. */

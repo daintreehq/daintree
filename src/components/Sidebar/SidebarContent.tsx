@@ -20,7 +20,10 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { boundedErrorText } from "@/utils/errorText";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
-import { ScrollIndicator } from "@/components/Worktree/ScrollIndicator";
+import {
+  ScrollIndicator,
+  SCROLL_INDICATOR_BAND_HEIGHT_PX,
+} from "@/components/Worktree/ScrollIndicator";
 import {
   useAgentLauncher,
   useWorktrees,
@@ -39,13 +42,19 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { WorktreesReconnectingBadge, WorktreesReconnectingRow } from "./WorktreesReconnectingBadge";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
-import { Server } from "@/components/icons";
+import { Rows3, Server } from "@/components/icons";
 import { getViewHostId } from "@/hooks/useHostConnection";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { ProjectHostsGroup } from "./ProjectHostsGroup";
 import { useHostConnectionStore } from "@/store/hostConnectionStore";
 import { splitHostName } from "@/components/Hosts/hostModel";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { WorktreeDensityItems } from "@/components/Worktree/WorktreeDensitySubmenu";
 import { SIDEBAR_HEADER_ACTION, SIDEBAR_HEADER_ROW } from "./sidebarHeader";
 import { useDispatchedSidebarRefresh } from "./useDispatchedSidebarRefresh";
 import { useSettledSidebarFailure, type SidebarFailure } from "./useSettledSidebarFailure";
@@ -384,31 +393,27 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // dialog close by a frame and lose the perceived-responsiveness win.
   const pendingCreations = useWorktreeSelectionStore((s) => s.pendingCreations);
   const deletedWorktrees = useWorktreeSelectionStore((s) => s.deletedWorktrees);
-  const openCreateDialog = useWorktreeSelectionStore((s) => s.openCreateDialog);
   const dismissPendingCreation = useWorktreeSelectionStore((s) => s.dismissPendingCreation);
+  const retryPendingCreation = useWorktreeSelectionStore((s) => s.retryPendingCreation);
 
   const handleRetryPendingCreation = useCallback(
-    (pendingCreation: PendingCreation) => {
-      dismissPendingCreation(pendingCreation.path);
-      openCreateDialog(null, {
-        initialBranchInput: pendingCreation.branch,
-        initialRecipeId: pendingCreation.recipeId,
-        initialAgentId: pendingCreation.agentId,
-        initialPrompt: pendingCreation.prompt,
-      });
-    },
-    [dismissPendingCreation, openCreateDialog]
+    (pendingCreation: PendingCreation) => retryPendingCreation(pendingCreation.path),
+    [retryPendingCreation]
   );
 
   const pendingCreationRows = useMemo(() => {
     if (pendingCreations.size === 0) return null;
+    // Rows of the grid like any other, since the grid may own only rows.
     return Array.from(pendingCreations.values()).map((pendingCreation) => (
-      <WorktreeCardPlaceholder
-        key={pendingCreation.path}
-        pendingCreation={pendingCreation}
-        onRetry={handleRetryPendingCreation}
-        onDismiss={dismissPendingCreation}
-      />
+      <div key={pendingCreation.path} role="row">
+        <div role="gridcell">
+          <WorktreeCardPlaceholder
+            pendingCreation={pendingCreation}
+            onRetry={handleRetryPendingCreation}
+            onDismiss={dismissPendingCreation}
+          />
+        </div>
+      </div>
     ));
   }, [pendingCreations, handleRetryPendingCreation, dismissPendingCreation]);
 
@@ -448,10 +453,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     mainWorktree,
     mainVisible,
     mainInQuickState,
+    mainHiddenByQuickState,
     nonMainWorktrees,
     quickStateCounts,
     chipCounts,
-    mainWorktreeAggregateCounts,
     filteredWorktrees,
     groupedSections,
     resultsWithoutQuickStateCount,
@@ -463,6 +468,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     ariaRowCount,
     sidebarItems,
     attentionWorktreeIds,
+    problemWorktreeTones,
     keyboardItems,
   } = useSidebarWorktreeModel({
     worktrees,
@@ -476,6 +482,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     keyboardCancelAnnouncement,
     isSortDisabled,
     dragDisabledReason,
+    isDragActive,
   } = useSidebarReorderSession({
     worktrees,
     dragStartOrder,
@@ -520,10 +527,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // immediately rather than after the persisted-query debounce.
   const hasFilters =
     liveQuery.trim().length > 0 || hasFacetFiltersActive || quickStateFilter !== "all";
-  // Main is a pinned card rather than a list row, but it is facet-filtered and
-  // it is on screen, so it belongs in both halves of the ratio. Without it,
-  // selecting "Main (1)" read "0 of 6 worktrees" directly above a visible main
-  // card. The quick-state bar keeps its own non-main scope.
+  // Main is a pinned card rather than a list row, but every filter applies to
+  // it and it is on screen, so it belongs in both halves of the ratio, as it
+  // does in the quick-state counts. Without it, selecting "Main (1)" read
+  // "0 of 6 worktrees" directly above a visible main card.
   const filteredCount = filteredWorktrees.length + (mainVisible ? 1 : 0);
   const scopeTotal = totalCount + (mainWorktree ? 1 : 0);
   const showScope = hasFilters && filteredCount !== scopeTotal;
@@ -532,17 +539,14 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // screen readers are served by the debounced announcer effects below, not a
   // live region, so the persistent sort-disabled text isn't re-announced on
   // every keystroke (#9665).
-  // The state tabs above this line count a different set on purpose — non-main,
-  // and deliberately not narrowed by the query — so while a search is running
-  // the user reads "1 of 5 worktrees" directly under a tab saying "All 4" with
-  // no way to tell which number is lying. Neither is; say so rather than making
-  // one of them wrong. Only while a query is active: without one the two scopes
-  // differ by the main worktree alone, which the pinned card already explains.
-  const scopeText = showScope
-    ? hasQuery
-      ? `${filteredCount} of ${scopeTotal} worktrees · state tabs ignore search`
-      : `${filteredCount} of ${scopeTotal} worktrees`
-    : null;
+  // On screen only for the search and the facets. A segment shows its own
+  // choice and count on the bar, and a line appearing above the bar on click
+  // pushed the bar out from under the pointer that had just pressed it. The
+  // announcement below still speaks for every kind of narrowing.
+  const scopeText =
+    showScope && (hasQuery || hasFacetFiltersActive)
+      ? `${filteredCount} of ${scopeTotal} worktrees`
+      : null;
   // Which filters, not just how many. A count tells the user the list is cut
   // down; it does not stop a sparse sidebar reading as an empty one.
   const activeFacetText = describeActiveFacets({
@@ -564,7 +568,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     quickStateFilter,
     hasQuery,
     hasFacets: hasFacetFiltersActive,
-    resultsWithoutQuickStateCount,
+    resultsWithoutQuickStateCount: resultsWithoutQuickStateCount + (mainHiddenByQuickState ? 1 : 0),
     mainVisible: mainVisible === true,
     mainInQuickState,
     displayQuery: deferredQuery,
@@ -629,21 +633,35 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // headers, issue #9666), so it needs the full item array as its input.
 
   const skipMotion = useShouldSkipMotion();
+  const isCompactDensity = useWorktreeFilterStore((state) => state.cardDensity === "compact");
 
   const {
     hiddenAbove,
     hiddenBelow,
     revealAbove,
     revealBelow,
+    bandInsets,
+    handleBandWheel,
     scrollerRef: scrollIndicatorScrollerRef,
     handleScroll,
     handleItemsRendered,
   } = useScrollIndicator({
     items: sidebarItems,
     attentionWorktreeIds,
+    problemWorktreeTones,
     virtuosoRef,
     smoothScroll: !skipMotion,
+    bandHeightPx: SCROLL_INDICATOR_BAND_HEIGHT_PX,
+    // A band would hide rows a drop can still land on.
+    paused: isDragActive,
   });
+
+  // Native focus scrolling (a row's toolbar button) parks its target clear
+  // of the bands too.
+  const scrollerStyle = {
+    scrollPaddingTop: bandInsets.top,
+    scrollPaddingBottom: bandInsets.bottom,
+  };
 
   const setScrollerElement = useCallback(
     (el: HTMLElement | Window | null) => {
@@ -770,19 +788,20 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         // reason is the part worth reading, and at sidebar width the context
         // line clipped it to "Workspace host exit…" with the rest on hover only.
         description={boundedErrorText(error)}
-        severity="warning"
+        // Error, not warning: this shows only once recovery has failed and
+        // settled, beside the load-failure banner's error tier.
+        severity="error"
         role="status"
         ariaLive="polite"
         onClose={canDismissErrorBanner ? onBannerDismiss : undefined}
         closeAriaLabel="Dismiss error"
-        actions={[
-          {
-            id: "restart-workspace-service",
-            label: "Restart service",
-            variant: "primary",
-            onClick: () => setIsRestartConfirmOpen(true),
-          },
-        ]}
+        action={{
+          id: "restart-workspace-service",
+          // The ellipsis says a confirmation comes first.
+          label: "Restart service…",
+          variant: "primary",
+          onClick: () => setIsRestartConfirmOpen(true),
+        }}
       />
     ) : null;
 
@@ -827,15 +846,43 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   if (showSkeleton && worktrees.length === 0) {
     return (
       <div className="flex flex-col h-full">
-        <div className={cn(SIDEBAR_HEADER_ROW, "border-b border-divider")}>
+        <div className={SIDEBAR_HEADER_ROW}>
           <SidebarViewHeading className="truncate text-text-primary font-semibold text-sm tracking-wide">
             Worktrees
           </SidebarViewHeading>
         </div>
+        {/* The control zone's shape, at its real heights (the 28px search rail,
+            the quick-state bar), so the zone's bottom edge does not drop 70px
+            the moment the list arrives. */}
+        <div
+          aria-hidden="true"
+          className="worktree-filter-bar flex shrink-0 gap-1.5 border-b border-divider px-3 pb-3"
+        >
+          <SkeletonBone className="flex-1 rounded-[var(--radius-md)]" heightPx={28} />
+          <SkeletonBone className="w-7 rounded-[var(--radius-md)]" heightPx={28} />
+        </div>
+        <div
+          aria-hidden="true"
+          className="worktree-filter-bar flex h-[29px] shrink-0 items-center gap-3 border-b border-border-default px-3"
+        >
+          {/* The bar's four segments, so its shape is there before its counts. */}
+          {[0, 1, 2, 3].map((segment) => (
+            <SkeletonBone key={segment} className="flex-1 rounded-sm" heightPx={10} />
+          ))}
+        </div>
         <div className="flex-1 min-h-0 relative overflow-hidden pb-8">
           <Skeleton label="Loading worktrees">
             {WORKTREE_SKELETON_CARDS.map((card) => (
-              <div key={card.id} aria-hidden="true" className="flex flex-col gap-2 px-4 py-3">
+              // The current density's card, line for line: Comfortable's
+              // title, branch, PR and activity rows; Compact's three.
+              <div
+                key={card.id}
+                aria-hidden="true"
+                className={cn(
+                  "flex flex-col px-4",
+                  isCompactDensity ? "gap-2 py-3" : "gap-2.5 py-3.5"
+                )}
+              >
                 <SkeletonBone
                   shimmer
                   className="rounded-sm"
@@ -848,7 +895,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                   heightPx={11}
                   style={{ width: card.subtitleWidth }}
                 />
-                <SkeletonBone shimmer className="mt-1 w-[90%] rounded-md" heightPx={32} />
+                {!isCompactDensity && (
+                  <SkeletonBone shimmer className="w-1/4 rounded-sm" heightPx={11} />
+                )}
+                <SkeletonBone shimmer className="mt-1 w-[85%] rounded-sm" heightPx={12} />
               </div>
             ))}
           </Skeleton>
@@ -895,6 +945,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   }
 
   const hasNonMainWorktrees = nonMainWorktrees.length > 0;
+  // The control zone stays up while any filter is on, even once the last
+  // feature worktree is gone: the filters persist, and the zone that set them
+  // is the only way to clear them. Without this a filter that hid main left a
+  // blank sidebar with nothing to undo it.
+  const showControlZone = hasNonMainWorktrees || hasFilters;
 
   // Each recovery action unmounts the button it lives on, so focus goes to the
   // search field first — it survives every branch, and it holds the criteria
@@ -949,7 +1004,12 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       onArm={() =>
         actionService.dispatch(
           "fleet.armMatchingFilter",
-          { worktreeIds: filteredWorktrees.map((w) => w.id) },
+          {
+            worktreeIds: [
+              ...(mainVisible && mainWorktree ? [mainWorktree.id] : []),
+              ...filteredWorktrees.map((w) => w.id),
+            ],
+          },
           { source: "user" }
         )
       }
@@ -974,14 +1034,14 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         className={cn(
           SIDEBAR_HEADER_ROW,
           "group/header @container/header justify-between gap-1 bg-transparent",
-          !hasNonMainWorktrees && "border-b border-divider"
+          !showControlZone && "border-b border-divider"
         )}
       >
         <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
           {/* Heading navigation lands here, not on the tag, so the host rides in
               the heading's name, and stays there when the tag hides. */}
           <SidebarViewHeading
-            className="shrink-0 text-text-primary font-semibold text-sm tracking-wide"
+            className="min-w-0 truncate text-text-primary font-semibold text-sm tracking-wide"
             aria-label={
               remoteHostName === null ? undefined : `Worktrees, on host ${remoteHostName}`
             }
@@ -1008,7 +1068,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                   <span
                     className={cn(
                       "truncate",
-                      remoteHostParts.nameHead.length > 4 ? "min-w-[4ch]" : "shrink-0"
+                      remoteHostParts.nameHead.length > 7
+                        ? "min-w-[4ch]"
+                        : remoteHostParts.nameHead.length > 4
+                          ? "min-w-0"
+                          : "shrink-0"
                     )}
                   >
                     {remoteHostParts.nameHead}
@@ -1029,14 +1093,25 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             />
           )}
         </div>
-        {/* gap-0.5, not gap-1: the four 24px buttons already carry their own
+        {/* gap-0.5, not gap-1: the five 24px buttons already carry their own
             inset, so a 4px gap on top spent width the 200px minimum does not
             have — the cluster crowded the "Worktrees" landmark it sits beside. */}
         {/* The cluster also stays up while the refresh icon is turning, so a
             refresh the pointer has left, or one started from the palette, still
             shows — and it fades back only once SpinningIcon finishes its turn. */}
         <div className="flex shrink-0 items-center gap-0.5">
-          <div className="invisible opacity-0 pointer-events-none transition-[opacity,visibility] duration-150 delay-75 group-hover/header:visible group-hover/header:opacity-100 group-hover/header:pointer-events-auto group-hover/header:delay-75 group-focus-within/header:visible group-focus-within/header:opacity-100 group-focus-within/header:pointer-events-auto group-focus-within/header:delay-75 has-[[data-spinning]]:visible has-[[data-spinning]]:opacity-100 has-[[data-spinning]]:pointer-events-auto flex items-center gap-0.5">
+          {/* Faded, not `invisible`: `visibility: hidden` took these out of the
+              tab order, so focus-within could never reveal them and a keyboard
+              user tabbing in never met them. Gone below 13rem, where their
+              reserved width would have run the title into them; all three
+              stay in the command palette and the background menu. */}
+          <div
+            className={cn(
+              "opacity-0 pointer-events-none transition-opacity duration-150 delay-75 group-hover/header:opacity-100 group-hover/header:pointer-events-auto group-hover/header:delay-75 group-focus-within/header:opacity-100 group-focus-within/header:pointer-events-auto group-focus-within/header:delay-75 has-[[data-spinning]]:opacity-100 has-[[data-spinning]]:pointer-events-auto hidden items-center gap-0.5",
+              // "Reconnecting…" beside the title needs the room these reserve.
+              !showReconnecting && "@[13rem]/header:flex"
+            )}
+          >
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -1094,6 +1169,31 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               </TooltipContent>
             </Tooltip>
           </div>
+          {/* Always shown, unlike the cluster beside it: with a full list the
+              cards cover the sidebar, so its background menu (where density
+              and the list-wide fold live) has nowhere to be right-clicked. */}
+          {worktrees.length > 0 && (
+            <DropdownMenu>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon-xs"
+                      className={SIDEBAR_HEADER_ACTION}
+                      aria-label="View options"
+                    >
+                      <Rows3 aria-hidden="true" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">View options</TooltipContent>
+              </Tooltip>
+              <DropdownMenuContent align="end" className="w-48">
+                <WorktreeDensityItems kind="dropdown" />
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -1126,13 +1226,32 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           escalatedSince={showReconnectingEscalated ? reconnectingAt : null}
         />
       )}
-      {/* Inline search bar — only when there are non-main worktrees */}
-      {hasNonMainWorktrees && (
+      {/* Inline search bar — while there are feature worktrees or a filter to clear */}
+      {showControlZone && (
         <WorktreeSidebarSearchBar
           inputRef={searchInputRef}
+          // ArrowDown from the field walks into the results, as it does in the
+          // overview: the grid takes focus and its cursor lands on the first row.
+          onArrowIntoResults={() => gridRef.current?.focus()}
           chipCounts={chipCounts}
           statusText={filterStatusText}
           filterSummaryText={activeFacetText || null}
+        />
+      )}
+      {/* The quick-state bar belongs to the control zone, under the search it
+          narrows alongside and above every card it filters, main included.
+          Sitting below the main card it read as a filter on the list alone,
+          and split the zone's controls around a card. */}
+      {showControlZone && (
+        <QuickStateFilterBar
+          // The search rail's plane, so the zone is one surface on the
+          // themes that tint it rather than a tinted rail over a bare bar.
+          className="worktree-filter-bar shrink-0"
+          value={quickStateFilter}
+          onChange={setQuickStateFilter}
+          counts={quickStateCounts}
+          finishedUnseen={quickStateCounts.finishedUnseen}
+          trailing={armMatchingButton}
         />
       )}
 
@@ -1154,6 +1273,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       <div className="sr-only" role="status" aria-live="assertive" aria-atomic="true">
         {keyboardCancelAnnouncement}
       </div>
+      <span id="worktree-sidebar-grid-help" className="sr-only">
+        Arrow keys move between worktrees and Enter opens one. Right arrow or F2 reaches a
+        worktree's controls, Escape comes back.
+      </span>
       {/* Worktree list — single role="grid" with aria-activedescendant tracking
           the active row. Single tab stop on the grid container; rows never
           take focus directly, so they can be unmounted by Virtuoso without
@@ -1162,9 +1285,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         ref={gridRef}
         role="grid"
         aria-label="Worktrees"
+        aria-describedby="worktree-sidebar-grid-help"
         aria-rowcount={ariaRowCount}
         aria-activedescendant={activeDescendantId}
-        tabIndex={0}
+        // No rows, no stop: an empty grid took focus with nothing to show it.
+        tabIndex={keyboardItems.length > 0 ? 0 : -1}
         onKeyDown={handleGridKeyDown}
         onFocus={handleGridFocus}
         onFocusCapture={handleGridFocusCapture}
@@ -1189,46 +1314,39 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               availability={availability}
               agentSettings={agentSettings}
               homeDir={homeDir}
-              aggregateCounts={mainWorktreeAggregateCounts}
               ariaRowIndex={mainRowIndex}
             />
           </div>
         )}
 
+        {/* Strong divider between pinned worktrees and scrollable list */}
+        {(hasNonMainWorktrees || pendingCreationRows) && mainVisible && (
+          <div role="presentation" className="shrink-0 border-b border-border-default" />
+        )}
+
+        {/* A worktree being created sits at the head of the list it will join,
+            not beside the pinned main card, so the row the user is watching
+            does not jump zones the moment it lands. */}
         {pendingCreationRows && (
           <div role="rowgroup" className="shrink-0">
             {pendingCreationRows}
           </div>
         )}
 
-        {/* Strong divider between pinned worktrees and scrollable list */}
-        {hasNonMainWorktrees && (
-          <div role="presentation" className="shrink-0 border-b border-border-default" />
-        )}
-
-        {hasNonMainWorktrees && (
-          <div role="row">
-            <div role="gridcell">
-              <QuickStateFilterBar
-                value={quickStateFilter}
-                onChange={setQuickStateFilter}
-                counts={quickStateCounts}
-                finishedUnseen={quickStateCounts.finishedUnseen}
-                trailing={armMatchingButton}
-              />
-            </div>
-          </div>
-        )}
-
         {/* Virtualized non-main worktree list */}
         <div role="presentation" className="relative flex-1 min-h-0">
           {listEmpty !== null ? (
-            <SidebarListEmptyState
-              empty={listEmpty}
-              onShowAllMatches={handleShowAllMatches}
-              onClearSearch={handleClearSearch}
-              onClearAllFilters={handleClearAllFilters}
-            />
+            // A row of its own, since the grid may own only rows.
+            <div role="row" className="h-full">
+              <div role="gridcell" className="h-full">
+                <SidebarListEmptyState
+                  empty={listEmpty}
+                  onShowAllMatches={handleShowAllMatches}
+                  onClearSearch={handleClearSearch}
+                  onClearAllFilters={handleClearAllFilters}
+                />
+              </div>
+            </div>
           ) : groupedSections ? (
             <Virtuoso<SidebarFlatItem, SidebarVirtuosoContext>
               key={virtuosoResetKey}
@@ -1245,7 +1363,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               scrollerRef={setScrollerElement}
               onScroll={handleScroll}
               itemsRendered={handleItemsRendered}
-              className="absolute inset-0 overflow-y-auto scrollbar-none"
+              style={scrollerStyle}
+              // `z-0` makes the scroller a stacking context, so nothing raised
+              // inside a row can paint over the bands.
+              className="absolute inset-0 z-0 overflow-y-auto scrollbar-none"
             />
           ) : (
             <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
@@ -1264,7 +1385,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 scrollerRef={setScrollerElement}
                 onScroll={handleScroll}
                 itemsRendered={handleItemsRendered}
-                className="absolute inset-0 overflow-y-auto scrollbar-none"
+                style={scrollerStyle}
+                className="absolute inset-0 z-0 overflow-y-auto scrollbar-none"
               />
             </SortableContext>
           )}
@@ -1277,7 +1399,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             direction="above"
             count={hiddenAbove.count}
             attentionCount={hiddenAbove.attention}
+            problemCount={hiddenAbove.problem}
+            problemTone={hiddenAbove.problemTone}
             onClick={revealAbove}
+            onWheel={handleBandWheel}
             ariaHidden
             tabIndex={-1}
           />
@@ -1285,7 +1410,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             direction="below"
             count={hiddenBelow.count}
             attentionCount={hiddenBelow.attention}
+            problemCount={hiddenBelow.problem}
+            problemTone={hiddenBelow.problemTone}
             onClick={revealBelow}
+            onWheel={handleBandWheel}
             ariaHidden
             tabIndex={-1}
           />

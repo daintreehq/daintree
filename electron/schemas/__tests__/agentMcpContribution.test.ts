@@ -89,8 +89,8 @@ describe("mcpName", () => {
     expect(parse(origin, "books").success).toBe(true);
   });
 
-  it.each(["docs", "runbooks"])(
-    "rejects %s, which would name the server after one of the Daintree Assistant's own",
+  it.each(["docs", "runbooks", "decisions"])(
+    "rejects %s, which would name the server after one of Daintree's own",
     (mcpName) => {
       for (const origin of ["user", "project"] as const) {
         const result = parse(origin, mcpName);
@@ -104,6 +104,7 @@ describe("mcpName", () => {
     const schema = getPluginManifestSchema("user");
     expect(schema.safeParse(manifestWith({ mcpName: "docs-index" })).success).toBe(true);
     expect(schema.safeParse(manifestWith({ mcpName: "runbooks2" })).success).toBe(true);
+    expect(schema.safeParse(manifestWith({ mcpName: "decisions-log" })).success).toBe(true);
   });
 });
 

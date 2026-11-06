@@ -15,6 +15,16 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
   isCachedViewWebContents: (...args: unknown[]) => isCachedViewWebContents(...args),
 }));
 
+const rebuildApplicationMenuIfStale = vi.fn();
+vi.mock("../../../menu.js", () => ({
+  rebuildApplicationMenuIfStale: (...args: unknown[]) => rebuildApplicationMenuIfStale(...args),
+}));
+
+const cliAvailabilityService = { id: "cli" };
+vi.mock("../../../window/serviceRefs.js", () => ({
+  getCliAvailabilityServiceRef: () => cliAvailabilityService,
+}));
+
 const { menuNamespace, resolveApplicationMenuAnchor } = await import("../menu.js");
 
 const showApplication = menuNamespace.ops.showApplication.handler as (
@@ -56,7 +66,9 @@ function makeCtx(win: unknown, webContentsId = 7, sender?: unknown) {
 beforeEach(() => {
   vi.clearAllMocks();
   setPlatform("win32");
+  isCachedViewWebContents.mockReset();
   isCachedViewWebContents.mockReturnValue(false);
+  rebuildApplicationMenuIfStale.mockReset();
 });
 
 afterEach(() => {
@@ -138,6 +150,63 @@ describe("menu:show-application", () => {
     expect(second.popup).toHaveBeenCalledTimes(1);
   });
 
+  it("brings a stale menu up to date first and pops up the one that rebuild installs", async () => {
+    // A window opened or closed while the app was in the background; the click
+    // that focused this window is the one asking for the menu.
+    const stale = makeMenu();
+    const rebuilt = makeMenu();
+    getApplicationMenu.mockReturnValue(stale);
+    rebuildApplicationMenuIfStale.mockImplementation(() => {
+      getApplicationMenu.mockReturnValue(rebuilt);
+    });
+    const win = makeWindow();
+
+    await showApplication(makeCtx(win), { x: 0, y: 0 });
+
+    expect(rebuildApplicationMenuIfStale).toHaveBeenCalledExactlyOnceWith(
+      win,
+      cliAvailabilityService
+    );
+    expect(stale.popup).not.toHaveBeenCalled();
+    expect(rebuilt.popup).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [
+      "the window lost focus",
+      (win: { isFocused: ReturnType<typeof vi.fn> }) => win.isFocused.mockReturnValue(false),
+    ],
+    ["the view was backgrounded", () => isCachedViewWebContents.mockReturnValue(true)],
+  ])("opens nothing when %s while the menu was being brought up to date", async (_l, move) => {
+    const menu = makeMenu();
+    getApplicationMenu.mockReturnValue(menu);
+    const win = { ...makeWindow(), isFocused: vi.fn(() => true) };
+    rebuildApplicationMenuIfStale.mockImplementation(() => move(win));
+
+    await showApplication(makeCtx(win), { x: 0, y: 0 });
+
+    expect(rebuildApplicationMenuIfStale).toHaveBeenCalledTimes(1);
+    expect(menu.popup).not.toHaveBeenCalled();
+  });
+
+  it("still opens the installed menu when bringing it up to date fails", async () => {
+    const menu = makeMenu();
+    getApplicationMenu.mockReturnValue(menu);
+    rebuildApplicationMenuIfStale.mockImplementation(() => {
+      throw new Error("rebuild failed");
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await showApplication(makeCtx(makeWindow()), { x: 0, y: 0 });
+
+    expect(menu.popup).toHaveBeenCalledTimes(1);
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining("bring the application menu up to date"),
+      expect.any(Error)
+    );
+    consoleError.mockRestore();
+  });
+
   it("converts the anchor with the sending view's own zoom factor", async () => {
     const menu = makeMenu();
     getApplicationMenu.mockReturnValue(menu);
@@ -174,6 +243,7 @@ describe("menu:show-application", () => {
     await showApplication(makeCtx(makeWindow()), { x: 12, y: 48 });
 
     expect(menu.popup).not.toHaveBeenCalled();
+    expect(rebuildApplicationMenuIfStale).not.toHaveBeenCalled();
   });
 
   it("does nothing for a backgrounded project view", async () => {
@@ -202,6 +272,7 @@ describe("menu:show-application", () => {
     await showApplication(makeCtx(win), { x: 12, y: 48 });
 
     expect(menu.popup).not.toHaveBeenCalled();
+    expect(rebuildApplicationMenuIfStale).not.toHaveBeenCalled();
   });
 
   it("reports rather than rejects when the native popup fails during teardown", async () => {
@@ -213,7 +284,10 @@ describe("menu:show-application", () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
 
     await expect(showApplication(makeCtx(makeWindow()), { x: 1, y: 1 })).resolves.toBeUndefined();
-    expect(consoleError).toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining("Failed to open the application menu"),
+      expect.any(Error)
+    );
     consoleError.mockRestore();
   });
 

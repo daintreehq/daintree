@@ -27,6 +27,8 @@ import {
   AgentSessionHistoryListArgsSchema,
   GitGetProjectPulseArgsSchema,
   SlashCommandsListArgsSchema,
+  AgentLaunchArgsSchema,
+  AgentLaunchInNewWorktreeArgsSchema,
   AgentListModelsArgsSchema,
   AgentListPresetsArgsSchema,
   RecipeListArgsSchema,
@@ -46,6 +48,29 @@ function acceptedKeys(schema: z.ZodType): string[] {
     properties?: Record<string, unknown>;
   };
   return Object.keys(json.properties ?? {}).sort();
+}
+
+interface SourceArmJson {
+  properties?: Record<string, { const?: unknown }>;
+}
+
+/**
+ * `createWithRecipe`'s keys per source mode, by `kind`. The top-level keys
+ * alone stop at `source`, so a field one side's arm gained (#15733's
+ * `fetchBase`) would pass unnoticed.
+ */
+function sourceArmKeys(schema: z.ZodType): Record<string, string[]> {
+  const json = z.toJSONSchema(schema, { io: "input", unrepresentable: "any" }) as {
+    properties?: { source?: { oneOf?: SourceArmJson[]; anyOf?: SourceArmJson[] } };
+  };
+  const source = json.properties?.source;
+  const arms = source?.oneOf ?? source?.anyOf ?? [];
+  return Object.fromEntries(
+    arms.map((arm) => [
+      String(arm.properties?.kind?.const),
+      Object.keys(arm.properties ?? {}).sort(),
+    ])
+  );
 }
 
 /**
@@ -82,6 +107,10 @@ describe("viewless argument schemas", () => {
     "worktree.waitForPullRequest": WorktreeWaitForPullRequestArgsSchema,
     "agentSessionHistory.list": AgentSessionHistoryListArgsSchema,
     "git.getProjectPulse": GitGetProjectPulseArgsSchema,
+    "agent.launch": AgentLaunchArgsSchema,
+    // Parsed in main before its create runs (#15738), so a key the renderer's
+    // advertised schema gained would otherwise be refused there.
+    "agent.launchInNewWorktree": AgentLaunchInNewWorktreeArgsSchema,
   };
 
   it.each(Object.entries(schemas))(
@@ -95,4 +124,68 @@ describe("viewless argument schemas", () => {
       expect(acceptedKeys(schema)).toEqual(acceptedKeys(rendererSchema));
     }
   );
+
+  it("takes the keys worktree.createWithRecipe's renderer action takes in every source mode", async () => {
+    const registry = await createActionRegistry();
+    const rendererSchema: unknown = registry.get("worktree.createWithRecipe")?.()?.argsSchema;
+    if (!isZodSchema(rendererSchema)) throw new Error("createWithRecipe has no args schema");
+
+    const rendererArms = sourceArmKeys(rendererSchema);
+    expect(Object.keys(rendererArms).sort()).toEqual([
+      "existingBranch",
+      "newBranch",
+      "pullRequest",
+    ]);
+    expect(sourceArmKeys(WorktreeCreateWithRecipeArgsSchema)).toEqual(rendererArms);
+  });
+
+  it("takes the source modes agent.launchInNewWorktree's renderer action advertises", async () => {
+    const registry = await createActionRegistry();
+    const rendererSchema: unknown = registry.get("agent.launchInNewWorktree")?.()?.argsSchema;
+    if (!isZodSchema(rendererSchema)) throw new Error("launchInNewWorktree has no args schema");
+
+    expect(sourceArmKeys(AgentLaunchInNewWorktreeArgsSchema)).toEqual(
+      sourceArmKeys(rendererSchema)
+    );
+  });
+
+  it("accepts and refuses agent.launchInNewWorktree's arguments as its renderer action does", async () => {
+    const registry = await createActionRegistry();
+    const rendererSchema: unknown = registry.get("agent.launchInNewWorktree")?.()?.argsSchema;
+    if (!isZodSchema(rendererSchema)) throw new Error("launchInNewWorktree has no args schema");
+    const newBranch = { kind: "newBranch", branchName: "unit-1" };
+    // Main additionally refuses unknown keys, a combined wait past the hold
+    // and handback without a prompt, none of which the renderer's advertised
+    // schema can express.
+    const cases: Array<[args: Record<string, unknown>, accepted: boolean]> = [
+      [{ source: newBranch, agentId: "claude" }, true],
+      [
+        { source: { ...newBranch, fetchBase: true, collisionPolicy: "error" }, agentId: "codex" },
+        true,
+      ],
+      [
+        { source: { kind: "pullRequest", pullRequestNumber: 7 }, agentId: "claude", model: "sol" },
+        true,
+      ],
+      [{ source: { kind: "existingBranch", branchName: "topic" }, agentId: "gemini" }, true],
+      [{ source: newBranch, agentId: "claude", location: "overlay", interactive: true }, true],
+      [
+        {
+          source: { kind: "existingBranch", branchName: "x", baseBranch: "develop" },
+          agentId: "a",
+        },
+        false,
+      ],
+      [{ source: { kind: "pullRequest", pullRequestNumber: 0 }, agentId: "claude" }, false],
+      [{ source: newBranch }, false],
+      [{ source: { ...newBranch, branchName: "  " }, agentId: "claude" }, false],
+      [{ source: newBranch, agentId: "claude", setupTimeoutMs: 600_001 }, false],
+      [{ source: newBranch, agentId: "claude", name: "x".repeat(201) }, false],
+    ];
+    for (const [args, accepted] of cases) {
+      const label = JSON.stringify(args);
+      expect(rendererSchema.safeParse(args).success, label).toBe(accepted);
+      expect(AgentLaunchInNewWorktreeArgsSchema.safeParse(args).success, label).toBe(accepted);
+    }
+  });
 });

@@ -78,6 +78,15 @@ export interface UseProjectSwitcherPaletteOptions {
   liveStatsWhileClosed?: boolean;
 }
 
+/** Where the highlight sits with no row chosen: the top match, or in browse the first row elsewhere. */
+function defaultRowIndex(results: readonly ProjectSwitcherRow[], ranked: boolean): number {
+  if (ranked) return 0;
+  const index = results.findIndex(
+    (row) => !row.isActive && !(row.kind === "project" && row.isMissing)
+  );
+  return index >= 0 ? index : 0;
+}
+
 export function useProjectSwitcherPalette({
   liveStatsWhileClosed = false,
 }: UseProjectSwitcherPaletteOptions = {}): UseProjectSwitcherPaletteReturn {
@@ -294,11 +303,17 @@ export function useProjectSwitcherPalette({
   // index addressing a different row than the user selected, and Enter would
   // commit that one (#11071). Deriving means the highlight follows the row
   // across reorders and never addresses a row that isn't rendered.
+  //
+  // With no row chosen, a query keeps its top match, but browse lands where
+  // opening does: the first row that isn't the workspace you're in. Typing and
+  // then clearing the query used to fall back to row 0 — the current project —
+  // so a reflexive Enter closed the palette instead of switching.
   const selectedIndex = useMemo(() => {
     if (results.length === 0) return 0;
     const index = selectedRowId ? results.findIndex((row) => row.id === selectedRowId) : -1;
-    return index >= 0 ? index : 0;
-  }, [results, selectedRowId]);
+    if (index >= 0) return index;
+    return defaultRowIndex(results, isRankedSearch);
+  }, [results, selectedRowId, isRankedSearch]);
 
   // Decoupled from `results` so the toolbar pill keeps the active project's
   // pin/process state even when the current search filters it out.
@@ -410,24 +425,29 @@ export function useProjectSwitcherPalette({
       if (results.length === 0) return;
       setSelectedRowId((previousId) => {
         const current = previousId ? results.findIndex((project) => project.id === previousId) : -1;
-        const from = current >= 0 ? current : 0;
+        // From the row the highlight is actually drawn on, so the first press
+        // moves off it rather than onto it.
+        const from = current >= 0 ? current : defaultRowIndex(results, isRankedSearch);
         const next = (from + delta + results.length) % results.length;
         return results[next]!.id;
       });
     },
-    [results]
+    [results, isRankedSearch]
   );
 
+  const [cycleRequest, setCycleRequest] = useState(0);
   const toggle = useCallback(
     (nextMode: ProjectSwitcherMode = "modal") => {
       const currentlyOpen = nextMode === "modal" ? modalIsOpen : dropdownIsOpen;
       if (currentlyOpen) {
-        step(1);
+        // The palette owns the step: its cursor walks folded headers,
+        // scratches and other hosts as well as the rows this hook selects.
+        setCycleRequest((count) => count + 1);
       } else {
         open(nextMode);
       }
     },
-    [modalIsOpen, dropdownIsOpen, open, step]
+    [modalIsOpen, dropdownIsOpen, open]
   );
 
   const selectPrevious = useCallback(() => step(-1), [step]);
@@ -577,6 +597,7 @@ export function useProjectSwitcherPalette({
     isRankedSearch,
     activeProject,
     selectedIndex,
+    cycleRequest,
     open,
     close,
     toggle,

@@ -1,3 +1,4 @@
+import { writeClipboardFileFormat } from "../../utils/clipboardAccess.js";
 import { clipboard } from "electron";
 import crypto from "crypto";
 import path from "path";
@@ -6,6 +7,11 @@ import { z } from "zod";
 import { CHANNELS } from "../channels.js";
 import { ValidationError } from "../validationError.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import {
+  BRACKETED_PASTE_END,
+  BRACKETED_PASTE_START,
+  neutralizeControlCharacters,
+} from "../../../shared/utils/terminalInputProtocol.js";
 import {
   broadcastToRenderer,
   checkRateLimit,
@@ -23,6 +29,10 @@ import type { ClientEndpoint } from "../endpoint.js";
 import { getRemoteService } from "../../remote/runtime.js";
 import { resolveScopedProjectForIpcContext } from "../projectContext.js";
 import { isAssistantTerminalRecord } from "../../services/assistantTerminal.js";
+import { getLifecycleLedger } from "../../services/pty/lifecycleLedger.js";
+import { isPlainShellName } from "../../services/pty/agentProcessTree.js";
+import { isBuiltInAgentId } from "../../../shared/config/agentIds.js";
+import type { TerminalInfoPayload } from "../../../shared/types/ipc/terminal.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type {
   CopyTreeGeneratePayload,
@@ -119,7 +129,11 @@ import type {
 import type { WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 import { projectStore } from "../../services/ProjectStore.js";
 import { recordCopyTreeRun } from "../../services/copyTreeHistoryService.js";
-import { contextInjectionTracker } from "../../services/ContextInjectionTracker.js";
+import {
+  contextInjectionTracker,
+  type InjectionStop,
+} from "../../services/ContextInjectionTracker.js";
+import { events } from "../../services/events.js";
 import {
   fitContentToResultBudget,
   readContentPreview,
@@ -131,6 +145,11 @@ import {
   cancelAllWorkspaceRootContext,
   generateWorkspaceRootContext,
 } from "../../services/workspaceRootCopyTree.js";
+import type {
+  CopyTreeOperationOwner,
+  CopyTreeOwnerPredicate,
+} from "../../services/copyTreeOperationOwner.js";
+import { peekDriveLeaseService } from "../../services/DriveLeaseService.js";
 import { isFullyQualifiedRoot } from "../../utils/fullyQualifiedRoot.js";
 
 function getStringField(payload: unknown, key: string): string | undefined {
@@ -274,6 +293,21 @@ interface CopyTreeSender {
    * folders, so it must only ever reach the view's own (#13210).
    */
   workspaceRoot: string | null;
+  /**
+   * Stamped on every run this sender starts, so an id-less cancel can tell
+   * whose it is (#16275). Its workspace is the view's own binding only: the
+   * global fallback `projectId` takes would claim the run for whichever
+   * project happens to be current.
+   */
+  owner: CopyTreeOperationOwner;
+}
+
+/**
+ * The caller's endpoint id. A local view's endpoint is built on first read and
+ * kept for the life of its WebContents, so reading it costs one lookup.
+ */
+function readEndpointId(ctx: IpcContext): string | null {
+  return (ctx.endpoint as ClientEndpoint | undefined)?.endpointId ?? null;
 }
 
 /**
@@ -294,7 +328,29 @@ function resolveCopyTreeSender(ctx: IpcContext, deps: HandlerDependencies): Copy
   } else if (scoped?.workspaceId) {
     workspaceRoot = scratchStore.getScratchById(scoped.workspaceId)?.path ?? null;
   }
-  return { projectId, project, workspaceRoot };
+  const owner = { workspaceId: scoped?.workspaceId ?? null, endpointId: readEndpointId(ctx) };
+  return { projectId, project, workspaceRoot, owner };
+}
+
+/**
+ * Which runs an id-less cancel from `ctx` may stop (#16275): only those of the
+ * caller's own workspace, and of those only its own unless it drives that
+ * workspace. A caller bound to no workspace stops nothing. Resolved once, so
+ * the drive standing is a snapshot of the moment the cancel arrived.
+ */
+function resolveCancelScope(
+  ctx: IpcContext,
+  deps: HandlerDependencies
+): CopyTreeOwnerPredicate | null {
+  const workspaceId = resolveScopedProjectForIpcContext(ctx, deps)?.workspaceId ?? null;
+  if (workspaceId === null) return null;
+  const endpoint = ctx.endpoint as ClientEndpoint | undefined;
+  const endpointId = endpoint?.endpointId ?? null;
+  const lease = peekDriveLeaseService();
+  const drives = !lease || (endpoint !== undefined && lease.isDriving(workspaceId, endpoint));
+  return (owner) =>
+    owner.workspaceId === workspaceId &&
+    (drives || (endpointId !== null && owner.endpointId === endpointId));
 }
 
 /**
@@ -410,6 +466,77 @@ async function loadCopyTreeProjectSettings(
 }
 
 const INJECTION_CANCELLED = "Injection cancelled";
+const INPUT_LOCKED_STOP = "Injection stopped: the terminal's input was locked";
+const AGENT_GONE_STOP = "Injection stopped: the agent it was for is no longer running there";
+const TERMINAL_CLOSED = "Terminal closed during injection";
+const TERMINAL_GONE = "Terminal no longer exists";
+const SHELL_REFUSAL = "Context can only be injected into a running agent, not a shell";
+const NOT_ACCEPTING_PASTE =
+  "The agent isn't accepting pasted text yet. Try again once its prompt is ready";
+const PASTE_READY_WAIT_MS = 10_000;
+const PASTE_READY_POLL_MS = 250;
+
+function describeInjectionStop(stop: InjectionStop): string {
+  return stop === "input-locked" ? INPUT_LOCKED_STOP : INJECTION_CANCELLED;
+}
+
+/**
+ * Why delivery must stop. `closePaste` says whether the program that read the
+ * opener is still there to be handed its terminator.
+ */
+interface InjectionHalt {
+  error: string;
+  closePaste: boolean;
+}
+
+/**
+ * The terminal and agent an injection was admitted for, held from before
+ * generation to the last chunk.
+ */
+interface InjectionTarget {
+  /** Lifecycle-ledger generation of the incarnation that was asked for. */
+  readonly generation: number | undefined;
+  /** Fold in a fresh host answer: the agent it names must still be the owner. */
+  observe(info: TerminalInfoPayload | null): void;
+  /** Why the injection can no longer go to this target, or null while it can. */
+  lost(): string | null;
+  dispose(): void;
+}
+
+/**
+ * Why the host's view of a terminal doesn't admit the bundle as a bracketed
+ * paste, or null when it does. `transient` marks a verdict worth waiting out:
+ * an agent still starting, or one that hasn't turned bracketed paste on yet.
+ */
+export function judgePasteDestination(
+  info: TerminalInfoPayload | null,
+  platform: NodeJS.Platform = process.platform
+): { reason: string; transient: boolean } | null {
+  if (!info?.hasPty) return { reason: TERMINAL_GONE, transient: false };
+  // The host recognises only built-in agents in the process tree. For one a
+  // plugin contributed, the launch plus a foreground process that isn't the
+  // shell it runs in is the evidence there is.
+  const contributedAgent =
+    info.launchAgentId !== undefined && !isBuiltInAgentId(info.launchAgentId);
+  // node-pty on Windows answers with the terminal name it was spawned with
+  // (`xterm-256color`), not a process, so there is no foreground to go on.
+  const foreground = platform === "win32" ? undefined : info.ptyForegroundProcess;
+  if (
+    info.detectedAgentId === undefined &&
+    contributedAgent &&
+    (foreground === undefined || isPlainShellName(foreground))
+  ) {
+    return { reason: SHELL_REFUSAL, transient: true };
+  }
+  if (info.detectedAgentId === undefined && !contributedAgent) {
+    // A launch the host has never seen an agent in is still starting; one it
+    // has is a shell again.
+    const starting = info.launchAgentId !== undefined && info.everDetectedAgent !== true;
+    return { reason: SHELL_REFUSAL, transient: starting };
+  }
+  if (info.bracketedPasteMode !== true) return { reason: NOT_ACCEPTING_PASTE, transient: true };
+  return null;
+}
 
 /**
  * Progress goes to the caller on the existing channel and to the operation,
@@ -491,7 +618,7 @@ async function runCopyTreeOperation(
  * file manager's Copy does. A remote window's copy-as-file lands here too,
  * with the bundle already downloaded from its host.
  */
-export function copyFileToClipboard(filePath: string): void {
+export async function copyFileToClipboard(filePath: string): Promise<void> {
   if (process.platform === "darwin") {
     // Electron's `clipboard.writeBuffer` maps to Chromium's
     // `WritePortableAndPlatformRepresentations`, which calls
@@ -507,11 +634,11 @@ export function copyFileToClipboard(filePath: string): void {
     <string>${escapeXml(filePath)}</string>
 </array>
 </plist>`;
-    clipboard.writeBuffer("NSFilenamesPboardType", Buffer.from(plist, "utf8"));
+    await writeClipboardFileFormat("NSFilenamesPboardType", Buffer.from(plist, "utf8"));
   } else if (process.platform === "win32") {
-    clipboard.writeText(filePath);
+    await clipboard.writeText(filePath);
   } else {
-    clipboard.writeBuffer(
+    await writeClipboardFileFormat(
       "text/uri-list",
       Buffer.from(pathToFileURL(filePath).href + "\r\n", "utf8")
     );
@@ -533,7 +660,8 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   const generateToFile = async (
     target: { path: string; branch?: string; isWorkspaceRoot?: boolean },
     options: CopyTreeOptions,
-    onProgress: (progress: CopyTreeProgress) => void
+    onProgress: (progress: CopyTreeProgress) => void,
+    owner: CopyTreeOperationOwner
   ): Promise<CopyTreeResult> => {
     let filePath: string;
     try {
@@ -555,8 +683,14 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       // A workspace root has no workspace host to route to — a scratch never
       // gets one — so it runs on main's own CopyTree worker (#13210).
       const result = target.isWorkspaceRoot
-        ? await generateWorkspaceRootContext(target.path, options, onProgress, filePath)
-        : await deps.worktreeService!.generateContext(target.path, options, onProgress, filePath);
+        ? await generateWorkspaceRootContext(target.path, options, onProgress, filePath, owner)
+        : await deps.worktreeService!.generateContext(
+            target.path,
+            options,
+            onProgress,
+            filePath,
+            owner
+          );
       if (result.error) return result;
       // A successful generation names the file we reserved and reports its
       // size. Anything else is a result that outlived its operation: publishing
@@ -626,7 +760,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     const projectSettings = await loadCopyTreeProjectSettings(sender.projectId);
     const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options);
 
-    const result = await generateToFile(worktree, mergedOptions, onProgress);
+    const result = await generateToFile(worktree, mergedOptions, onProgress, sender.owner);
     if (result.error) {
       return result;
     }
@@ -746,7 +880,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     // Written by the workspace host straight to disk. This handler used to pull
     // the whole bundle across two process boundaries only to write it out here
     // (#11528); the file it needs is now already on disk when the call returns.
-    const result = await generateToFile(target, mergedOptions, onProgress);
+    const result = await generateToFile(target, mergedOptions, onProgress, sender.owner);
 
     if (result.error || !result.filePath) {
       return result;
@@ -766,7 +900,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     const filePath = result.filePath;
 
     try {
-      copyFileToClipboard(filePath);
+      await copyFileToClipboard(filePath);
 
       console.log(`[${traceId}] Copied context file to clipboard: ${filePath}`);
 
@@ -805,6 +939,194 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       )
     )
   );
+
+  /**
+   * Pin the incarnation and the agent an injection is for, before generation
+   * spends seconds on it. A terminal with no agent detected yet (a workflow
+   * injects right after launching one) takes the first agent seen as its
+   * owner. From then on an exit, a respawn, or a different agent or session in
+   * the same pane means the bundle no longer has its reader.
+   *
+   * The host's agent events keep the pin current between snapshots, so a chunk
+   * boundary needs no round trip. An agent a plugin contributed has no
+   * detected identity, so only the incarnation is pinned for it.
+   */
+  const pinInjectionTarget = async (terminalId: string): Promise<InjectionTarget> => {
+    const ledger = getLifecycleLedger();
+    const generation = ledger.currentGeneration(terminalId);
+    const info = await deps.ptyClient!.getTerminalInfo(terminalId);
+    let owner: { agentId: string; incarnation: number | undefined } | undefined;
+    let lost: string | null = null;
+
+    const adoptOrCompare = (agentId: string, incarnation: number | undefined): void => {
+      if (!owner) {
+        owner = { agentId, incarnation };
+        return;
+      }
+      // Absent means unobserved, never zero, so only two observed counts compare.
+      const relaunched =
+        owner.incarnation !== undefined &&
+        incarnation !== undefined &&
+        owner.incarnation !== incarnation;
+      if (owner.agentId !== agentId || relaunched) lost = AGENT_GONE_STOP;
+    };
+
+    // An answer that straddled a respawn describes the predecessor. No answer
+    // at all is a spawn the host hasn't made yet (or a failed read), so the
+    // pin waits for the first agent seen.
+    if (ledger.currentGeneration(terminalId) !== generation) lost = TERMINAL_CLOSED;
+    else if (info && !info.hasPty) lost = TERMINAL_GONE;
+    else if (info?.detectedAgentId) adoptOrCompare(info.detectedAgentId, info.agentIncarnation);
+
+    // Subscribed in the continuation of the snapshot, so every event seen here
+    // happened after the state that answer describes.
+    const offDetected = events.on("agent:detected", (event) => {
+      if (lost || event.terminalId !== terminalId || !event.agentType) return;
+      adoptOrCompare(event.agentType, event.agentIncarnation);
+    });
+    // An agent leaving before one was pinned was there when the injection was
+    // asked for, unseen by a failed read: whatever starts next isn't it.
+    const offExited = events.on("agent:exited", (event) => {
+      if (lost || event.terminalId !== terminalId || !event.agentType) return;
+      lost = AGENT_GONE_STOP;
+    });
+
+    return {
+      generation,
+      observe(next) {
+        if (lost) return;
+        if (ledger.currentGeneration(terminalId) !== generation) {
+          lost = TERMINAL_CLOSED;
+          return;
+        }
+        if (next?.detectedAgentId) {
+          adoptOrCompare(next.detectedAgentId, next.agentIncarnation);
+        } else if (owner && next?.hasPty) {
+          lost = AGENT_GONE_STOP;
+        }
+      },
+      lost: () => lost,
+      dispose() {
+        offDetected();
+        offExited();
+      },
+    };
+  };
+
+  /**
+   * Poll the host until the terminal can take the paste, for as long as the
+   * verdict could still change: a workflow injects right after launching its
+   * agent, before the CLI has drawn a prompt. Every answer is held against the
+   * pinned target, so a respawn or a new agent can't inherit the paste.
+   */
+  const awaitPasteDestination = async (
+    terminalId: string,
+    target: InjectionTarget,
+    halted: () => InjectionHalt | null
+  ): Promise<{ error: string } | null> => {
+    const deadline = Date.now() + PASTE_READY_WAIT_MS;
+    for (;;) {
+      const before = halted();
+      if (before) return before;
+      const info = await deps.ptyClient!.getTerminalInfo(terminalId);
+      target.observe(info);
+      const after = halted();
+      if (after) return after;
+      const verdict = judgePasteDestination(info);
+      if (!verdict) return null;
+      if (!verdict.transient) return { error: verdict.reason };
+      if (Date.now() >= deadline) return { error: verdict.reason };
+      await new Promise((resolve) => setTimeout(resolve, PASTE_READY_POLL_MS));
+    }
+  };
+
+  /**
+   * Stream `sources` into the terminal as ONE bracketed paste: the wrapper
+   * opens once, each surrogate-safe chunk is neutralised on its way out, and
+   * the wrapper closes after the last source. `formatWithBracketedPaste` does
+   * the same in one string; this payload is too large to hold twice or to
+   * write without a cancellation point.
+   *
+   * Once delivery stops — cancelled, locked, terminal gone, a write that
+   * throws, the agent gone — no further body byte is written. The terminator
+   * is the one exception, so a program still reading is never left inside an
+   * open paste; one that left has no paste to close.
+   */
+  const writeBracketedPaste = async (
+    terminalId: string,
+    generation: number | undefined,
+    sources: string[],
+    halted: () => InjectionHalt | null,
+    traceId: string
+  ): Promise<string | null> => {
+    const ptyClient = deps.ptyClient!;
+    const ledger = getLifecycleLedger();
+    const CHUNK_SIZE = 4096;
+    if (sources.every((source) => source.length === 0)) return null;
+    let opened = false;
+
+    // `hasTerminal` alone stays true across a same-id respawn, whose successor
+    // never saw the opener and would read the rest of the bundle as typing.
+    const isAdmittedTerminalAlive = (): boolean =>
+      ptyClient.hasTerminal(terminalId) &&
+      ledger.currentGeneration(terminalId) === generation &&
+      ledger.getEntry(terminalId)?.closedAt === undefined;
+
+    const stop = (error: string, closePaste = true): string => {
+      if (closePaste && opened && isAdmittedTerminalAlive()) {
+        try {
+          ptyClient.write(terminalId, BRACKETED_PASTE_END, traceId);
+        } catch {
+          // The write that failed first is the error worth reporting.
+        }
+      }
+      return error;
+    };
+
+    // Admission resolved a continuation ago; a respawn can land in between.
+    const beforeOpen = halted();
+    if (beforeOpen) return beforeOpen.error;
+    if (!isAdmittedTerminalAlive()) return TERMINAL_CLOSED;
+    try {
+      ptyClient.write(terminalId, BRACKETED_PASTE_START, traceId);
+      opened = true;
+      for (const source of sources) {
+        for (let i = 0; i < source.length;) {
+          const halt = halted();
+          if (halt) {
+            console.log(`[${traceId}] CopyTree inject stopped: ${halt.error}`);
+            return stop(halt.error, halt.closePaste);
+          }
+          if (!isAdmittedTerminalAlive()) {
+            return stop(TERMINAL_CLOSED);
+          }
+          const end = nextChunkBoundary(source, i, CHUNK_SIZE);
+          // Neutralising maps each code unit to one code unit, so a chunk cut
+          // on a surrogate boundary stays cut on one.
+          const chunk = neutralizeControlCharacters(source.slice(i, end), {
+            insideBracketedPaste: true,
+          });
+          ptyClient.write(terminalId, chunk, traceId);
+          i = end;
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+      }
+    } catch (error) {
+      return stop(
+        `Failed to write context to the terminal: ${formatErrorMessage(error, "unknown error")}`
+      );
+    }
+
+    const afterLast = halted();
+    if (afterLast) return stop(afterLast.error, afterLast.closePaste);
+    if (!isAdmittedTerminalAlive()) return TERMINAL_CLOSED;
+    try {
+      ptyClient.write(terminalId, BRACKETED_PASTE_END, traceId);
+    } catch (error) {
+      return `Failed to write context to the terminal: ${formatErrorMessage(error, "unknown error")}`;
+    }
+    return null;
+  };
 
   const handleCopyTreeInject = async (
     ctx: IpcContext,
@@ -855,8 +1177,19 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     // while the workspace call is in flight, taking its binding with it.
     const sender = resolveCopyTreeSender(ctx, deps);
 
-    contextInjectionTracker.beginInjection(validated.terminalId, injectionId);
+    contextInjectionTracker.beginInjection(validated.terminalId, injectionId, sender.owner);
     op.onCancel(() => contextInjectionTracker.markCancelled(injectionId));
+    let target: InjectionTarget | undefined;
+
+    // A lock or cancel arrives as a stop on the tracker, and the target's own
+    // loss comes from the host; either ends the run at its next checkpoint.
+    // Only a target still there is handed the terminator, whichever stop won.
+    const halted = (): InjectionHalt | null => {
+      const lost = target?.lost() ?? null;
+      const stop = contextInjectionTracker.getStop(injectionId);
+      if (stop) return { error: describeInjectionStop(stop), closePaste: lost === null };
+      return lost ? { error: lost, closePaste: false } : null;
+    };
 
     try {
       const worktree = await findSenderWorktree(sender, validated.worktreeId, deps.worktreeService);
@@ -898,54 +1231,46 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
         reportCopyTreeProgress(ctx, op, stampProgress(progress, traceId, op));
       };
 
+      target = await pinInjectionTarget(validated.terminalId);
+
       // Merge project settings with runtime options
       const projectSettings = await loadCopyTreeProjectSettings(sender.projectId);
       const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options || {});
 
+      // A run stopped while it was being set up has nothing to generate for.
+      const beforeGeneration = halted();
+      if (beforeGeneration) {
+        return { content: "", fileCount: 0, error: beforeGeneration.error };
+      }
+
       const result = await deps.worktreeService.generateContext(
         worktree.path,
         mergedOptions,
-        onProgress
+        onProgress,
+        undefined,
+        sender.owner
       );
 
       if (result.error) {
         return result;
       }
 
-      const remoteComputeBlock = buildRemoteComputeBlock(worktree);
-      const CHUNK_SIZE = 4096;
-
-      // Write directly over each source string rather than concatenating into a
-      // single (possibly multi-MB) buffer that would stay pinned alongside
-      // result.content across the whole setImmediate-yielding loop. The
-      // remoteComputeBlock — usually empty — is written as trailing chunks.
-      const writeChunked = async (source: string): Promise<string | null> => {
-        for (let i = 0; i < source.length;) {
-          if (contextInjectionTracker.isCancelled(injectionId)) {
-            console.log(`[${traceId}] CopyTree inject cancelled by user`);
-            return INJECTION_CANCELLED;
-          }
-
-          if (!deps.ptyClient!.hasTerminal(validated.terminalId)) {
-            return "Terminal closed during injection";
-          }
-
-          const end = nextChunkBoundary(source, i, CHUNK_SIZE);
-          const chunk = source.slice(i, end);
-          deps.ptyClient!.write(validated.terminalId, chunk, traceId);
-          i = end;
-          if (i < source.length) {
-            await new Promise((resolve) => setImmediate(resolve));
-          }
-        }
-        return null;
-      };
-
-      let injectError = await writeChunked(result.content);
-      if (!injectError && remoteComputeBlock) {
-        await new Promise((resolve) => setImmediate(resolve));
-        injectError = await writeChunked(remoteComputeBlock);
+      // Admitted only now, against what the host has parsed since generation
+      // started: the bundle is written as one bracketed paste, which a shell's
+      // line editor would still leave as a multi-megabyte draft, and a program
+      // with bracketed paste off reads every newline in it as Enter.
+      const refusal = await awaitPasteDestination(validated.terminalId, target, halted);
+      if (refusal) {
+        return { content: "", fileCount: 0, error: refusal.error };
       }
+
+      const injectError = await writeBracketedPaste(
+        validated.terminalId,
+        target.generation,
+        [result.content, buildRemoteComputeBlock(worktree)],
+        halted,
+        traceId
+      );
       if (injectError) {
         return { content: "", fileCount: 0, error: injectError };
       }
@@ -966,6 +1291,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
         outputFormatVersion: result.outputFormatVersion,
       };
     } finally {
+      target?.dispose();
       contextInjectionTracker.finishInjection(validated.terminalId, injectionId);
     }
   };
@@ -986,7 +1312,10 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
   };
   handlers.push(typedHandle(CHANNELS.COPYTREE_AVAILABLE, handleCopyTreeAvailable));
 
-  const handleCopyTreeCancel = async (payload?: CopyTreeCancelPayload): Promise<void> => {
+  const handleCopyTreeCancel = async (
+    ctx: IpcContext,
+    payload?: CopyTreeCancelPayload
+  ): Promise<void> => {
     const parseResult = CopyTreeCancelPayloadSchema.safeParse(payload ?? {});
     if (!parseResult.success) {
       console.warn("Invalid cancel payload, ignoring");
@@ -996,24 +1325,30 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     const validated = parseResult.data;
 
     if (validated.injectionId) {
-      const wasActive = contextInjectionTracker.markCancelled(validated.injectionId);
+      const wasActive = contextInjectionTracker.markCancelled(
+        validated.injectionId,
+        validated.reason
+      );
       if (wasActive) {
         console.log(`[cancel] Marked injection ${validated.injectionId} for cancellation`);
       } else {
         console.log(
-          `[cancel] Ignoring cancel for unknown/completed injection ${validated.injectionId}`
+          `[cancel] Holding cancel for injection ${validated.injectionId} not yet active`
         );
       }
     } else {
-      const count = contextInjectionTracker.markAllCancelled();
-      if (deps.worktreeService) {
-        deps.worktreeService.cancelAllContext();
+      const matches = resolveCancelScope(ctx, deps);
+      if (!matches) {
+        console.log("[cancel] Cancel-all from a view bound to no workspace; nothing to cancel");
+        return;
       }
-      cancelAllWorkspaceRootContext();
-      console.log(`[cancel] Marked all ${count} active injections for cancellation`);
+      const count = contextInjectionTracker.markAllCancelled(matches);
+      deps.worktreeService?.cancelAllContext(matches);
+      cancelAllWorkspaceRootContext(matches);
+      console.log(`[cancel] Marked ${count} of the caller's injections for cancellation`);
     }
   };
-  handlers.push(typedHandle(CHANNELS.COPYTREE_CANCEL, handleCopyTreeCancel));
+  handlers.push(typedHandleWithContext(CHANNELS.COPYTREE_CANCEL, handleCopyTreeCancel));
 
   const handleCopyTreeGetFileTree = async (
     ctx: import("../types.js").IpcContext,
@@ -1067,7 +1402,8 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
       worktree.path,
       validated.dirPath,
       mergedOptions,
-      validated.includeExcluded
+      validated.includeExcluded,
+      sender.owner
     );
   };
   handlers.push(typedHandleWithContext(CHANNELS.COPYTREE_GET_FILE_TREE, handleCopyTreeGetFileTree));
@@ -1122,7 +1458,7 @@ export function registerCopyTreeHandlers(deps: HandlerDependencies): () => void 
     const projectSettings = await loadCopyTreeProjectSettings(sender.projectId);
     const mergedOptions = mergeCopyTreeOptions(projectSettings, validated.options);
 
-    return deps.worktreeService.testConfig(worktree.path, mergedOptions);
+    return deps.worktreeService.testConfig(worktree.path, mergedOptions, sender.owner);
   };
   handlers.push(typedHandleWithContext(CHANNELS.COPYTREE_TEST_CONFIG, handleCopyTreeTestConfig));
 

@@ -78,7 +78,9 @@ describe("voiceInput.stopAndSend (#14920)", () => {
       dispatchSource: "keybinding",
     } as ActionContext);
 
+    // Asked by the action, not the session panel's button: the key's default asker.
     expect(stopAndSend).toHaveBeenCalledTimes(1);
+    expect(stopAndSend).toHaveBeenCalledWith();
     expect(toggleFocusedPanel).not.toHaveBeenCalled();
   });
 });

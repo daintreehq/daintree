@@ -10,6 +10,7 @@ import {
 } from "@/services/terminal/terminalInstanceServiceAccessor";
 import type { TerminalPaintPlane } from "@/services/TerminalInstanceService";
 import { isSpawnUnconfirmed } from "@/store/slices/panelRegistry/unconfirmedSpawn";
+import { hostObservedAt } from "@shared/utils/restoreProvenance";
 
 export interface HostTerminalResyncOptions {
   /**
@@ -120,15 +121,19 @@ type HostAgentStateRecord = Pick<
 >;
 
 /**
- * Take the host's agent state for a pane where it is newer than the pane's, or
- * belongs to a new incarnation of the agent. `overGuess` takes it whatever its
+ * Take the host's agent state for a pane where it is newer than the state the
+ * host last reported there, or belongs to a new incarnation of the agent.
+ * `overGuess` takes it whatever its
  * stamp: the pane holds only the state it guessed at launch, which the host's
  * own clock never has to be ahead of.
  */
 export function takeHostAgentState(
   id: string,
   record: HostAgentStateRecord,
-  store: Pick<PanelState, "panelsById" | "updateAgentState">,
+  store: Pick<
+    PanelState,
+    "panelsById" | "updateAgentState" | "noteAgentObservation" | "setAgentIncarnation"
+  >,
   instances: { setAgentState: (id: string, state: AgentState) => void },
   overGuess = false
 ): void {
@@ -140,14 +145,22 @@ export function takeHostAgentState(
     (record.agentIncarnation !== undefined &&
       panel.agentIncarnation !== undefined &&
       record.agentIncarnation !== panel.agentIncarnation);
-  if (!newIncarnation && panel.lastStateChange && record.lastStateChange <= panel.lastStateChange) {
+  const observedAt = hostObservedAt(panel);
+  if (!newIncarnation && observedAt !== undefined && record.lastStateChange <= observedAt) {
     return;
+  }
+  // Taken with the state, as the live listener takes it: the session a wait
+  // belongs to is what tells a relaunch's failure from the one before it, and
+  // a count left behind would make every later resync look like a new session.
+  if (record.agentIncarnation !== undefined) {
+    store.setAgentIncarnation(id, record.agentIncarnation);
   }
   instances.setAgentState(id, record.agentState);
   // Same guard as the live state listener: a waiting report never overwrites
   // the renderer's directing, which the controller only writes on entry and
   // so could not restore on later keystrokes.
   if (!newIncarnation && panel.agentState === "directing" && record.agentState === "waiting") {
+    store.noteAgentObservation(id, record.agentState, record.lastStateChange);
     return;
   }
   store.updateAgentState(

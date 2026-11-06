@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { PluginTerminalLinksSection } from "./PluginTerminalLinksSection";
 import { PluginGrantSwitch } from "./PluginGrantSwitch";
+import { PluginPresetGrants } from "./PluginPresetGrants";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import {
   SettingsSubtabBar,
@@ -128,6 +129,9 @@ function PluginCapabilityList({
       )}
       {granted.includes("notification:os") && (
         <PluginGrantSwitch pluginId={plugin.instanceId} grant="os-notifications" />
+      )}
+      {granted.includes("agent:launch-preset") && (
+        <PluginPresetGrants pluginId={plugin.instanceId} />
       )}
     </div>
   );

@@ -206,6 +206,37 @@ describe("terminal input from a remote view", () => {
     }
   });
 
+  it("announces an observed title once it reaches the record, and never one it refused (#16230)", async () => {
+    const announced = () =>
+      emitMock.mock.calls.filter(([name]) => name === "terminal:observed-title-changed");
+    remoteSend(CHANNELS.TERMINAL_UPDATE_OBSERVED_TITLE, { id: "term-b", title: "Fix auth" });
+    remoteSend(CHANNELS.TERMINAL_INPUT, "term-a", "marker");
+    await vi.waitFor(() => expect(ptyClient.write).toHaveBeenCalledWith("term-a", "marker"));
+    expect(announced()).toEqual([]);
+
+    localSend(CHANNELS.TERMINAL_UPDATE_OBSERVED_TITLE, { id: "term-a", title: "Fix auth" });
+
+    expect(ptyClient.updateObservedTitle).toHaveBeenCalledWith("term-a", "Fix auth");
+    expect(announced()).toEqual([
+      ["terminal:observed-title-changed", { id: "term-a", timestamp: expect.any(Number) }],
+    ]);
+    // Announced only after the record has it, so a reader that hears it reads the new title.
+    const emitted =
+      emitMock.mock.invocationCallOrder[
+        emitMock.mock.calls.findIndex(([name]) => name === "terminal:observed-title-changed")
+      ]!;
+    expect(ptyClient.updateObservedTitle.mock.invocationCallOrder[0]).toBeLessThan(emitted);
+
+    // A title that didn't reach the record is never announced.
+    ptyClient.updateObservedTitle.mockImplementationOnce(() => {
+      throw new Error("no host");
+    });
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    localSend(CHANNELS.TERMINAL_UPDATE_OBSERVED_TITLE, { id: "term-a", title: "Another task" });
+    quiet.mockRestore();
+    expect(announced()).toHaveLength(1);
+  });
+
   it("drops foreign ids from a fan-out and keeps the owned ones", async () => {
     remoteSend(CHANNELS.TERMINAL_BROADCAST_WRITE, ["term-a", "term-b"], "y");
     remoteSend(CHANNELS.TERMINAL_BATCH_DOUBLE_ESCAPE, ["term-b", "term-a", "term-unknown"]);
@@ -354,6 +385,85 @@ describe("terminal input and the drive lease", () => {
     expect(ptyClient.write).toHaveBeenCalledWith("term-a", "ls\r");
     expect(ptyClient.broadcastWrite).toHaveBeenCalledWith(["term-a"], "x", false);
     expect(ptyClient.submit).toHaveBeenCalledWith("term-a", "make test", undefined, undefined);
+  });
+});
+
+describe("terminal:submit and a choice dialog (#16209)", () => {
+  let reading: Record<string, unknown> = {};
+  const ptyClient = {
+    write: vi.fn(),
+    submit: vi.fn(),
+    getTerminalAsync: vi.fn(async () => ({ hasPty: true, ...reading })),
+    getTerminalProjectId: vi.fn(() => "project-a"),
+  };
+  const AT_DIALOG = { detectedAgentId: "claude", agentState: "waiting", waitingReason: "approval" };
+
+  let dispose: () => void;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    reading = {};
+    _resetIpcGuardForTesting();
+    markIpcSecurityReady();
+    getIpcDispatcher().setInvokeEnveloper(async (_channel, _args, call) => {
+      try {
+        return wrapSuccess(await call());
+      } catch (error) {
+        const { code, message } = error as { code?: string; message: string };
+        return { ok: false, error: { code, message } } as unknown as IpcEnvelope;
+      }
+    });
+    dispose = registerTerminalIOHandlers({ ptyClient } as unknown as HandlerDependencies);
+  });
+
+  afterEach(() => {
+    dispose();
+    getIpcDispatcher().setInvokeEnveloper(null);
+  });
+
+  const submit = (...args: unknown[]) =>
+    remoteInvoke(CHANNELS.TERMINAL_SUBMIT, "term-a", "hello", "tok-1", ...args);
+
+  it("refuses a guarded send while the host reads a choice dialog, sending nothing", async () => {
+    reading = AT_DIALOG;
+    const envelope = await submit(undefined, undefined, "no-choice-dialog");
+
+    expect(envelope.ok ? null : envelope.error.code).toBe("TERMINAL_CHOICE_DIALOG");
+    expect(envelope.ok ? "" : envelope.error.message).toContain("Nothing was sent");
+    expect(ptyClient.submit).not.toHaveBeenCalled();
+  });
+
+  it("hands the guard on to the host, which checks it again at the lane", async () => {
+    reading = { ...AT_DIALOG, waitingReason: "prompt" };
+    const envelope = await submit(undefined, undefined, "no-choice-dialog");
+
+    expect(envelope.ok).toBe(true);
+    expect(ptyClient.submit).toHaveBeenCalledWith(
+      "term-a",
+      "hello",
+      "tok-1",
+      undefined,
+      "no-choice-dialog"
+    );
+  });
+
+  it("leaves an unguarded submit, and a shell, as they were", async () => {
+    reading = AT_DIALOG;
+    await expect(submit()).resolves.toMatchObject({ ok: true });
+    reading = { ...AT_DIALOG, detectedAgentId: undefined };
+    await expect(submit(undefined, undefined, "no-choice-dialog")).resolves.toMatchObject({
+      ok: true,
+    });
+    expect(ptyClient.submit.mock.calls).toEqual([
+      ["term-a", "hello", "tok-1", undefined],
+      ["term-a", "hello", "tok-1", undefined, "no-choice-dialog"],
+    ]);
+  });
+
+  it("refuses a guard it doesn't know rather than sending unguarded", async () => {
+    const envelope = await submit(undefined, undefined, "settled-prompt");
+    expect(envelope.ok ? null : envelope.error.code).toBe("VALIDATION");
+    expect(ptyClient.submit).not.toHaveBeenCalled();
   });
 });
 

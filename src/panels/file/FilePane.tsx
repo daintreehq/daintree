@@ -10,6 +10,10 @@ import { FolderTree } from "@/components/icons";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { MarkdownViewer, type MarkdownViewerHandle } from "@/components/Markdown/MarkdownViewer";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
+import {
+  MarkdownImageTrackingContext,
+  type MarkdownImageTracking,
+} from "@/components/Markdown/markdownImageRefresh";
 import { isProseFilePath } from "@/components/FileViewer/isProseFile";
 import { useRemoteFileContext } from "@/components/FileViewer/hostFileActions";
 import { saveHostFile } from "@/services/hostFileSave";
@@ -17,7 +21,7 @@ import { HtmlViewer } from "@/components/Html/HtmlViewer";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { CodeViewer, type CodeViewerHandle } from "@/components/FileViewer/CodeViewer";
 import { FileSourceMetadataStrip } from "@/components/FileViewer/FileSourceMetadataStrip";
-import { revealCopy } from "@/components/FileViewer/revealCopy";
+import { useRevealCopy } from "@/components/FileViewer/revealCopy";
 import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
 import { ZoomableImage } from "@/components/FileViewer/ZoomableImage";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
@@ -499,7 +503,7 @@ export function FilePane({
     loadFile("explicit");
   }, [loadFile]);
 
-  const { refreshing, handleToolbarRefresh } = useFileRefresh({
+  const { refreshing, handleToolbarRefresh, imageRefreshEpoch } = useFileRefresh({
     panelId: id,
     location,
     isFocused,
@@ -507,7 +511,6 @@ export function FilePane({
     effectiveRootPath,
     diffWorktreePath,
     relativeFilePath,
-    isMarkdown,
     viewMode,
     changeTick,
     worktreeChangeTick,
@@ -521,6 +524,17 @@ export function FilePane({
     diffContent,
     retryDiff,
   });
+
+  // The worktree signal the rendered document's images scope their own
+  // refreshes to, so a write elsewhere refetches none of them (#15678).
+  const markdownImageTracking = useMemo<MarkdownImageTracking>(
+    () => ({
+      trigger: changeTick,
+      signal: { tick: worktreeChangeTick, gitTick: gitChangeTick, changedDirs },
+      worktreePath: diffWorktreePath,
+    }),
+    [changeTick, worktreeChangeTick, gitChangeTick, changedDirs, diffWorktreePath]
+  );
 
   const remoteFile = useRemoteFileContext();
 
@@ -568,7 +582,7 @@ export function FilePane({
     filePath && isUnderRoot(filePath, pickerRoot)
       ? toForwardSlashes(filePath).slice(toForwardSlashes(pickerRoot).replace(/\/$/, "").length + 1)
       : filePath && toForwardSlashes(filePath);
-  const reveal = revealCopy();
+  const reveal = useRevealCopy();
 
   // Leaving Edit unmounts the editor, and with it whatever had keyboard focus;
   // the mode toggle is the control the user is conceptually holding, so focus
@@ -716,7 +730,7 @@ export function FilePane({
           onOpenDiff: () => handleViewModeChange("diff"),
           // The toolbar's reveal: it takes the guarded fallback for a file
           // outside every project root, which this pane deliberately displays.
-          onReveal: () => void handleOpenExternal("reveal"),
+          onReveal: () => handleOpenExternal("reveal"),
           // The text already on screen, as the toolbar copies it — `file.read`
           // would refuse a file outside every project root. Unset while
           // nothing is loaded, leaving the shared read to answer.
@@ -840,12 +854,12 @@ export function FilePane({
                 errorMessage={errorMessage}
                 filePath={filePath}
                 fileName={fileName ?? filePath}
-                revealLabel={reveal.label}
+                reveal={reveal}
                 openTarget={openTarget}
                 canOpenInDefaultApp={isInsideGovernedRoot}
                 remote={remoteFile}
                 onRetry={() => loadFile("explicit")}
-                onExternal={(target) => void handleOpenExternal(target)}
+                onExternal={handleOpenExternal}
               />
             )}
 
@@ -994,19 +1008,21 @@ export function FilePane({
             loadState === "loaded" &&
             content !== null &&
             (viewMode === "rendered" && isMarkdown ? (
-              <MarkdownViewer
-                ref={markdownViewerRef}
-                // The draft is document state, so Rendered previews it while one
-                // exists and the disk text otherwise (#12323).
-                content={draftText ?? content}
-                filePath={filePath}
-                rootPath={effectiveRootPath}
-                viewMode="rendered"
-                wrapLines={markdownWrapLines}
-                fontSize={markdownFontSize}
-                cacheBust={String(reloadNonce)}
-                onRendered={handleHeightHoldRendered}
-              />
+              <MarkdownImageTrackingContext value={markdownImageTracking}>
+                <MarkdownViewer
+                  ref={markdownViewerRef}
+                  // The draft is document state, so Rendered previews it while one
+                  // exists and the disk text otherwise (#12323).
+                  content={draftText ?? content}
+                  filePath={filePath}
+                  rootPath={effectiveRootPath}
+                  viewMode="rendered"
+                  wrapLines={markdownWrapLines}
+                  fontSize={markdownFontSize}
+                  cacheBust={String(imageRefreshEpoch)}
+                  onRendered={handleHeightHoldRendered}
+                />
+              </MarkdownImageTrackingContext>
             ) : viewMode === "rendered" && isHtml ? (
               // Rendered HTML fills the pane in a sandboxed iframe rather than the
               // min-h-full source column; the frame owns its own scrolling.

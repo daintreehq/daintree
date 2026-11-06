@@ -10,6 +10,12 @@ type SweepHost = { sweepPrunableWorktreeEntries: () => Promise<void> };
 
 const n = (p: string) => (p as string).replace(/\\/g, "/");
 
+const watcherLifecycle = vi.hoisted(() => ({ settle: vi.fn() }));
+vi.mock("../../utils/parcelWatcherBackend.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/parcelWatcherBackend.js")>()),
+  settleParcelWatcherLifecycle: watcherLifecycle.settle,
+}));
+
 const mockSimpleGit = {
   raw: vi.fn().mockResolvedValue(undefined),
   branch: vi.fn().mockResolvedValue({ current: "main" }),
@@ -178,6 +184,7 @@ describe("WorkspaceService.deleteWorktree", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    watcherLifecycle.settle.mockReset().mockResolvedValue(undefined);
     // Reset implementations too — `clearAllMocks` only wipes call history, so
     // a custom `mockImplementation` from a prior test would leak otherwise.
     mockSimpleGit.raw.mockReset().mockResolvedValue(undefined);
@@ -253,6 +260,51 @@ describe("WorkspaceService.deleteWorktree", () => {
     service["monitors"].set(wt.id, monitor);
     return monitor;
   }
+
+  it("waits for watcher teardown before removing the watched directory", async () => {
+    const fsModule = await import("fs/promises");
+    vi.mocked(fsModule.access).mockResolvedValue(undefined);
+    const monitor = createAndRegisterMonitor();
+    const pause = vi.spyOn(monitor, "pauseFileWatchingForDeletion");
+    let release!: () => void;
+    watcherLifecycle.settle.mockReturnValue(new Promise<void>((resolve) => (release = resolve)));
+
+    const deletion = service.deleteWorktree("req-drain", monitor.id);
+    await vi.waitFor(() => expect(watcherLifecycle.settle).toHaveBeenCalledOnce());
+    expect(pause).toHaveBeenCalledOnce();
+    expect(mockSimpleGit.raw).not.toHaveBeenCalled();
+
+    release();
+    await deletion;
+    expect(mockSimpleGit.raw).toHaveBeenCalledWith([
+      "worktree",
+      "remove",
+      "--end-of-options",
+      monitor.path,
+    ]);
+    expect(service["monitors"].has(monitor.id)).toBe(false);
+  });
+
+  it("restores file watching after deletion fails", async () => {
+    const fsModule = await import("fs/promises");
+    vi.mocked(fsModule.access).mockResolvedValue(undefined);
+    const monitor = createAndRegisterMonitor();
+    const restore = vi.fn();
+    vi.spyOn(monitor, "pauseFileWatchingForDeletion").mockReturnValue(restore);
+    mockSimpleGit.raw.mockRejectedValue(new Error("fatal: locked working tree"));
+
+    await service.deleteWorktree("req-failed-remove", monitor.id);
+
+    expect(service["monitors"].get(monitor.id)).toBe(monitor);
+    expect(restore).toHaveBeenCalledOnce();
+    expect(mockSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "delete-worktree-result",
+        success: false,
+        error: "fatal: locked working tree",
+      })
+    );
+  });
 
   it("sends delete-worktree-result success after removing monitor", async () => {
     const fsModule = await import("fs/promises");

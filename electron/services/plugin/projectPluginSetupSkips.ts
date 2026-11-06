@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../../utils/storeValues.js";
 import { store } from "../../store.js";
 
 /**
@@ -82,6 +83,6 @@ export function setProjectPluginSetupStepSkipped(
   const updated = { ...all };
   if (Object.keys(updatedProject).length === 0) delete updated[projectId];
   else updated[projectId] = updatedProject;
-  store.set(STORE_KEY, updated);
+  setRawStoreValue(store, STORE_KEY, updated);
   return true;
 }

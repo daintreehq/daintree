@@ -26,6 +26,7 @@ From there, follow the architecture doc nearest the surface you're changing. Eac
 | [feature-curation.md](./feature-curation.md) | What Daintree is and isn't — the rubric for deciding what not to build. |
 | [daintree-tour.md](./daintree-tour.md) | The narrated first-run tour: how scenes key off narration cues, regenerating the voice-over, and swapping in real recordings. |
 | [markdown-editing.md](./markdown-editing.md) | The file panel's Edit mode for Markdown: what a save writes, the conflict contract and its residual race, draft recovery and its window. |
+| [decisions.md](./decisions.md) | Answering agents' questions from your phone: deploying a relay, claiming, the recovery kit, pairing, which agents get `ask_human`, what gets typed, the pane chip, answers needing attention, the design-review gate, and what is and isn't protected. |
 
 ## Architecture
 
@@ -49,6 +50,9 @@ From there, follow the architecture doc nearest the surface you're changing. Eac
 | [terminal-paint-fabric.md](./architecture/terminal-paint-fabric.md) | The paint-plane fabric: sharding terminal parse/paint across render surfaces behind the compositor seam. |
 | [agent-activity-monitoring.md](./architecture/agent-activity-monitoring.md) | How a live agent terminal is judged working / waiting / completed / exited. |
 | [agent-state-tracking-strategy.md](./architecture/agent-state-tracking-strategy.md) | Why activity is tracked via passive PTY observation, and the rubric for new proposals. |
+| [scheduled-runs.md](./architecture/scheduled-runs.md) | The scheduled agent runs contract — schedule and run record shapes, cron cadence and its daylight-saving rules, occurrence keys, and which child owns each part. |
+| [terminal-when-done.md](./architecture/terminal-when-done.md) | An agent terminal's When done choice — arming, the fresh code every prompt carries, what acts and what never does, and what counts as someone using the pane. |
+| [decisions.md](./architecture/decisions.md) | The Daintree Decisions integration contract — where it runs, the `/mcp/decisions` route and its pane bearer, what is stored where and what leaves the machine, typing answers into the terminal that asked, resume, Remote Hosts, and what it costs when off. |
 | [resource-governance.md](./architecture/resource-governance.md) | Adaptive profiles, memory pressure, view eviction, and memory-pressure sleep. |
 | [fatal-error-spine.md](./architecture/fatal-error-spine.md) | The on-exit marker contract (`running.lock`) and the synchronous fatal-error path. |
 | [crash-recovery-and-safe-mode.md](./architecture/crash-recovery-and-safe-mode.md) | Detecting a dead/wedged session, safe mode, crash-loop backoff, host-failure handling. |
@@ -120,3 +124,4 @@ Some topics split a human "how to verify / why" doc from an "how it's built" doc
 - [architecture/action-system.md](./architecture/action-system.md) ↔ [architecture/mcp-server.md](./architecture/mcp-server.md) — the dispatch layer vs. the server that turns it into a tool surface; [architecture/mcp-context-condensation.md](./architecture/mcp-context-condensation.md) is the authoring standard for the prose both carry.
 - [architecture/notification-system.md](./architecture/notification-system.md) ↔ [architecture/dev-preview-event-routing.md](./architecture/dev-preview-event-routing.md) — the app-wide signal machinery vs. one subsystem's per-event audit against it.
 - [architecture/terminal-lifecycle.md](./architecture/terminal-lifecycle.md) ↔ [architecture/terminal-identity.md](./architecture/terminal-identity.md) — the runtime status of a PTY panel vs. what is running inside it.
+- [decisions.md](./decisions.md) ↔ [architecture/decisions.md](./architecture/decisions.md) — setting up and using Decisions vs. the integration contract behind it.

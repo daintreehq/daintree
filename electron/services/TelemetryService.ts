@@ -10,6 +10,7 @@ import { emitTelemetryPreview, isTelemetryPreviewActive } from "./TelemetryPrevi
 import { getWritesSuppressed } from "./diskPressureState.js";
 import { BreadcrumbRepeatLimiter } from "./breadcrumbRepeatLimiter.js";
 import { isVoiceSessionSummaryLine } from "../../shared/utils/voiceLogFields.js";
+import { buildSentryDataCollection } from "../../shared/config/sentryDataCollection.js";
 import {
   REPORTED_EXIT_REASONS,
   buildChildProcessExitEvent,
@@ -356,6 +357,7 @@ export async function initializeTelemetry(): Promise<void> {
       if (getTelemetryLevel() === "off") return;
       sentry.init({
         dsn,
+        dataCollection: buildSentryDataCollection(),
         release: app.getVersion(),
         environment: app.isPackaged ? "production" : "development",
         transport: sentry.makeElectronOfflineTransport((options) =>

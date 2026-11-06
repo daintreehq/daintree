@@ -46,11 +46,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { AgentStateChip } from "@/components/Terminal/TerminalAgentIndicator";
 import { SESSION_LABELS } from "@/components/Worktree/terminalStateConfig";
-import { resolveSessionPresentation, type HandBackSeenState } from "@/lib/handBackPresentation";
-import { isHandBackStop, isHandBackUnseen } from "@shared/utils/runHandBack";
+import { resolvePaneSessionPresentation } from "@/lib/paneSessionPresentation";
+import { usePaneObservation } from "@/hooks/useRunSessionPresentation";
+import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import type { BrandMarkSurface } from "@/lib/brandIcon";
 import type { HybridInputBarHandle } from "@/components/Terminal/HybridInputBar";
 import { isMac } from "@/lib/platform";
+import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
 import { PRESS_AGAIN_CONFIRM_MS } from "@/lib/pressAgain";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
@@ -130,6 +132,24 @@ export interface CanopyCardHandle {
 /** Where the keyboard lands in the pane when it opens: what the user was in on the agent before. */
 export type CanopyPaneFocus = "composer" | "terminal" | null;
 
+/**
+ * Where the keyboard is, for the keys the card names: this agent's row in the
+ * list, where its one-key actions and Enter act; the search, where Enter alone
+ * goes to this agent's terminal; or this card's reply. Anywhere else (its
+ * terminal, a button, nothing) none of them acts, so none is named.
+ */
+export type CanopyCardKeys = "list" | "search" | "reply" | null;
+
+/** Go to terminal from the reply, where Enter sends and ⌘↩ sends and moves on. */
+export const REPLY_GO_TO_TERMINAL = "Cmd+Alt+Enter";
+
+function isReplyGoToTerminal(event: KeyboardEvent<HTMLElement>): boolean {
+  if (event.key !== "Enter" || event.shiftKey) return false;
+  return isMac()
+    ? event.metaKey && event.altKey && !event.ctrlKey
+    : event.ctrlKey && event.altKey && !event.metaKey;
+}
+
 interface CanopyCardProps extends CanopyCardHandlers {
   item: CanopyItem;
   domId: string;
@@ -174,6 +194,8 @@ interface CanopyCardProps extends CanopyCardHandlers {
   workLabel?: string | null;
   /** Where ⌘↩ from the reply goes on to once it sends, named in the reply; null for nowhere. */
   moveOnTo?: CanopyItem | null;
+  /** Where the keyboard is, so the card names only the keys that act from there. */
+  keysFrom?: CanopyCardKeys;
   /** The reader is on, so a reading may land while the card is open. */
   reading?: boolean;
 }
@@ -277,6 +299,7 @@ export function CanopyCard({
   reconnecting = false,
   workLabel = null,
   moveOnTo = null,
+  keysFrom = null,
   reading = false,
 }: CanopyCardProps) {
   const otherHost = otherHostId !== undefined;
@@ -653,26 +676,29 @@ export function CanopyCard({
   }, [dictationRequest]);
 
   const agentId = isBuiltInAgentId(run.agentId) ? run.agentId : undefined;
-  // The grid's chip rules: nothing while idle, and a settled agent keeps its
-  // glyph only to explain a session cost, which the panel does not have.
-  // A hand-back draws unread or done, as on the grid's own chip, rather than
-  // the amber waiting ring; a plain settled agent still draws nothing.
-  const handBack: HandBackSeenState =
-    run.handBack === undefined ? "none" : isHandBackUnseen(run.handBack) ? "unseen" : "seen";
-  const agentState = resolveSessionPresentation(
-    run.agentState,
-    run.agentState,
-    run.waitingReason,
-    handBack
+  // The grid pane's own glyph: its display state through the run's fleet band.
+  // Amber is a run in Needs you, a hand-back is unread or finished, and a
+  // prompt that asks nothing draws nothing. The pane's newer observation
+  // speaks for the run when this view holds it, as on the pane, and the row's
+  // otherwise: another project's or host's terminal id names no pane here.
+  // Display state, exit and observation come from the same one, so a pane
+  // already back at work draws its spinner rather than a wait or an exit the
+  // row still holds. An exit is `runtimeStatus: "exited"`, as the pane reads
+  // its own.
+  const ownPane = usePaneObservation(ownsContext ? item.runId : null);
+  const observed = ownPane ?? run;
+  const displayChrome =
+    ownPane === undefined
+      ? row.chrome
+      : {
+          isAgent: row.chrome.isAgent,
+          hasExited: ownPane.runtimeStatus === "exited" || ownPane.agentState === "exited",
+        };
+  const agentState = resolvePaneSessionPresentation(
+    getTerminalAgentDisplayState(displayChrome, observed.agentState),
+    row.band,
+    observed
   );
-  const isHandBack =
-    handBack !== "none" &&
-    run.agentState !== undefined &&
-    isHandBackStop(run.agentState, run.waitingReason);
-  const showState =
-    agentState !== undefined &&
-    agentState !== "idle" &&
-    (isHandBack || (agentState !== "completed" && agentState !== "exited"));
   const { detail, action, progress, facts, contextWarning, readerWritten } = itemDetail(item);
   // An open question is the pane's anchor, whole and in the screen's words: the
   // row could only fit a headline, and a summary of it would only say it again.
@@ -917,7 +943,7 @@ export function CanopyCard({
         {/* The agent's state chip, in the reserved box at the far right where every agent pane keeps it. */}
         {agentId !== undefined && (
           <span className="ml-2 flex h-5 w-5 shrink-0 items-center justify-center">
-            {showState && (
+            {agentState !== undefined && (
               <AgentStateChip
                 agentState={agentState}
                 ariaLabel={`Agent state: ${SESSION_LABELS[agentState]}`}
@@ -1002,6 +1028,24 @@ export function CanopyCard({
         className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface-canvas"
         // Escape belongs to the agent here — it interrupts or backs out of a
         // menu — so it must not also close the dialog around it.
+        // Go to terminal from the reply, compact or expanded (portalled, so
+        // only React's tree leads here). Taken before the editor sees it: a
+        // dictated send still waiting locks the editor against every key.
+        // Not from the terminal, whose modified keys are the agent's.
+        onKeyDownCapture={(event) => {
+          if (
+            isReplyGoToTerminal(event) &&
+            !event.defaultPrevented &&
+            !event.nativeEvent.isComposing &&
+            event.keyCode !== 229 &&
+            event.target instanceof Element &&
+            event.target.closest(".cm-editor") !== null
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!event.repeat) onOpen(item);
+          }
+        }}
         onKeyDown={(event) => {
           if (event.key === "Escape") {
             // A reply hands Escape to the list through `onSendKey`; one that is
@@ -1054,11 +1098,11 @@ export function CanopyCard({
                 disabled={reconnecting}
                 data-canopy-choice=""
                 data-armed={armed || undefined}
-                aria-keyshortcuts={String(index + 1)}
+                aria-keyshortcuts={keysFrom === "list" ? String(index + 1) : undefined}
                 className={cn("min-w-0 shrink", armed && "bg-status-error/10")}
                 onClick={() => pressAnswer(choice, index + 1)}
               >
-                <Kbd className="shrink-0">{index + 1}</Kbd>
+                {keysFrom === "list" && <Kbd className="shrink-0">{index + 1}</Kbd>}
                 <span className="min-w-0 truncate">
                   {armed ? `Press again: ${choice}` : choice}
                 </span>
@@ -1070,25 +1114,34 @@ export function CanopyCard({
               <Button
                 variant="ghost"
                 size="xs"
-                aria-keyshortcuts="R"
+                aria-keyshortcuts={keysFrom === "list" ? "R" : undefined}
                 // As the composer it focuses is: shut while the stream is.
                 disabled={stream.watchId === null}
                 onClick={() => composerRef.current?.focus()}
               >
                 <MessageSquare aria-hidden="true" />
                 Reply
-                <Kbd className="shrink-0">R</Kbd>
+                {keysFrom === "list" && <Kbd className="shrink-0">R</Kbd>}
               </Button>
             )}
             <Button
               variant="ghost"
               size="xs"
-              aria-keyshortcuts="Enter"
+              aria-keyshortcuts={
+                keysFrom === "list" || keysFrom === "search"
+                  ? "Enter"
+                  : keysFrom === "reply"
+                    ? comboToAriaKeyshortcuts(REPLY_GO_TO_TERMINAL, isMac())
+                    : undefined
+              }
               onClick={(event) => onOpen(item, isNewWindowClick(event))}
             >
               <SquareArrowOutUpRight aria-hidden="true" />
               Go to terminal
-              <Kbd className="shrink-0">↵</Kbd>
+              {(keysFrom === "list" || keysFrom === "search") && <Kbd className="shrink-0">↵</Kbd>}
+              {keysFrom === "reply" && (
+                <KbdChord shortcut={REPLY_GO_TO_TERMINAL} className="shrink-0" />
+              )}
             </Button>
           </span>
         </div>
@@ -1118,8 +1171,9 @@ export function CanopyCard({
               data-canopy-move-on=""
               className="flex h-6 shrink-0 items-center gap-1.5 px-3.5 pb-1.5 text-xs text-text-secondary"
             >
-              {/* Only while the reply can send: a closed stream leaves it disabled. */}
-              {moveOnTo !== null && stream.watchId !== null && (
+              {/* Only while the reply has the keyboard and can send: a closed
+                  stream leaves it disabled. */}
+              {moveOnTo !== null && stream.watchId !== null && keysFrom === "reply" && (
                 <>
                   <KbdChord shortcut="Cmd+Enter" density="compact" />
                   <span className="shrink-0">Send and go to</span>

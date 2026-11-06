@@ -1,3 +1,4 @@
+import type { FolderUploadProblem, FolderUploadTotals } from "../folderUpload.js";
 import type { HostId, OperationId } from "../remoteHosts.js";
 import type { HostPickRequest } from "./hostFiles.js";
 
@@ -17,6 +18,9 @@ export type TransferDestination =
  * `files/<yyyymmdd-hhmmss>-<id>/<name>` for files.
  */
 export const HOST_INBOX_DIR_NAME = "daintree-inbox";
+
+/** How long an inbox entry lasts once nothing in it has changed, as the questions about it say. */
+export const HOST_INBOX_ENTRY_TTL_MS = 24 * 60 * 60 * 1000;
 
 export interface UploadLocalFilePayload {
   hostId: HostId;
@@ -87,6 +91,127 @@ export interface DownloadResult {
   bytes: number;
 }
 
+/** Why something inside a dropped folder is left out of what is sent. */
+export type FolderNotCopiedReason =
+  | "symlink"
+  | "junction"
+  /** Any other Windows reparse point. */
+  | "reparse-point"
+  /** A device, socket, FIFO or anything else that isn't a file or a folder. */
+  | "special-file"
+  | "unreadable";
+
+/** An item directly inside the dropped folder, with what it adds to the totals. */
+export interface FolderSummaryItem {
+  /** In the archive's root-prefixed form: `Root/node_modules/`, `Root/video.mov`. */
+  path: string;
+  kind: "file" | "folder";
+  /** Files at or under it, so 1 for a file. */
+  fileCount: number;
+  /** Folders at or under it, itself included, so 0 for a file. */
+  folderCount: number;
+  totalBytes: number;
+}
+
+/**
+ * A folder dropped or pasted in a remote window, as the question shows it
+ * before anything is sent. Every list holds at most
+ * `FOLDER_UPLOAD_SUMMARY_MAX_ITEMS`; the counts beside them cover the rest.
+ */
+export interface FolderUploadSummary {
+  rootName: string;
+  totals: FolderUploadTotals;
+  /**
+   * The walk stopped early (at a limit, a clash or a path it can't carry):
+   * every count and size here and in the lists is at least what it shows.
+   */
+  lowerBound: boolean;
+  /**
+   * Hidden files and folders (`.git`, `.env`), copied and counted like any
+   * other, and the outermost of them by path.
+   */
+  hidden: FolderUploadTotals & { paths: string[] };
+  /**
+   * The items directly inside the folder that hold the most bytes, largest
+   * first. A count or size limit's problem names its own largest
+   * contributors, ranked by what that limit counts.
+   */
+  largest: FolderSummaryItem[];
+  /** What is left out and why: never followed, never sent. */
+  notCopied: { count: number; items: Array<{ path: string; reason: FolderNotCopiedReason }> };
+}
+
+/**
+ * The walk itself gave up: it looked at more items than this, copied or not,
+ * before the folder's own limits were reached (a folder of links or sockets).
+ * Only the Shell's summary carries it; it never crosses the link.
+ */
+export interface FolderWalkLimitProblem {
+  kind: "walk-limit";
+  maximum: number;
+  actual: number;
+  /** The items directly inside the folder holding the most of them. */
+  paths: string[];
+}
+
+/** A summarized folder: ready to ask about, or refused with the limit or clash responsible. */
+export type FolderUploadCheck =
+  | { status: "ready"; summary: FolderUploadSummary }
+  | {
+      status: "refused";
+      summary: FolderUploadSummary;
+      problem: FolderUploadProblem | FolderWalkLimitProblem;
+    };
+
+export interface SummarizeLocalFolderPayload {
+  /** The dropped or pasted folder, exactly as this view was granted it. */
+  localPath: string;
+  /** The walk runs under this id, so `cancel` stops it. */
+  opId: OperationId;
+}
+
+/**
+ * A folder dropped or pasted in this view, summarized on this machine. A
+ * ready one carries the handle a send names it by: bound to this view and to
+ * exactly what was summarized, for as long as the view's grant of the folder
+ * lasts. A refused one has nothing to send.
+ */
+export type LocalFolderSummaryResult =
+  | (Extract<FolderUploadCheck, { status: "ready" }> & { handle: string })
+  | Extract<FolderUploadCheck, { status: "refused" }>;
+
+export interface UploadLocalFolderPayload {
+  hostId: HostId;
+  /** What `summarizeLocalFolder` answered this view for the folder. */
+  handle: string;
+  /** Only the inbox takes a folder: main refuses anything else, whatever the page asks. */
+  destination: TransferDestination;
+  /** The whole send runs under it: its progress events carry it and `cancel` stops it in any phase. */
+  opId: OperationId;
+}
+
+/** How a summarized entry no longer matches what is on disk. */
+export type FolderPackChange = "gone" | "modified" | "type" | "new";
+
+/**
+ * A folder send that ended without an error. Anything that names a path
+ * inside the folder is a result rather than an error, since errors are
+ * logged whole.
+ */
+export type UploadLocalFolderResult =
+  /**
+   * The whole folder is in the host inbox at `hostPath`. A cancel that
+   * reached the host after publication began ends here too: the folder is
+   * there.
+   */
+  | { status: "sent"; hostPath: string; totals: FolderUploadTotals }
+  /** The folder changed since it was summarized; nothing was sent. */
+  | { status: "changed"; path: string; change: FolderPackChange }
+  /** The host held what arrived to its content rules and refused it, naming why. */
+  | { status: "refused"; problem: FolderUploadProblem };
+
+export type FolderUploadPhase = "packing" | "sending" | "unpacking";
+
 export type FileTransferEvent =
   | {
       type: "progress";
@@ -95,10 +220,40 @@ export type FileTransferEvent =
       totalBytes: number;
     }
   /**
+   * A folder upload's progress. Each phase measures its own work: packing
+   * counts files packed and their content bytes, sending the archive's bytes,
+   * unpacking the files the host has written. Null is "not measured in this
+   * phase", never zero; the totals are always known.
+   */
+  | {
+      type: "folder-progress";
+      opId: OperationId;
+      phase: FolderUploadPhase;
+      filesDone: number | null;
+      filesTotal: number;
+      transferredBytes: number | null;
+      /** The archive's size while sending, the files' content otherwise. */
+      totalBytes: number;
+    }
+  /**
    * A native picker was asked for in a window attached to a remote host: this
    * view shows Daintree's host picker and answers with `answerHostPick`.
    */
   | { type: "host-pick-request"; requestId: string; request: HostPickRequest };
+
+/** A folder send's report, as the `folder-progress` event carries it. */
+export type FolderUploadProgress = Omit<
+  Extract<FileTransferEvent, { type: "folder-progress" }>,
+  "type" | "opId"
+>;
+
+/**
+ * A dropped folder on its way to a host, as `materialize` follows it: waiting
+ * its turn or the person's answer, read on this machine, then the send's own
+ * phases.
+ */
+export type FolderMaterializeProgress =
+  { phase: "waiting" } | { phase: "reading" } | FolderUploadProgress;
 
 export interface AnswerHostPickPayload {
   requestId: string;

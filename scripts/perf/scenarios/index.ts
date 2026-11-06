@@ -38,6 +38,8 @@ import { switcherSearchScenarios } from "./switcherSearch";
 import { imagePathProbeScenarios } from "./imagePathProbe";
 import { windowsCensusScenarios } from "./windowsCensus";
 import { elementPickerScenarios } from "./elementPicker";
+import { claudeSubagentScenarios } from "./claudeSubagents";
+import { markdownDiffScenarios } from "./markdownDiff";
 
 export const allScenarios: PerfScenario[] = [
   ...startupScenarios,
@@ -79,6 +81,8 @@ export const allScenarios: PerfScenario[] = [
   ...imagePathProbeScenarios,
   ...windowsCensusScenarios,
   ...elementPickerScenarios,
+  ...claudeSubagentScenarios,
+  ...markdownDiffScenarios,
 ];
 
 export function getScenariosForMode(mode: PerfMode): PerfScenario[] {
@@ -112,6 +116,7 @@ export const EXPECTED_SCENARIO_IDS: ReadonlySet<string> = new Set([
   "PERF-034",
   "PERF-035",
   "PERF-036",
+  "PERF-037",
   "PERF-042",
   "PERF-043",
   "PERF-044",
@@ -147,9 +152,12 @@ export const EXPECTED_SCENARIO_IDS: ReadonlySet<string> = new Set([
   "PERF-105",
   "PERF-106",
   "PERF-107",
+  "PERF-108",
+  "PERF-109",
   "PERF-110",
   "PERF-111",
   "PERF-112",
+  "PERF-113",
   "PERF-130",
   "PERF-131",
   "PERF-132",
@@ -170,6 +178,7 @@ export const EXPECTED_SCENARIO_IDS: ReadonlySet<string> = new Set([
   "PERF-162",
   "PERF-163",
   "PERF-164",
+  "PERF-165",
   "PERF-170",
   "PERF-171",
   "PERF-190",
@@ -181,6 +190,7 @@ export const EXPECTED_SCENARIO_IDS: ReadonlySet<string> = new Set([
   "PERF-196",
   "PERF-197",
   "PERF-198",
+  "PERF-199",
   "PERF-200",
   "PERF-201",
   "PERF-202",
@@ -201,6 +211,7 @@ export const EXPECTED_SCENARIO_IDS: ReadonlySet<string> = new Set([
   "PERF-245",
   "PERF-246",
   "PERF-247",
+  "PERF-248",
   "PERF-260",
   "PERF-261",
   "PERF-262",
@@ -218,6 +229,7 @@ export const EXPECTED_SCENARIO_IDS: ReadonlySet<string> = new Set([
   "PERF-303",
   "PERF-304",
   "PERF-305",
+  "PERF-306",
   "PERF-320",
   "PERF-321",
   "PERF-322",
@@ -266,6 +278,13 @@ export const EXPECTED_SCENARIO_IDS: ReadonlySet<string> = new Set([
   "PERF-411",
   "PERF-412",
   "PERF-413",
+  "PERF-414",
+  "PERF-415",
+  "PERF-416",
+  "PERF-417",
+  "PERF-418",
+  "PERF-419",
+  "PERF-420",
 ]);
 
 /**

@@ -4,6 +4,7 @@ import { InlineError } from "@/components/ui/field";
 import { Callout } from "@/components/ui/Callout";
 import { Button } from "@/components/ui/button";
 import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
+import { PluginPresetGrants } from "@/components/Plugin/PluginPresetGrants";
 import { PluginLogsSection, usePluginLogs } from "@/components/Plugin/PluginLogsSection";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { cn } from "@/lib/utils";
@@ -372,6 +373,11 @@ export function ProjectPluginDetailPane({
       {/* Decides where Daintree shows what the plugin reports, not what the
           plugin can do (#13821). */}
       {reportsActivity && <PluginGrantSwitch pluginId={instanceId} grant="panel-attention" />}
+
+      {/* Revokes what the first-use prompt granted, one preset at a time (#16324). */}
+      {declared.has("agent:launch-preset") && instanceId !== "" && (
+        <PluginPresetGrants pluginId={instanceId} />
+      )}
 
       {plugin.databases && plugin.databases.length > 0 && (
         <PluginDatabasesSection databases={plugin.databases} origin="project" />

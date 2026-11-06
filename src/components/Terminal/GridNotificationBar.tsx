@@ -303,7 +303,7 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
           // controls trail the text, and drop beneath it — aligned past the
           // glyph, dismiss holding the right edge — once the grid is too
           // narrow for a sentence and two actions to share a row.
-          "@container/banner relative flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-[var(--radius-sm)] border px-3 py-2",
+          "@container/banner relative flex flex-wrap items-center justify-between gap-x-3 gap-y-2 rounded-lg border px-3 py-2",
           config?.containerClass,
           className
         )}

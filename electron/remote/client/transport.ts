@@ -18,10 +18,29 @@ export interface LinkTransportConnection {
   token: string;
   /** Release whatever the transport started (ssh forward, local socket file). */
   dispose(): Promise<void>;
+  /**
+   * Opened from what an earlier connection learned about the host, without
+   * asking it again. A handshake that fails on it may be that knowledge
+   * gone stale (the host relaunched with a new token): dial again with
+   * `fresh` before taking the failure as the host's answer.
+   */
+  remembered?: true;
+}
+
+export interface LinkOpenOptions {
+  /**
+   * Whether a host reached with no Daintree serving may be checked on and
+   * started (true unless given). False while the host has said it is
+   * restarting: it comes back by itself, and until then its record says it
+   * quit on purpose.
+   */
+  mayStart?: boolean;
+  /** Forget what earlier connections learned and ask the host for all of it again. */
+  fresh?: boolean;
 }
 
 export interface LinkTransport {
-  open(signal: AbortSignal): Promise<LinkTransportConnection>;
+  open(signal: AbortSignal, options?: LinkOpenOptions): Promise<LinkTransportConnection>;
 }
 
 /** A failure to reach the host. `detail` is what we observed (ssh's own words), never a guess. */

@@ -7,7 +7,7 @@ import { SettingsSection } from "./SettingsSection";
 import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { EnvVarRow, validateEnvRows, type EnvVarDraft } from "./EnvVarRow";
 import { useRowFocus } from "./useRowFocus";
-import { isSensitiveEnvKey } from "@shared/utils/envVars";
+import { isSecretEnvEntry } from "@/utils/secretDetection";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useSettingsTabValidation } from "./SettingsValidationRegistry";
 import { useSettingsTabFlush, type SettingsFlushFailure } from "./SettingsFlushRegistry";
@@ -123,14 +123,6 @@ export function EnvironmentSettingsTab() {
     setEnvRows((prev) => {
       const row = prev[index];
       if (!row) return prev;
-      if (field === "key" && !isSensitiveEnvKey(row.key) && isSensitiveEnvKey(value)) {
-        // A name that turns sensitive re-masks a value the user had revealed.
-        setVisibleEnvVars((visible) => {
-          const next = new Set(visible);
-          next.delete(row.id);
-          return next;
-        });
-      }
       const updated = [...prev];
       updated[index] = { ...row, [field]: value };
       return updated;
@@ -282,7 +274,10 @@ export function EnvironmentSettingsTab() {
               row={envVar}
               position={index + 1}
               error={rowErrors[envVar.id]}
-              sensitive={isSensitiveEnvKey(envVar.key)}
+              // Name or value, as every other view of these variables masks: global
+              // names have no storage routing for the name-only test to match. An
+              // unrevealed row masks the moment either turns secret; a reveal holds.
+              sensitive={isSecretEnvEntry(envVar.key, envVar.value)}
               revealed={visibleEnvVars.has(envVar.id)}
               onToggleReveal={() => toggleVisibility(envVar.id)}
               onKeyChange={(v) => updateRow(index, "key", v)}

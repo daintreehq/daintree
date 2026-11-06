@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../../utils/storeValues.js";
 import type { Migration } from "../StoreMigrations.js";
 import { isEverydayPhrase } from "../../../shared/utils/phoneticSimilarity.js";
 
@@ -41,6 +42,6 @@ export const migration041: Migration = {
       return;
     }
     console.log(`[Migration 041] Took an everyday heard-as form off ${stripped} learned entries`);
-    store.set("voiceInput", { ...settings, dictionary });
+    setRawStoreValue(store, "voiceInput", { ...settings, dictionary });
   },
 };

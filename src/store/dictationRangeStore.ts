@@ -73,10 +73,12 @@ export interface DictationUtterance {
  * draft edit, and `edited` latches once a change reaches text the range
  * covers, so a caller can refuse to overwrite what it no longer wrote.
  *
- * Positions come from diffing successive draft strings, so they track text,
- * not keystrokes: an edit inside a run of identical characters is placed at
- * the run's end, which can leave a range on a neighbouring copy of its own
- * text. A range that isn't flagged always still holds the text it held before.
+ * Positions follow the changes a writer spells out (`expectDraftChange`): the
+ * composer's typing, a completion, a correction landing. Any other write is
+ * diffed, which tracks text, not keystrokes: an edit inside a run of identical
+ * characters is placed at the run's end, which can leave a range on a
+ * neighbouring copy of its own text. A range that isn't flagged always still
+ * holds the text it held before.
  */
 export interface DictationRecord {
   id: string;

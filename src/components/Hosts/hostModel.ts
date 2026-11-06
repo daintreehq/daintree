@@ -69,6 +69,12 @@ export interface HostMenuRow {
 
 const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
 
+/** What a host's summary says it runs on; only this Shell's own summary can say Windows, and it is not a host. */
+function reportedPlatform(summary: HostMetricsSummary | null): HostPlatform | null {
+  const platform = summary?.platform;
+  return platform === undefined || platform === "win32" ? null : platform;
+}
+
 /** This machine first, then every other host alphabetically by name. */
 export function buildHostMenuRows(
   entries: readonly HostListEntry[],
@@ -94,7 +100,7 @@ export function buildHostMenuRows(
       hostId: entry.descriptor.id,
       name: entry.descriptor.name,
       isLocal: false,
-      platform: entry.summary?.platform ?? entry.descriptor.platform,
+      platform: reportedPlatform(entry.summary) ?? entry.descriptor.platform,
       connection: entry.connection,
       lastSeenAt: lastSeenOf(entry),
       summary: entry.summary,
@@ -208,8 +214,11 @@ export function describeHostRowStatus(row: HostMenuRow, now: number = Date.now()
   if (!summary) return row.isLocal ? null : `Connected${differs}`;
   const agents: string[] = [];
   const observed = summary.agentsObserved;
+  // Waiting and blocked are the host's own fleet bands, never the raw waits.
+  const attention = observed ? summary.agentAttention : undefined;
   if (observed && observed.working > 0) agents.push(`${observed.working} working`);
-  if (observed && observed.waiting > 0) agents.push(`${observed.waiting} waiting`);
+  if (attention && attention.waiting > 0) agents.push(`${attention.waiting} waiting`);
+  if (attention && attention.blocked > 0) agents.push(`${attention.blocked} blocked`);
   // A failed read is unknown, not zero.
   const projects =
     summary.projectCount === null ? "Projects unknown" : pluralize(summary.projectCount, "project");

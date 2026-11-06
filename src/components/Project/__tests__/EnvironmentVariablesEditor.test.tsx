@@ -2,7 +2,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { act, render as rtlRender, screen, fireEvent, waitFor } from "@testing-library/react";
-import { useContext, type ReactElement, type ReactNode } from "react";
+import { StrictMode, useContext, useState, type ReactElement, type ReactNode } from "react";
 import { SettingsValidationProvider } from "@/components/Settings/SettingsValidationRegistry";
 import {
   SettingsFlushContext,
@@ -123,11 +123,11 @@ describe("EnvironmentVariablesEditor", () => {
 
       expect(screen.getByText("Inherited from global")).toBeTruthy();
 
-      const nameInputs = screen.getAllByLabelText("Environment variable name");
+      const nameInputs = screen.getAllByLabelText(/^Name of variable \d+$/);
       expect(nameInputs.length).toBe(1);
       expect((nameInputs[0] as HTMLInputElement).value).toBe("MY_VAR");
 
-      const valueInputs = screen.getAllByLabelText("Environment variable value");
+      const valueInputs = screen.getAllByLabelText(/^Value of /);
       expect(valueInputs.length).toBe(1);
       expect((valueInputs[0] as HTMLInputElement).value).toBe("my-value");
 
@@ -189,7 +189,7 @@ describe("EnvironmentVariablesEditor", () => {
       const addButton = screen.getByRole("button", { name: /add variable/i });
       fireEvent.click(addButton);
 
-      const nameInputs = screen.getAllByLabelText("Environment variable name");
+      const nameInputs = screen.getAllByLabelText(/^Name of variable \d+$/);
       expect(nameInputs.length).toBe(1);
     });
   });
@@ -345,7 +345,7 @@ describe("EnvironmentVariablesEditor save controls", () => {
     expect(save.disabled).toBe(true);
     expect(discard.disabled).toBe(true);
 
-    fireEvent.change(screen.getByLabelText("Environment variable value"), {
+    fireEvent.change(screen.getByLabelText(/^Value of /), {
       target: { value: "b" },
     });
     expect(save.disabled).toBe(false);
@@ -353,6 +353,54 @@ describe("EnvironmentVariablesEditor save controls", () => {
 
     fireEvent.click(discard);
     expect(save.disabled).toBe(true);
+  });
+
+  it("drops an unsaved edit when Settings closes and opens again", () => {
+    const props = {
+      ...defaultProps,
+      environmentVariables: [makeEnvVar("MY_VAR", "a")],
+      onFlush: vi.fn().mockResolvedValue(undefined),
+    };
+    const { rerender } = render(<EnvironmentVariablesEditor {...props} />);
+    fireEvent.change(screen.getByLabelText(/^Value of /), { target: { value: "b" } });
+
+    rerender(<EnvironmentVariablesEditor {...props} isOpen={false} />);
+    rerender(<EnvironmentVariablesEditor {...props} isOpen />);
+
+    expect(screen.getByLabelText<HTMLInputElement>(/^Value of /).value).toBe("a");
+    expect((screen.getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  // Save hands the trimmed rows to the form, which passes them back as new rows.
+  it("keeps the edit and the error of a failed Save once the form takes its rows", async () => {
+    function Form() {
+      const [rows, setRows] = useState([makeEnvVar("MY_VAR", "a")]);
+      return (
+        <EnvironmentVariablesEditor
+          {...defaultProps}
+          environmentVariables={rows}
+          onEnvironmentVariablesChange={setRows}
+          onFlush={async () => ({ message: "Read-only checkout" })}
+        />
+      );
+    }
+    render(
+      <StrictMode>
+        <Form />
+      </StrictMode>
+    );
+    fireEvent.change(screen.getByLabelText(/^Name of variable 1$/), {
+      target: { value: " MY_VAR " },
+    });
+    fireEvent.change(screen.getByLabelText(/^Value of /), { target: { value: "b" } });
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    });
+
+    expect(screen.getByRole("alert").textContent).toBe("Read-only checkout");
+    expect(screen.getByLabelText<HTMLInputElement>(/^Name of variable 1$/).value).toBe("MY_VAR");
+    expect(screen.getByLabelText<HTMLInputElement>(/^Value of /).value).toBe("b");
   });
 });
 
@@ -365,7 +413,10 @@ describe("EnvironmentVariablesEditor close-time flush", () => {
     return null;
   }
 
-  const renderEditor = (onChange: (value: EnvVar[]) => void, onFlush: () => Promise<void>) =>
+  const renderEditor = (
+    onChange: (value: EnvVar[]) => void,
+    onFlush: () => Promise<void | { message: string }>
+  ) =>
     render(
       <>
         <CaptureFlush />
@@ -382,7 +433,7 @@ describe("EnvironmentVariablesEditor close-time flush", () => {
     const onChange = vi.fn<(value: EnvVar[]) => void>();
     const onFlush = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
     renderEditor(onChange, onFlush);
-    fireEvent.change(screen.getByLabelText("Environment variable value"), {
+    fireEvent.change(screen.getByLabelText(/^Value of /), {
       target: { value: "b" },
     });
     await expect(flushAll!()).resolves.toEqual([]);
@@ -396,7 +447,7 @@ describe("EnvironmentVariablesEditor close-time flush", () => {
     const onFlush = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
     renderEditor(onChange, onFlush);
     fireEvent.click(screen.getAllByRole("button", { name: /add variable/i })[0]!);
-    const [healthy, name] = screen.getAllByLabelText("Environment variable name");
+    const [healthy, name] = screen.getAllByLabelText(/^Name of variable \d+$/);
     fireEvent.change(name!, { target: { value: "1BAD" } });
     let failed: FailedSettingsFlush[] = [];
     await act(async () => {
@@ -417,7 +468,7 @@ describe("EnvironmentVariablesEditor close-time flush", () => {
     const onChange = vi.fn<(value: EnvVar[]) => void>();
     const onFlush = vi.fn<() => Promise<void>>().mockRejectedValue(new Error("disk full"));
     renderEditor(onChange, onFlush);
-    const value = screen.getByLabelText("Environment variable value");
+    const value = screen.getByLabelText(/^Value of /);
     fireEvent.change(value, { target: { value: "b" } });
     let failed: FailedSettingsFlush[] = [];
     await act(async () => {
@@ -429,10 +480,54 @@ describe("EnvironmentVariablesEditor close-time flush", () => {
     expect(landing?.contains(screen.getByRole("alert"))).toBe(true);
   });
 
+  // The project form reports a failed save by resolving with it, never by rejecting.
+  it("keeps a draft whose save resolved with a failure when the dialog flushes", async () => {
+    const onChange = vi.fn<(value: EnvVar[]) => void>();
+    const onFlush = vi
+      .fn<() => Promise<void | { message: string }>>()
+      .mockResolvedValue({ message: "Read-only checkout" });
+    renderEditor(onChange, onFlush);
+    const value = screen.getByLabelText(/^Value of /);
+    fireEvent.change(value, { target: { value: "b" } });
+    let failed: FailedSettingsFlush[] = [];
+    await act(async () => {
+      failed = await flushAll!();
+    });
+    expect(failed).toHaveLength(1);
+    const landing = document.getElementById(failed[0]!.landOn);
+    expect(landing?.contains(value)).toBe(true);
+    expect(screen.getByRole("alert").textContent).toBe("Read-only checkout");
+  });
+
   it("registers nothing while the draft is clean", async () => {
     const onChange = vi.fn<(value: EnvVar[]) => void>();
     renderEditor(onChange, vi.fn<() => Promise<void>>().mockResolvedValue(undefined));
     await flushAll!();
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  // The page mounts on empty rows before the project form seeds them, and a close
+  // that caught a registration made then wrote the untouched values (#16150).
+  it("asks for no close-time save when the form seeds its rows, only for an edit", () => {
+    const register = vi.fn(() => () => {});
+    const registry = { register, flushAll: async () => [] };
+    const onFlush = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    const page = (environmentVariables: EnvVar[]) => (
+      <SettingsValidationProvider>
+        <SettingsFlushContext.Provider value={registry}>
+          <EnvironmentVariablesEditor
+            {...defaultProps}
+            environmentVariables={environmentVariables}
+            onFlush={onFlush}
+          />
+        </SettingsFlushContext.Provider>
+      </SettingsValidationProvider>
+    );
+    const { rerender } = rtlRender(page([]));
+    rerender(page([makeEnvVar("MY_VAR", "a")]));
+    expect(register).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText(/^Value of /), { target: { value: "b" } });
+    expect(register).toHaveBeenCalledWith("project:variables", expect.any(Function));
   });
 });

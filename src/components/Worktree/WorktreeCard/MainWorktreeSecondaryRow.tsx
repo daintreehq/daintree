@@ -9,6 +9,10 @@ import { pluralize } from "@/lib/pluralize";
 import { bucketCountPhrase } from "@/lib/agentStateVocabulary";
 
 interface MainWorktreeSecondaryRowProps {
+  /** The sidebar sets its card's lines closer together than the grid does. */
+  variant?: "sidebar" | "grid";
+  /** The compact sidebar card sets them closer still. */
+  density?: "comfortable" | "compact";
   branchLabel: string;
   isActive: boolean;
   isMuted?: boolean;
@@ -28,6 +32,8 @@ interface MainWorktreeSecondaryRowProps {
 }
 
 export function MainWorktreeSecondaryRow({
+  variant = "sidebar",
+  density = "compact",
   branchLabel,
   isActive,
   isMuted,
@@ -52,7 +58,10 @@ export function MainWorktreeSecondaryRow({
     // px-1 for the same reason as NonMainSecondaryRow — the main card's meta
     // line is the same tier and has to sit on the same x.
     <div
-      className="flex items-center gap-2 mt-2.5 px-1 empty:hidden"
+      className={cn(
+        "flex items-center gap-2 px-1 empty:hidden",
+        variant !== "sidebar" ? "mt-2.5" : density === "compact" ? "mt-1" : "mt-1.5"
+      )}
       data-testid="main-worktree-meta-row"
     >
       {!quietGit && <BranchLabel label={branchLabel} isActive={isActive} isMuted={isMuted} />}

@@ -68,6 +68,16 @@ describe("promptHashesForFirstMessage", () => {
     expect(promptHashesForFirstMessage(delivered)).toContain(paneHash(written));
   });
 
+  it("recognizes the written prompt under a scheduled run's instruction (#15982)", () => {
+    const written = "Triage the new issues\n";
+    const delivered = launchPromptArgText(appendHandbackInstruction(written, "ab12cd", "run"));
+
+    expect(promptHashesForFirstMessage(delivered)).toContain(paneHash(written));
+    // Every marker must carry the one code.
+    const mixed = delivered.replace(/NEEDS-YOU-ab12cd/, "NEEDS-YOU-zz99zz");
+    expect(promptHashesForFirstMessage(mixed)).not.toContain(paneHash(written));
+  });
+
   it("does not strip an instruction whose two markers disagree", () => {
     const delivered = launchPromptArgText(appendHandbackInstruction("Fix it", "ab12cd")).replace(
       /END-ab12cd$/,

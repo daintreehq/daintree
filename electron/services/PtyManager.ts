@@ -44,6 +44,7 @@ import { deleteSessionFile } from "./pty/terminalSessionPersistence.js";
 import { ledgerFactsFromSpawnOptions } from "./pty/lifecycleLedger.js";
 import { attributeClose } from "./pty/closeAttribution.js";
 import { AgentTerminalLifecycleLedger } from "../../shared/utils/agentLifecycleLedger.js";
+import { scheduledRunForRecord } from "../../shared/utils/scheduledRunProvenance.js";
 import { events } from "./events.js";
 import { keepWindowsTreeKillHelperWarm } from "../utils/windowsTreeKill.js";
 import {
@@ -51,6 +52,7 @@ import {
   trackAgentSessionCapture,
 } from "./pty/agentSessionCaptureDelivery.js";
 import type {
+  EndTrashGraceStatus,
   FirstPromptCandidate,
   GracefulKillResult,
   TerminalResizeResult,
@@ -583,8 +585,18 @@ export class PtyManager extends EventEmitter {
             this.streamOffsets.get(id) ??
             Math.max(this.streamOffsetOrigin, this.retiredStreamHighWater),
           onExit: (termId, exitCode, signal) => {
-            // Guard against stale exit events from previous terminal with same ID
+            // Guard against stale exit events from previous terminal with same ID.
+            // The replaced incarnation's facts still go out on their own event,
+            // with none of the per-id cleanup an exit does to the successor.
             if (this.registry.get(termId) !== terminalProcess) {
+              this.emit(
+                "superseded-exit",
+                termId,
+                exitCode,
+                signal,
+                options.launchGeneration,
+                terminalProcess.getInfo().spawnedAt
+              );
               return;
             }
             this.emit(
@@ -593,7 +605,8 @@ export class PtyManager extends EventEmitter {
               exitCode,
               signal,
               options.launchGeneration,
-              this.sessionPreservingTeardowns.has(terminalProcess) || undefined
+              this.sessionPreservingTeardowns.has(terminalProcess) || undefined,
+              terminalProcess.getInfo().spawnedAt
             );
             if (!terminalProcess.shouldPreserveOnExit(exitCode)) {
               this.registry.delete(termId);
@@ -700,13 +713,13 @@ export class PtyManager extends EventEmitter {
   /**
    * Write data to terminal stdin.
    */
-  write(id: string, data: string, traceId?: string): void {
+  write(id: string, data: string, traceId?: string, inputOwner?: string): void {
     const terminal = this.registry.get(id);
     if (!terminal) {
       logWarn(`Terminal ${id} not found, cannot write data`);
       return;
     }
-    terminal.write(data, traceId);
+    terminal.write(data, traceId, inputOwner);
   }
 
   /**
@@ -741,7 +754,9 @@ export class PtyManager extends EventEmitter {
     handbackCode?: string,
     guard?: TerminalSubmitGuard,
     imagePaths?: readonly string[],
-    firstPrompt?: FirstPromptCandidate
+    firstPrompt?: FirstPromptCandidate,
+    handbackInstruction?: "run",
+    promptOwner?: string
   ): void {
     const terminal = this.registry.get(id);
     if (!terminal) {
@@ -752,7 +767,16 @@ export class PtyManager extends EventEmitter {
       // that would answer for tokens this host never accepted.
       return;
     }
-    terminal.submit(text, submissionToken, handbackCode, guard, imagePaths, firstPrompt);
+    terminal.submit(
+      text,
+      submissionToken,
+      handbackCode,
+      guard,
+      imagePaths,
+      firstPrompt,
+      handbackInstruction,
+      promptOwner
+    );
   }
 
   /**
@@ -1038,6 +1062,7 @@ export class PtyManager extends EventEmitter {
                 agentModelId: info.agentModelId,
                 cwd: info.cwd ?? undefined,
                 branch: branch ?? undefined,
+                ...scheduledRunForRecord(info),
                 ...close,
               },
             });
@@ -1064,10 +1089,33 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
+   * End a trashed terminal's grace now (#15728): the expiry its timer would
+   * run, graceful shutdown and kill included, only for the incarnation the
+   * caller closed. A restored or relaunched terminal is left alone.
+   */
+  endTrashGrace(id: string, expectedGeneration: number): EndTrashGraceStatus {
+    if (!this.registry.isInTrash(id)) return "not-trashed";
+    if (this.registry.get(id)?.getInfo().launchGeneration !== expectedGeneration) {
+      return "generation-mismatch";
+    }
+    return this.registry.expireTrashNow(id) ? "started" : "not-trashed";
+  }
+
+  /** A graceful shutdown is quitting this terminal's agent now. */
+  isClosing(id: string): boolean {
+    return this.registry.get(id)?.isGracefullyClosing() ?? false;
+  }
+
+  /**
    * Check if a terminal is in the trash.
    */
   isInTrash(id: string): boolean {
     return this.registry.isInTrash(id);
+  }
+
+  /** When a trashed terminal's grace ends; undefined for one not in the trash. */
+  getTrashExpiresAt(id: string): number | undefined {
+    return this.registry.getTrashExpiresAt(id);
   }
 
   /**
@@ -1212,6 +1260,7 @@ export class PtyManager extends EventEmitter {
       hasPty,
       agentSessionId: terminalInfo.agentSessionId,
       detectedAgentId: terminalInfo.detectedAgentId,
+      bracketedPasteMode: hasPty && terminal.isBracketedPasteMode(),
       analysisEnabled: terminalInfo.analysisEnabled,
       resizeStrategy: terminal.getResizeStrategy(),
       ptyPid: ptyProcess?.pid,
@@ -1227,6 +1276,7 @@ export class PtyManager extends EventEmitter {
       originalAgentPresetId: terminalInfo.originalAgentPresetId,
       exitCode: terminalInfo.exitCode,
       everDetectedAgent: terminalInfo.everDetectedAgent,
+      usageLimitObservedAt: terminalInfo.usageLimitObservedAt,
     };
   }
 

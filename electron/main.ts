@@ -30,10 +30,10 @@ import { getCompileCacheMeta } from "./utils/hostPerformance.js";
 import { startPerformanceTraceIfEnabled } from "./utils/performanceTrace.js";
 import { enforceIpcSenderValidation, setupPermissionLockdown } from "./setup/security.js";
 import { startSessionCacheTracking } from "./services/sessionCacheCleaner.js";
+import { setupHtmlPreviewSession } from "./setup/htmlPreviewSession.js";
 import {
   registerAppProtocol,
   registerDaintreeFileProtocol,
-  registerDaintreeHtmlProtocol,
   registerDaintreeMediaProtocol,
   registerDaintreePdfProtocol,
   registerDeepLinkProtocolClient,
@@ -45,13 +45,19 @@ import {
   extractDirectoryPaths,
   hasCliPathFlag,
   registerAppLifecycleHandlers,
-  registerWindowSessionEndHandler,
 } from "./lifecycle/appLifecycle.js";
 import {
+  resolveFirstWindowLaunch,
   resolveLaunchIntent,
   resolveRestoreFallbackProjectId,
   shouldRestoreWindowFleet,
+  type LaunchIntent,
+  type LaunchIntentSignals,
 } from "./lifecycle/launchIntent.js";
+import {
+  createInitialWindowRequest,
+  type InitialWindowRequest,
+} from "./lifecycle/initialWindowRequest.js";
 import {
   RESTORE_HYDRATION_WAIT_MS,
   resolvePrimaryRestoreProjectId,
@@ -59,9 +65,15 @@ import {
   type CreateWindowResult,
 } from "./lifecycle/windowRestore.js";
 import { restoreFleetAfterCrash, setCrashFleetRestorer } from "./lifecycle/crashWindowRestore.js";
-import { registerShutdownHandler } from "./lifecycle/shutdown.js";
+import { initializeDatabaseForBoot } from "./lifecycle/databaseBoot.js";
+import { registerShutdownHandler, routeLastWindowCloseThroughQuit } from "./lifecycle/shutdown.js";
 import { setAttachedShellsProvider } from "./lifecycle/attachedShells.js";
 import { getActiveShutdown } from "./lifecycle/shutdownCoordinator.js";
+import {
+  createRemoteHostsLaunch,
+  hostsStillSetUp,
+  type RemoteHostsLaunch,
+} from "./lifecycle/remoteHostsLaunch.js";
 import {
   setMainWindow,
   getMainWindow,
@@ -75,10 +87,17 @@ import { buildMemoryAttribution } from "./utils/memoryAttribution.js";
 import { helpSessionService } from "./services/HelpSessionService.js";
 import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
+import { createWindowRecreation } from "./window/windowRecreation.js";
 import { hasPendingOpen, isWindowBound, reserveWindowForOpen } from "./window/windowOpenState.js";
 import { distributePortsToView, getRemoteViewHooks } from "./window/portDistribution.js";
 import { findOtherProjectOwner, type ProjectOwner } from "./window/projectOwnership.js";
 import { openFolderInNewWindow } from "./window/newWindowOpen.js";
+import { setScheduledRunWindowOpener } from "./window/scheduledRunNotificationNavigation.js";
+import {
+  hasOpenScheduledRun,
+  onScheduledRunClosed,
+  whenScheduledRunNotificationsSent,
+} from "./services/scheduledRuns/index.js";
 import { deliverOpenSystemMemoryPressure } from "./window/systemMemoryPressureDelivery.js";
 import { toDisposable } from "./utils/lifecycle.js";
 import {
@@ -143,9 +162,11 @@ import {
   readOpenWindowsManifestSync,
 } from "./services/persistence/readLastProjectId.js";
 import {
+  clearPendingWindowRecreation,
   enableOpenWindowsSaves,
   initOpenWindowsTracker,
   resumeOpenWindowsSaves,
+  saveBeforeLastWindowCloses,
   saveOpenWindowsNow,
   scheduleOpenWindowsSave,
   suppressOpenWindowsSaves,
@@ -166,6 +187,7 @@ import {
   requestedUpdateChannel,
   resolveHostModeLaunch,
 } from "./boot/hostModeLaunch.js";
+import { isDueScheduleCheckRequested } from "./boot/dueScheduleLaunch.js";
 import { isEitherRemoteRoleSupported, isRemoteHostSupported } from "./remote/buildGate.js";
 import { getRemoteService } from "./remote/runtime.js";
 
@@ -427,21 +449,8 @@ if (!gotTheLock) {
     getCrashRecoveryService().getCrashedLiveWorkspaceIds()
   );
 
-  // DatabaseMaintenance.initialize() runs the SQLite probe + recovery and MUST
-  // complete before getSharedDb() opens the file. Dynamic import removes
-  // main.ts as a static-graph importer of this service; shutdown.ts and
-  // globalServicesInit.ts still pull it in via their own eager paths, so the
-  // module remains on the eager graph — the win is keeping the boot path
-  // free of an additional static edge and the sync probe off the
-  // top-of-module evaluation. The 200ms startMaintenance() timer + suspend
-  // listener wiring is handled by the `database-maintenance` deferred task
-  // in globalServicesInit. See #8817.
-  const { initializeDatabaseMaintenance } =
-    await import("./services/DatabaseMaintenanceService.js");
-  // Pass the clean-exit signal so probeDb can skip the O(size) quick_check
-  // on clean boots. CrashLoopGuard zeros its crash count on a clean exit and
-  // accumulates it on crashes, so count === 0 is a reliable clean-boot signal.
-  initializeDatabaseMaintenance(getCrashLoopGuard().getCrashCount() === 0);
+  // Probe and recover the database before anything opens it.
+  await initializeDatabaseForBoot(getCrashLoopGuard());
 
   // GpuCrashMonitor must install its `child-process-gone` listener BEFORE the
   // GPU process spawns (first BrowserWindow creation), so it sees crashes in
@@ -505,7 +514,6 @@ if (!gotTheLock) {
   // Flips once the initial windows (or the windowless Host runtime) are up, so
   // a second launch before then doesn't open a window of its own.
   let launchSettled = false;
-  let stopRemoteHosts: (() => Promise<void>) | null = null;
   // A later `--host-mode` launch (login item, systemd unit, a Shell starting
   // Host mode over SSH) hands over to this process: it serves as a host until
   // quit, without changing the setting. Kept apart from `hostModeLaunch`,
@@ -517,7 +525,17 @@ if (!gotTheLock) {
   // The Shell that just installed this build here follows this channel; so does this host.
   let setupUpdateChannel = isRemoteHostSupported() ? requestedUpdateChannel(process.argv) : null;
   let remoteHostsStarted = false;
+  // An OS job started this process to run due schedules (#15989). Known from
+  // argv before `ready`, like `--host-mode`, so a relaunch or Dock click during
+  // the windowless start waits for it. It isn't Host mode: no listener starts
+  // for it, and the windows the launch would have opened wait for the first
+  // request to see the app.
+  const dueScheduleLaunch = isDueScheduleCheckRequested(process.argv);
+  // Set by that launch until the first request to see the app.
+  let initialWindowRequest: InitialWindowRequest | null = null;
   const listenForHandedOffHostMode = (): void => {
+    // A handoff arriving mid-quit would start listening just before the stop.
+    if (getActiveShutdown() !== null) return;
     const hostMode = getRemoteService("hostMode");
     if (!hostMode) return;
     const enable = hostModeEnableRequested;
@@ -591,15 +609,30 @@ if (!gotTheLock) {
       remoteWorkspaceKey?: string;
       /** The user chose to open `initialProjectPath` anyway at critical memory pressure (#13638). */
       ignoreMemoryPressure?: boolean;
+      /** An OOM rebuild: when the windows this one replaces died of a probable OOM (#15647). */
+      oomHistory?: readonly number[];
     }
   ): Promise<CreateWindowResult> {
+    // An OOM rebuilds the window onto what it is showing then, never onto this
+    // call's arguments (#15564). One instance serves both the startup view's
+    // handler and the manager's, so the window is rebuilt once and spends one
+    // of the OOM budget it inherits from the window it replaces (#15647). `ctx`
+    // is read lazily: it is registered synchronously below, before any
+    // renderer can die.
+    const recreation = createWindowRecreation({
+      windowRegistry,
+      getWindowId: () => ctx.windowId,
+      oomHistory: opts?.oomHistory,
+      createWindow: (projectId, recreateOpts) => createWindow(undefined, projectId, recreateOpts),
+    });
     const { win, appView, loadRenderer, smokeTestTimer, smokeRendererUnresponsive } =
       setupBrowserWindow(__dirname, {
-        onRecreateWindow: () => createWindow(initialProjectPath, initialProjectId).then(() => {}),
+        prepareWindowRecreation: recreation.prepare,
         onCreateWindow: (projectPath, initiatingWindowId) =>
           openWindowForPath(projectPath, initiatingWindowId),
         projectPath: initialProjectPath,
         initialProjectId,
+        remoteWorkspaceKey: opts?.remoteWorkspaceKey,
         revealMode: opts?.revealMode,
       });
     setMainWindow(win);
@@ -623,9 +656,15 @@ if (!gotTheLock) {
     // from the registry context captured here rather than read in the handler.
     const closedWindowId = ctx.windowId;
     scheduleOpenWindowsSave();
+    win.on("close", () => {
+      if (!recreation.isRecreating()) saveBeforeLastWindowCloses(closedWindowId);
+    });
     win.on("closed", () => {
       forgetRemoteWindowRestore(closedWindowId);
-      saveOpenWindowsNow(closedWindowId);
+      clearPendingWindowRecreation(closedWindowId);
+      // A window torn down for an OOM rebuild keeps its record on disk until
+      // its replacement, which carries that record, saves over it.
+      if (!recreation.isRecreating()) saveOpenWindowsNow(closedWindowId);
     });
     const initialWebContentsId = appView.webContents.id;
     windowRegistry.registerAppViewWebContents(ctx.windowId, initialWebContentsId);
@@ -636,7 +675,7 @@ if (!gotTheLock) {
 
     const pvm = new ProjectViewManager(win, {
       dirname: __dirname,
-      onRecreateWindow: () => createWindow(initialProjectPath, initialProjectId).then(() => {}),
+      prepareWindowRecreation: recreation.prepare,
       windowRegistry,
       // Resolve to the same value the IPC handler returns so the main-process
       // LRU cap and the renderer's Settings view agree on first boot. Invalid
@@ -981,7 +1020,6 @@ if (!gotTheLock) {
     ensureFocusThrottle();
 
     registerWindowForFocusThrottle(win);
-    registerWindowSessionEndHandler(win);
 
     // Idle harness (#12521). Started here rather than beside the freeze harness
     // in setupWindowServices: the agent-state cache the freeze-skip reads and
@@ -1022,17 +1060,6 @@ if (!gotTheLock) {
     return "ok";
   }
 
-  // A macOS login item started hidden (`open -gj` or an "hide on launch" login
-  // item). Not reported on every macOS version, so `--hidden` stands in too.
-  function wasOpenedAsHiddenLoginItem(): boolean {
-    if (process.platform !== "darwin") return false;
-    try {
-      return app.getLoginItemSettings().wasOpenedAsHidden === true;
-    } catch {
-      return false;
-    }
-  }
-
   // For folders opened from outside the app that need a window of their own
   // (#12593). Resolves to the new window's id so the open can report where it
   // landed.
@@ -1053,11 +1080,166 @@ if (!gotTheLock) {
     return windowId;
   }
 
+  function readLaunchSignals(): LaunchIntentSignals {
+    return {
+      argv: process.argv,
+      hasCliPathFlag,
+      extractDirectoryPaths,
+      pendingOpenDirPaths: getPendingOpenDirPaths(),
+      pendingOpenFilePaths: getPendingOpenFilePaths(),
+      isSafeMode: getCrashLoopGuard().isSafeMode(),
+      hasPendingCrash: getCrashRecoveryService().getPendingCrash() !== null,
+    };
+  }
+
+  // The windows a launch opens: the restored fleet, a folder's window, or the
+  // recovery window. At startup, or for a launch that started windowless, at
+  // the first request to see the app. `savesHeld` is a launch whose manifest
+  // stayed read-only until then.
+  async function openLaunchWindows(
+    launchIntent: LaunchIntent,
+    fallbackProjectId: string | undefined,
+    { savesHeld }: { savesHeld: boolean }
+  ): Promise<void> {
+    const { hadManifest, records: restoreRecords } = shouldRestoreWindowFleet(launchIntent)
+      ? readOpenWindowsManifestSync()
+      : { hadManifest: false, records: [] };
+
+    // The window that gets focus is the manifest's most-recently-focused
+    // record — not `lastActiveProjectId`, which tracks the last project
+    // *switched to* anywhere and can name a different window entirely.
+    const primaryRestoreProjectId = resolvePrimaryRestoreProjectId(
+      restoreRecords,
+      hadManifest,
+      fallbackProjectId
+    );
+
+    // Prime the hydrate prefetch cache for the window that will take focus so
+    // the renderer's first `app:boot` invoke resolves as a cache hit instead
+    // of doing an inline disk read. Fire-and-forget — overlaps with window
+    // creation. Skipped when:
+    //   - no project to restore (first run / project unset / picker window)
+    //   - safe mode or pending crash recovery (terminals are suppressed and
+    //     the panelFilter path layers extra constraints)
+    //   - per-project state file doesn't exist yet (migration must run on
+    //     the renderer-blocking handler path — `buildSwitchHydrateResult`
+    //     intentionally skips the migration write)
+    if (primaryRestoreProjectId && launchIntent !== "recovery") {
+      void projectStore
+        .getProjectState(primaryRestoreProjectId)
+        .then((state) => {
+          if (state === null) return;
+          return prefetchHydrateResult(primaryRestoreProjectId, buildSwitchHydrateResult);
+        })
+        .catch((error) => {
+          console.warn("[MAIN] Boot-prime hydrate prefetch failed:", error);
+        });
+    }
+
+    // Whether this launch brings back more than one project per window.
+    // Computed here, once, because both inputs live here: the launch intent
+    // (a targeted or recovery launch never fans out) and the user's opt-out.
+    // Windows are handed a background list only when it holds, so no code
+    // downstream carries a second copy of the policy.
+    const restoreLiveProjects =
+      shouldRestoreWindowFleet(launchIntent) && store.get("sessionRestore")?.enabled !== false;
+    const fleetRecords = restoreLiveProjects
+      ? restoreRecords
+      : restoreRecords.map(({ projectId }) => ({ projectId }));
+
+    const onBackgroundWindowFailed = (reason: unknown): void => {
+      console.error("[MAIN] Restoring a background window failed:", reason);
+    };
+    const isProjectOwned = (projectId: string): boolean =>
+      findOtherProjectOwner(windowRegistry, projectId, {}) !== null;
+    const isShuttingDown = (): boolean => getActiveShutdown() !== null;
+
+    const startupRestore = restoreWindowFleet({
+      records: fleetRecords,
+      hadManifest,
+      fallbackProjectId,
+      createWindow: (projectId, opts) => createWindow(undefined, projectId, opts),
+      suppressSaves: suppressOpenWindowsSaves,
+      resumeSaves: (persistNow) => {
+        // A launch that held the manifest until now keeps it from a clean
+        // restore on; a recovery leaves that to the crash restore.
+        if (savesHeld && persistNow && launchIntent !== "recovery" && !isShuttingDown()) {
+          enableOpenWindowsSaves();
+        }
+        resumeOpenWindowsSaves(persistNow);
+      },
+      onBackgroundWindowFailed,
+      isProjectOwned,
+      isShuttingDown,
+      // With no host set up, nothing starts early: a launch with none does
+      // no remote work before the restore has settled.
+      onRemoteHostsNeeded: (hostIds) =>
+        remoteHostsLaunch?.need(hostsStillSetUp(hostIds, store.get("remoteHosts")?.hosts)),
+    });
+
+    // Installed before the startup window boots: its renderer resolves the
+    // crash recovery while `startupRestore` is still pending. The recovery
+    // IPC decides whether this crash is a single one that earns the whole
+    // window set back (#12801); safe mode and loops never trigger it.
+    if (launchIntent === "recovery") {
+      setCrashFleetRestorer((requesterWebContentsId) =>
+        restoreFleetAfterCrash({
+          startupRestore,
+          waitForRequesterHydrated: async () => {
+            const ctx = windowRegistry.getByWebContentsId(requesterWebContentsId);
+            const pvm = ctx?.services.projectViewManager;
+            if (!ctx || !pvm) return false;
+            const outcome = await pvm.waitForViewHydrated(requesterWebContentsId, {
+              timeoutMs: RESTORE_HYDRATION_WAIT_MS,
+              signal: ctx.abortController.signal,
+            });
+            return outcome !== "cancelled" && !ctx.browserWindow.isDestroyed();
+          },
+          adoptBackgroundProjects: (handoffs) => {
+            // One job per window: the queue tracks one pending list per
+            // window, so a second job would overwrite the first's intent.
+            const byWindow = new Map<number, { owner: ProjectOwner; ids: string[] }>();
+            for (const { projectId, backgroundProjectIds } of handoffs) {
+              const owner = findOtherProjectOwner(windowRegistry, projectId, {});
+              if (!owner) continue;
+              const entry = byWindow.get(owner.context.windowId) ?? { owner, ids: [] };
+              entry.ids.push(...backgroundProjectIds.filter((id) => !entry.ids.includes(id)));
+              byWindow.set(owner.context.windowId, entry);
+            }
+            for (const { owner, ids } of byWindow.values()) {
+              queueWindowBackgroundProjects({
+                windowId: owner.context.windowId,
+                getManager: () => owner.context.services.projectViewManager,
+                projectViewManager: owner.projectViewManager,
+                windowRegistry,
+                projectIds: ids,
+              });
+            }
+          },
+          readManifest: readOpenWindowsManifestSync,
+          restoreLiveProjects: store.get("sessionRestore")?.enabled !== false,
+          createWindow: (projectId, opts) => createWindow(undefined, projectId, opts),
+          suppressSaves: suppressOpenWindowsSaves,
+          resumeSaves: resumeOpenWindowsSaves,
+          enableSaves: enableOpenWindowsSaves,
+          onBackgroundWindowFailed,
+          isProjectOwned,
+          isShuttingDown,
+        })
+      );
+    }
+
+    await startupRestore;
+  }
+
   const appLifecycle = registerAppLifecycleHandlers({
-    onCreateWindow: () => createWindow().then(() => {}),
+    onCreateWindow: (request) =>
+      initialWindowRequest ? initialWindowRequest.open(request) : createWindow().then(() => {}),
     getMainWindow,
     windowRegistry,
-    isHostModeActive: () => hostModeLaunch || hostModeHandedOff || isHostModeEnabled(),
+    onLastWindowClose: routeLastWindowCloseThroughQuit,
+    keepsRunningWithoutWindows: () =>
+      hostModeLaunch || hostModeHandedOff || isHostModeEnabled() || dueScheduleLaunch,
     isLaunchSettled: () => launchSettled,
     canOpenWindows: () => !headlessOzone,
     onHostModeRequested: isRemoteHostSupported()
@@ -1072,9 +1254,123 @@ if (!gotTheLock) {
           if (remoteHostsStarted) listenForHandedOffHostMode();
         }
       : undefined,
+    onDueScheduleCheckRequested: () => {
+      void import("./services/scheduledRuns/scheduledRunSchedulerLive.js")
+        .then(({ checkDueSchedules }) => checkDueSchedules())
+        .catch((error: unknown) => {
+          console.error("[MAIN] Couldn't check due schedules:", error);
+        });
+    },
+    scheduledRuns: {
+      hasOpen: hasOpenScheduledRun,
+      onClosed: onScheduledRunClosed,
+      notified: whenScheduledRunNotificationsSent,
+    },
   });
 
   setAttachedShellsProvider(() => getRemoteService("hostMode")?.getAttachedClients() ?? []);
+
+  // A scheduled run's banner, clicked with no window on this machine (a
+  // windowless Host, or macOS after the last window closed), opens one on the
+  // run's project (#15988).
+  setScheduledRunWindowOpener(async (projectId) => {
+    if (headlessOzone || !app.isReady()) return null;
+    let windowId: number | null = null;
+    const result = await createWindow(undefined, projectId, {
+      onRegistered: (id) => {
+        windowId = id;
+      },
+    });
+    return result === "ok" ? windowId : null;
+  });
+
+  // Remote Hosts' start at launch (#15888): as soon as the focused window is up
+  // when restored windows need a host, otherwise once the restore has settled,
+  // and never once a quit has begun.
+  let remoteHostsLaunch: RemoteHostsLaunch | null = null;
+  if (__DAINTREE_REMOTE_HOSTS__) {
+    if (isEitherRemoteRoleSupported()) {
+      remoteHostsLaunch = createRemoteHostsLaunch({
+        isShuttingDown: () => getActiveShutdown() !== null,
+        load: async () => {
+          const remoteHosts = await import("./remote/boot.js");
+          remoteHosts.setRemoteHostsWindowOpener(async (options) => {
+            let id = -1;
+            await createWindow(null, undefined, {
+              onRegistered: (w) => {
+                id = w;
+                options?.onRegistered?.(w);
+              },
+            });
+            return id;
+          });
+          return {
+            start: async (halted) => {
+              try {
+                await remoteHosts.startRemoteHosts({
+                  hostMode: hostModeLaunch || hostModeHandedOff || isHostModeEnabled(),
+                  halted,
+                });
+              } catch (error) {
+                if (!(error instanceof remoteHosts.HostModeListenError)) throw error;
+                console.error("[MAIN] Host mode couldn't start listening:", error);
+                // A headless host is here only to listen: exiting lets its unit
+                // restart it, where staying up would leave `systemctl start` a no-op.
+                if (headlessOzone && hostModeLaunch) {
+                  void (remoteHostsLaunch?.stop() ?? Promise.resolve()).finally(() => app.exit(1));
+                }
+              }
+            },
+            stop: remoteHosts.stopRemoteHosts,
+          };
+        },
+        onStarted: () => {
+          // Set even when listening failed: a later handoff or the switch tries again.
+          remoteHostsStarted = true;
+          // A handoff that landed while the start was in flight, or setup's enable.
+          if (hostModeHandedOff || hostModeEnableRequested) listenForHandedOffHostMode();
+          // Windows that were on a host's project when the app quit go back there.
+          void restoreRemoteWindows({
+            isWindowWaiting: (windowId) => {
+              const ctx = windowRegistry.getByWindowId(windowId);
+              if (!ctx || ctx.browserWindow.isDestroyed() || getActiveShutdown() !== null) {
+                return false;
+              }
+              // A folder the person is opening there (or its git-init prompt) wins.
+              if (hasPendingOpen(windowId)) return false;
+              return (ctx.services.projectViewManager?.getActiveProjectId() ?? null) === null;
+            },
+            canRestoreInBackground: (windowId) => {
+              const ctx = windowRegistry.getByWindowId(windowId);
+              const pvm = ctx?.services.projectViewManager;
+              return (
+                ctx !== undefined &&
+                !ctx.browserWindow.isDestroyed() &&
+                pvm !== undefined &&
+                !pvm.disposed &&
+                getActiveShutdown() === null
+              );
+            },
+            viewOf: (windowId) => {
+              const ctx = windowRegistry.getByWindowId(windowId);
+              if (!ctx || ctx.browserWindow.isDestroyed()) return null;
+              // A window on the picker has no project view: its UI is the
+              // window's first view, as ProjectViewManager itself falls back to.
+              const view =
+                ctx.services.projectViewManager?.getActiveView() ??
+                ctx.browserWindow.contentView.children[0];
+              return view && "webContents" in view ? (view as WebContentsView).webContents : null;
+            },
+            onRestored: () => scheduleOpenWindowsSave(),
+          });
+        },
+        dial: (hostId) => {
+          getRemoteService("remoteHostsClient")?.connect({ hostId });
+        },
+        onError: (message, error) => console.error(`[MAIN] ${message}:`, error),
+      });
+    }
+  }
 
   registerShutdownHandler({
     getPtyClient,
@@ -1093,9 +1389,7 @@ if (!gotTheLock) {
     getStopDiskSpaceMonitor,
     setStopDiskSpaceMonitor,
     windowRegistry,
-    stopRemoteHosts: async () => {
-      await stopRemoteHosts?.();
-    },
+    stopRemoteHosts: () => remoteHostsLaunch?.stop() ?? Promise.resolve(),
   });
 
   // Before whenReady so the eagerly created persist:daintree / persist:portal
@@ -1122,7 +1416,7 @@ if (!gotTheLock) {
       registerDeepLinkProtocolClient();
       registerAppProtocol(distPath, { allowDisplayCapture: isDemoMode });
       registerDaintreeFileProtocol();
-      registerDaintreeHtmlProtocol();
+      await setupHtmlPreviewSession();
       registerDaintreePdfProtocol();
       registerDaintreeMediaProtocol();
       // Register `plugin://` with a placeholder resolver that 404s every
@@ -1147,15 +1441,7 @@ if (!gotTheLock) {
       // through the existing confirm/security gates, never silently.
       activateDeepLinkHandler(windowRegistry);
       setupWebviewCSP();
-      const launchSignals = {
-        argv: process.argv,
-        hasCliPathFlag,
-        extractDirectoryPaths,
-        pendingOpenDirPaths: getPendingOpenDirPaths(),
-        pendingOpenFilePaths: getPendingOpenFilePaths(),
-        isSafeMode: getCrashLoopGuard().isSafeMode(),
-        hasPendingCrash: getCrashRecoveryService().getPendingCrash() !== null,
-      };
+      const launchSignals = readLaunchSignals();
       const launchIntent = resolveLaunchIntent(launchSignals);
       const hostModeEnabled = isHostModeEnabled();
       hostModeLaunch =
@@ -1163,9 +1449,9 @@ if (!gotTheLock) {
         resolveHostModeLaunch({
           argv: process.argv,
           hostModeEnabled,
-          // Only asked when it can matter, so a launch without Host mode makes
-          // no login-item query at all.
-          openedAsHidden: hostModeEnabled && wasOpenedAsHiddenLoginItem(),
+          // Electron 44 removed the macOS 12 hidden-login-item signal.
+          // Windowless launches use the existing --hidden flag.
+          openedAsHidden: false,
         });
       // A launch that opens a folder starts on the picker, so the folder routing
       // fills that window instead of opening a second one beside the last-active
@@ -1178,11 +1464,14 @@ if (!gotTheLock) {
       // targeted launch is NOT read-only: opening one folder from the CLI or
       // Finder is a genuine one-window session the user asked for, so the
       // manifest should describe it.
+      // A due-schedule launch that is also a Host launch starts as one.
+      const windowsDeferred = dueScheduleLaunch && !hostModeLaunch;
       initOpenWindowsTracker({
         registry: windowRegistry,
         // A windowless Host launch never restored the fleet, so whatever
-        // windows a remote session opens later must not replace it either.
-        readOnly: launchIntent === "recovery" || hostModeLaunch,
+        // windows a remote session opens later must not replace it either. A
+        // due-schedule launch holds it until its windows open.
+        readOnly: launchIntent === "recovery" || hostModeLaunch || windowsDeferred,
         // The manifest has to see projects whose agents outlived their renderer
         // — LRU eviction destroys the view and leaves the PTYs running, so a
         // view-only capture drops exactly the long-running projects a relaunch
@@ -1190,210 +1479,41 @@ if (!gotTheLock) {
         liveWorkspaceIds: () => getPtyClient()?.getLiveWorkspaceIds() ?? new Set<string>(),
       });
 
-      if (hostModeLaunch) {
+      if (hostModeLaunch || windowsDeferred) {
         // No window: the backend comes up on its own and windows attach as
         // clients later (a second launch opens one).
-        console.log("[MAIN] Host mode launch — starting without a window");
+        console.log(
+          hostModeLaunch
+            ? "[MAIN] Host mode launch — starting without a window"
+            : "[MAIN] Due-schedule launch — starting without a window"
+        );
+        if (windowsDeferred) {
+          initialWindowRequest = createInitialWindowRequest({
+            // Read when asked: a folder queued, a crash state, or what the
+            // request named since the start decides it.
+            openLaunchWindows: (request) => {
+              const { intent, fallbackProjectId } = resolveFirstWindowLaunch(
+                readLaunchSignals(),
+                request,
+                readLastActiveProjectIdSync()
+              );
+              return openLaunchWindows(intent, fallbackProjectId, { savesHeld: true });
+            },
+            createWindow: () => createWindow().then(() => {}),
+            isShuttingDown: () => getActiveShutdown() !== null,
+          });
+        }
+        appLifecycle.onStartedWindowless();
         if ((await startHostRuntime({ windowRegistry })) === "exit-requested") return;
         ensurePowerMonitor();
         ensureFocusThrottle();
       } else {
-        const { hadManifest, records: restoreRecords } = shouldRestoreWindowFleet(launchIntent)
-          ? readOpenWindowsManifestSync()
-          : { hadManifest: false, records: [] };
-
-        // The window that gets focus is the manifest's most-recently-focused
-        // record — not `lastActiveProjectId`, which tracks the last project
-        // *switched to* anywhere and can name a different window entirely.
-        const primaryRestoreProjectId = resolvePrimaryRestoreProjectId(
-          restoreRecords,
-          hadManifest,
-          fallbackProjectId
-        );
-
-        // Prime the hydrate prefetch cache for the window that will take focus so
-        // the renderer's first `app:boot` invoke resolves as a cache hit instead
-        // of doing an inline disk read. Fire-and-forget — overlaps with window
-        // creation. Skipped when:
-        //   - no project to restore (first run / project unset / picker window)
-        //   - safe mode or pending crash recovery (terminals are suppressed and
-        //     the panelFilter path layers extra constraints)
-        //   - per-project state file doesn't exist yet (migration must run on
-        //     the renderer-blocking handler path — `buildSwitchHydrateResult`
-        //     intentionally skips the migration write)
-        if (primaryRestoreProjectId && launchIntent !== "recovery") {
-          void projectStore
-            .getProjectState(primaryRestoreProjectId)
-            .then((state) => {
-              if (state === null) return;
-              return prefetchHydrateResult(primaryRestoreProjectId, buildSwitchHydrateResult);
-            })
-            .catch((error) => {
-              console.warn("[MAIN] Boot-prime hydrate prefetch failed:", error);
-            });
-        }
-
-        // Whether this launch brings back more than one project per window.
-        // Computed here, once, because both inputs live here: the launch intent
-        // (a targeted or recovery launch never fans out) and the user's opt-out.
-        // Windows are handed a background list only when it holds, so no code
-        // downstream carries a second copy of the policy.
-        const restoreLiveProjects =
-          shouldRestoreWindowFleet(launchIntent) && store.get("sessionRestore")?.enabled !== false;
-        const fleetRecords = restoreLiveProjects
-          ? restoreRecords
-          : restoreRecords.map(({ projectId }) => ({ projectId }));
-
-        const onBackgroundWindowFailed = (reason: unknown): void => {
-          console.error("[MAIN] Restoring a background window failed:", reason);
-        };
-        const isProjectOwned = (projectId: string): boolean =>
-          findOtherProjectOwner(windowRegistry, projectId, {}) !== null;
-        const isShuttingDown = (): boolean => getActiveShutdown() !== null;
-
-        const startupRestore = restoreWindowFleet({
-          records: fleetRecords,
-          hadManifest,
-          fallbackProjectId,
-          createWindow: (projectId, opts) => createWindow(undefined, projectId, opts),
-          suppressSaves: suppressOpenWindowsSaves,
-          resumeSaves: resumeOpenWindowsSaves,
-          onBackgroundWindowFailed,
-          isProjectOwned,
-          isShuttingDown,
-        });
-
-        // Installed before the startup window boots: its renderer resolves the
-        // crash recovery while `startupRestore` is still pending. The recovery
-        // IPC decides whether this crash is a single one that earns the whole
-        // window set back (#12801); safe mode and loops never trigger it.
-        if (launchIntent === "recovery") {
-          setCrashFleetRestorer((requesterWebContentsId) =>
-            restoreFleetAfterCrash({
-              startupRestore,
-              waitForRequesterHydrated: async () => {
-                const ctx = windowRegistry.getByWebContentsId(requesterWebContentsId);
-                const pvm = ctx?.services.projectViewManager;
-                if (!ctx || !pvm) return false;
-                const outcome = await pvm.waitForViewHydrated(requesterWebContentsId, {
-                  timeoutMs: RESTORE_HYDRATION_WAIT_MS,
-                  signal: ctx.abortController.signal,
-                });
-                return outcome !== "cancelled" && !ctx.browserWindow.isDestroyed();
-              },
-              adoptBackgroundProjects: (handoffs) => {
-                // One job per window: the queue tracks one pending list per
-                // window, so a second job would overwrite the first's intent.
-                const byWindow = new Map<number, { owner: ProjectOwner; ids: string[] }>();
-                for (const { projectId, backgroundProjectIds } of handoffs) {
-                  const owner = findOtherProjectOwner(windowRegistry, projectId, {});
-                  if (!owner) continue;
-                  const entry = byWindow.get(owner.context.windowId) ?? { owner, ids: [] };
-                  entry.ids.push(...backgroundProjectIds.filter((id) => !entry.ids.includes(id)));
-                  byWindow.set(owner.context.windowId, entry);
-                }
-                for (const { owner, ids } of byWindow.values()) {
-                  queueWindowBackgroundProjects({
-                    windowId: owner.context.windowId,
-                    getManager: () => owner.context.services.projectViewManager,
-                    projectViewManager: owner.projectViewManager,
-                    windowRegistry,
-                    projectIds: ids,
-                  });
-                }
-              },
-              readManifest: readOpenWindowsManifestSync,
-              restoreLiveProjects: store.get("sessionRestore")?.enabled !== false,
-              createWindow: (projectId, opts) => createWindow(undefined, projectId, opts),
-              suppressSaves: suppressOpenWindowsSaves,
-              resumeSaves: resumeOpenWindowsSaves,
-              enableSaves: enableOpenWindowsSaves,
-              onBackgroundWindowFailed,
-              isProjectOwned,
-              isShuttingDown,
-            })
-          );
-        }
-
-        await startupRestore;
+        await openLaunchWindows(launchIntent, fallbackProjectId, { savesHeld: false });
       }
       launchSettled = true;
       appLifecycle.onLaunchSettled();
 
-      if (__DAINTREE_REMOTE_HOSTS__) {
-        if (isEitherRemoteRoleSupported()) {
-          try {
-            const remoteHosts = await import("./remote/boot.js");
-            // Published before the start resolves, so a quit during it still
-            // stops whatever the start got as far as.
-            stopRemoteHosts = remoteHosts.stopRemoteHosts;
-            remoteHosts.setRemoteHostsWindowOpener(async (options) => {
-              let id = -1;
-              await createWindow(null, undefined, {
-                onRegistered: (w) => {
-                  id = w;
-                  options?.onRegistered?.(w);
-                },
-              });
-              return id;
-            });
-            try {
-              await remoteHosts.startRemoteHosts({
-                hostMode: hostModeLaunch || hostModeHandedOff || isHostModeEnabled(),
-              });
-            } catch (error) {
-              if (!(error instanceof remoteHosts.HostModeListenError)) throw error;
-              console.error("[MAIN] Host mode couldn't start listening:", error);
-              // A headless host is here only to listen: exiting lets its unit
-              // restart it, where staying up would leave `systemctl start` a no-op.
-              if (headlessOzone && hostModeLaunch) {
-                void (stopRemoteHosts?.() ?? Promise.resolve()).finally(() => app.exit(1));
-                return;
-              }
-            }
-            // Set even when listening failed: a later handoff or the switch tries again.
-            remoteHostsStarted = true;
-            // A handoff that landed while the start was in flight, or setup's enable.
-            if (hostModeHandedOff || hostModeEnableRequested) listenForHandedOffHostMode();
-            // Windows that were on a host's project when the app quit go back there.
-            void restoreRemoteWindows({
-              isWindowWaiting: (windowId) => {
-                const ctx = windowRegistry.getByWindowId(windowId);
-                if (!ctx || ctx.browserWindow.isDestroyed() || getActiveShutdown() !== null) {
-                  return false;
-                }
-                // A folder the person is opening there (or its git-init prompt) wins.
-                if (hasPendingOpen(windowId)) return false;
-                return (ctx.services.projectViewManager?.getActiveProjectId() ?? null) === null;
-              },
-              canRestoreInBackground: (windowId) => {
-                const ctx = windowRegistry.getByWindowId(windowId);
-                const pvm = ctx?.services.projectViewManager;
-                return (
-                  ctx !== undefined &&
-                  !ctx.browserWindow.isDestroyed() &&
-                  pvm !== undefined &&
-                  !pvm.disposed &&
-                  getActiveShutdown() === null
-                );
-              },
-              viewOf: (windowId) => {
-                const ctx = windowRegistry.getByWindowId(windowId);
-                if (!ctx || ctx.browserWindow.isDestroyed()) return null;
-                // A window on the picker has no project view: its UI is the
-                // window's first view, as ProjectViewManager itself falls back to.
-                const view =
-                  ctx.services.projectViewManager?.getActiveView() ??
-                  ctx.browserWindow.contentView.children[0];
-                return view && "webContents" in view ? (view as WebContentsView).webContents : null;
-              },
-              onRestored: () => scheduleOpenWindowsSave(),
-            });
-          } catch (error) {
-            console.error("[MAIN] Remote Hosts failed to start:", error);
-          }
-        }
-      }
+      await remoteHostsLaunch?.start();
     } catch (error) {
       console.error("[MAIN] Startup failed:", error);
       // Startup crashes hard-exit without running before-quit, which means

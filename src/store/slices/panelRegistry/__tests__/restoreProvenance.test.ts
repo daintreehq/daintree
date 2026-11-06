@@ -241,6 +241,44 @@ describe("updateAgentState", () => {
     expect(saveNormalized).not.toHaveBeenCalled();
   });
 
+  it("dates a waiting pane from the host's re-read of its reason (#16093)", () => {
+    seedAgent();
+    const report = (at: number, reason: "error" | "prompt") =>
+      usePanelStore
+        .getState()
+        .updateAgentState("a", "waiting", undefined, at, "heuristic", 0.9, reason);
+
+    report(7_000, "error");
+    report(9_000, "prompt");
+    expect(ptyPanel("a")?.lastAgentObservation).toEqual({ agentState: "waiting", at: 9_000 });
+
+    // The same reason again keeps the date, and an older report never moves it back.
+    report(11_000, "prompt");
+    report(8_000, "error");
+    expect(ptyPanel("a")?.lastAgentObservation).toEqual({ agentState: "waiting", at: 9_000 });
+  });
+
+  it("dates a re-read reason over an observation saved without a time", () => {
+    seedAgent();
+    usePanelStore.setState((s) => ({
+      panelsById: {
+        ...s.panelsById,
+        a: {
+          ...s.panelsById.a,
+          agentState: "waiting",
+          waitingReason: "error",
+          lastAgentObservation: { agentState: "waiting" },
+        } as PtyPanelData,
+      },
+    }));
+
+    usePanelStore
+      .getState()
+      .updateAgentState("a", "waiting", undefined, 9_000, "heuristic", 0.9, "prompt");
+
+    expect(ptyPanel("a")?.lastAgentObservation).toEqual({ agentState: "waiting", at: 9_000 });
+  });
+
   it("writes what a batch deferred when it closes, even with no panels to add", () => {
     seedAgent();
     const token = usePanelStore.getState().beginHydrationBatch();
@@ -254,6 +292,47 @@ describe("updateAgentState", () => {
     expect(ids).toEqual(["a"]);
     expect((byId.a as PtyPanelData).lastAgentObservation).toEqual({
       agentState: "idle",
+      at: 7_000,
+    });
+  });
+
+  it("records a report kept off a directing pane, and saves it (#16062)", () => {
+    seedAgent();
+    usePanelStore.getState().updateAgentState("a", "directing");
+
+    usePanelStore.getState().noteAgentObservation("a", "waiting", 7_000);
+
+    expect(ptyPanel("a")).toMatchObject({
+      agentState: "directing",
+      lastAgentObservation: { agentState: "waiting", at: 7_000 },
+    });
+    expect(saveNormalized).toHaveBeenCalledTimes(1);
+  });
+
+  it("notes neither directing nor a repeat of the observed state", () => {
+    seedAgent();
+    usePanelStore.getState().noteAgentObservation("a", "waiting", 7_000);
+    vi.mocked(saveNormalized).mockClear();
+
+    usePanelStore.getState().noteAgentObservation("a", "waiting", 9_000);
+    usePanelStore.getState().noteAgentObservation("a", "directing", 9_500);
+
+    expect(ptyPanel("a")?.lastAgentObservation).toEqual({ agentState: "waiting", at: 7_000 });
+    expect(saveNormalized).not.toHaveBeenCalled();
+  });
+
+  it("leaves a noted report's save to a hydration batch's close", () => {
+    seedAgent();
+    const token = usePanelStore.getState().beginHydrationBatch();
+    usePanelStore.getState().noteAgentObservation("a", "waiting", 7_000);
+    expect(saveNormalized).not.toHaveBeenCalled();
+
+    usePanelStore.getState().flushHydrationBatch(token);
+
+    expect(saveNormalized).toHaveBeenCalledTimes(1);
+    const saved = vi.mocked(saveNormalized).mock.calls[0]![0].a;
+    expect(saved && isPtyPanel(saved) ? saved.lastAgentObservation : undefined).toEqual({
+      agentState: "waiting",
       at: 7_000,
     });
   });

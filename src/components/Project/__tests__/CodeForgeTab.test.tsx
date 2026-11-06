@@ -12,19 +12,24 @@ vi.mock("@/components/Settings/SettingsSelect", () => ({
     value,
     onValueChange,
     options,
+    error,
   }: {
     label: string;
     value: string;
     onValueChange: (v: string) => void;
-    options: Array<{ value: string; label: string }>;
+    options: Array<{ value: string; label: string; description?: string; disabled?: boolean }>;
+    error?: string;
   }) => (
-    <select aria-label={label} value={value} onChange={(e) => onValueChange(e.target.value)}>
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
+    <>
+      <select aria-label={label} value={value} onChange={(e) => onValueChange(e.target.value)}>
+        {options.map((o) => (
+          <option key={o.value} value={o.value} disabled={o.disabled} title={o.description}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      {error ? <p data-error-for={label}>{error}</p> : null}
+    </>
   ),
 }));
 
@@ -219,5 +224,75 @@ describe("CodeForgeTab — issues provider (#13700)", () => {
     await waitFor(() => expect(select("Issues provider")?.value).toBe("acme.tracker.tracker"));
     const selected = select("Issues provider")!.selectedOptions[0];
     expect(selected?.textContent).toMatch(/unavailable/i);
+  });
+});
+
+describe("CodeForgeTab — installed plugins' providers (#15583)", () => {
+  const REASON = "Forge providers currently run only as built-in plugins";
+  const github = {
+    pluginId: "daintree.github",
+    contribution: { id: "github", name: "GitHub", matches: ["github.com"] },
+  };
+  const gitea = {
+    pluginId: "acme.gitea",
+    contribution: { id: "gitea", name: "Gitea", matches: ["gitea.example.com"] },
+    unavailableReason: REASON,
+  };
+  const tracker = {
+    pluginId: "acme.tracker",
+    contribution: { id: "tracker", name: "Tracker", matches: [], roles: ["issues"] },
+    unavailableReason: REASON,
+  };
+
+  function renderWith(forgeProviderOverride: string | null, issueProviderOverride: string | null) {
+    const view = render(
+      <CodeForgeTab
+        forgeRemote={undefined}
+        onForgeRemoteChange={vi.fn()}
+        forgeProviderOverride={forgeProviderOverride}
+        onForgeProviderOverrideChange={vi.fn()}
+        issueProviderOverride={issueProviderOverride}
+        onIssueProviderOverrideChange={vi.fn()}
+        projectPath="/Users/test/Projects/sample"
+      />
+    );
+    const select = (label: string) =>
+      view.container.querySelector(`select[aria-label="${label}"]`) as HTMLSelectElement | null;
+    const option = (label: string, value: string) =>
+      Array.from(select(label)?.options ?? []).find((o) => o.value === value);
+    const error = (label: string) =>
+      view.container.querySelector(`[data-error-for="${label}"]`)?.textContent ?? null;
+    return { ...view, select, option, error };
+  }
+
+  it("lists them as unavailable, with the reason, and can't pick them", async () => {
+    getForgeProvidersMock.mockResolvedValue([github, gitea, tracker]);
+    const { select, option, error } = renderWith(null, null);
+
+    await waitFor(() => expect(select("Issues provider")).not.toBeNull());
+    for (const [label, value] of [
+      ["Forge provider", "acme.gitea.gitea"],
+      ["Issues provider", "acme.tracker.tracker"],
+    ] as const) {
+      const unavailable = option(label, value);
+      expect(unavailable?.disabled).toBe(true);
+      expect(unavailable?.textContent).toMatch(/\(unavailable\)/);
+      expect(unavailable?.title).toBe(REASON);
+      expect(error(label)).toBeNull();
+    }
+    const builtin = option("Forge provider", "daintree.github.github");
+    expect(builtin?.disabled).toBe(false);
+    expect(builtin?.textContent).toBe("GitHub");
+  });
+
+  it("shows a stored choice of one as unavailable, with the reason beside it", async () => {
+    getForgeProvidersMock.mockResolvedValue([github, gitea, tracker]);
+    const { select, error } = renderWith("acme.gitea.gitea", "acme.tracker.tracker");
+
+    await waitFor(() => expect(select("Forge provider")?.value).toBe("acme.gitea.gitea"));
+    expect(select("Forge provider")!.selectedOptions[0]?.textContent).toMatch(/unavailable/);
+    expect(error("Forge provider")).toBe(REASON);
+    expect(select("Issues provider")?.value).toBe("acme.tracker.tracker");
+    expect(error("Issues provider")).toBe(REASON);
   });
 });

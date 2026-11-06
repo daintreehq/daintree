@@ -1,7 +1,7 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { afterAll, bench, describe, vi } from "vitest";
+import { afterAll, test, describe, vi } from "vitest";
 import { mockExecaChildren } from "../__tests__/helpers/editorChild.js";
 
 // Editor discovery against a synthetic 30-directory PATH of real temp dirs, a
@@ -188,10 +188,14 @@ fs.writeSync(
 );
 
 describe("editor discovery (30-dir PATH)", () => {
-  bench("discover()", async () => {
-    await runDiscover();
+  test("discover()", async ({ bench }) => {
+    await bench("discover()", async () => {
+      await runDiscover();
+    }).run();
   });
-  bench("openFile, configured editor missing → fallback loop", async () => {
-    await runFallback();
+  test("openFile, configured editor missing → fallback loop", async ({ bench }) => {
+    await bench("openFile, configured editor missing → fallback loop", async () => {
+      await runFallback();
+    }).run();
   });
 });

@@ -53,6 +53,37 @@ const isBoundaryAfter = (text: string, index: number): boolean => {
 };
 
 /**
+ * The `imagePaths` that `text` names on a token boundary, in the order it names
+ * them: each as many times as it appears, up to as many times as it was given.
+ * Text written apart from the chips (a fleet target's own edit of the draft)
+ * can name them in another order, which `splitImageInputSegments` needs.
+ */
+export function findImagePathsInText(text: string, imagePaths: readonly string[]): string[] {
+  const given = new Map<string, number>();
+  for (const imagePath of imagePaths) {
+    if (imagePath.length > 0) given.set(imagePath, (given.get(imagePath) ?? 0) + 1);
+  }
+  const found: Array<{ index: number; path: string }> = [];
+  for (const [imagePath, count] of given) {
+    let taken = 0;
+    let index = text.indexOf(imagePath);
+    while (index !== -1 && taken < count) {
+      if (
+        isBoundaryBefore(index === 0 ? undefined : text[index - 1]) &&
+        isBoundaryAfter(text, index + imagePath.length)
+      ) {
+        found.push({ index, path: imagePath });
+        taken += 1;
+        index = text.indexOf(imagePath, index + imagePath.length);
+      } else {
+        index = text.indexOf(imagePath, index + 1);
+      }
+    }
+  }
+  return found.sort((a, b) => a.index - b.index).map((entry) => entry.path);
+}
+
+/**
  * Split `text` into ordered text and image segments, locating each of
  * `imagePaths` in turn after the previous match.
  *

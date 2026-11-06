@@ -28,7 +28,7 @@ test.describe.serial("Element Picker on a static site", () => {
     await selectInPreview(ctx, "h1", "h1");
     await expectNotTraced(ctx.window, "index.html");
     await expect(selectedElement(ctx.window)).toContainText(
-      "The page reported no source for this element"
+      "The page didn't say where it's written."
     );
   });
 });

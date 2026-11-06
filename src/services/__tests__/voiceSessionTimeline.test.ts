@@ -67,6 +67,26 @@ afterEach(() => {
 });
 
 describe("VoiceSessionTimeline", () => {
+  it("says whether the session's start reopened a waiting send (#15704)", () => {
+    const plain = timeline();
+    plain.finish("user");
+    expect(logged()).toMatchObject({ reopenedSend: false });
+
+    log.mockReset();
+    const reopening = timeline();
+    reopening.noteReopenedSend();
+    reopening.noteReopenedSend();
+    reopening.finish("send");
+    expect(logged()).toMatchObject({ reopenedSend: true });
+  });
+
+  it("takes no reopened-send note once its line is out", () => {
+    const t = timeline();
+    t.finish("user");
+    t.noteReopenedSend();
+    expect(logged()).toMatchObject({ reopenedSend: false });
+  });
+
   it("measures every interval from the key press that led to the start", () => {
     const t = timeline(1_000 - 40);
     clock = 1_010;

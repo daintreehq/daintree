@@ -18,7 +18,11 @@ import { resolveLiveWebContents } from "../../window/webContentsRegistry.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import type { LinkSession } from "../link/session.js";
 import { registerRemoteService } from "../runtime.js";
-import { ClientFileTransport, type DownloadOutcome } from "./ClientFileTransport.js";
+import {
+  ClientFileTransport,
+  type DownloadOptions,
+  type DownloadOutcome,
+} from "./ClientFileTransport.js";
 import { createHostFileProxy } from "./hostFileProxy.js";
 import { HostPickerBridge } from "./HostPickerBridge.js";
 import { ViewFileCapabilities } from "./viewCapabilities.js";
@@ -73,10 +77,24 @@ export interface HostFileClientDeps {
   sendToView(webContentsId: number, event: FileTransferEvent): void;
   downloadsDir(): string;
   tempDir(): string;
+  /** How long a download whose link dropped waits for its host to come back. */
+  reconnectWaitMs?: number;
 }
 
 const PROGRESS_INTERVAL_MS = 100;
 const TEMP_RETENTION_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_RECONNECT_WAIT_MS = 30_000;
+/** A download its link cut off is started over at most this many times. */
+const MAX_RESTARTS = 2;
+
+function codeOf(error: unknown): string | null {
+  if (typeof error !== "object" || error === null || !("code" in error)) return null;
+  return typeof error.code === "string" ? error.code : null;
+}
+
+function cancelled(): AppError {
+  return new AppError({ code: "CANCELLED", message: "Download cancelled" });
+}
 
 function isHostFileRef(
   payload: { hostId: unknown; hostPath: unknown } | null | undefined
@@ -144,6 +162,46 @@ export function createHostFileClient(deps: HostFileClientDeps): HostFileClient {
     }
   };
 
+  /**
+   * A transfer can't pick up mid-file, and a resumed link is a new session: a
+   * download its link cut off starts over from the first byte once the view is
+   * back on the host, under the same caller promise.
+   */
+  const downloadAcrossDrops = async (
+    hostId: HostId,
+    hostPath: string,
+    options: DownloadOptions
+  ): Promise<DownloadOutcome> => {
+    const { webContentsId, signal } = options;
+    for (let restarts = 0; ; restarts++) {
+      if (signal?.aborted) throw cancelled();
+      // A restart goes nowhere once its view has left the host.
+      requireBoundHost(webContentsId, hostId);
+      try {
+        return await deps.transport.download(hostId, hostPath, options);
+      } catch (error) {
+        if (signal?.aborted) throw cancelled();
+        if (codeOf(error) !== "HOST_DISCONNECTED") throw error;
+        if (restarts >= MAX_RESTARTS) {
+          throw new AppError({
+            code: "HOST_DISCONNECTED",
+            message: `The link to host ${hostId} dropped ${restarts + 1} times during one download`,
+            userMessage: "The connection to the host kept dropping. Try again once it's steady.",
+          });
+        }
+        const waitMs = deps.reconnectWaitMs ?? DEFAULT_RECONNECT_WAIT_MS;
+        if (!(await deps.transport.whenReachable(hostId, webContentsId, waitMs, signal))) {
+          if (signal?.aborted) throw cancelled();
+          throw new AppError({
+            code: "HOST_DISCONNECTED",
+            message: `Host ${hostId} didn't reconnect within ${waitMs} ms`,
+            userMessage: "The host didn't reconnect in time. Try again once it's connected.",
+          });
+        }
+      }
+    }
+  };
+
   return {
     download(webContentsId, rawPayload) {
       const payload = validateDownload(rawPayload);
@@ -164,23 +222,22 @@ export function createHostFileClient(deps: HostFileClientDeps): HostFileClient {
       }
       const controller = new AbortController();
       let lastSent = 0;
-      const promise = deps.transport
-        .download(payload.hostId, payload.hostPath, {
-          webContentsId,
-          destinationDir: deps.downloadsDir(),
-          signal: controller.signal,
-          onProgress: (transferredBytes, totalBytes) => {
-            const now = Date.now();
-            if (transferredBytes < totalBytes && now - lastSent < PROGRESS_INTERVAL_MS) return;
-            lastSent = now;
-            deps.sendToView(webContentsId, {
-              type: "progress",
-              opId: payload.opId,
-              transferredBytes,
-              totalBytes,
-            });
-          },
-        })
+      const promise = downloadAcrossDrops(payload.hostId, payload.hostPath, {
+        webContentsId,
+        destinationDir: deps.downloadsDir(),
+        signal: controller.signal,
+        onProgress: (transferredBytes, totalBytes) => {
+          const now = Date.now();
+          if (transferredBytes < totalBytes && now - lastSent < PROGRESS_INTERVAL_MS) return;
+          lastSent = now;
+          deps.sendToView(webContentsId, {
+            type: "progress",
+            opId: payload.opId,
+            transferredBytes,
+            totalBytes,
+          });
+        },
+      })
         .then((outcome) => ({ localPath: outcome.localPath, bytes: outcome.bytes }))
         .finally(() => {
           if (running.get(payload.opId)?.promise === promise) running.delete(payload.opId);
@@ -194,10 +251,7 @@ export function createHostFileClient(deps: HostFileClientDeps): HostFileClient {
       const dir = deps.tempDir();
       await ensureOwnerOnlyDir(dir);
       await pruneTempDir(dir);
-      return deps.transport.download(hostId, hostPath, {
-        webContentsId,
-        destinationDir: dir,
-      });
+      return downloadAcrossDrops(hostId, hostPath, { webContentsId, destinationDir: dir });
     },
 
     async grantClickedFile(webContentsId, payload) {

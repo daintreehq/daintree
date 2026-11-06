@@ -1,6 +1,7 @@
+import { DEFAULT_AGENT_SETTINGS } from "@shared/types";
 import { agentSettingsClient } from "@/clients/agentSettingsClient";
 import { subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
-import { onHostResync } from "@/store/hostResyncSignal";
+import { onHostResync, readSettingOnResync, type HostResync } from "@/store/hostResyncSignal";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { logWarn } from "@/utils/logger";
 
@@ -21,11 +22,18 @@ export function initAgentSettingsSync(): () => void {
     useAgentSettingsStore.getState().applySaved(settings);
   });
 
-  const refetch = (): void => {
+  const refetch = (resync: HostResync = {}): void => {
     if (disposed) return;
     useAgentSettingsStore
       .getState()
-      .refresh()
+      .refresh(() =>
+        readSettingOnResync(
+          resync,
+          // A host that never saved any reads as none; the store fills in defaults.
+          (settings) => settings.agentSettings ?? DEFAULT_AGENT_SETTINGS,
+          () => agentSettingsClient.get()
+        )
+      )
       .catch((error: unknown) => {
         // A remote view whose host is unreachable keeps what it had; the
         // resync after the link returns reads it again.

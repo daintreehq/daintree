@@ -94,6 +94,7 @@ vi.mock("@xterm/xterm", () => ({
     onDimensionsChange() {
       return { dispose() {} };
     }
+    attachCustomKeyEventHandler() {}
     onData(listener: (data: string) => void) {
       this.onDataListener = listener;
       return { dispose: () => (this.onDataListener = null) };
@@ -216,7 +217,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cell.current = null;
-  useCanopyStore.setState({ listDrag: null });
+  useCanopyStore.setState({ listDrag: null, dockDrag: null });
   terminalResize.mockClear();
   xterm.current = null;
 });
@@ -334,6 +335,221 @@ describe("CanopyTerminal", () => {
     fireEvent.mouseDown(frame);
     xterm.current!.emitData("\x1b[I");
     expect(terminalInput.mock.calls).toEqual([[7, "y"]]);
+  });
+
+  describe("a drag the program reports", () => {
+    // SGR reports, as xterm sends them for Claude Code's fullscreen renderer.
+    const PRESS = "\x1b[<0;10;5M";
+    const MOTION = "\x1b[<32;14;5M";
+    const MIDDLE_MOTION = "\x1b[<33;14;5M";
+    const HOVER = "\x1b[<35;14;5M";
+    const RELEASE = "\x1b[<0;14;5m";
+    /** Past the gesture's own timer, so the next event has to open the gate itself. */
+    const nextTask = () => act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+    const stops: Array<() => void> = [];
+    afterEach(() => {
+      for (const stop of stops.splice(0)) stop();
+    });
+
+    /**
+     * Mouse reporting as xterm's MouseService does it: the press and hover from
+     * its element, then the drag's motion and release from its document, bound
+     * by a press and unbound only by a release with no button left held.
+     */
+    function reportLikeXterm(frame: Element) {
+      const inner = frame.firstElementChild!;
+      const doc = inner.ownerDocument;
+      const drag = (event: MouseEvent) => {
+        if (event.buttons === 0) return;
+        xterm.current!.emitData(event.buttons & 1 ? MOTION : MIDDLE_MOTION);
+      };
+      const release = (event: MouseEvent) => {
+        xterm.current!.emitData(RELEASE);
+        if (event.buttons === 0) unbind();
+      };
+      const unbind = () => {
+        doc.removeEventListener("mousemove", drag);
+        doc.removeEventListener("mouseup", release);
+      };
+      const press = () => {
+        xterm.current!.emitData(PRESS);
+        doc.addEventListener("mousemove", drag);
+        doc.addEventListener("mouseup", release);
+      };
+      const hover = (event: Event) => {
+        if (event instanceof MouseEvent && event.buttons === 0) xterm.current!.emitData(HOVER);
+      };
+      inner.addEventListener("mousedown", press);
+      inner.addEventListener("mousemove", hover);
+      stops.push(() => {
+        unbind();
+        inner.removeEventListener("mousedown", press);
+        inner.removeEventListener("mousemove", hover);
+      });
+      return inner;
+    }
+
+    async function openWithXterm() {
+      const { frame } = mount();
+      await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
+      return reportLikeXterm(frame);
+    }
+
+    async function pressIn(inner: Element, buttons = 1) {
+      fireEvent.mouseDown(inner, { button: 0, buttons });
+      await nextTask();
+    }
+
+    it("sends the motion and the release, which xterm takes at the document", async () => {
+      const inner = await openWithXterm();
+      await pressIn(inner);
+      fireEvent.mouseMove(document.body, { buttons: 1 });
+      await nextTask();
+      // Released past the panel's edge.
+      fireEvent.mouseUp(document.body, { button: 0, buttons: 0 });
+
+      expect(terminalInput.mock.calls).toEqual([
+        [7, PRESS],
+        [7, MOTION],
+        [7, RELEASE],
+      ]);
+    });
+
+    it("keeps following while another button is still held", async () => {
+      const inner = await openWithXterm();
+      await pressIn(inner, 5);
+      fireEvent.mouseUp(document.body, { button: 0, buttons: 4 });
+      await nextTask();
+      fireEvent.mouseMove(document.body, { buttons: 4 });
+      await nextTask();
+      fireEvent.mouseUp(document.body, { button: 1, buttons: 0 });
+
+      expect(terminalInput.mock.calls).toEqual([
+        [7, PRESS],
+        [7, RELEASE],
+        [7, MIDDLE_MOTION],
+        [7, RELEASE],
+      ]);
+    });
+
+    it("stops following once the button is up, and follows the next press again", async () => {
+      const inner = await openWithXterm();
+      await pressIn(inner);
+      fireEvent.mouseMove(document.body, { buttons: 1 });
+      fireEvent.mouseUp(document.body, { button: 0, buttons: 0 });
+      await nextTask();
+      expect(terminalInput.mock.calls.at(-1)).toEqual([7, RELEASE]);
+      terminalInput.mockClear();
+
+      fireEvent.mouseMove(document.body, { buttons: 1 });
+      xterm.current!.emitData(MOTION);
+      expect(terminalInput).not.toHaveBeenCalled();
+      await nextTask();
+
+      await pressIn(inner);
+      fireEvent.mouseMove(document.body, { buttons: 1 });
+      expect(terminalInput.mock.calls).toEqual([
+        [7, PRESS],
+        [7, MOTION],
+      ]);
+    });
+
+    it("ends a drag whose release it never saw at the next move with no button held", async () => {
+      const inner = await openWithXterm();
+      await pressIn(inner);
+      fireEvent.mouseMove(document.body, { buttons: 1 });
+      await nextTask();
+      expect(terminalInput.mock.calls.at(-1)).toEqual([7, MOTION]);
+      terminalInput.mockClear();
+
+      // The move that notices the button is up opens no gesture of its own.
+      const probe = () => xterm.current!.emitData("x");
+      document.addEventListener("mousemove", probe);
+      fireEvent.mouseMove(document.body, { buttons: 0 });
+      document.removeEventListener("mousemove", probe);
+      await nextTask();
+      fireEvent.mouseMove(document.body, { buttons: 1 });
+      xterm.current!.emitData(MOTION);
+      expect(terminalInput).not.toHaveBeenCalled();
+      await nextTask();
+
+      await pressIn(inner);
+      fireEvent.mouseMove(document.body, { buttons: 1 });
+      expect(terminalInput.mock.calls.at(-1)).toEqual([7, MOTION]);
+    });
+
+    it("sends nothing from a drag begun elsewhere that crosses the view", async () => {
+      const inner = await openWithXterm();
+      // A release lost off the window's edge: xterm still follows that drag.
+      await pressIn(inner);
+      fireEvent.mouseMove(document.body, { buttons: 0 });
+      await nextTask();
+      terminalInput.mockClear();
+
+      fireEvent.mouseDown(document.body, { button: 0, buttons: 1 });
+      await nextTask();
+      fireEvent.mouseMove(inner, { buttons: 1 });
+      await nextTask();
+      fireEvent.mouseUp(inner, { button: 0, buttons: 0 });
+      expect(terminalInput).not.toHaveBeenCalled();
+    });
+
+    it("follows nothing that started outside the view", async () => {
+      mount();
+      await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
+      fireEvent.mouseDown(document.body, { button: 0, buttons: 1 });
+      fireEvent.mouseMove(document.body, { buttons: 1 });
+      fireEvent.mouseUp(document.body, { button: 0, buttons: 0 });
+      xterm.current!.emitData(MOTION);
+      expect(terminalInput).not.toHaveBeenCalled();
+    });
+
+    it("sends hover over the view, never hover elsewhere", async () => {
+      const inner = await openWithXterm();
+      fireEvent.mouseMove(inner, { buttons: 0 });
+      await nextTask();
+      fireEvent.mouseMove(document.body, { buttons: 0 });
+      xterm.current!.emitData(HOVER);
+      expect(terminalInput.mock.calls).toEqual([[7, HOVER]]);
+    });
+
+    it("never sends the terminal's own replies in the middle of a drag", async () => {
+      const inner = await openWithXterm();
+      await pressIn(inner);
+      // Parsed while the motion was going in, after xterm's own report.
+      const replies = () => {
+        xterm.current!.emitData("\x1b[24;1R");
+        xterm.current!.emitData("\x1b[O");
+      };
+      document.addEventListener("mousemove", replies);
+      fireEvent.mouseMove(document.body, { buttons: 1 });
+      document.removeEventListener("mousemove", replies);
+      expect(terminalInput.mock.calls).toEqual([
+        [7, PRESS],
+        [7, MOTION],
+      ]);
+    });
+
+    it("removes the listeners it put on the document once the view is gone", async () => {
+      const { frame, unmount } = mount();
+      await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
+      const added = vi.spyOn(document, "addEventListener");
+      const removed = vi.spyOn(document, "removeEventListener");
+      try {
+        fireEvent.mouseDown(frame, { button: 0, buttons: 1 });
+        const follows = added.mock.calls.filter(
+          ([type, , capture]) => (type === "mousemove" || type === "mouseup") && capture === true
+        );
+        expect(follows.map(([type]) => type).sort()).toEqual(["mousemove", "mouseup"]);
+        unmount();
+        for (const [type, listener] of follows) {
+          expect(removed).toHaveBeenCalledWith(type, listener, true);
+        }
+      } finally {
+        added.mockRestore();
+        removed.mockRestore();
+      }
+    });
   });
 
   it("takes a key an input method holds, which xterm sends a task later", async () => {
@@ -481,6 +697,21 @@ describe("CanopyTerminal", () => {
       expect(terminalResize).toHaveBeenCalledWith(7, 99, 30);
     });
 
+    it("holds the PTY while the dock's edge is dragged, until the last edge lands (#16214)", async () => {
+      act(() => useCanopyStore.getState().setDockDrag(500));
+      await openSized();
+      act(() => useCanopyStore.getState().setListDrag(600));
+      expect(terminalResize).not.toHaveBeenCalled();
+      // The list's edge lands while the dock's still moves: nothing yet.
+      act(() => useCanopyStore.getState().setListDrag(null));
+      await settle();
+      expect(terminalResize).not.toHaveBeenCalled();
+      act(() => useCanopyStore.getState().setDockDrag(null));
+      await settle();
+      expect(terminalResize).toHaveBeenCalledTimes(1);
+      expect(terminalResize).toHaveBeenCalledWith(7, 99, 30);
+    });
+
     it("puts its grid back to the PTY's when the size is refused", async () => {
       await openSized(async () => {
         throw new Error("rate limited");
@@ -568,6 +799,8 @@ describe("CanopyTerminal", () => {
     const { container } = mount(onGoTo);
     await open({ watchId: 7, snapshot: null });
     expect(container.textContent).toContain("Couldn't show this terminal");
+    // The stream main opened for it is let go at once, not left running (#16214).
+    expect(vi.mocked(window.electron.canopy.unwatchTerminal).mock.calls).toEqual([[7]]);
     const goTo = [...container.querySelectorAll("button")].find(
       (button) => button.textContent === "Go to terminal"
     );

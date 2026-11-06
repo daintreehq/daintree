@@ -1,4 +1,4 @@
-import type { PanelTitleMode } from "../panel.js";
+import type { PanelTitleMode, ScheduledRunRef } from "../panel.js";
 
 /**
  * User-adjustable retention window for the agent resume journal, in days.
@@ -79,6 +79,11 @@ export interface AgentSessionRecord {
    * Canopy's Trash lists past the trash's own window.
    */
   trash?: AgentSessionTrashClose;
+  /**
+   * The scheduled run whose terminal the session was captured from (#15977),
+   * so a resume can tell a scheduled run's conversation from any other.
+   */
+  scheduledRun?: ScheduledRunRef;
 }
 
 /**

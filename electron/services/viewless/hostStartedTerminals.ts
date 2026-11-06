@@ -10,7 +10,10 @@
 
 export interface HostStartedTerminal {
   id: string;
-  /** Where the spawn placed it. Nothing moves a pane no view holds but a close, which forgets it. */
+  /**
+   * Where the spawn placed it. Nothing moves a pane no view holds but a
+   * scheduled run's done policy (#15982), or a close, which forgets it.
+   */
   location: "grid" | "dock" | "background";
   worktreeId?: string;
   /** The views seen holding it, which answer for it themselves. */
@@ -73,6 +76,12 @@ export function noteHeldByView(projectId: string, terminalIds: Iterable<string>,
   const entries = started.get(projectId);
   if (!entries) return;
   for (const id of terminalIds) entries.get(id)?.heldBy.add(viewId);
+}
+
+/** Moved by main to the background (#15982); the views that answer for it still do. */
+export function noteHostStartedTerminalBackgrounded(projectId: string, terminalId: string): void {
+  const entry = started.get(projectId)?.get(terminalId);
+  if (entry) entry.location = "background";
 }
 
 /** Closed by main: nothing is left to read for them here. */

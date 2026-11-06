@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RemoteHostsEvent } from "../../../../shared/types/ipc/remoteHosts.js";
 import type { CommandResult, CommandRunner } from "../commandRunner.js";
 import { HostSetupService, type HostSetupDeps } from "../HostSetupService.js";
@@ -323,7 +323,43 @@ describe("HostSetupService", () => {
     };
     const started = (scripts: string[]) =>
       scripts.some((c) => c.includes("open -n -g -a") || c.includes("systemctl --user start"));
+    const probes = (scripts: string[]) => scripts.filter((c) => c.includes("@@dt:uname")).length;
     const studio = { kind: "ssh", target: "studio" } as const;
+    const MAC_QUIT = () =>
+      MAC_STOPPED(true).replace(
+        `@@dt:hostmodestate ${hostState(true)}`,
+        `@@dt:hostmodestate ${JSON.stringify({ ...JSON.parse(hostState(true)), pid: 0, stopped: true })}`
+      );
+    const MAC_STARTED = () =>
+      MAC_STOPPED(true).replace(
+        "@@dt:end",
+        "@@dt:running yes\n@@dt:listening yes\n@@dt:hostpid 4242\n@@dt:launchagent yes\n@@dt:end"
+      );
+    /** A probe that never finished: ssh's output was cut short. */
+    const CUT_SHORT = "@@dt:uname Darwin arm64\n";
+    const LINUX_OFF = [
+      "@@dt:uname Linux x86_64",
+      "@@dt:install deb /opt/Daintree",
+      "@@dt:version 1.4.0",
+      "@@dt:unit yes",
+      `@@dt:hostmodestate ${hostState(false)}`,
+      "@@dt:end",
+    ].join("\n");
+    /** Daintree removed, its last Host mode record left behind. */
+    const MAC_UNINSTALLED = `@@dt:uname Darwin arm64\n@@dt:download yes\n@@dt:hostmodestate ${hostState(true)}\n@@dt:end`;
+    /** Holds the first probe until released; every probe answers `output`. */
+    const heldProbe = (output: string) => {
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      const state = { probed: 0, release: () => release() };
+      const run: CommandRunner = async (_command, args) => {
+        if (!(args.at(-1) ?? "").includes("@@dt:uname")) return ok();
+        state.probed++;
+        if (state.probed === 1) await held;
+        return ok(output);
+      };
+      return { run, state };
+    };
 
     it("starts a Mac that was a host before, after a power cut left it stopped", async () => {
       const running = MAC_STOPPED(true).replace(
@@ -399,6 +435,67 @@ describe("HostSetupService", () => {
       expect(started(quit.scripts)).toBe(false);
     });
 
+    it("starts a Daintree quit there on purpose when someone asks for the host back (#16170)", async () => {
+      const { run, scripts } = recording([MAC_QUIT(), MAC_QUIT(), MAC_STARTED()]);
+      const refusals: string[] = [];
+      await expect(
+        service("", { run }).setup.ensureHostRunning(studio, undefined, undefined, {
+          explicit: true,
+          onRefused: (refusal) => refusals.push(refusal),
+        })
+      ).resolves.toBe("started");
+      expect(started(scripts)).toBe(true);
+      expect(scripts.filter((c) => c.includes("open -n -g -a"))).toEqual([
+        expect.stringContaining(" --args --host-mode"),
+      ]);
+      expect(refusals).toEqual([]);
+      // Started as it was set up: nothing switched on or saved there.
+      expect(scripts.some((c) => c.includes("--enable-host-mode"))).toBe(false);
+    });
+
+    it("says why it started nothing, and never starts where Host mode is off even when asked", async () => {
+      const cases: Array<[string, string, boolean, string]> = [
+        ["quit, unasked", MAC_QUIT(), false, "quit"],
+        ["Host mode off, asked", MAC_STOPPED(false), true, "host-mode-off"],
+        [
+          "never a host, asked",
+          MAC_STOPPED(true).replace(/@@dt:hostmodestate .*\n/, ""),
+          true,
+          "host-mode-off",
+        ],
+        ["Linux service with Host mode off, asked", LINUX_OFF, true, "host-mode-off"],
+        ["not installed, asked", MAC_UNINSTALLED, true, "not-installed"],
+        ["probe cut short, asked", CUT_SHORT, true, "unreached"],
+      ];
+      for (const [why, output, explicit, refusal] of cases) {
+        const { run, scripts } = recording([output]);
+        const refusals: string[] = [];
+        await expect(
+          service("", { run }).setup.ensureHostRunning(studio, undefined, undefined, {
+            explicit,
+            onRefused: (r) => refusals.push(r),
+          }),
+          why
+        ).resolves.toBe("not-startable");
+        expect(refusals, why).toEqual([refusal]);
+        expect(started(scripts), why).toBe(false);
+      }
+    });
+
+    it("looks again past a held refusal when someone asks for the host back", async () => {
+      const { run, scripts } = recording([MAC_STOPPED(false)]);
+      const { setup } = service("", { run });
+      await setup.ensureHostRunning(studio);
+      const refusals: string[] = [];
+      await setup.ensureHostRunning(studio, undefined, undefined, {
+        onRefused: (r) => refusals.push(r),
+      });
+      expect(probes(scripts)).toBe(1);
+      expect(refusals).toEqual(["held"]);
+      await setup.ensureHostRunning(studio, undefined, undefined, { explicit: true });
+      expect(probes(scripts)).toBe(2);
+    });
+
     it("never installs: a host without Daintree is left as it is", async () => {
       const bare = recording(["@@dt:uname Darwin arm64\n@@dt:download yes\n@@dt:end"]);
       await expect(service("", { run: bare.run }).setup.ensureHostRunning(studio)).resolves.toBe(
@@ -413,6 +510,212 @@ describe("HostSetupService", () => {
         "listening"
       );
       expect(started(up.scripts)).toBe(false);
+    });
+
+    it("reads each fixture below as the refusal it is named for", async () => {
+      const read = (output: string) => service(output).setup.probe({ connection: studio });
+      expect(await read(MAC_QUIT())).toMatchObject({
+        install: expect.anything(),
+        hostModeListening: false,
+        hostModeState: { enabled: true, stopped: true },
+      });
+      expect(await read(LINUX_OFF)).toMatchObject({
+        install: expect.anything(),
+        advice: { hostModeUnit: true },
+        hostModeState: { enabled: false },
+      });
+      expect(await read(MAC_UNINSTALLED)).toMatchObject({
+        reachable: true,
+        install: null,
+        hostModeState: { enabled: true },
+      });
+    });
+
+    it("probes a host it can't start once, and goes by that until something changes there", async () => {
+      const outputs = {
+        quit: MAC_QUIT(),
+        "Host mode off on a Mac": MAC_STOPPED(false),
+        "Host mode off with a service to start": LINUX_OFF,
+        "never a host": MAC_STOPPED(true).replace(/@@dt:hostmodestate .*\n/, ""),
+        "not installed": "@@dt:uname Darwin arm64\n@@dt:download yes\n@@dt:end",
+        "uninstalled, its record left behind": MAC_UNINSTALLED,
+      };
+      for (const [why, output] of Object.entries(outputs)) {
+        const { run, scripts } = recording([output]);
+        const { setup } = service("", { run });
+        for (let dial = 0; dial < 3; dial++) {
+          await expect(setup.ensureHostRunning(studio), why).resolves.toBe("not-startable");
+        }
+        expect(probes(scripts), why).toBe(1);
+        expect(started(scripts), why).toBe(false);
+      }
+
+      const { run, scripts } = recording([MAC_QUIT()]);
+      const { setup } = service("", { run });
+      await setup.ensureHostRunning(studio);
+      // Another machine has its own answer, and a recheck of one leaves the other's.
+      const mini = { kind: "ssh", target: "mini" } as const;
+      await setup.ensureHostRunning(mini);
+      expect(probes(scripts)).toBe(2);
+      setup.recheckStart(studio);
+      await setup.ensureHostRunning(studio);
+      await setup.ensureHostRunning(studio);
+      await setup.ensureHostRunning(mini);
+      expect(probes(scripts)).toBe(3);
+      await setup.forgetArtifacts({ connection: studio });
+      await setup.ensureHostRunning(studio);
+      expect(probes(scripts)).toBe(4);
+      expect(started(scripts)).toBe(false);
+    });
+
+    it("probes again once the answer is ten minutes old, or the clock moved back past it", async () => {
+      const HOLD = 10 * 60_000;
+      let clock = 1_000_000;
+      const { run, scripts } = recording([MAC_QUIT()]);
+      const { setup } = service("", { run, now: () => clock });
+      await setup.ensureHostRunning(studio);
+      clock += HOLD - 1;
+      await setup.ensureHostRunning(studio);
+      expect(probes(scripts)).toBe(1);
+      clock += 1;
+      await setup.ensureHostRunning(studio);
+      expect(probes(scripts)).toBe(2);
+      // That probe's answer holds for ten minutes of its own.
+      clock += HOLD - 1;
+      await setup.ensureHostRunning(studio);
+      expect(probes(scripts)).toBe(2);
+      clock += 1;
+      await setup.ensureHostRunning(studio);
+      expect(probes(scripts)).toBe(3);
+      clock -= 60 * 60_000;
+      await setup.ensureHostRunning(studio);
+      expect(probes(scripts)).toBe(4);
+      expect(started(scripts)).toBe(false);
+    });
+
+    it("probes again when the last probe learned nothing", async () => {
+      const { run, scripts } = recording([CUT_SHORT]);
+      const { setup } = service("", { run });
+      await expect(setup.ensureHostRunning(studio)).resolves.toBe("not-startable");
+      await expect(setup.ensureHostRunning(studio)).resolves.toBe("not-startable");
+      expect(probes(scripts)).toBe(2);
+    });
+
+    it("keeps nothing a probe saw before a recheck it was under way through", async () => {
+      const { run, state } = heldProbe(MAC_QUIT());
+      const { setup } = service("", { run });
+      const first = setup.ensureHostRunning(studio);
+      await vi.waitFor(() => expect(state.probed).toBe(1));
+      // Another machine's recheck says nothing about this one.
+      setup.recheckStart({ kind: "ssh", target: "mini" });
+      state.release();
+      await expect(first).resolves.toBe("not-startable");
+      await setup.ensureHostRunning(studio);
+      expect(state.probed).toBe(1);
+
+      const again = heldProbe(MAC_QUIT());
+      const next = service("", { run: again.run }).setup;
+      const pending = next.ensureHostRunning(studio);
+      await vi.waitFor(() => expect(again.state.probed).toBe(1));
+      next.recheckStart(studio);
+      again.state.release();
+      await expect(pending).resolves.toBe("not-startable");
+      await next.ensureHostRunning(studio);
+      await next.ensureHostRunning(studio);
+      expect(again.state.probed).toBe(2);
+    });
+
+    it("keeps nothing a probe saw once its dial was cancelled", async () => {
+      const { run, state } = heldProbe(MAC_QUIT());
+      const { setup } = service("", { run });
+      const abort = new AbortController();
+      const first = setup.ensureHostRunning(studio, abort.signal);
+      await vi.waitFor(() => expect(state.probed).toBe(1));
+      abort.abort();
+      state.release();
+      await expect(first).resolves.toBe("not-startable");
+      await setup.ensureHostRunning(studio);
+      expect(state.probed).toBe(2);
+    });
+
+    it("probes again after switching Host mode on from here was tried, even when it failed", async () => {
+      const scripts: string[] = [];
+      const { setup } = service("", {
+        run: async (_command, args) => {
+          const script = args.at(-1) ?? "";
+          scripts.push(script);
+          if (script.includes("@@dt:uname")) return ok(MAC_QUIT());
+          if (script.includes("--enable-host-mode"))
+            return { ...ok(), code: 1, stderr: "no session" };
+          return ok();
+        },
+      });
+      await setup.ensureHostRunning(studio);
+      await expect(setup.startHostMode({ connection: studio })).rejects.toMatchObject({
+        code: "INTERNAL",
+      });
+      expect(scripts.some((c) => c.includes("--enable-host-mode"))).toBe(true);
+      const before = probes(scripts);
+      await setup.ensureHostRunning(studio);
+      expect(probes(scripts)).toBe(before + 1);
+    });
+
+    it("probes again after a start that failed", async () => {
+      const scripts: string[] = [];
+      const { setup } = service("", {
+        run: async (_command, args) => {
+          const script = args.at(-1) ?? "";
+          scripts.push(script);
+          if (script.includes("@@dt:uname")) return ok(MAC_STOPPED(true));
+          if (script.includes("open -n -g -a")) return { ...ok(), code: 1, stderr: "no session" };
+          return ok();
+        },
+      });
+      const onStart = vi.fn();
+      await expect(setup.ensureHostRunning(studio, undefined, onStart)).rejects.toMatchObject({
+        userMessage: expect.stringContaining("Log in there"),
+      });
+      expect(onStart).toHaveBeenCalledTimes(1);
+      await expect(setup.ensureHostRunning(studio)).rejects.toBeDefined();
+      expect(probes(scripts)).toBe(2);
+    });
+
+    it("says a start is under way only just before the start goes to the host", async () => {
+      const { run, scripts } = recording([MAC_STOPPED(true), MAC_STOPPED(true), MAC_STARTED()]);
+      const startedYet: boolean[] = [];
+      const onStart = vi.fn(() => startedYet.push(started(scripts)));
+      await expect(
+        service("", { run }).setup.ensureHostRunning(studio, undefined, onStart)
+      ).resolves.toBe("started");
+      expect(startedYet).toEqual([false]);
+      expect(started(scripts)).toBe(true);
+
+      // Checked on and left alone, found listening, or not answering: never starting.
+      const neverAHost = MAC_STOPPED(true).replace(/@@dt:hostmodestate .*\n/, "");
+      for (const output of [MAC_QUIT(), neverAHost, MAC_RUNNING_OLD, CUT_SHORT]) {
+        const quiet = vi.fn();
+        await service("", { run: recording([output]).run }).setup.ensureHostRunning(
+          studio,
+          undefined,
+          quiet
+        );
+        expect(quiet).not.toHaveBeenCalled();
+      }
+
+      // Cancelled while it was being checked on: the start never goes.
+      const { run: heldRun, state } = heldProbe(MAC_STOPPED(true));
+      const abort = new AbortController();
+      const cancelled = vi.fn();
+      const pending = service("", { run: heldRun }).setup.ensureHostRunning(
+        studio,
+        abort.signal,
+        cancelled
+      );
+      await vi.waitFor(() => expect(state.probed).toBe(1));
+      abort.abort();
+      state.release();
+      await expect(pending).resolves.toBe("not-startable");
+      expect(cancelled).not.toHaveBeenCalled();
     });
   });
 
@@ -489,6 +792,19 @@ describe("HostSetupService on Windows (WSL distros)", () => {
       mac.setup.probe({ connection: { kind: "wsl", distro: "Ubuntu" } })
     ).rejects.toMatchObject({ code: "UNSUPPORTED" });
     expect(mac.calls).toEqual([]);
+  });
+
+  it("goes by one answer for a distro however its name is cased", async () => {
+    const { setup, calls } = windowsService();
+    const probes = () => calls.filter(([, args]) => (args.at(-1) ?? "").includes("@@dt:uname"));
+    await expect(setup.ensureHostRunning({ kind: "wsl", distro: "Ubuntu-24.04" })).resolves.toBe(
+      "not-startable"
+    );
+    await setup.ensureHostRunning({ kind: "wsl", distro: "ubuntu-24.04" });
+    expect(probes()).toHaveLength(1);
+    setup.recheckStart({ kind: "wsl", distro: "UBUNTU-24.04" });
+    await setup.ensureHostRunning({ kind: "wsl", distro: "Ubuntu-24.04" });
+    expect(probes()).toHaveLength(2);
   });
 
   it("lets a forgotten host's distro go", async () => {

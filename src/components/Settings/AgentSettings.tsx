@@ -44,6 +44,8 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AgentInputSettings } from "./AgentInputSettings";
 import { AgentInventorySection } from "./AgentInventorySection";
 import { AgentQuotaSection } from "./AgentQuotaSection";
+import { AgentAccountsSection } from "./AgentAccountsSection";
+import type { SettingsTabClose } from "./settingsTabClose";
 import { isAgentLaunchable, isAgentReady } from "../../../shared/utils/agentAvailability";
 import { AgentShortcutCapture } from "@/components/KeyboardShortcuts";
 import { KbdChord } from "@/components/ui/Kbd";
@@ -175,12 +177,15 @@ interface AgentSettingsProps {
   activeSubtab: string | null;
   onSubtabChange: (id: string) => void;
   onSettingsChange?: () => void;
+  /** Closes Settings, so a sign-in terminal opened from here can be used. */
+  onClose?: SettingsTabClose;
 }
 
 export function AgentSettings({
   activeSubtab,
   onSubtabChange,
   onSettingsChange,
+  onClose,
 }: AgentSettingsProps) {
   const {
     settings,
@@ -667,6 +672,16 @@ export function AgentSettings({
             </SettingsGroup>
           </SettingsSection>
 
+          {/* Keyed so an offer raised for one agent never shows under another. */}
+          <AgentAccountsSection
+            key={activeAgent.id}
+            agentId={activeAgent.id}
+            agentName={activeAgent.name}
+            entry={activeEntry}
+            onClose={onClose}
+            onSettingsChange={onSettingsChange}
+          />
+
           {/* Unified scope editor — one set of controls for Default or any preset.
               The editor body is keyed on the scope id so rename/edit state resets
               naturally on scope switch (see #4958). */}
@@ -702,7 +717,7 @@ export function AgentSettings({
           <SettingsGroup id="agents-reset">
             <SettingsRow
               label={`Reset ${activeAgent.name} settings`}
-              description={`Returns launch and runtime settings to their defaults and deletes ${activeAgent.name}'s custom presets`}
+              description={`Returns launch and runtime settings to their defaults, deletes ${activeAgent.name}'s custom presets and forgets its accounts`}
               control={
                 <Button
                   size="sm"
@@ -727,7 +742,7 @@ export function AgentSettings({
               })();
             }}
             title={`Reset ${activeAgent.name} settings?`}
-            description={`Launch and runtime settings go back to their defaults, and ${activeAgent.name}'s custom presets are deleted. Project and CCR presets aren't affected.`}
+            description={`Launch and runtime settings go back to their defaults, ${activeAgent.name}'s custom presets are deleted and its accounts are forgotten. Project and CCR presets aren't affected, and account folders stay where they are.`}
             confirmLabel="Reset settings"
           />
         </>

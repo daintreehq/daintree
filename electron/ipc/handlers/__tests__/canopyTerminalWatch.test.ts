@@ -4,6 +4,7 @@ import type { WebContents } from "electron";
 import type { PtyClient } from "../../../services/PtyClient.js";
 import {
   activeTerminalWatches,
+  assistantWatchSlot,
   beginWatchRequest,
   followDriveLeaseChange,
   onSizeHoldsChange,
@@ -11,6 +12,7 @@ import {
   resizeWatchedTerminal,
   stopAllTerminalWatches,
   stopTerminalWatch,
+  stopTerminalWatchById,
   stopWorkerTerminalWatches,
   watchTerminal,
   watchedTerminal,
@@ -192,6 +194,130 @@ describe("watchTerminal", () => {
     expect(sent).toEqual([]);
     expect(releases[0]).toHaveBeenCalledTimes(1);
     expect(emitter.listenerCount("data-mirror")).toBe(0);
+  });
+});
+
+describe("the global assistant's slot (#16214)", () => {
+  /** Open the global assistant's stream as the assistant op does, in its own slot. */
+  function openGlobal(pty: PtyClient, sender: WebContents, runId = "global-1", spawnedAt = 300) {
+    return watchTerminal(
+      pty,
+      sender,
+      runId,
+      spawnedAt,
+      beginWatchRequest(sender.id, "global"),
+      undefined,
+      () => true,
+      { isBound: () => true, onEnded: () => () => {}, mayType: () => true },
+      false,
+      "global"
+    );
+  }
+
+  it("takes the global session's own slot, and every other subject the pane's", () => {
+    expect(assistantWatchSlot({ scope: { kind: "global" } })).toBe("global");
+    expect(assistantWatchSlot({ scope: { kind: "project", projectId: "p1" } })).toBe("detail");
+    expect(assistantWatchSlot(null)).toBe("detail");
+    expect(assistantWatchSlot({ scope: "global" })).toBe("detail");
+  });
+
+  it("streams beside the selected run, and a new selection leaves it open", async () => {
+    const { pty, emitter, releases } = fakePty();
+    const { sender, sent } = fakeSender();
+    const global = await openGlobal(pty, sender);
+    const first = await open(pty, sender, "run-1");
+    await open(pty, sender, "run-2");
+    // Only the pane's own stream was replaced.
+    expect(releases).toHaveLength(3);
+    expect(releases[0]).not.toHaveBeenCalled();
+    expect(releases[1]).toHaveBeenCalledTimes(1);
+    expect(watchedTerminal(1, first.watchId!)).toBeNull();
+    expect(watchedTerminal(1, global.watchId!)).toMatchObject({
+      runId: "global-1",
+      assistant: true,
+    });
+    emitter.emit("data-mirror", "global-1", "g", 5);
+    emitter.emit("data-mirror", "run-2", "w", 6);
+    expect(sent).toEqual([
+      expect.objectContaining({ watchId: global.watchId, runId: "global-1", data: "g" }),
+      expect.objectContaining({ runId: "run-2", data: "w" }),
+    ]);
+    expect(activeTerminalWatches().get(1)?.runId).toBe("run-2");
+    expect(activeTerminalWatches("global").get(1)?.runId).toBe("global-1");
+  });
+
+  it("keeps each slot's request its own: one overtakes only its slot's", async () => {
+    const { pty, resolveSnapshots } = fakePty("manual");
+    const { sender } = fakeSender();
+    const global = openGlobal(pty, sender);
+    const worker = open(pty, sender, "run-1");
+    resolveSnapshots({ data: "x", cols: 80, rows: 24 });
+    expect((await global).watchId).not.toBeNull();
+    expect((await worker).watchId).not.toBeNull();
+  });
+
+  it("lets a newer global request overtake an older one, and a pane's stop leave it be", async () => {
+    const { pty, resolveSnapshots } = fakePty("manual");
+    const { sender } = fakeSender();
+    const older = openGlobal(pty, sender, "global-1", 300);
+    const newer = openGlobal(pty, sender, "global-1", 301);
+    const kept = openGlobal(pty, sender, "global-2", 302);
+    stopTerminalWatch(1, "detail");
+    resolveSnapshots({ data: "x", cols: 80, rows: 24 });
+    expect((await older).watchId).toBeNull();
+    expect((await newer).watchId).toBeNull();
+    expect((await kept).watchId).not.toBeNull();
+    expect(activeTerminalWatches("global").get(1)?.runId).toBe("global-2");
+    const cancelled = openGlobal(pty, sender, "global-3", 303);
+    stopTerminalWatch(1, "global");
+    resolveSnapshots({ data: "x", cols: 80, rows: 24 });
+    expect((await cancelled).watchId).toBeNull();
+    expect(activeTerminalWatches("global").size).toBe(0);
+  });
+
+  it("ends one slot by its stream, or by its slot, and both when the view stops", async () => {
+    const { pty, releases } = fakePty();
+    const { sender } = fakeSender();
+    const global = await openGlobal(pty, sender);
+    await open(pty, sender, "run-1");
+    stopTerminalWatch(1, "detail");
+    expect(activeTerminalWatches().size).toBe(0);
+    expect(activeTerminalWatches("global").get(1)?.watchId).toBe(global.watchId);
+    const worker = await open(pty, sender, "run-2");
+    stopTerminalWatchById(1, global.watchId!);
+    expect(activeTerminalWatches("global").size).toBe(0);
+    expect(activeTerminalWatches().get(1)?.watchId).toBe(worker.watchId);
+    await openGlobal(pty, sender);
+    stopTerminalWatch(1);
+    expect(activeTerminalWatches().size).toBe(0);
+    expect(activeTerminalWatches("global").size).toBe(0);
+    expect(releases.every((release) => release.mock.calls.length === 1)).toBe(true);
+  });
+
+  it("sizes each of a view's terminals through its own stream", async () => {
+    const { pty } = fakePty();
+    const { sender } = fakeSender();
+    const global = await openGlobal(pty, sender);
+    const worker = await open(pty, sender, "run-1");
+    resizeWatchedTerminal(pty, 1, worker.watchId!, 90, 30);
+    resizeWatchedTerminal(pty, 1, global.watchId!, 70, 20);
+    expect((pty.resize as unknown as ReturnType<typeof vi.fn>).mock.calls).toEqual([
+      ["run-1", 90, 30],
+      ["global-1", 70, 20],
+    ]);
+    // Letting go of one hands back only its own terminal's size.
+    stopTerminalWatchById(1, global.watchId!);
+    expect((pty.resize as unknown as ReturnType<typeof vi.fn>).mock.calls.at(-1)).toEqual([
+      "global-1",
+      120,
+      36,
+    ]);
+    resizeWatchedTerminal(pty, 1, worker.watchId!, 100, 30);
+    expect((pty.resize as unknown as ReturnType<typeof vi.fn>).mock.calls.at(-1)).toEqual([
+      "run-1",
+      100,
+      30,
+    ]);
   });
 });
 

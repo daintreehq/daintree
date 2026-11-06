@@ -6,6 +6,7 @@ import { attributeClose } from "./closeAttribution.js";
 import { isAssistantTerminalRecord } from "../assistantTerminal.js";
 import { projectStore } from "../ProjectStore.js";
 import { createLogger } from "../../utils/logger.js";
+import { scheduledRunForRecord } from "../../../shared/utils/scheduledRunProvenance.js";
 
 const logger = createLogger("main:ProjectSessionJournal");
 
@@ -227,6 +228,7 @@ export async function gracefulTeardownAndJournalProject(
             agentModelId: info.agentModelId,
             cwd: info.cwd ?? undefined,
             branch: info.worktreeId ? branchByWorktree.get(info.worktreeId) : undefined,
+            ...scheduledRunForRecord(info),
             // The project closing ends its panes; one in the trash the user had closed.
             ...attributeClose(info, "sleep"),
           },

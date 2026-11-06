@@ -27,6 +27,23 @@ function managersIn(command: string): string[] {
 }
 
 describe("buildBaselinePrerequisites", () => {
+  it("gates on Git alone; Node.js and npm stay as non-blocking guidance", () => {
+    const specs = buildBaselinePrerequisites(null);
+    const severity = (tool: string) => specs.find((s) => s.tool === tool)?.severity;
+
+    expect(specs.filter((s) => s.severity === "fatal").map((s) => s.tool)).toEqual(["git"]);
+    // Still shown (a "silent" spec is hidden from the wizard) and still carrying
+    // install commands, so a user choosing an npm route sees them.
+    for (const tool of ["node", "npm"]) {
+      expect(severity(tool)).toBeDefined();
+      expect(severity(tool)).not.toBe("silent");
+    }
+    const nodeCommands = specs
+      .find((s) => s.tool === "node")
+      ?.installBlocks?.macos?.flatMap((b) => b.commands ?? []);
+    expect(nodeCommands?.length).toBeGreaterThan(0);
+  });
+
   it.each(FAMILIES)("installs git with %s's own package manager", (family) => {
     const [block] = linuxBlocks(buildBaselinePrerequisites(family), "git");
     const managers = managersIn(block?.commands?.[0] ?? "");

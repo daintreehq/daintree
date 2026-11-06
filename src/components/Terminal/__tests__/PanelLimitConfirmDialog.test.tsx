@@ -52,12 +52,18 @@ function setLimits(confirmationLimit: number, hardLimit: number) {
 
 /**
  * Start a batch the way a recipe run does. The answer comes back boxed: an
- * async function returning the bare promise would wait for the user.
+ * async function returning the bare promise would wait for the user. Any slots
+ * granted go straight back; these cases read only the decision.
  */
 async function startBatch(currentCount: number, requestedCount: number) {
   let result!: Promise<{ allowed: number; declined: boolean }>;
   await act(async () => {
-    result = preflightSpawnBatchLimit(currentCount, requestedCount);
+    result = preflightSpawnBatchLimit(() => currentCount, requestedCount).then(
+      ({ grant, ...decision }) => {
+        grant?.release();
+        return decision;
+      }
+    );
   });
   return { result };
 }

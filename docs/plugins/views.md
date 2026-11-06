@@ -255,6 +255,8 @@ variants: `(bare)` `-subtle` `-text` `-border`
 
 Everything else Tailwind ships that does not name a colour works too — this list is the part that is Daintree's rather than Tailwind's.
 
+**A font of your own ships inside the plugin.** Put the file under your plugin root, build its URL against your view module's own with `new URL("./fonts/inter-latin.woff2", import.meta.url)`, and point an `@font-face` in a `<style>` your view mounts at it (`src: url("${fontUrl}") format("woff2")`), then name the family on your own elements. Resolving against `import.meta.url` keeps the font on the authority, generation and host your view was served from; a hand-written `plugin://${pluginId}/…` URL always reads this machine's copy, so it misses in a window attached to another machine. `.woff2`, `.woff`, `.ttf` and `.otf` are served with their font types. Beyond the app's own origin, the renderer's `font-src` admits only `plugin:` and `data:`, so a font hosted on the web does not load. You are redistributing the font, so its licence is yours to honour: ship the licence file it requires beside it. A font directly inside an `assets/` directory with a content hash ending its name (`assets/inter-latin-3f9c2a7b.woff2`) is cached as immutable; any other path revalidates against its `Last-Modified`.
+
 ### Copy-ready shapes
 
 ```jsx

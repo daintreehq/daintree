@@ -481,6 +481,24 @@ describe("WindowRegistry", () => {
       expect(ids(registry)).toEqual([3, 1, 2]);
     });
 
+    it("leaves never-focused windows out when asked for focused ones only", () => {
+      const registry = new WindowRegistry();
+      const app = makeMockApp();
+      registry.wireFocusTracking(app);
+      const w1 = makeMockWindow(1, 100);
+      const w2 = makeMockWindow(2, 200);
+      const w3 = makeMockWindow(3, 300);
+      registry.register(w1);
+      registry.register(w2);
+      registry.register(w3);
+
+      app.emit("browser-window-focus", {}, w3);
+      app.emit("browser-window-focus", {}, w1);
+
+      expect(registry.focusOrder({ focusedOnly: true }).map((c) => c.windowId)).toEqual([1, 3]);
+      expect(ids(registry)).toEqual([1, 3, 2]);
+    });
+
     it("falls back to registration order when nothing has been focused", () => {
       const registry = new WindowRegistry();
       registry.register(makeMockWindow(1, 100));

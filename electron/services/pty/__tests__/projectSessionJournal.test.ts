@@ -42,6 +42,7 @@ interface FakeTerminal {
   cwd: string;
   agentLaunchFlags?: string[];
   agentModelId?: string;
+  scheduledRun?: { scheduleId: string; runId: string };
   isTrashed?: boolean;
   trashExpiresAt?: number;
   isAssistantTerminal?: boolean;
@@ -112,7 +113,30 @@ describe("gracefulTeardownAndJournalProject", () => {
     expect(journalMock.journalAgentSession).toHaveBeenCalledTimes(1);
     const [record, ctx] = journalMock.journalAgentSession.mock.calls[0]!;
     expect(record).toMatchObject({ sessionId: "s1", agentId: "claude", projectId: "proj" });
+    expect(record).not.toHaveProperty("scheduledRun");
     expect(ctx).toMatchObject({ terminalId: "t1" });
+  });
+
+  it("names a scheduled run's ids on the record a project close journals (#15977)", async () => {
+    const run = { scheduleId: "schedule-1", runId: "run-1" };
+    const { client } = makePtyClient({
+      terminals: [
+        {
+          id: "t1",
+          projectId: "proj",
+          launchAgentId: "claude",
+          cwd: "/a",
+          spawnedAt: 1,
+          scheduledRun: run,
+        },
+      ],
+      outcome: { confirmed: true, sessions: [{ id: "t1", agentSessionId: "s1" }] },
+    });
+
+    await gracefulTeardownAndJournalProject("proj", client);
+
+    const [record] = journalMock.journalAgentSession.mock.calls[0]!;
+    expect(record).toMatchObject({ sessionId: "s1", scheduledRun: run });
   });
 
   it("journals a project close as sleep, and a pane already in the trash as the user's close", async () => {

@@ -14,6 +14,7 @@ import {
   getEffectiveRegistry,
   type AgentConfig,
   type AgentAuthCheck,
+  type AgentAccountDeclaration,
 } from "../../shared/config/agentRegistry.js";
 import { refreshPath, expandWindowsEnvVars } from "../setup/environment.js";
 import { store } from "../store.js";
@@ -81,6 +82,20 @@ const WINDOWS_EXECUTABLE_PRIORITY = new Map<string, number>([
 ]);
 
 const WINDOWS_APPENDED_EXTENSIONS = [".cmd", ".exe", ".bat", ".com"];
+
+/**
+ * Whether `p` names one location wherever it is resolved from. On Windows
+ * `isAbsolute` also accepts `\x` and `/x`, which land on whichever drive is
+ * current, so only a drive-qualified (`C:\x`) or UNC (`\\server\share`) path
+ * counts there.
+ */
+export function isFullyQualifiedPath(
+  p: string,
+  platform: NodeJS.Platform = process.platform
+): boolean {
+  if (platform !== "win32") return isAbsolute(p);
+  return /^[A-Za-z]:[\\/]/.test(p) || /^[\\/]{2}[^\\/]/.test(p);
+}
 
 /**
  * Synthesise probe paths for PyPI-distributed agents. Modern Python tool
@@ -407,7 +422,7 @@ export class CliAvailabilityService {
     // found nothing), classify as `unauthenticated` — the binary exists but
     // will require login on first launch. The CLI handles auth at runtime.
     const authConfirmed = config.authCheck
-      ? await this.checkAuth(config.id, config.authCheck)
+      ? await this.checkAuth(config.id, config.authCheck, config.account)
       : undefined;
 
     const state: AgentAvailabilityState = authConfirmed === false ? "unauthenticated" : "ready";
@@ -429,7 +444,11 @@ export class CliAvailabilityService {
     };
   }
 
-  private async checkAuth(agentId: string, authCheck: AgentAuthCheck): Promise<boolean> {
+  private async checkAuth(
+    agentId: string,
+    authCheck: AgentAuthCheck,
+    account: AgentAccountDeclaration | undefined
+  ): Promise<boolean> {
     // Shared flag so the checkPromise knows the timeoutPromise already won
     // the race. Without this, a slow fs.access can later resolve/reject and
     // emit a misleading "auth discovery: no credential found" log for an
@@ -490,6 +509,33 @@ export class CliAvailabilityService {
             return true;
           } catch {
             // File not found, continue
+          }
+        }
+      }
+
+      if (authCheck.configHomePaths && account?.kind === "config-folder") {
+        const { envVar, defaultDir } = account;
+        const paths = authCheck.configHomePaths;
+        const relocated = process.env[envVar];
+        const isRelocated = relocated !== undefined && relocated.trim() !== "";
+        // A root that isn't fully qualified resolves against the agent's
+        // working directory (or drive), which differs per terminal, so nothing
+        // here can confirm it.
+        const root = !isRelocated
+          ? join(home, defaultDir)
+          : isFullyQualifiedPath(relocated)
+            ? relocated
+            : null;
+        if (root !== null) {
+          for (const relPath of paths) {
+            const fullPath = join(root, relPath);
+            checkedPaths.push(fullPath);
+            try {
+              await access(fullPath, constants.R_OK);
+              return true;
+            } catch {
+              // File not found, continue
+            }
           }
         }
       }

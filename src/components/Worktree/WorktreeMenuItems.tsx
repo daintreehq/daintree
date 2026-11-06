@@ -154,6 +154,12 @@ export interface WorktreeMenuItemsProps {
    */
   worktree?: WorktreeState;
   components: WorktreeMenuComponents;
+  /**
+   * The sidebar's View ▸ density submenu, placed with Organize so a
+   * presentation choice never sits under the destructive group. Only the
+   * sidebar card's context menu passes one.
+   */
+  viewSubmenu?: React.ReactNode;
   launchAgents: WorktreeLaunchAgentItem[];
   recipes: Array<{ id: string; name: string }>;
   runningRecipeId: string | null;
@@ -308,6 +314,7 @@ function joinGroups(groups: React.ReactNode[][], Separator: MenuComponent): Reac
 export function WorktreeMenuItems({
   worktree,
   components: C,
+  viewSubmenu,
   launchAgents,
   recipes,
   runningRecipeId,
@@ -491,16 +498,12 @@ export function WorktreeMenuItems({
   );
 
   // ---------------------------------------------------------------- Review
-  const changedFileCount = worktree?.worktreeChanges?.changes.length ?? 0;
+  const changedFileCount = worktree?.worktreeChanges?.changedFileCount ?? 0;
   const reviewRows = !worktree
     ? []
     : [
-        onOpenReviewHub && (
-          <C.Item key="review-hub" onSelect={onOpenReviewHub}>
-            <GitCommitHorizontal className={ICON} />
-            Review worktree
-          </C.Item>
-        ),
+        // "Review worktree" itself sits at the top of the menu as a direct
+        // item; repeating it here gave the menu two items of one name.
         onOpenChanges && (
           <C.Item
             key="open-changes"
@@ -1376,11 +1379,30 @@ export function WorktreeMenuItems({
     </C.Item>
   );
 
+  // The two things a card's menu is opened for most, one click away rather
+  // than behind a submenu each time. Launch keeps the full launcher among its
+  // rows; Review drops the hub so the menu never holds two items of one name.
+  const directRows = compact(
+    onOpenPanelPalette && (
+      <C.Item key="new-session" onSelect={() => onOpenPanelPalette(source)}>
+        <Plus className={ICON} />
+        New session…
+      </C.Item>
+    ),
+    worktree && onOpenReviewHub && (
+      <C.Item key="review-direct" onSelect={onOpenReviewHub}>
+        <GitCommitHorizontal className={ICON} />
+        Review worktree
+      </C.Item>
+    )
+  );
+
   const rows = joinGroups(
     [
+      directRows,
       compact(launchSub, openSub, !quietGit && reviewSub, gitSub),
       compact(sessionsSub, recipesSub, runtimeSub),
-      compact(linkedWorkSub, copySub, organizeSub, extensionsSub),
+      compact(linkedWorkSub, copySub, organizeSub, viewSubmenu, extensionsSub),
       compact(deleteItem),
     ],
     C.Separator

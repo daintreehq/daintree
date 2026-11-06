@@ -81,4 +81,5 @@ interface PanelPreviewWorkerFixtures {
  */
 declare const test: _playwright_test.TestType<_playwright_test.PlaywrightTestArgs & _playwright_test.PlaywrightTestOptions & PanelPreviewFixtures, _playwright_test.PlaywrightWorkerArgs & _playwright_test.PlaywrightWorkerOptions & PanelPreviewWorkerFixtures>;
 
-export { type PanelPreview, type PanelPreviewFixtures, type PanelPreviewOptions, type PanelPreviewWorkerFixtures, test };
+export { test };
+export type { PanelPreview, PanelPreviewFixtures, PanelPreviewOptions, PanelPreviewWorkerFixtures };

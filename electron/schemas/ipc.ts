@@ -8,6 +8,7 @@ import { BUILT_IN_AGENT_IDS } from "../../shared/config/agentIds.js";
 import { TERMINAL_SPAWN_SOURCES } from "../../shared/types/panel.js";
 import { MAX_TERMINAL_GRID_DIMENSION } from "../../shared/types/terminal.js";
 import { HANDBACK_CODE_PATTERN } from "../../shared/types/handback.js";
+import { normalizeDisplayEmoji } from "../../shared/utils/displayIdentity.js";
 import { COPY_TREE_RUN_SOURCES } from "../../shared/types/ipc/copyTreeHistory.js";
 import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../shared/utils/recipeSanitizer.js";
 import {
@@ -34,6 +35,17 @@ const TitleModeSchema = z.enum(["default", "custom", "user"]);
  * staying undeclared.
  */
 const SpawnSourceSchema = z.enum(TERMINAL_SPAWN_SOURCES).optional().catch(undefined);
+/** The scheduled run a `schedule`-spawned terminal names (#15977). */
+const ScheduledRunRefSchema = z.object({
+  scheduleId: z.string().min(1),
+  runId: z.string().min(1),
+});
+/**
+ * Tolerant on read for the same reason as `spawnedBy`. Whether it stands depends
+ * on the source beside it, which `readSpawnProvenance` checks where the snapshot
+ * is restored.
+ */
+const SnapshotScheduledRunSchema = ScheduledRunRefSchema.optional().catch(undefined);
 
 // ============================================================================
 // Terminal Entry Validation Schemas
@@ -110,6 +122,7 @@ export const AppStateTerminalEntrySchema = z
     browserConsoleOpen: z.boolean().optional(),
     devPreviewConsoleOpen: z.boolean().optional(),
     spawnedBy: SpawnSourceSchema,
+    scheduledRun: SnapshotScheduledRunSchema,
     pluginId: z.string().optional(),
   })
   .passthrough()
@@ -162,6 +175,12 @@ export const TerminalSnapshotSchema = z
     launchAgentId: LaunchAgentIdSchema.optional(),
     title: z.string(),
     titleMode: TitleModeSchema.optional(),
+    // A damaged persona is dropped, never the panel wearing it.
+    displayEmoji: z
+      .string()
+      .optional()
+      .transform((value) => normalizeDisplayEmoji(value))
+      .catch(undefined),
     cwd: z.string().optional(),
     worktreeId: z.string().optional(),
     location: TerminalLocationSchema,
@@ -185,6 +204,7 @@ export const TerminalSnapshotSchema = z
     callerLaunchFlags: z.array(z.string()).optional(),
     agentModelId: z.string().optional(),
     spawnedBy: SpawnSourceSchema,
+    scheduledRun: SnapshotScheduledRunSchema,
     agentPresetId: z.string().optional(),
     agentPresetColor: z.string().optional(),
     originalPresetId: z.string().optional(),
@@ -413,10 +433,16 @@ export const TerminalSpawnOptionsSchema = z.object({
   isEphemeral: z.boolean().optional(),
   agentLaunchFlags: z.array(z.string()).optional(),
   agentModelId: z.string().optional(),
+  // Listed or zod strips it, and a session captured when the agent ends no
+  // longer names its scheduled run (#15977).
+  scheduledRun: ScheduledRunRefSchema.optional(),
   // Session id already known at launch (#11782), recorded on the terminal
   // record at spawn. Must be listed here or zod strips it and the id never
   // reaches the pty-host.
   agentSessionId: z.string().optional(),
+  // Listed or zod strips it, and a resume that must be exact would start a
+  // fresh conversation under the id instead (#16019).
+  exactResume: z.boolean().optional(),
   worktreeId: z.string().optional(),
   agentPresetId: z.string().optional(),
   agentPresetColor: z.string().optional(),
@@ -424,6 +450,8 @@ export const TerminalSpawnOptionsSchema = z.object({
   // Handback code for the initial prompt (#12488). Listed or zod strips it, and
   // held to the marker grammar because the pty-host searches for it literally.
   handbackCode: z.string().regex(HANDBACK_CODE_PATTERN).optional(),
+  // A recipe step's When done (#16172), armed on this launch alone. Listed or zod strips it.
+  whenDone: z.enum(["background", "close"]).optional(),
   // Listed or zod strips it, and every send to a run that has its first prompt
   // would be offered as that record again (#15521).
   hasFirstPrompt: z.boolean().optional(),
@@ -658,9 +686,15 @@ export const CopyTreeInjectPayloadSchema = z.object({
   opId: OperationIdSchema.optional(),
 });
 
-export const CopyTreeCancelPayloadSchema = z.object({
-  injectionId: z.string().min(1).optional(),
-});
+export const CopyTreeCancelPayloadSchema = z
+  .object({
+    injectionId: z.string().min(1).optional(),
+    reason: z.enum(["input-locked"]).optional(),
+  })
+  // A reason names one run's stop; cancel-all is always the user's.
+  .refine((payload) => payload.reason === undefined || payload.injectionId !== undefined, {
+    message: "A stop reason needs an injectionId",
+  });
 
 // Test-config dry runs send `null` for fields the user explicitly cleared in the
 // unsaved settings form (Electron's structured clone drops `undefined` keys, so
@@ -770,6 +804,7 @@ export const DiffMediaReadFileVersionsPayloadSchema = z.object({
     .max(4096)
     // eslint-disable-next-line no-control-regex
     .regex(/^[^\x00]*$/, "Null bytes not allowed"),
+  side: z.enum(["staged", "unstaged"]).optional(),
   known: z
     .object({
       head: z.string().max(256).optional(),
@@ -1049,6 +1084,9 @@ export const WorktreeCreatePayloadSchema = z.object({
     // reaches WorkspaceService, which owns collision handling atomically — a
     // renderer-side check cannot, because it reserves nothing.
     collisionPolicy: z.enum(["suffix", "error"]).optional(),
+    // Fetch the base before branching (#15733). Declared so the request
+    // reaches the host instead of quietly branching from the last-fetched ref.
+    fetchBase: z.boolean().optional(),
   }),
   // Named by a remote view, so a create whose answer was lost can be looked up
   // by id instead of being repeated. A local view names none.

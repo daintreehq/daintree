@@ -5,14 +5,16 @@ import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/
 import { AppPaletteDialog, PaletteFooterHints } from "@/components/ui/AppPaletteDialog";
 import { PaletteOverflowNotice } from "@/components/ui/PaletteOverflowNotice";
 import { HighlightedText, findMatchIndices } from "@/components/ui/HighlightedText";
-import type { PanelKindOption } from "@/hooks/usePanelPalette";
+import { MORE_AGENTS_PANEL_ID, type PanelKindOption } from "@/hooks/usePanelPalette";
 import { PANEL_KIND_ORIGIN_LABELS } from "@/utils/panelKindOriginCopy";
 import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 import { PanelKindIcon } from "./PanelKindIcon";
+import { TailKeepingText, sliceRanges } from "@/components/ui/TailKeepingText";
 import { usePanelStore } from "@/store/panelStore";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
 import { countPanelsTowardLimit } from "@/store/slices/panelRegistry/panelCount";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
+import { KbdChord } from "@/components/ui/Kbd";
 import { keyBelongsToField } from "@/hooks/useListboxCursor";
 import { useRemoteHostName } from "@/hooks/useSettingsOwner";
 
@@ -31,6 +33,23 @@ interface PanelPaletteProps {
   onHoverIndex?: (index: number) => void;
   onConfirm: () => void;
   onClose: () => void;
+}
+
+/**
+ * What Enter does on the highlighted row, said the way the launcher says it.
+ * Names stay as written — "to create codex" read as a typo — and the verb
+ * follows what the row actually does: a resume row picks a session back up, and
+ * a row that isn't installed (or "More agents…") opens setup, not a panel.
+ * Null where Enter does nothing, so the footer never promises an action.
+ */
+export function getPanelPaletteEnterLabel(kind: PanelKindOption | null): string | null {
+  if (!kind) return null;
+  if (kind.isStale) return null;
+  if (kind.id === MORE_AGENTS_PANEL_ID) return "to set up agents";
+  if (kind.installed === false) return `to set up ${kind.name}`;
+  if (kind.category === "resume") return "to resume session";
+  if (kind.category === "agent") return `to launch ${kind.name}`;
+  return `to open ${kind.name}`;
 }
 
 const SECTION_LABELS: Record<"agent" | "tool" | "resume", string> = {
@@ -115,7 +134,11 @@ export function PanelPalette({
           }
           break;
         case "Tab":
+          // Stopped as well as prevented, as in SearchablePalette: the dialog's
+          // window-level focus wrap otherwise sees Shift+Tab on the field (its
+          // first tabbable) and moves focus to the last control.
           e.preventDefault();
+          e.stopPropagation();
           if (e.shiftKey) {
             onSelectPrevious();
           } else {
@@ -148,6 +171,7 @@ export function PanelPalette({
   const isSearching = query.trim().length > 0;
   const selectedKind =
     selectedIndex >= 0 && selectedIndex < results.length ? results[selectedIndex] : null;
+  const enterLabel = getPanelPaletteEnterLabel(selectedKind ?? null);
 
   const renderOption = (kind: PanelKindOption, index: number) => {
     const isStale = kind.isStale === true;
@@ -169,6 +193,19 @@ export function PanelPalette({
       [kind.origin ? PANEL_KIND_ORIGIN_LABELS[kind.origin] : undefined, kind.description]
         .filter(Boolean)
         .join(" · ") || null;
+    const descriptionIndices = kind.origin
+      ? undefined
+      : findMatchIndices(matchesById.get(kind.id), "description");
+    // The description leads with the session's worktree or branch
+    // (`resumeSessionItems`), so that prefix can be laid out on its own.
+    const location = kind.worktreeName ?? kind.branchName;
+    const resumeLocation =
+      kind.category === "resume" &&
+      location &&
+      secondaryText?.startsWith(location) &&
+      secondaryText.length > location.length
+        ? location
+        : null;
     return (
       <button
         key={kind.id}
@@ -208,8 +245,41 @@ export function PanelPalette({
               indices={findMatchIndices(matchesById.get(kind.id), "name")}
             />
           </div>
-          {secondaryText && (
-            <div className="text-xs text-text-secondary truncate">{secondaryText}</div>
+          {kind.shortcut ? (
+            // The launch chord as keycaps, the way the header and footers
+            // draw every other shortcut, not as a line of glyph text.
+            <KbdChord shortcut={kind.shortcut} density="compact" className="mt-0.5" />
+          ) : (
+            secondaryText &&
+            (resumeLocation ? (
+              // A resume row's location is what tells two sessions with the
+              // same title apart, and worktrees differ at the end of their
+              // branch, so it keeps its tail and the model and age give way
+              // first.
+              <div className="flex min-w-0 text-xs text-text-secondary">
+                <TailKeepingText
+                  text={resumeLocation}
+                  indices={sliceRanges(descriptionIndices, 0, resumeLocation.length)}
+                  className="shrink"
+                />
+                <span className="min-w-0 shrink-[10] truncate whitespace-pre">
+                  <HighlightedText
+                    text={secondaryText.slice(resumeLocation.length)}
+                    indices={sliceRanges(
+                      descriptionIndices,
+                      resumeLocation.length,
+                      secondaryText.length
+                    )}
+                  />
+                </span>
+              </div>
+            ) : (
+              <div className="text-xs text-text-secondary truncate">
+                {/* Matched words light up here too: a resume row is often
+                    found by its worktree or model, which live on this line. */}
+                <HighlightedText text={secondaryText} indices={descriptionIndices} />
+              </div>
+            ))
           )}
         </div>
         {badgeLabel && (
@@ -257,7 +327,7 @@ export function PanelPalette({
   return (
     <AppPaletteDialog isOpen={isOpen} onClose={onClose} ariaLabel="Panel palette" tier="anchored">
       <AppPaletteDialog.Header
-        label={showCounter ? `New Panel (${panelCount} / ${hardLimit})` : "New Panel"}
+        label={showCounter ? `New panel (${panelCount} / ${hardLimit})` : "New panel"}
         shortcut={panelPaletteShortcut}
       >
         <AppPaletteDialog.Input
@@ -265,7 +335,7 @@ export function PanelPalette({
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Select a panel type…"
+          placeholder="Search agents, tools, and sessions"
           role="combobox"
           // The listbox only exists while there are rows to put in it.
           aria-expanded={isOpen && results.length > 0}
@@ -280,6 +350,7 @@ export function PanelPalette({
         ariaLabel="Panel types"
         activeDescendant={activeDescendant}
         onNavigationKeyDown={handleKeyDown}
+        keepPointerFocusOnInput
       >
         {results.length === 0 ? (
           <AppPaletteDialog.Empty
@@ -300,12 +371,7 @@ export function PanelPalette({
       </AppPaletteDialog.Body>
 
       <AppPaletteDialog.Footer>
-        <PaletteFooterHints
-          primaryHint={{
-            keys: ["↵"],
-            label: selectedKind ? `to create ${selectedKind.name.toLowerCase()}` : "to create",
-          }}
-        />
+        {enterLabel && <PaletteFooterHints primaryHint={{ keys: ["↵"], label: enterLabel }} />}
       </AppPaletteDialog.Footer>
     </AppPaletteDialog>
   );

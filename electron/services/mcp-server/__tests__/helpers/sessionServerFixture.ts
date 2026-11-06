@@ -62,10 +62,11 @@ export function callHandler(
 /** The structured error envelope a failed tool call carries in its text content. */
 export function toolErrorPayload(result: { content: unknown }): {
   code: string;
+  message: string;
   retriable: boolean;
 } {
   const [first] = result.content as Array<{ text: string }>;
-  return JSON.parse(first.text) as { code: string; retriable: boolean };
+  return JSON.parse(first.text) as { code: string; message: string; retriable: boolean };
 }
 
 export function fakeSessionStore(tier: "core" | "full" | "external" = "core"): SessionStore {
@@ -129,6 +130,9 @@ export function fakeDeps(overrides?: Partial<SessionServerDeps>): SessionServerD
       .fn()
       .mockResolvedValue({ status: "unavailable", reason: "no-message" }),
     isTerminalIdInUse: vi.fn(() => false),
+    // A host with nothing running, so an owned worktree delete reaches its
+    // dispatch unless a test says otherwise (#15729).
+    readTerminalProcesses: vi.fn().mockResolvedValue([]),
     appendAuditRecord: vi.fn(),
     getCachedManifest: vi.fn(() => null),
     ...overrides,

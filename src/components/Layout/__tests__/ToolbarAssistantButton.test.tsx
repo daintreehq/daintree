@@ -4,6 +4,7 @@ import { render, act, fireEvent, screen, within, cleanup } from "@testing-librar
 import { primeRadix } from "@/components/ui/radix-loader";
 import { ToolbarAssistantButton } from "../ToolbarAssistantButton";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import { usePanelStore } from "@/store";
 import { STATE_COLORS } from "@/components/Worktree/terminalStateConfig";
 import type { McpRuntimeSnapshot } from "@shared/types";
@@ -113,7 +114,7 @@ function emptyLane() {
   };
 }
 
-function setPanel(id: string, agentState: string | undefined): void {
+function setPanel(id: string, agentState: string | undefined, waitingReason?: string): void {
   usePanelStore.setState((s) => ({
     ...s,
     panelsById: {
@@ -126,6 +127,7 @@ function setPanel(id: string, agentState: string | undefined): void {
         location: "dock",
         worktreeId: undefined,
         agentState: agentState as never,
+        ...(waitingReason !== undefined ? { waitingReason } : {}),
       } as never,
     },
     panelIds: s.panelIds.includes(id) ? s.panelIds : [...s.panelIds, id],
@@ -183,17 +185,38 @@ describe("ToolbarAssistantButton — agent state pip", () => {
     expect(label).toMatch(/directing/i);
   });
 
-  it("renders a yellow pip when the assistant terminal's agentState is waiting", () => {
+  // No Canopy reading ever covers an assistant, so a lane at its prompt is
+  // at most unread: the neutral dot, never the amber waiting ring (#16059).
+  it("draws an unseen wait as the neutral unread dot, never the waiting ring", () => {
     setHelpPanel({ isOpen: false, terminalId: "t-w" });
     setPanel("t-w", "waiting");
 
-    const { queryByTestId } = render(<ToolbarAssistantButton />);
+    const { queryByTestId, container } = render(<ToolbarAssistantButton />);
     const pip = queryByTestId("assistant-working-pip");
     expect(pip?.getAttribute("data-visible")).toBe("true");
-    expect(pip!.className).toMatch(/bg-state-waiting/);
+    expect(pip!.className).toMatch(/bg-text-secondary/);
+    expect(pip!.className).not.toMatch(/bg-state-waiting/);
+    expect(pip!.getAttribute("data-pip")).toBe("unread");
     expect(pip!.className).not.toMatch(/animate-pulse/);
     expect(pip!.getAttribute("data-agent-state")).toBe("waiting");
+    expect(container.querySelector("button")?.getAttribute("aria-label")).toBe(
+      "Daintree Assistant — Assistant has unread activity"
+    );
   });
+
+  it.each(["approval", "question", "error"] as const)(
+    "keeps a %s wait to the unread dot too",
+    (waitingReason) => {
+      setHelpPanel({ isOpen: false, terminalId: "t-wr" });
+      setPanel("t-wr", "waiting", waitingReason);
+
+      const { queryByTestId } = render(<ToolbarAssistantButton />);
+      const pip = queryByTestId("assistant-working-pip");
+      expect(pip?.getAttribute("data-visible")).toBe("true");
+      expect(pip!.getAttribute("data-pip")).toBe("unread");
+      expect(pip!.className).not.toMatch(/bg-state-waiting/);
+    }
+  );
 
   it("does not render the pip for completed or exited states", () => {
     setHelpPanel({ isOpen: false, terminalId: "t-c" });
@@ -293,7 +316,7 @@ describe("ToolbarAssistantButton — agent state pip", () => {
     });
     const pip = queryByTestId("assistant-working-pip");
     expect(pip?.getAttribute("data-visible")).toBe("true");
-    expect(pip!.className).toMatch(/bg-state-waiting/);
+    expect(pip!.className).toMatch(/bg-text-secondary/);
   });
 
   it("treats a re-spawned assistant terminal as unread even if the new state matches the previously-seen value", () => {
@@ -314,7 +337,7 @@ describe("ToolbarAssistantButton — agent state pip", () => {
     });
     const pip = queryByTestId("assistant-working-pip");
     expect(pip?.getAttribute("data-visible")).toBe("true");
-    expect(pip!.className).toMatch(/bg-state-waiting/);
+    expect(pip!.className).toMatch(/bg-text-secondary/);
   });
 
   it("tracks state changes that happen while the panel is open as already seen", () => {
@@ -360,6 +383,24 @@ describe("ToolbarAssistantButton — agent state pip", () => {
       expect(pip!.className).toMatch(/bg-state-working/);
     });
 
+    // A stop to read outranks work in flight, which outranks the user's own
+    // draft, whichever lane each sits in.
+    it.each([
+      [["waiting", "working", "directing"], "unread"],
+      [["directing", "working", "waiting"], "unread"],
+      [["directing", "working"], "working"],
+      [["working", "directing"], "working"],
+    ] as const)("draws the most demanding of unseen lanes %j as %s", (states, expected) => {
+      const ids = states.map((_, i) => `prio-${i}`);
+      setLanes(false, ids);
+      states.forEach((state, i) => setPanel(ids[i]!, state));
+
+      const { queryByTestId } = render(<ToolbarAssistantButton />);
+      const pip = queryByTestId("assistant-working-pip");
+      expect(pip?.getAttribute("data-visible")).toBe("true");
+      expect(pip!.getAttribute("data-pip")).toBe(expected);
+    });
+
     it("surfaces a second lane that starts waiting after the first was acknowledged", () => {
       setLanes(false, ["lane-a", "lane-b"]);
       setPanel("lane-a", "waiting");
@@ -373,9 +414,9 @@ describe("ToolbarAssistantButton — agent state pip", () => {
       act(() => setPanel("lane-b", "waiting"));
       const pip = queryByTestId("assistant-working-pip");
       expect(pip?.getAttribute("data-visible")).toBe("true");
-      expect(pip!.className).toMatch(/bg-state-waiting/);
+      expect(pip!.className).toMatch(/bg-text-secondary/);
       expect(container.querySelector("button")?.getAttribute("aria-label")).toBe(
-        "Daintree Assistant — Assistant is waiting"
+        "Daintree Assistant — Assistant has unread activity"
       );
     });
 
@@ -392,9 +433,9 @@ describe("ToolbarAssistantButton — agent state pip", () => {
       act(() => setPanel("lane-a", "waiting"));
       const pip = queryByTestId("assistant-working-pip");
       expect(pip?.getAttribute("data-visible")).toBe("true");
-      expect(pip!.className).toMatch(/bg-state-waiting/);
+      expect(pip!.className).toMatch(/bg-text-secondary/);
       expect(container.querySelector("button")?.getAttribute("aria-label")).toBe(
-        "Daintree Assistant — Assistant is waiting"
+        "Daintree Assistant — Assistant has unread activity"
       );
     });
 
@@ -467,7 +508,7 @@ describe("ToolbarAssistantButton — agent state pip", () => {
       });
       const pip2 = queryByTestId("assistant-working-pip");
       expect(pip2?.getAttribute("data-visible")).toBe("true");
-      expect(pip2!.className).toMatch(/bg-state-waiting/);
+      expect(pip2!.className).toMatch(/bg-text-secondary/);
     });
 
     it("click reveals the panel without toggling isOpen when gesture-hidden", () => {
@@ -559,8 +600,8 @@ describe("ToolbarAssistantButton — tooltip (#12509)", () => {
 
     const { container } = render(<ToolbarAssistantButton />);
     expect(readLabels(container)).toEqual({
-      tooltip: "Daintree Assistant — Assistant is waiting",
-      ariaLabel: "Daintree Assistant — Assistant is waiting",
+      tooltip: "Daintree Assistant — Assistant has unread activity",
+      ariaLabel: "Daintree Assistant — Assistant has unread activity",
     });
 
     // Opening the panel suppresses the agent pip, so the status must not linger.
@@ -698,7 +739,9 @@ describe("ToolbarAssistantButton — new session on a chosen agent", () => {
   it("parks the choices once every tab holds a session, and not while one is empty", async () => {
     agentChoices.current = ["claude", "codex"];
     const busyLane = (n: number) => ({ ...emptyLane(), terminalId: `t-${n}`, sessionId: `s-${n}` });
-    useHelpPanelStore.setState({ sessions: { 0: busyLane(0), 1: busyLane(1), 2: busyLane(2) } });
+    const everyLaneBusy = () =>
+      Object.fromEntries(ASSISTANT_SLOTS.map((slot) => [slot, busyLane(slot)]));
+    useHelpPanelStore.setState({ sessions: everyLaneBusy() });
     const { container, unmount } = render(<ToolbarAssistantButton />);
 
     fireEvent.contextMenu(container.querySelector("button")!);
@@ -711,7 +754,7 @@ describe("ToolbarAssistantButton — new session on a chosen agent", () => {
     unmount();
 
     // An empty tab at the ceiling is still somewhere to start one.
-    useHelpPanelStore.setState({ sessions: { 0: busyLane(0), 1: emptyLane(), 2: busyLane(2) } });
+    useHelpPanelStore.setState({ sessions: { ...everyLaneBusy(), 1: emptyLane() } });
     const again = render(<ToolbarAssistantButton />);
     fireEvent.contextMenu(again.container.querySelector("button")!);
     menu = await screen.findByRole("menu");

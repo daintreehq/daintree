@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { bench, describe } from "vitest";
+import { test, describe } from "vitest";
 import type { StateStorage } from "zustand/middleware";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { setWorktreeGitDirAccessor } from "@/store/storeAccessors";
@@ -66,8 +66,10 @@ function runIdenticalMergeWrites(): typeof counts {
 report("1000 identical mergeOnWrite setItem calls", runIdenticalMergeWrites());
 
 describe("safeStorage mergeOnWrite", () => {
-  bench("1000 identical setItem calls (~10KB state)", () => {
-    runIdenticalMergeWrites();
+  test("1000 identical setItem calls (~10KB state)", async ({ bench }) => {
+    await bench("1000 identical setItem calls (~10KB state)", () => {
+      runIdenticalMergeWrites();
+    }).run();
   });
 });
 
@@ -193,23 +195,29 @@ let urlTick = 0;
 }
 
 describe("panelPersistence.save (40 mixed panels)", () => {
-  bench("no-op save", () => {
-    noopPersistence.save(noopPanels, projectId);
+  test("no-op save", async ({ bench }) => {
+    await bench("no-op save", () => {
+      noopPersistence.save(noopPanels, projectId);
+    }).run();
   });
-  bench("one-title change", () => {
-    titleTick += 1;
-    titlePersistence.save(
-      withChangedPanel(titlePanels, 5, { title: `Renamed ${titleTick % 2}` }),
-      projectId
-    );
+  test("one-title change", async ({ bench }) => {
+    await bench("one-title change", () => {
+      titleTick += 1;
+      titlePersistence.save(
+        withChangedPanel(titlePanels, 5, { title: `Renamed ${titleTick % 2}` }),
+        projectId
+      );
+    }).run();
   });
-  bench("browserUrl change", () => {
-    urlTick += 1;
-    urlPersistence.save(
-      withChangedPanel(urlPanels, 7, {
-        browserUrl: `http://localhost/n${urlTick % 2}`,
-      } as Partial<TerminalInstance>),
-      projectId
-    );
+  test("browserUrl change", async ({ bench }) => {
+    await bench("browserUrl change", () => {
+      urlTick += 1;
+      urlPersistence.save(
+        withChangedPanel(urlPanels, 7, {
+          browserUrl: `http://localhost/n${urlTick % 2}`,
+        } as Partial<TerminalInstance>),
+        projectId
+      );
+    }).run();
   });
 });

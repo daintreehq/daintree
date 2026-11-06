@@ -7,6 +7,10 @@ const { store, setAgentState, reportLost, fetchAndRestore } = vi.hoisted(() => {
     panelIds: [] as string[],
     watchedPanels: new Set<string>(),
     updateAgentState: vi.fn(),
+    noteAgentObservation: vi.fn(),
+    setAgentIncarnation: vi.fn((id: string, agentIncarnation: number) => {
+      store.panelsById[id] = { ...store.panelsById[id], agentIncarnation };
+    }),
     addPanel: vi.fn(async (args: { existingId?: string }) => args.existingId ?? null),
     setRuntimeStatus: vi.fn(),
     removePanel: vi.fn(),
@@ -140,6 +144,8 @@ describe("resyncHostTerminals", () => {
 
     // The controller still learns the canonical state; only the store write is held back.
     expect(setAgentState).toHaveBeenCalledWith("t-draft", "waiting");
+    // The report still bounds what may follow (#16062).
+    expect(store.noteAgentObservation).toHaveBeenCalledWith("t-draft", "waiting", 200);
     expect(store.updateAgentState.mock.calls.map((call) => call[0])).toEqual(["t-run"]);
     expect(store.updateAgentState).toHaveBeenCalledWith(
       "t-run",
@@ -301,8 +307,9 @@ describe("resyncHostTerminals", () => {
   });
 
   it("adopts a new agent incarnation's state even when it looks older", async () => {
-    panel("t-1", { lastStateChange: 50, agentIncarnation: 1 });
-    panel("t-2", { lastStateChange: 50, agentIncarnation: 1 });
+    const reported = { agentState: "working", at: 50 };
+    panel("t-1", { lastStateChange: 50, lastAgentObservation: reported, agentIncarnation: 1 });
+    panel("t-2", { lastStateChange: 50, lastAgentObservation: reported, agentIncarnation: 1 });
     getForProject.mockResolvedValue([
       {
         id: "t-1",
@@ -327,6 +334,102 @@ describe("resyncHostTerminals", () => {
     expect(store.updateAgentState).toHaveBeenCalledTimes(1);
     expect(store.updateAgentState.mock.calls[0]![0]).toBe("t-1");
     expect(setAgentState).toHaveBeenCalledWith("t-1", "idle");
+  });
+
+  it("records the session it takes a state from on the pane, before the state (#16153)", async () => {
+    const reported = { agentState: "waiting", at: 50 };
+    panel("t-1", { lastStateChange: 50, lastAgentObservation: reported, agentIncarnation: 1 });
+    getForProject.mockResolvedValue([
+      {
+        id: "t-1",
+        cwd: "/",
+        agentState: "waiting",
+        waitingReason: "error",
+        lastStateChange: 90,
+        agentIncarnation: 2,
+      },
+    ]);
+
+    await resyncHostTerminals("proj-1", current);
+
+    expect(store.panelsById["t-1"]).toMatchObject({ agentIncarnation: 2 });
+    expect(store.setAgentIncarnation.mock.invocationCallOrder[0]).toBeLessThan(
+      store.updateAgentState.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("records no session from a record it doesn't take", async () => {
+    const reported = { agentState: "working", at: 50 };
+    panel("t-1", { lastStateChange: 50, lastAgentObservation: reported });
+    getForProject.mockResolvedValue([
+      { id: "t-1", cwd: "/", agentState: "idle", lastStateChange: 40, agentIncarnation: 3 },
+    ]);
+
+    await resyncHostTerminals("proj-1", current);
+
+    expect(store.updateAgentState).not.toHaveBeenCalled();
+    expect(store.setAgentIncarnation).not.toHaveBeenCalled();
+    expect(store.panelsById["t-1"]!.agentIncarnation).toBeUndefined();
+  });
+
+  it("holds a session it already recorded to the stale and directing checks on the next resync", async () => {
+    panel("t-1", {
+      agentState: "working",
+      lastStateChange: 50,
+      lastAgentObservation: { agentState: "working", at: 50 },
+      agentIncarnation: 1,
+    });
+    getForProject.mockResolvedValue([
+      { id: "t-1", cwd: "/", agentState: "working", lastStateChange: 40, agentIncarnation: 2 },
+    ]);
+    await resyncHostTerminals("proj-1", current);
+    expect(store.updateAgentState).toHaveBeenCalledTimes(1);
+
+    // The user starts typing into the new session; the host's next report is a
+    // wait, and then the same report comes back on another resync.
+    Object.assign(store.panelsById["t-1"]!, {
+      agentState: "directing",
+      lastAgentObservation: { agentState: "working", at: 60 },
+    });
+    getForProject.mockResolvedValue([
+      { id: "t-1", cwd: "/", agentState: "waiting", lastStateChange: 70, agentIncarnation: 2 },
+    ]);
+    await resyncHostTerminals("proj-1", current);
+    expect(store.updateAgentState).toHaveBeenCalledTimes(1);
+    expect(store.noteAgentObservation).toHaveBeenCalledWith("t-1", "waiting", 70);
+
+    getForProject.mockResolvedValue([
+      { id: "t-1", cwd: "/", agentState: "idle", lastStateChange: 55, agentIncarnation: 2 },
+    ]);
+    await resyncHostTerminals("proj-1", current);
+    expect(store.updateAgentState).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes a host report newer than its last one over this machine's later overlay (#16062)", async () => {
+    // The host's clock runs a minute behind this one: the pane's own revert
+    // from directing is stamped ahead of anything the host can report.
+    panel("t-1", {
+      agentState: "waiting",
+      lastStateChange: 160_000,
+      lastAgentObservation: { agentState: "waiting", at: 90_000 },
+      agentIncarnation: 1,
+    });
+    getForProject.mockResolvedValue([
+      { id: "t-1", cwd: "/", agentState: "working", lastStateChange: 100_000, agentIncarnation: 1 },
+    ]);
+
+    await resyncHostTerminals("proj-1", current);
+
+    expect(setAgentState).toHaveBeenCalledWith("t-1", "working");
+    expect(store.updateAgentState).toHaveBeenCalledWith(
+      "t-1",
+      "working",
+      undefined,
+      100_000,
+      undefined,
+      undefined,
+      undefined
+    );
   });
 
   it("replays this view's watched panes to the fresh session", async () => {

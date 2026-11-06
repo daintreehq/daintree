@@ -2,7 +2,7 @@ import { Fragment, useCallback, useMemo } from "react";
 import type React from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Copy, ExternalLink, FileDiff, RotateCcw, Trash2 } from "lucide-react";
-import { AtSign, FileText, FolderOpen, Folders, Package } from "@/components/icons";
+import { AtSign, FileText, Folders, Package } from "@/components/icons";
 import {
   ContextMenuActionItem,
   ContextMenuItem,
@@ -24,7 +24,8 @@ import {
   type InsertFileReferenceRefusalReason,
 } from "@/hooks/useInsertFileReference";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
-import { revealCopy } from "@/components/FileViewer/revealCopy";
+import { useRevealCopy } from "@/components/FileViewer/revealCopy";
+import { beginRevealConfirm, runTransientReveal } from "@/components/FileViewer/revealFeedback";
 import { isFileContentsCopyCandidate } from "@/components/FileViewer/filePreviewKinds";
 import { INSERT_FILE_REFERENCE_COMBO } from "@/panels/file-browser/fileReference";
 import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
@@ -218,9 +219,11 @@ export interface FileRowMenuItemOptions {
    * Reveals this row in the OS file manager. Supplied by a surface that shows
    * files outside every project root — the file panel — and already owns a
    * reveal that takes the guarded out-of-root fallback; omitted surfaces use
-   * the root-contained `file.showItemInFolder`.
+   * the root-contained `file.showItemInFolder`. Resolves true once the reveal
+   * succeeded, so a remote window's host-path copy can confirm itself; the
+   * surface reports a failure.
    */
-  onReveal?: (() => void) | undefined;
+  onReveal?: (() => Promise<boolean>) | undefined;
   /**
    * Copies the file's text from what the surface already holds. Supplied by
    * the file panel, which displays files outside every project root that
@@ -373,7 +376,7 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
     )
   );
 
-  const reveal = useMemo(() => revealCopy(), []);
+  const reveal = useRevealCopy();
   const insertAriaKeyshortcuts = comboToAriaKeyshortcuts(INSERT_FILE_REFERENCE_COMBO, isMac());
 
   const handleCopyFileContents = useCallback(
@@ -403,7 +406,18 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
 
   const handleReveal = useCallback(
     (absolutePath: string) =>
-      runRowAction("file.showItemInFolder", { path: absolutePath }, reveal.errorTitle, worktreeId),
+      runRowAction(
+        "file.showItemInFolder",
+        { path: absolutePath },
+        reveal.errorTitle,
+        worktreeId,
+        // A remote window's reveal copies the host path and changes nothing on
+        // screen, so it confirms like the Copy rows; a real reveal needs none.
+        () => {
+          const confirm = beginRevealConfirm(reveal);
+          return () => confirm?.();
+        }
+      ),
     [reveal, worktreeId]
   );
 
@@ -541,8 +555,14 @@ export function useFileRowMenuItems(surface: FileRowMenuSurface): FileRowMenuCon
               </ContextMenuActionItem>
             </>
           )}
-          <ContextMenuItem onSelect={options?.onReveal ?? (() => handleReveal(absolutePath))}>
-            <FolderOpen className={ICON_CLASS} />
+          <ContextMenuItem
+            onSelect={() => {
+              const onReveal = options?.onReveal;
+              if (onReveal) runTransientReveal(reveal, onReveal);
+              else handleReveal(absolutePath);
+            }}
+          >
+            <reveal.icon className={ICON_CLASS} />
             {reveal.label}
           </ContextMenuItem>
           {/* Disabled rather than hidden when nothing resolves: the gesture is

@@ -6,7 +6,7 @@
  * profile exports, changes, or unsets reaches every terminal Daintree opens but
  * never main itself. Code that needs to know what a CLI in one of those
  * terminals will see asks here. There is an observation only when the probe ran
- * the shell it named and that shell answered: shell-env's quiet fallbacks to
+ * the shell it named and that shell answered: the read's quiet fallbacks to
  * other shells, and finally to this process's own environment, describe no
  * terminal at all.
  */

@@ -476,7 +476,11 @@ export async function statContainedDaintreeFile(
         headers: buildDaintreeFileErrorHeaders(),
       });
     }
-    return { size, realFile };
+    // The same rule as files:read's `pathIsCanonical`: a hard-linked file has
+    // more than one real path, and a directory watch only reports the name it
+    // was written through.
+    const pathIsCanonical = realFile === normalizedFile && !(stats.nlink > 1);
+    return { size, realFile, pathIsCanonical };
   } finally {
     await fileHandle.close().catch(() => {});
   }

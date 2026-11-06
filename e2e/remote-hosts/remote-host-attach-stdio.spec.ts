@@ -385,10 +385,9 @@ test.describe.serial("Remote hosts: a Host reached over --attach-stdio", () => {
     run.remotePage = await waitForView(run.b.app, run.hostId, run.hostProject.name);
     const top = run.remotePage;
     const driven = top.locator(SEL.remoteHosts.drivenElsewhereBanner);
-    if ((await driven.count()) > 0) {
-      await driven.getByRole("button", { name: "Take control" }).click();
-      await expect(driven).toHaveCount(0, { timeout: 15_000 });
-    }
+    await expect(driven).toBeVisible({ timeout: 15_000 });
+    await driven.getByRole("button", { name: "Take control" }).click();
+    await expect(driven).toHaveCount(0, { timeout: 15_000 });
     await openTerminal(top);
     const panel = getFirstGridPanel(top);
     await waitForTerminalReady(top, panel, 60_000);

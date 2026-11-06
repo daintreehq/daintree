@@ -59,6 +59,7 @@ vi.mock("../../../../services/McpPaneConfigService.js", () => ({
 }));
 vi.mock("../../../../services/pty/agentSessionCapturePersistence.js", () => ({
   acceptCapturedAgentSession: vi.fn(),
+  acceptObservedAgentSession: vi.fn(),
   releaseSupersededCapturedSession: vi.fn(),
 }));
 vi.mock("../../../../services/events.js", () => ({

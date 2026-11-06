@@ -10,11 +10,10 @@ import {
   type CanopyRoleFilter,
 } from "@/components/Canopy/canopyAssistants";
 import { clampCanopyListWidth } from "@/components/Canopy/canopyListWidth";
+import { clampCanopyDockWidth } from "@/components/Canopy/canopyDockWidth";
 import type { CanopyReplyRow } from "./voiceRecordingStore";
 import {
-  CANOPY_URGENT_PRIORITY,
   readsWithHostedService,
-  type CanopyCard,
   type CanopyMode,
   type CanopySnapshot,
 } from "@shared/types/ipc/canopy";
@@ -46,14 +45,6 @@ interface CanopyState {
    * turned on from here until it is updated.
    */
   outdatedHost: boolean;
-  /**
-   * The urgent prompt each run last showed while the panel was open, as
-   * `spawnedAt:revision`. The toolbar badge counts only the urgent prompts not
-   * in here, so opening the panel clears it until a new one arrives.
-   */
-  acknowledged: Record<string, string>;
-  /** The open panel shows these runs: their urgent prompts count as seen. */
-  acknowledge: (runIds: readonly string[]) => void;
   /**
    * The inbox's order as last shown, run ids first to last, and the scan it was
    * ranked after: kept across opens, so the list opens as it was left.
@@ -104,6 +95,34 @@ interface CanopyState {
   readingOfferDismissed: boolean;
   dismissReadingOffer: () => void;
   /**
+   * The offer an agent pane makes while its agent is stopped on a question or
+   * an approval and Canopy is off was put away: for good, on every host and
+   * across launches. The panel's own offers stay.
+   */
+  paneOfferDismissed: boolean;
+  dismissPaneOffer: () => void;
+  /**
+   * The one pane making that offer: the first asking pane to claim it holds it
+   * until its agent moves on, so the offer never shows in several panes at
+   * once and never jumps between them while one is still asking.
+   */
+  paneOfferHolder: string | null;
+  claimPaneOffer: (panelId: string) => void;
+  releasePaneOffer: (panelId: string) => void;
+  /**
+   * Turning Canopy on from a pane's offer, under way or refused: the offer
+   * stays in that pane until it is settled, whatever its agent does meanwhile.
+   */
+  paneOfferAttempt: { panelId: string; status: "pending" | "failed" } | null;
+  startPaneOfferAttempt: (panelId: string) => void;
+  /** Settles the pane's attempt, if it is still that pane's: a closed pane hears nothing. */
+  finishPaneOfferAttempt: (panelId: string, turnedOn: boolean) => void;
+  /** The pane whose offer turned Canopy on: it says so, briefly, where the offer was. */
+  paneOfferTurnedOn: string | null;
+  closePaneOfferTurnedOn: () => void;
+  /** The pane closed: nothing it started is reported anywhere. */
+  forgetPaneOffer: (panelId: string) => void;
+  /**
    * The inbox list's width in px, as the user last dragged or stepped it: for
    * every project view and across launches. Null keeps the default, which
    * follows the window.
@@ -117,6 +136,19 @@ interface CanopyState {
    */
   listDrag: number | null;
   setListDrag: (width: number | null) => void;
+  /**
+   * The global assistant docked beside the selected agent (#16214), as the
+   * user last left it: for every project view and across launches. Off until
+   * turned on.
+   */
+  globalDocked: boolean;
+  setGlobalDocked: (docked: boolean) => void;
+  /** The docked assistant's width in px, as last dragged or stepped; null keeps the default. */
+  dockWidth: number | null;
+  setDockWidth: (width: number | null) => void;
+  /** The width the dock's edge is being dragged to; this view's alone, as {@link listDrag} is. */
+  dockDrag: number | null;
+  setDockDrag: (width: number | null) => void;
   /**
    * The row a dictation is writing a reply into, asked for from the recording
    * indicator (#14778): the panel opens on its host and selects it with the
@@ -143,6 +175,11 @@ export interface CanopyWorkOf {
 
 export type { CanopyOrder };
 
+/** An edge between Canopy's panes is being dragged: the open terminals hold their size until it lands. */
+export function isCanopyEdgeDragging(state: Pick<CanopyState, "listDrag" | "dockDrag">): boolean {
+  return state.listDrag !== null || state.dockDrag !== null;
+}
+
 /** The panel's "All hosts" scope: not a host, and never a target for anything that writes. */
 export const ALL_HOSTS_ID: HostId = "*";
 
@@ -154,77 +191,15 @@ const SCOPE_STORAGE_KEY = "daintree-canopy-scope";
 const ALL_HOSTS_STORAGE_KEY = "daintree-canopy-all-hosts";
 /** Read by every project view, so a view opened or reloaded since still opens on the order last shown. */
 const ORDER_STORAGE_KEY = "daintree-canopy-order";
-export const CANOPY_ACKNOWLEDGED_STORAGE_KEY = "daintree-canopy-acknowledged";
 export const CANOPY_ROLE_STORAGE_KEY = "daintree-canopy-role";
 const HANDBACKS_SEEN_STORAGE_KEY = "daintree-canopy-assistant-handbacks";
 const READING_OFFER_DISMISSED_STORAGE_KEY = "daintree-canopy-reading-offer-dismissed";
+const PANE_OFFER_DISMISSED_STORAGE_KEY = "daintree-canopy-pane-offer-dismissed";
 const LIST_WIDTH_STORAGE_KEY = "daintree-canopy-list-width";
+const GLOBAL_DOCKED_STORAGE_KEY = "daintree-canopy-global-docked";
+const DOCK_WIDTH_STORAGE_KEY = "daintree-canopy-dock-width";
 /** Assistants whose seen handback is kept at most, the oldest seen dropped first: as many as one directory names. */
 const MAX_HANDBACKS_SEEN = AGENT_DIRECTORY_ENTRIES_MAX;
-
-function promptKey(card: Pick<CanopyCard, "spawnedAt" | "revision">): string {
-  return `${card.spawnedAt}:${card.revision}`;
-}
-
-function readAcknowledged(): Record<string, string> {
-  try {
-    const raw = window.localStorage.getItem(CANOPY_ACKNOWLEDGED_STORAGE_KEY);
-    const parsed: unknown = raw ? JSON.parse(raw) : null;
-    if (!parsed || typeof parsed !== "object") return {};
-    const clean: Record<string, string> = {};
-    for (const [runId, key] of Object.entries(parsed)) {
-      if (typeof key === "string") clean[runId] = key;
-    }
-    return clean;
-  } catch {
-    return {};
-  }
-}
-
-function saveAcknowledged(acknowledged: Record<string, string>): void {
-  try {
-    window.localStorage.setItem(CANOPY_ACKNOWLEDGED_STORAGE_KEY, JSON.stringify(acknowledged));
-  } catch {
-    // Best effort: this view still stays quiet for this session.
-  }
-}
-
-/**
- * Marks the urgent prompts of the runs the panel shows as seen — only those: a
- * panel scoped to one project leaves another project's asks on the badge.
- * Merged over what is stored rather than this view's copy, since every project
- * view writes the key, and pruned to the runs Canopy still has cards for.
- */
-function acknowledgeUrgent(
-  current: Record<string, string>,
-  snapshot: CanopySnapshot | null,
-  shown: ReadonlySet<string>
-): Record<string, string> | null {
-  if (!snapshot) return null;
-  const urgent = snapshot.cards.filter(
-    (card) =>
-      shown.has(card.runId) &&
-      card.priority >= CANOPY_URGENT_PRIORITY &&
-      current[card.runId] !== promptKey(card)
-  );
-  if (urgent.length === 0) return null;
-  const known = new Set(snapshot.cards.map((card) => card.runId));
-  const next: Record<string, string> = {};
-  for (const [runId, key] of Object.entries({ ...current, ...readAcknowledged() })) {
-    if (known.has(runId)) next[runId] = key;
-  }
-  for (const card of urgent) next[card.runId] = promptKey(card);
-  saveAcknowledged(next);
-  return next;
-}
-
-/** An urgent card the user has not had in front of them in the open panel. */
-export function isCanopyUnacknowledged(
-  acknowledged: Record<string, string>,
-  card: Pick<CanopyCard, "runId" | "spawnedAt" | "revision">
-): boolean {
-  return acknowledged[card.runId] !== promptKey(card);
-}
 
 function loadHostId(): HostId | null {
   try {
@@ -284,6 +259,22 @@ function saveReadingOfferDismissed(): void {
   }
 }
 
+function loadPaneOfferDismissed(): boolean {
+  try {
+    return window.localStorage.getItem(PANE_OFFER_DISMISSED_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function savePaneOfferDismissed(): void {
+  try {
+    window.localStorage.setItem(PANE_OFFER_DISMISSED_STORAGE_KEY, "1");
+  } catch {
+    // Best effort: the offer still stays away for this session.
+  }
+}
+
 function loadListWidth(): number | null {
   try {
     const stored = window.localStorage.getItem(LIST_WIDTH_STORAGE_KEY);
@@ -298,6 +289,41 @@ function saveListWidth(width: number | null): void {
   try {
     if (width === null) window.localStorage.removeItem(LIST_WIDTH_STORAGE_KEY);
     else window.localStorage.setItem(LIST_WIDTH_STORAGE_KEY, String(width));
+  } catch {
+    // Best effort: the width still holds for this session.
+  }
+}
+
+function loadGlobalDocked(): boolean {
+  try {
+    return window.localStorage.getItem(GLOBAL_DOCKED_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function saveGlobalDocked(docked: boolean): void {
+  try {
+    if (docked) window.localStorage.setItem(GLOBAL_DOCKED_STORAGE_KEY, "1");
+    else window.localStorage.removeItem(GLOBAL_DOCKED_STORAGE_KEY);
+  } catch {
+    // Best effort: the choice still holds for this session.
+  }
+}
+
+function loadDockWidth(): number | null {
+  try {
+    const stored = window.localStorage.getItem(DOCK_WIDTH_STORAGE_KEY);
+    return stored === null || stored.trim() === "" ? null : clampCanopyDockWidth(Number(stored));
+  } catch {
+    return null;
+  }
+}
+
+function saveDockWidth(width: number | null): void {
+  try {
+    if (width === null) window.localStorage.removeItem(DOCK_WIDTH_STORAGE_KEY);
+    else window.localStorage.setItem(DOCK_WIDTH_STORAGE_KEY, String(width));
   } catch {
     // Best effort: the width still holds for this session.
   }
@@ -502,13 +528,6 @@ export const useCanopyStore = create<CanopyState>((set, get) => ({
   mode: "unset",
   seedMode: (mode) => set((state) => (state.snapshot === null ? { mode } : state)),
   snapshot: null,
-  acknowledged: readAcknowledged(),
-  acknowledge: (runIds) =>
-    set((state) => {
-      if (!state.isOpen) return state;
-      const acknowledged = acknowledgeUrgent(state.acknowledged, state.snapshot, new Set(runIds));
-      return acknowledged ? { acknowledged } : state;
-    }),
   ...loadOrders(),
   setOrder: (scope, order) =>
     set((state) => {
@@ -563,6 +582,32 @@ export const useCanopyStore = create<CanopyState>((set, get) => ({
     saveReadingOfferDismissed();
     set({ readingOfferDismissed: true });
   },
+  paneOfferDismissed: loadPaneOfferDismissed(),
+  dismissPaneOffer: () => {
+    savePaneOfferDismissed();
+    set({ paneOfferDismissed: true, paneOfferHolder: null, paneOfferAttempt: null });
+  },
+  paneOfferHolder: null,
+  claimPaneOffer: (panelId) =>
+    set((state) => (state.paneOfferHolder === null ? { paneOfferHolder: panelId } : state)),
+  releasePaneOffer: (panelId) =>
+    set((state) => (state.paneOfferHolder === panelId ? { paneOfferHolder: null } : state)),
+  paneOfferAttempt: null,
+  startPaneOfferAttempt: (panelId) => set({ paneOfferAttempt: { panelId, status: "pending" } }),
+  finishPaneOfferAttempt: (panelId, turnedOn) =>
+    set((state) => {
+      if (state.paneOfferAttempt?.panelId !== panelId) return state;
+      return turnedOn
+        ? { paneOfferAttempt: null, paneOfferTurnedOn: panelId }
+        : { paneOfferAttempt: { panelId, status: "failed" } };
+    }),
+  paneOfferTurnedOn: null,
+  closePaneOfferTurnedOn: () => set({ paneOfferTurnedOn: null }),
+  forgetPaneOffer: (panelId) =>
+    set((state) => ({
+      paneOfferAttempt: state.paneOfferAttempt?.panelId === panelId ? null : state.paneOfferAttempt,
+      paneOfferTurnedOn: state.paneOfferTurnedOn === panelId ? null : state.paneOfferTurnedOn,
+    })),
   listWidth: loadListWidth(),
   setListWidth: (width) => {
     const next = width === null ? null : clampCanopyListWidth(width);
@@ -575,6 +620,22 @@ export const useCanopyStore = create<CanopyState>((set, get) => ({
   },
   listDrag: null,
   setListDrag: (width) => set({ listDrag: width }),
+  globalDocked: loadGlobalDocked(),
+  setGlobalDocked: (docked) => {
+    saveGlobalDocked(docked);
+    set({ globalDocked: docked });
+  },
+  dockWidth: loadDockWidth(),
+  setDockWidth: (width) => {
+    const next = width === null ? null : clampCanopyDockWidth(width);
+    if (width !== null && next === null) return;
+    // Unchanged only if storage agrees, as the list's width is.
+    if (next === get().dockWidth && next === loadDockWidth()) return;
+    saveDockWidth(next);
+    set({ dockWidth: next });
+  },
+  dockDrag: null,
+  setDockDrag: (width) => set({ dockDrag: width }),
   resume: null,
   // Every opening starts on the window's own host, unless the user chose All
   // hosts or is coming back from "Go to terminal".
@@ -619,23 +680,30 @@ export const useCanopyStore = create<CanopyState>((set, get) => ({
         return state;
       }
       const mode = snapshot.mode;
+      // A pane's refused turn-on stops mattering once Canopy is on or hidden
+      // some other way: Settings, another view, the panel.
+      const paneOfferAttempt =
+        state.paneOfferAttempt?.status === "failed" && mode !== "unset"
+          ? null
+          : state.paneOfferAttempt;
       // Hidden from another view, or from Settings: a panel this view held open goes too.
       if (mode === "hidden") {
         return {
           snapshot,
           mode,
           outdatedHost: outdated,
+          paneOfferAttempt,
           isOpen: false,
           workOf: null,
           resume: null,
           replyReveal: null,
         };
       }
-      return { snapshot, mode, outdatedHost: outdated };
+      return { snapshot, mode, outdatedHost: outdated, paneOfferAttempt };
     }),
 }));
 
-// A sibling project view opened the panel: its badge cleared, so this one does too.
+// What a sibling project view saved, taken up here too.
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (event) => {
     if (event.key === HANDBACKS_SEEN_STORAGE_KEY) {
@@ -652,11 +720,27 @@ if (typeof window !== "undefined") {
       if (loadReadingOfferDismissed()) useCanopyStore.setState({ readingOfferDismissed: true });
       return;
     }
+    // Put away in a sibling project view: it goes from this one's panes too.
+    if (event.key === PANE_OFFER_DISMISSED_STORAGE_KEY) {
+      if (loadPaneOfferDismissed()) {
+        useCanopyStore.setState({
+          paneOfferDismissed: true,
+          paneOfferHolder: null,
+          paneOfferAttempt: null,
+        });
+      }
+      return;
+    }
     if (event.key === LIST_WIDTH_STORAGE_KEY) {
       useCanopyStore.setState({ listWidth: loadListWidth() });
       return;
     }
-    if (event.key !== CANOPY_ACKNOWLEDGED_STORAGE_KEY) return;
-    useCanopyStore.setState({ acknowledged: readAcknowledged() });
+    if (event.key === GLOBAL_DOCKED_STORAGE_KEY) {
+      useCanopyStore.setState({ globalDocked: loadGlobalDocked() });
+      return;
+    }
+    if (event.key === DOCK_WIDTH_STORAGE_KEY) {
+      useCanopyStore.setState({ dockWidth: loadDockWidth() });
+    }
   });
 }

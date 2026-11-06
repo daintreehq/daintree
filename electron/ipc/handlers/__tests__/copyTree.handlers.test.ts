@@ -1,3 +1,6 @@
+vi.mock("../../../utils/clipboardAccess.js", () => ({
+  writeClipboardFileFormat: clipboardMock.writeBuffer,
+}));
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import nodeFs from "fs/promises";
 import nodeOs from "os";
@@ -90,6 +93,7 @@ vi.mock("../../../window/windowRef.js", () => ({
 }));
 
 import type { CopyTreeHistoryAppendInput } from "../../../../shared/types/ipc/copyTreeHistory.js";
+import type { TerminalInfoPayload } from "../../../../shared/types/ipc/terminal.js";
 import { CHANNELS } from "../../channels.js";
 import {
   OperationRegistry,
@@ -103,11 +107,23 @@ import type { ClientEndpoint } from "../../endpoint.js";
 import { _resetRemoteServicesForTest, registerRemoteService } from "../../../remote/runtime.js";
 import { contextDir, _resetReservedPathsForTests } from "../../../services/copyTreeOutputFile.js";
 import {
+  disposeLifecycleLedger,
+  getLifecycleLedger,
+} from "../../../services/pty/lifecycleLedger.js";
+import { events } from "../../../services/events.js";
+import { contextInjectionTracker } from "../../../services/ContextInjectionTracker.js";
+import { _resetDriveLeaseServiceForTesting } from "../../../services/DriveLeaseService.js";
+import type {
+  CopyTreeOperationOwner,
+  CopyTreeOwnerPredicate,
+} from "../../../services/copyTreeOperationOwner.js";
+import {
   registerCopyTreeHandlers,
   mergeCopyTreeOptions,
   buildRemoteComputeBlock,
   escapeXml,
   nextChunkBoundary,
+  judgePasteDestination,
 } from "../copyTree.js";
 
 function getInvokeHandler(channel: string): (...args: unknown[]) => Promise<unknown> {
@@ -119,6 +135,9 @@ function getInvokeHandler(channel: string): (...args: unknown[]) => Promise<unkn
   }
   return call[1] as (...args: unknown[]) => Promise<unknown>;
 }
+
+/** What the host reports for an agent whose prompt takes a bracketed paste. */
+const PASTE_READY_AGENT = { hasPty: true, detectedAgentId: "claude", bracketedPasteMode: true };
 
 describe("copyTree handlers", () => {
   beforeEach(() => {
@@ -482,6 +501,7 @@ describe("copyTree handlers", () => {
         ptyClient: {
           hasTerminal: vi.fn(() => true),
           isAssistantTerminal: vi.fn(() => false),
+          getTerminalInfo: vi.fn(async () => PASTE_READY_AGENT),
           write: vi.fn(),
         },
         worktreeService: {
@@ -902,6 +922,7 @@ describe("file-backed generation", () => {
       ptyClient: {
         hasTerminal: vi.fn(() => true),
         isAssistantTerminal: vi.fn(() => false),
+        getTerminalInfo: vi.fn(async () => PASTE_READY_AGENT),
         write: vi.fn(),
       },
       worktreeService: {
@@ -1570,6 +1591,7 @@ describe("copy-tree run history recording", () => {
   let ptyClient: {
     hasTerminal: ReturnType<typeof vi.fn>;
     isAssistantTerminal: ReturnType<typeof vi.fn>;
+    getTerminalInfo: ReturnType<typeof vi.fn>;
     write: ReturnType<typeof vi.fn>;
   };
 
@@ -1601,6 +1623,7 @@ describe("copy-tree run history recording", () => {
     ptyClient = {
       hasTerminal: vi.fn(() => hasTerminal),
       isAssistantTerminal: vi.fn(() => isAssistantTerminal),
+      getTerminalInfo: vi.fn(async () => (hasTerminal ? PASTE_READY_AGENT : null)),
       write: vi.fn(),
     };
     registerCopyTreeHandlers({
@@ -1832,7 +1855,8 @@ describe("copy-tree run history recording", () => {
 
     expect(result).toMatchObject({ fileCount: 12 });
     expect(result).not.toHaveProperty("error");
-    expect(ptyClient.write).toHaveBeenCalledWith("t-1", "<files/>", expect.any(String));
+    const written = ptyClient.write.mock.calls.map(([, data]) => data).join("");
+    expect(written).toBe("\x1b[200~<files/>\x1b[201~");
   });
 
   it("does not record a rejected payload", async () => {
@@ -2026,11 +2050,1162 @@ describe("copyTree generate-and-copy-file — workspace root (#13210)", () => {
     expect(rootCopyMock.generateWorkspaceRootContext.mock.calls[0]?.[0]).toBe(PROJECT.path);
   });
 
-  it("cancels in-flight root copies alongside the hosts' on a cancel-all", async () => {
+  function cancelAll(): Promise<void> {
     const call = (ipcMainMock.handle as Mock).mock.calls.find(
       ([channel]) => channel === CHANNELS.COPYTREE_CANCEL
     );
-    await (call![1] as (...args: unknown[]) => Promise<void>)(sender, {});
+    return (call![1] as (...args: unknown[]) => Promise<void>)(sender, {});
+  }
+
+  /** The owner each root copy was started under, in call order. */
+  function rootCopyOwners(): CopyTreeOperationOwner[] {
+    return rootCopyMock.generateWorkspaceRootContext.mock.calls.map(
+      (args) => args[4] as CopyTreeOperationOwner
+    );
+  }
+
+  it("scopes a cancel-all's root-copy sweep to the view's own workspace, alongside the hosts'", async () => {
+    bindView(SCRATCH.id);
+    await handler()(sender, {});
+    bindView(PROJECT.id);
+    await handler()(sender, {});
+    const [scratchCopy, projectCopy] = rootCopyOwners();
+
+    await cancelAll();
+
     expect(rootCopyMock.cancelAllWorkspaceRootContext).toHaveBeenCalledTimes(1);
+    expect(worktreeService.cancelAllContext).toHaveBeenCalledTimes(1);
+    const matches = rootCopyMock.cancelAllWorkspaceRootContext.mock
+      .calls[0]![0] as CopyTreeOwnerPredicate;
+    expect(matches(projectCopy!)).toBe(true);
+    expect(matches(scratchCopy!)).toBe(false);
+    expect(worktreeService.cancelAllContext.mock.calls[0]![0]).toBe(matches);
+  });
+
+  it("matches a scratch's root copies to a cancel-all from the scratch's own view", async () => {
+    bindView(SCRATCH.id);
+    await handler()(sender, {});
+    const [scratchCopy] = rootCopyOwners();
+
+    await cancelAll();
+
+    const matches = rootCopyMock.cancelAllWorkspaceRootContext.mock
+      .calls[0]![0] as CopyTreeOwnerPredicate;
+    expect(matches(scratchCopy!)).toBe(true);
+  });
+
+  it("cancels nothing for a view bound to no workspace, whatever the current project", async () => {
+    bindView(null);
+    projectStoreMock.getCurrentProjectId.mockReturnValue(PROJECT.id);
+
+    await cancelAll();
+
+    expect(rootCopyMock.cancelAllWorkspaceRootContext).not.toHaveBeenCalled();
+    expect(worktreeService.cancelAllContext).not.toHaveBeenCalled();
+  });
+});
+
+describe("context injection paste boundary (#15629)", () => {
+  const PROJECT_ID = "f0e1d2c3".repeat(8);
+  const PASTE_START = "\x1b[200~";
+  const PASTE_END = "\x1b[201~";
+
+  let writes: string[];
+  let ptyClient: {
+    hasTerminal: ReturnType<typeof vi.fn>;
+    isAssistantTerminal: ReturnType<typeof vi.fn>;
+    getTerminalInfo: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+  };
+
+  function register(content: string, worktree: Record<string, unknown> = {}) {
+    browserWindowMock.fromWebContents.mockReturnValue({ id: 7, isDestroyed: () => false });
+    ipcMainMock.handle.mockClear();
+    writes = [];
+    ptyClient = {
+      hasTerminal: vi.fn(() => true),
+      isAssistantTerminal: vi.fn(() => false),
+      getTerminalInfo: vi.fn(async () => PASTE_READY_AGENT),
+      write: vi.fn((_id: string, data: string) => {
+        writes.push(data);
+      }),
+    };
+    const generateContext = vi.fn(async () => ({ content, fileCount: 3 }));
+    registerCopyTreeHandlers({
+      mainWindow: {
+        isDestroyed: () => false,
+        webContents: { isDestroyed: () => false, send: vi.fn() },
+      },
+      ptyClient,
+      worktreeService: {
+        getAllStatesForProjectAsync: vi.fn(async () => [
+          { id: "wt-1", path: "/repos/daintree", branch: "main", ...worktree },
+        ]),
+        generateContext,
+        testConfig: vi.fn(),
+        getContextFileTree: vi.fn(),
+        cancelAllContext: vi.fn(),
+      },
+      // A cancel-all reaches only its caller's own runs, so the view is bound.
+      projectViewManager: { getProjectIdForWebContents: () => PROJECT_ID },
+    } as never);
+    return generateContext;
+  }
+
+  function inject(payload: Record<string, unknown> = {}) {
+    return getInvokeHandler(CHANNELS.COPYTREE_INJECT)(mockSender, {
+      terminalId: "t-1",
+      worktreeId: "wt-1",
+      ...payload,
+    }) as Promise<{ fileCount: number; error?: string }>;
+  }
+
+  function cancel(injectionId: string) {
+    return getInvokeHandler(CHANNELS.COPYTREE_CANCEL)(mockSender, { injectionId });
+  }
+
+  function count(haystack: string, needle: string): number {
+    return haystack.split(needle).length - 1;
+  }
+
+  // Plugin-agent admission reads the foreground process, which Windows can't
+  // supply; pinned so these cases mean the same thing on every runner.
+  const originalPlatform = process.platform;
+
+  afterEach(() => {
+    vi.useRealTimers();
+    disposeLifecycleLedger();
+    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+  });
+
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "linux", writable: true });
+    vi.clearAllMocks();
+    _resetRateLimitQueuesForTest();
+    copyTreeHistoryMock.recordCopyTreeRun.mockReset().mockResolvedValue(undefined);
+    projectStoreMock.getCurrentProjectId.mockReturnValue(PROJECT_ID);
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: PROJECT_ID,
+      path: "/repos/daintree",
+      status: "active",
+    });
+    projectStoreMock.getProjectSettings.mockReset();
+  });
+
+  it("delivers an XML bundle as one bracketed paste with nothing outside the wrapper", async () => {
+    const bundle = '<file path="build.sh">\nrm -rf dist\nmake all\n</file>\n';
+    register(bundle);
+
+    const result = await inject();
+
+    expect(result).not.toHaveProperty("error");
+    const written = writes.join("");
+    expect(written).toBe(`${PASTE_START}${bundle}${PASTE_END}`);
+  });
+
+  it("turns control bytes in a Markdown bundle into visible text", async () => {
+    const bundle = "## notes.txt\n\n```\nbefore\x1b[201~after\x03 rest\x7f\x1b[2J\r\n```\n";
+    register(bundle);
+
+    const result = await inject({ options: { format: "markdown" } });
+
+    expect(result).not.toHaveProperty("error");
+    // CR stays: inside the wrapper it is the line separator, read as data.
+    expect(writes.join("")).toBe(
+      `${PASTE_START}## notes.txt\n\n\`\`\`\nbefore␛[201~after␃ rest␡␛[2J\r\n\`\`\`\n${PASTE_END}`
+    );
+  });
+
+  it("keeps the remote-compute block inside the same paste", async () => {
+    register("<files/>\n", {
+      resourceStatus: { lastStatus: "ready", endpoint: "10.0.0.5:22", provider: "acme" },
+      resourceConnectCommand: "ssh dev@10.0.0.5",
+    });
+
+    await inject();
+
+    const written = writes.join("");
+    expect(count(written, PASTE_START)).toBe(1);
+    expect(count(written, PASTE_END)).toBe(1);
+    expect(written.startsWith(`${PASTE_START}<files/>\n`)).toBe(true);
+    expect(written.endsWith(PASTE_END)).toBe(true);
+    expect(written).toContain("ssh dev@10.0.0.5");
+  });
+
+  it("closes the paste and writes no more of the bundle once cancelled between chunks", async () => {
+    const bundle = `${"a".repeat(5000)}\n${"b".repeat(5000)}\n${"c".repeat(5000)}\n`;
+    register(bundle);
+    ptyClient.write.mockImplementation((_id: string, data: string) => {
+      writes.push(data);
+      if (writes.length === 2) void cancel("inj-1");
+    });
+
+    const result = await inject({ injectionId: "inj-1" });
+
+    expect(result).toMatchObject({ fileCount: 0, error: "Injection cancelled" });
+    expect(writes).toEqual([PASTE_START, bundle.slice(0, 4096), PASTE_END]);
+    expect(copyTreeHistoryMock.recordCopyTreeRun).not.toHaveBeenCalled();
+  });
+
+  it("stops the same way when every injection is cancelled at once", async () => {
+    const bundle = "q".repeat(12_000);
+    register(bundle);
+    ptyClient.write.mockImplementation((_id: string, data: string) => {
+      writes.push(data);
+      if (writes.length === 2) void getInvokeHandler(CHANNELS.COPYTREE_CANCEL)(mockSender, {});
+    });
+
+    const result = await inject({ injectionId: "inj-all" });
+
+    expect(result.error).toBe("Injection cancelled");
+    expect(writes).toEqual([PASTE_START, bundle.slice(0, 4096), PASTE_END]);
+  });
+
+  it("reports a cancel that lands after the last chunk as cancelled, still closing the paste", async () => {
+    register("z".repeat(100));
+    ptyClient.write.mockImplementation((_id: string, data: string) => {
+      writes.push(data);
+      if (data.startsWith("z")) void cancel("inj-last");
+    });
+
+    const result = await inject({ injectionId: "inj-last" });
+
+    expect(result.error).toBe("Injection cancelled");
+    expect(writes).toEqual([PASTE_START, "z".repeat(100), PASTE_END]);
+    expect(copyTreeHistoryMock.recordCopyTreeRun).not.toHaveBeenCalled();
+  });
+
+  it("never opens a paste on a terminal that went away after admission", async () => {
+    register("<files/>\n");
+    // The first read is the pre-generation existence check; every later one
+    // sees the terminal gone.
+    ptyClient.hasTerminal.mockReturnValueOnce(true).mockReturnValue(false);
+
+    const result = await inject();
+
+    expect(result.error).toBe("Terminal closed during injection");
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it("never hands the rest of the paste to a same-id respawn", async () => {
+    const bundle = "r".repeat(12_000);
+    register(bundle);
+    ptyClient.write.mockImplementation((_id: string, data: string) => {
+      writes.push(data);
+      if (writes.length === 2) getLifecycleLedger().recordLaunch("t-1", {});
+    });
+
+    const result = await inject();
+
+    expect(result.error).toBe("Terminal closed during injection");
+    expect(writes).toEqual([PASTE_START, bundle.slice(0, 4096)]);
+  });
+
+  it("writes nothing more once the terminal exits mid-delivery", async () => {
+    const bundle = "x".repeat(12_000);
+    register(bundle);
+    ptyClient.write.mockImplementation((_id: string, data: string) => {
+      writes.push(data);
+      if (writes.length === 2) ptyClient.hasTerminal.mockReturnValue(false);
+    });
+
+    const result = await inject();
+
+    expect(result.error).toBe("Terminal closed during injection");
+    expect(writes).toEqual([PASTE_START, bundle.slice(0, 4096)]);
+  });
+
+  it("keeps surrogate pairs whole across chunk boundaries", async () => {
+    const bundle = `${"a".repeat(4095)}😀${"b".repeat(10)}`;
+    register(bundle);
+
+    await inject();
+
+    for (const chunk of writes) {
+      const last = chunk.charCodeAt(chunk.length - 1);
+      expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+    }
+    expect(writes.join("")).toBe(`${PASTE_START}${bundle}${PASTE_END}`);
+  });
+  // Reads: the target's pin before generation, then at most one admission
+  // read. A terminal the host says has no live PTY is refused at the pin.
+  it.each([
+    ["a shell", { hasPty: true, bracketedPasteMode: true }, "not a shell", 2],
+    [
+      "a shell an agent exited back to",
+      { hasPty: true, launchAgentId: "claude", everDetectedAgent: true, bracketedPasteMode: true },
+      "not a shell",
+      2,
+    ],
+    ["an exited terminal", { hasPty: false, detectedAgentId: "claude" }, "no longer exists", 1],
+    ["a terminal the host doesn't know", null, "no longer exists", 2],
+  ])("refuses %s at once, without writing a byte", async (_label, info, message, reads) => {
+    register('<file path="run.sh">\nrm -rf ~/work\n</file>\n');
+    ptyClient.getTerminalInfo.mockResolvedValue(info);
+
+    const result = await inject();
+
+    expect(result.error).toContain(message);
+    expect(result.fileCount).toBe(0);
+    expect(ptyClient.getTerminalInfo).toHaveBeenCalledTimes(reads);
+    expect(ptyClient.write).not.toHaveBeenCalled();
+    expect(copyTreeHistoryMock.recordCopyTreeRun).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "an agent with bracketed paste off",
+      { hasPty: true, detectedAgentId: "claude", bracketedPasteMode: false },
+      "accepting pasted text",
+    ],
+    ["an agent the host has no mode for", { hasPty: true, detectedAgentId: "claude" }, "accepting"],
+    [
+      "an agent launch the host never sees start",
+      { hasPty: true, launchAgentId: "claude", bracketedPasteMode: true },
+      "not a shell",
+    ],
+    [
+      "a plugin agent with bracketed paste off",
+      { hasPty: true, launchAgentId: "acme-agent", ptyForegroundProcess: "acme-agent" },
+      "accepting pasted text",
+    ],
+    [
+      "a plugin agent's launch whose shell is in the foreground",
+      {
+        hasPty: true,
+        launchAgentId: "acme-agent",
+        ptyForegroundProcess: "-zsh",
+        bracketedPasteMode: true,
+      },
+      "not a shell",
+    ],
+    [
+      "a plugin agent's launch with no foreground process to show",
+      { hasPty: true, launchAgentId: "acme-agent", bracketedPasteMode: true },
+      "not a shell",
+    ],
+  ])("waits out %s, then refuses without writing a byte", async (_label, info, message) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
+    register("<files/>\n");
+    ptyClient.getTerminalInfo.mockResolvedValue(info);
+
+    let settled = false;
+    const pending = inject().finally(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(settled).toBe(false);
+    expect(ptyClient.write).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2_000);
+    const result = await pending;
+
+    expect(result.error).toContain(message);
+    expect(ptyClient.getTerminalInfo.mock.calls.length).toBeGreaterThan(2);
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it("pastes once a just-launched agent is detected and turns bracketed paste on", async () => {
+    register("<files/>\n");
+    // The first answer pins the target before generation, with no agent yet.
+    ptyClient.getTerminalInfo
+      .mockResolvedValueOnce({ hasPty: true, launchAgentId: "claude" })
+      .mockResolvedValueOnce({ hasPty: true, launchAgentId: "claude" })
+      .mockResolvedValueOnce({ hasPty: true, launchAgentId: "claude", detectedAgentId: "claude" })
+      .mockResolvedValue({ ...PASTE_READY_AGENT, launchAgentId: "claude" });
+
+    const result = await inject();
+
+    expect(result).not.toHaveProperty("error");
+    expect(ptyClient.getTerminalInfo).toHaveBeenCalledTimes(4);
+    expect(writes.join("")).toBe(`${PASTE_START}<files/>\n${PASTE_END}`);
+  });
+
+  it("has no foreground process to trust for a plugin agent on Windows", () => {
+    // node-pty reports the terminal name there, which no shell check would catch.
+    const info = {
+      hasPty: true,
+      launchAgentId: "acme-agent",
+      ptyForegroundProcess: "xterm-256color",
+      bracketedPasteMode: true,
+    } as TerminalInfoPayload;
+
+    expect(judgePasteDestination(info, "win32")).toMatchObject({ reason: expect.any(String) });
+    expect(judgePasteDestination(info, "darwin")).toBeNull();
+    expect(judgePasteDestination({ ...info, detectedAgentId: "claude" }, "win32")).toBeNull();
+  });
+
+  it("takes a plugin-contributed agent on its launch, which the host can't detect", async () => {
+    register("<files/>\n");
+    ptyClient.getTerminalInfo.mockResolvedValue({
+      hasPty: true,
+      launchAgentId: "acme-agent",
+      ptyForegroundProcess: "acme-agent",
+      bracketedPasteMode: true,
+    });
+
+    const result = await inject();
+
+    expect(result).not.toHaveProperty("error");
+    expect(writes.join("")).toBe(`${PASTE_START}<files/>\n${PASTE_END}`);
+  });
+
+  it("judges the destination after generation, when the agent may have exited", async () => {
+    const generateContext = register("<files/>\n");
+    generateContext.mockImplementation(async () => {
+      ptyClient.getTerminalInfo.mockResolvedValue({ hasPty: true, bracketedPasteMode: false });
+      return { content: "<files/>\n", fileCount: 3 };
+    });
+
+    const result = await inject();
+
+    expect(result.error).toBeTruthy();
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it("writes nothing when cancelled while the destination is being checked", async () => {
+    register("<files/>\n");
+    // The pin answers first; the cancel lands during the admission read.
+    ptyClient.getTerminalInfo
+      .mockResolvedValueOnce(PASTE_READY_AGENT)
+      .mockImplementation(async () => {
+        await cancel("inj-2");
+        return PASTE_READY_AGENT;
+      });
+
+    const result = await inject({ injectionId: "inj-2" });
+
+    expect(result.error).toBe("Injection cancelled");
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it("drops the remote-compute block when cancelled after the last bundle chunk", async () => {
+    register("x".repeat(100), {
+      resourceStatus: { lastStatus: "ready", endpoint: "10.0.0.5:22", provider: "acme" },
+      resourceConnectCommand: "ssh dev@10.0.0.5",
+    });
+    ptyClient.write.mockImplementation((_id: string, data: string) => {
+      writes.push(data);
+      if (data.startsWith("x")) void cancel("inj-3");
+    });
+
+    const result = await inject({ injectionId: "inj-3" });
+
+    expect(result.error).toBe("Injection cancelled");
+    expect(writes).toEqual([PASTE_START, "x".repeat(100), PASTE_END]);
+  });
+
+  it("stops at a write that throws, closes the paste once, and reports the failure", async () => {
+    register("y".repeat(12_000));
+    ptyClient.write.mockImplementation((_id: string, data: string) => {
+      writes.push(data);
+      if (writes.length === 2) throw new Error("host gone");
+    });
+
+    const result = await inject();
+
+    expect(result.error).toContain("host gone");
+    expect(writes).toHaveLength(3);
+    expect(writes[2]).toBe(PASTE_END);
+    expect(copyTreeHistoryMock.recordCopyTreeRun).not.toHaveBeenCalled();
+  });
+});
+
+describe("context injection into a locked pane or a changed target (#15644)", () => {
+  const PROJECT_ID = "a1b2c3d4".repeat(8);
+  const PASTE_START = "\x1b[200~";
+  const PASTE_END = "\x1b[201~";
+  const BUNDLE = "k".repeat(12_000);
+
+  let writes: string[];
+  let ptyClient: {
+    hasTerminal: ReturnType<typeof vi.fn>;
+    isAssistantTerminal: ReturnType<typeof vi.fn>;
+    getTerminalInfo: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+  };
+  let generateContext: ReturnType<typeof vi.fn>;
+
+  function register(content = BUNDLE) {
+    browserWindowMock.fromWebContents.mockReturnValue({ id: 7, isDestroyed: () => false });
+    ipcMainMock.handle.mockClear();
+    writes = [];
+    ptyClient = {
+      hasTerminal: vi.fn(() => true),
+      isAssistantTerminal: vi.fn(() => false),
+      getTerminalInfo: vi.fn(async () => ({ ...PASTE_READY_AGENT, agentIncarnation: 0 })),
+      write: vi.fn((_id: string, data: string) => {
+        writes.push(data);
+      }),
+    };
+    generateContext = vi.fn(async () => ({ content, fileCount: 3 }));
+    registerCopyTreeHandlers({
+      mainWindow: {
+        isDestroyed: () => false,
+        webContents: { isDestroyed: () => false, send: vi.fn() },
+      },
+      ptyClient,
+      worktreeService: {
+        getAllStatesForProjectAsync: vi.fn(async () => [
+          { id: "wt-1", path: "/repos/daintree", branch: "main" },
+        ]),
+        generateContext,
+        testConfig: vi.fn(),
+        getContextFileTree: vi.fn(),
+        cancelAllContext: vi.fn(),
+      },
+      // A cancel-all reaches only its caller's own runs, so the view is bound.
+      projectViewManager: { getProjectIdForWebContents: () => PROJECT_ID },
+    } as never);
+  }
+
+  function inject(injectionId = "inj-lock") {
+    return getInvokeHandler(CHANNELS.COPYTREE_INJECT)(mockSender, {
+      terminalId: "t-1",
+      worktreeId: "wt-1",
+      injectionId,
+    }) as Promise<{ fileCount: number; error?: string }>;
+  }
+
+  function stop(injectionId: string, reason?: "input-locked") {
+    return getInvokeHandler(CHANNELS.COPYTREE_CANCEL)(mockSender, {
+      injectionId,
+      ...(reason ? { reason } : {}),
+    });
+  }
+
+  /** Hold generation open until the test lets it finish. */
+  function holdGeneration(): () => void {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    generateContext.mockImplementation(async () => {
+      await gate;
+      return { content: BUNDLE, fileCount: 3 };
+    });
+    return release;
+  }
+
+  function agentDetected(agentType: string, agentIncarnation: number) {
+    events.emit("agent:detected", {
+      terminalId: "t-1",
+      agentType,
+      processName: agentType,
+      timestamp: Date.now(),
+      agentIncarnation,
+    });
+  }
+
+  function agentExited(agentType: string) {
+    events.emit("agent:exited", {
+      terminalId: "t-1",
+      agentType,
+      timestamp: Date.now(),
+      exitKind: "subcommand",
+    });
+  }
+
+  afterEach(() => {
+    disposeLifecycleLedger();
+    contextInjectionTracker.onProjectSwitch();
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    _resetRateLimitQueuesForTest();
+    copyTreeHistoryMock.recordCopyTreeRun.mockReset().mockResolvedValue(undefined);
+    projectStoreMock.getCurrentProjectId.mockReturnValue(PROJECT_ID);
+    projectStoreMock.getProjectById.mockReturnValue({
+      id: PROJECT_ID,
+      path: "/repos/daintree",
+      status: "active",
+    });
+    projectStoreMock.getProjectSettings.mockReset();
+  });
+
+  it("writes nothing and says the pane was locked when the lock lands during generation", async () => {
+    register();
+    const release = holdGeneration();
+
+    const pending = inject();
+    await vi.waitFor(() => expect(generateContext).toHaveBeenCalled());
+    await stop("inj-lock", "input-locked");
+    release();
+    const result = await pending;
+
+    expect(result.error).toContain("input was locked");
+    expect(result.error).not.toBe("Injection cancelled");
+    expect(result.fileCount).toBe(0);
+    expect(ptyClient.write).not.toHaveBeenCalled();
+    expect(copyTreeHistoryMock.recordCopyTreeRun).not.toHaveBeenCalled();
+  });
+
+  it("writes no more of the bundle after a lock between chunks, closing the paste once", async () => {
+    register();
+    let lockedAt = -1;
+    ptyClient.write.mockImplementation((_id: string, data: string) => {
+      writes.push(data);
+      if (writes.length === 2) {
+        lockedAt = writes.length;
+        void stop("inj-lock", "input-locked");
+      }
+    });
+
+    const result = await inject();
+
+    expect(result.error).toContain("input was locked");
+    const afterLock = writes.slice(lockedAt);
+    expect(afterLock).toEqual([PASTE_END]);
+    expect(writes).toEqual([PASTE_START, BUNDLE.slice(0, 4096), PASTE_END]);
+    expect(copyTreeHistoryMock.recordCopyTreeRun).not.toHaveBeenCalled();
+  });
+
+  it("keeps the lock as the reason when every injection is cancelled after it", async () => {
+    register();
+    ptyClient.write.mockImplementation((_id: string, data: string) => {
+      writes.push(data);
+      if (writes.length === 2) {
+        void stop("inj-lock", "input-locked");
+        void getInvokeHandler(CHANNELS.COPYTREE_CANCEL)(mockSender, {});
+      }
+    });
+
+    const result = await inject();
+
+    expect(result.error).toContain("input was locked");
+  });
+
+  it("refuses a lock reason that names no injection rather than cancelling every run", async () => {
+    register();
+    ptyClient.write.mockImplementation((_id: string, data: string) => {
+      writes.push(data);
+      if (writes.length === 2) {
+        void getInvokeHandler(CHANNELS.COPYTREE_CANCEL)(mockSender, { reason: "input-locked" });
+      }
+    });
+
+    const result = await inject();
+
+    expect(result).not.toHaveProperty("error");
+    expect(writes.join("")).toBe(`${PASTE_START}${BUNDLE}${PASTE_END}`);
+  });
+
+  it("generates nothing for a stop that reached main before its injection did", async () => {
+    register();
+    // Cancel is lease-free and inject waits on the driver lease, so the stop
+    // can overtake it.
+    await stop("inj-early", "input-locked");
+
+    const result = await inject("inj-early");
+
+    expect(result.error).toContain("input was locked");
+    expect(generateContext).not.toHaveBeenCalled();
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a different agent", { ...PASTE_READY_AGENT, detectedAgentId: "codex", agentIncarnation: 0 }],
+    ["the same agent relaunched", { ...PASTE_READY_AGENT, agentIncarnation: 1 }],
+    ["the shell the agent exited to", { hasPty: true, bracketedPasteMode: true }],
+  ])("writes nothing to %s found after generation", async (_label, after) => {
+    register();
+    const release = holdGeneration();
+
+    const pending = inject();
+    await vi.waitFor(() => expect(generateContext).toHaveBeenCalled());
+    ptyClient.getTerminalInfo.mockResolvedValue(after);
+    release();
+    const result = await pending;
+
+    expect(result.error).toBe("Injection stopped: the agent it was for is no longer running there");
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it("writes nothing when the agent exits and another starts during generation", async () => {
+    register();
+    const release = holdGeneration();
+
+    const pending = inject();
+    await vi.waitFor(() => expect(generateContext).toHaveBeenCalled());
+    // The host's answer afterwards looks like the original agent, so only the
+    // events between the two reads show the swap.
+    agentExited("claude");
+    agentDetected("claude", 0);
+    release();
+    const result = await pending;
+
+    expect(result.error).toContain("no longer running");
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it("refuses a same-id respawn from generation at once, never waiting on its startup", async () => {
+    register();
+    const release = holdGeneration();
+
+    const pending = inject();
+    await vi.waitFor(() => expect(generateContext).toHaveBeenCalled());
+    getLifecycleLedger().recordLaunch("t-1", {});
+    // The successor is still starting, which on its own would be waited out.
+    ptyClient.getTerminalInfo.mockResolvedValue({ hasPty: true, launchAgentId: "claude" });
+    release();
+    const result = await pending;
+
+    expect(result.error).toBe("Terminal closed during injection");
+    expect(ptyClient.getTerminalInfo).toHaveBeenCalledTimes(2);
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it("delivers to a launch the host hadn't spawned yet when the pin was taken", async () => {
+    register("<files/>\n");
+    // `hasTerminal` counts a pending spawn; the host answers null until it exists.
+    ptyClient.getTerminalInfo.mockResolvedValueOnce(null);
+
+    const result = await inject();
+
+    expect(result).not.toHaveProperty("error");
+    expect(writes.join("")).toBe(`${PASTE_START}<files/>\n${PASTE_END}`);
+  });
+
+  it("gives nothing to a successor when an unpinned agent exits during generation", async () => {
+    register();
+    // A failed read leaves nothing pinned, but the agent was there all along.
+    ptyClient.getTerminalInfo.mockResolvedValueOnce(null);
+    const release = holdGeneration();
+
+    const pending = inject();
+    await vi.waitFor(() => expect(generateContext).toHaveBeenCalled());
+    agentExited("claude");
+    agentDetected("codex", 1);
+    ptyClient.getTerminalInfo.mockResolvedValue({
+      ...PASTE_READY_AGENT,
+      detectedAgentId: "codex",
+      agentIncarnation: 1,
+    });
+    release();
+    const result = await pending;
+
+    expect(result.error).toContain("no longer running");
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it("generates nothing for a lock that overtook its inject across a project switch", async () => {
+    register();
+    await stop("inj-switch", "input-locked");
+    contextInjectionTracker.onProjectSwitch();
+
+    const result = await inject("inj-switch");
+
+    expect(result.error).toContain("input was locked");
+    expect(generateContext).not.toHaveBeenCalled();
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it("keeps a lock recorded during generation through a project switch", async () => {
+    register();
+    const release = holdGeneration();
+
+    const pending = inject();
+    await vi.waitFor(() => expect(generateContext).toHaveBeenCalled());
+    await stop("inj-lock", "input-locked");
+    contextInjectionTracker.onProjectSwitch();
+    release();
+    const result = await pending;
+
+    expect(result.error).toContain("input was locked");
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it("hands no terminator to a successor when a lock and the agent's exit land together", async () => {
+    register();
+    ptyClient.write.mockImplementation((_id: string, data: string) => {
+      writes.push(data);
+      if (writes.length === 2) {
+        void stop("inj-lock", "input-locked");
+        agentExited("claude");
+      }
+    });
+
+    const result = await inject();
+
+    expect(result.error).toContain("input was locked");
+    expect(writes).toEqual([PASTE_START, BUNDLE.slice(0, 4096)]);
+  });
+
+  it("stops between chunks when the agent exits, with no terminator for its shell", async () => {
+    register();
+    ptyClient.write.mockImplementation((_id: string, data: string) => {
+      writes.push(data);
+      if (writes.length === 2) agentExited("claude");
+    });
+
+    const result = await inject();
+
+    expect(result.error).toContain("no longer running");
+    // The opener went to the agent that left; its shell never saw a paste open.
+    expect(writes).toEqual([PASTE_START, BUNDLE.slice(0, 4096)]);
+  });
+
+  it("takes the first agent seen as the owner of a target that had none, and holds it", async () => {
+    register();
+    ptyClient.getTerminalInfo.mockResolvedValueOnce({ hasPty: true, launchAgentId: "claude" });
+    const release = holdGeneration();
+
+    const pending = inject();
+    await vi.waitFor(() => expect(generateContext).toHaveBeenCalled());
+    agentDetected("claude", 0);
+    agentDetected("gemini", 0);
+    release();
+    const result = await pending;
+
+    expect(result.error).toContain("no longer running");
+    expect(ptyClient.write).not.toHaveBeenCalled();
+  });
+
+  it("still delivers to a just-launched agent first detected during generation", async () => {
+    register("<files/>\n");
+    ptyClient.getTerminalInfo.mockResolvedValueOnce({ hasPty: true, launchAgentId: "claude" });
+    const release = holdGeneration();
+    generateContext.mockImplementation(async () => {
+      agentDetected("claude", 0);
+      release();
+      return { content: "<files/>\n", fileCount: 3 };
+    });
+
+    const result = await inject();
+
+    expect(result).not.toHaveProperty("error");
+    expect(writes.join("")).toBe(`${PASTE_START}<files/>\n${PASTE_END}`);
+  });
+
+  it("ignores another terminal's agent events", async () => {
+    register();
+    ptyClient.write.mockImplementation((_id: string, data: string) => {
+      writes.push(data);
+      if (writes.length === 2) {
+        events.emit("agent:exited", { terminalId: "t-2", agentType: "claude", timestamp: 0 });
+      }
+    });
+
+    const result = await inject();
+
+    expect(result).not.toHaveProperty("error");
+    expect(writes.join("")).toBe(`${PASTE_START}${BUNDLE}${PASTE_END}`);
+  });
+});
+
+describe("an id-less cancel stays within the caller's project (#16275)", () => {
+  const PROJECT_A = { id: "proj-a", path: nodePath.resolve("/repos/a"), status: "active" };
+  const PROJECT_B = { id: "proj-b", path: nodePath.resolve("/repos/b"), status: "active" };
+  const senderA = { sender: { id: 11 } } as never;
+  const senderB = { sender: { id: 12 } } as never;
+  /** A second window on project A. */
+  const senderA2 = { sender: { id: 13 } } as never;
+  const bindings = new Map<number, string>([
+    [11, PROJECT_A.id],
+    [12, PROJECT_B.id],
+    [13, PROJECT_A.id],
+  ]);
+
+  let releases: Array<() => void>;
+  let inFlight: Array<Promise<unknown>>;
+  let worktreeService: {
+    getAllStatesForProjectAsync: Mock;
+    generateContext: Mock;
+    testConfig: Mock;
+    getContextFileTree: Mock;
+    cancelAllContext: Mock;
+  };
+
+  function worktreeOf(project: { path: string }) {
+    return { id: nodePath.join(project.path, "wt"), path: project.path, branch: "main" };
+  }
+
+  function remoteEndpoint(projectId: string): ClientEndpoint {
+    return {
+      endpointId: `remote:s1:${projectId}`,
+      clientId: "client-remote",
+      projectId,
+      kind: "remote-view",
+      handle: -7,
+      send: vi.fn(),
+      request: vi.fn(),
+      onClose: () => ({ dispose: () => undefined }),
+      isClosed: () => false,
+    } as unknown as ClientEndpoint;
+  }
+
+  function cancelFromRemote(endpoint: ClientEndpoint, payload: Record<string, unknown>) {
+    return getIpcDispatcher().invokeForEndpoint(
+      {
+        endpoint,
+        client: {
+          clientId: endpoint.clientId,
+          clientName: "b",
+          platform: "darwin",
+          kind: "remote",
+        },
+      },
+      CHANNELS.COPYTREE_CANCEL,
+      [payload]
+    );
+  }
+
+  /** Inject from `sender` into its project's worktree, with generation held until released. */
+  function heldInject(sender: never, project: { path: string }, terminalId: string, id: string) {
+    let started!: () => void;
+    const generating = new Promise<void>((resolve) => (started = resolve));
+    worktreeService.generateContext.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releases.push(() => resolve({ content: "<files/>\n", fileCount: 1 }));
+          started();
+        })
+    );
+    const result = getInvokeHandler(CHANNELS.COPYTREE_INJECT)(sender, {
+      terminalId,
+      worktreeId: worktreeOf(project).id,
+      injectionId: id,
+    }) as Promise<{ fileCount: number; error?: string }>;
+    inFlight.push(result);
+    // A run that ends before generating would otherwise leave the test waiting.
+    const endedEarly = result.then((settled) => {
+      throw new Error(`inject ended before generating: ${settled.error}`);
+    });
+    return { result, generating: Promise.race([generating, endedEarly]) };
+  }
+
+  const originalPlatform = process.platform;
+
+  beforeEach(() => {
+    Object.defineProperty(process, "platform", { value: "linux", writable: true });
+    vi.clearAllMocks();
+    _resetRateLimitQueuesForTest();
+    releases = [];
+    inFlight = [];
+    browserWindowMock.fromWebContents.mockReturnValue({ id: 7, isDestroyed: () => false });
+    windowRefMock.getProjectViewManager.mockReturnValue(null);
+    copyTreeHistoryMock.recordCopyTreeRun.mockReset().mockResolvedValue(undefined);
+    projectStoreMock.getCurrentProjectId.mockReturnValue(PROJECT_A.id);
+    projectStoreMock.getProjectById.mockImplementation(
+      (id) => [PROJECT_A, PROJECT_B].find((project) => project.id === id) ?? null
+    );
+    projectStoreMock.getProjectSettings.mockResolvedValue({ excludedPaths: [] });
+    ipcMainMock.handle.mockClear();
+    worktreeService = {
+      getAllStatesForProjectAsync: vi.fn(async (projectPath: string) => [
+        worktreeOf({ path: projectPath }),
+      ]),
+      generateContext: vi.fn(),
+      testConfig: vi.fn(),
+      getContextFileTree: vi.fn(),
+      cancelAllContext: vi.fn(),
+    };
+    registerCopyTreeHandlers({
+      mainWindow: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+      ptyClient: {
+        hasTerminal: vi.fn(() => true),
+        isAssistantTerminal: vi.fn(() => false),
+        getTerminalInfo: vi.fn(async () => PASTE_READY_AGENT),
+        write: vi.fn(),
+      },
+      worktreeService,
+      projectViewManager: { getProjectIdForWebContents: (id: number) => bindings.get(id) ?? null },
+    } as never);
+    getIpcDispatcher().setInvokeEnveloper(async (_channel, _args, call) =>
+      wrapSuccess(await call())
+    );
+  });
+
+  afterEach(async () => {
+    // Settled before the shared tracker and ledger move on, even after a failed assertion.
+    for (const release of releases) release();
+    await Promise.allSettled(inFlight);
+    getIpcDispatcher().setInvokeEnveloper(null);
+    disposeLifecycleLedger();
+    Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+  });
+
+  it("leaves another project's injection running", async () => {
+    const a = heldInject(senderA, PROJECT_A, "t-a", "inj-a");
+    await a.generating;
+
+    await getInvokeHandler(CHANNELS.COPYTREE_CANCEL)(senderB, {});
+    releases.shift()!();
+
+    expect(await a.result).not.toHaveProperty("error");
+  });
+
+  it("still stops the caller's own project's injection", async () => {
+    const a = heldInject(senderA, PROJECT_A, "t-a", "inj-a");
+    const b = heldInject(senderB, PROJECT_B, "t-b", "inj-b");
+    await Promise.all([a.generating, b.generating]);
+
+    await getInvokeHandler(CHANNELS.COPYTREE_CANCEL)(senderA, {});
+    for (const release of releases.splice(0)) release();
+
+    expect((await a.result).error).toBe("Injection cancelled");
+    expect(await b.result).not.toHaveProperty("error");
+  });
+
+  it("keeps a remote view's sweep out of a project it isn't viewing", async () => {
+    const a = heldInject(senderA, PROJECT_A, "t-a", "inj-a");
+    await a.generating;
+
+    await cancelFromRemote(remoteEndpoint(PROJECT_B.id), {});
+    releases.shift()!();
+
+    expect(await a.result).not.toHaveProperty("error");
+  });
+
+  it("still cancels by injection id", async () => {
+    const a = heldInject(senderA, PROJECT_A, "t-a", "inj-a");
+    await a.generating;
+
+    await getInvokeHandler(CHANNELS.COPYTREE_CANCEL)(senderA, { injectionId: "inj-a" });
+    releases.shift()!();
+
+    expect((await a.result).error).toBe("Injection cancelled");
+  });
+
+  it("cancels nothing for a view bound to no workspace, whatever the current project", async () => {
+    const a = heldInject(senderA, PROJECT_A, "t-a", "inj-a");
+    await a.generating;
+
+    await getInvokeHandler(CHANNELS.COPYTREE_CANCEL)({ sender: { id: 99 } }, {});
+    releases.shift()!();
+
+    expect(await a.result).not.toHaveProperty("error");
+    expect(worktreeService.cancelAllContext).not.toHaveBeenCalled();
+  });
+
+  it("lets any view of the project stop its runs when no lease service runs", async () => {
+    const a = heldInject(senderA, PROJECT_A, "t-a", "inj-a");
+    await a.generating;
+
+    await getInvokeHandler(CHANNELS.COPYTREE_CANCEL)(senderA2, {});
+    releases.shift()!();
+
+    expect((await a.result).error).toBe("Injection cancelled");
+  });
+
+  it("never claims a run for the global current project", async () => {
+    await getInvokeHandler(CHANNELS.COPYTREE_CANCEL)(senderA, {});
+    const projectACancel = worktreeService.cancelAllContext.mock
+      .calls[0]![0] as CopyTreeOwnerPredicate;
+    // Re-registered with no view binding at all: the run resolves its
+    // worktree through the current project, A, but must not belong to it.
+    ipcMainMock.handle.mockClear();
+    registerCopyTreeHandlers({
+      mainWindow: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+      worktreeService,
+    } as never);
+    worktreeService.generateContext.mockResolvedValue({ content: "", fileCount: 0, error: "x" });
+
+    await getInvokeHandler(CHANNELS.COPYTREE_GENERATE)(senderA, {
+      worktreeId: worktreeOf(PROJECT_A).id,
+    });
+
+    expect(worktreeService.generateContext).toHaveBeenCalledTimes(1);
+    const unscoped = worktreeService.generateContext.mock.calls[0]![4] as CopyTreeOperationOwner;
+    expect(projectACancel(unscoped)).toBe(false);
+  });
+
+  it("stamps generations with their caller, so only that project's cancel-all matches them", async () => {
+    worktreeService.generateContext.mockResolvedValue({ content: "", fileCount: 0, error: "x" });
+    const generate = getInvokeHandler(CHANNELS.COPYTREE_GENERATE);
+    await generate(senderA, { worktreeId: worktreeOf(PROJECT_A).id });
+    await generate(senderB, { worktreeId: worktreeOf(PROJECT_B).id });
+    const [ownerA, ownerB] = worktreeService.generateContext.mock.calls.map(
+      (args) => args[4] as CopyTreeOperationOwner
+    );
+
+    await getInvokeHandler(CHANNELS.COPYTREE_CANCEL)(senderB, {});
+
+    const matches = worktreeService.cancelAllContext.mock.calls[0]![0] as CopyTreeOwnerPredicate;
+    expect(matches(ownerB!)).toBe(true);
+    expect(matches(ownerA!)).toBe(false);
+  });
+
+  it("stamps the caller on listings and config tests, so a cancel-all reaches them", async () => {
+    worktreeService.getContextFileTree.mockResolvedValue([]);
+    worktreeService.testConfig.mockResolvedValue({ includedFiles: 0, includedSize: 0 });
+    await getInvokeHandler(CHANNELS.COPYTREE_GET_FILE_TREE)(senderA, {
+      worktreeId: worktreeOf(PROJECT_A).id,
+    });
+    await getInvokeHandler(CHANNELS.COPYTREE_TEST_CONFIG)(senderA, {
+      worktreeId: worktreeOf(PROJECT_A).id,
+    });
+    const listing = worktreeService.getContextFileTree.mock.calls[0]![4] as CopyTreeOperationOwner;
+    const config = worktreeService.testConfig.mock.calls[0]![2] as CopyTreeOperationOwner;
+
+    await getInvokeHandler(CHANNELS.COPYTREE_CANCEL)(senderA, {});
+
+    const matches = worktreeService.cancelAllContext.mock.calls[0]![0] as CopyTreeOwnerPredicate;
+    expect(matches(listing)).toBe(true);
+    expect(matches(config)).toBe(true);
+  });
+
+  describe("while a drive lease service runs", () => {
+    /** `${projectId} ${endpointId}` for each endpoint that drives a project. */
+    let driving: Set<string>;
+
+    beforeEach(() => {
+      driving = new Set();
+      _resetDriveLeaseServiceForTesting({
+        isDriving: (projectId: string, endpoint: { endpointId: string }) =>
+          driving.has(`${projectId} ${endpoint.endpointId}`),
+        dispose: () => undefined,
+      } as never);
+    });
+
+    afterEach(() => {
+      _resetDriveLeaseServiceForTesting(null);
+    });
+
+    it("lets a view watching the project stop only its own runs, whatever else it drives", async () => {
+      const watcher = remoteEndpoint(PROJECT_A.id);
+      driving.add(`${PROJECT_B.id} ${watcher.endpointId}`);
+      const a = heldInject(senderA, PROJECT_A, "t-a", "inj-a");
+      await a.generating;
+      worktreeService.generateContext.mockResolvedValueOnce({ content: "", fileCount: 0 });
+      await getIpcDispatcher().invokeForEndpoint(
+        {
+          endpoint: watcher,
+          client: {
+            clientId: watcher.clientId,
+            clientName: "b",
+            platform: "darwin",
+            kind: "remote",
+          },
+        },
+        CHANNELS.COPYTREE_GENERATE,
+        [{ worktreeId: worktreeOf(PROJECT_A).id }]
+      );
+      const [localOwner, watcherOwner] = worktreeService.generateContext.mock.calls.map(
+        (args) => args[4] as CopyTreeOperationOwner
+      );
+
+      await cancelFromRemote(watcher, {});
+      releases.shift()!();
+
+      expect(await a.result).not.toHaveProperty("error");
+      const matches = worktreeService.cancelAllContext.mock.calls[0]![0] as CopyTreeOwnerPredicate;
+      expect(matches(watcherOwner!)).toBe(true);
+      expect(matches(localOwner!)).toBe(false);
+    });
+
+    it("lets the project's driver stop every run in it, and none elsewhere", async () => {
+      const driver = remoteEndpoint(PROJECT_A.id);
+      driving.add(`${PROJECT_A.id} ${driver.endpointId}`);
+      const a = heldInject(senderA, PROJECT_A, "t-a", "inj-a");
+      const b = heldInject(senderB, PROJECT_B, "t-b", "inj-b");
+      await Promise.all([a.generating, b.generating]);
+
+      await cancelFromRemote(driver, {});
+      for (const release of releases.splice(0)) release();
+
+      expect((await a.result).error).toBe("Injection cancelled");
+      expect(await b.result).not.toHaveProperty("error");
+    });
   });
 });

@@ -16,8 +16,7 @@ import {
   SESSION_LABELS,
   summarizeSessionStates,
 } from "../terminalStateConfig";
-import { resolveSessionPresentation } from "@/lib/handBackPresentation";
-import { useRunHandBackState } from "@/hooks/useRunHandBackState";
+import { useRunSessionPresentation } from "@/hooks/useRunSessionPresentation";
 import { useRunParkState } from "@/hooks/useRunParkState";
 import { ParkedCircle } from "@/components/icons";
 import { useRunCanopyPlacement } from "@/hooks/useRunCanopyPlacement";
@@ -45,7 +44,13 @@ import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useKeybindingScope } from "@/hooks/useKeybinding";
-import { SECTION_LABEL, CARD_DENSITY } from "./sectionChrome";
+import {
+  SECTION_LABEL,
+  CARD_DENSITY,
+  DISCLOSURE_BUTTON,
+  DISCLOSURE_BUTTON_LABELLED,
+  INLINE_SESSIONS_SLOT,
+} from "./sectionChrome";
 import { pluralize } from "@/lib/pluralize";
 
 interface MarqueeBox {
@@ -58,6 +63,8 @@ interface MarqueeBox {
 interface TerminalRowProps {
   term: PtyPanelData;
   onClick: (term: PtyPanelData) => void;
+  /** Enter on an armable row opens its session rather than arming it. */
+  onOpen?: (term: PtyPanelData) => void;
   /** Vertical padding of the row's button — `CardDensity.sessionRowY`. */
   padY: string;
   /** See {@link WorktreeTerminalSectionProps.rowClick}. */
@@ -103,7 +110,7 @@ function CanopyEvidenceLine({ refinement, id, pointer }: CanopyEvidenceLineProps
   );
 }
 
-function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
+function TerminalRow({ term, onClick, onOpen, padY, canArm }: TerminalRowProps) {
   const { ref, isTruncated } = useTruncationDetection();
   const dragHandle = useDragHandle();
   const isArmed = useFleetArmingStore((s) => s.armedIds.has(term.id));
@@ -114,25 +121,18 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
   // demotes back to a plain terminal (agent exited or never lived), there
   // is nothing for the sidebar row to track either.
   const agentState = getTerminalAgentDisplayState(chrome, term.agentState);
-  // The glyph alone follows the hand-back: the data attribute keeps the
-  // observed state for E2E selectors.
-  const handBack = useRunHandBackState(term.id);
+  // The glyph alone follows the run's fleet band, as the pane's does: the data
+  // attribute keeps the observed state for E2E selectors.
+  const glyphState = useRunSessionPresentation(term.id, agentState);
   // Parked is the user's own intent, not an observed state, so it rides beside
   // the state glyph rather than replacing it — and leaves the data attribute
   // alone.
   const park = useRunParkState(term.id);
   const canopy = useRunCanopyPlacement(term.id);
-  const glyphState = resolveSessionPresentation(
-    agentState,
-    term.agentState,
-    term.waitingReason,
-    handBack
-  );
-  // Only the primary ("last armed") row gets the accent ring — it's the
-  // singular focus anchor that will receive keyboard focus when fleet scope
-  // exits. Secondary armed peers keep the dashed shape but use a neutral
-  // border color so multiple accents never render at once. The arm-position
-  // badge stays accent-colored as the secondary signal.
+  // The primary ("last armed") row is the one keyboard focus returns to when
+  // fleet scope exits; it is told apart by a solid outline against the peers'
+  // dashed one, both neutral, since a persistent accent here sat beside the
+  // active card's edge as a second "this one".
   const isPrimary = useFleetArmingStore((s) => s.lastArmedId === term.id);
   const isArmable = canArm && isFleetArmEligible(term);
   const StateIcon = glyphState ? SESSION_ICONS[glyphState] : null;
@@ -169,7 +169,10 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
           // 4px in, not 2: at 2 the stroke sat 1px inside the well's border and
           // met the next armed row's stroke edge to edge.
           isArmed && "outline outline-2 outline-offset-[-4px]",
-          isArmed && isPrimary && "outline-solid outline-accent-primary",
+          // Neutral, like the peers: armed is membership, and accent is the
+          // sidebar's one "this one" (the active card's edge, or a focus ring).
+          // Solid against the peers' dashed still says which is primary.
+          isArmed && isPrimary && "outline-solid outline-text-secondary",
           isArmed && !isPrimary && "outline-dashed outline-border-strong"
         )}
       >
@@ -202,10 +205,21 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
               what a click has to answer to. */}
             <button
               type="button"
+              data-session-row-button=""
               onMouseDown={suppressShiftClickTextSelection}
               onClick={(e) => {
                 e.stopPropagation();
                 onClick(term);
+              }}
+              // A click arms (the fleet gesture); from the keyboard, Space
+              // arms the same way and Enter opens the session, so there is a
+              // key that reaches a waiting agent's pane, not only one that
+              // adds it to a broadcast.
+              onKeyDown={(e) => {
+                if (!isArmable || e.key !== "Enter" || !onOpen) return;
+                e.preventDefault();
+                e.stopPropagation();
+                onOpen(term);
               }}
               aria-pressed={isArmable ? isArmed : undefined}
               // Named by the title alone: the placement and command below are
@@ -260,7 +274,9 @@ function TerminalRow({ term, onClick, padY, canArm }: TerminalRowProps) {
               <span className="flex shrink-0 items-center gap-1.5">
                 {isArmed && armBadge !== undefined && (
                   <span
-                    className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-accent-primary px-1 text-4xs font-mono font-semibold text-accent-primary-foreground tabular-nums"
+                    // Neutral: every armed row carries one, and accent is for the
+                    // single focus anchor, which the primary row's outline marks.
+                    className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-overlay-strong px-1 text-4xs font-mono font-semibold text-text-primary tabular-nums"
                     aria-label={`Armed position ${armBadge}`}
                   >
                     {armBadge}
@@ -361,6 +377,20 @@ export interface WorktreeTerminalSectionProps {
    * the collapsed group's rail beside them already views on click.
    */
   rowClick?: "arm" | "select";
+  /**
+   * The trigger sits at the end of the Details row instead of on a row of its
+   * own (compact sidebar card), and stays there once opened, with the list
+   * laid out beneath that row.
+   */
+  inline?: boolean;
+  /** Names the worktree in the disclosure's accessible name. */
+  worktreeLabel?: string;
+  /**
+   * The caller draws the session-state glyphs on its own title row (the live
+   * sidebar card), so the closed trigger leaves them out rather than repeat
+   * them. A caller without such a row keeps them here.
+   */
+  stateGlyphsElsewhere?: boolean;
 }
 
 const FLEET_HINT_DISMISSED_KEY = "daintree:fleet-selection-hint-dismissed";
@@ -375,6 +405,9 @@ export function WorktreeTerminalSection({
   onToggle,
   onTerminalSelect,
   rowClick = "arm",
+  inline = false,
+  stateGlyphsElsewhere = false,
+  worktreeLabel,
 }: WorktreeTerminalSectionProps) {
   useKeybindingScope("worktreeGrid", isExpanded);
 
@@ -384,6 +417,10 @@ export function WorktreeTerminalSection({
 
   const terminalsId = `worktree-${worktreeId}-terminals`;
   const terminalsPanelId = `worktree-${worktreeId}-terminals-panel`;
+  const summaryId = `${terminalsId}-summary`;
+  const triggerName = worktreeLabel
+    ? `Active sessions for worktree ${worktreeLabel}`
+    : "Active sessions";
 
   const [hintDismissed, setHintDismissed] = useState(
     () => localStorage.getItem(FLEET_HINT_DISMISSED_KEY) === "1"
@@ -394,7 +431,8 @@ export function WorktreeTerminalSection({
     const { visibleStates, label, breakdown } = summarizeSessionStates(
       counts.byState,
       counts.total,
-      counts.unread
+      counts.unread,
+      counts.blocked
     );
     // The collapsed trigger names itself once. Left to name-from-content it
     // read "3 active 3 sessions: 2 working, …" — the visible summary, then
@@ -406,7 +444,7 @@ export function WorktreeTerminalSection({
       terminalSessionAriaLabel: label,
       collapsedTriggerLabel: triggerLabel,
     };
-  }, [counts.byState, counts.total, counts.unread]);
+  }, [counts.byState, counts.total, counts.unread, counts.blocked]);
 
   const SummaryIcon = useMemo(() => {
     if (terminals.length === 0) return null;
@@ -569,52 +607,32 @@ export function WorktreeTerminalSection({
     setMarqueeBox(null);
   }, []);
 
-  /* No sessions. The grid card drops the section — it is a standalone surface
-     and ends cleanly on its own border. The sidebar card cannot: the tray IS
-     its terminator in a full-bleed list, and a list where only some cards
-     carry one separates unevenly, worst at exactly the idle cards that give
-     the eye least to hold on to.
+  /* No sessions. The grid shows a quiet "Start a session" row: its cards sit
+     side by side in rows, and a card with no bottom slot broke the row's
+     baseline, and "no sessions" and "the sessions row did not render" looked
+     the same. The row names the next action rather than the absence.
 
-     So the row stays, but it does not spend itself saying "No sessions". A
-     count of zero is already legible from the empty card above it, and
-     repeated down a thirteen-card sidebar it is thirteen rows of nothing. The
-     empty-state rule here is to name the next action instead of the absence,
-     and the next action on an idle worktree is to start something in it —
-     which is also the one thing this row is positioned to offer. Quiet at
-     rest, so it reads as a footer and not as a call to action. */
+     The sidebar card drops it in both densities. Repeated down a long list
+     it was the same call to action on every idle card, the quietest cards
+     carrying an extra row, and the list's largest single share of height.
+     Starting a session stays one step away in the card's menus. */
   if (!showMetaFooter) {
     // No tray without somewhere for its row to go: see `onStartSession`.
-    //
-    // The grid gets it too. It used to render nothing here, which cost the
-    // overview twice: a card with no sessions had no bottom slot at all, so
-    // its neighbours' bottoms sat 30-50px lower and the row's baseline broke;
-    // and "no sessions" and "the sessions row did not render" looked the same.
-    // The tray answers both, and it names the next action rather than the
-    // absence.
-    if (!onStartSession) return null;
+    if (!onStartSession || isSidebar) return null;
     return (
       <div
         id={terminalsId}
-        className={
-          // The GRID drops the well here. A well is a container, and with no
-          // sessions there is nothing to contain — the same "a well around one
-          // row is a box around nothing" rule the Details section above
-          // already follows. Across 13 cards it was 13 boxes saying the same
-          // sentence.
-          //
-          // The SIDEBAR keeps it, and that is the one place the rule bends:
-          // its cards are full-bleed with no border of their own, so this well
-          // is also what stops two adjacent cards merging into one another. A
-          // grid card has its own border and a 12px gutter and needs no help.
-          isSidebar ? density.well : "mt-1.5"
-        }
+        // No well: with no sessions there is nothing to contain. The sidebar
+        // keeps the well's 1px border, transparent, so the + lands on the same
+        // x as the Details chevron above it.
+        className={isSidebar ? "mt-1 border border-transparent" : "mt-1.5"}
       >
         <button
           type="button"
           onClick={onStartSession}
           className={cn(
             density.row,
-            "gap-1.5 text-2xs text-text-secondary transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
+            "min-h-6 gap-1.5 text-2xs text-text-secondary transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
           )}
         >
           <Plus className="h-3 w-3 shrink-0" aria-hidden="true" />
@@ -624,144 +642,211 @@ export function WorktreeTerminalSection({
     );
   }
 
+  // One control open and closed: the chevron, not the row. The count, the
+  // agent glyph and the state marks beside it are the card's content and
+  // select the worktree like the rest of it (#15864). The same element in
+  // both states, so keyboard focus survives the toggle and a click never
+  // lands on something that moved.
+  const disclosureButton = (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={isExpanded}
+      aria-controls={terminalsPanelId}
+      aria-label={triggerName}
+      aria-describedby={summaryId}
+      id={`${terminalsId}-button`}
+      data-session-trigger=""
+      className={cn(DISCLOSURE_BUTTON, isExpanded && !inline && DISCLOSURE_BUTTON_LABELLED)}
+    >
+      <ChevronRight
+        className={cn("h-3 w-3 shrink-0 text-text-secondary", isExpanded && "rotate-90")}
+        aria-hidden="true"
+      />
+      {/* The open trigger drops the summary glyph in both variants. It led a
+          row whose only other leading mark is the chevron, so this section's
+          label started ~20px right of Details' — two rows the card presents as
+          siblings, sitting on two columns — and it spent that measure on agent
+          identity the child rows directly below already carry, one glyph
+          each. The closed row keeps it: there, it is the only thing on screen
+          naming the agent. */}
+      {isExpanded && !inline && (
+        <span className={SECTION_LABEL}>Active sessions ({counts.total})</span>
+      )}
+    </button>
+  );
+  // The visible count and marks are content rather than part of the control's
+  // name, so the breakdown reaches a screen reader as its description.
+  const summaryDescription = (
+    <span id={summaryId} hidden>
+      {collapsedTriggerLabel}
+    </span>
+  );
+  const summaryGlyph = SummaryIcon ? (
+    <SummaryIcon className="w-3 h-3 shrink-0" />
+  ) : (
+    <SquareTerminal className="w-3 h-3 shrink-0" />
+  );
+
+  const panel = (
+    <SortableContext
+      id={`worktree-${worktreeId}-accordion`}
+      items={orderedWorktreeTerminals.map((t) => getAccordionDragId(t.id))}
+      strategy={verticalListSortingStrategy}
+    >
+      {eligibleTerminals.length >= 2 && armedIdsSize === 0 && !hintDismissed && (
+        <div className="flex items-center justify-between gap-2 border border-transparent py-1 pl-6 pr-2.5 text-2xs text-text-secondary">
+          {/* Every click toggles, modifier or not, so the hint names the
+              two gestures that exist rather than a Shift variant that does
+              the same thing as a plain click. The transparent border is the
+              rows' own, so the text starts on their glyph column. */}
+          <span>Click or drag to select · Enter opens</span>
+          <DismissButton
+            className="-my-1 -mr-1.5"
+            aria-label="Dismiss hint"
+            onClick={(e) => {
+              // Dismissing the hint must not double as selecting the
+              // card the section happens to live in.
+              e.stopPropagation();
+              localStorage.setItem(FLEET_HINT_DISMISSED_KEY, "1");
+              setHintDismissed(true);
+              // The button is about to unmount; focus goes to the first
+              // session rather than falling to the document.
+              scrollRef.current
+                ?.querySelector<HTMLElement>("[data-session-row-button]")
+                ?.focus({ preventScroll: true });
+            }}
+          />
+        </div>
+      )}
+      <div
+        id={terminalsPanelId}
+        ref={scrollRef}
+        role="list"
+        data-session-list=""
+        // The fleet-arming surface: a marquee drag that ends in here is an
+        // arming gesture, never a click on the card.
+        data-card-control=""
+        aria-labelledby={`${terminalsId}-button`}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
+        className={cn(
+          "relative max-h-[300px] overflow-y-auto",
+          rowClick === "arm" && "cursor-crosshair"
+        )}
+      >
+        {orderedWorktreeTerminals.map((term, index) => (
+          <SortableWorktreeTerminal
+            key={term.id}
+            terminal={term}
+            worktreeId={worktreeId}
+            sourceIndex={index}
+          >
+            <TerminalRow
+              term={term}
+              onClick={handleTerminalClick}
+              onOpen={onTerminalSelect}
+              padY={density.sessionRowY}
+              canArm={rowClick === "arm"}
+            />
+          </SortableWorktreeTerminal>
+        ))}
+        {marqueeBox && (
+          <div
+            aria-hidden
+            className="pointer-events-none absolute z-10 rounded-[var(--radius-md)] border border-border-strong bg-overlay-medium"
+            style={{
+              left: marqueeBox.x,
+              top: marqueeBox.y,
+              width: marqueeBox.w,
+              height: marqueeBox.h,
+            }}
+          />
+        )}
+      </div>
+    </SortableContext>
+  );
+
+  if (inline) {
+    return (
+      <>
+        <div id={terminalsId} className="mt-1 shrink-0 border border-transparent">
+          <div
+            // One width whatever its count says, so the age beside it lands on
+            // one column down the list.
+            className={cn(
+              "flex min-h-6 items-center text-xs text-text-secondary",
+              density.rowBox,
+              "pr-1",
+              INLINE_SESSIONS_SLOT
+            )}
+          >
+            {disclosureButton}
+            <span aria-hidden="true" className="flex items-center gap-1.5">
+              {summaryGlyph}
+              {/* One session's count is already beside its state glyph on the
+                  title row, so beside the Details row the row names it only
+                  past one. Stacked on its own row below 20rem it keeps the
+                  count, or it would be a chevron and an icon with nothing to
+                  say. */}
+              <span
+                className={cn(
+                  "font-mono tabular-nums",
+                  // Only when the title row really carries a glyph for it: a
+                  // lone plain shell draws none there.
+                  stateGlyphsElsewhere &&
+                    counts.total === 1 &&
+                    visibleTerminalStates.length > 0 &&
+                    "@xs/card:hidden"
+                )}
+              >
+                {counts.total}
+              </span>
+            </span>
+            {summaryDescription}
+          </div>
+        </div>
+        {/* Beneath the shared footer row rather than in place of it: the
+            trigger stays where it was clicked. */}
+        {isExpanded && (
+          <div className={cn(density.well, "w-full @xs/card:basis-full")}>{panel}</div>
+        )}
+      </>
+    );
+  }
+
   return (
     <div id={terminalsId} className={density.well}>
-      {isExpanded ? (
-        <>
-          <button
-            onClick={onToggle}
-            aria-expanded={true}
-            aria-controls={terminalsPanelId}
-            className={cn(
-              // Leading chevron, no fill, no rule under it — the same shape
-              // Details uses directly above. The grid used to draw this as a
-              // filled header band with a bottom border, which made one
-              // disclosure look like a titled sub-panel and the other like a
-              // row.
-              "transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
-              density.row,
-              "gap-1.5"
-            )}
-            id={`${terminalsId}-button`}
-          >
-            <ChevronRight className="h-3 w-3 shrink-0 rotate-90 text-text-secondary" />
-            {/* The expanded trigger drops the summary glyph in both variants.
-                It led a row whose only other leading mark is the chevron, so
-                this section's label started ~20px right of Details' — two rows
-                the card presents as siblings, sitting on two columns — and it
-                spent that measure on agent identity the child rows directly
-                below already carry, one glyph each. The collapsed trigger
-                keeps it: there, it is the only thing on screen naming the
-                agent. */}
-            <span className={SECTION_LABEL}>Active sessions ({counts.total})</span>
-          </button>
-          <SortableContext
-            id={`worktree-${worktreeId}-accordion`}
-            items={orderedWorktreeTerminals.map((t) => getAccordionDragId(t.id))}
-            strategy={verticalListSortingStrategy}
-          >
-            {eligibleTerminals.length >= 2 && armedIdsSize === 0 && !hintDismissed && (
-              <div className="flex items-center justify-between gap-2 border border-transparent py-1 pl-6 pr-2.5 text-2xs text-text-secondary">
-                {/* Every click toggles, modifier or not, so the hint names the
-                    two gestures that exist rather than a Shift variant that
-                    does the same thing as a plain click. The transparent
-                    border is the rows' own, so the text starts on their glyph
-                    column. */}
-                <span>Click or drag across sessions to select</span>
-                <DismissButton
-                  className="-my-1 -mr-1.5"
-                  aria-label="Dismiss hint"
-                  onClick={(e) => {
-                    // Dismissing the hint must not double as selecting the
-                    // card the section happens to live in.
-                    e.stopPropagation();
-                    localStorage.setItem(FLEET_HINT_DISMISSED_KEY, "1");
-                    setHintDismissed(true);
-                  }}
-                />
-              </div>
-            )}
-            <div
-              id={terminalsPanelId}
-              ref={scrollRef}
-              role="list"
-              aria-labelledby={`${terminalsId}-button`}
-              onPointerDown={handlePointerDown}
-              onPointerMove={handlePointerMove}
-              onPointerUp={handlePointerUp}
-              onPointerCancel={handlePointerCancel}
-              className={cn(
-                "relative max-h-[300px] overflow-y-auto",
-                rowClick === "arm" && "cursor-crosshair"
-              )}
+      <div className={cn("flex items-center", density.rowBox)}>
+        {disclosureButton}
+        {!isExpanded && (
+          <>
+            <span
+              aria-hidden="true"
+              className="flex min-w-0 flex-1 items-center gap-1.5 text-2xs text-text-secondary"
             >
-              {orderedWorktreeTerminals.map((term, index) => (
-                <SortableWorktreeTerminal
-                  key={term.id}
-                  terminal={term}
-                  worktreeId={worktreeId}
-                  sourceIndex={index}
-                >
-                  <TerminalRow
-                    term={term}
-                    onClick={handleTerminalClick}
-                    padY={density.sessionRowY}
-                    canArm={rowClick === "arm"}
-                  />
-                </SortableWorktreeTerminal>
-              ))}
-              {marqueeBox && (
-                <div
-                  aria-hidden
-                  className="pointer-events-none absolute z-10 rounded-[var(--radius-md)] border border-border-strong bg-overlay-medium"
-                  style={{
-                    left: marqueeBox.x,
-                    top: marqueeBox.y,
-                    width: marqueeBox.w,
-                    height: marqueeBox.h,
-                  }}
-                />
-              )}
-            </div>
-          </SortableContext>
-        </>
-      ) : (
-        <button
-          onClick={onToggle}
-          aria-expanded={false}
-          aria-controls={terminalsPanelId}
-          aria-label={collapsedTriggerLabel}
-          className={cn(
-            "justify-between transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
-            density.row
-          )}
-          id={`${terminalsId}-button`}
-        >
-          <span className="flex items-center gap-1.5 text-2xs text-text-secondary">
-            <ChevronRight className="h-3 w-3 shrink-0 text-text-secondary" aria-hidden="true" />
-            {/* Kept here, unlike the expanded trigger: collapsed, this glyph
-                is the ONLY thing on screen saying which agent is running. The
-                expanded trigger can drop it because its own child rows are
-                directly below it, each carrying that agent's glyph. */}
-            {SummaryIcon ? (
-              <SummaryIcon className="w-3 h-3" />
-            ) : (
-              <SquareTerminal className="w-3 h-3" />
-            )}
-            <span className="inline-flex items-center gap-1">
-              <span className="font-mono tabular-nums">{counts.total}</span>
-              <span className="font-sans">active</span>
+              {summaryGlyph}
+              <span className="inline-flex items-center gap-1">
+                <span className="font-mono tabular-nums">{counts.total}</span>
+                <span className="font-sans">active</span>
+              </span>
             </span>
-          </span>
-
-          {visibleTerminalStates.length > 0 && (
-            <CollapsedSessionIndicators
-              visibleStates={visibleTerminalStates}
-              sessionAriaLabel={terminalSessionAriaLabel}
-            />
-          )}
-        </button>
-      )}
+            {/* The live sidebar card draws these on its title row, in the
+                column where a collapsed card draws them too, so the waiting
+                ring sits in the same place on every card in either mode. */}
+            {!stateGlyphsElsewhere && visibleTerminalStates.length > 0 && (
+              <CollapsedSessionIndicators
+                visibleStates={visibleTerminalStates}
+                sessionAriaLabel={terminalSessionAriaLabel}
+              />
+            )}
+          </>
+        )}
+        {summaryDescription}
+      </div>
+      {isExpanded && panel}
     </div>
   );
 }

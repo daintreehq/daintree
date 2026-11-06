@@ -4,11 +4,13 @@ import {
   getEffectiveAgentConfig,
 } from "../config/agentRegistry.js";
 import { hasShellMetachar } from "./shellEscape.js";
+import { isAccountId } from "./agentAccountId.js";
 import {
   combineDangerousModes,
   combineInlineModes,
   resolveDangerousMode,
   resolveInlineMode,
+  resolveEffectivePresetId,
   type AgentSettingsEntry,
 } from "../types/agentSettings.js";
 
@@ -74,8 +76,10 @@ export function sanitizeDisplayTitle(value: unknown): string | undefined {
  *
  * Module-level rather than nested so the identity projection below shares the
  * exact same rules; a second copy would drift the moment either is edited.
+ * Exported so a preset write can refuse whatever this would change rather than
+ * store it and have a read quietly drop it (#16047).
  */
-function sanitizePreset(preset: AgentPreset): AgentPreset | null {
+export function sanitizePreset(preset: AgentPreset): AgentPreset | null {
   // Trim name first so a whitespace-only string is caught by the empty check below
   const trimmedName = preset.name?.trim() ?? "";
   if (!preset.id || !trimmedName) return null;
@@ -84,12 +88,18 @@ function sanitizePreset(preset: AgentPreset): AgentPreset | null {
   if (preset.id.length > 100) return null;
   if (!/^[a-zA-Z0-9_.-]+$/.test(preset.id)) return null; // Only safe ID chars
 
-  // Sanitize args array — filter out non-string, empty, injection-containing, or oversized entries
+  // Sanitize args array — filter out non-string, empty, injection-containing, or oversized entries.
+  // Each element is one argv token (#15638), so a control character inside one
+  // (a line break, a tab) would reach the launch command, which the spawn
+  // schema refuses whole; each run becomes a space, as a standing instruction's does.
   const sanitizeArgs = (args?: string[]): string[] | undefined => {
     if (!Array.isArray(args)) return undefined;
-    const safe = args.filter(
-      (a) => typeof a === "string" && a.length > 0 && a.length <= 10000 && !hasShellMetachar(a)
-    );
+    const safe = args
+      .filter(
+        (a) => typeof a === "string" && a.length > 0 && a.length <= 10000 && !hasShellMetachar(a)
+      )
+      // eslint-disable-next-line no-control-regex
+      .map((a) => a.replace(/[\x00-\x1F\x7F]+/g, " "));
     return safe.length > 0 ? safe : undefined;
   };
 
@@ -143,7 +153,20 @@ function sanitizePreset(preset: AgentPreset): AgentPreset | null {
     displayTitle: sanitizeDisplayTitle(preset.displayTitle),
     fallbacks: sanitizeFallbacks(preset.fallbacks, preset.id),
     fallbackOnRateLimit: preset.fallbackOnRateLimit === true ? true : undefined,
+    keepConversationOnRateLimit: preset.keepConversationOnRateLimit === true ? true : undefined,
+    // Kept even when no account answers to it any more: a launch refuses a
+    // pin it can't find rather than running on another login.
+    accountId: isAccountId(preset.accountId) ? preset.accountId : undefined,
   };
+}
+
+/**
+ * A preset with no pinned account. Accounts are this machine's folders, so
+ * only the user's own presets can pin one (#16133): a repository's preset
+ * file naming an account id could otherwise refuse every launch of it.
+ */
+function withoutAccountPin(preset: AgentPreset): AgentPreset {
+  return preset.accountId === undefined ? preset : { ...preset, accountId: undefined };
 }
 
 /**
@@ -169,9 +192,13 @@ export function getMergedPresets(
   const custom = presetBucket(customPresets) ?? [];
   const project = presetBucket(projectPresets) ?? [];
 
-  const sanitizedRegistry = registryPresets.map(sanitizePreset).filter(Boolean) as AgentPreset[];
+  const sanitizedRegistry = (
+    registryPresets.map(sanitizePreset).filter(Boolean) as AgentPreset[]
+  ).map(withoutAccountPin);
   const sanitizedCustom = custom.map(sanitizePreset).filter(Boolean) as AgentPreset[];
-  const sanitizedProject = project.map(sanitizePreset).filter(Boolean) as AgentPreset[];
+  const sanitizedProject = (project.map(sanitizePreset).filter(Boolean) as AgentPreset[]).map(
+    withoutAccountPin
+  );
 
   // Precedence (first-seen-wins): custom > project > CCR/registry. Custom
   // overrides team-shared project presets, which override CCR-discovered or
@@ -376,6 +403,27 @@ export function getMergedPreset(
     return undefined;
   }
   return merged.find((f) => f.id === presetId);
+}
+
+/**
+ * The saved preset a plain launch settles on, from an agent's merged presets:
+ * the worktree's pick, else the agent's default, which also stands in for a
+ * worktree pick that's gone, as `buildAgentLaunchPlan` falls back. Lets a
+ * picker mark the account that preset pins (#16133) where the launch will.
+ */
+export function resolveSettledSavedPreset(
+  presets: readonly AgentPreset[],
+  entry: AgentSettingsEntry | null | undefined,
+  worktreeId: string | null | undefined
+): AgentPreset | undefined {
+  const savedId = resolveEffectivePresetId(entry, worktreeId);
+  if (!savedId) return undefined;
+  const saved = presets.find((preset) => preset.id === savedId);
+  if (saved) return saved;
+  const agentDefault = entry?.presetId;
+  return agentDefault && agentDefault !== savedId
+    ? presets.find((preset) => preset.id === agentDefault)
+    : undefined;
 }
 
 export function applyPresetBehaviorOverrides(

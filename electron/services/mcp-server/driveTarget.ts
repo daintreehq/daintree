@@ -17,10 +17,19 @@ export type McpDriveTarget =
   | { state: "live"; endpoint: ClientEndpoint; holderName?: string };
 
 /**
- * The drive lease is a remote-hosts service, so core code never imports it:
- * the remote boot installs this resolver in Host mode.
+ * A change the host is about to make to the project itself, with no view:
+ * relayed from a Shell on `linkSessionId`, or this machine's own with none.
  */
-export type McpDriveTargetResolver = (projectId: string) => McpDriveTarget;
+export interface McpDriveChange {
+  linkSessionId: string | null;
+}
+
+/**
+ * The drive lease is a remote-hosts service, so core code never imports it:
+ * the remote boot installs this resolver in Host mode. Asked for a `change`,
+ * a vacant answer lets the host make it, which the lease hears of.
+ */
+export type McpDriveTargetResolver = (projectId: string, change?: McpDriveChange) => McpDriveTarget;
 
 let resolver: McpDriveTargetResolver | null = null;
 const driveTargetChangeListeners = new Set<() => void>();
@@ -75,11 +84,14 @@ export function isMcpHostRoutingEnabled(): boolean {
  * has since closed is a holder that just went, which is what the lease's
  * reservation covers.
  */
-export function resolveMcpDriveTarget(projectId: string): McpDriveTarget | null {
+export function resolveMcpDriveTarget(
+  projectId: string,
+  change?: McpDriveChange
+): McpDriveTarget | null {
   if (resolver === null) return null;
   let target: McpDriveTarget;
   try {
-    target = resolver(projectId);
+    target = resolver(projectId, change);
   } catch (err) {
     console.warn("[MCP] Drive lease lookup failed:", err);
     return { state: "unavailable", reason: "lookup-failed" };

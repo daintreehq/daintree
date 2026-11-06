@@ -680,6 +680,23 @@ describe("McpServerService terminal hand-over to the global assistant (#14161)",
     expect(service.listTerminalAdoptions()).toEqual([]);
   });
 
+  it("drops the prompts the ended session held for workers, and no other session's (#16187)", () => {
+    const queue = service.getWorkerSteerQueue();
+    const revoke = vi.spyOn(queue, "revokePrincipal");
+
+    // Held by the owner key a relayed session's calls run under, as `ownerOf` gives it.
+    service.retireRelayPrincipal("local", GLOBAL.sessionId);
+    expect(revoke).toHaveBeenLastCalledWith(globalOwner);
+
+    // A remote session's end is fenced: its calls still being admitted hold nothing.
+    service.endRelayHeldSends("sender-b", "help-b");
+    expect(revoke).toHaveBeenLastCalledWith(
+      principalOwnerKey(relayOwnershipPrincipal("sender-b", "help-b")),
+      { fence: true }
+    );
+    revoke.mockRestore();
+  });
+
   it("a replacement run is a new principal, handed nothing the old one held", () => {
     adoptGlobal();
     service.releaseRelayAdoptions("local", GLOBAL.sessionId);

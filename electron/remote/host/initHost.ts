@@ -85,7 +85,13 @@ export function initRemoteHostsHost(
   });
   const unregister = registerRemoteService("sessionHost", sessionHost);
   // Read by `agentActive` above, which no endpoint can reach before this exists.
-  const agents = new ProjectAgentActivityCache(() => sessionHost.refreshAgentActivity());
+  // Its inventory is read only while a Shell has a view open here, the only
+  // time an answer is read: Host mode often runs around the clock with nobody
+  // attached (#15907).
+  const agents = new ProjectAgentActivityCache(
+    () => sessionHost.refreshAgentActivity(),
+    () => sessionHost.servesViews
+  );
   // An assistant's help binding is made before its PTY spawns, and every
   // revoke or displacement kills the PTY, so its spawn and its exit are the
   // moments its view's protection changes. The client may not exist yet when
@@ -103,17 +109,29 @@ export function initRemoteHostsHost(
   const offAgentState = events.on("agent:state-changed", ({ terminalId, state }) => {
     if (terminalId) agents.noteState(terminalId, state);
   });
+  // A view opening, or a Shell coming back to its views, may be the first
+  // reader since the inventory was last read: its answer is read fresh, and
+  // whatever changed since is told as it lands. A PTY client attached now
+  // seeds itself.
+  const readAgents = () => {
+    if (watched) agents.reconcile();
+    else watchPty();
+  };
   watchPty();
-  const offOpened = sessionHost.onEndpointOpened(watchPty);
+  const offOpened = sessionHost.onEndpointOpened(readAgents);
+  const offTransport = sessionHost.onTransportChange((_, attached) => {
+    if (attached) readAgents();
+  });
   // Not every end is an exit: a pty-host that dies mid-capture emits none, and
   // a revoke before the kill client is wired kills nothing. A slow sweep stops
   // the view those leave protected from staying so until something else changes.
-  // The agent cache reads the inventory again on the same beat: a failed or
-  // partial read, or a pty-host that restarted without a crash event, is
-  // repaired there, and any change it finds is announced as it lands. An MCP
-  // session binding or dropping against a view already open is only seen here:
-  // its liveness spans the session's routing and transport records, which
-  // change at different moments, and the sweep reads them settled.
+  // The agent cache reads the inventory again on the same beat, while a view
+  // is open to read it: a failed or partial read, or a pty-host that restarted
+  // without a crash event, is repaired there, and any change it finds is
+  // announced as it lands. An MCP session binding or dropping against a view
+  // already open is only seen here: its liveness spans the session's routing
+  // and transport records, which change at different moments, and the sweep
+  // reads them settled.
   const sweep = setInterval(() => {
     refresh();
     agents.reconcile();
@@ -127,6 +145,7 @@ export function initRemoteHostsHost(
     dispose() {
       clearInterval(sweep);
       offOpened();
+      offTransport();
       offAgentState();
       agents.dispose();
       watched?.off("spawn-result", refresh);

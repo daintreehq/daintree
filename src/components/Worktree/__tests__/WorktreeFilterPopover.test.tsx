@@ -89,6 +89,16 @@ describe("WorktreeFilterPopover derives its filter state from one snapshot", () 
     expect(screen.queryByText("Clear all filters")).toBeNull();
   });
 
+  it("leaves the quick-state segment out of the trigger's facet count", () => {
+    // The segment is its own visible control beside the search field; counting
+    // it here doubled one filter across two surfaces.
+    useWorktreeFilterStore.getState().setQuickStateFilter("working");
+    useWorktreeFilterStore.getState().toggleStatusFilter("dirty");
+    openPopover();
+    const trigger = screen.getByLabelText(/^Filter and sort worktrees/);
+    expect(trigger.textContent?.trim()).toBe("1");
+  });
+
   it("keeps the trigger's count and its active styling in agreement", () => {
     // One derived number drives both, so the control can never look switched
     // on while showing nothing, or show a number while looking switched off.
@@ -179,7 +189,7 @@ describe("WorktreeFilterPopover chip states are told apart without colour", () =
     expect(chip(/^Feature/)).toBeDefined();
     expect(chip(/^Bugfix/)).toBeDefined();
     expect(chip(/^Detached/)).toBeUndefined();
-    const more = screen.getByText(/with no matches$/);
+    const more = screen.getByText(/more, none match$/);
     fireEvent.click(more);
     expect(chip(/^Detached/)).toBeDefined();
   });
@@ -250,7 +260,7 @@ describe("WorktreeFilterPopover chip states are told apart without colour", () =
         chipCounts={manyMatching}
       />
     );
-    expect(screen.queryByText(/with no matches$/)).toBeNull();
+    expect(screen.queryByText(/more, none match$/)).toBeNull();
     expect(screen.getByText(/\d+ more$/)).toBeTruthy();
   });
 

@@ -28,21 +28,14 @@ import { SeverityMark } from "@/lib/statusSeverity";
 import { isMac } from "@/lib/platform";
 import { describeChord } from "@/lib/kbdShortcut";
 import { hostScopedKey } from "@/hooks/useHostPlatform";
-import {
-  QUICK_RUN_AUTO_RESTART_KEY_PREFIX,
-  QUICK_RUN_HISTORY_KEY_PREFIX,
-} from "./quickRunStorageKeys";
+import { QUICK_RUN_AUTO_RESTART_KEY_PREFIX } from "./quickRunStorageKeys";
+import { historyStorageKey, loadHistory, recordHistory, type HistoryItem } from "./quickRunHistory";
 import { QUICK_RUN_PANEL_ID } from "./QuickRunToggle";
 
 interface QuickRunProps {
   projectId: string;
   /** Focus the input on mount — true only when the user just opened the panel. */
   focusOnMount?: boolean;
-}
-
-interface HistoryItem {
-  command: string;
-  timestamp: number;
 }
 
 type SuggestionItem =
@@ -161,22 +154,7 @@ function matchRanges(text: string, search: string): Array<[number, number]> | un
 /** Stable ids so `aria-activedescendant` has something to point at. */
 const SUGGESTION_LIST_ID = "quick-run-suggestions";
 const suggestionOptionId = (index: number) => `quick-run-suggestion-${index}`;
-const MAX_HISTORY = 10;
 const LEAD_INDEX = -2;
-
-/**
- * Normalize a command string for comparison.
- * Removes quotes around tokens that don't contain spaces.
- * e.g., `npm run "test"` -> `npm run test`
- * but keeps `npm run "test with spaces"` as is.
- */
-function normalizeCommand(cmd: string): string {
-  return cmd
-    .trim()
-    .replace(/\s+/g, " ")
-    .replace(/"([^"\s]+)"/g, "$1")
-    .replace(/'([^'\s]+)'/g, "$1");
-}
 
 /**
  * QuickRun's panel: the destination, running tasks and the command input. It
@@ -268,47 +246,8 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   };
 
   useEffect(() => {
-    const saved = localStorage.getItem(
-      `${QUICK_RUN_HISTORY_KEY_PREFIX}${hostScopedKey(projectId)}`
-    );
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (
-          Array.isArray(parsed) &&
-          parsed.every(
-            (item) => typeof item === "object" && "command" in item && "timestamp" in item
-          )
-        ) {
-          setHistory(parsed);
-        } else {
-          console.warn("Invalid history format, resetting");
-          localStorage.removeItem(`${QUICK_RUN_HISTORY_KEY_PREFIX}${hostScopedKey(projectId)}`);
-        }
-      } catch (e) {
-        logError("Failed to parse command history", e);
-        localStorage.removeItem(`${QUICK_RUN_HISTORY_KEY_PREFIX}${hostScopedKey(projectId)}`);
-      }
-    }
+    setHistory(loadHistory(historyStorageKey(projectId)));
   }, [projectId]);
-
-  const saveHistory = (cmd: string) => {
-    setHistory((prev) => {
-      const newItem = { command: cmd, timestamp: Date.now() };
-      const normalizedNew = normalizeCommand(cmd);
-      // Use normalized comparison to avoid duplicates with quote variations
-      // but keep the original command value
-      const newHistory = [
-        newItem,
-        ...prev.filter((h) => normalizeCommand(h.command) !== normalizedNew),
-      ].slice(0, MAX_HISTORY);
-      localStorage.setItem(
-        `${QUICK_RUN_HISTORY_KEY_PREFIX}${hostScopedKey(projectId)}`,
-        JSON.stringify(newHistory)
-      );
-      return newHistory;
-    });
-  };
 
   // Pinning moves a row into another band, so its index changes under the
   // highlight. Remember which command was acted on and put the highlight back
@@ -361,20 +300,20 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     const search = input.toLowerCase().trim();
     const savedCommands = settings?.runCommands || [];
 
-    // Use normalized commands for comparison to handle quote variations
-    const savedNormalized = new Set(savedCommands.map((c) => normalizeCommand(c.command)));
-    const detectedNormalized = new Set(allDetectedRunners.map((r) => normalizeCommand(r.command)));
+    // Commands are the same only when their text is. A shell reads `'$HOME'`,
+    // `"$HOME"` and `$HOME` three ways, so quoting and spacing never fold two
+    // commands into one row.
+    const savedCommandTexts = new Set(savedCommands.map((c) => c.command));
+    const detectedCommandTexts = new Set(allDetectedRunners.map((r) => r.command));
 
     // Pinned commands that came from package.json - preserve package.json order
     const savedDetected: SuggestionItem[] = allDetectedRunners
-      .filter((r) => savedNormalized.has(normalizeCommand(r.command)))
+      .filter((r) => savedCommandTexts.has(r.command))
       .map((r) => {
-        const saved = savedCommands.find(
-          (s) => normalizeCommand(s.command) === normalizeCommand(r.command)
-        );
+        const saved = savedCommands.find((s) => s.command === r.command);
         return {
           label: saved?.name || r.name,
-          value: r.command, // Use detected command (clean, no quotes)
+          value: r.command,
           type: "saved" as const,
           icon: saved?.icon || r.icon,
           description: saved?.description || r.description,
@@ -385,7 +324,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
 
     // Custom pinned commands (user-typed, not from package.json) - appear after script pins
     const savedCustom: SuggestionItem[] = savedCommands
-      .filter((cmd) => !detectedNormalized.has(normalizeCommand(cmd.command)))
+      .filter((cmd) => !detectedCommandTexts.has(cmd.command))
       .map((cmd) => ({
         label: cmd.name,
         value: cmd.command, // Keep original command
@@ -401,7 +340,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     // Remaining detected scripts (not pinned) - filter from allDetectedRunners to preserve package.json order
     // This ensures unpinned commands return to their original position
     const scriptOptions: SuggestionItem[] = allDetectedRunners
-      .filter((r) => !savedNormalized.has(normalizeCommand(r.command)))
+      .filter((r) => !savedCommandTexts.has(r.command))
       .map((r) => ({
         label: r.name,
         value: r.command,
@@ -411,12 +350,8 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
       }));
 
     // History - most recent first, excluding saved and detected commands
-    const seenNormalized = new Set([
-      ...savedNormalized,
-      ...allDetectedRunners.map((r) => normalizeCommand(r.command)),
-    ]);
     const historyOptions: SuggestionItem[] = history
-      .filter((h) => !seenNormalized.has(normalizeCommand(h.command)))
+      .filter((h) => !savedCommandTexts.has(h.command) && !detectedCommandTexts.has(h.command))
       .map((h) => ({
         label: h.command,
         value: h.command, // Keep original command
@@ -425,12 +360,11 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
 
     const allOptions = [...savedOptions, ...scriptOptions, ...historyOptions];
 
-    // Remove duplicates using normalized comparison (keep first occurrence)
+    // Remove duplicates of the same text (keep first occurrence)
     const seen = new Set<string>();
     const uniqueOptions = allOptions.filter((opt) => {
-      const normalized = normalizeCommand(opt.value);
-      if (seen.has(normalized)) return false;
-      seen.add(normalized);
+      if (seen.has(opt.value)) return false;
+      seen.add(opt.value);
       return true;
     });
 
@@ -445,15 +379,15 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
     // match is lit where it sits, under its own band; anything else gets the
     // typed text itself as a leading row rather than left implied by an unlit
     // list.
+    // A row's own text may carry surrounding space (a pin saved that way), which
+    // Tab copies into the field; it is still the row that was typed.
     const typed = input.trim();
-    const normalizedTyped = normalizeCommand(typed);
-    if (matches.some((opt) => normalizeCommand(opt.value) === normalizedTyped)) return matches;
+    if (matches.some((opt) => opt.value.trim() === typed)) return matches;
     return [{ label: typed, value: typed, type: "typed" as const }, ...matches];
   }, [input, allDetectedRunners, history, settings]);
 
   if (refocus) {
-    const normalized = normalizeCommand(refocus.value);
-    const at = suggestions.findIndex((s) => normalizeCommand(s.value) === normalized);
+    const at = suggestions.findIndex((s) => s.value === refocus.value);
     const moved = at >= 0 && (suggestions[at]!.type === "saved") !== refocus.wasSaved;
     if (moved) {
       setRefocus(null);
@@ -462,18 +396,16 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   }
 
   const handleToggleAutoRestart = () => {
-    setAutoRestart((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem(
-          `${QUICK_RUN_AUTO_RESTART_KEY_PREFIX}${hostScopedKey(projectId)}`,
-          String(next)
-        );
-      } catch {
-        // ignore
-      }
-      return next;
-    });
+    const next = !autoRestart;
+    setAutoRestart(next);
+    try {
+      localStorage.setItem(
+        `${QUICK_RUN_AUTO_RESTART_KEY_PREFIX}${hostScopedKey(projectId)}`,
+        String(next)
+      );
+    } catch {
+      // ignore
+    }
   };
 
   // A pinned command carries its own output and restart choice, and a toggle
@@ -531,7 +463,7 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
         exitBehavior: restart ? "restart" : undefined,
         spawnedBy: "quickrun",
       });
-      saveHistory(cmd);
+      setHistory(recordHistory(historyStorageKey(projectId), cmd, history));
     } catch (error) {
       logError("Failed to spawn terminal", error);
       // Give the command back rather than leaving an empty field and no task —
@@ -548,15 +480,19 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   };
 
   const listOpen = showSuggestions && suggestions.length > 0;
-  const searching = input.trim().length > 0;
-  const normalizedInput = normalizeCommand(input);
+  const typedCommand = input.trim();
+  const searching = typedCommand.length > 0;
+  // The row that is the field's text. A row whose own text has surrounding space
+  // still counts, but one that matches the field to the character comes first, so
+  // `echo ready ` and `echo ready` stay two rows rather than the earlier winning.
+  const fieldRowIndex = () => {
+    const exact = suggestions.findIndex((s) => s.value === input);
+    return exact >= 0 ? exact : suggestions.findIndex((s) => s.value.trim() === typedCommand);
+  };
   const activeIndex =
     focusedSuggestionIndex === LEAD_INDEX
       ? searching
-        ? Math.max(
-            0,
-            suggestions.findIndex((s) => normalizeCommand(s.value) === normalizedInput)
-          )
+        ? Math.max(0, fieldRowIndex())
         : -1
       : focusedSuggestionIndex;
   const highlighted = listOpen ? suggestions[activeIndex] : undefined;
@@ -581,16 +517,15 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   // The one thing Run means, for Enter and the arrow alike: the lit row, or
   // with the list shut, the text in the field. Text that is exactly a pinned
   // command or a script is still that command with the list shut, so a pinned
-  // command keeps its own output and restart choice after Escape. Literal
-  // equality, not normalized: normalizing drops quotes, and `'$SHELL'` is not
-  // the command `$SHELL` is.
-  const exactMatch = searching
-    ? suggestions.find((s) => s.type !== "typed" && s.value === input.trim())
-    : undefined;
+  // command keeps its own output and restart choice after Escape. Every
+  // comparison of a row with the field is literal apart from surrounding space,
+  // with the list open or shut: `'$SHELL'` is not the command `$SHELL` is.
+  const fieldRow = searching ? suggestions[fieldRowIndex()] : undefined;
+  const exactMatch = fieldRow?.type === "typed" ? undefined : fieldRow;
   const runTarget: SuggestionItem | undefined =
     highlighted ??
     exactMatch ??
-    (searching ? { label: input.trim(), value: input.trim(), type: "typed" } : undefined);
+    (searching ? { label: typedCommand, value: typedCommand, type: "typed" } : undefined);
 
   const effective = runTarget
     ? resolveRunOptions(runTarget)
@@ -619,10 +554,13 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   // Tab completes: the lit command goes into the field to be read in full or
   // edited, without running. Only while it differs from what is there, so a
   // second Tab moves focus on as usual rather than trapping it.
-  const canComplete =
-    highlighted != null && normalizeCommand(highlighted.value) !== normalizedInput;
+  const canComplete = highlighted != null && highlighted.value.trim() !== typedCommand;
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Mid-composition every key is the IME's: Enter commits the candidate rather
+    // than running it. 229 covers browsers that report the commit after
+    // `isComposing` has already cleared.
+    if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
     // Down opens a shut list; the other navigation keys only move a list that is
     // showing, so Home and End keep the caret while it is shut. -1 is the field.
     const navigable = !keyBelongsToField(e) && (listOpen || e.key === "ArrowDown");

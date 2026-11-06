@@ -1,16 +1,22 @@
 import type { ActionErrorCode } from "../../../shared/types/actions.js";
 import { HOST_THROWAWAY_TOOL_SIGNATURES } from "../../../shared/types/hostThrowaway.js";
 import {
+  HOST_BRING_BACK_TOOL,
   HOST_CALL_TOOL,
   HOST_ENSURE_PROJECT_TOOL,
   HOST_LIST_TOOL,
   HOST_SETTINGS_TOOL,
+  HOST_STATUS_TOOL,
   HOST_WATCH_TOOL,
+  HostBringBackArgsSchema,
   HostCallArgsSchema,
   HostEnsureProjectArgsSchema,
   HostListArgsSchema,
   HostSettingsArgsSchema,
+  HostStatusArgsSchema,
   HostWatchArgsSchema,
+  type HostBringBackArgs,
+  type HostBringBackResult,
   type HostCallArgs,
   type HostCallResult,
   type HostControlOutcome,
@@ -22,6 +28,8 @@ import {
   type HostListResult,
   type HostSettingsArgs,
   type HostSettingsResult,
+  type HostStatusArgs,
+  type HostStatusResult,
   type HostWatchArgs,
   type HostWatchResult,
 } from "../../../shared/types/hostControl.js";
@@ -54,8 +62,22 @@ export interface HostControlRuntimeHandle {
     helpSessionId: string,
     args: HostSettingsArgs
   ): Promise<HostControlOutcome<HostSettingsResult>>;
-  /** Arms, cancels or lists the calling run's one-shot watches on a host's link or capacity (#14463). */
+  /**
+   * Arms, cancels or lists the calling run's one-shot watches on a host's link
+   * or capacity (#14463), or on agents starting to wait (#16188).
+   */
   watch(helpSessionId: string, args: HostWatchArgs): Promise<HostControlOutcome<HostWatchResult>>;
+  /** Tries to bring back a host whose link is down, waking and starting it where it can (#16170). */
+  bringBack(
+    helpSessionId: string,
+    args: HostBringBackArgs
+  ): Promise<HostControlOutcome<HostBringBackResult>>;
+  /** `terminal.getStatus` in many projects on many hosts, in one answer (#16191). */
+  status(
+    helpSessionId: string,
+    args: HostStatusArgs,
+    context: HostCallContext
+  ): Promise<HostControlOutcome<HostStatusResult>>;
   /** The hosts and projects the global assistant starts knowing (#14547); never dials a host. */
   inventory?(): Promise<HostInventorySnapshot>;
 }
@@ -64,6 +86,11 @@ export interface HostControlRuntimeHandle {
 export interface HostCallContext {
   /** The tier the call was admitted at here, which is all it may have on the host. */
   tier: "core" | "full";
+  /**
+   * Told when the call ran on the host under this machine's own skip
+   * preference (#15698), never anything the host said: for its audit record.
+   */
+  noteSkipPreference?: () => void;
 }
 
 let installedRuntime: HostControlRuntimeHandle | null = null;
@@ -149,23 +176,30 @@ function settingsArgsFit(args: HostSettingsArgs): boolean {
   }
 }
 
-/** An arm names a host and one kind of condition; cancel and list take only their own. */
+/**
+ * An arm names one kind of condition, and a host unless it watches agents,
+ * which may cover every host; cancel and list take only their own.
+ */
 function watchArgsFit(args: HostWatchArgs): boolean {
   const capacity =
     args.memoryAvailableBytesAtLeast !== undefined ||
     args.cpuIdleCoresAtLeast !== undefined ||
     args.memoryPressureAtMost !== undefined;
+  const agents = args.agentsWaiting === true;
+  const agentFilters = args.waitingReasons !== undefined || args.projectId !== undefined;
   const armOnly =
     capacity ||
+    agents ||
+    agentFilters ||
     args.connection !== undefined ||
     args.expiresInSeconds !== undefined ||
     args.note !== undefined;
   switch (args.operation) {
     case "arm":
+      if (args.watchId !== undefined) return false;
+      if (agents) return args.connection === undefined && !capacity;
       return (
-        args.hostId !== undefined &&
-        args.watchId === undefined &&
-        (args.connection !== undefined) !== capacity
+        args.hostId !== undefined && !agentFilters && (args.connection !== undefined) !== capacity
       );
     case "cancel":
       return args.watchId !== undefined && args.hostId === undefined && !armOnly;
@@ -215,6 +249,16 @@ async function dispatch(
     case HOST_LIST_TOOL: {
       const parsed = HostListArgsSchema.safeParse(raw);
       return parsed.success ? runtime.list(helpSessionId, parsed.data) : invalidArgs();
+    }
+    case HOST_BRING_BACK_TOOL: {
+      const parsed = HostBringBackArgsSchema.safeParse(raw);
+      return parsed.success ? runtime.bringBack(helpSessionId, parsed.data) : invalidArgs();
+    }
+    case HOST_STATUS_TOOL: {
+      // Each project is read at the tier the call was admitted at here, as `host.call` is.
+      if (context === undefined) return notEligible();
+      const parsed = HostStatusArgsSchema.safeParse(raw);
+      return parsed.success ? runtime.status(helpSessionId, parsed.data, context) : invalidArgs();
     }
     default:
       return invalidArgs();

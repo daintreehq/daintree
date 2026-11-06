@@ -2,9 +2,11 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { z } from "zod";
 import {
+  TerminalInputLineSchema,
   TerminalSummarySchema,
   TerminalStatusResultSchema,
   TerminalSendCommandResultSchema,
+  TerminalSendCommandOwnedResultSchema,
   TerminalLastMessageResultSchema,
   PanelLimitSnapshotSchema,
 } from "./schemas";
@@ -26,9 +28,19 @@ import { NOTIFY_ARG_DESCRIPTION, NotifyReplyLinesSchema } from "@shared/types/te
 import { WaitForReplySchema, WaitSecondsSchema } from "@shared/types/replyWait";
 import { RunGenerationArgSchema } from "@shared/types/assistantControl";
 import {
+  QueueTtlSecondsArgSchema,
+  QueuedSendTokenArgSchema,
+  WhenBusyArgSchema,
+} from "@shared/types/queuedSend";
+import {
   TerminalCloseManyArgsSchema,
   TerminalSendCommandManyArgsSchema,
 } from "@shared/types/mcpBatch";
+import {
+  TerminalWaitForExitArgsSchema,
+  TerminalWaitForExitResultSchema,
+} from "@shared/types/terminalExitWait";
+import { TERMINAL_LOCATION_FILTERS } from "@shared/utils/terminalLocationFilter";
 import type { TerminalQueryActionRunId } from "./terminalQueryActions.impl";
 
 /**
@@ -85,9 +97,9 @@ export function registerTerminalQueryActions(
           .optional()
           .describe("Only this worktree. Omit for every worktree in the project."),
         location: z
-          .enum(["grid", "dock", "trash", "background"])
+          .enum(TERMINAL_LOCATION_FILTERS)
           .optional()
-          .describe("Only this location. Omitted, trash and background are excluded."),
+          .describe("Omit to skip trash and background; `all` includes them."),
         owned: z
           .boolean()
           .optional()
@@ -164,6 +176,7 @@ export function registerTerminalQueryActions(
         .describe(
           "True when older output was left out, by `maxLines` or the 50 KiB response budget; the newest lines are kept."
         ),
+      inputLine: TerminalInputLineSchema.optional(),
       error: z.string().optional(),
     }),
     mcpOutputSchema: true,
@@ -213,6 +226,38 @@ export function registerTerminalQueryActions(
     },
   }));
 
+  // Registered for manifest metadata only: main answers it (#15728). What it
+  // reports are exits main kept after the pty-host let a closed panel go, and
+  // what it checks is the ownership ledger's record of what this session
+  // closed; neither is state a renderer can see.
+  actions.set("terminal.waitForExit", () => ({
+    id: "terminal.waitForExit",
+    title: "Wait for closed terminals to exit",
+    description:
+      "Wait, up to a deadline, for the processes of panels this session closed to exit. Each reports exited with its code, running at the deadline, or unknown. Can end their trash grace early instead of sitting it out. Use it before deleting their worktree.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["exit", "process", "trash", "stopped", "cleanup"],
+    palette: { mode: "hidden" },
+    argsSchema: TerminalWaitForExitArgsSchema,
+    resultSchema: TerminalWaitForExitResultSchema,
+    mcpOutputSchema: true,
+    examples: [
+      {
+        args: { terminalIds: ["term-abc123"], endGrace: true },
+        description: "You closed your panes and their processes must be gone before the delete.",
+      },
+    ],
+    run: async () => {
+      throw new Error(
+        "terminal.waitForExit must be invoked through the MCP main-process path, not renderer dispatch."
+      );
+    },
+  }));
+
   actions.set("terminal.getStatus", () => ({
     id: "terminal.getStatus",
     title: "Get terminal status",
@@ -237,9 +282,9 @@ export function registerTerminalQueryActions(
           ),
         worktreeId: z.string().optional().describe("Filter by worktree."),
         location: z
-          .enum(["grid", "dock", "trash", "background"])
+          .enum(TERMINAL_LOCATION_FILTERS)
           .optional()
-          .describe("Filter by location. Default: all but trash and background."),
+          .describe("Omit to skip trash and background; `all` includes them."),
         submissionToken: z
           .string()
           .min(1)
@@ -248,6 +293,9 @@ export function registerTerminalQueryActions(
           .describe(
             "Token from a send; adds its delivery record to each entry. Needs `terminalIds`."
           ),
+        queuedSendToken: QueuedSendTokenArgSchema.optional().describe(
+          "A held send's token; adds `queuedSend`."
+        ),
         // `true` is what a model reaches for first; it reads as the defaults.
         includeOutput: z
           .union([
@@ -268,7 +316,7 @@ export function registerTerminalQueryActions(
           ])
           .optional()
           .describe(
-            "`true` or options: adds `recentOutput` (last N lines), plus `lastOutputChangeAt` and `lastTypedInputAt` when observed."
+            "`true` or options: adds `recentOutput` (last N lines) and `inputLine`, plus `lastOutputChangeAt` and `lastTypedInputAt` when observed."
           ),
       })
       .optional(),
@@ -530,8 +578,10 @@ export function registerTerminalQueryActions(
       replyLines: NotifyReplyLinesSchema,
       waitForReply: WaitForReplySchema,
       waitSeconds: WaitSecondsSchema,
+      whenBusy: WhenBusyArgSchema,
+      queueTtlSeconds: QueueTtlSecondsArgSchema,
     }),
-    resultSchema: TerminalSendCommandResultSchema,
+    resultSchema: TerminalSendCommandOwnedResultSchema,
     mcpOutputSchema: true,
     run: async () => {
       throw new Error(

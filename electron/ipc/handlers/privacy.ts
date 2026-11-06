@@ -12,6 +12,7 @@ import { typedBroadcast } from "../utils.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { PRIVACY_METHOD_CHANNELS } from "./privacy.preload.js";
 import { armRelaunch } from "../../lifecycle/armRelaunch.js";
+import { RUN_DUE_SCHEDULES_FLAG } from "../../boot/dueScheduleLaunch.js";
 
 type TelemetryLevel = "off" | "errors" | "full";
 const VALID_LEVELS: TelemetryLevel[] = ["off", "errors", "full"];
@@ -58,7 +59,9 @@ export const privacyNamespace = defineIpcNamespace({
       (): Promise<{ cleared: number; failed: number }> => clearAllSessionCaches()
     ),
     resetAllData: op(PRIVACY_METHOD_CHANNELS.resetAllData, async (): Promise<void> => {
-      armRelaunch({ args: process.argv.slice(1).concat(["--reset-data"]) });
+      // Without the OS job's one-shot windowless launch, so the reset comes back with a window.
+      const args = process.argv.slice(1).filter((arg) => arg !== RUN_DUE_SCHEDULES_FLAG);
+      armRelaunch({ args: args.concat(["--reset-data"]) });
       await closeTelemetry();
       app.exit(0);
     }),

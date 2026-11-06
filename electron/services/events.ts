@@ -8,6 +8,7 @@ import type {
 } from "../../shared/types/pty-host.js";
 import type { ExitReason } from "./pty/types.js";
 import type { AgentEndObservation } from "../../shared/types/ipc/agent.js";
+import type { ClaudeUsageObservation } from "../../shared/types/ipc/agentQuota.js";
 import type { ActionSource } from "../../shared/types/actions.js";
 
 export type { EventCategory };
@@ -236,11 +237,23 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "A pane's output showed an agent rate-limit banner",
   },
+  "agent:claude-usage-observed": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A Claude Code pane showed a usage-limit message, as parsed fields",
+  },
   "agent:handback-observed": {
     category: "agent",
     requiresContext: false,
     requiresTimestamp: true,
     description: "A pane printed the handback marker a submission asked for",
+  },
+  "agent:run-handback-observed": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A scheduled run's agent printed the marker its launch asked for",
   },
   "agent:detected": {
     category: "agent",
@@ -258,7 +271,7 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     category: "agent",
     requiresContext: true,
     requiresTimestamp: true,
-    description: "Agent produced output (sanitized in EventBuffer)",
+    description: "Daintree Assistant terminal produced output (sanitized in EventBuffer)",
   },
   "agent:completed": {
     category: "agent",
@@ -327,6 +340,12 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: true,
     description: "A panel was renamed and the authoritative record now agrees",
   },
+  "terminal:observed-title-changed": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A mounted terminal reported a new title from its agent",
+  },
   "terminal:worktree-changed": {
     category: "agent",
     requiresContext: false,
@@ -357,11 +376,41 @@ export const EVENT_META: Record<keyof DaintreeEventMap, EventMetadata> = {
     requiresTimestamp: false,
     description: "Pty-host captured a resumable session; Main must persist it",
   },
+  "agent-session:observed": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: false,
+    description: "A run's own argv named the session it resumes; Main must record it on the pane",
+  },
+  "agent-session:attributed": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: false,
+    description: "Main learned the conversation a live run is in",
+  },
   "agent-session:recorded": {
     category: "agent",
     requiresContext: false,
     requiresTimestamp: true,
     description: "A close path journaled a resumable agent session",
+  },
+  "scheduled-run:started": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A schedule's run was registered to launch",
+  },
+  "scheduled-run:ended": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A schedule's run settled",
+  },
+  "scheduled-runs:deleted": {
+    category: "agent",
+    requiresContext: false,
+    requiresTimestamp: true,
+    description: "A schedule's or a project's run history was deleted",
   },
   "terminal:activity": {
     category: "agent",
@@ -735,6 +784,14 @@ export type DaintreeEventMap = {
   };
 
   /**
+   * A Claude Code pane showed a usage message (#15727): the limit it names,
+   * what it says about use and its reset, as parsed fields. The line itself
+   * never leaves the pty host. Main records it for `agent.readQuota` and
+   * doesn't re-emit it.
+   */
+  "agent:claude-usage-observed": ClaudeUsageObservation & { timestamp: number };
+
+  /**
    * A pane printed, complete, the handback marker one of its submissions asked
    * for (#12488), seen as the output arrived rather than at the agent's settle.
    * `handback.message` is the agent's own untrusted summary.
@@ -744,6 +801,27 @@ export type DaintreeEventMap = {
     handback: import("../../shared/types/handback.js").TerminalHandback;
     /** The code minted for the prompt, which names this marker on screen. */
     code?: string;
+    /** The pane's `lastStateChange` when the marker was seen: the state it was printed in. */
+    lastStateChange?: number;
+    timestamp: number;
+  };
+
+  /**
+   * A scheduled run's launch marker printed, complete (#15982): `done` or
+   * `needs-you` with the agent's one-line summary, from the incarnation
+   * `spawnedAt`. Emitted in the pty-host for a run's launch request alone,
+   * from whichever check saw it first, and possibly again for a capture that
+   * changed; the run history keeps the first. Deliberately not buffered for
+   * the event inspector: `message` is terminal text the agent wrote.
+   */
+  "agent:run-handback-observed": {
+    terminalId: string;
+    spawnedAt: number;
+    code: string;
+    report: import("../../shared/types/handback.js").HandbackReport;
+    message: string | null;
+    truncated: boolean;
+    observedAt: number;
     timestamp: number;
   };
 
@@ -782,7 +860,9 @@ export type DaintreeEventMap = {
   };
 
   /**
-   * Emitted when an agent produces output.
+   * Emitted when an agent in a Daintree Assistant terminal produces output.
+   * Other agent terminals' output never leaves the PTY host this way: Main
+   * has no reader for it (#15667).
    * Note: This is separate from terminal data and may be parsed/structured.
    * WARNING: The data field may contain sensitive information (API keys, secrets, etc.).
    * Consumers should sanitize or redact before logging/persisting.
@@ -954,6 +1034,17 @@ export type DaintreeEventMap = {
   };
 
   /**
+   * A mounted terminal sent main the agent's new title (#16230), once it was
+   * forwarded to the authoritative record. Apart from `terminal:title-changed`
+   * so the fleet doesn't re-read every terminal each time an agent retitles;
+   * Decisions' terminal snapshots retitle the pane on the phone.
+   */
+  "terminal:observed-title-changed": {
+    id: string;
+    timestamp: number;
+  };
+
+  /**
    * A cross-worktree move reached the authoritative terminal record. The fleet
    * projection subscribes because the row's worktree grouping changed; no agent
    * state moved, so no other feed reports it and the 5s poll would otherwise own
@@ -1033,6 +1124,34 @@ export type DaintreeEventMap = {
       import("../../shared/types/ipc/agentSessionHistory.js").AgentSessionRecord,
       "savedAt"
     >;
+    /** The agent run that ended, for an exit or demotion capture. */
+    run?: import("../../shared/types/pty-host.js").AgentRunToken;
+  };
+
+  /**
+   * Emitted in the pty-host when a run's own argv names the conversation it
+   * resumes (`codex resume <id>` typed into the pane's shell, #15994), once per
+   * observed run, and re-emitted on the Main bus by PtyEventsBridge. Main
+   * records it on the saved pane only: the run is still going, so there is
+   * nothing to journal. Deliberately not buffered for the event inspector:
+   * the id is a resume credential.
+   */
+  "agent-session:observed": {
+    terminalId: string;
+    agentId: string;
+    projectId: string;
+    sessionId: string;
+    run: import("../../shared/types/pty-host.js").AgentRunToken;
+  };
+
+  /**
+   * Main learned the conversation a live run is in, after the run started
+   * (#15268), and told the pty host. Never carries the id: it is a resume
+   * credential, read off the pane record by whoever needs it.
+   */
+  "agent-session:attributed": {
+    terminalId: string;
+    launchGeneration: number;
   };
 
   /**
@@ -1045,6 +1164,45 @@ export type DaintreeEventMap = {
     sessionId: string;
     worktreeId: string | null;
     projectId: string | null;
+    timestamp: number;
+  };
+
+  /**
+   * A schedule's run was registered to launch, just before its terminal
+   * spawns (#15976). A run that starts ends with `scheduled-run:ended`, at the
+   * next startup if Daintree quits first; a skipped run neither starts nor ends.
+   */
+  "scheduled-run:started": {
+    runId: string;
+    scheduleId: string;
+    projectId: string;
+    terminalId: string;
+    timestamp: number;
+  };
+
+  /**
+   * A schedule's run settled. Fires once per run. A run left open when
+   * Daintree quit or crashed ends at the next startup, as `interrupted`,
+   * with no `scheduled-run:started` in that lifetime.
+   */
+  "scheduled-run:ended": {
+    runId: string;
+    scheduleId: string;
+    projectId: string;
+    terminalId: string | null;
+    outcome: import("../../shared/types/scheduledRuns.js").ScheduledRunOutcome;
+    timestamp: number;
+  };
+
+  /**
+   * Run history was deleted with its schedule or its project (#15981). Its
+   * runs, open ones included, are gone without settling, so none of them will
+   * ever send `scheduled-run:ended`. Their processes aren't touched.
+   */
+  "scheduled-runs:deleted": {
+    projectId: string;
+    /** The schedule whose runs went; null when every run of the project did. */
+    scheduleId: string | null;
     timestamp: number;
   };
 
@@ -1194,11 +1352,20 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "terminal:park-changed",
   "terminal:park-released",
   "terminal:title-changed",
+  // `terminal:observed-title-changed` is absent: it fires each time an agent
+  // retitles, which would crowd the inspector's buffer for no reader.
   "terminal:worktree-changed",
   "terminal:snooze-changed",
   "terminal:hand-back-changed",
   "agent-session:captured",
+  // `agent-session:observed` is deliberately absent: its payload is nothing
+  // but a resume credential, and the buffer feeds the event inspector.
+  // `agent:claude-usage-observed` is absent: it never reaches main's bus.
+  // `agent:run-handback-observed` is absent too: it carries the agent's text.
   "agent-session:recorded",
+  "scheduled-run:started",
+  "scheduled-run:ended",
+  "scheduled-runs:deleted",
   "terminal:activity",
   "terminal:status",
   "terminal:backgrounded",
@@ -1206,6 +1373,12 @@ export const ALL_EVENT_TYPES: Array<keyof DaintreeEventMap> = [
   "terminal:reliability-metric",
   "terminal:exited",
 ];
+
+/** Events whose payload carries a session id: a resume credential, never printed. */
+const CREDENTIAL_PAYLOAD_EVENTS: ReadonlySet<keyof DaintreeEventMap> = new Set([
+  "agent-session:captured",
+  "agent-session:observed",
+]);
 
 export class TypedEventBus {
   private bus = new EventEmitter();
@@ -1238,7 +1411,11 @@ export class TypedEventBus {
     ...args: DaintreeEventMap[K] extends void ? [] : [DaintreeEventMap[K]]
   ) {
     if (this.debugEnabled) {
-      console.log("[events]", event, args[0]);
+      console.log(
+        "[events]",
+        event,
+        CREDENTIAL_PAYLOAD_EVENTS.has(event) ? "[payload withheld: resume credential]" : args[0]
+      );
     }
     this.bus.emit(event, ...(args as any[]));
   }

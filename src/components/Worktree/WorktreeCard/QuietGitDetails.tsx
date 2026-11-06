@@ -9,8 +9,15 @@ interface QuietGitDetailsProps {
   worktree: WorktreeState;
   branchLabel: string;
   isActive: boolean;
+  /** Names the worktree in its references' accessible names. */
+  worktreeLabel?: string;
   onOpenIssue?: () => void;
   onOpenPR?: () => void;
+  /**
+   * Only the sync line. The default profile keeps branch and PR on the card
+   * and moves just the ambient drift here (see `NonMainSecondaryRow`).
+   */
+  syncOnly?: boolean;
 }
 
 /**
@@ -23,8 +30,10 @@ export function QuietGitDetails({
   worktree,
   branchLabel,
   isActive,
+  worktreeLabel,
   onOpenIssue,
   onOpenPR,
+  syncOnly = false,
 }: QuietGitDetailsProps) {
   const prDetectionPaused = usePRCircuitBreakerStore((s) => s.tripped);
   const pr =
@@ -42,20 +51,22 @@ export function QuietGitDetails({
     !isDetached && worktree.worktreeChanges != null && !worktree.worktreeChanges.tracking;
 
   return (
-    <div className="mb-2 flex flex-col gap-0.5" data-testid="worktree-quiet-git-details">
-      <BranchLabel label={branchLabel} isActive={isActive} />
-      {worktree.issueNumber && (
+    <div
+      className="mb-2 flex flex-col gap-0.5"
+      data-testid={syncOnly ? "worktree-sync-details" : "worktree-quiet-git-details"}
+    >
+      {!syncOnly && <BranchLabel label={branchLabel} isActive={isActive} />}
+      {!syncOnly && worktree.issueNumber && (
         <IssueBadge
           issueNumber={worktree.issueNumber}
           issueTitle={worktree.issueTitle ?? worktree.branchDerivedTitle}
           provenance={worktree}
           worktreePath={worktree.path}
           onOpen={onOpenIssue}
-          isActive={isActive}
-          underlineOnHover
+          worktreeLabel={worktreeLabel}
         />
       )}
-      {pr && (
+      {!syncOnly && pr && (
         <PRBadge
           prNumber={pr.ref.number}
           prTitle={pr.title ?? worktree.prTitle}
@@ -66,8 +77,7 @@ export function QuietGitDetails({
           isSubordinate={false}
           worktreePath={worktree.path}
           onOpen={onOpenPR}
-          isActive={isActive}
-          underlineOnHover
+          worktreeLabel={worktreeLabel}
           prDetectionPaused={prDetectionPaused}
         />
       )}

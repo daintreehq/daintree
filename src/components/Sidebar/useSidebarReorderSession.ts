@@ -51,6 +51,9 @@ export function useSidebarReorderSession({
   // produces a fresh DOM mutation that AT actually treats as new content.
   const [keyboardCancelAnnouncement, setKeyboardCancelAnnouncement] = useState("");
   const cancelAnnouncementTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Any drag, not only a worktree sort: whatever is being dragged may be
+  // dropped on a row, so nothing may cover the list while one is in flight.
+  const [isDragActive, setIsDragActive] = useState(false);
   const handleKeyboardReorder = useCallback((worktreeId: string, delta: -1 | 1) => {
     // Grouped-by-type and active-search modes hide the drag handle; keyboard
     // reorder must mirror that — writing to manualOrder here would silently
@@ -97,6 +100,7 @@ export function useSidebarReorderSession({
   }, []);
   useDndMonitor({
     onDragStart() {
+      setIsDragActive(true);
       // Drop any pending 50ms cancel-announcement timer from a previous drag
       // so a rapid Escape → pickup sequence can't speak stale cancel copy on
       // top of the new drag's pickup announcement.
@@ -105,7 +109,11 @@ export function useSidebarReorderSession({
         cancelAnnouncementTimerRef.current = null;
       }
     },
+    onDragEnd() {
+      setIsDragActive(false);
+    },
     onDragCancel({ active }) {
+      setIsDragActive(false);
       // Only handle worktree-sort drags — other drag types live on their own
       // surfaces and don't compete with this region's polite Alt+Arrow queue.
       // Note: dnd-kit fires onDragCancel for both Escape presses and
@@ -216,5 +224,6 @@ export function useSidebarReorderSession({
     keyboardCancelAnnouncement,
     isSortDisabled,
     dragDisabledReason,
+    isDragActive,
   };
 }

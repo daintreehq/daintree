@@ -14,6 +14,10 @@ import type { PendingUpdateInstallStage } from "./utils/updateInstallStages.js";
 import type { TerminalConfig } from "../shared/types/ipc/config.js";
 import type { HostDescriptor } from "../shared/types/remoteHosts.js";
 import type { DeviceAnswerSettings } from "../shared/types/ipc/deviceAnswer.js";
+import type { DecisionsSettings } from "../shared/types/decisions.js";
+import type { DecisionsHostRecord } from "../shared/types/decisionsHosts.js";
+import type { EditorConfig } from "../shared/types/editor.js";
+import type { DisplayIdentity } from "../shared/types/displayIdentity.js";
 import type { IssueAssociation } from "../shared/types/ipc/worktree.js";
 import type { InstalledPluginRecord } from "../shared/types/plugin.js";
 import type { ErrorRecord } from "../shared/types/ipc/errors.js";
@@ -127,8 +131,8 @@ export interface StoreSchema {
    */
   windowOpening: WindowOpeningConfig;
   /**
-   * Whether the power save blocker is held while agents work, and whether that
-   * extends to battery power (#12516). `PowerSaveBlockerService` is the sole
+   * Whether the power save blocker is held while agents work or a scheduled
+   * run is live, and whether that extends to battery power (#12516, #15981). `PowerSaveBlockerService` is the sole
    * reader and writer.
    */
   keepAwake: {
@@ -382,9 +386,9 @@ export interface StoreSchema {
     apiKey: string;
     auditEnabled: boolean;
     auditMaxRecords: number;
-    /** @deprecated Moved to the audit-logs store by migration022. Read-only carryover. */
+    /** @deprecated Legacy ring; imported into SQLite `audit_rings` at boot (legacyAuditRingImport). */
     auditLog?: McpAuditRecord[];
-    /** @deprecated Moved to the audit-logs store by migration022. Read-only carryover. */
+    /** @deprecated Legacy ring; imported into SQLite `audit_rings` at boot (legacyAuditRingImport). */
     turnOutcomeLog?: AssistantTurnRecord[];
     abusePolicyEnabled: boolean;
     abusePolicyMaxDenials: number;
@@ -438,6 +442,15 @@ export interface StoreSchema {
      * `electron/services/agentDefaults.ts`, never by `helpAssistant.setSettings`.
      */
     agentId?: string | null;
+    /**
+     * The personas the person gave the global assistant and each project's
+     * assistant (#16213). Absent means none. Sanitized at read time and
+     * written only through `electron/services/assistantIdentity.ts`.
+     */
+    identities?: {
+      global?: DisplayIdentity;
+      projects?: Record<string, DisplayIdentity>;
+    };
   };
   pendingErrors: ErrorRecord[];
   errorFingerprints: Record<string, { count: number; firstSeen: number; lastSeen: number }>;
@@ -570,7 +583,7 @@ export interface StoreSchema {
     auditEnabled: boolean;
     /** Ring-buffer cap for persisted plugin-action audit records. */
     auditMaxRecords: number;
-    /** @deprecated Moved to the audit-logs store by migration023. Read-only carryover. */
+    /** @deprecated Legacy ring; imported into SQLite `audit_rings` at boot (legacyAuditRingImport). */
     auditLog?: PluginActionAuditRecord[];
     installed: Record<string, InstalledPluginRecord>;
   };
@@ -596,28 +609,26 @@ export interface StoreSchema {
   /**
    * Audit ring buffer for `ForgeProviderImpl` method calls. Parallel to
    * `mcpServer.auditLog` but scoped to host-side forge invocations — slow
-   * providers, credential failures, and malformed responses leave a trail
-   * here. `auditLog` is the persisted ring (trimmed to `auditMaxRecords`);
-   * `auditEnabled` is the kill switch. Read defensively (`?? {}` defaults
-   * applied by electron-store) — the on-disk shape is owned by
-   * `ForgeAuditService`.
+   * providers, credential failures, and malformed responses leave a trail.
+   * Only the flags live here: `auditEnabled` is the kill switch and
+   * `auditMaxRecords` the cap; the ring itself is the `forgeAuditLog` ring in
+   * SQLite `audit_rings`. Read defensively (`?? {}` defaults applied by
+   * electron-store).
    */
   forgeAudit: {
     auditEnabled: boolean;
     auditMaxRecords: number;
-    /** @deprecated Moved to the audit-logs store by migration023. Read-only carryover. */
+    /** @deprecated Legacy ring; imported into SQLite `audit_rings` at boot (legacyAuditRingImport). */
     auditLog?: ForgeAuditRecord[];
   };
   /**
-   * Durable run-history ring buffer for recipe and fleet automation outcomes
-   * (#9949). `records` is the persisted oldest-first ring, trimmed to
-   * {@link RUN_HISTORY_DEFAULT_MAX_RECORDS} by `RunHistoryLog`. Lives in the
-   * Main-process store (not renderer localStorage) so it survives reloads and
-   * the multi-window LRU eviction. Read defensively (`?? {}` applied by
-   * electron-store) — the on-disk shape is owned by `RunHistoryLog`.
+   * Legacy home of the run-history ring for recipe and fleet automation
+   * outcomes (#9949). The ring now lives in SQLite `audit_rings`
+   * (`runHistoryRecords`), owned by `RunHistoryLog`; only a pre-0.19 carryover
+   * can remain here until the boot import moves it.
    */
   runHistory: {
-    /** @deprecated Moved to the audit-logs store by migration023. Read-only carryover. */
+    /** @deprecated Legacy ring; imported into SQLite `audit_rings` at boot (legacyAuditRingImport). */
     records?: RunHistoryRecord[];
   };
   /**
@@ -625,13 +636,13 @@ export interface StoreSchema {
    * `plugins.auditLog` but scoped to *inbound* MCP tool calls — i.e. calls a
    * plugin's stdio MCP server makes back into the host. Records never store
    * raw args, raw tool descriptions, or raw input schemas; only SHA-256 hex
-   * digests. `auditLog` is the persisted ring (trimmed to `auditMaxRecords`);
-   * `auditEnabled` is the kill switch.
+   * digests. Only the flags live here (`auditEnabled` is the kill switch);
+   * the ring itself is the `pluginMcpAuditLog` ring in SQLite `audit_rings`.
    */
   pluginMcpAudit: {
     auditEnabled: boolean;
     auditMaxRecords: number;
-    /** @deprecated Moved to the audit-logs store by migration023. Read-only carryover. */
+    /** @deprecated Legacy ring; imported into SQLite `audit_rings` at boot (legacyAuditRingImport). */
     auditLog?: PluginMcpAuditRecord[];
   };
   /**
@@ -692,6 +703,18 @@ export interface StoreSchema {
    * Additive key with no numbered migration, like `projectPluginTrust`.
    */
   pluginProjectInstances?: Record<string, string[]>;
+
+  /**
+   * The agents each plugin started with its own `agent.launch`, by terminal id
+   * (#16240): what lets `host.agents` reach them again after an app restart.
+   * Written and read only by `pluginLaunchedAgents.ts`, which treats every
+   * entry as untrusted on load. Additive key with no numbered migration, like
+   * `projectPluginTrust`.
+   */
+  pluginLaunchedAgents?: Record<
+    string,
+    { pluginId: string; projectId: string | null; seenAt: number }
+  >;
 
   /**
    * Per-project visibility for INSTALLED (global) plugins: which manifest ids
@@ -923,6 +946,28 @@ export interface StoreSchema {
    * validated on load.
    */
   deviceAnswer?: DeviceAnswerSettings;
+  /**
+   * Daintree Decisions (#15998): the owner's one switch, the relay this machine
+   * talks to, and its ids there. Never a secret. Additive key with no numbered
+   * migration: absent reads as off, and every read goes through
+   * `sanitizeDecisionsSettings`.
+   */
+  decisions?: DecisionsSettings;
+  /**
+   * This machine as a Remote Host enrolled in its owner's Decisions (#16022):
+   * the enrollment's public half, so startup can tell it runs Decisions for
+   * its own panes without opening the sealed keys. Never a secret, and never
+   * a switch of its own: the owner's Shell turns it off and on. Additive key
+   * with no numbered migration; absent means not enrolled.
+   */
+  decisionsHost?: DecisionsHostRecord;
+  /**
+   * The external editor a project with no saved editor of its own launches
+   * (#16162). This machine's, since the editor runs where you sit. Additive key
+   * with no numbered migration: absent means automatic selection, and every
+   * read goes through `readDefaultEditor`.
+   */
+  defaultEditor?: EditorConfig;
   /** Client-side behaviour while a window is attached to a remote host. */
   remoteHostsPreferences?: { interceptCtrlVImages: boolean };
   /**
@@ -947,13 +992,6 @@ export interface StoreSchema {
 const storeOptions = {
   defaults: {
     _schemaVersion: 0,
-    windowState: {
-      x: undefined,
-      y: undefined,
-      width: 1200,
-      height: 800,
-      isMaximized: false,
-    },
     terminalConfig: {
       scrollbackLines: 1000,
       performanceMode: false,
@@ -1046,7 +1084,6 @@ const storeOptions = {
     globalEnvironmentVariables: {},
     appAgentConfig: DEFAULT_APP_AGENT_CONFIG,
     canopyMode: "unset" as const,
-    windowStates: {},
     worktreeIssueMap: {},
     wslGitByWorktree: {},
     rosettaWarningDismissed: false,
@@ -1774,11 +1811,96 @@ export const windowStatesStore = new Proxy({} as Store<WindowStatesStoreSchema>,
   },
 });
 
+/**
+ * Where each audit ring lived in config.json up to v0.18. Migrations 022/023
+ * moved them into `audit-logs.json` under the `ring` key (or left them here
+ * when that store was not durable), but every owner reads SQLite
+ * `audit_rings`, so `legacyAuditRingImport` brings both sources across.
+ */
+export const LEGACY_CONFIG_AUDIT_RINGS = [
+  { parentKey: "mcpServer", field: "auditLog", ring: "mcpAuditLog" },
+  { parentKey: "mcpServer", field: "turnOutcomeLog", ring: "mcpTurnOutcomeLog" },
+  { parentKey: "plugins", field: "auditLog", ring: "pluginAuditLog" },
+  { parentKey: "forgeAudit", field: "auditLog", ring: "forgeAuditLog" },
+  { parentKey: "runHistory", field: "records", ring: "runHistoryRecords" },
+  { parentKey: "pluginMcpAudit", field: "auditLog", ring: "pluginMcpAuditLog" },
+] as const satisfies readonly {
+  parentKey: keyof StoreSchema;
+  field: string;
+  ring: keyof AuditLogsStoreSchema;
+}[];
+
+/** The audit-logs.json path electron-store derives from `storeOptions.cwd`, without constructing it. */
+export function resolveAuditLogsPath(): string | null {
+  const cwd = storeOptions.cwd;
+  if (cwd && path.isAbsolute(cwd)) return path.join(cwd, "audit-logs.json");
+  const userData = getElectronUserDataPath();
+  return userData ? path.join(userData, cwd ?? "", "audit-logs.json") : null;
+}
+
+export type AuditLogsFileRead =
+  | { status: "missing" }
+  | { status: "unreadable"; reason: string }
+  | { status: "ok"; data: Record<string, unknown> };
+
+/**
+ * Read audit-logs.json raw, never through electron-store: constructing the
+ * store over a corrupt or non-object file rewrites it with defaults.
+ */
+export function readAuditLogsFile(filePath: string): AuditLogsFileRead {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { status: "missing" };
+    return { status: "unreadable", reason: (error as NodeJS.ErrnoException).code ?? "read failed" };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { status: "unreadable", reason: "invalid JSON" };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { status: "unreadable", reason: "not a JSON object" };
+  }
+  return { status: "ok", data: parsed as Record<string, unknown> };
+}
+
+/**
+ * Cheap boot check for audit rings no owner reads yet: anything still at a
+ * legacy config.json location (a malformed value too, so the import logs it),
+ * or an audit-logs.json on disk. An in-memory config store says nothing about
+ * disk, so the import waits for a durable boot.
+ */
+export function hasLegacyAuditRingSources(): boolean {
+  if (store.path === "") return false;
+  for (const { parentKey, field } of LEGACY_CONFIG_AUDIT_RINGS) {
+    const parent: unknown = store.get(parentKey);
+    if (parent !== null && typeof parent === "object" && field in parent) return true;
+  }
+  const sidecarPath = resolveAuditLogsPath();
+  return sidecarPath !== null && fs.existsSync(sidecarPath);
+}
+
 let auditLogsInstance: Store<AuditLogsStoreSchema> | undefined;
 
 function initializeAuditLogsStore(): Store<AuditLogsStoreSchema> {
   if (auditLogsInstance) return auditLogsInstance;
   try {
+    // A file electron-store would reset or coerce stays as it is: the
+    // fallback below makes migrations 022/023 leave the rings in config.json.
+    const sidecarPath = resolveAuditLogsPath();
+    const existing = sidecarPath ? readAuditLogsFile(sidecarPath) : null;
+    if (existing?.status === "unreadable") {
+      throw new Error(`audit-logs.json is unreadable (${existing.reason})`);
+    }
+    if (existing?.status === "ok") {
+      const malformed = LEGACY_CONFIG_AUDIT_RINGS.find(
+        ({ ring }) => ring in existing.data && !Array.isArray(existing.data[ring])
+      );
+      if (malformed) throw new Error(`audit-logs.json has a malformed "${malformed.ring}" ring`);
+    }
     const created = new Store<AuditLogsStoreSchema>({
       name: "audit-logs",
       cwd: storeOptions.cwd,
@@ -1790,7 +1912,7 @@ function initializeAuditLogsStore(): Store<AuditLogsStoreSchema> {
         runHistoryRecords: [],
         pluginMcpAuditLog: [],
       },
-      clearInvalidConfig: true,
+      clearInvalidConfig: false,
       configFileMode: 0o600,
     });
     tightenFilePermissions(created.path);
@@ -1813,9 +1935,9 @@ function initializeAuditLogsStore(): Store<AuditLogsStoreSchema> {
   }
 }
 
-// Lazy like the main `store` Proxy: the audit rings can grow to multiple MB
-// and are only needed when an MCP audit consumer reads or flushes — never
-// during bootstrap, so the sync read+parse of audit-logs.json is deferred.
+// Lazy like the main `store` Proxy: only migrations 022/023 open it, on a
+// profile upgrading from before v0.19. No owner reads it; the boot import
+// (legacyAuditRingImport) reads the file raw and moves it into SQLite.
 export const auditLogsStore = new Proxy({} as Store<AuditLogsStoreSchema>, {
   get(_target, prop) {
     const instance = initializeAuditLogsStore();

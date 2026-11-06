@@ -66,10 +66,11 @@ import {
   summarizeSessionStates,
 } from "./terminalStateConfig";
 import {
-  resolveSessionPresentation,
+  resolvePaneSessionPresentation,
   type SessionPresentationState,
-} from "@/lib/handBackPresentation";
-import { useRunHandBackStates } from "@/hooks/useRunHandBackState";
+} from "@/lib/paneSessionPresentation";
+import { useRunFleetBands } from "@/hooks/useRunSessionPresentation";
+import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import { ActivityLight } from "./ActivityLight";
 import { CollapsedSessionIndicators } from "./WorktreeCard/CollapsedSessionIndicators";
 import { Badge } from "@/components/ui/badge";
@@ -125,12 +126,13 @@ const MAX_INLINE_SESSIONS = 3;
  */
 const LEAD_PRIORITY: Record<SessionPresentationState, number> = {
   waiting: 0,
-  directing: 1,
-  unread: 2,
-  working: 3,
-  completed: 4,
-  idle: 5,
-  exited: 6,
+  blocked: 1,
+  directing: 2,
+  unread: 3,
+  working: 4,
+  completed: 5,
+  idle: 6,
+  exited: 7,
 };
 
 interface SessionMark {
@@ -142,22 +144,20 @@ interface SessionMark {
 function useSessionMarks(worktreeId: string): SessionMark[] {
   const { terminals } = useWorktreeTerminals(worktreeId);
   const terminalIds = useMemo(() => terminals.map((t) => t.id), [terminals]);
-  const handBackStates = useRunHandBackStates(terminalIds);
+  const bands = useRunFleetBands(terminalIds);
   return useMemo(() => {
     const marks = terminals
-      .map((terminal, i) => ({ terminal, handBack: handBackStates[i] ?? "none" }))
+      .map((terminal, i) => ({ terminal, band: bands[i] }))
       .filter(({ terminal }) => terminal.location !== "trash")
-      .map(({ terminal, handBack }) => {
+      .map(({ terminal, band }) => {
         const chrome = deriveTerminalChrome(terminal);
-        // The raw state, not the compact indicator's coerced one: that helper
-        // reads idle and completed as waiting, which put amber circles on rows
-        // the Attention count beside them did not include.
-        const observed = chrome.isAgent && !chrome.hasExited ? terminal.agentState : undefined;
-        const state = resolveSessionPresentation(
-          observed,
-          terminal.agentState,
-          terminal.waitingReason,
-          handBack
+        // The pane's own glyph: its display state through the run's fleet
+        // band, so a live agent at a prompt that asks nothing draws no amber
+        // here either, and the Attention count beside the rows agrees.
+        const state = resolvePaneSessionPresentation(
+          getTerminalAgentDisplayState(chrome, terminal.agentState),
+          band,
+          terminal
         );
         return { terminal, chrome, state };
       });
@@ -168,7 +168,7 @@ function useSessionMarks(worktreeId: string): SessionMark[] {
       const pb = b.state ? LEAD_PRIORITY[b.state] : 9;
       return pa - pb;
     });
-  }, [terminals, handBackStates]);
+  }, [terminals, bands]);
 }
 
 function leadLine(mark: SessionMark | undefined): { text: string; mono: boolean } | null {
@@ -339,7 +339,7 @@ export function WorktreeOverviewRow({
   const behind = worktree.behindCount ?? 0;
 
   const [sessionsExpanded, setSessionsExpanded] = useState(false);
-  // Counted from the same raw states the listed rows draw, so the trigger's
+  // Counted from the same states the listed rows draw, so the trigger's
   // pips and the rows it expands to can never disagree.
   const sessionSummary = useMemo(() => {
     const byState: Record<AgentState, number> = {
@@ -351,11 +351,13 @@ export function WorktreeOverviewRow({
       exited: 0,
     };
     let unread = 0;
+    let blocked = 0;
     for (const mark of marks) {
       if (mark.state === "unread") unread += 1;
+      else if (mark.state === "blocked") blocked += 1;
       else if (mark.state) byState[mark.state] += 1;
     }
-    return summarizeSessionStates(byState, marks.length, unread);
+    return summarizeSessionStates(byState, marks.length, unread, blocked);
   }, [marks]);
 
   // The strip's glyph is the sidebar's: the agent's own mark when every

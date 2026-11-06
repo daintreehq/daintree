@@ -143,6 +143,19 @@ import {
   _resetDictationViewHoldsForTests,
   holdDictationView,
 } from "../../services/voice/dictationViewHold.js";
+import {
+  CACHED_VIEW_FLUSH_TIMEOUT_MS,
+  _resetCachedViewFlushForTests,
+  recordCachedViewFlushArmed,
+  settleCachedViewFlush,
+} from "../../services/cachedViewFlush.js";
+
+/** When main last told this renderer it is cached, the edge it schedules its idle GC on. */
+function cachedSignalOrder(wc: ReturnType<typeof createMockWebContents>): number | undefined {
+  const channels = wc.send.mock.calls.map(([channel]) => channel as unknown);
+  const index = channels.lastIndexOf(CHANNELS.APP_VIEW_CACHED);
+  return index === -1 ? undefined : wc.send.mock.invocationCallOrder[index];
+}
 
 function createMockWindow() {
   return {
@@ -188,6 +201,9 @@ describe("ProjectViewManager — efficiency freeze", () => {
   });
 
   afterEach(() => {
+    // Every manager subscribes to flush settles, and the next test reuses its webContents ids.
+    if (!manager.disposed) manager.dispose();
+    _resetCachedViewFlushForTests();
     vi.useRealTimers();
   });
 
@@ -255,20 +271,17 @@ describe("ProjectViewManager — efficiency freeze", () => {
     expect(vi.mocked(unfreezeWebContents)).toHaveBeenCalledWith(initialWc);
   });
 
-  it("deactivateCurrentView calls freezeWebContents only when efficiency is on, and AFTER GC", async () => {
+  it("deactivateCurrentView calls freezeWebContents only when efficiency is on, and AFTER the cached signal", async () => {
     manager.setEfficiencyFreeze(true);
     vi.advanceTimersByTime(500);
     vi.mocked(freezeWebContents).mockClear();
-    initialWc.executeJavaScript.mockClear();
 
     await manager.switchTo("proj-b", "/path/b");
 
-    expect(initialWc.executeJavaScript).toHaveBeenCalledOnce();
     expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
-
-    const gcOrder = initialWc.executeJavaScript.mock.invocationCallOrder[0];
+    // The renderer schedules its idle GC on that signal (lesson #4684).
     const freezeOrder = vi.mocked(freezeWebContents).mock.invocationCallOrder[0];
-    expect(gcOrder).toBeLessThan(freezeOrder);
+    expect(cachedSignalOrder(initialWc)).toBeLessThan(freezeOrder);
   });
 
   describe("a view a dictation still needs (#14773)", () => {
@@ -295,6 +308,96 @@ describe("ProjectViewManager — efficiency freeze", () => {
 
       release();
       manager.refreezeUnprotectedCachedViews();
+      expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
+    });
+  });
+
+  describe("a view still flushing unsaved edits on its cached edge (#15633)", () => {
+    afterEach(() => _resetDictationViewHoldsForTests());
+
+    const flushIdSentTo = (wc: ReturnType<typeof createMockWebContents>) =>
+      (
+        wc.send.mock.calls.filter(([channel]) => channel === CHANNELS.APP_VIEW_CACHED).at(-1) as
+          [string, { flushId?: string }?] | undefined
+      )?.[1]?.flushId;
+    const frozeInitial = () =>
+      vi.mocked(freezeWebContents).mock.calls.some(([wc]) => (wc as unknown) === initialWc);
+
+    beforeEach(() => {
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+      vi.mocked(freezeWebContents).mockClear();
+      // Settings is open in proj-a as the user leaves it.
+      recordCachedViewFlushArmed(initialWc as never, true);
+    });
+
+    it("isn't frozen until its renderer says the flush reached main", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      const flushId = flushIdSentTo(initialWc);
+      expect(typeof flushId).toBe("string");
+      expect(frozeInitial()).toBe(false);
+
+      // A batch pass landing mid-flush leaves it alone too.
+      manager.refreezeUnprotectedCachedViews();
+      expect(frozeInitial()).toBe(false);
+
+      settleCachedViewFlush(initialWc as never, flushId);
+      vi.advanceTimersByTime(0);
+      expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
+
+      // Still after the cached signal the renderer schedules its GC on (lesson #4684).
+      const freezeOrder = vi.mocked(freezeWebContents).mock.invocationCallOrder.at(-1)!;
+      expect(cachedSignalOrder(initialWc)).toBeLessThan(freezeOrder);
+    });
+
+    it("is frozen anyway once a renderer that never answers runs out its wait", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+
+      vi.advanceTimersByTime(CACHED_VIEW_FLUSH_TIMEOUT_MS - 1);
+      expect(frozeInitial()).toBe(false);
+      vi.advanceTimersByTime(1);
+      // The settle defers its freeze pass by a turn, which the fake clock only
+      // runs once it moves on.
+      vi.advanceTimersByTime(1);
+      expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
+    });
+
+    it("isn't frozen if it became active again before the flush settled", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      const flushId = flushIdSentTo(initialWc);
+      await manager.switchTo("proj-a", "/path/a");
+
+      settleCachedViewFlush(initialWc as never, flushId);
+      vi.advanceTimersByTime(CACHED_VIEW_FLUSH_TIMEOUT_MS);
+
+      expect(frozeInitial()).toBe(false);
+    });
+
+    it("freezes only the view that settled, not every unfrozen cached view", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      const flushId = flushIdSentTo(initialWc);
+      const wcB = manager.getActiveView()!.webContents;
+      // A dictation keeps proj-b unfrozen as the user leaves it; once it lets go,
+      // only the periodic pass would freeze it.
+      const release = holdDictationView(wcB.id);
+      await manager.switchTo("proj-c", "/path/c");
+      release();
+      vi.mocked(freezeWebContents).mockClear();
+
+      settleCachedViewFlush(initialWc as never, flushId);
+      vi.advanceTimersByTime(1);
+
+      const frozen = vi.mocked(freezeWebContents).mock.calls.map(([wc]) => wc as unknown);
+      expect(frozen).toHaveLength(1);
+      expect(frozen[0]).toBe(initialWc);
+    });
+
+    it("is frozen at once, as before, once its renderer has nothing registered", async () => {
+      recordCachedViewFlushArmed(initialWc as never, false);
+
+      await manager.switchTo("proj-b", "/path/b");
+
+      expect(flushIdSentTo(initialWc)).toBeUndefined();
       expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
     });
   });
@@ -495,6 +598,99 @@ describe("ProjectViewManager — efficiency freeze", () => {
       .mocked(freezeWebContents)
       .mock.calls.some((call) => (call[0] as unknown) === initialWc);
     expect(frozeProjA).toBe(false);
+  });
+
+  describe("a host's project whose agents are working there (#15879)", () => {
+    let activeRemoteViews: Set<number>;
+    let localWc: ReturnType<typeof createMockWebContents>;
+    let remoteWc: Electron.WebContents;
+    const frozeRemote = () =>
+      vi.mocked(freezeWebContents).mock.calls.some((call) => call[0] === remoteWc);
+
+    beforeEach(async () => {
+      manager.dispose();
+      activeRemoteViews = new Set();
+      manager = new ProjectViewManager(win as never, {
+        dirname: "/test",
+        cachedProjectViews: 3,
+        paintGateTimeoutMs: 0,
+        paintGateHardTimeoutMs: 0,
+        remoteAgentActive: (webContentsId) => activeRemoteViews.has(webContentsId),
+      });
+      (manager as unknown as { waitForPaint: () => Promise<string> }).waitForPaint = () =>
+        Promise.resolve("signal");
+      localWc = createMockWebContents();
+      manager.registerInitialView(
+        { webContents: localWc, setBounds: vi.fn() } as never,
+        "proj-a",
+        "/path/a"
+      );
+      await manager.switchToHostProject("studio-02", "proj-r", "/srv/r");
+      remoteWc = manager.getAllViews().find((v) => v.projectId.startsWith("studio-02"))!.view
+        .webContents;
+    });
+
+    it("isn't batch-frozen while its host reports an active agent", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      activeRemoteViews.add(remoteWc.id);
+
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+      expect(frozeRemote()).toBe(false);
+
+      // Once the host says its agents settled, the next pass freezes it like any other.
+      activeRemoteViews.clear();
+      manager.refreezeUnprotectedCachedViews();
+      expect(frozeRemote()).toBe(true);
+    });
+
+    it("isn't frozen as the user leaves it while its host reports an active agent", async () => {
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+      activeRemoteViews.add(remoteWc.id);
+
+      await manager.switchTo("proj-b", "/path/b");
+
+      expect(frozeRemote()).toBe(false);
+    });
+
+    it("is frozen as the user leaves it when its host reports no active agent", async () => {
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+
+      await manager.switchTo("proj-b", "/path/b");
+
+      expect(frozeRemote()).toBe(true);
+    });
+
+    it("wakes from a freeze once its host reports an active agent, and isn't frozen again", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+      expect(frozeRemote()).toBe(true);
+      vi.mocked(freezeWebContents).mockClear();
+      vi.mocked(unfreezeWebContents).mockClear();
+
+      activeRemoteViews.add(remoteWc.id);
+      manager.unfreezeActiveAgentViews();
+      expect(vi.mocked(unfreezeWebContents)).toHaveBeenCalledWith(remoteWc);
+      // The idle local view stays frozen: the wake is for active agents only.
+      expect(vi.mocked(unfreezeWebContents)).not.toHaveBeenCalledWith(localWc);
+
+      manager.refreezeUnprotectedCachedViews();
+      expect(frozeRemote()).toBe(false);
+    });
+
+    it("never takes this machine's agents as the host's", async () => {
+      await manager.switchTo("proj-b", "/path/b");
+      // A local terminal whose project id happens to match the host's.
+      seedActiveAgent("t1", "proj-r");
+
+      manager.setEfficiencyFreeze(true);
+      vi.advanceTimersByTime(500);
+
+      expect(frozeRemote()).toBe(true);
+    });
   });
 
   it("unfreezeActiveAgentViews wakes a view that was frozen before its agent went active", async () => {
@@ -1494,41 +1690,25 @@ describe("ProjectViewManager — GC on deactivate", () => {
     manager.registerInitialView(initialView as never, "proj-a", "/path/a");
   });
 
-  it("triggers GC via requestIdleCallback immediately on deactivation", async () => {
+  // Real timers here: an efficiency debounce or purge left armed would fire after the test.
+  afterEach(() => manager.dispose());
+
+  it("leaves the cached-time GC to the renderer, injecting nothing that could outlive activation (#15680)", async () => {
     await manager.switchTo("proj-b", "/path/b");
 
-    expect(initialWc.executeJavaScript).toHaveBeenCalledOnce();
-    expect(initialWc.executeJavaScript).toHaveBeenCalledWith(
-      expect.stringContaining("requestIdleCallback")
-    );
-    expect(initialWc.executeJavaScript).toHaveBeenCalledWith(expect.stringContaining("window.gc"));
-    expect(initialWc.executeJavaScript).toHaveBeenCalledWith(
-      expect.stringContaining("timeout: 1000")
-    );
+    expect(cachedSignalOrder(initialWc)).toBeDefined();
+    expect(initialWc.executeJavaScript).not.toHaveBeenCalled();
+
+    // Coming back injects nothing either: the renderer cancels its own GC.
+    await manager.switchTo("proj-a", "/path/a");
+    expect(initialWc.executeJavaScript).not.toHaveBeenCalled();
   });
 
-  it("requests GC, flushStorageData, and navigationHistory.clear in order on deactivation", async () => {
+  it("flushes storage and clears navigation history on deactivation", async () => {
     await manager.switchTo("proj-b", "/path/b");
 
-    expect(initialWc.executeJavaScript).toHaveBeenCalledOnce();
     expect(initialWc.session.flushStorageData).toHaveBeenCalledOnce();
     expect(initialWc.navigationHistory.clear).toHaveBeenCalledOnce();
-
-    const flushOrder = initialWc.session.flushStorageData.mock.invocationCallOrder[0];
-    const clearOrder = initialWc.navigationHistory.clear.mock.invocationCallOrder[0];
-    const gcOrder = initialWc.executeJavaScript.mock.invocationCallOrder[0];
-
-    expect(flushOrder).toBeLessThan(gcOrder);
-    expect(clearOrder).toBeLessThan(gcOrder);
-  });
-
-  it("suppresses executeJavaScript rejection without unhandled promise", async () => {
-    initialWc.executeJavaScript.mockRejectedValue(new Error("renderer gone"));
-
-    await manager.switchTo("proj-b", "/path/b");
-
-    // Should have been called (and rejected silently)
-    expect(initialWc.executeJavaScript).toHaveBeenCalledOnce();
   });
 
   it("does not throw when flushStorageData throws", async () => {
@@ -1547,18 +1727,21 @@ describe("ProjectViewManager — GC on deactivate", () => {
       throw new Error("renderer gone");
     });
 
+    manager.setEfficiencyFreeze(true);
+    vi.mocked(freezeWebContents).mockClear();
+
     await expect(manager.switchTo("proj-b", "/path/b")).resolves.toBeDefined();
     expect(initialWc.navigationHistory.clear).toHaveBeenCalledOnce();
-    // executeJavaScript should still fire despite clear() throwing
-    expect(initialWc.executeJavaScript).toHaveBeenCalledOnce();
+    // The freeze after it should still land despite clear() throwing
+    expect(vi.mocked(freezeWebContents)).toHaveBeenCalledWith(initialWc);
   });
 
-  it("skips flushStorageData, clearHistory, and GC when webContents is destroyed at outer guard", async () => {
+  it("skips flushStorageData, clearHistory, and the cached signal when webContents is destroyed at outer guard", async () => {
     initialWc.isDestroyed.mockReturnValue(true);
     await manager.switchTo("proj-b", "/path/b");
 
     expect(initialWc.session.flushStorageData).not.toHaveBeenCalled();
     expect(initialWc.navigationHistory.clear).not.toHaveBeenCalled();
-    expect(initialWc.executeJavaScript).not.toHaveBeenCalled();
+    expect(cachedSignalOrder(initialWc)).toBeUndefined();
   });
 });

@@ -44,7 +44,8 @@ vi.mock("@/components/Terminal/TerminalIcon", () => ({
   TerminalIcon: () => <span data-testid="terminal-icon" />,
 }));
 
-vi.mock("@/components/icons", () => ({
+vi.mock("@/components/icons", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/icons")>()),
   FolderGit2: () => <span data-testid="folder-icon" />,
 }));
 
@@ -339,11 +340,16 @@ describe("QuickSwitcher plugin search scope", () => {
     expect(screen.queryByText(/create a terminal/i)).toBeNull();
   });
 
-  it("renders a plugin row with its icon, its provider and an open hint", () => {
+  it("renders a plugin row under its provider's band, with its icon and an open hint", () => {
     renderScoped({ query: "gro", results: [pluginItem], totalResults: 1 });
-    const option = within(screen.getByRole("listbox")).getByRole("option");
+    const options = within(screen.getByRole("listbox")).getAllByRole("option");
+    // The provider names the band once, as an inert head the arrow keys skip.
+    const head = options.find((el) => el.getAttribute("aria-disabled") === "true");
+    expect(head?.textContent).toBe("Notes");
+    const option = options.find((el) => el.getAttribute("aria-disabled") !== "true")!;
     expect(option.textContent).toContain("Groceries");
-    expect(option.textContent).toContain("Notes");
+    // Still attributed in the row's own name, for a reader who lands on it directly.
+    expect(option.textContent).toContain("from Notes");
     expect(option.querySelector('[data-testid="kind-icon-notebook"]')).not.toBeNull();
     expect(screen.getByText("to open")).toBeTruthy();
   });

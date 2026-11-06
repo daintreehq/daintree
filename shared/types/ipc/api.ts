@@ -126,6 +126,7 @@ import type {
   CopyTreeTestConfigOptions,
   FileTreeNode,
   CopyTreeProgress,
+  CopyTreeStopReason,
 } from "./copyTree.js";
 import type { CopyTreeRunSource } from "./copyTreeHistory.js";
 import type {
@@ -174,6 +175,16 @@ import type { KeepAwakeState } from "./keepAwake.js";
 import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
 import type { IdleBackgroundClosedPayload } from "./idleBackgroundAutoClose.js";
 import type { KeyAction } from "../keymap.js";
+
+/**
+ * This machine's saved keybinding overrides, numbered by save. A read, a
+ * write's reply and the pushes reach a view separately, so it keeps the
+ * newest (#15579).
+ */
+export interface KeybindingOverridesSnapshot {
+  revision: number;
+  overrides: Record<string, string[]>;
+}
 
 export interface KeybindingImportResult {
   ok: boolean;
@@ -346,14 +357,18 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * tracked and retain nothing. `handbackCode` is the code minted for a
      * submission that asked for a handback (#12488), whose instruction is
      * already in `text`. `imagePaths` are the composer's image chips, in
-     * order, each also present in `text` (#12792).
+     * order, each also present in `text` (#12792). `guard: "no-choice-dialog"`
+     * refuses the submission with `TERMINAL_CHOICE_DIALOG` while the agent is
+     * observed waiting on a choice dialog, and again when it reaches the lane
+     * (#16209).
      */
     submit(
       id: string,
       text: string,
       submissionToken?: string,
       handbackCode?: string,
-      imagePaths?: string[]
+      imagePaths?: string[],
+      guard?: "no-choice-dialog"
     ): Promise<void>;
     /**
      * Resolve one submission token across several terminals (#12337). Answers
@@ -436,6 +451,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** A pane's pending terminal notices changed. Callers filter by `terminalId`. */
     onNotifyState(
       callback: (data: import("../terminalNotify.js").PaneNotifyState) => void
+    ): () => void;
+    /** A pane's Decisions state changed (#16016). Callers filter by `terminalId`. */
+    onDecisionState(
+      callback: (data: import("../decisions.js").PaneDecisionState) => void
     ): () => void;
     onReliabilityMetric(callback: (data: TerminalReliabilityMetricPayload) => void): () => void;
     /**
@@ -534,7 +553,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       name?: string
     ): Promise<CopyTreeResult>;
     isAvailable(): Promise<boolean>;
-    cancel(injectionId?: string): Promise<void>;
+    cancel(injectionId?: string, reason?: CopyTreeStopReason): Promise<void>;
     getFileTree(
       worktreeId: string,
       dirPath?: string,
@@ -549,6 +568,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   editor: {
     getConfig(projectId?: string): Promise<import("../editor.js").EditorGetConfigResult>;
     setConfig(payload: import("../editor.js").EditorSetConfigPayload): Promise<void>;
+    setDefault(payload: import("../editor.js").EditorSetDefaultPayload): Promise<void>;
+    clearProjectPreference(
+      payload: import("../editor.js").EditorClearProjectPreferencePayload
+    ): Promise<void>;
     discover(): Promise<import("../editor.js").DiscoveredEditor[]>;
   };
   // getResourceProfile comes from GeneratedElectronAPI; the rest are legacy
@@ -669,6 +692,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * from (#11212).
      */
     isViewCached?(): boolean;
+    /**
+     * Run `callback` on every cached edge, before the `onViewCached`
+     * subscribers. While any is registered, main keeps the view unfrozen and
+     * out of eviction's reach until every promise returned for that edge
+     * settles, or its bounded wait runs out (#15633). A flush already started
+     * keeps that hold after its unsubscribe.
+     */
+    onViewCachedFlush?(callback: () => void | Promise<unknown>): () => void;
   };
   // menu is generated — see GeneratedElectronAPI.
   logs: {
@@ -1132,6 +1163,41 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (snapshot: import("./reviewMarks.js").ReviewMarksSnapshot) => void
     ): () => void;
   };
+  // list / create / update / setEnabled / setSwitches / remove / runNow come from GeneratedElectronAPI; onChanged is a renderer-only subscription.
+  schedules: GeneratedElectronAPI["schedules"] & {
+    onChanged(callback: (snapshot: import("./schedules.js").SchedulesSnapshot) => void): () => void;
+    /**
+     * Main asking this view to launch a scheduled run (#15978). Answer each
+     * request once with {@link sendLaunchResponse}, correlated by `requestId`.
+     */
+    onLaunchRequest(
+      callback: (request: import("./schedules.js").ScheduledLaunchViewRequest) => void
+    ): () => void;
+    sendLaunchResponse(response: import("./schedules.js").ScheduledLaunchViewResponse): void;
+    /** Main asking this view to apply a scheduled run's done policy to its pane (#15982). */
+    onFinishRequest(
+      callback: (request: import("./schedules.js").ScheduledRunFinishRequest) => void
+    ): () => void;
+    /** Main closed a scheduled run's terminal to replace it (#15980); drop the run's pane. */
+    onRunClosed(
+      callback: (push: import("./schedules.js").ScheduledRunClosedPush) => void
+    ): () => void;
+  };
+  // set / list come from GeneratedElectronAPI; the rest is main asking this view (#16171).
+  terminalWhenDone: GeneratedElectronAPI["terminalWhenDone"] & {
+    onChanged(
+      callback: (change: import("./terminalWhenDone.js").TerminalWhenDoneChange) => void
+    ): () => void;
+    /** Main asking this view to move or remove an armed terminal's pane. */
+    onFinishRequest(
+      callback: (request: import("./terminalWhenDone.js").TerminalWhenDoneFinishRequest) => void
+    ): () => void;
+    /** Main asking whether someone is using a pane; answer each once with {@link sendInUseReply}. */
+    onInUseQuery(
+      callback: (query: import("./terminalWhenDone.js").TerminalWhenDoneInUseQuery) => void
+    ): () => void;
+    sendInUseReply(reply: import("./terminalWhenDone.js").TerminalWhenDoneInUseReply): void;
+  };
   // ensure / restart / stop / getState etc. come from GeneratedElectronAPI;
   // onStateChanged is a renderer-only subscription.
   devPreview: GeneratedElectronAPI["devPreview"] & {
@@ -1183,7 +1249,20 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     stageAll(cwd: string): Promise<void>;
     unstageAll(cwd: string): Promise<void>;
     commit(cwd: string, message: string): Promise<{ hash: string; summary: string }>;
-    push(cwd: string, setUpstream?: boolean, opId?: string): Promise<void>;
+    /**
+     * Push the checked-out branch to its push destination.
+     *
+     * `review` is what a confirm showed (#15646): with it the push refuses
+     * (`push-review-stale`) unless the worktree is still on that branch at that
+     * commit going to that destination, and publishes that commit. Omit it only
+     * where no confirm previewed the push.
+     */
+    push(
+      cwd: string,
+      setUpstream?: boolean,
+      opId?: string,
+      review?: import("../git.js").GitPushReview
+    ): Promise<void>;
     pullRebase(cwd: string): Promise<void>;
     forcePushWithLease(cwd: string, branchName: string, leaseSha: string): Promise<void>;
     listRemoteCommits(
@@ -1247,7 +1326,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       branch2: string,
       filePath?: string,
       useMergeBase?: boolean,
-      ignoreWhitespace?: boolean
+      ignoreWhitespace?: boolean,
+      contextLines?: number
     ): Promise<import("./git.js").CrossWorktreeDiffResult | string>;
     getUsername(cwd: string): Promise<string | null>;
     getWorkingDiff(cwd: string, type: "unstaged" | "staged" | "head"): Promise<string>;
@@ -1502,18 +1582,20 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onStateChanged(callback: (payload: { osDndActive: boolean | undefined }) => void): () => void;
   };
   keybinding: {
-    /** Get current keybinding overrides */
-    getOverrides(): Promise<Record<KeyAction, string[]>>;
-    /** Set override for a specific action */
-    setOverride(actionId: KeyAction, combo: string[]): Promise<void>;
-    /** Remove override for a specific action (revert to default) */
-    removeOverride(actionId: KeyAction): Promise<void>;
-    /** Reset all overrides to defaults */
-    resetAll(): Promise<void>;
+    /** Get current keybinding overrides, numbered like the saves */
+    getOverrides(): Promise<KeybindingOverridesSnapshot>;
+    /** Set override for a specific action; resolves to the saved map */
+    setOverride(actionId: KeyAction, combo: string[]): Promise<KeybindingOverridesSnapshot>;
+    /** Remove override for a specific action (revert to default); resolves to the saved map */
+    removeOverride(actionId: KeyAction): Promise<KeybindingOverridesSnapshot>;
+    /** Reset all overrides to defaults; resolves to the saved map */
+    resetAll(): Promise<KeybindingOverridesSnapshot>;
     /** Export current overrides to a file via save dialog; returns false if cancelled */
     exportProfile(): Promise<boolean>;
     /** Import overrides from a file via open dialog; returns import result */
     importProfile(): Promise<KeybindingImportResult>;
+    /** This machine's saved overrides, the whole map, after any view changes them (#15579). */
+    onOverridesChanged(callback: (snapshot: KeybindingOverridesSnapshot) => void): () => void;
   };
   worktreeConfig: {
     /** Get worktree path pattern configuration */
@@ -1611,8 +1693,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onWatchNavigate(
       callback: (context: { panelId: string; panelTitle: string; worktreeId?: string }) => void
     ): () => void;
-    /** Sync the renderer's watched panel set to main so AgentNotificationService can gate on it */
-    syncWatchedPanels(panelIds: string[]): void;
+    /**
+     * Sync the renderer's watched panel set to main so AgentNotificationService
+     * can gate on it, with the view's selected worktree when given (left as last
+     * reported when omitted), so alert suppression judges this view's selection.
+     */
+    syncWatchedPanels(panelIds: string[], context?: { activeWorktreeId: string | null }): void;
     /** Acknowledge a waiting agent escalation (cancels pending escalation timer) */
     acknowledgeWaiting(terminalId: string): void;
     /** Acknowledge working pulse (cancels periodic pulse sound for the terminal) */
@@ -1664,8 +1750,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Toggle Store update notifications on/off. */
     setSettings(enabled: boolean): Promise<{ enabled: boolean }>;
   };
-  // gemini is generated — see GeneratedElectronAPI.
-  // commands is generated — see GeneratedElectronAPI.
   appAgent: {
     /** Get the current app agent config (without API key) */
     getConfig(): Promise<Omit<AppAgentConfig, "apiKey">>;
@@ -1756,9 +1840,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     setPreferredLightScheme(schemeId: string): Promise<void>;
     setRecentSchemeIds(ids: string[]): Promise<void>;
     setAccentColorOverride(color: string | null): Promise<void>;
-    onSystemAppearanceChanged(
-      callback: (payload: { isDark: boolean; schemeId: string }) => void
-    ): () => void;
+    onChanged(callback: (config: AppThemeConfig) => void): () => void;
   };
   telemetry: {
     get(): Promise<{ enabled: boolean; hasSeenPrompt: boolean }>;
@@ -2047,6 +2129,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * no provider resolves for `cwd` — never throws.
      */
     getFirstPageCache(payload: { cwd: string }): Promise<ForgeFirstPageCachePayload | null>;
+    /**
+     * The repository origin (`forge-host/owner/repo`) behind both toolbar
+     * counts, without polling the forge, so a view can find its Shell's shared
+     * record before its first poll answers (#15546). `null` when no provider
+     * resolves or an issues provider splits the issue count off — never throws.
+     */
+    getRepoKey(payload: { cwd: string }): Promise<string | null>;
     /**
      * Project-health roll-up for the project pulse card. Errors surface in
      * the returned payload's `error` field, never as a rejection.
@@ -2430,7 +2519,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (state: import("./help.js").GlobalAssistantView) => void
     ): () => void;
   };
-  // helpAssistant is generated — see GeneratedElectronAPI.
+  // helpAssistant's invoke methods are generated; the persona push is hand-wired.
+  helpAssistant: GeneratedElectronAPI["helpAssistant"] & {
+    /** Every assistant persona as stored, after any write from any view (#16213). */
+    onIdentitiesChanged(
+      callback: (identities: import("../displayIdentity.js").AssistantIdentities) => void
+    ): () => void;
+  };
   mcpBridge: {
     /** Listen for manifest requests from main process */
     onGetManifestRequest(callback: (requestId: string) => void): () => void;
@@ -2502,6 +2597,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
          * (#14992), set only by main, so the dialog can name it.
          */
         requester?: import("./mcpServer.js").McpRequester;
+        /**
+         * Main's deadline for the call as it stood when sent, epoch ms on
+         * this machine's clock (#15648), set only by main. A confirm the view
+         * reports moves it; until then, nothing may start after it.
+         */
+        dispatchDeadlineAt?: number;
       }) => void
     ): () => void;
     /** Send action dispatch result to main process */
@@ -2527,6 +2628,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         actionId: string;
         args?: unknown;
         pluginId?: string;
+        /** Main's consent for an `agent.launch` on one preset (#16324). */
+        approvedPresetLaunch?: import("../../utils/agentPresetLaunchConsent.js").HostApprovedPluginPresetLaunch;
       }) => void
     ): () => void;
     /** Send the plugin action dispatch result back to the main process. */

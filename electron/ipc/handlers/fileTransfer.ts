@@ -13,8 +13,12 @@ import type {
   DownloadResult,
   GrantClickedFilePayload,
   LocalFileStat,
+  LocalFolderSummaryResult,
+  SummarizeLocalFolderPayload,
   UploadBytesPayload,
   UploadLocalFilePayload,
+  UploadLocalFolderPayload,
+  UploadLocalFolderResult,
   UploadPreferences,
   UploadResult,
 } from "../../../shared/types/ipc/fileTransfer.js";
@@ -51,6 +55,23 @@ export const fileTransferNamespace = defineIpcNamespace({
           ctx.webContentsId,
           payload?.localPath
         ),
+      { withContext: true }
+    ),
+    // A dropped or pasted folder, walked on this machine: what it holds, and
+    // a handle bound to this view for sending exactly that. Only the folder
+    // the view was granted, never a path inside it.
+    summarizeLocalFolder: op(
+      FILE_TRANSFER_METHOD_CHANNELS.summarizeLocalFolder,
+      async (ctx, payload: SummarizeLocalFolderPayload): Promise<LocalFolderSummaryResult> =>
+        requireRemoteService("hostUploadClient").summarizeLocalFolder(ctx.webContentsId, payload),
+      { withContext: true }
+    ),
+    // A folder this view summarized, sent by its handle into the host inbox,
+    // never into a worktree, under an operation id `cancel` stops in any phase.
+    uploadLocalFolder: op(
+      FILE_TRANSFER_METHOD_CHANNELS.uploadLocalFolder,
+      async (ctx, payload: UploadLocalFolderPayload): Promise<UploadLocalFolderResult> =>
+        requireRemoteService("hostUploadClient").uploadLocalFolder(ctx.webContentsId, payload),
       { withContext: true }
     ),
     getUploadPreferences: op(

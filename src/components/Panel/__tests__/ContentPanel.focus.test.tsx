@@ -83,11 +83,13 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 import { ContentPanel } from "../ContentPanel";
+import { GridGroupAttentionContext } from "../gridGroupAttention";
 import { focusPanelInput } from "../panelFocusRegistry";
 import { inlineRenameFieldClassName } from "../inlineRenameField";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 
 describe("ContentPanel focus", () => {
   /**
@@ -519,7 +521,7 @@ describe("ContentPanel selection chrome", () => {
    * A lone grid pane wears the same `terminal-selected` frame as a pane in a
    * multi-pane grid: after the user clicks away and back, the pane that holds
    * the keystrokes has to be visible even with nothing beside it. The ambient
-   * states (arming, agent state, hibernation) stay multi-pane only.
+   * states (arming, agent state) stay multi-pane only.
    */
   const MACRO_FOCUS_DEFAULTS = {
     focusedRegion: null,
@@ -527,30 +529,41 @@ describe("ContentPanel selection chrome", () => {
   } as const;
 
   /**
-   * The resolver returns exactly one class, so the oracle is "which state won",
-   * not "is this class present". Neutral chrome is expressed as the absence of
-   * every semantic class rather than by pinning the fallback's utility string,
-   * which a purely visual refactor would churn without changing behaviour.
+   * The oracle is "which state won", not "is this class present". The resolver
+   * returns one state, except that waiting and failed keep their edge over the
+   * selected fill: those are the only legal pairs. Neutral chrome is expressed
+   * as the absence of every semantic class rather than by pinning the
+   * fallback's utility string, which a purely visual refactor would churn
+   * without changing behaviour.
    */
   const CHROME_STATES = [
     { state: "arming", className: "panel-state-arming" },
     { state: "selected", className: "terminal-selected" },
     { state: "waiting", className: "panel-state-waiting" },
+    { state: "failed", className: "panel-state-failed" },
     { state: "working", className: "panel-state-working" },
-    { state: "hibernated", className: "panel-state-hibernated" },
   ] as const;
 
-  type ChromeState = (typeof CHROME_STATES)[number]["state"] | "none";
+  const COMPOSITE_STATES = ["selected+waiting", "selected+failed"] as const;
+
+  type ChromeState =
+    (typeof CHROME_STATES)[number]["state"] | (typeof COMPOSITE_STATES)[number] | "none";
+
+  const KNOWN_CHROME_STATES: readonly ChromeState[] = [
+    ...CHROME_STATES.map(({ state }) => state),
+    ...COMPOSITE_STATES,
+  ];
 
   function chromeOf(container: HTMLElement, id = "t-1"): ChromeState {
     const panel = container.querySelector(`[data-panel-id="${id}"]`);
     expect(panel, `panel ${id} rendered`).not.toBeNull();
     const present = CHROME_STATES.filter(({ className }) => panel?.classList.contains(className));
+    const key = present.map(({ state }) => state).join("+");
     expect(
-      present.length,
-      `expected one chrome state, got [${present.map(({ state }) => state).join(", ")}]`
-    ).toBeLessThan(2);
-    return present[0]?.state ?? "none";
+      present.length < 2 || (COMPOSITE_STATES as readonly string[]).includes(key),
+      `expected one chrome state or a legal pair, got [${key}]`
+    ).toBe(true);
+    return KNOWN_CHROME_STATES.find((state) => state === key) ?? "none";
   }
 
   interface PanelOverrides {
@@ -558,16 +571,16 @@ describe("ContentPanel selection chrome", () => {
     isSelected?: boolean;
     isMultiPanelGrid?: boolean;
     isMaximized?: boolean;
-    isHibernated?: boolean;
     isVoiceArming?: boolean;
     agentState?: AgentState;
+    ambientAgentState?: AgentState;
     location?: "grid" | "dock" | "dialog";
     className?: string;
   }
 
   function renderPanel(overrides: PanelOverrides = {}, id = "t-1") {
-    const { isFocused = true, ...rest } = overrides;
-    return render(
+    const { isFocused = true, ambientAgentState, ...rest } = overrides;
+    const panel = (
       <ContentPanel
         id={id}
         title={`Panel ${id}`}
@@ -580,6 +593,46 @@ describe("ContentPanel selection chrome", () => {
         <div data-testid="panel-body" />
       </ContentPanel>
     );
+    if (ambientAgentState === undefined) return render(panel);
+    // A hidden tab's state reaches the shown pane from its group.
+    return render(
+      <GridGroupAttentionContext.Provider
+        value={{ panelId: id, ambientAgentState, hiddenTabFailed: false }}
+      >
+        {panel}
+      </GridGroupAttentionContext.Provider>
+    );
+  }
+
+  /**
+   * The fleet reads an unread Canopy ask on t-1: the one thing pane chrome
+   * draws amber for. An asking pane is stopped, so the work it competes with in
+   * these cases comes from a hidden tab (the group's `ambientAgentState`).
+   */
+  function askFromFleet() {
+    mockState.headerAgentState = "waiting";
+    useFleetSnapshotStore.setState({
+      snapshot: {
+        runs: [
+          {
+            runId: "t-1",
+            workspaceId: "p1",
+            spawnedAt: 0,
+            cwd: "/repo",
+            agentState: "waiting",
+            canopy: { kind: "asked", quote: "Ship it?", readAt: 0, seen: false },
+          },
+        ],
+        changedAt: 0,
+        degraded: false,
+        lastSuccessfulAt: null,
+      },
+    });
+  }
+
+  function clearAsk() {
+    mockState.headerAgentState = undefined;
+    useFleetSnapshotStore.setState({ snapshot: null });
   }
 
   function showAssistant(visible: boolean) {
@@ -601,6 +654,7 @@ describe("ContentPanel selection chrome", () => {
     mockState.dockBlockedState = null;
     mockState.headerAgentState = undefined;
     mockState.pluginActivity = null;
+    useFleetSnapshotStore.setState({ snapshot: null });
   }
 
   beforeEach(resetStores);
@@ -682,10 +736,14 @@ describe("ContentPanel selection chrome", () => {
       expect(chromeOf(container)).toBe(chrome);
     });
 
-    it("draws nothing with grid highlights off", () => {
+    it("draws a waiting report even with grid highlights off, but not a working one", () => {
       reported("waiting");
-      const { container } = renderPanel({ isFocused: false });
-      expect(chromeOf(container)).toBe("none");
+      const waiting = renderPanel({ isFocused: false });
+      expect(chromeOf(waiting.container)).toBe("waiting");
+      waiting.unmount();
+      reported("working");
+      const working = renderPanel({ isFocused: false });
+      expect(chromeOf(working.container)).toBe("none");
     });
 
     it("yields the border to an agent Daintree observes in the panel", () => {
@@ -696,11 +754,11 @@ describe("ContentPanel selection chrome", () => {
       expect(chromeOf(container)).toBe("working");
     });
 
-    it("never outranks selection", () => {
+    it("keeps its waiting edge over the selected fill", () => {
       mockState.showGridAgentHighlights = true;
       reported("waiting");
       const { container } = renderPanel();
-      expect(chromeOf(container)).toBe("selected");
+      expect(chromeOf(container)).toBe("selected+waiting");
     });
   });
 
@@ -725,20 +783,29 @@ describe("ContentPanel selection chrome", () => {
       expect(chromeOf(container)).toBe("arming");
     });
 
-    it("ranks selection above the waiting and working ambient states", () => {
+    it("keeps the waiting edge over the selected fill and ranks selection above working", () => {
       mockState.showGridAgentHighlights = true;
-      mockState.dockBlockedState = "waiting";
-      const { container } = renderPanel({ isMultiPanelGrid: true, agentState: "working" });
-      expect(chromeOf(container)).toBe("selected");
+      askFromFleet();
+      const asking = renderPanel({
+        isMultiPanelGrid: true,
+        agentState: "waiting",
+        ambientAgentState: "working",
+      });
+      expect(chromeOf(asking.container)).toBe("selected+waiting");
+      asking.unmount();
+      clearAsk();
+      const working = renderPanel({ isMultiPanelGrid: true, agentState: "working" });
+      expect(chromeOf(working.container)).toBe("selected");
     });
 
     it("ranks waiting above working once selection releases", () => {
       mockState.showGridAgentHighlights = true;
-      mockState.dockBlockedState = "waiting";
+      askFromFleet();
       const { container } = renderPanel({
         isMultiPanelGrid: true,
         isFocused: false,
-        agentState: "working",
+        agentState: "waiting",
+        ambientAgentState: "working",
       });
       expect(chromeOf(container)).toBe("waiting");
     });
@@ -753,58 +820,36 @@ describe("ContentPanel selection chrome", () => {
       expect(chromeOf(container)).toBe("working");
     });
 
-    it("suppresses the agent states when the highlight preference is off", () => {
+    it("suppresses working when the highlight preference is off, but never waiting", () => {
       mockState.showGridAgentHighlights = false;
-      mockState.dockBlockedState = "waiting";
-      const { container } = renderPanel({
+      const working = renderPanel({
         isMultiPanelGrid: true,
         isFocused: false,
         agentState: "working",
       });
-      expect(chromeOf(container)).toBe("none");
-    });
-
-    it("ranks working above hibernation", () => {
-      // The adjacent pair the waiting-vs-hibernated case below does not reach —
-      // without this, swapping the working and hibernated branches passes.
-      mockState.showGridAgentHighlights = true;
-      const { container } = renderPanel({
+      expect(chromeOf(working.container)).toBe("none");
+      working.unmount();
+      askFromFleet();
+      const asking = renderPanel({
         isMultiPanelGrid: true,
         isFocused: false,
-        isHibernated: true,
-        agentState: "working",
+        agentState: "waiting",
+        ambientAgentState: "working",
       });
-      expect(chromeOf(container)).toBe("working");
-    });
-
-    it("ranks hibernation below the agent states but above bare", () => {
-      mockState.showGridAgentHighlights = true;
-      const { container } = renderPanel({
-        isMultiPanelGrid: true,
-        isFocused: false,
-        isHibernated: true,
-      });
-      expect(chromeOf(container)).toBe("hibernated");
-
-      mockState.dockBlockedState = "waiting";
-      const { container: waiting } = renderPanel(
-        { isMultiPanelGrid: true, isFocused: false, isHibernated: true },
-        "t-2"
-      );
-      expect(chromeOf(waiting, "t-2")).toBe("waiting");
+      expect(chromeOf(asking.container)).toBe("waiting");
     });
 
     it("withholds every ambient state from a lone pane", () => {
       // The ambient states are all gated on `showGridAttention`, so a single
       // pane must never reach them — only selection or bare.
       mockState.showGridAgentHighlights = true;
-      mockState.dockBlockedState = "waiting";
+      askFromFleet();
       const { container } = renderPanel({
         isMultiPanelGrid: false,
         isFocused: false,
         isVoiceArming: true,
-        isHibernated: true,
-        agentState: "working",
+        agentState: "waiting",
+        ambientAgentState: "working",
       });
       expect(chromeOf(container)).toBe("none");
     });
@@ -830,7 +875,7 @@ describe("ContentPanel selection chrome", () => {
       // The docblock's promise: chrome follows the keystrokes, but the ambient
       // panel-state-* borders keep rendering.
       mockState.showGridAgentHighlights = true;
-      mockState.dockBlockedState = "waiting";
+      askFromFleet();
       const { container } = renderPanel({ isMultiPanelGrid: true });
       showAssistant(true);
       focusAssistant(true);

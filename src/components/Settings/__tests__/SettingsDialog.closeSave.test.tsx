@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const projectForm = vi.hoisted(() => ({ flush: vi.fn(async () => {}) }));
 vi.mock("@/hooks/useProjectSettingsForm", () => ({
   useProjectSettingsForm: () => ({
     currentProject: null,
     projectIsLoading: false,
-    flush: async () => {},
+    flush: projectForm.flush,
     saveNow: async () => {},
   }),
 }));
@@ -19,6 +20,7 @@ vi.mock("@/clients", async (importOriginal) => ({
 }));
 
 import { SettingsDialog } from "../SettingsDialog";
+import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 
 // jsdom has neither; the dialog preloads tabs at idle and measures its scroll shadows.
 vi.stubGlobal("requestIdleCallback", () => 0);
@@ -33,6 +35,7 @@ vi.stubGlobal(
 );
 
 beforeEach(() => {
+  projectForm.flush.mockClear();
   Object.defineProperty(window, "electron", {
     configurable: true,
     writable: true,
@@ -50,7 +53,7 @@ async function openOnEnvironment() {
   const onClose = vi.fn();
   render(<SettingsDialog isOpen onClose={onClose} defaultTab="environment" />);
   await waitFor(() => {
-    expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(1);
+    expect(screen.getAllByLabelText(/^Name of variable \d+$/)).toHaveLength(1);
   });
   return onClose;
 }
@@ -69,7 +72,7 @@ describe("SettingsDialog close with a draft that didn't save", () => {
   it("stays open on the page that failed, with focus on the field in error", async () => {
     const onClose = await openOnEnvironment();
     fireEvent.click(screen.getByRole("button", { name: /add variable/i }));
-    const badName = screen.getAllByLabelText<HTMLInputElement>("Environment variable name")[1]!;
+    const badName = screen.getAllByLabelText<HTMLInputElement>(/^Name of variable \d+$/)[1]!;
     fireEvent.change(badName, { target: { value: "1BAD" } });
 
     // Leave the page, so the close has to bring it back.
@@ -91,7 +94,7 @@ describe("SettingsDialog close with a draft that didn't save", () => {
   it("closes once the draft is discarded", async () => {
     const onClose = await openOnEnvironment();
     fireEvent.click(screen.getByRole("button", { name: /add variable/i }));
-    fireEvent.change(screen.getAllByLabelText("Environment variable name")[1]!, {
+    fireEvent.change(screen.getAllByLabelText(/^Name of variable \d+$/)[1]!, {
       target: { value: "1BAD" },
     });
 
@@ -107,7 +110,7 @@ describe("SettingsDialog close with a draft that didn't save", () => {
 
   it("saves a valid draft and closes, as before", async () => {
     const onClose = await openOnEnvironment();
-    fireEvent.change(screen.getByLabelText("Environment variable value"), {
+    fireEvent.change(screen.getByLabelText(/^Value of /), {
       target: { value: "2" },
     });
 
@@ -120,7 +123,7 @@ describe("SettingsDialog close with a draft that didn't save", () => {
   it("lets a hide flush through without holding anything open", async () => {
     const onClose = await openOnEnvironment();
     fireEvent.click(screen.getByRole("button", { name: /add variable/i }));
-    const badName = screen.getAllByLabelText("Environment variable name")[1]!;
+    const badName = screen.getAllByLabelText(/^Name of variable \d+$/)[1]!;
     fireEvent.change(badName, { target: { value: "1BAD" } });
     await act(async () => {
       fireEvent.click(document.getElementById("settings-tab-general")!);
@@ -142,5 +145,99 @@ describe("SettingsDialog close with a draft that didn't save", () => {
     expect(onClose).not.toHaveBeenCalled();
     expect(panel("environment").classList.contains("hidden")).toBe(true);
     expect(window.electron.globalEnv.set).not.toHaveBeenCalled();
+  });
+});
+
+describe("SettingsDialog when main caches its project view (#15633)", () => {
+  // Mirrors preload: a cached edge runs every registered flusher, and main is
+  // answered once they have all settled. The document never goes hidden.
+  let flushers: Set<() => unknown>;
+  const cacheView = () => Promise.allSettled(Array.from(flushers, (flush) => flush()));
+
+  beforeEach(() => {
+    __resetProjectViewCacheStateForTests();
+    flushers = new Set();
+    window.electron = {
+      ...window.electron,
+      app: {
+        ...window.electron.app,
+        isViewCached: () => false,
+        onViewCached: () => () => {},
+        onViewWarmActivated: () => () => {},
+        onViewRevealed: () => () => {},
+        onViewCachedFlush: (callback: () => unknown) => {
+          const flush = () => callback();
+          flushers.add(flush);
+          return () => flushers.delete(flush);
+        },
+      },
+    };
+  });
+
+  afterEach(() => __resetProjectViewCacheStateForTests());
+
+  function deferEnvSave() {
+    let finish!: () => void;
+    vi.mocked(window.electron.globalEnv.set).mockImplementation(
+      () => new Promise<void>((resolve) => (finish = () => resolve()))
+    );
+    return () => finish();
+  }
+
+  it("saves the draft, then the project form, before main is told it can freeze", async () => {
+    const finishEnvSave = deferEnvSave();
+    let finishProjectSave!: () => void;
+    projectForm.flush.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (finishProjectSave = resolve))
+    );
+    const onClose = await openOnEnvironment();
+    fireEvent.change(screen.getByLabelText(/^Value of /), {
+      target: { value: "2" },
+    });
+
+    let answered = false;
+    await act(async () => {
+      void cacheView().then(() => {
+        answered = true;
+      });
+    });
+
+    expect(document.hidden).toBe(false);
+    expect(window.electron.globalEnv.set).toHaveBeenCalledWith({ GOOD: "2" });
+    expect(projectForm.flush).not.toHaveBeenCalled();
+
+    await act(async () => finishEnvSave());
+    expect(projectForm.flush).toHaveBeenCalledTimes(1);
+    expect(answered).toBe(false);
+
+    await act(async () => finishProjectSave());
+    expect(answered).toBe(true);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("joins a close that is already saving rather than saving again", async () => {
+    const finishEnvSave = deferEnvSave();
+    const onClose = await openOnEnvironment();
+    fireEvent.change(screen.getByLabelText(/^Value of /), {
+      target: { value: "2" },
+    });
+    await pressEscape();
+    expect(window.electron.globalEnv.set).toHaveBeenCalledTimes(1);
+
+    let answered = false;
+    await act(async () => {
+      void cacheView().then(() => {
+        answered = true;
+      });
+    });
+    // The edge waits on the close's save rather than answering at once.
+    expect(answered).toBe(false);
+
+    await act(async () => finishEnvSave());
+
+    expect(answered).toBe(true);
+    expect(window.electron.globalEnv.set).toHaveBeenCalledTimes(1);
+    expect(projectForm.flush).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
   });
 });

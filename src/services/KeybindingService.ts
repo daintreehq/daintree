@@ -13,6 +13,7 @@ import { KEY_ACTION_VALUES } from "@shared/types/keymap";
 import { evaluateWhenClause } from "@shared/utils/whenClause/evaluateWhenClause";
 import type { WhenClauseContext } from "@shared/utils/whenClause/types";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import type { KeybindingOverridesSnapshot } from "@shared/types/ipc/api";
 
 export * from "./keybindingUtils";
 export * from "./defaultKeybindings";
@@ -26,6 +27,22 @@ const builtInActionIdSet: ReadonlySet<string> = new Set([
   ...KEY_ACTION_VALUES,
 ]);
 
+function isOverridesSnapshot(value: unknown): value is KeybindingOverridesSnapshot {
+  if (!value || typeof value !== "object") return false;
+  const { revision, overrides } = value as Partial<KeybindingOverridesSnapshot>;
+  return Number.isFinite(revision) && !!overrides && typeof overrides === "object";
+}
+
+function sameOverrides(a: Map<string, string[]>, b: Map<string, string[]>): boolean {
+  if (a.size !== b.size) return false;
+  for (const [actionId, combos] of a) {
+    const other = b.get(actionId);
+    if (!other || other.length !== combos.length) return false;
+    if (combos.some((combo, i) => combo !== other[i])) return false;
+  }
+  return true;
+}
+
 class KeybindingService {
   private bindings: Map<string, RegisteredKeybindingConfig[]> = new Map();
   private overrides: Map<string, string[]> = new Map();
@@ -38,6 +55,12 @@ class KeybindingService {
   private whenContext: WhenClauseContext = {};
   private whenContextProvider: ((event: KeyboardEvent) => WhenClauseContext) | null = null;
   private shortcutCaptures = 0;
+  // The newest save this view holds (#15579). Main numbers every save, and a
+  // read, a write's reply and the pushes arrive separately, so an older one is
+  // dropped.
+  private overridesRevision = 0;
+  // Set once a save or a read lands. The boot payload was read before either.
+  private overridesSeeded = false;
 
   constructor() {
     DEFAULT_KEYBINDINGS.forEach((binding) => {
@@ -52,11 +75,11 @@ class KeybindingService {
 
   /**
    * Replace the in-memory overrides with an already-fetched payload — same
-   * validation as `loadOverrides()` minus the IPC round-trip. Used by the
-   * hydration bootstrap to seed overrides from the batched `app:boot` payload.
+   * validation as `loadOverrides()` minus the IPC round-trip and its
+   * freshness check.
    */
   applyOverrides(overrides: Record<string, string[]> | undefined): void {
-    this.overrides.clear();
+    const next = new Map<string, string[]>();
     if (overrides && typeof overrides === "object") {
       for (const [actionId, combos] of Object.entries(overrides)) {
         if (!Array.isArray(combos)) continue;
@@ -66,17 +89,46 @@ class KeybindingService {
           );
           continue;
         }
-        this.overrides.set(actionId, combos as string[]);
+        next.set(actionId, combos as string[]);
       }
     }
+    const changed = !sameOverrides(this.overrides, next);
+    this.overrides = next;
+    // A chord started under the old map may finish on a combo it no longer has.
+    if (changed) {
+      this.clearChordTimeout();
+      this.pendingChord = null;
+    }
     this.notifyListeners();
+  }
+
+  /** The `app:boot` payload, which is older than any push or read this view has taken. */
+  applyBootOverrides(overrides: Record<string, string[]> | undefined): void {
+    if (this.overridesSeeded) return;
+    this.applyOverrides(overrides);
+  }
+
+  /**
+   * A save as Main pushed it or answered a write with it: the whole map, from
+   * any view on this machine. Applied unless this view already holds a newer one.
+   */
+  receiveOverridesSnapshot(snapshot: unknown): void {
+    if (!isOverridesSnapshot(snapshot) || snapshot.revision <= this.overridesRevision) return;
+    this.overridesRevision = snapshot.revision;
+    this.overridesSeeded = true;
+    this.applyOverrides(snapshot.overrides);
   }
 
   async loadOverrides(): Promise<void> {
     if (typeof window !== "undefined" && window.electron?.keybinding) {
       try {
-        const overrides = await window.electron.keybinding.getOverrides();
-        this.applyOverrides(overrides);
+        const answer = await window.electron.keybinding.getOverrides();
+        // The same revision as this view's is the same save: a fresh view
+        // reads revision 0 before anything was saved.
+        if (!isOverridesSnapshot(answer) || answer.revision < this.overridesRevision) return;
+        this.overridesRevision = answer.revision;
+        this.overridesSeeded = true;
+        this.applyOverrides(answer.overrides);
       } catch (error) {
         // Mirrors useUserAgentRegistryStore.initialize() — non-fatal degradation.
         // `this.bindings` retains DEFAULT_KEYBINDINGS (seeded in constructor).
@@ -93,32 +145,27 @@ class KeybindingService {
     }
   }
 
+  // Each write resolves once this view holds the save it made, or a newer one.
   async setOverride(actionId: string, combo: string[]): Promise<void> {
     // A pending chord captured under the old binding may now reference a stale
     // combo. Drop it before the rebind so the next keypress starts fresh.
     this.clearPendingChord();
     if (typeof window !== "undefined" && window.electron?.keybinding) {
-      await window.electron.keybinding.setOverride(actionId, combo);
-      this.overrides.set(actionId, combo);
-      this.notifyListeners();
+      this.receiveOverridesSnapshot(await window.electron.keybinding.setOverride(actionId, combo));
     }
   }
 
   async removeOverride(actionId: string): Promise<void> {
     this.clearPendingChord();
     if (typeof window !== "undefined" && window.electron?.keybinding) {
-      await window.electron.keybinding.removeOverride(actionId);
-      this.overrides.delete(actionId);
-      this.notifyListeners();
+      this.receiveOverridesSnapshot(await window.electron.keybinding.removeOverride(actionId));
     }
   }
 
   async resetAllOverrides(): Promise<void> {
     this.clearPendingChord();
     if (typeof window !== "undefined" && window.electron?.keybinding) {
-      await window.electron.keybinding.resetAll();
-      this.overrides.clear();
-      this.notifyListeners();
+      this.receiveOverridesSnapshot(await window.electron.keybinding.resetAll());
     }
   }
 

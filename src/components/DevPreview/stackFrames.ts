@@ -63,11 +63,6 @@ export function frameFileName(frame: CdpStackFrame): string {
   return withoutQuery.slice(withoutQuery.lastIndexOf("/") + 1) || path;
 }
 
-/** The complete, unshortened location — what a hover reveals. */
-export function frameFullLocation(frame: CdpStackFrame): string {
-  return frame.url ? `${frame.url}:${frame.lineNumber}:${frame.columnNumber}` : "";
-}
-
 /**
  * The frame that answers "where did this happen": the first one in the
  * user's own code, falling back to the call site when the whole stack is

@@ -22,7 +22,11 @@ import { getPowerPolicy, subscribePowerPolicy } from "../../../window/powerPolic
 import { BrowserWindow } from "electron";
 import {
   getFleetSnapshotServiceRef,
+  getRunAttentionServiceRef,
+  getRunHandBackServiceRef,
   setFleetSnapshotServiceRef,
+  setRunAttentionServiceRef,
+  setRunHandBackServiceRef,
 } from "../../../window/serviceRefs.js";
 
 let projectStatsServiceInstance: ProjectStatsService | null = null;
@@ -66,6 +70,7 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
     { isQuitting: isCleaningUp }
   );
   runAttentionServiceInstance = runAttentionService;
+  setRunAttentionServiceRef(runAttentionService);
   handlers.push(() => {
     runAttentionService.dispose();
     // Identity-guarded: a stale cleanup from a superseded registration must
@@ -73,17 +78,20 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
     if (runAttentionServiceInstance === runAttentionService) {
       runAttentionServiceInstance = null;
     }
+    if (getRunAttentionServiceRef() === runAttentionService) setRunAttentionServiceRef(null);
   });
 
   // Hand-backs ride the fleet rows like park and snooze, so the service is built
   // before the snapshot that decorates with it.
   const runHandBackService = new RunHandBackService({ isQuitting: isCleaningUp });
   runHandBackServiceInstance = runHandBackService;
+  setRunHandBackServiceRef(runHandBackService);
   handlers.push(() => {
     runHandBackService.dispose();
     if (runHandBackServiceInstance === runHandBackService) {
       runHandBackServiceInstance = null;
     }
+    if (getRunHandBackServiceRef() === runHandBackService) setRunHandBackServiceRef(null);
   });
 
   const projectStatsService = new ProjectStatsService(
@@ -270,7 +278,8 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
       // Hand-back seen state and parks, as the pushed status map reads them.
       runHandBack ? (id, spawnedAt) => runHandBack.getRecord(id, spawnedAt) : undefined,
       runAttentionServiceInstance?.getAll(),
-      canopyRefinementFor
+      canopyRefinementFor,
+      runHandBack ? (id, spawnedAt) => runHandBack.getWait(id, spawnedAt) : undefined
     );
 
     const result: BulkProjectStats = {};

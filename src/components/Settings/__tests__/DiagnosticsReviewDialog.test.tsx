@@ -61,6 +61,8 @@ const payload: DiagnosticsReviewPayload = {
   appLaunchTimestamp: 0,
   versionFirstRun: null,
   oldestRetainedLogMs: null,
+  collectedAtMs: 10_000_000,
+  logMembers: {},
 };
 
 function renderDialog(
@@ -100,6 +102,37 @@ const updatedPayload: DiagnosticsReviewPayload = {
   versionFirstRun: { version: "0.39.0", firstRunAtMs: 4_000 },
   oldestRetainedLogMs: 500,
 };
+
+const COLLECTED_AT = 10_000_000;
+
+const bundlePayload: DiagnosticsReviewPayload = {
+  ...payload,
+  payload: {
+    logs: {
+      recentEntries: [
+        { timestamp: COLLECTED_AT - 60 * 60 * 1000, message: "an hour before review" },
+        { timestamp: COLLECTED_AT - 10 * 60 * 1000, message: "ten minutes before review" },
+      ],
+    },
+  },
+  sectionKeys: ["logs"],
+  collectedAtMs: COLLECTED_AT,
+  logMembers: {
+    "30m": [
+      { name: "daintree.log", bytes: 2048 },
+      { name: "crashes/crash-1-a.json", bytes: 512, outsideWindow: true },
+    ],
+    full: [
+      { name: "daintree.log", bytes: 4096 },
+      { name: "daintree.log.1", bytes: 3 * 1024 * 1024 },
+    ],
+  },
+};
+
+function fileRows(): string[] {
+  const list = screen.getByRole("list", { name: "Files in the report" });
+  return Array.from(list.querySelectorAll("li")).map((li) => li.textContent ?? "");
+}
 
 function timeWindowSelect(): HTMLSelectElement {
   return screen.getByLabelText("Logs from") as HTMLSelectElement;
@@ -263,6 +296,59 @@ describe("DiagnosticsReviewDialog", () => {
       expect(control.matches(":disabled")).toBe(true);
     }
     expect(screen.getByRole("region", { name: "Report preview" }).matches(":disabled")).toBe(false);
+  });
+
+  it("lists every file the save writes for the chosen window, with its size", () => {
+    renderDialog(bundlePayload);
+    expect(fileRows()).toEqual([
+      expect.stringMatching(/^diagnostics\.json\d/),
+      "daintree.log2 KB",
+      "crashes/crash-1-a.jsonNot limited by Logs from512 B",
+    ]);
+
+    fireEvent.change(timeWindowSelect(), { target: { value: "full" } });
+    expect(fileRows().slice(1)).toEqual(["daintree.log4 KB", "daintree.log.13 MB"]);
+  });
+
+  it("sizes diagnostics.json as the UTF-8 bytes of the report it saves, as rules change it", () => {
+    renderDialog({ ...payload, payload: { os: { name: "Zoë’s Mac" } }, sectionKeys: ["os"] });
+    const report = () => screen.getByRole("region", { name: "Report preview" }).textContent ?? "";
+    const utf8Bytes = () => new TextEncoder().encode(report()).length;
+
+    const before = utf8Bytes();
+    expect(before).toBeGreaterThan(report().length);
+    expect(fileRows()[0]).toBe(`diagnostics.json${before} B`);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Find, rule 1" }), {
+      target: { value: "Zoë’s" },
+    });
+    expect(utf8Bytes()).not.toBe(before);
+    expect(fileRows()[0]).toBe(`diagnostics.json${utf8Bytes()} B`);
+  });
+
+  it("drops the log files from the list when the Logs section is left out", () => {
+    renderDialog(bundlePayload);
+    fireEvent.click(screen.getByRole("button", { name: /^Sections/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "Logs" }));
+    expect(fileRows()).toEqual([expect.stringMatching(/^diagnostics\.json/)]);
+  });
+
+  it("resolves relative windows against when the review was collected, not the clock", () => {
+    const onSave = vi.fn();
+    // The test clock is decades past COLLECTED_AT; a cutoff taken from it
+    // would leave the preview empty.
+    renderDialog(bundlePayload, onSave);
+
+    const preview = screen.getByLabelText("Report preview").textContent ?? "";
+    expect(preview).toContain("ten minutes before review");
+    expect(preview).not.toContain("an hour before review");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save report" }));
+    expect(onSave).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      COLLECTED_AT - 30 * 60 * 1000
+    );
   });
 
   it("hides the update window when no version change has been observed", () => {

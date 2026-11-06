@@ -591,7 +591,7 @@ describe("HelpPanelBanners — tier mismatch (#12119)", () => {
     );
 
     const banner = getByTestId("help-tier-mismatch-banner");
-    expect(banner.getAttribute("role")).toBe("alert");
+    expect(banner.getAttribute("role")).toBe("status");
 
     const actionRow = banner.querySelector("[data-banner-controls]");
     expect(actionRow).not.toBeNull();

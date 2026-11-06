@@ -1,4 +1,3 @@
-import { Plus } from "lucide-react";
 import { useRef, useCallback } from "react";
 import { RecipeRunnerItem } from "./RecipeRunnerItem";
 import type { TerminalRecipe } from "@/types";
@@ -6,6 +5,7 @@ import type { TerminalRecipe } from "@/types";
 interface RecipeRunnerGridProps {
   recipes: TerminalRecipe[];
   focusedIndex: number;
+  showScope?: boolean;
   disabled?: boolean;
   onRun: (id: string) => void;
   onEdit: (id: string) => void;
@@ -13,16 +13,18 @@ interface RecipeRunnerGridProps {
   onPin: (id: string) => void;
   onUnpin: (id: string) => void;
   onDelete: (id: string) => void;
-  onCreate: () => void;
   setFocusedIndex: (i: number) => void;
 }
 
-function moveFocus(current: number, total: number, key: string): number {
+// Arrow keys follow the grid as it is drawn. Left/Right walk reading order.
+// Up/Down are spatial: they land on the card in the next rendered row that sits
+// under a remembered column line, so a card spanning the row (the odd last card
+// at two columns) is reachable by Down from either card above it, and Up from it
+// returns to the column the user came down. A move off the top or bottom stays.
+function moveHorizontal(current: number, total: number, key: string): number {
   switch (key) {
-    case "ArrowDown":
     case "ArrowRight":
       return (current + 1) % total;
-    case "ArrowUp":
     case "ArrowLeft":
       return (current - 1 + total) % total;
     case "Home":
@@ -34,9 +36,40 @@ function moveFocus(current: number, total: number, key: string): number {
   }
 }
 
+function moveVertical(
+  buttons: Array<HTMLButtonElement | null>,
+  current: number,
+  direction: 1 | -1,
+  columnX: number
+): number {
+  const origin = buttons[current];
+  if (!origin) return current;
+  const rows = [...new Set(buttons.map((b) => b?.offsetTop).filter((t) => t !== undefined))].sort(
+    (a, b) => a - b
+  );
+  const targetRow = rows[rows.indexOf(origin.offsetTop) + direction];
+  if (targetRow === undefined) return current;
+  let best = current;
+  let bestDistance = Infinity;
+  buttons.forEach((button, index) => {
+    if (!button || button.offsetTop !== targetRow) return;
+    const left = button.offsetLeft;
+    const right = left + button.offsetWidth;
+    const distance = columnX < left ? left - columnX : columnX > right ? columnX - right : 0;
+    if (distance < bestDistance) {
+      best = index;
+      bestDistance = distance;
+    }
+  });
+  return best;
+}
+
+const NAVIGATION_KEYS = new Set(["ArrowRight", "ArrowLeft", "ArrowDown", "ArrowUp", "Home", "End"]);
+
 export function RecipeRunnerGrid({
   recipes,
   focusedIndex,
+  showScope,
   disabled,
   onRun,
   onEdit,
@@ -44,11 +77,10 @@ export function RecipeRunnerGrid({
   onPin,
   onUnpin,
   onDelete,
-  onCreate,
   setFocusedIndex,
 }: RecipeRunnerGridProps) {
-  // A lone recipe renders as one full-width hero card — a half-empty two-column
-  // grid reads as a mistake when there's a single pinned recipe (the common
+  // A lone recipe spans the measure as one row — a half-empty two-column grid
+  // reads as a mistake when there's a single pinned recipe (the common
   // fresh-worktree case).
   //
   // The container-query overrides drop columns as the CANVAS narrows, not the
@@ -62,10 +94,19 @@ export function RecipeRunnerGrid({
       ? "grid-cols-1"
       : recipes.length === 2
         ? "grid-cols-2 @max-[26rem]/launcher:grid-cols-1"
-        : "grid-cols-3 @max-[34rem]/launcher:grid-cols-2 @max-[26rem]/launcher:grid-cols-1";
-  const createIndex = recipes.length;
-  const focusableCount = recipes.length + 1;
+        : // At two columns an odd last card spans the row, the same call the
+          // lone-recipe case makes, instead of sitting half-width beside a hole.
+          "grid-cols-3 @max-[34rem]/launcher:grid-cols-2 @max-[34rem]/launcher:[&>:last-child:nth-child(odd)]:col-span-full @max-[26rem]/launcher:grid-cols-1";
+  const focusableCount = recipes.length;
+  // The hook's cursor also counts list mode's Create row, one past the last
+  // recipe. Clamped here, or a cursor left there would give no card the tab
+  // stop and the grid would be unreachable by Tab.
+  const activeIndex = Math.min(focusedIndex, Math.max(0, focusableCount - 1));
   const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  // The column line a run of Up/Down presses keeps to, and the card that run
+  // last landed on. Pressed from anywhere else (a horizontal move, a click, a
+  // fresh Tab in), the run starts over from the focused card's centre.
+  const columnRunRef = useRef<{ x: number; at: number } | null>(null);
 
   const setButtonRef = useCallback(
     (index: number) => (el: HTMLButtonElement | null) => {
@@ -76,9 +117,27 @@ export function RecipeRunnerGrid({
 
   const handleOptionKeyDown = (index: number) => (e: React.KeyboardEvent<HTMLButtonElement>) => {
     if (e.altKey || e.ctrlKey || e.metaKey) return;
-    const next = moveFocus(index, focusableCount, e.key);
-    if (next === index) return;
+    if (!NAVIGATION_KEYS.has(e.key)) return;
+    // Claimed even when the cursor cannot move (Down on the bottom row, any
+    // arrow with one recipe): otherwise the key falls through and scrolls the
+    // canvas while focus stays put.
     e.preventDefault();
+    const buttons = buttonRefs.current.slice(0, focusableCount);
+    let next: number;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      const origin = buttons[index];
+      const x =
+        columnRunRef.current?.at === index
+          ? columnRunRef.current.x
+          : origin
+            ? origin.offsetLeft + origin.offsetWidth / 2
+            : 0;
+      next = moveVertical(buttons, index, e.key === "ArrowDown" ? 1 : -1, x);
+      columnRunRef.current = { x, at: next };
+    } else {
+      next = moveHorizontal(index, focusableCount, e.key);
+    }
+    if (next === index) return;
     setFocusedIndex(next);
     buttonRefs.current[next]?.focus();
   };
@@ -94,11 +153,15 @@ export function RecipeRunnerGrid({
         <RecipeRunnerItem
           key={recipe.id}
           recipe={recipe}
-          isFocused={focusedIndex === i}
-          mode="grid"
+          isFocused={activeIndex === i}
+          // A lone recipe is one full-width row in the list's single-line form:
+          // as a two-line card stretched across the measure it was a frame
+          // around mostly air, and outweighed the resume row above it.
+          mode={recipes.length === 1 ? "list" : "grid"}
+          showScope={showScope}
           disabled={disabled}
           id={`recipe-option-${recipe.id}`}
-          tabIndex={focusedIndex === i ? 0 : -1}
+          tabIndex={activeIndex === i ? 0 : -1}
           buttonRef={setButtonRef(i)}
           onFocus={() => setFocusedIndex(i)}
           onKeyDown={handleOptionKeyDown(i)}
@@ -110,26 +173,6 @@ export function RecipeRunnerGrid({
           onDelete={onDelete}
         />
       ))}
-      <button
-        id="recipe-option-create"
-        ref={setButtonRef(createIndex)}
-        role="option"
-        aria-selected={focusedIndex === createIndex}
-        type="button"
-        onClick={onCreate}
-        onFocus={() => setFocusedIndex(createIndex)}
-        onKeyDown={handleOptionKeyDown(createIndex)}
-        tabIndex={disabled || focusedIndex === createIndex ? 0 : -1}
-        className="press-scale group col-span-full flex items-center justify-center gap-2 px-3 py-2 mt-1 rounded-[var(--radius-md)] hover:bg-overlay-hover transition-[background-color,border-color] duration-150 ease-out active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 border border-transparent group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
-      >
-        <Plus
-          className="h-3.5 w-3.5 text-text-secondary group-hover:text-text-primary transition-colors shrink-0"
-          aria-hidden
-        />
-        <span className="text-sm text-text-secondary group-hover:text-text-primary transition-colors">
-          Create new recipe…
-        </span>
-      </button>
     </div>
   );
 }

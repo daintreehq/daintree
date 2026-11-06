@@ -107,6 +107,7 @@ export const SEL = {
     card: (branch: string) => `[data-worktree-branch="${branch}"]`,
     row: (branch: string) => `[data-worktree-row]:has([data-worktree-branch="${branch}"])`,
     mainCard: '[data-worktree-is-main="true"]',
+    selectButton: "[data-card-select-overlay]",
     mainRow: '[data-worktree-row]:has([data-worktree-is-main="true"])',
     actionsMenu: '[data-testid="worktree-actions-menu"]',
     newDialog: '[data-testid="new-worktree-dialog"]',
@@ -190,7 +191,7 @@ export const SEL = {
   projectSwitcher: {
     palette: '[data-testid="project-switcher-palette"]',
     addButton: '[data-testid="project-add-button"]',
-    projectSettings: 'button:has(:text-is("Project settings…"))',
+    projectSettings: '[data-testid="project-settings-button"]',
     closeButton: '[aria-label="Close project"]',
   },
   trash: {
@@ -262,7 +263,7 @@ export const SEL = {
     cancel: '[data-confirm-role="cancel"]',
   },
   welcome: {
-    openFolder: '[data-testid="quick-actions"] button[aria-label="Open project"]',
+    openFolder: '[data-testid="quick-actions"] button[aria-label^="Open project"]',
   },
   firstRun: {
     welcomeTitle: 'h1:text-is("Welcome to Daintree")',
@@ -374,11 +375,11 @@ export const SEL = {
     addHostDialog: '[data-testid="add-host-dialog"]',
     /** The recovery banner for the window's link to its host (every variant). */
     connectionBanner:
-      '[role="status"]:has-text("Reconnecting…"), [role="status"]:has-text("Connecting to"), [role="alert"]:has-text("is unreachable"), [role="status"]:has-text("runs a different build")',
+      '[role="status"]:has-text("Terminals are read-only until"), [role="status"]:has-text("This window connects once"), [role="status"]:has-text("Checking with")',
     /** Another frontend drives the host project this view shows. */
-    drivenElsewhereBanner: '[role="status"]:has-text("has control of this project")',
+    drivenElsewhereBanner: '[role="status"]:has-text("Read-only ·")',
     /** On the host's own screen, once a Shell has taken its project over. */
-    takenFromHostBanner: '[role="status"]:has-text("has control of this project")',
+    takenFromHostBanner: '[role="status"]:has-text("Read-only ·")',
     projectPickerOption: (projectName: string) =>
       `[role="option"][id^="host-project-picker-"]:has-text("${projectName}")`,
   },
@@ -559,10 +560,10 @@ export const SEL = {
     dialog: '[role="dialog"]:has(h2:text-is("Recipe manager"))',
     teamSection: 'h3:text-is("Team recipes")',
     globalSection: 'h3:text-is("Global recipes")',
-    // The section header's "New" button carries the full name as its label;
-    // the all-empty state spells it out as visible text.
-    newProjectRecipeButton:
-      'button[aria-label="New project recipe"], button:has(:text-is("New project recipe"))',
+    // The Team section's "New" button carries the full name as its label; the
+    // all-empty state spells it out as visible text.
+    newTeamRecipeButton:
+      'button[aria-label="New team recipe"], button:has(:text-is("New team recipe"))',
     // Present only in the all-empty state; a populated manager files import
     // under the toolbar's Import menu (`importMenuTrigger`).
     importButton: 'button:has(:text-is("Import from clipboard"))',

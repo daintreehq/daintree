@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
 import { BranchLabel } from "../BranchLabel";
+import { syncLineHasNews } from "./syncLineNews";
 import { UpstreamSyncBadge } from "./UpstreamSyncBadge";
 import { IssueBadge } from "./IssueBadge";
 import { PRBadge } from "./PRBadge";
@@ -14,7 +15,8 @@ interface NonMainSecondaryRowProps {
   branchLabel: string;
   isActive: boolean;
   isMuted?: boolean;
-  underlineOnHover: boolean;
+  /** Names the worktree in its references' accessible names. */
+  worktreeLabel?: string;
   hasUpstreamDelta: boolean;
   hasAuthFailedSignIn: boolean;
   /**
@@ -42,6 +44,14 @@ interface NonMainSecondaryRowProps {
    * merge, drift behind upstream or base, and a failed fetch.
    */
   quietGit?: boolean;
+  variant?: "sidebar" | "grid";
+  /**
+   * A compact sidebar card lays the stack out tighter: the PR shares the
+   * branch's row, and the sync line stays on the card only when it reports a
+   * failure (the rest of it is in Details). A comfortable card keeps one line
+   * per fact, with an issue and its PR counted as one.
+   */
+  density?: "comfortable" | "compact";
   badges: {
     onOpenIssue?: () => void;
     onOpenPR?: () => void;
@@ -54,7 +64,7 @@ export function NonMainSecondaryRow({
   branchLabel,
   isActive,
   isMuted,
-  underlineOnHover,
+  worktreeLabel,
   hasUpstreamDelta,
   hasAuthFailedSignIn,
   hasDisplayTitle,
@@ -62,6 +72,8 @@ export function NonMainSecondaryRow({
   isPrOriginated,
   hasPlanFile,
   quietGit = false,
+  variant = "sidebar",
+  density = "compact",
   badges,
 }: NonMainSecondaryRowProps) {
   // The issue badge carries its title wherever it stands in for a headline:
@@ -94,6 +106,8 @@ export function NonMainSecondaryRow({
   // has genuinely drifted still shows the counts — that path mounts on
   // `hasUpstreamDelta` and is unchanged.
   const isDetached = Boolean(worktree.isDetached);
+  const isSidebar = variant === "sidebar";
+  const isCompact = isSidebar && density === "compact";
   // Any status pass or fetch mounts it too: with no counts and no base to
   // show, the badge's own marks (failed, no upstream) are the only
   // thing saying what the numbers are worth, and it returns nothing when there
@@ -115,9 +129,10 @@ export function NonMainSecondaryRow({
   const hasNoUpstream =
     !isDetached && worktree.worktreeChanges != null && !worktree.worktreeChanges.tracking;
 
-  const prTier = showPRBadge
-    ? computeAlarmTier({ ciState: worktree.linked?.pr?.ciStatus?.state }).tier
-    : 0;
+  const prTier =
+    showPRBadge || isPrOriginated
+      ? computeAlarmTier({ ciState: worktree.linked?.pr?.ciStatus?.state }).tier
+      : 0;
   const upstreamTier = computeAlarmTier({
     authFailed: hasAuthFailedSignIn,
     behindCount: worktree.behindCount,
@@ -128,30 +143,97 @@ export function NonMainSecondaryRow({
   const upstreamHasAlarm =
     upstreamTier > 0 || Boolean(worktree.fetchAuthFailed || worktree.fetchNetworkFailed);
 
-  // The PR a worktree was created from leads this stack when a custom title
-  // displaced it from the headline, and quiet keeps it only while it warns.
-  const showSourcePrBadge =
-    hasCustomTitle && isPrOriginated && Boolean(sourcePrNumber) && (!quietGit || prHasAlarm);
-
-  const prBadge =
-    showPRBadge && (!quietGit || prHasAlarm) ? (
+  // The PR a worktree was created from, as a reference of its own: the
+  // headline shows its title as words and never opens it (#15864). It leads
+  // this stack when a custom title displaced it, carrying that title, and
+  // otherwise takes the slot a linked PR takes on any other card. Quiet keeps
+  // it only while it warns.
+  const sourcePrBadge =
+    isPrOriginated && Boolean(sourcePrNumber) && (!quietGit || prHasAlarm) ? (
       <PRBadge
-        prNumber={worktree.linked!.pr!.ref.number}
-        prState={worktree.linked!.pr!.state}
-        prCiStatus={worktree.linked!.pr!.ciStatus}
-        mergeIntent={worktree.linked!.pr!.mergeIntent}
-        headMovedWhileArmed={worktree.linked!.pr!.headMovedWhileArmed}
-        isSubordinate={!!worktree.issueNumber}
+        prNumber={sourcePrNumber!}
+        prTitle={hasCustomTitle ? (worktree.linked?.pr?.title ?? worktree.prTitle) : undefined}
+        prState={worktree.linked?.pr?.state}
+        prCiStatus={worktree.linked?.pr?.ciStatus}
+        mergeIntent={worktree.linked?.pr?.mergeIntent}
+        headMovedWhileArmed={worktree.linked?.pr?.headMovedWhileArmed}
+        isSubordinate={false}
         worktreePath={worktree.path}
         onOpen={badges.onOpenPR}
-        isActive={isActive}
-        underlineOnHover={underlineOnHover}
+        worktreeLabel={worktreeLabel}
         prDetectionPaused={prDetectionPaused}
       />
     ) : null;
 
+  const prBadge = isPrOriginated ? (
+    hasCustomTitle ? null : (
+      sourcePrBadge
+    )
+  ) : showPRBadge && (!quietGit || prHasAlarm) ? (
+    <PRBadge
+      prNumber={worktree.linked!.pr!.ref.number}
+      prState={worktree.linked!.pr!.state}
+      prCiStatus={worktree.linked!.pr!.ciStatus}
+      mergeIntent={worktree.linked!.pr!.mergeIntent}
+      headMovedWhileArmed={worktree.linked!.pr!.headMovedWhileArmed}
+      // The sidebar draws the PR on the stack's own rail; the ↳ hook put a
+      // second glyph and a fifth left edge in front of it.
+      isSubordinate={!isSidebar && !!worktree.issueNumber}
+      worktreePath={worktree.path}
+      onOpen={badges.onOpenPR}
+      worktreeLabel={worktreeLabel}
+      prDetectionPaused={prDetectionPaused}
+    />
+  ) : null;
+
+  // The issue is reachable from its own reference on every card that has one,
+  // the card whose headline is that issue's title included — the headline is
+  // words now, so this is where the issue opens from (#15864). On a compact
+  // card that headline's reference is one number, so it rides the identity
+  // row's trailing slot beside the PR rather than spending a line.
+  const isIssueHeadline = hasDisplayTitle && !isPrOriginated && !hasCustomTitle;
+  // The comfortable card gives a bare issue reference the line its PR takes,
+  // under the branch: an issue and its pull request are one pair, and the
+  // branch between them read as two unrelated facts. Only a reference that
+  // carries a displaced title keeps a line of its own above the branch.
+  const issueSharesLine = isCompact ? isIssueHeadline : isSidebar && !issueBadgeTitle;
+  const issueBadge =
+    !quietGit && worktree.issueNumber ? (
+      <IssueBadge
+        issueNumber={worktree.issueNumber}
+        issueTitle={issueBadgeTitle}
+        provenance={worktree}
+        worktreePath={worktree.path}
+        onOpen={badges.onOpenIssue}
+        worktreeLabel={worktreeLabel}
+        hoverCardSide={issueSharesLine && prBadge ? "top" : "right"}
+      />
+    ) : null;
+  const trailingIssueBadge = isCompact && isIssueHeadline ? issueBadge : null;
+  const referenceRowIssue = !isCompact && issueSharesLine ? issueBadge : null;
+  const stackIssueBadge = trailingIssueBadge || referenceRowIssue ? null : issueBadge;
+
+  // On the compact card the sync line is ambient: how far a branch has drifted is
+  // worth knowing when deciding to rebase, not every time the eye passes the
+  // card. It lives at the top of Details there, and only a failed fetch or
+  // sign-in (something to act on) keeps it on the card.
+  const upstreamFailed =
+    hasAuthFailedSignIn || Boolean(worktree.fetchAuthFailed || worktree.fetchNetworkFailed);
+  const showSidebarUpstream = isCompact && showUpstreamBadge && upstreamFailed;
+  const upstreamOutranksPr = showSidebarUpstream && upstreamFirst && prBadge !== null;
+  const sharedRowPr = upstreamOutranksPr ? null : prBadge;
+  // The comfortable card gives the sync line its own row only when it has
+  // news, drift or a failure, the way the PR row appears only when there is a
+  // PR: "level with develop, no upstream" on every idle card taught the eye to
+  // skip the row that later carried real drift. Details keeps the quiet form.
+  const syncHasNews = syncLineHasNews(worktree);
   const upstreamBadge =
-    showUpstreamBadge && (!quietGit || upstreamHasAlarm) ? (
+    showUpstreamBadge &&
+    (isCompact
+      ? upstreamFailed
+      : isSidebar
+        ? syncHasNews && (!quietGit || upstreamHasAlarm)
+        : !quietGit || upstreamHasAlarm) ? (
       <UpstreamSyncBadge
         aheadCount={worktree.aheadCount}
         behindCount={worktree.behindCount}
@@ -167,6 +249,26 @@ export function NonMainSecondaryRow({
         baseMatchesUpstream={worktree.baseMatchesUpstream}
         baseCompareRef={worktree.baseCompareRef}
         hasNoUpstream={hasNoUpstream}
+      />
+    ) : null;
+
+  // Compact keeps upstream drift on the identity row, at no height: unpushed
+  // or diverged commits are a decision fact, and Details is one click too far
+  // to compare cards by. Base drift and the quiet states stay in Details.
+  const compactDrift =
+    isCompact &&
+    !quietGit &&
+    !upstreamFailed &&
+    ((worktree.aheadCount ?? 0) > 0 || (worktree.behindCount ?? 0) > 0) ? (
+      <UpstreamSyncBadge
+        aheadCount={worktree.aheadCount}
+        behindCount={worktree.behindCount}
+        isFetchInFlight={false}
+        lastFetchedAt={worktree.lastFetchedAt}
+        fetchAuthFailed={false}
+        fetchNetworkFailed={false}
+        hasAuthFailedSignIn={false}
+        containerGapClass="gap-1"
       />
     ) : null;
 
@@ -188,46 +290,81 @@ export function NonMainSecondaryRow({
     // empty:hidden — the header mounts this row whenever the sync line might
     // have something to say, and the badge decides whether it does; a row
     // whose every child rendered nothing must not leave its margin behind.
-    <div className="flex flex-col gap-0.5 mt-2.5 px-1 empty:hidden">
-      {showSourcePrBadge && (
-        <PRBadge
-          prNumber={sourcePrNumber!}
-          prTitle={worktree.linked?.pr?.title ?? worktree.prTitle}
-          prState={worktree.linked?.pr?.state}
-          prCiStatus={worktree.linked?.pr?.ciStatus}
-          mergeIntent={worktree.linked?.pr?.mergeIntent}
-          headMovedWhileArmed={worktree.linked?.pr?.headMovedWhileArmed}
-          isSubordinate={false}
-          worktreePath={worktree.path}
-          onOpen={badges.onOpenPR}
-          isActive={isActive}
-          underlineOnHover={underlineOnHover}
-          prDetectionPaused={prDetectionPaused}
-        />
+    // The comfortable sidebar card spaces its lines 4px apart rather than 2px:
+    // with the sync line and the PR back on lines of their own, four lines at
+    // 2px read as one block of mono text instead of four facts.
+    <div
+      className={cn(
+        "flex flex-col px-1 empty:hidden",
+        isCompact ? "mt-1 gap-0.5" : isSidebar ? "mt-1.5 gap-1" : "mt-2.5 gap-0.5"
       )}
-      {!quietGit &&
-        worktree.issueNumber &&
-        (isPrOriginated || !hasDisplayTitle || hasCustomTitle) && (
-          <IssueBadge
-            issueNumber={worktree.issueNumber}
-            issueTitle={issueBadgeTitle}
-            provenance={worktree}
-            worktreePath={worktree.path}
-            onOpen={badges.onOpenIssue}
-            isActive={isActive}
-            underlineOnHover={underlineOnHover}
-          />
-        )}
+    >
+      {hasCustomTitle && sourcePrBadge}
+      {stackIssueBadge}
       {/* Branch before upstream delta: the branch is identity, the delta is
           state, and the card answers "which worktree is this?" before "how far
           has it drifted?". The upstream/PR pair still swaps between itself by
           alarm tier — that ordering is about which alarm outranks which, not
           about outranking the branch name. */}
-      {!quietGit && (hasDisplayTitle || hasCustomTitle) && (
-        <BranchLabel label={branchLabel} isActive={isActive} isMuted={isMuted} />
+      {isCompact ? (
+        <>
+          {/* One identity row: the branch, with its pull request in a trailing
+              slot, so the PR and its CI mark land in the same column on every
+              card instead of on a line of their own. */}
+          {((!quietGit && (hasDisplayTitle || hasCustomTitle)) ||
+            sharedRowPr ||
+            compactDrift ||
+            trailingIssueBadge) && (
+            // Stacked below 20rem, where a PR beside the branch left the
+            // branch about 14 characters.
+            <div className="flex min-w-0 flex-col gap-0.5 @xs/card:flex-row @xs/card:items-center @xs/card:gap-3">
+              {!quietGit && (hasDisplayTitle || hasCustomTitle) && (
+                <div className="min-w-0 flex-1">
+                  <BranchLabel label={branchLabel} isActive={isActive} isMuted={isMuted} />
+                </div>
+              )}
+              {(compactDrift || sharedRowPr || trailingIssueBadge) && (
+                // Wraps only where the row has stacked below 20rem and the
+                // group has the card's width to itself; beside the branch it
+                // keeps its own width and the branch gives way.
+                <div className="flex max-w-full shrink-0 flex-wrap items-center gap-x-3 gap-y-2">
+                  {compactDrift}
+                  {trailingIssueBadge}
+                  {sharedRowPr}
+                </div>
+              )}
+            </div>
+          )}
+          {upstreamBadge}
+          {/* When the failed fetch outranks the PR's state, the alarm order
+              wins over the shared row: branch, then the failure, then the PR. */}
+          {upstreamOutranksPr && prBadge}
+        </>
+      ) : (
+        <>
+          {!quietGit && (hasDisplayTitle || hasCustomTitle) && (
+            <BranchLabel label={branchLabel} isActive={isActive} isMuted={isMuted} />
+          )}
+          {/* The comfortable card keeps one order, branch → issue and PR → sync,
+              so each fact stays on the line the eye learned for it; urgency goes
+              to the title row's attention column instead of reordering the stack. */}
+          {isSidebar
+            ? (referenceRowIssue || prBadge) && (
+                // Each reference keeps its own target. When the card is too
+                // narrow for both, the PR wraps whole, its marks with it,
+                // rather than either number truncating; the row gap keeps the
+                // targets' vertical extensions from meeting across the wrap.
+                <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+                  {referenceRowIssue}
+                  {prBadge}
+                </div>
+              )
+            : upstreamFirst
+              ? upstreamBadge
+              : prBadge}
+          {isSidebar ? upstreamBadge : upstreamFirst ? prBadge : upstreamBadge}
+        </>
       )}
-      {upstreamFirst ? upstreamBadge : prBadge}
-      {upstreamFirst ? prBadge : upstreamBadge}
       {hasPlanFile && badges.onOpenPlan && (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -242,18 +379,12 @@ export function NonMainSecondaryRow({
                 above. */}
             <button
               type="button"
-              onClick={() => {
-                if (isActive) badges.onOpenPlan?.();
-              }}
+              // The viewer is a dialog naming this worktree's root, so it
+              // opens from any card without selecting it first (#11942).
+              onClick={() => badges.onOpenPlan?.()}
               data-no-dnd
-              className="group flex items-center gap-1.5 w-fit max-w-full min-w-0 -mx-1.5 px-1.5 -mt-0.5 pt-0.5 -mb-1.5 pb-1.5 text-left cursor-pointer rounded-[var(--radius-sm)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
-              // Not aria-disabled on an unselected card: the click is not
-              // refused, it selects the card, so the name says that instead.
-              aria-label={
-                isActive
-                  ? `Open plan file ${planFileName}`
-                  : `Select worktree, then open plan file ${planFileName}`
-              }
+              className="group flex items-center gap-1.5 w-fit max-w-full min-w-0 -mx-1.5 px-1.5 -mt-0.5 pt-0.5 -mb-1.5 pb-1.5 text-left cursor-pointer rounded-[var(--radius-sm)] transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
+              aria-label={`Open plan file ${planFileName}${worktreeLabel ? ` for worktree ${worktreeLabel}` : ""}`}
             >
               <FileText
                 className="w-3.5 h-3.5 shrink-0 text-text-secondary"
@@ -264,11 +395,7 @@ export function NonMainSecondaryRow({
                 className={cn(
                   // Secondary even on a muted card: the row still operates
                   // there, and text-muted has no dark-theme contrast floor.
-                  "truncate font-mono text-2xs font-medium text-text-secondary transition-colors duration-150",
-                  // Only a card that opens the file on this click answers the
-                  // hover; an unselected card's first click selects the card.
-                  isActive && "group-hover:text-text-primary",
-                  underlineOnHover && "group-hover:underline"
+                  "truncate font-mono text-2xs font-medium text-text-secondary transition-colors duration-150 group-hover:text-text-primary group-hover:underline"
                 )}
               >
                 {planFileName}
@@ -277,9 +404,7 @@ export function NonMainSecondaryRow({
           </TooltipTrigger>
           <TooltipContent side="right" className="text-xs">
             <div>Open {planFileName} in the file viewer</div>
-            <div className="text-text-secondary">
-              {isActive ? "Plan file in this worktree" : "Select the worktree first"}
-            </div>
+            <div className="text-text-secondary">Plan file in this worktree</div>
           </TooltipContent>
         </Tooltip>
       )}

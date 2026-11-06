@@ -21,6 +21,7 @@ import {
 } from "../../services/ProjectHistoryService.js";
 import { scratchStore } from "../../services/ScratchStore.js";
 import { isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
+import { MAX_ASSISTANT_SLOTS } from "../../../shared/config/assistantSlots.js";
 import { AppError, isAppError } from "../../utils/errorTypes.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
@@ -79,20 +80,24 @@ import { RemoteRouterImpl, type SenderLookup } from "./RemoteRouter.js";
 import { answerReverseRequest } from "./reverseRequests.js";
 import { requireSupportedConnection } from "./connection.js";
 import { SshTransport } from "./sshTransport.js";
+import { HostStarts } from "./hostStarts.js";
 import { WslKeepalive } from "./wslKeepalive.js";
 import { WslTransport } from "./wslTransport.js";
-import { TransportError, UnusableConnectionError, type LinkTransport } from "./transport.js";
+import { UnusableConnectionError, type LinkTransport } from "./transport.js";
 import { WindowHostBinding } from "./WindowHostBinding.js";
 import { defaultCommandRunner } from "./commandRunner.js";
 import { readOrCreateDeviceId } from "./deviceId.js";
 import { machineDisplayName } from "../../utils/machineName.js";
 import { detectClientBundle, downloadArtifact } from "./clientBuild.js";
 import { HostSetupService, RELEASE_FEED_PREFIXES } from "./HostSetupService.js";
+import { HostBringBackService } from "./HostBringBackService.js";
+import { sendWakePacket, wakeRouteFor } from "./wakeOnLan.js";
 
 declare module "../runtime.js" {
   interface RemoteServices {
     remoteHostsClient: RemoteHostsClient;
     hostSetup: HostSetupService;
+    hostBringBack: HostBringBackService;
   }
 }
 
@@ -182,6 +187,16 @@ function createViewSink(hostOf: (webContentsId: number) => HostId | null): ViewS
       sink.send(webContentsId, CHANNELS.REMOTE_HOSTS_EVENT, [event]);
     },
     hostOf,
+    agentActivated(webContentsId) {
+      const wc = resolveLiveWebContents(webContentsId);
+      const win = wc ? getWindowForWebContents(wc) : null;
+      if (!win || win.isDestroyed()) return;
+      // The sweep re-asks the host per view, so it wakes only views still
+      // cached, still bound to it and still active, and only under efficiency.
+      getWindowRegistry()
+        ?.getByWindowId(win.id)
+        ?.services.projectViewManager?.unfreezeActiveAgentViews();
+    },
   };
   return sink;
 }
@@ -208,9 +223,12 @@ function managerFor(windowId: number) {
   return pvm;
 }
 
+/** What a host's transport calls to start Daintree there when ssh reaches it with none serving. */
+export type EnsureHostRunning = (signal: AbortSignal) => Promise<boolean>;
+
 export interface RemoteHostsClientHooks {
   /** How each host is reached; system ssh unless given. */
-  createTransport?: (descriptor: HostDescriptor) => LinkTransport;
+  createTransport?: (descriptor: HostDescriptor, ensureRunning: EnsureHostRunning) => LinkTransport;
   /** The first time a host is actually used (see RemoteHostsClientOptions.onFirstUse). */
   onFirstUse?: () => void;
   /** A window now shows a remote project view: newly created, or a cached one reactivated. */
@@ -496,6 +514,24 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
       });
       return answer.then((choice) => choice !== "cancel");
     },
+    reusableRemoteViewPath(windowId, hostId, projectId) {
+      const pvm = getWindowRegistry()?.getByWindowId(windowId)?.services.projectViewManager;
+      const key = toHostScopedKey(hostId, projectId);
+      if (!pvm || !hasReusableProjectView(pvm, key)) return null;
+      return pvm.getAllViews().find((entry) => entry.projectId === key)?.projectPath || null;
+    },
+    shownProjectKey(windowId) {
+      const pvm = getWindowRegistry()?.getByWindowId(windowId)?.services.projectViewManager;
+      return pvm && !pvm.disposed ? pvm.getActiveProjectId() : null;
+    },
+    discardCachedView(windowId, hostId, projectId) {
+      const pvm = getWindowRegistry()?.getByWindowId(windowId)?.services.projectViewManager;
+      if (!pvm || pvm.disposed) return;
+      const key = toHostScopedKey(hostId, projectId);
+      if (pvm.getActiveProjectId() === key || pvm.getOutgoingBridgeProjectId() === key) return;
+      pvm.abandonBackgroundRestore(key);
+      pvm.destroyView(key);
+    },
     revealWindow(windowId) {
       const ctx = getWindowRegistry()?.getByWindowId(windowId);
       if (!ctx || ctx.browserWindow.isDestroyed()) return;
@@ -534,13 +570,13 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
     },
     async replaceWithLocalWindow(windowId) {
       const old = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
-      if (!old || old.isDestroyed()) return;
+      if (!old || old.isDestroyed()) return null;
       if (!windowOpener) throw new Error("No window can be opened yet");
       const opener = windowOpener;
       const bounds = old.getNormalBounds();
       const maximized = old.isMaximized();
       const fullScreen = old.isFullScreen();
-      let replaced = false;
+      let replacement: number | null = null;
       // The old window closes the moment its successor exists, synchronously:
       // nothing (a switch, a quit's window snapshot) can come between the two,
       // and there is never a moment with neither window open.
@@ -558,10 +594,13 @@ function createWindowControl(hooks: RemoteHostsClientHooks): WindowControl {
             });
           }
           old.close();
-          replaced = true;
+          replacement = nextId;
         },
       });
-      if (!replaced && !old.isDestroyed()) throw new Error("The replacement window didn't open");
+      if (replacement === null && !old.isDestroyed()) {
+        throw new Error("The replacement window didn't open");
+      }
+      return replacement;
     },
     appViewId(windowId) {
       const win = getWindowRegistry()?.getByWindowId(windowId)?.browserWindow;
@@ -643,6 +682,13 @@ const HOST_STATE_CLEANUPS: readonly HostStateCleanup[] = [
   { name: "window titles", run: forgetRemoteWorkspaceTitles },
   { name: "window restores", run: clearPendingRemoteRestoresForHost },
   { name: "window restore retries", run: forgetRemoteRestoresForHost },
+  {
+    name: "window bounds",
+    async run(hostId) {
+      const { pruneWindowStatesForHost } = await import("../../windowState.js");
+      pruneWindowStatesForHost(hostId);
+    },
+  },
   {
     name: "cached views",
     run(hostId) {
@@ -743,8 +789,6 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   // Remote windows' titles name their host as it is called now.
   setRemoteHostNameResolver((hostId) => registry.get(hostId)?.name ?? null);
   const stopTitleRefresh = registry.onChange(refreshWindowTitles);
-  /** Hosts whose Daintree this machine is checking on or starting over ssh, by attempts in flight. */
-  const startingHosts = new Map<HostId, number>();
   const clientDir = path.join(app.getPath("userData"), "rh");
   const wslKeepalive = new WslKeepalive();
   // Bound below: the sink needs the router's answer, the router needs the manager.
@@ -754,17 +798,23 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const awakeSince = (since: number) => sleep.getAwakeTimeSince(since);
   const manager = new RemoteHostManager({
     registry,
-    createTransport:
-      hooks.createTransport ??
-      ((descriptor) =>
-        transportFor(
-          descriptor.connection,
-          clientDir,
-          // A dial while the host is removed or re-pointed (a notification, an
-          // update's reconnect) would hold the old distro after its release.
-          { keepalive: wslKeepalive, isRetiring: (connection) => client.isRetiring(connection) },
-          (signal) => ensureHostRunning(descriptor.id, descriptor.connection, signal)
-        )),
+    createTransport: (descriptor) => {
+      const ensureRunning: EnsureHostRunning = (signal) =>
+        starts.ensureRunning(descriptor.id, descriptor.connection, signal);
+      // Someone asking for the host back may start it whatever the link allows (#16170).
+      return starts.transport(
+        descriptor.id,
+        hooks.createTransport?.(descriptor, ensureRunning) ??
+          transportFor(
+            descriptor.connection,
+            clientDir,
+            // A dial while the host is removed or re-pointed (a notification, an
+            // update's reconnect) would hold the old distro after its release.
+            { keepalive: wslKeepalive, isRetiring: (connection) => client.isRetiring(connection) },
+            ensureRunning
+          )
+      );
+    },
     handshake: getLocalHandshakeInfo,
     client: {
       // Per launch: a session only resumes within one run of this app.
@@ -773,6 +823,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       deviceId: readOrCreateDeviceId(clientDir),
       platform:
         process.platform === "win32" ? "win32" : process.platform === "darwin" ? "darwin" : "linux",
+      assistantSlots: MAX_ASSISTANT_SLOTS,
     },
     views: createViewSink(hostForView),
     reverseRequests: answerReverseRequest,
@@ -795,6 +846,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       getIpcDispatcher().setRemoteRouter(next);
     },
     emit: broadcastLocal,
+    listViews: () => getAllAppWebContents().map((wc) => wc.id),
     onFirstUse: hooks.onFirstUse,
     onForget: async (descriptor): Promise<void> => {
       await forgetHostState(descriptor.id, HOST_STATE_CLEANUPS);
@@ -805,34 +857,40 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
       await forgetHostState(before.id, HOST_STATE_CLEANUPS);
       await setup.forgetArtifacts(before);
     },
-    isStarting: (hostId) => (startingHosts.get(hostId) ?? 0) > 0,
+    isStarting: (hostId) => starts.isStarting(hostId),
+    isAttemptingStart: (hostId) => starts.isAttempting(hostId),
     isInstalling: (connection) => setup.isInstallRunning(connection),
+    onRetry: (hostId) => recheckStart(hostId),
+    // Before the link goes: an attempt to bring it back would dial it again.
+    onLetGo: (hostId) => bringBack.cancel(hostId),
   });
-  /**
-   * A host reachable over ssh whose Daintree isn't serving (a reboot, a power
-   * cut) is started rather than reported unreachable; its own reason for not
-   * starting is what the user sees.
-   */
-  const ensureHostRunning = async (
-    hostId: HostId,
-    connection: HostConnection,
-    signal: AbortSignal
-  ): Promise<boolean> => {
-    startingHosts.set(hostId, (startingHosts.get(hostId) ?? 0) + 1);
-    client.refreshPendingSwitches(hostId);
-    try {
-      return (await setup.ensureHostRunning(connection, signal)) !== "not-startable";
-    } catch (error) {
-      const reason = isAppError(error)
-        ? (error.userMessage ?? error.message)
-        : formatErrorMessage(error, "Daintree couldn't be started on the host");
-      throw new TransportError(reason, reason);
-    } finally {
-      const left = (startingHosts.get(hostId) ?? 1) - 1;
-      if (left > 0) startingHosts.set(hostId, left);
-      else startingHosts.delete(hostId);
-      client.refreshPendingSwitches(hostId);
-    }
+  const starts = new HostStarts({
+    setup: {
+      ensureHostRunning: (connection, signal, onStart, options) =>
+        setup.ensureHostRunning(connection, signal, onStart, options),
+    },
+    onChange: (hostId) => client.refreshPendingSwitches(hostId),
+  });
+  // One attempt per host to bring it back, shared by its row and the assistants (#16170).
+  const bringBack = new HostBringBackService({
+    host: (hostId) => registry.get(hostId),
+    linkState: (hostId) => manager.connectionState(hostId),
+    onLinkState: (listener) => manager.onStateChange(listener),
+    redial: (hostId) => {
+      client.connect({ hostId, restart: true });
+    },
+    nudge: (hostId) => {
+      client.connect({ hostId });
+    },
+    hold: (hostId) => manager.hold(hostId),
+    allowStart: (hostId) => starts.allowExplicit(hostId),
+    observeStarts: (hostId, listener) => starts.observe(hostId, listener),
+    wakeRoute: (wake) => wakeRouteFor(wake),
+    sendWake: (mac, route, signal) => sendWakePacket(mac, route, { signal }),
+  });
+  const recheckStart = (hostId: HostId): void => {
+    const descriptor = registry.get(hostId);
+    if (descriptor) setup.recheckStart(descriptor.connection);
   };
   const setup: HostSetupService = new HostSetupService({
     run: defaultCommandRunner,
@@ -914,6 +972,10 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     isRetiring: (connection) => client.isRetiring(connection),
     wslKeepalive,
   });
+  // A host whose Daintree answered is checked afresh the next time it isn't serving.
+  const stopStartRechecks = manager.onStateChange((hostId, state) => {
+    if (state.status === "connected") recheckStart(hostId);
+  });
   const stopOwnedHostCleanup = watchOwnedHostCleanup({
     list: () => registry.list(),
     forget: (hostId) => client.forget({ hostId }),
@@ -921,6 +983,10 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
   const unregister = registerRemoteService("remoteHostsClient", client);
   const unregisterWindowHosts = registerRemoteService("windowHosts", client);
   const unregisterSetup = registerRemoteService("hostSetup", setup);
+  const unregisterBringBack = registerRemoteService("hostBringBack", bringBack);
+  // Views restored before Remote Hosts started read an empty list, and nothing
+  // else tells them the configured hosts until one is dialled or edited.
+  broadcastLocal({ type: "hosts-changed", hosts: client.list() });
   return {
     client,
     onEndpointOpened: (listener) => manager.onEndpointOpened(listener),
@@ -933,10 +999,14 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     registry,
     async dispose() {
       stopWakeWatch();
+      stopStartRechecks();
       stopOwnedHostCleanup();
       unregister();
       unregisterWindowHosts();
       unregisterSetup();
+      unregisterBringBack();
+      // Before the links close: an attempt would read their closing as its host going.
+      bringBack.dispose();
       stopTitleRefresh();
       setRemoteHostNameResolver(() => null);
       await client.dispose();

@@ -1,0 +1,574 @@
+import type Store from "electron-store";
+import { describe, expect, it } from "vitest";
+import {
+  defaultDecisionsSettings,
+  normalizeRelayOrigin,
+  readDecisionsSettings,
+  sanitizeDecisionsSettings,
+  writeDecisionsSettings,
+  type DecisionsStore,
+} from "../decisionsSettings.js";
+import type { StoreSchema } from "../../../store.js";
+import type { DecisionsSettings } from "../../../../shared/types/decisions.js";
+import {
+  DEFAULT_QUESTION_EXPIRY_MS,
+  QUESTION_EXPIRY_CHOICES,
+} from "../../../../shared/config/decisionsQuestionExpiry.js";
+
+// The app's settings store is what callers hand these helpers.
+const appStoreFits: Store<StoreSchema> extends DecisionsStore ? true : never = true;
+void appStoreFits;
+
+const connected: DecisionsSettings = {
+  enabled: true,
+  relayOrigin: "https://decisions.example.workers.dev",
+  installationId: "inst_01HZY3K9QW",
+  deviceId: "dev-01HZY3K9QX",
+  hostId: "host_01HZY3K9QY",
+  proxyAllowlisted: true,
+  // Never: the one choice a careless `??` would lose.
+  defaultQuestionExpiryMs: null,
+  consentedAt: 1_761_955_200_000,
+  revokedAt: null,
+  recoveryKit: null,
+  autoEnrollHosts: true,
+  setupCheck: null,
+  modelLearning: true,
+  modelAdapter: "codex",
+  modelConsentedAt: 1_761_955_250_000,
+  askHumanAgents: ["claude", "acme.agent-2"],
+  terminalSnapshots: true,
+  terminalSnapshotsConsentedAt: 1_761_955_270_000,
+};
+
+/** `connected`, with a recovery kit verified for its identity. */
+const verified: DecisionsSettings = {
+  ...connected,
+  recoveryKit: {
+    verifiedAt: 1_761_955_300_000,
+    relayOrigin: connected.relayOrigin!,
+    installationId: connected.installationId!,
+    deviceId: connected.deviceId!,
+  },
+};
+
+function memoryStore(initial?: unknown) {
+  let value = initial;
+  const writes: unknown[] = [];
+  const store: DecisionsStore = {
+    get: () => value,
+    set: (_key, next) => {
+      writes.push(next);
+      value = next;
+    },
+  };
+  return { store, writes, current: () => value };
+}
+
+describe("sanitizeDecisionsSettings", () => {
+  it("enrolls Remote Hosts automatically unless the saved value is exactly false", () => {
+    // A setting saved before the field existed has none, and needs no migration.
+    const { autoEnrollHosts: _absent, ...beforeTheField } = connected;
+    expect(sanitizeDecisionsSettings(beforeTheField).autoEnrollHosts).toBe(true);
+    for (const value of [true, "false", 0, null, {}]) {
+      expect(
+        sanitizeDecisionsSettings({ ...connected, autoEnrollHosts: value }).autoEnrollHosts,
+        String(value)
+      ).toBe(true);
+    }
+    expect(
+      sanitizeDecisionsSettings({ ...connected, autoEnrollHosts: false }).autoEnrollHosts
+    ).toBe(false);
+    // Turning it off survives a rewrite, with nothing else changed.
+    const { store, current } = memoryStore({ ...connected, autoEnrollHosts: false });
+    writeDecisionsSettings(store, readDecisionsSettings(store));
+    expect(current()).toEqual({ ...connected, autoEnrollHosts: false });
+  });
+
+  it("switches no agent on for ask_human until one is saved, and keeps only agent ids, once each", () => {
+    // A setting saved before the field existed has none, and needs no migration.
+    const { askHumanAgents: _absent, ...beforeTheField } = connected;
+    expect(sanitizeDecisionsSettings(beforeTheField).askHumanAgents).toEqual([]);
+    expect(defaultDecisionsSettings().askHumanAgents).toEqual([]);
+    for (const value of [null, "claude", { claude: true }, 1, true]) {
+      expect(
+        sanitizeDecisionsSettings({ ...connected, askHumanAgents: value }).askHumanAgents,
+        String(value)
+      ).toEqual([]);
+    }
+    expect(
+      sanitizeDecisionsSettings({
+        ...connected,
+        askHumanAgents: ["codex", "claude", "codex", "", "a b", "../x", 7, null, "x".repeat(129)],
+      }).askHumanAgents
+    ).toEqual(["codex", "claude"]);
+    const many = Array.from({ length: 300 }, (_, i) => `agent-${i}`);
+    expect(
+      sanitizeDecisionsSettings({ ...connected, askHumanAgents: many }).askHumanAgents
+    ).toEqual(many.slice(0, 256));
+    // The choice survives a rewrite, with nothing else changed.
+    const { store, current } = memoryStore(connected);
+    writeDecisionsSettings(store, readDecisionsSettings(store));
+    expect(current()).toEqual(connected);
+  });
+
+  it("keeps the decision model off with no CLI unless the saved values are exactly a choice", () => {
+    // A setting saved before the fields existed has neither, and needs no migration.
+    const {
+      modelLearning: _l,
+      modelAdapter: _a,
+      modelConsentedAt: _c,
+      ...beforeTheFields
+    } = connected;
+    const before = sanitizeDecisionsSettings(beforeTheFields);
+    expect([before.modelLearning, before.modelAdapter, before.modelConsentedAt]).toEqual([
+      false,
+      null,
+      null,
+    ]);
+    for (const value of ["true", 1, {}, [true], null, "claude ", "Claude", "openai", ["codex"]]) {
+      const settings = sanitizeDecisionsSettings({
+        ...connected,
+        modelLearning: value,
+        modelAdapter: value,
+      });
+      expect([settings.modelLearning, settings.modelAdapter], String(value)).toEqual([false, null]);
+    }
+    for (const adapter of ["claude", "codex", "gemini"] as const) {
+      const { store, current } = memoryStore({ ...connected, modelAdapter: adapter });
+      writeDecisionsSettings(store, readDecisionsSettings(store));
+      expect(current()).toEqual({ ...connected, modelAdapter: adapter });
+    }
+  });
+
+  it("keeps a default expiry only when Settings offers it, never included, and 7 days otherwise", () => {
+    // Saved before the field existed: the library's own default, no migration.
+    const { defaultQuestionExpiryMs: _absent, ...beforeTheField } = connected;
+    expect(sanitizeDecisionsSettings(beforeTheField).defaultQuestionExpiryMs).toBe(
+      DEFAULT_QUESTION_EXPIRY_MS
+    );
+    for (const choice of QUESTION_EXPIRY_CHOICES) {
+      expect(
+        sanitizeDecisionsSettings({ ...connected, defaultQuestionExpiryMs: choice })
+          .defaultQuestionExpiryMs,
+        String(choice)
+      ).toBe(choice);
+    }
+    // Anything else, the library's own limits included, would make the policy
+    // refuse to start, so it reads as the default rather than surviving.
+    for (const value of [
+      0,
+      -1,
+      59_999,
+      60_000,
+      1.5,
+      2 * DEFAULT_QUESTION_EXPIRY_MS,
+      "never",
+      NaN,
+      {},
+    ]) {
+      expect(
+        sanitizeDecisionsSettings({ ...connected, defaultQuestionExpiryMs: value })
+          .defaultQuestionExpiryMs,
+        String(value)
+      ).toBe(DEFAULT_QUESTION_EXPIRY_MS);
+    }
+    // Never survives a rewrite, with nothing else changed.
+    const { store, current } = memoryStore(connected);
+    writeDecisionsSettings(store, readDecisionsSettings(store));
+    expect(current()).toEqual(connected);
+  });
+
+  it("keeps learning off without the model's own consent, which Decisions' consent doesn't stand for", () => {
+    for (const value of [null, 0, -1, Number.NaN, Number.POSITIVE_INFINITY, "1761955250000"]) {
+      const settings = sanitizeDecisionsSettings({ ...connected, modelConsentedAt: value });
+      expect([settings.modelLearning, settings.modelConsentedAt], String(value)).toEqual([
+        false,
+        null,
+      ]);
+      // The choice of CLI and Decisions' own consent are kept either way.
+      expect([settings.modelAdapter, settings.consentedAt]).toEqual([
+        connected.modelAdapter,
+        connected.consentedAt,
+      ]);
+    }
+    // Consent with learning off is kept, so turning learning on later asks nothing again.
+    const off = sanitizeDecisionsSettings({ ...connected, modelLearning: false });
+    expect([off.modelLearning, off.modelConsentedAt]).toEqual([false, connected.modelConsentedAt]);
+  });
+
+  it("reads a setting saved before terminal snapshots existed as off, whatever else was agreed", () => {
+    const before: Record<string, unknown> = { ...connected };
+    delete before.terminalSnapshots;
+    delete before.terminalSnapshotsConsentedAt;
+    const settings = sanitizeDecisionsSettings(before);
+    expect([settings.terminalSnapshots, settings.terminalSnapshotsConsentedAt]).toEqual([
+      false,
+      null,
+    ]);
+    // Decisions and learning stay as they were agreed to.
+    expect([settings.enabled, settings.consentedAt, settings.modelLearning]).toEqual([
+      true,
+      connected.consentedAt,
+      true,
+    ]);
+    expect(defaultDecisionsSettings().terminalSnapshots).toBe(false);
+  });
+
+  it("keeps terminal snapshots off unless saved as exactly true with their own consent", () => {
+    for (const flag of [false, "true", 1, {}, [true], null, undefined]) {
+      expect(
+        sanitizeDecisionsSettings({ ...connected, terminalSnapshots: flag }).terminalSnapshots,
+        String(flag)
+      ).toBe(false);
+    }
+    for (const value of [null, 0, -1, Number.NaN, Number.POSITIVE_INFINITY, "1761955270000"]) {
+      const settings = sanitizeDecisionsSettings({
+        ...connected,
+        terminalSnapshotsConsentedAt: value,
+      });
+      expect(
+        [settings.terminalSnapshots, settings.terminalSnapshotsConsentedAt],
+        String(value)
+      ).toEqual([false, null]);
+      // Decisions' and the model's consent don't stand in for it, and stay as saved.
+      expect([settings.consentedAt, settings.modelConsentedAt]).toEqual([
+        connected.consentedAt,
+        connected.modelConsentedAt,
+      ]);
+    }
+    // Turned off, the time of the last agreement is kept.
+    const off = sanitizeDecisionsSettings({ ...connected, terminalSnapshots: false });
+    expect([off.terminalSnapshots, off.terminalSnapshotsConsentedAt]).toEqual([
+      false,
+      connected.terminalSnapshotsConsentedAt,
+    ]);
+  });
+
+  it("reads anything that isn't a settings object as off with no relay, without throwing", () => {
+    for (const raw of [undefined, null, "on", 1, true, [], [{ enabled: true }], () => true]) {
+      const settings = sanitizeDecisionsSettings(raw);
+      expect(settings, String(raw)).toEqual(defaultDecisionsSettings());
+      expect(settings.enabled).toBe(false);
+    }
+  });
+
+  it("is on only for an exact true, and a proxy is allowed only for an exact true", () => {
+    for (const flag of [false, "true", 1, {}, [true], null]) {
+      const settings = sanitizeDecisionsSettings({
+        ...connected,
+        enabled: flag,
+        proxyAllowlisted: flag,
+      });
+      expect(settings.enabled, String(flag)).toBe(false);
+      expect(settings.proxyAllowlisted, String(flag)).toBe(false);
+    }
+    expect(sanitizeDecisionsSettings({ enabled: true }).enabled).toBe(true);
+  });
+
+  it("keeps a well-formed value whole, and a second pass changes nothing", () => {
+    const once = sanitizeDecisionsSettings(connected);
+    expect(once).toEqual(connected);
+    expect(sanitizeDecisionsSettings(once)).toEqual(once);
+  });
+
+  it("reads a missing field as its default, so an older file needs no migration", () => {
+    expect(sanitizeDecisionsSettings({ enabled: true })).toEqual({
+      ...defaultDecisionsSettings(),
+      enabled: true,
+    });
+    expect(sanitizeDecisionsSettings({})).toEqual(defaultDecisionsSettings());
+  });
+
+  it("drops a malformed id and turns Decisions off, keeping the other ids", () => {
+    for (const bad of [
+      "short",
+      "x".repeat(65),
+      "has space1",
+      "dot.ted.id",
+      "slash/id1",
+      12345678,
+    ]) {
+      const settings = sanitizeDecisionsSettings({ ...connected, deviceId: bad });
+      expect(settings, String(bad)).toEqual({ ...connected, enabled: false, deviceId: null });
+    }
+    for (const field of ["installationId", "deviceId", "hostId"] as const) {
+      const settings = sanitizeDecisionsSettings({ ...connected, [field]: ["x".repeat(10)] });
+      expect(settings, field).toEqual({ ...connected, enabled: false, [field]: null });
+    }
+    // Daintree's own host id is unique only per machine, so it never names a host here.
+    expect(sanitizeDecisionsSettings({ ...connected, hostId: "local" })).toEqual({
+      ...connected,
+      enabled: false,
+      hostId: null,
+    });
+  });
+
+  it("takes ids at the protocol's length bounds", () => {
+    for (const id of ["a".repeat(8), "Z".repeat(64), "a_b-C_d-9"]) {
+      expect(sanitizeDecisionsSettings({ ...connected, deviceId: id }).deviceId, id).toBe(id);
+    }
+    expect(sanitizeDecisionsSettings({ ...connected, deviceId: "a".repeat(7) }).deviceId).toBe(
+      null
+    );
+  });
+
+  it("never carries a field it doesn't declare, a secret included", () => {
+    const settings = sanitizeDecisionsSettings({
+      ...connected,
+      claimSecret: "claim-7f3a9c1e5b",
+      keys: { signing: "priv-4d2e8a" },
+      token: "tok-91bc2d",
+      recoveryPassphrase: "correct horse battery",
+    });
+    expect(settings).toEqual(connected);
+    const written = JSON.stringify(settings);
+    for (const secret of ["claim-7f3a9c1e5b", "priv-4d2e8a", "tok-91bc2d", "correct horse"]) {
+      expect(written).not.toContain(secret);
+    }
+  });
+
+  it("turns Decisions off when the relay origin is there but unreadable", () => {
+    for (const relayOrigin of ["not a url", "http://relay.example.com", 7, { href: "x" }]) {
+      const settings = sanitizeDecisionsSettings({ ...connected, relayOrigin });
+      expect(settings, String(relayOrigin)).toEqual({
+        ...connected,
+        enabled: false,
+        relayOrigin: null,
+      });
+    }
+  });
+
+  it("keeps a revocation time with the relay's ids, and drops it without them or when malformed", () => {
+    const revoked = sanitizeDecisionsSettings({ ...connected, revokedAt: 1_761_955_300_000 });
+    expect(revoked).toEqual({ ...connected, revokedAt: 1_761_955_300_000 });
+
+    for (const revokedAt of [0, -1, Number.NaN, "1761955300000", true, {}]) {
+      const settings = sanitizeDecisionsSettings({ ...connected, revokedAt });
+      expect(settings, String(revokedAt)).toEqual(connected);
+    }
+    for (const field of ["relayOrigin", "installationId", "deviceId"] as const) {
+      const settings = sanitizeDecisionsSettings({
+        ...connected,
+        [field]: null,
+        revokedAt: 1_761_955_300_000,
+      });
+      expect(settings.revokedAt, field).toBeNull();
+    }
+  });
+
+  it("keeps a consent time only when it's a positive finite number, never turning off for one", () => {
+    for (const consentedAt of [0, -1, Number.NaN, Infinity, "1761955200000", true, {}, null]) {
+      const settings = sanitizeDecisionsSettings({ ...connected, consentedAt });
+      expect(settings, String(consentedAt)).toEqual({ ...connected, consentedAt: null });
+    }
+  });
+
+  it("keeps a recovery kit verification only for the identity the setting records", () => {
+    const recoveryKit = verified.recoveryKit!;
+    expect(sanitizeDecisionsSettings(verified).recoveryKit).toEqual(recoveryKit);
+    // The same relay written with a path still names the same origin.
+    expect(
+      sanitizeDecisionsSettings({
+        ...verified,
+        recoveryKit: { ...recoveryKit, relayOrigin: `${verified.relayOrigin}/` },
+      }).recoveryKit
+    ).toEqual(recoveryKit);
+    for (const other of [
+      { relayOrigin: "https://other.example.workers.dev" },
+      { installationId: "inst_another_one" },
+      { deviceId: "dev-another-one" },
+    ]) {
+      const settings = sanitizeDecisionsSettings({
+        ...verified,
+        recoveryKit: { ...recoveryKit, ...other },
+      });
+      expect(settings, JSON.stringify(other)).toEqual({ ...verified, recoveryKit: null });
+    }
+    // Ids changing under it, as a disconnect or a new claim does, leaves it behind.
+    expect(
+      sanitizeDecisionsSettings({ ...verified, deviceId: "dev-from-a-new-claim" }).recoveryKit
+    ).toBeNull();
+    expect(
+      sanitizeDecisionsSettings({
+        ...verified,
+        relayOrigin: null,
+        installationId: null,
+        deviceId: null,
+      }).recoveryKit
+    ).toBeNull();
+  });
+
+  it("reads a damaged recovery kit record as unverified, never turning Decisions off", () => {
+    const recoveryKit = verified.recoveryKit!;
+    for (const damaged of [
+      "verified",
+      [],
+      { ...recoveryKit, verifiedAt: 0 },
+      { ...recoveryKit, verifiedAt: "1761955300000" },
+      { ...recoveryKit, relayOrigin: "http://decisions.example.workers.dev" },
+      { ...recoveryKit, deviceId: undefined },
+    ]) {
+      const settings = sanitizeDecisionsSettings({ ...verified, recoveryKit: damaged });
+      expect(settings, JSON.stringify(damaged)).toEqual({ ...verified, recoveryKit: null });
+    }
+    const extra = sanitizeDecisionsSettings({
+      ...verified,
+      recoveryKit: { ...recoveryKit, passphrase: "never kept" },
+    });
+    expect(extra.recoveryKit).toEqual(recoveryKit);
+  });
+
+  it("keeps a setup check result only for the identity the setting records", () => {
+    const passed = {
+      checkedAt: 1_761_955_400_000,
+      relayOrigin: connected.relayOrigin!,
+      installationId: connected.installationId!,
+      deviceId: connected.deviceId!,
+      failedStep: null,
+    };
+    expect(sanitizeDecisionsSettings({ ...connected, setupCheck: passed }).setupCheck).toEqual(
+      passed
+    );
+    const failed = { ...passed, failedStep: "question" };
+    expect(sanitizeDecisionsSettings({ ...connected, setupCheck: failed }).setupCheck).toEqual(
+      failed
+    );
+    for (const other of [
+      { relayOrigin: "https://other.example.workers.dev" },
+      { installationId: "inst_another_one" },
+      { deviceId: "dev-another-one" },
+    ]) {
+      const settings = sanitizeDecisionsSettings({
+        ...connected,
+        setupCheck: { ...passed, ...other },
+      });
+      expect(settings, JSON.stringify(other)).toEqual(connected);
+    }
+    // A disconnect or a new claim leaves it behind.
+    expect(
+      sanitizeDecisionsSettings({
+        ...connected,
+        deviceId: "dev-from-a-new-claim",
+        setupCheck: passed,
+      }).setupCheck
+    ).toBeNull();
+  });
+
+  it("reads a damaged setup check record as no check, never turning Decisions off", () => {
+    const passed = {
+      checkedAt: 1_761_955_400_000,
+      relayOrigin: connected.relayOrigin!,
+      installationId: connected.installationId!,
+      deviceId: connected.deviceId!,
+      failedStep: null,
+    };
+    for (const damaged of [
+      "passed",
+      [],
+      { ...passed, checkedAt: 0 },
+      { ...passed, failedStep: "phone" },
+      { ...passed, failedStep: undefined },
+      { ...passed, deviceId: undefined },
+    ]) {
+      const settings = sanitizeDecisionsSettings({ ...connected, setupCheck: damaged });
+      expect(settings, JSON.stringify(damaged)).toEqual(connected);
+    }
+  });
+
+  it("keeps the switch on while no relay is set up yet", () => {
+    const settings = sanitizeDecisionsSettings({
+      enabled: true,
+      relayOrigin: null,
+      installationId: null,
+      deviceId: null,
+      hostId: null,
+    });
+    expect(settings).toEqual({ ...defaultDecisionsSettings(), enabled: true });
+  });
+
+  it("leaves what it was given untouched", () => {
+    const raw = { ...connected, relayOrigin: "https://owner:pw@relay.example.com/x", extra: 1 };
+    const before = structuredClone(raw);
+    sanitizeDecisionsSettings(raw);
+    expect(raw).toEqual(before);
+  });
+});
+
+describe("readDecisionsSettings and writeDecisionsSettings", () => {
+  it("reads an absent setting as off without writing anything", () => {
+    const { store, writes } = memoryStore(undefined);
+    expect(readDecisionsSettings(store)).toEqual(defaultDecisionsSettings());
+    expect(readDecisionsSettings(memoryStore("garbage").store).enabled).toBe(false);
+    expect(writes).toEqual([]);
+  });
+
+  it("reads a damaged setting sanitised, leaving the file as it was", () => {
+    const onDisk = { ...connected, deviceId: "short", claimSecret: "claim-7f3a9c1e5b" };
+    const { store, writes, current } = memoryStore(onDisk);
+    expect(readDecisionsSettings(store)).toEqual({ ...connected, enabled: false, deviceId: null });
+    expect(writes).toEqual([]);
+    expect(current()).toBe(onDisk);
+  });
+
+  it("writes the whole setting in one set, sanitised, and returns what it stored", () => {
+    const { store, writes, current } = memoryStore({
+      ...connected,
+      claimSecret: "claim-7f3a9c1e5b",
+    });
+    const next = {
+      ...readDecisionsSettings(store),
+      relayOrigin: "https://relay.example.com/setup?claim=claim-7f3a9c1e5b",
+      token: "tok-91bc2d",
+    } as DecisionsSettings;
+
+    const stored = writeDecisionsSettings(store, next);
+
+    expect(stored).toEqual({ ...connected, relayOrigin: "https://relay.example.com" });
+    expect(writes).toEqual([stored]);
+    expect(current()).toEqual(stored);
+    expect(JSON.stringify(current())).not.toMatch(/claim-7f3a9c1e5b|tok-91bc2d/);
+  });
+});
+
+describe("normalizeRelayOrigin", () => {
+  it("reduces an https URL to its origin, dropping credentials, path and query", () => {
+    expect(normalizeRelayOrigin("https://decisions.example.workers.dev")).toBe(
+      "https://decisions.example.workers.dev"
+    );
+    expect(
+      normalizeRelayOrigin("  https://owner:hunter2@relay.example.com:8443/api/v1?token=abc#x  ")
+    ).toBe("https://relay.example.com:8443");
+  });
+
+  it("allows plain http only on loopback", () => {
+    expect(normalizeRelayOrigin("http://localhost:8787")).toBe("http://localhost:8787");
+    expect(normalizeRelayOrigin("http://127.0.0.1:8787/")).toBe("http://127.0.0.1:8787");
+    expect(normalizeRelayOrigin("http://relay.example.com")).toBeNull();
+    expect(normalizeRelayOrigin("http://192.168.1.20:8787")).toBeNull();
+    for (const other of ["ftp://localhost:8787", "wss://127.0.0.1:8787", "ws://localhost:8787"]) {
+      expect(normalizeRelayOrigin(other), other).toBeNull();
+      expect(sanitizeDecisionsSettings({ ...connected, relayOrigin: other }), other).toEqual({
+        ...connected,
+        enabled: false,
+        relayOrigin: null,
+      });
+    }
+  });
+
+  it("refuses anything that isn't an http(s) URL", () => {
+    for (const raw of [
+      "",
+      "relay.example.com",
+      "ftp://relay.example.com",
+      "file:///etc/passwd",
+      "javascript:alert(1)",
+      "wss://relay.example.com",
+      42,
+      null,
+      { href: "https://relay.example.com" },
+    ]) {
+      expect(normalizeRelayOrigin(raw), String(raw)).toBeNull();
+    }
+  });
+});

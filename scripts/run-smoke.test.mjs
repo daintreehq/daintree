@@ -32,4 +32,15 @@ describe.each([
       })
     ).toThrow("renderer bootstrap failure");
   });
+
+  it("rejects a native check failure even when the process exits zero", () => {
+    expect(() =>
+      validate({
+        code: 0,
+        signal: null,
+        timedOut: false,
+        output: `Check failed: !GpuDataManagerImpl::Initialized().\n${markers.join("\n")}`,
+      })
+    ).toThrow("native check failure");
+  });
 });

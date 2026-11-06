@@ -110,26 +110,29 @@ export const theme: BuiltInThemeSource = {
     "search-match-badge-background": "rgba(62,145,218,0.16)",
     "search-selected-result-border": "rgba(62,145,218,0.35)",
     "search-selected-result-icon": "#3E91DA",
+    // Derived would be text-primary @42%, which measures 2.98:1 against the
+    // highlighted row on a panel surface, under the 3:1 its outline owes.
+    "selection-outline": "rgba(232,226,217,0.44)",
     "shadow-ambient": "0 1px 2px rgba(16,11,6,0.40), 0 1px 1px rgba(16,11,6,0.25)",
     "shadow-color": "rgba(16,11,6,0.45)",
     "shadow-dialog": "0 4px 12px rgba(16,11,6,0.50), 0 16px 40px rgba(16,11,6,0.28)",
     "shadow-floating": "0 2px 6px rgba(16,11,6,0.45), 0 8px 20px rgba(16,11,6,0.25)",
     "surface-toolbar": "#171411",
     "terminal-black": "#0C0F18",
-    "terminal-bright-black": "#6C7585",
+    "terminal-bright-black": "#788294",
     "terminal-cursor-accent": "#141826",
   },
   extensions: {
     "dock-bg": "#171411",
-    // Active item carries the apricot heat ink (same as panel focus), never
-    // the cold accent.
+    // Active item carries the apricot heat ink, never the cold accent.
     "dock-item-bg": "rgba(214,181,142,0.03)",
     "dock-item-bg-active": "rgba(214,181,142,0.09)",
     "dock-item-border-active": "rgba(232,155,95,0.35)",
-    // Apricot crest focus hairline; the keyboard focus ring stays cold.
-    // Outer ring + contact shadow only — no inset (reads as a defect on panes).
-    "panel-focus-border": "rgba(232,155,95,0.36)",
-    "panel-focus-shadow": "0 0 0 1px rgba(232,155,95,0.12), 0 1px 2px rgba(16,11,6,0.40)",
+    // Neutral sand focus hairline: an apricot edge sat between the always-on
+    // waiting and failed edges and read as a third alert. Outer ring + contact
+    // shadow only — no inset (reads as a defect on panes).
+    "panel-focus-border": "rgba(232,226,217,0.30)",
+    "panel-focus-shadow": "0 0 0 1px rgba(232,226,217,0.09), 0 1px 2px rgba(16,11,6,0.40)",
     // Focused pane's title bar: same crest ink at whisper alpha.
     "panel-header-focus-bg": "rgba(232,155,95,0.06)",
     "pulse-before-bg": "#141110",
@@ -150,8 +153,8 @@ export const theme: BuiltInThemeSource = {
     "settings-search-bg": "#1F1B16",
     "sidebar-action-hover-bg": "rgba(214,181,142,0.04)",
     // Registry requires white-tint rgba here — do not re-ink into the sand family.
-    "sidebar-active-bg": "rgba(255,255,255,0.065)",
-    "sidebar-hover-bg": "rgba(255,255,255,0.048)",
+    "sidebar-active-bg": "rgba(255,255,255,0.096)",
+    "sidebar-hover-bg": "rgba(255,255,255,0.064)",
     "toolbar-agent-hover-bg": "rgba(214,181,142,0.05)",
     "toolbar-control-active-bg": "rgba(214,181,142,0.10)",
     "toolbar-control-armed-bg": "rgba(214,181,142,0.10)",

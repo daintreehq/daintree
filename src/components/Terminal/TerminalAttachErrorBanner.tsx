@@ -1,4 +1,4 @@
-import { MonitorX, RefreshCw } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import { sanitizeErrorText } from "@/utils/errorText";
 
@@ -43,7 +43,6 @@ export function TerminalAttachErrorBanner({
 }: TerminalAttachErrorBannerProps) {
   return (
     <InlineStatusBanner
-      icon={MonitorX}
       title="Terminal display failed"
       description={
         processRunning

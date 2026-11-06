@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { ForgeProviderEntry, ResolvedForgeProvider } from "../../../../shared/types/forge.js";
 import type { ResolveForgeProviderInputs } from "../../../services/forgeProviderResolver.js";
 
@@ -19,6 +19,8 @@ const registryMock = vi.hoisted(() => ({
   getForgeProviderImpl: vi.fn<(id: string) => unknown>(() => undefined),
   getForgeIssueProviderImpl: vi.fn<(id: string) => unknown>(() => undefined),
   getForgeProviderBaseImpl: vi.fn<(id: string) => unknown>(() => undefined),
+  // Every provider can run unless a test says it comes from an installed plugin.
+  getForgeProviderUnavailableError: vi.fn<(id: string) => string | null>(() => null),
   // Remote selection asks the registry whether a URL is parseable at all
   // (#11408). Default: every remote is supported, so selection falls through
   // to name preference and these tests stay about provider resolution.
@@ -63,6 +65,10 @@ const pluginServiceMock = vi.hoisted(() => ({
 vi.mock("../../../services/PluginService.js", () => ({ pluginService: pluginServiceMock }));
 
 import {
+  getImplForNamespace,
+  getImplForNamespaceActivating,
+  getIssueImplForNamespace,
+  hasIssueOverrideForCwd,
   issueToTooltipData,
   readIssueLinkTarget,
   resolveForCwd,
@@ -312,6 +318,20 @@ describe("resolveForCwd", () => {
     // Project root, not the linked worktree the call came from — matches the
     // path PullRequestService stamps on the RPC path.
     expect(result.repoRef.projectPath).toBe("/repo");
+  });
+
+  it("carries the resolved contribution's display name for copy that names the forge (#15603)", async () => {
+    registryMock.getForgeProviderImpl.mockReturnValue({
+      parseRemote: vi.fn(() => ({ owner: "owner", repo: "repo", rawData: null })),
+    });
+    resolverMock.resolveForgeProvider.mockReturnValue({
+      entry: giteaEntry,
+      resolvedVia: "hostname",
+    });
+
+    const result = await resolveForCwd("/repo");
+
+    expect(result).toMatchObject({ providerId: "gitea", providerName: "Gitea" });
   });
 
   it("falls back to getRepositoryRoot for projectPath when no worktree is marked main (#10563)", async () => {
@@ -916,6 +936,19 @@ describe("resolveForCwd — issues role (#13700)", () => {
     );
   });
 
+  it("says from settings alone whether issues are bound elsewhere (#15546)", async () => {
+    const tracker = makeIssuesOnlyProvider();
+    const resolveIssueRepo = vi.spyOn(tracker, "resolveIssueRepo");
+    registryMock.getForgeIssueProviderImpl.mockReturnValue(tracker);
+
+    await expect(hasIssueOverrideForCwd("/repo/src", "/repo")).resolves.toBe(true);
+    expect(resolveIssueRepo).not.toHaveBeenCalled();
+    expect(pluginServiceMock.activatePluginForForgeProvider).not.toHaveBeenCalled();
+
+    projectStoreMock.getProjectSettings.mockResolvedValue({ runCommands: [] });
+    await expect(hasIssueOverrideForCwd("/repo/src")).resolves.toBe(false);
+  });
+
   it("stamps issues it served with the provider's canonical id", async () => {
     registryMock.getForgeIssueProviderImpl.mockReturnValue(makeIssuesOnlyProvider());
     const context = await resolveForCwd("/repo", "issues");
@@ -924,6 +957,90 @@ describe("resolveForCwd — issues role (#13700)", () => {
       key: "ENG-42",
       providerId: "acme.tracker.tracker",
     });
+  });
+});
+
+describe("installed plugins' providers can't run (#15583)", () => {
+  const UNAVAILABLE =
+    'Forge provider "Gitea" can\'t run: it comes from the installed plugin "acme", and forge providers currently run only as built-in plugins.';
+  const installedGitea: ForgeProviderEntry = {
+    ...giteaEntry,
+    unavailableReason: "installed plugin",
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    gitServiceCacheMock.getGitService.mockReturnValue(gitServiceMock);
+    gitServiceMock.listWorktrees.mockResolvedValue([
+      { path: "/repo", branch: "main", bare: false, isMainWorktree: true },
+    ]);
+    gitServiceMock.getRemoteUrl.mockResolvedValue("https://gitea.example.com/owner/repo.git");
+    gitServiceMock.listRemotes.mockResolvedValue([
+      { name: "origin", fetchUrl: "https://gitea.example.com/owner/repo.git" },
+    ]);
+    projectStoreMock.getProjectByPath.mockImplementation(async (p: string) =>
+      p === "/repo" ? { id: "project-1", path: "/repo" } : null
+    );
+    projectStoreMock.getProjectSettings.mockResolvedValue({ runCommands: [] });
+    registryMock.listMatchingProviders.mockReturnValue([{}]);
+    registryMock.getForgeProviderImpl.mockReturnValue(undefined);
+    registryMock.getForgeIssueProviderImpl.mockReturnValue(undefined);
+    registryMock.getForgeProviderBaseImpl.mockReturnValue(undefined);
+    registryMock.getForgeProviderUnavailableError.mockImplementation((id: string) =>
+      id === "acme.gitea" ? UNAVAILABLE : null
+    );
+  });
+
+  afterEach(() => {
+    registryMock.getForgeProviderUnavailableError.mockImplementation(() => null);
+  });
+
+  it.each(["hostname", "override", "default"] as const)(
+    "fails a project resolved to one by %s with the real reason, without activating it",
+    async (resolvedVia) => {
+      resolverMock.resolveForgeProvider.mockReturnValue({ entry: installedGitea, resolvedVia });
+
+      const error = await resolveForCwd("/repo").catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe(UNAVAILABLE);
+      expect((error as Error).message).not.toMatch(/Activate it in Settings/);
+      expect(pluginServiceMock.activatePluginForForgeProvider).not.toHaveBeenCalled();
+    }
+  );
+
+  it("fails an issues override naming one with the real reason", async () => {
+    projectStoreMock.getProjectSettings.mockResolvedValue({
+      runCommands: [],
+      issueProviderOverride: "acme.gitea",
+    });
+    resolverMock.resolveForgeProvider.mockReturnValue({
+      entry: null,
+      resolvedVia: null,
+      issues: { entry: installedGitea, resolvedVia: "override" },
+    });
+
+    await expect(resolveForCwd("/repo", "issues")).rejects.toThrow(UNAVAILABLE);
+    expect(pluginServiceMock.activatePluginForForgeProvider).not.toHaveBeenCalled();
+  });
+
+  it("names the real reason on the synchronous impl lookups", () => {
+    expect(() => getImplForNamespace("acme.gitea")).toThrow(UNAVAILABLE);
+    expect(() => getIssueImplForNamespace("acme.gitea")).toThrow(UNAVAILABLE);
+    // A built-in that simply hasn't bound keeps the activation hint.
+    expect(() => getImplForNamespace("daintree.github.github")).toThrow(
+      'Forge provider "daintree.github.github" not activated. Activate it in Settings.'
+    );
+  });
+
+  it("doesn't start the plugin's worker for a credential lookup", async () => {
+    await expect(getImplForNamespaceActivating("acme.gitea")).resolves.toBeUndefined();
+    expect(pluginServiceMock.activatePluginForForgeProvider).not.toHaveBeenCalled();
+
+    await getImplForNamespaceActivating("daintree.github.github");
+    expect(pluginServiceMock.activatePluginForForgeProvider).toHaveBeenCalledWith(
+      "daintree.github.github"
+    );
   });
 });
 

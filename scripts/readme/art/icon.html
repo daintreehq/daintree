@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="variants" content="dark" />
+    <meta name="format" content="png" />
+    <link rel="stylesheet" href="base.css" />
+    <style>
+      /* The app icon for the README header, at 88px (176px at 2x). The source
+         carries a faint construction rim in its transparent corners, so the
+         tile is clipped to its own rounded square and the corners stay clear
+         on GitHub's light and dark pages. */
+      #art {
+        width: 88px;
+        height: 88px;
+        border-radius: 20px;
+        overflow: hidden;
+      }
+      /* Overscanned a little, so the clip falls inside the tile's own edge. */
+      #art img {
+        display: block;
+        width: 106%;
+        height: 106%;
+        margin: -3%;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="art"><img id="icon" src="../../../build/icon.png" alt="" /></div>
+    <script>
+      document
+        .getElementById("icon")
+        .decode()
+        .then(() => {
+          window.__artReady = true;
+        });
+    </script>
+  </body>
+</html>

@@ -30,6 +30,7 @@ import {
 import {
   detectPrompt,
   detectPromptLexeme,
+  findEmptyComposerRow,
   DEFAULT_PROMPT_PATTERNS,
   type PromptDetectorConfig,
 } from "./pty/PromptDetector.js";
@@ -38,6 +39,7 @@ import { CompletionTimer } from "./pty/CompletionTimer.js";
 import { BootDetector } from "./pty/BootDetector.js";
 import {
   classifyWaitingReason,
+  endsOnChoiceSelector,
   WAITING_REASON_CHECKLIST_ROWS,
   WAITING_REASON_SCAN_LINE_COUNT,
 } from "./pty/WaitingReasonClassifier.js";
@@ -132,6 +134,10 @@ export interface ActivityMonitorOptions {
   bootCompletePatterns?: RegExp[];
   patternBufferSize?: number;
   getVisibleLines?: (n: number) => string[];
+  // The last n non-empty viewport rows. `getVisibleLines` reads the bottom n
+  // physical rows, which are blank below an inline TUI that hasn't reached the
+  // bottom of a tall pane, so a working pattern is read here when given.
+  getLastTextLines?: (n: number) => string[];
   getVisibleContentSnapshot?: (n: number) => VisibleContentSnapshot | undefined;
   getCursorLine?: () => string | null;
   initialState?: "busy" | "idle";
@@ -193,6 +199,14 @@ export interface ActivityStateMetadata {
   waitingReason?: WaitingReason;
   sessionCost?: number;
   sessionTokens?: number;
+  /**
+   * Set only on a reason-only update (#16093): an idle agent's screen changed
+   * and settled without it going busy, and this is when the settled screen
+   * was read for `waitingReason`, with its input row in view and empty, or
+   * with a choice dialog in its place (#16209). No state transition goes with
+   * it.
+   */
+  rereadAt?: number;
 }
 
 export class ActivityMonitor {
@@ -236,6 +250,20 @@ export class ActivityMonitor {
   // sustainedSince between sparse frame-close events (one every 80-100ms is
   // typical, vs. the polling cycle's 50ms cadence).
   private readonly structuralRecoveryDebouncer: WorkingSignalDebouncer;
+  // Idle→busy from a working pattern read off the screen (#16062). Its own
+  // debouncer because the polling cycle reports this signal every tick, which
+  // would zero the data path's sustained pattern signal between chunks.
+  private readonly visibleWorkingDebouncer = new WorkingSignalDebouncer(SPINNER_ACTIVE_MS);
+  // When the visible content last changed; 0 until it ever has, so a screen
+  // restored already showing a working line can't read as freshly changed.
+  private lastVisibleChangeAt = 0;
+  private visibleWorkingScannedAt = 0;
+  private visibleWorkingMatch: PatternDetectionResult | undefined;
+  // The reason this idle period was last given, and when the screen was last
+  // read for it (#16093). A screen that changes while the agent stays idle is
+  // read again once it settles past that read.
+  private idleWaitingReason: WaitingReason | undefined;
+  private waitingReasonReadAt = 0;
   private readonly lineRewriteDetector: LineRewriteDetector;
   private readonly completionTimer: CompletionTimer;
   private readonly bootDetector: BootDetector;
@@ -273,6 +301,7 @@ export class ActivityMonitor {
   private patternDetector?: AgentPatternDetector;
   private lastPatternResult?: PatternDetectionResult;
   private readonly getVisibleLines?: (n: number) => string[];
+  private readonly getLastTextLines?: (n: number) => string[];
   private readonly getVisibleContentSnapshot?: (n: number) => VisibleContentSnapshot | undefined;
   private readonly getCursorLine?: () => string | null;
   private pollingInterval?: ReturnType<typeof setInterval>;
@@ -283,6 +312,9 @@ export class ActivityMonitor {
 
   // Prompt/completion config
   private readonly promptDetectorConfig: PromptDetectorConfig;
+  // The agent whose screen this is, for dialog shapes only its own config
+  // knows (#16209). Follows `reconfigure`.
+  private agentId: string | undefined;
   private readonly completionPatterns: RegExp[];
   private readonly completionConfidence: number;
 
@@ -393,7 +425,9 @@ export class ActivityMonitor {
     if (options?.patternConfig || options?.agentId) {
       this.patternDetector = new AgentPatternDetector(options.agentId, options.patternConfig);
     }
+    this.agentId = options?.agentId;
     this.getVisibleLines = options?.getVisibleLines;
+    this.getLastTextLines = options?.getLastTextLines;
     this.getVisibleContentSnapshot = options?.getVisibleContentSnapshot;
     this.getCursorLine = options?.getCursorLine;
 
@@ -968,11 +1002,84 @@ export class ActivityMonitor {
    * rather than counted against the window.
    */
   private classifyReason(lines: string[], isPromptDetected: boolean): WaitingReason {
+    return this.readWaitingScreen(lines, isPromptDetected).reason;
+  }
+
+  // The agent's empty input row bounds the error window when it is in view,
+  // so a footer drawn below it can't label the wait.
+  private readWaitingScreen(
+    lines: string[],
+    isPromptDetected: boolean
+  ): { reason: WaitingReason; composerRow: number | undefined; read: string[]; rows: number } {
     const rows = Math.max(lines.length, WAITING_REASON_SCAN_LINE_COUNT);
     const wanted = rows + WAITING_REASON_CHECKLIST_ROWS;
     const read =
       this.getVisibleLines && lines.length < wanted ? this.getVisibleLines(wanted) : lines;
-    return classifyWaitingReason(read, isPromptDetected, rows);
+    const composerRow = findEmptyComposerRow(read, this.promptDetectorConfig.promptPatterns);
+    return {
+      reason: classifyWaitingReason(read, isPromptDetected, rows, composerRow, this.agentId),
+      composerRow,
+      read,
+      rows,
+    };
+  }
+
+  // An idle agent's reason was read once, when it settled (#16093). A screen
+  // that changes without it going busy (a footer redrawn after Escape cancels
+  // a limit wait) never reached the classifier again, so a reason computed at
+  // that settle held for as long as the agent stayed idle. Once the change has
+  // settled the screen is read again, and only a screen showing the agent's
+  // input row, empty, can change the reason to one a send is admitted at: the
+  // update carries a new settle for the send gate, which must never land over
+  // a draft. Time alone never re-reads anything.
+  //
+  // A dialog drawn after the settle takes that row's place (#16209), so a
+  // selector the screen shows by its structure is published without it; a
+  // phrase alone could be a draft. A dialog closed into a draft leaves the
+  // reading at approval until the input row is empty again or the agent next
+  // settles, so no send lands over the draft meanwhile.
+  private rereadWaitingReason(now: number): void {
+    if (this.state !== "idle" || this.completionTimer.emitted || !this.getVisibleLines) return;
+    const changedAt = Math.max(this.lastDataTimestamp, this.simpleSnapshotSettleFrom);
+    if (changedAt <= this.waitingReasonReadAt) return;
+    // The snapshot cache's settle window: long enough for the headless
+    // mirror to parse the last chunk and any redraw it set off.
+    if (now - changedAt < SIMPLE_SNAPSHOT_SETTLE_MS) return;
+    if (
+      this.isResizeSuppressed(now) ||
+      this.isFocusSuppressed(now) ||
+      this.inputTracker.isRecentUserInput(now) ||
+      // Only the busy paths clear an empty Enter's confirmation, so one that
+      // expired with the agent idle still reads as set.
+      now < this.inputTracker.pendingInputUntil
+    ) {
+      return;
+    }
+    this.waitingReasonReadAt = now;
+    const lines = this.getVisibleLines(this.promptDetectorConfig.promptScanLineCount);
+    const promptResult = detectPrompt(
+      lines,
+      this.promptDetectorConfig,
+      this.getCursorLine?.() ?? null,
+      { allowHistoryScan: true }
+    );
+    const { reason, composerRow, read, rows } = this.readWaitingScreen(
+      lines,
+      promptResult.isPrompt
+    );
+    if (reason === this.idleWaitingReason) return;
+    if (
+      composerRow === undefined &&
+      !(reason === "approval" && endsOnChoiceSelector(read, rows, this.agentId))
+    ) {
+      return;
+    }
+    this.idleWaitingReason = reason;
+    this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
+      trigger: "pattern",
+      waitingReason: reason,
+      rereadAt: now,
+    });
   }
 
   // The viewport can keep mutating after these signals without new PTY data
@@ -983,6 +1090,47 @@ export class ActivityMonitor {
     this.simpleSnapshotCapturedAt = 0;
     this.simpleSnapshotCapturedByteAt = 0;
     this.simpleSnapshotSettleFrom = Date.now();
+    this.visibleWorkingScannedAt = 0;
+    this.visibleWorkingMatch = undefined;
+  }
+
+  // An idle agent whose screen says it is working (#16062). A differential
+  // renderer repaints a working screen in place — after the first frame, only
+  // the elapsed-time digits, once a second — so the raw-stream pattern tier
+  // never sees the text that matches, and changes that sparse never satisfy
+  // the temperature's sustained-change gate. Only a primary pattern counts
+  // (fallback tiers also match transcript lines), and only while the screen
+  // keeps changing: a working line left frozen on screen, or one beside bytes
+  // that move nothing visible, is not work. The sustain spans the freshness
+  // window, so it takes at least two visible changes, never one repaint.
+  private recoverFromVisibleWorking(now: number): void {
+    const readLines = this.getLastTextLines ?? this.getVisibleLines;
+    if (!this.patternDetector || !readLines) return;
+    const live =
+      this.lastVisibleChangeAt > 0 &&
+      now - this.lastVisibleChangeAt < SPINNER_ACTIVE_MS &&
+      !this.isResizeSuppressed(now) &&
+      !this.isFocusSuppressed(now) &&
+      !this.inputTracker.isRecentUserInput(now);
+    if (!live) {
+      this.visibleWorkingDebouncer.reset();
+      return;
+    }
+    // Rescanned at the snapshot's own cap rather than every tick: a headless
+    // mirror may not have parsed the latest chunk yet, and the next scan will.
+    if (now - this.visibleWorkingScannedAt >= SIMPLE_SNAPSHOT_MIN_INTERVAL_MS) {
+      this.visibleWorkingScannedAt = now;
+      this.visibleWorkingMatch = this.patternDetector.detectFromLines(
+        readLines(AGENT_OUTPUT_ACTIVITY_LINE_COUNT)
+      );
+    }
+    const match = this.visibleWorkingMatch;
+    if (
+      match !== undefined &&
+      this.visibleWorkingDebouncer.shouldTriggerRecovery(now, match.matchTier === "primary")
+    ) {
+      this.becomeBusy({ trigger: "pattern", patternConfidence: match.confidence }, now);
+    }
   }
 
   private noteSimpleOutputSnapshot(
@@ -1004,6 +1152,7 @@ export class ActivityMonitor {
     if (result.changed) {
       this.lastActivityTimestamp = now;
       this.lastDataTimestamp = now;
+      this.lastVisibleChangeAt = now;
     }
 
     if (this.state === "busy" && result.changed) {
@@ -1083,6 +1232,7 @@ export class ActivityMonitor {
     this.workingSignalDebouncer.reset();
     this.cosmeticRecoveryDebouncer.reset();
     this.structuralRecoveryDebouncer.reset();
+    this.visibleWorkingDebouncer.reset();
     this.simpleOutputTemperature.reset();
     this.simpleSnapshotCache = undefined;
     this.simpleSnapshotCacheKey = 0;
@@ -1106,6 +1256,7 @@ export class ActivityMonitor {
     this.lastStatusRewriteAt = 0;
     this.lastWorkingIndicatorTimestamp = 0;
     this.promptStableSince = 0;
+    this.lastVisibleChangeAt = 0;
   }
 
   getLastPatternResult(): PatternDetectionResult | undefined {
@@ -1115,6 +1266,7 @@ export class ActivityMonitor {
   reconfigure(agentId?: string, patternConfig?: PatternDetectionConfig): void {
     if (this.isDisposed) return;
 
+    this.agentId = agentId;
     this.patternDetector =
       agentId || patternConfig ? new AgentPatternDetector(agentId, patternConfig) : undefined;
 
@@ -1207,6 +1359,7 @@ export class ActivityMonitor {
     this.waitingWatchdog.reset();
     this.cosmeticRecoveryDebouncer.reset();
     this.structuralRecoveryDebouncer.reset();
+    this.visibleWorkingDebouncer.reset();
     this.completionTimer.reset();
     // Discard the temperature snapshot so its quiet clock restarts from the
     // promotion (same rationale as `notifyFocus`). A stale `quietStartedAt`
@@ -1238,6 +1391,7 @@ export class ActivityMonitor {
     this.workingSignalDebouncer.reset();
     this.cosmeticRecoveryDebouncer.reset();
     this.structuralRecoveryDebouncer.reset();
+    this.visibleWorkingDebouncer.reset();
     // Structural tier keys cell ring buffers by viewport-bottom-relative
     // (rowOffset, col); a resize invalidates that mapping. Reset so the
     // first post-resize frame doesn't compare against pre-resize cells.
@@ -1261,6 +1415,7 @@ export class ActivityMonitor {
     this.workingSignalDebouncer.reset();
     this.cosmeticRecoveryDebouncer.reset();
     this.structuralRecoveryDebouncer.reset();
+    this.visibleWorkingDebouncer.reset();
     // Discard accumulated temperature snapshot so the post-focus redraw gets a
     // fresh baseline. Unlike resize, focus does not invalidate cell ring-buffer
     // history or the high-output window — those stay intact.
@@ -1377,6 +1532,11 @@ export class ActivityMonitor {
         const indicatorActive =
           this.lastStatusRewriteAt > 0 && now - this.lastStatusRewriteAt <= SPINNER_ACTIVE_MS;
         this.noteSimpleOutputSnapshot(snapshot, now, indicatorActive ? "indicator" : "content");
+      }
+
+      if (this.state === "idle") {
+        this.recoverFromVisibleWorking(now);
+        this.rereadWaitingReason(now);
       }
 
       // Completion detection runs every cycle while busy — mirrors the
@@ -1790,6 +1950,8 @@ export class ActivityMonitor {
       this.state = "idle";
       this.idleSince = Date.now();
       this.patternBuf.clear();
+      this.idleWaitingReason = undefined;
+      this.waitingReasonReadAt = this.idleSince;
       this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
         trigger: "pattern",
         patternConfidence: 0.85,
@@ -1867,6 +2029,8 @@ export class ActivityMonitor {
       // outside the 6-line prompt window.
       waitingReason = this.classifyReason(lines, promptResult.isPrompt);
     }
+    this.idleWaitingReason = waitingReason;
+    this.waitingReasonReadAt = now;
     this.onStateChange(this.terminalId, this.spawnedAt, "idle", {
       trigger: "timeout",
       waitingReason,
@@ -1894,6 +2058,7 @@ export class ActivityMonitor {
     // immediately re-trigger recovery without sustained signal.
     this.cosmeticRecoveryDebouncer.reset();
     this.structuralRecoveryDebouncer.reset();
+    this.visibleWorkingDebouncer.reset();
 
     // Reset completion state for the new work cycle
     this.completionTimer.reset();

@@ -90,7 +90,7 @@ export interface GenerateAgentCommandOptionsLike {
   clipboardDirectory?: string;
   modelId?: string;
   recipeArgs?: string;
-  presetArgs?: string;
+  presetArgs?: readonly string[];
   globalSkipPermissions?: boolean;
   globalUseAltScreen?: boolean;
   sessionId?: string;

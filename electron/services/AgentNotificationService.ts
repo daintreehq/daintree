@@ -7,12 +7,23 @@ import {
 } from "./NotificationService.js";
 import { isRemoteEndpointHandle } from "../ipc/endpoint.js";
 import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
-import { store, type StoreSchema } from "../store.js";
 import type { NotificationSettings } from "../../shared/types/ipc/api.js";
 import { projectStore } from "./ProjectStore.js";
+import { getPtyClient } from "../window/serviceRefs.js";
+import { isHostThrowawayTerminalId } from "../../shared/config/hostThrowaway.js";
+import { PanelRecordIndex, type PanelRecord } from "./agentNotificationPanels.js";
 import { soundService } from "./SoundService.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { isScheduledQuietNow } from "../../shared/utils/quietHours.js";
+import {
+  displayIdentityLabel,
+  isEmptyDisplayIdentity,
+  normalizeDisplayEmoji,
+  withDisplayEmoji,
+} from "../../shared/utils/displayIdentity.js";
+import { isGlobalAssistantId } from "../../shared/config/globalAssistant.js";
+import { readAssistantIdentity } from "./assistantIdentity.js";
+import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
 import { getOsDndService } from "./OsDndService.js";
 import type { UserPresence } from "./userPresence.js";
 import { shouldPlayUiFeedbackSound } from "../utils/uiFeedbackSound.js";
@@ -54,9 +65,6 @@ const SPAWN_GRACE_PERIOD_MS = 5_000;
  */
 const BOOT_GRACE_PERIOD_MS = 8_000;
 
-type TerminalSnapshot = StoreSchema["appState"]["terminals"];
-type TerminalSnapshotEntry = TerminalSnapshot[number];
-
 interface PendingNotification {
   title: string;
   body: string;
@@ -66,6 +74,8 @@ interface PendingNotification {
   triggerSound: boolean;
   soundFile?: string;
   ownerWebContentsId?: NotificationOwnerId;
+  /** The agent's project, frozen when its event arrived: a natural exit drops the live record. */
+  projectId: string | null;
   category: NotificationCategory;
 }
 
@@ -77,6 +87,7 @@ interface BurstWaitingEntry {
   soundFile: string;
   soundEnabled: boolean;
   ownerWebContentsId?: NotificationOwnerId;
+  projectId: string | null;
 }
 
 /**
@@ -123,17 +134,40 @@ class AgentNotificationService {
    * a minutes-later escalation fires, the live index no longer knows the owner.
    */
   private lastOwnerByPanel = new Map<string, NotificationOwnerId>();
-  private terminalIndexById = new Map<string, number>();
+  /** Each panel's dock, worktree and title, from its project's saved record (#15636). */
+  private panels = new PanelRecordIndex();
+  /** Projects whose alert overrides are being read now. */
+  private overridesLoading = new Set<string>();
+  /**
+   * The project each agent's live terminal last named. A natural exit drops
+   * the live record before the agent's last transition, and a panel that was
+   * never saved has no record to fall back on.
+   */
+  private projectByTerminal = new Map<string, string>();
+  /**
+   * The worktree each view has selected, as it last reported. Every view has
+   * its own, so the global `appState.activeWorktreeId` (whichever view changed
+   * worktree last) can't say what the view that owns a panel is showing.
+   */
+  private selectedWorktreeByOwner = new Map<NotificationOwnerId, string | null>();
   private hasEverGoneWorking = false;
   private peakConcurrentWorking = 0;
   private activeTerminalIds = new Set<string>();
+  /** Agents an event spoke for while the startup seed was in flight: the seed is older news. */
+  private activeSeedTouched: Set<string> | null = null;
+  /** An all-clear that came due while the seed was in flight, and waits on its answer. */
+  private allClearHeldForSeed = false;
   private allClearTimer: NodeJS.Timeout | null = null;
+  /**
+   * The project of the agent whose transition left nothing working: the
+   * all-clear is the fleet's, and its sound goes by the last one's choices.
+   */
+  private allClearProjectId: string | null = null;
 
   private waitingBurstBuffer: BurstWaitingEntry[] = [];
   private waitingBurstTimer: NodeJS.Timeout | null = null;
   private completionBurstBuffer: PendingNotification[] = [];
   private completionBurstTimer: NodeJS.Timeout | null = null;
-  private completionBurstSoundFile: string | undefined;
   private waitingTerminalIds = new Set<string>();
   /**
    * Waits Daintree's own banner already went out for, until the agent stops
@@ -144,7 +178,10 @@ class AgentNotificationService {
   private canopyAnnouncedIds = new Set<string>();
   /** Each with the panels that list it: what's in front of one ask says nothing of another's. */
   private canopyAskBuffer: Array<
-    CanopyAskNotice & { canopyOpenIn: () => readonly NotificationOwnerId[] }
+    CanopyAskNotice & {
+      canopyOpenIn: () => readonly NotificationOwnerId[];
+      projectId: string | null;
+    }
   > = [];
   private canopyAskTimer: NodeJS.Timeout | null = null;
   /** Tracks when each agent spawned to suppress sounds during the grace period */
@@ -190,6 +227,11 @@ class AgentNotificationService {
     }
   }
 
+  /** The worktree a view has selected; `null` when it has none. */
+  setSelectedWorktree(ownerWebContentsId: NotificationOwnerId, worktreeId: string | null): void {
+    this.selectedWorktreeByOwner.set(ownerWebContentsId, worktreeId);
+  }
+
   /**
    * Drop everything owned by a renderer that no longer exists. Idempotent — the
    * webContents "destroyed" listener and its window's cleanup can both fire.
@@ -198,6 +240,7 @@ class AgentNotificationService {
    * track main-process terminal state, which outlives any renderer watching it.
    */
   removeOwner(ownerWebContentsId: NotificationOwnerId): void {
+    this.selectedWorktreeByOwner.delete(ownerWebContentsId);
     const watched = this.watchedPanelsByOwner.get(ownerWebContentsId);
     if (watched) {
       for (const panelId of watched) {
@@ -316,18 +359,41 @@ class AgentNotificationService {
   }
 
   /**
-   * The settings that decide a notification for `ownerId`. A remote view's
-   * Shell chooses which events alert it and when (#14701): its choices stand
-   * in for this host's global ones, the project's own overrides still apply
-   * over them, and its quiet hours are left to it, since they follow its own
-   * clock. This machine's windows, and a Shell that never sent its choices,
-   * go by this host's own.
+   * The project an agent belongs to, whose overrides decide its alerts
+   * (#15635): its live terminal's, else the last one that terminal named,
+   * else the one whose save last listed its panel. `null` when none knows,
+   * and then the globals decide alone, never the overrides of whichever
+   * project is current.
    */
-  private settingsFor(ownerId: NotificationOwnerId | undefined): NotificationSettings {
+  private projectOf(terminalId: string | undefined): string | null {
+    if (!terminalId) return null;
+    const live = getPtyClient()?.getTerminalProjectId(terminalId);
+    if (live) {
+      this.projectByTerminal.set(terminalId, live);
+      return live;
+    }
+    return this.projectByTerminal.get(terminalId) ?? this.panels.workspaceOf(terminalId) ?? null;
+  }
+
+  /**
+   * The settings that decide a notification about an agent of `projectId`
+   * for `ownerId`. A remote view's Shell chooses which events alert it and
+   * when (#14701): its choices stand in for this host's global ones, the
+   * agent's project's own overrides still apply over them, and its quiet
+   * hours are left to it, since they follow its own clock. This machine's
+   * windows, and a Shell that never sent its choices, go by this host's own.
+   */
+  private settingsFor(
+    ownerId: NotificationOwnerId | undefined,
+    projectId: string | null
+  ): NotificationSettings {
     const clientId = this.shellClientOf(ownerId);
     const policy = clientId === undefined ? undefined : this.shellPolicies.get(clientId);
-    if (!policy) return projectStore.getEffectiveNotificationSettings();
-    return { ...projectStore.getEffectiveNotificationSettings(policy), quietHoursEnabled: false };
+    if (!policy) return projectStore.getEffectiveNotificationSettings(projectId);
+    return {
+      ...projectStore.getEffectiveNotificationSettings(projectId, policy),
+      quietHoursEnabled: false,
+    };
   }
 
   /** The machine a notification is decided for: this one, or one Shell. */
@@ -337,20 +403,22 @@ class AgentNotificationService {
   }
 
   /**
-   * A burst split by the machine each item goes to, in arrival order: grouped
-   * under another machine's view, an item would be shown, or held back, by
-   * that machine's choices and never reach its own.
+   * A burst split by the machine each item goes to and the project its agent
+   * belongs to, in arrival order: grouped under another machine's view, an
+   * item would be shown, or held back, by that machine's choices and never
+   * reach its own, and grouped under another project's agent it would sound
+   * and navigate by that project's.
    */
-  private byRecipient<T>(
+  private byDestination<T extends { projectId: string | null }>(
     items: readonly T[],
     ownerOf: (item: T) => NotificationOwnerId | undefined
   ): T[][] {
     const groups = new Map<string, T[]>();
     for (const item of items) {
-      const recipient = this.recipientOf(ownerOf(item));
-      const group = groups.get(recipient);
+      const key = `${this.recipientOf(ownerOf(item))}\0${item.projectId ?? ""}`;
+      const group = groups.get(key);
       if (group) group.push(item);
-      else groups.set(recipient, [item]);
+      else groups.set(key, [item]);
     }
     return [...groups.values()];
   }
@@ -361,14 +429,9 @@ class AgentNotificationService {
     if (this.unsubscribers.length > 0) return;
 
     this.initializedAt = Date.now();
-    const initialTerminals = store.get("appState")?.terminals ?? [];
-    this.rebuildTerminalIndex(initialTerminals);
-    this.activeTerminalIds = new Set(
-      initialTerminals
-        .filter((terminal) =>
-          terminal.agentState ? ACTIVE_AGENT_STATES.has(terminal.agentState) : false
-        )
-        .map((terminal) => terminal.id)
+
+    const unsubPersisted = projectStore.onProjectStatePersisted((workspaceId, state) =>
+      this.panels.noteSaved(workspaceId, state)
     );
 
     const unsubStateChanged = events.on("agent:state-changed", (payload) => {
@@ -384,7 +447,11 @@ class AgentNotificationService {
       if (agentKey) {
         this.agentSpawnTimestamps.set(agentKey, Date.now());
       }
-      const settings = projectStore.getEffectiveNotificationSettings();
+      // Its project's overrides, read now, are in by its first transition.
+      if (payload.terminalId) this.loadPanelProject(payload.terminalId);
+      const settings = projectStore.getEffectiveNotificationSettings(
+        this.projectOf(payload.terminalId)
+      );
       // isInformationalAudioSuppressed covers quiet hours, session mute, and
       // OS DND — the same chain the sound and the all-clear flash use.
       // Boot grace is a separate, spawn-specific condition (avoids a flood
@@ -409,6 +476,7 @@ class AgentNotificationService {
     const unsubDetected = events.on("agent:detected", (payload) => {
       if (!payload.agentType || !payload.terminalId) return;
       this.agentSpawnTimestamps.set(payload.terminalId, Date.now());
+      this.loadPanelProject(payload.terminalId);
     });
 
     // Prune spawn-grace tracking when an agent exits — otherwise an agent that
@@ -418,7 +486,7 @@ class AgentNotificationService {
       if (payload.terminalId) {
         this.agentSpawnTimestamps.delete(payload.terminalId);
         this.activeTerminalIds.delete(payload.terminalId);
-        this.terminalIndexById.delete(payload.terminalId);
+        this.activeSeedTouched?.add(payload.terminalId);
         // Bound the routing hint's lifetime to the agent's. A re-watch of the
         // same panel repopulates it; notifications already in flight captured
         // their owner when the event fired.
@@ -434,19 +502,123 @@ class AgentNotificationService {
       if (payload.terminalId) {
         this.agentSpawnTimestamps.delete(payload.terminalId);
         this.activeTerminalIds.delete(payload.terminalId);
-        this.terminalIndexById.delete(payload.terminalId);
+        this.activeSeedTouched?.add(payload.terminalId);
         this.forgetPanelOwnership(payload.terminalId);
+        this.projectByTerminal.delete(payload.terminalId);
         this.dismissWaitingAlerts(payload.terminalId);
       }
     });
 
     this.unsubscribers.push(
+      unsubPersisted,
       unsubStateChanged,
       unsubSpawned,
       unsubDetected,
       unsubExited,
       unsubKilled
     );
+
+    this.seedActiveAgents();
+  }
+
+  /**
+   * Agents already working when this service starts: their transitions came
+   * before it was listening, and without them a fleet finishing around one
+   * would sound the all-clear early. Asked of the PTY host, which knows what is
+   * running now. Anything an event spoke for since the question went out is
+   * newer than the answer.
+   */
+  private seedActiveAgents(): void {
+    const ptyClient = getPtyClient();
+    if (!ptyClient) return;
+    const touched = new Set<string>();
+    this.activeSeedTouched = touched;
+    void ptyClient.getAllTerminalsWithCompletenessAsync().then(
+      ({ terminals, degraded }) => {
+        if (this.activeSeedTouched !== touched) return;
+        this.activeSeedTouched = null;
+        let seeded = false;
+        for (const terminal of terminals) {
+          if (isHostThrowawayTerminalId(terminal.id)) continue;
+          // Read each live terminal's project now, while the host still names
+          // it: a natural exit drops that attribution before its last event.
+          const projectId = ptyClient.getTerminalProjectId(terminal.id) ?? terminal.projectId;
+          if (projectId) this.loadProject(projectId);
+          if (touched.has(terminal.id) || terminal.isExited) continue;
+          // An agent running since before this service: its next transition
+          // may be a natural exit, by which time only this answer names its project.
+          if (projectId && terminal.agentState && terminal.agentState !== "exited") {
+            this.projectByTerminal.set(terminal.id, projectId);
+          }
+          if (terminal.agentState && ACTIVE_AGENT_STATES.has(terminal.agentState)) {
+            this.activeTerminalIds.add(terminal.id);
+            seeded = true;
+          }
+        }
+        if (seeded) {
+          this.hasEverGoneWorking = true;
+          this.peakConcurrentWorking = Math.max(
+            this.peakConcurrentWorking,
+            this.activeTerminalIds.size
+          );
+        }
+        // A host that didn't fully answer can't vouch that nothing is working.
+        this.settleAllClearForSeed(!degraded);
+      },
+      () => {
+        if (this.activeSeedTouched !== touched) return;
+        this.activeSeedTouched = null;
+        this.settleAllClearForSeed(false);
+      }
+    );
+  }
+
+  private settleAllClearForSeed(seedIsComplete: boolean): void {
+    const held = this.allClearHeldForSeed;
+    this.allClearHeldForSeed = false;
+    if (seedIsComplete) {
+      if (held && this.activeTerminalIds.size === 0) this.fireAllClear();
+      return;
+    }
+    // A host that didn't fully answer can't vouch that nothing is working, so
+    // an all-clear already in the making is abandoned, along with the session
+    // it closed when nothing is left working to carry it on.
+    if (this.allClearTimer) {
+      clearTimeout(this.allClearTimer);
+      this.allClearTimer = null;
+    }
+    if (this.activeTerminalIds.size === 0) {
+      this.peakConcurrentWorking = 0;
+      this.hasEverGoneWorking = false;
+    }
+  }
+
+  private readSavedPanels = (projectId: string) => projectStore.getProjectState(projectId);
+
+  /** Read once the project a terminal belongs to, if nothing has reached it yet. */
+  private loadPanelProject(terminalId: string): void {
+    const projectId = getPtyClient()?.getTerminalProjectId(terminalId);
+    if (projectId) this.loadProject(projectId);
+  }
+
+  /**
+   * A project's saved panels, and its alert overrides, which on a cold cache
+   * would leave the globals deciding for its agents. Asked on every sighting,
+   * one read at a time: the store answers at once while it holds them, and
+   * reads again once something has dropped them.
+   */
+  private loadProject(projectId: string): void {
+    this.panels.load(projectId, this.readSavedPanels);
+    if (this.overridesLoading.has(projectId)) return;
+    this.overridesLoading.add(projectId);
+    const done = () => this.overridesLoading.delete(projectId);
+    projectStore.loadNotificationOverrides(projectId).then(done, done);
+  }
+
+  /** Where a panel is now, by its saved record; what the event said only when there is none. */
+  private worktreeOf(terminalId: string | undefined, reported?: string): string | undefined {
+    const panel = this.panels.get(terminalId);
+    return panel ? panel.worktreeId : reported;
   }
 
   private isWithinBootGrace(): boolean {
@@ -468,46 +640,6 @@ class AgentNotificationService {
     return true;
   }
 
-  private rebuildTerminalIndex(terminals: TerminalSnapshot): void {
-    this.terminalIndexById.clear();
-    terminals.forEach((terminal, index) => this.terminalIndexById.set(terminal.id, index));
-  }
-
-  private getTerminalSnapshotFrom(
-    terminals: TerminalSnapshot,
-    terminalId?: string
-  ): TerminalSnapshotEntry | undefined {
-    if (!terminalId) return undefined;
-    const index = this.terminalIndexById.get(terminalId);
-    if (index !== undefined) {
-      const terminal = terminals[index];
-      if (terminal?.id === terminalId) return terminal;
-    }
-
-    this.rebuildTerminalIndex(terminals);
-    return terminals.find((terminal) => terminal.id === terminalId);
-  }
-
-  /**
-   * Look up a terminal's persisted entry — notably its renderer-owned
-   * worktreeId — from persisted app state.
-   *
-   * Backend-emitted agent events (agent:state-changed, agent:completed, etc.) no
-   * longer carry worktreeId — it's renderer-owned layout state. Main-side
-   * consumers that need worktreeId for focus/dedup/routing should resolve it
-   * here from the IPC-synced appState. May briefly lag a drag-to-worktree
-   * gesture; that is acceptable because the fallback (undefined) simply means
-   * notifications aren't suppressed, not that they fire wrongly.
-   *
-   * Each `store.get` deep-clones the whole appState, so callers resolving more
-   * than one terminal should read `terminals` once and use
-   * `getTerminalSnapshotFrom`.
-   */
-  private getTerminalSnapshot(terminalId?: string): TerminalSnapshotEntry | undefined {
-    if (!terminalId) return undefined;
-    return this.getTerminalSnapshotFrom(store.get("appState").terminals, terminalId);
-  }
-
   private handleStateChanged(payload: {
     state: string;
     previousState: string;
@@ -518,21 +650,24 @@ class AgentNotificationService {
     waitingReason?: string;
   }): void {
     const { state, previousState, terminalId, agentId } = payload;
-    this.checkAllClear(state, previousState, terminalId);
+    // The agent's own project decides its alerts (#15635), frozen now for
+    // every timer this event starts.
+    const projectId = this.projectOf(terminalId);
+    // An agent's last transition: nothing later needs its terminal's project.
+    if (state === "exited" && terminalId) this.projectByTerminal.delete(terminalId);
+    this.checkAllClear(state, previousState, terminalId, projectId);
     if (state === previousState) return;
+    // The project as resolved, retained or saved: a natural exit has no live one to read.
+    if (projectId) this.loadProject(projectId);
 
-    // Idle is never a notification, escalation, or working-pulse destination,
-    // so no branch below consumes terminal metadata for it.
-    const terminal = state === "idle" ? undefined : this.getTerminalSnapshot(terminalId);
     // Capture the owner now: the renderer unwatches one-shot on this very
     // transition, so the live index is empty by the time a notification
     // fires. Whichever machine it belongs to decides what it may raise.
     const ownerWebContentsId = this.resolveOwner(terminalId);
-    const settings = this.settingsFor(ownerWebContentsId);
-    // Backend no longer emits worktreeId on agent events (#5139). Resolve it
-    // from persisted renderer state so focus suppression, dedup keying, and
-    // notification context still work correctly.
-    const worktreeId = payload.worktreeId ?? terminal?.worktreeId;
+    const settings = this.settingsFor(ownerWebContentsId, projectId);
+    // Backend no longer emits worktreeId on agent events (#5139): the panel's
+    // saved record says where it is.
+    const worktreeId = this.worktreeOf(terminalId, payload.worktreeId);
 
     // Clear spawn grace tracking once the agent starts doing real work
     // (waiting→working means the user gave input, so future waiting sounds are legitimate)
@@ -605,9 +740,8 @@ class AgentNotificationService {
     if (state === "waiting" && terminalId && !this.isWithinSpawnGrace(agentId, terminalId)) {
       this.scheduleWaitingEscalation(
         terminalId,
+        projectId,
         settings,
-        terminal,
-        worktreeId,
         agentId,
         coerceWaitingReason(payload.waitingReason)
       );
@@ -615,7 +749,7 @@ class AgentNotificationService {
 
     // Schedule working pulse for watched/docked agents entering working state
     if (state === "working" && previousState !== "working" && terminalId) {
-      this.scheduleWorkingPulse(terminalId, settings, terminal);
+      this.scheduleWorkingPulse(terminalId, projectId, settings);
     }
 
     // Skip if all OS notification types are disabled (off by default).
@@ -631,7 +765,12 @@ class AgentNotificationService {
     if (!isWatched) return;
 
     if ((state === "completed" || state === "exited") && settings.completedEnabled) {
-      this.scheduleCompletionNotification(key, worktreeId, terminalId, agentId, ownerWebContentsId);
+      this.scheduleCompletionNotification(key, projectId, {
+        worktreeId,
+        terminalId,
+        agentId,
+        ownerWebContentsId,
+      });
     } else if (
       state === "waiting" &&
       settings.waitingEnabled &&
@@ -645,6 +784,7 @@ class AgentNotificationService {
         soundFile: settings.waitingSoundFile,
         soundEnabled: settings.soundEnabled,
         ownerWebContentsId,
+        projectId,
       });
       if (this.waitingBurstTimer === null) {
         this.waitingBurstTimer = setTimeout(() => this.flushWaitingBurst(), BURST_WINDOW_MS);
@@ -652,36 +792,30 @@ class AgentNotificationService {
     }
   }
 
-  private countActiveAgents(terminals: TerminalSnapshot): number {
-    return terminals.filter((t) => t.agentState && ACTIVE_AGENT_STATES.has(t.agentState)).length;
-  }
-
-  private checkAllClear(state: string, previousState: string, terminalId?: string): void {
+  /**
+   * The count is the agents events (and the startup seed) say are active now,
+   * never the legacy `appState.terminals`: an entry there still marked active
+   * from an old session would hold the all-clear back for good.
+   */
+  private checkAllClear(
+    state: string,
+    previousState: string,
+    terminalId: string | undefined,
+    projectId: string | null
+  ): void {
     const wasActive = ACTIVE_AGENT_STATES.has(previousState);
     const isActive = ACTIVE_AGENT_STATES.has(state);
 
     if (terminalId) {
+      this.activeSeedTouched?.add(terminalId);
       if (isActive) this.activeTerminalIds.add(terminalId);
       else this.activeTerminalIds.delete(terminalId);
     }
 
-    let activeCount = terminalId
-      ? this.activeTerminalIds.size
-      : this.countActiveAgents(store.get("appState").terminals);
+    const activeCount = this.activeTerminalIds.size;
 
     // Track when agents start working
     if (!wasActive && isActive) {
-      // Preserve the persisted-snapshot contract on the first active transition
-      // of a session. Renderer state can already contain active siblings whose
-      // transitions preceded initialization (or were not observed here). The
-      // peak only has a two-agent floor, so later transitions can stay on the
-      // event-maintained set without rescanning the fleet.
-      if (!this.hasEverGoneWorking) {
-        activeCount = Math.max(
-          activeCount,
-          this.countActiveAgents(store.get("appState").terminals)
-        );
-      }
       this.hasEverGoneWorking = true;
       this.peakConcurrentWorking = Math.max(this.peakConcurrentWorking, activeCount);
 
@@ -690,6 +824,7 @@ class AgentNotificationService {
         clearTimeout(this.allClearTimer);
         this.allClearTimer = null;
       }
+      this.allClearHeldForSeed = false;
       return;
     }
 
@@ -699,55 +834,71 @@ class AgentNotificationService {
     // All conditions must hold to schedule the all-clear
     if (!this.hasEverGoneWorking || this.peakConcurrentWorking < 2 || activeCount > 0) return;
 
-    // Cancel any existing timer (rapid succession of completions)
+    // Cancel any existing timer (rapid succession of completions), and any
+    // all-clear held for the seed: this timer decides afresh.
     if (this.allClearTimer) {
       clearTimeout(this.allClearTimer);
     }
+    this.allClearHeldForSeed = false;
+    this.allClearProjectId = projectId;
 
     this.allClearTimer = setTimeout(() => {
       this.allClearTimer = null;
 
       // Re-check after debounce — an agent may have started during the window
-      const currentActive = this.countActiveAgents(store.get("appState").terminals);
-      if (currentActive > 0) return;
-
-      // Fire the all-clear. The event itself is unconditional — it drives
-      // renderer state (the all-clear overlay), which must still settle even
-      // when silent — but it carries a `shouldFlash` verdict computed here,
-      // from the single freshest copy of settings, rather than leaving each
-      // renderer to recompute it from its own (possibly stale, per-view)
-      // settings mirror: a second project view left open across a settings
-      // change would otherwise flash on stale eligibility.
-      const settings = projectStore.getEffectiveNotificationSettings();
-      const isSuppressed = this.isInformationalAudioSuppressed(settings);
-      if (settings.enabled !== false && settings.soundEnabled && !isSuppressed) {
-        soundService.play("all-clear");
+      if (this.activeTerminalIds.size > 0) return;
+      // An agent working since before startup isn't counted until the seed
+      // answers, so the all-clear waits for it.
+      if (this.activeSeedTouched) {
+        this.allClearHeldForSeed = true;
+        return;
       }
-      const shouldFlash = settings.enabled !== false && settings.flashEnabled && !isSuppressed;
-      events.emit("agent:all-clear", { timestamp: Date.now(), shouldFlash });
-
-      // Reset for next multi-agent session
-      this.peakConcurrentWorking = 0;
-      this.hasEverGoneWorking = false;
+      this.fireAllClear();
     }, ALL_CLEAR_DEBOUNCE_MS);
+  }
+
+  private fireAllClear(): void {
+    // Fire the all-clear. The event itself is unconditional — it drives
+    // renderer state (the all-clear overlay), which must still settle even
+    // when silent — but it carries a `shouldFlash` verdict computed here,
+    // from the single freshest copy of settings, rather than leaving each
+    // renderer to recompute it from its own (possibly stale, per-view)
+    // settings mirror: a second project view left open across a settings
+    // change would otherwise flash on stale eligibility.
+    const settings = projectStore.getEffectiveNotificationSettings(this.allClearProjectId);
+    const isSuppressed = this.isInformationalAudioSuppressed(settings);
+    if (settings.enabled !== false && settings.soundEnabled && !isSuppressed) {
+      soundService.play("all-clear");
+    }
+    const shouldFlash = settings.enabled !== false && settings.flashEnabled && !isSuppressed;
+    events.emit("agent:all-clear", { timestamp: Date.now(), shouldFlash });
+
+    // Reset for next multi-agent session
+    this.peakConcurrentWorking = 0;
+    this.hasEverGoneWorking = false;
+    this.allClearProjectId = null;
   }
 
   private scheduleCompletionNotification(
     key: string,
-    worktreeId?: string,
-    terminalId?: string,
-    agentId?: string,
-    ownerWebContentsId?: NotificationOwnerId
+    projectId: string | null,
+    target: {
+      worktreeId?: string;
+      terminalId?: string;
+      agentId?: string;
+      ownerWebContentsId?: NotificationOwnerId;
+    }
   ): void {
     if (this.completionTimers.has(key)) {
       clearTimeout(this.completionTimers.get(key)!);
     }
 
+    const { worktreeId, terminalId, agentId, ownerWebContentsId } = target;
     const timer = setTimeout(() => {
       this.completionTimers.delete(key);
-      const settings = this.settingsFor(this.emitOwner(terminalId, ownerWebContentsId));
+      const settings = this.settingsFor(this.emitOwner(terminalId, ownerWebContentsId), projectId);
       if (settings.enabled === false || !settings.completedEnabled) return;
-      const label = this.getLabel(agentId);
+      const label = this.getLabel(agentId, terminalId);
       this.completionBurstBuffer.push({
         title: "Agent finished",
         body: `${label} finished its task`,
@@ -755,12 +906,11 @@ class AgentNotificationService {
         terminalId,
         agentId,
         triggerSound: settings.soundEnabled,
+        soundFile: settings.completedSoundFile,
         ownerWebContentsId,
+        projectId,
         category: "completed",
       });
-      if (!this.completionBurstSoundFile) {
-        this.completionBurstSoundFile = settings.completedSoundFile;
-      }
       if (this.completionBurstTimer === null) {
         this.completionBurstTimer = setTimeout(() => this.flushCompletionBurst(), 0);
       }
@@ -790,10 +940,14 @@ class AgentNotificationService {
     // waiting. Every part of that has to be proven — the owning view showing
     // in a focused window, that worktree selected, the user present — and
     // anything unresolved, including unknown presence, still pages. Presence
-    // and the selection are read at most once per flush.
+    // is read at most once per flush. The worktree is where the panel is now,
+    // not where it was when the wait began.
     let presence: UserPresence | undefined;
-    let activeWorktreeId: string | null | undefined;
-    const dedupedItems = Array.from(dedupedByKey.values()).filter((item) => {
+    const current = Array.from(dedupedByKey.values(), (item) => ({
+      ...item,
+      worktreeId: this.worktreeOf(item.terminalId, item.worktreeId),
+    }));
+    const dedupedItems = current.filter((item) => {
       // A pane that went back to work inside the burst window has nothing to
       // announce. Checked here rather than purged on the transition, so a
       // quick waiting → working → waiting flap still delivers once the
@@ -803,20 +957,37 @@ class AgentNotificationService {
       if (item.terminalId && this.canopyAnnouncedIds.has(item.terminalId)) return false;
       // The view it goes to now may be another machine's, with its own choices.
       const owner = this.emitOwner(item.terminalId, item.ownerWebContentsId);
-      const settings = this.settingsFor(owner);
+      const settings = this.settingsFor(owner, item.projectId);
       if (settings.enabled === false || !settings.waitingEnabled) return false;
       if (!item.worktreeId) return true;
-      if (!notificationService.isOwnerViewFocused(owner)) return true;
-      activeWorktreeId ??= store.get("appState").activeWorktreeId ?? null;
-      if (activeWorktreeId !== item.worktreeId) return true;
+      if (!this.isWorktreeInFront(owner, item.worktreeId)) return true;
       presence ??= notificationService.getUserPresence();
       return presence !== "present";
     });
-    for (const group of this.byRecipient(dedupedItems, (item) =>
+    for (const group of this.byDestination(dedupedItems, (item) =>
       this.emitOwner(item.terminalId, item.ownerWebContentsId)
     )) {
       this.announceWaiting(group);
     }
+  }
+
+  /**
+   * Whether a focused view is showing this worktree: the view that owns the
+   * panel, by its own selection. For a panel with no known owner, any focused
+   * view that has the worktree selected, since that is the view in front of
+   * the user. Worktree ids are absolute paths, so a match is that worktree.
+   */
+  private isWorktreeInFront(owner: NotificationOwnerId | undefined, worktreeId: string): boolean {
+    if (owner !== undefined) {
+      return (
+        this.selectedWorktreeByOwner.get(owner) === worktreeId &&
+        notificationService.isOwnerViewFocused(owner)
+      );
+    }
+    for (const [viewId, selected] of this.selectedWorktreeByOwner) {
+      if (selected === worktreeId && notificationService.isOwnerViewFocused(viewId)) return true;
+    }
+    return false;
   }
 
   private announceWaiting(dedupedItems: BurstWaitingEntry[]): void {
@@ -833,7 +1004,7 @@ class AgentNotificationService {
     }
 
     if (dedupedItems.length === 1) {
-      const label = this.getLabel(first.agentId);
+      const label = this.getLabel(first.agentId, first.terminalId);
       const context = this.makeContext(first.terminalId, first.agentId, first.worktreeId);
       notificationService.showWatchNotification(
         "Agent waiting",
@@ -865,39 +1036,34 @@ class AgentNotificationService {
   private flushCompletionBurst(): void {
     this.completionBurstTimer = null;
     const items = this.completionBurstBuffer.splice(0);
-    const soundFile = this.completionBurstSoundFile;
-    this.completionBurstSoundFile = undefined;
 
-    for (const group of this.byRecipient(items, (item) =>
+    for (const group of this.byDestination(items, (item) =>
       this.emitOwner(item.terminalId, item.ownerWebContentsId)
     )) {
       if (group.length === 1) {
-        this.enqueue(group[0], true, soundFile);
+        this.enqueue(group[0]);
         continue;
       }
       const first = group[0];
-      this.enqueue(
-        {
-          title: "Agents finished",
-          body: `${group.length} agents finished their tasks`,
-          worktreeId: first.worktreeId,
-          terminalId: first.terminalId,
-          agentId: first.agentId,
-          triggerSound: first.triggerSound,
-          ownerWebContentsId: first.ownerWebContentsId,
-          category: first.category,
-        },
-        true,
-        soundFile
-      );
+      this.enqueue({
+        title: "Agents finished",
+        body: `${group.length} agents finished their tasks`,
+        worktreeId: first.worktreeId,
+        terminalId: first.terminalId,
+        agentId: first.agentId,
+        triggerSound: first.triggerSound,
+        soundFile: first.soundFile,
+        ownerWebContentsId: first.ownerWebContentsId,
+        projectId: first.projectId,
+        category: first.category,
+      });
     }
   }
 
   private scheduleWaitingEscalation(
     terminalId: string,
+    projectId: string | null,
     settings: NotificationSettings,
-    terminal: TerminalSnapshotEntry | undefined,
-    worktreeId?: string,
     agentId?: string,
     waitingReason?: WaitingReason
   ): void {
@@ -907,30 +1073,27 @@ class AgentNotificationService {
 
     if (!settings.waitingEscalationEnabled || !settings.waitingEnabled) return;
 
-    // Only escalate for docked terminals
-    if (!terminal || terminal.location !== "dock") return;
-
+    // Only docked panels escalate, judged when the timer fires: a panel docked
+    // during the wait counts, and one moved out of the dock or closed doesn't.
     const timer = setTimeout(() => {
       this.waitingEscalationTimers.delete(terminalId);
       const ownerWebContentsId = this.resolveOwner(terminalId);
-      const currentSettings = this.settingsFor(ownerWebContentsId);
+      const currentSettings = this.settingsFor(ownerWebContentsId, projectId);
       if (currentSettings.enabled === false) return;
       if (!currentSettings.waitingEscalationEnabled || !currentSettings.waitingEnabled) return;
 
-      // Re-read terminal state — skip if moved out of dock or removed. One
-      // appState read serves every lookup below; each `store.get` deep-clones it.
-      const currentTerminals = store.get("appState").terminals;
-      const currentTerminal = this.getTerminalSnapshotFrom(currentTerminals, terminalId);
-      if (!currentTerminal || currentTerminal.location !== "dock") return;
+      const panel = this.panels.get(terminalId);
+      if (panel?.location !== "dock") return;
 
-      // Count the dock terminals currently waiting for the same machine (for
-      // grouped escalation): another machine's keep their own reminders, on
-      // that machine's delay.
+      // Count the dock terminals currently waiting for the same machine and
+      // project (for grouped escalation): another machine's, or another
+      // project's, keep their own reminders, on their own delay and choices.
       const recipient = this.recipientOf(ownerWebContentsId);
       const waitingDockTerminalIds = [...this.waitingTerminalIds].filter(
         (id) =>
-          this.getTerminalSnapshotFrom(currentTerminals, id)?.location === "dock" &&
-          this.recipientOf(this.resolveOwner(id)) === recipient
+          this.panels.get(id)?.location === "dock" &&
+          this.recipientOf(this.resolveOwner(id)) === recipient &&
+          this.projectOf(id) === projectId
       );
 
       if (!isRemoteNotificationOwner(ownerWebContentsId)) {
@@ -947,13 +1110,12 @@ class AgentNotificationService {
       // destroyed since. A docked terminal that was never watched has no known
       // owner — the click then falls back to the primary window, which is
       // explicit and no worse than today's dead click.
-      // Take the worktree from the terminal as it is NOW, not as it was when the
-      // timer was armed: the body below already uses the fresh title, and a panel
-      // dragged to another worktree during the wait would otherwise navigate to
-      // the worktree it used to live in. The agent id can't change for a terminal.
+      // The context takes the worktree from the panel as it is NOW, not as it
+      // was when the timer was armed: a panel dragged to another worktree during
+      // the wait would otherwise navigate to the worktree it used to live in.
       const navigation = {
         channel: CHANNELS.NOTIFICATION_WATCH_NAVIGATE,
-        context: this.makeContext(terminalId, agentId, currentTerminal.worktreeId ?? worktreeId),
+        context: this.makeContext(terminalId, agentId),
       };
 
       if (waitingDockTerminalIds.length > 1) {
@@ -974,7 +1136,7 @@ class AgentNotificationService {
           }
         );
       } else {
-        const label = this.getLabel(agentId, currentTerminal);
+        const label = this.getLabel(agentId, terminalId, panel);
         // Reason captured at the waiting transition — repeated waiting events
         // while already waiting don't reschedule this timer, so the closure
         // value is the reason for this wait episode. The duration-flavored
@@ -1009,14 +1171,16 @@ class AgentNotificationService {
    * the user is looking at the agent's worktree.
    */
   notifyCanopyAsk(ask: CanopyAskNotice, canopyOpenIn: () => readonly NotificationOwnerId[]): void {
-    if (this.settingsFor(this.resolveOwner(ask.terminalId)).enabled === false) return;
+    const projectId = this.projectOf(ask.terminalId);
+    if (this.settingsFor(this.resolveOwner(ask.terminalId), projectId).enabled === false) return;
     if (this.isWithinBootGrace() || this.isWithinSpawnGrace(ask.agentId, ask.terminalId)) return;
     if (this.announcedWaitingIds.has(ask.terminalId)) return;
     if (this.isCanopyInFront(canopyOpenIn)) return;
+    this.loadPanelProject(ask.terminalId);
     this.canopyAskBuffer = this.canopyAskBuffer.filter(
       (entry) => entry.terminalId !== ask.terminalId
     );
-    this.canopyAskBuffer.push({ ...ask, canopyOpenIn });
+    this.canopyAskBuffer.push({ ...ask, canopyOpenIn, projectId });
     this.canopyAskTimer ??= setTimeout(() => this.flushCanopyAsks(), BURST_WINDOW_MS);
   }
 
@@ -1028,38 +1192,35 @@ class AgentNotificationService {
   private flushCanopyAsks(): void {
     this.canopyAskTimer = null;
     let presence: UserPresence | undefined;
-    let activeWorktreeId: string | null | undefined;
-    const asks = this.canopyAskBuffer.splice(0).filter((ask) => {
+    // The fleet row's worktree is the one the terminal launched in; the saved
+    // panel says where it is now.
+    const current = this.canopyAskBuffer.splice(0).map((ask) => ({
+      ...ask,
+      worktreeId: this.worktreeOf(ask.terminalId, ask.worktreeId),
+    }));
+    const asks = current.filter((ask) => {
       const owner = this.resolveOwner(ask.terminalId);
-      if (this.settingsFor(owner).enabled === false) return false;
+      if (this.settingsFor(owner, ask.projectId).enabled === false) return false;
       if (this.announcedWaitingIds.has(ask.terminalId)) return false;
       // Each ask by the panels that list it, read again now the burst is out.
       if (this.isCanopyInFront(ask.canopyOpenIn)) return false;
       if (!ask.worktreeId) return true;
-      // A terminal never watched has no known owner: the focused window
-      // showing its worktree is the best evidence the user is looking at it.
-      const inFront =
-        owner === undefined
-          ? notificationService.isWindowFocused()
-          : notificationService.isOwnerViewFocused(owner);
-      if (!inFront) return true;
-      activeWorktreeId ??= store.get("appState").activeWorktreeId ?? null;
-      if (activeWorktreeId !== ask.worktreeId) return true;
+      if (!this.isWorktreeInFront(owner, ask.worktreeId)) return true;
       presence ??= notificationService.getUserPresence();
       return presence !== "present";
     });
     for (const ask of asks) this.canopyAnnouncedIds.add(ask.terminalId);
-    for (const group of this.byRecipient(asks, (ask) => this.resolveOwner(ask.terminalId))) {
+    for (const group of this.byDestination(asks, (ask) => this.resolveOwner(ask.terminalId))) {
       this.announceCanopyAsks(group);
     }
   }
 
-  private announceCanopyAsks(asks: CanopyAskNotice[]): void {
+  private announceCanopyAsks(asks: Array<CanopyAskNotice & { projectId: string | null }>): void {
     const first = asks[0];
     const ownerWebContentsId = this.resolveOwner(first.terminalId);
     // A remote view's Shell plays its own sound for the category.
     if (!isRemoteNotificationOwner(ownerWebContentsId)) {
-      const settings = projectStore.getEffectiveNotificationSettings();
+      const settings = projectStore.getEffectiveNotificationSettings(first.projectId);
       this.playNotificationSound(settings.soundEnabled, settings.waitingSoundFile);
     }
     const navigation = {
@@ -1075,7 +1236,7 @@ class AgentNotificationService {
     if (asks.length === 1) {
       notificationService.showNativeNotification(
         "Agent waiting",
-        describeWaiting(this.getLabel(first.agentId), first.kind),
+        describeWaiting(this.getLabel(first.agentId, first.terminalId), first.kind),
         options
       );
       return;
@@ -1127,37 +1288,48 @@ class AgentNotificationService {
 
   private scheduleWorkingPulse(
     terminalId: string,
-    settings: NotificationSettings,
-    terminal: TerminalSnapshotEntry | undefined
+    projectId: string | null,
+    settings: NotificationSettings
   ): void {
     this.clearWorkingPulse(terminalId);
 
     if (!settings.workingPulseEnabled || !settings.soundEnabled) return;
 
-    // Eligibility: watched OR (docked + escalation enabled)
+    // Eligibility: watched, or docked with escalation enabled. The dock is
+    // judged on every tick, so a panel moved into or out of it while it works
+    // pulses by where it is now.
     const isWatched = this.isWatched(terminalId);
-    if (!isWatched) {
-      if (!terminal || terminal.location !== "dock" || !settings.waitingEscalationEnabled) return;
-    }
+    if (!isWatched && !settings.waitingEscalationEnabled) return;
 
     const delayTimer = setTimeout(() => {
       this.workingPulseDelayTimers.delete(terminalId);
-      this.startPulseInterval(terminalId);
+      this.startPulseInterval(terminalId, projectId, isWatched);
     }, WORKING_PULSE_INITIAL_DELAY_MS);
 
     this.workingPulseDelayTimers.set(terminalId, delayTimer);
   }
 
-  private startPulseInterval(terminalId: string): void {
+  private startPulseInterval(
+    terminalId: string,
+    projectId: string | null,
+    isWatched: boolean
+  ): void {
     const tick = () => {
-      const currentSettings = projectStore.getEffectiveNotificationSettings();
+      // The agent's own project's choices on every beat: a switch to another
+      // project changes nothing about this one's pulse.
+      const currentSettings = projectStore.getEffectiveNotificationSettings(projectId);
       if (!currentSettings.workingPulseEnabled || !currentSettings.soundEnabled) {
         this.clearWorkingPulse(terminalId);
         return;
       }
+      const eligible =
+        isWatched ||
+        (currentSettings.waitingEscalationEnabled &&
+          this.panels.get(terminalId)?.location === "dock");
       // Skip this tick's sound but keep the loop alive so pulses resume
-      // automatically once the suppression lifts.
+      // automatically once the suppression lifts or the panel is docked again.
       if (
+        !eligible ||
         this.isInformationalAudioSuppressed(currentSettings) ||
         isRemoteNotificationOwner(this.resolveOwner(terminalId))
       ) {
@@ -1213,16 +1385,8 @@ class AgentNotificationService {
     );
   }
 
-  private enqueue(
-    notification: PendingNotification,
-    bypassFocusCheck = false,
-    soundFile?: string
-  ): void {
-    if (!bypassFocusCheck && this.isFocusedOnWorktree(notification.worktreeId)) {
-      return;
-    }
-
-    this.notificationQueue.push({ ...notification, soundFile });
+  private enqueue(notification: PendingNotification): void {
+    this.notificationQueue.push(notification);
 
     if (!this.staggerTimer) {
       this.drainQueue();
@@ -1234,7 +1398,7 @@ class AgentNotificationService {
     if (!item) return;
 
     const ownerWebContentsId = this.emitOwner(item.terminalId, item.ownerWebContentsId);
-    const settings = this.settingsFor(ownerWebContentsId);
+    const settings = this.settingsFor(ownerWebContentsId, item.projectId);
 
     // Quiet hours schedule and renderer-driven session mute both suppress
     // completion/pulse alerts but not waiting alerts — waiting agents block
@@ -1280,38 +1444,50 @@ class AgentNotificationService {
     }
   }
 
-  private isFocusedOnWorktree(worktreeId?: string): boolean {
-    if (!notificationService.isWindowFocused()) return false;
-    if (!worktreeId) return true;
-    // Read active worktree directly from store — always reflects current state
-    const activeWorktreeId = store.get("appState").activeWorktreeId;
-    return activeWorktreeId === worktreeId;
-  }
-
   /**
-   * The subject a banner names (#15233): the agent's display name, else plain
-   * "Agent". Never an id: an agent id is a slug, and a worktree id is an
-   * absolute path. A pane's own title only counts when the caller already
-   * holds its entry and someone named it: the global terminal list is the
-   * legacy record, and the per-project one isn't reachable from here.
+   * The subject a banner names (#15233): the pane's own title when someone
+   * named it, else the agent's display name, else plain "Agent". Never an id:
+   * an agent id is a slug, and a worktree id is an absolute path.
    */
-  private getLabel(agentId: string | undefined, terminal?: TerminalSnapshotEntry): string {
+  private getLabel(
+    agentId: string | undefined,
+    terminalId: string | undefined,
+    terminal: PanelRecord | undefined = this.panels.get(terminalId)
+  ): string {
+    // An assistant is named as the person named it, wherever it runs.
+    const assistant = this.assistantLabel(terminalId);
+    if (assistant) return assistant;
     const title = terminal?.title?.trim();
-    if (title && (terminal?.titleMode === "user" || terminal?.titleMode === "custom")) {
-      return title;
-    }
-    return (agentId ? getEffectiveRegistry()[agentId]?.name?.trim() : undefined) || "Agent";
+    const name =
+      title && (terminal?.titleMode === "user" || terminal?.titleMode === "custom")
+        ? title
+        : (agentId ? getEffectiveRegistry()[agentId]?.name?.trim() : undefined) || "Agent";
+    // The persona the person gave the pane leads, as it does on the pane.
+    return withDisplayEmoji(name, normalizeDisplayEmoji(terminal?.displayEmoji));
   }
 
+  /** The persona of the assistant a terminal runs, when it is one and has a persona. */
+  private assistantLabel(terminalId: string | undefined): string | null {
+    if (!terminalId || !getAgentAvailabilityStore().isHelpTerminal(terminalId)) return null;
+    const projectId = this.projectOf(terminalId);
+    if (!projectId) return null;
+    const identity = readAssistantIdentity(
+      isGlobalAssistantId(projectId) ? { kind: "global" } : { kind: "project", projectId }
+    );
+    return isEmptyDisplayIdentity(identity) ? null : displayIdentityLabel(identity, "Assistant");
+  }
+
+  /** A banner's click target, with the panel's worktree and title as it is saved now. */
   private makeContext(
     terminalId?: string,
     agentId?: string,
     worktreeId?: string
   ): WatchNotificationContext {
+    const panel = this.panels.get(terminalId);
     return {
       panelId: terminalId ?? agentId ?? "unknown",
-      panelTitle: this.getLabel(agentId),
-      worktreeId,
+      panelTitle: this.getLabel(agentId, terminalId, panel),
+      worktreeId: panel ? panel.worktreeId : worktreeId,
     };
   }
 
@@ -1354,6 +1530,7 @@ class AgentNotificationService {
       clearTimeout(this.allClearTimer);
       this.allClearTimer = null;
     }
+    this.allClearProjectId = null;
 
     if (this.staggerTimer) {
       clearTimeout(this.staggerTimer);
@@ -1379,14 +1556,18 @@ class AgentNotificationService {
       this.completionBurstTimer = null;
     }
     this.completionBurstBuffer = [];
-    this.completionBurstSoundFile = undefined;
 
     this.waitingTerminalIds.clear();
     this.agentSpawnTimestamps.clear();
     this.watchedPanelsByOwner.clear();
     this.ownersByPanel.clear();
     this.lastOwnerByPanel.clear();
-    this.terminalIndexById.clear();
+    this.selectedWorktreeByOwner.clear();
+    this.panels.clear();
+    this.overridesLoading.clear();
+    this.projectByTerminal.clear();
+    this.activeSeedTouched = null;
+    this.allClearHeldForSeed = false;
     this.notificationQueue = [];
     this.hasEverGoneWorking = false;
     this.peakConcurrentWorking = 0;

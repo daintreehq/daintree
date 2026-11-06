@@ -98,6 +98,8 @@ export interface RelayedNotice {
   terminalId: string;
   observation: NoticeObservation;
   awaitingHandback?: boolean;
+  /** The reported state's transition on this machine's clock, as {@link FiredNotice} has it. */
+  lastTransitionAt: number | null;
 }
 
 type RelayTag = Pick<RelayedNotice, "helpSessionId" | "callId">;
@@ -113,6 +115,15 @@ export function helpNotifyKey(helpSessionId: string): string {
 
 export function relayNotifyKey(principal: string): string {
   return `relay\u0000${principal}`;
+}
+
+/**
+ * The notice line of a worker that holds no Daintree bearer, for a prompt
+ * held for it (#16187). No bearer, so no notices of its own for this to
+ * displace.
+ */
+export function workerNotifyKey(terminalId: string): string {
+  return `worker\u0000${terminalId}`;
 }
 
 /**
@@ -142,7 +153,18 @@ export interface NotifyTerminalInfo {
   everDetectedAgent?: boolean;
   hasPty?: boolean;
   isTrashed?: boolean;
+  /** Its agent is being quit by a graceful shutdown. */
+  isClosing?: boolean;
+  isExited?: boolean;
   submission?: TerminalSubmissionRecord;
+  /** The run identity a decision wake checks before it is typed (#16015). */
+  launchGeneration?: number;
+  agentIncarnation?: number;
+  agentSessionId?: string;
+  worktreeId?: string;
+  /** Input it could have taken as a prompt, and whose (#16187): a held prompt drops on someone else's. */
+  lastOwnedPromptInput?: { owner: string; at: number };
+  lastForeignPromptInputAt?: number;
 }
 
 export interface TerminalNotifyPtyClient {
@@ -154,7 +176,9 @@ export interface TerminalNotifyPtyClient {
     handbackCode?: string,
     guard?: TerminalSubmitGuard,
     imagePaths?: readonly string[],
-    promptAsWritten?: string | null
+    promptAsWritten?: string | null,
+    handbackInstruction?: "run",
+    promptOwner?: string
   ): void;
   /** Take back a line that has not reached its Enter; see `WriteQueue.withdrawGuardedSubmission`. */
   withdrawGuardedSubmission(id: string, submissionToken: string): void;
@@ -192,9 +216,18 @@ export interface TerminalNotifyServiceDeps {
    * for. Optional so a host without the observation keeps the settle path.
    */
   onHandbackObserved?: (
-    listener: (terminalId: string, handback: TerminalHandback, code?: string) => void
+    listener: (
+      terminalId: string,
+      handback: TerminalHandback,
+      code?: string,
+      /** The pane's `lastStateChange` when it printed the marker. */
+      lastStateChange?: number
+    ) => void
   ) => () => void;
-  /** Whether the MCP server is on. Read on every decision. */
+  /**
+   * Whether the MCP server is on. Read on every decision; a {@link WakeScope}'s
+   * wakes need their scope live instead.
+   */
   isEnabled: () => boolean;
   /** Push a pane's chrome state to the views of its project. */
   publish: (projectId: string, state: PaneNotifyState) => void;
@@ -298,6 +331,12 @@ export type LaneWakeOutcome =
 
 export type LaneWakeCheck = { kind: "ready" } | { kind: "held" | "unavailable"; reason: string };
 
+/** What a `delivered` report stands on: the host's record of the line's write. */
+export interface LaneWakeEvidence {
+  phase: "pty_written";
+  submissionToken: string;
+}
+
 /**
  * A line for an assistant's own pane that no terminal of this machine fired.
  * It rides that pane's notice line, so one writer types into that prompt, and
@@ -314,9 +353,12 @@ export interface LaneWake {
    * notices the run asked it for (#13930), in {@link LaneWake.lostNotices};
    * `watch` says what became of a `host.watch` the run armed (#14463), in
    * {@link LaneWake.hostWatch}; `approval` says the user approved a refused
-   * tool from the panel (#14995), in {@link LaneWake.approval}.
+   * tool from the panel (#14995), in {@link LaneWake.approval}; `decision`
+   * carries a Decisions answer for the pane that asked (#16015), in
+   * {@link LaneWake.decision}; `steer` carries a global Assistant's prompt
+   * held for this pane's next prompt (#16187), in {@link LaneWake.steer}.
    */
-  kind: "notice" | "retired" | "lost" | "watch" | "approval";
+  kind: "notice" | "retired" | "lost" | "watch" | "approval" | "decision" | "steer";
   /**
    * A `notice`'s observation. Only the host's name as this Shell knows it and
    * the host's observations: the line is still Daintree's own wording.
@@ -330,26 +372,86 @@ export interface LaneWake {
   hostWatch?: HostWatchNotice;
   /** An `approval` line's tool or tier. */
   approval?: AssistantApproval;
-  /** Asked synchronously immediately before the line is typed, and while it waits. */
-  recheck(): LaneWakeCheck;
+  /**
+   * A `decision`'s section, rendered by Decisions from the answer it was
+   * handed: Daintree's wording around delimited blocks whose answer text is
+   * sanitised data. Typed only past the stricter `settled-prompt-exact` guard.
+   */
+  decision?: { text: string };
+  /**
+   * A `steer`'s prompt, already stamped as the Assistant's, with the handback
+   * code its instruction names and the text as written for the run's
+   * first-prompt record (#15521). Typed only past `settled-prompt-exact`, and
+   * at most one to a line, so a line's handback and first prompt are its.
+   */
+  steer?: {
+    text: string;
+    promptAsWritten: string;
+    handbackCode?: string;
+    /** The assistant whose prompt it is: the host files the line as its input once written. */
+    principal: string;
+  };
+  /**
+   * How long it may wait for its pane, from admission, up to
+   * {@link LANE_WAKE_LONGEST_PENDING_MS}; {@link LANE_WAKE_MAX_PENDING_MS}
+   * when absent.
+   */
+  maxPendingMs?: number;
+  /**
+   * Asked synchronously immediately before the line is typed, and while it
+   * waits. `info` is the pane's record as the delivery attempt just read it;
+   * absent on the checks between attempts.
+   */
+  recheck(info?: NotifyTerminalInfo): LaneWakeCheck;
   /**
    * Reserves the attempt durably, synchronously and with nothing awaited
    * before the submit. False keeps the wake off the line for good, with no
    * report: the exchange already holds what became of it.
    */
   beforeType(): boolean;
-  report(outcome: LaneWakeOutcome): void;
+  /** `evidence` comes with `delivered`, which is reported only once the host wrote the line. */
+  report(outcome: LaneWakeOutcome, evidence?: LaneWakeEvidence): void;
 }
 
 export const LANE_WAKE_ID_PATTERN = /^[A-Za-z0-9-]{1,64}$/;
 /** How long a wake may wait for its pane, from admission; it holds hibernation off until then. */
 export const LANE_WAKE_MAX_PENDING_MS = 10 * 60_000;
+/** The longest a wake may ask to wait: an hour of its project kept awake (#16187). */
+export const LANE_WAKE_LONGEST_PENDING_MS = 60 * 60_000;
 /** How often a waiting wake is rechecked: a pause or lease ending raises no event. */
 export const LANE_WAKE_RECHECK_MS = 5_000;
 export const MAX_QUEUED_WAKES_PER_PANE = 32;
 
+/**
+ * A feature's own lane wakes, accepted whether or not the MCP server is on
+ * (#15999). Its wakes share their pane's notice line and gate like any other;
+ * releasing it ends those not yet on a line.
+ */
+export interface WakeScope {
+  enqueueWake(pane: OwnPane, projectId: string, wake: LaneWake): void;
+  /**
+   * Ends the scope's wakes still waiting to be typed and takes no more. A
+   * line already submitted stays on its pane until the host confirms it or
+   * the scope is released, so its outcome is still known.
+   */
+  cancelQueued(): void;
+  release(): void;
+}
+
+/** A scope's identity on its wakes: an object no caller can name or forge. */
+interface WakeScopeRecord {
+  readonly id: string;
+  released: boolean;
+  /** Takes no new wakes; its submitted ones still count as live. */
+  closed?: boolean;
+}
+
 interface WakeEntry {
   wake: LaneWake;
+  /** Its key in the owner's map: the wake id, namespaced by its scope's when it has one. */
+  key: string;
+  /** Set for a feature's wake, which needs its scope live rather than the server on. */
+  scope?: WakeScopeRecord;
   deadline: number;
   /** The line carrying it, once reserved; it is never typed again after this. */
   token?: string;
@@ -406,6 +508,8 @@ interface Notice {
     waitingReason?: WaitingReason;
     /** When the target left `working`, by the event's own clock. */
     startedAt: number;
+    /** When it entered `state`: later than `startedAt` once the settle moved between states. */
+    lastTransitionAt: number;
     timer: ReturnType<typeof setTimeout>;
   };
 }
@@ -551,6 +655,8 @@ export class TerminalNotifyService {
   private readonly teardownEpochs = new Map<string, number>();
   /** Notices whose history is being replayed into them right now. */
   private readonly replaying = new Set<Notice>();
+  /** Scopes not yet released; empty, turning the server off disposes everything. */
+  private readonly wakeScopes = new Set<WakeScopeRecord>();
   private globalTeardownEpoch = 0;
   private epoch = 0;
   private disposed = false;
@@ -716,6 +822,9 @@ export class TerminalNotifyService {
     });
     let settled = false;
     const release = () => {
+      // The server going off already cleared this launch's count; one taken
+      // since is another launch's.
+      if (this.globalTeardownEpoch > epochBefore) return;
       owner.pendingLaunches = Math.max(0, owner.pendingLaunches - 1);
       const launching = callId === undefined ? 0 : (owner.launchingCalls?.get(callId) ?? 0);
       if (launching > 1) owner.launchingCalls!.set(callId!, launching - 1);
@@ -732,7 +841,10 @@ export class TerminalNotifyService {
           result !== null &&
           (result as Record<string, unknown>).launched === true &&
           (result as Record<string, unknown>).spawnStatus == null;
-        if (owner.disposed || !launched || terminalId === undefined) {
+        // A pane a wake scope kept through the server going off is not
+        // disposed, but the notices it was asking for went then.
+        const torndown = owner.disposed || this.globalTeardownEpoch > epochBefore;
+        if (torndown || !launched || terminalId === undefined) {
           this.maybeDispose(owner);
           if (!owner.disposed) this.publish(owner);
           return;
@@ -905,11 +1017,31 @@ export class TerminalNotifyService {
    * lane is enrolled and running as `pane`; every outcome reaches `wake.report`.
    */
   enqueueWake(pane: OwnPane, projectId: string, wake: LaneWake): void {
+    this.queueWake(pane, projectId, wake, undefined);
+  }
+
+  /** A scope for one feature's wakes, which go on with the server off; see {@link WakeScope}. */
+  openWakeScope(): WakeScope {
+    const scope: WakeScopeRecord = { id: randomUUID(), released: false };
+    this.wakeScopes.add(scope);
+    return {
+      enqueueWake: (pane, projectId, wake) => this.queueWake(pane, projectId, wake, scope),
+      cancelQueued: () => this.cancelQueuedInScope(scope),
+      release: () => this.releaseScope(scope),
+    };
+  }
+
+  private queueWake(
+    pane: OwnPane,
+    projectId: string,
+    wake: LaneWake,
+    scope: WakeScopeRecord | undefined
+  ): void {
     if (!LANE_WAKE_ID_PATTERN.test(wake.id)) {
       reportWake(wake, { kind: "unavailable", reason: "invalid-id" });
       return;
     }
-    if (this.disposed || !this.deps.isEnabled()) {
+    if (this.disposed || !this.accepts(scope)) {
       reportWake(wake, { kind: "unavailable", reason: "notices-off" });
       return;
     }
@@ -923,20 +1055,25 @@ export class TerminalNotifyService {
       reportWake(wake, check);
       return;
     }
+    // Namespaced so a feature's wake never joins, or is joined by, one it didn't queue.
+    const key = scope === undefined ? wake.id : `${scope.id}\u0000${wake.id}`;
     const existing = this.existingOwner(pane);
-    if (existing?.wakes.has(wake.id) === true) return;
+    if (existing?.wakes.has(key) === true) return;
     if ((existing?.wakes.size ?? 0) >= MAX_QUEUED_WAKES_PER_PANE) {
       reportWake(wake, { kind: "unavailable", reason: "capacity" });
       return;
     }
-    this.ensureSubscribed(client);
+    // After `ownerFor`: replacing the only other owner would unsubscribe.
     const owner = this.ownerFor(pane, projectId);
+    this.ensureSubscribed(client);
     const entry: WakeEntry = {
       wake,
-      deadline: this.now() + LANE_WAKE_MAX_PENDING_MS,
+      key,
+      ...(scope !== undefined ? { scope } : {}),
+      deadline: this.now() + pendingMsOf(wake),
       heldReported: false,
     };
-    owner.wakes.set(wake.id, entry);
+    owner.wakes.set(key, entry);
     if (check.kind === "held") this.holdWake(entry, check.reason);
     this.armWakeTimer(owner);
     this.schedule(owner);
@@ -1000,7 +1137,7 @@ export class TerminalNotifyService {
     return calls;
   }
 
-  /** The MCP server was turned off, or the service is shutting down. */
+  /** The service is shutting down: every notice and wake goes, scoped ones too. */
   disposeAll(): void {
     this.globalTeardownEpoch = ++this.epoch;
     for (const owner of [...this.ownersByKey.values()]) this.disposeOwner(owner);
@@ -1010,6 +1147,110 @@ export class TerminalNotifyService {
     this.disposed = true;
     this.disposeAll();
     this.unsubscribe();
+  }
+
+  /**
+   * The MCP server was turned off. With no {@link WakeScope} live this is
+   * {@link disposeAll}. Otherwise every notice, launch and unscoped wake still
+   * goes, and a pane keeps only its scoped wakes, with its line's history, so
+   * nothing but a feature's own line is typed while the server is off.
+   */
+  disposeUnscoped(): void {
+    if (this.wakeScopes.size === 0) {
+      this.disposeAll();
+      return;
+    }
+    // Admissions and launches still in flight read this as their pane torn down.
+    this.globalTeardownEpoch = ++this.epoch;
+    for (const owner of [...this.ownersByKey.values()]) this.keepScopedWakes(owner);
+  }
+
+  private keepScopedWakes(owner: PaneOwner): void {
+    const inHost = owner.inHost;
+    // A line the host still holds can't be split: one carrying anything else
+    // is taken back with all it carries, as turning the server off always did.
+    if (
+      ![...owner.wakes.values()].some(isLiveScoped) ||
+      (inHost !== undefined && this.lineCarriesUnscoped(owner, inHost.token))
+    ) {
+      this.disposeOwner(owner);
+      return;
+    }
+    for (const notice of [...owner.notices.values()]) this.removeNotice(owner, notice);
+    owner.fired = [];
+    owner.droppedCount = 0;
+    owner.pendingLaunches = 0;
+    delete owner.launchingCalls;
+    for (const [key, entry] of owner.wakes) {
+      if (isLiveScoped(entry)) continue;
+      owner.wakes.delete(key);
+      reportWake(entry.wake, { kind: "unavailable", reason: "stopped" });
+    }
+    this.publish(owner);
+  }
+
+  private lineCarriesUnscoped(owner: PaneOwner, token: string): boolean {
+    if (owner.fired.some((entry) => entry.wakeToken === token)) return true;
+    for (const entry of owner.wakes.values()) {
+      if (entry.token === token && !isLiveScoped(entry)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * End a scope. Its wakes not yet on a line go as stopped. With the server
+   * off, a pane its wakes were keeping is stopped whole, its line taken back
+   * if the host still holds it, since nothing else may be typed there.
+   */
+  private cancelQueuedInScope(scope: WakeScopeRecord): void {
+    if (scope.released || scope.closed === true) return;
+    scope.closed = true;
+    for (const owner of [...this.ownersByKey.values()]) {
+      let touched = false;
+      for (const [key, entry] of owner.wakes) {
+        if (entry.scope !== scope || entry.token !== undefined) continue;
+        touched = true;
+        owner.wakes.delete(key);
+        reportWake(entry.wake, { kind: "unavailable", reason: "stopped" });
+      }
+      if (!touched) continue;
+      this.publish(owner);
+      this.maybeDispose(owner);
+    }
+  }
+
+  private releaseScope(scope: WakeScopeRecord): void {
+    if (scope.released) return;
+    scope.released = true;
+    this.wakeScopes.delete(scope);
+    const enabled = this.deps.isEnabled();
+    for (const owner of [...this.ownersByKey.values()]) {
+      let touched = false;
+      for (const [key, entry] of owner.wakes) {
+        if (entry.scope !== scope) continue;
+        touched = true;
+        if (entry.token !== undefined) continue;
+        owner.wakes.delete(key);
+        reportWake(entry.wake, { kind: "unavailable", reason: "stopped" });
+      }
+      if (!touched) continue;
+      if (!enabled && ![...owner.wakes.values()].some(isLiveScoped)) {
+        this.disposeOwner(owner);
+        continue;
+      }
+      this.publish(owner);
+      this.maybeDispose(owner);
+    }
+  }
+
+  /** Whether a wake may be queued now: a scoped one needs its scope, any other the server on. */
+  private accepts(scope: WakeScopeRecord | undefined): boolean {
+    return scope === undefined ? this.deps.isEnabled() : !scope.released && scope.closed !== true;
+  }
+
+  /** Whether anything may be typed into this pane now. */
+  private mayType(owner: PaneOwner): boolean {
+    return this.deps.isEnabled() || [...owner.wakes.values()].some(isLiveScoped);
   }
 
   /**
@@ -1345,11 +1586,16 @@ export class TerminalNotifyService {
   }
 
   /** End the wakes a line carried with `outcome`. */
-  private finishWakes(owner: PaneOwner, token: string, outcome: LaneWakeOutcome): void {
+  private finishWakes(
+    owner: PaneOwner,
+    token: string,
+    outcome: LaneWakeOutcome,
+    evidence?: LaneWakeEvidence
+  ): void {
     for (const [id, entry] of owner.wakes) {
       if (entry.token !== token) continue;
       owner.wakes.delete(id);
-      reportWake(entry.wake, outcome);
+      reportWake(entry.wake, outcome, evidence);
     }
   }
 
@@ -1368,20 +1614,28 @@ export class TerminalNotifyService {
 
   /**
    * Recheck the waiting wakes, dropping those that can no longer go out, and
-   * return the ones ready to be typed now.
+   * return the ones ready to be typed now. `info` is the pane's record when a
+   * delivery attempt has just read it.
    */
-  private sweepWakes(owner: PaneOwner): WakeEntry[] {
+  private sweepWakes(owner: PaneOwner, info?: NotifyTerminalInfo): WakeEntry[] {
     const now = this.now();
     const ready: WakeEntry[] = [];
     for (const [id, entry] of owner.wakes) {
       if (entry.token !== undefined) continue;
+      if (!this.accepts(entry.scope)) {
+        owner.wakes.delete(id);
+        reportWake(entry.wake, { kind: "unavailable", reason: "notices-off" });
+        continue;
+      }
       if (now >= entry.deadline) {
         owner.wakes.delete(id);
         // Ends it: whoever queued it may try again, and nothing else will.
         reportWake(entry.wake, { kind: "unavailable", reason: "expired" });
         continue;
       }
-      const check = recheckWake(entry.wake);
+      const check = recheckWake(entry.wake, info);
+      // Its hook may have ended it already, scope or pane, with its outcome.
+      if (owner.wakes.get(id) !== entry) continue;
       if (check.kind === "unavailable") {
         owner.wakes.delete(id);
         reportWake(entry.wake, check);
@@ -1507,7 +1761,7 @@ export class TerminalNotifyService {
       this.applyTargetEvent(owner, notice, ended);
       return;
     }
-    this.fire(owner, notice, { kind: "not-written", phase });
+    this.fire(owner, notice, { kind: "not-written", phase }, null);
   }
 
   private ensureSubscribed(client: TerminalNotifyPtyClient): void {
@@ -1534,8 +1788,8 @@ export class TerminalNotifyService {
       ...(this.deps.onHandbackObserved
         ? [
             this.deps.onHandbackObserved(
-              guarded((terminalId, handback, code) =>
-                this.handleHandbackObserved(terminalId, handback, code)
+              guarded((terminalId, handback, code, lastStateChange) =>
+                this.handleHandbackObserved(terminalId, handback, code, lastStateChange)
               )
             ),
           ]
@@ -1552,7 +1806,8 @@ export class TerminalNotifyService {
   private handleHandbackObserved(
     terminalId: string,
     handback: TerminalHandback,
-    code?: string
+    code?: string,
+    lastStateChange?: number
   ): void {
     this.reviseFiredHandbacks(terminalId, handback, code);
     const watchers = this.watchersByTarget.get(terminalId);
@@ -1565,7 +1820,8 @@ export class TerminalNotifyService {
       notice.handback = handback;
       if (code !== undefined) notice.handbackCode = code;
       clearSettling(notice);
-      this.fire(owner, notice, { kind: "handback" });
+      // The state the marker was printed in, which may still be `working`.
+      this.fire(owner, notice, { kind: "handback" }, lastStateChange ?? null);
     }
   }
 
@@ -1698,15 +1954,20 @@ export class TerminalNotifyService {
 
   private applyTargetEvent(owner: PaneOwner, notice: Notice, event: TargetEvent): void {
     if (event.kind === "exit") {
-      this.fire(owner, notice, {
-        kind: "exit",
-        ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
-        handback: notice.handbackSeen,
-      });
+      this.fire(
+        owner,
+        notice,
+        {
+          kind: "exit",
+          ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
+          handback: notice.handbackSeen,
+        },
+        null
+      );
       return;
     }
     if (event.kind === "closed") {
-      this.fire(owner, notice, { kind: "closed" });
+      this.fire(owner, notice, { kind: "closed" }, null);
       return;
     }
     const change = event.change;
@@ -1717,24 +1978,29 @@ export class TerminalNotifyService {
       notice.handbackSeen = true;
       notice.handback = change.lastHandback;
     }
+    // The agent left its terminal, from whatever state: a CLI quit from its
+    // own dialog never worked, so waiting for a settle out of `working` would
+    // wait forever. An exit is reported as one even when it carried the marker.
+    if (change.state === "exited") {
+      clearSettling(notice);
+      this.fire(owner, notice, { kind: "exit", handback: notice.handbackSeen }, null);
+      return;
+    }
     // The agent printed the marker this prompt asked for: its reply is
     // finished, so the notice goes now rather than after the settle window.
     if (handbackNow && change.state !== "working") {
       clearSettling(notice);
-      this.fire(owner, notice, {
-        kind: "state",
-        state: change.state,
-        ...(change.waitingReason !== undefined ? { waitingReason: change.waitingReason } : {}),
-        handback: true,
-      });
-      return;
-    }
-    // The agent left its terminal, from whatever state: a CLI quit from its
-    // own dialog never worked, so waiting for a settle out of `working` would
-    // wait forever.
-    if (change.state === "exited") {
-      clearSettling(notice);
-      this.fire(owner, notice, { kind: "exit", handback: notice.handbackSeen });
+      this.fire(
+        owner,
+        notice,
+        {
+          kind: "state",
+          state: change.state,
+          ...(change.waitingReason !== undefined ? { waitingReason: change.waitingReason } : {}),
+          handback: true,
+        },
+        change.timestamp
+      );
       return;
     }
     if (change.state === "working") {
@@ -1755,6 +2021,7 @@ export class TerminalNotifyService {
     if (notice.settling !== undefined) {
       notice.settling.state = change.state;
       notice.settling.waitingReason = change.waitingReason;
+      notice.settling.lastTransitionAt = change.timestamp;
       return;
     }
     if (change.previousState !== "working") return;
@@ -1763,6 +2030,7 @@ export class TerminalNotifyService {
       state: change.state,
       ...(change.waitingReason !== undefined ? { waitingReason: change.waitingReason } : {}),
       startedAt: change.timestamp,
+      lastTransitionAt: change.timestamp,
       timer: setTimeout(() => this.fireSettled(owner, notice), delay),
     };
   }
@@ -1781,18 +2049,23 @@ export class TerminalNotifyService {
         ...(settling.waitingReason !== undefined ? { waitingReason: settling.waitingReason } : {}),
         handback: notice.handbackSeen,
       },
+      settling.lastTransitionAt,
       settling.startedAt
     );
   }
 
   /**
    * The notice has something to say: it leaves the pending set for delivery.
-   * `stoppedAt` is when the target left `working`, for a settle.
+   * `lastTransitionAt` is the transition into the state it reports, fixed
+   * here so a late delivery still names the state it saw; null when no
+   * transition matches the observation. `stoppedAt` is when the target left
+   * `working`, for a settle.
    */
   private fire(
     owner: PaneOwner,
     notice: Notice,
     observation: NoticeObservation,
+    lastTransitionAt: number | null,
     stoppedAt?: number
   ): void {
     if (!this.isCurrent(owner, notice)) return;
@@ -1807,6 +2080,7 @@ export class TerminalNotifyService {
         terminalId: notice.targetId,
         ...(notice.note !== undefined ? { note: notice.note } : {}),
         observation,
+        lastTransitionAt,
         ...(summary !== undefined
           ? { handback: summary.message ?? "", handbackTruncated: summary.truncated }
           : {}),
@@ -1907,10 +2181,15 @@ export class TerminalNotifyService {
     if (client?.getSerializedStateAsync === undefined) return;
     try {
       const getState = client.getSerializedStateAsync.bind(client);
-      const snapshot = await readTailSnapshot(
-        (options) => getState(entry.notice.terminalId, options),
-        REPLY_SEARCH_ROWS
-      );
+      // The record names the agent whose suggested prompt is marked in the
+      // quote (#16189), so a suggestion can't pass for the owner's words.
+      const [snapshot, info] = await Promise.all([
+        readTailSnapshot(
+          (options) => getState(entry.notice.terminalId, options),
+          REPLY_SEARCH_ROWS
+        ),
+        client.getTerminalAsync(entry.notice.terminalId).catch(() => null),
+      ]);
       if (snapshot === null) return;
       const observed = entry.observed;
       const endAt: ObservedMarker | boolean = !endAtHandback
@@ -1921,7 +2200,13 @@ export class TerminalNotifyService {
               message: observed.message,
               ...(entry.observedCode !== undefined ? { code: entry.observedCode } : {}),
             };
-      const { reply, reachedHandback } = extractReply(snapshot.data, lines, endAt);
+      const { reply, reachedHandback } = extractReply(
+        snapshot.data,
+        lines,
+        endAt,
+        undefined,
+        info?.detectedAgentId ?? info?.launchAgentId
+      );
       if (reply === null) return;
       // A read that no longer finds the marker (scrolled off, or another turn
       // on screen) keeps the quote that did, flagged when it ends at a capture
@@ -2023,6 +2308,10 @@ export class TerminalNotifyService {
   private schedule(owner: PaneOwner): void {
     if (owner.disposed) return;
     const status = owner.delivery.status;
+    if (status === "outstanding" && this.decisionsMayFollow(owner)) {
+      this.armTimer(owner, NOTIFY_COALESCE_MS);
+      return;
+    }
     if (status === "outstanding" || status === "failed") return;
     if (!this.hasUndelivered(owner)) {
       owner.recheckMs = undefined;
@@ -2060,9 +2349,12 @@ export class TerminalNotifyService {
 
   private async attempt(owner: PaneOwner): Promise<void> {
     if (owner.disposed || owner.attempting) return;
+    // A line confirmed written, still waiting on the pane's turn, holds back
+    // every notice; only answers may follow it (#16282).
+    const following = this.decisionsMayFollow(owner);
     const status = owner.delivery.status;
-    if (status === "outstanding" || status === "failed") return;
-    if (!this.deps.isEnabled()) return;
+    if ((status === "outstanding" && !following) || status === "failed") return;
+    if (!this.mayType(owner)) return;
     if (!this.hasUndelivered(owner)) {
       owner.recheckMs = undefined;
       this.setDelivery(owner, { status: "idle" });
@@ -2071,7 +2363,7 @@ export class TerminalNotifyService {
     // The pane is on the relayed call's Shell, whose own notice line types it
     // under that pane's gate; nothing here can read or wait on it.
     if (owner.relay !== undefined) {
-      this.handOff(owner, owner.relay);
+      if (!following) this.handOff(owner, owner.relay);
       return;
     }
 
@@ -2079,7 +2371,7 @@ export class TerminalNotifyService {
     if (lastDeliveredAt !== undefined) {
       const wait = lastDeliveredAt + MIN_NOTIFY_INTERVAL_MS - this.now();
       if (wait > 0) {
-        this.setDelivery(owner, { status: "held", reason: "interval" });
+        if (!following) this.setDelivery(owner, { status: "held", reason: "interval" });
         this.armTimer(owner, wait);
         return;
       }
@@ -2106,8 +2398,11 @@ export class TerminalNotifyService {
     } finally {
       owner.attempting = false;
     }
-    if (owner.disposed || !this.deps.isEnabled()) return;
-    if (owner.delivery.status === "outstanding" || owner.delivery.status === "failed") return;
+    if (owner.disposed || !this.mayType(owner)) return;
+    const followsLine = owner.delivery.status === "outstanding";
+    if ((followsLine && !this.decisionsMayFollow(owner)) || owner.delivery.status === "failed") {
+      return;
+    }
     if (!this.hasUndelivered(owner)) {
       owner.recheckMs = undefined;
       this.setDelivery(owner, { status: "idle" });
@@ -2115,14 +2410,30 @@ export class TerminalNotifyService {
     }
     // No reading is not a safe reading.
     if (info === null) {
+      if (followsLine) return;
       this.setDelivery(owner, { status: "blocked", reason: "unreadable" });
       this.armRecheck(owner);
       return;
     }
 
     // A CLI that queues mid-turn input takes the notice now, so the pane
-    // hears as soon as the target stops instead of after its own turn.
-    const verdict = evaluateWakeGate(info, wakeGateOptionsFor(info.detectedAgentId));
+    // hears as soon as the target stops instead of after its own turn. Not
+    // while a held prompt waits for the pane's own prompt (#16187): typed
+    // mid-turn, the notice would take the settle the prompt waits for.
+    const gate = wakeGateOptionsFor(info.detectedAgentId);
+    const verdict = evaluateWakeGate(
+      info,
+      holdsSteer(owner) ? { ...gate, acceptWorking: false } : gate
+    );
+    const settledFor = info.lastStateChange === undefined ? 0 : this.now() - info.lastStateChange;
+    if (!followsLine && verdict.kind === "ready" && settledFor >= NOTIFY_SETTLE_GRACE_MS) {
+      this.deliver(owner, client, info);
+      return;
+    }
+    // An answer waits only on its own check (#16282): mid-turn, at a question
+    // asked in prose, or before the notices' grace is up, it goes on a line
+    // of its own.
+    if (this.deliver(owner, client, info, true) || followsLine) return;
     if (verdict.kind === "hold") {
       this.holdWakes(owner, verdict.reason);
       this.setDelivery(owner, { status: "held", reason: verdict.reason }, info);
@@ -2135,29 +2446,55 @@ export class TerminalNotifyService {
       this.armRecheck(owner);
       return;
     }
-    const settledFor = info.lastStateChange === undefined ? 0 : this.now() - info.lastStateChange;
-    if (settledFor < NOTIFY_SETTLE_GRACE_MS) {
-      this.setDelivery(owner, { status: "scheduled" });
-      this.armTimer(owner, NOTIFY_SETTLE_GRACE_MS - settledFor);
-      return;
-    }
-
-    this.deliver(owner, client);
+    this.setDelivery(owner, { status: "scheduled" });
+    this.armTimer(owner, NOTIFY_SETTLE_GRACE_MS - settledFor);
   }
 
-  private deliver(owner: PaneOwner, client: TerminalNotifyPtyClient): void {
+  /**
+   * Type the pane's line. `decisionsOnly` puts only the Decisions answers whose
+   * own check passes on it, leaving notices and held prompts for the pane's
+   * line, and does nothing at all when none passes. True when it did more
+   * than look.
+   */
+  private deliver(
+    owner: PaneOwner,
+    client: TerminalNotifyPtyClient,
+    info: NotifyTerminalInfo,
+    decisionsOnly = false
+  ): boolean {
+    const onLine = (entry: WakeEntry) => !decisionsOnly || entry.wake.kind === "decision";
+    if (decisionsOnly && !this.sweepWakes(owner, info).some(onLine)) return owner.disposed;
     // An earlier line the host never finished with would land beside this one;
     // taking it back returns its notices to this line.
     this.withdraw(owner);
     // The last word on each wake: nothing is awaited between this and the submit.
-    const wakes = this.sweepWakes(owner).filter((entry) => this.reserveWake(owner, entry));
-    const entries = owner.fired.filter((entry) => isDeliverable(entry));
+    let steerTaken = false;
+    const reserved = this.sweepWakes(owner, info).filter((entry) => {
+      if (!onLine(entry)) return false;
+      if (owner.wakes.get(entry.key) !== entry) return false;
+      // One held prompt to a line: another waits for the turn after this one's.
+      const steer = entry.wake.kind === "steer";
+      if (steer && steerTaken) return false;
+      if (!this.reserveWake(owner, entry)) return false;
+      if (steer) steerTaken = true;
+      return true;
+    });
+    // A wake's own hooks may have stopped the pane or ended a scope meanwhile.
+    if (owner.disposed) return true;
+    const wakes = reserved.filter((entry) => owner.wakes.get(entry.key) === entry);
+    // With the server off only a scope's wakes may go; notices wait for nothing.
+    const entries =
+      !decisionsOnly && this.deps.isEnabled()
+        ? owner.fired.filter((entry) => isDeliverable(entry))
+        : [];
     if (entries.length === 0 && wakes.length === 0) {
       // Only wakes, all waiting on the lane: the wake timer comes back for them.
-      this.setDelivery(owner, { status: owner.wakes.size > 0 ? "scheduled" : "idle" });
+      if (owner.delivery.status !== "outstanding") {
+        this.setDelivery(owner, { status: owner.wakes.size > 0 ? "scheduled" : "idle" });
+      }
       this.publish(owner);
       this.maybeDispose(owner);
-      return;
+      return true;
     }
     const token = randomUUID();
     owner.recheckMs = undefined;
@@ -2192,6 +2529,9 @@ export class TerminalNotifyService {
           ? [formatAssistantApprovalLine(wake.approval)]
           : []
       ),
+      ...wakes.flatMap(({ wake }) =>
+        wake.kind === "decision" && wake.decision !== undefined ? [wake.decision.text] : []
+      ),
       ...(entries.length > 0
         ? [
             formatNoticeLine(
@@ -2200,23 +2540,50 @@ export class TerminalNotifyService {
             ),
           ]
         : []),
+      // Last, so the line ends with the prompt and any handback instruction it carries.
+      ...wakes.flatMap(({ wake }) =>
+        wake.kind === "steer" && wake.steer !== undefined ? [wake.steer.text] : []
+      ),
     ];
+    const steer = wakes.find(({ wake }) => wake.kind === "steer")?.wake.steer;
     const deliveredAt = this.now();
     owner.inHost = { token };
     remember(this.lastDeliveryAt, owner.terminalId, deliveredAt);
     owner.delivery = { status: "outstanding", lastDeliveredAt: deliveredAt, token };
+    // A held prompt is never typed into a working pane, even one whose CLI
+    // queues mid-turn input, and a decision answer only into one that queues
+    // it (#16282), taking a question in prose only on a line of its own; both
+    // only into the run just checked. The host holds the whole line to that.
+    const steerOnLine = wakes.some(({ wake }) => wake.kind === "steer");
+    const guard: TerminalSubmitGuard =
+      steerOnLine || wakes.some(({ wake }) => wake.kind === "decision")
+        ? {
+            kind: "settled-prompt-exact",
+            ...(info.agentIncarnation !== undefined
+              ? { agentIncarnation: info.agentIncarnation }
+              : {}),
+            ...(info.agentSessionId !== undefined ? { agentSessionId: info.agentSessionId } : {}),
+            ...(steerOnLine || (!decisionsOnly && holdsSteer(owner))
+              ? {}
+              : { acceptWorking: true as const }),
+            ...(decisionsOnly ? { acceptQuestion: true as const } : {}),
+          }
+        : "settled-prompt";
     // The host re-checks the gate when the line reaches the lane, and drops
     // its Enter if anyone types before it lands.
     try {
-      // A notice is nobody's prompt, so it never becomes the run's first one.
+      // A notice is nobody's prompt, so it never becomes the run's first one;
+      // a held prompt is the Assistant's, as it wrote it (#15521).
       client.submit(
         owner.terminalId,
         lines.join("\n\n"),
         token,
+        steer?.handbackCode,
+        guard,
         undefined,
-        "settled-prompt",
+        steer?.promptAsWritten ?? null,
         undefined,
-        null
+        steer?.principal
       );
     } catch (err) {
       // Whether any of it reached the host is unknown, so this is a failed
@@ -2226,7 +2593,7 @@ export class TerminalNotifyService {
       this.requeue(owner, token);
       owner.droppedCount += dropped;
       this.failDelivery(owner, "unknown");
-      return;
+      return true;
     }
     logger.info("Notice line submitted", {
       pane: owner.terminalId,
@@ -2237,6 +2604,20 @@ export class TerminalNotifyService {
     this.confirmDelivery(owner, client, token, dropped).catch((err: unknown) => {
       console.error("[MCP] terminal notify: confirming a line failed:", err);
     });
+    return true;
+  }
+
+  /**
+   * The last line is written and only waits on the pane's turn, and an answer
+   * is waiting: it may go now, since its own check is an empty composer.
+   */
+  private decisionsMayFollow(owner: PaneOwner): boolean {
+    if (owner.delivery.status !== "outstanding" || owner.delivery.confirmed !== true) return false;
+    if (owner.inHost !== undefined) return false;
+    for (const entry of owner.wakes.values()) {
+      if (entry.wake.kind === "decision" && entry.token === undefined) return true;
+    }
+    return false;
   }
 
   /**
@@ -2262,12 +2643,18 @@ export class TerminalNotifyService {
         info = null;
       }
       if (!stillHeld()) return;
-      const phase = info?.submission?.phase;
+      // Only this line's own record speaks for it.
+      const phase = info?.submission?.token === token ? info.submission.phase : undefined;
       if (phase === "pty_written") {
         logger.info("Notice line written", { pane: owner.terminalId });
         owner.inHost = undefined;
         owner.fired = owner.fired.filter((entry) => entry.wakeToken !== token);
-        this.finishWakes(owner, token, { kind: "delivered" });
+        this.finishWakes(
+          owner,
+          token,
+          { kind: "delivered" },
+          { phase: "pty_written", submissionToken: token }
+        );
         if (owner.delivery.token === token) {
           owner.delivery.confirmed = true;
           if (owner.delivery.settledSinceDelivery === true) {
@@ -2329,6 +2716,7 @@ export class TerminalNotifyService {
         terminalId: notice.terminalId,
         observation: notice.observation,
         ...(notice.awaitingHandback === true ? { awaitingHandback: true } : {}),
+        lastTransitionAt: notice.lastTransitionAt ?? null,
       });
     }
     if (notices.length > 0) {
@@ -2349,11 +2737,13 @@ export class TerminalNotifyService {
       reserved = entry.wake.beforeType();
     } catch (err) {
       console.error("[MCP] terminal notify: reserving a lane wake failed:", err);
-      owner.wakes.delete(entry.wake.id);
-      reportWake(entry.wake, { kind: "unavailable", reason: "reserve-failed" });
+      if (owner.wakes.get(entry.key) === entry) {
+        owner.wakes.delete(entry.key);
+        reportWake(entry.wake, { kind: "unavailable", reason: "reserve-failed" });
+      }
       return false;
     }
-    if (!reserved) owner.wakes.delete(entry.wake.id);
+    if (!reserved) owner.wakes.delete(entry.key);
     return reserved;
   }
 
@@ -2445,9 +2835,9 @@ function gateDiagnostics(info: NotifyTerminalInfo): Record<string, unknown> {
   };
 }
 
-function recheckWake(wake: LaneWake): LaneWakeCheck {
+function recheckWake(wake: LaneWake, info?: NotifyTerminalInfo): LaneWakeCheck {
   try {
-    return wake.recheck();
+    return wake.recheck(info);
   } catch (err) {
     console.error("[MCP] terminal notify: rechecking a lane wake failed:", err);
     return { kind: "unavailable", reason: "recheck-failed" };
@@ -2455,12 +2845,32 @@ function recheckWake(wake: LaneWake): LaneWakeCheck {
 }
 
 /** Recording an outcome must never unwind the line or the pane's state. */
-function reportWake(wake: LaneWake, outcome: LaneWakeOutcome): void {
+function reportWake(wake: LaneWake, outcome: LaneWakeOutcome, evidence?: LaneWakeEvidence): void {
   try {
-    wake.report(outcome);
+    if (evidence === undefined) wake.report(outcome);
+    else wake.report(outcome, evidence);
   } catch (err) {
     console.error("[MCP] terminal notify: recording a lane wake outcome failed:", err);
   }
+}
+
+/** A feature's wake whose scope is still live. */
+function pendingMsOf(wake: LaneWake): number {
+  const asked = wake.maxPendingMs;
+  if (asked === undefined || !Number.isFinite(asked) || asked <= 0) return LANE_WAKE_MAX_PENDING_MS;
+  return Math.min(asked, LANE_WAKE_LONGEST_PENDING_MS);
+}
+
+/** A held prompt is still waiting on the pane's line (#16187). */
+function holdsSteer(owner: PaneOwner): boolean {
+  for (const entry of owner.wakes.values()) {
+    if (entry.wake.kind === "steer" && entry.token === undefined) return true;
+  }
+  return false;
+}
+
+function isLiveScoped(entry: WakeEntry): boolean {
+  return entry.scope !== undefined && !entry.scope.released;
 }
 
 /** Fired, not held back for a reply wait, and not already on a line. */

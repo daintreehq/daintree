@@ -37,8 +37,11 @@ import {
   SESSION_ICONS,
   SESSION_LABELS,
 } from "@/components/Worktree/terminalStateConfig";
-import { useHandBackRunIds, useSessionPresentation } from "@/hooks/useRunHandBackState";
-import { isAskingWait } from "@/lib/handBackPresentation";
+import { useFleetBandRunIds } from "@/hooks/useRunFleetBand";
+import { useRunSessionPresentation } from "@/hooks/useRunSessionPresentation";
+import { NEEDS_YOU_BANDS } from "@/lib/fleetAttention";
+import { isNeedsYouPane } from "@/lib/paneSessionPresentation";
+import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import {
   KILL_TERMINAL_TITLE,
@@ -46,6 +49,7 @@ import {
   killTerminalDescription,
 } from "./killTerminalStrings";
 import { pluralize } from "@/lib/pluralize";
+import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
 
 interface BackgroundContainerProps {
   compact?: boolean;
@@ -99,11 +103,12 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
   );
   const worktreeNames = useWorktreeNames();
 
-  // A hand-back is not asking for anything, so the pill does not count it.
-  const handBackRunIds = useHandBackRunIds();
+  // Only a run in Needs you is waiting: a prompt that asks nothing and a
+  // hand-back are not counted.
+  const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
   const waitingCount = useMemo(
-    () => terminals.filter((t) => isAskingWait(handBackRunIds, t)).length,
-    [terminals, handBackRunIds]
+    () => terminals.filter((t) => isNeedsYouPane(needsYouRunIds, t)).length,
+    [terminals, needsYouRunIds]
   );
   const hereCount = useMemo(
     () => terminals.filter((t) => (t.worktreeId ?? null) === (activeWorktreeId ?? null)).length,
@@ -272,6 +277,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
   }, [killConfirmId, removePanel, terminals]);
 
   const count = terminals.length;
+  const worktreeCount = new Set(terminals.map((t) => t.worktreeId ?? null)).size;
   // Lagged count keeps the label stable while the pill fades out via the
   // .dock-status-pill exit transition instead of flashing "(0)".
   const displayCount = useExitLaggedCount(count);
@@ -354,11 +360,11 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
           <div className="flex flex-col">
             <div className={DOCK_POPOVER_HEADER_CLASS}>
               <span className="text-xs font-medium text-text-secondary">Background panels</span>
-              {waitingCount > 0 && (
-                <span className="text-3xs font-medium text-text-secondary tabular-nums">
-                  {waitingCount} waiting
-                </span>
-              )}
+              <span className="text-3xs font-medium text-text-secondary tabular-nums">
+                {pluralize(count, "panel")}
+                {worktreeCount > 1 && ` across ${worktreeCount} worktrees`}
+                {waitingCount > 0 && ` · ${waitingCount} waiting`}
+              </span>
             </div>
 
             <DockPopoverList>
@@ -442,12 +448,26 @@ function BackgroundSingleItem({
   onKill,
   compact = false,
 }: BackgroundSingleItemProps) {
-  // A hand-back draws unread or done, as on the pane's own chip.
-  const agentState = useSessionPresentation(terminal.id, terminal.agentState);
+  // The pane's display state through the run's fleet band, as on the pane's
+  // own chip: amber only for a run in Needs you.
+  const chrome = deriveTerminalChrome(terminal);
+  const agentState = useRunSessionPresentation(
+    terminal.id,
+    getTerminalAgentDisplayState(chrome, terminal.agentState)
+  );
   const StateIcon = agentState ? SESSION_ICONS[agentState] : null;
   const stateLabel = agentState ? SESSION_LABELS[agentState] : null;
   const stateColor = agentState ? SESSION_COLORS[agentState] : null;
   const title = terminal.title || "Terminal";
+  // The task is what tells two backgrounded "Claude" rows apart, as on the
+  // Waiting and Unread rows.
+  const task = getTerminalTaskTitle(terminal);
+  const name = task ? `${title}: ${task}` : title;
+  const hasMeta =
+    !!worktreeName ||
+    !!(StateIcon && stateLabel) ||
+    !!terminal.activityHeadline ||
+    terminal.lastStateChange != null;
 
   return (
     // The row's state is its glyph and label, not a coloured rail: a row in a
@@ -459,65 +479,84 @@ function BackgroundSingleItem({
         data-agent-state={terminal.agentState ?? "unknown"}
         data-dock-row=""
         className={cn(
-          "flex items-start gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] group",
+          "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] group",
           DOCK_POPOVER_ROW_HOVER_CLASS,
           compact && "py-1 pl-1.5"
         )}
       >
-        <div className="shrink-0 mt-0.5 opacity-70 group-hover:opacity-100 transition-opacity">
+        <div className="shrink-0 opacity-70 group-hover:opacity-100 transition-opacity">
           <TerminalIcon
             kind={terminal.kind}
-            chrome={deriveTerminalChrome(terminal)}
+            chrome={chrome}
             className={compact ? "h-2.5 w-2.5" : "h-3 w-3"}
           />
         </div>
 
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-1.5 min-w-0">
+        {/* Clicking the row restores it, as clicking a Waiting or Unread row
+            opens it; the Restore button stays the row's keyboard target. */}
+        <div className="flex-1 min-w-0 cursor-pointer" onClick={() => onRestore(terminal)}>
+          <div className="flex items-baseline gap-1.5 min-w-0">
             <span
               className={cn(
-                "truncate font-medium text-text-primary transition-colors",
+                "shrink-0 max-w-[60%] truncate font-medium text-text-primary transition-colors",
                 compact ? "text-2xs" : "text-xs"
               )}
             >
               {title}
             </span>
-            {terminal.lastStateChange != null && (
-              <LiveTimeAgo
-                timestamp={terminal.lastStateChange}
-                className="text-3xs text-text-secondary shrink-0"
-              />
-            )}
-          </div>
-          <div className="flex items-center gap-1.5 mt-0.5 text-2xs text-text-secondary">
-            {worktreeName && <span className="truncate">{worktreeName}</span>}
-            {worktreeName && (stateLabel || terminal.activityHeadline) && (
-              <span aria-hidden="true">·</span>
-            )}
-            {StateIcon && stateLabel && (
-              <span className="inline-flex items-center gap-1 shrink-0">
-                <StateIcon
-                  className={cn(
-                    "h-2.5 w-2.5",
-                    stateColor,
-                    agentState === "working" && "animate-spin-slow motion-reduce:animate-none"
-                  )}
-                />
-                <span>{stateLabel}</span>
+            {task && (
+              <span
+                className={cn(
+                  "min-w-0 truncate text-text-secondary",
+                  compact ? "text-2xs" : "text-xs"
+                )}
+              >
+                {task}
               </span>
             )}
-            {terminal.activityHeadline && (
-              <>
-                {(worktreeName || stateLabel) && <span aria-hidden="true">·</span>}
-                <span className="truncate italic text-text-secondary">
-                  {terminal.activityHeadline}
-                </span>
-              </>
-            )}
           </div>
+          {hasMeta && (
+            <div className="flex items-center gap-1.5 mt-0.5 text-2xs text-text-secondary">
+              {worktreeName && <span className="truncate">{worktreeName}</span>}
+              {worktreeName && (stateLabel || terminal.activityHeadline) && (
+                <span aria-hidden="true">·</span>
+              )}
+              {StateIcon && stateLabel && (
+                <span className="inline-flex items-center gap-1 shrink-0">
+                  <StateIcon
+                    className={cn(
+                      "h-2.5 w-2.5",
+                      stateColor,
+                      agentState === "working" && "animate-spin-slow motion-reduce:animate-none"
+                    )}
+                  />
+                  <span>{stateLabel}</span>
+                </span>
+              )}
+              {terminal.activityHeadline && (
+                <>
+                  {(worktreeName || stateLabel) && <span aria-hidden="true">·</span>}
+                  <span className="truncate italic text-text-secondary">
+                    {terminal.activityHeadline}
+                  </span>
+                </>
+              )}
+              {terminal.lastStateChange != null && (
+                <>
+                  {(worktreeName || stateLabel || terminal.activityHeadline) && (
+                    <span aria-hidden="true">·</span>
+                  )}
+                  <LiveTimeAgo
+                    timestamp={terminal.lastStateChange}
+                    className="text-2xs text-text-secondary shrink-0 tabular-nums"
+                  />
+                </>
+              )}
+            </div>
+          )}
         </div>
 
-        <div className="flex gap-0.5 shrink-0 mt-0.5">
+        <div className="flex gap-0.5 shrink-0">
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
@@ -551,14 +590,14 @@ function BackgroundSingleItem({
                   e.stopPropagation();
                   onRestore(terminal);
                 }}
-                aria-label={`Restore ${title}`}
+                aria-label={`Restore ${name}`}
                 data-testid="bg-restore-button"
                 data-dock-row-target=""
               >
                 <RotateCcw aria-hidden="true" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">{`Restore ${title}`}</TooltipContent>
+            <TooltipContent side="bottom">{`Restore ${name}`}</TooltipContent>
           </Tooltip>
 
           <Tooltip>
@@ -570,13 +609,13 @@ function BackgroundSingleItem({
                   e.stopPropagation();
                   onKill(terminal.id);
                 }}
-                aria-label={`Kill ${title}`}
+                aria-label={`Kill ${name}`}
                 data-testid="bg-kill-button"
               >
                 <OctagonX aria-hidden="true" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">{`Kill ${title}`}</TooltipContent>
+            <TooltipContent side="bottom">{`Kill ${name}`}</TooltipContent>
           </Tooltip>
         </div>
       </div>
@@ -610,8 +649,8 @@ function BackgroundGroupItem({
   const [isExpanded, setIsExpanded] = useState(true);
   const tabCount = terminals.length;
   const groupName = `Tab group (${pluralize(tabCount, "tab")})`;
-  const handBackRunIds = useHandBackRunIds();
-  const groupWaiting = terminals.filter((t) => isAskingWait(handBackRunIds, t)).length;
+  const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
+  const groupWaiting = terminals.filter((t) => isNeedsYouPane(needsYouRunIds, t)).length;
   // Named on the header too, so a collapsed group still says where it lives.
   const groupWorktreeId = groupMetadata.worktreeId ?? terminals[0]?.worktreeId;
   const groupWorktreeName =
@@ -669,6 +708,7 @@ function BackgroundGroupItem({
           type="button"
           className="text-3xs text-text-secondary shrink-0 hover:text-text-primary transition-colors"
           onClick={() => onRestoreGroup(groupRestoreId, groupMetadata)}
+          data-dock-row-target=""
         >
           Restore all
         </button>

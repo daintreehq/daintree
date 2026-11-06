@@ -14,6 +14,7 @@ import {
   HostModeOffError,
   TransportError,
   UnusableConnectionError,
+  type LinkOpenOptions,
   type LinkTransport,
   type LinkTransportConnection,
 } from "./transport.js";
@@ -114,13 +115,20 @@ export class WslTransport implements LinkTransport {
     wslExecArgs(options.distro, ["/bin/true"]);
   }
 
-  async open(signal: AbortSignal): Promise<LinkTransportConnection> {
+  async open(signal: AbortSignal, options?: LinkOpenOptions): Promise<LinkTransportConnection> {
     this.options.keepalive?.(this.options.distro);
     try {
       return await this.openOnce(signal);
     } catch (error) {
       const ensureRunning = this.options.ensureRunning;
-      if (!(error instanceof HostModeOffError) || !ensureRunning || signal.aborted) throw error;
+      if (
+        !(error instanceof HostModeOffError) ||
+        !ensureRunning ||
+        options?.mayStart === false ||
+        signal.aborted
+      ) {
+        throw error;
+      }
       if (!(await ensureRunning(signal))) throw error;
       return this.openOnce(signal);
     }

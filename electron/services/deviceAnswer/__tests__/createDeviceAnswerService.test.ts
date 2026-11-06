@@ -26,6 +26,7 @@ const pty = {
   getSerializedStateAsync: async () => null,
   write: (_id: string, data: string) => {
     state.writes.push(data);
+    state.screen = redrawFor(state.screen, data);
   },
 };
 
@@ -50,6 +51,7 @@ vi.mock("../../plugin/pluginTerminalScreenRead.js", () => ({
   }),
 }));
 
+import { redrawFor } from "../../__tests__/answerRedraw.js";
 import { LOCAL_CLIENT_ID } from "../../../ipc/endpoint.js";
 import { LOCAL_HOST_ID } from "../../../../shared/types/remoteHosts.js";
 import { createDeviceAnswerService } from "../createDeviceAnswerService.js";
@@ -67,6 +69,12 @@ function wiredAnswer(): DeviceAnswerServiceDeps["answer"] {
 
 const device = { id: "dev-1", name: "Phone" };
 
+/** The question this machine's run is listed with now, as a device would be sent it. */
+async function listedQuestion(): Promise<string> {
+  const { runs } = await wiredDeps().listWaiting({ hosts: false, read: null });
+  return runs.find((run) => run.hostId === LOCAL_HOST_ID)!.questionId!;
+}
+
 const HOST_RUN = {
   runId: "run-1",
   spawnedAt: 100,
@@ -80,6 +88,7 @@ const HOST_RUN = {
   snoozed: false,
   screen: DIALOG,
   choices: ["Yes", "No"],
+  questionId: "question-of-run-1-0001",
 };
 
 describe("createDeviceAnswerService answer", () => {
@@ -98,9 +107,44 @@ describe("createDeviceAnswerService answer", () => {
       runId: "run-1",
       spawnedAt: 100,
       label: "No",
+      questionId: await listedQuestion(),
       stillAllowed: () => null,
     });
     expect(state.writes).toEqual(["\x1b[B", "\r"]);
+  });
+
+  it("presses nothing into a later question that offers the same options as the one listed", async () => {
+    state.screen = " Run rm -rf build?\n❯ 1. Yes\n  2. No\n\n Esc to cancel";
+    const shown = await listedQuestion();
+    // Answered at the desktop, and the agent asks again with the same options.
+    state.screen = " Run git push --force?\n❯ 1. Yes\n  2. No\n\n Esc to cancel";
+    await expect(
+      wiredAnswer()({
+        device,
+        hostId: LOCAL_HOST_ID,
+        runId: "run-1",
+        spawnedAt: 100,
+        label: "Yes",
+        questionId: shown,
+        stillAllowed: () => null,
+      })
+    ).rejects.toMatchObject({
+      userMessage: "The question changed since this device showed it. Nothing was pressed.",
+    });
+    expect(state.writes).toEqual([]);
+
+    // Moving the highlight isn't a different question.
+    state.screen = " Run rm -rf build?\n  1. Yes\n❯ 2. No\n\n Esc to cancel";
+    await wiredAnswer()({
+      device,
+      hostId: LOCAL_HOST_ID,
+      runId: "run-1",
+      spawnedAt: 100,
+      label: "Yes",
+      questionId: shown,
+      stillAllowed: () => null,
+    });
+    expect(state.writes).toEqual(["\x1b[A", "\r"]);
   });
 
   it("stands in the drive lease as this machine's windows, and presses nothing where a remote Shell drives", async () => {
@@ -118,6 +162,7 @@ describe("createDeviceAnswerService answer", () => {
         runId: "run-1",
         spawnedAt: 100,
         label: "Yes",
+        questionId: await listedQuestion(),
         stillAllowed: () => null,
       })
     ).rejects.toMatchObject({ userMessage: expect.stringContaining("driven from another screen") });
@@ -126,6 +171,7 @@ describe("createDeviceAnswerService answer", () => {
   });
 
   it("presses nothing for a run the fleet no longer shows waiting", async () => {
+    const questionId = await listedQuestion();
     state.fleetRuns = [{ runId: "run-1", spawnedAt: 100, agentState: "working" }];
     await expect(
       wiredAnswer()({
@@ -134,6 +180,7 @@ describe("createDeviceAnswerService answer", () => {
         runId: "run-1",
         spawnedAt: 100,
         label: "Yes",
+        questionId,
         stillAllowed: () => null,
       })
     ).rejects.toMatchObject({ userMessage: expect.stringContaining("isn't waiting") });
@@ -142,6 +189,7 @@ describe("createDeviceAnswerService answer", () => {
 
   it("presses the option a redacted label was shown for, and never one named by its secret", async () => {
     state.screen = "❯ 1. Yes\n  2. Use token=abcdef123456\n  3. No\n\n Esc to cancel";
+    const questionId = await listedQuestion();
     const press = (label: string) =>
       wiredAnswer()({
         device,
@@ -149,6 +197,7 @@ describe("createDeviceAnswerService answer", () => {
         runId: "run-1",
         spawnedAt: 100,
         label,
+        questionId,
         stillAllowed: () => null,
       });
     await expect(press("Use token=abcdef123456")).rejects.toMatchObject({
@@ -168,6 +217,8 @@ describe("createDeviceAnswerService answer", () => {
       runId: "run-1",
       spawnedAt: 100,
       label: "Use token=[redacted]",
+      // Such a list is offered with no options, so no question either.
+      questionId: "question-of-run-1-0001",
       stillAllowed: () => null,
     });
     await expect(refused).rejects.toMatchObject({
@@ -177,6 +228,12 @@ describe("createDeviceAnswerService answer", () => {
   });
 });
 
+function unreadHost(hostId: string, host: string, status: string) {
+  return { hostId, host, status, runs: [], omitted: [], waiting: null };
+}
+
+const { screen: _screen, choices: _choices, questionId: _questionId, ...HOST_SUMMARY } = HOST_RUN;
+
 describe("createDeviceAnswerService and connected hosts", () => {
   beforeEach(() => {
     state.writes = [];
@@ -185,9 +242,16 @@ describe("createDeviceAnswerService and connected hosts", () => {
     state.lease = null;
     state.remote = {
       listWaiting: vi.fn(async () => [
-        { hostId: "studio-03", host: "studio-03", status: "ok", runs: [{ ...HOST_RUN }] },
-        { hostId: "studio-04", host: "studio-04", status: "needs-update", runs: [] },
-        { hostId: "mini", host: "Mini", status: "not-connected", runs: [] },
+        {
+          hostId: "studio-03",
+          host: "studio-03",
+          status: "ok",
+          runs: [{ ...HOST_RUN }],
+          omitted: [],
+          waiting: 1,
+        },
+        unreadHost("studio-04", "studio-04", "needs-update"),
+        unreadHost("mini", "Mini", "not-connected"),
       ]),
       answer: vi.fn(async () => {}),
       hostName: (hostId) => (hostId === "studio-03" ? "studio-03" : null),
@@ -195,11 +259,16 @@ describe("createDeviceAnswerService and connected hosts", () => {
   });
 
   it("lists this machine's runs with every connected host's, each named with its machine", async () => {
-    const { runs, hosts } = await wiredDeps().listWaiting({ hosts: true });
+    const { runs, hosts, coverage } = await wiredDeps().listWaiting({ hosts: true, read: null });
     expect(runs.map((run) => [run.hostId, run.runId])).toEqual([
-      // The host's run has waited longest.
+      // The host's run asks for approval; this machine's sits at its prompt.
       ["studio-03", "run-1"],
       [LOCAL_HOST_ID, "run-1"],
+    ]);
+    // Only the machines read say how much of them was.
+    expect(coverage).toEqual([
+      { hostId: LOCAL_HOST_ID, host: runs[1]!.host, listed: 1, waiting: 1 },
+      { hostId: "studio-03", host: "studio-03", listed: 1, waiting: 1 },
     ]);
     expect(runs[0]!.host).toBe("studio-03");
     expect(runs[1]!.host).not.toBe("");
@@ -210,16 +279,64 @@ describe("createDeviceAnswerService and connected hosts", () => {
     ]);
   });
 
+  it("ranks a host's run whose agent said it needs the person ahead of this machine's hand-backs", async () => {
+    state.fleetRuns = [
+      {
+        runId: "local-1",
+        spawnedAt: 100,
+        agentState: "waiting",
+        waitingReason: "prompt",
+        since: 1,
+      },
+    ];
+    const reported = { ...HOST_RUN, waitingReason: "prompt" as const, since: 50 };
+    state.remote!.listWaiting = vi.fn(async () => [
+      {
+        hostId: "studio-03",
+        host: "studio-03",
+        status: "ok",
+        runs: [
+          { ...reported, runId: "plain", since: 0 },
+          { ...reported, handbackReport: "needs-you" },
+        ],
+        omitted: [
+          { ...HOST_SUMMARY, runId: "plain-left", waitingReason: "prompt", since: 0 },
+          {
+            ...HOST_SUMMARY,
+            runId: "needs-left",
+            waitingReason: "prompt",
+            since: 60,
+            handbackReport: "needs-you",
+          },
+        ],
+        waiting: 4,
+      },
+    ]) as never;
+    const { runs, omitted } = await wiredDeps().listWaiting({ hosts: true, read: null });
+    expect(runs.map((run) => [run.hostId, run.runId])).toEqual([
+      ["studio-03", "run-1"],
+      ["studio-03", "plain"],
+      [LOCAL_HOST_ID, "local-1"],
+    ]);
+    expect(omitted!.map((run) => run.runId)).toEqual(["needs-left", "plain-left"]);
+  });
+
   it("lists only this machine's runs where remote hosts aren't running", async () => {
     state.remote = undefined;
-    const { runs, hosts, hostsUnlisted } = await wiredDeps().listWaiting({ hosts: true });
+    const { runs, hosts, hostsUnlisted } = await wiredDeps().listWaiting({
+      hosts: true,
+      read: null,
+    });
     expect(runs.map((run) => run.hostId)).toEqual([LOCAL_HOST_ID]);
     expect(hosts).toEqual([]);
     expect(hostsUnlisted).toBeFalsy();
   });
 
   it("asks no host for a page that can't answer hosts' runs", async () => {
-    const { runs, hosts, hostsUnlisted } = await wiredDeps().listWaiting({ hosts: false });
+    const { runs, hosts, hostsUnlisted } = await wiredDeps().listWaiting({
+      hosts: false,
+      read: null,
+    });
     expect(state.remote!.listWaiting).not.toHaveBeenCalled();
     expect(runs.map((run) => run.hostId)).toEqual([LOCAL_HOST_ID]);
     expect(hosts).toEqual([]);
@@ -231,12 +348,73 @@ describe("createDeviceAnswerService and connected hosts", () => {
     state.remote!.listWaiting.mockImplementationOnce(() => {
       throw new Error("registry unreadable");
     });
-    const { runs, hosts, hostsUnlisted } = await wiredDeps().listWaiting({ hosts: true });
+    const { runs, hosts, hostsUnlisted } = await wiredDeps().listWaiting({
+      hosts: true,
+      read: null,
+    });
     expect(runs.map((run) => run.hostId)).toEqual([LOCAL_HOST_ID]);
     // An empty list here is one that couldn't be read, not one with no hosts.
     expect(hosts).toEqual([]);
     expect(hostsUnlisted).toBe(true);
     warn.mockRestore();
+  });
+
+  it("says which machine cut its list, and that a host which can't say may have", async () => {
+    state.fleetRuns = Array.from({ length: 21 }, (_, i) => ({
+      runId: `local-${i}`,
+      spawnedAt: 100,
+      agentState: "waiting",
+      waitingReason: "prompt",
+      since: i,
+    }));
+    state.remote!.listWaiting.mockResolvedValueOnce([
+      {
+        hostId: "studio-03",
+        host: "studio-03",
+        status: "ok",
+        runs: [{ ...HOST_RUN }],
+        omitted: [{ ...HOST_SUMMARY, runId: "run-2" }],
+        waiting: 30,
+      },
+      { hostId: "old", host: "Old", status: "ok", runs: [], omitted: [], waiting: null },
+    ]);
+    const { runs, omitted, coverage } = await wiredDeps().listWaiting({ hosts: true, read: null });
+    expect(runs).toHaveLength(21);
+    expect(coverage).toEqual([
+      { hostId: LOCAL_HOST_ID, host: expect.any(String), listed: 20, waiting: 21 },
+      { hostId: "studio-03", host: "studio-03", listed: 1, waiting: 30 },
+      { hostId: "old", host: "Old", listed: 0, waiting: null },
+    ]);
+    // The host's unread approval comes before this machine's unread hand-back.
+    expect(omitted!.map((run) => [run.hostId, run.runId, run.agentName])).toEqual([
+      ["studio-03", "run-2", "Codex"],
+      [LOCAL_HOST_ID, "local-20", null],
+    ]);
+  });
+
+  it("reads a run a device picked only on the machine it waits on", async () => {
+    state.fleetRuns = Array.from({ length: 21 }, (_, i) => ({
+      runId: `local-${i}`,
+      spawnedAt: 100,
+      agentState: "waiting",
+      since: i,
+    }));
+    const local = await wiredDeps().listWaiting({
+      hosts: true,
+      read: { hostId: LOCAL_HOST_ID, runId: "local-20", spawnedAt: 100 },
+    });
+    expect(local.runs.some((run) => run.runId === "local-20")).toBe(true);
+    expect(state.remote!.listWaiting).toHaveBeenLastCalledWith({ read: null });
+
+    const remote = await wiredDeps().listWaiting({
+      hosts: true,
+      read: { hostId: "studio-03", runId: "local-20", spawnedAt: 100 },
+    });
+    // Same id here, but the pick was the host's: this machine reads its usual runs.
+    expect(remote.omitted!.map((run) => run.runId)).toEqual(["local-20"]);
+    expect(state.remote!.listWaiting).toHaveBeenLastCalledWith({
+      read: { hostId: "studio-03", runId: "local-20", spawnedAt: 100 },
+    });
   });
 
   it("sends a host's run to that host, and presses nothing here though a run of the same id waits", async () => {
@@ -246,13 +424,16 @@ describe("createDeviceAnswerService and connected hosts", () => {
       runId: "run-1",
       spawnedAt: 100,
       label: "No",
+      questionId: HOST_RUN.questionId,
       stillAllowed: () => null,
     });
+    // The host checks the question; this machine only passes it on.
     expect(state.remote!.answer).toHaveBeenCalledWith({
       hostId: "studio-03",
       runId: "run-1",
       spawnedAt: 100,
       label: "No",
+      questionId: HOST_RUN.questionId,
     });
     expect(state.writes).toEqual([]);
   });
@@ -265,6 +446,7 @@ describe("createDeviceAnswerService and connected hosts", () => {
         runId: "run-1",
         spawnedAt: 100,
         label: "Yes",
+        questionId: HOST_RUN.questionId,
         stillAllowed: () => "This device was removed. Nothing more was pressed.",
       })
     ).rejects.toMatchObject({ userMessage: expect.stringContaining("removed") });
@@ -280,6 +462,7 @@ describe("createDeviceAnswerService and connected hosts", () => {
         runId: "run-1",
         spawnedAt: 100,
         label: "Yes",
+        questionId: await listedQuestion(),
         stillAllowed: () => null,
       })
     ).rejects.toMatchObject({ userMessage: expect.stringContaining("Nothing was pressed") });

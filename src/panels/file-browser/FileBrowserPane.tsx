@@ -13,6 +13,7 @@ import { basename, join } from "@shared/utils/path";
 import { cn } from "@/lib/utils";
 import { PANE_STATUS_FOOTER_CLASS } from "@/components/ui/paneToolbarStyles";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
+import type { TabInfo } from "@/components/Panel/TabButton";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Button } from "@/components/ui/button";
@@ -74,7 +75,13 @@ import { useWorkspaceRootPath } from "./useWorkspaceRootPath";
 import { FileBrowserViewOptions } from "./FileBrowserViewOptions";
 import { FileBrowserHiddenStrip } from "./FileBrowserHiddenStrip";
 
-export type FileBrowserPaneProps = BasePanelProps;
+export interface FileBrowserPaneProps extends BasePanelProps {
+  tabs?: TabInfo[];
+  onTabClick?: (tabId: string) => void;
+  onTabClose?: (tabId: string) => void;
+  onTabRename?: (tabId: string, newTitle: string) => void;
+  onAddTab?: () => void;
+}
 
 /**
  * Read-only file browser: a lazily-expanded tree over one folder beside a
@@ -102,6 +109,11 @@ export function FileBrowserPane({
   onMinimize,
   onRestore,
   showRestoreControl,
+  tabs,
+  onTabClick,
+  onTabClose,
+  onTabRename,
+  onAddTab,
 }: FileBrowserPaneProps) {
   const updateFileBrowserView = usePanelStore((state) => state.setFileBrowserView);
   const project = useProjectStore((state) => state.currentProject);
@@ -514,7 +526,7 @@ export function FileBrowserPane({
       // The 500ms persistence debounce usually completes while the hidden
       // renderer stays alive, but flush anyway: on app quit there is no later
       // tick, and the capture above must make this save, not the next one.
-      flushPanelPersistence();
+      void flushPanelPersistence();
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
@@ -1270,6 +1282,11 @@ export function FileBrowserPane({
       onMinimize={onMinimize}
       onRestore={onRestore}
       showRestoreControl={showRestoreControl}
+      tabs={tabs}
+      onTabClick={onTabClick}
+      onTabClose={onTabClose}
+      onTabRename={onTabRename}
+      onAddTab={onAddTab}
     >
       {/* In both locations the parent provides a definite height — the grid
           cell directly, the dialog via the registry's `dialogFullHeight` pin

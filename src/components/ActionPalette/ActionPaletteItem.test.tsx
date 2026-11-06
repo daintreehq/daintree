@@ -43,8 +43,11 @@ function describedTexts(option: HTMLElement): string[] {
 }
 
 function labelText(option: HTMLElement): string {
-  const id = option.getAttribute("aria-labelledby");
-  return id ? (document.getElementById(id)?.textContent ?? "") : "";
+  return (option.getAttribute("aria-labelledby") ?? "")
+    .split(" ")
+    .filter(Boolean)
+    .map((id) => document.getElementById(id)?.textContent ?? `#${id}`)
+    .join(" ");
 }
 
 function makeItem(overrides: Partial<ActionPaletteItemType> = {}): ActionPaletteItemType {
@@ -456,7 +459,7 @@ describe("ActionPaletteItem", () => {
       expect(container.querySelector('svg[aria-hidden="true"]')).toBeNull();
     });
 
-    it("describes a confirm-tier row by its consequence first, selected or not", () => {
+    it("includes the consequence in a confirm-tier row's name, selected or not", () => {
       for (const isSelected of [true, false]) {
         const { container, unmount } = render(
           <ActionPaletteItem
@@ -469,8 +472,8 @@ describe("ActionPaletteItem", () => {
         const option = container.querySelector<HTMLElement>('[role="option"]')!;
         // A row that showed its consequence only under the cursor grew as the
         // cursor landed on it, so the line and its reference are unconditional.
-        expect(describedTexts(option)[0]).toBe("Removes the working tree and branch from disk");
-        expect(labelText(option)).toBe("Delete worktree…");
+        expect(labelText(option)).toContain("Removes the working tree and branch from disk");
+        expect(labelText(option).startsWith("Delete worktree…")).toBe(true);
         unmount();
       }
     });
@@ -482,7 +485,7 @@ describe("ActionPaletteItem", () => {
       );
 
       const option = container.querySelector<HTMLElement>('[role="option"]')!;
-      expect(describedIds(option).some((id) => id.endsWith("danger-rationale"))).toBe(false);
+      expect(option.getAttribute("aria-labelledby")).not.toContain("danger-rationale");
       expect(container.querySelector('[id$="-danger-rationale"]')).toBeNull();
       // Suffix and icon still render — they gate on `danger === "confirm"`, not on rationale.
       expect(screen.getByText("Delete worktree…")).toBeTruthy();
@@ -491,15 +494,52 @@ describe("ActionPaletteItem", () => {
   });
 
   describe("accessible name and description", () => {
-    it("names the option by its title alone", () => {
+    it.each([
+      ["MacIntel", "⌘⇧P"],
+      ["Linux x86_64", "Ctrl+Shift+P"],
+      ["Win32", "Ctrl+Shift+P"],
+    ])("includes the shortcut once in the option name on %s", (platform, shortcutLabel) => {
+      const platformMock = vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+      try {
+        render(
+          <ActionPaletteItem
+            item={makeItem({ shortcut: "Cmd+Shift+P" })}
+            index={0}
+            isSelected={false}
+            onSelect={onSelect}
+          />
+        );
+        const option = screen.getByRole("option", {
+          name: `Test Action terminal ${shortcutLabel} Test description`,
+        });
+        const labels = option
+          .getAttribute("aria-labelledby")!
+          .split(" ")
+          .map((id) => document.getElementById(id)!);
+        for (let index = 1; index < labels.length; index++) {
+          expect(
+            labels[index - 1]!.compareDocumentPosition(labels[index]!) &
+              Node.DOCUMENT_POSITION_FOLLOWING
+          ).toBeTruthy();
+        }
+      } finally {
+        platformMock.mockRestore();
+      }
+    });
+
+    it("names the option with its visible title, category and summary", () => {
       const { container } = render(
         <ActionPaletteItem item={makeItem()} index={0} isSelected={false} onSelect={onSelect} />
       );
       const option = container.querySelector<HTMLElement>('[role="option"]')!;
-      expect(labelText(option)).toBe("Test Action");
+      expect(labelText(option)).toBe("Test Action terminal Test description");
+      expect(option.textContent?.replace(/\s+/g, " ").trim()).toBe(labelText(option));
+      expect(screen.getByRole("option", { name: "Test Action terminal Test description" })).toBe(
+        option
+      );
     });
 
-    it("describes the row by its category, summary and the footer hint, in that order", () => {
+    it("describes the row with the footer hint without repeating its visible label", () => {
       const { container } = render(
         <>
           <ActionPaletteItem
@@ -513,10 +553,10 @@ describe("ActionPaletteItem", () => {
         </>
       );
       const option = container.querySelector<HTMLElement>('[role="option"]')!;
-      expect(describedTexts(option)).toEqual(["terminal", "Test description", "↵ to run"]);
+      expect(describedTexts(option)).toEqual(["↵ to run"]);
     });
 
-    it("puts an unavailable row's reason ahead of everything else it says", () => {
+    it("includes an unavailable row's visible reason in its name", () => {
       const { container } = render(
         <ActionPaletteItem
           item={makeItem({ enabled: false, disabledReason: "No focused terminal" })}
@@ -527,7 +567,7 @@ describe("ActionPaletteItem", () => {
         />
       );
       const option = container.querySelector<HTMLElement>('[role="option"]')!;
-      expect(describedTexts(option)[0]).toBe("No focused terminal");
+      expect(labelText(option)).toBe("Test Action terminal Test description No focused terminal");
     });
 
     it("references the rationale before the footer hint on a confirm-tier row", () => {
@@ -549,8 +589,9 @@ describe("ActionPaletteItem", () => {
           <div id="palette-footer-hint">↵ to delete</div>
         </>
       );
-      const texts = describedTexts(container.querySelector<HTMLElement>('[role="option"]')!);
-      expect(texts.indexOf("Removes the working tree")).toBeLessThan(texts.indexOf("↵ to delete"));
+      const option = container.querySelector<HTMLElement>('[role="option"]')!;
+      expect(labelText(option)).toContain("Removes the working tree");
+      expect(describedTexts(option)).toEqual(["↵ to delete"]);
     });
 
     it("omits aria-describedby entirely when the row has nothing to describe it", () => {

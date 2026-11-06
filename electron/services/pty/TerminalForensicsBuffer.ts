@@ -1,6 +1,6 @@
 import type { TerminalInfo } from "./types.js";
 import { decideTerminalExitForensics } from "./terminalForensics.js";
-import { logError } from "../../utils/logger.js";
+import { logError, logLocalOnly } from "../../utils/logger.js";
 
 const FORENSIC_BUFFER_SIZE = 4000;
 
@@ -54,8 +54,11 @@ export class TerminalForensicsBuffer {
       lastOutput: decision.strippedOutput.slice(-1000),
     });
 
+    // The tail is the agent's screen: code, prompts, plans. Anything printed
+    // here reaches Main's console and from there Sentry breadcrumbs (#15558).
     if (process.env.DAINTREE_VERBOSE || exitCode !== 0) {
-      console.error(
+      logLocalOnly(
+        "error",
         `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nTERMINAL CRASH FORENSICS\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nTerminal ID: ${terminalId}\nAgent:       ${agentId}\nExit Code:   ${exitCode}\nSignal:      ${decision.normalizedSignal ?? "none"}\nCWD:         ${terminal.cwd}\nTimestamp:   ${new Date().toISOString()}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nLAST OUTPUT (${decision.strippedOutput.length} chars):\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n${decision.strippedOutput}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`
       );
     }

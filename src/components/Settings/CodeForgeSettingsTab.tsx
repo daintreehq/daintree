@@ -8,6 +8,7 @@ import { makeForgeProviderId } from "@shared/utils/forgeProviderIds";
 import { forgeProviderRoles } from "@shared/utils/forgeProviderRoles";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Callout } from "@/components/ui/Callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   ForgeProviderSelectorDropdown,
@@ -211,12 +212,13 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
         id: makeForgeProviderId(entry.pluginId, entry.contribution.id),
         name: entry.contribution.name,
         pluginId: entry.pluginId,
+        unavailable: entry.unavailableReason !== undefined,
       })),
     [providers]
   );
 
   // Subtab resolution is provider-generic. A fresh open (no subtab yet)
-  // defaults to the first registered provider so the tab lands on something
+  // defaults to the first provider that can run so the tab lands on something
   // configurable; a stale subtab (e.g. a deep-link to a provider whose plugin
   // was disabled — the provider list omits it) falls back to General, because
   // defaulting to a panel for an absent provider is exactly the "disable does
@@ -228,7 +230,7 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
     ? (activeSubtab as string)
     : activeSubtab !== null
       ? GENERAL_ID
-      : (providerOptions[0]?.id ?? GENERAL_ID);
+      : ((providerOptions.find((p) => !p.unavailable) ?? providerOptions[0])?.id ?? GENERAL_ID);
 
   useSettingsTabValidation("code-forge", Boolean(loadError));
 
@@ -323,6 +325,14 @@ function ProviderPanel({ providerId, entry }: { providerId: string; entry: Forge
   const SlotView = useBuiltinView<Record<string, never>>(
     entry.contribution.slots?.settingsTab ?? ""
   );
+  // Credentials for a provider that can never run would be saved for nothing.
+  if (entry.unavailableReason) {
+    return (
+      <Callout severity="warning" title={`${entry.contribution.name} isn't available`}>
+        {entry.unavailableReason}. It can't be picked as a default or project provider.
+      </Callout>
+    );
+  }
   if (SlotView) {
     return (
       <Suspense fallback={null}>

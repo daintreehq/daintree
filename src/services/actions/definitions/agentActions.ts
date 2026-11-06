@@ -13,11 +13,24 @@ import { z } from "zod";
 import { AGENT_REGISTRY } from "@/config/agents";
 import { NOTIFY_ARG_DESCRIPTION, NotifyReplyLinesSchema } from "@shared/types/terminalNotify";
 import { AgentLaunchManyArgsSchema } from "@shared/types/mcpBatch";
-import { AwaitedReplySchema, WaitForReplySchema, WaitSecondsSchema } from "@shared/types/replyWait";
+import {
+  AwaitedReplySchema,
+  REPLY_WAIT_MAX_SECONDS,
+  WaitForReplySchema,
+  WaitSecondsSchema,
+} from "@shared/types/replyWait";
 import { SYSTEM_PROMPT_MAX_LENGTH } from "@shared/utils/agentSystemPrompt";
 import {
+  LAUNCH_SETUP_WAIT_DEFAULT_MS,
+  LAUNCH_SETUP_WAIT_MAX_MS,
+} from "@shared/utils/launchInNewWorktree";
+import { WorktreeCreationSourceSchema } from "./workflowCreationActionArgs";
+import {
+  AgentCreatePresetArgsSchema,
+  AgentDeletePresetArgsSchema,
   AgentListModelsArgsSchema,
   AgentListPresetsArgsSchema,
+  AgentUpdatePresetArgsSchema,
   BookmarkAndCloseArgsSchema,
   BookmarkDeleteArgsSchema,
   BookmarkListArgsSchema,
@@ -26,6 +39,121 @@ import {
   SessionHistoryListArgsSchema,
 } from "./agentActionArgs";
 import type { AgentActionRunId } from "./agentActions.impl";
+
+/**
+ * `agent.launch`'s arguments, shared with `agent.launchInNewWorktree`, which
+ * takes every one of them but the worktree it creates itself.
+ */
+const AgentLaunchArgsSchema = z.object({
+  agentId: AgentIdSchema,
+  location: AgentLaunchLocationSchema.optional(),
+  cwd: z
+    .string()
+    .optional()
+    .describe("Absolute launch directory, not a worktree selector. Defaults to the worktree root."),
+  worktreeId: z
+    .string()
+    .optional()
+    .describe("Worktree id from the worktree listing. Defaults to the active worktree."),
+  prompt: z
+    .string()
+    .optional()
+    .describe("First turn, submitted once the agent starts. Omit to leave it waiting."),
+  handback: z
+    .boolean()
+    .optional()
+    .describe(
+      "Ask the agent to end its reply to `prompt` with a Daintree marker, read back as `lastHandback`."
+    ),
+  // Acted on in main, which sets up the notice; `run()` only refuses it for
+  // a launch with no agent to watch.
+  notify: z.boolean().optional().describe(NOTIFY_ARG_DESCRIPTION),
+  replyLines: NotifyReplyLinesSchema,
+  waitForReply: WaitForReplySchema,
+  waitSeconds: WaitSecondsSchema,
+  systemPrompt: z
+    .string()
+    .max(SYSTEM_PROMPT_MAX_LENGTH)
+    .optional()
+    .describe(
+      "Appended to the agent's system prompt, at most 2000 characters, kept on resume. Claude and Codex only; others refuse it."
+    ),
+  interactive: z
+    .boolean()
+    .optional()
+    .describe("Run as a conversation the user can continue, not one non-interactive pass."),
+  model: z
+    .string()
+    .optional()
+    .describe(
+      "Omit for the CLI's default; set only when the user names a model. No preset needed."
+    ),
+  presetId: z
+    .string()
+    .nullable()
+    .optional()
+    .describe("One of the user's saved launch presets. Explicit null ignores the default preset."),
+  accountId: z
+    .string()
+    .nullable()
+    .optional()
+    .describe("One of the agent's saved accounts. Explicit null uses the CLI's default login."),
+  activateDockOnCreate: z
+    .boolean()
+    .optional()
+    .describe("Open the sidebar dock when placing the agent there."),
+  env: z
+    .record(z.string(), z.string())
+    .optional()
+    .describe(
+      "Extra env vars merged over the inherited environment. They reach a real process: never add credentials the user has not exposed."
+    ),
+  excludeFromPersistence: z
+    .boolean()
+    .optional()
+    .describe(
+      "Hide the terminal from the saved session, listings, status reads and bulk close or kill, so it can't be polled later. For throwaway work."
+    ),
+  removeOnExit: z
+    .boolean()
+    .optional()
+    .describe("Close the panel when the agent exits, discarding its output."),
+  agentLaunchFlags: z
+    .array(z.string())
+    .optional()
+    .describe(
+      'Extra CLI flags for this launch, verbatim, e.g. Codex effort ["-c", "model_reasoning_effort=high"]. Bad ones fail at CLI start.'
+    ),
+  spawnedBy: TerminalSpawnSourceSchema.optional(),
+  focusPolicy: AddPanelFocusPolicySchema.optional(),
+  requestedId: z
+    .string()
+    .optional()
+    .describe("Panel id to create the terminal with, to correlate the launch."),
+  force: z
+    .boolean()
+    .optional()
+    .describe(
+      "Skip the CLI launchability check, so an unlaunchable CLI starts and fails instead of opening a setup diagnostic. Leave off."
+    ),
+  name: z
+    .string()
+    .max(200)
+    .optional()
+    .describe(
+      "Always pass a short tab title ('Claude: auth refactor') so parallel agents are told apart. Blank uses the default."
+    ),
+});
+
+/** Why a preset write asks first, shown in the host's confirm dialog. */
+const PRESET_WRITE_DANGER_RATIONALE =
+  "A preset's env vars and flags apply to every launch that picks it, and can redirect where the agent sends its traffic or relax its permissions.";
+
+/** What a preset write reports: identity only, never env or flags. */
+const PresetWriteResultSchema = z.object({
+  presetId: z.string(),
+  name: z.string(),
+});
 
 /**
  * Run bodies load on first dispatch (#14268, after the git pilot in #14239).
@@ -77,6 +205,37 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     },
   }));
 
+  actions.set("agent.launchInNewWorktree", () => ({
+    id: "agent.launchInNewWorktree",
+    title: "Create worktree and launch agent",
+    description:
+      "Create a managed worktree and launch one agent in it: source as for any managed worktree (no recipe), the rest as for any agent launch. Launches only once setup ends ready, else stops and says which. The session owns both. A failure after creation is PARTIAL_SUCCESS carrying worktreeId: use that worktree, don't retry.",
+    category: "agent",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["branch", "issue", "unit", "setup"],
+    palette: { mode: "hidden" },
+    argsSchema: AgentLaunchArgsSchema.omit({ worktreeId: true }).extend({
+      source: WorktreeCreationSourceSchema,
+      setupTimeoutMs: z
+        .number()
+        .int()
+        .min(0)
+        .max(LAUNCH_SETUP_WAIT_MAX_MS)
+        .optional()
+        .describe(
+          `Ms to wait for setup, 0-${LAUNCH_SETUP_WAIT_MAX_MS} (default ${LAUNCH_SETUP_WAIT_DEFAULT_MS}). With waitForReply, it plus waitSeconds stays within ${REPLY_WAIT_MAX_SECONDS} s.`
+        ),
+    }),
+    run: async () => {
+      throw new Error(
+        "agent.launchInNewWorktree must be invoked through the MCP main-process path, not renderer dispatch."
+      );
+    },
+  }));
+
   actions.set("agent.launch", () => ({
     id: "agent.launch",
     title: "Launch agent",
@@ -87,105 +246,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     danger: "safe",
     scope: "renderer",
     keywords: ["spawn", "start", "run", "new", "agents", "task", "model", "effort", "reasoning"],
-    argsSchema: z.object({
-      agentId: AgentIdSchema,
-      location: AgentLaunchLocationSchema.optional(),
-      cwd: z
-        .string()
-        .optional()
-        .describe(
-          "Absolute launch directory, not a worktree selector. Defaults to the worktree root."
-        ),
-      worktreeId: z
-        .string()
-        .optional()
-        .describe("Worktree id from the worktree listing. Defaults to the active worktree."),
-      prompt: z
-        .string()
-        .optional()
-        .describe("First turn, submitted once the agent starts. Omit to leave it waiting."),
-      handback: z
-        .boolean()
-        .optional()
-        .describe(
-          "Ask the agent to end its reply to `prompt` with a Daintree marker, read back as `lastHandback`."
-        ),
-      // Acted on in main, which sets up the notice; `run()` only refuses it for
-      // a launch with no agent to watch.
-      notify: z.boolean().optional().describe(NOTIFY_ARG_DESCRIPTION),
-      replyLines: NotifyReplyLinesSchema,
-      waitForReply: WaitForReplySchema,
-      waitSeconds: WaitSecondsSchema,
-      systemPrompt: z
-        .string()
-        .max(SYSTEM_PROMPT_MAX_LENGTH)
-        .optional()
-        .describe(
-          "Appended to the agent's system prompt, at most 2000 characters, kept on resume. Claude and Codex only; others refuse it."
-        ),
-      interactive: z
-        .boolean()
-        .optional()
-        .describe("Run as a conversation the user can continue, not one non-interactive pass."),
-      model: z
-        .string()
-        .optional()
-        .describe(
-          "Omit for the CLI's default; set only when the user names a model. No preset needed."
-        ),
-      presetId: z
-        .string()
-        .nullable()
-        .optional()
-        .describe(
-          "One of the user's saved launch presets. Explicit null ignores the default preset."
-        ),
-      activateDockOnCreate: z
-        .boolean()
-        .optional()
-        .describe("Open the sidebar dock when placing the agent there."),
-      env: z
-        .record(z.string(), z.string())
-        .optional()
-        .describe(
-          "Extra env vars merged over the inherited environment. They reach a real process: never add credentials the user has not exposed."
-        ),
-      excludeFromPersistence: z
-        .boolean()
-        .optional()
-        .describe(
-          "Hide the terminal from the saved session, listings, status reads and bulk close or kill, so it can't be polled later. For throwaway work."
-        ),
-      removeOnExit: z
-        .boolean()
-        .optional()
-        .describe("Close the panel when the agent exits, discarding its output."),
-      agentLaunchFlags: z
-        .array(z.string())
-        .optional()
-        .describe(
-          'Extra CLI flags for this launch, verbatim, e.g. Codex effort ["-c", "model_reasoning_effort=high"]. Bad ones fail at CLI start.'
-        ),
-      spawnedBy: TerminalSpawnSourceSchema.optional(),
-      focusPolicy: AddPanelFocusPolicySchema.optional(),
-      requestedId: z
-        .string()
-        .optional()
-        .describe("Panel id to create the terminal with, to correlate the launch."),
-      force: z
-        .boolean()
-        .optional()
-        .describe(
-          "Skip the CLI launchability check, so an unlaunchable CLI starts and fails instead of opening a setup diagnostic. Leave off."
-        ),
-      name: z
-        .string()
-        .max(200)
-        .optional()
-        .describe(
-          "Always pass a short tab title ('Claude: auth refactor') so parallel agents are told apart. Blank uses the default."
-        ),
-    }),
+    argsSchema: AgentLaunchArgsSchema,
     // Top-level object, never `.nullable()`: `buildToolOutputSchema` (tierAuth)
     // forwards a manifest schema only when its JSON Schema has
     // `type === "object"`, and zod renders a nullable object as a top-level
@@ -643,6 +704,83 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     mcpOutputSchema: true,
     run: (args: unknown, ctx: ActionContext) =>
       runAgentAction("agent.listPresets", args, ctx, callbacks),
+  }));
+
+  // The user-preset writes (#16047). Confirm tier, so an agent's call raises
+  // the host's dialog with the exact change (`resolveMcpConfirmPreviewTarget`),
+  // or rides the person's own grant or skip preference, never the model's say.
+  // Palette-hidden: Settings edits presets directly, and the palette has no way
+  // to ask for the fields. Closed to plugins, like `agentSettings.set`.
+  actions.set("agent.createPreset", () => ({
+    id: "agent.createPreset",
+    title: "Create launch preset",
+    description:
+      "Save a new user launch preset for an agent: a named set of env vars, flags and modes picked at launch. The user approves the exact preset first; values Daintree would drop at launch are refused. It doesn't become the agent's default. Returns its id.",
+    category: "agent",
+    kind: "command",
+    danger: "confirm",
+    dangerRationale: PRESET_WRITE_DANGER_RATIONALE,
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["preset", "profile", "env", "account", "add"],
+    palette: { mode: "hidden" },
+    argsSchema: AgentCreatePresetArgsSchema,
+    examples: [
+      {
+        args: {
+          agentId: "codex",
+          name: "Work account",
+          env: { CODEX_HOME: "/Users/me/.codex-work" },
+        },
+        description: "A Codex preset that keeps its own login and history",
+      },
+    ],
+    resultSchema: PresetWriteResultSchema,
+    run: (args: unknown, ctx: ActionContext) =>
+      runAgentAction("agent.createPreset", args, ctx, callbacks),
+  }));
+
+  actions.set("agent.updatePreset", () => ({
+    id: "agent.updatePreset",
+    title: "Edit launch preset",
+    description:
+      'Change one of the user\'s own launch presets in place, after the user approves the exact change. Pass only what changes: envSet and envUnset touch only the named env vars; an empty value or "inherit" clears a field. Repository, CCR and built-in presets are read-only.',
+    category: "agent",
+    kind: "command",
+    danger: "confirm",
+    dangerRationale: PRESET_WRITE_DANGER_RATIONALE,
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["preset", "profile", "env", "account", "edit", "rename"],
+    palette: { mode: "hidden" },
+    argsSchema: AgentUpdatePresetArgsSchema,
+    resultSchema: PresetWriteResultSchema,
+    run: (args: unknown, ctx: ActionContext) =>
+      runAgentAction("agent.updatePreset", args, ctx, callbacks),
+  }));
+
+  actions.set("agent.deletePreset", () => ({
+    id: "agent.deletePreset",
+    title: "Remove launch preset",
+    description:
+      "Remove one of the user's own launch presets for good, after the user approves it. If it was the agent's default preset, the default is cleared. Repository, CCR and built-in presets are read-only.",
+    category: "agent",
+    kind: "command",
+    danger: "confirm",
+    dangerRationale:
+      "Removes the preset for good. Launches that picked it, as a default included, go back to the agent's own settings.",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["preset", "profile", "remove", "delete"],
+    palette: { mode: "hidden" },
+    argsSchema: AgentDeletePresetArgsSchema,
+    resultSchema: PresetWriteResultSchema.extend({
+      agentDefaultCleared: z
+        .boolean()
+        .describe("It was the agent's default preset, so the agent now has none."),
+    }),
+    run: (args: unknown, ctx: ActionContext) =>
+      runAgentAction("agent.deletePreset", args, ctx, callbacks),
   }));
 
   actions.set("agent.listModels", () => ({

@@ -159,7 +159,6 @@ describe("writeInRepoSettings", () => {
     devServerDismissed: true,
     devServerAutoDetected: true,
     cloudSyncWarningDismissed: true,
-    commandOverrides: [{ commandId: "git.push", disabled: true }],
     gitInitDefaults: { createInitialCommit: false },
     preferredEditor: { id: "vscode" },
     preferredImageViewer: { mode: "os" },

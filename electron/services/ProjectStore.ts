@@ -42,6 +42,13 @@ import { ProjectSettingsManager } from "./ProjectSettingsManager.js";
 import { ProjectStateManager, type ProjectStateReadResult } from "./ProjectStateManager.js";
 import { invalidatePrefetchCache } from "./prefetchHydrateCache.js";
 import { ProjectFileStore } from "./ProjectFileStore.js";
+import { ScheduleStore } from "./ScheduleStore.js";
+import { events } from "./events.js";
+import { cancelScheduledLaunches } from "./scheduledRuns/scheduledRunAdmission.js";
+import {
+  runWhenClosedWriteIssues,
+  startWhenClosedWriteIssue,
+} from "./scheduledRuns/scheduleOsJobContext.js";
 import { ProjectRecipeSynchronizer } from "./ProjectRecipeSynchronizer.js";
 import type {
   CopyTreeHistoryAppendInput,
@@ -61,9 +68,21 @@ import { rewriteProjectStatePaths } from "./projectPathStateRewrite.js";
 import { rewriteAgentSessionPathsForProject } from "./pty/agentSessionHistory.js";
 import { getPendingHelpHibernationStore } from "./PendingHelpHibernationStore.js";
 import { repairMovedSubmodulePaths } from "./git/submodulePathRepair.js";
+import { readProjectGroups } from "./projectGroupsDocument.js";
 
 export { DEFAULT_PROJECT_EMOJI } from "../../shared/utils/projectEmoji.js";
 import { DEFAULT_PROJECT_EMOJI } from "../../shared/utils/projectEmoji.js";
+
+/**
+ * The group a creation dialog chose, while that group still exists. Called
+ * with no await between it and the insert it feeds, so a group deleted while
+ * the dialog was open, or during the add's own awaits, files the new project
+ * nowhere rather than under an id no group carries.
+ */
+function resolveCreationGroupId(candidate: string | undefined): string | undefined {
+  if (!candidate) return undefined;
+  return readProjectGroups().some((group) => group.id === candidate) ? candidate : undefined;
+}
 
 /** A fresh project (one cloned from another machine) asked for a folder a project is registered at. */
 function freshFolderTaken(): AppError {
@@ -186,6 +205,8 @@ export class ProjectStore {
   private settingsManager: ProjectSettingsManager;
   private stateManager: ProjectStateManager;
   private fileStore: ProjectFileStore;
+  /** Each project's schedules (#15975), kept on this machine only. */
+  readonly schedules: ScheduleStore;
   private globalFileStore: GlobalFileStore;
   private identityFiles: ProjectIdentityFiles;
 
@@ -200,6 +221,12 @@ export class ProjectStore {
   // begin/endRelocationRewrite.
   private relocationRewrites = new Map<string, { oldPath: string; newPath: string }>();
 
+  private statePersistedListeners = new Set<
+    (workspaceId: string, state: ProjectState | null) => void
+  >();
+
+  private registryListeners = new Set<() => void>();
+
   constructor() {
     this.userDataDir = app.getPath("userData");
     this.projectsConfigDir = path.join(this.userDataDir, "projects");
@@ -207,6 +234,19 @@ export class ProjectStore {
     this.settingsManager = new ProjectSettingsManager(this.projectsConfigDir, store);
     this.stateManager = new ProjectStateManager(this.projectsConfigDir);
     this.fileStore = new ProjectFileStore(this.projectsConfigDir);
+    this.schedules = new ScheduleStore(
+      this.projectsConfigDir,
+      (projectId) => this.getProjectById(projectId) !== null,
+      Date.now,
+      async (_projectId, scheduleId) => {
+        // A launch still waiting to spawn would register a run whose history is going.
+        cancelScheduledLaunches({ scheduleId });
+        const { getScheduledRunRecorder } = await import("./scheduledRuns/index.js");
+        (await getScheduledRunRecorder())?.deleteForSchedule(scheduleId);
+      },
+      runWhenClosedWriteIssues,
+      startWhenClosedWriteIssue
+    );
     this.globalFileStore = new GlobalFileStore(this.globalConfigDir);
     this.identityFiles = new ProjectIdentityFiles();
     this.recipeSynchronizer = new ProjectRecipeSynchronizer(this.identityFiles, this.fileStore);
@@ -216,9 +256,60 @@ export class ProjectStore {
     // The slot holds one observer, and scratch state comes through this same
     // manager — so this one routes both kinds by id shape (#11821) rather than
     // a second observer replacing this one.
-    this.stateManager.setStatePersistedObserver((workspaceId, state) =>
-      this.persistResumableAgentCount(workspaceId, state)
-    );
+    this.stateManager.setStatePersistedObserver((workspaceId, state) => {
+      this.persistResumableAgentCount(workspaceId, state);
+      this.notifyStatePersistedListeners(workspaceId, state);
+    });
+  }
+
+  /**
+   * Hear every workspace state that lands on disk, `null` when it is cleared.
+   * The state is the merged result a save actually wrote, never the array one
+   * renderer sent. Listeners must not mutate it or throw back into the save.
+   */
+  onProjectStatePersisted(
+    listener: (workspaceId: string, state: ProjectState | null) => void
+  ): () => void {
+    this.statePersistedListeners.add(listener);
+    return () => {
+      this.statePersistedListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Hear every change to which projects are registered here and where: one
+   * added or removed, or one's path, name or git backing changed. Status,
+   * ranking and counts never fire it. Listeners must not throw back into the
+   * write.
+   */
+  onProjectRegistryChanged(listener: () => void): () => void {
+    this.registryListeners.add(listener);
+    return () => {
+      this.registryListeners.delete(listener);
+    };
+  }
+
+  private notifyRegistryListeners(): void {
+    for (const listener of [...this.registryListeners]) {
+      try {
+        listener();
+      } catch (error) {
+        console.error("[ProjectStore] Registry listener failed:", error);
+      }
+    }
+  }
+
+  private notifyStatePersistedListeners(workspaceId: string, state: ProjectState | null): void {
+    for (const listener of [...this.statePersistedListeners]) {
+      try {
+        listener(workspaceId, state);
+      } catch (error) {
+        console.error(
+          `[ProjectStore] State-persisted listener failed for workspace ${workspaceId}:`,
+          error
+        );
+      }
+    }
   }
 
   /**
@@ -530,11 +621,12 @@ export class ProjectStore {
   }
 
   /**
-   * `options.identity` is the name/emoji chosen in a creation dialog. It is
-   * consulted only where a brand-new row is minted below — every earlier return
+   * `options.identity` is the name/emoji chosen in a creation dialog, and
+   * `options.groupId` the group it files the project under. Both are consulted
+   * only where a brand-new row is minted below — every earlier return
    * (already-registered path, adopted move, lost insert race) keeps the
-   * identity it already has, so re-adding a folder can never rename it.
-   * In-repo `.daintree/project.json` still wins field-wise.
+   * identity and membership it already has, so re-adding a folder can never
+   * rename or refile it. In-repo `.daintree/project.json` still wins field-wise.
    *
    * `options.gitBacked === false` adopts a folder that has no repository at
    * all; anything else keeps the strict git-root requirement. The two options
@@ -580,7 +672,7 @@ export class ProjectStore {
             return this.touchExistingProject(existing, { gitBacked: false });
           }
         } else if (options?.gitBacked === false) {
-          return this.insertLightweightProject(lightweight);
+          return this.insertLightweightProject(lightweight, options.groupId);
         }
       }
 
@@ -598,18 +690,16 @@ export class ProjectStore {
 
     // The registered project is the git ROOT, which is not always the path the
     // caller handed us: creating `/repo/child` inside an existing repository
-    // resolves back to `/repo`. Identity chosen for the child must not be
-    // stamped onto the ancestor, so it only survives when the two agree.
+    // resolves back to `/repo`. Identity and group chosen for the child must not
+    // be stamped onto the ancestor, so they only survive when the two agree.
     //
     // Both sides are canonicalized the same way (`normalizedPath` already comes
     // from a realpath'd git root). A lexical-only comparison here would treat a
     // symlinked path, a trailing separator, or different casing on a
     // case-insensitive volume as a mismatch and silently discard an identity
     // the user actually chose.
-    const mintIdentity =
-      (await this.canonicalizeForCompare(projectPath)) === normalizedPath
-        ? creationIdentity
-        : undefined;
+    const mintsRequestedPath = (await this.canonicalizeForCompare(projectPath)) === normalizedPath;
+    const mintIdentity = mintsRequestedPath ? creationIdentity : undefined;
 
     const existing = await this.getProjectByPath(normalizedPath);
     // A folder from another machine never takes over a project row: that
@@ -644,6 +734,7 @@ export class ProjectStore {
       return raced;
     }
 
+    const groupId = mintsRequestedPath ? resolveCreationGroupId(options?.groupId) : undefined;
     const now = Date.now();
     const project: Project = {
       id: options?.fresh
@@ -658,6 +749,7 @@ export class ProjectStore {
       lastAccessedAt: now,
       ...(inRepo.color ? { color: inRepo.color } : {}),
       ...(inRepo.found ? { daintreeConfigPresent: true } : {}),
+      ...(groupId ? { groupId } : {}),
     };
 
     const db = getSharedDb();
@@ -674,8 +766,10 @@ export class ProjectStore {
         inRepoSettings: project.inRepoSettings ?? null,
         frecencyScore: FRECENCY_COLD_START,
         lastAccessedAt: now,
+        groupId: project.groupId ?? null,
       })
       .run();
+    this.notifyRegistryListeners();
 
     return project;
   }
@@ -745,7 +839,8 @@ export class ProjectStore {
    * {@link tryAdoptMovedProject}, take over that project's id and inherit its
    * panels, settings and Assistant history.
    */
-  private insertLightweightProject(normalizedPath: string): Project {
+  private insertLightweightProject(normalizedPath: string, groupCandidate?: string): Project {
+    const groupId = resolveCreationGroupId(groupCandidate);
     const now = Date.now();
     const project: Project = {
       id: mintProjectId(normalizedPath, (candidate) => this.isProjectIdTaken(candidate)),
@@ -757,6 +852,7 @@ export class ProjectStore {
       frecencyScore: FRECENCY_COLD_START,
       lastAccessedAt: now,
       gitBacked: false,
+      ...(groupId ? { groupId } : {}),
     };
 
     getSharedDb()
@@ -771,8 +867,10 @@ export class ProjectStore {
         frecencyScore: FRECENCY_COLD_START,
         lastAccessedAt: now,
         gitBacked: false,
+        groupId: project.groupId ?? null,
       })
       .run();
+    this.notifyRegistryListeners();
 
     return project;
   }
@@ -883,7 +981,24 @@ export class ProjectStore {
     const project = this.getProjectById(projectId);
 
     const db = getSharedDb();
-    db.delete(projectsTable).where(eq(projectsTable.id, projectId)).run();
+    // A project's schedules live in its state directory, removed below, so the
+    // history of their runs goes with the project row.
+    const { removed, runsRemoved } = db.transaction(
+      (tx) => {
+        const result = tx.delete(projectsTable).where(eq(projectsTable.id, projectId)).run();
+        const runs = tx.run(sql`DELETE FROM scheduled_runs WHERE project_id = ${projectId}`);
+        tx.run(sql`DELETE FROM schedule_evaluation_points WHERE project_id = ${projectId}`);
+        return { removed: result, runsRemoved: runs.changes };
+      },
+      { behavior: "immediate" }
+    );
+    if (removed.changes > 0) this.notifyRegistryListeners();
+    // A launch still waiting to spawn would register a run for a project that's gone.
+    cancelScheduledLaunches({ projectId });
+    // Those runs, open ones included, will never end now.
+    if (runsRemoved > 0) {
+      events.emit("scheduled-runs:deleted", { projectId, scheduleId: null, timestamp: Date.now() });
+    }
 
     if (project) {
       this.recipeSynchronizer.pruneInRepoRecipeHashes(project.path);
@@ -895,12 +1010,15 @@ export class ProjectStore {
       logError(`Failed to remove secure env vars for ${projectId}`, error);
     }
 
-    if (existsSync(stateDir)) {
-      try {
-        await fs.rm(stateDir, { recursive: true, force: true });
-      } catch (error) {
-        logError(`Failed to remove state directory for ${projectId}`, error);
-      }
+    // The directory, schedules and all, goes in a schedule turn after the row:
+    // an edit already past its check finishes first, every later one refuses,
+    // and one for the same project added straight back waits until it's gone.
+    try {
+      await this.schedules.removeProject(projectId, async () => {
+        if (existsSync(stateDir)) await fs.rm(stateDir, { recursive: true, force: true });
+      });
+    } catch (error) {
+      logError(`Failed to remove state directory for ${projectId}`, error);
     }
     this.stateManager.invalidateProjectStateCache(projectId);
 
@@ -975,7 +1093,14 @@ export class ProjectStore {
     if ("groupId" in updates) set.groupId = updates.groupId ?? null;
 
     if (Object.keys(set).length > 0) {
-      db.update(projectsTable).set(set).where(eq(projectsTable.id, projectId)).run();
+      const updated = db
+        .update(projectsTable)
+        .set(set)
+        .where(eq(projectsTable.id, projectId))
+        .run();
+      if (updated.changes > 0 && ("path" in set || "name" in set || "gitBacked" in set)) {
+        this.notifyRegistryListeners();
+      }
     }
 
     const row = db.select().from(projectsTable).where(eq(projectsTable.id, projectId)).get();
@@ -1752,13 +1877,21 @@ export class ProjectStore {
     return this.settingsManager.addBrowserAllowedHost(projectId, hostname);
   }
 
+  /**
+   * The settings `projectId`'s overrides make of the globals. Named by the
+   * caller, never read off `currentProjectId`: that names whichever window
+   * switched last, not the project a notification is about (#15635). `null`
+   * is the globals alone.
+   */
   getEffectiveNotificationSettings(
+    projectId: string | null,
     globalChoices?: Partial<NotificationSettings>
   ): NotificationSettings {
-    return this.settingsManager.getEffectiveNotificationSettings(
-      this.getCurrentProjectId(),
-      globalChoices
-    );
+    return this.settingsManager.getEffectiveNotificationSettings(projectId, globalChoices);
+  }
+
+  async loadNotificationOverrides(projectId: string): Promise<void> {
+    return this.settingsManager.loadNotificationOverrides(projectId);
   }
 
   async isProjectNotificationsMuted(projectId: string): Promise<boolean> {

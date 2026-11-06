@@ -11,6 +11,7 @@ import {
 } from "react";
 import { CircleDot, GitPullRequest, GitCommit, Clock, TriangleAlert } from "lucide-react";
 import { PRDetectionPausedIndicator } from "./PRDetectionPausedIndicator";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { actionService } from "@/services/ActionService";
@@ -37,6 +38,7 @@ import {
   formatExactCount,
   formatForgeBadgeCount,
   resolveForgeDisplayCount,
+  formatExactCountNoun,
 } from "./forgeStatsCountDisplay";
 import {
   formatRateLimitCountdown,
@@ -45,6 +47,7 @@ import {
 } from "./RateLimitDetails";
 import { forgeNotConnectedLabel, useRemoteHostName } from "@/hooks/useSettingsOwner";
 import { ForgeStatPill } from "./ForgeStatPill";
+import { ForgeStatsPlaceholder } from "./ForgeStatsPlaceholder";
 import { LocalCommitsDropdown } from "./LocalCommitsDropdown";
 
 // Hover-to-prefetch tuning. The prefetch fires immediately on pointerenter
@@ -113,12 +116,18 @@ export interface ForgeStatsHandle {
 
 interface ForgeStatsToolbarButtonProps {
   currentProject: Project | null;
+  /**
+   * Whether the capsule is showing its "data unavailable" mark. The capsule
+   * stays mounted while evicted, so this is how its warning reaches the `…`
+   * trigger that hides it.
+   */
+  onDataUnavailableChange?: (unavailable: boolean) => void;
   "data-toolbar-item"?: string;
 }
 
 export const ForgeStatsToolbarButton = memo(
   forwardRef<ForgeStatsHandle, ForgeStatsToolbarButtonProps>(function ForgeStatsToolbarButton(
-    { currentProject },
+    { currentProject, onDataUnavailableChange },
     ref
   ) {
     const {
@@ -128,6 +137,7 @@ export const ForgeStatsToolbarButton = memo(
       isValidating: statsValidating,
       errorSeverity,
       isTokenError,
+      sharedCounts,
       refresh: refreshStats,
       lastUpdated,
       rateLimitResetAt,
@@ -325,18 +335,21 @@ export const ForgeStatsToolbarButton = memo(
     // unconditionally once set, freezing the badge until the dropdown reopened
     // even when a fresher poll had landed. Stays separate from the numeric
     // `issueCount` / `prCount` so the digit-pulse delta detection keeps
-    // comparing raw totals.
+    // comparing raw totals. While the counts are the Shell's shared record
+    // (#15546), every view of the repository shows that record: a dropdown's
+    // own total would set this view apart. A fresh list fetch still reaches the
+    // badge, through the stats refresh it triggers and the record it updates.
     const issueDisplayCount: number | string | null = resolveForgeDisplayCount(
       issueCount,
       issueCountRefreshedAt,
-      issueListCount,
+      sharedCounts ? null : issueListCount,
       issueListHasMore,
       issueListTimestamp
     );
     const prDisplayCount: number | string | null = resolveForgeDisplayCount(
       prCount,
       prCountRefreshedAt,
-      prListCount,
+      sharedCounts ? null : prListCount,
       prListHasMore,
       prListTimestamp
     );
@@ -399,13 +412,18 @@ export const ForgeStatsToolbarButton = memo(
     // clipped any indicator off the right edge — and a clipped element can't
     // receive pointer events, which is why the rate-limit details tooltip
     // stopped opening on hover.
-    // Same condition as the stripe's error state (`getForgeIndicatorStatus`):
-    // the stripe alone said "failing" in colour only, so a persistent failure
-    // also gets a glyph slot carrying the message in its tooltip.
+    // Same condition as the indicator's error state (`getForgeIndicatorStatus`),
+    // which announces the failure but no longer paints it: this warning glyph,
+    // with the message in its tooltip, is the one visible mark.
     const persistentErrorActive =
       errorSeverity === "persistent" && !isTokenError && !rateLimitActive && !statsLoading;
+    useEffect(() => {
+      onDataUnavailableChange?.(persistentErrorActive);
+    }, [onDataUnavailableChange, persistentErrorActive]);
+    useEffect(() => () => onDataUnavailableChange?.(false), [onDataUnavailableChange]);
     const trailingIndicatorCount =
-      (rateLimitActive ? 1 : 0) + (prCircuitTripped ? 1 : 0) + (persistentErrorActive ? 1 : 0);
+      (rateLimitActive ? 1 : 0) +
+      (persistentErrorActive || (prCircuitTripped && stats != null) ? 1 : 0);
     // Commits-only mode keeps a single pill at its usual one-third share so
     // the segment doesn't stretch to the full three-pill budget. When the
     // widest displayed count exceeds the per-pill character budget, every
@@ -1012,7 +1030,11 @@ export const ForgeStatsToolbarButton = memo(
       prCircuitTripped ? "PR detection paused" : null,
     ]);
 
-    if (!currentProject || providerLoading) return null;
+    if (!currentProject) return null;
+    // Until the provider answers, the slot keeps the full pill's width: a forge
+    // provider's pill then fills it without moving the row, and commits-only
+    // only ever shrinks it.
+    if (providerLoading) return <ForgeStatsPlaceholder />;
 
     // Every right-click target in the control owns its menu, the indicators
     // beside the pills included. One menu wrapping the whole control would also
@@ -1028,7 +1050,7 @@ export const ForgeStatsToolbarButton = memo(
 
     return (
       <div
-        className="toolbar-stats app-no-drag relative mr-2 flex h-8 shrink-0 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,var(--radius-md))] border transition-[width] duration-150 ease-out motion-reduce:transition-none"
+        className="toolbar-stats app-no-drag relative mx-1 flex h-8 shrink-0 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,var(--radius-md))] border transition-[width] duration-150 ease-out motion-reduce:transition-none"
         style={{ width: statsContainerWidth }}
       >
         {forgeMode ? (
@@ -1042,14 +1064,14 @@ export const ForgeStatsToolbarButton = memo(
             ariaLabel={
               isTokenError
                 ? tokenMissingLabel("issues")
-                : `${formatExactCount(issueDisplayCount)} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}${issuesStatusSuffix}`
+                : `${formatExactCountNoun(issueDisplayCount, "open issue", "open issues")}${freshnessSuffix(freshnessLevel, lastUpdated, now)}${issuesStatusSuffix}`
             }
             tooltipContent={
               isTokenError
                 ? tokenMissingLabel("issues")
                 : freshnessLevel === "fresh"
                   ? `Browse ${providerName} issues${exactSuffix(issueDisplayCount, "open")}${issuesStatusSuffix}`
-                  : `${formatExactCount(issueDisplayCount)} open issues${freshnessSuffix(freshnessLevel, lastUpdated, now)}${issuesStatusSuffix}`
+                  : `${formatExactCountNoun(issueDisplayCount, "open issue", "open issues")}${freshnessSuffix(freshnessLevel, lastUpdated, now)}${issuesStatusSuffix}`
             }
             onContextMenuOpenChange={handleStatsMenuOpenChange}
             contextMenuContent={
@@ -1064,7 +1086,13 @@ export const ForgeStatsToolbarButton = memo(
             iconClassName="text-pr-open"
             tooltipSuppressed={tokenCalloutOpen}
             ariaDescribedBy={tokenCalloutOpen ? tokenCalloutId : undefined}
-            tone={isTokenError ? "unavailable" : issueDisplayCount === 0 ? "quiet" : "default"}
+            tone={
+              isTokenError || issueDisplayCount === null
+                ? "unavailable"
+                : issueDisplayCount === 0
+                  ? "quiet"
+                  : "default"
+            }
             dropdownContent={
               IssuesDropdownView && issuesProviderId ? (
                 <IssuesDropdownView
@@ -1075,6 +1103,7 @@ export const ForgeStatsToolbarButton = memo(
                   initialCount={stats?.issueCount}
                   onClose={() => {
                     setIssuesOpen(false);
+                    armTooltipFocusSuppression();
                     issuesButtonRef.current?.focus();
                   }}
                   onFreshFetch={handleListFreshFetch}
@@ -1120,6 +1149,7 @@ export const ForgeStatsToolbarButton = memo(
             onOpenChange={(open) => {
               setIssuesOpen(open);
               if (!open) {
+                armTooltipFocusSuppression();
                 issuesButtonRef.current?.focus();
               }
             }}
@@ -1145,14 +1175,14 @@ export const ForgeStatsToolbarButton = memo(
             ariaLabel={
               isTokenError
                 ? tokenMissingLabel("pull requests")
-                : `${formatExactCount(prDisplayCount)} open pull requests${freshnessSuffix(freshnessLevel, lastUpdated, now)}${prsStatusSuffix}`
+                : `${formatExactCountNoun(prDisplayCount, "open pull request", "open pull requests")}${freshnessSuffix(freshnessLevel, lastUpdated, now)}${prsStatusSuffix}`
             }
             tooltipContent={
               isTokenError
                 ? tokenMissingLabel("pull requests")
                 : freshnessLevel === "fresh"
                   ? `Browse ${providerName} pull requests${exactSuffix(prDisplayCount, "open")}${prsStatusSuffix}`
-                  : `${formatExactCount(prDisplayCount)} open PRs${freshnessSuffix(freshnessLevel, lastUpdated, now)}${prsStatusSuffix}`
+                  : `${formatExactCountNoun(prDisplayCount, "open PR", "open PRs")}${freshnessSuffix(freshnessLevel, lastUpdated, now)}${prsStatusSuffix}`
             }
             onContextMenuOpenChange={handleStatsMenuOpenChange}
             contextMenuContent={
@@ -1165,7 +1195,13 @@ export const ForgeStatsToolbarButton = memo(
             }
             icon={GitPullRequest}
             iconClassName="text-pr-merged"
-            tone={isTokenError ? "unavailable" : prDisplayCount === 0 ? "quiet" : "default"}
+            tone={
+              isTokenError || prDisplayCount === null
+                ? "unavailable"
+                : prDisplayCount === 0
+                  ? "quiet"
+                  : "default"
+            }
             dropdownContent={
               DropdownView && providerId ? (
                 <DropdownView
@@ -1176,6 +1212,7 @@ export const ForgeStatsToolbarButton = memo(
                   initialCount={stats?.prCount}
                   onClose={() => {
                     setPrsOpen(false);
+                    armTooltipFocusSuppression();
                     prsButtonRef.current?.focus();
                   }}
                   onFreshFetch={handleListFreshFetch}
@@ -1217,6 +1254,7 @@ export const ForgeStatsToolbarButton = memo(
             onOpenChange={(open) => {
               setPrsOpen(open);
               if (!open) {
+                armTooltipFocusSuppression();
                 prsButtonRef.current?.focus();
               }
             }}
@@ -1237,11 +1275,11 @@ export const ForgeStatsToolbarButton = memo(
           count={commitCount}
           animKey={commitAnimKey}
           testId="forge-stat-pill-commits"
-          ariaLabel={`${formatExactCount(commitCount)} commits${freshnessSuffix(commitFreshnessLevel, lastUpdated, now)}`}
+          ariaLabel={`${formatExactCountNoun(commitCount, "commit")}${freshnessSuffix(commitFreshnessLevel, lastUpdated, now)}`}
           tooltipContent={
             commitFreshnessLevel === "fresh"
               ? `Browse git commits${exactSuffix(commitCount)}`
-              : `${formatExactCount(commitCount)} commits${freshnessSuffix(commitFreshnessLevel, lastUpdated, now)}`
+              : `${formatExactCountNoun(commitCount, "commit")}${freshnessSuffix(commitFreshnessLevel, lastUpdated, now)}`
           }
           onContextMenuOpenChange={handleStatsMenuOpenChange}
           contextMenuContent={
@@ -1255,7 +1293,16 @@ export const ForgeStatsToolbarButton = memo(
             />
           }
           icon={GitCommit}
-          tone={stats?.commitCount === 0 ? "quiet" : "default"}
+          // Local and neutral: rests on secondary ink like every quiet glyph
+          // on the strip; the count beside it is what says it is live.
+          iconClassName="text-text-secondary"
+          tone={
+            stats?.commitCount == null
+              ? "unavailable"
+              : stats.commitCount === 0
+                ? "quiet"
+                : "default"
+          }
           dropdownContent={
             DropdownView && providerId ? (
               <DropdownView
@@ -1268,6 +1315,7 @@ export const ForgeStatsToolbarButton = memo(
                 initialCount={stats?.commitCount}
                 onClose={() => {
                   setCommitsOpen(false);
+                  armTooltipFocusSuppression();
                   commitsButtonRef.current?.focus();
                 }}
               />
@@ -1282,6 +1330,7 @@ export const ForgeStatsToolbarButton = memo(
                 initialCount={stats?.commitCount}
                 onClose={() => {
                   setCommitsOpen(false);
+                  armTooltipFocusSuppression();
                   commitsButtonRef.current?.focus();
                 }}
               />
@@ -1294,7 +1343,10 @@ export const ForgeStatsToolbarButton = memo(
           }}
           onOpenChange={(open) => {
             setCommitsOpen(open);
-            if (!open) commitsButtonRef.current?.focus();
+            if (!open) {
+              armTooltipFocusSuppression();
+              commitsButtonRef.current?.focus();
+            }
           }}
         />
         <ForgeStatusIndicator status={getForgeIndicatorStatus()} error={statsError ?? undefined} />
@@ -1363,14 +1415,27 @@ export const ForgeStatsToolbarButton = memo(
               </ContextMenuContent>
             </ContextMenu>
             <TooltipContent side="bottom">
-              {`${providerName} data unavailable${statsError ? `: ${statsError}` : ""}`}
+              <span className="flex flex-col gap-0.5">
+                <span>{`${providerName} data unavailable${statsError ? `: ${statsError}` : ""}`}</span>
+                {prCircuitTripped && (
+                  <span className="text-text-secondary">PR detection paused — retrying</span>
+                )}
+              </span>
             </TooltipContent>
           </Tooltip>
         ) : null}
-        <PRDetectionPausedIndicator
-          contextMenuContent={chromeMenuContent}
-          onContextMenuOpenChange={handleStatsMenuOpenChange}
-        />
+        {/* One fault, one segment: an unreachable forge trips both, and two
+            trailing glyphs for one thing the user can't act on read as two
+            problems. The data-unavailable segment names the pause too. */}
+        {/* Only over data the capsule has: before the first fetch settles the
+            dashes are the loading state, and the paused glyph must not stand
+            in for the unavailable one. */}
+        {!persistentErrorActive && stats != null && (
+          <PRDetectionPausedIndicator
+            contextMenuContent={chromeMenuContent}
+            onContextMenuOpenChange={handleStatsMenuOpenChange}
+          />
+        )}
         {forgeMode && providerId && tokenErrorKind && tokenErrorKind !== "not-configured" ? (
           <ForgeTokenCallout
             id={tokenCalloutId}

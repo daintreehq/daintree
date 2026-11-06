@@ -5,6 +5,18 @@ import { AppError } from "../../utils/errorTypes.js";
 import type { LinkSession } from "../link/session.js";
 import type { TransferSource } from "../link/transfer.js";
 import {
+  classifyFolderUploadCallError,
+  FOLDER_UPLOAD_SINK_PREFIX,
+  FolderUploadCancelResultSchema,
+  FolderUploadLinkMethod,
+  FolderUploadPrepareResultSchema,
+  FolderUploadStatusSchema,
+  type FolderUploadCancelResult,
+  type FolderUploadPreparePayload,
+  type FolderUploadPrepareResult,
+  type FolderUploadStatus,
+} from "./folderUploadLinkMethods.js";
+import {
   UPLOAD_SINK_PREFIX,
   UploadLinkMethod,
   UploadPrepareResultSchema,
@@ -36,6 +48,18 @@ interface HostLink {
 }
 
 const PREPARE_TIMEOUT_MS = 60_000;
+/** Longer than the host waits for a cancelled folder upload to wind down before it answers. */
+const FOLDER_CANCEL_TIMEOUT_MS = 45_000;
+const FOLDER_STATUS_TIMEOUT_MS = 30_000;
+/** What the archive is called on the link: never the folder's own name. */
+const FOLDER_ARCHIVE_NAME = "folder.zip";
+
+/** Where a folder upload's calls go, and how they are told apart in messages. */
+export interface FolderCallOptions {
+  webContentsId: number;
+  hostLabel: string;
+  signal?: AbortSignal;
+}
 
 export function notConnected(hostLabel: string): AppError {
   return new AppError({
@@ -127,6 +151,70 @@ function sendFailure(error: unknown, name: string, hostLabel: string): Error {
     userMessage: /checksum/i.test(error.message)
       ? `${name} was damaged on the way to ${hostLabel}. Try again.`
       : `Couldn't save ${name} on ${hostLabel}.`,
+  });
+}
+
+/**
+ * A failed folder-upload call or transfer, restated without anything the
+ * host or the link said: errors are logged whole, and a folder's must never
+ * name it. The code is what decides whether the send is resumed.
+ */
+function folderFailure(error: unknown, hostLabel: string): AppError {
+  switch (errorCode(error)) {
+    case "CANCELLED":
+      return new AppError({ code: "CANCELLED", message: "Folder upload cancelled" });
+    case "HOST_DISCONNECTED":
+      return notConnected(hostLabel);
+    case "OUTCOME_UNKNOWN":
+      return folderOutcomeUnknown(hostLabel);
+    case "RATE_LIMITED":
+      return new AppError({
+        code: "RATE_LIMITED",
+        message: "The host is busy",
+        userMessage: `${hostLabel} is busy receiving other files. Try again in a moment.`,
+      });
+    case "DRIVEN_ELSEWHERE":
+      return new AppError({
+        code: "DRIVEN_ELSEWHERE",
+        message: "Another window drives this project",
+        userMessage: `Another window has control of this project on ${hostLabel}. Take control to send folders.`,
+      });
+  }
+  switch (classifyFolderUploadCallError(error)) {
+    case "unsupported":
+      return new AppError({
+        code: "UNSUPPORTED",
+        message: "The host does not take folder uploads",
+        userMessage: `Update Daintree on ${hostLabel} to send folders.`,
+      });
+    case "validation":
+      return new AppError({
+        code: "VALIDATION",
+        message: "The host refused the folder upload request",
+        userMessage: `Couldn't send the folder to ${hostLabel}.`,
+      });
+    case "other":
+      return new AppError({
+        code: "INTERNAL",
+        message: "The folder upload failed",
+        userMessage: `Couldn't send the folder to ${hostLabel}.`,
+      });
+  }
+}
+
+export function folderOutcomeUnknown(hostLabel: string): AppError {
+  return new AppError({
+    code: "OUTCOME_UNKNOWN",
+    message: "The folder upload's outcome is unknown",
+    userMessage: `The connection to ${hostLabel} dropped while the folder was being sent. Drop it again to be sure it arrived.`,
+  });
+}
+
+function unreadableAnswer(hostLabel: string): AppError {
+  return new AppError({
+    code: "INTERNAL",
+    message: "The host answered a folder upload call with an unusable reply",
+    userMessage: `Couldn't send the folder to ${hostLabel}.`,
   });
 }
 
@@ -296,5 +384,120 @@ export class ClientUploadTransport {
       });
     }
     return { hostPath: result.path, bytes: result.bytes, deduplicated: false };
+  }
+
+  /** The view's own endpoint on the host's current link, or HOST_DISCONNECTED. */
+  private folderLink(
+    hostId: HostId,
+    options: FolderCallOptions
+  ): { session: LinkSession; endpointId: string } {
+    if (options.signal?.aborted) {
+      throw new AppError({ code: "CANCELLED", message: "Folder upload cancelled" });
+    }
+    const session = this.hosts.get(hostId)?.session;
+    const endpointId = this.endpointFor(hostId, options.webContentsId);
+    if (!session || !session.isOpen || endpointId === null) throw notConnected(options.hostLabel);
+    return { session, endpointId };
+  }
+
+  private async folderCall<T>(
+    hostId: HostId,
+    method: string,
+    body: Record<string, unknown>,
+    parse: (answer: unknown) => { success: true; data: T } | { success: false },
+    options: FolderCallOptions & { timeoutMs: number }
+  ): Promise<{ answer: T; session: LinkSession }> {
+    const { session, endpointId } = this.folderLink(hostId, options);
+    let raw: unknown;
+    try {
+      raw = await session.call(
+        method,
+        { endpointId, ...body },
+        { timeoutMs: options.timeoutMs, signal: options.signal }
+      );
+    } catch (error) {
+      throw folderFailure(error, options.hostLabel);
+    }
+    const parsed = parse(raw);
+    if (!parsed.success) throw unreadableAnswer(options.hostLabel);
+    return { answer: parsed.data, session };
+  }
+
+  /**
+   * Admit a folder upload, or learn where this operation already is. The
+   * session it was asked on comes back with the answer, since a token is
+   * good only on the link it was issued on.
+   */
+  async prepareFolder(
+    hostId: HostId,
+    payload: Omit<FolderUploadPreparePayload, "endpointId">,
+    options: FolderCallOptions
+  ): Promise<{ result: FolderUploadPrepareResult; session: LinkSession }> {
+    const { answer, session } = await this.folderCall(
+      hostId,
+      FolderUploadLinkMethod.PREPARE,
+      { ...payload },
+      (raw) => FolderUploadPrepareResultSchema.safeParse(raw),
+      { ...options, timeoutMs: PREPARE_TIMEOUT_MS }
+    );
+    return { result: answer, session };
+  }
+
+  async folderStatus(
+    hostId: HostId,
+    opId: string,
+    options: FolderCallOptions
+  ): Promise<FolderUploadStatus> {
+    const { answer } = await this.folderCall(
+      hostId,
+      FolderUploadLinkMethod.STATUS,
+      { opId },
+      (raw) => FolderUploadStatusSchema.safeParse(raw),
+      { ...options, timeoutMs: FOLDER_STATUS_TIMEOUT_MS }
+    );
+    return answer;
+  }
+
+  async cancelFolder(
+    hostId: HostId,
+    opId: string,
+    options: FolderCallOptions
+  ): Promise<FolderUploadCancelResult> {
+    const { answer } = await this.folderCall(
+      hostId,
+      FolderUploadLinkMethod.CANCEL,
+      { opId },
+      (raw) => FolderUploadCancelResultSchema.safeParse(raw),
+      { ...options, timeoutMs: FOLDER_CANCEL_TIMEOUT_MS }
+    );
+    return answer;
+  }
+
+  /**
+   * Send a folder's archive to the token a prepare on `session` issued.
+   * Resolving says the host has the archive whole, never that the folder is
+   * in place: only a `done` status says that.
+   */
+  async sendFolderArchive(
+    session: LinkSession,
+    source: TransferSource,
+    token: string,
+    options: {
+      hostLabel: string;
+      signal?: AbortSignal;
+      onProgress?: (sentBytes: number, totalBytes: number) => void;
+    }
+  ): Promise<void> {
+    if (!session.isOpen) throw notConnected(options.hostLabel);
+    try {
+      await session.transfers.send(source, {
+        name: FOLDER_ARCHIVE_NAME,
+        destination: { kind: "path", path: `${FOLDER_UPLOAD_SINK_PREFIX}${token}` },
+        signal: options.signal,
+        onProgress: (progress) => options.onProgress?.(progress.bytes, progress.totalBytes),
+      });
+    } catch (error) {
+      throw folderFailure(error, options.hostLabel);
+    }
   }
 }

@@ -61,6 +61,20 @@ export function loadPipelineModules(): Promise<PipelineModules> {
   return modulesPromise;
 }
 
+type GitStatusModule = typeof import("../../../electron/utils/git");
+
+let gitStatusPromise: Promise<GitStatusModule> | null = null;
+
+/** The status utility itself, for scenarios that drive passes without a monitor. */
+export function loadGitStatusModule(): Promise<GitStatusModule> {
+  if (!gitStatusPromise) {
+    ensurePerfEnv();
+    installGitSpawnCounter();
+    gitStatusPromise = import("../../../electron/utils/git");
+  }
+  return gitStatusPromise;
+}
+
 type GitUtilsModule = typeof import("../../../electron/utils/gitUtils");
 
 let gitUtilsPromise: Promise<GitUtilsModule> | null = null;
@@ -101,6 +115,23 @@ export interface ProcessSpawnEvent {
 
 const spawnEvents: GitSpawnEvent[] = [];
 const processSpawnEvents: ProcessSpawnEvent[] = [];
+
+/** A git start as the product issued it: enough to replay or classify it. */
+export interface CapturedGitSpawn {
+  file: string;
+  /** argv including argv[0], exactly as handed to the OS. */
+  args: string[];
+  cwd: string | undefined;
+  /** `KEY=VALUE` pairs, or undefined when the child inherited this process's env. */
+  envPairs: string[] | undefined;
+}
+
+/**
+ * Open argv capture, or null. Opt-in and scoped because argv and environment
+ * are large: retaining them for every spawn of a long run would grow without
+ * bound, while the subcommand tally above is all most scenarios need.
+ */
+let argvCapture: CapturedGitSpawn[] | null = null;
 let counterInstalled = false;
 /** The wrapper this module installed, so a later re-patch is detectable. */
 let installedHook: unknown = null;
@@ -147,14 +178,73 @@ export function installGitSpawnCounter(): void {
     const atMs = performance.now();
     processSpawnEvents.push({ atMs, executable: baseName });
     if (isGitExecutable(baseName)) {
-      spawnEvents.push({
-        atMs,
-        subcommand: extractSubcommand(options?.args ?? [file]),
-      });
+      const subcommand = extractSubcommand(options?.args ?? [file]);
+      spawnEvents.push({ atMs, subcommand });
+      if (argvCapture) {
+        const raw = options as { cwd?: string; envPairs?: string[] };
+        argvCapture.push({
+          file,
+          args: [...(options?.args ?? [file])],
+          cwd: raw.cwd,
+          envPairs: raw.envPairs ? [...raw.envPairs] : undefined,
+        });
+      }
+      const result = original.call(this, options);
+      if (lifetimeRecorder) {
+        const lifetime: GitProcessLifetime = {
+          subcommand,
+          spawnedAtMs: atMs,
+          closedAtMs: null,
+          exitCode: null,
+        };
+        lifetimeRecorder.push(lifetime);
+        this.once("close", (code: number | null) => {
+          lifetime.closedAtMs = performance.now();
+          lifetime.exitCode = code;
+        });
+      }
+      return result;
     }
     return original.call(this, options);
   };
   installedHook = proto.spawn;
+}
+
+// --- Git process lifetimes ---------------------------------------------------
+
+export interface GitProcessLifetime {
+  subcommand: string;
+  spawnedAtMs: number;
+  /** performance.now() at the child's `close`, or null if it never closed. */
+  closedAtMs: number | null;
+  exitCode: number | null;
+}
+
+let lifetimeRecorder: GitProcessLifetime[] | null = null;
+
+/**
+ * Record when each git child started and closed while `body` runs.
+ *
+ * Lets a scenario split a cold search into the subprocess's lifetime and the
+ * service work that runs after its output arrives. Extends the installed
+ * wrapper rather than patching again, which `spawnObserverMisses` would read as
+ * a blind observer. The `close` listener is attached before the wrapper hands
+ * the child back, so it fires ahead of simple-git's own handler; a child that
+ * never closes leaves `closedAtMs` null for the caller to count as a miss.
+ */
+export async function recordGitProcessLifetimes(
+  body: () => Promise<void>
+): Promise<GitProcessLifetime[]> {
+  installGitSpawnCounter();
+  if (lifetimeRecorder) throw new Error("git process lifetimes are already being recorded");
+  const recorded: GitProcessLifetime[] = [];
+  lifetimeRecorder = recorded;
+  try {
+    await body();
+  } finally {
+    lifetimeRecorder = null;
+  }
+  return recorded;
 }
 
 // --- Observer self-validation ------------------------------------------------
@@ -246,6 +336,28 @@ export function gitSpawnsSince(mark: number): GitSpawnWindow {
     bySubcommand,
     lastAtMs: slice.length > 0 ? slice[slice.length - 1].atMs : null,
   };
+}
+
+/**
+ * Record the full argv of every git start until the returned function is
+ * called, which closes the window and hands back what it saw. One window at a
+ * time: opening a second discards the first's records.
+ */
+export function captureGitArgv(): () => CapturedGitSpawn[] {
+  installGitSpawnCounter();
+  const records: CapturedGitSpawn[] = [];
+  argvCapture = records;
+  return () => {
+    if (argvCapture === records) argvCapture = null;
+    return records;
+  };
+}
+
+/** Pathspecs of a `git diff --numstat` start, or null for any other start. */
+export function numstatPathspecs(spawn: CapturedGitSpawn): string[] | null {
+  if (extractSubcommand(spawn.args) !== "diff" || !spawn.args.includes("--numstat")) return null;
+  const separator = spawn.args.indexOf("--");
+  return separator === -1 ? [] : spawn.args.slice(separator + 1);
 }
 
 export interface ProcessSpawnWindow {

@@ -5,7 +5,8 @@ import { usePanelStore } from "@/store";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import type { BrowserHistory } from "@shared/types/browser";
-import { ContentPanel, type BasePanelProps } from "@/components/Panel";
+import { ContentPanel, type BasePanelProps, type TabInfo } from "@/components/Panel";
+import { useGridGroupAttention } from "@/components/Panel/gridGroupAttention";
 import { BrowserToolbar } from "../Browser/BrowserToolbar";
 import { InlineStatusBanner } from "../Terminal/InlineStatusBanner";
 import { DevPreviewStuckBanner, DevPreviewHmrDeadBanner } from "./DevPreviewBanners";
@@ -88,6 +89,11 @@ async function captureWebviewSessionStorage(
 export interface DevPreviewPaneProps extends BasePanelProps {
   cwd: string;
   worktreeId?: string;
+  tabs?: TabInfo[];
+  onTabClick?: (tabId: string) => void;
+  onTabClose?: (tabId: string) => void;
+  onTabRename?: (tabId: string, newTitle: string) => void;
+  onAddTab?: () => void;
 }
 
 export function DevPreviewPane({
@@ -106,6 +112,11 @@ export function DevPreviewPane({
   onRestore,
   showRestoreControl,
   isMultiPanelGrid,
+  tabs,
+  onTabClick,
+  onTabClose,
+  onTabRename,
+  onAddTab,
 }: DevPreviewPaneProps) {
   const webviewRef = useRef<Electron.WebviewTag>(null);
   const [webviewElement, setWebviewElement] = useState<Electron.WebviewTag | null>(null);
@@ -121,6 +132,13 @@ export function DevPreviewPane({
   const setDevPreviewScrollPosition = usePanelStore((state) => state.setDevPreviewScrollPosition);
   const setDevPreviewCommand = usePanelStore((state) => state.setDevPreviewCommand);
   const currentProjectId = useProjectStore((state) => state.currentProject?.id);
+  // A tab group's amber or red edge for a hidden tab outranks the preview's own
+  // frame, whose rules come later in the stylesheet and would paint over it.
+  const groupAttention = useGridGroupAttention(id, location);
+  const groupEdgeShown =
+    !isMaximized &&
+    isMultiPanelGrid !== false &&
+    (groupAttention?.ambientAgentState === "waiting" || groupAttention?.hiddenTabFailed === true);
   const projectSettings = useProjectSettingsStore((state) => state.settings);
   const projectEnv = projectSettings?.environmentVariables;
   const isDragging = useIsDragging();
@@ -930,14 +948,21 @@ export function DevPreviewPane({
       showRestoreControl={showRestoreControl}
       isMultiPanelGrid={isMultiPanelGrid}
       kind="dev-preview"
+      tabs={tabs}
+      onTabClick={onTabClick}
+      onTabClose={onTabClose}
+      onTabRename={onTabRename}
+      onAddTab={onAddTab}
       // An endpoint preview runs no dev command, so a script pick couldn't change it.
       headerContent={endpoint === undefined ? headerContent : null}
       className={
-        phaseLabel === "Compiling"
-          ? "panel-state-compiling"
-          : stuckTier >= 1
-            ? "panel-state-working"
-            : undefined
+        groupEdgeShown
+          ? undefined
+          : phaseLabel === "Compiling"
+            ? "panel-state-compiling"
+            : stuckTier >= 1
+              ? "panel-state-working"
+              : undefined
       }
     >
       <div className="flex flex-col h-full">

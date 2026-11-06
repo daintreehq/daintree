@@ -3,7 +3,7 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
 import { createFixtureRepo } from "../helpers/fixtures";
 import { openAndOnboardProject } from "../helpers/project";
-import { spawnTerminalAndVerify } from "../helpers/workflows";
+import { spawnTerminalAndVerify, switchWorktree } from "../helpers/workflows";
 import { runTerminalCommand, waitForTerminalTextIgnoringLineBreaks } from "../helpers/terminal";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../helpers/timeouts";
@@ -89,7 +89,7 @@ test.describe.serial("Core: Worktree Lifecycle", () => {
 
     await test.step("Click new worktree card and verify selection swaps from main", async () => {
       const newCard = window.locator(SEL.worktree.card(BRANCH));
-      await newCard.click({ position: { x: 10, y: 10 } });
+      await switchWorktree(window, BRANCH);
 
       await expect
         .poll(() => newCard.getAttribute("data-active"), {

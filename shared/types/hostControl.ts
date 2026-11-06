@@ -1,10 +1,13 @@
 import { z } from "zod";
+import type { WaitingReason } from "./agent.js";
 import { AgentDirectorySchema } from "./agentDirectory.js";
 import {
   ASSISTANT_HOST_SETTING_KEYS,
   AssistantHostSettingsPatchFieldsSchema,
 } from "./hostSettings.js";
 import { HostThrowawayCallSchema } from "./hostThrowaway.js";
+import { HostBringBackAnswerSchema } from "./hostWake.js";
+import { TerminalStatusEntrySchema, TerminalStatusResultSchema } from "./terminalStatusSchemas.js";
 
 /**
  * This Shell's reach into its Remote Hosts for its own assistants (#13493,
@@ -51,11 +54,32 @@ export const HOST_SETTINGS_TOOL = "host.settings";
 
 /**
  * One notice when a host's link or capacity is first observed meeting a
- * condition the caller named (#14463), so an assistant holding work for a host
- * can end its turn. Passive: it reads the link and summaries this Shell already
- * has, never dials, holds or wakes a host, and acts on nothing when it fires.
+ * condition the caller named (#14463), or when an agent on a host is first
+ * seen starting to wait for a reason the caller named (#16188), so an
+ * assistant holding work or covering for the person can end its turn.
+ * Passive: it reads the link, summaries and agent transitions this Shell
+ * already hears, never dials, holds or wakes a host, and acts on nothing when
+ * it fires.
  */
 export const HOST_WATCH_TOOL = "host.watch";
+
+/**
+ * Tries to bring back a host whose link is down (#16170): a wake sent first
+ * where one is set up and this machine is on the host's LAN, then a dial that
+ * starts Daintree there in Host mode where its Host mode is on. Bounded, one
+ * attempt per host that later calls join, and answered with what was
+ * observed. Never changes the host's settings or turns Host mode on.
+ */
+export const HOST_BRING_BACK_TOOL = "host.bringBack";
+
+/**
+ * `terminal.getStatus` for terminals in many projects on many hosts, in one
+ * answer (#16191). Each project is read as `host.call` would read it there,
+ * through the same gates, and every host is read at once. Screen text and
+ * handback messages are redacted before they leave the machine they were read
+ * on. Directory data stays without text: this is a read the caller asks for.
+ */
+export const HOST_STATUS_TOOL = "host.status";
 
 export const HOST_CONTROL_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_LIST_TOOL,
@@ -63,6 +87,8 @@ export const HOST_CONTROL_TOOL_IDS: ReadonlySet<string> = new Set([
   HOST_ENSURE_PROJECT_TOOL,
   HOST_SETTINGS_TOOL,
   HOST_WATCH_TOOL,
+  HOST_BRING_BACK_TOOL,
+  HOST_STATUS_TOOL,
 ]);
 
 /** Most projects `host.list` names for one host in one answer: a page. */
@@ -207,13 +233,13 @@ export const HostListEntrySchema = z.object({
       sampledAt: z.number(),
       receivedAt: z.number().nullable(),
       ageMs: z.number().nullable().describe("At most this old. Null: unknown."),
-      stale: z
-        .boolean()
-        .describe("Too old to trust: the live figures below are null. Not a zero reading."),
+      stale: z.boolean().describe("Untrusted: live figures are null, not zero."),
       staleReason: z
-        .enum(["age-limit", "clock-uncertain"])
+        .enum(["age-limit", "clock-uncertain", "earlier-link"])
         .nullable()
-        .describe("clock-uncertain: no age bound, and its timestamp is off this clock."),
+        .describe(
+          "clock-uncertain: no age bound, timestamp off this clock. earlier-link: prior link's."
+        ),
       platform: z.enum(["darwin", "linux"]),
       cpuPercent: z.number().nullable(),
       cpuLogicalCores: z.number().nullable(),
@@ -326,7 +352,7 @@ export const HostCallArgsSchema = z
   );
 export type HostCallArgs = z.infer<typeof HostCallArgsSchema>;
 
-/** A host tool's answer, as its own MCP result: structured when it has a schema, else its text. */
+/** A host tool's answer: structured when it is a JSON object, schema or not, else its text. */
 const hostCallInnerSchema = z.object({
   isError: z.boolean(),
   structured: z.record(z.string(), z.unknown()).nullable(),
@@ -516,6 +542,25 @@ export const HOST_WATCH_HISTORY_MAX = 16;
 export const HOST_WATCH_CONNECTION_SETTLE_MS = 5_000;
 /** Longest note a watch echoes back. */
 export const HOST_WATCH_NOTE_MAX = 160;
+/** Why an agent waits, as its host observed it; the order a watch names them in. */
+export const HOST_WATCH_WAITING_REASONS = [
+  "approval",
+  "question",
+  "prompt",
+  "error",
+] as const satisfies readonly WaitingReason[];
+/**
+ * What an agent watch hears when the caller names no reasons. `prompt` is the
+ * fallback and every finished turn, and input may not unblock `error`, so both
+ * are asked for by name.
+ */
+export const HOST_WATCH_DEFAULT_WAITING_REASONS = ["approval", "question"] as const;
+/** Agents one agent watch's notice names; the rest are counted. */
+export const HOST_WATCH_AGENTS_MAX = 8;
+/** Agents already waiting that one arm names; the rest are counted. */
+export const HOST_WATCH_MATCHES_MAX = 16;
+
+const waitingReasonSchema = z.enum(HOST_WATCH_WAITING_REASONS);
 
 export const HostWatchArgsSchema = z.object({
   operation: z
@@ -523,7 +568,11 @@ export const HostWatchArgsSchema = z.object({
     .describe(
       "arm: one notice when first observed. cancel: end one. list: yours, armed and ended."
     ),
-  hostId: hostIdSchema.optional().describe("For arm: the host. For list: only that host."),
+  hostId: hostIdSchema
+    .optional()
+    .describe(
+      "For arm: the host; with agentsWaiting, omit for all, local too. For list: only that host."
+    ),
   connection: z
     .enum(["connected", "disconnected"])
     .optional()
@@ -536,6 +585,24 @@ export const HostWatchArgsSchema = z.object({
     .describe("Arm on capacity instead: all given figures met by a fresh sample."),
   cpuIdleCoresAtLeast: z.number().min(0).max(4096).optional(),
   memoryPressureAtMost: z.enum(["normal", "warn"]).optional(),
+  agentsWaiting: z
+    .literal(true)
+    .optional()
+    .describe(
+      "Arm on agents instead: fires as one starts to wait. Arm names those already waiting."
+    ),
+  waitingReasons: z
+    .array(z.enum([...HOST_WATCH_WAITING_REASONS, "any"]))
+    .min(1)
+    .max(HOST_WATCH_WAITING_REASONS.length + 1)
+    .optional()
+    .describe('Up to 5. Default approval, question. "any" also hears older hosts that send none.'),
+  projectId: z
+    .string()
+    .min(1)
+    .max(256)
+    .optional()
+    .describe("With agentsWaiting: only that project."),
   expiresInSeconds: z
     .number()
     .int()
@@ -553,8 +620,61 @@ const hostWatchConditionSchema = z.object({
   memoryAvailableBytesAtLeast: z.number().nullable(),
   cpuIdleCoresAtLeast: z.number().nullable(),
   memoryPressureAtMost: z.enum(["normal", "warn"]).nullable(),
+  /** An agent watch: the reasons it fires on (`["any"]`: every one), and its one project, if any. */
+  agentsWaiting: z
+    .object({
+      waitingReasons: z.array(z.enum([...HOST_WATCH_WAITING_REASONS, "any"])),
+      projectId: z.string().nullable(),
+    })
+    .nullable(),
 });
 export type HostWatchCondition = z.infer<typeof hostWatchConditionSchema>;
+export type HostWatchWaitingReasons = NonNullable<
+  HostWatchCondition["agentsWaiting"]
+>["waitingReasons"];
+
+/**
+ * An agent a host was seen waiting on (#16188), as observed: never a verdict
+ * that it still waits, or on what. Read its status and screen before acting.
+ */
+export const HostWatchAgentSchema = z.object({
+  hostId: z.string(),
+  projectId: z.string().nullable(),
+  worktreeId: z.string().nullable(),
+  terminalId: z.string(),
+  /** The terminal's PTY launch, as the agent directory names it; null when not said. */
+  incarnation: z.number().nullable(),
+  /** The agent run inside it, as `terminal.getStatus` answers it; null when not said. */
+  agentIncarnation: z.number().nullable(),
+  /** Null from a host too old to say why. */
+  waitingReason: waitingReasonSchema.nullable(),
+  /** When it was seen waiting, by that host's own clock; null when the host didn't say. */
+  seenAt: z.number().nullable(),
+});
+export type HostWatchAgent = z.infer<typeof HostWatchAgentSchema>;
+
+/**
+ * How an agent watch hears one host. `events`: every waiting transition, with
+ * its reason. `attention`: a host too old to send them, heard by "any" alone
+ * through the person's notices, once a minute per agent at most, with no
+ * reason. Not heard now: `link-down` (watch its connection too),
+ * `host-refused` (it takes no assistants' work), `older-host` (only "any"
+ * hears it). `unread`: its link is up, but it didn't say whether it sends them.
+ */
+export const HOST_WATCH_HEARING = [
+  "events",
+  "attention",
+  "link-down",
+  "host-refused",
+  "older-host",
+  "unread",
+] as const;
+export const HostWatchHostCoverageSchema = z.object({
+  hostId: z.string(),
+  name: z.string(),
+  hears: z.enum(HOST_WATCH_HEARING),
+});
+export type HostWatchHostCoverage = z.infer<typeof HostWatchHostCoverageSchema>;
 
 /** A host as this Shell saw it at one moment: observations, never a promise it can take work. */
 export const HostWatchObservedSchema = z.object({
@@ -594,8 +714,9 @@ export type HostWatchDelivery = (typeof HOST_WATCH_DELIVERIES)[number];
 
 export const HostWatchSchema = z.object({
   watchId: z.string(),
-  hostId: z.string(),
-  hostName: z.string(),
+  /** Null for an agent watch on every host the caller controls. */
+  hostId: z.string().nullable(),
+  hostName: z.string().nullable(),
   condition: hostWatchConditionSchema,
   note: z.string().nullable(),
   armedAt: z.number(),
@@ -617,14 +738,155 @@ export const HostWatchResultSchema = z.object({
   watches: z.array(HostWatchSchema),
   /** arm: the host as observed when it was asked. */
   observed: HostWatchObservedSchema.nullable(),
+  /**
+   * An agent arm only: who was already seen waiting as it was armed (no notice
+   * comes for them), and how each host is heard.
+   */
+  agents: z
+    .object({
+      matches: z.array(HostWatchAgentSchema),
+      /** Matches past the cap. */
+      omitted: z.number(),
+      hosts: z.array(HostWatchHostCoverageSchema),
+    })
+    .optional(),
 });
 export type HostWatchResult = z.infer<typeof HostWatchResultSchema>;
+
+export const HostBringBackArgsSchema = z.object({ hostId: hostIdSchema });
+export type HostBringBackArgs = z.infer<typeof HostBringBackArgsSchema>;
+
+export const HostBringBackResultSchema = z.object({
+  ...outcomeFields,
+  /** What the attempt observed; null when the host couldn't be tried (not found, control off). */
+  answer: HostBringBackAnswerSchema.nullable(),
+});
+export type HostBringBackResult = z.infer<typeof HostBringBackResultSchema>;
+
+/** Most projects one `host.status` reads, across every host. */
+export const HOST_STATUS_TARGETS_MAX = 64;
+/** Most terminals one project's read names: `terminal.getStatus`'s own bound. */
+export const HOST_STATUS_PROJECT_TERMINALS_MAX = 256;
+/** Most terminals one `host.status` answer carries; the rest are counted in their target's `omitted`. */
+export const HOST_STATUS_TERMINALS_MAX = 256;
+/** Lines of output per terminal by default: fewer than one project's read, since many share the answer. */
+export const HOST_STATUS_DEFAULT_LINES = 10;
+export const HOST_STATUS_MAX_LINES = 50;
+/**
+ * Most bytes the hosts and projects one `host.status` names may take
+ * together, as its answer's JSON writes them. Each is echoed back with its outcome, so this keeps every
+ * target's answer inside one MCP result whatever its terminals take; 64 real
+ * project ids and host ids use well under it.
+ */
+export const HOST_STATUS_TARGET_ID_BYTES_MAX = 8 * 1024;
+
+const utf8 = new TextEncoder();
+/** What a string takes in the answer's JSON, escapes included, quotes not. */
+const jsonBytes = (text: string): number => utf8.encode(JSON.stringify(text)).length - 2;
+
+const HostStatusTargetSchema = z.object({
+  hostId: hostIdSchema,
+  projectId: idSchema.describe("A projectId from the host list."),
+  terminalIds: z
+    .array(idSchema)
+    .min(1)
+    .max(HOST_STATUS_PROJECT_TERMINALS_MAX)
+    .optional()
+    .describe("1-256 terminals in that project. Omit for every agent it lists."),
+});
+
+export const HostStatusArgsSchema = z.object({
+  targets: z
+    .array(HostStatusTargetSchema)
+    .min(1)
+    .max(HOST_STATUS_TARGETS_MAX)
+    // One read per project: a second target for it would be read twice.
+    .refine(
+      (targets) =>
+        new Set(targets.map(({ hostId, projectId }) => `${hostId}\u0000${projectId}`)).size ===
+        targets.length
+    )
+    .refine(
+      (targets) =>
+        targets.reduce(
+          (sum, { hostId, projectId }) => sum + jsonBytes(hostId) + jsonBytes(projectId),
+          0
+        ) <= HOST_STATUS_TARGET_ID_BYTES_MAX
+    )
+    .describe("1-64 projects, each named once, on any hosts."),
+  includeOutput: z
+    .union([
+      z.boolean(),
+      z.object({
+        lines: z
+          .number()
+          .int()
+          .min(1)
+          .max(HOST_STATUS_MAX_LINES)
+          .default(HOST_STATUS_DEFAULT_LINES)
+          .describe("Trailing lines per terminal (max 50, default 10)."),
+        stripAnsi: z.boolean().default(true).describe("Strip ANSI (default true)."),
+      }),
+    ])
+    .optional()
+    .describe(
+      "`true` or options: adds `recentOutput`, `lastOutputChangeAt` and `lastTypedInputAt`. Tails share one 50 KiB answer."
+    ),
+});
+export type HostStatusArgs = z.infer<typeof HostStatusArgsSchema>;
+
+/**
+ * What a host's read covered: `ok`, it answered; `unreachable`, no link, no
+ * answer in time, or reading it isn't allowed now; `unsupported`, it runs a
+ * Daintree that can't be read this way. Never `stale`: nothing read is kept.
+ */
+export const HOST_STATUS_COVERAGE = ["ok", "unreachable", "unsupported"] as const;
+export type HostStatusCoverage = (typeof HOST_STATUS_COVERAGE)[number];
+
+const statusShape = TerminalStatusResultSchema.shape;
+
+export const HostStatusTargetResultSchema = z.object({
+  hostId: z.string(),
+  projectId: z.string(),
+  ...outcomeFields,
+  source: statusShape.source.nullable(),
+  unavailableFields: statusShape.unavailableFields.nullable(),
+  complete: z
+    .boolean()
+    .describe(
+      "Every terminal asked for, or every agent listed, is here; else absence proves nothing."
+    ),
+  omitted: z.number().describe("Its terminals left out of this answer, to fit it."),
+});
+export type HostStatusTargetResult = z.infer<typeof HostStatusTargetResultSchema>;
+
+/** An entry as `terminal.getStatus` reads it there; never a `submission`, since no token is asked after. */
+export const HostStatusTerminalSchema = TerminalStatusEntrySchema.omit({ submission: true }).extend(
+  {
+    hostId: z.string(),
+    projectId: z.string(),
+  }
+);
+export type HostStatusTerminal = z.infer<typeof HostStatusTerminalSchema>;
+
+export const HostStatusResultSchema = z.object({
+  hosts: z.array(z.object({ hostId: z.string(), coverage: z.enum(HOST_STATUS_COVERAGE) })),
+  targets: z.array(HostStatusTargetResultSchema),
+  terminals: z.array(HostStatusTerminalSchema),
+});
+export type HostStatusResult = z.infer<typeof HostStatusResultSchema>;
 
 /** Why a host tool refused outright: the caller isn't this machine's assistant, or its arguments don't parse. */
 export type HostControlRefusalCode = "NOT_ELIGIBLE" | "INVALID_ARGS" | "UNAVAILABLE";
 
 export type HostControlToolResult =
-  HostListResult | HostCallResult | HostEnsureProjectResult | HostSettingsResult | HostWatchResult;
+  | HostListResult
+  | HostCallResult
+  | HostEnsureProjectResult
+  | HostSettingsResult
+  | HostWatchResult
+  | HostBringBackResult
+  | HostStatusResult;
 
 export type HostControlOutcome<T> =
   { ok: true; value: T } | { ok: false; code: HostControlRefusalCode; message: string };

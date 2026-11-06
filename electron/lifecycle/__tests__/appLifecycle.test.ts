@@ -11,12 +11,56 @@ const appMock = vi.hoisted(() => ({
 }));
 
 const browserWindowMock = vi.hoisted(() => ({
-  getAllWindows: vi.fn(() => []),
+  getAllWindows: vi.fn((): unknown[] => []),
 }));
+
+interface FakeBaseWindow {
+  options: unknown;
+  listeners: Record<string, (...args: unknown[]) => void>;
+  on: (event: string, cb: (...args: unknown[]) => void) => FakeBaseWindow;
+  once: (event: string, cb: (...args: unknown[]) => void) => FakeBaseWindow;
+  destroy: () => void;
+  isDestroyed: () => boolean;
+}
+
+const baseWindowMock = vi.hoisted(() => {
+  const instances: FakeBaseWindow[] = [];
+  const order: string[] = [];
+  const BaseWindow = vi.fn(function (options: unknown) {
+    let destroyed = false;
+    const win: FakeBaseWindow = {
+      options,
+      listeners: {},
+      on: (event, cb) => {
+        win.listeners[event] = cb;
+        return win;
+      },
+      once: (event, cb) => {
+        win.listeners[event] = cb;
+        return win;
+      },
+      destroy: () => {
+        destroyed = true;
+        order.push("stand-in destroyed");
+        win.listeners.closed?.();
+      },
+      isDestroyed: () => destroyed,
+    };
+    instances.push(win);
+    return win;
+  });
+  return { BaseWindow, instances, order };
+});
 
 vi.mock("electron", () => ({
   app: appMock,
   BrowserWindow: browserWindowMock,
+  BaseWindow: baseWindowMock.BaseWindow,
+}));
+
+const getActiveShutdownMock = vi.hoisted(() => vi.fn((): unknown => null));
+vi.mock("../shutdownCoordinator.js", () => ({
+  getActiveShutdown: getActiveShutdownMock,
 }));
 
 vi.mock("../../services/CrashRecoveryService.js", () => ({
@@ -28,6 +72,18 @@ vi.mock("../../services/CrashRecoveryService.js", () => ({
 const refreshProjectMenuStateMock = vi.hoisted(() => vi.fn());
 vi.mock("../../projectMenuState.js", () => ({
   refreshProjectMenuState: refreshProjectMenuStateMock,
+}));
+
+const windowMenuStateMock = vi.hoisted(() => ({
+  noteWindowClosing: vi.fn(),
+  refreshOpenWindowMenu: vi.fn(),
+}));
+vi.mock("../../windowMenuState.js", () => windowMenuStateMock);
+
+const onWindowTitlesChangedMock = vi.hoisted(() => vi.fn(() => () => {}));
+vi.mock("../../window/windowTitle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../window/windowTitle.js")>()),
+  onWindowTitlesChanged: onWindowTitlesChangedMock,
 }));
 
 const setSignalShutdownMock = vi.fn();
@@ -60,6 +116,11 @@ vi.mock("../../setup/archiveInstallIntent.js", () => ({
 const installPluginMock = vi.hoisted(() => vi.fn());
 vi.mock("../../services/PluginService.js", () => ({
   pluginService: { installPlugin: installPluginMock },
+}));
+const handleDaintreeUrlMock = vi.hoisted(() => vi.fn<(url: string) => void>());
+vi.mock("../../setup/deepLinkInstall.js", () => ({
+  extractDaintreeUrl: (argv: string[]) => argv.find((arg) => arg.startsWith("daintree://")) ?? null,
+  handleDaintreeUrl: handleDaintreeUrlMock,
 }));
 // environment.ts registers real `open-file` listeners and calls enableSandbox()
 // at import time; only the external folder-open dispatch is needed here.
@@ -479,14 +540,14 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
 
   async function register(overrides?: Partial<AppLifecycleOptions>) {
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
-    const opts = makeOpts({ isHostModeActive: () => true, ...overrides });
+    const opts = makeOpts({ keepsRunningWithoutWindows: () => true, ...overrides });
     const handle = registerAppLifecycleHandlers(opts);
     const call = appMock.on.mock.calls.find(([event]: string[]) => event === "second-instance");
     return { opts, handle, handler: call![1] as SecondInstanceHandler };
   }
 
   it("keeps today's behaviour without Host mode: no window is opened", async () => {
-    const { opts, handler } = await register({ isHostModeActive: () => false });
+    const { opts, handler } = await register({ keepsRunningWithoutWindows: () => false });
 
     handler({}, ["daintree"], "/");
 
@@ -551,6 +612,57 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
     expect(opts.onCreateWindow).not.toHaveBeenCalled();
   });
 
+  it("runs due schedules for an OS job's launch without opening, focusing or routing anything", async () => {
+    const onDueScheduleCheckRequested = vi.fn();
+    const win = makeWindow();
+    const { opts, handler } = await register({
+      onDueScheduleCheckRequested,
+      getMainWindow: vi.fn(() => win as unknown as import("electron").BrowserWindow),
+    });
+
+    handler(
+      {},
+      [
+        "/opt/Daintree/daintree",
+        "--run-due-schedules",
+        `--cli-path=${cliDir}`,
+        pathToFileURL(cliDir).href,
+        nodePath.join(cliDir, "plugin.dntr"),
+        "daintree://install?plugin=x",
+      ],
+      "/home/greg"
+    );
+    await Promise.resolve();
+
+    expect(onDueScheduleCheckRequested).toHaveBeenCalledOnce();
+    expect(win.focus).not.toHaveBeenCalled();
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+    expect(dispatchOpenDirPathMock).not.toHaveBeenCalled();
+    expect(enqueueArchiveInstallIntentsMock).not.toHaveBeenCalled();
+    expect(handleDaintreeUrlMock).not.toHaveBeenCalled();
+  });
+
+  it("opens nothing for an OS job's launch with nothing to run the check", async () => {
+    const { opts, handle, handler } = await register({ isLaunchSettled: () => false });
+
+    handler({}, ["daintree", "--run-due-schedules"], "/");
+    handle.onLaunchSettled();
+
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
+  it("hands over Host mode asked for beside the schedule check", async () => {
+    const onHostModeRequested = vi.fn();
+    const onDueScheduleCheckRequested = vi.fn();
+    const { opts, handler } = await register({ onHostModeRequested, onDueScheduleCheckRequested });
+
+    handler({}, ["daintree", "--host-mode", "--run-due-schedules"], "/");
+
+    expect(onDueScheduleCheckRequested).toHaveBeenCalledOnce();
+    expect(onHostModeRequested).toHaveBeenCalledOnce();
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+  });
+
   it("treats --host-mode as a plain relaunch where Host mode can't be handed over", async () => {
     const { opts, handler } = await register();
 
@@ -564,7 +676,21 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
 
     handler({}, ["daintree"], "/");
 
-    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+    expect(opts.onCreateWindow).toHaveBeenCalledExactlyOnceWith({
+      targeted: false,
+      opensFolder: false,
+    });
+  });
+
+  it("says a relaunch that named something to open was targeted, and which a folder", async () => {
+    hasOpenDirConsumerMock.mockReturnValue(false);
+    const { opts, handler } = await register();
+
+    handler({}, ["daintree", nodePath.join(cliDir, "plugin.dntr")], "/");
+    handler({}, ["daintree", "--cli-path=/nowhere/at/all"], "/");
+
+    expect(opts.onCreateWindow).toHaveBeenNthCalledWith(1, { targeted: true, opensFolder: false });
+    expect(opts.onCreateWindow).toHaveBeenNthCalledWith(2, { targeted: true, opensFolder: true });
   });
 
   it("treats a destroyed primary window as no window", async () => {
@@ -621,10 +747,32 @@ describe("registerAppLifecycleHandlers – second-instance with no window", () =
 
     handler({}, ["daintree", `--cli-path=${cliDir}`], "/");
     expect(dispatchOpenDirPathMock).toHaveBeenCalledExactlyOnceWith(cliDir);
+    handler({}, ["daintree"], "/");
     settled = true;
     handle.onLaunchSettled();
 
-    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+    // Targeted, though a plain relaunch arrived after it.
+    expect(opts.onCreateWindow).toHaveBeenCalledExactlyOnceWith({
+      targeted: true,
+      opensFolder: true,
+    });
+  });
+
+  it("keeps a folder request's flags through a Dock click before the start settles", async () => {
+    let settled = false;
+    hasOpenDirConsumerMock.mockReturnValue(false);
+    const { opts, handle, handler } = await register({ isLaunchSettled: () => settled });
+    const activate = appMock.on.mock.calls.find(([event]: string[]) => event === "activate")![1];
+
+    handler({}, ["daintree", "--cli-path=/nowhere/at/all"], "/");
+    activate();
+    settled = true;
+    handle.onLaunchSettled();
+
+    expect(opts.onCreateWindow).toHaveBeenCalledExactlyOnceWith({
+      targeted: true,
+      opensFolder: true,
+    });
   });
 
   it("does nothing on settle when no second launch arrived", async () => {
@@ -711,10 +859,10 @@ describe("registerAppLifecycleHandlers – window-all-closed", () => {
     expect(appMock.quit).toHaveBeenCalledOnce();
   });
 
-  it("keeps running on linux while Host mode is active", async () => {
+  it("keeps running on linux while it runs without windows", async () => {
     Object.defineProperty(process, "platform", { value: "linux" });
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
-    registerAppLifecycleHandlers(makeOpts({ isHostModeActive: () => true }));
+    registerAppLifecycleHandlers(makeOpts({ keepsRunningWithoutWindows: () => true }));
 
     getWindowAllClosedHandler()();
 
@@ -758,33 +906,224 @@ describe("registerAppLifecycleHandlers – window-all-closed", () => {
     expect(refreshProjectMenuStateMock).not.toHaveBeenCalled();
   });
 
-  it("refreshes the gates after a closing window's survivor is promoted", async () => {
-    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
-    registerAppLifecycleHandlers(makeOpts());
-
+  /** Announce a new window to the lifecycle handlers and capture what it listens for. */
+  function createWindow() {
     const createdCall = appMock.on.mock.calls.find(
       ([event]: string[]) => event === "browser-window-created"
     );
     expect(createdCall).toBeDefined();
 
-    const winListeners: Record<string, () => void> = {};
+    const winListeners: Record<string, (event?: unknown) => void> = {};
     const fakeWin = {
       once: (event: string, cb: () => void) => {
         winListeners[event] = cb;
       },
+      on: (event: string, cb: (event?: unknown) => void) => {
+        winListeners[event] = cb;
+      },
     };
     (createdCall![1] as (event: unknown, win: unknown) => void)({}, fakeWin);
+    return { fakeWin, winListeners };
+  }
 
+  it("refreshes the gates after a closing window's survivor is promoted", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts());
+
+    const { winListeners } = createWindow();
     winListeners.closed();
 
     // Must NOT be synchronous: WindowRegistry promotes the surviving window in
     // its own "closed" listener, registered after this one. Refreshing now would
     // still resolve against the window that is going away.
     expect(refreshProjectMenuStateMock).not.toHaveBeenCalled();
+    expect(windowMenuStateMock.refreshOpenWindowMenu).not.toHaveBeenCalled();
 
     await Promise.resolve();
 
     expect(refreshProjectMenuStateMock).toHaveBeenCalled();
+    // The survivor takes the Window menu's current-window mark.
+    expect(windowMenuStateMock.refreshOpenWindowMenu).toHaveBeenCalled();
+  });
+
+  describe("closing the last window off macOS", () => {
+    const closeEvent = () => {
+      const event = { defaultPrevented: false, preventDefault: vi.fn() };
+      event.preventDefault.mockImplementation(() => {
+        event.defaultPrevented = true;
+      });
+      return event;
+    };
+
+    beforeEach(() => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+      browserWindowMock.getAllWindows.mockReturnValue([]);
+    });
+
+    it("hands the close to the quit when the quit has something to warn about", async () => {
+      const onLastWindowClose = vi.fn(() => true);
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      registerAppLifecycleHandlers(makeOpts({ onLastWindowClose }));
+
+      const { winListeners } = createWindow();
+      const event = closeEvent();
+      winListeners.close(event);
+
+      expect(onLastWindowClose).toHaveBeenCalledOnce();
+      expect(event.preventDefault).toHaveBeenCalledOnce();
+    });
+
+    it("lets the close go ahead when there is nothing to warn about", async () => {
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      registerAppLifecycleHandlers(makeOpts({ onLastWindowClose: () => false }));
+
+      const { winListeners } = createWindow();
+      const event = closeEvent();
+      winListeners.close(event);
+
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    });
+
+    it("leaves a window alone while another stays open", async () => {
+      const onLastWindowClose = vi.fn(() => true);
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      registerAppLifecycleHandlers(makeOpts({ onLastWindowClose }));
+
+      const { fakeWin, winListeners } = createWindow();
+      browserWindowMock.getAllWindows.mockReturnValue([fakeWin, { isDestroyed: () => false }]);
+      winListeners.close(closeEvent());
+
+      expect(onLastWindowClose).not.toHaveBeenCalled();
+    });
+
+    it("leaves the close alone while the process keeps running without windows", async () => {
+      const onLastWindowClose = vi.fn(() => true);
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      registerAppLifecycleHandlers(
+        makeOpts({ onLastWindowClose, keepsRunningWithoutWindows: () => true })
+      );
+
+      const { winListeners } = createWindow();
+      winListeners.close(closeEvent());
+
+      expect(onLastWindowClose).not.toHaveBeenCalled();
+    });
+
+    it("leaves the close alone while a scheduled run keeps the process up", async () => {
+      const onLastWindowClose = vi.fn(() => true);
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      registerAppLifecycleHandlers(
+        makeOpts({
+          onLastWindowClose,
+          scheduledRuns: {
+            hasOpen: () => true,
+            onClosed: () => () => {},
+            notified: () => Promise.resolve(),
+          },
+        })
+      );
+
+      const { winListeners } = createWindow();
+      winListeners.close(closeEvent());
+
+      expect(onLastWindowClose).not.toHaveBeenCalled();
+    });
+
+    it("leaves the close alone while a window is being recreated", async () => {
+      const onLastWindowClose = vi.fn(() => true);
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      registerAppLifecycleHandlers(makeOpts({ onLastWindowClose }));
+
+      const { winListeners } = createWindow();
+      isWindowRecreatingMock.mockReturnValue(true);
+      winListeners.close(closeEvent());
+
+      expect(onLastWindowClose).not.toHaveBeenCalled();
+    });
+
+    it("counts the registry's windows when it has one", async () => {
+      const onLastWindowClose = vi.fn(() => true);
+      const registryWindows: unknown[] = [];
+      const windowRegistry = {
+        all: () => registryWindows.map((browserWindow) => ({ browserWindow })),
+      } as unknown as AppLifecycleOptions["windowRegistry"];
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      registerAppLifecycleHandlers(makeOpts({ onLastWindowClose, windowRegistry }));
+
+      const { fakeWin, winListeners } = createWindow();
+      registryWindows.push(fakeWin, { isDestroyed: () => false });
+      winListeners.close(closeEvent());
+      expect(onLastWindowClose).not.toHaveBeenCalled();
+
+      registryWindows.splice(1, 1, { isDestroyed: () => true });
+      winListeners.close(closeEvent());
+      expect(onLastWindowClose).toHaveBeenCalledOnce();
+    });
+
+    it("leaves the close alone once a shutdown owns the process", async () => {
+      const onLastWindowClose = vi.fn(() => true);
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      registerAppLifecycleHandlers(makeOpts({ onLastWindowClose }));
+
+      const { winListeners } = createWindow();
+      getActiveShutdownMock.mockReturnValue({ phase: "cleaning" });
+      try {
+        winListeners.close(closeEvent());
+      } finally {
+        getActiveShutdownMock.mockReturnValue(null);
+      }
+
+      expect(onLastWindowClose).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each(["win32", "linux"] as const)(
+    "on %s takes a window off the Window menu's list as soon as it starts closing",
+    async (platform) => {
+      Object.defineProperty(process, "platform", { value: platform });
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      registerAppLifecycleHandlers(makeOpts());
+
+      const { fakeWin, winListeners } = createWindow();
+      const closeEvent = { defaultPrevented: false };
+      winListeners.close(closeEvent);
+
+      expect(windowMenuStateMock.noteWindowClosing).toHaveBeenCalledExactlyOnceWith(
+        fakeWin,
+        closeEvent
+      );
+    }
+  );
+
+  it("on darwin leaves closing windows to AppKit's own list", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts());
+
+    const { winListeners } = createWindow();
+
+    expect(winListeners.close).toBeUndefined();
+  });
+
+  it.each(["win32", "linux"] as const)(
+    "on %s relabels the Window menu's list whenever window titles change",
+    async (platform) => {
+      Object.defineProperty(process, "platform", { value: platform });
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      registerAppLifecycleHandlers(makeOpts());
+
+      expect(onWindowTitlesChangedMock).toHaveBeenCalledExactlyOnceWith(
+        windowMenuStateMock.refreshOpenWindowMenu
+      );
+    }
+  );
+
+  it("on darwin does not follow window titles for a list AppKit keeps", async () => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    registerAppLifecycleHandlers(makeOpts());
+
+    expect(onWindowTitlesChangedMock).not.toHaveBeenCalled();
   });
 
   it("refreshes the File-menu project gates whenever a window takes focus", async () => {
@@ -799,6 +1138,8 @@ describe("registerAppLifecycleHandlers – window-all-closed", () => {
 
     // The menu is process-global but its gates track the focused window's project.
     expect(refreshProjectMenuStateMock).toHaveBeenCalled();
+    // And the Window menu marks whichever window is now focused.
+    expect(windowMenuStateMock.refreshOpenWindowMenu).toHaveBeenCalled();
   });
 
   it("does not call app.quit on darwin even when no recreation is in flight", async () => {
@@ -838,6 +1179,378 @@ describe("registerAppLifecycleHandlers – window-all-closed", () => {
     isWindowRecreatingMock.mockReturnValue(false);
     handler();
     expect(appMock.quit).toHaveBeenCalledOnce();
+  });
+});
+
+describe("registerAppLifecycleHandlers – a last window closed with scheduled runs open", () => {
+  const originalPlatform = process.platform;
+  type SecondInstanceHandler = (
+    event: unknown,
+    commandLine: string[],
+    workingDirectory: string
+  ) => void;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+    appMock.isReady.mockReturnValue(true);
+    isWindowRecreatingMock.mockReturnValue(false);
+    getActiveShutdownMock.mockReturnValue(null);
+    browserWindowMock.getAllWindows.mockReturnValue([]);
+    baseWindowMock.instances.length = 0;
+    vi.spyOn(process, "on").mockImplementation(() => process);
+    vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform });
+  });
+
+  const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
+
+  function handlerFor<T>(event: string): T {
+    const call = appMock.on.mock.calls.find(([name]: string[]) => name === event);
+    return call![1] as T;
+  }
+
+  async function register(platform: NodeJS.Platform, overrides?: Partial<AppLifecycleOptions>) {
+    Object.defineProperty(process, "platform", { value: platform });
+    let open = true;
+    let onClosed: (() => void) | null = null;
+    const stopFollowing = vi.fn();
+    const scheduledRuns = {
+      hasOpen: vi.fn(() => open),
+      onClosed: vi.fn((listener: () => void) => {
+        onClosed = listener;
+        return stopFollowing;
+      }),
+      notified: vi.fn(() => Promise.resolve()),
+    };
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const opts = makeOpts({ scheduledRuns, ...overrides });
+    registerAppLifecycleHandlers(opts);
+    return {
+      opts,
+      scheduledRuns,
+      stopFollowing,
+      setOpen: (value: boolean) => {
+        open = value;
+      },
+      runClosed: () => onClosed?.(),
+      closeLastWindow: () => handlerFor<() => void>("window-all-closed")(),
+    };
+  }
+
+  function announceWindow() {
+    const win = {
+      on: vi.fn((event: string) => {
+        if (event === "session-end") baseWindowMock.order.push("window hears session-end");
+      }),
+      once: vi.fn(),
+    };
+    handlerFor<(event: unknown, win: unknown) => void>("browser-window-created")({}, win);
+    return win;
+  }
+
+  it.each(["win32", "linux"] as const)(
+    "on %s stays up while a run is open and quits once the last one ends",
+    async (platform) => {
+      const { scheduledRuns, stopFollowing, setOpen, runClosed, closeLastWindow } =
+        await register(platform);
+
+      closeLastWindow();
+      expect(appMock.quit).not.toHaveBeenCalled();
+      expect(scheduledRuns.onClosed).toHaveBeenCalledOnce();
+
+      // Another run is still going.
+      runClosed();
+      await nextTurn();
+      expect(appMock.quit).not.toHaveBeenCalled();
+
+      setOpen(false);
+      runClosed();
+      runClosed();
+      // Heard mid-settlement: the quit waits for the rest of it.
+      expect(appMock.quit).not.toHaveBeenCalled();
+      await nextTurn();
+      expect(appMock.quit).toHaveBeenCalledOnce();
+      expect(stopFollowing).toHaveBeenCalledOnce();
+    }
+  );
+
+  it("lets the last run's notification go out before it quits", async () => {
+    const { scheduledRuns, setOpen, runClosed, closeLastWindow } = await register("win32");
+    let sent!: () => void;
+    scheduledRuns.notified.mockReturnValue(new Promise<void>((resolve) => (sent = resolve)));
+    closeLastWindow();
+
+    setOpen(false);
+    runClosed();
+    await nextTurn();
+    expect(appMock.quit).not.toHaveBeenCalled();
+
+    sent();
+    await nextTurn();
+    expect(appMock.quit).toHaveBeenCalledOnce();
+  });
+
+  it("doesn't quit after the notification if a window opened meanwhile", async () => {
+    const { scheduledRuns, setOpen, runClosed, closeLastWindow } = await register("linux");
+    let sent!: () => void;
+    scheduledRuns.notified.mockReturnValue(new Promise<void>((resolve) => (sent = resolve)));
+    closeLastWindow();
+    setOpen(false);
+    runClosed();
+    await nextTurn();
+
+    announceWindow();
+    sent();
+    await nextTurn();
+
+    expect(appMock.quit).not.toHaveBeenCalled();
+  });
+
+  it("never lets an older notification wait quit past a later run's", async () => {
+    const { scheduledRuns, setOpen, runClosed, closeLastWindow } = await register("linux");
+    let firstSent!: () => void;
+    let bothSent!: () => void;
+    scheduledRuns.notified
+      .mockReturnValueOnce(new Promise<void>((resolve) => (firstSent = resolve)))
+      .mockReturnValueOnce(new Promise<void>((resolve) => (bothSent = resolve)));
+    closeLastWindow();
+    setOpen(false);
+    runClosed();
+    await nextTurn();
+
+    // Another run started and ended while the first one's notification loaded.
+    runClosed();
+    await nextTurn();
+    firstSent();
+    await nextTurn();
+    expect(appMock.quit).not.toHaveBeenCalled();
+
+    bothSent();
+    await nextTurn();
+    expect(appMock.quit).toHaveBeenCalledOnce();
+  });
+
+  it("drops a notification wait from before a window reopened and closed again", async () => {
+    const { scheduledRuns, setOpen, runClosed, closeLastWindow } = await register("linux");
+    let firstSent!: () => void;
+    scheduledRuns.notified
+      .mockReturnValueOnce(new Promise<void>((resolve) => (firstSent = resolve)))
+      .mockReturnValueOnce(new Promise<void>(() => {}));
+    closeLastWindow();
+    setOpen(false);
+    runClosed();
+    await nextTurn();
+
+    announceWindow();
+    setOpen(true);
+    closeLastWindow();
+    setOpen(false);
+    runClosed();
+    await nextTurn();
+    firstSent();
+    await nextTurn();
+
+    expect(appMock.quit).not.toHaveBeenCalled();
+  });
+
+  it("waits ten seconds at most for a notification that never goes out", async () => {
+    vi.useFakeTimers();
+    try {
+      const { scheduledRuns, setOpen, runClosed, closeLastWindow } = await register("linux");
+      scheduledRuns.notified.mockReturnValue(new Promise<void>(() => {}));
+      closeLastWindow();
+      setOpen(false);
+      runClosed();
+
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(appMock.quit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(appMock.quit).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("quits at once, as before, when no run is open", async () => {
+    const { scheduledRuns, setOpen, closeLastWindow } = await register("linux");
+    setOpen(false);
+
+    closeLastWindow();
+
+    expect(appMock.quit).toHaveBeenCalledOnce();
+    expect(scheduledRuns.onClosed).not.toHaveBeenCalled();
+  });
+
+  it("leaves macOS's windowless lifetime alone", async () => {
+    const { scheduledRuns, closeLastWindow } = await register("darwin");
+
+    closeLastWindow();
+
+    expect(scheduledRuns.hasOpen).not.toHaveBeenCalled();
+    expect(appMock.quit).not.toHaveBeenCalled();
+  });
+
+  it("decides afresh once a window opens again", async () => {
+    const { stopFollowing, setOpen, runClosed, closeLastWindow } = await register("linux");
+    closeLastWindow();
+
+    announceWindow();
+    setOpen(false);
+    runClosed();
+    await nextTurn();
+
+    expect(stopFollowing).toHaveBeenCalledOnce();
+    expect(appMock.quit).not.toHaveBeenCalled();
+  });
+
+  it("opens a window for a relaunch while it waits", async () => {
+    const { opts, closeLastWindow } = await register("win32");
+    const relaunch = handlerFor<SecondInstanceHandler>("second-instance");
+
+    relaunch({}, ["daintree"], "/");
+    expect(opts.onCreateWindow).not.toHaveBeenCalled();
+
+    closeLastWindow();
+    relaunch({}, ["daintree"], "/");
+    expect(opts.onCreateWindow).toHaveBeenCalledOnce();
+  });
+
+  it("stops waiting without quitting once something else keeps it running", async () => {
+    let kept = false;
+    const { stopFollowing, setOpen, runClosed, closeLastWindow } = await register("linux", {
+      keepsRunningWithoutWindows: () => kept,
+    });
+    closeLastWindow();
+
+    // A Host-mode launch handed over meanwhile.
+    kept = true;
+    setOpen(false);
+    runClosed();
+    await nextTurn();
+
+    expect(stopFollowing).toHaveBeenCalledOnce();
+    expect(appMock.quit).not.toHaveBeenCalled();
+  });
+
+  it("waits for a window recreation in flight rather than quit under it", async () => {
+    const { setOpen, runClosed, closeLastWindow } = await register("linux");
+    closeLastWindow();
+
+    isWindowRecreatingMock.mockReturnValue(true);
+    setOpen(false);
+    runClosed();
+    await nextTurn();
+
+    expect(appMock.quit).not.toHaveBeenCalled();
+  });
+
+  it("never starts waiting once a quit has begun", async () => {
+    const { scheduledRuns, closeLastWindow } = await register("linux");
+    getActiveShutdownMock.mockReturnValue({ phase: "cleaning" });
+
+    closeLastWindow();
+
+    expect(scheduledRuns.onClosed).not.toHaveBeenCalled();
+    expect(appMock.quit).toHaveBeenCalledOnce();
+  });
+
+  describe("the hidden window that hears the session end", () => {
+    beforeEach(() => {
+      baseWindowMock.order.length = 0;
+    });
+
+    it("on win32 stands in from a windowless start, and its session end quits as a signal", async () => {
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      Object.defineProperty(process, "platform", { value: "win32" });
+      const handle = registerAppLifecycleHandlers(makeOpts());
+
+      handle.onStartedWindowless();
+      handle.onStartedWindowless();
+
+      expect(baseWindowMock.instances).toHaveLength(1);
+      const [standIn] = baseWindowMock.instances;
+      expect(standIn.options).toMatchObject({ show: false, skipTaskbar: true, focusable: false });
+
+      standIn.listeners["session-end"]!();
+      expect(setSignalShutdownMock).toHaveBeenCalledOnce();
+      expect(appMock.quit).toHaveBeenCalledOnce();
+    });
+
+    it.each(["linux", "darwin"] as const)("on %s creates none", async (platform) => {
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      Object.defineProperty(process, "platform", { value: platform });
+      const handle = registerAppLifecycleHandlers(
+        makeOpts({ keepsRunningWithoutWindows: () => true })
+      );
+
+      handle.onStartedWindowless();
+      handlerFor<() => void>("window-all-closed")();
+
+      expect(baseWindowMock.BaseWindow).not.toHaveBeenCalled();
+    });
+
+    it("never stands in once a quit has begun", async () => {
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      Object.defineProperty(process, "platform", { value: "win32" });
+      const handle = registerAppLifecycleHandlers(
+        makeOpts({ keepsRunningWithoutWindows: () => true })
+      );
+      getActiveShutdownMock.mockReturnValue({ phase: "cleaning" });
+
+      handle.onStartedWindowless();
+      handlerFor<() => void>("window-all-closed")();
+
+      expect(baseWindowMock.BaseWindow).not.toHaveBeenCalled();
+    });
+
+    it("never stands in beside a real window, which hears the session end itself", async () => {
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      Object.defineProperty(process, "platform", { value: "win32" });
+      const handle = registerAppLifecycleHandlers(makeOpts());
+      browserWindowMock.getAllWindows.mockReturnValue([{}]);
+
+      handle.onStartedWindowless();
+
+      expect(baseWindowMock.BaseWindow).not.toHaveBeenCalled();
+    });
+
+    it("hands over to the first real window, then comes back when the last one closes", async () => {
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      Object.defineProperty(process, "platform", { value: "win32" });
+      const handle = registerAppLifecycleHandlers(
+        makeOpts({ keepsRunningWithoutWindows: () => true })
+      );
+      handle.onStartedWindowless();
+      const [standIn] = baseWindowMock.instances;
+
+      announceWindow();
+
+      // The real window listens before the stand-in goes, so no moment is unheard.
+      expect(baseWindowMock.order).toEqual(["window hears session-end", "stand-in destroyed"]);
+      expect(standIn.isDestroyed()).toBe(true);
+
+      handlerFor<() => void>("window-all-closed")();
+      expect(baseWindowMock.instances).toHaveLength(2);
+      expect(baseWindowMock.instances[1].isDestroyed()).toBe(false);
+      expect(appMock.quit).not.toHaveBeenCalled();
+    });
+
+    it("stands in while a closed last window waits on a run, and not for a plain quit", async () => {
+      const { setOpen, closeLastWindow } = await register("win32");
+
+      closeLastWindow();
+      expect(baseWindowMock.instances).toHaveLength(1);
+
+      announceWindow();
+      setOpen(false);
+      closeLastWindow();
+      expect(baseWindowMock.instances).toHaveLength(1);
+      expect(appMock.quit).toHaveBeenCalledOnce();
+    });
   });
 });
 
@@ -921,7 +1634,7 @@ describe("registerAppLifecycleHandlers – activate", () => {
     let settled = false;
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     const opts = makeOpts({
-      isHostModeActive: () => true,
+      keepsRunningWithoutWindows: () => true,
       isLaunchSettled: () => settled,
     });
     const handle = registerAppLifecycleHandlers(opts);
@@ -942,7 +1655,7 @@ describe("registerAppLifecycleHandlers – activate", () => {
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     const opts = makeOpts({
       windowRegistry: makeRegistry(0),
-      isHostModeActive: () => false,
+      keepsRunningWithoutWindows: () => false,
       isLaunchSettled: () => false,
     });
     const handle = registerAppLifecycleHandlers(opts);

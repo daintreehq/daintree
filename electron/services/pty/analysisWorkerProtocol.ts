@@ -3,6 +3,7 @@ import type { ActivityStateMetadata } from "../ActivityMonitor.js";
 import type { AgentConfig } from "../../../shared/config/agentRegistry.js";
 import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
 import type { PowerPolicyLevel } from "../../../shared/types/powerPolicy.js";
+import type { TerminalSubmissionOutput } from "../../../shared/types/terminalSubmission.js";
 
 // Typed message protocol between the pty-host main thread and the analysis
 // worker_threads pool. All payloads must be structured-clone-safe.
@@ -21,6 +22,12 @@ export interface AnalysisCreateSpec {
    * host can discard acks from a superseded generation.
    */
   epoch: number;
+  /**
+   * Bracketed paste as the mirror this one replaces last saw it. A program
+   * turns it on once and never says so again, so a rebuilt mirror starts
+   * from it rather than from xterm's default.
+   */
+  bracketedPasteMode?: boolean;
 }
 
 export interface AnalysisMonitorStartSpec {
@@ -59,6 +66,8 @@ export type HostToWorkerMessage =
   | { type: "input"; terminalId: string; data: string }
   | { type: "focus"; terminalId: string }
   | { type: "submission"; terminalId: string }
+  | { type: "submission-capture-start"; terminalId: string; captureId: number; text: string }
+  | { type: "submission-capture-close"; terminalId: string }
   | ({ type: "monitor-start"; terminalId: string } & AnalysisMonitorStartSpec)
   | { type: "monitor-stop"; terminalId: string }
   | { type: "monitor-reconfigure"; terminalId: string; agentId: string }
@@ -188,7 +197,20 @@ export type WorkerToHostMessage =
   | { type: "waiting-timeout"; terminalId: string; spawnedAt: number }
   | { type: "boot-complete"; terminalId: string; spawnedAt: number; timestamp: number }
   | { type: "pty-response"; terminalId: string; data: string }
-  | { type: "viewport"; terminalId: string; lines: string[]; cursorLine: string | null }
+  | {
+      /** A submission capture's output, as it grows and when it ends (#16210). */
+      type: "submission-capture";
+      terminalId: string;
+      captureId: number;
+      output: TerminalSubmissionOutput;
+    }
+  | {
+      type: "viewport";
+      terminalId: string;
+      lines: string[];
+      cursorLine: string | null;
+      bracketedPasteMode: boolean;
+    }
   | {
       type: "response";
       requestId: number;

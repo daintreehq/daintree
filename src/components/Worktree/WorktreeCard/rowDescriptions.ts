@@ -6,7 +6,7 @@
  * words.
  * Every mark renders a hidden node under one of these ids for it to point at.
  */
-export type RowDescriptionPart = "lifecycle" | "alarm" | "devServer" | "external";
+export type RowDescriptionPart = "lifecycle" | "alarm" | "attention" | "devServer" | "external";
 
 /**
  * Worktree ids are paths, and a path can hold a space, which would split one
@@ -27,7 +27,7 @@ export function selectButtonDescribedBy(
   worktreeId: string,
   mounted: Record<RowDescriptionPart, boolean>
 ): string | undefined {
-  const parts = (["lifecycle", "alarm", "devServer", "external"] as const).filter(
+  const parts = (["lifecycle", "alarm", "attention", "devServer", "external"] as const).filter(
     (part) => mounted[part]
   );
   if (parts.length === 0) return undefined;

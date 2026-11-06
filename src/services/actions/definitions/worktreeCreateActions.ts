@@ -14,6 +14,7 @@ import {
 import { PartialSuccessError } from "@shared/utils/partialSuccess";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { WORKTREE_BRANCH_KEPT_MARKER } from "@shared/utils/worktreeSummary";
+import { WorktreeRetireOwnedArgsSchema } from "@shared/types/worktreeRetirement";
 
 export function registerWorktreeCreateActions(
   actions: ActionRegistry,
@@ -201,13 +202,16 @@ export function registerWorktreeCreateActions(
   // to close every terminal in the worktree — `closeTerminals` is a blunt
   // boolean over all of them, so it cannot be narrowed to the owned ones. A
   // caller cleaning up after itself closes its own panels through
-  // `terminal.closeOwned` first, then deletes a clean worktree.
+  // `terminal.closeOwned` first, then deletes a clean worktree. Main refuses
+  // the delete while the pty-host still has a running process in the
+  // worktree, the caller's trashed panes and other people's terminals alike
+  // (#15729), so leaving one open is a refusal rather than a pulled directory.
   actions.set("worktree.deleteOwned", () =>
     defineAction({
       id: "worktree.deleteOwned",
       title: "Delete owned worktree",
       description:
-        "Delete a worktree this session created, removing its directory after the user confirms. Anything else is refused. It never forces past uncommitted or untracked changes, deletes the branch, or closes terminals it does not own; commit or close those first.",
+        "Delete a worktree this session created, and its directory, after the user confirms. Refuses any other, or while a terminal process runs in it, closed panes included. Never forces past uncommitted or untracked changes, deletes the branch, or closes terminals.",
       category: "worktree",
       kind: "command",
       danger: "confirm",
@@ -228,6 +232,36 @@ export function registerWorktreeCreateActions(
       run: async () => {
         throw new Error(
           "worktree.deleteOwned must be invoked through the MCP main-process path, not renderer dispatch."
+        );
+      },
+    })
+  );
+
+  // The owned delete with its preconditions run in one call (#15737), on the
+  // same main-process path: main checks the tree is clean and pushed and that
+  // no one else's process is in it, closes this session's own panes there
+  // and waits for their processes to exit, then sends the same
+  // `worktree.delete` the owned delete sends, so the D2 confirmation and its
+  // preview are unchanged. `danger: "confirm"` withholds it from a
+  // workspace-bound session for the same reason as `worktree.deleteOwned`.
+  actions.set("worktree.retireOwned", () =>
+    defineAction({
+      id: "worktree.retireOwned",
+      title: "Retire owned worktree",
+      description:
+        "Delete a worktree this session created, after the user confirms, once it is clean, every commit is on a remote, and no terminal you don't own runs there. Closes your panes there and waits for their processes to exit first. Never forces or deletes the branch.",
+      category: "worktree",
+      kind: "command",
+      danger: "confirm",
+      denyPluginDispatch: true,
+      scope: "renderer",
+      dangerRationale:
+        "Closes the session's own panes in the worktree and deletes the working tree from disk. Recovery requires re-creating the worktree, so the session's own ownership record is a precondition rather than the approval.",
+      palette: { mode: "hidden" },
+      argsSchema: WorktreeRetireOwnedArgsSchema,
+      run: async () => {
+        throw new Error(
+          "worktree.retireOwned must be invoked through the MCP main-process path, not renderer dispatch."
         );
       },
     })

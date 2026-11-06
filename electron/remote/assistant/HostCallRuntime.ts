@@ -5,8 +5,18 @@ import {
 } from "../../../shared/config/globalAssistant.js";
 import { PROJECT_CHECK_DEFAULT_TIMEOUT_MS } from "../../../shared/types/projectCheck.js";
 import { REPLY_WAIT_DEFAULT_SECONDS } from "../../../shared/types/replyWait.js";
+import { LAUNCH_SETUP_WAIT_DEFAULT_MS } from "../../../shared/utils/launchInNewWorktree.js";
+import { DEFAULT_TERMINAL_EXIT_WAIT_MS } from "../../../shared/types/terminalExitWait.js";
+import { WORKTREE_RETIRE_OWNED_TOOL } from "../../services/mcp-server/sessionToolIds.js";
+import {
+  MCP_DISPATCH_TIMEOUT_MS,
+  MCP_REMOTE_DISPATCH_TIMEOUT_MS,
+  remoteHoldUntil,
+} from "../../../shared/config/mcpConfirmWindow.js";
 import {
   HOST_LIST_PROJECT_BYTES_MAX,
+  type HostBringBackArgs,
+  type HostBringBackResult,
   type HostCallArgs,
   type HostCallResult,
   type HostControlOutcome,
@@ -19,17 +29,28 @@ import {
   type HostListResult,
   type HostSettingsArgs,
   type HostSettingsResult,
+  type HostStatusArgs,
+  type HostStatusResult,
   type HostWatchArgs,
   type HostWatchResult,
 } from "../../../shared/types/hostControl.js";
 import {
+  DEFAULT_THROWAWAY_TIME_LIMIT_MS,
   HOST_THROWAWAY_TOOL_SIGNATURES,
   HostThrowawayCallSchema,
+  THROWAWAY_LAUNCH_TOOL,
+  type HostThrowawayCall,
   type HostThrowawayFailure,
   type HostThrowawayRefusal,
 } from "../../../shared/types/hostThrowaway.js";
+import type { HostBringBackAnswer } from "../../../shared/types/hostWake.js";
 import { HostSettingsRequests, type HostSettingsRequestDeps } from "./HostSettingsRequests.js";
-import { HostWatches, type HostWatchListener } from "./HostWatches.js";
+import { HostWatches, type AgentWatchRead, type HostWatchListener } from "./HostWatches.js";
+import type { AgentWaitingListener } from "../metrics/agentWaiting.js";
+import { runHostBringBack } from "./hostBringBack.js";
+import { runHostStatus } from "./hostStatus.js";
+import { STATUS_READ_TOOL } from "./projectStatusRead.js";
+import { ThrowawaySession } from "./throwawaySession.js";
 import {
   AGENT_DIRECTORY_BYTES_MAX,
   AGENT_DIRECTORY_ENTRIES_MAX,
@@ -46,7 +67,10 @@ import {
   type HostId,
   type HostMetricsSummary,
 } from "../../../shared/types/remoteHosts.js";
-import type { HostControlRuntimeHandle } from "../../services/mcp-server/hostControlTools.js";
+import type {
+  HostCallContext,
+  HostControlRuntimeHandle,
+} from "../../services/mcp-server/hostControlTools.js";
 import type {
   HostInventoryHost,
   HostInventorySnapshot,
@@ -83,16 +107,21 @@ import {
   type McpCallAnswer,
   type RelayApproveAnswer,
   type RelayApprovePayload,
+  type RelayApproveTimedPayload,
   type RelayCallRequest,
   type RelayNotice,
   type RelayNoticeStatusAnswer,
   type RelayNoticeStatusPayload,
   type RelayNoticesPayload,
+  type ProjectStatusAnswer,
   type RelayRefusal,
+  type StatusPayload,
   type ThrowawayCallAnswer,
   type ThrowawayCallPayload,
 } from "./linkMethods.js";
 import { canonicalArgsHash } from "../../services/mcp-server/sessionDedup.js";
+import { OWNED_RESOURCE_TOOLS } from "../../services/mcp-server/sessionCallOwnership.js";
+import { HOST_ALWAYS_ASKS_ACTION_IDS } from "../client/hostDispatchableActions.js";
 import type { McpConfirmationDecision } from "../../../shared/types/ipc/mcpServer.js";
 import { createLogger } from "../../utils/logger.js";
 
@@ -102,6 +131,8 @@ const logger = createLogger("main:HostCallRuntime");
 interface Sampled {
   summary: HostMetricsSummary;
   receipt: SummaryReceipt | null;
+  /** It came on a link that has since closed, however recent it is (#15736). */
+  earlier?: boolean;
 }
 
 /** One host as this Shell observes it: its registry entry, its link, its last summary. */
@@ -113,6 +144,11 @@ export interface ObservedHost {
   summary: HostMetricsSummary | null;
   /** When `summary` arrived and what its frame proved about its age; absent, only its timestamp says. */
   summaryReceipt?: SummaryReceipt | null;
+  /**
+   * Whether `summary` came on the link open now (#15736): false for one an
+   * earlier link brought, kept across the reconnect; absent when unknown.
+   */
+  summaryFromCurrentLink?: boolean;
   /** The build its last handshake named, kept after the link goes. */
   lastHandshake?: HostHandshakeInfo | null;
   /** The person disconnected it and nothing has dialled it since. */
@@ -141,6 +177,8 @@ export interface LocalHostReach {
   throwawayCall?(payload: ThrowawayCallPayload): Promise<ThrowawayCallAnswer>;
   /** Its workers and assistants, as `host.list` shows them with `includeAgents` (#14160). */
   agents?(options: { projectId?: string }): Promise<AgentDirectory>;
+  /** `terminal.getStatus` in several of its projects, for `host.status` (#16191). */
+  status?(payload: StatusPayload): Promise<ProjectStatusAnswer[]>;
 }
 
 /** The run a help session is answering in, as `host.call` pins what it arms to. */
@@ -164,7 +202,9 @@ export interface HostCallRuntimeDeps {
   /** Read at each call: the client is installed with the database and may come later. */
   client():
     | (Pick<HostControlLinkClient, "relayCall" | "throwawayCall"> &
-        Partial<Pick<HostControlLinkClient, "throwawayRelease" | "agents">>)
+        Partial<
+          Pick<HostControlLinkClient, "throwawayRelease" | "agents" | "agentsOnOpenLink" | "status">
+        >)
     | null;
   /**
    * Whether a help session's assistant works through one of this machine's own
@@ -174,6 +214,21 @@ export interface HostCallRuntimeDeps {
   inLocalView?(helpSessionId: string): boolean;
   /** The person's per-host "assistant control" switch, read at each call (#13493). */
   controlEnabled?(hostId: HostId): boolean;
+  /**
+   * A call ran and was answered, on a host or this machine's other project,
+   * for a schedule's run to record the workers it launched (#16169).
+   */
+  noteAnswered?(answer: {
+    helpSessionId: string;
+    hostId: HostId;
+    /** The host's name as observed; null for this machine. */
+    hostName: string | null;
+    projectId: string;
+    tool: string;
+    args: Record<string, unknown>;
+    structured: Record<string, unknown> | null;
+    askedAt: number;
+  }): void;
   /**
    * Queues a wake on a run's own notice line, the one writer that types into
    * its prompt, under its gate (#13500). Absent, hosts' notices are dropped.
@@ -197,12 +252,24 @@ export interface HostCallRuntimeDeps {
    */
   connect?(hostId: HostId, timeoutMs: number): Promise<unknown>;
   /**
+   * The Shell's one attempt per host to bring back a host whose link is down
+   * (#16170), joined by every caller. Absent, `host.bringBack` is unsupported.
+   */
+  bringBack?(hostId: HostId): Promise<HostBringBackAnswer>;
+  /**
    * Puts a host's question about one of this Shell's relayed calls to the
    * person, in the window of the assistant that made it (#13501), showing the
    * host's own preview. Null when it couldn't be asked there; absent, no host
    * is ever answered.
    */
   askApproval?(ask: RelayApprovalQuestion): Promise<McpConfirmationDecision | null>;
+  /**
+   * Whether a help session's assistant runs with Daintree's confirmations
+   * skipped here (#15698): the person's own preference on this machine, read
+   * at each ask, never anything a host says. Absent, or throwing, every
+   * relayed call that would ask still asks.
+   */
+  confirmationsSkipped?(helpSessionId: string): boolean;
   /**
    * Makes sure one of this machine's projects is on a host, with no window
    * (#14140): the Shell's switch service. Absent, no project is ever brought.
@@ -217,10 +284,17 @@ export interface HostCallRuntimeDeps {
   askSettingsApproval?: HostSettingsRequestDeps["askApproval"];
   /**
    * Hears hosts' links, the host list and summaries as they already arrive,
-   * for `host.watch` (#14463); subscribed only while a watch is armed. It
-   * never dials, holds or wakes a host. Absent, no watch is armed.
+   * for `host.watch` (#14463); subscribed only while a watch is armed, or
+   * while `host.list` waits for a host it dialed to send its first summary.
+   * It never dials, holds or wakes a host. Absent, no watch is armed.
    */
   watchHosts?(listener: HostWatchListener): () => void;
+  /**
+   * Hears this machine's and its hosts' agents starting to wait, for
+   * `host.watch` on agents (#16188); subscribed only while one is armed. It
+   * never dials, holds or wakes a host. Absent, no agent watch is armed.
+   */
+  watchAgents?(listener: AgentWaitingListener): () => void;
   now?: () => number;
   /** This machine's clocks, for how old a sample is; `now` and the monotonic clock by default. */
   clock?: () => ElapsedStamp;
@@ -252,6 +326,8 @@ const NOTICE_PIN_TTL_MS = RELAY_NOTICE_WINDOW_MS;
 const MAX_SEEN_NOTICES = 1024;
 /** Host terminals whose recent prompts from here are remembered, for superseding. */
 const MAX_PROMPTED_TERMINALS = 512;
+/** First sends whose time a resend reports under (#16169); the oldest go first. */
+const MAX_CALL_TIMES = 512;
 /**
  * Prompts remembered per host terminal, newest kept: ones that ran apart from
  * ones still unanswered, so a burst of calls refused later never pushes out
@@ -265,6 +341,8 @@ const PROJECTS_READ_MS = 5_000;
 const INVENTORY_READ_MS = 1_500;
 /** How long `host.list` waits for a host it dials to connect. */
 const LIST_CONNECT_MS = 8_000;
+/** How long `host.list` then waits for the new link's first summary (#15736). */
+const FIRST_SAMPLE_MS = 1_500;
 /** Hosts' directories kept by host and project filter, for a read that fails (#14455). */
 const LAST_AGENTS_MAX = 64;
 
@@ -276,6 +354,11 @@ export interface RelayApprovalQuestion {
   args: Record<string, unknown>;
   subject?: string;
   lines: string[];
+  /**
+   * The latest the dialog may hold, on this machine's clock (#15699): inside
+   * the host's own wait for the answer. Absent from a host too old to say.
+   */
+  holdUntil?: number;
 }
 
 /** A relayed call out to a host right now, and the run here that made it. */
@@ -286,21 +369,30 @@ interface CallInFlight {
   projectId: string | null;
   tool: string;
   args: Record<string, unknown>;
+  /** The tier it was sent at, which the host holds a resend of it to. */
+  tier: "core" | "full";
   run: OpenRun;
-  /** A host asked about it once already: an approval is for the call, not each ask. */
+  /**
+   * A host asked about it, or ran it under the skip preference, once already:
+   * an approval or a skip is for the call, not each ask or dispatch.
+   */
   asked: boolean;
+  /** It runs under the skip preference (#15698), so a resend that joins it later does too. */
+  skipped: boolean;
+  /**
+   * Tells each `host.call` send still out for it that it ran under the skip
+   * preference, for that send's audit record (#15698).
+   */
+  skipNotes: Set<() => void>;
   /** Sends of it still out, a resend's included; the record goes with the last. */
   sends: number;
 }
 
 /**
- * The confirm-gated actions a host may ask this Shell to approve (#13501),
- * each with the owned tool that stands in for it, whose delegate the host
- * rebuilds from the id alone.
+ * The confirm-gated actions a host may ask this Shell to approve (#13501):
+ * the ones its own form of the action can preview with no view there.
  */
-const RELAY_APPROVABLE: Readonly<Record<string, { ownedTool: string; idArg: string }>> = {
-  "worktree.delete": { ownedTool: "worktree.deleteOwned", idArg: "worktreeId" },
-};
+const RELAY_APPROVABLE: ReadonlySet<string> = new Set(["worktree.delete"]);
 
 /** What a host's MCP server runs a call with: its arguments less the request's own keys. */
 function relayedActionArgs(args: Record<string, unknown>): Record<string, unknown> {
@@ -309,24 +401,65 @@ function relayedActionArgs(args: Record<string, unknown>): Record<string, unknow
 }
 
 /**
+ * The action a call runs on the host, with exactly its arguments: its own
+ * tool as sent, or the action an `*Owned` tool stands in for, rebuilt from
+ * the id and the fields it forwards just as the host's server rebuilds it.
+ */
+function actionHashesOf(call: CallInFlight, actionId: string): string | null {
+  const owned = Object.hasOwn(OWNED_RESOURCE_TOOLS, call.tool)
+    ? OWNED_RESOURCE_TOOLS[call.tool]
+    : undefined;
+  // An owned tool's arguments are always rebuilt, even one that delegates to itself.
+  if (owned === undefined) {
+    return call.tool === actionId
+      ? canonicalArgsHash(actionId, relayedActionArgs(call.args))
+      : null;
+  }
+  if (owned.executor !== "renderer" || owned.delegateTo !== actionId || owned.reveals === true) {
+    return null;
+  }
+  const id = call.args[owned.idArg];
+  if (typeof id !== "string") return null;
+  const delegateArgs: Record<string, unknown> = {};
+  for (const key of owned.forwardArgs ?? []) {
+    if (Object.hasOwn(call.args, key)) delegateArgs[key] = call.args[key];
+  }
+  delegateArgs[owned.delegateIdArg ?? owned.idArg] = id;
+  return canonicalArgsHash(actionId, delegateArgs);
+}
+
+/**
+ * Whether two sends under one callId are the same call, which the host runs
+ * once for both: its ledger's own identity, the arguments whole.
+ */
+function sameCall(
+  a: Pick<CallInFlight, "tool" | "projectId" | "tier" | "args">,
+  b: Pick<CallInFlight, "tool" | "projectId" | "tier" | "args">
+): boolean {
+  return (
+    a.tool === b.tool &&
+    a.projectId === b.projectId &&
+    a.tier === b.tier &&
+    canonicalArgsHash(a.tool, a.args) === canonicalArgsHash(b.tool, b.args)
+  );
+}
+
+/** Whether a host is running exactly this call: the same action with the same arguments. */
+function runsAsCall(call: CallInFlight, actionId: string, args: unknown): boolean {
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return false;
+  const expected = actionHashesOf(call, actionId);
+  return expected !== null && canonicalArgsHash(actionId, args) === expected;
+}
+
+/**
  * Whether a host's ask is about exactly the call this Shell made: the same
  * action with the same arguments, or the plain action an owned tool stands
  * in for, on the same id and nothing else.
  */
 function asksAboutCall(call: CallInFlight, payload: RelayApprovePayload): boolean {
-  if (!Object.hasOwn(RELAY_APPROVABLE, payload.actionId)) return false;
-  const asked = canonicalArgsHash(payload.actionId, payload.args);
-  if (asked !== payload.argsHash) return false;
-  if (call.tool === payload.actionId) {
-    return canonicalArgsHash(call.tool, relayedActionArgs(call.args)) === asked;
-  }
-  const { ownedTool, idArg } = RELAY_APPROVABLE[payload.actionId]!;
-  const id = call.args[idArg];
-  return (
-    call.tool === ownedTool &&
-    typeof id === "string" &&
-    canonicalArgsHash(payload.actionId, { [idArg]: id }) === asked
-  );
+  if (!RELAY_APPROVABLE.has(payload.actionId)) return false;
+  if (canonicalArgsHash(payload.actionId, payload.args) !== payload.argsHash) return false;
+  return runsAsCall(call, payload.actionId, payload.args);
 }
 
 /** A call that may arm notices on its host, and the run here that made it. */
@@ -405,6 +538,35 @@ interface NotedCall {
 }
 
 const NOTHING_NOTED: NotedCall = { ran: () => {}, notRun: () => {} };
+
+/**
+ * What a throwaway answer shows about the session's runs on a host (#15878).
+ * An `unknown` or `conflict` answer, a failed close or send, and a refusal of
+ * a resend show nothing: what may still be going stays held until its time is up.
+ */
+function noteThrowawayAnswer(
+  session: ThrowawaySession,
+  hostId: HostId,
+  call: HostThrowawayCall,
+  callId: string,
+  answer: ThrowawayCallAnswer,
+  holdsLaunch: boolean
+): void {
+  if (call.tool === THROWAWAY_LAUNCH_TOOL) {
+    if (answer.status === "done") session.observe(hostId, answer.result.run, callId);
+    else if (answer.status === "failed" || (answer.status === "refused" && holdsLaunch)) {
+      session.launchFailed(callId);
+    }
+    return;
+  }
+  if (answer.status === "done") session.observe(hostId, answer.result.run);
+  else if (
+    answer.status === "failed" &&
+    (answer.reason === "not-found" || answer.reason === "exited")
+  ) {
+    session.runOver(hostId, call.args.runId);
+  }
+}
 
 function trimMarks(marks: readonly PromptMark[]): PromptMark[] {
   const kept = new Set([
@@ -534,10 +696,18 @@ const LOCAL_REFUSAL_DETAILS: Partial<
   },
 };
 
-/** Least a relayed call is given: a dispatch, a confirmation the person may take, and the trip. */
-const RELAY_MIN_RUN_MS = 90_000;
 /** Room past what a tool asks for, for its own dispatch and its answer to come back. */
 const RELAY_RUN_MARGIN_MS = 30_000;
+/**
+ * Least a relayed project call is given (#15699): the host's wait on a whole
+ * confirmation here, from queueing to a full decision window once it is on
+ * screen, then the room past it. The host's own waits end inside it.
+ */
+const RELAY_MIN_RUN_MS = MCP_REMOTE_DISPATCH_TIMEOUT_MS + RELAY_RUN_MARGIN_MS;
+/** Least a throwaway call is given: it never asks anyone, so a dispatch and the trip. */
+const THROWAWAY_MIN_RUN_MS = 90_000;
+/** Runs a create, a setup wait and a launch in sequence on its host (#15738). */
+const LAUNCH_IN_NEW_WORKTREE_TOOL = "agent.launchInNewWorktree";
 /** How much longer than the host's own deadline the Shell waits for the answer. */
 const RELAY_ANSWER_GRACE_MS = 15_000;
 
@@ -546,7 +716,11 @@ const RELAY_ANSWER_GRACE_MS = 15_000;
  * call's own arguments ask for, so a long check or a held reply isn't cut off
  * and reported as lost.
  */
-export function relayRunMs(tool: string, args: Record<string, unknown>): number {
+export function relayRunMs(
+  tool: string,
+  args: Record<string, unknown>,
+  minMs: number = RELAY_MIN_RUN_MS
+): number {
   let wanted = 0;
   const timeoutMs = args.timeoutMs;
   if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0) {
@@ -554,14 +728,30 @@ export function relayRunMs(tool: string, args: Record<string, unknown>): number 
   } else if (tool === "project.runCheck") {
     wanted = PROJECT_CHECK_DEFAULT_TIMEOUT_MS;
   }
-  if (args.waitForReply === true) {
-    const seconds =
-      typeof args.waitSeconds === "number" && Number.isFinite(args.waitSeconds)
-        ? args.waitSeconds
-        : REPLY_WAIT_DEFAULT_SECONDS;
-    wanted = Math.max(wanted, seconds * 1000);
+  const replyMs =
+    args.waitForReply === true
+      ? (typeof args.waitSeconds === "number" && Number.isFinite(args.waitSeconds)
+          ? args.waitSeconds
+          : REPLY_WAIT_DEFAULT_SECONDS) * 1000
+      : 0;
+  if (tool === LAUNCH_IN_NEW_WORKTREE_TOOL) {
+    // Its steps run one after another: the create's dispatch, the setup wait,
+    // the launch's dispatch, then the reply wait.
+    const setupMs =
+      typeof args.setupTimeoutMs === "number" && Number.isFinite(args.setupTimeoutMs)
+        ? Math.max(0, args.setupTimeoutMs)
+        : LAUNCH_SETUP_WAIT_DEFAULT_MS;
+    wanted = 2 * MCP_DISPATCH_TIMEOUT_MS + setupMs + replyMs;
+  } else {
+    // A retirement waits for its panes' processes and then on the delete's
+    // confirmation, one after the other (#15737), so it is owed both.
+    if (tool === WORKTREE_RETIRE_OWNED_TOOL) {
+      wanted =
+        (wanted > 0 ? wanted : DEFAULT_TERMINAL_EXIT_WAIT_MS) + MCP_REMOTE_DISPATCH_TIMEOUT_MS;
+    }
+    wanted = Math.max(wanted, replyMs);
   }
-  return Math.min(MAX_RELAY_RUN_MS, Math.max(RELAY_MIN_RUN_MS, wanted + RELAY_RUN_MARGIN_MS));
+  return Math.min(MAX_RELAY_RUN_MS, Math.max(minMs, wanted + RELAY_RUN_MARGIN_MS));
 }
 
 function codeOf(error: unknown): string | null {
@@ -741,9 +931,18 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   private readonly seenNotices = new Map<string, true>();
   /** Recent prompts sent from here to each host terminal, by host and terminal. */
   private readonly prompted = new Map<string, PromptMark[]>();
-  /** The hosts each help session sent a throwaway launch to, to release them when it ends (#14447). */
-  private readonly throwawayHosts = new Map<string, Set<HostId>>();
+  /** When each call was first sent, by host, session and call, so its answer got later still dates from then. */
+  private readonly callTimes = new Map<string, number>();
+  /** Each help session's throwaway runs on hosts, to hold their links and release them when it ends. */
+  private readonly throwawaySessions = new Map<string, ThrowawaySession>();
+  /**
+   * Hosts each help session asked to hold a message for a worker (#16187), so
+   * its end reaches them: a held message is never typed after it.
+   */
+  private readonly heldSendHosts = new Map<string, Set<HostId>>();
   private disposed = false;
+  /** `host.list`'s waits for a dialed host's first summary, each ended at once by dispose. */
+  private readonly sampleWaits = new Set<() => void>();
   private readonly settingsRequests: HostSettingsRequests;
   private readonly hostWatches: HostWatches;
   /** Each host's last directory read, by project filter, oldest first. */
@@ -768,6 +967,14 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       controlOn: (hostId) => this.controlOn(hostId),
       stillRunning: (run) => this.stillRunning(run),
       ...(deps.watchHosts ? { observe: deps.watchHosts } : {}),
+      ...(deps.watchAgents
+        ? {
+            observeAgents: deps.watchAgents,
+            readAgents: (hostId: HostId, options: { projectId?: string }) =>
+              this.watchAgentsRead(hostId, options),
+          }
+        : {}),
+      ...(deps.local ? { localName: () => deps.local!.name() } : {}),
       ...(deps.queueNotice ? { queueNotice: deps.queueNotice } : {}),
       now: () => this.now(),
       clock: () => this.clock(),
@@ -800,6 +1007,80 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   /** Whether one of this Shell's assistants has a call out to `hostId` right now. */
   hasCallInFlight(hostId: HostId): boolean {
     return (this.callsOut.get(hostId) ?? 0) > 0;
+  }
+
+  /**
+   * Whether a throwaway run one of this Shell's assistants launched may still
+   * be going on `hostId` (#15878). The host ends a Shell's runs once its link
+   * says goodbye, so the link stays until each run is seen over, its session
+   * ends, or its time limit passes. Holding the link never keeps the host awake.
+   */
+  holdsThrowawayRuns(hostId: HostId): boolean {
+    for (const session of this.throwawaySessions.values()) {
+      if (session.holds(hostId)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Whether a host's dispatch into this Shell's view of its project is one
+   * of this Shell's own assistants' calls to that host, running with that
+   * assistant's Daintree confirmations skipped here (#15698). True only for
+   * the call still out from the run that made it, in that view's project,
+   * about exactly that call's action and arguments, while the person's
+   * control switch for the host is on. The skip is this Shell's own
+   * preference, read now: nothing the host sends turns it on. The host is
+   * the connection's, never the payload's.
+   */
+  skipsRelayedDispatch(
+    hostId: HostId,
+    dispatch: {
+      callId: string;
+      helpSessionId: string;
+      projectId: string;
+      actionId: string;
+      args: unknown;
+    }
+  ): boolean {
+    const call = this.callsInFlight.get(dispatch.callId);
+    if (
+      this.disposed ||
+      call === undefined ||
+      call.asked ||
+      call.hostId !== hostId ||
+      call.helpSessionId !== dispatch.helpSessionId ||
+      call.projectId !== dispatch.projectId ||
+      !runsAsCall(call, dispatch.actionId, dispatch.args) ||
+      !this.stillRunning(call.run) ||
+      !this.controlOn(hostId) ||
+      !this.skipsConfirmations(call, dispatch.actionId)
+    ) {
+      return false;
+    }
+    this.grantSkip(call);
+    return true;
+  }
+
+  /** Spends a call's one ask on the skip, and tells every send of it still out. */
+  private grantSkip(call: CallInFlight): void {
+    call.asked = true;
+    call.skipped = true;
+    for (const note of call.skipNotes) note();
+  }
+
+  /**
+   * Whether the assistant that made a call runs with Daintree's
+   * confirmations skipped, for an action that may skip at all: one that would
+   * move this window always asks. A failed read keeps the dialog.
+   */
+  private skipsConfirmations(call: CallInFlight, actionId: string): boolean {
+    if (HOST_ALWAYS_ASKS_ACTION_IDS.has(actionId)) return false;
+    try {
+      return this.deps.confirmationsSkipped?.(call.helpSessionId) === true;
+    } catch (error) {
+      logger.warn("Couldn't read the assistant's confirmations preference", { error });
+      return false;
+    }
   }
 
   /**
@@ -926,10 +1207,17 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * only for a call still out to that host from the run that made it, about
    * exactly that call's action and arguments, once per call, and only while
    * the person's control switch for the host is on; asked in that
-   * assistant's own window. Anything else is `refused`, which approves
-   * nothing. The host is the connection's, never the payload's.
+   * assistant's own window, unless that assistant runs with Daintree's
+   * confirmations skipped here (#15698), when nobody is asked and the answer
+   * says so. Anything else is `refused`, which approves nothing. The host is
+   * the connection's, never the payload's.
    */
-  async receiveApproval(hostId: HostId, payload: RelayApprovePayload): Promise<RelayApproveAnswer> {
+  async receiveApproval(
+    hostId: HostId,
+    payload: RelayApprovePayload | RelayApproveTimedPayload
+  ): Promise<RelayApproveAnswer> {
+    // Before anything awaits: the host's wait started when it asked.
+    const receivedAt = this.now();
     const answer = (decision: RelayApproveAnswer["decision"]): RelayApproveAnswer => ({
       approvalId: payload.approvalId,
       argsHash: payload.argsHash,
@@ -952,6 +1240,12 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       return answer("refused");
     }
     call.asked = true;
+    // The person's own "Never ask" covers their assistant's call on a host as
+    // it does one here (#15698): nobody is asked, and the host is told so.
+    if (this.skipsConfirmations(call, payload.actionId)) {
+      this.grantSkip(call);
+      return answer("skip-preference");
+    }
     let decision: McpConfirmationDecision | null;
     try {
       decision = await ask({
@@ -961,6 +1255,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         args: payload.args,
         ...(payload.subject !== undefined ? { subject: payload.subject } : {}),
         lines: payload.lines,
+        ...("holdBudgetMs" in payload
+          ? { holdUntil: remoteHoldUntil(receivedAt, payload.holdBudgetMs) }
+          : {}),
       });
     } catch (error) {
       logger.warn("Asking about a host's call failed", { error });
@@ -1011,6 +1308,9 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         observation: notice.observation,
         ...(pin.note !== undefined ? { note: pin.note } : {}),
         ...(notice.awaitingHandback === true ? { awaitingHandback: true } : {}),
+        ...(notice.lastTransitionAt !== undefined
+          ? { lastTransitionAt: notice.lastTransitionAt }
+          : {}),
       };
       queue(
         {
@@ -1170,11 +1470,14 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    */
   endHelpSession(helpSessionId: string): void {
     this.hostWatches.endSession(helpSessionId);
-    const hosts = this.throwawayHosts.get(helpSessionId);
-    this.throwawayHosts.delete(helpSessionId);
+    const session = this.throwawaySessions.get(helpSessionId);
+    this.throwawaySessions.delete(helpSessionId);
+    const held = this.heldSendHosts.get(helpSessionId);
+    this.heldSendHosts.delete(helpSessionId);
     const client = this.deps.client();
-    if (hosts === undefined || !client?.throwawayRelease) return;
-    for (const hostId of hosts) {
+    if ((session === undefined && held === undefined) || !client?.throwawayRelease) return;
+    // The release says the session ended; a host drops its held messages on it too.
+    for (const hostId of new Set([...(session?.hosts ?? []), ...(held ?? [])])) {
       void client.throwawayRelease(hostId, { helpSessionId }).catch((error: unknown) => {
         logger.debug("Couldn't release a host's throwaway runs", { hostId, error });
       });
@@ -1192,14 +1495,17 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   /** Forgets every call and notice; calls on hosts are left as they are. */
   dispose(): void {
     this.disposed = true;
+    for (const end of [...this.sampleWaits]) end();
     this.hostWatches.dispose();
-    this.throwawayHosts.clear();
+    this.throwawaySessions.clear();
+    this.heldSendHosts.clear();
     this.callsOut.clear();
     this.callsInFlight.clear();
     this.noticePins.clear();
     this.settledPins.clear();
     this.seenNotices.clear();
     this.prompted.clear();
+    this.callTimes.clear();
     this.lastAgents.clear();
     this.agentsEpochs.clear();
     this.settingsRequests.dispose();
@@ -1224,7 +1530,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
   call(
     helpSessionId: string,
     args: HostCallArgs,
-    context: { tier: "core" | "full" }
+    context: HostCallContext
   ): Promise<HostControlOutcome<HostCallResult>> {
     return this.settle(helpSessionId, async (caller) => {
       const projectId = args.projectId;
@@ -1280,6 +1586,11 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         };
       }
       const runMs = relayRunMs(args.tool, toolArgs);
+      // The same call sent again (a resend, or a retry under its own `newCallId`)
+      // dates from its first send.
+      const callKey = `${args.hostId}\u0000${helpSessionId}\u0000${callId}`;
+      const askedAt = this.callTimes.get(callKey) ?? this.now();
+      if (!this.callTimes.has(callKey)) remember(this.callTimes, callKey, askedAt, MAX_CALL_TIMES);
       const payload: RelayCallRequest = {
         helpSessionId,
         projectId,
@@ -1295,14 +1606,28 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       const noted = resend
         ? NOTHING_NOTED
         : this.noteCall(callId, args.hostId, caller, args.tool, toolArgs);
-      const sendDone = this.trackSend(callId, {
-        hostId: args.hostId,
-        helpSessionId,
-        projectId,
-        tool: args.tool,
-        args: toolArgs,
-        run: caller,
-      });
+      // This machine's own projects hear the session end in process.
+      if (!local && args.tool === "terminal.sendCommandOwned" && toolArgs.whenBusy === "queue") {
+        let hosts = this.heldSendHosts.get(helpSessionId);
+        if (hosts === undefined) {
+          hosts = new Set();
+          this.heldSendHosts.set(helpSessionId, hosts);
+        }
+        hosts.add(args.hostId);
+      }
+      const sendDone = this.trackSend(
+        callId,
+        {
+          hostId: args.hostId,
+          helpSessionId,
+          projectId,
+          tool: args.tool,
+          args: toolArgs,
+          tier: context.tier,
+          run: caller,
+        },
+        context.noteSkipPreference
+      );
       let answer: McpCallAnswer;
       try {
         answer = local
@@ -1321,6 +1646,20 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         // A tool error may still have run some of a batch before it failed.
         case "done": {
           noted.ran(answer.result);
+          try {
+            this.deps.noteAnswered?.({
+              helpSessionId,
+              hostId: args.hostId,
+              hostName: local ? null : (host?.name ?? null),
+              projectId,
+              tool: args.tool,
+              args: toolArgs,
+              structured: answer.result.structured,
+              askedAt,
+            });
+          } catch (error) {
+            logger.debug("Couldn't note an answered call", { callId, error });
+          }
           // A resend that got the answer its first send lost: the host has the call.
           const pin = resend ? this.pinOf(callId) : undefined;
           if (pin?.hostId === args.hostId && pin.run.sessionId === helpSessionId) {
@@ -1350,17 +1689,33 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * send is still out is the same call and shares that record, so an approval
    * the host is asking for still counts.
    */
-  private trackSend(callId: string, record: Omit<CallInFlight, "asked" | "sends">): () => void {
+  private trackSend(
+    callId: string,
+    record: Omit<CallInFlight, "asked" | "sends" | "skipped" | "skipNotes">,
+    noteSkip?: () => void
+  ): () => void {
     const { hostId, helpSessionId } = record;
     this.callsOut.set(hostId, (this.callsOut.get(hostId) ?? 0) + 1);
     const sharing = this.callsInFlight.get(callId);
     const inFlight: CallInFlight =
       sharing !== undefined && sharing.hostId === hostId && sharing.helpSessionId === helpSessionId
         ? sharing
-        : { ...record, asked: false, sends: 0 };
+        : { ...record, asked: false, sends: 0, skipped: false, skipNotes: new Set() };
     inFlight.sends += 1;
     if (inFlight !== sharing) this.callsInFlight.set(callId, inFlight);
+    // Each send's own, so a send that settled, having written its record, is
+    // told nothing; and only a send of the same call, since the host refuses a
+    // different one under that callId as a conflict, which ran nothing.
+    const note =
+      noteSkip !== undefined && (inFlight === sharing ? sameCall(inFlight, record) : true)
+        ? () => noteSkip()
+        : undefined;
+    if (note !== undefined) {
+      if (inFlight.skipped) note();
+      else inFlight.skipNotes.add(note);
+    }
     return () => {
+      if (note !== undefined) inFlight.skipNotes.delete(note);
       const left = (this.callsOut.get(hostId) ?? 1) - 1;
       if (left > 0) this.callsOut.set(hostId, left);
       else this.callsOut.delete(hostId);
@@ -1460,7 +1815,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         return { ...this.outcomeWith("opted_out", CONTROL_OFF_DETAIL), ...unsent };
       }
     }
-    const runMs = relayRunMs(args.tool, parsed.data.args);
+    const runMs = relayRunMs(args.tool, parsed.data.args, THROWAWAY_MIN_RUN_MS);
     const payload: ThrowawayCallPayload = {
       helpSessionId,
       tier: context.tier,
@@ -1475,8 +1830,12 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       projectId: null,
       tool: args.tool,
       args: parsed.data.args,
+      tier: context.tier,
       run: caller,
     });
+    // Taken now: an answer that lands after the session ended changes a record nothing keeps.
+    const session = local ? null : this.throwawaySession(helpSessionId);
+    let holdsLaunch = false;
     let answer: ThrowawayCallAnswer;
     try {
       if (local) {
@@ -1484,11 +1843,15 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
           ? await local.throwawayCall(payload)
           : { status: "refused", reason: "throwaway-off" };
       } else {
-        // Before it is sent: a launch whose answer is lost may still have launched.
-        if (parsed.data.tool === "throwaway.launch") {
-          const hosts = this.throwawayHosts.get(helpSessionId) ?? new Set<HostId>();
-          hosts.add(args.hostId);
-          this.throwawayHosts.set(helpSessionId, hosts);
+        // Before it is sent: a launch whose answer is lost may still have launched,
+        // and its run may last its whole limit from when the host got to it.
+        if (parsed.data.tool === THROWAWAY_LAUNCH_TOOL) {
+          const limitMs = parsed.data.args.timeLimitMs ?? DEFAULT_THROWAWAY_TIME_LIMIT_MS;
+          holdsLaunch = session!.launching(
+            args.hostId,
+            callId,
+            limitMs + runMs + RELAY_ANSWER_GRACE_MS
+          );
         }
         answer = await this.requireClient().throwawayCall(
           args.hostId,
@@ -1497,10 +1860,15 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         );
       }
     } catch (error) {
-      return this.sendFailure(error, host, callId, resend, NOTHING_NOTED);
+      const noted: NotedCall = holdsLaunch
+        ? { ran: () => {}, notRun: () => session!.launchFailed(callId) }
+        : NOTHING_NOTED;
+      return this.sendFailure(error, host, callId, resend, noted);
     } finally {
       sendDone();
     }
+    if (session)
+      noteThrowawayAnswer(session, args.hostId, parsed.data, callId, answer, holdsLaunch);
     switch (answer.status) {
       case "done":
         return {
@@ -1530,6 +1898,15 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         return { ...this.outcomeWith(code, detail), ...sent };
       }
     }
+  }
+
+  private throwawaySession(helpSessionId: string): ThrowawaySession {
+    let session = this.throwawaySessions.get(helpSessionId);
+    if (session === undefined) {
+      session = new ThrowawaySession(() => this.clock().mono);
+      this.throwawaySessions.set(helpSessionId, session);
+    }
+    return session;
   }
 
   /**
@@ -1610,9 +1987,113 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     );
   }
 
-  /** Arms, cancels or lists the calling run's own host watches (#14463). */
+  /** Arms, cancels or lists the calling run's own host watches (#14463), agent watches too (#16188). */
   watch(helpSessionId: string, args: HostWatchArgs): Promise<HostControlOutcome<HostWatchResult>> {
-    return this.settle(helpSessionId, async (caller) => this.hostWatches.run(caller, args));
+    return this.settle(helpSessionId, async (caller) =>
+      args.operation === "arm" && args.agentsWaiting === true
+        ? this.hostWatches.armAgents(caller, args)
+        : this.hostWatches.run(caller, args)
+    );
+  }
+
+  /**
+   * One host's agents for an agent watch's arm to name those already waiting
+   * (#16188): the read `host.list` makes with `includeAgents`, but only over a
+   * link already up, never touched, dialled or given a new credential, and
+   * only what was read now, never one kept from before.
+   */
+  private async watchAgentsRead(
+    hostId: HostId,
+    options: { projectId?: string }
+  ): Promise<AgentWatchRead> {
+    if (hostId === LOCAL_HOST_ID) {
+      const local = this.deps.local;
+      if (!local) return { status: "unread" };
+      // This machine's own transitions are always heard; the read only names who waits now.
+      return {
+        status: "read",
+        directory: await this.localAgents(local, options),
+        waitingEvents: true,
+      };
+    }
+    if (!this.controlOn(hostId)) return { status: "unread" };
+    const host = this.deps.hosts().find((candidate) => candidate.hostId === hostId);
+    if (!host || host.connection.status !== "connected") return { status: "link-down" };
+    const client = this.deps.client();
+    const read = client?.agentsOnOpenLink;
+    if (!client || !read) return { status: "unread" };
+    const payload = options.projectId === undefined ? {} : { projectId: options.projectId };
+    const answer = await withinMs(
+      Promise.resolve()
+        .then(() => read.call(client, hostId, payload, PROJECTS_READ_MS))
+        .catch((error: unknown) => (codeOf(error) === "UNSUPPORTED" ? "unsupported" : null)),
+      PROJECTS_READ_MS,
+      null
+    );
+    if (answer === null) return { status: "unread" };
+    if (answer === "unsupported") return { status: "unsupported" };
+    if (answer.status === "refused") return { status: "refused" };
+    return {
+      status: "read",
+      directory: agentDirectoryAs(hostId, fitAgentDirectory(capEntries(answer.directory))),
+      waitingEvents: answer.waitingEvents === true,
+    };
+  }
+
+  bringBack(
+    helpSessionId: string,
+    args: HostBringBackArgs
+  ): Promise<HostControlOutcome<HostBringBackResult>> {
+    return this.settle(helpSessionId, async () =>
+      runHostBringBack(
+        {
+          hostIds: () => this.deps.hosts().map((host) => host.hostId),
+          controlOn: (hostId) => this.deps.controlEnabled?.(hostId) === true,
+          ...(this.deps.bringBack ? { bringBack: this.deps.bringBack } : {}),
+        },
+        args
+      )
+    );
+  }
+
+  /**
+   * `terminal.getStatus` in many projects on many hosts in one answer
+   * (#16191): each host read at once, in one exchange where it can, each
+   * project through the gates `host.call` meets there.
+   */
+  status(
+    helpSessionId: string,
+    args: HostStatusArgs,
+    context: { tier: "core" | "full" }
+  ): Promise<HostControlOutcome<HostStatusResult>> {
+    return this.settle(helpSessionId, (caller) => {
+      const global = isGlobalAssistantId(caller.projectId);
+      return runHostStatus(
+        {
+          callerProjectId: caller.projectId,
+          global,
+          mayRelay: !global || globalAssistantMayRelay(STATUS_READ_TOOL),
+          tier: context.tier,
+          hostIds: () => this.deps.hosts().map((host) => host.hostId),
+          controlOn: (hostId) => this.deps.controlEnabled?.(hostId) === true,
+          ...(this.deps.local ? { local: this.deps.local } : {}),
+          client: () => this.deps.client(),
+          // Read as a call is: the link is held while it runs.
+          holdHost: (hostId) => {
+            this.callsOut.set(hostId, (this.callsOut.get(hostId) ?? 0) + 1);
+            return () => {
+              const left = (this.callsOut.get(hostId) ?? 1) - 1;
+              if (left > 0) this.callsOut.set(hostId, left);
+              else this.callsOut.delete(hostId);
+            };
+          },
+          newId: this.newId,
+          now: this.now,
+        },
+        helpSessionId,
+        args
+      );
+    });
   }
 
   list(
@@ -1638,14 +2119,18 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       const seenHosts = observed.filter((seen) => wanted(seen.hostId));
       const hosts = await Promise.all(
         seenHosts.map(async (seen): Promise<HostListEntry> => {
-          const host = await this.dialed(seen);
-          const summary = host.summary;
+          const { host, dialed } = await this.dialed(seen);
           const connected = host.connection.status === "connected";
           const control = this.deps.controlEnabled?.(host.hostId) === true;
-          const [page, agents] = await Promise.all([
+          const [page, agents, sample] = await Promise.all([
             connected && control ? this.hostProjects(host.hostId, scope) : null,
             agentsOf ? this.hostAgents(host, control, agentsOf) : null,
+            dialed ? this.firstSample(host) : host,
           ]);
+          const summary = sample.summary;
+          // The history outlives a reconnect: what an earlier link brought is
+          // not what the host says now, however recently it came.
+          const earlier = connected && sample.summaryFromCurrentLink === false;
           const entry: HostListEntry = {
             hostId: host.hostId,
             name: host.name,
@@ -1658,13 +2143,17 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
             load: null,
             // A tally from before the link dropped is history, not what is running now.
             agentsObserved:
-              connected && summary?.agentsObserved ? { ...summary.agentsObserved } : null,
+              connected && !earlier && summary?.agentsObserved
+                ? { ...summary.agentsObserved }
+                : null,
             projects: null,
             projectInventory: null,
             control,
             ...(agents ? { agents } : {}),
           };
-          if (summary) sampled.set(entry, { summary, receipt: host.summaryReceipt ?? null });
+          if (summary) {
+            sampled.set(entry, { summary, receipt: sample.summaryReceipt ?? null, earlier });
+          }
           if (page) paged.set(entry, page);
           return entry;
         })
@@ -1676,7 +2165,10 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         const held = sampled.get(entry);
         if (!held) continue;
         const live = entry.link.status === "connected" || entry.link.status === "local";
-        const freshness = sampleFreshness(held.summary, held.receipt, now);
+        const measured = sampleFreshness(held.summary, held.receipt, now);
+        const freshness = held.earlier
+          ? { ...measured, stale: true, staleReason: "earlier-link" as const }
+          : measured;
         entry.load = projectHostLoad(held.summary, freshness);
         entry.agentClis = projectHostAgentClis(held.summary, live, !freshness.stale);
       }
@@ -1933,19 +2425,84 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
    * the Shell lets an unused link go after a few minutes, and `host.call`
    * dials it again on demand, so to the assistant it is a host it can reach,
    * not one that is down. One the person disconnected stays as it is. Observed
-   * again afterwards, whatever came of it.
+   * again afterwards, whatever came of it, and said whether it was dialed.
    */
-  private async dialed(host: ObservedHost): Promise<ObservedHost> {
+  private async dialed(host: ObservedHost): Promise<{ host: ObservedHost; dialed: boolean }> {
     const connect = this.deps.connect;
     const status = host.connection.status;
-    if (!connect || (status !== "disconnected" && status !== "connecting")) return host;
-    if (this.deps.controlEnabled?.(host.hostId) !== true) return host;
+    if (!connect || (status !== "disconnected" && status !== "connecting")) {
+      return { host, dialed: false };
+    }
+    if (this.deps.controlEnabled?.(host.hostId) !== true) return { host, dialed: false };
     // A dial that throws before it is under way fails this host's entry, never the listing.
     const dial = Promise.resolve()
       .then(() => connect(host.hostId, LIST_CONNECT_MS))
       .catch(() => undefined);
     await withinMs(dial, LIST_CONNECT_MS, undefined);
-    return this.deps.hosts().find((candidate) => candidate.hostId === host.hostId) ?? host;
+    const observed = this.deps.hosts().find((candidate) => candidate.hostId === host.hostId);
+    return { host: observed ?? host, dialed: true };
+  }
+
+  /**
+   * A host just dialed whose summary an earlier link brought, observed again
+   * once the new link's first one arrives (#15736): the host sends what it
+   * holds as a link opens, but the dial is done before that lands. Waits at
+   * most {@link FIRST_SAMPLE_MS}, and no longer once the host drops, goes or
+   * has its control switched off; the observation returned is this one or a
+   * later one whose summary came on the link open now.
+   */
+  private firstSample(host: ObservedHost): Promise<ObservedHost> {
+    const watch = this.deps.watchHosts;
+    if (
+      !watch ||
+      this.disposed ||
+      host.connection.status !== "connected" ||
+      host.summaryFromCurrentLink !== false
+    ) {
+      return Promise.resolve(host);
+    }
+    return new Promise((resolve) => {
+      let off: (() => void) | null = null;
+      let done = false;
+      const finish = (observed: ObservedHost) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        this.sampleWaits.delete(end);
+        off?.();
+        resolve(observed);
+      };
+      const end = () => finish(host);
+      const check = () => {
+        const now = this.deps.hosts().find((candidate) => candidate.hostId === host.hostId);
+        if (
+          !now ||
+          now.connection.status !== "connected" ||
+          this.deps.controlEnabled?.(host.hostId) !== true
+        ) {
+          finish(host);
+        } else if (now.summaryFromCurrentLink === true) {
+          finish(now);
+        }
+      };
+      const timer = setTimeout(end, FIRST_SAMPLE_MS);
+      timer.unref?.();
+      this.sampleWaits.add(end);
+      try {
+        off = watch({
+          changed: check,
+          summary: (hostId) => {
+            if (hostId === host.hostId) check();
+          },
+        });
+      } catch {
+        finish(host);
+        return;
+      }
+      // Told synchronously as it subscribed: finished before there was anything to let go.
+      if (done) off();
+      else check();
+    });
   }
 
   /** A page of a connected host's projects, or null when it didn't say in time. */

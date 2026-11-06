@@ -100,6 +100,7 @@ export function addNonPtyPanel(
     // to `"default"` — the panel kept the name but lost the ownership that
     // stops a derived surface (the dock chip) from overriding it.
     ...(options.titleMode && { titleMode: options.titleMode }),
+    ...(options.displayEmoji && { displayEmoji: options.displayEmoji }),
     worktreeId: effectiveWorktreeId,
     location,
     ...(location === "background" && {

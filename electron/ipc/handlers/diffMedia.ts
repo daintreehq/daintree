@@ -138,6 +138,24 @@ async function readHeadSide(
   }
 }
 
+async function readIndexSide(
+  cwd: string,
+  filePath: string,
+  mime: string,
+  options: HeadFileReadOptions
+): Promise<DiffMediaWireSide> {
+  try {
+    const result = await gitServiceCache
+      .getGitService(cwd)
+      .readFileInIndex(filePath, DIFF_MEDIA_MAX_BYTES, options);
+    return toBlobSide(mime, result);
+  } catch (error) {
+    if (isRateLimited(error)) throw error;
+    console.error("[IPC] diff-media index read failed:", error);
+    return { ok: false, error: "ERROR" };
+  }
+}
+
 async function readPreviousSide(
   cwd: string,
   filePath: string,
@@ -311,26 +329,31 @@ async function handleReadFileVersions(
     };
   }
 
-  const [headAtHead, working] = await Promise.all([
-    readHeadSide(payload.cwd, payload.filePath, mime, { knownVersion: known?.head, beforeRead }),
-    readWorkingSide(payload.cwd, payload.filePath, mime, {
-      knownVersion: known?.working,
-      beforeRead,
-    }),
+  // The index stands in for whichever end of the comparison the side names:
+  // the new end for staged, the old end for unstaged.
+  const { side } = payload;
+  const headOptions = { knownVersion: known?.head, beforeRead };
+  const workingOptions = { knownVersion: known?.working, beforeRead };
+  const [base, working] = await Promise.all([
+    side === "unstaged"
+      ? readIndexSide(payload.cwd, payload.filePath, mime, headOptions)
+      : readHeadSide(payload.cwd, payload.filePath, mime, headOptions),
+    side === "staged"
+      ? readIndexSide(payload.cwd, payload.filePath, mime, workingOptions)
+      : readWorkingSide(payload.cwd, payload.filePath, mime, workingOptions),
   ]);
 
   // Both sides missing is the signature of an already-committed deletion —
   // literal HEAD has moved past the delete, so show the last committed
   // version. Gated on the working side too: for a never-tracked path (a
   // working copy exists) rev-list would scan the full history just to
-  // return nothing.
+  // return nothing. Never for a named side: a commit from history is neither
+  // HEAD nor the index, so substituting one would break the comparison the
+  // row promised.
   const head =
-    isMissing(headAtHead) && isMissing(working)
-      ? await readPreviousSide(payload.cwd, payload.filePath, mime, {
-          knownVersion: known?.head,
-          beforeRead,
-        })
-      : headAtHead;
+    side === undefined && isMissing(base) && isMissing(working)
+      ? await readPreviousSide(payload.cwd, payload.filePath, mime, headOptions)
+      : base;
 
   return { head, working };
 }

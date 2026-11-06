@@ -9,9 +9,19 @@ import {
   MCP_DISPATCH_ACTION_METHOD,
   MCP_GET_MANIFEST_METHOD,
 } from "../../services/mcp-server/driveTarget.js";
-import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
+import { LOCAL_HOST_ID, parseHostScopedKey } from "../../../shared/types/remoteHosts.js";
+import { getProjectForWebContents } from "../../window/webContentsRegistry.js";
+import { resolveEffectiveActionDanger } from "../../../shared/utils/effectiveActionDanger.js";
 import { AppError } from "../../utils/errorTypes.js";
-import { NOTIFICATION_SHOW_METHOD, showHostNotification } from "../hybrid/notifications.js";
+import { remoteHoldUntil } from "../../../shared/config/mcpConfirmWindow.js";
+import {
+  NOTIFICATION_CLOSE_METHOD,
+  NOTIFICATION_RECONCILE_METHOD,
+  NOTIFICATION_SHOW_METHOD,
+  closeHostNotifications,
+  reconcileHostNotifications,
+  showHostNotification,
+} from "../hybrid/notifications.js";
 import { getRemoteService } from "../runtime.js";
 import {
   HOST_ALWAYS_ASKS_ACTION_IDS,
@@ -36,7 +46,9 @@ export { HOST_DISPATCHABLE_ACTION_IDS };
  * One exception (#13368): the assistant's confirmations preference is
  * host-owned, so only the host can say a call falls under "Never ask". A call
  * the host confirmed for its own assistant under `skip-preference` runs
- * without this Shell's dialog — see `honoursSkipPreference`.
+ * without this Shell's dialog — see `honoursSkipPreference`. This Shell's own
+ * assistant's call through `host.call` follows this Shell's own preference
+ * instead (#15698) — see `skipsOwnRelayedCall`.
  */
 const McpDispatchPayloadSchema = z.object({
   actionId: z.string().min(1).max(256),
@@ -55,6 +67,23 @@ const McpDispatchPayloadSchema = z.object({
   // only, and believed only while this Shell has a call out to that host: it
   // names who asked in the dialog and grants nothing.
   relayed: z.boolean().optional(),
+  // Which of this Shell's own `host.call`s the host is running (#15698).
+  // Grants nothing by itself: it names a call for this Shell to look up, and
+  // only a call still out to that host, about exactly this action and these
+  // arguments, from an assistant whose confirmations are skipped here, runs
+  // without asking.
+  relayCall: z
+    .object({
+      // The link's own bounds for both, so no call a host admitted is refused here.
+      callId: z.string().min(1).max(256),
+      helpSessionId: z.string().min(1).max(256),
+    })
+    .strict()
+    .optional(),
+  // How long the host waits for this answer, from when it sent it (#15699).
+  // Grants time, never approval: the view holds its dialog inside it, less
+  // the trip back. Absent from a host too old to say, which waits 30 s.
+  holdBudgetMs: z.number().int().positive().optional(),
 });
 
 type McpDispatchPayload = z.infer<typeof McpDispatchPayloadSchema>;
@@ -73,6 +102,60 @@ function honoursSkipPreference(request: McpDispatchPayload): boolean {
     request.authorization === "skip-preference" &&
     request.approvalOnly !== true &&
     !HOST_ALWAYS_ASKS_ACTION_IDS.has(request.actionId)
+  );
+}
+
+/**
+ * Whether a host's dispatch is one of this Shell's own assistant's relayed
+ * calls that runs under that assistant's "Never ask" here (#15698): one this
+ * view would ask about, matched to the call this Shell has out to that host,
+ * in the project this view shows of it. The skip is read on this Shell; an
+ * approval-only request exists to ask.
+ */
+async function skipsOwnRelayedCall(
+  service: Awaited<ReturnType<typeof loadMcpServerService>>,
+  hostId: string,
+  webContentsId: number,
+  request: McpDispatchPayload
+): Promise<boolean> {
+  const call = request.relayCall;
+  if (call === undefined || request.approvalOnly === true) return false;
+  const viewKey = getProjectForWebContents(webContentsId);
+  if (viewKey === null) return false;
+  const view = parseHostScopedKey(viewKey);
+  if (view.hostId !== hostId) return false;
+  // A call that wouldn't ask has no confirmation to skip, and its record
+  // mustn't say it ran unasked.
+  if (!(await asksInView(service, webContentsId, request))) return false;
+  return (
+    getRemoteService("hostCallRelayClient")?.skipsRelayedDispatch(hostId, {
+      callId: call.callId,
+      helpSessionId: call.helpSessionId,
+      projectId: view.projectId,
+      actionId: request.actionId,
+      args: request.args,
+    }) === true
+  );
+}
+
+/** Whether this view raises a confirmation for the dispatch, by its own registry's danger. */
+async function asksInView(
+  service: Awaited<ReturnType<typeof loadMcpServerService>>,
+  webContentsId: number,
+  request: McpDispatchPayload
+): Promise<boolean> {
+  let manifest: ActionManifestEntry[];
+  try {
+    manifest = await service.requestManifestForHost(webContentsId);
+  } catch (error) {
+    logger.warn("Couldn't read the view's actions for a relayed call", { error });
+    return false;
+  }
+  const entry = manifest.find((candidate) => candidate.id === request.actionId);
+  return (
+    entry?.danger !== undefined &&
+    resolveEffectiveActionDanger(request.actionId, entry.danger, "agent", request.args) ===
+      "confirm"
   );
 }
 
@@ -163,11 +246,27 @@ function narrowRegistryRead(actionId: string, result: ActionDispatchResult): Act
   return result;
 }
 
+/**
+ * How long this view may hold what a host asked for (#15699): inside the wait
+ * the host named, from when it arrived. A host that didn't say waits about
+ * the plain deadline, so it is held to that.
+ */
+function hostDeadline(
+  holdBudgetMs: number | undefined,
+  receivedAt: number
+): { holdUntil: number } | { fixedDeadline: true } {
+  return holdBudgetMs === undefined
+    ? { fixedDeadline: true }
+    : { holdUntil: remoteHoldUntil(receivedAt, holdBudgetMs) };
+}
+
 async function dispatchAction(
   hostId: string,
   webContentsId: number,
   payload: unknown
 ): Promise<unknown> {
+  // Before anything awaits: the host's clock started when it sent this.
+  const receivedAt = Date.now();
   const parsed = McpDispatchPayloadSchema.safeParse(payload);
   if (!parsed.success) {
     throw new AppError({ code: "VALIDATION", message: "Malformed MCP dispatch from the host" });
@@ -186,12 +285,15 @@ async function dispatchAction(
       },
     };
   }
+  const deadline = hostDeadline(request.holdBudgetMs, receivedAt);
   const service = await loadMcpServerService();
   // Otherwise never pre-confirmed: a confirm-gated action raises this Shell's
   // own dialog, naming the host that asked, exactly as a local MCP client's
   // would. The origin stays `external` either way: the skip rides on
   // `authorization`, not on posing as one of this Shell's assistant surfaces.
-  const skipPreference = honoursSkipPreference(request);
+  const hostSkip = honoursSkipPreference(request);
+  const ownSkip = !hostSkip && (await skipsOwnRelayedCall(service, hostId, webContentsId, request));
+  const skipPreference = hostSkip || ownSkip;
   const envelope = await service.dispatchActionForHost(
     webContentsId,
     request.actionId,
@@ -202,14 +304,14 @@ async function dispatchAction(
     // The host times this call, so this view never holds it open past the
     // host's own deadline, which is the one its agent is told about (#14989).
     skipPreference
-      ? { authorization: "skip-preference", fixedDeadline: true }
+      ? { authorization: "skip-preference", ...deadline }
       : request.approvalOnly
         ? {
             approvalOnly: true,
             ...(request.approvalReason ? { approvalReason: request.approvalReason } : {}),
-            fixedDeadline: true,
+            ...deadline,
           }
-        : { fixedDeadline: true },
+        : deadline,
     describeHost(
       hostId,
       request.relayed === true &&
@@ -217,12 +319,16 @@ async function dispatchAction(
     )
   );
   // Only what the host reads back: this machine's view identity stays here,
-  // and no approval is ever handed out for the host to reuse.
+  // and no approval is ever handed out for the host to reuse. A skip this
+  // Shell granted is said, so the host's audit doesn't read it as unasked; a
+  // dialog raised after all (a force delete's typed name) says what happened.
   return {
     result: narrowRegistryRead(request.actionId, envelope.result),
     ...(envelope.confirmationDecision !== undefined
       ? { confirmationDecision: envelope.confirmationDecision }
-      : {}),
+      : ownSkip
+        ? { authorization: "skip-preference" }
+        : {}),
   };
 }
 
@@ -248,8 +354,9 @@ export async function askHostApprovalInWindow(
       {
         approvalOnly: true,
         hostPreview: { lines: ask.lines, ...(ask.subject ? { subject: ask.subject } : {}) },
-        // The host's own approval window governs a call it runs itself.
-        fixedDeadline: true,
+        // Inside the host's own wait for the answer (#15699), so the dialog
+        // never outlasts it; a host too old to say waits about the plain deadline.
+        ...(ask.holdUntil !== undefined ? { holdUntil: ask.holdUntil } : { fixedDeadline: true }),
       },
       describeHost(ask.hostId, true)
     );
@@ -297,7 +404,7 @@ async function requestManifest(webContentsId: number): Promise<ActionManifestEnt
 /**
  * The reverse requests a host may send this Shell's views: MCP dispatch and
  * manifest reads for the view that drives a project, and notifications the
- * host decided to show. Returns a teardown.
+ * host decided to show or take down. Returns a teardown.
  */
 export function installViewReverseRequests(): () => void {
   const disposers = [
@@ -313,6 +420,27 @@ export function installViewReverseRequests(): () => void {
       }
       return null;
     }),
+    registerReverseRequestMethod(NOTIFICATION_CLOSE_METHOD, ({ hostId, payload }) => {
+      if (!closeHostNotifications(payload, hostId)) {
+        throw new AppError({
+          code: "VALIDATION",
+          message: "Malformed notification close from the host",
+        });
+      }
+      return null;
+    }),
+    registerReverseRequestMethod(
+      NOTIFICATION_RECONCILE_METHOD,
+      ({ hostId, webContentsId, payload }) => {
+        if (!reconcileHostNotifications(webContentsId, payload, hostId)) {
+          throw new AppError({
+            code: "VALIDATION",
+            message: "Malformed notification reconcile from the host",
+          });
+        }
+        return null;
+      }
+    ),
   ];
   return () => {
     for (const dispose of disposers.splice(0).reverse()) dispose();

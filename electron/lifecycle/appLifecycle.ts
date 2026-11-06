@@ -1,21 +1,28 @@
 // eager-import-allow: manages application lifetime hooks and native deep link triggers on startup
-import { app, BrowserWindow } from "electron";
+import { app, BaseWindow, BrowserWindow } from "electron";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
 import { refreshProjectMenuState } from "../projectMenuState.js";
+import { noteWindowClosing, refreshOpenWindowMenu } from "../windowMenuState.js";
+import { onWindowTitlesChanged } from "../window/windowTitle.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { setSignalShutdown, setSafetyBeltTimer } from "./signalShutdownState.js";
 import { finishIfGroupStop } from "./groupStop.js";
 import { isWindowRecreating } from "./windowRecreationState.js";
+import { getActiveShutdown } from "./shutdownCoordinator.js";
 import { SAFETY_BELT_TIMEOUT_MS } from "./shutdownConfig.js";
 import { extractDaintreeUrl, handleDaintreeUrl } from "../setup/deepLinkInstall.js";
 import { dispatchOpenDirPath, hasOpenDirConsumer } from "../setup/environment.js";
 import { isHostModeRequested } from "../boot/hostModeLaunch.js";
+import { isDueScheduleCheckRequested } from "../boot/dueScheduleLaunch.js";
 
 const DISABLE_GPU_CRASH_LIMIT_SWITCH = "disable-gpu-process-crash-limit";
+// How long a quit after the last open scheduled run waits for that run's
+// notification to go out: shutdown discards one still loading.
+const RUN_NOTIFICATION_WAIT_MS = 10_000;
 const SIGNAL_ECHO_WINDOW_MS = 100;
 
 const CLI_PATH_FLAG = "--cli-path";
@@ -229,16 +236,30 @@ export async function queueDntrPaths(archivePaths: readonly string[]): Promise<v
   await enqueueArchiveInstallIntents(archivePaths);
 }
 
+/** What asked for a window. */
+export interface WindowRequest {
+  /**
+   * A relaunch that named something to open (a folder, even one that didn't
+   * resolve, or a `.dntr` archive), so a launch that deferred its windows
+   * opens them as a targeted launch would.
+   */
+  readonly targeted: boolean;
+  /** Of those, one that named a folder: its window starts on the picker. */
+  readonly opensFolder: boolean;
+}
+
 export interface AppLifecycleOptions {
-  onCreateWindow: () => void | Promise<void>;
+  onCreateWindow: (request?: WindowRequest) => void | Promise<void>;
   getMainWindow: () => BrowserWindow | null;
   windowRegistry?: WindowRegistry;
   /**
-   * True while this process serves as a Host. Closing the last window then
-   * leaves it running on every platform, since remote Shells and working
-   * agents still depend on it.
+   * True while this process runs with or without windows: it serves as a
+   * Host, or an OS job started it windowless to run due schedules. Closing the
+   * last window then leaves it running on every platform, since remote
+   * Shells, working agents and scheduled runs still depend on it, and a
+   * relaunch with nothing on screen opens a window.
    */
-  isHostModeActive?: () => boolean;
+  keepsRunningWithoutWindows?: () => boolean;
   /**
    * Whether the launch has finished bringing up its initial windows (or its
    * windowless Host runtime). Until then a second launch must not open a
@@ -259,6 +280,30 @@ export interface AppLifecycleOptions {
    * launch is handled like any other.
    */
   onHostModeRequested?: (commandLine: readonly string[]) => void;
+  /**
+   * A second launch from an OS job asked for due schedules to run
+   * (`--run-due-schedules`). Such a launch never focuses or opens a window.
+   */
+  onDueScheduleCheckRequested?: () => void;
+  /**
+   * Scheduled runs this process has open. Off macOS, closing the last window
+   * while one is open doesn't quit: the process stays up with no window until
+   * none is, so the run isn't ended with the window, and a relaunch meanwhile
+   * opens a window on it.
+   */
+  /**
+   * Off macOS, asked when the last window is about to close and closing it
+   * would quit. True takes the close over (it is cancelled and becomes a quit
+   * that can still warn); false lets it go ahead.
+   */
+  onLastWindowClose?: () => boolean;
+  scheduledRuns?: {
+    hasOpen: () => boolean;
+    /** Calls back as runs end or are deleted, until the returned function is called. */
+    onClosed: (listener: () => void) => () => void;
+    /** Settles once the notifications runs that already ended set off have gone out. */
+    notified: () => Promise<void>;
+  };
 }
 
 export interface AppLifecycleHandle {
@@ -268,6 +313,11 @@ export interface AppLifecycleHandle {
    * is answered now.
    */
   onLaunchSettled(): void;
+  /**
+   * Called as this launch starts its backend with no window, before the
+   * backend is up, so the end of the user's session reaches it on Windows.
+   */
+  onStartedWindowless(): void;
 }
 
 export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLifecycleHandle {
@@ -370,9 +420,94 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
   if (app.isReady()) registerTerminationSignals();
   else void app.whenReady().then(registerTerminationSignals);
 
+  // Windows sends the end of the user's session (logoff, shutdown, restart)
+  // only to top-level windows; powerMonitor's window is message-only, so it
+  // never hears it. With no window the process would be killed with no
+  // cleanup and look crashed at the next launch. While it runs windowless, a
+  // hidden BaseWindow, with no web contents, takes the message for it. It
+  // exists only while no BrowserWindow does, so the last real window closing
+  // still emits `window-all-closed`.
+  let sessionEndWindow: BaseWindow | null = null;
+  const holdSessionEndWindow = (): void => {
+    if (process.platform !== "win32" || sessionEndWindow || !app.isReady()) return;
+    if (getActiveShutdown() !== null || BrowserWindow.getAllWindows().length > 0) return;
+    try {
+      const win = new BaseWindow({ show: false, skipTaskbar: true, focusable: false });
+      registerWindowSessionEndHandler(win);
+      win.once("closed", () => {
+        if (sessionEndWindow === win) sessionEndWindow = null;
+      });
+      sessionEndWindow = win;
+    } catch (error) {
+      console.error("[MAIN] Couldn't create the window that hears the session end:", error);
+    }
+  };
+  const releaseSessionEndWindow = (): void => {
+    const win = sessionEndWindow;
+    sessionEndWindow = null;
+    if (win && !win.isDestroyed()) win.destroy();
+  };
+
+  // Set while the last window has closed with a scheduled run open; the quit
+  // that close would have made waits until no run is.
+  let stopWaitingOnRuns: (() => void) | null = null;
+  let runsRecheckQueued = false;
+  // Bumped by every run end and by the wait ending, so only the newest check
+  // waiting on notifications may quit: an older one would drop a later run's.
+  let runsCheck = 0;
+  const endWaitOnRuns = (): void => {
+    runsCheck += 1;
+    const stop = stopWaitingOnRuns;
+    stopWaitingOnRuns = null;
+    stop?.();
+  };
+  // Whether the wait is still on with nothing left to wait for. Something
+  // that now keeps the process up, or a quit already under way, ends it.
+  const runsLetQuit = (): boolean => {
+    if (!stopWaitingOnRuns) return false;
+    if (getActiveShutdown() !== null || opts.keepsRunningWithoutWindows?.()) {
+      endWaitOnRuns();
+      return false;
+    }
+    return !isWindowRecreating() && !opts.scheduledRuns?.hasOpen();
+  };
+  const runNotificationsSent = (): Promise<void> =>
+    new Promise((resolve) => {
+      const timer = setTimeout(resolve, RUN_NOTIFICATION_WAIT_MS);
+      void Promise.resolve(opts.scheduledRuns?.notified())
+        .catch(() => {})
+        .then(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+    });
+  const recheckRuns = (): void => {
+    runsCheck += 1;
+    // A run ending is heard mid-settlement, before its notification is
+    // even set off; the check waits for the rest of it.
+    if (runsRecheckQueued) return;
+    runsRecheckQueued = true;
+    setImmediate(() => {
+      runsRecheckQueued = false;
+      if (!runsLetQuit()) return;
+      const check = runsCheck;
+      void runNotificationsSent().then(() => {
+        // A window, a new run or a quit may have come meanwhile.
+        if (check !== runsCheck || !runsLetQuit()) return;
+        endWaitOnRuns();
+        console.log("[MAIN] The last open scheduled run ended with no window open. Quitting...");
+        app.quit();
+      });
+    });
+  };
+  const waitOnRuns = (runs: NonNullable<AppLifecycleOptions["scheduledRuns"]>): void => {
+    stopWaitingOnRuns ??= runs.onClosed(recheckRuns);
+  };
+
   // A second launch that arrived before the first had anything on screen.
-  // `plainRelaunch` is true if any of them was a plain relaunch.
-  let deferredRelaunch: { plainRelaunch: boolean } | null = null;
+  // `plainRelaunch` is true if any of them was a plain relaunch, `targeted` if
+  // any named something to open.
+  let deferredRelaunch: ({ plainRelaunch: boolean } & WindowRequest) | null = null;
 
   const focusWindow = (win: BrowserWindow): void => {
     if (win.isMinimized()) win.restore();
@@ -384,20 +519,27 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
     return win && !win.isDestroyed() ? win : null;
   };
 
-  // Nothing is on screen — a windowless Host, or macOS after the last window
+  // Nothing is on screen — a windowless launch, or macOS after the last window
   // closed. A relaunch is the user asking to see the app, so it gets a window.
   // A folder open only needs one when no window has ever set up the routing
   // that would make one for it; queued, it opens in the new window.
-  const openWindowIfNeeded = (plainRelaunch: boolean): void => {
+  const openWindowIfNeeded = (plainRelaunch: boolean, request: WindowRequest): void => {
     if (opts.canOpenWindows && !opts.canOpenWindows()) return;
     if (!plainRelaunch && hasOpenDirConsumer()) return;
-    void Promise.resolve(opts.onCreateWindow()).catch((err) =>
+    void Promise.resolve(opts.onCreateWindow(request)).catch((err) =>
       console.error("[MAIN] Failed to open a window for a second launch:", err)
     );
   };
 
   app.on("second-instance", (_event, commandLine, workingDirectory) => {
     console.log("[MAIN] Second instance detected");
+    // An OS job running due schedules works in the background too: nothing is
+    // focused or opened for it, whether or not anything handles the check.
+    const dueScheduleCheck = isDueScheduleCheckRequested(commandLine);
+    if (dueScheduleCheck) {
+      console.log("[MAIN] Second instance asked to run due schedules");
+      opts.onDueScheduleCheckRequested?.();
+    }
     // A background Host-mode launch (login item, systemd unit, or a Shell
     // starting Host mode over SSH) is a request for this process to serve,
     // never for a window: nothing is focused or opened for it.
@@ -406,6 +548,7 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
       opts.onHostModeRequested(commandLine);
       return;
     }
+    if (dueScheduleCheck) return;
     if (opts.canOpenWindows && !opts.canOpenWindows()) {
       console.log("[MAIN] Second instance wants a window, but this Host has no display");
       return;
@@ -460,31 +603,65 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
     // re-launches (no path argument). A CLI path or folder open raises the
     // window it lands in, so it is excluded.
     const plainRelaunch = dntrPaths.length > 0 || (!cliPath && directoryPaths.length === 0);
+    const opensFolder = hasCliPathFlag(commandLine) || directoryPaths.length > 0;
+    const targeted = opensFolder || dntrPaths.length > 0;
     if (liveWindow) {
       if (plainRelaunch) focusWindow(liveWindow);
       return;
     }
-    // Without Host mode, a relaunch with nothing on screen behaves as it always
-    // has (the folder routing above still applies).
-    if (!opts.isHostModeActive?.()) return;
+    // Unless this process runs windowless, a relaunch with nothing on screen
+    // behaves as it always has (the folder routing above still applies).
+    if (!opts.keepsRunningWithoutWindows?.() && !stopWaitingOnRuns) return;
     if (!app.isReady() || !(opts.isLaunchSettled?.() ?? true)) {
       // The launch is still bringing up its own windows or its windowless
       // Host; decided once it has, against whatever is on screen then.
       deferredRelaunch = {
         plainRelaunch: (deferredRelaunch?.plainRelaunch ?? false) || plainRelaunch,
+        targeted: (deferredRelaunch?.targeted ?? false) || targeted,
+        opensFolder: (deferredRelaunch?.opensFolder ?? false) || opensFolder,
       };
       return;
     }
-    openWindowIfNeeded(plainRelaunch);
+    openWindowIfNeeded(plainRelaunch, { targeted, opensFolder });
   });
 
   // The application menu is process-global but its project gates track the
   // focused window, so every focus change can flip them (#11136).
   app.on("browser-window-focus", () => {
     refreshProjectMenuState();
+    // The Window menu marks the focused window (#15536).
+    refreshOpenWindowMenu();
   });
 
+  // Off macOS the Window menu lists each window by its title, so a waiting
+  // count or a project switch relabels it in place.
+  if (process.platform !== "darwin") {
+    onWindowTitlesChanged(refreshOpenWindowMenu);
+  }
+
+  // Whether closing `win` ends the process: it is the last window, and nothing
+  // the window-all-closed handler honours keeps the process up without one.
+  const closingQuits = (win: BrowserWindow): boolean => {
+    if (getActiveShutdown() !== null || isWindowRecreating()) return false;
+    if (opts.keepsRunningWithoutWindows?.() || opts.scheduledRuns?.hasOpen()) return false;
+    const others = opts.windowRegistry
+      ? opts.windowRegistry.all().map((ctx) => ctx.browserWindow)
+      : BrowserWindow.getAllWindows();
+    return others.every((other) => other === win || other.isDestroyed());
+  };
+
   app.on("browser-window-created", (_event, win) => {
+    // Before the hidden stand-in goes, so no moment is left unheard.
+    registerWindowSessionEndHandler(win);
+    releaseSessionEndWindow();
+    // A window is on screen again: closing it decides afresh.
+    endWaitOnRuns();
+    if (process.platform !== "darwin") {
+      win.on("close", (event) => {
+        if (closingQuits(win) && opts.onLastWindowClose?.()) event.preventDefault();
+        noteWindowClosing(win, event);
+      });
+    }
     win.once("closed", () => {
       // Closing the focused window promotes a survivor that may never take focus
       // (minimized/hidden), so `browser-window-focus` can't be relied on here.
@@ -493,7 +670,10 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
       // synchronously; refreshing inline would still read the closing window. A
       // microtask runs once every listener for this emit has, which is exactly
       // the ordering we need.
-      queueMicrotask(() => refreshProjectMenuState());
+      queueMicrotask(() => {
+        refreshProjectMenuState();
+        refreshOpenWindowMenu();
+      });
     });
   });
 
@@ -509,17 +689,34 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
     // survives windowless with just its menu bar.
     refreshProjectMenuState();
 
-    if (process.platform !== "darwin" && !opts.isHostModeActive?.()) {
-      app.quit();
+    if (process.platform === "darwin") return;
+    if (opts.keepsRunningWithoutWindows?.()) {
+      holdSessionEndWindow();
+      return;
     }
+    const runs = opts.scheduledRuns;
+    if (runs && getActiveShutdown() === null && runs.hasOpen()) {
+      console.log("[MAIN] Last window closed with a scheduled run open; staying up until it ends");
+      waitOnRuns(runs);
+      holdSessionEndWindow();
+      return;
+    }
+    app.quit();
   });
 
   app.on("activate", () => {
-    // A windowless Host launch never opens a window of its own, so a Dock click
+    // A windowless launch never opens a window of its own, so a Dock click
     // before it settles is the user asking to see the app: answered on settle
     // exactly like a plain relaunch.
-    if (opts.isHostModeActive?.() && (!app.isReady() || !(opts.isLaunchSettled?.() ?? true))) {
-      deferredRelaunch = { plainRelaunch: true };
+    if (
+      opts.keepsRunningWithoutWindows?.() &&
+      (!app.isReady() || !(opts.isLaunchSettled?.() ?? true))
+    ) {
+      deferredRelaunch = {
+        plainRelaunch: true,
+        targeted: deferredRelaunch?.targeted ?? false,
+        opensFolder: deferredRelaunch?.opensFolder ?? false,
+      };
       return;
     }
     // A Dock click during a slow startup fires `activate` before
@@ -545,8 +742,12 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
         if (pending.plainRelaunch) focusWindow(liveWindow);
         return;
       }
-      openWindowIfNeeded(pending.plainRelaunch);
+      openWindowIfNeeded(pending.plainRelaunch, {
+        targeted: pending.targeted,
+        opensFolder: pending.opensFolder,
+      });
     },
+    onStartedWindowless: holdSessionEndWindow,
   };
 }
 
@@ -560,7 +761,7 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
 // `CrashRecoveryService` covers truncation. `TerminateProcess`/`taskkill /F`
 // bypass `WM_ENDSESSION` entirely; that case is also handled by the marker
 // fallback. See `docs/architecture/fatal-error-spine.md`.
-export function registerWindowSessionEndHandler(win: BrowserWindow): void {
+export function registerWindowSessionEndHandler(win: BaseWindow): void {
   if (process.platform !== "win32") return;
   win.on("session-end", () => {
     setSignalShutdown();

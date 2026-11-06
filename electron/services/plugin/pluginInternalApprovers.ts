@@ -7,6 +7,7 @@ import type {
   PluginDatabaseApi,
   PluginFsApi,
   PluginHostApi,
+  PluginProcessHandle,
 } from "../../../shared/types/plugin.js";
 
 /** Approves a file another host component writes, through `host.fs`'s write gate. */
@@ -53,6 +54,20 @@ export function approvePluginDatabaseWrite(
   const authorize = databaseWriteAuthorizers.get(db);
   if (!authorize) return Promise.reject(new Error("db writes are not available on this host"));
   return authorize(id, openedPath);
+}
+
+/**
+ * Kills a plugin's process for the host itself, past the drive lease that
+ * holds the plugin's own `kill()`: cleanup the host owes (a worker going away,
+ * a spawn nobody will learn of) answers to nobody's view.
+ */
+export const processHandleKillers = new WeakMap<PluginProcessHandle, () => void>();
+
+/** Kill `handle` as the host's own cleanup. Used by the worker bridge. */
+export function killPluginProcessForHost(handle: PluginProcessHandle): void {
+  const kill = processHandleKillers.get(handle);
+  if (kill) kill();
+  else handle.kill();
 }
 
 /**

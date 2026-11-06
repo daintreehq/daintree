@@ -8,7 +8,8 @@ import {
   type PersistWriteMergeContext,
 } from "./persistence/persistWriteMerge";
 import { registerPersistedStore } from "./persistence/persistedStoreRegistry";
-import type { AgentDirectorySubject } from "@shared/types/agentDirectory";
+import { isSameAssistantRun, type AgentDirectorySubject } from "@shared/types/agentDirectory";
+import type { WindowGlobalAssistantPanel } from "@shared/types/ipc/help";
 import { legacyHelpPanelAgentId } from "./persistence/agentDefaultsLegacy";
 import { agentDefaultsClient } from "@/clients/agentDefaultsClient";
 import { logError } from "@/utils/logger";
@@ -227,6 +228,12 @@ interface HelpPanelState {
   /** Monotonic counter bumped by requestFocus() so repeated Cmd+L presses re-trigger the focus effect. */
   focusRequest: number;
   /**
+   * The `focusRequest` dictation made (#15870), or null when the latest was
+   * anyone else's: the composer takes the keyboard whatever home says, with
+   * its caret where the words go.
+   */
+  dictationFocusRequest: number | null;
+  /**
    * The panel body shows the installation's global assistant instead of a
    * project lane (#14454). `activeSlot` keeps the lane to come back to.
    */
@@ -237,6 +244,12 @@ interface HelpPanelState {
    * never shown in its place.
    */
   globalTarget: AgentDirectorySubject | null;
+  /**
+   * The latest `focusRequest` the global pane must treat as already served,
+   * or -1. Global brought back by a project switch (#16099) wasn't asked for,
+   * so the keyboard stays where the switch put it until a newer request.
+   */
+  globalFocusHandledThrough: number;
 }
 
 interface HelpPanelActions {
@@ -271,6 +284,13 @@ interface HelpPanelActions {
   /** Show the global assistant, pinned to one exact run or following whichever runs. */
   selectGlobal: (target?: AgentDirectorySubject | null) => void;
   /**
+   * Take on the window's panel as the view it switched from left it (#16099).
+   * Global showing there shows here, at once and without taking the keyboard;
+   * Global closed there closes it here. A project lane is this project's own
+   * and is never opened or closed by it, and nothing is ever launched.
+   */
+  applyWindowGlobalPanel: (panel: WindowGlobalAssistantPanel | null) => void;
+  /**
    * A person choosing the assistant agent: shown at once, saved on the host,
    * and, unless `switchSession` is false, queued to replace this view's live
    * session (#8353).
@@ -288,7 +308,7 @@ interface HelpPanelActions {
   clearDroppedPreferredAgent: () => void;
   dismissIntro: () => void;
   markConversationStarted: (slot: number) => void;
-  requestFocus: () => void;
+  requestFocus: (options?: { forDictation?: boolean }) => void;
   setHibernateSession: (
     projectId: string,
     slot: number,
@@ -321,8 +341,10 @@ const initialState: HelpPanelState = {
   introDismissed: false,
   hibernateSessions: {},
   focusRequest: 0,
+  dictationFocusRequest: null,
   globalSelected: false,
   globalTarget: null,
+  globalFocusHandledThrough: -1,
 };
 
 /**
@@ -630,6 +652,27 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
 
       selectGlobal: (target = null) => set({ globalSelected: true, globalTarget: target }),
 
+      applyWindowGlobalPanel: (panel) =>
+        set((s) => {
+          if (!panel) return s;
+          if (!panel.showing) return s.isOpen && s.globalSelected ? { isOpen: false } : s;
+          if (
+            s.isOpen &&
+            s.globalSelected &&
+            (s.globalTarget === panel.target || isSameAssistantRun(s.globalTarget, panel.target))
+          ) {
+            return s;
+          }
+          // One update: an open panel on a project lane, even for a render, is
+          // one that lane may auto-launch into.
+          return {
+            isOpen: true,
+            globalSelected: true,
+            globalTarget: panel.target,
+            globalFocusHandledThrough: s.focusRequest,
+          };
+        }),
+
       setPreferredAgent: (agentId, options) => {
         const epoch = ++assistantAgentWriteEpoch;
         const switchSession = options?.switchSession !== false;
@@ -703,7 +746,14 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
           )
         ),
 
-      requestFocus: () => set((s) => ({ focusRequest: s.focusRequest + 1 })),
+      requestFocus: (options) =>
+        set((s) => {
+          const focusRequest = s.focusRequest + 1;
+          return {
+            focusRequest,
+            dictationFocusRequest: options?.forDictation === true ? focusRequest : null,
+          };
+        }),
 
       setHibernateSession: (projectId, slot, entry) =>
         set((s) => ({
@@ -897,9 +947,9 @@ export function selectOpenSlots(state: HelpPanelState): number[] {
 /**
  * Whether a session can start without displacing one: a slot no tab holds yet,
  * or an open tab with nothing in it — no terminal, no session and no captured
- * conversation of `workspaceId`'s waiting to resume. Looser than the strip's
- * `+`, which only ever opens a new tab, because a session started on a named
- * agent fills an empty tab before it opens another (#13442).
+ * conversation of `workspaceId`'s waiting to resume. Looser than a free slot,
+ * because a session started on a named agent fills an empty tab before it opens
+ * another (#13442).
  */
 export function selectHasRoomForSession(
   state: HelpPanelState,

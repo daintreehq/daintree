@@ -1,4 +1,4 @@
-import type { SessionPresentationState } from "@/lib/handBackPresentation";
+import type { SessionPresentationState } from "@/lib/paneSessionPresentation";
 import { cn } from "@/lib/utils";
 import { SESSION_ICONS, SESSION_COLORS } from "../terminalStateConfig";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
@@ -6,6 +6,13 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 interface CollapsedSessionIndicatorsProps {
   visibleStates: { state: SessionPresentationState; count: number }[];
   sessionAriaLabel: string;
+  /**
+   * Applied to every group but the one that matters most (waiting, else
+   * blocked, else the first), so a cramped row keeps a single state and gives
+   * the rest of its width to the title. The tooltip and accessible name keep
+   * the breakdown.
+   */
+  secondaryClassName?: string;
 }
 
 /**
@@ -34,9 +41,23 @@ interface CollapsedSessionIndicatorsProps {
 export function CollapsedSessionIndicators({
   visibleStates,
   sessionAriaLabel,
+  secondaryClassName,
 }: CollapsedSessionIndicatorsProps) {
+  // The state that wants the user — waiting, else blocked — is drawn last:
+  // nearest the card's controls, at the one x every card's ring lands on, with
+  // any other states ahead of it rather than pushing it along the row.
+  const waitingAt = visibleStates.findIndex((v) => v.state === "waiting");
+  const leadAt =
+    waitingAt !== -1 ? waitingAt : visibleStates.findIndex((v) => v.state === "blocked");
+  const ordered =
+    leadAt === -1
+      ? visibleStates
+      : [...visibleStates.filter((_, i) => i !== leadAt), visibleStates[leadAt]!];
+  const leadIndex = leadAt === -1 ? 0 : ordered.length - 1;
   return (
-    <Tooltip>
+    // The breakdown is the only full reading once a narrow row drops groups,
+    // so it stays while hovered or focused and can be hovered itself.
+    <Tooltip autoDismiss={false} disableHoverableContent={false}>
       <TooltipTrigger asChild>
         <span
           className="flex items-center gap-1.5 shrink-0"
@@ -44,14 +65,17 @@ export function CollapsedSessionIndicators({
           aria-label={sessionAriaLabel}
           data-testid="collapsed-session-indicators"
         >
-          {visibleStates.map(({ state, count }) => {
+          {ordered.map(({ state, count }, index) => {
             const Icon = SESSION_ICONS[state];
             return (
               <span
                 key={state}
                 aria-hidden="true"
                 data-state={state}
-                className="flex items-center gap-0.5 text-2xs font-medium text-text-secondary"
+                className={cn(
+                  "flex items-center gap-0.5 text-2xs font-medium text-text-secondary",
+                  index !== leadIndex && secondaryClassName
+                )}
               >
                 <span className={cn("flex shrink-0", SESSION_COLORS[state])}>
                   <Icon

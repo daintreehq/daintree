@@ -15,6 +15,7 @@ const TOOLBAR_SOURCE_FILES = [
   "ToolbarOverflowMenu.tsx",
   "toolbarItemClasses.ts",
   "ToolbarProjectPill.tsx",
+  "ForgeStatsPlaceholder.tsx",
 ];
 
 export async function readToolbarSource(): Promise<string> {

@@ -16,11 +16,14 @@ import type {
   FleetRunRow,
   FleetSnapshot,
   RunCanopyRefinement,
+  RunWaitRecord,
 } from "../../shared/types/ipc/fleet.js";
+import { isObservedAskWait } from "../../shared/utils/runHandBack.js";
 import {
   canopyRefinementFor,
   onCanopyRefinementsChanged,
 } from "./canopy/canopyRefinementSource.js";
+import { answerAttentionFor, onAnswerAttentionChanged } from "./runAnswerAttentionSource.js";
 import { MutableDisposable, toDisposable, type IDisposable } from "../utils/lifecycle.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 
@@ -57,6 +60,8 @@ export const STALL_QUIET_MS = 10 * 60_000;
  * `PtyClient` is a global singleton whose terminal records survive eviction
  * entirely. A parked project's agents keep running and keep appearing here.
  */
+type InventoryTerminal = Awaited<ReturnType<typeof getSharedTerminalSnapshot>>["terminals"][number];
+
 export class FleetSnapshotService {
   private intervalSlot = new MutableDisposable<IDisposable>();
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -121,7 +126,13 @@ export class FleetSnapshotService {
     subscribe("terminal:worktree-changed");
     // A refinement is a decoration, like a park: nothing on the host moved, so
     // the recompute reuses its inventory rather than asking it again.
-    this.eventUnsubscribes.push(onCanopyRefinementsChanged(() => this.onCanopyChanged()));
+    this.eventUnsubscribes.push(onCanopyRefinementsChanged(() => this.onDecorationsChanged()));
+    // And so are Decisions' answers needing attention: a delivery that stopped
+    // moved nothing on the host.
+    this.eventUnsubscribes.push(onAnswerAttentionChanged(() => this.onDecorationsChanged()));
+    // So is a wait's seen mark: a look moved nothing on the host either.
+    const offWaits = this.handBacks?.onWaitChanged(() => this.onDecorationsChanged());
+    if (offWaits) this.eventUnsubscribes.push(offWaits);
   }
 
   updatePollInterval(ms: number): void {
@@ -291,7 +302,11 @@ export class FleetSnapshotService {
         x.handBack?.stoppedAt !== y.handBack?.stoppedAt ||
         x.handBack?.seenAt !== y.handBack?.seenAt ||
         x.handBack?.markedUnreadAt !== y.handBack?.markedUnreadAt ||
+        x.wait?.stoppedAt !== y.wait?.stoppedAt ||
+        x.wait?.seenAt !== y.wait?.seenAt ||
+        x.handbackReport !== y.handbackReport ||
         x.quietSince !== y.quietSince ||
+        x.answerAttention !== y.answerAttention ||
         !sameCanopyRefinement(x.canopy, y.canopy)
       ) {
         return false;
@@ -346,7 +361,9 @@ export class FleetSnapshotService {
         const park = parkRecords?.get(terminal.id);
         const snooze = snoozeRecords?.get(terminal.id);
         const handBack = this.handBacks?.getRecord(terminal.id, terminal.spawnedAt);
+        const wait = this.waitFor(terminal, readStartedAt);
         const canopy = canopyRefinementFor(terminal.id, terminal.spawnedAt);
+        const answerAttention = answerAttentionFor(terminal.id);
         runs.push({
           runId: terminal.id,
           workspaceId: terminal.projectId,
@@ -384,7 +401,14 @@ export class FleetSnapshotService {
           ...(park !== undefined ? { park } : {}),
           ...(snooze !== undefined ? { snooze } : {}),
           ...(handBack !== undefined ? { handBack } : {}),
+          ...(wait !== undefined ? { wait } : {}),
+          // Only the report, never the summary: a fleet row carries no
+          // terminal or handback text, and a done report places nothing.
+          ...(terminal.lastHandback?.report === "needs-you"
+            ? { handbackReport: "needs-you" as const }
+            : {}),
           ...(canopy !== undefined ? { canopy } : {}),
+          ...(answerAttention !== undefined ? { answerAttention } : {}),
           // Stall cue: only for a working run, and only once the CURRENT
           // working stint has been silent past the threshold. Anchored on the
           // later of last output, the transition into this state and the
@@ -446,19 +470,52 @@ export class FleetSnapshotService {
    * renderer's cue to say it cannot tell rather than to render an empty fleet.
    */
   /**
-   * Canopy's refinements moved. A degraded fleet keeps its last good rows, and
-   * those must not keep a reading Canopy has since withdrawn — turned off, or
-   * the tier lapsed — until the host recovers: the retained rows are decorated
-   * afresh and sent, still marked degraded.
+   * The approval or question wait a run is in, as main tracks it. Only while
+   * the run shows one: the record outlives the wait through its stop's slides,
+   * and a row carrying it then would be news to no band. A wait this inventory
+   * shows that no state was heard for begins here.
    */
-  private onCanopyChanged(): void {
+  private waitFor(terminal: InventoryTerminal, readStartedAt: number): RunWaitRecord | undefined {
+    if (!this.handBacks || terminal.agentState === undefined) return undefined;
+    if (!isObservedAskWait(terminal.agentState, terminal.waitingReason)) return undefined;
+    const since =
+      typeof terminal.lastStateChange === "number" && terminal.lastStateChange > 0
+        ? terminal.lastStateChange
+        : Date.now();
+    this.handBacks.noteInventoryWait(
+      terminal.id,
+      Math.max(since, terminal.spawnedAt),
+      readStartedAt
+    );
+    return this.handBacks.getWait(terminal.id, terminal.spawnedAt);
+  }
+
+  /**
+   * Canopy's refinements, a wait's seen mark, or Decisions' answers needing
+   * attention moved. A degraded fleet keeps
+   * its last good rows, and those must not keep a reading Canopy has since
+   * withdrawn — turned off, or the tier lapsed — nor a wait the user has since
+   * looked at, until the host recovers: the retained rows are decorated afresh
+   * and sent, still marked degraded. No wait begins from them.
+   */
+  private onDecorationsChanged(): void {
     const previous = this.lastBroadcast;
     if (previous?.degraded === true) {
       const runs = previous.runs.map((run) => {
         const canopy = canopyRefinementFor(run.runId, run.spawnedAt);
+        const wait =
+          run.wait === undefined ? undefined : this.handBacks?.getWait(run.runId, run.spawnedAt);
+        const answerAttention = answerAttentionFor(run.runId);
         const rest = { ...run };
         delete rest.canopy;
-        return canopy === undefined ? rest : { ...rest, canopy };
+        delete rest.wait;
+        delete rest.answerAttention;
+        return {
+          ...rest,
+          ...(wait !== undefined ? { wait } : {}),
+          ...(canopy !== undefined ? { canopy } : {}),
+          ...(answerAttention !== undefined ? { answerAttention } : {}),
+        };
       });
       if (!this.runsEqual(runs, previous.runs)) {
         this.publish({ ...previous, runs, changedAt: Date.now() });
@@ -503,5 +560,6 @@ function sameCanopyRefinement(
   if (a.kind !== b.kind || a.quote !== b.quote || a.readAt !== b.readAt) return false;
   if (a.kind === "stalled" && b.kind === "stalled") return a.stalledSince === b.stalledSince;
   if (a.kind === "not-asking" && b.kind === "not-asking") return a.seen === b.seen;
+  if (a.kind === "asked" && b.kind === "asked") return a.seen === b.seen;
   return true;
 }

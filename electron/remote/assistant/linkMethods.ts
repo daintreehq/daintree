@@ -2,6 +2,12 @@ import { z } from "zod";
 import { EXCHANGE_STATES } from "../exchange/types.js";
 import { AgentDirectorySchema } from "../../../shared/types/agentDirectory.js";
 import {
+  HOST_STATUS_MAX_LINES,
+  HOST_STATUS_PROJECT_TERMINALS_MAX,
+  HOST_STATUS_TARGETS_MAX,
+} from "../../../shared/types/hostControl.js";
+import { TerminalStatusResultSchema } from "../../../shared/types/terminalStatusSchemas.js";
+import {
   HOST_THROWAWAY_FAILURES,
   HOST_THROWAWAY_REFUSALS,
   HostThrowawayCallSchema,
@@ -64,6 +70,13 @@ export const AssistantLinkMethod = {
    */
   RELAY_APPROVE: "assistant.relay-approve",
   /**
+   * Host → Shell: RELAY_APPROVE, saying how long the host waits for the answer
+   * (#15699), so the Shell's dialog ends inside it. A Shell from before this
+   * answers UNSUPPORTED, and is asked by RELAY_APPROVE; a Shell asked that way
+   * holds its dialog to the plain deadline.
+   */
+  RELAY_APPROVE_TIMED: "assistant.relay-approve-timed",
+  /**
    * Shell → Host: run one throwaway tool for one of the Shell's assistants
    * (#14444), with no project. Its own method, so a host from before this
    * answers UNSUPPORTED rather than failing MCP_CALL's payload check.
@@ -83,6 +96,14 @@ export const AssistantLinkMethod = {
    * UNSUPPORTED.
    */
   AGENTS: "assistant.agents",
+  /**
+   * Shell → Host: `terminal.getStatus` in several of this host's projects in
+   * one exchange, for `host.status` (#16191). Each project is read in a session
+   * the host admits for it, as MCP_CALL's is, and screens and handback
+   * messages are redacted here before they leave. A host from before this
+   * answers UNSUPPORTED, and the Shell reads each project with MCP_CALL.
+   */
+  STATUS: "assistant.status",
 } as const;
 
 /** What a v0.44 Shell calls for the exchanges it sent, answered from retired records (#13496). */
@@ -290,7 +311,18 @@ export const AgentsPayloadSchema = z.object({ projectId: id.optional() }).strict
 export type AgentsPayload = z.infer<typeof AgentsPayloadSchema>;
 
 export const AgentsAnswerSchema = z.discriminatedUnion("status", [
-  z.object({ status: z.literal("done"), directory: AgentDirectorySchema }).strip(),
+  z
+    .object({
+      status: z.literal("done"),
+      directory: AgentDirectorySchema,
+      /**
+       * This host sends `host.agent-waiting` for its agents' waits (#16188).
+       * Absent from a host from before it, which a watch hears only through
+       * the person's attention notices.
+       */
+      waitingEvents: z.boolean().optional(),
+    })
+    .strip(),
   /** This host doesn't take work from other machines' assistants; nothing was read. */
   z
     .object({
@@ -306,6 +338,152 @@ export const AgentsAnswerSchema = z.discriminatedUnion("status", [
     .strip(),
 ]);
 export type AgentsAnswer = z.infer<typeof AgentsAnswerSchema>;
+
+/** Longest a host may take over a STATUS read: well past any Shell's own wait for one. */
+export const MAX_STATUS_RUN_MS = 60_000;
+
+export const StatusOutputSchema = z
+  .object({
+    lines: z.number().int().min(1).max(HOST_STATUS_MAX_LINES),
+    stripAnsi: z.boolean(),
+  })
+  .strict();
+export type StatusOutput = z.infer<typeof StatusOutputSchema>;
+
+export const StatusProjectSchema = z
+  .object({
+    projectId: id,
+    /** Absent: every agent the host's own directory lists in the project. */
+    terminalIds: z.array(id).min(1).max(HOST_STATUS_PROJECT_TERMINALS_MAX).optional(),
+  })
+  .strict();
+export type StatusProject = z.infer<typeof StatusProjectSchema>;
+
+export const StatusPayloadSchema = z
+  .object({
+    /** The Shell assistant's own help session, as MCP_CALL names it. */
+    helpSessionId: id,
+    tier: z.enum(["core", "full"]),
+    /**
+     * The Shell's global Assistant (#14545), from the Shell runtime's own lane.
+     * A field here, not a method as GLOBAL_MCP_CALL is: every host that knows
+     * this method knows a global Assistant's sessions.
+     */
+    global: z.literal(true).optional(),
+    projects: z.array(StatusProjectSchema).min(1).max(HOST_STATUS_TARGETS_MAX),
+    /** Null for state alone. */
+    includeOutput: StatusOutputSchema.nullable(),
+    /** How long the host may take before answering with what it has read. */
+    runMs: z.number().int().min(1).max(MAX_STATUS_RUN_MS),
+  })
+  .strict();
+export type StatusPayload = z.infer<typeof StatusPayloadSchema>;
+
+/**
+ * Why one project's read gave nothing: its status read answered with an error
+ * (`tool-error`) or with something that isn't a status (`unreadable`); its
+ * agents couldn't be listed when no terminals were named, just now
+ * (`agents-unread`) or ever on this host (`agents-unsupported`); or it didn't
+ * answer in time (`timeout`). A Shell reading an older host project by project
+ * also meets a link it can't use (`unreachable`), a host that runs no tools for
+ * other machines' assistants (`unsupported`), one that turned this Shell's
+ * sender away (`sender-refused`) and one taking no more calls just now
+ * (`rate-limited`).
+ */
+export const PROJECT_STATUS_FAILURES = [
+  "tool-error",
+  "unreadable",
+  "agents-unread",
+  "agents-unsupported",
+  "timeout",
+  "unreachable",
+  "unsupported",
+  "sender-refused",
+  "rate-limited",
+] as const;
+export type ProjectStatusFailure = (typeof PROJECT_STATUS_FAILURES)[number];
+
+const KnownProjectStatusAnswerSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      status: z.literal("done"),
+      projectId: id,
+      /** As `terminal.getStatus` answered there, its text redacted; null when it lists no agents. */
+      result: TerminalStatusResultSchema.nullable(),
+      /** Every agent was listed: always true for named terminals. */
+      complete: z.boolean(),
+      /** Agents the directory left out, for its cap. */
+      omitted: z.number().int().min(0),
+    })
+    .strip(),
+  z
+    .object({
+      status: z.literal("refused"),
+      projectId: id,
+      reason: z.union([
+        z.enum(RELAY_REFUSALS),
+        z
+          .string()
+          .max(64)
+          .transform(() => "server-off" as const),
+      ]),
+    })
+    .strip(),
+  z
+    .object({
+      status: z.literal("failed"),
+      projectId: id,
+      reason: z.union([
+        z.enum(PROJECT_STATUS_FAILURES),
+        z
+          .string()
+          .max(64)
+          .transform(() => "unreadable" as const),
+      ]),
+    })
+    .strip(),
+]);
+
+/**
+ * One project's read. A project answered in a way this Shell can't read, a
+ * status a newer host added included, is that project unreadable: its
+ * siblings in the same answer still count.
+ */
+export const ProjectStatusAnswerSchema = z.union([
+  KnownProjectStatusAnswerSchema,
+  z
+    .object({ projectId: id })
+    .strip()
+    .transform(({ projectId }) => ({
+      status: "failed" as const,
+      projectId,
+      reason: "unreadable" as const,
+    })),
+]);
+export type ProjectStatusAnswer = z.infer<typeof ProjectStatusAnswerSchema>;
+
+export const StatusAnswerSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      status: z.literal("done"),
+      projects: z.array(ProjectStatusAnswerSchema).max(HOST_STATUS_TARGETS_MAX),
+    })
+    .strip(),
+  /** This host doesn't take work from other machines' assistants; nothing was read. */
+  z
+    .object({
+      status: z.literal("refused"),
+      reason: z.union([
+        z.literal("control-off"),
+        z
+          .string()
+          .max(64)
+          .transform(() => "control-off" as const),
+      ]),
+    })
+    .strip(),
+]);
+export type StatusAnswer = z.infer<typeof StatusAnswerSchema>;
 
 /** Notices one relay-notices call carries; the host sends the rest in the next. */
 export const MAX_RELAY_NOTICES_PER_CALL = 32;
@@ -351,6 +529,15 @@ export const RelayNoticeSchema = z
     observation: relayObservationSchema,
     /** It stopped without the done marker its prompt asked for; one more notice may follow. */
     awaitingHandback: z.boolean().optional(),
+    /**
+     * The host's `lastStateChange` for the state the notice reports, on the
+     * host's clock: what `terminal.getStatus` on the host answers as
+     * `lastTransitionAt`. Null when no transition matches the observation;
+     * absent from a host that predates it. A Shell that predates it strips it.
+     * One that is not a time is dropped rather than refusing the batch, which
+     * the host would take as final and lose every notice in it.
+     */
+    lastTransitionAt: z.number().nullable().optional().catch(undefined),
   })
   .strip();
 export type RelayNotice = z.infer<typeof RelayNoticeSchema>;
@@ -415,16 +602,25 @@ export const RelayApprovePayloadSchema = z
   .strict();
 export type RelayApprovePayload = z.infer<typeof RelayApprovePayloadSchema>;
 
+export const RelayApproveTimedPayloadSchema = RelayApprovePayloadSchema.extend({
+  /** How long the host waits for the answer, from when it asked. */
+  holdBudgetMs: z.number().int().positive(),
+}).strict();
+export type RelayApproveTimedPayload = z.infer<typeof RelayApproveTimedPayloadSchema>;
+
 /**
  * `refused`: the Shell couldn't put it to anyone — the call isn't one of its
  * own in flight, its assistant's window is gone, or it doesn't ask about that
- * action. Nothing was approved.
+ * action. Nothing was approved. `skip-preference`: nobody was asked, because
+ * the assistant that made the call runs with Daintree's confirmations skipped
+ * on the Shell (#15698); it covers the call as an approval would. A host from
+ * before it reads it as no answer, and refuses the call.
  */
 export const RelayApproveAnswerSchema = z
   .object({
     approvalId: z.string().regex(/^[A-Za-z0-9-]{1,64}$/),
     argsHash,
-    decision: z.enum(["approved", "rejected", "timeout", "refused"]),
+    decision: z.enum(["approved", "rejected", "timeout", "refused", "skip-preference"]),
   })
   .strip();
 export type RelayApproveAnswer = z.infer<typeof RelayApproveAnswerSchema>;

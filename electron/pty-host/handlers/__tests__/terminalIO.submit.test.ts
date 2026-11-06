@@ -29,8 +29,62 @@ describe("submit (#15521)", () => {
       undefined,
       undefined,
       undefined,
-      { text: "Fix the login bug", truncated: true }
+      { text: "Fix the login bug", truncated: true },
+      undefined,
+      undefined
     );
+  });
+
+  it("passes the choice-dialog guard on, and drops one it doesn't know (#16209)", () => {
+    const { ptyManager, handler } = setup();
+
+    handler({ type: "submit", id: "t1", text: "go", guard: "no-choice-dialog" });
+    handler({ type: "submit", id: "t1", text: "go", guard: "no-dialog" as never });
+
+    expect(ptyManager.submit.mock.calls.map((call) => call[4])).toEqual([
+      "no-choice-dialog",
+      undefined,
+    ]);
+  });
+
+  it("passes on whose prompt a line carries, only as a string (#16187)", () => {
+    const { ptyManager, handler } = setup();
+
+    handler({ type: "submit", id: "t1", text: "go", promptOwner: "principal-a" });
+    handler({ type: "submit", id: "t1", text: "go" });
+    handler({ type: "submit", id: "t1", text: "go", promptOwner: 7 as never });
+
+    expect(ptyManager.submit.mock.calls.map((call) => call[8])).toEqual([
+      "principal-a",
+      undefined,
+      undefined,
+    ]);
+  });
+
+  it("passes the run instruction on only with a code (#16171)", () => {
+    const { ptyManager, handler } = setup();
+
+    handler({
+      type: "submit",
+      id: "t1",
+      text: "go",
+      handbackCode: "k7f3qa",
+      handbackInstruction: "run",
+    });
+    handler({ type: "submit", id: "t1", text: "go", handbackInstruction: "run" });
+    handler({
+      type: "submit",
+      id: "t1",
+      text: "go",
+      handbackCode: "k7f3qa",
+      handbackInstruction: "other" as never,
+    });
+
+    expect(ptyManager.submit.mock.calls.map((call) => call[7])).toEqual([
+      "run",
+      undefined,
+      undefined,
+    ]);
   });
 
   it("drops a candidate that isn't one", () => {
@@ -45,5 +99,46 @@ describe("submit (#15521)", () => {
     });
 
     for (const call of ptyManager.submit.mock.calls) expect(call[6]).toBeUndefined();
+  });
+});
+
+describe("submit guards (#16015)", () => {
+  function setup() {
+    const ptyManager = { submit: vi.fn() };
+    const handler = createTerminalIOHandlers({
+      ptyManager,
+      sendEvent: vi.fn(),
+    } as unknown as HostContext).submit!;
+    return { ptyManager, handler };
+  }
+
+  it("passes an exact guard on with only its run fields, and makes a malformed one refuse", () => {
+    const { ptyManager, handler } = setup();
+    const send = (guard: unknown) =>
+      handler({ type: "submit", id: "t1", text: "answer", guard: guard as never });
+
+    send({ kind: "settled-prompt-exact", agentIncarnation: 2, agentSessionId: "s-1", extra: 1 });
+    send({ kind: "settled-prompt-exact" });
+    send({ kind: "settled-prompt-exact", agentIncarnation: "2" });
+    send({ kind: "settled-prompt-exact", agentIncarnation: 1, agentSessionId: 7 });
+    send({ kind: "anything-goes" });
+    send("settled-prompt-strict");
+    // A Decisions answer's allowances (#16282) cross only as `true`.
+    send({ kind: "settled-prompt-exact", acceptWorking: true, acceptQuestion: true });
+    send({ kind: "settled-prompt-exact", acceptWorking: "yes" });
+    send({ kind: "settled-prompt-exact", acceptQuestion: false });
+
+    const refusing = { kind: "settled-prompt-exact", agentIncarnation: -1 };
+    expect(ptyManager.submit.mock.calls.map((call) => call[4])).toEqual([
+      { kind: "settled-prompt-exact", agentIncarnation: 2, agentSessionId: "s-1" },
+      { kind: "settled-prompt-exact" },
+      refusing,
+      refusing,
+      refusing,
+      "settled-prompt-strict",
+      { kind: "settled-prompt-exact", acceptWorking: true, acceptQuestion: true },
+      refusing,
+      refusing,
+    ]);
   });
 });

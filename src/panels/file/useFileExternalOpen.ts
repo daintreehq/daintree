@@ -63,9 +63,9 @@ export function externalTargetCopy(
 
 // Module scope so the hook below stays compilable: a statement-level `finally`
 // bails React Compiler for the whole enclosing hook.
-async function settleAfter(work: Promise<void>, settle: () => void): Promise<void> {
+async function settleAfter<T>(work: Promise<T>, settle: () => void): Promise<T> {
   try {
-    await work;
+    return await work;
   } finally {
     settle();
   }
@@ -79,7 +79,11 @@ export interface ExternalOpenError {
 export interface FileExternalOpen {
   externalError: ExternalOpenError | null;
   dismissExternalError: () => void;
-  handleOpenExternal: (target: ExternalTarget) => Promise<void>;
+  /**
+   * Resolves true once the action succeeded — for a remote window's reveal,
+   * once main has copied the host path — so the control can confirm it.
+   */
+  handleOpenExternal: (target: ExternalTarget) => Promise<boolean>;
   /** Whether the target behind the standing failure banner is being retried. */
   isErrorTargetPending: boolean;
   showRetrySpinner: boolean;
@@ -128,15 +132,15 @@ export function useFileExternalOpen({
   }, [panelId, filePath]);
 
   const handleOpenExternal = useCallback(
-    async (target: ExternalTarget) => {
-      if (!filePath) return;
+    async (target: ExternalTarget): Promise<boolean> => {
+      if (!filePath) return false;
       // File-browser carries worktree-scoped args and reveal opts into the
       // guarded out-of-root fallback; browser/editor stay path-only. Built
       // before the pending flip so a missing scope can't leave the button
       // spinning on a dispatch that was never going to happen.
       let args: unknown;
       if (target === "file-browser") {
-        if (!revealWorktreeId) return;
+        if (!revealWorktreeId) return false;
         args = {
           worktreeId: revealWorktreeId,
           // `toWorktreeRelative` hands back its input unchanged for a path that
@@ -158,25 +162,27 @@ export function useFileExternalOpen({
       } else {
         args = { path: filePath };
       }
-      if (externalInFlightRef.current.has(target)) return;
+      if (externalInFlightRef.current.has(target)) return false;
       externalInFlightRef.current.add(target);
       const generation = externalGenerationRef.current;
       setPendingTargets((current) => (current.includes(target) ? current : [...current, target]));
-      await settleAfter(
+      return settleAfter(
         actionService
           .dispatch(EXTERNAL_ACTIONS[target], args, { source: "user" })
           .then((result) => {
             // The file (or panel) changed while this was in flight: the result
-            // describes a file the pane no longer shows.
-            if (externalGenerationRef.current !== generation) return;
+            // describes a file the pane no longer shows, so it touches no
+            // banner. A success still reports, since the copy it made is real.
+            if (externalGenerationRef.current !== generation) return result.ok;
             if (result.ok) {
               // Clears only its own failure — a sibling's banner stands until
               // that button's own retry succeeds.
               setExternalError((current) => (current?.target === target ? null : current));
-              return;
+              return true;
             }
             logError(`[FilePane] ${EXTERNAL_ACTIONS[target]} failed`, result.error);
             setExternalError({ message: result.error.message, target });
+            return false;
           }),
         () => {
           // Releasing on settlement keeps a rejection from wedging the button;

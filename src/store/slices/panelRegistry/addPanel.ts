@@ -1,5 +1,10 @@
 import type { TerminalRuntimeStatus } from "@/types";
-import type { PanelRegistryStoreApi, PanelRegistrySlice } from "./types";
+import type {
+  AddPanelCommitOptions,
+  AddPanelOptions,
+  PanelRegistryStoreApi,
+  PanelRegistrySlice,
+} from "./types";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import {
   load as loadTerminalService,
@@ -21,6 +26,9 @@ import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelLimitStore, buildPanelLimitSnapshot } from "@/store/panelLimitStore";
 import { notify } from "@/lib/notify";
+import { notifyRetiredModelDropped } from "@/services/terminal/retiredModelNotice";
+import { dropRetiredAgentModel, dropUnselectedAgentModel } from "@shared/types/agentSettings";
+import { readSpawnProvenance } from "@shared/utils/scheduledRunProvenance";
 import { noteVisibleAgentLaunch } from "@/services/systemMemoryLaunchNotice";
 import {
   getDefaultTitle,
@@ -36,8 +44,10 @@ import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { cancelDriveLeaseHold, clearPanelDriveLeaseMark } from "@/store/driveLeaseWaitStore";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
-import { countPanelsTowardLimit } from "./panelCount";
+import { countPanelLimitUsage, countsTowardPanelLimit } from "./panelCount";
+import { reservePanelSlots } from "./panelSlotReservations";
 import { isUsableTerminalGeometry } from "@shared/types/terminal";
+import { isDecisionsRelayTerminalId } from "@shared/config/terminalScreenPersistence";
 import {
   commitPtyPanel,
   isHeldForRecovery,
@@ -61,10 +71,6 @@ async function resolveProjectStore() {
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
-
-function countNonTrashTerminals(state: PanelRegistrySlice): number {
-  return countPanelsTowardLimit(state.panelsById, state.panelIds);
-}
 
 // Chrome allowance for the overlay (help panel) grid estimate: horizontal =
 // panel border + terminal-host inset; vertical = header + banners + hybrid
@@ -102,57 +108,32 @@ function estimateOverlayGridDims(fontSize: number): { cols: number; rows: number
   );
 }
 
-export const createAddPanelActions = (
-  set: Set,
-  get: Get
-): Pick<PanelRegistrySlice, "addPanel"> => ({
-  addPanel: async (options, commit) => {
-    // Panel limit enforcement: only the hard ceiling blocks a single-panel add.
-    // The confirm band (>= confirmationLimit) is intentionally non-blocking —
-    // adding a panel is reversible (one-click close), so the step-throttled
-    // `TerminalCountWarning` banner (shown from `softWarningLimit` upward, with
-    // no upper bound) is the right calibration, not a focus-stealing modal. The
-    // blocking confirm survives only for batch spawns (`preflightSpawnBatchLimit`),
-    // where the blast radius of many panels at once warrants it. See #10547.
-    // Launching a pane held for recovery replaces it rather than adding one, so
-    // it must not be refused by a limit the held pane already counts toward.
-    const replacesHeldPane =
-      options.replacesRestoreRecovery === true &&
-      options.requestedId !== undefined &&
-      isHeldForRecovery(get().panelsById[options.requestedId]);
-    if (!options.bypassLimits && !replacesHeldPane) {
-      const { softWarningLimit, confirmationLimit, hardLimit } = usePanelLimitStore.getState();
-      const snapshot = buildPanelLimitSnapshot(countNonTrashTerminals(get()), {
-        softWarningLimit,
-        confirmationLimit,
-        hardLimit,
-      });
-
-      if (snapshot.tier === "hard") {
-        logWarn("[TerminalStore] Refused a panel at the hard panel limit", {
-          kind: options.kind ?? "terminal",
-          count: snapshot.count,
-          hardLimit,
-        });
-        commit?.onLimitRefused?.(snapshot);
-        notify({
-          type: "warning",
-          priority: "high",
-          title: "Panel limit reached",
-          message: `Maximum of ${hardLimit} panels reached. Close some panels before adding new ones.`,
-          duration: 5000,
-          context: { worktreeId: options.worktreeId ?? undefined },
-        });
-        return null;
-      }
-    }
-
-    const requestedKind = options.kind ?? "terminal";
+export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySlice, "addPanel"> => {
+  const createPanel = async (
+    requestedOptions: AddPanelOptions,
+    commit: AddPanelCommitOptions | undefined
+  ): Promise<string | null> => {
+    const requestedKind = requestedOptions.kind ?? "terminal";
 
     // Handle panels that use custom UI (browser, dev-preview, extensions) separately
     if (!panelKindUsesTerminalUi(requestedKind)) {
-      return addNonPtyPanel(set, get, options, commit, requestedKind);
+      return addNonPtyPanel(set, get, requestedOptions, commit, requestedKind);
     }
+
+    // Every replayed launch (recipe, duplicate, reopen, worktree and project
+    // restore) arrives here, so a saved retired model is dropped once, before
+    // the panel records it (#15652), as is a model the command doesn't select
+    // for an agent that takes one only headless (#15569). A reconnect attaches
+    // to a run already going and a recovery hold starts nothing, so neither is
+    // changed.
+    const startsLaunch =
+      !requestedOptions.existingId && requestedOptions.restoreRecovery === undefined;
+    const { launch: withoutRetired, droppedModelIds } = startsLaunch
+      ? dropRetiredAgentModel(requestedOptions.launchAgentId, requestedOptions)
+      : { launch: requestedOptions, droppedModelIds: [] };
+    const options = startsLaunch
+      ? dropUnselectedAgentModel(requestedOptions.launchAgentId, withoutRetired)
+      : withoutRetired;
 
     // PTY panels: terminal / dev-preview. Agent identity lives on `launchAgentId`.
     const launchAgentId = options.launchAgentId;
@@ -210,6 +191,13 @@ export const createAddPanelActions = (
     // like any other pane and stops there — no startup slot, no ledger launch,
     // no prewarm, no spawn.
     const isRecoveryHold = options.restoreRecovery !== undefined && !isReconnect;
+    // Restored as its process's own exit left it (#15941): the pane commits
+    // exited and stops there, as a pane does when its PTY ends — no startup
+    // slot, no spawn, until the user restarts it. A reconnect to a host record
+    // whose process is gone takes the exit too, and spawns nothing anyway.
+    const restoredExitCode = isRecoveryHold ? undefined : options.restoredExitCode;
+    const restoresExit = restoredExitCode !== undefined;
+    const isRestoredExit = restoresExit && !isReconnect;
 
     // Checked after the last await before the commit: the pane may have been
     // closed, or already launched by another click, while this call waited, and
@@ -263,7 +251,26 @@ export const createAddPanelActions = (
     // merge below would clobber it). Generation 0 = "persisted snapshot,
     // predates every launch this session", so the rejection lands in the
     // anomaly ring for diagnostics.
-    if (isReconnect) {
+    // A replayed snapshot finds the pane as that exit left it, or moved on:
+    // restarting, running again, or exited since with another code. Only the
+    // former is committed again; a newer launch that exited with the same code
+    // is caught by the ledger guard below.
+    if (isRestoredExit) {
+      const existing = get().panelsById[id];
+      if (
+        existing !== undefined &&
+        !(
+          isPtyPanel(existing) &&
+          !existing.isRestarting &&
+          existing.runtimeStatus === "exited" &&
+          existing.exitCode === restoredExitCode
+        )
+      ) {
+        logWarn("[TerminalStore] Kept a pane that moved on over a restored exit", { id });
+        return id;
+      }
+    }
+    if (isReconnect || isRestoredExit) {
       const preexisting = get().panelsById[id];
       const ledgerEntry = preexisting ? agentLifecycleLedger.getEntry(id) : undefined;
       if (
@@ -291,13 +298,11 @@ export const createAddPanelActions = (
     const ptyExtensionStateVersion =
       options.extensionStateVersion ??
       (options.extensionState !== undefined ? ptyKindConfig?.stateVersion : undefined);
-    // Reconnects don't go through a fresh spawn — mark them "ready" directly. A
-    // held pane has no spawn at all; `restoreRecovery` drives its rendering.
-    const spawnStatus: "spawning" | "ready" | undefined = isReconnect
-      ? "ready"
-      : isRecoveryHold
-        ? undefined
-        : "spawning";
+    // Reconnects don't go through a fresh spawn — mark them "ready" directly,
+    // as is a pane restored exited, whose spawn ran long ago. A held pane has
+    // no spawn at all; `restoreRecovery` drives its rendering.
+    const spawnStatus: "spawning" | "ready" | undefined =
+      isReconnect || isRestoredExit ? "ready" : isRecoveryHold ? undefined : "spawning";
 
     // Overlay terminals boot at ~their real grid instead of the 80×24 spawn
     // default so the assistant CLI never paints its startup banner at a width
@@ -331,12 +336,13 @@ export const createAddPanelActions = (
     const eagerAttach =
       !isReconnect &&
       !isRecoveryHold &&
+      !isRestoredExit &&
       location === "grid" &&
       isInActiveWorktree &&
       terminalStartupQueue.isIdle;
-    // Every non-reconnect, non-held PTY panel reaches the enqueue below (prewarm
-    // and dock-wake failures are caught), so each reserve pairs with one enqueue.
-    if (!isReconnect && !isRecoveryHold) terminalStartupQueue.reserve();
+    // Every PTY panel that spawns reaches the enqueue below (prewarm and
+    // dock-wake failures are caught), so each reserve pairs with one enqueue.
+    if (!isReconnect && !isRecoveryHold && !isRestoredExit) terminalStartupQueue.reserve();
 
     const terminal = {
       id,
@@ -348,6 +354,7 @@ export const createAddPanelActions = (
       // agent-detected/exited title rewrites. Conditional spread avoids
       // stamping `undefined`, which would read as an explicit "default".
       ...(options.titleMode && { titleMode: options.titleMode }),
+      ...(options.displayEmoji && { displayEmoji: options.displayEmoji }),
       worktreeId: options.worktreeId,
       cwd: options.cwd ?? "",
       cols: constructionDims?.cols ?? 80,
@@ -359,11 +366,16 @@ export const createAddPanelActions = (
       ...(location === "background" && {
         backgroundRestoreLocation: parkedRestoreTarget(get(), id, options),
       }),
-      command: options.command,
+      // A relay deploy, update or removal runs its command once, from the spawn
+      // options, and the pane never keeps it: a restart, duplicate, restore or
+      // recipe would otherwise run the deploy again under the same Worker name
+      // (#16023), or start an update or removal nobody asked for (#16201, #16202).
+      command: isDecisionsRelayTerminalId(id) ? undefined : options.command,
       // Initialize grid terminals as visible to avoid initial under-throttling
       // IntersectionObserver will update this once mounted
       isVisible: location === "grid" ? true : false,
-      runtimeStatus: isRecoveryHold ? undefined : runtimeStatus,
+      runtimeStatus: isRecoveryHold ? undefined : restoresExit ? "exited" : runtimeStatus,
+      ...(restoresExit && { exitCode: restoredExitCode }),
       isInputLocked: options.isInputLocked,
       exitBehavior: options.exitBehavior,
       agentSessionId: options.agentSessionId,
@@ -396,6 +408,7 @@ export const createAddPanelActions = (
       // prefetch below, overlapping prewarm and any queue wait) and layered
       // UNDER this, so only the launch-resolved layer is frozen here.
       ...(options.env && { env: options.env }),
+      ...(options.agentAccountId && { agentAccountId: options.agentAccountId }),
       isUsingFallback: options.isUsingFallback,
       fallbackChainIndex: options.fallbackChainIndex,
       sessionLostOnRestore: options.sessionLostOnRestore,
@@ -413,7 +426,8 @@ export const createAddPanelActions = (
       extensionStateVersion: ptyExtensionStateVersion,
       pluginId: ptyPluginId,
       ...(pluginPanelKindId !== undefined && { pluginPanelKindId }),
-      spawnedBy: options.spawnedBy,
+      // Kept as a pair (#15977): a run reference never rides another source.
+      ...readSpawnProvenance(options.spawnedBy, options.scheduledRun),
       focusPolicy: options.focusPolicy,
       excludeFromPersistence: options.excludeFromPersistence,
       removeOnExit: options.removeOnExit,
@@ -444,6 +458,13 @@ export const createAddPanelActions = (
 
     markRendererPerformance("agentlaunch.committed", { id });
 
+    if (launchAgentId && droppedModelIds.length > 0) {
+      notifyRetiredModelDropped(launchAgentId, droppedModelIds, {
+        panelId: id,
+        worktreeId: options.worktreeId,
+      });
+    }
+
     // Mint the panel's launch generation atomically with the commit above (no
     // await between id reservation and here). Every async completion below —
     // env fetch, spawn IPC, attach settle — re-validates against it so a
@@ -469,7 +490,7 @@ export const createAddPanelActions = (
     // A launch of this id supersedes any earlier one still waiting for control.
     cancelDriveLeaseHold(id);
     clearPanelDriveLeaseMark(id);
-    if (isReconnect) {
+    if (isReconnect || isRestoredExit) {
       // Mark this generation as restore-born so the stale-restore guard above
       // can tell an idempotent re-merge from a clobbering one.
       agentLifecycleLedger.recordRestoreApplied(id, launchGeneration);
@@ -481,7 +502,11 @@ export const createAddPanelActions = (
     // global env under project env under the caller's launch env. The
     // promise never rejects (every branch resolves a fallback), so an
     // early-returning startup task cannot leave an unhandled rejection.
-    const spawnEnvPromise = startSpawnEnvFetch(options, isReconnect, capturedProjectId);
+    const spawnEnvPromise = startSpawnEnvFetch(
+      options,
+      isReconnect || isRestoredExit,
+      capturedProjectId
+    );
 
     // Prewarm renderer-side xterm immediately so we never drop startup output/ANSI while hidden.
     // earlyDataBuffer in terminalClient buffers any data that arrives before the
@@ -643,6 +668,7 @@ export const createAddPanelActions = (
       logDebug("[TerminalStore] Reconnecting to existing terminal", { id });
       return id;
     }
+    if (isRestoredExit) return id;
 
     // A fresh agent the user will see, during an open memory episode, raises the
     // episode's figures above the grid once (#14309). Never waited on: it is a
@@ -679,5 +705,76 @@ export const createAddPanelActions = (
     });
 
     return id;
-  },
-});
+  };
+
+  return {
+    addPanel: async (options, commit) => {
+      // Panel limit enforcement: only the hard ceiling blocks a single-panel add.
+      // The confirm band (>= confirmationLimit) is intentionally non-blocking —
+      // adding a panel is reversible (one-click close), so the step-throttled
+      // `TerminalCountWarning` banner (shown from `softWarningLimit` upward, with
+      // no upper bound) is the right calibration, not a focus-stealing modal. The
+      // blocking confirm survives only for batch spawns (`preflightSpawnBatchLimit`),
+      // where the blast radius of many panels at once warrants it. See #10547.
+      // Launching a pane held for recovery replaces it rather than adding one, so
+      // it must not be refused by a limit the held pane already counts toward.
+      const replacesHeldPane =
+        options.replacesRestoreRecovery === true &&
+        options.requestedId !== undefined &&
+        isHeldForRecovery(get().panelsById[options.requestedId]);
+      if (!options.bypassLimits && !replacesHeldPane) {
+        const { softWarningLimit, confirmationLimit, hardLimit } = usePanelLimitStore.getState();
+        const snapshot = buildPanelLimitSnapshot(countPanelLimitUsage(get()), {
+          softWarningLimit,
+          confirmationLimit,
+          hardLimit,
+        });
+
+        if (snapshot.tier === "hard") {
+          logWarn("[TerminalStore] Refused a panel at the hard panel limit", {
+            kind: options.kind ?? "terminal",
+            count: snapshot.count,
+            hardLimit,
+          });
+          commit?.onLimitRefused?.(snapshot);
+          notify({
+            type: "warning",
+            priority: "high",
+            title: "Panel limit reached",
+            message: `Maximum of ${hardLimit} panels reached. Close some panels before adding new ones.`,
+            duration: 5000,
+            context: { worktreeId: options.worktreeId ?? undefined },
+          });
+          return null;
+        }
+      }
+
+      // The check above and the commit are separated by awaits, so hold the
+      // slot it admitted until the add returns, claimed under the id the panel
+      // will take: an overlapping gate or add sees it as taken either way
+      // (#15607). Only an add the limit was checked for holds one.
+      if (options.bypassLimits || replacesHeldPane || !countsTowardPanelLimit(options)) {
+        return createPanel(options, commit);
+      }
+      const requestedKind = options.kind ?? "terminal";
+      const idKind = panelKindUsesTerminalUi(requestedKind)
+        ? requestedKind === "dev-preview"
+          ? "dev-preview"
+          : "terminal"
+        : requestedKind;
+      const id = options.existingId ?? options.requestedId ?? `${idKind}-${crypto.randomUUID()}`;
+      const slot = reservePanelSlots(1);
+      slot.claim(id);
+      try {
+        return await createPanel(
+          options.existingId === undefined && options.requestedId === undefined
+            ? { ...options, requestedId: id }
+            : options,
+          commit
+        );
+      } finally {
+        slot.release();
+      }
+    },
+  };
+};

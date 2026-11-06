@@ -86,6 +86,7 @@ import {
 import { pluralize } from "@/lib/pluralize";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { isInPaneDialog } from "@/lib/paneDialog";
+import { hasAppModal } from "@/lib/appModal";
 import { focusPanelInput } from "@/components/Panel/panelFocusRegistry";
 
 interface RunCountSegment {
@@ -404,12 +405,7 @@ export function FleetArmingRibbon(): ReactElement | null {
       // destructive AppDialog without a preview is an alertdialog. A page's
       // dialog blocks only its own pane, so it holds Enter only while focus is
       // inside it (#15037).
-      if (
-        document.querySelector(
-          '[role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]'
-        ) !== null ||
-        isInPaneDialog(e.target)
-      ) {
+      if (hasAppModal() || isInPaneDialog(e.target)) {
         return;
       }
       const rawTarget = e.target;

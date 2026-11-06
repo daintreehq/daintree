@@ -589,6 +589,62 @@ describe("notificationHistorySlice", () => {
     });
   });
 
+  describe("importEntries", () => {
+    it("adds whole entries under their own ids, in timestamp order, counting the unread", () => {
+      const now = Date.now();
+      getState().importEntries([makeEntry({ id: "newer", timestamp: now - 1_000 })]);
+      getState().importEntries([
+        makeEntry({ id: "older", timestamp: now - 60_000 }),
+        makeEntry({ id: "newest", timestamp: now }),
+      ]);
+
+      expect(getState().entries.map((e) => e.id)).toEqual(["newest", "newer", "older"]);
+      expect(getState().unreadCount).toBe(3);
+    });
+
+    it("skips an id already held, whatever its state, and repeats within one import", () => {
+      getState().importEntries([
+        makeEntry({ id: "unread", message: "first" }),
+        makeEntry({ id: "read", message: "first" }),
+        makeEntry({ id: "archived", message: "first" }),
+      ]);
+      getState().markIdsRead(["read"]);
+      getState().archiveEntry("archived");
+
+      getState().importEntries([
+        makeEntry({ id: "unread", message: "again" }),
+        makeEntry({ id: "read", message: "again" }),
+        makeEntry({ id: "archived", message: "again" }),
+        makeEntry({ id: "other" }),
+        makeEntry({ id: "other", message: "twice" }),
+      ]);
+
+      const byId = new Map(getState().entries.map((e) => [e.id, e]));
+      expect(byId.size).toBe(4);
+      expect(byId.get("unread")).toMatchObject({ message: "first", seenAsToast: false });
+      expect(byId.get("read")).toMatchObject({ message: "first", seenAsToast: true });
+      expect(byId.get("archived")?.archivedAt).not.toBeNull();
+      expect(byId.get("other")?.message).toBe("msg");
+      expect(getState().unreadCount).toBe(2);
+    });
+
+    it("counts an import in a snoozed thread as the thread's, and keeps an old unread one", () => {
+      const now = Date.now();
+      useNotificationHistoryStore.setState({ snoozedThreads: { thread: now + 60_000 } });
+      getState().importEntries([
+        makeEntry({ id: "snoozed", correlationId: "thread" }),
+        makeEntry({ id: "old", timestamp: now - 2 * READ_RETENTION_MS }),
+      ]);
+
+      expect(
+        getState()
+          .entries.map((e) => e.id)
+          .sort()
+      ).toEqual(["old", "snoozed"]);
+      expect(getState().unreadCount).toBe(1);
+    });
+  });
+
   describe("supersede on addEntry", () => {
     it("supersedes by exact id archives the target entry", () => {
       const oldId = getState().addEntry({ type: "error", message: "Disconnected" });
@@ -978,6 +1034,17 @@ describe("notificationHistorySlice", () => {
       ).toBeNull();
     });
 
+    it("bounds future timestamps against the clock it is given", () => {
+      const now = 1_000_000;
+      const raw = { id: "a", timestamp: now + 30_000, type: "info", message: "x" };
+      expect(sanitizePersistedEntry(raw, now)).not.toBeNull();
+      expect(sanitizePersistedEntry(raw, now - 60_000)).toBeNull();
+      expect(
+        sanitizePersistedEntry({ ...raw, timestamp: now, archivedAt: now + 90_000 }, now)!
+          .archivedAt
+      ).toBeNull();
+    });
+
     it("coerces archivedAt: 0 to null (preserves truthy-check consistency)", () => {
       const result = sanitizePersistedEntry({
         id: "a",
@@ -1035,6 +1102,78 @@ describe("notificationHistorySlice", () => {
       });
       expect(result!.actions![0]!.actionArgs).toEqual({ panelId: "p1" });
       expect(result!.actions![0]!.variant).toBe("secondary");
+    });
+
+    it("strips a stored force delete from an old quick-create entry but keeps the entry (#16264)", () => {
+      const result = sanitizePersistedEntry({
+        id: "a",
+        timestamp: 1,
+        type: "success",
+        title: "Worktree created",
+        message: "bugfix/issue-7-fix-thing",
+        correlationId: "wt-1",
+        context: { worktreeId: "wt-1" },
+        actions: [
+          {
+            label: "Undo",
+            actionId: "worktree.delete",
+            actionArgs: { worktreeId: "wt-1", force: true },
+          },
+          { label: "Open", actionId: "panel.focus", actionArgs: { panelId: "p1" } },
+        ],
+      });
+      expect(result).not.toBeNull();
+      expect(result!.correlationId).toBe("wt-1");
+      expect(result!.actions!.map((a) => a.actionId)).toEqual(["panel.focus"]);
+    });
+
+    it("drops the actions field when a stored force delete was the only action", () => {
+      const result = sanitizePersistedEntry({
+        id: "a",
+        timestamp: 1,
+        type: "success",
+        message: "x",
+        actions: [
+          {
+            label: "Undo",
+            actionId: "worktree.delete",
+            actionArgs: { worktreeId: "wt-1", force: true },
+          },
+        ],
+      });
+      expect(result!.actions).toBeUndefined();
+    });
+
+    it("strips a stored force delete by what it does, not by its label", () => {
+      const result = sanitizePersistedEntry({
+        id: "a",
+        timestamp: 1,
+        type: "success",
+        message: "x",
+        actions: [
+          {
+            label: "Remove",
+            actionId: "worktree.delete",
+            actionArgs: { worktreeId: "wt-1", force: true },
+          },
+          { label: "Undo", actionId: "panel.focus", actionArgs: { panelId: "p1" } },
+          { label: "Delete", actionId: "worktree.delete", actionArgs: { worktreeId: "wt-2" } },
+          {
+            label: "Delete",
+            actionId: "worktree.delete",
+            actionArgs: { worktreeId: "wt-3", force: false },
+          },
+          { label: "Close", actionId: "terminal.close", actionArgs: { force: true } },
+        ],
+      });
+      // Only the force delete goes: a plain delete is refused by the host on a
+      // changed tree, and `force` means nothing to other actions.
+      expect(result!.actions!.map((a) => [a.label, a.actionId, a.actionArgs])).toEqual([
+        ["Undo", "panel.focus", { panelId: "p1" }],
+        ["Delete", "worktree.delete", { worktreeId: "wt-2" }],
+        ["Delete", "worktree.delete", { worktreeId: "wt-3", force: false }],
+        ["Close", "terminal.close", { force: true }],
+      ]);
     });
   });
 

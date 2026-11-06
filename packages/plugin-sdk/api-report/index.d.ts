@@ -252,6 +252,13 @@ interface RepoMetadata {
     topics?: string[];
     /** How pull requests may merge here, when the provider reports it. */
     mergeSettings?: RepoMergeSettings;
+    /**
+     * `false`: the provider never reports what the host's in-app merge previews
+     * (a PR's merge status, head commit and commits, and these merge settings),
+     * so the host offers no in-app merge and links to the forge instead. Absent
+     * or `true`: a read missing those fields is treated as transient.
+     */
+    mergePreviewSupported?: boolean;
     /** Opaque freshness token the host round-trips; see {@link FetchOptions}. */
     freshnessToken?: string;
     /** `true` when unchanged since `ifNotChangedSince`; see {@link FetchOptions}. */
@@ -268,8 +275,11 @@ interface RepoMergeSettings {
     autoMergeAllowed: boolean;
 }
 /**
- * Paged-listing options. All fields advisory — providers ignore options they
- * do not support. `cursor` is opaque and provider-defined.
+ * Paged-listing options. Advisory — providers ignore options they do not
+ * support — except ordering: a provider that can't serve `sort` `"created"` /
+ * `"updated"` in the requested `direction` refuses it by name rather than
+ * return a page in some other order (#15604). `cursor` is opaque and
+ * provider-defined.
  */
 interface ListOptions {
     /**
@@ -1832,8 +1842,178 @@ type WorktreeSwitchIndex = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 type WorktreeSwitchAction = `worktree.switch${WorktreeSwitchIndex}`;
 type BuiltInKeyAction = "nav.up" | "nav.down" | "nav.left" | "nav.right" | "nav.pageUp" | "nav.pageDown" | "nav.home" | "nav.end" | "nav.expand" | "nav.collapse" | "nav.primary" | "nav.toggleSidebar" | "nav.toggleFocusMode" | "nav.quickSwitcher" | "nav.focusRegion.next" | "nav.focusRegion.prev" | "file.open" | "file.copyPath" | "file.copyTree" | "ui.refresh" | "ui.escape" | "git.commit" | "git.push" | "git.stageAll" | "git.toggle" | "worktree.next" | "worktree.previous" | "worktree.panel" | WorktreeSwitchAction | "worktree.up" | "worktree.down" | "worktree.upVim" | "worktree.downVim" | "worktree.home" | "worktree.end" | "worktree.select" | "worktree.selectSpace" | "worktree.copyTree" | "worktree.openChanges" | "worktree.markReviewed" | "worktree.clearReviewMark" | "worktree.openEditor" | "worktree.openFileBrowser" | "worktree.openFileBrowserPanel" | "worktree.openPalette" | "worktree.createDialog.open" | "worktree.overview" | "worktree.sessions.minimizeAll" | "worktree.sessions.maximizeAll" | "worktree.sessions.restartAll" | "worktree.sessions.endAll" | "worktree.sessions.closeCompleted" | "worktree.sessions.trashAll" | "worktree.sessions.resetRenderers" | "tab.next" | "tab.previous" | "terminal.close" | "terminal.closeAll" | "terminal.killAll" | "terminal.restartAll" | "terminal.toggleDock" | "terminal.toggleDockAll" | "terminal.new" | "terminal.reopenLast" | "terminal.resumeSessions" | "terminal.maximize" | "terminal.inject" | "terminal.focusNext" | "terminal.focusPrevious" | "terminal.focusAlternate" | "terminal.toggleInputSurface" | "terminal.focusUp" | "terminal.focusDown" | "terminal.focusLeft" | "terminal.focusRight" | "terminal.focusDock" | "terminal.focusIndex1" | "terminal.focusIndex2" | "terminal.focusIndex3" | "terminal.focusIndex4" | "terminal.focusIndex5" | "terminal.focusIndex6" | "terminal.focusIndex7" | "terminal.focusIndex8" | "terminal.focusIndex9" | "terminal.moveLeft" | "terminal.moveRight" | "terminal.moveUp" | "terminal.moveDown" | "terminal.moveToDock" | "terminal.moveToGrid" | "terminal.watch" | "terminal.duplicate" | "terminal.background" | "terminal.contextMenu" | "terminal.stashInput" | "terminal.popStash" | "terminal.scrollToLastActivity" | "terminal.sendToAgent" | "terminal.bulkCommand" | "terminal.armDefault" | "terminal.disarmAll" | "terminal.kill" | "terminal.restart" | "terminal.forceResume" | "terminal.redraw" | "terminal.rename" | "fleet.accept" | "fleet.reject" | "fleet.interrupt" | "fleet.restart" | "fleet.kill" | "fleet.trash" | "fleet.armFocused" | "fleet.armAll" | "agent.palette" | AgentKeyAction | "agent.terminal" | "agent.browser" | "agent.focusNextWaiting" | "agent.focusNextWaitingGlobal" | "agent.focusNextWorking" | "agent.focusNextAgent" | "agent.focusPreviousAgent" | "dock.focusNextWaiting" | "find.inFocusedPanel" | "window.zoomIn" | "window.zoomOut" | "window.zoomReset" | "panel.palette" | "panel.toggleDiagnostics" | "panel.togglePortal" | "panel.diagnosticsLogs" | "panel.diagnosticsEvents" | "panel.diagnosticsMessages" | "notifications.toggle" | "portal.newTab" | "portal.closeTab" | "portal.nextTab" | "portal.prevTab" | "devPreview.reloadPreview" | "action.palette" | "action.palette.open" | "action.repeatLast" | "pilot.toggle" | "pilot.openProject" | "canopy.toggle" | "project.switcherPalette" | "project.mruCycleOlder" | "project.openInNewWindow" | "project.sleep" | "project.restart" | "project.sleepIdle" | "host.switch" | "help.shortcuts" | "help.shortcutsAlt" | "help.launchAgent" | "help.togglePanel" | "app.settings" | "app.theme.toggle" | "app.theme.pick" | "voiceInput.toggle" | "voiceInput.toggleAssistant" | "voiceInput.rewriteSelection" | "voiceInput.togglePause" | "voiceInput.stopAndSend" | "voiceInput.lockTarget" | "voiceInput.unlockTarget" | "voiceInput.recallRecentTarget" | "voiceInput.openRecentDictations" | "layout.undo" | "layout.redo" | "app.newWindow" | "app.quit" | "app.forceQuit" | "modal.close";
 
-declare const BUILT_IN_ACTION_IDS: readonly ["terminal.list", "terminal.getOutput", "terminal.getStatus", "terminal.sendCommand", "terminal.sendCommandOwned", "terminal.sendCommandMany", "terminal.closeMany", "terminal.waitUntilIdle", "terminal.waitUntilIdleBatch", "terminal.readLastMessageOwned", "terminal.resumeSessions", "terminal.notifyWhenIdle", "terminal.setClientMetadata", "panel.list", "panel.focus", "panel.focusIndex", "panel.openPluginPanel", "panel.palette", "panel.gridLayout.setStrategy", "panel.gridLayout.setValue", "worktree.list", "worktree.getCurrent", "worktree.refresh", "worktree.reconcileTopology", "worktree.refreshPullRequests", "worktree.restartService", "worktree.retryProjectLoad", "worktree.setActive", "worktree.create", "worktree.delete", "worktree.deleteOwned", "worktree.listBranches", "worktree.getDefaultPath", "worktree.reveal", "worktree.openIssue", "worktree.openPR", "worktree.copyContext", "worktree.inject", "worktree.getAvailableBranch", "worktree.waitUntilReady", "worktree.waitForPullRequest", "worktree.createWithRecipe", "worktree.compareDiff", "worktree.reviewReadiness", "worktree.switchIndex", "worktree.quickCreate", "worktree.createDialog.open", "worktree.select", "worktree.copyTree", "worktree.openEditor", "worktree.openReviewHub", "worktree.markReviewed", "worktree.clearReviewMark", "worktree.openFileBrowser", "worktree.openFileBrowserPanel", "worktree.openChanges", "worktree.overview.open", "worktree.overview.close", "worktree.setLabelColor", "worktree.setCustomTitle", "worktree.resource.provision", "worktree.resource.teardown", "worktree.resource.resume", "worktree.resource.pause", "worktree.resource.status", "worktree.resource.connect", "worktree.resource.openOnHost", "worktree.resource.config.get", "worktree.resource.config.set", "worktree.lifecycle.retrySetup", "worktree.sessions.minimizeAll", "worktree.sessions.maximizeAll", "worktree.sessions.restartAll", "worktree.sessions.resetRenderers", "worktree.sessions.closeCompleted", "worktree.sessions.trashAll", "worktree.sessions.endAll", "worktree.sessions.clearHistory", "worktree.bulk.closeSessions", "worktree.bulk.remove", "workflow.startWorkOnIssue", "workflow.prepBranchForReview", "workflow.focusNextAttention", "system.openExternal", "system.openPath", "system.checkCommand", "system.checkDirectory", "system.getHomeDir", "system.getResourceProfileSnapshot", "cliAvailability.get", "cliAvailability.refresh", "sessionRestore.getConfig", "sessionRestore.updateConfig", "windowOpening.getConfig", "windowOpening.updateConfig", "idleTerminalNotify.getConfig", "idleTerminalNotify.updateConfig", "idleTerminalNotify.closeProject", "idleTerminalNotify.muteProject", "idleBackgroundAutoClose.getConfig", "idleBackgroundAutoClose.updateConfig", "agentSettings.get", "agentSettings.set", "agentSettings.reset", "keybinding.getOverrides", "keybinding.setOverride", "keybinding.removeOverride", "keybinding.resetAll", "terminalConfig.get", "terminalConfig.setScrollback", "terminalConfig.setPerformanceMode", "terminalConfig.setFontSize", "terminalConfig.setFontFamily", "terminalConfig.setHybridInputEnabled", "terminalConfig.setHybridInputAutoFocus", "terminalConfig.setScreenReaderMode", "terminalConfig.setCachedProjectViews", "worktreeConfig.get", "worktreeConfig.setPattern", "files.search", "file.view", "file.read", "file.openDiff", "file.openInEditor", "file.openInBrowser", "file.openImageViewer", "file.showItemInFolder", "file.trash", "file.openPanel", "slashCommands.list", "skills.search", "skills.load", "artifact.saveToFile", "artifact.applyPatch", "copyTree.generate", "copyTree.generateAndCopyFile", "copyTree.injectToTerminal", "copyTree.isAvailable", "copyTree.cancel", "copyTree.getFileTree", "git.getProjectPulse", "git.getFileDiff", "git.listCommits", "git.stageFile", "git.unstageFile", "git.discardFileChanges", "git.stageAll", "git.unstageAll", "git.commit", "git.push", "git.pullRebase", "git.fetch", "git.rebaseOntoBase", "git.mergeBaseIntoBranch", "git.abortRepositoryOperation", "git.continueRepositoryOperation", "git.forcePushWithLease", "git.markSafeDirectory", "git.retryAuthFetch", "git.getStagingStatus", "preferences.showProjectPulse.set", "preferences.showDeveloperTools.set", "preferences.showGridAgentHighlights.set", "preferences.showDockAgentHighlights.set", "preferences.showAgentTaskTitles.set", "preferences.reduceAnimations.set", "window.toggleFullscreen", "window.reload", "window.forceReload", "window.toggleDevTools", "window.zoomIn", "window.zoomOut", "window.zoomReset", "window.close", "forge.openIssues", "forge.openPRs", "forge.openCommits", "forge.openRepo", "forge.openIssue", "forge.openPR", "forge.assignIssue", "forge.unassignIssue", "forge.approvePR", "forge.requestChanges", "forge.dismissReview", "forge.requestReviewers", "forge.createIssue", "forge.closeIssue", "forge.reopenIssue", "forge.editIssue", "forge.addIssueComment", "forge.addIssueLabel", "forge.removeIssueLabel", "forge.validateToken", "forge.getRepoStats", "forge.listIssues", "forge.listPRs", "forge.getIssue", "forge.listIssueComments", "forge.getChecks", "forge.getPR", "forge.getPRs", "forge.getCIStatus", "forge.createPR", "forge.closePR", "forge.reopenPR", "forge.mergePR", "forge.enableAutoMerge", "forge.disableAutoMerge", "forge.convertPRToDraft", "forge.markPRReadyForReview", "forge.commentOnPR", "forge.editPR", "pilot.toggle", "pilot.openProject", "pilot.openRun", "canopy.toggle", "canopy.markAllRead", "project.getAll", "project.getCurrent", "project.add", "project.openInNewWindow", "project.switch", "project.update", "project.toggleNeverAutoSleep", "project.sleep", "project.restart", "project.sleepIdle", "project.remove", "project.archive", "project.unarchive", "project.setGroup", "project.listGroups", "project.createGroup", "project.close", "project.closeActive", "project.openDialog", "project.getSettings", "project.saveSettings", "project.muteNotifications", "project.silenceNotificationKind", "project.detectRunners", "project.runCheck", "project.runCommand", "workspace.list", "plugin.validate", "plugin.diagnostics", "plugin.reloadProject", "plugin.reloadPanel", "plugin.capturePanel", "plugin.reloadWindow", "plugin.openSettings", "plugin.backupDatabases", "plugin.setNotificationsSilenced", "project.getStats", "project.settings.open", "project.cloneRepo", "host.switch", "host.add", "host.overview.open", "project.openOnHost", "host.forwardPort", "app.pluginManager", "app.reloadConfig", "app.exportConfig", "app.importConfig", "app.developerMode.set", "app.theme.pick", "app.theme.toggle", "app.theme.browser.open", "logs.openFile", "logs.clear", "logs.setVerbose", "logs.getVerbose", "logs.getAll", "logs.getSources", "logs.setLogLevel", "logs.getLevelOverrides", "logs.setLevelOverrides", "logs.clearLevelOverrides", "logs.getRegistry", "diagnostics.openReview", "diagnostics.openWhySlow", "errors.clearAll", "errors.openLogs", "errors.recent", "notifications.recent", "notifications.toggle", "eventInspector.getEvents", "eventInspector.getFiltered", "eventInspector.subscribe", "eventInspector.unsubscribe", "eventInspector.clear", "telemetry.togglePreview", "telemetry.clearPreview", "recipe.run", "recipe.list", "recipe.editor.open", "recipe.editor.openFromLayout", "recipe.manager.open", "recipe.saveToRepo", "recipe.delete", "layout.apply", "agent.launch", "agent.launchMany", "agent.terminal", "agent.focusNextWaiting", "agent.focusNextWorking", "agent.focusNextAgent", "agent.focusPreviousAgent", "agent.getState", "agent.listToolbar", "agent.listAvailable", "agent.listPresets", "agent.listModels", "agentSessionHistory.list", "agentSessionHistory.resume", "session.bookmarkAndClose", "session.bookmark.promote", "session.bookmark.rename", "session.bookmark.delete", "session.bookmarks.list", "app.settings.openTab", "action.palette.open", "action.repeatLast", "actions.list", "actions.getContext", "actions.persistedStores", "actions.search", "actions.getSchema", "mcp.surface", "terminal.restart", "terminal.restartOnPreset", "terminal.restartOnPresetOwned", "terminal.startHeld", "terminal.redraw", "terminal.forceResume", "terminal.toggleInputLock", "terminal.viewInfo", "terminal.restartService", "watchdog.restart", "terminal.new", "terminal.moveToDock", "terminal.moveToGrid", "terminal.toggleDock", "terminal.toggleDockAll", "terminal.toggleMaximize", "terminal.duplicate", "terminal.rename", "terminal.close", "terminal.closeOwned", "terminal.revealOwned", "terminal.placeOwned", "terminal.trash", "terminal.kill", "terminal.killBatch", "terminal.closeAll", "terminal.killAll", "terminal.moveToWorktree", "terminal.moveToNewWorktree", "terminal.watch", "terminal.gridLayout.setStrategy", "terminal.gridLayout.setValue", "terminal.copy", "terminal.paste", "terminal.copyLink", "terminal.contextMenu", "terminal.sendToAgent", "terminal.inject", "terminal.injectOwned", "terminal.bulkCommand", "terminal.interrupt", "terminal.interruptOwned", "terminal.sendKeys", "terminal.sendKeysOwned", "terminal.stashInput", "terminal.popStash", "terminal.arm", "terminal.disarm", "terminal.disarmAll", "terminal.armByState", "terminal.armAll", "terminal.armDefault", "terminal.openWorktreeEditor", "terminal.openWorktreeIssue", "terminal.openWorktreePR", "terminal.info.open", "terminal.info.get", "terminal.setHoldOnRestart", "browser.reload", "browser.navigate", "browser.openUrl", "browser.back", "browser.forward", "browser.openExternal", "browser.copyUrl", "browser.setZoomLevel", "browser.captureScreenshot", "browser.toggleConsole", "browser.clearConsole", "browser.getConsoleMessages", "browser.toggleDevTools", "browser.hardReload", "nav.toggleFocusMode", "nav.quickSwitcher", "nav.showProjectHome", "nav.showProjectSplit", "nav.showGrid", "find.inFocusedPanel", "portal.toggle", "portal.closeTab", "portal.nextTab", "portal.prevTab", "portal.newTab", "portal.closeAllTabs", "portal.activateTab", "portal.openLaunchpad", "portal.openUrl", "portal.goBack", "portal.goForward", "portal.reload", "portal.copyUrl", "portal.openExternal", "portal.duplicateTab", "portal.reloadTab", "portal.copyTabUrl", "portal.openTabExternal", "portal.closeOthers", "portal.closeToRight", "portal.resetWidth", "portal.width.set", "portal.setDefaultNewTab", "portal.links.add", "portal.links.remove", "portal.links.update", "portal.links.toggle", "portal.links.reorder", "portal.tabs.reorder", "portal.listTabs", "portal.toggleDevDashboard", "help.gettingStarted.show", "help.tour.show", "help.tour.status", "help.displayImage", "help.openCommandsFolder", "help.newSessionWithAgent", "help.resumePastSession", "assistant.list", "assistant.start", "agent.readQuota", "host.list", "host.call", "host.ensureProject", "host.settings", "host.watch", "ui.sidebar.resetWidth", "ui.sidebar.switchView", "ui.sidebar.showWorktrees", "devServer.start", "devPreview.stop", "devPreview.toggleTool", "devPreview.toggleElementPicker", "devPreview.reloadPreview", "devPreview.restart", "devPreview.restartAndClearCache", "devPreview.reinstallAndRestart", "devPreview.promoteToPortal", "env.global.get", "env.global.set", "env.project.get", "env.project.set", "fleet.accept", "fleet.reject", "fleet.interrupt", "fleet.restart", "fleet.kill", "fleet.trash", "fleet.armAll", "fleet.armFocused", "fleet.scope.enter", "fleet.scope.exit", "fleet.armMatchingFilter", "fleet.retryFailures", "fleet.saveNamedFleet", "fleet.recallNamedFleet", "fleet.deleteNamedFleet", "fleet.getRunStatus"];
+declare const BUILT_IN_ACTION_IDS: readonly ["terminal.list", "terminal.getOutput", "terminal.getStatus", "terminal.sendCommand", "terminal.sendCommandOwned", "terminal.sendCommandMany", "terminal.closeMany", "terminal.waitForExit", "terminal.waitUntilIdle", "terminal.waitUntilIdleBatch", "terminal.readLastMessageOwned", "terminal.resumeSessions", "terminal.notifyWhenIdle", "terminal.cancelQueuedSend", "terminal.setClientMetadata", "panel.list", "panel.focus", "panel.focusIndex", "panel.openPluginPanel", "panel.palette", "panel.gridLayout.setStrategy", "panel.gridLayout.setValue", "worktree.list", "worktree.getCurrent", "worktree.refresh", "worktree.reconcileTopology", "worktree.refreshPullRequests", "worktree.restartService", "worktree.retryProjectLoad", "worktree.setActive", "worktree.create", "worktree.delete", "worktree.deleteOwned", "worktree.retireOwned", "worktree.listBranches", "worktree.getDefaultPath", "worktree.reveal", "worktree.openIssue", "worktree.openPR", "worktree.copyContext", "worktree.inject", "worktree.getAvailableBranch", "worktree.waitUntilReady", "worktree.waitForPullRequest", "worktree.createWithRecipe", "worktree.compareDiff", "worktree.reviewReadiness", "worktree.switchIndex", "worktree.quickCreate", "worktree.createDialog.open", "worktree.select", "worktree.copyTree", "worktree.openEditor", "worktree.openReviewHub", "worktree.markReviewed", "worktree.clearReviewMark", "worktree.openFileBrowser", "worktree.openFileBrowserPanel", "worktree.openChanges", "worktree.overview.open", "worktree.overview.close", "worktree.setLabelColor", "worktree.setCustomTitle", "worktree.resource.provision", "worktree.resource.teardown", "worktree.resource.resume", "worktree.resource.pause", "worktree.resource.status", "worktree.resource.connect", "worktree.resource.openOnHost", "worktree.resource.config.get", "worktree.resource.config.set", "worktree.lifecycle.retrySetup", "worktree.sessions.minimizeAll", "worktree.sessions.maximizeAll", "worktree.sessions.restartAll", "worktree.sessions.resetRenderers", "worktree.sessions.closeCompleted", "worktree.sessions.trashAll", "worktree.sessions.endAll", "worktree.sessions.clearHistory", "worktree.bulk.closeSessions", "worktree.bulk.remove", "workflow.startWorkOnIssue", "workflow.prepBranchForReview", "workflow.focusNextAttention", "system.openExternal", "system.openPath", "system.checkCommand", "system.checkDirectory", "system.getHomeDir", "system.getResourceProfileSnapshot", "cliAvailability.get", "cliAvailability.refresh", "sessionRestore.getConfig", "sessionRestore.updateConfig", "windowOpening.getConfig", "windowOpening.updateConfig", "idleTerminalNotify.getConfig", "idleTerminalNotify.updateConfig", "idleTerminalNotify.closeProject", "idleTerminalNotify.muteProject", "idleBackgroundAutoClose.getConfig", "idleBackgroundAutoClose.updateConfig", "agentSettings.get", "agentSettings.set", "agentSettings.reset", "keybinding.getOverrides", "keybinding.setOverride", "keybinding.removeOverride", "keybinding.resetAll", "terminalConfig.get", "terminalConfig.setScrollback", "terminalConfig.setPerformanceMode", "terminalConfig.setFontSize", "terminalConfig.setFontFamily", "terminalConfig.setHybridInputEnabled", "terminalConfig.setHybridInputAutoFocus", "terminalConfig.setScreenReaderMode", "terminalConfig.setCachedProjectViews", "worktreeConfig.get", "worktreeConfig.setPattern", "files.search", "file.view", "file.read", "file.openDiff", "file.openInEditor", "file.openInBrowser", "file.openImageViewer", "file.showItemInFolder", "file.trash", "file.openPanel", "slashCommands.list", "skills.search", "skills.load", "artifact.saveToFile", "artifact.applyPatch", "copyTree.generate", "copyTree.generateAndCopyFile", "copyTree.injectToTerminal", "copyTree.isAvailable", "copyTree.cancel", "copyTree.getFileTree", "git.getProjectPulse", "git.getFileDiff", "git.listCommits", "git.stageFile", "git.unstageFile", "git.discardFileChanges", "git.stageAll", "git.unstageAll", "git.commit", "git.push", "git.pullRebase", "git.fetch", "git.rebaseOntoBase", "git.mergeBaseIntoBranch", "git.abortRepositoryOperation", "git.continueRepositoryOperation", "git.forcePushWithLease", "git.markSafeDirectory", "git.retryAuthFetch", "git.getStagingStatus", "preferences.showProjectPulse.set", "preferences.showDeveloperTools.set", "preferences.showGridAgentHighlights.set", "preferences.showDockAgentHighlights.set", "preferences.showAgentTaskTitles.set", "preferences.reduceAnimations.set", "window.toggleFullscreen", "window.reload", "window.forceReload", "window.toggleDevTools", "window.zoomIn", "window.zoomOut", "window.zoomReset", "window.close", "forge.openIssues", "forge.openPRs", "forge.openCommits", "forge.openRepo", "forge.openIssue", "forge.openPR", "forge.assignIssue", "forge.unassignIssue", "forge.approvePR", "forge.requestChanges", "forge.dismissReview", "forge.requestReviewers", "forge.createIssue", "forge.closeIssue", "forge.reopenIssue", "forge.editIssue", "forge.addIssueComment", "forge.addIssueLabel", "forge.removeIssueLabel", "forge.validateToken", "forge.getRepoStats", "forge.listIssues", "forge.listPRs", "forge.getIssue", "forge.listIssueComments", "forge.getChecks", "forge.getPR", "forge.getPRs", "forge.getCIStatus", "forge.createPR", "forge.closePR", "forge.reopenPR", "forge.mergePR", "forge.enableAutoMerge", "forge.disableAutoMerge", "forge.convertPRToDraft", "forge.markPRReadyForReview", "forge.commentOnPR", "forge.editPR", "pilot.toggle", "pilot.openProject", "pilot.openRun", "canopy.toggle", "canopy.markAllRead", "project.getAll", "project.getCurrent", "project.add", "project.openInNewWindow", "project.switch", "project.update", "project.toggleNeverAutoSleep", "project.sleep", "project.restart", "project.sleepIdle", "project.remove", "project.archive", "project.unarchive", "project.setGroup", "project.listGroups", "project.createGroup", "project.close", "project.closeActive", "project.openDialog", "project.getSettings", "project.saveSettings", "project.muteNotifications", "project.silenceNotificationKind", "project.detectRunners", "project.runCheck", "project.runCommand", "workspace.list", "plugin.validate", "plugin.diagnostics", "plugin.reloadProject", "plugin.reloadPanel", "plugin.capturePanel", "plugin.reloadWindow", "plugin.openSettings", "plugin.backupDatabases", "plugin.setNotificationsSilenced", "project.getStats", "project.settings.open", "project.cloneRepo", "schedules.open", "schedules.runNow", "host.switch", "host.add", "host.overview.open", "project.openOnHost", "host.forwardPort", "app.pluginManager", "app.reloadConfig", "app.exportConfig", "app.importConfig", "app.developerMode.set", "app.theme.pick", "app.theme.toggle", "app.theme.browser.open", "logs.openFile", "logs.clear", "logs.setVerbose", "logs.getVerbose", "logs.getAll", "logs.getSources", "logs.setLogLevel", "logs.getLevelOverrides", "logs.setLevelOverrides", "logs.clearLevelOverrides", "logs.getRegistry", "diagnostics.openReview", "diagnostics.openWhySlow", "errors.clearAll", "errors.openLogs", "errors.recent", "notifications.recent", "notifications.toggle", "eventInspector.getEvents", "eventInspector.getFiltered", "eventInspector.subscribe", "eventInspector.unsubscribe", "eventInspector.clear", "telemetry.togglePreview", "telemetry.clearPreview", "recipe.run", "recipe.list", "recipe.editor.open", "recipe.editor.openFromLayout", "recipe.manager.open", "recipe.saveToRepo", "recipe.delete", "layout.apply", "agent.launch", "agent.launchMany", "agent.launchInNewWorktree", "agent.terminal", "agent.focusNextWaiting", "agent.focusNextWorking", "agent.focusNextAgent", "agent.focusPreviousAgent", "agent.getState", "agent.listToolbar", "agent.listAvailable", "agent.listPresets", "agent.createPreset", "agent.updatePreset", "agent.deletePreset", "agent.listModels", "agentSessionHistory.list", "agentSessionHistory.resume", "session.bookmarkAndClose", "session.bookmark.promote", "session.bookmark.rename", "session.bookmark.delete", "session.bookmarks.list", "app.settings.openTab", "action.palette.open", "action.repeatLast", "actions.list", "actions.getContext", "actions.persistedStores", "actions.search", "actions.getSchema", "mcp.surface", "terminal.restart", "terminal.restartOnPreset", "terminal.restartOnAccount", "terminal.restartOnPresetOwned", "terminal.startHeld", "terminal.redraw", "terminal.forceResume", "terminal.toggleInputLock", "terminal.setWhenDone", "terminal.viewInfo", "terminal.restartService", "watchdog.restart", "terminal.new", "terminal.moveToDock", "terminal.moveToGrid", "terminal.toggleDock", "terminal.toggleDockAll", "terminal.toggleMaximize", "terminal.duplicate", "terminal.rename", "terminal.close", "terminal.closeOwned", "terminal.revealOwned", "terminal.placeOwned", "terminal.trash", "terminal.kill", "terminal.killBatch", "terminal.closeAll", "terminal.killAll", "terminal.moveToWorktree", "terminal.moveToNewWorktree", "terminal.watch", "terminal.gridLayout.setStrategy", "terminal.gridLayout.setValue", "terminal.copy", "terminal.paste", "terminal.copyLink", "terminal.contextMenu", "terminal.sendToAgent", "terminal.inject", "terminal.injectOwned", "terminal.bulkCommand", "terminal.interrupt", "terminal.interruptOwned", "terminal.sendKeys", "terminal.sendKeysOwned", "terminal.stashInput", "terminal.popStash", "terminal.arm", "terminal.disarm", "terminal.disarmAll", "terminal.armByState", "terminal.armAll", "terminal.armDefault", "terminal.openWorktreeEditor", "terminal.openWorktreeIssue", "terminal.openWorktreePR", "terminal.info.open", "terminal.info.get", "terminal.sessionFile.get", "terminal.setHoldOnRestart", "browser.reload", "browser.navigate", "browser.openUrl", "browser.back", "browser.forward", "browser.openExternal", "browser.copyUrl", "browser.setZoomLevel", "browser.captureScreenshot", "browser.toggleConsole", "browser.clearConsole", "browser.getConsoleMessages", "browser.toggleDevTools", "browser.hardReload", "nav.toggleFocusMode", "nav.quickSwitcher", "nav.showProjectHome", "nav.showProjectSplit", "nav.showGrid", "find.inFocusedPanel", "portal.toggle", "portal.closeTab", "portal.nextTab", "portal.prevTab", "portal.newTab", "portal.closeAllTabs", "portal.activateTab", "portal.openLaunchpad", "portal.openUrl", "portal.goBack", "portal.goForward", "portal.reload", "portal.copyUrl", "portal.openExternal", "portal.duplicateTab", "portal.reloadTab", "portal.copyTabUrl", "portal.openTabExternal", "portal.closeOthers", "portal.closeToRight", "portal.resetWidth", "portal.width.set", "portal.setDefaultNewTab", "portal.links.add", "portal.links.remove", "portal.links.update", "portal.links.toggle", "portal.links.reorder", "portal.tabs.reorder", "portal.listTabs", "portal.toggleDevDashboard", "help.gettingStarted.show", "help.tour.show", "help.tour.status", "help.displayImage", "help.openCommandsFolder", "help.newSessionWithAgent", "help.resumePastSession", "assistant.list", "assistant.start", "agent.readQuota", "host.list", "host.call", "host.ensureProject", "host.settings", "host.watch", "host.bringBack", "host.status", "ui.sidebar.resetWidth", "ui.sidebar.switchView", "ui.sidebar.showWorktrees", "devServer.start", "devPreview.stop", "devPreview.toggleTool", "devPreview.toggleElementPicker", "devPreview.reloadPreview", "devPreview.restart", "devPreview.restartAndClearCache", "devPreview.reinstallAndRestart", "devPreview.promoteToPortal", "env.global.get", "env.global.set", "env.project.get", "env.project.set", "fleet.accept", "fleet.reject", "fleet.interrupt", "fleet.restart", "fleet.kill", "fleet.trash", "fleet.armAll", "fleet.armFocused", "fleet.scope.enter", "fleet.scope.exit", "fleet.armMatchingFilter", "fleet.retryFailures", "fleet.saveNamedFleet", "fleet.recallNamedFleet", "fleet.deleteNamedFleet", "fleet.getRunStatus"];
 type BuiltInRuntimeActionId = (typeof BUILT_IN_ACTION_IDS)[number];
+
+/** Agent lifecycle state: idle | working | waiting | directing | completed | exited */
+type AgentState = "idle" | "working" | "waiting" | "directing" | "completed" | "exited";
+/**
+ * Classification of why an agent is in the "waiting" state.
+ *
+ * - `"prompt"` — usually an empty input prompt, but also the fallback when nothing more specific matched; confirm against output before driving it.
+ * - `"question"` — agent asked a free-form question; verify before replying.
+ * - `"approval"` — permission/approval selector visible (tool approval, y/n
+ *   confirm, trust dialog); a specific choice is required, not free text.
+ * - `"error"` — agent settled after a blocking error (auth failure, rate
+ *   limit, network error, failed command); input may not unblock it.
+ */
+type WaitingReason = "prompt" | "question" | "approval" | "error";
+
+/**
+ * How an agent CLI is handed Daintree's MCP servers at launch — the
+ * orchestration server when the project's tier is not `off`, and every plugin
+ * endpoint the project turned on — declared per agent in its registry entry
+ * (`capabilities.launchMcp`). Each format is a mechanism the CLI itself merges
+ * over the user's own servers, so nothing the user configured is replaced, and
+ * none writes into the user's agent config or the repository: a file, when one
+ * is needed, is written 0600 under Daintree's userData and deleted when the PTY
+ * exits. Bearers travel in that file or in the PTY env, never in argv.
+ *
+ * - `claude-mcp-config`: `--mcp-config <file>` (`mcpServers`, literal bearers).
+ * - `codex-config-overrides`: `-c mcp_servers.<key>.…` overrides; each bearer is
+ *   read from the PTY env through `bearer_token_env_var`.
+ * - `gemini-system-defaults`: a settings file named by `envVar`, loaded as the
+ *   lowest-precedence layer, whose `mcpServers` merge by name. An admin's own
+ *   system-defaults file is carried into it, since the variable replaces it.
+ * - `qwen-mcp-config`: `--mcp-config <file>` in Qwen Code's dialect (`httpUrl`).
+ * - `opencode-config-content`: inline config JSON in `envVar`, deep-merged over
+ *   every config file; an inherited value is carried into it.
+ * - `copilot-additional-mcp-config`: `--additional-mcp-config @<file>`.
+ * - `amp-mcp-config`: `--mcp-config <file>` holding a bare server map.
+ * - `vibe-mcp-servers-env`: `VIBE_MCP_SERVERS` JSON, bearers read from the env.
+ */
+type LaunchMcpInjection = {
+    format: "claude-mcp-config";
+} | {
+    format: "codex-config-overrides";
+} | {
+    format: "gemini-system-defaults";
+    envVar: string;
+} | {
+    format: "qwen-mcp-config";
+} | {
+    format: "opencode-config-content";
+    envVar: string;
+} | {
+    format: "copilot-additional-mcp-config";
+} | {
+    format: "amp-mcp-config";
+} | {
+    format: "vibe-mcp-servers-env";
+};
+type LaunchMcpFormat = LaunchMcpInjection["format"];
+
+/**
+ * Configuration for pattern-based working state detection.
+ * Patterns are matched against terminal output to detect when an agent is actively working.
+ */
+interface AgentDetectionConfig {
+    /**
+     * Primary patterns that indicate working state (high confidence).
+     * Patterns are matched against the last N lines of terminal output.
+     * Use strings that will be converted to RegExp with case-insensitive flag.
+     */
+    primaryPatterns: string[];
+    /**
+     * Fallback patterns for early-stage output (medium confidence).
+     * Checked when primary patterns don't match.
+     */
+    fallbackPatterns?: string[];
+    /**
+     * Patterns that indicate the agent has completed boot and is ready.
+     * Use strings that will be converted to RegExp with case-insensitive flag.
+     */
+    bootCompletePatterns?: string[];
+    /**
+     * Patterns that indicate the agent is waiting for user input (prompt visible).
+     * Use strings that will be converted to RegExp with case-insensitive flag.
+     */
+    promptPatterns?: string[];
+    /**
+     * Patterns that indicate an empty input prompt is visible.
+     * Safe to scan from visible lines even when the cursor line is active output.
+     */
+    promptHintPatterns?: string[];
+    /**
+     * The key-hint row a CLI draws under a select dialog whose options carry no
+     * numbers (#16209). Matched against the last row of a screen whose bottom
+     * block also holds a highlighted option, it reads the wait as a choice
+     * rather than an empty prompt, whatever the dialog asks. Case-insensitive.
+     */
+    choiceDialogFooterPatterns?: string[];
+    /**
+     * Number of lines from end of output to scan (default: 10).
+     */
+    scanLineCount?: number;
+    /**
+     * Number of lines from end of output to scan for prompt detection (default: 6).
+     */
+    promptScanLineCount?: number;
+    /**
+     * Activity debounce period in ms — time to wait after last activity before
+     * transitioning to idle. `buildActivityMonitorOptions` floors this to
+     * AGENT_WAITING_QUIET_MS (8000) to prevent working↔waiting jitter during
+     * silent inter-tool-call gaps (#3606); sub-floor values are not honored.
+     * Omit to accept the 8000ms default.
+     */
+    debounceMs?: number;
+    /**
+     * Minimum quiet-output ms before the prompt fast-path can fire.
+     * `buildActivityMonitorOptions` floors this to the effective idle debounce
+     * (>= AGENT_WAITING_QUIET_MS, 8000) for the same #3606 jitter guard —
+     * sub-floor values are not honored. Omit to accept the default.
+     */
+    promptFastPathMinQuietMs?: number;
+    /**
+     * Confidence level when primary pattern matches (default: 0.95).
+     */
+    primaryConfidence?: number;
+    /**
+     * Confidence level when fallback pattern matches (default: 0.75).
+     */
+    fallbackConfidence?: number;
+    /**
+     * Confidence level when prompt pattern matches (default: 0.85).
+     */
+    promptConfidence?: number;
+    /**
+     * Patterns that indicate the agent successfully completed a task.
+     * When detected, briefly transition to "completed" state before settling to "waiting".
+     * Use strings that will be converted to RegExp with case-insensitive flag.
+     */
+    completionPatterns?: string[];
+    /**
+     * Confidence level when completion pattern matches (default: 0.90).
+     */
+    completionConfidence?: number;
+    /**
+     * Patterns matched against terminal window title (OSC 0/2) for state detection.
+     * Substrings checked via includes() against the title string.
+     */
+    titleStatePatterns?: {
+        working: string[];
+        waiting: string[];
+    };
+}
+/**
+ * The plain-data form of {@link AgentResume} a plugin manifest declares (#13687).
+ * A `session-id` template carries the literal `{sessionId}` placeholder in one
+ * of its args. Kept as data on {@link AgentConfig.resumeTemplate} because the
+ * plugin agent snapshot is structured-cloned into the renderer, pty-host and
+ * analysis worker, and a function would not survive the copy;
+ * {@link getEffectiveRegistry} expands it into `resume` in each process.
+ */
+type AgentResumeTemplate = {
+    kind: "session-id";
+    args: string[];
+    sessionIdPattern?: string;
+    quitCommand?: string;
+    resumeLatestArgs?: string[];
+} | {
+    kind: "project-scoped";
+    args: string[];
+    quitCommand?: string;
+};
 
 type ActionKind = "command" | "query";
 type ActionDanger = "safe" | "confirm" | "restricted";
@@ -1892,7 +2072,13 @@ type ActionErrorCode = "NOT_FOUND" | "VALIDATION_ERROR"
  * is needed before anything can act on it. Callers bound to one view never
  * see this code — main collapses it into the ordinary miss for them.
  */
- | "TERMINAL_IN_OTHER_PROJECT" | "INVALID_URL"
+ | "TERMINAL_IN_OTHER_PROJECT"
+/**
+ * A send was refused because the terminal's agent was last observed waiting
+ * on a choice dialog (#16209): text typed there picks an option or is lost.
+ * Nothing was sent. Answer the dialog with keys, or send once it is gone.
+ */
+ | "TERMINAL_CHOICE_DIALOG" | "INVALID_URL"
 /**
  * A plugin on a remote host dispatched an action while no frontend drives
  * its project: nobody is attached whose view could run it.
@@ -2116,169 +2302,6 @@ interface PluginArtifactSource {
 
 /** Notification type */
 type NotificationType = "info" | "success" | "error" | "warning";
-
-/** Agent lifecycle state: idle | working | waiting | directing | completed | exited */
-type AgentState = "idle" | "working" | "waiting" | "directing" | "completed" | "exited";
-/**
- * Classification of why an agent is in the "waiting" state.
- *
- * - `"prompt"` — usually an empty input prompt, but also the fallback when nothing more specific matched; confirm against output before driving it.
- * - `"question"` — agent asked a free-form question; verify before replying.
- * - `"approval"` — permission/approval selector visible (tool approval, y/n
- *   confirm, trust dialog); a specific choice is required, not free text.
- * - `"error"` — agent settled after a blocking error (auth failure, rate
- *   limit, network error, failed command); input may not unblock it.
- */
-type WaitingReason = "prompt" | "question" | "approval" | "error";
-
-/**
- * How an agent CLI is handed Daintree's MCP servers at launch — the
- * orchestration server when the project's tier is not `off`, and every plugin
- * endpoint the project turned on — declared per agent in its registry entry
- * (`capabilities.launchMcp`). Each format is a mechanism the CLI itself merges
- * over the user's own servers, so nothing the user configured is replaced, and
- * none writes into the user's agent config or the repository: a file, when one
- * is needed, is written 0600 under Daintree's userData and deleted when the PTY
- * exits. Bearers travel in that file or in the PTY env, never in argv.
- *
- * - `claude-mcp-config`: `--mcp-config <file>` (`mcpServers`, literal bearers).
- * - `codex-config-overrides`: `-c mcp_servers.<key>.…` overrides; each bearer is
- *   read from the PTY env through `bearer_token_env_var`.
- * - `gemini-system-defaults`: a settings file named by `envVar`, loaded as the
- *   lowest-precedence layer, whose `mcpServers` merge by name. An admin's own
- *   system-defaults file is carried into it, since the variable replaces it.
- * - `qwen-mcp-config`: `--mcp-config <file>` in Qwen Code's dialect (`httpUrl`).
- * - `opencode-config-content`: inline config JSON in `envVar`, deep-merged over
- *   every config file; an inherited value is carried into it.
- * - `copilot-additional-mcp-config`: `--additional-mcp-config @<file>`.
- * - `amp-mcp-config`: `--mcp-config <file>` holding a bare server map.
- * - `vibe-mcp-servers-env`: `VIBE_MCP_SERVERS` JSON, bearers read from the env.
- */
-type LaunchMcpInjection = {
-    format: "claude-mcp-config";
-} | {
-    format: "codex-config-overrides";
-} | {
-    format: "gemini-system-defaults";
-    envVar: string;
-} | {
-    format: "qwen-mcp-config";
-} | {
-    format: "opencode-config-content";
-    envVar: string;
-} | {
-    format: "copilot-additional-mcp-config";
-} | {
-    format: "amp-mcp-config";
-} | {
-    format: "vibe-mcp-servers-env";
-};
-type LaunchMcpFormat = LaunchMcpInjection["format"];
-
-/**
- * Configuration for pattern-based working state detection.
- * Patterns are matched against terminal output to detect when an agent is actively working.
- */
-interface AgentDetectionConfig {
-    /**
-     * Primary patterns that indicate working state (high confidence).
-     * Patterns are matched against the last N lines of terminal output.
-     * Use strings that will be converted to RegExp with case-insensitive flag.
-     */
-    primaryPatterns: string[];
-    /**
-     * Fallback patterns for early-stage output (medium confidence).
-     * Checked when primary patterns don't match.
-     */
-    fallbackPatterns?: string[];
-    /**
-     * Patterns that indicate the agent has completed boot and is ready.
-     * Use strings that will be converted to RegExp with case-insensitive flag.
-     */
-    bootCompletePatterns?: string[];
-    /**
-     * Patterns that indicate the agent is waiting for user input (prompt visible).
-     * Use strings that will be converted to RegExp with case-insensitive flag.
-     */
-    promptPatterns?: string[];
-    /**
-     * Patterns that indicate an empty input prompt is visible.
-     * Safe to scan from visible lines even when the cursor line is active output.
-     */
-    promptHintPatterns?: string[];
-    /**
-     * Number of lines from end of output to scan (default: 10).
-     */
-    scanLineCount?: number;
-    /**
-     * Number of lines from end of output to scan for prompt detection (default: 6).
-     */
-    promptScanLineCount?: number;
-    /**
-     * Activity debounce period in ms — time to wait after last activity before
-     * transitioning to idle. `buildActivityMonitorOptions` floors this to
-     * AGENT_WAITING_QUIET_MS (8000) to prevent working↔waiting jitter during
-     * silent inter-tool-call gaps (#3606); sub-floor values are not honored.
-     * Omit to accept the 8000ms default.
-     */
-    debounceMs?: number;
-    /**
-     * Minimum quiet-output ms before the prompt fast-path can fire.
-     * `buildActivityMonitorOptions` floors this to the effective idle debounce
-     * (>= AGENT_WAITING_QUIET_MS, 8000) for the same #3606 jitter guard —
-     * sub-floor values are not honored. Omit to accept the default.
-     */
-    promptFastPathMinQuietMs?: number;
-    /**
-     * Confidence level when primary pattern matches (default: 0.95).
-     */
-    primaryConfidence?: number;
-    /**
-     * Confidence level when fallback pattern matches (default: 0.75).
-     */
-    fallbackConfidence?: number;
-    /**
-     * Confidence level when prompt pattern matches (default: 0.85).
-     */
-    promptConfidence?: number;
-    /**
-     * Patterns that indicate the agent successfully completed a task.
-     * When detected, briefly transition to "completed" state before settling to "waiting".
-     * Use strings that will be converted to RegExp with case-insensitive flag.
-     */
-    completionPatterns?: string[];
-    /**
-     * Confidence level when completion pattern matches (default: 0.90).
-     */
-    completionConfidence?: number;
-    /**
-     * Patterns matched against terminal window title (OSC 0/2) for state detection.
-     * Substrings checked via includes() against the title string.
-     */
-    titleStatePatterns?: {
-        working: string[];
-        waiting: string[];
-    };
-}
-/**
- * The plain-data form of {@link AgentResume} a plugin manifest declares (#13687).
- * A `session-id` template carries the literal `{sessionId}` placeholder in one
- * of its args. Kept as data on {@link AgentConfig.resumeTemplate} because the
- * plugin agent snapshot is structured-cloned into the renderer, pty-host and
- * analysis worker, and a function would not survive the copy;
- * {@link getEffectiveRegistry} expands it into `resume` in each process.
- */
-type AgentResumeTemplate = {
-    kind: "session-id";
-    args: string[];
-    sessionIdPattern?: string;
-    quitCommand?: string;
-    resumeLatestArgs?: string[];
-} | {
-    kind: "project-scoped";
-    args: string[];
-    quitCommand?: string;
-};
 
 /**
  * `contributes.contextProviders` (#13795): a plugin claims a short `@` prefix
@@ -3239,7 +3262,7 @@ interface PluginPanelActivity {
 type PluginContextValue = boolean | string;
 type MenuItemLocation = "terminal" | "file" | "view" | "help";
 type ContextMenuLocation = "worktree" | "terminal" | "file" | "browser" | "project";
-declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "terminal:read", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose", "project:dispatch", "panel:focus-read", "notification:os", "artifact:store", "preview:inspect"];
+declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "agent:launch-preset", "terminal:read", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose", "project:dispatch", "panel:focus-read", "notification:os", "artifact:store", "preview:inspect"];
 type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
 type PluginCapability = BuiltInPluginCapability;
 /** Third argument to {@link PluginHostApi.dispatch} (#13119). */
@@ -4662,7 +4685,8 @@ interface PluginManifest {
      * The short name agents see this plugin's MCP server under, as
      * `daintree-<mcpName>`: lowercase letters, digits and hyphens, at most 16
      * characters. `docs` and `runbooks` are taken by the Daintree Assistant's own
-     * servers. Without one the host derives a name from the last segment of
+     * servers, and `decisions` by the server agents ask the person through.
+     * Without one the host derives a name from the last segment of
      * `name`. The same name in every project; see `docs/plugins/manifest.md` for
      * how a clash between two plugins is settled.
      */
@@ -6029,7 +6053,8 @@ type PluginTerminalLifecycleEvent = (PluginTerminalLifecycleEventBase & {
  * - `project-unavailable` — the plugin's project has no open view, or it did not
  *   answer in time.
  * - `launch-failed` — the user chose to start a new agent and it did not start,
- *   or the new worktree's setup failed, needs approval or is still running.
+ *   or the new worktree's setup needs approval or is still running. A setup
+ *   that failed or timed out doesn't refuse: the agent starts anyway.
  * - `prompt-open` — another picker from this plugin is already open.
  * - `busy` — too many targeted sends from this plugin are already in flight.
  */
@@ -9350,4 +9375,5 @@ declare function syncedCollectionSnapshotChannel(channel: string): string;
  */
 declare function createSyncedCollection<T>(host: SyncedCollectionHost, channel: string, options: SyncedCollectionOptions<T>): Promise<SyncedCollection<T>>;
 
-export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentContextDataTransfer, type AgentContextDragData, type AgentContextDragPayload, type AgentContextReferenceDragPayload, type AgentState, type AnyForgeProviderImpl, type AssistantKnowledgeContribution, type AssistantKnowledgeEntry, type AuthValidation, type AutoMergeCapability, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type ContextProviderCallOptions, type ContextProviderContent, type ContextProviderContribution, type ContextProviderDescriptor, type ContextProviderImpl, type ContextProviderItem, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type DisableAutoMergeResult, type ElementPickerDetectionKind, type ElementPickerDetectionRule, type ElementPickerProviderContribution, type EnableAutoMergeInput, type EnableAutoMergeResult, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type FileEditorMode, type ForgeCodeProviderImpl, type ForgeIssueProviderImpl, type ForgeLabel, type ForgeNumberReference, type ForgeProviderBaseImpl, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeProviderRole, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type PRCommitSummary, type PRMergeIntent, type PRMergeMethod, type PRMergeStatus, type Page, type PanelContribution, type PanelMenuItemContribution, type PanelReloadResult, type PanelViewProps, type PluginAccountAccessToken, type PluginAccountApi, type PluginAccountContribution, type PluginAccountIdentity, type PluginAccountKind, type PluginAccountRef, type PluginAccountState, type PluginAccountTest, type PluginActionContribution, type PluginActionManifestEntry, type PluginActionResultSchema, type PluginActivate, type PluginActivationApi, type PluginAgentInputResult, type PluginAgentInterruptResult, type PluginAgentKeysInput, type PluginAgentKeysResult, type PluginAgentMcpContribution, type PluginAgentMcpServerSource, type PluginAgentMcpServerSourceTool, type PluginAgentMcpToolGroup, type PluginAgentMcpToolGroupAccess, type PluginAgentPane, type PluginAgentRun, type PluginAgentSnapshot, type PluginAgentsApi, type PluginAllAgentsSnapshot, type PluginApplicationDescriptor, type PluginApplicationDestination, type PluginApplicationNavigation, type PluginApplicationNavigationApi, type PluginApplicationNavigationParam, type PluginApplicationSection, type PluginApplicationTourRef, type PluginArtifact, type PluginArtifactApi, type PluginArtifactCreateOptions, type PluginArtifactDownloadOptions, type PluginArtifactDownloadRequest, type PluginArtifactImportSource, type PluginArtifactListOptions, type PluginArtifactProgress, type PluginArtifactSource, type PluginArtifactUploadOptions, type PluginArtifactUploadRequest, type PluginArtifactUploadResult, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginConnectionContribution, type PluginContextValue, type PluginDatabase, type PluginDatabaseApi, type PluginDatabaseBackupResult, type PluginDatabaseChangeEvent, type PluginDatabaseColumn, type PluginDatabaseContribution, type PluginDatabaseLocation, type PluginDatabaseLocationKind, type PluginDatabaseOpenOptions, type PluginDatabaseParams, type PluginDatabaseQueryContribution, type PluginDatabaseQueryParam, type PluginDatabaseQueryParamFormat, type PluginDatabaseQueryParamType, type PluginDatabaseRunResult, type PluginDatabaseStatements, type PluginDispatchOptions, type PluginDocumentsApi, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginEventRoute, type PluginEventRouteEvent, type PluginEventRouteWake, type PluginFileDocument, type PluginFileDocumentChange, type PluginFileDocumentReadResult, type PluginFileDocumentSaveResult, type PluginFocusedPanel, type PluginFocusedPanelKind, type PluginFsApi, type PluginFsDirEntry, type PluginFsReadFilesEncoding, type PluginFsReadFilesEntry, type PluginFsReadFilesErrorCode, type PluginFsReadFilesOptions, type PluginFsReadWithRevisionResult, type PluginFsScope, type PluginFsStat, type PluginFsWalkEntry, type PluginFsWalkOptions, type PluginFsWalkResult, type PluginFsWatchOptions, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHandlerOptions, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginInvokeOrigin, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolAnnotations, type PluginMcpToolDefinition, type PluginNavigationIntent, type PluginNavigationLocation, type PluginNavigationParamValue, type PluginNavigationRefusal, type PluginNavigationResult, type PluginNetworkScope, type PluginNotifyAction, type PluginNotifyOptions, type PluginNotifyResult, type PluginNotifyTarget, type PluginPanelActivity, type PluginPanelActivityState, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginPanelToolbarItemState, type PluginPdfMargins, type PluginPdfPageSize, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginProjectPresence, type PluginProjectPresenceState, type PluginPromptCallOptions, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginRenderPdfOptions, type PluginRenderPdfResult, type PluginRunRecipeOptions, type PluginRunRecipeRefusalReason, type PluginRunRecipeResult, type PluginSearchContext, type PluginSearchProvider, type PluginSearchProviderContribution, type PluginSearchResult, type PluginSearchResultTarget, type PluginSendToAgentOptions, type PluginSendToAgentRefusalReason, type PluginSendToAgentResult, type PluginServiceCallContext, type PluginServiceCallOptions, type PluginServiceCaller, type PluginServiceContract, type PluginServiceFailureReason, type PluginServiceHandlers, type PluginServiceProvideContribution, type PluginServiceProviderInfo, type PluginServiceRequireContribution, type PluginServiceResult, type PluginServiceStatus, type PluginServicesApi, type PluginServicesContribution, type PluginSettingsPageContribution, type PluginSettingsScope, type PluginSettingsViewContext, type PluginSettingsViewFocus, type PluginSetupStepAction, type PluginSetupStepContribution, type PluginSetupStepDone, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginTaskApi, type PluginTaskHandle, type PluginTaskProgress, type PluginTaskResult, type PluginTaskStartOptions, type PluginTerminalKind, type PluginTerminalLifecycleEvent, type PluginTerminalLifecycleEventBase, type PluginTerminalLifecycleEventType, type PluginTerminalReadScreenOptions, type PluginTerminalScreenResult, type PluginTerminalStatus, type PluginTerminalsApi, type PluginToastOptions, type PluginToolbarButtonRuntimeState, type PluginTypedIpcHandler, type PluginViewHostContext, type PluginViewHostKind, type PluginWorktreeCardStatus, type PluginWorktreeDeleteNote, type PluginWorktreeFileState, type PluginWorktreeGitOperation, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeReviewCheck, type PluginWorktreeSetup, type PluginWorktreeSetupStage, type PluginWorktreeSetupState, type PluginWorktreeSetupStepContext, type PluginWorktreeSetupStepHandler, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesChange, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type ProjectTemplateContribution, type RateLimitInfo, type RepoMergeSettings, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type SyncedCollection, type SyncedCollectionDelta, type SyncedCollectionHost, type SyncedCollectionOptions, type SyncedCollectionSnapshot, type TerminalLinkContribution, type TerminalLinkPatternArgs, type TerminalLinkSubject, type TerminalLinkUrlArgs, type TerminalLinkUrlContribution, type ToolbarButtonContribution, type ToolbarButtonPopover, type ViewContribution, type ViewLocation, type WaitingReason, type WorkerRestartResult, type WorktreeDeleteNotesContribution, type WorktreeDeleteNotesProviderDescriptor, type WorktreeDeleteNotesProviderImpl, type WorktreeSetupStepContribution, createSyncedCollection, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData, syncedCollectionSnapshotChannel };
+export { AGENT_CONTEXT_DRAG_MIME, AGENT_CONTEXT_MAX_SOURCE_LABEL_LENGTH, AGENT_CONTEXT_MAX_TEXT_LENGTH, AGENT_CONTEXT_MAX_TITLE_LENGTH, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, createSyncedCollection, encodeAgentContextDragPayload, localAuthStubs, setAgentContextDragData, syncedCollectionSnapshotChannel };
+export type { ActionDanger, ActionDispatchError, ActionDispatchResult, ActionDispatchSuccess, ActionError, ActionErrorCode, ActionExample, ActionHandler, ActionId, ActionKind, AgentContextDataTransfer, AgentContextDragData, AgentContextDragPayload, AgentContextReferenceDragPayload, AgentState, AnyForgeProviderImpl, AssistantKnowledgeContribution, AssistantKnowledgeEntry, AuthValidation, AutoMergeCapability, BuiltInActionId, BuiltInPluginCapability, CIStatus, CheckRun, CheckRunConclusion, CheckRunStatus, ChecksCapability, ContextMenuContribution, ContextMenuLocation, ContextProviderCallOptions, ContextProviderContent, ContextProviderContribution, ContextProviderDescriptor, ContextProviderImpl, ContextProviderItem, CreateIssueInput, CredentialImportCandidate, CredentialImportCapability, CredentialImportExpected, CredentialImportFailureReason, CredentialImportPreview, CredentialImportUnavailable, Credentials, DisableAutoMergeResult, ElementPickerDetectionKind, ElementPickerDetectionRule, ElementPickerProviderContribution, EnableAutoMergeInput, EnableAutoMergeResult, FetchOptions, FileDecoration, FileDecorationContribution, FileDecorationProviderDescriptor, FileDecorationProviderImpl, FileEditorContribution, FileEditorMode, ForgeCodeProviderImpl, ForgeIssueProviderImpl, ForgeLabel, ForgeNumberReference, ForgeProviderBaseImpl, ForgeProviderContribution, ForgeProviderDescriptor, ForgeProviderImpl, ForgeProviderKind, ForgeProviderRole, ForgeUser, Issue, KeybindingContribution, ListOptions, McpServerContribution, MenuItemContribution, MenuItemLocation, NormalizedIssueState, NormalizedPRState, PR, PRCommitSummary, PRMergeIntent, PRMergeMethod, PRMergeStatus, Page, PanelContribution, PanelMenuItemContribution, PanelReloadResult, PanelViewProps, PluginAccountAccessToken, PluginAccountApi, PluginAccountContribution, PluginAccountIdentity, PluginAccountKind, PluginAccountRef, PluginAccountState, PluginAccountTest, PluginActionContribution, PluginActionManifestEntry, PluginActionResultSchema, PluginActivate, PluginActivationApi, PluginAgentInputResult, PluginAgentInterruptResult, PluginAgentKeysInput, PluginAgentKeysResult, PluginAgentMcpContribution, PluginAgentMcpServerSource, PluginAgentMcpServerSourceTool, PluginAgentMcpToolGroup, PluginAgentMcpToolGroupAccess, PluginAgentPane, PluginAgentRun, PluginAgentSnapshot, PluginAgentsApi, PluginAllAgentsSnapshot, PluginApplicationDescriptor, PluginApplicationDestination, PluginApplicationNavigation, PluginApplicationNavigationApi, PluginApplicationNavigationParam, PluginApplicationSection, PluginApplicationTourRef, PluginArtifact, PluginArtifactApi, PluginArtifactCreateOptions, PluginArtifactDownloadOptions, PluginArtifactDownloadRequest, PluginArtifactImportSource, PluginArtifactListOptions, PluginArtifactProgress, PluginArtifactSource, PluginArtifactUploadOptions, PluginArtifactUploadRequest, PluginArtifactUploadResult, PluginAuthor, PluginCanDispatchResult, PluginCapability, PluginChannelSchema, PluginClipboardApi, PluginConfirmOptions, PluginConnectionContribution, PluginContextValue, PluginDatabase, PluginDatabaseApi, PluginDatabaseBackupResult, PluginDatabaseChangeEvent, PluginDatabaseColumn, PluginDatabaseContribution, PluginDatabaseLocation, PluginDatabaseLocationKind, PluginDatabaseOpenOptions, PluginDatabaseParams, PluginDatabaseQueryContribution, PluginDatabaseQueryParam, PluginDatabaseQueryParamFormat, PluginDatabaseQueryParamType, PluginDatabaseRunResult, PluginDatabaseStatements, PluginDispatchOptions, PluginDocumentsApi, PluginDuplexProcessHandle, PluginDuplexProcessSpawnOptions, PluginEventRoute, PluginEventRouteEvent, PluginEventRouteWake, PluginFileDocument, PluginFileDocumentChange, PluginFileDocumentReadResult, PluginFileDocumentSaveResult, PluginFocusedPanel, PluginFocusedPanelKind, PluginFsApi, PluginFsDirEntry, PluginFsReadFilesEncoding, PluginFsReadFilesEntry, PluginFsReadFilesErrorCode, PluginFsReadFilesOptions, PluginFsReadWithRevisionResult, PluginFsScope, PluginFsStat, PluginFsWalkEntry, PluginFsWalkOptions, PluginFsWalkResult, PluginFsWatchOptions, PluginGitApi, PluginGitCommitOptions, PluginGitCommitResult, PluginGitStatus, PluginGitStatusFile, PluginHandlerOptions, PluginHostActionsApi, PluginHostApi, PluginHostCallOptions, PluginHostSubscriptionOptions, PluginIdentity, PluginInputBoxOptions, PluginInvokeOrigin, PluginIpcContext, PluginIpcHandler, PluginLocalSocketScope, PluginLogger, PluginManifest, PluginManifestScopes, PluginMcpApi, PluginMcpCaller, PluginMcpJsonSchema, PluginMcpToolAnnotations, PluginMcpToolDefinition, PluginNavigationIntent, PluginNavigationLocation, PluginNavigationParamValue, PluginNavigationRefusal, PluginNavigationResult, PluginNetworkScope, PluginNotifyAction, PluginNotifyOptions, PluginNotifyResult, PluginNotifyTarget, PluginPanelActivity, PluginPanelActivityState, PluginPanelBadge, PluginPanelBadgeColor, PluginPanelLifecycleEvent, PluginPanelLifecyclePhase, PluginPanelToolbarItemState, PluginPdfMargins, PluginPdfPageSize, PluginProcessApi, PluginProcessDataChunk, PluginProcessHandle, PluginProcessMode, PluginProcessSpawnOptions, PluginProcessStreamEvent, PluginProjectPresence, PluginProjectPresenceState, PluginPromptCallOptions, PluginPtyProcessHandle, PluginPtyProcessSpawnOptions, PluginQuickPickItem, PluginQuickPickOptions, PluginRenderPdfOptions, PluginRenderPdfResult, PluginRunRecipeOptions, PluginRunRecipeRefusalReason, PluginRunRecipeResult, PluginSearchContext, PluginSearchProvider, PluginSearchProviderContribution, PluginSearchResult, PluginSearchResultTarget, PluginSendToAgentOptions, PluginSendToAgentRefusalReason, PluginSendToAgentResult, PluginServiceCallContext, PluginServiceCallOptions, PluginServiceCaller, PluginServiceContract, PluginServiceFailureReason, PluginServiceHandlers, PluginServiceProvideContribution, PluginServiceProviderInfo, PluginServiceRequireContribution, PluginServiceResult, PluginServiceStatus, PluginServicesApi, PluginServicesContribution, PluginSettingsPageContribution, PluginSettingsScope, PluginSettingsViewContext, PluginSettingsViewFocus, PluginSetupStepAction, PluginSetupStepContribution, PluginSetupStepDone, PluginStorageScope, PluginSystemApi, PluginSystemWakeEvent, PluginTaskApi, PluginTaskHandle, PluginTaskProgress, PluginTaskResult, PluginTaskStartOptions, PluginTerminalKind, PluginTerminalLifecycleEvent, PluginTerminalLifecycleEventBase, PluginTerminalLifecycleEventType, PluginTerminalReadScreenOptions, PluginTerminalScreenResult, PluginTerminalStatus, PluginTerminalsApi, PluginToastOptions, PluginToolbarButtonRuntimeState, PluginTypedIpcHandler, PluginViewHostContext, PluginViewHostKind, PluginWorktreeCardStatus, PluginWorktreeDeleteNote, PluginWorktreeFileState, PluginWorktreeGitOperation, PluginWorktreeLinked, PluginWorktreeLinkedIssue, PluginWorktreeLinkedPR, PluginWorktreeReviewCheck, PluginWorktreeSetup, PluginWorktreeSetupStage, PluginWorktreeSetupState, PluginWorktreeSetupStepContext, PluginWorktreeSetupStepHandler, PluginWorktreeSnapshot, PluginWorktreeStatus, PluginWorktreeStatusFile, PluginWorktreesChange, PluginWorktreesResult, PluginWorktreesUnavailableReason, ProjectTemplateContribution, RateLimitInfo, RepoMergeSettings, RepoMetadata, RepoRef, ResourceRef, SettingDefinition, SettingFieldType, SettingsApi, StorageApi, SyncedCollection, SyncedCollectionDelta, SyncedCollectionHost, SyncedCollectionOptions, SyncedCollectionSnapshot, TerminalLinkContribution, TerminalLinkPatternArgs, TerminalLinkSubject, TerminalLinkUrlArgs, TerminalLinkUrlContribution, ToolbarButtonContribution, ToolbarButtonPopover, ViewContribution, ViewLocation, WaitingReason, WorkerRestartResult, WorktreeDeleteNotesContribution, WorktreeDeleteNotesProviderDescriptor, WorktreeDeleteNotesProviderImpl, WorktreeSetupStepContribution };

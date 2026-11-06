@@ -17,15 +17,12 @@ import type { TabInfo } from "@/components/Panel/TabButton";
 import { usePanelHandlers } from "@/hooks/usePanelHandlers";
 import { buildPanelProps } from "@/utils/panelProps";
 import { getGridLayoutSnapshot } from "./gridLayoutSnapshot";
-import type { AgentState } from "@/types";
 
 export interface GridPanelProps {
   terminalId: string;
   isFocused: boolean;
   isMaximized?: boolean;
   isMultiPanelGrid?: boolean;
-  // Group-level ambient agent state (highest urgency across all tabs in a tab group)
-  ambientAgentState?: AgentState;
   // Fleet scope render overrides: force input lock, disable per-panel
   // maximize/minimize/add-tab, and let the caller disambiguate titles when
   // the armed set spans multiple worktrees. These are transient render-only
@@ -35,7 +32,6 @@ export interface GridPanelProps {
   titleOverride?: string;
   // Tab support
   tabs?: TabInfo[];
-  groupId?: string;
   onTabClick?: (tabId: string) => void;
   onTabClose?: (tabId: string) => void;
   onTabRename?: (tabId: string, newTitle: string) => void;
@@ -49,7 +45,6 @@ export interface GridPanelProps {
   // stable handler (e.g., `ctx.handleAddTabForPanel`) — GridPanel composes
   // the no-arg shape internally and skips it in fleet scope.
   onAddTabForPanel?: (terminal: PanelInstance) => void | Promise<void>;
-  onTabReorder?: (newOrder: string[]) => void;
 }
 
 export const GridPanel = React.memo(function GridPanel({
@@ -57,17 +52,14 @@ export const GridPanel = React.memo(function GridPanel({
   isFocused,
   isMaximized = false,
   isMultiPanelGrid,
-  ambientAgentState,
   isFleetScope = false,
   titleOverride,
   tabs,
-  groupId,
   onTabClick,
   onTabClose,
   onTabRename,
   onAddTab,
   onAddTabForPanel,
-  onTabReorder,
 }: GridPanelProps) {
   // Subscribe to the terminal slice keyed by id. `useShallow` does per-field
   // identity comparison, so re-renders fire only when fields of THIS terminal
@@ -131,7 +123,6 @@ export const GridPanel = React.memo(function GridPanel({
         location: "grid" as const,
         isMaximized,
         isMultiPanelGrid,
-        ambientAgentState,
         onFocus: handleFocus,
         onClose: handleClose,
         // Fleet scope disables per-panel maximize — the armed grid is a single
@@ -140,12 +131,10 @@ export const GridPanel = React.memo(function GridPanel({
         onTitleChange: handleTitleChange,
         onMinimize: isFleetScope ? undefined : handleMinimize,
         tabs,
-        groupId,
         onTabClick,
         onTabClose,
         onTabRename,
         onAddTab: composedOnAddTab,
-        onTabReorder,
         ...(isFleetScope ? { isInputLocked: true } : undefined),
         ...(titleOverride !== undefined ? { title: titleOverride } : undefined),
       },
@@ -155,19 +144,16 @@ export const GridPanel = React.memo(function GridPanel({
     isFocused,
     isMaximized,
     isMultiPanelGrid,
-    ambientAgentState,
     handleFocus,
     handleClose,
     handleToggleMaximize,
     handleTitleChange,
     handleMinimize,
     tabs,
-    groupId,
     onTabClick,
     onTabClose,
     onTabRename,
     composedOnAddTab,
-    onTabReorder,
     isFleetScope,
     titleOverride,
   ]);
@@ -195,19 +181,16 @@ export const GridPanel = React.memo(function GridPanel({
         // Without this the prop defaults to `true`, so an unavailable plugin
         // pane claims multi-pane chrome even when it is the only pane.
         isMultiPanelGrid={isMultiPanelGrid}
-        ambientAgentState={ambientAgentState}
         onFocus={handleFocus}
         onClose={handleClose}
         onToggleMaximize={handleToggleMaximize}
         onTitleChange={handleTitleChange}
         onMinimize={handleMinimize}
         tabs={tabs}
-        groupId={groupId}
         onTabClick={onTabClick}
         onTabClose={onTabClose}
         onTabRename={onTabRename}
         onAddTab={composedOnAddTab}
-        onTabReorder={onTabReorder}
       >
         {isPluginOwned ? (
           <PluginMissingPanel

@@ -79,10 +79,10 @@ describe("EnvironmentSettingsTab", () => {
     renderTab();
 
     await waitFor(() => {
-      expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(1);
+      expect(screen.getAllByLabelText(/^Name of variable \d+$/)).toHaveLength(1);
     });
 
-    const valueInput = screen.getByLabelText("Environment variable value");
+    const valueInput = screen.getByLabelText(/^Value of /);
     fireEvent.change(valueInput, { target: { value: "new-value" } });
 
     const saveButton = screen.getByRole("button", { name: /save/i });
@@ -137,7 +137,7 @@ describe("EnvironmentSettingsTab", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
 
     await waitFor(() => {
-      expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(1);
+      expect(screen.getAllByLabelText(/^Name of variable \d+$/)).toHaveLength(1);
     });
     expect(get).toHaveBeenCalledTimes(2);
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
@@ -160,8 +160,8 @@ describe("EnvironmentSettingsTab", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /add variable/i }));
 
-    const nameInput = screen.getByLabelText("Environment variable name");
-    const valueInput = screen.getByLabelText("Environment variable value");
+    const nameInput = screen.getByLabelText(/^Name of variable \d+$/);
+    const valueInput = screen.getByLabelText(/^Value of /);
     fireEvent.change(nameInput, { target: { value: "1BAD-NAME" } });
     fireEvent.change(valueInput, { target: { value: "anything" } });
 
@@ -201,8 +201,8 @@ describe("EnvironmentSettingsTab", () => {
     const addButton = screen.getByRole("button", { name: /add variable/i });
     fireEvent.click(addButton);
 
-    const nameInput = screen.getByLabelText("Environment variable name");
-    const valueInput = screen.getByLabelText("Environment variable value");
+    const nameInput = screen.getByLabelText(/^Name of variable \d+$/);
+    const valueInput = screen.getByLabelText(/^Value of /);
 
     fireEvent.change(nameInput, { target: { value: "NEW_VAR" } });
     fireEvent.change(valueInput, { target: { value: "new_value" } });
@@ -221,11 +221,11 @@ describe("EnvironmentSettingsTab close-time save", () => {
     window.electron.globalEnv.get = vi.fn().mockResolvedValue({ GOOD: "1" });
     renderTabInDialog();
     await waitFor(() => {
-      expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(1);
+      expect(screen.getAllByLabelText(/^Name of variable \d+$/)).toHaveLength(1);
     });
 
     fireEvent.click(screen.getByRole("button", { name: /add variable/i }));
-    const badName = screen.getAllByLabelText<HTMLInputElement>("Environment variable name")[1]!;
+    const badName = screen.getAllByLabelText<HTMLInputElement>(/^Name of variable \d+$/)[1]!;
     fireEvent.change(badName, { target: { value: "1BAD" } });
 
     const failed = await closeFlush();
@@ -234,9 +234,7 @@ describe("EnvironmentSettingsTab close-time save", () => {
     expect(failed[0]!.tab).toBe("environment");
     const landing = document.getElementById(failed[0]!.landOn);
     expect(landing?.contains(badName)).toBe(true);
-    expect(landing?.contains(screen.getAllByLabelText("Environment variable name")[0]!)).toBe(
-      false
-    );
+    expect(landing?.contains(screen.getAllByLabelText(/^Name of variable \d+$/)[0]!)).toBe(false);
     // The reason is on screen once the close has tried to save.
     expect(badName.getAttribute("aria-invalid")).toBe("true");
     expect(badName.value).toBe("1BAD");
@@ -248,9 +246,9 @@ describe("EnvironmentSettingsTab close-time save", () => {
     window.electron.globalEnv.set = vi.fn().mockRejectedValue(new Error("disk full"));
     renderTabInDialog();
     await waitFor(() => {
-      expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(1);
+      expect(screen.getAllByLabelText(/^Name of variable \d+$/)).toHaveLength(1);
     });
-    const value = screen.getByLabelText("Environment variable value") as HTMLInputElement;
+    const value = screen.getByLabelText(/^Value of /) as HTMLInputElement;
     fireEvent.change(value, { target: { value: "2" } });
 
     const failed = await closeFlush();
@@ -267,9 +265,9 @@ describe("EnvironmentSettingsTab close-time save", () => {
     window.electron.globalEnv.get = vi.fn().mockResolvedValue({ GOOD: "1" });
     renderTabInDialog();
     await waitFor(() => {
-      expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(1);
+      expect(screen.getAllByLabelText(/^Name of variable \d+$/)).toHaveLength(1);
     });
-    fireEvent.change(screen.getByLabelText("Environment variable value"), {
+    fireEvent.change(screen.getByLabelText(/^Value of /), {
       target: { value: "2" },
     });
 
@@ -285,9 +283,9 @@ describe("EnvironmentSettingsTab close-time save", () => {
     );
     renderTabInDialog();
     await waitFor(() => {
-      expect(screen.getAllByLabelText("Environment variable name")).toHaveLength(1);
+      expect(screen.getAllByLabelText(/^Name of variable \d+$/)).toHaveLength(1);
     });
-    fireEvent.change(screen.getByLabelText("Environment variable value"), {
+    fireEvent.change(screen.getByLabelText(/^Value of /), {
       target: { value: "2" },
     });
     await act(async () => {
@@ -305,5 +303,89 @@ describe("EnvironmentSettingsTab close-time save", () => {
 
     expect(failed).toHaveLength(1);
     expect(window.electron.globalEnv.set).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Obviously fake, and short of the long-opaque fallback so the vendor shapes are what match.
+const FAKE_GITHUB_PAT = `ghp_${"FAKE".repeat(8)}`;
+const FAKE_OPENAI_KEY = `sk-${"FAKE".repeat(6)}`;
+
+async function renderWith(vars: Record<string, string>) {
+  window.electron.globalEnv.get = vi.fn().mockResolvedValue(vars);
+  renderTab();
+  await waitFor(() => {
+    expect(screen.getAllByLabelText(/^Name of variable \d+$/)).toHaveLength(
+      Object.keys(vars).length
+    );
+  });
+}
+
+const nameInputs = () => screen.getAllByLabelText<HTMLInputElement>(/^Name of variable \d+$/);
+const valueInputs = () => screen.getAllByLabelText<HTMLInputElement>(/^Value of /);
+const revealToggle = (name: string) =>
+  screen.queryByRole("button", { name: `Show value of ${name}` });
+
+describe("EnvironmentSettingsTab masking (#15577)", () => {
+  it("masks a token stored under a neutral name and leaves an ordinary value readable", async () => {
+    await renderWith({ GITHUB_PAT: FAKE_GITHUB_PAT, TOOLS_DIR: "/usr/local/bin" });
+    const [pat, tools] = valueInputs();
+    expect(pat!.type).toBe("password");
+    expect(revealToggle("GITHUB_PAT")!.getAttribute("aria-pressed")).toBe("false");
+    expect(tools!.type).toBe("text");
+    expect(revealToggle("TOOLS_DIR")).toBeNull();
+  });
+
+  it("masks a long opaque value under a neutral name", async () => {
+    await renderWith({ BUILD_ID: "FAKE".repeat(10) });
+    expect(valueInputs()[0]!.type).toBe("password");
+  });
+
+  it("still masks a secret-sounding name whatever its value, except a ${VAR} reference", async () => {
+    await renderWith({ API_TOKEN: "plain", EMPTY_SECRET: "", GH_TOKEN: "${GITHUB_TOKEN}" });
+    const [apiToken, emptySecret, ghToken] = valueInputs();
+    expect(apiToken!.type).toBe("password");
+    expect(emptySecret!.type).toBe("password");
+    expect(ghToken!.type).toBe("text");
+    expect(revealToggle("GH_TOKEN")).toBeNull();
+  });
+
+  it("masks an unrevealed row as soon as a token is pasted into its value", async () => {
+    await renderWith({ OPENAI: "pending" });
+    expect(valueInputs()[0]!.type).toBe("text");
+    fireEvent.change(valueInputs()[0]!, { target: { value: FAKE_OPENAI_KEY } });
+    expect(valueInputs()[0]!.type).toBe("password");
+    expect(revealToggle("OPENAI")).toBeTruthy();
+  });
+
+  it("masks an unrevealed row as soon as its name turns secret", async () => {
+    await renderWith({ DEPLOY: "plain" });
+    fireEvent.change(nameInputs()[0]!, { target: { value: "DEPLOY_TOKEN" } });
+    expect(valueInputs()[0]!.type).toBe("password");
+  });
+
+  it("keeps a row the user revealed revealed while they edit it, until they hide it", async () => {
+    await renderWith({ GITHUB_PAT: FAKE_GITHUB_PAT });
+    fireEvent.click(revealToggle("GITHUB_PAT")!);
+    expect(valueInputs()[0]!.type).toBe("text");
+
+    // Cut short of anything the detector recognises, then the token put back.
+    fireEvent.change(valueInputs()[0]!, { target: { value: "ghp_" } });
+    expect(valueInputs()[0]!.type).toBe("text");
+    expect(revealToggle("GITHUB_PAT")).toBeNull();
+    fireEvent.change(valueInputs()[0]!, { target: { value: FAKE_GITHUB_PAT } });
+    expect(valueInputs()[0]!.type).toBe("text");
+    expect(revealToggle("GITHUB_PAT")!.getAttribute("aria-pressed")).toBe("true");
+
+    fireEvent.click(revealToggle("GITHUB_PAT")!);
+    expect(valueInputs()[0]!.type).toBe("password");
+  });
+
+  it("keeps a revealed row revealed through a rename that leaves and regains a secret name", async () => {
+    await renderWith({ API_KEY: "plain" });
+    fireEvent.click(revealToggle("API_KEY")!);
+    fireEvent.change(nameInputs()[0]!, { target: { value: "API" } });
+    fireEvent.change(nameInputs()[0]!, { target: { value: "API_TOKEN" } });
+    expect(valueInputs()[0]!.type).toBe("text");
+    expect(revealToggle("API_TOKEN")!.getAttribute("aria-pressed")).toBe("true");
   });
 });

@@ -89,6 +89,7 @@ class MockTerminalProcess {
   dispose = vi.fn();
   getActivityTier = vi.fn(() => "active" as const);
   getResizeStrategy = vi.fn(() => "default" as const);
+  isBracketedPasteMode = vi.fn(() => false);
 
   constructor(
     id: string,
@@ -487,6 +488,22 @@ describe("PtyManager adversarial", () => {
     expect(payload!.agentLaunchFlags).toEqual(["--dangerously-skip-permissions"]);
     expect(payload!.agentModelId).toBe("claude-opus-4-7");
     expect(payload!.detectedAgentId).toBe("claude");
+  });
+
+  it("GET_TERMINAL_INFO_REPORTS_BRACKETED_PASTE_ONLY_WHILE_THE_PTY_LIVES", () => {
+    const manager = new PtyManager();
+    manager.spawn("agent-1", spawnOptions({ kind: "terminal", launchAgentId: "claude" }));
+    const created = shared.created[0]!;
+    created.isBracketedPasteMode.mockReturnValue(true);
+
+    expect(manager.getTerminalInfo("agent-1")!.bracketedPasteMode).toBe(true);
+
+    created.isBracketedPasteMode.mockReturnValue(false);
+    expect(manager.getTerminalInfo("agent-1")!.bracketedPasteMode).toBe(false);
+
+    created.isBracketedPasteMode.mockReturnValue(true);
+    created.info.isExited = true;
+    expect(manager.getTerminalInfo("agent-1")!.bracketedPasteMode).toBe(false);
   });
 
   it("DISPOSE_EMITS_AGENT_KILLED_ONLY_FOR_AGENTS", () => {

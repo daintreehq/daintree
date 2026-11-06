@@ -163,6 +163,14 @@ vi.mock("../../window/deferredInitQueue.js", () => ({
   signalFirstInteractive: vi.fn(),
 }));
 
+vi.mock("../../services/databaseBackupNotice.js", () => ({
+  noteDatabaseNoticeRendererReady: vi.fn(),
+}));
+
+vi.mock("../../window/rendererReloadNotice.js", () => ({
+  releaseReloadNotice: vi.fn(),
+}));
+
 vi.mock("../../utils/performance.js", () => ({
   markPerformance: vi.fn(),
   isPerformanceCaptureEnabled: vi.fn(() => false),
@@ -178,6 +186,10 @@ vi.mock("../../services/prefetchHydrateCache.js", () => ({
 vi.mock("../../services/plugin/projectLayoutSeeds.js", () => ({
   getProjectLayoutSeed: vi.fn(() => ({ status: "settled", at: 0 })),
   captureProjectLayoutSeed: vi.fn(),
+}));
+
+vi.mock("../../services/plugin/pluginLaunchStore.js", () => ({
+  admitRestoredPluginLaunchesFromStore: vi.fn(),
 }));
 
 vi.mock("../../window/webContentsRegistry.js", () => ({
@@ -199,8 +211,11 @@ vi.mock("../../ipc/utils.js", async (importOriginal) => {
 });
 
 import { registerAppStateHandlers } from "../handlers/app/state.js";
+import { noteDatabaseNoticeRendererReady } from "../../services/databaseBackupNotice.js";
+import { releaseReloadNotice } from "../../window/rendererReloadNotice.js";
 import { CHANNELS } from "../channels.js";
 import { consumePrefetchedHydrateResult } from "../../services/prefetchHydrateCache.js";
+import { admitRestoredPluginLaunchesFromStore } from "../../services/plugin/pluginLaunchStore.js";
 import {
   captureProjectLayoutSeed,
   getProjectLayoutSeed,
@@ -1080,6 +1095,57 @@ describe("app:boot handler", () => {
       expect((result.appState as Record<string, unknown>).mruList).toEqual([]);
     });
 
+    describe("a workspace a crash fresh start cleared (#16257)", () => {
+      const STALE_GLOBAL_PANEL = {
+        id: "crashed-agent",
+        kind: "terminal",
+        title: "Agent",
+        location: "grid",
+        cwd: "/projects/real",
+      };
+
+      async function hydrateHeirWith(projectState: Record<string, unknown>) {
+        // The heir holding a global list is the case that could hand panels back.
+        legacyOwnerRef.current = REAL_PROJECT.id;
+        globalAppStateRef.current = {
+          ...DEFAULT_GLOBAL_APP_STATE,
+          terminals: [STALE_GLOBAL_PANEL],
+        };
+        vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+          state: { projectId: REAL_PROJECT.id, sidebarWidth: 350, ...projectState },
+          quarantinedPath: undefined,
+        } as unknown as Awaited<ReturnType<typeof projectStore.getProjectStateWithRecovery>>);
+        return invokeBoot({ deps: realProjectDeps(), senderId: 42 });
+      }
+
+      it("hydrates with no panels and keeps the worktree selection", async () => {
+        const result = await hydrateHeirWith({
+          activeWorktreeId: "wt-kept",
+          terminals: [],
+          tabGroups: [],
+          terminalSizes: {},
+          draftInputs: {},
+        });
+        const appState = result.appState as Record<string, unknown>;
+
+        expect(appState.terminals).toEqual([]);
+        expect(appState.activeWorktreeId).toBe("wt-kept");
+        expect(result.tabGroups).toEqual([]);
+        expect(result.terminalSizes).toEqual({});
+        expect(result.draftInputs).toEqual({});
+      });
+
+      it("would inherit the global panel from a record with no terminal list", async () => {
+        // Control: proves the fixture above is one hydrate would act on, so its
+        // empty result comes from the cleared list and not from validation.
+        const result = await hydrateHeirWith({});
+
+        expect((result.appState as { terminals: Array<{ id: string }> }).terminals).toEqual([
+          expect.objectContaining({ id: STALE_GLOBAL_PANEL.id }),
+        ]);
+      });
+    });
+
     // The legacy record has exactly one heir. Nothing used to consume it, so
     // every project row that had not saved terminals yet re-read the same list
     // and was seeded with another project's panels — `cwd` and `worktreeId`
@@ -1814,6 +1880,67 @@ describe("app:boot handler", () => {
       expect(captureProjectLayoutSeed).not.toHaveBeenCalled();
     });
 
+    describe("a state file that is unreadable and still in place (#15613)", () => {
+      const legacyPanel = {
+        id: "t1",
+        type: "terminal",
+        title: "Shell",
+        cwd: "/p",
+        location: "grid",
+      } as const;
+
+      beforeEach(() => {
+        setCurrentProject();
+        vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+          state: null,
+          unreadableInPlace: true,
+        });
+        vi.mocked(projectStore.wasStateUnreadableThisSession).mockReturnValue(true);
+      });
+
+      it("hydrates empty without seeding a fresh state over it", async () => {
+        const result = await invokeBoot();
+
+        expect(result.workspaceId).toBe("p1");
+        expect((result.appState as Record<string, unknown>).terminals).toEqual([]);
+        expect(projectStore.enqueueProjectStateUpdate).not.toHaveBeenCalled();
+        expect(captureProjectLayoutSeed).toHaveBeenCalledWith("p1", false);
+      });
+
+      it("neither shows nor migrates the heir's legacy terminals", async () => {
+        globalAppStateRef.current = { ...DEFAULT_GLOBAL_APP_STATE, terminals: [legacyPanel] };
+
+        const result = await invokeBoot();
+
+        expect((result.appState as Record<string, unknown>).terminals).toEqual([]);
+        expect(projectStore.enqueueProjectStateUpdate).not.toHaveBeenCalled();
+      });
+
+      it("still restores the crash snapshot's panels, without writing them over it", async () => {
+        globalAppStateRef.current = { ...DEFAULT_GLOBAL_APP_STATE, terminals: [legacyPanel] };
+        crashService.consumePanelFilter.mockReturnValue(["t1"] as unknown as null);
+
+        const result = await invokeBoot();
+        const terminals = (result.appState as Record<string, unknown>).terminals as Array<
+          Record<string, unknown>
+        >;
+
+        expect(terminals.map((t) => t.id)).toEqual(["t1"]);
+        expect(projectStore.enqueueProjectStateUpdate).not.toHaveBeenCalled();
+      });
+
+      it("still seeds once the read reports a file that really was moved aside", async () => {
+        vi.mocked(projectStore.getProjectStateWithRecovery).mockResolvedValue({
+          state: null,
+          quarantinedPath: "/p/state.json.corrupted.1",
+        });
+
+        await invokeBoot();
+
+        expect(projectStore.enqueueProjectStateUpdate).toHaveBeenCalledTimes(1);
+      });
+    });
+
     it("hydrates normally when the seed can't be recorded", async () => {
       setCurrentProject();
       vi.mocked(captureProjectLayoutSeed).mockImplementationOnce(() => {
@@ -1869,6 +1996,123 @@ describe("app:boot handler", () => {
     expect(result.workspaceId).toBeNull();
     expect(projectStore.getProjectStateWithRecovery).not.toHaveBeenCalled();
     expect(projectStore.getCurrentProject).not.toHaveBeenCalled();
+  });
+
+  describe("plugin launch records an earlier run left (#16240)", () => {
+    const SAVED = [
+      {
+        id: "agent",
+        kind: "terminal",
+        title: "A",
+        location: "grid",
+        cwd: "/tmp",
+        launchedByPluginId: "acme.orchestrator",
+      },
+      {
+        id: "suspect",
+        kind: "terminal",
+        title: "S",
+        location: "grid",
+        cwd: "/tmp",
+        launchedByPluginId: "acme.orchestrator",
+      },
+      { id: "shell", kind: "terminal", title: "B", location: "grid", cwd: "/tmp" },
+    ];
+    const RECORDS = {
+      agent: { pluginId: "acme.orchestrator", projectId: null, seenAt: Date.now() },
+      suspect: { pluginId: "acme.orchestrator", projectId: null, seenAt: Date.now() },
+    };
+
+    async function seedStore(launches: unknown, terminals: unknown[] = SAVED): Promise<void> {
+      const storeModule = await import("../../store.js");
+      vi.mocked(storeModule.store.get).mockImplementation((key: string) => {
+        if (key === "pluginLaunchedAgents") return launches;
+        if (key === "appState") return { terminals, sidebarWidth: 350 };
+        return defaultStoreGet(key);
+      });
+    }
+
+    async function invokeHydrate(): Promise<{ appState: { terminals: Array<{ id: string }> } }> {
+      ipcHandlers.clear();
+      const cleanup = registerAppStateHandlers();
+      const handler = ipcHandlers.get(CHANNELS.APP_HYDRATE);
+      if (!handler) throw new Error("app:hydrate handler not registered");
+      const result = await handler(makeInvokeEvent());
+      cleanup();
+      return result as { appState: { terminals: Array<{ id: string }> } };
+    }
+
+    function pendingCrash() {
+      crashService.getPendingCrash.mockReturnValue({
+        logPath: "/fake.json",
+        entry: {
+          id: "c",
+          timestamp: 0,
+          appVersion: "1",
+          platform: "x",
+          osVersion: "y",
+          arch: "z",
+        },
+        hasBackup: false,
+        panels: [],
+      });
+    }
+
+    it("hands the ledger exactly the panes the hydrate restores", async () => {
+      await seedStore(RECORDS);
+      crashGuard.isSafeMode.mockReturnValue(true);
+      panelSuspectLedger.getQuarantinedPanelIds.mockReturnValue(new Set(["suspect"]));
+      const result = (await invokeBoot()) as { appState: { terminals: Array<{ id: string }> } };
+      expect(result.appState.terminals.map((t) => t.id)).toEqual(["agent", "shell"]);
+      await vi.waitFor(() =>
+        expect(admitRestoredPluginLaunchesFromStore).toHaveBeenCalledWith([
+          { id: "agent", launchedByPluginId: "acme.orchestrator" },
+          { id: "shell", launchedByPluginId: undefined },
+        ])
+      );
+    });
+
+    it("hands back a prefetched payload's panes too", async () => {
+      await seedStore(RECORDS);
+      vi.mocked(projectStore.getCurrentProject).mockReturnValue({
+        id: "p1",
+        name: "P",
+        path: "/p",
+      } as unknown as ReturnType<typeof projectStore.getCurrentProject>);
+      legacyOwnerRef.current = "p1";
+      vi.mocked(consumePrefetchedHydrateResult).mockReturnValue({
+        appState: { terminals: [SAVED[0]] },
+      } as never);
+      await invokeBoot();
+      await vi.waitFor(() =>
+        expect(admitRestoredPluginLaunchesFromStore).toHaveBeenCalledWith([
+          { id: "agent", launchedByPluginId: "acme.orchestrator" },
+        ])
+      );
+    });
+
+    it("waits for the hydrate that follows a pending crash's choice", async () => {
+      await seedStore(RECORDS);
+      pendingCrash();
+      await invokeBoot();
+      await vi.dynamicImportSettled();
+      expect(admitRestoredPluginLaunchesFromStore).not.toHaveBeenCalled();
+
+      await invokeHydrate();
+      await vi.waitFor(() => expect(admitRestoredPluginLaunchesFromStore).toHaveBeenCalled());
+    });
+
+    it.each([
+      ["no run left a record", {}, SAVED],
+      ["the ledger is missing", undefined, SAVED],
+      ["the ledger is malformed", "acme.orchestrator", SAVED],
+      ["nothing is restored", RECORDS, []],
+    ])("loads nothing when %s", async (_label, launches, terminals) => {
+      await seedStore(launches, terminals);
+      await invokeBoot();
+      await vi.dynamicImportSettled();
+      expect(admitRestoredPluginLaunchesFromStore).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -2420,5 +2664,34 @@ describe("app:set-state grid layout patch (#14700)", () => {
     await pending;
 
     expect(stored.panelGridConfig).toEqual({ strategy: "fixed-rows", value: 7 });
+  });
+});
+
+describe("app:first-interactive handler", () => {
+  it("marks the sender ready for a held database backup notice", async () => {
+    vi.mocked(noteDatabaseNoticeRendererReady).mockClear();
+    ipcHandlers.clear();
+    const cleanup = registerAppStateHandlers();
+    const handler = ipcHandlers.get(CHANNELS.APP_FIRST_INTERACTIVE);
+    if (!handler) throw new Error("app:first-interactive handler not registered");
+
+    await handler(makeInvokeEvent(7));
+    cleanup();
+
+    expect(noteDatabaseNoticeRendererReady).toHaveBeenCalledExactlyOnceWith(7);
+  });
+
+  it("releases the reload notice held for the sender", async () => {
+    vi.mocked(releaseReloadNotice).mockClear();
+    ipcHandlers.clear();
+    const cleanup = registerAppStateHandlers();
+    const handler = ipcHandlers.get(CHANNELS.APP_FIRST_INTERACTIVE);
+    if (!handler) throw new Error("app:first-interactive handler not registered");
+
+    const event = makeInvokeEvent(7);
+    await handler(event);
+    cleanup();
+
+    expect(releaseReloadNotice).toHaveBeenCalledExactlyOnceWith(event.sender);
   });
 });

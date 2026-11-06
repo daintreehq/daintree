@@ -351,12 +351,18 @@ describe("toolbarPreferencesStore", () => {
       expect([...leftButtons, ...rightButtons]).toContain(recipeId);
     });
 
-    it("places the pin beside the launcher, not at the end of the row", async () => {
+    it("places pins on the launcher's side in the order they were pinned", async () => {
+      // Render-time grouping keeps a pin beside its peers whatever its index, so
+      // the index only decides order among them — and a pin that jumped to the
+      // front of its group read a set pinned A, B as B, A.
       const store = await loadStore();
+      const secondId = launcherItemToolbarButtonId("recipe", "7a1b-3c4d");
       store.getState().setLauncherItemOnToolbar(recipeId, true);
+      store.getState().setLauncherItemOnToolbar(secondId, true);
 
       const { leftButtons } = store.getState().layout;
-      expect(leftButtons[leftButtons.indexOf("launcher") + 1]).toBe(recipeId);
+      expect(leftButtons.indexOf("launcher")).toBeLessThan(leftButtons.indexOf(recipeId));
+      expect(leftButtons.indexOf(recipeId)).toBeLessThan(leftButtons.indexOf(secondId));
     });
 
     it("deletes the key and the position on unpin rather than writing a false", async () => {
@@ -1736,7 +1742,7 @@ describe("toolbarPreferencesStore", () => {
 
       const { leftButtons, pinnedButtons } = store.getState().layout;
       expect(leftButtons).toContain("browser");
-      expect(leftButtons.indexOf("browser")).toBe(leftButtons.indexOf("launcher") + 1);
+      expect(leftButtons.at(-1)).toBe("browser");
       // An explicit `true`, unlike `toggleButtonVisibility`. `browser` is not a
       // default, so the promotion is a real choice with nothing else recording
       // it — and it's the only part that survives a stale sibling view
@@ -1784,7 +1790,7 @@ describe("toolbarPreferencesStore", () => {
       const store = await loadStore();
       const { leftButtons, rightButtons } = store.getState().layout;
       expect(leftButtons).toContain("browser");
-      expect(leftButtons.indexOf("browser")).toBe(leftButtons.indexOf("launcher") + 1);
+      expect(leftButtons.at(-1)).toBe("browser");
       expect([...leftButtons, ...rightButtons].filter((id) => id === "browser")).toHaveLength(1);
     });
 
@@ -1916,17 +1922,15 @@ describe("toolbarPreferencesStore", () => {
       const { leftButtons, rightButtons } = store.getState().layout;
       expect(rightButtons).toContain("dev-server");
       expect(leftButtons).not.toContain("dev-server");
-      expect(rightButtons.indexOf("dev-server")).toBe(rightButtons.indexOf("launcher") + 1);
+      expect(rightButtons.at(-1)).toBe("dev-server");
     });
   });
 
   describe("positionAgentButton (#11680)", () => {
     it("keeps a batch in the caller's order instead of reversing it", async () => {
       // The live caller is the first-run repair in `Toolbar.tsx`, where
-      // `buildInitialAgentPinUpdates` pins several agents at once. Every insert
-      // lands immediately after the launcher and the launcher does not move, so
-      // one call per id emits the batch backwards — a visible post-paint reorder
-      // that then persists.
+      // `buildInitialAgentPinUpdates` pins several agents at once; the batch has
+      // to land in the order given, or the first paint reorders and persists.
       const store = await loadStore();
 
       store.getState().positionAgentButton(["claude", "codex", "gemini"]);
@@ -1947,10 +1951,10 @@ describe("toolbarPreferencesStore", () => {
 
       const { leftButtons, rightButtons } = store.getState().layout;
       expect([...leftButtons, ...rightButtons].filter((id) => id === "codex")).toHaveLength(1);
-      expect(leftButtons.indexOf("claude")).toBe(leftButtons.indexOf("launcher") + 1);
-      // `codex` was already placed, so the new insert goes in front of it rather
-      // than displacing it to a fresh slot.
-      expect(leftButtons.indexOf("codex")).toBe(codexIndex + 1);
+      expect(leftButtons.at(-1)).toBe("claude");
+      // `codex` was already placed, so it keeps its slot rather than moving to a
+      // fresh one.
+      expect(leftButtons.indexOf("codex")).toBe(codexIndex);
     });
 
     it("is a no-op (preserves the layout reference) when every id already has a slot", async () => {

@@ -31,7 +31,6 @@ import {
   ACTIONS_LIST_TOOL,
   CORE_TIER_TOOLS as CORE_TIER_TOOLS_LIST,
   FULL_TIER_ADDONS as FULL_TIER_ADDONS_LIST,
-  RENDERER_OWNED_ORIGIN_ONLY_TOOLS,
   toNonRendererOwnedTools,
 } from "../../../shared/config/helpAssistantTierAllowlists.js";
 import { MCP_EXTERNAL_TIER_TOOLS } from "../../../shared/config/mcpExternalTierAllowlist.js";
@@ -200,12 +199,19 @@ export interface WorkspaceDispatchOptions {
   /** What pre-authorized a `confirmed` dispatch — see `SessionServerDeps.dispatchAction`. */
   authorization?: McpDispatchAuthorization;
   /**
-   * Another machine is timing this call (#14989): a host's dispatch into the
-   * view this Shell drives it from, or its question about a call it runs
-   * itself. Its view can't hold the call open past the host's own deadline,
-   * which is the one the host's agent is told about.
+   * Another machine is timing this call and didn't say for how long (#14989):
+   * a host too old to say, dispatching into the view this Shell drives it
+   * from. Its view can't hold the call open past the plain deadline, which is
+   * as long as that host waits.
    */
   fixedDeadline?: true;
+  /**
+   * The latest this dispatch may stay open, on this machine's clock (#15699):
+   * what another machine said it waits, less the trip back, or the deadline
+   * of the relayed call it runs for. A confirmation it raises still gets its
+   * phases, but none past this, and neither does any wait on another machine.
+   */
+  holdUntil?: number;
   /**
    * A call one of another machine's assistants made here through its Shell
    * (#13493). Anything but a read runs only in that Shell's own view of the
@@ -216,6 +222,12 @@ export interface WorkspaceDispatchOptions {
   relay?: {
     linkSessionId: string;
     readOnly: boolean;
+    /**
+     * The Shell's own `host.call` this dispatch runs (#15698), named to that
+     * Shell's view so it can match the call to one of its own and apply its
+     * own assistant's confirmations preference. Grants nothing here.
+     */
+    call?: { callId: string; helpSessionId: string };
     /**
      * One of this machine's own assistants reaching another of its projects
      * (#14024): a change runs through this machine's own view of it, or here
@@ -643,11 +655,6 @@ export const TIER_ALLOWLISTS: Readonly<Record<McpTier, ReadonlySet<string>>> = {
   external: MCP_TOOL_ALLOWLIST,
 };
 
-/** Tools only a renderer-owned session may reach, at any tier (#12407). */
-export const RENDERER_OWNED_ORIGIN_ONLY_TOOL_IDS: ReadonlySet<string> = new Set(
-  RENDERER_OWNED_ORIGIN_ONLY_TOOLS
-);
-
 /**
  * The same three surfaces as {@link TIER_ALLOWLISTS}, admitted against by every
  * session whose origin is not renderer-owned — an agent pane's bearer at a
@@ -784,13 +791,22 @@ export const MCP_ASSISTANT_SERVER_INSTRUCTIONS =
  * returns, and the state stays unset (#11534 dropped `forge.assignIssue` for
  * exactly this).
  *
- * An entry that *does* have an inverse is kept only when the replay it
- * absorbs outweighs the suppression it risks. `worktree.delete` creates
- * nothing on a replay; it is here to return the original success instead of
- * the error a redundant redispatch would raise, which is a different
- * justification from the duplicate-artifact one and should not be confused
- * with it. The forge writes that used to sit here left MCP with the core/full
- * split, so no replay of them can arrive.
+ * Deletes are out, both `worktree.delete` and `worktree.deleteOwned`, on the
+ * path-reuse ground that keeps `worktree.create` off: worktree ids are paths,
+ * and delete → recreate at the same path is a supported workflow, so an
+ * identical second delete inside the TTL can name a genuinely different
+ * worktree. A cached answer there reported success for a delete that never
+ * ran and asked no confirmation (#15791). Concurrent identical deletes are not
+ * singleflighted either: lookup runs right after admission and the native
+ * grant charge, so a shared promise hands the duplicate the first call's
+ * outcome, and for `worktree.deleteOwned` that skips the duplicate's own
+ * ownership check and process guard (#15729). Each delete call goes through
+ * its own checks and confirmation policy and returns its own result or
+ * refusal, so a concurrent duplicate that passes its checks raises a second
+ * dialog, or dispatches a second time when pre-authorized.
+ *
+ * The forge writes that used to sit here left MCP with the core/full split, so
+ * no replay of them can arrive.
  *
  * `git.commit` and `git.push` are the tempting case that still fails (c), so
  * #11534 dropped them. Neither takes an argument a legitimate repeat varies:
@@ -806,6 +822,7 @@ export const MCP_ASSISTANT_SERVER_INSTRUCTIONS =
  * guard (#8429), widened again in #9156, then corrected against the criterion
  * above in #11534 — which added the creation tools that were missing and
  * dropped the navigation, idempotent and git-write entries that never met it.
+ * #15791 dropped `worktree.delete`, the last entry kept for its replay alone.
  */
 const MCP_DEDUP_ALLOWLIST_ENTRIES = [
   // Panel/agent spawns — a replay leaves an orphaned terminal or a second
@@ -824,16 +841,13 @@ const MCP_DEDUP_ALLOWLIST_ENTRIES = [
   // first id would hand back a worktree that no longer exists (#11880).
   "worktree.createWithRecipe",
   "workflow.startWorkOnIssue",
+  // A replay of a completed call would launch a second agent into the
+  // worktree its create step's entry, keyed to the call, hands back (#15738).
+  "agent.launchInNewWorktree",
   "worktree.resource.provision",
-  "worktree.delete",
-  // `worktree.deleteOwned` is deliberately NOT here, though the "replay the
-  // original success" argument for `worktree.delete` above reads like it should
-  // be. Worktree ids are paths, and create → delete → recreate with the same
-  // path is a supported workflow — the very reason `worktree.create` is absent
-  // from this list. Caching a delete would then suppress a genuine second
-  // deletion of a genuinely different worktree and report success for it. The
-  // replay it would have absorbed is only a confusing `RESOURCE_NOT_OWNED` on a
-  // redundant call, which is a worse error message but an honest one (#11909).
+  // Neither delete variant belongs here, cached or singleflighted: see the
+  // path-reuse paragraph above (#11909 for `worktree.deleteOwned`, #15791 for
+  // `worktree.delete`).
 ] as const satisfies readonly BuiltInActionId[];
 
 export const MCP_DEDUP_ALLOWLIST: ReadonlySet<string> = new Set(MCP_DEDUP_ALLOWLIST_ENTRIES);
@@ -1127,7 +1141,7 @@ export const PROMPT_DEFINITIONS: readonly PromptDefinition[] = [
         "",
         "**Queues pace with one owner.** When you work through N jobs at most K at a time, one mechanism wakes the loop — `ScheduleWakeup`, or Daintree notices where your pane has them — never a second timer, background sleep or polling script stacked on it, which only produces duplicate checks.",
         "- A notice fires once: launch or prompt each job with `notify: true` (or `terminal.notifyWhenIdle` if available, for one already working) and end your turn, and when that agent stops Daintree types a notice into your prompt: the handback summary it gave your prompt, else its last screen lines (`terminal.notifyWhenIdle` always quotes the screen). Re-arm with every new prompt; if your pane cannot take notices, use `ScheduleWakeup` — still one mechanism at a time.",
-        "- Launch each job only once its worktree has finished setup (`worktree.waitUntilReady` if available at your tier), then `agent.launch` with the full prompt.",
+        "- Launch each job only once its worktree has finished setup: `agent.launchInNewWorktree` if available creates the worktree, waits and launches in one call; otherwise `worktree.waitUntilReady` if available at your tier, then `agent.launch` with the full prompt.",
         "- Waiting alone is not done, only a cue to inspect: refill a slot only once its job reached the milestone the user named, its PR is confirmed and its final report is read. A job waiting on an approval or question is blocked and keeps its slot. `prNumber` in `worktree.list` is a cached hint and null does not prove there is no PR, so confirm with the forge (`forge.getPR` or `forge.listPRs` if available) rather than scraping the agent's screen.",
         "- Text on a finished agent's input line may be its CLI's suggested next prompt, not the user's: never submit or act on it.",
         "",
@@ -1156,10 +1170,12 @@ export interface DispatchHold {
   phase: "dispatched" | import("../../../shared/types/ipc/mcpServer.js").McpDispatchHoldPhase;
   deadlineAt: number;
   /**
-   * False for a call another machine is timing (#13501): its deadline is the
-   * one the agent sees, so this machine never holds the call open past it.
+   * The latest any phase may hold the call (#15699): Infinity for this
+   * machine's own call, and inside the deadline of whoever is timing it
+   * otherwise, so this machine never holds the call open past the one its
+   * caller is told about.
    */
-  extendable: boolean;
+  capAt: number;
   /** Settle the call as timed out: a confirmation timeout while it was asking. */
   expire: () => void;
 }
@@ -1192,6 +1208,12 @@ export interface DispatchEnvelope {
    * the dispatch offered it; absent otherwise.
    */
   approvalScope?: McpApprovalScope;
+  /**
+   * A relayed call the Shell it came from ran, or let run, under its own
+   * assistant's skip preference (#15698): nobody was asked. Never beside a
+   * `confirmationDecision`, which says a dialog was raised after all.
+   */
+  authorization?: "skip-preference";
   /**
    * Absent when identity could not be resolved (view torn down between
    * dispatch and response, or a webContents with no registered workspace).
@@ -1266,8 +1288,18 @@ export interface McpRelayCaller {
    * call with no view is refused.
    */
   requestApproval?: (
-    ask: import("../viewless/index.js").ViewlessApprovalAsk & { callId: string }
+    ask: import("../viewless/index.js").ViewlessApprovalAsk & {
+      callId: string;
+      /** When the call stops waiting on the answer, on this machine's clock (#15699). */
+      holdUntil?: number;
+    }
   ) => Promise<import("../viewless/index.js").ViewlessApprovalDecision>;
+  /**
+   * When one of this session's calls in flight gives up, on this machine's
+   * clock (#15699), so everything it waits on ends first; undefined once it
+   * has settled, or for a call this session isn't running.
+   */
+  callDeadline?: (callId: string) => number | undefined;
 }
 
 const RESOURCE_URI_PATTERN =

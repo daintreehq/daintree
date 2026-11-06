@@ -1,5 +1,7 @@
 import type { ActionRegistry } from "../actionTypes";
 import {
+  HostBringBackArgsSchema,
+  HostBringBackResultSchema,
   HostCallArgsSchema,
   HostCallResultSchema,
   HostEnsureProjectArgsSchema,
@@ -8,6 +10,8 @@ import {
   HostListResultSchema,
   HostSettingsArgsSchema,
   HostSettingsResultSchema,
+  HostStatusArgsSchema,
+  HostStatusResultSchema,
   HostWatchArgsSchema,
   HostWatchResultSchema,
 } from "@shared/types/hostControl";
@@ -29,9 +33,11 @@ function mainProcessOnly(id: string): () => Promise<never> {
  * hosts over the link from main, and this machine's other projects in
  * process under its own id, `local` (#14024). Delegating to a host's assistant is agent
  * messaging run through `host.call` (#13496), and a host's own named settings
- * are read and changed through `host.settings` (#14167), and `host.watch`
- * wakes an assistant once a host's link or capacity is seen to change (#14463).
- * `run()` throws if the renderer ever invokes it directly.
+ * are read and changed through `host.settings` (#14167), `host.watch`
+ * wakes an assistant once a host's link or capacity is seen to change (#14463),
+ * `host.bringBack` tries to bring back a host whose link is down (#16170), and
+ * `host.status` reads agents' status and screens across projects and hosts in
+ * one call (#16191). `run()` throws if the renderer ever invokes it directly.
  */
 export function registerHostControlActions(actions: ActionRegistry): void {
   actions.set("host.list", () => ({
@@ -137,13 +143,24 @@ export function registerHostControlActions(actions: ActionRegistry): void {
     id: "host.watch",
     title: "Watch a host",
     description:
-      "One notice when a host's link, or a fresh load sample, is first seen meeting your condition, so you can end your turn. It only observes: never dials or holds the host, never acts. Watches expire; cancel or list yours.",
+      "One notice when a host's link or a fresh load sample first meets your condition, or an agent here or on a host starts to wait, so you can end your turn. It only observes: never dials or holds a host, never acts. Watches expire.",
     category: "help",
     kind: "command",
     danger: "safe",
     denyPluginDispatch: true,
     scope: "renderer",
-    keywords: ["host", "remote", "watch", "notify", "reconnect", "capacity", "wake"],
+    keywords: [
+      "host",
+      "remote",
+      "watch",
+      "notify",
+      "reconnect",
+      "capacity",
+      "wake",
+      "agents",
+      "waiting",
+      "approval",
+    ],
     palette: { mode: "hidden" },
     argsSchema: HostWatchArgsSchema,
     resultSchema: HostWatchResultSchema,
@@ -156,5 +173,54 @@ export function registerHostControlActions(actions: ActionRegistry): void {
       openWorldHint: true,
     },
     run: mainProcessOnly("host.watch"),
+  }));
+
+  actions.set("host.bringBack", () => ({
+    id: "host.bringBack",
+    title: "Bring back a host",
+    description:
+      "Bring back a host whose link is down: wake it where a wake is set up here, then start Daintree there if its Host mode is on. Up to 2 min; repeat calls join. Answers with what was observed.",
+    category: "help",
+    kind: "command",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["host", "remote", "wake", "start", "reconnect", "asleep"],
+    palette: { mode: "hidden" },
+    argsSchema: HostBringBackArgsSchema,
+    resultSchema: HostBringBackResultSchema,
+    mcpOutputSchema: true,
+    mcpAnnotations: {
+      readOnlyHint: false,
+      // A repeat joins the attempt under way, or finds the host back.
+      idempotentHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
+    run: mainProcessOnly("host.bringBack"),
+  }));
+
+  actions.set("host.status", () => ({
+    id: "host.status",
+    title: "Read agents' status across hosts",
+    description:
+      "Read agents' status in many projects on many hosts in one call, as each project's own status read answers it: states, handbacks and, with includeOutput, screen tails, redacted. Read it before prompting, keying or interrupting an agent, or answering about running work. Never fails whole.",
+    category: "help",
+    kind: "query",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["host", "remote", "status", "screen", "agent", "state", "waiting"],
+    palette: { mode: "hidden" },
+    argsSchema: HostStatusArgsSchema,
+    resultSchema: HostStatusResultSchema,
+    mcpOutputSchema: true,
+    mcpAnnotations: {
+      readOnlyHint: true,
+      idempotentHint: true,
+      destructiveHint: false,
+      openWorldHint: true,
+    },
+    run: mainProcessOnly("host.status"),
   }));
 }

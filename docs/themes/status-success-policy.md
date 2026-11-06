@@ -95,7 +95,7 @@ Use the semantic spelling, not the legacy `daintree-*` aliases — `border-borde
 
 ## InlineStatusBanner
 
-`severity="success"` requires `autoDismissAfter` and `onClose` at the type level, so a success banner that never says how it leaves does not compile. The type can require a number but not a positive one — `autoDismissAfter={0}` still type-checks and would stand forever — so the component warns about that in dev builds rather than pretending the type closed it. Persistent completion is `severity="neutral"`, which is what `AgentCompletionBanner` already uses to say "N files changed, review when ready".
+`severity="success"` requires `autoDismissAfter` and `onClose` at the type level, so a success banner that never says how it leaves does not compile. The type can require a number but not a positive one — `autoDismissAfter={0}` still type-checks and would stand forever — so the component warns about that in dev builds rather than pretending the type closed it. Persistent completion is `severity="neutral"`.
 
 ## The guard
 

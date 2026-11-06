@@ -67,25 +67,84 @@ describe("ScrollIndicator", () => {
   });
 
   // The number is bare on screen; the name is where the noun lives.
+  // The action names what the jump lands on: waiting rows win over problems,
+  // so with both past the edge it says "needs attention".
   it.each([
-    ["below", 3, 0, "3 more worktrees below. Click to show the next page"],
-    ["above", 1, 0, "1 more worktree above. Click to show the next page"],
-    ["below", 7, 1, "7 more worktrees below, 1 needs attention. Click to show it"],
-    ["above", 7, 2, "7 more worktrees above, 2 need attention. Click to show the nearest"],
+    ["below", 3, 0, 0, "3 more worktrees below. Click to show the next page"],
+    ["above", 1, 0, 0, "1 more worktree above. Click to show the next page"],
+    ["below", 7, 1, 0, "7 more worktrees below, 1 needs attention. Click to show it"],
+    [
+      "above",
+      7,
+      2,
+      0,
+      "7 more worktrees above, 2 need attention. Click to show the nearest that needs attention",
+    ],
+    ["below", 4, 0, 1, "4 more worktrees below, 1 reports a problem. Click to show it"],
+    [
+      "below",
+      4,
+      0,
+      2,
+      "4 more worktrees below, 2 report a problem. Click to show the nearest problem",
+    ],
+    [
+      "above",
+      5,
+      1,
+      1,
+      "5 more worktrees above, 1 needs attention, 1 reports a problem. Click to show the nearest that needs attention",
+    ],
   ] as const)(
-    "names %s with %i hidden, %i needing attention",
-    (direction, count, attentionCount, name) => {
+    "names %s with %i hidden, %i needing attention, %i reporting a problem",
+    (direction, count, attentionCount, problemCount, name) => {
       render(
         <ScrollIndicator
           direction={direction}
           count={count}
           attentionCount={attentionCount}
+          problemCount={problemCount}
+          problemTone={problemCount > 0 ? "warning" : null}
           onClick={onClick}
         />
       );
       expect(screen.getByRole("button").getAttribute("aria-label")).toBe(name);
     }
   );
+
+  it("marks a problem past the edge only when it has a tone to draw", () => {
+    const { rerender } = render(
+      <ScrollIndicator
+        direction="below"
+        count={4}
+        problemCount={1}
+        problemTone="error"
+        onClick={onClick}
+      />
+    );
+    expect(screen.queryByTestId("scroll-indicator-problem-mark")).not.toBeNull();
+
+    rerender(<ScrollIndicator direction="below" count={4} problemCount={0} onClick={onClick} />);
+    expect(screen.queryByTestId("scroll-indicator-problem-mark")).toBeNull();
+  });
+
+  it("draws the error and warning problem marks as different glyphs", () => {
+    const markFor = (tone: "error" | "warning") => {
+      const { unmount } = render(
+        <ScrollIndicator
+          direction="below"
+          count={4}
+          problemCount={1}
+          problemTone={tone}
+          onClick={onClick}
+        />
+      );
+      const html = screen.getByTestId("scroll-indicator-problem-mark").outerHTML;
+      unmount();
+      return html;
+    };
+    expect(markFor("error")).not.toBe(markFor("warning"));
+  });
 
   it("uses translate-y-0 when visible (below)", () => {
     render(<ScrollIndicator direction="below" count={1} onClick={onClick} />);
@@ -149,6 +208,86 @@ describe("ScrollIndicator", () => {
     const event = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
     screen.getByRole("button").dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
+  });
+
+  // The band covers rows that are past the list's edge, so a press on it acts
+  // on nothing beneath and doesn't move focus, but still reads as an outside
+  // press to an open popover. Only the pill acts; a wheel scrolls the list.
+  describe("the band the pill sits in", () => {
+    const band = () => document.querySelector<HTMLElement>("[data-sidebar-scroll-indicator]")!;
+
+    it("takes a press on its empty part without acting or taking focus", () => {
+      render(<ScrollIndicator direction="below" count={2} onClick={onClick} />);
+      const press = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+      band().dispatchEvent(press);
+      fireEvent.click(band());
+
+      expect(press.defaultPrevented).toBe(true);
+      expect(onClick).not.toHaveBeenCalled();
+    });
+
+    // Radix dismisses an open popover from a document-level pointerdown.
+    it("lets a press reach the document, so an open popover closes", () => {
+      const onDocumentPointerDown = vi.fn();
+      document.addEventListener("pointerdown", onDocumentPointerDown);
+      try {
+        render(<ScrollIndicator direction="below" count={2} onClick={onClick} />);
+        fireEvent.pointerDown(band());
+        fireEvent.pointerDown(screen.getByRole("button"));
+        expect(onDocumentPointerDown).toHaveBeenCalledTimes(2);
+      } finally {
+        document.removeEventListener("pointerdown", onDocumentPointerDown);
+      }
+    });
+
+    it("hands a wheel anywhere over it to the list", () => {
+      const onWheel = vi.fn();
+      render(<ScrollIndicator direction="above" count={2} onClick={onClick} onWheel={onWheel} />);
+      fireEvent.wheel(band(), { deltaY: 40 });
+      fireEvent.wheel(screen.getByRole("button"), { deltaY: -40 });
+      expect(onWheel.mock.calls.map(([event]) => event.deltaY)).toEqual([40, -40]);
+    });
+
+    // Once the count drops, the rows it is uncovering are back on screen.
+    it("goes inert while it fades out", () => {
+      const onWheel = vi.fn();
+      const { rerender } = render(
+        <ScrollIndicator direction="below" count={2} onClick={onClick} onWheel={onWheel} />
+      );
+      mockUseAnimatedPresence.mockReturnValue({ isVisible: false, shouldRender: true });
+      rerender(<ScrollIndicator direction="below" count={0} onClick={onClick} onWheel={onWheel} />);
+
+      fireEvent.click(screen.getByRole("button"));
+      fireEvent.wheel(band(), { deltaY: 40 });
+      expect(onClick).not.toHaveBeenCalled();
+      expect(onWheel).not.toHaveBeenCalled();
+    });
+
+    // jsdom doesn't hit-test, so this reads the merged classes: the pill's
+    // primitive bakes in `pointer-events-auto`, which must give way on exit.
+    it("lets presses fall through to the rows while it fades out", () => {
+      const classes = (el: Element) => el.className.split(/\s+/);
+      const { rerender } = render(
+        <ScrollIndicator direction="below" count={2} onClick={onClick} />
+      );
+      expect(classes(band())).not.toContain("pointer-events-none");
+      expect(classes(screen.getByRole("button"))).toContain("pointer-events-auto");
+
+      mockUseAnimatedPresence.mockReturnValue({ isVisible: false, shouldRender: true });
+      rerender(<ScrollIndicator direction="below" count={0} onClick={onClick} />);
+      expect(classes(band())).toContain("pointer-events-none");
+      expect(classes(screen.getByRole("button"))).not.toContain("pointer-events-auto");
+      expect(classes(screen.getByRole("button"))).toContain("pointer-events-none");
+    });
+
+    it("leaves with the pill", () => {
+      const { rerender, container } = render(
+        <ScrollIndicator direction="below" count={2} onClick={onClick} />
+      );
+      expect(band()).not.toBeNull();
+      rerender(<ScrollIndicator direction="below" count={0} onClick={onClick} />);
+      expect(container.innerHTML).toBe("");
+    });
   });
 
   it("uses scoped transition-[opacity,translate] instead of bare transition", () => {

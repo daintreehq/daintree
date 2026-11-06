@@ -8,6 +8,14 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: boolean;
   };
+  "agent-accounts:add": {
+    args: [request: import("./agentAccounts.js").AddAgentAccountRequest];
+    result: import("./agentAccounts.js").AddAgentAccountResult;
+  };
+  "agent-accounts:remove": {
+    args: [agentId: string, accountId: string];
+    result: import("../agentSettings.js").AgentSettings;
+  };
   "agent-capabilities:get-agent-ids": {
     args: [];
     result: string[];
@@ -295,7 +303,7 @@ export interface GeneratedIpcInvokeMap {
   "canopy:read-agent-directory": {
     args: [options?: { projectId?: string | undefined } | undefined];
     result: {
-      coverage: "ok" | "stale" | "unreachable" | "unsupported";
+      coverage: "ok" | "unreachable" | "stale" | "unsupported";
       observedAt: number | null;
       complete: boolean;
       omitted: number;
@@ -317,7 +325,7 @@ export interface GeneratedIpcInvokeMap {
             since: number | null;
             label: string | null;
             attached: boolean | null;
-            handback: { observedAt: number } | null;
+            handback: { observedAt: number; report?: "done" | "needs-you" | undefined } | null;
             confirmations?:
               | {
                   waiting: { actionId: string; since: number; expiresAt: number }[];
@@ -332,6 +340,8 @@ export interface GeneratedIpcInvokeMap {
                 }
               | null
               | undefined;
+            personaName?: string | undefined;
+            personaEmoji?: string | undefined;
           }
         | {
             state: "resumable";
@@ -582,22 +592,6 @@ export interface GeneratedIpcInvokeMap {
     args: [__0: { cwd: string }];
     result: string | null;
   };
-  "commands:execute": {
-    args: [payload: import("../commands.js").CommandExecutePayload];
-    result: import("../commands.js").CommandResult<unknown>;
-  };
-  "commands:get": {
-    args: [payload: import("../commands.js").CommandGetPayload];
-    result: import("../commands.js").CommandManifestEntry | null;
-  };
-  "commands:get-builder": {
-    args: [commandId: string];
-    result: { steps: import("../commands.js").BuilderStep[] } | null;
-  };
-  "commands:list": {
-    args: [context?: import("../commands.js").CommandContext | undefined];
-    result: import("../commands.js").CommandManifestEntry[];
-  };
   "config-bundle:apply-import": {
     args: [payload: { bundleJson: string }];
     result: import("../configBundle.js").ConfigImportReport;
@@ -617,6 +611,194 @@ export interface GeneratedIpcInvokeMap {
   "copy-tree-history:get-records": {
     args: [];
     result: import("./copyTreeHistory.js").CopyTreeHistoryRecord[];
+  };
+  "decisions:approve-pairing": {
+    args: [payload: import("../decisions.js").ApproveDecisionsPairingPayload];
+    result: import("../decisions.js").DecisionsPairingApproveResult;
+  };
+  "decisions:cancel-model-evaluation": {
+    args: [payload: import("../decisionsModel.js").CancelDecisionsModelEvaluationPayload];
+    result: import("../decisionsModel.js").DecisionsModelState;
+  };
+  "decisions:cancel-relay-deploy": {
+    args: [deployId: string];
+    result: void;
+  };
+  "decisions:cancel-setup-check": {
+    args: [payload: import("../decisions.js").CancelDecisionsSetupCheckPayload];
+    result: import("../decisions.js").DecisionsSetupCheckRun | null;
+  };
+  "decisions:check-relay": {
+    args: [url: string];
+    result: import("../decisions.js").DecisionsRelayCheck;
+  };
+  "decisions:claim-deployed-relay": {
+    args: [payload: import("../decisions.js").ClaimDeployedDecisionsRelayPayload];
+    result: import("../decisions.js").DecisionsConnectResult;
+  };
+  "decisions:claim-relay": {
+    args: [payload: import("../decisions.js").ClaimDecisionsRelayPayload];
+    result: import("../decisions.js").DecisionsConnectResult;
+  };
+  "decisions:clear-model-history": {
+    args: [];
+    result: import("../decisionsModel.js").DecisionsModelState;
+  };
+  "decisions:copy-answer": {
+    args: [questionId: string];
+    result: string;
+  };
+  "decisions:decline-pairing": {
+    args: [pairingId: string];
+    result: import("../decisions.js").DecisionsPairingDeclineResult;
+  };
+  "decisions:delete-local-data": {
+    args: [];
+    result: import("../decisions.js").DecisionsLocalDeleteResult;
+  };
+  "decisions:delete-relay-data": {
+    args: [payload: import("../decisions.js").DeleteDecisionsRelayDataPayload];
+    result: import("../decisions.js").DecisionsRelayDeleteResult;
+  };
+  "decisions:disconnect-relay": {
+    args: [];
+    result: import("../decisions.js").DecisionsStatus;
+  };
+  "decisions:enroll-host": {
+    args: [payload: import("../decisionsHosts.js").EnrollDecisionsHostPayload];
+    result: import("../decisionsHosts.js").DecisionsHostEnrollResult;
+  };
+  "decisions:export-data": {
+    args: [payload: import("../decisions.js").ExportDecisionsDataPayload];
+    result: import("../decisions.js").DecisionsExportResult;
+  };
+  "decisions:export-recovery-kit": {
+    args: [payload: import("../decisions.js").ExportDecisionsRecoveryKitPayload];
+    result: import("../decisions.js").DecisionsKitExportResult;
+  };
+  "decisions:get-model": {
+    args: [];
+    result: import("../decisionsModel.js").DecisionsModelState;
+  };
+  "decisions:get-pairing": {
+    args: [pairingId: string];
+    result: import("../decisions.js").DecisionsPairingState;
+  };
+  "decisions:get-pane-state": {
+    args: [terminalId: string];
+    result: import("../decisions.js").PaneDecisionState | null;
+  };
+  "decisions:get-policy": {
+    args: [];
+    result: import("../decisions.js").DecisionsPolicy;
+  };
+  "decisions:get-setup-check": {
+    args: [];
+    result: import("../decisions.js").DecisionsSetupCheckRun | null;
+  };
+  "decisions:get-status": {
+    args: [];
+    result: import("../decisions.js").DecisionsStatus;
+  };
+  "decisions:list-answer-destinations": {
+    args: [questionId: string];
+    result: import("../decisionsAttention.js").DecisionsAnswerDestinations;
+  };
+  "decisions:list-attention": {
+    args: [];
+    result: import("../decisionsAttention.js").DecisionsAttentionList;
+  };
+  "decisions:list-devices": {
+    args: [];
+    result: import("../decisions.js").DecisionsDevicesResult;
+  };
+  "decisions:list-hosts": {
+    args: [];
+    result: import("../decisionsHosts.js").DecisionsHostsResult;
+  };
+  "decisions:mark-answer-handled": {
+    args: [payload: import("../decisionsAttention.js").MarkDecisionsAnswerHandledPayload];
+    result: import("../decisionsAttention.js").DecisionsAnswerOutcome;
+  };
+  "decisions:prepare-relay-deploy": {
+    args: [];
+    result: import("../decisions.js").PreparedDecisionsRelayDeploy;
+  };
+  "decisions:reassign-answer": {
+    args: [payload: import("../decisionsAttention.js").ReassignDecisionsAnswerPayload];
+    result: import("../decisionsAttention.js").DecisionsAnswerOutcome;
+  };
+  "decisions:report-composer-drafts": {
+    args: [keys: string[]];
+    result: void;
+  };
+  "decisions:restore-identity": {
+    args: [payload: import("../decisions.js").RestoreDecisionsIdentityPayload];
+    result: import("../decisions.js").DecisionsConnectResult;
+  };
+  "decisions:resume-answer": {
+    args: [questionId: string];
+    result: import("../decisionsAttention.js").DecisionsAnswerOutcome;
+  };
+  "decisions:revoke-device": {
+    args: [deviceId: string];
+    result: import("../decisions.js").DecisionsRevokeDeviceResult;
+  };
+  "decisions:rotate-keys": {
+    args: [];
+    result: import("../decisions.js").DecisionsRotateKeysResult;
+  };
+  "decisions:set-agent-ask-human": {
+    args: [payload: import("../decisions.js").SetDecisionsAgentAskHumanPayload];
+    result: import("../decisions.js").DecisionsPolicy;
+  };
+  "decisions:set-auto-enroll-hosts": {
+    args: [enabled: boolean];
+    result: import("../decisionsHosts.js").DecisionsHostsResult;
+  };
+  "decisions:set-default-question-expiry": {
+    args: [ms: number | null];
+    result: import("../decisions.js").DecisionsPolicy;
+  };
+  "decisions:set-enabled": {
+    args: [payload: import("../decisions.js").SetDecisionsEnabledPayload];
+    result: import("../decisions.js").DecisionsStatus;
+  };
+  "decisions:set-model": {
+    args: [payload: import("../decisionsModel.js").SetDecisionsModelPayload];
+    result: import("../decisionsModel.js").DecisionsModelState;
+  };
+  "decisions:set-model-threshold": {
+    args: [payload: import("../decisionsModel.js").SetDecisionsModelThresholdPayload];
+    result: import("../decisionsModel.js").DecisionsModelState;
+  };
+  "decisions:set-proxy-allowlisted": {
+    args: [allowed: boolean];
+    result: import("../decisions.js").DecisionsPolicy;
+  };
+  "decisions:set-terminal-snapshots": {
+    args: [payload: import("../decisions.js").SetDecisionsTerminalSnapshotsPayload];
+    result: import("../decisions.js").DecisionsStatus;
+  };
+  "decisions:start-model-evaluation": {
+    args: [];
+    result: import("../decisionsModel.js").DecisionsModelState;
+  };
+  "decisions:start-pairing": {
+    args: [];
+    result: import("../decisions.js").DecisionsPairingStartResult;
+  };
+  "decisions:start-relay-removal": {
+    args: [payload: import("../decisions.js").StartDecisionsRelayRemovalPayload];
+    result: import("../decisions.js").DecisionsRelayRemoval;
+  };
+  "decisions:start-setup-check": {
+    args: [];
+    result: import("../decisions.js").DecisionsSetupCheckStartResult;
+  };
+  "decisions:verify-recovery-kit": {
+    args: [payload: import("../decisions.js").VerifyDecisionsRecoveryKitPayload];
+    result: import("../decisions.js").DecisionsKitVerifyResult;
   };
   "demo:annotate": {
     args: [payload: import("./demo.js").DemoAnnotatePayload];
@@ -810,19 +992,24 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./driveLease.js").DriveLeaseTakeOverPayload];
     result: import("./driveLease.js").DriveLeaseView;
   };
+  "editor:clear-project-preference": {
+    args: [payload: import("../editor.js").EditorClearProjectPreferencePayload];
+    result: void;
+  };
   "editor:discover": {
     args: [];
     result: import("../editor.js").DiscoveredEditor[];
   };
   "editor:get-config": {
     args: [projectId?: string | undefined];
-    result: {
-      preferredEditor: import("../editor.js").EditorConfig | null;
-      discoveredEditors: import("../editor.js").DiscoveredEditor[];
-    };
+    result: import("../editor.js").EditorGetConfigResult;
   };
   "editor:set-config": {
     args: [payload: import("../editor.js").EditorSetConfigPayload];
+    result: void;
+  };
+  "editor:set-default": {
+    args: [payload: import("../editor.js").EditorSetDefaultPayload];
     result: void;
   };
   "element-picker:bind": {
@@ -859,7 +1046,7 @@ export interface GeneratedIpcInvokeMap {
               };
               verdict: "tested" | "untested";
               reasons: string[];
-              missingInstall: ("svelte" | "kit" | "tailwind" | "vite")[];
+              missingInstall: ("kit" | "svelte" | "tailwind" | "vite")[];
             };
             diagnostics: {
               code: "unresolved-layout-reset" | "duplicate-route-id" | "traversal-truncated";
@@ -873,6 +1060,10 @@ export interface GeneratedIpcInvokeMap {
           status: "unavailable";
           reason: "failed" | "cancelled" | "busy" | "budget-exhausted" | "unknown-workspace";
         };
+  };
+  "element-picker:hold-sources": {
+    args: [payload: { workspaceId: string; paths: string[] }];
+    result: void;
   };
   "element-picker:reselect": {
     args: [
@@ -1534,6 +1725,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { localPath: string }];
     result: import("./fileTransfer.js").LocalFileStat | null;
   };
+  "file-transfer:summarize-local-folder": {
+    args: [payload: import("./fileTransfer.js").SummarizeLocalFolderPayload];
+    result: import("./fileTransfer.js").LocalFolderSummaryResult;
+  };
   "file-transfer:upload-bytes": {
     args: [payload: import("./fileTransfer.js").UploadBytesPayload];
     result: import("./fileTransfer.js").UploadResult;
@@ -1541,6 +1736,10 @@ export interface GeneratedIpcInvokeMap {
   "file-transfer:upload-local-file": {
     args: [payload: import("./fileTransfer.js").UploadLocalFilePayload];
     result: import("./fileTransfer.js").UploadResult;
+  };
+  "file-transfer:upload-local-folder": {
+    args: [payload: import("./fileTransfer.js").UploadLocalFolderPayload];
+    result: import("./fileTransfer.js").UploadLocalFolderResult;
   };
   "file-watch:fingerprint": {
     args: [payload: import("./fileWatch.js").FileWatchFingerprintPayload];
@@ -1756,6 +1955,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { cwd: string; numbers: number[] }];
     result: import("../forge.js").ForgeReferenceLookupResult[] | null;
   };
+  "forge:get-repo-key": {
+    args: [payload: { cwd: string }];
+    result: string | null;
+  };
   "forge:get-repo-stats": {
     args: [payload: { cwd: string; bypassCache?: boolean | undefined }];
     result: import("./forge.js").ForgeRepositoryStats;
@@ -1842,14 +2045,6 @@ export interface GeneratedIpcInvokeMap {
   "forge:unassign-issue": {
     args: [payload: { cwd: string; issueNumber: number; username: string }];
     result: import("../forge.js").ForgeUser[];
-  };
-  "gemini:enable-alternate-buffer": {
-    args: [];
-    result: { success: boolean };
-  };
-  "gemini:get-status": {
-    args: [];
-    result: { exists: boolean; alternateBufferEnabled: boolean; error?: string | undefined };
   };
   "git:discard-file-changes": {
     args: [
@@ -1942,6 +2137,10 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: void;
   };
+  "help-assistant:get-identities": {
+    args: [];
+    result: import("../displayIdentity.js").AssistantIdentities;
+  };
   "help-assistant:get-live-session-status": {
     args: [__1: { sessionId: string }];
     result: import("./api.js").HelpSessionLiveStatus;
@@ -1949,6 +2148,10 @@ export interface GeneratedIpcInvokeMap {
   "help-assistant:get-settings": {
     args: [];
     result: import("./api.js").HelpAssistantSettings;
+  };
+  "help-assistant:set-identity": {
+    args: [request: import("../displayIdentity.js").SetAssistantIdentityRequest];
+    result: import("../displayIdentity.js").AssistantIdentities;
   };
   "help-assistant:set-settings": {
     args: [patch: Partial<import("./api.js").HelpAssistantSettings>];
@@ -1975,11 +2178,11 @@ export interface GeneratedIpcInvokeMap {
     result: string[];
   };
   "help:global-assistant-attach": {
-    args: [];
+    args: [eligible?: boolean | undefined];
     result: import("./help.js").GlobalAssistantAttachment;
   };
   "help:global-assistant-claim-input": {
-    args: [attachmentId: string];
+    args: [attachmentId: string, from?: string | undefined];
     result: import("./help.js").GlobalAssistantView;
   };
   "help:global-assistant-detach": {
@@ -1993,6 +2196,10 @@ export interface GeneratedIpcInvokeMap {
   "help:global-assistant-ensure": {
     args: [];
     result: import("./help.js").GlobalAssistantView;
+  };
+  "help:global-assistant-input-eligible": {
+    args: [attachmentId: string, eligible: boolean];
+    result: void;
   };
   "help:global-assistant-release-input": {
     args: [attachmentId: string];
@@ -2056,6 +2263,10 @@ export interface GeneratedIpcInvokeMap {
     args: [projectId: string, isOpen: boolean, isVisible?: boolean | undefined];
     result: void;
   };
+  "help:report-window-global-assistant-panel": {
+    args: [panel: import("./help.js").WindowGlobalAssistantPanel];
+    result: void;
+  };
   "help:restore-pending-hibernation": {
     args: [projectId: string, claimId: string, rawSlot?: number | undefined];
     result: boolean;
@@ -2071,6 +2282,10 @@ export interface GeneratedIpcInvokeMap {
   "help:unmark-terminal": {
     args: [terminalId: string];
     result: void;
+  };
+  "help:window-global-assistant-panel": {
+    args: [];
+    result: import("./help.js").WindowGlobalAssistantPanel | null;
   };
   "host-files:get-picker-roots": {
     args: [];
@@ -2508,8 +2723,16 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: string[];
   };
+  "plugin-capability:list-preset-grants": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginPresetGrantsQuery];
+    result: import("../pluginCapabilityConsent.js").PluginPresetGrantEntry[];
+  };
   "plugin-capability:resolve-consent": {
     args: [input: import("../pluginCapabilityConsent.js").PluginCapabilityResolveConsentInput];
+    result: void;
+  };
+  "plugin-capability:revoke-preset-grant": {
+    args: [input: import("../pluginCapabilityConsent.js").PluginPresetGrantRevoke];
     result: void;
   };
   "plugin-capability:set-os-notifications": {
@@ -3384,6 +3607,26 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: import("./remoteHosts.js").AddHostPayload];
     result: import("../remoteHosts.js").HostDescriptor;
   };
+  "remote-hosts:bring-back": {
+    args: [payload: { hostId: string }];
+    result: {
+      status:
+        | "cancelled"
+        | "unreachable"
+        | "connected"
+        | "woken"
+        | "started"
+        | "not_wakeable"
+        | "not_startable"
+        | "version_mismatch"
+        | "timed_out";
+      wake: "failed" | "sent" | "not_needed" | "not_set_up" | "not_on_lan";
+      reached: boolean;
+      startRequested: boolean;
+      observed: string | null;
+      elapsedMs: number;
+    };
+  };
   "remote-hosts:cancel-install": {
     args: [payload: { opId: string }];
     result: boolean;
@@ -3606,6 +3849,299 @@ export interface GeneratedIpcInvokeMap {
   "run-history:get-records": {
     args: [];
     result: import("./runHistory.js").RunHistoryRecord[];
+  };
+  "scheduled-runs:ack-inbox": {
+    args: [payload: import("./scheduledRuns.js").ScheduledRunsAckInboxPayload];
+    result: void;
+  };
+  "scheduled-runs:list-by-project": {
+    args: [payload: import("./scheduledRuns.js").ScheduledRunsListByProjectPayload];
+    result: {
+      id: string;
+      scheduleId: string;
+      projectId: string;
+      origin:
+        | { coalesced: null; dueAt: number; occurrenceKey: string; trigger: "scheduled" }
+        | {
+            coalesced: { after: number; through: number };
+            dueAt: number;
+            occurrenceKey: string;
+            trigger: "catch-up";
+          }
+        | {
+            coalesced: { after: number; through: number } | null;
+            dueAt: number;
+            occurrenceKey: string;
+            trigger: "os-launch";
+          }
+        | { trigger: "run-now"; dueAt: null; occurrenceKey: null; coalesced: null };
+      createdAt: number;
+      terminalId: string | null;
+      terminalSpawnedAt: number | null;
+      settlement:
+        | { state: "open" }
+        | {
+            state: "settled";
+            settledAt: number;
+            outcome:
+              | "failed"
+              | "skipped"
+              | "cancelled"
+              | "exited"
+              | "done"
+              | "needs-you"
+              | "replaced"
+              | "lost"
+              | "interrupted";
+            evidence:
+              | {
+                  kind: "handback";
+                  report: "done" | "needs-you";
+                  summary: string | null;
+                  truncated: boolean;
+                }
+              | {
+                  kind: "exit";
+                  process: "pty" | "agent";
+                  exitCode: number | null;
+                  signal: number | null;
+                }
+              | {
+                  kind: "skip";
+                  reason:
+                    | { kind: "missed" }
+                    | { kind: "overlap"; openRunId: string }
+                    | {
+                        kind: "precondition";
+                        exitCode: number | null;
+                        signal: number | null;
+                        error: string | null;
+                      }
+                    | { kind: "assistant-sessions-full" };
+                }
+              | { kind: "launch-error"; message: string }
+              | { kind: "cancel" }
+              | { kind: "replace"; replacedByRunId: string }
+              | { kind: "lost" }
+              | { kind: "interrupted" };
+          };
+      process: {
+        agent:
+          | { state: "not-started" }
+          | { state: "running"; startedAt: number }
+          | {
+              state: "exited";
+              startedAt: number | null;
+              exitedAt: number;
+              exitCode: number | null;
+              signal: number | null;
+            };
+        pty:
+          | { state: "not-started" }
+          | { state: "running"; startedAt: number }
+          | {
+              state: "exited";
+              startedAt: number | null;
+              exitedAt: number;
+              exitCode: number | null;
+              signal: number | null;
+            };
+      };
+      pane:
+        | { state: "none" }
+        | { state: "open"; since: number }
+        | { state: "background"; since: number }
+        | { state: "closed"; closedAt: number };
+      resume: {
+        agentId: string;
+        agentSessionId: string | null;
+        cwd: string;
+        worktreeId: string | null;
+        agentLaunchFlags: string[];
+        agentModelId: string | null;
+        agentPresetId: string | null;
+      } | null;
+      assistant?: true | undefined;
+      workers?:
+        | {
+            terminalId: string;
+            hostId: string | null;
+            hostName: string | null;
+            projectId: string;
+            projectName: string | null;
+            agentId: string | null;
+            observedAt: number;
+          }[]
+        | undefined;
+    }[];
+  };
+  "scheduled-runs:list-by-schedule": {
+    args: [payload: import("./scheduledRuns.js").ScheduledRunsListBySchedulePayload];
+    result: {
+      id: string;
+      scheduleId: string;
+      projectId: string;
+      origin:
+        | { coalesced: null; dueAt: number; occurrenceKey: string; trigger: "scheduled" }
+        | {
+            coalesced: { after: number; through: number };
+            dueAt: number;
+            occurrenceKey: string;
+            trigger: "catch-up";
+          }
+        | {
+            coalesced: { after: number; through: number } | null;
+            dueAt: number;
+            occurrenceKey: string;
+            trigger: "os-launch";
+          }
+        | { trigger: "run-now"; dueAt: null; occurrenceKey: null; coalesced: null };
+      createdAt: number;
+      terminalId: string | null;
+      terminalSpawnedAt: number | null;
+      settlement:
+        | { state: "open" }
+        | {
+            state: "settled";
+            settledAt: number;
+            outcome:
+              | "failed"
+              | "skipped"
+              | "cancelled"
+              | "exited"
+              | "done"
+              | "needs-you"
+              | "replaced"
+              | "lost"
+              | "interrupted";
+            evidence:
+              | {
+                  kind: "handback";
+                  report: "done" | "needs-you";
+                  summary: string | null;
+                  truncated: boolean;
+                }
+              | {
+                  kind: "exit";
+                  process: "pty" | "agent";
+                  exitCode: number | null;
+                  signal: number | null;
+                }
+              | {
+                  kind: "skip";
+                  reason:
+                    | { kind: "missed" }
+                    | { kind: "overlap"; openRunId: string }
+                    | {
+                        kind: "precondition";
+                        exitCode: number | null;
+                        signal: number | null;
+                        error: string | null;
+                      }
+                    | { kind: "assistant-sessions-full" };
+                }
+              | { kind: "launch-error"; message: string }
+              | { kind: "cancel" }
+              | { kind: "replace"; replacedByRunId: string }
+              | { kind: "lost" }
+              | { kind: "interrupted" };
+          };
+      process: {
+        agent:
+          | { state: "not-started" }
+          | { state: "running"; startedAt: number }
+          | {
+              state: "exited";
+              startedAt: number | null;
+              exitedAt: number;
+              exitCode: number | null;
+              signal: number | null;
+            };
+        pty:
+          | { state: "not-started" }
+          | { state: "running"; startedAt: number }
+          | {
+              state: "exited";
+              startedAt: number | null;
+              exitedAt: number;
+              exitCode: number | null;
+              signal: number | null;
+            };
+      };
+      pane:
+        | { state: "none" }
+        | { state: "open"; since: number }
+        | { state: "background"; since: number }
+        | { state: "closed"; closedAt: number };
+      resume: {
+        agentId: string;
+        agentSessionId: string | null;
+        cwd: string;
+        worktreeId: string | null;
+        agentLaunchFlags: string[];
+        agentModelId: string | null;
+        agentPresetId: string | null;
+      } | null;
+      assistant?: true | undefined;
+      workers?:
+        | {
+            terminalId: string;
+            hostId: string | null;
+            hostName: string | null;
+            projectId: string;
+            projectName: string | null;
+            agentId: string | null;
+            observedAt: number;
+          }[]
+        | undefined;
+    }[];
+  };
+  "scheduled-runs:take-inbox": {
+    args: [];
+    result: import("./scheduledRuns.js").ScheduledRunInboxTake;
+  };
+  "schedules:create": {
+    args: [input: import("./schedules.js").ScheduleCreateInput];
+    result: import("./schedules.js").ScheduleCreateOutcome;
+  };
+  "schedules:list": {
+    args: [];
+    result: import("./schedules.js").SchedulesSnapshot | null;
+  };
+  "schedules:os-job-status": {
+    args: [];
+    result: import("./schedules.js").ScheduleOsJobStatus;
+  };
+  "schedules:remove": {
+    args: [scheduleId: string];
+    result: import("./schedules.js").ScheduleRemoveOutcome;
+  };
+  "schedules:repair-os-job": {
+    args: [];
+    result: import("./schedules.js").ScheduleOsJobStatus;
+  };
+  "schedules:run-now": {
+    args: [
+      scheduleId: string,
+      options?: import("./schedules.js").ScheduleRunNowOptions | undefined,
+    ];
+    result: import("./schedules.js").ScheduleRunNowOutcome;
+  };
+  "schedules:set-enabled": {
+    args: [scheduleId: string, enabled: boolean];
+    result: import("./schedules.js").ScheduleSetEnabledOutcome;
+  };
+  "schedules:set-switches": {
+    args: [patch: import("./schedules.js").ScheduleSwitchesPatch];
+    result: import("./schedules.js").ScheduleSetSwitchesOutcome;
+  };
+  "schedules:update": {
+    args: [
+      scheduleId: string,
+      expectedUpdatedAt: number,
+      patch: import("./schedules.js").ScheduleUpdatePatch,
+    ];
+    result: import("./schedules.js").ScheduleUpdateOutcome;
   };
   "scratch:create": {
     args: [name?: string | undefined];
@@ -3857,6 +4393,18 @@ export interface GeneratedIpcInvokeMap {
     args: [scrollbackLines: number];
     result: void;
   };
+  "terminal-session-file:get": {
+    args: [__1: { terminalId: string }];
+    result: import("../agentSessionFile.js").AgentSessionFileResult;
+  };
+  "terminal-when-done:list": {
+    args: [];
+    result: import("./terminalWhenDone.js").TerminalWhenDoneEntry[];
+  };
+  "terminal-when-done:set": {
+    args: [terminalId: string, choice: import("./terminalWhenDone.js").TerminalWhenDone];
+    result: void;
+  };
   "terminal:force-resume": {
     args: [id: string];
     result: void;
@@ -3971,12 +4519,15 @@ export interface GeneratedIpcInvokeMap {
         isEphemeral?: boolean | undefined;
         agentLaunchFlags?: string[] | undefined;
         agentModelId?: string | undefined;
+        scheduledRun?: { scheduleId: string; runId: string } | undefined;
         agentSessionId?: string | undefined;
+        exactResume?: boolean | undefined;
         worktreeId?: string | undefined;
         agentPresetId?: string | undefined;
         agentPresetColor?: string | undefined;
         originalAgentPresetId?: string | undefined;
         handbackCode?: string | undefined;
+        whenDone?: "background" | "close" | undefined;
         hasFirstPrompt?: boolean | undefined;
         actionContext?:
           | {
@@ -3998,7 +4549,7 @@ export interface GeneratedIpcInvokeMap {
               scratchName?: string | undefined;
               scratchPath?: string | undefined;
               dispatchSource?:
-                "user" | "menu" | "keybinding" | "agent" | "context-menu" | "plugin" | undefined;
+                "user" | "menu" | "agent" | "keybinding" | "context-menu" | "plugin" | undefined;
             }
           | undefined;
         requiredPluginTools?: string[] | undefined;
@@ -4014,6 +4565,7 @@ export interface GeneratedIpcInvokeMap {
       submissionToken?: string | undefined,
       handbackCode?: string | undefined,
       imagePaths?: string[] | undefined,
+      guard?: "no-choice-dialog" | undefined,
     ];
     result: void;
   };
@@ -4032,7 +4584,7 @@ export interface GeneratedIpcInvokeMap {
         heardAs?: string[] | undefined;
         source?: "manual" | "learned" | "imported" | undefined;
         addedAt?: number | undefined;
-        heardAsConflict?: "reject" | "skip" | "move" | undefined;
+        heardAsConflict?: "skip" | "reject" | "move" | undefined;
       },
     ];
     result: import("./api.js").VoiceDictionaryChange;
@@ -4044,7 +4596,7 @@ export interface GeneratedIpcInvokeMap {
         term: string;
         source?: "manual" | "learned" | "imported" | undefined;
         addedAt?: number | undefined;
-        heardAsConflict?: "reject" | "skip" | "move" | undefined;
+        heardAsConflict?: "skip" | "reject" | "move" | undefined;
         heardAs?: string[] | undefined;
       },
     ];
@@ -4298,6 +4850,7 @@ export interface GeneratedIpcInvokeMap {
           sourcePrLinkedIssueNumber?: number | undefined;
           submoduleInit?: "none" | "inherit" | "all" | undefined;
           collisionPolicy?: "error" | "suffix" | undefined;
+          fetchBase?: boolean | undefined;
         };
         opId?: string | undefined;
       },

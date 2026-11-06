@@ -43,7 +43,13 @@ import {
   channelHandlerArityHint,
 } from "./plugin/pluginHandlerHints.js";
 import { PluginPtyTransport } from "./plugin/PluginPtyTransport.js";
-import { forgetPluginLaunches, forgetPluginLaunchesWhere } from "./plugin/pluginLaunchedAgents.js";
+import {
+  attachPluginLaunchPersistence,
+  detachPluginLaunchPersistence,
+  forgetPluginLaunches,
+  forgetPluginLaunchesWhere,
+} from "./plugin/pluginLaunchedAgents.js";
+import { storePluginLaunchPersistence } from "./plugin/pluginLaunchStore.js";
 import { PluginPathNotAllowedError } from "./plugin/pluginFsContainment.js";
 import { e2eSideloadPluginDir, isE2EMode } from "../setup/runtimeFlags.js";
 import { whenPluginDirResolverLive } from "../setup/pluginProtocolReadiness.js";
@@ -1662,6 +1668,9 @@ export class PluginService {
    */
   dispose(): void {
     this.disposed = true;
+    // Before any unload below can forget a launch: teardown ends the plugins'
+    // reach in memory only, and the records on disk carry it to the next run.
+    detachPluginLaunchPersistence();
     void this.shutdownArtifacts();
     this.metrics.dispose();
     // Native watchers go first: a settled burst arriving mid-teardown would
@@ -1758,6 +1767,7 @@ export class PluginService {
   }
 
   private async runInitialize(): Promise<void> {
+    attachPluginLaunchPersistence(storePluginLaunchPersistence);
     this.catalogScanInFlight = true;
     try {
       await this.scanStartupCatalog();
@@ -1847,6 +1857,10 @@ export class PluginService {
       // installed-id set is authoritative. A partial inventory would read as
       // "uninstalled" and delete live metadata (#6110).
       await this.reconcilePluginRecipeMetadata();
+      // The same holds for launch records: one whose installed plugin didn't
+      // come back belongs to a plugin removed or disabled while the app was
+      // closed, and a reinstall under its id must not inherit its agents.
+      forgetPluginLaunchesWhere((owner) => this.isMissingInstalledOwner(owner));
       // The same holds for the theme catalog: a selected plugin theme it lacks
       // now is genuinely gone.
       this.pluginThemeCatalogReady = true;
@@ -5422,10 +5436,13 @@ export class PluginService {
    * installer's content-mutation invariant (#9292).
    *
    * Idempotent across dev sessions: if the plugin is already loaded (a prior
-   * session that didn't clean up, or a crashed CLI), it's unloaded first so the
+   * session that didn't clean up, a crashed CLI, or a session from another
+   * directory whose link this one took over), it's unloaded first so the
    * duplicate-name guard in {@link loadPlugin} doesn't reject the reload.
+   * `sessionId` (absent from CLIs older than #15616) becomes the session's
+   * owner, so only that CLI's stop can end it.
    */
-  async loadDevPlugin(pluginId: string): Promise<void> {
+  async loadDevPlugin(pluginId: string, sessionId?: string): Promise<void> {
     // The id becomes `path.join(pluginsRoot, pluginId)` in `loadPlugin`, so a
     // `../` segment would escape the plugins root and load an arbitrary
     // `plugin.json` (#10518) — reachable over the CLI control socket. Gate on
@@ -5437,12 +5454,17 @@ export class PluginService {
     // Queued behind any reconcile or stop for this plugin: a CLI restart sends
     // stop and start back to back, and a start that overtook the stop would be
     // undone by it.
-    return this.serializeDevSession(pluginId, () => this.doLoadDevPlugin(pluginId));
+    return this.serializeDevSession(pluginId, () => this.doLoadDevPlugin(pluginId, sessionId));
   }
 
-  private async doLoadDevPlugin(pluginId: string): Promise<void> {
+  private async doLoadDevPlugin(pluginId: string, sessionId: string | undefined): Promise<void> {
+    // The watcher holds the realpath the link had when it armed, and re-arming
+    // for the same link path is a no-op. A takeover retargets the link without
+    // changing that path, so drop the watcher and let the load arm a fresh one.
+    this.devArtifactWatcherRegistry?.stop(pluginId);
     const replacing = this.plugins.has(pluginId);
     if (replacing) this.unloadPlugin(pluginId, { reload: true });
+    let started = false;
     try {
       // Honor the user's persisted disabled intent — the dev path must not be a
       // trust escape hatch that force-loads a plugin the user turned off (#10518).
@@ -5457,8 +5479,18 @@ export class PluginService {
           `Couldn't load dev plugin "${pluginId}" from ${this.pluginsRoot} — it may be disabled in Preferences, or the symlink/plugin.json may be invalid`
         );
       }
+      const session = this.devSessions.get(pluginId);
+      if (session) session.sessionId = sessionId;
+      started = true;
       await this.activatePlugin(pluginId);
     } finally {
+      if (!started) {
+        // A start that loads nothing leaves no session, whichever one it was
+        // replacing: that plugin is unloaded, and the CLI that asked tears down
+        // on this error. Kept, it would sit in the runtime status unwatched.
+        this.devArtifactWatcherRegistry?.stop(pluginId);
+        if (this.devSessions.delete(pluginId)) this.emitRuntimeStatus(pluginId);
+      }
       if (replacing) this.settlePluginReload(pluginId);
     }
   }
@@ -5472,7 +5504,18 @@ export class PluginService {
    * it outlives the plugin loads the session drives, so a reload that fails to
    * produce a loadable plugin still has somewhere to report why.
    */
-  private devSessions = new Map<string, { reloadCount: number; detail: string | null }>();
+  private devSessions = new Map<
+    string,
+    {
+      reloadCount: number;
+      detail: string | null;
+      /**
+       * The CLI session that started it. Absent for a session adopted from a
+       * marker at startup, or started by a CLI older than #15616.
+       */
+      sessionId?: string;
+    }
+  >();
 
   /** One dev operation at a time per plugin — reload, or the stop behind it. */
   private devSessionChains = new Map<string, Promise<void>>();
@@ -5511,18 +5554,29 @@ export class PluginService {
   /**
    * End a dev session and unload its plugin (`plugin.dev.stop`).
    *
-   * The watcher is stopped BEFORE the queue is joined, so no further rebuild
-   * can queue work behind the unload; the unload itself goes through the chain
-   * so it lands after any reconcile already in flight rather than racing it.
+   * A stop carrying a `sessionId` is ignored when a different CLI session has
+   * since started this plugin: an older session from another directory exits
+   * after a newer one took its link over, and its stop can land after the
+   * newer start. A stop without one (an older CLI) ends whatever session holds
+   * the id, as before.
+   *
+   * An untagged stop drops the watcher BEFORE joining the queue, so no further
+   * rebuild can queue work behind the unload. A tagged stop can't know before
+   * its turn whether the session is still its own, so it drops the watcher in
+   * the queue instead; a rebuild queued meanwhile finds the session gone. The
+   * unload goes through the chain either way, so it lands after any reconcile
+   * already in flight rather than racing it.
    */
-  async stopDevSession(pluginId: string): Promise<void> {
-    this.devArtifactWatcherRegistry?.stop(pluginId);
+  async stopDevSession(pluginId: string, sessionId?: string): Promise<void> {
+    if (sessionId === undefined) this.devArtifactWatcherRegistry?.stop(pluginId);
     await this.serializeDevSession(pluginId, async () => {
-      // Stopped a second time, deliberately. A reconcile already in flight when
-      // the first stop landed re-enters `loadPlugin`, which re-arms the session
-      // through `ensureDevSession` — so without this the queued teardown would
-      // unload the plugin and leave that replacement subscription watching a
-      // session nobody owns.
+      const owner = this.devSessions.get(pluginId)?.sessionId;
+      if (sessionId !== undefined && owner !== undefined && owner !== sessionId) return;
+      // Stopped here even after an untagged stop's early one, deliberately. A
+      // reconcile already in flight when that landed re-enters `loadPlugin`,
+      // which re-arms the session through `ensureDevSession` — so without this
+      // the queued teardown would unload the plugin and leave that replacement
+      // subscription watching a session nobody owns.
       this.devArtifactWatcherRegistry?.stop(pluginId);
       const had = this.devSessions.delete(pluginId);
       this.unloadPlugin(pluginId);
@@ -7104,7 +7158,31 @@ export class PluginService {
     if (opts.uninstall) {
       this.projectInstanceStore.removePackage(manifestId);
       this.projectInstancePackages.delete(manifestId);
+      this.forgetPackageInstanceLaunches(manifestId);
     }
+  }
+
+  /**
+   * End a package's reach on every agent its per-project instances launched,
+   * including instances of a project that isn't open, which no unload reaches.
+   */
+  private forgetPackageInstanceLaunches(manifestId: string): void {
+    forgetPluginLaunchesWhere(
+      (owner) =>
+        parseProjectPluginInstanceKey(owner)?.installed === true &&
+        pluginManifestIdFromInstanceKey(owner) === manifestId
+    );
+  }
+
+  /**
+   * Whether a launch record's plugin is an installed one the startup scan didn't
+   * load. A dev plugin mid-rebuild is out of `plugins` for the swap, and its own
+   * reload settles its records. A repository plugin's go when its project closes.
+   */
+  private isMissingInstalledOwner(owner: string): boolean {
+    const parsed = parseProjectPluginInstanceKey(owner);
+    if (parsed === null) return !this.plugins.has(owner) && !this.devSessions.has(owner);
+    return parsed.installed && !this.projectInstancePackages.has(parsed.manifestId);
   }
 
   /** Load a package's instances again in every still-open project that enabled it. */
@@ -7451,7 +7529,11 @@ export class PluginService {
 
   unloadPlugin(pluginId: string, options?: { reload: true }): void {
     const unloading = this.plugins.get(pluginId);
-    if (!unloading) return;
+    if (!unloading) {
+      // Nothing loaded to tear down, but records an earlier run left still end here.
+      if (!options?.reload) forgetPluginLaunches(pluginId);
+      return;
+    }
     // First, before anything else can run plugin code or yield: every agent
     // credential for this instance dies, and only then do its rosters go. The
     // other order leaves a window where a live grant resolves to an endpoint
@@ -8351,6 +8433,7 @@ export class PluginService {
         const catalogued = this.projectInstancePackages.get(pluginId);
         if (!running && catalogued) {
           this.unloadPackageInstances(pluginId, { uninstall: false, purge: false });
+          this.forgetPackageInstanceLaunches(pluginId);
           this.projectInstancePackages.delete(pluginId);
           this.disabledPlugins.set(pluginId, {
             manifest: catalogued.manifest as PluginManifest,

@@ -10,9 +10,10 @@ export interface DetachedViewRegistryOptions {
 }
 
 /**
- * The views an explicit disconnect cut off from their host.
+ * The views a discarded connection cut off from their host: a person's
+ * disconnect, or the Shell letting an unused connection go.
  *
- * Disconnecting discards the connection with its endpoints, so the next
+ * Discarding a connection drops its endpoints with it, so the next
  * connection starts with no record of any view: it has nothing to reopen and
  * its first session is not a reconnect, so {@link ResyncCoordinator} never
  * hears of them. This keeps them past the discard and, once a replacement

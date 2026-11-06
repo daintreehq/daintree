@@ -132,6 +132,37 @@ export async function withVerifiedReadHandle<T>(
 }
 
 /**
+ * {@link withVerifiedReadHandle} for a call that reads the whole file (#15584).
+ * O_NONBLOCK (undefined on Windows, which has no such FIFOs) stops a FIFO with
+ * no writer from holding the open — and a Main threadpool thread with it —
+ * and the descriptor is then refused unless it is a regular file, so a FIFO or
+ * device is never read until an EOF that may not come. A directory is let
+ * through to fail on the read with Node's EISDIR, as it always has.
+ */
+function withVerifiedWholeFileRead<T>(
+  pluginId: string,
+  op: string,
+  resolved: string,
+  read: (handle: FileHandle) => Promise<T>
+): Promise<T> {
+  return withVerifiedReadHandle(
+    pluginId,
+    op,
+    resolved,
+    fs.constants.O_NONBLOCK ?? 0,
+    (handle, opened) => {
+      if (!opened.isFile() && !opened.isDirectory()) {
+        throw fsTargetError(
+          "TARGET_UNAVAILABLE",
+          `Plugin "${pluginId}" fs.${op}: the target is not a regular file`
+        );
+      }
+      return read(handle);
+    }
+  );
+}
+
+/**
  * Create `resolved` and every missing ancestor, one component at a time,
  * reporting each directory to `onCreated` the moment it exists — so a failure
  * further down the chain never leaves an earlier creation unaudited.
@@ -513,12 +544,12 @@ export function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): Plugi
       requireLoaded("readFile");
       requireReadCapForClass("readFile", rootClass);
       // The open cannot be cancelled, so an abort during containment is
-      // honoured here, before a FIFO at the path could leave it pending.
+      // honoured here, before any filesystem work starts.
       options?.signal?.throwIfAborted();
       // Deliberately no 500KB / binary cap — this is a sanctioned plugin API,
       // not the size-limited files.read preview path. The signal cancels the
       // read itself (Node honors it) as well as the boundary checks above.
-      return withVerifiedReadHandle(pluginId, "readFile", resolved, 0, (handle) =>
+      return withVerifiedWholeFileRead(pluginId, "readFile", resolved, (handle) =>
         handle.readFile({ encoding: "utf-8", signal: options?.signal })
       );
     },
@@ -531,11 +562,10 @@ export function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): Plugi
       requireReadCapForClass("readFileBytes", rootClass);
       // Same as `readFile`: the open itself cannot be cancelled.
       options?.signal?.throwIfAborted();
-      const buffer = await withVerifiedReadHandle(
+      const buffer = await withVerifiedWholeFileRead(
         pluginId,
         "readFileBytes",
         resolved,
-        0,
         (handle) => handle.readFile({ signal: options?.signal })
       );
       // Copy out of Node's pooled Buffer allocator: a small read shares its
@@ -553,11 +583,10 @@ export function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): Plugi
       options?.signal?.throwIfAborted();
       // Decoded and hashed from one buffer, so the revision always describes
       // the text returned — two reads could straddle a write.
-      const buffer = await withVerifiedReadHandle(
+      const buffer = await withVerifiedWholeFileRead(
         pluginId,
         "readFileWithRevision",
         resolved,
-        0,
         (handle) => handle.readFile({ signal: options?.signal })
       );
       return { contents: buffer.toString("utf-8"), revision: sha256Hex(buffer) };
@@ -658,12 +687,12 @@ export function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): Plugi
           // one never reads the target, so an unreadable or oversized file
           // still gets its atomic replace. The read is verified like any
           // other, so the hash a mismatch hands back is never the hash of a
-          // file a swapped-in symlink pointed at.
-          const current = await withVerifiedReadHandle(
+          // file a swapped-in symlink pointed at, and a FIFO there is refused
+          // rather than left holding this path's write lock.
+          const current = await withVerifiedWholeFileRead(
             pluginId,
             "writeFile",
             resolved,
-            0,
             (handle) => handle.readFile()
           ).catch((error: NodeJS.ErrnoException) => {
             if (error.code === "ENOENT") return null;

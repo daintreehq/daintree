@@ -961,6 +961,10 @@ export const BUILT_IN_PLUGIN_CAPABILITIES = [
   "agent:read",
   "agent:register",
   "agent:input",
+  // Launch an agent on one of the person's presets (`host.dispatch("agent.launch",
+  // { agentId, presetId })`, #16324). Declaring it enables nothing: each preset
+  // asks once on first use, and the grant ends when the preset changes.
+  "agent:launch-preset",
   // Read a terminal's current screen as plain text (`host.terminals.readScreen`).
   // Separate from `agent:read` on purpose: what a terminal shows routinely
   // includes tokens and env dumps, so it carries its own first-use consent.
@@ -2777,7 +2781,8 @@ export interface PluginManifest {
    * The short name agents see this plugin's MCP server under, as
    * `daintree-<mcpName>`: lowercase letters, digits and hyphens, at most 16
    * characters. `docs` and `runbooks` are taken by the Daintree Assistant's own
-   * servers. Without one the host derives a name from the last segment of
+   * servers, and `decisions` by the server agents ask the person through.
+   * Without one the host derives a name from the last segment of
    * `name`. The same name in every project; see `docs/plugins/manifest.md` for
    * how a clash between two plugins is settled.
    */
@@ -4877,7 +4882,8 @@ export type PluginTerminalLifecycleEvent =
  * - `project-unavailable` — the plugin's project has no open view, or it did not
  *   answer in time.
  * - `launch-failed` — the user chose to start a new agent and it did not start,
- *   or the new worktree's setup failed, needs approval or is still running.
+ *   or the new worktree's setup needs approval or is still running. A setup
+ *   that failed or timed out doesn't refuse: the agent starts anyway.
  * - `prompt-open` — another picker from this plugin is already open.
  * - `busy` — too many targeted sends from this plugin are already in flight.
  */

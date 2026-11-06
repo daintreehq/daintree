@@ -2,6 +2,8 @@ import type {
   EditorConfig,
   EditorGetConfigResult,
   EditorSetConfigPayload,
+  EditorSetDefaultPayload,
+  EditorClearProjectPreferencePayload,
   DiscoveredEditor,
 } from "@shared/types/editor";
 
@@ -14,9 +16,24 @@ export const editorClient = {
     return window.electron.editor.setConfig(payload);
   },
 
+  setDefault: (payload: EditorSetDefaultPayload): Promise<void> => {
+    return window.electron.editor.setDefault(payload);
+  },
+
+  clearProjectPreference: (payload: EditorClearProjectPreferencePayload): Promise<void> => {
+    return window.electron.editor.clearProjectPreference(payload);
+  },
+
   discover: (): Promise<DiscoveredEditor[]> => {
     return window.electron.editor.discover();
   },
 } as const;
 
-export type { EditorConfig, EditorGetConfigResult, EditorSetConfigPayload, DiscoveredEditor };
+export type {
+  EditorConfig,
+  EditorGetConfigResult,
+  EditorSetConfigPayload,
+  EditorSetDefaultPayload,
+  EditorClearProjectPreferencePayload,
+  DiscoveredEditor,
+};

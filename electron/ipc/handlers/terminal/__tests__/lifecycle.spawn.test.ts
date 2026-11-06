@@ -201,6 +201,8 @@ const {
   mockSetOwnershipPrincipalRevokedListener,
   mockSetPaneTerminalResolver,
   mockGetPaneIdForToken,
+  mockSetWorkerPrincipalResolver,
+  mockGetLaunchPrincipal,
   mockEnsureReady,
 } = vi.hoisted(() => ({
   mockValidateToken: vi.fn<(token: string) => "core" | "full" | false>(),
@@ -219,6 +221,9 @@ const {
   mockSetPaneTerminalResolver:
     vi.fn<(resolver: ((token: string) => string | null) | null) => void>(),
   mockGetPaneIdForToken: vi.fn<(token: string) => string | null>(),
+  mockSetWorkerPrincipalResolver:
+    vi.fn<(resolver: ((paneId: string) => string | null) | null) => void>(),
+  mockGetLaunchPrincipal: vi.fn<(paneId: string) => string | null>(),
   mockEnsureReady: vi.fn<() => Promise<boolean>>(),
 }));
 
@@ -292,6 +297,8 @@ vi.mock("../../../../services/McpServerService.js", () => ({
       mockSetPaneOwnershipPrincipalResolver(resolver),
     setPaneTerminalResolver: (resolver: ((token: string) => string | null) | null) =>
       mockSetPaneTerminalResolver(resolver),
+    setWorkerPrincipalResolver: (resolver: ((paneId: string) => string | null) | null) =>
+      mockSetWorkerPrincipalResolver(resolver),
     revokePaneBearer: (principal: string) => mockRevokePaneBearer(principal),
   },
 }));
@@ -304,6 +311,7 @@ vi.mock("../../../../services/McpPaneConfigService.js", () => ({
       mockRegisterPaneWorkspaceBinding(token, binding),
     getOwnershipPrincipalForToken: (token: string) => mockGetOwnershipPrincipalForToken(token),
     getPaneIdForToken: (token: string) => mockGetPaneIdForToken(token),
+    getLaunchPrincipal: (paneId: string) => mockGetLaunchPrincipal(paneId),
     setOwnershipPrincipalRevokedListener: (listener: ((principal: string) => void) | null) =>
       mockSetOwnershipPrincipalRevokedListener(listener),
   },
@@ -315,6 +323,13 @@ vi.mock("../../../../services/McpPaneConfigService.js", () => ({
 const { mockResolveSettingTemplate } = vi.hoisted(() => ({
   mockResolveSettingTemplate: vi.fn<(pluginId: string, settingId: string) => Promise<string>>(),
 }));
+const { mockArmWhenDoneLaunch } = vi.hoisted(() => ({
+  mockArmWhenDoneLaunch: vi.fn(() => true),
+}));
+vi.mock("../../../../services/terminalWhenDone/terminalWhenDoneLive.js", () => ({
+  armWhenDoneLaunch: mockArmWhenDoneLaunch,
+}));
+
 vi.mock("../../../../services/PluginService.js", () => ({
   pluginService: {
     resolveSettingTemplate: (pluginId: string, settingId: string) =>
@@ -331,7 +346,21 @@ import { setUserRegistry } from "../../../../../shared/config/agentRegistry.js";
 import { CHANNELS } from "../../../channels.js";
 import { TRASH_TTL_MS } from "../../../../../shared/config/trash.js";
 import { registerTerminalLifecycleHandlers } from "../lifecycle.js";
+import {
+  _resetRelayRemovalLaunchesForTesting,
+  noteRelayRemovalLaunch,
+  takeRelayRemovalLaunch,
+} from "../../../../services/pty/relayRemovalLaunches.js";
 import type { HandlerDependencies } from "../../../types.js";
+import {
+  _resetScheduledRunAdmissionForTest,
+  reserveScheduledLaunch,
+} from "../../../../services/scheduledRuns/scheduledRunAdmission.js";
+import {
+  disposeLifecycleLedger,
+  getLifecycleLedger,
+  ledgerFactsFromSpawnOptions,
+} from "../../../../services/pty/lifecycleLedger.js";
 
 function getSpawnHandler() {
   const calls = (ipcMain.handle as unknown as { mock: { calls: Array<[string, unknown]> } }).mock
@@ -960,6 +989,141 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
     expect(spawnArgs.worktreeId).toBe("wt-123");
   });
 
+  it("forwards a scheduled run's ids to the pty client for the session record (#15977)", async () => {
+    const deps = { ptyClient } as unknown as HandlerDependencies;
+    registerTerminalLifecycleHandlers(deps);
+
+    const handler = getSpawnHandler();
+    const os = await import("os");
+    const run = { scheduleId: "schedule-1", runId: "run-1" };
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      { cwd: os.homedir(), cols: 80, rows: 24, scheduledRun: run } as unknown as Parameters<
+        typeof handler
+      >[1]
+    );
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      { cwd: os.homedir(), cols: 80, rows: 24 } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(ptyClient.spawn.mock.calls[0][1].scheduledRun).toEqual(run);
+    expect(ptyClient.spawn.mock.calls[1][1].scheduledRun).toBeUndefined();
+  });
+
+  describe("a scheduled run's first spawn (#15978)", () => {
+    afterEach(() => {
+      _resetScheduledRunAdmissionForTest();
+    });
+
+    const scheduledSpawn = (cwd: string) => ({
+      id: "terminal-run-1",
+      projectId: "project-1",
+      cwd,
+      cols: 80,
+      rows: 24,
+      launchAgentId: "claude",
+      worktreeId: "wt-123",
+      agentLaunchFlags: ["--model", "opus"],
+      agentModelId: "opus",
+      agentPresetId: "preset-1",
+      agentSessionId: "0b6e3f9c-0d3e-4a55-8a0e-4b6ad8d6e9a1",
+      scheduledRun: { scheduleId: "schedule-1", runId: "run-1" },
+      handbackCode: "k7f3qa",
+    });
+
+    it("registers the run from the values it spawns with, before the PTY starts", async () => {
+      registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+      const handler = getSpawnHandler();
+      const os = await import("os");
+      const admit = vi.fn(() => {
+        expect(ptyClient.spawn).not.toHaveBeenCalled();
+      });
+      const reserved = reserveScheduledLaunch({
+        runId: "run-1",
+        scheduleId: "schedule-1",
+        projectId: "project-1",
+        terminalId: "terminal-run-1",
+        agentId: "claude",
+        admit,
+      });
+
+      await handler({} as Electron.IpcMainInvokeEvent, scheduledSpawn(os.homedir()));
+
+      expect(admit).toHaveBeenCalledWith(
+        {
+          agentId: "claude",
+          agentSessionId: "0b6e3f9c-0d3e-4a55-8a0e-4b6ad8d6e9a1",
+          cwd: os.homedir(),
+          worktreeId: "wt-123",
+          agentLaunchFlags: ["--model", "opus"],
+          agentModelId: "opus",
+          agentPresetId: "preset-1",
+        },
+        "k7f3qa"
+      );
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+      expect(reserved.state()).toEqual({ kind: "registered" });
+      // The launch that registered the run reports for it (#15982).
+      expect(ptyClient.spawn.mock.calls[0]?.[1]).toMatchObject({
+        handbackCode: "k7f3qa",
+        handbackInstruction: "run",
+      });
+
+      // A restart of the run's pane spawns without registering it again, and
+      // whatever code it carries is no report of the run's.
+      await handler({} as Electron.IpcMainInvokeEvent, scheduledSpawn(os.homedir()));
+      expect(admit).toHaveBeenCalledTimes(1);
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+      expect(ptyClient.spawn.mock.calls[1]?.[1]).not.toHaveProperty("handbackInstruction");
+    });
+
+    it("refuses to start a run anywhere but the directory it asked for", async () => {
+      mockRevokePaneConfig.mockResolvedValue(undefined);
+      registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+      const handler = getSpawnHandler();
+      const admit = vi.fn();
+      const reserved = reserveScheduledLaunch({
+        runId: "run-1",
+        scheduleId: "schedule-1",
+        projectId: "project-1",
+        terminalId: "terminal-run-1",
+        agentId: "claude",
+        admit,
+      });
+
+      // The handler would fall back to home from a worktree folder that's gone.
+      await expect(
+        handler({} as Electron.IpcMainInvokeEvent, scheduledSpawn("/nonexistent/path"))
+      ).rejects.toThrow("Failed to spawn terminal: The run's working directory is missing.");
+      expect(admit).not.toHaveBeenCalled();
+      expect(ptyClient.spawn).not.toHaveBeenCalled();
+      expect(reserved.state().kind).toBe("refused");
+    });
+
+    it("fails the spawn when the run's registration refuses it", async () => {
+      mockRevokePaneConfig.mockResolvedValue(undefined);
+      registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+      const handler = getSpawnHandler();
+      const os = await import("os");
+      reserveScheduledLaunch({
+        runId: "run-1",
+        scheduleId: "schedule-1",
+        projectId: "project-1",
+        terminalId: "terminal-run-1",
+        agentId: "claude",
+        admit: () => {
+          throw new Error("The project was going to sleep.");
+        },
+      });
+
+      await expect(
+        handler({} as Electron.IpcMainInvokeEvent, scheduledSpawn(os.homedir()))
+      ).rejects.toThrow("Failed to spawn terminal: The project was going to sleep.");
+      expect(ptyClient.spawn).not.toHaveBeenCalled();
+    });
+  });
+
   it("caches the launch command as postSpawnInput for a wrapper-less shell (#11339)", async () => {
     const deps = { ptyClient } as unknown as HandlerDependencies;
     registerTerminalLifecycleHandlers(deps);
@@ -1098,6 +1262,28 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
       expect(spawnArgs.agentSessionId).toBe(SESSION);
     });
 
+    it("refuses an exact resume whose conversation was never written, spawning and minting nothing (#16019)", async () => {
+      findUntouchedClaudeSessionMock.mockResolvedValueOnce(SESSION);
+
+      await expect(
+        spawnClaude({ shell: "/usr/bin/nu", agentSessionId: SESSION, exactResume: true })
+      ).rejects.toThrow(/no Claude conversation to resume/);
+      expect(ptyClient.spawn).not.toHaveBeenCalled();
+      expect(mockPreparePaneConfig).not.toHaveBeenCalled();
+      expect(claudeStoreMocks.rememberClaudePaneStore).not.toHaveBeenCalled();
+    });
+
+    it("spawns an exact resume whose conversation exists as asked", async () => {
+      const { spawnArgs } = await spawnClaude({
+        shell: "/usr/bin/nu",
+        agentSessionId: SESSION,
+        exactResume: true,
+      });
+
+      expect(spawnArgs.command).toContain(`--resume ${SESSION}`);
+      expect(spawnArgs.command).not.toContain("--session-id");
+    });
+
     it("still spawns the resume when the lookup throws", async () => {
       findUntouchedClaudeSessionMock.mockRejectedValueOnce(new Error("store unreadable"));
 
@@ -1213,6 +1399,137 @@ describe("terminal spawn shell-injection hardening (#6065)", () => {
       expect(spawnArgs.args[1]).toContain("exec '/tmp/o'\\''hare/zsh' -l");
     }
   );
+
+  describe("a Decisions relay update (#16201)", () => {
+    const UPDATE_ID = "daintree-decisions-update-6f1c2c4e";
+    const COMMAND =
+      "npx --yes @daintreehq/decisions-cli@0.3.0 update --url https://r.example.dev --protocol 1";
+
+    async function spawnUpdate(shell: string, id = UPDATE_ID) {
+      registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+      await getSpawnHandler()(
+        {} as Electron.IpcMainInvokeEvent,
+        { id, cols: 80, rows: 24, cwd: "/tmp", shell, command: COMMAND } as unknown as Parameters<
+          ReturnType<typeof getSpawnHandler>
+        >[1]
+      );
+      return ptyClient.spawn.mock.calls[0][1];
+    }
+
+    it.skipIf(process.platform === "win32")(
+      "ends its shell with the CLI, so the pane's exit is the update's",
+      async () => {
+        const spawnArgs = await spawnUpdate("/bin/zsh");
+
+        expect(spawnArgs.args).toEqual(["-lic", `trap : INT\n${COMMAND}\nexit`]);
+        expect(spawnArgs.postSpawnInput).toBeUndefined();
+      }
+    );
+
+    it.skipIf(process.platform === "win32")(
+      "runs under sh when the configured shell can't host the wrapper",
+      async () => {
+        const spawnArgs = await spawnUpdate("/usr/bin/nu");
+
+        expect(spawnArgs.shell).toBe("/bin/sh");
+        expect(spawnArgs.args).toEqual(["-i", "-c", `trap : INT\n${COMMAND}\nexit`]);
+        expect(spawnArgs.postSpawnInput).toBeUndefined();
+      }
+    );
+
+    it.skipIf(process.platform === "win32")(
+      "leaves any other pane's command to its interactive shell",
+      async () => {
+        const spawnArgs = await spawnUpdate("/usr/bin/nu", "daintree-decisions-deploy-6f1c2c4e");
+
+        expect(spawnArgs.postSpawnInput).toBe(`${COMMAND}\r`);
+      }
+    );
+  });
+
+  // Its status is the only word of how the removal went (#16202).
+  describe.skipIf(process.platform === "win32")("a Decisions relay removal", () => {
+    const id = "daintree-decisions-remove-00000000-0000-4000-8000-000000000001";
+    const command =
+      "npx --yes @daintreehq/decisions-cli@0.3.0 remove https://relay.example.workers.dev";
+
+    beforeEach(() => {
+      _resetRelayRemovalLaunchesForTesting();
+    });
+
+    async function spawnRemoval(shell: string, spawnCommand: string | null = command) {
+      const deps = { ptyClient } as unknown as HandlerDependencies;
+      registerTerminalLifecycleHandlers(deps);
+      const handler = getSpawnHandler();
+      return handler(
+        {} as Electron.IpcMainInvokeEvent,
+        {
+          id,
+          cols: 80,
+          rows: 24,
+          cwd: "/tmp",
+          shell,
+          ...(spawnCommand !== null && { command: spawnCommand }),
+        } as unknown as Parameters<typeof handler>[1]
+      );
+    }
+
+    it.each(["/bin/zsh", "/usr/bin/fish"])(
+      "runs the CLI as the PTY's own process, whatever the shell (%s), having said so before the spawn",
+      async (shell) => {
+        let notedAtSpawn = false;
+        ptyClient.spawn.mockImplementation(() => {
+          notedAtSpawn = takeRelayRemovalLaunch(id);
+        });
+
+        await spawnRemoval(shell);
+
+        const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+        expect(spawnArgs.shell).toBe("/usr/bin/env");
+        expect(spawnArgs.args).toEqual(command.split(" "));
+        expect(spawnArgs.postSpawnInput).toBeUndefined();
+        expect(notedAtSpawn).toBe(true);
+        // npm runs the bin through a script shell that reads no startup files, whatever .npmrc says.
+        expect(spawnArgs.env).toMatchObject({
+          npm_config_script_shell: "/bin/sh",
+          NPM_CONFIG_SCRIPT_SHELL: "/bin/sh",
+        });
+      }
+    );
+
+    it("refuses anything but the relay removal under a removal id", async () => {
+      await expect(spawnRemoval("/bin/zsh", "npx --yes some-other-cli remove x")).rejects.toThrow(
+        /runs only the relay removal/
+      );
+
+      expect(ptyClient.spawn).not.toHaveBeenCalled();
+      expect(takeRelayRemovalLaunch(id)).toBe(false);
+    });
+
+    it("opens a restarted removal pane, which carries no command, as a plain shell that spoils the id", async () => {
+      // A removal sent before, whose spawn hadn't been answered yet.
+      noteRelayRemovalLaunch(id);
+      let launchAtSpawn: boolean | null = null;
+      ptyClient.spawn.mockImplementation(() => {
+        launchAtSpawn = takeRelayRemovalLaunch(id);
+      });
+
+      await spawnRemoval("/bin/zsh", null);
+
+      const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+      expect(spawnArgs.shell).not.toBe("/usr/bin/env");
+      expect(spawnArgs.env?.npm_config_script_shell).toBeUndefined();
+      expect(launchAtSpawn).toBe(false);
+    });
+
+    it("never arms a removal sent after a plain shell under the same id", async () => {
+      await spawnRemoval("/bin/zsh", null);
+      await spawnRemoval("/bin/zsh");
+
+      expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+      expect(takeRelayRemovalLaunch(id)).toBe(false);
+    });
+  });
 });
 
 describe("terminal spawn rate limiting (#5352)", () => {
@@ -2613,6 +2930,16 @@ describe("terminal spawn handler - Claude pane launch-workspace binding (#12486)
     expect(mockGetPaneIdForToken).toHaveBeenCalledWith("pane-token");
   });
 
+  it("wires the launch principal a held prompt finds the pane's notice line by (#16187)", async () => {
+    await launchClaude({ sender: { id: 42 }, projectId: "p1" });
+
+    const resolver = mockSetWorkerPrincipalResolver.mock.calls.at(-1)?.[0];
+    expect(resolver).toBeTypeOf("function");
+    mockGetLaunchPrincipal.mockReturnValueOnce("principal-7");
+    expect(resolver!("pane-7")).toBe("principal-7");
+    expect(mockGetLaunchPrincipal).toHaveBeenCalledWith("pane-7");
+  });
+
   it("binds to the pane's own project even when another project is globally current", async () => {
     // The global current project belongs to whichever window switched last —
     // the retargeting this binding removes (#6016).
@@ -2997,6 +3324,18 @@ describe("terminal close handlers - resume journaling", () => {
     expect(record.agentId).toBe("claude");
     expect(record.cwd).toBe("/repo/feature");
     expect(record.branch).toBe("feature/foo");
+    expect(record).not.toHaveProperty("scheduledRun");
+  });
+
+  it("names a scheduled run's ids on the record a kill journals (#15977)", async () => {
+    const run = { scheduleId: "schedule-1", runId: "run-1" };
+    ptyClient.getTerminalAsync.mockResolvedValue({ ...agentInfo, scheduledRun: run });
+    ptyClient.gracefulKill.mockResolvedValue("sess-abc");
+    register();
+
+    await getKillHandler()({}, "term-1");
+
+    expect(persistAgentSessionMock.mock.calls[0][0].scheduledRun).toEqual(run);
   });
 
   it("hard-kills a non-agent terminal without journaling", async () => {
@@ -3184,6 +3523,34 @@ describe("terminal spawn handler - Windows PATH refresh", () => {
     } finally {
       process.env.PATH = savedPath;
     }
+  });
+
+  it("hands a Decisions relay update to the system PowerShell when its shell can't end with it (#16201)", async () => {
+    setPlatform("win32");
+    const handler = spawnHandlerForTest();
+    const command =
+      "npx.cmd --yes @daintreehq/decisions-cli@0.3.0 update --url https://r.example.dev --protocol 1";
+
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        id: "daintree-decisions-update-6f1c2c4e",
+        cols: 80,
+        rows: 24,
+        kind: "terminal",
+        shell: "C:\\Program Files\\Git\\bin\\bash.exe",
+        command,
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+    expect(spawnArgs.shell).toMatch(/powershell\.exe$/i);
+    // The exit form: no -NoExit, so the PTY ends with the CLI's status.
+    expect(spawnArgs.args.slice(0, 2)).toEqual(["-NoLogo", "-EncodedCommand"]);
+    const script = Buffer.from(spawnArgs.args[2], "base64").toString("utf16le");
+    expect(script).toContain(command);
+    expect(script).toContain("if ($LASTEXITCODE) { exit $LASTEXITCODE }");
+    expect(spawnArgs.postSpawnInput).toBeUndefined();
   });
 
   it("Windows agent startup preserves literal argv and the persisted command", async () => {
@@ -3469,5 +3836,139 @@ describe("terminal spawn handler - no host agent ceiling (#14810)", () => {
 
     await expect(agentSpawn("restored", { restore: true })).resolves.toBe("restored");
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("terminal spawn handler - a recipe step's When done (#16172)", () => {
+  let ptyClient: {
+    spawn: ReturnType<typeof vi.fn>;
+    hasTerminal: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    disposeLifecycleLedger();
+    // Records the launch as PtyClient.spawn does, minting the generation.
+    ptyClient = {
+      spawn: vi.fn((id: string, options: Parameters<typeof ledgerFactsFromSpawnOptions>[0]) => {
+        getLifecycleLedger().recordLaunch(id, ledgerFactsFromSpawnOptions(options));
+      }),
+      hasTerminal: vi.fn(() => false),
+      write: vi.fn(),
+    };
+    mockGetCurrentProject.mockReturnValue(null);
+    mockGetProjectById.mockReturnValue(null);
+    mockGetProjectSettings.mockResolvedValue({});
+    mockIsHelpTerminal.mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    disposeLifecycleLedger();
+    _resetScheduledRunAdmissionForTest();
+  });
+
+  const recipeSpawn = async (overrides: Record<string, unknown> = {}) => {
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+    const handler = getSpawnHandler();
+    const os = await import("os");
+    return handler({} as Electron.IpcMainInvokeEvent, {
+      id: "terminal-review",
+      projectId: "project-1",
+      cwd: os.homedir(),
+      cols: 80,
+      rows: 24,
+      launchAgentId: "claude",
+      command: "claude 'Review'",
+      handbackCode: "k7f3qa",
+      whenDone: "close",
+      ...overrides,
+    });
+  };
+
+  it("arms a fresh agent launch with its code, after the spawn the host reports for", async () => {
+    await recipeSpawn();
+
+    expect(ptyClient.spawn.mock.calls[0]?.[1]).toMatchObject({
+      handbackCode: "k7f3qa",
+      handbackInstruction: "run",
+    });
+    expect(mockArmWhenDoneLaunch).toHaveBeenCalledWith({
+      terminalId: "terminal-review",
+      projectId: "project-1",
+      launchGeneration: getLifecycleLedger().currentGeneration("terminal-review"),
+      choice: "close",
+      code: "k7f3qa",
+    });
+  });
+
+  it("never arms a respawn under an id that already ran, as a restart is", async () => {
+    await recipeSpawn();
+    mockArmWhenDoneLaunch.mockClear();
+
+    await recipeSpawn();
+
+    expect(mockArmWhenDoneLaunch).not.toHaveBeenCalled();
+    expect(ptyClient.spawn.mock.calls[1]?.[1]).not.toHaveProperty("handbackInstruction");
+  });
+
+  it("arms the choice it was given", async () => {
+    await recipeSpawn({ whenDone: "background" });
+
+    expect(mockArmWhenDoneLaunch).toHaveBeenCalledWith(
+      expect.objectContaining({ choice: "background" })
+    );
+  });
+
+  it("never arms a restore, a launch with no code, a shell, or an agent with no command", async () => {
+    await recipeSpawn({ id: "restored", restore: true });
+    await recipeSpawn({ id: "no-code", handbackCode: undefined });
+    await recipeSpawn({ id: "shell", launchAgentId: undefined });
+    await recipeSpawn({ id: "bare-agent", command: "" });
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(4);
+    expect(mockArmWhenDoneLaunch).not.toHaveBeenCalled();
+    for (const call of ptyClient.spawn.mock.calls) {
+      expect(call[1]).not.toHaveProperty("handbackInstruction");
+    }
+  });
+
+  it("leaves a scheduled run's launch to its own done policy", async () => {
+    const reserved = reserveScheduledLaunch({
+      runId: "run-1",
+      scheduleId: "schedule-1",
+      projectId: "project-1",
+      terminalId: "terminal-review",
+      agentId: "claude",
+      admit: vi.fn(),
+    });
+
+    await recipeSpawn({ scheduledRun: { scheduleId: "schedule-1", runId: "run-1" } });
+
+    expect(reserved.state()).toEqual({ kind: "registered" });
+    expect(mockArmWhenDoneLaunch).not.toHaveBeenCalled();
+    // The run's own report still goes out for its code.
+    expect(ptyClient.spawn.mock.calls[0]?.[1]).toMatchObject({ handbackInstruction: "run" });
+  });
+
+  it("never arms the Assistant's own terminal", async () => {
+    mockIsHelpTerminal.mockReturnValue(true);
+
+    await recipeSpawn();
+
+    expect(mockArmWhenDoneLaunch).not.toHaveBeenCalled();
+  });
+
+  it("arms nothing when PtyClient refuses the spawn before sending it", async () => {
+    ptyClient.spawn.mockImplementation(() => {});
+
+    await recipeSpawn();
+
+    expect(mockArmWhenDoneLaunch).not.toHaveBeenCalled();
+  });
+
+  it("refuses a value other than background or close", async () => {
+    await expect(recipeSpawn({ whenDone: "keep" })).rejects.toThrow(/validation/i);
+    expect(ptyClient.spawn).not.toHaveBeenCalled();
   });
 });

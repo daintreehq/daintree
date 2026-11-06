@@ -1,4 +1,4 @@
-import { BRANCH_TYPE_COLOR_CLASSES } from "../theme/index.js";
+import { BRANCH_TYPE_COLOR_CLASSES } from "../theme/entityColors.js";
 
 export interface BranchTypeColors {
   bg: string;

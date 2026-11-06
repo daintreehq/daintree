@@ -6,7 +6,10 @@ import type { HelpAssistantTier, McpTier, DispatchEnvelope } from "./shared.js";
 import type { McpWorkspaceBinding } from "./shared.js";
 import type { OwnPane, TerminalNotifyHandlers } from "./terminalNotify.js";
 import type { ReplyWaiterService } from "./replyWaiter.js";
-import type { CodexQuotaResult } from "../../../shared/types/ipc/agentQuota.js";
+import type {
+  ClaudeUsageObservation,
+  CodexQuotaResult,
+} from "../../../shared/types/ipc/agentQuota.js";
 import type { HostControlAccess } from "./hostControlTools.js";
 import type {
   AssistantCaller,
@@ -220,6 +223,47 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     terminalId: string
   ) => Promise<import("../../../shared/types/panelClose.js").ClosedPanelProcess>;
   /**
+   * Wait, bounded, for the processes of panels the caller closed to exit
+   * (#15728), optionally ending their trash grace first. The caller has
+   * already checked each target against what it closed. Absent,
+   * `terminal.waitForExit` refuses: nothing here can observe an exit.
+   */
+  /**
+   * The incarnation running under a terminal id as far as main can tell, or
+   * after its exit the one main saw exit (#15728). Read for each close, so the
+   * wait after it asks about the process that close reached. Absent, closes
+   * are noted with no incarnation, and their waits never match a kept exit.
+   */
+  terminalGenerationOf?: (terminalId: string) => number | undefined;
+  /**
+   * Every terminal id main tracks, read before `terminal.closeAll` (which
+   * names none) so its closes are noted with the incarnation each reached.
+   */
+  trackedTerminalIds?: () => readonly string[];
+  waitForClosedPanelExits?: (
+    targets: readonly import("./closedPanelExits.js").ClosedPanelExitTarget[],
+    options: import("./closedPanelExits.js").ClosedPanelExitWaitOptions
+  ) => Promise<import("../../../shared/types/terminalExitWait.js").TerminalWaitForExitResult>;
+  /**
+   * Every terminal record the pty-host holds, trashed ones included, read
+   * before `worktree.deleteOwned` runs (#15729). Rejects when the host or any
+   * of its shards cannot answer. Absent, every owned worktree delete is
+   * refused: no reader is no evidence that nothing runs there.
+   */
+  readTerminalProcesses?: () => Promise<
+    readonly import("./worktreeProcessGuard.js").TerminalProcessRecord[]
+  >;
+  /**
+   * What git reports of a worktree about to be retired (#15737): its status
+   * and how many of its commits no remote-tracking ref holds. Rejects on any
+   * failure. Absent, every retirement is refused: no reader is no evidence
+   * that the worktree is clean.
+   */
+  readWorktreeGit?: (
+    worktreePath: string,
+    signal: AbortSignal
+  ) => Promise<import("./worktreeRetirementGit.js").WorktreeGitObservation>;
+  /**
    * Whether a terminal belongs to the workspace of this session's pinned view,
    * re-resolved on every call (#12883). What admits Daintree's own assistant to
    * `terminal.readLastMessageOwned` for a pane it did not create: it already
@@ -234,6 +278,14 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    * not-eligible.
    */
   terminalNotify?: TerminalNotifyHandlers;
+  /**
+   * The global Assistant's prompts held for busy workers (#16187), for a
+   * status read and a cancel. Absent, neither finds any.
+   */
+  workerSteerQueue?: Pick<
+    import("../assistants/WorkerSteerQueue.js").WorkerSteerQueue,
+    "status" | "cancel"
+  >;
   /**
    * The assistant's reach to this Shell's hosts (#13493), bound to this
    * session's help-session bearer. Absent for every other bearer; then
@@ -264,14 +316,17 @@ export interface SessionServerDeps extends OwnedMainExecutors {
   /**
    * The global Assistant's steer of a worker it didn't launch (#14551), set
    * only for a session relayed for one: a prompt, keys or an interrupt, each
-   * held to the run it names and the person at it. Absent, nothing widens.
+   * held to the run it names and the person at it, and a reveal of its panel
+   * held to the same run (#16096). Absent, nothing widens.
    */
   globalSteer?: Pick<
     import("../assistants/GlobalWorkerSteer.js").GlobalWorkerSteer,
-    "prompt" | "keys" | "interrupt"
+    "prompt" | "keys" | "interrupt" | "reveal"
   >;
   /** This machine's Codex quota, as `agent.readQuota` reports it. */
   readCodexQuota?: () => Promise<CodexQuotaResult>;
+  /** The Claude Code usage messages this machine's panes showed, latest per limit (#15727). */
+  readClaudeUsage?: () => ClaudeUsageObservation[];
   /** Blocking replies for `waitForReply`. Optional; absent, the flag is ignored. */
   replyWaiter?: Pick<ReplyWaiterService, "wait">;
   /**

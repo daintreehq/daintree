@@ -242,6 +242,13 @@ const GLOBAL_TABS: Record<GlobalSettingsTab, TabExpectation> = {
       });
     },
   },
+  decisions: {
+    content: async (window) => {
+      await expect(window.getByRole("switch", { name: "Enable Decisions" })).toBeVisible({
+        timeout: T_SHORT,
+      });
+    },
+  },
   portal: { title: "Portal links" },
   mcp: {
     content: async (window) => {
@@ -297,7 +304,14 @@ const PROJECT_TABS: Record<ProjectSettingsTab, TabExpectation> = {
     },
   },
   "project:recipes": {},
-  "project:commands": {},
+  "project:schedules": {
+    // A fresh project has no schedules, so the tab offers the first one.
+    content: async (_window, panel) => {
+      await expect(panel.getByRole("button", { name: "Add schedule" })).toBeVisible({
+        timeout: T_SHORT,
+      });
+    },
+  },
   "project:notifications": {},
   "project:code-forge": {},
   "project:plugins": {},
@@ -393,7 +407,9 @@ test.describe("Core: Settings", () => {
 
       await expect(window.locator(SEL.toolbar.toggleSidebar)).toBeVisible({ timeout: T_MEDIUM });
       await expectToolbarButtonReachable(window, SEL.toolbar.openSettings, T_SHORT);
-      await expect(window.getByRole("button", { name: "Open project", exact: true })).toBeVisible({
+      await expect(
+        window.getByRole("button", { name: /^Open project\b/, exact: true })
+      ).toBeVisible({
         timeout: T_MEDIUM,
       });
     });
@@ -597,11 +613,13 @@ test.describe("Core: Settings", () => {
       expect(await options.count()).toBeGreaterThanOrEqual(2);
 
       const agentOption = options.nth(1);
-      const agentName = ((await agentOption.textContent()) ?? "").trim();
+      // Health marks belong to the menu row, not the selected agent's name.
+      const agentName = (await agentOption.locator(":scope > span.truncate").innerText()).trim();
       expect(agentName).not.toBe("");
       await agentOption.click();
       await expect(listbox).not.toBeVisible({ timeout: T_SHORT });
       await expect(trigger).toContainText(agentName, { timeout: T_SHORT });
+      await expect(trigger).toHaveAttribute("aria-label", `Switch agent, current: ${agentName}`);
 
       await trigger.click();
       await expect(listbox).toBeVisible({ timeout: T_SHORT });

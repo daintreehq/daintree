@@ -4,10 +4,12 @@ import { TerminalAgentStateController } from "../TerminalAgentStateController";
 import type { ManagedTerminal, PostCompleteHook } from "../types";
 
 const mockUpdateAgentState = vi.fn();
+const mockPanelsById: Record<string, unknown> = {};
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: {
     getState: () => ({
       updateAgentState: mockUpdateAgentState,
+      panelsById: mockPanelsById,
     }),
   },
 }));
@@ -38,6 +40,7 @@ describe("TerminalAgentStateController", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     mockUpdateAgentState.mockClear();
+    for (const key of Object.keys(mockPanelsById)) delete mockPanelsById[key];
     instances = new Map();
     controller = new TerminalAgentStateController({
       getInstance: (id) => instances.get(id),
@@ -1205,5 +1208,88 @@ describe("TerminalAgentStateController — postCompleteHook", () => {
     controller.setAgentState("t1", "waiting");
 
     expect(hook).toHaveBeenCalledWith("");
+  });
+
+  describe("unconfirmed optimistic working", () => {
+    const panel = (overrides: Record<string, unknown>) => ({
+      id: "t1",
+      kind: "terminal",
+      agentState: "working",
+      lastAgentObservation: { agentState: "waiting", at: 1 },
+      ...overrides,
+    });
+
+    function pressEnterOnWaiting(): ManagedTerminal {
+      const managed = makeMockManaged({ agentState: "waiting", canonicalAgentState: "waiting" });
+      instances.set("t1", managed);
+      mockPanelsById.t1 = panel({ agentState: "waiting", waitingReason: "prompt" });
+      controller.onEnterPressed("t1");
+      expect(managed.agentState).toBe("working");
+      // The store's write echoes back through TerminalPane, as it does live.
+      mockPanelsById.t1 = panel({});
+      controller.setAgentState("t1", "working");
+      mockUpdateAgentState.mockClear();
+      return managed;
+    }
+
+    it("returns to the observed state when the host never reports the submission", () => {
+      const managed = pressEnterOnWaiting();
+      vi.advanceTimersByTime(5000);
+
+      expect(managed.agentState).toBe("waiting");
+      expect(managed.canonicalAgentState).toBe("waiting");
+      expect(mockUpdateAgentState).toHaveBeenCalledWith(
+        "t1",
+        "waiting",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        "prompt"
+      );
+    });
+
+    it("keeps working once the host has observed it", () => {
+      const managed = pressEnterOnWaiting();
+      mockPanelsById.t1 = panel({ lastAgentObservation: { agentState: "working", at: 2 } });
+      vi.advanceTimersByTime(5000);
+
+      expect(managed.agentState).toBe("working");
+      expect(mockUpdateAgentState).not.toHaveBeenCalled();
+    });
+
+    it("leaves a pane alone that has already moved on", () => {
+      const managed = pressEnterOnWaiting();
+      mockPanelsById.t1 = panel({ agentState: "idle" });
+      managed.agentState = "idle";
+      vi.advanceTimersByTime(5000);
+
+      expect(managed.agentState).toBe("idle");
+      expect(mockUpdateAgentState).not.toHaveBeenCalled();
+    });
+
+    it("returns to waiting for a pane the host has never reported on", () => {
+      const managed = pressEnterOnWaiting();
+      mockPanelsById.t1 = panel({ lastAgentObservation: undefined });
+      vi.advanceTimersByTime(5000);
+
+      expect(managed.agentState).toBe("waiting");
+      expect(mockUpdateAgentState).toHaveBeenCalledTimes(1);
+    });
+
+    it("tells subscribers about the revert", () => {
+      const managed = pressEnterOnWaiting();
+      const subscriber = vi.fn();
+      managed.agentStateSubscribers.add(subscriber);
+      vi.advanceTimersByTime(5000);
+
+      expect(subscriber).toHaveBeenCalledWith("waiting");
+    });
+
+    it("does not revert before the confirm window closes", () => {
+      const managed = pressEnterOnWaiting();
+      vi.advanceTimersByTime(4999);
+      expect(managed.agentState).toBe("working");
+    });
   });
 });

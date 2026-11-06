@@ -40,7 +40,14 @@ vi.mock("@/components/ui/AppDialog", () => {
 });
 
 vi.mock("../DiffViewer", () => ({
-  DiffViewer: ({ diff }: { diff: string }) => <div data-testid="diff-viewer">{diff}</div>,
+  DiffFilePath: ({ path }: { path: string }) => <span>{path}</span>,
+  // The comparison controls ride in the viewer's file header.
+  DiffViewer: ({ diff, headerActions }: { diff: string; headerActions?: ReactNode }) => (
+    <div>
+      {headerActions}
+      <div data-testid="diff-viewer">{diff}</div>
+    </div>
+  ),
 }));
 
 const mockCompareWorktrees = vi.fn();
@@ -156,8 +163,9 @@ describe("CrossWorktreeDiff file shelf", () => {
     await waitFor(() => expect(fileRows()).toHaveLength(COLLIDING.length));
     const drawn = fileRows().map((row) => row.dataset.filePath);
     const visited: (string | undefined)[] = [];
+    // The first file opens on its own; `]` walks the rest.
     for (let i = 0; i < drawn.length; i++) {
-      fireEvent.keyDown(window, { key: "]" });
+      if (i > 0) fireEvent.keyDown(window, { key: "]" });
       await waitFor(() =>
         expect(screen.getByTestId("cross-worktree-file-position").textContent).toBe(
           `${i + 1} of ${drawn.length}`

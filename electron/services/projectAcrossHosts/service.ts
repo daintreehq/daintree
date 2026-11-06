@@ -67,6 +67,7 @@ import {
   scanRoots,
   type RemoteLister,
 } from "./matcher.js";
+import { RemoteReadCache } from "./remoteReadCache.js";
 import type { ProjectAcrossHostsDeps } from "./types.js";
 
 const BRANCH_FETCH_TIMEOUT_MS = 15_000;
@@ -179,6 +180,8 @@ export interface PlacementAuthority {
    * the saved worktree, in a project another window holds.
    */
   beforeAnyChange?: boolean;
+  /** Told of a change made without placing anything: focusing a worktree the project has. */
+  noteChange?(projectId: string): void;
 }
 
 /**
@@ -188,8 +191,13 @@ export interface PlacementAuthority {
  * can be driving it.
  */
 export function localPlacementAuthority(
-  lease: { getHolder(projectId: string): DriveLeaseHolder | null } | null
+  lease: {
+    getHolder(projectId: string): DriveLeaseHolder | null;
+    noteSessionChange(projectId: string, linkSessionId: string | null): void;
+  } | null
 ): PlacementAuthority {
+  // Placing or focusing a worktree changes the project's saved active worktree.
+  const noteChange = (projectId: string) => lease?.noteSessionChange(projectId, null);
   return {
     assertMayPlace(projectId) {
       const holder = lease?.getHolder(projectId) ?? null;
@@ -201,7 +209,9 @@ export function localPlacementAuthority(
           context: { projectId },
         });
       }
+      noteChange(projectId);
     },
+    noteChange,
   };
 }
 
@@ -221,11 +231,20 @@ export class ProjectAcrossHostsService {
    */
   private readonly reservedDestinations = new Set<string>();
 
+  /**
+   * Remotes for `identify` and `find`, which every presence check and bare
+   * host switch repeats. Everything that creates or changes something from
+   * what it reads (a clone, a worktree, a push) reads fresh.
+   */
+  private readonly lookupRemotes: RemoteReadCache;
+
   constructor(
     private readonly deps: ProjectAcrossHostsDeps,
     private readonly listRemotes: RemoteLister = listRegisteredRemotes
   ) {
-    this.bundles = new BundleStore(() => deps.bundleDir(), deps.now ?? (() => Date.now()));
+    const now = deps.now ?? (() => Date.now());
+    this.bundles = new BundleStore(() => deps.bundleDir(), now);
+    this.lookupRemotes = new RemoteReadCache(listRemotes, { now });
   }
 
   private requireProject(projectId: unknown): Project {
@@ -365,7 +384,7 @@ export class ProjectAcrossHostsService {
   async identify(payload: IdentifyProjectPayload): Promise<ProjectIdentity> {
     const project = this.requireProject(payload?.projectId);
     const remotes = stripRemoteListCredentials(
-      await this.listRemotes(project.path).catch(() => [])
+      await this.lookupRemotes.read(project.path).catch(() => [])
     );
     const git = await this.deps.git.local(project.path);
     const tracked = await tryRaw(git, ["ls-files", "--", ".daintree/project.json"]);
@@ -585,6 +604,13 @@ export class ProjectAcrossHostsService {
   }
 
   find(payload: FindProjectMatchPayload): Promise<ProjectMatchCandidate[]> {
+    return this.findRegistered(payload, this.lookupRemotes.read);
+  }
+
+  private findRegistered(
+    payload: FindProjectMatchPayload,
+    listRemotes: RemoteLister
+  ): Promise<ProjectMatchCandidate[]> {
     return findRegisteredMatches(
       {
         remoteUrls: Array.isArray(payload?.remoteUrls) ? payload.remoteUrls : [],
@@ -592,7 +618,7 @@ export class ProjectAcrossHostsService {
           typeof payload?.committedProjectId === "string" ? payload.committedProjectId : null,
       },
       this.deps,
-      this.listRemotes
+      listRemotes
     );
   }
 
@@ -608,7 +634,8 @@ export class ProjectAcrossHostsService {
    * clone that is the same repository by its remotes).
    */
   async match(payload: FindProjectMatchPayload): Promise<ProjectMatchCandidate[]> {
-    const registered = await this.find(payload);
+    // A switch or an ensure clones or adds a worktree from this: read fresh, unlike a presence `find`.
+    const registered = await this.findRegistered(payload, this.listRemotes);
     if (registered.some((c) => c.matchedBy === "remote-url")) return registered;
     return [...registered, ...(await this.scan({ remoteUrls: payload.remoteUrls }))];
   }
@@ -1119,6 +1146,7 @@ export class ProjectAcrossHostsService {
     requireBranchName(target.remoteBranch, "remote branch");
     const existing = findWorktreeForBranch(await this.worktreePorcelain(project.path), target.name);
     if (existing) {
+      authority?.noteChange?.(project.id);
       await this.deps.focusWorktree(project.id, existing).catch(() => {});
       return { ...base, worktreePath: existing, canCheckOutBranch: false, branchNote: null };
     }

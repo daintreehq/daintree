@@ -8,6 +8,7 @@ import { readAgentToolbarPinsSnapshot } from "./agentToolbarPins.js";
 import { projectStore } from "./ProjectStore.js";
 import { applyHostEndHold, holdTerminalsForHostEnds } from "./hostEndRestoreHold.js";
 import { filterRestorableTerminalSnapshots } from "./projectStateRestore.js";
+import { invalidatePrefetchCache } from "./prefetchHydrateCache.js";
 import {
   getGpuFeatureStatus,
   getWebGLFeatureStatus,
@@ -85,8 +86,14 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
   // The one write this path makes, and only once after an unclean end: a switch
   // restores straight from this payload, so it must already carry the holds.
   const hostEnds = await applyHostEndHold(projectId);
-  const { state: projectState, quarantinedPath: projectStateQuarantinedPath } =
-    await projectStore.getProjectStateWithRecovery(projectId);
+  const {
+    state: projectState,
+    quarantinedPath: projectStateQuarantinedPath,
+    unreadableInPlace,
+  } = await projectStore.getProjectStateWithRecovery(projectId);
+  // The empty payload stands in for a file that is still there, so a prefetch
+  // must not keep serving it after a later read can use that file.
+  if (unreadableInPlace) invalidatePrefetchCache(projectId);
 
   // undefined means "not migrated yet" — fall through to the global list.
   if (projectState?.mruList !== undefined) {

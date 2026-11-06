@@ -132,6 +132,27 @@ describe("AssistantPicker", () => {
     );
   });
 
+  // No Canopy reading ever covers an assistant, so an approval or question the
+  // patterns saw is at most unread, never the amber waiting mark (#16059).
+  it("never draws an observed approval or question in the waiting hue", async () => {
+    directory.entries = [
+      assistant(0, { waitingReason: "approval" }),
+      assistant(1, { waitingReason: "question" }),
+    ];
+    render(<AssistantPicker open onClose={() => {}} />);
+    await flush();
+    expect(options().map((option) => option.getAttribute("data-ask"))).toEqual([
+      "approval",
+      "question",
+    ]);
+    for (const option of options()) {
+      expect(option.querySelector('[class*="text-state-waiting"]')).toBeNull();
+      // The state glyph alone: the unread mark, in the tone a review wears.
+      const glyph = option.querySelector('[aria-hidden="true"]')?.firstElementChild;
+      expect(glyph?.getAttribute("class")).toContain("text-text-primary");
+    }
+  });
+
   it("marks a handback seen once the assistant it came from is opened", async () => {
     directory.entries = [assistant(0, { handback: { observedAt: 50 } })];
     render(<AssistantPicker open onClose={() => {}} />);

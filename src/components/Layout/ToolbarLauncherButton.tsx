@@ -6,6 +6,7 @@ import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/component
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
+import { toolbarIconButtonClass } from "./toolbarItemClasses";
 
 type LauncherType = "terminal" | "browser";
 
@@ -31,8 +32,6 @@ const LAUNCHER_CONFIG: Record<
     keybindingAction: "agent.browser",
   },
 };
-
-const toolbarIconButtonClass = "toolbar-icon-button text-text-primary relative";
 
 interface ToolbarLauncherButtonProps {
   type: LauncherType;

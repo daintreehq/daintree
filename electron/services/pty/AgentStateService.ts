@@ -22,6 +22,7 @@ import {
   rawHandbackText,
   type HandbackHit,
 } from "./HandbackDetector.js";
+import { reportRunHandback } from "./runHandback.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalCheckResult } from "../../../shared/types/checkResult.js";
 
@@ -78,6 +79,42 @@ function isOppositeDirectionTransition(from: AgentState, to: AgentState): boolea
 // strand the UI on "working" after the agent has already terminated.
 function isLifecycleEvent(event: AgentEvent): boolean {
   return event.type === "exit" || event.type === "kill" || event.type === "respawn";
+}
+
+/**
+ * How long the screen must have kept changing after a usage-limit banner, in
+ * the turn that settles, before the pane counts as working again (#16136).
+ * Canopy's turn hold, for the same reason: a local command such as `/usage`
+ * on a spent account draws once and stops, however long the monitor takes to
+ * call the turn over, and is no sign the account took a turn.
+ */
+export const USAGE_LIMIT_WORK_HOLD_MS = 3_000;
+
+/**
+ * Whether a pane that showed a usage-limit banner has worked since (#16136),
+ * read at each settle out of `working`. A settle on an error is how the
+ * classifier reads a limit banner in the transcript: the user's "continue" on
+ * a spent account hits it again, often with the old banner still in view. Any
+ * other settle clears the memory once the visible content (spinners and
+ * tickers aside, `lastOutputChangeAt`) went on changing past the hold after
+ * both the turn's start and the banner, so a limit retried and lifted within
+ * one turn counts too. An exit, or a new session in the pane, runs on the
+ * same account and keeps it.
+ */
+function noteUsageLimitProgress(
+  terminal: TerminalInfo,
+  previousState: AgentState,
+  workingSince: number | undefined,
+  newState: AgentState
+): void {
+  const observedAt = terminal.usageLimitObservedAt;
+  if (observedAt === undefined || previousState !== "working") return;
+  if (newState === "working" || newState === "exited") return;
+  if (newState === "waiting" && terminal.waitingReason === "error") return;
+  const workedFrom = Math.max(workingSince ?? observedAt, observedAt);
+  const changedAt = terminal.lastOutputChangeAt;
+  if (changedAt === undefined || changedAt - workedFrom < USAGE_LIMIT_WORK_HOLD_MS) return;
+  terminal.usageLimitObservedAt = undefined;
 }
 
 // Backend-side identity used when routing agent-state events (who is this
@@ -252,6 +289,7 @@ export class AgentStateService {
     const effectiveAgentId = terminal.detectedAgentId ?? terminal.launchAgentId;
 
     const previousState = terminal.agentState || "idle";
+    const previousStateChange = terminal.lastStateChange;
     const newState = nextAgentState(previousState, event);
 
     if (newState === previousState) {
@@ -425,6 +463,9 @@ export class AgentStateService {
       if (handbackHit) {
         terminal.lastHandback = handbackHit.handback;
         terminal.handbackTracker?.retire(handbackHit.code);
+        // The settle retires the code, so its capture is a scheduled run's
+        // report (#15982), whether or not the output check saw it first.
+        reportRunHandback(terminal, handbackHit, timestamp);
       }
       if (newState !== "working") terminal.lastHandbackUnpublished = false;
       if (event.type === "exit" || event.type === "kill") {
@@ -450,9 +491,71 @@ export class AgentStateService {
       terminal.waitingReason = undefined;
     }
 
+    noteUsageLimitProgress(terminal, previousState, previousStateChange, newState);
+
     events.emit("agent:state-changed", validatedStateChange.data);
     this.emitTerminalActivity(terminal);
 
+    return true;
+  }
+
+  /**
+   * A waiting agent's reason re-read off its settled screen while it stayed
+   * idle (#16093). The FSM drops a same-state event before it looks at the
+   * reason, so this is its own path: no transition, published as a
+   * `waiting → waiting` change carrying the new reason. The monitor sends one
+   * only for a screen showing the agent's input row empty, so `observedAt` is
+   * a settle at the prompt like any other, and the send gate measures typing
+   * from it; input that landed after it still holds a send. The exception is
+   * an `approval`, sent with a dialog in that row's place (#16209), at which
+   * no send is admitted. Refused unless the
+   * agent is waiting, the reason differs, and nothing has settled it since.
+   */
+  updateWaitingReason(
+    terminal: TerminalInfo,
+    waitingReason: WaitingReason,
+    observedAt: number
+  ): boolean {
+    if (terminal.agentState !== "waiting" || terminal.waitingReason === waitingReason) {
+      return false;
+    }
+    if (terminal.lastStateChange !== undefined && observedAt <= terminal.lastStateChange) {
+      return false;
+    }
+
+    const confidence = this.normalizeConfidence(0.9);
+    const payload = {
+      agentId: terminal.detectedAgentId ?? terminal.launchAgentId,
+      state: "waiting" as const,
+      previousState: "waiting" as const,
+      timestamp: observedAt,
+      agentIncarnation: terminal.agentIncarnation ?? 0,
+      traceId: terminal.traceId,
+      terminalId: terminal.id,
+      cwd: terminal.cwd,
+      trigger: "heuristic" as const,
+      confidence,
+      waitingReason,
+    };
+    const validated = AgentStateChangedSchema.safeParse(payload);
+    if (!validated.success) {
+      this.emitTransitionDropped(terminal, {
+        outcome: "schema-invalid",
+        currentState: "waiting",
+        attemptedState: "waiting",
+        trigger: "heuristic",
+        confidence,
+        cwd: terminal.cwd,
+        reason: "waiting-reason update failed Zod validation",
+        validationErrors: z.prettifyError(validated.error).split("\n"),
+      });
+      return false;
+    }
+
+    terminal.waitingReason = waitingReason;
+    terminal.lastStateChange = observedAt;
+    events.emit("agent:state-changed", validated.data);
+    this.emitTerminalActivity(terminal);
     return true;
   }
 
@@ -634,6 +737,7 @@ export class AgentStateService {
       sessionCost?: number;
       sessionTokens?: number;
       temperature?: AgentActivityObservationResult;
+      rereadAt?: number;
     }
   ): void {
     // The ActivityMonitor emits a synthetic `idle` observation with
@@ -655,6 +759,13 @@ export class AgentStateService {
         currentState: terminal.agentState || "idle",
         reason: "dispose observation suppressed at teardown",
       });
+      return;
+    }
+
+    if (metadata?.rereadAt !== undefined) {
+      if (activity === "idle" && metadata.waitingReason !== undefined) {
+        this.updateWaitingReason(terminal, metadata.waitingReason, metadata.rereadAt);
+      }
       return;
     }
 

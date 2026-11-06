@@ -81,6 +81,7 @@ export const memoryProjectStore = {
     harnessState.currentProjectId = null;
   },
   getAllProjects: () => [...harnessState.projects.values()],
+  onProjectRegistryChanged: () => () => undefined,
   getProjectSummaries: () => [...harnessState.projects.values()],
   getAllProjectIdentities: () =>
     [...harnessState.projects.values()].map(({ id, path, name }) => ({ id, path, name })),

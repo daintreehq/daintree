@@ -55,7 +55,13 @@ vi.mock("@/services/terminal/TerminalInstanceService", () => {
     createTerminalPaintPlane: () => terminalInstanceService,
   };
 });
-vi.mock("@/clients", () => ({ terminalClient: terminalClientMock }));
+const agentSettingsClientMock = vi.hoisted(() => ({
+  get: vi.fn().mockResolvedValue({ agents: {} }),
+}));
+vi.mock("@/clients", () => ({
+  terminalClient: terminalClientMock,
+  agentSettingsClient: agentSettingsClientMock,
+}));
 vi.mock("@/store/viewWorkspaceId", () => viewWorkspaceIdMock);
 vi.mock("@/lib/watchNotification", () => ({
   fireWatchNotification: fireWatchNotificationMock,
@@ -470,6 +476,7 @@ function setRichPanelState(options: { focusedId?: string | null; panels: AgentPa
   const removePanel = vi.fn();
   const restartTerminal = vi.fn();
   const restartTerminalOnPreset = vi.fn().mockResolvedValue({ success: true });
+  const restartTerminalOnAccount = vi.fn().mockResolvedValue({ success: true });
   const bulkRestartAll = vi.fn().mockResolvedValue(undefined);
   const bulkRestartByWorktree = vi.fn().mockResolvedValue(undefined);
   panelStoreMock.getState.mockImplementation(() => ({
@@ -479,10 +486,17 @@ function setRichPanelState(options: { focusedId?: string | null; panels: AgentPa
     removePanel,
     restartTerminal,
     restartTerminalOnPreset,
+    restartTerminalOnAccount,
     bulkRestartAll,
     bulkRestartByWorktree,
   }));
-  return { removePanel, restartTerminal, restartTerminalOnPreset, bulkRestartAll };
+  return {
+    removePanel,
+    restartTerminal,
+    restartTerminalOnPreset,
+    restartTerminalOnAccount,
+    bulkRestartAll,
+  };
 }
 
 describe("terminal.kill confirm gate", () => {
@@ -897,6 +911,170 @@ describe("terminal.killBatch", () => {
   });
 });
 
+describe("terminal.restartOnAccount (#16040)", () => {
+  const COMPANY = { id: "company", name: "Company", configDir: "/Users/me/.codex-company" };
+
+  it("refuses without confirmation, like a preset switch", async () => {
+    const { restartTerminalOnAccount } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", kind: "terminal", location: "grid", launchAgentId: "codex" }],
+    });
+    const run = setupActions();
+
+    await expect(
+      run("terminal.restartOnAccount", { terminalId: "p1", accountId: "company" })
+    ).rejects.toThrow(/confirmed/);
+    expect(restartTerminalOnAccount).not.toHaveBeenCalled();
+  });
+
+  it("restarts on the saved account's folder, named by the agent's own variable", async () => {
+    agentSettingsClientMock.get.mockResolvedValueOnce({
+      agents: { codex: { accounts: [COMPANY] } },
+    });
+    const { restartTerminalOnAccount } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", kind: "terminal", location: "grid", launchAgentId: "codex" }],
+    });
+    const run = setupActions();
+
+    await run("terminal.restartOnAccount", {
+      terminalId: "p1",
+      accountId: "company",
+      confirmed: true,
+    });
+
+    expect(restartTerminalOnAccount).toHaveBeenCalledWith(
+      "p1",
+      { id: "company", envVar: "CODEX_HOME", configDir: COMPANY.configDir },
+      { keepConversation: false }
+    );
+  });
+
+  it("moves to the default login for a null account", async () => {
+    const { restartTerminalOnAccount } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", kind: "terminal", location: "grid", launchAgentId: "codex" }],
+    });
+    const run = setupActions();
+
+    await run("terminal.restartOnAccount", { terminalId: "p1", accountId: null, confirmed: true });
+
+    expect(restartTerminalOnAccount).toHaveBeenCalledWith("p1", null, { keepConversation: false });
+  });
+
+  it("asks for the conversation when told to keep it, and says it wasn't cleared (#16135)", async () => {
+    agentSettingsClientMock.get.mockResolvedValueOnce({
+      agents: { codex: { accounts: [COMPANY] } },
+    });
+    const { restartTerminalOnAccount } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", kind: "terminal", location: "grid", launchAgentId: "codex" }],
+    });
+    restartTerminalOnAccount.mockResolvedValue({ success: true, resumedSessionId: "thread-1" });
+    const run = setupActions();
+
+    const result = await run("terminal.restartOnAccount", {
+      terminalId: "p1",
+      accountId: "company",
+      keepConversation: true,
+      confirmed: true,
+    });
+
+    expect(restartTerminalOnAccount).toHaveBeenCalledWith(
+      "p1",
+      { id: "company", envVar: "CODEX_HOME", configDir: COMPANY.configDir },
+      { keepConversation: true }
+    );
+    expect(result).toMatchObject({ terminalId: "p1", agentSessionIdCleared: false });
+  });
+
+  it.each([
+    ["a new one started", undefined],
+    ["the store started one although asked to keep it", true],
+  ])("says the conversation was cleared when %s", async (_label, keepConversation) => {
+    setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", kind: "terminal", location: "grid", launchAgentId: "codex" }],
+    });
+    const run = setupActions();
+
+    const result = await run("terminal.restartOnAccount", {
+      terminalId: "p1",
+      accountId: null,
+      confirmed: true,
+      ...(keepConversation ? { keepConversation } : {}),
+    });
+
+    expect(result).toMatchObject({ terminalId: "p1", agentSessionIdCleared: true });
+  });
+
+  it("restarts on the account named, never the first one saved", async () => {
+    agentSettingsClientMock.get.mockResolvedValue({
+      agents: {
+        codex: {
+          accounts: [{ id: "decoy", name: "Decoy", configDir: "/Users/me/.codex-decoy" }, COMPANY],
+        },
+      },
+    });
+    const { restartTerminalOnAccount } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", kind: "terminal", location: "grid", launchAgentId: "codex" }],
+    });
+    const run = setupActions();
+
+    await run("terminal.restartOnAccount", {
+      terminalId: "p1",
+      accountId: "company",
+      confirmed: true,
+    });
+    await expect(
+      run("terminal.restartOnAccount", { terminalId: "p1", accountId: "gone", confirmed: true })
+    ).rejects.toThrow(/no account 'gone'/);
+
+    expect(restartTerminalOnAccount).toHaveBeenCalledTimes(1);
+    expect(restartTerminalOnAccount).toHaveBeenCalledWith(
+      "p1",
+      { id: "company", envVar: "CODEX_HOME", configDir: COMPANY.configDir },
+      { keepConversation: false }
+    );
+  });
+
+  it("advertises a result both answers satisfy", () => {
+    const actions = registerActions();
+    const schema = (actions.get("terminal.restartOnAccount" as ActionId)!() as AnyActionDefinition)
+      .resultSchema!;
+    for (const agentSessionIdCleared of [true, false]) {
+      expect(
+        schema.safeParse({ terminalId: "p1", agentAccountId: "company", agentSessionIdCleared })
+      ).toMatchObject({ success: true, data: { agentSessionIdCleared } });
+    }
+    for (const agentSessionIdCleared of [undefined, "true"]) {
+      expect(
+        schema.safeParse({ terminalId: "p1", agentAccountId: null, agentSessionIdCleared }).success
+      ).toBe(false);
+    }
+  });
+
+  it("refuses an account the agent doesn't have, and an agent with no accounts", async () => {
+    const { restartTerminalOnAccount } = setRichPanelState({
+      focusedId: "p1",
+      panels: [
+        { id: "p1", kind: "terminal", location: "grid", launchAgentId: "codex" },
+        { id: "p2", kind: "terminal", location: "grid", launchAgentId: "cursor" },
+      ],
+    });
+    const run = setupActions();
+
+    await expect(
+      run("terminal.restartOnAccount", { terminalId: "p1", accountId: "gone", confirmed: true })
+    ).rejects.toThrow(/no account 'gone'/);
+    await expect(
+      run("terminal.restartOnAccount", { terminalId: "p2", accountId: null, confirmed: true })
+    ).rejects.toThrow(/no accounts/);
+    expect(restartTerminalOnAccount).not.toHaveBeenCalled();
+  });
+});
+
 describe("terminal.restartOnPreset (#13746)", () => {
   it("refuses without confirmation even when the agent is idle", async () => {
     // A rate-limited agent is rarely working, and the conversation is lost
@@ -925,7 +1103,9 @@ describe("terminal.restartOnPreset (#13746)", () => {
 
     await run("terminal.restartOnPreset", { terminalId: "p1", presetId: "work", confirmed: true });
 
-    expect(restartTerminalOnPreset).toHaveBeenCalledWith("p1", "work");
+    expect(restartTerminalOnPreset).toHaveBeenCalledWith("p1", "work", {
+      keepConversation: false,
+    });
     expect(useRateLimitObservationStore.getState().observedAtByTerminalId.p1).toBeUndefined();
   });
 
@@ -971,12 +1151,45 @@ describe("terminal.restartOnPreset (#13746)", () => {
       { dispatchSource: "agent", hostConfirmed: true }
     );
 
-    expect(restartTerminalOnPreset).toHaveBeenCalledWith("p1", "work");
+    expect(restartTerminalOnPreset).toHaveBeenCalledWith("p1", "work", {
+      keepConversation: false,
+    });
     expect(result).toEqual({
       terminalId: "p1",
       agentPresetId: "work-resolved",
       agentSessionIdCleared: true,
     });
+  });
+
+  it("asks for the conversation when told to keep it, and says it wasn't cleared (#16045)", async () => {
+    const { restartTerminalOnPreset } = setRichPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", location: "grid", detectedAgentId: "codex", agentState: "waiting" }],
+    });
+    restartTerminalOnPreset.mockResolvedValue({ success: true, resumedSessionId: "thread-1" });
+    const run = setupActions();
+
+    const result = await run(
+      "terminal.restartOnPreset",
+      { terminalId: "p1", presetId: "work", keepConversation: true },
+      { dispatchSource: "agent", hostConfirmed: true }
+    );
+
+    expect(restartTerminalOnPreset).toHaveBeenCalledWith("p1", "work", { keepConversation: true });
+    expect(result).toMatchObject({ terminalId: "p1", agentSessionIdCleared: false });
+  });
+
+  it("advertises a result both answers satisfy, on the tool and its owned twin", () => {
+    const actions = registerActions();
+    for (const id of ["terminal.restartOnPreset", "terminal.restartOnPresetOwned"]) {
+      const schema = (actions.get(id as ActionId)!() as AnyActionDefinition).resultSchema!;
+      for (const agentSessionIdCleared of [true, false]) {
+        expect(
+          schema.safeParse({ terminalId: "p1", agentPresetId: "work", agentSessionIdCleared })
+            .success
+        ).toBe(true);
+      }
+    }
   });
 
   it("refuses the owned twin outside the MCP main-process path", async () => {
@@ -2105,6 +2318,14 @@ describe("terminal.revealOwned (#12315)", () => {
     expect(schema?.safeParse({}).success).toBe(false);
     expect(schema?.safeParse({ terminalId: "terminal-1" }).success).toBe(true);
   });
+
+  it("takes the run's generation for a worker the global Assistant didn't launch, never in its place (#16096)", () => {
+    const schema = definition().argsSchema;
+    expect(schema?.safeParse({ terminalId: "terminal-1", generation: 4 }).success).toBe(true);
+    expect(schema?.safeParse({ terminalId: "terminal-1", generation: -1 }).success).toBe(false);
+    expect(schema?.safeParse({ terminalId: "terminal-1", generation: 1.5 }).success).toBe(false);
+    expect(schema?.safeParse({ generation: 4 }).success).toBe(false);
+  });
 });
 
 describe("restored panes and the plugin hold (#14017)", () => {
@@ -2329,5 +2550,110 @@ describe("restored panes and the plugin hold (#14017)", () => {
       expect(def.palette).toEqual({ mode: "hidden" });
       expect(def.mcpVisibility).toBe("hidden");
     });
+  });
+});
+
+describe("terminal.sessionFile.get (#16097)", () => {
+  const get = vi.fn();
+  const observed = {
+    status: "observed",
+    agentId: "codex",
+    sessionId: "01a19a09-d462-7101-a841-24b57d849008",
+    path: "/Users/x/.codex/sessions/2026/11/02/rollout-2026-11-02T04-14-57-01a19a09-d462-7101-a841-24b57d849008.jsonl",
+    observedBy: "open-for-writing",
+  };
+
+  function definition(): AnyActionDefinition {
+    const actions: ActionRegistry = new Map();
+    registerTerminalLifecycleActions(actions, {} as ActionCallbacks);
+    const factory = actions.get("terminal.sessionFile.get");
+    if (!factory) throw new Error("missing terminal.sessionFile.get");
+    return factory() as AnyActionDefinition;
+  }
+
+  beforeEach(() => {
+    get.mockReset();
+    get.mockResolvedValue(observed);
+    vi.stubGlobal("window", { electron: { terminalSessionFile: { get } } });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("asks main for the named terminal on a plugin's behalf", async () => {
+    await expect(
+      definition().run({ terminalId: "term-1" }, {
+        dispatchSource: "plugin",
+        callerPluginId: "acme.handoff",
+      } as never)
+    ).resolves.toEqual(observed);
+    expect(get).toHaveBeenCalledWith({ terminalId: "term-1" });
+  });
+
+  it.each([
+    { dispatchSource: "agent" },
+    { dispatchSource: "user" },
+    { dispatchSource: "agent", callerPluginId: "acme.handoff" },
+    { dispatchSource: "plugin" },
+  ])("refuses a dispatch with no plugin behind it (%o)", async (ctx) => {
+    await expect(definition().run({ terminalId: "term-1" }, ctx as never)).rejects.toThrow(
+      /Only a plugin/
+    );
+    expect(get).not.toHaveBeenCalled();
+  });
+
+  it("requires a terminal id, with no focused-panel fallback", () => {
+    const schema = definition().argsSchema;
+    expect(schema?.safeParse({}).success).toBe(false);
+    expect(schema?.safeParse({ terminalId: "  " }).success).toBe(false);
+    expect(schema?.safeParse({ terminalId: "term-1" }).success).toBe(true);
+  });
+
+  it("delivers both answers through its result schema whole", () => {
+    const schema = definition().resultSchema;
+    expect(schema?.parse(observed)).toEqual(observed);
+    const unknown = { status: "unknown", reason: "store-unknown" };
+    expect(schema?.parse(unknown)).toEqual(unknown);
+    expect(schema?.safeParse({ status: "unknown", reason: "guessed" }).success).toBe(false);
+  });
+
+  it("reaches dispatch only as the plugin the host says is calling", async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+    service.register(definition());
+    const id = "terminal.sessionFile.get" as ActionId;
+
+    const plugin = await service.dispatch(
+      id,
+      { terminalId: "term-1" },
+      { source: "plugin", callerPluginId: "acme.handoff" }
+    );
+    const forged = await service.dispatch(
+      id,
+      { terminalId: "term-1" },
+      {
+        source: "agent",
+        contextOverride: { dispatchSource: "plugin", callerPluginId: "acme.handoff" },
+      }
+    );
+
+    // The source is a plugin's, but the identity only came in through the override.
+    const unattributed = await service.dispatch(
+      id,
+      { terminalId: "term-1" },
+      { source: "plugin", contextOverride: { callerPluginId: "acme.handoff" } }
+    );
+
+    expect(plugin).toMatchObject({ ok: true, result: observed });
+    expect(forged.ok).toBe(false);
+    expect(unattributed.ok).toBe(false);
+    expect(get).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays out of the palette and off MCP", () => {
+    const def = definition();
+    expect(def.palette).toEqual({ mode: "hidden" });
+    expect(def.mcpVisibility).toBe("hidden");
   });
 });

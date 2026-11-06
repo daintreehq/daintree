@@ -4,6 +4,8 @@ import { Check, ChevronDown, Copy, Ellipsis, FileText, type LucideIcon } from "l
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { COPIED_LABEL, COPY_FAILED_LABEL } from "@/components/ui/CopyButton";
+import type { RevealCopy } from "./revealCopy";
+import { useRevealControl } from "./revealFeedback";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   DropdownMenu,
@@ -460,6 +462,30 @@ function CopyContentsButton({ contents }: { contents: string | null }) {
 }
 
 /**
+ * The file's reveal: the OS file manager locally, and in a remote window a copy
+ * of the host path, which wears the copy glyph and swaps to a check once main
+ * has written it — nothing else on screen changes. The pane owns the dispatch
+ * and its failure banner; `onReveal` resolves true once the action succeeded.
+ */
+function RevealButton({
+  reveal,
+  path,
+  onReveal,
+}: {
+  reveal: RevealCopy;
+  path: string;
+  onReveal: () => Promise<boolean>;
+}) {
+  const { copied, onClick } = useRevealControl(reveal, path, onReveal);
+  const Icon = copied ? Check : reveal.icon;
+  return (
+    <IconButton label={reveal.label} onClick={onClick}>
+      <Icon className={TOOLBAR_ICON_CLASS} />
+    </IconButton>
+  );
+}
+
+/**
  * Where secondary actions go once the row is compact: one trigger, the same
  * footprint as an `IconButton`, holding whatever the caller would otherwise
  * have laid out as buttons. The caller supplies `DropdownMenuItem`s so each
@@ -594,6 +620,7 @@ export const FileViewerToolbar = {
   Actions,
   IconButton,
   CopyContentsButton,
+  RevealButton,
   MoreActions,
   ModeControl,
   Responsive,

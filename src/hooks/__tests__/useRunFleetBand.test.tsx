@@ -1,0 +1,154 @@
+// @vitest-environment jsdom
+import { describe, it, expect, afterEach } from "vitest";
+import { act, cleanup, renderHook } from "@testing-library/react";
+import type { FleetRunRow, FleetSnapshot } from "@shared/types/ipc/fleet";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import { NEEDS_YOU_BANDS } from "@/lib/fleetAttention";
+import {
+  useFleetBandRunIds,
+  useRunFleetBand,
+  useRunUnseenAsk,
+  useUnseenAsks,
+} from "../useRunFleetBand";
+
+const ask = { kind: "asked", quote: "Ship it?", readAt: 0, seen: false } as const;
+
+function push(runs: Array<Partial<FleetRunRow> & { runId: string }>, changedAt = 0) {
+  const snapshot: FleetSnapshot = {
+    runs: runs.map((r) => ({ workspaceId: "p1", spawnedAt: 0, cwd: "/repo", ...r })),
+    changedAt,
+    degraded: false,
+    lastSuccessfulAt: null,
+  };
+  act(() => useFleetSnapshotStore.setState({ snapshot }));
+}
+
+afterEach(() => {
+  cleanup();
+  useFleetSnapshotStore.setState({ snapshot: null });
+});
+
+describe("useRunFleetBand", () => {
+  it("reads nothing before the snapshot, then the run's band as it moves", () => {
+    const { result } = renderHook(() => useRunFleetBand("t1"));
+    expect(result.current).toBeUndefined();
+
+    push([{ runId: "t1", agentState: "waiting", waitingReason: "prompt" }]);
+    expect(result.current).toBe("idle");
+
+    push([{ runId: "t1", agentState: "waiting", waitingReason: "question", canopy: ask }]);
+    expect(result.current).toBe("needs-you");
+
+    push([{ runId: "other", agentState: "working" }]);
+    expect(result.current).toBeUndefined();
+  });
+
+  it("re-renders when the run's band moves, and not for a push that leaves it alone", () => {
+    let renders = 0;
+    const { result } = renderHook(() => {
+      renders++;
+      return useRunFleetBand("t1");
+    });
+    const beforeReport = renders;
+    push([{ runId: "t1", agentState: "working" }]);
+    expect(result.current).toBe("running");
+    expect(renders).toBeGreaterThan(beforeReport);
+
+    const settled = renders;
+    push([
+      { runId: "t1", agentState: "working" },
+      { runId: "t2", agentState: "waiting", canopy: ask },
+    ]);
+    expect(result.current).toBe("running");
+    expect(renders).toBe(settled);
+  });
+});
+
+describe("useFleetBandRunIds", () => {
+  it("keeps the same set across pushes that leave membership alone", () => {
+    push([{ runId: "t1", agentState: "waiting", canopy: ask }]);
+    const { result } = renderHook(() => useFleetBandRunIds(NEEDS_YOU_BANDS));
+    const first = result.current;
+    expect([...first]).toEqual(["t1"]);
+
+    push([
+      { runId: "t1", agentState: "waiting", canopy: ask },
+      { runId: "t2", agentState: "working" },
+    ]);
+    expect(result.current).toBe(first);
+
+    push([{ runId: "t1", agentState: "waiting", canopy: { ...ask, seen: true } }]);
+    expect(result.current.size).toBe(0);
+  });
+});
+
+describe("useRunUnseenAsk", () => {
+  it("reads no ask before the snapshot, then follows the run's wait and its look", () => {
+    let renders = 0;
+    const { result } = renderHook(() => {
+      renders++;
+      return useRunUnseenAsk("t1");
+    });
+    expect(result.current).toBeUndefined();
+
+    push([{ runId: "t1", agentState: "waiting", waitingReason: "approval" }]);
+    expect(result.current).toBe("observed");
+
+    // Another run's push leaves this one alone.
+    const settled = renders;
+    push([
+      { runId: "t1", agentState: "waiting", waitingReason: "approval" },
+      { runId: "t2", agentState: "working" },
+    ]);
+    expect(renders).toBe(settled);
+
+    push([{ runId: "t1", agentState: "waiting", waitingReason: "approval", canopy: ask }]);
+    expect(result.current).toBe("canopy");
+
+    push([
+      {
+        runId: "t1",
+        agentState: "waiting",
+        waitingReason: "approval",
+        wait: { stoppedAt: 0, seenAt: 1 },
+      },
+    ]);
+    expect(result.current).toBeUndefined();
+  });
+});
+
+describe("useUnseenAsks", () => {
+  it("holds each unseen ask by whose it is, the same map while the asks hold", () => {
+    push([
+      { runId: "t1", agentState: "waiting", waitingReason: "question" },
+      { runId: "t2", agentState: "completed", canopy: ask },
+      { runId: "t3", agentState: "waiting", waitingReason: "prompt" },
+    ]);
+    const { result, rerender } = renderHook(() => useUnseenAsks());
+    const first = result.current;
+    expect([...first].sort()).toEqual([
+      ["t1", "observed"],
+      ["t2", "canopy"],
+    ]);
+
+    rerender();
+    expect(result.current).toBe(first);
+
+    push([
+      { runId: "t3", agentState: "waiting", waitingReason: "prompt" },
+      { runId: "t2", agentState: "completed", canopy: ask },
+      { runId: "t1", agentState: "waiting", waitingReason: "question" },
+    ]);
+    expect(result.current).toBe(first);
+
+    push([
+      {
+        runId: "t1",
+        agentState: "waiting",
+        waitingReason: "question",
+        wait: { stoppedAt: 0, seenAt: 1 },
+      },
+    ]);
+    expect(result.current.size).toBe(0);
+  });
+});

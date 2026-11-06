@@ -52,8 +52,58 @@
     background-color: CanvasText;
   }
 
+  /* Opted out of the UA's adjustment with every colour authored as a system
+     colour: left to it, Chromium laid a Canvas backplate behind the digits,
+     which then drew Canvas on Canvas and the count was gone. */
   .toolbar-count {
+    forced-color-adjust: none;
+    background-color: CanvasText;
     color: Canvas;
+    outline: 2px solid Canvas;
+  }
+
+  /* The agents' brand marks set their colour on the <svg> itself, which
+     Chromium leaves unforced, so the dark theme's pastels sat on a light
+     Canvas under 3:1. On the strip they take button ink like every other
+     glyph, GrayText while their button is unavailable. Scoped to the toolbar:
+     elsewhere a brand mark is decoration beside a label. */
+  .surface-toolbar [data-toolbar-item] .brand-mark {
+    color: ButtonText;
+  }
+
+  .surface-toolbar [data-toolbar-item][aria-disabled="true"] .brand-mark {
+    color: GrayText;
+  }
+
+  /* The stats capsule is one frame with segment rules, as it is unforced: the
+     blanket button frame would box each segment inside it and double every
+     edge. The open segment's inset edge thickens so it still reads against
+     the frame. */
+  .toolbar-stats > button[data-stat-segment] {
+    border-width: 0;
+  }
+
+  .toolbar-stats > [data-stat-segment] ~ [data-stat-segment] {
+    border-inline-start: 1px solid ButtonText;
+  }
+
+  .toolbar-stat-pill[aria-expanded="true"]::after {
+    border-width: 2px;
+  }
+
+  /* The waiting ring keeps its hollow centre — filled, it would read as the
+   * unread disc, and shape is the only cue left here. */
+  .toolbar-pip[data-pip="waiting"],
+  .toolbar-overflow-badge[data-severity="waiting"] {
+    background-color: Canvas;
+    border-color: CanvasText;
+  }
+
+  /* A menu's waiting ring leaves `.status-mark` off (that host rule fills
+     every mark), so it stays hollow here too. */
+  .toolbar-menu-pip[data-pip="waiting"] {
+    background-color: Canvas;
+    border-color: CanvasText;
   }
 
   /* A remote window's light: forced colours drop gradients and shadows anyway,

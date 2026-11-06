@@ -17,7 +17,12 @@ import {
 import { readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
 import { logError, logWarn } from "../utils/logger.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
-import { rendererReloadNotice } from "./rendererReloadNotice.js";
+import type { PrepareWindowRecreation } from "./windowRecreation.js";
+import {
+  dropReloadNotice,
+  holdReloadNotice,
+  rendererReloadNotice,
+} from "./rendererReloadNotice.js";
 import { getTerminationIntent } from "../services/processTerminationIntent.js";
 
 const CRASH_LOOP_WINDOW_MS = 60_000;
@@ -29,15 +34,16 @@ export interface AppViewRendererGoneOptions {
   /** Resolved per event: services are wired after the window is created. */
   getProjectViewManager: () => ProjectViewManager | null;
   getRecoveryUrl: (reason: string, exitCode: number) => string;
-  onRecreateWindow?: () => Promise<void>;
+  prepareWindowRecreation?: PrepareWindowRecreation;
 }
 
 export function attachAppViewRendererGoneHandler(opts: AppViewRendererGoneOptions): void {
-  const { win, appWebContents, getProjectViewManager, getRecoveryUrl, onRecreateWindow } = opts;
+  const { win, appWebContents, getProjectViewManager, getRecoveryUrl, prepareWindowRecreation } =
+    opts;
   const rendererCrashTimestamps: number[] = [];
-  const oomRecreationTimestamps: number[] = [];
 
   appWebContents.on("render-process-gone", (_event, details) => {
+    dropReloadNotice(appWebContents);
     if (details.reason === "clean-exit") return;
     const pvm = getProjectViewManager();
     const projectId = pvm?.getProjectIdForWebContents(appWebContents.id) ?? undefined;
@@ -94,9 +100,7 @@ export function attachAppViewRendererGoneHandler(opts: AppViewRendererGoneOption
       // for every other cached view: reloading a renderer the OS just reclaimed
       // would respawn it under the same pressure.
       if (pvm?.evictCrashedCachedView(appWebContents, "memory-eviction")) return;
-      notifyError(new Error("The renderer was reloaded due to memory pressure."), {
-        source: "renderer-crash",
-      });
+      holdReloadNotice(appWebContents, "The renderer was reloaded due to memory pressure.");
       setImmediate(() => {
         if (win.isDestroyed()) return;
         appWebContents.reload();
@@ -129,17 +133,13 @@ export function attachAppViewRendererGoneHandler(opts: AppViewRendererGoneOption
         const recoveryUrl = getRecoveryUrl(details.reason, details.exitCode);
         appWebContents.loadURL(recoveryUrl);
       });
-    } else if (isProbableOom && onRecreateWindow) {
-      const now2 = Date.now();
-      while (
-        oomRecreationTimestamps.length > 0 &&
-        now2 - oomRecreationTimestamps[0] > CRASH_LOOP_WINDOW_MS
-      ) {
-        oomRecreationTimestamps.shift();
-      }
-      oomRecreationTimestamps.push(now2);
-
-      if (oomRecreationTimestamps.length >= CRASH_LOOP_THRESHOLD) {
+    } else if (isProbableOom && prepareWindowRecreation) {
+      // Captured now, while the window still holds its views: destroying it
+      // disposes everything that knows what it was showing (#15564). The
+      // OOM budget lives there too, since this handler dies with the window
+      // and the replacement starts a fresh one (#15647).
+      const recreateWindow = prepareWindowRecreation();
+      if (!recreateWindow) {
         console.error("[MAIN] OOM crash loop detected, loading recovery page");
         setImmediate(() => {
           if (win.isDestroyed()) return;
@@ -159,7 +159,7 @@ export function attachAppViewRendererGoneHandler(opts: AppViewRendererGoneOption
           // `window-all-closed` synchronously inside the destroy call.
           beginWindowRecreating();
           if (!win.isDestroyed()) win.destroy();
-          onRecreateWindow()
+          recreateWindow()
             .catch((err) => {
               console.error("[MAIN] Failed to recreate window after OOM:", err);
             })
@@ -167,15 +167,17 @@ export function attachAppViewRendererGoneHandler(opts: AppViewRendererGoneOption
               endWindowRecreating();
               // The suppressed `window-all-closed` event must be replayed if
               // the recreation failed — otherwise on non-darwin the process
-              // hangs headless with no windows and no quit path. Skip when
-              // another OOM recreate is still in flight or any window remains
-              // (the natural `window-all-closed` path will cover those cases).
+              // hangs headless with no windows and no quit path. Replayed, not
+              // a bare quit, so a process that stays up without windows (an
+              // OS launch, a scheduled run still open) does. Skip when another
+              // OOM recreate is still in flight or any window remains (the
+              // natural `window-all-closed` path will cover those cases).
               if (
                 !isWindowRecreating() &&
                 process.platform !== "darwin" &&
                 BrowserWindow.getAllWindows().length === 0
               ) {
-                app.quit();
+                app.emit("window-all-closed");
               }
             });
         });
@@ -185,17 +187,11 @@ export function attachAppViewRendererGoneHandler(opts: AppViewRendererGoneOption
       // any other cached view (#12954). Nothing on screen, so no toast.
     } else {
       console.log("[MAIN] Renderer crash, auto-reloading");
-      notifyError(
-        new Error(
-          rendererReloadNotice(
-            "The renderer process",
-            details.reason,
-            getTerminationIntent({ webContentsId: appWebContents.id })
-          )
-        ),
-        {
-          source: "renderer-crash",
-        }
+      const intent = getTerminationIntent({ webContentsId: appWebContents.id });
+      holdReloadNotice(
+        appWebContents,
+        rendererReloadNotice("The renderer process", details.reason, intent),
+        intent ? "info" : "warning"
       );
       setImmediate(() => {
         if (win.isDestroyed()) return;

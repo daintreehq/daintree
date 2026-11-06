@@ -12,6 +12,7 @@ import { notify } from "@/lib/notify";
 import { reduceAgentDetected, reduceAgentExited } from "./identityReducer";
 import { logIdentityDebugDev, recordIdentityEventDev } from "./identityDiagnostics";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
+import { hostObservedAt } from "@shared/utils/restoreProvenance";
 
 // Per-terminal baseline of `changedFileCount` captured the first time an
 // agent enters "working" in a session. Compared against the count at
@@ -85,7 +86,8 @@ export function setupIdentityListeners(): DisposableStore {
           return;
         }
 
-        if (terminal.lastStateChange && timestamp < terminal.lastStateChange) {
+        const observedAt = hostObservedAt(terminal);
+        if (observedAt !== undefined && timestamp < observedAt) {
           return;
         }
 
@@ -96,29 +98,19 @@ export function setupIdentityListeners(): DisposableStore {
         // terminal id against a fresh record starting at zero, and a panel that
         // refused to follow it down would go on naming a session that no longer
         // exists while the replacement climbed back towards it. Out-of-order
-        // events are already dropped above by `lastStateChange`, so following
+        // events are already dropped above by the host's last observation, so following
         // the host is the safer of the two ways to be wrong: a count that
         // disagrees refuses the delivery, a count that lies permits it.
-        const observedIncarnation = data.agentIncarnation;
-        if (
-          observedIncarnation !== undefined &&
-          observedIncarnation !== terminal.agentIncarnation
-        ) {
-          usePanelStore.setState((st) => {
-            const panel = st.panelsById[terminalId];
-            if (!panel || !isPtyPanel(panel)) return st;
-            return {
-              panelsById: {
-                ...st.panelsById,
-                [terminalId]: { ...panel, agentIncarnation: observedIncarnation },
-              },
-            };
-          });
+        if (data.agentIncarnation !== undefined) {
+          usePanelStore.getState().setAgentIncarnation(terminalId, data.agentIncarnation);
         }
 
         withTerminalService((service) => service.setAgentState(terminalId, state), terminalId);
 
         if (terminal.agentState === "directing" && state === "waiting") {
+          // Directing stays on screen, but the host did report this, and a
+          // resync record older than it must not be taken over it later.
+          usePanelStore.getState().noteAgentObservation(terminalId, state, timestamp);
           return;
         }
 
@@ -422,8 +414,12 @@ export function setupIdentityListeners(): DisposableStore {
         // Loaded on demand: only a launched run's end needs it, and it pulls in
         // the restart and resume machinery this listener otherwise never touches.
         if (data.agentEnd?.launchedRun) {
+          // Read now: a restart while the module loads starts a run this end
+          // isn't about.
+          const ended = usePanelStore.getState().panelsById[terminalId];
+          const restartKey = ended && isPtyPanel(ended) ? (ended.restartKey ?? 0) : undefined;
           void import("@/services/terminal/agentEndRecovery")
-            .then(({ handleAgentEnd }) => handleAgentEnd(data))
+            .then(({ handleAgentEnd }) => handleAgentEnd(data, restartKey))
             .catch((error: unknown) => {
               logWarn("[IdentityListener] Agent end recovery failed", { terminalId, error });
             });

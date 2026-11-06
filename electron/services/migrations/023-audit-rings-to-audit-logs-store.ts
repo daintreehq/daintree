@@ -4,7 +4,9 @@ import { auditLogsStore } from "../../store.js";
 /**
  * Move the four remaining ring buffers out of config.json into the dedicated
  * lazily-constructed audit-logs store, completing what migration022 started
- * for the MCP rings. The rings dominate config.json size, which bootstrap
+ * for the MCP rings. No owner reads that store: the rings live in SQLite
+ * `audit_rings`, and the boot import (legacyAuditRingImport) moves
+ * audit-logs.json there. The rings dominate config.json size, which bootstrap
  * reads/parses synchronously and the store cache snapshots whole — boot and
  * write cost scaled with audit volume. Config flags (`auditEnabled`,
  * `auditMaxRecords`) intentionally stay in config.json.
@@ -45,29 +47,26 @@ export const migration023: Migration = {
       const slice = get(move.sourceKey) as Record<string, unknown>;
       const { [move.ringKey]: ring, ...rest } = slice;
 
-      if (Array.isArray(ring) && ring.length > 0) {
-        const existing = auditLogsStore.get(move.targetKey);
-        const existingRecords = Array.isArray(existing) ? existing : [];
-        // Idempotency guard for partial-failure retries: if a previous run
-        // copied this ring but failed before stripping the source key (or a
-        // later migration failed and config.json was restored from backup),
-        // the records are already in the audit-logs store — prepending again
-        // would duplicate them. Every ring record carries a unique `id`.
-        const firstId = (ring[0] as { id?: unknown }).id;
-        const alreadyMigrated =
-          typeof firstId === "string" &&
-          existingRecords.some((record) => (record as { id?: unknown })?.id === firstId);
-        if (!alreadyMigrated) {
-          // Rings are oldest-first; migrated config.json records predate
-          // anything already in the audit-logs store, so they go first.
-          auditLogsStore.set(move.targetKey, [...ring, ...existingRecords] as never);
-        }
-      } else if (ring !== undefined && !Array.isArray(ring)) {
-        // Corrupt (non-array) ring value — it is about to be stripped without
-        // a copy; leave a trace so the discard isn't silent.
+      if (!Array.isArray(ring)) {
+        // Nothing to move, but the bytes stay where they are rather than
+        // being stripped without a copy.
         console.warn(
-          `[Migrations] Dropping corrupt non-array ring at ${move.sourceKey}.${move.ringKey}`
+          `[Migrations] Leaving malformed non-array ring at ${move.sourceKey}.${move.ringKey}`
         );
+        continue;
+      }
+
+      if (ring.length > 0) {
+        const existing = auditLogsStore.get(move.targetKey);
+        // Rings are oldest-first; migrated config.json records predate anything
+        // already in the audit-logs store, so they go first. A retried chain
+        // (config.json restored after a later migration failed) prepends the
+        // same records again: the boot import (legacyAuditRingImport) keeps
+        // one of each, so nothing here may skip a record it hasn't seen.
+        auditLogsStore.set(move.targetKey, [
+          ...ring,
+          ...(Array.isArray(existing) ? existing : []),
+        ] as never);
       }
 
       // Rebuild without the moved key so it's dropped from the persisted

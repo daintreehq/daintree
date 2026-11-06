@@ -32,6 +32,12 @@ const VALID: PluginWorkerToHostMessage[] = [
     registrationKey: "service:acme.jira.issues",
   },
   { type: "host-notify", method: "unregisterService", params: { name: "acme.jira.issues" } },
+  {
+    type: "host-notify",
+    method: "process.write",
+    params: { processId: "p1", data: "ls\r" },
+    invocationId: "i4",
+  },
   { type: "host-cancel", requestId: "c2" },
   { type: "host-notify", method: "logger.info", params: { message: "hi" } },
   {

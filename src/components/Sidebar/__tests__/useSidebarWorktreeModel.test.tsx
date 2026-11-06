@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorktreeState } from "@/types";
 import type { DeletedWorktree } from "@/store/worktreeStore";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import { usePanelStore } from "@/store/panelStore";
+import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import { getWorktreeSortDragId } from "@/components/DragDrop/SortableWorktreeCard";
 import { useSidebarWorktreeModel } from "../useSidebarWorktreeModel";
 
@@ -152,12 +155,18 @@ describe("useSidebarWorktreeModel — rows", () => {
     expect(result.current.ariaRowCount).toBe(3);
   });
 
-  it("hides the main worktree for a query it fails, but never for the quick state", () => {
+  it("hides the main worktree for a quick state or a query it fails, like any card", () => {
     const { result } = renderModel();
 
+    // The bar sits above every card it filters, main included: an idle main
+    // card leaves the Working segment, and counts as hidden by it.
     act(() => useWorktreeFilterStore.getState().setQuickStateFilter("working"));
-    expect(result.current.mainVisible).toBe(true);
+    expect(result.current.mainVisible).toBe(false);
+    expect(result.current.mainHiddenByQuickState).toBe(true);
     expect(result.current.filteredWorktrees).toEqual([]);
+
+    act(() => useWorktreeFilterStore.getState().setQuickStateFilter("all"));
+    expect(result.current.mainVisible).toBe(true);
 
     act(() => useWorktreeFilterStore.getState().setLiveQuery("zzz"));
     expect(result.current.mainVisible).toBe(false);
@@ -188,5 +197,112 @@ describe("useSidebarWorktreeModel — rows", () => {
 
     act(() => useWorktreeFilterStore.getState().toggleStatusFilter("dirty"));
     expect(result.current.filteredWorktrees).toEqual([]);
+  });
+});
+
+describe("useSidebarWorktreeModel — quick-state counts", () => {
+  function pushFleet(runs: FleetRunRow[]): void {
+    act(() =>
+      useFleetSnapshotStore.getState().applySnapshot({
+        runs,
+        changedAt: 1,
+        degraded: false,
+        lastSuccessfulAt: null,
+      })
+    );
+  }
+  const run = (runId: string, overrides: Partial<FleetRunRow> = {}): FleetRunRow => ({
+    runId,
+    workspaceId: "p1",
+    spawnedAt: 0,
+    cwd: "/repo",
+    ...overrides,
+  });
+
+  function seedAgentPanel(id: string, worktreeId: string): void {
+    usePanelStore.setState({
+      panelIds: [id],
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test carrier: only the fields the sidebar selectors read
+      panelsById: {
+        [id]: {
+          id,
+          kind: "terminal",
+          title: id,
+          worktreeId,
+          location: "grid",
+          detectedAgentId: "claude",
+          agentState: "working",
+        },
+      } as never,
+      panelIdsByWorktreeId: { [worktreeId]: [id] },
+    });
+  }
+
+  afterEach(() => {
+    act(() => {
+      useFleetSnapshotStore.setState({ snapshot: null });
+      usePanelStore.setState({ panelIds: [], panelsById: {}, panelIdsByWorktreeId: {} });
+    });
+  });
+
+  it("moves with each count, main included", () => {
+    seedAgentPanel("agent-a", "a");
+    pushFleet([run("agent-a", { agentState: "idle" }), run("x", { agentState: "working" })]);
+    const { result } = renderModel();
+    expect(result.current.quickStateCounts).toMatchObject({
+      all: 3,
+      working: 0,
+      waiting: 0,
+      finished: 0,
+    });
+
+    // Each step moves exactly one count off the idle baseline, so every count
+    // is checked on its own.
+    const states: Array<
+      [Partial<FleetRunRow>, { working: number; waiting: number; finished: number }]
+    > = [
+      [{ agentState: "working" }, { working: 1, waiting: 0, finished: 0 }],
+      [{ agentState: "idle" }, { working: 0, waiting: 0, finished: 0 }],
+      [
+        {
+          agentState: "waiting",
+          waitingReason: "approval",
+          canopy: { kind: "asked", quote: "Run the migration?", readAt: 1, seen: false },
+        },
+        { working: 0, waiting: 1, finished: 0 },
+      ],
+      [{ agentState: "idle" }, { working: 0, waiting: 0, finished: 0 }],
+      [
+        { agentState: "waiting", waitingReason: "prompt", handBack: { stoppedAt: 1 } },
+        { working: 0, waiting: 0, finished: 1 },
+      ],
+      [{ agentState: "idle" }, { working: 0, waiting: 0, finished: 0 }],
+    ];
+    for (const [overrides, counts] of states) {
+      pushFleet([run("agent-a", overrides)]);
+      expect(result.current.quickStateCounts).toMatchObject({ all: 3, ...counts });
+    }
+  });
+
+  it("follows the worktree count, the main card counted with the rest", () => {
+    pushFleet([]);
+    const { result, rerender } = renderModel();
+    expect(result.current.quickStateCounts).toMatchObject({
+      all: 3,
+      working: 0,
+      waiting: 0,
+      finished: 0,
+    });
+
+    const props = {
+      activeWorktreeId: null,
+      deletedWorktrees: new Map(),
+      canPruneWorktreeIds: true,
+    };
+    rerender({ ...props, worktrees: [...snapshot(), makeWorktree("c")] });
+    expect(result.current.quickStateCounts.all).toBe(4);
+
+    rerender({ ...props, worktrees: snapshot().filter((w) => w.isMainWorktree) });
+    expect(result.current.quickStateCounts.all).toBe(1);
   });
 });

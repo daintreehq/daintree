@@ -29,9 +29,10 @@ const flush = async () => {
 
 function setup() {
   const onChange = vi.fn();
-  const cache = new ProjectAgentActivityCache(onChange);
+  const demand = { wanted: true };
+  const cache = new ProjectAgentActivityCache(onChange, () => demand.wanted);
   const pty = new FakePty();
-  return { cache, pty, onChange };
+  return { cache, pty, onChange, demand };
 }
 
 describe("ProjectAgentActivityCache (#13359)", () => {
@@ -190,17 +191,92 @@ describe("ProjectAgentActivityCache (#13359)", () => {
   it("stops listening and ignores a late inventory once disposed", async () => {
     const { cache, pty, onChange } = setup();
     cache.attach(pty);
+    cache.reconcile();
     cache.dispose();
     pty.answer({
       terminals: [{ id: "t1", projectId: "p1", agentState: "working" }],
       degraded: false,
     });
     await flush();
+    expect(pty.pending).toHaveLength(0);
     cache.noteState("t1", "working");
 
     expect(cache.isProjectActive("p1")).toBe(false);
     expect(pty.listenerCount("exit")).toBe(0);
     expect(pty.listenerCount("host-crash")).toBe(0);
     expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("reads no inventory while nothing wants its answers, and follows events meanwhile", async () => {
+    const { cache, pty, onChange, demand } = setup();
+    demand.wanted = false;
+    cache.attach(pty);
+    pty.emit("host-crash");
+    cache.reconcile();
+    expect(pty.pending).toHaveLength(0);
+
+    pty.owners.set("t1", "p1");
+    cache.noteState("t1", "working");
+    expect(cache.isProjectActive("p1")).toBe(true);
+    pty.emit("exit", "t1");
+    expect(cache.isProjectActive("p1")).toBe(false);
+    expect(onChange).toHaveBeenCalledTimes(2);
+
+    demand.wanted = true;
+    cache.reconcile();
+    pty.answer({
+      terminals: [{ id: "t2", projectId: "p2", agentState: "waiting" }],
+      degraded: false,
+    });
+    await flush();
+    expect(cache.isProjectActive("p2")).toBe(true);
+  });
+
+  it("takes the inventory over what events said while it read none", async () => {
+    const { cache, pty, demand } = setup();
+    demand.wanted = false;
+    cache.attach(pty);
+    pty.owners.set("t1", "p1");
+    cache.noteState("t1", "working");
+    pty.emit("exit", "t2");
+
+    demand.wanted = true;
+    cache.reconcile();
+    pty.answer({
+      terminals: [
+        { id: "t1", projectId: "p1", agentState: "idle" },
+        { id: "t2", projectId: "p2", agentState: "working" },
+      ],
+      degraded: false,
+    });
+    await flush();
+    expect(cache.isProjectActive("p1")).toBe(false);
+    // Running again under the same id since: only an exit during the read counts.
+    expect(cache.isProjectActive("p2")).toBe(true);
+  });
+
+  it("queues no read asked for while nothing wanted it", async () => {
+    const { cache, pty, demand } = setup();
+    cache.attach(pty);
+    demand.wanted = false;
+    cache.reconcile();
+    demand.wanted = true;
+    pty.answer({ terminals: [], degraded: false });
+    await flush();
+    expect(pty.pending).toHaveLength(0);
+  });
+
+  it("drops a read queued behind one in flight once nothing wants it", async () => {
+    const { cache, pty, demand } = setup();
+    cache.attach(pty);
+    cache.reconcile();
+    demand.wanted = false;
+    pty.answer({ terminals: [], degraded: false });
+    await flush();
+    expect(pty.pending).toHaveLength(0);
+
+    demand.wanted = true;
+    cache.reconcile();
+    expect(pty.pending).toHaveLength(1);
   });
 });

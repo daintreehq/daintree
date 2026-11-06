@@ -5,6 +5,7 @@ import type { WorkspaceClient } from "../services/WorkspaceClient.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { journalAgentSession } from "../services/pty/agentSessionJournal.js";
 import { attributeClose } from "../services/pty/closeAttribution.js";
+import { scheduledRunForRecord } from "../../shared/utils/scheduledRunProvenance.js";
 import { sealAndDrainCapturedSessionPersistence } from "../services/pty/agentSessionCapturePersistence.js";
 import { isAssistantTerminalRecord } from "../services/assistantTerminal.js";
 import type { AssistantLaneSnapshot } from "../services/HelpSessionService.js";
@@ -20,6 +21,7 @@ import { disposeWorkspaceClient } from "../services/WorkspaceClient.js";
 import { disposeMainProcessWatchdog } from "../services/MainProcessWatchdogClient.js";
 import { projectCheckService } from "../services/ProjectCheckService.js";
 import { projectCommandService } from "../services/ProjectCommandService.js";
+import { disposeSchedulePreconditions } from "../services/scheduledRuns/scheduledRunPrecondition.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { getCrashLoopGuard } from "../services/CrashLoopGuardService.js";
 import { getPanelSuspectLedger } from "../services/PanelSuspectLedgerService.js";
@@ -48,6 +50,7 @@ import {
   setAutoUpdaterServiceRef,
   getWindowsStoreNotifierServiceRef,
   setWindowsStoreNotifierServiceRef,
+  sealDecisionsModule,
 } from "../window/serviceRefs.js";
 import { haltDeferredQueue } from "../window/deferredInitQueue.js";
 import { freezeAndSnapshotOpenWindows } from "../window/openWindowsTracker.js";
@@ -72,6 +75,7 @@ import {
 import {
   CAPTURE_DELIVERY_BUDGET_MS,
   CAPTURE_PERSISTENCE_DRAIN_BUDGET_MS,
+  CANOPY_READER_DRAIN_BUDGET_MS,
   CLEANUP_TIMEOUT_MS,
   POST_PTY_TEARDOWN_RESERVE_MS,
   PROJECT_GRACEFUL_KILL_TIMEOUT_MS,
@@ -116,6 +120,24 @@ export interface ShutdownDeps {
 const REMOTE_HOSTS_STOP_BUDGET_MS = 2_000;
 
 let isConfirmingQuit = false;
+
+/**
+ * Off macOS, closing the last window quits the app, but by the time
+ * `before-quit` runs that window is gone and the warning about working agents
+ * has nowhere to show, so Alt+F4 or the caption's close button quit without
+ * it. Called from that window's `close` when closing it would quit: when the
+ * warning has something to say, the close becomes a quit, which asks while the
+ * window is still up and leaves it open if the answer is no.
+ */
+export function routeLastWindowCloseThroughQuit(): boolean {
+  if (process.platform === "darwin" || isE2EMode || isSmokeTest) return false;
+  if (getActiveShutdown() || isSignalShutdown()) return false;
+  if (isConfirmingQuit || isExitConfirmationPending()) return true;
+  const activeCount = getActiveAgentCount(getAgentAvailabilityStore());
+  if (activeCount === 0 && getAttachedShells().length === 0) return false;
+  setImmediate(() => app.quit());
+  return true;
+}
 
 export function registerShutdownHandler(deps: ShutdownDeps): void {
   // Publish the cleanup chain to the coordinator so the update-install path
@@ -162,8 +184,9 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
     const canShowDialog =
       !isE2EMode && !isSignalShutdown() && deps.windowRegistry?.getPrimary()?.browserWindow != null;
 
-    // A signal never waits on the update dialog.
-    if (isConfirmingQuit || (isExitConfirmationPending() && !isSignalShutdown())) {
+    // A signal never waits on an open confirmation, the quit warning's included:
+    // it claims the shutdown now, and the warning's late answer finds it owned.
+    if (!isSignalShutdown() && (isConfirmingQuit || isExitConfirmationPending())) {
       event.preventDefault();
       return;
     }
@@ -191,7 +214,9 @@ export function registerShutdownHandler(deps: ShutdownDeps): void {
           setExitConfirmationPending(false);
         }
 
-        if (!confirmed) {
+        // A signal claimed the shutdown while the warning was open, so its
+        // answer no longer decides anything.
+        if (!confirmed || getActiveShutdown()) {
           return;
         }
       }
@@ -257,6 +282,11 @@ function finishGroupStop(): boolean {
   } catch (err) {
     console.warn("[MAIN] projectCommandService.dispose failed:", err);
   }
+  try {
+    disposeSchedulePreconditions();
+  } catch (err) {
+    console.warn("[MAIN] disposeSchedulePreconditions failed:", err);
+  }
   // A chain that settled clean has written the markers already.
   if (outcome === "clean" && chainOutcome === null) writeCleanExitMarkers();
   clearSafetyBeltTimer();
@@ -298,6 +328,9 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
   // be resumed). Tasks that start during the dialog run against a fully live
   // app and are torn down by the cleanup chain like any other service.
   haltDeferredQueue();
+  // Sealed in the same synchronous step: a Decisions load that hasn't started
+  // never will, and one already under way is stopped below.
+  const decisionsLoading = sealDecisionsModule();
 
   // Stop the background-project restore queue before the manifest snapshot
   // below (#12320). A project still queued when the quit commits was never
@@ -396,6 +429,23 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
     REMOTE_HOSTS_STOP_BUDGET_MS,
     "device answer stop"
   );
+
+  // Decisions stops before any terminal is captured too. Only something that
+  // loaded it gets stopped: with Decisions off, quitting imports none of it.
+  if (decisionsLoading) {
+    await settleWithin(
+      (async () => {
+        try {
+          const decisions = await decisionsLoading;
+          await decisions.stopDecisions();
+        } catch (err) {
+          console.warn("[MAIN] Decisions stop failed:", err);
+        }
+      })(),
+      REMOTE_HOSTS_STOP_BUDGET_MS,
+      "decisions stop"
+    );
+  }
 
   const ptyClient = deps.getPtyClient();
   const workspaceClient = deps.getWorkspaceClient();
@@ -632,6 +682,7 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
                 agentModelId: info.agentModelId,
                 cwd: info.cwd ?? undefined,
                 branch: info.worktreeId ? branchByWorktree.get(info.worktreeId) : undefined,
+                ...scheduledRunForRecord(info),
                 // Quitting ends no pane the user had not closed; one sitting in
                 // the trash was closed by the user before the quit.
                 ...attributeClose(info, "shutdown"),
@@ -908,6 +959,12 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
           } catch (err) {
             console.warn("[MAIN] projectCommandService.dispose failed:", err);
           }
+          // Schedule preconditions run detached too, in their own process groups.
+          try {
+            disposeSchedulePreconditions();
+          } catch (err) {
+            console.warn("[MAIN] disposeSchedulePreconditions failed:", err);
+          }
           try {
             disposeWorkspaceClient();
           } catch (err) {
@@ -970,6 +1027,17 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         .catch((error) => {
           console.warn("[MAIN] VAD drain at quit failed:", error);
         });
+      // Canopy teardown above retires its reader process the same way.
+      const readerDrain = import("../services/canopy/canopyReaderProcess.js")
+        .then(({ waitForRetiringReaders }) => waitForRetiringReaders(CANOPY_READER_DRAIN_BUDGET_MS))
+        .then((pending) => {
+          if (pending > 0) {
+            console.warn(`[MAIN] ${pending} Canopy reader process(es) still draining at quit`);
+          }
+        })
+        .catch((error) => {
+          console.warn("[MAIN] Canopy reader drain at quit failed:", error);
+        });
       const cleanupErr = deps.getCleanupErrorHandlers();
       if (cleanupErr) {
         cleanupErr();
@@ -1006,6 +1074,26 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
 
       // Stop the opt-in plugin update checker and drain any in-flight pass
       // (#10893) — its timers/wake listeners must not survive teardown.
+      // Pending schedule timers and power listeners (#15979). No pass launches
+      // or records once shutdown began; this stops them looking.
+      try {
+        const { stopScheduledRunScheduler } =
+          await import("../services/scheduledRuns/scheduledRunSchedulerLive.js");
+        await stopScheduledRunScheduler();
+      } catch (error) {
+        console.warn("[MAIN] Scheduled-run scheduler stop failed:", error);
+      }
+
+      // A rewrite of the schedules' OS job under way finishes, so an edit made
+      // just before quitting holds once Daintree is gone (#15990).
+      try {
+        const { stopScheduleOsJob } =
+          await import("../services/scheduledRuns/scheduleOsJobLive.js");
+        await stopScheduleOsJob();
+      } catch (error) {
+        console.warn("[MAIN] Schedule OS job stop failed:", error);
+      }
+
       try {
         const { getPluginUpdateCheckService } =
           await import("../services/PluginUpdateCheckService.js");
@@ -1028,6 +1116,8 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
 
       currentPhase = "vad-drain";
       await vadDrain;
+      currentPhase = "canopy-reader-drain";
+      await readerDrain;
     });
 
   const timeoutPromise = new Promise<never>((_, reject) => {

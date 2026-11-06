@@ -1,0 +1,693 @@
+import type { ActionDispatchResult } from "../../../shared/types/actions.js";
+import type { Project } from "../../../shared/types/project.js";
+import type {
+  ScheduleRunNowOutcome,
+  ScheduleRunNowOverlapConfirmation,
+} from "../../../shared/types/ipc/schedules.js";
+import type {
+  ProjectScheduleSwitches,
+  Schedule,
+  ScheduledRun,
+  ScheduledRunOrigin,
+  ScheduledRunSkipReason,
+} from "../../../shared/types/scheduledRuns.js";
+import type { ScheduledRunRef } from "../../../shared/types/scheduledRunRef.js";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { pathComparisonKey } from "../../../shared/utils/path.js";
+import { isScheduleAssistantAgentId } from "../../../shared/utils/scheduledRuns.js";
+import type { ScheduledRunRecorder } from "./ScheduledRunRecorder.js";
+import { reserveScheduledLaunch } from "./scheduledRunAdmission.js";
+import type { ArmedScheduledRun } from "./ScheduledRunDonePolicy.js";
+import type { PreconditionSkipReason } from "./scheduledRunPrecondition.js";
+
+/** The `agent.launch` arguments a scheduled run launches with; never its provenance. */
+export interface ScheduledLaunchArgs {
+  agentId: string;
+  prompt: string;
+  /** The run reports back through Daintree's handback marker. */
+  handback: true;
+  /** Null launches with no preset, never the agent's default one. */
+  presetId: string | null;
+  /** Empty is the project's main checkout, never whichever worktree is active. */
+  worktreeId: string;
+  location: "grid";
+  /** Never takes focus from whatever the user is doing. */
+  focusPolicy: "preserve";
+  /** The terminal id the run reserved. */
+  requestedId: string;
+}
+
+export interface ScheduledLaunchRequest {
+  args: ScheduledLaunchArgs;
+  scheduledRun: ScheduledRunRef;
+}
+
+/** A schedule's run of the project's Daintree Assistant (#16169), which main always starts. */
+export interface ScheduledAssistantLaunchRequest {
+  /** The schedule's prompt as written; the run's handback instruction is added at launch. */
+  prompt: string;
+  /** The terminal id the run reserved. */
+  terminalId: string;
+  scheduledRun: ScheduledRunRef;
+}
+
+/**
+ * How starting the Assistant went. `no-session`: every Assistant session of
+ * the project is taken, and none is ever displaced for a schedule.
+ */
+export type ScheduledAssistantLaunchResult =
+  { status: "started" } | { status: "no-session" } | { status: "failed"; message: string };
+
+/** Why the view launching a run gave no answer: it closed, or took too long. */
+export class ScheduledLaunchUnansweredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ScheduledLaunchUnansweredError";
+  }
+}
+
+export interface ScheduledRunLauncherDeps<View> {
+  getRecorder: () => Promise<ScheduledRunRecorder | null>;
+  /**
+   * The schedule with its project's switches (#16166), from one read. Null
+   * when the schedule, or the project it belonged to, is gone.
+   */
+  getSchedule: (
+    projectId: string,
+    scheduleId: string
+  ) => Promise<{ schedule: Schedule; switches: ProjectScheduleSwitches } | null>;
+  getProject: (projectId: string) => Project | null;
+  folderExists: (path: string) => Promise<boolean>;
+  isProjectSleeping: (projectId: string) => boolean;
+  /** A run started in a project nothing shows: it mustn't read as closed while it runs. */
+  markProjectRunning: (projectId: string) => void;
+  /** The local view showing the project, preferring the one named, or null. */
+  findView: (projectId: string, preferredWebContentsId?: number) => View | null;
+  /**
+   * Asks the view to dispatch `agent.launch` with the run as host-stamped
+   * provenance. Throws {@link ScheduledLaunchUnansweredError} when the view
+   * closes or doesn't answer.
+   */
+  launchInView: (view: View, request: ScheduledLaunchRequest) => Promise<ActionDispatchResult>;
+  launchWithoutView: (
+    project: Project,
+    request: ScheduledLaunchRequest
+  ) => Promise<ActionDispatchResult>;
+  /**
+   * Starts the project's Daintree Assistant for the run in main, in a vacant
+   * session only (#16169); a view showing the project takes it over as it
+   * does any Assistant started without one.
+   */
+  launchAssistant: (
+    project: Project,
+    request: ScheduledAssistantLaunchRequest
+  ) => Promise<ScheduledAssistantLaunchResult>;
+  /**
+   * Runs the schedule's precondition in `cwd`, ending it when `signal`
+   * aborts. Null when it exited 0; otherwise the skip the history records.
+   */
+  runPrecondition: (request: {
+    projectId: string;
+    command: string;
+    cwd: string;
+    signal: AbortSignal;
+  }) => Promise<PreconditionSkipReason | null>;
+  /**
+   * Closes an open run's terminal the way a graceful quit does, its session
+   * captured and journaled for resuming. Resolves with the session id it
+   * captured, or null; rejects when the close couldn't be asked for.
+   */
+  closeRunTerminal: (run: ScheduledRun) => Promise<string | null>;
+  /** Takes a closed run's pane out of the views showing its project, or its saved layout. */
+  removeRunPane: (run: ScheduledRun) => Promise<void>;
+  newId: () => string;
+  /**
+   * A run started and its launch has finished, pane committed and saved: its
+   * done policy, as this launch read it, can be armed (#15982).
+   */
+  onLaunched?: (run: ArmedScheduledRun) => void;
+  /** How long a replaced run's terminal has to exit once its close was answered. */
+  replaceExitTimeoutMs?: number;
+  /**
+   * True once Daintree is quitting: nothing starts, and a refusal the quit
+   * caused records nothing, so the occurrence stays due for the next startup.
+   */
+  isShuttingDown?: () => boolean;
+  /** How long a launch that answered to have started waits for its spawn. */
+  spawnTimeoutMs?: number;
+  /** How long main's own launch, with no view, may take before it's given up. */
+  answerTimeoutMs?: number;
+  logWarn?: (message: string, error?: unknown) => void;
+}
+
+export interface ScheduledRunLaunchInput {
+  projectId: string;
+  scheduleId: string;
+  origin: ScheduledRunOrigin;
+  /** The view that asked (Run now), launched in when it shows the project. */
+  preferredWebContentsId?: number;
+  /** Run now only: what the user agreed to when earlier runs were still open. */
+  overlapConfirmed?: ScheduleRunNowOverlapConfirmation;
+  /**
+   * The scheduler's: false once what it decided on has changed (the schedule
+   * or its project's schedules switched off, its cadence changed, it was
+   * removed), so a launch that waited for its turn fires nothing.
+   */
+  stillCurrent?: () => boolean;
+}
+
+/**
+ * How a launch ended. `already-recorded` is for an occurrence the history
+ * already has a run for: nothing ran, and nothing more was recorded. Run now
+ * carries no occurrence, so it never sees it.
+ */
+export type ScheduledRunLaunchOutcome =
+  ScheduleRunNowOutcome | { status: "already-recorded"; runId: string };
+
+const DEFAULT_SPAWN_TIMEOUT_MS = 60_000;
+const DEFAULT_ANSWER_TIMEOUT_MS = 60_000;
+/** The close itself already waited on the agent to quit; the exit follows it closely. */
+const DEFAULT_REPLACE_EXIT_TIMEOUT_MS = 10_000;
+
+/**
+ * One launch of a schedule at a time, from its overlap check to its outcome,
+ * so two triggers arriving together (a catch-up and Run now) can't both find
+ * no open run: the second is judged against what the first left.
+ */
+const scheduleTurns = new Map<string, Promise<void>>();
+
+async function inScheduleTurn<T>(key: string, work: () => Promise<T>): Promise<T> {
+  const previous = scheduleTurns.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const mine = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(() => mine);
+  scheduleTurns.set(key, tail);
+  await previous;
+  try {
+    return await work();
+  } finally {
+    release();
+    if (scheduleTurns.get(key) === tail) scheduleTurns.delete(key);
+  }
+}
+
+const CASE_INSENSITIVE_PATHS = process.platform === "darwin" || process.platform === "win32";
+
+function samePath(a: string, b: string): boolean {
+  const options = { caseInsensitive: CASE_INSENSITIVE_PATHS };
+  return pathComparisonKey(a, options) === pathComparisonKey(b, options);
+}
+
+function withDeadline<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise,
+    new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new ScheduledLaunchUnansweredError(message)), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+const DECLINE_REASONS: Record<string, string> = {
+  "panel-limit": "The project already has as many panels as it can hold.",
+  "missing-cli": "The agent isn't installed or can't start.",
+  "already-launching": "Another launch of the agent was still starting.",
+  "spawn-failed": "The agent's terminal couldn't start.",
+  unavailable: "The window showing the project couldn't launch agents.",
+  "presets-loading": "The agent's presets couldn't be read.",
+};
+
+/** Whether `agent.launch` answered that it started a terminal. */
+function launchedTerminal(result: ActionDispatchResult): boolean {
+  if (!result.ok) return false;
+  const value = result.result;
+  return typeof value === "object" && value !== null && Reflect.get(value, "launched") === true;
+}
+
+/** Why `agent.launch` started nothing, in the words the history keeps. */
+function declineReason(result: ActionDispatchResult): string {
+  if (!result.ok) return result.error.message;
+  const value = result.result;
+  const status =
+    typeof value === "object" && value !== null ? Reflect.get(value, "spawnStatus") : undefined;
+  return (typeof status === "string" && DECLINE_REASONS[status]) || DECLINE_REASONS["spawn-failed"];
+}
+
+/**
+ * Launches a schedule's agent as a tracked run (#15978): the agent, preset,
+ * prompt and worktree the schedule names, with Daintree's handback
+ * instruction after the prompt, as an ordinary agent terminal of the project.
+ *
+ * It launches where the project is shown, so the pane appears in that
+ * window's grid at once and its persistence saves it; with no window it runs
+ * in main, which records the pane in the saved layout for the next window to
+ * open the project. Either way the run is registered at the spawn itself, from
+ * the values the terminal starts with (see `scheduledRunAdmission.ts`), and a
+ * launch refused before it spawns is recorded as a failed run with its reason.
+ *
+ * Every trigger goes through here: Run now, and the scheduler (#15979) with
+ * `scheduled` and `catch-up` origins. Each first meets the schedule's overlap
+ * policy and precondition (#15980), one launch of a schedule at a time.
+ */
+export function launchScheduledRun<View>(
+  input: ScheduledRunLaunchInput,
+  deps: ScheduledRunLauncherDeps<View>
+): Promise<ScheduledRunLaunchOutcome> {
+  return inScheduleTurn(`${input.projectId}\0${input.scheduleId}`, () =>
+    launchInScheduleTurn(input, deps)
+  );
+}
+
+async function launchInScheduleTurn<View>(
+  input: ScheduledRunLaunchInput,
+  deps: ScheduledRunLauncherDeps<View>
+): Promise<ScheduledRunLaunchOutcome> {
+  const logWarn = deps.logWarn ?? console.warn;
+  const isShuttingDown = deps.isShuttingDown ?? (() => false);
+  const { projectId, scheduleId, origin } = input;
+  const recorder = await deps.getRecorder();
+  if (!recorder) {
+    return {
+      status: "failed",
+      runId: null,
+      message: "The run history isn't available, so the run couldn't be recorded.",
+    };
+  }
+  const found = await deps.getSchedule(projectId, scheduleId).catch((error: unknown) => {
+    logWarn(`[ScheduledRuns] Couldn't read schedule ${scheduleId}:`, error);
+    return null;
+  });
+  if (!found) return { status: "not-found" };
+  const { schedule, switches } = found;
+  // The scheduler decided on a schedule it read earlier: one switched off
+  // since, or whose project's schedules went off since, fires nothing and
+  // records nothing, even when it was switched back on while this launch
+  // waited for its turn. Run now runs either way: asking is the opt-in.
+  // Asked after the last await before the reservation, so a switch-off from
+  // here on cancels the reservation instead.
+  if (origin.trigger !== "run-now") {
+    if (!schedule.enabled || !switches.schedulesOn || input.stillCurrent?.() === false) {
+      return { status: "not-found" };
+    }
+  }
+  // Removing a project removes its schedules and their history with them.
+  const project = deps.getProject(projectId);
+  if (!project) return { status: "not-found" };
+
+  const runId = deps.newId();
+  const terminalId = `terminal-${deps.newId()}`;
+  const { launch } = schedule;
+  const target = launch.worktreeId ?? project.path;
+  // The Assistant (#16169) starts in its own session folder, with its own
+  // settings, under whichever CLI they pick.
+  const assistant = isScheduleAssistantAgentId(launch.agentId);
+
+  const recordSkip = (
+    reason: ScheduledRunSkipReason,
+    reservedId: string | null
+  ): ScheduledRunLaunchOutcome => {
+    try {
+      recorder.registerSkip({
+        id: runId,
+        scheduleId,
+        projectId,
+        origin,
+        reason,
+        terminalId: reservedId,
+      });
+      return { status: "skipped", runId, reason };
+    } catch (error) {
+      logWarn(`[ScheduledRuns] Couldn't record run ${runId}'s skip:`, error);
+      return { status: "failed", runId: null, message: "The skipped run couldn't be recorded." };
+    }
+  };
+
+  const history = recorder.listBySchedule(scheduleId);
+  const { occurrenceKey } = origin;
+  if (occurrenceKey !== null) {
+    // Before anything with side effects: a precondition, or closing a run.
+    const existing = history.find((run) => run.origin.occurrenceKey === occurrenceKey);
+    if (existing) return { status: "already-recorded", runId: existing.id };
+  }
+
+  // Overlap reads the settlement axis, a fact: a run is open until its exit,
+  // a handback or another settlement says otherwise, whatever its pane or
+  // agent looks like. Newest first, as the history lists them.
+  const openRuns = history.filter((run) => run.settlement.state === "open");
+  const policy = schedule.policies.overlap;
+  let replacing: ScheduledRun[] = [];
+  if (openRuns.length > 0 && policy !== "start-another") {
+    if (origin.trigger === "run-now") {
+      const openRunIds = openRuns.map((run) => run.id);
+      const confirmed = input.overlapConfirmed;
+      const agreed =
+        confirmed?.policy === policy && openRunIds.every((id) => confirmed.openRunIds.includes(id));
+      if (!agreed) {
+        return { status: "confirm-overlap", policy, openRunIds, scheduleName: schedule.name };
+      }
+      // Agreeing to a skip is running anyway, alongside.
+      if (policy === "replace") replacing = openRuns;
+    } else if (policy === "skip") {
+      return recordSkip({ kind: "overlap", openRunId: openRuns[0]!.id }, null);
+    } else {
+      replacing = openRuns;
+    }
+  }
+  // Reserved in the same turn the schedule was read, so a removal of the
+  // schedule or project from here on cancels it (`cancelScheduledLaunches`).
+  const reserved = reserveScheduledLaunch({
+    runId,
+    scheduleId,
+    projectId,
+    terminalId,
+    agentId: launch.agentId,
+    ...(assistant ? { assistant: true as const } : {}),
+    automatic: origin.trigger !== "run-now",
+    admit: (resume, handbackCode) => {
+      if (isShuttingDown()) throw new Error("Daintree was quitting.");
+      // A launcher falls back from a preset it can't find, and a launch with
+      // no worktree list from a worktree it can't place; a run that would
+      // start differently from its schedule doesn't start. An Assistant has
+      // neither, and starts in its session folder.
+      if (!assistant) {
+        if (launch.presetId !== null && resume.agentPresetId !== launch.presetId) {
+          throw new Error("The schedule's preset isn't available any more.");
+        }
+        if (launch.worktreeId !== null && resume.worktreeId !== launch.worktreeId) {
+          throw new Error("The schedule's worktree isn't part of the project any more.");
+        }
+        if (!samePath(resume.cwd, target)) {
+          throw new Error(
+            launch.worktreeId !== null
+              ? "The schedule's worktree couldn't be found."
+              : "The project's folder couldn't be found."
+          );
+        }
+      }
+      if (deps.isProjectSleeping(projectId)) throw new Error("The project was going to sleep.");
+      recorder.registerLaunch({
+        id: runId,
+        scheduleId,
+        projectId,
+        origin,
+        terminalId,
+        resume,
+        handbackCode,
+        ...(assistant ? { assistant: true } : {}),
+      });
+      try {
+        deps.markProjectRunning(projectId);
+      } catch (error) {
+        logWarn(`[ScheduledRuns] Couldn't mark project ${projectId} as running:`, error);
+      }
+    },
+  });
+
+  const launchReserved = async (): Promise<ScheduledRunLaunchOutcome> => {
+    const failed = (
+      message: string,
+      reservedId: string | null = terminalId
+    ): ScheduledRunLaunchOutcome => {
+      // A removed schedule or project has no history left to write into, and
+      // a switch-off or a quit cancels an occurrence without consuming it.
+      if (reserved.removed() || isShuttingDown() || !deps.getProject(projectId)) {
+        return { status: "not-found" };
+      }
+      try {
+        recorder.registerRefusedLaunch({
+          id: runId,
+          scheduleId,
+          projectId,
+          origin,
+          terminalId: reservedId,
+          message,
+        });
+        return { status: "failed", runId, message };
+      } catch (error) {
+        logWarn(`[ScheduledRuns] Couldn't record run ${runId}'s refused launch:`, error);
+        return { status: "failed", runId: null, message };
+      }
+    };
+    // Nothing was asked for yet, so no spawn can come for it.
+    const refuseBeforeLaunch = (message: string): ScheduledRunLaunchOutcome => {
+      reserved.withdraw();
+      return failed(message, null);
+    };
+
+    if (project.status === "missing" || !(await deps.folderExists(project.path))) {
+      return refuseBeforeLaunch("The project's folder is missing.");
+    }
+    if (deps.isProjectSleeping(projectId))
+      return refuseBeforeLaunch("The project was going to sleep.");
+    if (reserved.state().kind !== "pending") return { status: "not-found" };
+    if (isShuttingDown()) {
+      reserved.withdraw();
+      return { status: "not-found" };
+    }
+
+    const { precondition } = schedule.policies;
+    if (precondition !== null) {
+      // It runs where the agent would, never wherever a fallback would land.
+      if (!(await deps.folderExists(target))) {
+        return refuseBeforeLaunch(
+          launch.worktreeId !== null
+            ? "The schedule's worktree couldn't be found."
+            : "The project's folder couldn't be found."
+        );
+      }
+      if (reserved.state().kind !== "pending") return { status: "not-found" };
+      // Removing the schedule or project cancels the reservation, and the check with it.
+      const stop = new AbortController();
+      reserved.admitted.catch(() => stop.abort());
+      const skipped = await deps.runPrecondition({
+        projectId,
+        command: precondition.command,
+        cwd: target,
+        signal: stop.signal,
+      });
+      if (reserved.state().kind !== "pending") return { status: "not-found" };
+      if (skipped !== null) {
+        reserved.withdraw();
+        if (reserved.removed() || isShuttingDown() || !deps.getProject(projectId)) {
+          return { status: "not-found" };
+        }
+        return recordSkip(skipped, terminalId);
+      }
+      if (deps.isProjectSleeping(projectId)) {
+        return refuseBeforeLaunch("The project was going to sleep.");
+      }
+    }
+
+    if (replacing.length > 0) {
+      // The precondition passed, so this run will launch: closing is the commit point.
+      const failure = await replaceOpenRuns(replacing, runId, recorder, deps, logWarn);
+      if (reserved.state().kind !== "pending") return { status: "not-found" };
+      if (failure !== null) return refuseBeforeLaunch(failure);
+    }
+
+    const scheduledRun: ScheduledRunRef = { scheduleId, runId };
+    // What the launch answered: started, or why not. Null when it didn't answer.
+    let answer: { launched: true } | { launched: false; reason: string } | null = null;
+    let unanswered: string | null = null;
+    try {
+      if (assistant) {
+        // Main's own start, bounded like main's agent launch.
+        const started = await withDeadline(
+          deps.launchAssistant(project, { prompt: launch.prompt, terminalId, scheduledRun }),
+          deps.answerTimeoutMs ?? DEFAULT_ANSWER_TIMEOUT_MS,
+          "The launch didn't finish in time."
+        );
+        if (started.status === "no-session") {
+          // Nothing was spawned for it, so nothing can take the reservation late.
+          if (!reserved.withdraw()) return { status: "not-found" };
+          if (reserved.removed() || isShuttingDown() || !deps.getProject(projectId)) {
+            return { status: "not-found" };
+          }
+          return recordSkip({ kind: "assistant-sessions-full" }, terminalId);
+        }
+        answer =
+          started.status === "started"
+            ? { launched: true }
+            : { launched: false, reason: started.message };
+      } else {
+        const request: ScheduledLaunchRequest = {
+          args: {
+            agentId: launch.agentId,
+            prompt: launch.prompt,
+            handback: true,
+            presetId: launch.presetId,
+            worktreeId: launch.worktreeId ?? "",
+            location: "grid",
+            focusPolicy: "preserve",
+            requestedId: terminalId,
+          },
+          scheduledRun,
+        };
+        const view = deps.findView(projectId, input.preferredWebContentsId);
+        // A view's bridge keeps its own deadline; main's launch waits on the
+        // workspace host, which nothing else bounds.
+        const result = view
+          ? await deps.launchInView(view, request)
+          : await withDeadline(
+              deps.launchWithoutView(project, request),
+              deps.answerTimeoutMs ?? DEFAULT_ANSWER_TIMEOUT_MS,
+              "The launch didn't finish in time."
+            );
+        answer = launchedTerminal(result)
+          ? { launched: true }
+          : { launched: false, reason: declineReason(result) };
+      }
+    } catch (error) {
+      unanswered = formatErrorMessage(error, "The launch didn't answer.");
+    }
+
+    // A view answers once its pane is committed, which can be before the
+    // terminal's spawn reaches main; the run is registered only then.
+    if (answer?.launched === true && reserved.state().kind === "pending") {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        reserved.admitted.catch(() => {}),
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, deps.spawnTimeoutMs ?? DEFAULT_SPAWN_TIMEOUT_MS);
+        }),
+      ]);
+      clearTimeout(timer);
+    }
+
+    const state = reserved.state();
+    if (state.kind === "cancelled") return { status: "not-found" };
+    if (state.kind === "refused") return failed(state.message);
+    if (state.kind === "pending") {
+      reserved.giveUp();
+      if (unanswered !== null) return failed(unanswered);
+      if (answer !== null && !answer.launched) return failed(answer.reason);
+      return failed("The agent's terminal didn't start in time.");
+    }
+    if (answer !== null && !answer.launched) {
+      // Registered, then the launch failed: the spawn threw after its admission.
+      const message = answer.reason;
+      const run = recorder.get(runId);
+      if (run?.process.pty.state === "not-started") {
+        recorder.settle(runId, { kind: "launch-error", message });
+      }
+      return { status: "failed", runId, message };
+    }
+    // The PTY host can refuse a spawn as it's sent (too many terminals), which
+    // the history has already settled while the launch still answers started.
+    const settlement = recorder.get(runId)?.settlement;
+    if (settlement?.state === "settled" && settlement.evidence.kind === "launch-error") {
+      return { status: "failed", runId, message: settlement.evidence.message };
+    }
+    return { status: "started", runId, terminalId };
+  };
+
+  try {
+    const outcome = await launchReserved();
+    if (outcome.status === "started") {
+      try {
+        deps.onLaunched?.({
+          runId,
+          scheduleId,
+          projectId,
+          terminalId,
+          onDone: schedule.policies.onDone,
+        });
+      } catch (error) {
+        logWarn(`[ScheduledRuns] Couldn't arm run ${runId}'s done policy:`, error);
+      }
+    }
+    return outcome;
+  } finally {
+    reserved.finish();
+  }
+}
+
+/**
+ * Closes each open run so `successorId` can take its place (#15980): its
+ * terminal is closed the way a graceful quit closes one, its session kept for
+ * resuming, and once its PTY is seen gone it settles as replaced. Until then
+ * the history holds back what its exit would settle it as, so the close reads
+ * as a replacement, not a failure. Answers null when every run is replaced,
+ * or why one couldn't be; a run that couldn't be closed stays open, and
+ * nothing after it is touched.
+ */
+async function replaceOpenRuns<View>(
+  runs: readonly ScheduledRun[],
+  successorId: string,
+  recorder: ScheduledRunRecorder,
+  deps: ScheduledRunLauncherDeps<View>,
+  logWarn: (message: string, error?: unknown) => void
+): Promise<string | null> {
+  for (const open of runs) {
+    const replacement = recorder.beginReplacement(open.id);
+    // Settled since it was read: its terminal isn't the schedule's to close.
+    if (!replacement) continue;
+    let replaced = false;
+    try {
+      let sessionId: string | null;
+      try {
+        sessionId = await deps.closeRunTerminal(open);
+      } catch (error) {
+        logWarn(`[ScheduledRuns] Couldn't close run ${open.id}'s terminal:`, error);
+        return "The open run's terminal couldn't be closed, so it wasn't replaced.";
+      }
+      if (!replacement.isGone()) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        await Promise.race([
+          replacement.gone,
+          new Promise<void>((resolve) => {
+            timer = setTimeout(
+              resolve,
+              deps.replaceExitTimeoutMs ?? DEFAULT_REPLACE_EXIT_TIMEOUT_MS
+            );
+          }),
+        ]);
+        clearTimeout(timer);
+      }
+      if (!replacement.isGone()) {
+        return "The open run's terminal didn't close in time, so it wasn't replaced.";
+      }
+      if (sessionId !== null) recordClosedSession(recorder, open.id, sessionId);
+      replacement.finish(successorId);
+      replaced = true;
+    } finally {
+      if (!replaced) replacement.finish(null);
+    }
+    // Its terminal is closed either way, so its pane goes.
+    try {
+      await deps.removeRunPane(open);
+    } catch (error) {
+      logWarn(`[ScheduledRuns] Couldn't take replaced run ${open.id}'s pane out:`, error);
+    }
+    // Another service settling it first is fine; a write that failed leaves it
+    // open, and an open run is still the next run's overlap.
+    if (recorder.get(open.id)?.settlement.state === "open") {
+      return "The open run's replacement couldn't be recorded, so the new run didn't start.";
+    }
+  }
+  return null;
+}
+
+/**
+ * The close journals the session it captured, but the history follows only
+ * captures announced for an incarnation; this hands it the one the close
+ * returned. An id the run already has is never replaced.
+ */
+function recordClosedSession(
+  recorder: ScheduledRunRecorder,
+  runId: string,
+  sessionId: string
+): void {
+  const run = recorder.get(runId);
+  if (!run?.resume || run.terminalId === null || run.terminalSpawnedAt === null) return;
+  recorder.handleSessionCaptured({
+    record: {
+      sessionId,
+      agentId: run.resume.agentId,
+      projectId: run.projectId,
+      terminal: { id: run.terminalId, spawnedAt: run.terminalSpawnedAt },
+    },
+  });
+}

@@ -1,0 +1,517 @@
+// @vitest-environment jsdom
+/**
+ * The amber pane edge marks an ask the user hasn't seen (#16139): an unread
+ * Canopy ask, or with no reading an observed approval or question wait not yet
+ * looked at. The glyph keeps to the band (#16056). This renders the real chrome
+ * derivation, display-state fold, header indicator and error-wait debounce, and
+ * drives the band through the fleet snapshot the way main delivers it.
+ */
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, cleanup, act } from "@testing-library/react";
+import type { AgentState, WaitingReason } from "@shared/types/agent";
+import type { FleetRunRow, FleetSnapshot, RunCanopyRefinement } from "@shared/types/ipc/fleet";
+import { SESSION_COLORS } from "@/components/Worktree/terminalStateConfig";
+import {
+  cleanupFleetSnapshotListeners,
+  setupFleetSnapshotListeners,
+  useFleetSnapshotStore,
+} from "@/store/fleetSnapshotStore";
+
+vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
+  TerminalContextMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStore: (selector: (s: { worktrees: Map<string, unknown> }) => unknown) =>
+    selector({ worktrees: new Map() }),
+  useWorktreeStoreOptional: (selector: (s: { worktrees: Map<string, unknown> }) => unknown) =>
+    selector({ worktrees: new Map() }),
+}));
+
+vi.mock("@/hooks/useWorktreeColorMap", () => ({
+  useWorktreeColorMap: () => undefined,
+}));
+
+vi.mock("@/components/DragDrop", () => ({
+  useIsDragging: () => false,
+}));
+
+vi.mock("@/components/Terminal/SubagentChip", () => ({
+  SubagentChip: () => null,
+}));
+
+const mockState = {
+  showGridAgentHighlights: false,
+  panel: {} as Record<string, unknown>,
+};
+
+vi.mock("@/store", () => ({
+  usePreferencesStore: (
+    selector: (s: { showGridAgentHighlights: boolean; showAgentTaskTitles: boolean }) => unknown
+  ) =>
+    selector({
+      showGridAgentHighlights: mockState.showGridAgentHighlights,
+      showAgentTaskTitles: true,
+    }),
+  usePanelStore: (selector: (s: { panelsById: Record<string, unknown> }) => unknown) =>
+    selector({ panelsById: { "t-1": { id: "t-1", kind: "terminal", ...mockState.panel } } }),
+}));
+
+vi.mock("@/components/ui/tooltip", () => ({
+  TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+}));
+
+import { ContentPanel } from "../ContentPanel";
+import { GridGroupAttentionContext, type GridGroupAttention } from "../gridGroupAttention";
+
+const UNREAD_ASK: RunCanopyRefinement = {
+  kind: "asked",
+  quote: "Run the migration?",
+  readAt: 0,
+  seen: false,
+};
+
+function snapshot(overrides: Partial<FleetRunRow>): FleetSnapshot {
+  return {
+    runs: [{ runId: "t-1", workspaceId: "p1", spawnedAt: 0, cwd: "/repo", ...overrides }],
+    changedAt: 0,
+    degraded: false,
+    lastSuccessfulAt: null,
+  };
+}
+
+function fleet(overrides: Partial<FleetRunRow>) {
+  act(() => useFleetSnapshotStore.setState({ snapshot: snapshot(overrides) }));
+}
+
+/** The pane's own observation, as the panel store holds it. */
+function observe(agentState: AgentState, waitingReason?: WaitingReason, extra = {}) {
+  mockState.panel = { agentState, waitingReason, ...extra };
+}
+
+interface PaneProps {
+  agentState?: AgentState;
+  isFocused?: boolean;
+  isExited?: boolean;
+  exitCode?: number | null;
+  location?: "grid" | "dock" | "dialog";
+  /** What the pane's tab group says about its hidden tabs. */
+  group?: Partial<GridGroupAttention>;
+}
+
+function pane({ isFocused = false, group, ...props }: PaneProps = {}) {
+  const panel = (
+    <ContentPanel
+      id="t-1"
+      title="Claude"
+      kind="terminal"
+      agentId="claude"
+      isFocused={isFocused}
+      isMultiPanelGrid
+      onFocus={() => {}}
+      onClose={() => {}}
+      onToggleMaximize={() => {}}
+      {...props}
+    >
+      <div data-testid="panel-body" />
+    </ContentPanel>
+  );
+  if (group === undefined) return panel;
+  const value: GridGroupAttention = {
+    panelId: "t-1",
+    ambientAgentState: undefined,
+    hiddenTabFailed: false,
+    ...group,
+  };
+  return (
+    <GridGroupAttentionContext.Provider value={value}>{panel}</GridGroupAttentionContext.Provider>
+  );
+}
+
+const frame = (container: HTMLElement) =>
+  container.querySelector<HTMLElement>('[data-panel-id="t-1"]')!;
+const hasEdge = (container: HTMLElement, state: string) =>
+  frame(container).classList.contains(`panel-state-${state}`);
+const glyph = () =>
+  screen
+    .queryAllByRole("status")
+    .find((el) => (el.getAttribute("aria-label") ?? "").startsWith("Agent state:"));
+const glyphLabel = () => glyph()?.getAttribute("aria-label") ?? null;
+const wearsWaitingHue = () => glyph()?.className.includes(SESSION_COLORS.waiting) ?? false;
+/** The grey a wait that isn't news shares with the settled glyphs. */
+const wearsSettledTone = () => glyph()?.className.includes(SESSION_COLORS.idle) ?? false;
+
+/** Past the error wait's debounce, so nothing amber can still be on its way. */
+function settle() {
+  act(() => {
+    vi.advanceTimersByTime(1_000);
+  });
+}
+
+const electronDescriptor = Object.getOwnPropertyDescriptor(window, "electron");
+const hostIdDescriptor = Object.getOwnPropertyDescriptor(window, "__DAINTREE_HOST_ID__");
+
+function restoreGlobal(name: string, descriptor: PropertyDescriptor | undefined) {
+  if (descriptor) Object.defineProperty(window, name, descriptor);
+  else Reflect.deleteProperty(window, name);
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  mockState.showGridAgentHighlights = false;
+  mockState.panel = {};
+  useFleetSnapshotStore.setState({ snapshot: null });
+});
+
+afterEach(() => {
+  cleanup();
+  cleanupFleetSnapshotListeners();
+  useFleetSnapshotStore.setState({ snapshot: null });
+  restoreGlobal("electron", electronDescriptor);
+  restoreGlobal("__DAINTREE_HOST_ID__", hostIdDescriptor);
+  vi.useRealTimers();
+});
+
+describe("ContentPanel amber from the fleet band", () => {
+  it.each([
+    ["on this machine", undefined],
+    ["in a remote host's view", { id: "host-1" }],
+  ])("draws no amber for an agent at its prompt with no Canopy reading %s", (_label, host) => {
+    // A remote project's view reaches the host's fleet over the same channels;
+    // the snapshot it holds is the host's, matched to panes by terminal id.
+    if (host) {
+      Object.defineProperty(window, "__DAINTREE_HOST_ID__", { configurable: true, value: host });
+    }
+    let push: ((snapshot: FleetSnapshot) => void) | undefined;
+    const hostFleet = snapshot({ agentState: "waiting", waitingReason: "prompt" });
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      value: {
+        fleet: {
+          onSnapshotUpdated: (cb: (s: FleetSnapshot) => void) => {
+            push = cb;
+            return () => {};
+          },
+          getSnapshot: () => Promise.resolve(hostFleet),
+        },
+      },
+    });
+    observe("waiting", "prompt");
+    setupFleetSnapshotListeners();
+    act(() => push?.(hostFleet));
+
+    const { container } = render(pane({ agentState: "waiting" }));
+    settle();
+
+    expect(hasEdge(container, "waiting")).toBe(false);
+    // The header still draws the wait, in grey (#16138).
+    expect(glyphLabel()).toBe("Agent state: waiting");
+    expect(wearsWaitingHue()).toBe(false);
+    expect(wearsSettledTone()).toBe(true);
+    // The observation itself is still reported as seen.
+    expect(frame(container).getAttribute("data-agent-state")).toBe("waiting");
+
+    // The same view lights up for an ask the host's Canopy read.
+    act(() =>
+      push?.(snapshot({ agentState: "waiting", waitingReason: "prompt", canopy: UNREAD_ASK }))
+    );
+    expect(hasEdge(container, "waiting")).toBe(true);
+    expect(glyphLabel()).toMatch(/^Agent state: waiting/);
+    expect(wearsWaitingHue()).toBe(true);
+  });
+
+  it("draws the unread mark, not the edge, for an unread hand-back", () => {
+    observe("completed");
+    fleet({ agentState: "completed", handBack: { stoppedAt: 0 } });
+    const { container } = render(pane({ agentState: "completed" }));
+    settle();
+
+    expect(hasEdge(container, "waiting")).toBe(false);
+    expect(glyphLabel()).toBe("Agent state: unread");
+    expect(wearsWaitingHue()).toBe(false);
+  });
+
+  it("draws the edge and amber ring for an unread ask, and takes both away once it is seen", () => {
+    observe("waiting", "question");
+    fleet({ agentState: "waiting", waitingReason: "question", canopy: UNREAD_ASK });
+    const { container, rerender } = render(pane({ agentState: "waiting" }));
+
+    expect(hasEdge(container, "waiting")).toBe(true);
+    expect(glyphLabel()).toBe("Agent state: waiting (question)");
+    expect(wearsWaitingHue()).toBe(true);
+
+    // Focus alone answers nothing: the edge keeps over the selected fill.
+    rerender(pane({ agentState: "waiting", isFocused: true }));
+    expect(hasEdge(container, "waiting")).toBe(true);
+    expect(frame(container).classList.contains("terminal-selected")).toBe(true);
+
+    // Canopy's read mark for the turn is what clears it, everywhere at once.
+    fleet({
+      agentState: "waiting",
+      waitingReason: "question",
+      canopy: { ...UNREAD_ASK, seen: true },
+    });
+    expect(hasEdge(container, "waiting")).toBe(false);
+    // Seen is not answered: the ring stays, without the amber.
+    expect(glyphLabel()).toBe("Agent state: waiting (question)");
+    expect(wearsWaitingHue()).toBe(false);
+    expect(wearsSettledTone()).toBe(true);
+
+    // A new ask is a new turn, unread again.
+    fleet({
+      agentState: "waiting",
+      waitingReason: "question",
+      canopy: { ...UNREAD_ASK, readAt: 9 },
+    });
+    expect(hasEdge(container, "waiting")).toBe(true);
+  });
+
+  it.each(["approval", "question"] as const)(
+    "draws the edge for an unseen %s wait without Canopy, until the look marks it seen",
+    (waitingReason) => {
+      observe("waiting", waitingReason);
+      fleet({ agentState: "waiting", waitingReason, wait: { stoppedAt: 0 } });
+      const { container, rerender } = render(pane({ agentState: "waiting" }));
+      settle();
+
+      expect(hasEdge(container, "waiting")).toBe(true);
+      // The glyph keeps to the band: unread news, not the amber ring.
+      expect(glyphLabel()).toBe("Agent state: unread");
+      expect(wearsWaitingHue()).toBe(false);
+
+      // Focus alone is not the look: main marks the wait seen after its dwell.
+      rerender(pane({ agentState: "waiting", isFocused: true }));
+      expect(hasEdge(container, "waiting")).toBe(true);
+
+      fleet({ agentState: "waiting", waitingReason, wait: { stoppedAt: 0, seenAt: 1 } });
+      expect(hasEdge(container, "waiting")).toBe(false);
+      rerender(pane({ agentState: "waiting" }));
+      expect(hasEdge(container, "waiting")).toBe(false);
+
+      // A new ask is a new wait, unseen again.
+      fleet({ agentState: "waiting", waitingReason, wait: { stoppedAt: 5 } });
+      expect(hasEdge(container, "waiting")).toBe(true);
+    }
+  );
+
+  it("lets the pane's newer stop end an observed ask before the fleet catches up", () => {
+    // The fleet still holds the approval; the pane has since answered it and
+    // stopped again, at a prompt or finished. Only a Canopy reading outlives that.
+    fleet({ agentState: "waiting", waitingReason: "approval", wait: { stoppedAt: 0 } });
+    for (const [agentState, waitingReason] of [
+      ["waiting", "prompt"],
+      ["completed", undefined],
+    ] as const) {
+      observe(agentState, waitingReason);
+      const { container, unmount } = render(pane({ agentState }));
+      settle();
+      expect(hasEdge(container, "waiting"), agentState).toBe(false);
+      unmount();
+    }
+
+    fleet({ agentState: "waiting", waitingReason: "approval", canopy: UNREAD_ASK });
+    observe("waiting", "prompt");
+    const { container } = render(pane({ agentState: "waiting" }));
+    expect(hasEdge(container, "waiting")).toBe(true);
+  });
+
+  it("keeps an observed ask's edge when the pane's wait has lost its reason", () => {
+    // The input controller's directing spell hands the wait back with no
+    // reason; main still holds the approval, and the fleet says so.
+    observe("waiting");
+    fleet({ agentState: "waiting", waitingReason: "approval", wait: { stoppedAt: 0 } });
+    const { container } = render(pane({ agentState: "waiting" }));
+    settle();
+    expect(hasEdge(container, "waiting")).toBe(true);
+  });
+
+  it("draws no edge once the header has stopped showing the agent as waiting", () => {
+    // An exit code on record retires the display state before the exit itself
+    // lands; the edge goes with it.
+    observe("waiting", "approval");
+    fleet({ agentState: "waiting", waitingReason: "approval", wait: { stoppedAt: 0 } });
+    const { container } = render(pane({ agentState: "waiting", exitCode: 0 }));
+    settle();
+    expect(hasEdge(container, "waiting")).toBe(false);
+  });
+
+  it("draws no edge for a question Canopy read as asking nothing", () => {
+    observe("waiting", "question");
+    fleet({
+      agentState: "waiting",
+      waitingReason: "question",
+      wait: { stoppedAt: 0 },
+      canopy: { kind: "not-asking", quote: "All tests pass.", readAt: 0, seen: false },
+    });
+    const { container } = render(pane({ agentState: "waiting" }));
+    settle();
+
+    expect(hasEdge(container, "waiting")).toBe(false);
+    expect(glyphLabel()).toBe("Agent state: unread");
+  });
+
+  it("draws no edge for a seen Canopy ask, whatever the wait's own record says", () => {
+    observe("waiting", "approval");
+    fleet({
+      agentState: "waiting",
+      waitingReason: "approval",
+      wait: { stoppedAt: 0 },
+      canopy: { ...UNREAD_ASK, seen: true },
+    });
+    const { container } = render(pane({ agentState: "waiting" }));
+    settle();
+
+    expect(hasEdge(container, "waiting")).toBe(false);
+  });
+
+  it("reads a Canopy ask on a finished turn as amber", () => {
+    observe("completed");
+    fleet({ agentState: "completed", handBack: { stoppedAt: 0, seenAt: 1 }, canopy: UNREAD_ASK });
+    const { container } = render(pane({ agentState: "completed" }));
+
+    expect(hasEdge(container, "waiting")).toBe(true);
+    expect(glyphLabel()).toBe("Agent state: waiting");
+  });
+
+  it("draws no amber before the fleet snapshot arrives, then follows it", () => {
+    observe("waiting", "approval");
+    const { container } = render(pane({ agentState: "waiting" }));
+    settle();
+
+    expect(hasEdge(container, "waiting")).toBe(false);
+    expect(glyphLabel()).toBe("Agent state: waiting (approval)");
+    expect(wearsWaitingHue()).toBe(false);
+    expect(wearsSettledTone()).toBe(true);
+
+    fleet({ agentState: "waiting", waitingReason: "approval", canopy: UNREAD_ASK });
+    expect(hasEdge(container, "waiting")).toBe(true);
+    expect(wearsWaitingHue()).toBe(true);
+    expect(wearsSettledTone()).toBe(false);
+  });
+
+  it("lets the pane's own newer observation end the amber before the band catches up", () => {
+    fleet({ agentState: "waiting", waitingReason: "question", canopy: UNREAD_ASK });
+    observe("working");
+    mockState.showGridAgentHighlights = true;
+    const working = render(pane({ agentState: "working" }));
+
+    expect(hasEdge(working.container, "waiting")).toBe(false);
+    expect(hasEdge(working.container, "working")).toBe(true);
+    working.unmount();
+
+    observe("waiting", "question", { isRestarting: true });
+    const restarting = render(pane({ agentState: "waiting" }));
+    // The edge and the ring's amber go together, not one after the other.
+    expect(hasEdge(restarting.container, "waiting")).toBe(false);
+    expect(glyphLabel()).toBe("Agent state: idle");
+    expect(wearsWaitingHue()).toBe(false);
+  });
+
+  it("raises the edge for a hidden tab's ask even while the shown tab sits at its prompt", () => {
+    observe("waiting", "prompt");
+    fleet({ agentState: "waiting", waitingReason: "prompt" });
+    const { container } = render(
+      pane({ agentState: "waiting", group: { ambientAgentState: "waiting" } })
+    );
+
+    expect(hasEdge(container, "waiting")).toBe(true);
+    // The shown tab's own glyph keeps to its own band.
+    expect(glyphLabel()).toBe("Agent state: waiting");
+    expect(wearsWaitingHue()).toBe(false);
+  });
+
+  it("raises the red edge for a hidden tab's unseen failure over a hidden ask, and drops it with the group", () => {
+    observe("waiting", "prompt");
+    fleet({ agentState: "waiting", waitingReason: "prompt" });
+    const asking = { ambientAgentState: "waiting" } as const;
+    const { container, rerender } = render(
+      pane({ agentState: "waiting", group: { ...asking, hiddenTabFailed: true } })
+    );
+    expect(hasEdge(container, "failed")).toBe(true);
+    expect(hasEdge(container, "waiting")).toBe(false);
+    // The shown tab's glyph keeps to its own state.
+    expect(glyphLabel()).toBe("Agent state: waiting");
+
+    rerender(pane({ agentState: "waiting", isFocused: true, group: { hiddenTabFailed: true } }));
+    expect(hasEdge(container, "failed")).toBe(true);
+    expect(frame(container).classList.contains("terminal-selected")).toBe(true);
+
+    // The failed tab's own look cleared it; the hidden ask still draws.
+    rerender(pane({ agentState: "waiting", group: asking }));
+    expect(hasEdge(container, "failed")).toBe(false);
+    expect(hasEdge(container, "waiting")).toBe(true);
+  });
+
+  it("takes no group edge meant for another tab, or outside the grid", () => {
+    observe("waiting", "prompt");
+    fleet({ agentState: "waiting", waitingReason: "prompt" });
+    const loud = { ambientAgentState: "waiting", hiddenTabFailed: true } as const;
+    const other = render(pane({ agentState: "waiting", group: { ...loud, panelId: "t-2" } }));
+    expect(hasEdge(other.container, "failed")).toBe(false);
+    expect(hasEdge(other.container, "waiting")).toBe(false);
+    expect(frame(other.container).hasAttribute("data-ambient-agent-state")).toBe(false);
+    other.unmount();
+
+    for (const location of ["dock", "dialog"] as const) {
+      const { container, unmount } = render(pane({ agentState: "waiting", location, group: loud }));
+      expect(frame(container).hasAttribute("data-ambient-agent-state"), location).toBe(false);
+      unmount();
+    }
+  });
+
+  it("draws the failed edge for an error wait, with the blocked mark in place of the ring", () => {
+    observe("waiting", "error");
+    fleet({ agentState: "waiting", waitingReason: "error" });
+    const { container } = render(pane({ agentState: "waiting" }));
+
+    // The error edge keeps its debounce.
+    expect(hasEdge(container, "failed")).toBe(false);
+    settle();
+    expect(hasEdge(container, "failed")).toBe(true);
+    expect(hasEdge(container, "waiting")).toBe(false);
+    expect(glyphLabel()).toBe("Agent state: blocked (error)");
+  });
+
+  it("draws the failed edge for a failed exit, and none for a clean or interrupted one", () => {
+    fleet({ agentState: "exited" });
+    for (const [exitCode, failed] of [
+      [1, true],
+      [0, false],
+      [130, false],
+    ] as const) {
+      observe("exited", undefined, { exitCode });
+      const { container, unmount } = render(
+        pane({ agentState: "exited", isExited: true, exitCode })
+      );
+      expect(hasEdge(container, "failed"), `exit ${exitCode}`).toBe(failed);
+      unmount();
+    }
+  });
+
+  it("ranks a failure over an ask, and keeps it over the selected fill", () => {
+    observe("waiting", "question", { restartError: { message: "restart failed" } });
+    fleet({ agentState: "waiting", waitingReason: "question", canopy: UNREAD_ASK });
+    const { container, rerender } = render(pane({ agentState: "waiting" }));
+    expect(hasEdge(container, "failed")).toBe(true);
+    expect(hasEdge(container, "waiting")).toBe(false);
+
+    rerender(pane({ agentState: "waiting", isFocused: true }));
+    expect(hasEdge(container, "failed")).toBe(true);
+    expect(frame(container).classList.contains("terminal-selected")).toBe(true);
+  });
+
+  it("keeps the working edge behind the highlights setting", () => {
+    observe("working");
+    fleet({ agentState: "working" });
+    const off = render(pane({ agentState: "working" }));
+    expect(hasEdge(off.container, "working")).toBe(false);
+    off.unmount();
+
+    mockState.showGridAgentHighlights = true;
+    const on = render(pane({ agentState: "working" }));
+    expect(hasEdge(on.container, "working")).toBe(true);
+  });
+});

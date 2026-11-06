@@ -15,6 +15,7 @@ import { fireWatchNotification } from "@/lib/watchNotification";
 import { usePanelStore } from "@/store/panelStore";
 import { useRateLimitObservationStore } from "@/store/rateLimitObservationStore";
 import { isPtyPanel } from "@shared/types/panel";
+import { resolveAccountSwitchTarget } from "@/services/terminal/accountSwitchTarget";
 import {
   useTerminalPendingDestructiveActionStore,
   type TerminalPendingDestructiveActionKind,
@@ -42,6 +43,7 @@ import {
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
 import { logWarn } from "@/utils/logger";
 import {
+  RestartOnAccountArgsSchema,
   RestartOnPresetArgsSchema,
   SetHoldOnRestartArgsSchema,
   StartHeldArgsSchema,
@@ -358,19 +360,24 @@ export const terminalLifecycleActionRuns = {
     ctx: ActionContext,
     focusedAtDispatch: string | null
   ) => {
-    const { terminalId, presetId } = RestartOnPresetArgsSchema.parse(args);
+    const { terminalId, presetId, keepConversation } = RestartOnPresetArgsSchema.parse(args);
     requireExplicitTerminalIdForAgentDispatch("terminal.restartOnPreset", terminalId, ctx);
     // Unlike terminal.restart, this asks whatever the agent is doing: the
-    // conversation can't follow the pane to another preset's home, and a
-    // rate-limited agent is rarely `working` (#13746).
+    // conversation follows the pane to another preset's home only when asked
+    // to and when that home can find it (#16045), and a rate-limited agent is
+    // rarely `working` (#13746).
     if (!isConfirmed(args, ctx)) {
-      throw new Error("Restarting on another preset ends the conversation; pass confirmed: true");
+      throw new Error(
+        "Restarting on another preset interrupts the agent and discards its scrollback; pass confirmed: true"
+      );
     }
     const state = usePanelStore.getState();
     const targetId = terminalId ?? focusedAtDispatch;
     if (!targetId) throw new Error("No terminal to restart on that preset");
     const observedBefore = useRateLimitObservationStore.getState().observedAtByTerminalId[targetId];
-    const result = await state.restartTerminalOnPreset(targetId, presetId);
+    const result = await state.restartTerminalOnPreset(targetId, presetId, {
+      keepConversation: keepConversation === true,
+    });
     if (!result.success) {
       throw new Error(result.error ?? "Couldn't restart the terminal on that preset");
     }
@@ -385,7 +392,52 @@ export const terminalLifecycleActionRuns = {
       terminalId: targetId,
       agentPresetId:
         (restarted && isPtyPanel(restarted) ? restarted.agentPresetId : undefined) ?? presetId,
-      agentSessionIdCleared: true as const,
+      // What was launched, not whether the CLI took it: a refusal is a later
+      // observation the pane reports.
+      agentSessionIdCleared: result.resumedSessionId === undefined,
+    };
+  },
+  "terminal.restartOnAccount": async (
+    args: unknown,
+    ctx: ActionContext,
+    focusedAtDispatch: string | null
+  ) => {
+    const { terminalId, accountId, keepConversation } = RestartOnAccountArgsSchema.parse(args);
+    requireExplicitTerminalIdForAgentDispatch("terminal.restartOnAccount", terminalId, ctx);
+    // Asked whatever the agent is doing, as a preset switch is: the
+    // conversation follows the pane to another account's folder only when
+    // asked to and when that folder can find it (#16135).
+    if (!isConfirmed(args, ctx)) {
+      throw new Error(
+        "Restarting on another account interrupts the agent and discards its scrollback; pass confirmed: true"
+      );
+    }
+    const targetId = terminalId ?? focusedAtDispatch;
+    if (!targetId) throw new Error("No terminal to restart on that account");
+    const panel = usePanelStore.getState().panelsById[targetId];
+    const agentId = panel && isPtyPanel(panel) ? panel.launchAgentId : undefined;
+    if (!agentId) throw new Error(`Terminal '${targetId}' isn't an agent`);
+    const target = await resolveAccountSwitchTarget(agentId, accountId);
+    const observedBefore = useRateLimitObservationStore.getState().observedAtByTerminalId[targetId];
+    const result = await usePanelStore.getState().restartTerminalOnAccount(targetId, target, {
+      keepConversation: keepConversation === true,
+    });
+    if (!result.success) {
+      throw new Error(result.error ?? "Couldn't restart the terminal on that account");
+    }
+    // The chip reported the account the pane left. Only that observation goes:
+    // the new process may already have reported one of its own.
+    if (observedBefore !== undefined) {
+      useRateLimitObservationStore.getState().clearObservation(targetId, observedBefore);
+    }
+    const restarted = usePanelStore.getState().panelsById[targetId];
+    return {
+      terminalId: targetId,
+      agentAccountId:
+        (restarted && isPtyPanel(restarted) ? restarted.agentAccountId : null) ?? null,
+      // What was launched, not whether the CLI took it: a refusal is a later
+      // observation the pane reports.
+      agentSessionIdCleared: result.resumedSessionId === undefined,
     };
   },
   "terminal.redraw": async (
@@ -498,6 +550,16 @@ export const terminalLifecycleActionRuns = {
       throw new Error("No terminal selected");
     }
     return await readTerminalPaneInfo(targetId);
+  },
+  "terminal.sessionFile.get": async (args: unknown, ctx: ActionContext) => {
+    const { terminalId } = args as { terminalId: string };
+    // The caller comes off the host-stamped context, never an argument.
+    if (ctx?.dispatchSource !== "plugin" || !ctx.callerPluginId) {
+      throw new UnactionableTargetError(
+        "Only a plugin can look up the session file a terminal's agent is writing."
+      );
+    }
+    return await window.electron.terminalSessionFile.get({ terminalId });
   },
   "terminal.setHoldOnRestart": async (args: unknown, ctx: ActionContext) => {
     const { terminalId, hold } = SetHoldOnRestartArgsSchema.parse(args);

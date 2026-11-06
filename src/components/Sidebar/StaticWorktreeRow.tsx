@@ -1,9 +1,8 @@
 import { memo, useCallback, useMemo } from "react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { WorktreeCard, type WorktreeCardProps } from "@/components/Worktree";
+import { WorktreeCard } from "@/components/Worktree";
 import { WorktreeCardErrorFallback } from "@/components/Worktree/WorktreeCardErrorFallback";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
-import { getWorktreeSidebarRowId } from "./useWorktreeSidebarKeyboard";
 import type { WorktreeState } from "@/types";
 import type { WorktreeActions } from "@/hooks/useWorktreeActions";
 import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
@@ -19,7 +18,6 @@ interface StaticWorktreeRowProps {
   availability: UseAgentLauncherReturn["availability"];
   agentSettings: UseAgentLauncherReturn["agentSettings"];
   homeDir: string | undefined;
-  aggregateCounts?: WorktreeCardProps["aggregateCounts"];
   isDragHandleDisabled?: boolean;
   ariaRowIndex: number;
 }
@@ -35,7 +33,6 @@ function StaticWorktreeRow({
   availability,
   agentSettings,
   homeDir,
-  aggregateCounts,
   isDragHandleDisabled,
   ariaRowIndex,
 }: StaticWorktreeRowProps) {
@@ -74,7 +71,6 @@ function StaticWorktreeRow({
   return (
     <div
       role="row"
-      id={getWorktreeSidebarRowId(worktreeId)}
       data-worktree-row={worktreeId}
       data-keyboard-cursor={isKeyboardCursor ? "true" : undefined}
       tabIndex={-1}
@@ -94,8 +90,8 @@ function StaticWorktreeRow({
             worktree={worktree}
             isActive={isActive}
             isFocused={worktreeId === focusedWorktreeId}
+            isKeyboardCursor={isKeyboardCursor}
             isSingleWorktree={totalWorktreeCount === 1}
-            aggregateCounts={aggregateCounts}
             onSelect={onSelect}
             onOpenEditor={onOpenEditor}
             onSaveLayout={onSaveLayout}

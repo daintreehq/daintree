@@ -1,5 +1,7 @@
 import type React from "react";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import { DiffStat } from "@/components/ui/DiffStat";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { prefetchStagingStatus } from "@/components/Worktree/ReviewHub/stagingStatusCache";
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import type { WorktreeState } from "@/types";
@@ -17,8 +19,6 @@ import { useForgeAuthorAvatar } from "@/hooks/useForgeAuthorAvatar";
 import { useReviewChangeHint } from "@/hooks/useReviewChangeHint";
 import {
   Activity,
-  AlertTriangle,
-  ChevronDown,
   ChevronRight,
   GitCommitHorizontal,
   Pause,
@@ -31,7 +31,12 @@ import {
 import { useKeepMounted } from "@/hooks/useKeepMounted";
 import { actionService } from "@/services/ActionService";
 import type { ComputedSubtitle, WorktreeReviewState } from "./hooks/useWorktreeStatus";
-import { SECTION_LABEL, CARD_DENSITY } from "./sectionChrome";
+import {
+  SECTION_LABEL,
+  CARD_DENSITY,
+  DISCLOSURE_BUTTON,
+  DISCLOSURE_BUTTON_LABELLED,
+} from "./sectionChrome";
 import { useCardFocusHandoff } from "./hooks/useCardFocusHandoff";
 import { resourceLifecycleVisibility } from "../utils/resourceLifecycle";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -82,6 +87,8 @@ export interface WorktreeDetailsSectionProps {
   worktreeErrors: ErrorRecord[];
   isFocused: boolean;
   isStale?: boolean;
+  /** Names the worktree in the disclosure's accessible name. */
+  worktreeLabel?: string;
   onToggleExpand: (e: React.MouseEvent) => void;
   onPathClick: () => void;
   onDismissError: (id: string) => void;
@@ -96,6 +103,8 @@ export interface WorktreeDetailsSectionProps {
    * unless the worktree is conflicted, where it is the way out.
    */
   quietGitDetail?: React.ReactNode;
+  /** The sync line, when the card itself leaves it to Details (sidebar, default profile). */
+  syncDetail?: React.ReactNode;
   isLifecycleRunning?: boolean;
   lifecycleLabel?: string;
 
@@ -125,12 +134,14 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
     worktreeErrors,
     isFocused,
     isStale,
+    worktreeLabel,
     onToggleExpand,
     onPathClick,
     onDismissError,
     onRetryError,
     onOpenReviewHub,
     quietGitDetail,
+    syncDetail,
     reviewState,
     isLifecycleRunning,
     lifecycleLabel,
@@ -197,6 +208,18 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   }, [changedFileCount, prefersReducedMotion]);
 
   const isConflicted = reviewState === "conflicted";
+
+  // The resting row's words truncate on whichever inner span holds them, so
+  // the summary measures on hover and reveals the full text only when
+  // something was cut. A keyboard user hears it as the disclosure's
+  // description instead.
+  const [summaryReveal, setSummaryReveal] = useState<string | null>(null);
+  const measureSummary = (el: HTMLElement) => {
+    const cut = [el, ...el.querySelectorAll<HTMLElement>(".truncate")].some(
+      (node) => node.scrollWidth > node.clientWidth + 1
+    );
+    setSummaryReveal(cut ? el.textContent?.trim() || null : null);
+  };
   // A clean tree with unpushed commits still has a Review Hub next step —
   // push — so the opener stays visible; only the label shifts to match.
   const isUnpushedClean = reviewState === "unpushed-clean" && !hasChanges;
@@ -273,6 +296,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
 
   const isSidebar = variant === "sidebar";
   const density = CARD_DENSITY[isSidebar ? "sidebar" : "grid"];
+  const detailsLabel = worktreeLabel ? `Details for worktree ${worktreeLabel}` : "Details";
 
   return (
     <>
@@ -301,32 +325,37 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
           // (it wins over the well's via `cn`'s tailwind-merge), and the
           // border is reserved as transparent when it isn't drawn. Collapsed
           // is the value to keep: the metadata cluster above is spaced
-          // against this row's 4px specifically — see the `pt-2` note in
+          // against this row's 4px specifically — see the body padding note in
           // `WorktreeCard.tsx`. Reserving the border also puts the collapsed
           // row's text on the same x as the sessions row below it, which
           // always sits inside a well.
           isSidebar ? "mt-1" : "mt-1.5"
         )}
       >
-        {isExpanded ? (
-          <div>
-            <button
-              onClick={onToggleExpand}
-              aria-expanded={true}
-              aria-controls={detailsPanelId}
-              className={cn(
-                // Leading chevron, no fill, no rule under it: the trigger has
-                // to stay attached to the body it just revealed. A divider
-                // there cuts the two apart and they read as separate
-                // components.
-                "cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
-                density.row,
-                "gap-1.5"
-              )}
-              id={`${detailsId}-button`}
-            >
-              <ChevronRight className="h-3 w-3 shrink-0 rotate-90 text-text-secondary" />
-              {isBeingDeleted && !deleteError ? (
+        {/* One row in both states, and its leading chevron is the only part of
+            it that toggles: the summary, the commit line and the padding are
+            the card's content and select the worktree like the rest of it
+            (#15864). The row used to be the trigger end to end, so a click
+            aimed at the worktree opened a disclosure instead. */}
+        <div className={cn("flex min-w-0 items-center text-left", density.rowBox)}>
+          <button
+            type="button"
+            onClick={onToggleExpand}
+            aria-expanded={isExpanded}
+            aria-controls={detailsPanelId}
+            aria-label={detailsLabel}
+            // The row's own words, so the disclosure names what it
+            // summarises rather than only that it opens.
+            aria-describedby={isExpanded ? undefined : `${detailsId}-summary`}
+            id={`${detailsId}-button`}
+            className={cn(DISCLOSURE_BUTTON, isExpanded && DISCLOSURE_BUTTON_LABELLED)}
+          >
+            <ChevronRight
+              className={cn("h-3 w-3 shrink-0 text-text-secondary", isExpanded && "rotate-90")}
+              aria-hidden="true"
+            />
+            {isExpanded &&
+              (isBeingDeleted && !deleteError ? (
                 <span className={SECTION_LABEL} role="status" aria-live="polite">
                   <span className="flex items-center gap-1.5">
                     <Spinner size="xs" className="shrink-0" />
@@ -335,98 +364,22 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                 </span>
               ) : (
                 <span className={SECTION_LABEL}>Details</span>
-              )}
-            </button>
-            <div
-              id={detailsPanelId}
-              role="region"
-              aria-labelledby={`${detailsId}-button`}
-              // Inside the well now, so it owns the well's padding. The
-              // trigger above it supplies the top inset.
-              className={cn(
-                isSidebar
-                  ? "px-2.5 pb-2"
-                  : // The grid caps the opened panel and scrolls inside it.
-                    // Grid rows share a height, so an unbounded panel is not
-                    // only this card's problem: one card expanded to 460px
-                    // took its three row-mates with it and left 250px of
-                    // nothing in each. Bounding it is the standard correction
-                    // for variable-height cards in a grid, and 208px still
-                    // shows the note plus the first several changed files.
-                    //
-                    // It does not fully solve the row: `items-stretch` still
-                    // propagates whatever height the open card ends up with,
-                    // so its row-mates grow with it. Moving Details out of
-                    // flow entirely — a side inspector or an anchored overlay
-                    // — is the only thing that would, and that is a change to
-                    // what the disclosure IS rather than to how it looks.
-                    "max-h-52 overflow-y-auto px-3 pb-2.5"
-              )}
-            >
-              {quietGitDetail}
-              <WorktreeDetails
-                variant={variant}
-                worktree={worktree}
-                homeDir={homeDir}
-                effectiveNote={effectiveNote}
-                effectiveSummary={effectiveSummary}
-                worktreeErrors={worktreeErrors}
-                hasChanges={hasChanges}
-                isFocused={isFocused}
-                isStale={isStale}
-                onPathClick={onPathClick}
-                onDismissError={onDismissError}
-                onRetryError={onRetryError}
-                showLastCommit={true}
-                lastActivityTimestamp={worktree.lastActivityTimestamp}
-                showTime={true}
-                forgeAvatarUrl={forgeAuthorAvatarUrl}
-              />
-            </div>
-          </div>
-        ) : (
-          <div className="flex flex-col">
-            <div className="flex items-stretch">
-              <div
-                onClick={onToggleExpand}
-                className={cn(
-                  "worktree-section-button relative flex min-w-0 flex-1 items-center justify-between text-left transition-colors",
-                  // Sidebar: a flat row on the card surface with a hover
-                  // backplate, not a permanent bordered well. Same hit area,
-                  // same content, one less container.
-                  // Shares the density's row box (it cannot use the row class
-                  // itself — this row is a flex-1 sibling of the right button
-                  // group, not a full-width row). The old -ml-1.5 chip put
-                  // this line's chevron 16px left of the session row's
-                  // directly beneath it.
-                  //
-                  // The grid used to spell this `px-3 py-2.5` inside a filled,
-                  // bordered well, which put its text 9px left of the card
-                  // title above it and gave a single line of metadata the
-                  // weight of a container.
-                  density.rowBox
-                )}
+              ))}
+          </button>
+          {!isExpanded && (
+            <>
+              <TruncatedTooltip
+                content={summaryReveal}
+                isTruncated={summaryReveal !== null}
+                side="bottom"
+                contentClassName="max-w-xs [overflow-wrap:anywhere]"
+                focusable={false}
               >
-                <button
-                  type="button"
-                  aria-expanded={false}
-                  aria-controls={detailsPanelId}
-                  id={`${detailsId}-button`}
-                  aria-label="Show details"
-                  className={cn(
-                    "absolute inset-0 cursor-pointer rounded-[var(--radius-lg)]",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
-                  )}
-                />
-                {/* The closed half of the same disclosure vocabulary the
-                    expanded state uses. Flattening removed the well that used
-                    to say "this is a thing you open", so without a chevron the
-                    resting row is just a line of metadata. */}
-                <ChevronRight
-                  className="pointer-events-none relative z-10 mr-1.5 h-3 w-3 shrink-0 text-text-secondary"
-                  aria-hidden="true"
-                />
-                <span className="relative z-10 text-xs truncate min-w-0 flex-1 pointer-events-none">
+                <span
+                  id={`${detailsId}-summary`}
+                  onPointerEnter={(event) => measureSummary(event.currentTarget)}
+                  className="text-xs truncate min-w-0 flex-1"
+                >
                   {isBeingDeleted && !deleteError ? (
                     <span
                       className="flex items-center gap-1.5 text-text-secondary"
@@ -447,18 +400,28 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   ) : lifecycleLabel &&
                     !isLifecycleRunning &&
                     worktree.lifecycleStatus?.state !== "success" ? (
-                    <span
-                      className={
-                        lifecycleState === "needs-approval"
-                          ? "text-status-warning"
-                          : "text-status-error"
-                      }
-                    >
-                      {lifecycleLabel}
+                    // Neutral words, hue on the severity glyph: status hues
+                    // miss 4.5:1 as text on several themes.
+                    <span className="flex items-center gap-1.5 text-text-secondary">
+                      {lifecycleState === "needs-approval" ? (
+                        <SEVERITY_GLYPH.warning
+                          className="w-3 h-3 shrink-0 text-status-warning"
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        <SEVERITY_GLYPH.error
+                          className="w-3 h-3 shrink-0 text-status-error"
+                          aria-hidden="true"
+                        />
+                      )}
+                      <span className="truncate">{lifecycleLabel}</span>
                     </span>
                   ) : isConflicted ? (
-                    <span className="flex items-center gap-1.5 text-status-error">
-                      <AlertTriangle className="w-3 h-3 shrink-0" aria-hidden="true" />
+                    <span className="flex items-center gap-1.5 text-text-secondary">
+                      <SEVERITY_GLYPH.error
+                        className="w-3 h-3 shrink-0 text-status-error"
+                        aria-hidden="true"
+                      />
                       <span className="truncate">Conflicts need review</span>
                     </span>
                   ) : hasChanges && worktree.worktreeChanges ? (
@@ -466,163 +429,182 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       <span ref={countRef} className="inline-block">
                         {pluralize(worktree.worktreeChanges.changedFileCount, "file")}
                       </span>
-                      <DiffStat
-                        insertions={worktree.worktreeChanges.insertions}
-                        deletions={worktree.worktreeChanges.deletions}
-                      />
+                      {/* Clipped mid-digit it misreads (+214 became "+2"), so on a
+                          narrow sidebar card it gives way whole and the file
+                          count stands alone; Details lists every file. */}
+                      <span
+                        className={cn("inline-flex", isSidebar && "hidden @xs/card:inline-flex")}
+                      >
+                        <DiffStat
+                          insertions={worktree.worktreeChanges.insertions}
+                          deletions={worktree.worktreeChanges.deletions}
+                        />
+                      </span>
                       {reviewChangeLine && (
                         <span className="truncate text-text-secondary">· {reviewChangeLine}</span>
                       )}
                     </span>
                   ) : (
-                    <span className={cn(reviewChangeLine && "flex items-center gap-1.5")}>
-                      <span
-                        className={cn(
-                          reviewChangeLine && "truncate",
-                          computedSubtitle.tone === "warning" && "text-status-warning",
-                          computedSubtitle.tone === "info" && "text-status-info",
-                          computedSubtitle.tone === "muted" && "text-text-muted"
-                        )}
-                      >
-                        {computedSubtitle.text}
-                      </span>
+                    // Secondary words whatever the tone, with the hue on a
+                    // severity glyph: status hues and text-muted both miss
+                    // 4.5:1 as text on several themes.
+                    <span
+                      className={cn(
+                        "text-text-secondary",
+                        (reviewChangeLine ||
+                          computedSubtitle.tone === "warning" ||
+                          computedSubtitle.tone === "info") &&
+                          "flex items-center gap-1.5"
+                      )}
+                    >
+                      {computedSubtitle.tone === "warning" && (
+                        <SEVERITY_GLYPH.warning
+                          className="w-3 h-3 shrink-0 text-status-warning"
+                          aria-hidden="true"
+                        />
+                      )}
+                      {computedSubtitle.tone === "info" && (
+                        <SEVERITY_GLYPH.info
+                          className="w-3 h-3 shrink-0 text-status-info"
+                          aria-hidden="true"
+                        />
+                      )}
+                      <span className="truncate">{computedSubtitle.text}</span>
                       {reviewChangeLine && (
                         <span className="truncate text-text-secondary">· {reviewChangeLine}</span>
                       )}
                     </span>
                   )}
                 </span>
+              </TruncatedTooltip>
 
-                {hasResourceConfig && (
-                  <ContextMenu>
-                    <ContextMenuTrigger asChild>
-                      <span className="sr-only">Resource actions</span>
-                    </ContextMenuTrigger>
-                    <ContextMenuContent onClick={(e) => e.stopPropagation()}>
-                      {showResourceResume && onResourceResume && (
-                        <ContextMenuItem onClick={onResourceResume}>
-                          <Play className="w-3.5 h-3.5 mr-2" />
-                          Resume resource
+              {hasResourceConfig && (
+                <ContextMenu>
+                  <ContextMenuTrigger asChild>
+                    <span className="sr-only">Resource actions</span>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent onClick={(e) => e.stopPropagation()}>
+                    {showResourceResume && onResourceResume && (
+                      <ContextMenuItem onClick={onResourceResume}>
+                        <Play className="w-3.5 h-3.5 mr-2" />
+                        Resume resource
+                      </ContextMenuItem>
+                    )}
+                    {showResourcePause && onResourcePause && (
+                      <ContextMenuItem onClick={onResourcePause}>
+                        <Pause className="w-3.5 h-3.5 mr-2" />
+                        Pause resource
+                      </ContextMenuItem>
+                    )}
+                    {showResourceConnect && (
+                      <ContextMenuItem onClick={onResourceConnect}>
+                        <Plug className="w-3.5 h-3.5 mr-2" />
+                        Connect to resource
+                      </ContextMenuItem>
+                    )}
+                    {(showResourceResume || showResourcePause || showResourceConnect) &&
+                      onResourceStatus && <ContextMenuSeparator />}
+                    {onResourceStatus && (
+                      <ContextMenuItem onClick={onResourceStatus}>
+                        <Activity className="w-3.5 h-3.5 mr-2" />
+                        Check status
+                      </ContextMenuItem>
+                    )}
+                    {onResourceTeardown && (
+                      <>
+                        <ContextMenuSeparator />
+                        <ContextMenuItem destructive onClick={onResourceTeardown}>
+                          <Trash2 className="w-3.5 h-3.5 mr-2" />
+                          Tear down resource
                         </ContextMenuItem>
-                      )}
-                      {showResourcePause && onResourcePause && (
-                        <ContextMenuItem onClick={onResourcePause}>
-                          <Pause className="w-3.5 h-3.5 mr-2" />
-                          Pause resource
-                        </ContextMenuItem>
-                      )}
-                      {showResourceConnect && (
-                        <ContextMenuItem onClick={onResourceConnect}>
-                          <Plug className="w-3.5 h-3.5 mr-2" />
-                          Connect to resource
-                        </ContextMenuItem>
-                      )}
-                      {(showResourceResume || showResourcePause || showResourceConnect) &&
-                        onResourceStatus && <ContextMenuSeparator />}
-                      {onResourceStatus && (
-                        <ContextMenuItem onClick={onResourceStatus}>
-                          <Activity className="w-3.5 h-3.5 mr-2" />
-                          Check status
-                        </ContextMenuItem>
-                      )}
-                      {onResourceTeardown && (
-                        <>
-                          <ContextMenuSeparator />
-                          <ContextMenuItem destructive onClick={onResourceTeardown}>
-                            <Trash2 className="w-3.5 h-3.5 mr-2" />
-                            Tear down resource
-                          </ContextMenuItem>
-                        </>
-                      )}
-                    </ContextMenuContent>
-                  </ContextMenu>
+                      </>
+                    )}
+                  </ContextMenuContent>
+                </ContextMenu>
+              )}
+
+              {hasResourceConfig &&
+                (showResourceResume || showResourcePause || showResourceConnect) && (
+                  <span className="relative z-10 ml-1 inline-flex shrink-0 items-center gap-0.5">
+                    {showResourceResume && onResourceResume && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onResourceResume();
+                            }}
+                            className="shrink-0"
+                            aria-label="Resume resource"
+                          >
+                            <Play />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">Resume resource</TooltipContent>
+                      </Tooltip>
+                    )}
+                    {showResourcePause && onResourcePause && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon-xs"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onResourcePause();
+                            }}
+                            className="shrink-0"
+                            aria-label="Pause resource"
+                          >
+                            <Pause />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">Pause resource</TooltipContent>
+                      </Tooltip>
+                    )}
+                    {showResourceConnect && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost-info"
+                            size="icon-xs"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onResourceConnect!();
+                            }}
+                            className="shrink-0"
+                            aria-label="Connect to resource"
+                          >
+                            <Plug />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">Connect to resource</TooltipContent>
+                      </Tooltip>
+                    )}
+                  </span>
                 )}
 
-                {hasResourceConfig &&
-                  (showResourceResume || showResourcePause || showResourceConnect) && (
-                    <span className="relative z-10 ml-1 inline-flex shrink-0 items-center gap-0.5">
-                      {showResourceResume && onResourceResume && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon-xs"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onResourceResume();
-                              }}
-                              className="shrink-0"
-                              aria-label="Resume resource"
-                            >
-                              <Play />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom">Resume resource</TooltipContent>
-                        </Tooltip>
-                      )}
-                      {showResourcePause && onResourcePause && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon-xs"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onResourcePause();
-                              }}
-                              className="shrink-0"
-                              aria-label="Pause resource"
-                            >
-                              <Pause />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom">Pause resource</TooltipContent>
-                        </Tooltip>
-                      )}
-                      {showResourceConnect && (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button
-                              variant="ghost-info"
-                              size="icon-xs"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onResourceConnect!();
-                              }}
-                              className="shrink-0"
-                              aria-label="Connect to resource"
-                            >
-                              <Plug />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="bottom">Connect to resource</TooltipContent>
-                        </Tooltip>
-                      )}
-                    </span>
-                  )}
-
-                {quietGitDetail === undefined && (
-                  <WorktreeActivityChip
-                    lastCommitTimestampMs={worktree.worktreeChanges?.lastCommitTimestampMs}
-                    author={worktree.worktreeChanges?.lastCommitAuthor}
-                    commitMessage={worktree.worktreeChanges?.lastCommitMessage}
-                    commitBody={worktree.worktreeChanges?.lastCommitBody}
-                    commitSha={worktree.worktreeChanges?.headOid}
-                    forgeAvatarUrl={forgeAuthorAvatarUrl}
-                    lastActivityTimestamp={worktree.lastActivityTimestamp}
-                  />
-                )}
-              </div>
-
+              {/* Before the age, so every card's age ends on the same right
+                    edge whether or not it has something to review. */}
               {showReviewHubButton && (
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
-                      onClick={onOpenReviewHub}
+                      onClick={(event) => {
+                        // A control, so the card ignores it anyway; the stop
+                        // keeps the section honest wherever it is rendered.
+                        event.stopPropagation();
+                        onOpenReviewHub?.();
+                      }}
                       onPointerEnter={() => void prefetchStagingStatus(worktree.path)}
                       className={cn(
-                        "shrink-0 transition-colors",
-                        "text-[var(--color-state-active)] hover:bg-[var(--color-state-active)]/10",
+                        // Neutral, like the row's other controls: in the
+                        // working hue it read as one more status mark, green
+                        // beside a merge conflict.
+                        "relative z-10 shrink-0 transition-colors",
+                        "text-text-secondary hover:bg-overlay-soft hover:text-text-primary",
                         // Both variants: a trailing icon button in the same
                         // row. The fenced right segment the grid used to draw
                         // — a left border plus a right-rounded cap — made one
@@ -632,7 +614,9 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                         // `min-h-6 min-w-6` is the 24px target floor
                         // (WCAG 2.2 SC 2.5.8): a 14px glyph in `px-1.5 py-1`
                         // is 26x22, which fails on the short axis.
-                        "ml-0.5 flex min-h-6 min-w-6 items-center justify-center rounded-[var(--radius-md)] px-1.5",
+                        // -my-1 lets the 24px target overlap the row's own padding, so
+                        // a card with something to review is no taller than one without.
+                        "-my-1 mr-0.5 flex min-h-6 min-w-6 items-center justify-center rounded-[var(--radius-md)] px-1.5",
                         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
                       )}
                       aria-label={`Open ${reviewHubButtonLabel}`}
@@ -643,46 +627,128 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   <TooltipContent side="bottom">{reviewHubButtonLabel}</TooltipContent>
                 </Tooltip>
               )}
-            </div>
+              {quietGitDetail === undefined && (
+                <WorktreeActivityChip
+                  lastCommitTimestampMs={worktree.worktreeChanges?.lastCommitTimestampMs}
+                  author={worktree.worktreeChanges?.lastCommitAuthor}
+                  commitMessage={worktree.worktreeChanges?.lastCommitMessage}
+                  commitBody={worktree.worktreeChanges?.lastCommitBody}
+                  commitSha={worktree.worktreeChanges?.headOid}
+                  forgeAvatarUrl={forgeAuthorAvatarUrl}
+                  lastActivityTimestamp={worktree.lastActivityTimestamp}
+                />
+              )}
+            </>
+          )}
+        </div>
+        {isExpanded && (
+          <div
+            id={detailsPanelId}
+            role="region"
+            aria-labelledby={`${detailsId}-button`}
+            // Inside the well now, so it owns the well's padding. The
+            // trigger above it supplies the top inset.
+            className={cn(
+              isSidebar
+                ? "px-2.5 pb-2"
+                : // The grid caps the opened panel and scrolls inside it.
+                  // Grid rows share a height, so an unbounded panel is not
+                  // only this card's problem: one card expanded to 460px
+                  // took its three row-mates with it and left 250px of
+                  // nothing in each. Bounding it is the standard correction
+                  // for variable-height cards in a grid, and 208px still
+                  // shows the note plus the first several changed files.
+                  //
+                  // It does not fully solve the row: `items-stretch` still
+                  // propagates whatever height the open card ends up with,
+                  // so its row-mates grow with it. Moving Details out of
+                  // flow entirely — a side inspector or an anchored overlay
+                  // — is the only thing that would, and that is a change to
+                  // what the disclosure IS rather than to how it looks.
+                  "max-h-52 overflow-y-auto px-3 pb-2.5"
+            )}
+          >
+            {quietGitDetail}
+            {syncDetail}
+            <WorktreeDetails
+              variant={variant}
+              worktree={worktree}
+              homeDir={homeDir}
+              effectiveNote={effectiveNote}
+              effectiveSummary={effectiveSummary}
+              worktreeErrors={worktreeErrors}
+              hasChanges={hasChanges}
+              isFocused={isFocused}
+              isStale={isStale}
+              onPathClick={onPathClick}
+              onDismissError={onDismissError}
+              onRetryError={onRetryError}
+              showLastCommit={true}
+              lastActivityTimestamp={worktree.lastActivityTimestamp}
+              showTime={true}
+              forgeAvatarUrl={forgeAuthorAvatarUrl}
+            />
+          </div>
+        )}
 
-            {lifecycleFailed && (
-              <div
-                className={cn(
-                  // No rule above it in either variant: this block follows
-                  // the collapsed summary row on the card's own surface, and
-                  // a full-width hairline there reads as another section
-                  // boundary rather than as this row's own continuation.
-                  "flex flex-col gap-2 py-1",
-                  isSidebar ? "mt-1" : "mt-1 pl-1.5 pr-2.5"
-                )}
+        {lifecycleFailed && (
+          <div
+            // Recovery block: pressing in it never switches worktrees.
+            data-card-control=""
+            className={cn(
+              // No rule above it in either variant: this block follows
+              // the summary row on the card's own surface, and a full-width
+              // hairline there reads as another section boundary rather than
+              // as this row's own continuation.
+              "flex flex-col gap-2 py-1",
+              // Outside the Details disclosure, like the approval block below:
+              // opening Details to look into a failed setup must not take
+              // away the way to re-run it.
+              isExpanded
+                ? isSidebar
+                  ? "px-2.5"
+                  : "px-3"
+                : isSidebar
+                  ? "mt-1"
+                  : "mt-1 pl-1.5 pr-2.5"
+            )}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="min-w-0 text-xs text-text-secondary">
+                Setup didn't finish. Re-run when you're ready.
+              </span>
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={handleRetrySetup}
+                loading={isRetryingSetup}
+                className="shrink-0 shadow-none inset-shadow-none"
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs text-text-muted truncate">
-                    Setup didn't finish. Re-run when you're ready.
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="xs"
-                    onClick={handleRetrySetup}
-                    loading={isRetryingSetup}
-                    className="shrink-0 shadow-none inset-shadow-none"
-                  >
-                    <RefreshCw aria-hidden="true" />
-                    Retry setup
-                  </Button>
-                </div>
-                {hasLifecycleDetails && (
-                  <details className="text-xs">
-                    <summary className="flex items-center gap-1 rounded-[var(--radius-xs)] text-text-secondary cursor-pointer select-none transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary">
-                      <ChevronDown className="w-3 h-3" aria-hidden="true" />
-                      Show details
-                    </summary>
-                    <pre className="mt-1.5 max-h-32 overflow-auto rounded-[var(--radius-md)] bg-status-error/5 p-2 font-mono text-2xs text-text-secondary whitespace-pre-wrap break-all select-text">
-                      {[lifecycleError, lifecycleOutput].filter(Boolean).join("\n\n")}
-                    </pre>
-                  </details>
-                )}
-              </div>
+                <RefreshCw aria-hidden="true" />
+                Retry setup
+              </Button>
+            </div>
+            {hasLifecycleDetails && (
+              <details className="group/setup-log text-xs">
+                {/* Its own control: a click opens the log, never also selects
+                    the card underneath. */}
+                <summary
+                  onClick={(e) => e.stopPropagation()}
+                  className="flex min-h-6 items-center gap-1 rounded-[var(--radius-xs)] text-text-secondary cursor-pointer select-none transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+                >
+                  {/* The card's own disclosure grammar: a right chevron that
+                      turns down when open. A static down chevron claimed the
+                      log was showing before it was. */}
+                  <ChevronRight
+                    className="w-3 h-3 transition-transform duration-150 group-open/setup-log:rotate-90 motion-reduce:transition-none"
+                    aria-hidden="true"
+                  />
+                  Output
+                </summary>
+                <pre className="mt-1.5 max-h-32 overflow-auto rounded-[var(--radius-md)] bg-status-error/5 p-2 font-mono text-2xs text-text-secondary whitespace-pre-wrap break-all select-text">
+                  {[lifecycleError, lifecycleOutput].filter(Boolean).join("\n\n")}
+                </pre>
+              </details>
             )}
           </div>
         )}
@@ -702,6 +768,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   : "mt-1 pl-1.5 pr-2.5"
             )}
             data-testid="worktree-command-approval"
+            data-card-control=""
           >
             <span className="text-xs text-text-secondary truncate">
               {commandsNeedApproval
@@ -767,12 +834,9 @@ export function WorktreeDeleteErrorBanner({
   onRetry,
   onDismiss,
 }: WorktreeDeleteErrorBannerProps) {
-  // The card root selects the worktree on any click that reaches it, and
-  // `handleCardClick` has no interactive-target guard — the card's convention
-  // (documented on its `handleDoubleClick`, #10319) is that interactive
-  // children stop click propagation themselves, as `handleRetrySetup` above
-  // does. Without this, dismissing an error on a background card would also
-  // switch the active worktree (#12087).
+  // The card ignores clicks on its controls (`cardClickTarget.ts`); the stop
+  // is kept so dismissing an error on a background card can never switch the
+  // active worktree even where this banner is rendered outside one (#12087).
   const handleRetryClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     onRetry?.();
@@ -862,12 +926,9 @@ export function WorktreeIssueErrorBanner({
   onDismiss,
 }: WorktreeIssueErrorBannerProps) {
   const title = mutationType === "attach-issue" ? "Couldn't attach issue" : "Couldn't unlink issue";
-  // The card root selects the worktree on any click that reaches it, and
-  // `handleCardClick` has no interactive-target guard — the card's convention
-  // (documented on its `handleDoubleClick`, #10319) is that interactive
-  // children stop click propagation themselves, as `handleRetrySetup` above
-  // does. Without this, dismissing an error on a background card would also
-  // switch the active worktree (#12087).
+  // The card ignores clicks on its controls (`cardClickTarget.ts`); the stop
+  // is kept so dismissing an error on a background card can never switch the
+  // active worktree even where this banner is rendered outside one (#12087).
   const handleRetryClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     onRetry?.();

@@ -108,6 +108,12 @@ const PATTERNS: ReadonlyArray<readonly [GitOperationReason, RegExp]> = [
     /Repository not found|fatal: repository '.*' not found|The project you were looking for could not be found|does not appear to be a git repository/i,
   ],
   [
+    // Push paths always name one branch explicitly (#15556), so a mirror remote,
+    // which would push every ref, refuses rather than mirroring.
+    "push-config-unsupported",
+    /--mirror can't be combined with refspecs/i,
+  ],
+  [
     "push-rejected-policy",
     // GH006: protected branch, GH013: ruleset violation (modern GitHub), generic 'protected
     // branch' / 'file size' / pack-size / ruleset-violation wording.
@@ -284,6 +290,10 @@ const RECOVERY_HINTS: Record<GitOperationReason, string | undefined> = {
     "The remote has commits you don't have locally — pull and rebase before pushing.",
   "push-rejected-policy":
     "The remote rejected this push (protected branch, hook, or size limit). Contact the repo admin.",
+  "push-config-unsupported":
+    "This remote is set up as a mirror (remote.<name>.mirror), which pushes every ref at once. Daintree only pushes the branch it showed, so push from a terminal, or turn mirroring off for this remote.",
+  "push-review-stale":
+    "The branch, its commits or its push destination changed after the push was reviewed, so nothing was pushed. Review the push again to see what it would publish now.",
   "pathspec-invalid": "The specified ref or path does not exist.",
   "lfs-missing": "Git LFS objects are missing — install git-lfs and run 'git lfs pull'.",
   "lfs-quota-exceeded":
@@ -305,6 +315,9 @@ const RECOVERY_ACTIONS: Partial<Record<GitOperationReason, RecoveryAction>> = {
     args: { tab: "code-forge", subtab: BUILTIN_GITHUB_PROVIDER_ID },
   },
   "push-rejected-outdated": { label: "Pull and rebase", actionId: "git.pullRebase" },
+  // Pushing again opens a fresh review, which is the only thing that can cover
+  // what the branch holds now.
+  "push-review-stale": { label: "Review push", actionId: "git.push" },
   "conflict-unresolved": { label: "Resolve conflicts", actionId: "worktree.openReviewHub" },
   "dubious-ownership": { label: "Trust this repo", actionId: "git.markSafeDirectory" },
 };

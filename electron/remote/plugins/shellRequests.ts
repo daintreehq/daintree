@@ -1,3 +1,4 @@
+import { writeClipboardImage } from "../../utils/clipboardAccess.js";
 import { clipboard } from "electron";
 import { parseHostScopedKey, type HostId } from "../../../shared/types/remoteHosts.js";
 import type { PluginUiPromptParams } from "../../../shared/types/pluginUiPrompt.js";
@@ -343,7 +344,7 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
         if (Buffer.byteLength(payload.text, "utf8") > REMOTE_CLIPBOARD_TEXT_MAX_BYTES) {
           throw new AppError({ code: "PAYLOAD_TOO_LARGE", message: "Clipboard text is too large" });
         }
-        clipboard.writeText(payload.text);
+        await clipboard.writeText(payload.text);
         return null;
       case "writeImage": {
         if (payload.png.byteLength > REMOTE_CLIPBOARD_IMAGE_MAX_BYTES) {
@@ -354,7 +355,7 @@ export function installPluginShellRequests(deps: PluginShellRequestDeps = {}): (
         }
         const image = decodeClipboardPng(payload.png);
         if (image === null) throw refuse("The clipboard image could not be decoded");
-        clipboard.writeImage(image);
+        await writeClipboardImage(image);
         return null;
       }
       case "readText":

@@ -48,7 +48,6 @@ const PANEL_KIND_META_KEYS = [
   "canRestart",
   "canConvert",
   "usesTerminalUi",
-  "keepAliveOnProjectSwitch",
   "firstRenderRestore",
   "lazyImportPath",
   "showInPalette",

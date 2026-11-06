@@ -20,7 +20,6 @@ import {
   triggerTerminalLink,
   waitForTerminalReady,
   waitForTerminalText,
-  waitForTerminalTextIgnoringLineBreaks,
 } from "../../helpers/terminal";
 import {
   copyFullContextFromToolbar,
@@ -102,20 +101,40 @@ async function readClipboardText(app: ElectronApplication): Promise<string> {
   return app.evaluate(({ clipboard }) => clipboard.readText());
 }
 
+/** The macOS Find pasteboard is separate and survives clearing the general clipboard. */
+async function clipboardPayloadBytes(app: ElectronApplication): Promise<number> {
+  return app.evaluate(async ({ clipboard }) => {
+    let bytes = 0;
+    for (const item of await clipboard.read()) {
+      for (const type of item.types) {
+        if (process.platform === "darwin" && type === "electron application/findtext") continue;
+        const payload = await item.getType(type);
+        bytes += payload instanceof Blob ? payload.size : payload.title.length + payload.url.length;
+      }
+    }
+    return bytes;
+  });
+}
+
 /**
  * The path Copy Context put on the clipboard. The bundle is written to a file
  * and the clipboard carries a file reference in the platform's native shape
  * (electron/ipc/handlers/copyTree.ts), so read that shape back.
  */
 async function readCopiedContextPath(app: ElectronApplication): Promise<string | null> {
-  const raw = await app.evaluate(({ clipboard }) => {
+  const raw = await app.evaluate(async ({ clipboard }) => {
     if (process.platform === "darwin") {
-      const xml = clipboard.readBuffer("NSFilenamesPboardType").toString("utf8");
+      const type = 'electron application/osclipboard;format="NSFilenamesPboardType"';
+      const items = await clipboard.read();
+      const item = items.find((entry) => entry.types.includes(type));
+      const xml = item ? await (await item.getType(type)).text() : "";
       const match = /<string>([^<]*)<\/string>/.exec(xml);
       return match ? match[1] : null;
     }
-    if (process.platform === "win32") return clipboard.readText() || null;
-    return clipboard.readBuffer("text/uri-list").toString("utf8").trim() || null;
+    if (process.platform === "win32") return (await clipboard.readText()) || null;
+    const items = await clipboard.read();
+    const item = items.find((entry) => entry.types.includes("text/uri-list"));
+    return item ? (await (await item.getType("text/uri-list")).text()).trim() || null : null;
   });
   if (!raw) return null;
   const unescaped = raw
@@ -536,6 +555,8 @@ test.describe("Core: Terminal pane", () => {
 
         await rightClickPane(window, panel);
         await clickSubmenuItem(window, "Session", "Unlock input");
+        // Menu dispatch waits for focus restoration; closing the menu doesn't finish the action.
+        await expect(panel.locator(".xterm-helper-textarea")).toHaveJSProperty("readOnly", false);
         await typeTerminalCommand(window, panelId, "open", { submit: false });
         // Keys reach the PTY in order, so exact equality also proves none of the
         // locked-phase input was queued and released by the unlock.
@@ -1221,7 +1242,7 @@ test.describe("Core: Terminal pane", () => {
       // installs a text format, so the reset would satisfy the check itself.
       await app.evaluate(({ clipboard }) => clipboard.clear());
       await expect
-        .poll(() => app.evaluate(({ clipboard }) => clipboard.availableFormats().length), {
+        .poll(() => clipboardPayloadBytes(app), {
           timeout: T_SHORT,
           message: "Clipboard should start empty so the copy below is what is read back",
         })
@@ -1233,7 +1254,7 @@ test.describe("Core: Terminal pane", () => {
       await expectToolbarButtonReachable(window, SEL.toolbar.copyContext, T_LONG);
 
       await expect
-        .poll(() => app.evaluate(({ clipboard }) => clipboard.availableFormats().length), {
+        .poll(() => clipboardPayloadBytes(app), {
           timeout: T_LONG,
           message: "Clipboard should have content after copy",
         })
@@ -1324,7 +1345,7 @@ test.describe("Core: Terminal pane", () => {
       expect(content).not.toContain(".git\\");
     });
 
-    test("injecting context writes content to terminal buffer", async () => {
+    test("context injection refuses a plain shell without writing the bundle", async () => {
       const { window } = ctx;
       const wtId = await getActiveWorktreeId(window);
 
@@ -1361,13 +1382,10 @@ test.describe("Core: Terminal pane", () => {
           },
         { terminalId: panelId, worktreeId: wtId }
       );
-      expect(injectResult?.error).toBeFalsy();
-
-      await waitForTerminalTextIgnoringLineBreaks(
-        getPanelById(window, panelId),
-        "index.ts",
-        T_LONG
-      );
+      expect(injectResult?.error).toContain("running agent, not a shell");
+      await runTerminalCommand(window, panel, "echo INJECTION_SHELL_STILL_READY");
+      await waitForTerminalText(panel, "INJECTION_SHELL_STILL_READY", T_LONG);
+      expect(await getTerminalText(panel)).not.toContain("index.ts");
     });
   });
 

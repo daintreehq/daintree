@@ -1,6 +1,6 @@
 import * as fs from "fs/promises";
 import * as path from "path";
-import { createHardenedGit } from "../utils/hardenedGit.js";
+import { createStrictExitGit } from "../utils/hardenedGit.js";
 import { Cache } from "../utils/cache.js";
 import { logWarn } from "../utils/logger.js";
 import { isPathInside } from "../../shared/utils/path.js";
@@ -10,7 +10,7 @@ interface FileListCacheEntry {
   files: string[];
   normalizedFiles: string[];
   basenameStarts: Int32Array;
-  sortedFiles?: string[];
+  shortestFiles?: string[];
   lastSearchQuery?: string;
   lastSearchCandidates?: number[];
 }
@@ -38,8 +38,8 @@ const FILE_LIST_TTL_MS = 300_000;
  *
  * `Cache.get` only drops the one key it was asked for and `set` only evicts by
  * LRU past `maxSize`, so without a sweep an expired entry — `files`,
- * `normalizedFiles`, `basenameStarts`, the optional sorted copy, megabytes on a
- * large repo — stays resident until something reads that exact cwd again.
+ * `normalizedFiles`, `basenameStarts`, megabytes on a large repo — stays
+ * resident until something reads that exact cwd again.
  *
  * A minute rather than a multiple of the TTL: the sweep is a walk of at most
  * `maxSize` numeric comparisons, so its cost is not worth amortising, and
@@ -118,6 +118,7 @@ function invalidateResolvedCwd(resolvedCwd: string): void {
 }
 
 const MAX_RESULTS_DEFAULT = 50;
+const MAX_RESULTS_LIMIT = 100;
 const MAX_QUERY_LENGTH = 256;
 const MAX_FALLBACK_FILES = 20_000;
 
@@ -223,14 +224,66 @@ function buildScoringInputs(files: string[]): {
   return { normalizedFiles, basenameStarts };
 }
 
-function sortedFilesFor(entry: FileListCacheEntry): string[] {
-  if (!entry.sortedFiles) {
-    const collator = getPathCollator();
-    entry.sortedFiles = [...entry.files].sort(
-      (a, b) => a.length - b.length || collator.compare(a, b)
-    );
+/**
+ * The empty-query ranking, cut at the largest page any caller can ask for, so
+ * every limit is a prefix of one cached list rather than of its own selection.
+ */
+function shortestFilesFor(entry: FileListCacheEntry): string[] {
+  entry.shortestFiles ??= selectShortestFiles(entry.files, MAX_RESULTS_LIMIT);
+  return entry.shortestFiles;
+}
+
+/**
+ * The first `count` paths of a stable sort by length then locale, without
+ * sorting the whole index on the process that serves every terminal's IPC.
+ *
+ * The index tie-break is the stability `Array.prototype.sort` gives paths the
+ * collator calls equal, made explicit: it turns the order into a total one, and
+ * the smallest `count` elements of a total order are exactly the first `count`
+ * of the stable sort. A bounded max-heap holds the best seen so far, and most
+ * paths are longer than its worst, so they are rejected on a length comparison
+ * without reaching the collator.
+ */
+function selectShortestFiles(files: string[], count: number): string[] {
+  const collator = getPathCollator();
+  const compare = (a: number, b: number): number => {
+    const byLength = files[a].length - files[b].length;
+    if (byLength !== 0) return byLength;
+    return collator.compare(files[a], files[b]) || a - b;
+  };
+
+  const heap: number[] = [];
+  const siftDown = (): void => {
+    let parent = 0;
+    while (true) {
+      const left = parent * 2 + 1;
+      const right = left + 1;
+      let largest = parent;
+      if (left < heap.length && compare(heap[left], heap[largest]) > 0) largest = left;
+      if (right < heap.length && compare(heap[right], heap[largest]) > 0) largest = right;
+      if (largest === parent) return;
+      [heap[parent], heap[largest]] = [heap[largest], heap[parent]];
+      parent = largest;
+    }
+  };
+
+  for (let fileIdx = 0; fileIdx < files.length; fileIdx++) {
+    if (heap.length < count) {
+      let child = heap.push(fileIdx) - 1;
+      while (child > 0) {
+        const parent = (child - 1) >> 1;
+        if (compare(heap[child], heap[parent]) <= 0) break;
+        [heap[parent], heap[child]] = [heap[child], heap[parent]];
+        child = parent;
+      }
+      continue;
+    }
+    if (compare(fileIdx, heap[0]) >= 0) continue;
+    heap[0] = fileIdx;
+    siftDown();
   }
-  return entry.sortedFiles;
+
+  return heap.sort(compare).map((fileIdx) => files[fileIdx]);
 }
 
 interface ScoredMatch {
@@ -259,10 +312,10 @@ function findWorstIdx(best: ScoredMatch[]): number {
 function pickTopMatches(entry: FileListCacheEntry, query: string, limit: number): string[] {
   const queryLower = normalizeQuery(query).toLowerCase();
   const normalizedQuery = queryLower.endsWith("/") ? queryLower.slice(0, -1) : queryLower;
-  const effectiveLimit = clampInt(limit, 1, 100, MAX_RESULTS_DEFAULT);
+  const effectiveLimit = clampInt(limit, 1, MAX_RESULTS_LIMIT, MAX_RESULTS_DEFAULT);
 
   if (normalizedQuery.length === 0) {
-    return sortedFilesFor(entry).slice(0, effectiveLimit);
+    return shortestFilesFor(entry).slice(0, effectiveLimit);
   }
 
   const best: ScoredMatch[] = [];
@@ -356,7 +409,9 @@ async function loadFilesFromDisk(cwd: string): Promise<string[]> {
 }
 
 async function loadGitFiles(cwd: string): Promise<string[]> {
-  const git = await createHardenedGit(cwd);
+  // Strict exit: an empty listing is taken as final, so a git that died without
+  // output has to reject and reach the walker rather than read as "all ignored".
+  const git = await createStrictExitGit(cwd);
 
   // -z: NUL-delimited output. Required to round-trip filenames containing tabs,
   // newlines, or backslashes; core.quotepath=false alone only suppresses high-bit
@@ -371,14 +426,18 @@ async function loadGitFiles(cwd: string): Promise<string[]> {
   // paths. A non-repository cwd exits non-zero and falls back to the walker.
   const output = await git.raw(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
 
-  const files: string[] = [];
+  // ls-files prints an unmerged path once per index stage (base/ours/theirs), so
+  // exact repeats are dropped here. Exact-string only: case and Unicode variants
+  // are distinct paths and stay separate.
+  const seen = new Set<string>();
   let start = 0;
   while (start < output.length) {
     let end = output.indexOf("\0", start);
     if (end === -1) end = output.length;
-    if (end > start) files.push(output.slice(start, end));
+    if (end > start) seen.add(output.slice(start, end));
     start = end + 1;
   }
+  const files = [...seen];
 
   const dirs = new Set<string>();
   for (const file of files) {
@@ -486,7 +545,7 @@ export class FileSearchService {
   async search(payload: { cwd: string; query: string; limit?: number }): Promise<string[]> {
     try {
       const resolvedCwd = path.resolve(payload.cwd);
-      const limit = clampInt(payload.limit, 1, 100, MAX_RESULTS_DEFAULT);
+      const limit = clampInt(payload.limit, 1, MAX_RESULTS_LIMIT, MAX_RESULTS_DEFAULT);
 
       const entry = await this.getFiles(resolvedCwd);
 
@@ -589,10 +648,14 @@ export class FileSearchService {
     }
 
     try {
-      const gitFiles = await loadGitFiles(cwd);
-      if (gitFiles.length > 0) return gitFiles;
+      // A successful listing is the answer even when it is empty: inside a work
+      // tree, empty means nothing under cwd is tracked or unignored, and the walker
+      // below doesn't read .gitignore, so falling through would list ignored files.
+      // That includes a folder a parent repository ignores (a home directory
+      // tracked with `*`): git can't tell that apart from an ignored subtree.
+      return await loadGitFiles(cwd);
     } catch {
-      // ignore; fall back to filesystem walk
+      // Not inside a work tree, or git can't run here: walk the disk instead.
     }
 
     return loadFilesFromDisk(cwd);

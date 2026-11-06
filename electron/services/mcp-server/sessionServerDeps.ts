@@ -1,15 +1,9 @@
-// eager-import-allow: reads the assistant's confirmation settings via store.get on each call
 import { webContents as webContentsModule } from "electron";
 import type { WindowRegistry } from "../../window/WindowRegistry.js";
-import { store } from "../../store.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { getEndpointRegistry } from "../../ipc/endpointRegistry.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import {
-  assistantSkipsDaintreeConfirmations,
-  resolveAssistantAgentSkip,
-} from "../../../shared/utils/assistantDaintreeConfirmations.js";
-import { isStorableAssistantAgentId } from "../../../shared/types/ipc/agentDefaults.js";
+import { readAssistantConfirmationsSkipped } from "./assistantConfirmationsPreference.js";
 import type { ActionManifestEntry } from "../../../shared/types/actions.js";
 import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
 import { summarizeMcpArgs, summarizeMcpResult } from "../../../shared/utils/mcpArgsSummary.js";
@@ -62,7 +56,10 @@ import { computeMcpAuditSeverity } from "../../../shared/types/ipc/mcpServer.js"
 import type { TurnOutcomeService } from "./turnOutcomeLog.js";
 import { helpNotifyKey, relayNoticePane } from "./terminalNotify.js";
 import type { AbusePolicy } from "./abusePolicy.js";
-import { MCP_CONFIRMABLE_CALL_MAX_MS } from "../../../shared/config/mcpConfirmWindow.js";
+import {
+  MCP_CONFIRMABLE_CALL_MAX_MS,
+  MCP_REMOTE_CONFIRM_MARGIN_MS,
+} from "../../../shared/config/mcpConfirmWindow.js";
 import { createLogger } from "../../utils/logger.js";
 
 const pinnedViewLogger = createLogger("main:McpPinnedView");
@@ -267,9 +264,16 @@ export interface SessionServerDepsSource {
   machineName?: () => string;
   /** This machine's Codex quota, as `agent.readQuota` reports it. */
   readCodexQuota?: import("./sessionServer.js").SessionServerDeps["readCodexQuota"];
+  /** The Claude Code usage messages this machine's panes showed, as `agent.readQuota` reports them. */
+  readClaudeUsage?: import("./sessionServer.js").SessionServerDeps["readClaudeUsage"];
   isTerminalIdInUse: (terminalId: string) => boolean;
   readTerminalCloseContext?: import("./sessionServer.js").SessionServerDeps["readTerminalCloseContext"];
   readClosedPanelProcess?: import("./sessionServer.js").SessionServerDeps["readClosedPanelProcess"];
+  readTerminalProcesses?: import("./sessionServer.js").SessionServerDeps["readTerminalProcesses"];
+  readWorktreeGit?: import("./sessionServer.js").SessionServerDeps["readWorktreeGit"];
+  waitForClosedPanelExits?: import("./sessionServer.js").SessionServerDeps["waitForClosedPanelExits"];
+  terminalGenerationOf?: import("./sessionServer.js").SessionServerDeps["terminalGenerationOf"];
+  trackedTerminalIds?: import("./sessionServer.js").SessionServerDeps["trackedTerminalIds"];
   /**
    * Whether the pty-host's record places a terminal as an agent pane of this
    * workspace (#12883). `false` for anything it cannot place.
@@ -277,6 +281,8 @@ export interface SessionServerDepsSource {
   isAgentPaneInWorkspace?: (terminalId: string, workspaceId: string) => Promise<boolean>;
   /** Terminal notices. Absent, `terminal.notifyWhenIdle` and `notify: true` answer not-eligible. */
   terminalNotify?: import("./terminalNotify.js").TerminalNotifyHandlers;
+  /** Prompts held for busy workers (#16187). */
+  workerSteerQueue?: import("./sessionServer.js").SessionServerDeps["workerSteerQueue"];
   replyWaiter?: Pick<import("./replyWaiter.js").ReplyWaiterService, "wait">;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   // Per-WebContents manifest cache read for pinned help sessions (#9887). Lets
@@ -324,7 +330,7 @@ function boundSteer(
   if (steer === undefined) {
     throw new AssistantTargetError(
       WORKER_STEER_REFUSALS.notFound,
-      "This host can't steer its agents for you right now. Nothing was sent."
+      "This host can't reach its agents for you right now. Nothing was done."
     );
   }
   return steer;
@@ -899,15 +905,46 @@ export function createSessionServerDeps(
       // Its confirmation, with no view here to raise one, is put to the
       // person at that Shell about this very call (#13501).
       const askShell = relay?.requestApproval;
+      // Everything the call waits on ends inside its own deadline (#15699),
+      // with room for the answer to reach it: a confirmation that outlasted
+      // it could be approved after the caller was told the call failed.
+      const callDeadline =
+        relay !== undefined && relayCallId !== undefined
+          ? relay.callDeadline?.(relayCallId)
+          : undefined;
+      if (
+        relay?.callDeadline !== undefined &&
+        relayCallId !== undefined &&
+        callDeadline === undefined
+      ) {
+        // Its caller has already been answered, a timeout most likely, while
+        // this call was still reading: nothing more of it may run.
+        return Promise.reject(
+          new Error(`Relayed call ${relayCallId} has already ended, so ${actionId} was not run`)
+        );
+      }
+      const holdUntil =
+        callDeadline !== undefined ? callDeadline - MCP_REMOTE_CONFIRM_MARGIN_MS : undefined;
       const relayOptions: WorkspaceDispatchOptions | undefined = relay
         ? {
+            ...(holdUntil !== undefined ? { holdUntil } : {}),
             relay: {
               linkSessionId: relay.linkSessionId,
               readOnly:
                 relayEntry !== undefined && buildAnnotations(relayEntry).readOnlyHint === true,
               ...(relay.local === true ? { local: true as const } : {}),
+              ...(relayCallId !== undefined
+                ? { call: { callId: relayCallId, helpSessionId: relay.helpSessionId } }
+                : {}),
               ...(askShell !== undefined && relayCallId !== undefined
-                ? { requestApproval: (ask) => askShell({ ...ask, callId: relayCallId }) }
+                ? {
+                    requestApproval: (ask) =>
+                      askShell({
+                        ...ask,
+                        callId: relayCallId,
+                        ...(holdUntil !== undefined ? { holdUntil } : {}),
+                      }),
+                  }
                 : {}),
             },
           }
@@ -1074,9 +1111,26 @@ export function createSessionServerDeps(
     ...(deps.readClosedPanelProcess !== undefined
       ? { readClosedPanelProcess: deps.readClosedPanelProcess }
       : {}),
+    ...(deps.readTerminalProcesses !== undefined
+      ? { readTerminalProcesses: deps.readTerminalProcesses }
+      : {}),
+    ...(deps.readWorktreeGit !== undefined ? { readWorktreeGit: deps.readWorktreeGit } : {}),
+    ...(deps.waitForClosedPanelExits !== undefined
+      ? { waitForClosedPanelExits: deps.waitForClosedPanelExits }
+      : {}),
+    ...(deps.terminalGenerationOf !== undefined
+      ? { terminalGenerationOf: deps.terminalGenerationOf }
+      : {}),
+    ...(deps.trackedTerminalIds !== undefined
+      ? { trackedTerminalIds: deps.trackedTerminalIds }
+      : {}),
     isTerminalInPinnedWorkspace,
     ...(deps.replyWaiter !== undefined ? { replyWaiter: deps.replyWaiter } : {}),
     ...(deps.terminalNotify !== undefined ? { terminalNotify: deps.terminalNotify } : {}),
+    // Only a session relayed for a Shell's global Assistant holds any (#16187).
+    ...(deps.workerSteerQueue !== undefined && relay?.global === true
+      ? { workerSteerQueue: deps.workerSteerQueue }
+      : {}),
     // A relayed session is never this machine's assistant: no lane, and no
     // hosts of its own to reach, so a call never chains (#13493).
     ...(relay
@@ -1149,11 +1203,13 @@ export function createSessionServerDeps(
             prompt: async (...args) => boundSteer(host).prompt(...args),
             keys: async (...args) => boundSteer(host).keys(...args),
             interrupt: async (...args) => boundSteer(host).interrupt(...args),
+            reveal: async (target, show) => boundSteer(host).reveal(target, show),
           },
         }
       : {}),
     assistantCaller: () => assistantCallerFor(),
     ...(deps.readCodexQuota !== undefined ? { readCodexQuota: deps.readCodexQuota } : {}),
+    ...(deps.readClaudeUsage !== undefined ? { readClaudeUsage: deps.readClaudeUsage } : {}),
     // A pane bearer's own terminal is fixed for the bearer's life and was
     // resolved at handshake; a help lane's is read per call, because its
     // binding follows the PTY that currently serves it.
@@ -1248,19 +1304,12 @@ export function createSessionServerDeps(
     // assistant's next call. sessionServer consults it for help sessions only.
     // The default follows the skip setting of the agent this session runs,
     // else the assistant's chosen agent (#14141).
-    readAssistantConfirmationsSkipped: () => {
-      const helpAssistant = store.get("helpAssistant");
-      const storedAgentId = helpAssistant?.agentId;
-      const chosenAgentId = isStorableAssistantAgentId(storedAgentId) ? storedAgentId : null;
-      const agentId =
+    readAssistantConfirmationsSkipped: () =>
+      readAssistantConfirmationsSkipped(
         (helpSessionId !== null
           ? host.assistantControlBinding()?.sessionAgent?.(helpSessionId)
-          : null) ?? chosenAgentId;
-      return assistantSkipsDaintreeConfirmations(
-        helpAssistant?.daintreeConfirmations,
-        resolveAssistantAgentSkip(agentId, store.get("agentSettings")).skips
-      );
-    },
+          : null) ?? null
+      ),
     notifyToolCallStarted,
     notifyToolCallSettled,
     notifyDisplayImage,

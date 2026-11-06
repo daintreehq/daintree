@@ -77,6 +77,8 @@ interface Views {
   bound: Set<string>;
   driving: boolean;
   holder: string | null;
+  /** The projects a change was noted on for a session no view of whose is on them. */
+  noted: Array<[string, string | null]>;
 }
 
 interface Rig {
@@ -102,7 +104,7 @@ async function rig(): Promise<Rig> {
   const n = ++hostCounter;
   const local = createTestHost(root, `local${n}`);
   const studio = createTestHost(root, `studio${n}`);
-  const views: Views = { bound: new Set(), driving: true, holder: null };
+  const views: Views = { bound: new Set(), driving: true, holder: null, noted: [] };
   const authority: ProjectsHostAuthority = {
     boundEndpoints: (sessionId, projectId) =>
       sessionId === SESSION && views.bound.has(projectId)
@@ -110,6 +112,7 @@ async function rig(): Promise<Rig> {
         : [],
     isDriving: () => views.driving,
     holderEndpointId: () => views.holder,
+    noteSessionChange: (projectId, sessionId) => views.noted.push([projectId, sessionId]),
   };
   const grants = new ProjectHostGrants();
   // Host-wide, as Host mode keeps them: a new link can still ask about a push.
@@ -693,6 +696,8 @@ describe("what the host checks for itself", () => {
       worktreePath: expect.any(String),
       canCheckOutBranch: false,
     });
+    // Its worktree changes a project no view of this session's is on (#15918).
+    expect(r.views.noted).toContainEqual([project.id, SESSION]);
     // Nothing was offered, so a checkout call stays refused.
     await expect(r.client.call(ProjectLinkMethod.CHECK_OUT, checkout)).rejects.toMatchObject({
       code: "PERMISSION",
@@ -724,6 +729,7 @@ describe("what the host checks for itself", () => {
         branchRemoteUrl: URL,
       })
     ).rejects.toMatchObject({ code: "DRIVEN_ELSEWHERE" });
+    expect(r.views.noted).toEqual([]);
   });
 
   /**

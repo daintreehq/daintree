@@ -14,9 +14,19 @@ import { decode, encodeEnvelope } from "./projectSettingsCodec.js";
 import { Cache } from "../utils/cache.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { mergeBrowserAllowedHosts } from "../../shared/utils/urlUtils.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+
+/** How long a read that found no settings file answers for its project's alert overrides. */
+const NO_SETTINGS_FILE_TTL_MS = 30_000;
 
 export class ProjectSettingsManager {
   private notificationOverridesCache = new Map<string, Partial<NotificationSettings> | undefined>();
+  /**
+   * When a read last found no settings file, and so no overrides, for a
+   * project. Kept apart from the cache and bounded, so a file that appears
+   * later is still read.
+   */
+  private readonly noSettingsFileAt = new Map<string, number>();
   private readonly settingsCache = new Cache<string, ProjectSettings>({
     maxSize: 20,
     defaultTTL: 30_000,
@@ -41,14 +51,14 @@ export class ProjectSettingsManager {
    * them (a Shell's alert choices, #14701); the overrides still apply.
    */
   getEffectiveNotificationSettings(
-    currentProjectId: string | null,
+    projectId: string | null,
     globalChoices?: Partial<NotificationSettings>
   ): NotificationSettings {
     const own = this.store.get("notificationSettings");
     const global = globalChoices ? { ...own, ...globalChoices } : own;
-    if (!currentProjectId) return global;
+    if (!projectId) return global;
 
-    const overrides = this.notificationOverridesCache.get(currentProjectId);
+    const overrides = this.notificationOverridesCache.get(projectId);
     if (!overrides) return global;
 
     return {
@@ -72,6 +82,19 @@ export class ProjectSettingsManager {
       quietHoursEndMin: global.quietHoursEndMin,
       quietHoursWeekdays: global.quietHoursWeekdays,
     };
+  }
+
+  /**
+   * Read `projectId`'s settings if no read or save has reached its alert
+   * overrides yet, so its agents' alerts go by them rather than the globals.
+   */
+  async loadNotificationOverrides(projectId: string): Promise<void> {
+    if (this.notificationOverridesCache.has(projectId)) return;
+    const missingAt = this.noSettingsFileAt.get(projectId);
+    if (missingAt !== undefined && Date.now() - missingAt < NO_SETTINGS_FILE_TTL_MS) return;
+    await this.getProjectSettings(projectId);
+    if (this.notificationOverridesCache.has(projectId)) this.noSettingsFileAt.delete(projectId);
+    else this.noSettingsFileAt.set(projectId, Date.now());
   }
 
   /**
@@ -128,7 +151,7 @@ export class ProjectSettingsManager {
       this.notificationOverridesCache.delete(projectId);
       if (error instanceof SyntaxError) {
         console.error(`[ProjectSettingsManager] Failed to parse settings for ${projectId}:`, error);
-        const quarantinedPath = await this.quarantine(filePath, "corrupted");
+        const quarantinedPath = await this.quarantine(projectId, filePath, "corrupted");
         void this.broadcastCorruption(quarantinedPath);
         return { runCommands: [] };
       }
@@ -145,7 +168,11 @@ export class ProjectSettingsManager {
       console.warn(
         `[ProjectSettingsManager] settings.json for ${projectId} was written by a newer app (v${decoded.onDiskVersion} > current); quarantining`
       );
-      const quarantinedPath = await this.quarantine(filePath, `future-v${decoded.onDiskVersion}`);
+      const quarantinedPath = await this.quarantine(
+        projectId,
+        filePath,
+        `future-v${decoded.onDiskVersion}`
+      );
       void this.broadcastCorruption(quarantinedPath, "future-version");
       return { runCommands: [] };
     }
@@ -210,6 +237,7 @@ export class ProjectSettingsManager {
       (this.writeGenerations.get(projectId) ?? 0) !== generation;
     if (!overlappedWrite) {
       this.notificationOverridesCache.set(projectId, settings.notificationOverrides);
+      this.noSettingsFileAt.delete(projectId);
       this.settingsCache.set(projectId, settings);
     }
 
@@ -264,28 +292,42 @@ export class ProjectSettingsManager {
   }
 
   /**
-   * Best-effort quarantine. Returns the destination path on success and
-   * `null` if the rename failed — quarantine is a safety net, not a hard
-   * dependency for surfacing corruption to the renderer. Suffix collisions
-   * (e.g. when an earlier future-version quarantine already exists) get a
-   * timestamp tail so we never clobber a previous artifact.
+   * Move an unreadable settings file aside and return where it went. A failed
+   * rename **throws** rather than letting the caller hand out defaults: the
+   * next save would write them straight over bytes that were never preserved
+   * (mirrors ProjectFileStore.quarantineRecipes). Suffix collisions (e.g. when
+   * an earlier future-version quarantine already exists) get a timestamp tail
+   * so we never clobber a previous artifact.
    */
-  private async quarantine(filePath: string, suffix: string): Promise<string | null> {
+  private async quarantine(projectId: string, filePath: string, suffix: string): Promise<string> {
+    const base =
+      suffix === "corrupted" ? `${filePath}.corrupted.${Date.now()}` : `${filePath}.${suffix}`;
+    const quarantinePath = existsSync(base) ? `${base}.${Date.now()}` : base;
     try {
-      const base =
-        suffix === "corrupted" ? `${filePath}.corrupted.${Date.now()}` : `${filePath}.${suffix}`;
-      const quarantinePath = existsSync(base) ? `${base}.${Date.now()}` : base;
       await resilientRename(filePath, quarantinePath);
-      console.warn(`[ProjectSettingsManager] Quarantined settings file to ${quarantinePath}`);
-      return quarantinePath;
-    } catch {
-      return null;
+    } catch (error) {
+      console.error(
+        `[ProjectSettingsManager] Failed to quarantine settings for ${projectId}:`,
+        error
+      );
+      const reason = formatErrorMessage(error, "rename failed");
+      throw new Error(
+        `Settings file for project ${projectId} is unreadable and could not be moved aside (${reason}); leaving it untouched`,
+        { cause: error }
+      );
     }
+    console.warn(`[ProjectSettingsManager] Quarantined settings file to ${quarantinePath}`);
+    return quarantinePath;
   }
 
+  /**
+   * `beforeSave` is a file a save moved aside on its way to replacing it, so
+   * the save's settings, not defaults, are what take effect.
+   */
   private async broadcastCorruption(
-    quarantinedPath: string | null,
-    kind?: "future-version"
+    quarantinedPath: string,
+    kind?: "future-version",
+    beforeSave = false
   ): Promise<void> {
     try {
       // Lazy import keeps the workspace-host bundle clean of `BrowserWindow`.
@@ -296,16 +338,16 @@ export class ProjectSettingsManager {
       // corruption silently no-ops (the failed import is caught below), and
       // the main process surfaces the toast on its next read.
       const { broadcastToRenderer } = await import("../ipc/utils.js");
-      const message = quarantinedPath
-        ? `Project settings couldn't be read and have been preserved at ${quarantinedPath}. Defaults are in effect until you reload the project.`
-        : "Project settings couldn't be read. Defaults are in effect until you reload the project.";
       broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
         type: "error",
         title: kind === "future-version" ? "Settings file too new" : "Project settings corrupted",
-        message:
-          kind === "future-version"
-            ? `${quarantinedPath ? `Settings file written by a newer version of Daintree was quarantined to ${quarantinedPath}. ` : ""}Defaults are in effect until you reload with a newer build.`
-            : message,
+        message: beforeSave
+          ? kind === "future-version"
+            ? `Settings written by a newer version of Daintree were preserved at ${quarantinedPath} before saving.`
+            : `Project settings on disk couldn't be read and were preserved at ${quarantinedPath} before saving.`
+          : kind === "future-version"
+            ? `Settings file written by a newer version of Daintree was quarantined to ${quarantinedPath}. Defaults are in effect until you reload with a newer build.`
+            : `Project settings couldn't be read and have been preserved at ${quarantinedPath}. Defaults are in effect until you reload the project.`,
       });
     } catch (err) {
       console.warn("[ProjectSettingsManager] Failed to broadcast corruption toast:", err);
@@ -368,14 +410,28 @@ export class ProjectSettingsManager {
       if (isMissingFileError(error)) return undefined;
       throw error;
     }
+    let parsed: unknown;
     try {
       const stripped = content.startsWith(UTF8_BOM) ? content.slice(UTF8_BOM.length) : content;
-      const decoded = decode(JSON.parse(stripped));
-      return decoded.ok ? decoded.settings : undefined;
+      parsed = JSON.parse(stripped);
     } catch {
-      // Unparseable: there is nothing saved for the save to keep.
+      // Unparseable: there is nothing in it for the save to keep, but its bytes
+      // are moved aside before the save replaces them, or the save fails.
+      const quarantinedPath = await this.quarantine(projectId, filePath, "corrupted");
+      void this.broadcastCorruption(quarantinedPath, undefined, true);
       return undefined;
     }
+    const decoded = decode(parsed);
+    if (!decoded.ok) {
+      const quarantinedPath = await this.quarantine(
+        projectId,
+        filePath,
+        `future-v${decoded.onDiskVersion}`
+      );
+      void this.broadcastCorruption(quarantinedPath, "future-version", true);
+      return undefined;
+    }
+    return decoded.settings;
   }
 
   private async writeProjectSettings(projectId: string, settings: ProjectSettings): Promise<void> {
@@ -474,47 +530,6 @@ export class ProjectSettingsManager {
       }
     }
 
-    if (settings.commandOverrides !== undefined) {
-      if (!Array.isArray(settings.commandOverrides)) {
-        console.warn(
-          `[ProjectSettingsManager] Coercing non-array commandOverrides to undefined in project ${projectId}`
-        );
-        runtimeSettings = { ...runtimeSettings, commandOverrides: undefined };
-      } else {
-        const validOverrides = settings.commandOverrides.filter((override) => {
-          if (!override || typeof override !== "object") return false;
-          if (typeof override.commandId !== "string") return false;
-          if (
-            override.defaults !== undefined &&
-            (override.defaults === null ||
-              typeof override.defaults !== "object" ||
-              Array.isArray(override.defaults))
-          ) {
-            console.warn(
-              `[ProjectSettingsManager] Dropping invalid commandOverride for ${override.commandId} in project ${projectId}`
-            );
-            return false;
-          }
-          if (override.disabled !== undefined && typeof override.disabled !== "boolean")
-            return false;
-          if (
-            override.prompt !== undefined &&
-            (typeof override.prompt !== "string" || override.prompt.trim() === "")
-          ) {
-            console.warn(
-              `[ProjectSettingsManager] Dropping invalid/empty prompt in commandOverride for ${override.commandId} in project ${projectId}`
-            );
-            return false;
-          }
-          return true;
-        });
-        runtimeSettings = {
-          ...runtimeSettings,
-          commandOverrides: validOverrides.length > 0 ? validOverrides : undefined,
-        };
-      }
-    }
-
     const envelope = encodeEnvelope(runtimeSettings);
     const jsonString = JSON.stringify(envelope, null, 2);
 
@@ -548,11 +563,7 @@ export class ProjectSettingsManager {
     // Published only once the write lands, so a failed save leaves the last
     // saved overrides in effect.
     this.notificationOverridesCache.set(projectId, runtimeSettings.notificationOverrides);
-
-    // Invalidate after durable write succeeds. Dynamic import avoids
-    // expanding the static module graph for tests that mock ProjectStore.
-    const { commandService } = await import("./CommandService.js");
-    commandService.invalidateOverridesCache(projectId);
+    this.noSettingsFileAt.delete(projectId);
   }
 
   async getProjectNotificationOverrides(

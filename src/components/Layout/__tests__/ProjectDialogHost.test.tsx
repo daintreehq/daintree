@@ -112,13 +112,24 @@ vi.mock("@/components/Worktree/NewWorktreeDialog", () => ({
     rootPath,
     onClose,
     onWorktreeCreated,
+    initialPR,
+    restoreDraft,
   }: {
     isOpen: boolean;
     rootPath: string;
     onClose: () => void;
     onWorktreeCreated: (id: string) => void;
+    initialPR?: { number: number } | null;
+    restoreDraft?: { branch: string; path: string } | null;
   }) => (
-    <div data-testid="new-worktree-dialog" data-open={String(isOpen)} data-root={rootPath}>
+    <div
+      data-testid="new-worktree-dialog"
+      data-open={String(isOpen)}
+      data-root={rootPath}
+      data-pr={initialPR?.number ?? ""}
+      data-restore-branch={restoreDraft?.branch ?? ""}
+      data-restore-path={restoreDraft?.path ?? ""}
+    >
       <button onClick={() => onWorktreeCreated("wt-new")}>create</button>
       <button onClick={onClose}>close</button>
     </div>
@@ -131,6 +142,10 @@ vi.mock("@/components/Fleet/FleetPickerPalette", () => ({
       <button onClick={onClose}>close fleet</button>
     </div>
   ),
+}));
+
+vi.mock("@/components/Schedules/ScheduleEditorHost", () => ({
+  ScheduleEditorHost: () => <div data-testid="schedule-editor-host" />,
 }));
 
 vi.mock("@/components/TerminalRecipe/RecipeEditor", () => ({
@@ -177,13 +192,14 @@ vi.mock("@/components/TerminalRecipe/RecipeManager", () => ({
   }) => (
     <div data-testid="recipe-manager" data-open={String(isOpen)}>
       <button onClick={() => onEditRecipe(MANAGER_RECIPE)}>edit recipe</button>
-      <button onClick={() => onCreateRecipe("project")}>new project recipe</button>
+      <button onClick={() => onCreateRecipe("project")}>new team recipe</button>
     </div>
   ),
 }));
 
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { useWorktreeSelectionStore, type PendingCreationDraft } from "@/store/worktreeStore";
 import { useFleetPickerPaletteStore } from "@/store/fleetPickerPaletteStore";
+import { useSchedulesViewStore } from "@/store/schedulesViewStore";
 import { useRecipeEditorActivityStore } from "@/store/recipeEditorActivityStore";
 import { useRecipeStore } from "@/store/recipeStore";
 import { ProjectDialogHost } from "../ProjectDialogHost";
@@ -234,6 +250,25 @@ describe("ProjectDialogHost", () => {
       expect(useWorktreeSelectionStore.getState().createDialog.isOpen).toBe(false);
       expect(screen.getByTestId("new-worktree-dialog")).toBe(dialog);
       expect(dialog.dataset.open).toBe("false");
+    });
+
+    it("hands a Retry's failed request to the stock dialog", async () => {
+      render(<ProjectDialogHost />);
+      const selection = useWorktreeSelectionStore.getState();
+      selection.addPendingCreation("/repo-worktrees/retry-me", {
+        branch: "feature/retry-me",
+        pr: { number: 42 } as NonNullable<PendingCreationDraft["pr"]>,
+      });
+      selection.failPendingCreation("/repo-worktrees/retry-me", "boom");
+      act(() =>
+        useWorktreeSelectionStore.getState().retryPendingCreation("/repo-worktrees/retry-me")
+      );
+
+      const dialog = await screen.findByTestId("new-worktree-dialog");
+      expect(dialog.dataset.open).toBe("true");
+      expect(dialog.dataset.restoreBranch).toBe("feature/retry-me");
+      expect(dialog.dataset.restorePath).toBe("/repo-worktrees/retry-me");
+      expect(dialog.dataset.pr).toBe("42");
     });
 
     it("refreshes the worktree list and hands the new id to the opener", async () => {
@@ -309,7 +344,7 @@ describe("ProjectDialogHost", () => {
       act(() =>
         useWorktreeSelectionStore.getState().openCreateDialog(null, {
           surfacePanelKindId: PLUGIN_KIND,
-          initialBranchInput: "feature/x",
+          initialRecipeId: "recipe-x",
           onCreated,
         })
       );
@@ -319,7 +354,7 @@ describe("ProjectDialogHost", () => {
       expect(screen.queryByTestId("plugin-create-dialog")).toBeNull();
       expect((await screen.findByTestId("new-worktree-dialog")).dataset.open).toBe("true");
       const { createDialog } = useWorktreeSelectionStore.getState();
-      expect(createDialog.initialBranchInput).toBe("feature/x");
+      expect(createDialog.initialRecipeId).toBe("recipe-x");
       expect(createDialog.onCreated).toBe(onCreated);
 
       act(() => useWorktreeSelectionStore.getState().closeCreateDialog());
@@ -358,7 +393,7 @@ describe("ProjectDialogHost", () => {
       act(() =>
         useWorktreeSelectionStore.getState().openCreateDialog(null, {
           surfacePanelKindId: PLUGIN_KIND,
-          initialBranchInput: "feature/x",
+          initialRecipeId: "recipe-x",
           onCreated,
         })
       );
@@ -383,7 +418,7 @@ describe("ProjectDialogHost", () => {
       expect(screen.queryByTestId("plugin-create-dialog")).toBeNull();
       expect((await screen.findByTestId("new-worktree-dialog")).dataset.open).toBe("true");
       const { createDialog } = useWorktreeSelectionStore.getState();
-      expect(createDialog.initialBranchInput).toBe("feature/x");
+      expect(createDialog.initialRecipeId).toBe("recipe-x");
       expect(createDialog.onCreated).toBe(onCreated);
     });
 
@@ -624,7 +659,7 @@ describe("ProjectDialogHost", () => {
       expect(editor.dataset.omissions).toBe("");
     });
 
-    it.each(["edit recipe", "new project recipe"])(
+    it.each(["edit recipe", "new team recipe"])(
       "drops a captured draft's report when the manager's %s takes over",
       async (button) => {
         render(<ProjectDialogHost />);
@@ -759,7 +794,7 @@ describe("ProjectDialogHost", () => {
       act(() => {
         window.dispatchEvent(new CustomEvent("daintree:open-recipe-manager"));
       });
-      fireEvent.click(await screen.findByText("new project recipe"));
+      fireEvent.click(await screen.findByText("new team recipe"));
 
       expect(screen.getByTestId("recipe-manager").dataset.open).toBe("false");
       const editor = await screen.findByTestId("recipe-editor");
@@ -826,5 +861,29 @@ describe("ProjectDialogHost", () => {
 
       expect(useFleetPickerPaletteStore.getState().isOpen).toBe(false);
     });
+  });
+});
+
+describe("ProjectDialogHost — the schedule editor", () => {
+  beforeEach(() => {
+    setProject({ id: "project-1", path: "/repo" });
+    useSchedulesViewStore.setState({ editor: null });
+  });
+  afterEach(() => cleanup());
+
+  it("mounts the editor while an opening exists, outside Project settings", async () => {
+    render(<ProjectDialogHost />);
+    expect(screen.queryByTestId("schedule-editor-host")).toBeNull();
+    act(() => useSchedulesViewStore.getState().openEditor(null));
+    expect(await screen.findByTestId("schedule-editor-host")).toBeTruthy();
+    act(() => useSchedulesViewStore.getState().clearEditor());
+    expect(screen.queryByTestId("schedule-editor-host")).toBeNull();
+  });
+
+  it("drops the opening with the workspace, so the next one starts without it", () => {
+    const { unmount } = render(<ProjectDialogHost />);
+    act(() => useSchedulesViewStore.getState().openEditor(null));
+    unmount();
+    expect(useSchedulesViewStore.getState().editor).toBeNull();
   });
 });

@@ -50,7 +50,7 @@ function cleanPath(rawPath: string): string[] | null {
   const segments = path.split("/").filter((s) => s.length > 0);
   // A GitLab project path is at least `namespace/project`.
   if (segments.length < 2) return null;
-  if (RESERVED_LEADING_SEGMENTS.has(segments[0].toLowerCase())) return null;
+  if (RESERVED_LEADING_SEGMENTS.has(segments[0]!.toLowerCase())) return null;
   // Web URLs (not clone URLs) carry `/-/` route separators — cut there so a
   // pasted MR/issue URL still resolves to its project.
   const dashIndex = segments.indexOf("-");
@@ -63,7 +63,7 @@ function fromSegments(host: string, segments: string[]): ParsedGitLabRemote {
   return {
     host: host.toLowerCase(),
     owner: segments.slice(0, -1).join("/"),
-    repo: segments[segments.length - 1],
+    repo: segments[segments.length - 1]!,
   };
 }
 
@@ -87,9 +87,9 @@ export function parseGitLabRemoteUrl(url: string): ParsedGitLabRemote | null {
   // SCP-like syntax: [user@]host:path (no scheme, single colon, no leading //).
   const scpMatch = /^(?:[\w.-]+@)?([\w.-]+):(?!\/\/)(.+)$/.exec(trimmed);
   if (scpMatch && !trimmed.includes("://")) {
-    const segments = cleanPath(scpMatch[2]);
+    const segments = cleanPath(scpMatch[2]!);
     if (!segments) return null;
-    return fromSegments(scpMatch[1], segments);
+    return fromSegments(scpMatch[1]!, segments);
   }
 
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;

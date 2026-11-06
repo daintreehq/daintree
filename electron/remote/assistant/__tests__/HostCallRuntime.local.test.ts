@@ -5,6 +5,7 @@ import type { HostMetricsSummary } from "../../../../shared/types/remoteHosts.js
 import { SummaryLoop } from "../../metrics/summaryLoop.js";
 import type { SummaryReceipt } from "../../metrics/summaryReceipt.js";
 import type { LaneWake } from "../../../services/mcp-server/terminalNotify.js";
+import { buildToolCallResult } from "../../../services/mcp-server/toolCallResult.js";
 import { AGENT_DIRECTORY_BYTES_MAX } from "../../../../shared/types/agentDirectory.js";
 import {
   HOST_LIST_PROJECTS_MAX,
@@ -335,6 +336,22 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
       });
     });
 
+    it("gives no load for a Windows Shell's own sample, which the contract has no platform for", async () => {
+      latestSummary = () =>
+        ({
+          sampledAt: 995,
+          platform: "win32",
+          cpuPercent: 25,
+          cpuLogicalCoreCount: 12,
+          cpuLoadAverage1m: null,
+          memoryTotalBytes: 36e9,
+        }) as HostMetricsSummary;
+      const listed = await runtime.list("a");
+      if (!listed.ok) throw new Error("refused");
+      expect(HostListResultSchema.safeParse(listed.value).success).toBe(true);
+      expect(listed.value.hosts[0]?.load).toBeNull();
+    });
+
     it("ages this machine's sample from when it was read, whatever its wall clock did (#14462)", async () => {
       const loop = new SummaryLoop({
         sample: async () =>
@@ -464,6 +481,31 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
           callId: "00000000-0000-4000-8000-000000000001",
         },
       ]);
+    });
+
+    it("answers a tool with no output schema in its structured half (#15730)", async () => {
+      const value = {
+        commands: [
+          {
+            id: "/review",
+            label: "/review",
+            description: "Review the diff",
+            scope: "project",
+            agentId: "claude",
+          },
+        ],
+      };
+      answer = async () => buildToolCallResult(value);
+
+      const settled = await runtime.call(
+        "a",
+        { ...LIST, tool: "slashCommands.list", args: {} },
+        { tier: "full" }
+      );
+
+      if (!settled.ok) throw new Error("refused");
+      expect(settled.value.result).toEqual({ isError: false, structured: value, text: null });
+      expect(HostCallResultSchema.safeParse(settled.value).success).toBe(true);
     });
 
     describe("whose the call is (#14545)", () => {
@@ -639,6 +681,7 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
   });
 
   it("types a notice the call armed into the run that made it, even one fired before it answered", async () => {
+    const stoppedAt = Date.parse("2026-10-18T09:59:30Z");
     answer = async (session) => {
       session.spec.deliverNotices([
         {
@@ -651,6 +694,7 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
             waitingReason: "prompt",
             handback: false,
           },
+          lastTransitionAt: stoppedAt,
         },
       ]);
       return { content: [], structuredContent: { terminalId: "t-site" } };
@@ -669,7 +713,10 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
     expect(queued[0]!.lane).toEqual({ helpSessionId: "a", terminalId: "t-a", projectId: "proj-1" });
     expect(queued[0]!.wake).toMatchObject({
       kind: "notice",
-      hostNotice: { hostName: "greg-mbp", notice: { terminalId: "t-site" } },
+      hostNotice: {
+        hostName: "greg-mbp",
+        notice: { terminalId: "t-site", lastTransitionAt: stoppedAt },
+      },
     });
     expect(queued[0]!.wake.recheck()).toEqual({ kind: "ready" });
 
@@ -701,6 +748,8 @@ describe("HostCallRuntime reaching this machine's other projects (#14024)", () =
         actionId: "worktree.delete",
         args: { worktreeId: "/wt/feature" },
         lines: ["No uncommitted changes."],
+        // Asked the timed way, so the dialog ends inside the relay's wait (#15699).
+        holdUntil: expect.any(Number),
       },
     ]);
     expect(decision).toMatchObject({ decision: "approved" });

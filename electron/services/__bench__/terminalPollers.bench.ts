@@ -1,4 +1,4 @@
-import { bench, describe, vi } from "vitest";
+import { test, describe, vi } from "vitest";
 
 // Main-process terminal pollers against a modelled PTY host: 10 projects,
 // 30 terminals, both background pollers running for one simulated minute with
@@ -161,23 +161,19 @@ process.stdout.write(
 );
 
 describe("terminal pollers (10 projects, 30 terminals)", () => {
-  bench(
-    "one simulated minute, both pollers + 4 transitions",
-    async () => {
+  test("one simulated minute, both pollers + 4 transitions", async ({ bench }) => {
+    await bench("one simulated minute, both pollers + 4 transitions", {}, async () => {
       await simulateMinute();
-    },
-    { time: 3_000 }
-  );
+    }).run({ time: 3_000 });
+  });
 
-  bench(
-    "ProjectStatsService.computeAndBroadcast (cold read)",
-    async () => {
+  test("ProjectStatsService.computeAndBroadcast (cold read)", async ({ bench }) => {
+    await bench("ProjectStatsService.computeAndBroadcast (cold read)", {}, async () => {
       // A fresh client per call keeps any shared read cache cold, so this times
       // a full fan-out rather than a cache hit.
       const host = makeHost();
       const svc = new ProjectStatsService(host.client as never);
       await (svc as unknown as { computeAndBroadcast(): Promise<void> }).computeAndBroadcast();
-    },
-    { time: 3_000 }
-  );
+    }).run({ time: 3_000 });
+  });
 });

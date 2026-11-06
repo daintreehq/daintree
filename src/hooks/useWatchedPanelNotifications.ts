@@ -4,6 +4,7 @@ import { exitProjectHome } from "@/store/storeAccessors";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import { isPtyPanel } from "@shared/types/panel";
+import { withDisplayEmoji } from "@shared/utils/displayIdentity";
 
 const NOTIFICATION_STAGGER_MS = 250;
 export const MAX_STAGGER_QUEUE_LENGTH = 50;
@@ -25,18 +26,30 @@ export function applyStaggerQueueCap<T>(queue: T[]): boolean {
 
 export function useWatchedPanelNotifications(): void {
   useEffect(() => {
-    // Sync initial watched set to main process
-    window.electron?.notification?.syncWatchedPanels?.(
-      Array.from(usePanelStore.getState().watchedPanels)
-    );
+    // The view's selected worktree rides along: main judges whether the user is
+    // already looking at a waiting agent by the selection of the view that owns
+    // its panel, never by whichever view changed worktree last.
+    const syncWatched = (watchedPanels: ReadonlySet<string>) =>
+      window.electron?.notification?.syncWatchedPanels?.(Array.from(watchedPanels), {
+        activeWorktreeId: useWorktreeSelectionStore.getState().activeWorktreeId ?? null,
+      });
+
+    syncWatched(usePanelStore.getState().watchedPanels);
 
     // Keep main process in sync whenever the watched set changes
     let prevWatchedPanels = usePanelStore.getState().watchedPanels;
     const unsubWatched = usePanelStore.subscribe((state) => {
       if (state.watchedPanels !== prevWatchedPanels) {
         prevWatchedPanels = state.watchedPanels;
-        window.electron?.notification?.syncWatchedPanels?.(Array.from(state.watchedPanels));
+        syncWatched(state.watchedPanels);
       }
+    });
+
+    let prevSelectedWorktree = useWorktreeSelectionStore.getState().activeWorktreeId;
+    const unsubSelection = useWorktreeSelectionStore.subscribe((state) => {
+      if (state.activeWorktreeId === prevSelectedWorktree) return;
+      prevSelectedWorktree = state.activeWorktreeId;
+      syncWatched(usePanelStore.getState().watchedPanels);
     });
 
     const snapshotAgentStates = (state: ReturnType<typeof usePanelStore.getState>) =>
@@ -110,7 +123,7 @@ export function useWatchedPanelNotifications(): void {
 
           // Capture values for closure
           const capturedPanelId = panelId;
-          const capturedTitle = terminal.title ?? panelId;
+          const capturedTitle = withDisplayEmoji(terminal.title ?? panelId, terminal.displayEmoji);
           const capturedState = currentState;
 
           enqueueNotification(() => {
@@ -148,6 +161,7 @@ export function useWatchedPanelNotifications(): void {
 
     return () => {
       unsubWatched();
+      unsubSelection();
       unsubscribe();
       unsubNavigate?.();
       if (staggerTimer) {

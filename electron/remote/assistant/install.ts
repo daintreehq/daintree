@@ -1,12 +1,14 @@
 import type Database from "better-sqlite3";
 import type { HostProjectSummary } from "../../../shared/types/ipc/remoteHosts.js";
 import { LOCAL_HOST_ID, type HostId } from "../../../shared/types/remoteHosts.js";
-import { isRemoteEndpointHandle } from "../../ipc/endpoint.js";
+import { isRemoteEndpointHandle, NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
 import { getLocalAgentDirectory } from "../../services/assistants/localAgentDirectory.js";
+import { events } from "../../services/events.js";
 import { helpSessionService } from "../../services/HelpSessionService.js";
 import { peekGlobalAssistantService } from "../../services/globalAssistant.js";
 import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
 import { setHostControlRuntime } from "../../services/mcp-server/hostControlTools.js";
+import { readAssistantConfirmationsSkipped } from "../../services/mcp-server/assistantConfirmationsPreference.js";
 import type { LaneWake } from "../../services/mcp-server/terminalNotify.js";
 import { getSharedDb, getSharedSqlite } from "../../services/persistence/db.js";
 import { machineDisplayName } from "../../utils/machineName.js";
@@ -14,6 +16,7 @@ import { getPtyClient } from "../../window/serviceRefs.js";
 import { getProjectForWebContents } from "../../window/webContentsRegistry.js";
 import type { LinkSession } from "../link/session.js";
 import { getLocalSummaryLoop } from "../metrics/localLoop.js";
+import { agentWaitingOf, type AgentWaitingListener } from "../metrics/agentWaiting.js";
 import { getRemoteService, registerRemoteService } from "../runtime.js";
 import {
   HostCallRuntime,
@@ -22,6 +25,10 @@ import {
   type OpenRun,
 } from "./HostCallRuntime.js";
 import { HostControlLinkClient } from "./HostControlLinkClient.js";
+import {
+  noteAssistantToolAnswer,
+  workerLaunchesIn,
+} from "../../services/scheduledRuns/assistantWorkerLaunches.js";
 import { createLocalMcpRelay, LOCAL_RELAY_SENDER_ID } from "./localMcpRelay.js";
 import { relayCallerOf } from "./mcpRelayExecutor.js";
 import { forgetRetiredSends, readRetiredSends } from "./retiredSends.js";
@@ -37,7 +44,9 @@ declare module "../runtime.js" {
     hostCallRelayClient: Pick<
       HostCallRuntime,
       | "hasCallInFlight"
+      | "skipsRelayedDispatch"
       | "awaitsNotices"
+      | "holdsThrowawayRuns"
       | "receiveNotices"
       | "noticeCalls"
       | "receiveNoticeStatus"
@@ -48,9 +57,71 @@ declare module "../runtime.js" {
 }
 
 /**
+ * Whether a help session belongs to no view yet because this machine's own
+ * schedule started it (#16169): main's, like the global assistant, until one
+ * of this machine's views takes it over. One a remote Shell's view holds
+ * never counts.
+ */
+function isOwnScheduledWithoutView(helpSessionId: string, handle: number): boolean {
+  return handle === NO_VIEW_HANDLE && helpSessionService.getScheduledRunOf(helpSessionId) !== null;
+}
+
+/** How long a host's project listing may take to name a worker's project before it goes unnamed. */
+const HOST_PROJECT_NAME_WAIT_MS = 2_000;
+
+/**
+ * A call an assistant made through `host.call` was answered (#16169). A
+ * launch it names is recorded on the schedule's run that started that
+ * assistant, if one did; a host's project is named from the host's own
+ * listing when it answers in time, this machine's from its own projects.
+ */
+function noteHostCallAnswer(
+  answer: Parameters<NonNullable<HostCallRuntimeDeps["noteAnswered"]>>[0],
+  listHostProjects: ((hostId: HostId) => Promise<readonly HostProjectSummary[]>) | undefined
+): void {
+  const runId = helpSessionService.getScheduledRunOf(answer.helpSessionId)?.runId;
+  if (runId === undefined) return;
+  if (workerLaunchesIn(answer.tool, answer.args, answer.structured).terminalIds.length === 0) {
+    return;
+  }
+  const local = answer.hostId === LOCAL_HOST_ID;
+  const note = (projectName: string | null) =>
+    noteAssistantToolAnswer({
+      helpSessionId: answer.helpSessionId,
+      tool: answer.tool,
+      args: answer.args,
+      result: answer.structured,
+      hostId: local ? null : answer.hostId,
+      hostName: answer.hostName,
+      projectId: answer.projectId,
+      projectName,
+      askedAt: answer.askedAt,
+      runId,
+    });
+  if (local || listHostProjects === undefined) {
+    note(null);
+    return;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  void Promise.race([
+    listHostProjects(answer.hostId).then(
+      (projects) => projects.find((project) => project.id === answer.projectId)?.name ?? null,
+      () => null
+    ),
+    new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), HOST_PROJECT_NAME_WAIT_MS);
+    }),
+  ]).then((name) => {
+    clearTimeout(timer);
+    note(name);
+  });
+}
+
+/**
  * The run a help session answers in, when one of this machine's own views
  * shows it, or when it is this machine's global assistant (#14161), which
- * main owns and no view holds.
+ * main owns and no view holds, or one of its schedules' assistants no view
+ * has taken over yet (#16169).
  */
 function localRunOf(helpSessionId: string): OpenRun | null {
   const lane = helpSessionService.getSessionLane(helpSessionId);
@@ -61,6 +132,7 @@ function localRunOf(helpSessionId: string): OpenRun | null {
   const handle = running.projectViewWebContentsId;
   if (
     !isGlobalAssistantId(lane.projectId) &&
+    !isOwnScheduledWithoutView(helpSessionId, handle) &&
     (isRemoteEndpointHandle(handle) || getProjectForWebContents(handle) !== lane.projectId)
   ) {
     return null;
@@ -111,13 +183,40 @@ export interface HostControlInstallDeps {
   listHostProjects?(hostId: HostId): Promise<readonly HostProjectSummary[]>;
   /** Dials a host this Shell holds no link to, for `host.list` to observe it connected. */
   connect?(hostId: HostId, timeoutMs: number): Promise<unknown>;
+  /** The Shell's attempt to bring back a host whose link is down (#16170). */
+  bringBack?: HostCallRuntimeDeps["bringBack"];
   /** The person's "assistant control" switch for a host: whether its assistant reaches it (#13493). */
   isHostControlEnabled(hostId: HostId): boolean;
   /**
    * Hears what hosts already report, for `host.watch` (#14463): links, the
-   * host list and summaries. Held only while a watch is armed.
+   * host list and summaries. Held only while a watch is armed, or while
+   * `host.list` waits for a host it dialed to send its first summary.
    */
   watchHosts?: HostCallRuntimeDeps["watchHosts"];
+  /**
+   * Hears hosts' agents starting to wait as they report it, for an agent
+   * `host.watch` (#16188); held only while one is armed, and never dials.
+   */
+  watchHostAgents?(listener: AgentWaitingListener): () => void;
+}
+
+/**
+ * This machine's agents and its hosts' starting to wait (#16188): this one's
+ * straight off its own transitions, the hosts' as they report them.
+ */
+function watchAgentsHere(
+  listener: AgentWaitingListener,
+  hosts: HostControlInstallDeps["watchHostAgents"]
+): () => void {
+  const offLocal = events.on("agent:state-changed", (payload) => {
+    const seen = agentWaitingOf(payload, getPtyClient());
+    if (seen !== null) listener(LOCAL_HOST_ID, { ...seen, source: "event" });
+  });
+  const offHosts = hosts?.(listener);
+  return () => {
+    offLocal();
+    offHosts?.();
+  };
 }
 
 /**
@@ -166,6 +265,7 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     receiveNotices: (payload) => runtime.receiveNotices(LOCAL_HOST_ID, payload),
     receiveApproval: (payload) => runtime.receiveApproval(LOCAL_HOST_ID, payload),
     throwawayRuns: () => getRemoteService("hostThrowawayRuns") ?? null,
+    readAgents: (options) => getLocalAgentDirectory().read(options),
   });
   // The global assistant has no window of its own: it is asked in one that
   // shows it, never the focused one, and not at all while none does.
@@ -184,16 +284,24 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     hosts: () => deps.observeHosts(),
     listHostProjects: deps.listHostProjects,
     connect: deps.connect,
+    ...(deps.bringBack ? { bringBack: deps.bringBack } : {}),
     // From provisioning, before the run is confirmed: the view a session was opened in.
     // The global assistant (#14161) is this machine's own with no view at all.
     inLocalView: (helpSessionId) => {
       const lane = helpSessionService.getSessionLane(helpSessionId);
       if (lane !== null && isGlobalAssistantId(lane.projectId)) return true;
       const handle = helpSessionService.getWebContentsIdForSessionId(helpSessionId);
-      return handle !== null && !isRemoteEndpointHandle(handle);
+      // A live session with no view answers null here; a schedule's is this machine's own.
+      if (handle === null) {
+        return lane !== null && helpSessionService.getScheduledRunOf(helpSessionId) !== null;
+      }
+      return !isRemoteEndpointHandle(handle);
     },
     controlEnabled: (hostId) => deps.isHostControlEnabled(hostId),
+    // Workers a schedule's assistant launched elsewhere, for its run (#16169).
+    noteAnswered: (answer) => noteHostCallAnswer(answer, deps.listHostProjects),
     ...(deps.watchHosts ? { watchHosts: deps.watchHosts } : {}),
+    watchAgents: (listener) => watchAgentsHere(listener, deps.watchHostAgents),
     // A host's question about a call it would run itself goes to the person in
     // the window of the assistant that made the call (#13501), never the
     // focused one: an assistant a remote Shell's view runs here has none.
@@ -203,6 +311,9 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
       const { askHostApprovalInWindow } = await import("../client/viewRequests.js");
       return askHostApprovalInWindow(webContentsId, ask);
     },
+    // This machine's own preference for the assistant that made the call, never the host's (#15698).
+    confirmationsSkipped: (helpSessionId) =>
+      readAssistantConfirmationsSkipped(helpSessionService.getSessionAgent(helpSessionId)),
     // A host's settings, read and changed by name with no view there (#14167).
     settingsClient: () => getRemoteService("settingsControlClient") ?? null,
     askSettingsApproval: async ({ helpSessionId, ...ask }) => {
@@ -235,13 +346,14 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
           frontendAttached: isProjectFrontendAttached(project.id),
         }));
       },
-      // The sampler reads macOS and treats everything else as Linux, so a
-      // Windows machine has no measurement to offer rather than a borrowed one.
+      // The assistant's host contract names macOS and Linux, so this Windows
+      // machine has no summary to offer in it.
       latestSummary: () => (process.platform === "win32" ? null : getLocalSummaryLoop().latest()),
       summaryReceipt: (summary) => getLocalSummaryLoop().receiptOf(summary),
       relayCall: (payload) => local.relayCall(payload),
       throwawayCall: (payload) => local.throwawayCall(payload),
       agents: (options) => getLocalAgentDirectory().read(options),
+      status: (payload) => local.status(payload),
     },
   });
   // A help session that won't run again holds nothing it made in another
@@ -345,6 +457,8 @@ export function installRetiredSendsNotice(
 export interface HostControlLinkClientInstallDeps {
   /** The host's open session, connecting it if need be; null when it can't be reached. */
   session(hostId: HostId): Promise<LinkSession | null>;
+  /** The host's session if one is open now, never connecting it or marking it used. */
+  openSession?(hostId: HostId): LinkSession | null;
   onSessionOpened(listener: (hostId: HostId, session: LinkSession) => void): () => void;
   /** Hosts this Shell still knows; a removed host's credential goes with it. */
   knownHosts(): HostId[];
@@ -363,6 +477,22 @@ function openDatabase(): Database.Database | null {
     console.error("[HostControl] The database is unavailable:", err);
     return null;
   }
+}
+
+/**
+ * Whether this Shell's assistants still use `hostId`'s link: a relayed call
+ * running, the notices those calls armed until their host has nothing more
+ * for them (#13500, #13930), or a throwaway run one of them launched that may
+ * still be going, which the host ends with the link (#15878). Holding the
+ * link never keeps the host awake.
+ */
+export function assistantsUseHost(hostId: HostId): boolean {
+  const relay = getRemoteService("hostCallRelayClient");
+  return (
+    relay?.hasCallInFlight(hostId) === true ||
+    relay?.awaitsNotices(hostId) === true ||
+    relay?.holdsThrowawayRuns(hostId) === true
+  );
 }
 
 /**
@@ -389,19 +519,13 @@ export function installHostControlLinkClient(deps: HostControlLinkClientInstallD
     credential: (hostId) => credentials.credential(hostId),
     existingCredential: (hostId) => credentials.existing(hostId),
     session: deps.session,
+    ...(deps.openSession ? { openSession: deps.openSession } : {}),
     onSessionOpened: deps.onSessionOpened,
     noticeReceiver: () => getRemoteService("hostCallRelayClient"),
     approvalReceiver: () => getRemoteService("hostCallRelayClient"),
   });
   client.start();
-  // Bounded by each relayed call while it runs, and by the notices those
-  // calls armed until their host has nothing more for them (#13500, #13930).
-  // Holding the link never keeps the host awake.
-  const offUseCheck =
-    deps.addUseCheck?.((hostId) => {
-      const relay = getRemoteService("hostCallRelayClient");
-      return relay?.hasCallInFlight(hostId) === true || relay?.awaitsNotices(hostId) === true;
-    }) ?? (() => {});
+  const offUseCheck = deps.addUseCheck?.(assistantsUseHost) ?? (() => {});
   const unregister = registerRemoteService("hostControlLinkClient", client);
   const stopRetiredNotice = installRetiredSendsNotice(sqlite, { hostName: deps.hostName });
   return () => {

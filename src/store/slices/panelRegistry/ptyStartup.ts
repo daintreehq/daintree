@@ -682,6 +682,9 @@ export function enqueuePtyStartup(
             spawnBatchSize: options.spawnBatchSize,
             agentLaunchFlags: options.agentLaunchFlags,
             agentModelId: options.agentModelId,
+            // Off the live panel, which holds it paired with its source, so a
+            // session captured when the agent ends names the run (#15977).
+            scheduledRun: _p1.scheduledRun,
             // Known-at-launch session id (#11782) — either freshly minted and
             // assigned to the CLI, or the one this launch resumes. Recorded on
             // the terminal record at spawn so a kill path that never runs a
@@ -695,6 +698,7 @@ export function enqueuePtyStartup(
             agentPresetColor: options.agentPresetColor,
             originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
             handbackCode: options.handbackCode,
+            ...(options.whenDone !== undefined && { whenDone: options.whenDone }),
             // A launch prompt or a carried record is the run's first prompt, so
             // main never offers a send as one (#15521).
             ...((options.launchPrompt || _p1.firstPrompt) && { hasFirstPrompt: true }),

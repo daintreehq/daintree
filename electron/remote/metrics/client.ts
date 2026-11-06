@@ -29,6 +29,7 @@ import { stampNow, type ElapsedStamp } from "../link/elapsed.js";
 import type { LinkSession } from "../link/session.js";
 import type { FleetCaller } from "./hostOps.js";
 import {
+  AgentWaitingPayloadSchema,
   AttentionPayloadSchema,
   FleetTargetListSchema,
   LinkActivitySchema,
@@ -41,6 +42,7 @@ import { boundProcessInventory } from "./processInventoryWire.js";
 import { HOST_METRICS_INTERVAL_MS } from "./sampler.js";
 import { receiveSummary, type SummaryReceipt } from "./summaryReceipt.js";
 import { WorktreeChangeWatch } from "./worktreeChanges.js";
+import type { AgentWaitingHeard, AgentWaitingListener } from "./agentWaiting.js";
 import { EmptyPayloadSchema } from "../host/linkMethods.js";
 import { connectionKey } from "../client/connection.js";
 import { admitHostNotice } from "../hybrid/hostNoticeBudget.js";
@@ -101,6 +103,8 @@ export interface HostMetricsClientOptions {
     processInventory(): Promise<ProcessInventorySnapshot>;
     /** Told when this machine's worktree list may show something else. */
     onWorktreesMaybeChanged?(listener: () => void): () => void;
+    /** Told when which projects are registered on this machine changed. */
+    onProjectsChanged?(listener: () => void): () => void;
   };
   ringSize?: number;
   /** How long a burst of this machine's worktree changes is gathered; the default outside tests. */
@@ -218,6 +222,9 @@ export class HostMetricsClient {
   private readonly rings = new Map<HostId, HostMetricsSummary[]>();
   /** When each held summary arrived and how old it could be then, kept beside it rather than in it. */
   private readonly receipts = new WeakMap<HostMetricsSummary, SummaryReceipt>();
+  /** The link each held summary came on, as a token per session so its summaries never keep a closed one alive. */
+  private readonly arrivedOn = new WeakMap<HostMetricsSummary, object>();
+  private readonly linkTokens = new WeakMap<LinkSession, object>();
   /** Each known host's address: a new address is another machine, whose history starts empty. */
   private readonly known = new Map<HostId, string>();
   /** Hosts dialled for their notifications, so turning them on dials once, not on every change. */
@@ -225,9 +232,12 @@ export class HostMetricsClient {
   private readonly disposers: Array<() => void> = [];
   /** Told of every recorded summary; empty unless something in main asked (#14463). */
   private readonly summaryListeners = new Set<(hostId: HostId) => void>();
+  /** This Shell's assistants' armed agent watches, the only ones told of a host's agents' waits. */
+  private readonly agentWaitingListeners = new Set<AgentWaitingListener>();
   private stopLocal: (() => void) | null = null;
   private stopLocalWorktrees: (() => void) | null = null;
   private localWorktrees: WorktreeChangeWatch | null = null;
+  private stopLocalProjects: (() => void) | null = null;
   private readonly ringSize: number;
 
   constructor(private readonly options: HostMetricsClientOptions) {
@@ -248,6 +258,8 @@ export class HostMetricsClient {
     this.stopLocal = null;
     this.stopLocalWorktrees?.();
     this.stopLocalWorktrees = null;
+    this.stopLocalProjects?.();
+    this.stopLocalProjects = null;
     this.summaryListeners.clear();
   }
 
@@ -257,6 +269,30 @@ export class HostMetricsClient {
     return () => {
       this.summaryListeners.delete(listener);
     };
+  }
+
+  /**
+   * Hosts' agents seen starting to wait (#16188), for an armed `host.watch`
+   * only: none of the person's notification choices apply, and nothing here
+   * dials a host to hear them. Told only for a host with assistant control on.
+   */
+  onAgentWaiting(listener: AgentWaitingListener): () => void {
+    this.agentWaitingListeners.add(listener);
+    return () => {
+      this.agentWaitingListeners.delete(listener);
+    };
+  }
+
+  private hearAgentWaiting(hostId: HostId, heard: AgentWaitingHeard): void {
+    if (this.agentWaitingListeners.size === 0) return;
+    if (this.options.registry.get(hostId)?.assistantControlEnabled !== true) return;
+    for (const listener of [...this.agentWaitingListeners]) {
+      try {
+        listener(hostId, heard);
+      } catch (error) {
+        logger.warn("An agent watch couldn't take a host's agent", { hostId, error });
+      }
+    }
   }
 
   getSnapshots(): HostMetricsSnapshot[] {
@@ -270,6 +306,17 @@ export class HostMetricsClient {
   /** When a summary this client holds arrived, and what its frame proved about its age (#14462). */
   receiptOf(summary: HostMetricsSummary): SummaryReceipt | null {
     return this.receipts.get(summary) ?? null;
+  }
+
+  /**
+   * Whether a held summary came on `session` (#15736). The history outlives a
+   * reconnect, so one from an earlier link, or any while no link is open, is
+   * false; null for one that came on no link at all, as this machine's own do.
+   */
+  cameOn(summary: HostMetricsSummary, session: LinkSession | null): boolean | null {
+    const token = this.arrivedOn.get(summary);
+    if (token === undefined) return null;
+    return session !== null && this.linkTokens.get(session) === token;
   }
 
   /** Agents a connected host last reported working and waiting; unknown while it isn't connected. */
@@ -453,6 +500,7 @@ export class HostMetricsClient {
       stamped,
       receiveSummary(timing, (nonce) => session?.pingSentAt(nonce) ?? null, at)
     );
+    if (session) this.arrivedOn.set(stamped, this.linkToken(session));
     let ring = this.rings.get(hostId);
     if (!ring) {
       ring = [];
@@ -468,6 +516,15 @@ export class HostMetricsClient {
         logger.warn("A summary listener threw", { error });
       }
     }
+  }
+
+  private linkToken(session: LinkSession): object {
+    let token = this.linkTokens.get(session);
+    if (token === undefined) {
+      token = {};
+      this.linkTokens.set(session, token);
+    }
+    return token;
   }
 
   private hostIdOf(payload: unknown): HostId {
@@ -500,7 +557,28 @@ export class HostMetricsClient {
     session.on(Lane.CONTROL, ControlKind.HOST_SUMMARY, (frame) =>
       this.record(hostId, frame, session)
     );
+    session.registerCallHandler(
+      MetricsLinkMethod.AGENT_WAITING,
+      AgentWaitingPayloadSchema,
+      (payload) => {
+        this.hearAgentWaiting(hostId, { ...payload, source: "event" });
+        return null;
+      }
+    );
     session.registerCallHandler(MetricsLinkMethod.ATTENTION, AttentionPayloadSchema, (payload) => {
+      // Before the person's choices: a host too old to send its agents' waits
+      // is heard this way by an agent watch that takes any reason.
+      this.hearAgentWaiting(hostId, {
+        source: "attention",
+        terminalId: payload.terminalId,
+        projectId: payload.projectId ?? null,
+        worktreeId: null,
+        incarnation: null,
+        agentIncarnation: null,
+        waitingReason: null,
+        refined: false,
+        seenAt: null,
+      });
       const descriptor = this.options.registry.get(hostId);
       // Opt-in per host, and off until the user turns it on.
       if (descriptor?.notificationsEnabled !== true) return null;
@@ -525,6 +603,10 @@ export class HostMetricsClient {
     });
     session.registerCallHandler(MetricsLinkMethod.WORKTREES_CHANGED, EmptyPayloadSchema, () => {
       this.options.emit({ type: "worktrees", hostId });
+      return null;
+    });
+    session.registerCallHandler(MetricsLinkMethod.PROJECTS_CHANGED, EmptyPayloadSchema, () => {
+      this.options.emit({ type: "projects", hostId });
       return null;
     });
   }
@@ -598,6 +680,16 @@ export class HostMetricsClient {
     } else if (hosts.length === 0 && this.stopLocalWorktrees) {
       this.stopLocalWorktrees();
       this.stopLocalWorktrees = null;
+    }
+    // A window showing another host matches its project against this machine too.
+    const followProjects = this.options.local.onProjectsChanged;
+    if (hosts.length > 0 && !this.stopLocalProjects && followProjects) {
+      this.stopLocalProjects = followProjects(() =>
+        this.options.emit({ type: "projects", hostId: LOCAL_HOST_ID })
+      );
+    } else if (hosts.length === 0 && this.stopLocalProjects) {
+      this.stopLocalProjects();
+      this.stopLocalProjects = null;
     }
   }
 }

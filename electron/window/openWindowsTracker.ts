@@ -89,19 +89,50 @@ export function clearPendingBackgroundRestores(windowId: number): void {
  */
 const pendingRemoteRestores = new Map<number, string>();
 
+/**
+ * Told when a window starts or stops waiting for a host's project. A window's
+ * saved bounds follow it (windowStateTracking.ts), and a restore that is given
+ * up passes through no view manager to say so.
+ */
+const pendingRemoteRestoreListeners = new Set<() => void>();
+
+export function onPendingRemoteRestoreChanged(listener: () => void): () => void {
+  pendingRemoteRestoreListeners.add(listener);
+  return () => {
+    pendingRemoteRestoreListeners.delete(listener);
+  };
+}
+
+function notifyPendingRemoteRestoreChanged(): void {
+  for (const listener of pendingRemoteRestoreListeners) {
+    try {
+      listener();
+    } catch (error) {
+      // Runs inside a restore's bookkeeping, which must finish whatever a listener does.
+      console.error("[openWindowsTracker] pending restore listener threw:", error);
+    }
+  }
+}
+
 export function setPendingRemoteRestore(windowId: number, workspaceKey: string): void {
   pendingRemoteRestores.set(windowId, workspaceKey);
+  notifyPendingRemoteRestoreChanged();
 }
 
 export function clearPendingRemoteRestore(windowId: number): void {
-  pendingRemoteRestores.delete(windowId);
+  if (pendingRemoteRestores.delete(windowId)) notifyPendingRemoteRestoreChanged();
 }
 
 /** A host was removed from this device: no window is restored onto it any more. */
 export function clearPendingRemoteRestoresForHost(hostId: string): void {
+  let cleared = false;
   for (const [windowId, key] of pendingRemoteRestores) {
-    if (parseHostScopedKey(key).hostId === hostId) pendingRemoteRestores.delete(windowId);
+    if (parseHostScopedKey(key).hostId === hostId) {
+      pendingRemoteRestores.delete(windowId);
+      cleared = true;
+    }
   }
+  if (cleared) notifyPendingRemoteRestoreChanged();
   for (const windowId of [...pendingRemoteBackgroundRestores.keys()]) {
     removePendingRemoteBackgroundRestores(
       windowId,
@@ -154,6 +185,38 @@ export function clearPendingRemoteBackgroundRestores(windowId: number): void {
   pendingRemoteBackgroundRestores.delete(windowId);
 }
 
+/**
+ * What a window rebuilt after a probable OOM was showing, keyed by the
+ * replacement's window id, until its setup settles (#15564). The replacement
+ * binds its workspace only once setup reaches `registerInitialView`, and queues
+ * its background projects after its earlier awaits, so a save landing before
+ * then (its own registration, a focus change, a switch the person made
+ * meanwhile) would otherwise persist it as an empty picker, or drop the
+ * backgrounds it has yet to queue.
+ */
+const pendingWindowRecreations = new Map<
+  number,
+  { record: OpenWindowRecord; setupFailed: boolean }
+>();
+
+export function setPendingWindowRecreation(windowId: number, record: OpenWindowRecord): void {
+  pendingWindowRecreations.set(windowId, { record, setupFailed: false });
+}
+
+/**
+ * The replacement's setup threw. That proves nothing about the workspace, so
+ * the record still describes the window while it shows nothing; once it shows
+ * a workspace the person has moved on, and the record is spent.
+ */
+export function markWindowRecreationSetupFailed(windowId: number): void {
+  const pending = pendingWindowRecreations.get(windowId);
+  if (pending) pending.setupFailed = true;
+}
+
+export function clearPendingWindowRecreation(windowId: number): void {
+  pendingWindowRecreations.delete(windowId);
+}
+
 let state: TrackerState | null = null;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 /** Latched at shutdown. Permanent by design — nothing resumes after it. */
@@ -197,6 +260,39 @@ export function buildOpenWindowRecords(
   excludeWindowId?: number,
   liveWorkspaceIds?: ReadonlySet<string>
 ): OpenWindowRecord[] {
+  const { entries, claimed } = collectWindowRecords(
+    registry,
+    excludeWindowId,
+    MAX_RESTORED_WINDOWS
+  );
+  return attachOrphanedLiveWorkspaces(
+    entries.map((entry) => entry.record),
+    claimed,
+    liveWorkspaceIds
+  );
+}
+
+/**
+ * The record the manifest would hold for one window, read while it is still
+ * alive: what an OOM recreation rebuilds it onto (#15564). Built by the same
+ * pass as the manifest, so the two never disagree about a window's workspace
+ * or what it had warm, but without the fleet cap, so a window past it still
+ * has a record. Orphaned live workspaces stay with the primary window, as the
+ * manifest assigns them.
+ */
+export function captureWindowRecord(
+  registry: WindowRegistry,
+  windowId: number
+): OpenWindowRecord | null {
+  const { entries } = collectWindowRecords(registry, undefined, Number.POSITIVE_INFINITY);
+  return entries.find((entry) => entry.windowId === windowId)?.record ?? null;
+}
+
+function collectWindowRecords(
+  registry: WindowRegistry,
+  excludeWindowId: number | undefined,
+  maxWindows: number
+): { entries: Array<{ windowId: number; record: OpenWindowRecord }>; claimed: Set<string> } {
   // Two passes, because a window's background list must exclude every OTHER
   // window's foreground project, and focus order gives no way to know a later
   // window's project while building an earlier one's list. Assigning a project
@@ -223,6 +319,7 @@ export function buildOpenWindowRecords(
       projectId = null;
       pvm = undefined;
     }
+    const showing = projectId !== null;
 
     const pendingRemote = pendingRemoteRestores.get(ctx.windowId);
     if (pendingRemote !== undefined) {
@@ -233,9 +330,19 @@ export function buildOpenWindowRecords(
       else pendingRemoteRestores.delete(ctx.windowId);
     }
 
+    // What the manager shows always wins the foreground, and is read before
+    // the host intent above, which a host-scoped recreation also sets. While
+    // setup runs the record's backgrounds stay, since setup queues them only
+    // after its awaits; after a failed setup they go with the rest of it.
+    const recreation = pendingWindowRecreations.get(ctx.windowId);
+    if (recreation) {
+      if (!showing) projectId ??= recreation.record.projectId;
+      else if (recreation.setupFailed) pendingWindowRecreations.delete(ctx.windowId);
+    }
+
     if (projectId !== null) claimed.add(projectId);
     windows.push({ windowId: ctx.windowId, projectId, pvm });
-    if (windows.length >= MAX_RESTORED_WINDOWS) break;
+    if (windows.length >= maxWindows) break;
   }
 
   // Every window's views are claimed before any window's pending restores, so
@@ -254,22 +361,25 @@ export function buildOpenWindowRecords(
     return ids;
   });
 
-  const records: OpenWindowRecord[] = [];
+  const entries: Array<{ windowId: number; record: OpenWindowRecord }> = [];
   for (const [index, win] of windows.entries()) {
     const pending = [
       ...(pendingBackgroundRestores.get(win.windowId) ?? []),
       ...(pendingRemoteBackgroundRestores.get(win.windowId) ?? []),
+      ...(pendingWindowRecreations.get(win.windowId)?.record.backgroundProjectIds ?? []),
     ].filter((id) => !claimed.has(id));
     const backgroundProjectIds = capBackgroundProjectIds([...viewIds[index]!, ...pending]);
     for (const id of backgroundProjectIds) claimed.add(id);
-    records.push(
-      backgroundProjectIds.length > 0
-        ? { projectId: win.projectId, backgroundProjectIds }
-        : { projectId: win.projectId }
-    );
+    entries.push({
+      windowId: win.windowId,
+      record:
+        backgroundProjectIds.length > 0
+          ? { projectId: win.projectId, backgroundProjectIds }
+          : { projectId: win.projectId },
+    });
   }
 
-  return attachOrphanedLiveWorkspaces(records, claimed, liveWorkspaceIds);
+  return { entries, claimed };
 }
 
 /**
@@ -390,6 +500,26 @@ export function saveOpenWindowsNow(excludeWindowId?: number): void {
 }
 
 /**
+ * Record a window that is about to close when it is the last one, off macOS.
+ *
+ * There the last window closing is the quit, and by its `closed` listener and
+ * the quit's own snapshot the window is gone, so the save it gets is the empty
+ * set the guard in `persist` refuses: the manifest keeps whatever an earlier
+ * save captured. Anything that changed since without scheduling a save of its
+ * own (a host switch, for one) was lost, and the window came back on what it
+ * showed before. macOS keeps running windowless and Cmd+Q snapshots the live
+ * set, so it needs none of this.
+ */
+export function saveBeforeLastWindowCloses(windowId: number): void {
+  if (process.platform === "darwin" || !state) return;
+  const others = state.registry
+    .all()
+    .filter((ctx) => ctx.windowId !== windowId && !ctx.browserWindow.isDestroyed());
+  if (others.length > 0) return;
+  saveOpenWindowsNow();
+}
+
+/**
  * Lift a recovery launch's read-only hold (#12801).
  *
  * Only for a single crash whose whole fleet came back cleanly: the manifest is
@@ -449,4 +579,5 @@ export function resetOpenWindowsTrackerForTests(): void {
   pendingBackgroundRestores.clear();
   pendingRemoteRestores.clear();
   pendingRemoteBackgroundRestores.clear();
+  pendingWindowRecreations.clear();
 }

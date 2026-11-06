@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { MAX_ASSISTANT_SLOTS } from "../config/assistantSlots.js";
 import { TERMINAL_NOTIFY_DELIVERY_STATUSES } from "./terminalNotify.js";
+import { HANDBACK_REPORTS } from "./handback.js";
 
 /**
  * The agent directory (#14160): one typed, passive list of a host's workers and
@@ -120,8 +121,14 @@ export const AgentDirectoryLiveEntrySchema = z.object({
   label: z.string().nullable(),
   /** An assistant shown in a window here; false while it runs with no view; null for a worker. */
   attached: z.boolean().nullable(),
-  /** When the run last reported a handback marker, without its text; null if never observed. */
-  handback: z.object({ observedAt: z.number() }).nullable(),
+  /**
+   * The run's last handback marker, without its text; null if never observed.
+   * `report` is which marker the agent printed, its own claim; a host that
+   * doesn't report it leaves it out.
+   */
+  handback: z
+    .object({ observedAt: z.number(), report: z.enum(HANDBACK_REPORTS).optional() })
+    .nullable(),
   /**
    * An assistant's Daintree confirmations still waiting, oldest first; absent
    * for a worker, and from a host that doesn't report them.
@@ -135,6 +142,10 @@ export const AgentDirectoryLiveEntrySchema = z.object({
     .optional(),
   /** An assistant's terminal notices; null when it holds none, absent where not reported. */
   notices: AgentDirectoryNoticesSchema.nullable().optional(),
+  /** The name the person gave an assistant (#16213); absent when none. Display only. */
+  personaName: z.string().optional(),
+  /** The emoji the person gave an assistant; absent when none. Display only. */
+  personaEmoji: z.string().optional(),
 });
 export type AgentDirectoryLiveEntry = z.infer<typeof AgentDirectoryLiveEntrySchema>;
 
@@ -183,7 +194,10 @@ export const AgentDirectorySchema = z.object({
   observedAt: z.number().nullable(),
   /** Every source answered. False when a pty shard did not, so entries may be missing. */
   complete: z.boolean(),
-  /** Entries left out for the cap on entries, after the project filter. */
+  /**
+   * Entries left out, after the project filter: for the cap on entries, for
+   * the byte budget, and for lanes the reading Shell's build can't name.
+   */
   omitted: z.number().int().nonnegative(),
   entries: z.array(AgentDirectoryEntrySchema),
 });
@@ -214,6 +228,27 @@ export function agentDirectoryAs(hostId: string, directory: AgentDirectory): Age
         ? { ...entry, subject: { ...entry.subject, hostId } }
         : { ...entry, hostId }
     ),
+  };
+}
+
+/**
+ * The directory a Shell that reads lanes below `laneCount` can parse: entries
+ * in a higher lane are counted in `omitted` rather than sent, since one such
+ * lane fails that Shell's whole answer. Workers carry no lane and always stay.
+ */
+export function agentDirectoryForLanes(
+  directory: AgentDirectory,
+  laneCount: number
+): AgentDirectory {
+  const entries = directory.entries.filter((entry) => {
+    const lane = entry.state === "live" ? entry.subject.lane : entry.lane;
+    return lane === undefined || lane < laneCount;
+  });
+  if (entries.length === directory.entries.length) return directory;
+  return {
+    ...directory,
+    omitted: directory.omitted + directory.entries.length - entries.length,
+    entries,
   };
 }
 

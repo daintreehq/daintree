@@ -1,12 +1,59 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { build } from "vite";
-import { mkdtemp, writeFile, rm, mkdir } from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, rm, mkdir } from "node:fs/promises";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { daintreePlugin } from "../index.js";
 
 describe("document package build boundary", () => {
+  it("loads an emitted adapter relative to a nested plugin view, independently of the host root", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "daintree-package-runtime-url-"));
+    try {
+      await writeFile(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
+      await writeFile(path.join(root, "adapter.js"), 'export const marker = "RUNTIME_ADAPTER";');
+      await writeFile(
+        path.join(root, "view.js"),
+        'export { default as loadEditor } from "virtual:daintree-document-package/@acme/editor";'
+      );
+      await build({
+        configFile: false,
+        root,
+        logLevel: "silent",
+        plugins: [
+          daintreePlugin({
+            documentPackages: {
+              "@acme/editor": { entry: "adapter.js", version: "1.0.0", scope: "document" },
+            },
+          }),
+        ],
+        build: {
+          minify: false,
+          lib: {
+            entry: path.join(root, "view.js"),
+            formats: ["es"],
+            fileName: () => "views/panel.js",
+          },
+        },
+      });
+      vi.stubGlobal("__daintreeDocumentPackagesV1", {
+        load: (moduleUrl: string, descriptor: { entryUrl: string }) => ({ moduleUrl, descriptor }),
+      });
+      const { loadEditor } = await import(
+        pathToFileURL(path.join(root, "dist/views/panel.js")).href
+      );
+      const { moduleUrl, descriptor } = loadEditor();
+      const entry = new URL(descriptor.entryUrl, moduleUrl);
+      const entryPath = fileURLToPath(entry);
+      expect(await readFile(entryPath, "utf8")).toContain("RUNTIME_ADAPTER");
+      expect(entryPath.startsWith(path.join(root, "dist") + path.sep)).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     'export const load = () => import("@fixture/missing-dependency");',
     'import "@fixture/missing-dependency"; export const ready = true;',

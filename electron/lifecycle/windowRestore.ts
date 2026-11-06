@@ -7,6 +7,7 @@
  * fleet stopped restoring until the next relaunch.
  */
 
+import { parseHostScopedKey } from "../../shared/types/remoteHosts.js";
 import {
   isRemoteWorkspaceKey,
   type OpenWindowRecord,
@@ -88,6 +89,12 @@ export interface RestoreWindowFleetDeps {
    * empty manifest opens nothing.
    */
   primaryAlreadyOpen?: boolean;
+  /**
+   * The restore brings back windows or background projects on these hosts.
+   * Called once the focused window is up (global init has settled), before
+   * the rest of the fleet, so their dials don't wait on local windows (#15888).
+   */
+  onRemoteHostsNeeded?: (hostIds: string[]) => void;
 }
 
 /**
@@ -127,12 +134,39 @@ function localSeedOf(record: OpenWindowRecord): string | undefined {
   return remoteKeyOf(record) ? undefined : (record.projectId ?? undefined);
 }
 
+/** Each host a record names, as its window's workspace or a background project. */
+function hostsNamedBy(records: readonly OpenWindowRecord[]): string[] {
+  const hostIds = new Set<string>();
+  for (const { projectId, backgroundProjectIds } of records) {
+    for (const id of [projectId, ...(backgroundProjectIds ?? [])]) {
+      if (id && isRemoteWorkspaceKey(id)) hostIds.add(parseHostScopedKey(id).hostId);
+    }
+  }
+  return [...hostIds];
+}
+
 /** The create option carrying a host-scoped workspace, or nothing for a local one. */
 function remoteRestoreOpts(record: OpenWindowRecord | undefined): {
   remoteWorkspaceKey?: string;
 } {
   const key = remoteKeyOf(record);
   return key ? { remoteWorkspaceKey: key } : {};
+}
+
+/**
+ * What `createWindow` is given to bring a window back from its record. Shared
+ * by the launch restore and an OOM recreation (#15564), so a host-scoped
+ * workspace comes back the same way from both: a picker on this machine that
+ * moves to the host, never a local project that happens to share its id.
+ */
+export function windowRestoreArgs(record: OpenWindowRecord): {
+  projectId: string | undefined;
+  options: { remoteWorkspaceKey?: string; backgroundProjectIds?: readonly string[] };
+} {
+  return {
+    projectId: localSeedOf(record),
+    options: { ...remoteRestoreOpts(record), backgroundProjectIds: record.backgroundProjectIds },
+  };
 }
 
 /**
@@ -226,6 +260,9 @@ export async function restoreWindowFleet(deps: RestoreWindowFleetDeps): Promise<
       if (primaryResult !== "ok") return;
     }
 
+    const hostIds = hostsNamedBy(records);
+    if (hostIds.length > 0) deps.onRemoteHostsNeeded?.(hostIds);
+
     let backgroundClean = true;
     // Background windows come up one at a time, each waiting for the last to
     // finish its services and hydrate its renderer. Starting them all at once
@@ -245,10 +282,10 @@ export async function restoreWindowFleet(deps: RestoreWindowFleetDeps): Promise<
       if (record.projectId !== null && deps.isProjectOwned?.(record.projectId)) continue;
       // Background windows reveal with showInactive(): a plain show() would
       // pull focus away from the window the user is working in.
-      const created = deps.createWindow(localSeedOf(record), {
-        ...remoteRestoreOpts(record),
+      const { projectId, options } = windowRestoreArgs(record);
+      const created = deps.createWindow(projectId, {
+        ...options,
         revealMode: "showInactive",
-        backgroundProjectIds: record.backgroundProjectIds,
         ...(index < background.length - 1 ? { awaitHydrationMs: RESTORE_HYDRATION_WAIT_MS } : {}),
       });
       let result: CreateWindowResult | "stalled";

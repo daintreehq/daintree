@@ -113,12 +113,6 @@ const chmodMock = vi.hoisted(() =>
 const readFileMock = vi.hoisted(() =>
   vi.fn<(path: string) => Promise<string>>(() => Promise.resolve("log line"))
 );
-const statMock = vi.hoisted(() =>
-  vi.fn<(path: string) => Promise<{ mtimeMs: number }>>(() =>
-    Promise.resolve({ mtimeMs: Date.now() })
-  )
-);
-const existsSyncMock = vi.hoisted(() => vi.fn<(path: string) => boolean>(() => false));
 const readdirMock = vi.hoisted(() =>
   vi.fn<(path: string) => Promise<string[]>>(() => Promise.resolve([]))
 );
@@ -128,10 +122,8 @@ vi.mock("node:fs", () => ({
     readFile: readFileMock,
     readdir: readdirMock,
     chmod: chmodMock,
-    stat: statMock,
   },
   createWriteStream: createWriteStreamMock,
-  existsSync: existsSyncMock,
 }));
 
 vi.mock("../../../utils/logger.js", () => ({
@@ -244,9 +236,7 @@ describe("registerDiagnosticsHandlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // clearAllMocks resets call data but not implementations, so restore the
-    // defaults each test to keep the rotated-log tests isolated.
-    existsSyncMock.mockReturnValue(false);
-    statMock.mockResolvedValue({ mtimeMs: Date.now() });
+    // defaults each test to keep the log-file tests isolated.
     readFileMock.mockResolvedValue("log line");
     readdirMock.mockResolvedValue([]);
     // The metrics handlers read through a 5s shared cache; clear it so each
@@ -637,6 +627,144 @@ describe("registerDiagnosticsHandlers", () => {
   });
 
   describe("handleCollectDiagnosticsForReview", () => {
+    const T0 = Date.parse("2026-10-31T08:00:00.000Z");
+    const line = (ms: number, text: string) => `[${new Date(ms).toISOString()}] [INFO] ${text}\n`;
+    const enoent = () => Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
+    const logFiles = (files: Record<string, string>) =>
+      readFileMock.mockImplementation((p: string) => {
+        const content = files[path.basename(p)];
+        return content === undefined ? enoent() : Promise.resolve(content);
+      });
+    const appendedNames = () =>
+      archiverMock().append.mock.calls.map((c: unknown[]) => (c[1] as { name: string }).name);
+    const appendedContent = (name: string) =>
+      archiverMock().append.mock.calls.find(
+        (c: unknown[]) => (c[1] as { name: string }).name === name
+      )?.[0] as string | undefined;
+
+    async function collect(): Promise<DiagnosticsReviewPayload> {
+      return (await getHandlerFn(
+        "system:collect-diagnostics-for-review"
+      )()) as DiagnosticsReviewPayload;
+    }
+
+    async function save(collectedAtMs: number): Promise<void> {
+      dialogMock.showSaveDialog.mockResolvedValueOnce({
+        filePath: "/tmp/diagnostics.zip",
+        canceled: false,
+      });
+      await getHandlerFn("system:save-diagnostics-bundle")(
+        {},
+        {
+          payload: { metadata: {} },
+          enabledSections: { metadata: true, logs: true },
+          replacements: [],
+          timeWindowStartMs: null,
+          collectedAtMs,
+        }
+      );
+    }
+
+    it("lists the log files each offered window would save, cut where collection began", async () => {
+      const recent = line(T0 - 10 * 60_000, "recent");
+      const earlier = line(T0 - 2 * 60 * 60_000, "earlier");
+      const atCutoff = line(T0, "at the cutoff");
+      const rotated = line(T0 - 2 * 24 * 60 * 60_000, "old");
+      logFiles({
+        "daintree.log": earlier + recent + atCutoff + line(T0 + 30_000, "logged while collecting"),
+        "daintree.log.1": rotated,
+      });
+      // Collection takes a minute; the cutoff is when it began, not when it ended.
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(T0);
+      collectDiagnosticsWithKeysMock.mockImplementationOnce(() => {
+        nowSpy.mockReturnValue(T0 + 60_000);
+        return Promise.resolve({ payload: { metadata: {} }, sectionKeys: ["metadata"] });
+      });
+
+      try {
+        registerDiagnosticsHandlers(deps);
+        const result = await collect();
+
+        expect(result.collectedAtMs).toBe(T0);
+        expect(result.logMembers["30m"]).toEqual([
+          { name: "daintree.log", bytes: Buffer.byteLength(recent + atCutoff) },
+        ]);
+        expect(result.logMembers.full).toEqual([
+          { name: "daintree.log", bytes: Buffer.byteLength(earlier + recent + atCutoff) },
+          { name: "daintree.log.1", bytes: Buffer.byteLength(rotated) },
+        ]);
+        // No version change observed, so there is no update window to list.
+        expect(Object.keys(result.logMembers).sort()).toEqual(["30m", "5m", "full", "launch"]);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it("saves the files the review read, even after they rotate and grow", async () => {
+      const reviewed = line(Date.now() - 60_000, "reviewed");
+      logFiles({ "daintree.log": reviewed });
+      const cleanup = registerDiagnosticsHandlers(deps);
+      const { collectedAtMs } = await collect();
+
+      // Rotation moves the reviewed line to .1, and a batch dated before the
+      // cutoff lands late: neither was in the files the dialog listed.
+      logFiles({
+        "daintree.log": line(collectedAtMs - 1, "flushed after the review read"),
+        "daintree.log.1": reviewed,
+      });
+      await save(collectedAtMs);
+
+      expect(appendedNames()).toEqual(["diagnostics.json", "daintree.log"]);
+      expect(appendedContent("daintree.log")).toBe(reviewed);
+
+      // A completed save lets go of the read, so saving again rereads.
+      archiverMock().append.mockClear();
+      await save(collectedAtMs);
+      expect(appendedNames()).toEqual(["diagnostics.json", "daintree.log", "daintree.log.1"]);
+      cleanup();
+    });
+
+    it("keeps the review's read when the native save dialog outlasts the hold", async () => {
+      const reviewed = line(Date.now() - 60_000, "reviewed");
+      logFiles({ "daintree.log": reviewed });
+      const cleanup = registerDiagnosticsHandlers(deps);
+      const { collectedAtMs } = await collect();
+      logFiles({ "daintree.log.1": reviewed });
+
+      // The hold is released while the user is still choosing where to save.
+      dialogMock.showSaveDialog.mockImplementationOnce(() => {
+        cleanup();
+        return Promise.resolve({ filePath: "/tmp/diagnostics.zip", canceled: false });
+      });
+      await getHandlerFn("system:save-diagnostics-bundle")(
+        {},
+        {
+          payload: { metadata: {} },
+          enabledSections: { metadata: true, logs: true },
+          replacements: [],
+          timeWindowStartMs: null,
+          collectedAtMs,
+        }
+      );
+
+      expect(appendedNames()).toEqual(["diagnostics.json", "daintree.log"]);
+    });
+
+    it("rereads the files, still cut at the review, once the held read is released", async () => {
+      logFiles({ "daintree.log": line(Date.now() - 60_000, "reviewed") });
+      const cleanup = registerDiagnosticsHandlers(deps);
+      const { collectedAtMs } = await collect();
+      cleanup();
+
+      const rotated = line(collectedAtMs - 1, "rotated in");
+      logFiles({ "daintree.log.1": rotated + line(collectedAtMs + 1, "after the review") });
+      registerDiagnosticsHandlers(deps);
+      await save(collectedAtMs);
+
+      expect(appendedNames()).toEqual(["diagnostics.json", "daintree.log.1"]);
+      expect(appendedContent("daintree.log.1")).toBe(rotated);
+    });
+
     it("carries the version boundary and oldest retained log time", async () => {
       getVersionFirstRunBoundaryMock.mockReturnValueOnce({ version: "0.39.0", firstRunAtMs: 1234 });
       readOldestRetainedLogMsMock.mockResolvedValueOnce(999);
@@ -651,101 +779,84 @@ describe("registerDiagnosticsHandlers", () => {
   });
 
   describe("save-bundle time window", () => {
-    const logPath = (file: string) => path.normalize(path.join("/logs", file));
-    const readPaths = () =>
-      readFileMock.mock.calls.map((c: unknown[]) => path.normalize(c[0] as string));
+    const at = (ms: number) => new Date(ms).toISOString();
+    const appendedNames = () =>
+      archiverMock().append.mock.calls.map((c: unknown[]) => (c[1] as { name: string }).name);
+    const appendedContent = (name: string) =>
+      archiverMock().append.mock.calls.find(
+        (c: unknown[]) => (c[1] as { name: string }).name === name
+      )?.[0] as string | undefined;
 
-    it("skips rotated logs whose mtime predates the window, keeps recent ones", async () => {
-      existsSyncMock.mockImplementation(
-        (p: string): boolean =>
-          path.normalize(p) === logPath("daintree.log") ||
-          path.normalize(p) === logPath("daintree.log.1") ||
-          path.normalize(p) === logPath("daintree.log.2")
-      );
-      // Window cutoff = 5000ms. .1 is older (skip), .2 is newer (keep).
-      statMock.mockImplementation((p: string): Promise<{ mtimeMs: number }> =>
-        Promise.resolve({
-          mtimeMs: path.normalize(p) === logPath("daintree.log.1") ? 4000 : 6000,
-        })
-      );
+    function logFiles(files: Record<string, string>): void {
+      readFileMock.mockImplementation((p: string) => {
+        const content = files[path.basename(p)];
+        return content === undefined
+          ? Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }))
+          : Promise.resolve(content);
+      });
+    }
+
+    async function saveBundle(
+      timeWindowStartMs: number | null,
+      collectedAtMs?: number
+    ): Promise<void> {
       dialogMock.showSaveDialog.mockResolvedValueOnce({
         filePath: "/tmp/diagnostics.zip",
         canceled: false,
       });
-
       registerDiagnosticsHandlers(deps);
-      const handler = getHandlerFn("system:save-diagnostics-bundle");
-      await handler(
+      await getHandlerFn("system:save-diagnostics-bundle")(
         {},
         {
           payload: { metadata: {} },
           enabledSections: { metadata: true, logs: true },
           replacements: [],
-          timeWindowStartMs: 5000,
+          timeWindowStartMs,
+          collectedAtMs,
         }
       );
+    }
 
-      const paths = readPaths();
-      expect(paths).toContain(logPath("daintree.log"));
-      expect(paths).toContain(logPath("daintree.log.2"));
-      expect(paths).not.toContain(logPath("daintree.log.1"));
+    it("holds the active and rotated logs to the window by their entries' own times", async () => {
+      logFiles({
+        "daintree.log": `[${at(4000)}] [INFO] old active\n[${at(6000)}] [INFO] new active\n`,
+        "daintree.log.1": `[${at(4000)}] [INFO] old rotated\n`,
+        "daintree.log.2": `[${at(4500)}] [INFO] older\n[${at(5500)}] [INFO] straddles\n`,
+      });
+
+      await saveBundle(5000);
+
+      expect(appendedContent("daintree.log")).toBe(`[${at(6000)}] [INFO] new active\n`);
+      expect(appendedNames()).not.toContain("daintree.log.1");
+      expect(appendedContent("daintree.log.2")).toBe(`[${at(5500)}] [INFO] straddles\n`);
     });
 
-    it("includes all rotated logs and never stats them when the window is full history", async () => {
-      existsSyncMock.mockImplementation(
-        (p: string): boolean =>
-          path.normalize(p) === logPath("daintree.log") ||
-          path.normalize(p) === logPath("daintree.log.1") ||
-          path.normalize(p) === logPath("daintree.log.2")
-      );
-      dialogMock.showSaveDialog.mockResolvedValueOnce({
-        filePath: "/tmp/diagnostics.zip",
-        canceled: false,
+    it("keeps every retained log line, undated ones too, when the window is full history", async () => {
+      logFiles({
+        "daintree.log": `[${at(4000)}] [INFO] active\n`,
+        "daintree.log.1": "an undated fragment\n",
+        "daintree.log.2": `[${at(1000)}] [INFO] oldest\n`,
       });
 
-      registerDiagnosticsHandlers(deps);
-      const handler = getHandlerFn("system:save-diagnostics-bundle");
-      await handler(
-        {},
-        {
-          payload: { metadata: {} },
-          enabledSections: { metadata: true, logs: true },
-          replacements: [],
-          timeWindowStartMs: null,
-        }
-      );
+      await saveBundle(null);
 
-      const paths = readPaths();
-      expect(paths).toContain(logPath("daintree.log.1"));
-      expect(paths).toContain(logPath("daintree.log.2"));
-      expect(statMock).not.toHaveBeenCalled();
+      expect(appendedNames()).toEqual([
+        "diagnostics.json",
+        "daintree.log",
+        "daintree.log.1",
+        "daintree.log.2",
+      ]);
+      expect(appendedContent("daintree.log.1")).toBe("an undated fragment\n");
     });
 
-    it("includes a rotated log when its stat fails rather than dropping it", async () => {
-      existsSyncMock.mockImplementation(
-        (p: string): boolean =>
-          path.normalize(p) === logPath("daintree.log") ||
-          path.normalize(p) === logPath("daintree.log.1")
-      );
-      statMock.mockRejectedValue(new Error("stat failed"));
-      dialogMock.showSaveDialog.mockResolvedValueOnce({
-        filePath: "/tmp/diagnostics.zip",
-        canceled: false,
+    it("leaves out log lines dated after the review was collected", async () => {
+      logFiles({
+        "daintree.log": `[${at(6000)}] [INFO] reviewed\n[${at(8000)}] [INFO] logged while open\n`,
       });
 
-      registerDiagnosticsHandlers(deps);
-      const handler = getHandlerFn("system:save-diagnostics-bundle");
-      await handler(
-        {},
-        {
-          payload: { metadata: {} },
-          enabledSections: { metadata: true, logs: true },
-          replacements: [],
-          timeWindowStartMs: 5000,
-        }
-      );
+      await saveBundle(null, 7000);
 
-      expect(readPaths()).toContain(logPath("daintree.log.1"));
+      expect(appendedContent("daintree.log")).toBe(`[${at(6000)}] [INFO] reviewed\n`);
     });
   });
 
@@ -769,7 +880,7 @@ describe("registerDiagnosticsHandlers", () => {
         {
           payload: { metadata: {} },
           enabledSections: { metadata: true, logs },
-          replacements: [{ find: "/Users/alice", replace: "~" }],
+          replacements: [{ find: "acme-plan", replace: "[PROJECT]" }],
           timeWindowStartMs,
         }
       );
@@ -802,17 +913,17 @@ describe("registerDiagnosticsHandlers", () => {
             JSON.stringify({
               timestamp: 7000,
               errorStack: "at /Users/alice/app.js",
+              errorMessage: "acme-plan failed",
               recentActions: [{ actionId: "terminal.sendText", args: { text: "secret prompt" } }],
             })
           );
         }
-        return Promise.resolve(`log for ${file}`);
+        // Each PTY host log restarted after the window opened at 5000.
+        return Promise.resolve(`[${new Date(9000).toISOString()}] [START] log for ${file}\n`);
       });
     });
 
     it("adds in-window crash records by their own timestamp and every pty-host log", async () => {
-      // mtime says everything is recent; only the record timestamp may exclude.
-      statMock.mockResolvedValue({ mtimeMs: 9000 });
       await saveBundle(true, 5000);
 
       const names = appendedNames();
@@ -901,19 +1012,24 @@ describe("registerDiagnosticsHandlers", () => {
       expect(names).toEqual(["crashes/crash-2000-b.json"]);
     });
 
-    it("drops breadcrumb args and applies replacements to crash records", async () => {
+    it("drops breadcrumb args, scrubs paths and applies replacements to crash records", async () => {
       await saveBundle(true, null);
 
       const content = appendedContent("crashes/crash-7000-c.json") ?? "";
       expect(content).toContain("terminal.sendText");
       expect(content).not.toContain("secret prompt");
-      expect(content).not.toContain("/Users/alice");
+      expect(content).toContain("at /Users/USER/app.js");
+      expect(content).toContain("[PROJECT] failed");
       expect(appendedNames()).toContain("crashes/crash-1000-a.json");
     });
 
-    it("skips a pty-host log last written before the window", async () => {
-      statMock.mockImplementation((p: string) =>
-        Promise.resolve({ mtimeMs: path.basename(p) === "pty-host-shard1.log" ? 1000 : 9000 })
+    it("skips a pty-host log whose entries all predate the window", async () => {
+      readFileMock.mockImplementation((p: string) =>
+        Promise.resolve(
+          path.basename(p) === "pty-host-shard1.log"
+            ? `[${new Date(1000).toISOString()}] [START] pid=1\n`
+            : `[${new Date(9000).toISOString()}] [START] pid=2\n`
+        )
       );
       await saveBundle(true, 5000);
 
@@ -1187,9 +1303,17 @@ describe("registerDiagnosticsHandlers", () => {
 
   describe("renderer CPU profile", () => {
     const PROFILE_FIXTURE = { nodes: [], startTime: 0, endTime: 15, samples: [1, 2] };
+    // cpuProfileSessions is module state that clearAllMocks can't reach, so
+    // every fixture's view is destroyed after its test to release its session.
+    const liveFixtures: Array<() => void> = [];
 
     function makeProfilerEvent(id: number) {
-      const listeners: Record<string, Array<(...args: unknown[]) => void>> = {};
+      type Listener = (...args: unknown[]) => void;
+      const listeners: Record<string, Listener[]> = {};
+      const off = (key: string, fn: Listener) => {
+        listeners[key] = (listeners[key] ?? []).filter((l) => l !== fn);
+      };
+      let attached = false;
       const sendCommand = vi.fn((method: string) => {
         if (method === "Profiler.stop") return Promise.resolve({ profile: PROFILE_FIXTURE });
         return Promise.resolve({});
@@ -1197,24 +1321,44 @@ describe("registerDiagnosticsHandlers", () => {
       const sender = {
         id,
         isDestroyed: vi.fn(() => false),
-        once: vi.fn((event: string, fn: (...args: unknown[]) => void) => {
-          (listeners[`wc:${event}`] ??= []).push(fn);
+        once: vi.fn((event: string, fn: Listener) => {
+          const key = `wc:${event}`;
+          const wrapped: Listener = (...args) => {
+            off(key, wrapped);
+            fn(...args);
+          };
+          (wrapped as { listener?: Listener }).listener = fn;
+          (listeners[key] ??= []).push(wrapped);
         }),
-        removeListener: vi.fn(),
+        removeListener: vi.fn((event: string, fn: Listener) => {
+          const key = `wc:${event}`;
+          listeners[key] = (listeners[key] ?? []).filter(
+            (l) => l !== fn && (l as { listener?: Listener }).listener !== fn
+          );
+        }),
         debugger: {
-          isAttached: vi.fn(() => false),
-          attach: vi.fn(),
+          isAttached: vi.fn(() => attached),
+          attach: vi.fn(() => {
+            attached = true;
+          }),
           sendCommand,
-          on: vi.fn((event: string, fn: (...args: unknown[]) => void) => {
+          on: vi.fn((event: string, fn: Listener) => {
             (listeners[`dbg:${event}`] ??= []).push(fn);
           }),
-          removeListener: vi.fn(),
+          removeListener: vi.fn((event: string, fn: Listener) => off(`dbg:${event}`, fn)),
         },
       };
       const emit = (key: string, ...args: unknown[]) => {
-        listeners[key]?.forEach((fn) => fn(...args));
+        if (key === "dbg:detach") attached = false;
+        [...(listeners[key] ?? [])].forEach((fn) => fn(...args));
       };
-      return { event: { sender }, sender, sendCommand, emit };
+      const listenerCount = (key: string) => (listeners[key] ?? []).length;
+      const destroy = () => {
+        sender.isDestroyed.mockReturnValue(true);
+        emit("wc:destroyed");
+      };
+      liveFixtures.push(destroy);
+      return { event: { sender }, sender, sendCommand, emit, listenerCount, destroy };
     }
 
     function profilerStopCalls(sendCommand: ReturnType<typeof vi.fn>): number {
@@ -1223,9 +1367,11 @@ describe("registerDiagnosticsHandlers", () => {
 
     beforeEach(() => {
       vi.useFakeTimers();
+      dialogMock.showSaveDialog.mockReset();
     });
 
     afterEach(() => {
+      liveFixtures.splice(0).forEach((destroy) => destroy());
       vi.useRealTimers();
     });
 
@@ -1518,6 +1664,371 @@ describe("registerDiagnosticsHandlers", () => {
       const result = await stop(event);
 
       expect(result).toEqual({ status: "failed", reason: "not-recording" });
+    });
+
+    describe("concurrent starts on one webContents", () => {
+      // Mirrors V8ProfilerAgentImpl's guards: enable and start are no-ops when
+      // already done, setSamplingInterval refuses while a profile runs, disable
+      // throws away a running profile, and stop needs one to be running. State
+      // changes when a command is sent; `hold` delays only its reply. A detach
+      // ends the CDP session, which resets the agent.
+      function makeV8ProfilerEvent(
+        id: number,
+        hold?: (method: string, nth: number) => Promise<void> | undefined
+      ) {
+        const base = makeProfilerEvent(id);
+        const v8 = { enabled: false, recording: false };
+        const counts: Record<string, number> = {};
+        base.sendCommand.mockImplementation(((method: string) => {
+          const nth = (counts[method] = (counts[method] ?? 0) + 1);
+          if (base.sender.isDestroyed() || !base.sender.debugger.isAttached()) {
+            return Promise.reject(new Error("No target available"));
+          }
+          let outcome: () => unknown;
+          switch (method) {
+            case "Profiler.enable":
+              v8.enabled = true;
+              outcome = () => ({});
+              break;
+            case "Profiler.setSamplingInterval":
+              outcome = v8.recording
+                ? () => {
+                    throw new Error("Cannot change sampling interval when profiling.");
+                  }
+                : () => ({});
+              break;
+            case "Profiler.start":
+              if (!v8.enabled) {
+                outcome = () => {
+                  throw new Error("Profiler is not enabled");
+                };
+              } else {
+                v8.recording = true;
+                outcome = () => ({});
+              }
+              break;
+            case "Profiler.stop":
+              if (v8.recording) {
+                v8.recording = false;
+                outcome = () => ({ profile: PROFILE_FIXTURE });
+              } else {
+                outcome = () => {
+                  throw new Error("No recording profiles found");
+                };
+              }
+              break;
+            case "Profiler.disable":
+              v8.enabled = false;
+              v8.recording = false;
+              outcome = () => ({});
+              break;
+            default:
+              outcome = () => ({});
+          }
+          const gate = hold?.(method, nth);
+          return (async () => {
+            if (gate) await gate;
+            return outcome();
+          })();
+        }) as (method: string) => Promise<Record<string, unknown>>);
+        const emit = (key: string, ...args: unknown[]) => {
+          if (key === "dbg:detach") {
+            v8.enabled = false;
+            v8.recording = false;
+          }
+          base.emit(key, ...args);
+        };
+        return { ...base, emit, v8 };
+      }
+
+      function heldReply() {
+        let resolve!: () => void;
+        let reject!: (err: Error) => void;
+        const promise = new Promise<void>((res, rej) => {
+          resolve = res;
+          reject = rej;
+        });
+        return { promise, resolve, reject };
+      }
+
+      function sentMethods(sendCommand: ReturnType<typeof vi.fn>): string[] {
+        return sendCommand.mock.calls.map((c: unknown[]) => c[0] as string);
+      }
+
+      function expectSingleWinner(
+        v: ReturnType<typeof makeV8ProfilerEvent>,
+        results: Array<{ status: string; reason?: string }>,
+        timersBefore: number
+      ) {
+        expect(results.filter((r) => r.status === "started")).toHaveLength(1);
+        expect(results.filter((r) => r.status === "failed")).toEqual([
+          { status: "failed", reason: "already-recording" },
+        ]);
+        expect(sentMethods(v.sendCommand)).toEqual([
+          "Profiler.enable",
+          "Profiler.setSamplingInterval",
+          "Profiler.start",
+        ]);
+        expect(v.v8.recording).toBe(true);
+        expect(vi.getTimerCount() - timersBefore).toBe(1);
+        expect(v.listenerCount("dbg:detach")).toBe(1);
+        expect(v.listenerCount("wc:destroyed")).toBe(1);
+      }
+
+      async function expectNoOrphans(v: ReturnType<typeof makeV8ProfilerEvent>) {
+        const sentAfterStop = v.sendCommand.mock.calls.length;
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(v.sendCommand.mock.calls.length).toBe(sentAfterStop);
+        expect(profilerStopCalls(v.sendCommand)).toBe(1);
+        expect(v.listenerCount("dbg:detach")).toBe(0);
+        expect(v.listenerCount("wc:destroyed")).toBe(0);
+      }
+
+      it("two starts whose command sequences interleave before either profiles yield one recording", async () => {
+        const v = makeV8ProfilerEvent(720);
+        dialogMock.showSaveDialog.mockResolvedValueOnce({
+          filePath: "/tmp/race.cpuprofile",
+          canceled: false,
+        });
+        registerDiagnosticsHandlers(deps);
+        const start = getHandlerFn("system:renderer-cpu-profile-start");
+        const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+        const timersBefore = vi.getTimerCount();
+
+        const results = (await Promise.all([start(v.event), start(v.event)])) as Array<{
+          status: string;
+          reason?: string;
+        }>;
+
+        expectSingleWinner(v, results, timersBefore);
+        expect(results[0].status).toBe("started");
+
+        expect(await stop(v.event)).toEqual({ status: "saved" });
+        expect(resilientAtomicWriteFileMock).toHaveBeenCalledWith(
+          "/tmp/race.cpuprofile",
+          JSON.stringify(PROFILE_FIXTURE),
+          "utf-8",
+          { mode: 0o600 }
+        );
+        await expectNoOrphans(v);
+      });
+
+      it("a second start whose interval would land after the first's Profiler.start loses without disabling the winner", async () => {
+        let releaseSecondEnable!: () => void;
+        const secondEnable = new Promise<void>((resolve) => {
+          releaseSecondEnable = resolve;
+        });
+        const v = makeV8ProfilerEvent(721, (method, nth) =>
+          method === "Profiler.enable" && nth === 2 ? secondEnable : undefined
+        );
+        dialogMock.showSaveDialog.mockResolvedValueOnce({
+          filePath: "/tmp/race2.cpuprofile",
+          canceled: false,
+        });
+        registerDiagnosticsHandlers(deps);
+        const start = getHandlerFn("system:renderer-cpu-profile-start");
+        const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+        const timersBefore = vi.getTimerCount();
+
+        const first = start(v.event) as Promise<{ status: string; reason?: string }>;
+        const second = start(v.event) as Promise<{ status: string; reason?: string }>;
+        const firstResult = await first;
+        releaseSecondEnable();
+        const results = [firstResult, await second];
+
+        expectSingleWinner(v, results, timersBefore);
+        expect(sentMethods(v.sendCommand)).not.toContain("Profiler.disable");
+
+        expect(await stop(v.event)).toEqual({ status: "saved" });
+        await expectNoOrphans(v);
+      });
+
+      it.each([
+        ["rejects", 726],
+        ["resolves", 728],
+      ] as const)(
+        "a start abandoned by a detach, whose held reply %s, can't disturb the retry that replaced it",
+        async (outcome, id) => {
+          const firstEnable = heldReply();
+          const v = makeV8ProfilerEvent(id, (method, nth) =>
+            method === "Profiler.enable" && nth === 1 ? firstEnable.promise : undefined
+          );
+          dialogMock.showSaveDialog.mockResolvedValueOnce({
+            filePath: "/tmp/retry.cpuprofile",
+            canceled: false,
+          });
+          registerDiagnosticsHandlers(deps);
+          const start = getHandlerFn("system:renderer-cpu-profile-start");
+          const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+          const first = start(v.event) as Promise<{ status: string; reason?: string }>;
+          v.emit("dbg:detach");
+          const retry = (await start(v.event)) as { status: string };
+          expect(retry.status).toBe("started");
+
+          if (outcome === "rejects") {
+            firstEnable.reject(new Error("target closed while handling command"));
+          } else {
+            firstEnable.resolve();
+          }
+          const abandoned = await first;
+
+          expect(abandoned.status).toBe("failed");
+          expect(abandoned.reason).toBe("cdp-error");
+          expect(sentMethods(v.sendCommand)).toEqual([
+            "Profiler.enable",
+            "Profiler.enable",
+            "Profiler.setSamplingInterval",
+            "Profiler.start",
+          ]);
+          expect(v.v8.recording).toBe(true);
+          expect(v.listenerCount("dbg:detach")).toBe(1);
+          expect(v.listenerCount("wc:destroyed")).toBe(1);
+          expect(await stop(v.event)).toEqual({ status: "saved" });
+        }
+      );
+
+      it("only the winning session's auto-stop captures the profile", async () => {
+        const v = makeV8ProfilerEvent(722);
+        dialogMock.showSaveDialog.mockResolvedValueOnce({
+          filePath: "/tmp/auto-race.cpuprofile",
+          canceled: false,
+        });
+        registerDiagnosticsHandlers(deps);
+        const start = getHandlerFn("system:renderer-cpu-profile-start");
+        const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+        const timersBefore = vi.getTimerCount();
+
+        const results = (await Promise.all([start(v.event), start(v.event)])) as Array<{
+          status: string;
+          reason?: string;
+        }>;
+        expectSingleWinner(v, results, timersBefore);
+        await vi.advanceTimersByTimeAsync(15_000);
+
+        expect(profilerStopCalls(v.sendCommand)).toBe(1);
+        expect(await stop(v.event)).toEqual({ status: "saved" });
+      });
+
+      it("a replaced session's stale destroyed listener can't release its replacement", async () => {
+        const v = makeV8ProfilerEvent(727);
+        dialogMock.showSaveDialog.mockResolvedValueOnce({
+          filePath: "/tmp/replaced.cpuprofile",
+          canceled: false,
+        });
+        registerDiagnosticsHandlers(deps);
+        const start = getHandlerFn("system:renderer-cpu-profile-start");
+        const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+        await start(v.event);
+        const staleOnDestroyed = v.sender.once.mock.calls[0][1] as () => void;
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(((await start(v.event)) as { status: string }).status).toBe("started");
+
+        staleOnDestroyed();
+
+        expect(await start(v.event)).toEqual({ status: "failed", reason: "already-recording" });
+        expect(await stop(v.event)).toEqual({ status: "saved" });
+      });
+
+      it("stop while the start is still in flight leaves the recording to finish starting", async () => {
+        let releaseEnable!: () => void;
+        const enable = new Promise<void>((resolve) => {
+          releaseEnable = resolve;
+        });
+        const v = makeV8ProfilerEvent(723, (method) =>
+          method === "Profiler.enable" ? enable : undefined
+        );
+        dialogMock.showSaveDialog.mockResolvedValueOnce({ filePath: undefined, canceled: true });
+        registerDiagnosticsHandlers(deps);
+        const start = getHandlerFn("system:renderer-cpu-profile-start");
+        const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+        const pending = start(v.event) as Promise<{ status: string }>;
+        expect(await stop(v.event)).toEqual({ status: "failed", reason: "not-recording" });
+        releaseEnable();
+
+        expect((await pending).status).toBe("started");
+        expect(await stop(v.event)).toEqual({ status: "canceled" });
+      });
+
+      it.each([
+        [724, "Profiler.enable", ["Profiler.enable"]],
+        [729, "Profiler.setSamplingInterval", ["Profiler.enable", "Profiler.setSamplingInterval"]],
+      ])(
+        "a view destroyed while #%i's %s reply is pending sends nothing more",
+        async (id, heldMethod, sent) => {
+          const reply = heldReply();
+          const v = makeV8ProfilerEvent(id, (method) =>
+            method === heldMethod ? reply.promise : undefined
+          );
+          registerDiagnosticsHandlers(deps);
+          const start = getHandlerFn("system:renderer-cpu-profile-start");
+          const timersBefore = vi.getTimerCount();
+
+          const pending = start(v.event) as Promise<{ status: string; reason?: string }>;
+          await vi.waitFor(() => expect(sentMethods(v.sendCommand)).toEqual(sent));
+          v.destroy();
+          reply.resolve();
+
+          expect(await pending).toEqual({ status: "failed", reason: "webcontents-destroyed" });
+          expect(vi.getTimerCount() - timersBefore).toBe(0);
+          expect(sentMethods(v.sendCommand)).toEqual(sent);
+        }
+      );
+
+      it("a capture that fails without a detach is not blamed on DevTools", async () => {
+        const v = makeV8ProfilerEvent(725);
+        registerDiagnosticsHandlers(deps);
+        const start = getHandlerFn("system:renderer-cpu-profile-start");
+        const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+        await start(v.event);
+        v.v8.recording = false;
+        const result = (await stop(v.event)) as {
+          status: string;
+          reason: string;
+          message?: string;
+        };
+
+        expect(result.status).toBe("failed");
+        expect(result.reason).toBe("capture-failed");
+        expect(result.message).toContain("No recording profiles found");
+      });
+
+      it("a detach stays blamed after another consumer reattaches the debugger", async () => {
+        const v = makeV8ProfilerEvent(730);
+        registerDiagnosticsHandlers(deps);
+        const start = getHandlerFn("system:renderer-cpu-profile-start");
+        const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+        await start(v.event);
+        v.emit("dbg:detach");
+        v.sender.debugger.attach();
+        const result = (await stop(v.event)) as { status: string; reason: string };
+
+        expect(result.reason).toBe("devtools-detached");
+      });
+
+      it("a capture rejected before the detach event arrives is still blamed on the detach", async () => {
+        const stopReply = heldReply();
+        const v = makeV8ProfilerEvent(731, (method) =>
+          method === "Profiler.stop" ? stopReply.promise : undefined
+        );
+        registerDiagnosticsHandlers(deps);
+        const start = getHandlerFn("system:renderer-cpu-profile-start");
+        const stop = getHandlerFn("system:renderer-cpu-profile-stop");
+
+        await start(v.event);
+        const pending = stop(v.event) as Promise<{ status: string; reason: string }>;
+        // Electron clears the attachment before rejecting pending commands, and
+        // emits `detach` only after them.
+        v.sender.debugger.isAttached.mockReturnValue(false);
+        stopReply.reject(new Error("target closed while handling command"));
+
+        expect((await pending).reason).toBe("devtools-detached");
+      });
     });
   });
 });

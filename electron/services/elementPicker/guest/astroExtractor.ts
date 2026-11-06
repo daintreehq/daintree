@@ -3,10 +3,13 @@
  * Astro's reader. Astro leaves no component instances in the page, only what
  * its compiler stamps on the markup of `.astro` files while the dev toolbar is
  * on: `data-astro-source-file`, the module's path, and `data-astro-source-loc`,
- * `line:column` with both 1-based and the column in UTF-16 units. The two on
- * the element itself are the only source this reads; a pair borrowed from an
- * ancestor would name another element's line. Without them it says the
- * location is not exposed, never why: the toolbar is one gate of several.
+ * `line:column` with both 1-based and the column in UTF-16 units. The toolbar
+ * then takes both off every element soon after load (its Audit app keeps them
+ * in a private map), so the pair is read from the element itself while it is
+ * still there, and otherwise from the element's counterpart in the markup the
+ * dev server served (`servedDocument.ts`), never from an ancestor: a borrowed
+ * pair would name another element's line. Without one it says the location is
+ * not exposed, never why: the toolbar is one gate of several.
  *
  * An island's interior is its renderer's to describe, so there Astro hands
  * off: it sends evidence alone (which framework hydrates the island, when,
@@ -21,6 +24,7 @@ import type { Capabilities, Capability } from "../../../../shared/elementPicker/
 import type { SourceCandidate } from "../../../../shared/elementPicker/source.js";
 import { ANCESTRY_LIMIT, islandRenderer, parentAcrossShadow } from "./detectors.js";
 import type { ElementPickerExtractor } from "./registry.js";
+import { createServedDocument, type ServedDocument } from "./servedDocument.js";
 import type { ExtractorContribution } from "./types.js";
 
 /** Restated from the shared schemas: a value import would bundle zod into the page. */
@@ -41,6 +45,13 @@ type Boundary = "page" | "slot" | "island" | "island-host" | "unknown";
 
 /** `unusable`: the attribute is there, but not in a form that can name a file or a position. */
 type AttributeState = "present" | "absent" | "unusable";
+
+/**
+ * What the served markup said of an element that carries no stamp of its own:
+ * `matched` its counterpart there is stamped, `unstamped` it is not, and the
+ * rest are `ServedLookup`'s.
+ */
+type ServedState = "matched" | "unstamped" | "unmatched" | "unavailable";
 
 interface Context {
   boundary: Boundary;
@@ -158,10 +169,12 @@ function islandFields(island: Element): GenericEvidence["fields"] {
   return fields;
 }
 
+/** The attribute fields say what the live element carries; `servedDocument`, where the pair came from otherwise. */
 function evidenceOf(
   context: Context,
   file: AttributeState,
-  loc: AttributeState
+  loc: AttributeState,
+  served: ServedState | null
 ): FrameworkEvidence {
   return {
     kind: "generic",
@@ -170,6 +183,7 @@ function evidenceOf(
       { name: "boundary", value: context.boundary },
       { name: ASTRO_FILE_ATTRIBUTE, value: file },
       { name: ASTRO_LOC_ATTRIBUTE, value: loc },
+      ...(served === null ? [] : [{ name: "servedDocument", value: served }]),
       ...(context.island === null ? [] : islandFields(context.island)),
     ],
   };
@@ -188,29 +202,51 @@ function capabilitiesOf(candidate: SourceCandidate | null): Capabilities {
   };
 }
 
-export function describeAstro(element: Element): ExtractorContribution {
+function isStamped(source: { file: AttributeState; loc: AttributeState }): boolean {
+  return source.file !== "absent" || source.loc !== "absent";
+}
+
+/**
+ * `served` is the markup the dev server sent, when the host could read it
+ * back; without it only the live element's own attributes are read.
+ */
+export function describeAstro(element: Element, served?: ServedDocument): ExtractorContribution {
   const context = contextOf(element);
-  const source = sourceOf(element);
-  const evidence = evidenceOf(context, source.file, source.loc);
-  const stamped = source.file !== "absent" || source.loc !== "absent";
+  const live = sourceOf(element);
+  const stamped = isStamped(live);
   // Inside an island, or past where the walk could tell, an element Astro did
   // not stamp is another framework's to describe.
   if (!stamped && (context.boundary === "island" || context.boundary === "unknown")) {
-    return { frameworkEvidence: [evidence] };
+    return { frameworkEvidence: [evidenceOf(context, live.file, live.loc, null)] };
+  }
+  // Asked only when the element carries neither attribute: one it does carry,
+  // even unusable, is the page's word now, not to be replaced by older markup.
+  let candidate = live.candidate;
+  let servedState: ServedState | null = null;
+  if (!stamped && served !== undefined) {
+    const found = served.lookup(element);
+    if (typeof found === "string") {
+      servedState = found;
+    } else {
+      const source = sourceOf(found);
+      servedState = isStamped(source) ? "matched" : "unstamped";
+      candidate = source.candidate;
+    }
   }
   return {
-    sourceCandidates: source.candidate === null ? [] : [source.candidate],
-    capabilities: capabilitiesOf(source.candidate),
-    frameworkEvidence: [evidence],
+    sourceCandidates: candidate === null ? [] : [candidate],
+    capabilities: capabilitiesOf(candidate),
+    frameworkEvidence: [evidenceOf(context, live.file, live.loc, servedState)],
     // Stamped markup, slot content and the island element itself are Astro's
     // own. An unstamped element elsewhere is only Astro's for want of another
     // framework claiming it.
-    ownership: stamped || context.boundary !== "page" ? "direct" : "fallback",
+    ownership:
+      stamped || servedState === "matched" || context.boundary !== "page" ? "direct" : "fallback",
   };
 }
 
 /**
- * Selection only: everything here is attribute reads and a bounded walk, but
+ * Selection only: everything here is attribute reads and bounded walks, but
  * none of it improves a hover label, which the neutral picker already draws.
  * Declared, so a hover's silence is not taken for finding nothing.
  */
@@ -218,3 +254,17 @@ export const astroExtractor: ElementPickerExtractor = {
   selectionOnly: true,
   extract: (element, phase) => (phase === "selection" ? describeAstro(element) : null),
 };
+
+/**
+ * The installed reader: the same, with the served markup the host handed in
+ * (`api.served`, absent or null when it read nothing) to fall back on. The
+ * parsed copy goes when the extractor does.
+ */
+export function createAstroExtractor(served: unknown): ElementPickerExtractor {
+  const document = createServedDocument(served);
+  return {
+    selectionOnly: true,
+    extract: (element, phase) => (phase === "selection" ? describeAstro(element, document) : null),
+    dispose: () => document.dispose(),
+  };
+}

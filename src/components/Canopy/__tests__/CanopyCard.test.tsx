@@ -7,6 +7,9 @@ import { useCanopyStore } from "@/store/canopyStore";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import type { CanopyCard as CanopyCardData, CanopyCategory } from "@shared/types/ipc/canopy";
 import { buildPilotGroups } from "@/components/Pilot/pilotRows";
+import { bandForRun } from "@shared/utils/fleetBands";
+import { usePanelStore } from "@/store/panelStore";
+import type { PtyPanelData } from "@shared/types/panel";
 import { buildCanopyInbox, type CanopyItem } from "../canopyModel";
 import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 import { DICTATION_OWNER_ATTR, canopyReplyVoiceId } from "@/services/canopyReplyDictation";
@@ -15,6 +18,7 @@ import {
   CanopyCard,
   type CanopyCardHandle,
   type CanopyCardHandlers,
+  type CanopyCardKeys,
   type CanopyPaneFocus,
 } from "../CanopyCard";
 
@@ -475,7 +479,13 @@ describe("CanopyCard", () => {
       const h = handlers();
       const item = itemFor("question");
       const view = render(
-        <CanopyCard item={item} {...PROPS} {...h} moveOnTo={named("run-2", "Pick a port")} />
+        <CanopyCard
+          item={item}
+          {...PROPS}
+          {...h}
+          keysFrom="reply"
+          moveOnTo={named("run-2", "Pick a port")}
+        />
       );
       await composer();
       const line = () => view.container.querySelector<HTMLElement>("[data-canopy-move-on]");
@@ -485,9 +495,186 @@ describe("CanopyCard", () => {
       expect(line()?.textContent).toContain("Send and go to");
       expect(line()?.textContent).toContain("Pick a port");
 
-      view.rerender(<CanopyCard item={item} {...PROPS} {...h} moveOnTo={null} />);
+      view.rerender(<CanopyCard item={item} {...PROPS} {...h} keysFrom="reply" moveOnTo={null} />);
       expect(line()).not.toBeNull();
       expect(line()!.textContent).toBe("");
+    });
+
+    it("names ⌘↩ only while the reply has the keyboard, the line held either way", async () => {
+      const h = handlers();
+      const item = itemFor("question");
+      const to = named("run-2", "Pick a port");
+      const view = render(
+        <CanopyCard item={item} {...PROPS} {...h} keysFrom="list" moveOnTo={to} />
+      );
+      await composer();
+      await streamOpens({ watchId: 7 });
+      const line = () => view.container.querySelector<HTMLElement>("[data-canopy-move-on]");
+      expect(line()!.textContent).toBe("");
+
+      view.rerender(<CanopyCard item={item} {...PROPS} {...h} keysFrom="reply" moveOnTo={to} />);
+      expect(line()!.textContent).toContain("Send and go to");
+      expect([...line()!.querySelectorAll("kbd")].map((kbd) => kbd.textContent)).toEqual([
+        "Ctrl",
+        "Enter",
+      ]);
+
+      view.rerender(<CanopyCard item={item} {...PROPS} {...h} keysFrom={null} moveOnTo={to} />);
+      expect(line()!.textContent).toBe("");
+    });
+  });
+
+  describe("key hints (#16173)", () => {
+    function rowButton(container: HTMLElement, text: string) {
+      return [
+        ...container.querySelectorAll<HTMLButtonElement>("[data-canopy-choices] button"),
+      ].find((button) => button.textContent?.includes(text))!;
+    }
+    /** What the button names as its key: the chips drawn and the shortcut announced. */
+    function hint(button: HTMLButtonElement) {
+      return {
+        shown: [...button.querySelectorAll("kbd")].map((kbd) => kbd.textContent).join(""),
+        announced: button.getAttribute("aria-keyshortcuts"),
+      };
+    }
+
+    async function cardWith(keysFrom: CanopyCardKeys) {
+      const h = handlers();
+      const item = itemFor("approval", { options: ["Yes", "No"], risk: "none" });
+      const view = render(<CanopyCard item={item} {...PROPS} {...h} keysFrom={keysFrom} />);
+      await composer();
+      await streamOpens({ watchId: 7 });
+      return {
+        yes: () => hint(rowButton(view.container, "Yes")),
+        no: () => hint(rowButton(view.container, "No")),
+        reply: () => hint(rowButton(view.container, "Reply")),
+        goTo: () => hint(rowButton(view.container, "Go to terminal")),
+      };
+    }
+
+    it("names the list's keys while its row has the keyboard", async () => {
+      const { yes, no, reply, goTo } = await cardWith("list");
+      expect(yes()).toEqual({ shown: "1", announced: "1" });
+      expect(no()).toEqual({ shown: "2", announced: "2" });
+      expect(reply()).toEqual({ shown: "R", announced: "R" });
+      expect(goTo()).toEqual({ shown: "↵", announced: "Enter" });
+    });
+
+    it("names only Enter from the search, where every other key types", async () => {
+      const { yes, reply, goTo } = await cardWith("search");
+      expect(yes()).toEqual({ shown: "", announced: null });
+      expect(reply()).toEqual({ shown: "", announced: null });
+      expect(goTo()).toEqual({ shown: "↵", announced: "Enter" });
+    });
+
+    it("names the reply's own way to the terminal from the reply, and no list key", async () => {
+      const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+      try {
+        const { yes, reply, goTo } = await cardWith("reply");
+        expect(yes()).toEqual({ shown: "", announced: null });
+        expect(reply()).toEqual({ shown: "", announced: null });
+        expect(goTo()).toEqual({ shown: "⌘⌥⏎", announced: "Meta+Alt+Enter" });
+      } finally {
+        platform.mockRestore();
+      }
+    });
+
+    it("spells the reply's way to the terminal with Ctrl off the Mac", async () => {
+      const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
+      try {
+        const { goTo } = await cardWith("reply");
+        expect(goTo()).toEqual({ shown: "CtrlAltEnter", announced: "Control+Alt+Enter" });
+      } finally {
+        platform.mockRestore();
+      }
+    });
+
+    it("names no key from anywhere else, its terminal and its buttons included", async () => {
+      const { yes, reply, goTo } = await cardWith(null);
+      expect(yes()).toEqual({ shown: "", announced: null });
+      expect(reply()).toEqual({ shown: "", announced: null });
+      expect(goTo()).toEqual({ shown: "", announced: null });
+    });
+
+    it("goes to the terminal with ⌘⌥↩ from the reply, sending nothing", async () => {
+      const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+      try {
+        const { container, h } = renderCard(itemFor("question"));
+        await composer();
+        await streamOpens({ watchId: 7 });
+        const editor = container.querySelector<HTMLElement>("[data-editor-content]")!;
+        // What the editor's own handlers would see: its keymap, and the lock a
+        // dictated send still waiting puts on every key.
+        const editorSaw = vi.fn();
+        editor.addEventListener("keydown", editorSaw);
+
+        // Taken whole before the editor, so nothing of it lands in the draft.
+        expect(fireEvent.keyDown(editor, { key: "Enter", metaKey: true, altKey: true })).toBe(
+          false
+        );
+        expect(editorSaw).not.toHaveBeenCalled();
+        expect(h.onOpen).toHaveBeenCalledTimes(1);
+        expect(h.onOpen).toHaveBeenCalledWith(expect.objectContaining({ runId: "run-1" }));
+        // Held, it is one press.
+        fireEvent.keyDown(editor, { key: "Enter", metaKey: true, altKey: true, repeat: true });
+        // Ctrl+Alt is the chord off the Mac only, and Shift makes it another.
+        fireEvent.keyDown(editor, { key: "Enter", ctrlKey: true, altKey: true });
+        fireEvent.keyDown(editor, { key: "Enter", metaKey: true, altKey: true, shiftKey: true });
+        // The live terminal keeps its keys for the agent.
+        fireEvent.keyDown(container.querySelector("[data-canopy-terminal]")!, {
+          key: "Enter",
+          metaKey: true,
+          altKey: true,
+        });
+        expect(h.onOpen).toHaveBeenCalledTimes(1);
+        expect(submit).not.toHaveBeenCalled();
+        expect(sendKey).not.toHaveBeenCalled();
+      } finally {
+        platform.mockRestore();
+      }
+    });
+
+    it("leaves the chord to an input method, and other keys and chords to the reply", async () => {
+      const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
+      const claim = (event: globalThis.KeyboardEvent) => event.preventDefault();
+      try {
+        const { container, h } = renderCard(itemFor("question"));
+        await composer();
+        await streamOpens({ watchId: 7 });
+        const editor = container.querySelector<HTMLElement>("[data-editor-content]")!;
+        const chord = { key: "Enter", metaKey: true, altKey: true };
+        fireEvent.keyDown(editor, { ...chord, isComposing: true });
+        fireEvent.keyDown(editor, { ...chord, keyCode: 229 });
+        fireEvent.keyDown(editor, { ...chord, key: "a" });
+        fireEvent.keyDown(editor, { ...chord, ctrlKey: true });
+        // Claimed by the window first (an app-wide key): it isn't the reply's to take.
+        window.addEventListener("keydown", claim, true);
+        fireEvent.keyDown(editor, chord);
+        window.removeEventListener("keydown", claim, true);
+        expect(h.onOpen).not.toHaveBeenCalled();
+
+        fireEvent.keyDown(editor, chord);
+        expect(h.onOpen).toHaveBeenCalledTimes(1);
+      } finally {
+        window.removeEventListener("keydown", claim, true);
+        platform.mockRestore();
+      }
+    });
+
+    it("goes to the terminal with Ctrl+Alt+Enter from the reply off the Mac", async () => {
+      const platform = vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
+      try {
+        const { container, h } = renderCard(itemFor("question"));
+        await composer();
+        await streamOpens({ watchId: 7 });
+        const editor = container.querySelector<HTMLElement>("[data-editor-content]")!;
+        fireEvent.keyDown(editor, { key: "Enter", metaKey: true, altKey: true });
+        expect(h.onOpen).not.toHaveBeenCalled();
+        fireEvent.keyDown(editor, { key: "Enter", ctrlKey: true, altKey: true });
+        expect(h.onOpen).toHaveBeenCalledTimes(1);
+      } finally {
+        platform.mockRestore();
+      }
     });
   });
 
@@ -1116,9 +1303,11 @@ describe("CanopyCard", () => {
     expect(container.querySelector("button[data-armed]")).toBeNull();
   });
   describe("the pane's state chip", () => {
+    // The row carries the run's band, as the fleet places it, beside the run.
     function withRun(overrides: Partial<FleetRunRow>): CanopyItem {
       const base = itemFor("finished");
-      return { ...base, row: { ...base.row, run: { ...base.row.run, ...overrides } } };
+      const run = { ...base.row.run, ...overrides };
+      return { ...base, row: { ...base.row, run, band: bandForRun(run) } };
     }
     const chip = (container: HTMLElement) =>
       container.querySelector('[role="status"][aria-label^="Agent state"]');
@@ -1137,15 +1326,99 @@ describe("CanopyCard", () => {
       }
     });
 
-    it("keeps an approval wait on the waiting chip whatever the hand-back says", () => {
-      const { container } = renderCard(
+    it("draws an approval wait amber only for an unread Canopy ask, whatever the hand-back says", () => {
+      const approval = {
+        agentState: "waiting",
+        waitingReason: "approval",
+        handBack: { stoppedAt: NOW - 2, seenAt: NOW - 1 },
+      } as const;
+      const asked = renderCard(
         withRun({
-          agentState: "waiting",
-          waitingReason: "approval",
-          handBack: { stoppedAt: NOW - 2, seenAt: NOW - 1 },
+          ...approval,
+          canopy: { kind: "asked", quote: "Run npm test?", readAt: NOW - 1, seen: false },
         })
       );
-      expect(chip(container)?.getAttribute("aria-label")).toBe("Agent state: waiting");
+      expect(chip(asked.container)?.getAttribute("aria-label")).toBe("Agent state: waiting");
+      asked.unmount();
+
+      // With no reading it is the patterns' guess: unread until looked at.
+      const guessed = renderCard(withRun(approval));
+      expect(chip(guessed.container)?.getAttribute("aria-label")).toBe("Agent state: unread");
+    });
+
+    it("draws nothing for a prompt that asks nothing", () => {
+      const { container } = renderCard(withRun({ agentState: "waiting" }));
+      expect(chip(container)).toBeNull();
+    });
+
+    describe("the pane this view holds speaks for the run", () => {
+      const ask = { kind: "asked", quote: "Run npm test?", readAt: NOW - 1, seen: false } as const;
+      const viewWindow = window as { __DAINTREE_INITIAL_PROJECT__?: { id: string } };
+
+      function holdPane(observation: Partial<PtyPanelData>) {
+        const pane = {
+          id: "run-1",
+          kind: "terminal",
+          title: "Claude",
+          location: "grid",
+          cwd: "/Users/dev/app",
+          cols: 80,
+          rows: 24,
+          launchAgentId: "claude",
+          ...observation,
+        } as PtyPanelData;
+        usePanelStore.setState({ panelsById: { "run-1": pane }, panelIds: ["run-1"] });
+      }
+
+      afterEach(() => {
+        delete viewWindow.__DAINTREE_INITIAL_PROJECT__;
+        usePanelStore.setState({ panelsById: {}, panelIds: [] });
+      });
+
+      it("drops the ask's amber once its own pane restarts or works, ahead of the row", () => {
+        viewWindow.__DAINTREE_INITIAL_PROJECT__ = { id: "p1" };
+        holdPane({ agentState: "waiting", isRestarting: true });
+        const restarting = renderCard(withRun({ agentState: "waiting", canopy: ask }));
+        expect(chip(restarting.container)).toBeNull();
+        restarting.unmount();
+
+        holdPane({ agentState: "working" });
+        const working = renderCard(withRun({ agentState: "waiting", canopy: ask }));
+        expect(chip(working.container)?.getAttribute("aria-label")).toBe("Agent state: working");
+      });
+
+      it("follows its own pane past an exit or a stop the row still reports", () => {
+        viewWindow.__DAINTREE_INITIAL_PROJECT__ = { id: "p1" };
+        // The row as the fleet built it for an exited run: its chrome has exited.
+        const exitedRun = { ...itemFor("finished").row.run, agentState: "exited" as const };
+        const exited = buildPilotGroups([exitedRun], {
+          workspaces: new Map([["p1", { kind: "project", name: "app" }]]),
+          currentWorkspaceId: null,
+          nowMs: NOW,
+        }).flatMap((group) => group.rows)[0]!;
+        const base = itemFor("finished");
+        holdPane({ agentState: "working", runtimeStatus: "running" });
+        const restarted = renderCard({ ...base, row: { ...base.row, ...exited } } as CanopyItem);
+        expect(chip(restarted.container)?.getAttribute("aria-label")).toBe("Agent state: working");
+        restarted.unmount();
+
+        holdPane({ agentState: "waiting", runtimeStatus: "exited" });
+        const gone = renderCard(withRun({ agentState: "waiting", canopy: ask }));
+        expect(chip(gone.container)).toBeNull();
+        gone.unmount();
+
+        // An exit on record outranks a stale working state, as on the pane.
+        holdPane({ agentState: "working", runtimeStatus: "exited" });
+        const exitedPane = renderCard(withRun({ agentState: "working" }));
+        expect(chip(exitedPane.container)).toBeNull();
+      });
+
+      it("keeps the row's own observation for another project's run under the same id", () => {
+        viewWindow.__DAINTREE_INITIAL_PROJECT__ = { id: "p2" };
+        holdPane({ agentState: "waiting", isRestarting: true });
+        const { container } = renderCard(withRun({ agentState: "waiting", canopy: ask }));
+        expect(chip(container)?.getAttribute("aria-label")).toBe("Agent state: waiting");
+      });
     });
 
     it("draws nothing for a completion with no hand-back", () => {

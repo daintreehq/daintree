@@ -88,6 +88,9 @@ export const theme: BuiltInThemeSource = {
     },
   },
   tokens: {
+    // Parted from the working green it would otherwise share through
+    // `status-success`, as in bondi (#15866): ΔE 0.097.
+    "activity-completed": "#366140",
     "accent-muted": "rgba(33,133,70,0.30)",
     "accent-soft": "rgba(33,133,70,0.18)",
     // Solid so the field edge clears 3:1 on every surface a field sits on
@@ -100,7 +103,7 @@ export const theme: BuiltInThemeSource = {
     "overlay-hover": "rgba(49,52,43,0.08)",
     // Derived 3% is sub-threshold over near-white surfaces.
     "overlay-soft": "rgba(49,52,43,0.055)",
-    // Opaque elevate-to-select for menu/palette rows on white popovers.
+    // Opaque elevate-to-select plane (armed toolbar controls, settings scope).
     "overlay-raised": "#EBEEE3",
     // Re-inked to the field temperature (engine slate reads cool here).
     "pr-draft": "#62695F",

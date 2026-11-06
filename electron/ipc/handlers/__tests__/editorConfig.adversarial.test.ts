@@ -15,7 +15,18 @@ const discoverMock = vi.hoisted(() =>
   vi.fn<() => Promise<Array<{ id: string; name: string; available: boolean }>>>(async () => [])
 );
 
+// A real key/value map, so a default written through one handler is what the
+// next read sees, the way electron-store behaves.
+const storeData = vi.hoisted(() => new Map<string, unknown>());
+const storeMock = vi.hoisted(() => ({
+  get: vi.fn((key: string) => storeData.get(key)),
+  set: vi.fn((key: string, value: unknown) => {
+    storeData.set(key, value);
+  }),
+}));
+
 vi.mock("electron", () => ({ ipcMain: ipcMainMock }));
+vi.mock("../../../store.js", () => ({ store: storeMock }));
 vi.mock("../../../services/ProjectStore.js", () => ({ projectStore: projectStoreMock }));
 vi.mock("../../../services/EditorService.js", () => ({ discover: discoverMock }));
 
@@ -41,6 +52,7 @@ describe("editorConfig IPC adversarial", () => {
 
   beforeEach(() => {
     ipcHandlers.clear();
+    storeData.clear();
     vi.clearAllMocks();
     projectStoreMock.getProjectSettings.mockResolvedValue({});
     projectStoreMock.saveProjectSettings.mockResolvedValue(undefined);
@@ -148,5 +160,144 @@ describe("editorConfig IPC adversarial", () => {
     expect(noProject.preferredEditor).toBeNull();
     expect(wrongType.preferredEditor).toBeNull();
     expect(projectStoreMock.getProjectSettings).not.toHaveBeenCalled();
+  });
+
+  describe("default editor", () => {
+    it("getConfig reports the project's choice, the default, and which one a launch tries", async () => {
+      storeData.set("defaultEditor", { id: "antigravity-ide" });
+      projectStoreMock.getProjectSettings.mockResolvedValue({ preferredEditor: { id: "vscode" } });
+
+      const pinned = (await getHandler(CHANNELS.EDITOR_GET_CONFIG)(fakeEvent(), "p1")) as Record<
+        string,
+        unknown
+      >;
+      expect(pinned.preferredEditor).toEqual({ id: "vscode" });
+      expect(pinned.defaultEditor).toMatchObject({ id: "antigravity-ide" });
+      expect(pinned.effectiveEditor).toEqual({ id: "vscode" });
+
+      projectStoreMock.getProjectSettings.mockResolvedValue({});
+      const following = (await getHandler(CHANNELS.EDITOR_GET_CONFIG)(fakeEvent(), "p2")) as Record<
+        string,
+        unknown
+      >;
+      expect(following.preferredEditor).toBeNull();
+      expect(following.effectiveEditor).toMatchObject({ id: "antigravity-ide" });
+    });
+
+    it("getConfig reads no default when none is set, and when the stored one no longer validates", async () => {
+      const unset = (await getHandler(CHANNELS.EDITOR_GET_CONFIG)(fakeEvent(), "p1")) as Record<
+        string,
+        unknown
+      >;
+      expect(unset.defaultEditor).toBeNull();
+      expect(unset.effectiveEditor).toBeNull();
+
+      storeData.set("defaultEditor", { id: "retired-editor" });
+      const damaged = (await getHandler(CHANNELS.EDITOR_GET_CONFIG)(fakeEvent(), "p1")) as Record<
+        string,
+        unknown
+      >;
+      expect(damaged.defaultEditor).toBeNull();
+      expect(damaged.effectiveEditor).toBeNull();
+    });
+
+    it("setDefault stores the fallback and never reads or writes a project", async () => {
+      await getHandler(CHANNELS.EDITOR_SET_DEFAULT)(fakeEvent(), {
+        editor: { id: "antigravity-ide", customCommand: "leftover" },
+      });
+
+      expect(storeData.get("defaultEditor")).toEqual({
+        id: "antigravity-ide",
+        customCommand: undefined,
+        customTemplate: undefined,
+      });
+      expect(projectStoreMock.getProjectSettings).not.toHaveBeenCalled();
+      expect(projectStoreMock.saveProjectSettings).not.toHaveBeenCalled();
+    });
+
+    it("setDefault holds a custom default to the same rules as a project's", async () => {
+      await expect(
+        getHandler(CHANNELS.EDITOR_SET_DEFAULT)(fakeEvent(), {
+          editor: { id: "custom", customCommand: "  " },
+        })
+      ).rejects.toThrow(/customCommand/);
+      await expect(
+        getHandler(CHANNELS.EDITOR_SET_DEFAULT)(fakeEvent(), { editor: { id: "nope" } })
+      ).rejects.toThrow(/Invalid editor id/);
+      await expect(getHandler(CHANNELS.EDITOR_SET_DEFAULT)(fakeEvent(), null)).rejects.toThrow(
+        /Invalid payload/
+      );
+      expect(storeMock.set).not.toHaveBeenCalled();
+
+      await getHandler(CHANNELS.EDITOR_SET_DEFAULT)(fakeEvent(), {
+        editor: { id: "custom", customCommand: "hx", customTemplate: "{file}:{line}" },
+      });
+      expect(storeData.get("defaultEditor")).toEqual({
+        id: "custom",
+        customCommand: "hx",
+        customTemplate: "{file}:{line}",
+      });
+    });
+
+    it("setConfig leaves the default alone", async () => {
+      storeData.set("defaultEditor", { id: "antigravity-ide" });
+      await getHandler(CHANNELS.EDITOR_SET_CONFIG)(fakeEvent(), {
+        projectId: "p1",
+        editor: { id: "zed" },
+      });
+      expect(storeData.get("defaultEditor")).toEqual({ id: "antigravity-ide" });
+      expect(storeMock.set).not.toHaveBeenCalled();
+    });
+
+    it("clearProjectPreference removes the project's choice and keeps every other setting", async () => {
+      storeData.set("defaultEditor", { id: "antigravity-ide" });
+      projectStoreMock.getProjectSettings.mockResolvedValue({
+        runCommands: [{ id: "r", name: "dev", command: "npm run dev" }],
+        devServerCommand: "npm run dev",
+        preferredEditor: { id: "vscode" },
+      });
+
+      await getHandler(CHANNELS.EDITOR_CLEAR_PROJECT_PREFERENCE)(fakeEvent(), { projectId: "p1" });
+
+      expect(projectStoreMock.saveProjectSettings).toHaveBeenCalledTimes(1);
+      const [pid, saved] = projectStoreMock.saveProjectSettings.mock.calls[0] as [
+        string,
+        Record<string, unknown>,
+      ];
+      expect(pid).toBe("p1");
+      // Cleared, not overwritten with the default: the project follows the default from here.
+      expect("preferredEditor" in saved).toBe(false);
+      expect(saved.devServerCommand).toBe("npm run dev");
+      expect(saved.runCommands).toEqual([{ id: "r", name: "dev", command: "npm run dev" }]);
+      expect(storeData.get("defaultEditor")).toEqual({ id: "antigravity-ide" });
+    });
+
+    it("clearProjectPreference writes nothing for a project already on the fallback", async () => {
+      projectStoreMock.getProjectSettings.mockResolvedValue({ runCommands: [] });
+      // With a default and without one: the project has no choice to clear either way.
+      await getHandler(CHANNELS.EDITOR_CLEAR_PROJECT_PREFERENCE)(fakeEvent(), { projectId: "p1" });
+      storeData.set("defaultEditor", { id: "antigravity-ide" });
+      await getHandler(CHANNELS.EDITOR_CLEAR_PROJECT_PREFERENCE)(fakeEvent(), { projectId: "p1" });
+      expect(projectStoreMock.saveProjectSettings).not.toHaveBeenCalled();
+    });
+
+    it("clearProjectPreference clears a saved choice when no default is set", async () => {
+      projectStoreMock.getProjectSettings.mockResolvedValue({
+        runCommands: [],
+        preferredEditor: { id: "zed" },
+      });
+      await getHandler(CHANNELS.EDITOR_CLEAR_PROJECT_PREFERENCE)(fakeEvent(), { projectId: "p1" });
+      expect(projectStoreMock.saveProjectSettings).toHaveBeenCalledWith("p1", { runCommands: [] });
+    });
+
+    it("clearProjectPreference refuses a call without a project", async () => {
+      await expect(
+        getHandler(CHANNELS.EDITOR_CLEAR_PROJECT_PREFERENCE)(fakeEvent(), {})
+      ).rejects.toThrow(/projectId/);
+      await expect(
+        getHandler(CHANNELS.EDITOR_CLEAR_PROJECT_PREFERENCE)(fakeEvent(), { projectId: "" })
+      ).rejects.toThrow(/projectId/);
+      expect(projectStoreMock.getProjectSettings).not.toHaveBeenCalled();
+    });
   });
 });

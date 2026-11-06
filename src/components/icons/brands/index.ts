@@ -2,6 +2,7 @@
 export { GitHubIcon } from "./GitHubIcon";
 export { GitLabIcon } from "./GitLabIcon";
 export { LinearIcon } from "./LinearIcon";
+export { BeadsIcon } from "./BeadsIcon";
 
 // AI Agent icons
 export { ClaudeIcon } from "./ClaudeIcon";
@@ -81,6 +82,7 @@ export { HelmIcon } from "./HelmIcon";
 
 // Cloud & tunnels
 export { CloudflareIcon } from "./CloudflareIcon";
+export { DecisionsIcon } from "./DecisionsIcon";
 export { VercelIcon } from "./VercelIcon";
 export { NetlifyIcon } from "./NetlifyIcon";
 export { SupabaseIcon } from "./SupabaseIcon";

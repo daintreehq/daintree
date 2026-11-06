@@ -267,6 +267,51 @@ describe("agentSessionHistory", () => {
     expect(onDisk.some((r) => "snapshot" in r)).toBe(false);
   });
 
+  // #15977: a scheduled run's ids on the record a resume reads.
+  describe("scheduled run", () => {
+    const RUN = { scheduleId: "schedule-1", runId: "run-1" };
+    const base = { agentId: "claude", worktreeId: "wt-1", title: null, projectId: null };
+
+    it("keeps the run a record was captured with", async () => {
+      await persistAgentSession({ ...base, sessionId: "s1", scheduledRun: RUN }, userDataDir);
+
+      expect((await readSessionHistory(userDataDir))[0].scheduledRun).toEqual(RUN);
+    });
+
+    it("reads a run reference that doesn't hold both ids as none", async () => {
+      const filePath = getSessionHistoryPath(userDataDir)!;
+      const now = Date.now();
+      await fsp.writeFile(
+        filePath,
+        JSON.stringify([
+          { ...base, sessionId: "broken", savedAt: now, scheduledRun: { runId: "run-1" } },
+          { ...base, sessionId: "padded", savedAt: now - 1, scheduledRun: { ...RUN, extra: 1 } },
+        ])
+      );
+
+      const records = await readSessionHistory(userDataDir);
+      expect(records.find((r) => r.sessionId === "broken")).not.toHaveProperty("scheduledRun");
+      expect(records.find((r) => r.sessionId === "padded")?.scheduledRun).toEqual(RUN);
+    });
+
+    it("stays the run's when the conversation is resumed and journaled again", async () => {
+      await persistAgentSession({ ...base, sessionId: "s1", scheduledRun: RUN }, userDataDir);
+      await persistAgentSession({ ...base, sessionId: "s1", title: "Carried on" }, userDataDir);
+
+      const [record] = await readSessionHistory(userDataDir);
+      expect(record).toMatchObject({ title: "Carried on", scheduledRun: RUN });
+    });
+
+    it("never moves to another agent's session that shares the id", async () => {
+      await persistAgentSession({ ...base, sessionId: "s1", scheduledRun: RUN }, userDataDir);
+      await persistAgentSession({ ...base, sessionId: "s1", agentId: "codex" }, userDataDir);
+
+      const [record] = await readSessionHistory(userDataDir);
+      expect(record.agentId).toBe("codex");
+      expect(record).not.toHaveProperty("scheduledRun");
+    });
+  });
+
   it("listAgentSessions filters by worktreeId", async () => {
     await persistAgentSession(
       { sessionId: "s1", agentId: "claude", worktreeId: "wt-1", title: null, projectId: null },

@@ -199,6 +199,15 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Ahead-arrow count against the base branch",
     },
   ],
+  "src/components/Schedules/RunGlyph.tsx": [
+    {
+      category: "outcome",
+      signature: "text-status-success",
+      expectedOccurrences: 1,
+      rationale:
+        "Recorded \"done\" outcome of a scheduled run, as its run history settled it; one glyph for the list's Last run and the schedule's run history",
+    },
+  ],
   "src/components/Settings/VoiceInputSettingsTab.tsx": [
     {
       category: "outcome",
@@ -352,16 +361,10 @@ export const STATUS_SUCCESS_INVENTORY = {
     {
       category: "domain",
       signature: "text-status-success",
-      anchor: "↑{aheadCount}",
+      anchor: 'arrow === "↑"',
       expectedOccurrences: 1,
-      rationale: "Ahead-arrow count against the upstream",
-    },
-    {
-      category: "domain",
-      signature: "text-status-success",
-      anchor: "↑{displayedBaseAhead}",
-      expectedOccurrences: 1,
-      rationale: "Ahead-arrow count against the base branch",
+      rationale:
+        "The ahead arrow of a drift count, against the upstream and against the base branch alike; one `Count` helper draws both, with the figure itself in neutral ink",
     },
   ],
   "src/components/Worktree/WorktreeOverviewRow.tsx": [

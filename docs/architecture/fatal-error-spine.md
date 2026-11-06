@@ -54,14 +54,14 @@ app.quit();
 
 ## Windows planned-shutdown path (`session-end`)
 
-Registered per-window in `registerWindowSessionEndHandler` (`electron/lifecycle/appLifecycle.ts`), called from `electron/main.ts` after `registerWindowForFocusThrottle(win)`. The handler is:
+Registered per-window in `registerWindowSessionEndHandler` (`electron/lifecycle/appLifecycle.ts`), called for every `BrowserWindow` from appLifecycle's `browser-window-created` handler. While Daintree runs with no `BrowserWindow` (a windowless due-schedule launch, or a last window closed while it stays up), a hidden `BaseWindow` with no web contents carries the same handler, since Windows sends the session end only to top-level windows and `powerMonitor`'s window is message-only (see `docs/architecture/scheduled-runs.md`). The handler is:
 
 ```
 setSignalShutdown();
 app.quit();
 ```
 
-The `BrowserWindow.on("session-end")` event maps to Win32's `WM_ENDSESSION` and fires on **planned** termination: user logoff, standard shutdown, restart, Windows Update reboot, and Fast Startup (which is logoff + kernel hibernate). It does **not** fire on `TerminateProcess` / `taskkill /F` — those bypass the message pump entirely; the dirty-marker fallback covers them.
+The `session-end` window event maps to Win32's `WM_ENDSESSION` and fires on **planned** termination: user logoff, standard shutdown, restart, Windows Update reboot, and Fast Startup (which is logoff + kernel hibernate). It does **not** fire on `TerminateProcess` / `taskkill /F` — those bypass the message pump entirely; the dirty-marker fallback covers them.
 
 **Best-effort, not guaranteed.** Windows' default `HungAppTimeout` is 5 seconds; the full safety-belt budget is `SAFETY_BELT_TIMEOUT_MS`, several times that. The OS will frequently kill the process mid-chain. This is acceptable because:
 

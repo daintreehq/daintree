@@ -321,10 +321,13 @@ describe("DiffFileSidebar — windowed file shelf (#12241)", () => {
     const rows = screen.getAllByTestId("diff-sidebar-file");
     expect(rows.length).toBeLessThan(120);
 
-    // The first row on screen is the LAST file in the changeset, because the
-    // directories sort in reverse. Clicking it must report 119, not 0.
+    // Virtuoso can reveal the current file before this assertion. Derive the
+    // changeset index from the rendered path, rather than assuming a viewport.
+    const renderedPath = rows[0]!.getAttribute("aria-label")!.slice("Open ".length);
+    const changesetIndex = files.findIndex((file) => file.path === renderedPath);
+    expect(changesetIndex).toBeGreaterThan(0);
     fireEvent.click(rows[0]!);
-    expect(onSelect).toHaveBeenCalledWith(119);
+    expect(onSelect).toHaveBeenCalledWith(changesetIndex);
   });
 
   it("marks the open file current by its changeset index, not its display position", () => {

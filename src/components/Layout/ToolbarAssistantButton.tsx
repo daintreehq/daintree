@@ -33,11 +33,12 @@ import { useAssistantAgentChoices } from "@/hooks/useAssistantAgentChoices";
 import { actionService } from "@/services/ActionService";
 import type { McpRuntimeSnapshot } from "@shared/types";
 import type { AgentState } from "@/types";
-
-const toolbarIconButtonClass = "toolbar-icon-button text-text-primary relative";
+import { toolbarIconButtonClass } from "./toolbarItemClasses";
 
 interface PipDescriptor {
   className: string;
+  /** The mark's shape tier in pips.css: warning a rounded square, error a square. */
+  shape: "warning" | "error";
   delayed: boolean;
   tooltip: string;
 }
@@ -47,12 +48,14 @@ function describePip(snapshot: McpRuntimeSnapshot): PipDescriptor | null {
     case "starting":
       return {
         className: "bg-status-warning",
+        shape: "warning",
         delayed: true,
         tooltip: "MCP starting…",
       };
     case "failed":
       return {
         className: "bg-status-danger",
+        shape: "error",
         delayed: false,
         tooltip: snapshot.lastError ?? "MCP failed to start",
       };
@@ -68,6 +71,26 @@ interface AgentPipDescriptor {
   tooltip: string;
 }
 
+/**
+ * What the agent pip draws. Amber is only for an ask Canopy read, and Canopy
+ * never reads an assistant (it reads fleet runs, and assistants aren't any), so
+ * a lane that stopped is at most unread: the strip's neutral dot, never the
+ * waiting ring. Presentation only; `data-agent-state` keeps the observation.
+ */
+type AgentPipState = "unread" | "working" | "directing";
+
+function agentPipState(state: AgentState | null | undefined): AgentPipState | null {
+  switch (state) {
+    case "waiting":
+      return "unread";
+    case "working":
+    case "directing":
+      return state;
+    default:
+      return null;
+  }
+}
+
 // Local mapping that includes "working" — broader than the shared
 // agentStateDotColor() in terminalStateConfig, which deliberately omits
 // passive states for the agent buttons. Here the toolbar button is the only
@@ -76,14 +99,12 @@ interface AgentPipDescriptor {
 const AGENT_PIP_BY_STATE = {
   working: { className: "bg-state-working", tooltip: "Assistant is working" },
   directing: { className: "bg-category-blue", tooltip: "You're directing the assistant" },
-  waiting: { className: "bg-state-waiting", tooltip: "Assistant is waiting" },
-} as const satisfies Record<
-  Extract<AgentState, "working" | "directing" | "waiting">,
-  AgentPipDescriptor
->;
+  unread: { className: "bg-text-secondary", tooltip: "Assistant has unread activity" },
+} as const satisfies Record<AgentPipState, AgentPipDescriptor>;
 
-// Waiting is the only request for the user, so it outranks everything; a
-// state that earns a pip outranks one that does not, whichever lane it is in.
+// A stop the user hasn't seen is the one thing here to read, so it outranks
+// work in flight; a state that earns a pip outranks one that does not,
+// whichever lane it is in.
 const ASSISTANT_PIP_PRIORITY = [
   "waiting",
   "working",
@@ -97,9 +118,9 @@ function mostDemandingState(states: readonly (AgentState | null)[]): AgentState 
   return states.find((state) => state !== null) ?? null;
 }
 
-function describeAgentPip(state: AgentState | null | undefined): AgentPipDescriptor | null {
-  if (state == null) return null;
-  return (AGENT_PIP_BY_STATE as Partial<Record<AgentState, AgentPipDescriptor>>)[state] ?? null;
+function describeAgentPip(state: AgentPipState | null): AgentPipDescriptor | null {
+  if (state === null) return null;
+  return AGENT_PIP_BY_STATE[state];
 }
 
 const laneKey = (terminalId: string, state: AgentState | null) =>
@@ -123,10 +144,10 @@ export function ToolbarAssistantButton({
   // Two-step selectors so the button only re-renders when the set of assistant
   // terminals changes, then when the reported agentState transitions.
   // Aggregate across lanes (#12108). The button is the one place a background
-  // assistant can ask for the user, so it reports the most demanding lane
-  // rather than the focused one — surfacing "one of your assistants is
-  // waiting" is the whole point of the pip, and reporting only the active lane
-  // would hide exactly the session the user has navigated away from.
+  // assistant's news reaches the user, so it reports the most demanding lane
+  // rather than the focused one — surfacing "one of your assistants stopped"
+  // is the whole point of the pip, and reporting only the active lane would
+  // hide exactly the session the user has navigated away from.
   const assistantTerminalIds = useHelpPanelStore(useShallow(selectSlotTerminalIds));
   const laneStates = usePanelStore(
     useShallow((s) =>
@@ -146,12 +167,12 @@ export function ToolbarAssistantButton({
   // state) pair the user saw while the panel was open, so the pip only surfaces
   // unread *changes* while the panel is closed. Per lane, not per aggregate
   // (#12108): with one lane already acknowledged as waiting, a second lane
-  // that starts waiting is a new request and must not hide behind the first.
+  // that starts waiting is new and must not hide behind the first.
   // Scoping to terminalId means a respawned assistant landing on the same state
   // value still reads as unread — a fresh session is always a new event. While
   // the panel is open the set tracks the live lanes. While it is closed a lane
   // keeps its acknowledgement only until its state moves: waiting, then
-  // working, then waiting again is a second request, not the one already read.
+  // working, then waiting again is a second stop, not the one already read.
   const laneKeys = assistantTerminalIds.map((terminalId, i) =>
     laneKey(terminalId, laneStates[i] ?? null)
   );
@@ -165,8 +186,8 @@ export function ToolbarAssistantButton({
       return stillSeen.length === seen.size ? seen : new Set(stillSeen);
     });
   }, [isVisible, laneKeysJoined]);
-  const unreadState = mostDemandingState(
-    laneStates.filter((_, i) => !seenLaneKeys.has(laneKeys[i]!))
+  const unreadPipState = agentPipState(
+    mostDemandingState(laneStates.filter((_, i) => !seenLaneKeys.has(laneKeys[i]!)))
   );
 
   const handleClick = useCallback(() => {
@@ -207,7 +228,7 @@ export function ToolbarAssistantButton({
   const canOpenSession = useHelpPanelStore((s) => selectHasRoomForSession(s, workspaceId));
 
   const pip = describePip(mcp);
-  const agentPip = describeAgentPip(unreadState);
+  const agentPip = describeAgentPip(unreadPipState);
   // The MCP-health pip takes precedence — when it's showing, the agent pip
   // would compete for the same corner. The agent pip is suppressed while the
   // panel is open (the in-panel header indicator already conveys state), and
@@ -254,6 +275,8 @@ export function ToolbarAssistantButton({
                         data-testid="assistant-working-pip"
                         data-agent-state={agentState ?? ""}
                         data-visible={pip !== null || showAgentPip}
+                        data-badge-color={pip?.shape}
+                        data-pip={!pip && showAgentPip ? (unreadPipState ?? undefined) : undefined}
                         className={cn(
                           "toolbar-pip toolbar-badge",
                           pip?.className ?? (showAgentPip ? agentPip?.className : undefined),

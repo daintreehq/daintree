@@ -84,13 +84,23 @@ import {
   _resetEndpointRegistryForTesting,
   getEndpointRegistry,
 } from "../../../ipc/endpointRegistry.js";
-import type { DispatchEnvelope, PendingRequest } from "../shared.js";
+import {
+  MCP_DISPATCH_TIMEOUT_MS,
+  type DispatchEnvelope,
+  type PendingRequest,
+  type WorkspaceDispatchOptions,
+} from "../shared.js";
 import {
   _resetHostStartedTerminalsForTesting,
   hostStartedTerminals,
   noteHostStartedTerminal,
 } from "../../viewless/hostStartedTerminals.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
+import {
+  MCP_CONFIRM_ASK_MAX_MS,
+  MCP_REMOTE_CONFIRM_MARGIN_MS,
+  MCP_REMOTE_DISPATCH_TIMEOUT_MS,
+} from "../../../../shared/config/mcpConfirmWindow.js";
 
 const WORKSPACE = "ws-1";
 
@@ -218,6 +228,8 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
         confirmed: false,
         sessionOrigin: "external",
         context,
+        // In Host mode the lease hears of each change it makes (#15918).
+        checkWrite: expect.any(Function),
       });
       expect(envelope.result).toEqual({ ok: true, result: { terminalId: "t-new" } });
       expect(envelope.dispatchedWorkspace).toEqual({
@@ -345,6 +357,114 @@ describe("rendererBridge — drive target and no-frontend dispatch", () => {
         dispatchedWorkspace: { workspaceId: WORKSPACE },
       });
       expect(viewless.runViewlessAction).not.toHaveBeenCalled();
+    });
+
+    describe("how long it waits on the driving view (#15699)", () => {
+      // A Shell's own call, as `host.call` makes it, into that Shell's own driving view.
+      const relayed = (holdUntil?: number) => ({
+        ...(holdUntil !== undefined ? { holdUntil } : {}),
+        relay: {
+          linkSessionId: "shell-a",
+          readOnly: false,
+          call: { callId: "call-1", helpSessionId: "help-a" },
+        },
+      });
+
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      function answeringEndpoint(): ClientEndpoint {
+        return {
+          ...makeRemoteEndpoint(async () => ({ result: { ok: true, result: null } })),
+          endpointId: "remote:shell-a:view-1",
+          linkSessionId: "shell-a",
+        };
+      }
+
+      function sent(endpoint: ClientEndpoint) {
+        const [, payload, options] = vi.mocked(endpoint.request).mock.calls[0] as [
+          string,
+          { holdBudgetMs?: number },
+          { timeoutMs: number },
+        ];
+        return { budget: payload.holdBudgetMs, timeoutMs: options.timeoutMs };
+      }
+
+      async function dispatch(options: WorkspaceDispatchOptions) {
+        return bridge.dispatchActionForWorkspace(
+          WORKSPACE,
+          "worktree.delete",
+          { worktreeId: "/repo-wt/x" },
+          false,
+          "external",
+          options
+        );
+      }
+
+      it.each([
+        ["a relayed call", relayed()],
+        ["any other caller", {}],
+      ])(
+        "waits out a whole confirmation there for %s, and tells the view how long",
+        async (_label, options) => {
+          const endpoint = answeringEndpoint();
+          setMcpDriveTargetResolver(() => ({ state: "live", endpoint }));
+
+          await dispatch(options);
+
+          const { budget, timeoutMs } = sent(endpoint);
+          expect(budget).toBe(timeoutMs);
+          // The view holds inside the budget less the trip back, which still fits a whole ask.
+          expect(timeoutMs - MCP_REMOTE_CONFIRM_MARGIN_MS).toBeGreaterThanOrEqual(
+            MCP_CONFIRM_ASK_MAX_MS
+          );
+        }
+      );
+
+      it("fits inside the relayed call's own deadline", async () => {
+        vi.useFakeTimers();
+        const endpoint = answeringEndpoint();
+        setMcpDriveTargetResolver(() => ({ state: "live", endpoint }));
+
+        await dispatch(relayed(Date.now() + 100_000));
+
+        expect(sent(endpoint)).toEqual({ budget: 100_000, timeoutMs: 100_000 });
+      });
+
+      it("sends a whole number of milliseconds, so the view can read it", async () => {
+        vi.useFakeTimers();
+        const endpoint = answeringEndpoint();
+        setMcpDriveTargetResolver(() => ({ state: "live", endpoint }));
+
+        await dispatch(relayed(Date.now() + 100_000.75));
+
+        expect(sent(endpoint)).toEqual({ budget: 100_000, timeoutMs: 100_000 });
+      });
+
+      it("keeps the whole confirmation when the call's deadline is further off", async () => {
+        vi.useFakeTimers();
+        const endpoint = answeringEndpoint();
+        setMcpDriveTargetResolver(() => ({ state: "live", endpoint }));
+
+        await dispatch(relayed(Date.now() + 2 * MCP_REMOTE_DISPATCH_TIMEOUT_MS));
+
+        expect(sent(endpoint).timeoutMs).toBe(MCP_REMOTE_DISPATCH_TIMEOUT_MS);
+      });
+
+      it("sends nothing an older Shell's plain hold could outlast", async () => {
+        vi.useFakeTimers();
+        const endpoint = answeringEndpoint();
+        setMcpDriveTargetResolver(() => ({ state: "live", endpoint }));
+        // An older Shell ignores the budget and holds the plain deadline, whatever it is told.
+        const leastSent = MCP_DISPATCH_TIMEOUT_MS + MCP_REMOTE_CONFIRM_MARGIN_MS;
+
+        await expect(dispatch(relayed(Date.now() + leastSent - 1))).rejects.toThrow(/timed out/);
+        expect(endpoint.request).not.toHaveBeenCalled();
+
+        await dispatch(relayed(Date.now() + leastSent));
+        expect(sent(endpoint).timeoutMs).toBe(leastSent);
+      });
     });
 
     it("reports a driver that left mid-request as a lost, retriable route", async () => {
@@ -673,6 +793,28 @@ describe("rendererBridge — relayed calls (#13493)", () => {
     expect(request.checkWrite?.(false)).toBeNull();
   });
 
+  it("tells the lease of each change it runs for a caller on this machine, refusing none (#15918)", async () => {
+    const asked: unknown[] = [];
+    setMcpDriveTargetResolver((projectId, change) => {
+      if (change) asked.push([projectId, change]);
+      return { state: "vacant" };
+    });
+    viewless.runViewlessAction.mockResolvedValue({ ok: true, result: { terminalId: "t-1" } });
+
+    await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.new", {});
+
+    const [request] = viewless.runViewlessAction.mock.calls[0] as [
+      { checkWrite: (changed: boolean) => Error | null },
+    ];
+    expect(asked).toEqual([]);
+    expect(request.checkWrite(false)).toBeNull();
+    expect(request.checkWrite(true)).toBeNull();
+    expect(asked).toEqual([
+      [WORKSPACE, { linkSessionId: null }],
+      [WORKSPACE, { linkSessionId: null }],
+    ]);
+  });
+
   it("never sends a change into a window here that only shows the project", async () => {
     setMcpDriveTargetResolver(() => ({ state: "vacant" }));
     const view = makeWebContents(7);
@@ -795,6 +937,112 @@ describe("rendererBridge — relayed calls (#13493)", () => {
 
     expect(requestApproval).toHaveBeenCalledTimes(1);
     expect(envelope.confirmationDecision).toBe("rejected");
+  });
+
+  it("reports the Shell's own Never ask as the skip it is, not anyone's decision (#15698)", async () => {
+    setMcpDriveTargetResolver(() => ({ state: "vacant" }));
+    const skipped = {
+      decision: "approved" as const,
+      deadline: Date.now() + 40_000,
+      authorization: "skip-preference" as const,
+    };
+    const requestApproval = vi.fn(async () => skipped);
+    let executorSaw: unknown;
+    viewless.runViewlessAction.mockImplementation(
+      async (request: { requestApproval?: (ask: unknown) => Promise<unknown> }) => {
+        executorSaw = await request.requestApproval?.({
+          actionId: "worktree.delete",
+          args: {},
+          lines: [],
+        });
+        return { ok: true, result: { deleted: true } };
+      }
+    );
+
+    const envelope = await bridge.dispatchActionForWorkspace(
+      WORKSPACE,
+      "worktree.delete",
+      { worktreeId: "/repo-wt/x" },
+      false,
+      "external",
+      { relay: { ...write.relay, requestApproval } }
+    );
+
+    // The executor runs under the answer as it would an approval.
+    expect(executorSaw).toEqual(skipped);
+    expect(envelope.confirmationDecision).toBeUndefined();
+    expect(envelope.authorization).toBe("skip-preference");
+  });
+
+  it("names the Shell's own call to its driving view, and reads back a skip it granted (#15698)", async () => {
+    const endpoint: ClientEndpoint = {
+      ...ownEndpoint("shell-a"),
+      request: vi
+        .fn()
+        .mockResolvedValueOnce({
+          result: { ok: true, result: { ran: true } },
+          authorization: "skip-preference",
+        })
+        .mockResolvedValueOnce({ result: { ok: true, result: { ran: true } } }),
+    };
+    setMcpDriveTargetResolver(() => ({ state: "live", endpoint, holderName: "greg-mbp" }));
+    const call = { callId: "call-1", helpSessionId: "help-a" };
+
+    const envelope = await bridge.dispatchActionForWorkspace(
+      WORKSPACE,
+      "worktree.delete",
+      { worktreeId: "/repo-wt/x" },
+      false,
+      "external",
+      { relay: { ...write.relay, call } }
+    );
+
+    expect(endpoint.request).toHaveBeenCalledWith(
+      MCP_DISPATCH_ACTION_METHOD,
+      expect.objectContaining({ confirmed: false, relayed: true, relayCall: call }),
+      expect.anything()
+    );
+    expect(envelope.authorization).toBe("skip-preference");
+
+    // An answer that says no skip is read as none.
+    const plain = await bridge.dispatchActionForWorkspace(
+      WORKSPACE,
+      "worktree.delete",
+      { worktreeId: "/repo-wt/x" },
+      false,
+      "external",
+      { relay: { ...write.relay, call } }
+    );
+    expect(plain).not.toHaveProperty("authorization");
+  });
+
+  it("keeps a decision over a skip the same answer claims", async () => {
+    const endpoint: ClientEndpoint = {
+      ...ownEndpoint("shell-a"),
+      request: vi.fn(async () => ({
+        result: { ok: true, result: { ran: true } },
+        confirmationDecision: "approved",
+        authorization: "skip-preference",
+      })),
+    };
+    setMcpDriveTargetResolver(() => ({ state: "live", endpoint, holderName: "greg-mbp" }));
+
+    const envelope = await bridge.dispatchActionForWorkspace(
+      WORKSPACE,
+      "worktree.delete",
+      { worktreeId: "/repo-wt/x" },
+      false,
+      "external",
+      write
+    );
+
+    expect(envelope.confirmationDecision).toBe("approved");
+    expect(envelope.authorization).toBeUndefined();
+    expect(endpoint.request).toHaveBeenCalledWith(
+      MCP_DISPATCH_ACTION_METHOD,
+      expect.not.objectContaining({ relayCall: expect.anything() }),
+      expect.anything()
+    );
   });
 
   it("lets a read through wherever the project is driven", async () => {
@@ -934,6 +1182,29 @@ describe("rendererBridge — terminals the host started while a window shows the
     });
 
     expect(envelope.result).toEqual({ ok: true, result: { terminals: [parkedRow], panelLimit } });
+  });
+
+  it("finds parked and gridded panes alike when the caller asks for every location (#15732)", async () => {
+    noteHostStartedTerminal(WORKSPACE, "parked", { location: "background", worktreeId: "/repo" });
+    noteHostStartedTerminal(WORKSPACE, "host-agent", { worktreeId: "/repo" });
+    noteHostStartedTerminal(WORKSPACE, "elsewhere", { worktreeId: "/other" });
+    viewAnswering({ terminals: [], panelLimit });
+    const parkedRow = { ...hostRow, id: "parked", location: "background" };
+    viewless.runViewlessAction.mockResolvedValue({
+      ok: true,
+      result: { terminals: [parkedRow, hostRow] },
+    });
+
+    const args = { worktreeId: "/repo", location: "all" };
+    const envelope = await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.list", args);
+
+    expect(envelope.result).toEqual({
+      ok: true,
+      result: { terminals: [parkedRow, hostRow], panelLimit },
+    });
+    expect(viewless.runViewlessAction).toHaveBeenCalledWith(
+      expect.objectContaining({ actionId: "terminal.list", args })
+    );
   });
 
   it("answers status from the pty-host, whole and labelled so, once a named terminal is only there", async () => {
@@ -1092,6 +1363,22 @@ describe("rendererBridge — terminals the host started while a window shows the
     expect(filtered.result).toEqual(fromPty);
     expect(fleet.result).toEqual(fromPty);
     expect(viewless.runViewlessAction).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads a parked launch into a fleet read of every location (#15732)", async () => {
+    noteHostStartedTerminal(WORKSPACE, "parked", { location: "background" });
+    viewAnswering(viewStatus([]));
+    const fromPty = ptyStatus([status("parked", "working")]);
+    viewless.runViewlessAction.mockResolvedValue(fromPty);
+
+    const fleet = await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.getStatus", {});
+    const every = await bridge.dispatchActionForWorkspace(WORKSPACE, "terminal.getStatus", {
+      location: "all",
+    });
+
+    expect(fleet.result).toEqual({ ok: true, result: viewStatus([]) });
+    expect(every.result).toEqual(fromPty);
+    expect(viewless.runViewlessAction).toHaveBeenCalledTimes(1);
   });
 
   it.each([

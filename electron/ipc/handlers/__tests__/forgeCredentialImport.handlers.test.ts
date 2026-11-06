@@ -42,6 +42,7 @@ const registryMock = vi.hoisted(() => {
     // Credential import takes the role-agnostic lookup; these tests bind a full
     // provider, which both lookups return.
     getForgeProviderBaseImpl: (id: string) => getForgeProviderImpl(id),
+    getForgeProviderUnavailableError: vi.fn<(id: string) => string | null>(() => null),
     listMatchingProviders: vi.fn<(remoteUrl: string) => unknown[]>(() => [{}]),
   };
 });

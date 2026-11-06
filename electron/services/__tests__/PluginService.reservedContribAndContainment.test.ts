@@ -569,17 +569,33 @@ describe("reserved contribution point warnings", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toHaveLength(1);
-    expect(registerForgeProviders).toHaveBeenCalledWith("acme.forge", [
-      {
-        id: "github",
-        name: "GitHub",
-        matches: ["github.com"],
-        capabilities: ["issues", "pulls", "reviews"],
-        settingsScopeRef: "github",
-        viewRefs: ["github-issues"],
-      },
-    ]);
+    // An installed plugin activates in the worker, which can't back a forge
+    // provider, so the registry is told it isn't a built-in.
+    expect(registerForgeProviders).toHaveBeenCalledWith(
+      "acme.forge",
+      [
+        {
+          id: "github",
+          name: "GitHub",
+          matches: ["github.com"],
+          capabilities: ["issues", "pulls", "reviews"],
+          settingsScopeRef: "github",
+          viewRefs: ["github-issues"],
+        },
+      ],
+      { builtin: false }
+    );
     expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("contributes.forgeProviders"));
+    // The author's durable signal: the plugin's own log, not just the console.
+    const logLines =
+      service.getDiagnosticsSnapshot().plugins.find((p) => p.pluginId === "acme.forge")?.logLines ??
+      [];
+    expect(logLines).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        message: expect.stringContaining('Forge provider "github" is listed as unavailable'),
+      })
+    );
     expect(registerToolbarButton).not.toHaveBeenCalled();
     expect(registerPluginMenuItem).not.toHaveBeenCalled();
   });

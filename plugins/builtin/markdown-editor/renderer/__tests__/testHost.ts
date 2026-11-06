@@ -17,6 +17,8 @@ import {
  */
 export interface FakeMain {
   files: Map<string, string>;
+  /** Paths whose disk file is over the editor's ceiling: main answers without reading them. */
+  oversized: Set<string>;
   drafts: Map<string, { record: DraftRecord; generation: number }>;
   deletedAt: Map<string, number>;
   calls: Array<{ channel: string; args: unknown }>;
@@ -33,6 +35,7 @@ export const sha = (text: string) => createHash("sha256").update(text, "utf8").d
 export function createFakeMain(): FakeMain {
   const main: FakeMain = {
     files: new Map(),
+    oversized: new Set(),
     drafts: new Map(),
     deletedAt: new Map(),
     calls: [],
@@ -76,6 +79,9 @@ function handle(main: FakeMain, channel: string, rawArgs: unknown): unknown {
   const identity = args.identity as DocumentIdentity | undefined;
   switch (channel) {
     case CHANNELS.read: {
+      if (main.oversized.has(identity!.filePath)) {
+        return { status: "refused", reason: "TOO_LARGE" } satisfies DocumentReadResult;
+      }
       const text = main.files.get(identity!.filePath);
       if (text === undefined) return { status: "unavailable" } satisfies DocumentReadResult;
       return {
@@ -89,11 +95,15 @@ function handle(main: FakeMain, channel: string, rawArgs: unknown): unknown {
       } satisfies DocumentReadResult;
     }
     case CHANNELS.revalidate: {
+      if (main.oversized.has(identity!.filePath)) return { status: "too-large" };
       const text = main.files.get(identity!.filePath);
       if (text === undefined) return { status: "unavailable" };
       return { status: "ok", revision: sha(text) };
     }
     case CHANNELS.save: {
+      if (main.oversized.has(identity!.filePath)) {
+        return { status: "too-large" } satisfies DocumentSaveResult;
+      }
       const current = main.files.get(identity!.filePath);
       if (current === undefined) return { status: "unavailable" } satisfies DocumentSaveResult;
       const expected = args.expectedRevision as string;

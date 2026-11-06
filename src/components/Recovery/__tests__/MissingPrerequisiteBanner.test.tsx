@@ -579,20 +579,24 @@ describe("MissingPrerequisiteBanner", () => {
     });
 
     it("names the still-outstanding tools after a partial fix", async () => {
-      const node = missingGit({ tool: "node", label: "Node.js", installBlocks: undefined });
+      const other = missingGit({
+        tool: "other-tool",
+        label: "Other tool",
+        installBlocks: undefined,
+      });
       installAgentMock.mockResolvedValue({ success: true, exitCode: 0 });
-      healthCheckMock.mockResolvedValue(health([HEALTHY_GIT, node]));
-      useMissingPrerequisiteStore.setState({ missing: [missingGit(), node] });
+      healthCheckMock.mockResolvedValue(health([HEALTHY_GIT, other]));
+      useMissingPrerequisiteStore.setState({ missing: [missingGit(), other] });
       render(<MissingPrerequisiteBanner />);
 
       await click(await screen.findByRole("button", { name: "Install Git" }));
 
       await waitFor(() => expect(notifyMock).toHaveBeenCalled());
-      // It must not claim everything works while Node is still missing, and it
+      // It must not claim everything works while another tool is still missing, and it
       // must not list the tool it just installed as outstanding.
       const message = String(notifyMock.mock.calls[0]?.[0].message);
       const outstanding = useMissingPrerequisiteStore.getState().missing.map((p) => p.label);
-      expect(outstanding).toEqual(["Node.js"]);
+      expect(outstanding).toEqual(["Other tool"]);
       for (const label of outstanding) expect(message).toContain(label);
       expect(message).not.toContain("Git");
     });

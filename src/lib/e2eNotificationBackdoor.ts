@@ -30,6 +30,7 @@ import { usePanelStore, type BackendStatus, type WatchdogStatus } from "@/store/
 import { useUIStore } from "@/store/uiStore";
 import { useSafeModeStore } from "@/store/safeModeStore";
 import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
+import { setHostPlatformInfo } from "@/hooks/useHostPlatform";
 
 export interface E2EToastInput {
   type: NotificationType;
@@ -98,6 +99,8 @@ export interface NotificationsE2EApi {
    * real ages can't otherwise put the divider anywhere but the top.
    */
   setCenterLastClosedAt: (timestamp: number) => void;
+  /** Every history entry's message, oldest first: what notify() recorded, toast or not. */
+  historyMessages: () => string[];
   clearHistory: () => void;
   resetNotifyInternals: () => void;
   setBackendStatus: (status: BackendStatus) => void;
@@ -105,6 +108,18 @@ export interface NotificationsE2EApi {
   setSafeMode: (safeMode: boolean, dismissed?: boolean) => void;
   setRestoreConfirmation: (visible: boolean) => void;
   resetBanners: () => void;
+  /**
+   * Merges fields into one panel's store record, for the pane banners whose
+   * real trigger is a host failure a capture cannot cheaply cause (a lost
+   * reconnect, a restart in flight). Returns false when the panel is unknown.
+   */
+  patchPanel: (panelId: string, patch: Record<string, unknown>) => boolean;
+  /**
+   * Names the host this view's project lives on, as a remote window's
+   * hydrate does, so a capture can show the copy a pane on another machine
+   * gets without a second machine. Null is this machine again.
+   */
+  setHostName: (hostName: string | null) => void;
 }
 
 function buildApi(): NotificationsE2EApi {
@@ -171,6 +186,10 @@ function buildApi(): NotificationsE2EApi {
       useNotificationHistoryStore.getState().snoozeThread(correlationId, snoozedUntil),
     setCenterLastClosedAt: (timestamp) =>
       useUIStore.setState({ lastNotificationCenterClosedAt: timestamp }),
+    historyMessages: () =>
+      [...useNotificationHistoryStore.getState().entries]
+        .sort((a, b) => a.timestamp - b.timestamp)
+        .map((entry) => entry.message),
     clearHistory: () => useNotificationHistoryStore.getState().clearAll(),
     resetNotifyInternals: () => {
       _resetRateLimitBuckets();
@@ -199,6 +218,15 @@ function buildApi(): NotificationsE2EApi {
       });
       useRestoreConfirmationStore.setState({ visible: false });
     },
+    patchPanel: (panelId, patch) => {
+      const current = usePanelStore.getState().panelsById[panelId];
+      if (!current) return false;
+      usePanelStore.setState((state) => ({
+        panelsById: { ...state.panelsById, [panelId]: { ...current, ...patch } },
+      }));
+      return true;
+    },
+    setHostName: (hostName) => setHostPlatformInfo({ hostName }),
   };
 }
 

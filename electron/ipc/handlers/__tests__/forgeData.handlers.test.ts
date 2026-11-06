@@ -58,12 +58,14 @@ const repoRef: RepoRef = { host: "fake.test", owner: "acme", repo: "widgets", ra
 
 const resolveForCwdMock = vi.hoisted(() => vi.fn());
 const resolveIssueOverrideForCwdMock = vi.hoisted(() => vi.fn(async () => null as unknown));
+const hasIssueOverrideForCwdMock = vi.hoisted(() => vi.fn(async () => false));
 const resolveIssueLinkForCwdMock = vi.hoisted(() => vi.fn());
 const getIssueForLinkMock = vi.hoisted(() => vi.fn<() => Promise<unknown>>(async () => undefined));
 
 vi.mock("../forgeResolution.js", () => ({
   resolveForCwd: resolveForCwdMock,
   resolveIssueOverrideForCwd: resolveIssueOverrideForCwdMock,
+  hasIssueOverrideForCwd: hasIssueOverrideForCwdMock,
   resolveIssueLinkForCwd: resolveIssueLinkForCwdMock,
   getIssueForLink: getIssueForLinkMock,
   readIssueLinkTarget: (payload: Record<string, unknown>) => {
@@ -660,6 +662,29 @@ describe("registerForgeDataHandlers", () => {
     const result = await findHandler("forge:get-repo-metadata")(null, { cwd: "/repo" });
 
     expect(result).toMatchObject({ autoMergeSupported: true });
+  });
+
+  it("getRepoMetadata names the contribution that answered, not whatever the provider claims (#15603)", async () => {
+    fakeImpl.getRepoMetadata.mockResolvedValue({
+      defaultBranch: "main",
+      isPrivate: false,
+      isFork: false,
+      isArchived: false,
+      mergePreviewSupported: false,
+      providerName: "Spoofed",
+      rawData: null,
+    });
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      providerName: "Fake Forge",
+      repoRef,
+      impl: fakeImpl as unknown as ForgeProviderImpl,
+    });
+    registerForgeDataHandlers();
+
+    const result = await findHandler("forge:get-repo-metadata")(null, { cwd: "/repo" });
+
+    expect(result).toMatchObject({ providerName: "Fake Forge", mergePreviewSupported: false });
   });
 
   it("getRepoStats short-circuits to a zero snapshot when the project directory is gone (#10663)", async () => {
@@ -1353,6 +1378,7 @@ describe("issues bound to a separate provider (#13700)", () => {
     vi.clearAllMocks();
     _resetRateLimitQueuesForTest();
     resolveIssueOverrideForCwdMock.mockResolvedValue(null);
+    hasIssueOverrideForCwdMock.mockResolvedValue(false);
   });
 
   it("stamps listed issues with the issues provider when its override served them", async () => {
@@ -1385,6 +1411,57 @@ describe("issues bound to a separate provider (#13700)", () => {
     const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
 
     expect(stats).toMatchObject({ issueCount: 99, prCount: 4, repoKey: "fake.test/acme/widgets" });
+    // Says where the counts came from, so a Shell can tell a cache replay.
+    expect(stats).toMatchObject({ countsSource: "memory-cache" });
+  });
+
+  it.each([
+    ["Fake.Test", "widgets", "fake.test/acme/widgets"],
+    ["git.example", "gadgets", "git.example/acme/gadgets"],
+  ])(
+    "names the origin the stats would carry without polling (#15546): %s/%s",
+    async (host, repo, expected) => {
+      const code = codeImplWithStats();
+      resolveForCwdMock.mockResolvedValue({
+        namespaceId: "fake.provider",
+        repoRef: { ...repoRef, host, repo, projectPath: "/repo" },
+        impl: code,
+      });
+      registerForgeDataHandlers();
+
+      const repoKey = await findHandler("forge:get-repo-key")(null, { cwd: "/repo/src" });
+      expect(code.repoStats.getRepoStats).not.toHaveBeenCalled();
+      const stats = await findHandler("forge:get-repo-stats")(null, { cwd: "/repo" });
+
+      expect(repoKey).toBe(expected);
+      expect(stats).toMatchObject({ repoKey });
+      expect(resolveForCwdMock).toHaveBeenCalledWith("/repo/src");
+      // The split is read from settings: the issues provider is never resolved.
+      expect(hasIssueOverrideForCwdMock).toHaveBeenCalledWith("/repo/src", "/repo");
+      expect(resolveIssueOverrideForCwdMock).not.toHaveBeenCalledWith("/repo/src", "/repo");
+    }
+  );
+
+  it.each([
+    ["an issues provider is bound", () => hasIssueOverrideForCwdMock.mockResolvedValue(true)],
+    [
+      "the project's forge settings can't be read",
+      () => hasIssueOverrideForCwdMock.mockRejectedValue(new Error("settings read failed")),
+    ],
+    [
+      "no code provider resolves",
+      () => resolveForCwdMock.mockRejectedValue(new Error("No remote URL found")),
+    ],
+  ])("names no origin when %s", async (_label, arrange) => {
+    resolveForCwdMock.mockResolvedValue({
+      namespaceId: "fake.provider",
+      repoRef,
+      impl: codeImplWithStats(),
+    });
+    arrange();
+    registerForgeDataHandlers();
+
+    await expect(findHandler("forge:get-repo-key")(null, { cwd: "/repo" })).resolves.toBeNull();
   });
 
   it("takes the issue count from the issues provider and keeps PRs from the code forge", async () => {

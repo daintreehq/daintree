@@ -8,7 +8,7 @@ import React, {
 } from "react";
 import type { DraggableAttributes, DraggableSyntheticListeners } from "@dnd-kit/core";
 import { m, AnimatePresence } from "framer-motion";
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, ShieldAlert } from "lucide-react";
 import type { PanelKind, AgentState, PanelLocation } from "@/types";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -18,13 +18,14 @@ import {
   documentTabClassName,
 } from "@/components/ui/document-tab";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
+import { usePanelStore } from "@/store";
 import { TerminalContextMenu } from "@/components/Terminal/TerminalContextMenu";
 import {
   SESSION_COLORS,
   SESSION_ICONS,
   SESSION_LABELS,
 } from "@/components/Worktree/terminalStateConfig";
-import { useSessionPresentation } from "@/hooks/useRunHandBackState";
+import { useRunSessionPresentation } from "@/hooks/useRunSessionPresentation";
 import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { getTerminalAgentDisplayState } from "@/utils/terminalAgentDisplayState";
 import { DURATION_100 } from "@/lib/animationUtils";
@@ -79,6 +80,12 @@ export interface TabButtonProps {
   parked?: boolean;
   /** Where the tab's panel lives, for its own context menu's layout commands. */
   menuLocation?: PanelLocation;
+  /**
+   * Whether the pane this strip belongs to is the one the keyboard is in. Only
+   * that strip's selected tab wears the accent underline; the rest keep it in
+   * neutral ink.
+   */
+  isStripFocused?: boolean;
 }
 
 /** The DOM id a tab carries, so the panel it controls can name it back. */
@@ -108,11 +115,15 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     tabPanelId,
     parked = false,
     menuLocation,
+    isStripFocused = true,
   },
   ref
 ) {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(title);
+  // Every tab is a panel; its persona emoji sits beside the title, never in it,
+  // so a rename starts from the title alone.
+  const displayEmoji = usePanelStore((state) => state.panelsById[id]?.displayEmoji);
   const inputRef = useRef<HTMLInputElement>(null);
   const labelRef = useRef<HTMLSpanElement>(null);
   // Where the rename field sits: over the label's own box. The field is a
@@ -317,9 +328,9 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
     [isActive, onClick, sortableKeyDown, startEditing]
   );
 
-  // A hand-back draws unread or done here as it does on the pane's own chip,
-  // never as the amber waiting ring.
-  const displayAgentState = useSessionPresentation(
+  // The run's fleet band decides the glyph, as on the pane's own chip: amber
+  // only for a run in Needs you.
+  const displayAgentState = useRunSessionPresentation(
     id,
     getTerminalAgentDisplayState(chrome, agentState)
   );
@@ -352,7 +363,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
               {...sortablePointerListeners}
               onPointerDown={handleTabPointerDown}
             >
-              {isActive && <DocumentTabIndicator />}
+              {isActive && <DocumentTabIndicator inFocusedRegion={isStripFocused} />}
               <span className="shrink-0 flex items-center justify-center w-3.5 h-3.5">
                 <TerminalIcon
                   kind={kind}
@@ -361,11 +372,23 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
                   brandColor={presetColor ?? chrome.color}
                 />
               </span>
+              {displayEmoji && (
+                <span
+                  aria-hidden="true"
+                  data-testid="tab-persona-emoji"
+                  className="shrink-0 select-none text-xs leading-none"
+                >
+                  {displayEmoji}
+                </span>
+              )}
 
               <span
                 ref={labelRef}
                 className={cn(
-                  "truncate max-w-[100px] inline-block border border-transparent px-1",
+                  // Room for a task title's distinguishing words: agent tabs are named by
+                  // the task, and at 100px two tabs read the same. The strip's
+                  // overflow chevron takes what no longer fits.
+                  "truncate max-w-40 inline-block border border-transparent px-1",
                   onRename && "cursor-text",
                   // Holds the label's slot while the rename field sits over it.
                   isEditing && "invisible min-w-[60px]"
@@ -446,10 +469,16 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
               {hasDangerousFlags && (
                 <Tooltip>
                   <TooltipTrigger asChild>
+                    {/* The pane header's mark, smaller: a dot here meant
+                        "dangerous flags" while the same dot on the header
+                        means a failed broadcast. */}
                     <span
-                      className="status-mark w-2 h-2 rounded-full bg-status-danger shrink-0"
+                      role="img"
+                      className="inline-flex h-3 w-3 shrink-0 items-center justify-center text-status-danger"
                       aria-label="Launched with dangerous permissions"
-                    />
+                    >
+                      <ShieldAlert className="h-3 w-3" aria-hidden="true" />
+                    </span>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
                     Launched with dangerous permissions — agent can modify files without prompting

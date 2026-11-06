@@ -173,6 +173,7 @@ export function buildActivityMonitorOptions(
   effectiveAgentId: string | undefined,
   deps: {
     getVisibleLines?: (n: number) => string[];
+    getLastTextLines?: (n: number) => string[];
     getVisibleContentSnapshot?: (n: number) => VisibleContentSnapshot | undefined;
     getCursorLine?: () => string | null;
   }
@@ -223,6 +224,7 @@ export function buildActivityMonitorOptions(
   };
 
   const getVisibleLines = effectiveAgentId ? deps.getVisibleLines : undefined;
+  const getLastTextLines = effectiveAgentId ? deps.getLastTextLines : undefined;
   const getVisibleContentSnapshot = effectiveAgentId ? deps.getVisibleContentSnapshot : undefined;
   const getCursorLine = effectiveAgentId ? deps.getCursorLine : undefined;
   let idleDebounceMs: number | undefined;
@@ -243,6 +245,7 @@ export function buildActivityMonitorOptions(
     agentId: effectiveAgentId,
     outputActivityDetection,
     getVisibleLines,
+    getLastTextLines,
     getVisibleContentSnapshot,
     getCursorLine,
     patternConfig,

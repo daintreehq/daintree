@@ -9,6 +9,9 @@ import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type { GitFileDiffResult } from "../../../shared/types/ipc/git.js";
 import { GIT_FILE_DIFF_MAX_BYTES } from "../../../shared/config/gitReadLimits.js";
 
+// Whole-file context for any file the diff preview's byte cap would let through.
+const MAX_COMPARE_CONTEXT_LINES = 1_000_000;
+
 export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
 
@@ -19,13 +22,18 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
     filePath?: string;
     useMergeBase?: boolean;
     ignoreWhitespace?: boolean;
+    contextLines?: number;
   }) => {
-    checkRateLimit(CHANNELS.GIT_COMPARE_WORKTREES, 20, 10_000);
+    // Opening a file in the compare dialog is two reads (its diff, and the
+    // whole-file diff its hidden context comes from), so the allowance is
+    // twice the files a reader can step through in the window.
+    checkRateLimit(CHANNELS.GIT_COMPARE_WORKTREES, 40, 10_000);
     if (!payload || typeof payload !== "object") {
       throw new Error("Invalid payload");
     }
 
-    const { cwd, branch1, branch2, filePath, useMergeBase, ignoreWhitespace } = payload;
+    const { cwd, branch1, branch2, filePath, useMergeBase, ignoreWhitespace, contextLines } =
+      payload;
 
     if (typeof cwd !== "string" || !cwd) {
       throw new Error("Invalid working directory");
@@ -45,9 +53,24 @@ export function registerGitReadHandlers(deps: HandlerDependencies): () => void {
     if (ignoreWhitespace !== undefined && typeof ignoreWhitespace !== "boolean") {
       throw new Error("Invalid ignoreWhitespace");
     }
+    if (
+      contextLines !== undefined &&
+      (!Number.isSafeInteger(contextLines) ||
+        contextLines < 0 ||
+        contextLines > MAX_COMPARE_CONTEXT_LINES)
+    ) {
+      throw new Error("Invalid contextLines");
+    }
 
     const gitService = gitServiceCache.getGitService(cwd);
-    return gitService.compareWorktrees(branch1, branch2, filePath, useMergeBase, ignoreWhitespace);
+    return gitService.compareWorktrees(
+      branch1,
+      branch2,
+      filePath,
+      useMergeBase,
+      ignoreWhitespace,
+      contextLines
+    );
   };
   handlers.push(typedHandle(CHANNELS.GIT_COMPARE_WORKTREES, handleGitCompareWorktrees));
 

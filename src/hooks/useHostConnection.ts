@@ -25,7 +25,7 @@ import {
   startDriverNavigationReporter,
   type DriverNavigationReporter,
 } from "@/store/hostDriverNavigation";
-import { notifyHostResync } from "@/store/hostResyncSignal";
+import { notifyHostResync, type HydratedSettings } from "@/store/hostResyncSignal";
 import {
   dropDeferredHostOwnedWrites,
   holdHostOwnedWrites,
@@ -48,6 +48,7 @@ import { logInfo, logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { primeHostPreviewCapability } from "@/components/FileViewer/filePreviewKinds";
 import { watchHostConnectionAnnouncements } from "@/components/Recovery/hostConnectionAnnouncements";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 
 /** The remote host this view runs on, or null when it runs on this machine. */
 export function getViewHostId(): HostId | null {
@@ -86,6 +87,14 @@ let resyncRunning: Promise<void> | null = null;
 let resyncAgain = false;
 /** A pass still owed the project state, because a request that asked for it was coalesced. */
 let resyncProjectStateOwed = false;
+/**
+ * A full pass asked for while this view was cached, put off until main shows
+ * it again: what it refetches only matters on screen, and every cached view
+ * of a host asking at once would crowd the visible one's recovery off the link.
+ */
+let resyncFullOwed = false;
+/** Run the owed full pass even though the view is cached: saves wait on it. */
+let resyncFullNow = false;
 /**
  * The panes a host restart ended, by the restart key each was lost under,
  * held until the host says whether this view drives: it relaunches them, or
@@ -142,12 +151,19 @@ export interface ResyncFromHostOptions {
  * Refetch what this view shows from its host after the host dropped events on
  * their way here or the link came back fresh. Terminal output is not part of
  * this: it resumes on its own stream. Overlapping requests coalesce into one
- * follow-up pass.
+ * follow-up pass. A cached view reads only what must stay live while nobody
+ * sees it (who drives, its terminals and their agents) and owes the rest
+ * until it is shown; one that watches still follows the driver meanwhile.
  */
 export function resyncFromHost(options: ResyncFromHostOptions = {}): Promise<void> {
   resyncGeneration += 1;
   if (options.freshSession) resyncProjectStateOwed = true;
   if (options.hostRestarted) armRestartRecovery(options.previousEnd);
+  resyncFullOwed = true;
+  return runResyncs();
+}
+
+function runResyncs(): Promise<void> {
   if (resyncRunning) {
     resyncAgain = true;
     return resyncRunning;
@@ -155,9 +171,15 @@ export function resyncFromHost(options: ResyncFromHostOptions = {}): Promise<voi
   resyncRunning = (async () => {
     do {
       resyncAgain = false;
-      const projectState = resyncProjectStateOwed;
-      resyncProjectStateOwed = false;
-      await runResyncPass(projectState);
+      // Decided per pass: a view cached again since stops at what stays live.
+      const full = resyncFullOwed && (resyncFullNow || !isCachedRemoteView());
+      const projectState = full && resyncProjectStateOwed;
+      if (full) {
+        resyncFullOwed = false;
+        resyncFullNow = false;
+        resyncProjectStateOwed = false;
+      }
+      await runResyncPass(full, projectState);
     } while (resyncAgain);
   })().finally(() => {
     resyncRunning = null;
@@ -165,10 +187,26 @@ export function resyncFromHost(options: ResyncFromHostOptions = {}): Promise<voi
   return resyncRunning;
 }
 
-async function runResyncPass(projectState: boolean): Promise<void> {
+/**
+ * Main has cached this view of a host's project: what only matters on screen
+ * waits until it is shown. A view on this machine has no link to crowd.
+ */
+function isCachedRemoteView(): boolean {
+  return getViewHostId() !== null && isProjectViewCached();
+}
+
+/** The full pass a cached view put off, now that it is shown or its saves wait on it. */
+function runOwedResync(now = false): Promise<void> {
+  if (!resyncFullOwed) return resyncRunning ?? Promise.resolve();
+  if (now) resyncFullNow = true;
+  return runResyncs();
+}
+
+async function runResyncPass(full: boolean, projectState: boolean): Promise<void> {
   const projectId = getViewWorkspaceId();
   const generation = resyncGeneration;
   const readBacks = readBacksStarted;
+  const follows = followGeneration;
   const isCurrent = () => generation === resyncGeneration && getViewWorkspaceId() === projectId;
   const lease = refreshLease();
   const recovery = restartRecovery?.gathering ? restartRecovery : null;
@@ -178,39 +216,76 @@ async function runResyncPass(projectState: boolean): Promise<void> {
         onLost: recovery ? recordRestartLoss : undefined,
       })
     : Promise.resolve();
-  const worktrees = window.electron.worktree.refresh();
+  // A pass that hydrates hands the settings its answer carries to their syncs,
+  // which would otherwise read the same three again over the link.
+  let settleHydrated: (settings: HydratedSettings | null) => void = () => {};
+  const hydrated =
+    projectState && projectId
+      ? new Promise<HydratedSettings | null>((resolve) => {
+          settleHydrated = resolve;
+        })
+      : undefined;
   const steps: Array<[string, () => Promise<unknown>]> = [
-    ["worktrees", () => worktrees],
-    [
-      "worktree topology",
-      () => window.electron.worktreePort.request("reconcile-topology", { force: true }),
-    ],
     ["terminals", () => terminals],
-    [
-      "plugins",
-      async () => {
-        const { usePluginRuntimeStore } = await import("@/store/pluginRuntimeStore");
-        usePluginRuntimeStore.getState().refresh();
-      },
-    ],
     ["drive lease", () => lease],
-    // Dev previews and anything else kept from host events refetch for themselves.
-    ["event-fed state", async () => notifyHostResync()],
   ];
+  if (projectId) {
+    // A dropped event may have been the driver's panels changing. A follow
+    // asked for since this pass began (the lease read finding a new driver)
+    // already reads them.
+    steps.push([
+      "driver's panels",
+      async () => {
+        await Promise.allSettled([lease]);
+        if (isCurrent() && watches(projectId) && follows === followGeneration) {
+          void followHostPanels();
+        }
+      },
+    ]);
+  }
+  const worktrees = full ? window.electron.worktree.refresh() : Promise.resolve();
+  if (full) {
+    steps.push(
+      ["worktrees", () => worktrees],
+      [
+        "worktree topology",
+        () => window.electron.worktreePort.request("reconcile-topology", { force: true }),
+      ],
+      [
+        "plugins",
+        async () => {
+          const { usePluginRuntimeStore } = await import("@/store/pluginRuntimeStore");
+          usePluginRuntimeStore.getState().refresh();
+        },
+      ],
+      // Dev previews and anything else kept from host events refetch for themselves.
+      ["event-fed state", async () => notifyHostResync({ hydrated })]
+    );
+  }
   if (projectState && projectId) {
     steps.push([
       "project state",
       async () => {
-        // After the terminals, so the host's saved order also places the ones
-        // just adopted; after the lease, to know whose layout wins.
-        // And after the worktrees, so the saved active worktree can be found.
-        await Promise.allSettled([terminals, lease, worktrees]);
-        // A view that watches reads it back by following the driver, which
-        // the lease just read has set going; one back over another driver's
-        // state reads it back as authoritative instead.
-        if (!isCurrent() || watches(projectId)) return;
-        if (readBackOwed || readBacksStarted !== readBacks) return;
-        await rehydrateHostProjectState(projectId, { isCurrent, authoritative: false });
+        try {
+          // After the terminals, so the host's saved order also places the
+          // ones just adopted; after the lease, to know whose layout wins.
+          // And after the worktrees, so the saved active worktree can be found.
+          await Promise.allSettled([terminals, lease, worktrees]);
+          // A view that watches reads it back by following the driver, which
+          // this pass sets going once the lease is read; one back over another
+          // driver's state reads it back as authoritative instead.
+          if (!isCurrent() || watches(projectId)) return;
+          if (readBackOwed || readBacksStarted !== readBacks) return;
+          await rehydrateHostProjectState(projectId, {
+            isCurrent,
+            authoritative: false,
+            onHydrated: settleHydrated,
+          });
+        } finally {
+          // No answer of this pass's own (skipped, superseded, or failed): the
+          // settings syncs read for themselves. A no-op once settled.
+          settleHydrated(null);
+        }
       },
     ]);
   }
@@ -445,8 +520,9 @@ function drivesSinceGap(projectId: string): boolean {
 /**
  * While another screen drives this view's project, show the panels it shows:
  * adopt the terminals the host runs, drop the ones it closed, and take the
- * driver's saved layout. Runs whenever this view starts watching and whenever
- * the host says the driver saved a different panel set. Nothing is written
+ * driver's saved layout. Runs whenever this view starts watching, someone
+ * else takes the project, the host says the driver saved a different panel
+ * set, or a resync says events may have been dropped. Nothing is written
  * back: a watcher's saves of the host's project state are skipped. Overlapping
  * requests coalesce into one follow-up pass.
  */
@@ -818,9 +894,13 @@ function applyLease(lease: DriveLeaseView, source: "answer" | "take-over" = "ans
     takeOversSettling.add(settling);
     handoffOwed = true;
   }
+  const followsAnew = watchesAnew(getDriveLeaseSnapshot(), lease);
   setDriveLeaseSnapshot(lease);
   noteLeaseNavigation(lease);
-  if (!lease.drivingHere) void followHostPanels();
+  // The same holder said again (its away state flipping, a lookup) leaves its
+  // panels as they were: they change through panels-changed.
+  if (followsAnew) void followHostPanels();
+  else if (!lease.drivingHere) void followDriverNavigation();
   const driver = drivenElsewhereBy(lease);
   const driverIsHostScreen = lease.holder?.isHostLocal === true;
   setLeaseInputBlock(
@@ -840,6 +920,19 @@ function applyLease(lease: DriveLeaseView, source: "answer" | "take-over" = "ans
   if (back === "release") releaseHostOwnedWrites();
   if (settling) readBackAfterGap(lease, settling);
   settleRestartRecovery();
+}
+
+/**
+ * Whether `lease` has this view watching a driver it doesn't follow yet: it
+ * starts watching, or someone else holds the project now.
+ */
+function watchesAnew(before: DriveLeaseView | null, lease: DriveLeaseView): boolean {
+  if (lease.drivingHere) return false;
+  if (before?.projectId !== lease.projectId || before.drivingHere) return true;
+  return (
+    before.holder?.leaseId !== lease.holder?.leaseId ||
+    before.holder?.endpointId !== lease.holder?.endpointId
+  );
 }
 
 function hostDisplayName(fallback: string): string {
@@ -868,7 +961,11 @@ async function remoteDrivingPossible(): Promise<boolean> {
  */
 export async function takeOverDrive(
   projectId: string,
-  options: { ifLeaseId?: number | null } = {}
+  options: {
+    ifLeaseId?: number | null;
+    /** False when nothing changes hands, so the state this view has is the host's already. */
+    readBack?: boolean;
+  } = {}
 ): Promise<void> {
   const settling = Symbol("take-over");
   takeOversSettling.add(settling);
@@ -893,11 +990,20 @@ export async function takeOverDrive(
     applyLease(view);
     return;
   }
+  const heldForGap = takeOverDuringGap(view);
+  // Saves a lost link left held still wait on a read of the host's state.
+  const readBack = options.readBack !== false || heldForGap;
   // The host's state is read back as authoritative below; a save held from
   // before the takeover must not land on top of it.
-  dropDeferredHostOwnedWrites("this view took the project over");
-  const heldForGap = takeOverDuringGap(view);
+  if (readBack) dropDeferredHostOwnedWrites("this view took the project over");
   applyLease(view, "take-over");
+  if (!readBack) {
+    // Only an older read-back is overtaken; this view still moves to where the
+    // last driver was before it says where it is.
+    takeOverGeneration += 1;
+    settleTakeOver(settling, projectId);
+    return;
+  }
   // The previous driver's terminals and saved layout are the project's now;
   // this view's were stale while it was displaced.
   const done = readBackAsDriver(projectId, view, settling, "after taking over", {
@@ -1000,9 +1106,9 @@ function readBackAsDriver(
 /**
  * Opening a host's project from here is taking it over: the sessions there are
  * this user's own, so the view takes the project as {@link takeOverDrive} does
- * (held saves dropped, the host's state read back as authoritative). Once per
- * view, not per sync mount (the layout remounts once after hydration), and
- * only until it succeeds; a machine that takes the project over later is
+ * (held saves dropped, the host's state read back as authoritative), when it
+ * changes hands at all. Once per view, not per sync mount, and only until it
+ * succeeds; a machine that takes the project over later is
  * offered back through the banner, never fought for.
  *
  * A finished claim is also kept in sessionStorage, which belongs to the view's
@@ -1094,7 +1200,13 @@ async function claimUnlessAnotherMachineDrives(projectId: string): Promise<void>
     }
     // Only from the holder just read: another Shell opening the project at
     // the same moment may have taken it since, and isn't taken from in turn.
-    await takeOverDrive(projectId, { ifLeaseId: holder?.leaseId ?? null });
+    // Nobody holding it, or this view already doing so, hands over nothing
+    // the boot read didn't show; another of this machine's windows may have
+    // saved since.
+    await takeOverDrive(projectId, {
+      ifLeaseId: holder?.leaseId ?? null,
+      readBack: holder !== null && !lease.drivingHere,
+    });
     return;
   }
   // The lease kept moving while it was read: leave it to the events, which
@@ -1138,11 +1250,13 @@ function beginSync(): () => void {
   if (hostId !== null) disposers.push(watchHostConnectionAnnouncements(hostId));
 
   // Saves held while the link was down go out only after the lease is re-read
-  // and any resync in flight (a fresh session's rehydrate) has finished.
+  // and any resync in flight (a fresh session's rehydrate) has finished,
+  // including one a cached view put off.
   disposers.push(
     setHostOwnedWriteFlushBarrier(async () => {
       await refreshLease();
       if (resyncRunning) await resyncRunning;
+      await runOwedResync(true);
     })
   );
 
@@ -1198,9 +1312,13 @@ function beginSync(): () => void {
   if (hostId !== null && remoteHosts) {
     const store = useHostConnectionStore.getState();
     store.bindHost(hostId, null);
-    // Set by an explicit disconnect and kept through the connecting states
-    // that follow it, so the session that eventually comes up still resyncs.
-    let resyncPending = false;
+    // Main says when it shows this view again: what it put off runs then,
+    // as the view comes out from behind the switch's bridge.
+    disposers.push(
+      subscribeProjectViewLifecycle((phase) => {
+        if (phase !== "cached") void runOwedResync();
+      })
+    );
     disposers.push(
       useHostConnectionStore.subscribe((next, prev) => {
         if (
@@ -1216,9 +1334,6 @@ function beginSync(): () => void {
           const wasUp = isHostLinkUp(prev) || prev.connection === null;
           if (wasUp && !isHostLinkUp(next) && next.connection !== null) noteLeaseOutOfSight();
         }
-        if (next.connection?.status === "disconnected" && next.everConnected) {
-          resyncPending = true;
-        }
         if (next.connection?.status === "connected" && prev.connection?.status !== "connected") {
           const { buildMismatch, handshake: remoteBuild } = next.connection;
           if (buildMismatch) {
@@ -1231,11 +1346,10 @@ function beginSync(): () => void {
             );
           }
           const claimOutstanding = projectId !== null && openClaimOutstanding(projectId);
-          if (resyncPending) {
-            resyncPending = false;
-            // After an explicit disconnect the link that comes back is a new session.
-            void resyncFromHost({ freshSession: true });
-          } else if (
+          // A fresh session, including the one after an explicit disconnect, is
+          // resynced when main says so (`resync-required`), never from here too:
+          // a second request would discard the first pass's reads.
+          if (
             !claimOutstanding &&
             (getLeaseInputBlock()?.kind === "lease-unknown" ||
               leaseBeforeGap !== undefined ||
@@ -1270,8 +1384,6 @@ function beginSync(): () => void {
                 ...(event.reason === "host-restarted" &&
                   event.previousEnd && { previousEnd: event.previousEnd }),
               });
-              // A dropped event may have been the driver's panels changing.
-              if (projectId && watches(projectId)) void followHostPanels();
             }
             return;
           default:
@@ -1302,6 +1414,8 @@ function beginSync(): () => void {
     takeOverGeneration += 1;
     restartRecoveryGeneration += 1;
     restartRecovery = null;
+    resyncFullOwed = false;
+    resyncFullNow = false;
     for (const dispose of disposers.splice(0)) dispose();
     driverNavigation = null;
     navigationLeaseId = undefined;
@@ -1323,9 +1437,9 @@ function beginSync(): () => void {
   };
 }
 
-/** Mount-scoped {@link startHostConnectionSync}. */
-export function useHostConnectionSync(): void {
-  useEffect(() => startHostConnectionSync(), []);
+/** Mount-scoped {@link startHostConnectionSync}, while `enabled`. */
+export function useHostConnectionSync(enabled = true): void {
+  useEffect(() => (enabled ? startHostConnectionSync() : undefined), [enabled]);
 }
 
 export interface RunHostOperationOptions<T> {
@@ -1387,12 +1501,15 @@ export async function runHostOperation<T>(
   }
 }
 
+/**
+ * Which host this view runs on, by id and name. Only the identity: a link's
+ * pings replace its connection every few seconds, so anything showing the
+ * link's state selects it from the store itself.
+ */
 export function useHostConnection() {
   const hostId = useHostConnectionStore((s) => s.hostId);
   const hostName = useHostConnectionStore((s) => s.hostName);
-  const connection = useHostConnectionStore((s) => s.connection);
-  const lastSeenAt = useHostConnectionStore((s) => s.lastSeenAt);
-  return { hostId, hostName: hostName ?? hostId, connection, lastSeenAt };
+  return { hostId, hostName: hostName ?? hostId };
 }
 
 /** Why terminals in this view take no input right now, or null when they do. */
@@ -1426,6 +1543,8 @@ export function _reloadHostConnectionSyncForTesting(): void {
   resyncRunning = null;
   resyncAgain = false;
   resyncProjectStateOwed = false;
+  resyncFullOwed = false;
+  resyncFullNow = false;
   restartRecovery = null;
   restartRecoveryGeneration += 1;
   followRunning = null;

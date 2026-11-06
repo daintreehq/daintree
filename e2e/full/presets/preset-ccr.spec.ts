@@ -28,7 +28,7 @@ import {
 // the config it needs, so the tests stand alone. The launcher/toolbar checks
 // need a launchable Claude, hence the fake CLI on PATH.
 
-const TOOLBAR_CHEVRON = '[aria-label="Set Claude preset"]';
+const TOOLBAR_CHEVRON = '[aria-label="Start Claude with a preset"]';
 
 let ctx: AppContext;
 let agents: FakeAgents;

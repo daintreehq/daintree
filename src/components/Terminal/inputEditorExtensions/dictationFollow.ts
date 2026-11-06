@@ -37,7 +37,11 @@ export const dictationFollowField = StateField.define<DictationFollow>({
         next = IDLE;
         continue;
       }
-      const end = effect.value.end ?? (session === next.session ? next.end : null);
+      // A position taken in other text (a draft a send has since emptied)
+      // is ignored, as one left out is: kept, it breaks the next edit (#15716).
+      const given = effect.value.end;
+      const fits = given !== undefined && given >= 0 && given <= tr.newDoc.length;
+      const end = fits ? given : session === next.session ? next.end : null;
       if (session !== next.session || end !== next.end) next = { session, end };
     }
     return next;

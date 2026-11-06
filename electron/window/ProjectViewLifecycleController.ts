@@ -23,12 +23,12 @@ import {
   purgeMemoryWebContents,
   readJsHeapUsedBytes,
 } from "../utils/webContentsLifecycle.js";
-import { CHANNELS } from "../ipc/channels.js";
 import { logWarn } from "../utils/logger.js";
 import * as AgentStateCache from "./ProjectViewAgentStateCache.js";
 import { updateViewBounds } from "./ProjectViewFactory.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import { isDictationViewHeld } from "../services/voice/dictationViewHold.js";
+import { isCachedViewFlushPending, sendViewCached } from "../services/cachedViewFlush.js";
 import type { CachedViewPurgeSession, ViewEntry } from "./ProjectViewManagerTypes.js";
 
 // Cached-view memory purge cadence. The delay keeps the likely next-switch
@@ -107,13 +107,11 @@ export function deactivateEntry(
     // Tell the renderer it's being cached so it cancels any in-flight wake/
     // repaint rAFs and reveal backstops scheduled for the view it's leaving —
     // otherwise those fire against a now-occluded/frozen view, or survive to
-    // run stale work on the next reactivation. Sent before any freeze below so
-    // the renderer can still process it.
-    try {
-      current.view.webContents.send(CHANNELS.APP_VIEW_CACHED);
-    } catch {
-      // ignore — a destroyed/closing renderer has nothing to cancel
-    }
+    // run stale work on the next reactivation, and so it flushes unsaved
+    // edits. Sent before any freeze below so the renderer can still process
+    // it; a renderer with flush work registered holds off the freeze until
+    // that work settles (#15633).
+    sendViewCached(current.view.webContents);
     // Close live producer ports BEFORE the view can be frozen. Once hidden,
     // Chromium can freeze the renderer after ~5 min or under memory pressure,
     // and the efficiency freeze below can land immediately; any messages
@@ -150,31 +148,28 @@ export function deactivateEntry(
       // Renderer may have torn down between the isDestroyed check and this call
     }
 
-    // Trigger V8 GC during idle callbacks so the call doesn't synchronously
-    // block the renderer. The timeout (1s) guarantees it runs even under
-    // background throttling.
     const capturedProjectId = current.projectId;
-    const { view, webContents: vc } = { view: current.view, webContents: current.view.webContents };
-    const liveEntry = host.views.get(capturedProjectId);
-    if (liveEntry && liveEntry.view === view && liveEntry.state === "cached" && !vc.isDestroyed()) {
-      vc.executeJavaScript(
-        "requestIdleCallback(() => { if (window.gc) window.gc(); }, { timeout: 1000 })"
-      ).catch(() => {});
-    }
+    const vc = current.view.webContents;
 
-    // Freeze AFTER GC scheduling — Page.setWebLifecycleState suspends the
-    // renderer event loop, so the requestIdleCallback above would never run
-    // if we froze first (lesson #4684). Skip the freeze for a project with a
-    // live agent: a frozen renderer can't apply queued agent:state-changed
-    // events, stranding the background dashboard on a stale state (mirrors
-    // the freezeAllCached guard). A live MCP session binding earns the same
-    // skip for the same reason — a frozen renderer can't answer the dispatch
-    // IPC either, and this is the path that would freeze a bound workspace the
-    // moment the user switches away from it (#11790).
+    // The renderer schedules its own idle-time collection when it handles
+    // APP_VIEW_CACHED (preload), sent above, ahead of the freeze below (lesson
+    // #4684). It lives there rather than in a script injected from here because
+    // only the renderer can drop it the moment a freeze lands; an injected one
+    // ran on the thaw that activation causes, in the view the user had just
+    // returned to (#15680).
+    //
+    // Skip the freeze for a project with a live agent, here or on its host: a
+    // frozen renderer can't apply queued agent:state-changed events, stranding
+    // the background dashboard on a stale state (mirrors the freezeAllCached
+    // guard), and a host keeps streaming its agents' output into it (#15879). A live
+    // MCP session binding earns the same skip for the same reason — a frozen
+    // renderer can't answer the dispatch IPC either, and this is the path that
+    // would freeze a bound workspace the moment the user switches away from it
+    // (#11790).
     if (
       host.efficiencyFreezeEnabled &&
       !vc.isDestroyed() &&
-      !AgentStateCache.hasActiveAgent(host, capturedProjectId)
+      !AgentStateCache.viewHasActiveAgent(host, capturedProjectId, current)
     ) {
       const mcp = host.mcpActivityFor(capturedProjectId, vc);
       // A host's live assistant runs its tool calls through this view (#13392).
@@ -182,12 +177,16 @@ export function deactivateEntry(
       // A dictation started here still captures its audio in this renderer,
       // and its cleanup writes into its draft (#14773).
       const dictating = isDictationViewHeld(vc);
+      // A flush the cached edge just started runs sequential IPC a freeze would
+      // cut short; the manager freezes the view once it settles (#15633).
+      const flushing = isCachedViewFlushPending(vc);
       if (
         !mcp.liveBinding &&
         !mcp.dispatchLease &&
         !mcp.unknown &&
         !remoteAssistant &&
-        !dictating
+        !dictating &&
+        !flushing
       ) {
         void freezeWebContents(vc);
       }
@@ -198,11 +197,11 @@ export function deactivateEntry(
 }
 
 /**
- * Delayed + periodic V8 garbage collection for a cached view. The
- * renderer-side `requestIdleCallback(gc)` above is best-effort and never runs
- * once the view is frozen; this is the guaranteed main-side counterpart (works
- * frozen too). It reclaims the renderer's JS heap only — Blink's
- * discardable caches are not in reach from main (see the invariants on
+ * Delayed + periodic V8 garbage collection for a cached view. The renderer's
+ * own idle-time collection on the cached edge (preload) is best-effort and is
+ * dropped once the view is frozen; this is the guaranteed main-side
+ * counterpart (works frozen too). It reclaims the renderer's JS heap only —
+ * Blink's discardable caches are not in reach from main (see the invariants on
  * `purgeMemoryWebContents`). Collecting does not stop timers, ports, or
  * agent output processing, so it is safe for cached views with live agents.
  *

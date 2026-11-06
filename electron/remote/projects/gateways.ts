@@ -150,7 +150,10 @@ export class LocalHostGateway implements HostGateway {
   async assistantAccess(): Promise<boolean> {
     return true;
   }
-  checkOut(payload: CheckOutBranchPayload) {
+  async checkOut(payload: CheckOutBranchPayload) {
+    const { peekDriveLeaseService } = await import("../../services/DriveLeaseService.js");
+    // Checking a branch out changes the project's saved active worktree.
+    peekDriveLeaseService()?.noteSessionChange(payload.projectId, null);
     return this.service.checkOut(payload);
   }
   async createBundle(projectId: string) {
@@ -237,7 +240,8 @@ export class RemoteHostGateway implements HostGateway {
     const onAbort = () => {
       if (opId === undefined) return;
       void this.session()
-        .then((session) => session.call(ProjectLinkMethod.PUSH_CANCEL, { opId }))
+        // No deadline: a cancel that settles unsent is dropped, and the push runs on.
+        .then((session) => session.call(ProjectLinkMethod.PUSH_CANCEL, { opId }, { timeoutMs: 0 }))
         .catch(() => {});
     };
     signal?.addEventListener("abort", onAbort, { once: true });

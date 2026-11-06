@@ -9,6 +9,7 @@ import {
   setProvenanceAccessors,
 } from "../GitLabAuth.js";
 import { resetLastRateLimitInfo } from "../GitLabClient.js";
+import { clearGitLabAssignmentHistory } from "../mutations.js";
 import { clearGitLabCaches, resolveAuthorAvatarImpl } from "../readOps.js";
 import { clearValidatedUserInfo } from "../GitLabAuth.js";
 
@@ -71,6 +72,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn());
   resetAuthStateForTests();
   clearGitLabCaches();
+  clearGitLabAssignmentHistory();
   resetLastRateLimitInfo();
   // No durable provenance record: a fresh install, where the first token
   // adopts the configured instance and that becomes its provenance.
@@ -988,6 +990,132 @@ describe("mutations", () => {
     );
   });
 
+  describe("merge pins (#15603)", () => {
+    const HEAD = "a".repeat(40);
+    const isMergeCall = (call: unknown[]) =>
+      requestUrl(call).endsWith("/merge_requests/5/merge") &&
+      (call[1] as RequestInit | undefined)?.method === "PUT";
+
+    it("re-reads the target before merging and pins the head it was given", async () => {
+      fetchMock()
+        .mockResolvedValueOnce(jsonResponse({ iid: 5, state: "opened", target_branch: "main" }))
+        .mockResolvedValueOnce(jsonResponse({ iid: 5, state: "merged", merge_commit_sha: "mc1" }));
+      const result = await gitlabForgeProvider.mergePR(REPO, 5, {
+        expectedHeadSha: HEAD,
+        expectedBaseRef: "main",
+      });
+      const calls = fetchMock().mock.calls;
+      expect(calls).toHaveLength(2);
+      expect(requestUrl(calls[0])).toMatch(/\/merge_requests\/5$/);
+      expect(isMergeCall(calls[1])).toBe(true);
+      expect(requestBody(calls[1]).sha).toBe(HEAD);
+      expect(result).toMatchObject({ prNumber: 5, sha: "mc1", merged: true });
+    });
+
+    it("keeps reporting a queued merge as queued when its pins still hold", async () => {
+      fetchMock()
+        .mockResolvedValueOnce(jsonResponse({ iid: 5, state: "opened", target_branch: "main" }))
+        .mockResolvedValueOnce(jsonResponse({ iid: 5, state: "opened" }));
+      const result = await gitlabForgeProvider.mergePR(REPO, 5, {
+        expectedHeadSha: HEAD,
+        expectedBaseRef: "main",
+      });
+      expect(result.merged).toBe(false);
+      expect(result.message).toMatch(/queued/);
+    });
+
+    it("sends no sha and reads nothing first for an unpinned merge", async () => {
+      fetchMock().mockResolvedValue(jsonResponse({ iid: 5, state: "merged" }));
+      await gitlabForgeProvider.mergePR(REPO, 5, { mergeMethod: "squash" });
+      const calls = fetchMock().mock.calls;
+      expect(calls).toHaveLength(1);
+      expect(isMergeCall(calls[0])).toBe(true);
+      expect(requestBody(calls[0])).not.toHaveProperty("sha");
+    });
+
+    it("pins the head alone without a read when no base was given", async () => {
+      fetchMock().mockResolvedValue(jsonResponse({ iid: 5, state: "merged" }));
+      await gitlabForgeProvider.mergePR(REPO, 5, { expectedHeadSha: HEAD });
+      const calls = fetchMock().mock.calls;
+      expect(calls).toHaveLength(1);
+      expect(requestBody(calls[0]).sha).toBe(HEAD);
+    });
+
+    it("refuses a retargeted MR before anything merges", async () => {
+      fetchMock().mockResolvedValueOnce(
+        jsonResponse({ iid: 5, state: "opened", target_branch: "release" })
+      );
+      await expect(
+        gitlabForgeProvider.mergePR(REPO, 5, { expectedHeadSha: HEAD, expectedBaseRef: "main" })
+      ).rejects.toThrow("Merge request !5 no longer targets main");
+      expect(fetchMock().mock.calls.some(isMergeCall)).toBe(false);
+    });
+
+    it("fails rather than drops a base pin the read can't confirm", async () => {
+      fetchMock().mockResolvedValueOnce(jsonResponse({ iid: 5, state: "opened" }));
+      await expect(
+        gitlabForgeProvider.mergePR(REPO, 5, { expectedBaseRef: "main" })
+      ).rejects.toThrow(/didn't report which branch merge request !5 targets/);
+      expect(fetchMock().mock.calls.some(isMergeCall)).toBe(false);
+    });
+
+    it("names a moved head when GitLab refuses the pinned sha", async () => {
+      fetchMock().mockResolvedValue(
+        jsonResponse({ message: "SHA does not match HEAD of source branch" }, { status: 409 })
+      );
+      await expect(gitlabForgeProvider.mergePR(REPO, 5, { expectedHeadSha: HEAD })).rejects.toThrow(
+        "Merge request !5 has new commits since you reviewed it"
+      );
+    });
+
+    // Only a pinned merge can have its head move under it; an unpinned 409
+    // is something else and keeps GitLab's own words.
+    it("leaves an unpinned 409 as GitLab said it", async () => {
+      fetchMock().mockResolvedValue(jsonResponse({ message: "Merge conflict" }, { status: 409 }));
+      await expect(gitlabForgeProvider.mergePR(REPO, 5)).rejects.toThrow("Merge conflict");
+    });
+
+    it("never reads a 409 on the target re-read as a moved head", async () => {
+      fetchMock().mockResolvedValueOnce(
+        jsonResponse({ message: "Resource lock" }, { status: 409 })
+      );
+      const attempt = gitlabForgeProvider.mergePR(REPO, 5, {
+        expectedHeadSha: HEAD,
+        expectedBaseRef: "main",
+      });
+      await expect(attempt).rejects.toThrow("Resource lock");
+      await expect(attempt).rejects.not.toThrow(/new commits/);
+      expect(fetchMock().mock.calls.some(isMergeCall)).toBe(false);
+    });
+
+    it("explains an instance that requires a pinned head", async () => {
+      fetchMock().mockResolvedValue(
+        jsonResponse({ message: "SHA must be provided when merging" }, { status: 400 })
+      );
+      await expect(gitlabForgeProvider.mergePR(REPO, 5)).rejects.toThrow(
+        /only merges a merge request pinned to its reviewed head commit/
+      );
+    });
+
+    it("leaves an unrelated 400 as GitLab said it", async () => {
+      fetchMock().mockResolvedValue(
+        jsonResponse({ message: "Branch cannot be merged" }, { status: 400 })
+      );
+      await expect(gitlabForgeProvider.mergePR(REPO, 5)).rejects.toThrow("Branch cannot be merged");
+    });
+  });
+
+  // The MR reads carry none of what the host's merge confirm previews, so the
+  // provider says so instead of leaving the Review Hub to retry forever.
+  it("declares that it supplies no merge preview", async () => {
+    fetchMock().mockResolvedValue(
+      jsonResponse({ id: 1, default_branch: "main", visibility: "private", archived: false })
+    );
+    const metadata = await gitlabForgeProvider.getRepoMetadata(REPO);
+    expect(metadata.mergePreviewSupported).toBe(false);
+    expect(metadata.mergeSettings).toBeUndefined();
+  });
+
   it("converts to draft by prefixing the title", async () => {
     fetchMock()
       .mockResolvedValueOnce(jsonResponse({ iid: 6, title: "Feature", state: "opened" }))
@@ -1188,6 +1316,253 @@ describe("mutations", () => {
     expect(comment.url).toBe("https://gitlab.com/group/project/-/merge_requests/6#note_502");
     expect(comment.body).toBe("LGTM");
     expect(fetchMock()).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("assignment undo", () => {
+  const ADA = { id: 3, username: "ada" };
+  const FIXER = { id: 77, username: "fixer" };
+  const BOB = { id: 5, username: "bob" };
+  const USERS = [ADA, FIXER, BOB];
+
+  /**
+   * A stateful issue #9. `multiAssignee: false` mirrors GitLab Free's
+   * `filter_assignees_using_checks`, which keeps only the first id; `[0]`
+   * clears the list on every tier. `landNext` overrides what the next write
+   * lands, `idless` appends rows GitLab returned without an id, `renamed`
+   * serves a user under a new login, and `failNextPut` answers the next write
+   * with a 500.
+   */
+  function assigneeServer(options: { multiAssignee: boolean; initial: number[] }) {
+    const server = {
+      ids: [...options.initial],
+      puts: [] as number[][],
+      landNext: null as number[] | null,
+      idless: [] as string[],
+      renamed: {} as Record<number, string>,
+      failNextPut: false,
+    };
+    const issue = () => ({
+      iid: 9,
+      state: "opened",
+      assignees: [
+        ...server.ids.map((id) => {
+          const user = USERS.find((u) => u.id === id);
+          return user && { ...user, username: server.renamed[id] ?? user.username };
+        }),
+        ...server.idless.map((username) => ({ username })),
+      ],
+    });
+    fetchMock().mockImplementation(async (input: unknown, init?: RequestInit) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/users")) {
+        return jsonResponse(USERS.filter((u) => u.username === url.searchParams.get("username")));
+      }
+      if (url.pathname.endsWith("/issues/9")) {
+        if (init?.method === "PUT") {
+          if (server.failNextPut) {
+            server.failNextPut = false;
+            return jsonResponse({ message: "500 Internal Server Error" }, { status: 500 });
+          }
+          const requested = requestBody([input, init]).assignee_ids as number[];
+          server.puts.push(requested);
+          const next = requested.filter((id) => id !== 0);
+          server.ids = server.landNext ?? (options.multiAssignee ? next : next.slice(0, 1));
+          server.landNext = null;
+        }
+        return jsonResponse(issue());
+      }
+      throw new Error(`unexpected request ${url.pathname}`);
+    });
+    return server;
+  }
+
+  it.each([ADA, BOB])(
+    "hands a single-assignee issue back to $username, whom it displaced",
+    async (holder) => {
+      const server = assigneeServer({ multiAssignee: false, initial: [holder.id] });
+
+      const assigned = await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+      expect(assigned.map((u) => u.login)).toEqual(["fixer"]);
+
+      const undone = await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+      expect(undone.map((u) => u.login)).toEqual([holder.username]);
+      expect(server.ids).toEqual([holder.id]);
+      expect(server.puts.at(-1)).toEqual([holder.id]);
+    }
+  );
+
+  it("keeps whoever else the write landed alongside the restored assignee", async () => {
+    const server = assigneeServer({ multiAssignee: true, initial: [ADA.id] });
+    server.landNext = [FIXER.id, BOB.id];
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+
+    const undone = await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(server.puts.at(-1)).toEqual([ADA.id, BOB.id]);
+    expect(undone.map((u) => u.login)).toEqual(["ada", "bob"]);
+  });
+
+  it("removes only the viewer on a multi-assignee server", async () => {
+    const server = assigneeServer({ multiAssignee: true, initial: [ADA.id] });
+
+    const assigned = await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    expect(assigned.map((u) => u.login)).toEqual(["fixer", "ada"]);
+
+    const undone = await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(undone.map((u) => u.login)).toEqual(["ada"]);
+    expect(server.ids).toEqual([ADA.id]);
+  });
+
+  it("keeps assignees added after the assignment on a multi-assignee server", async () => {
+    const server = assigneeServer({ multiAssignee: true, initial: [ADA.id] });
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    server.ids = [...server.ids, BOB.id];
+
+    const undone = await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(undone.map((u) => u.login)).toEqual(["ada", "bob"]);
+  });
+
+  it("leaves the issue alone when someone else took it after the assignment", async () => {
+    const server = assigneeServer({ multiAssignee: false, initial: [ADA.id] });
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    server.ids = [BOB.id];
+    const putsBefore = server.puts.length;
+
+    const undone = await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(undone.map((u) => u.login)).toEqual(["bob"]);
+    expect(server.puts).toHaveLength(putsBefore);
+  });
+
+  it("leaves the issue alone when the viewer was removed after the assignment", async () => {
+    const server = assigneeServer({ multiAssignee: false, initial: [ADA.id] });
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    server.ids = [];
+    const putsBefore = server.puts.length;
+
+    const undone = await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(undone).toEqual([]);
+    expect(server.puts).toHaveLength(putsBefore);
+  });
+
+  // Unreachable on a real Free project, but any change to the list since the
+  // write means the displacement no longer describes it.
+  it("leaves the issue alone when the list changed but still holds the viewer", async () => {
+    const server = assigneeServer({ multiAssignee: false, initial: [ADA.id] });
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    server.ids = [FIXER.id, BOB.id];
+    const putsBefore = server.puts.length;
+
+    const undone = await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(undone.map((u) => u.login)).toEqual(["fixer", "bob"]);
+    expect(server.puts).toHaveLength(putsBefore);
+
+    // That Undo spent the record, so asking again is a plain removal.
+    await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(server.ids).toEqual([BOB.id]);
+  });
+
+  it("leaves the issue alone when a row without an id appeared since the assignment", async () => {
+    const server = assigneeServer({ multiAssignee: false, initial: [ADA.id] });
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    server.idless = ["no-id"];
+    const putsBefore = server.puts.length;
+
+    const undone = await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(undone.map((u) => u.login)).toEqual(["fixer", "no-id"]);
+    expect(server.puts).toHaveLength(putsBefore);
+  });
+
+  it("records nothing when the write's answer can't be compared whole", async () => {
+    const server = assigneeServer({ multiAssignee: false, initial: [ADA.id] });
+    server.idless = ["no-id"];
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    server.idless = [];
+
+    await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(server.puts.at(-1)).toEqual([0]);
+  });
+
+  it("records nothing when the server landed someone other than the assignee", async () => {
+    const server = assigneeServer({ multiAssignee: false, initial: [ADA.id] });
+    server.landNext = [BOB.id];
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    server.ids = [FIXER.id];
+
+    await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(server.puts.at(-1)).toEqual([0]);
+  });
+
+  it("does not restore an assignee displaced before the issue was cleared and taken again", async () => {
+    const server = assigneeServer({ multiAssignee: false, initial: [ADA.id] });
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    server.ids = [];
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+
+    await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(server.puts.at(-1)).toEqual([0]);
+    expect(server.ids).toEqual([]);
+  });
+
+  it("keeps the record through an unassign of someone who isn't assigned", async () => {
+    const server = assigneeServer({ multiAssignee: false, initial: [ADA.id] });
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    await gitlabForgeProvider.unassignIssue(REPO, 9, "bob");
+
+    await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(server.ids).toEqual([ADA.id]);
+  });
+
+  it("restores for the same user after a rename of their login", async () => {
+    const server = assigneeServer({ multiAssignee: false, initial: [ADA.id] });
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    server.renamed = { [FIXER.id]: "fixer-renamed" };
+
+    await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer-renamed");
+    expect(server.ids).toEqual([ADA.id]);
+  });
+
+  it("keeps the record for a retry when the Undo write fails", async () => {
+    const server = assigneeServer({ multiAssignee: false, initial: [ADA.id] });
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    server.failNextPut = true;
+    await expect(gitlabForgeProvider.unassignIssue(REPO, 9, "fixer")).rejects.toThrow();
+    expect(server.ids).toEqual([FIXER.id]);
+
+    await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(server.ids).toEqual([ADA.id]);
+  });
+
+  it("still restores after a repeated assign that found the viewer already there", async () => {
+    const server = assigneeServer({ multiAssignee: false, initial: [ADA.id] });
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    expect(server.puts).toHaveLength(1);
+
+    await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(server.ids).toEqual([ADA.id]);
+  });
+
+  it("spends the record on the Undo that uses it", async () => {
+    const server = assigneeServer({ multiAssignee: false, initial: [ADA.id] });
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(server.ids).toEqual([ADA.id]);
+
+    // Someone hands the issue straight back: a later unassign is a plain
+    // removal, not a second restoration of Ada.
+    server.ids = [FIXER.id];
+    await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(server.puts.at(-1)).toEqual([0]);
+    expect(server.ids).toEqual([]);
+  });
+
+  it("forgets what was displaced once the credential changes", async () => {
+    const server = assigneeServer({ multiAssignee: false, initial: [ADA.id] });
+    await gitlabForgeProvider.assignIssue(REPO, 9, "fixer");
+    gitlabForgeProvider.setCredentials?.({ kind: "bearer", value: "glpat-other" });
+
+    await gitlabForgeProvider.unassignIssue(REPO, 9, "fixer");
+    expect(server.puts.at(-1)).toEqual([0]);
   });
 });
 

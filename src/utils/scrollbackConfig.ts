@@ -96,17 +96,3 @@ export function estimateMemoryUsage(
   const plainBytes = bytesForScrollbackLines(linesPerTerminal.plain) * terminalCounts.plain;
   return { agent: agentBytes, plain: plainBytes, total: agentBytes + plainBytes };
 }
-
-/**
- * Get scrollback limit summary given base setting. Returns the limit that
- * will be used for an agent or plain terminal along with a display label.
- */
-export function getScrollbackSummary(
-  isAgent: boolean,
-  baseScrollback: number
-): { limit: number; label: string } {
-  return {
-    limit: getScrollbackForType(isAgent, baseScrollback),
-    label: isAgent ? "Agent" : "Terminal",
-  };
-}

@@ -67,6 +67,23 @@ export interface DetectionResult {
 export type DetectionCallback = (result: DetectionResult, spawnedAt: number) => void;
 
 /**
+ * The census process behind the committed agent identity. `command` is the
+ * full command line, so it stays inside the pty-host: never logged, never
+ * forwarded.
+ */
+export interface AgentProcessObservation {
+  agentType: BuiltInAgentId;
+  command: string;
+  /** The process itself, so a row a run left in the census isn't read as its successor's. */
+  pid?: number;
+}
+
+export type AgentProcessObserver = (
+  observation: AgentProcessObservation,
+  spawnedAt: number
+) => void;
+
+/**
  * One detection pass: the public result plus the tree candidate that actually
  * supports it. The candidate rides alongside rather than inside
  * `DetectionResult` because that type crosses to the renderer, and it is

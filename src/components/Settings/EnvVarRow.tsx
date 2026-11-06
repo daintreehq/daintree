@@ -4,6 +4,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SettingsInlineError } from "@/components/Settings/SettingsGroup";
+import { isValidEnvKey } from "@shared/utils/envVars";
 
 /**
  * The editable `NAME = value` row shared by the global Environment page and the
@@ -19,12 +20,7 @@ export interface EnvVarDraft {
   value: string;
 }
 
-const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
-/** A name a POSIX shell can export. */
-export function isValidEnvKey(key: string): boolean {
-  return ENV_KEY_PATTERN.test(key);
-}
+export { isValidEnvKey };
 
 export const ENV_KEY_INVALID_MESSAGE =
   "Start with a letter or underscore, then use only letters, digits and underscores";
@@ -95,6 +91,8 @@ export function EnvVarRow({
 }: EnvVarRowProps) {
   const errorId = `${row.id}-error`;
   const name = row.key.trim();
+  // The row number keeps two rows holding the same name distinguishable.
+  const valueLabel = name ? `Value of ${name} (row ${position})` : `Value of variable ${position}`;
   return (
     // The id is what a close blocked on this row's error lands on.
     <div id={row.id} className="px-4 py-2.5" data-env-row="">
@@ -113,7 +111,7 @@ export function EnvVarRow({
             aria-describedby={error ? errorId : undefined}
             className={cn("font-mono", storageBadge && "pr-8")}
             placeholder="VARIABLE_NAME"
-            aria-label="Environment variable name"
+            aria-label={`Name of variable ${position}`}
           />
           {storageBadge && (
             <span className="absolute right-2.5 top-1/2 -translate-y-1/2 flex">{storageBadge}</span>
@@ -133,7 +131,7 @@ export function EnvVarRow({
             autoComplete={sensitive ? "new-password" : "off"}
             className={cn("font-mono", sensitive && "pr-9")}
             placeholder={valuePlaceholder}
-            aria-label="Environment variable value"
+            aria-label={valueLabel}
             aria-describedby={error ? errorId : undefined}
           />
           {sensitive && (

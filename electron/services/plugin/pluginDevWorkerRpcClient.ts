@@ -336,7 +336,14 @@ export class PluginDevWorkerRpcClient implements PluginDevWorkerRpc {
 
   notify(method: PluginHostNotifyMethod, params: unknown, registrationKey?: string): void {
     if (this.isDisposed) return;
-    this.postMessage({ type: "host-notify", method, params, registrationKey });
+    const invocationId = this.invocation.getStore();
+    this.postMessage({
+      type: "host-notify",
+      method,
+      params,
+      registrationKey,
+      ...(invocationId !== undefined ? { invocationId } : {}),
+    });
   }
 
   subscribe(

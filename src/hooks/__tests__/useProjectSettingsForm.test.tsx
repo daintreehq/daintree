@@ -5,6 +5,7 @@ import type { ProjectSettings } from "@/types";
 
 const {
   mockSettings,
+  mockStoredSettings,
   mockSaveSettings,
   mockUpdateProject,
   mockEnableInRepoSettings,
@@ -14,6 +15,8 @@ const {
   mockRefresh,
 } = vi.hoisted(() => ({
   mockSettings: { value: null as ProjectSettings | null },
+  // What main holds; null means it matches the cache.
+  mockStoredSettings: { value: null as ProjectSettings | null },
   mockSaveSettings: vi.fn().mockResolvedValue(undefined),
   mockRefresh: vi.fn().mockResolvedValue(undefined),
   mockUpdateProject: vi.fn().mockResolvedValue(undefined),
@@ -43,6 +46,12 @@ vi.mock("@/hooks/useProjectSettings", () => ({
   }),
 }));
 
+vi.mock("@/clients", () => ({
+  projectClient: {
+    getSettings: vi.fn(async () => mockStoredSettings.value ?? mockSettings.value),
+  },
+}));
+
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: (selector?: (state: Record<string, unknown>) => unknown) => {
     const state = {
@@ -67,6 +76,7 @@ vi.mock("@/store/recipeStore", () => ({
 }));
 
 import { useProjectSettingsForm } from "../useProjectSettingsForm";
+import { projectClient } from "@/clients";
 
 const baseSettings: ProjectSettings = {
   runCommands: [{ id: "rc-1", name: "Dev", command: "npm run dev" }],
@@ -76,7 +86,6 @@ const baseSettings: ProjectSettings = {
   defaultWorktreeRecipeId: undefined,
   devServerCommand: "npm run dev",
   devServerLoadTimeout: 5000,
-  commandOverrides: [],
   copyTreeSettings: {},
   branchPrefixMode: "username",
   branchPrefixCustom: "gpriday",
@@ -88,6 +97,10 @@ const baseSettings: ProjectSettings = {
 
 function resetMocks() {
   mockSettings.value = null;
+  mockStoredSettings.value = null;
+  mockSaveSettings.mockResolvedValue(undefined);
+  mockUpdateProject.mockResolvedValue(undefined);
+  mockRefresh.mockResolvedValue(undefined);
   mockIsLoading.value = false;
   mockProjects.value = [
     { id: "proj-1", name: "Test Project", emoji: "🌲", color: undefined, path: "/test" },
@@ -117,6 +130,16 @@ function renderOpenForm(projectId = "proj-1") {
   mockSettings.value = baseSettings;
   hook.rerender({ isOpen: true, tick: 2, projectId });
 
+  return hook;
+}
+
+// Opened and seeded, with the open read settled. Needs fake timers installed.
+async function renderSeededForm() {
+  const hook = renderOpenForm();
+  await act(async () => {
+    await vi.runAllTimersAsync();
+  });
+  expect(hook.result.current.projectIsInitialized).toBe(true);
   return hook;
 }
 
@@ -192,7 +215,7 @@ describe("useProjectSettingsForm", () => {
     expect(result.current.projectIsInitialized).toBe(true);
 
     act(() => {
-      result.current.setProjectName("Renamed Project");
+      result.current.setDevServerCommand("npm start");
     });
 
     expect(mockSaveSettings).not.toHaveBeenCalled();
@@ -240,7 +263,7 @@ describe("useProjectSettingsForm", () => {
     });
 
     act(() => {
-      result.current.setProjectName("Flushed Name");
+      result.current.setDevServerCommand("npm run flushed");
     });
 
     expect(mockSaveSettings).not.toHaveBeenCalled();
@@ -309,7 +332,7 @@ describe("useProjectSettingsForm", () => {
     vi.useRealTimers();
   });
 
-  it("a later form save carries the preference the cache holds, not the one it opened with", async () => {
+  it("a later form save carries the preference main stores, not the one it opened with", async () => {
     vi.useFakeTimers();
     const { result, rerender } = renderHook(
       ({ isOpen }: { isOpen: boolean; tick: number }) =>
@@ -324,10 +347,10 @@ describe("useProjectSettingsForm", () => {
     });
     expect(result.current.projectIsInitialized).toBe(true);
 
-    // Another tab saved a new editor and wrote through to the cache. The form
-    // spreads the cache on every save, so it must pick up the new value —
-    // this is what patchCachedProjectSettings exists to make true (#12326).
-    mockSettings.value = { ...baseSettings, preferredEditor: { id: "zed" } };
+    // Another tab saved a new editor. The form writes only what it edited over
+    // the settings as stored, so the new value survives whether or not the
+    // cache heard about it (#12326, #15573).
+    mockStoredSettings.value = { ...baseSettings, preferredEditor: { id: "zed" } };
     rerender({ isOpen: true, tick: 3 });
 
     vi.clearAllMocks();
@@ -373,6 +396,8 @@ describe("useProjectSettingsForm", () => {
       emoji: "🌲",
       color: undefined,
     });
+    // The name lives on the project, not in its settings.
+    expect(mockSaveSettings).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
 
@@ -430,6 +455,227 @@ describe("useProjectSettingsForm", () => {
     vi.useRealTimers();
   });
 
+  it("flush() resolves with the failure and keeps the draft for the next close", async () => {
+    vi.useFakeTimers();
+    const { result } = await renderSeededForm();
+    mockSaveSettings.mockRejectedValue(new Error("Disk full"));
+    act(() => {
+      result.current.setDevServerCommand("npm run edited");
+    });
+
+    let outcome: Awaited<ReturnType<typeof result.current.flush>>;
+    await act(async () => {
+      outcome = await result.current.flush();
+    });
+    expect(outcome).toEqual({ message: "Disk full" });
+    expect(result.current.projectAutoSaveError).toBe("Disk full");
+    expect(result.current.devServerCommand).toBe("npm run edited");
+
+    // The failed write left the baseline alone, so the next close tries again.
+    mockSaveSettings.mockResolvedValue(undefined);
+    await act(async () => {
+      outcome = await result.current.flush();
+    });
+    expect(outcome).toBeUndefined();
+    expect(result.current.projectAutoSaveError).toBeNull();
+    expect(mockSaveSettings).toHaveBeenLastCalledWith(
+      expect.objectContaining({ devServerCommand: "npm run edited" })
+    );
+
+    mockSaveSettings.mockClear();
+    await act(async () => {
+      outcome = await result.current.flush();
+    });
+    expect(outcome).toBeUndefined();
+    expect(mockSaveSettings).not.toHaveBeenCalled();
+  });
+
+  it("saveNow() resolves with the failure instead of rejecting", async () => {
+    vi.useFakeTimers();
+    const { result } = await renderSeededForm();
+    mockSaveSettings.mockRejectedValue(new Error("Read-only checkout"));
+
+    let outcome: Awaited<ReturnType<typeof result.current.saveNow>>;
+    await act(async () => {
+      outcome = await result.current.saveNow();
+    });
+    expect(outcome).toEqual({ message: "Read-only checkout" });
+    expect(result.current.projectAutoSaveError).toBe("Read-only checkout");
+  });
+
+  it("a failed identity update is a failure too", async () => {
+    vi.useFakeTimers();
+    const { result } = await renderSeededForm();
+    mockUpdateProject.mockRejectedValue(new Error("Couldn't rename"));
+    act(() => {
+      result.current.setProjectName("Renamed");
+    });
+
+    let outcome: Awaited<ReturnType<typeof result.current.flush>>;
+    await act(async () => {
+      outcome = await result.current.flush();
+    });
+    expect(outcome).toEqual({ message: "Couldn't rename" });
+    expect(result.current.projectName).toBe("Renamed");
+  });
+
+  it("discardUnsavedChanges() reseeds from main, so a close has nothing to write", async () => {
+    vi.useFakeTimers();
+    const { result } = await renderSeededForm();
+    mockSaveSettings.mockRejectedValue(new Error("Disk full"));
+    act(() => {
+      result.current.setDevServerCommand("npm run edited");
+    });
+    await act(async () => {
+      await result.current.flush();
+    });
+    expect(result.current.projectAutoSaveError).toBe("Disk full");
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+
+    // Another edit arms the autosave, which the discard must not let fire.
+    act(() => {
+      result.current.setDevServerCommand("npm run edited again");
+    });
+    mockSaveSettings.mockClear();
+    mockSettings.value = { ...baseSettings, devServerCommand: "npm run stored-elsewhere" };
+    act(() => {
+      result.current.discardUnsavedChanges();
+    });
+    expect(result.current.projectAutoSaveError).toBeNull();
+    await act(async () => {
+      await vi.runAllTimersAsync();
+    });
+
+    expect(mockRefresh).toHaveBeenCalledTimes(2);
+    expect(result.current.projectIsInitialized).toBe(true);
+    expect(result.current.devServerCommand).toBe("npm run stored-elsewhere");
+    expect(mockSaveSettings).not.toHaveBeenCalled();
+    let outcome: Awaited<ReturnType<typeof result.current.flush>>;
+    await act(async () => {
+      outcome = await result.current.flush();
+    });
+    expect(outcome).toBeUndefined();
+    expect(mockSaveSettings).not.toHaveBeenCalled();
+  });
+
+  it("a close under way when the edit is discarded neither writes it nor brings its error back", async () => {
+    vi.useFakeTimers();
+    const { result } = await renderSeededForm();
+    let rejectSave!: (err: Error) => void;
+    mockSaveSettings.mockImplementationOnce(
+      () => new Promise<void>((_, reject) => (rejectSave = reject))
+    );
+    act(() => {
+      result.current.setDevServerCommand("npm run edited");
+    });
+    // A close in progress holds the flush it started with.
+    const closingFlush = result.current.flush;
+    let outcome: Awaited<ReturnType<typeof closingFlush>> | "pending" = "pending";
+    let closing!: Promise<void>;
+    act(() => {
+      closing = closingFlush().then((settled) => {
+        outcome = settled;
+      });
+    });
+    await vi.waitFor(() => {
+      expect(mockSaveSettings).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      result.current.discardUnsavedChanges();
+    });
+    await act(async () => {
+      rejectSave(new Error("Disk full"));
+      await closing;
+    });
+
+    expect(outcome).toBeUndefined();
+    expect(result.current.projectAutoSaveError).toBeNull();
+    expect(mockSaveSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("a save still reading when the edit is discarded doesn't go on to write it", async () => {
+    vi.useFakeTimers();
+    const { result } = await renderSeededForm();
+    let finishRead!: () => void;
+    vi.mocked(projectClient.getSettings).mockImplementationOnce(
+      () => new Promise((resolve) => (finishRead = () => resolve(baseSettings)))
+    );
+
+    let saving!: Promise<unknown>;
+    act(() => {
+      saving = result.current.saveNow();
+    });
+    await vi.waitFor(() => {
+      expect(projectClient.getSettings).toHaveBeenCalled();
+    });
+    act(() => {
+      result.current.discardUnsavedChanges();
+    });
+    await act(async () => {
+      finishRead();
+      await saving;
+    });
+
+    expect(mockSaveSettings).not.toHaveBeenCalled();
+  });
+
+  it("a discarded save that fails after Settings closes leaves no error for the next open", async () => {
+    vi.useFakeTimers();
+    const hook = await renderSeededForm();
+    let rejectSave!: (err: Error) => void;
+    mockSaveSettings.mockImplementationOnce(
+      () => new Promise<void>((_, reject) => (rejectSave = reject))
+    );
+    let saving!: Promise<unknown>;
+    act(() => {
+      saving = hook.result.current.saveNow();
+    });
+    await vi.waitFor(() => {
+      expect(mockSaveSettings).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      hook.result.current.discardUnsavedChanges();
+    });
+    hook.rerender({ isOpen: false, tick: 3, projectId: "proj-1" });
+    await act(async () => {
+      rejectSave(new Error("Disk full"));
+      await saving;
+    });
+
+    expect(hook.result.current.projectAutoSaveError).toBeNull();
+  });
+
+  it("a save queued behind one still running is discarded with it", async () => {
+    vi.useFakeTimers();
+    const hook = await renderSeededForm();
+    let rejectSave!: (err: Error) => void;
+    mockSaveSettings.mockImplementationOnce(
+      () => new Promise<void>((_, reject) => (rejectSave = reject))
+    );
+    let saving!: Promise<unknown>;
+    act(() => {
+      // Retry pressed twice: the second waits for the first.
+      saving = Promise.all([hook.result.current.saveNow(), hook.result.current.saveNow()]);
+    });
+    await vi.waitFor(() => {
+      expect(mockSaveSettings).toHaveBeenCalledTimes(1);
+    });
+
+    act(() => {
+      hook.result.current.discardUnsavedChanges();
+    });
+    hook.rerender({ isOpen: false, tick: 3, projectId: "proj-1" });
+    await act(async () => {
+      rejectSave(new Error("Disk full"));
+      await saving;
+    });
+
+    expect(mockSaveSettings).toHaveBeenCalledTimes(1);
+    expect(hook.result.current.projectAutoSaveError).toBeNull();
+  });
+
   it("stays uninitialized while loading with no settings yet (backs the Doherty loader)", async () => {
     mockIsLoading.value = true;
     mockSettings.value = null;
@@ -442,6 +688,59 @@ describe("useProjectSettingsForm", () => {
     expect(result.current.projectIsLoading).toBe(true);
     expect(result.current.projectIsInitialized).toBe(false);
     expect(mockSaveSettings).not.toHaveBeenCalled();
+  });
+
+  it("seeds from the read made on open, not the settings cached before it", async () => {
+    let finishRefresh!: () => void;
+    mockRefresh.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (finishRefresh = resolve))
+    );
+    mockSettings.value = { ...baseSettings, devServerCommand: "cached before open" };
+    const { result, rerender } = renderHook(
+      ({ isOpen, projectId }: FormProps) => useProjectSettingsForm({ projectId, isOpen }),
+      { initialProps: { isOpen: false, tick: 0, projectId: "proj-1" } }
+    );
+    rerender({ isOpen: true, tick: 1, projectId: "proj-1" });
+    await act(async () => {});
+
+    expect(mockRefresh).toHaveBeenCalledTimes(1);
+    expect(result.current.projectIsInitialized).toBe(false);
+    // The store's own flag stays down through a revalidation.
+    expect(result.current.projectIsLoading).toBe(true);
+
+    mockSettings.value = baseSettings;
+    await act(async () => finishRefresh());
+
+    await waitFor(() => {
+      expect(result.current.projectIsInitialized).toBe(true);
+    });
+    expect(result.current.projectIsLoading).toBe(false);
+    expect(result.current.devServerCommand).toBe("npm run dev");
+  });
+
+  it("ignores the open read of a session that already closed", async () => {
+    const finishRefresh: Array<() => void> = [];
+    const deferred = () => new Promise<void>((resolve) => finishRefresh.push(resolve));
+    mockRefresh.mockImplementationOnce(deferred).mockImplementationOnce(deferred);
+    mockSettings.value = baseSettings;
+    const { result, rerender } = renderHook(
+      ({ isOpen, projectId }: FormProps) => useProjectSettingsForm({ projectId, isOpen }),
+      { initialProps: { isOpen: false, tick: 0, projectId: "proj-1" } }
+    );
+    rerender({ isOpen: true, tick: 1, projectId: "proj-1" });
+    await act(async () => {});
+    rerender({ isOpen: false, tick: 2, projectId: "proj-1" });
+    rerender({ isOpen: true, tick: 3, projectId: "proj-1" });
+    await act(async () => {});
+    expect(finishRefresh).toHaveLength(2);
+
+    await act(async () => finishRefresh[0]!());
+    expect(result.current.projectIsInitialized).toBe(false);
+
+    await act(async () => finishRefresh[1]!());
+    await waitFor(() => {
+      expect(result.current.projectIsInitialized).toBe(true);
+    });
   });
 
   it("initializes correctly when settings are already loaded at dialog open", async () => {

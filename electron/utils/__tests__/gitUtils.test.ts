@@ -16,6 +16,12 @@ vi.mock("child_process", () => ({
   execFile: execFileMock,
 }));
 
+// Executable discovery is separate from git resolution and must not use the
+// real filesystem while these tests stall fs calls or freeze timers.
+vi.mock("../windowsExecutable.js", () => ({
+  resolveExecutableForSpawn: vi.fn(async (name: string) => name),
+}));
+
 import {
   getGitBranch,
   getGitDir,
@@ -23,7 +29,6 @@ import {
   clearGitDirCache,
   clearGitCommonDirCache,
 } from "../gitUtils.js";
-import { executableForSpawn } from "../windowsExecutable.js";
 
 type ExecCallback = (error: Error | null, stdout: string, stderr: string) => void;
 
@@ -110,8 +115,7 @@ describe("getGitBranch", () => {
     await getGitBranch("/repo/path", { timeout: 1234 });
     expect(execFileMock).toHaveBeenCalledTimes(1);
     const [file, args, opts] = execFileMock.mock.calls[0];
-    // On Windows git is spawned by its absolute PATH location.
-    expect(file).toBe(executableForSpawn("git"));
+    expect(file).toBe("git");
     expect(args).toEqual(["rev-parse", "--abbrev-ref", "HEAD"]);
     expect(opts).toMatchObject({ cwd: "/repo/path", timeout: 1234 });
   });
@@ -270,6 +274,28 @@ describe("filesystem fast path (no subprocess)", () => {
 
     await expect(getGitCommonDir(wtRoot)).resolves.toBe(mainGitDir);
     expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the subprocess when the .git probe stalls, instead of caching the stall (#15645)", async () => {
+    vi.useFakeTimers();
+    const stat = vi.spyOn(fsPromises, "stat").mockImplementation(() => new Promise(() => {}));
+    try {
+      const gitDir = pathJoin(root, ".git");
+      mockGitOutput(`${gitDir}\n`);
+      let settled = false;
+      const resolving = getGitDir(root).finally(() => (settled = true));
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(settled).toBe(false);
+      expect(execFileMock).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+
+      await expect(resolving).resolves.toBe(gitDir);
+      expect(execFileMock).toHaveBeenCalledTimes(1);
+    } finally {
+      stat.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it("returns the git dir itself as common dir for a main worktree", async () => {

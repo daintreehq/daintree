@@ -8,7 +8,9 @@ type FocusPayload =
   | { intent: "focus-worktree"; worktreeId: string }
   | { intent: "open-assistant"; subject: Record<string, unknown> }
   | { intent: "restore-trashed"; runId: string; spawnedAt: number; expiresAt: number }
-  | { intent: "placement-note"; note: string };
+  | { intent: "placement-note"; note: string }
+  | { intent: "focus-scheduled-run"; runId: string; scheduleId: string; panelId: string | null }
+  | { intent: "open-schedules"; scheduleId: string | null };
 
 const onFocusOnActivateMock = vi.hoisted(() =>
   vi.fn<(cb: (payload: FocusPayload) => void) => () => void>()
@@ -52,6 +54,11 @@ const { landOnWorktreeMock, worktreeStore } = vi.hoisted(() => ({
 }));
 vi.mock("@/services/worktreeLanding", () => ({ landOnWorktree: landOnWorktreeMock }));
 vi.mock("@/hooks/useWorktreeStore", () => ({ useWorktreeStoreApi: () => worktreeStore }));
+
+const landOnScheduledRunMock = vi.hoisted(() =>
+  vi.fn(async (_target: unknown, _isSuperseded: () => boolean) => {})
+);
+vi.mock("@/services/scheduledRunLanding", () => ({ landOnScheduledRun: landOnScheduledRunMock }));
 
 import { useFocusOnActivateIntent } from "../useFocusOnActivateIntent";
 
@@ -138,6 +145,30 @@ describe("useFocusOnActivateIntent", () => {
       )
     );
     expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it("lands on a scheduled run once hydrated, until a newer destination comes (#15988)", () => {
+    const { rerender } = renderHook(({ loaded }) => useFocusOnActivateIntent(loaded), {
+      initialProps: { loaded: false },
+    });
+    act(() => {
+      lastCallback?.({
+        intent: "focus-scheduled-run",
+        runId: "run-1",
+        scheduleId: "schedule-1",
+        panelId: "terminal-1",
+      });
+    });
+    expect(landOnScheduledRunMock).not.toHaveBeenCalled();
+    rerender({ loaded: true });
+    expect(landOnScheduledRunMock).toHaveBeenCalledTimes(1);
+    const [landed, isSuperseded] = landOnScheduledRunMock.mock.calls[0] ?? [];
+    expect(landed).toEqual({ runId: "run-1", scheduleId: "schedule-1", panelId: "terminal-1" });
+    expect(isSuperseded?.()).toBe(false);
+    act(() => {
+      lastCallback?.({ intent: "focus-next-waiting" });
+    });
+    expect(isSuperseded?.()).toBe(true);
   });
 
   it("does NOT dispatch when intent arrives before hydration completes", () => {
@@ -403,6 +434,27 @@ describe("useFocusOnActivateIntent", () => {
     expect(landOnWorktreeMock).not.toHaveBeenCalled();
     rerender({ loaded: true });
     expect(notifyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the Schedules view at the schedule once hydrated (#15983)", async () => {
+    dispatchMock.mockResolvedValue({ ok: true });
+    const { rerender } = renderHook(({ loaded }) => useFocusOnActivateIntent(loaded), {
+      initialProps: { loaded: false },
+    });
+    act(() => {
+      lastCallback?.({ intent: "open-schedules", scheduleId: "schedule-1" });
+    });
+    expect(dispatchMock).not.toHaveBeenCalled();
+
+    rerender({ loaded: true });
+    expect(dispatchMock).toHaveBeenCalledExactlyOnceWith("schedules.open", {
+      scheduleId: "schedule-1",
+    });
+
+    act(() => {
+      lastCallback?.({ intent: "open-schedules", scheduleId: null });
+    });
+    expect(dispatchMock).toHaveBeenLastCalledWith("schedules.open", undefined);
   });
 
   it("drops a landing still waiting when a newer intent arrives or the view unmounts", () => {

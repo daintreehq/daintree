@@ -27,6 +27,7 @@ const samplePayload = {
   payload: { app: { version: "1.0" }, env: { node: "20" } },
   sectionKeys: ["app", "env"],
   previewJson: '{"app":{"version":"1.0"},"env":{"node":"20"}}',
+  collectedAtMs: 1_700_000_000_000,
 };
 
 function resetStore() {
@@ -142,7 +143,7 @@ describe("diagnosticsReviewStore", () => {
     expect(state.reviewPayload).toEqual(samplePayload);
   });
 
-  it("saveReview hits IPC and closes the dialog when the user picks a file", async () => {
+  it("saveReview hits IPC, bounded by when the review was collected, and closes the dialog", async () => {
     collectMock.mockResolvedValueOnce(samplePayload);
     saveMock.mockResolvedValueOnce(true);
     await useDiagnosticsReviewStore.getState().openReview();
@@ -156,6 +157,7 @@ describe("diagnosticsReviewStore", () => {
       enabledSections: { app: true, env: false },
       replacements: [{ find: "secret", replace: "[REDACTED]" }],
       timeWindowStartMs: undefined,
+      collectedAtMs: samplePayload.collectedAtMs,
     });
     const state = useDiagnosticsReviewStore.getState();
     expect(state.isOpen).toBe(false);

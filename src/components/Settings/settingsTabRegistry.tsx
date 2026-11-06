@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 import { lazyWithPreload } from "@/lib/lazyWithPreload";
 import {
   Blocks,
-  Command,
   FileCode,
   GitBranch,
   GitBranchPlus,
@@ -25,7 +24,9 @@ import {
   Server,
 } from "lucide-react";
 import {
+  CalendarClock,
   DaintreeIcon,
+  DecisionsIcon,
   FolderGit2,
   Plug,
   McpServerIcon,
@@ -49,6 +50,7 @@ import type {
 // Boot-path consumers import the ids/validators from settingsTabIds (no
 // component imports); re-export them so registry consumers are untouched.
 import { scopeForTab } from "./settingsTabIds";
+import { isSettingsTabAvailable } from "./settingsTabAvailability";
 
 export { isSettingsTab, scopeForTab } from "./settingsTabIds";
 export type { GlobalSettingsTab, ProjectSettingsTab, SettingsScope, SettingsTab };
@@ -67,6 +69,8 @@ export interface SettingsSectionMeta {
   readonly requiresEnabled?: {
     readonly settingId: string;
     readonly label: string;
+    /** A proper noun ("Decisions"), never lowercased mid-sentence. */
+    readonly keepCase?: boolean;
   };
   /** What this entry writes when it differs from its section's or its tab's. */
   readonly settings?: readonly SettingRef[];
@@ -154,6 +158,7 @@ const importToolbarSettingsTab = () => import("./ToolbarSettingsTab");
 const importIntegrationsTab = () => import("./IntegrationsTab");
 const importVoiceInputSettingsTab = () => import("./VoiceInputSettingsTab");
 const importCanopySettingsTab = () => import("./CanopySettingsTab");
+const importDecisionsSettingsTab = () => import("./Decisions/DecisionsSettingsTab");
 const importMcpServerSettingsTab = () => import("./McpServerSettingsTab");
 const importPluginActionsSettingsTab = () => import("./PluginActionsSettingsTab");
 const importRunHistorySettingsTab = () => import("./RunHistorySettingsTab");
@@ -168,7 +173,7 @@ const importProjectContextTab = () => import("@/components/Project/ContextTab");
 const importProjectVariablesTab = () => import("@/components/Project/EnvironmentVariablesEditor");
 const importProjectAutomationTab = () => import("@/components/Project/AutomationTab");
 const importProjectRecipesTab = () => import("@/components/Project/RecipesTab");
-const importProjectCommandsTab = () => import("./CommandOverridesTab");
+const importProjectSchedulesTab = () => import("@/components/Project/ProjectSchedulesTab");
 const importProjectNotificationsTab = () => import("@/components/Project/ProjectNotificationsTab");
 const importProjectCodeForgeTab = () => import("@/components/Project/CodeForgeTab");
 const importProjectPluginsTab = () => import("./ProjectPluginsTab");
@@ -211,6 +216,10 @@ const LazyCodeForgeSettingsTab = lazyWithPreload(
   (m) => m.CodeForgeSettingsTab
 );
 const LazyCanopySettingsTab = lazyWithPreload(importCanopySettingsTab, (m) => m.CanopySettingsTab);
+const LazyDecisionsSettingsTab = lazyWithPreload(
+  importDecisionsSettingsTab,
+  (m) => m.DecisionsSettingsTab
+);
 const LazyVoiceInputSettingsTab = lazyWithPreload(
   importVoiceInputSettingsTab,
   (m) => m.VoiceInputSettingsTab
@@ -253,9 +262,9 @@ const LazyProjectAutomationTab = lazyWithPreload(
   (m) => m.AutomationTab
 );
 const LazyProjectRecipesTab = lazyWithPreload(importProjectRecipesTab, (m) => m.RecipesTab);
-const LazyProjectCommandsTab = lazyWithPreload(
-  importProjectCommandsTab,
-  (m) => m.CommandOverridesTab
+const LazyProjectSchedulesTab = lazyWithPreload(
+  importProjectSchedulesTab,
+  (m) => m.ProjectSchedulesTab
 );
 const LazyProjectNotificationsTab = lazyWithPreload(
   importProjectNotificationsTab,
@@ -274,6 +283,12 @@ const VOICE_REQUIRES_ENABLED = {
 const VOICE_AI_REQUIRES_ENABLED = {
   settingId: "voice-ai-correction-enable",
   label: "AI text correction",
+} as const;
+
+const DECISIONS_REQUIRES_ENABLED = {
+  settingId: "decisions-enable",
+  label: "Decisions",
+  keepCase: true,
 } as const;
 
 const MCP_REQUIRES_ENABLED = {
@@ -570,7 +585,7 @@ export const SETTINGS_REGISTRY = [
         section: "Interface elements",
         title: "Grid panel agent highlights",
         description:
-          "Show waiting and working state borders on grid panels, including plugin-reported activity",
+          "Show working state borders on grid panels, including plugin-reported activity; waiting and failed borders always show",
         keywords: [
           "agent",
           "highlight",
@@ -1037,8 +1052,13 @@ export const SETTINGS_REGISTRY = [
     id: "worktree",
     scope: "global",
     group: "Terminal",
-    settings: ["worktreeConfig", "storage:daintree-preferences"],
+    settings: [
+      "worktreeConfig",
+      "storage:daintree-preferences",
+      "storage:daintree-worktree-filters*",
+    ],
     sectionSettings: {
+      "Worktree sidebar": SECTION_SETTINGS.worktreeSidebar,
       "Worktree path pattern": SECTION_SETTINGS.worktreePathPattern,
       "Always-hidden files": SECTION_SETTINGS.clientPreferences,
     },
@@ -1061,6 +1081,23 @@ export const SETTINGS_REGISTRY = [
       "junk files",
     ],
     sections: [
+      {
+        id: "worktree-sidebar-density",
+        section: "Worktree sidebar",
+        title: "Sidebar density",
+        description:
+          "Comfortable gives each fact about a worktree its own line; Compact fits more worktrees on screen",
+        keywords: [
+          "density",
+          "compact",
+          "comfortable",
+          "dense",
+          "spacing",
+          "sidebar",
+          "worktree cards",
+          "view",
+        ],
+      },
       {
         id: "worktree-path-pattern",
         section: "Worktree path pattern",
@@ -1173,7 +1210,8 @@ export const SETTINGS_REGISTRY = [
     importKind: "lazy",
     importer: LazyEnvironmentSettingsTab.preload,
     LazyComponent: LazyEnvironmentSettingsTab,
-    searchNavDescription: "Per-project environment variables injected into all terminals",
+    searchNavDescription:
+      "Global environment variables injected into every terminal in every project",
     searchNavKeywords: [
       "terminal",
       "environment",
@@ -1187,9 +1225,9 @@ export const SETTINGS_REGISTRY = [
       {
         id: "environment-variables",
         section: "Environment variables",
-        title: "Project environment variables",
+        title: "Global environment variables",
         description:
-          "Add, edit, and delete key/value environment variables for the current project. Injected into new terminals at spawn time.",
+          "Add, edit, and delete key/value environment variables that apply in every project. Injected into new terminals at spawn time.",
         keywords: [
           "env",
           "environment",
@@ -1337,6 +1375,8 @@ export const SETTINGS_REGISTRY = [
     LazyComponent: LazyAgentSettings,
     needsSubtabs: true,
     needsOnSettingsChange: true,
+    // A sign-in terminal opened from an agent's Accounts closes Settings first.
+    needsOnClose: true,
     searchNavDescription: "Configure CLI agent settings",
     searchNavKeywords: [
       "integrations",
@@ -2036,6 +2076,226 @@ export const SETTINGS_REGISTRY = [
   } satisfies LazySettingsTabEntry,
 
   {
+    id: "decisions",
+    scope: "global",
+    group: "Integrations",
+    settings: ["decisions.enabled"],
+    label: "Decisions",
+    icon: <DecisionsIcon className="w-4 h-4" size={16} />,
+    importKind: "lazy",
+    importer: LazyDecisionsSettingsTab.preload,
+    LazyComponent: LazyDecisionsSettingsTab,
+    needsOnClose: true,
+    searchNavDescription:
+      "Answer agents' questions from your phone, through a relay in your own Cloudflare account",
+    searchNavKeywords: [
+      "integrations",
+      "decisions",
+      "phone",
+      "mobile",
+      "ask",
+      "question",
+      "answer",
+      "relay",
+      "cloudflare",
+    ],
+    sections: [
+      {
+        id: "decisions-enable",
+        section: "Decisions",
+        title: "Enable Decisions",
+        description:
+          "Agents ask you a question and end their turn. You answer from your phone, and Daintree types your answer into the terminal that asked. Needs a relay in your own Cloudflare account and a paired phone.",
+        keywords: ["decisions", "enable", "phone", "ask human", "question", "answer", "consent"],
+      },
+      {
+        id: "decisions-connection",
+        section: "Connection",
+        title: "Relay connection",
+        description:
+          "Whether this computer is connected to the relay in your Cloudflare account, and a check of a relay's URL",
+        keywords: [
+          "relay",
+          "cloudflare",
+          "connected",
+          "status",
+          "worker",
+          "server",
+          "url",
+          "address",
+          "check",
+          "health",
+          "protocol",
+          "version",
+          "update",
+          "claim",
+          "deploy",
+          "wrangler",
+        ],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-devices",
+        section: "Devices",
+        title: "Paired phones and tablets",
+        description:
+          "Phones and tablets paired with this computer, where you answer your agents' questions",
+        keywords: [
+          "phone",
+          "tablet",
+          "pair",
+          "device",
+          "mobile",
+          "qr",
+          "scan",
+          "code",
+          "iphone",
+          "ipad",
+          "android",
+          "notifications",
+          "push",
+          "last seen",
+          "revoke",
+        ],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-hosts",
+        section: "Remote Hosts",
+        title: "Remote Host enrollment",
+        description:
+          "Whether each Remote Host's agents can ask you through your relay, enrolled automatically or one at a time",
+        keywords: [
+          "remote host",
+          "host",
+          "enroll",
+          "enrollment",
+          "automatic",
+          "ssh",
+          "remote",
+          "revoke",
+          "keychain",
+        ],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-questions",
+        section: "Questions",
+        title: "Default question expiry",
+        description:
+          "How long a question waits for your answer when its agent sets no expiry, never included, and what an expired one authorises",
+        keywords: [
+          "expiry",
+          "expire",
+          "expires",
+          "timeout",
+          "wait",
+          "question",
+          "authorise",
+          "default",
+          "never",
+        ],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-terminal-snapshots",
+        section: "Questions",
+        title: "Show agent status and recent terminal lines on my phone",
+        description:
+          "For the pane that asked, only while its question is open, redacted on a best-effort basis",
+        keywords: [
+          "terminal",
+          "snapshot",
+          "screen",
+          "lines",
+          "output",
+          "status",
+          "state",
+          "pane",
+          "title",
+          "phone",
+          "privacy",
+          "consent",
+          "redact",
+        ],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-policy",
+        section: "Policy",
+        title: "Workflow gates",
+        description:
+          "The gates Daintree sets, such as design-review/final, which only you can answer",
+        keywords: ["policy", "gate", "workflow", "design review", "human", "required", "approve"],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-proxy-allowlist",
+        section: "Policy",
+        title: "Allow proxy answers",
+        description:
+          "Whether a question without a registered workflow gate may accept a decision model's answer",
+        keywords: ["proxy", "allowlist", "decision model", "automatic", "answer", "policy"],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-model-learning",
+        section: "Decision model",
+        title: "Learn from your answers",
+        description:
+          "Keeps the questions you answer from your phone on this computer, so the decision model can answer the way you would",
+        keywords: ["decision model", "learning", "learn", "history", "proxy", "consent", "model"],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-model-adapter",
+        section: "Decision model",
+        title: "Agent CLI",
+        description:
+          "The agent CLI the decision model runs, and where it sends your past answers (by default Claude Code to Anthropic, Codex CLI to OpenAI, Gemini CLI to Google)",
+        keywords: [
+          "decision model",
+          "adapter",
+          "cli",
+          "claude",
+          "codex",
+          "gemini",
+          "evaluate",
+          "evaluation",
+          "report",
+          "threshold",
+          "confidence",
+        ],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-model-history",
+        section: "Decision model",
+        title: "Clear history",
+        description: "Deletes what the decision model learned on this computer, and its evaluation",
+        keywords: ["decision model", "clear", "delete", "history", "forget", "learned"],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-voice",
+        section: "Voice",
+        title: "Dictating answers",
+        description: "Dictation in the phone app isn't end-to-end encrypted",
+        keywords: ["voice", "dictation", "speech", "encrypted", "microphone"],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+      {
+        id: "decisions-data",
+        section: "Data",
+        title: "What's sent, and where",
+        description: "What Decisions sends to your relay, and what the relay can read",
+        keywords: ["privacy", "data", "encrypted", "metadata", "push", "consent", "sent"],
+        requiresEnabled: DECISIONS_REQUIRES_ENABLED,
+      },
+    ],
+  } satisfies LazySettingsTabEntry,
+
+  {
     id: "run-history",
     scope: "global",
     group: "Integrations",
@@ -2240,16 +2500,19 @@ export const SETTINGS_REGISTRY = [
   } satisfies LazySettingsTabEntry,
 
   {
-    id: "project:commands",
+    id: "project:schedules",
     scope: "project",
     group: "Project",
-    settings: ["projectPresentation"],
-    label: "Commands",
-    icon: <Command className="w-4 h-4" />,
+    settings: ["file:schedules"],
+    label: "Schedules",
+    icon: <CalendarClock className="w-4 h-4" />,
     importKind: "lazy",
-    importer: LazyProjectCommandsTab.preload,
-    LazyComponent: LazyProjectCommandsTab,
+    importer: LazyProjectSchedulesTab.preload,
+    LazyComponent: LazyProjectSchedulesTab,
+    // Reads its own schedules over IPC rather than the shared project form.
     needsProjectForm: true,
+    needsOnClose: true,
+    needsIsActive: true,
   } satisfies LazySettingsTabEntry,
 
   {
@@ -2333,8 +2596,17 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
 > = {
   "project:general": {
     tabLabel: "General",
-    searchNavDescription: "Project name, emoji, color, icon, and dev server configuration",
-    searchNavKeywords: ["project", "name", "emoji", "color", "icon", "theme", "dev server"],
+    searchNavDescription: "Project name, emoji, color, group, icon, and dev server configuration",
+    searchNavKeywords: [
+      "project",
+      "name",
+      "emoji",
+      "color",
+      "group",
+      "icon",
+      "theme",
+      "dev server",
+    ],
     sections: [
       {
         id: "project-name",
@@ -2350,6 +2622,13 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
         title: "Theme",
         description: "Show this project in its own theme instead of the global one",
         keywords: ["theme", "appearance", "colors", "dark", "light", "suggested"],
+      },
+      {
+        id: "project-group",
+        section: "Project identity",
+        title: "Group",
+        description: "Files this project under a heading in the project switcher",
+        keywords: ["group", "folder", "organize", "category", "move", "switcher"],
       },
       {
         id: "project-features",
@@ -2494,10 +2773,33 @@ export const PROJECT_SETTINGS_SECTIONS: Readonly<
       },
     ],
   },
-  "project:commands": {
-    tabLabel: "Commands",
-    searchNavDescription: "Project-specific command overrides",
-    searchNavKeywords: ["project", "commands", "overrides", "alias"],
+  "project:schedules": {
+    tabLabel: "Schedules",
+    searchNavDescription:
+      "Agents this project runs on a schedule: their cadence, prompt, and run history",
+    searchNavKeywords: [
+      "project",
+      "schedules",
+      "schedule",
+      "scheduled",
+      "cron",
+      "recurring",
+      "nightly",
+      "timer",
+      "automation",
+      "agent",
+      "runs",
+    ],
+    sections: [
+      {
+        id: "project-schedules",
+        section: "Agent schedules",
+        title: "Schedules",
+        description:
+          "Run an agent with your prompt at the times you set, and see what each run did",
+        keywords: ["schedule", "cron", "recurring", "nightly", "run now", "history", "resume"],
+      },
+    ],
   },
   "project:notifications": {
     tabLabel: "Notifications",
@@ -2594,6 +2896,7 @@ export const globalTabIcons: Record<GlobalSettingsTab, ReactNode> = {
   hosts: <Server className="w-5 h-5 text-text-secondary" />,
   voice: <Mic className="w-5 h-5 text-text-secondary" />,
   canopy: <Telescope className="w-5 h-5 text-text-secondary" />,
+  decisions: <DecisionsIcon className="w-5 h-5 text-text-secondary" size={20} />,
   mcp: <McpServerIcon className="w-5 h-5 text-text-secondary" />,
   plugins: <Package className="w-5 h-5 text-text-secondary" />,
   "plugin-actions": <ScrollText className="w-5 h-5 text-text-secondary" />,
@@ -2615,7 +2918,7 @@ export const projectTabIcons: Record<ProjectSettingsTab, ReactNode> = {
   "project:variables": <KeyRound className="w-5 h-5 text-text-secondary" />,
   "project:automation": <GitBranchPlus className="w-5 h-5 text-text-secondary" />,
   "project:recipes": <Workflow className="w-5 h-5 text-text-secondary" />,
-  "project:commands": <Command className="w-5 h-5 text-text-secondary" />,
+  "project:schedules": <CalendarClock className="w-5 h-5 text-text-secondary" />,
   "project:notifications": <Bell className="w-5 h-5 text-text-secondary" />,
   "project:code-forge": <GitBranch className="w-5 h-5 text-text-secondary" />,
   "project:plugins": <Package className="w-5 h-5 text-text-secondary" />,
@@ -2662,5 +2965,12 @@ const _projectGroups: SettingsNavGroup[] = [
 ].filter((g) => g.entries.length > 0);
 
 export function getSettingsNavGroups(scope: SettingsScope): SettingsNavGroup[] {
-  return scope === "global" ? _globalGroups : _projectGroups;
+  const groups = scope === "global" ? _globalGroups : _projectGroups;
+  // Asked each time rather than at load: the window learns which host it drives after boot.
+  return groups
+    .map((group) => ({
+      ...group,
+      entries: group.entries.filter((entry) => isSettingsTabAvailable(entry.id)),
+    }))
+    .filter((group) => group.entries.length > 0);
 }

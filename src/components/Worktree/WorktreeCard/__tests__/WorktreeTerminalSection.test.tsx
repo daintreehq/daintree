@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, act } from "@testing-library/react";
+import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
 import type { ReactNode } from "react";
 import {
   WorktreeTerminalSection,
@@ -80,6 +80,7 @@ const baseCounts: WorktreeTerminalSectionProps["counts"] = {
   total: 2,
   byState: { idle: 2, working: 0, waiting: 0, directing: 0, completed: 0, exited: 0 },
   unread: 0,
+  blocked: 0,
 };
 
 function renderSection(overrides: Partial<WorktreeTerminalSectionProps> = {}) {
@@ -437,8 +438,8 @@ describe("WorktreeTerminalSection arming click handlers", () => {
 
 // Terminal row state icon: active states (working/waiting/directing) pass
 // through regardless of identity (#6650 boot window). Once the agent chrome is
-// live, the indicator stays visible — idle/missing/completed state coerce to
-// waiting so the activity indicator never silently disappears mid-flight.
+// live, idle/missing/completed state coerce to waiting, and the run's fleet
+// band then decides what that wait draws, as on the pane (#16057).
 describe("WorktreeTerminalSection row state icon", () => {
   beforeEach(() => {
     useFleetArmingStore.setState({
@@ -513,19 +514,28 @@ describe("WorktreeTerminalSection row state icon", () => {
       expect(row.querySelector('[aria-label="unread"]')).not.toBeNull();
     });
 
-    it("keeps a question wait amber", () => {
+    it("draws a question wait amber only for an unread Canopy ask", () => {
       setRun({
         agentState: "waiting",
         waitingReason: "question",
         handBack: { stoppedAt: 1, seenAt: 2 },
+        canopy: { kind: "asked", quote: "Which branch?", readAt: 3, seen: false },
       });
-      const row = rowFor({ waitingReason: "question" });
-      expect(row.querySelector('[aria-label="waiting"]')).not.toBeNull();
+      const asked = rowFor({ waitingReason: "question" });
+      expect(asked.querySelector('[aria-label="waiting"]')).not.toBeNull();
+      cleanup();
+
+      // The same wait with no reading is the patterns' guess: unread, never amber.
+      setRun({ agentState: "waiting", waitingReason: "question" });
+      const guessed = rowFor({ waitingReason: "question" });
+      expect(guessed.querySelector('[aria-label="unread"]')).not.toBeNull();
+      expect(guessed.querySelector('[aria-label="waiting"]')).toBeNull();
     });
 
-    it("stays waiting before the fleet snapshot arrives", () => {
+    it("draws nothing for a prompt before the fleet snapshot arrives", () => {
       const row = rowFor();
-      expect(row.querySelector('[aria-label="waiting"]')).not.toBeNull();
+      expect(row.querySelector('[aria-label="waiting"]')).toBeNull();
+      expect(row.getAttribute("data-terminal-agent-state")).toBe("waiting");
     });
   });
 
@@ -586,13 +596,15 @@ describe("WorktreeTerminalSection row state icon", () => {
       expect(description(row)).not.toContain("Parked:");
     });
 
-    it("leaves the observed state glyph and attribute alone", () => {
-      // Parking is the user's intent, not something the agent did.
+    it("leaves the observed attribute alone and draws no amber for a parked wait", () => {
+      // Parking is the user's intent, not something the agent did: the
+      // attribute keeps the observation, and a parked run asks nothing.
       setRun({ agentState: "waiting", park: { parkedAt: 1 } });
       const row = renderRow()();
 
       expect(row.getAttribute("data-terminal-agent-state")).toBe("waiting");
-      expect(row.querySelector('[aria-label="waiting"]')).not.toBeNull();
+      expect(row.querySelector('[aria-label="waiting"]')).toBeNull();
+      expect(row.querySelector('[data-testid="session-row-parked"]')).not.toBeNull();
     });
 
     it("drops the mark as soon as the snapshot no longer carries the park", () => {
@@ -613,7 +625,7 @@ describe("WorktreeTerminalSection row state icon", () => {
     });
   });
 
-  it("renders waiting icon when agentState='idle' and agent chrome is live", () => {
+  it("draws an idle live agent amber only once the fleet reports an unread Canopy ask", () => {
     const term = makeTerminal({
       id: "idle-1",
       kind: "terminal",
@@ -626,9 +638,33 @@ describe("WorktreeTerminalSection row state icon", () => {
       terminals: [term],
       counts: { ...baseCounts, total: 1 },
     });
-    const row = container.querySelector('[data-terminal-id="idle-1"]');
-    const waitingIcon = row?.querySelector('[aria-label="waiting"]');
-    expect(waitingIcon).not.toBeNull();
+    const row = () => container.querySelector('[data-terminal-id="idle-1"]');
+    expect(row()?.querySelector('[aria-label="waiting"]')).toBeNull();
+
+    try {
+      act(() => {
+        useFleetSnapshotStore.setState({
+          snapshot: {
+            runs: [
+              {
+                runId: "idle-1",
+                workspaceId: "p1",
+                spawnedAt: 0,
+                cwd: "/tmp",
+                agentState: "waiting",
+                canopy: { kind: "asked", quote: "Run it?", readAt: 1, seen: false },
+              },
+            ],
+            changedAt: 0,
+            degraded: false,
+            lastSuccessfulAt: null,
+          } satisfies FleetSnapshot,
+        });
+      });
+      expect(row()?.querySelector('[aria-label="waiting"]')).not.toBeNull();
+    } finally {
+      useFleetSnapshotStore.setState({ snapshot: null });
+    }
   });
 
   it("does not render any state icon during the post-exit IPC race (stale agentState)", () => {
@@ -687,12 +723,28 @@ describe("WorktreeTerminalSection collapsed pill state indicators", () => {
         total: 5,
         byState: { idle: 3, working: 2, waiting: 2, directing: 0, completed: 1, exited: 0 },
         unread: 0,
+        blocked: 0,
       },
     });
     const indicators = screen.getByTestId("collapsed-session-indicators");
     expect(indicators.getAttribute("role")).toBe("img");
     expect(indicators.getAttribute("aria-label")).toBe(
       "5 sessions: 2 working, 2 waiting, 1 finished"
+    );
+  });
+
+  it("names error waits blocked in the collapsed breakdown, apart from waiting", () => {
+    renderSection({
+      isExpanded: false,
+      counts: {
+        total: 4,
+        byState: { idle: 1, working: 1, waiting: 1, directing: 0, completed: 0, exited: 0 },
+        unread: 0,
+        blocked: 1,
+      },
+    });
+    expect(screen.getByTestId("collapsed-session-indicators").getAttribute("aria-label")).toBe(
+      "4 sessions: 1 working, 1 blocked, 1 waiting"
     );
   });
 
@@ -703,6 +755,7 @@ describe("WorktreeTerminalSection collapsed pill state indicators", () => {
         total: 3,
         byState: { idle: 0, working: 2, waiting: 1, directing: 0, completed: 0, exited: 0 },
         unread: 0,
+        blocked: 0,
       },
     });
     expect(screen.queryByTestId("collapsed-session-indicators")).toBeNull();
@@ -715,6 +768,7 @@ describe("WorktreeTerminalSection collapsed pill state indicators", () => {
         total: 2,
         byState: { idle: 2, working: 0, waiting: 0, directing: 0, completed: 0, exited: 0 },
         unread: 0,
+        blocked: 0,
       },
     });
     expect(screen.queryByTestId("collapsed-session-indicators")).toBeNull();
@@ -735,36 +789,78 @@ describe("WorktreeTerminalSection drag handle reveal", () => {
   });
 });
 
-describe("WorktreeTerminalSection collapsed trigger name", () => {
-  it("names itself once, starting with the visible summary, and repeats no count", () => {
-    // Left to name-from-content the button read its visible "N active" and then
-    // the nested cluster's own name, which restates the total. It also has to
-    // start with what is on screen, so speech input can target it.
-    const terminals = [
-      makeTerminal({ detectedAgentId: "claude" }),
-      makeTerminal({ detectedAgentId: "claude" }),
-      makeTerminal({ detectedAgentId: "claude" }),
-    ];
-    renderSection({
-      isExpanded: false,
-      terminals,
-      counts: {
-        total: 3,
-        byState: { idle: 0, working: 2, waiting: 1, directing: 0, completed: 0, exited: 0 },
-        unread: 0,
-      },
-    });
+describe("WorktreeTerminalSection disclosure control (#15864)", () => {
+  const terminals = [
+    makeTerminal({ detectedAgentId: "claude" }),
+    makeTerminal({ detectedAgentId: "claude" }),
+    makeTerminal({ detectedAgentId: "claude" }),
+  ];
+  const counts = {
+    total: 3,
+    byState: { idle: 0, working: 2, waiting: 1, directing: 0, completed: 0, exited: 0 },
+    unread: 0,
+    blocked: 0,
+  };
+
+  it("is one control with one name open and closed, describing the breakdown", () => {
+    // The count and marks are content now, so the breakdown is the control's
+    // description: said once, with the total once.
+    const { rerender } = renderSection({ isExpanded: false, terminals, counts });
+    const closed = document.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!;
+    const name = closed.getAttribute("aria-label");
+    const description =
+      document.getElementById(closed.getAttribute("aria-describedby") ?? "")?.textContent ?? "";
+    expect(description.match(/\b3\b/g) ?? []).toHaveLength(1);
+    expect(description).toContain("2 working");
+    expect(description).toContain("1 waiting");
+    expect(closed.querySelector("div")).toBeNull();
+
+    rerender(
+      <TooltipProvider>
+        <WorktreeTerminalSection
+          worktreeId="wt-1"
+          isExpanded
+          counts={counts}
+          terminals={terminals}
+          onToggle={vi.fn()}
+          onTerminalSelect={vi.fn()}
+        />
+      </TooltipProvider>
+    );
+    const open = document.querySelector<HTMLButtonElement>('button[aria-expanded="true"]')!;
+    // The same element, so keyboard focus survives the toggle.
+    expect(open).toBe(closed);
+    expect(open.getAttribute("aria-label")).toBe(name);
+  });
+
+  it("names the worktree it belongs to", () => {
+    renderSection({ isExpanded: false, terminals, counts, worktreeLabel: "feature/login" });
     const button = document.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!;
-    const name = button.getAttribute("aria-label") ?? "";
-    // The visible words sit in separate flex items, so compare without spaces.
-    const squash = (text: string) => text.replace(/\s+/g, "");
-    const visible = squash(button.querySelector("span")!.textContent ?? "");
-    expect(visible.length).toBeGreaterThan(0);
-    expect(squash(name).startsWith(visible)).toBe(true);
-    expect(name.match(/\b3\b/g) ?? []).toHaveLength(1);
-    expect(name).toContain("2 working");
-    expect(name).toContain("1 waiting");
-    expect(button.querySelector("div")).toBeNull();
+    expect(button.getAttribute("aria-label")).toBe("Active sessions for worktree feature/login");
+  });
+
+  it("leaves the count and the agent glyph outside the control, as card content", () => {
+    renderSection({ isExpanded: false, terminals, counts });
+    const button = document.querySelector<HTMLButtonElement>('button[aria-expanded="false"]')!;
+    expect(button.textContent).toBe("");
+    // The visible summary, not the hidden description beside it.
+    const summary = button.nextElementSibling as HTMLElement;
+    expect(summary.hidden).toBe(false);
+    expect(summary.textContent?.replace(/\s+/g, "")).toBe("3active");
+    const glyph = summary.querySelector("svg");
+    expect(glyph).not.toBeNull();
+    expect(button.contains(summary)).toBe(false);
+    expect(button.querySelectorAll("svg")).toHaveLength(1);
+  });
+
+  it("keeps the inline trigger in its row once open and lays the list out beneath it", () => {
+    const { container } = renderSection({ isExpanded: true, inline: true, terminals, counts });
+    const button = container.querySelector<HTMLButtonElement>('button[aria-expanded="true"]')!;
+    const list = container.querySelector('[role="list"]')!;
+    expect(list).not.toBeNull();
+    // The trigger is not inside the list's well, so it did not move into it.
+    expect(button.closest(`[id="worktree-wt-1-terminals"]`)).not.toBeNull();
+    expect(list.closest(`[id="worktree-wt-1-terminals"]`)).toBeNull();
   });
 });
 

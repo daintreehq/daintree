@@ -1,12 +1,9 @@
-// eager-import-allow: reads diagnostics files via sync fs in the IPC handler
 import { app, dialog, shell } from "electron";
 import os from "node:os";
+import path from "node:path";
 import v8 from "node:v8";
 import { monitorEventLoopDelay, type IntervalHistogram } from "node:perf_hooks";
 import { readSystemMemorySnapshot } from "../../utils/systemMemory.js";
-import { promises as fs, createWriteStream } from "node:fs";
-import { existsSync } from "node:fs";
-import path from "node:path";
 import { CHANNELS } from "../channels.js";
 import { resilientAtomicWriteFile } from "../../utils/fs.js";
 import { ensureAttached } from "../../utils/webContentsLifecycle.js";
@@ -26,6 +23,7 @@ import type {
 } from "../../../shared/types/ipc/system.js";
 import { getActionBreadcrumbService } from "../../services/ActionBreadcrumbService.js";
 import type * as DiagnosticsCollectorModule from "../../services/DiagnosticsCollector.js";
+import type * as DiagnosticsBundleModule from "../../services/diagnosticsBundle.js";
 import {
   recordBlinkSample,
   recordEluSample,
@@ -44,15 +42,23 @@ async function getDiagnosticsCollector(): Promise<typeof DiagnosticsCollectorMod
   }
   return cachedDiagnosticsCollector;
 }
+let cachedDiagnosticsBundle: typeof DiagnosticsBundleModule | null = null;
+async function getDiagnosticsBundle(): Promise<typeof DiagnosticsBundleModule> {
+  if (!cachedDiagnosticsBundle) {
+    cachedDiagnosticsBundle = await import("../../services/diagnosticsBundle.js");
+  }
+  return cachedDiagnosticsBundle;
+}
 import { getLogFilePath, getLogDirectory } from "../../utils/logger.js";
 import { readOldestRetainedLogMs } from "../../utils/logRetention.js";
 import { getVersionFirstRunBoundary } from "../../services/versionFirstRun.js";
 import { safeStringify } from "../../utils/safeStringify.js";
-import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import {
   filterSections,
   filterLogEntriesByTime,
   applyReplacements,
+  computeTimeWindowStart,
+  getTimeWindowIds,
   type ReplacementRule,
 } from "../../../shared/utils/diagnosticsTransform.js";
 import { typedHandle, typedHandleWithContext } from "../utils.js";
@@ -71,213 +77,46 @@ const EVENT_LOOP_HISTOGRAM_IDLE_MS = 60_000;
 // not. Backs the "Since application launch" time-window option.
 const APP_LAUNCH_TIMESTAMP = Date.now();
 
-const MAX_BUNDLED_CRASH_RECORDS = 20;
-const CRASH_RECORD_FILE = /^(crash|renderer-gone)-[\w-]+\.json$/;
-// The default shard writes `pty-host.log`; other shards `pty-host-<suffix>.log`.
-const PTY_HOST_LOG_FILE = /^pty-host(-[\w-]+)?\.log$/;
-
 function optionalDurationMs(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
-async function listDir(dir: string): Promise<string[]> {
+// The log files a review read, held so its save writes exactly what the dialog
+// listed instead of rereading files that may have rotated or grown since. A
+// cancelled review never tells main it closed, so the hold also expires.
+const REVIEW_SOURCES_TTL_MS = 15 * 60_000;
+let reviewSources: {
+  collectedAtMs: number;
+  sources: DiagnosticsBundleModule.BundleSources;
+} | null = null;
+let reviewSourcesTimer: NodeJS.Timeout | null = null;
+
+function releaseReviewSources(): void {
+  if (reviewSourcesTimer) {
+    clearTimeout(reviewSourcesTimer);
+    reviewSourcesTimer = null;
+  }
+  reviewSources = null;
+}
+
+function holdReviewSources(
+  collectedAtMs: number,
+  sources: DiagnosticsBundleModule.BundleSources
+): void {
+  releaseReviewSources();
+  reviewSources = { collectedAtMs, sources };
+  reviewSourcesTimer = setTimeout(releaseReviewSources, REVIEW_SOURCES_TTL_MS);
+  reviewSourcesTimer.unref?.();
+}
+
+function getBundleDirs(): DiagnosticsBundleModule.BundleDirs {
+  let crashesDir: string | null = null;
   try {
-    return await fs.readdir(dir);
+    crashesDir = path.join(app.getPath("userData"), "crashes");
   } catch {
-    return [];
+    // No userData path — ship the bundle without crash records.
   }
-}
-
-/**
- * Crash and renderer-gone records from `userData/crashes`, newest first.
- * Recency comes from each record's own `timestamp`, never mtime, which
- * copy-fallback paths can rewrite. Breadcrumb args are dropped because
- * action args can carry user-entered text; known secret shapes are scrubbed
- * before the user's own replacements run.
- *
- * The newest fatal crash ignores the window. Export usually follows the
- * relaunch, so the record of how the last session died is older than any
- * short window, and it is the one record the bundle exists to carry.
- */
-async function collectCrashRecordEntries(
-  crashesDir: string,
-  timeWindowStartMs: number | null,
-  replacements: ReplacementRule[]
-): Promise<Array<{ name: string; content: string }>> {
-  const candidates: Array<{
-    file: string;
-    timestamp: number | null;
-    record: Record<string, unknown>;
-  }> = [];
-  for (const file of await listDir(crashesDir)) {
-    if (!CRASH_RECORD_FILE.test(file)) continue;
-    try {
-      const parsed: unknown = JSON.parse(await fs.readFile(path.join(crashesDir, file), "utf-8"));
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
-      const record = parsed as Record<string, unknown>;
-      const timestamp =
-        typeof record.timestamp === "number" && Number.isFinite(record.timestamp)
-          ? record.timestamp
-          : null;
-      candidates.push({ file, timestamp, record });
-    } catch {
-      continue;
-    }
-  }
-
-  let newestFatal: (typeof candidates)[number] | null = null;
-  for (const candidate of candidates) {
-    if (!candidate.file.startsWith("crash-") || candidate.timestamp === null) continue;
-    if (!newestFatal || candidate.timestamp > (newestFatal.timestamp ?? 0)) newestFatal = candidate;
-  }
-
-  const inWindow = candidates.filter(
-    ({ timestamp }) =>
-      // An undated record can't be placed inside a chosen window.
-      timeWindowStartMs === null || (timestamp !== null && timestamp >= timeWindowStartMs)
-  );
-  inWindow.sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
-  const selected = inWindow.slice(0, MAX_BUNDLED_CRASH_RECORDS);
-  if (newestFatal && !selected.includes(newestFatal)) {
-    if (selected.length >= MAX_BUNDLED_CRASH_RECORDS) selected.pop();
-    selected.push(newestFatal);
-    selected.sort((a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0));
-  }
-
-  return selected.map(({ file, record }) => ({
-    name: `crashes/${file}`,
-    content: toBundledCrashRecord(record, replacements),
-  }));
-}
-
-function toBundledCrashRecord(
-  record: Record<string, unknown>,
-  replacements: ReplacementRule[]
-): string {
-  if (Array.isArray(record.recentActions)) {
-    record.recentActions = record.recentActions
-      .filter((crumb: unknown) => !!crumb && typeof crumb === "object")
-      .map((crumb: unknown) => {
-        const { args: _args, ...rest } = crumb as Record<string, unknown>;
-        return rest;
-      });
-  } else {
-    delete record.recentActions;
-  }
-  return applyReplacements(scrubSecrets(JSON.stringify(record, null, 2)), replacements);
-}
-
-/** PTY host emergency logs: process start lines and fatal errors, no terminal output. */
-async function collectPtyHostLogEntries(
-  logDir: string,
-  timeWindowStartMs: number | null,
-  replacements: ReplacementRule[]
-): Promise<Array<{ name: string; content: string }>> {
-  const entries: Array<{ name: string; content: string }> = [];
-  for (const file of (await listDir(logDir)).sort()) {
-    if (!PTY_HOST_LOG_FILE.test(file)) continue;
-    const filePath = path.join(logDir, file);
-    if (timeWindowStartMs !== null) {
-      try {
-        const stat = await fs.stat(filePath);
-        if (stat.mtimeMs < timeWindowStartMs) continue;
-      } catch {
-        // stat failed — include rather than silently drop relevant lines.
-      }
-    }
-    try {
-      const raw = await fs.readFile(filePath, "utf-8");
-      entries.push({ name: file, content: applyReplacements(scrubSecrets(raw), replacements) });
-    } catch {
-      // Unreadable log — the rest of the bundle is still useful.
-    }
-  }
-  return entries;
-}
-
-async function writeBundleZip(
-  zipPath: string,
-  jsonContent: string,
-  includeLogs: boolean,
-  replacements: ReplacementRule[],
-  timeWindowStartMs: number | null
-): Promise<void> {
-  const { ZipArchive } = await import("archiver");
-  const logDir = getLogDirectory();
-  const logFile = getLogFilePath();
-
-  const logEntries: Array<{ name: string; content: string }> = [];
-
-  if (includeLogs) {
-    // The active log is always current, so it's never time-filtered here.
-    if (existsSync(logFile)) {
-      const raw = await fs.readFile(logFile, "utf-8");
-      logEntries.push({ name: "daintree.log", content: applyReplacements(raw, replacements) });
-    }
-
-    for (let i = 1; i <= 5; i++) {
-      const rotated = path.join(logDir, `daintree.log.${i}`);
-      if (!existsSync(rotated)) continue;
-
-      if (timeWindowStartMs !== null) {
-        try {
-          const stat = await fs.stat(rotated);
-          // Skip rotated files last written before the window. `mtime`
-          // over-includes a freshly-rotated file holding mostly old lines —
-          // the accepted failure mode (over-include rather than drop).
-          if (stat.mtimeMs < timeWindowStartMs) continue;
-        } catch {
-          // stat failed — include rather than silently drop relevant lines.
-        }
-      }
-
-      const raw = await fs.readFile(rotated, "utf-8");
-      logEntries.push({
-        name: `daintree.log.${i}`,
-        content: applyReplacements(raw, replacements),
-      });
-    }
-
-    logEntries.push(...(await collectPtyHostLogEntries(logDir, timeWindowStartMs, replacements)));
-    let crashesDir: string | null = null;
-    try {
-      crashesDir = path.join(app.getPath("userData"), "crashes");
-    } catch {
-      // No userData path — ship the bundle without crash records.
-    }
-    if (crashesDir) {
-      logEntries.push(
-        ...(await collectCrashRecordEntries(crashesDir, timeWindowStartMs, replacements))
-      );
-    }
-  }
-
-  await new Promise<void>((resolve, reject) => {
-    const output = createWriteStream(zipPath, { mode: 0o600 });
-    const archive = new ZipArchive({ zlib: { level: 6 } });
-
-    output.on("close", () => {
-      resolve();
-    });
-    output.on("error", reject);
-    archive.on("error", reject);
-
-    archive.pipe(output);
-    archive.append(jsonContent, { name: "diagnostics.json" });
-
-    for (const entry of logEntries) {
-      archive.append(entry.content, { name: entry.name });
-    }
-
-    void archive.finalize();
-  });
-
-  // Belt-and-suspenders: createWriteStream's `mode` is only applied when the
-  // file is freshly created. If the user picked an existing path, the prior
-  // mode (e.g. 0o644) survives. POSIX-only — chmod is a no-op on Windows.
-  if (process.platform !== "win32") {
-    await fs.chmod(zipPath, 0o600);
-  }
+  return { logDir: getLogDirectory(), logFile: getLogFilePath(), crashesDir };
 }
 
 const CPU_PROFILE_DURATION_MS = 15_000;
@@ -287,6 +126,13 @@ const CPU_PROFILE_SAMPLING_INTERVAL_US = 1000;
 
 interface RendererCpuProfileSession {
   wc: Electron.WebContents;
+  webContentsId: number;
+  /**
+   * True until `Profiler.start` is acknowledged. The session holds its slot in
+   * `cpuProfileSessions` from before the first CDP command, so a concurrent
+   * start is refused instead of interleaving its commands with this one's.
+   */
+  starting: boolean;
   timer: NodeJS.Timeout | null;
   /**
    * Memoized `Profiler.stop` call. Both the auto-stop timer and the renderer's
@@ -301,16 +147,20 @@ interface RendererCpuProfileSession {
    * new recording on the same debugger, and the stale disable would kill it.
    */
   discarded: boolean;
+  /** Latched by this session's own `detach` listener. */
+  detached: boolean;
   onDetach: () => void;
   onDestroyed: () => void;
 }
 
 const cpuProfileSessions = new Map<number, RendererCpuProfileSession>();
 
-function cleanupCpuProfileSession(webContentsId: number): void {
-  const session = cpuProfileSessions.get(webContentsId);
-  if (!session) return;
-  cpuProfileSessions.delete(webContentsId);
+function cleanupCpuProfileSession(session: RendererCpuProfileSession): void {
+  // Identity, not id: a stale callback must never release a newer session.
+  if (cpuProfileSessions.get(session.webContentsId) === session) {
+    cpuProfileSessions.delete(session.webContentsId);
+  }
+  if (session.discarded) return;
   session.discarded = true;
   if (session.timer) {
     clearTimeout(session.timer);
@@ -320,6 +170,19 @@ function cleanupCpuProfileSession(webContentsId: number): void {
   if (!wc.isDestroyed()) {
     wc.debugger.removeListener("detach", session.onDetach);
     wc.removeListener("destroyed", session.onDestroyed);
+  }
+}
+
+// Electron clears the attachment, then rejects pending commands, then emits
+// `detach`, so a rejection can be handled before the listener has run:
+// `isAttached()` covers that window. The latch covers the reverse, another
+// consumer reattaching the shared debugger before stop collects the failure.
+function wasCpuProfileDebuggerDetached(session: RendererCpuProfileSession): boolean {
+  if (session.detached) return true;
+  try {
+    return !session.wc.isDestroyed() && !session.wc.debugger.isAttached();
+  } catch {
+    return false;
   }
 }
 
@@ -387,7 +250,7 @@ function readSystemMemoryMB(): { systemTotalMB?: number; systemAvailableMB?: num
 }
 
 export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => void {
-  const handlers: Array<() => void> = [releaseEventLoopHistogram];
+  const handlers: Array<() => void> = [releaseEventLoopHistogram, releaseReviewSources];
 
   const handleGetAppMetrics = (): AppMetricsSummary => {
     try {
@@ -625,17 +488,29 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
   handlers.push(typedHandle(CHANNELS.SYSTEM_DOWNLOAD_DIAGNOSTICS, handleDownloadDiagnostics));
 
   const handleCollectDiagnosticsForReview = async (): Promise<DiagnosticsReviewPayload> => {
+    // Taken before collecting, so lines the logger has yet to flush are on
+    // disk by the time the log files are read for the listing below.
+    const collectedAtMs = Date.now();
     const { collectDiagnosticsWithKeys } = await getDiagnosticsCollector();
     const { payload, sectionKeys } = await collectDiagnosticsWithKeys(deps);
     const previewJson = safeStringify(payload, 2);
-    return {
-      payload,
-      sectionKeys,
-      previewJson,
+    const boundaries = {
       appLaunchTimestamp: APP_LAUNCH_TIMESTAMP,
       versionFirstRun: getVersionFirstRunBoundary(),
       oldestRetainedLogMs: await readOldestRetainedLogMs(getLogDirectory(), getLogFilePath()),
     };
+    const { readBundleSources, buildBundleManifests } = await getDiagnosticsBundle();
+    const sources = await readBundleSources(getBundleDirs());
+    holdReviewSources(collectedAtMs, sources);
+    const logMembers = buildBundleManifests(
+      sources,
+      getTimeWindowIds(boundaries).map((id) => ({
+        id,
+        startMs: computeTimeWindowStart(id, boundaries, collectedAtMs),
+      })),
+      collectedAtMs
+    );
+    return { payload, sectionKeys, previewJson, ...boundaries, collectedAtMs, logMembers };
   };
   handlers.push(
     typedHandle(CHANNELS.SYSTEM_COLLECT_DIAGNOSTICS_FOR_REVIEW, handleCollectDiagnosticsForReview)
@@ -653,6 +528,11 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
     json = applyReplacements(json, savePayload.replacements as ReplacementRule[]);
 
     const includeLogs = savePayload.enabledSections.logs !== false;
+    // Taken before the native dialog, which can stay open past the hold's expiry.
+    const held =
+      reviewSources !== null && reviewSources.collectedAtMs === savePayload.collectedAtMs
+        ? reviewSources
+        : null;
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const win = deps.windowRegistry?.getPrimary()?.browserWindow ?? deps.mainWindow;
@@ -667,13 +547,19 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
 
     if (canceled || !filePath) return false;
 
-    await writeBundleZip(
-      filePath,
-      json,
-      includeLogs,
-      savePayload.replacements as ReplacementRule[],
-      timeWindowStartMs
-    );
+    const { readBundleSources, buildBundleMembers, writeBundleZip } = await getDiagnosticsBundle();
+    // Without the review's own read (it expired, or a review in another view
+    // replaced it), the files are read again and the ceiling still keeps out
+    // anything dated after the review.
+    const members = includeLogs
+      ? buildBundleMembers(
+          held?.sources ?? (await readBundleSources(getBundleDirs())),
+          { startMs: timeWindowStartMs, endMs: savePayload.collectedAtMs ?? null },
+          savePayload.replacements as ReplacementRule[]
+        )
+      : [];
+    await writeBundleZip(filePath, json, members);
+    if (held && reviewSources === held) releaseReviewSources();
     shell.showItemInFolder(filePath);
     return true;
   };
@@ -691,48 +577,35 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
     if (existing) {
       // A finished-but-uncollected session (auto-stop fired while Settings was
       // closed, so no stop IPC ever arrived) must not block re-recording.
-      if (existing.timer === null && !existing.stopping) {
+      if (!existing.starting && existing.timer === null && !existing.stopping) {
         if (existing.capture) {
           console.warn(
             `[diagnostics] Discarding uncollected renderer CPU profile for webContents ${wc.id}`
           );
         }
-        cleanupCpuProfileSession(wc.id);
+        cleanupCpuProfileSession(existing);
       } else {
         return { status: "failed", reason: "already-recording" };
       }
     }
 
-    try {
-      ensureAttached(wc);
-      await wc.debugger.sendCommand("Profiler.enable");
-      await wc.debugger.sendCommand("Profiler.setSamplingInterval", {
-        interval: CPU_PROFILE_SAMPLING_INTERVAL_US,
-      });
-      await wc.debugger.sendCommand("Profiler.start");
-    } catch (err) {
-      // Don't leave the Profiler domain enabled after a partial start.
-      try {
-        if (!wc.isDestroyed()) {
-          wc.debugger.sendCommand("Profiler.disable").catch(() => {});
-        }
-      } catch {
-        // detached between failure and cleanup — nothing left to disable
-      }
-      return {
-        status: "failed",
-        reason: "cdp-error",
-        message: formatErrorMessage(err, "CPU profiler failed to start"),
-      };
-    }
-
     const session: RendererCpuProfileSession = {
       wc,
+      webContentsId: wc.id,
+      starting: true,
       timer: null,
       capture: null,
       stopping: false,
       discarded: false,
+      detached: false,
       onDetach: () => {
+        session.detached = true;
+        // A detach mid-start frees the slot so a retry can record; the start
+        // sees `discarded` and sends nothing more.
+        if (session.starting) {
+          cleanupCpuProfileSession(session);
+          return;
+        }
         // DevTools (or another client) stole the CDP session — an in-flight
         // recording is unrecoverable. Stop the timer and poison the capture so
         // the stop handler reports the failure; an already-completed capture
@@ -744,15 +617,68 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
         session.capture ??= Promise.reject(new Error("Debugger detached during recording"));
         session.capture.catch(() => {});
       },
-      onDestroyed: () => cleanupCpuProfileSession(wc.id),
+      onDestroyed: () => cleanupCpuProfileSession(session),
     };
+    // Claimed before the first await: invoke handlers aren't serialised, and a
+    // second start interleaving its commands on the shared debugger can disable
+    // or orphan this one's recording.
+    cpuProfileSessions.set(wc.id, session);
+    wc.debugger.on("detach", session.onDetach);
+    wc.once("destroyed", session.onDestroyed);
+
+    let startError: unknown = null;
+    try {
+      ensureAttached(wc);
+      const steps = [
+        () => wc.debugger.sendCommand("Profiler.enable"),
+        () =>
+          wc.debugger.sendCommand("Profiler.setSamplingInterval", {
+            interval: CPU_PROFILE_SAMPLING_INTERVAL_US,
+          }),
+        () => wc.debugger.sendCommand("Profiler.start"),
+      ];
+      for (const step of steps) {
+        if (session.discarded) break;
+        await step();
+      }
+    } catch (err) {
+      startError = err;
+    }
+
+    // Discarded mid-start, the Profiler domain may already belong to a retry,
+    // so nothing here may disable it.
+    if (session.discarded) {
+      return wc.isDestroyed()
+        ? { status: "failed", reason: "webcontents-destroyed" }
+        : {
+            status: "failed",
+            reason: "cdp-error",
+            message: "The debugger detached while the profiler was starting",
+          };
+    }
+
+    if (startError !== null) {
+      // Don't leave the Profiler domain enabled after a partial start.
+      try {
+        if (!wc.isDestroyed()) {
+          wc.debugger.sendCommand("Profiler.disable").catch(() => {});
+        }
+      } catch {
+        // detached between failure and cleanup — nothing left to disable
+      }
+      cleanupCpuProfileSession(session);
+      return {
+        status: "failed",
+        reason: "cdp-error",
+        message: formatErrorMessage(startError, "CPU profiler failed to start"),
+      };
+    }
+
+    session.starting = false;
     session.timer = setTimeout(() => {
       session.timer = null;
       beginCpuProfileCapture(session).catch(() => {});
     }, CPU_PROFILE_DURATION_MS);
-    wc.debugger.on("detach", session.onDetach);
-    wc.once("destroyed", session.onDestroyed);
-    cpuProfileSessions.set(wc.id, session);
 
     return { status: "started", expiresAt: Date.now() + CPU_PROFILE_DURATION_MS };
   };
@@ -768,7 +694,7 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
     ctx: IpcContext
   ): Promise<RendererCpuProfileStopResult> => {
     const session = cpuProfileSessions.get(ctx.webContentsId);
-    if (!session) return { status: "failed", reason: "not-recording" };
+    if (!session || session.starting) return { status: "failed", reason: "not-recording" };
     if (session.stopping) return { status: "failed", reason: "already-stopping" };
     session.stopping = true;
     if (session.timer) {
@@ -780,14 +706,14 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
     try {
       profile = await beginCpuProfileCapture(session);
     } catch (err) {
-      cleanupCpuProfileSession(ctx.webContentsId);
+      cleanupCpuProfileSession(session);
       return {
         status: "failed",
-        reason: "devtools-detached",
+        reason: wasCpuProfileDebuggerDetached(session) ? "devtools-detached" : "capture-failed",
         message: formatErrorMessage(err, "Profiler stopped unexpectedly"),
       };
     }
-    cleanupCpuProfileSession(ctx.webContentsId);
+    cleanupCpuProfileSession(session);
 
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const win =

@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { AGENT_DIRECTORY_BYTES_MAX } from "../../../../shared/types/agentDirectory.js";
+import { MAX_ASSISTANT_SLOTS } from "../../../../shared/config/assistantSlots.js";
+import {
+  AGENT_DIRECTORY_BYTES_MAX,
+  type AgentDirectory,
+} from "../../../../shared/types/agentDirectory.js";
+import { buildToolError } from "../../../services/mcp-server/shared.js";
+import { buildToolCallResult } from "../../../services/mcp-server/toolCallResult.js";
+import { decodeValue, encodeValue } from "../../link/encoding.js";
 import type { LinkSession } from "../../link/session.js";
 import type { MetricsSessionContext } from "../../metrics/hostMetricsHost.js";
 import {
@@ -20,6 +27,8 @@ import {
   ThrowawayCallPayloadSchema,
   type McpCallPayload,
 } from "../linkMethods.js";
+import type { RelayedNotice } from "../../../services/mcp-server/terminalNotify.js";
+import { MAX_CARRIED_DEPTH } from "../mcpRelayExecutor.js";
 import { MAX_RELAY_NOTICES_PER_SENDER } from "../relayNoticeOutbox.js";
 import { SenderSessions } from "../senderSessions.js";
 import type { HostThrowawayExecutor } from "../throwawayRelay.js";
@@ -180,7 +189,8 @@ describe("installHostMcpRelay", () => {
   });
 
   it("runs the tool in a session opened for the sender, help session, project and tier", async () => {
-    const { links, opened, relay } = harness([["link-1", "sender-a"]]);
+    // A still clock: admitting the call takes none of its run (#15699).
+    const { links, opened, relay } = harness([["link-1", "sender-a"]], { now: () => 1_000 });
     const answer = await links[0]!.call({ tool: "terminal.list", args: { owned: true } });
 
     expect(answer).toEqual({
@@ -567,6 +577,116 @@ describe("projectRelayResult", () => {
     ).toEqual({ isError: true, structured: null, text: "line one\n[image content omitted]" });
   });
 
+  it("carries a JSON object answered as text in its structured half, as a schema'd tool's", () => {
+    expect(
+      projectRelayResult({ content: [{ type: "text", text: '{"commands":[],"n":1}' }] })
+    ).toEqual({ isError: false, structured: { commands: [], n: 1 }, text: null });
+  });
+
+  it("keeps as text whatever isn't a lone JSON object, and every error", () => {
+    const asText = (text: string, extra: Partial<CallToolResult> = {}) =>
+      projectRelayResult({ content: [{ type: "text", text }], ...extra });
+
+    expect(asText("OK")).toEqual({ isError: false, structured: null, text: "OK" });
+    expect(asText("[1,2]")).toEqual({ isError: false, structured: null, text: "[1,2]" });
+    expect(asText("null")).toEqual({ isError: false, structured: null, text: "null" });
+    expect(asText('"{}"')).toEqual({ isError: false, structured: null, text: '"{}"' });
+    expect(asText("{not json")).toEqual({ isError: false, structured: null, text: "{not json" });
+    const error = '{"code":"NOT_FOUND","message":"No such terminal"}';
+    expect(asText(error, { isError: true })).toEqual({
+      isError: true,
+      structured: null,
+      text: error,
+    });
+    // A note after the result, a JSON object split across blocks, or a result
+    // the host's server already cut, stays as it came.
+    expect(
+      projectRelayResult({
+        content: [
+          { type: "text", text: '{"terminalId":"t-1"}' },
+          { type: "text", text: "Owned for this session." },
+        ],
+      })
+    ).toEqual({
+      isError: false,
+      structured: null,
+      text: '{"terminalId":"t-1"}\nOwned for this session.',
+    });
+    expect(
+      projectRelayResult({
+        content: [
+          { type: "text", text: '{"a":' },
+          { type: "text", text: "1}" },
+        ],
+      })
+    ).toEqual({ isError: false, structured: null, text: '{"a":\n1}' });
+    const serverCut = buildToolCallResult({ items: "x".repeat(60 * 1024) });
+    const [cutBlock] = serverCut.content;
+    if (cutBlock?.type !== "text") throw new Error("expected a text block");
+    expect(() => JSON.parse(cutBlock.text) as unknown).toThrow();
+    expect(projectRelayResult(serverCut)).toEqual({
+      isError: false,
+      structured: null,
+      text: cutBlock.text,
+    });
+  });
+
+  it("prefers the structured half to a text that disagrees with it", () => {
+    expect(
+      projectRelayResult({
+        content: [{ type: "text", text: '{"a":2}' }],
+        structuredContent: { a: 1 },
+      })
+    ).toEqual({ isError: false, structured: { a: 1 }, text: null });
+  });
+
+  it("carries an object as deep as the link encodes in a whole answer, and a deeper one as text", () => {
+    const nested = (depth: number) => `${'{"a":'.repeat(depth)}1${"}".repeat(depth)}`;
+    const deepest = nested(MAX_CARRIED_DEPTH);
+    const projected = projectRelayResult({ content: [{ type: "text", text: deepest }] });
+    expect(projected).toEqual({ isError: false, structured: JSON.parse(deepest), text: null });
+    // As the link carries the answer back: a call result, its envelope, the answer.
+    const frame = {
+      requestId: 1,
+      envelope: {
+        __daintreeIpcEnvelope: true,
+        ok: true,
+        data: { status: "done", result: projected },
+      },
+    };
+    expect(decodeValue(encodeValue(frame))).toEqual(frame);
+
+    const deeper = nested(MAX_CARRIED_DEPTH + 1);
+    expect(projectRelayResult({ content: [{ type: "text", text: deeper }] })).toEqual({
+      isError: false,
+      structured: null,
+      text: deeper,
+    });
+    expect(
+      projectRelayResult({
+        content: [{ type: "text", text: deeper }],
+        structuredContent: JSON.parse(deeper) as Record<string, unknown>,
+      })
+    ).toEqual({ isError: false, structured: null, text: deeper });
+  });
+
+  it("carries as text an object with a key the link can't encode or the Shell would drop", () => {
+    for (const text of ['{"ok":{"__proto__":{"polluted":true}}}', '{"ok":{"\\ud800":1}}']) {
+      expect(projectRelayResult({ content: [{ type: "text", text }] })).toEqual({
+        isError: false,
+        structured: null,
+        text,
+      });
+      expect(
+        projectRelayResult({
+          content: [{ type: "text", text }],
+          structuredContent: JSON.parse(text) as Record<string, unknown>,
+        })
+      ).toEqual({ isError: false, structured: null, text });
+    }
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
   it("cuts a result too large to carry, saying the call ran", () => {
     const big = "x".repeat(MAX_RELAY_RESULT_BYTES * 2);
     const projected = projectRelayResult({ content: [{ type: "text", text: big }] });
@@ -579,14 +699,96 @@ describe("projectRelayResult", () => {
       MAX_RELAY_RESULT_BYTES
     );
   });
+
+  it("cuts a JSON object answered as text that is too large to carry, as text with its notice", () => {
+    // Spaced out, so the cut shows the object as it was carried rather than the text as it came.
+    const big = `{ "items" : [ "${"x".repeat(MAX_RELAY_RESULT_BYTES * 2)}" ] }`;
+    const projected = projectRelayResult({ content: [{ type: "text", text: big }] });
+
+    expect(projected.structured).toBeNull();
+    expect(projected.text).toMatch(
+      /^\[The host's result was cut to fit: \d+ of \d+ bytes shown\. The call ran[^\n]*\n\{"items":\["x/
+    );
+    expect(Buffer.byteLength(JSON.stringify(projected), "utf8")).toBeLessThanOrEqual(
+      MAX_RELAY_RESULT_BYTES
+    );
+  });
+});
+
+describe("installHostMcpRelay results of tools with no output schema (#15730)", () => {
+  // What the host's MCP server answers for an action whose manifest entry has
+  // no output schema: its result as compact JSON text, with no structured content.
+  const noSchemaAnswer = (value: unknown) => async () => {
+    const result = buildToolCallResult(value);
+    expect(result.structuredContent).toBeUndefined();
+    expect(result.content).toEqual([{ type: "text", text: JSON.stringify(value) }]);
+    return result;
+  };
+
+  it.each([
+    [
+      "worktree.createWithRecipe",
+      {
+        worktreeId: "wt-1",
+        worktreePath: "/repo-worktrees/feature-x",
+        branch: "feature/x",
+        requestedBranch: "feature/x",
+        effectiveBranch: "feature/x",
+        recipeLaunched: true,
+        spawnedTerminalCount: 1,
+        spawnedTerminalIds: ["t-1"],
+        failedTerminalCount: 0,
+        setupState: { status: "running" },
+        assignedToSelf: false,
+        assignedUsername: null,
+        assignmentError: null,
+      },
+    ],
+    [
+      "slashCommands.list",
+      {
+        commands: [
+          {
+            id: "/review",
+            label: "/review",
+            description: "Review the diff",
+            scope: "project",
+            agentId: "claude",
+          },
+        ],
+      },
+    ],
+  ])("answers %s in its structured half", async (tool, value) => {
+    const { links, relay } = harness([["link-1", "sender-a"]], {}, noSchemaAnswer(value));
+
+    await expect(links[0]!.call({ tool, args: {} })).resolves.toEqual({
+      status: "done",
+      result: { isError: false, structured: value, text: null },
+    });
+    relay.dispose();
+  });
+
+  it("still answers a tool's refusal in its text half", async () => {
+    const refusal = buildToolError({ code: "NOT_FOUND", message: "No such worktree" });
+    const [block] = refusal.content;
+    if (block?.type !== "text") throw new Error("expected a text block");
+    const { links, relay } = harness([["link-1", "sender-a"]], {}, async () => refusal);
+
+    await expect(links[0]!.call({ tool: "worktree.createWithRecipe" })).resolves.toEqual({
+      status: "done",
+      result: { isError: true, structured: null, text: block.text },
+    });
+    relay.dispose();
+  });
 });
 
 describe("installHostMcpRelay notices (#13500)", () => {
-  const notice = (callId = "call-1") => ({
+  const notice = (callId = "call-1"): RelayedNotice => ({
     helpSessionId: "help-1",
     callId,
     terminalId: "t-1",
-    observation: { kind: "closed" as const },
+    observation: { kind: "closed" },
+    lastTransitionAt: null,
   });
   const notifyCall = { tool: "terminal.notifyWhenIdle", args: { terminalId: "t-1" } };
   const status = (link: FakeLink, calls: Array<{ helpSessionId: string; callId: string }>) =>
@@ -839,13 +1041,15 @@ describe("installHostMcpRelay approvals (#13501)", () => {
     expect(links[1]!.sent).toEqual([]);
     expect(links[0]!.sent).toEqual([
       {
-        method: AssistantLinkMethod.RELAY_APPROVE,
+        // Asked the timed way first, saying how long it waits (#15699).
+        method: AssistantLinkMethod.RELAY_APPROVE_TIMED,
         payload: expect.objectContaining({
           helpSessionId: "help-1",
           callId: "call-1",
           projectId: "project-1",
           actionId: "worktree.delete",
           args: { worktreeId: "/wt/feature" },
+          holdBudgetMs: expect.any(Number),
         }),
       },
     ]);
@@ -1062,6 +1266,26 @@ describe("throwaway runs of an owner that is gone (#14447)", () => {
     relay.dispose();
   });
 
+  it("drops what an ended help session held for its workers, for the proven sender only (#16187)", async () => {
+    const endHeldSends = vi.fn();
+    const { links, relay } = harness(
+      [
+        ["link-1", "sender-a"],
+        ["link-2", null],
+      ],
+      { endHeldSends }
+    );
+    await expect(
+      links[0]!.ask(AssistantLinkMethod.THROWAWAY_RELEASE, { helpSessionId: "help-1" })
+    ).resolves.toEqual({});
+    expect(endHeldSends).toHaveBeenCalledWith("sender-a", "help-1");
+    await expect(
+      links[1]!.ask(AssistantLinkMethod.THROWAWAY_RELEASE, { helpSessionId: "help-1" })
+    ).rejects.toMatchObject({ code: "PERMISSION" });
+    expect(endHeldSends).toHaveBeenCalledTimes(1);
+    relay.dispose();
+  });
+
   it("closes a sender's runs once its last link has been gone past the grace", async () => {
     vi.useFakeTimers();
     const { links, endOwner, relay, detach } = withRuns([["link-1", "sender-a"]]);
@@ -1192,12 +1416,50 @@ describe("a Shell listing this host's agents (#14455)", () => {
     const readAgents = vi.fn(async () => DIRECTORY);
     const openSession = vi.fn();
     const { links, relay } = harness([["link-1", "sender-a"]], { readAgents, openSession });
+    // It says it sends its agents' waits, which an older host's answer never does (#16188).
     await expect(
       links[0]!.ask(AssistantLinkMethod.AGENTS, { projectId: "project-1" })
-    ).resolves.toEqual({ status: "done", directory: DIRECTORY });
+    ).resolves.toEqual({ status: "done", directory: DIRECTORY, waitingEvents: true });
     expect(readAgents).toHaveBeenCalledWith({ projectId: "project-1" });
     // Listing opens no MCP session, and so takes no tier, grant or ownership.
     expect(openSession).not.toHaveBeenCalled();
+    relay.dispose();
+  });
+
+  it("sends a Shell no lane higher than its build names, counting the rest (#16218)", async () => {
+    const assistant = (lane: number) => ({
+      ...DIRECTORY.entries[0]!,
+      role: "assistant" as const,
+      subject: { ...DIRECTORY.entries[0]!.subject, terminalId: `lane-${lane}`, lane },
+      attached: true,
+    });
+    const kept = {
+      state: "resumable" as const,
+      role: "assistant" as const,
+      hostId: "local",
+      scope: { kind: "project" as const, projectId: "project-1" },
+      lane: 5,
+      agentId: "codex",
+      capturedAt: 1,
+    };
+    const wide = {
+      ...DIRECTORY,
+      omitted: 1,
+      entries: [DIRECTORY.entries[0]!, assistant(2), assistant(3), kept],
+    };
+    const { links, relay } = harness([["link-1", "sender-a"]], { readAgents: async () => wide });
+
+    // A Shell that doesn't say reads three lanes, and refuses an answer naming a fourth.
+    const legacy = (await links[0]!.ask(AssistantLinkMethod.AGENTS, {})) as {
+      directory: AgentDirectory;
+    };
+    expect(legacy.directory.entries).toEqual([DIRECTORY.entries[0], assistant(2)]);
+    expect(legacy.directory.omitted).toBe(3);
+
+    (links[0]!.ctx.client as { assistantSlots?: number }).assistantSlots = MAX_ASSISTANT_SLOTS;
+    await expect(links[0]!.ask(AssistantLinkMethod.AGENTS, {})).resolves.toMatchObject({
+      directory: wide,
+    });
     relay.dispose();
   });
 
@@ -1260,6 +1522,7 @@ describe("a Shell listing this host's agents (#14455)", () => {
         omitted: 0,
         entries: [],
       },
+      waitingEvents: true,
     });
     broken.relay.dispose();
   });
@@ -1270,6 +1533,7 @@ describe("a Shell listing this host's agents (#14455)", () => {
     await expect(partial.links[0]!.ask(AssistantLinkMethod.AGENTS, {})).resolves.toEqual({
       status: "done",
       directory: stale,
+      waitingEvents: true,
     });
     partial.relay.dispose();
 
@@ -1292,5 +1556,398 @@ describe("a Shell listing this host's agents (#14455)", () => {
       AGENT_DIRECTORY_BYTES_MAX
     );
     big.relay.dispose();
+  });
+});
+
+describe("a Shell reading this host's agents' status (#16191)", () => {
+  /** A token and a key, each in a shape the redactor knows. */
+  const GITHUB_TOKEN = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2";
+  const API_KEY = "sk-proj-" + "abcdefghijklmnopqrstu";
+
+  const statusAnswer = (terminalId: string): CallToolResult => {
+    const result = {
+      terminals: [
+        {
+          terminalId,
+          agentId: "claude",
+          agentState: "waiting",
+          waitingReason: "prompt",
+          lastTransitionAt: 10,
+          lastTypedInputAt: 4,
+          agentIncarnation: 2,
+          lastHandback: {
+            message: `pushed with ${API_KEY}`,
+            observedAt: 9,
+            truncated: false,
+          },
+          recentOutput: `export GITHUB_TOKEN=${GITHUB_TOKEN}\n❯ approve?`,
+        },
+      ],
+      source: "pty",
+      unavailableFields: ["armed", "lastCheckResult", "exitCode"],
+    };
+    return buildToolCallResult(result, { structuredContent: result });
+  };
+
+  const payload = (overrides: Record<string, unknown> = {}) => ({
+    helpSessionId: "help-1",
+    tier: "core",
+    projects: [
+      { projectId: "project-1", terminalIds: ["t-1"] },
+      { projectId: "project-2", terminalIds: ["t-2"] },
+    ],
+    includeOutput: { lines: 10, stripAnsi: true },
+    runMs: 5_000,
+    ...overrides,
+  });
+
+  const LIVE = {
+    state: "live" as const,
+    agentId: "claude",
+    agentState: "idle" as const,
+    waitingReason: null,
+    since: null,
+    label: null,
+    attached: null,
+    handback: null,
+  };
+  const live = (terminalId: string, projectId: string, role: "worker" | "assistant") => ({
+    ...LIVE,
+    role,
+    subject: {
+      hostId: "local",
+      scope: { kind: "project" as const, projectId },
+      terminalId,
+      incarnation: 1,
+    },
+  });
+
+  it("reads each project in its own bound session in one exchange, and redacts what the screens showed", async () => {
+    const answers = [statusAnswer("t-1"), statusAnswer("t-2")];
+    const { links, opened, relay } = harness([["link-1", "sender-a"]], {}, async () =>
+      answers.shift()!
+    );
+    const answer = await links[0]!.ask(AssistantLinkMethod.STATUS, payload({ global: true }));
+
+    expect(opened.map((session) => session.spec.projectId).sort()).toEqual([
+      "project-1",
+      "project-2",
+    ]);
+    for (const session of opened) {
+      // Admitted for the Shell's sender and help session, as its global Assistant.
+      expect(session.spec).toMatchObject({
+        linkSessionId: "link-1",
+        senderId: "sender-a",
+        helpSessionId: "help-1",
+        tier: "core",
+        global: true,
+      });
+      expect(session.calls).toHaveLength(1);
+      expect(session.calls[0]).toMatchObject({
+        tool: "terminal.getStatus",
+        args: {
+          terminalIds: [session.spec.projectId === "project-1" ? "t-1" : "t-2"],
+          includeOutput: { lines: 10, stripAnsi: true },
+        },
+      });
+    }
+    const text = JSON.stringify(answer);
+    expect(text).not.toContain(GITHUB_TOKEN);
+    expect(text).not.toContain(API_KEY);
+    expect(answer).toMatchObject({
+      status: "done",
+      projects: [
+        {
+          status: "done",
+          projectId: "project-1",
+          complete: true,
+          omitted: 0,
+          result: {
+            source: "pty",
+            terminals: [
+              {
+                terminalId: "t-1",
+                agentState: "waiting",
+                lastTypedInputAt: 4,
+                agentIncarnation: 2,
+                lastHandback: { message: "pushed with [redacted]", observedAt: 9 },
+                recentOutput: "export GITHUB_TOKEN=[redacted]\n❯ approve?",
+              },
+            ],
+          },
+        },
+        { status: "done", projectId: "project-2" },
+      ],
+    });
+    // What crossed the link is the redacted answer, and it encodes whole.
+    expect(JSON.stringify(decodeValue(encodeValue(answer)))).not.toContain(GITHUB_TOKEN);
+    relay.dispose();
+  });
+
+  it("opens the session a later call reuses, so its notices and approvals still reach the Shell", async () => {
+    const { links, opened, relay } = harness([["link-1", "sender-a"]], {}, async () =>
+      statusAnswer("t-1")
+    );
+    await links[0]!.ask(
+      AssistantLinkMethod.STATUS,
+      payload({ global: true, projects: [{ projectId: "project-1", terminalIds: ["t-1"] }] })
+    );
+    await links[0]!.ask(AssistantLinkMethod.GLOBAL_MCP_CALL, {
+      helpSessionId: "help-1",
+      projectId: "project-1",
+      tier: "core",
+      callId: "call-1",
+      resend: false,
+      tool: "terminal.list",
+      args: {},
+      runMs: 90_000,
+    });
+    expect(opened).toHaveLength(1);
+    expect(opened[0]!.calls.map((call) => call.tool)).toEqual([
+      "terminal.getStatus",
+      "terminal.list",
+    ]);
+    // The session the read opened carries the call's notices and questions back over its link.
+    const spec = opened[0]!.spec;
+    spec.deliverNotices([
+      {
+        helpSessionId: "help-1",
+        callId: "call-1",
+        terminalId: "t-1",
+        observation: { kind: "closed" },
+        lastTransitionAt: null,
+      },
+    ]);
+    await vi.waitFor(() =>
+      expect(links[0]!.sent.map((sent) => sent.method)).toContain(AssistantLinkMethod.RELAY_NOTICES)
+    );
+    await spec.requestApproval({
+      callId: "call-1",
+      actionId: "worktree.delete",
+      args: { worktreeId: "/wt/feature" },
+      lines: ["No uncommitted changes."],
+    });
+    expect(links[0]!.sent.map((sent) => sent.method)).toContain(
+      AssistantLinkMethod.RELAY_APPROVE_TIMED
+    );
+    expect(
+      links[0]!.sent.find((sent) => sent.method === AssistantLinkMethod.RELAY_APPROVE_TIMED)
+    ).toMatchObject({ payload: { helpSessionId: "help-1", projectId: "project-1" } });
+    relay.dispose();
+  });
+
+  it("names a project's agents from its own directory when no terminals are named", async () => {
+    const readAgents = vi.fn(async () => ({
+      coverage: "ok" as const,
+      observedAt: 7,
+      complete: true,
+      omitted: 0,
+      entries: [
+        live("t-a", "project-1", "worker"),
+        live("t-b", "project-1", "assistant"),
+        live("t-c", "project-9", "worker"),
+      ],
+    }));
+    const { links, opened, relay } = harness([["link-1", "sender-a"]], { readAgents }, async () => {
+      const answer = statusAnswer("t-a");
+      const result = answer.structuredContent as { terminals: Array<{ terminalId: string }> };
+      result.terminals.push({ ...result.terminals[0]!, terminalId: "t-b" });
+      return buildToolCallResult(result, { structuredContent: result });
+    });
+    const answer = await links[0]!.ask(
+      AssistantLinkMethod.STATUS,
+      payload({ projects: [{ projectId: "project-1" }, { projectId: "project-2" }] })
+    );
+    expect(readAgents).toHaveBeenCalledWith({ projectId: "project-1" });
+    // project-2 lists no agents of its own: it is answered whole, with nothing to read.
+    expect(opened.map((session) => session.spec.projectId)).toEqual(["project-1"]);
+    expect(opened[0]!.calls[0]!.args).toMatchObject({ terminalIds: ["t-a", "t-b"] });
+    expect(answer).toMatchObject({
+      status: "done",
+      projects: [
+        {
+          status: "done",
+          projectId: "project-1",
+          complete: true,
+          result: { terminals: [{ terminalId: "t-a" }, { terminalId: "t-b" }] },
+        },
+        { status: "done", projectId: "project-2", result: null, complete: true, omitted: 0 },
+      ],
+    });
+    relay.dispose();
+  });
+
+  it("says a project's agents couldn't be listed, and a partial list is no whole one", async () => {
+    const none = harness([["link-1", "sender-a"]]);
+    await expect(
+      none.links[0]!.ask(
+        AssistantLinkMethod.STATUS,
+        payload({ projects: [{ projectId: "project-1" }] })
+      )
+    ).resolves.toEqual({
+      status: "done",
+      projects: [{ status: "failed", projectId: "project-1", reason: "agents-unsupported" }],
+    });
+    expect(none.opened).toHaveLength(0);
+    none.relay.dispose();
+
+    // A project this host doesn't have is never one with no agents.
+    const readAgents = vi.fn(async () => ({
+      coverage: "ok" as const,
+      observedAt: 7,
+      complete: true,
+      omitted: 0,
+      entries: [],
+    }));
+    const gone = harness([["link-1", "sender-a"]], {
+      readAgents,
+      hasProject: async () => false,
+    });
+    await expect(
+      gone.links[0]!.ask(
+        AssistantLinkMethod.STATUS,
+        payload({ projects: [{ projectId: "project-1" }] })
+      )
+    ).resolves.toEqual({
+      status: "done",
+      projects: [{ status: "refused", projectId: "project-1", reason: "no-project" }],
+    });
+    expect(readAgents).not.toHaveBeenCalled();
+    gone.relay.dispose();
+
+    const stale = harness(
+      [["link-1", "sender-a"]],
+      {
+        readAgents: async () => ({
+          coverage: "stale" as const,
+          observedAt: 7,
+          complete: false,
+          omitted: 3,
+          entries: [live("t-a", "project-1", "worker")],
+        }),
+      },
+      async () => statusAnswer("t-a")
+    );
+    await expect(
+      stale.links[0]!.ask(
+        AssistantLinkMethod.STATUS,
+        payload({ projects: [{ projectId: "project-1" }] })
+      )
+    ).resolves.toMatchObject({
+      projects: [{ status: "done", projectId: "project-1", complete: false, omitted: 3 }],
+    });
+    stale.relay.dispose();
+  });
+
+  it("refuses without reading while this host's own setting is off, or once it goes off", async () => {
+    const off = harness([["link-1", "sender-a"]], { acceptsRemoteControl: () => false });
+    await expect(off.links[0]!.ask(AssistantLinkMethod.STATUS, payload())).resolves.toEqual({
+      status: "refused",
+      reason: "control-off",
+    });
+    expect(off.opened).toHaveLength(0);
+    off.relay.dispose();
+
+    let consent = true;
+    const revoked = harness(
+      [["link-1", "sender-a"]],
+      { acceptsRemoteControl: () => consent },
+      async () => {
+        consent = false;
+        return statusAnswer("t-1");
+      }
+    );
+    await expect(revoked.links[0]!.ask(AssistantLinkMethod.STATUS, payload())).resolves.toEqual({
+      status: "refused",
+      reason: "control-off",
+    });
+    revoked.relay.dispose();
+  });
+
+  it("reads nothing for a session that proved no sender", async () => {
+    const { links, opened, relay } = harness([["link-1", null]]);
+    await expect(links[0]!.ask(AssistantLinkMethod.STATUS, payload())).rejects.toMatchObject({
+      code: "PERMISSION",
+    });
+    expect(opened).toHaveLength(0);
+    relay.dispose();
+  });
+
+  it("answers each project for itself: missing, an error, not a status, or out of time", async () => {
+    const answers: Array<() => Promise<CallToolResult>> = [
+      async () => buildToolError({ code: "TIER_NOT_PERMITTED", message: "no" }),
+      async () => ({ content: [{ type: "text", text: "not a status" }] }),
+      () => new Promise<CallToolResult>(() => {}),
+    ];
+    const { links, relay } = harness(
+      [["link-1", "sender-a"]],
+      { hasProject: async (projectId) => projectId !== "project-0" },
+      () => answers.shift()!()
+    );
+    const answer = await links[0]!.ask(
+      AssistantLinkMethod.STATUS,
+      payload({
+        projects: [
+          { projectId: "project-0", terminalIds: ["t-0"] },
+          { projectId: "project-1", terminalIds: ["t-1"] },
+          { projectId: "project-2", terminalIds: ["t-2"] },
+          { projectId: "project-3", terminalIds: ["t-3"] },
+        ],
+        runMs: 500,
+      })
+    );
+    expect(answer).toEqual({
+      status: "done",
+      projects: [
+        { status: "refused", projectId: "project-0", reason: "no-project" },
+        { status: "failed", projectId: "project-1", reason: "tool-error" },
+        { status: "failed", projectId: "project-2", reason: "unreadable" },
+        { status: "failed", projectId: "project-3", reason: "timeout" },
+      ],
+    });
+    relay.dispose();
+  });
+
+  it("sends every tail as each project read it: the Shell shares the room out, not the host", async () => {
+    const tail = "z".repeat(40_000);
+    const { links, relay } = harness([["link-1", "sender-a"]], {}, async () => {
+      const result = {
+        terminals: [
+          { terminalId: "t-1", agentId: "claude", agentState: "working", recentOutput: tail },
+        ],
+        source: "pty",
+        unavailableFields: [],
+      };
+      return buildToolCallResult(result, { structuredContent: result });
+    });
+    const answer = (await links[0]!.ask(
+      AssistantLinkMethod.STATUS,
+      payload({
+        projects: Array.from({ length: 6 }, (_, index) => ({
+          projectId: `project-${index}`,
+          terminalIds: ["t-1"],
+        })),
+      })
+    )) as { projects: Array<{ result: { terminals: Array<{ recentOutput: string }> } }> };
+    // Well past one relayed call's answer, and every tail whole.
+    expect(JSON.stringify(answer).length).toBeGreaterThan(MAX_RELAY_RESULT_BYTES);
+    for (const project of answer.projects) {
+      expect(project.result.terminals[0]!.recentOutput).toBe(tail);
+    }
+    relay.dispose();
+  });
+
+  it("keeps no record of a read: the same project read twice runs twice", async () => {
+    const { links, opened, relay } = harness([["link-1", "sender-a"]], {}, async () =>
+      statusAnswer("t-1")
+    );
+    const once = payload({ projects: [{ projectId: "project-1", terminalIds: ["t-1"] }] });
+    await links[0]!.ask(AssistantLinkMethod.STATUS, once);
+    await links[0]!.ask(AssistantLinkMethod.STATUS, once);
+    expect(opened).toHaveLength(1);
+    const [first, second] = opened[0]!.calls;
+    expect(second).toBeDefined();
+    expect(first!.callId).not.toBe(second!.callId);
+    relay.dispose();
   });
 });

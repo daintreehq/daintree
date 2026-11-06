@@ -941,7 +941,8 @@ ptyManager.on(
     exitCode: number,
     signal?: number,
     launchGeneration?: number,
-    preserveSession?: boolean
+    preserveSession?: boolean,
+    spawnedAt?: number
   ) => {
     // Release all pause holds and remove coordinator for this terminal
     const coordinator = pauseCoordinators.get(id);
@@ -1002,8 +1003,23 @@ ptyManager.on(
       exitCode,
       signal,
       launchGeneration,
+      ...(spawnedAt !== undefined && { spawnedAt }),
       ...(preserveSession && { preserveSession }),
     });
+  }
+);
+
+// A replaced incarnation's exit: no per-id cleanup here, the id is its successor's.
+ptyManager.on(
+  "superseded-exit",
+  (
+    id: string,
+    exitCode: number,
+    signal: number | undefined,
+    launchGeneration: number | undefined,
+    spawnedAt: number
+  ) => {
+    sendEvent({ type: "superseded-exit", id, exitCode, signal, launchGeneration, spawnedAt });
   }
 );
 
@@ -1121,6 +1137,21 @@ events.on("agent:handback-observed", (payload) => {
     terminalId: payload.terminalId,
     handback: payload.handback,
     ...(payload.code !== undefined ? { code: payload.code } : {}),
+    ...(payload.lastStateChange !== undefined ? { lastStateChange: payload.lastStateChange } : {}),
+    timestamp: payload.timestamp,
+  });
+});
+
+events.on("agent:run-handback-observed", (payload) => {
+  sendEvent({
+    type: "agent-run-handback-observed",
+    terminalId: payload.terminalId,
+    spawnedAt: payload.spawnedAt,
+    code: payload.code,
+    report: payload.report,
+    message: payload.message,
+    truncated: payload.truncated,
+    observedAt: payload.observedAt,
     timestamp: payload.timestamp,
   });
 });
@@ -1129,6 +1160,19 @@ events.on("agent:rate-limit-observed", (payload) => {
   sendEvent({
     type: "agent-rate-limit-observed",
     terminalId: payload.terminalId,
+    observedAt: payload.observedAt,
+    timestamp: payload.timestamp,
+  });
+});
+
+events.on("agent:claude-usage-observed", (payload) => {
+  sendEvent({
+    type: "agent-claude-usage-observed",
+    terminalId: payload.terminalId,
+    window: payload.window,
+    statement: payload.statement,
+    usedPercent: payload.usedPercent,
+    resetsAt: payload.resetsAt,
     observedAt: payload.observedAt,
     timestamp: payload.timestamp,
   });
@@ -1259,6 +1303,18 @@ events.on("agent-session:captured", (payload) => {
     launchGeneration: payload.launchGeneration,
     boundary: payload.boundary,
     record: payload.record,
+    ...(payload.run ? { run: payload.run } : {}),
+  });
+});
+
+events.on("agent-session:observed", (payload) => {
+  sendEvent({
+    type: "agent-session-observed",
+    terminalId: payload.terminalId,
+    agentId: payload.agentId,
+    projectId: payload.projectId,
+    sessionId: payload.sessionId,
+    run: payload.run,
   });
 });
 

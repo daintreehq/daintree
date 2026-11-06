@@ -1,6 +1,9 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from "vitest";
-import { render } from "@testing-library/react";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { act, render } from "@testing-library/react";
+import type { FleetRunRow } from "@shared/types/ipc/fleet";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import { SESSION_COLORS } from "@/components/Worktree/terminalStateConfig";
 import type { PanelInstance } from "@shared/types/panel";
 
 vi.mock("@/components/Terminal/TerminalIcon", () => ({
@@ -9,7 +12,7 @@ vi.mock("@/components/Terminal/TerminalIcon", () => ({
 
 import { TerminalDragPreview } from "../TerminalDragPreview";
 
-function agentPanel(): PanelInstance {
+function agentPanel(agentState = "working"): PanelInstance {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- inert fixture
   return {
     id: "p1",
@@ -19,7 +22,7 @@ function agentPanel(): PanelInstance {
     isVisible: true,
     launchAgentId: "claude",
     runtimeIdentity: { kind: "agent", id: "claude", iconId: "claude", agentId: "claude" },
-    agentState: "working",
+    agentState,
   } as unknown as PanelInstance;
 }
 
@@ -86,5 +89,53 @@ describe("TerminalDragPreview chrome", () => {
       expect(el.className.toString()).not.toMatch(/(?:^|\s)text-[a-z-]+\/\d+/);
       expect(el.style.color).toBe("");
     }
+  });
+});
+
+// The ghost draws the pane's own glyph (#16057): amber only for an unread
+// Canopy ask, never for a prompt that asks nothing.
+describe("TerminalDragPreview glyph from the fleet band", () => {
+  afterEach(() => {
+    useFleetSnapshotStore.setState({ snapshot: null });
+  });
+
+  function deliverRun(overrides: Partial<FleetRunRow>) {
+    act(() => {
+      useFleetSnapshotStore.getState().applySnapshot({
+        runs: [
+          {
+            runId: "p1",
+            workspaceId: "w1",
+            spawnedAt: 1,
+            cwd: "/repo",
+            agentState: "waiting",
+            ...overrides,
+          },
+        ],
+        changedAt: 2,
+        degraded: false,
+        lastSuccessfulAt: 2,
+      });
+    });
+  }
+  // The single drag's only svg is the state glyph: the kind icon is stubbed.
+  const glyphClass = (container: HTMLElement) =>
+    container.querySelector("svg")?.getAttribute("class") ?? null;
+
+  it("draws nothing for a prompt that asks nothing, and the amber ring for an unread ask", () => {
+    const { container } = render(<TerminalDragPreview terminal={agentPanel("waiting")} />);
+    deliverRun({});
+    expect(glyphClass(container)).toBeNull();
+    deliverRun({ canopy: { kind: "asked", quote: "Run it?", readAt: 1, seen: false } });
+    expect(glyphClass(container)).toContain(SESSION_COLORS.waiting);
+  });
+
+  it("draws a hand-back unread, then finished once read", () => {
+    const { container } = render(<TerminalDragPreview terminal={agentPanel("waiting")} />);
+    deliverRun({ handBack: { stoppedAt: 1 } });
+    expect(glyphClass(container)).toContain(SESSION_COLORS.unread);
+    deliverRun({ handBack: { stoppedAt: 1, seenAt: 2 } });
+    expect(glyphClass(container)).toContain(SESSION_COLORS.completed);
+    expect(glyphClass(container)).not.toContain(SESSION_COLORS.waiting);
   });
 });

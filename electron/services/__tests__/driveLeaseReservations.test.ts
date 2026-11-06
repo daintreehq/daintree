@@ -34,6 +34,21 @@ describe("drive lease reservations on disk", () => {
     });
   });
 
+  it("keeps a project nobody held only with the tenure it waits on (#15918)", () => {
+    expect(
+      parseReservations(
+        JSON.stringify({
+          kept: { clientId: "c1", clientName: "laptop", tenureId: "t-1", vacant: true },
+          noTenure: { clientId: "c1", clientName: "laptop", vacant: true },
+          notVacant: { clientId: "c1", clientName: "laptop", tenureId: "t-2", vacant: "yes" },
+        })
+      )
+    ).toEqual({
+      kept: { clientId: "c1", clientName: "laptop", tenureId: "t-1", vacant: true },
+      notVacant: { clientId: "c1", clientName: "laptop", tenureId: "t-2" },
+    });
+  });
+
   it("ignores a damaged file rather than failing to start", () => {
     dir = mkdtempSync(path.join(os.tmpdir(), "dlr-"));
     writeFileSync(path.join(dir, "drive-lease-reservations.json"), "{not json");

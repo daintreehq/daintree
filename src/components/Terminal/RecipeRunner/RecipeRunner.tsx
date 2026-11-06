@@ -1,4 +1,4 @@
-import { RefreshCw, XCircle } from "lucide-react";
+import { Plus, RefreshCw, XCircle } from "lucide-react";
 import { useRecipeRunner, type SpawnFailureSummary } from "./useRecipeRunner";
 import { RecipeRunnerGrid } from "./RecipeRunnerGrid";
 import { RecipeRunnerList } from "./RecipeRunnerList";
@@ -6,6 +6,7 @@ import { RecipeRunnerEmpty } from "./RecipeRunnerEmpty";
 import { InlineStatusBanner } from "../InlineStatusBanner";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
+import { getRecipeScope } from "@/utils/recipeScope";
 
 interface RecipeRunnerProps {
   activeWorktreeId: string | null | undefined;
@@ -68,6 +69,10 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
   }
 
   const flatRecipes = runner.getFlatRecipes();
+  // A scope label earns its place only when it tells recipes apart: printed
+  // under every card when they all share it, it was the whole second line
+  // saying "Team" three times.
+  const showScope = new Set(runner.recipes.map((recipe) => getRecipeScope(recipe).label)).size > 1;
 
   return (
     <div className="w-full">
@@ -112,6 +117,7 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
           focusedIndex={runner.focusedIndex}
           focusedItemId={runner.focusedItemId}
           showSearch={runner.showSearch}
+          showScope={showScope}
           disabled={!defaultCwd}
           onSearchChange={runner.setSearchQuery}
           onKeyDown={runner.handleKeyDown}
@@ -128,6 +134,7 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
         <RecipeRunnerGrid
           recipes={flatRecipes}
           focusedIndex={runner.focusedIndex}
+          showScope={showScope}
           disabled={!defaultCwd}
           onRun={runner.handleRun}
           onEdit={runner.handleEdit}
@@ -135,17 +142,26 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
           onPin={runner.handlePin}
           onUnpin={runner.handleUnpin}
           onDelete={runner.handleDelete}
-          onCreate={runner.handleCreate}
           setFocusedIndex={runner.setFocusedIndex}
         />
       )}
-      {/* The canvas launches; the manager is where every recipe's other
+      {/* The band's two housekeeping actions share one footer line under the
+          cards, at one size, on the column's edges: creating at the start,
+          managing at the end. They used to be two centred lines at two sizes,
+          with Create inside the cards' listbox, so Tab skipped a control that
+          looked separate and the band ended in a stack of loose links.
+
+          The canvas launches; the manager is where every recipe's other
           actions live. Right-click reaches a few of them here, but a context
           menu is not a visible path, so the band names the one that is. */}
       {!runner.showSearch && (
-        <div className="mt-1 flex justify-center">
-          <Button variant="ghost" size="xs" onClick={runner.handleManage} className="px-2 text-xs">
-            Manage recipes
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <Button variant="ghost" size="sm" onClick={runner.handleCreate}>
+            <Plus aria-hidden />
+            Create new recipe…
+          </Button>
+          <Button variant="ghost" size="sm" onClick={runner.handleManage}>
+            Manage recipes…
           </Button>
         </div>
       )}

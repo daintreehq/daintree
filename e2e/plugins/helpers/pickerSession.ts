@@ -103,9 +103,11 @@ export function registerPickerSession(options: PickerSessionOptions) {
     const strip = window.getByRole("toolbar", { name: "Element Picker" });
     await expect(strip).toBeVisible({ timeout: 30_000 });
     await expect(window.locator("webview")).toBeAttached({ timeout });
-    await expect(strip.getByText("Click an element to ask an agent about it")).toBeVisible({
-      timeout,
-    });
+    // The strip's live region says its sentence too, so the visible row's text
+    // alone matches twice; the announced status is the one state to wait on.
+    await expect(
+      strip.getByRole("status").filter({ hasText: "Click an element to ask an agent about it" })
+    ).toBeVisible({ timeout });
   }
 
   return { session, start };
@@ -121,7 +123,13 @@ export function registerPickerSession(options: PickerSessionOptions) {
  */
 export async function expectNotTraced(page: Page, sourceFile: string): Promise<void> {
   const identity = selectedElement(page);
-  await expect(identity.getByText("Not traced to source")).toBeVisible();
+  await expect(
+    page
+      .getByRole("complementary", { name: "Element Picker details" })
+      .getByText(
+        /^(?:No source reported for this element|No file or line for this element|Production build — elements can't be traced to source)$/
+      )
+  ).toBeVisible();
   await expect(identity.getByRole("button", { name: "Copy path" })).toHaveCount(0);
   await expect(identity.getByRole("button", { name: "Open in editor" })).toHaveCount(0);
   await expect(identity).not.toContainText(sourceFile);
@@ -142,5 +150,7 @@ export async function expectComponentsNamed(page: Page, name?: string): Promise<
 export async function expectComponentSelected(page: Page, name: string): Promise<void> {
   const strip = page.getByRole("toolbar", { name: "Element Picker" });
   await expect(strip).toContainText(name, { timeout: 30_000 });
-  await expect(strip.getByText("Component", { exact: true })).toBeVisible();
+  // By role: the trail also draws an aria-hidden copy of itself to measure
+  // its fold, badge included.
+  await expect(strip.getByRole("listitem").getByText("Component", { exact: true })).toBeVisible();
 }

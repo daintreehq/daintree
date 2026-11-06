@@ -6,10 +6,13 @@ import type { LinkSession } from "../link/session.js";
 import {
   AgentsAnswerSchema,
   AssistantLinkMethod,
+  MAX_STATUS_RUN_MS,
   McpCallAnswerSchema,
   RelayApprovePayloadSchema,
+  RelayApproveTimedPayloadSchema,
   RelayNoticeStatusAnswerSchema,
   RelayNoticesPayloadSchema,
+  StatusAnswerSchema,
   ThrowawayCallAnswerSchema,
   type AgentsAnswer,
   type AgentsPayload,
@@ -17,9 +20,12 @@ import {
   type RelayCallRequest,
   type RelayApproveAnswer,
   type RelayApprovePayload,
+  type RelayApproveTimedPayload,
   type RelayNoticeStatusAnswer,
   type RelayNoticeStatusPayload,
   type RelayNoticesPayload,
+  type StatusAnswer,
+  type StatusPayload,
   type ThrowawayCallAnswer,
   type ThrowawayCallPayload,
   type ThrowawayReleasePayload,
@@ -43,6 +49,11 @@ export interface HostControlLinkClientDeps {
   existingCredential?(hostId: HostId): string | null;
   /** The host's open session, connecting it if need be; null when the host can't be reached. */
   session(hostId: HostId): Promise<LinkSession | null>;
+  /**
+   * The host's session if one is open now: never connecting it, and never
+   * marking it used. Absent, nothing is read over a link without touching it.
+   */
+  openSession?(hostId: HostId): LinkSession | null;
   onSessionOpened(listener: (hostId: HostId, session: LinkSession) => void): () => void;
   /** Takes what a host saw of terminals this Shell's assistants asked it about (#13500). */
   noticeReceiver?: () => RelayNoticeReceiver | undefined;
@@ -52,7 +63,10 @@ export interface HostControlLinkClientDeps {
    */
   approvalReceiver?: () =>
     | {
-        receiveApproval(hostId: HostId, payload: RelayApprovePayload): Promise<RelayApproveAnswer>;
+        receiveApproval(
+          hostId: HostId,
+          payload: RelayApprovePayload | RelayApproveTimedPayload
+        ): Promise<RelayApproveAnswer>;
       }
     | undefined;
   callTimeoutMs?: number;
@@ -151,20 +165,29 @@ export class HostControlLinkClient {
           }
         );
         // A host asking about a call one of this Shell's assistants is making
-        // there; nobody to take it refuses it, which approves nothing.
+        // there; nobody to take it refuses it, which approves nothing. Asked
+        // the timed way, it also says how long it waits (#15699).
+        const answerApproval = (
+          payload: RelayApprovePayload | RelayApproveTimedPayload
+        ): Promise<RelayApproveAnswer> | RelayApproveAnswer => {
+          const receiver = this.disposed ? undefined : this.deps.approvalReceiver?.();
+          return (
+            receiver?.receiveApproval(hostId, payload) ?? {
+              approvalId: payload.approvalId,
+              argsHash: payload.argsHash,
+              decision: "refused",
+            }
+          );
+        };
         session.registerCallHandler(
           AssistantLinkMethod.RELAY_APPROVE,
           RelayApprovePayloadSchema,
-          (payload): Promise<RelayApproveAnswer> | RelayApproveAnswer => {
-            const receiver = this.disposed ? undefined : this.deps.approvalReceiver?.();
-            return (
-              receiver?.receiveApproval(hostId, payload) ?? {
-                approvalId: payload.approvalId,
-                argsHash: payload.argsHash,
-                decision: "refused",
-              }
-            );
-          }
+          answerApproval
+        );
+        session.registerCallHandler(
+          AssistantLinkMethod.RELAY_APPROVE_TIMED,
+          RelayApproveTimedPayloadSchema,
+          answerApproval
         );
         // A new session after one the host couldn't resume: proving the sender
         // again lets the host send what it kept for this Shell, and asking
@@ -316,7 +339,8 @@ export class HostControlLinkClient {
   async throwawayRelease(hostId: HostId, payload: ThrowawayReleasePayload): Promise<void> {
     const session = await this.open(hostId);
     await this.authenticate(hostId, session);
-    await this.call(hostId, session, AssistantLinkMethod.THROWAWAY_RELEASE, payload);
+    // No deadline: a release that settles unsent is dropped, and its runs live on to their own limits.
+    await this.call(hostId, session, AssistantLinkMethod.THROWAWAY_RELEASE, payload, 0);
   }
 
   /**
@@ -331,10 +355,74 @@ export class HostControlLinkClient {
       if (isUnknownOutcome(error)) throw unreachable(hostId);
       throw error;
     }
+    return this.readAgents(hostId, session, payload, timeoutMs);
+  }
+
+  /**
+   * The same read for an agent `host.watch` arm (#16188), over a link only
+   * if it is open now: it never connects the host or marks its link used,
+   * and presents a credential only if one is already kept, never minting one.
+   * Unreachable when there is no such link or credential.
+   */
+  async agentsOnOpenLink(
+    hostId: HostId,
+    payload: AgentsPayload,
+    timeoutMs?: number
+  ): Promise<AgentsAnswer> {
+    const session = this.deps.openSession?.(hostId) ?? null;
+    if (!session || !session.isOpen) throw unreachable(hostId);
+    if (!this.authenticated.has(session)) {
+      const credential = this.deps.existingCredential?.(hostId) ?? null;
+      if (credential === null) throw unreachable(hostId);
+      try {
+        await this.call(hostId, session, AssistantLinkMethod.AUTHENTICATE, { credential });
+      } catch (error) {
+        if (isUnknownOutcome(error)) throw unreachable(hostId);
+        throw error;
+      }
+      this.authenticated.add(session);
+    }
+    return this.readAgents(hostId, session, payload, timeoutMs);
+  }
+
+  private async readAgents(
+    hostId: HostId,
+    session: LinkSession,
+    payload: AgentsPayload,
+    timeoutMs: number | undefined
+  ): Promise<AgentsAnswer> {
     const parsed = AgentsAnswerSchema.safeParse(
       await this.call(hostId, session, AssistantLinkMethod.AGENTS, payload, timeoutMs)
     );
     if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.AGENTS);
+    return parsed.data;
+  }
+
+  /**
+   * `terminal.getStatus` in several of the host's projects in one exchange
+   * (#16191), for `host.status`. A host from before this answers UNSUPPORTED.
+   */
+  async status(
+    hostId: HostId,
+    payload: Omit<StatusPayload, "runMs">,
+    timeoutMs: number
+  ): Promise<StatusAnswer> {
+    const startedAt = Date.now();
+    const session = await this.open(hostId);
+    try {
+      await this.authenticate(hostId, session);
+    } catch (error) {
+      if (isUnknownOutcome(error)) throw unreachable(hostId);
+      throw error;
+    }
+    // The host is given what is left of the wait once the link is proved, so it answers inside it.
+    const leftMs = timeoutMs - (Date.now() - startedAt);
+    if (leftMs < 1) throw unreachable(hostId);
+    const runMs = Math.min(MAX_STATUS_RUN_MS, Math.floor(leftMs));
+    const parsed = StatusAnswerSchema.safeParse(
+      await this.call(hostId, session, AssistantLinkMethod.STATUS, { ...payload, runMs }, leftMs)
+    );
+    if (!parsed.success) throw invalidAnswer(hostId, AssistantLinkMethod.STATUS);
     return parsed.data;
   }
 

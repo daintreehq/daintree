@@ -17,6 +17,14 @@ const terminalInput = vi.hoisted(() => ({ hybridInputEnabled: true }));
 // The real one reads the DOM, which these suites stub in part; its own suite
 // is voiceComposerFocus.test.tsx.
 const revealDictationComposer = vi.hoisted(() => vi.fn());
+const revealAssistantComposer = vi.hoisted(() => vi.fn());
+const overlayHoldsKeyboard = vi.hoisted(() => vi.fn(() => false));
+// Whether the person was in the Assistant after a pane, as composerSurface's
+// listeners would have seen it; that suite drives the real ones.
+const assistantRecency = vi.hoisted(() => ({
+  used: false,
+  panesSince: new Set<string>(),
+}));
 type DictationReturn = import("@/services/voiceComposerFocus").DictationReturn;
 const beginDictationReturn = vi.hoisted(() =>
   vi.fn<(panelId: string, options: { pressedHere: boolean }) => DictationReturn | null>(() => null)
@@ -24,7 +32,15 @@ const beginDictationReturn = vi.hoisted(() =>
 vi.mock("@/services/voiceComposerFocus", () => ({
   beginDictationReturn,
   focusDictationComposer,
+  overlayHoldsKeyboard,
+  revealAssistantComposer,
   revealDictationComposer,
+}));
+
+vi.mock("@/lib/composerSurface", () => ({
+  wasAssistantLastFocused: () => false,
+  wasAssistantUsedAfter: (paneIds: Iterable<string>) =>
+    assistantRecency.used && ![...paneIds].some((id) => assistantRecency.panesSince.has(id)),
 }));
 
 // Whether main has this view cached, and its lifecycle edges, as a test drives them.
@@ -106,10 +122,24 @@ vi.mock("@/store/voiceRecordingStore", () => {
 });
 
 vi.mock("@/store/panelStore", () => {
+  type Entry = { id: string; location?: string; worktreeId?: string };
   const state = {
     panelsById: {} as Record<string, unknown>,
     panelIds: [] as string[],
     focusedId: null as string | null,
+    mruList: [] as string[],
+    activeDockTerminalId: null as string | null,
+    maximizedId: null as string | null,
+    maximizeTarget: null as { type: "panel" | "group"; id: string } | null,
+    trashedTerminals: new Map<string, unknown>(),
+    // Every grid pane its own group, in the scope `getTabGroups` filters by.
+    getTabGroups: (location: string, worktreeId?: string) =>
+      (Object.values(state.panelsById) as Entry[])
+        .filter((p) => (p.location ?? "grid") === location && p.worktreeId === worktreeId)
+        .map((p) => ({ id: p.id, panelIds: [p.id], activeTabId: p.id })),
+    activateTerminal: vi.fn((id: string) => {
+      state.focusedId = id;
+    }),
   };
   const getState = () => state;
   const subscribe = vi.fn(() => () => {});
@@ -154,18 +184,25 @@ vi.mock("@/store/createWorktreeStore", () => ({
 }));
 
 vi.mock("@/store/worktreeStore", () => {
-  const getState = () => ({ activeWorktreeId: null, selectWorktree: vi.fn() });
-  return { useWorktreeSelectionStore: Object.assign(getState, { getState }) };
+  const state = { activeWorktreeId: null as string | null, isFleetScopeActive: false };
+  const getState = () => ({ ...state, selectWorktree: vi.fn() });
+  return { useWorktreeSelectionStore: Object.assign(getState, { getState }), __state: state };
 });
 
 vi.mock("@/store/helpPanelStore", () => {
   const state = {
     isOpen: false,
     terminalId: null as string | null,
+    agentId: null as string | null,
+    globalSelected: false,
+    // Set by a test that runs several lanes, in place of the flat lane above.
+    lanes: null as Record<number, { terminalId: string | null; agentId: string | null }> | null,
+    activeSlot: 0,
   };
-  // #12108: dictation targets the lane on screen. This fixture runs one lane,
-  // so the selector projects the same flat state as that lane.
-  const selectActiveSlot = (s: typeof state) => s;
+  // #12108: dictation targets the lane on screen. This fixture runs one lane
+  // unless `lanes` is set, so the selector projects the flat state as that lane.
+  const selectActiveSlot = (s: typeof state) =>
+    s.lanes ? (s.lanes[s.activeSlot] ?? { terminalId: null, agentId: null }) : s;
   const fns = {
     setOpen: vi.fn((open: boolean) => {
       state.isOpen = open;
@@ -176,6 +213,12 @@ vi.mock("@/store/helpPanelStore", () => {
   return {
     useHelpPanelStore: Object.assign(getState, { getState }),
     selectActiveSlot,
+    selectSlotTerminalIds: (s: typeof state) =>
+      s.lanes
+        ? Object.values(s.lanes).flatMap((lane) => (lane.terminalId ? [lane.terminalId] : []))
+        : s.terminalId
+          ? [s.terminalId]
+          : [],
     __state: state,
     __fns: fns,
   };
@@ -1708,6 +1751,926 @@ describe("VoiceRecordingService — assistant dictation routing (#8887)", () => 
   });
 });
 
+describe("VoiceRecordingService — the key with no agent focused (#15550)", () => {
+  type PanelState = {
+    focusedId: string | null;
+    panelsById: Record<string, unknown>;
+    panelIds: string[];
+    mruList: string[];
+    activeDockTerminalId: string | null;
+    trashedTerminals: Map<string, unknown>;
+    activateTerminal: Mock;
+  };
+
+  beforeEach(() => {
+    vi.resetModules();
+    suspendCallbacks.length = 0;
+    revealDictationComposer.mockClear();
+  });
+
+  afterEach(async () => {
+    const panel = Reflect.get(await import("@/store/panelStore"), "__state") as PanelState;
+    panel.focusedId = null;
+    panel.panelsById = {};
+    panel.panelIds = [];
+    panel.mruList = [];
+    panel.activeDockTerminalId = null;
+    panel.trashedTerminals = new Map();
+    panel.activateTerminal.mockClear();
+    Object.assign(Reflect.get(await import("@/store/worktreeStore"), "__state"), {
+      activeWorktreeId: null,
+      isFleetScopeActive: false,
+    });
+    const voice = (await import("@/store/voiceRecordingStore")) as unknown as {
+      __state: {
+        lockedTarget: object | null;
+        status: string;
+        activeTarget: object | null;
+        sessionElsewhere: unknown;
+      };
+    };
+    voice.__state.lockedTarget = null;
+    voice.__state.status = "idle";
+    voice.__state.activeTarget = null;
+    voice.__state.sessionElsewhere = null;
+    terminalInput.hybridInputEnabled = true;
+    (await import("@/store/storeAccessors")).resetStoreAccessorsForTesting();
+    (await import("@/services/terminal/optimisticPanelCloseIds")).replaceClosingIds(new Set());
+    (await import("@/store/fleetArmingStore")).useFleetArmingStore.setState({
+      armedIds: new Set<string>(),
+      armOrder: [],
+    });
+    (await import("@/store/fleetScopeFlagStore")).useFleetScopeFlagStore.setState({
+      mode: "scoped",
+    });
+    (await import("@/store/canopyStore")).useCanopyStore.getState().isOpen = false;
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    voiceRecordingService.destroy();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const agent = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    title: id,
+    location: "grid",
+    launchAgentId: "claude",
+    ...extra,
+  });
+  const shell = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    title: id,
+    kind: "terminal",
+    location: "grid",
+    ...extra,
+  });
+
+  async function arrange({
+    panels,
+    focusedId = null,
+    mru = [],
+    activeWorktreeId = null,
+  }: {
+    panels: Array<{ id: string } & Record<string, unknown>>;
+    focusedId?: string | null;
+    mru?: string[];
+    activeWorktreeId?: string | null;
+  }) {
+    setupGlobals();
+    const macro = (await import("@/store/macroFocusStore")) as unknown as {
+      isAssistantFocused: Mock;
+    };
+    macro.isAssistantFocused.mockReset();
+    macro.isAssistantFocused.mockReturnValue(false);
+    const panel = Reflect.get(await import("@/store/panelStore"), "__state") as PanelState;
+    panel.panelsById = Object.fromEntries(panels.map((p) => [p.id, p]));
+    panel.panelIds = panels.map((p) => p.id);
+    panel.focusedId = focusedId;
+    panel.mruList = mru;
+    Reflect.get(await import("@/store/worktreeStore"), "__state").activeWorktreeId =
+      activeWorktreeId;
+    const voice = (await import("@/store/voiceRecordingStore")) as unknown as {
+      __state: { status: string; activeTarget: object | null; lockedTarget: object | null };
+      useVoiceRecordingStore: { getState: () => { setLastError: Mock } };
+    };
+    voice.__state.status = "idle";
+    voice.__state.activeTarget = null;
+    voice.__state.lockedTarget = null;
+    voice.useVoiceRecordingStore.getState().setLastError.mockClear();
+    const { notify } = await import("@/lib/notify");
+    vi.mocked(notify).mockClear();
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const toggleSpy = vi.spyOn(voiceRecordingService, "toggle").mockResolvedValue();
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+    return { voiceRecordingService, toggleSpy, stopSpy, panel, notify: vi.mocked(notify) };
+  }
+
+  async function expectStartedIn(
+    panelId: string,
+    { toggleSpy, panel }: { toggleSpy: Mock; panel: PanelState }
+  ) {
+    expect(toggleSpy).toHaveBeenCalledTimes(1);
+    expect(toggleSpy).toHaveBeenCalledWith(expect.objectContaining({ panelId }));
+    // The pane comes forward and its composer is asked for, before the session starts.
+    expect(panel.activateTerminal).toHaveBeenCalledWith(panelId);
+    expect(revealDictationComposer).toHaveBeenCalledWith(panelId);
+    expect(panel.activateTerminal.mock.invocationCallOrder[0]).toBeLessThan(
+      revealDictationComposer.mock.invocationCallOrder[0]!
+    );
+    expect(revealDictationComposer.mock.invocationCallOrder[0]).toBeLessThan(
+      toggleSpy.mock.invocationCallOrder[0]!
+    );
+  }
+
+  function expectUnavailable({
+    toggleSpy,
+    panel,
+    notify,
+  }: {
+    toggleSpy: Mock;
+    panel: PanelState;
+    notify: Mock;
+  }) {
+    expect(toggleSpy).not.toHaveBeenCalled();
+    expect(panel.activateTerminal).not.toHaveBeenCalled();
+    expect(revealDictationComposer).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0]![0]).toMatchObject({
+      type: "error",
+      title: "Dictation unavailable",
+      message: "Focus an agent terminal to dictate into its input.",
+    });
+  }
+
+  it("starts in the agent last focused once focus has left every pane", async () => {
+    const arranged = await arrange({
+      panels: [agent("agent-b"), agent("agent-a")],
+      mru: ["terminal:agent-a"],
+    });
+
+    await arranged.voiceRecordingService.toggleFocusedPanel();
+
+    await expectStartedIn("agent-a", arranged);
+  });
+
+  it.each([
+    ["a plain shell", shell("other")],
+    ["a browser panel", { id: "other", title: "Web", kind: "browser", location: "grid" }],
+  ])("starts in the agent focused before %s", async (_name, focused) => {
+    const arranged = await arrange({
+      panels: [agent("agent-b"), agent("agent-a"), focused],
+      focusedId: "other",
+      mru: ["terminal:other", "terminal:agent-a", "terminal:agent-b"],
+    });
+
+    await arranged.voiceRecordingService.toggleFocusedPanel();
+
+    await expectStartedIn("agent-a", arranged);
+  });
+
+  it("passes over a more recent agent in a worktree that isn't showing", async () => {
+    const arranged = await arrange({
+      panels: [
+        agent("agent-c", { worktreeId: "wt-1" }),
+        agent("agent-a", { worktreeId: "wt-1" }),
+        agent("agent-b", { worktreeId: "wt-2" }),
+      ],
+      activeWorktreeId: "wt-1",
+      mru: ["terminal:agent-b", "worktree:wt-2", "terminal:agent-a", "worktree:wt-1"],
+    });
+
+    await arranged.voiceRecordingService.toggleFocusedPanel();
+
+    await expectStartedIn("agent-a", arranged);
+  });
+
+  it.each([
+    ["closed", [] as Array<{ id: string }>, new Map<string, unknown>(), false],
+    ["trashed", [agent("recent", { location: "trash" })], new Map<string, unknown>(), false],
+    ["in the trash map", [agent("recent")], new Map<string, unknown>([["recent", {}]]), false],
+    ["closed a moment ago", [agent("recent")], new Map<string, unknown>(), true],
+  ])(
+    "falls to the one agent on screen when the most recent was %s",
+    async (_name, recent, trashed, closing) => {
+      const arranged = await arrange({
+        panels: [...recent, agent("survivor"), shell("zsh")],
+        mru: ["terminal:recent", "terminal:zsh"],
+      });
+      arranged.panel.trashedTerminals = trashed;
+      if (closing) {
+        const closeIds = await import("@/services/terminal/optimisticPanelCloseIds");
+        closeIds.replaceClosingIds(new Set(["recent"]));
+      }
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      await expectStartedIn("survivor", arranged);
+    }
+  );
+
+  it("starts in the only agent on screen though it was never focused", async () => {
+    const arranged = await arrange({ panels: [agent("agent-a"), shell("zsh")] });
+
+    await arranged.voiceRecordingService.toggleFocusedPanel();
+
+    await expectStartedIn("agent-a", arranged);
+  });
+
+  it("starts in the open dock's agent", async () => {
+    const arranged = await arrange({
+      panels: [agent("docked", { location: "dock" }), agent("agent-a")],
+      mru: ["terminal:docked", "terminal:agent-a"],
+    });
+    arranged.panel.activeDockTerminalId = "docked";
+
+    await arranged.voiceRecordingService.toggleFocusedPanel();
+
+    await expectStartedIn("docked", arranged);
+  });
+
+  async function drawFleet(armed: string[]) {
+    Reflect.get(await import("@/store/worktreeStore"), "__state").isFleetScopeActive = true;
+    (await import("@/store/fleetArmingStore")).useFleetArmingStore.setState({
+      armedIds: new Set(armed),
+      armOrder: armed,
+    });
+  }
+
+  it("never picks a grid agent the fleet scope is drawn over", async () => {
+    const arranged = await arrange({
+      panels: [agent("agent-a"), shell("armed", { worktreeId: "wt-2" })],
+      mru: ["terminal:agent-a"],
+    });
+    await drawFleet(["armed"]);
+
+    await arranged.voiceRecordingService.toggleFocusedPanel();
+
+    expectUnavailable(arranged);
+  });
+
+  it("still starts in the open dock while the fleet scope is drawn", async () => {
+    const arranged = await arrange({
+      panels: [agent("docked", { location: "dock" }), shell("armed", { worktreeId: "wt-2" })],
+      mru: ["terminal:docked"],
+    });
+    arranged.panel.activeDockTerminalId = "docked";
+    await drawFleet(["armed"]);
+
+    await arranged.voiceRecordingService.toggleFocusedPanel();
+
+    await expectStartedIn("docked", arranged);
+  });
+
+  it.each([
+    ["the legacy fleet mode draws the grid", "legacy" as const, false],
+    ["the fleet's only armed pane is closing", "scoped" as const, true],
+  ])("picks a grid agent when %s", async (_name, mode, closing) => {
+    const arranged = await arrange({
+      panels: [agent("agent-a"), shell("armed", { worktreeId: "wt-2" })],
+      mru: ["terminal:agent-a"],
+    });
+    await drawFleet(["armed"]);
+    (await import("@/store/fleetScopeFlagStore")).useFleetScopeFlagStore.setState({ mode });
+    if (closing) {
+      const closeIds = await import("@/services/terminal/optimisticPanelCloseIds");
+      closeIds.replaceClosingIds(new Set(["armed"]));
+    }
+
+    await arranged.voiceRecordingService.toggleFocusedPanel();
+
+    await expectStartedIn("agent-a", arranged);
+  });
+
+  it.each([
+    ["two agents on screen, neither focused before", [agent("agent-a"), agent("agent-b")], []],
+    ["no agent on screen", [shell("zsh")], ["terminal:zsh"]],
+    [
+      "the only agent in another worktree",
+      [agent("agent-a", { worktreeId: "wt-2" })],
+      ["terminal:agent-a"],
+    ],
+    [
+      "the only agent in a closed dock",
+      [agent("agent-a", { location: "dock" })],
+      ["terminal:agent-a"],
+    ],
+    [
+      "the only agent backgrounded",
+      [agent("agent-a", { location: "background" })],
+      ["terminal:agent-a"],
+    ],
+  ])("still says to focus an agent with %s", async (_name, panels, mru) => {
+    const arranged = await arrange({ panels, mru });
+
+    await arranged.voiceRecordingService.toggleFocusedPanel();
+
+    expectUnavailable(arranged);
+  });
+
+  it("never picks an agent whose composer is off", async () => {
+    terminalInput.hybridInputEnabled = false;
+    const arranged = await arrange({ panels: [agent("agent-a")], mru: ["terminal:agent-a"] });
+
+    await arranged.voiceRecordingService.toggleFocusedPanel();
+
+    expectUnavailable(arranged);
+  });
+
+  it("never picks a grid agent while Home fills the main area", async () => {
+    const arranged = await arrange({ panels: [agent("agent-a")], mru: ["terminal:agent-a"] });
+    (await import("@/store/storeAccessors")).setProjectHomePresentedAccessor(() => true);
+
+    await arranged.voiceRecordingService.toggleFocusedPanel();
+
+    expectUnavailable(arranged);
+  });
+
+  it("leaves the focused agent's start as it was, without moving its keyboard", async () => {
+    const arranged = await arrange({
+      panels: [agent("agent-a"), agent("agent-b")],
+      focusedId: "agent-b",
+      mru: ["terminal:agent-a"],
+    });
+
+    await arranged.voiceRecordingService.toggleFocusedPanel();
+
+    expect(arranged.toggleSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ panelId: "agent-b" })
+    );
+    expect(arranged.panel.activateTerminal).not.toHaveBeenCalled();
+    expect(revealDictationComposer).not.toHaveBeenCalled();
+  });
+
+  it("routes to the focused assistant ahead of the last agent", async () => {
+    const arranged = await arrange({
+      panels: [agent("agent-a"), { id: "assistant-1", location: "overlay" }],
+      mru: ["terminal:agent-a"],
+    });
+    const help = (await import("@/store/helpPanelStore")) as unknown as {
+      __state: { terminalId: string | null };
+    };
+    help.__state.terminalId = "assistant-1";
+    vi.mocked((await import("@/store/macroFocusStore")).isAssistantFocused).mockReturnValue(true);
+
+    await arranged.voiceRecordingService.toggleFocusedPanel();
+
+    expect(arranged.toggleSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ panelId: "assistant-1" })
+    );
+    expect(arranged.panel.activateTerminal).not.toHaveBeenCalled();
+    help.__state.terminalId = null;
+  });
+
+  it("keeps a lock on a pane with no composer from falling back to the last agent", async () => {
+    const arranged = await arrange({
+      panels: [shell("locked"), agent("agent-a")],
+      mru: ["terminal:agent-a"],
+    });
+    const voice = (await import("@/store/voiceRecordingStore")) as unknown as {
+      __state: { lockedTarget: object | null };
+    };
+    voice.__state.lockedTarget = { panelId: "locked", panelTitle: "Locked" };
+
+    await arranged.voiceRecordingService.toggleFocusedPanel();
+
+    expect(arranged.toggleSpy).not.toHaveBeenCalled();
+    expect(arranged.panel.activateTerminal).not.toHaveBeenCalled();
+  });
+
+  it("lets the key stop a running session rather than start in the last agent", async () => {
+    const arranged = await arrange({
+      panels: [agent("agent-a"), agent("recording")],
+      mru: ["terminal:agent-a"],
+    });
+    const voice = (await import("@/store/voiceRecordingStore")) as unknown as {
+      __state: { status: string; activeTarget: object | null };
+    };
+    voice.__state.status = "recording";
+    voice.__state.activeTarget = { panelId: "recording" };
+
+    await arranged.voiceRecordingService.toggleFocusedPanel();
+
+    expect(arranged.stopSpy).toHaveBeenCalledTimes(1);
+    expect(arranged.toggleSpy).not.toHaveBeenCalled();
+    expect(arranged.panel.activateTerminal).not.toHaveBeenCalled();
+  });
+
+  it("sends the key to Canopy's reply while Canopy is open", async () => {
+    const arranged = await arrange({ panels: [agent("agent-a")], mru: ["terminal:agent-a"] });
+    (await import("@/store/canopyStore")).useCanopyStore.getState().isOpen = true;
+    const message = "Pick a row to reply to.";
+    const registry = await import("@/services/canopyReplyDictation");
+    registry.registerCanopyReplyDictation(() => ({ ok: false, message }));
+
+    await arranged.voiceRecordingService.toggleFocusedPanel();
+
+    expect(arranged.toggleSpy).not.toHaveBeenCalled();
+    expect(arranged.panel.activateTerminal).not.toHaveBeenCalled();
+    expect(arranged.notify.mock.calls[0]![0]).toMatchObject({ message });
+  });
+
+  it("reads the target at the press, before anything awaits", async () => {
+    const arranged = await arrange({
+      panels: [agent("agent-a"), agent("agent-b")],
+      mru: ["terminal:agent-a"],
+    });
+
+    const press = arranged.voiceRecordingService.toggleFocusedPanel();
+    arranged.panel.mruList = ["terminal:agent-b"];
+    await press;
+
+    await expectStartedIn("agent-a", arranged);
+  });
+
+  describe("the Assistant as the key's fallback (#15870)", () => {
+    type HelpMock = {
+      __state: {
+        isOpen: boolean;
+        terminalId: string | null;
+        agentId: string | null;
+        globalSelected: boolean;
+        lanes: Record<number, { terminalId: string | null; agentId: string | null }> | null;
+        activeSlot: number;
+      };
+      __fns: { setOpen: Mock; requestFocus: Mock };
+    };
+
+    const assistantPanel = (extra: Record<string, unknown> = {}) => ({
+      id: "assistant-1",
+      title: "Assistant",
+      kind: "terminal",
+      location: "overlay",
+      launchAgentId: "claude",
+      ...extra,
+    });
+
+    async function runAssistant({
+      open = true,
+      terminalId = "assistant-1",
+      agentId = "claude",
+    }: { open?: boolean; terminalId?: string | null; agentId?: string | null } = {}) {
+      const help = (await import("@/store/helpPanelStore")) as unknown as HelpMock;
+      Object.assign(help.__state, {
+        isOpen: open,
+        terminalId,
+        agentId,
+        globalSelected: false,
+        lanes: null,
+        activeSlot: 0,
+      });
+      help.__fns.setOpen.mockClear();
+      help.__fns.requestFocus.mockClear();
+      return help;
+    }
+
+    /** The person was in the Assistant, then (only) in these panes. */
+    function usedAssistantBefore(...panes: string[]) {
+      assistantRecency.used = true;
+      assistantRecency.panesSince = new Set(panes);
+    }
+
+    beforeEach(() => {
+      revealAssistantComposer.mockClear();
+      overlayHoldsKeyboard.mockReset();
+      overlayHoldsKeyboard.mockReturnValue(false);
+    });
+
+    afterEach(async () => {
+      assistantRecency.used = false;
+      assistantRecency.panesSince = new Set();
+      vi.mocked((await import("@/store/macroFocusStore")).isAssistantFocused).mockReturnValue(
+        false
+      );
+      await runAssistant({ open: false, terminalId: null, agentId: null });
+      (await import("@/store/focusStore")).useFocusStore.setState({
+        gestureAssistantHidden: false,
+      });
+    });
+
+    function expectStartedInAssistant({
+      toggleSpy,
+      panel,
+      notify,
+    }: {
+      toggleSpy: Mock;
+      panel: PanelState;
+      notify: Mock;
+    }) {
+      expect(toggleSpy).toHaveBeenCalledTimes(1);
+      expect(toggleSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ panelId: "assistant-1", panelTitle: "Daintree Assistant" })
+      );
+      // Its composer is asked for before the session starts, and no grid pane moves.
+      expect(revealAssistantComposer).toHaveBeenCalledTimes(1);
+      expect(revealAssistantComposer.mock.invocationCallOrder[0]).toBeLessThan(
+        toggleSpy.mock.invocationCallOrder[0]!
+      );
+      expect(panel.activateTerminal).not.toHaveBeenCalled();
+      expect(revealDictationComposer).not.toHaveBeenCalled();
+      expect(notify).not.toHaveBeenCalled();
+    }
+
+    function expectAssistantLeftAlone(help: HelpMock) {
+      expect(help.__fns.setOpen).not.toHaveBeenCalled();
+      expect(revealAssistantComposer).not.toHaveBeenCalled();
+    }
+
+    it("starts in a running Assistant while Home fills the main area", async () => {
+      const arranged = await arrange({
+        panels: [agent("agent-a"), assistantPanel()],
+        mru: ["terminal:agent-a"],
+      });
+      (await import("@/store/storeAccessors")).setProjectHomePresentedAccessor(() => true);
+      const help = await runAssistant();
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expectStartedInAssistant(arranged);
+      expect(help.__fns.setOpen).not.toHaveBeenCalled();
+    });
+
+    it("starts in a running Assistant over an empty grid", async () => {
+      const arranged = await arrange({ panels: [assistantPanel()] });
+      await runAssistant();
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expectStartedInAssistant(arranged);
+    });
+
+    it("opens a closed Assistant and starts in it", async () => {
+      const arranged = await arrange({ panels: [assistantPanel()] });
+      const help = await runAssistant({ open: false });
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expectStartedInAssistant(arranged);
+      expect(help.__fns.setOpen).toHaveBeenCalledWith(true);
+      expect(help.__fns.setOpen.mock.invocationCallOrder[0]).toBeLessThan(
+        revealAssistantComposer.mock.invocationCallOrder[0]!
+      );
+    });
+
+    it("brings back an Assistant the focus gesture hid", async () => {
+      const arranged = await arrange({ panels: [assistantPanel()] });
+      await runAssistant();
+      const { useFocusStore } = await import("@/store/focusStore");
+      useFocusStore.setState({ gestureAssistantHidden: true });
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expectStartedInAssistant(arranged);
+      expect(useFocusStore.getState().gestureAssistantHidden).toBe(false);
+    });
+
+    it.each([
+      [
+        "only a shell and a browser",
+        [
+          shell("zsh", { worktreeId: "wt-1" }),
+          { id: "web", kind: "browser", location: "grid", worktreeId: "wt-1" },
+        ],
+        "zsh",
+      ],
+      ["its only agent in another worktree", [agent("agent-a", { worktreeId: "wt-2" })], null],
+    ])("starts in the Assistant with %s", async (_name, panels, focusedId) => {
+      const arranged = await arrange({
+        panels: [...panels, assistantPanel()],
+        focusedId,
+        mru: panels.map((p) => `terminal:${p.id}`),
+        activeWorktreeId: "wt-1",
+      });
+      await runAssistant();
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expectStartedInAssistant(arranged);
+    });
+
+    it.each([
+      ["still names the agent", "agent-a"],
+      ["has moved off it", null],
+    ])(
+      "starts in the Assistant the person left for a toolbar control, though the selection %s",
+      async (_name, focusedId) => {
+        const arranged = await arrange({
+          panels: [agent("agent-a"), assistantPanel()],
+          focusedId,
+          mru: ["terminal:agent-a"],
+        });
+        await runAssistant();
+        usedAssistantBefore();
+
+        await arranged.voiceRecordingService.toggleFocusedPanel();
+
+        expectStartedInAssistant(arranged);
+      }
+    );
+
+    it("keeps the focused agent the person went back to after the Assistant", async () => {
+      const arranged = await arrange({
+        panels: [agent("agent-a"), assistantPanel()],
+        focusedId: "agent-a",
+        mru: ["terminal:agent-a"],
+      });
+      const help = await runAssistant();
+      usedAssistantBefore("agent-a");
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expect(arranged.toggleSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ panelId: "agent-a" })
+      );
+      expectAssistantLeftAlone(help);
+    });
+
+    it("picks the agent on screen the person went back to after the Assistant", async () => {
+      const arranged = await arrange({
+        panels: [agent("agent-a"), agent("agent-b"), assistantPanel()],
+        mru: ["terminal:agent-a"],
+      });
+      const help = await runAssistant();
+      usedAssistantBefore("agent-a");
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      await expectStartedIn("agent-a", arranged);
+      expectAssistantLeftAlone(help);
+    });
+
+    it("weighs the Assistant against every agent on screen, not just the newest", async () => {
+      const arranged = await arrange({
+        panels: [agent("agent-a"), agent("agent-b"), assistantPanel()],
+        mru: ["terminal:agent-a", "terminal:agent-b"],
+      });
+      const help = await runAssistant();
+      usedAssistantBefore("agent-b");
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      await expectStartedIn("agent-a", arranged);
+      expectAssistantLeftAlone(help);
+    });
+
+    it("takes the Assistant used after every agent on screen, the open dock's included", async () => {
+      const arranged = await arrange({
+        panels: [
+          agent("agent-a"),
+          agent("agent-b"),
+          agent("docked", { location: "dock" }),
+          assistantPanel(),
+        ],
+        mru: ["terminal:agent-a", "terminal:docked", "terminal:agent-b"],
+      });
+      arranged.panel.activeDockTerminalId = "docked";
+      await runAssistant();
+      usedAssistantBefore("agent-elsewhere");
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expectStartedInAssistant(arranged);
+    });
+
+    it("lets the open dock's agent used after the Assistant keep the key from it", async () => {
+      const arranged = await arrange({
+        panels: [agent("agent-a"), agent("docked", { location: "dock" }), assistantPanel()],
+        mru: ["terminal:agent-a", "terminal:docked"],
+      });
+      arranged.panel.activeDockTerminalId = "docked";
+      const help = await runAssistant();
+      usedAssistantBefore("docked");
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      await expectStartedIn("agent-a", arranged);
+      expectAssistantLeftAlone(help);
+    });
+
+    it.each([
+      ["closed", false, false],
+      ["hidden by the focus gesture", true, true],
+    ])(
+      "leaves the last agent the key when the Assistant used after it is %s",
+      async (_name, open, gestureHidden) => {
+        const arranged = await arrange({
+          panels: [agent("agent-a"), assistantPanel()],
+          mru: ["terminal:agent-a"],
+        });
+        const help = await runAssistant({ open });
+        usedAssistantBefore();
+        (await import("@/store/focusStore")).useFocusStore.setState({
+          gestureAssistantHidden: gestureHidden,
+        });
+
+        await arranged.voiceRecordingService.toggleFocusedPanel();
+
+        await expectStartedIn("agent-a", arranged);
+        expectAssistantLeftAlone(help);
+      }
+    );
+
+    it.each([
+      ["neither was focused", false],
+      ["the Assistant was used since", true],
+    ])("still says to focus an agent with two on screen when %s", async (_name, assistantUsed) => {
+      const arranged = await arrange({
+        panels: [agent("agent-a"), agent("agent-b"), assistantPanel()],
+      });
+      const help = await runAssistant();
+      if (assistantUsed) usedAssistantBefore();
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expectUnavailable(arranged);
+      expectAssistantLeftAlone(help);
+    });
+
+    it("never launches an Assistant that hasn't been started", async () => {
+      const arranged = await arrange({ panels: [shell("zsh")] });
+      const help = await runAssistant({ open: false, terminalId: null });
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expectUnavailable(arranged);
+      expectAssistantLeftAlone(help);
+      expect(help.__fns.requestFocus).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["still reserving its terminal", [] as Array<{ id: string }>, {}],
+      ["trashed", [assistantPanel({ location: "trash" })], {}],
+      ["whose CLI is missing", [assistantPanel({ spawnStatus: "missing-cli" })], {}],
+      ["that failed to spawn", [assistantPanel({ spawnStatus: "failed" })], {}],
+      ["still spawning", [assistantPanel({ spawnStatus: "spawning" })], {}],
+      ["whose input is locked", [assistantPanel({ isInputLocked: true })], {}],
+      ["that isn't a terminal", [assistantPanel({ kind: "browser" })], {}],
+      ["with no agent of its own", [assistantPanel()], { agentId: null }],
+      ["running an agent with no composer", [assistantPanel()], { agentId: "not-an-agent" }],
+      ["behind the global assistant", [assistantPanel()], { globalSelected: true }],
+    ])("never falls back to an Assistant %s", async (_name, panels, lane) => {
+      const arranged = await arrange({ panels });
+      const help = await runAssistant({ open: false });
+      Object.assign(help.__state, lane);
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expectUnavailable(arranged);
+      expectAssistantLeftAlone(help);
+    });
+
+    it.each([
+      ["spawned", "ready"],
+      ["reconnected, with no spawn status", undefined],
+    ])("starts in an Assistant %s", async (_name, spawnStatus) => {
+      const arranged = await arrange({ panels: [assistantPanel({ spawnStatus })] });
+      await runAssistant();
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expectStartedInAssistant(arranged);
+    });
+
+    it("starts in the active lane's session, not another running one", async () => {
+      const arranged = await arrange({
+        panels: [assistantPanel({ id: "assistant-0" }), assistantPanel()],
+      });
+      const help = await runAssistant();
+      help.__state.lanes = {
+        0: { terminalId: "assistant-0", agentId: "claude" },
+        1: { terminalId: "assistant-1", agentId: "claude" },
+      };
+      help.__state.activeSlot = 1;
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expectStartedInAssistant(arranged);
+    });
+
+    it("never borrows another lane's session when the active one has none", async () => {
+      const arranged = await arrange({ panels: [assistantPanel()] });
+      const help = await runAssistant();
+      help.__state.lanes = {
+        0: { terminalId: "assistant-1", agentId: "claude" },
+        1: { terminalId: null, agentId: null },
+      };
+      help.__state.activeSlot = 1;
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expectUnavailable(arranged);
+      expectAssistantLeftAlone(help);
+    });
+
+    it("never opens the Assistant over a modal that holds the keyboard", async () => {
+      const arranged = await arrange({ panels: [assistantPanel()] });
+      const help = await runAssistant({ open: false });
+      overlayHoldsKeyboard.mockReturnValue(true);
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expectUnavailable(arranged);
+      expectAssistantLeftAlone(help);
+    });
+
+    it("starts in an Assistant already on screen though a modal holds the keyboard", async () => {
+      const arranged = await arrange({ panels: [assistantPanel()] });
+      await runAssistant();
+      overlayHoldsKeyboard.mockReturnValue(true);
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expectStartedInAssistant(arranged);
+    });
+
+    it("never falls back to an Assistant whose composer is off", async () => {
+      terminalInput.hybridInputEnabled = false;
+      const arranged = await arrange({ panels: [assistantPanel()] });
+      const help = await runAssistant();
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expectUnavailable(arranged);
+      expectAssistantLeftAlone(help);
+    });
+
+    it("keeps a lock ahead of the Assistant", async () => {
+      const arranged = await arrange({ panels: [agent("locked"), assistantPanel()] });
+      const help = await runAssistant();
+      usedAssistantBefore();
+      const voice = (await import("@/store/voiceRecordingStore")) as unknown as {
+        __state: { lockedTarget: object | null };
+      };
+      voice.__state.lockedTarget = { panelId: "locked", panelTitle: "Locked" };
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expect(arranged.toggleSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ panelId: "locked" })
+      );
+      expectAssistantLeftAlone(help);
+    });
+
+    it("sends the key to Canopy's reply ahead of the Assistant", async () => {
+      const arranged = await arrange({ panels: [assistantPanel()] });
+      const help = await runAssistant();
+      (await import("@/store/canopyStore")).useCanopyStore.getState().isOpen = true;
+      const registry = await import("@/services/canopyReplyDictation");
+      registry.registerCanopyReplyDictation(() => ({ ok: false, message: "Pick a row." }));
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expect(arranged.toggleSpy).not.toHaveBeenCalled();
+      expectAssistantLeftAlone(help);
+    });
+
+    it("lets the key stop a running session rather than start in the Assistant", async () => {
+      const arranged = await arrange({ panels: [agent("recording"), assistantPanel()] });
+      const help = await runAssistant();
+      const voice = (await import("@/store/voiceRecordingStore")) as unknown as {
+        __state: { status: string; activeTarget: object | null };
+      };
+      voice.__state.status = "recording";
+      voice.__state.activeTarget = { panelId: "recording" };
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expect(arranged.stopSpy).toHaveBeenCalledTimes(1);
+      expect(arranged.toggleSpy).not.toHaveBeenCalled();
+      expectAssistantLeftAlone(help);
+    });
+
+    it("stops a session another view owns rather than start in the Assistant", async () => {
+      const arranged = await arrange({ panels: [assistantPanel()] });
+      const help = await runAssistant();
+      const voice = (await import("@/store/voiceRecordingStore")) as unknown as {
+        __state: { sessionElsewhere: unknown };
+      };
+      voice.__state.sessionElsewhere = { sessionId: "elsewhere-1" };
+      const stopLive = vi.mocked(window.electron.voiceInput.stopLive);
+      stopLive.mockResolvedValue(false);
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expect(stopLive).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "elsewhere-1" }));
+      expect(arranged.toggleSpy).not.toHaveBeenCalled();
+      expectAssistantLeftAlone(help);
+    });
+
+    it("leaves the focused Assistant's own start as it was", async () => {
+      const arranged = await arrange({ panels: [agent("agent-a"), assistantPanel()] });
+      const help = await runAssistant();
+      vi.mocked((await import("@/store/macroFocusStore")).isAssistantFocused).mockReturnValue(true);
+
+      await arranged.voiceRecordingService.toggleFocusedPanel();
+
+      expect(arranged.toggleSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ panelId: "assistant-1" })
+      );
+      expectAssistantLeftAlone(help);
+    });
+  });
+});
+
 describe("VoiceRecordingService — a lock on a pane with no composer (#14955)", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -3048,6 +4011,40 @@ describe("VoiceRecordingService — push-to-talk mode (#9189)", () => {
     const upEvent = { code: "Period" } as unknown as KeyboardEvent;
     for (const listener of keyupListeners) listener(upEvent);
 
+    expect(stopSpy).toHaveBeenCalledWith(
+      "Dictation stopped.",
+      expect.objectContaining({ preserveLiveText: true })
+    );
+  });
+
+  it("takes no drag recovery's Escape keyup as the release of a key bound to Escape", async () => {
+    const electron = buildPttElectronStub();
+    const { windowListeners } = setupGlobals(electron);
+
+    const { keybindingService } = await import("@/services/KeybindingService");
+    vi.mocked(keybindingService.matchesEvent).mockImplementation(
+      (e: KeyboardEvent, combo: string) => combo === "Cmd+." && e.code === "Escape"
+    );
+    const { markDragCancelEscape } = await import("@/lib/dragCancelEscape");
+
+    const { voiceRecordingService } = await import("../VoiceRecordingService");
+    const stopSpy = vi.spyOn(voiceRecordingService, "stop").mockResolvedValue();
+
+    voiceRecordingService.initialize();
+    await vi.waitFor(() => {
+      expect(electron.voiceInput.getSettings).toHaveBeenCalled();
+    });
+
+    const down = { code: "Escape", key: "Escape", repeat: false, metaKey: true };
+    for (const listener of windowListeners["keydown"] ?? []) listener(down);
+    await startFromPress(voiceRecordingService);
+
+    for (const listener of windowListeners["keyup"] ?? []) {
+      listener(markDragCancelEscape({ code: "Escape" }));
+    }
+    expect(stopSpy).not.toHaveBeenCalled();
+
+    for (const listener of windowListeners["keyup"] ?? []) listener({ code: "Escape" });
     expect(stopSpy).toHaveBeenCalledWith(
       "Dictation stopped.",
       expect.objectContaining({ preserveLiveText: true })

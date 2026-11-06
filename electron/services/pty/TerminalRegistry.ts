@@ -25,6 +25,8 @@ export class TerminalRegistry {
   private terminals: Map<string, TerminalProcess> = new Map();
   private trashTimeouts: Map<string, NodeJS.Timeout> = new Map();
   private trashExpiryTimes: Map<string, number> = new Map();
+  /** What each trashed terminal's grace runs when it ends, early or on time. */
+  private trashExpiryCallbacks: Map<string, (id: string) => void> = new Map();
   private projectIdCandidatesByTerminalId: Map<string, ProjectIdCandidates> = new Map();
 
   constructor(
@@ -84,9 +86,7 @@ export class TerminalRegistry {
     const expiresAt = Date.now() + this.trashTtlMs;
     const timeout = setTimeout(() => {
       console.log(`[TerminalRegistry] Auto-killing trashed terminal after TTL: ${id}`);
-      onExpire(id);
-      // The expiry's kill clears it on its way; this covers one that didn't.
-      this.clearTrashTimeout(id);
+      this.runTrashExpiry(id);
     }, this.trashTtlMs);
     // Unref so the pending TTL never holds the Electron event loop alive after
     // app.quit. The default TRASH_TTL_MS is 20s, but trashTtlMs is constructor-
@@ -95,7 +95,27 @@ export class TerminalRegistry {
 
     this.trashTimeouts.set(id, timeout);
     this.trashExpiryTimes.set(id, expiresAt);
+    this.trashExpiryCallbacks.set(id, onExpire);
     events.emit("terminal:trashed", { id, expiresAt });
+  }
+
+  /**
+   * End a trashed terminal's grace now, through the same expiry its timer
+   * would have run (#15728). False when it is not in the trash.
+   */
+  expireTrashNow(id: string): boolean {
+    if (!this.trashTimeouts.has(id)) return false;
+    console.log(`[TerminalRegistry] Ending trash grace early: ${id}`);
+    this.runTrashExpiry(id);
+    return true;
+  }
+
+  private runTrashExpiry(id: string): void {
+    const onExpire = this.trashExpiryCallbacks.get(id);
+    clearTimeout(this.trashTimeouts.get(id));
+    onExpire?.(id);
+    // The expiry's kill clears it on its way; this covers one that didn't.
+    this.clearTrashTimeout(id);
   }
 
   /**
@@ -109,6 +129,7 @@ export class TerminalRegistry {
       clearTimeout(timeout);
       this.trashTimeouts.delete(id);
       this.trashExpiryTimes.delete(id);
+      this.trashExpiryCallbacks.delete(id);
 
       if (this.terminals.has(id)) {
         console.log(`[TerminalRegistry] Restored terminal from trash: ${id}`);
@@ -136,6 +157,7 @@ export class TerminalRegistry {
       const expiresAt = this.trashExpiryTimes.get(id);
       this.trashTimeouts.delete(id);
       this.trashExpiryTimes.delete(id);
+      this.trashExpiryCallbacks.delete(id);
       if (expiresAt !== undefined) events.emit("terminal:trash-cleared", { id, expiresAt });
     }
   }
@@ -361,6 +383,7 @@ export class TerminalRegistry {
     }
     this.trashTimeouts.clear();
     this.trashExpiryTimes.clear();
+    this.trashExpiryCallbacks.clear();
     this.terminals.clear();
     this.projectIdCandidatesByTerminalId.clear();
   }

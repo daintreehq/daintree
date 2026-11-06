@@ -82,7 +82,7 @@ export interface SearchablePaletteProps<T> {
   /**
    * Heads each run of consecutive rows that share a label with the palette
    * section label, as an inert option. Results must already be ordered by
-   * band; a label change starts a new band.
+   * band; a label change starts a new band. An empty label draws no head.
    */
   getSectionLabel?: (item: T) => string;
   /**
@@ -638,16 +638,19 @@ export function SearchablePalette<T>({
                               VoiceOver drop a group's label and announce "empty
                               group". The head is an inert option instead, as in
                               the action palette; arrow keys skip it because it is
-                              not in `results`. */}
-                          <div
-                            className={SECTION_HEADER_CLASS}
-                            role="option"
-                            aria-disabled="true"
-                            aria-selected="false"
-                            aria-label={run.label}
-                          >
-                            {run.label}
-                          </div>
+                              not in `results`. An empty label is a run with no
+                              head, for palettes that band only some rows. */}
+                          {run.label !== "" && (
+                            <div
+                              className={SECTION_HEADER_CLASS}
+                              role="option"
+                              aria-disabled="true"
+                              aria-selected="false"
+                              aria-label={run.label}
+                            >
+                              {run.label}
+                            </div>
+                          )}
                           {run.items.map((item, offset) => {
                             const index = run.start + offset;
                             return renderItem(

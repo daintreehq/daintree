@@ -1,4 +1,10 @@
-import { AGENT_REGISTRY, getEffectiveAgentConfig } from "../config/agentRegistry.js";
+import {
+  AGENT_REGISTRY,
+  canSelectAgentModel,
+  getAgentDisplayTitle,
+  getEffectiveAgentConfig,
+  isRetiredAgentModel,
+} from "../config/agentRegistry.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import {
   agentCommandDialect,
@@ -8,6 +14,7 @@ import {
   quotePowerShellArg,
 } from "../utils/shellEscape.js";
 import { systemPromptArgPositions } from "../utils/agentSystemPrompt.js";
+import { hasUnclosedQuote, parseShellArgs } from "../utils/shellArgs.js";
 import { HOST_INBOX_DIR_NAME } from "./ipc/fileTransfer.js";
 
 /**
@@ -29,6 +36,24 @@ function quoteAgentArg(arg: string): string {
 function quoteAgentArgOptional(arg: string): string {
   return arg !== "" && isSafeUnescaped(arg) ? arg : quoteAgentArg(arg);
 }
+
+/**
+ * Tokenises an Arguments or Custom arguments field into argv (#15637): quotes
+ * group a spaced value into one argument. Text with an unclosed quote keeps
+ * the whitespace split it always had, so a bare apostrophe (`O'Brien`) can't
+ * swallow every argument after it. A control character left inside an argument
+ * becomes a space, because the spawn schema refuses a command that holds one.
+ */
+function parseLaunchArgs(text: string | undefined): string[] {
+  if (!text?.trim()) return [];
+  const args = hasUnclosedQuote(text) ? text.trim().split(/\s+/) : parseShellArgs(text);
+  // eslint-disable-next-line no-control-regex
+  return args.map((arg) => arg.replace(/[\x00-\x1F\x7F]+/g, " "));
+}
+
+// Marks where recipe args go in the persisted launch flags while those are
+// reconciled. argv elements are C strings, so no real argument holds a NUL.
+const RECIPE_ARGS_SLOT = "\0recipe-args";
 
 /**
  * Tri-state permission-bypass intent. `"on"`/`"off"` are explicit user choices
@@ -53,6 +78,20 @@ export type DangerousMode = "inherit" | "on" | "off";
  * the choice in alt-screen terms).
  */
 export type InlineMode = "inherit" | "on" | "off";
+
+/**
+ * One of an agent's accounts (#16040): a config folder its CLI keeps
+ * everything in, login included, handed to a launch through the variable the
+ * agent's registry `account` declaration names. Daintree never writes inside
+ * the folder, and removing the account forgets this entry only.
+ */
+export interface AgentAccount {
+  /** Stable and agent-local; a pane records it. */
+  id: string;
+  name: string;
+  /** Absolute folder on the host. Fixed once added: another folder is another account. */
+  configDir: string;
+}
 
 export interface AgentSettingsEntry {
   customFlags?: string;
@@ -140,12 +179,33 @@ export interface AgentSettingsEntry {
     fallbacks?: string[];
     /** Also fall over when the agent hits a plan or rate limit (#14370). */
     fallbackOnRateLimit?: boolean;
+    /** Reopen the same conversation on a usage-limit hop (#16045). */
+    keepConversationOnRateLimit?: boolean;
+    /** The account a launch of this preset signs in as, unless overridden (#16133). */
+    accountId?: string;
   }>;
   /**
    * Environment variables applied to every launch of this agent, regardless of preset.
    * Preset-level env overrides these when keys overlap.
    */
   globalEnv?: Record<string, string>;
+  /**
+   * This agent's accounts (#16040), chosen separately from the preset. The
+   * CLI's own default login is the implicit entry and is never listed.
+   * Host-local: the folders are this machine's.
+   */
+  accounts?: AgentAccount[];
+  /**
+   * Agent-level default account; absent launches on the CLI's default login.
+   * A preset's own pinned account wins over it (#16133).
+   */
+  accountId?: string;
+  /**
+   * Per-worktree account overrides, keyed by worktreeId, as `worktreePresets`
+   * is for presets. An absent key inherits the preset's pin, else `accountId`;
+   * `null` is the default login in that worktree alone.
+   */
+  worktreeAccounts?: Record<string, string | null>;
   [key: string]: unknown;
 }
 
@@ -229,7 +289,7 @@ export const DEFAULT_DANGEROUS_ARGS: Record<string, string> = {
   codex: "--dangerously-bypass-approvals-and-sandbox",
   grok: "--always-approve",
   cursor: "--force",
-  interpreter: "--auto_run",
+  interpreter: "--dangerously-bypass-approvals-and-sandbox",
   amp: "--dangerously-allow-all",
   aider: "--yes-always",
   qwen: "--yolo",
@@ -239,6 +299,31 @@ export const DEFAULT_DANGEROUS_ARGS: Record<string, string> = {
   // opencode intentionally absent: --dangerously-skip-permissions exists only
   // on the `run` subcommand, not the bare TUI launch (verified on 1.14.48)
 };
+
+/**
+ * Bypass flags an agent's default used to be, before its CLI stopped accepting
+ * them. Settings seeded from the old default, config bundles exported from
+ * them, and captured launch flags all outlive the change, so a retired value
+ * reads as unset and a restore strips it instead of relaunching into a CLI that
+ * rejects it.
+ */
+const RETIRED_DANGEROUS_ARGS: Readonly<Record<string, readonly string[]>> = {
+  // The Python program's flag; the current Rust product rejects it (#15567).
+  interpreter: ["--auto_run"],
+};
+
+// Own keys only: a custom agent's id can name an Object.prototype member
+// ("toString"), which a plain index would hand back as a function.
+function ownEntry<T>(map: Readonly<Record<string, T>>, agentId: string | undefined): T | undefined {
+  return agentId !== undefined && Object.hasOwn(map, agentId) ? map[agentId] : undefined;
+}
+
+/** The written `dangerousArgs`, or the agent's default when unset or retired. */
+function resolveDangerousArgs(written: string | undefined, agentId: string | undefined): string {
+  const value = written?.trim() ?? "";
+  if (value && !ownEntry(RETIRED_DANGEROUS_ARGS, agentId)?.includes(value)) return value;
+  return ownEntry(DEFAULT_DANGEROUS_ARGS, agentId)?.trim() ?? "";
+}
 
 export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
   agents: Object.fromEntries(
@@ -562,12 +647,16 @@ export function reconcileBypassFlags(
   effectiveBypass: boolean,
   bypassArgs?: string
 ): string[] {
-  const resolved = (bypassArgs?.trim() || DEFAULT_DANGEROUS_ARGS[agentId] || "").trim();
+  const resolved = resolveDangerousArgs(bypassArgs, agentId);
   // Strip both the resolved args and the registry default: a snapshot may have
   // been captured before the user customized `dangerousArgs`, so cleaning only
   // the current value could leave a stale default flag behind.
   const groups: string[][] = [];
-  for (const source of [resolved, DEFAULT_DANGEROUS_ARGS[agentId]]) {
+  for (const source of [
+    resolved,
+    ownEntry(DEFAULT_DANGEROUS_ARGS, agentId),
+    ...(ownEntry(RETIRED_DANGEROUS_ARGS, agentId) ?? []),
+  ]) {
     for (const group of optionGroups(source?.trim().split(/\s+/).filter(Boolean) ?? [])) {
       if (!groups.some((known) => known.join(" ") === group.join(" "))) groups.push(group);
     }
@@ -662,17 +751,13 @@ export function generateAgentFlags(
   const flags: string[] = [];
   if (resolveEffectiveBypass(entry, agentId, options?.globalSkipPermissions)) {
     // Use entry.dangerousArgs if set, otherwise fall back to default for this agent
-    const dangerousArgs =
-      entry.dangerousArgs?.trim() || (agentId ? DEFAULT_DANGEROUS_ARGS[agentId] : "");
+    const dangerousArgs = resolveDangerousArgs(entry.dangerousArgs, agentId);
     if (dangerousArgs) {
       flags.push(...dangerousArgs.split(/\s+/));
     }
   }
   if (entry.customFlags) {
-    const trimmed = entry.customFlags.trim();
-    if (trimmed) {
-      flags.push(...trimmed.split(/\s+/));
-    }
+    flags.push(...parseLaunchArgs(entry.customFlags));
   }
 
   // Decorative-effect opt-out (e.g. Codex's composer sparkles): the registry
@@ -722,10 +807,16 @@ export interface GenerateAgentCommandOptions {
    * `resolveSystemPromptArgs` or `extractSystemPromptArgs`. Quoted here.
    */
   systemPromptArgs?: readonly string[];
-  /** Additional CLI arguments from recipe terminal (whitespace-separated string) */
+  /**
+   * The recipe terminal's Arguments field, tokenised by {@link parseLaunchArgs}
+   * so quotes group a spaced value into one argument.
+   */
   recipeArgs?: string;
-  /** Additional CLI arguments from agent preset (whitespace-separated string) */
-  presetArgs?: string;
+  /**
+   * The agent preset's argv elements. Each element is one argument, quoted
+   * whole like the persisted launch flags, so first launch and resume agree.
+   */
+  presetArgs?: readonly string[];
   /** Global skip-permissions override (#10432); forwarded to {@link generateAgentFlags}. */
   globalSkipPermissions?: boolean;
   /**
@@ -827,8 +918,17 @@ export function generateAgentCommand(
     }
   }
 
+  // A launch whose shape the CLI ignores `--model` on (#15569) carries none:
+  // not the selected model, nor one a preset, recipe or settings flag adds.
+  const selectsModel = canSelectAgentModel(agentId, {
+    interactive: options?.interactive,
+    initialPrompt: options?.initialPrompt,
+  });
+  const keepArgs = (args: readonly string[]): readonly string[] =>
+    selectsModel ? args : (withoutModelArgs(args, anyModel, identityWord, new Set()) ?? args);
+
   // Add --model flag if a specific model was selected for this launch
-  if (options?.modelId) {
+  if (options?.modelId && selectsModel) {
     parts.push(
       "--model",
       /^[A-Za-z0-9_.:/-]+$/.test(options.modelId) ? options.modelId : quoteAgentArg(options.modelId)
@@ -836,29 +936,17 @@ export function generateAgentCommand(
   }
 
   // Add preset-level args (env overrides applied separately via spawn env)
-  if (options?.presetArgs) {
-    for (const token of options.presetArgs.trim().split(/\s+/).filter(Boolean)) {
-      if (isSafeShellOption(token)) {
-        parts.push(token);
-      } else {
-        parts.push(quoteAgentArg(token));
-      }
-    }
+  for (const arg of keepArgs(options?.presetArgs ?? [])) {
+    parts.push(isSafeShellOption(arg) ? arg : quoteAgentArg(arg));
   }
 
   // Add recipe-level args (per-terminal overrides from recipe editor)
-  if (options?.recipeArgs) {
-    for (const token of options.recipeArgs.trim().split(/\s+/).filter(Boolean)) {
-      if (isSafeShellOption(token)) {
-        parts.push(token);
-      } else {
-        parts.push(quoteAgentArg(token));
-      }
-    }
+  for (const arg of keepArgs(parseLaunchArgs(options?.recipeArgs))) {
+    parts.push(isSafeShellOption(arg) ? arg : quoteAgentArg(arg));
   }
 
   // Add flags, escaping non-flag values
-  for (const flag of flags) {
+  for (const flag of keepArgs(flags)) {
     if (isSafeShellOption(flag)) {
       parts.push(flag);
     } else {
@@ -869,7 +957,7 @@ export function generateAgentCommand(
   // The caller's standing instruction (#12431) goes after preset, recipe and
   // settings args so it wins over one they carry — the CLI keeps the last. It
   // is one argv token even when it holds spaces, so it is quoted whole rather
-  // than split like the preset/recipe strings above.
+  // than split like the recipe string above.
   for (const arg of options?.systemPromptArgs ?? []) {
     parts.push(isSafeShellOption(arg) ? arg : quoteAgentArg(arg));
   }
@@ -1046,6 +1134,7 @@ export function buildAgentLaunchFlags(
     modelId?: string;
     systemPromptArgs?: readonly string[];
     presetArgs?: string[];
+    recipeArgs?: string;
     globalSkipPermissions?: boolean;
     globalUseAltScreen?: boolean;
   }
@@ -1068,8 +1157,9 @@ export function buildAgentLaunchFlags(
   );
   if (screenModeFlag) flags.push(screenModeFlag);
 
-  // Model flag for per-panel model selection
-  if (options?.modelId) {
+  // Model flag for per-panel model selection. These flags only ever replay a
+  // restart or resume, so an agent whose flag is headless-only keeps none.
+  if (options?.modelId && canSelectAgentModel(agentId)) {
     flags.push("--model", options.modelId);
   }
 
@@ -1078,6 +1168,14 @@ export function buildAgentLaunchFlags(
   if (options?.presetArgs?.length) {
     flags.push(...options.presetArgs);
   }
+
+  // Recipe args sit between preset args and settings flags, as in
+  // generateAgentCommand, so a restart replays them in launch order. A slot
+  // holds their place through the decoration reconciliation below, which
+  // must leave an explicit recipe override (Codex's `-c tui.whimsy=false`)
+  // in place, as the launch command does.
+  const recipeArgs = parseLaunchArgs(options?.recipeArgs);
+  if (recipeArgs.length) flags.push(RECIPE_ARGS_SLOT);
 
   // Dangerous args and custom flags (from generateAgentFlags, excluding clipboard dir)
   const settingsFlags = generateAgentFlags(entry, agentId, {
@@ -1094,7 +1192,13 @@ export function buildAgentLaunchFlags(
 
   // generateAgentFlags dedupes the decorations pair against its own output
   // only; a preset's args (pushed above) can carry it too. Converge on one.
-  return reconcileDecorationFlags(flags, agentId, resolveKeepDecorations(entry));
+  const launchFlags = reconcileDecorationFlags(
+    flags,
+    agentId,
+    resolveKeepDecorations(entry)
+  ).flatMap((flag) => (flag === RECIPE_ARGS_SLOT ? recipeArgs : [flag]));
+  // A preset, recipe or settings flag can name a model too.
+  return replayableLaunchFlags(launchFlags, agentId) ?? launchFlags;
 }
 
 /**
@@ -1118,6 +1222,7 @@ export function buildResumeCommand(
   const agentConfig = getEffectiveAgentConfig(agentId);
   const resume = agentConfig?.resume;
   if (!agentConfig || !resume) return undefined;
+  launchFlags = replayableLaunchFlags(launchFlags, agentId);
 
   const parts = [baseCommand ?? agentConfig.command];
 
@@ -1213,6 +1318,7 @@ export function buildResumeLatestCommand(
         ? resume.args()
         : undefined;
   if (!fallbackArgs || fallbackArgs.length === 0) return undefined;
+  launchFlags = replayableLaunchFlags(launchFlags, agentId);
 
   const parts = [baseCommand ?? agentConfig.command];
 
@@ -1294,6 +1400,18 @@ export function supportsCrossDirectoryResume(agentId: string | undefined): boole
   if (!agentId) return false;
   const resume = getEffectiveAgentConfig(agentId)?.resume;
   return resume?.kind === "session-id" && resume.crossDirectoryResume === true;
+}
+
+/**
+ * Whether a preset switch may ask `agentId` to reopen the pane's conversation
+ * by id (#16045): the CLI resumes an exact id and Daintree knows the words it
+ * refuses one with, so a refusal is offered back to the user rather than read
+ * as an ordinary exit.
+ */
+export function supportsConversationKeepingSwitch(agentId: string | undefined): boolean {
+  if (!agentId) return false;
+  const resume = getEffectiveAgentConfig(agentId)?.resume;
+  return resume?.kind === "session-id" && !!resume.refusalPattern;
 }
 
 /**
@@ -1466,6 +1584,201 @@ export function stripConversationSelectorFlags(
   return kept;
 }
 
+const MODEL_FLAG = "--model";
+
+/**
+ * Drops each `--model <id>` / `--model=<id>` whose id `shouldDrop` picks from a
+ * run of argument words. `unquote` reads a command's shell-quoted words for the
+ * id. Returns undefined when nothing was dropped. Stops at `--`: what follows
+ * it is positional, never a flag.
+ */
+function withoutModelArgs(
+  words: readonly string[],
+  shouldDrop: (modelId: string) => boolean,
+  unquote: (word: string) => string,
+  dropped: Set<string>
+): string[] | undefined {
+  const kept: string[] = [];
+  let changed = false;
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i]!;
+    if (word === "--") {
+      kept.push(...words.slice(i));
+      break;
+    }
+    if (word === MODEL_FLAG && i + 1 < words.length && words[i + 1] !== "--") {
+      const modelId = unquote(words[i + 1]!);
+      if (shouldDrop(modelId)) {
+        dropped.add(modelId);
+        changed = true;
+        i++;
+        continue;
+      }
+    } else if (word === MODEL_FLAG) {
+      // No value follows: an empty id, which only a drop-everything rule takes.
+      if (shouldDrop("")) {
+        changed = true;
+        continue;
+      }
+    } else if (word.startsWith(`${MODEL_FLAG}=`)) {
+      const modelId = unquote(word.slice(MODEL_FLAG.length + 1));
+      if (shouldDrop(modelId)) {
+        dropped.add(modelId);
+        changed = true;
+        continue;
+      }
+    }
+    kept.push(word);
+  }
+  return changed ? kept : undefined;
+}
+
+/** The fields a pane or launch keeps its model choice in. */
+export interface SavedAgentModelLaunch {
+  agentModelId?: string;
+  agentLaunchFlags?: string[];
+  callerLaunchFlags?: string[];
+  command?: string;
+}
+
+/**
+ * Takes a retired model (`AgentConfig.retiredModels`) out of a saved launch
+ * before it is replayed, so the run starts on the CLI default instead of
+ * failing on `--model <retired id>` every time (#15652).
+ *
+ * The choice is saved in up to four places — the scalar id, the replayed
+ * flags, the caller's verbatim tail of them, and the command itself — and a
+ * relaunch path can take any of them, so all four are cleaned together. An id
+ * that is offered, unknown, or simply missing from the bundled list is left
+ * alone: only a declared retirement drops anything.
+ *
+ * Returns the same `launch` object, with no ids, when nothing is retired.
+ */
+export function dropRetiredAgentModel<T extends SavedAgentModelLaunch>(
+  agentId: string | undefined,
+  launch: T
+): { launch: T; droppedModelIds: string[] } {
+  if (!agentId || !getEffectiveAgentConfig(agentId)?.retiredModels) {
+    return { launch, droppedModelIds: [] };
+  }
+  const dropped = new Set<string>();
+  const next: T = { ...launch };
+  if (isRetiredAgentModel(agentId, launch.agentModelId)) {
+    dropped.add(launch.agentModelId!);
+    next.agentModelId = undefined;
+  }
+  const retired = (modelId: string) => isRetiredAgentModel(agentId, modelId);
+  if (launch.agentLaunchFlags) {
+    const flags = withoutModelArgs(launch.agentLaunchFlags, retired, identityWord, dropped);
+    if (flags) next.agentLaunchFlags = flags;
+  }
+  if (launch.callerLaunchFlags) {
+    const flags = withoutModelArgs(launch.callerLaunchFlags, retired, identityWord, dropped);
+    if (flags) next.callerLaunchFlags = flags.length > 0 ? flags : undefined;
+  }
+  if (launch.command) {
+    const words = withoutModelArgs(
+      splitShellWords(launch.command),
+      retired,
+      unquoteShellWord,
+      dropped
+    );
+    if (words) next.command = words.join(" ");
+  }
+  if (dropped.size === 0) return { launch, droppedModelIds: [] };
+  return { launch: next, droppedModelIds: [...dropped] };
+}
+
+const identityWord = (word: string) => word;
+const anyModel = () => true;
+
+/**
+ * Persisted flags as a replay may pass them on: without a `--model` for an
+ * agent that takes one only on a new headless run (#15569), which a restart or
+ * resume never is. Saved panes from before that rule still carry one.
+ */
+export function replayableLaunchFlags(
+  flags: readonly string[] | undefined,
+  agentId: string
+): string[] | undefined {
+  if (!flags) return undefined;
+  if (canSelectAgentModel(agentId)) return [...flags];
+  return withoutModelArgs(flags, anyModel, identityWord, new Set()) ?? [...flags];
+}
+
+/**
+ * Takes a model choice the launch doesn't make out of a saved launch, for an
+ * agent whose `--model` only a new headless run takes
+ * (`AgentConfig.modelSelection`, #15569). Its replayed flags never keep one,
+ * since a restart or resume is never such a run. `agentModelId` stays only
+ * while `command` passes it as `--model`, so a duplicate or recipe rebuilt as
+ * an interactive launch stops claiming the model its source ran headless
+ * with, and a title that is just the one generated for that model goes back
+ * to the agent's name.
+ *
+ * `replay` is for a launch that is itself a replay (a restart): the model
+ * comes out of `command` too. Otherwise the command is left as it is, because
+ * a fresh headless launch arrives the same way as a replayed one.
+ *
+ * Returns the same `launch` object when nothing changed.
+ */
+export function dropUnselectedAgentModel<
+  T extends SavedAgentModelLaunch & { title?: string; titleMode?: string },
+>(agentId: string | undefined, launch: T, options: { replay?: boolean } = {}): T {
+  if (!agentId || canSelectAgentModel(agentId)) return launch;
+  const ignored = new Set<string>();
+  const next: T = { ...launch };
+  let changed = false;
+  if (launch.agentLaunchFlags) {
+    const flags = withoutModelArgs(launch.agentLaunchFlags, anyModel, identityWord, ignored);
+    if (flags) {
+      next.agentLaunchFlags = flags;
+      changed = true;
+    }
+  }
+  if (launch.callerLaunchFlags) {
+    const flags = withoutModelArgs(launch.callerLaunchFlags, anyModel, identityWord, ignored);
+    if (flags) {
+      next.callerLaunchFlags = flags.length > 0 ? flags : undefined;
+      changed = true;
+    }
+  }
+  if (options.replay && launch.command) {
+    const words = withoutModelArgs(
+      splitShellWords(launch.command),
+      anyModel,
+      unquoteShellWord,
+      ignored
+    );
+    if (words) {
+      next.command = words.join(" ");
+      changed = true;
+    }
+  }
+  const modelId = launch.agentModelId;
+  const selected =
+    modelId !== undefined &&
+    next.command !== undefined &&
+    withoutModelArgs(
+      splitShellWords(next.command),
+      (id) => id === modelId,
+      unquoteShellWord,
+      ignored
+    ) !== undefined;
+  if (modelId !== undefined && !selected) {
+    next.agentModelId = undefined;
+    changed = true;
+    const generated = launch.titleMode === undefined || launch.titleMode === "default";
+    const modelTitle = getAgentDisplayTitle(agentId, modelId);
+    const bareTitle = getAgentDisplayTitle(agentId);
+    // Also when decorated after it, as a duplicate's " (copy)" is.
+    if (generated && modelTitle !== bareTitle && launch.title?.startsWith(modelTitle)) {
+      next.title = bareTitle + launch.title.slice(modelTitle.length);
+    }
+  }
+  return changed ? next : launch;
+}
+
 const ASSIGNABLE_SESSION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -1580,7 +1893,7 @@ export function buildLaunchCommandFromFlags(
   launchFlags: readonly string[],
   options?: BuildLaunchCommandFromFlagsOptions
 ): string {
-  const flags: string[] = [...launchFlags];
+  const flags: string[] = [...(replayableLaunchFlags(launchFlags, agentId) ?? [])];
 
   if (
     agentId === "gemini" &&

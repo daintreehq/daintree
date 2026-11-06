@@ -14,6 +14,7 @@ import type {
   TerminalFlowStatus,
   PanelTitleMode,
   TerminalFirstPrompt,
+  ScheduledRunRef,
 } from "./panel.js";
 import type { ResourceProfile } from "./resourceProfile.js";
 import type { PowerPolicyLevel } from "./powerPolicy.js";
@@ -98,6 +99,11 @@ export interface PtyHostSpawnOptions {
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
   /**
+   * The scheduled run this terminal was launched for (#15977), named on the
+   * session record captured when its agent ends.
+   */
+  scheduledRun?: ScheduledRunRef;
+  /**
    * Session id already known at launch (#11782) — either minted by Daintree and
    * assigned via `resume.assignSessionIdArgs`, or the id this launch resumes.
    * Recorded on the terminal record as the PTY is created, so the conversation
@@ -154,6 +160,13 @@ export interface PtyHostSpawnOptions {
    * to wait on. Absent for every launch that did not ask.
    */
   handbackCode?: string;
+  /**
+   * `run` when `handbackCode` is a scheduled run's launch code (#15982): its
+   * instruction offers a `needs-you` marker beside `done`, and a marker for it
+   * is reported to Main as the run's. Set by Main's spawn handler only for the
+   * spawn that registered the run, never taken from a caller.
+   */
+  handbackInstruction?: import("./handback.js").HandbackInstruction;
 }
 
 /** Per-project terminal-workload memory, deduplicated by PID. */
@@ -270,7 +283,11 @@ export type PtyHostRequest =
   | PluginPtyHostRequest
   | { type: "spawn"; id: string; options: PtyHostSpawnOptions }
   | { type: "resize"; id: string; cols: number; rows: number }
-  | { type: "write"; id: string; data: string; traceId?: string }
+  /**
+   * `inputOwner` names the assistant these bytes were written for (#16094);
+   * only main's own channel carries it, so a renderer's keys are never owned.
+   */
+  | { type: "write"; id: string; data: string; traceId?: string; inputOwner?: string }
   | {
       type: "broadcast-write";
       ids: string[];
@@ -288,6 +305,12 @@ export type PtyHostRequest =
       submissionToken?: string;
       /** Handback code minted for this submission (#12488); its instruction is already in `text`. */
       handbackCode?: string;
+      /**
+       * `run` when `text` carries the instruction that offers `needs-you` too:
+       * a terminal armed with a When done choice (#16171). Absent, the code is
+       * looked for in its `done` form alone.
+       */
+      handbackInstruction?: "run";
       /** Admission check run when the submission reaches the lane (#12491). */
       guard?: TerminalSubmitGuard;
       /** Absolute paths of images attached in the composer, in order (#12792). */
@@ -297,16 +320,23 @@ export type PtyHostRequest =
        * written (#15521), already capped. Present only while the run has none.
        */
       firstPrompt?: FirstPromptCandidate;
+      /**
+       * The assistant whose prompt this guarded line carries (#16187), filed
+       * as its prompt-capable input once the Enter is written. Absent, a
+       * guarded line is nobody's prompt.
+       */
+      promptOwner?: string;
     }
   | { type: "stage"; id: string; text: string }
   /** Take back a guarded submission before its Enter (#12491). Ordinary ones are unaffected. */
   | { type: "withdraw-submission"; id: string; submissionToken: string }
   /** Drop input queued for the PTY but not yet written; input stays open. */
   | { type: "cancel-pending-input"; id: string }
-  | { type: "batch-double-escape"; ids: string[] }
+  | { type: "batch-double-escape"; ids: string[]; inputOwner?: string }
   | { type: "kill"; id: string; reason?: string; escalationDelayMs?: number }
   | { type: "trash"; id: string }
   | { type: "restore"; id: string }
+  | { type: "end-trash-grace"; id: string; requestId: string; expectedGeneration: number }
   | {
       type: "set-activity-tier";
       id: string;
@@ -706,6 +736,7 @@ export type PtyHostEvent =
     }
   // `launchGeneration` attributes the exit to one terminal incarnation so a
   // stale exit arriving after a same-id respawn can't close the successor.
+  // `spawnedAt` names that incarnation as session records do (#15976).
   // `preserveSession` marks an exit a session-preserving project teardown
   // caused, so the renderer keeps the pane in the layout (#13841).
   | {
@@ -714,7 +745,19 @@ export type PtyHostEvent =
       exitCode: number;
       signal?: number;
       launchGeneration?: number;
+      spawnedAt?: number;
       preserveSession?: boolean;
+    }
+  // The exit of an incarnation a same-id respawn already replaced in the host
+  // (#15976). The host keeps nothing for it any more, so this is the facts
+  // alone, for main's record of that incarnation, and never a terminal's exit.
+  | {
+      type: "superseded-exit";
+      id: string;
+      exitCode: number;
+      signal?: number;
+      launchGeneration?: number;
+      spawnedAt: number;
     }
   | { type: "error"; id: string; error: string }
   // Typed submit-lane status (#11875). Deliberately NOT folded into the `error`
@@ -806,12 +849,42 @@ export type PtyHostEvent =
       terminalId: string;
       handback: TerminalHandback;
       code?: string;
+      /** The pane's `lastStateChange` when the marker was seen. */
+      lastStateChange?: number;
+      timestamp: number;
+    }
+  | {
+      /**
+       * A scheduled run's launch marker is complete in this pane (#15982),
+       * from whichever check saw it first: the output as it arrived or the
+       * agent's settle. Main-only; `message` is the agent's own text.
+       */
+      type: "agent-run-handback-observed";
+      terminalId: string;
+      /** The incarnation that printed it. */
+      spawnedAt: number;
+      code: string;
+      report: import("./handback.js").HandbackReport;
+      message: string | null;
+      truncated: boolean;
+      observedAt: number;
       timestamp: number;
     }
   | {
       /** A rate-limit banner appeared in this pane (#12797). Never carries its text. */
       type: "agent-rate-limit-observed";
       terminalId: string;
+      observedAt: number;
+      timestamp: number;
+    }
+  | {
+      /** A Claude Code usage message in this pane (#15727), as parsed fields only. */
+      type: "agent-claude-usage-observed";
+      terminalId: string;
+      window: import("./ipc/agentQuota.js").ClaudeUsageWindow;
+      statement: import("./ipc/agentQuota.js").ClaudeUsageStatement;
+      usedPercent: number | null;
+      resetsAt: number | null;
       observedAt: number;
       timestamp: number;
     }
@@ -873,6 +946,21 @@ export type PtyHostEvent =
       launchGeneration?: number | null;
       boundary: AgentSessionCaptureBoundary;
       record: Omit<AgentSessionRecord, "savedAt">;
+      /** The agent run that ended, for an exit or demotion capture. */
+      run?: AgentRunToken;
+    }
+  | {
+      /**
+       * A run's own argv named the conversation it resumes (#15994), read once
+       * per observed run. Not a capture: nothing closed, so Main writes the
+       * saved pane and journals nothing.
+       */
+      type: "agent-session-observed";
+      terminalId: string;
+      agentId: string;
+      projectId: string;
+      sessionId: string;
+      run: AgentRunToken;
     }
   // `launchGeneration` binds the PID to the incarnation that owns it, so Main
   // never attributes a predecessor's PID to a same-id respawn.
@@ -974,6 +1062,11 @@ export type PtyHostEvent =
       requestId: string;
       id: string;
       agentSessionId: string | null;
+    }
+  | {
+      type: "end-trash-grace-result";
+      requestId: string;
+      status: EndTrashGraceStatus;
     }
   | {
       type: "graceful-kill-by-project-result";
@@ -1085,12 +1178,33 @@ export interface GracefulKillResult {
 }
 
 /**
+ * What ending a trashed terminal's grace early did (#15728): `started` ran the
+ * trash expiry (graceful shutdown, then kill), which says nothing yet about
+ * the exit; `not-trashed` and `generation-mismatch` left it alone, because it
+ * was restored, already let go, or the id now names another incarnation.
+ */
+export type EndTrashGraceStatus = "started" | "not-trashed" | "generation-mismatch";
+
+/**
  * Which lifecycle boundary produced an `agent-session-captured` record. Only
  * `exit` — the PTY incarnation ending for good — identifies a session the
  * saved pane can own; a demotion leaves a live shell that may host another
  * conversation, and trash expiry belongs to a pane the user already closed.
+ * `kill` is Main closing the terminal itself, for a scheduled run's done
+ * policy (#15982): the pane goes with it.
  */
-export type AgentSessionCaptureBoundary = "exit" | "demotion" | "trash-expiry";
+export type AgentSessionCaptureBoundary = "exit" | "demotion" | "trash-expiry" | "kill";
+
+/**
+ * One observed agent run: the PTY launch, then which agent run inside that
+ * shell. A hand-started agent after a demotion is a new run in the same
+ * generation. Counts observed boundaries only, so two runs detection never
+ * told apart share a token.
+ */
+export interface AgentRunToken {
+  launchGeneration: number;
+  agentIncarnation: number;
+}
 
 /** Reply to `finish-session-captures`: whether every observed capture was delivered. */
 export interface AgentSessionCaptureFinishResult {
@@ -1154,6 +1268,13 @@ export function isPtyHostResponseEvent(event: PtyHostEvent): event is PtyHostRes
   );
 }
 
+/** Typed input Daintree wrote on an assistant's behalf (#16094): when, and for whom. */
+export interface OwnedTypedInput {
+  /** The assistant's ownership principal, opaque to the pty host. */
+  owner: string;
+  at: number;
+}
+
 /** Terminal info sent from Host → Main for getTerminal queries */
 export interface PtyHostTerminalInfo {
   id: string;
@@ -1186,6 +1307,14 @@ export interface PtyHostTerminalInfo {
   lastInputTime?: number;
   /** Last input that could have put text in the composer, ignoring xterm's own reports (#12491). */
   lastTypedInputAt?: number;
+  /** The last of that input written for an assistant, and whose (#16094). */
+  lastOwnedInput?: OwnedTypedInput;
+  /** The last of that input anyone but `lastOwnedInput`'s owner wrote: all of it while none is owned. */
+  lastForeignInputAt?: number;
+  /** The last input the agent could have taken as a prompt written for an assistant, and whose (#16187). */
+  lastOwnedPromptInput?: OwnedTypedInput;
+  /** The last of that input anyone but `lastOwnedPromptInput`'s owner wrote. */
+  lastForeignPromptInputAt?: number;
   lastOutputTime?: number;
   /** A submission is queued or still being written; absent from older hosts. */
   hasPendingSubmission?: boolean;
@@ -1197,6 +1326,8 @@ export interface PtyHostTerminalInfo {
   outputObservedSince?: number;
   spawnedAt: number;
   isTrashed?: boolean;
+  /** A graceful shutdown is quitting its agent: the PTY runs, but the run is ending. Absent from older hosts. */
+  isClosing?: boolean;
   trashExpiresAt?: number;
   /** Current activity tier: "active" (foreground) or "background" (project switched away) */
   activityTier?: "active" | "background";
@@ -1217,10 +1348,21 @@ export interface PtyHostTerminalInfo {
   ptyRows?: number;
   /** Captured agent session ID from graceful shutdown */
   agentSessionId?: string;
+  /**
+   * The Claude Code config folder this terminal's launch env names: its
+   * `CLAUDE_CONFIG_DIR` (an account's folder, #16269), or `~/.claude` when it
+   * sets none. Absent when the env names one that can't be resolved.
+   */
+  claudeConfigDir?: string;
   /** Process-level flags captured at launch time (e.g. --dangerously-skip-permissions) */
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
+  /**
+   * The scheduled run this terminal was launched for (#15977), named on the
+   * session record captured when its agent ends.
+   */
+  scheduledRun?: ScheduledRunRef;
   /** Worktree the terminal was spawned in; used when persisting agent session history */
   worktreeId?: string;
   /** Preset ID the agent was launched with. */
@@ -1329,6 +1471,11 @@ export interface SpawnResult {
    * spawn entry or mis-record its ledger resolution.
    */
   launchGeneration?: number;
+  /**
+   * A successful spawn's start time, `TerminalInfo.spawnedAt`: with the id it
+   * names the incarnation, as session records and exits do.
+   */
+  spawnedAt?: number;
   error?: SpawnError;
 }
 
@@ -1397,8 +1544,40 @@ export type TerminalSubmitStatusState = "slow" | "stalled" | "settled" | "failed
  * for a CLI that queues input while it works: a brief one assistant sends
  * another (#13496) is refused rather than taken in the middle of a turn. A
  * question the agent asked in prose still counts as its prompt (#14475).
+ *
+ * {@link ExactPromptGuard} is the strict check without that allowance, for
+ * the run the line was meant for.
+ *
+ * `no-choice-dialog` (#16209) is a caller's own prompt, sent as an unguarded
+ * line is, refused only while the terminal's agent is observed waiting on a
+ * choice dialog (`isAtChoiceDialog`), when it reaches the lane as well as when
+ * it is handed over. A shell, a working agent, or one at its prompt takes it
+ * as before.
  */
-export type TerminalSubmitGuard = "settled-prompt" | "settled-prompt-strict";
+export type TerminalSubmitGuard =
+  "settled-prompt" | "settled-prompt-strict" | "no-choice-dialog" | ExactPromptGuard;
+
+/**
+ * `settled-prompt-exact` (#16015): only an agent waiting at its own prompt,
+ * settled since the lane last wrote to it, never mid-turn and never at a
+ * question, and only the run main checked the line against. A held prompt
+ * waits for exactly that; a Decisions answer relaxes it (#16282).
+ */
+export interface ExactPromptGuard {
+  kind: "settled-prompt-exact";
+  /** The agent incarnation main read; another one holding the PTY refuses the line. */
+  agentIncarnation?: number;
+  /** The agent session main read, when known. One learned since is still that run. */
+  agentSessionId?: string;
+  /**
+   * Mid-turn too, when the host's own record says the agent's CLI queues
+   * input (`capabilities.queuesInputWhileWorking`), never on input typed
+   * since the turn began.
+   */
+  acceptWorking?: true;
+  /** At a question the agent asked in prose as well as at its prompt. */
+  acceptQuestion?: true;
+}
 
 /** A submission's text as a run's first-prompt record, before it was written (#15521). */
 export type FirstPromptCandidate = Omit<TerminalFirstPrompt, "via" | "at">;

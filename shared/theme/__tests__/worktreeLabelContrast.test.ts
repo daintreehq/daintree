@@ -28,8 +28,8 @@ function labelMixPercent(): number {
 /** The card plane's CSS fallbacks in sidebar.css, used when a theme sets no extension. */
 const PLANE_FALLBACKS = {
   resting: ["sidebar-card-bg", "rgba(255, 255, 255, 0.03)"],
-  hovered: ["sidebar-hover-bg", "rgba(255, 255, 255, 0.048)"],
-  selected: ["sidebar-active-bg", "rgba(255, 255, 255, 0.065)"],
+  hovered: ["sidebar-hover-bg", "rgba(255, 255, 255, 0.064)"],
+  selected: ["sidebar-active-bg", "rgba(255, 255, 255, 0.096)"],
 } as const;
 
 function composite(value: string, base: string): string {

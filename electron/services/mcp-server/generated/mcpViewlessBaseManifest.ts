@@ -19,6 +19,295 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "agent",
     danger: "safe",
     description:
+      "Create a managed worktree and launch one agent in it: source as for any managed worktree (no recipe), the rest as for any agent launch. Launches only once setup ends ready, else stops and says which. The session owns both. A failure after creation is PARTIAL_SUCCESS carrying worktreeId: use that worktree, don't retry.",
+    enabled: true,
+    id: "agent.launchInNewWorktree",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        agentId: {
+          anyOf: [
+            {
+              type: "string",
+              enum: [
+                "claude",
+                "opencode",
+                "aider",
+                "gemini",
+                "antigravity",
+                "codex",
+                "grok",
+                "cursor",
+                "copilot",
+                "goose",
+                "amp",
+                "crush",
+                "qwen",
+                "kimi",
+                "interpreter",
+                "mistral",
+                "kiro",
+                "terminal",
+                "browser",
+                "dev-preview",
+              ],
+            },
+            {
+              type: "string",
+              minLength: 1,
+            },
+          ],
+          description:
+            "Agent CLI id from the agent listing. Other strings are accepted, so a bad id fails at launch, not validation.",
+        },
+        location: {
+          type: "string",
+          enum: ["grid", "dock", "overlay", "background"],
+          description: 'Default "grid". "background" runs it unmounted until restored.',
+        },
+        cwd: {
+          description:
+            "Absolute launch directory, not a worktree selector. Defaults to the worktree root.",
+          type: "string",
+        },
+        prompt: {
+          description: "First turn, submitted once the agent starts. Omit to leave it waiting.",
+          type: "string",
+        },
+        handback: {
+          description:
+            "Ask the agent to end its reply to `prompt` with a Daintree marker, read back as `lastHandback`.",
+          type: "boolean",
+        },
+        notify: {
+          description:
+            "When this agent next stops, Daintree types its handback summary, else its screen, into your prompt; may be missed: poll too. Agent panes and assistants only.",
+          type: "boolean",
+        },
+        replyLines: {
+          description:
+            "With notify: screen lines quoted (default 40, 0 for none); with handback, up to the marker. Set, it quotes despite a summary.",
+          type: "integer",
+          minimum: 0,
+          maximum: 200,
+        },
+        waitForReply: {
+          description: "Hold the call until the agent finishes; its reply comes back in `reply`.",
+          type: "boolean",
+        },
+        waitSeconds: {
+          description: "Longest wait, 1-1800 s (default 300).",
+          type: "integer",
+          minimum: 1,
+          maximum: 1800,
+        },
+        systemPrompt: {
+          description:
+            "Appended to the agent's system prompt, at most 2000 characters, kept on resume. Claude and Codex only; others refuse it.",
+          type: "string",
+          maxLength: 2000,
+        },
+        interactive: {
+          description: "Run as a conversation the user can continue, not one non-interactive pass.",
+          type: "boolean",
+        },
+        model: {
+          description:
+            "Omit for the CLI's default; set only when the user names a model. No preset needed.",
+          type: "string",
+        },
+        presetId: {
+          description:
+            "One of the user's saved launch presets. Explicit null ignores the default preset.",
+          type: ["string", "null"],
+        },
+        accountId: {
+          description:
+            "One of the agent's saved accounts. Explicit null uses the CLI's default login.",
+          type: ["string", "null"],
+        },
+        activateDockOnCreate: {
+          description: "Open the sidebar dock when placing the agent there.",
+          type: "boolean",
+        },
+        env: {
+          description:
+            "Extra env vars merged over the inherited environment. They reach a real process: never add credentials the user has not exposed.",
+          type: "object",
+          propertyNames: {
+            type: "string",
+          },
+          additionalProperties: {
+            type: "string",
+          },
+        },
+        excludeFromPersistence: {
+          description:
+            "Hide the terminal from the saved session, listings, status reads and bulk close or kill, so it can't be polled later. For throwaway work.",
+          type: "boolean",
+        },
+        removeOnExit: {
+          description: "Close the panel when the agent exits, discarding its output.",
+          type: "boolean",
+        },
+        agentLaunchFlags: {
+          description:
+            'Extra CLI flags for this launch, verbatim, e.g. Codex effort ["-c", "model_reasoning_effort=high"]. Bad ones fail at CLI start.',
+          type: "array",
+          items: {
+            type: "string",
+          },
+        },
+        spawnedBy: {
+          type: "string",
+          enum: ["quickrun", "recipe", "agent", "palette", "mcp", "assistant"],
+          description: "Run-history provenance only. Leave unset over MCP.",
+        },
+        focusPolicy: {
+          type: "string",
+          enum: ["auto", "preserve", "take"],
+          description:
+            'Focus the new panel: "auto" (default) unless the assistant owns input, "preserve" never, "take" always. Use preserve for background spawns.',
+        },
+        requestedId: {
+          description: "Panel id to create the terminal with, to correlate the launch.",
+          type: "string",
+        },
+        force: {
+          description:
+            "Skip the CLI launchability check, so an unlaunchable CLI starts and fails instead of opening a setup diagnostic. Leave off.",
+          type: "boolean",
+        },
+        name: {
+          description:
+            "Always pass a short tab title ('Claude: auth refactor') so parallel agents are told apart. Blank uses the default.",
+          type: "string",
+          maxLength: 200,
+        },
+        source: {
+          oneOf: [
+            {
+              type: "object",
+              properties: {
+                kind: {
+                  type: "string",
+                  const: "newBranch",
+                  description: "Branch off a base; a taken name follows collisionPolicy.",
+                },
+                branchName: {
+                  type: "string",
+                  minLength: 1,
+                  description: "New branch name; an invalid git ref is rejected, not rewritten.",
+                },
+                baseBranch: {
+                  description: "Base branch (default: the main worktree's branch).",
+                  type: "string",
+                  minLength: 1,
+                },
+                fromRemote: {
+                  description: "True if baseBranch is a remote branch, e.g. origin/develop.",
+                  type: "boolean",
+                },
+                fetchBase: {
+                  description:
+                    "Fetch the base (a local one via its upstream) and branch from that commit, returned as startCommit. A failed fetch fails; a taken name is never reused.",
+                  type: "boolean",
+                },
+                collisionPolicy: {
+                  description:
+                    "If the name is taken: 'suffix' (default) reuses the branch when nothing has it checked out, else creates name-2, and reports which; 'error' fails.",
+                  type: "string",
+                  enum: ["suffix", "error"],
+                },
+                issueNumber: {
+                  description:
+                    "Issue this worktree is for, passed to the recipe and assignToSelf; not attached.",
+                  type: "integer",
+                  exclusiveMinimum: 0,
+                  maximum: 9007199254740991,
+                },
+                assignToSelf: {
+                  description:
+                    "Assign the issue to the current user. Omit for the saved 'Assign issue to me' preference.",
+                  type: "boolean",
+                },
+              },
+              required: ["kind", "branchName"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                kind: {
+                  type: "string",
+                  const: "existingBranch",
+                  description: "Check out an existing local branch exactly as named.",
+                },
+                branchName: {
+                  type: "string",
+                  minLength: 1,
+                  description: "Existing local branch, used verbatim: never suffixed or created.",
+                },
+                issueNumber: {
+                  description:
+                    "Issue this worktree is for, passed to the recipe and assignToSelf; not attached.",
+                  type: "integer",
+                  exclusiveMinimum: 0,
+                  maximum: 9007199254740991,
+                },
+                assignToSelf: {
+                  description:
+                    "Assign the issue to the current user. Omit for the saved 'Assign issue to me' preference.",
+                  type: "boolean",
+                },
+              },
+              required: ["kind", "branchName"],
+              additionalProperties: false,
+            },
+            {
+              type: "object",
+              properties: {
+                kind: {
+                  type: "string",
+                  const: "pullRequest",
+                  description:
+                    "Check out a pull request's head branch; a closed or merged PR works while its head ref exists.",
+                },
+                pullRequestNumber: {
+                  type: "integer",
+                  exclusiveMinimum: 0,
+                  maximum: 9007199254740991,
+                  description: "Pull request to check out; its head branch is fetched for you.",
+                },
+              },
+              required: ["kind", "pullRequestNumber"],
+              additionalProperties: false,
+            },
+          ],
+          description: "Where the branch comes from; exactly one mode.",
+        },
+        setupTimeoutMs: {
+          description:
+            "Ms to wait for setup, 0-600000 (default 300000). With waitForReply, it plus waitSeconds stays within 1800 s.",
+          type: "integer",
+          minimum: 0,
+          maximum: 600000,
+        },
+      },
+      required: ["agentId", "source"],
+    },
+    keywords: ["branch", "issue", "unit", "setup"],
+    kind: "command",
+    name: "agent.launchInNewWorktree",
+    requiresArgs: true,
+    title: "Create worktree and launch agent",
+  },
+  {
+    band: "reversible",
+    category: "agent",
+    danger: "safe",
+    description:
       "Each agent CLI's current model ids and names, to turn a model the user names into an id. With none named, launch without a model.",
     enabled: true,
     examples: [
@@ -88,7 +377,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "agent",
     danger: "safe",
     description:
-      "Read this machine's Codex account quota, as Codex reports it: how much of each rate-limit window is used and when it resets.",
+      "Read this machine's Codex quota as Codex reports it, and the last Claude Code usage-limit message per limit its panes showed (not a live reading).",
     enabled: true,
     id: "agent.readQuota",
     inputSchema: {
@@ -96,7 +385,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       type: "object",
       properties: {},
     },
-    keywords: ["codex", "quota", "usage", "limit"],
+    keywords: ["codex", "claude", "quota", "usage", "limit"],
     kind: "query",
     mcpAnnotations: {
       readOnlyHint: true,
@@ -109,6 +398,72 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       $schema: "https://json-schema.org/draft/2020-12/schema",
       type: "object",
       properties: {
+        claude: {
+          type: "object",
+          properties: {
+            source: {
+              type: "string",
+              const: "seen-in-panes",
+              description:
+                "Claude Code's own messages in this machine's panes, not a live account reading.",
+            },
+            readings: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  window: {
+                    type: "string",
+                    enum: [
+                      "5-hour limit",
+                      "session limit",
+                      "weekly limit",
+                      "Opus limit",
+                      "Sonnet limit",
+                      "Fable limit",
+                      "usage limit",
+                      "limit",
+                    ],
+                    description: "The limit as Claude Code named it.",
+                  },
+                  statement: {
+                    type: "string",
+                    enum: ["used", "over", "approaching", "reached"],
+                    description:
+                      "used: usedPercent exact. over: past usedPercent. reached: limit hit.",
+                  },
+                  usedPercent: {
+                    type: ["number", "null"],
+                  },
+                  resetsAt: {
+                    description: "Epoch ms of the reset it printed, or null.",
+                    type: ["number", "null"],
+                  },
+                  terminalId: {
+                    type: "string",
+                    description: "The pane that showed it.",
+                  },
+                  observedAt: {
+                    type: "number",
+                    description: "When it showed, epoch ms.",
+                  },
+                },
+                required: [
+                  "window",
+                  "statement",
+                  "usedPercent",
+                  "resetsAt",
+                  "terminalId",
+                  "observedAt",
+                ],
+                additionalProperties: false,
+              },
+              description: "Latest per limit since Daintree started. Empty: none seen.",
+            },
+          },
+          required: ["source", "readings"],
+          additionalProperties: false,
+        },
         codex: {
           oneOf: [
             {
@@ -179,11 +534,11 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           ],
         },
       },
-      required: ["codex"],
+      required: ["claude", "codex"],
       additionalProperties: false,
     },
     requiresArgs: false,
-    title: "Read Codex quota",
+    title: "Read agent quota",
   },
   {
     band: "reversible",
@@ -448,7 +803,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           description: "A vacant slot. Omit for the lowest vacant one.",
           type: "integer",
           minimum: 0,
-          maximum: 2,
+          maximum: 5,
         },
         agentId: {
           description: "claude, codex or copilot. Omit for this machine's default.",
@@ -1309,7 +1664,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           minLength: 1,
         },
         perPage: {
-          description: "Rows per page, 1-100 (default: 20).",
+          description: "1-100 rows; default varies.",
           type: "integer",
           minimum: 1,
           maximum: 100,
@@ -1320,7 +1675,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           enum: ["created", "updated"],
         },
         direction: {
-          description: "Sort direction (default: desc).",
+          description: "Default desc; asc may be refused.",
           type: "string",
           enum: ["asc", "desc"],
         },
@@ -1388,7 +1743,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           minLength: 1,
         },
         perPage: {
-          description: "Rows per page, 1-100 (default: 20).",
+          description: "1-100 rows; default varies.",
           type: "integer",
           minimum: 1,
           maximum: 100,
@@ -1399,7 +1754,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           enum: ["created", "updated"],
         },
         direction: {
-          description: "Sort direction (default: desc).",
+          description: "Default desc; asc may be refused.",
           type: "string",
           enum: ["asc", "desc"],
         },
@@ -1891,7 +2246,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "agent",
     danger: "safe",
     description:
-      "List the slash commands an agent CLI offers, including project-local ones, before driving the agent with one. An empty list means it has none.",
+      "List the slash commands an agent CLI offers, with what each does, project-local ones included. An empty list means it has none.",
     enabled: true,
     id: "slashCommands.list",
     inputSchema: {
@@ -1938,6 +2293,99 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     name: "slashCommands.list",
     requiresArgs: false,
     title: "List slash commands",
+  },
+  {
+    band: "reversible",
+    category: "terminal",
+    danger: "safe",
+    description:
+      'Withdraw text held for a busy agent with `whenBusy: "queue"` before it is typed. Text already going in stays; the answer says which.',
+    enabled: true,
+    id: "terminal.cancelQueuedSend",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+          minLength: 1,
+          maxLength: 512,
+          description: "The terminal it was held for.",
+        },
+        queuedSendToken: {
+          type: "string",
+          minLength: 1,
+          maxLength: 128,
+          description: "A held send's `queuedSendToken`.",
+        },
+      },
+      required: ["terminalId", "queuedSendToken"],
+    },
+    keywords: ["cancel", "queued", "held", "send", "withdraw"],
+    kind: "command",
+    mcpAnnotations: {
+      readOnlyHint: false,
+      idempotentHint: true,
+      destructiveHint: false,
+    },
+    name: "terminal.cancelQueuedSend",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        cancelled: {
+          type: "boolean",
+          description: "False once it ended or went to the terminal.",
+        },
+        queuedSend: {
+          type: "object",
+          properties: {
+            status: {
+              type: "string",
+              enum: ["queued", "delivered", "superseded", "dropped", "cancelled", "unconfirmed"],
+              description:
+                "`delivered` was written, not acted on; `unconfirmed` may have been, and is never resent.",
+            },
+            queuedAt: {
+              type: "number",
+            },
+            expiresAt: {
+              type: "number",
+            },
+            waitingOn: {
+              type: "string",
+            },
+            submissionToken: {
+              type: "string",
+            },
+            supersededBy: {
+              type: "string",
+            },
+            reason: {
+              type: "string",
+              enum: [
+                "typed",
+                "restarted",
+                "target-gone",
+                "session-gone",
+                "not-allowed",
+                "expired",
+                "stopped",
+              ],
+            },
+            endedAt: {
+              type: "number",
+            },
+          },
+          required: ["status", "queuedAt", "expiresAt"],
+          additionalProperties: false,
+        },
+      },
+      required: ["cancelled", "queuedSend"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Cancel held terminal message",
   },
   {
     band: "reversible",
@@ -2047,7 +2495,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           enum: ["requested", "requested-unverified"],
           description:
-            "`requested`: keystrokes handed to an agent whose CLI names Escape as its interrupt. `requested-unverified`: that CLI names no interrupt key. Neither says the keystrokes arrived or the agent stopped; read the terminal's output.",
+            "`requested`: keys sent to an agent whose CLI interrupts on Escape; `requested-unverified`: its CLI names none. Neither means they arrived or it stopped; read the terminal.",
         },
       },
       required: ["terminalId", "agentId", "agentStateAtDispatch", "status"],
@@ -2321,6 +2769,92 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
   },
   {
     band: "reversible",
+    category: "terminal",
+    danger: "safe",
+    description:
+      "Wait, up to a deadline, for the processes of panels this session closed to exit. Each reports exited with its code, running at the deadline, or unknown. Can end their trash grace early instead of sitting it out. Use it before deleting their worktree.",
+    enabled: true,
+    examples: [
+      {
+        args: {
+          terminalIds: ["term-abc123"],
+          endGrace: true,
+        },
+        description: "You closed your panes and their processes must be gone before the delete.",
+      },
+    ],
+    id: "terminal.waitForExit",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalIds: {
+          minItems: 1,
+          maxItems: 16,
+          type: "array",
+          items: {
+            type: "string",
+            minLength: 1,
+          },
+          description: "1-16 panels this session closed.",
+        },
+        timeoutMs: {
+          description: "Shared deadline, 0 to 60000; default 30000. 0 reads once.",
+          type: "integer",
+          minimum: 0,
+          maximum: 60000,
+        },
+        endGrace: {
+          description: "Start shutting down those still in the trash now, not when the grace ends.",
+          type: "boolean",
+        },
+      },
+      required: ["terminalIds"],
+    },
+    keywords: ["exit", "process", "trash", "stopped", "cleanup"],
+    kind: "command",
+    name: "terminal.waitForExit",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        processes: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              terminalId: {
+                type: "string",
+              },
+              outcome: {
+                type: "string",
+                enum: ["exited", "running", "unknown"],
+                description: "exited: the host saw it exit; running: still alive at the deadline.",
+              },
+              exitCode: {
+                type: "number",
+              },
+              signal: {
+                type: "number",
+              },
+              graceEnded: {
+                description: "With endGrace: true when this call started its shutdown.",
+                type: "boolean",
+              },
+            },
+            required: ["terminalId", "outcome"],
+            additionalProperties: false,
+          },
+        },
+      },
+      required: ["processes"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Wait for closed terminals to exit",
+  },
+  {
+    band: "reversible",
     category: "worktree",
     danger: "safe",
     description:
@@ -2440,6 +2974,39 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     name: "worktree.delete",
     requiresArgs: true,
     title: "Delete worktree",
+  },
+  {
+    band: "destructive-local",
+    category: "worktree",
+    danger: "confirm",
+    dangerRationale:
+      "Closes the session's own panes in the worktree and deletes the working tree from disk. Recovery requires re-creating the worktree, so the session's own ownership record is a precondition rather than the approval.",
+    description:
+      "Delete a worktree this session created, after the user confirms, once it is clean, every commit is on a remote, and no terminal you don't own runs there. Closes your panes there and waits for their processes to exit first. Never forces or deletes the branch.",
+    enabled: true,
+    id: "worktree.retireOwned",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        worktreeId: {
+          type: "string",
+          minLength: 1,
+          description: "The `worktreeId` this session got when creating the worktree.",
+        },
+        timeoutMs: {
+          description: "Wait for closed panes to exit, 0 to 60000; default 30000.",
+          type: "integer",
+          minimum: 0,
+          maximum: 60000,
+        },
+      },
+      required: ["worktreeId"],
+    },
+    kind: "command",
+    name: "worktree.retireOwned",
+    requiresArgs: true,
+    title: "Retire owned worktree",
   },
   {
     band: "reversible",

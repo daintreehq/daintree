@@ -30,13 +30,24 @@ vi.mock("../../inputEditorExtensions", () => ({
 }));
 
 const { usePasteExtensions } = await import("../usePasteExtensions");
+const { userEdit } = await import("../../inputEditorExtensions/userEdit");
 const { setRemoteMaterializer } = await import("@/services/materialize");
-const { getPendingUploads, _resetPendingUploadsForTests } =
-  await import("../../uploads/pendingUploads");
+const {
+  getHeldBackAttachments,
+  getPendingUploads,
+  isComposerSendHeld,
+  _resetPendingUploadsForTests,
+} = await import("../../uploads/pendingUploads");
+const { advanceComposerDraft } =
+  await import("../../inputEditorExtensions/composerDraftGeneration");
 
 const CWD = "/Users/greg/Projects/daintree";
 
-/** `head` may be a getter, for a caret that moves while a paste resolves. */
+/**
+ * `head` may be a getter, for a caret that moves while a paste resolves. The
+ * text before the caret is whitespace, so no separator is inserted; the
+ * boundary behaviour has its own suite against a real EditorState.
+ */
 function fakeView(head: number | (() => number) = 0) {
   const dispatch = vi.fn();
   const main = {
@@ -45,7 +56,10 @@ function fakeView(head: number | (() => number) = 0) {
     },
   };
   const view = {
-    state: { selection: { main } },
+    state: {
+      selection: { main },
+      doc: { sliceString: (from: number, to: number) => " ".repeat(Math.max(0, to - from)) },
+    },
     dispatch,
   } as unknown as EditorView;
   return { view, dispatch, head: main.head };
@@ -192,6 +206,8 @@ describe("usePasteExtensions — materialize seam", () => {
         },
       },
       selection: { anchor: 5 + path.length + 1 },
+      // The user's own edit, which words still being corrected refuse (#15874).
+      annotations: userEdit.of(true),
     });
   });
 
@@ -309,5 +325,167 @@ describe("usePasteExtensions: an image pasted in a remote window's composer", ()
     expect(seen!.signal!.aborted).toBe(true);
     expect(dispatch).not.toHaveBeenCalled();
     expect(getPendingUploads("composer:t1")).toHaveLength(0);
+  });
+
+  it("follows a pasted folder on its chip and inserts its host path once it is sent", async () => {
+    let report!: (progress: { phase: "reading" }) => void;
+    let finish!: () => void;
+    setRemoteMaterializer(
+      (_source, options) =>
+        new Promise((resolve) => {
+          report = options!.onFolderProgress!;
+          finish = () =>
+            resolve({
+              hostPath: "/tmp/daintree-inbox/files/20261105-a1/designs",
+              displayName: "designs",
+              bytes: 30,
+            });
+        })
+    );
+    renderHook(() => usePasteExtensions(CWD, "composer:t1"));
+    const { view, dispatch } = fakeView();
+
+    const pending = captured.filePaste?.(view, [pasted("designs", "/Users/me/designs")]);
+    await vi.waitFor(() => expect(report).toBeTypeOf("function"));
+    report({ phase: "reading" });
+    expect(getPendingUploads("composer:t1")[0]?.folder).toEqual({ phase: "reading" });
+    expect(isComposerSendHeld("composer:t1")).toBe(true);
+
+    finish();
+    await pending;
+    expect(insertedToken(dispatch)).toBe("@/tmp/daintree-inbox/files/20261105-a1/designs");
+    expect(isComposerSendHeld("composer:t1")).toBe(false);
+  });
+});
+
+describe("usePasteExtensions: a paste still on its way (#15599)", () => {
+  beforeEach(() => {
+    _resetPendingUploadsForTests();
+  });
+
+  afterEach(() => {
+    _resetPendingUploadsForTests();
+  });
+
+  it("holds the composer's send in a local window until the image is in the draft", async () => {
+    let saved!: () => void;
+    saveImage.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          saved = () =>
+            resolve({ filePath: "/tmp/clip.png", thumbnailDataUrl: "data:image/png;base64,a" });
+        })
+    );
+    renderHook(() => usePasteExtensions(CWD, "composer:t1"));
+    const { view, dispatch } = fakeView();
+
+    const pending = captured.imagePaste?.(view);
+    expect(isComposerSendHeld("composer:t1")).toBe(true);
+    expect(getPendingUploads("composer:t1")).toEqual([]);
+
+    saved();
+    await pending;
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(isComposerSendHeld("composer:t1")).toBe(false);
+  });
+
+  it("holds back an image whose draft was sent before it was saved", async () => {
+    let saved!: () => void;
+    saveImage.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          saved = () =>
+            resolve({ filePath: "/tmp/clip.png", thumbnailDataUrl: "data:image/png;base64,a" });
+        })
+    );
+    renderHook(() => usePasteExtensions(CWD, "composer:t1"));
+    const { view, dispatch } = fakeView();
+
+    const pending = captured.imagePaste?.(view);
+    advanceComposerDraft(view);
+    saved();
+    await pending;
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(getHeldBackAttachments("composer:t1")).toEqual([
+      { type: "image", filePath: "/tmp/clip.png", thumbnailDataUrl: "data:image/png;base64,a" },
+    ]);
+    expect(isComposerSendHeld("composer:t1")).toBe(false);
+  });
+
+  it("holds back pasted files whose draft was replaced while they resolved, in order", async () => {
+    let resolveAll!: () => void;
+    const gate = new Promise<void>((resolve) => (resolveAll = resolve));
+    setRemoteMaterializer(async (source) => {
+      await gate;
+      const path = source.kind === "local-file" ? source.path : "";
+      return { hostPath: path, displayName: path, bytes: null };
+    });
+    renderHook(() => usePasteExtensions(CWD, "composer:t1"));
+    const { view, dispatch } = fakeView();
+
+    const pending = captured.filePaste?.(view, [
+      pasted("a.ts", `${CWD}/a.ts`),
+      pasted("b.ts", `${CWD}/b.ts`),
+    ]);
+    expect(isComposerSendHeld("composer:t1")).toBe(true);
+    advanceComposerDraft(view);
+    resolveAll();
+    await pending;
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(getHeldBackAttachments("composer:t1")).toEqual([
+      { type: "file", filePath: `${CWD}/a.ts`, fileName: "a.ts", fileSize: 42 },
+      { type: "file", filePath: `${CWD}/b.ts`, fileName: "b.ts", fileSize: 42 },
+    ]);
+    expect(isComposerSendHeld("composer:t1")).toBe(false);
+  });
+
+  it("drops a paste that resolves after its editor is gone, holding nothing back", async () => {
+    let saved!: () => void;
+    saveImage.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          saved = () =>
+            resolve({ filePath: "/tmp/clip.png", thumbnailDataUrl: "data:image/png;base64,a" });
+        })
+    );
+    const { view, dispatch } = fakeView();
+    const ref: { current: EditorView | null } = { current: view };
+    renderHook(() => usePasteExtensions(CWD, "composer:t1", false, ref));
+
+    const pending = captured.imagePaste?.(view);
+    advanceComposerDraft(view);
+    ref.current = null;
+    saved();
+    await pending;
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(getHeldBackAttachments("composer:t1")).toEqual([]);
+    expect(isComposerSendHeld("composer:t1")).toBe(false);
+  });
+
+  it("drops pasted files that resolve after their editor is gone, holding nothing back", async () => {
+    let resolveAll!: () => void;
+    const gate = new Promise<void>((resolve) => (resolveAll = resolve));
+    setRemoteMaterializer(async (source) => {
+      await gate;
+      const path = source.kind === "local-file" ? source.path : "";
+      return { hostPath: path, displayName: path, bytes: null };
+    });
+    const { view, dispatch } = fakeView();
+    const ref: { current: EditorView | null } = { current: view };
+    renderHook(() => usePasteExtensions(CWD, "composer:t1", false, ref));
+
+    const pending = captured.filePaste?.(view, [pasted("a.ts", `${CWD}/a.ts`)]);
+    advanceComposerDraft(view);
+    ref.current = null;
+    resolveAll();
+    await pending;
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(getHeldBackAttachments("composer:t1")).toEqual([]);
+    expect(isComposerSendHeld("composer:t1")).toBe(false);
   });
 });

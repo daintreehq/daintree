@@ -113,6 +113,7 @@ export const useDiagnosticsReviewStore = create<DiagnosticsReviewState>((set, ge
         enabledSections,
         replacements,
         timeWindowStartMs,
+        collectedAtMs: reviewPayload.collectedAtMs,
       });
       if (saved) {
         const issueUrl = buildDiagnosticsIssueUrl(extractIssueMetadata(payload));

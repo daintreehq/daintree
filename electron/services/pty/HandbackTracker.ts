@@ -1,3 +1,5 @@
+import type { HandbackInstruction, HandbackReport } from "../../../shared/types/handback.js";
+
 /**
  * Handback requests one terminal is holding (#12488): the codes minted for
  * submissions that asked for a handback, and how far each submission got.
@@ -10,6 +12,13 @@
 
 export interface HandbackRequest {
   code: string;
+  /**
+   * Present for a scheduled run's launch prompt (#15982) and for a prompt to a
+   * terminal armed with a When done choice (#16171): the marker that retires
+   * its code is reported to Main's run consumers. Every request is looked for
+   * in both forms (#16190).
+   */
+  instruction?: Extract<HandbackInstruction, "run">;
   /** Token of the submission that asked, when it carried one (#12337). */
   submissionToken?: string;
   /** Submission order within this terminal, used to retire earlier requests. */
@@ -24,7 +33,7 @@ export interface HandbackRequest {
    * working. The code stays open then: a marker seen mid-turn can sit in a
    * draft or a status line that the reply goes on to replace.
    */
-  reported?: { message: string | null; truncated: boolean };
+  reported?: { message: string | null; truncated: boolean; report: HandbackReport };
 }
 
 /**
@@ -62,8 +71,13 @@ export class HandbackTracker {
   }
 
   /** A launch prompt: delivered the moment the process is spawned with it. */
-  registerDelivered(code: string): void {
-    this.push({ code, seq: this.takeSeq(), delivered: true });
+  registerDelivered(code: string, instruction?: HandbackInstruction): void {
+    this.push({
+      code,
+      seq: this.takeSeq(),
+      delivered: true,
+      ...(instruction === "run" ? { instruction } : {}),
+    });
   }
 
   /**
@@ -71,7 +85,11 @@ export class HandbackTracker {
    * its `pty_written`, or `undefined` when there is nothing it could retire or
    * deliver — so an ordinary submit into a terminal with no request stays free.
    */
-  noteSubmission(code?: string, submissionToken?: string): (() => void) | undefined {
+  noteSubmission(
+    code?: string,
+    submissionToken?: string,
+    instruction?: HandbackInstruction
+  ): (() => void) | undefined {
     if (code === undefined && this.requests.length === 0) return undefined;
     const seq = this.takeSeq();
     if (code !== undefined) {
@@ -80,6 +98,7 @@ export class HandbackTracker {
         seq,
         delivered: false,
         ...(submissionToken !== undefined ? { submissionToken } : {}),
+        ...(instruction === "run" ? { instruction } : {}),
       });
     }
     return () => this.markWritten(seq);
@@ -91,18 +110,24 @@ export class HandbackTracker {
    * capture that only now reaches the length cap is new: its summary is no
    * longer whole.
    */
-  noteReported(code: string, message: string | null, truncated = false): boolean {
+  noteReported(
+    code: string,
+    message: string | null,
+    truncated = false,
+    report: HandbackReport = "done"
+  ): boolean {
     const request = this.requests.find((candidate) => candidate.code === code);
     if (request === undefined) return true;
     const reported = request.reported;
     if (
       reported !== undefined &&
       reported.message === message &&
-      reported.truncated === truncated
+      reported.truncated === truncated &&
+      reported.report === report
     ) {
       return false;
     }
-    request.reported = { message, truncated };
+    request.reported = { message, truncated, report };
     return true;
   }
 

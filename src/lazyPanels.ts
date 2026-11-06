@@ -204,6 +204,12 @@ export const LazyLayoutApplyConfirmDialog = lazy(() =>
   }))
 );
 
+export const LazyScheduleRunConfirmDialog = lazy(() =>
+  import("./components/Schedules/ScheduleRunConfirmDialog").then((m) => ({
+    default: m.ScheduleRunConfirmDialog,
+  }))
+);
+
 export const LazyRecipeRunConfirmDialog = lazy(() =>
   import("./components/TerminalRecipe/RecipeRunConfirmDialog").then((m) => ({
     default: m.RecipeRunConfirmDialog,

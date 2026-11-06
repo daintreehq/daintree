@@ -25,6 +25,10 @@ export interface AgentActivityPty {
  * overwrites the state of a terminal an event touched while it was in flight,
  * nor brings back one that exited meanwhile; an incomplete inventory adds what
  * it saw but never takes a terminal away.
+ *
+ * The inventory is read only while `wanted` says something will read the
+ * answers (#15907). Events keep the cache following meanwhile, and the owner
+ * reconciles when reading resumes.
  */
 export class ProjectAgentActivityCache {
   private readonly states = new Map<string, AgentState>();
@@ -38,7 +42,10 @@ export class ProjectAgentActivityCache {
   private seedAgain = false;
   private disposed = false;
 
-  constructor(private readonly onChange: () => void) {}
+  constructor(
+    private readonly onChange: () => void,
+    private readonly wanted: () => boolean = () => true
+  ) {}
 
   /** Start following `pty`. Later calls are ignored: there is one client per process. */
   attach(pty: AgentActivityPty): void {
@@ -56,7 +63,8 @@ export class ProjectAgentActivityCache {
 
   noteState(terminalId: string, state: AgentState): void {
     if (this.disposed) return;
-    this.touched.add(terminalId);
+    // Only a read in flight needs it, and a host nobody reads can go days between reads.
+    if (this.seeding) this.touched.add(terminalId);
     if (this.states.get(terminalId) === state) return;
     this.states.set(terminalId, state);
     this.onChange();
@@ -80,11 +88,13 @@ export class ProjectAgentActivityCache {
     this.pty = null;
     this.states.clear();
     this.seededProjects.clear();
+    this.touched.clear();
+    this.exited.clear();
   }
 
   private readonly onExit = (terminalId: string) => {
     if (this.disposed) return;
-    this.exited.add(terminalId);
+    if (this.seeding) this.exited.add(terminalId);
     this.seededProjects.delete(terminalId);
     if (this.states.delete(terminalId)) this.onChange();
   };
@@ -92,15 +102,13 @@ export class ProjectAgentActivityCache {
   private readonly onHostCrash = () => void this.seed();
 
   private async seed(): Promise<void> {
+    const pty = this.pty;
+    if (!pty || this.disposed || !this.wanted()) return;
     if (this.seeding) {
       this.seedAgain = true;
       return;
     }
-    const pty = this.pty;
-    if (!pty || this.disposed) return;
     this.seeding = true;
-    this.touched.clear();
-    this.exited.clear();
     try {
       const { terminals, degraded } = await pty.getAllTerminalsWithCompletenessAsync();
       if (this.disposed || this.pty !== pty) return;
@@ -138,6 +146,8 @@ export class ProjectAgentActivityCache {
       console.error("[ProjectAgentActivityCache] inventory seed failed:", error);
     } finally {
       this.seeding = false;
+      this.touched.clear();
+      this.exited.clear();
       if (this.seedAgain && !this.disposed) {
         this.seedAgain = false;
         void this.seed();

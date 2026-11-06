@@ -3,6 +3,7 @@ import { Plus } from "lucide-react";
 import { RecipeRunnerItem } from "./RecipeRunnerItem";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { SearchField } from "@/components/ui/SearchField";
+import { Button } from "@/components/ui/button";
 import type { RecipeSections, RankedRecipe } from "./recipeRunnerUtils";
 import type { TerminalRecipe } from "@/types";
 import { cn } from "@/lib/utils";
@@ -10,6 +11,7 @@ import { LIST_LABEL_CLASS, SECTION_LABEL_CLASS } from "@/components/ui/sectionLa
 
 interface RecipeRunnerListProps {
   sections: RecipeSections;
+  showScope?: boolean;
   searchQuery: string;
   searchResults: RankedRecipe[];
   focusedIndex: number;
@@ -30,6 +32,7 @@ interface RecipeRunnerListProps {
 
 export function RecipeRunnerList({
   sections,
+  showScope,
   searchQuery,
   searchResults,
   focusedIndex,
@@ -89,6 +92,7 @@ export function RecipeRunnerList({
         recipe={recipe}
         isFocused={focusedIndex === itemIndex}
         mode="list"
+        showScope={showScope}
         disabled={disabled}
         id={`recipe-option-${recipe.id}`}
         // The combobox above owns the only tab stop in this composite; every
@@ -121,7 +125,9 @@ export function RecipeRunnerList({
         // showed two equal search anchors and the lower one looked like
         // another way to launch anything. Naming the band and shrinking the
         // input to a filter says what its scope actually is.
-        <div className="mb-2 flex items-center gap-3 px-1">
+        // `pl-3` puts the band label on the glyph rail the section labels and
+        // rows below use; the Manage button's own padding carries the right.
+        <div className="mb-2 flex items-center gap-3 pl-3">
           <span id="recipe-band-label" className={cn(SECTION_LABEL_CLASS, "shrink-0")}>
             Recipes
           </span>
@@ -146,13 +152,9 @@ export function RecipeRunnerList({
           {/* In list mode the inventory is long enough that a link under it
               is a scroll away; the header is where management is findable. */}
           {onManage && (
-            <button
-              type="button"
-              onClick={onManage}
-              className="shrink-0 rounded-[var(--radius-sm)] px-1 text-xs text-text-secondary transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-            >
-              Manage
-            </button>
+            <Button variant="ghost" size="sm" onClick={onManage} className="shrink-0">
+              Manage recipes…
+            </Button>
           )}
         </div>
       )}
@@ -239,13 +241,17 @@ export function RecipeRunnerList({
           // filter input, this button's own focus ring can never paint, so the
           // fill alone (~1.1:1) would be the only cue that Enter creates rather
           // than runs.
-          className="press-scale group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] border border-transparent hover:bg-overlay-hover transition-[background-color,border-color] duration-150 ease-out active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2 group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
+          // Kept as the combobox's last option, not moved to a footer button as
+          // in the grid: typing a name that matches nothing and pressing Enter
+          // creates it. Sized like the grid footer's button so the two modes
+          // draw the same control.
+          className="press-scale group w-full flex h-8 items-center gap-1.5 px-3 rounded-[var(--radius-md)] border border-transparent hover:bg-overlay-hover transition-[background-color,border-color] duration-150 ease-out active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2 group-focus-within/recipes:aria-selected:bg-overlay-highlight group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)] contrast-more:group-focus-within/recipes:aria-selected:border-text-primary forced-colors:group-focus-within/recipes:aria-selected:outline-solid forced-colors:group-focus-within/recipes:aria-selected:outline-2 forced-colors:group-focus-within/recipes:aria-selected:outline-[color:Highlight] forced-colors:group-focus-within/recipes:aria-selected:-outline-offset-2"
         >
           <Plus
             className="h-3.5 w-3.5 text-text-secondary group-hover:text-text-primary transition-colors shrink-0"
             aria-hidden
           />
-          <span className="flex-1 text-sm text-text-secondary group-hover:text-text-primary transition-colors">
+          <span className="flex-1 text-xs text-text-secondary group-hover:text-text-primary transition-colors">
             Create new recipe…
           </span>
         </button>

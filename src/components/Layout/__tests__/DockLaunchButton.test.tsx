@@ -125,7 +125,16 @@ vi.mock("@/services/ActionService", () => ({
 // seam Settings → Toolbar shares, and mocking it would let the launcher write
 // the pin any way it liked while the suite still passed.
 let mockAgentSettings: {
-  agents?: Record<string, { presetId?: string; worktreePresets?: Record<string, string | null> }>;
+  agents?: Record<
+    string,
+    {
+      presetId?: string;
+      worktreePresets?: Record<string, string | null>;
+      accounts?: Array<{ id: string; name: string; configDir: string }>;
+      accountId?: string;
+      worktreeAccounts?: Record<string, string | null>;
+    }
+  >;
 } | null = { agents: {} };
 // This machine's toolbar pins (#14702).
 let mockAgentPins: Record<string, boolean> = {};
@@ -150,6 +159,7 @@ const toggleButtonVisibilityMock = vi.fn();
 // top-level const, so referencing one at factory-evaluation time is a TDZ error
 // (the `mock*` bindings below are fine because they are only read at call time).
 const updateWorktreePresetMock = vi.fn(() => Promise.resolve());
+const updateWorktreeAccountMock = vi.fn(() => Promise.resolve());
 const updateAgentMock = vi.fn(() => Promise.resolve());
 const refreshAvailabilityMock = vi.fn(() => Promise.resolve());
 
@@ -157,6 +167,7 @@ vi.mock("@/store/agentSettingsStore", () => {
   const getState = () => ({
     settings: mockAgentSettings,
     updateWorktreePreset: updateWorktreePresetMock,
+    updateWorktreeAccount: updateWorktreeAccountMock,
     updateAgent: updateAgentMock,
   });
   return {
@@ -183,8 +194,13 @@ vi.mock("@/store/agentToolbarPinsStore", async (importOriginal) => {
 });
 
 // Presets the launcher expands into sibling rows. Controlled per test.
-let mockMergedPresets: Array<{ id: string; name: string; displayTitle?: string; color?: string }> =
-  [];
+let mockMergedPresets: Array<{
+  id: string;
+  name: string;
+  displayTitle?: string;
+  color?: string;
+  accountId?: string;
+}> = [];
 vi.mock("@/config/agents", () => ({
   getMergedPresets: () => mockMergedPresets,
   getAgentConfig: (id: string) => ({ id, name: id, icon: undefined }),
@@ -417,6 +433,7 @@ import { TOOLBAR_CUSTOMIZE_ICON, TOOLBAR_CUSTOMIZE_LABEL } from "../toolbarMenuS
 import type { DockLaunchAgent } from "../DockLaunchMenuItems";
 import { comboToAriaKeyshortcuts, describeChord } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 
 /** Spoken by name ("Alt P" / "Option P"), never as the "Alt+P" string. */
 const PIN_SPOKEN = describeChord("Alt+P", isMac());
@@ -541,6 +558,7 @@ beforeEach(() => {
   positionAgentButtonMock.mockReset();
   toggleButtonVisibilityMock.mockReset();
   updateWorktreePresetMock.mockReset();
+  updateWorktreeAccountMock.mockReset();
   updateAgentMock.mockReset();
   mockMergedPresets = [];
   for (const key of Object.keys(mockKeybindings)) delete mockKeybindings[key];
@@ -615,8 +633,10 @@ describe("DockLaunchButton", () => {
     // Gemini is blocked in the fixture; it stays in the agent column under the
     // one "Agents" heading and says "Setup" on its own row. With two agents
     // against the full panel set, recipes stack under the agents. The footer
-    // actions are placed, not headed.
-    expect(labels).toEqual(["Agents", "Recipes", "Open in dock", "Open in grid"]);
+    // actions are placed, not headed. The dock's header says "Launch in dock",
+    // so its own panels are just "Panels"; recipes and Review land in the grid
+    // and their headings say so.
+    expect(labels).toEqual(["Agents", "Recipes · open in grid", "Panels", "Open in grid"]);
   });
 
   it("lists pinned and unpinned agents under one Agents heading, pinned first", () => {
@@ -956,7 +976,32 @@ describe("DockLaunchButton", () => {
         },
       });
       try {
+        // A prompt that asks nothing earns no pip, so the row says nothing.
         Object.assign(panelStoreState, { panelsById: session("waiting"), panelIds: ["pty-1"] });
+        const prompt = renderButton();
+        expect(rowByName(prompt.container, "Claude").getAttribute("aria-label")).not.toMatch(
+          /Agent (working|waiting|directing)/
+        );
+        prompt.unmount();
+
+        // An unread Canopy ask is the waiting pip, and the row speaks it.
+        act(() => {
+          useFleetSnapshotStore.getState().applySnapshot({
+            runs: [
+              {
+                runId: "pty-1",
+                workspaceId: "p1",
+                spawnedAt: 1,
+                cwd: "/repo",
+                agentState: "waiting",
+                canopy: { kind: "asked", quote: "Run it?", readAt: 1, seen: false },
+              },
+            ],
+            changedAt: 2,
+            degraded: false,
+            lastSuccessfulAt: 2,
+          });
+        });
         const waiting = renderButton();
         expect(rowByName(waiting.container, "Claude").getAttribute("aria-label")).toContain(
           "Agent waiting"
@@ -970,6 +1015,7 @@ describe("DockLaunchButton", () => {
         );
       } finally {
         Object.assign(panelStoreState, saved);
+        useFleetSnapshotStore.setState({ snapshot: null });
       }
     });
 
@@ -3136,6 +3182,162 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       }
       expect(fireEvent.keyDown(input, { key: "d", code: "KeyD", altKey: true })).toBe(true);
       expect(updateWorktreePresetMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("account rows (#16133)", () => {
+    const COMPANY = { id: "company", name: "Company", configDir: "/Users/me/.claude-company" };
+    const PERSONAL = { id: "personal", name: "Personal", configDir: "/Users/me/.claude-personal" };
+    const accountRows = (container: HTMLElement) =>
+      Array.from(
+        container.querySelectorAll<HTMLElement>('[role="option"][data-row-kind="account"]')
+      );
+    const setDefaultControl = (row: HTMLElement) =>
+      row.querySelector<HTMLElement>("[data-launcher-set-default]");
+
+    beforeEach(() => {
+      mockAgentSettings = { agents: { claude: { accounts: [COMPANY, PERSONAL] } } };
+    });
+
+    it("expands an agent with accounts and no presets into the default login and each account", () => {
+      const { container, getAllByTestId } = renderButton({ agents: READY });
+      expect(rowByName(container, "Claude").getAttribute("aria-label")).toContain(
+        "Press Right Arrow for accounts"
+      );
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+
+      expect(presetRows(container)).toHaveLength(0);
+      expect(accountRows(container).map((row) => row.textContent)).toEqual([
+        expect.stringContaining("Default login"),
+        expect.stringContaining("Company"),
+        expect.stringContaining("Personal"),
+      ]);
+      expect(getAllByTestId("dock-launcher-band").map((el) => el.textContent)).toContain("Account");
+      expect(selectedOption(container)?.textContent).toContain("Default login");
+      for (const row of accountRows(container)) {
+        expect(row.getAttribute("aria-label")).toMatch(/^[^,]+, Claude account/);
+      }
+    });
+
+    it("collapses the expansion from an account row back to its agent", () => {
+      const { container } = renderButton({ agents: READY });
+      const input = searchInput(container);
+      fireEvent.keyDown(input, { key: "ArrowRight" });
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      expect(selectedOption(container)?.getAttribute("data-row-kind")).toBe("account");
+
+      fireEvent.keyDown(input, { key: "ArrowLeft" });
+      expect(accountRows(container)).toHaveLength(0);
+      expect(selectedOption(container)?.getAttribute("aria-label")).toMatch(/^Claude,/);
+    });
+
+    it("lists the accounts after the presets, under their own heading", () => {
+      mockMergedPresets = [{ id: "fast", name: "Fast" }];
+      const { container, getAllByTestId } = renderButton({ agents: READY });
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+
+      const kinds = options(container)
+        .map((row) => row.getAttribute("data-row-kind"))
+        .filter((kind) => kind === "preset" || kind === "account");
+      expect(kinds).toEqual(["preset", "preset", "account", "account", "account"]);
+      expect(getAllByTestId("dock-launcher-preset-group").map((el) => el.textContent)).toEqual([
+        "Account",
+      ]);
+      expect(accountRows(container)[0]!.getAttribute("aria-label")).toContain(
+        "Press Left Arrow to close presets and accounts"
+      );
+    });
+
+    it("launches the saved preset once on the chosen account, the default login as null", () => {
+      const onLaunchAgent = vi.fn();
+      const { container } = renderButton({
+        agents: READY,
+        onLaunchAgent,
+        activeWorktreeId: "wt-1",
+      });
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+      fireEvent.click(accountRows(container)[2]!);
+
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined, { accountId: "personal" });
+      // A one-off: nothing is saved by the launch.
+      expect(updateWorktreeAccountMock).not.toHaveBeenCalled();
+
+      onLaunchAgent.mockReset();
+      const again = renderButton({ agents: READY, onLaunchAgent });
+      fireEvent.keyDown(searchInput(again.container), { key: "ArrowRight" });
+      fireEvent.click(accountRows(again.container)[0]!);
+      expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined, { accountId: null });
+    });
+
+    it("marks what a plain launch signs in as, the saved preset's pin included", () => {
+      mockMergedPresets = [{ id: "fast", name: "Fast", accountId: "company" }];
+      mockAgentSettings = {
+        agents: {
+          claude: { accounts: [COMPANY, PERSONAL], accountId: "personal", presetId: "fast" },
+        },
+      };
+      const { container } = renderButton({ agents: READY, activeWorktreeId: "wt-1" });
+      expect(qualifierTextOf(rowByName(container, "Claude"))).toBe("Fast · Company");
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+
+      const company = accountRows(container)[1]!;
+      expect(qualifierTextOf(company)).toBe("Current default");
+      expect(setDefaultControl(company)).toBeNull();
+      expect(qualifierTextOf(accountRows(container)[2]!)).toBe("");
+    });
+
+    it("marks the pin of the agent's preset when the worktree's own pick is gone", () => {
+      mockMergedPresets = [{ id: "fast", name: "Fast", accountId: "company" }];
+      mockAgentSettings = {
+        agents: {
+          claude: {
+            accounts: [COMPANY, PERSONAL],
+            accountId: "personal",
+            presetId: "fast",
+            worktreePresets: { "wt-1": "deleted" },
+          },
+        },
+      };
+      const { container } = renderButton({ agents: READY, activeWorktreeId: "wt-1" });
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+
+      expect(qualifierTextOf(accountRows(container)[1]!)).toBe("Current default");
+      // Personal isn't what launches, so it can still be saved for this worktree.
+      expect(setDefaultControl(accountRows(container)[2]!)).not.toBeNull();
+    });
+
+    it("saves an account to this worktree with Set as default, and offers none outside one", () => {
+      const onLaunchAgent = vi.fn();
+      const { container } = renderButton({
+        agents: READY,
+        onLaunchAgent,
+        activeWorktreeId: "wt-7",
+      });
+      const input = searchInput(container);
+      fireEvent.keyDown(input, { key: "ArrowRight" });
+      fireEvent.click(setDefaultControl(accountRows(container)[1]!)!);
+      expect(updateWorktreeAccountMock).toHaveBeenCalledWith("claude", "wt-7", "company");
+
+      // The selected default login offers nothing; Alt+D on another row saves it.
+      expect(setDefaultControl(accountRows(container)[0]!)).toBeNull();
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      fireEvent.keyDown(input, { key: "d", code: "KeyD", altKey: true });
+      expect(updateWorktreeAccountMock).toHaveBeenLastCalledWith("claude", "wt-7", "personal");
+      expect(onLaunchAgent).not.toHaveBeenCalled();
+      expect(updateWorktreePresetMock).not.toHaveBeenCalled();
+
+      const outside = renderButton({ agents: READY });
+      fireEvent.keyDown(searchInput(outside.container), { key: "ArrowRight" });
+      expect(setDefaultControl(accountRows(outside.container)[1]!)).toBeNull();
+    });
+
+    it("offers no account rows for an agent whose CLI keeps one login", () => {
+      mockAgentSettings = { agents: { cursor: { accounts: [COMPANY] } } };
+      const { container } = renderButton({
+        agents: [{ id: "cursor", name: "Cursor", availability: "ready" as const }],
+      });
+      expect(rowByName(container, "Cursor").getAttribute("aria-expanded")).toBeNull();
     });
   });
 

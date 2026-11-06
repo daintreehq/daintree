@@ -84,6 +84,7 @@ import {
 } from "../../link/__tests__/linkTestUtils.js";
 import { HostRegistry, type RemoteHostsStore } from "../HostRegistry.js";
 import {
+  HOST_PROJECT_LOOKUP_TIMEOUT_MS,
   RemoteHostManager,
   type HostConnection,
   type ReverseRequestAnswerer,
@@ -96,7 +97,7 @@ import { installHostMetricsHostWith } from "../../metrics/hostMetricsHost.js";
 import { MetricsLinkMethod } from "../../metrics/linkMethods.js";
 import { LinkMethod } from "../../host/linkMethods.js";
 import type { LinkSession } from "../../link/session.js";
-import { ControlKind } from "../../link/messages.js";
+import { ControlKind, EventKind } from "../../link/messages.js";
 
 const HOST_CHANNEL = "git:get-file-diff";
 const SHELL_CHANNEL = "window:new";
@@ -108,6 +109,7 @@ const HOST_ID = "studio-01";
 const VIEW_A = 11; // studio-01:proj-1
 const VIEW_B = 12; // studio-01:proj-2
 const VIEW_LOCAL = 13; // proj-1 on this machine
+const VIEW_C = 14; // studio-01:proj-1, a second view of the project
 
 function memoryStore(): RemoteHostsStore {
   let value: { hosts: HostDescriptor[] } | undefined;
@@ -135,6 +137,7 @@ function invoke(channel: string, fromView: number, ...args: unknown[]): Promise<
 function recordingSink() {
   const delivered = new Map<number, Array<{ channel: string; args: unknown[] }>>();
   const resyncs: Array<{ webContentsId: number; reason: string }> = [];
+  const activated: number[] = [];
   const goneListeners = new Map<number, () => void>();
   const hosts = new Map<number, string | null>();
   const sink: ViewSink = {
@@ -153,10 +156,11 @@ function recordingSink() {
     },
     // Views default to the host the test talks to; a test can move one away.
     hostOf: (webContentsId) => (hosts.has(webContentsId) ? hosts.get(webContentsId)! : HOST_ID),
+    agentActivated: (webContentsId) => activated.push(webContentsId),
   };
   /** The view was destroyed. */
   const gone = (webContentsId: number) => goneListeners.get(webContentsId)?.();
-  return { sink, delivered, resyncs, gone, hosts };
+  return { sink, delivered, resyncs, activated, gone, hosts };
 }
 
 interface Harness {
@@ -367,15 +371,39 @@ describe("remote session wiring", () => {
     });
   });
 
-  it("never takes a Shell-owned push from a host", async () => {
+  it("never takes a Shell-owned push from a host, and a host on this build never sends one (#15901)", async () => {
     await startHarness();
     await connect();
     await invoke(HOST_CHANNEL, VIEW_A, {});
+    const crossed: string[] = [];
+    h.manager
+      .get(HOST_ID)!
+      .currentSession!.on(Lane.EVENTS, EventKind.EVENT, (body) => crossed.push(body.channel));
 
     broadcastToRenderer("accessibility:support-changed", true);
+    broadcastToRenderer(CHANNELS.UPDATE_DOWNLOAD_PROGRESS, { percent: 40 });
     broadcastToRenderer(EVENT_CHANNEL, "term-all", "hi");
     await waitFor(() => (h.sink.delivered.get(VIEW_A)?.length ?? 0) === 1);
     expect(h.sink.delivered.get(VIEW_A)).toEqual([
+      { channel: EVENT_CHANNEL, args: ["term-all", "hi"] },
+    ]);
+    expect(crossed).toEqual([EVENT_CHANNEL]);
+  });
+
+  it("still drops a Shell-owned push a host on another build sends", async () => {
+    await startHarness();
+    const sink = await connectOlderShell();
+    await invoke(HOST_CHANNEL, VIEW_A, {});
+    const crossed: string[] = [];
+    sink.manager
+      .get(HOST_ID)!
+      .currentSession!.on(Lane.EVENTS, EventKind.EVENT, (body) => crossed.push(body.channel));
+
+    broadcastToRenderer("accessibility:support-changed", true);
+    broadcastToRenderer(EVENT_CHANNEL, "term-all", "hi");
+    await waitFor(() => (sink.delivered.get(VIEW_A)?.length ?? 0) === 1);
+    expect(crossed).toEqual(["accessibility:support-changed", EVENT_CHANNEL]);
+    expect(sink.delivered.get(VIEW_A)).toEqual([
       { channel: EVENT_CHANNEL, args: ["term-all", "hi"] },
     ]);
   });
@@ -457,6 +485,72 @@ describe("remote session wiring", () => {
       { channel: EVENT_CHANNEL, args: ["term-all", "hi"] },
     ]);
     expect(h.sink.delivered.has(VIEW_LOCAL)).toBe(false);
+  });
+
+  it("sends a global broadcast across the link once for all of a Shell's views (#15902)", async () => {
+    projectKeys.set(VIEW_C, `${HOST_ID}:proj-1`);
+    await startHarness();
+    const hostLinks: LinkSession[] = [];
+    cleanups.push(h.server.onSession((ctx) => hostLinks.push(ctx.session)));
+    await connect();
+    await invoke(HOST_CHANNEL, VIEW_A, {});
+    await invoke(HOST_CHANNEL, VIEW_B, {});
+    await invoke(HOST_CHANNEL, VIEW_C, {});
+    expect(hostLinks).toHaveLength(1);
+    const post = vi.spyOn(hostLinks[0]!, "post");
+
+    broadcastToRenderer(EVENT_CHANNEL, "term-all", "hi");
+
+    for (const view of [VIEW_A, VIEW_B, VIEW_C]) {
+      await waitFor(() => (h.sink.delivered.get(view)?.length ?? 0) === 1);
+      expect(h.sink.delivered.get(view)).toEqual([
+        { channel: EVENT_CHANNEL, args: ["term-all", "hi"] },
+      ]);
+    }
+    const events = post.mock.calls
+      .map(([message]) => message)
+      .filter((message) => message.lane === Lane.EVENTS && message.kind === EventKind.EVENT);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.body).toEqual({
+      endpointId: null,
+      channel: EVENT_CHANNEL,
+      args: ["term-all", "hi"],
+    });
+    expect(h.sink.delivered.has(VIEW_LOCAL)).toBe(false);
+
+    // In order with the events addressed to one view, on the same lane.
+    broadcastToProjectRenderers("proj-1", EVENT_CHANNEL, "before");
+    broadcastToRenderer(EVENT_CHANNEL, "all");
+    broadcastToProjectRenderers("proj-1", EVENT_CHANNEL, "after");
+    const history = (view: number) =>
+      (h.sink.delivered.get(view) ?? []).map((event) => event.args[0]);
+    await waitFor(() => history(VIEW_A).includes("after") && history(VIEW_C).includes("after"));
+    for (const view of [VIEW_A, VIEW_C]) {
+      expect(history(view)).toEqual(["term-all", "before", "all", "after"]);
+    }
+    // proj-2's view hears only the global ones, both ahead of "after" on the lane.
+    expect(history(VIEW_B)).toEqual(["term-all", "all"]);
+  });
+
+  it("keeps a global broadcast from a view the host turned away at its endpoint cap", async () => {
+    projectKeys.set(VIEW_C, `${HOST_ID}:proj-1`);
+    await startHarness({ maxEndpoints: 2 });
+    await connect();
+    await invoke(HOST_CHANNEL, VIEW_A, {});
+    await invoke(HOST_CHANNEL, VIEW_B, {});
+    const refused = await invoke(HOST_CHANNEL, VIEW_C, {});
+    expect(refused).toMatchObject({ ok: false, error: { code: "NOT_FOUND" } });
+
+    broadcastToRenderer(EVENT_CHANNEL, "term-all", "hi");
+    // Behind the broadcast on the same lane, so once it lands the broadcast has had its chance at view C.
+    broadcastToRenderer(EVENT_CHANNEL, "sentinel");
+    const history = (view: number) =>
+      (h.sink.delivered.get(view) ?? []).map((event) => event.args[0]);
+    await waitFor(() => history(VIEW_A).includes("sentinel"));
+    await waitFor(() => history(VIEW_B).includes("sentinel"));
+    expect(history(VIEW_A)).toEqual(["term-all", "sentinel"]);
+    expect(history(VIEW_B)).toEqual(["term-all", "sentinel"]);
+    expect(h.sink.delivered.has(VIEW_C)).toBe(false);
   });
 
   it("resolves HOST_DISCONNECTED immediately while the host is down", async () => {
@@ -655,7 +749,7 @@ describe("remote session wiring", () => {
     );
     older.connect(HOST_ID);
     await waitFor(() => older.connectionState(HOST_ID).status === "connected");
-    return sink;
+    return { ...sink, manager: older };
   }
 
   it("names the host and both builds when a host on another build doesn't have a channel (#13918)", async () => {
@@ -766,6 +860,39 @@ describe("remote session wiring", () => {
     await connection.listProjects();
     const options = call.mock.calls[0]![2] as { timeoutMs?: number } | undefined;
     expect(options?.timeoutMs).toBeLessThan(60_000);
+  });
+
+  it("fails a switch's lookups on a host that doesn't answer well before the link's 60 s", async () => {
+    await startHarness();
+    await connect();
+    const connection = h.manager.get(HOST_ID)!;
+    // The host's answers stop being read: the link stays up, nothing comes back.
+    for (const socket of h.sockets) socket.pause();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const settled = (work: Promise<unknown>) => {
+        const state = { done: false, error: undefined as unknown };
+        work.then(
+          () => (state.done = true),
+          (error: unknown) => {
+            state.done = true;
+            state.error = error;
+          }
+        );
+        return state;
+      };
+      const described = settled(connection.describeProject("proj-1"));
+      const last = settled(connection.lastActiveProject());
+      await vi.advanceTimersByTimeAsync(HOST_PROJECT_LOOKUP_TIMEOUT_MS - 1);
+      expect([described.done, last.done]).toEqual([false, false]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(described.error).toMatchObject({ code: "OUTCOME_UNKNOWN" });
+      expect(last.error).toMatchObject({ code: "OUTCOME_UNKNOWN" });
+      expect(HOST_PROJECT_LOOKUP_TIMEOUT_MS).toBeLessThan(60_000);
+    } finally {
+      vi.useRealTimers();
+      for (const socket of h.sockets) socket.resume();
+    }
   });
 
   it("exposes the host's open session with no view bound, and none while the link is down", async () => {
@@ -1195,6 +1322,7 @@ describe("remote session wiring", () => {
       h.allowConnect.value = true;
       await waitFor(() => connection.unavailableEnvelope() === null);
       await waitFor(() => !connection.hasActiveAgent(VIEW_A) && !connection.hasActiveAgent(VIEW_B));
+      expect(h.sink.activated).toEqual([VIEW_A, VIEW_B]);
     });
 
     it("forgets a view's answer when it closes", async () => {
@@ -1242,6 +1370,58 @@ describe("remote session wiring", () => {
       expect(connection.hasActiveAgent(VIEW_B)).toBe(true);
     });
 
+    it("tells the view sink when a view's agents go active, and only then (#15879)", async () => {
+      await startHarness();
+      const hostSessions: LinkSession[] = [];
+      cleanups.push(h.server.onSession((ctx) => hostSessions.push(ctx.session)));
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_B, {});
+      const say = (projectId: string, active: boolean) =>
+        hostSessions.at(-1)!.call(LinkMethod.ENDPOINT_AGENT_ACTIVITY, {
+          endpoints: [{ endpointId: "view-12", projectId, active }],
+        });
+
+      await say("proj-2", true);
+      expect(h.sink.activated).toEqual([VIEW_B]);
+
+      // A repeat says nothing new, and a stop needs no wake.
+      await say("proj-2", true);
+      await say("proj-2", false);
+      expect(h.sink.activated).toEqual([VIEW_B]);
+
+      // Said about a project the view isn't on: no wake.
+      await say("proj-1", true);
+      expect(h.sink.activated).toEqual([VIEW_B]);
+
+      await say("proj-2", true);
+      expect(h.sink.activated).toEqual([VIEW_B, VIEW_B]);
+    });
+
+    it("wakes a view whose agent started during a resumed gap, and only that one", async () => {
+      active.add("proj-1");
+      await startWithAgents({ resumeGraceMs: 10_000 });
+      await connect();
+      await invoke(HOST_CHANNEL, VIEW_A, {});
+      await invoke(HOST_CHANNEL, VIEW_B, {});
+      const connection = h.manager.get(HOST_ID)!;
+      await waitFor(() => connection.hasActiveAgent(VIEW_A));
+      const resumed: boolean[] = [];
+      cleanups.push(h.manager.onSessionAttached((_hostId, info) => resumed.push(info.resumed)));
+
+      h.allowConnect.value = false;
+      for (const socket of h.sockets.splice(0)) socket.destroy();
+      await waitFor(() => connection.unavailableEnvelope() !== null);
+      // proj-2's agent starts while nobody is attached to hear; proj-1's runs on.
+      active.add("proj-2");
+      h.sessionHost.refreshAgentActivity();
+      h.allowConnect.value = true;
+      await waitFor(() => connection.hasActiveAgent(VIEW_B));
+
+      expect(resumed).toEqual([true]);
+      expect(connection.hasActiveAgent(VIEW_A)).toBe(true);
+      expect(h.sink.activated).toEqual([VIEW_A, VIEW_B]);
+    });
+
     it("hears agents that outlived the session on a fresh one", async () => {
       active.add("proj-1");
       await startWithAgents();
@@ -1257,6 +1437,8 @@ describe("remote session wiring", () => {
       h.allowConnect.value = true;
       await waitFor(() => getEndpointRegistry().getRemote().length === 1);
       await waitFor(() => connection.hasActiveAgent(VIEW_A));
+      // A fresh session forgot every answer, so hearing it again is a new activation.
+      expect(h.sink.activated).toEqual([VIEW_A, VIEW_A]);
     });
   });
 
@@ -1374,6 +1556,7 @@ describe("remote session wiring", () => {
       submitFleet: async () => {},
       listWorktrees: async () => [],
       onWorktreesMaybeChanged: () => () => {},
+      onProjectsChanged: () => () => {},
       restartTerminals: async () => ({
         projects: [],
         complete: true,
@@ -1390,6 +1573,7 @@ describe("remote session wiring", () => {
         quietHoursWeekdays: [],
       }),
       shellDecides: () => false,
+      acceptsRemoteControl: () => true,
       now: Date.now,
     });
     cleanups.push(disposeHost);
@@ -1443,5 +1627,65 @@ describe("remote session wiring", () => {
     const stopped = h.manager.get(HOST_ID)!;
     await h.manager.disconnect(HOST_ID);
     await expect(stopped.whenReady(5_000)).resolves.toBe("stopped");
+  });
+});
+
+describe("a closing view's last calls (#15881)", () => {
+  const viewAOnHost = () => getEndpointRegistry().getForProject("proj-1")[0];
+
+  /** What reached the host's send handler, and whether its endpoint was still open then. */
+  function recordHostSends() {
+    const received: Array<{ channel: string; endpointOpen: boolean }> = [];
+    const spy = vi
+      .spyOn(getIpcDispatcher(), "sendForEndpoint")
+      .mockImplementation((invocation, channel) => {
+        received.push({ channel, endpointOpen: !invocation.endpoint.isClosed() });
+      });
+    cleanups.push(() => spy.mockRestore());
+    return received;
+  }
+
+  async function openViewA() {
+    await startHarness();
+    await connect();
+    await invoke(HOST_CHANNEL, VIEW_A, {});
+    expect(viewAOnHost()).toBeDefined();
+    return h.manager.get(HOST_ID)!;
+  }
+
+  it("delivers a send queued behind a backpressured socket before the view's close", async () => {
+    const connection = await openViewA();
+    const received = recordHostSends();
+    const socket = h.sockets.at(-1)!;
+    // Held writes past the high-water mark: the session waits for a drain,
+    // and everything posted after stays in its scheduler.
+    socket.cork();
+    connection.send(VIEW_A, "proj-1", "filler", ["x".repeat(socket.writableHighWaterMark)]);
+    await waitFor(() => socket.writableNeedDrain);
+    connection.send(VIEW_A, "proj-1", "commit", [{ panelIds: ["t1"] }]);
+    h.sink.gone(VIEW_A);
+    // A flush later, both still wait in the scheduler and nothing has arrived.
+    await new Promise((resolve) => setImmediate(resolve));
+    const session = connection.currentSession!;
+    expect(session.queuedBytes(Lane.RPC)).toBeGreaterThan(0);
+    expect(session.queuedBytes(Lane.CONTROL)).toBeGreaterThan(0);
+    expect(received).toEqual([]);
+    socket.uncork();
+
+    await waitFor(() => viewAOnHost() === undefined);
+    expect(received).toEqual([
+      { channel: "filler", endpointOpen: true },
+      { channel: "commit", endpointOpen: true },
+    ]);
+  });
+
+  it("delivers a send posted in the same tick as the view's close before it", async () => {
+    const connection = await openViewA();
+    const received = recordHostSends();
+    connection.send(VIEW_A, "proj-1", "commit", [{ panelIds: ["t1"] }]);
+    h.sink.gone(VIEW_A);
+
+    await waitFor(() => viewAOnHost() === undefined);
+    expect(received).toEqual([{ channel: "commit", endpointOpen: true }]);
   });
 });

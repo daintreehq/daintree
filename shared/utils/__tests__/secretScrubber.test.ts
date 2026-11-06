@@ -472,6 +472,51 @@ describe("secretScrubber", () => {
         input: `HEROKU_API_KEY=HRKU-AA${"a".repeat(58)} end`,
         expected: `HEROKU_API_KEY=${REDACTED} end`,
       },
+      {
+        name: "decisions-claim-secret",
+        input: `  Claim secret  ${"0a".repeat(32)}\nNext: pair your phone`,
+        expected: `  Claim secret  ${REDACTED}\nNext: pair your phone`,
+      },
+      {
+        name: "decisions-claim-secret-env",
+        input: `DECISIONS_CLAIM_SECRET="${"k".repeat(24)}" decisions setup`,
+        expected: `DECISIONS_CLAIM_SECRET=${REDACTED} decisions setup`,
+      },
+      {
+        name: "decisions-claim-secret-flag",
+        input: `decisions setup --claim-secret=${"s".repeat(20)} --url https://relay.example`,
+        expected: `decisions setup --claim-secret=${REDACTED} --url https://relay.example`,
+      },
+      {
+        name: "decisions-claim-secret-json",
+        input: '{"claimSecret":"a horse with no name","ok":true}',
+        expected: `{"claimSecret":${REDACTED},"ok":true}`,
+      },
+      {
+        name: "decisions-recovery-passphrase",
+        input: "recovery passphrase: correct horse battery staple\r\nnext line",
+        expected: `recovery passphrase: ${REDACTED}\r\nnext line`,
+      },
+      {
+        name: "decisions-recovery-passphrase-json",
+        input: '{"recoveryPassphrase":"correct horse","status":"ok"}',
+        expected: `{"recoveryPassphrase":${REDACTED},"status":"ok"}`,
+      },
+      {
+        name: "decisions-recovery-passphrase-long",
+        input: `RECOVERY_PASSPHRASE=${"a".repeat(600)}`,
+        expected: `RECOVERY_PASSPHRASE=${REDACTED}`,
+      },
+      {
+        name: "cloudflare-api-token-assignment",
+        input: `export CLOUDFLARE_API_TOKEN=${"a1B2".repeat(10)} && wrangler deploy`,
+        expected: `export CLOUDFLARE_API_TOKEN=${REDACTED} && wrangler deploy`,
+      },
+      {
+        name: "cloudflare-global-key-assignment",
+        input: `CF_API_KEY: "${"0123456789abcdef".repeat(2)}12345"`,
+        expected: `CF_API_KEY: "${REDACTED}"`,
+      },
     ];
 
     for (const { name, input, expected } of positive) {
@@ -513,6 +558,74 @@ describe("secretScrubber", () => {
     it("does not match partial PEM sigils", () => {
       const partial = "-----BEGIN CERTIFICATE----- without matching end marker";
       expect(scrubSecrets(partial)).toBe(partial);
+    });
+
+    it("leaves a claim secret's file path and the words about it alone", () => {
+      const text = [
+        "decisions setup --claim-secret-file /home/me/claim-secret.txt",
+        "decisions setup --claim-secret-file=/home/me/claim-secret.txt",
+        "This computer claimed the relay, so the claim secret has been used and is not needed again.",
+        "See claim secret troubleshooting-guide.md for details",
+      ].join("\n");
+      expect(scrubSecrets(text)).toBe(text);
+    });
+
+    it("redacts a recovery passphrase once, however often it is scrubbed", () => {
+      const once = scrubSecrets("RECOVERY_PASSPHRASE=correct horse battery staple");
+      expect(once).toBe(`RECOVERY_PASSPHRASE=${REDACTED}`);
+      expect(scrubSecrets(once)).toBe(once);
+      const spaced = scrubSecrets("recovery passphrase: correct horse");
+      expect(scrubSecrets(spaced)).toBe(spaced);
+      // A value the logger already redacted by its key keeps its quotes.
+      const keyed = '"recoveryPassphrase": "[redacted]",';
+      expect(scrubSecrets(keyed)).toBe(keyed);
+    });
+
+    it.each([
+      [
+        "a recovery passphrase with escaped quotes",
+        '{"recoveryPassphrase":"correct horse \\"battery\\" staple","status":"ok"}',
+        `{"recoveryPassphrase":${REDACTED},"status":"ok"}`,
+      ],
+      [
+        "a claim secret with escaped quotes",
+        'CLAIM_SECRET="correct horse battery \\"staple\\""',
+        `CLAIM_SECRET=${REDACTED}`,
+      ],
+      [
+        "a quoted claim secret longer than the relay allows",
+        `CLAIM_SECRET="${"a".repeat(300)}" next`,
+        `CLAIM_SECRET=${REDACTED} next`,
+      ],
+      [
+        "a claim secret whose quote never closes before a lone backslash",
+        `claim_secret="${"c".repeat(16)}\\`,
+        `claim_secret=${REDACTED}`,
+      ],
+      [
+        "a claim secret whose quote never closes before a backslash and a new line",
+        `claim_secret="${"c".repeat(16)}\\\nnext`,
+        `claim_secret=${REDACTED}\nnext`,
+      ],
+      [
+        "a claim secret whose quote never closes",
+        `claimSecret: "${"b".repeat(20)} and more`,
+        `claimSecret: ${REDACTED}`,
+      ],
+    ])("redacts %s whole, and a second pass changes nothing", (_label, input, expected) => {
+      const once = scrubSecrets(input);
+      expect(once).toBe(expected);
+      expect(scrubSecrets(once)).toBe(once);
+    });
+
+    it("leaves a short quoted value and the rest of its line alone", () => {
+      const text = 'CLAIM_SECRET="short" && echo the rest of this line stays';
+      expect(scrubSecrets(text)).toBe(text);
+    });
+
+    it("finds a legacy Cloudflare token by the name it is assigned to", () => {
+      expect(findSecretInValue(`CLOUDFLARE_API_TOKEN=${"a1B2".repeat(10)}`)).toBeDefined();
+      expect(findSecretInValue("CLOUDFLARE_API_TOKEN=short")).toBeUndefined();
     });
 
     it("leaves an empty string unchanged", () => {

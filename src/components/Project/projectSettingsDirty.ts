@@ -1,4 +1,3 @@
-import type { CommandOverride } from "@shared/types/commands";
 import type {
   CopyTreeSettings,
   DaintreeMcpTier,
@@ -26,7 +25,6 @@ export interface ProjectSettingsSnapshot {
     preferredAutoRestart?: boolean;
   }>;
   defaultWorktreeRecipeId: string | undefined;
-  commandOverrides: CommandOverride[];
   copyTreeSettings: CopyTreeSettings;
   branchPrefixMode: "none" | "username" | "custom";
   color: string | undefined;
@@ -68,7 +66,6 @@ export function createProjectSettingsSnapshot(
   environmentVariables: EnvVar[],
   runCommands: RunCommand[],
   defaultWorktreeRecipeId: string | undefined,
-  commandOverrides: CommandOverride[],
   copyTreeSettings: CopyTreeSettings,
   branchPrefixMode: "none" | "username" | "custom" = "none",
   branchPrefixCustom: string = "",
@@ -125,8 +122,6 @@ export function createProjectSettingsSnapshot(
 
   const sanitizedPaths = excludedPaths.map((p) => p.trim()).filter(Boolean);
 
-  const sortedCommandOverrides = [...commandOverrides];
-
   // Normalize CopyTree settings
   const normalizedCopyTreeSettings: CopyTreeSettings = {
     ...copyTreeSettings,
@@ -161,7 +156,6 @@ export function createProjectSettingsSnapshot(
     environmentVariables: sortedEnvVars,
     runCommands: sanitizedRunCommands,
     defaultWorktreeRecipeId,
-    commandOverrides: sortedCommandOverrides,
     copyTreeSettings: normalizedCopyTreeSettings,
     color: color?.trim() || undefined,
     branchPrefixMode: normalizedMode,
@@ -260,29 +254,6 @@ export function areSnapshotsEqual(a: ProjectSettingsSnapshot, b: ProjectSettings
     ) {
       return false;
     }
-  }
-
-  if (a.commandOverrides.length !== b.commandOverrides.length) return false;
-  for (let i = 0; i < a.commandOverrides.length; i++) {
-    const aOverride = a.commandOverrides[i]!;
-    const bOverride = b.commandOverrides[i]!;
-    if (aOverride.commandId !== bOverride.commandId) return false;
-    if (aOverride.disabled !== bOverride.disabled) return false;
-    if (aOverride.prompt !== bOverride.prompt) return false;
-
-    const aDefaults = aOverride.defaults || {};
-    const bDefaults = bOverride.defaults || {};
-    const aDefaultsStr = JSON.stringify(
-      Object.keys(aDefaults)
-        .sort()
-        .map((k) => [k, aDefaults[k]])
-    );
-    const bDefaultsStr = JSON.stringify(
-      Object.keys(bDefaults)
-        .sort()
-        .map((k) => [k, bDefaults[k]])
-    );
-    if (aDefaultsStr !== bDefaultsStr) return false;
   }
 
   // CopyTree settings comparison

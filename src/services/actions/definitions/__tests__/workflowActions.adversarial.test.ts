@@ -30,7 +30,10 @@ const projectStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const recipeStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const preferencesStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const currentViewStoreMock = vi.hoisted(() => ({ getCurrentViewStore: vi.fn() }));
-const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
+const panelStoreMock = vi.hoisted(() => ({
+  getState: vi.fn(),
+  subscribe: vi.fn(() => () => {}),
+}));
 const selectorMock = vi.hoisted(() => ({
   selectOrderedTerminals: vi.fn<() => unknown[]>(() => []),
 }));
@@ -617,6 +620,98 @@ describe("worktree.createWithRecipe", () => {
     expect(result.setupState).toBe("running");
   });
 
+  it("asks the host for a fresh base and returns the commit the branch started from (#15733)", async () => {
+    const startCommit = "e".repeat(40);
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+    worktreeClientMock.create.mockResolvedValue({
+      worktreeId: "wt-new",
+      branch: "feature/foo",
+      setupState: "pending",
+      startCommit,
+    });
+
+    const result = (await def.run(
+      { source: newBranch("feature/foo", { fetchBase: true }) },
+      {} as never
+    )) as Record<string, unknown>;
+
+    expect(worktreeClientMock.create).toHaveBeenCalledWith(
+      expect.objectContaining({ fetchBase: true, useExistingBranch: false }),
+      "/repo"
+    );
+    expect(result.startCommit).toBe(startCommit);
+  });
+
+  it("keeps the fetched start commit on the partial result when the recipe then fails", async () => {
+    const startCommit = "e".repeat(40);
+    worktreeClientMock.create.mockResolvedValue({
+      worktreeId: "wt-new",
+      branch: "feature/foo",
+      setupState: "pending",
+      startCommit,
+    });
+    setRecipe("recipe-1", async () => {
+      throw new Error("recipe boom");
+    });
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    const error = await def
+      .run({ source: newBranch("feature/foo", { fetchBase: true }), recipeId: "recipe-1" }, {
+        dispatchSource: "agent",
+      } as never)
+      .then(
+        () => null,
+        (err: unknown) => err as Error
+      );
+
+    const message = error?.message ?? "";
+    expect(message).toMatch(/^PARTIAL_SUCCESS:/);
+    const payload = JSON.parse(message.slice(message.indexOf("{")));
+    expect(payload.partialResult.startCommit).toBe(startCommit);
+  });
+
+  it("stops before the recipe when a fresh base was asked for but the host confirmed none", async () => {
+    // A host from before fetchBase strips the option and answers without the
+    // commit; that worktree may sit on a stale base.
+    worktreeClientMock.create.mockResolvedValue({
+      worktreeId: "wt-new",
+      branch: "feature/foo",
+      setupState: "pending",
+    });
+    const runRecipeWithResults = setRecipe("recipe-1");
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    const error = await def
+      .run(
+        { source: newBranch("feature/foo", { fetchBase: true }), recipeId: "recipe-1" },
+        {} as never
+      )
+      .then(
+        () => null,
+        (err: unknown) => err as Error
+      );
+
+    const message = error?.message ?? "";
+    expect(message).toMatch(/^PARTIAL_SUCCESS:/);
+    const payload = JSON.parse(message.slice(message.indexOf("{")));
+    expect(payload.message).toContain("didn't confirm it fetched the base");
+    expect(payload.partialResult).toMatchObject({ worktreeId: "wt-new", recipeLaunched: false });
+    expect(payload.partialResult).not.toHaveProperty("startCommit");
+    expect(runRecipeWithResults).not.toHaveBeenCalled();
+  });
+
+  it("leaves fetchBase off the request, and startCommit off the result, unless asked", async () => {
+    const def = setupActions(makeCallbacks())("worktree.createWithRecipe");
+
+    const result = (await def.run({ source: newBranch("feature/foo") }, {} as never)) as Record<
+      string,
+      unknown
+    >;
+
+    expect(worktreeClientMock.create.mock.calls[0]![0]).not.toHaveProperty("fetchBase");
+    expect(result).not.toHaveProperty("startCommit");
+  });
+
   it("recipe context carries prNumber (not issueNumber) when pullRequestNumber is provided", async () => {
     forgeClientMock.getPR.mockResolvedValue({
       number: 42,
@@ -698,6 +793,7 @@ describe("worktree.createWithRecipe", () => {
         terminalCount: 6,
         terminalsDigest: "deadbeef",
       },
+      dispatchDeadlineAt: 123_456,
     } as never);
 
     expect(runRecipeWithResults).toHaveBeenCalledWith(
@@ -712,6 +808,8 @@ describe("worktree.createWithRecipe", () => {
           terminalCount: 6,
           terminalsDigest: "deadbeef",
         },
+        // The deadline the worktree creation already spent from (#15648).
+        dispatchDeadlineAt: 123_456,
       })
     );
   });
@@ -1016,12 +1114,18 @@ describe("workflow recipe-spawn plugin guard (issue #10582)", () => {
           terminalCount: 8,
           terminalsDigest: "deadbeef",
         },
+        dispatchDeadlineAt: 123_456,
       }
     );
     expect(approved.ok).toBe(true);
-    expect(
-      (runRecipeWithResults.mock.calls[1]?.[4] as Record<string, unknown>).hostApprovedRecipeRun
-    ).toEqual({ recipeId: "recipe-1", terminalCount: 8, terminalsDigest: "deadbeef" });
+    const approvedOptions = runRecipeWithResults.mock.calls[1]?.[4] as Record<string, unknown>;
+    expect(approvedOptions.hostApprovedRecipeRun).toEqual({
+      recipeId: "recipe-1",
+      terminalCount: 8,
+      terminalsDigest: "deadbeef",
+    });
+    // The bridge's deadline reaches the run through the same stamp (#15648).
+    expect(approvedOptions.dispatchDeadlineAt).toBe(123_456);
   });
 });
 
@@ -1054,10 +1158,11 @@ describe("workflow.startWorkOnIssue", () => {
       "term-1",
       "wt-new",
       undefined,
-      undefined,
+      expect.any(String),
       // Workflow creation is its own surface in the run history (#11732) — not
       // a toolbar copy and not an agent tool call.
-      "workflow"
+      "workflow",
+      undefined
     );
     expect(result.terminalId).toBe("term-1");
     expect(result.contextInjected).toBe(true);
@@ -1067,6 +1172,29 @@ describe("workflow.startWorkOnIssue", () => {
     expect(result.issueTitle).toBe("Add workflow macro tools");
     // The result is published as structuredContent now (#11547), so it has to
     // satisfy the schema MCP advertises for it.
+    expectMatchesResultSchema("workflow.startWorkOnIssue", result);
+  });
+
+  it("injects nothing into a launched agent whose pane is already locked (#15644)", async () => {
+    forgeClientMock.getIssue.mockResolvedValue({ number: 42, title: "t", url: "u" });
+    panelStoreMock.getState.mockReturnValue({
+      panelsById: { "term-1": { id: "term-1", kind: "terminal", isInputLocked: true } },
+      panelIds: ["term-1"],
+      isInTrash: vi.fn().mockReturnValue(false),
+      focusNextWaiting: vi.fn(),
+      focusNextWorking: vi.fn(),
+    });
+    const def = setupActions(makeCallbacks())("workflow.startWorkOnIssue");
+
+    const result = (await def.run({ issueNumber: 42, agentId: "claude" }, {} as never)) as Record<
+      string,
+      unknown
+    >;
+
+    expect(copyTreeClientMock.injectToTerminal).not.toHaveBeenCalled();
+    expect(result.contextInjected).toBe(false);
+    // The launch stands; only the context was withheld.
+    expect(result.terminalId).toBe("term-1");
     expectMatchesResultSchema("workflow.startWorkOnIssue", result);
   });
 

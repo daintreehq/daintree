@@ -27,6 +27,8 @@ import {
   type SessionServerDeps,
 } from "../../../services/mcp-server/sessionServer.js";
 import { SessionStore } from "../../../services/mcp-server/sessionStore.js";
+import type { TerminalProcessRecord } from "../../../services/mcp-server/worktreeProcessGuard.js";
+import type { WorktreeGitObservation } from "../../../services/mcp-server/worktreeRetirementGit.js";
 import {
   RELAY_CALL_ID_META_KEY,
   type DispatchEnvelope,
@@ -73,6 +75,8 @@ import type {
  */
 
 const HOST_ID = "studio";
+/** A token in a shape the redactor knows, to show it never leaves the host whole. */
+const STATUS_SECRET = "ghp_" + "Z9y8X7w6V5u4T3s2R1q0P9o8";
 const PROJECT = "proj-2";
 const CREDENTIAL = "C".repeat(43);
 /** The owner the host keeps what a Shell's assistant made under: its sender and help session. */
@@ -118,6 +122,7 @@ function entry(
 
 const MANIFEST: ActionManifestEntry[] = [
   entry("terminal.list", "query"),
+  entry("terminal.getStatus", "query"),
   entry("agent.launch"),
   entry("terminal.closeOwned"),
   entry("terminal.interruptOwned"),
@@ -129,6 +134,7 @@ const MANIFEST: ActionManifestEntry[] = [
     },
   },
   entry("worktree.deleteOwned", "command", "confirm"),
+  entry("worktree.retireOwned", "command", "confirm"),
 ];
 
 function deferred<T = void>() {
@@ -152,7 +158,22 @@ class Destination {
   readonly terminals = new Set<string>(["user-shell"]);
   readonly worktrees = new Set<string>();
   readonly dirty = new Set<string>();
+  /** What this host's pty host reports running; nothing unless a test says so. */
+  processes: TerminalProcessRecord[] = [];
+  /** What git reports of a worktree here: clean and pushed unless a test says otherwise. */
+  git: WorktreeGitObservation = {
+    headOid: "c".repeat(40),
+    branch: "feature/done",
+    staged: 0,
+    unstaged: 0,
+    untracked: 0,
+    conflicted: 0,
+    hiddenFromStatus: 0,
+    unpushedCommits: 0,
+  };
   readonly submissions = new Map<string, string[]>();
+  /** Status reads as they reach the project's tools, after the host's own admission. */
+  readonly statusReads: Array<{ projectId: string; global: boolean; args: unknown }> = [];
   accepts = true;
   /** Set to hold the next change until released, as a slow host would. */
   gate: { reached: (callId: string) => void; release: Promise<void> } | null = null;
@@ -189,6 +210,23 @@ class Destination {
       handleTerminalGetStatusViewless: vi.fn(),
       handleTerminalReadLastMessageOwned: vi.fn(),
       isTerminalIdInUse: (id: string) => this.terminals.has(id),
+      readTerminalProcesses: async () => this.processes,
+      readWorktreeGit: async () => this.git,
+      // A closed pane's process exits once its grace is ended, as the pty host reports it.
+      waitForClosedPanelExits: async (targets: Array<{ terminalId: string }>) => {
+        const ids = new Set(targets.map((target) => target.terminalId));
+        this.processes = this.processes.map((record) =>
+          ids.has(record.id) ? { ...record, isExited: true } : record
+        );
+        return {
+          processes: targets.map(({ terminalId }) => ({
+            terminalId,
+            outcome: "exited" as const,
+            exitCode: 0,
+            graceEnded: true,
+          })),
+        };
+      },
       appendAuditRecord: vi.fn(),
       getCachedManifest: vi.fn(() => MANIFEST),
       resolveOwnPane: () => null,
@@ -231,6 +269,30 @@ class Destination {
       ({ result: { ok: false, error: { code, message } } }) as never;
     if (actionId === "terminal.list") {
       return ok({ terminals: [...this.terminals].map((id) => ({ id })) });
+    }
+    if (actionId === "terminal.getStatus") {
+      this.statusReads.push({ projectId: spec.projectId, global: spec.global === true, args });
+      return ok({
+        terminals: (args.terminalIds as string[]).map((terminalId) =>
+          this.terminals.has(terminalId)
+            ? {
+                terminalId,
+                agentId: "claude",
+                agentState: "waiting",
+                waitingReason: "prompt",
+                lastTransitionAt: 5,
+                recentOutput: `GITHUB_TOKEN=${STATUS_SECRET}\n❯ continue?`,
+              }
+            : {
+                terminalId,
+                agentId: null,
+                agentState: null,
+                error: "Terminal not found or status unavailable",
+              }
+        ),
+        source: "renderer",
+        unavailableFields: [],
+      });
     }
     if (actionId === "worktree.delete") {
       // With no view here, the person at the Shell is asked about this very call (#13501).
@@ -517,7 +579,7 @@ const agentReads: Array<{ projectId?: string }> = [];
 const agentReadFails = { value: false };
 
 /** Relayed calls as they arrive on the host, before its ledger or anything else sees them. */
-const arrivals = { mcpCalls: 0, projectReads: 0, sessionsOpened: 0 };
+const arrivals = { mcpCalls: 0, statusCalls: 0, projectReads: 0, sessionsOpened: 0 };
 
 function hostSource(link: LinkSession) {
   const session = new Proxy(link, {
@@ -529,6 +591,7 @@ function hostSource(link: LinkSession) {
             schema as never,
             ((payload: unknown) => {
               if (method === AssistantLinkMethod.MCP_CALL) arrivals.mcpCalls++;
+              if (method === AssistantLinkMethod.STATUS) arrivals.statusCalls++;
               return handler(payload);
             }) as never
           );
@@ -611,6 +674,7 @@ beforeEach(async () => {
   destination = new Destination();
   throwaways = new ThrowawayRuns();
   arrivals.mcpCalls = 0;
+  arrivals.statusCalls = 0;
   arrivals.projectReads = 0;
   arrivals.sessionsOpened = 0;
   agentReads.length = 0;
@@ -906,6 +970,102 @@ describe("cleanup that keeps what it may not remove (#14169)", () => {
       destination.store.resourceOwnership.owns(principal("help-a"), "worktree", "/wt/dirty")
     ).toBe(true);
   });
+
+  it("keeps a worktree the person's shell still runs in, asking no one (#15729)", async () => {
+    await launchWorker();
+    destination.worktrees.add("/wt/busy");
+    destination.store.resourceOwnership.record(
+      principal("help-a"),
+      [{ kind: "worktree", id: "/wt/busy" }],
+      PROJECT
+    );
+    destination.processes = [{ id: "user-shell", cwd: "/wt/busy", isExited: false }];
+
+    const busy = await settled(call("worktree.deleteOwned", { worktreeId: "/wt/busy" }));
+
+    expect(busy.result).toMatchObject({ isError: true });
+    // The Shell's caller gets the host's whole refusal, details included.
+    expect(JSON.parse((busy.result as { text: string }).text)).toMatchObject({
+      code: "DISABLED",
+      message: expect.stringContaining("'user-shell' (not recorded as created by this session)"),
+      retriable: false,
+      details: {
+        reason: "worktree-has-running-terminals",
+        worktreeId: "/wt/busy",
+        terminals: [
+          {
+            terminalId: "user-shell",
+            createdByThisSession: false,
+            closableByThisSession: false,
+            trashed: false,
+            trashExpiresAt: null,
+          },
+        ],
+      },
+    });
+    expect(asked).toEqual([]);
+    expect(destination.count("worktree.delete")).toBe(0);
+    expect(destination.terminals.has("user-shell")).toBe(true);
+    expect(destination.worktrees.has("/wt/busy")).toBe(true);
+    expect(
+      destination.store.resourceOwnership.owns(principal("help-a"), "worktree", "/wt/busy")
+    ).toBe(true);
+  });
+});
+
+describe("retiring a worktree through host.call with no window open there (#15737)", () => {
+  async function ownedWorktreeWithWorker(worktreeId: string) {
+    await launchWorker();
+    destination.worktrees.add(worktreeId);
+    destination.store.resourceOwnership.record(
+      principal("help-a"),
+      [{ kind: "worktree", id: worktreeId }],
+      PROJECT
+    );
+    destination.processes = [{ id: "w-1", cwd: worktreeId, isExited: false }];
+  }
+
+  it("closes its worker, waits for it, and deletes after the one question at the Shell", async () => {
+    await ownedWorktreeWithWorker("/wt/done");
+
+    const retired = await settled(call("worktree.retireOwned", { worktreeId: "/wt/done" }));
+
+    expect(retired.result).toMatchObject({
+      isError: false,
+      structured: {
+        worktreeId: "/wt/done",
+        closedTerminalIds: ["w-1"],
+        processes: [{ terminalId: "w-1", outcome: "exited" }],
+      },
+    });
+    // The delete's own confirmation, relayed here, is the only thing asked.
+    expect(asked).toEqual(["worktree.delete"]);
+    expect(destination.count("terminal.close")).toBe(1);
+    expect(destination.terminals.has("w-1")).toBe(false);
+    expect(destination.worktrees.has("/wt/done")).toBe(false);
+  });
+
+  it("says its worker was closed when the person at the Shell rejects the delete", async () => {
+    await ownedWorktreeWithWorker("/wt/kept");
+    decision = "rejected";
+
+    const kept = await settled(call("worktree.retireOwned", { worktreeId: "/wt/kept" }));
+
+    expect(kept.result).toMatchObject({ isError: true });
+    expect(JSON.parse((kept.result as { text: string }).text)).toMatchObject({
+      code: "PARTIAL_SUCCESS",
+      details: {
+        failedStep: "delete",
+        closedTerminalIds: ["w-1"],
+        cause: { code: "USER_REJECTED" },
+      },
+    });
+    expect(destination.terminals.has("w-1")).toBe(false);
+    expect(destination.worktrees.has("/wt/kept")).toBe(true);
+    expect(
+      destination.store.resourceOwnership.owns(principal("help-a"), "worktree", "/wt/kept")
+    ).toBe(true);
+  });
 });
 
 describe("restarting the coordinating Shell mid-workload (#14169)", () => {
@@ -1180,5 +1340,72 @@ describe("host.list reading a host's agents over the link (#14455)", () => {
     control.add(HOST_ID);
     agentReadFails.value = true;
     expect(await list()).toMatchObject({ coverage: "unreachable", entries: [] });
+  });
+});
+
+describe("host.status over a real link (#16191)", () => {
+  it("reads the host's projects in one exchange through its own gates, and redacts there", async () => {
+    await launchWorker();
+    const relayedBefore = arrivals.mcpCalls;
+    const outcome = await shell.runtime.status(
+      "help-a",
+      {
+        targets: [
+          { hostId: HOST_ID, projectId: PROJECT, terminalIds: ["w-1", "w-unknown"] },
+          { hostId: HOST_ID, projectId: "proj-gone", terminalIds: ["w-2"] },
+        ],
+        includeOutput: true,
+      },
+      { tier: "core" }
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    // One exchange for the host, and no project call relayed one at a time.
+    expect(arrivals.statusCalls).toBe(1);
+    expect(arrivals.mcpCalls).toBe(relayedBefore);
+    expect(destination.statusReads).toEqual([
+      {
+        projectId: PROJECT,
+        global: false,
+        args: {
+          terminalIds: ["w-1", "w-unknown"],
+          includeOutput: { lines: 10, stripAnsi: true },
+        },
+      },
+    ]);
+    expect(outcome.value.targets.map((target) => [target.projectId, target.outcome])).toEqual([
+      [PROJECT, "ok"],
+      ["proj-gone", "not_found"],
+    ]);
+    expect(outcome.value.terminals).toMatchObject([
+      {
+        hostId: HOST_ID,
+        projectId: PROJECT,
+        terminalId: "w-1",
+        agentState: "waiting",
+        recentOutput: "GITHUB_TOKEN=[redacted]\n❯ continue?",
+      },
+      {
+        hostId: HOST_ID,
+        projectId: PROJECT,
+        terminalId: "w-unknown",
+        error: "Terminal not found or status unavailable",
+      },
+    ]);
+    expect(JSON.stringify(outcome.value)).not.toContain(STATUS_SECRET);
+    // A read is no effect on the host.
+    expect(destination.count("terminal.getStatus")).toBe(0);
+  });
+
+  it("reads nothing once the person turns assistant control off for the host", async () => {
+    control.delete(HOST_ID);
+    const outcome = await shell.runtime.status(
+      "help-a",
+      { targets: [{ hostId: HOST_ID, projectId: PROJECT, terminalIds: ["w-1"] }] },
+      { tier: "core" }
+    );
+    expect(outcome.ok && outcome.value.targets[0]!.outcome).toBe("opted_out");
+    expect(arrivals.statusCalls).toBe(0);
+    expect(destination.statusReads).toEqual([]);
   });
 });

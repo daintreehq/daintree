@@ -1,10 +1,16 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { bridgePtyEvent } from "../PtyEventsBridge.js";
 import { events } from "../../events.js";
+import { HANDBACK_MESSAGE_MAX_CHARS } from "../../../../shared/types/handback.js";
+import {
+  clearClaudeUsageObservations,
+  readClaudeUsageObservations,
+} from "../../claude/ClaudeUsageObservations.js";
 
 describe("bridgePtyEvent", () => {
   afterEach(() => {
     events.removeAllListeners();
+    clearClaudeUsageObservations();
   });
 
   it("normalizes agent-state trigger and confidence before emitting", () => {
@@ -145,6 +151,65 @@ describe("bridgePtyEvent", () => {
     }
 
     expect(codes).toEqual(["k7f3qa", undefined, undefined]);
+  });
+
+  it("forwards the pane's last transition with a handback, and drops one that is not a time (#15726)", () => {
+    const seen: Array<number | undefined> = [];
+    events.on("agent:handback-observed", (payload) => seen.push(payload.lastStateChange));
+    const handback = { message: "done", observedAt: 1_000, truncated: false };
+
+    for (const lastStateChange of [
+      900,
+      0,
+      1_792_317_600_123,
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      "900",
+      undefined,
+    ]) {
+      bridgePtyEvent({
+        type: "agent-handback-observed",
+        terminalId: "term-1",
+        handback,
+        ...(lastStateChange !== undefined ? { lastStateChange: lastStateChange as number } : {}),
+        timestamp: 1_000,
+      });
+    }
+
+    expect(seen).toEqual([900, 0, 1_792_317_600_123, undefined, undefined, undefined, undefined]);
+  });
+
+  it("forwards a scheduled run's report, and drops one that crossed malformed (#15982)", () => {
+    const seen: unknown[] = [];
+    events.on("agent:run-handback-observed", (payload) => seen.push(payload));
+    const report = {
+      type: "agent-run-handback-observed" as const,
+      terminalId: "term-1",
+      spawnedAt: 900,
+      code: "k7f3qa",
+      report: "needs-you" as const,
+      message: "the migration needs a decision",
+      truncated: false,
+      observedAt: 1_000,
+      timestamp: 1_000,
+    };
+
+    bridgePtyEvent(report);
+    bridgePtyEvent({ ...report, message: null, report: "done" });
+    for (const malformed of [
+      { code: "../etc" },
+      { report: "finished" },
+      { spawnedAt: Number.NaN },
+      { message: "x".repeat(HANDBACK_MESSAGE_MAX_CHARS + 1) },
+      { message: 42 },
+      { truncated: "no" },
+      { observedAt: Number.POSITIVE_INFINITY },
+    ]) {
+      bridgePtyEvent({ ...report, ...malformed } as unknown as typeof report);
+    }
+
+    const { type: _type, ...forwarded } = report;
+    expect(seen).toEqual([forwarded, { ...forwarded, message: null, report: "done" }]);
   });
 
   it("forwards waitingReason from agent-state events", () => {
@@ -370,6 +435,56 @@ describe("bridgePtyEvent", () => {
     });
     expect(handled).toBe(true);
     expect(heard).toEqual([{ id: "term-3", expiresAt: 1_800_000_020_000 }]);
+  });
+
+  describe("Claude usage observations (#15727)", () => {
+    const observed = {
+      type: "agent-claude-usage-observed",
+      terminalId: "term-4",
+      window: "weekly limit",
+      statement: "used",
+      usedPercent: 87,
+      resetsAt: 1_793_599_200_000,
+      observedAt: 1_793_590_000_000,
+      timestamp: 1_793_590_000_000,
+    } as const;
+
+    it("records the parsed fields for agent.readQuota and keeps them off the bus", () => {
+      const heard: unknown[] = [];
+      events.on("agent:claude-usage-observed", (payload) => heard.push(payload));
+
+      // A field the pty host should never send is not carried into the record.
+      expect(bridgePtyEvent({ ...observed, line: "You've used 87%…" } as never)).toBe(true);
+
+      expect(heard).toEqual([]);
+      expect(readClaudeUsageObservations()).toEqual([
+        {
+          terminalId: "term-4",
+          window: "weekly limit",
+          statement: "used",
+          usedPercent: 87,
+          resetsAt: 1_793_599_200_000,
+          observedAt: 1_793_590_000_000,
+        },
+      ]);
+    });
+
+    it.each([
+      ["an unknown limit", { window: "monthly limit" }],
+      ["an unknown statement", { statement: "nearly" }],
+      ["a percent past 100", { usedPercent: 140 }],
+      ["a reset that isn't a time", { resetsAt: Number.NaN }],
+      ["no observation time", { observedAt: undefined }],
+      ["no pane", { terminalId: "" }],
+    ])("drops one with %s", (_name, change) => {
+      expect(bridgePtyEvent({ ...observed, ...change } as never)).toBe(true);
+      expect(readClaudeUsageObservations()).toEqual([]);
+    });
+
+    it("leaves a host throwaway run's out (#14445)", () => {
+      bridgePtyEvent({ ...observed, terminalId: "daintree-throwaway-1" });
+      expect(readClaudeUsageObservations()).toEqual([]);
+    });
   });
 
   it("returns false for unhandled event types", () => {

@@ -2759,15 +2759,6 @@ class TerminalInstanceService {
     return this.unseenTracker.subscribe(id, listener);
   }
 
-  // Hibernation no longer occurs (terminals stay fully live in the
-  // background). Retained as a no-op so `useIsHibernated` and other direct
-  // callers (e.g. useAccessibilityAnnouncements) keep a stable
-  // useSyncExternalStore contract against the always-false `isHibernated`
-  // snapshot below — the listener is never notified.
-  subscribeHibernation(_id: string, _listener: () => void): () => void {
-    return () => {};
-  }
-
   /**
    * Subscribe to batch scrollback-restore state changes. The scheduler
    * (`scrollbackRestoreScheduler`) drives every `scrollbackRestoreState`
@@ -3622,12 +3613,6 @@ class TerminalInstanceService {
     if (!managed) return () => {};
     managed.exitSubscribers.add(cb);
     return () => managed.exitSubscribers.delete(cb);
-  }
-
-  // Hibernation no longer occurs (terminals stay fully live in the
-  // background) — always false. See subscribeHibernation above.
-  isHibernated(_id: string): boolean {
-    return false;
   }
 
   // Whether this terminal currently holds a live WebGL context (vs the DOM

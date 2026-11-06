@@ -342,14 +342,12 @@ export const TOOLBAR_BUTTON_PRIORITIES: Record<ToolbarButtonId, ToolbarButtonPri
   "sidebar-toggle": 1,
   "assistant-toggle": 1,
   "portal-toggle": 1,
-  "forge-stats": 1,
   "voice-recording": 1,
   // Deliberately ahead of the individual panel buttons at 3: on a fresh profile
   // the launcher is the only toolbar route to the agents and to `browser` /
   // `dev-server`, so evicting it before them would strand everything whose own
   // button isn't there to fall back to (#11680).
   launcher: 2,
-  "plugin-tray": 2,
   ...(Object.fromEntries(
     BUILT_IN_AGENT_IDS.map((id) => [id, 2 as ToolbarButtonPriority])
   ) as Record<BuiltInAgentId, ToolbarButtonPriority>),
@@ -357,13 +355,19 @@ export const TOOLBAR_BUTTON_PRIORITIES: Record<ToolbarButtonId, ToolbarButtonPri
   browser: 3,
   "file-browser": 3,
   "dev-server": 3,
+  // The buttons that carry the strip's signals outlast the tools beside them,
+  // and hold the agents' tier while they are lit (`withLitSignalPriorities`).
+  "notification-center": 3,
+  canopy: 3,
+  problems: 3,
+  // Wide and informational: the stats capsule costs as much room as six icon
+  // buttons, and its counts stay one click away in the `…` menu.
+  "forge-stats": 4,
+  "plugin-tray": 4,
   "command-palette": 4,
-  "resume-sessions": 4,
-  settings: 5,
-  "notification-center": 5,
-  canopy: 5,
+  settings: 4,
+  "resume-sessions": 5,
   "copy-tree": 5,
-  problems: 5,
 };
 
 /** Complete toolbar preferences configuration */

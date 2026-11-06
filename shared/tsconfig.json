@@ -4,7 +4,7 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "lib": ["ES2022"],
-    "outDir": "../dist-electron/shared",
+    "outDir": "../dist-typecheck/shared",
     "rootDir": ".",
     "strict": true,
     "esModuleInterop": true,

@@ -5,7 +5,12 @@ import { useAgentDirectory } from "@/hooks/useAgentDirectory";
 import { useProjectStore } from "@/store/projectStore";
 import { useCanopyStore } from "@/store/canopyStore";
 import { PilotRunState } from "@/components/Pilot/PilotRunState";
-import { assistantStatus, buildAssistantItems } from "@/components/Canopy/canopyAssistants";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import {
+  assistantPlaceLabel,
+  assistantStatus,
+  buildAssistantItems,
+} from "@/components/Canopy/canopyAssistants";
 import {
   assistantBand,
   canopyAssistantDomId,
@@ -125,8 +130,8 @@ export function AssistantPicker({ open, onClose }: { open: boolean; onClose: () 
               onPointerMove={() => setActiveId(item.id)}
               onClick={() => choose(index)}
               className={cn(
-                "mx-1.5 flex cursor-pointer items-center gap-2.5 rounded-[var(--radius-sm)] px-2 py-1.5",
-                index === activeIndex && "bg-overlay-highlight"
+                PALETTE_ROW_CLASS,
+                "mx-1.5 flex cursor-pointer items-center gap-2.5 rounded-[var(--radius-sm)] px-2 py-1.5"
               )}
             >
               <span className="flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
@@ -137,7 +142,7 @@ export function AssistantPicker({ open, onClose }: { open: boolean; onClose: () 
               </span>
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate text-sm leading-5 text-text-primary">
-                  {item.scopeLabel}
+                  {assistantPlaceLabel(item)}
                 </span>
                 <span
                   className={cn(

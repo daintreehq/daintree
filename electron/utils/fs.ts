@@ -92,7 +92,8 @@ function isUnsupportedDirectorySyncError(error: unknown): boolean {
   return code === "EPERM" || code === "EINVAL";
 }
 
-async function syncParentDirectory(filePath: string): Promise<void> {
+/** Makes a rename or unlink in `filePath`'s directory durable. A no-op on Windows. */
+export async function syncParentDirectory(filePath: string): Promise<void> {
   if (process.platform === "win32") return;
   const dirPath = dirname(filePath);
   let dirHandle: Awaited<ReturnType<typeof open>> | undefined;

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   getAgentIds,
+  getAgentConfigFolderAccount,
   getAgentConfig,
   setUserRegistry,
   getEffectiveAgentConfig,
@@ -21,6 +22,7 @@ import {
 import { UserAgentConfigSchema } from "../../types/userAgentRegistry.js";
 import { buildResumeCommand, buildResumeLatestCommand } from "../../types/agentSettings.js";
 import { BUILT_IN_AGENT_IDS } from "../agentIds.js";
+import { isSensitiveEnvKey } from "../../utils/envVars.js";
 
 describe("agentRegistry", () => {
   beforeEach(() => {
@@ -493,6 +495,44 @@ describe("agentRegistry", () => {
   });
 });
 
+describe("account declarations (#16040)", () => {
+  it("gives every probe of a config folder the folder's own declaration", () => {
+    for (const id of getAgentIds()) {
+      const config = getAgentConfig(id);
+      if (!config?.authCheck?.configHomePaths) continue;
+      expect(config.account?.kind, id).toBe("config-folder");
+    }
+  });
+
+  it("names a home-relative default folder and a variable for every config-folder account", () => {
+    for (const id of getAgentIds()) {
+      const account = getAgentConfig(id)?.account;
+      if (account?.kind !== "config-folder") continue;
+      expect(account.envVar, id).toMatch(/^[A-Z][A-Z0-9_]*$/);
+      expect(account.defaultDir.startsWith("/") || account.defaultDir.includes(".."), id).toBe(
+        false
+      );
+    }
+  });
+
+  it("offers folder accounts only for agents whose CLI keeps its whole login in one folder", () => {
+    expect(getAgentConfigFolderAccount("codex")?.envVar).toBe("CODEX_HOME");
+    expect(getAgentConfigFolderAccount("claude")?.envVar).toBe("CLAUDE_CONFIG_DIR");
+    // A keychain login isn't selectable per launch, and an install directory isn't a login.
+    expect(getAgentConfigFolderAccount("copilot")).toBeUndefined();
+    expect(getAgentConfigFolderAccount("amp")).toBeUndefined();
+    // GEMINI_CLI_HOME moves the whole home directory, not just the login (#16134).
+    expect(getAgentConfigFolderAccount("gemini")).toBeUndefined();
+    expect(getAgentConfigFolderAccount("not-an-agent")).toBeUndefined();
+  });
+
+  it("declares how every built-in agent's CLI holds an account (#16134)", () => {
+    for (const id of getAgentIds()) {
+      expect(getAgentConfig(id)?.account, id).toBeDefined();
+    }
+  });
+});
+
 describe("mistral configuration", () => {
   it("uses /exit as the quitCommand (Vibe has no /quit alias)", () => {
     const resume = getAgentConfig("mistral")?.resume;
@@ -511,6 +551,25 @@ describe("mistral configuration", () => {
     const match = "Or: vibe --resume abc-123-def-456".match(re);
     expect(match?.[1]).toBe("abc-123-def-456");
     expect("vibe --continue".match(re)).toBeNull();
+  });
+
+  it("only selects agents Vibe 3 ships, and labels none of them read-only (#15568)", () => {
+    // Vibe 3.0 removed the `plan` agent; an explicit `--agent` naming a missing
+    // agent fails at startup. Built-ins per vibe/cli-rust/src/cli.rs in 3.0.4.
+    const vibeBuiltins = new Set(["ask", "accept-edits", "smart-approve", "auto-approve"]);
+    const presets = getAgentConfig("mistral")?.presets ?? [];
+    const selected = presets.flatMap((preset) =>
+      (preset.args ?? []).flatMap((arg, i, args) => {
+        if (arg === "--agent") return [args[i + 1]];
+        return arg.startsWith("--agent=") ? [arg.slice("--agent=".length)] : [];
+      })
+    );
+
+    expect(selected.length).toBeGreaterThan(0);
+    for (const agent of selected) expect(vibeBuiltins.has(agent!)).toBe(true);
+    for (const preset of presets) {
+      expect(`${preset.name} ${preset.description ?? ""}`).not.toMatch(/\bread[-\s]*only\b/i);
+    }
   });
 });
 
@@ -534,9 +593,28 @@ describe("kimi detection patterns", () => {
     return (patterns ?? []).map((p: string) => new RegExp(p, "im"));
   }
 
-  it.each(["✨", "💫", "📋", "$"])("matches prompt glyph %s", (glyph) => {
+  it.each([
+    ["an empty input box", "│ >                                        │"],
+    ["a draft in the input box", "│ > fix the failing test                   │"],
+    ["shell mode", "│ ! ls -la                                 │"],
+  ])("matches the boxed editor prompt row for %s", (_label, row) => {
     const patterns = compilePatterns("promptPatterns");
-    expect(patterns.some((p) => p.test(`${glyph} `))).toBe(true);
+    expect(patterns.some((p) => p.test(row))).toBe(true);
+  });
+
+  it.each([
+    // The archived Python client's prompt_toolkit glyphs.
+    ["✨ "],
+    ["💫 "],
+    ["📋 "],
+    ["$ npm test"],
+    // A transcript echo of something already sent is not the prompt.
+    ["❯ fix the failing test"],
+    // The welcome panel shares the box border.
+    ["│  Directory: /Users/test/project          │"],
+  ])("does not treat %j as the prompt", (line) => {
+    const patterns = compilePatterns("promptPatterns");
+    expect(patterns.some((p) => p.test(line))).toBe(false);
   });
 
   it.each(["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"])(
@@ -551,13 +629,12 @@ describe("kimi detection patterns", () => {
     }
   );
 
-  it("matches the kimi-cli welcome banner as boot-complete", () => {
+  it("matches the Kimi Code welcome panel as boot-complete", () => {
     const patterns = compilePatterns("bootCompletePatterns");
-    // Bare banner line (Rich Console.print output before Panel wrapping)
-    expect(patterns.some((p) => p.test("Welcome to Kimi Code CLI!"))).toBe(true);
-    // Banner wrapped in the Rich Panel box-drawing characters rendered in
-    // the live terminal — a literal substring match must still fire here.
-    expect(patterns.some((p) => p.test("╭─ Welcome to Kimi Code CLI! ─╮"))).toBe(true);
+    // Narrow terminals print the bare title line.
+    expect(patterns.some((p) => p.test("Welcome to Kimi Code!"))).toBe(true);
+    // The full panel puts the title beside the logo inside the box border.
+    expect(patterns.some((p) => p.test("│  ▐█▛█▛█▌  Welcome to Kimi Code!          │"))).toBe(true);
   });
 
   it("matches braille dots spinner with task description in fallback", () => {
@@ -578,6 +655,159 @@ describe("kimi detection patterns", () => {
     // cliclack spinner. The moon class is the only thing that earns primary.
     expect(patterns.some((p) => p.test("⠋ Thinking about the request"))).toBe(false);
     expect(patterns.some((p) => p.test("⠹ Working"))).toBe(false);
+  });
+});
+
+// The entry describes the current Rust product only. The Python package it
+// used to install is a different program with its own commands and docs.
+describe("Open Interpreter configuration (#15567)", () => {
+  const config = getAgentConfig("interpreter");
+
+  function compilePatterns(key: string): RegExp[] {
+    const patterns = config?.detection?.[key as keyof NonNullable<typeof config.detection>] as
+      string[] | undefined;
+    return (patterns ?? []).map((p: string) => new RegExp(p, "im"));
+  }
+  const anyMatch = (key: string, line: string) => compilePatterns(key).some((p) => p.test(line));
+
+  const installCommands = Object.values(config?.install?.byOs ?? {}).flatMap((blocks) =>
+    (blocks ?? []).flatMap((block) => block.commands ?? [])
+  );
+  const updateCommands = Object.values(config?.update ?? {}).filter(
+    (command): command is string => typeof command === "string"
+  );
+  const docsUrls = [
+    config?.usageUrl,
+    config?.install?.docsUrl,
+    ...(config?.externalLinks ?? []).map((link) => link.url),
+    ...(config?.prerequisites ?? []).map((prerequisite) => prerequisite.installUrl),
+  ].filter((url): url is string => typeof url === "string");
+  const urlsIn = (command: string) => command.match(/https:\/\/[^\s'"|]+/g) ?? [];
+
+  it("installs from the same site its docs live on, on every OS", () => {
+    for (const os of ["macos", "linux", "windows"] as const) {
+      const commands = (config?.install?.byOs?.[os] ?? []).flatMap((block) => block.commands ?? []);
+      expect(commands.length, `${os} has no install command`).toBeGreaterThan(0);
+      // POSIX hosts run the sh script; Windows runs the PowerShell one.
+      for (const command of commands) {
+        expect(command, `${os}: ${command}`).toMatch(
+          os === "windows" ? /^irm \S+\.ps1 \| iex$/ : /^curl \S+ \S+ \| sh$/
+        );
+      }
+    }
+    const docsHosts = new Set(docsUrls.map((url) => new URL(url).host));
+    expect(docsHosts.size).toBe(1);
+    for (const command of installCommands) {
+      const urls = urlsIn(command);
+      expect(urls, `${command} names no installer`).toHaveLength(1);
+      expect(docsHosts.has(new URL(urls[0] as string).host), command).toBe(true);
+    }
+  });
+
+  it("names none of the Python package's install or update commands", () => {
+    for (const command of [...installCommands, ...updateCommands]) {
+      expect(command).not.toMatch(/\b(?:pip|pipx|uv)\b|open-interpreter/);
+    }
+    expect(config?.packages?.pypi).toBeUndefined();
+    expect(config?.version?.pypiPackage).toBeUndefined();
+  });
+
+  it("updates through the installed CLI's own update subcommand", () => {
+    expect(updateCommands.length).toBeGreaterThan(0);
+    for (const command of updateCommands) {
+      expect(command.split(/\s+/)).toEqual([config?.command, "update"]);
+    }
+  });
+
+  it("links no docs page that documents a different program", () => {
+    // docs.openinterpreter.com redirects to the Rust product's pages, which
+    // install a different program than the Python commands this entry carried.
+    for (const url of docsUrls) {
+      expect(new URL(url).host).not.toBe("docs.openinterpreter.com");
+    }
+    // The install card's docs link and the missing-CLI gate send users to the
+    // same install page.
+    expect(new Set(config?.prerequisites?.map((p) => p.installUrl))).toEqual(
+      new Set([config?.install?.docsUrl])
+    );
+  });
+
+  it("reads its latest version and release notes from one repository", () => {
+    const repo = config?.version?.githubRepo;
+    expect(repo).toBeDefined();
+    // The Python project's old repository only redirects to the Rust one.
+    expect(repo).not.toBe("openinterpreter/open-interpreter");
+    expect(config?.version?.releaseNotesUrl).toContain(`github.com/${repo}/`);
+  });
+
+  it("looks for the binary where the standalone installers put it", () => {
+    for (const path of config?.nativePaths ?? []) {
+      expect(path).toMatch(new RegExp(`[\\\\/]${config?.command}(?:\\.exe)?$`));
+    }
+    expect(config?.nativePaths?.some((p) => p.startsWith("~/"))).toBe(true);
+    expect(config?.nativePaths?.some((p) => p.startsWith("%LOCALAPPDATA%"))).toBe(true);
+  });
+
+  it.each([
+    ["the session header card", "│ >_ Open Interpreter (v0.0.57)                  │"],
+    ["the plain transcript header", "Open Interpreter (v0.0.56)"],
+  ])("treats %s as boot-complete", (_label, line) => {
+    expect(anyMatch("bootCompletePatterns", line)).toBe(true);
+  });
+
+  it.each([
+    // The Python TUI's banner lines.
+    ["Welcome to **Open Interpreter**."],
+    ["▌ Model set to gpt-4o"],
+    // Onboarding only, not every launch.
+    ["Welcome to Open Interpreter"],
+    ["Open Interpreter docs"],
+  ])("does not treat %j as boot-complete", (line) => {
+    expect(anyMatch("bootCompletePatterns", line)).toBe(false);
+  });
+
+  it.each([
+    ["the empty composer", "› Ask Codex to do anything"],
+    ["a draft", "› fix the failing test"],
+    ["a bare glyph", "›"],
+  ])("matches %s as the prompt", (_label, line) => {
+    expect(anyMatch("promptPatterns", line)).toBe(true);
+  });
+
+  it.each([
+    // The Python TUI's bare prompt.
+    [">"],
+    ["> "],
+    ["│ >_ Open Interpreter (v0.0.57)                  │"],
+    ["> npm test"],
+  ])("does not treat %j as the prompt", (line) => {
+    expect(anyMatch("promptPatterns", line)).toBe(false);
+  });
+
+  it.each([
+    ["the default header", "• Working (0s • esc to interrupt)"],
+    [
+      "a reasoning header with a note",
+      "◦ Planning the migration (1m 05s • esc to interrupt) · 2 background terminals running",
+    ],
+    ["an hour-long turn", "⠋ Working (1h 02m 03s • esc to interrupt)"],
+  ])("matches %s as working", (_label, line) => {
+    expect(anyMatch("primaryPatterns", line)).toBe(true);
+  });
+
+  it.each([
+    // The Python TUI's working lines.
+    ["• Running code"],
+    ["· Executing python"],
+    ["```python"],
+    // The same line once the interrupt hint is gone.
+    ["• Working (12s)"],
+  ])("does not treat %j as working", (line) => {
+    const patterns = [
+      ...compilePatterns("primaryPatterns"),
+      ...compilePatterns("fallbackPatterns"),
+    ];
+    expect(patterns.some((p) => p.test(line))).toBe(false);
   });
 });
 
@@ -1187,11 +1417,102 @@ describe("all built-in agents have Windows or generic install", () => {
     "kimi",
     "amp",
     "aider",
+    "crush",
+    "kiro",
+    "antigravity",
   ])("%s has windows or generic install block", (agentId) => {
     const config = getAgentConfig(agentId);
     const hasWindows = (config?.install?.byOs?.windows?.length ?? 0) > 0;
     const hasGeneric = (config?.install?.byOs?.generic?.length ?? 0) > 0;
     expect(hasWindows || hasGeneric).toBe(true);
+  });
+});
+
+describe("crush and kiro Windows install help", () => {
+  it("offers the vendor-documented Windows routes", () => {
+    const crush = getAgentConfig("crush")!.install!.byOs!.windows!;
+    expect(crush.find((m) => m.label === "winget")?.commands).toEqual([
+      "winget install --id charmbracelet.crush -e --source winget --accept-source-agreements --accept-package-agreements",
+    ]);
+    expect(crush.find((m) => m.label === "Scoop")?.commands).toEqual([
+      "scoop bucket add charm https://github.com/charmbracelet/scoop-bucket.git",
+      "scoop install crush",
+    ]);
+    expect(getAgentConfig("kiro")!.install!.byOs!.windows![0]!.commands).toEqual([
+      "irm 'https://cli.kiro.dev/install.ps1' | iex",
+    ]);
+  });
+
+  it("states Kiro's Windows 11 / PowerShell requirement", () => {
+    const lines = getAgentConfig("kiro")!.install!.troubleshooting ?? [];
+    expect(lines.some((l) => /Windows 11/.test(l) && /PowerShell/.test(l))).toBe(true);
+  });
+
+  it.each(["crush", "kiro"])("%s troubleshooting never claims macOS/Linux only", (id) => {
+    const lines = getAgentConfig(id)!.install!.troubleshooting ?? [];
+    expect(lines.some((l) => /macOS and Linux only|only supported on macOS/i.test(l))).toBe(false);
+  });
+});
+
+// Google's CLI quickstart publishes a shell script for macOS and Linux and a
+// PowerShell or cmd.exe script for Windows, all served from the docs' own site.
+describe("Antigravity install help (#15622)", () => {
+  const config = getAgentConfig("antigravity")!;
+  const docsUrl = config.install?.docsUrl;
+  const installerUrl = (command: string) => {
+    const urls = command.match(/https:\/\/[^\s'"|]+/g) ?? [];
+    expect(urls, `${command} names one installer`).toHaveLength(1);
+    return new URL(urls[0]!);
+  };
+
+  // Each script must actually run: piped into its interpreter, or, for
+  // cmd.exe, downloaded, run, then cleaned up.
+  const runsTheScript = (command: string) => {
+    const script = installerUrl(command).pathname;
+    if (script.endsWith(".sh")) return /^curl -fsSL \S+ \| bash$/.test(command);
+    if (script.endsWith(".ps1")) return /^irm \S+ \| iex$/.test(command);
+    if (!script.endsWith(".cmd")) return false;
+    const file = /^curl -fsSL \S+ -o (\S+) /.exec(command)?.[1];
+    return !!file && command.endsWith(` -o ${file} && ${file} && del ${file}`);
+  };
+
+  it.each([
+    ["macos", /\.sh$/],
+    ["linux", /\.sh$/],
+    ["windows", /\.(?:ps1|cmd)$/],
+  ] as const)("offers the %s installer from the docs' site", (os, script) => {
+    const commands = (config.install?.byOs?.[os] ?? []).flatMap((block) => block.commands ?? []);
+    expect(commands.length, `${os} has no install command`).toBeGreaterThan(0);
+    for (const command of commands) {
+      const url = installerUrl(command);
+      expect(url.host, command).toBe(new URL(docsUrl!).host);
+      expect(url.pathname, command).toMatch(script);
+      expect(runsTheScript(command), command).toBe(true);
+    }
+  });
+
+  it("sends the docs link and the prerequisite's install link to the CLI quickstart", () => {
+    // The quickstart is the only Antigravity page with CLI install steps; the
+    // install page (/docs/install) covers sign-in, and the announcement post
+    // installs nothing.
+    expect(new URL(docsUrl!).pathname).toMatch(/^\/docs\/getting-started\/?$/);
+    const installUrls = (config.prerequisites ?? []).map((p) => p.installUrl);
+    expect(installUrls.length).toBeGreaterThan(0);
+    expect(new Set(installUrls)).toEqual(new Set([docsUrl]));
+  });
+
+  it("looks for the binary where the installers put it", () => {
+    const paths = config.nativePaths ?? [];
+    for (const path of paths) {
+      expect(path).toMatch(new RegExp(`[\\\\/]${config.command}(?:\\.exe)?$`));
+    }
+    expect(paths.some((p) => p.startsWith("~/"))).toBe(true);
+    expect(paths.some((p) => p.startsWith("%LOCALAPPDATA%"))).toBe(true);
+  });
+
+  it("stays out of the assistant until its wiring is verified against a live agy", () => {
+    expect(getAssistantSupportedAgentIds()).not.toContain("antigravity");
+    expect(getAssistantWiredAgentIds()).not.toContain("antigravity");
   });
 });
 
@@ -1225,6 +1546,93 @@ describe("claude providerTemplates descriptions", () => {
       (s) => s.key === "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
     );
     expect(suggestion?.hint).toContain("Monitor");
+  });
+});
+
+// #15570: Claude Code speaks only the Anthropic Messages API and posts to
+// `/v1/messages` under ANTHROPIC_BASE_URL, so a template aimed at an
+// OpenAI-style `/v1` surface creates a preset that can't reach the model.
+describe("claude providerTemplates endpoints and credentials", () => {
+  const templates = getAgentConfig("claude")?.providerTemplates ?? [];
+  const routed = templates.flatMap((t) =>
+    t.env?.ANTHROPIC_BASE_URL !== undefined
+      ? [{ id: t.id, env: t.env, base: t.env.ANTHROPIC_BASE_URL }]
+      : []
+  );
+  const isLoopback = (base: string) =>
+    ["localhost", "127.0.0.1", "[::1]"].includes(new URL(base).hostname);
+  const credentials = (env: Record<string, string> = {}) =>
+    Object.entries(env).filter(([key]) => isSensitiveEnvKey(key));
+  const messagesUrl = (base: string) => `${base.replace(/\/+$/, "")}/v1/messages`;
+
+  // Each provider's published Claude Code setup: the Messages endpoint it
+  // serves, the token it documents (blank for the user's key, or a local
+  // placeholder), and whether its guide blanks an inherited ANTHROPIC_API_KEY.
+  const documented = [
+    ["zai", "https://api.z.ai/api/anthropic/v1/messages", "", undefined],
+    ["openrouter", "https://openrouter.ai/api/v1/messages", "", ""],
+    ["deepseek", "https://api.deepseek.com/anthropic/v1/messages", "", undefined],
+    ["ollama", "http://localhost:11434/v1/messages", "ollama", ""],
+  ] as const;
+
+  it.each(documented)(
+    "%s follows its provider's documented Claude Code setup",
+    (id, endpoint, authToken, apiKey) => {
+      const env = templates.find((t) => t.id === id)?.env ?? {};
+      expect(env.ANTHROPIC_BASE_URL).toBeDefined();
+      expect(messagesUrl(env.ANTHROPIC_BASE_URL ?? "")).toBe(endpoint);
+      expect(env.ANTHROPIC_AUTH_TOKEN).toBe(authToken);
+      expect(env.ANTHROPIC_API_KEY).toBe(apiKey);
+    }
+  );
+
+  // Exhaustive, so a new routed template (and any local placeholder token it
+  // carries) can't ship without its provider's setup pinned above.
+  it("pins a documented setup for every routed template", () => {
+    expect(routed.map((t) => t.id).sort()).toEqual(documented.map(([id]) => id).sort());
+  });
+
+  it("never points a routed template at a /v1 base", () => {
+    expect(routed.length).toBeGreaterThan(0);
+    for (const t of routed) {
+      const segments = new URL(t.base).pathname.split("/").filter(Boolean);
+      expect(segments, t.id).not.toContain("v1");
+    }
+  });
+
+  it("never offers an endpoint as OpenAI-compatible", () => {
+    for (const t of templates) {
+      expect(`${t.id} ${t.name} ${t.description ?? ""}`, t.id).not.toMatch(/openai/i);
+    }
+  });
+
+  it("offers the custom endpoint as Anthropic-compatible", () => {
+    const custom = templates.find((t) => t.id.startsWith("custom"));
+    expect(custom?.name).toMatch(/anthropic/i);
+    expect(custom?.description).toMatch(/anthropic/i);
+  });
+
+  it("carries the credential variable on every routed template", () => {
+    for (const t of routed) expect(t.env, t.id).toHaveProperty("ANTHROPIC_AUTH_TOKEN");
+  });
+
+  // The one non-blank credential a template may carry is a local server's
+  // placeholder token: there is no key to issue, and Claude Code needs one set.
+  it("ships no secret: every credential is blank but a local server's token", () => {
+    for (const t of templates) {
+      const base = t.env?.ANTHROPIC_BASE_URL;
+      const local = base !== undefined && isLoopback(base);
+      for (const [key, value] of credentials(t.env)) {
+        if (local && key === "ANTHROPIC_AUTH_TOKEN") continue;
+        expect(value, `${t.id} ${key}`).toBe("");
+      }
+    }
+  });
+
+  it("gives a local server a placeholder token, so it launches without a key", () => {
+    const local = routed.filter((t) => isLoopback(t.base));
+    expect(local.length).toBeGreaterThan(0);
+    for (const t of local) expect(t.env.ANTHROPIC_AUTH_TOKEN, t.id).toBeTruthy();
   });
 });
 
@@ -1590,5 +1998,50 @@ describe("UserAgentConfigSchema supports field", () => {
     if (result.success) {
       expect(result.data.supports).toBeUndefined();
     }
+  });
+});
+
+describe("opencode install targets OpenCode 1", () => {
+  const config = getAgentConfig("opencode")!;
+  const byOs = config.install?.byOs ?? {};
+  const commandsFor = (os: "macos" | "linux" | "windows", label: string) =>
+    byOs[os]?.find((m) => m.label === label)?.commands;
+
+  // Unqualified `brew install opencode` is homebrew-core's OpenCode 2, and
+  // Scoop's extras/opencode manifest is deprecated; the entry targets V1.
+  it("installs OpenCode 1 through the anomalyco tap on macOS and Linux Homebrew", () => {
+    expect(commandsFor("macos", "Homebrew")).toEqual(["brew install anomalyco/tap/opencode"]);
+    expect(commandsFor("linux", "Homebrew")).toEqual(["brew install anomalyco/tap/opencode"]);
+  });
+
+  it("upgrades the same tapped formula", () => {
+    expect(config.update?.brew).toBe("brew upgrade anomalyco/tap/opencode");
+  });
+
+  it("installs from the Scoop main bucket, not the deprecated extras bucket", () => {
+    expect(commandsFor("windows", "Scoop")).toEqual(["scoop install main/opencode"]);
+  });
+
+  it("offers no unqualified Homebrew command anywhere", () => {
+    const all = [
+      ...Object.values(byOs).flatMap((methods) => (methods ?? []).flatMap((m) => m.commands ?? [])),
+      ...Object.values(config.update ?? {}).filter((c): c is string => typeof c === "string"),
+    ];
+    const brew = all.filter((c) => /\bbrew\b/.test(c));
+    for (const c of brew) {
+      expect(c).not.toMatch(/\bbrew\s+(install|upgrade)\s+opencode\b/);
+    }
+  });
+
+  it("reads versions from the active upstream repository", () => {
+    expect(config.version?.githubRepo).toBe("anomalyco/opencode");
+    expect(config.version?.releaseNotesUrl).toBe("https://github.com/anomalyco/opencode/releases");
+  });
+
+  it("tells users OpenCode 2 is unsupported and how to replace it", () => {
+    const notes = config.install?.troubleshooting?.find((t) => t.includes("OpenCode 2"));
+    expect(notes).toMatch(/not supported/);
+    expect(notes).toContain("brew uninstall opencode");
+    expect(notes).toContain("brew install anomalyco/tap/opencode");
   });
 });

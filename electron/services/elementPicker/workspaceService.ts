@@ -60,7 +60,12 @@ export interface ElementPickerLease {
 
 type WorkspaceHost = Pick<
   ElementPickerHost,
-  "registerWorkspace" | "releaseWorkspace" | "resolve" | "describeProject" | "sourceRevisions"
+  | "registerWorkspace"
+  | "releaseWorkspace"
+  | "resolve"
+  | "describeProject"
+  | "sourceRevisions"
+  | "holdSources"
 >;
 
 /** What an app search found: canonical or not, inside the worktree or not; the service checks. */
@@ -334,6 +339,15 @@ export class ElementPickerWorkspaceService {
       (host) => host.sourceRevisions(workspaceId, paths)
     );
     return { revisions };
+  }
+
+  async holdSources(
+    owner: ElementPickerWorkspaceOwner,
+    workspaceId: string,
+    paths: string[]
+  ): Promise<void> {
+    const lease = this.require(owner, workspaceId);
+    await this.withHost(lease, (host) => host.holdSources(workspaceId, paths));
   }
 
   /** For handler teardown: every lease goes, and nothing opens after. */

@@ -12,9 +12,14 @@ vi.mock("../../useTerminalFileTransfer", () => ({
 const logError = vi.hoisted(() => vi.fn());
 vi.mock("@/utils/logger", () => ({ logError }));
 
-const { useAttachFiles } = await import("../useAttachFiles");
+const pickHostPaths = vi.hoisted(() => vi.fn<() => Promise<string[] | null>>());
+vi.mock("@/components/HostFilePicker/hostFilePickerQueue", () => ({ pickHostPaths }));
+
+const { useAttachFiles, useAttachFromHost } = await import("../useAttachFiles");
 const { setRemoteMaterializer } = await import("@/services/materialize");
 const { getAllAtFileTokens } = await import("../../hybridInputParsing");
+const { getHeldBackAttachments, isComposerSendHeld, _resetPendingUploadsForTests } =
+  await import("../../uploads/pendingUploads");
 
 const CWD = "/Users/greg/Projects/daintree";
 
@@ -360,5 +365,99 @@ describe("useAttachFiles", () => {
       filePath: "/host/inbox/notes.txt",
       fileName: "notes.txt",
     });
+  });
+});
+
+// Sending waits for every attachment to be in the draft, so a hold left
+// behind on any way out would refuse every send after it (#15599).
+describe("useAttachFiles: the composer's send hold", () => {
+  const SURFACE = "composer:t1";
+
+  beforeEach(() => {
+    _resetPendingUploadsForTests();
+  });
+
+  afterEach(() => {
+    _resetPendingUploadsForTests();
+  });
+
+  it("holds the send while a host image's thumbnail comes back, though nothing uploads", async () => {
+    const shot = "/srv/proj/shot.png";
+    pickHostPaths.mockResolvedValueOnce([shot]);
+    const thumbnail = deferred<{ thumbnailDataUrl: string }>();
+    thumbnailFromPath.mockReturnValueOnce(thumbnail.promise);
+    const { dispatch, ref } = fakeView();
+    const { result } = renderHook(() => useAttachFromHost(ref, CWD, SURFACE));
+
+    let attached!: Promise<void>;
+    act(() => {
+      attached = result.current();
+    });
+    await vi.waitFor(() => expect(thumbnailFromPath).toHaveBeenCalledWith(shot));
+    expect(isComposerSendHeld(SURFACE)).toBe(true);
+    expect(dispatch).not.toHaveBeenCalled();
+
+    await act(async () => {
+      thumbnail.resolve({ thumbnailDataUrl: "data:image/png;base64,x" });
+      await attached;
+    });
+
+    expect(insertedText(dispatch).trimEnd()).toBe(shot);
+    expect(isComposerSendHeld(SURFACE)).toBe(false);
+  });
+
+  it("releases the hold when every pick fails to materialize", async () => {
+    setRemoteMaterializer(async () => {
+      throw new Error("link down");
+    });
+    pickAttachments.mockResolvedValue(["/Users/me/a.png", "/Users/me/b.txt"]);
+    const { dispatch, ref } = fakeView();
+    const { result } = renderHook(() => useAttachFiles(ref, CWD, SURFACE));
+
+    await act(async () => {
+      await result.current();
+    });
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(isComposerSendHeld(SURFACE)).toBe(false);
+  });
+
+  it("releases the hold, holding nothing back, when the editor is torn down mid-thumbnail", async () => {
+    pickAttachments.mockResolvedValue(["/tmp/shot.png"]);
+    const thumbnail = deferred<{ thumbnailDataUrl: string }>();
+    thumbnailFromPath.mockReturnValueOnce(thumbnail.promise);
+    const { dispatch, ref } = fakeView();
+    const { result } = renderHook(() => useAttachFiles(ref, CWD, SURFACE));
+
+    let attached!: Promise<void>;
+    act(() => {
+      attached = result.current();
+    });
+    await vi.waitFor(() => expect(thumbnailFromPath).toHaveBeenCalled());
+    ref.current = null;
+    await act(async () => {
+      thumbnail.resolve({ thumbnailDataUrl: "data:image/png;base64,x" });
+      await attached;
+    });
+
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(getHeldBackAttachments(SURFACE)).toEqual([]);
+    expect(isComposerSendHeld(SURFACE)).toBe(false);
+  });
+
+  it("releases the hold when the insertion itself throws", async () => {
+    pickAttachments.mockResolvedValue([`${CWD}/notes.md`]);
+    const { dispatch, ref } = fakeView();
+    dispatch.mockImplementation(() => {
+      throw new Error("view destroyed");
+    });
+    const { result } = renderHook(() => useAttachFiles(ref, CWD, SURFACE));
+
+    await act(async () => {
+      await result.current();
+    });
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(isComposerSendHeld(SURFACE)).toBe(false);
   });
 });

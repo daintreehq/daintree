@@ -558,7 +558,42 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // forge reads, so the default assistant can read a whole issue thread, check
   // several agents' PRs in one call and see which check failed. Their prose is
   // unchanged. In-app only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 23_750;
+  // 23_750 → 23_970 for `terminal.waitForExit` (#15728), measured at 23_961 B
+  // (+250): a caller that closed its panes waits, bounded, for their processes
+  // to exit before deleting the worktree. The prose has to carry the three
+  // outcomes and that the grace can be ended early. In-app only, off the
+  // external surface.
+  // 23_970 → 24_250 for `agent.launchInNewWorktree` (#15738), measured at
+  // 24_222 B. What the prose has to carry is that the source and the launch
+  // work as they do on their own, that it launches only once setup ends ready
+  // and otherwise says which way it ended, that the session owns both, and
+  // that a failure after creation hands back the worktree rather than inviting
+  // a retry that makes a second one. In-app only, off the external surface.
+  // 24_250 → 24_510 for `worktree.retireOwned` (#15737), measured at
+  // 24_480 B (+258): retiring a finished worktree on a host took six or
+  // seven calls, each a check the caller had to remember and order. The prose
+  // names the three refusals and that its own panes are closed and waited for
+  // first. In-app only, off the external surface.
+  // 24_510 → 25_220 for #16047's three user-preset writes, measured at 25_190 B
+  // (+710). Each has to say the user approves the exact change, that a value
+  // Daintree would drop at launch is refused, and that only the user's own
+  // presets can change; the create adds that it doesn't become the default, the
+  // edit how a patch clears a field. In-app only, off the external surface.
+  // 25_220 → 25_350 for `host.bringBack` (#16170), measured at 25_336 B (+188
+  // over develop's 25_148). The prose has to say what it tries in which order
+  // (a wake, then a start where Host mode is on), that it is bounded, that
+  // repeat calls join, and that it answers with observations. Assistant-only,
+  // off the external surface.
+  // 25_350 → 25_650 for `host.status` (#16191), measured at 25_623 B (+287 over
+  // develop's 25_336). It has to say it reads many projects on many hosts at
+  // once, that it answers as each project's own status read would, that screen
+  // tails are redacted, and that it is the read to make before steering an
+  // agent. Assistant-only, off the external surface.
+  // 25_650 → 25_780 for `terminal.cancelQueuedSend` (#16187), measured at
+  // 25_765 B (+142 over develop's 25_623): withdrawing a send held for a busy
+  // worker. The prose has to say a line already going in isn't taken back, and
+  // that the answer says which. Assistant-only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 25_780;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1095,6 +1130,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "terminal.killAll",
   "terminal.restart",
   "terminal.restartOnPreset",
+  "terminal.restartOnAccount",
   "terminal.restartOnPresetOwned",
   "terminal.restartAll",
   "terminal.startHeld",
@@ -1103,6 +1139,8 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   // Delegates into `worktree.delete` from the main process, so it has to carry
   // the same danger class — the delegation is what raises the modal.
   "worktree.deleteOwned",
+  // The same delegation after main's own checks and closes (#15737).
+  "worktree.retireOwned",
   "worktree.sessions.endAll",
   "worktree.sessions.trashAll",
   "worktree.sessions.restartAll",
@@ -1116,16 +1154,21 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "portal.links.remove",
   "keybinding.resetAll",
   "logs.clear",
+  "eventInspector.clear",
   "project.remove",
   "project.sleep",
   "project.restart",
   "project.sleepIdle",
+  "schedules.runNow",
   "recipe.delete",
   "recipe.run",
   "devPreview.restartAndClearCache",
   "devPreview.reinstallAndRestart",
   "artifact.applyPatch",
   "agentSettings.reset",
+  "agent.createPreset",
+  "agent.updatePreset",
+  "agent.deletePreset",
   "app.importConfig",
   "forge.createPR",
   "forge.closePR",
@@ -1165,6 +1208,7 @@ const CONFIRMED_WIRED: ReadonlyArray<ActionId> = [
   "terminal.killAll",
   "terminal.restart",
   "terminal.restartOnPreset",
+  "terminal.restartOnAccount",
   "terminal.restartAll",
   "worktree.delete",
   "worktree.sessions.endAll",
@@ -1175,6 +1219,7 @@ const CONFIRMED_WIRED: ReadonlyArray<ActionId> = [
   "worktree.resource.openOnHost",
   "keybinding.resetAll",
   "logs.clear",
+  "eventInspector.clear",
   "recipe.delete",
   "devPreview.restartAndClearCache",
   "devPreview.reinstallAndRestart",
@@ -1197,6 +1242,9 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   "project.sleep",
   "project.sleepIdle",
   "project.restart",
+  // Deferred-promise via scheduleRunConfirmStore (#15980); run() awaits the
+  // app-level ScheduleRunConfirmDialog only when earlier runs are still open.
+  "schedules.runNow",
   // The fleet ribbon's own inline confirmation (useFleetPendingActionStore,
   // buildConfirmMessage), not a ConfirmDialog-family component.
   "fleet.kill",
@@ -1236,6 +1284,9 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // process checks session ownership and then delegates to `worktree.delete`,
   // so the modal a user answers is wired under that id, above.
   "worktree.deleteOwned",
+  // Same shape (#15737): main checks, closes the session's panes and waits,
+  // then delegates to `worktree.delete`.
+  "worktree.retireOwned",
   // Same shape (#14369): main checks the session launched the pane, then
   // delegates to `terminal.restartOnPreset`, whose confirm is wired above.
   "terminal.restartOnPresetOwned",
@@ -1264,6 +1315,12 @@ const BYPASS_WIRED: ReadonlyArray<ActionId> = [
   // all agents at once is destructive-local with no undo); there is no UI
   // ConfirmDialog because there is no user-facing dispatch path.
   "agentSettings.reset",
+  // The user-preset writes (#16047) are agent/MCP-only and palette-hidden;
+  // Settings edits presets through the store directly, not ActionService. The
+  // confirm is the generic McpConfirmDialog, previewing the exact change.
+  "agent.createPreset",
+  "agent.updatePreset",
+  "agent.deletePreset",
   // ConfirmDialog with diff preview in ArtifactOverlay.tsx; the dispatch lives in
   // useArtifacts.ts (action ID not co-located with the dialog component).
   "artifact.applyPatch",
@@ -1389,6 +1446,8 @@ describe("destructive-action danger metadata", () => {
       terminalIds: ["term-placeholder"],
       // terminal.restartOnPreset names the preset to respawn on.
       presetId: "preset-placeholder",
+      // terminal.restartOnAccount names the account to respawn on.
+      accountId: "account-placeholder",
       // terminal.startHeld names how the held pane starts.
       start: "fresh",
       // session.bookmarkAndClose/delete need label + sessionId to clear arg
@@ -1402,6 +1461,15 @@ describe("destructive-action danger metadata", () => {
       // base-branch default resolved inside a destructive submit is exactly the
       // silent fallback the D-tier rules call a review blocker.
       baseBranch: "develop",
+      // schedules.runNow names the schedule to run.
+      scheduleId: "schedule-placeholder",
+    };
+    // Strict schemas, which the union above can't satisfy: its extra keys are
+    // themselves a VALIDATION_ERROR, so the confirm gate would never be reached.
+    const STRICT_ARGS: Readonly<Record<string, Record<string, unknown>>> = {
+      "agent.createPreset": { agentId: "claude", name: "placeholder" },
+      "agent.updatePreset": { agentId: "claude", presetId: "preset-placeholder", name: "p" },
+      "agent.deletePreset": { agentId: "claude", presetId: "preset-placeholder" },
     };
 
     // Some listed actions (e.g. worktree.resource.teardown) gate availability
@@ -1475,7 +1543,7 @@ describe("destructive-action danger metadata", () => {
     const failures: string[] = [];
     try {
       for (const id of EXPECTED_CONFIRM_DANGER) {
-        const result = await service.dispatch(id, placeholderArgs, {
+        const result = await service.dispatch(id, STRICT_ARGS[id] ?? placeholderArgs, {
           source: "agent",
           contextOverride,
         });
@@ -1538,8 +1606,10 @@ describe("plugin-dispatch injection guard (#10558)", () => {
     // project.runCheck requires projectId + runnerId; the terminal-watch tools
     // take terminalIds or a watchId; plugin.reloadPanel a panelId;
     // plugin.backupDatabases a pluginId; plugin.setNotificationsSilenced a
-    // pluginId and a flag; agentSettings.set an agentId and settings). Schemas
-    // are non-strict, so the union satisfies every denied action.
+    // pluginId and a flag; agentSettings.set an agentId and settings;
+    // worktree.retireOwned a worktreeId; schedules.runNow a scheduleId;
+    // terminal.cancelQueuedSend a queuedSendToken). Schemas are non-strict, so
+    // the union satisfies every denied action.
     const args = {
       terminalId: "t-placeholder",
       panelId: "p-placeholder",
@@ -1553,6 +1623,9 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       agentId: "claude",
       settings: {},
       silenced: true,
+      worktreeId: "/wt/placeholder",
+      scheduleId: "s-placeholder",
+      queuedSendToken: "q-placeholder",
     };
     // ...except where a schema is strict, which the union above cannot satisfy:
     // the extra keys are themselves a VALIDATION_ERROR, so dispatch would never
@@ -1565,8 +1638,13 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "terminal.placeOwned": { terminalId: "t-placeholder", location: "dock" },
       "terminal.restartOnPresetOwned": { terminalId: "t-placeholder", presetId: "p-placeholder" },
       "agent.launchMany": { agentIds: ["claude"], prompt: "p" },
+      "agent.launchInNewWorktree": {
+        source: { kind: "newBranch", branchName: "b-placeholder" },
+        agentId: "claude",
+      },
       "terminal.sendCommandMany": { sends: [{ terminalId: "t-placeholder", command: "c" }] },
       "terminal.closeMany": { terminalIds: ["t-placeholder"] },
+      "terminal.setWhenDone": { terminalId: "t-placeholder", choice: "keep" },
       "assistant.list": {},
       "assistant.start": {},
       "agent.readQuota": {},
@@ -1575,6 +1653,11 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "host.ensureProject": { hostId: "h-placeholder" },
       "host.settings": { operation: "read", hostIds: ["h-placeholder"] },
       "host.watch": { operation: "list" },
+      "host.bringBack": { hostId: "h-placeholder" },
+      "host.status": { targets: [{ hostId: "h-placeholder", projectId: "p-placeholder" }] },
+      "agent.createPreset": { agentId: "claude", name: "p-placeholder" },
+      "agent.updatePreset": { agentId: "claude", presetId: "p-placeholder", name: "p" },
+      "agent.deletePreset": { agentId: "claude", presetId: "p-placeholder" },
     };
 
     const failures: string[] = [];

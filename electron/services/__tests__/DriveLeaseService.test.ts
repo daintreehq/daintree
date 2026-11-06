@@ -29,7 +29,7 @@ import type {
   DriveLeaseEvent,
   DriveLeaseNavigation,
 } from "../../../shared/types/ipc/driveLease.js";
-import type { DriveLeaseState } from "../../../shared/types/remoteHosts.js";
+import type { DriveLeaseHolder, DriveLeaseState } from "../../../shared/types/remoteHosts.js";
 import type { PtyHostDriveLease } from "../../../shared/types/pty-host.js";
 
 class FakeEndpoint implements ClientEndpoint {
@@ -504,20 +504,292 @@ describe("DriveLeaseService", () => {
     expect(new Set([taken.tenureId, elsewhere.tenureId, back.tenureId]).size).toBe(3);
   });
 
-  it("starts a new tenure once nobody held the project", async () => {
-    const laptop = remote("s1:e1", "c1");
-    registry.add(laptop);
-    await settle();
-    const first = service.getHolder("p")!;
+  describe("once the grace runs out with nobody there (#15918)", () => {
+    /** The laptop drives p, then its link stays down past the grace: nobody holds p. */
+    async function vacateAfterDriving(laptop = remote("s1:e1", "c1")) {
+      registry.add(laptop);
+      await settle();
+      const first = service.getHolder("p")!;
+      service.noteEndpointTransport([laptop.endpointId], false);
+      vi.advanceTimersByTime(GRACE_MS);
+      expect(service.snapshotLeases()).toEqual([]);
+      expect(service.keepsUnheldTenures()).toBe(true);
+      return { laptop, first };
+    }
 
-    service.noteEndpointTransport([laptop.endpointId], false);
-    vi.advanceTimersByTime(GRACE_MS);
-    expect(service.getState("p").holder).toBeNull();
-    service.noteEndpointTransport([laptop.endpointId], true);
+    /** The laptop's client takes p back on a fresh session; its holder, as granted. */
+    async function comeBackOnAFreshSession(laptop: FakeEndpoint) {
+      laptop.close();
+      const reopened = remote("s2:e1", "c1");
+      registry.add(reopened);
+      await settle();
+      const holder = service.getHolder("p");
+      expect(holder?.endpointId).toBe("s2:e1");
+      return holder!;
+    }
 
-    const regranted = service.getHolder("p")!;
-    expect(regranted.endpointId).toBe("s1:e1");
-    expect(regranted.tenureId).not.toBe(first.tenureId);
+    function expectNewTenure(holder: DriveLeaseHolder, first: DriveLeaseHolder) {
+      expect(holder.tenureId).toEqual(expect.any(String));
+      expect(holder.tenureId).not.toBe(first.tenureId);
+    }
+
+    it("keeps the tenure for the client that comes back, however long it was away", async () => {
+      const { laptop, first } = await vacateAfterDriving();
+      vi.advanceTimersByTime(GRACE_MS * 60);
+
+      service.noteEndpointTransport([laptop.endpointId], true);
+
+      const regranted = service.getHolder("p")!;
+      expect(regranted.endpointId).toBe("s1:e1");
+      expect(regranted.leaseId).toBeGreaterThan(first.leaseId);
+      expect(regranted.tenureId).toBe(first.tenureId);
+      expect(laptop.events().at(-1)?.state.holder?.tenureId).toBe(first.tenureId);
+      expect(service.keepsUnheldTenures()).toBe(false);
+    });
+
+    it("keeps it for the same client back on a fresh session", async () => {
+      const { laptop, first } = await vacateAfterDriving();
+      expect((await comeBackOnAFreshSession(laptop)).tenureId).toBe(first.tenureId);
+    });
+
+    it("starts a new tenure once another Shell held the project in the gap", async () => {
+      const { laptop, first } = await vacateAfterDriving();
+      const other = remote("s9:e1", "c2");
+      registry.add(other);
+      await settle();
+      expect(service.getHolder("p")?.clientId).toBe("c2");
+      other.close();
+      await settle();
+      vi.advanceTimersByTime(GRACE_MS);
+      expect(service.snapshotLeases()).toEqual([]);
+
+      service.noteEndpointTransport([laptop.endpointId], true);
+
+      expect(service.getHolder("p")?.endpointId).toBe("s1:e1");
+      expectNewTenure(service.getHolder("p")!, first);
+    });
+
+    it("starts a new tenure once a window on the Host's screen opened the project in the gap", async () => {
+      const { laptop, first } = await vacateAfterDriving();
+      // The laptop's view is still registered on p, so the window is granted it.
+      const hostWindow = local(1);
+      registry.add(hostWindow);
+      await settle();
+      expect(service.getHolder("p")?.clientId).toBe("local");
+      hostWindow.close();
+      await settle();
+      vi.advanceTimersByTime(GRACE_MS);
+      expect(service.snapshotLeases()).toEqual([]);
+
+      service.noteEndpointTransport([laptop.endpointId], true);
+
+      expect(service.getHolder("p")?.endpointId).toBe("s1:e1");
+      expectNewTenure(service.getHolder("p")!, first);
+    });
+
+    it("ends the tenure once a Host window shows the project with no Shell attached at all", async () => {
+      const { laptop, first } = await vacateAfterDriving();
+      laptop.close();
+      await settle();
+      expect(service.keepsUnheldTenures()).toBe(true);
+      // A project only this machine's windows show is held by nobody, so they drive it.
+      const hostWindow = local(1);
+      registry.add(hostWindow);
+      await settle();
+      expect(service.snapshotLeases()).toEqual([]);
+      expect(service.keepsUnheldTenures()).toBe(false);
+      hostWindow.close();
+
+      expectNewTenure(await comeBackOnAFreshSession(laptop), first);
+    });
+
+    it("ends it once a Host window on another project asks whether it drives this one", async () => {
+      // As a view leaving the project it drove does before saving what it leaves.
+      const { laptop, first } = await vacateAfterDriving();
+      const hostWindow = local(1, "q");
+      registry.add(hostWindow);
+      await settle();
+      expect(service.keepsUnheldTenures()).toBe(true);
+
+      expect(service.isDriving("p", hostWindow)).toBe(true);
+      expect(service.keepsUnheldTenures()).toBe(false);
+
+      expectNewTenure(await comeBackOnAFreshSession(laptop), first);
+    });
+
+    it("ends it once a Host window moved onto the project makes a gated call", async () => {
+      const { laptop, first } = await vacateAfterDriving();
+      laptop.close();
+      const hostWindow = local(1, "q");
+      registry.add(hostWindow);
+      await settle();
+      // A local view's binding is read live: moving projects tells the registry nothing.
+      hostWindow.projectId = "p";
+      expect(service.projectsDrivenElsewhere(hostWindow).size).toBe(0);
+      hostWindow.projectId = "q";
+      expect(service.keepsUnheldTenures()).toBe(false);
+
+      expectNewTenure(await comeBackOnAFreshSession(laptop), first);
+    });
+
+    it("ends it when a Host window is on the project as the client takes it back", async () => {
+      const { laptop, first } = await vacateAfterDriving();
+      laptop.close();
+      const hostWindow = local(1, "q");
+      registry.add(hostWindow);
+      await settle();
+      hostWindow.projectId = "p";
+
+      // Taken before any reconcile could see the window: the grant itself looks.
+      const reopened = remote("s2:e1", "c1");
+      registry.add(reopened);
+      const taken = service.takeOver("p", reopened);
+
+      expect(taken.endpointId).toBe("s2:e1");
+      expectNewTenure(taken, first);
+    });
+
+    it("ends it for a change the lease gate let through to the project, and only that one", async () => {
+      const { laptop, first } = await vacateAfterDriving();
+      const hostWindow = local(1, "q");
+      registry.add(hostWindow);
+      await settle();
+
+      // A window on q saving to q, and the laptop's own client changing p, end nothing.
+      service.noteUnheldChange(hostWindow, ["q"]);
+      service.noteUnheldChange(remote("s1:e2", "c1", "q"), ["p"]);
+      expect(service.keepsUnheldTenures()).toBe(true);
+      service.noteUnheldChange(hostWindow, ["p"]);
+      expect(service.keepsUnheldTenures()).toBe(false);
+
+      expectNewTenure(await comeBackOnAFreshSession(laptop), first);
+    });
+
+    it("ends every tenure but the caller's own for a gated call whose target couldn't be traced", async () => {
+      const { laptop: laptopOnP, first: onP } = await vacateAfterDriving();
+      const studio = remote("s3:e1", "c2", "q");
+      registry.add(studio);
+      await settle();
+      const onQ = service.getHolder("q")!;
+      service.noteEndpointTransport([studio.endpointId], false);
+      vi.advanceTimersByTime(GRACE_MS);
+      expect(service.snapshotLeases()).toEqual([]);
+
+      // Another window of the laptop's client, on a third project.
+      service.noteUnheldChange(remote("s4:e1", "c1", "r"), "every");
+
+      service.noteEndpointTransport([laptopOnP.endpointId, studio.endpointId], true);
+      expect(service.getHolder("p")?.tenureId).toBe(onP.tenureId);
+      expect(service.getHolder("q")?.endpointId).toBe("s3:e1");
+      expectNewTenure(service.getHolder("q")!, onQ);
+    });
+
+    it("judges a change made for a link session with no view by that session", async () => {
+      const { laptop, first } = await vacateAfterDriving(remote("remote:s1:e1", "c1"));
+      // The laptop's own assistant, relayed on its link session.
+      service.noteSessionChange("p", "s1");
+      expect(service.keepsUnheldTenures()).toBe(true);
+      // This machine's own assistant, or another Shell's.
+      service.noteSessionChange("p", null);
+      expect(service.keepsUnheldTenures()).toBe(false);
+
+      service.noteEndpointTransport([laptop.endpointId], true);
+      expect(service.getHolder("p")?.endpointId).toBe("remote:s1:e1");
+      expectNewTenure(service.getHolder("p")!, first);
+    });
+
+    it("ends it for another Shell's change made with no view", async () => {
+      const { laptop, first } = await vacateAfterDriving(remote("remote:s1:e1", "c1"));
+      service.noteSessionChange("p", "s9");
+      service.noteEndpointTransport([laptop.endpointId], true);
+      expect(service.getHolder("p")?.endpointId).toBe("remote:s1:e1");
+      expectNewTenure(service.getHolder("p")!, first);
+    });
+
+    it("keeps a Host window's tenure through this machine's own change made with no view", async () => {
+      const hostWindow = local(1);
+      const laptop = remote("s1:e1", "c1");
+      registry.add(hostWindow);
+      registry.add(laptop);
+      await settle();
+      const first = service.takeOver("p", hostWindow);
+      service.noteEndpointTransport([laptop.endpointId], false);
+      hostWindow.close();
+      await settle();
+      vi.advanceTimersByTime(GRACE_MS);
+      expect(service.snapshotLeases()).toEqual([]);
+
+      service.noteSessionChange("p", null);
+      expect(service.keepsUnheldTenures()).toBe(true);
+      service.noteSessionChange("p", "s1");
+      expect(service.keepsUnheldTenures()).toBe(false);
+
+      const reopened = local(2);
+      registry.add(reopened);
+      expectNewTenure(service.takeOver("p", reopened), first);
+    });
+
+    it("judges a Canopy panel or a paired device by its link session, not the client it claims", async () => {
+      const standing = (endpointId: string, linkSessionId: string) =>
+        Object.assign(new FakeEndpoint(endpointId, "c1", null, "remote-view"), { linkSessionId });
+      const { laptop, first } = await vacateAfterDriving(remote("remote:s1:e1", "c1"));
+
+      for (const own of [standing("canopy-viewer:v1", "s1"), standing("device-answer:d1", "s1")]) {
+        expect(service.isDriving("p", own)).toBe(true);
+        expect(service.drivingLeaseId("p", own)).toBeNull();
+      }
+      expect(service.keepsUnheldTenures()).toBe(true);
+
+      // Another Shell's panel claiming the laptop's client id drives too, while nobody holds p.
+      expect(service.isDriving("p", standing("canopy-viewer:v2", "s9"))).toBe(true);
+      expect(service.keepsUnheldTenures()).toBe(false);
+
+      service.noteEndpointTransport([laptop.endpointId], true);
+      expect(service.getHolder("p")?.endpointId).toBe("remote:s1:e1");
+      expectNewTenure(service.getHolder("p")!, first);
+    });
+
+    it("ends it for a paired device of another Shell asking for its lease id", async () => {
+      await vacateAfterDriving(remote("remote:s1:e1", "c1"));
+      const device = Object.assign(
+        new FakeEndpoint("device-answer:d2", "c1", null, "remote-view"),
+        { linkSessionId: "s9" }
+      );
+      expect(service.drivingLeaseId("p", device)).toBeNull();
+      expect(service.keepsUnheldTenures()).toBe(false);
+    });
+
+    it("keeps it through a caller whose link is down, and a viewless action's own calls", async () => {
+      const { laptop, first } = await vacateAfterDriving();
+      const studio = remote("s3:e1", "c2", "q");
+      registry.add(studio);
+      await settle();
+      service.noteEndpointTransport([studio.endpointId], false);
+      const viewless = new FakeEndpoint("viewless:p", "local", "p", "local-view", 0);
+
+      for (const caller of [studio, viewless]) {
+        expect(service.isDriving("p", caller)).toBe(true);
+        expect(service.drivingLeaseId("p", caller)).toBeNull();
+        service.noteUnheldChange(caller, ["p"]);
+      }
+      expect(service.keepsUnheldTenures()).toBe(true);
+
+      service.noteEndpointTransport([laptop.endpointId], true);
+      expect(service.getHolder("p")?.tenureId).toBe(first.tenureId);
+    });
+
+    it("keeps the tenure through a Host window that only showed another project", async () => {
+      const { laptop, first } = await vacateAfterDriving();
+      const hostWindow = local(1, "q");
+      registry.add(hostWindow);
+      await settle();
+      expect(service.isDriving("q", hostWindow)).toBe(true);
+      service.noteUnheldChange(hostWindow, ["q"]);
+
+      service.noteEndpointTransport([laptop.endpointId], true);
+
+      expect(service.getHolder("p")?.tenureId).toBe(first.tenureId);
+    });
   });
 
   it("treats a remote view rebound to another project as having left", async () => {
@@ -1206,6 +1478,64 @@ describe("DriveLeaseService across a restart of this app", () => {
       platform: "darwin",
       kind: "remote",
     });
+
+  it("keeps the tenure of a project nobody held across the restart, holding nothing for it (#15918)", async () => {
+    service.dispose();
+    const memory = memoryStore();
+    service = new DriveLeaseService({
+      registry,
+      releaseGraceMs: GRACE_MS,
+      now: () => 1_000,
+      applyDriveLeases: (leases) => leaseTables.push(leases),
+      reservations: memory.store,
+    });
+    const laptop = remote("s1:e1", "shell-launch-1");
+    registry.add(laptop);
+    noteClient(laptop, "shell-launch-1", "greg-mbp");
+    await settle();
+    const { tenureId } = service.getHolder("p")!;
+    service.noteEndpointTransport([laptop.endpointId], false);
+    vi.advanceTimersByTime(GRACE_MS);
+    expect(memory.saved.at(-1)).toEqual({ p: { ...greg, tenureId, vacant: true } });
+    laptop.close();
+    service.dispose();
+
+    const { next } = restarted(memory.saved.at(-1)!);
+    service = next;
+    // Nothing is reserved: this machine's windows drive it as one nobody holds.
+    expect(service.snapshotLeases()).toEqual([]);
+    expect(service.keepsUnheldTenures()).toBe(true);
+    vi.advanceTimersByTime(RESTORED_GRACE_MS);
+
+    const reopened = remote("s2:e1", "shell-launch-1");
+    registry.add(reopened);
+    await settle();
+    expect(service.getHolder("p")).toMatchObject({ endpointId: "s2:e1", tenureId });
+  });
+
+  it("knows a restored tenure's own client by its session's other views", async () => {
+    service.dispose();
+    const { next } = restarted({ p: { ...greg, tenureId: "kept", vacant: true } });
+    service = next;
+    // The Shell is back on a new session, with a view on another project only.
+    registry.add(remote("remote:s5:e1", "shell-launch-1", "q"));
+    await settle();
+
+    service.noteSessionChange("p", "s5");
+    expect(service.keepsUnheldTenures()).toBe(true);
+    service.noteSessionChange("p", "s6");
+    expect(service.keepsUnheldTenures()).toBe(false);
+  });
+
+  it("forgets a restored tenure, and its saved entry, once anyone else is on the project", async () => {
+    service.dispose();
+    const { next, memory } = restarted({ p: { ...greg, tenureId: "kept", vacant: true } });
+    service = next;
+    registry.add(local(1));
+    await settle();
+    expect(service.keepsUnheldTenures()).toBe(false);
+    expect(memory.saved.at(-1)).toEqual({});
+  });
 
   it("keeps the remote holders it grants, and forgets a project once this machine drives it", async () => {
     service.dispose();

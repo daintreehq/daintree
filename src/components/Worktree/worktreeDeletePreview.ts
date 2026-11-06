@@ -60,10 +60,12 @@ export async function buildWorktreeDeletePreview(
     return null;
   }
   const changes = fresh.changes ?? [];
+  const omittedUntrackedCount = fresh.omittedUntrackedCount ?? 0;
   return {
-    ...summarizeWorktreeChanges(changes),
+    ...summarizeWorktreeChanges(changes, omittedUntrackedCount),
     changes,
     rootPath: fresh.rootPath,
+    ...(omittedUntrackedCount > 0 ? { omittedUntrackedCount } : {}),
     ...(fresh.ahead === undefined ? {} : { ahead: fresh.ahead }),
     submodules: await submodulePromise,
   };

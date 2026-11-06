@@ -91,6 +91,13 @@ export interface ViewSink {
    * delivers nothing to, and carries no streams for, a view bound elsewhere.
    */
   hostOf?(webContentsId: number): HostId | null;
+  /**
+   * The host now says an agent in the view's project is active, where before
+   * it said none was (#15879). A view frozen in the meantime must wake: the
+   * host streams that agent's output into it, and a frozen renderer can't
+   * acknowledge any of it.
+   */
+  agentActivated?(webContentsId: number): void;
 }
 
 interface OpenEndpoint {
@@ -167,6 +174,13 @@ function notifyEndpointOpened(
  */
 /** How long a host gets to list its projects before the listing counts as failed. */
 export const HOST_PROJECT_LIST_TIMEOUT_MS = 8_000;
+
+/**
+ * How long a host gets to describe a project, or name the one this Shell last
+ * showed there, before the lookup counts as failed: a switch waits on these,
+ * and a wedged host should fail it as soon as it fails a listing.
+ */
+export const HOST_PROJECT_LOOKUP_TIMEOUT_MS = HOST_PROJECT_LIST_TIMEOUT_MS;
 
 export class HostConnection {
   readonly hostId: HostId;
@@ -462,6 +476,7 @@ export class HostConnection {
           detail: state.detail,
           ...(state.hostModeOff && state.retryAt === null ? { hostModeOff: true as const } : {}),
           ...(state.restarting ? { restarting: true as const } : {}),
+          ...(state.answered ? { answered: true as const } : {}),
           ...(state.retryAt === null ? { stoppedRetrying: true as const } : {}),
         };
       case "version-mismatch":
@@ -539,7 +554,11 @@ export class HostConnection {
    * down, drops mid-call or sends something unreadable rejects instead, so a
    * blip is never reported as the project being gone.
    */
-  async describeProject(projectId: string): Promise<ProjectDescription | null> {
+  async describeProject(
+    projectId: string,
+    /** How long the host gets to answer: a switch's bound, or null for the link's own. */
+    timeoutMs: number | null = HOST_PROJECT_LOOKUP_TIMEOUT_MS
+  ): Promise<ProjectDescription | null> {
     const session = this.session;
     if (!session || !session.isOpen) {
       throw new AppError({
@@ -548,7 +567,11 @@ export class HostConnection {
         userMessage: "Couldn't reach this host. Check that it is on and try again.",
       });
     }
-    const answer = await session.call(LinkMethod.DESCRIBE_PROJECT, { projectId });
+    const answer = await session.call(
+      LinkMethod.DESCRIBE_PROJECT,
+      { projectId },
+      timeoutMs === null ? {} : { timeoutMs }
+    );
     if (answer === null) return null;
     const parsed = ProjectDescriptionSchema.safeParse(answer);
     if (!parsed.success) {
@@ -603,7 +626,9 @@ export class HostConnection {
   async lastActiveProject(): Promise<ProjectDescription | null> {
     const session = this.session;
     if (!session || !session.isOpen) return null;
-    const answer = await session.call(LinkMethod.LAST_ACTIVE_PROJECT, null);
+    const answer = await session.call(LinkMethod.LAST_ACTIVE_PROJECT, null, {
+      timeoutMs: HOST_PROJECT_LOOKUP_TIMEOUT_MS,
+    });
     const parsed = ProjectDescriptionSchema.safeParse(answer);
     return parsed.success ? parsed.data : null;
   }
@@ -718,13 +743,22 @@ export class HostConnection {
       LinkMethod.ENDPOINT_AGENT_ACTIVITY,
       EndpointAgentActivityPayloadSchema,
       ({ endpoints }) => {
+        const activated: number[] = [];
         for (const { endpointId, projectId, active } of endpoints) {
           const webContentsId = this.viewsByEndpoint.get(endpointId);
           if (webContentsId === undefined) continue;
           // Said about a binding the view has since left.
           if (this.endpoints.get(webContentsId)?.projectId !== projectId) continue;
+          if (active && !this.activeAgentViews.has(webContentsId)) activated.push(webContentsId);
           if (active) this.activeAgentViews.add(webContentsId);
           else this.activeAgentViews.delete(webContentsId);
+        }
+        for (const webContentsId of activated) {
+          try {
+            this.views.agentActivated?.(webContentsId);
+          } catch (error) {
+            console.error("[RemoteHostManager] agent-activated sink failed:", error);
+          }
         }
         return null;
       }
@@ -783,7 +817,8 @@ export class HostConnection {
       const reconcile: EndpointReconcilePayload = {
         endpointIds: [...this.endpoints.values()].map((open) => open.endpointId),
       };
-      session.call(LinkMethod.ENDPOINT_RECONCILE, reconcile).catch(() => {});
+      // No deadline: a notice that settles unsent is dropped, and nothing sends it again.
+      session.call(LinkMethod.ENDPOINT_RECONCILE, reconcile, { timeoutMs: 0 }).catch(() => {});
     }
     // A resume keeps the host's endpoints, so the views' streams move to the new session.
     for (const [webContentsId, open] of [...this.endpoints]) {
@@ -1386,6 +1421,9 @@ export class RemoteHostManager {
       this.options.registry.recordObservation(hostId, { lastSeenAt: this.now() });
     }
     await connection.stop();
+    // Dialled again while this one stopped: the newer connection's own states
+    // are what the host is, and this would land on top of them.
+    if (this.connections.has(hostId)) return;
     this.emit(hostId, { status: "disconnected" });
   }
 

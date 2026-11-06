@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Lock, Moon } from "lucide-react";
+import { Lock } from "lucide-react";
 import { OctagonAlert, TriangleAlert } from "@/components/icons";
 import type { AgentState, PanelKind } from "@/types";
 import { cn } from "@/lib/utils";
@@ -21,7 +21,9 @@ import {
 } from "./terminalHeaderChip";
 import { TerminalDrivenByBadge } from "./TerminalHandOver";
 import { TerminalRateLimitBadge } from "./TerminalRateLimitBadge";
+import { TerminalWhenDoneBadge } from "./TerminalWhenDoneBadge";
 import { TerminalNotifyChip } from "./TerminalNotifyChip";
+import { TerminalDecisionsChip } from "./TerminalDecisionsChip";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { describeExitStatus } from "./exitStatus";
 import { pluralize } from "@/lib/pluralize";
@@ -43,11 +45,6 @@ export interface TerminalHeaderContentProps {
    * Leads the settled trace chip with "Nothing to commit".
    */
   completedWithNoChanges?: boolean;
-  /**
-   * True when the terminal's renderer is hibernated (PTY preserved, xterm
-   * disposed). Drives the ambient Moon pill — Tier-1 only, no toast.
-   */
-  isHibernated?: boolean;
 }
 
 /**
@@ -234,7 +231,6 @@ export function TerminalHeaderContent({
   exitCode = null,
   queueCount = 0,
   completedWithNoChanges = false,
-  isHibernated = false,
 }: TerminalHeaderContentProps) {
   const resourceEnabled = useResourceMonitoringStore((s) => s.enabled);
   const resourceState = useResourceMonitoringStore((s) => s.metrics.get(id));
@@ -328,7 +324,7 @@ export function TerminalHeaderContent({
             )}
             {sessionCost != null && (
               <span className="shrink-0 whitespace-pre" aria-hidden="true">
-                {noChanges && "· "}
+                {noChanges && <span className="mr-1">·</span>}
                 {formatSessionCost(sessionCost)}
               </span>
             )}
@@ -340,7 +336,9 @@ export function TerminalHeaderContent({
                 )}
                 aria-hidden="true"
               >
-                {(noChanges || sessionCost != null) && "· "}
+                {/* The chip's gap sits before the dot and mr-1 after it, so the
+                    dot is centred rather than clinging to the value. */}
+                {(noChanges || sessionCost != null) && <span className="mr-1">·</span>}
                 {formatTokenCount(sessionTokens)} tokens
               </span>
             )}
@@ -380,13 +378,14 @@ export function TerminalHeaderContent({
       {/* Exit code badge — aria-live="off" overrides role="status"'s implicit
           polite live region. The global announcer in useAccessibilityAnnouncements
           routes the transition once with a pane-title prefix, avoiding competing
-          live regions across a multi-pane fleet (#9204). Set at the row's 11px
-          step; a failure is marked in shape ahead of the reading, which keeps
+          live regions across a multi-pane fleet (#9204). In the row's shared
+          chip box, so the ended session's cost and exit read as one kind of
+          fact; a failure is marked in shape ahead of the reading, which keeps
           secondary ink because the error hue on 11px text falls under 4.5:1 on
           several light headers. */}
       {exitStatus && (
         <span
-          className="inline-flex shrink-0 items-center gap-1 text-2xs leading-4 font-mono tabular-nums text-text-secondary"
+          className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE, "font-mono tabular-nums")}
           role="status"
           aria-live="off"
           aria-label={exitStatus.failed ? `${exitStatus.badge}, failed` : undefined}
@@ -401,45 +400,15 @@ export function TerminalHeaderContent({
         </span>
       )}
 
-      {/* Hibernated badge — ambient cue that the pane's renderer is asleep.
-          Rounded-full + dashed border keeps its silhouette apart from the
-          other metadata chips without escalating weight. Transient flow and
-          submit status live in TerminalStatusSlot's reserved box instead
-          (#12374). The PTY survives; focus wakes it. */}
-      {isHibernated && (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <div
-              className={cn(
-                HEADER_CHIP_CLASS,
-                HEADER_CHIP_SURFACE,
-                HEADER_CHIP_FOCUS_CLASS,
-                "border-dashed"
-              )}
-              role="status"
-              aria-live="off"
-              tabIndex={0}
-              data-testid="terminal-hibernated-badge"
-            >
-              <Moon className="w-3 h-3" aria-hidden="true" />
-              Hibernated
-            </div>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="max-w-xs">
-            <div className="flex flex-col gap-0.5">
-              <span className="font-medium">Renderer asleep</span>
-              <span>PTY preserved. Wakes on focus.</span>
-            </div>
-          </TooltipContent>
-        </Tooltip>
-      )}
-
       {/* Driven-by badge — ambient cue that the user handed this terminal to
           an orchestrating pane (#12490), naming which one. Self-gating. */}
       {hasPtyKind && <TerminalDrivenByBadge terminalId={id} />}
 
       {/* Pane-observed rate-limit banner (#12797). Self-gating and expiring. */}
       {hasPtyKind && <TerminalRateLimitBadge terminalId={id} />}
+
+      {/* What the pane does once its agent reports done (#16171). Self-gating. */}
+      {hasPtyKind && <TerminalWhenDoneBadge terminalId={id} />}
 
       {/* Command Pill - shows currently running command (inline with title).
           The row's one chip box; the command truncates inside it. */}
@@ -464,13 +433,14 @@ export function TerminalHeaderContent({
       {queueCount > 0 && (
         <Tooltip>
           <TooltipTrigger asChild>
+            {/* One run of text like every other count in the bar, not a mono
+                digit a flex gap away from its noun. */}
             <div
-              className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE)}
+              className={cn(HEADER_CHIP_CLASS, HEADER_CHIP_SURFACE, "tabular-nums")}
               role="status"
               aria-live="off"
             >
-              <span className="font-mono tabular-nums">{queueCount}</span>
-              <span>queued</span>
+              {queueCount} queued
             </div>
           </TooltipTrigger>
           <TooltipContent side="bottom">
@@ -485,6 +455,11 @@ export function TerminalHeaderContent({
           pane's header clips first (#12374). */}
       <SubagentChip terminalId={id} />
 
+      {/* Decisions — self-gating; shown only while Decisions is on and this
+          pane's agent has a question out, an answer waiting to be typed in,
+          or an answer that needs a person. */}
+      {hasPtyKind && <TerminalDecisionsChip terminalId={id} />}
+
       {/* Terminal notices — self-gating; shown only while an agent in this
           pane is waiting to hear about other terminals, and the one place the
           user can stop them. */}
@@ -494,8 +469,19 @@ export function TerminalHeaderContent({
       {isInputLocked && (
         <Tooltip>
           <TooltipTrigger asChild>
-            <div className="flex items-center text-text-secondary shrink-0" role="status">
-              <Lock className="w-3.5 h-3.5" aria-hidden="true" />
+            {/* Focusable like the row's other tooltip-bearing marks, so the
+                reason the pane ignores keystrokes reaches the keyboard too. */}
+            <div
+              className={cn(
+                "flex shrink-0 items-center rounded-sm p-0.5 text-text-secondary",
+                HEADER_CHIP_FOCUS_CLASS
+              )}
+              role="status"
+              aria-live="off"
+              aria-label="Input locked (read-only monitor mode)"
+              tabIndex={0}
+            >
+              <Lock className="w-3 h-3" aria-hidden="true" />
             </div>
           </TooltipTrigger>
           <TooltipContent side="bottom">Input locked (read-only monitor mode)</TooltipContent>

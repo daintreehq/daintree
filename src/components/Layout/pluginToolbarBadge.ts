@@ -84,7 +84,7 @@ export function pluginBadgeOverflowSeverity(
   return "info";
 }
 
-const SEVERITY_RANK = { critical: 3, warning: 2, info: 1 } as const;
+const SEVERITY_RANK = { critical: 5, waiting: 4, warning: 3, notice: 2, info: 1 } as const;
 
 /** The higher of two overflow tiers. */
 export function maxOverflowSeverity(

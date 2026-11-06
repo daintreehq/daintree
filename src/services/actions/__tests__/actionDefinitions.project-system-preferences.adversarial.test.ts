@@ -1090,6 +1090,8 @@ describe("preferences action hardening", () => {
             color: "#3366ff",
             displayTitle: "Claude [Blue]",
             fallbacks: ["fallback"],
+            fallbackOnRateLimit: true,
+            keepConversationOnRateLimit: true,
           },
         ],
       },
@@ -1109,6 +1111,8 @@ describe("preferences action hardening", () => {
           color: "#3366ff",
           displayTitle: "Claude [Blue]",
           fallbacks: ["fallback"],
+          fallbackOnRateLimit: true,
+          keepConversationOnRateLimit: true,
         },
       ],
     });

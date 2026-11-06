@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { homedir } from "os";
 import { join } from "path";
-import { CliAvailabilityService } from "../CliAvailabilityService.js";
+import { CliAvailabilityService, isFullyQualifiedPath } from "../CliAvailabilityService.js";
 import { getAgentConfig, getAgentIds } from "../../../shared/config/agentRegistry.js";
 import { execFile, execFileSync } from "child_process";
 import { refreshPath } from "../../setup/environment.js";
@@ -155,9 +155,14 @@ describe("CliAvailabilityService", () => {
   const envKeysToClear = [
     ...new Set(
       getAgentIds().flatMap((id) => {
-        const envVar = getAgentConfig(id)?.authCheck?.envVar;
-        if (!envVar) return [];
-        return Array.isArray(envVar) ? envVar : [envVar];
+        const config = getAgentConfig(id);
+        const envVar = config?.authCheck?.envVar;
+        const envVars = !envVar ? [] : Array.isArray(envVar) ? envVar : [envVar];
+        // A relocated config root moves every probed path, so a developer's
+        // own KIMI_CODE_HOME (and the like) must not leak in either.
+        const homeVar =
+          config?.account?.kind === "config-folder" ? config.account.envVar : undefined;
+        return homeVar ? [...envVars, homeVar] : envVars;
       })
     ),
     // Not an auth env var: alters the probe PATH; cleared for the same isolation.
@@ -781,6 +786,28 @@ describe("CliAvailabilityService", () => {
       expect(result.copilot).toBe("ready");
     });
 
+    it("confirms Amp auth from the documented secrets.json and stays unauthenticated without it", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "amp") return Buffer.from("");
+        throw new Error("not found");
+      });
+
+      const secrets = join(homedir(), ".local/share/amp/secrets.json");
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path) === secrets) return;
+        throw new Error("ENOENT");
+      });
+      const present = await service.checkAvailability();
+      expect(present.amp).toBe("ready");
+
+      mockedAccess.mockRejectedValue(new Error("ENOENT"));
+      const absent = await new CliAvailabilityService().checkAvailability();
+      expect(absent.amp).toBe("unauthenticated");
+    });
+
     it("does NOT probe the bogus Antigravity path (.antigravity/oauth_creds.json)", async () => {
       const { access } = await import("fs/promises");
       const mockedAccess = vi.mocked(access);
@@ -849,6 +876,357 @@ describe("CliAvailabilityService", () => {
         if (prev === undefined) delete process.env.GOOGLE_API_KEY;
         else process.env.GOOGLE_API_KEY = prev;
       }
+    });
+  });
+
+  // Kimi Code keeps config and OAuth credentials under ~/.kimi-code/, which
+  // KIMI_CODE_HOME relocates. The archived Python client used ~/.kimi/ and
+  // read KIMI_API_KEY from the shell; the current client does neither.
+  describe("Kimi Code auth discovery (#15566)", () => {
+    const kimiOnPath = () =>
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "kimi") return Buffer.from("");
+        throw new Error("not found");
+      });
+
+    const withEnv = async (key: string, value: string, run: () => Promise<void>) => {
+      const prev = process.env[key];
+      process.env[key] = value;
+      try {
+        await run();
+      } finally {
+        if (prev === undefined) delete process.env[key];
+        else process.env[key] = prev;
+      }
+    };
+
+    const kimiProbedPaths = (calls: unknown[][]) =>
+      calls.map((call) => String(call[0])).filter((p) => /kimi/i.test(p));
+
+    it("reaches 'ready' when the Kimi Code OAuth credential exists under ~/.kimi-code", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      kimiOnPath();
+
+      const oauthCredential = join(homedir(), ".kimi-code", "credentials", "kimi-code.json");
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path) === oauthCredential) return;
+        throw new Error("ENOENT");
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.kimi).toBe("ready");
+      expect(service.getDetails()!.kimi?.authConfirmed).toBe(true);
+    });
+
+    it("reaches 'ready' when ~/.kimi-code/config.toml exists", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      kimiOnPath();
+
+      const configToml = join(homedir(), ".kimi-code", "config.toml");
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path) === configToml) return;
+        throw new Error("ENOENT");
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.kimi).toBe("ready");
+    });
+
+    it("probes KIMI_CODE_HOME instead of ~/.kimi-code when it is set", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      kimiOnPath();
+
+      const customHome = join("/opt", "kimi-home");
+      const relocatedCredential = join(customHome, "credentials", "kimi-code.json");
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path) === relocatedCredential) return;
+        throw new Error("ENOENT");
+      });
+
+      await withEnv("KIMI_CODE_HOME", customHome, async () => {
+        const result = await service.checkAvailability();
+        expect(result.kimi).toBe("ready");
+      });
+
+      const probed = kimiProbedPaths(mockedAccess.mock.calls);
+      expect(probed).toContain(relocatedCredential);
+      expect(probed.some((p) => p.startsWith(join(homedir(), ".kimi-code")))).toBe(false);
+    });
+
+    it("does not fall back to ~/.kimi-code when KIMI_CODE_HOME holds no credential", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      kimiOnPath();
+
+      // A stale login under the default root is not where the CLI looks.
+      const defaultCredential = join(homedir(), ".kimi-code", "credentials", "kimi-code.json");
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path) === defaultCredential) return;
+        throw new Error("ENOENT");
+      });
+
+      await withEnv("KIMI_CODE_HOME", join("/opt", "kimi-home"), async () => {
+        const result = await service.checkAvailability();
+        expect(result.kimi).toBe("unauthenticated");
+      });
+
+      const probed = kimiProbedPaths(mockedAccess.mock.calls);
+      expect(probed.some((p) => p.startsWith(join(homedir(), ".kimi-code")))).toBe(false);
+    });
+
+    it.each([
+      ["empty", ""],
+      ["whitespace-only", "   "],
+    ])("probes ~/.kimi-code when KIMI_CODE_HOME is %s", async (_label, value) => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      kimiOnPath();
+      mockedAccess.mockRejectedValue(new Error("ENOENT"));
+
+      await withEnv("KIMI_CODE_HOME", value, async () => {
+        await service.checkAvailability();
+      });
+
+      expect(kimiProbedPaths(mockedAccess.mock.calls)).toEqual([
+        join(homedir(), ".kimi-code", "credentials", "kimi-code.json"),
+        join(homedir(), ".kimi-code", "config.toml"),
+      ]);
+    });
+
+    it("leaves a relative KIMI_CODE_HOME unconfirmed instead of guessing its base", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      kimiOnPath();
+      // Every path exists, so any probe at all would confirm auth.
+      mockedAccess.mockResolvedValue(undefined);
+
+      await withEnv("KIMI_CODE_HOME", join("relative", "kimi-home"), async () => {
+        const result = await service.checkAvailability();
+        expect(result.kimi).toBe("unauthenticated");
+      });
+
+      const authProbes = kimiProbedPaths(mockedAccess.mock.calls).filter(
+        (p) => p.endsWith("config.toml") || p.endsWith("kimi-code.json")
+      );
+      expect(authProbes).toEqual([]);
+    });
+
+    it("does not treat a shell KIMI_API_KEY as authenticated", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      kimiOnPath();
+      mockedAccess.mockRejectedValue(new Error("ENOENT"));
+
+      await withEnv("KIMI_API_KEY", "sk-test", async () => {
+        const result = await service.checkAvailability();
+        expect(result.kimi).toBe("unauthenticated");
+        expect(service.getDetails()!.kimi?.authConfirmed).toBe(false);
+      });
+    });
+
+    it("never probes the archived Python client's ~/.kimi paths", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      kimiOnPath();
+      mockedAccess.mockRejectedValue(new Error("ENOENT"));
+
+      await service.checkAvailability();
+
+      const probed = kimiProbedPaths(mockedAccess.mock.calls);
+      expect(probed).toEqual([
+        join(homedir(), ".kimi-code", "credentials", "kimi-code.json"),
+        join(homedir(), ".kimi-code", "config.toml"),
+      ]);
+    });
+  });
+
+  // The current Rust product keeps its credentials under ~/.openinterpreter,
+  // which INTERPRETER_HOME relocates. The Python package's profiles/default.yaml
+  // is a different program's config.
+  describe("Open Interpreter auth discovery (#15567)", () => {
+    const interpreterOnPath = () =>
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "interpreter") return Buffer.from("");
+        throw new Error("not found");
+      });
+
+    const withEnv = async (key: string, value: string, run: () => Promise<void>) => {
+      const prev = process.env[key];
+      process.env[key] = value;
+      try {
+        await run();
+      } finally {
+        if (prev === undefined) delete process.env[key];
+        else process.env[key] = prev;
+      }
+    };
+
+    const authProbes = (calls: unknown[][]) =>
+      calls
+        .map((call) => String(call[0]))
+        .filter((p) => /openinterpreter|open-interpreter|Open Interpreter[\\/]profiles/i.test(p));
+
+    it("reaches 'ready' when ~/.openinterpreter/auth.json exists", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      interpreterOnPath();
+
+      const credential = join(homedir(), ".openinterpreter", "auth.json");
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path) === credential) return;
+        throw new Error("ENOENT");
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.interpreter).toBe("ready");
+      expect(service.getDetails()!.interpreter?.authConfirmed).toBe(true);
+    });
+
+    it("does not count the keyring backends' encrypted stores, which a logout leaves behind", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      interpreterOnPath();
+
+      // A logout rewrites these as an empty encrypted map instead of deleting them.
+      const secretsDir = join(homedir(), ".openinterpreter", "secrets");
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path).startsWith(secretsDir)) return;
+        throw new Error("ENOENT");
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.interpreter).toBe("unauthenticated");
+      expect(service.getDetails()!.interpreter?.authConfirmed).toBe(false);
+    });
+
+    it("probes INTERPRETER_HOME instead of ~/.openinterpreter when it is set", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      interpreterOnPath();
+
+      const customHome = join("/opt", "oi-home");
+      const relocated = join(customHome, "auth.json");
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path) === relocated) return;
+        throw new Error("ENOENT");
+      });
+
+      await withEnv("INTERPRETER_HOME", customHome, async () => {
+        const result = await service.checkAvailability();
+        expect(result.interpreter).toBe("ready");
+      });
+
+      const probed = mockedAccess.mock.calls.map((call) => String(call[0]));
+      expect(probed).toContain(relocated);
+      expect(probed.some((p) => p.startsWith(join(homedir(), ".openinterpreter")))).toBe(false);
+    });
+
+    it("does not read CODEX_HOME, which the Rust product ignores", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      interpreterOnPath();
+
+      const codexHome = join("/opt", "codex-home");
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path).startsWith(codexHome)) return;
+        throw new Error("ENOENT");
+      });
+
+      await withEnv("CODEX_HOME", codexHome, async () => {
+        const result = await service.checkAvailability();
+        expect(result.interpreter).toBe("unauthenticated");
+      });
+    });
+
+    it("no longer counts the Python package's profile as a sign-in", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      interpreterOnPath();
+      // Every Python-era location exists; none is the Rust product's.
+      mockedAccess.mockImplementation(async (path) => {
+        if (/open-interpreter|Open Interpreter[\\/]profiles/i.test(String(path))) return;
+        throw new Error("ENOENT");
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.interpreter).toBe("unauthenticated");
+      expect(authProbes(mockedAccess.mock.calls)).toEqual([
+        join(homedir(), ".openinterpreter", "auth.json"),
+      ]);
+    });
+
+    it.each(["OPENAI_API_KEY", "GEMINI_API_KEY"])(
+      "reaches 'ready' from a %s in the environment",
+      async (key) => {
+        const { access } = await import("fs/promises");
+        const mockedAccess = vi.mocked(access);
+        interpreterOnPath();
+        mockedAccess.mockRejectedValue(new Error("ENOENT"));
+
+        await withEnv(key, "sk-test", async () => {
+          const result = await service.checkAvailability();
+          expect(result.interpreter).toBe("ready");
+        });
+      }
+    );
+
+    it("does not treat GOOGLE_API_KEY as a provider key", async () => {
+      // The provider catalog reads GEMINI_API_KEY for Gemini, not GOOGLE_API_KEY.
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      interpreterOnPath();
+      mockedAccess.mockRejectedValue(new Error("ENOENT"));
+
+      await withEnv("GOOGLE_API_KEY", "test-key", async () => {
+        const result = await service.checkAvailability();
+        expect(result.interpreter).toBe("unauthenticated");
+      });
+    });
+
+    it("finds the standalone install in ~/.local/bin when it is off PATH", async () => {
+      const { access } = await import("fs/promises");
+      const mockedAccess = vi.mocked(access);
+      mockedExecFileSync.mockImplementation(() => {
+        throw new Error("not found");
+      });
+
+      const installed = join(homedir(), ".local", "bin", "interpreter");
+      mockedAccess.mockImplementation(async (path) => {
+        if (String(path) === installed) return;
+        throw new Error("ENOENT");
+      });
+
+      const result = await service.checkAvailability();
+      expect(result.interpreter).not.toBe("missing");
+      expect(service.getDetails()!.interpreter?.via).toBe("native");
+      expect(service.getDetails()!.interpreter?.resolvedPath).toBe(installed);
+    });
+  });
+
+  describe("isFullyQualifiedPath (#15566)", () => {
+    it.each([
+      ["/opt/kimi", true],
+      ["relative/kimi", false],
+      ["./kimi", false],
+    ])("POSIX: %s -> %s", (p, expected) => {
+      expect(isFullyQualifiedPath(p, "darwin")).toBe(expected);
+    });
+
+    it.each([
+      ["C:\\Users\\me\\kimi", true],
+      ["d:/kimi", true],
+      ["\\\\server\\share\\kimi", true],
+      // Resolved against whichever drive is current.
+      ["\\kimi", false],
+      ["/kimi", false],
+      // Resolved against the current directory on drive C.
+      ["C:kimi", false],
+      ["kimi", false],
+    ])("Windows: %s -> %s", (p, expected) => {
+      expect(isFullyQualifiedPath(p, "win32")).toBe(expected);
     });
   });
 
@@ -1432,6 +1810,46 @@ describe("CliAvailabilityService", () => {
     });
   });
 
+  // The installers add their bin directory to the user PATH; the native paths
+  // only cover a PATH Daintree inherited before that (#15622).
+  describe("Antigravity standalone install", () => {
+    const installed = join(homedir(), ".local", "bin", "agy");
+
+    it("finds agy in ~/.local/bin when PATH misses it", async () => {
+      const { access } = await import("fs/promises");
+      mockedExecFileSync.mockImplementation(() => {
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+      vi.mocked(access).mockImplementation(async (p) => {
+        if (String(p) === installed) return;
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+
+      const result = await service.checkAvailability();
+
+      expect(result.antigravity).not.toBe("missing");
+      expect(service.getDetails()!.antigravity?.via).toBe("native");
+      expect(service.getDetails()!.antigravity?.resolvedPath).toBe(installed);
+    });
+
+    it("launches the PATH copy when both exist", async () => {
+      const { access } = await import("fs/promises");
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "agy") return Buffer.from("/opt/agy/bin/agy\n");
+        throw Object.assign(new Error("not found"), { code: "ENOENT" });
+      });
+      vi.mocked(access).mockImplementation(async (p) => {
+        if (String(p) === installed) return;
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      });
+
+      await service.checkAvailability();
+
+      expect(service.getDetails()!.antigravity?.via).toBe("which");
+      expect(service.getDetails()!.antigravity?.resolvedPath).toBe("/opt/agy/bin/agy");
+    });
+  });
+
   describe("extended native path coverage", () => {
     it("detects cursor-agent via the macOS app-bundle sidecar when only Cursor.app is installed", async () => {
       const { access } = await import("fs/promises");
@@ -1616,7 +2034,7 @@ describe("CliAvailabilityService", () => {
     });
 
     it("does not synthesise PyPI paths when packages.pypi is unset", async () => {
-      // Agents that legitimately declare `packages.pypi` (interpreter, mistral, kimi, aider)
+      // Agents that legitimately declare `packages.pypi` (mistral, aider)
       // SHOULD probe uv/pipx layouts; every other built-in does not, and must not
       // produce PyPI-shaped fs.access calls. This guards against accidental
       // probing when an agent has e.g. `npmGlobalPackage` only.
@@ -1631,21 +2049,15 @@ describe("CliAvailabilityService", () => {
       await service.checkAvailability();
 
       // Filter out paths synthesised for agents whose `packages.pypi`
-      // legitimately triggers uv/pipx probing (interpreter, mistral, kimi, aider).
+      // legitimately triggers uv/pipx probing (mistral, aider). Open Interpreter
+      // left PyPI for a standalone installer (#15567), so its paths are not exempt.
       // Remaining probed paths must not include any uv/pipx layouts.
       // Normalize separators so substring checks work regardless of host OS
       // (Windows runners produce backslashed paths post-`path.join`).
       const norm = (s: string) => s.replace(/\\/g, "/");
       const allProbedPaths = mockedAccess.mock.calls.map((c) => norm(String(c[0])));
       const probedPaths = allProbedPaths.filter(
-        (p) =>
-          !p.includes("open-interpreter") &&
-          !p.includes("/interpreter") &&
-          !p.includes("mistral") &&
-          !p.includes("/vibe") &&
-          !p.includes("kimi-cli") &&
-          !p.includes("/kimi") &&
-          !p.includes("aider")
+        (p) => !p.includes("mistral") && !p.includes("/vibe") && !p.includes("aider")
       );
       expect(probedPaths.some((p) => p.includes(".local/share/uv/tools"))).toBe(false);
       expect(probedPaths.some((p) => p.includes(".local/share/pipx/venvs"))).toBe(false);
@@ -2196,6 +2608,29 @@ describe("CliAvailabilityService", () => {
 
       expect(service.getDetails()!.goose?.via).toBe("native");
       expect(service.getDetails()!.goose?.resolvedPath).toBe(gooseExe);
+    });
+
+    it("finds Open Interpreter in its PowerShell installer's directory (#15567)", async () => {
+      process.env.LOCALAPPDATA = "C:\\Users\\test\\AppData\\Local";
+      const installed =
+        "C:\\Users\\test\\AppData\\Local\\Programs\\Open Interpreter\\bin\\interpreter.exe";
+      await onlyExisting(installed);
+
+      await service.checkAvailability();
+
+      expect(service.getDetails()!.interpreter?.via).toBe("native");
+      expect(service.getDetails()!.interpreter?.resolvedPath).toBe(installed);
+    });
+
+    it("finds Antigravity in its installers' directory (#15622)", async () => {
+      process.env.LOCALAPPDATA = "C:\\Users\\test\\AppData\\Local";
+      const installed = "C:\\Users\\test\\AppData\\Local\\agy\\bin\\agy.exe";
+      await onlyExisting(installed);
+
+      await service.checkAvailability();
+
+      expect(service.getDetails()!.antigravity?.via).toBe("native");
+      expect(service.getDetails()!.antigravity?.resolvedPath).toBe(installed);
     });
 
     it("never appends a second extension to an entry that already carries one", async () => {

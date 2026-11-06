@@ -1,6 +1,6 @@
 import { configure } from "safe-stable-stringify";
 
-const stringify = configure({ bigint: false });
+const stringify = configure({ bigint: false, circularValue: "[Circular]" });
 
 function replacer(_key: string, val: unknown): unknown {
   if (typeof val === "bigint") return val.toString();

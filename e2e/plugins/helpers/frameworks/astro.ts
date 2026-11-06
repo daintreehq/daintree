@@ -31,8 +31,10 @@ const features = ${FEATURES_LITERAL};
 `;
 
 /**
- * Astro with no UI framework: server-rendered markup only, with the source
- * attributes its dev toolbar stamps on every element.
+ * Astro with no UI framework: server-rendered markup only, served with the
+ * source attributes its compiler stamps while the dev toolbar is on, which the
+ * toolbar then takes off the elements, and no islands or scoped styles to say
+ * Astro once they are gone.
  */
 export const ASTRO: FixtureSite = {
   name: "picker-astro",
@@ -59,7 +61,8 @@ const { title, body } = Astro.props;
 };
 
 export const ASTRO_COMMANDS = {
-  dev: (port: number) => `npm run dev -- --host 127.0.0.1 --port ${port}`,
+  // Astro backgrounds agent-launched servers; the preview owns a foreground PTY.
+  dev: (port: number) => `npm run dev -- --ignore-lock --host 127.0.0.1 --port ${port}`,
 };
 
 export const ASTRO_HEADING = `${PAGE_FILE}:${lineOf(PAGE_SOURCE, "<h1>")}`;

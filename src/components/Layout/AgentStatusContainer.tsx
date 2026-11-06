@@ -23,6 +23,7 @@ import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
+import { dockSessionTags } from "./dockSessionTag";
 import type { TabGroup } from "@/types";
 import {
   KILL_TERMINAL_TITLE,
@@ -258,6 +259,24 @@ export function AgentStatusContainer({
       pluginRows.filter((row) => row.worktreeId === (activeWorktreeId ?? null)).length,
     [terminals, pluginRows, activeWorktreeId]
   );
+  // Two task-less "Claude" rows in one worktree would read and announce alike,
+  // and the row picks which session opens: each gets when it started, as its
+  // dock chip does. Only rows that would otherwise collide.
+  const sessionTags = useMemo(() => {
+    const byWorktree = new Map<string, PtyPanelData[]>();
+    for (const terminal of terminals) {
+      const key = terminal.worktreeId ?? "";
+      const bucket = byWorktree.get(key);
+      if (bucket) bucket.push(terminal);
+      else byWorktree.set(key, [terminal]);
+    }
+    const tags = new Map<string, string>();
+    const now = Date.now();
+    for (const bucket of byWorktree.values()) {
+      for (const [id, tag] of dockSessionTags(bucket, true, now)) tags.set(id, tag);
+    }
+    return tags;
+  }, [terminals]);
   const worktreeCount = useMemo(
     () =>
       new Set([
@@ -428,6 +447,7 @@ export function AgentStatusContainer({
                             rowAction={config.rowAction}
                             group={item.group}
                             memberTerminals={item.memberTerminals}
+                            sessionTags={sessionTags}
                             worktreeNames={worktreeNames}
                             showWorktree={showWorktree}
                             onActivate={handleActivate}
@@ -447,6 +467,7 @@ export function AgentStatusContainer({
                           rowAction={config.rowAction}
                           terminal={item.terminal}
                           groupId={item.groupId}
+                          sessionTag={sessionTags.get(item.terminal.id)}
                           worktreeName={worktreeName}
                           onActivate={handleActivate}
                           onKill={(id) => setKillConfirmId(id)}
@@ -497,6 +518,8 @@ interface AgentSingleItemProps {
   rowAction: AgentStatusConfig["rowAction"];
   terminal: PtyPanelData;
   groupId: string | null;
+  /** When this session started, given only when another row here shares its name. */
+  sessionTag?: string;
   worktreeName: string | undefined;
   /** False inside a group whose header already shows the worktree; it stays in the accessible name. */
   showWorktreeInline?: boolean;
@@ -515,6 +538,7 @@ function AgentSingleItem({
   rowAction,
   terminal,
   groupId,
+  sessionTag,
   worktreeName,
   showWorktreeInline = true,
   onActivate,
@@ -529,7 +553,13 @@ function AgentSingleItem({
   // an unlabeled row so the list doesn't overclaim.
   const reason = showReasons ? actionableWaitingReason(terminal.waitingReason) : null;
   const headline = showReasons ? terminal.activityHeadline : undefined;
-  const context = [showWorktreeInline ? worktreeName : undefined, task].filter(Boolean).join(" · ");
+  const context = [
+    showWorktreeInline ? worktreeName : undefined,
+    task,
+    sessionTag ? `started ${sessionTag}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const ageId = useId();
   // The arrows land on the row's button, never on its text, so a clipped title
   // or context shows its full text while the row holds keyboard focus.
@@ -549,7 +579,7 @@ function AgentSingleItem({
           data-waiting-reason={terminal.waitingReason ?? "unknown"}
           onClick={() => onActivate(terminal, groupId)}
           className={ROW_TARGET_CLASS}
-          aria-label={`Focus ${title}${task ? `: ${task}` : ""}${worktreeName ? ` in ${worktreeName}` : ""}${reason ? ` — ${waitingHeadline(reason).toLowerCase()}` : ""}${headline ? ` — ${headline}` : ""}`}
+          aria-label={`Focus ${title}${task ? `: ${task}` : ""}${sessionTag ? `, started ${sessionTag}` : ""}${worktreeName ? ` in ${worktreeName}` : ""}${reason ? ` — ${waitingHeadline(reason).toLowerCase()}` : ""}${headline ? ` — ${headline}` : ""}`}
           aria-describedby={terminal.lastStateChange != null ? ageId : undefined}
           onFocus={(e) => setRevealClipped(e.currentTarget.matches(":focus-visible"))}
           onBlur={() => setRevealClipped(false)}
@@ -637,7 +667,7 @@ function AgentSingleItem({
                       context: "AgentStatusContainer markRunRead",
                     })
                   }
-                  aria-label={`Mark ${title}${task ? `: ${task}` : ""} as read`}
+                  aria-label={`Mark ${title}${task ? `: ${task}` : ""}${sessionTag ? `, started ${sessionTag}` : ""} as read`}
                   data-testid={`${kind}-mark-read-button`}
                 >
                   <MailOpen aria-hidden="true" />
@@ -653,7 +683,7 @@ function AgentSingleItem({
                   size="icon-sm"
                   className="pointer-events-auto transition-colors"
                   onClick={() => onKill(terminal.id)}
-                  aria-label={`Kill ${title}${task ? `: ${task}` : ""}`}
+                  aria-label={`Kill ${title}${task ? `: ${task}` : ""}${sessionTag ? `, started ${sessionTag}` : ""}`}
                   data-testid={`${kind}-kill-button`}
                 >
                   <OctagonX aria-hidden="true" />
@@ -674,6 +704,7 @@ interface AgentGroupItemProps {
   rowAction: AgentStatusConfig["rowAction"];
   group: TabGroup;
   memberTerminals: PtyPanelData[];
+  sessionTags: ReadonlyMap<string, string>;
   worktreeNames: ReadonlyMap<string, string>;
   showWorktree: boolean;
   onActivate: (terminal: PtyPanelData, groupId: string | null) => void;
@@ -686,6 +717,7 @@ function AgentGroupItem({
   rowAction,
   group,
   memberTerminals,
+  sessionTags,
   worktreeNames,
   showWorktree,
   onActivate,
@@ -748,6 +780,7 @@ function AgentGroupItem({
               rowAction={rowAction}
               terminal={terminal}
               groupId={group.id}
+              sessionTag={sessionTags.get(terminal.id)}
               worktreeName={
                 showWorktree && terminal.worktreeId
                   ? worktreeNames.get(terminal.worktreeId)

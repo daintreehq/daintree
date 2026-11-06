@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../../utils/storeValues.js";
 import type { Migration } from "../StoreMigrations.js";
 
 export const migration004: Migration = {
@@ -16,7 +17,7 @@ export const migration004: Migration = {
       console.log(
         `[Migration 004] Upgrading correctionModel from "${voiceInput.correctionModel ?? "(unset)"}" to "gpt-5-mini"`
       );
-      store.set("voiceInput", { ...voiceInput, correctionModel: "gpt-5-mini" });
+      setRawStoreValue(store, "voiceInput", { ...voiceInput, correctionModel: "gpt-5-mini" });
     } else {
       console.log(
         `[Migration 004] correctionModel already "${voiceInput.correctionModel}", skipping`

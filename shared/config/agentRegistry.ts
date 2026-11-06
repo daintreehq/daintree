@@ -42,6 +42,29 @@ export interface AgentExternalLink {
 }
 
 /**
+ * How an agent CLI draws the next prompt it suggests in its empty input box
+ * (#16189), so a screen read can tell it from text someone typed. Declared per
+ * agent from a captured screen: grey is a legitimate colour for typed text in
+ * some themes, so no generic rule applies.
+ */
+export interface AgentInputSuggestionConfig {
+  /** The CLI as a plain-text read's mark names it: `[suggested by Claude Code: …]`. */
+  label: string;
+  /** `dim`: the suggestion is SGR 2, its first cell inverse when the CLI paints its own cursor. */
+  style: "dim";
+  /** The box's first row as plain text: its prompt glyph and the gap after it. */
+  promptRowPattern: string;
+  /**
+   * The row directly above that one, the box's top edge; the box runs down to
+   * the next row like it. Echoes of sent messages open with the same glyph but
+   * have no edge above them.
+   */
+  borderPattern: string;
+  /** Fixed placeholders an empty box shows, matched against its styled text: they read as `empty`. */
+  placeholderPatterns?: string[];
+}
+
+/**
  * Configuration for pattern-based working state detection.
  * Patterns are matched against terminal output to detect when an agent is actively working.
  */
@@ -76,6 +99,14 @@ export interface AgentDetectionConfig {
    * Safe to scan from visible lines even when the cursor line is active output.
    */
   promptHintPatterns?: string[];
+
+  /**
+   * The key-hint row a CLI draws under a select dialog whose options carry no
+   * numbers (#16209). Matched against the last row of a screen whose bottom
+   * block also holds a highlighted option, it reads the wait as a choice
+   * rather than an empty prompt, whatever the dialog asks. Case-insensitive.
+   */
+  choiceDialogFooterPatterns?: string[];
 
   /**
    * Number of lines from end of output to scan (default: 10).
@@ -159,15 +190,46 @@ export interface AgentAuthCheck {
   configPaths?: Partial<Record<"darwin" | "linux" | "win32", string[]>>;
   /** Platform-independent config file paths (relative to os.homedir()) */
   configPathsAll?: string[];
+  /**
+   * Files under the agent's config folder, the one its `account` declaration
+   * names (`kind: "config-folder"`). Checked under `process.env[envVar]` when
+   * it is set in Daintree's environment, otherwise under `defaultDir`. Never
+   * both: a relocated folder means the default one is not where the CLI looks.
+   * A relative value is not probed at all, since it depends on the directory
+   * the agent is launched in.
+   */
+  configHomePaths?: string[];
   /** Environment variable(s) that indicate auth when present */
   envVar?: string | string[];
 }
+
+/**
+ * How a CLI holds a second account (#16040), declared so Settings, the
+ * launcher and the quota reader all read one answer.
+ *
+ * - `config-folder`: everything the CLI keeps, login included, lives in one
+ *   folder that `envVar` relocates. An account is that folder; Daintree only
+ *   hands the variable to a launch and never writes inside the folder.
+ *   `defaultDir` is the folder the CLI uses without it, relative to the home
+ *   directory.
+ * - `api-key`: the CLI is reached with a key in `keyVars`. Such keys stay in
+ *   presets for now, beside the endpoint they belong to.
+ * - `fixed`: the CLI keeps a single login in one place (the keychain, its own
+ *   app data). Not selectable per launch.
+ *
+ * Absent means nobody has confirmed how the CLI holds one, never that it can't.
+ */
+export type AgentAccountDeclaration =
+  | { kind: "config-folder"; envVar: string; defaultDir: string }
+  | { kind: "api-key"; keyVars: readonly string[] }
+  | { kind: "fixed" };
 
 export interface AgentPreset {
   id: string;
   name: string;
   description?: string;
   env?: Record<string, string>;
+  /** Argv elements, each one argument as-is: never re-split on whitespace (#15638). */
   args?: string[];
   /** Legacy per-preset bypass override; superseded by `dangerousMode`. */
   dangerousEnabled?: boolean;
@@ -206,6 +268,20 @@ export interface AgentPreset {
    * on the next preset, so turning this on is the consent for that.
    */
   fallbackOnRateLimit?: boolean;
+  /**
+   * On a usage-limit hop, ask the next preset's CLI to reopen the same
+   * conversation instead of starting a new one (#16045). Read with
+   * `fallbackOnRateLimit`, from the user's own presets alone; a refusal stops
+   * on an offer in the pane rather than walking on.
+   */
+  keepConversationOnRateLimit?: boolean;
+  /**
+   * One of the agent's accounts (#16133) a launch of this preset signs in as,
+   * unless the launch or its worktree chooses another. Kept on the user's own
+   * presets alone: accounts are this machine's folders, which a shared preset
+   * can't name.
+   */
+  accountId?: string;
 }
 
 /** Max fallback presets that can be chained after the primary. */
@@ -233,7 +309,7 @@ export interface AgentProviderTemplate {
 export interface AgentPackages {
   /** npm package name (e.g. "@anthropic-ai/claude-code"). Probed via npm-global bin shim. */
   npm?: string;
-  /** PyPI package name (e.g. "open-interpreter"). Drives uv/pipx path synthesis. */
+  /** PyPI package name (e.g. "aider-chat"). Drives uv/pipx path synthesis. */
   pypi?: string;
   /** Homebrew formula name (e.g. "opencode"). Surfaced by install/update help only today. */
   brew?: string;
@@ -395,6 +471,15 @@ interface AgentSessionIdResumeBase {
    * nothing, or prompt, instead.
    */
   crossDirectoryResume?: true;
+  /**
+   * Regex for what the CLI prints when `args(id)` names a conversation it
+   * can't find from where it was launched, matched against the last lines the
+   * run printed before it ended. Declared from the interactive launch Daintree
+   * runs, not the headless form, whose wording can differ. A switch that keeps
+   * the conversation (#16045) offers the user a way out on a match; an agent
+   * without one is never offered that switch.
+   */
+  refusalPattern?: string;
 }
 
 /**
@@ -467,6 +552,31 @@ export type AgentResume =
       quitCommand?: string;
       shutdownKeySequence?: string;
     };
+
+/**
+ * Where a session id sits in an agent's command line, as positional parsing
+ * rather than a pattern over the whole text: only the subcommand's first
+ * positional counts, so an id mentioned anywhere else (a prompt, a `fork`
+ * source) is never read as the conversation that runs. Plain data, so it
+ * survives the structured clone that plugin agent configs go through.
+ *
+ * Every rule fails closed: an option it doesn't know, an id of the wrong
+ * shape or an excluded flag reads as no id at all, never as a guess.
+ */
+export interface AgentResumeArgv {
+  /** The subcommand that resumes, which must be the first positional (`resume`). */
+  subcommand: string;
+  /** Regex the subcommand's first positional must match in full to be an id. */
+  sessionIdPattern: string;
+  /**
+   * Options that consume the argument after them, so their value is not read
+   * as a positional (`-c key=value resume <id>`). The `--option=value` form
+   * needs no entry.
+   */
+  optionsWithValue?: string[];
+  /** Flags that change what the positional means (`--last` makes it a prompt). */
+  excludedFlags?: string[];
+}
 
 /**
  * The plain-data form of {@link AgentResume} a plugin manifest declares (#13687).
@@ -671,6 +781,23 @@ export interface AgentConfig {
    */
   curatedModels?: boolean;
   /**
+   * Model IDs the CLI once took that its maker has since retired, each with
+   * the day it was retired. A pane or recipe that saved one of these relaunches
+   * without it, with a notice naming it, instead of failing on every start
+   * (#15652), so a plan that still serves one sees what changed. Declared
+   * rather than inferred from {@link models}: an ID the list doesn't carry may
+   * still be one the CLI accepts, so absence alone never drops a saved choice.
+   */
+  retiredModels?: Readonly<Record<string, string>>;
+  /**
+   * Narrows which launches the CLI's `--model` takes effect on. Unset, every
+   * launch takes it. `"new-headless-session"`: only a one-shot run that starts
+   * a new conversation, as Mistral Vibe's flag (3.0.4+) does; its interactive
+   * sessions ignore the flag, earlier releases reject it, and a resume refuses
+   * it, so no restart or resume may replay one (#15569).
+   */
+  modelSelection?: "new-headless-session";
+  /**
    * Model the Daintree assistant launches this agent with until the user picks
    * one (no entry in `HelpAssistantSettings.modelIds`). Unset means the CLI's own
    * default.
@@ -832,6 +959,8 @@ export interface AgentConfig {
    * If not specified, built-in patterns for the agent ID are used.
    */
   detection?: AgentDetectionConfig;
+  /** How the CLI draws its suggested next prompt; absent, its input box reads as `unknown`. */
+  inputSuggestion?: AgentInputSuggestionConfig;
   /**
    * Version detection configuration.
    */
@@ -841,7 +970,7 @@ export interface AgentConfig {
     /** npm package name for version lookup (e.g., "@anthropic-ai/claude-code") */
     npmPackage?: string;
     /**
-     * PyPI package name for version lookup (e.g., "open-interpreter"). When
+     * PyPI package name for version lookup (e.g., "aider-chat"). When
      * set, AgentVersionService queries https://pypi.org/pypi/<pkg>/json after
      * github/npm fall through.
      */
@@ -885,6 +1014,13 @@ export interface AgentConfig {
    */
   resumeTemplate?: AgentResumeTemplate;
   /**
+   * How a run's own command line names the conversation it resumes, so a run
+   * the user starts by hand in the pane's shell (`codex resume <id>`) is
+   * recorded as exactly as one Daintree launched (#15994). Read off the
+   * process census, never off typed input.
+   */
+  resumeArgv?: AgentResumeArgv;
+  /**
    * How this agent's conversation history fares across a project-folder move
    * (#11282, phase 5). Read live by the relocation preview via
    * {@link resolveAgentContinuity}; unset ⇒ `unverified`, so an unclassified
@@ -902,6 +1038,8 @@ export interface AgentConfig {
    * Used by CliAvailabilityService to distinguish "installed" from "ready".
    */
   authCheck?: AgentAuthCheck;
+  /** How the CLI holds a second account (#16040). */
+  account?: AgentAccountDeclaration;
   /**
    * Absolute filesystem paths to probe when PATH-based lookup (`which`/`where`)
    * fails. Used to detect agents installed by native installers into locations
@@ -1151,6 +1289,17 @@ export function resolveAgentContinuity(agentId: string): AgentContinuity {
   return getEffectiveAgentConfig(agentId)?.continuity ?? { tier: "unverified" };
 }
 
+/**
+ * The config folder an agent's accounts are made of (#16040), or `undefined`
+ * when its CLI holds no account Daintree can choose per launch.
+ */
+export function getAgentConfigFolderAccount(
+  agentId: string
+): Extract<AgentAccountDeclaration, { kind: "config-folder" }> | undefined {
+  const account = getEffectiveAgentConfig(agentId)?.account;
+  return account?.kind === "config-folder" ? account : undefined;
+}
+
 export function isBuiltInAgent(agentId: string): boolean {
   // Own-key check: a user agent legitimately named `toString` passes the
   // safe-id rules, and `in` would falsely reject it as a built-in.
@@ -1335,6 +1484,41 @@ export function resolveAssistantModelId(
     return availableIds.includes(recommended) ? recommended : "";
   }
   return recommended;
+}
+
+/** Whether `agentId` declares `modelId` retired (see `AgentConfig.retiredModels`). */
+/** The shape of one launch, as far as model selection cares. */
+export interface AgentModelLaunchShape {
+  /** Omitted means interactive, the default for every launch. */
+  interactive?: boolean;
+  /** The prompt the command carries; a headless run needs one to be headless. */
+  initialPrompt?: string;
+}
+
+/**
+ * Whether a launch of this shape can select a model with `--model` (see
+ * `AgentConfig.modelSelection`). With no shape, the question is about a
+ * replay (a restart or resume), which is never a new headless run.
+ */
+export function canSelectAgentModel(
+  agentId: string | undefined,
+  launch: AgentModelLaunchShape = {}
+): boolean {
+  if (!agentId) return true;
+  const selection = getEffectiveAgentConfig(agentId)?.modelSelection;
+  if (selection === "new-headless-session") {
+    return launch.interactive === false && Boolean(launch.initialPrompt?.trim());
+  }
+  return true;
+}
+
+export function isRetiredAgentModel(
+  agentId: string | undefined,
+  modelId: string | undefined
+): boolean {
+  if (!agentId || !modelId) return false;
+  const retired = getEffectiveAgentConfig(agentId)?.retiredModels;
+  return retired !== undefined && Object.hasOwn(retired, modelId);
 }
 
 export function getAgentDisplayTitle(agentId: string, modelId?: string): string {

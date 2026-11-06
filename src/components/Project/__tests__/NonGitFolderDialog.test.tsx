@@ -111,6 +111,21 @@ describe("NonGitFolderDialog (#11405)", () => {
     );
   });
 
+  it("hands the identity and group carried from the create dialog to git setup", () => {
+    const identity = { name: "Chosen", emoji: "🚀" };
+    const { props } = renderDialog({ initialIdentity: identity, initialGroupId: "g1" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Initialize repository" }));
+
+    expect(gitInitDialogSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialIdentity: identity,
+        initialGroupId: "g1",
+        onSuccess: props.onInitSuccess,
+      })
+    );
+  });
+
   it("opens straight into git setup when asked to (sidebar upgrade)", () => {
     renderDialog({ initialStep: "initialize" });
 

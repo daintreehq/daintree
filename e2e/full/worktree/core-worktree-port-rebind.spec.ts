@@ -175,7 +175,7 @@ test.describe.serial("Core: Worktree Port Rebinding", () => {
     await expect(mainCard).toBeVisible({ timeout: T_LONG });
     await expect(mainCard).toContainText("external-commit-c1", { timeout: T_LONG });
     await expect
-      .poll(() => mainCard.getAttribute("aria-label"), {
+      .poll(() => mainCard.locator(SEL.worktree.selectButton).getAttribute("aria-label"), {
         timeout: T_LONG,
         message: "Cached reactivation should see clean state after external commit",
       })
@@ -186,7 +186,7 @@ test.describe.serial("Core: Worktree Port Rebinding", () => {
     writeFileSync(path.join(repoC, "rebind-cached-c2.txt"), "c2\n");
 
     await expect
-      .poll(() => mainCard.getAttribute("aria-label"), {
+      .poll(() => mainCard.locator(SEL.worktree.selectButton).getAttribute("aria-label"), {
         timeout: T_LONG,
         message: "Live port should detect a second external change without re-switching",
       })
@@ -224,7 +224,7 @@ test.describe.serial("Core: Worktree Port Rebinding", () => {
     await expect(mainCard).toBeVisible({ timeout: T_LONG });
     await expect(mainCard).toContainText("external-commit-b1", { timeout: T_LONG });
     await expect
-      .poll(() => mainCard.getAttribute("aria-label"), {
+      .poll(() => mainCard.locator(SEL.worktree.selectButton).getAttribute("aria-label"), {
         timeout: T_LONG,
         message: "Cold-loaded view should see clean state after external commit",
       })
@@ -235,7 +235,7 @@ test.describe.serial("Core: Worktree Port Rebinding", () => {
     writeFileSync(path.join(repoB, "rebind-evicted-b2.txt"), "b2\n");
 
     await expect
-      .poll(() => mainCard.getAttribute("aria-label"), {
+      .poll(() => mainCard.locator(SEL.worktree.selectButton).getAttribute("aria-label"), {
         timeout: T_LONG,
         message: "Cold-loaded port should detect a second external change without re-switching",
       })
@@ -299,7 +299,7 @@ test.describe.serial("Core: Worktree Port Rebinding", () => {
     writeFileSync(path.join(repoB, "rebind-isolation-b3.txt"), "b3\n");
 
     await expect
-      .poll(() => mainCardBAfter.getAttribute("aria-label"), {
+      .poll(() => mainCardBAfter.locator(SEL.worktree.selectButton).getAttribute("aria-label"), {
         timeout: T_LONG,
         message: "Project B's live port must deliver B-specific events after the round-trip",
       })

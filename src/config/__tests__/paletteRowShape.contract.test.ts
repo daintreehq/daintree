@@ -114,7 +114,11 @@ const FAMILY_BOX: Record<Family, { radius: string; inset: string; heights: strin
  * the create button are denser than its ranked rows on purpose: they are a
  * secondary band under the project list. Documented in the recipe.
  */
-const DENSE_ROW_FILES = new Set(["src/components/Project/ProjectSwitcherScratchSection.tsx"]);
+const DENSE_ROW_FILES = new Set([
+  "src/components/Project/ProjectSwitcherScratchSection.tsx",
+  "src/components/Project/ProjectSwitcherRows.tsx",
+  "src/components/Project/ProjectSwitcherBands.tsx",
+]);
 
 function boxViolations(rel: string, source: string, family: Family): string[] {
   const box = FAMILY_BOX[family];
@@ -157,6 +161,7 @@ const POPOVER_FILES = [
   "src/components/Settings/EnvVarEditor.tsx",
   "src/components/Panel/MoveToWorktreePicker.tsx",
   "src/components/Layout/DockLaunchButton.tsx",
+  "src/components/Layout/AssistantPicker.tsx",
   "src/components/Project/ProjectSwitcherRows.tsx",
 ];
 

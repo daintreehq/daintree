@@ -3,12 +3,15 @@ import { LAUNCH_CONTEXT_AGENT_IDS } from "../../../shared/config/agentLaunchCont
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import {
   buildResumeCommand,
+  dropRetiredAgentModel,
+  dropUnselectedAgentModel,
   stripAssignedSessionIdArgs,
   supportsSessionIdAssignment,
 } from "../../../shared/types/agentSettings.js";
 import { resolveAgentLaunchBaseCommandFor } from "../../../shared/utils/agentLaunchCommand.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { mergeTerminalLaunchEnv } from "../../../shared/utils/terminalLaunchOptions.js";
+import { readSpawnProvenance } from "../../../shared/utils/scheduledRunProvenance.js";
 import type { TerminalFirstPrompt } from "../../../shared/types/panel.js";
 import type { ViewlessDeps } from "./ViewlessActionExecutor.js";
 
@@ -26,14 +29,17 @@ export type ViewlessRestartOutcome =
  * the captured conversation when the agent can, and starting it fresh with the
  * saved launch otherwise. A pane the view would refuse to restart is left as it
  * is: one waiting for input, one held for recovery, and an agent that already
- * quit to its shell. An input lock is a view's own preference, kept in that
- * view, so with no view there is none to honour.
+ * quit to its shell. So is one saved with a retired model, whose drop needs a
+ * view to show it, and one holding a model a restart can't select. An input lock is a view's own preference, kept in that
+ * view, so with no view there is none to honour. `beforeChange` runs once,
+ * right before the first change, and only for a restart that goes ahead.
  */
 export async function restartTerminalWithoutView(
   projectId: string,
   terminalId: string,
   deps: ViewlessDeps,
-  isCurrent: () => boolean = () => true
+  isCurrent: () => boolean = () => true,
+  beforeChange: () => void = () => {}
 ): Promise<ViewlessRestartOutcome> {
   const pty = deps.getPtyReader();
   if (!pty) return "gone";
@@ -52,10 +58,21 @@ export async function restartTerminalWithoutView(
   // A demoted pane runs the shell its agent quit to; a view restarts it as that
   // shell, which takes launch state this host never kept for it.
   if (agentId !== undefined && info.agentState === "exited") return "unsupported";
+  // A saved retired model fails the relaunch (#15652), and a view's restart
+  // drops it with a notice saying so. With no view, nobody would see the drop,
+  // so the pane keeps running until one restarts it.
+  if (dropRetiredAgentModel(agentId, snapshot).droppedModelIds.length > 0) return "unsupported";
+  // So does a model a restart can't select (#15569): a view's restart takes it
+  // out of the launch, the record and the title together, which this host's
+  // session-only update can't.
+  if (dropUnselectedAgentModel(agentId, snapshot, { replay: true }) !== snapshot) {
+    return "unsupported";
+  }
 
   // The reads above wait on the pty-host and the disk; the terminal may have
   // been relaunched meanwhile, and its successor isn't the one that leaked.
   if (!isCurrent()) return "stale";
+  beforeChange();
 
   let capturedSessionId: string | null = null;
   try {
@@ -114,6 +131,7 @@ export async function restartTerminalWithoutView(
   const keepsFirstPrompt = startsOver
     ? snapshot.firstPrompt?.via === "launch"
     : (await savedFirstPrompt(deps, projectId, terminalId)) !== undefined;
+  const { scheduledRun } = readSpawnProvenance(snapshot.spawnedBy, snapshot.scheduledRun);
 
   const layers = await deps.getLaunchEnvLayers(projectId).catch(() => null);
   const env = mergeTerminalLaunchEnv(layers?.global, layers?.project, snapshot.env);
@@ -164,6 +182,9 @@ export async function restartTerminalWithoutView(
               agentPresetColor: snapshot.agentPresetColor,
               originalAgentPresetId: snapshot.originalPresetId,
               ...(keepsFirstPrompt ? { hasFirstPrompt: true } : {}),
+              // Still the scheduled run's pane, so its next session names the
+              // run (#15977).
+              ...(scheduledRun !== undefined ? { scheduledRun } : {}),
             }
           : {}),
         ...(actionContext !== undefined ? { actionContext } : {}),

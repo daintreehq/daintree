@@ -53,14 +53,14 @@ test.describe.serial("Element Picker on a SvelteKit production build", () => {
 
   test("the built site starts in a dev preview with the Element Picker on", start);
 
-  // First, so the pick after it is made on a page Svelte's extractor has
-  // already read: the page reports on itself only once it settles.
   test("the drawer says the preview is a production build", async () => {
+    // The drawer opens with a selection; the page then explains why it has no source.
+    await selectInPreview(session(), "h1", "h1");
     await expect(
       session()
         .window.getByRole("complementary", { name: "Element Picker details" })
         .getByRole("status")
-        .filter({ hasText: "This preview is a production build" })
+        .filter({ hasText: "Production build — elements can't be traced to source" })
     ).toBeVisible({ timeout: 30_000 });
   });
 

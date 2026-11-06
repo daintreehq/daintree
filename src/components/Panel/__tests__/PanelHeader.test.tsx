@@ -1,12 +1,15 @@
 // @vitest-environment jsdom
 import React from "react";
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, onTestFinished } from "vitest";
 import { act, cleanup, render, screen, fireEvent } from "@testing-library/react";
 import { PanelHeader } from "../PanelHeader";
 import type { PanelHeaderProps } from "../PanelHeader";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import { NoDndMouseSensor, NoDndTouchSensor } from "@/components/DragDrop/DndProvider";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import type { FleetRunRow } from "@shared/types/ipc/fleet";
+import type { PtyPanelData } from "@shared/types/panel";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getGenericPanelMenuGroups, type GenericPanelMenuInput } from "../genericPanelMenu";
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
@@ -123,6 +126,26 @@ const mockDispatch = vi.fn().mockResolvedValue({ ok: true });
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: (...args: unknown[]) => mockDispatch(...args) },
 }));
+
+// A scheduled pane's chip reads its schedule's name; nothing else here reads schedules.
+vi.mock("@/clients/schedulesClient", () => ({
+  schedulesClient: {
+    list: () =>
+      Promise.resolve({
+        projectId: "p1",
+        revision: 1,
+        schedules: [{ id: "sched-1", name: "Nightly triage" }],
+      }),
+    onChanged: () => () => {},
+  },
+}));
+
+const SCHEDULED_PANEL = {
+  id: "test-panel",
+  kind: "terminal",
+  spawnedBy: "schedule",
+  scheduledRun: { scheduleId: "sched-1", runId: "run-1" },
+};
 
 vi.mock("@/lib/watchNotification", () => ({
   fireWatchNotification: vi.fn(),
@@ -289,6 +312,83 @@ describe("PanelHeader", () => {
     mockWorktreeIds = null;
     mockMenuOpenChange = undefined;
     mockMenuCloseAutoFocus = undefined;
+  });
+
+  describe("schedule chip", () => {
+    // The active pane is the header's `id`; here it is the second tab.
+    const tabs = [
+      {
+        id: "t1",
+        title: "Tab 1",
+        kind: "terminal" as const,
+        chrome: deriveTerminalChrome(),
+        isActive: false,
+      },
+      {
+        id: "test-panel",
+        title: "Tab 2",
+        kind: "terminal" as const,
+        chrome: deriveTerminalChrome(),
+        isActive: true,
+      },
+    ];
+
+    const follows = (earlier: Element, later: Element) =>
+      (earlier.compareDocumentPosition(later) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+
+    it("draws nothing for a pane no schedule launched", () => {
+      mockHasPty = true;
+      mockStoreState = {
+        ...mockStoreState,
+        panelsById: { "test-panel": { id: "test-panel", kind: "terminal", spawnedBy: "agent" } },
+      };
+      render(<PanelHeader {...makeProps()} />);
+      expect(screen.queryByTestId("terminal-schedule-chip")).toBeNull();
+    });
+
+    it("follows a single pane's title, ahead of its metadata and outside the controls", async () => {
+      mockHasPty = true;
+      mockStoreState = { ...mockStoreState, panelsById: { "test-panel": SCHEDULED_PANEL } };
+      render(<PanelHeader {...makeProps({ headerContent: <span>metadata</span> })} />);
+      await act(async () => {});
+
+      const chip = screen.getByTestId("terminal-schedule-chip");
+      expect(chip.textContent).toBe("Nightly triage");
+      expect(follows(screen.getAllByText("Test Panel")[0]!, chip)).toBe(true);
+      expect(follows(chip, screen.getByTestId("panel-header-content"))).toBe(true);
+      expect(screen.getByTestId("panel-header-controls").contains(chip)).toBe(false);
+
+      fireEvent.click(chip);
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "schedules.open",
+        { scheduleId: "sched-1" },
+        { source: "user" }
+      );
+    });
+
+    it("follows a tab group's strip for its active pane, where the maximized readout keeps clear of it", async () => {
+      mockHasPty = true;
+      mockStoreState = {
+        ...mockStoreState,
+        panelsById: {
+          t1: { id: "t1", kind: "terminal" },
+          "test-panel": SCHEDULED_PANEL,
+        },
+      };
+      render(
+        <PanelHeader
+          {...makeProps({ tabs, onTabClick: vi.fn(), headerContent: <span>metadata</span> })}
+        />
+      );
+      await act(async () => {});
+
+      const chip = screen.getByTestId("terminal-schedule-chip");
+      expect(chip.textContent).toBe("Nightly triage");
+      expect(follows(screen.getAllByText("Tab 2")[0]!, chip)).toBe(true);
+      expect(follows(chip, screen.getByTestId("panel-header-content"))).toBe(true);
+      expect(screen.getByTestId("panel-header-controls").contains(chip)).toBe(false);
+      expect(chip.closest("[data-readout-obstacle]")).not.toBeNull();
+    });
   });
 
   describe("overflow menu tooltip", () => {
@@ -1643,6 +1743,131 @@ describe("PanelHeader", () => {
       const inactiveItem = items.find((b) => b.textContent?.includes("Tab 2"));
       expect(inactiveItem?.getAttribute("aria-current")).toBeNull();
     });
+
+    describe("hidden waiting count", () => {
+      const ask = { kind: "asked", quote: "Ship it?", readAt: 0, seen: false } as const;
+
+      function fleet(runs: Array<Partial<FleetRunRow> & { runId: string }>) {
+        useFleetSnapshotStore.setState({
+          snapshot: {
+            runs: runs.map((r) => ({ workspaceId: "p1", spawnedAt: 0, cwd: "/repo", ...r })),
+            changedAt: 0,
+            degraded: false,
+            lastSuccessfulAt: null,
+          },
+        });
+      }
+
+      function panels(states: Record<string, Partial<PtyPanelData>>) {
+        mockStoreState = {
+          ...mockStoreState,
+          panelsById: Object.fromEntries(
+            Object.entries(states).map(([id, p]) => [id, { id, kind: "terminal", ...p }])
+          ),
+          panelIds: Object.keys(states),
+        };
+      }
+
+      const trigger = () => screen.getByTestId("panel-tabs-overflow");
+
+      afterEach(() => {
+        cleanup();
+        useFleetSnapshotStore.setState({ snapshot: null });
+      });
+
+      it("counts only hidden tabs the fleet places in needs-you", () => {
+        mockHiddenTabIds = new Set(["t2", "t3"]);
+        // t2 sits at its prompt with no reading; t3 is a Canopy-read ask.
+        panels({
+          t2: { agentState: "waiting", waitingReason: "prompt" },
+          t3: { agentState: "waiting", waitingReason: "question" },
+        });
+        fleet([
+          { runId: "t2", agentState: "waiting", waitingReason: "prompt" },
+          { runId: "t3", agentState: "waiting", waitingReason: "question", canopy: ask },
+        ]);
+        render(<PanelHeader {...makeProps({ tabs: threeTabs, onTabClick: vi.fn() })} />);
+        expect(trigger().getAttribute("aria-label")).toBe(
+          "Show 2 hidden tabs, 1 waiting for input"
+        );
+      });
+
+      it("counts nothing before the snapshot, for a seen ask, or for an unread wait", () => {
+        mockHiddenTabIds = new Set(["t2", "t3"]);
+        panels({
+          t2: { agentState: "waiting", waitingReason: "question" },
+          t3: { agentState: "waiting", waitingReason: "approval" },
+        });
+        const { rerender } = render(
+          <PanelHeader {...makeProps({ tabs: threeTabs, onTabClick: vi.fn() })} />
+        );
+        expect(trigger().getAttribute("aria-label")).toBe("Show 2 hidden tabs");
+
+        act(() =>
+          fleet([
+            {
+              runId: "t2",
+              agentState: "waiting",
+              waitingReason: "question",
+              canopy: { ...ask, seen: true },
+            },
+            {
+              runId: "t3",
+              agentState: "waiting",
+              waitingReason: "approval",
+              wait: { stoppedAt: 0 },
+            },
+          ])
+        );
+        rerender(<PanelHeader {...makeProps({ tabs: threeTabs, onTabClick: vi.fn() })} />);
+        expect(trigger().getAttribute("aria-label")).toBe("Show 2 hidden tabs");
+      });
+
+      it("counts each hidden ask, and drops one once it is seen", () => {
+        mockHiddenTabIds = new Set(["t2", "t3"]);
+        panels({
+          t2: { agentState: "waiting", waitingReason: "question" },
+          t3: { agentState: "completed" },
+        });
+        fleet([
+          { runId: "t2", agentState: "waiting", waitingReason: "question", canopy: ask },
+          { runId: "t3", agentState: "completed", canopy: ask },
+        ]);
+        const { rerender } = render(
+          <PanelHeader {...makeProps({ tabs: threeTabs, onTabClick: vi.fn() })} />
+        );
+        expect(trigger().getAttribute("aria-label")).toBe(
+          "Show 2 hidden tabs, 2 waiting for input"
+        );
+
+        act(() =>
+          fleet([
+            {
+              runId: "t2",
+              agentState: "waiting",
+              waitingReason: "question",
+              canopy: { ...ask, seen: true },
+            },
+            { runId: "t3", agentState: "completed", canopy: ask },
+          ])
+        );
+        rerender(<PanelHeader {...makeProps({ tabs: threeTabs, onTabClick: vi.fn() })} />);
+        expect(trigger().getAttribute("aria-label")).toBe(
+          "Show 2 hidden tabs, 1 waiting for input"
+        );
+      });
+
+      it("drops a hidden ask once its agent is working again, and never counts a cut active tab", () => {
+        mockHiddenTabIds = new Set(["t1", "t2"]);
+        panels({ t1: { agentState: "waiting" }, t2: { agentState: "working" } });
+        fleet([
+          { runId: "t1", agentState: "waiting", canopy: ask },
+          { runId: "t2", agentState: "completed", canopy: ask },
+        ]);
+        render(<PanelHeader {...makeProps({ tabs: threeTabs, onTabClick: vi.fn() })} />);
+        expect(trigger().getAttribute("aria-label")).toBe("Show 2 hidden tabs");
+      });
+    });
   });
 
   describe("header double-click behavior", () => {
@@ -2145,6 +2370,14 @@ describe("PanelHeader", () => {
           },
           controls: { "fleet failure dot": () => screen.getByTestId("panel-fleet-failure-dot") },
         },
+        {
+          props: { location: "grid" },
+          setup: () => {
+            mockHasPty = true;
+            mockStoreState = { ...mockStoreState, panelsById: { "test-panel": SCHEDULED_PANEL } };
+          },
+          controls: { "schedule chip": () => screen.getByTestId("terminal-schedule-chip") },
+        },
       ];
 
       const dragPointerDown = vi.fn();
@@ -2186,6 +2419,7 @@ describe("PanelHeader", () => {
           "move to grid",
           "overflow menu",
           "restore",
+          "schedule chip",
           "tabs overflow",
         ].sort()
       );
@@ -2333,6 +2567,25 @@ describe("PanelHeader", () => {
 
     it("names a hidden tab's agent state in text, not only in a glyph", () => {
       mockHiddenTabIds = new Set(["t2"]);
+      // An unread Canopy ask: the state a hidden tab is drawn and named by.
+      useFleetSnapshotStore.setState({
+        snapshot: {
+          runs: [
+            {
+              runId: "t2",
+              workspaceId: "p1",
+              spawnedAt: 0,
+              cwd: "/repo",
+              agentState: "waiting",
+              canopy: { kind: "asked", quote: "Ship it?", readAt: 0, seen: false },
+            },
+          ],
+          changedAt: 0,
+          degraded: false,
+          lastSuccessfulAt: null,
+        },
+      });
+      onTestFinished(() => useFleetSnapshotStore.setState({ snapshot: null }));
       render(
         <PanelHeader
           {...makeProps({

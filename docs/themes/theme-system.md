@@ -101,7 +101,7 @@ Extensions are applied as bare CSS custom properties on `:root` (e.g., `"toolbar
 
 - `getAppThemeCssVariables()` in `shared/theme/themes.ts` converts a scheme into CSS variables.
 - `applyAppThemeToRoot()` in `src/theme/applyAppTheme.ts` applies those variables to the root element, clears stale extension vars between switches, and sets `data-theme`, `data-colorMode`, `color-scheme`, and `.dark`/`.light` classes.
-- `applyColorVisionMode()` (in `src/theme/applyAppTheme.ts`) overrides tokens for colorblind simulation. The tables live in `shared/theme/colorVisionOverrides.ts`, and they are **derived rather than hand-listed**: each map starts from a literal seed of base tokens (status, activity, PR state, terminal ANSI, syntax, category) and is then expanded by `withStatusSurfaces()` — which mints the matching `*-surface` fill at `CVD_STATUS_SURFACE_ALPHA` — and `withDiffSurfaces()`, which mints each status colour's diff background, edit background and gutter. So the exported `RED_GREEN_OVERRIDES` / `BLUE_YELLOW_OVERRIDES` are meaningfully larger than their seeds, and `ALL_CVD_TOKENS` is their union. Count them from the code rather than from a number here. Seed values must be 3- or 6-digit hex: `hexToRgba` produces `rgba(NaN, …)` for anything else, which CSS silently drops.
+- `applyColorVisionMode()` (in `src/theme/applyAppTheme.ts`) overrides tokens for colorblind simulation. The tables live in `shared/theme/colorVisionOverrides.ts`, and they are **derived rather than hand-listed**: each map starts from a literal seed of base tokens (status, activity, PR state, terminal ANSI, syntax, category) and is then expanded by `withStatusSurfaces()` — which mints the matching `*-surface` fill at `CVD_STATUS_SURFACE_ALPHA` — and `withDiffSurfaces()`, which mints each status colour's diff background, edit background and gutter. So the exported `RED_GREEN_OVERRIDES` / `BLUE_YELLOW_OVERRIDES` are meaningfully larger than their seeds, and `ALL_CVD_TOKENS` is their union. Count them from the code rather than from a number here. Seed values must be 3- or 6-digit hex: `hexToRgba` produces `rgba(NaN, …)` for anything else, which CSS silently drops. A seed is one hex for both polarities, so when the active scheme is known `getColorVisionWrites()` fits each syntax and graphical status seed along OKLCH lightness, at its own hue, to the floor the theme's own ink holds on that theme's surfaces (`SYNTAX_CANVAS_FLOORS` on `surface-canvas`, `STATUS_INK_CONTRAST` on the five display surfaces), and derives the churn inks, `status-*-text` twins and destructive fills from the fitted ink. Without a scheme the raw map is written.
 - Tailwind-facing aliases live in `src/index.css`.
 
 ## Import Flow
@@ -180,7 +180,7 @@ Additional checks when reviewing a theme that authors the material extension key
 | `shared/theme/terminal.ts` | Maps resolved app tokens to xterm `ITheme` |
 | `shared/theme/entityColors.ts` | Panel brand colors, branch type Tailwind classes |
 | `src/theme/applyAppTheme.ts` | DOM injection of CSS vars, CVD overrides |
-| `shared/theme/colorVisionOverrides.ts` | CVD token tables (`RED_GREEN_OVERRIDES`, `BLUE_YELLOW_OVERRIDES`, `ALL_CVD_TOKENS`) |
+| `shared/theme/colorVisionOverrides.ts` | CVD token tables (`RED_GREEN_OVERRIDES`, `BLUE_YELLOW_OVERRIDES`, `ALL_CVD_TOKENS`) and the per-theme writes (`getColorVisionWrites`) |
 | `src/index.css` | Tailwind v4 `@theme inline` mappings |
 | `src/store/appThemeStore.ts` | Renderer theme state (Zustand) |
 | `src/config/terminalColorSchemes.ts` | Terminal-specific color scheme library |

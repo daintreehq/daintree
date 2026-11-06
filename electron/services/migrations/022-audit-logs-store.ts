@@ -3,7 +3,9 @@ import { auditLogsStore } from "../../store.js";
 
 /**
  * Move the MCP audit and turn-outcome ring buffers out of config.json into the
- * dedicated lazily-constructed audit-logs store. The rings were the bulk of
+ * dedicated lazily-constructed audit-logs store. No owner reads that store:
+ * the rings live in SQLite `audit_rings`, and the boot import
+ * (legacyAuditRingImport) moves audit-logs.json there. The rings were the bulk of
  * config.json, which bootstrap reads/parses twice and copies to .bak
  * synchronously before main.js loads — boot cost scaled with audit volume.
  * `auditEnabled` / `auditMaxRecords` (and `pendingErrors`, the crash-reporting
@@ -29,23 +31,29 @@ export const migration022: Migration = {
       return;
     }
 
-    const { auditLog, turnOutcomeLog, ...rest } = mcpServer;
-
-    if (Array.isArray(auditLog) && auditLog.length > 0) {
-      const existing = auditLogsStore.get("mcpAuditLog");
-      // Rings are oldest-first; migrated config.json records predate anything
-      // already in the audit-logs store, so they go first.
-      auditLogsStore.set("mcpAuditLog", [
-        ...auditLog,
-        ...(Array.isArray(existing) ? existing : []),
-      ] as never);
-    }
-    if (Array.isArray(turnOutcomeLog) && turnOutcomeLog.length > 0) {
-      const existing = auditLogsStore.get("mcpTurnOutcomeLog");
-      auditLogsStore.set("mcpTurnOutcomeLog", [
-        ...turnOutcomeLog,
-        ...(Array.isArray(existing) ? existing : []),
-      ] as never);
+    const rest: Record<string, unknown> = { ...mcpServer };
+    for (const [sourceKey, targetKey] of [
+      ["auditLog", "mcpAuditLog"],
+      ["turnOutcomeLog", "mcpTurnOutcomeLog"],
+    ] as const) {
+      if (!(sourceKey in mcpServer)) continue;
+      const ring = (mcpServer as Record<string, unknown>)[sourceKey];
+      if (!Array.isArray(ring)) {
+        // Nothing to move, but the bytes stay where they are rather than
+        // being stripped without a copy.
+        console.warn(`[Migrations] Leaving malformed non-array ring at mcpServer.${sourceKey}`);
+        continue;
+      }
+      if (ring.length > 0) {
+        const existing = auditLogsStore.get(targetKey);
+        // Rings are oldest-first; migrated config.json records predate anything
+        // already in the audit-logs store, so they go first.
+        auditLogsStore.set(targetKey, [
+          ...ring,
+          ...(Array.isArray(existing) ? existing : []),
+        ] as never);
+      }
+      delete rest[sourceKey];
     }
 
     // Rebuild without the moved keys so they're dropped from the persisted

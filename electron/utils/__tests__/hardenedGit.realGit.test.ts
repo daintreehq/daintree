@@ -5,7 +5,12 @@ import { createRequire, syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { GitPluginError } from "simple-git";
-import { createBoundRepositoryGit, createContinueGit, createHardenedGit } from "../hardenedGit.js";
+import {
+  createBoundRepositoryGit,
+  createContinueGit,
+  createHardenedGit,
+  createStrictExitGit,
+} from "../hardenedGit.js";
 
 // Real git through the real simple-git: every other hardenedGit suite mocks
 // simple-git, so none of them can see its environment guard or argv scanner
@@ -155,6 +160,43 @@ describe("hardened profile against real git", () => {
         await (await createBoundRepositoryGit(repo)).raw(["--git-dir", gitDir, "rev-parse", "HEAD"])
       ).trim()
     ).toBe(head);
+  });
+});
+
+describe("strict-exit profile against real git", () => {
+  it("rejects a silent non-zero exit that the default profile resolves as empty", async () => {
+    const repo = makeRepo();
+    fs.writeFileSync(path.join(repo, "file.txt"), "changed\n");
+    // `diff --quiet` exits 1 on a change and prints nothing at all.
+    const quietDiff = ["diff", "--quiet"];
+
+    await expect((await createHardenedGit(repo)).raw(quietDiff)).resolves.toBe("");
+    await expect((await createStrictExitGit(repo)).raw(quietDiff)).rejects.toThrow(/exited with 1/);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "rejects a git killed by a signal before it wrote anything",
+    async () => {
+      const repo = makeRepo();
+      // The alias's shell kills its parent, the git process itself, so git
+      // closes with no exit code, no stdout and no stderr.
+      git(repo, "config", "alias.die", "!kill -9 $PPID");
+
+      await expect((await createHardenedGit(repo)).raw(["die"])).resolves.toBe("");
+      await expect((await createStrictExitGit(repo)).raw(["die"])).rejects.toThrow(
+        /exited with null/
+      );
+    }
+  );
+
+  it("still resolves exit 0 and still reports git's own error message", async () => {
+    const repo = makeRepo();
+    const strict = await createStrictExitGit(repo);
+
+    await expect(strict.raw(["ls-files"])).resolves.toBe("file.txt\n");
+    await expect(strict.raw(["rev-parse", "--verify", "missing-ref"])).rejects.toThrow(
+      /fatal: Needed a single revision/
+    );
   });
 });
 

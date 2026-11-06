@@ -572,7 +572,7 @@ describe("PluginService blocklist / kill-switch (#10891)", () => {
       const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
       // Resolves while the fetch is still held open.
       await service.initialize();
-      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
       expect(service.hasPlugin("acme.bad")).toBe(false);
       expect(isBlocked(service, "acme.bad")).toBe(true);
       expect(service.hasPlugin("acme.ok")).toBe(true);

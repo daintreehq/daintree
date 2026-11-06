@@ -31,6 +31,10 @@ function fakeRuntime() {
         observed: null,
       })
     ),
+    bringBack: vi.fn(() =>
+      ok({ outcome: "ok" as const, detail: null, retryAfterMs: null, answer: null })
+    ),
+    status: vi.fn(() => ok({ hosts: [], targets: [], terminals: [] })),
   } satisfies HostControlRuntimeHandle;
 }
 
@@ -229,6 +233,101 @@ describe("runHostControlTool (#13493)", () => {
     for (const answer of refused) expect(answer).toMatchObject({ ok: false, code: "INVALID_ARGS" });
   });
 
+  it("hands host.bringBack a host and nothing else (#16170)", async () => {
+    const runtime = fakeRuntime();
+    const uninstall = setHostControlRuntime(runtime);
+    const access = bindHostControl(() => "hub");
+    await runHostControlTool("host.bringBack", { hostId: "studio" }, access);
+    expect(runtime.bringBack).toHaveBeenCalledWith("hub", { hostId: "studio" });
+    for (const args of [{}, { hostId: "" }, { hostId: 7 }]) {
+      expect(await runHostControlTool("host.bringBack", args, access)).toMatchObject({
+        ok: false,
+        code: "INVALID_ARGS",
+      });
+    }
+    expect(runtime.bringBack).toHaveBeenCalledTimes(1);
+    // No assistant session, no attempt.
+    expect(
+      await runHostControlTool("host.bringBack", { hostId: "studio" }, undefined)
+    ).toMatchObject({ ok: false, code: "NOT_ELIGIBLE" });
+    uninstall();
+  });
+
+  it("hands host.status its targets with the calling session's tier, and never without one (#16191)", async () => {
+    const runtime = fakeRuntime();
+    const uninstall = setHostControlRuntime(runtime);
+    const access = bindHostControl(() => "hub");
+    const args = {
+      targets: [
+        { hostId: "local", projectId: "p1" },
+        { hostId: "studio", projectId: "p2", terminalIds: ["t-1"] },
+      ],
+      includeOutput: true,
+    };
+
+    await runHostControlTool("host.status", args, access, { tier: "core" });
+    const untiered = await runHostControlTool("host.status", args, access);
+    const refused = await Promise.all(
+      [
+        { targets: [] },
+        { targets: [{ hostId: "studio" }] },
+        { targets: [{ hostId: "studio", projectId: "p2", terminalIds: [] }] },
+        // One read per project: naming it twice is refused, not merged.
+        {
+          targets: [
+            { hostId: "studio", projectId: "p2" },
+            { hostId: "studio", projectId: "p2", terminalIds: ["t-1"] },
+          ],
+        },
+        { targets: [{ hostId: "studio", projectId: "p2" }], includeOutput: { lines: 51 } },
+        // As the answer writes them: a control character takes six bytes there.
+        {
+          targets: Array.from({ length: 64 }, (_, index) => ({
+            hostId: "studio",
+            projectId: `${index}`.padStart(2, "0") + "\u0001".repeat(120),
+          })),
+        },
+        // Every id is echoed back with its outcome, so together they are bounded.
+        {
+          targets: Array.from({ length: 40 }, (_, index) => ({
+            hostId: "studio",
+            projectId: `${index}-${"p".repeat(250)}`,
+          })),
+        },
+      ].map((bad) => runHostControlTool("host.status", bad, access, { tier: "core" }))
+    );
+    // The same project on two hosts is two projects.
+    await runHostControlTool(
+      "host.status",
+      {
+        targets: [
+          { hostId: "studio", projectId: "p2" },
+          { hostId: "mini", projectId: "p2" },
+        ],
+        includeOutput: { lines: 5 },
+      },
+      access,
+      { tier: "full" }
+    );
+    uninstall();
+    expect(runtime.status).toHaveBeenCalledTimes(2);
+    expect(runtime.status).toHaveBeenNthCalledWith(1, "hub", args, { tier: "core" });
+    expect(runtime.status).toHaveBeenNthCalledWith(
+      2,
+      "hub",
+      {
+        targets: [
+          { hostId: "studio", projectId: "p2" },
+          { hostId: "mini", projectId: "p2" },
+        ],
+        includeOutput: { lines: 5, stripAnsi: true },
+      },
+      { tier: "full" }
+    );
+    expect(untiered).toMatchObject({ ok: false, code: "NOT_ELIGIBLE" });
+    for (const answer of refused) expect(answer).toMatchObject({ ok: false, code: "INVALID_ARGS" });
+  });
+
   it("hands host.watch one kind of condition to arm, and each operation only its own arguments (#14463)", async () => {
     const runtime = fakeRuntime();
     const uninstall = setHostControlRuntime(runtime);
@@ -265,6 +364,46 @@ describe("runHostControlTool (#13493)", () => {
     uninstall();
     expect(runtime.watch).toHaveBeenCalledTimes(accepted.length);
     expect(runtime.watch).toHaveBeenCalledWith("hub", accepted[0]);
+    for (const answer of refused) expect(answer).toMatchObject({ ok: false, code: "INVALID_ARGS" });
+  });
+
+  it("arms an agent watch on every host or one, and keeps its filters to it (#16188)", async () => {
+    const runtime = fakeRuntime();
+    const uninstall = setHostControlRuntime(runtime);
+    const access = bindHostControl(() => "hub");
+    const accepted = [
+      { operation: "arm", agentsWaiting: true },
+      { operation: "arm", agentsWaiting: true, hostId: "local", waitingReasons: ["any"] },
+      {
+        operation: "arm",
+        agentsWaiting: true,
+        hostId: "h",
+        projectId: "p1",
+        waitingReasons: ["approval", "error"],
+        expiresInSeconds: 600,
+        note: "cover it",
+      },
+    ];
+    for (const args of accepted) await runHostControlTool("host.watch", args, access);
+    const refused = await Promise.all(
+      [
+        // One watch is one kind of condition.
+        { operation: "arm", agentsWaiting: true, connection: "connected", hostId: "h" },
+        { operation: "arm", agentsWaiting: true, cpuIdleCoresAtLeast: 2 },
+        // Its filters belong to it alone.
+        { operation: "arm", hostId: "h", connection: "connected", waitingReasons: ["approval"] },
+        { operation: "arm", hostId: "h", connection: "connected", projectId: "p1" },
+        { operation: "arm", waitingReasons: ["approval"] },
+        { operation: "arm", agentsWaiting: true, waitingReasons: [] },
+        { operation: "arm", agentsWaiting: true, waitingReasons: ["maybe"] },
+        { operation: "arm", agentsWaiting: false },
+        { operation: "cancel", watchId: "hw-1", agentsWaiting: true },
+        { operation: "list", projectId: "p1" },
+      ].map((args) => runHostControlTool("host.watch", args, access))
+    );
+    uninstall();
+    expect(runtime.watch).toHaveBeenCalledTimes(accepted.length);
+    expect(runtime.watch).toHaveBeenCalledWith("hub", accepted[2]);
     for (const answer of refused) expect(answer).toMatchObject({ ok: false, code: "INVALID_ARGS" });
   });
 

@@ -1,6 +1,5 @@
 import { Button } from "@/components/ui/button";
 import { AlertCircle } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
@@ -9,8 +8,12 @@ import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { DIAGNOSTICS_DOCK_REGION_ID } from "@/components/Diagnostics/regionIds";
 import { pluralize } from "@/lib/pluralize";
+import { toolbarIconButtonClass } from "./toolbarItemClasses";
 
-const toolbarIconButtonClass = "toolbar-icon-button text-text-primary";
+/** Two characters at most, so the count stays a dot-sized pill. */
+function countGlyph(count: number): string {
+  return count > 9 ? "9+" : String(count);
+}
 
 interface ToolbarProblemsButtonProps {
   errorCount: number;
@@ -46,11 +49,18 @@ export function ToolbarProblemsButton({
     : topologyWatcherDark
       ? "Worktree list may be stale"
       : null;
-  const errorSummary = `${pluralize(errorCount, "error")}`;
+  const errorSummary = pluralize(errorCount, "error");
   const diagnosticsShortcut = useEffectiveCombo("panel.toggleDiagnostics");
   const diagnosticsAriaShortcut = useAriaKeyshortcuts("panel.toggleDiagnostics");
   const diagnosticsHover = useShortcutHintHover("panel.toggleDiagnostics");
   const isDockOpen = useDiagnosticsStore((state) => state.isOpen);
+  // Name the button by what it observes, and say nothing at rest: "0 errors"
+  // on every pass through the toolbar is noise.
+  const observations = [
+    errorCount > 0 ? errorSummary : null,
+    watcherStatus ? watcherStatus.toLowerCase() : null,
+  ].filter((part): part is string => part !== null);
+  const label = observations.length > 0 ? `Problems — ${observations.join(", ")}` : "Problems";
 
   return (
     <ContextMenu>
@@ -64,28 +74,36 @@ export function ToolbarProblemsButton({
                 size="icon"
                 data-toolbar-item={dataToolbarItem}
                 onClick={onToggleProblems}
-                className={cn(toolbarIconButtonClass, "relative")}
-                aria-label={`Problems: ${errorSummary}${watcherStatus ? `, ${watcherStatus.toLowerCase()}` : ""}`}
+                className={toolbarIconButtonClass}
+                aria-label={label}
                 aria-keyshortcuts={diagnosticsAriaShortcut}
                 aria-expanded={isDockOpen}
                 aria-controls={DIAGNOSTICS_DOCK_REGION_ID}
               >
-                <AlertCircle />
-                <span
-                  data-visible={errorCount > 0}
-                  className="toolbar-problems-badge toolbar-badge absolute top-1.5 right-1.5 w-2 h-2 rounded-full"
-                />
-                {/* Persistent watcher-unreliable pip. 6px + ring-surface-sidebar
-                  per the toolbar pip vocabulary (semantic-status dot); pinned
-                  to the opposite corner so it never collides with the 8px
-                  error badge when both are visible. Shared by recursive-watcher
-                  degradation and topology-watcher-dark — both mean file
-                  watching is unreliable. */}
-                <span
-                  data-testid="watcher-degraded-badge"
-                  data-visible={watcherUnreliable}
-                  className="toolbar-badge absolute bottom-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-status-warning ring-1 ring-surface-sidebar"
-                />
+                {/* Anchored to the glyph with the strip's shared pip geometry.
+                  The count stands down while the dock is open — the dock is
+                  showing the errors — and comes back when it closes. The
+                  watcher warning is a separate observation, so it keeps the
+                  bottom corner rather than fighting the count for the top. */}
+                <span className="relative inline-flex">
+                  <AlertCircle />
+                  <span
+                    aria-hidden="true"
+                    data-visible={errorCount > 0 && !isDockOpen}
+                    data-badge-color="error"
+                    className="toolbar-count toolbar-problems-badge toolbar-badge"
+                  >
+                    {countGlyph(Math.max(errorCount, 1))}
+                  </span>
+                  <span
+                    aria-hidden="true"
+                    data-testid="watcher-degraded-badge"
+                    data-visible={watcherUnreliable && !isDockOpen}
+                    data-badge-color="warning"
+                    data-pip-corner="bottom"
+                    className="toolbar-pip toolbar-badge bg-status-warning"
+                  />
+                </span>
               </Button>
             </TooltipTrigger>
             <TooltipContent side="bottom">

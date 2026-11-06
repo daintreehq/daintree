@@ -6,8 +6,10 @@ import {
   parseContainedFileRequest,
   readContainedDaintreeFile,
   resolveContainedRealPath,
+  statContainedDaintreeFile,
   streamContainedMediaFile,
 } from "./containedFile.js";
+import { PATH_CANONICAL_HEADER } from "../../../shared/types/ipc/files.js";
 import { grantAppCors, trustedAppCorsOrigin } from "./appCors.js";
 import { answerArtifactRequest } from "./artifact.js";
 import { answerHostScopedRequest } from "./hostScoped.js";
@@ -53,6 +55,21 @@ function createDaintreeFileRequestCore() {
         }
         // A media-suffixed alias of a non-media file — fall through to the
         // buffered path, which redoes containment and applies its usual caps.
+      }
+
+      // HEAD is a Markdown image's canonical-path probe, sent after each of
+      // its refreshes, so it answers from a stat instead of reading the bytes
+      // only to discard them.
+      if (request.method === "HEAD") {
+        const stat = await statContainedDaintreeFile(normalizedRoot, normalizedFile, "file");
+        if (stat instanceof Response) return stat;
+        return new Response(null, {
+          status: 200,
+          headers: {
+            ...buildDaintreeFileHeaders(getMimeType(stat.realFile), stat.size),
+            [PATH_CANONICAL_HEADER]: String(stat.pathIsCanonical),
+          },
+        });
       }
 
       const result = await readContainedDaintreeFile(normalizedRoot, normalizedFile, "file");

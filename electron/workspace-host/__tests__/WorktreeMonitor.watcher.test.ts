@@ -237,6 +237,39 @@ describe("WorktreeMonitor", () => {
     vi.restoreAllMocks();
   });
 
+  it("holds file watching off during deletion without aborting safety reads", async () => {
+    mockWatcherStartResult = true;
+    mockGetWorktreeChangesWithStats.mockResolvedValue({ changes: [], changedFileCount: 0 });
+    const monitor = new WorktreeMonitor(
+      TEST_WORKTREE,
+      { ...TEST_CONFIG, gitWatchEnabled: true },
+      makeCallbacks(),
+      "main"
+    );
+    try {
+      await monitor.start();
+      expect(monitor.hasWatcher).toBe(true);
+      const restore = monitor.pauseFileWatchingForDeletion();
+      const restoreConcurrent = monitor.pauseFileWatchingForDeletion();
+      expect(monitor.hasWatcher).toBe(false);
+
+      monitor.isCurrent = true;
+      await monitor.getFreshChanges();
+      expect(monitor.hasWatcher).toBe(false);
+      expect(monitor.isRunning).toBe(true);
+      expect(mockGetWorktreeChangesWithStats.mock.lastCall?.[1].signal.aborted).toBe(false);
+
+      restore();
+      restore();
+      expect(monitor.hasWatcher).toBe(false);
+      restoreConcurrent();
+      await Promise.resolve();
+      expect(monitor.hasWatcher).toBe(true);
+    } finally {
+      monitor.stop();
+    }
+  });
+
   it("calls onRemoved and stops polling when WorktreeRemovedError is thrown", async () => {
     mockGetWorktreeChangesWithStats.mockRejectedValue(new WorktreeRemovedError("/test/worktree"));
 

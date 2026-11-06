@@ -7,6 +7,18 @@ import type { GitStatus } from "@shared/types/git";
 // Type-only: erased before the vi.mock factory runs, so it cannot pull the real
 // module in ahead of its own mock.
 import type { MarkdownViewerProps } from "@/components/Markdown/MarkdownViewer";
+import {
+  GridGroupAttentionContext,
+  useGridGroupAttention,
+  type GridGroupAttention,
+} from "@/components/Panel/gridGroupAttention";
+import {
+  GridGroupTabReorderContext,
+  useGridGroupTabReorder,
+  type GridGroupTabReorder,
+} from "@/components/Panel/gridGroupTabReorder";
+import type { TabInfo } from "@/components/Panel/TabButton";
+import { deriveTerminalChrome } from "@/utils/terminalChrome";
 
 // FilePane forwards a fixed prop list to ContentPanel; #10991 was a dropped
 // `showRestoreControl`, which hid the inline "Move to grid" button on a docked
@@ -15,12 +27,22 @@ import type { MarkdownViewerProps } from "@/components/Markdown/MarkdownViewer";
 // wiring — the seam that shipped the bug. The stub also renders `toolbar`, so
 // the toolbar-owned open-in-editor error banner (#11114) is observable.
 const contentPanelProps: Array<Record<string, unknown>> = [];
+// The tab group edge and reorder each render's ContentPanel took, read the way the real one reads them.
+const groupEdges: Array<GridGroupAttention | null> = [];
+const groupReorders: Array<GridGroupTabReorder | null> = [];
 
 vi.mock("@/components/Panel/ContentPanel", () => ({
   ContentPanel: (
-    props: Record<string, unknown> & { toolbar?: ReactNode; children?: ReactNode }
+    props: Record<string, unknown> & {
+      id: string;
+      location?: "grid" | "dock" | "dialog";
+      toolbar?: ReactNode;
+      children?: ReactNode;
+    }
   ) => {
     contentPanelProps.push(props);
+    groupEdges.push(useGridGroupAttention(props.id, props.location ?? "grid"));
+    groupReorders.push(useGridGroupTabReorder(props.id, props.location ?? "grid"));
     // Render children too so the Source/Rendered branch is observable, not just
     // the toolbar (#11191 HTML preview branch).
     return (
@@ -354,6 +376,8 @@ import { fileEditorSlotKey } from "@shared/types/plugin";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { FILE_READ_ERROR_MESSAGES } from "@/components/FileViewer/fileReadErrors";
 import { revealCopy } from "@/components/FileViewer/revealCopy";
+import { _resetHostPlatformForTests, setHostPlatformInfo } from "@/hooks/useHostPlatform";
+import { _resetCopyFlashForTests, getCopyFlash } from "@/lib/copyFlash";
 import { ClientAppError } from "@/utils/clientAppError";
 import type { DriveLeaseView } from "@shared/types/ipc/driveLease";
 import {
@@ -418,6 +442,8 @@ beforeEach(() => {
 
 afterEach(() => {
   contentPanelProps.length = 0;
+  groupEdges.length = 0;
+  groupReorders.length = 0;
   for (const key of Object.keys(panelsById)) delete panelsById[key];
   setFileViewModeMock.mockReset();
   setFilePanelPathMock.mockReset();
@@ -447,6 +473,89 @@ describe("FilePane restore-control wiring", () => {
     const props = lastContentPanelProps();
     expect(props.showRestoreControl).toBe(true);
     expect(props.onRestore).toBeTypeOf("function");
+  });
+});
+
+describe("FilePane tab group edges (#16151)", () => {
+  function inGroup(panelId: string) {
+    return (
+      <GridGroupAttentionContext.Provider
+        value={{ panelId, ambientAgentState: "waiting", hiddenTabFailed: true }}
+      >
+        <FilePane
+          id="file-1"
+          title="spec.md"
+          isFocused={false}
+          location="grid"
+          onFocus={() => {}}
+          onClose={() => {}}
+        />
+      </GridGroupAttentionContext.Provider>
+    );
+  }
+
+  it("draws its tab group's edge for a hidden tab's ask and failure", () => {
+    render(inGroup("file-1"));
+    expect(groupEdges.at(-1)).toMatchObject({
+      ambientAgentState: "waiting",
+      hiddenTabFailed: true,
+    });
+  });
+
+  it("takes no edge meant for another tab", () => {
+    render(inGroup("other"));
+    expect(groupEdges.at(-1)).toBeNull();
+  });
+});
+
+describe("FilePane tab reorder (#16160)", () => {
+  const tabs: TabInfo[] = [
+    {
+      id: "file-1",
+      title: "spec.md",
+      chrome: deriveTerminalChrome(),
+      kind: "file",
+      isActive: true,
+    },
+    {
+      id: "t-2",
+      title: "Shell",
+      chrome: deriveTerminalChrome(),
+      kind: "terminal",
+      isActive: false,
+    },
+  ];
+  const onTabReorder = vi.fn();
+
+  function inGroup(panelId: string) {
+    panelsById["file-1"] = { id: "file-1", kind: "file", filePath: "/repo/spec.md" };
+    return (
+      <TooltipProvider>
+        <GridGroupTabReorderContext.Provider value={{ panelId, groupId: "g-1", onTabReorder }}>
+          <FilePane
+            id="file-1"
+            title="spec.md"
+            isFocused={false}
+            location="grid"
+            onFocus={() => {}}
+            onClose={() => {}}
+            tabs={tabs}
+          />
+        </GridGroupTabReorderContext.Provider>
+      </TooltipProvider>
+    );
+  }
+
+  it("hands its strip its tab group's reorder", () => {
+    render(inGroup("file-1"));
+    expect(lastContentPanelProps().tabs).toBe(tabs);
+    expect(groupReorders.at(-1)).toMatchObject({ groupId: "g-1", onTabReorder });
+  });
+
+  it("takes no reorder meant for another tab", () => {
+    render(inGroup("other"));
+    expect(lastContentPanelProps().tabs).toBe(tabs);
+    expect(groupReorders.at(-1)).toBeNull();
   });
 });
 
@@ -844,6 +953,99 @@ describe("FilePane reveal in file manager (#11386)", () => {
       await liveReveal.promise;
     });
   });
+
+  describe("in a remote window, where reveal copies the host path (#15722)", () => {
+    const glyph = (button: HTMLElement, name: string) =>
+      button.querySelector("svg")?.classList.contains(`lucide-${name}`) ?? false;
+
+    beforeEach(() => {
+      window.__DAINTREE_HOST_ID__ = { id: "studio-01" };
+      setHostPlatformInfo({
+        platform: "linux",
+        connection: { kind: "ssh", target: "greg@studio-01" },
+      });
+    });
+
+    afterEach(() => {
+      cleanup();
+      delete (window as { __DAINTREE_HOST_ID__?: unknown }).__DAINTREE_HOST_ID__;
+      _resetHostPlatformForTests();
+    });
+
+    it("wears the copy glyph and swaps to a check once main copied the path", async () => {
+      const copy = deferred();
+      dispatchMock.mockReturnValueOnce(copy.promise);
+      const { container } = renderFilePane();
+      expect(glyph(findButton(container, "Copy host path"), "copy")).toBe(true);
+
+      await click(findButton(container, "Copy host path"));
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "file.showItemInFolder",
+        { path: PATH, allowOutsideRoots: true },
+        { source: "user" }
+      );
+      // Nothing is confirmed while the copy is still in flight.
+      expect(glyph(findButton(container, "Copy host path"), "check")).toBe(false);
+
+      await act(async () => {
+        copy.resolve({ ok: true, result: undefined });
+        await copy.promise;
+      });
+
+      expect(glyph(findButton(container, "Copy host path"), "check")).toBe(true);
+    });
+
+    it("leaves a failed copy to the reveal banner, unconfirmed", async () => {
+      dispatchMock.mockResolvedValueOnce({
+        ok: false,
+        error: { code: "EXECUTION_ERROR", message: "Host unreachable" },
+      });
+      const { container } = renderFilePane();
+
+      await click(findButton(container, "Copy host path"));
+
+      const alert = container.querySelector('[role="alert"]');
+      expect(alert?.textContent).toContain("Couldn't copy host path");
+      expect(alert?.textContent).toContain("Host unreachable");
+      expect(glyph(findButton(container, "Copy host path"), "check")).toBe(false);
+      expect(glyph(findButton(container, "Copy host path"), "copy")).toBe(true);
+    });
+
+    it("confirms a Retry that succeeds where it was pressed, since the banner goes", async () => {
+      _resetCopyFlashForTests();
+      dispatchMock.mockResolvedValueOnce({
+        ok: false,
+        error: { code: "EXECUTION_ERROR", message: "Host unreachable" },
+      });
+      const { container } = renderFilePane();
+      await click(findButton(container, "Copy host path"));
+      expect(getCopyFlash()).toBeNull();
+
+      dispatchMock.mockResolvedValueOnce({ ok: true, result: undefined });
+      await click(findButton(container, "Retry copying host path"));
+
+      expect(container.querySelector('[role="alert"]')).toBeNull();
+      expect(getCopyFlash()).not.toBeNull();
+      _resetCopyFlashForTests();
+    });
+
+    it("offers the copy in the unavailable body of a file outside the project", async () => {
+      readMock.mockRejectedValueOnce(new ClientAppError("OUTSIDE_ROOT", "outside"));
+      renderFilePane("/srv/elsewhere/notes.ts");
+      const body = await screen.findByTestId("file-pane-unavailable");
+      const copy = () => within(body).getByRole("button", { name: "Copy host path" });
+      expect(glyph(copy(), "copy")).toBe(true);
+
+      await click(copy());
+
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "file.showItemInFolder",
+        { path: "/srv/elsewhere/notes.ts", allowOutsideRoots: true },
+        { source: "user" }
+      );
+      expect(glyph(copy(), "check")).toBe(true);
+    });
+  });
 });
 
 // #11483: the file viewer's route back to the tree it was opened from. The
@@ -1178,10 +1380,11 @@ describe("FilePane HTML Source/Rendered (#11191)", () => {
   });
 
   // The failure #11587 actually reports: an agent rewrites ./img/arch.png while
-  // spec.md itself is untouched. The silent re-read sees identical markdown, so a
-  // bytes-changed gate would hold the token still and the stale image would stay
-  // on screen. Only markdown opts out of that gate — this is what pins it.
-  it("advances the token on a silent re-read even when the markdown bytes are unchanged", async () => {
+  // spec.md itself is untouched. Worktree ticks reach each image on their own
+  // (#15678), but window focus regain covers a write no watcher saw, and the
+  // re-read it triggers sees identical markdown — so the token has to move on
+  // the focus itself, not on whether the bytes did.
+  it("advances the token on window focus even when the markdown bytes are unchanged", async () => {
     renderPane("/repo/docs/spec.md", "rendered");
     await screen.findByTestId("markdown-viewer-mock");
     const before = markdownViewerProps.current?.cacheBust;

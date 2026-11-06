@@ -37,6 +37,7 @@ import type { ResourceProfile } from "../../../shared/types/resourceProfile.js";
 import { deriveAgentObservationLevel } from "../../../shared/types/powerPolicy.js";
 import { getPowerPolicy } from "../../window/powerPolicy.js";
 import { isHostThrowawayTerminalId } from "../../../shared/config/hostThrowaway.js";
+import { isDecisionsRelayTerminalId } from "../../../shared/config/terminalScreenPersistence.js";
 
 /**
  * Stamp main's current PATH onto a Windows spawn message.
@@ -117,6 +118,11 @@ export interface ShardRecoveryCoordinatorDeps {
   dropShardSignals: (shardKey: string) => void;
   /** A terminal that died with its shard and is not brought back. */
   terminalLost: (id: string) => void;
+  /**
+   * One incarnation of a terminal died with its shard, and the terminal is
+   * being replayed as a new one (#15976).
+   */
+  incarnationLost?: (id: string, launchGeneration: number) => void;
   logWarn: (message: string) => void;
 }
 
@@ -254,8 +260,8 @@ export class ShardRecoveryCoordinator {
    */
   private disarmStoredHandback(id: string): void {
     const stored = this.deps.pendingSpawns.get(id);
-    if (stored?.handbackCode === undefined) return;
-    const { handbackCode: _delivered, ...rest } = stored;
+    if (stored?.handbackCode === undefined && stored?.handbackInstruction === undefined) return;
+    const { handbackCode: _delivered, handbackInstruction: _instruction, ...rest } = stored;
     this.deps.pendingSpawns.set(id, rest);
   }
 
@@ -307,12 +313,18 @@ export class ShardRecoveryCoordinator {
 
   /**
    * A host's throwaway runs (#14447) never come back from a crash: a replay
-   * would start a fresh agent nobody launched. Dropped before any replay, and
-   * reported lost so their inventory lets them go.
+   * would start a fresh agent nobody launched. Nor does a Decisions relay
+   * deploy (#16023): its shell outlives the deploy, so a replay would run it
+   * again under the same Worker name, updating that Worker or giving it a new
+   * claim secret. Nor a relay update (#16201), which nobody asked to run, nor a
+   * removal (#16202), which would ask to delete the relay
+   * again. Dropped before any replay, and reported lost so their panes and
+   * inventory let them go.
    */
-  private dropThrowawaySpawns(shard: PtyShard): void {
+  private dropNeverReplayedSpawns(shard: PtyShard): void {
     for (const id of [...this.deps.pendingSpawns.keys()]) {
-      if (!isHostThrowawayTerminalId(id) || this.deps.ownerKey(id) !== shard.key) continue;
+      const neverReplayed = isHostThrowawayTerminalId(id) || isDecisionsRelayTerminalId(id);
+      if (!neverReplayed || this.deps.ownerKey(id) !== shard.key) continue;
       this.deps.pendingSpawns.delete(id);
       this.deps.displacedSpawns.delete(id);
       this.deps.restartExitSuppression.delete(id);
@@ -321,7 +333,7 @@ export class ShardRecoveryCoordinator {
   }
 
   private respawnPendingForShard(shard: PtyShard): void {
-    this.dropThrowawaySpawns(shard);
+    this.dropNeverReplayedSpawns(shard);
     // Kills sent to the crashed shard will never receive "exit" events, so
     // its pendingKillCount entries are permanently stale. Unlike pendingSpawns
     // (replayed below to recreate terminals on the new host), they are
@@ -369,6 +381,7 @@ export class ShardRecoveryCoordinator {
       const previousGeneration = options.launchGeneration ?? ledger.currentGeneration(id);
       if (previousGeneration !== undefined && ledger.currentGeneration(id) !== undefined) {
         ledger.recordClose(id, previousGeneration, "pty-host-crash");
+        this.deps.incarnationLost?.(id, previousGeneration);
       }
       const generation = ledger.recordLaunch(id, ledgerFactsFromSpawnOptions(options));
       this.deps.restartExitSuppression.delete(id);
@@ -463,7 +476,7 @@ export class ShardRecoveryCoordinator {
       `[PtyClient] PTY shard '${shard.key}' exceeded its crash budget (code ${code}); migrating its terminals to the default shard`
     );
     // Read before the shard is retired, while its terminals still route to it.
-    this.dropThrowawaySpawns(shard);
+    this.dropNeverReplayedSpawns(shard);
     shard.retired = true;
     this.deps.shards.delete(shard.key);
     this.deps.cancelShardRetirement(shard.key);
@@ -495,6 +508,7 @@ export class ShardRecoveryCoordinator {
       const previousGeneration = options.launchGeneration ?? ledger.currentGeneration(id);
       if (previousGeneration !== undefined && ledger.currentGeneration(id) !== undefined) {
         ledger.recordClose(id, previousGeneration, "pty-host-crash");
+        this.deps.incarnationLost?.(id, previousGeneration);
       }
       const generation = ledger.recordLaunch(id, ledgerFactsFromSpawnOptions(options));
       this.deps.restartExitSuppression.delete(id);

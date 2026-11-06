@@ -33,6 +33,34 @@ describe("HandbackTracker", () => {
     expect(codes(tracker)).toEqual(["launch"]);
   });
 
+  it("marks a scheduled run's launch prompt as the run's, and nothing else (#15982)", () => {
+    const tracker = new HandbackTracker(noScreen);
+    tracker.registerDelivered("launch", "run");
+    tracker.noteSubmission("later0")?.();
+    tracker.registerDelivered("plain0", "handback");
+    expect(tracker.deliveredRequests()).toEqual([
+      { code: "later0", seq: 2, delivered: true },
+      { code: "plain0", seq: 3, delivered: true },
+    ]);
+
+    const fresh = new HandbackTracker(noScreen);
+    fresh.registerDelivered("launch", "run");
+    expect(fresh.deliveredRequests()).toEqual([
+      { code: "launch", seq: 1, delivered: true, instruction: "run" },
+    ]);
+  });
+
+  it("marks a submission to an armed terminal as offering needs-you, and nothing else (#16171)", () => {
+    const tracker = new HandbackTracker(noScreen);
+    tracker.noteSubmission("armed0", "token-a", "run")?.();
+    expect(tracker.deliveredRequests()).toEqual([
+      { code: "armed0", submissionToken: "token-a", seq: 1, delivered: true, instruction: "run" },
+    ]);
+
+    tracker.noteSubmission("plain0", undefined, "handback")?.();
+    expect(tracker.deliveredRequests()).toEqual([{ code: "plain0", seq: 2, delivered: true }]);
+  });
+
   it("retires earlier requests when a later submission reaches the pty", () => {
     const tracker = new HandbackTracker(noScreen);
     tracker.registerDelivered("first0");
@@ -126,6 +154,15 @@ describe("HandbackTracker", () => {
     expect(tracker.noteReported("aaaaaa", "x".repeat(500), false)).toBe(true);
     expect(tracker.noteReported("aaaaaa", "x".repeat(500), true)).toBe(true);
     expect(tracker.noteReported("aaaaaa", "x".repeat(500), true)).toBe(false);
+  });
+
+  it("reports a capture again when only the marker's form changes (#16190)", () => {
+    const tracker = new HandbackTracker(noScreen);
+    tracker.registerDelivered("aaaaaa");
+
+    expect(tracker.noteReported("aaaaaa", "deploy", false, "done")).toBe(true);
+    expect(tracker.noteReported("aaaaaa", "deploy", false, "needs-you")).toBe(true);
+    expect(tracker.noteReported("aaaaaa", "deploy", false, "needs-you")).toBe(false);
   });
 
   it("reads the rendered screen through the reader it was given", () => {

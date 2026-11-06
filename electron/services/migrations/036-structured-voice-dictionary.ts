@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../../utils/storeValues.js";
 import type { Migration } from "../StoreMigrations.js";
 
 /**
@@ -45,6 +46,6 @@ export const migration036: Migration = {
     }
 
     console.log(`[Migration 036] Moved ${migrated} voice dictionary terms into entries`);
-    store.set("voiceInput", { ...rest, dictionary });
+    setRawStoreValue(store, "voiceInput", { ...rest, dictionary });
   },
 };

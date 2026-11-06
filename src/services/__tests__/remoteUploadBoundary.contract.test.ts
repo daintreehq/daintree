@@ -19,6 +19,8 @@ const REMOTE_ONLY = [
   "src/services/remoteMaterializer.ts",
   "src/components/Terminal/uploads/uploadConfirm.ts",
   "src/components/Terminal/uploads/UploadConfirmHost.tsx",
+  "src/components/Terminal/uploads/FolderUploadQuestion.tsx",
+  "src/components/Terminal/uploads/folderRefusal.ts",
   // The hosts overview, the new-worktree placement row and other hosts' worktrees.
   "src/components/Hosts/Overview/HostsOverviewHost.tsx",
   "src/components/Hosts/Overview/HostsOverviewDialog.tsx",

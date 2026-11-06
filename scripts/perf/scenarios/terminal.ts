@@ -16,6 +16,15 @@ import {
   runSubmitLane,
   SUBMIT_LANE_CORRECTNESS,
 } from "../lib/submitLaneFixture";
+import {
+  buildForwardingFleet,
+  cohortCounts,
+  FLEET_COHORTS,
+  FORWARDING_COHORTS,
+  forwardingMisses,
+  runForwardingFleet,
+  type ForwardingFleetPlan,
+} from "../lib/agentOutputForwardingFixture";
 import { percentile } from "../lib/stats";
 import { INCREMENTAL_RESTORE_CONFIG } from "../../../src/services/terminal/types";
 import { WorkerParseSession } from "../../../src/services/terminal/workerParse/WorkerParseSession";
@@ -97,6 +106,14 @@ function plans(): NonNullable<typeof corpora> {
     }),
   };
   return corpora;
+}
+
+let forwardingFleetPlan: ForwardingFleetPlan | null = null;
+
+/** Built once, outside the measured runs, for the same reason as the corpora above. */
+function forwardingFleet(): ForwardingFleetPlan {
+  forwardingFleetPlan ??= buildForwardingFleet();
+  return forwardingFleetPlan;
 }
 
 // One byte past the Daintree-side incremental-restore slice boundary —
@@ -694,6 +711,66 @@ export const terminalScenarios: PerfScenario[] = [
           ...grade,
         },
         notes: `${SUBMIT_BURST} submits per arm, ${contended.slowSubmits} held open at ${SUBMIT_SLOW_WAIT_MS}ms`,
+      };
+    },
+  },
+  {
+    id: "PERF-037",
+    name: "Agent Output Forwarding - Fleet to Main",
+    description:
+      "How much raw agent output the PTY host hands to Main as agent:output (#15667). Twelve " +
+      "agent terminals stream answers in 1-4 K-character chunks at 32 KiB/s and a thirteenth floods a " +
+      "test log at 1 MiB/s in exact 2 KiB chunks, none of them the Daintree Assistant; one " +
+      "Assistant terminal of each shape runs beside them as the bound control. Every terminal " +
+      "goes through the real PtyDataPipeline into a real AgentOutputForwarder on one virtual " +
+      "clock, so the forwarder's own 50 ms timer and 2,000-char size trigger decide the batching, " +
+      "and every emit on the real event bus is one message pty-host.ts sends to Main. Reported " +
+      "per cohort as messages, messages per MiB of PTY output and forwarded UTF-8 bytes per MiB; " +
+      "the fleet figures are the issue's workload. Counts, not time: they compare across " +
+      "machines. Graded on what must not change: every chunk still reaches the renderer with " +
+      "its answered colour queries stripped, the host-local output ring still holds the tail, an " +
+      "Assistant terminal forwards exactly its raw PTY output in order before any teardown flush, " +
+      "any other terminal forwards all of its output or none of it, and every payload names the " +
+      "right terminal and agent.",
+    tier: "fast",
+    modes: ["smoke", "ci", "nightly"],
+    iterations: { smoke: 2, ci: 3, nightly: 5 },
+    warmups: 1,
+    correctness: [
+      "rendererDeliveryMisses",
+      "outputRingMisses",
+      "boundPayloadMisses",
+      "unboundPayloadMisses",
+      "attributionMisses",
+    ],
+    // Counts per MiB hold at any size, but the raw counts are the issue's
+    // fleet: twelve streaming agents and a flood, at the volume declared here.
+    workloadFloors: { terminalCount: 15, fleetPtyBytes: 1_500_000 },
+    async run() {
+      const plan = forwardingFleet();
+      const observed = await runForwardingFleet(plan);
+      const fleet = cohortCounts(plan, observed, FLEET_COHORTS);
+      const perCohort: Record<string, number> = {};
+      for (const cohort of FORWARDING_COHORTS) {
+        const counts = cohortCounts(plan, observed, [cohort]);
+        perCohort[`${cohort}Messages`] = counts.messages;
+        perCohort[`${cohort}MessagesPerMiB`] = counts.messagesPerMiB;
+        perCohort[`${cohort}BytesPerMiB`] = counts.bytesPerMiB;
+      }
+
+      return {
+        durationMs: -1,
+        metrics: {
+          terminalCount: plan.terminals.length,
+          fleetPtyBytes: fleet.ptyBytes,
+          fleetMessages: fleet.messages,
+          fleetForwardedBytes: fleet.forwardedBytes,
+          fleetMessagesPerMiB: fleet.messagesPerMiB,
+          fleetBytesPerMiB: fleet.bytesPerMiB,
+          ...perCohort,
+          ...forwardingMisses(plan, observed),
+        },
+        notes: `${plan.terminals.length} terminals, ${(fleet.ptyBytes / (1024 * 1024)).toFixed(2)} MiB of unbound fleet output`,
       };
     },
   },

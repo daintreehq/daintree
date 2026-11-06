@@ -1,8 +1,8 @@
 import type { Plugin, HtmlTagDescriptor } from "vite";
 import path from "path";
-import { getFirstRenderPreloadSeeds } from "../../shared/config/panelKindRegistry";
+import { getFirstRenderPreloadSeeds } from "../../shared/config/panelKindRegistry.ts";
 import { computeFirstRenderPreloadFiles } from "../first-render-closure-lib.mjs";
-import { isHostFacadeChunkName } from "./vite-host-facade";
+import { isHostFacadeChunkName } from "./vite-host-facade.ts";
 
 // Prepends the V8 explicit-compile-hints magic comment (Chrome >=136; we ship
 // Chromium 148) to a curated set of boot-hot chunks so V8 eagerly compiles all

@@ -75,6 +75,7 @@ import { defineIpcNamespace, op } from "../define.js";
 import { getIpcDispatcher } from "../dispatcher.js";
 import { CANOPY_METHOD_CHANNELS } from "./canopy.preload.js";
 import {
+  assistantWatchSlot,
   beginWatchRequest,
   isCurrentWatchRequest,
   followDriveLeaseChange,
@@ -104,6 +105,7 @@ import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
 import { answerRunByLabel, isAnswerLabel } from "../../services/terminalAnswer.js";
 import { isCanopyViewerEndpointId } from "../endpoint.js";
 import { terminalAnswerOf } from "../../../shared/utils/terminalSubmission.js";
+import { scheduledRunForRecord } from "../../../shared/utils/scheduledRunProvenance.js";
 import { getGitBranch } from "../../utils/gitUtils.js";
 import { events } from "../../services/events.js";
 import { projectStore } from "../../services/ProjectStore.js";
@@ -1011,6 +1013,7 @@ function endOnHost(runId: string, info: HostTerminalRecord): void {
         agentLaunchFlags: info.agentLaunchFlags,
         agentModelId: info.agentModelId,
         cwd: info.cwd,
+        ...scheduledRunForRecord(info),
         ...attributeClose(info, "kill"),
       },
     });
@@ -1530,7 +1533,10 @@ export const canopyNamespace = defineIpcNamespace({
           activeViews.delete(id);
           // A closed panel shows nothing: the next open says afresh what it lists.
           viewShown.delete(id);
-          stopTerminalWatch(id);
+          // Its pane's stream. The global assistant's is let go by its own
+          // pane, which may outlive this: Canopy moved to another host with
+          // the assistant still docked, or the Assistant panel behind it.
+          stopTerminalWatch(id, "detail");
         }
         syncActive();
         return getService().getSnapshot();
@@ -1614,10 +1620,12 @@ export const canopyNamespace = defineIpcNamespace({
         // A viewer serves another machine's reader, which never holds this one's input.
         const stamp = isViewer(ctx) ? null : parseGlobalAssistantInputStamp(inputStamp);
         const viewId = ctx.webContentsId;
-        const ticket = beginWatchRequest(viewId);
+        // The global session streams beside the run a pane selected, never in its place.
+        const slot = assistantWatchSlot(subject);
+        const ticket = beginWatchRequest(viewId, slot);
         watchView(ctx);
         const binding = await resolveLiveAssistant(subject, await liveAssistantSources(), stamp);
-        if (!isCurrentWatchRequest(viewId, ticket)) return { watchId: null, snapshot: null };
+        if (!isCurrentWatchRequest(viewId, ticket, slot)) return { watchId: null, snapshot: null };
         const ptyClient = requirePtyClient();
         const { terminalId } = binding.subject;
         return watchTerminal(
@@ -1630,7 +1638,9 @@ export const canopyNamespace = defineIpcNamespace({
           // Resize authority follows input: a global session's other windows only read it,
           // and a viewer follows the size this machine's own window gave the terminal.
           isViewer(ctx) ? () => false : () => drivesRun(ctx, terminalId) && binding.mayType(viewId),
-          binding
+          binding,
+          false,
+          slot
         );
       },
       { withContext: true }
@@ -1728,8 +1738,11 @@ export const canopyNamespace = defineIpcNamespace({
     unwatchTerminal: op(
       CANOPY_METHOD_CHANNELS.unwatchTerminal,
       async (ctx, watchId?: number): Promise<void> => {
+        // No stream named: the pane's selected run, as an All hosts pane lets
+        // go of a host it moved off. The global assistant beside it is let go
+        // only by its own stream.
         if (watchId === undefined) {
-          stopTerminalWatch(ctx.webContentsId);
+          stopTerminalWatch(ctx.webContentsId, "detail");
           return;
         }
         if (!Number.isSafeInteger(watchId)) throw new Error("Invalid watch");

@@ -10,6 +10,8 @@ import { useRecipeEditorActivityStore } from "@/store/recipeEditorActivityStore"
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { getWorktreePathIndex } from "@/store/storeAccessors";
 import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
+import { ConfirmationTimeoutError } from "../confirmationTimeout";
+import { PANEL_LIMIT_CONFIRM_EXPIRED_REASON } from "./panelLimitError";
 import {
   TerminalSpawnSourceSchema,
   RecipeSummarySchema,
@@ -223,7 +225,8 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
         // agent-source terminal cap, and the host's record of what an approver
         // was shown so the cap is sized to that rather than to the unapproved
         // floor (#12263). Both are stamped by ActionService on every dispatch,
-        // so this is the live path for all real invocations.
+        // so this is the live path for all real invocations. The dispatch
+        // deadline bounds any panel-limit confirm the run raises (#15648).
         const recipeName = useRecipeStore.getState().getRecipeById(recipeId)?.name;
         const results = await useRecipeStore
           .getState()
@@ -232,6 +235,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
             focusPolicy,
             dispatchSource: ctx.dispatchSource,
             hostApprovedRecipeRun: ctx.hostApprovedRecipeRun,
+            dispatchDeadlineAt: ctx.dispatchDeadlineAt,
           });
 
         // Toast/inbox first so palette users see the failure even though the
@@ -244,7 +248,11 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
 
         if (results.spawned.length === 0 && results.failed.length > 0) {
           const reasons = Array.from(new Set(results.failed.map((f) => f.error))).join("; ");
-          throw new Error(`Recipe launch failed: ${reasons}`);
+          const message = `Recipe launch failed: ${reasons}`;
+          if (results.failed.some((f) => f.error === PANEL_LIMIT_CONFIRM_EXPIRED_REASON)) {
+            throw new ConfirmationTimeoutError(message);
+          }
+          throw new Error(message);
         }
 
         return {

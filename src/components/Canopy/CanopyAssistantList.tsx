@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from "react";
+import { useState, type KeyboardEvent, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import { CanopyTerminal } from "./CanopyTerminal";
 import { CanopyRowAge, CanopyWhereLine, MetaDot, OVERDUE_WAIT_MS } from "./CanopyRow";
 import {
   assistantAgePhrase,
+  assistantDisplayName,
   assistantRowNote,
   assistantStateSince,
   assistantStatus,
@@ -64,7 +65,7 @@ export function CanopyAssistantRow({
   const place = item.projectName ?? "Global";
   // Its role and session say which assistant this is, as a worker's task
   // names it; the agent it runs on follows, as a worker's does.
-  const name = ["Daintree Assistant", item.session, item.agentName]
+  const name = [assistantDisplayName(item), item.session, item.agentName]
     .filter((part): part is string => !!part)
     .join(", ");
   const meta = [
@@ -115,7 +116,7 @@ export function CanopyAssistantRow({
             className="flex min-w-0 flex-1 text-sm leading-5 text-text-primary"
           >
             {/* The role gives way first: the session is what tells two apart. */}
-            <span className="min-w-0 truncate">Daintree Assistant</span>
+            <span className="min-w-0 truncate">{assistantDisplayName(item)}</span>
             {item.session !== null && (
               <span className="flex shrink-0 whitespace-nowrap">
                 <MetaDot />
@@ -159,13 +160,18 @@ export function CanopyAssistantRow({
  * The selected assistant's own live session, through the exact-subject viewer,
  * and the way into its lane. Nothing it shows is read by Canopy's readers.
  */
-export function CanopyAssistantPane({
-  item,
-  refusal,
-  onOpen,
-  showingWork,
-  onShowWork,
-}: {
+export function CanopyAssistantPane(props: CanopyAssistantPaneHeadProps) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="canopy-assistant-pane">
+      <CanopyAssistantPaneHead {...props} />
+      <CanopyAssistantPaneFrame>
+        <AssistantLiveTerminal item={props.item} />
+      </CanopyAssistantPaneFrame>
+    </div>
+  );
+}
+
+interface CanopyAssistantPaneHeadProps {
   item: CanopyAssistantItem;
   /** Why the last "Open in Assistant" didn't, in words. */
   refusal: string | null;
@@ -174,16 +180,42 @@ export function CanopyAssistantPane({
   showingWork: boolean;
   /** Narrow the inbox to its work, or, while it is, show the whole inbox again. */
   onShowWork: () => void;
-}) {
-  // Made once per pane: the pane is keyed by the exact subject, and a fresh
-  // directory read hands over an equal subject that must not reopen the stream.
-  const [api] = useState(() => assistantTerminalApi(item.subject));
+}
+
+/**
+ * What the pane says above an assistant's session: what it is doing, where
+ * it runs, how it supervises, and what waits on the person.
+ */
+export function CanopyAssistantPaneHead({
+  item,
+  refusal,
+  onOpen,
+  showingWork,
+  onShowWork,
+}: CanopyAssistantPaneHeadProps) {
   const supervision = assistantSupervision(item);
+  const status = assistantStatus(item);
   return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="canopy-assistant-pane">
-      <div className="flex h-9 min-w-0 shrink-0 items-center gap-2 px-1 text-xs select-none">
-        <span className="min-w-0 shrink-0 font-medium text-text-primary">Daintree Assistant</span>
-        <span className="min-w-0 flex-1 truncate text-text-secondary">
+    <>
+      {/* Wraps rather than clips where the pane is narrow, as it is docked beside an agent. */}
+      <div className="flex min-h-9 min-w-0 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 px-1 py-1 text-xs select-none">
+        {/* What it is doing, as its row says it: the observation, never a verdict. */}
+        <span
+          data-canopy-assistant-state=""
+          className={cn(
+            "flex max-w-full min-w-0 shrink-0 items-center gap-1.5",
+            item.ask ? "text-text-primary" : "text-text-secondary"
+          )}
+        >
+          <span aria-hidden="true" className="flex size-4 shrink-0 items-center justify-center">
+            <PilotRunState band={assistantBand(item)} agentState={item.agentState ?? undefined} />
+          </span>
+          <span className="min-w-0 truncate">{status}</span>
+        </span>
+        <span className="min-w-0 shrink-0 font-medium text-text-primary">
+          {assistantDisplayName(item)}
+        </span>
+        <span className="min-w-0 flex-1 basis-24 truncate text-text-secondary">
           {[item.scopeLabel, item.agentName].filter(Boolean).join(" · ")}
         </span>
         <Button variant="outline" size="xs" pressed={showingWork} onClick={onShowWork}>
@@ -216,16 +248,32 @@ export function CanopyAssistantPane({
           </Callout>
         </div>
       )}
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[var(--radius-md)] border border-border-default bg-surface-panel">
-        {/* The viewer is admitted by the exact subject, not by a spawn stamp:
-            the incarnation only says which run this pane is for. */}
-        <CanopyTerminal
-          runId={item.subject.terminalId}
-          spawnedAt={item.subject.incarnation}
-          api={api}
-        />
-      </div>
+    </>
+  );
+}
+
+/** The frame an assistant's session sits in. */
+export function CanopyAssistantPaneFrame({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[var(--radius-md)] border border-border-default bg-surface-panel">
+      {children}
     </div>
+  );
+}
+
+/** An assistant's session through the exact-subject viewer, read and typed to as its own host allows. */
+function AssistantLiveTerminal({ item }: { item: CanopyAssistantItem }) {
+  // Made once per pane: the pane is keyed by the exact subject, and a fresh
+  // directory read hands over an equal subject that must not reopen the stream.
+  const [api] = useState(() => assistantTerminalApi(item.subject));
+  // The viewer is admitted by the exact subject, not by a spawn stamp: the
+  // incarnation only says which run this pane is for.
+  return (
+    <CanopyTerminal
+      runId={item.subject.terminalId}
+      spawnedAt={item.subject.incarnation}
+      api={api}
+    />
   );
 }
 

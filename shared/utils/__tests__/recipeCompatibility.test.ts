@@ -47,6 +47,7 @@ describe("detectRecipeForwardIncompat", () => {
           args: "--x",
           devCommand: "d",
           exitBehavior: "keep",
+          whenDone: "close",
           agentModelId: "m",
           agentLaunchFlags: ["--f"],
           location: "dock",

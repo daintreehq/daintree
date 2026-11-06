@@ -26,6 +26,11 @@ export interface UseRovingRowsArgs {
    * `containerProps.ref` on the container.
    */
   containerRef?: React.RefObject<HTMLElement | null>;
+  /**
+   * Leave an end-of-list Up/Down from a focused row to the surroundings rather
+   * than consuming it, for a list nested in another keyboard model.
+   */
+  releaseAtEdges?: boolean;
 }
 
 export interface UseRovingRowsResult {
@@ -74,6 +79,7 @@ export function useRovingRows({
   reveal,
   windowed = false,
   containerRef: externalContainerRef,
+  releaseAtEdges = false,
 }: UseRovingRowsArgs): UseRovingRowsResult {
   const [cursorKey, setCursorKey] = useState<string | null>(null);
   const [stopMounted, setStopMounted] = useState(false);
@@ -144,13 +150,25 @@ export function useRovingRows({
         default:
           return;
       }
+      // Opted in: at an end, an arrow that moves nothing from a focused row is
+      // left to the list's surroundings (a sidebar card steps on to the next
+      // worktree). Never from the parked container, whose arrows must still
+      // reveal the remembered row.
+      if (
+        releaseAtEdges &&
+        to === from &&
+        (event.key === "ArrowDown" || event.key === "ArrowUp") &&
+        target.closest("[data-roving-row]")
+      ) {
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
       const key = keys[to]!;
       setCursorKey(key);
       focusRow(key, to);
     },
-    [keys, tabStopKey, focusRow, containerRef]
+    [keys, tabStopKey, focusRow, containerRef, releaseAtEdges]
   );
 
   const onContainerFocus = useCallback(

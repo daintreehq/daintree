@@ -119,12 +119,21 @@ export const config: AgentConfig = {
     args: [],
   },
   authCheck: {
-    // `amp login` writes OAuth tokens to ~/.amp/oauth/. Keychain-only
-    // installs leave that directory absent — those users get
-    // `authConfirmed: false` but remain launchable.
-    configPathsAll: [".amp/oauth"],
+    // Amp documents its credentials file as ~/.local/share/amp/secrets.json
+    // (home-relative on macOS, Linux and Windows; https://ampcode.com/security).
+    // Existence-only: the file is never read. ~/.amp/oauth is kept as a legacy
+    // fallback. Installs with neither get `authConfirmed: false` but remain
+    // launchable.
+    configPathsAll: [".local/share/amp/secrets.json", ".amp/oauth"],
     envVar: "AMP_API_KEY",
   },
+  // No variable moves an Amp login on its own: AMP_HOME is the install
+  // directory, and secrets.json sits in ~/.local/share/amp (under
+  // XDG_DATA_HOME on Linux only, which the other tools the agent runs read
+  // too). `amp account switch` picks the account for every later amp process,
+  // not one launch. An access token in AMP_API_KEY takes precedence over the
+  // saved login, so a preset carrying one runs on that token's account.
+  account: { kind: "api-key", keyVars: ["AMP_API_KEY"] },
   prerequisites: [
     {
       tool: "amp",
@@ -135,7 +144,10 @@ export const config: AgentConfig = {
     },
   ],
   envSuggestions: [
-    { key: "AMP_API_KEY", hint: "Amp API key for headless / CI authentication" },
+    {
+      key: "AMP_API_KEY",
+      hint: "Amp access token, used instead of the amp login (headless use, or another account)",
+    },
     { key: "AMP_HOME", hint: "Override Amp install directory (default: ~/.amp)" },
   ],
 };

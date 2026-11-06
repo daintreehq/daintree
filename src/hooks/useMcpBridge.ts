@@ -62,6 +62,7 @@ import type {
   ActionContext,
   ActionDispatchResult,
   ActionId,
+  HostApprovedPush,
   HostApprovedRecipeRun,
   HostApprovedTarget,
 } from "@shared/types/actions";
@@ -82,6 +83,19 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { resolveMcpConfirmRequester } from "@/lib/mcpConfirmRequester";
 import { waitForWorktreeSnapshot } from "@/store/worktreeSnapshotSync";
 import { withReplayedWorktreeDetails } from "@/services/actions/replayedContextWorktree";
+import {
+  agentPresetMutationFingerprint,
+  isAgentPresetMutationAction,
+  planAgentPresetMutation,
+  type AgentPresetMutation,
+  type AgentPresetMutationActionId,
+} from "@/services/actions/definitions/agentPresetMutation";
+import { readPresetWriteSources } from "@/services/actions/definitions/agentPresetSources";
+import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import {
+  agentPresetPreviewSubject,
+  formatAgentPresetPreviewLines,
+} from "@/lib/mcpAgentPresetPreview";
 
 const REJECTION_RESULT: ActionDispatchResult = {
   ok: false,
@@ -128,6 +142,24 @@ const TIMEOUT_RESULT: ActionDispatchResult = {
   error: {
     code: "CONFIRMATION_TIMEOUT",
     message: "Confirmation request timed out before the user responded.",
+  },
+};
+
+/**
+ * An approved push whose confirm measured nothing (#15646): the read failed,
+ * found no branch or destination, or never ran because the worktree didn't
+ * resolve when the modal opened. The approval then names no branch, commit or
+ * destination, and a push is only ever allowed to publish what one did — so it
+ * is refused rather than run against whatever the worktree holds now. The
+ * modal still allowed the click, with its "couldn't verify" warning, because a
+ * permanently disabled approve button would strand the request until timeout.
+ */
+const UNREVIEWED_PUSH_RESULT: ActionDispatchResult = {
+  ok: false,
+  error: {
+    code: "CONFIRMATION_REQUIRED",
+    message:
+      "Push refused: the confirmation couldn't read what this push would publish, so the approval covers no branch, commit or destination. Nothing was pushed. Call again to raise a fresh confirmation with the push's preview.",
   },
 };
 
@@ -188,6 +220,9 @@ const MCP_SPAWN_TAGGED_ACTIONS = new Set([
 ]);
 
 function shouldTagMcpSpawn(actionId: string): boolean {
+  // The preset writes launch nothing, and their strict schemas would refuse the
+  // spawn fields as unknown (#16047).
+  if (isAgentPresetMutationAction(actionId)) return false;
   return actionId.startsWith("agent.") || MCP_SPAWN_TAGGED_ACTIONS.has(actionId);
 }
 
@@ -261,7 +296,14 @@ export type McpConfirmPreviewTarget =
    * (#15270): which conversation it continues is the choice the hold left to
    * the user, and the argument summary never shows the conversation.
    */
-  | { kind: "terminalStartHeld"; terminalId: string; start: StartHeldChoice };
+  | { kind: "terminalStartHeld"; terminalId: string; start: StartHeldChoice }
+  /**
+   * A user-preset write (#16047), planned from the dispatch arguments and the
+   * stored presets. Synchronous like the forge kinds: the arguments are the
+   * change, and the env inside them reaches the argument summary only as
+   * `<object>`. Planned again at `run()`, which writes what that plan says.
+   */
+  | { kind: "agentPreset"; mutation: AgentPresetMutation };
 
 /** Section heading rendered above each kind's preview lines. */
 const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
@@ -277,10 +319,81 @@ const PREVIEW_TITLES: Record<McpConfirmPreviewTarget["kind"], string> = {
   forgeAddIssueComment: "Comment to be posted",
   terminalLaunch: "Terminal to be opened",
   terminalStartHeld: "Held pane to be started",
+  // Replaced per operation below. Present so the map stays exhaustive.
+  agentPreset: "Launch preset",
+};
+
+const AGENT_PRESET_PREVIEW_TITLES: Record<AgentPresetMutation["operation"], string> = {
+  create: "Preset to be created",
+  update: "Changes to this preset",
+  delete: "Preset to be removed",
 };
 
 export function mcpConfirmPreviewTitle(target: McpConfirmPreviewTarget): string {
+  if (target.kind === "agentPreset") return AGENT_PRESET_PREVIEW_TITLES[target.mutation.operation];
   return PREVIEW_TITLES[target.kind];
+}
+
+/**
+ * Stands in for a create's id while it is only being previewed or checked; the
+ * run mints the one that is stored. Fresh each time, so it can't match a real
+ * preset a fallback names and refuse that as the preset naming itself.
+ */
+function previewPresetId(): string {
+  return `user-${crypto.randomUUID()}`;
+}
+
+/**
+ * The preset or its defaults changed between the preview and the approval
+ * (#16047). Main reads `CONFIRMATION_REQUIRED` as "ask again", which is what
+ * the caller should do: a fresh call previews the preset as it now stands.
+ */
+const PRESET_CHANGED_RESULT: ActionDispatchResult = {
+  ok: false,
+  error: {
+    code: "CONFIRMATION_REQUIRED",
+    message:
+      "Preset write refused: the preset or its defaults changed while the confirmation was open, so the approval doesn't cover what would be written. Nothing was written. Call again to raise a fresh confirmation.",
+  },
+};
+
+/** Plan a preset write against this view's stores, for its preview or its refusal. */
+function planPresetWriteHere(
+  actionId: AgentPresetMutationActionId,
+  args: unknown,
+  context: ActionContext | undefined
+) {
+  // Whole-object precedence, as `ActionService` applies a pinned context.
+  const projectId = (context ?? actionService.getContext()).projectId;
+  return planAgentPresetMutation(
+    actionId,
+    args,
+    readPresetWriteSources(projectId),
+    previewPresetId()
+  );
+}
+
+/**
+ * A preset write the run would refuse, refused before anyone is asked (#16047):
+ * a value the launch-time sanitiser would drop, a field the schema doesn't
+ * know, or a preset that isn't the user's own. Approving one would hand the
+ * user a dialog that could only end in an error, and the caller learns what to
+ * fix sooner. Undefined when the write can be put to the user.
+ */
+async function presetWriteRefusal(
+  actionId: AgentPresetMutationActionId,
+  args: unknown,
+  context: ActionContext | undefined
+): Promise<ActionDispatchResult | undefined> {
+  // A load failure leaves the store empty, and the plan refuses that itself.
+  await useAgentSettingsStore
+    .getState()
+    .initialize()
+    .catch(() => {});
+  const plan = planPresetWriteHere(actionId, args, context);
+  return plan.ok
+    ? undefined
+    : { ok: false, error: { code: "VALIDATION_ERROR", message: plan.message } };
 }
 
 /**
@@ -352,6 +465,25 @@ function readGitLocationArg(args: unknown): GitLocationArg {
     state: "named",
     location: Object.fromEntries(named.map((key) => [key, record[key]])) as WorktreeLocationArgs,
   };
+}
+
+/**
+ * Whether a git dispatch's location selector can never be valid: a spelling
+ * that is empty or not a string, or two path spellings that contradict each
+ * other. Such a call gets no preview, and must reach the action's own
+ * validation to be rejected for what it is — unlike a well-formed selector
+ * that simply didn't resolve yet, which is the approval-covers-nothing case.
+ */
+function isMalformedGitLocation(args: unknown, context: ActionContext | undefined): boolean {
+  const named = readGitLocationArg(args);
+  if (named.state === "invalid") return true;
+  if (named.state !== "named") return false;
+  try {
+    resolveWorktreeLocation(named.location, context ?? actionService.getContext());
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -609,6 +741,10 @@ export function resolveMcpConfirmPreviewTarget(
     const target = startHeldArgs(args);
     return target === undefined ? undefined : { kind: "terminalStartHeld", ...target };
   }
+  if (isAgentPresetMutationAction(actionId)) {
+    const plan = planPresetWriteHere(actionId, args, context);
+    return plan.ok ? { kind: "agentPreset", mutation: plan.mutation } : undefined;
+  }
   if (actionId === "worktree.delete") {
     const worktreeId = worktreeIdArg(args);
     return worktreeId === undefined
@@ -716,6 +852,7 @@ export function resolveMcpConfirmSubject(
       const recipe = useRecipeStore.getState().getRecipeById(target.resolvedRecipeId);
       return recipe?.name !== undefined && recipe.name.length > 0 ? recipe.name : undefined;
     }
+    if (target.kind === "agentPreset") return agentPresetPreviewSubject(target.mutation);
     if (target.kind === "terminalStartHeld") {
       const title = readStartHeldPane(target.terminalId)?.title;
       return title !== undefined && title.length > 0
@@ -825,6 +962,12 @@ export interface McpConfirmPreviewResult {
    * count the approver read.
    */
   approvedRecipeRun?: HostApprovedRecipeRun;
+  /**
+   * The branch, commit and destination a push preview showed, for the approval
+   * to pin the push to (#15646). Built from the same read the lines describe,
+   * and only when that read measured a push range.
+   */
+  approvedPush?: HostApprovedPush;
 }
 
 /**
@@ -910,6 +1053,9 @@ export async function buildMcpConfirmPreview(
       lines: formatStartHeldPreviewLines(target.start, readStartHeldPane(target.terminalId)),
     };
   }
+  if (target.kind === "agentPreset") {
+    return { lines: formatAgentPresetPreviewLines(target.mutation) };
+  }
   const operation = target.kind === "gitPush" ? "push" : "pull-rebase";
   try {
     const preview = await buildGitRemoteOperationPreview(target.cwd, operation);
@@ -921,6 +1067,9 @@ export async function buildMcpConfirmPreview(
           : "No local commits to replay.",
         operation
       ),
+      ...(target.kind === "gitPush" && preview.pushReview
+        ? { approvedPush: { cwd: target.cwd, review: preview.pushReview } }
+        : {}),
     };
   } catch {
     return { lines: formatGitRemoteOperationPreviewLines(null, "", operation) };
@@ -1066,6 +1215,8 @@ function withPreviewedWorktreeCwd(
   if (target.kind === "terminalLaunch") return args;
   // Names a pane by id and carries no directory to pin.
   if (target.kind === "terminalStartHeld") return args;
+  // Names a preset by id; settings aren't worktree-scoped.
+  if (target.kind === "agentPreset") return args;
   // Named per kind rather than left to a fall-through: every remaining kind
   // happens to carry a path today, and a future one that does not would
   // otherwise silently pin `cwd: undefined` onto a dispatch.
@@ -1186,12 +1337,20 @@ export function useMcpBridge(): void {
         hostPreview,
         authorization,
         requester,
+        dispatchDeadlineAt: sentDeadlineAt,
       }) => {
         // Main started its clock when it sent this; ours starts a beat later.
         // Only a confirmation's first deadline reads it, until main grants a
         // hold, and an approval runs on main's own say-so, never on this.
         // Taken before the snapshot wait below, which spends that same clock.
         const receivedAt = Date.now();
+        // Main's own deadline when it says, which also counts the thaw before
+        // the send and any shorter cap the caller set (#15648). The receipt
+        // estimate is for a main that doesn't.
+        const dispatchDeadlineAt =
+          typeof sentDeadlineAt === "number" && Number.isFinite(sentDeadlineAt)
+            ? sentDeadlineAt
+            : receivedAt + MAIN_DISPATCH_DEADLINE_MS;
         // A background view's worktree port is restored just before main sends
         // this, so the snapshot it fetched may still be on its way. Everything
         // below reads the worktree store, which has to hold it first (#13348).
@@ -1244,6 +1403,14 @@ export function useMcpBridge(): void {
         // keeps the smaller unapproved terminal cap rather than silently
         // inheriting a ten-pane authority nobody was shown.
         let approvedRecipeRun: HostApprovedRecipeRun | undefined;
+        // The push half of the same attestation (#15646), captured the same
+        // way: set from the preview build before approval can be clicked, and
+        // undefined for a pre-granted dispatch, which previews nothing and so
+        // keeps pushing the worktree as it stands.
+        let approvedPush: HostApprovedPush | undefined;
+        // The preset half (#16047): the fingerprint of the change the dialog
+        // showed, so the write can refuse a plan that moved after this check.
+        let approvedPresetWrite: string | undefined;
         try {
           let effectiveConfirmed = confirmed;
 
@@ -1320,6 +1487,22 @@ export function useMcpBridge(): void {
               });
               return;
             }
+            if (
+              definition &&
+              definition.danger === "confirm" &&
+              approvalOnly !== true &&
+              isAgentPresetMutationAction(actionId)
+            ) {
+              const refusal = await presetWriteRefusal(actionId, args, context);
+              if (disposed) return;
+              if (refusal) {
+                window.electron.mcpBridge.sendDispatchActionResponse({
+                  requestId,
+                  result: refusal,
+                });
+                return;
+              }
+            }
             if (definition && (definition.danger === "confirm" || approvalOnly === true)) {
               inFlightConfirms.add(requestId);
               // Fetch the fresh preview OFF the critical path so the modal
@@ -1359,12 +1542,20 @@ export function useMcpBridge(): void {
               const previewPending = hasAsyncPreview;
               if (hasAsyncPreview && previewTarget !== undefined) {
                 void buildMcpConfirmPreview(previewTarget)
-                  .then(({ lines, typedNameTarget, approvedRecipeRun: offered }) => {
-                    if (disposed) return;
-                    approvedTypedNameTarget = typedNameTarget;
-                    approvedRecipeRun = offered;
-                    useMcpConfirmStore.getState().setPreview(requestId, lines, typedNameTarget);
-                  })
+                  .then(
+                    ({
+                      lines,
+                      typedNameTarget,
+                      approvedRecipeRun: offered,
+                      approvedPush: shown,
+                    }) => {
+                      if (disposed) return;
+                      approvedTypedNameTarget = typedNameTarget;
+                      approvedRecipeRun = offered;
+                      approvedPush = shown;
+                      useMcpConfirmStore.getState().setPreview(requestId, lines, typedNameTarget);
+                    }
+                  )
                   // The builder already fails soft, but a rejection escaping it
                   // would leave previewPending stuck true and the modal
                   // unapprovable — the exact stall class #11538 removes. Clear
@@ -1372,6 +1563,7 @@ export function useMcpBridge(): void {
                   .catch(() => {
                     if (disposed) return;
                     approvedRecipeRun = undefined;
+                    approvedPush = undefined;
                     useMcpConfirmStore.getState().setPreview(requestId, []);
                   });
               }
@@ -1464,7 +1656,7 @@ export function useMcpBridge(): void {
                   // screen (#14989); until it grants that, the plain deadline it
                   // started when it sent this is all the dialog can count on.
                   {
-                    deadlineAt: receivedAt + MAIN_DISPATCH_DEADLINE_MS,
+                    deadlineAt: dispatchDeadlineAt,
                     hold: (phase) => holdDispatch(requestId, phase),
                   }
                 );
@@ -1573,6 +1765,59 @@ export function useMcpBridge(): void {
                   return;
                 }
               }
+
+              // An approved push runs only on the review it was shown. With
+              // none, the approval covers no particular push, and `git.push`
+              // would otherwise run on whatever the worktree holds now.
+              //
+              // Keyed on the action, not on whether a preview target resolved:
+              // a worktree id this view didn't know yet when the modal opened,
+              // or no active worktree then, gets no preview at all, and either
+              // can resolve by the time the dispatch runs. Only a malformed
+              // selector is let through, to fail the action's own validation.
+              if (
+                actionId === "git.push" &&
+                approvedPush === undefined &&
+                !isMalformedGitLocation(args, context)
+              ) {
+                window.electron.mcpBridge.sendDispatchActionResponse({
+                  requestId,
+                  result: UNREVIEWED_PUSH_RESULT,
+                  confirmationDecision,
+                });
+                return;
+              }
+
+              // A preset write runs only on the change it was shown (#16047).
+              // `run()` plans again against the store it writes, so a preset
+              // edited, removed or made a default in another view while the
+              // dialog was open would otherwise be written on an approval that
+              // described something else. Keyed on the action, like the push
+              // check: with no preview, the approval covers no change.
+              if (isAgentPresetMutationAction(actionId)) {
+                const shown =
+                  previewTarget?.kind === "agentPreset" ? previewTarget.mutation : undefined;
+                const now = planPresetWriteHere(actionId, args, context);
+                const refusal: ActionDispatchResult | undefined = !now.ok
+                  ? { ok: false, error: { code: "VALIDATION_ERROR", message: now.message } }
+                  : shown === undefined ||
+                      agentPresetMutationFingerprint(now.mutation) !==
+                        agentPresetMutationFingerprint(shown)
+                    ? PRESET_CHANGED_RESULT
+                    : undefined;
+                if (refusal !== undefined) {
+                  window.electron.mcpBridge.sendDispatchActionResponse({
+                    requestId,
+                    result: refusal,
+                    confirmationDecision,
+                  });
+                  return;
+                }
+                // The run still loads its chunk and the settings before it
+                // writes, so it compares its own final plan with this too.
+                if (shown !== undefined)
+                  approvedPresetWrite = agentPresetMutationFingerprint(shown);
+              }
             }
           }
 
@@ -1627,6 +1872,12 @@ export function useMcpBridge(): void {
                 contextOverride: context,
                 ...(hostApprovedTargets ? { hostApprovedTargets } : {}),
                 ...(approvedRecipeRun ? { hostApprovedRecipeRun: approvedRecipeRun } : {}),
+                ...(approvedPush ? { hostApprovedPush: approvedPush } : {}),
+                ...(approvedPresetWrite ? { hostApprovedPresetWrite: approvedPresetWrite } : {}),
+                // An approval's run budget replaces the deadline main first
+                // sent; a dispatch nobody was asked about keeps that one. An
+                // action that waits on a person gives up at it (#15648).
+                dispatchDeadlineAt: runDeadlineAt ?? dispatchDeadlineAt,
               }),
             actionId
           );

@@ -5,6 +5,7 @@ import type { ForgeRepoMetadataPayload } from "../ipc/forge.js";
 import type { StagingStatus } from "../git.js";
 import type { KeyAction } from "../keymap.js";
 import type { WorktreeConfig } from "../ipc/worktree.js";
+import type { KeybindingOverridesSnapshot } from "../ipc/api.js";
 
 // Helper aliases — pulled out so the assertions below stay readable.
 type InvokeArgs<K extends keyof IpcInvokeMap> = IpcInvokeMap[K]["args"];
@@ -99,14 +100,18 @@ describe("hand-typed IPC handler contracts", () => {
       expectTypeOf<InvokeArgs<"keybinding:set-override">>().toEqualTypeOf<
         [payload: { actionId: KeyAction; combo: string[] }]
       >();
-      expectTypeOf<InvokeResult<"keybinding:set-override">>().toEqualTypeOf<void>();
+      expectTypeOf<
+        InvokeResult<"keybinding:set-override">
+      >().toEqualTypeOf<KeybindingOverridesSnapshot>();
     });
 
     it("keybinding:remove-override — args + result", () => {
       expectTypeOf<InvokeArgs<"keybinding:remove-override">>().toEqualTypeOf<
         [actionId: KeyAction]
       >();
-      expectTypeOf<InvokeResult<"keybinding:remove-override">>().toEqualTypeOf<void>();
+      expectTypeOf<
+        InvokeResult<"keybinding:remove-override">
+      >().toEqualTypeOf<KeybindingOverridesSnapshot>();
     });
   });
 

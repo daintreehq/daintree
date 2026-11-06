@@ -190,6 +190,10 @@ export const forgeClient = {
     return window.electron.forge.getFirstPageCache({ cwd });
   },
 
+  getRepoKey: (cwd: string): Promise<string | null> => {
+    return window.electron.forge.getRepoKey({ cwd });
+  },
+
   getProjectHealth: (cwd: string, bypassCache?: boolean): Promise<ForgeProjectHealthPayload> => {
     return window.electron.forge.getProjectHealth({ cwd, bypassCache });
   },

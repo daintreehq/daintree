@@ -4,6 +4,10 @@ export const config: AgentConfig = {
   id: "antigravity",
   name: "Antigravity",
   command: "agy",
+  // Where Google's standalone installers put the binary. They add it to the
+  // user PATH, so these only cover a stale PATH: Electron's often misses
+  // ~/.local/bin, and Windows hands the new PATH only to new processes.
+  nativePaths: ["~/.local/bin/agy", "%LOCALAPPDATA%\\agy\\bin\\agy.exe"],
   color: "#4285F4",
   iconId: "antigravity",
   supportsContextInjection: true,
@@ -24,9 +28,35 @@ export const config: AgentConfig = {
   version: {
     args: ["--version"],
   },
+  // The CLI quickstart is the only Antigravity page with CLI install steps.
   install: {
-    docsUrl:
-      "https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/",
+    docsUrl: "https://antigravity.google/docs/getting-started/",
+    byOs: {
+      macos: [
+        {
+          label: "Install script",
+          commands: ["curl -fsSL https://antigravity.google/cli/install.sh | bash"],
+        },
+      ],
+      linux: [
+        {
+          label: "Install script",
+          commands: ["curl -fsSL https://antigravity.google/cli/install.sh | bash"],
+        },
+      ],
+      windows: [
+        {
+          label: "PowerShell",
+          commands: ["irm https://antigravity.google/cli/install.ps1 | iex"],
+        },
+        {
+          label: "Command Prompt",
+          commands: [
+            "curl -fsSL https://antigravity.google/cli/install.cmd -o install.cmd && install.cmd && del install.cmd",
+          ],
+        },
+      ],
+    },
     troubleshooting: [
       "Restart Daintree after installation to update PATH",
       "Verify installation with: agy --version",
@@ -165,14 +195,14 @@ export const config: AgentConfig = {
     configPathsAll: [".gemini/oauth_creds.json", ".gemini/google_accounts.json"],
     envVar: "GOOGLE_API_KEY",
   },
+  account: { kind: "api-key", keyVars: ["GOOGLE_API_KEY"] },
   prerequisites: [
     {
       tool: "agy",
       label: "Antigravity CLI",
       versionArgs: ["--version"],
       severity: "fatal",
-      installUrl:
-        "https://developers.googleblog.com/an-important-update-transitioning-gemini-cli-to-antigravity-cli/",
+      installUrl: "https://antigravity.google/docs/getting-started/",
     },
   ],
   // Folders probed against a live agy 1.4.10 with throwaway skills (#15243).

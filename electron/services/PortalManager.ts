@@ -633,7 +633,11 @@ export class PortalManager {
             },
             {
               label: "Copy Link Address",
-              click: () => clipboard.writeText(linkUrl),
+              click: () => {
+                void clipboard.writeText(linkUrl).catch((error) => {
+                  console.error("[PortalManager] Failed to copy link URL:", error);
+                });
+              },
             },
             { type: "separator" }
           );
@@ -657,7 +661,14 @@ export class PortalManager {
         const pageUrl = (params.pageURL ?? view.webContents.getURL()).trim();
         if (pageUrl) {
           template.push(
-            { label: "Copy Page URL", click: () => clipboard.writeText(pageUrl) },
+            {
+              label: "Copy Page URL",
+              click: () => {
+                void clipboard.writeText(pageUrl).catch((error) => {
+                  console.error("[PortalManager] Failed to copy page URL:", error);
+                });
+              },
+            },
             {
               label: "Open Page in Browser",
               enabled: canOpenExternalUrl(pageUrl),

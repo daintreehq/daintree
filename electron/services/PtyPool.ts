@@ -868,10 +868,3 @@ export function getPtyPool(config?: PtyPoolConfig): PtyPool {
   }
   return ptyPoolInstance;
 }
-
-export function disposePtyPool(): void {
-  if (ptyPoolInstance) {
-    ptyPoolInstance.dispose();
-    ptyPoolInstance = null;
-  }
-}

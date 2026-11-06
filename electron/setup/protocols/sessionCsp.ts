@@ -1,6 +1,5 @@
 // eager-import-allow: reads the import-map hash sidecar synchronously while the session CSP is set up on startup
 import { app, session } from "electron";
-import { getWindowForWebContents, getAppWebContents } from "../../window/webContentsRegistry.js";
 import path from "path";
 import { readFileSync } from "node:fs";
 import {
@@ -21,13 +20,10 @@ import {
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
 import { looksLikeOAuthUrl } from "../../services/OAuthLoopbackService.js";
 import { CHANNELS } from "../../ipc/channels.js";
+import { sendToWebContents } from "../../ipc/utils.js";
 import { claimPageDictationKey } from "../../services/voice/pageDictationKey.js";
 import { getDistPath } from "./app.js";
-
-/** True for any `daintree-html://…` request URL (the sandboxed preview scheme). */
-function isDaintreeHtmlPreviewUrl(url: string | undefined): boolean {
-  return typeof url === "string" && url.startsWith("daintree-html://");
-}
+import { isHtmlPreviewContents } from "../htmlPreviewSession.js";
 
 /** True for any `daintree-pdf://…` request URL (the inline PDF preview scheme). */
 function isDaintreePdfPreviewUrl(url: string | undefined): boolean {
@@ -46,10 +42,8 @@ function isPdfViewerExtensionUrl(url: string | undefined): boolean {
 /**
  * Responses whose headers must survive the session-wide CSP overlay untouched.
  * Each needs the pass-through for its own reason:
- *   daintree-html:// carries a token-scoped CSP and a COEP that the overlay
- *     would replace with the trusted app policy.
- *   daintree-pdf:// carries NEITHER, and must not acquire either: a `sandbox`
- *     CSP blocks PDFium outright (ERR_BLOCKED_BY_CLIENT), and a COEP header
+ *   daintree-pdf:// carries no CSP and no COEP, and must not acquire either:
+ *     a `sandbox` CSP blocks PDFium outright (ERR_BLOCKED_BY_CLIENT), and a COEP header
  *     makes the PDF document an embedder whose own internal viewer frame is
  *     then blocked (ERR_BLOCKED_BY_RESPONSE).
  *   The PDF viewer extension ships its own manifest CSP. Stamping the app
@@ -59,9 +53,7 @@ function isPdfViewerExtensionUrl(url: string | undefined): boolean {
  * All verified against Electron 42 / Chromium 148 on a persist: partition.
  */
 function shouldPreservePreviewResponseHeaders(url: string | undefined): boolean {
-  return (
-    isDaintreeHtmlPreviewUrl(url) || isDaintreePdfPreviewUrl(url) || isPdfViewerExtensionUrl(url)
-  );
+  return isDaintreePdfPreviewUrl(url) || isPdfViewerExtensionUrl(url);
 }
 
 // Read the production import-map hash sidecar emitted by the Vite build
@@ -166,14 +158,13 @@ export function setupWebviewCSP(): void {
     ses.webRequest.onHeadersReceived(
       { urls: ["<all_urls>"], types: ["mainFrame", "subFrame", "script"] },
       (details, callback) => {
-        // Preview documents own their response headers. protocol.handle
+        // PDF preview documents own their response headers. protocol.handle
         // responses DO flow through onHeadersReceived (Electron 42 /
-        // Chromium 148), so without this bypass mergeCspHeaders would replace
-        // a daintree-html:// page's token-scoped CSP with the trusted app CSP
-        // — breaking its scripts AND re-exposing connect-src daintree-file: —
-        // and would stamp that same policy onto a daintree-pdf:// document and
-        // onto PDFium's own viewer frame, which then can't boot. Pass all of
-        // them through untouched.
+        // Chromium 148), so without this bypass mergeCspHeaders would stamp
+        // the trusted app CSP onto a daintree-pdf:// document and onto
+        // PDFium's own viewer frame, which then can't boot. Pass them through
+        // untouched. HTML previews never reach this session: they load in
+        // their own (htmlPreviewSession.ts), which has no overlay.
         if (shouldPreservePreviewResponseHeaders(details.url)) {
           callback({ responseHeaders: details.responseHeaders });
           return;
@@ -203,6 +194,20 @@ export function setupWebviewCSP(): void {
 
   // Monitor for dynamic dev-preview partitions
   app.on("web-contents-created", (_event, contents) => {
+    // Every push about a guest goes to the renderer embedding it, never to its
+    // window's active app view: a cached project view keeps its guests running
+    // while another project is on screen, and only the embedder has the panel.
+    // Cached because hostWebContents is unreachable once the guest is
+    // destroyed, and dismiss-on-destroy still has to reach the embedder.
+    let cachedEmbedder: Electron.WebContents | null = null;
+    const resolveEmbedder = (): Electron.WebContents | null => {
+      if (!contents.isDestroyed()) {
+        const live = contents.hostWebContents;
+        if (live) cachedEmbedder = live;
+      }
+      return cachedEmbedder && !cachedEmbedder.isDestroyed() ? cachedEmbedder : null;
+    };
+
     const notifyBlockedNavigation = (url: string) => {
       const dialogService = getWebviewDialogService();
       const panelId = dialogService.getPanelId(contents.id);
@@ -240,14 +245,11 @@ export function setupWebviewCSP(): void {
         );
       }
 
-      const parentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
-      if (parentWindow && !parentWindow.isDestroyed()) {
-        getAppWebContents(parentWindow).send(CHANNELS.WEBVIEW_NAVIGATION_BLOCKED, {
-          panelId,
-          url,
-          canOpenExternal: canOpenExternalUrl(url),
-        });
-      }
+      sendToWebContents(resolveEmbedder(), CHANNELS.WEBVIEW_NAVIGATION_BLOCKED, {
+        panelId,
+        url,
+        canOpenExternal: canOpenExternalUrl(url),
+      });
     };
 
     contents.on("will-attach-webview", (_event, _webPreferences, params) => {
@@ -259,12 +261,18 @@ export function setupWebviewCSP(): void {
 
     // A guest in a remote-bound view reaches this machine's localhost only
     // through its host's forwards, for every request and not just navigations.
+    // HTML preview guests are excluded: they have no network to forward, and
+    // this guard's listener would replace the preview session's own request
+    // filter and resolve hostnames on the guest's behalf.
     contents.on("did-attach-webview", (_event, guest) => {
+      if (isHtmlPreviewContents(guest)) return;
       guardRemoteGuestRequests(contents.id, guest);
     });
 
-    // Route target="_blank" links and window.open() from webview guests to the system browser
-    if (contents.getType() === "webview") {
+    // Route target="_blank" links and window.open() from webview guests to the system browser.
+    // HTML preview guests are locked down by htmlPreviewSession instead: this
+    // wiring would open their links externally and refuse their relative links.
+    if (contents.getType() === "webview" && !isHtmlPreviewContents(contents)) {
       const embedder = contents.hostWebContents;
       if (embedder) guardRemoteGuestRequests(embedder.id, contents);
 
@@ -335,19 +343,6 @@ export function setupWebviewCSP(): void {
         }
       });
 
-      // Resolve and cache the guest's parent window. On the `destroyed` event the
-      // guest's hostWebContents is no longer reachable, so dismiss-on-destroy falls
-      // back to the reference captured while the guest was alive — populated when a
-      // dialog is first intercepted below (a dialog can only be pending if this ran).
-      let cachedParentWindow: Electron.BrowserWindow | null = null;
-      const resolveParentWindow = (): Electron.BrowserWindow | null => {
-        if (!contents.isDestroyed()) {
-          const live = getWindowForWebContents(contents.hostWebContents ?? contents);
-          if (live) cachedParentWindow = live;
-        }
-        return cachedParentWindow && !cachedParentWindow.isDestroyed() ? cachedParentWindow : null;
-      };
-
       // Intercept JavaScript dialogs (alert/confirm/prompt) from webview guests.
       // Electron 40+ emits "js-dialog" but its TS types omit it from the overload union.
       (contents as { on: (event: string, listener: (...args: unknown[]) => void) => void }).on(
@@ -380,19 +375,15 @@ export function setupWebviewCSP(): void {
             return;
           }
 
-          const parentWindow = resolveParentWindow();
-          if (parentWindow) {
-            getAppWebContents(parentWindow).send("webview:dialog-request", {
-              dialogId,
-              panelId,
-              type,
-              message: msg,
-              defaultValue: defVal,
-              origin,
-            });
-          } else {
-            dialogService.resolveDialog(dialogId, type === "alert");
-          }
+          const delivered = sendToWebContents(resolveEmbedder(), CHANNELS.WEBVIEW_DIALOG_REQUEST, {
+            dialogId,
+            panelId,
+            type,
+            message: msg,
+            defaultValue: defVal,
+            origin,
+          });
+          if (!delivered) dialogService.resolveDialog(dialogId, type === "alert");
         }
       );
 
@@ -402,20 +393,14 @@ export function setupWebviewCSP(): void {
         if (contents.isDestroyed()) return;
         const panelId = getWebviewDialogService().getPanelId(contents.id);
         if (!panelId) return;
-        const parentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
-        if (parentWindow && !parentWindow.isDestroyed()) {
-          getAppWebContents(parentWindow).send(CHANNELS.WEBVIEW_UNRESPONSIVE, { panelId });
-        }
+        sendToWebContents(resolveEmbedder(), CHANNELS.WEBVIEW_UNRESPONSIVE, { panelId });
       };
 
       const notifyResponsive = () => {
         if (contents.isDestroyed()) return;
         const panelId = getWebviewDialogService().getPanelId(contents.id);
         if (!panelId) return;
-        const parentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
-        if (parentWindow && !parentWindow.isDestroyed()) {
-          getAppWebContents(parentWindow).send(CHANNELS.WEBVIEW_RESPONSIVE, { panelId });
-        }
+        sendToWebContents(resolveEmbedder(), CHANNELS.WEBVIEW_RESPONSIVE, { panelId });
       };
 
       contents.on("unresponsive", notifyUnresponsive);
@@ -428,16 +413,13 @@ export function setupWebviewCSP(): void {
       // would survive a page that no longer exists. did-navigate fires only for
       // cross-document main-frame navigations (same-document hash/pushState changes
       // emit did-navigate-in-page and are correctly ignored). The destroyed path
-      // relies on the cached parent window since hostWebContents is gone by then.
+      // relies on the cached embedder since hostWebContents is gone by then.
       const dismissPendingDialogs = () => {
         const dialogService = getWebviewDialogService();
         const panelId = dialogService.getPanelId(contents.id);
         dialogService.cancelPendingForGuest(contents.id);
         if (!panelId) return;
-        const parentWindow = resolveParentWindow();
-        if (parentWindow) {
-          getAppWebContents(parentWindow).send(CHANNELS.WEBVIEW_DIALOG_DISMISS, { panelId });
-        }
+        sendToWebContents(resolveEmbedder(), CHANNELS.WEBVIEW_DIALOG_DISMISS, { panelId });
       };
 
       contents.on("did-navigate", dismissPendingDialogs);
@@ -492,7 +474,7 @@ export function setupWebviewCSP(): void {
         const panelId = dialogService.getPanelId(contents.id);
         if (!panelId) return;
 
-        const findParentWindow = getWindowForWebContents(contents.hostWebContents ?? contents);
+        const embedder = resolveEmbedder();
 
         if (isReload) {
           // Only dev-preview guests get Cmd/Ctrl+R reload — claiming the key for
@@ -501,11 +483,8 @@ export function setupWebviewCSP(): void {
           if (dialogService.getPanelKind(contents.id) !== "dev-preview") return;
           // preventDefault only when the signal can actually be delivered, so a
           // window teardown race doesn't eat the key with no reload to show for it.
-          if (findParentWindow && !findParentWindow.isDestroyed()) {
+          if (sendToWebContents(embedder, CHANNELS.WEBVIEW_RELOAD_SHORTCUT, { panelId })) {
             event.preventDefault();
-            getAppWebContents(findParentWindow).send(CHANNELS.WEBVIEW_RELOAD_SHORTCUT, {
-              panelId,
-            });
           }
           return;
         }
@@ -515,23 +494,14 @@ export function setupWebviewCSP(): void {
           // — unlike reload, all of them need Cmd/Ctrl+W to close the panel
           // instead of falling through to the native role:"close" accelerator,
           // which would otherwise close the whole window (#10859).
-          if (findParentWindow && !findParentWindow.isDestroyed()) {
-            getAppWebContents(findParentWindow).send(CHANNELS.WEBVIEW_CLOSE_SHORTCUT, {
-              panelId,
-            });
-          }
+          sendToWebContents(embedder, CHANNELS.WEBVIEW_CLOSE_SHORTCUT, { panelId });
           return;
         }
 
         if (shortcut !== "close") {
           event.preventDefault();
         }
-        if (findParentWindow && !findParentWindow.isDestroyed()) {
-          getAppWebContents(findParentWindow).send(CHANNELS.WEBVIEW_FIND_SHORTCUT, {
-            panelId,
-            shortcut,
-          });
-        }
+        sendToWebContents(embedder, CHANNELS.WEBVIEW_FIND_SHORTCUT, { panelId, shortcut });
       });
     }
   });

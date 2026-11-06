@@ -12,9 +12,11 @@ import {
   frameToMessage,
   messageToFrame,
 } from "../messages.js";
+import { continuesMessage } from "../messageFragments.js";
 import { LinkSession } from "../session.js";
 import { bytesTransferSource } from "../transfer.js";
 import {
+  TEST_HANDSHAKE,
   closedPromise,
   makeTempDir,
   openSessionPair,
@@ -160,13 +162,255 @@ describe("LinkSession request/response", () => {
 
   it("reports an aborted request as an unknown outcome once sent, cancelled before", async () => {
     const { host, client } = await pair();
-    host.registerCallHandler("hang", z.unknown(), () => new Promise(() => {}));
+    let reached = false;
+    host.registerCallHandler("hang", z.unknown(), () => {
+      reached = true;
+      return new Promise(() => {});
+    });
     const ac = new AbortController();
     const p = client.call("hang", null, { signal: ac.signal });
+    p.catch(() => {});
+    await waitFor(() => reached);
     ac.abort();
-    await expect(p).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
+    await expect(p).rejects.toMatchObject({
+      code: "OUTCOME_UNKNOWN",
+      message: expect.stringMatching(/after it was sent/),
+    });
     await expect(client.call("hang", null, { signal: ac.signal })).rejects.toMatchObject({
       code: "CANCELLED",
+    });
+  });
+
+  describe("a request settled while its frame waits behind backpressure (#15882)", () => {
+    const BEYOND_SOCKET_BUFFERS = "x".repeat(4 * 1024 * 1024);
+    const peers: net.Socket[] = [];
+
+    afterEach(() => {
+      for (const peer of peers.splice(0)) peer.destroy();
+    });
+
+    /**
+     * A client whose peer is a paused raw socket, with one frame larger than
+     * any socket buffer already handed to the stream: until the peer reads,
+     * every later frame stays in the scheduler.
+     */
+    async function stalledClient(options: { requestTimeoutMs?: number } = {}) {
+      const { client, a, b } = await pausedPeer(options);
+      client.post({
+        lane: Lane.EVENTS,
+        kind: EventKind.EVENT,
+        body: { endpointId: null, channel: "fill", args: [BEYOND_SOCKET_BUFFERS] },
+      });
+      await waitFor(() => a.writableNeedDrain);
+      return { client, b };
+    }
+
+    async function pausedPeer(options: { requestTimeoutMs?: number } = {}) {
+      const { a, b } = await socketPair(dir);
+      peers.push(b);
+      const client = new LinkSession(a, {
+        role: "client",
+        pingIntervalMs: 0,
+        idleTimeoutMs: 0,
+        ...options,
+      });
+      sessions.push(client);
+      client.open();
+      b.pause();
+      return { client, a, b };
+    }
+
+    /** Resume the peer and name every request it receives up to a sentinel posted behind them. */
+    async function requestsReceived(client: LinkSession, b: net.Socket): Promise<string[]> {
+      const frames = recordFrames(b);
+      client.post({
+        lane: Lane.EVENTS,
+        kind: EventKind.EVENT,
+        body: { endpointId: null, channel: "sentinel", args: [] },
+      });
+      b.resume();
+      const isSentinel = (f: LinkFrame) =>
+        f.lane === Lane.EVENTS &&
+        (frameToMessage(f).body as { channel: string }).channel === "sentinel";
+      await waitFor(() => frames.some(isSentinel));
+      return frames.flatMap((f) => {
+        if (f.lane !== Lane.RPC) return [];
+        const message = frameToMessage(f);
+        if (message.lane !== Lane.RPC) return [];
+        if (message.kind === RpcKind.CALL) return [message.body.method];
+        if (message.kind === RpcKind.INVOKE) return [message.body.channel];
+        return [];
+      });
+    }
+
+    it("never sends a request that timed out before it was written", async () => {
+      const { client, b } = await stalledClient();
+      const timedOut = client.call("late", null, { timeoutMs: 20 });
+      await expect(timedOut).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
+      expect(client.queuedBytes(Lane.RPC)).toBeGreaterThan(0);
+      client.call("kept", null).catch(() => {});
+      expect(await requestsReceived(client, b)).toEqual(["kept"]);
+      expect(client.queuedBytes(Lane.RPC)).toBe(0);
+    });
+
+    it("never sends a request that was aborted before it was written", async () => {
+      const { client, b } = await stalledClient();
+      const ac = new AbortController();
+      const aborted = client.invoke("e1", "late", [], { signal: ac.signal });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(client.queuedBytes(Lane.RPC)).toBeGreaterThan(0);
+      ac.abort();
+      const env = await aborted;
+      expect(!env.ok && env.error.code).toBe("OUTCOME_UNKNOWN");
+      expect(!env.ok && env.error.message).toMatch(/before it was sent/);
+      client.invoke("e1", "kept", []).catch(() => {});
+      expect(await requestsReceived(client, b)).toEqual(["kept"]);
+    });
+
+    it("still reports a request the stalled socket took as an unknown outcome, and delivers it", async () => {
+      const { client, a, b } = await pausedPeer();
+      const taken = client.call("taken", BEYOND_SOCKET_BUFFERS, { timeoutMs: 20 });
+      taken.catch(() => {});
+      await waitFor(() => a.writableNeedDrain);
+      expect(client.queuedBytes(Lane.RPC)).toBe(0);
+      await expect(taken).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
+      expect(await requestsReceived(client, b)).toEqual(["taken"]);
+    });
+
+    it("still sends a request with no deadline once the link drains", async () => {
+      const { client, b } = await stalledClient({ requestTimeoutMs: 20 });
+      const late = client.call("late", null);
+      const notice = client.call("notice", null, { timeoutMs: 0 });
+      late.catch(() => {});
+      notice.catch(() => {});
+      await expect(late).rejects.toMatchObject({ code: "OUTCOME_UNKNOWN" });
+      // Past the session's deadline for a call made a moment after the first.
+      await new Promise((r) => setTimeout(r, 40));
+      expect(await requestsReceived(client, b)).toEqual(["notice"]);
+    });
+
+    it("still sends an endpoint's close held behind a request that settled unsent (#15881)", async () => {
+      const { client, b } = await stalledClient();
+      const ac = new AbortController();
+      const aborted = client.invoke("e1", "late", [], { signal: ac.signal });
+      client.post({
+        lane: Lane.CONTROL,
+        kind: ControlKind.ENDPOINT_CLOSE,
+        body: { endpointId: "e1" },
+      });
+      await new Promise((r) => setTimeout(r, 20));
+      ac.abort();
+      await aborted;
+      const frames = recordFrames(b);
+      expect(await requestsReceived(client, b)).toEqual([]);
+      expect(
+        frames.some(
+          (f) => f.lane === Lane.CONTROL && frameToMessage(f).kind === ControlKind.ENDPOINT_CLOSE
+        )
+      ).toBe(true);
+    });
+  });
+
+  describe("telling a poster its frame was written", () => {
+    const BEYOND_SOCKET_BUFFERS = "x".repeat(4 * 1024 * 1024);
+    const peers: net.Socket[] = [];
+
+    afterEach(() => {
+      for (const peer of peers.splice(0)) peer.destroy();
+    });
+
+    const event = (channel: string, args: unknown[] = []) => ({
+      lane: Lane.EVENTS,
+      kind: EventKind.EVENT,
+      body: { endpointId: null, channel, args },
+    });
+
+    /** A client whose peer has stopped reading, so the socket stops taking bytes. */
+    async function stalledClient() {
+      const { a, b } = await socketPair(dir);
+      peers.push(b);
+      const client = new LinkSession(a, { role: "client", pingIntervalMs: 0, idleTimeoutMs: 0 });
+      sessions.push(client);
+      client.open();
+      b.pause();
+      return { client, a, b };
+    }
+
+    it("reports a frame once the transport has taken it, not while it waits in a lane or the socket", async () => {
+      const { client, a, b } = await stalledClient();
+      const written: string[] = [];
+      expect(
+        client.post(event("fill", [BEYOND_SOCKET_BUFFERS]), () => written.push("fill"))
+      ).not.toBe("refused");
+      client.post(event("behind"), () => written.push("behind"));
+      await waitFor(() => a.writableNeedDrain);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(written).toEqual([]);
+      expect(client.queuedBytes(Lane.EVENTS)).toBeGreaterThan(0);
+
+      b.resume();
+      await waitFor(() => written.length === 2);
+      expect(written).toEqual(["fill", "behind"]);
+    });
+
+    it("never reports a frame the session dropped unsent, or one the socket failed to take", async () => {
+      const { client, a, b } = await stalledClient();
+      const written: string[] = [];
+      client.post(event("fill", [BEYOND_SOCKET_BUFFERS]), () => written.push("fill"));
+      await waitFor(() => a.writableNeedDrain);
+      client.post(event("dropped"), () => written.push("dropped"));
+      const closed = closedPromise(client);
+      const socketClosed = new Promise((resolve) => a.once("close", resolve));
+      b.destroy();
+      await closed;
+      await socketClosed;
+      await new Promise((r) => setImmediate(r));
+      expect(written).toEqual([]);
+    });
+
+    it("reports a fragmented message once, after its last fragment, and never one cut off partway", async () => {
+      const { a, b } = await socketPair(dir);
+      peers.push(b);
+      const client = new LinkSession(a, { role: "client", pingIntervalMs: 0, idleTimeoutMs: 0 });
+      sessions.push(client);
+      client.open({ peerReadsFragments: true });
+      b.pause();
+      const frames = recordFrames(b);
+      const written: string[] = [];
+      client.post(event("fragmented", [BEYOND_SOCKET_BUFFERS]), () => written.push("fragmented"));
+      await waitFor(() => a.writableNeedDrain);
+      // Early fragments have reached the socket by now; the message has not.
+      await new Promise((r) => setTimeout(r, 20));
+      expect(written).toEqual([]);
+
+      b.resume();
+      await waitFor(() => written.length === 1);
+      await waitFor(() => frames.some((f) => f.lane === Lane.EVENTS && !continuesMessage(f)));
+      expect(frames.filter((f) => f.lane === Lane.EVENTS).length).toBeGreaterThan(1);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(written).toEqual(["fragmented"]);
+
+      b.pause();
+      client.post(event("cut off", [BEYOND_SOCKET_BUFFERS]), () => written.push("cut off"));
+      await waitFor(() => a.writableNeedDrain);
+      const closed = closedPromise(client);
+      b.destroy();
+      await closed;
+      await new Promise((r) => setImmediate(r));
+      expect(written).toEqual(["fragmented"]);
+    });
+
+    it("reports a control frame the session writes on its way out", async () => {
+      const { client, b } = await stalledClient();
+      const frames = recordFrames(b);
+      const written: string[] = [];
+      client.post({ lane: Lane.CONTROL, kind: ControlKind.PING, body: { sentAt: 1 } }, () =>
+        written.push("ping")
+      );
+      client.close("gone");
+      b.resume();
+      await waitFor(() => written.length === 1);
+      expect(frames.some((f) => f.lane === Lane.CONTROL)).toBe(true);
     });
   });
 
@@ -207,6 +451,27 @@ describe("LinkSession request/response", () => {
       args: [{ id: "w" }],
     });
     expect(inputs[0]).toEqual({ endpointId: "e1", message: { type: "write", data: "ls\r" } });
+  });
+
+  it("queues transfer credit with control frames and the rest of a transfer in bulk", async () => {
+    const { host } = await pair();
+    // Synchronous reads, before the write pass the posts scheduled.
+    host.post({
+      lane: Lane.BULK,
+      kind: BulkKind.TRANSFER_ACK,
+      body: { transferId: 1, receivedBytes: 0, path: null, error: null },
+    });
+    const control = host.queuedBytes(Lane.CONTROL);
+    expect(control).toBeGreaterThan(0);
+    expect(host.queuedBytes(Lane.BULK)).toBe(0);
+    host.post({ lane: Lane.BULK, kind: BulkKind.TRANSFER_END, body: { transferId: 2 } });
+    host.post({
+      lane: Lane.BULK,
+      kind: BulkKind.TRANSFER_ABORT,
+      body: { transferId: 4, reason: "cancelled" },
+    });
+    expect(host.queuedBytes(Lane.CONTROL)).toBe(control);
+    expect(host.queuedBytes(Lane.BULK)).toBeGreaterThan(0);
   });
 });
 
@@ -387,6 +652,50 @@ describe("LinkSession liveness", () => {
     }
   });
 
+  it("gives up a client handshake without a GOODBYE, so a stalled host that reads the HELLO keeps what it resumed (#15877)", async () => {
+    const { a, b } = await socketPair(dir);
+    const frames = recordFrames(b);
+    const session = new LinkSession(a, { role: "client", handshakeTimeoutMs: 30 });
+    sessions.push(session);
+    session.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.HELLO,
+      body: {
+        handshake: TEST_HANDSHAKE,
+        token: "t",
+        client: { clientId: "c", clientName: "n", platform: "linux" },
+        resumeSessionId: "s-1",
+        resumeSecret: "secret",
+      },
+    });
+    await expect(closedPromise(session)).resolves.toEqual({
+      reason: "handshake timed out",
+      by: "local",
+    });
+    await new Promise<void>((resolve) => b.once("end", resolve));
+    expect(frames.map((f) => f.kind)).toEqual([ControlKind.HELLO]);
+    b.destroy();
+  });
+
+  it("tells a client that never said HELLO why the host gave up on it", async () => {
+    const { a, b } = await socketPair(dir);
+    const frames = recordFrames(b);
+    const session = new LinkSession(a, { role: "host", handshakeTimeoutMs: 30 });
+    sessions.push(session);
+    await expect(closedPromise(session)).resolves.toEqual({
+      reason: "handshake timed out",
+      by: "local",
+    });
+    await new Promise<void>((resolve) => b.once("end", resolve));
+    expect(frames.map((f) => frameToMessage(f))).toEqual([
+      expect.objectContaining({
+        kind: ControlKind.GOODBYE,
+        body: { reason: "handshake timed out" },
+      }),
+    ]);
+    b.destroy();
+  });
+
   it("ends with a GOODBYE the peer sees as a remote close", async () => {
     const { host, client } = await pair();
     const closed = closedPromise(client);
@@ -509,5 +818,133 @@ describe("LinkSession lane priority", () => {
     expect(frames.slice(interactiveAt + 1).some((f) => f.kind === BulkKind.TRANSFER_CHUNK)).toBe(
       true
     );
+  });
+});
+
+describe("LinkSession endpoint closes (#15881)", () => {
+  it("writes what an endpoint queued before its close ahead of it, and other control frames past it", async () => {
+    const { host, client } = await pair();
+    const arrived: string[] = [];
+    host.setSendHandler((body) => arrived.push(`send:${body.channel}`));
+    host.on(Lane.INTERACTIVE, InteractiveKind.TERMINAL_IN, () => arrived.push("input"));
+    host.on(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, (body) =>
+      arrived.push(`close:${body.endpointId}`)
+    );
+    host.on(Lane.CONTROL, ControlKind.ENDPOINT_OPEN, (body) =>
+      arrived.push(`open:${body.endpointId}`)
+    );
+
+    // All before one flush, where the control lane would otherwise go first.
+    client.send("e1", "commit", []);
+    client.post({
+      lane: Lane.INTERACTIVE,
+      kind: InteractiveKind.TERMINAL_IN,
+      body: { endpointId: "e1", message: { type: "write", data: "q" } },
+    });
+    client.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.ENDPOINT_CLOSE,
+      body: { endpointId: "e1" },
+    });
+    client.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.ENDPOINT_OPEN,
+      body: { endpointId: "e2", projectId: "p", openId: "o" },
+    });
+
+    await waitFor(() => arrived.length === 4);
+    expect(arrived).toEqual(["open:e2", "input", "send:commit", "close:e1"]);
+  });
+
+  // The queued frame's own answer, when it has one, to wait for before the sessions close.
+  it.each<[string, (client: LinkSession) => unknown, string?]>([
+    [
+      "terminal input",
+      (client) =>
+        client.post({
+          lane: Lane.INTERACTIVE,
+          kind: InteractiveKind.TERMINAL_IN,
+          body: { endpointId: "e1", message: { type: "write", data: "q" } },
+        }),
+    ],
+    [
+      "a worktree port message",
+      (client) =>
+        client.post({
+          lane: Lane.INTERACTIVE,
+          kind: InteractiveKind.WORKTREE_PORT,
+          body: { endpointId: "e1", message: { id: 1 } },
+        }),
+    ],
+    ["an invoke", (client) => client.invoke("e1", "commit", [])],
+    ["a call naming it", (client) => client.call("m", { endpointId: "e1" })],
+    [
+      "a call naming it last of several",
+      (client) => client.call("m", { endpointIds: ["e2", "e1"] }),
+    ],
+    [
+      "a call naming it first of several",
+      (client) => client.call("m", { endpointIds: ["e2", "e1"] }),
+      "e2",
+    ],
+    [
+      "a call naming it beside another endpoint",
+      (client) => client.call("m", { endpointId: "e2", endpointIds: ["e1"] }),
+    ],
+  ])("writes %s ahead of the endpoint's close", async (_kind, queue, closes = "e1") => {
+    const { host, client } = await pair();
+    const arrived: string[] = [];
+    const record = () => void arrived.push("frame");
+    host.on(Lane.INTERACTIVE, InteractiveKind.TERMINAL_IN, record);
+    host.on(Lane.INTERACTIVE, InteractiveKind.WORKTREE_PORT, record);
+    host.setInvokeHandler(async () => {
+      record();
+      return { __daintreeIpcEnvelope: true, ok: true, data: null };
+    });
+    host.registerCallHandler("m", z.unknown(), () => {
+      record();
+      return null;
+    });
+    host.on(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, () => arrived.push("close"));
+
+    const answered = queue(client);
+    client.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.ENDPOINT_CLOSE,
+      body: { endpointId: closes },
+    });
+
+    await waitFor(() => arrived.length === 2);
+    expect(arrived).toEqual(["frame", "close"]);
+    await answered;
+  });
+
+  it("keeps a reopen under the same id behind the close it follows", async () => {
+    const { host, client } = await pair();
+    const arrived: string[] = [];
+    host.setSendHandler(() => arrived.push("send"));
+    host.on(Lane.CONTROL, ControlKind.ENDPOINT_CLOSE, () => arrived.push("close"));
+    host.on(Lane.CONTROL, ControlKind.ENDPOINT_OPEN, () => arrived.push("open"));
+    host.on(Lane.CONTROL, ControlKind.ENDPOINT_REBIND, () => arrived.push("rebind"));
+
+    client.send("e1", "commit", []);
+    client.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.ENDPOINT_CLOSE,
+      body: { endpointId: "e1" },
+    });
+    client.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.ENDPOINT_OPEN,
+      body: { endpointId: "e1", projectId: "p", openId: "o2" },
+    });
+    client.post({
+      lane: Lane.CONTROL,
+      kind: ControlKind.ENDPOINT_REBIND,
+      body: { endpointId: "e1", projectId: "q" },
+    });
+
+    await waitFor(() => arrived.length === 4);
+    expect(arrived).toEqual(["send", "close", "open", "rebind"]);
   });
 });

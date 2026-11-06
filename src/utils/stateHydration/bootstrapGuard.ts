@@ -32,7 +32,7 @@ export async function ensureHydrationBootstrap(): Promise<void> {
       await Promise.all([
         withRendererSpan(PERF_MARKS.HYDRATE_BOOTSTRAP_LOAD_OVERRIDES, () =>
           boot?.keybindingOverrides !== undefined
-            ? Promise.resolve(keybindingService.applyOverrides(boot.keybindingOverrides))
+            ? Promise.resolve(keybindingService.applyBootOverrides(boot.keybindingOverrides))
             : keybindingService.loadOverrides()
         ),
         withRendererSpan(PERF_MARKS.HYDRATE_BOOTSTRAP_INIT_USER_AGENTS, () => {

@@ -1,38 +1,58 @@
 import { afterEach, describe, expect, it } from "vitest";
+import type { GitPushReview } from "@shared/types/git";
 import { useGitPushConfirmStore } from "../gitPushConfirmStore";
+
+const review = (branch: string): GitPushReview => ({
+  branch,
+  headOid: "a".repeat(40),
+  destination: { remote: "origin", branch },
+});
 
 afterEach(() => {
   // Resolve any leaked pending request so it can't bleed into the next test.
   if (useGitPushConfirmStore.getState().pendingConfirm) {
-    useGitPushConfirmStore.getState().resolveConfirmation(false);
+    useGitPushConfirmStore.getState().resolveConfirmation(null);
   }
 });
 
 describe("gitPushConfirmStore", () => {
-  it("resolves the awaited Promise with the value passed to resolveConfirmation", async () => {
+  it("resolves the awaited Promise with the review the approval carried", async () => {
     const { requestConfirmation } = useGitPushConfirmStore.getState();
     const pending = requestConfirmation("/repo");
 
     expect(useGitPushConfirmStore.getState().pendingConfirm?.cwd).toBe("/repo");
 
-    useGitPushConfirmStore.getState().resolveConfirmation(true);
-    await expect(pending).resolves.toBe(true);
+    const shown = review("topic");
+    useGitPushConfirmStore.getState().resolveConfirmation(shown);
+    await expect(pending).resolves.toEqual({ confirmed: true, review: shown });
     expect(useGitPushConfirmStore.getState().pendingConfirm).toBeNull();
   });
 
-  it("cancels a prior pending request (resolves it false) when a new one arrives", async () => {
+  it("resolves a decline with no review", async () => {
+    const pending = useGitPushConfirmStore.getState().requestConfirmation("/repo");
+
+    useGitPushConfirmStore.getState().resolveConfirmation(null);
+
+    await expect(pending).resolves.toEqual({ confirmed: false, review: null });
+  });
+
+  it("cancels a prior pending request (declined, no review) when a new one arrives", async () => {
     const first = useGitPushConfirmStore.getState().requestConfirmation("/repo-a");
     const second = useGitPushConfirmStore.getState().requestConfirmation("/repo-b");
 
-    await expect(first).resolves.toBe(false);
+    await expect(first).resolves.toEqual({ confirmed: false, review: null });
     expect(useGitPushConfirmStore.getState().pendingConfirm?.cwd).toBe("/repo-b");
 
-    useGitPushConfirmStore.getState().resolveConfirmation(true);
-    await expect(second).resolves.toBe(true);
+    // The second request's approval belongs to it alone.
+    const shown = review("other");
+    useGitPushConfirmStore.getState().resolveConfirmation(shown);
+    await expect(second).resolves.toEqual({ confirmed: true, review: shown });
   });
 
   it("resolveConfirmation is a no-op when nothing is pending", () => {
-    expect(() => useGitPushConfirmStore.getState().resolveConfirmation(true)).not.toThrow();
+    expect(() =>
+      useGitPushConfirmStore.getState().resolveConfirmation(review("topic"))
+    ).not.toThrow();
     expect(useGitPushConfirmStore.getState().pendingConfirm).toBeNull();
   });
 
@@ -55,7 +75,7 @@ describe("gitPushConfirmStore", () => {
       useGitPushConfirmStore.getState().requestConfirmation("/repo");
       const afterRequest = useGitPushConfirmStore.getState().requestSeq;
 
-      useGitPushConfirmStore.getState().resolveConfirmation(true);
+      useGitPushConfirmStore.getState().resolveConfirmation(review("topic"));
       expect(useGitPushConfirmStore.getState().requestSeq).toBe(afterRequest);
     });
   });

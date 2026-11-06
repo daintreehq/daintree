@@ -111,11 +111,11 @@ describe("ContentGridEmptyState — workspace capabilities", () => {
       expect(screen.getByTestId("launcher-quick-actions")).toBeTruthy();
     });
 
-    it("shows the scratch's own name and path", () => {
+    it("shows the scratch's own name but not its app-storage path", () => {
       render(<ContentGridEmptyState {...SCRATCH_PROPS} />);
 
       expect(screen.getByText(SCRATCH_PROPS.workspaceName)).toBeTruthy();
-      expect(screen.getByText(SCRATCH_PROPS.activeWorktreePath)).toBeTruthy();
+      expect(screen.queryByText(SCRATCH_PROPS.activeWorktreePath)).toBeNull();
     });
 
     it("hides project settings — a scratch has no settings tab to open", () => {

@@ -54,7 +54,9 @@ function PluginStatusChip({
   };
 
   return (
-    <Tooltip>
+    // A plugin's explanation can run to several lines, so it stays while
+    // hovered or focused and can be hovered itself (WCAG 1.4.13).
+    <Tooltip autoDismiss={false} disableHoverableContent={false}>
       <TooltipTrigger asChild>
         {/* A button so the status is reachable by keyboard and its tooltip
             opens on focus, even when it has no command to run. */}
@@ -65,9 +67,11 @@ function PluginStatusChip({
           aria-label={`${name}: ${status.label}`}
           onClick={handleClick}
           className={cn(
-            "inline-flex h-6 min-w-0 max-w-full items-center rounded-[var(--radius-sm)] px-1 text-xs text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
+            // A quiet chip, so a plugin's word reads as a mark on the card
+            // rather than a stray line of body copy, on a 24px target.
+            "inline-flex h-6 min-w-0 max-w-full items-center rounded-[var(--radius-sm)] border border-border-default bg-overlay-subtle px-1.5 text-2xs text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
             actionTitle !== undefined &&
-              "cursor-pointer transition-colors duration-150 ease-out hover:text-text-primary"
+              "cursor-pointer transition-colors duration-150 ease-out hover:bg-overlay-soft hover:text-text-primary"
           )}
         >
           <span className="min-w-0 truncate">{status.label}</span>

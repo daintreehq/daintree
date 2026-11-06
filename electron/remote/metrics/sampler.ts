@@ -1,9 +1,9 @@
 import type {
   DriveLeaseHolder,
+  HostAgentAttention,
   HostDriverObservation,
   HostForgeObservation,
   HostMetricsSummary,
-  HostPlatform,
 } from "../../../shared/types/remoteHosts.js";
 import type { SystemMemorySnapshot } from "../../utils/systemMemory.js";
 import { LOCAL_HOST_ID, MAX_HOST_SUMMARY_DRIVERS } from "../../../shared/types/remoteHosts.js";
@@ -34,15 +34,20 @@ import {
 /** How often a host samples and streams its summary. */
 export const HOST_METRICS_INTERVAL_MS = 5_000;
 
+/** How long one sample waits on its reads before reporting what hasn't come as unknown. */
+export const HOST_SAMPLE_BUDGET_MS = 2_000;
+
 export interface ObservedAgents {
   working: number;
   waiting: number;
   idle: number;
+  /** The same runs as the fleet bands them; see `HostMetricsSummary.agentAttention`. */
+  attention?: HostAgentAttention;
 }
 
 /** Where the sampler reads from; faked in tests, real in {@link createHostSampleSources}. */
 export interface HostSampleSources {
-  platform: HostPlatform;
+  platform: HostMetricsSummary["platform"];
   cpus(): CpuTimes[];
   totalmem(): number;
   /** Activity Monitor style memory, the reading Daintree's own reclaim uses; null when unavailable. */
@@ -86,8 +91,12 @@ const MAX_CGROUP_DEPTH = 32;
 const CPU_CLUSTER_PROBES = 3;
 /** Reads of the Linux page size before an unknown answer is taken as final. */
 const PAGE_SIZE_PROBES = 3;
-/** Longer than this between swap readings (a sleep, a stalled loop) and the average says little. */
-const MAX_SWAP_RATE_GAP_MS = 3 * HOST_METRICS_INTERVAL_MS;
+/**
+ * Longer than this between two readings (a sleep, a stalled loop, a pause with
+ * nobody listening) and what's measured across them averages the whole gap,
+ * which says little about the load now.
+ */
+const MAX_READING_GAP_MS = 3 * HOST_METRICS_INTERVAL_MS;
 
 interface CpuClusters {
   performance: number | null;
@@ -127,6 +136,9 @@ const NO_MEMORY: HostMemoryFields = {
 
 const NO_SWAP_RATES = { swapInBytesPerSec: null, swapOutBytesPerSec: null };
 
+/** CPU on a Linux host whose scope wasn't read: the machine's figures may not be what it has. */
+const UNKNOWN_SCOPE_CPU: CgroupCpu = { cores: null, logicalCores: null, percent: null };
+
 interface CgroupCpu {
   /** Cores the percentage is a share of, fractional under a quota. */
   cores: number | null;
@@ -157,7 +169,8 @@ async function settle<T>(read: () => Promise<T>, fallback: T): Promise<T> {
  * and drive lease look like. Anything a platform doesn't expose is null.
  */
 export class HostMetricsSampler {
-  private previousCpus: CpuTimes[] | null = null;
+  /** The core times at the last sample, which machine CPU is measured between. */
+  private previousCpus: { at: number; cpus: CpuTimes[] } | null = null;
   /** Cluster sizes are hardware: kept once read, so only an unknown answer is asked again. */
   private clusters: CpuClusters | null = null;
   private clusterProbes = 0;
@@ -172,46 +185,73 @@ export class HostMetricsSampler {
   } | null = null;
   private pageSize: number | null = null;
   private pageSizeProbes = 0;
+  /** Reads still running past an earlier sample's budget. */
+  private readonly lingering = new Set<string>();
 
   constructor(private readonly sources: HostSampleSources) {}
 
   async sample(): Promise<HostMetricsSummary> {
     const s = this.sources;
+    const cpusAt = s.now();
     const cpus = s.cpus();
-    const previousCpus = this.previousCpus;
+    const previous = this.previousCpus;
+    // Core-time shares don't divide by the interval, so only a gap too long (or a clock that went
+    // back, which hides how long) loses the baseline; the fresh reading starts the next one.
+    const elapsedMs = previous ? cpusAt - previous.at : -1;
+    const previousCpus =
+      previous && elapsedMs >= 0 && elapsedMs <= MAX_READING_GAP_MS ? previous.cpus : null;
     const cpuPercent = cpuPercentBetween(previousCpus, cpus);
-    this.previousCpus = cpus;
+    this.previousCpus = { at: cpusAt, cpus };
     const readers: SampleReaders = s.beginSample?.() ?? s;
 
+    let budgetTimer: ReturnType<typeof setTimeout> | undefined;
+    const budget = new Promise<void>((resolve) => {
+      budgetTimer = setTimeout(resolve, HOST_SAMPLE_BUDGET_MS);
+      budgetTimer.unref?.();
+    });
     const [clusters, resources, agents, projects, agentClis, forges] = await Promise.all([
-      this.cpuClusters(),
-      settle<{ memory: HostMemoryFields; cgroupCpu?: CgroupCpu | null } | null>(
-        async () =>
-          s.platform === "darwin"
-            ? { memory: await this.darwinMemory() }
-            : this.linuxResources(cpus.length),
+      this.withinBudget("clusters", budget, () => this.cpuClusters(), NO_CLUSTERS),
+      this.withinBudget<{ memory: HostMemoryFields; cgroupCpu?: CgroupCpu | null } | null>(
+        "resources",
+        budget,
+        async () => {
+          try {
+            if (s.platform === "darwin") return { memory: await this.darwinMemory() };
+            if (s.platform === "win32") return { memory: this.windowsMemory() };
+            return await this.linuxResources(cpus.length);
+          } catch (error) {
+            // A failed reading must not leave a baseline the next one is measured across.
+            this.previousSwap = null;
+            throw error;
+          }
+        },
         null
-      ).then((read) => {
-        // A failed reading must not leave a baseline the next one is measured across.
-        if (read === null) this.previousSwap = null;
-        return read ?? { memory: NO_MEMORY };
-      }),
-      // A failed read is unknown, not zero: zero working agents lets an update restart the host.
-      settle<ObservedAgents | null>(() => readers.agents(), null),
-      settle<{ projectCount: number | null; worktreeCount: number | null }>(
+      ).then(
+        (read) =>
+          read ?? {
+            memory: NO_MEMORY,
+            ...(s.platform === "linux" ? { cgroupCpu: UNKNOWN_SCOPE_CPU } : {}),
+          }
+      ),
+      // A failed or late read is unknown, not zero: zero working agents lets an update restart the host.
+      this.withinBudget<ObservedAgents | null>("agents", budget, () => readers.agents(), null),
+      this.withinBudget<{ projectCount: number | null; worktreeCount: number | null }>(
+        "projects",
+        budget,
         () => readers.projects(),
-        {
-          projectCount: null,
-          worktreeCount: null,
-        }
+        { projectCount: null, worktreeCount: null }
       ),
-      settle(() => s.agentClis(), []),
-      // A failed read is unknown, never "not connected".
-      settle<HostForgeObservation[] | null | undefined>(
-        async () => (s.forges ? await s.forges() : undefined),
-        null
-      ),
-    ]);
+      this.withinBudget("agentClis", budget, () => s.agentClis(), []),
+      // A failed or late read is unknown, never "not connected".
+      s.forges
+        ? this.withinBudget<HostForgeObservation[] | null>(
+            "forges",
+            budget,
+            () => s.forges!(),
+            null
+          )
+        : undefined,
+    ]).finally(() => clearTimeout(budgetTimer));
 
     let driver: DriveLeaseHolder | null;
     try {
@@ -256,7 +296,12 @@ export class HostMetricsSampler {
       cpuPerformancePercent: clusterPercent.performance,
       cpuEfficiencyPercent: clusterPercent.efficiency,
       ...resources.memory,
-      agentsObserved: agents,
+      agentsObserved: agents && {
+        working: agents.working,
+        waiting: agents.waiting,
+        idle: agents.idle,
+      },
+      ...(agents?.attention ? { agentAttention: agents.attention } : {}),
       projectCount: projects.projectCount,
       worktreeCount: projects.worktreeCount,
       driver,
@@ -264,6 +309,24 @@ export class HostMetricsSampler {
       agentClis,
       ...(forges !== undefined ? { forges } : {}),
     };
+  }
+
+  /**
+   * A read's answer if it comes within this sample's budget, `unknown` if not.
+   * A late read runs on, so the caches behind it are warm for a later sample,
+   * but its answer is never taken by one: it would be older than that sample
+   * says. Until it settles the read isn't started again.
+   */
+  private withinBudget<T>(
+    key: string,
+    budget: Promise<void>,
+    read: () => Promise<T>,
+    unknown: T
+  ): Promise<T> {
+    if (this.lingering.has(key)) return Promise.resolve(unknown);
+    this.lingering.add(key);
+    const answer = settle(read, unknown).finally(() => this.lingering.delete(key));
+    return Promise.race([answer, budget.then(() => unknown)]);
   }
 
   private async darwinMemory() {
@@ -294,6 +357,15 @@ export class HostMetricsSampler {
   }
 
   /**
+   * Only what the OS hands over without a Linux or macOS probe: the RAM size.
+   * Use, swap, pressure and temperature stay unknown rather than borrowed.
+   */
+  private windowsMemory(): HostMemoryFields {
+    const total = this.sources.totalmem();
+    return { ...NO_MEMORY, memoryTotalBytes: total > 0 ? total : null };
+  }
+
+  /**
    * Total less what Activity Monitor counts as available (free + purgeable +
    * file-backed), so file cache isn't read as used. Unknown, never the
    * cache-inclusive figure, when that reading isn't there.
@@ -310,6 +382,8 @@ export class HostMetricsSampler {
   }
 
   private loadAverage1m(): number | null {
+    // Windows has no load average: Node returns [0, 0, 0] there, which is a stub, not a reading.
+    if (this.sources.platform === "win32") return null;
     try {
       const value = this.sources.loadavg()[0];
       return value !== undefined && Number.isFinite(value) && value >= 0 ? value : null;
@@ -477,7 +551,10 @@ export class HostMetricsSampler {
     return { dir, memoryLimit, swapLimit, cpuQuota, cpuSet };
   }
 
-  /** Busy share of the cgroup's cores between two `cpu.stat` readings; null until there are two. */
+  /**
+   * Busy share of the cgroup's cores between two `cpu.stat` readings; null
+   * until there are two close enough together.
+   */
   private cgroupCpuPercent(
     dir: string,
     usec: number | null,
@@ -493,7 +570,7 @@ export class HostMetricsSampler {
     if (!previous || previous.dir !== dir || previous.cores !== cores) return null;
     const elapsedUsec = (at - previous.at) * 1000;
     const used = usec - previous.usec;
-    if (elapsedUsec <= 0 || used < 0) return null;
+    if (elapsedUsec <= 0 || elapsedUsec > MAX_READING_GAP_MS * 1000 || used < 0) return null;
     return Math.min(100, Math.max(0, (used / (elapsedUsec * cores)) * 100));
   }
 
@@ -518,7 +595,7 @@ export class HostMetricsSampler {
       return NO_SWAP_RATES;
     }
     const elapsedMs = at - previous.at;
-    if (elapsedMs <= 0 || elapsedMs > MAX_SWAP_RATE_GAP_MS) return NO_SWAP_RATES;
+    if (elapsedMs <= 0 || elapsedMs > MAX_READING_GAP_MS) return NO_SWAP_RATES;
     const rate = (now: number | null, before: number | null): number | null =>
       now === null || before === null || now < before
         ? null

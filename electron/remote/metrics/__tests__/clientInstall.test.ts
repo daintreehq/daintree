@@ -30,6 +30,7 @@ vi.mock("../localLoop.js", () => ({ getLocalSummaryLoop: () => ({}) }));
 vi.mock("../hostOps.js", () => ({
   listLocalFleetTargets: vi.fn(),
   listLocalWorktrees: vi.fn(),
+  onLocalProjectsChanged: vi.fn(),
   onLocalWorktreesMaybeChanged: vi.fn(),
   submitLocalFleet: vi.fn(),
 }));

@@ -3,7 +3,7 @@ import { Transaction, type ChangeDesc, type Extension } from "@codemirror/state"
 import { isolateHistory } from "@codemirror/commands";
 import type { RewriteSelection } from "@/services/voiceRewriteSelection";
 
-const REWRITE_USER_EVENT = "input.voice-rewrite";
+export const REWRITE_USER_EVENT = "input.voice-rewrite";
 
 const trackedByView = new WeakMap<EditorView, Set<TrackedSelection>>();
 

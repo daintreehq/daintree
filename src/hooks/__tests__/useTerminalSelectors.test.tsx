@@ -50,10 +50,18 @@ function deliverRuns(runs: RunOverrides[]) {
   });
 }
 
-/** The fleet reporting each of these terminals as asking for an approval. */
+/** Canopy's unread reading of an approval: the only thing that puts a run in Waiting. */
+const ASK = { kind: "asked", quote: "Run the migration?", readAt: 3, seen: false } as const;
+
+/** The fleet reporting each of these terminals as asking for an approval, as Canopy read it. */
 function deliverAsks(ids: string[]) {
   deliverRuns(
-    ids.map((runId) => ({ runId, agentState: "waiting", waitingReason: "approval" as const }))
+    ids.map((runId) => ({
+      runId,
+      agentState: "waiting",
+      waitingReason: "approval" as const,
+      canopy: ASK,
+    }))
   );
 }
 
@@ -137,6 +145,7 @@ describe("useTerminalSelectors", () => {
     setupTerminals([
       { id: "t-waiting", worktreeId: "wt-1", agentState: "waiting", location: "grid" },
     ]);
+    deliverAsks(["t-waiting"]);
 
     const { result } = renderHook(() => useTerminalNotificationCounts());
     expect(result.current.waitingCount).toBe(1);
@@ -151,6 +160,7 @@ describe("useTerminalSelectors", () => {
         { id: "q1", agentState: "waiting", location: "grid" },
         { id: "idle", agentState: "idle", location: "grid" },
       ]);
+      deliverAsks(["q1"]);
 
       const { result } = renderHook(() => useBackgroundPanelStats("current"));
       expect(result.current.activeCount).toBe(4);
@@ -164,6 +174,7 @@ describe("useTerminalSelectors", () => {
         { id: "dock-working", agentState: "working", location: "dock" },
         { id: "bg-waiting", agentState: "waiting", location: "background" },
       ]);
+      deliverAsks(["bg-waiting"]);
 
       const { result } = renderHook(() => useBackgroundPanelStats("none"));
       expect(result.current.activeCount).toBe(1);
@@ -176,6 +187,7 @@ describe("useTerminalSelectors", () => {
         { id: "term", agentState: "waiting", location: "grid" },
         { id: "browser", agentState: "working", location: "grid", kind: "browser" },
       ]);
+      deliverAsks(["term"]);
 
       const { result } = renderHook(() => useBackgroundPanelStats("none"));
       expect(result.current.activeCount).toBe(2);
@@ -202,6 +214,7 @@ describe("useTerminalSelectors", () => {
           lastStateChange: Date.now() - 1000,
         },
       ]);
+      deliverAsks(["t1"]);
 
       const { result } = renderHook(() => useTerminalNotificationCounts(null));
       expect(result.current.waitingCount).toBe(0);
@@ -218,6 +231,7 @@ describe("useTerminalSelectors", () => {
           lastStateChange: Date.now() - 60_000,
         },
       ]);
+      deliverAsks(["t1"]);
 
       const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
       expect(result.current.waitingCount).toBe(0);
@@ -233,6 +247,7 @@ describe("useTerminalSelectors", () => {
           location: "grid",
         },
       ]);
+      deliverAsks(["t1"]);
 
       const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
       expect(result.current.waitingCount).toBe(0);
@@ -253,6 +268,7 @@ describe("useTerminalSelectors", () => {
           lastStateChange: Date.now() - 10 * 60_000,
         },
       ]);
+      deliverAsks(["t1"]);
 
       const { result } = renderHook(() => useTerminalNotificationCounts());
       expect(result.current.waitingCount).toBe(1);
@@ -269,6 +285,7 @@ describe("useTerminalSelectors", () => {
           lastStateChange: blurTime,
         },
       ]);
+      deliverAsks(["t1"]);
 
       const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
       expect(result.current.waitingCount).toBe(0);
@@ -285,6 +302,7 @@ describe("useTerminalSelectors", () => {
           lastStateChange: blurTime + 1,
         },
       ]);
+      deliverAsks(["t1"]);
 
       const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
       expect(result.current.waitingCount).toBe(1);
@@ -307,6 +325,7 @@ describe("useTerminalSelectors", () => {
           lastStateChange: Date.now() - 10_000,
         },
       ]);
+      deliverAsks(["t1"]);
 
       const { result } = renderHook(() => useTerminalNotificationCounts(blurTime));
       expect(result.current.waitingCount).toBe(0);
@@ -329,10 +348,10 @@ describe("useWaitingTerminals", () => {
       { id: "t4", agentState: "waiting", location: "background" },
     ]);
     deliverRuns([
-      { runId: "t1", agentState: "waiting", waitingReason: "approval" },
+      { runId: "t1", agentState: "waiting", waitingReason: "approval", canopy: ASK },
       { runId: "t2", agentState: "working" },
-      { runId: "t3", agentState: "waiting", waitingReason: "approval" },
-      { runId: "t4", agentState: "waiting", waitingReason: "approval" },
+      { runId: "t3", agentState: "waiting", waitingReason: "approval", canopy: ASK },
+      { runId: "t4", agentState: "waiting", waitingReason: "approval", canopy: ASK },
     ]);
 
     const { result } = renderHook(() => useWaitingTerminals());
@@ -659,7 +678,7 @@ describe("hand-backs are not waits", () => {
     deliverRuns([
       { runId: "unread", agentState: "waiting", handBack: { stoppedAt: 2 } },
       { runId: "read", agentState: "waiting", handBack: { stoppedAt: 2, seenAt: 3 } },
-      { runId: "approval", agentState: "waiting", waitingReason: "approval" },
+      { runId: "approval", agentState: "waiting", waitingReason: "approval", canopy: ASK },
     ]);
 
     const waiting = renderHook(() => useWaitingTerminals());
@@ -672,13 +691,27 @@ describe("hand-backs are not waits", () => {
     expect(stats.result.current.waitingCount).toBe(1);
   });
 
-  it("counts a prompt wait as waiting until the fleet reports it as a hand-back", () => {
+  it("counts a prompt as waiting only while the fleet reports an unread Canopy ask", () => {
     setupBoth([{ id: "t1", agentState: "waiting", location: "grid" }]);
     const { result } = renderHook(() => useTerminalNotificationCounts());
+    const stats = renderHook(() => useBackgroundPanelStats("none", true));
+    // No snapshot yet: a prompt is not a question.
+    expect(result.current.waitingCount).toBe(0);
+    expect(stats.result.current.waitingCount).toBe(0);
+
+    deliverRuns([{ runId: "t1", agentState: "waiting", canopy: ASK }]);
     expect(result.current.waitingCount).toBe(1);
+    expect(stats.result.current.waitingCount).toBe(1);
 
     deliverHandBacks(["t1"], false);
     expect(result.current.waitingCount).toBe(0);
+    expect(stats.result.current.waitingCount).toBe(0);
+  });
+
+  it("drops an unread ask from the counts once the pane has the agent working again", () => {
+    setupBoth([{ id: "t1", agentState: "working", location: "grid" }]);
+    deliverAsks(["t1"]);
+    expect(renderHook(() => useTerminalNotificationCounts()).result.current.waitingCount).toBe(0);
   });
 });
 
@@ -700,8 +733,8 @@ describe("the dock's agent pills read the fleet bands", () => {
     expect(renderHook(() => useWaitingTerminals()).result.current).toEqual([]);
     expect(renderHook(() => useUnreadTerminals()).result.current).toEqual([]);
     expect(renderHook(() => useDemandTerminalCount()).result.current).toBe(0);
-    // The Dock badge and window title still count the ask they can see.
-    expect(renderHook(() => useTerminalNotificationCounts()).result.current.waitingCount).toBe(2);
+    // The Dock badge and window title count only what the band calls an ask.
+    expect(renderHook(() => useTerminalNotificationCounts()).result.current.waitingCount).toBe(0);
   });
 
   it("leaves parked and snoozed agents out of both pills", () => {
@@ -746,7 +779,7 @@ describe("the dock's agent pills read the fleet bands", () => {
         runId: "asked",
         agentState: "completed",
         handBack: { stoppedAt: 2, seenAt: 3 },
-        canopy: { kind: "asked", quote: "Ship it?", readAt: 3 },
+        canopy: { kind: "asked", quote: "Ship it?", readAt: 3, seen: false },
       },
       {
         runId: "not-asking",
@@ -758,6 +791,36 @@ describe("the dock's agent pills read the fleet bands", () => {
 
     expect(ids(renderHook(() => useWaitingTerminals()).result.current)).toEqual(["asked"]);
     expect(ids(renderHook(() => useUnreadTerminals()).result.current)).toEqual(["not-asking"]);
+  });
+
+  it("puts an approval or question no reading placed in Unread until looked at, never Waiting", () => {
+    setupBoth([
+      { id: "approval", agentState: "waiting", waitingReason: "approval", location: "grid" },
+      { id: "question", agentState: "waiting", waitingReason: "question", location: "grid" },
+      { id: "read-ask", agentState: "waiting", waitingReason: "approval", location: "grid" },
+    ]);
+    const deliver = (wait: FleetRunRow["wait"]) =>
+      deliverRuns([
+        { runId: "approval", agentState: "waiting", waitingReason: "approval", wait },
+        { runId: "question", agentState: "waiting", waitingReason: "question", wait },
+        {
+          runId: "read-ask",
+          agentState: "waiting",
+          waitingReason: "approval",
+          canopy: { ...ASK, seen: true },
+        },
+      ]);
+
+    deliver({ stoppedAt: 2 });
+    const waiting = renderHook(() => useWaitingTerminals());
+    const unread = renderHook(() => useUnreadTerminals());
+    expect(waiting.result.current).toEqual([]);
+    expect(ids(unread.result.current)).toEqual(["approval", "question"]);
+
+    // Looked at, they are no more than idle: in neither pill.
+    deliver({ stoppedAt: 2, seenAt: 3 });
+    expect(waiting.result.current).toEqual([]);
+    expect(unread.result.current).toEqual([]);
   });
 
   it("drains Unread when the hand-back is seen, and keeps Unread to visible terminals", () => {

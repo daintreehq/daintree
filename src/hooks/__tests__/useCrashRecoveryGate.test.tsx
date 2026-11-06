@@ -2,7 +2,7 @@
 import { StrictMode } from "react";
 import { renderHook, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { useCrashRecoveryGate } from "../app/useCrashRecoveryGate";
+import { isCrashGateResolved, useCrashRecoveryGate } from "../app/useCrashRecoveryGate";
 import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
 import type { PendingCrash, CrashRecoveryConfig, CrashRecoveryAction } from "@shared/types/ipc";
 import type { BootResult } from "@shared/types/ipc/app";
@@ -345,6 +345,41 @@ describe("useCrashRecoveryGate", () => {
     }
     const storeState = useRestoreConfirmationStore.getState();
     expect(storeState.visible).toBe(false);
+  });
+
+  it("holds hydration back after a failed auto-restore until the user resolves (#16257)", async () => {
+    // Hydrating behind the failed dialog would load the very panels a
+    // following fresh start clears, and nothing hydrates again after it.
+    const resolve = vi
+      .fn(async (_action: CrashRecoveryAction) => {})
+      .mockRejectedValueOnce(new Error("Crash recovery restore failed"));
+    installElectronStub({ resolve });
+
+    const { result } = renderHook(() =>
+      useCrashRecoveryGate(
+        makeBootResult({
+          crashPending: { ...mockCrash, crashCount: 1 },
+          crashConfig: { autoRestoreOnCrash: true },
+        })
+      )
+    );
+    expect(isCrashGateResolved(result.current.state)).toBe(false);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(result.current.state.status).toBe("failed");
+    expect(isCrashGateResolved(result.current.state)).toBe(false);
+
+    await act(async () => {
+      await result.current.resolve({ kind: "fresh" });
+    });
+
+    expect(resolve).toHaveBeenLastCalledWith({ kind: "fresh" });
+    expect(isCrashGateResolved(result.current.state)).toBe(true);
   });
 
   it("uses the fallback error message when reject is a non-Error without a message property", async () => {

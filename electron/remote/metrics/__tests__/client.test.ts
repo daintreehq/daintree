@@ -119,6 +119,13 @@ function harness(hosts: HostDescriptor[], extra: Partial<HostMetricsClientOption
         local.worktreesHeard = null;
       };
     },
+    projectsHeard: null as (() => void) | null,
+    onProjectsChanged(listener: () => void) {
+      local.projectsHeard = listener;
+      return () => {
+        local.projectsHeard = null;
+      };
+    },
   };
   const options: HostMetricsClientOptions = {
     manager: {
@@ -525,7 +532,39 @@ describe("HostMetricsClient", () => {
     expect(bound).toBeLessThan(3_600_000);
     // The summary from before keeps the bound its own session gave it.
     expect(h.client.receiptOf(old)!.maxAgeMs).toBeGreaterThanOrEqual(3_600_000);
+    // And each is known by the session it came on (#15736).
+    expect(h.client.cameOn(fresh, after.client)).toBe(true);
+    expect(h.client.cameOn(old, after.client)).toBe(false);
     h.client.dispose();
+  });
+
+  it("tells which link each summary came on, keeping the history across a reconnect (#15736)", () => {
+    const h = harness([descriptor("studio-01")]);
+    const before = { pingSentAt: () => null } as unknown as LinkSession;
+    const after = { pingSentAt: () => null } as unknown as LinkSession;
+    h.client.record("studio-01", summary(1, 3), before);
+    const first = h.client.latest("studio-01")!;
+    h.client.record("studio-01", summary(2, 3), before);
+    const old = h.client.latest("studio-01")!;
+    // Every summary one link brings is that link's.
+    expect(h.client.cameOn(first, before)).toBe(true);
+    expect(h.client.cameOn(old, before)).toBe(true);
+    // Reconnected, or with no link open at all, it is what an earlier link brought.
+    expect(h.client.cameOn(old, after)).toBe(false);
+    expect(h.client.cameOn(old, null)).toBe(false);
+
+    h.client.record("studio-01", summary(3, 1), after);
+    const fresh = h.client.latest("studio-01")!;
+    expect(h.client.cameOn(fresh, after)).toBe(true);
+    expect(h.client.cameOn(old, after)).toBe(false);
+    expect(h.client.getSnapshots()).toEqual([
+      { hostId: "studio-01", history: [fresh, old, first] },
+    ]);
+
+    // One that came on no link, as this machine's own do, can't be told either way.
+    h.client.record("studio-01", summary(4));
+    expect(h.client.cameOn(h.client.latest("studio-01")!, after)).toBeNull();
+    expect(h.client.cameOn(summary(5), after)).toBeNull();
   });
 
   it("presents attention only for hosts the user opted in to", async () => {
@@ -584,6 +623,121 @@ describe("HostMetricsClient", () => {
     h.client.dispose();
   });
 
+  it("hands a host's agents' waits to armed agent watches only, past every alert choice (#16188)", async () => {
+    const watched = { ...descriptor("studio"), assistantControlEnabled: true };
+    const h = harness([watched, descriptor("plain")], { waitingPolicy: () => "silent" });
+    h.client.start();
+    const studio = await openSessionPair(dir);
+    const plain = await openSessionPair(dir);
+    open.push(studio.host, studio.client, plain.host, plain.client);
+    h.openSession("studio", studio.client);
+    h.openSession("plain", plain.client);
+    const wait = {
+      terminalId: "t1",
+      projectId: "p1",
+      worktreeId: "/work/app",
+      incarnation: 2,
+      agentIncarnation: 0,
+      waitingReason: "approval",
+      refined: false,
+      seenAt: 5,
+    };
+    // Nothing listens while no watch is armed.
+    await studio.host.call(MetricsLinkMethod.AGENT_WAITING, wait);
+
+    const heard: Array<[string, unknown]> = [];
+    const off = h.client.onAgentWaiting((hostId, event) => heard.push([hostId, event]));
+    await studio.host.call(MetricsLinkMethod.AGENT_WAITING, {
+      ...wait,
+      waitingReason: "a reason from a later build",
+    });
+    // A host the person hasn't given assistant control is never heard.
+    await plain.host.call(MetricsLinkMethod.AGENT_WAITING, wait);
+    // An older host's attention stands in, with no reason, whatever this
+    // screen's alert choices and the host's notifications switch say.
+    await studio.host.call(MetricsLinkMethod.ATTENTION, {
+      kind: "waiting",
+      terminalId: "t2",
+      projectId: "p1",
+      projectName: "app",
+      agentName: "Claude",
+      quiet: false,
+    });
+    expect(heard).toEqual([
+      ["studio", { ...wait, waitingReason: null, source: "event" }],
+      [
+        "studio",
+        {
+          source: "attention",
+          terminalId: "t2",
+          projectId: "p1",
+          worktreeId: null,
+          incarnation: null,
+          agentIncarnation: null,
+          waitingReason: null,
+          refined: false,
+          seenAt: null,
+        },
+      ],
+    ]);
+    // None of it reached a person, nor dialled a host.
+    expect(h.attention).toEqual([]);
+    expect(h.connect).not.toHaveBeenCalled();
+
+    off();
+    await studio.host.call(MetricsLinkMethod.AGENT_WAITING, wait);
+    expect(heard).toHaveLength(2);
+    h.client.dispose();
+  });
+
+  it("hears a host's agents by the link they came on, past the person's spent notice budget", async () => {
+    const watched = { ...descriptor("loud", true), assistantControlEnabled: true };
+    const h = harness([watched]);
+    h.client.start();
+    const loud = await openSessionPair(dir);
+    open.push(loud.host, loud.client);
+    h.openSession("loud", loud.client);
+    const page = {
+      kind: "waiting",
+      projectId: null,
+      projectName: null,
+      agentName: null,
+      quiet: false,
+    };
+    for (let index = 0; index < 20; index += 1) {
+      await loud.host.call(MetricsLinkMethod.ATTENTION, { ...page, terminalId: `p-${index}` });
+    }
+    // The person's share of notices from this host is spent.
+    expect(h.attention.length).toBeLessThan(20);
+    const heard: Array<[string, string]> = [];
+    h.client.onAgentWaiting((hostId, event) => heard.push([hostId, event.terminalId]));
+    await loud.host.call(MetricsLinkMethod.AGENT_WAITING, {
+      hostId: "someone-else",
+      terminalId: "t1",
+      projectId: null,
+      worktreeId: null,
+      incarnation: null,
+      agentIncarnation: null,
+      waitingReason: "question",
+      refined: false,
+      seenAt: 1,
+    });
+    await expect(
+      loud.host.call(MetricsLinkMethod.AGENT_WAITING, {
+        terminalId: "x".repeat(300),
+        projectId: null,
+        worktreeId: null,
+        incarnation: null,
+        agentIncarnation: null,
+        waitingReason: null,
+        refined: false,
+        seenAt: 1,
+      })
+    ).rejects.toBeDefined();
+    expect(heard).toEqual([["loud", "t1"]]);
+    h.client.dispose();
+  });
+
   it("tells every view a host's worktree list changed, whether or not its notifications are on", async () => {
     const h = harness([descriptor("quiet")]);
     h.client.start();
@@ -593,6 +747,41 @@ describe("HostMetricsClient", () => {
     await quiet.host.call(MetricsLinkMethod.WORKTREES_CHANGED, null);
     expect(h.emitted).toContainEqual({ type: "worktrees", hostId: "quiet" });
     h.client.dispose();
+  });
+
+  it("tells every view a host's projects changed, apart from its worktrees", async () => {
+    const h = harness([descriptor("quiet")]);
+    h.client.start();
+    const quiet = await openSessionPair(dir);
+    open.push(quiet.host, quiet.client);
+    h.openSession("quiet", quiet.client);
+    await quiet.host.call(MetricsLinkMethod.PROJECTS_CHANGED, null);
+    expect(h.emitted).toContainEqual({ type: "projects", hostId: "quiet" });
+    expect(h.emitted.some((event) => event.type === "worktrees")).toBe(false);
+    h.client.dispose();
+  });
+
+  it("follows this machine's projects only while another host exists", () => {
+    const h = harness([]);
+    h.client.start();
+    expect(h.local.projectsHeard).toBeNull();
+
+    h.setHosts([descriptor("a")]);
+    h.local.projectsHeard?.();
+    expect(h.emitted).toEqual([{ type: "projects", hostId: "local" }]);
+
+    h.setHosts([]);
+    expect(h.local.projectsHeard).toBeNull();
+
+    // Followed again once another host is back, and let go on dispose.
+    h.setHosts([descriptor("a")]);
+    h.local.projectsHeard?.();
+    expect(h.emitted).toEqual([
+      { type: "projects", hostId: "local" },
+      { type: "projects", hostId: "local" },
+    ]);
+    h.client.dispose();
+    expect(h.local.projectsHeard).toBeNull();
   });
 
   it("follows this machine's worktree list only while another host exists", async () => {

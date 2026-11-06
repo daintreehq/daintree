@@ -7,7 +7,6 @@ interface UseForgeBadgeTooltipParams {
   missingCredential: boolean;
   /** Resolved forge provider id — routes the missing-credential click to that provider's settings subtab. */
   providerId: string | null;
-  isActive: boolean;
   onOpen?: () => void;
 }
 
@@ -16,7 +15,6 @@ export function useForgeBadgeTooltip({
   reset,
   missingCredential,
   providerId,
-  isActive,
   onOpen,
 }: UseForgeBadgeTooltipParams) {
   const [isOpen, setIsOpen] = useState(false);
@@ -33,8 +31,10 @@ export function useForgeBadgeTooltip({
     [fetchTooltip, reset]
   );
 
+  // Opens on the first click on any card, the active one or not: a reference
+  // that did nothing until its card was selected meant the same control did
+  // two different things depending on which worktree was current (#15864).
   const handleClick = useCallback(() => {
-    if (!isActive) return;
     if (missingCredential) {
       void actionService.dispatch(
         "app.settings.openTab",
@@ -44,7 +44,7 @@ export function useForgeBadgeTooltip({
       return;
     }
     onOpen?.();
-  }, [isActive, missingCredential, providerId, onOpen]);
+  }, [missingCredential, providerId, onOpen]);
 
   return { isOpen, handleOpenChange, handleClick };
 }

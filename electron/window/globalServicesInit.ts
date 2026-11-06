@@ -20,6 +20,7 @@ import {
 import { initializeSystemSleepService } from "../services/SystemSleepService.js";
 import { initializeOsDndService } from "../services/OsDndService.js";
 import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceService.js";
+import { installDatabaseBackupNotice } from "../services/databaseBackupNotice.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 // Free for eager import: PtyClient already value-imports HelpSessionService,
 // so this static edge adds zero boot cost — keep it that way.
@@ -46,7 +47,7 @@ import { getSharedTerminalSnapshot } from "../services/sharedTerminalSnapshot.js
 import { withTimeout } from "../utils/withTimeout.js";
 
 import { startDiskSpaceMonitor } from "../services/DiskSpaceMonitor.js";
-import { runScratchCleanup } from "../services/ScratchCleanupService.js";
+import { runScratchCleanup, setHeldWorkspaceIdsReader } from "../services/ScratchCleanupService.js";
 import {
   initializeAgentCompileCacheCleanup,
   requestAgentCompileCacheCleanup,
@@ -85,12 +86,20 @@ import {
   getRunHandBackService,
 } from "../ipc/handlers/projectCrud/index.js";
 import { findCoordinationHold } from "../services/coordinationHolds.js";
+import { peekScheduledRunRecorder } from "../services/scheduledRuns/index.js";
+import { hasPendingScheduledLaunch } from "../services/scheduledRuns/scheduledRunAdmission.js";
 import { registerDeferredTask } from "./deferredInitQueue.js";
 import {
   collectActiveProjectIds,
+  collectHeldWorkspaceIds,
   collectShownProjectIds,
   projectViewManagersFrom,
 } from "./activeProjectIds.js";
+import { getReservedWorkspaceIds } from "./windowOpenState.js";
+import { getAllPendingActivationIds } from "./projectActivationClaims.js";
+import { getQueuedBackgroundRestoreIds } from "../lifecycle/projectRestore.js";
+import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
+import { readManifestWorkspaceIds } from "../services/persistence/windowManifestStore.js";
 import { isSmokeTest } from "../setup/environment.js";
 import { setPluginDirResolver, setPluginTourAudioResolver } from "../setup/protocols.js";
 import { isE2EFaultMode, isE2EMode } from "../setup/runtimeFlags.js";
@@ -100,8 +109,7 @@ import { trackProjectVisibility } from "../services/projectVisibilityClock.js";
 import { getProjectPresenceTracker } from "../services/ProjectPresenceTracker.js";
 import { getCompositeMemorySnapshot } from "../services/memoryAccounting.js";
 import { scratchStore } from "../services/ScratchStore.js";
-import { registerCommands } from "../services/commands/index.js";
-import { store, wasStoreFreshAtBoot } from "../store.js";
+import { hasLegacyAuditRingSources, store, wasStoreFreshAtBoot } from "../store.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
 import type { IdleBackgroundAutoCloseService } from "../services/IdleBackgroundAutoCloseService.js";
@@ -128,6 +136,8 @@ import {
   setGlobalServicesInitialized,
   getCliAvailabilityServiceRef,
   getGlobalServicesInitialized,
+  decisionsWantedAtStartup,
+  loadDecisionsModule,
 } from "./serviceRefs.js";
 
 /**
@@ -232,13 +242,12 @@ function reconcileScratchResumableAgentCounts(
  * How many workspace states the sweep reads at once.
  *
  * Bounded rather than a bare `Promise.all` over every workspace, because the
- * failure mode is not a slow sweep — it is lost state. `ProjectStateManager`
- * cannot tell a descriptor exhaustion from a corrupt file: an `EMFILE` lands in
- * the same catch as a parse error, which marks the workspace unreadable AND
- * renames its perfectly healthy `state.json` to `.corrupted.<ts>`. A sweep that
- * exists to reclaim disk must not be the thing that destroys restorable panels,
- * and adding scratches to it (#11821) roughly doubled the fan-out that gets
- * there.
+ * failure mode is not a slow sweep — it is lost restores. An `EMFILE` that
+ * outlasts `ProjectStateManager`'s brief read retry marks the workspace
+ * unreadable for the session: its panels hydrate empty, its resumable count
+ * goes unknown, and the orphan pass below stands down for every workspace. A
+ * sweep that exists to reclaim disk must not be what causes that, and adding
+ * scratches to it (#11821) roughly doubled the fan-out that gets there.
  */
 const STATE_READ_CONCURRENCY = 8;
 
@@ -523,6 +532,19 @@ export async function initGlobalServices(
     return "exit-requested";
   }
 
+  // Audit rings from before the SQLite move (#15615). Before anything can
+  // hydrate a ring owner, whose first write replaces the ring wholesale; a
+  // failure leaves every source in place for the next boot.
+  if (hasLegacyAuditRingSources()) {
+    try {
+      const { importLegacyAuditRings } =
+        await import("../services/persistence/legacyAuditRingImport.js");
+      importLegacyAuditRings();
+    } catch (error) {
+      console.error("[MAIN] Legacy audit ring import failed:", error);
+    }
+  }
+
   // Adaptive-recovery + watchdog E2E seams (#9599), gated on
   // DAINTREE_E2E_FAULT_MODE — never present in production. Drive a synthetic
   // resource-profile transition and a synthetic watchdog cap-hit so the
@@ -573,6 +595,25 @@ export async function initGlobalServices(
   const presenceViews = projectViewManagersFrom(windowRegistry);
   getProjectPresenceTracker().setShownReader(() =>
     collectShownProjectIds(presenceViews, "project-presence")
+  );
+
+  // What the scratch sweep must never tombstone (#15614). Installed before any
+  // deferred task, so neither the boot sweep nor the disk-critical one can run
+  // without it — and a sweep without it tombstones nothing.
+  setHeldWorkspaceIdsReader(() =>
+    collectHeldWorkspaceIds({
+      projectViewManagers: presenceViews,
+      remoteViewWorkspaceIds: () =>
+        getEndpointRegistry()
+          .getRemote()
+          .map((endpoint) => endpoint.projectId),
+      liveTerminalWorkspaceIds: () => getPtyClient()?.getLiveWorkspaceIds() ?? [],
+      openingWorkspaceIds: () => [...getReservedWorkspaceIds(), ...getAllPendingActivationIds()],
+      restoringWorkspaceIds: () => [
+        ...getQueuedBackgroundRestoreIds(),
+        ...readManifestWorkspaceIds(),
+      ],
+    })
   );
 
   // ── Group 1: cheap synchronous wires ──
@@ -646,6 +687,7 @@ export async function initGlobalServices(
   registerDeferredTask({
     name: "database-maintenance",
     run: () => {
+      installDatabaseBackupNotice();
       getDatabaseMaintenanceService().startMaintenance();
     },
   });
@@ -1075,20 +1117,6 @@ export async function initGlobalServices(
     },
   });
 
-  // Built-in commands — registration fires the githubCreateIssue/githubWorkIssue
-  // chunk imports, so it belongs in the deferred queue, not main-module eval.
-  // The commands IPC awaits builtinCommandsReady(), so a settings page that
-  // lists commands before the queue drains still sees them. registerCommands()
-  // is fire-and-forget internally and returns synchronously, never stalling the
-  // drain. Registered once per process (initGlobalServices runs once),
-  // matching the previous main.ts semantics.
-  registerDeferredTask({
-    name: "builtin-commands",
-    run: () => {
-      registerCommands();
-    },
-  });
-
   registerDeferredTask({
     name: "idle-terminal-notification-service",
     run: async () => {
@@ -1135,6 +1163,8 @@ export async function initGlobalServices(
         const handBacks = getRunHandBackService();
         const attention = getRunAttentionService();
         return findCoordinationHold(projectId, {
+          hasUnsettledScheduledRun: (id) =>
+            hasPendingScheduledLaunch(id) || (peekScheduledRunRecorder()?.hasOpenRun(id) ?? false),
           projectOfTerminal: (id) =>
             ptyClient?.getTerminalProjectId(id) ?? fleetProjects.get(id) ?? ownerOf(id),
           waitingRunProjectIds: () =>
@@ -1159,6 +1189,35 @@ export async function initGlobalServices(
       );
       svc.start();
       idleSleepService = svc;
+    },
+  });
+
+  // Fires due schedules for the life of the process, with or without a window
+  // (#15979). Its first pass catches up what came due while Daintree was quit.
+  registerDeferredTask({
+    name: "scheduled-run-scheduler",
+    run: async () => {
+      const { startScheduledRunScheduler } =
+        await import("../services/scheduledRuns/scheduledRunSchedulerLive.js");
+      startScheduledRunScheduler();
+    },
+  });
+
+  // Keeps the OS job that starts Daintree for schedules set to run while it
+  // isn't running (#15990 on macOS, #15991 on Linux, #15993 on Windows)
+  // matching them, and repairs one left by an app that has moved.
+  registerDeferredTask({
+    name: "schedule-os-job",
+    run: async () => {
+      if (
+        process.platform !== "darwin" &&
+        process.platform !== "linux" &&
+        process.platform !== "win32"
+      ) {
+        return;
+      }
+      const { startScheduleOsJob } = await import("../services/scheduledRuns/scheduleOsJobLive.js");
+      startScheduleOsJob();
     },
   });
 
@@ -1439,6 +1498,24 @@ export async function initGlobalServices(
           await startDeviceAnswerIfEnabled();
         } catch (err) {
           console.warn("[MAIN] Answer from another device failed to start:", err);
+        }
+      },
+    });
+
+    // Decisions: the saved switch, and an enrolled Host's record (#16022),
+    // are read before anything of Decisions is imported, so with neither this
+    // task loads nothing at all.
+    registerDeferredTask({
+      name: "decisions",
+      run: async () => {
+        if (!decisionsWantedAtStartup(store.get("decisions"), store.get("decisionsHost"))) return;
+        try {
+          const decisions = await loadDecisionsModule(
+            () => import("../services/decisions/index.js")
+          );
+          await decisions?.startDecisionsIfEnabled();
+        } catch (err) {
+          console.warn("[MAIN] Decisions failed to start:", err);
         }
       },
     });

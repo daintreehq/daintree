@@ -86,6 +86,7 @@ import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { routeHostEvent, type PtyEventRouterDeps } from "./pty/PtyEventRouter.js";
 import type { TerminalLaunchAttribution } from "./pty/TerminalLifecycleObserver.js";
 import { sendPtyHostRpc } from "./pty/PtyHostRpcFacade.js";
+import { RecentTerminalExits } from "./pty/RecentTerminalExits.js";
 import { mergeFlowControlSnapshots, mergeMemoryRollups } from "./pty/rollupMerge.js";
 import { HostSignalAggregator, type HostMemoryWarningPayload } from "./pty/HostSignalAggregator.js";
 import { HostMemoryPauseTracker } from "./pty/HostMemoryPauseTracker.js";
@@ -113,6 +114,7 @@ import type {
   HostThrottlePayload,
   MemoryRollup,
   GracefulKillResult,
+  EndTrashGraceStatus,
   AgentSessionCaptureFinishResult,
   PtyHostWorkerGovernanceSnapshot,
   TrimStateResult,
@@ -121,6 +123,7 @@ import type {
   TerminalSubmitGuard,
   PtyHostDriveLease,
   FirstPromptCandidate,
+  OwnedTypedInput,
 } from "../../shared/types/pty-host.js";
 import type {
   ClosedProcessKillResult,
@@ -130,7 +133,12 @@ import type {
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
 import type { AgentState, AgentId, WaitingReason } from "../../shared/types/agent.js";
-import type { PanelKind, PanelTitleMode, TerminalFirstPrompt } from "../../shared/types/panel.js";
+import type {
+  PanelKind,
+  PanelTitleMode,
+  ScheduledRunRef,
+  TerminalFirstPrompt,
+} from "../../shared/types/panel.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
 import type { PowerPolicyLevel } from "../../shared/types/powerPolicy.js";
 import type {
@@ -170,6 +178,14 @@ interface TerminalInfoResponse {
   lastInputTime?: number;
   /** Last input that could have put text in the composer, ignoring xterm's own reports (#12491). */
   lastTypedInputAt?: number;
+  /** The last of that input written for an assistant, and whose (#16094). */
+  lastOwnedInput?: OwnedTypedInput;
+  /** The last of that input anyone but `lastOwnedInput`'s owner wrote: all of it while none is owned. */
+  lastForeignInputAt?: number;
+  /** The last input the agent could have taken as a prompt written for an assistant, and whose (#16187). */
+  lastOwnedPromptInput?: OwnedTypedInput;
+  /** The last of that input anyone but `lastOwnedPromptInput`'s owner wrote. */
+  lastForeignPromptInputAt?: number;
   lastOutputTime?: number;
   /** A submission is queued or still being written; absent from older hosts. */
   hasPendingSubmission?: boolean;
@@ -191,8 +207,12 @@ interface TerminalInfoResponse {
    */
   isExited?: boolean;
   agentSessionId?: string;
+  /** The Claude store the launch env names; absent when it can't be resolved (#16269). */
+  claudeConfigDir?: string;
   agentLaunchFlags?: string[];
   agentModelId?: string;
+  /** The scheduled run this terminal was launched for (#15977). */
+  scheduledRun?: ScheduledRunRef;
   /** Last non-useless OSC title observed from the agent — preferred over `title` for resume-record labels. */
   lastObservedTitle?: string;
   agentPresetId?: string;
@@ -231,6 +251,38 @@ interface TerminalInfoResponse {
  * are orphaned. On the confirmed path `sessions` holds one entry per terminal
  * (agentSessionId null for non-agents / unresumable terminals).
  */
+/**
+ * One PTY incarnation ended, as the host reported it. Unlike the public `exit`,
+ * emitted for a same-id respawn's predecessor too, whether main or the host
+ * saw it replaced; `spawnedAt` names the incarnation (absent only from a host
+ * that didn't send it).
+ */
+/** What {@link PtyClient.setSubmitDecorator} installs; null leaves a submission as it was. */
+export type PtySubmitDecorator = (
+  id: string,
+  text: string,
+  handbackCode: string | undefined
+) => { text: string; handbackCode: string; handbackInstruction: "run" } | null;
+
+export interface PtyIncarnationExit {
+  terminalId: string;
+  spawnedAt?: number;
+  exitCode: number;
+  signal: number | null;
+  /**
+   * Daintree ended this incarnation: a kill was asked for before it exited,
+   * or a newer one under the same id replaced it. Its status is then the
+   * teardown's, not what it ran.
+   */
+  stopped?: true;
+}
+
+/** One incarnation died with its pty-host, and its terminal is being replayed as a new one. */
+export interface PtyIncarnationLost {
+  terminalId: string;
+  launchGeneration: number;
+}
+
 export interface GracefulKillByProjectOutcome {
   confirmed: boolean;
   sessions: Array<{ id: string; agentSessionId: string | null }>;
@@ -284,6 +336,8 @@ const MAX_MISSED_HEARTBEATS = 3;
  * before SIGKILL, after it), each bounded at 3s, plus the escalation grace.
  */
 const CLOSED_PROCESS_KILL_TIMEOUT_MS = 15_000;
+/** The host only starts the trash expiry and answers; the shutdown runs on after. */
+const END_TRASH_GRACE_TIMEOUT_MS = 5000;
 /** One run of Main's tree-kill helper for roots a disposing host handed over. */
 const HANDOFF_TREE_KILL_TIMEOUT_MS = 3000;
 /**
@@ -348,6 +402,7 @@ function takesFirstSend(options: PtyHostSpawnOptions | undefined): boolean {
 export class PtyClient extends EventEmitter {
   private config: ResolvedPtyClientConfig;
   private isDisposed = false;
+  private submitDecorator: PtySubmitDecorator | null = null;
   private hostsExited: Promise<boolean> = Promise.resolve(true);
   /** Retired shards whose hosts are still tearing down; quit waits on them too. */
   private readonly retiringHostExits = new Set<Promise<boolean>>();
@@ -377,6 +432,12 @@ export class PtyClient extends EventEmitter {
    * per-terminal requests to the shard that actually holds the terminal.
    */
   private readonly terminalOwners = new Map<string, string>();
+  /**
+   * Exits the host reported, kept past the host's record of the terminal so a
+   * wait for a closed panel's process still finds one the trash already let go
+   * (#15728).
+   */
+  readonly recentExits = new RecentTerminalExits();
   /**
    * projectId → forced shard key. Written when a project shard exhausts its
    * crash budget (its terminals migrate to the default shard and stay there
@@ -589,6 +650,10 @@ export class PtyClient extends EventEmitter {
       trackRetiringHost: (exit) => this.trackRetiringHost(exit),
       dropShardSignals: (shardKey) => this.dropShardSignals(shardKey),
       terminalLost: (id) => this.emit("terminal-lost", id),
+      incarnationLost: (id, launchGeneration) => {
+        const fact: PtyIncarnationLost = { terminalId: id, launchGeneration };
+        this.emit("incarnation-lost", fact);
+      },
       logWarn,
     });
 
@@ -828,13 +893,25 @@ export class PtyClient extends EventEmitter {
         // Lifecycle-ledger bookkeeping. Exits carry the host-adopted
         // launchGeneration so a stale exit arriving after a same-id respawn
         // closes its own incarnation, never the successor.
-        onTerminalExit: (id, exitCode, launchGeneration) => {
+        onTerminalExit: (id, exitCode, launchGeneration, signal, spawnedAt, stopped) => {
           terminalCrashReapService.detachTerminal(id, launchGeneration);
           const ledger = getLifecycleLedger();
           const generation = launchGeneration ?? ledger.currentGeneration(id);
           if (generation !== undefined && ledger.currentGeneration(id) !== undefined) {
             ledger.recordClose(id, generation, "exit", exitCode);
           }
+          this.recentExits.record({
+            terminalId: id,
+            launchGeneration: generation,
+            exitCode,
+            signal,
+          });
+          // Main-only, and for every incarnation: the public `exit` drops one a
+          // same-id respawn superseded, but that exit still ends its own run.
+          const fact: PtyIncarnationExit = { terminalId: id, exitCode, signal: signal ?? null };
+          if (spawnedAt !== undefined) fact.spawnedAt = spawnedAt;
+          if (stopped) fact.stopped = true;
+          this.emit("incarnation-exit", fact);
         },
         // Per-terminal captures streamed while a graceful kill is still
         // running (#12180). Recorded only while a call for that project is in
@@ -1542,10 +1619,26 @@ export class PtyClient extends EventEmitter {
     this.defaultShard.send({ type: "plugin-pty-kill", id, generation, signal });
   }
 
-  write(id: string, data: string, traceId?: string): void {
-    this.shardForTerminal(id).send({ type: "write", id, data, traceId });
+  /** `inputOwner` marks the bytes as an assistant's (#16094), for that assistant's next check. */
+  write(id: string, data: string, traceId?: string, inputOwner?: string): void {
+    this.shardForTerminal(id).send({
+      type: "write",
+      id,
+      data,
+      traceId,
+      ...(inputOwner !== undefined ? { inputOwner } : {}),
+    });
     const answer = terminalAnswerOf(data);
     if (answer !== null) this.emit("terminal-input", id, { answer } satisfies TerminalInputNotice);
+  }
+
+  /**
+   * Rewrites submissions to terminals armed with a When done choice (#16171),
+   * so every prompt any caller sends one carries its own fresh code. Installed
+   * only while a terminal is armed.
+   */
+  setSubmitDecorator(decorator: PtySubmitDecorator | null): void {
+    this.submitDecorator = decorator;
   }
 
   /**
@@ -1553,6 +1646,12 @@ export class PtyClient extends EventEmitter {
    * anything of its own (a provenance stamp), for the run's first-prompt record
    * (#15521). Absent, it is `text` without the handback instruction for
    * `handbackCode`. `null` marks a submission that is nobody's prompt.
+   *
+   * `handbackInstruction` is `run` when `text` already carries the instruction
+   * that offers `needs-you`; such a submission is never decorated again.
+   *
+   * `promptOwner` names the assistant whose prompt a guarded line carries
+   * (#16187); the host files it as that assistant's prompt input once written.
    */
   submit(
     id: string,
@@ -1561,8 +1660,24 @@ export class PtyClient extends EventEmitter {
     handbackCode?: string,
     guard?: TerminalSubmitGuard,
     imagePaths?: readonly string[],
-    promptAsWritten?: string | null
+    promptAsWritten?: string | null,
+    handbackInstruction?: "run",
+    promptOwner?: string
   ): void {
+    if (handbackInstruction === undefined && this.submitDecorator !== null) {
+      const armed = this.submitDecorator(id, text, handbackCode);
+      if (armed !== null) {
+        // The first-prompt record is the caller's text, before either
+        // instruction; null still marks a send that is nobody's prompt.
+        if (promptAsWritten === undefined) {
+          promptAsWritten =
+            handbackCode !== undefined ? withoutHandbackInstruction(text, handbackCode) : text;
+        }
+        text = armed.text;
+        handbackCode = armed.handbackCode;
+        handbackInstruction = armed.handbackInstruction;
+      }
+    }
     const firstPrompt = this.firstPromptCandidate(id, text, handbackCode, promptAsWritten);
     this.shardForTerminal(id).send({
       type: "submit",
@@ -1570,13 +1685,18 @@ export class PtyClient extends EventEmitter {
       text,
       submissionToken,
       handbackCode,
+      ...(handbackCode !== undefined && handbackInstruction === "run"
+        ? { handbackInstruction }
+        : {}),
       ...(guard !== undefined ? { guard } : {}),
       ...(imagePaths !== undefined && imagePaths.length > 0 ? { imagePaths: [...imagePaths] } : {}),
       ...(firstPrompt !== undefined ? { firstPrompt } : {}),
+      ...(promptOwner !== undefined ? { promptOwner } : {}),
     });
     // A guarded submission is Daintree waking an idle agent, not anyone
-    // answering it, and the host may yet refuse it.
-    if (guard === undefined) {
+    // answering it, and the host may yet refuse it. A line guarded only
+    // against a choice dialog is still its caller's own (#16209).
+    if (guard === undefined || guard === "no-choice-dialog") {
       this.emit("terminal-input", id, { answer: "submit" } satisfies TerminalInputNotice);
     }
   }
@@ -1660,12 +1780,16 @@ export class PtyClient extends EventEmitter {
    * gap survives main-process IPC jitter (which can otherwise collapse two
    * sub-10ms writes into a single Meta-Escape).
    */
-  batchDoubleEscape(ids: string[]): void {
+  batchDoubleEscape(ids: string[], inputOwner?: string): void {
     if (!Array.isArray(ids) || ids.length === 0) return;
     const validIds = ids.filter((id) => typeof id === "string" && id.length > 0);
     if (validIds.length === 0) return;
     for (const [shard, shardIds] of this.groupByOwnerShard(validIds)) {
-      shard.send({ type: "batch-double-escape", ids: shardIds });
+      shard.send({
+        type: "batch-double-escape",
+        ids: shardIds,
+        ...(inputOwner !== undefined ? { inputOwner } : {}),
+      });
     }
     // Escape declines an approval, as a single one sent by name does.
     for (const id of validIds) {
@@ -1761,6 +1885,11 @@ export class PtyClient extends EventEmitter {
   /** Check if a terminal exists (based on local tracking) */
   hasTerminal(id: string): boolean {
     return this.pendingSpawns.has(id);
+  }
+
+  /** Every terminal id main is tracking, for a snapshot taken before a bulk close. */
+  getTrackedTerminalIds(): string[] {
+    return [...this.pendingSpawns.keys()];
   }
 
   /**
@@ -2174,6 +2303,21 @@ export class PtyClient extends EventEmitter {
       return { sessionId: null };
     });
     return result.sessionId;
+  }
+
+  /**
+   * End a trashed terminal's grace now (#15728), only for the incarnation the
+   * caller closed. Null when the host did not answer: it may or may not have
+   * started, and the caller's wait finds out from the exit.
+   */
+  async endTrashGrace(id: string, expectedGeneration: number): Promise<EndTrashGraceStatus | null> {
+    if (this.isDisposed) return null;
+    return sendPtyHostRpc<EndTrashGraceStatus>(
+      this.shardForTerminal(id),
+      `end-trash-grace-${id}`,
+      (requestId) => ({ type: "end-trash-grace", id, requestId, expectedGeneration }),
+      { method: "end-trash-grace", timeoutMs: END_TRASH_GRACE_TIMEOUT_MS }
+    ).catch(() => null);
   }
 
   /**
@@ -3052,6 +3196,7 @@ export class PtyClient extends EventEmitter {
     this.isDisposed = true;
 
     getTrashedPidTracker().clearAll();
+    this.recentExits.clear();
     console.log("[PtyClient] Disposing...");
 
     for (const timer of this.shardRetirementTimers.values()) {

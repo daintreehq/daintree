@@ -4,6 +4,7 @@ import type {
   ForgeProviderBaseImpl,
   ForgeProviderContribution,
   ForgeProviderImpl,
+  ForgeProviderRole,
   RegisteredForgeProvider,
   RepoRef,
 } from "../../shared/types/forge.js";
@@ -79,7 +80,26 @@ function notifyMatchersChanged(): void {
  * via `host.registerForgeProvider` and stored in
  * {@link PLUGIN_FORGE_PROVIDER_IMPLS} keyed by namespaced id.
  */
-const PLUGIN_FORGE_PROVIDERS = new Map<string, ForgeProviderContribution[]>();
+const PLUGIN_FORGE_PROVIDERS = new Map<string, RegisteredPluginProviders>();
+
+interface RegisteredPluginProviders {
+  contributions: ForgeProviderContribution[];
+  /**
+   * Whether the owning plugin runs in-process, the only place
+   * `host.registerForgeProvider` can bind an impl. An installed plugin
+   * activates in the plugin worker, whose `registerForgeProvider` binds
+   * nothing: its forge providers can be listed and routed to, never run.
+   */
+  builtin: boolean;
+}
+
+/**
+ * Why an installed plugin's provider can't be used, shown beside it wherever
+ * Settings lists it. Availability is the plugin's runtime, not whether an impl
+ * has bound yet: a lazy built-in is available before its `activate()` runs.
+ */
+export const INSTALLED_FORGE_PROVIDER_REASON =
+  "Forge providers currently run only as built-in plugins, and this one comes from an installed plugin";
 
 /**
  * Runtime implementation handlers bound via `host.registerForgeProvider`.
@@ -92,9 +112,15 @@ const PLUGIN_FORGE_PROVIDERS = new Map<string, ForgeProviderContribution[]>();
  */
 const PLUGIN_FORGE_PROVIDER_IMPLS = new Map<string, AnyForgeProviderImpl>();
 
+/**
+ * `options.builtin` is the loader's classification of the owning plugin; the
+ * plugin registrar always passes it. Omitted, the providers are treated as
+ * runnable, which is how the registry behaved before it knew the difference.
+ */
 export function registerForgeProviders(
   pluginId: string,
-  contributions: ForgeProviderContribution[]
+  contributions: ForgeProviderContribution[],
+  options: { builtin?: boolean } = {}
 ): void {
   if (typeof pluginId !== "string" || pluginId.length === 0) return;
   if (!Array.isArray(contributions) || contributions.length === 0) {
@@ -103,7 +129,10 @@ export function registerForgeProviders(
     notifyMatchersChanged();
     return;
   }
-  PLUGIN_FORGE_PROVIDERS.set(pluginId, contributions.map(freezeContribution));
+  PLUGIN_FORGE_PROVIDERS.set(pluginId, {
+    contributions: contributions.map(freezeContribution),
+    builtin: options.builtin !== false,
+  });
   notifyRegistryChanged();
   notifyMatchersChanged();
 }
@@ -248,12 +277,57 @@ function lookupImpl(namespacedId: string): AnyForgeProviderImpl | undefined {
 }
 
 function findContribution(namespacedId: string): ForgeProviderContribution | undefined {
-  for (const [pluginId, contributions] of PLUGIN_FORGE_PROVIDERS) {
+  for (const [pluginId, { contributions }] of PLUGIN_FORGE_PROVIDERS) {
     for (const contribution of contributions) {
       if (makeForgeProviderId(pluginId, contribution.id) === namespacedId) return contribution;
     }
   }
   return undefined;
+}
+
+/**
+ * The error a forge call gets when `providerId` names a provider that can't
+ * run — today, one declared by an installed plugin — or `null` when it can, or
+ * when no registered provider has that id (callers keep their own "missing"
+ * handling for that). Checked before implicit activation so an unrunnable
+ * provider never starts its plugin's worker. Accepts the canonical
+ * `{pluginId}.{contributionId}` id and, like the resolver, a legacy bare
+ * contribution id; pass the role a stored selection is for so a bare id is
+ * matched against the same candidates the resolver uses.
+ */
+export function getForgeProviderUnavailableError(
+  providerId: string,
+  role?: ForgeProviderRole
+): string | null {
+  if (typeof providerId !== "string" || providerId.length === 0) return null;
+  // First match in registration order, like the resolver's `findById`, so a
+  // bare id a built-in and an installed plugin share names the same provider
+  // the resolver would pick.
+  for (const [pluginId, { contributions, builtin }] of PLUGIN_FORGE_PROVIDERS) {
+    for (const contribution of contributions) {
+      if (role && !forgeProviderServesRole(contribution, role)) continue;
+      if (
+        makeForgeProviderId(pluginId, contribution.id) !== providerId &&
+        contribution.id !== providerId
+      ) {
+        continue;
+      }
+      return builtin
+        ? null
+        : `Forge provider "${contribution.name}" can't run: it comes from the installed plugin "${pluginId}", and forge providers currently run only as built-in plugins.`;
+    }
+  }
+  return null;
+}
+
+function toEntry(
+  pluginId: string,
+  contribution: ForgeProviderContribution,
+  builtin: boolean
+): RegisteredForgeProvider {
+  return builtin
+    ? { pluginId, contribution }
+    : { pluginId, contribution, unavailableReason: INSTALLED_FORGE_PROVIDER_REASON };
 }
 
 const ISSUE_ROLE_METHODS = [
@@ -353,7 +427,7 @@ export function getForgeProviderImplEntries(): Array<[string, AnyForgeProviderIm
  */
 export function listForgeProviderMatchers(): ForgeProviderMatcher[] {
   const matchers: ForgeProviderMatcher[] = [];
-  for (const [pluginId, contributions] of PLUGIN_FORGE_PROVIDERS) {
+  for (const [pluginId, { contributions }] of PLUGIN_FORGE_PROVIDERS) {
     for (const contribution of contributions) {
       // Hostnames route the code role only (#13700).
       if (!forgeProviderServesRole(contribution, "code")) continue;
@@ -372,9 +446,9 @@ function buildImplKey(pluginId: string, contributionId: string): string {
 
 export function getRegisteredForgeProviders(): RegisteredForgeProvider[] {
   const result: RegisteredForgeProvider[] = [];
-  for (const [pluginId, contributions] of PLUGIN_FORGE_PROVIDERS) {
+  for (const [pluginId, { contributions, builtin }] of PLUGIN_FORGE_PROVIDERS) {
     for (const contribution of contributions) {
-      result.push({ pluginId, contribution });
+      result.push(toEntry(pluginId, contribution, builtin));
     }
   }
   return result;
@@ -402,13 +476,13 @@ export function getActiveProvider(arg: string | RepoRef): RegisteredForgeProvide
 
 function listProvidersByHostname(hostname: string): RegisteredForgeProvider[] {
   const matches: RegisteredForgeProvider[] = [];
-  for (const [pluginId, contributions] of PLUGIN_FORGE_PROVIDERS) {
+  for (const [pluginId, { contributions, builtin }] of PLUGIN_FORGE_PROVIDERS) {
     for (const contribution of contributions) {
       // Hostname matching picks a code forge; an issues-only provider has no
       // remote to match, whatever its manifest lists (#13700).
       if (!forgeProviderServesRole(contribution, "code")) continue;
       if (hostnameMatchesAny(hostname, contribution.matches)) {
-        matches.push({ pluginId, contribution });
+        matches.push(toEntry(pluginId, contribution, builtin));
       }
     }
   }

@@ -18,7 +18,12 @@ import { actionService } from "@/services/ActionService";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { formatChordText } from "@/lib/kbdShortcut";
-import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
+import { PALETTE_ROW_CLASS, ROW_MENU_TARGET_CLASS } from "@/components/ui/paletteRowStyles";
+import {
+  HighlightedText,
+  substringMatchIndices,
+  wordMatchIndices,
+} from "@/components/ui/HighlightedText";
 import {
   ContextMenu,
   ContextMenuCheckboxItem,
@@ -52,6 +57,7 @@ import {
 import { pluralize } from "@/lib/pluralize";
 import { OpenOnHostSubmenu } from "@/components/Hosts/OpenOnHostSubmenu";
 import { CommandTile, ProjectTile } from "./paletteTiles";
+import { PaletteCurrentLabel as CurrentLabel } from "@/components/ui/PaletteCurrentLabel";
 import { type OtherHostOption } from "@/components/Hosts/OtherHostsSection";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 
@@ -81,6 +87,8 @@ export interface ProjectListItemProps {
   showGroupLabel?: boolean;
   /** Drawn under band headers (browse) rather than in the flat ranked list. */
   inBands?: boolean;
+  /** The live query, so the name can show what it matched — the family's match emphasis. */
+  highlightQuery?: string;
   onSelect: (row: ProjectSwitcherProjectRow, source?: ProjectSwitchSelectSource) => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
@@ -197,11 +205,11 @@ function wedgePath(share: number): string {
  * the ring tones keep their borders. The pie is reached only by a row that
  * genuinely has something to divide.
  *
- * The cost of dropping the notch is that two hues sitting close together — as
- * `review` and `working` do in palettes where both are greens — make a split
- * mark read as one disc. That is a legible mark stating one of its two facts;
- * the notch was an illegible mark stating both, and the row's line carries the
- * counts in words either way.
+ * The cost of dropping the notch is that two hues sitting close together make a
+ * split mark read as one disc. Every built-in keeps `review` and `working` apart
+ * for that reason (#15866); a custom palette that doesn't gets a legible mark
+ * stating one of its two facts, where the notch was an illegible mark stating
+ * both, and the row's line carries the counts in words either way.
  *
  * `aria-hidden`, like every mark in this list: the row's own line states both
  * counts in words, and a mark that also announced itself would have a reader
@@ -305,7 +313,7 @@ export function RowStatusLine({ status }: { status: ProjectRowStatus }) {
       // Muted, and never in the demand tone. The age is the one fragment here
       // that asks for nothing, and colouring it made the coloured run long
       // enough to outweigh the count leading the line.
-      <span key="age" className="truncate text-daintree-text/50">
+      <span key="age" className="truncate text-text-secondary">
         {status.ageDetail}
       </span>
     ),
@@ -313,7 +321,7 @@ export function RowStatusLine({ status }: { status: ProjectRowStatus }) {
       // `shrink` where the count takes `shrink-0`: the hint answers which
       // project this is, which the name above already mostly does, while the
       // count is the row's headline figure.
-      <span key="path" className="truncate shrink text-daintree-text/50">
+      <span key="path" className="truncate shrink text-text-secondary">
         {status.pathHint}
       </span>
     ),
@@ -322,7 +330,10 @@ export function RowStatusLine({ status }: { status: ProjectRowStatus }) {
   if (parts.length === 0) return null;
 
   return (
-    <div className="flex items-center gap-1 min-w-0 mt-0.5 text-2xs leading-none">
+    // `leading-tight`, not `leading-none`: the age and the count truncate, and
+    // `overflow: hidden` on a line box with no leading cuts every descender —
+    // "1h ago" rendered as "1h aqo".
+    <div className="flex items-center gap-1 min-w-0 mt-px text-2xs leading-tight">
       {parts.map((part, index) => (
         <Fragment key={part.key}>
           {/*
@@ -339,7 +350,7 @@ export function RowStatusLine({ status }: { status: ProjectRowStatus }) {
           {index > 0 && (
             <>
               <span className="sr-only">, </span>
-              <span className="shrink-0 text-daintree-text/40" aria-hidden="true">
+              <span className="shrink-0 text-text-muted" aria-hidden="true">
                 ·
               </span>
             </>
@@ -402,13 +413,6 @@ export function ResumableAgentsLabel({ count }: { count: number }) {
 }
 
 /**
- * Where you are, in words. A trailing check read as "done" among rows that are
- * all agent status, and the check is this app's mark for a chosen value in a
- * picker — the switcher is navigation, so it says "Current" the way the branch
- * and move-to-worktree pickers do. Hidden from readers because every row that
- * draws it already carries the fact in its accessible name or selection state.
- */
-/**
  * Where a row is filed, said after its name wherever no band header says it:
  * its group in search, and "Archived" anywhere outside the Archived band. Muted
  * and plain like the host label beside it — it is provenance, not status.
@@ -453,12 +457,17 @@ function ProjectFilingLabel({
   );
 }
 
-export function CurrentLabel() {
-  return (
-    <span aria-hidden="true" className="shrink-0 text-xs text-text-secondary">
-      Current
-    </span>
-  );
+export { CurrentLabel };
+
+/**
+ * What a row's name shows it matched: the query as one run, or — for a query of
+ * several words, which search matches word by word — each word where it lands.
+ */
+function queryMatchIndices(name: string, query: string | undefined) {
+  if (!query) return undefined;
+  const whole = substringMatchIndices(name, query);
+  if (whole || !/\s/.test(query.trim())) return whole;
+  return wordMatchIndices(name, query);
 }
 
 /**
@@ -475,6 +484,21 @@ export function CurrentLabel() {
  */
 export function canSleepProject(project: { isMissing: boolean; status?: string }): boolean {
   return !project.isMissing && project.status !== "closed";
+}
+
+/** Mirrors `sleepProject`: it confirms when work would stop or the project is on screen. */
+function sleepConfirms(
+  project: Pick<
+    SearchableProject,
+    "isActive" | "processCount" | "activeAgentCount" | "waitingAgentCount"
+  >
+): boolean {
+  return (
+    project.isActive ||
+    project.processCount > 0 ||
+    project.activeAgentCount > 0 ||
+    project.waitingAgentCount > 0
+  );
 }
 
 /**
@@ -561,22 +585,27 @@ export function getProjectSwitcherEnterHint(
 ): { keys: string; label: string } | null {
   if (!row) return null;
   // A missing project's Enter opens the relocation dialog, not a switch.
-  if (row.kind === "project" && row.isMissing) return { keys: "↵", label: "Locate" };
+  if (row.kind === "project" && row.isMissing) return { keys: "↵", label: "to locate" };
+  // Enter on the workspace you're in is a "never mind": the palette closes and
+  // nothing switches, so the hint says that rather than promising a switch.
+  if (row.isActive) return { keys: "↵", label: "to close" };
   const opensWindow = modifierHeld && modEnterOpensWindow(row, canOpenWindow);
   // The keydown takes Meta or Control, so the modifier is whichever this
   // platform calls primary — a literal ⌘ tells Windows and Linux to press a key
   // they don't have. The Enter glyph stays the footer family's ↵.
   const modEnter = `${formatChordText("Cmd", mac)}${mac ? "" : "+"}↵`;
   if (opensWindow && row.kind === "project" && movesCachedView(row)) {
-    return { keys: modEnter, label: "New window" };
+    return { keys: modEnter, label: "to open in new window" };
   }
   // A row this window is already bringing in front switches here, whatever
   // another window still caches.
   if (row.kind === "project" && isOpenElsewhere(row) && !row.isOpenInThisWindow) {
-    return { keys: opensWindow ? modEnter : "↵", label: "Go to window" };
+    return { keys: opensWindow ? modEnter : "↵", label: "to go to window" };
   }
-  if (opensWindow && !row.isOpenInThisWindow) return { keys: modEnter, label: "New window" };
-  return { keys: "↵", label: "Switch" };
+  if (opensWindow && !row.isOpenInThisWindow) {
+    return { keys: modEnter, label: "to open in new window" };
+  }
+  return { keys: "↵", label: "to switch" };
 }
 
 /**
@@ -591,15 +620,18 @@ export function getOtherHostEnterHint(
   modifierHeld: boolean,
   mac: boolean = isMac()
 ): { keys: string; label: string; host?: string } | null {
-  if (option.kind === "retry") return option.busy ? null : { keys: "↵", label: "Retry" };
+  if (option.kind === "retry") return option.busy ? null : { keys: "↵", label: "to retry" };
   if (modifierHeld) {
-    return { keys: `${formatChordText("Cmd", mac)}${mac ? "" : "+"}↵`, label: "New window" };
+    return {
+      keys: `${formatChordText("Cmd", mac)}${mac ? "" : "+"}↵`,
+      label: "to open in new window",
+    };
   }
-  if (option.kind === "connect") return { keys: "↵", label: "Connect" };
-  if (option.kind === "host") return { keys: "↵", label: "Switch" };
+  if (option.kind === "connect") return { keys: "↵", label: "to connect" };
+  if (option.kind === "host") return { keys: "↵", label: "to switch" };
   // The host apart from the words, so the footer can clip a long name the way
   // the band does — keeping the part that tells two machines apart.
-  return { keys: "↵", label: "Open on", host: option.hostName };
+  return { keys: "↵", label: "to open on", host: option.hostName };
 }
 
 export function ProjectListItem({
@@ -610,6 +642,7 @@ export function ProjectListItem({
   hostName,
   showGroupLabel = false,
   inBands = false,
+  highlightQuery,
   onSelect,
   onStopProject,
   onCloseProject,
@@ -652,14 +685,15 @@ export function ProjectListItem({
       aria-current={project.isActive ? "true" : undefined}
       className={cn(
         PALETTE_ROW_CLASS,
-        "group w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] text-left cursor-pointer",
+        ROW_MENU_TARGET_CLASS,
+        "group w-full flex items-center gap-2 px-2 py-1 rounded-[var(--radius-sm)] text-left cursor-pointer",
         project.isActive
           ? "text-text-primary"
           : project.isMissing
             ? // A missing project stays dimmed while selected: the row's own
               // brightness is what says the folder is gone, and restoring it
               // under the highlight would erase that.
-              "text-daintree-text/50 aria-selected:text-daintree-text/50"
+              "text-text-secondary aria-selected:text-text-secondary"
             : "text-text-secondary"
       )}
       // The current project is selectable too: picking where you already are is
@@ -677,6 +711,9 @@ export function ProjectListItem({
       // The pointer moves the palette's one cursor, so the lit row is always the
       // one Enter switches to; the prefetch below is a separate concern.
       onPointerMove={onHoverRow && !isSelected ? () => onHoverRow(project.id) : undefined}
+      // A right-click without a pointer move first still makes this the row
+      // Enter acts on, or the menu's row and the lit row would be two rows.
+      onContextMenu={onHoverRow && !isSelected ? () => onHoverRow(project.id) : undefined}
       onPointerEnter={onHoverProject ? (e) => onHoverProject(project.id, e.pointerType) : undefined}
       onPointerLeave={onHoverProjectEnd ? (e) => onHoverProjectEnd(e.pointerType) : undefined}
     >
@@ -689,14 +726,13 @@ export function ProjectListItem({
           <span
             className={cn(
               "truncate text-sm font-semibold leading-tight",
-              project.isMissing
-                ? "text-text-secondary"
-                : project.isActive || isSelected
-                  ? "text-text-primary"
-                  : "text-daintree-text/85"
+              project.isMissing ? "text-text-secondary" : "text-text-primary"
             )}
           >
-            {project.name}
+            <HighlightedText
+              text={project.name}
+              indices={queryMatchIndices(project.name, highlightQuery)}
+            />
           </span>
           {hostName && (
             <span className="ml-1.5 shrink-0 text-xs text-text-secondary">
@@ -762,7 +798,7 @@ export function ProjectListItem({
                */}
               <span className="sr-only">, </span>
               <BellOff
-                className="w-3.5 h-3.5 text-daintree-text/40 shrink-0 ml-1"
+                className="w-3.5 h-3.5 text-text-secondary shrink-0 ml-1"
                 aria-label="Notifications muted for this project"
               />
             </>
@@ -863,7 +899,7 @@ export function ProjectListItem({
         {showStop && onStopProject && (
           <ContextMenuItem destructive onSelect={() => onStopProject(project.id)}>
             <CircleStop className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-            Stop project
+            Stop project…
           </ContextMenuItem>
         )}
         {showSleep && onSleepProject && (
@@ -883,7 +919,9 @@ export function ProjectListItem({
         {showSleep && onSleepProject && (
           <ContextMenuItem onSelect={() => onSleepProject(project.id)}>
             <Moon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-            Sleep project
+            {/* The ellipsis only where Sleep confirms first: something would be
+                stopped, or it is the project on screen. */}
+            {sleepConfirms(project) ? "Sleep project…" : "Sleep project"}
           </ContextMenuItem>
         )}
         {showSleep && onRestartProject && project.isActive && (
@@ -895,13 +933,13 @@ export function ProjectListItem({
         {onCloseProject && project.isActive && (
           <ContextMenuItem destructive onSelect={() => onCloseProject(project.id)}>
             <X className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-            Close project
+            Close project…
           </ContextMenuItem>
         )}
         {onCloseProject && !project.isActive && (
           <ContextMenuItem destructive onSelect={() => onCloseProject(project.id)}>
             <X className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-            Remove project
+            Remove project…
           </ContextMenuItem>
         )}
         {project.isMissing && onLocateProject && (
@@ -909,7 +947,7 @@ export function ProjectListItem({
             <ContextMenuSeparator />
             <ContextMenuItem onSelect={() => onLocateProject(project.id)}>
               <FolderOpen className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-              Locate moved project
+              Locate moved project…
             </ContextMenuItem>
           </>
         )}
@@ -940,11 +978,18 @@ export function ScratchListItem({
   isSelected,
   nowMs,
   showCurrentLabel,
+  highlightQuery,
   onSelect,
   onHoverRow,
-}: {
+  menuTarget = false,
+  ...triggerProps
+}: Omit<React.HTMLAttributes<HTMLDivElement>, "onSelect"> & {
+  /** Drawn as a context-menu trigger: marks itself while its menu is open. */
+  menuTarget?: boolean;
   scratch: ProjectSwitcherScratchRow;
   isSelected: boolean;
+  /** See `ProjectListItemProps`. */
+  highlightQuery?: string;
   /** The clock this row renders against, passed rather than read — see `ProjectListItemProps`. */
   nowMs: number;
   /** See `ProjectListItemProps`. */
@@ -964,12 +1009,20 @@ export function ScratchListItem({
       // `aria-current` is the workspace you are in. A ranked scratch has no
       // band header to place it, so the accessible name carries the word too.
       aria-current={scratch.isActive ? "true" : undefined}
+      // A context-menu trigger hands its own handlers and `data-state` in here;
+      // they go on first so the row's own handlers below win.
+      {...triggerProps}
       className={cn(
         PALETTE_ROW_CLASS,
-        "group w-full flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] text-left cursor-pointer",
+        menuTarget && ROW_MENU_TARGET_CLASS,
+        "group w-full flex items-center gap-2 px-2 py-1 rounded-[var(--radius-sm)] text-left cursor-pointer",
         scratch.isActive ? "text-text-primary" : "text-text-secondary"
       )}
       onPointerMove={onHoverRow && !isSelected ? () => onHoverRow(scratch.id) : undefined}
+      onContextMenu={(event) => {
+        if (onHoverRow && !isSelected) onHoverRow(scratch.id);
+        triggerProps.onContextMenu?.(event);
+      }}
       onClick={() => onSelect(scratch)}
     >
       <StatusDot status={status} showResumeDot={showResumeDot} />
@@ -985,15 +1038,13 @@ export function ScratchListItem({
          * is the second line #11692 is trying to give back.
          */}
         <div className="flex items-baseline gap-1 min-w-0">
-          <span
-            className={cn(
-              "truncate text-sm font-semibold leading-tight",
-              scratch.isActive || isSelected ? "text-text-primary" : "text-daintree-text/85"
-            )}
-          >
-            {scratch.name}
+          <span className={cn("truncate text-sm font-semibold leading-tight", "text-text-primary")}>
+            <HighlightedText
+              text={scratch.name}
+              indices={queryMatchIndices(scratch.name, highlightQuery)}
+            />
           </span>
-          <span className="text-2xs leading-none text-text-secondary shrink-0">· Scratch</span>
+          <span className="text-2xs leading-tight text-text-secondary shrink-0">· Scratch</span>
           {scratch.isActive && <span className="sr-only">, current</span>}
           {showResumeDot && <ResumableAgentsLabel count={scratch.resumableAgentCount ?? 0} />}
         </div>

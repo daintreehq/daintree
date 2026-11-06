@@ -30,6 +30,7 @@ import {
   BLUE_YELLOW_OVERRIDES,
   ALL_CVD_TOKENS,
 } from "../../../src/theme/applyAppTheme";
+import { getColorVisionWrites } from "../../../shared/theme/colorVisionOverrides.js";
 import { parseAppThemeContent } from "../../../electron/utils/appThemeImporter";
 import { AGENT_REGISTRY } from "../../../shared/config/agentRegistry";
 import { BRAND_MARK_SURFACES, resolveBrandMarkInk } from "../../../src/lib/brandIcon";
@@ -42,12 +43,15 @@ import { BRAND_MARK_SURFACES, resolveBrandMarkInk } from "../../../src/lib/brand
  *
  * - **The built-in cohort is resolved at module evaluation.** `themes.ts` maps
  *   `BUILT_IN_THEME_SOURCES` through a module-private `createThemeFromSource`
- *   when `@shared/theme` is first imported, so that exact call is unreachable
- *   from a benchmark — it has already run. PERF-300 drives
- *   `normalizeAppColorScheme`, the exported resolver every plugin and custom
- *   theme takes, over the same 15 palettes. It shares `compilePaletteToTokens`
- *   and `createDaintreeTokens` with the built-in path and diverges in exactly
- *   one token (see `ACCENT_FOREGROUND_DIVERGES` below).
+ *   when `@shared/theme` is first imported, so that exact call has already run
+ *   by the time this fixture can call anything; PERF-306
+ *   (`lib/themeModuleFixture.ts`) prices it by evaluating the module cold.
+ *   PERF-300 drives `normalizeAppColorScheme`, the exported resolver every
+ *   plugin and custom theme takes, over the same 15 palettes. It shares
+ *   `compilePaletteToTokens` and `createDaintreeTokens` with the built-in path
+ *   and diverges in exactly one token (see `ACCENT_FOREGROUND_DIVERGES` below),
+ *   but it runs the compile's own contrast pass, which the built-in path skips
+ *   when a theme's overrides make the follow-ups redo it.
  * - **There is no CSSOM.** PERF-304 drives the real `applyAppThemeToRoot` /
  *   `applyColorVisionMode` against a Map-backed stand-in for `HTMLElement`, so
  *   the counts (variables written, stale variables removed, CVD tokens
@@ -822,14 +826,17 @@ export function runThemeSwitchChain(stand: RootStandIn, grade: boolean): SwitchP
     applyColorVisionMode(stand.root, mode, last);
     cvdOverridden += Object.keys(overrides).length;
     if (!grade) continue;
-    for (const [token, value] of Object.entries(overrides)) {
+    // The syntax and graphical status inks are the map's seeds fitted to this
+    // theme's floors, so each token is held to what the mode writes over it.
+    const writes = getColorVisionWrites(mode, last);
+    for (const token of Object.keys(overrides)) {
       const declared = stand.declared.get(token);
       // A text ink's map entry is the raw override standing in for the ink the
       // mode lifts against this theme, so all it owes here is to have replaced
       // the theme's own.
       if (LIFTED_TEXT_INK.test(token)) {
         if (declared === undefined || declared === base[token]) cvdMisses += 1;
-      } else if (declared !== value) {
+      } else if (declared !== writes[token]) {
         cvdMisses += 1;
       }
     }

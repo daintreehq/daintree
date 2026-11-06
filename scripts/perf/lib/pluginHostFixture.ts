@@ -1061,6 +1061,7 @@ export const protocol = bridge.protocol;
 export const net = bridge.net;
 export const nativeTheme = bridge.nativeTheme;
 export const nativeImage = bridge.nativeImage;
+export const ClipboardItem = bridge.ClipboardItem;
 export const powerMonitor = bridge.powerMonitor;
 export const screen = bridge.screen;
 export const utilityProcess = bridge.utilityProcess;

@@ -5,18 +5,16 @@ import path from "path";
 import { ProjectSettingsManager } from "../ProjectSettingsManager.js";
 import { generateProjectId } from "../projectStorePaths.js";
 import { PROJECT_SETTINGS_SCHEMA_VERSION } from "../projectSettingsCodec.js";
-import { resilientAtomicWriteFile } from "../../utils/fs.js";
+import { resilientAtomicWriteFile, resilientRename } from "../../utils/fs.js";
 
 vi.mock("../../utils/fs.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../utils/fs.js")>();
-  return { ...actual, resilientAtomicWriteFile: vi.fn(actual.resilientAtomicWriteFile) };
+  return {
+    ...actual,
+    resilientAtomicWriteFile: vi.fn(actual.resilientAtomicWriteFile),
+    resilientRename: vi.fn(actual.resilientRename),
+  };
 });
-
-vi.mock("../CommandService.js", () => ({
-  commandService: {
-    invalidateOverridesCache: vi.fn(),
-  },
-}));
 
 vi.mock("../ProjectEnvSecureStorage.js", () => ({
   projectEnvSecureStorage: {
@@ -233,6 +231,44 @@ describe("ProjectSettingsManager caching", () => {
 
     const loaded = await manager.getProjectSettings(projectId);
     expect(loaded.forgeProviderOverride).toBe("daintree.github.github");
+  });
+
+  it("loads a file still carrying the retired commandOverrides quietly, and drops it on the next save (#15759)", async () => {
+    const settingsPath = path.join(tempDir, projectId, "settings.json");
+    const legacy = JSON.stringify({
+      _schemaVersion: PROJECT_SETTINGS_SCHEMA_VERSION,
+      runCommands: [{ id: "npm-dev", name: "dev", command: "npm run dev" }],
+      devServerCommand: "npm run dev",
+      commandOverrides: [
+        { commandId: "retired:one", disabled: true },
+        { commandId: "retired:two", defaults: null, prompt: "" },
+        "not-an-override",
+      ],
+    });
+    await fs.writeFile(settingsPath, legacy, "utf-8");
+    const warn = vi.spyOn(console, "warn");
+    const error = vi.spyOn(console, "error");
+
+    try {
+      const loaded = await manager.getProjectSettings(projectId);
+      expect(loaded.runCommands).toHaveLength(1);
+      expect(loaded.devServerCommand).toBe("npm run dev");
+      expect("commandOverrides" in loaded).toBe(false);
+      expect(warn).not.toHaveBeenCalled();
+      expect(error).not.toHaveBeenCalled();
+      expect(broadcastSpy).not.toHaveBeenCalled();
+      // Reading never rewrites the file.
+      expect(await fs.readFile(settingsPath, "utf-8")).toBe(legacy);
+
+      await manager.saveProjectSettings(projectId, { ...loaded, devServerCommand: "npm start" });
+      const saved = JSON.parse(await fs.readFile(settingsPath, "utf-8"));
+      expect(saved.commandOverrides).toBeUndefined();
+      expect(saved.devServerCommand).toBe("npm start");
+      expect(saved.runCommands).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+      error.mockRestore();
+    }
   });
 
   it("loads settings whose JSON is prefixed with a UTF-8 BOM", async () => {
@@ -516,6 +552,142 @@ describe("ProjectSettingsManager caching", () => {
     expect(payload).toMatchObject({ type: "error", title: "Settings file too new" });
   });
 
+  describe("a damaged file that can't be moved aside (#15613)", () => {
+    const damaged: Array<[string, () => string]> = [
+      ["unparseable JSON", () => "{{invalid json"],
+      [
+        "a future-version envelope",
+        () =>
+          JSON.stringify({
+            _schemaVersion: PROJECT_SETTINGS_SCHEMA_VERSION + 99,
+            runCommands: [{ id: "npm-dev", name: "dev", command: "npm run dev" }],
+          }),
+      ],
+    ];
+
+    it.each(damaged)(
+      "%s: refuses both the read and the next save, leaving the file in place",
+      async (_label, bytes) => {
+        const settingsPath = path.join(tempDir, projectId, "settings.json");
+        const original = bytes();
+        await fs.writeFile(settingsPath, original, "utf-8");
+        vi.mocked(resilientRename).mockRejectedValue(
+          Object.assign(new Error("EBUSY: locked"), { code: "EBUSY" })
+        );
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        try {
+          await expect(manager.getProjectSettings(projectId)).rejects.toThrow(
+            /leaving it untouched/
+          );
+          await expect(
+            manager.saveProjectSettings(projectId, { runCommands: [], devServerCommand: "x" })
+          ).rejects.toThrow(/leaving it untouched/);
+          await expect(
+            manager.changeVoiceDictionary(projectId, (entries) => [
+              ...entries,
+              { term: "Daintree", heardAs: ["dain tree"], source: "manual", addedAt: 1 },
+            ])
+          ).rejects.toThrow(/leaving it untouched/);
+        } finally {
+          vi.mocked(resilientRename).mockReset();
+          errorSpy.mockRestore();
+          warnSpy.mockRestore();
+        }
+
+        expect(await fs.readFile(settingsPath, "utf-8")).toBe(original);
+        const dirEntries = await fs.readdir(path.join(tempDir, projectId));
+        expect(dirEntries.filter((name) => name !== "settings.json")).toEqual([]);
+        // Nothing says "defaults are in effect" for a file that was never moved aside.
+        expect(broadcastSpy).not.toHaveBeenCalled();
+      }
+    );
+
+    it("recovers once a later read manages to move the file aside", async () => {
+      const settingsPath = path.join(tempDir, projectId, "settings.json");
+      await fs.writeFile(settingsPath, "{{invalid json", "utf-8");
+      vi.mocked(resilientRename).mockRejectedValueOnce(
+        Object.assign(new Error("EBUSY: locked"), { code: "EBUSY" })
+      );
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await expect(manager.getProjectSettings(projectId)).rejects.toThrow(/leaving it untouched/);
+      } finally {
+        errorSpy.mockRestore();
+      }
+
+      vi.mocked(resilientRename).mockImplementation(async (src, dest) => fs.rename(src, dest));
+      try {
+        expect(await manager.getProjectSettings(projectId)).toEqual({ runCommands: [] });
+        await manager.saveProjectSettings(projectId, { runCommands: [], devServerCommand: "x" });
+      } finally {
+        vi.mocked(resilientRename).mockReset();
+      }
+
+      const dirEntries = await fs.readdir(path.join(tempDir, projectId));
+      const quarantined = dirEntries.filter((name) => name.startsWith("settings.json.corrupted."));
+      expect(quarantined).toHaveLength(1);
+      expect(await fs.readFile(path.join(tempDir, projectId, quarantined[0]), "utf-8")).toBe(
+        "{{invalid json"
+      );
+      expect((await manager.getProjectSettings(projectId)).devServerCommand).toBe("x");
+    });
+
+    it("moves a damaged file aside before a save with no read ahead of it replaces it", async () => {
+      const settingsPath = path.join(tempDir, projectId, "settings.json");
+      await fs.writeFile(settingsPath, "{{invalid json", "utf-8");
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        await manager.saveProjectSettings(projectId, { runCommands: [], devServerCommand: "x" });
+      } finally {
+        warnSpy.mockRestore();
+      }
+
+      const dirEntries = await fs.readdir(path.join(tempDir, projectId));
+      const quarantined = dirEntries.filter((name) => name.startsWith("settings.json.corrupted."));
+      expect(quarantined).toHaveLength(1);
+      expect(await fs.readFile(path.join(tempDir, projectId, quarantined[0]), "utf-8")).toBe(
+        "{{invalid json"
+      );
+      expect((await manager.getProjectSettings(projectId)).devServerCommand).toBe("x");
+      await vi.waitFor(() => expect(broadcastSpy).toHaveBeenCalledTimes(1));
+      const [, payload] = broadcastSpy.mock.calls[0];
+      expect(payload).toMatchObject({ type: "error", title: "Project settings corrupted" });
+      expect(payload.message).toContain(quarantined[0]);
+      expect(payload.message).not.toMatch(/Defaults are in effect/);
+    });
+
+    it("moves a future-version file aside before a save replaces it, and says so", async () => {
+      const settingsPath = path.join(tempDir, projectId, "settings.json");
+      const newer = JSON.stringify({
+        _schemaVersion: PROJECT_SETTINGS_SCHEMA_VERSION + 1,
+        runCommands: [],
+      });
+      await fs.writeFile(settingsPath, newer, "utf-8");
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        await manager.saveProjectSettings(projectId, { runCommands: [], devServerCommand: "x" });
+      } finally {
+        warnSpy.mockRestore();
+      }
+
+      const preserved = path.join(
+        tempDir,
+        projectId,
+        `settings.json.future-v${PROJECT_SETTINGS_SCHEMA_VERSION + 1}`
+      );
+      expect(await fs.readFile(preserved, "utf-8")).toBe(newer);
+      expect((await manager.getProjectSettings(projectId)).devServerCommand).toBe("x");
+      await vi.waitFor(() => expect(broadcastSpy).toHaveBeenCalledTimes(1));
+      const [, payload] = broadcastSpy.mock.calls[0];
+      expect(payload).toMatchObject({ type: "error", title: "Settings file too new" });
+      expect(payload.message).not.toMatch(/Defaults are in effect/);
+    });
+  });
+
   it("never caches a read that overlapped a write", async () => {
     await manager.saveProjectSettings(projectId, {
       runCommands: [],
@@ -709,6 +881,62 @@ describe("ProjectSettingsManager caching", () => {
     expect(manager.getEffectiveNotificationSettings(projectId)).toMatchObject({
       completedEnabled: true,
       waitingEscalationDelayMs: 30_000,
+    });
+  });
+
+  describe("loadNotificationOverrides (#15635)", () => {
+    const writeOverrides = (id: string, overrides: object) =>
+      fs.writeFile(
+        path.join(tempDir, id, "settings.json"),
+        JSON.stringify({ runCommands: [], notificationOverrides: overrides }),
+        "utf-8"
+      );
+
+    it("puts a cold project's own overrides in effect, apart from any other project's", async () => {
+      await writeOverrides(projectId, { completedEnabled: false, waitingEnabled: false });
+      const cold = new ProjectSettingsManager(tempDir, createMockStore());
+      expect(cold.getEffectiveNotificationSettings(projectId).completedEnabled).toBe(true);
+
+      await cold.loadNotificationOverrides(projectId);
+
+      expect(cold.getEffectiveNotificationSettings(projectId)).toMatchObject({
+        completedEnabled: false,
+        waitingEnabled: false,
+      });
+      const other = generateProjectId("/test/other");
+      expect(cold.getEffectiveNotificationSettings(other).completedEnabled).toBe(true);
+      expect(cold.getEffectiveNotificationSettings(null).completedEnabled).toBe(true);
+    });
+
+    it("reads a project with no settings file again only once a while has passed", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        await fs.rm(path.join(tempDir, projectId, "settings.json"), { force: true });
+        const cold = new ProjectSettingsManager(tempDir, createMockStore());
+        await cold.loadNotificationOverrides(projectId);
+        await writeOverrides(projectId, { completedEnabled: false });
+
+        await cold.loadNotificationOverrides(projectId);
+        expect(cold.getEffectiveNotificationSettings(projectId).completedEnabled).toBe(true);
+
+        vi.setSystemTime(Date.now() + 30_000);
+        await cold.loadNotificationOverrides(projectId);
+        expect(cold.getEffectiveNotificationSettings(projectId).completedEnabled).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("leaves overrides a save already published as they are", async () => {
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        notificationOverrides: { waitingEnabled: false },
+      });
+      await writeOverrides(projectId, { waitingEnabled: true });
+
+      await manager.loadNotificationOverrides(projectId);
+
+      expect(manager.getEffectiveNotificationSettings(projectId).waitingEnabled).toBe(false);
     });
   });
 

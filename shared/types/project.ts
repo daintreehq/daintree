@@ -13,6 +13,7 @@ import type {
   FileBrowserSortKey,
   FileBrowserTreeSnapshot,
   TerminalSpawnSource,
+  ScheduledRunRef,
   PanelRestoreRecovery,
   TerminalAgentObservation,
   TerminalRestoreProvenance,
@@ -20,11 +21,11 @@ import type {
   TerminalFirstPrompt,
 } from "./panel.js";
 import type { PersistedPanelKindRef } from "../config/panelKindRegistry.js";
-import type { CommandOverride } from "./commands.js";
 import type { GitignoreTemplateId } from "../config/gitignoreTemplates.js";
 import type { GitStatus } from "./git.js";
 import type { EditorConfig } from "./editor.js";
 import type { NotificationSettings, VoiceDictionaryEntry } from "./ipc/api.js";
+import type { TerminalWhenDone } from "./ipc/terminalWhenDone.js";
 
 /**
  * Project lifecycle status:
@@ -202,6 +203,14 @@ export interface ProjectAddOptions {
    * payload carrying only `gitBacked` would be discarded silently.
    */
   identity?: ProjectCreationIdentity;
+  /**
+   * The {@link ProjectGroup} a creation dialog chose to file the project under.
+   * Like {@link ProjectAddOptions.identity} it applies only where a brand-new
+   * row is minted, and it is its own key so a bad id never discards a good
+   * identity. An id that names no group by the time the row is written lands
+   * the project ungrouped rather than pointing at a missing group.
+   */
+  groupId?: string;
 }
 
 /**
@@ -241,6 +250,8 @@ export interface PanelSnapshot {
   title: string;
   /** How the title is owned. Absent defaults to "default". */
   titleMode?: PanelTitleMode;
+  /** The emoji the person gave this panel as a persona (#16213); absent when none. Display only. */
+  displayEmoji?: string;
   /** Working directory - only present for PTY panels */
   cwd?: string;
   /** Associated worktree ID */
@@ -366,10 +377,17 @@ export interface PanelSnapshot {
    * is no way to infer it after the fact, so those stay unattributed.
    */
   spawnedBy?: TerminalSpawnSource;
+  /**
+   * The scheduled run a `schedule`-spawned terminal belongs to (#15977). Read
+   * back only as a pair with `spawnedBy`, through `readSpawnProvenance`.
+   */
+  scheduledRun?: ScheduledRunRef;
   /** Preset ID active at launch time, used to restore colored icon on reload */
   agentPresetId?: string;
   /** Preset hex color captured at launch time; fallback when preset is later deleted */
   agentPresetColor?: string;
+  /** The account the pane launched on (#16040); its folder is in `env`. */
+  agentAccountId?: string;
   /** Original user-selected preset ID; immutable across fallback hops. */
   originalPresetId?: string;
   /** Whether this panel is currently running on a fallback preset. */
@@ -398,6 +416,12 @@ export interface PanelSnapshot {
   scratchpad?: TerminalScratchpad;
   /** The first prompt Daintree delivered to the run (#14592). Untrusted on read — sanitized at restore. */
   firstPrompt?: TerminalFirstPrompt;
+  /**
+   * The code a pane's process exited with on its own, while the pane still
+   * shows that exit (#15941). Restore brings a pane that would relaunch no
+   * agent back exited instead of starting a new process. Untrusted on read.
+   */
+  exitCode?: number;
   /** Last known agent state for crash recovery display */
   agentState?: AgentState;
   /** Timestamp of last agent state change */
@@ -514,6 +538,26 @@ export function isAgentRecipeType(type: string): boolean {
   return type !== "terminal" && type !== "dev-preview" && type !== "plugin-panel";
 }
 
+/**
+ * Whether a launch prompt can carry the When done instruction (#16172): text
+ * for the agent to work on. An empty prompt asks nothing, and an agent CLI's
+ * slash command would take the instruction as its arguments, so neither is
+ * armed, as a send of either isn't (#16171).
+ */
+export function promptCarriesWhenDone(prompt: string | undefined): boolean {
+  const trimmed = prompt?.trim() ?? "";
+  return trimmed !== "" && !trimmed.startsWith("/");
+}
+
+/**
+ * Whether a recipe prompt opens with a variable, so only the filled-in prompt
+ * says whether {@link promptCarriesWhenDone} holds: it may fill in empty, or
+ * as a path that reads as a slash command.
+ */
+export function promptStartsWithVariable(prompt: string | undefined): boolean {
+  return prompt?.trimStart().startsWith("{{") ?? false;
+}
+
 /** A single terminal definition within a recipe */
 export interface RecipeTerminal {
   /** Type of terminal to spawn */
@@ -541,6 +585,12 @@ export interface RecipeTerminal {
   devCommand?: string;
   /** Behavior when terminal exits: "keep" preserves for review, "trash" sends to trash, "remove" deletes completely (optional, defaults to "keep") */
   exitBehavior?: PanelExitBehavior;
+  /**
+   * What an agent step's terminal does once its agent reports `done` (#16172):
+   * the When done choice of #16171, armed on the terminal this recipe launches
+   * and on no other. Absent means keep, which is never stored. Agent types only.
+   */
+  whenDone?: Exclude<TerminalWhenDone, "keep">;
   /** Per-panel model override captured at launch (agent types only). Transient — stripped before disk persistence. */
   agentModelId?: string;
   /** Process-level launch flags captured at launch (agent types only). Transient — stripped before disk persistence. */
@@ -838,8 +888,6 @@ export interface ProjectSettings {
   turbopackEnabled?: boolean;
   /** CopyTree context generation configuration */
   copyTreeSettings?: CopyTreeSettings;
-  /** Command overrides for project-specific customization */
-  commandOverrides?: CommandOverride[];
   /** Git initialization defaults */
   gitInitDefaults?: {
     /** Create an initial commit (default: true) */
@@ -956,7 +1004,6 @@ export const PROJECT_SETTINGS_SHAREABILITY = {
   devServerLoadTimeout: "shareable",
   turbopackEnabled: "shareable",
   copyTreeSettings: "shareable",
-  commandOverrides: "local",
   gitInitDefaults: "local",
   preferredEditor: "local",
   preferredImageViewer: "local",
@@ -1032,7 +1079,6 @@ export const PROJECT_SETTINGS_AGENT_EXPOSURE = {
   devServerLoadTimeout: "exposed",
   turbopackEnabled: "exposed",
   copyTreeSettings: "exposed",
-  commandOverrides: "internal",
   gitInitDefaults: "internal",
   preferredEditor: "internal",
   preferredImageViewer: "internal",

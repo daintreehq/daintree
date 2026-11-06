@@ -1,9 +1,7 @@
-import type { HostAttentionEvent, HostMetricsEvent } from "@shared/types/ipc/hostMetrics";
+import type { HostAttentionEvent } from "@shared/types/ipc/hostMetrics";
 import { isRemoteShellSupported } from "@/lib/remoteHosts";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
-import { useHostMetricsStore } from "@/store/hostMetricsStore";
-import { logWarn } from "@/utils/logger";
 
 const HOST_ATTENTION_TOAST_MS = 12_000;
 
@@ -48,23 +46,15 @@ export function presentHostAttention(event: HostAttentionEvent): void {
   });
 }
 
-function handle(event: HostMetricsEvent): void {
-  if (event.type === "summary") {
-    useHostMetricsStore.getState().apply(event.summary);
-    return;
-  }
-  if (event.type === "attention") presentHostAttention(event);
-}
-
 let refs = 0;
 let stop: (() => void) | null = null;
 
 /**
- * Follow host summaries (and attention events) while anything in this view
- * needs them. Makes no calls where Remote Hosts can't exist, and seeds only
- * once remote hosts are actually in use.
+ * Present opted-in hosts' attention events while anything in this view owns
+ * them. Main sends each to one view; summaries on the same channel are left
+ * to whatever shows host figures (`useHostFigures`).
  */
-export function startHostMetricsFeed(): () => void {
+export function startHostAttentionFeed(): () => void {
   refs += 1;
   if (refs === 1) stop = subscribe();
   let released = false;
@@ -83,30 +73,12 @@ function subscribe(): () => void {
   if (!isRemoteShellSupported()) return () => {};
   const api = window.electron?.hostMetrics;
   if (!api) return () => {};
-  let live = true;
-  const off = api.onEvent(handle);
-  const inUse = window.electron?.remoteHosts?.isInUse;
-  const seed = () =>
-    api
-      .getSnapshots()
-      .then((snapshots) => {
-        if (live) useHostMetricsStore.getState().seed(snapshots);
-      })
-      .catch((error: unknown) => logWarn("[Hosts] Couldn't read host summaries", { error }));
-  if (typeof inUse === "function") {
-    void inUse()
-      .then((used) => (used && live ? seed() : undefined))
-      .catch(() => {});
-  } else {
-    void seed();
-  }
-  return () => {
-    live = false;
-    off();
-  };
+  return api.onEvent((event) => {
+    if (event.type === "attention") presentHostAttention(event);
+  });
 }
 
-export function _resetHostMetricsFeedForTesting(): void {
+export function _resetHostAttentionFeedForTesting(): void {
   stop?.();
   stop = null;
   refs = 0;

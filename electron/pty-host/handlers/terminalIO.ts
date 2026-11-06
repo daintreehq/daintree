@@ -1,5 +1,42 @@
-import type { BroadcastWriteTargetResult } from "../../../shared/types/pty-host.js";
+import type {
+  BroadcastWriteTargetResult,
+  ExactPromptGuard,
+} from "../../../shared/types/pty-host.js";
 import type { HandlerMap, HostContext } from "./types.js";
+
+/**
+ * No run has a negative incarnation: a guard pinned to one refuses its line,
+ * which is what a malformed exact guard must do rather than admit on weaker
+ * terms.
+ */
+const REFUSING_GUARD: ExactPromptGuard = { kind: "settled-prompt-exact", agentIncarnation: -1 };
+
+/** Whose an input is, as main named it (#16094): a non-empty string or nobody's. */
+function inputOwnerOf(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+/**
+ * An exact guard as main sent it, with only the fields it may carry. Any other
+ * object, or a field that is present but malformed, refuses the line.
+ */
+function exactPromptGuardOf(value: unknown): ExactPromptGuard | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const guard = value as Partial<Record<keyof ExactPromptGuard, unknown>>;
+  if (guard.kind !== "settled-prompt-exact") return REFUSING_GUARD;
+  const { agentIncarnation, agentSessionId, acceptWorking, acceptQuestion } = guard;
+  if (agentIncarnation !== undefined && !Number.isInteger(agentIncarnation)) return REFUSING_GUARD;
+  if (agentSessionId !== undefined && typeof agentSessionId !== "string") return REFUSING_GUARD;
+  if (acceptWorking !== undefined && acceptWorking !== true) return REFUSING_GUARD;
+  if (acceptQuestion !== undefined && acceptQuestion !== true) return REFUSING_GUARD;
+  return {
+    kind: "settled-prompt-exact",
+    ...(agentIncarnation !== undefined ? { agentIncarnation: agentIncarnation as number } : {}),
+    ...(agentSessionId !== undefined ? { agentSessionId } : {}),
+    ...(acceptWorking === true ? { acceptWorking: true } : {}),
+    ...(acceptQuestion === true ? { acceptQuestion: true } : {}),
+  };
+}
 
 export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
   const { ptyManager, sendEvent } = ctx;
@@ -10,16 +47,18 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
 
   return {
     write: (msg) => {
-      ptyManager.write(msg.id, msg.data, msg.traceId);
+      ptyManager.write(msg.id, msg.data, msg.traceId, inputOwnerOf(msg.inputOwner));
     },
 
     submit: (msg) => {
       // Only the known guards cross; anything else is dropped rather than
       // trusted to mean "no check".
       const guard =
-        msg.guard === "settled-prompt" || msg.guard === "settled-prompt-strict"
+        msg.guard === "settled-prompt" ||
+        msg.guard === "settled-prompt-strict" ||
+        msg.guard === "no-choice-dialog"
           ? msg.guard
-          : undefined;
+          : exactPromptGuardOf(msg.guard);
       const imagePaths = Array.isArray(msg.imagePaths)
         ? msg.imagePaths.filter((path: unknown): path is string => typeof path === "string")
         : undefined;
@@ -37,7 +76,9 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
         msg.handbackCode,
         guard,
         imagePaths,
-        firstPrompt
+        firstPrompt,
+        msg.handbackCode !== undefined && msg.handbackInstruction === "run" ? "run" : undefined,
+        inputOwnerOf(msg.promptOwner)
       );
     },
 
@@ -120,17 +161,18 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
       const ESC = "\u001b";
       const INTER_ESC_DELAY_MS = 50;
       const ids: string[] = Array.isArray(msg.ids) ? msg.ids : [];
+      const inputOwner = inputOwnerOf(msg.inputOwner);
       for (const id of ids) {
         if (typeof id !== "string" || !id) continue;
         const terminal = ptyManager.getTerminal(id);
         if (!terminal || terminal.wasKilled || terminal.isExited) continue;
-        ptyManager.write(id, ESC);
+        ptyManager.write(id, ESC, undefined, inputOwner);
         setTimeout(() => {
           const t = ptyManager.getTerminal(id);
           // The same spawn the first went to: a restart under this id in the
           // gap is a new run that asked for no Escape.
           if (!t || t.spawnedAt !== terminal.spawnedAt || t.wasKilled || t.isExited) return;
-          ptyManager.write(id, ESC);
+          ptyManager.write(id, ESC, undefined, inputOwner);
         }, INTER_ESC_DELAY_MS);
       }
     },

@@ -45,3 +45,16 @@ export function parseShellArgs(input: string): string[] {
   if (inToken) args.push(current);
   return args;
 }
+
+/** Whether {@link parseShellArgs} would reach the end of `input` inside a quote. */
+export function hasUnclosedQuote(input: string): boolean {
+  let quote: '"' | "'" | null = null;
+  for (const char of input) {
+    if (quote) {
+      if (char === quote) quote = null;
+    } else if (char === '"' || char === "'") {
+      quote = char;
+    }
+  }
+  return quote !== null;
+}

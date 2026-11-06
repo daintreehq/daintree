@@ -35,7 +35,12 @@ function sources(overrides: Partial<AgentDirectorySources> = {}): AgentDirectory
       waitingReason: "approval",
       lastStateChange: 500,
       title: "  fix   the bug ",
-      lastHandback: { message: "private text", observedAt: 700, truncated: false },
+      lastHandback: {
+        message: "private text",
+        report: "needs-you",
+        observedAt: 700,
+        truncated: false,
+      },
       spawnedAt: 1,
     }),
     // Assistants run ordinary agents, stamped or bound to a lane.
@@ -142,6 +147,42 @@ describe("collectAgentDirectory (#14160)", () => {
     expect(JSON.stringify(directory)).not.toContain("orphan");
   });
 
+  it("names each assistant by its scope's persona and no worker by one (#16213)", async () => {
+    const directory = await collectAgentDirectory(
+      sources({
+        listRunningLanes: () => [
+          { projectId: "p1", slot: 0, agentId: "claude", attached: true },
+          { projectId: "daintree:global-assistant", slot: 0, agentId: "claude", attached: false },
+        ],
+        getRunningLaneSession: (projectId, slot) => ({
+          sessionId: `s-${projectId}`,
+          terminalId: projectId === "p1" ? "a0" : "a1",
+          projectViewWebContentsId: 1,
+          ...(slot ? {} : {}),
+        }),
+        assistantIdentity: (scope) =>
+          scope.kind === "global"
+            ? { name: "Assistant to the Regional Manager" }
+            : scope.projectId === "p1"
+              ? { name: "Dwight", emoji: "🌱" }
+              : {},
+      })
+    );
+
+    expect(AgentDirectorySchema.safeParse(directory).success).toBe(true);
+    const personas = directory.entries.map((entry) =>
+      entry.state === "live"
+        ? [entry.role, entry.subject.scope.kind, entry.personaName, entry.personaEmoji]
+        : null
+    );
+    expect(personas).toEqual([
+      ["assistant", "global", "Assistant to the Regional Manager", undefined],
+      ["assistant", "project", "Dwight", "🌱"],
+      ["worker", "project", undefined, undefined],
+      ["worker", "project", undefined, undefined],
+    ]);
+  });
+
   it("lists no host throwaway run, and still reads as complete (#14445)", async () => {
     const base = sources();
     const { terminals } = await base.readTerminals();
@@ -178,12 +219,65 @@ describe("collectAgentDirectory (#14160)", () => {
       since: 500,
       label: "fix the bug",
       attached: null,
-      handback: { observedAt: 700 },
+      // Which marker the agent printed, never what it said (#16190).
+      handback: { observedAt: 700, report: "needs-you" },
       subject: { hostId: "local", scope: { kind: "project", projectId: "p1" }, incarnation: 4 },
     });
     const text = JSON.stringify(directory);
     expect(text).not.toContain("/secret/path");
     expect(text).not.toContain("private text");
+  });
+
+  it("tells a finished worker from one that needs the owner, by the marker each printed (#16190)", async () => {
+    const handback = (report?: "done" | "needs-you") => ({
+      message: "summary",
+      ...(report !== undefined ? { report } : {}),
+      observedAt: 700,
+      truncated: false,
+    });
+    const directory = await collectAgentDirectory(
+      sources({
+        getLiveGeneration: () => 1,
+        readTerminals: async () => ({
+          terminals: [
+            terminal({
+              id: "done",
+              projectId: "p1",
+              detectedAgentId: "claude",
+              lastHandback: handback("done"),
+            }),
+            terminal({
+              id: "asks",
+              projectId: "p1",
+              detectedAgentId: "claude",
+              lastHandback: handback("needs-you"),
+            }),
+            terminal({
+              id: "older",
+              projectId: "p1",
+              detectedAgentId: "claude",
+              lastHandback: handback(),
+            }),
+            terminal({ id: "none", projectId: "p1", detectedAgentId: "claude" }),
+          ],
+          degraded: false,
+        }),
+      })
+    );
+    const handbacks = Object.fromEntries(
+      directory.entries.flatMap((entry) =>
+        entry.state === "live" && entry.role === "worker"
+          ? [[entry.subject.terminalId, entry.handback]]
+          : []
+      )
+    );
+    expect(handbacks).toEqual({
+      done: { observedAt: 700, report: "done" },
+      asks: { observedAt: 700, report: "needs-you" },
+      older: { observedAt: 700 },
+      none: null,
+    });
+    expect(AgentDirectorySchema.safeParse(directory).success).toBe(true);
   });
 
   it("reports attachment for assistants", async () => {

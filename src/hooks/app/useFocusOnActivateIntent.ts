@@ -6,6 +6,7 @@ import { logWarn } from "@/utils/logger";
 import { notify } from "@/lib/notify";
 import { activateAssistantLane } from "@/services/assistantSubject";
 import { landOnWorktree } from "@/services/worktreeLanding";
+import { landOnScheduledRun } from "@/services/scheduledRunLanding";
 import { useWorktreeStoreApi } from "@/hooks/useWorktreeStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -47,7 +48,9 @@ export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
         payload?.intent !== "run-plugin-action" &&
         payload?.intent !== "open-assistant" &&
         payload?.intent !== "restore-trashed" &&
-        payload?.intent !== "placement-note"
+        payload?.intent !== "placement-note" &&
+        payload?.intent !== "focus-scheduled-run" &&
+        payload?.intent !== "open-schedules"
       ) {
         return;
       }
@@ -128,6 +131,29 @@ export function useFocusOnActivateIntent(isStateLoaded: boolean): void {
         placement: "grid-bar",
         duration: 0,
         replaceKey: "focus-on-activate:placement-note",
+      });
+      return;
+    }
+    if (pending.intent === "focus-scheduled-run") {
+      // A scheduled run's banner (#15988): its pane if this view holds it,
+      // else its schedule's history, decided now that the panes are in.
+      let superseded = false;
+      cancelLanding.current = () => {
+        superseded = true;
+      };
+      safeFireAndForget(
+        landOnScheduledRun(
+          { runId: pending.runId, scheduleId: pending.scheduleId, panelId: pending.panelId },
+          () => superseded
+        ),
+        { context: "Landing on a scheduled run from its notification" }
+      );
+      return;
+    }
+    if (pending.intent === "open-schedules") {
+      const args = pending.scheduleId ? { scheduleId: pending.scheduleId } : undefined;
+      void actionService.dispatch("schedules.open", args).then((result) => {
+        if (!result.ok) logWarn("Couldn't open the schedules view", { error: result.error });
       });
       return;
     }

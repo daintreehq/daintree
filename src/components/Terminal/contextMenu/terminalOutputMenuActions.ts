@@ -1,4 +1,4 @@
-import { isRemoteWindow, isWslWindow } from "@/hooks/useHostPlatform";
+import { revealCopy } from "@/components/FileViewer/revealCopy";
 import { actionService } from "@/services/ActionService";
 import { reportFileLinkFailure } from "@/services/terminal/FileLinksAddon";
 import type { OpenLinkOptions } from "@/services/terminal/TerminalLinkHandler";
@@ -64,8 +64,10 @@ export function runTerminalOutputMenuAction(
     const path = actionId.slice("reveal-in-finder:".length);
     // The path is the host's; a remote host's file manager is on a screen
     // nobody is looking at, so hand the path over instead. A WSL distro's
-    // files are on this PC, so those reveal in Explorer like local ones.
-    if (isRemoteWindow() && !isWslWindow()) {
+    // files are on this PC, so those reveal in Explorer like local ones. The
+    // row is labelled from the same resolver, so its words and its action
+    // agree even before main has named the window's connection.
+    if (revealCopy().copiedAnnouncement !== null) {
       copyWithToast("Host path", path);
       return true;
     }

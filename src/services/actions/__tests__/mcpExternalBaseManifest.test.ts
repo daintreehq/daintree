@@ -57,18 +57,42 @@ const MAIN_PROCESS_TOOLS = [
   "project.runCheck",
   "project.runCommand",
   "terminal.readLastMessageOwned",
+  "terminal.waitForExit",
   "terminal.notifyWhenIdle",
+  "terminal.cancelQueuedSend",
   "assistant.list",
   "assistant.start",
   "agent.readQuota",
 ];
 
 /**
+ * Tools main runs by dispatching other tools as their single calls, so they
+ * answer with no view exactly where those steps do. Not in
+ * `VIEWLESS_MAIN_PROCESS_TOOLS`, whose members never dispatch at all.
+ */
+const MAIN_PROCESS_COMPOSITES = ["agent.launchInNewWorktree"];
+
+/**
+ * Owned tools main checks and then hands to actions the host runs itself
+ * (#15737). They reach a view when one is open, so they are not main-process
+ * tools, but with none open their delegates still run, and the call needs its
+ * own danger to know it asks.
+ */
+const MAIN_DELEGATED_TOOLS = ["worktree.retireOwned"];
+
+/**
  * What a help session with no view lists besides the external surface
  * (#13511): the actions the host runs itself (#13498) and the tools main
  * runs, where the external tier doesn't already describe them.
  */
-const VIEWLESS_EXTRA_TOOLS = [...new Set([...Object.keys(VIEWLESS_ACTIONS), ...MAIN_PROCESS_TOOLS])]
+const VIEWLESS_EXTRA_TOOLS = [
+  ...new Set([
+    ...Object.keys(VIEWLESS_ACTIONS),
+    ...MAIN_PROCESS_TOOLS,
+    ...MAIN_PROCESS_COMPOSITES,
+    ...MAIN_DELEGATED_TOOLS,
+  ]),
+]
   .filter((id) => !(MCP_EXTERNAL_TIER_TOOLS as readonly string[]).includes(id))
   .sort();
 

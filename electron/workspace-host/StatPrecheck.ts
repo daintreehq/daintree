@@ -242,13 +242,15 @@ export class StatPrecheck {
    * failure so the next non-forced poll falls through to a full check
    * rather than skipping against a snapshot that predates the failure.
    * Callers must only invoke this when the full pass actually succeeded —
-   * see `dropBaseline()` for the failure path.
+   * see `dropBaseline()` for the failure path. `isCurrent` turns false when
+   * the pass is abandoned mid-capture; its baseline must not land after that.
    */
-  async recordFullPass(gitDir: string): Promise<void> {
+  async recordFullPass(gitDir: string, isCurrent: () => boolean = () => true): Promise<void> {
     this.fullStatusAt = Date.now();
     try {
       const commonDir = await this.resolveCommonDirAsync(gitDir);
       const fresh = await this.buildStatBaseline(gitDir, commonDir, this.host.branch);
+      if (!isCurrent()) return;
       if (fresh !== null) {
         this.baseline = fresh;
         this.baselineAt = Date.now();
@@ -257,7 +259,7 @@ export class StatPrecheck {
         this.baseline = null;
       }
     } catch {
-      this.baseline = null;
+      if (isCurrent()) this.baseline = null;
     }
   }
 

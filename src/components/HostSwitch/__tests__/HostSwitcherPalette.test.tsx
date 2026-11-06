@@ -39,6 +39,7 @@ vi.mock("@/store", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) 
 vi.mock("@/store/portalStore", () => ({ usePortalStore: () => ({ isOpen: false, width: 0 }) }));
 vi.mock("@/components/Hosts/hostList", () => ({
   useHostList: () => hostList.value,
+  useHostFigures: () => hostList.value,
   getHostListSnapshot: () => hostList.value,
 }));
 vi.mock("@/lib/platform", async (importOriginal) => ({
@@ -87,6 +88,7 @@ function summary(hostId: string, overrides: Partial<HostMetricsSummary> = {}): H
     thermal: null,
     cpuPressure: null,
     agentsObserved: { working: 2, waiting: 1, idle: 0 },
+    agentAttention: { waiting: 1, blocked: 0, idle: 0 },
     projectCount: 3,
     worktreeCount: null,
     driver: null,

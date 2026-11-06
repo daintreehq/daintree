@@ -842,6 +842,15 @@ async function collectWhySlowPty(ptyClient?: PtyClient): Promise<WhySlowPtySumma
 // copytree workers, plugin workers, and the utility hosts themselves. Provider
 // isolation and time-boxing live inside the service; this wrapper only guards
 // the import/singleton path.
+async function collectKeepAwake() {
+  try {
+    const { getKeepAwakeDiagnostics } = await import("./PowerSaveBlockerService.js");
+    return getKeepAwakeDiagnostics();
+  } catch {
+    return { error: "Failed to read keep-awake state" };
+  }
+}
+
 async function collectWorkerGovernance() {
   try {
     const { getWorkerGovernanceService } = await import("./WorkerGovernanceService.js");
@@ -976,6 +985,7 @@ export async function collectDiagnosticsWithKeys(
     { key: "memoryTrends", fn: collectMemoryTrends },
     { key: "memoryAttribution", fn: () => collectMemoryAttribution(deps) },
     { key: "resourceState", fn: collectResourceState },
+    { key: "keepAwake", fn: collectKeepAwake },
     { key: "workerGovernance", fn: collectWorkerGovernance },
     { key: "whySlow", fn: () => collectWhySlowSnapshot(deps) },
     { key: "counts", fn: () => collectCounts(deps) },

@@ -1,13 +1,4 @@
-import {
-  lazy,
-  Suspense,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-} from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -25,7 +16,6 @@ import type { GitStatus } from "@shared/types/git";
 import type { DiffPanelData } from "@shared/types/panel";
 import { isAbsolute, join, resolveWorktreePathScope } from "@shared/utils/path";
 import { useShallow } from "zustand/react/shallow";
-import { FolderOpen } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
@@ -50,7 +40,8 @@ import {
 } from "@/components/FileViewer/hostFileActions";
 import { getFileTypeIcon } from "@/panels/file-browser/fileTypeIcons";
 import { DiffChangeStepper } from "@/components/FileViewer/DiffChangeStepper";
-import { revealCopy } from "@/components/FileViewer/revealCopy";
+import { useRevealCopy, type RevealCopy } from "@/components/FileViewer/revealCopy";
+import { RevealActionButton, runTransientReveal } from "@/components/FileViewer/revealFeedback";
 import { DiffFileSidebar } from "@/components/FileViewer/DiffFileSidebar";
 import { FileVideoPreview } from "@/components/FileViewer/FileVideoPreview";
 import { FileAudioPreview } from "@/components/FileViewer/FileAudioPreview";
@@ -87,11 +78,8 @@ import { Skeleton, SkeletonBone, SkeletonText } from "@/components/ui/Skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { usePanelStore } from "@/store/panelStore";
-import {
-  usePreferencesStore,
-  type DiffFontSize,
-  type DiffViewType,
-} from "@/store/preferencesStore";
+import { usePreferencesStore, type DiffViewType } from "@/store/preferencesStore";
+import { diffFontStyle } from "@/components/Worktree/diffFontSize";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
@@ -104,6 +92,7 @@ import {
   isRenderedMarkdownSupported,
 } from "./renderedMarkdownAvailability";
 import type { MarkdownDiffFailure } from "@/components/Worktree/markdownBlockDiff";
+import { RenderedMarkdownDiffSkeleton } from "@/components/Worktree/RenderedMarkdownDiffSkeleton";
 import type { DiffSubject } from "./diffContentCache";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import type { TabInfo } from "@/components/Panel/TabButton";
@@ -156,14 +145,6 @@ const GENERIC_AUDIO_ERROR: MediaPreviewError = {
   title: "This audio file couldn't be played",
   description:
     "The format is supported but the codec may not be. Open it in your default app to play it.",
-};
-
-// The S/M/L rungs are the shared type steps, so the preference keeps meaning the
-// same sizes it always did while still tracking the scale.
-const DIFF_FONT_SIZE: Record<DiffFontSize, string> = {
-  s: "var(--text-2xs)",
-  m: "var(--text-xs)",
-  l: "var(--text-sm)",
 };
 
 // react-markdown plus the remark pipeline behind it are several hundred KB that
@@ -299,9 +280,7 @@ export function DiffPane({
   const setDiffFullFile = usePreferencesStore((s) => s.setDiffFullFile);
   const diffShowFileList = usePreferencesStore((s) => s.diffShowFileList);
   const diffFontSize = usePreferencesStore((s) => s.diffFontSize);
-  const diffFontStyle: CSSProperties & Record<"--diff-font-size", string> = {
-    "--diff-font-size": DIFF_FONT_SIZE[diffFontSize],
-  };
+  const fontStyle = diffFontStyle(diffFontSize);
   const setDiffShowFileList = usePreferencesStore((s) => s.setDiffShowFileList);
 
   const filePath = panel?.filePath;
@@ -576,10 +555,12 @@ export function DiffPane({
   }, [id, absolutePath]);
 
   const handleExternalAction = useCallback(
-    async (target: ExternalTarget) => {
-      if (!absolutePath) return;
-      if (target === "file-browser" && (!browserScope || fileStatus === "deleted")) return;
-      if (externalInFlightRef.current.has(target)) return;
+    // Resolves true once the action succeeded, so a remote window's reveal —
+    // a host-path copy that changes nothing on screen — can confirm itself.
+    async (target: ExternalTarget): Promise<boolean> => {
+      if (!absolutePath) return false;
+      if (target === "file-browser" && (!browserScope || fileStatus === "deleted")) return false;
+      if (externalInFlightRef.current.has(target)) return false;
       externalInFlightRef.current.add(target);
       const generation = externalGenerationRef.current;
       setPendingTargets((current) => (current.includes(target) ? current : [...current, target]));
@@ -596,16 +577,18 @@ export function DiffPane({
           { source: "user" }
         );
         // The file (or its worktree) moved while this was in flight: the result
-        // describes a location the pane no longer shows.
-        if (externalGenerationRef.current !== generation) return;
+        // describes a location the pane no longer shows, so it touches no
+        // banner. A success still reports, since a copy it made is real.
+        if (externalGenerationRef.current !== generation) return result.ok;
         if (result.ok) {
           // Clears only its own failure — the other button's banner stands
           // until that button's own retry succeeds.
           setExternalError((current) => (current?.target === target ? null : current));
-          return;
+          return true;
         }
         logError(`[DiffPane] ${EXTERNAL_ACTIONS[target]} failed`, result.error);
         setExternalError({ message: result.error.message, target });
+        return false;
       } finally {
         // Releasing in `finally` keeps a rejection from wedging the button for
         // good; the generation check leaves a reset's clean slate alone.
@@ -786,7 +769,16 @@ export function DiffPane({
   // The rendered layout's change inventory, reported up by the view because the
   // host has a patch and the view has the model: a hunk is a run of lines, a
   // change here is a block the reader can point at, and the two counts differ.
-  const [renderedChangeCount, setRenderedChangeCount] = useState(0);
+  //
+  // Stamped with the attempt it counts, like the verdict below: a count from the
+  // previous file must not drive the stepper while this one is still being read
+  // or compared, and the view reports nothing until its comparison is done.
+  const [renderedInventory, setRenderedInventory] = useState<{
+    attempt: string;
+    count: number;
+  } | null>(null);
+  const renderedChangeCount =
+    renderedInventory?.attempt === renderedAttemptKey ? renderedInventory.count : 0;
   const [renderedChangeIndex, setRenderedChangeIndex] = useState(0);
   const scrollRootRef = useRef<HTMLDivElement>(null);
 
@@ -929,8 +921,8 @@ export function DiffPane({
     </div>
   );
 
-  const handleRenderedChangeCount = useCallback((count: number) => {
-    setRenderedChangeCount(count);
+  const handleRenderedChangeCount = useCallback((count: number, forAttempt: string) => {
+    setRenderedInventory({ attempt: forAttempt, count });
     setRenderedChangeIndex(0);
   }, []);
 
@@ -1005,15 +997,6 @@ export function DiffPane({
     [renderedChangeCount, renderedChangeIndex]
   );
 
-  const renderedSkeleton = (
-    <div className="p-4 space-y-3">
-      <Skeleton label="Loading rendered Markdown">
-        <SkeletonBone className="h-7 w-3/4" />
-        <SkeletonText lines={8} />
-      </Skeleton>
-    </div>
-  );
-
   const renderedDisabledReason =
     renderedAvailability.visible && !renderedAvailability.enabled
       ? renderedAvailability.reason
@@ -1056,7 +1039,7 @@ export function DiffPane({
   const fileName = filePath?.split(/[/\\]/).filter(Boolean).pop();
   const displayTitle = panel?.titleMode === "user" ? title : (fileName ?? title);
 
-  const reveal = revealCopy();
+  const reveal = useRevealCopy();
   const externalErrorCopy =
     externalError?.target === "reveal"
       ? {
@@ -1158,8 +1141,12 @@ export function DiffPane({
                 )}
                 {absolutePath && (
                   <>
-                    <DropdownMenuItem onSelect={() => void handleExternalAction("reveal")}>
-                      <FolderOpen className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+                    <DropdownMenuItem
+                      onSelect={() =>
+                        runTransientReveal(reveal, () => handleExternalAction("reveal"))
+                      }
+                    >
+                      <reveal.icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
                       {reveal.label}
                     </DropdownMenuItem>
                     <DropdownMenuItem onSelect={() => void handleExternalAction("editor")}>
@@ -1199,12 +1186,11 @@ export function DiffPane({
                         <FolderTree className={TOOLBAR_ICON_CLASS} />
                       </FileViewerToolbar.IconButton>
                     )}
-                    <FileViewerToolbar.IconButton
-                      label={reveal.label}
-                      onClick={() => void handleExternalAction("reveal")}
-                    >
-                      <FolderOpen className={TOOLBAR_ICON_CLASS} />
-                    </FileViewerToolbar.IconButton>
+                    <FileViewerToolbar.RevealButton
+                      reveal={reveal}
+                      path={absolutePath}
+                      onReveal={() => handleExternalAction("reveal")}
+                    />
                     <FileViewerToolbar.IconButton
                       label="Open in editor"
                       onClick={() => void handleExternalAction("editor")}
@@ -1244,7 +1230,12 @@ export function DiffPane({
             variant: "dangerFilled",
             loading: showRetrySpinner,
             disabled: isErrorTargetPending,
-            onClick: () => void handleExternalAction(externalError.target),
+            // A retried copy confirms like the first attempt would have; the
+            // banner it came from unmounts on success.
+            onClick: () =>
+              externalError.target === "reveal"
+                ? runTransientReveal(reveal, () => handleExternalAction("reveal"))
+                : void handleExternalAction(externalError.target),
             ariaLabel: externalErrorCopy.retry,
           }}
           onClose={() => setExternalError(null)}
@@ -1340,7 +1331,7 @@ export function DiffPane({
             makes the size preference reach the rendered diff. */}
         <div
           className="relative flex-1 min-w-0 min-h-0 flex flex-col"
-          style={diffFontStyle}
+          style={fontStyle}
           data-testid="diff-pane-body"
         >
           <div ref={scrollRootRef} className="flex-1 min-h-0 overflow-auto diff-scroll-root">
@@ -1381,6 +1372,11 @@ export function DiffPane({
                   relPath={filePath}
                   worktreePath={worktreePath}
                   status={fileStatus}
+                  side={
+                    effectiveSource === "staged" || effectiveSource === "unstaged"
+                      ? effectiveSource
+                      : undefined
+                  }
                 />
               </div>
             )}
@@ -1411,8 +1407,8 @@ export function DiffPane({
                   error={previewError}
                   fileReason="MEDIA_FAILED"
                   remote={remoteFile}
-                  revealLabel={reveal.label}
-                  onExternal={(target) => void handleExternalAction(target)}
+                  reveal={reveal}
+                  onExternal={handleExternalAction}
                 />
               ) : isAudioMode ? (
                 <FileAudioPreview
@@ -1452,8 +1448,8 @@ export function DiffPane({
                   error={previewError}
                   fileReason="PDF_FAILED"
                   remote={remoteFile}
-                  revealLabel={reveal.label}
-                  onExternal={(target) => void handleExternalAction(target)}
+                  reveal={reveal}
+                  onExternal={handleExternalAction}
                 />
               ) : (
                 <FilePdfPreview
@@ -1481,9 +1477,9 @@ export function DiffPane({
               content &&
               !sinceReviewNotice?.replacesBody &&
               (showRendered ? (
-                <Suspense fallback={renderedSkeleton}>
+                <Suspense fallback={<RenderedMarkdownDiffSkeleton />}>
                   {renderedSourcePending ? (
-                    renderedSkeleton
+                    <RenderedMarkdownDiffSkeleton />
                   ) : (
                     <LazyRenderedMarkdownDiff
                       diff={content}
@@ -1494,6 +1490,7 @@ export function DiffPane({
                       cacheBust={String(previewReloadNonce)}
                       fontSize={markdownFontSize}
                       attemptKey={renderedAttemptKey}
+                      requestKey={`rendered-markdown:${id}`}
                       onVerdict={handleRenderedVerdict}
                       onChangeCount={handleRenderedChangeCount}
                     />
@@ -1650,7 +1647,7 @@ function DiffPreviewUnavailable({
   error,
   fileReason,
   remote,
-  revealLabel,
+  reveal,
   onExternal,
 }: {
   filePath: string;
@@ -1658,8 +1655,9 @@ function DiffPreviewUnavailable({
   error: MediaPreviewError;
   fileReason: "MEDIA_FAILED" | "PDF_FAILED";
   remote: RemoteFileContext | null;
-  revealLabel: string;
-  onExternal: (target: "reveal" | "default-app") => void;
+  reveal: RevealCopy;
+  /** Resolves true once the hand-off succeeded; the pane reports a failure. */
+  onExternal: (target: "reveal" | "default-app") => Promise<boolean>;
 }) {
   const refused = refusalReason(error);
   if (refused === "DRIVEN_ELSEWHERE") {
@@ -1685,12 +1683,14 @@ function DiffPreviewUnavailable({
         copy.action === "save" ? (
           <SaveHostFileButton hostPath={hostPath} variant="contrast" />
         ) : copy.action === "reveal" ? (
-          <Button variant="contrast" size="sm" onClick={() => onExternal("reveal")}>
-            <FolderOpen />
-            {revealLabel}
-          </Button>
+          <RevealActionButton
+            reveal={reveal}
+            path={hostPath}
+            onReveal={() => onExternal("reveal")}
+            variant="contrast"
+          />
         ) : (
-          <Button variant="contrast" size="sm" onClick={() => onExternal("default-app")}>
+          <Button variant="contrast" size="sm" onClick={() => void onExternal("default-app")}>
             <ExternalLink />
             Open in default app
           </Button>

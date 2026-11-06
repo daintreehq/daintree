@@ -97,6 +97,9 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   ),
   DropdownMenuSeparator: () => <hr />,
   DropdownMenuCheckboxItem: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuRadioGroup: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuRadioItem: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuMeta: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
 }));
 
 // The session tabs' per-lane menu is incidental here, and the real primitive

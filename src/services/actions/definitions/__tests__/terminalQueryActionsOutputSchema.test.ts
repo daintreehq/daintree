@@ -56,6 +56,18 @@ function registerAll(): ActionService {
   return service;
 }
 
+function propertiesOf(schema: Record<string, unknown>): Record<string, unknown> {
+  const { properties } = schema;
+  return typeof properties === "object" && properties !== null ? { ...properties } : {};
+}
+
+function requiredOf(schema: Record<string, unknown>): string[] {
+  const { required } = schema;
+  return Array.isArray(required)
+    ? required.filter((name): name is string => typeof name === "string")
+    : [];
+}
+
 function outputSchema(service: ActionService, id: string): Record<string, unknown> | undefined {
   return service.get(id as ActionId)?.outputSchema as Record<string, unknown> | undefined;
 }
@@ -181,6 +193,46 @@ describe("terminal query actions emit a manifest outputSchema (#10676)", () => {
     expect(parsed.terminals[0]?.recentOutputTruncated).toBe(true);
   });
 
+  it("terminal.getStatus keeps which marker the agent printed, and the waits accept it (#16190)", () => {
+    const handback = {
+      message: "approve the deploy",
+      report: "needs-you",
+      observedAt: 1,
+      truncated: false,
+    };
+    // Dispatch strips undeclared keys, so the report has to be declared to arrive.
+    const parsed = TerminalStatusResultSchema.parse({
+      terminals: [
+        { terminalId: "t1", agentId: null, agentState: "waiting", lastHandback: handback },
+      ],
+      source: "renderer",
+      unavailableFields: [],
+    });
+    expect(parsed.terminals[0]?.lastHandback?.report).toBe("needs-you");
+
+    const service = registerAll();
+    const ajv = new Ajv2020({ strict: false });
+    const single = ajv.compile(outputSchema(service, "terminal.waitUntilIdle")!);
+    const batch = ajv.compile(outputSchema(service, "terminal.waitUntilIdleBatch")!);
+    const wait = { terminalId: "t1", busyState: "idle", trackingState: "tracked", timedOut: false };
+    const row = { terminalId: "t1", busyState: "idle", trackingState: "tracked", settled: true };
+    const accepts = (lastHandback: Record<string, unknown>) => [
+      single({ ...wait, lastHandback }),
+      batch({
+        mode: "first",
+        results: [{ ...row, lastHandback }],
+        settledTerminalIds: ["t1"],
+        timedOut: false,
+      }),
+    ];
+    const { report: _report, ...older } = handback;
+    expect(accepts(handback)).toEqual([true, true]);
+    expect(accepts({ ...handback, report: "done" })).toEqual([true, true]);
+    // An older host's observation has no report.
+    expect(accepts(older)).toEqual([true, true]);
+    expect(accepts({ ...handback, report: "approve" })).toEqual([false, false]);
+  });
+
   it("terminal.getOutput exposes content/lineCount/truncated properties", () => {
     const props =
       (outputSchema(registerAll(), "terminal.getOutput")!.properties as Record<string, unknown>) ??
@@ -227,11 +279,53 @@ describe("terminal.sendCommandOwned (#12407)", () => {
     return factory();
   }
 
-  it("advertises the same output schema as the submission it delegates to", () => {
+  // A steer send may be held instead of sent (#16187), so the owned receipt
+  // is the delegate's with its token optional and the held fields added.
+  it("advertises the delegate's receipt, widened only by a held send's fields (#16187)", () => {
     const service = registerAll();
-    const owned = outputSchema(service, "terminal.sendCommandOwned");
-    expect(owned?.type).toBe("object");
-    expect(owned).toEqual(outputSchema(service, "terminal.sendCommand"));
+    const owned = outputSchema(service, "terminal.sendCommandOwned")!;
+    const delegate = outputSchema(service, "terminal.sendCommand")!;
+    expect(owned.type).toBe("object");
+    const ownedProps = propertiesOf(owned);
+    const delegateProps = propertiesOf(delegate);
+    for (const [name, schema] of Object.entries(delegateProps)) {
+      if (name === "submissionToken") continue;
+      expect(ownedProps[name], name).toEqual(schema);
+    }
+    expect(
+      Object.keys(ownedProps)
+        .filter((name) => !(name in delegateProps))
+        .sort()
+    ).toEqual(["expiresAt", "queued", "queuedSendToken", "supersededToken"]);
+    expect(requiredOf(owned)).toEqual(
+      requiredOf(delegate).filter((name) => name !== "submissionToken")
+    );
+  });
+
+  it("validates both a sent and a held receipt (#16187)", () => {
+    const service = registerAll();
+    const validate = new Ajv2020({ strict: false }).compile(
+      outputSchema(service, "terminal.sendCommandOwned")!
+    );
+    const sent = {
+      sent: true,
+      terminalId: "t-1",
+      command: "ls",
+      submissionToken: "tok",
+      message: "m",
+    };
+    const held = {
+      sent: false,
+      queued: true,
+      terminalId: "t-1",
+      command: "ls",
+      queuedSendToken: "q-1",
+      expiresAt: 1,
+      supersededToken: "q-0",
+      message: "m",
+    };
+    expect(validate(sent), JSON.stringify(validate.errors)).toBe(true);
+    expect(validate(held), JSON.stringify(validate.errors)).toBe(true);
   });
 
   it("requires both the target and the text", () => {
@@ -925,4 +1019,112 @@ describe("terminal.list restore metadata (#14017)", () => {
       disposition: "held",
     });
   });
+});
+
+describe("every location in one call (#15732)", () => {
+  function seedEveryLocation(): void {
+    panelStoreMock.getState.mockReturnValue({
+      focusedId: null,
+      panelIds: [
+        "grid-a",
+        "dock-b",
+        "bg-c",
+        "trash-d",
+        "overlay-e",
+        "other-wt",
+        "dialog-g",
+        "ephemeral-f",
+      ],
+      panelsById: {
+        "grid-a": { id: "grid-a", kind: "terminal", location: "grid", worktreeId: "wt-1" },
+        "dock-b": { id: "dock-b", kind: "terminal", location: "dock", worktreeId: "wt-1" },
+        "bg-c": { id: "bg-c", kind: "terminal", location: "background", worktreeId: "wt-1" },
+        "trash-d": { id: "trash-d", kind: "terminal", location: "trash", worktreeId: "wt-1" },
+        "overlay-e": { id: "overlay-e", kind: "file", location: "overlay", worktreeId: "wt-1" },
+        "other-wt": {
+          id: "other-wt",
+          kind: "terminal",
+          location: "background",
+          worktreeId: "wt-2",
+        },
+        // Dialog and non-persisted panels are tooling-internal, so even every
+        // location leaves them out.
+        "dialog-g": { id: "dialog-g", kind: "file", location: "dialog", worktreeId: "wt-1" },
+        "ephemeral-f": {
+          id: "ephemeral-f",
+          kind: "terminal",
+          location: "dock",
+          worktreeId: "wt-1",
+          excludeFromPersistence: true,
+        },
+      },
+    });
+  }
+
+  async function dispatch(id: string, args: unknown): Promise<unknown> {
+    const result = await registerAll().dispatch(id as ActionId, args, { source: "agent" });
+    if (!result.ok) throw new Error(result.error.message);
+    return result.result;
+  }
+
+  it("terminal.list lists a worktree's panes wherever they sit, each with its own location", async () => {
+    seedEveryLocation();
+
+    const { terminals } = (await dispatch("terminal.list", {
+      worktreeId: "wt-1",
+      location: "all",
+    })) as { terminals: TerminalListItem[] };
+
+    expect(terminals.map((t) => [t.id, t.location])).toEqual([
+      ["grid-a", "grid"],
+      ["dock-b", "dock"],
+      ["bg-c", "background"],
+      ["trash-d", "trash"],
+      ["overlay-e", "overlay"],
+    ]);
+  });
+
+  it("terminal.list keeps leaving the trash and the background out by default", async () => {
+    seedEveryLocation();
+
+    const { terminals } = (await dispatch("terminal.list", { worktreeId: "wt-1" })) as {
+      terminals: TerminalListItem[];
+    };
+
+    expect(terminals.map((t) => t.id)).toEqual(["grid-a", "dock-b", "overlay-e"]);
+  });
+
+  it("terminal.getStatus reads the fleet in every location", async () => {
+    seedEveryLocation();
+
+    const { terminals } = (await dispatch("terminal.getStatus", {
+      worktreeId: "wt-1",
+      location: "all",
+    })) as { terminals: Array<{ terminalId: string }> };
+
+    expect(terminals.map((t) => t.terminalId)).toEqual([
+      "grid-a",
+      "dock-b",
+      "bg-c",
+      "trash-d",
+      "overlay-e",
+    ]);
+  });
+
+  it.each(["grid", "all"])(
+    "terminal.getStatus with named terminals still ignores location %s",
+    async (location) => {
+      seedEveryLocation();
+
+      const { terminals } = (await dispatch("terminal.getStatus", {
+        terminalIds: ["bg-c", "trash-d"],
+        location,
+      })) as { terminals: Array<{ terminalId: string; error?: string }> };
+
+      expect(terminals.map((t) => [t.terminalId, t.error])).toEqual([
+        ["bg-c", undefined],
+        ["trash-d", undefined],
+      ]);
+    }
+  );
 });

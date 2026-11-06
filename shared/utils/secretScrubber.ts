@@ -207,6 +207,14 @@ export const PATTERNS: readonly SecretPattern[] = [
     replacement: REDACTED,
   },
   {
+    name: "cloudflare-api-token-assignment",
+    // A Cloudflare token or global key from before the `cf…_` prefixes, known only
+    // by the name it is assigned to: `CLOUDFLARE_API_TOKEN=…`, `CF_API_KEY: …`.
+    regex:
+      /(^|[^A-Za-z0-9])((?:cloudflare|cf)[_-]?api[_-]?(?:token|key)["']?[ \t]{0,4}[:=][ \t]{0,4}["']?)[A-Za-z0-9_-]{32,128}/gi,
+    replacement: `$1$2${REDACTED}`,
+  },
+  {
     name: "supabase-key",
     regex: /\bsb_(?:publishable|secret)_[A-Za-z0-9_]{32,64}\b/g,
     probe: String.raw`\bsb_(?:publishable|secret)_`,
@@ -471,6 +479,26 @@ export const PATTERNS: readonly SecretPattern[] = [
     regex: /\btk-us-[A-Za-z0-9_-]{48}/g,
     probe: String.raw`\btk-us-`,
     replacement: REDACTED,
+  },
+  {
+    name: "decisions-claim-secret",
+    // The one-time secret that claims a Decisions relay: `CLAIM_SECRET=…`,
+    // `"claimSecret": "…"`, `--claim-secret …`, and the deploy CLI's
+    // `Claim secret  <value>` (two spaces or more, so prose that mentions one
+    // stays). A quoted value is taken whole, escapes included, or to the end of
+    // its line when the quote never closes. `--claim-secret-file <path>` names
+    // a file and stays.
+    regex:
+      /(^|[^A-Za-z0-9])(claim[_ -]?secret["']?(?:[ \t]{0,4}[:=][ \t]{0,4}|[ \t]{2,16})|-claim-secret[ \t]{1,4})(?:"(?:[^"\\\r\n]|\\[^\r\n]){16,4096}(?:"|\\?(?![^\r\n]))|'(?:[^'\\\r\n]|\\[^\r\n]){16,4096}(?:'|\\?(?![^\r\n]))|[^\s"'`]{16,4096})/gi,
+    replacement: `$1$2${REDACTED}`,
+  },
+  {
+    name: "decisions-recovery-passphrase",
+    // A labelled Decisions recovery passphrase: a quoted one whole, escapes
+    // included, and an unquoted one to the end of its line, since it may hold spaces.
+    regex:
+      /(^|[^A-Za-z0-9])(recovery[_ -]?passphrase["']?[ \t]{0,4}[:=][ \t]{0,4})(?![ \t]{0,4}["']?\[REDACTED\])(?:"(?:[^"\\\r\n]|\\[^\r\n]){1,4096}"|'(?:[^'\\\r\n]|\\[^\r\n]){1,4096}'|[^\r\n]{1,4096})/gi,
+    replacement: `$1$2${REDACTED}`,
   },
   {
     name: "generic-key-fallback",

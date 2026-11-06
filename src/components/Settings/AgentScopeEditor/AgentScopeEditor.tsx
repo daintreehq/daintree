@@ -9,6 +9,7 @@ import { CustomPresetChrome, PresetDeleteRow } from "./CustomPresetChrome";
 import { BehavioralControls } from "./BehavioralControls";
 import { EnvBlock } from "./EnvBlock";
 import { FallbackChainEditor } from "./FallbackChainEditor";
+import { PresetAccountRow } from "./PresetAccountRow";
 import { ReadOnlyDetail } from "./ReadOnlyDetail";
 import { savedPresetStatus } from "./scopeUtils";
 import type { AgentPreset } from "@/config/agents";
@@ -148,6 +149,18 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
               />
             )}
 
+            {scope.scopeKind === "custom" && scope.selectedPreset && (
+              <PresetAccountRow
+                agentId={props.agentId}
+                agentName={agentName}
+                selectedPreset={scope.selectedPreset}
+                accounts={props.activeEntry.accounts}
+                onChange={(accountId) =>
+                  scope.handleUpdatePreset(scope.selectedPreset!.id, { accountId })
+                }
+              />
+            )}
+
             {scope.isEditableScope && (
               <BehavioralControls
                 scopeKind={scope.scopeKind}
@@ -174,6 +187,7 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
 
             {scope.scopeKind === "custom" && scope.selectedPreset && (
               <FallbackChainEditor
+                agentId={props.agentId}
                 selectedPreset={scope.selectedPreset}
                 allPresets={scope.allPresets}
                 onUpdatePreset={scope.handleUpdatePreset}

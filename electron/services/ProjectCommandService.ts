@@ -51,30 +51,35 @@ export interface ProjectCommandServiceDeps {
   getEnvLayers(projectId: string): Promise<ProjectCommandEnvLayers>;
 }
 
+/** The global and project variables the user configured for terminals. */
+export async function readProjectCommandEnvLayers(
+  projectId: string
+): Promise<ProjectCommandEnvLayers> {
+  const [{ projectStore }, { store }] = await Promise.all([
+    import("./ProjectStore.js"),
+    import("../store.js"),
+  ]);
+  return {
+    global: store.get("globalEnvironmentVariables") ?? {},
+    project:
+      (
+        await projectStore.getProjectSettings(projectId).catch((error: unknown) => {
+          console.warn(
+            "[ProjectCommandService] Couldn't read project settings; running without project env:",
+            error
+          );
+          return null;
+        })
+      )?.environmentVariables ?? {},
+  };
+}
+
 const liveDeps: ProjectCommandServiceDeps = {
   getProject: async (projectId) => {
     const { projectStore } = await import("./ProjectStore.js");
     return projectStore.getProjectById(projectId);
   },
-  getEnvLayers: async (projectId) => {
-    const [{ projectStore }, { store }] = await Promise.all([
-      import("./ProjectStore.js"),
-      import("../store.js"),
-    ]);
-    return {
-      global: store.get("globalEnvironmentVariables") ?? {},
-      project:
-        (
-          await projectStore.getProjectSettings(projectId).catch((error: unknown) => {
-            console.warn(
-              "[ProjectCommandService] Couldn't read project settings; running without project env:",
-              error
-            );
-            return null;
-          })
-        )?.environmentVariables ?? {},
-    };
-  },
+  getEnvLayers: readProjectCommandEnvLayers,
 };
 
 /**

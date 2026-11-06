@@ -4,6 +4,8 @@ import type { IPty } from "node-pty";
 import { RATE_LIMIT_SETTLE_MS, TerminalProcess } from "../TerminalProcess.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import { events } from "../../events.js";
+import { AgentOutputForwarder } from "../AgentOutputForwarder.js";
+import { OUTPUT_BUFFER_SIZE } from "../types.js";
 
 vi.mock("../../../utils/windowsTreeKill.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../utils/windowsTreeKill.js")>()),
@@ -395,6 +397,45 @@ describe("TerminalProcess rate-limit observation (#12797)", () => {
     terminal.dispose();
   });
 
+  it("keeps the latest banner on the pane for an account switch to read (#16136)", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "codex" });
+
+    ptyOnDataCallback!("■ You've hit your usage limit. Try again at 3:40 PM.\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.getInfo().usageLimitObservedAt).toBe(seen[0]?.observedAt);
+
+    ptyOnDataCallback!("line\r\n".repeat(20));
+    await vi.advanceTimersByTimeAsync(60_000);
+    ptyOnDataCallback!("■ You've hit your usage limit.\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(2);
+    expect(terminal.getInfo().usageLimitObservedAt).toBe(seen[1]?.observedAt);
+
+    terminal.dispose();
+  });
+
+  it("remembers a limit hit again inside the event's cooldown (#16136)", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "codex" });
+
+    ptyOnDataCallback!("■ You've hit your usage limit.\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(1);
+
+    // The pane worked again, and its memory went with it.
+    terminal.getInfo().usageLimitObservedAt = undefined;
+    ptyOnDataCallback!("line\r\n".repeat(20));
+    await vi.advanceTimersByTimeAsync(1_000);
+    ptyOnDataCallback!("■ You've hit your usage limit.\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(seen).toHaveLength(1);
+    expect(terminal.getInfo().usageLimitObservedAt).toBeGreaterThan(Number(seen[0]?.observedAt));
+
+    terminal.dispose();
+  });
+
   it("ignores a plain shell with no agent", async () => {
     const seen = collect();
     const terminal = createTerminal();
@@ -402,6 +443,217 @@ describe("TerminalProcess rate-limit observation (#12797)", () => {
     ptyOnDataCallback!("HTTP 429 Too Many Requests\r\n");
     await vi.advanceTimersByTimeAsync(250);
     expect(seen).toHaveLength(0);
+    expect(terminal.getInfo().usageLimitObservedAt).toBeUndefined();
+
+    terminal.dispose();
+  });
+});
+
+describe("TerminalProcess Claude usage observation (#15727)", () => {
+  // 10am on Nov 2 in Sydney.
+  const now = Date.UTC(2026, 10, 1, 23, 0);
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    ptyOnDataCallback = null;
+  });
+
+  const unsubscribers: Array<() => void> = [];
+
+  afterEach(() => {
+    unsubscribers.splice(0).forEach((unsubscribe) => unsubscribe());
+    vi.useRealTimers();
+    vi.clearAllTimers();
+  });
+
+  function collect() {
+    const seen: Array<Record<string, unknown>> = [];
+    unsubscribers.push(
+      events.on("agent:claude-usage-observed", (payload) => seen.push({ ...payload }))
+    );
+    return seen;
+  }
+
+  // Claude's footer on the 80-column pane: hints left, its warning flush right.
+  const footerRow = (message: string) => {
+    const left = "  ? for shortcuts";
+    return `${left}${" ".repeat(79 - left.length - message.length)}${message}\r\n`;
+  };
+  const footer = (percent: number) =>
+    footerRow(`You've used ${percent}% of your weekly limit · resets 6pm (UTC)`);
+
+  it("reports the parsed fields of a footer warning, never its text", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    ptyOnDataCallback!(footer(87));
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(seen).toEqual([
+      {
+        terminalId: "t1",
+        window: "weekly limit",
+        statement: "used",
+        usedPercent: 87,
+        // 6pm UTC has passed today, so it's tomorrow's.
+        resetsAt: Date.UTC(2026, 10, 2, 18, 0),
+        observedAt: expect.any(Number),
+        timestamp: seen[0]?.observedAt,
+      },
+    ]);
+    // When the sample read it, not when the bytes arrived or the message reset.
+    expect(seen[0]?.observedAt).toBeGreaterThanOrEqual(now);
+    expect(seen[0]?.observedAt).toBeLessThanOrEqual(Date.now());
+
+    terminal.dispose();
+  });
+
+  it("leaves a warning after a gap short of the pane's edge alone", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    ptyOnDataCallback!("  ? for shortcuts  Approaching weekly limit · resets 6pm (UTC)\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toEqual([]);
+    // The same message flush right is Claude's footer.
+    ptyOnDataCallback!(footerRow("Approaching weekly limit · resets 6pm (UTC)"));
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(1);
+
+    terminal.dispose();
+  });
+
+  it("reports a message once while it stays, and again when it changes", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    ptyOnDataCallback!(footer(87));
+    await vi.advanceTimersByTimeAsync(250);
+    // On screen past the cooldown, through repaints, it is one observation.
+    for (let i = 0; i < 3; i++) {
+      ptyOnDataCallback!(`more output ${i}\r\n${footer(87)}`);
+      await vi.advanceTimersByTimeAsync(30_000);
+    }
+    expect(seen).toHaveLength(1);
+
+    // A repaint that drops it for a frame is the same message.
+    ptyOnDataCallback!("line\r\n".repeat(30));
+    await vi.advanceTimersByTimeAsync(250);
+    ptyOnDataCallback!(footer(87));
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(1);
+
+    ptyOnDataCallback!(footer(91));
+    await vi.advanceTimersByTimeAsync(250);
+    ptyOnDataCallback!(footerRow("Over 90% of your weekly limit used · resets 6pm (UTC)"));
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen.map((payload) => [payload.statement, payload.usedPercent])).toEqual([
+      ["used", 87],
+      ["used", 91],
+      ["over", 90],
+    ]);
+
+    // Gone a while, then shown again, it is seen again.
+    ptyOnDataCallback!("line\r\n".repeat(30));
+    await vi.advanceTimersByTimeAsync(60_000);
+    ptyOnDataCallback!(footerRow("Over 90% of your weekly limit used · resets 6pm (UTC)"));
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(4);
+
+    terminal.dispose();
+  });
+
+  it("reports each limit on its own", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    ptyOnDataCallback!(footer(87));
+    await vi.advanceTimersByTimeAsync(250);
+    ptyOnDataCallback!("  ⎿  You've hit your 5-hour limit · resets 3pm (Australia/Sydney)\r\n");
+    ptyOnDataCallback!(footer(87));
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(seen.map((payload) => [payload.window, payload.statement])).toEqual([
+      ["weekly limit", "used"],
+      ["5-hour limit", "reached"],
+    ]);
+
+    terminal.dispose();
+  });
+
+  it("reads Claude Code panes only", async () => {
+    const seen = collect();
+    const codex = createTerminal({ launchAgentId: "codex" });
+    ptyOnDataCallback!(footer(87));
+    await vi.advanceTimersByTimeAsync(250);
+    codex.dispose();
+
+    const shell = createTerminal();
+    ptyOnDataCallback!(footer(87));
+    await vi.advanceTimersByTimeAsync(250);
+    shell.dispose();
+
+    expect(seen).toEqual([]);
+  });
+
+  it("goes by the agent detected in a pane launched as Claude", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    const info = (terminal as unknown as { terminalInfo: { detectedAgentId?: string } })
+      .terminalInfo;
+    info.detectedAgentId = "codex";
+
+    ptyOnDataCallback!(footer(87));
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toEqual([]);
+
+    terminal.dispose();
+  });
+
+  it("stops reading once Claude has exited the pane", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    ptyOnDataCallback!(footer(87));
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(1);
+
+    const info = (terminal as unknown as { terminalInfo: { agentState?: string } }).terminalInfo;
+    info.agentState = "exited";
+    ptyOnDataCallback!(footer(91));
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toHaveLength(1);
+
+    terminal.dispose();
+  });
+
+  it("reads a footer warning in the frame Claude exits on", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    ptyOnDataCallback!(footer(87));
+    await vi.advanceTimersByTimeAsync(1);
+    // The agent and its PTY exit before the sample is taken; the exit path
+    // settles the last frame as it releases the mirror.
+    const info = (
+      terminal as unknown as { terminalInfo: { agentState?: string; isExited?: boolean } }
+    ).terminalInfo;
+    info.agentState = "exited";
+    info.isExited = true;
+    terminal.dispose();
+
+    expect(seen.map((payload) => payload.usedPercent)).toEqual([87]);
+  });
+
+  it("ignores a Claude pane's prose about a limit", async () => {
+    const seen = collect();
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    ptyOnDataCallback!("⏺ The footer says you've used 87% of your weekly limit · resets Nov 2\r\n");
+    ptyOnDataCallback!("⚠ Heads up, you have less than 10% of your weekly limit left.\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(seen).toEqual([]);
 
     terminal.dispose();
   });
@@ -594,6 +846,8 @@ describe("TerminalProcess rate-limit fallback offer (#14370)", () => {
 });
 
 describe("TerminalProcess agent:output coalescing", () => {
+  // Only the Assistant's output is forwarded to Main (#15667).
+  const assistant = { launchAgentId: "claude", isAssistantTerminal: true } as const;
   let received: Array<{ agentId: string; data: string; terminalId?: string }>;
   let unsubscribe: () => void;
 
@@ -613,7 +867,7 @@ describe("TerminalProcess agent:output coalescing", () => {
   });
 
   it("coalesces multiple chunks into one emit on the flush timer", () => {
-    const terminal = createTerminal({ launchAgentId: "claude" });
+    const terminal = createTerminal(assistant);
     expect(ptyOnDataCallback).not.toBeNull();
 
     ptyOnDataCallback!("chunk-a");
@@ -630,13 +884,34 @@ describe("TerminalProcess agent:output coalescing", () => {
   });
 
   it("flushes immediately when pending output reaches the size cap", () => {
-    const terminal = createTerminal({ launchAgentId: "claude" });
+    const terminal = createTerminal(assistant);
     const big = "x".repeat(2500);
 
     ptyOnDataCallback!(big);
     expect(received).toHaveLength(1);
     expect(received[0].data).toBe(big);
 
+    terminal.dispose();
+  });
+
+  it("emits nothing for an agent terminal that is not the Assistant", () => {
+    const queue = vi.spyOn(AgentOutputForwarder.prototype, "queue");
+    const emitData = vi.fn();
+    const terminal = createTerminal({ launchAgentId: "claude" }, { emitData });
+    const big = "x".repeat(2500);
+
+    ptyOnDataCallback!("agent output");
+    ptyOnDataCallback!(big);
+    vi.advanceTimersByTime(100);
+    terminal.kill("user requested");
+
+    expect(received).toHaveLength(0);
+    expect(queue).not.toHaveBeenCalled();
+    // The renderer and the host-local ring still get every byte.
+    expect(emitData.mock.calls.map((call) => call[1]).join("")).toBe(`agent output${big}`);
+    expect(terminal.getInfo().outputBuffer).toBe(`agent output${big}`.slice(-OUTPUT_BUFFER_SIZE));
+
+    queue.mockRestore();
     terminal.dispose();
   });
 
@@ -655,7 +930,7 @@ describe("TerminalProcess agent:output coalescing", () => {
     const offOrder = events.on("agent:output", () => {
       order.push("output");
     });
-    const terminal = createTerminal({ launchAgentId: "claude" }, undefined, {
+    const terminal = createTerminal(assistant, undefined, {
       updateAgentState: () => {
         order.push("state");
       },
@@ -675,7 +950,7 @@ describe("TerminalProcess agent:output coalescing", () => {
   });
 
   it("flushes pending output on dispose without waiting for the timer", () => {
-    const terminal = createTerminal({ launchAgentId: "claude" });
+    const terminal = createTerminal(assistant);
 
     ptyOnDataCallback!("last-words");
     expect(received).toHaveLength(0);
@@ -930,5 +1205,22 @@ describe("TerminalProcess write-error throttle", () => {
     expect(handles.writeMock).toHaveBeenCalledTimes(1);
     expect(handles.writeMock).toHaveBeenCalledWith(big);
     expect(errorLogs()).toHaveLength(0);
+  });
+});
+
+describe("TerminalProcess in-thread bracketed paste (#15629)", () => {
+  it("reports the mode its own mirror parsed from the output", async () => {
+    ptyOnDataCallback = null;
+    const terminal = createTerminal();
+    expect(terminal.isBracketedPasteMode()).toBe(false);
+
+    ptyOnDataCallback!("\x1b[?2004h❯ ");
+    await vi.waitFor(() => expect(terminal.isBracketedPasteMode()).toBe(true));
+
+    ptyOnDataCallback!("\x1b[?2004l$ ");
+    await vi.waitFor(() => expect(terminal.isBracketedPasteMode()).toBe(false));
+
+    terminal.dispose();
+    expect(terminal.isBracketedPasteMode()).toBe(false);
   });
 });

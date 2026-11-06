@@ -227,6 +227,7 @@ export function listPushCommitsFrom(fixture: CommitsFixture) {
       rangeBasis: push.basis,
       total: push.total ?? push.count,
       behind: 0,
+      headOid: range[0]?.hash ?? "0".repeat(40),
       commits: range.map((c) => ({
         hash: c.hash,
         date: c.date,

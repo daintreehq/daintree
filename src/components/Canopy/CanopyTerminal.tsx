@@ -46,7 +46,7 @@ import { loadXtermCore } from "@/services/terminal/xtermCore";
 import { hasUsableRenderer } from "@/services/terminal/xtermRendererProbe";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
-import { useCanopyStore } from "@/store/canopyStore";
+import { isCanopyEdgeDragging, useCanopyStore } from "@/store/canopyStore";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { useScreenReaderStore } from "@/store/screenReaderStore";
 import {
@@ -55,7 +55,11 @@ import {
   useTerminalColorSchemeStore,
 } from "@/store/terminalColorSchemeStore";
 import { streamRangeOf, stripCoveredOutput } from "@/services/terminal/streamFence";
-import { isTerminalReply } from "@/services/terminal/inputUtils";
+import {
+  createSurrogatePairJoiner,
+  isTerminalReply,
+  isWindowCloseChord,
+} from "@/services/terminal/inputUtils";
 import { logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import {
@@ -96,8 +100,8 @@ const GESTURE_EVENTS = [
   "input",
   "compositionend",
   "paste",
+  // A release belongs to the press before it, so the drag follow takes it.
   "mousedown",
-  "mouseup",
   "wheel",
 ] as const;
 
@@ -293,6 +297,7 @@ export function CanopyTerminal({
       rows: 24,
       cursorBlink: false,
     });
+    terminal.attachCustomKeyEventHandler((event) => !isWindowCloseChord(event));
     // Awaited before the snapshot's first write, so widths are recorded as the grid records them.
     const unicodeReady = activateUnicode11(terminal);
     terminal.open(host);
@@ -411,8 +416,8 @@ export function CanopyTerminal({
         const cell = getXtermCellDimensions(terminal);
         // A host that doesn't take the size keeps the one its own window gave it.
         if (disposed || watchId === null || cell === null || !holdsSize) return;
-        // The list's edge is still moving: the drag's end asks again.
-        if (useCanopyStore.getState().listDrag !== null) return;
+        // The list's or the dock's edge is still moving: the drag's end asks again.
+        if (isCanopyEdgeDragging(useCanopyStore.getState())) return;
         // Fractional bounds, truncated, as the grid pane measures them: a
         // rounded-up clientWidth can promise a column the pane hasn't got.
         const box = frame.getBoundingClientRect();
@@ -440,10 +445,10 @@ export function CanopyTerminal({
       ensureImageAddon();
       requestPanelSize();
     });
-    // The pane took its new width while the list's edge moved; the agent
-    // redraws for it once, as the edge lands.
+    // The pane took its new width while the list's or the dock's edge moved;
+    // the agent redraws for it once, as the last edge lands.
     const unsubscribeListDrag = useCanopyStore.subscribe((state, previous) => {
-      if (previous.listDrag !== null && state.listDrag === null) requestPanelSize();
+      if (isCanopyEdgeDragging(previous) && !isCanopyEdgeDragging(state)) requestPanelSize();
     });
     const unsubscribeFont = useTerminalFontStore.subscribe((font, previous) => {
       if (font.fontSize === previous.fontSize && font.fontFamily === previous.fontFamily) return;
@@ -538,6 +543,38 @@ export function CanopyTerminal({
         : setTimeout(end, 0);
     };
     for (const type of GESTURE_EVENTS) frame.addEventListener(type, markGesture, true);
+    // A press the program reports has xterm follow its motion and release at the
+    // document, so they arrive wherever the pointer goes. Without them a
+    // fullscreen Claude Code reads a drag as a click, and a release outside the
+    // view leaves its button held. Captured, to run before xterm's own listeners.
+    let dragDocument: Document | null = null;
+    const endDrag = () => {
+      dragDocument?.removeEventListener("mousemove", followDrag, true);
+      dragDocument?.removeEventListener("mouseup", followDrag, true);
+      dragDocument = null;
+    };
+    const followDrag = (event: globalThis.MouseEvent) => {
+      // A release the document never saw, as off the window's edge.
+      if (event.type === "mousemove" && event.buttons === 0) return endDrag();
+      markGesture(event);
+      if (event.type === "mouseup" && event.buttons === 0) endDrag();
+    };
+    const startDrag = () => {
+      if (dragDocument === frame.ownerDocument) return;
+      endDrag();
+      dragDocument = frame.ownerDocument;
+      dragDocument.addEventListener("mousemove", followDrag, true);
+      dragDocument.addEventListener("mouseup", followDrag, true);
+    };
+    frame.addEventListener("mousedown", startDrag, true);
+    // Hover, for a program that asks for every motion (mode 1003). Motion with a
+    // button held is a drag, which counts only when it began here: one begun
+    // elsewhere can cross the view while xterm still follows a drag whose
+    // release never arrived.
+    const markHover = (event: globalThis.MouseEvent) => {
+      if (event.buttons === 0) markGesture(event);
+    };
+    frame.addEventListener("mousemove", markHover, true);
     // A sideways gesture over a grid wider than the pane scrolls the pane. xterm
     // swallows every wheel event while the program reports the mouse — and would
     // pass a diagonal one on as vertical wheel input — so it is taken first.
@@ -549,7 +586,8 @@ export function CanopyTerminal({
       frame.scrollLeft += event.deltaX;
     };
     frame.addEventListener("wheel", sideways, { capture: true, passive: false });
-    const input = terminal.onData((data) => {
+    const joinSurrogatePairs = createSurrogatePairJoiner();
+    const forwardInput = (data: string) => {
       const watchId = stream.watchId;
       // A reply to the program's own query, or a focus change, can fall
       // inside a gesture: the terminal's own pane answers those, and focus
@@ -563,6 +601,13 @@ export function CanopyTerminal({
         },
         (error: unknown) => logWarn("[Canopy] input refused", { error })
       );
+    };
+    const input = terminal.onData((data) => {
+      if (!gesture || stream.watchId === null || reconnectingRef.current) {
+        joinSurrogatePairs.reset();
+        return;
+      }
+      for (const chunk of joinSurrogatePairs.join(data)) forwardInput(chunk);
     });
 
     // The link under the pointer when the menu opened: the hover ends as the pointer reaches it.
@@ -722,6 +767,13 @@ export function CanopyTerminal({
         return;
       }
       if (opened.watchId === null || opened.snapshot === null) {
+        // A stream opened with no screen to start from is let go, not left
+        // running behind a pane that never shows it.
+        if (opened.watchId !== null) {
+          safeFireAndForget(unlessHostDisconnected(api.unwatchTerminal(opened.watchId)), {
+            context: "Ending a canopy terminal stream that opened with no screen",
+          });
+        }
         setStatus("failed");
         return;
       }
@@ -799,6 +851,9 @@ export function CanopyTerminal({
       unsubscribeFont();
       unsubscribeListDrag();
       for (const type of GESTURE_EVENTS) frame.removeEventListener(type, markGesture, true);
+      frame.removeEventListener("mousedown", startDrag, true);
+      frame.removeEventListener("mousemove", markHover, true);
+      endDrag();
       frame.removeEventListener("wheel", sideways, true);
       if (gestureTimer !== null) clearTimeout(gestureTimer);
       resizeObserver.disconnect();

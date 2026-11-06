@@ -245,9 +245,10 @@ describe("standing instruction through the launch builders", () => {
     const presetPair = ["--append-system-prompt", "preset"];
     const cmd = generateAgentCommand("claude", {}, "claude", {
       systemPromptArgs: claudeArgs,
-      presetArgs: presetPair.join(" "),
+      presetArgs: presetPair,
     });
-    expect(cmd.indexOf(quoted)).toBeGreaterThan(cmd.indexOf("preset"));
+    expect(cmd).toContain("--append-system-prompt 'preset'");
+    expect(cmd.indexOf(quoted)).toBeGreaterThan(cmd.indexOf("'preset'"));
 
     const flags = buildAgentLaunchFlags({ customFlags: "--verbose" }, "claude", {
       systemPromptArgs: claudeArgs,

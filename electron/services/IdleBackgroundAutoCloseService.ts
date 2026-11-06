@@ -78,7 +78,12 @@ type BlockingReason = "terminal" | "assistant" | "coordination-hold" | "plugin-w
 
 /** Why a project past its threshold was left awake, as the sweep log names it. */
 type SkipReason =
-  IdleShellSkipReason | "mcp-dispatch" | "ineligible" | "coordination-hold" | "plugin-work";
+  | IdleShellSkipReason
+  | "mcp-dispatch"
+  | "dictation"
+  | "ineligible"
+  | "coordination-hold"
+  | "plugin-work";
 
 type ShellCloseResult =
   | { status: "slept"; entry: IdleBackgroundClosedProjectEntry; terminalsKilled: number }

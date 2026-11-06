@@ -1,4 +1,4 @@
-import { bench, describe, vi } from "vitest";
+import { test, describe, vi } from "vitest";
 import path from "path";
 import { appendFileSync } from "fs";
 import { serialize } from "v8";
@@ -264,24 +264,28 @@ async function runScenario(): Promise<Metrics> {
 let first: Metrics | null = null;
 
 describe("github plugin onDidChangeWorktrees under worktree-update churn", () => {
-  bench(
-    `${EVENTS} events @ ${SPACING_MS} ms, ${WORKTREES} worktrees x ${CHANGES_PER_WORKTREE} changes`,
-    async () => {
-      const m = await runScenario();
-      if (first) return;
-      first = m;
-      const line = JSON.stringify({
-        handlerCalls: m.handlerCalls,
-        fetchCalls: m.fetchCalls,
-        hostRpcs: m.hostRpcs,
-        callbackRuns: m.callbackRuns,
-        invalidations: m.invalidations,
-        mbCloned: +(m.bytesCloned / 1_048_576).toFixed(1),
-        ms: Math.round(m.ms),
-      });
-      console.log(line);
-      if (process.env.BENCH_OUT) appendFileSync(process.env.BENCH_OUT, `${line}\n`);
-    },
-    { iterations: 1, warmupIterations: 0, time: 0 }
-  );
+  test(`${EVENTS} events @ ${SPACING_MS} ms, ${WORKTREES} worktrees x ${CHANGES_PER_WORKTREE} changes`, async ({
+    bench,
+  }) => {
+    await bench(
+      `${EVENTS} events @ ${SPACING_MS} ms, ${WORKTREES} worktrees x ${CHANGES_PER_WORKTREE} changes`,
+      {},
+      async () => {
+        const m = await runScenario();
+        if (first) return;
+        first = m;
+        const line = JSON.stringify({
+          handlerCalls: m.handlerCalls,
+          fetchCalls: m.fetchCalls,
+          hostRpcs: m.hostRpcs,
+          callbackRuns: m.callbackRuns,
+          invalidations: m.invalidations,
+          mbCloned: +(m.bytesCloned / 1_048_576).toFixed(1),
+          ms: Math.round(m.ms),
+        });
+        console.log(line);
+        if (process.env.BENCH_OUT) appendFileSync(process.env.BENCH_OUT, `${line}\n`);
+      }
+    ).run({ iterations: 1, warmupIterations: 0, time: 0 });
+  });
 });

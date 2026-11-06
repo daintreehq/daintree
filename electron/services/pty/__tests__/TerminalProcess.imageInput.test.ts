@@ -73,6 +73,9 @@ function createAgentTerminal(agentId: string | undefined): TerminalProcess {
 }
 
 const paste = (text: string) => `\x1b[200~${text}\x1b[201~`;
+const typedAt = (terminal: TerminalProcess) =>
+  (terminal as unknown as { terminalInfo: { lastTypedInputAt?: number } }).terminalInfo
+    .lastTypedInputAt;
 const writes = () => ptyWriteMock.mock.calls.map((call) => call[0]);
 
 describe("TerminalProcess.submit with image paths (#12792)", () => {
@@ -177,6 +180,8 @@ describe("TerminalProcess.submit with image paths (#12792)", () => {
     await vi.advanceTimersByTimeAsync(5000);
 
     expect(writes()).toEqual([paste(shot)]);
+    // The paste that went in is a draft from here on (#16282).
+    expect(typedAt(terminal)).toBeDefined();
   });
 
   it("gives up on a stat that never settles and sends the text as it was", async () => {
@@ -236,6 +241,24 @@ describe("TerminalProcess.submit with image paths (#12792)", () => {
     await vi.advanceTimersByTimeAsync(5000);
 
     expect(writes()).toEqual([paste(shot)]);
+    // The new run's composer starts empty: nothing holds it (#16282).
+    expect(typedAt(terminal)).toBeUndefined();
+  });
+
+  it("never submits once the agent exits after the last paste, during the Enter delay", async () => {
+    const terminal = createAgentTerminal("claude");
+
+    terminal.submit(`${shot}`, "tok-1", undefined, undefined, [shot]);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(writes()).toEqual([paste(shot)]);
+
+    (
+      terminal as unknown as { terminalInfo: { detectedAgentId: string | undefined } }
+    ).terminalInfo.detectedAgentId = undefined;
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(writes()).toEqual([paste(shot)]);
+    expect(terminal.getSubmission("tok-1")?.phase).toBe("cancelled");
   });
 
   it("never submits the text fallback once the agent exits during the stat", async () => {

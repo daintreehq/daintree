@@ -1,15 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { activate } from "../index.js";
 import { __resetKeyedMutexForTests } from "../../../../../electron/utils/keyedMutex.js";
+import { readBoundedFromHandle } from "../../../../../electron/utils/boundedRead.js";
 import {
   CHANNELS,
+  MAX_EDITABLE_BYTES,
   PUSH_CHANNELS,
   type DocumentIdentity,
   type DocumentReadResult,
+  type DocumentRevalidateResult,
   type DocumentSaveAsResult,
   type DocumentSaveResult,
   type DraftPutResult,
@@ -23,8 +26,10 @@ import type {
 /**
  * A host stand-in over a real temp directory. `fs.writeFile` reproduces the
  * host's checked-write contract (revision compare, create-new, missing
- * target) closely enough to drive the plugin's save paths; the host's own
- * tests prove the real implementation.
+ * target) closely enough to drive the plugin's save paths, and `fs.readFiles`
+ * stops at `maxBytesPerFile` through the host's own bounded read; the host's
+ * own tests prove the real implementation. `largestRead` is the most bytes any
+ * read handed the plugin, which bounds what it could have hashed or returned.
  */
 type Handler = (ctx: PluginIpcContext, args: unknown) => unknown;
 
@@ -39,6 +44,7 @@ interface FakeHost {
   dispatched: Array<{ actionId: string; args: unknown }>;
   toasts: Array<{ message: string }>;
   activeProjectId: string;
+  largestRead: number;
 }
 
 const sha = (bytes: Uint8Array | string) =>
@@ -64,13 +70,60 @@ function makeHost(): FakeHost {
     dispatched: [],
     toasts: [],
     activeProjectId: "p1",
+    largestRead: 0,
+  };
+  const recordRead = (length: number) => {
+    fake.largestRead = Math.max(fake.largestRead, length);
   };
   fake.host = {
     pluginId: "daintree.markdown-editor",
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     fs: {
       readFile: (filePath: string) => fs.readFile(filePath, "utf-8"),
-      readFileBytes: async (filePath: string) => new Uint8Array(await fs.readFile(filePath)),
+      readFileBytes: async (filePath: string) => {
+        const bytes = new Uint8Array(await fs.readFile(filePath));
+        recordRead(bytes.length);
+        return bytes;
+      },
+      readFiles: async (
+        paths: readonly string[],
+        options?: { encoding?: "utf-8" | "bytes"; maxBytesPerFile?: number }
+      ) =>
+        Promise.all(
+          paths.map(async (filePath) => {
+            const fail = (code: string) => ({
+              path: filePath,
+              ok: false as const,
+              error: { code, message: code },
+            });
+            let handle: FileHandle;
+            try {
+              handle = await fs.open(filePath, "r");
+            } catch (error) {
+              const code = (error as NodeJS.ErrnoException).code;
+              return fail(code === "ENOENT" ? "NOT_FOUND" : "READ_FAILED");
+            }
+            try {
+              const opened = await handle.stat();
+              if (!opened.isFile()) return fail("NOT_A_FILE");
+              const bytes = await readBoundedFromHandle(
+                handle,
+                opened.size,
+                options?.maxBytesPerFile ?? Number.MAX_SAFE_INTEGER
+              );
+              if (bytes === null) return fail("TOO_LARGE");
+              recordRead(bytes.length);
+              return {
+                path: filePath,
+                ok: true as const,
+                content:
+                  options?.encoding === "bytes" ? new Uint8Array(bytes) : bytes.toString("utf-8"),
+              };
+            } finally {
+              await handle.close();
+            }
+          })
+        ),
       writeFile: async (
         filePath: string,
         contents: string,
@@ -509,7 +562,7 @@ describe("markdown-editor main (#12323)", () => {
       await call(CHANNELS.read, { identity, panelId: "a" });
       // Waited on the re-hash's own read rather than a clock, which a loaded
       // machine can outrun: it has to land before the file moves.
-      const reads = vi.spyOn(fake.host.fs, "readFileBytes");
+      const reads = vi.spyOn(fake.host.fs, "readFiles");
       fake.wake?.();
       await vi.waitFor(() => expect(reads).toHaveBeenCalledTimes(1));
       await reads.mock.results[0]!.value;
@@ -518,6 +571,162 @@ describe("markdown-editor main (#12323)", () => {
       await fs.writeFile(identity.filePath, "# Plan changed\n");
       fake.wake?.();
       await vi.waitFor(() => expect(fake.pushes).toHaveLength(1));
+    });
+  });
+
+  describe("a document whose disk file grows past the ceiling (#15608)", () => {
+    // One byte over, so a weaker cap than the ceiling would read it whole and
+    // show up in `largestRead` instead of being refused on its size alone.
+    const oversized = () => Buffer.alloc(MAX_EDITABLE_BYTES + 1, 0x61);
+    let uncapped: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      uncapped = vi.spyOn(fake.host.fs, "readFileBytes");
+    });
+
+    /** Nothing the plugin held, hashed or returned can be larger than what it was handed. */
+    function expectBounded() {
+      expect(uncapped).not.toHaveBeenCalled();
+      expect(fake.largestRead).toBeLessThanOrEqual(MAX_EDITABLE_BYTES);
+    }
+
+    async function openThenGrow() {
+      await fs.writeFile(identity.filePath, "# Plan\n");
+      const read = await call<DocumentReadResult>(CHANNELS.read, { identity, panelId: "a" });
+      if (read.status !== "ok") throw new Error(read.status);
+      await fs.writeFile(identity.filePath, oversized());
+      return read;
+    }
+
+    async function settleWake() {
+      const reads = vi.spyOn(fake.host.fs, "readFiles");
+      reads.mockClear();
+      fake.wake?.();
+      await vi.waitFor(() => expect(reads).toHaveBeenCalledTimes(1));
+      await reads.mock.results[0]!.value;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    it("a file of exactly the ceiling still opens", async () => {
+      await fs.writeFile(identity.filePath, Buffer.alloc(MAX_EDITABLE_BYTES, 0x61));
+      expect(await call(CHANNELS.read, { identity, panelId: "a" })).toMatchObject({
+        status: "ok",
+        size: MAX_EDITABLE_BYTES,
+      });
+      expectBounded();
+    });
+
+    it("a read refuses it as too large without reading it whole, and keeps watching it", async () => {
+      await fs.writeFile(identity.filePath, oversized());
+      expect(await call(CHANNELS.read, { identity, panelId: "a" })).toEqual({
+        status: "refused",
+        reason: "TOO_LARGE",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(fake.watchers).toHaveLength(1);
+      expectBounded();
+      // The refusal is what this side observed, so a wake has nothing new to say.
+      await settleWake();
+      expect(fake.pushes).toEqual([]);
+    });
+
+    it("a release that lands while an oversized read is in flight leaves no watch behind", async () => {
+      await fs.writeFile(identity.filePath, oversized());
+      const reading = call(CHANNELS.read, { identity, panelId: "a" });
+      await call(CHANNELS.release, { identity, panelId: "a" });
+      expect(await reading).toEqual({ status: "refused", reason: "TOO_LARGE" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(fake.watchers.filter((w) => !w.disposed)).toHaveLength(0);
+    });
+
+    it("revalidate reports it as too large without reading or hashing it, and its revision once it shrinks", async () => {
+      await openThenGrow();
+      expect(await call<DocumentRevalidateResult>(CHANNELS.revalidate, { identity })).toEqual({
+        status: "too-large",
+      });
+      expectBounded();
+      await fs.writeFile(identity.filePath, "# Smaller\n");
+      expect(await call<DocumentRevalidateResult>(CHANNELS.revalidate, { identity })).toEqual({
+        status: "ok",
+        revision: sha("# Smaller\n"),
+      });
+    });
+
+    it("a wake announces it without reading it whole, stays quiet while it stays oversized, and announces the shrink", async () => {
+      await openThenGrow();
+      await settleWake();
+      expect(fake.pushes).toHaveLength(1);
+      // The view answers the push with a revalidate, which records what it saw.
+      await call(CHANNELS.revalidate, { identity });
+      await fs.appendFile(identity.filePath, "more");
+      await settleWake();
+      expect(fake.pushes).toHaveLength(1);
+      expectBounded();
+      await fs.writeFile(identity.filePath, "# Smaller\n");
+      await settleWake();
+      expect(fake.pushes).toHaveLength(2);
+    });
+
+    it("an unedited save is held as too large", async () => {
+      const read = await openThenGrow();
+      const result = await call<DocumentSaveResult>(CHANNELS.save, {
+        identity,
+        text: read.text,
+        expectedRevision: read.revision,
+        unchanged: true,
+        hasBom: read.hasBom,
+        eol: read.eol,
+      });
+      expect(result).toEqual({ status: "too-large" });
+      expectBounded();
+      await settleWake();
+      expect(fake.pushes).toEqual([]);
+    });
+
+    it("a stale edited save is held as too large before the host's revision compare, and writes nothing", async () => {
+      const read = await openThenGrow();
+      const writes = vi.spyOn(fake.host.fs, "writeFile");
+      const result = await call<DocumentSaveResult>(CHANNELS.save, {
+        identity,
+        text: "# Plan\n\nmine\n",
+        expectedRevision: read.revision,
+        unchanged: false,
+        hasBom: false,
+        eol: "\n",
+      });
+      expect(result).toEqual({ status: "too-large" });
+      expect(writes).not.toHaveBeenCalled();
+      expectBounded();
+      expect((await fs.stat(identity.filePath)).size).toBe(MAX_EDITABLE_BYTES + 1);
+    });
+
+    it("a save that loses the race to a file growing after the check is held as too large", async () => {
+      const read = await openThenGrow();
+      await fs.writeFile(identity.filePath, "# Plan\n");
+      vi.spyOn(fake.host.fs, "writeFile").mockImplementationOnce(async () => {
+        await fs.writeFile(identity.filePath, oversized());
+        throw fsError("REVISION_MISMATCH", "changed");
+      });
+      const result = await call<DocumentSaveResult>(CHANNELS.save, {
+        identity,
+        text: "# Plan\n\nmine\n",
+        expectedRevision: read.revision,
+        unchanged: false,
+        hasBom: false,
+        eol: "\n",
+      });
+      expect(result).toEqual({ status: "too-large" });
+      expectBounded();
+    });
+
+    it("without the host's bounded read every document read fails closed, never uncapped", async () => {
+      await fs.writeFile(identity.filePath, "# Plan\n");
+      delete (fake.host.fs as { readFiles?: unknown }).readFiles;
+      expect(await call(CHANNELS.read, { identity, panelId: "a" })).toEqual({
+        status: "unavailable",
+      });
+      expect(await call(CHANNELS.revalidate, { identity })).toEqual({ status: "unavailable" });
+      expect(uncapped).not.toHaveBeenCalled();
     });
   });
 

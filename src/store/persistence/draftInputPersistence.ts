@@ -38,11 +38,12 @@ function liveSyncedProject(): string | null {
  * Drafts (unsent compose text) live only in `terminalInputStore`. A project
  * switch relays them into outgoing state, but window/view teardown never
  * persisted them, so a half-written prompt was lost when the window closed.
- * This module flushes drafts on view teardown (via `resource.ts`'s
- * `visibilitychange` handler) using the same merge-safe delta contract the
- * layout persistence uses for terminals/tab groups: the writer sends what it
- * changed relative to its last-acknowledged baseline so Main merges concurrent
- * writes from sibling windows of the same project instead of clobbering them.
+ * This module flushes drafts once nobody can see the view (via `resource.ts`,
+ * on main's cached edge or a hidden window) using the same merge-safe delta
+ * contract the layout persistence uses for terminals/tab groups: the writer
+ * sends what it changed relative to its last-acknowledged baseline so Main
+ * merges concurrent writes from sibling windows of the same project instead of
+ * clobbering them.
  *
  * The baseline (`persistedByProject`) is separate from the Zustand store on
  * purpose: a cleared/sent draft is dropped from the live map entirely, so a

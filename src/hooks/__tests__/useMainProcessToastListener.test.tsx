@@ -39,6 +39,7 @@ type ToastCallback = (payload: {
   rateLimitKey?: string;
   rateLimitLabel?: string;
   priority?: "high" | "low" | "watch";
+  urgent?: boolean;
   action?: { label: string; ipcChannel: string; data?: string };
   hostSwitchFailure?: { hostId: string; projectId: string; code: string | null };
   pluginActions?: Array<{ label: string; actionId: string; args?: Record<string, unknown> }>;
@@ -240,6 +241,29 @@ describe("useMainProcessToastListener", () => {
     });
 
     expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ priority: "low" }));
+  });
+
+  it("threads main's urgent flag so a time-critical notice outruns quiet hours", () => {
+    renderHook(() => useMainProcessToastListener());
+    act(() => {
+      capturedCallback!({ type: "warning", message: "Database damage", urgent: true });
+    });
+
+    expect(notifyMock.mock.calls[0]![0].urgent).toBe(true);
+  });
+
+  it("keeps a plugin toast non-urgent even if the payload asks", () => {
+    renderHook(() => useMainProcessToastListener());
+    act(() => {
+      capturedCallback!({
+        type: "info",
+        message: "Approve",
+        urgent: true,
+        pluginActions: [{ label: "Open", actionId: "acme.openRun" }],
+      });
+    });
+
+    expect(notifyMock.mock.calls[0]![0].urgent).toBe(false);
   });
 
   it("threads the overflow label beside the rate-limit key (#13760)", () => {

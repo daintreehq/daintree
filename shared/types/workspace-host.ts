@@ -978,6 +978,8 @@ export type WorkspaceHostEvent =
        * would be indistinguishable from "this app did not create it".
        */
       setupState?: WorktreeSetupState;
+      /** The commit a `fetchBase` create started the branch at; absent otherwise. */
+      startCommit?: string;
       error?: string;
     }
   | { type: "delete-worktree-result"; requestId: string; success: boolean; error?: string }

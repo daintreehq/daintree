@@ -190,6 +190,19 @@ function launcherItemIcon(item: DockLaunchItem): ToolbarButtonMetadata["icon"] {
 }
 
 /**
+ * Recipe names the catalog holds more than once — a team recipe and a personal
+ * one of the same name, say. A pinned recipe is told apart by its name alone,
+ * so those are the ones that need their scope beside it.
+ */
+export function collidingRecipeNames(catalog: LauncherToolbarCatalog): ReadonlySet<string> {
+  const counts = new Map<string, number>();
+  for (const { item } of catalog.values()) {
+    if (item.category === "recipe") counts.set(item.name, (counts.get(item.name) ?? 0) + 1);
+  }
+  return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
+}
+
+/**
  * Display metadata for the launcher items currently on the toolbar, derived
  * from the live launcher row rather than a table.
  *
@@ -202,10 +215,19 @@ export function buildLauncherToolbarMeta(
   catalog: LauncherToolbarCatalog
 ): Record<string, ToolbarButtonMetadata> {
   const meta: Record<string, ToolbarButtonMetadata> = {};
+  const colliding = collidingRecipeNames(catalog);
   for (const entry of catalog.values()) {
     const { item } = entry;
     meta[entry.buttonId] = {
-      label: item.name,
+      label:
+        item.category === "recipe" && colliding.has(item.name)
+          ? `${item.name} · ${item.scopeLabel}`
+          : // Everything on the toolbar opens in the grid but a project-scoped
+            // panel kind, which always opens in the dock; its pin says so, and
+            // overflowing it must not drop that.
+            item.category === "panel" && item.location === "dock"
+            ? `${item.name} · Dock`
+            : item.name,
       icon: launcherItemIcon(item),
       description: launcherItemDescription(item),
     };

@@ -9,6 +9,7 @@ import {
 import { TerminalRefreshTier } from "@/types";
 import { panelKindHasPty, panelKindIsDockable } from "@shared/config/panelKindRegistry";
 import { isDevPreviewPanel } from "@shared/types/panel";
+import { normalizeDisplayEmoji } from "@shared/utils/displayIdentity";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import {
   deferPersistToBatchEnd,
@@ -36,10 +37,11 @@ import type { HydrationBatchToken } from "./types";
 import { removeFromWorktreeIndex, transferBetweenWorktreeIndex } from "./worktreeIndex";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
-import { countPanelsTowardLimit } from "./panelCount";
+import { countPanelLimitUsage } from "./panelCount";
 import { usePanelLimitStore } from "@/store/panelLimitStore";
 import { notify } from "@/lib/notify";
 import { cancelDriveLeaseHold, clearPanelDriveLeaseMark } from "@/store/driveLeaseWaitStore";
+import { forgetApprovedPresetLaunch } from "@/services/plugin/pluginPresetLaunchApprovals";
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
@@ -118,8 +120,11 @@ export const createCorePanelActions = (
   | "flushSpawnBatch"
   | "removePanel"
   | "updateTitle"
+  | "setDisplayEmoji"
   | "updateLastObservedTitle"
   | "updateAgentState"
+  | "noteAgentObservation"
+  | "setAgentIncarnation"
   | "updateActivity"
   | "updateLastCommand"
   | "updateVisibility"
@@ -155,6 +160,7 @@ export const createCorePanelActions = (
 
   removePanel: (id, options) => {
     clearTrashExpiryTimer(id);
+    forgetApprovedPresetLaunch(id);
     cancelReconnectErrorDebounce(id);
     const state = get();
     const removedIndex = state.panelIds.indexOf(id);
@@ -243,6 +249,7 @@ export const createCorePanelActions = (
     for (const id of idSet) {
       clearTrashExpiryTimer(id);
       cancelReconnectErrorDebounce(id);
+      forgetApprovedPresetLaunch(id);
       const terminal = state.panelsById[id];
       if (!terminal) continue;
 
@@ -353,6 +360,18 @@ export const createCorePanelActions = (
     }
   },
 
+  setDisplayEmoji: (id, emoji) => {
+    set((state) => {
+      const panel = state.panelsById[id];
+      if (!panel) return state;
+      const next = normalizeDisplayEmoji(emoji);
+      if (panel.displayEmoji === next) return state;
+      const newById = { ...state.panelsById, [id]: { ...panel, displayEmoji: next } };
+      saveNormalized(newById, state.panelIds);
+      return { panelsById: newById };
+    });
+  },
+
   updateLastObservedTitle: (id, title) => {
     set((state) => {
       const terminal = state.panelsById[id];
@@ -401,11 +420,16 @@ export const createCorePanelActions = (
       // Only the host's own reports carry its timestamp: the input controller's
       // `directing`, its optimistic `working` and the exit fallback pass none,
       // and none of those is something the host saw (#14017). A report of the
-      // state already observed keeps the time that state began.
+      // state already observed keeps the time that state began, unless it
+      // re-read a waiting agent's reason (#16093): the host then dates the wait
+      // from that read, and a resync record from before it must not undo it.
+      const priorObservation = terminal.lastAgentObservation;
       const observation =
         lastStateChange !== undefined &&
         agentState !== "directing" &&
-        terminal.lastAgentObservation?.agentState !== agentState
+        (priorObservation?.agentState !== agentState ||
+          (nextWaitingReason !== terminal.waitingReason &&
+            lastStateChange > (priorObservation.at ?? 0)))
           ? { agentState, at: lastStateChange }
           : undefined;
       // Written as it is observed, since nothing else saves while an agent works
@@ -463,6 +487,32 @@ export const createCorePanelActions = (
       };
       persist(next.panelsById);
       return next;
+    });
+  },
+
+  noteAgentObservation: (id, agentState, at) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal || !isPtyPanel(terminal) || agentState === "directing") return state;
+      if (terminal.lastAgentObservation?.agentState === agentState) return state;
+      const panelsById = {
+        ...state.panelsById,
+        [id]: { ...terminal, lastAgentObservation: { agentState, at } },
+      };
+      if (isHydrationBatchActive()) deferPersistToBatchEnd();
+      else saveNormalized(panelsById, state.panelIds);
+      return { panelsById };
+    });
+  },
+
+  setAgentIncarnation: (id, agentIncarnation) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal || !isPtyPanel(terminal)) return state;
+      if (terminal.agentIncarnation === agentIncarnation) return state;
+      return {
+        panelsById: { ...state.panelsById, [id]: { ...terminal, agentIncarnation } },
+      };
     });
   },
 
@@ -739,8 +789,9 @@ export const createCorePanelActions = (
       // The dialog panel was never counted, so promoting it admits a genuinely
       // new panel — the same hard ceiling `addPanel` enforces applies. Only the
       // hard tier blocks: the confirm band is reserved for batch spawns
-      // (#10547), and a single promotion is one click to undo.
-      if (hardLimit > 0 && countPanelsTowardLimit(state.panelsById, state.panelIds) >= hardLimit) {
+      // (#10547), and a single promotion is one click to undo. Judged on the
+      // live count, so it can't take a slot a spawn in flight was granted (#15607).
+      if (hardLimit > 0 && countPanelLimitUsage(state) >= hardLimit) {
         atLimit = true;
         return state;
       }

@@ -33,6 +33,24 @@ const FS_OP_TIMEOUT_MS = 5_000;
 // FNV-1a 32-bit offset basis and initial state for the status digest.
 const FNV_OFFSET_BASIS = 0x811c9dc5;
 
+interface PassClaim {
+  readonly lifecycleSignal: AbortSignal;
+}
+
+/**
+ * `skipped`: no pass started, because another held the single-flight slot or
+ * the monitor isn't running. A poll that got `skipped` checked nothing.
+ */
+export type GitStatusPassOutcome = "ran" | "skipped";
+
+interface HeadState {
+  branch: string | undefined;
+  isDetached: boolean;
+  head: string | undefined;
+}
+
+const NO_GIT_DIR_HEAD: HeadState = { branch: undefined, isDetached: false, head: undefined };
+
 function isValidActivityTimestamp(value: unknown, now: number): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= now;
 }
@@ -124,6 +142,13 @@ export class GitStatusPass {
   private baseMatchesUpstreamValue: boolean | undefined;
   private baseCompareRefValue: string | null | undefined;
   private activityTimestamp: number | null = null;
+  // The pass holding the single-flight slot. Losing it (stop, watchdog) ends
+  // that pass's right to write, whenever it settles.
+  private claim: PassClaim | null = null;
+  // The card is showing a degraded mood (a failed or expired pass) over its
+  // last snapshot. Until a full read publishes, every pass is forced, so an
+  // unchanged tree still replaces the degraded mood and summary.
+  private degraded = false;
 
   constructor(
     private readonly host: GitStatusPassHost,
@@ -194,25 +219,57 @@ export class GitStatusPass {
     return this.activityTimestamp;
   }
 
-  async run(forceRefresh: boolean = false): Promise<void> {
-    if (this.host.isUpdating) {
-      return;
+  get isDegraded(): boolean {
+    return this.degraded;
+  }
+
+  /** The monitor put a degraded mood on the card; only a full read clears it. */
+  markDegraded(): void {
+    this.degraded = true;
+  }
+
+  /**
+   * Give up on the in-flight pass: nothing it finds from here on lands, and
+   * the slot is free for the next one. The stat baseline goes too, since the
+   * pass that would have refreshed it never finished.
+   */
+  abandon(): void {
+    if (this.claim) this.invalidate(this.claim);
+  }
+
+  /**
+   * `abandonSignal` lets a caller that stops waiting (the poll watchdog) give
+   * up on exactly the pass this call started, never a newer one.
+   */
+  async run(
+    forceRefresh: boolean = false,
+    abandonSignal?: AbortSignal
+  ): Promise<GitStatusPassOutcome> {
+    if (this.host.isUpdating || !this.host.isRunning || this.host.abortSignal.aborted) {
+      return "skipped";
     }
+    await this.runClaimed(forceRefresh || this.degraded, abandonSignal);
+    return "ran";
+  }
+
+  private async runClaimed(forceRefresh: boolean, abandonSignal?: AbortSignal): Promise<void> {
     // Claim the single-flight slot before the first await. Everything below
     // suspends (git-dir resolution, the stat pre-check), and forced refreshes
     // bypass both the worktree-changes in-flight cache and the pre-check — so
     // without the early claim two rapid forced refreshes could pass the guard
     // together and run duplicate status passes with out-of-order commits.
+    // The lifecycle signal is pinned with it: a stop-then-start swaps the
+    // monitor's controller mid-pass, and the old lifecycle must not publish.
+    const claim: PassClaim = { lifecycleSignal: this.host.abortSignal };
+    this.claim = claim;
     this.host.isUpdating = true;
+    abandonSignal?.addEventListener("abort", () => this.invalidate(claim), { once: true });
 
     // Definite-assignment: assigned as the first statement of the try below;
     // the status pass (the only later reader) is unreachable unless that try
     // completed normally, so every read is dominated by the assignment.
     let gitDir!: string | null;
     let reachedStatusPass = false;
-    // Pinned before the first await so a stop (or stop-then-start) during the
-    // sentinel read below is seen, instead of the old lifecycle publishing.
-    const lifecycleSignal = this.host.abortSignal;
     try {
       // Skip the git status invocation while a rebase/merge/cherry-pick/revert
       // is in progress — running it would compete with the user's git client
@@ -221,6 +278,9 @@ export class GitStatusPass {
       // Polling continues uninterrupted, so the next scheduled poll after
       // sentinels clear also picks up the change.
       gitDir = await getGitDir(this.host.path, { cache: true, logErrors: false });
+      if (!this.isLive(claim)) {
+        return;
+      }
 
       // Detect blocking git operation state from sentinel files so the renderer
       // can surface it even when git status is skipped.
@@ -233,7 +293,7 @@ export class GitStatusPass {
           FS_OP_TIMEOUT_MS,
           `repo operation state: ${gitDir}`
         ).catch(() => undefined);
-        if (lifecycleSignal.aborted) {
+        if (!this.isLive(claim)) {
           return;
         }
         if (opState !== this.host.repoState) {
@@ -285,19 +345,24 @@ export class GitStatusPass {
         !forceRefresh &&
         gitDir &&
         this.host.hasInitialStatus &&
-        this.host.worktreeChanges !== null &&
-        (await this.statPrecheck.shouldSkip(
+        this.host.worktreeChanges !== null
+      ) {
+        const skip = await this.statPrecheck.shouldSkip(
           gitDir,
           this.watcherController.currentMode === "recursive"
-        ))
-      ) {
-        // Treat the skip as a no-change observation so the idle backoff
-        // ramps up the next interval. lastGitStatusCompletedAt bumps too,
-        // otherwise the heartbeat-gap check would false-positive on a
-        // long quiet streak that only ran stat-skips.
-        this.pollingStrategy.recordNoChange();
-        this.host.lastGitStatusCompletedAt = Date.now();
-        return;
+        );
+        if (!this.isLive(claim)) {
+          return;
+        }
+        if (skip) {
+          // Treat the skip as a no-change observation so the idle backoff
+          // ramps up the next interval. lastGitStatusCompletedAt bumps too,
+          // otherwise the heartbeat-gap check would false-positive on a
+          // long quiet streak that only ran stat-skips.
+          this.pollingStrategy.recordNoChange();
+          this.host.lastGitStatusCompletedAt = Date.now();
+          return;
+        }
       }
 
       reachedStatusPass = true;
@@ -307,9 +372,11 @@ export class GitStatusPass {
       // was held. The status pass below keeps the claim; its own finally is
       // the release point — and stays the LAST code to touch the flag, so a
       // flush-triggered synchronous re-entry can't have its claim clobbered.
+      // A pass that lost its claim leaves both to whoever holds it now.
       if (!reachedStatusPass) {
-        this.host.isUpdating = false;
-        this.watcherController.flushPendingIfReady(true);
+        const live = this.isLive(claim);
+        this.release(claim);
+        if (live) this.watcherController.flushPendingIfReady(true);
       }
     }
 
@@ -319,8 +386,7 @@ export class GitStatusPass {
     // a flaky git that throws here can't get its old baseline re-stamped and
     // silently suppress the next retry.
     let checkSucceeded = false;
-    // Pinned: a stop-then-start swaps the monitor's controller mid-pass.
-    const signal = this.host.abortSignal;
+    const signal = claim.lifecycleSignal;
 
     try {
       if (forceRefresh) {
@@ -337,14 +403,24 @@ export class GitStatusPass {
         cacheTTL,
         wsl: this.host.wslInvocation,
         signal,
+        abandonSignal,
       });
 
-      if (!this.host.isRunning) {
+      if (!this.isLive(claim)) {
         return;
       }
 
       // Detect branch changes by reading HEAD directly
-      const currentBranch = await this.readCurrentBranch();
+      const headState = await this.readHead(signal);
+      if (!this.isLive(claim)) {
+        return;
+      }
+      // An unreadable or malformed HEAD keeps the last observed state.
+      if (headState) {
+        this.host.isDetached = headState.isDetached;
+        this.host.head = headState.head;
+      }
+      const currentBranch = headState?.branch;
       const branchChanged = currentBranch !== undefined && currentBranch !== this.host.branch;
       if (branchChanged) {
         this.host.branch = currentBranch;
@@ -386,6 +462,9 @@ export class GitStatusPass {
         FS_OP_TIMEOUT_MS,
         `note read: ${this.host.path}`
       ).catch(() => undefined);
+      if (!this.isLive(claim)) {
+        return;
+      }
 
       const hasUpstream = !!newChanges.tracking;
       const nextAheadCount = hasUpstream ? (newChanges.ahead ?? 0) : undefined;
@@ -413,6 +492,9 @@ export class GitStatusPass {
       const nextPlanFilePath = detectedPlanFile;
 
       const baseDivergenceResult = await baseDivergencePromise;
+      if (!this.isLive(claim)) {
+        return;
+      }
       const nextBaseBranchName = baseDivergenceResult?.baseBranchName ?? undefined;
       const nextBaseAheadCount = baseDivergenceResult?.aheadCount ?? undefined;
       const nextBaseBehindCount = baseDivergenceResult?.behindCount ?? undefined;
@@ -480,22 +562,29 @@ export class GitStatusPass {
 
       // A placeholder snapshot (startWithoutGitStatus) seeds every comparison
       // above, so "unchanged" can't be trusted until a status has published.
-      if (!anythingChanged && !forceRefresh && this.host.worktreeChanges !== null) {
+      // Nor can it while the card shows a degraded mood the hash never saw.
+      if (
+        !anythingChanged &&
+        !forceRefresh &&
+        !this.degraded &&
+        this.host.worktreeChanges !== null
+      ) {
         checkSucceeded = true;
         return;
       }
 
       const isInitialLoad = !this.host.hasInitialStatus;
       const isNowClean = newChanges.changedFileCount === 0;
-      this.activityTimestamp = nextActivityTimestamp;
 
-      if (
+      // Recovery recomputes the summary as a first load would: a degraded
+      // card's summary may be the watchdog's warning, not an observation.
+      const nextSummary =
         isNowClean ||
         isInitialLoad ||
+        this.degraded ||
         (this.host.worktreeChanges && this.host.worktreeChanges.changedFileCount === 0)
-      ) {
-        this.host.summary = await this.fetchLastCommitMessage(newChanges);
-      }
+          ? await this.fetchLastCommitMessage(newChanges, signal)
+          : undefined;
 
       let nextMood = this.host.mood;
       try {
@@ -513,7 +602,14 @@ export class GitStatusPass {
       } catch {
         nextMood = "error";
       }
+      if (!this.isLive(claim)) {
+        return;
+      }
 
+      this.activityTimestamp = nextActivityTimestamp;
+      if (nextSummary !== undefined) {
+        this.host.summary = nextSummary;
+      }
       this.previousStateHash = currentHash;
       this.host.worktreeChanges = newChanges;
       this.worktreeModifiedCount = newChanges.changedFileCount;
@@ -532,13 +628,15 @@ export class GitStatusPass {
       this.baseMatchesUpstreamValue = nextBaseMatchesUpstream;
       this.baseCompareRefValue = nextBaseCompareRef;
       this.host.hasInitialStatus = true;
+      this.degraded = false;
 
       this.host.emitUpdate();
       checkSucceeded = true;
     } catch (error) {
-      // The monitor stopped mid-pass and its signal killed the git child. A
-      // cancelled read says nothing about the worktree, so no error mood.
-      if (signal.aborted) {
+      // The monitor stopped mid-pass (its signal killed the git child) or the
+      // watchdog gave up on it. Either way the failure says nothing about the
+      // worktree, so no error mood.
+      if (!this.isLive(claim)) {
         return;
       }
 
@@ -556,57 +654,71 @@ export class GitStatusPass {
       }
 
       this.host.mood = "error";
+      this.degraded = true;
       this.host.emitUpdate();
       throw error;
     } finally {
-      this.host.isUpdating = false;
-      this.host.lastGitStatusCompletedAt = Date.now();
       // Rebuild the stat baseline only when a real git check finished
       // cleanly. On failure (anything that didn't set checkSucceeded — git
       // throw, WorktreeRemovedError, index.lock retry path) we drop the
       // baseline so the next non-forced poll falls through to a full check
       // rather than skipping against a snapshot that predates the failure.
-      if (checkSucceeded && gitDir) {
-        await this.statPrecheck.recordFullPass(gitDir);
-      } else {
-        this.statPrecheck.dropBaseline();
+      // The claim is held until the baseline lands, so a newer pass can't
+      // start against the half-built one.
+      if (this.isLive(claim)) {
+        this.host.lastGitStatusCompletedAt = Date.now();
+        if (checkSucceeded && gitDir) {
+          await this.statPrecheck.recordFullPass(gitDir, () => this.isLive(claim));
+        } else {
+          this.statPrecheck.dropBaseline();
+        }
       }
-      this.watcherController.flushPendingIfReady(true);
+      const live = this.isLive(claim);
+      this.release(claim);
+      if (live) this.watcherController.flushPendingIfReady(true);
     }
   }
 
-  private async readCurrentBranch(): Promise<string | undefined> {
+  private isLive(claim: PassClaim): boolean {
+    return this.claim === claim && this.host.isRunning && !claim.lifecycleSignal.aborted;
+  }
+
+  private release(claim: PassClaim): void {
+    if (this.claim !== claim) return;
+    this.claim = null;
+    this.host.isUpdating = false;
+  }
+
+  private invalidate(claim: PassClaim): void {
+    if (this.claim !== claim) return;
+    this.release(claim);
+    this.statPrecheck.dropBaseline();
+  }
+
+  // Reads only: the caller applies the result once it knows the pass is live.
+  private async readHead(lifecycleSignal: AbortSignal): Promise<HeadState | undefined> {
     const gitDir = await getGitDir(this.host.path, { cache: true, logErrors: false });
     if (!gitDir) {
-      this.host.isDetached = false;
-      this.host.head = undefined;
-      return undefined;
+      return NO_GIT_DIR_HEAD;
     }
 
-    const { signal, dispose } = timeoutSignal(FS_OP_TIMEOUT_MS, this.host.abortSignal);
+    const { signal, dispose } = timeoutSignal(FS_OP_TIMEOUT_MS, lifecycleSignal);
     try {
       const headContent = await readFile(pathJoin(gitDir, "HEAD"), { encoding: "utf-8", signal });
       const trimmed = headContent.trim();
       const prefix = "ref: refs/heads/";
       if (trimmed.startsWith(prefix)) {
-        this.host.isDetached = false;
-        this.host.head = undefined;
-        return trimmed.slice(prefix.length);
+        return { branch: trimmed.slice(prefix.length), isDetached: false, head: undefined };
       }
       // Detached HEAD — the file contains a commit SHA
-      if (/^[0-9a-f]{40}$/.test(trimmed)) {
-        this.host.isDetached = true;
-        this.host.head = trimmed;
-      } else {
-        this.host.isDetached = false;
-        this.host.head = undefined;
+      // SHA-1 repos hold 40 hex chars, SHA-256 repos 64.
+      if (/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(trimmed)) {
+        return { branch: undefined, isDetached: true, head: trimmed };
       }
       return undefined;
     } catch {
-      // Includes a timeout/abort (AbortError) on a stalled filesystem — treat
-      // as "branch unchanged" rather than letting the read hang the poll.
-      this.host.isDetached = false;
-      this.host.head = undefined;
+      // Includes a timeout/abort (AbortError) on a stalled filesystem — keep the
+      // last observed state rather than inventing an attached one.
       return undefined;
     } finally {
       dispose();
@@ -639,6 +751,11 @@ export class GitStatusPass {
           `${c.path}:${c.status}:${c.insertions ?? 0}:${c.deletions ?? 0}:${String(c.mtimeMs ?? c.mtime ?? "")}`
       )
       .sort();
+    // Files past the untracked enrichment cap have no row above, so a count
+    // that grows from 201 to 205 would otherwise publish nothing.
+    if (changes.omittedUntrackedCount) {
+      fileState.push(`omitted-untracked:${String(changes.omittedUntrackedCount)}`);
+    }
     if (changes.changedFileCount > 0 && changes.latestFileMtime !== undefined) {
       fileState.push(`latest-file-mtime:${String(changes.latestFileMtime)}`);
     }
@@ -661,7 +778,10 @@ export class GitStatusPass {
     return hash >>> 0;
   }
 
-  private async fetchLastCommitMessage(changes: WorktreeChanges): Promise<string> {
+  private async fetchLastCommitMessage(
+    changes: WorktreeChanges,
+    signal: AbortSignal
+  ): Promise<string> {
     if (changes.lastCommitMessage) {
       const firstLine = changes.lastCommitMessage.split("\n")[0].trim();
       return `✅ ${firstLine}`;
@@ -670,8 +790,8 @@ export class GitStatusPass {
     try {
       const wsl = this.host.wslInvocation;
       const git = wsl
-        ? await createWslHardenedGit(wsl, this.host.abortSignal)
-        : await createHardenedGit(this.host.path, this.host.abortSignal);
+        ? await createWslHardenedGit(wsl, signal)
+        : await createHardenedGit(this.host.path, signal);
       const log = await git.log({ maxCount: 1 });
       const lastCommitMsg = log.latest?.message;
 

@@ -74,6 +74,8 @@ function getWorktreeCreateRequestKey(
     // caller asked to be refused, and differing submodule policies would become
     // first-request-wins.
     collisionPolicy: payload.options.collisionPolicy ?? "suffix",
+    // A fresh-base create must not be answered by one that skipped the fetch.
+    fetchBase: payload.options.fetchBase ?? false,
     submoduleInit: payload.options.submoduleInit ?? "inherit",
     // These change what gets provisioned and what the worktree's card shows, so
     // two requests differing only here are still different requests.
@@ -96,7 +98,7 @@ function remoteViewEndpoint(ctx: IpcContext): ClientEndpoint | null {
 
 /**
  * Retry for a view on a remote Shell: reload the endpoint's project here (the
- * same host activation its switch ran, so the view holds the project
+ * same host activation its residency ran, so the view holds the project
  * resident), connect the endpoint to the reloaded workspace host, then ask the
  * view's Shell to post it a fresh relayed port and wait for the renderer's
  * receipt, as the local path does. Any shortfall throws so the banner stays.

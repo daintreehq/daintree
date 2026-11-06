@@ -20,7 +20,12 @@ import {
   slicePausePositions,
 } from "@shared/utils/voicePausePositions";
 import { panelHasComposer } from "@/components/Terminal/terminalComposer";
-import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
+import { shouldShowHybridInputBar } from "@/components/Terminal/terminalFocus";
+import { isBuiltInAgentId } from "@shared/config/agentIds";
+import { isPtyPanel } from "@shared/types/panel";
+import { wasAssistantUsedAfter } from "@/lib/composerSurface";
+import { useFocusStore } from "@/store/focusStore";
+import { useHelpPanelStore, selectActiveSlot, selectSlotTerminalIds } from "@/store/helpPanelStore";
 import { isAssistantFocused } from "@/store/macroFocusStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import {
@@ -39,6 +44,7 @@ import {
   setPendingComposerSelection,
 } from "@/lib/composerCaret";
 import { makeDraftKey } from "@/lib/draftKey";
+import { isDragCancelEscape } from "@/lib/dragCancelEscape";
 import { correctionRequest } from "@/services/voiceCorrectionRequest";
 import {
   planVoiceBreak,
@@ -56,6 +62,11 @@ import {
   type VoiceScratchRefusal,
 } from "@/store/voiceRecordingStore";
 import { keepRecentDictation, keepRecentDictationCorrection } from "@/services/recentDictations";
+import {
+  getLeaseInputBlock,
+  subscribeTerminalInputGate,
+  type TerminalInputBlock,
+} from "@/services/terminal/inputGate";
 import { joinCompletedSegments } from "@/lib/voiceTranscriptSegments";
 import { startVoiceDetailsPublisher } from "@/services/voiceSessionDetailsPublisher";
 import { setElsewhereLevel } from "@/services/voiceElsewhereLevel";
@@ -95,6 +106,11 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { notify } from "@/lib/notify";
 import type { NotificationAction } from "@/store/notificationStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
+import { useFleetScopeFlagStore } from "@/store/fleetScopeFlagStore";
+import { isProjectHomePresented } from "@/store/storeAccessors";
+import { getClosingIds } from "@/services/terminal/optimisticPanelCloseIds";
+import { buildFleetPanels } from "@/components/Terminal/contentGridFleetPanels";
+import { listVisiblePaneIds, pickRecentVisibleTarget } from "@/services/voiceFallbackTarget";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   OPENING_CHUNK_WINDOW,
@@ -107,6 +123,7 @@ import {
 } from "@/services/voiceStartDiagnostics";
 import {
   recordCorrectionLanded,
+  writeComposerDraftThrough,
   type CorrectionBaseline,
   type LandedCorrection,
 } from "@/services/voiceCorrectionLanding";
@@ -115,8 +132,15 @@ import { CorrectionStreamAligner, type StreamedRewrite } from "@/services/voiceC
 import {
   isHeldBackSession,
   planVoiceDraftSend,
+  sendWaitingStopAndSends,
   type VoiceDraftSend,
 } from "@/services/voiceDraftSend";
+import {
+  logVoiceSendRefused,
+  type VoiceSendAsker,
+  type VoiceSendRefusal,
+  type VoiceStopAndSendAsker,
+} from "@/services/voiceSendDiagnostics";
 import {
   collectCorrectionPassages,
   countPassageFates,
@@ -159,6 +183,8 @@ import { findRewriteComposer, type RewriteSelection } from "@/services/voiceRewr
 import {
   beginDictationReturn,
   focusDictationComposer,
+  overlayHoldsKeyboard,
+  revealAssistantComposer,
   revealDictationComposer,
 } from "@/services/voiceComposerFocus";
 import { captureFocusEpoch, isFocusEpochCurrent } from "@/components/Terminal/paneFocusRequest";
@@ -217,6 +243,8 @@ type StartStepLogger = (step: string, details?: Record<string, unknown>) => void
 /** How a composer's send was asked for: a spoken "send it" holds back a too-short draft. */
 export interface VoiceSendOptions {
   spoken?: boolean;
+  /** What asked, for the line a refused send leaves. Left out, it follows `spoken`. */
+  asker?: VoiceSendAsker;
   /** A spoken "send it" its draft was too short for: nothing is sent, and the composer says so. */
   tooShort?: boolean;
 }
@@ -551,14 +579,43 @@ function draftChanges(
   });
 }
 
+type DrivenElsewhere = Extract<TerminalInputBlock, { kind: "driven-elsewhere" }>;
+
+/**
+ * Another screen's control of the project a draft belongs to, which hands
+ * that draft over to its driver: what is written here is never saved and is
+ * replaced by the driver's own. A draft with no project (a Canopy reply) is
+ * this view's alone.
+ */
+function drivenElsewhereFor(projectId: string | undefined): DrivenElsewhere | null {
+  if (projectId === undefined) return null;
+  const block = getLeaseInputBlock();
+  if (block?.kind !== "driven-elsewhere") return null;
+  return block.projectId === undefined || block.projectId === projectId ? block : null;
+}
+
+/** Who has control, named as the pane's read-only notice names them. */
+function controllerName(block: DrivenElsewhere): string {
+  return block.driverIsHostScreen ? `${block.driverName}'s own screen` : block.driverName;
+}
+
 /** A spoken rewrite of a composer selection, on its way to the model. */
 interface PendingRewrite {
   panelId: string;
+  projectId: string | undefined;
   selection: RewriteSelection;
   /** Landed or dropped; either way it will never touch the draft again. */
   done: boolean;
   settled: Promise<void>;
   settle: () => void;
+}
+
+/** Whether a dictation's draft went to another screen's driver: its words are kept, not written. */
+function isDraftDetached(dictationSessionId: string | null | undefined): boolean {
+  return (
+    !!dictationSessionId &&
+    useVoiceRecordingStore.getState().draftDetachedSessionId === dictationSessionId
+  );
 }
 
 /** The text a session dictated into its target's draft, while the draft still holds it. */
@@ -781,6 +838,10 @@ class VoiceRecordingService {
   // they had already sent is still on its way and has nowhere left to land.
   // Each is let go once main reports it ended, the last thing it sends for it.
   private discardedSessionIds = new Set<string>();
+  // The panel each discarded session was dictating into: Escape clears the
+  // active target at once, and a spoken send still in flight names its panel
+  // from here (#15704).
+  private discardedSessionPanels = new Map<string, string>();
   // Main has nothing left to send for this one, so cancelling it needs no
   // tombstone (and would leave one behind, with no end notice to clear it).
   private lastEndedSessionId: string | null = null;
@@ -942,6 +1003,9 @@ class VoiceRecordingService {
   private cleanupModel: VoiceCorrectionModel = VOICE_CLEANUP_AI_MODEL;
   // Each session's summary until its line is logged, by session id (#14617).
   private timelines = new Map<string, VoiceSessionTimeline>();
+  // Starts that reopened a waiting send before their session, and so their
+  // summary, existed: the dictation key's press arms the target first (#15704).
+  private reopeningStarts = new WeakSet<VoiceRecordingTarget>();
   // The in-flight start's summary, until its capture is promoted.
   private attemptTimeline: VoiceSessionTimeline | null = null;
   // When the dictation shortcut was pressed, for a start in the same dispatch.
@@ -985,10 +1049,11 @@ class VoiceRecordingService {
         if (delta.trim()) this.noteWordsHeard();
         const voiceState = useVoiceRecordingStore.getState();
         const target = voiceState.activeTarget;
-        // An instruction streams into liveText only; it never lands in the draft.
-        if (target && !target.rewrite) {
+        const buffer = target ? voiceState.panelBuffers[target.panelId] : undefined;
+        // An instruction streams into liveText only; it never lands in the draft,
+        // and nor does a dictation whose draft another screen now drives.
+        if (target && !target.rewrite && !isDraftDetached(buffer?.dictationSessionId)) {
           if (delta.trim()) this.timelines.get(sessionId)?.markNextFrame("firstText");
-          const buffer = voiceState.panelBuffers[target.panelId];
           // An empty revision retracts a preview; it never starts an utterance.
           const isFirstDelta = delta !== "" && (!buffer || buffer.liveText === "");
           if (isFirstDelta) {
@@ -1025,7 +1090,18 @@ class VoiceRecordingService {
           heardPauses,
           commandPauses,
         }) => {
-          if (this.discardedSessionIds.has(sessionId)) return;
+          if (this.discardedSessionIds.has(sessionId)) {
+            // Main has already taken "send it" off the words.
+            if (send) {
+              logVoiceSendRefused({
+                asker: "spoken_send",
+                reason: "session_discarded",
+                panelId: this.discardedSessionPanels.get(sessionId) ?? null,
+                sessionId,
+              });
+            }
+            return;
+          }
           logDebug(`${LOG_PREFIX} Received transcription complete`, {
             itemId,
             length: text.length,
@@ -1041,6 +1117,10 @@ class VoiceRecordingService {
           }
           const panelId = voiceState.activeTarget?.panelId;
           const projectId = voiceState.activeTarget?.projectId;
+          if (panelId && isDraftDetached(voiceState.panelBuffers[panelId]?.dictationSessionId)) {
+            this.keepDetachedWords(panelId, sessionId, text, itemId, send);
+            return;
+          }
           let completedText = text;
           let completedHeard = heard?.trim();
           let completedUncertain = uncertain;
@@ -1053,6 +1133,14 @@ class VoiceRecordingService {
             // "Scratch that, send it" only scratches: the draft it leaves is one
             // the user hasn't seen, and a spoken send fires with no key press.
             if (spoken && isScratchCommand(spoken)) {
+              if (send) {
+                logVoiceSendRefused({
+                  asker: "spoken_send",
+                  reason: "scratch_precedence",
+                  panelId,
+                  sessionId,
+                });
+              }
               // Recent dictations keep what landed, so scratched words leave the
               // session's transcript with the draft (#14637), every segment a
               // cleaned chunk ran together included.
@@ -1161,7 +1249,7 @@ class VoiceRecordingService {
           useVoiceRecordingStore.getState().completeSegment(completedText, itemId);
           // After completeSegment, so the command's own preview is already retired
           // and a stop that preserves live text can't put it back.
-          if (send && panelId) this.handleSpokenSend(panelId, projectId);
+          if (send && panelId) this.handleSpokenSend(panelId, projectId, sessionId);
         }
       )
     );
@@ -1251,6 +1339,7 @@ class VoiceRecordingService {
         if (!buffer) return;
 
         const { dictationSessionId } = buffer;
+        if (isDraftDetached(dictationSessionId)) return;
         const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
         const plan = planVoiceBreak(
           draft,
@@ -1410,6 +1499,7 @@ class VoiceRecordingService {
         this.timelines.get(sessionId)?.reportEnded(reason, report);
         this.lastEndedSessionId = sessionId;
         this.discardedSessionIds.delete(sessionId);
+        this.discardedSessionPanels.delete(sessionId);
         // Replaced elsewhere before it had anything to drain, typically while
         // its start was still pending. Its start result is stale from here.
         if (reason !== "superseded" || sessionId !== this.sessionId) return;
@@ -1568,6 +1658,10 @@ class VoiceRecordingService {
       })
     );
 
+    // Read once now too: a view can open already driven from elsewhere.
+    this.unsubscribers.push(subscribeTerminalInputGate(() => this.followDriveLease()));
+    this.followDriveLease();
+
     // Dictation takes Escape only once every overlay, menu, dialog and focused
     // widget has had its turn; the target composer hands it over itself.
     this.unsubscribers.push(registerEscapeFallback(() => this.handleEscape()));
@@ -1612,7 +1706,8 @@ class VoiceRecordingService {
     // counts as the release. Modifier-only releases (Shift, Alt, Ctrl) do not —
     // only the physical trigger key or Meta release.
     const handlePttKeyUp = (e: KeyboardEvent) => {
-      if (this.heldPress === null) return;
+      // A drag recovery's Escape keyup is no release, even of a key bound to Escape.
+      if (this.heldPress === null || isDragCancelEscape(e)) return;
       const isTriggerRelease = e.code === this.heldPress.code;
       const isMetaRelease = e.code === "MetaLeft" || e.code === "MetaRight";
       if (!isTriggerRelease && !isMetaRelease) return;
@@ -1691,6 +1786,13 @@ class VoiceRecordingService {
     const stopping = this.stopPanelDictation(target.panelId);
     if (stopping) {
       await stopping;
+      return;
+    }
+
+    // Words for a draft another screen drives would never be saved (#15919).
+    const driven = drivenElsewhereFor(target.projectId);
+    if (driven) {
+      this.reportDrivenStart(driven);
       return;
     }
 
@@ -1921,6 +2023,7 @@ class VoiceRecordingService {
     const sessionId = this.sessionId;
     if (sessionId && sessionId !== this.lastEndedSessionId) {
       this.discardedSessionIds.add(sessionId);
+      this.discardedSessionPanels.set(sessionId, target.panelId);
     }
     // Nothing of the dictation is kept, so no chunk of it lands or is recorded.
     this.resetChunking();
@@ -2100,7 +2203,22 @@ class VoiceRecordingService {
     // text. Disposed, its timeline takes every mark as a no-op.
     if (target.rewrite) timeline.dispose();
     else this.timelines.set(sessionId, timeline);
+    // Consumed: a target is reused by later starts (a microphone switch, a
+    // locked dictation), and only the one that reopened the wait says so.
+    if (this.reopeningStarts.delete(target)) timeline.noteReopenedSend();
     return timeline;
+  }
+
+  /**
+   * A dictation started in a draft whose send was waiting, and called that
+   * send off (#15703): the session's summary says so, so a prompt built from
+   * two dictations reads differently from two prompts. Given the armed target
+   * when the key's press did it, since its session isn't open yet, or the
+   * session when one began without a press.
+   */
+  noteSendReopened(by: { target: VoiceRecordingTarget } | { sessionId: string }): void {
+    if ("target" in by) this.reopeningStarts.add(by.target);
+    else this.timelines.get(by.sessionId)?.noteReopenedSend();
   }
 
   private releasePendingCapture(): void {
@@ -2344,6 +2462,13 @@ class VoiceRecordingService {
 
   async start(target: VoiceRecordingTarget): Promise<void> {
     this.initialize();
+    const driven = drivenElsewhereFor(target.projectId);
+    if (driven) {
+      // A caller may have armed it already.
+      this.cancelArming("lease_lost");
+      this.reportDrivenStart(driven);
+      return;
+    }
     this.releasePendingCapture();
     // A newer start in this view replaces one still under way, and a send the
     // dictation still finishing lands isn't the user's last word any more.
@@ -2899,6 +3024,18 @@ class VoiceRecordingService {
       micSilenceGraceMs = Math.max(0, micSilenceGraceMs - (performance.now() - captureAttachedAt));
     }
 
+    // Another screen may have taken control of the draft while it started: a
+    // restart or a retry never waits in pendingTarget for the gate to cancel.
+    const drivenNow = drivenElsewhereFor(target.projectId);
+    if (drivenNow) {
+      abandonCapture(stream);
+      this.cancelArming("lease_lost");
+      // A restart's rewrite was kept through the stop above for this start.
+      target.rewrite?.selection.release();
+      this.reportDrivenStart(drivenNow);
+      return;
+    }
+
     const generation = ++this.generation;
     logDebug(`${LOG_PREFIX} Beginning session`, { generation });
     this.pauseStartedAt = 0;
@@ -3168,8 +3305,9 @@ class VoiceRecordingService {
       const correctionEnabled = storeState.correctionEnabled;
       const wasMicLive = storeState.micSignal === "live";
 
+      // The reason, not the announcement: that can name who took control.
       logDebug(`${LOG_PREFIX} stop() called`, {
-        announcement,
+        reason,
         hasSession,
         skipRemoteStop,
         nextStatus,
@@ -3258,7 +3396,9 @@ class VoiceRecordingService {
             const remaining =
               preview && this.sessionDropsHesitations ? stripHesitations(preview) : preview;
             committedLiveText = remaining;
-            if (remaining) {
+            // Kept for Recent dictations either way; only a draft this view
+            // still drives takes them.
+            if (remaining && !isDraftDetached(buffer?.dictationSessionId)) {
               const { words } = writeVoiceWords(
                 panelId,
                 projectId,
@@ -3310,6 +3450,9 @@ class VoiceRecordingService {
       // Every word the transcription will give is in the draft by now.
       stopTimeline?.mark("settled");
 
+      // Its draft went to another screen's driver: the words are kept as heard,
+      // and nothing rewrites what is now the driver's text.
+      const detached = isDraftDetached(stoppedSessionId);
       // Chunks cleaned while it ran are settled; what's left is the stop's.
       const cleanup = stoppedSessionId ? this.cleanups.get(stoppedSessionId) : undefined;
       if (cleanup) cleanup.stopped = true;
@@ -3321,7 +3464,7 @@ class VoiceRecordingService {
       // stop that keeps the text gets this, whether or not correction runs.
       // A rewrite's instruction goes to the model as spoken. A chunk had its
       // own rerun before its cleanup, which nothing reruns over.
-      if (stoppedTarget && !stoppedTarget.rewrite && this.heardAsRules) {
+      if (stoppedTarget && !stoppedTarget.rewrite && this.heardAsRules && !detached) {
         const rewrites = [
           ...(cleanup?.rewrites ?? []),
           ...this.applyHeardAsRules(stoppedTarget, stoppedSessionId, this.heardAsRules, unclaimed),
@@ -3341,10 +3484,11 @@ class VoiceRecordingService {
       // doesn't await it: the decoration shows progress, and a send waits for
       // it through waitForPendingCorrections(). It is registered before stop()
       // resolves, so a caller that awaited stop() can always see it.
-      const graceful = !skipRemoteStop && nextStatus === "idle" && !options.skipCorrection;
+      const graceful =
+        !skipRemoteStop && nextStatus === "idle" && !options.skipCorrection && !detached;
       if (stoppedTarget?.rewrite) {
         if (graceful && !stoppedTarget.rewrite.cancelled) {
-          this.runRewrite(stoppedTarget.panelId, stoppedTarget.rewrite);
+          this.runRewrite(stoppedTarget, stoppedTarget.rewrite);
         } else if (this.liveStartup()?.target.rewrite !== stoppedTarget.rewrite) {
           // A restart of the same rewrite (a microphone switch) keeps recording into it.
           stoppedTarget.rewrite.selection.release();
@@ -4029,6 +4173,10 @@ class VoiceRecordingService {
     });
 
     const { panelId, projectId } = correction;
+    // Placed in the text the composer shows, not the store's copy a render
+    // behind it (#15873). Typing that reached a passage drops it as any edit
+    // does, and one that reached them all retires the correction here.
+    if (!correction.done) writeComposerDraftThrough(panelId, projectId);
     if (correction.done) {
       // The history keeps the cleaned text even when the draft it was meant
       // for was sent or edited first: that is when it's worth recovering.
@@ -4263,7 +4411,7 @@ class VoiceRecordingService {
    * Registered before stop() resolves, so a send waits for it like a
    * correction; an edit that reaches the selection drops it.
    */
-  private runRewrite(panelId: string, rewrite: VoiceRewriteRequest): void {
+  private runRewrite(target: VoiceRecordingTarget, rewrite: VoiceRewriteRequest): void {
     const { selection } = rewrite;
     const instruction = rewrite.instruction
       .join(" ")
@@ -4274,10 +4422,23 @@ class VoiceRecordingService {
       this.reportRewriteSkipped("No instruction was heard. The selection is unchanged.");
       return;
     }
-    this.requestRewrite(panelId, selection, instruction);
+    this.requestRewrite(target.panelId, target.projectId, selection, instruction);
   }
 
-  private requestRewrite(panelId: string, selection: RewriteSelection, instruction: string): void {
+  private requestRewrite(
+    panelId: string,
+    projectId: string | undefined,
+    selection: RewriteSelection,
+    instruction: string
+  ): void {
+    const driven = drivenElsewhereFor(projectId);
+    if (driven) {
+      selection.release();
+      this.reportRewriteSkipped(
+        `${controllerName(driven)} has control of this project, so the selection wasn't rewritten.`
+      );
+      return;
+    }
     if (!selection.range()) {
       this.reportRewriteSkipped("The selection was edited, so it wasn't rewritten.");
       return;
@@ -4285,6 +4446,7 @@ class VoiceRecordingService {
     let settle!: () => void;
     const job: PendingRewrite = {
       panelId,
+      projectId,
       selection,
       done: false,
       settled: new Promise<void>((resolve) => {
@@ -4371,7 +4533,9 @@ class VoiceRecordingService {
           message: "The request failed or timed out. The selection is unchanged.",
           replaceKey: "voice-rewrite",
           context: { eventKind: "connectivity" },
-          action: this.retryAction(() => this.requestRewrite(job.panelId, selection, instruction)),
+          action: this.retryAction(() =>
+            this.requestRewrite(job.panelId, job.projectId, selection, instruction)
+          ),
         });
         return;
     }
@@ -4441,8 +4605,8 @@ class VoiceRecordingService {
   /**
    * The dictation sessions a send from this draft takes, read as it starts:
    * every one with words in the draft or cleanup on its way, and the one
-   * dictating into it. A session that starts after this is the next prompt's
-   * (#14804).
+   * dictating into it. A session that starts here while the send waits
+   * reopens it (#15703); one after it was handed over is the next prompt's.
    */
   sendSessions(panelId: string, projectId: string | undefined): ReadonlySet<string> {
     const sessions = new Set<string>();
@@ -4638,6 +4802,8 @@ class VoiceRecordingService {
     const now = this.replanHeldBack(send);
     if (!now) return null;
     const { panelId, projectId } = now;
+    // The draft is another screen's driver's now, and so is what it holds.
+    if (drivenElsewhereFor(projectId)) return null;
     const ranges = useDictationRangeStore.getState();
     if (now.leadingSpace) {
       ranges.yieldLeadingSpace(now.leadingSpace.dictationId, now.leadingSpace.span);
@@ -4934,7 +5100,37 @@ class VoiceRecordingService {
       return;
     }
 
-    const target = this.getFocusedPanelTarget();
+    // The Assistant counts as the place the person was last in when it is on
+    // screen and they used it after the pane in question (#15870).
+    const assistant = this.getAssistantFallbackTarget();
+    const assistantAhead = (paneIds: Iterable<string>): boolean =>
+      this.isAssistantShown() && wasAssistantUsedAfter(paneIds);
+
+    // `focusedId` stays on the pane the person left for the Assistant (#6959),
+    // so it is the focused agent only once they are back in it.
+    const focusedTarget = this.getFocusedPanelTarget();
+    if (focusedTarget) {
+      if (assistant && assistantAhead([focusedTarget.panelId])) {
+        await this.startInAssistant(assistant);
+        return;
+      }
+      await this.startOrToggle(focusedTarget);
+      return;
+    }
+
+    // Nothing focused can take it, so the agent on screen the person was just
+    // in does (#15550). It comes forward with the keyboard in its composer, as
+    // if it had been focused, so they see where the words go (#14770).
+    // A closed Assistant opening would take the keyboard from a modal that
+    // holds it, so it only comes forward without one.
+    const { candidates, target } = this.getVisibleFallback();
+    const assistantFallback = target
+      ? assistantAhead(candidates.keys())
+      : candidates.size === 0 && (this.isAssistantShown() || !overlayHoldsKeyboard());
+    if (assistant && assistantFallback) {
+      await this.startInAssistant(assistant);
+      return;
+    }
     if (!target) {
       useVoiceRecordingStore.getState().setLastError({
         severity: "fatal",
@@ -4951,6 +5147,20 @@ class VoiceRecordingService {
       return;
     }
 
+    usePanelStore.getState().activateTerminal(target.panelId);
+    revealDictationComposer(target.panelId);
+    await this.startOrToggle(target);
+  }
+
+  /**
+   * The Assistant as the key's fallback: shown if it was closed, with the
+   * keyboard in its composer, as a grid pane comes forward for #15550.
+   */
+  private async startInAssistant(target: VoiceRecordingTarget): Promise<void> {
+    const help = useHelpPanelStore.getState();
+    useFocusStore.getState().clearAssistantGesture();
+    if (!help.isOpen) help.setOpen(true);
+    revealAssistantComposer();
     await this.startOrToggle(target);
   }
 
@@ -5412,6 +5622,51 @@ class VoiceRecordingService {
     return panelId ? this.getDictationTarget(panelId) : null;
   }
 
+  /**
+   * The panes on screen that can take dictation, and of them the one most
+   * recently focused, else the only one. No target when there is none, or
+   * several and none was focused.
+   */
+  private getVisibleFallback(): {
+    candidates: ReadonlyMap<string, VoiceRecordingTarget>;
+    target: VoiceRecordingTarget | null;
+  } {
+    const panels = usePanelStore.getState();
+    const { activeWorktreeId, isFleetScopeActive } = useWorktreeSelectionStore.getState();
+    const closing = getClosingIds();
+    // A fleet scope draws every worktree's armed panels in place of this
+    // worktree's grid; its cells are left to the focused path.
+    const fleetDrawn =
+      isFleetScopeActive &&
+      useFleetScopeFlagStore.getState().mode === "scoped" &&
+      buildFleetPanels(
+        useFleetArmingStore.getState().armOrder,
+        useFleetArmingStore.getState().armedIds,
+        panels.panelsById
+      ).some((panel) => !closing.has(panel.id));
+
+    const visibleIds = listVisiblePaneIds({
+      panelIds: panels.panelIds,
+      panelsById: panels.panelsById,
+      activeDockTerminalId: panels.activeDockTerminalId,
+      trashedTerminals: panels.trashedTerminals,
+      activeWorktreeId,
+      maximizedId: panels.maximizedId,
+      maximizeTarget: panels.maximizeTarget,
+      gridGroups: panels.getTabGroups("grid", activeWorktreeId ?? undefined),
+      helpTerminalIds: new Set(selectSlotTerminalIds(useHelpPanelStore.getState())),
+      gridHidden: isProjectHomePresented() || fleetDrawn,
+      isClosing: (id) => closing.has(id),
+    });
+
+    const targets = new Map<string, VoiceRecordingTarget>();
+    for (const id of visibleIds) {
+      const target = this.getDictationTarget(id);
+      if (target) targets.set(id, target);
+    }
+    return { candidates: targets, target: pickRecentVisibleTarget(targets, panels.mruList) };
+  }
+
   /** The pane as a dictation target, or null when it has no composer to show the words. */
   getDictationTarget(panelId: string): VoiceRecordingTarget | null {
     const panel = usePanelStore.getState().panelsById[panelId];
@@ -5464,6 +5719,38 @@ class VoiceRecordingService {
     };
   }
 
+  /**
+   * The Assistant the key may fall back to (#15870): the active lane's
+   * session, already running and showing a composer that can take the words.
+   * Never one still starting, and never while the panel shows the global
+   * assistant in place of the lane, where the words would go somewhere nobody
+   * can see.
+   */
+  private getAssistantFallbackTarget(): VoiceRecordingTarget | null {
+    const help = useHelpPanelStore.getState();
+    if (help.globalSelected) return null;
+    const target = this.getAssistantTarget();
+    if (!target) return null;
+    const panel = usePanelStore.getState().panelsById[target.panelId];
+    if (!panel || !isPtyPanel(panel) || panel.isInputLocked === true) return null;
+    // A reconnected terminal carries no status; one still spawning (or held
+    // for memory or a drive lease) isn't running yet.
+    if (panel.spawnStatus !== undefined && panel.spawnStatus !== "ready") return null;
+    // The composer as the Assistant renders it, from the lane's agent.
+    const hasComposer = shouldShowHybridInputBar({
+      hasAgentIdentity: isBuiltInAgentId(selectActiveSlot(help).agentId),
+      hybridInputEnabled: useTerminalInputStore.getState().hybridInputEnabled,
+      isFleetArmed: false,
+      fleetSize: 0,
+    });
+    return hasComposer ? target : null;
+  }
+
+  /** The Assistant panel on screen: open, and not hidden by the focus gesture. */
+  private isAssistantShown(): boolean {
+    return useHelpPanelStore.getState().isOpen && !useFocusStore.getState().gestureAssistantHidden;
+  }
+
   private async waitForPanel(panelId: string, timeoutMs = 5000): Promise<void> {
     const existingPanel = usePanelStore.getState().panelsById[panelId];
     if (existingPanel && existingPanel.location !== "trash") return;
@@ -5486,6 +5773,176 @@ class VoiceRecordingService {
         resolve();
       });
     });
+  }
+
+  /**
+   * An utterance of a dictation whose draft another screen drives: kept with
+   * the session's words for Recent dictations, never written, and never a
+   * command. A scratch has nothing here to take back, so it's only dropped.
+   */
+  private keepDetachedWords(
+    panelId: string,
+    sessionId: string,
+    text: string,
+    itemId: string | undefined,
+    send: boolean | undefined
+  ): void {
+    if (send) {
+      logVoiceSendRefused({
+        asker: "spoken_send",
+        reason: "composer_disabled",
+        panelId,
+        sessionId,
+      });
+    }
+    const spoken = text.trim();
+    if (spoken && isScratchCommand(spoken)) {
+      useVoiceRecordingStore.getState().completeSegment("", itemId, { discard: true });
+      return;
+    }
+    if (!spoken && !itemId) return;
+    useVoiceRecordingStore.getState().completeSegment(text, itemId);
+  }
+
+  /**
+   * Another screen took control of the project a dictation writes into (#15919).
+   * Its drafts are the driver's now: nothing written here is saved, and the
+   * driver's replace it. The session ends, what it heard kept for Recent
+   * dictations rather than written, and nothing already on its way (a
+   * cleanup, a rewrite, a file link) lands in those drafts.
+   */
+  private followDriveLease(): void {
+    if (getLeaseInputBlock()?.kind !== "driven-elsewhere") return;
+    this.dropDrivenDraftWork();
+
+    // A start for a driven draft never begins, whether it is arming or waiting
+    // on a session still finishing, even one in its own panel (a restart).
+    const { pendingTarget } = useVoiceRecordingStore.getState();
+    const pendingDriven = pendingTarget ? drivenElsewhereFor(pendingTarget.projectId) : null;
+    if (pendingDriven) {
+      this.cancelArming("lease_lost");
+      this.reportDrivenStart(pendingDriven);
+    }
+
+    const state = useVoiceRecordingStore.getState();
+    const target = state.activeTarget;
+    const driven = target ? drivenElsewhereFor(target.projectId) : null;
+    if (!target || !driven) return;
+    if (state.status === "arming") {
+      this.cancelArming("lease_lost");
+      this.reportDrivenStart(driven);
+      return;
+    }
+    if (!isActiveVoiceSession(state.status)) return;
+    const buffer = state.panelBuffers[target.panelId];
+    const sessionId = buffer?.dictationSessionId;
+    if (!sessionId || state.draftDetachedSessionId === sessionId) return;
+    state.detachSessionDraft(sessionId);
+    useDictationRangeStore.getState().releaseAnchors(sessionId);
+    logInfo(`${LOG_PREFIX} Another screen took control of the dictation's project`, {
+      status: state.status,
+      stopping: this.stopPromise !== null,
+    });
+    if (target.rewrite) {
+      // Its stop gives the selection back as it was.
+      this.reportRewriteSkipped(
+        `${controllerName(driven)} has control of this project, so the selection wasn't rewritten.`
+      );
+    } else {
+      this.reportDrivenStop(
+        driven,
+        buffer.completedSegments.length > 0 || buffer.liveText.trim() !== ""
+      );
+    }
+    // A stop already draining ends the session; it writes nothing more now.
+    if (this.stopPromise) return;
+    void this.stop(
+      `Dictation stopped because ${controllerName(driven)} has control of this project.`,
+      {
+        preserveLiveText: true,
+        reason: "lease_lost",
+        // A start still waiting is for a draft this view drives (a Canopy
+        // reply): it goes ahead once this session has ended.
+        preservePendingStart: useVoiceRecordingStore.getState().pendingTarget !== null,
+      }
+    );
+  }
+
+  /**
+   * Lets go of every dictated range in a draft another screen drives, and the
+   * cleanups and rewrites aimed at them: they would land in text that is the
+   * driver's now. A cleanup's reply is still kept for Recent dictations.
+   */
+  private dropDrivenDraftWork(): void {
+    const ranges = useDictationRangeStore.getState();
+    for (const records of Object.values(ranges.drafts)) {
+      for (const record of records) {
+        if (drivenElsewhereFor(record.projectId)) ranges.releaseDictation(record.id);
+      }
+    }
+    const panels = new Set<string>();
+    for (const correction of this.pendingCorrections) {
+      if (drivenElsewhereFor(correction.projectId)) panels.add(correction.panelId);
+    }
+    let rewriteDropped: DrivenElsewhere | null = null;
+    for (const rewrite of this.pendingRewrites) {
+      const driven = drivenElsewhereFor(rewrite.projectId);
+      if (!driven) continue;
+      panels.add(rewrite.panelId);
+      rewriteDropped = driven;
+    }
+    for (const panelId of panels) this.discardPendingCorrections(panelId);
+    if (rewriteDropped) {
+      this.reportRewriteSkipped(
+        `${controllerName(rewriteDropped)} has control of this project, so the selection wasn't rewritten.`
+      );
+    }
+  }
+
+  private reportDrivenStop(driven: DrivenElsewhere, keptWords: boolean): void {
+    const controls = `${controllerName(driven)} has control of this project.`;
+    notify({
+      type: "info",
+      placement: "grid-bar",
+      title: "Dictation stopped",
+      message: keptWords ? `${controls} What you said is in Recent dictations.` : controls,
+      priority: "high",
+      replaceKey: "voice-drive-lease",
+      context: { eventKind: "recovery" },
+      ...(keptWords
+        ? {
+            action: {
+              label: "Open recent dictations",
+              actionId: "voiceInput.openRecentDictations" as const,
+              onClick: () => this.openRecentDictations(),
+            },
+          }
+        : {}),
+    });
+  }
+
+  /** Feedback on the user's own press: the composer already shows it is read-only. */
+  private reportDrivenStart(driven: DrivenElsewhere): void {
+    const message = `${controllerName(driven)} has control of this project.`;
+    useVoiceRecordingStore.getState().announce(`Dictation didn't start. ${message}`);
+    notify({
+      type: "info",
+      title: "Dictation didn't start",
+      message,
+      transient: true,
+      priority: "high",
+      replaceKey: "voice-drive-lease",
+      context: { eventKind: "uiFeedback" },
+    });
+  }
+
+  private openRecentDictations(): void {
+    safeFireAndForget(
+      import("@/services/ActionService").then(({ actionService }) =>
+        actionService.dispatch("voiceInput.openRecentDictations", undefined, { source: "user" })
+      ),
+      { context: "Opening recent dictations" }
+    );
   }
 
   private async handleSuspend(): Promise<void> {
@@ -5941,15 +6398,27 @@ class VoiceRecordingService {
    * Stop and send, staying where the person is: the session panel's Send and
    * its key. Its composer sends as Enter would. Without one mounted to send
    * from, the dictation still stops and its words stay in the draft; another
-   * view's session stops there.
+   * view's session stops there. With no dictation left to send, a send it
+   * started that still waits on its cleanup goes as the words stand, as a
+   * second Enter sends one Enter started (#15705); a drain still finishing is
+   * left to finish, never stopped again. Whatever stops short of handing the
+   * composer the send leaves one line in the log saying why (#15704).
    */
-  async stopAndSend(): Promise<void> {
+  async stopAndSend({
+    asker = "stop_and_send_key",
+  }: { asker?: VoiceStopAndSendAsker } = {}): Promise<void> {
     this.initialize();
-    if (this.sendActiveSession()) return;
+    const unsent = this.dispatchActiveSessionSend(asker);
+    if (unsent === null) return;
+    if (sendWaitingStopAndSends()) return;
+    // Read before the stop moves the store on.
+    const { activeTarget, status, sessionElsewhere } = useVoiceRecordingStore.getState();
+    const panelId = activeTarget?.panelId ?? null;
     // A start still arming had nothing to send, so its cancel says nothing.
-    const hadWords = isActiveVoiceSession(useVoiceRecordingStore.getState().status);
+    const hadWords = isActiveVoiceSession(status);
     const stopping = this.stopAnySession();
     if (stopping) {
+      logVoiceSendRefused({ asker, reason: unsent, panelId });
       await stopping;
       if (!hadWords) return;
       notify({
@@ -5961,8 +6430,17 @@ class VoiceRecordingService {
       });
       return;
     }
-    const elsewhere = useVoiceRecordingStore.getState().sessionElsewhere;
-    if (elsewhere) await this.stopSessionElsewhere(elsewhere, false);
+    if (sessionElsewhere) {
+      logVoiceSendRefused({
+        asker,
+        reason: "session_elsewhere",
+        panelId: null,
+        sessionId: sessionElsewhere.sessionId,
+      });
+      await this.stopSessionElsewhere(sessionElsewhere, false);
+      return;
+    }
+    logVoiceSendRefused({ asker, reason: unsent, panelId });
   }
 
   /**
@@ -6029,29 +6507,41 @@ class VoiceRecordingService {
 
   /** Whether the session panel's Send has a composer to send from. */
   canSendActiveSession(): boolean {
-    return this.activeSessionSend() !== null;
+    return "send" in this.activeSessionSend();
   }
 
   /**
    * The session panel's Send: the dictation stops and its composer sends the
    * draft as Enter would, without the person going there. Nothing happens
-   * when no composer for it is mounted to send from.
+   * when no composer for it is mounted to send from. True means the composer
+   * was asked, not that it sent: one that ignores the request says why in the
+   * log itself.
    */
-  sendActiveSession(): boolean {
+  sendActiveSession(asker: VoiceStopAndSendAsker = "stop_and_send_key"): boolean {
     this.initialize();
-    const send = this.activeSessionSend();
-    if (!send) return false;
-    send({ spoken: false });
-    return true;
+    return this.dispatchActiveSessionSend(asker) === null;
   }
 
-  private activeSessionSend(): ((options?: VoiceSendOptions) => void) | null {
+  /** Why nothing was asked of a composer, or null once its composer has the request. */
+  private dispatchActiveSessionSend(
+    asker: VoiceStopAndSendAsker
+  ): Extract<VoiceSendRefusal, "no_session" | "session_finishing" | "composer_unavailable"> | null {
+    const active = this.activeSessionSend();
+    if (!("send" in active)) return active.unsent;
+    active.send({ spoken: false, asker });
+    return null;
+  }
+
+  private activeSessionSend():
+    | { send: (options?: VoiceSendOptions) => void }
+    | { unsent: "no_session" | "session_finishing" | "composer_unavailable" } {
     const { activeTarget, status } = useVoiceRecordingStore.getState();
-    if (!activeTarget || status === "finishing" || !isActiveVoiceSession(status)) return null;
-    return (
-      this.spokenSendHandlers.get(spokenSendKey(activeTarget.panelId, activeTarget.projectId)) ??
-      null
+    if (!activeTarget || !isActiveVoiceSession(status)) return { unsent: "no_session" };
+    if (status === "finishing") return { unsent: "session_finishing" };
+    const send = this.spokenSendHandlers.get(
+      spokenSendKey(activeTarget.panelId, activeTarget.projectId)
     );
+    return send ? { send } : { unsent: "composer_unavailable" };
   }
 
   // A stop is the surest end of speech there is, so a send its drain lands goes
@@ -6060,13 +6550,30 @@ class VoiceRecordingService {
   // retarget, Enter or a timeout must not get a send nobody asked for, and
   // joining the stop would cancel a newer start. A stopping session is never
   // stopped a second time.
-  private handleSpokenSend(panelId: string, projectId: string | undefined): void {
+  //
+  // Main has already taken "send it" off the words, so a request that stops
+  // here leaves a line in the log: the session heard it, `sessionId`, is the
+  // one named, not a newer one in the panel (#15704).
+  private handleSpokenSend(
+    panelId: string,
+    projectId: string | undefined,
+    sessionId: string
+  ): void {
+    const refuse = (reason: VoiceSendRefusal) =>
+      logVoiceSendRefused({ asker: "spoken_send", reason, panelId, sessionId });
     const voiceState = useVoiceRecordingStore.getState();
-    if (voiceState.activeTarget?.panelId !== panelId) return;
+    if (voiceState.activeTarget?.panelId !== panelId) {
+      refuse("target_changed");
+      return;
+    }
     const stopping = voiceState.status === "finishing";
     if (stopping) {
-      if (!this.stopTakesSpokenSend) return;
+      if (!this.stopTakesSpokenSend) {
+        refuse("stop_not_users");
+        return;
+      }
     } else if (voiceState.status !== "recording") {
+      refuse("not_recording");
       return;
     }
     const draft = useTerminalInputStore.getState().getDraftInput(panelId, projectId);
@@ -6078,6 +6585,7 @@ class VoiceRecordingService {
       isCanopyReplyTarget(voiceState.activeTarget) &&
       (!handler || !useCanopyStore.getState().isOpen)
     ) {
+      refuse("composer_unavailable");
       return;
     }
     if (handler && isSpokenSendable(draft)) {
@@ -6088,11 +6596,13 @@ class VoiceRecordingService {
     // alone would pass for an ordinary one, so the composer says it wasn't
     // sent and how to send it, in place of the stop's own word (#14944).
     if (handler && draft.trim()) {
+      refuse("draft_too_short");
       if (stopping) this.stopAnnounces = false;
       else void this.stop("Dictation stopped.", { reason: "send", announce: false });
       handler({ tooShort: true });
       return;
     }
+    refuse(handler ? "draft_empty" : "composer_unavailable");
     if (!stopping) void this.stop("Dictation stopped.", { reason: "send" });
   }
 
@@ -6135,6 +6645,7 @@ class VoiceRecordingService {
     this.unfollowLearningBaselines();
     this.spokenSendHandlers.clear();
     this.discardedSessionIds.clear();
+    this.discardedSessionPanels.clear();
     for (const unsub of this.unsubscribers) {
       unsub();
     }

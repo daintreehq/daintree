@@ -151,3 +151,13 @@ export const BROWSER_PARTITION_PATTERN = /^persist:browser(-[a-z0-9_-]+)?$/;
 export function isBrowserPartition(value: unknown): boolean {
   return typeof value === "string" && BROWSER_PARTITION_PATTERN.test(value);
 }
+
+/**
+ * The in-memory session every rendered HTML preview (`daintree-html://`) loads
+ * in, as its own `<webview>` guest. Chromium has no per-frame WebRTC control,
+ * so the preview can't share a WebContents or session with the app shell: main
+ * gives this session a proxy that refuses every connection and gives each guest
+ * the `disable_non_proxied_udp` WebRTC policy, which together leave a preview
+ * no UDP and no direct TCP. No `persist:` prefix, so nothing reaches disk.
+ */
+export const HTML_PREVIEW_PARTITION = "daintree-html-preview";

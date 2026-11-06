@@ -321,3 +321,93 @@ describe("useAgentLauncher — a saved preset whose inventory hasn't loaded (#15
     expect(updateWorktreePreset).not.toHaveBeenCalled();
   });
 });
+
+const { presetLaunchContent, resolvePresetLaunchParts } =
+  await import("@shared/utils/agentPresetLaunchConsent");
+const approvals = await import("@/services/plugin/pluginPresetLaunchApprovals");
+
+describe("useAgentLauncher — a plugin launch on an approved preset (#16324)", () => {
+  const BACKUP: AgentPreset = { id: "backup", name: "Backup", env: { WHO: "backup" } };
+  const CHAINED: AgentPreset = { ...MINE, fallbacks: ["backup"] };
+  const approvalFor = (custom: AgentPreset[], project?: AgentPreset[]) => {
+    const parts = resolvePresetLaunchParts("claude", "mine", custom, undefined, project)!;
+    return {
+      agentId: "claude",
+      presetId: "mine",
+      source: parts.source,
+      content: parts.content,
+      fallbacks: parts.fallbacks,
+    };
+  };
+
+  beforeEach(() => {
+    addPanel.mockReset().mockResolvedValue("terminal-1");
+    approvals._resetApprovedPresetLaunchesForTests();
+    Reflect.set(window, "electron", {});
+    useCcrPresetsStore.setState({ ccrPresetsByAgent: {}, isInitialized: true });
+    useProjectPresetsStore.getState().setPresetsByAgent("proj-1", {});
+  });
+
+  afterEach(() => {
+    Reflect.set(window, "electron", undefined);
+  });
+
+  async function launchApproved(approval: ReturnType<typeof approvalFor>) {
+    const { result } = renderHook(() => useAgentLauncher());
+    let outcome: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      outcome = result.current.launchAgent("claude", {
+        force: true,
+        presetId: "mine",
+        approvedPluginPreset: approval,
+      });
+      await outcome.catch(() => {});
+    });
+    return outcome;
+  }
+
+  it("launches when the preset is exactly what was approved, and holds its hops to it", async () => {
+    const approval = approvalFor([CHAINED, BACKUP]);
+    saveChoices({ customPresets: [CHAINED, BACKUP] });
+    await expect(launchApproved(approval)).resolves.toMatchObject({ terminalId: "terminal-1" });
+    expect(launchedPresetIds()).toEqual(["mine"]);
+    const backupContent = approval.fallbacks[0]![1];
+    expect(approvals.fallbackHopApproved("terminal-1", "backup", backupContent)).toBe(true);
+    expect(
+      approvals.fallbackHopApproved(
+        "terminal-1",
+        "backup",
+        presetLaunchContent({ ...BACKUP, dangerousMode: "on" })
+      )
+    ).toBe(false);
+  });
+
+  it("refuses, launching nothing, when the preset changed after it was approved", async () => {
+    const approval = approvalFor([MINE]);
+    saveChoices({ customPresets: [{ ...MINE, env: { WHO: "someone else" } }] });
+    await expect(launchApproved(approval)).rejects.toThrow(/isn't the one that was approved/);
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("refuses when only a fallback changed after it was approved", async () => {
+    const approval = approvalFor([CHAINED, BACKUP]);
+    saveChoices({ customPresets: [CHAINED, { ...BACKUP, dangerousMode: "on" }] });
+    await expect(launchApproved(approval)).rejects.toThrow(/isn't the one that was approved/);
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("refuses the same content from a different source than the one approved", async () => {
+    const approval = approvalFor([MINE]);
+    saveChoices({ customPresets: [] });
+    useProjectPresetsStore.getState().setPresetsByAgent("proj-1", { claude: [MINE] });
+    await expect(launchApproved(approval)).rejects.toThrow(/isn't the one that was approved/);
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+
+  it("refuses rather than launching without the preset when it is gone", async () => {
+    const approval = approvalFor([MINE]);
+    saveChoices({ customPresets: [] });
+    await expect(launchApproved(approval)).rejects.toThrow(/isn't the one that was approved/);
+    expect(addPanel).not.toHaveBeenCalled();
+  });
+});

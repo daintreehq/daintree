@@ -254,9 +254,14 @@ describe("composer control row", () => {
     expect(button(block)).not.toMatch(/opacity-/);
   });
 
-  it("dims an unavailable composer once, at the shared 50%", () => {
+  it("dims an unavailable composer by its inks, never by opacity", () => {
+    // An opacity dim on the shell also halved the line that says why the
+    // composer is unavailable. The marker and the controls step down to one
+    // shared inactive ink instead, so they still read as one family.
     const dims = bar.match(/disabled && "[^"]*opacity-[^"]*"/g) ?? [];
-    expect(dims).toEqual(['disabled && "opacity-50"']);
+    expect(dims).toEqual([]);
+    expect(bar).toMatch(/"--ib-control-mix": disabled \? DISABLED_CONTROL_MIX/);
+    expect(bar).toMatch(/"--ib-marker": disabled\s*\?\s*DISABLED_CONTROL_INK/);
   });
 
   it("opens every tooltip on one side, away from the pane edge", () => {

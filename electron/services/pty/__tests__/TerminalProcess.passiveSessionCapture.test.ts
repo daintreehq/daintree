@@ -36,6 +36,7 @@ vi.mock("../../../utils/gitUtils.js", () => ({
 }));
 
 const SESSION_ID = "0199f8c1-2b4d-7e3a-9f10-5c6d7e8f9a0b";
+const OTHER_SESSION_ID = "0199f8c1-2b4d-7e3a-9f10-5c6d7e8f9a0c";
 
 /** Codex's real hint line, so a pattern change upstream fails these tests. */
 function codexHint(id: string): string {
@@ -588,6 +589,55 @@ describe("passive agent session capture", () => {
       expect(captured[0].record.agentModelId).toBeUndefined();
     });
 
+    // #15977: the record of a scheduled run's agent names the run, read off the
+    // terminal record the spawn options built.
+    it("names the scheduled run the terminal was launched for", async () => {
+      const run = { scheduleId: "schedule-1", runId: "run-1" };
+      const terminal = track(createTerminal({ scheduledRun: { ...run, extra: "dropped" } }));
+      promoteCodex(terminal);
+      mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n`);
+      mockPty(terminal).__emitExit(0);
+
+      await flushCapture();
+      expect(captured[0].record.scheduledRun).toEqual(run);
+    });
+
+    it("omits the scheduled run for an agent Daintree did not launch", async () => {
+      const terminal = track(
+        createTerminal({
+          launchAgentId: "claude",
+          scheduledRun: { scheduleId: "schedule-1", runId: "run-1" },
+        })
+      );
+      promoteCodex(terminal);
+      mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n$ `);
+      demote(terminal);
+
+      await flushCapture();
+      expect(captured[0].record.agentId).toBe("codex");
+      expect(captured[0].record).not.toHaveProperty("scheduledRun");
+    });
+
+    it("omits the scheduled run for a later run of the same CLI the user started by hand", async () => {
+      const run = { scheduleId: "schedule-1", runId: "run-1" };
+      const terminal = track(createTerminal({ scheduledRun: run }));
+      promoteCodex(terminal);
+      mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n$ `);
+      demote(terminal);
+      await flushCapture();
+      // Premise: the scheduled run's own session names it.
+      expect(captured[0].record.scheduledRun).toEqual(run);
+
+      // The detector sees the same CLI take over the surviving shell again.
+      terminal.getInfo().agentIncarnation = 1;
+      promoteCodex(terminal);
+      mockPty(terminal).__emitData(`${codexHint(OTHER_SESSION_ID)}\n$ `);
+      demote(terminal);
+      await flushCapture();
+      expect(captured[1].record.sessionId).toBe(OTHER_SESSION_ID);
+      expect(captured[1].record).not.toHaveProperty("scheduledRun");
+    });
+
     it("keeps the user's locked title instead of the observed one", async () => {
       const terminal = track(createTerminal({ titleMode: "user" }));
       promoteCodex(terminal);
@@ -724,6 +774,7 @@ describe("passive agent session capture", () => {
           launchedRun: true,
           resumeHintSeen: false,
           selfUpdateSucceeded: true,
+          resumeRefused: false,
         });
         expect(captured).toHaveLength(1);
         expect(captured[0].record.sessionId).toBe(LAUNCH_ID);
@@ -751,6 +802,7 @@ describe("passive agent session capture", () => {
         expect(exited[0].agentEnd).toMatchObject({
           resumeHintSeen: true,
           selfUpdateSucceeded: false,
+          resumeRefused: false,
         });
       } finally {
         off();
@@ -770,6 +822,7 @@ describe("passive agent session capture", () => {
           launchedRun: true,
           resumeHintSeen: false,
           selfUpdateSucceeded: false,
+          resumeRefused: false,
         });
         // Still reachable from history.
         expect(captured[0].record.sessionId).toBe(LAUNCH_ID);
@@ -797,6 +850,7 @@ describe("passive agent session capture", () => {
           launchedRun: false,
           resumeHintSeen: false,
           selfUpdateSucceeded: false,
+          resumeRefused: false,
         });
         // Only the launched run journaled the launch id.
         expect(captured).toHaveLength(1);
@@ -835,6 +889,249 @@ describe("passive agent session capture", () => {
       } finally {
         off();
       }
+    });
+  });
+
+  describe("a resume the CLI refused (#16045)", () => {
+    const LAUNCH_ID = "7f3c9a12-4b6e-4d1a-9c2f-0e8b5a6d1f34";
+
+    /** The refusal as each CLI prints it interactively, checked against the registry. */
+    function refusal(agentId: "codex" | "claude", line: string): string {
+      const resume = getAgentConfig(agentId)?.resume;
+      if (resume?.kind !== "session-id" || !resume.refusalPattern) {
+        throw new Error(`${agentId} must declare a refusalPattern`);
+      }
+      if (!new RegExp(resume.refusalPattern).test(line)) {
+        throw new Error(`fixture no longer matches ${agentId}'s declared refusalPattern`);
+      }
+      return line;
+    }
+
+    function captureExited(): {
+      exited: DaintreeEventMap["agent:exited"][];
+      off: () => void;
+    } {
+      const exited: DaintreeEventMap["agent:exited"][] = [];
+      const off = events.on("agent:exited", (payload) => exited.push(payload));
+      return { exited, off };
+    }
+
+    it("reports Codex's interactive refusal as the run's last words", async () => {
+      const { exited, off } = captureExited();
+      try {
+        const terminal = track(createTerminal({ agentSessionId: LAUNCH_ID }));
+        promoteCodex(terminal);
+        mockPty(terminal).__emitData(
+          [
+            `$ codex resume ${LAUNCH_ID} -C .`,
+            "\x1b[?1049h  >_ OpenAI Codex (v0.166.0)  Resuming session…\x1b[?1049l",
+            refusal(
+              "codex",
+              `ERROR: No saved session found with ID ${LAUNCH_ID}. Run \`codex resume\` without an ID to choose from existing sessions.`
+            ),
+            "user@host project % ",
+          ].join("\r\n")
+        );
+        demote(terminal);
+
+        await flushCapture();
+        expect(exited[0].agentEnd).toMatchObject({ launchedRun: true, resumeRefused: true });
+      } finally {
+        off();
+      }
+    });
+
+    it("reports Claude's refusal on a PTY exit too", async () => {
+      const { exited, off } = captureExited();
+      try {
+        const terminal = track(
+          createTerminal({ launchAgentId: "claude", agentSessionId: LAUNCH_ID })
+        );
+        detect(terminal, makeAgentResult({ agentType: "claude", processIconId: "claude" }));
+        mockPty(terminal).__emitData(
+          `${refusal("claude", `No conversation found with session ID: ${LAUNCH_ID}`)}\r\r\n`
+        );
+        mockPty(terminal).__emitExit(1);
+
+        await flushCapture();
+        expect(exited[0].agentEnd).toMatchObject({ launchedRun: true, resumeRefused: true });
+      } finally {
+        off();
+      }
+    });
+
+    it.each([
+      // Short lines: only the line bound keeps the refusal out of the window.
+      ["more lines than the window", Array.from({ length: 12 }, (_, i) => `ok ${i}`).join("\n")],
+      // One long line: only the character bound does.
+      ["more characters than the window", "x".repeat(500)],
+    ])("leaves a refusal followed by %s unreported", async (_label, after) => {
+      const { exited, off } = captureExited();
+      try {
+        const terminal = track(createTerminal({ agentSessionId: LAUNCH_ID }));
+        promoteCodex(terminal);
+        mockPty(terminal).__emitData(
+          [`ERROR: No saved session found with ID ${LAUNCH_ID}.`, after, "$ "].join("\n")
+        );
+        demote(terminal);
+
+        await flushCapture();
+        expect(exited[0].agentEnd).toMatchObject({ resumeRefused: false });
+      } finally {
+        off();
+      }
+    });
+
+    it("leaves a later run in the same shell unreported", async () => {
+      const { exited, off } = captureExited();
+      try {
+        const terminal = track(createTerminal({ agentSessionId: LAUNCH_ID }));
+        promoteCodex(terminal);
+        mockPty(terminal).__emitData("goodbye\n$ ");
+        demote(terminal);
+        terminal.getInfo().agentIncarnation = 1;
+        promoteCodex(terminal);
+        mockPty(terminal).__emitData(`ERROR: No saved session found with ID ${LAUNCH_ID}.\n$ `);
+        demote(terminal);
+
+        await flushCapture();
+        expect(exited[1].agentEnd).toMatchObject({ launchedRun: false, resumeRefused: false });
+      } finally {
+        off();
+      }
+    });
+  });
+
+  describe("a run's own argv (#15994)", () => {
+    const HAND_ID = "0199aaaa-1111-7222-8333-444455556666";
+    let observed: DaintreeEventMap["agent-session:observed"][];
+    let offObserved: () => void;
+
+    beforeEach(() => {
+      observed = [];
+      offObserved = events.on("agent-session:observed", (payload) => {
+        observed.push(payload);
+      });
+    });
+
+    afterEach(() => {
+      offObserved();
+    });
+
+    function seeProcess(terminal: TerminalProcess, command: string): void {
+      terminal.handleAgentProcessObservation({ agentType: "codex", command }, spawnedAt(terminal));
+    }
+
+    /** Quit to the shell and start Codex again by hand: the next run in this generation. */
+    function handStartCodex(terminal: TerminalProcess, incarnation: number): void {
+      demote(terminal);
+      // What the real AgentStateService does when the shell hosts a new run.
+      terminal.getInfo().agentIncarnation = incarnation;
+      promoteCodex(terminal);
+    }
+
+    it("ships the id a hand-typed resume names, tagged with its run", () => {
+      const terminal = track(createTerminal());
+      promoteCodex(terminal);
+      handStartCodex(terminal, 1);
+
+      seeProcess(terminal, `node /opt/homebrew/bin/codex resume ${HAND_ID}`);
+
+      expect(observed).toEqual([
+        {
+          terminalId: "t-passive",
+          agentId: "codex",
+          projectId: "proj-1",
+          sessionId: HAND_ID,
+          run: { launchGeneration: 7, agentIncarnation: 1 },
+        },
+      ]);
+    });
+
+    it("reads each run once, and every new run afresh", () => {
+      const terminal = track(createTerminal());
+      promoteCodex(terminal);
+      seeProcess(terminal, "codex");
+      seeProcess(terminal, `codex resume ${HAND_ID}`);
+      expect(observed).toHaveLength(0);
+
+      handStartCodex(terminal, 1);
+      seeProcess(terminal, `codex resume ${HAND_ID}`);
+      seeProcess(terminal, `codex resume ${HAND_ID}`);
+      expect(observed.map((o) => o.run.agentIncarnation)).toEqual([1]);
+
+      handStartCodex(terminal, 2);
+      seeProcess(terminal, `codex resume ${SESSION_ID}`);
+      expect(observed.map((o) => [o.sessionId, o.run.agentIncarnation])).toEqual([
+        [HAND_ID, 1],
+        [SESSION_ID, 2],
+      ]);
+    });
+
+    it("waits until the pane has promoted the agent the process belongs to", () => {
+      const terminal = track(createTerminal());
+      seeProcess(terminal, `codex resume ${HAND_ID}`);
+      expect(observed).toHaveLength(0);
+
+      promoteCodex(terminal);
+      seeProcess(terminal, `codex resume ${HAND_ID}`);
+      expect(observed).toHaveLength(1);
+    });
+
+    it("ships nothing for an agent the pane wasn't launched as", () => {
+      const plain = track(createTerminal({ launchAgentId: undefined }));
+      promoteCodex(plain);
+      seeProcess(plain, `codex resume ${HAND_ID}`);
+
+      const claudePane = track(createTerminal({ launchAgentId: "claude" }));
+      promoteCodex(claudePane);
+      seeProcess(claudePane, `codex resume ${HAND_ID}`);
+
+      expect(observed).toHaveLength(0);
+    });
+
+    it("ships nothing for the assistant's overlay terminal", () => {
+      const terminal = track(createTerminal({ isAssistantTerminal: true }));
+      promoteCodex(terminal);
+      seeProcess(terminal, `codex resume ${HAND_ID}`);
+
+      expect(observed).toHaveLength(0);
+    });
+
+    it("ignores a process from a previous PTY incarnation", () => {
+      const terminal = track(createTerminal());
+      promoteCodex(terminal);
+      terminal.handleAgentProcessObservation(
+        { agentType: "codex", command: `codex resume ${HAND_ID}` },
+        spawnedAt(terminal) - 1
+      );
+
+      expect(observed).toHaveLength(0);
+    });
+
+    it("never logs the command line or the id", async () => {
+      const terminal = track(createTerminal());
+      promoteCodex(terminal);
+      seeProcess(terminal, `codex -c secret_token=abc resume ${HAND_ID}`);
+
+      const { logBuffer } = await import("../../LogBuffer.js");
+      const serialized = JSON.stringify(logBuffer.getAll());
+      expect(serialized).toContain("Agent run argv read");
+      expect(serialized).not.toContain(HAND_ID);
+      expect(serialized).not.toContain("secret_token");
+    });
+
+    it("tags a demotion's farewell with the run that ended, read before the branch stamp", async () => {
+      const terminal = track(createTerminal());
+      promoteCodex(terminal);
+      handStartCodex(terminal, 1);
+      mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n\nuser@host project % `);
+      demote(terminal);
+      // A new run starting while the farewell waits on its branch lookup.
+      terminal.getInfo().agentIncarnation = 2;
+
+      await flushCapture();
+      expect(captured.map((c) => c.run)).toEqual([{ launchGeneration: 7, agentIncarnation: 1 }]);
     });
   });
 

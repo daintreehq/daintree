@@ -380,3 +380,87 @@ describe("useScopedSelectAll with self scope", () => {
     expect(event.defaultPrevented).toBe(false);
   });
 });
+
+describe("useScopedSelectAll beforeSelect", () => {
+  /** Renders its tail only after `beforeSelect` runs, like a viewer that mounts lazily. */
+  function LazyHarness({ onBefore }: { onBefore: () => void }) {
+    const ref = useRef<HTMLDivElement>(null);
+    useScopedSelectAll(ref, true, "surface", () => {
+      onBefore();
+      const tail = document.createElement("p");
+      tail.textContent = "late rows";
+      ref.current?.appendChild(tail);
+    });
+    return (
+      <div data-testid="pane" data-panel-id="pane-1" tabIndex={-1}>
+        <input data-testid="search" />
+        <div data-testid="body" ref={ref}>
+          <p>early rows</p>
+        </div>
+      </div>
+    );
+  }
+
+  it("runs before the selection, so content it adds is selected too", () => {
+    const onBefore = vi.fn();
+    const { getByTestId } = render(<LazyHarness onBefore={onBefore} />);
+
+    pressSelectAll(getByTestId("pane"));
+
+    expect(onBefore).toHaveBeenCalledTimes(1);
+    expectSelectedWholeOf(getByTestId("body"));
+    expect(selectedText()).toContain("late rows");
+  });
+
+  it("does not run when the chord is left to a text field", () => {
+    const onBefore = vi.fn();
+    const { getByTestId } = render(<LazyHarness onBefore={onBefore} />);
+
+    const event = pressSelectAll(getByTestId("search"));
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(onBefore).not.toHaveBeenCalled();
+  });
+
+  it("does not run for a target outside its own pane", () => {
+    const onBefore = vi.fn();
+    const { getByTestId } = render(
+      <>
+        <LazyHarness onBefore={onBefore} />
+        <div data-testid="other-pane" data-panel-id="pane-2" tabIndex={-1} />
+      </>
+    );
+
+    const event = pressSelectAll(getByTestId("other-pane"));
+
+    expect(event.defaultPrevented).toBe(false);
+    expect(onBefore).not.toHaveBeenCalled();
+  });
+
+  it("does not run when a higher-priority owner already claimed the chord", () => {
+    const onBefore = vi.fn();
+    const { getByTestId } = render(<LazyHarness onBefore={onBefore} />);
+    const pane = getByTestId("pane");
+    const claim = (event: Event) => event.preventDefault();
+    pane.addEventListener("keydown", claim);
+
+    pressSelectAll(pane);
+    pane.removeEventListener("keydown", claim);
+
+    expect(onBefore).not.toHaveBeenCalled();
+    expect(selectedText()).toBe("");
+  });
+
+  it.each([
+    ["the Shift chord", { shiftKey: true }],
+    ["an Alt chord", { altKey: true }],
+    ["a keystroke the IME is composing", { isComposing: true }],
+  ])("does not run for %s", (_label, init) => {
+    const onBefore = vi.fn();
+    const { getByTestId } = render(<LazyHarness onBefore={onBefore} />);
+
+    pressSelectAll(getByTestId("pane"), init);
+
+    expect(onBefore).not.toHaveBeenCalled();
+  });
+});

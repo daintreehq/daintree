@@ -91,7 +91,12 @@ export const FrameworkDetectionSchema = z.strictObject({
   signals: z
     .array(
       z.strictObject({
-        via: z.enum(["global", "expando", "attribute", "document-sample"]),
+        via: z.enum({
+          global: "global",
+          expando: "expando",
+          attribute: "attribute",
+          "document-sample": "document-sample",
+        }),
         name: z.string().min(1).max(128),
       })
     )
@@ -111,7 +116,12 @@ export const CapabilitySchema = z.discriminatedUnion("state", [
   z.strictObject({ state: z.literal("unknown") }),
   z.strictObject({
     state: z.literal("unavailable"),
-    reason: z.enum(["not-exposed", "production-build", "no-framework", "unmapped"]),
+    reason: z.enum({
+      "not-exposed": "not-exposed",
+      "production-build": "production-build",
+      "no-framework": "no-framework",
+      unmapped: "unmapped",
+    }),
   }),
 ]);
 export type Capability = z.infer<typeof CapabilitySchema>;

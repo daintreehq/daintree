@@ -1,5 +1,9 @@
 import type { PanelSnapshot, ProjectState } from "../../../shared/types/project.js";
-import { forgetHostStartedTerminals, noteHostStartedTerminal } from "./hostStartedTerminals.js";
+import {
+  forgetHostStartedTerminals,
+  noteHostStartedTerminal,
+  noteHostStartedTerminalBackgrounded,
+} from "./hostStartedTerminals.js";
 
 /**
  * The slice of `ProjectStore` main-authored state writes need. Injected so the
@@ -73,6 +77,68 @@ function withoutKey<T>(
   return rest;
 }
 
+/** The layout's tab groups without `terminalId`, a group left empty dropped. */
+function withoutGroupMember(
+  tabGroups: ProjectState["tabGroups"],
+  terminalId: string
+): ProjectState["tabGroups"] {
+  return tabGroups
+    ?.map((group) => {
+      const panelIds = group.panelIds.filter((id) => id !== terminalId);
+      return {
+        ...group,
+        panelIds,
+        activeTabId:
+          group.activeTabId === terminalId ? (panelIds[0] ?? group.activeTabId) : group.activeTabId,
+      };
+    })
+    .filter((group) => group.panelIds.length > 0);
+}
+
+/**
+ * Park a terminal no view holds in the background of the saved layout, as a
+ * view's own "move to background" parks it: out of its grid or dock and its
+ * tab group, coming back where it was. A scheduled run's done policy (#15982)
+ * is the only caller. Queued like the writes above; a panel the layout never
+ * held, or one already parked or in the trash, is left alone.
+ */
+export async function backgroundViewlessTerminal(
+  writer: ProjectStateWriter,
+  projectId: string,
+  terminalId: string,
+  /**
+   * Asked when the queued write runs: false leaves the layout and the
+   * host-started record as they are (#16171). Without it both change at once.
+   */
+  isStillWanted?: () => boolean
+): Promise<void> {
+  if (!isStillWanted) noteHostStartedTerminalBackgrounded(projectId, terminalId);
+  await writer.enqueueProjectStateUpdate(projectId, (existing) => {
+    if (isStillWanted) {
+      if (!isStillWanted()) return null;
+      noteHostStartedTerminalBackgrounded(projectId, terminalId);
+    }
+    if (!existing || !Array.isArray(existing.terminals)) return null;
+    const restoreLocation = existing.terminals.find(
+      (terminal) => terminal.id === terminalId
+    )?.location;
+    if (restoreLocation !== "grid" && restoreLocation !== "dock") return null;
+    const tabGroups = withoutGroupMember(existing.tabGroups, terminalId);
+    return {
+      ...existing,
+      terminals: existing.terminals.map((terminal): PanelSnapshot =>
+        terminal.id === terminalId
+          ? { ...terminal, location: "background", backgroundRestoreLocation: restoreLocation }
+          : terminal
+      ),
+      ...(tabGroups !== undefined ? { tabGroups } : {}),
+      ...(existing.terminalLayout !== undefined
+        ? { terminalLayout: withoutPanelReferences(existing.terminalLayout, terminalId) }
+        : {}),
+    };
+  });
+}
+
 /**
  * Take a panel a viewless action closed out of the saved layout, the way a
  * view's own save drops a trashed panel: the next frontend to attach should
@@ -85,25 +151,22 @@ function withoutKey<T>(
 export async function forgetViewlessTerminal(
   writer: ProjectStateWriter,
   projectId: string,
-  terminalId: string
+  terminalId: string,
+  /**
+   * Asked when the queued write runs: false leaves the layout and the
+   * host-started record as they are (#16171). Without it both change at once.
+   */
+  isStillWanted?: () => boolean
 ): Promise<void> {
-  forgetHostStartedTerminals(projectId, [terminalId]);
+  if (!isStillWanted) forgetHostStartedTerminals(projectId, [terminalId]);
   await writer.enqueueProjectStateUpdate(projectId, (existing) => {
+    if (isStillWanted) {
+      if (!isStillWanted()) return null;
+      forgetHostStartedTerminals(projectId, [terminalId]);
+    }
     if (!existing || !Array.isArray(existing.terminals)) return null;
     if (!existing.terminals.some((terminal) => terminal.id === terminalId)) return null;
-    const tabGroups = existing.tabGroups
-      ?.map((group) => {
-        const panelIds = group.panelIds.filter((id) => id !== terminalId);
-        return {
-          ...group,
-          panelIds,
-          activeTabId:
-            group.activeTabId === terminalId
-              ? (panelIds[0] ?? group.activeTabId)
-              : group.activeTabId,
-        };
-      })
-      .filter((group) => group.panelIds.length > 0);
+    const tabGroups = withoutGroupMember(existing.tabGroups, terminalId);
     return {
       ...existing,
       terminals: existing.terminals.filter((terminal) => terminal.id !== terminalId),

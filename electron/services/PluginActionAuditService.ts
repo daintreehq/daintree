@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../utils/storeValues.js";
 // eager-import-allow: wires the plugin-audit ring buffer to the synchronous electron-store slice at boot (global service, mirrors ActionBreadcrumbService)
 import { randomUUID } from "node:crypto";
 import type {
@@ -47,8 +48,8 @@ export interface PluginAuditLogStore {
   write(records: PluginActionAuditRecord[], options?: { sync?: boolean }): void;
 }
 
-// Persists the ring in the dedicated audit-logs store (migration023) so
-// config.json stays small and audit appends never re-serialize it.
+// Persists the ring in SQLite `audit_rings` so config.json stays small and
+// audit appends never re-serialize it.
 // `auditEnabled` / `auditMaxRecords` stay in config.json (`plugins`), read via
 // the injected config closures.
 const defaultLogStore: PluginAuditLogStore = {
@@ -67,7 +68,7 @@ const defaultLogStore: PluginAuditLogStore = {
  * carries a `pluginId`: a plugin-contributed action, or any action a plugin
  * dispatched. Config flags are wired to the
  * `plugins` store slice via the `saveConfig`/`readConfig` callbacks and the
- * ring to the audit-logs store via `logStore`, so the service stays decoupled
+ * ring to SQLite `audit_rings` via `logStore`, so the service stays decoupled
  * from the concrete store module.
  */
 export class PluginActionAuditService {
@@ -291,12 +292,12 @@ export function getPluginActionAuditService(): PluginActionAuditService {
   if (!instance) {
     // `store` is the lazy electron-store Proxy — importing it doesn't initialize
     // the backing store, and the singleton is only constructed on first use.
-    // The spread merge keeps a legacy `plugins.auditLog` carryover intact for
-    // installs where migration023 deferred (audit-logs store not durable).
+    // The spread merge keeps a legacy `plugins.auditLog` carryover intact
+    // until the boot import (legacyAuditRingImport) moves it into SQLite.
     instance = new PluginActionAuditService(
       (patch) => {
         const current = (store.get("plugins") ?? {}) as Record<string, unknown>;
-        store.set("plugins", { ...current, ...patch });
+        setRawStoreValue(store, "plugins", { ...current, ...patch });
       },
       () => (store.get("plugins") ?? {}) as Record<string, unknown>
     );

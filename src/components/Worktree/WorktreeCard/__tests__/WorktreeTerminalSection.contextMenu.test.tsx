@@ -46,7 +46,6 @@ vi.mock("@/services/TerminalInstanceService", () => {
   };
 });
 vi.mock("@/hooks/useSidebarWorktreeOrder", () => ({ useSidebarWorktreeOrder: () => [] }));
-vi.mock("@/hooks/useIsHibernated", () => ({ useIsHibernated: () => false }));
 vi.mock("@/hooks/usePluginContextMenuItems", () => ({ usePluginContextMenuItems: () => [] }));
 vi.mock("@/store/voiceRecordingStore", () => ({
   useVoiceRecordingStore: (selector: (s: unknown) => unknown) =>
@@ -110,6 +109,7 @@ function renderInCard(onAncestorContextMenu?: () => void) {
                     exited: 0,
                   },
                   unread: 0,
+                  blocked: 0,
                 }}
                 terminals={sessions}
                 onToggle={() => {}}

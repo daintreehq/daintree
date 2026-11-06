@@ -20,18 +20,25 @@ vi.mock("../../lifecycle/shutdownCoordinator.js", () => ({
 import {
   addPendingRemoteBackgroundRestores,
   buildOpenWindowRecords,
+  captureWindowRecord,
   clearPendingBackgroundRestores,
+  clearPendingWindowRecreation,
+  clearPendingRemoteRestore,
   clearPendingRemoteRestoresForHost,
   enableOpenWindowsSaves,
   freezeAndSnapshotOpenWindows,
   initOpenWindowsTracker,
+  markWindowRecreationSetupFailed,
+  onPendingRemoteRestoreChanged,
   removePendingRemoteBackgroundRestores,
   resetOpenWindowsTrackerForTests,
   resumeOpenWindowsSaves,
+  saveBeforeLastWindowCloses,
   saveOpenWindowsNow,
   scheduleOpenWindowsSave,
   setPendingBackgroundRestores,
   setPendingRemoteRestore,
+  setPendingWindowRecreation,
   suppressOpenWindowsSaves,
 } from "../openWindowsTracker.js";
 import {
@@ -159,6 +166,27 @@ describe("buildOpenWindowRecords", () => {
     ]);
   });
 
+  it("tells listeners when a window starts or stops waiting for a host's project", () => {
+    const listener = vi.fn();
+    const unsubscribe = onPendingRemoteRestoreChanged(listener);
+
+    setPendingRemoteRestore(1, `studio:${"a".repeat(64)}`);
+    setPendingRemoteRestore(2, `studio-2:${"a".repeat(64)}`);
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    clearPendingRemoteRestore(1);
+    clearPendingRemoteRestore(1);
+    clearPendingRemoteRestoresForHost("studio");
+    expect(listener).toHaveBeenCalledTimes(3);
+
+    clearPendingRemoteRestoresForHost("studio-2");
+    expect(listener).toHaveBeenCalledTimes(4);
+
+    unsubscribe();
+    setPendingRemoteRestore(1, `studio:${"a".repeat(64)}`);
+    expect(listener).toHaveBeenCalledTimes(4);
+  });
+
   it("keeps a window whose manager throws, as a picker window", () => {
     // Losing which project it was on beats losing the window entirely.
     const registry = makeRegistry([
@@ -198,6 +226,113 @@ describe("buildOpenWindowRecords", () => {
       }))
     );
     expect(buildOpenWindowRecords(registry)).toHaveLength(MAX_RESTORED_WINDOWS);
+  });
+});
+
+describe("OOM recreation records (#15564)", () => {
+  it("captures a window past the fleet cap", () => {
+    const registry = makeRegistry(
+      Array.from({ length: MAX_RESTORED_WINDOWS + 2 }, (_, i) => ({
+        windowId: i + 1,
+        projectId: `p${i}`,
+      }))
+    );
+    const last = MAX_RESTORED_WINDOWS + 2;
+    expect(captureWindowRecord(registry, last)).toEqual({ projectId: `p${last - 1}` });
+    expect(captureWindowRecord(registry, last + 1)).toBeNull();
+  });
+
+  it("captures the window's record as the manifest holds it, without orphaned live workspaces", () => {
+    const registry = makeRegistry([
+      { windowId: 1, projectId: "a", views: [["a", 3]] },
+      {
+        windowId: 2,
+        projectId: "b",
+        views: [
+          ["b", 2],
+          ["c", 1],
+        ],
+      },
+    ]);
+    setPendingBackgroundRestores(2, ["a", "d"]);
+    const live = new Set(["orphan"]);
+
+    // The manifest hands the orphan to the primary window; a capture of that
+    // window describes what it held, not what the next save would assign it.
+    expect(buildOpenWindowRecords(registry, undefined, live)[0]).toEqual({
+      projectId: "a",
+      backgroundProjectIds: ["orphan"],
+    });
+    expect(captureWindowRecord(registry, 1)).toEqual({ projectId: "a" });
+    expect(captureWindowRecord(registry, 2)).toEqual({
+      projectId: "b",
+      backgroundProjectIds: ["c", "d"],
+    });
+  });
+
+  it("names a replacement window's captured workspace until it shows one of its own", () => {
+    const win: FakeWindow = { windowId: 5, projectId: null };
+    const registry = makeRegistry([win]);
+    setPendingWindowRecreation(5, { projectId: "b", backgroundProjectIds: ["c"] });
+
+    expect(buildOpenWindowRecords(registry)).toEqual([
+      { projectId: "b", backgroundProjectIds: ["c"] },
+    ]);
+
+    // The person switched while setup still awaits: what the window shows
+    // wins, and the backgrounds setup has yet to queue stay with it.
+    win.projectId = "x";
+    win.views = [["x", 1]];
+    expect(buildOpenWindowRecords(registry)).toEqual([
+      { projectId: "x", backgroundProjectIds: ["c"] },
+    ]);
+
+    clearPendingWindowRecreation(5);
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "x" }]);
+  });
+
+  it("spends a failed replacement's record once the person opens something there", () => {
+    const win: FakeWindow = { windowId: 5, projectId: null };
+    const registry = makeRegistry([win]);
+    setPendingWindowRecreation(5, { projectId: "b", backgroundProjectIds: ["c"] });
+    markWindowRecreationSetupFailed(5);
+
+    expect(buildOpenWindowRecords(registry)).toEqual([
+      { projectId: "b", backgroundProjectIds: ["c"] },
+    ]);
+
+    win.projectId = "x";
+    win.views = [["x", 1]];
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: "x" }]);
+    win.projectId = null;
+    win.views = [];
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: null }]);
+  });
+
+  it("leaves a host-scoped replacement's pending host intent unspent", () => {
+    const remote = `studio-01:${"a".repeat(64)}`;
+    const registry = makeRegistry([{ windowId: 5, projectId: null }]);
+    setPendingRemoteRestore(5, remote);
+    setPendingWindowRecreation(5, { projectId: remote });
+
+    buildOpenWindowRecords(registry);
+    clearPendingWindowRecreation(5);
+
+    expect(buildOpenWindowRecords(registry)).toEqual([{ projectId: remote }]);
+  });
+
+  it("keeps a host-scoped replacement's backgrounds while it waits on the picker for its host", () => {
+    const remote = `studio-01:${"a".repeat(64)}`;
+    const registry = makeRegistry([{ windowId: 5, projectId: null }]);
+    setPendingRemoteRestore(5, remote);
+    setPendingWindowRecreation(5, { projectId: remote, backgroundProjectIds: ["c"] });
+
+    expect(buildOpenWindowRecords(registry)).toEqual([
+      { projectId: remote, backgroundProjectIds: ["c"] },
+    ]);
+    expect(buildOpenWindowRecords(registry)).toEqual([
+      { projectId: remote, backgroundProjectIds: ["c"] },
+    ]);
   });
 });
 
@@ -399,6 +534,49 @@ describe("saveOpenWindowsNow", () => {
         expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
       }
     );
+
+    it.each(["win32", "linux"])(
+      "records what the last window shows as it starts closing on %s",
+      (value) => {
+        Object.defineProperty(process, "platform", { value });
+        const remote = `ubuntu-24.04:${"b".repeat(64)}`;
+        const win: FakeWindow = { windowId: 1, projectId: "local" };
+        initOpenWindowsTracker({ registry: makeRegistry([win]), readOnly: false });
+
+        // The window moved onto a host, which schedules no save of its own.
+        win.projectId = remote;
+        saveBeforeLastWindowCloses(1);
+        expect(lastWritten()).toEqual([{ projectId: remote }]);
+
+        // Its `closed` save then finds nothing and keeps that record.
+        writeOpenWindowsManifest.mockClear();
+        saveOpenWindowsNow(1);
+        expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
+      }
+    );
+
+    it("leaves a closing window alone while another stays open", () => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+      initOpenWindowsTracker({
+        registry: makeRegistry([
+          { windowId: 1, projectId: "a" },
+          { windowId: 2, projectId: "b" },
+        ]),
+        readOnly: false,
+      });
+      saveBeforeLastWindowCloses(1);
+      expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
+    });
+
+    it("does nothing on darwin, where Cmd+Q snapshots the live windows", () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      initOpenWindowsTracker({
+        registry: makeRegistry([{ windowId: 1, projectId: "a" }]),
+        readOnly: false,
+      });
+      saveBeforeLastWindowCloses(1);
+      expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
+    });
 
     it("still records an empty set on darwin, where the app survives windowless", () => {
       Object.defineProperty(process, "platform", { value: "darwin" });

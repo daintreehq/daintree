@@ -212,6 +212,9 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
       {children}
     </button>
   ),
+  DropdownMenuRadioGroup: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuRadioItem: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  DropdownMenuMeta: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
 }));
 
 // The session tabs' per-lane menu is incidental here, and the real primitive
@@ -737,8 +740,19 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     expect(helpPanelState.setAutoLaunchEnabled).toHaveBeenLastCalledWith(false);
   });
 
+  /** A lane on screen with a live terminal, so New session opens another beside it. */
+  function bindFrontLane() {
+    helpPanelState.terminalId = "term-1";
+    helpPanelState.agentId = "claude";
+    panelStoreState.panelsById = {
+      "term-1": { id: "term-1", kind: "terminal", spawnStatus: "ready", cwd: "/help" },
+    };
+  }
+
+  const newSessionItem = () => screen.getByRole("button", { name: "New session" });
+
   it.each([false, true])(
-    "the strip's New session queues the default agent on the new tab itself (auto-start %s, #14976)",
+    "the strip's New session queues the default agent on the new lane itself (auto-start %s, #14976)",
     async (autoLaunchEnabled) => {
       helpPanelState.autoLaunchEnabled = autoLaunchEnabled;
       helpPanelState.preferredAgentId = "claude";
@@ -747,20 +761,18 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
       mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
       mockGetFolderPath.mockResolvedValue("/help");
       mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "new-term" } });
+      bindFrontLane();
 
       render(<HelpPanel width={380} />);
-      // With auto-start on, the empty tab on screen starts its own session.
-      await vi.waitFor(() => {
-        expect(mockProvisionSession).toHaveBeenCalledTimes(autoLaunchEnabled ? 1 : 0);
-      });
       const launchesBefore = mockProvisionSession.mock.calls.length;
 
       await act(async () => {
-        fireEvent.click(screen.getByLabelText("New session"));
+        fireEvent.click(newSessionItem());
       });
 
-      // Waiting on the new tab's first input sync, not launched through the
-      // tab on screen, and never by turning auto-start on.
+      // Waiting on the new lane's first input sync, not launched through the lane on
+      // screen, and never by turning auto-start on.
+      expect(helpPanelState.openSlot).toHaveBeenCalled();
       expect(acquireHelpSessionController(1)["_queuedLaunch"]).toEqual({
         agentId: "claude",
         replaceExisting: true,
@@ -770,7 +782,30 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     }
   );
 
-  it("leaves a new tab that holds a captured conversation to offer its own Resume (#14976)", async () => {
+  it("starts the empty lane on screen in place rather than opening another beside it (#16329)", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
+    helpPanelState.openSlot = vi.fn(() => 1);
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    mockGetFolderPath.mockResolvedValue("/help");
+    mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "new-term" } });
+
+    render(<HelpPanel width={380} />);
+    await act(async () => {
+      fireEvent.click(newSessionItem());
+    });
+
+    expect(helpPanelState.openSlot).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(mockProvisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: "claude" })
+      );
+    });
+    expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
+  });
+
+  it("leaves a new lane that holds a captured conversation to offer its own Resume (#14976)", async () => {
     helpPanelState.autoLaunchEnabled = false;
     helpPanelState.preferredAgentId = "claude";
     helpPanelState.openSlot = vi.fn(() => 1);
@@ -779,14 +814,36 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     };
     cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+    bindFrontLane();
 
     render(<HelpPanel width={380} />);
     await act(async () => {
-      fireEvent.click(screen.getByLabelText("New session"));
+      fireEvent.click(newSessionItem());
     });
 
     expect(helpPanelState.openSlot).toHaveBeenCalled();
     expect(acquireHelpSessionController(1)["_queuedLaunch"]).toBeNull();
+    expect(mockProvisionSession).not.toHaveBeenCalled();
+  });
+
+  it("treats a lane holding a captured conversation as taken, before its peek resolves", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
+    helpPanelState.openSlot = vi.fn(() => 1);
+    helpPanelState.hibernateSessions = {
+      [assistantSlotKey("proj-default", 0)]: { sessionId: "s0", cwd: "/help", agentId: "claude" },
+    };
+    cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
+
+    render(<HelpPanel width={380} />);
+    await act(async () => {
+      fireEvent.click(newSessionItem());
+    });
+
+    // A second lane, never a fresh start over the conversation waiting to resume.
+    expect(helpPanelState.openSlot).toHaveBeenCalled();
+    expect(acquireHelpSessionController(0)["_queuedLaunch"]).toBeNull();
   });
 
   it("first-run starter-prompt chip launches without turning on auto-start (#10699, #14976)", async () => {

@@ -1,4 +1,4 @@
-import { bench, describe } from "vitest";
+import { test, describe } from "vitest";
 import { UrlDetector } from "../UrlDetector.js";
 
 // UrlDetector.scanOutput runs on the main thread for every chunk of dev-server
@@ -104,13 +104,19 @@ function replayInterleaved(sessions: readonly (readonly string[])[]): number {
 }
 
 describe("UrlDetector.scanOutput — 10k-chunk dev-server log", () => {
-  bench("vite (HMR)", () => {
-    replay(viteChunks);
+  test("vite (HMR)", async ({ bench }) => {
+    await bench("vite (HMR)", () => {
+      replay(viteChunks);
+    }).run();
   });
-  bench("next (request log)", () => {
-    replay(nextChunks);
+  test("next (request log)", async ({ bench }) => {
+    await bench("next (request log)", () => {
+      replay(nextChunks);
+    }).run();
   });
-  bench("5 interleaved sessions, recurring errors", () => {
-    replayInterleaved(erroringSessions);
+  test("5 interleaved sessions, recurring errors", async ({ bench }) => {
+    await bench("5 interleaved sessions, recurring errors", () => {
+      replayInterleaved(erroringSessions);
+    }).run();
   });
 });

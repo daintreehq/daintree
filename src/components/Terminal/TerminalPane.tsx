@@ -33,7 +33,6 @@ import { ArtifactOverlay } from "./ArtifactOverlay";
 import { TerminalSearchBar } from "./TerminalSearchBar";
 import { TerminalScrollIndicator } from "./TerminalScrollIndicator";
 import { TerminalChipRow } from "./TerminalChipRow";
-import { EXITED_PANE_CLASS } from "./exitStatus";
 import { useGridScrollRoot } from "./GridScrollRootContext";
 import { useUnmountVisibilityCleanup } from "./useUnmountVisibilityCleanup";
 import { useTerminalVisibilityObserver } from "./useTerminalVisibilityObserver";
@@ -48,11 +47,14 @@ import {
 import { RestoreRecoveryGate } from "./RestoreRecoveryGate";
 import { MemoryPressureGate } from "./MemoryPressureGate";
 import { DriveLeaseGate } from "./DriveLeaseGate";
-import { InlineStatusBanner } from "./InlineStatusBanner";
+import { InlineStatusBanner, PaneBannerSurfaceContext } from "./InlineStatusBanner";
+import { useDockBlockedState } from "@/components/Layout/useDockBlockedState";
+import { getVisibleTabbableElements, restoreFocusTo } from "@/lib/accessibility";
 import { PluginKindSetupStrip } from "@/components/Plugin/PluginSetupStrip";
 import { useForceResumeCycleWatchdog } from "@/hooks/terminal/useForceResumeCycleWatchdog";
 import { useContextInjection } from "@/hooks/useContextInjection";
 import { getRestartBannerVariant } from "./restartStatus";
+import { PresetSwitchRefusedBanner } from "./PresetSwitchRefusedBanner";
 import { TerminalErrorBanner } from "./TerminalErrorBanner";
 import { SpawnErrorBanner } from "./SpawnErrorBanner";
 import { ReconnectErrorBanner } from "./ReconnectErrorBanner";
@@ -64,7 +66,6 @@ import { isAttachedProcessRunning } from "./attachedProcessRunning";
 import { useShouldSuppressLocalError } from "@/components/Recovery/useShouldSuppressLocalError";
 import { UpdateCwdDialog } from "./UpdateCwdDialog";
 import { CompactErrorList } from "../Errors/CompactErrorList";
-import { AgentCompletionBanner } from "./AgentCompletionBanner";
 import { TerminalScratchpad } from "./TerminalScratchpad";
 import { isScratchpadElement } from "@/lib/terminalScratchpad";
 import { ContentPanel } from "@/components/Panel";
@@ -89,7 +90,6 @@ import { selectHomeFocusTarget } from "@/store/terminalInputStore";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { selectMicNoticeForPanel, useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
-import { useIsHibernated } from "@/hooks/useIsHibernated";
 import { errorsClient } from "@/clients";
 import type { AgentState } from "@/types";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
@@ -102,18 +102,15 @@ import { notifyWorktreeTerminalAttached } from "@/services/terminal/worktreeReve
 import { actionService } from "@/services/ActionService";
 import {
   buildMissingCliContinueArgs,
+  missingCliContinueScheduledRun,
   buildMissingCliRelaunchOptions,
 } from "@/utils/missingCliGate";
-import { useReviewDialogOpenForWorktree } from "./useReviewDialogOpenForWorktree";
 import { InputTracker } from "@/services/clearCommandDetection";
 import { getAgentConfig, getMergedPresets } from "@/config/agents";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { terminalClient } from "@/clients";
-import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
-import { sendCompletionToAgent, sendCompletionToAssistant } from "./completionHandoff";
-import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import type { HybridInputBarHandle } from "./HybridInputBar";
 const LazyHybridInputBar = lazy(() =>
   import("./HybridInputBar").then((m) => ({ default: m.HybridInputBar }))
@@ -149,6 +146,16 @@ import {
   usePaneInputNotice,
 } from "./TerminalInputBlockBanner";
 import { WorktreeMoveBanner } from "./WorktreeMoveBanner";
+import { CanopyPaneOffer, useCanopyPaneOffer } from "@/components/Canopy/CanopyPaneOffer";
+import { RelayDeployBanner } from "./RelayDeployBanner";
+import { RelayUpdateBanner } from "./RelayUpdateBanner";
+import { RelayRemovalBanner, describeRelayRemoval } from "./RelayRemovalBanner";
+import { useRelayRemoval } from "./useRelayRemoval";
+import {
+  isDecisionsDeployTerminalId,
+  isDecisionsRemoveTerminalId,
+  isDecisionsUpdateTerminalId,
+} from "@shared/config/terminalScreenPersistence";
 import { VoiceMicNoticeBanner } from "./VoiceMicNoticeBanner";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 
@@ -179,11 +186,13 @@ export interface BannerSlotProps {
 }
 
 /**
- * Wraps a banner so swaps between siblings of different heights interpolate
- * smoothly instead of jumping. Relies on `interpolate-size: allow-keywords`
- * (set on :root in src/index.css) for the `0 ↔ auto` height transition, and
- * caches the last visible children through the exit window so the collapse
- * has content to measure from.
+ * Wraps a pane banner. Its height snaps rather than animating: every frame of a
+ * height transition resizes the terminal beneath it, which resizes the PTY and
+ * makes an agent's TUI redraw mid-animation. Only opacity fades, and the slot
+ * holds its height through the exit fade so the terminal moves once, at the
+ * end. Caches the last visible children through that window so the fade has
+ * content to show. Inside it, banners take the pane layout and status surface
+ * (`PaneBannerSurfaceContext`).
  */
 export function BannerSlot({ visible, children }: BannerSlotProps) {
   const [isVisible, setIsVisible] = useState(visible);
@@ -192,6 +201,7 @@ export function BannerSlot({ visible, children }: BannerSlotProps) {
   const exitTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const entryFrameRef = useRef<number | null>(null);
   const hasMountedRef = useRef(false);
+  const slotRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (visible) {
@@ -226,6 +236,17 @@ export function BannerSlot({ visible, children }: BannerSlotProps) {
       cancelAnimationFrame(entryFrameRef.current);
       entryFrameRef.current = null;
     }
+    // A notice leaving with the keyboard in it hands focus on before it fades,
+    // to the next notice in the pane or the pane itself, and goes inert, so a
+    // second key press never lands on a banner that is already gone.
+    const slot = slotRef.current;
+    if (slot?.contains(document.activeElement)) {
+      const stack = slot.closest<HTMLElement>("[data-pane-banners]");
+      const next = stack
+        ? getVisibleTabbableElements(stack).find((el) => !slot.contains(el))
+        : undefined;
+      restoreFocusTo(next, slot.closest<HTMLElement>("[data-panel-id]"));
+    }
     setIsVisible(false);
     if (exitTimeoutRef.current !== null) {
       clearTimeout(exitTimeoutRef.current);
@@ -256,18 +277,25 @@ export function BannerSlot({ visible, children }: BannerSlotProps) {
 
   return (
     <div
+      ref={slotRef}
+      inert={!isVisible || undefined}
       className={cn(
-        "banner-slot shrink-0 overflow-hidden transition-[height]",
+        "banner-slot shrink-0 transition-[opacity] reduce-motion:transition-none",
         isVisible
-          ? "h-auto ease-[var(--ease-snappy)]"
-          : "h-0 ease-[var(--ease-exit)] pointer-events-none"
+          ? "opacity-100 ease-[var(--ease-snappy)]"
+          : "opacity-0 ease-[var(--ease-exit)] pointer-events-none"
       )}
       style={{
-        transitionDuration: `${isVisible ? BANNER_ENTER_DURATION : BANNER_EXIT_DURATION}ms`,
+        transitionDuration:
+          typeof document !== "undefined" &&
+          document.body.getAttribute("data-performance-mode") === "true"
+            ? "0ms"
+            : `${isVisible ? BANNER_ENTER_DURATION : BANNER_EXIT_DURATION}ms`,
       }}
-      aria-hidden={isVisible ? undefined : true}
     >
-      {visible ? children : cachedChildren}
+      <PaneBannerSurfaceContext value={true}>
+        {visible ? children : cachedChildren}
+      </PaneBannerSurfaceContext>
     </div>
   );
 }
@@ -380,8 +408,6 @@ export interface TerminalPaneProps {
   attachError?: string;
   isMultiPanelGrid?: boolean;
   detectedProcessId?: string;
-  // Group-level ambient state: highest-urgency state across all tabs, for container border styling
-  ambientAgentState?: AgentState;
   // Fleet scope render-time override: force-locks input without mutating the
   // stored TerminalInstance.isInputLocked flag.
   isInputLocked?: boolean;
@@ -427,7 +453,6 @@ function TerminalPaneComponent({
   attachError,
   isMultiPanelGrid = true,
   detectedProcessId,
-  ambientAgentState,
   isInputLocked: isInputLockedOverride,
   tabs,
   onTabClick,
@@ -455,7 +480,6 @@ function TerminalPaneComponent({
   );
   const [isUpdateCwdOpen, setIsUpdateCwdOpen] = useState(false);
   const [isAutoRestarting, setIsAutoRestarting] = useState(false);
-  const [completionBannerDismissed, setCompletionBannerDismissed] = useState(false);
   const autoRestartTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoRestartAttemptRef = useRef(0);
   const processStartTimeRef = useRef<number>(0);
@@ -501,6 +525,10 @@ function TerminalPaneComponent({
     const panel = state.panelsById[id];
     return panel && isPtyPanel(panel) ? panel.agentResumeOffer : undefined;
   });
+  const presetSwitchRefused = usePanelStore((state) => {
+    const panel = state.panelsById[id];
+    return panel !== undefined && isPtyPanel(panel) && panel.presetSwitchResume?.refused === true;
+  });
 
   const cliDetails = useCliAvailabilityStore((state) => state.details);
   const getPanelCliDetail = (): AgentCliDetail | undefined => {
@@ -540,18 +568,22 @@ function TerminalPaneComponent({
     if (!panel || !isPtyPanel(panel)) return;
     const args = buildMissingCliContinueArgs(panel);
     if (!args) return;
+    const scheduledRun = missingCliContinueScheduledRun(panel);
 
     removePanel(id);
     const scratchpad = panel.scratchpad;
-    void actionService.dispatch("agent.launch", args, { source: "user" }).then((result) => {
-      if (!scratchpad || !result.ok) return;
-      const launched: unknown = result.result;
-      if (typeof launched !== "object" || launched === null || !("terminalId" in launched)) return;
-      const launchedId = launched.terminalId;
-      if (typeof launchedId === "string" && launchedId) {
-        usePanelStore.getState().seedScratchpad(launchedId, scratchpad);
-      }
-    });
+    void actionService
+      .dispatch("agent.launch", args, { source: "user", ...(scheduledRun && { scheduledRun }) })
+      .then((result) => {
+        if (!scratchpad || !result.ok) return;
+        const launched: unknown = result.result;
+        if (typeof launched !== "object" || launched === null || !("terminalId" in launched))
+          return;
+        const launchedId = launched.terminalId;
+        if (typeof launchedId === "string" && launchedId) {
+          usePanelStore.getState().seedScratchpad(launchedId, scratchpad);
+        }
+      });
   };
 
   // Fleet arming store for multi-select gestures. Selection treatment is
@@ -644,12 +676,21 @@ function TerminalPaneComponent({
     isRestarting ||
     followsDriver ||
     hostSwitchPending;
+  // What an empty, unavailable composer says in place of its invitation, so a
+  // locked pane does not ask for a prompt it will refuse. A driven or switching
+  // composer keeps it: the driver's draft or the window's notice says why.
+  const hybridInputDisabledPlaceholder =
+    isBackendDisconnected || isBackendRecovering
+      ? "Reconnecting…"
+      : isRestarting
+        ? "Restarting…"
+        : isInputLocked
+          ? "Input locked"
+          : undefined;
   // Focus routing ignores a pending switch: it is brief and window-wide, and
   // moving the keyboard to xterm for it would leave it there once the switch
   // lands or fails, off the composer the user was in.
   const isHybridInputDisabledForFocus = isHybridInputDisabled && !hostSwitchPending;
-
-  const isHibernated = useIsHibernated(id);
 
   // Pre-audio confirmation cue. Follows the pending target rather than the
   // session's, so it also shows while a new start waits behind a session that
@@ -979,6 +1020,10 @@ function TerminalPaneComponent({
   }, [getTerminal, id, isArmed, isFocused]);
 
   const handleClick = (e?: React.MouseEvent) => {
+    // A click something inside already handled leaves the selection alone,
+    // as ContentPanel does: a header chip opening its popover is one, and
+    // selecting would send the keyboard home and close what it opened.
+    if (e?.defaultPrevented) return;
     const target = e?.target as HTMLElement | null;
     const isBufferClick = !!target?.closest(".xterm");
     const managed = peekTerminalService()?.get(id) ?? null;
@@ -1310,16 +1355,55 @@ function TerminalPaneComponent({
     peekTerminalService()?.setAgentState(id, agentState ?? "idle");
   }, [id, agentState]);
 
-  // Per-pane dismiss state resets when the agent leaves the completed phase —
-  // a rerun should re-arm the banner from scratch.
-  useEffect(() => {
-    if (agentState !== "completed") {
-      setCompletionBannerDismissed(false);
-    }
-  }, [agentState]);
+  // A blocked wait (`error`) gets an error banner.
+  const waitingReason = usePanelStore((state) => {
+    const panel = state.panelsById[id];
+    return panel && isPtyPanel(panel) ? panel.waitingReason : undefined;
+  });
+  // Debounced the way the pane frame is, so the banner and the failed edge
+  // arrive together and a momentary wait never flashes either.
+  // A restart or an exit is the newer observation: the dead run's error wait
+  // no longer describes the pane.
+  const debouncedWait = useDockBlockedState(agentState);
+  const isBlockedWait =
+    debouncedWait === "waiting" && waitingReason === "error" && !isRestarting && !isExited;
+  // Stopped on what Daintree read as a question or an approval: where Canopy's
+  // reading would have told an ask from a finished turn, so its offer lives here.
+  const askedOn =
+    debouncedWait === "waiting" &&
+    !isRestarting &&
+    !isExited &&
+    (waitingReason === "question" || waitingReason === "approval")
+      ? waitingReason
+      : null;
+  const canopyOffer = useCanopyPaneOffer(id, askedOn !== null);
+  const [blockedBannerDismissed, setBlockedBannerDismissed] = useState(false);
+  const [relayDeployBannerDismissed, setRelayDeployBannerDismissed] = useState(false);
+  const [relayUpdateBannerDismissed, setRelayUpdateBannerDismissed] = useState(false);
+  const relayRemoval = useRelayRemoval(id, isDecisionsRemoveTerminalId(id));
+  const relayRemovalCopy = relayRemoval ? describeRelayRemoval(relayRemoval) : null;
+  // A dismissal holds until what the banner says changes.
+  const [relayRemovalDismissed, setRelayRemovalDismissed] = useState<string | null>(null);
+  // Folding and unfolding swap the control the keyboard is on; hand focus to
+  // its counterpart once the swap has painted, unless it already moved on.
+  const keepBlockedNoticeFocus = (label: string) => {
+    requestAnimationFrame(() => {
+      if (document.activeElement && document.activeElement !== document.body) return;
+      containerRef.current
+        ?.querySelector<HTMLElement>(`[data-pane-banners] [aria-label="${label}"]`)
+        ?.focus();
+    });
+  };
+  const blockedAgentName = effectiveAgentId
+    ? (getAgentConfig(effectiveAgentId)?.name ?? effectiveAgentId)
+    : "Agent";
 
-  // The current worktree's changed-file count drives the review strip and
-  // the zero-change pill. We prefer the explicit `worktreeId` prop (matches
+  useEffect(() => {
+    if (!isBlockedWait) setBlockedBannerDismissed(false);
+  }, [isBlockedWait]);
+
+  // The current worktree's changed-file count drives the zero-change pill.
+  // We prefer the explicit `worktreeId` prop (matches
   // `worktree.id` in WorktreeCard) over `cwd` so a user-initiated `cd` away
   // from the worktree root doesn't break the lookup.
   const reviewWorktreeId = worktreeId ?? cwd;
@@ -1330,54 +1414,7 @@ function TerminalPaneComponent({
       ? s.worktrees.get(reviewWorktreeId)?.worktreeChanges?.changedFileCount
       : undefined
   );
-  const changedFileCount = observedChangedFileCount ?? 0;
-
-  const completedWithChanges = agentState === "completed" && changedFileCount > 0;
   const completedWithNoChanges = agentState === "completed" && observedChangedFileCount === 0;
-
-  // Any review surface opening for this worktree dismisses the completion
-  // banner: the user is already looking at the changes it was pointing at.
-  const reviewDialogOpen = useReviewDialogOpenForWorktree(reviewWorktreeId);
-  useEffect(() => {
-    if (reviewDialogOpen) setCompletionBannerDismissed(true);
-  }, [reviewDialogOpen]);
-
-  const handleOpenReviewHub = () => {
-    if (reviewWorktreeId) {
-      void actionService.dispatch("worktree.openReviewHub", { worktreeId: reviewWorktreeId });
-    }
-  };
-
-  // "Send to assistant" drafts this agent's completion output into the active
-  // assistant session's composer. Offered whenever that session exists: a
-  // draft never submits, so a working assistant can take one too, and a
-  // session that can't take one says why when the button is pressed.
-  const helpTerminalId = useHelpPanelStore((s) => selectActiveSlot(s).terminalId);
-  const assistantAvailable = !!helpTerminalId && helpTerminalId !== id;
-
-  // The "Send to agent" palette has nothing to offer when this is the only
-  // eligible PTY pane — hide it rather than render a button that no-ops.
-  // Short-circuit on agentState: the result only gates the completion
-  // banner's button, so idle/working panes skip the O(N) scan per store write.
-  const hasAgentTargets = usePanelStore(
-    (s) =>
-      agentState === "completed" &&
-      s.panelIds.some((tid) => {
-        const t = s.panelsById[tid];
-        return (
-          !!t &&
-          t.id !== id &&
-          t.location !== "trash" &&
-          t.location !== "background" &&
-          t.location !== "overlay" &&
-          (t.kind ? panelKindHasPty(t.kind) : true) &&
-          (!isPtyPanel(t) || t.hasPty !== false)
-        );
-      })
-  );
-
-  const handleSendToAssistant = useCallback(() => sendCompletionToAssistant(id), [id]);
-  const handleSendToAgent = useCallback(() => sendCompletionToAgent(id), [id]);
 
   const isWorking = agentState === "working";
   const allowPing = !isMaximized;
@@ -1433,6 +1470,12 @@ function TerminalPaneComponent({
   const showScrollbackRestoreError =
     !suppressParseError && Boolean(scrollbackRestoreError) && !restartError;
   const showRestartStatus = restartBannerVariant.type !== "none";
+  // A lost session or a resume offer is an advisory: it sits below the
+  // notices that need acting on, where an exit error or a restart in flight
+  // sits with the failures.
+  const isAdvisoryRestartBanner =
+    restartBannerVariant.type === "session-resume-unavailable" ||
+    restartBannerVariant.type === "agent-resume-offer";
   const attachedProcessRunning = isAttachedProcessRunning({
     spawnStatus,
     runtimeStatus,
@@ -1493,10 +1536,8 @@ function TerminalPaneComponent({
       submitStatus={submitStatus ?? undefined}
       isPinged={isPinged}
       wasJustSelected={wasJustSelected}
-      ambientAgentState={ambientAgentState}
       isSelected={isSelected}
       isFleetFollower={isFleetFollower}
-      isHibernated={isHibernated}
       isVoiceArming={isVoiceArming}
       tabs={tabs}
       onTabClick={onTabClick}
@@ -1505,7 +1546,6 @@ function TerminalPaneComponent({
       onAddTab={onAddTab}
       className={cn(
         "terminal-pane",
-        isExited && EXITED_PANE_CLASS,
         isPinged &&
           allowPing &&
           (wasJustSelected ? "animate-terminal-ping-select" : "animate-terminal-ping")
@@ -1543,179 +1583,298 @@ function TerminalPaneComponent({
 
       {/* A PTY-backed plugin kind's "needs setup" strip, in flow above the
           terminal rather than over it. Nothing for a plain terminal. */}
-      {storedKind !== undefined && <PluginKindSetupStrip kind={storedKind} />}
-      <BannerSlot visible={paneInputNotice !== null}>
-        {paneInputNotice === "blocked" && paneInputBlock ? (
-          <TerminalInputBlockBanner block={paneInputBlock} panelId={id} />
-        ) : (
-          paneInputNotice === "confirmed" && <ControlConfirmedBanner />
-        )}
-      </BannerSlot>
+      {/* The pane's notices, failures first, then what needs acting on, then
+          advisories. The stack never takes more than a little under half the
+          pane: past that it scrolls, so a pile of notices cannot squeeze the
+          terminal they are about out of view. */}
+      <div
+        data-pane-banners
+        className="flex shrink-0 flex-col max-h-[45%] overflow-y-auto overscroll-contain"
+      >
+        <BannerSlot visible={isBlockedWait}>
+          {blockedBannerDismissed ? (
+            // Dismissed, the explanation folds to one line rather than leaving
+            // the failed edge as the pane's only sign: the glyph and the words
+            // stay until the agent moves on.
+            <InlineStatusBanner
+              severity="error"
+              layout="inline"
+              title={`${blockedAgentName} stopped on an error`}
+              action={{
+                id: "show-blocked-details",
+                label: "Details",
+                variant: "dismiss",
+                ariaLabel: "Show what stopped the agent",
+                onClick: () => {
+                  setBlockedBannerDismissed(false);
+                  keepBlockedNoticeFocus("Fold this notice to one line");
+                },
+              }}
+            />
+          ) : (
+            <InlineStatusBanner
+              severity="error"
+              title={`${blockedAgentName} stopped on an error`}
+              description="Its last output reads like a blocking error, such as a rate limit, an overload or a sign-in problem. It may not continue on its own."
+              closeAriaLabel="Fold this notice to one line"
+              onClose={() => {
+                setBlockedBannerDismissed(true);
+                keepBlockedNoticeFocus("Show what stopped the agent");
+              }}
+            />
+          )}
+        </BannerSlot>
 
-      <BannerSlot visible={showRestartError}>
-        {restartError && (
-          <TerminalErrorBanner
-            terminalId={id}
-            error={restartError}
-            onUpdateCwd={handleUpdateCwd}
-            onRetry={handleRestart}
-            onTrash={handleTrash}
-            isRestarting={isRestarting}
+        <BannerSlot visible={showRestartError}>
+          {restartError && (
+            <TerminalErrorBanner
+              terminalId={id}
+              error={restartError}
+              onUpdateCwd={handleUpdateCwd}
+              onRetry={handleRestart}
+              onTrash={handleTrash}
+              isRestarting={isRestarting}
+            />
+          )}
+        </BannerSlot>
+
+        <BannerSlot visible={showSpawnError}>
+          {spawnError && (
+            <SpawnErrorBanner
+              terminalId={id}
+              error={spawnError}
+              cwd={cwd}
+              onUpdateCwd={handleUpdateCwd}
+              onRetry={handleRestart}
+              onTrash={handleTrash}
+              onStartWithoutPluginTools={handleStartWithoutPluginTools}
+              isRestarting={isRestarting}
+            />
+          )}
+        </BannerSlot>
+
+        <BannerSlot visible={Boolean(attachError)}>
+          {attachError && (
+            <TerminalAttachErrorBanner
+              terminalId={id}
+              error={attachError}
+              processRunning={attachedProcessRunning}
+              onRetry={handleRetryAttach}
+              isRetrying={isRebuildingDisplay}
+            />
+          )}
+        </BannerSlot>
+
+        <BannerSlot visible={!suppressBackendDependent && showForceResumeStall}>
+          <InlineStatusBanner
+            severity="error"
+            title="Terminal output stalled"
+            description="Output keeps backing up faster than it can render. Reset the queue to recover."
+            action={{
+              id: "reset-force-resume-queue",
+              label: "Reset queue",
+              icon: RotateCcw,
+              onClick: resetForceResumeQueue,
+            }}
           />
-        )}
-      </BannerSlot>
+        </BannerSlot>
 
-      <BannerSlot visible={showSpawnError}>
-        {spawnError && (
-          <SpawnErrorBanner
-            terminalId={id}
-            error={spawnError}
-            cwd={cwd}
-            onUpdateCwd={handleUpdateCwd}
-            onRetry={handleRestart}
-            onTrash={handleTrash}
-            onStartWithoutPluginTools={handleStartWithoutPluginTools}
-            isRestarting={isRestarting}
-          />
-        )}
-      </BannerSlot>
+        <BannerSlot visible={showReconnectError}>
+          {reconnectError && (
+            <ReconnectErrorBanner
+              terminalId={id}
+              error={reconnectError}
+              onDismiss={handleDismissReconnectError}
+              onRestart={handleRestart}
+              isRestarting={isRestarting}
+            />
+          )}
+        </BannerSlot>
 
-      <BannerSlot visible={showSubmitStatusBanner}>
-        {(submitStatus === "stalled" || submitStatus === "failed") && (
-          <TerminalSubmitStatusBanner
-            terminalId={id}
-            status={submitStatus}
-            isRestarting={isRestarting}
-          />
-        )}
-      </BannerSlot>
+        <BannerSlot visible={showSubmitStatusBanner}>
+          {(submitStatus === "stalled" || submitStatus === "failed") && (
+            <TerminalSubmitStatusBanner
+              terminalId={id}
+              status={submitStatus}
+              isRestarting={isRestarting}
+            />
+          )}
+        </BannerSlot>
 
-      <BannerSlot visible={showReconnectError}>
-        {reconnectError && (
-          <ReconnectErrorBanner
-            terminalId={id}
-            error={reconnectError}
-            onDismiss={handleDismissReconnectError}
+        {/* A choice the pane waits on (#16045): no agent runs until it's made. */}
+        <BannerSlot visible={presetSwitchRefused && !isRestarting}>
+          <PresetSwitchRefusedBanner panelId={id} />
+        </BannerSlot>
+
+        <BannerSlot visible={showRestartStatus && !isAdvisoryRestartBanner}>
+          <TerminalRestartStatusBanner
+            variant={restartBannerVariant}
             onRestart={handleRestart}
-            isRestarting={isRestarting}
+            onDismiss={() =>
+              restartBannerVariant.type === "session-resume-unavailable"
+                ? sessionLostBanner.dismiss()
+                : restartBannerVariant.type === "agent-resume-offer"
+                  ? dismissAgentResumeOffer(id)
+                  : setDismissedRestartPrompt(true)
+            }
+            onResumeConversation={
+              offeredSessionId
+                ? () => void resumeFromAgentEndOffer(id, offeredSessionId)
+                : undefined
+            }
+            onDismissAll={
+              restartBannerVariant.type === "session-resume-unavailable"
+                ? sessionLostBanner.dismissAll
+                : undefined
+            }
+            findSessionSlot={
+              restartBannerVariant.type === "session-resume-unavailable" &&
+              effectiveAgentId === "codex" ? (
+                <FindCodexSessionAction panelId={id} />
+              ) : restartBannerVariant.type === "agent-resume-offer" &&
+                restartBannerVariant.agentId === "codex" ? (
+                <FindCodexSessionAction
+                  panelId={id}
+                  onOpenSession={(sessionId) => resumeFromAgentEndOffer(id, sessionId)}
+                />
+              ) : undefined
+            }
           />
-        )}
-      </BannerSlot>
+        </BannerSlot>
 
-      <BannerSlot visible={showScrollbackRestoreError}>
-        {scrollbackRestoreError && (
-          <ScrollbackRestoreErrorBanner
-            terminalId={id}
-            error={scrollbackRestoreError}
-            onDismiss={handleDismissScrollbackRestoreError}
+        {storedKind !== undefined && <PluginKindSetupStrip kind={storedKind} />}
+
+        <BannerSlot visible={showScrollbackRestoreError}>
+          {scrollbackRestoreError && (
+            <ScrollbackRestoreErrorBanner
+              terminalId={id}
+              error={scrollbackRestoreError}
+              onDismiss={handleDismissScrollbackRestoreError}
+              onRestart={handleRestart}
+              isRestarting={isRestarting}
+            />
+          )}
+        </BannerSlot>
+
+        <BannerSlot visible={showRestartStatus && isAdvisoryRestartBanner}>
+          <TerminalRestartStatusBanner
+            variant={restartBannerVariant}
             onRestart={handleRestart}
-            isRestarting={isRestarting}
+            onDismiss={() =>
+              restartBannerVariant.type === "session-resume-unavailable"
+                ? sessionLostBanner.dismiss()
+                : restartBannerVariant.type === "agent-resume-offer"
+                  ? dismissAgentResumeOffer(id)
+                  : setDismissedRestartPrompt(true)
+            }
+            onResumeConversation={
+              offeredSessionId
+                ? () => void resumeFromAgentEndOffer(id, offeredSessionId)
+                : undefined
+            }
+            onDismissAll={
+              restartBannerVariant.type === "session-resume-unavailable"
+                ? sessionLostBanner.dismissAll
+                : undefined
+            }
+            findSessionSlot={
+              restartBannerVariant.type === "session-resume-unavailable" &&
+              effectiveAgentId === "codex" ? (
+                <FindCodexSessionAction panelId={id} />
+              ) : restartBannerVariant.type === "agent-resume-offer" &&
+                restartBannerVariant.agentId === "codex" ? (
+                <FindCodexSessionAction
+                  panelId={id}
+                  onOpenSession={(sessionId) => resumeFromAgentEndOffer(id, sessionId)}
+                />
+              ) : undefined
+            }
           />
-        )}
-      </BannerSlot>
+        </BannerSlot>
 
-      <BannerSlot visible={Boolean(attachError)}>
-        {attachError && (
-          <TerminalAttachErrorBanner
-            terminalId={id}
-            error={attachError}
-            processRunning={attachedProcessRunning}
-            onRetry={handleRetryAttach}
-            isRetrying={isRebuildingDisplay}
+        <BannerSlot visible={paneInputNotice !== null}>
+          {paneInputNotice === "blocked" && paneInputBlock ? (
+            <TerminalInputBlockBanner block={paneInputBlock} panelId={id} />
+          ) : (
+            paneInputNotice === "confirmed" && <ControlConfirmedBanner />
+          )}
+        </BannerSlot>
+
+        <BannerSlot visible={worktreeMoveBanner.visible}>
+          <WorktreeMoveBanner
+            destinationPath={worktreeMoveBanner.destinationPath}
+            carriesDraft={worktreeMoveBanner.carriesDraft}
+            deliveryFailed={worktreeMoveBanner.deliveryFailed}
+            onTell={worktreeMoveBanner.tell}
+            onDismiss={worktreeMoveBanner.dismiss}
           />
-        )}
-      </BannerSlot>
+        </BannerSlot>
 
-      <BannerSlot visible={showRestartStatus}>
-        <TerminalRestartStatusBanner
-          variant={restartBannerVariant}
-          onRestart={handleRestart}
-          onDismiss={() =>
-            restartBannerVariant.type === "session-resume-unavailable"
-              ? sessionLostBanner.dismiss()
-              : restartBannerVariant.type === "agent-resume-offer"
-                ? dismissAgentResumeOffer(id)
-                : setDismissedRestartPrompt(true)
-          }
-          onResumeConversation={
-            offeredSessionId ? () => void resumeFromAgentEndOffer(id, offeredSessionId) : undefined
-          }
-          onDismissAll={
-            restartBannerVariant.type === "session-resume-unavailable"
-              ? sessionLostBanner.dismissAll
-              : undefined
-          }
-          findSessionSlot={
-            restartBannerVariant.type === "session-resume-unavailable" &&
-            effectiveAgentId === "codex" ? (
-              <FindCodexSessionAction panelId={id} />
-            ) : restartBannerVariant.type === "agent-resume-offer" &&
-              restartBannerVariant.agentId === "codex" ? (
-              <FindCodexSessionAction
-                panelId={id}
-                onOpenSession={(sessionId) => resumeFromAgentEndOffer(id, sessionId)}
-              />
-            ) : undefined
-          }
-        />
-      </BannerSlot>
+        <BannerSlot visible={voiceMicNotice !== null}>
+          {voiceMicNotice && <VoiceMicNoticeBanner notice={voiceMicNotice} />}
+        </BannerSlot>
 
-      <BannerSlot visible={!suppressBackendDependent && showForceResumeStall}>
-        <InlineStatusBanner
-          severity="error"
-          title="Terminal output stalled"
-          description="Output keeps backing up faster than it can render. Reset the queue to recover."
-          action={{
-            id: "reset-force-resume-queue",
-            label: "Reset queue",
-            icon: RotateCcw,
-            onClick: resetForceResumeQueue,
-          }}
-        />
-      </BannerSlot>
+        <BannerSlot visible={showInjectionBanner}>
+          <InlineStatusBanner
+            icon={injectionStatus === "waiting" ? Hourglass : Folders}
+            severity={injectionStatus === "waiting" ? "neutral" : "info"}
+            title={injectionStatus === "waiting" ? "Waiting for agent" : "Injecting context"}
+            description={
+              injectionStatus === "waiting"
+                ? "Context will inject when the agent is idle"
+                : undefined
+            }
+            contextLine={injectionStatus === "injecting" ? injectionProgress?.message : undefined}
+            role="status"
+            ariaLive="polite"
+            action={{
+              id: "cancel-context-injection",
+              label: "Cancel",
+              onClick: cancelInjection,
+            }}
+            descriptionExtras={
+              injectionStatus === "injecting" ? (
+                <ProgressBar
+                  label="Context injection"
+                  value={Math.round((injectionProgress?.progress ?? 0) * 100)}
+                  size="thin"
+                  className="mt-1.5"
+                />
+              ) : undefined
+            }
+          />
+        </BannerSlot>
 
-      <BannerSlot visible={worktreeMoveBanner.visible}>
-        <WorktreeMoveBanner
-          destinationPath={worktreeMoveBanner.destinationPath}
-          carriesDraft={worktreeMoveBanner.carriesDraft}
-          deliveryFailed={worktreeMoveBanner.deliveryFailed}
-          onTell={worktreeMoveBanner.tell}
-          onDismiss={worktreeMoveBanner.dismiss}
-        />
-      </BannerSlot>
+        <BannerSlot visible={canopyOffer !== null}>
+          {canopyOffer && (
+            <CanopyPaneOffer
+              panelId={id}
+              state={canopyOffer}
+              agentName={blockedAgentName}
+              reason={askedOn ?? "question"}
+            />
+          )}
+        </BannerSlot>
 
-      <BannerSlot visible={voiceMicNotice !== null}>
-        {voiceMicNotice && <VoiceMicNoticeBanner notice={voiceMicNotice} />}
-      </BannerSlot>
+        <BannerSlot visible={isDecisionsDeployTerminalId(id) && !relayDeployBannerDismissed}>
+          <RelayDeployBanner onDismiss={() => setRelayDeployBannerDismissed(true)} />
+        </BannerSlot>
 
-      <BannerSlot visible={showInjectionBanner}>
-        <InlineStatusBanner
-          icon={injectionStatus === "waiting" ? Hourglass : Folders}
-          severity={injectionStatus === "waiting" ? "neutral" : "info"}
-          title={injectionStatus === "waiting" ? "Waiting for agent" : "Injecting context"}
-          description={
-            injectionStatus === "waiting" ? "Context will inject when the agent is idle" : undefined
-          }
-          contextLine={injectionStatus === "injecting" ? injectionProgress?.message : undefined}
-          role="status"
-          ariaLive="polite"
-          action={{
-            id: "cancel-context-injection",
-            label: "Cancel",
-            onClick: cancelInjection,
-          }}
-          descriptionExtras={
-            injectionStatus === "injecting" ? (
-              <ProgressBar
-                label="Context injection"
-                value={Math.round((injectionProgress?.progress ?? 0) * 100)}
-                size="thin"
-                className="mt-1.5"
-              />
-            ) : undefined
-          }
-        />
-      </BannerSlot>
+        <BannerSlot visible={isDecisionsUpdateTerminalId(id) && !relayUpdateBannerDismissed}>
+          <RelayUpdateBanner onDismiss={() => setRelayUpdateBannerDismissed(true)} />
+        </BannerSlot>
+
+        <BannerSlot
+          visible={relayRemovalCopy !== null && relayRemovalCopy.key !== relayRemovalDismissed}
+        >
+          {relayRemovalCopy && (
+            <RelayRemovalBanner
+              copy={relayRemovalCopy}
+              onDismiss={() => setRelayRemovalDismissed(relayRemovalCopy.key)}
+            />
+          )}
+        </BannerSlot>
+      </div>
 
       <div className="flex-1 min-h-0 flex">
         <div className="flex-1 min-w-0 min-h-0 bg-surface-canvas flex flex-col">
@@ -1752,12 +1911,20 @@ function TerminalPaneComponent({
           ) : spawnStatus === "spawning" && !eagerAttach ? (
             <TerminalStartupPlaceholder agentId={agentId} onCancel={() => onClose()} />
           ) : spawnStatus === "failed" ? (
-            <div className="relative flex-1 min-h-0">
-              <PaneState
-                icon={<XCircle className="text-status-error" />}
-                title="Terminal failed to start"
-              />
-            </div>
+            showSpawnError || showRestartError ? (
+              // The banner above already names the failure and its recovery; a
+              // second error mark here only repeats it. The body keeps the
+              // terminal's colour, so a failed pane reads as a dead terminal
+              // rather than a hole in the grid.
+              <div className="relative flex-1 min-h-0 bg-terminal-background" />
+            ) : (
+              <div className="relative flex-1 min-h-0">
+                <PaneState
+                  icon={<XCircle className="text-status-error" />}
+                  title="Terminal failed to start"
+                />
+              </div>
+            )
           ) : (
             <>
               <div className="flex-1 relative min-h-0">
@@ -1840,22 +2007,13 @@ function TerminalPaneComponent({
                 )}
               </div>
 
-              {completedWithChanges && !completionBannerDismissed && (
-                <AgentCompletionBanner
-                  fileCount={changedFileCount}
-                  onReview={handleOpenReviewHub}
-                  onDismiss={() => setCompletionBannerDismissed(true)}
-                  onSendToAssistant={assistantAvailable ? handleSendToAssistant : undefined}
-                  onSendToAgent={hasAgentTargets ? handleSendToAgent : undefined}
-                />
-              )}
-
               {showHybridInputBar && (
                 <Suspense fallback={null}>
                   <LazyHybridInputBar
                     ref={inputBarRef}
                     terminalId={id}
                     disabled={isHybridInputDisabled}
+                    disabledPlaceholder={hybridInputDisabledPlaceholder}
                     followsDriver={followsDriver}
                     cwd={cwd}
                     agentId={effectiveAgentId}

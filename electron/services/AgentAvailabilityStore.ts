@@ -353,15 +353,14 @@ export function getAgentAvailabilityStore(): AgentAvailabilityStore {
 }
 
 /**
- * Initialize a new AgentAvailabilityStore instance.
- * Disposes any existing instance.
+ * Initialize the AgentAvailabilityStore singleton. Every window's setup and
+ * the windowless host's boot call this, and an existing instance is kept:
+ * its readings are of terminals that outlive any one window, and starting
+ * over would leave an agent already at its prompt unobserved until it next
+ * changes state.
  */
 export function initializeAgentAvailabilityStore(): AgentAvailabilityStore {
-  if (storeInstance) {
-    storeInstance.dispose();
-  }
-  storeInstance = new AgentAvailabilityStore();
-  return storeInstance;
+  return getAgentAvailabilityStore();
 }
 
 /**

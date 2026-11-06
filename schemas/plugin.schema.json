@@ -23,7 +23,7 @@
     },
     "mcpName": {
       "type": "string",
-      "pattern": "^(?!(?:docs|runbooks)$)[a-z0-9][a-z0-9-]{0,15}$"
+      "pattern": "^(?!(?:docs|runbooks|decisions)$)[a-z0-9][a-z0-9-]{0,15}$"
     },
     "description": {
       "type": "string"
@@ -358,6 +358,7 @@
           "agent:read",
           "agent:register",
           "agent:input",
+          "agent:launch-preset",
           "terminal:read",
           "git:read",
           "git:write",
@@ -1205,6 +1206,7 @@
                     "agent:read",
                     "agent:register",
                     "agent:input",
+                    "agent:launch-preset",
                     "terminal:read",
                     "git:read",
                     "git:write",

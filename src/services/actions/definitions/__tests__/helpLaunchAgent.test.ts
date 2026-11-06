@@ -118,6 +118,7 @@ import {
   resetHelpPanelRuntimeGateForTests,
 } from "@/lib/helpPanelRuntimeGate";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
+import { ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
 import { usePaletteStore } from "@/store/paletteStore";
 import { makePluginTourId } from "@shared/utils/tourIds";
 import type { ActionCallbacks, ActionRegistry } from "../../actionTypes";
@@ -199,6 +200,15 @@ describe("help.launchAgent", () => {
     // launch goes (#13192) — every test starts from one empty tab.
     useHelpPanelStore.setState(useHelpPanelStore.getInitialState(), true);
     action = extractHelpLaunchAgent();
+  });
+
+  it("takes any lane a project can hold as its slot, and refuses one past the ceiling", () => {
+    const schema = action.argsSchema!;
+    for (const slot of ASSISTANT_SLOTS) {
+      expect(schema.safeParse({ slot }).success).toBe(true);
+    }
+    expect(schema.safeParse({ slot: ASSISTANT_SLOTS.length }).success).toBe(false);
+    expect(schema.safeParse({ slot: -1 }).success).toBe(false);
   });
 
   it("asks for the assistant panel and binds nothing until it has mounted", async () => {
@@ -955,7 +965,7 @@ describe("help.launchAgent", () => {
     it("refuses without provisioning when every tab holds a session", async () => {
       const store = useHelpPanelStore.getState();
       store.setTerminal(0, "term-a", "claude", "sess-a");
-      for (const slot of [1, 2]) {
+      for (const slot of ASSISTANT_SLOTS.filter((slot) => slot !== 0)) {
         store.ensureSlot(slot);
         useHelpPanelStore.getState().setTerminal(slot, `term-${slot}`, "claude", `sess-${slot}`);
       }
@@ -976,8 +986,11 @@ describe("help.launchAgent", () => {
     it("counts a closed tab's hibernated conversation as in use", async () => {
       const store = useHelpPanelStore.getState();
       store.setTerminal(0, "term-a", "claude", "sess-a");
-      store.ensureSlot(1);
-      useHelpPanelStore.getState().setTerminal(1, "term-b", "claude", "sess-b");
+      // Every other tab is live, so the closed one is the only slot left.
+      for (const slot of ASSISTANT_SLOTS.filter((slot) => slot !== 0 && slot !== 2)) {
+        store.ensureSlot(slot);
+        useHelpPanelStore.getState().setTerminal(slot, `term-${slot}`, "claude", `sess-${slot}`);
+      }
       useHelpPanelStore.getState().setHibernateSession("proj-default", 2, {
         sessionId: "agent-s",
         cwd: "/repo",
@@ -1387,9 +1400,7 @@ describe("help.resumePastSession", () => {
   });
 
   it("reports every tab busy instead of displacing one, then replaces the tab the user names", async () => {
-    bindLane(0, "term-0", "claude");
-    bindLane(1, "term-1", "claude");
-    bindLane(2, "term-2", "claude");
+    for (const slot of ASSISTANT_SLOTS) bindLane(slot, `term-${slot}`, "claude");
 
     expect(await run({ agentId: "claude", sessionId: "abc-1" })).toEqual({
       outcome: "lanes-full",
@@ -1647,9 +1658,7 @@ describe("help.newSessionWithAgent (#13442)", () => {
   });
 
   it("says the tabs are full instead of displacing one", async () => {
-    bindLane(0, "term-0", "claude");
-    bindLane(1, "term-1", "claude");
-    bindLane(2, "term-2", "claude");
+    for (const slot of ASSISTANT_SLOTS) bindLane(slot, `term-${slot}`, "claude");
 
     expect(await run("codex")).toEqual({ outcome: "lanes-full" });
 

@@ -1,6 +1,11 @@
 import { NOTIFY_REPLY_MAX_CHARS } from "../../../shared/types/terminalNotify.js";
 import { tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
-import { detectHandback } from "../pty/HandbackDetector.js";
+import { handbackNeedsYouMarker, handbackStartMarker } from "../../../shared/utils/handback.js";
+import {
+  inputSuggestionRuleFor,
+  observeInputLine,
+} from "../../../shared/utils/terminalInputLine.js";
+import { detectHandback, rejoinHyphenRowBreaks } from "../pty/HandbackDetector.js";
 
 /** The target's last screen lines, captured when its notice fired. */
 export interface NoticeReply {
@@ -97,21 +102,21 @@ function closingMarkerAt(
 /** Rows searched above a closing marker for its opening one: a capped summary wraps to fewer. */
 const MAX_MARKER_ROWS = 40;
 
-const HANDBACK_START_SPLIT_HEAD = /DAINTREE-DONE-[\s─-▟|]*$/u;
+/** Rows one opening marker can span: its first, and one more per hyphen in it. */
+const OPENING_MARKER_MAX_ROWS = 5;
 
-/** The row the opening marker for `code` nearest above row `from` starts on; -1 when none. */
+/**
+ * The row the opening marker for `code` nearest above row `from` starts on,
+ * either form (#16190); -1 when none. Rows broken at any of the marker's
+ * hyphens are joined back as the detector joins them. Nothing below `from` is
+ * read, so the first row found searching up is the one the marker starts on.
+ */
 function openingRowFor(rows: readonly string[], code: string, from: number): number {
-  const start = `DAINTREE-DONE-${code}`;
-  const splitTail = new RegExp(`^[\\s\\u2500-\\u259f\\u23bf\\u23fa|>›❯•●◦·]*${code}\\b`, "u");
+  const starts = [handbackStartMarker(code), handbackNeedsYouMarker(code)];
   for (let r = from; r >= 0 && r >= from - MAX_MARKER_ROWS; r--) {
-    if (rows[r].includes(start)) return r;
-    if (
-      r + 1 < rows.length &&
-      HANDBACK_START_SPLIT_HEAD.test(rows[r]) &&
-      splitTail.test(rows[r + 1])
-    ) {
-      return r;
-    }
+    const end = Math.min(r + OPENING_MARKER_MAX_ROWS, from + 1);
+    const joined = rejoinHyphenRowBreaks(rows.slice(r, end).join("\n"));
+    if (starts.some((start) => joined.includes(start))) return r;
   }
   return -1;
 }
@@ -168,15 +173,20 @@ export interface ExtractedReply {
  * quote ends at that marker wherever it sits on the screen, which drops the
  * composer and status rows an agent TUI draws below its reply. `endAt` is the
  * marker observed, when known, or `true` for any marker the detector accepts.
+ * `agentId` is the agent the screen is read for: the suggested next prompt it
+ * draws in its input box is marked, so it can't pass for the owner's words
+ * (#16189).
  */
 export function extractReply(
   serialized: string,
   lines: number,
   endAt: ObservedMarker | boolean,
-  maxChars: number = NOTIFY_REPLY_MAX_CHARS
+  maxChars: number = NOTIFY_REPLY_MAX_CHARS,
+  agentId?: string | null
 ): ExtractedReply {
   if (lines <= 0) return { reply: null, reachedHandback: false };
-  const tail = tailCapturedOutput(serialized, REPLY_SEARCH_ROWS, true);
+  const { marked } = observeInputLine(serialized, inputSuggestionRuleFor(agentId));
+  const tail = tailCapturedOutput(marked, REPLY_SEARCH_ROWS, true);
   let rows = replyRows(tail.content);
   let truncated = tail.truncated;
   let reachedHandback = false;

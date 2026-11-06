@@ -123,6 +123,9 @@ describe("buildProjectTemplateInventory", () => {
     [".continue/mcpServers/db.yaml", "agent configuration"],
     [".roo/mcp.json", "agent configuration"],
     [".cline/hooks/pre.sh", "agent configuration"],
+    // Kimi Code runs the stdio servers in a project's .kimi-code/mcp.json.
+    [".kimi-code/mcp.json", "agent configuration"],
+    ["apps/web/.kimi-code/mcp.json", "agent configuration"],
     ["GIT~2", "repository metadata"],
     // Spellings a case-insensitive disk resolves to a refused name: `ſ` folds
     // to `s` on APFS, and a full-width letter is its ASCII form after NFKC.

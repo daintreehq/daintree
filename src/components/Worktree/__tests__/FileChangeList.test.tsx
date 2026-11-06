@@ -362,6 +362,16 @@ describe("FileChangeList — folder grouping is an invariant (#12102)", () => {
     expect(container.textContent).toContain("…and 1 more");
     expect(container.textContent).toContain("b.ts");
   });
+
+  it("counts files the status read counted without rows in the overflow line (#15559)", () => {
+    const changes = [file("src/a.ts"), file("src/b.ts")];
+    const { container } = render(
+      <FileChangeList changes={changes} rootPath={ROOT} maxVisible={1} unlistedCount={5} />
+    );
+    expect(container.textContent).toContain("…and 6 more");
+    // Only b.ts can be named; the rest are marked as more.
+    expect(container.textContent).toContain("b.ts, …");
+  });
 });
 
 describe("FileChangeList — stale state (#8069)", () => {

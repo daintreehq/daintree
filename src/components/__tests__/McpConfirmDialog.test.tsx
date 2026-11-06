@@ -18,6 +18,7 @@ import {
 import type { ActionDanger } from "@shared/types/actions";
 import type { McpBearerIdentity } from "@shared/types/ipc/mcpServer";
 import type { McpConfirmRequester } from "@/store/mcpConfirmStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 
 vi.mock("zustand/react/shallow", () => ({
   useShallow: (fn: unknown) => fn,
@@ -435,7 +436,7 @@ describe("McpConfirmDialog", () => {
       }
     });
 
-    it("keeps an expired request up, inert, until it is closed, then shows the next", async () => {
+    it("keeps an expired request with nothing behind it up, inert, until it is closed", async () => {
       vi.useFakeTimers();
       try {
         const expiring = enqueue(
@@ -446,7 +447,6 @@ describe("McpConfirmDialog", () => {
           },
           mainDeadline()
         );
-        const next = enqueue({ requestId: "req-next", actionTitle: "Push branch" }, mainDeadline());
         render(<McpConfirmDialog />);
         // Already mounted, and empty, so the expiry is a change it announces.
         const status = screen.getByRole("status");
@@ -470,19 +470,214 @@ describe("McpConfirmDialog", () => {
         // Typing the name and clicking answers nothing: it already timed out.
         expect(useMcpConfirmStore.getState().current?.requestId).toBe("req-expiring");
 
-        await act(async () => {
-          await vi.advanceTimersByTimeAsync(5_000);
-        });
         act(() => {
           fireEvent.click(screen.getByRole("button", { name: "Close" }));
         });
-        expect(screen.getByText("Run 'Push branch'?")).toBeTruthy();
-        // The next one's window starts now, not when it was queued.
+        expect(useMcpConfirmStore.getState().current).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("brings up the next request as soon as the one on screen expires, and says the earlier one expired (#15700)", async () => {
+      vi.useFakeTimers();
+      try {
+        const expiring = enqueue(
+          { requestId: "req-expiring", actionTitle: "Delete worktree", subject: "feature/x" },
+          mainDeadline()
+        );
+        const nextDeadline = mainDeadline();
+        const next = enqueue(
+          { requestId: "req-next", actionTitle: "Push branch", danger: "safe" },
+          nextDeadline
+        );
+        render(<McpConfirmDialog />);
+        const status = screen.getByRole("status");
         await act(async () => {
-          await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS - 1_000);
+          await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS);
+        });
+
+        expect(await expiring).toEqual({ decision: "timeout" });
+        // Nobody closed anything: the next request is up, and it is the one asking.
+        expect(screen.getByText("Run 'Push branch'?")).toBeTruthy();
+        expect(screen.queryByText("Delete worktree 'feature/x'?")).toBeNull();
+        expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+        const notice =
+          "The previous request, Delete worktree 'feature/x', timed out before an answer, so nothing ran";
+        expect(screen.getByText(notice)).toBeTruthy();
+        // Said once through the announcer; the status line is for this request's own expiry.
+        expect(useAnnouncerStore.getState().polite?.msg).toBe(
+          `${notice}. Now asking: Run 'Push branch'?`
+        );
+        expect(screen.getByRole("status")).toBe(status);
+        expect(status.textContent).toBe("");
+        expect(nextDeadline.phases).toEqual(["queued", "shown"]);
+
+        // Brought up under a pointer that may have been aimed at the request
+        // that expired, so even a safe request starts with its button held,
+        // and focus lands on Cancel rather than the arguments ahead of it.
+        const confirm = screen.getByRole("button", { name: "Push branch" });
+        expect(confirm.getAttribute("aria-disabled")).toBe("true");
+        act(() => {
+          fireEvent.click(confirm);
         });
         await expectStillPending(next);
+        expect(confirm.getAttribute("aria-disabled")).toBe("true");
+        expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("cancel");
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1_200 - PENDING_PROBE_MS);
+        });
+        expect(confirm.hasAttribute("aria-disabled")).toBe(false);
+
+        // A whole window of its own, from the moment it came up.
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS - 1_200 - 1_000);
+        });
+        await expectStillPending(next);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1_000);
+        });
+        expect(await next).toEqual({ decision: "timeout" });
       } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("brings up a request that arrives while an expired one is up, and says the earlier one expired (#15700)", async () => {
+      vi.useFakeTimers();
+      try {
+        void enqueue({ requestId: "req-expiring", actionTitle: "Delete worktree" }, mainDeadline());
+        render(<McpConfirmDialog />);
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS);
+        });
+        expect(screen.getByRole("button", { name: "Close" })).toBeTruthy();
+
+        let arriving!: ReturnType<typeof enqueue>;
+        await act(async () => {
+          arriving = enqueue(
+            { requestId: "req-arriving", actionTitle: "Push branch", danger: "safe" },
+            mainDeadline()
+          );
+          await vi.advanceTimersByTimeAsync(0);
+        });
+
+        expect(screen.getByText("Run 'Push branch'?")).toBeTruthy();
+        expect(
+          screen.getByText(
+            "The previous request, 'Delete worktree', timed out before an answer, so nothing ran"
+          )
+        ).toBeTruthy();
+        expect(screen.queryByRole("button", { name: "Close" })).toBeNull();
+        await expectStillPending(arriving);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("announces each request brought up by an expiry, even when the words repeat (#15700)", () => {
+      void enqueue({ requestId: "req-a", actionTitle: "Push", danger: "safe" });
+      void enqueue({ requestId: "req-b", actionTitle: "Push", danger: "safe" });
+      void enqueue({ requestId: "req-c", actionTitle: "Push", danger: "safe" });
+      render(<McpConfirmDialog />);
+
+      act(() => {
+        useMcpConfirmStore.getState().expire("req-a");
+      });
+      const first = useAnnouncerStore.getState().polite;
+      act(() => {
+        useMcpConfirmStore.getState().expire("req-b");
+      });
+      const second = useAnnouncerStore.getState().polite;
+
+      expect(useMcpConfirmStore.getState().current?.requestId).toBe("req-c");
+      expect(first?.msg).toContain("The previous request, 'Push', timed out");
+      expect(second?.msg).toBe(first?.msg);
+      expect(second?.id).toBeGreaterThan(first?.id ?? Infinity);
+    });
+
+    it("never approves the next request with a press that began on the one that expired (#15700)", async () => {
+      vi.useFakeTimers();
+      try {
+        void enqueue({ requestId: "req-expiring", actionTitle: "Push", danger: "safe" });
+        const next = enqueue({ requestId: "req-next", actionTitle: "Push", danger: "safe" });
+        render(<McpConfirmDialog />);
+        const confirm = screen.getByRole("button", { name: "Push" });
+
+        // Pressed while the first was up, held through the swap and the cooldown.
+        fireEvent.pointerDown(confirm);
+        act(() => {
+          useMcpConfirmStore.getState().expire("req-expiring");
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1_300);
+        });
+        expect(screen.getByRole("button", { name: "Push" })).toBe(confirm);
+        expect(confirm.hasAttribute("aria-disabled")).toBe(false);
+        act(() => {
+          fireEvent.click(confirm);
+        });
+        await expectStillPending(next);
+
+        // A press that begins on the request now up answers it.
+        fireEvent.pointerDown(confirm);
+        act(() => {
+          fireEvent.click(confirm);
+        });
+        expect(await next).toEqual({ decision: "approved" });
+      } finally {
+        vi.runOnlyPendingTimers();
+        vi.useRealTimers();
+      }
+    });
+
+    it("lets a click with no press of its own approve after a finished press on an earlier request (#15700)", async () => {
+      vi.useFakeTimers();
+      try {
+        void enqueue({ requestId: "req-expiring", actionTitle: "Push", danger: "safe" });
+        const next = enqueue({ requestId: "req-next", actionTitle: "Push", danger: "safe" });
+        render(<McpConfirmDialog />);
+        const description = screen.getByText("Permanently delete a worktree.");
+        fireEvent.pointerDown(description);
+        fireEvent.click(description);
+
+        act(() => {
+          useMcpConfirmStore.getState().expire("req-expiring");
+        });
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1_300);
+        });
+        // An assistive "press": a click with no pointer behind it.
+        act(() => {
+          screen.getByRole("button", { name: "Push" }).click();
+        });
+
+        expect(await next).toEqual({ decision: "approved" });
+      } finally {
+        vi.runOnlyPendingTimers();
+        vi.useRealTimers();
+      }
+    });
+
+    it("never answers the request brought up in place of one that expired with a click meant for it (#15700)", async () => {
+      vi.useFakeTimers();
+      try {
+        void enqueue({ requestId: "req-expiring", actionTitle: "Push", danger: "safe" });
+        const next = enqueue({ requestId: "req-next", actionTitle: "Push", danger: "safe" });
+        render(<McpConfirmDialog />);
+        const aimed = screen.getByRole("button", { name: "Push" });
+        expect(aimed.hasAttribute("aria-disabled")).toBe(false);
+
+        // The expiry and the click land back to back, before any re-render.
+        act(() => {
+          useMcpConfirmStore.getState().expire("req-expiring");
+          aimed.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+        });
+
+        expect(useMcpConfirmStore.getState().current?.requestId).toBe("req-next");
+        await expectStillPending(next);
+      } finally {
+        vi.runOnlyPendingTimers();
         vi.useRealTimers();
       }
     });
@@ -1068,6 +1263,66 @@ describe("McpConfirmDialog", () => {
       expect(requesterMocks.show).toHaveBeenCalledTimes(1);
       expect(screen.getByRole("button", { name: "Push" })).toBeTruthy();
       expect(screen.queryByRole("region", { name: "Approval request" })).toBeNull();
+    });
+
+    it("brings the next request up when the one stepped aside from expires (#15700)", async () => {
+      vi.useFakeTimers();
+      try {
+        const expiring = enqueue(
+          { requestId: "req-aside", danger: "safe", actionTitle: "Push", requester: PANE },
+          mainDeadline()
+        );
+        const next = enqueue(
+          { requestId: "req-next", danger: "safe", actionTitle: "Pull" },
+          mainDeadline()
+        );
+        render(<McpConfirmDialog />);
+        act(() => {
+          fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+        });
+
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS);
+        });
+
+        expect(await expiring).toEqual({ decision: "timeout" });
+        expect(screen.queryByRole("region", { name: "Approval request" })).toBeNull();
+        expect(screen.getByText("Run 'Pull'?")).toBeTruthy();
+        expect(
+          screen.getByText(
+            "The previous request, 'Push', timed out before an answer, so nothing ran"
+          )
+        ).toBeTruthy();
+        await expectStillPending(next);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("says again that the previous request expired when the next comes back into view (#15700)", async () => {
+      void enqueue({ requestId: "req-expiring", danger: "safe", actionTitle: "Push" });
+      void enqueue({ requestId: "req-next", danger: "safe", actionTitle: "Pull", requester: PANE });
+      render(<McpConfirmDialog />);
+      act(() => {
+        useMcpConfirmStore.getState().expire("req-expiring");
+      });
+      const promoted = useAnnouncerStore.getState().polite;
+      expect(promoted?.msg).toContain("The previous request, 'Push', timed out");
+
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Show pane" }));
+      });
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(useAnnouncerStore.getState().polite).toBe(promoted);
+      act(() => {
+        fireEvent.click(screen.getByRole("button", { name: "Review request" }));
+      });
+
+      const reopened = useAnnouncerStore.getState().polite;
+      expect(reopened?.msg).toBe(promoted?.msg);
+      expect(reopened?.id).toBeGreaterThan(promoted?.id ?? Infinity);
     });
 
     it("keeps the request's clock running while it is stepped aside", async () => {

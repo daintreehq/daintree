@@ -256,6 +256,68 @@ describe("agentActions adversarial", () => {
     expect(parseAgainstSchema(actions, "agent.launch", result).success).toBe(true);
   });
 
+  // Only the host's dispatch options make a launch a scheduled run's (#15977):
+  // neither an argument an MCP or plugin caller writes nor a forged source can.
+  it("agent.launch hands the launcher the host's scheduled run and no argument's", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+    const run = { scheduleId: "schedule-1", runId: "run-1" };
+
+    await callAction(actions, "agent.launch", { agentId: "claude" }, { scheduledRun: run });
+    await callAction(actions, "agent.launch", {
+      agentId: "claude",
+      scheduledRun: { scheduleId: "schedule-2", runId: "run-2" },
+    });
+
+    expect(callbacks.onLaunchAgent.mock.calls.map(([, options]) => options.scheduledRun)).toEqual([
+      run,
+      undefined,
+    ]);
+  });
+
+  // Only a plugin dispatch's host-stamped context carries a preset approval to
+  // the launcher, which holds the launch to it (#16324).
+  it("agent.launch hands the launcher a plugin dispatch's preset approval and no other", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+    const approval = {
+      agentId: "claude",
+      presetId: "zai",
+      source: "custom" as const,
+      content: "[1]",
+      fallbacks: [],
+    };
+
+    await callAction(
+      actions,
+      "agent.launch",
+      { agentId: "claude", presetId: "zai" },
+      {
+        dispatchSource: "plugin",
+        callerPluginId: "beads",
+        hostApprovedPluginPresetLaunch: approval,
+      }
+    );
+    await callAction(
+      actions,
+      "agent.launch",
+      { agentId: "claude", presetId: "zai" },
+      { dispatchSource: "agent", hostApprovedPluginPresetLaunch: approval }
+    );
+
+    expect(
+      callbacks.onLaunchAgent.mock.calls.map(([, options]) => options.approvedPluginPreset)
+    ).toEqual([approval, undefined]);
+  });
+
+  it("agent.launch refuses a schedule source in its arguments", () => {
+    const schema = getDefinition(setupActions(makeCallbacks()), "agent.launch").argsSchema;
+    if (!schema) throw new Error("agent.launch has no argsSchema");
+
+    expect(schema.safeParse({ agentId: "claude", spawnedBy: "schedule" }).success).toBe(false);
+    expect(schema.safeParse({ agentId: "claude", spawnedBy: "mcp" }).success).toBe(true);
+  });
+
   // A requested id is a request for a new panel; one this view already holds
   // would have the launcher overwrite a live panel's record (#12407).
   it("agent.launch refuses a requested id an existing panel already uses", async () => {
@@ -322,7 +384,8 @@ describe("agentActions adversarial", () => {
         : undefined;
     expect(code).toEqual(expect.stringMatching(/^[a-z0-9]{6}$/));
     expect(options).toMatchObject({
-      prompt: `Fix the flaky test\n\n${buildHandbackInstruction(String(code))}`,
+      // Every handback request offers needs-you beside done (#16190).
+      prompt: `Fix the flaky test\n\n${buildHandbackInstruction(String(code), "run")}`,
       // The pane records what the caller wrote, never the instruction (#14592).
       promptAsWritten: "Fix the flaky test",
     });
@@ -447,6 +510,46 @@ describe("agentActions adversarial", () => {
     await expect(launch).rejects.toBeInstanceOf(UnactionableTargetError);
     await expect(launch).rejects.toThrow(/Gemini has no launch option that appends/);
     expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["an interactive launch", { model: "devstral-small", prompt: "Fix the bug" }],
+    ["a headless launch with no prompt", { model: "devstral-small", interactive: false }],
+    ["a model in its verbatim flags", { agentLaunchFlags: ["--model=devstral-small"] }],
+    ["a two-word model flag", { agentLaunchFlags: ["--model", "devstral-small"] }],
+  ])(
+    "agent.launch refuses a Vibe model on %s, which Vibe ignores or rejects (#15569)",
+    async (_label, args) => {
+      const callbacks = makeCallbacks();
+      const actions = setupActions(callbacks);
+
+      const launch = callAction(actions, "agent.launch", { agentId: "mistral", ...args });
+      await expect(launch).rejects.toBeInstanceOf(UnactionableTargetError);
+      await expect(launch).rejects.toThrow(
+        /Mistral Vibe applies a model only to a new headless run/
+      );
+      expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+    }
+  );
+
+  it("agent.launch passes a Vibe model through for a headless run with a prompt", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(actions, "agent.launch", {
+      agentId: "mistral",
+      model: "devstral-small",
+      prompt: "Fix the bug",
+      interactive: false,
+    });
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
+      "mistral",
+      expect.objectContaining({
+        modelId: "devstral-small",
+        interactive: false,
+        prompt: "Fix the bug",
+      })
+    );
   });
 
   it("agent.launch refuses a systemPrompt that starts with a dash", async () => {

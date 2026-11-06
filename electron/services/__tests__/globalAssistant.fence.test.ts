@@ -16,6 +16,7 @@ function makeService() {
     spawn: async () => true,
     revoke: async () => {},
     kill: () => {},
+    focusedWindows: () => [],
   });
 }
 
@@ -44,6 +45,23 @@ describe("fenceInputOnOwnerChange (#14454)", () => {
     service.claimInput(a, 10);
     await settle();
     expect(cancelPendingInput).toHaveBeenCalledTimes(3);
+  });
+
+  it("drops the departing owner's pending input once when main hands its input on (#16098)", async () => {
+    const service = makeService();
+    const cancelPendingInput = vi.fn();
+    fenceInputOnOwnerChange(service, async () => ({ cancelPendingInput }));
+    const { terminalId } = await service.ensureSession();
+    const a = service.attach(10, 1);
+    const b = service.attach(20, 2);
+    await settle();
+    cancelPendingInput.mockClear();
+
+    service.detach(a, 10);
+    await settle();
+    expect(service.getState().inputOwner).toBe(b);
+    expect(cancelPendingInput).toHaveBeenCalledTimes(1);
+    expect(cancelPendingInput).toHaveBeenCalledWith(terminalId);
   });
 
   it("asks nothing of the PTY host while no run holds a terminal", async () => {

@@ -8,8 +8,12 @@ import { create } from "zustand";
  *
  * Only what the user typed or recalled lands here. The worktree note's seed is
  * an open-time hint and is never kept on its own (#7884). Session-scoped like
- * the Viewed marks it sits beside: never persisted, so a fresh app session or
- * an evicted project view starts from an empty composer.
+ * the Viewed marks it sits beside: never persisted, so a fresh app session
+ * starts from an empty composer. Nothing would bring a draft back once the
+ * view is gone, so a view holding one counts as holding unrecoverable work
+ * (#15574): eviction, idle release, a move to another window and automatic
+ * Sleep all leave it alone. Memory pressure still takes it, as the last
+ * ordinary tier, exactly as it takes an unsaved file draft.
  */
 interface ReviewCommitDraftState {
   draftsByWorktree: Record<string, string>;
@@ -55,3 +59,10 @@ export const useReviewCommitDraftStore = create<ReviewCommitDraftState>()((set) 
         : { draftsByWorktree: withoutKey(state.draftsByWorktree, worktreePath) }
     ),
 }));
+
+/** A draft with text in it. Whitespace alone is nothing a teardown would lose. */
+export function hasTypedCommitDraft(): boolean {
+  return Object.values(useReviewCommitDraftStore.getState().draftsByWorktree).some(
+    (message) => message.trim() !== ""
+  );
+}

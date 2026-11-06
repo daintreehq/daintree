@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { InlineError } from "@/components/ui/field";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { getAgentConfig } from "@shared/config/agentRegistry";
@@ -24,6 +25,8 @@ import { takeFirstConnect } from "./hostCopySettingsRequests";
 import type { HostPluginsSectionId } from "./hostPluginRequests";
 import { HostClipboardGrants } from "./HostClipboardGrants";
 import { HostPluginViewConsents } from "./HostPluginViewConsents";
+import { HostWakeSetup } from "./HostWakeSetup";
+import { bringBackMessage, canBringBack, useHostBringBacks } from "./hostBringBack";
 import {
   buildLabel,
   connectionLabel,
@@ -129,6 +132,11 @@ export function HostDetail({
   );
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
+  const bringBacks = useHostBringBacks();
+  const bringing = bringBacks.isPending(descriptor.id);
+  const bringBackSaid = bringing
+    ? null
+    : bringBackMessage(bringBacks.outcomeFor(descriptor.id), descriptor, connection);
   const name = useCommittedField(descriptor.name, (value) =>
     remoteHostsClient.update({ hostId: descriptor.id, name: value })
   );
@@ -314,11 +322,27 @@ export function HostDetail({
             label="Status"
             description={connectionLabel(connection)}
             error={
-              // Announced: it answers one press of Connect or Disconnect.
-              connectError ? <span role="alert">{connectError}</span> : undefined
+              // Announced: it answers one press of Connect, Disconnect or Bring back.
+              connectError || bringBackSaid ? (
+                <span role="alert">{connectError ?? bringBackSaid}</span>
+              ) : undefined
             }
             control={
               <div className="flex gap-2">
+                {(bringing || canBringBack(connection)) && (
+                  // Wakes it where a wake is set up below, then starts Daintree there if it can.
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    loading={bringing}
+                    onClick={() => {
+                      setConnectError(null);
+                      bringBacks.bringBack(descriptor.id);
+                    }}
+                  >
+                    Bring back
+                  </Button>
+                )}
                 {hostModeOff && (
                   // Setting up turns Host mode on there; Retry checks again as it is.
                   <Button variant="outline" size="sm" onClick={() => setUpdateOpen("setup")}>
@@ -370,6 +394,8 @@ export function HostDetail({
           />
         </SettingsGroup>
       </SettingsSection>
+
+      {sshTarget !== null && <HostWakeSetup descriptor={descriptor} />}
 
       <HostSessionsSection
         hostId={descriptor.id}
@@ -527,11 +553,7 @@ export function HostDetail({
         onConfirm={remove}
         isConfirmLoading={removing}
       >
-        {removeError && (
-          <p role="alert" className="text-xs text-status-error select-text">
-            {removeError}
-          </p>
-        )}
+        {removeError && <InlineError role="alert">{removeError}</InlineError>}
       </ConfirmDialog>
       {changeTargetOpen && sshTarget !== null && (
         <ChangeHostTargetDialog

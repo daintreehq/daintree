@@ -16,6 +16,7 @@ import {
 } from "../../../shared/elementPicker/resolution.js";
 import type { ProjectContextOutcome } from "../../../shared/elementPicker/projectContext.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { ELEMENT_PICKER_MAX_HELD_SOURCES } from "../../../shared/types/ipc/elementPicker.js";
 import { logError, logInfo, logWarn } from "../../utils/logger.js";
 import { minimalSpawnEnv } from "../../utils/minimalSpawnEnv.js";
 import { watchShared } from "../FileObservationService.js";
@@ -762,6 +763,26 @@ export class ElementPickerHost {
     if (this.disposed) throw hostError("HOST_DISPOSED", "the source host is shutting down");
     if (signal.aborted) throw hostError("UNKNOWN_WORKSPACE", "the workspace was released");
     return unique.map((path, index) => ({ path, revision: revisions[index] ?? null }));
+  }
+
+  /**
+   * The files the view holds a selection on, most important first, for the
+   * workspace's source tracker to keep ahead of whatever else a resolve read.
+   * Advisory: it reads nothing here, never starts the resolver process, and a
+   * path no resolve in the workspace has read stays untracked.
+   */
+  async holdSources(workspaceId: string, paths: readonly string[]): Promise<void> {
+    if (this.disposed) throw hostError("HOST_DISPOSED", "the source host is shutting down");
+    if (
+      !Array.isArray(paths) ||
+      paths.length > ELEMENT_PICKER_MAX_HELD_SOURCES ||
+      !paths.every((entry) => typeof entry === "string")
+    ) {
+      throw hostError("INVALID_REQUEST", "the paths are malformed");
+    }
+    const workspace = this.workspaces.get(workspaceId);
+    if (!workspace) throw hostError("UNKNOWN_WORKSPACE", "no open workspace has this id");
+    workspace.tracker.hold(paths);
   }
 
   private async currentRevision(

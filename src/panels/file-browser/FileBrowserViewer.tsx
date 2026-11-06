@@ -18,7 +18,7 @@ import {
   XCircle,
   type LucideIcon,
 } from "lucide-react";
-import { CircleCheck, FolderOpen } from "@/components/icons";
+import { CircleCheck } from "@/components/icons";
 import {
   DropdownMenuCheckboxItem,
   DropdownMenuItem,
@@ -34,7 +34,8 @@ import {
   TOOLBAR_ICON_CLASS,
   useFileViewerToolbarCompact,
 } from "@/components/FileViewer/FileViewerToolbar";
-import { revealCopy } from "@/components/FileViewer/revealCopy";
+import { useRevealCopy, type RevealCopy } from "@/components/FileViewer/revealCopy";
+import { RevealActionButton, runTransientReveal } from "@/components/FileViewer/revealFeedback";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { FileImagePreview } from "@/components/FileViewer/FileImagePreview";
 import { ZoomableImage } from "@/components/FileViewer/ZoomableImage";
@@ -789,9 +790,11 @@ export function FileBrowserViewer({
   };
 
   const handleExternalAction = useCallback(
-    async (target: ExternalTarget) => {
-      if (!filePath) return;
-      if (externalInFlightRef.current.has(target)) return;
+    // Resolves true once the action succeeded, so a remote window's reveal —
+    // a host-path copy that changes nothing on screen — can confirm itself.
+    async (target: ExternalTarget): Promise<boolean> => {
+      if (!filePath) return false;
+      if (externalInFlightRef.current.has(target)) return false;
       externalInFlightRef.current.add(target);
       const generation = externalGenerationRef.current;
       setPendingTargets((current) => (current.includes(target) ? current : [...current, target]));
@@ -801,13 +804,15 @@ export function FileBrowserViewer({
           { path: filePath },
           { source: "user" }
         );
-        if (externalGenerationRef.current !== generation) return;
+        // A stale result touches no banner, but a copy it made is still real.
+        if (externalGenerationRef.current !== generation) return result.ok;
         if (result.ok) {
           setExternalError((current) => (current?.target === target ? null : current));
-          return;
+          return true;
         }
         logError(`[FileBrowserViewer] ${EXTERNAL_ACTIONS[target]} failed`, result.error);
         setExternalError({ message: result.error.message, target });
+        return false;
       } finally {
         // Releasing in `finally` keeps a rejection from wedging the button for
         // good; the generation check leaves a reset's clean slate alone.
@@ -826,7 +831,7 @@ export function FileBrowserViewer({
   // blocks a double submit from the first millisecond.
   const showRetrySpinner = useDohertyGate(isErrorTargetPending);
 
-  const reveal = revealCopy();
+  const reveal = useRevealCopy();
   const externalErrorCopy =
     externalError === null
       ? null
@@ -1003,8 +1008,8 @@ export function FileBrowserViewer({
                     ? { value: wrapLines, onValueChange: setWrapLines }
                     : null
               }
-              revealLabel={reveal.label}
-              onReveal={() => void handleExternalAction("reveal")}
+              reveal={reveal}
+              onReveal={() => handleExternalAction("reveal")}
               openLabel={openAction.label}
               openIcon={openAction.icon}
               onOpen={runOpen}
@@ -1059,7 +1064,12 @@ export function FileBrowserViewer({
             variant: "dangerFilled",
             loading: showRetrySpinner,
             disabled: isErrorTargetPending,
-            onClick: () => void handleExternalAction(externalError.target),
+            // A retried copy confirms like the first attempt would have; the
+            // banner it came from unmounts on success.
+            onClick: () =>
+              externalError.target === "reveal"
+                ? runTransientReveal(reveal, () => handleExternalAction("reveal"))
+                : void handleExternalAction(externalError.target),
             ariaLabel: externalErrorCopy.retry,
           }}
           onClose={() => setExternalError(null)}
@@ -1357,10 +1367,12 @@ export function FileBrowserViewer({
               {openAction.label}
             </Button>
           ) : copy.action === "reveal" ? (
-            <Button variant="subtle" size="sm" onClick={() => void handleExternalAction("reveal")}>
-              <FolderOpen />
-              {reveal.label}
-            </Button>
+            <RevealActionButton
+              reveal={reveal}
+              path={filePath}
+              onReveal={() => handleExternalAction("reveal")}
+              variant="subtle"
+            />
           ) : copy.action === "retry" ? (
             <Button variant="subtle" size="sm" onClick={onRefresh}>
               <RefreshCw />
@@ -1631,7 +1643,7 @@ function FileActions({
   contents,
   textSize,
   wrap,
-  revealLabel,
+  reveal,
   onReveal,
   openLabel,
   openIcon: OpenIcon,
@@ -1642,8 +1654,9 @@ function FileActions({
   contents: string | null;
   textSize: { value: MarkdownFontSize; onValueChange: (value: MarkdownFontSize) => void } | null;
   wrap: { value: boolean; onValueChange: (value: boolean) => void } | null;
-  revealLabel: string;
-  onReveal: () => void;
+  reveal: RevealCopy;
+  /** Resolves true once the reveal succeeded; the viewer reports a failure. */
+  onReveal: () => Promise<boolean>;
   openLabel: string;
   openIcon: LucideIcon;
   onOpen: () => void;
@@ -1686,9 +1699,9 @@ function FileActions({
             Copy file contents
           </DropdownMenuItem>
         )}
-        <DropdownMenuItem onSelect={onReveal}>
-          <FolderOpen className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
-          {revealLabel}
+        <DropdownMenuItem onSelect={() => runTransientReveal(reveal, onReveal)}>
+          <reveal.icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
+          {reveal.label}
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={onOpen}>
           <OpenIcon className="mr-2 h-3.5 w-3.5" aria-hidden="true" data-menu-icon />
@@ -1734,9 +1747,7 @@ function FileActions({
           `svg` keeps sanitized markup rather than the source it was built
           from, and every media/error state carries none at all. */}
       <FileViewerToolbar.CopyContentsButton key={filePath} contents={contents} />
-      <FileViewerToolbar.IconButton label={revealLabel} onClick={onReveal}>
-        <FolderOpen className={TOOLBAR_ICON_CLASS} />
-      </FileViewerToolbar.IconButton>
+      <FileViewerToolbar.RevealButton reveal={reveal} path={filePath} onReveal={onReveal} />
       <FileViewerToolbar.IconButton label={openLabel} onClick={onOpen}>
         <OpenIcon className={TOOLBAR_ICON_CLASS} />
       </FileViewerToolbar.IconButton>

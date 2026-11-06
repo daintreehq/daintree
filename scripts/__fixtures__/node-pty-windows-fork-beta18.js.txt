@@ -1,0 +1,3 @@
+// The fork site from node-pty 1.2.0-beta.18's windowsPtyAgent.js.
+// Runtime tests separately execute the complete installed agent.
+            var agent = (0, child_process_1.fork)(path.join(__dirname, 'conpty_console_list_agent'), [_this._innerPid.toString()]);

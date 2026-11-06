@@ -1077,12 +1077,14 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
   },
   // Stop and send, staying where you are. Not Cmd+Alt+D: macOS takes that to
   // hide the Dock before the app sees it, and Cmd+Shift+D opens changes. Only
-  // while dictating, so the Review Hub's commit box keeps the key otherwise.
+  // while dictating, or while a send it started waits on its cleanup (pressed
+  // again, it sends as the words stand), so the Review Hub's commit box keeps
+  // the key otherwise.
   {
     actionId: "voiceInput.stopAndSend",
     combo: "Cmd+Shift+Enter",
     scope: "global",
-    when: "dictationActive",
+    when: "dictationActive || voiceSendWaiting",
     priority: 0,
     description: "Stop voice dictation and send the prompt",
     category: "Voice",

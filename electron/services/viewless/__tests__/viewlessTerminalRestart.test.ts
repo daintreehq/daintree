@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CHANNELS } from "../../../ipc/channels.js";
 import type { ProjectState, TerminalSnapshot } from "../../../../shared/types/project.js";
 import type { ViewlessTerminalRecord } from "../ViewlessActionExecutor.js";
@@ -49,8 +49,13 @@ describe("restartTerminalWithoutView", () => {
       "sess-123"
     );
 
-    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("restarted");
+    // Told once, before the kill (#15918).
+    const beforeChange = vi.fn(() => expect(invoke).not.toHaveBeenCalled());
+    await expect(
+      restartTerminalWithoutView(PROJECT.id, "t1", deps, () => true, beforeChange)
+    ).resolves.toBe("restarted");
 
+    expect(beforeChange).toHaveBeenCalledTimes(1);
     expect(channels(invoke)).toEqual([CHANNELS.TERMINAL_GRACEFUL_KILL, CHANNELS.TERMINAL_SPAWN]);
     expect(invoke.mock.calls[0]?.[2]).toEqual(["t1", { forRestart: true }]);
     const spawn = spawned(invoke);
@@ -86,6 +91,119 @@ describe("restartTerminalWithoutView", () => {
 
     await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("restarted");
     expect(spawned(invoke).command).toBe("claude --model opus");
+  });
+
+  // #15977: the pane is still the scheduled run's, so the host's record keeps
+  // the run whether the restart resumes or starts over.
+  it.each([
+    ["resumed", "sess-123"],
+    ["started over", null],
+  ])("hands a scheduled run's ids to the respawn when %s", async (_label, killAnswer) => {
+    const run = { scheduleId: "schedule-1", runId: "run-1" };
+    const { deps, invoke } = setup(
+      {
+        id: "t1",
+        launchAgentId: "claude",
+        command: "claude",
+        spawnedBy: "schedule",
+        scheduledRun: run,
+      },
+      { agentState: "working", launchAgentId: "claude" },
+      killAnswer
+    );
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("restarted");
+    expect(spawned(invoke).scheduledRun).toEqual(run);
+  });
+
+  it("hands no run to a respawn whose saved pane has only half the pair", async () => {
+    const { deps, invoke } = setup(
+      {
+        id: "t1",
+        launchAgentId: "claude",
+        command: "claude",
+        spawnedBy: "mcp",
+        scheduledRun: { scheduleId: "schedule-1", runId: "run-1" },
+      },
+      { agentState: "working", launchAgentId: "claude" }
+    );
+
+    await restartTerminalWithoutView(PROJECT.id, "t1", deps);
+    expect(spawned(invoke)).not.toHaveProperty("scheduledRun");
+  });
+
+  it("leaves a pane saved with a retired model for a view to restart (#15652)", async () => {
+    const { deps, invoke } = setup(
+      {
+        id: "t1",
+        launchAgentId: "copilot",
+        command: "copilot --model claude-opus-4.6",
+        agentModelId: "claude-opus-4.6",
+        agentLaunchFlags: ["--model", "claude-opus-4.6"],
+      },
+      { agentState: "working", launchAgentId: "copilot" },
+      "sess-123"
+    );
+
+    const beforeChange = vi.fn();
+    await expect(
+      restartTerminalWithoutView(PROJECT.id, "t1", deps, () => true, beforeChange)
+    ).resolves.toBe("unsupported");
+    expect(invoke).not.toHaveBeenCalled();
+    // Nothing changed, so nothing is told (#15918).
+    expect(beforeChange).not.toHaveBeenCalled();
+  });
+
+  it("leaves a pane holding a Vibe model a restart can't select for a view to restart (#15569)", async () => {
+    const { deps, invoke } = setup(
+      {
+        id: "t1",
+        launchAgentId: "mistral",
+        title: "Mistral Vibe (Small)",
+        command: "vibe --trust --model devstral-small",
+        agentModelId: "devstral-small",
+        agentLaunchFlags: ["--trust"],
+      },
+      { agentState: "working", launchAgentId: "mistral" },
+      "sess-123"
+    );
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("unsupported");
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("relaunches a Vibe pane that holds no model", async () => {
+    const { deps, invoke } = setup(
+      {
+        id: "t1",
+        launchAgentId: "mistral",
+        command: "vibe --trust",
+        agentLaunchFlags: ["--trust"],
+      },
+      { agentState: "working", launchAgentId: "mistral" },
+      null
+    );
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("restarted");
+    expect(spawned(invoke).command).toBe("vibe --trust");
+  });
+
+  it("relaunches a pane on a model Copilot still offers (#15652)", async () => {
+    const { deps, invoke } = setup(
+      {
+        id: "t1",
+        launchAgentId: "copilot",
+        command: "copilot --model gpt-6.1-sol",
+        agentModelId: "gpt-6.1-sol",
+      },
+      { agentState: "working", launchAgentId: "copilot" }
+    );
+
+    await expect(restartTerminalWithoutView(PROJECT.id, "t1", deps)).resolves.toBe("restarted");
+    expect(spawned(invoke)).toMatchObject({
+      command: "copilot --model gpt-6.1-sol",
+      agentModelId: "gpt-6.1-sol",
+    });
   });
 
   it("keeps the run's first prompt across a resume (#15521)", async () => {

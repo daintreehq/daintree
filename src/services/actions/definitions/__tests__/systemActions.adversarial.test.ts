@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { COPY_TREE_UNMATCHED_SELECTORS } from "@shared/types/ipc/copyTree";
 import { COPY_TREE_HISTORY_NAME_MAX_LENGTH } from "@shared/types/ipc/copyTreeHistory";
@@ -71,6 +71,8 @@ vi.mock("@/clients", () => ({
 }));
 
 import { registerSystemActions } from "../systemActions";
+import { usePanelStore } from "@/store/panelStore";
+import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
 import {
   setWorktreePathIndexAccessor,
   resetStoreAccessorsForTesting,
@@ -830,11 +832,12 @@ describe("systemActions adversarial", () => {
         { terminalId: "t-1" },
         { activeWorktreeId: "wt-active" }
       );
+      // The run carries an id of its own, so a lock mid-run can stop it.
       expect(copyTreeClientMock.injectToTerminal).toHaveBeenCalledWith(
         "t-1",
         "wt-active",
         undefined,
-        undefined,
+        expect.any(String),
         "unknown",
         undefined
       );
@@ -851,7 +854,7 @@ describe("systemActions adversarial", () => {
         "t-1",
         "wt-explicit",
         undefined,
-        undefined,
+        expect.any(String),
         "unknown",
         undefined
       );
@@ -862,6 +865,60 @@ describe("systemActions adversarial", () => {
       await expect(run("copyTree.injectToTerminal", { terminalId: "t-1" })).rejects.toThrow(
         "No active worktree"
       );
+    });
+
+    describe("into a locked pane (#15644)", () => {
+      function setLocked(isInputLocked: boolean): void {
+        usePanelStore.setState({
+          panelsById: { "t-1": { id: "t-1", kind: "terminal", isInputLocked } as never },
+        });
+      }
+
+      afterEach(() => {
+        usePanelStore.setState({ panelsById: {} });
+      });
+
+      it("refuses before anything is generated, and announces nothing", async () => {
+        setLocked(true);
+        const { run } = setupActions();
+
+        const attempt = run(
+          "copyTree.injectToTerminal",
+          { terminalId: "t-1" },
+          { activeWorktreeId: "wt-active" }
+        );
+
+        await expect(attempt).rejects.toBeInstanceOf(UnactionableTargetError);
+        await expect(attempt).rejects.toThrow(/input is locked/);
+        expect(copyTreeClientMock.injectToTerminal).not.toHaveBeenCalled();
+        expect(notifyMock).not.toHaveBeenCalled();
+      });
+
+      it("stops a run locked mid-flight and reports the stop, never success", async () => {
+        setLocked(false);
+        let reply!: (value: { content: string; fileCount: number; error?: string }) => void;
+        copyTreeClientMock.injectToTerminal.mockReturnValueOnce(
+          new Promise((resolve) => {
+            reply = resolve;
+          })
+        );
+        const { run } = setupActions();
+
+        const attempt = run(
+          "copyTree.injectToTerminal",
+          { terminalId: "t-1" },
+          { activeWorktreeId: "wt-active" }
+        );
+        await vi.waitFor(() => expect(copyTreeClientMock.injectToTerminal).toHaveBeenCalled());
+        setLocked(true);
+        const injectionId = copyTreeClientMock.injectToTerminal.mock.calls[0]?.[3];
+        expect(copyTreeClientMock.cancel).toHaveBeenCalledWith(injectionId, "input-locked");
+        const stopped = "Injection stopped: the terminal's input was locked";
+        reply({ content: "", fileCount: 0, error: stopped });
+
+        await expect(attempt).rejects.toThrow(stopped);
+        expect(notifyMock).not.toHaveBeenCalled();
+      });
     });
 
     it("reports only the counts — the context went to the terminal, not the result", async () => {
@@ -987,7 +1044,7 @@ describe("systemActions adversarial", () => {
         mock: copyTreeClientMock.injectToTerminal,
         args: { terminalId: "t-1" },
         base: "Context injected",
-        call: ["t-1", "wt-active", undefined, undefined, "unknown", RAW_NAME],
+        call: ["t-1", "wt-active", undefined, expect.any(String), "unknown", RAW_NAME],
       },
     ];
 

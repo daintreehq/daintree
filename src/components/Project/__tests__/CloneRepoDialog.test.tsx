@@ -184,7 +184,12 @@ vi.mock("@/components/Terminal/InlineStatusBanner", () => ({
   },
 }));
 
+vi.mock("@/components/ui/select", () => import("@/components/ui/__tests__/nativeSelectMock"));
+vi.mock("@/store/projectGroupsStore", () => import("@/store/__tests__/projectGroupsStoreMock"));
+
 import { CloneRepoDialog } from "../CloneRepoDialog";
+import { useProjectGroupsStore } from "@/store/projectGroupsStore";
+import { makeProjectGroup } from "@/store/__tests__/projectGroupsStoreMock";
 
 describe("CloneRepoDialog", () => {
   let progressHandler: ((event: CloneRepoProgressEvent) => void) | null = null;
@@ -218,6 +223,7 @@ describe("CloneRepoDialog", () => {
 
     cloneRepoMock.mockResolvedValue({ clonedPath: "/tmp/my-repo" });
     openDialogMock.mockResolvedValue("/tmp");
+    useProjectGroupsStore.setState({ groups: [] });
   });
 
   afterEach(() => {
@@ -432,6 +438,70 @@ describe("CloneRepoDialog", () => {
       { name: "my-repo", emoji: suggestProjectEmoji("my-repo") },
       { disposition: "new" }
     );
+  });
+
+  describe("project group", () => {
+    const groupField = () => screen.queryByTestId<HTMLSelectElement>("project-group-field");
+
+    async function fillAndClone(): Promise<void> {
+      fireEvent.change(screen.getByLabelText(/^url$/i), {
+        target: { value: "https://github.com/user/my-repo.git" },
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Browse for a location" }));
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Clone" }));
+      });
+    }
+
+    it("offers no group row while no groups exist", () => {
+      render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+      expect(groupField()).toBeNull();
+    });
+
+    it("hands the chosen group on with the cloned project", async () => {
+      useProjectGroupsStore.setState({
+        groups: [makeProjectGroup("g1", "Daintree"), makeProjectGroup("g2", "Clients", 1)],
+      });
+      const onSuccess = vi.fn();
+      render(<CloneRepoDialog isOpen={true} onSuccess={onSuccess} onCancel={vi.fn()} />);
+
+      expect(groupField()?.value).toBe("no-group");
+      fireEvent.change(groupField()!, { target: { value: "g1" } });
+      await fillAndClone();
+      fireEvent.click(await screen.findByRole("button", { name: "Open project" }));
+
+      expect(onSuccess).toHaveBeenCalledExactlyOnceWith(
+        "/tmp/my-repo",
+        { name: "my-repo", emoji: suggestProjectEmoji("my-repo") },
+        { disposition: "current", groupId: "g1" }
+      );
+    });
+
+    it("hands on no group when the chosen one is deleted during the clone", async () => {
+      useProjectGroupsStore.setState({ groups: [makeProjectGroup("g1", "Daintree")] });
+      let finishClone: ((value: { clonedPath: string }) => void) | null = null;
+      cloneRepoMock.mockImplementationOnce(
+        () => new Promise<{ clonedPath: string }>((resolve) => (finishClone = resolve))
+      );
+      const onSuccess = vi.fn();
+      render(<CloneRepoDialog isOpen={true} onSuccess={onSuccess} onCancel={vi.fn()} />);
+
+      fireEvent.change(groupField()!, { target: { value: "g1" } });
+      await fillAndClone();
+      act(() => {
+        useProjectGroupsStore.setState({ groups: [] });
+      });
+      await act(async () => {
+        finishClone?.({ clonedPath: "/tmp/my-repo" });
+      });
+      fireEvent.click(await screen.findByRole("button", { name: "Open project" }));
+
+      expect(onSuccess).toHaveBeenCalledExactlyOnceWith("/tmp/my-repo", expect.any(Object), {
+        disposition: "current",
+      });
+    });
   });
 
   it("locks the destination while the clone runs", async () => {

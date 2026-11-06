@@ -141,6 +141,7 @@ export type {
   CopyTreeGenerateAndCopyFilePayload,
   CopyTreeInjectPayload,
   CopyTreeCancelPayload,
+  CopyTreeStopReason,
   CopyTreeGetFileTreePayload,
   CopyTreeTestConfigOptions,
   CopyTreeTestConfigPayload,
@@ -366,6 +367,7 @@ export type { BuiltInKeyAction, KeyAction, KeymapPreset, KeyMapConfig } from "./
 
 // Agent settings types - AI agent CLI configuration
 export type {
+  AgentAccount,
   AgentSettingsEntry,
   AgentSettings,
   DangerousMode,
@@ -685,23 +687,6 @@ export type {
   ActionDispatchPayload,
 } from "./actions.js";
 
-// Command system types - global command registry and execution
-export type {
-  CommandCategory,
-  CommandArgumentType,
-  CommandArgument,
-  CommandContext,
-  CommandResult,
-  BuilderFieldType,
-  BuilderFieldValidation,
-  BuilderField,
-  BuilderStep,
-  DaintreeCommand,
-  CommandManifestEntry,
-  CommandExecutePayload,
-  CommandGetPayload,
-} from "./commands.js";
-
 // App Agent types - AI configuration
 export type { AppAgentProvider, AppAgentConfig } from "./appAgent.js";
 
@@ -732,6 +717,8 @@ export type {
   EditorConfig,
   DiscoveredEditor,
   EditorSetConfigPayload,
+  EditorSetDefaultPayload,
+  EditorClearProjectPreferencePayload,
   EditorGetConfigResult,
 } from "./editor.js";
 

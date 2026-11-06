@@ -98,8 +98,7 @@ describe("list-row states", () => {
   const classes = (value: string) => value.split(/\s+/).filter(Boolean);
 
   it("give the menu target no fill, so it can never collide with hover or selection", () => {
-    // On light themes `overlay-raised` resolves to the highlight's own colour; a
-    // fill tier here had no free rung left on the ladder.
+    // A fill tier here would need a rung of its own between hover and selection.
     const fills = classes(ROW_MENU_TARGET_CLASS).filter((c) => /(^|:)bg-/.test(c));
     expect(fills).toEqual([]);
     expect(classes(ROW_MENU_TARGET_CLASS).some((c) => /:outline(-\d)?$/.test(c))).toBe(true);

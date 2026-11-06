@@ -23,7 +23,6 @@ export function useFileRefresh({
   effectiveRootPath,
   diffWorktreePath,
   relativeFilePath,
-  isMarkdown,
   viewMode,
   changeTick,
   worktreeChangeTick,
@@ -44,7 +43,6 @@ export function useFileRefresh({
   effectiveRootPath: string;
   diffWorktreePath: string;
   relativeFilePath: string;
-  isMarkdown: boolean;
   viewMode: FileViewMode;
   changeTick: number | undefined;
   worktreeChangeTick: number | undefined;
@@ -57,11 +55,18 @@ export function useFileRefresh({
   diffSubject: DiffSubject | null;
   diffContent: unknown;
   retryDiff: () => void;
-}): { refreshing: boolean; handleToolbarRefresh: () => void } {
+}): { refreshing: boolean; handleToolbarRefresh: () => void; imageRefreshEpoch: number } {
   // A preview the host refused to a watching window loads once this one has control.
   useRetryOnControl(loadState === "error" && errorCode === "DRIVEN_ELSEWHERE", () =>
     loadFile("explicit")
   );
+
+  // The rendered Markdown's cache token: every embedded image refetches when it
+  // moves. Only a moment that could have missed a write moves it — Refresh,
+  // focus regain, coming back to this project. A worktree tick doesn't: each
+  // image follows the ticks that could have touched its own file (#15678).
+  const [imageRefreshEpoch, setImageRefreshEpoch] = useState(0);
+  const refetchImages = useCallback(() => setImageRefreshEpoch((epoch) => epoch + 1), []);
 
   // Which surface a toolbar Refresh press is currently spinning for (or null).
   // The mode is captured at click so a mode switch mid-refresh doesn't settle
@@ -75,9 +80,13 @@ export function useFileRefresh({
   // full rotation from the single active render.
   const handleToolbarRefresh = useCallback(() => {
     setRefreshingMode(viewMode);
-    if (viewMode === "diff") retryDiff();
-    else loadFile("explicit");
-  }, [viewMode, retryDiff, loadFile]);
+    if (viewMode === "diff") {
+      retryDiff();
+      return;
+    }
+    refetchImages();
+    loadFile("explicit");
+  }, [viewMode, retryDiff, loadFile, refetchImages]);
 
   useEffect(() => {
     if (refreshingMode === null) return;
@@ -113,7 +122,8 @@ export function useFileRefresh({
   // And only a tick that could have touched this file: every write anywhere in
   // the worktree moves the tick, so without the changed-directory check each
   // open pane re-reads on all of them. A failed read keeps taking every tick —
-  // that is how one that raced a half-written file recovers.
+  // that is how one that raced a half-written file recovers. Markdown is no
+  // exception: its embedded images watch their own directories.
   const fileChangeCount = useFileChangeCount(
     changeTick,
     useMemo(
@@ -121,13 +131,7 @@ export function useFileRefresh({
       [worktreeChangeTick, gitChangeTick, changedDirs]
     ),
     relativeFilePath || null,
-    // Markdown opts out for the same reason it opts out of the bytes-changed
-    // gate: an embedded image elsewhere in the worktree is the change, and only
-    // a read bumps the cache token that refetches it.
-    !isMarkdown &&
-      canonicalFilePath !== null &&
-      canonicalFilePath === filePath &&
-      loadState !== "error"
+    canonicalFilePath !== null && canonicalFilePath === filePath && loadState !== "error"
   );
   const lastChangeSignalRef = useRef({
     filePath,
@@ -193,17 +197,21 @@ export function useFileRefresh({
   const wasFocusedRef = useRef(isFocused);
   useEffect(() => {
     if (isFocused && !wasFocusedRef.current && refetchesOnFocus) {
+      refetchImages();
       loadFile("ambient");
     }
     wasFocusedRef.current = isFocused;
-  }, [isFocused, refetchesOnFocus, loadFile]);
+  }, [isFocused, refetchesOnFocus, loadFile, refetchImages]);
 
   useEffect(() => {
     if (!refetchesOnFocus) return;
-    const handleWindowFocus = () => loadFile("ambient");
+    const handleWindowFocus = () => {
+      refetchImages();
+      loadFile("ambient");
+    };
     window.addEventListener("focus", handleWindowFocus);
     return () => window.removeEventListener("focus", handleWindowFocus);
-  }, [refetchesOnFocus, loadFile]);
+  }, [refetchesOnFocus, loadFile, refetchImages]);
 
   // Coming back to a project the user left is the one moment nothing else
   // covers. A view swap is not a page load and produces no window focus event,
@@ -232,10 +240,12 @@ export function useFileRefresh({
   );
   useProjectViewRevealed(
     () => {
-      if (viewMode !== "diff") loadFile("revealed");
+      if (viewMode === "diff") return;
+      refetchImages();
+      loadFile("revealed");
     },
     { enabled: !isDockParked }
   );
 
-  return { refreshing: refreshingMode !== null, handleToolbarRefresh };
+  return { refreshing: refreshingMode !== null, handleToolbarRefresh, imageRefreshEpoch };
 }

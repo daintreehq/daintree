@@ -15,12 +15,17 @@ const { broadcastToRenderer, broadcastToProjectRenderers, logWarn, logInfo } = v
   logWarn: vi.fn(),
   logInfo: vi.fn(),
 }));
-const { revokePaneConfig, acceptCapturedAgentSession, releaseSupersededCapturedSession } =
-  vi.hoisted(() => ({
-    revokePaneConfig: vi.fn(async (_id: string) => undefined),
-    acceptCapturedAgentSession: vi.fn(),
-    releaseSupersededCapturedSession: vi.fn(),
-  }));
+const {
+  revokePaneConfig,
+  acceptCapturedAgentSession,
+  acceptObservedAgentSession,
+  releaseSupersededCapturedSession,
+} = vi.hoisted(() => ({
+  revokePaneConfig: vi.fn(async (_id: string) => undefined),
+  acceptCapturedAgentSession: vi.fn(),
+  acceptObservedAgentSession: vi.fn(async () => "filled"),
+  releaseSupersededCapturedSession: vi.fn(),
+}));
 const handleTerminalExit = vi.hoisted(() => vi.fn());
 const handleTerminalSpawnResult = vi.hoisted(() => vi.fn());
 const serviceRef = vi.hoisted(() => ({
@@ -53,6 +58,7 @@ vi.mock("../../../../services/McpPaneConfigService.js", () => ({
 }));
 vi.mock("../../../../services/pty/agentSessionCapturePersistence.js", () => ({
   acceptCapturedAgentSession,
+  acceptObservedAgentSession,
   releaseSupersededCapturedSession,
 }));
 const deliverFirstPrompt = vi.hoisted(() => vi.fn());
@@ -355,6 +361,7 @@ describe("terminal event handlers — captured agent sessions (#12433)", () => {
 
   beforeEach(() => {
     acceptCapturedAgentSession.mockReset();
+    acceptObservedAgentSession.mockClear();
     releaseSupersededCapturedSession.mockReset();
     ptyClient = Object.assign(new EventEmitter(), { getTerminalProjectId: vi.fn() });
     dispose = registerTerminalEventHandlers({ ptyClient } as unknown as HandlerDependencies);
@@ -373,6 +380,21 @@ describe("terminal event handlers — captured agent sessions (#12433)", () => {
     // hop through a microtask would leave a window where it is invisible.
     expect(acceptCapturedAgentSession).toHaveBeenCalledTimes(1);
     expect(acceptCapturedAgentSession).toHaveBeenCalledWith(payload);
+  });
+
+  it("hands each argv observation to persistence before the emit returns (#15994)", () => {
+    const payload = {
+      terminalId: "t1",
+      agentId: "codex",
+      projectId: "proj-1",
+      sessionId: "0199f8c1-2b4d-7e3a-9f10-5c6d7e8f9a0b",
+      run: { launchGeneration: 3, agentIncarnation: 1 },
+    };
+
+    events.emit("agent-session:observed", payload);
+
+    expect(acceptObservedAgentSession.mock.calls).toEqual([[payload]]);
+    expect(acceptCapturedAgentSession).not.toHaveBeenCalled();
   });
 
   it("offers only a confirmed spawn, with its generation, to the relaunch release", () => {

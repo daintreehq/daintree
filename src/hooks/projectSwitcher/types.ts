@@ -229,7 +229,16 @@ export interface SearchableProject extends WorkspaceRowStatusFields {
  * Sleep, ⌘⌫ remove — type-reachable with a scratch id behind it.
  */
 export type ProjectSwitcherProjectRow = { kind: "project" } & SearchableProject;
-export type ProjectSwitcherScratchRow = { kind: "scratch" } & SearchableScratch;
+/**
+ * `section` is set only on a scratch browse lifts into a project band — one
+ * asking for something or running agents — so the work the header counts is
+ * found where the header's eye goes. Search rows and the pinned Scratch
+ * section's rows carry none.
+ */
+export type ProjectSwitcherScratchRow = {
+  kind: "scratch";
+  section?: ProjectBandKey;
+} & SearchableScratch;
 export type ProjectSwitcherRow = ProjectSwitcherProjectRow | ProjectSwitcherScratchRow;
 
 /**
@@ -321,6 +330,13 @@ export interface UseProjectSwitcherPaletteReturn {
    * non-empty, so `results[selectedIndex]` is guaranteed to be a rendered row.
    */
   selectedIndex: number;
+  /**
+   * Bumped each time the open palette's own shortcut is pressed again, which
+   * steps the palette's cursor one stop. The palette owns that step because
+   * its cursor walks rows this hook doesn't select among — band headers,
+   * scratches, other hosts.
+   */
+  cycleRequest: number;
   open: (mode?: ProjectSwitcherMode) => void;
   close: () => void;
   toggle: (mode?: ProjectSwitcherMode) => void;

@@ -12,6 +12,7 @@ import { createSessionServer, validateDisplayImageUrl } from "../sessionServer.j
 import type { SessionServerDeps } from "../sessionServer.js";
 import type { SessionStore } from "../sessionStore.js";
 import type { McpSessionOrigin } from "../../../../shared/types/ipc/mcpServer.js";
+import { AgentReadQuotaResultSchema } from "../../../../shared/types/assistantControl.js";
 import {
   AssistantTargetError,
   type AssistantCaller,
@@ -771,10 +772,35 @@ describe("one assistant addressing another (#13496)", () => {
     expect(control.list).toHaveBeenCalledWith(CALLER);
 
     const quota = await callTool(server, { name: "agent.readQuota", arguments: {} });
+    // No pane has shown a Claude usage message, and the answer says so.
     expect(quota.structuredContent).toEqual({
+      claude: { source: "seen-in-panes", readings: [] },
       codex: { status: "unavailable", reason: "cli-missing", fetchedAt: 3 },
     });
     expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("answers agent.readQuota with the Claude usage messages this machine's panes showed (#15727)", async () => {
+    const { deps } = assistantDeps({ caller: CALLER });
+    const readings = [
+      {
+        window: "weekly limit" as const,
+        statement: "used" as const,
+        usedPercent: 87,
+        resetsAt: 1_793_602_800_000,
+        terminalId: "t-worker",
+        observedAt: 1_793_574_000_000,
+      },
+    ];
+    deps.readClaudeUsage = vi.fn(() => readings);
+    const server = await serve(deps);
+
+    const quota = await callTool(server, { name: "agent.readQuota", arguments: {} });
+    expect(quota.structuredContent).toEqual({
+      claude: { source: "seen-in-panes", readings },
+      codex: { status: "unavailable", reason: "cli-missing", fetchedAt: 3 },
+    });
+    expect(AgentReadQuotaResultSchema.safeParse(quota.structuredContent).success).toBe(true);
   });
 
   it("refuses the assistant tools to anyone else, whatever its tier", async () => {
@@ -963,6 +989,28 @@ describe("one assistant addressing another (#13496)", () => {
     expect(deps.handleWaitUntilIdle).not.toHaveBeenCalled();
     expect(deps.handleTerminalGetStatusViewless).not.toHaveBeenCalled();
     expect(deps.dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("notes the incarnation an assistant close reached, not one launched while it ran (#15728)", async () => {
+    const { deps, control } = assistantDeps({ caller: CALLER });
+    let generation = 5;
+    deps.terminalGenerationOf = () => generation;
+    control.close.mockImplementation(async () => {
+      generation = 6;
+      return { closedIds: [ASSISTANT_TERMINAL] };
+    });
+    deps.sessionStore.resourceOwnership.bindPrincipal("sess", "help-hub");
+    const server = await serve(deps);
+
+    await callTool(server, {
+      name: "terminal.close",
+      arguments: { terminalId: ASSISTANT_TERMINAL },
+    });
+
+    const owner = deps.sessionStore.resourceOwnership.ownerOf("sess");
+    expect(
+      deps.sessionStore.resourceOwnership.closedRecord(owner, ASSISTANT_TERMINAL)?.launchGeneration
+    ).toBe(5);
   });
 
   it("closes an assistant in a closeMany without putting it to the person", async () => {

@@ -141,6 +141,24 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
+/** Hear every change to any composer's memory, outside React. */
+export const subscribeComposerMemory = subscribe;
+
+/**
+ * The selections this composer has a request pinned to, most recently pinned
+ * first: the draft's, then each request still waiting to go in, newest first.
+ * A settled request is history and holds nothing.
+ */
+export function pinnedSelections(memory: ComposerMemory): PickedSelection[] {
+  const pinned: PickedSelection[] = [];
+  if (memory.pinned) pinned.push(memory.pinned.selection);
+  for (let index = memory.deliveries.length - 1; index >= 0; index--) {
+    const delivery = memory.deliveries[index]!;
+    if (delivery.subject && !isSettledDelivery(delivery)) pinned.push(delivery.subject.selection);
+  }
+  return pinned;
+}
+
 export function useComposerMemory(previewPanelId: string): ComposerMemory {
   return useSyncExternalStore(subscribe, () => readComposerMemory(previewPanelId));
 }

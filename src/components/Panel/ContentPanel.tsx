@@ -7,6 +7,7 @@ import React, {
   useState,
   type ReactNode,
 } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
 import { PanelHeader } from "./PanelHeader";
 import { useIsDragging } from "@/components/DragDrop";
@@ -35,6 +36,12 @@ import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { tabDomId } from "./TabButton";
 import { usePluginPanelActivity } from "./PluginPanelActivity";
 import { isBuiltInPanelKind, isPtyPanel } from "@shared/types/panel";
+import { useRunUnseenAsk } from "@/hooks/useRunFleetBand";
+import { isUnseenAskPane } from "@/lib/paneSessionPresentation";
+import { isFailedExitCode } from "@/store/panelFailureStore";
+import { usePanelFailureEdge } from "./usePanelFailureEdge";
+import { useGridGroupAttention } from "./gridGroupAttention";
+import { useGridGroupTabReorder } from "./gridGroupTabReorder";
 
 /**
  * Base props for all panel types.
@@ -116,10 +123,6 @@ export interface ContentPanelProps extends BasePanelProps {
   onRestart?: () => void;
   isPinged?: boolean;
   wasJustSelected?: boolean;
-  // Group-level ambient state: highest-urgency agent state across all tabs in a tab group.
-  // When set, this overrides agentState for container border styling so hidden tabs
-  // surface their state on the group container without changing the header chip.
-  ambientAgentState?: AgentState;
 
   // Multi-select indicator. When the pane is part of an armed set of 2+
   // terminals, the title bar lifts. The outer container border stays as-is —
@@ -134,15 +137,10 @@ export interface ContentPanelProps extends BasePanelProps {
   // looking up at the fleet ribbon.
   isFleetFollower?: boolean;
 
-  // True when this pane's PTY is hibernated — the renderer is released but
-  // the process is preserved. Drives the panel-state-hibernated border cue
-  // and the Moon icon in the header.
-  isHibernated?: boolean;
-
   // True when voice dictation is in its pre-audio arming window targeting
   // this pane. Drives the panel-state-arming border cue (single load-bearing
   // signal during the ~200ms before the mic opens and recording chrome takes
-  // over). Outranks waiting/working/hibernated because it is user-initiated
+  // over). Outranks waiting/working because it is user-initiated
   // and time-bounded.
   isVoiceArming?: boolean;
 
@@ -153,14 +151,12 @@ export interface ContentPanelProps extends BasePanelProps {
    */
   compactTitle?: string;
 
-  // Tab support
+  // Tab support. Reordering comes from the grid tab group by context.
   tabs?: TabInfo[];
-  groupId?: string;
   onTabClick?: (tabId: string) => void;
   onTabClose?: (tabId: string) => void;
   onTabRename?: (tabId: string, newTitle: string) => void;
   onAddTab?: () => void;
-  onTabReorder?: (newOrder: string[]) => void;
 }
 
 interface GridChromeInputs {
@@ -169,31 +165,46 @@ interface GridChromeInputs {
   showSelectedChrome: boolean;
   showGridAgentHighlights: boolean;
   isVoiceArming: boolean;
-  isWaiting: boolean;
+  isFailed: boolean;
+  isAsking: boolean;
   isWorkingState: boolean;
-  isHibernated: boolean;
+  isExitedClean: boolean;
 }
 
 /**
- * Resolves the grid pane's container chrome to exactly one class, ordered
- * highest-priority first. Selection is not gated on `showGridAttention`: a
- * lone pane still has to show that it, and not the dock or the Assistant,
- * holds the keystrokes after the user clicks back into it.
+ * Resolves the grid pane's container chrome, ordered highest-priority first.
+ * Selection is not gated on `showGridAttention`: a lone pane still has to show
+ * that it, and not the dock or the Assistant, holds the keystrokes after the
+ * user clicks back into it.
+ *
+ * The two states that need the user — failed and asking — always draw, because
+ * they are rare and they are the reason to look at the grid at all; failed
+ * only until the user has had the pane in front of them. Working is
+ * the common case, so its edge stays behind the highlights preference: six
+ * busy agents must not paint six frames. Both keep their edge while focused,
+ * over the selected fill: the focused pane is the one last typed into, and
+ * the user may be looking anywhere when it stops to ask or fails.
  */
 function resolveGridPanelChromeClass({
   showGridAttention,
   showSelectedChrome,
   showGridAgentHighlights,
   isVoiceArming,
-  isWaiting,
+  isFailed,
+  isAsking,
   isWorkingState,
-  isHibernated,
+  isExitedClean,
 }: GridChromeInputs): string {
   if (showGridAttention && isVoiceArming) return "panel-state-arming";
+  if (showGridAttention && isFailed) {
+    return showSelectedChrome ? "terminal-selected panel-state-failed" : "panel-state-failed";
+  }
+  if (showGridAttention && isAsking) {
+    return showSelectedChrome ? "terminal-selected panel-state-waiting" : "panel-state-waiting";
+  }
   if (showSelectedChrome) return "terminal-selected";
-  if (showGridAttention && showGridAgentHighlights && isWaiting) return "panel-state-waiting";
   if (showGridAttention && showGridAgentHighlights && isWorkingState) return "panel-state-working";
-  if (showGridAttention && isHibernated) return "panel-state-hibernated";
+  if (showGridAttention && isExitedClean) return "panel-state-exited";
   return "border-overlay hover:border-tint/[0.08]";
 }
 
@@ -248,19 +259,15 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     onRestart,
     isPinged,
     wasJustSelected,
-    ambientAgentState,
     isSelected = false,
     isFleetFollower = false,
     compactTitle,
-    isHibernated = false,
     isVoiceArming = false,
     tabs,
-    groupId,
     onTabClick,
     onTabClose,
     onTabRename,
     onAddTab,
-    onTabReorder,
   },
   ref
 ) {
@@ -435,11 +442,15 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   );
   const ownAgentState = agentState;
   const headerAgentState = getTerminalAgentDisplayState(terminalChrome, ownAgentState);
+  // A grid tab group's hidden tabs reach the edge of the tab it shows, whatever
+  // that tab's kind, without changing its header chip.
+  const groupAttention = useGridGroupAttention(id, location);
+  const groupTabReorder = useGridGroupTabReorder(id, location);
+  const ambientAgentState = groupAttention?.ambientAgentState;
   // Determine effective agent state for container border styling.
   // ambientAgentState takes priority so tab groups can surface highest-urgency
   // state from hidden live-agent tabs without affecting the active header chip.
   const effectiveAgentState = ambientAgentState ?? ownAgentState;
-  const blockedState = useDockBlockedState(effectiveAgentState);
   const isWorkingState = effectiveAgentState === "working";
   // The owning plugin's own report takes the same borders under the same
   // setting, but only the border: it never becomes this panel's agent state,
@@ -448,6 +459,70 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
   // keeps the dock chip's glyph.
   const reportedActivity = usePluginPanelActivity(id);
   const pluginActivity = headerAgentState || ambientAgentState ? null : reportedActivity;
+  // What the pane observed that needs the user, read straight off its record:
+  // why it is waiting, and whether a launch, restart or reconnect failed.
+  const paneSignals = usePanelStore(
+    useShallow((state) => {
+      const panel = state.panelsById[id];
+      const pty = panel && isPtyPanel(panel) ? panel : undefined;
+      return {
+        waitingReason: pty?.waitingReason,
+        isRestarting: pty?.isRestarting === true,
+        spawnFailed: pty?.spawnError !== undefined,
+        restartFailed: pty?.restartError !== undefined,
+        reconnectFailed: pty?.reconnectError !== undefined && pty.reconnectError.type !== "timeout",
+      };
+    })
+  );
+  const ownUnseenAsk = useRunUnseenAsk(id);
+  const ownBlockedState = useDockBlockedState(ownAgentState);
+  // A restart or an exit is newer than the error wait it ends. The raw state
+  // must still be waiting too: an agent exit moves it on without clearing the
+  // reason, while the debounced state still holds the wait for a commit.
+  const isBlockedWait =
+    ownAgentState === "waiting" &&
+    ownBlockedState === "waiting" &&
+    paneSignals.waitingReason === "error" &&
+    !paneSignals.isRestarting &&
+    !isExited;
+  // The amber edge marks an outstanding ask. The agent's own needs-you report
+  // holds it until the next prompt; Canopy's unread ask, or with neither an
+  // observed approval or question wait, holds it until the user has had it in
+  // front of them, when the look takes the edge away while the header glyph
+  // keeps to the band. A prompt that asks nothing, a hand-back, and any pane
+  // the fleet hasn't reported draw no amber.
+  // Only a live pane can ask. An error wait is never asking: it is failed
+  // while the run is alive and nothing once a restart or exit replaces it.
+  const ownCanAsk = paneSignals.waitingReason !== "error" && !paneSignals.isRestarting && !isExited;
+  const ownAsking =
+    ownCanAsk &&
+    headerAgentState === "waiting" &&
+    isUnseenAskPane(ownUnseenAsk, {
+      agentState: ownAgentState,
+      waitingReason: paneSignals.waitingReason,
+      isRestarting: paneSignals.isRestarting,
+    });
+  // The group only reports waiting for a hidden tab asking unseen.
+  const hiddenTabAsking = ambientAgentState === "waiting";
+  const isAskingWait = ownAsking || hiddenTabAsking || pluginActivity?.shown === "waiting";
+  const exitedFailed = isExited === true && isFailedExitCode(exitCode);
+  // The red edge is for a failure the user hasn't had in front of them yet; the
+  // header glyph and the inline banners keep it for as long as it lasts.
+  const ownFailed = usePanelFailureEdge(
+    id,
+    {
+      wait: isBlockedWait,
+      exit: exitedFailed,
+      spawn: paneSignals.spawnFailed,
+      restart: paneSignals.restartFailed,
+      reconnect: paneSignals.reconnectFailed,
+      submit: submitStatus === "failed",
+    },
+    isFocused,
+    location
+  );
+  // A hidden tab's failure clears only by that tab's own look, once shown.
+  const isFailed = ownFailed || groupAttention?.hiddenTabFailed === true;
 
   // Auto-construct the terminal header for PTY-backed terminals when no custom
   // headerContent is provided. One gate covers both the metadata and the status
@@ -471,7 +546,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           exitCode={exitCode}
           queueCount={queueCount}
           completedWithNoChanges={completedWithNoChanges}
-          isHibernated={isHibernated}
         />
       );
     }
@@ -488,7 +562,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     exitCode,
     queueCount,
     completedWithNoChanges,
-    isHibernated,
   ]);
 
   // A mixed tab group keeps both trailing boxes (empty, `null`) while a
@@ -521,6 +594,19 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     ) ??
       false);
 
+  // The glyph is an agent pane's permanent status, so its slot is never left
+  // empty where the display state withholds one (#16138): an exit the pane has
+  // seen draws exited, a restart idle, and anything else what the pane last
+  // observed. For the glyph only — `headerAgentState`, `data-agent-state` and
+  // the edges keep the observation.
+  const indicatorAgentState: AgentState =
+    headerAgentState ??
+    (paneSignals.isRestarting
+      ? "idle"
+      : isExited === true || ownAgentState === "exited"
+        ? "exited"
+        : (ownAgentState ?? "idle"));
+
   // The agent state glyph goes to PanelHeader's far-right box, past the close
   // button, and is never folded into the metadata row.
   const resolvedAgentIndicator = useMemo(() => {
@@ -528,7 +614,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
       return (
         <TerminalAgentIndicator
           id={id}
-          agentState={headerAgentState}
+          agentState={indicatorAgentState}
           activity={activity}
           isExited={isExited}
           exitCode={exitCode}
@@ -541,7 +627,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     isAgentTerminal,
     reservesAgentSlot,
     id,
-    headerAgentState,
+    indicatorAgentState,
     activity,
     isExited,
     exitCode,
@@ -648,7 +734,6 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
       data-runtime-kind={terminalChrome.runtimeKind}
       data-runtime-icon-id={terminalChrome.iconId || undefined}
       data-selected={isSelected || undefined}
-      data-hibernated={isHibernated || undefined}
       data-fleet-dimmed={isFleetDimmed || undefined}
       style={{ contain: "content" }}
       className={cn(
@@ -676,9 +761,13 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
             showSelectedChrome,
             showGridAgentHighlights,
             isVoiceArming,
-            isWaiting: blockedState === "waiting" || pluginActivity?.shown === "waiting",
+            isFailed,
+            isAsking: isAskingWait,
             isWorkingState: isWorkingState || pluginActivity?.shown === "working",
-            isHibernated,
+            // A clean exit recedes on the edge: its text keeps full contrast. A
+            // failed exit takes failed above until it has been seen, then
+            // recedes the same way.
+            isExitedClean: isExited === true && !isFailed,
           }),
         location === "grid" && isMaximized && "border-0 rounded-none z-[var(--z-maximized)]",
         // Voice-dictation lock border overrides ambient state colours so the
@@ -720,7 +809,10 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
             agentLaunchFlags={agentLaunchFlags}
             worktreeAccentColor={worktreeAccentColor}
             worktreeBranch={worktreeBranch}
-            isFocused={isFocused}
+            // The header lifts with the frame, not with the store's focused id:
+            // while the assistant holds the keyboard, the pane it will hand back
+            // to keeps neither, so only one surface reads as where you are.
+            isFocused={showSelectedChrome}
             isMaximized={isMaximized}
             location={location}
             isEditingTitle={titleEditing.isEditingTitle}
@@ -751,12 +843,12 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
             headerActions={headerActions}
             headerToolbar={headerToolbar}
             tabs={tabs}
-            groupId={groupId}
+            groupId={groupTabReorder?.groupId}
             onTabClick={onTabClick}
             onTabClose={onTabClose}
             onTabRename={onTabRename}
             onAddTab={onAddTab}
-            onTabReorder={onTabReorder}
+            onTabReorder={groupTabReorder?.onTabReorder}
           />
         </PanelContextMenuTrigger>
       )}
@@ -805,8 +897,8 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
 export const ContentPanel = forwardRef<HTMLDivElement, ContentPanelProps>(
   function ContentPanel(props, ref) {
     // Resolve the display title once for both the header and the rename
-    // editor (WYSIWYG prefill): identity-only in the dock, task-composed in
-    // the grid. Non-pty panels keep the caller-provided title untouched, and
+    // editor (WYSIWYG prefill): task-composed in the grid and in a dock
+    // preview alike, so a preview names the session its chip names. Non-pty panels keep the caller-provided title untouched, and
     // a parent-supplied override (props.title differing from the stored panel
     // title, e.g. the fleet scope's worktree prefix) always wins.
     const showAgentTaskTitles = usePreferencesStore((s) => s.showAgentTaskTitles);
@@ -814,17 +906,13 @@ export const ContentPanel = forwardRef<HTMLDivElement, ContentPanelProps>(
     const composedTitle = usePanelStore((s) => {
       const panel = s.panelsById[props.id];
       if (!panel || !isPtyPanel(panel) || panel.title !== propsTitle) return undefined;
-      return getTerminalDisplayTitle(panel, props.location === "dock" ? "base" : "full", {
-        showTask: showAgentTaskTitles,
-      });
+      return getTerminalDisplayTitle(panel, "full", { showTask: showAgentTaskTitles });
     });
     // The task alone, which is what the header paints: the brand mark beside it
-    // already names the agent. Only the grid composes tasks, and only when the
-    // compact form actually differs.
+    // already names the agent. Only when the compact form actually differs.
     const compactTitle = usePanelStore((s) => {
       const panel = s.panelsById[props.id];
       if (!panel || !isPtyPanel(panel) || panel.title !== propsTitle) return undefined;
-      if (props.location === "dock") return undefined;
       const compact = getTerminalDisplayTitle(panel, "compact", { showTask: showAgentTaskTitles });
       return compact && compact !== composedTitle ? compact : undefined;
     });

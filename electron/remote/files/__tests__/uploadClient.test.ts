@@ -58,6 +58,7 @@ function setup(
     hostLabel: (hostId) => (hostId === "studio-01" ? "studio-01" : hostId),
     sendToView: (_id, event) => events.push(event),
     localLabel: "This Mac",
+    packDir: path.join(os.tmpdir(), "unused-folder-packs"),
     maxUploadBytes: options.maxUploadBytes,
     random: options.random,
   });
@@ -474,6 +475,7 @@ describe("a busy or dropped host", () => {
       hostLabel: (hostId) => hostId,
       sendToView: () => {},
       localLabel: "This Mac",
+      packDir: path.join(os.tmpdir(), "unused-folder-packs"),
     });
     const toHost = (webContentsId: number, opId: string) =>
       multi.uploadBytes(webContentsId, {
@@ -516,6 +518,7 @@ describe("a busy or dropped host", () => {
       hostLabel: (hostId) => hostId,
       sendToView: () => {},
       localLabel: "This Mac",
+      packDir: path.join(os.tmpdir(), "unused-folder-packs"),
       watchView: (webContentsId, onGone) => {
         const entry = { webContentsId, onGone };
         watchers.add(entry);
@@ -547,6 +550,7 @@ describe("a busy or dropped host", () => {
       hostLabel: (hostId) => hostId,
       sendToView: () => {},
       localLabel: "This Mac",
+      packDir: path.join(os.tmpdir(), "unused-folder-packs"),
       maxConcurrentPerHost: 1,
     });
     const ahead = uploads.uploadBytes(8, bytesFor("op-ahead"));
@@ -655,6 +659,7 @@ describe("a busy or dropped host", () => {
       hostLabel: (hostId) => hostId,
       sendToView: () => {},
       localLabel: "This Mac",
+      packDir: path.join(os.tmpdir(), "unused-folder-packs"),
       maxConcurrentPerHost: 1,
     });
     const outcomes = ["op-a", "op-b", "op-c", "op-d"].map((opId) =>

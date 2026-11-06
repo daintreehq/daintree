@@ -19,6 +19,10 @@ import type { agentNotificationService as AgentNotificationServiceType } from ".
 import type { windowsStoreNotifierService as WindowsStoreNotifierServiceType } from "../services/WindowsStoreNotifierService.js";
 import type { mcpServerService as McpServerServiceType } from "../services/McpServerService.js";
 import type { FleetSnapshotService } from "../services/FleetSnapshotService.js";
+import type { RunAttentionService } from "../services/RunAttentionService.js";
+import type { RunHandBackService } from "../services/RunHandBackService.js";
+import type * as DecisionsModule from "../services/decisions/index.js";
+import type { DecisionsHostsPort } from "../types/decisionsHosts.js";
 
 // Guard: process.argv CLI path should only be consumed by the first window
 let processArgvCliHandled = false;
@@ -55,6 +59,10 @@ let ccrConfigService: CcrConfigService | null = null;
 // Owned by the project stats handlers, which create and stop it; held here so
 // the plugin host can read the fleet without importing the IPC handler graph.
 let fleetSnapshotService: FleetSnapshotService | null = null;
+// Owned by the same handlers; held here so the host's summary can band its runs
+// as the fleet does without importing the IPC handler graph either.
+let runAttentionService: RunAttentionService | null = null;
+let runHandBackService: RunHandBackService | null = null;
 
 // Singletons resolved by deferred tasks. Held here so dispose paths can clean
 // them up safely if the task ran. If the window closes before the task runs
@@ -70,6 +78,12 @@ let windowsStoreNotifierServiceRef: typeof WindowsStoreNotifierServiceType | nul
 // which reads as "no view is protected" — the correct answer when there is no
 // server and therefore no session.
 let mcpServerServiceRef: typeof McpServerServiceType | null = null;
+// Decisions' entry module, loaded at most once and only by a caller that has
+// already read the setting as on, so with Decisions off nothing of it is ever
+// imported. Held here so shutdown can stop a load already under way without
+// importing Decisions itself; sealed at quit so no load starts after that.
+let decisionsModule: Promise<typeof DecisionsModule> | null = null;
+let decisionsModuleSealed = false;
 
 // ── Public getters/setters (consumed by main.ts, menu.ts, shutdown.ts) ──
 export function getPtyClient(): PtyClient | null {
@@ -83,6 +97,18 @@ export function getFleetSnapshotServiceRef(): FleetSnapshotService | null {
 }
 export function setFleetSnapshotServiceRef(v: FleetSnapshotService | null): void {
   fleetSnapshotService = v;
+}
+export function getRunAttentionServiceRef(): RunAttentionService | null {
+  return runAttentionService;
+}
+export function setRunAttentionServiceRef(v: RunAttentionService | null): void {
+  runAttentionService = v;
+}
+export function getRunHandBackServiceRef(): RunHandBackService | null {
+  return runHandBackService;
+}
+export function setRunHandBackServiceRef(v: RunHandBackService | null): void {
+  runHandBackService = v;
 }
 export function getMainProcessWatchdogClientRef(): MainProcessWatchdogClient | null {
   return mainProcessWatchdogClient;
@@ -233,4 +259,122 @@ export function setWindowsStoreNotifierServiceRef(
   v: typeof WindowsStoreNotifierServiceType | null
 ): void {
   windowsStoreNotifierServiceRef = v;
+}
+
+/**
+ * Decisions' entry module, loading it with `load` the first time. Null once
+ * quit has sealed it. A failed load is forgotten, so the next caller retries.
+ */
+export function loadDecisionsModule(
+  load: () => Promise<typeof DecisionsModule>
+): Promise<typeof DecisionsModule> | null {
+  if (decisionsModuleSealed) return null;
+  if (!decisionsModule) {
+    const loading = load();
+    decisionsModule = loading;
+    loading.catch(() => {
+      if (decisionsModule === loading) decisionsModule = null;
+    });
+  }
+  return decisionsModule;
+}
+
+function fieldOf(value: unknown, key: string): unknown {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)[key]
+    : undefined;
+}
+
+/**
+ * This machine is a Remote Host enrolled in its owner's Decisions (#16022)
+ * and serves its own panes now: its saved record (`decisionsHost`) names a
+ * device, and neither the owner turned it off nor the relay revoked it. Read
+ * from the saved value alone, before anything of Decisions is imported.
+ */
+export function decisionsHostServes(record: unknown): boolean {
+  return (
+    typeof fieldOf(record, "deviceId") === "string" &&
+    fieldOf(record, "ownerOffAt") == null &&
+    fieldOf(record, "revokedAt") == null
+  );
+}
+
+/**
+ * Agents launched here get `ask_human` (#16012, #16022): the owner's switch
+ * (`decisions`) is on, or this machine is an enrolled Host that serves its
+ * panes. Read before anything of Decisions is imported.
+ */
+export function decisionsServesPanes(settings: unknown, hostRecord: unknown): boolean {
+  return fieldOf(settings, "enabled") === true || decisionsHostServes(hostRecord);
+}
+
+/**
+ * Decisions has something to do at startup: it serves panes, or a revoked
+ * Host's keys are still to be removed.
+ */
+export function decisionsWantedAtStartup(settings: unknown, hostRecord: unknown): boolean {
+  return (
+    decisionsServesPanes(settings, hostRecord) ||
+    (typeof fieldOf(hostRecord, "deviceId") === "string" &&
+      fieldOf(hostRecord, "revokedAt") != null &&
+      fieldOf(hostRecord, "credentialsRemovedAt") == null)
+  );
+}
+
+/** Quit: no Decisions load starts after this. Returns the one already under way, if any. */
+export function sealDecisionsModule(): Promise<typeof DecisionsModule> | null {
+  decisionsModuleSealed = true;
+  return decisionsModule;
+}
+
+/** @internal Tests only. */
+export function _resetDecisionsModuleForTesting(): void {
+  decisionsModule = null;
+  decisionsModuleSealed = false;
+}
+
+/**
+ * The Remote Hosts client's side of enrolling Hosts as Decisions devices
+ * (#16021). The client publishes it once it is up and Decisions, loaded only
+ * once it is on, watches for it, so neither imports the other and either may
+ * start first.
+ */
+let decisionsHostsPort: DecisionsHostsPort | null = null;
+const decisionsHostsPortWatchers = new Set<(port: DecisionsHostsPort | null) => void>();
+
+function tellDecisionsHostsPortWatchers(): void {
+  for (const watcher of [...decisionsHostsPortWatchers]) {
+    try {
+      watcher(decisionsHostsPort);
+    } catch (error) {
+      console.error("[serviceRefs] A Decisions hosts port watcher threw:", error);
+    }
+  }
+}
+
+/** Publishes the port; the returned function withdraws it, if it is still the one published. */
+export function setDecisionsHostsPort(port: DecisionsHostsPort): () => void {
+  decisionsHostsPort = port;
+  tellDecisionsHostsPortWatchers();
+  return () => {
+    if (decisionsHostsPort !== port) return;
+    decisionsHostsPort = null;
+    tellDecisionsHostsPortWatchers();
+  };
+}
+
+/** The Remote Hosts client's port now; null while it isn't up. */
+export function getDecisionsHostsPort(): DecisionsHostsPort | null {
+  return decisionsHostsPort;
+}
+
+/** Calls `watcher` with the port now, and again whenever it is published or withdrawn. */
+export function watchDecisionsHostsPort(
+  watcher: (port: DecisionsHostsPort | null) => void
+): () => void {
+  decisionsHostsPortWatchers.add(watcher);
+  watcher(decisionsHostsPort);
+  return () => {
+    decisionsHostsPortWatchers.delete(watcher);
+  };
 }

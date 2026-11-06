@@ -46,7 +46,6 @@ function Harness({ recipes, initialFocusedIndex = 0 }: HarnessProps) {
       onPin={noop}
       onUnpin={noop}
       onDelete={noop}
-      onCreate={noop}
     />
   );
 }
@@ -62,35 +61,42 @@ describe("RecipeRunnerGrid — roving tabindex", () => {
     makeRecipe({ id: "gamma", name: "Gamma" }),
   ];
 
-  it("renders one option per recipe plus the trailing create option", () => {
+  it("renders one option per recipe and no create option", () => {
     render(<Harness recipes={recipes} />);
 
-    expect(screen.getAllByRole("option")).toHaveLength(4);
-    expect(screen.getByRole("option", { name: /Create new recipe/ })).toBeTruthy();
+    expect(screen.getAllByRole("option")).toHaveLength(3);
+    expect(screen.queryByRole("option", { name: /Create new recipe/ })).toBeNull();
   });
 
   it("places tabIndex=0 on the focused option and -1 on the rest", () => {
     render(<Harness recipes={recipes} initialFocusedIndex={1} />);
 
     const [alpha, beta, gamma] = recipes.map((r) => optionButton(r));
-    const create = screen.getByRole("option", { name: /Create new recipe/ });
 
     expect(alpha!.getAttribute("tabindex")).toBe("-1");
     expect(beta!.getAttribute("tabindex")).toBe("0");
     expect(gamma!.getAttribute("tabindex")).toBe("-1");
-    expect(create.getAttribute("tabindex")).toBe("-1");
   });
 
   it("marks only the focused option with aria-selected=true", () => {
     render(<Harness recipes={recipes} initialFocusedIndex={2} />);
 
     const [alpha, beta, gamma] = recipes.map((r) => optionButton(r));
-    const create = screen.getByRole("option", { name: /Create new recipe/ });
 
     expect(alpha!.getAttribute("aria-selected")).toBe("false");
     expect(beta!.getAttribute("aria-selected")).toBe("false");
     expect(gamma!.getAttribute("aria-selected")).toBe("true");
-    expect(create.getAttribute("aria-selected")).toBe("false");
+  });
+
+  it("clamps a cursor left past the last recipe so a card keeps the tab stop", () => {
+    // List mode's Create row sits one past the last recipe in the hook's cursor.
+    render(<Harness recipes={recipes} initialFocusedIndex={3} />);
+
+    const [alpha, beta, gamma] = recipes.map((r) => optionButton(r));
+
+    expect(alpha!.getAttribute("tabindex")).toBe("-1");
+    expect(beta!.getAttribute("tabindex")).toBe("-1");
+    expect(gamma!.getAttribute("tabindex")).toBe("0");
   });
 });
 
@@ -116,7 +122,6 @@ describe("RecipeRunnerGrid — focus-driven Enter runs the focused recipe", () =
           onPin={noop}
           onUnpin={noop}
           onDelete={noop}
-          onCreate={noop}
         />
       );
     }
@@ -155,7 +160,6 @@ describe("RecipeRunnerGrid — focus-driven Enter runs the focused recipe", () =
           onPin={noop}
           onUnpin={noop}
           onDelete={noop}
-          onCreate={noop}
         />
       );
     }
@@ -173,69 +177,18 @@ describe("RecipeRunnerGrid — focus-driven Enter runs the focused recipe", () =
     expect(onRun).toHaveBeenCalledWith("gamma");
     expect(onRun).not.toHaveBeenCalledWith("alpha");
   });
-
-  it("runs the create action when Enter is pressed on the focused create option", () => {
-    const onCreate = vi.fn();
-    const recipes: TerminalRecipe[] = [
-      makeRecipe({ id: "alpha", name: "Alpha" }),
-      makeRecipe({ id: "beta", name: "Beta" }),
-    ];
-
-    function StatefulHarness() {
-      const [focusedIndex, setFocusedIndex] = useState(2);
-      return (
-        <RecipeRunnerGrid
-          recipes={recipes}
-          focusedIndex={focusedIndex}
-          setFocusedIndex={setFocusedIndex}
-          onRun={noop}
-          onEdit={noop}
-          onDuplicate={noop}
-          onPin={noop}
-          onUnpin={noop}
-          onDelete={noop}
-          onCreate={onCreate}
-        />
-      );
-    }
-
-    render(<StatefulHarness />);
-
-    const create = screen.getByRole("option", { name: /Create new recipe/ });
-    fireEvent.keyDown(create, { key: "Enter" });
-    fireEvent.click(create);
-
-    expect(onCreate).toHaveBeenCalledTimes(1);
-  });
 });
 
-describe("RecipeRunnerGrid — disabled entry point", () => {
-  it("keeps the create option tabbable when all recipes are disabled", () => {
-    const recipes: TerminalRecipe[] = [
-      makeRecipe({ id: "alpha", name: "Alpha" }),
-      makeRecipe({ id: "beta", name: "Beta" }),
-    ];
-
-    render(
-      <RecipeRunnerGrid
-        recipes={recipes}
-        focusedIndex={0}
-        setFocusedIndex={() => {}}
-        onRun={noop}
-        onEdit={noop}
-        onDuplicate={noop}
-        onPin={noop}
-        onUnpin={noop}
-        onDelete={noop}
-        onCreate={noop}
-        disabled
-      />
-    );
-
-    const create = screen.getByRole("option", { name: /Create new recipe/ });
-    expect(create.getAttribute("tabindex")).toBe("0");
+// jsdom has no layout, so every card reports offsetTop 0 and the grid reads as
+// one row. Rows are laid out explicitly for the Up/Down cases.
+function layOutRows(buttons: HTMLElement[], columns: number) {
+  buttons.forEach((button, i) => {
+    Object.defineProperty(button, "offsetTop", {
+      configurable: true,
+      get: () => Math.floor(i / columns) * 100,
+    });
   });
-});
+}
 
 describe("RecipeRunnerGrid — arrow navigation", () => {
   const recipes: TerminalRecipe[] = [
@@ -244,12 +197,12 @@ describe("RecipeRunnerGrid — arrow navigation", () => {
     makeRecipe({ id: "gamma", name: "Gamma" }),
   ];
 
-  it("ArrowDown moves focus and tabindex to the next option", () => {
+  it("ArrowRight moves focus and tabindex to the next option", () => {
     render(<Harness recipes={recipes} initialFocusedIndex={0} />);
     const [alpha, beta, gamma] = recipes.map((r) => optionButton(r));
 
     alpha!.focus();
-    fireEvent.keyDown(alpha!, { key: "ArrowDown" });
+    fireEvent.keyDown(alpha!, { key: "ArrowRight" });
 
     expect(alpha!.getAttribute("tabindex")).toBe("-1");
     expect(beta!.getAttribute("tabindex")).toBe("0");
@@ -257,40 +210,83 @@ describe("RecipeRunnerGrid — arrow navigation", () => {
     expect(document.activeElement).toBe(beta);
   });
 
-  it("ArrowUp moves focus to the previous option", () => {
+  it("ArrowLeft moves focus to the previous option", () => {
     render(<Harness recipes={recipes} initialFocusedIndex={1} />);
     const [alpha, beta] = recipes.map((r) => optionButton(r));
 
     beta!.focus();
-    fireEvent.keyDown(beta!, { key: "ArrowUp" });
+    fireEvent.keyDown(beta!, { key: "ArrowLeft" });
 
     expect(alpha!.getAttribute("tabindex")).toBe("0");
     expect(beta!.getAttribute("tabindex")).toBe("-1");
     expect(document.activeElement).toBe(alpha);
   });
 
-  it("wraps from the last option to the first on ArrowDown", () => {
-    render(<Harness recipes={recipes} initialFocusedIndex={3} />);
-    const create = screen.getByRole("option", { name: /Create new recipe/ });
-    const alpha = optionButton(recipes[0]!);
+  it("wraps from the last option to the first on ArrowRight", () => {
+    render(<Harness recipes={recipes} initialFocusedIndex={2} />);
+    const [alpha, , gamma] = recipes.map((r) => optionButton(r));
 
-    create.focus();
-    fireEvent.keyDown(create, { key: "ArrowDown" });
+    gamma!.focus();
+    fireEvent.keyDown(gamma!, { key: "ArrowRight" });
 
-    expect(alpha.getAttribute("tabindex")).toBe("0");
+    expect(alpha!.getAttribute("tabindex")).toBe("0");
     expect(document.activeElement).toBe(alpha);
   });
 
-  it("wraps from the first option to the last on ArrowUp", () => {
+  it("wraps from the first option to the last on ArrowLeft", () => {
     render(<Harness recipes={recipes} initialFocusedIndex={0} />);
-    const alpha = optionButton(recipes[0]!);
-    const create = screen.getByRole("option", { name: /Create new recipe/ });
+    const [alpha, , gamma] = recipes.map((r) => optionButton(r));
 
-    alpha.focus();
-    fireEvent.keyDown(alpha, { key: "ArrowUp" });
+    alpha!.focus();
+    fireEvent.keyDown(alpha!, { key: "ArrowLeft" });
 
-    expect(create.getAttribute("tabindex")).toBe("0");
-    expect(document.activeElement).toBe(create);
+    expect(gamma!.getAttribute("tabindex")).toBe("0");
+    expect(document.activeElement).toBe(gamma);
+  });
+
+  it("ArrowDown moves a whole row in a two-column grid", () => {
+    render(<Harness recipes={recipes} initialFocusedIndex={0} />);
+    const buttons = recipes.map((r) => optionButton(r));
+    layOutRows(buttons, 2);
+    const [alpha, , gamma] = buttons;
+
+    alpha!.focus();
+    fireEvent.keyDown(alpha!, { key: "ArrowDown" });
+
+    expect(gamma!.getAttribute("tabindex")).toBe("0");
+    expect(document.activeElement).toBe(gamma);
+  });
+
+  it("ArrowUp moves a whole row in a two-column grid", () => {
+    render(<Harness recipes={recipes} initialFocusedIndex={2} />);
+    const buttons = recipes.map((r) => optionButton(r));
+    layOutRows(buttons, 2);
+    const [alpha, , gamma] = buttons;
+
+    gamma!.focus();
+    fireEvent.keyDown(gamma!, { key: "ArrowUp" });
+
+    expect(alpha!.getAttribute("tabindex")).toBe("0");
+    expect(document.activeElement).toBe(alpha);
+  });
+
+  it("claims ArrowDown on the bottom row without moving focus", () => {
+    render(<Harness recipes={recipes} initialFocusedIndex={2} />);
+    const buttons = recipes.map((r) => optionButton(r));
+    layOutRows(buttons, 2);
+    const gamma = buttons[2]!;
+
+    gamma.focus();
+    const event = new KeyboardEvent("keydown", {
+      key: "ArrowDown",
+      bubbles: true,
+      cancelable: true,
+    });
+    gamma.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(gamma.getAttribute("tabindex")).toBe("0");
+    expect(document.activeElement).toBe(gamma);
   });
 
   it("Home jumps to the first option", () => {
@@ -305,16 +301,16 @@ describe("RecipeRunnerGrid — arrow navigation", () => {
     expect(document.activeElement).toBe(alpha);
   });
 
-  it("End jumps to the last option (the create button)", () => {
+  it("End jumps to the last recipe", () => {
     render(<Harness recipes={recipes} initialFocusedIndex={0} />);
     const alpha = optionButton(recipes[0]!);
-    const create = screen.getByRole("option", { name: /Create new recipe/ });
+    const gamma = optionButton(recipes[2]!);
 
     alpha!.focus();
     fireEvent.keyDown(alpha!, { key: "End" });
 
-    expect(create.getAttribute("tabindex")).toBe("0");
-    expect(document.activeElement).toBe(create);
+    expect(gamma.getAttribute("tabindex")).toBe("0");
+    expect(document.activeElement).toBe(gamma);
   });
 
   it("does not intercept keys when a modifier is held", () => {
@@ -322,7 +318,7 @@ describe("RecipeRunnerGrid — arrow navigation", () => {
     const alpha = optionButton(recipes[0]!);
 
     alpha!.focus();
-    fireEvent.keyDown(alpha!, { key: "ArrowDown", metaKey: true });
+    fireEvent.keyDown(alpha!, { key: "ArrowRight", metaKey: true });
 
     // Focus should not have moved; meta+arrow is left alone.
     expect(alpha!.getAttribute("tabindex")).toBe("0");
@@ -351,7 +347,6 @@ describe("RecipeRunnerGrid — focus sync", () => {
           onPin={noop}
           onUnpin={noop}
           onDelete={noop}
-          onCreate={noop}
         />
       );
     }

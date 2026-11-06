@@ -698,8 +698,10 @@ export function EnvVarEditor({
       // If a user clears an override's value and that key is still inherited,
       // silently reverting is safer than persisting an empty-string override —
       // otherwise the preset would ship `KEY=""` which masks the inherited
-      // value instead of falling back to it.
-      if (row.value === "" && inheritedEnv && key in inheritedEnv) {
+      // value instead of falling back to it. A blank the preset already holds
+      // was put there on purpose (a provider template blanking an inherited
+      // ANTHROPIC_API_KEY), so tabbing through it leaves it alone.
+      if (row.value === "" && inheritedEnv && key in inheritedEnv && env[key] !== "") {
         const inheritedValue = inheritedEnv[key]!;
         const next = prev.map((r) =>
           r.rowId === rowId ? { ...r, value: inheritedValue, isInherited: true } : r

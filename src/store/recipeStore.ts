@@ -1,6 +1,6 @@
 import { create, type StateCreator } from "zustand";
 import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types";
-import { isAgentRecipeType, isPluginRecipe } from "@shared/types/project";
+import { isAgentRecipeType, isPluginRecipe, promptCarriesWhenDone } from "@shared/types/project";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import type { PluginRecipeMetadataPatch } from "@shared/types/project";
 import { usePanelStore } from "./panelStore";
@@ -9,8 +9,11 @@ import { useToolbarPreferencesStore } from "./toolbarPreferencesStore";
 import { launcherItemToolbarButtonId } from "@shared/types/toolbar";
 import { recipeToolbarSourceId } from "@/utils/recipeScope";
 import { preflightSpawnBatchLimit } from "./panelLimitStore";
-import { PANEL_LIMIT_DECLINED_REASON } from "@/services/actions/definitions/panelLimitError";
-import { countPanelsTowardLimit } from "./slices/panelRegistry/panelCount";
+import {
+  PANEL_LIMIT_CONFIRM_EXPIRED_REASON,
+  PANEL_LIMIT_DECLINED_REASON,
+} from "@/services/actions/definitions/panelLimitError";
+import { countPanelLimitUsage } from "./slices/panelRegistry/panelCount";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { isMcpSpawnFocusSuppressed } from "./mcpSpawnFocusGuard";
 import { isAssistantFocused } from "./macroFocusStore";
@@ -46,6 +49,7 @@ import type { RecipeContext } from "@/utils/recipeVariables";
 import { sanitizeTerminalName } from "@/utils/agentLaunchValidation";
 import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
 import { buildFirstPrompt } from "@shared/utils/firstPrompt";
+import { appendHandbackInstruction, mintHandbackCode } from "@shared/utils/handback";
 import { resolveRecipeAgentStep } from "@/utils/recipeAgentStep";
 import { getPanelKindConfig, panelKindIsProjectScoped } from "@shared/config/panelKindRegistry";
 import { pluginAgentToolsProblem, recipeRunNeedsAgentTools } from "@/utils/pluginRecipeAgentTools";
@@ -151,7 +155,22 @@ export interface RecipeRunOptions {
    * shadowing winner, and not content a plugin reload swapped in since.
    */
   expectedRecipe?: { id: string; terminalsDigest: string };
+  /**
+   * When main gives up on the agent dispatch behind this run, forwarded from
+   * `ActionContext.dispatchDeadlineAt` (#15648). Past it the caller has been
+   * told the call failed, so the run starts nothing more, and a panel-limit
+   * confirm it raises closes in time to say so. Absent for runs a person
+   * started, which wait on the person as long as they take.
+   */
+  dispatchDeadlineAt?: number;
 }
+
+/**
+ * The failure reason for a step an agent's run never started because the
+ * dispatch behind it had already timed out (#15648).
+ */
+export const RECIPE_DISPATCH_EXPIRED_REASON =
+  "The request timed out before this terminal could start";
 
 /** How long a panel step waits for a worktree created moments ago to reach this view. */
 const WORKTREE_ARRIVAL_WAIT_MS = 5_000;
@@ -188,7 +207,8 @@ async function waitForWorktreeInView(worktreeId: string): Promise<void> {
 async function openRecipePluginPanel(
   recipe: TerminalRecipe,
   terminal: RecipeTerminal,
-  worktreeId: string | undefined
+  worktreeId: string | undefined,
+  dispatchExpired: () => boolean
 ): Promise<string> {
   const kind = terminal.panelKindId;
   const config = kind !== undefined ? getPanelKindConfig(kind) : undefined;
@@ -206,6 +226,8 @@ async function openRecipePluginPanel(
   // Loaded on demand: the action layer imports half the renderer, and only a
   // plugin recipe with a panel step needs it.
   const { actionService } = await import("@/services/ActionService");
+  // Both waits above can outlast the dispatch an agent is waiting on.
+  if (dispatchExpired()) throw new Error(RECIPE_DISPATCH_EXPIRED_REASON);
   const result = await actionService.dispatch<{ panelId: string }>(
     "panel.openPluginPanel",
     {
@@ -235,6 +257,11 @@ function sanitizeRecipeTerminal(terminal: RecipeTerminal): RecipeTerminal {
     initialPrompt: isAgent ? initialPrompt : undefined,
     devCommand: terminal.type === "dev-preview" ? devCommand : undefined,
     args,
+    // Keep is the default and never stored; only an agent step can be armed.
+    whenDone:
+      isAgent && (terminal.whenDone === "background" || terminal.whenDone === "close")
+        ? terminal.whenDone
+        : undefined,
     // Session-scoped overrides must never leak into disk-saved recipes.
     agentModelId: undefined,
     agentLaunchFlags: undefined,
@@ -1006,11 +1033,28 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     const prevProject = get().projectRecipes;
     const prevInRepo = get().inRepoRecipes;
 
+    // Replacing an existing team recipe replaces its file, so its ProjectFileStore
+    // mirror must follow: the merged list and the manager's Team row read the
+    // mirror, and would show the old content until the next reload.
+    const withPromotedMirror = (list: TerminalRecipe[]) =>
+      list.map((r) =>
+        r.id === promoted.id && isInRepoRecipeId(r)
+          ? {
+              ...promoted,
+              // What reconciliation keeps from the mirror it rewrites.
+              projectId: r.projectId,
+              worktreeId: r.worktreeId,
+              lastUsedAt: r.lastUsedAt,
+              usageHistory: r.usageHistory,
+            }
+          : r
+      );
     const nextInRepo = [...prevInRepo.filter((r) => r.id !== promoted.id), promoted];
     const nextGlobal =
       deleteOriginal && isGlobal ? prevGlobal.filter((r) => r.id !== recipeId) : prevGlobal;
-    const nextProject =
-      deleteOriginal && !isGlobal ? prevProject.filter((r) => r.id !== recipeId) : prevProject;
+    const nextProject = withPromotedMirror(
+      deleteOriginal && !isGlobal ? prevProject.filter((r) => r.id !== recipeId) : prevProject
+    );
 
     set({
       globalRecipes: nextGlobal,
@@ -1052,9 +1096,14 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         logError("Failed to delete original recipe", error);
         set({
           globalRecipes: prevGlobal,
-          projectRecipes: prevProject,
+          projectRecipes: withPromotedMirror(prevProject),
           inRepoRecipes: nextInRepo,
-          recipes: mergeRecipes(prevGlobal, prevProject, nextInRepo, get().pluginRecipes),
+          recipes: mergeRecipes(
+            prevGlobal,
+            withPromotedMirror(prevProject),
+            nextInRepo,
+            get().pluginRecipes
+          ),
         });
         throw error;
       }
@@ -1175,6 +1224,11 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // strip focus from user-initiated recipe runs (dock menu, NewWorktreeDialog,
     // WorktreeCard); MCP-initiated runs already get "preserve" via panelStore.
     const focusPolicy = options?.focusPolicy;
+    // Checked before anything starts: past it, main has told the agent the
+    // call failed, so a panel opened now is one nobody will ever claim (#15648).
+    const dispatchDeadlineAt = options?.dispatchDeadlineAt;
+    const dispatchExpired = () =>
+      dispatchDeadlineAt !== undefined && Date.now() >= dispatchDeadlineAt;
 
     const results: RecipeSpawnResults = { spawned: [], failed: [] };
 
@@ -1211,10 +1265,8 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // path", which is false: preflightSpawnBatchLimit prompts on
     // `currentCount + allowed > DEFAULT_CONFIRMATION_LIMIT`, and `currentCount`
     // is the workspace's ambient panel count, which no per-recipe cap bounds.
-    // 18 panels already open plus a capped 3 is 21, and that prompts today —
-    // with no timeout on the dialog and a 30s deadline on the dispatch behind
-    // it. Left alone deliberately: it is a separate defect from this cap, and
-    // widening the approved ceiling only changes how often it is reached.
+    // 18 panels already open plus a capped 3 is 21, and that prompts. The
+    // prompt is bounded by the dispatch's own deadline instead (#15648).
     const approval = options?.hostApprovedRecipeRun;
     const approvalCovers = approval !== undefined && approvalCoversRecipe(approval, recipe);
     const agentTerminalCap = approval
@@ -1241,8 +1293,17 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // panel list, which a batch's deferred append would leave stale (#13797).
     const panelIndices = validIndices.filter((i) => recipe.terminals[i]!.type === "plugin-panel");
     for (const index of panelIndices) {
+      if (dispatchExpired()) {
+        results.failed.push({ index, error: RECIPE_DISPATCH_EXPIRED_REASON });
+        continue;
+      }
       try {
-        const panelId = await openRecipePluginPanel(recipe, recipe.terminals[index]!, worktreeId);
+        const panelId = await openRecipePluginPanel(
+          recipe,
+          recipe.terminals[index]!,
+          worktreeId,
+          dispatchExpired
+        );
         results.spawned.push({ index, terminalId: panelId });
       } catch (error) {
         results.failed.push({ index, error: formatErrorMessage(error, "Failed to open panel") });
@@ -1273,20 +1334,36 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     // same stale count and under-enforce the ceiling; gate the whole burst once
     // here and pass `bypassLimits` on each individual call. (#9165)
     // Read fresh: the plugin panels opened above already count toward the limit,
-    // and the snapshot taken before them would let the batch overshoot it.
-    const livePanels = usePanelStore.getState();
-    const currentCount = countPanelsTowardLimit(livePanels.panelsById, livePanels.panelIds);
-    const { allowed, declined } = await preflightSpawnBatchLimit(
-      currentCount,
-      validIndices.length,
-      { source: { kind: "recipe", name: recipe.name }, worktreeId }
-    );
+    // and the snapshot taken before them would let the batch overshoot it. The
+    // live count also covers overlapping runs and adds still in flight, and the
+    // granted slots stay reserved until this run's panels are visible (#15607).
+    // The waits above spend the agent dispatch's budget too, so a run already
+    // past it asks nobody anything; slots granted to one that lapsed anyway go
+    // back with the release below.
+    const gate = dispatchExpired()
+      ? null
+      : await preflightSpawnBatchLimit(
+          () => countPanelLimitUsage(usePanelStore.getState()),
+          validIndices.length,
+          {
+            source: { kind: "recipe", name: recipe.name },
+            worktreeId,
+            deadlineAt: dispatchDeadlineAt,
+          }
+        );
+    const grant = gate?.grant ?? null;
+    const lapsed = gate === null || (gate.allowed > 0 && dispatchExpired());
+    const allowed = lapsed ? 0 : (gate?.allowed ?? 0);
+    const refusal = lapsed
+      ? RECIPE_DISPATCH_EXPIRED_REASON
+      : gate?.expired
+        ? PANEL_LIMIT_CONFIRM_EXPIRED_REASON
+        : gate?.declined
+          ? PANEL_LIMIT_DECLINED_REASON
+          : "Panel limit reached";
     const spawnIndices = validIndices.slice(0, allowed);
     for (const index of validIndices.slice(allowed)) {
-      results.failed.push({
-        index,
-        error: declined ? PANEL_LIMIT_DECLINED_REASON : "Panel limit reached",
-      });
+      results.failed.push({ index, error: refusal });
     }
 
     // Capture focus intent synchronously before the batch. The batched
@@ -1319,6 +1396,13 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         : ptySpawnCount > 1
           ? { spawnBatchId: crypto.randomUUID(), spawnBatchSize: ptySpawnCount }
           : {};
+    // Claimed right before each `addPanel`, after any await the step makes, so
+    // the slot is counted under the panel's own id from the moment it can land.
+    const claimPanelId = (kind: "terminal" | "dev-preview"): string => {
+      const id = `${kind}-${crypto.randomUUID()}`;
+      grant?.claim(id);
+      return id;
+    };
     try {
       const settled = await Promise.allSettled(
         spawnIndices.map(async (index) => {
@@ -1327,6 +1411,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           if (terminal.type === "dev-preview") {
             return terminalStore.addPanel({
               kind: "dev-preview",
+              requestedId: claimPanelId("dev-preview"),
               title: terminal.title || "Dev server",
               cwd: worktreePath,
               worktreeId: worktreeId,
@@ -1375,9 +1460,12 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               launchCliDetail = getCurrentLaunchCliDetail(agentId, true);
               launchCliDetails.set(agentId, launchCliDetail);
             }
+            const cliDetail = await launchCliDetail;
+            // That wait can outlast the dispatch an agent is waiting on.
+            if (dispatchExpired()) throw new Error(RECIPE_DISPATCH_EXPIRED_REASON);
             const baseCommand = resolveAgentLaunchBaseCommand(
               agentConfig?.command ?? "",
-              await launchCliDetail
+              cliDetail
             );
             const resolvedContext: RecipeContext = { ...context, worktreePath };
             const step = resolveRecipeAgentStep(recipe, terminal, agentId, resolvedContext);
@@ -1441,15 +1529,28 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             const finalEnv =
               baseEnv || terminal.env ? { ...baseEnv, ...terminal.env } : terminal.env;
 
+            // A step's When done (#16172) is armed on this launch alone, its
+            // prompt the request a fresh code answers. A step that launches
+            // with no prompt, or a slash command, has no request to answer;
+            // its pane is armed from the menu like any other.
+            const whenDone =
+              promptCarriesWhenDone(initialPrompt) &&
+              (terminal.whenDone === "background" || terminal.whenDone === "close")
+                ? terminal.whenDone
+                : undefined;
+            const handbackCode = whenDone !== undefined ? mintHandbackCode() : undefined;
             const command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
-              initialPrompt,
+              initialPrompt:
+                handbackCode !== undefined && initialPrompt
+                  ? appendHandbackInstruction(initialPrompt, handbackCode, "run")
+                  : initialPrompt,
               clipboardDirectory,
               modelId: terminal.agentModelId,
               // An in-memory recipe's captured flags can carry a standing
               // instruction; apply it to this launch as well (#12431).
               systemPromptArgs,
               recipeArgs: terminal.args?.trim() || undefined,
-              presetArgs: preset?.args?.join(" "),
+              presetArgs: preset?.args,
               globalSkipPermissions,
               globalUseAltScreen,
             });
@@ -1460,17 +1561,16 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             // `--dangerously-skip-permissions` and the recipe's args (#9650).
             // Preserve flags an in-memory recipe already carries; for disk
             // recipes the field is stripped (undefined), so compute from live
-            // settings (mirroring useAgentLauncher) and append recipe args as
-            // raw tokens since the restart command builder applies its own
-            // escaping.
+            // settings (mirroring useAgentLauncher). The builder tokenises the
+            // recipe args exactly as the launch command does (#15637).
             const agentLaunchFlags = terminal.agentLaunchFlags ?? [
               ...buildAgentLaunchFlags(effectiveEntry, agentId, {
                 modelId: terminal.agentModelId,
                 presetArgs: preset?.args,
+                recipeArgs: terminal.args,
                 globalSkipPermissions,
                 globalUseAltScreen,
               }),
-              ...(terminal.args?.trim().split(/\s+/).filter(Boolean) ?? []),
               // Last, where the launch command puts it, so restart replays it.
               ...step.systemPromptArgs,
             ];
@@ -1480,6 +1580,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               : undefined;
             return terminalStore.addPanel({
               kind: "terminal",
+              requestedId: claimPanelId("terminal"),
               launchAgentId: agentId,
               command,
               title: terminal.title,
@@ -1493,6 +1594,8 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               env: finalEnv,
               exitBehavior: terminal.exitBehavior,
               ...(firstPrompt && { launchPrompt: firstPrompt }),
+              ...(handbackCode !== undefined &&
+                whenDone !== undefined && { handbackCode, whenDone }),
               spawnedBy,
               focusPolicy,
               bypassLimits: true,
@@ -1508,6 +1611,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
 
           return terminalStore.addPanel({
             kind: "terminal",
+            requestedId: claimPanelId("terminal"),
             title: terminal.title,
             ...titlePin,
             cwd: worktreePath,
@@ -1539,8 +1643,14 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       });
     } finally {
       // Always flush so the batch can never be left open (a no-op for a `null`
-      // token when a concurrent run already owns the active batch).
-      terminalStore.flushSpawnBatch(batchToken);
+      // token when a concurrent run already owns the active batch). Release
+      // after it: this run's panels count from `panelIds`, or from the batch
+      // that still holds them, and slots never claimed go back to the pool.
+      try {
+        terminalStore.flushSpawnBatch(batchToken);
+      } finally {
+        grant?.release();
+      }
     }
 
     // Keep the index-ordered contract callers rely on; parallel settle order

@@ -23,9 +23,32 @@ function resolve(overrides: Partial<ResolveInput>): SidebarListEmpty | null {
 }
 
 describe("resolveSidebarListEmpty", () => {
-  it("is null while the list has rows, or when there are no other worktrees to list", () => {
+  it("is null while the list has rows, or with no other worktrees and main on screen or unfiltered", () => {
     expect(resolve({ filteredCount: 2, quickStateFilter: "working" })).toBeNull();
-    expect(resolve({ hasNonMainWorktrees: false, quickStateFilter: "working" })).toBeNull();
+    expect(
+      resolve({ hasNonMainWorktrees: false, quickStateFilter: "working", mainVisible: true })
+    ).toBeNull();
+    expect(resolve({ hasNonMainWorktrees: false })).toBeNull();
+  });
+
+  it("explains an empty sidebar when a filter hid the only worktree, main", () => {
+    // Main obeys the quick state and the search now, so with no other
+    // worktrees a filter can empty the sidebar entirely; the empty state is
+    // the only way back.
+    expect(resolve({ hasNonMainWorktrees: false, quickStateFilter: "working" })).toEqual({
+      kind: "drained",
+      bucket: "working",
+      mainInBucket: false,
+    });
+    expect(resolve({ hasNonMainWorktrees: false, hasQuery: true, displayQuery: "zzz" })).toEqual({
+      kind: "no-match",
+      query: "zzz",
+      hasFacets: false,
+      mainVisible: false,
+    });
+    expect(resolve({ hasNonMainWorktrees: false, hasFacets: true })).toEqual(
+      expect.objectContaining({ kind: "no-match", hasFacets: true })
+    );
   });
 
   it("reads a state tab with no search or facet as drained, whatever the counterfactual", () => {

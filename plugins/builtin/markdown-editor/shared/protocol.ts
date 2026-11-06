@@ -68,8 +68,15 @@ export const DocumentReadResultSchema = z.discriminatedUnion("status", [
 export type DocumentReadResult = z.infer<typeof DocumentReadResultSchema>;
 
 export const DocumentRevalidateArgsSchema = z.object({ identity: DocumentIdentitySchema }).strict();
+/**
+ * `too-large`: the file on disk is over `MAX_EDITABLE_BYTES`. It was not read
+ * whole, so it has no revision to report; a save against it is held the same way.
+ */
+const DiskTooLargeSchema = z.object({ status: z.literal("too-large") });
+
 export const DocumentRevalidateResultSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("ok"), revision: z.string() }),
+  DiskTooLargeSchema,
   z.object({ status: z.literal("unavailable") }),
 ]);
 export type DocumentRevalidateResult = z.infer<typeof DocumentRevalidateResultSchema>;
@@ -95,7 +102,9 @@ export const DocumentSaveResultSchema = z.discriminatedUnion("status", [
     hasBom: z.boolean(),
     eol: EolSchema,
   }),
+  DiskTooLargeSchema,
   z.object({ status: z.literal("unavailable") }),
+  /** `TOO_LARGE` here is the buffer being saved; an oversized disk file is `too-large`. */
   z.object({ status: z.literal("refused"), reason: z.enum(["NOT_MARKDOWN", "TOO_LARGE"]) }),
   z.object({ status: z.literal("error"), message: z.string() }),
 ]);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatShellArgs, parseShellArgs } from "../shellArgs.js";
+import { formatShellArgs, hasUnclosedQuote, parseShellArgs } from "../shellArgs.js";
 
 describe("shellArgs", () => {
   it.each([
@@ -22,6 +22,13 @@ describe("shellArgs", () => {
   it("splits on any whitespace and ignores surrounding blanks", () => {
     expect(parseShellArgs("  -l \t --login  ")).toEqual(["-l", "--login"]);
     expect(parseShellArgs("   ")).toEqual([]);
+  });
+
+  it("reports a quote left open at the end of the input", () => {
+    expect(hasUnclosedQuote("--name O'Brien")).toBe(true);
+    expect(hasUnclosedQuote(`--title "draft`)).toBe(true);
+    expect(hasUnclosedQuote(`--name "O'Brien" 'say "hi"'`)).toBe(false);
+    expect(hasUnclosedQuote("--plain")).toBe(false);
   });
 
   it("joins adjacent quoted and unquoted parts into one argument", () => {

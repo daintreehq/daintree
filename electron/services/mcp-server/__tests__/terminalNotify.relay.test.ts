@@ -67,6 +67,7 @@ function working(projectId = PROJECT): NotifyTerminalInfo {
 function setup() {
   const client = new FakePtyClient();
   const stateListeners = new Set<(payload: NotifyStateChange) => void>();
+  const killListeners = new Set<(terminalId: string) => void>();
   const published: PaneNotifyState[] = [];
   const service = new TerminalNotifyService({
     getPtyClient: () => client,
@@ -74,7 +75,10 @@ function setup() {
       stateListeners.add(listener);
       return () => stateListeners.delete(listener);
     },
-    onKilled: () => () => {},
+    onKilled: (listener) => {
+      killListeners.add(listener);
+      return () => killListeners.delete(listener);
+    },
     onTrashed: () => () => {},
     isEnabled: () => true,
     publish: (_projectId, state) => published.push(state),
@@ -103,7 +107,10 @@ function setup() {
       });
     }
   };
-  return { client, service, published, delivered, pane, settle };
+  const kill = (terminalId: string) => {
+    for (const listener of [...killListeners]) listener(terminalId);
+  };
+  return { client, service, published, delivered, pane, settle, kill };
 }
 
 const flushNotice = () =>
@@ -128,6 +135,7 @@ describe("relayed notices (#13500)", () => {
     });
     expect(h.client.reads).not.toContain(pane.terminalId);
 
+    const settledAt = Date.now();
     h.settle("t-a");
     await flushNotice();
 
@@ -143,6 +151,7 @@ describe("relayed notices (#13500)", () => {
             waitingReason: "prompt",
             handback: false,
           },
+          lastTransitionAt: settledAt,
         },
       ],
     ]);
@@ -151,6 +160,24 @@ describe("relayed notices (#13500)", () => {
     expect(h.published).toEqual([]);
     expect(h.client.screenReads).toBe(0);
     expect(h.service.getPaneState(pane.terminalId)).toBeNull();
+  });
+
+  it("relays a close with null, since no transition matches it (#15726)", async () => {
+    const h = setup();
+    // Its record holds a transition, which is not the close's.
+    h.client.terminals.set("t-a", { ...working(), lastStateChange: Date.now() - 90_000 });
+    await h.service.whenIdle(h.pane(), { terminalId: "t-a" });
+    h.kill("t-a");
+    await flushNotice();
+    expect(h.delivered.flat()).toEqual([
+      {
+        helpSessionId: "help-1",
+        callId: "call-1",
+        terminalId: "t-a",
+        observation: { kind: "closed" },
+        lastTransitionAt: null,
+      },
+    ]);
   });
 
   it("keeps a relayed notice to its session's project", async () => {
@@ -335,6 +362,39 @@ describe("a host's notice on the Shell's line (#13500)", () => {
     ]);
     expect(h.client.submitted[0]!.text).toContain('on host "studio-01"');
     expect(first.outcomes).toEqual([{ kind: "delivered" }]);
+  });
+
+  it("types a notice held in the wake queue with the transition it arrived with (#15726)", async () => {
+    const h = setup();
+    const AT = Date.now() - 90_000;
+    // The hub is mid-turn in a CLI not known to queue input, so the wake waits for its prompt.
+    h.client.terminals.set(HUB, {
+      ...working(),
+      detectedAgentId: "gemini",
+      lastStateChange: Date.now() - 30_000,
+    });
+    const held = hostWake("n-1", "studio-01", { ...stopped("t-x"), lastTransitionAt: AT });
+    h.service.enqueueWake(HUB_PANE, PROJECT, held.wake);
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    expect(h.client.submitted).toEqual([]);
+
+    h.client.terminals.set(HUB, {
+      projectId: PROJECT,
+      agentState: "waiting",
+      waitingReason: "prompt",
+      lastStateChange: Date.now() - 5_000,
+      detectedAgentId: "gemini",
+      hasPty: true,
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(h.client.submitted.map((s) => s.text)).toEqual([
+      `Daintree: on host "studio-01", terminal t-x stopped working, now waiting at its prompt (lastTransitionAt ${AT}). Check it with terminal.getStatus through host.call, whose lastTransitionAt is on the same host clock.`,
+    ]);
+    expect(held.outcomes).toEqual([
+      expect.objectContaining({ kind: "held" }),
+      { kind: "delivered" },
+    ]);
   });
 
   it("tells the hub a host no longer holds its notices, naming the host and terminals (#13930)", async () => {

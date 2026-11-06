@@ -219,7 +219,3 @@ export function notifyWorktreeTerminalAttached(id: string): void {
 export function clearWorktreeRevealObligations(): void {
   coordinator.clear();
 }
-
-export function pendingWorktreeRevealIds(): string[] {
-  return coordinator.pendingIds();
-}

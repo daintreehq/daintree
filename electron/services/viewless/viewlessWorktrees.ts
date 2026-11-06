@@ -259,9 +259,12 @@ export async function previewWorktreeDelete(
             changes === "unreadable"
               ? null
               : {
-                  ...summarizeWorktreeChanges(changes.changes ?? []),
+                  ...summarizeWorktreeChanges(changes.changes ?? [], changes.omittedUntrackedCount),
                   changes: changes.changes ?? [],
                   rootPath: changes.rootPath,
+                  ...(changes.omittedUntrackedCount
+                    ? { omittedUntrackedCount: changes.omittedUntrackedCount }
+                    : {}),
                   ...(changes.ahead === undefined ? {} : { ahead: changes.ahead }),
                   submodules,
                 }

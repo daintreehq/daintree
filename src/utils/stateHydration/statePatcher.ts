@@ -21,6 +21,8 @@ import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
 import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { ResumeOnRestart } from "@shared/types/agentSettings";
 import { getAgentConfig, sanitizeAgentEnv } from "@/config/agents";
+import { isAccountId } from "@shared/utils/agentAccounts";
+import { canSelectAgentModel } from "@shared/config/agentRegistry";
 import type { AgentPreset } from "@/config/agents";
 import {
   generateAgentCommand,
@@ -37,6 +39,7 @@ import {
   resolveKeepDecorations,
 } from "@shared/types";
 import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
+import { readSpawnProvenance } from "@shared/utils/scheduledRunProvenance";
 import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
 import {
   appendCallerLaunchFlagsToCommand,
@@ -141,6 +144,8 @@ export interface SavedTerminalData {
   title?: string;
   /** Title ownership rung persisted with the snapshot — restoring it is what keeps preset/user titles pinned across restart (#10738). */
   titleMode?: PanelTitleMode;
+  /** The persona emoji the person gave the panel (#16213); main normalized it on read. */
+  displayEmoji?: string;
   cwd?: string;
   worktreeId?: string;
   location?: string;
@@ -205,6 +210,8 @@ export interface SavedTerminalData {
    * so it is trusted here the same way `titleMode` is.
    */
   spawnedBy?: TerminalSpawnSource;
+  /** Untrusted on-disk value (#15977), read with `spawnedBy` through `readSpawnProvenance`. */
+  scheduledRun?: unknown;
   /**
    * Caller-resolved launch env captured at launch time (#10922). Preferred over
    * live preset re-resolution on respawn so a restored session replays the same
@@ -213,6 +220,8 @@ export interface SavedTerminalData {
    * boundary before use.
    */
   env?: Record<string, unknown>;
+  /** Untrusted on-disk value (#16040) — read through `readAccountId`. */
+  agentAccountId?: unknown;
   isUsingFallback?: boolean;
   fallbackChainIndex?: number;
   /** Untrusted on-disk values (#12434) — sanitized in `restoreRecovery.ts`. */
@@ -231,6 +240,8 @@ export interface SavedTerminalData {
   lastAgentObservation?: unknown;
   launchedByPluginId?: unknown;
   holdOnRestart?: unknown;
+  /** Untrusted on-disk value (#15941), read through {@link sanitizeSavedExitCode}. */
+  exitCode?: unknown;
   /** @deprecated pre-#5459 legacy key; read-only fallback, never written. */
   agentFlavorId?: string;
   /** @deprecated pre-#5459 legacy key; read-only fallback, never written. */
@@ -263,6 +274,13 @@ function readPresetId(saved: SavedTerminalData): string | undefined {
 
 function readPresetColor(saved: SavedTerminalData): string | undefined {
   return saved.agentPresetColor ?? saved.agentFlavorColor;
+}
+
+/** The pane's account, only beside the saved env that holds its folder (#16040). */
+function readAccountId(saved: SavedTerminalData): string | undefined {
+  return isAccountId(saved.agentAccountId) && sanitizeAgentEnv(saved.env)
+    ? saved.agentAccountId
+    : undefined;
 }
 
 // Backend snapshots carry the waiting reason so re-created views keep their
@@ -303,6 +321,8 @@ interface BackendTerminalData {
   agentIncarnation?: number;
   detectedAgentId?: BuiltInAgentId;
   detectedProcessId?: string;
+  /** False once the host's record outlived its process. */
+  hasPty?: boolean;
 }
 
 interface ReconnectedTerminalData {
@@ -384,6 +404,11 @@ function pluginHoldArgs(
  * silently seed the post-hydration focus picker with a sentinel that
  * would always win (e.g. `Number.MAX_SAFE_INTEGER` from a buggy writer).
  */
+/** A saved exit code is any integer a process can report; anything else was never one. */
+export function sanitizeSavedExitCode(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) ? value : undefined;
+}
+
 function sanitizeLastActiveAt(value: number | undefined): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return undefined;
@@ -427,16 +452,24 @@ export function buildArgsForBackendTerminal(
   const location = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
   const isDevPreview = backendTerminal.kind === "dev-preview";
   const devCommand = isDevPreview ? saved.command?.trim() : undefined;
+  // The host keeps a shell that once ran an agent after a clean exit, with no
+  // process left (#15941): it reattaches showing the exit it saved, not live.
+  const restoredExitCode =
+    backendTerminal.hasPty === false && !isDevPreview && launchAgentId === undefined
+      ? sanitizeSavedExitCode(saved.exitCode)
+      : undefined;
 
   return {
     kind: normalizePtyKind(backendTerminal.kind),
     launchAgentId,
     title: saved.title ?? backendTerminal.title,
     titleMode: saved.titleMode ?? backendTerminal.titleMode,
+    ...(saved.displayEmoji && { displayEmoji: saved.displayEmoji }),
     cwd,
     worktreeId: saved.worktreeId,
     location,
     existingId: backendTerminal.id,
+    ...(restoredExitCode !== undefined && { restoredExitCode }),
     agentState: coerceAgentState(backendTerminal.agentState),
     waitingReason: restoredWaitingReason(backendTerminal),
     lastStateChange: backendTerminal.lastStateChange,
@@ -461,9 +494,10 @@ export function buildArgsForBackendTerminal(
       saved
     ),
     agentModelId: backendTerminal.agentModelId ?? saved.agentModelId,
-    // Snapshot-only: Main never tracks provenance, so there is no live value
-    // to prefer here the way `agentModelId` does (#12419).
-    spawnedBy: saved.spawnedBy,
+    // Snapshot-only: the renderer never reads provenance back from Main, so
+    // there is no live value to prefer here the way `agentModelId` does
+    // (#12419). The source and its scheduled run come back as a pair (#15977).
+    ...readSpawnProvenance(saved.spawnedBy, saved.scheduledRun),
     everDetectedAgent: backendTerminal.everDetectedAgent,
     agentIncarnation: backendTerminal.agentIncarnation,
     detectedAgentId: backendTerminal.detectedAgentId,
@@ -483,6 +517,7 @@ export function buildArgsForBackendTerminal(
     // instead of dropping it and reintroducing the provider swap on the next
     // full restart (#10922). Not used to spawn here — the PTY already has it.
     env: sanitizeAgentEnv(saved.env),
+    agentAccountId: readAccountId(saved),
     isUsingFallback: saved.isUsingFallback,
     fallbackChainIndex: saved.fallbackChainIndex,
     extensionState: saved.extensionState,
@@ -530,6 +565,7 @@ export function buildArgsForReconnectedFallback(
     launchAgentId,
     title: saved.title ?? reconnectedTerminal.title,
     titleMode: saved.titleMode ?? reconnectedTerminal.titleMode,
+    ...(saved.displayEmoji && { displayEmoji: saved.displayEmoji }),
     cwd,
     worktreeId: saved.worktreeId,
     location,
@@ -558,9 +594,10 @@ export function buildArgsForReconnectedFallback(
       saved
     ),
     agentModelId: reconnectedTerminal.agentModelId ?? saved.agentModelId,
-    // Snapshot-only: Main never tracks provenance, so there is no live value
-    // to prefer here the way `agentModelId` does (#12419).
-    spawnedBy: saved.spawnedBy,
+    // Snapshot-only: the renderer never reads provenance back from Main, so
+    // there is no live value to prefer here the way `agentModelId` does
+    // (#12419). The source and its scheduled run come back as a pair (#15977).
+    ...readSpawnProvenance(saved.spawnedBy, saved.scheduledRun),
     everDetectedAgent: reconnectedTerminal.everDetectedAgent,
     agentIncarnation: reconnectedTerminal.agentIncarnation,
     detectedAgentId: reconnectedTerminal.detectedAgentId,
@@ -577,6 +614,7 @@ export function buildArgsForReconnectedFallback(
     // snapshot WITH env rather than dropping it and reintroducing the provider
     // swap on the next full restart (#10922). Not used to spawn — PTY has it.
     env: sanitizeAgentEnv(saved.env),
+    agentAccountId: readAccountId(saved),
     isUsingFallback: saved.isUsingFallback,
     fallbackChainIndex: saved.fallbackChainIndex,
     extensionState: saved.extensionState,
@@ -823,7 +861,9 @@ export function buildArgsForRespawn(
     const injectedFromEmpty = presetWasStale
       ? [
           ...reconcileFlags([
-            ...(saved.agentModelId ? ["--model", saved.agentModelId] : []),
+            ...(saved.agentModelId && canSelectAgentModel(agentId)
+              ? ["--model", saved.agentModelId]
+              : []),
             ...staleSystemPromptArgs,
           ]),
           ...callerLaunchFlags,
@@ -862,7 +902,7 @@ export function buildArgsForRespawn(
                 clipboardDirectory,
                 modelId: saved.agentModelId,
                 systemPromptArgs: staleSystemPromptArgs,
-                presetArgs: preset?.args?.join(" "),
+                presetArgs: preset?.args,
                 globalSkipPermissions,
                 globalUseAltScreen,
               }),
@@ -911,7 +951,7 @@ export function buildArgsForRespawn(
             clipboardDirectory,
             modelId: saved.agentModelId,
             systemPromptArgs: staleSystemPromptArgs,
-            presetArgs: preset?.args?.join(" "),
+            presetArgs: preset?.args,
             globalSkipPermissions,
             globalUseAltScreen,
             sessionId: mintFreshSessionId(),
@@ -995,7 +1035,7 @@ export function buildArgsForRespawn(
             clipboardDirectory,
             modelId: saved.agentModelId,
             systemPromptArgs: staleSystemPromptArgs,
-            presetArgs: preset?.args?.join(" "),
+            presetArgs: preset?.args,
             globalSkipPermissions,
             globalUseAltScreen,
             sessionId: mintFreshSessionId(),
@@ -1044,10 +1084,15 @@ export function buildArgsForRespawn(
   const respawnKind = normalizePtyKind(kind);
   const isDevPreview = kind === "dev-preview";
   const location = (saved.location === "dock" ? "dock" : "grid") as "grid" | "dock";
+  // A plain terminal whose process had exited on its own comes back showing
+  // that exit, not running again (#15941). An agent pane keeps its resume path.
+  const restoredExitCode =
+    respawnKind === "terminal" && !isAgentPanel ? sanitizeSavedExitCode(saved.exitCode) : undefined;
 
   const lastSeen = isAgentPanel ? sanitizeAgentObservation(saved.lastAgentObservation) : undefined;
+  // Nothing is rebuilt for a pane restored exited, so it records no disposition.
   const restoreProvenance: TerminalRestoreProvenance | undefined =
-    respawnKind === "terminal"
+    respawnKind === "terminal" && restoredExitCode === undefined
       ? {
           at: options?.restoredAt ?? Date.now(),
           disposition: restoreRecovery ? "held" : resumed ? "resume" : "fresh",
@@ -1085,6 +1130,7 @@ export function buildArgsForRespawn(
     // A stale preset's pinned title was just stripped — drop the pin with it
     // (unless the user locked the title, which the strip above exempts).
     titleMode: presetWasStale && !userLockedTitle ? undefined : saved.titleMode,
+    ...(saved.displayEmoji && { displayEmoji: saved.displayEmoji }),
     cwd: coldLaunch?.cwd || saved.cwd || projectRoot || "",
     worktreeId: coldLaunch?.worktreeId ?? saved.worktreeId,
     location,
@@ -1112,7 +1158,7 @@ export function buildArgsForRespawn(
       : (reconciledLaunchFlags ?? saved.agentLaunchFlags),
     callerLaunchFlags: isAgentPanel && callerLaunchFlags.length > 0 ? callerLaunchFlags : undefined,
     agentModelId: saved.agentModelId,
-    spawnedBy: saved.spawnedBy,
+    ...readSpawnProvenance(saved.spawnedBy, saved.scheduledRun),
     agentSessionId: respawnSessionId,
     agentPresetId: respawnAgentPresetId,
     agentPresetColor: respawnAgentPresetColor,
@@ -1125,6 +1171,7 @@ export function buildArgsForRespawn(
       : sanitizeConversationCwd(saved.conversationCwd),
     restoreRecovery,
     restoreProvenance,
+    ...(restoredExitCode !== undefined && { restoredExitCode }),
     // Carried as the pane's own until its new process reports something, so a
     // pane held again, or resumed and closed before reporting, keeps it (#14017).
     lastAgentObservation: lastSeen,
@@ -1135,6 +1182,8 @@ export function buildArgsForRespawn(
     // current store. Falls back to live re-resolution for legacy snapshots saved
     // before env was persisted, or when the saved env sanitizes to nothing safe.
     env: sanitizeAgentEnv(saved.env) ?? presetEnv,
+    // The folder is in the saved env, so the account comes back only with it.
+    agentAccountId: readAccountId(saved),
     extensionState: saved.extensionState,
     extensionStateVersion: restoredExtensionStateVersion(saved),
     pluginId: saved.pluginId,
@@ -1197,6 +1246,7 @@ export function buildArgsForNonPtyRecreation(
     kind,
     title: saved.title,
     titleMode: saved.titleMode,
+    ...(saved.displayEmoji && { displayEmoji: saved.displayEmoji }),
     cwd: resolveSavedCwd(saved.cwd, projectRoot),
     worktreeId,
     location,

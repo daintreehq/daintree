@@ -406,15 +406,6 @@ test.describe.serial("Core: Browser Panel", () => {
     });
 
     test("typing a query shows the match count", async () => {
-      // Typing (findNext: false) leaves the counter on "No results" although the
-      // guest reports 3 matches for the same query (main-process findInPage);
-      // Enter (findNext: true) shows "1 of 3". Reproduced in 4 local runs.
-      test.info().annotations.push({
-        type: "quarantine",
-        description:
-          "2026-09-30 as-you-type find never shows the match count (counter stays 'No results'); Enter works",
-      });
-      test.skip(true, "as-you-type find count is not displayed; see quarantine annotation");
       const { window } = ctx;
       const browserPanel = window.locator(SEL.panel.gridPanel).filter({
         has: window.locator(SEL.browser.addressBar),
@@ -425,14 +416,14 @@ test.describe.serial("Core: Browser Panel", () => {
       await expect(browserPanel.getByText(/1 of 3/)).toBeVisible({ timeout: T_MEDIUM });
     });
 
-    test("Enter in the find field jumps to the first match", async () => {
+    test("Enter in the find field moves to the next match", async () => {
       const { window } = ctx;
       const browserPanel = window.locator(SEL.panel.gridPanel).filter({
         has: window.locator(SEL.browser.addressBar),
       });
 
       await browserPanel.locator(SEL.browser.findInput).press("Enter");
-      await expect(browserPanel.getByText(/1 of 3/)).toBeVisible({ timeout: T_MEDIUM });
+      await expect(browserPanel.getByText(/2 of 3/)).toBeVisible({ timeout: T_MEDIUM });
     });
 
     test("next and previous navigation changes active match", async () => {
@@ -442,10 +433,10 @@ test.describe.serial("Core: Browser Panel", () => {
       });
 
       await browserPanel.locator(SEL.browser.findNext).click();
-      await expect(browserPanel.getByText(/2 of 3/)).toBeVisible({ timeout: T_MEDIUM });
+      await expect(browserPanel.getByText(/3 of 3/)).toBeVisible({ timeout: T_MEDIUM });
 
       await browserPanel.locator(SEL.browser.findPrev).click();
-      await expect(browserPanel.getByText(/1 of 3/)).toBeVisible({ timeout: T_MEDIUM });
+      await expect(browserPanel.getByText(/2 of 3/)).toBeVisible({ timeout: T_MEDIUM });
     });
 
     test("closing find bar removes it", async () => {

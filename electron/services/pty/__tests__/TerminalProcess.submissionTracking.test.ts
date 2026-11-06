@@ -5,6 +5,7 @@ import { TerminalProcess } from "../TerminalProcess.js";
 import { events } from "../../events.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import type { TerminalInputController } from "../TerminalInputController.js";
+import type { AnalysisBackend } from "../analysis/AnalysisBackend.js";
 import { OUTPUT_PROGRESS_SAMPLE_MS } from "../OutputProgressTracker.js";
 
 /**
@@ -389,6 +390,145 @@ describe("TerminalProcess handback requests (#12488)", () => {
     terminal.dispose();
   });
 
+  it("drops the last handback once a typed Enter submits at the agent's prompt, and not for keys that don't (#16190)", () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    const info = terminal.getInfo();
+    const handback = {
+      message: "Approve the deploy",
+      report: "needs-you" as const,
+      observedAt: 1,
+      truncated: false,
+    };
+    info.agentState = "waiting";
+    info.waitingReason = "prompt";
+
+    info.lastHandback = handback;
+    info.lastHandbackUnpublished = true;
+    // Typing the reply, a soft newline inside it, and a paste submit nothing.
+    terminal.write("approved");
+    terminal.write("\x1b\r");
+    terminal.write("\x1b[200~line one\rline two\x1b[201~");
+    expect(info.lastHandback).toBe(handback);
+
+    // Keys on an approval dialog pick an option; they never reach the prompt.
+    info.waitingReason = "approval";
+    terminal.write("\r");
+    expect(info.lastHandback).toBe(handback);
+
+    info.waitingReason = "prompt";
+    terminal.write("\r");
+    expect(info.lastHandback).toBeUndefined();
+    expect(info.lastHandbackUnpublished).toBe(false);
+
+    // A broadcast keystroke takes the same path to the agent.
+    info.lastHandback = handback;
+    terminal.tryWrite("go on\r");
+    expect(info.lastHandback).toBeUndefined();
+    terminal.dispose();
+  });
+
+  it("keeps the last handback through a paste broadcast whole or streamed across writes, until an Enter after it", () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    const info = terminal.getInfo();
+    const handback = {
+      message: null,
+      report: "needs-you" as const,
+      observedAt: 1,
+      truncated: false,
+    };
+    info.agentState = "waiting";
+    info.waitingReason = "prompt";
+    info.lastHandback = handback;
+
+    terminal.tryWrite("\x1b[200~one\rtwo\x1b[201~");
+    expect(info.lastHandback).toBe(handback);
+
+    // CopyTree writes the markers apart from the body it streams between them.
+    terminal.write("\x1b[200~");
+    terminal.write("first\rsecond\r");
+    terminal.write("third\r");
+    terminal.write("\x1b[201~");
+    expect(info.lastHandback).toBe(handback);
+    terminal.write("\r");
+    expect(info.lastHandback).toBeUndefined();
+
+    info.lastHandback = handback;
+    terminal.write("\x1b[200~pasted\rtext\x1b[201~\r");
+    expect(info.lastHandback).toBeUndefined();
+    terminal.dispose();
+  });
+
+  it("closes a paste left open once its agent has gone, and follows the submit lane's markers too", () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    const info = terminal.getInfo();
+    const handback = {
+      message: null,
+      report: "needs-you" as const,
+      observedAt: 1,
+      truncated: false,
+    };
+    info.agentState = "waiting";
+    info.waitingReason = "prompt";
+    info.agentIncarnation = 0;
+
+    // CopyTree lost the agent mid-paste and left the end marker off.
+    terminal.write("\x1b[200~context");
+    info.lastHandback = handback;
+    terminal.write("\r");
+    expect(info.lastHandback).toBe(handback);
+    // A new agent session in the same PTY starts with no paste open.
+    info.agentIncarnation = 1;
+    terminal.write("\r");
+    expect(info.lastHandback).toBeUndefined();
+
+    // A paste end the submit lane writes closes one raw input opened.
+    terminal.write("\x1b[200~context");
+    info.lastHandback = handback;
+    const controller = (
+      terminal as unknown as { inputController: { writeStrict(d: string): boolean } }
+    ).inputController;
+    controller.writeStrict("\x1b[201~");
+    expect(info.lastHandback).toBe(handback);
+    terminal.write("\r");
+    expect(info.lastHandback).toBeUndefined();
+    terminal.dispose();
+  });
+
+  it("keeps the last handback when keys answer an approval the analysis moves on as they arrive", () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    const info = terminal.getInfo();
+    const handback = {
+      message: null,
+      report: "needs-you" as const,
+      observedAt: 1,
+      truncated: false,
+    };
+    info.agentState = "waiting";
+    info.waitingReason = "approval";
+    info.lastHandback = handback;
+    const analysis = (
+      terminal as unknown as {
+        inputController: { host: { analysis: AnalysisBackend } };
+      }
+    ).inputController.host.analysis;
+    // In-thread, the input observation sets the agent working before the write returns.
+    vi.spyOn(analysis, "hasMonitor").mockReturnValue(true);
+    vi.spyOn(analysis, "notifyInput").mockImplementation(() => {
+      info.agentState = "working";
+      info.waitingReason = undefined;
+    });
+
+    terminal.write("y\r");
+    expect(info.agentState).toBe("working");
+    expect(info.lastHandback).toBe(handback);
+
+    info.agentState = "waiting";
+    info.waitingReason = "approval";
+    terminal.tryWrite("y\r");
+    expect(info.lastHandback).toBe(handback);
+    terminal.dispose();
+  });
+
   it("reports a done marker the moment it is complete on screen, without waiting for a settle", async () => {
     vi.useFakeTimers();
     ptyOnDataCallback = null;
@@ -411,6 +551,171 @@ describe("TerminalProcess handback requests (#12488)", () => {
     ptyOnDataCallback!("\r\n");
     await vi.advanceTimersByTimeAsync(300);
     expect(seen).toHaveLength(1);
+    off();
+    vi.useRealTimers();
+    terminal.dispose();
+  });
+
+  it("reports a scheduled run's launch marker only once it retires the code (#15982)", async () => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+    const runs: Array<{ code: string; report: string; message: string | null; spawnedAt: number }> =
+      [];
+    const ordinary: Array<string | null> = [];
+    const offRun = events.on("agent:run-handback-observed", (payload) =>
+      runs.push({
+        code: payload.code,
+        report: payload.report,
+        message: payload.message,
+        spawnedAt: payload.spawnedAt,
+      })
+    );
+    const offOrdinary = events.on("agent:handback-observed", (payload) =>
+      ordinary.push(payload.handback.message)
+    );
+    const terminal = createTerminal({
+      launchAgentId: "grok",
+      handbackCode: "k7f3qa",
+      handbackInstruction: "run",
+    });
+    terminal.getInfo().agentState = "working";
+
+    // A drafted marker in a thinking preview is observed, but is no report yet:
+    // a close policy acting on it would end the reply still to come.
+    ptyOnDataCallback!("  draft: DAINTREE-DONE-k7f3qa: Voted A END-k7f3qa\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(ordinary).toEqual(["Voted A"]);
+    expect(runs).toEqual([]);
+
+    terminal.getInfo().agentState = "waiting";
+    ptyOnDataCallback!("  DAINTREE-NEEDS-YOU-k7f3qa: the deploy key expired END-k7f3qa\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(runs).toEqual([
+      {
+        code: "k7f3qa",
+        report: "needs-you",
+        message: "the deploy key expired",
+        spawnedAt: terminal.getInfo().spawnedAt,
+      },
+    ]);
+    // Retired, so the same screen sampled again reports nothing more.
+    ptyOnDataCallback!("\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(runs).toHaveLength(1);
+    offRun();
+    offOrdinary();
+    vi.useRealTimers();
+    terminal.dispose();
+  });
+
+  it("reports a run's marker first seen while working once the agent leaves working", async () => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+    const runs: Array<string | null> = [];
+    const off = events.on("agent:run-handback-observed", (payload) => runs.push(payload.message));
+    const terminal = createTerminal({
+      launchAgentId: "claude",
+      handbackCode: "k7f3qa",
+      handbackInstruction: "run",
+    });
+    terminal.getInfo().agentState = "working";
+
+    ptyOnDataCallback!("DAINTREE-DONE-k7f3qa: triaged all six END-k7f3qa\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(runs).toEqual([]);
+
+    // The same capture, sampled again once the agent reads as stopped.
+    terminal.getInfo().agentState = "waiting";
+    ptyOnDataCallback!("\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(runs).toEqual(["triaged all six"]);
+    off();
+    vi.useRealTimers();
+    terminal.dispose();
+  });
+
+  it("reports an armed terminal's submitted marker once it retires the code, never an earlier one (#16171)", async () => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+    const runs: Array<{ code: string; report: string }> = [];
+    const off = events.on("agent:run-handback-observed", (payload) =>
+      runs.push({ code: payload.code, report: payload.report })
+    );
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    terminal.getInfo().agentState = "waiting";
+
+    terminal.submit("first", "tok-1", "aaaaaa", undefined, undefined, undefined, "run");
+    await vi.advanceTimersByTimeAsync(250);
+    terminal.submit("second", "tok-2", "bbbbbb", undefined, undefined, undefined, "run");
+    await vi.advanceTimersByTimeAsync(250);
+
+    // The first request was retired when the second reached the pty, so its
+    // marker reprinted (a transcript replay) reports nothing; neither does a
+    // marker with no code or another code, in a file or a command's output.
+    ptyOnDataCallback!("DAINTREE-DONE-aaaaaa: first one END-aaaaaa\r\n");
+    ptyOnDataCallback!("$ cat notes.md\r\nDAINTREE-DONE: copied END-\r\n");
+    ptyOnDataCallback!("DAINTREE-DONE-zzzzzz: someone else's END-zzzzzz\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(runs).toEqual([]);
+
+    ptyOnDataCallback!("DAINTREE-NEEDS-YOU-bbbbbb: pick a name END-bbbbbb\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(runs).toEqual([{ code: "bbbbbb", report: "needs-you" }]);
+
+    // Retired, so the same screen sampled again reports nothing more.
+    ptyOnDataCallback!("\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(runs).toHaveLength(1);
+
+    terminal.submit("third", "tok-3", "cccccc", undefined, undefined, undefined, "run");
+    await vi.advanceTimersByTimeAsync(250);
+    ptyOnDataCallback!("DAINTREE-DONE-cccccc: all done END-cccccc\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    expect(runs).toEqual([
+      { code: "bbbbbb", report: "needs-you" },
+      { code: "cccccc", report: "done" },
+    ]);
+    off();
+    vi.useRealTimers();
+    terminal.dispose();
+  });
+
+  it("never reports a launch marker as a run's when the launch was no run's", async () => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+    const runs: unknown[] = [];
+    const off = events.on("agent:run-handback-observed", (payload) => runs.push(payload));
+    const terminal = createTerminal({ launchAgentId: "claude", handbackCode: "k7f3qa" });
+    terminal.getInfo().agentState = "waiting";
+
+    ptyOnDataCallback!("DAINTREE-NEEDS-YOU-k7f3qa: stuck END-k7f3qa\r\n");
+    ptyOnDataCallback!("DAINTREE-DONE-k7f3qa: reviewed END-k7f3qa\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(terminal.getInfo().lastHandback?.message).toBe("reviewed");
+    expect(runs).toEqual([]);
+    off();
+    vi.useRealTimers();
+    terminal.dispose();
+  });
+
+  it("names the state a marker was printed in by the pane's own last transition (#15726)", async () => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+    const seen: Array<number | undefined> = [];
+    const off = events.on("agent:handback-observed", (payload) =>
+      seen.push(payload.lastStateChange)
+    );
+    const terminal = createTerminal({ launchAgentId: "grok", handbackCode: "k7f3qa" });
+    const workingSince = Date.now() - 42_000;
+    terminal.getInfo().agentState = "working";
+    terminal.getInfo().lastStateChange = workingSince;
+
+    ptyOnDataCallback!("DAINTREE-DONE-k7f3qa: gave a fact END-k7f3qa\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(seen).toEqual([workingSince]);
     off();
     vi.useRealTimers();
     terminal.dispose();
@@ -451,6 +756,37 @@ describe("TerminalProcess handback requests (#12488)", () => {
     await vi.advanceTimersByTimeAsync(300);
     expect(seen).toHaveLength(2);
     expect(terminal.getInfo().handbackTracker?.deliveredRequests()).toEqual([]);
+    off();
+    vi.useRealTimers();
+    terminal.dispose();
+  });
+
+  it("reports a marker whose form alone changed while the agent works (#16190)", async () => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+    const seen: Array<string | undefined> = [];
+    const off = events.on("agent:handback-observed", (payload) =>
+      seen.push(payload.handback.report)
+    );
+    const terminal = createTerminal({ launchAgentId: "grok", handbackCode: "k7f3qa" });
+    terminal.getInfo().agentState = "working";
+
+    ptyOnDataCallback!("  DAINTREE-DONE-k7f3qa: deploy pushed END-k7f3qa\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    const firstObservedAt = terminal.getInfo().lastHandback?.observedAt;
+
+    // The reply settles on the other form, with the same summary.
+    ptyOnDataCallback!("  DAINTREE-NEEDS-YOU-k7f3qa: deploy pushed END-k7f3qa\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+    ptyOnDataCallback!("\r\n");
+    await vi.advanceTimersByTimeAsync(300);
+
+    expect(seen).toEqual(["done", "needs-you"]);
+    expect(terminal.getInfo().lastHandback).toMatchObject({
+      message: "deploy pushed",
+      report: "needs-you",
+      observedAt: firstObservedAt,
+    });
     off();
     vi.useRealTimers();
     terminal.dispose();

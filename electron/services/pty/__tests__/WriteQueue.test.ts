@@ -586,3 +586,109 @@ describe("WriteQueue slow-submit reporting", () => {
     expect(() => wq.submit("still-usable")).not.toThrow();
   });
 });
+
+describe("WriteQueue.stage (#15554)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A performSubmit for "a" that holds the lane until released. */
+  function holdFirst(m: MutableOptions, order: string[]): () => void {
+    let release!: () => void;
+    m.performSubmit.mockImplementation((text) => {
+      order.push(text);
+      if (text !== "a") return Promise.resolve();
+      return new Promise<void>((r) => {
+        release = r;
+      });
+    });
+    return () => release();
+  }
+
+  it("runs in the caller's tick on an idle lane and leaves the lane idle", () => {
+    const m = makeOptions();
+    const wq = new WriteQueue(m.options);
+    const order: string[] = [];
+
+    wq.stage(() => order.push("draft"));
+
+    expect(order).toEqual(["draft"]);
+    expect(wq.hasPendingSubmission()).toBe(false);
+  });
+
+  it("takes its FIFO turn between the submissions around it", async () => {
+    const m = makeOptions();
+    const order: string[] = [];
+    const release = holdFirst(m, order);
+    const wq = new WriteQueue(m.options);
+
+    wq.submit("a");
+    wq.submit("b");
+    wq.stage(() => order.push("draft"));
+    wq.submit("c");
+    await vi.runAllTimersAsync();
+    expect(order).toEqual(["a"]);
+    expect(wq.hasPendingSubmission()).toBe(true);
+
+    release();
+    await vi.runAllTimersAsync();
+    expect(order).toEqual(["a", "b", "draft", "c"]);
+    expect(wq.hasPendingSubmission()).toBe(false);
+  });
+
+  it("drops a waiting stage on cancel, and runs one staged afterwards", async () => {
+    const m = makeOptions();
+    const order: string[] = [];
+    const release = holdFirst(m, order);
+    const wq = new WriteQueue(m.options);
+
+    wq.submit("a");
+    wq.stage(() => order.push("cancelled draft"));
+    wq.cancelPendingInput();
+    wq.stage(() => order.push("later draft"));
+
+    release();
+    await vi.runAllTimersAsync();
+    expect(order).toEqual(["a", "later draft"]);
+  });
+
+  it("drops a waiting stage on dispose, and ignores one staged after", async () => {
+    const m = makeOptions();
+    const order: string[] = [];
+    const release = holdFirst(m, order);
+    const wq = new WriteQueue(m.options);
+
+    wq.submit("a");
+    wq.stage(() => order.push("queued draft"));
+    wq.dispose();
+    wq.stage(() => order.push("late draft"));
+
+    release();
+    await vi.runAllTimersAsync();
+    expect(order).toEqual(["a"]);
+  });
+
+  it("reports a throwing stage and carries on draining", async () => {
+    const m = makeOptions();
+    const order: string[] = [];
+    const release = holdFirst(m, order);
+    const wq = new WriteQueue(m.options);
+    const boom = new Error("EIO");
+
+    wq.submit("a");
+    wq.stage(() => {
+      throw boom;
+    });
+    wq.submit("b");
+
+    release();
+    await vi.runAllTimersAsync();
+    expect(order).toEqual(["a", "b"]);
+    expect(m.onWriteError).toHaveBeenCalledWith(boom, { operation: "stage" });
+    expect(m.statuses).toEqual([]);
+  });
+});

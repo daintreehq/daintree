@@ -9,6 +9,7 @@ import {
   isHostModeHandoffOnly,
   isHostModeRequested,
 } from "../../boot/hostModeLaunch.js";
+import { isDueScheduleCheckRequested } from "../../boot/dueScheduleLaunch.js";
 import { hostLocation } from "./hostLocation.js";
 import { HOST_MODE_STATUS_NAME, parseHostModeStatus } from "./hostModeStatusFile.js";
 import { systemdUnitName } from "./startAtLogin.js";
@@ -43,6 +44,7 @@ export function wantsDesktopWindow(argv: readonly string[], env: NodeJS.ProcessE
     isHostModeRequested(argv) ||
     isAttachStdioRequested(argv) ||
     isHostModeHandoffOnly(argv) ||
+    isDueScheduleCheckRequested(argv) ||
     argv.includes(HIDDEN_LAUNCH_FLAG)
   );
 }

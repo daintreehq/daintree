@@ -19,10 +19,3 @@ export function describeExitStatus(exitCode: number | null | undefined): ExitSta
   }
   return { badge: `[exit ${exitCode}]`, detail: `Exit code: ${exitCode}`, failed: exitCode !== 0 };
 }
-
-/**
- * How an exited pane recedes: its body only. The header keeps full ink, since
- * it carries the exit badge's failure mark and the settled trace, which a
- * grayscale filter would wash out. Keys off `data-pane-body` on ContentPanel.
- */
-export const EXITED_PANE_CLASS = "[&>[data-pane-body]]:opacity-75 [&>[data-pane-body]]:grayscale";

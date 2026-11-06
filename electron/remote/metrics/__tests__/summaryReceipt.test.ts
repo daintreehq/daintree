@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { HostMetricsSummary } from "../../../../shared/types/remoteHosts.js";
 import { elapsedSince, type ElapsedStamp } from "../../link/elapsed.js";
 import {
+  HOST_LOAD_BOUND_STALE_MS,
   HOST_LOAD_STALE_MS,
   receiveSummary,
   sampleFreshness,
@@ -113,11 +114,20 @@ describe("sampleFreshness (#14462)", () => {
     });
   });
 
+  it("gives this machine's own sample, which no ping dates, no allowance past the limit", () => {
+    const own = bounded(0);
+    expect(sampleFreshness(summary(1_000), own, at(1_000 + HOST_LOAD_STALE_MS)).stale).toBe(false);
+    expect(sampleFreshness(summary(1_000), own, at(1_001 + HOST_LOAD_STALE_MS))).toMatchObject({
+      stale: true,
+      staleReason: "age-limit",
+    });
+  });
+
   it("goes stale as a bounded sample ages on this Shell's clocks", () => {
-    const receipt = bounded(4_000);
-    expect(sampleFreshness(summary(1_000), receipt, at(12_000)).stale).toBe(false);
-    expect(sampleFreshness(summary(1_000), receipt, at(12_001))).toEqual({
-      ageMs: HOST_LOAD_STALE_MS + 1,
+    const receipt = bounded(6_000);
+    expect(sampleFreshness(summary(1_000), receipt, at(15_000)).stale).toBe(false);
+    expect(sampleFreshness(summary(1_000), receipt, at(15_001))).toEqual({
+      ageMs: HOST_LOAD_BOUND_STALE_MS + 1,
       stale: true,
       staleReason: "age-limit",
       receivedAt: 1_000,
@@ -215,5 +225,55 @@ describe("sampleFreshness (#14462)", () => {
         receivedAt: 1_000,
       });
     }
+  });
+});
+
+describe("the margin a ping-dated bound needs (#15735)", () => {
+  // Pings leave this Shell every 5 s; the host names the newest one it had when it posts.
+  const everyFive = new Map(Array.from({ length: 10 }, (_, n) => [n, at(n * 5_000)]));
+  const sentAt = (nonce: number) => everyFive.get(nonce) ?? null;
+  // A 4 s sample that began at 1 s posts at 5 s, a moment before ping 1 reaches
+  // the host, so it names ping 0, sent 5 s before: the worst phase. Each way takes 100 ms.
+  const worstPhase = () => receiveSummary({ sampleAgeMs: 4_000, afterPing: 0 }, sentAt, at(5_100));
+
+  it("reads a host sampling every 5 s fresh until its next frame, a busy second late", () => {
+    const receipt = worstPhase();
+    expect(receipt.maxAgeMs).toBe(9_100);
+    expect(sampleFreshness(summary(0), receipt, at(11_099))).toMatchObject({
+      ageMs: 15_099,
+      stale: false,
+    });
+  });
+
+  it("still reads it fresh across one dropped frame", () => {
+    expect(sampleFreshness(summary(0), worstPhase(), at(15_099))).toMatchObject({
+      ageMs: 19_099,
+      stale: false,
+    });
+  });
+
+  it("calls it stale once the bound passes three samples and a ping interval", () => {
+    const receipt = worstPhase();
+    expect(sampleFreshness(summary(0), receipt, at(16_000))).toMatchObject({
+      ageMs: HOST_LOAD_BOUND_STALE_MS,
+      stale: false,
+    });
+    expect(sampleFreshness(summary(0), receipt, at(16_001))).toMatchObject({
+      ageMs: HOST_LOAD_BOUND_STALE_MS + 1,
+      stale: true,
+      staleReason: "age-limit",
+    });
+  });
+
+  it("never stretches the limit for a sample known to be older than it", () => {
+    // Posted just after ping 7 reached the host, so its bound is tight, but the
+    // sample was already 12 s old: 3 s more here and it is past the limit for certain.
+    const receipt = receiveSummary({ sampleAgeMs: 12_000, afterPing: 7 }, sentAt, at(35_100));
+    expect(sampleFreshness(summary(0), receipt, at(38_100)).stale).toBe(false);
+    expect(sampleFreshness(summary(0), receipt, at(38_101))).toMatchObject({
+      ageMs: 15_101,
+      stale: true,
+      staleReason: "age-limit",
+    });
   });
 });

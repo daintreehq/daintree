@@ -120,6 +120,57 @@ const leadingColumn = (container: HTMLElement) =>
   container.querySelector<HTMLElement>("[data-canopy-lead]")!;
 
 describe("CanopyRow", () => {
+  describe("a run whose agent said it needs the user", () => {
+    const reported: Partial<FleetRunRow> = {
+      waitingReason: "prompt",
+      handbackReport: "needs-you",
+      handBack: { stoppedAt: NOW - 60_000, seenAt: NOW - 30_000 },
+    };
+
+    it("says so as its ask before any reading, never calling the run finished", () => {
+      const groups = buildPilotGroups(
+        [
+          {
+            runId: "run-1",
+            workspaceId: "p1",
+            spawnedAt: NOW - 3_600_000,
+            cwd: "/Users/dev/app",
+            agentId: "claude",
+            agentState: "waiting",
+            title: "Fix flaky panel tests",
+            since: NOW - 60_000,
+            ...reported,
+          },
+        ],
+        {
+          workspaces: new Map([["p1", { kind: "project", name: "app", emoji: "🦊" }]]),
+          currentWorkspaceId: null,
+          nowMs: NOW,
+        }
+      );
+      const item = buildCanopyInbox(groups, new Map())[0]!;
+      const { container } = renderRow(item);
+      expect(container.querySelector("#row-ask")!.textContent).toContain("Says it needs you");
+      expect(option(container).textContent).not.toContain("Finished");
+    });
+
+    it("keeps the reader's words as the ask and says the agent's word beside them", () => {
+      const { container } = renderRow(itemFor("finished", {}, reported));
+      expect(container.querySelector("#row-ask")!.textContent).toContain(
+        "Choose push to develop or open a PR"
+      );
+      expect(option(container).textContent).toContain("Says it needs you");
+      expect(description(container)).toContain("says it needs you");
+    });
+
+    it("says nothing of it once the user parked the run", () => {
+      const { container } = renderRow(
+        itemFor("finished", {}, { ...reported, park: { parkedAt: NOW - 1_000, note: "" } })
+      );
+      expect(option(container).textContent).not.toContain("Says it needs you");
+    });
+  });
+
   describe("before the readers have written words", () => {
     const unread = {
       stage: "classified" as const,
@@ -700,7 +751,16 @@ describe("CanopyRow", () => {
   });
 
   it("gives the name line the time, never a score or a word the glyph already says", () => {
-    const { container } = renderRow(itemFor("question", {}, { waitingReason: "question" }));
+    const { container } = renderRow(
+      itemFor(
+        "question",
+        {},
+        {
+          waitingReason: "question",
+          canopy: { kind: "asked", quote: "Which branch?", readAt: NOW, seen: false },
+        }
+      )
+    );
     const column = leadingColumn(container);
     expect(container.querySelector("[data-canopy-age]")!.textContent).toContain("1m");
     expect(column.textContent).not.toContain("88");

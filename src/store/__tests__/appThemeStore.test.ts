@@ -4,7 +4,17 @@ import { BUILT_IN_APP_SCHEMES, DEFAULT_APP_SCHEME_ID } from "@/config/appColorSc
 import { flushPendingTheme, injectSchemeToDOM, useAppThemeStore } from "../appThemeStore";
 import type { AppColorScheme } from "@shared/theme";
 import { selectSelectableSchemes } from "@/theme/selectableSchemes";
-import { resolveAppTheme } from "@shared/theme";
+import { normalizeAppColorScheme, resolveAppTheme } from "@shared/theme";
+import {
+  RED_GREEN_OVERRIDES,
+  getColorVisionTerminalWrites,
+} from "@shared/theme/colorVisionOverrides";
+import { DEFAULT_SCHEME_ID } from "@/config/terminalColorSchemes";
+import {
+  clearThemeCache,
+  selectEffectiveTheme,
+  useTerminalColorSchemeStore,
+} from "../terminalColorSchemeStore";
 
 describe("appThemeStore.recentSchemeIds LRU", () => {
   beforeEach(() => {
@@ -577,5 +587,81 @@ describe("plugin themes (#13832)", () => {
     expect(state.pluginSnapshotScheme).toBeNull();
     expect(state.recentSchemeIds).toEqual(["svalbard"]);
     expect(canvasToken()).toBe(bondi.tokens["surface-canvas"]);
+  });
+});
+
+describe("appThemeStore.setColorVisionMode", () => {
+  const readCss = (name: string) =>
+    getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+  beforeEach(() => {
+    clearThemeCache();
+    useAppThemeStore.setState({
+      selectedSchemeId: DEFAULT_APP_SCHEME_ID,
+      customSchemes: [],
+      colorVisionMode: "default",
+      previewSchemeId: null,
+      accentColorOverride: null,
+    });
+    useTerminalColorSchemeStore.setState({
+      selectedSchemeId: DEFAULT_SCHEME_ID,
+      customSchemes: [],
+      previewSchemeId: null,
+    });
+    injectSchemeToDOM(resolveAppTheme(DEFAULT_APP_SCHEME_ID), { immediate: true });
+  });
+
+  afterEach(() => {
+    useAppThemeStore.setState({ previewSchemeId: null, customSchemes: [] });
+    useAppThemeStore.getState().setColorVisionMode("default");
+    injectSchemeToDOM(resolveAppTheme(DEFAULT_APP_SCHEME_ID), { immediate: true });
+    useTerminalColorSchemeStore.setState({ selectedSchemeId: DEFAULT_SCHEME_ID });
+    clearThemeCache();
+  });
+
+  it("paints the mode's CSS before terminal subscribers read it", () => {
+    // Publishing the mode re-runs terminal selectors synchronously; the
+    // unknown-scheme fallback reads the CSS variables, so they must already hold
+    // the mode's values or the stale palette is cached under the new mode.
+    useTerminalColorSchemeStore.setState({ selectedSchemeId: "no-such-scheme" });
+    expect(readCss("--theme-terminal-red")).not.toBe(RED_GREEN_OVERRIDES["--theme-terminal-red"]);
+    const seen: Array<string | undefined> = [];
+    const unsubscribe = useTerminalColorSchemeStore.subscribe((state) => {
+      seen.push(selectEffectiveTheme(state).red);
+    });
+
+    useAppThemeStore.getState().setColorVisionMode("red-green");
+    unsubscribe();
+
+    const painted = readCss("--theme-terminal-red");
+    expect(painted).toBe(RED_GREEN_OVERRIDES["--theme-terminal-red"]);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((red) => red === painted)).toBe(true);
+  });
+
+  it("fits the mode to a theme preview's terminal, as the terminals do", () => {
+    const lightTerminal = normalizeAppColorScheme({
+      id: "light-terminal",
+      name: "Light terminal",
+      type: "light",
+      tokens: { "terminal-background": "#e0e0e0" },
+    });
+    useAppThemeStore.setState({ customSchemes: [lightTerminal] });
+    useAppThemeStore.getState().setPreviewSchemeId(lightTerminal.id);
+    injectSchemeToDOM(lightTerminal, { immediate: true });
+    // Primed before the switch, so the switch has to reach a cached selector.
+    selectEffectiveTheme(useTerminalColorSchemeStore.getState());
+
+    useAppThemeStore.getState().setColorVisionMode("blue-yellow");
+
+    const fitted = getColorVisionTerminalWrites("blue-yellow", lightTerminal)[
+      "--theme-terminal-bright-blue"
+    ];
+    expect(fitted).not.toBe(
+      getColorVisionTerminalWrites("blue-yellow")["--theme-terminal-bright-blue"]
+    );
+    expect(readCss("--theme-terminal-bright-blue")).toBe(fitted);
+    expect(selectEffectiveTheme(useTerminalColorSchemeStore.getState()).brightBlue).toBe(fitted);
+    expect(useTerminalColorSchemeStore.getState().getEffectiveTheme().brightBlue).toBe(fitted);
   });
 });

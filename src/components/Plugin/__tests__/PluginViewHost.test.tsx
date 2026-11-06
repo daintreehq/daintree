@@ -241,7 +241,7 @@ describe("makePluginViewHost", () => {
   });
 
   it("hands the content a close callback that forwards no arguments (#11301)", async () => {
-    const captured = vi.hoisted(() => ({ onRequestClose: undefined as undefined | (() => void) }));
+    const captured = { onRequestClose: undefined as undefined | (() => void) };
     vi.doMock("@/components/Plugin/PluginViewContent", () => ({
       makePluginViewContent: () => (props: { onRequestClose?: () => void }) => {
         captured.onRequestClose = props.onRequestClose;

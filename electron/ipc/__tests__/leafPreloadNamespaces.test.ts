@@ -5,7 +5,6 @@ import { buildGlobalEnvPreloadBindings } from "../handlers/globalEnv.preload.js"
 import { buildHelpPreloadBindings } from "../handlers/help.preload.js";
 import { buildAccessibilityPreloadBindings } from "../handlers/accessibility.preload.js";
 import { buildEventInspectorPreloadBindings } from "../handlers/eventInspector.preload.js";
-import { buildCommandsPreloadBindings } from "../handlers/commands.preload.js";
 import { buildPortalPreloadBindings } from "../handlers/portal.preload.js";
 import { buildDevPreviewPreloadBindings } from "../handlers/devPreview.preload.js";
 import { buildPluginPreloadBindings } from "../handlers/plugin.preload.js";
@@ -16,7 +15,6 @@ import { buildShortcutHintsPreloadBindings } from "../handlers/shortcutHints.pre
 import { buildForgeRecommendationPreloadBindings } from "../handlers/forgeRecommendation.preload.js";
 import { buildForgeCredentialImportPreloadBindings } from "../handlers/forgeCredentialImport.preload.js";
 import { buildCliPreloadBindings } from "../handlers/cli.preload.js";
-import { buildGeminiPreloadBindings } from "../handlers/gemini.preload.js";
 import { buildAgentCapabilitiesPreloadBindings } from "../handlers/agentCapabilities.preload.js";
 import { buildGlobalRecipesPreloadBindings } from "../handlers/globalRecipes.preload.js";
 import { buildConnectivityPreloadBindings } from "../handlers/connectivity.preload.js";
@@ -24,6 +22,7 @@ import { buildProjectPresencePreloadBindings } from "../handlers/projectPresence
 import { buildProjectPresentationPreloadBindings } from "../handlers/projectPresentation.preload.js";
 import { buildPrivacyPreloadBindings } from "../handlers/privacy.preload.js";
 import { buildOnboardingPreloadBindings } from "../handlers/onboarding.preload.js";
+import { buildSchedulesPreloadBindings } from "../handlers/schedules.preload.js";
 
 describe("leaf preload namespace bindings", () => {
   describe("slashCommands", () => {
@@ -99,19 +98,6 @@ describe("leaf preload namespace bindings", () => {
     });
   });
 
-  describe("commands", () => {
-    it("routes list(context) to commands:list with the context forwarded", async () => {
-      const invoke = vi.fn().mockResolvedValue([]);
-      const bindings = buildCommandsPreloadBindings(invoke);
-
-      const ctx = { projectId: "p1" } as const;
-      await bindings.list(ctx);
-
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith("commands:list", ctx);
-    });
-  });
-
   describe("portal", () => {
     it("routes create(payload) to portal:create with the payload forwarded", async () => {
       const invoke = vi.fn().mockResolvedValue(undefined);
@@ -161,6 +147,37 @@ describe("leaf preload namespace bindings", () => {
 
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("plugin:actions-register", "plug-1", contribution);
+    });
+  });
+
+  describe("schedules", () => {
+    it("routes each op to its channel with every arg forwarded", async () => {
+      const invoke = vi.fn().mockResolvedValue({});
+      const bindings = buildSchedulesPreloadBindings(invoke);
+      const input = { name: "Nightly", launch: { agentId: "claude", prompt: "Go." } };
+      const patch = { name: "Renamed" };
+
+      await bindings.list();
+      await bindings.create(input);
+      await bindings.update("s1", 42, patch);
+      await bindings.setEnabled("s1", false);
+      await bindings.setSwitches({ schedulesOn: true });
+      await bindings.remove("s1");
+      await bindings.runNow("s1");
+      await bindings.osJobStatus();
+      await bindings.repairOsJob();
+
+      expect(invoke.mock.calls).toEqual([
+        ["schedules:list"],
+        ["schedules:create", input],
+        ["schedules:update", "s1", 42, patch],
+        ["schedules:set-enabled", "s1", false],
+        ["schedules:set-switches", { schedulesOn: true }],
+        ["schedules:remove", "s1"],
+        ["schedules:run-now", "s1"],
+        ["schedules:os-job-status"],
+        ["schedules:repair-os-job"],
+      ]);
     });
   });
 
@@ -253,18 +270,6 @@ describe("leaf preload namespace bindings", () => {
 
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("cli:install");
-    });
-  });
-
-  describe("gemini", () => {
-    it("routes getStatus() to gemini:get-status with no args", async () => {
-      const invoke = vi.fn().mockResolvedValue({ exists: true, alternateBufferEnabled: false });
-      const bindings = buildGeminiPreloadBindings(invoke);
-
-      await bindings.getStatus();
-
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith("gemini:get-status");
     });
   });
 

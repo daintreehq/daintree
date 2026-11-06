@@ -1,10 +1,12 @@
 import { stat } from "fs/promises";
 import type { TerminalInfo } from "./types.js";
-import type { TerminalSubmitGuard } from "../../../shared/types/pty-host.js";
+import type { ExactPromptGuard, TerminalSubmitGuard } from "../../../shared/types/pty-host.js";
 import {
   ASSISTANT_SEND_GATE,
   evaluateWakeGate,
+  isAtChoiceDialog,
   wakeGateOptionsFor,
+  type WakeGateOptions,
   type WakeGateSnapshot,
 } from "../../../shared/utils/terminalWakeGate.js";
 import type { AnalysisBackend } from "./analysis/AnalysisBackend.js";
@@ -22,6 +24,8 @@ import {
   isFocusReport,
   isTerminalReportOnly,
   delay,
+  BRACKETED_PASTE_END,
+  BRACKETED_PASTE_START,
   PASTE_THRESHOLD_CHARS,
   OUTPUT_SETTLE_DEBOUNCE_MS,
   OUTPUT_SETTLE_MAX_WAIT_MS,
@@ -29,12 +33,28 @@ import {
 } from "./terminalInput.js";
 import { formatWithBracketedPaste } from "../../../shared/utils/terminalInputProtocol.js";
 import {
+  keysReachPrompt,
+  stampPromptInput,
+  stampTypedInput,
+} from "../../../shared/utils/terminalInputProvenance.js";
+import {
   isImageAttachmentPath,
   splitImageInputSegments,
   type ImageInputSegment,
 } from "../../../shared/utils/imageAttachmentInput.js";
 
 const IMAGE_STAT_TIMEOUT_MS = 1000;
+
+/**
+ * A carriage return in `data` between `from` and `to` that isn't the second
+ * half of an ESC-prefixed soft newline.
+ */
+function hasBareEnter(data: string, from: number, to: number): boolean {
+  for (let i = data.indexOf("\r", from); i !== -1 && i < to; i = data.indexOf("\r", i + 1)) {
+    if (i === 0 || data[i - 1] !== "\x1b") return true;
+  }
+  return false;
+}
 
 /**
  * Whether `filePath` is a regular file, answered `false` rather than awaited
@@ -88,6 +108,12 @@ function wakeGateSnapshot(terminal: TerminalInfo): WakeGateSnapshot {
 export class TerminalInputController {
   private shutdownLockDepth = 0;
   private inputGeneration = 0;
+  /**
+   * The agent incarnation a bracketed paste opened in and hasn't closed yet,
+   * so its CRs are text. A paste whose agent has since gone is closed: CopyTree
+   * leaves the end marker off when the agent it was pasting into is lost.
+   */
+  private pasteOpenIn: number | null = null;
   /**
    * When the submit lane last wrote to the prompt (#13496). A strict
    * submission waits for the agent's state to change after it, so a brief
@@ -189,7 +215,10 @@ export class TerminalInputController {
     }
 
     terminal.lastInputTime = Date.now();
-    if (!isTerminalReportOnly(data)) terminal.lastTypedInputAt = terminal.lastInputTime;
+    if (!isTerminalReportOnly(data)) this.stampTyped(terminal.lastInputTime);
+    // Read before the analysis hears the keys: in-thread, it can move the
+    // state on before the write returns.
+    const reachesPrompt = keysReachPrompt(terminal);
     if (traceId !== undefined) {
       terminal.traceId = traceId || undefined;
     }
@@ -203,6 +232,7 @@ export class TerminalInputController {
 
     try {
       terminal.ptyProcess.write(data);
+      this.noteTypedSubmit(data, reachesPrompt);
       return { ok: true };
     } catch (error) {
       this.host.logWriteError(error, { operation: "tryWrite", traceId });
@@ -210,8 +240,21 @@ export class TerminalInputController {
     }
   }
 
-  write(data: string, traceId?: string): void {
-    this.writeInternal(data, traceId, false);
+  /**
+   * Typed input, filed under `inputOwner` (#16094), and as input the agent
+   * could take as a prompt unless it waits on an approval dialog now (#16187):
+   * keys there pick an option, and the record says so only if read when they
+   * arrive.
+   */
+  private stampTyped(at: number, inputOwner?: string): void {
+    const terminal = this.host.terminalInfo;
+    stampTypedInput(terminal, at, inputOwner);
+    if (keysReachPrompt(terminal)) stampPromptInput(terminal, at, inputOwner);
+  }
+
+  /** `inputOwner` names the assistant the bytes were written for (#16094); absent, they are a person's. */
+  write(data: string, traceId?: string, inputOwner?: string): void {
+    this.writeInternal(data, traceId, false, inputOwner);
   }
 
   /**
@@ -235,16 +278,24 @@ export class TerminalInputController {
     return this.writeInternal(data, traceId, true);
   }
 
-  private writeInternal(data: string, traceId: string | undefined, rethrow: boolean): boolean {
+  private writeInternal(
+    data: string,
+    traceId: string | undefined,
+    rethrow: boolean,
+    inputOwner?: string
+  ): boolean {
     const terminal = this.host.terminalInfo;
     if (this.isInputLocked) {
       return false;
     }
     terminal.lastInputTime = Date.now();
+    // Read before the analysis hears the keys: in-thread, it can move the
+    // state on before the write returns.
+    const reachesPrompt = keysReachPrompt(terminal);
     // `rethrow` is the submit lane's own body and Enter, which leave the
     // composer empty once the Enter lands; only raw input can leave a draft.
     if (!rethrow && !isTerminalReportOnly(data)) {
-      terminal.lastTypedInputAt = terminal.lastInputTime;
+      this.stampTyped(terminal.lastInputTime, inputOwner);
     }
 
     if (terminal.isExited) {
@@ -326,6 +377,8 @@ export class TerminalInputController {
         this.host.logWriteError(error, { operation: "write(bracketed-paste)", traceId });
         return false;
       }
+      if (rethrow) this.trackPaste(data);
+      else this.noteTypedSubmit(data, reachesPrompt);
       return true;
     }
 
@@ -341,7 +394,56 @@ export class TerminalInputController {
       this.host.logWriteError(error, { operation: "write(direct)", traceId });
       return false;
     }
+    // The submit lane drops the handback once its own Enter lands; typed keys
+    // are the other way a prompt reaches the agent.
+    if (rethrow) this.trackPaste(data);
+    else this.noteTypedSubmit(data, reachesPrompt);
     return true;
+  }
+
+  /**
+   * Typed keys that submit the agent's next prompt drop the last handback, as
+   * a submission through the lane does (#16190): the marker answered the turn
+   * before, and a needs-you report left standing would place the next stop in
+   * Needs you though that turn never said so. Only a bare Enter outside a
+   * paste submits: a soft newline is ESC followed by CR, a pasted CR is text,
+   * and keys on an approval dialog pick an option rather than reach the
+   * prompt. `reachesPrompt` is read before the analysis heard the keys.
+   */
+  private noteTypedSubmit(data: string, reachesPrompt: boolean): void {
+    const submits = this.trackPaste(data);
+    const terminal = this.host.terminalInfo;
+    if (!submits || !reachesPrompt || terminal.lastHandback === undefined) return;
+    terminal.lastHandback = undefined;
+    terminal.lastHandbackUnpublished = false;
+  }
+
+  /**
+   * Follow the paste markers `data` carries, and say whether it holds a bare
+   * Enter outside any bracketed paste. A paste can arrive across writes
+   * (CopyTree streams its body between the markers), so one left open is
+   * carried to the next write, whichever lane wrote it.
+   */
+  private trackPaste(data: string): boolean {
+    const incarnation = this.host.terminalInfo.agentIncarnation ?? 0;
+    if (this.pasteOpenIn !== null && this.pasteOpenIn !== incarnation) this.pasteOpenIn = null;
+    let submits = false;
+    let at = 0;
+    while (at < data.length) {
+      if (this.pasteOpenIn !== null) {
+        const end = data.indexOf(BRACKETED_PASTE_END, at);
+        if (end === -1) return submits;
+        this.pasteOpenIn = null;
+        at = end + BRACKETED_PASTE_END.length;
+        continue;
+      }
+      const start = data.indexOf(BRACKETED_PASTE_START, at);
+      if (hasBareEnter(data, at, start === -1 ? data.length : start)) submits = true;
+      if (start === -1) return submits;
+      this.pasteOpenIn = incarnation;
+      at = start + BRACKETED_PASTE_START.length;
+    }
+    return submits;
   }
 
   submit(
@@ -351,12 +453,21 @@ export class TerminalInputController {
     guard?: TerminalSubmitGuard,
     imagePaths?: readonly string[]
   ): void {
-    if (this.isInputLocked || this.host.terminalInfo.isExited) {
+    // A choice dialog on screen would take the line (#16209): refused before
+    // the monitor is told of a submission, which would clear the very reading
+    // the check stands on.
+    const atChoice =
+      guard === "no-choice-dialog"
+        ? () => isAtChoiceDialog(wakeGateSnapshot(this.host.terminalInfo))
+        : undefined;
+    if (this.isInputLocked || this.host.terminalInfo.isExited || atChoice?.() === true) {
       // Refused before the lane sees it, so `WriteQueue` never mints a record.
       // Answer the token here instead of leaving the caller to read `unknown`.
       if (token !== undefined) this.host.writeQueue.noteRejectedSubmission(token);
       return;
     }
+    // Someone's prompt like any unguarded line; the guard only refuses it.
+    const ownPrompt = guard === undefined || guard === "no-choice-dialog";
 
     // Immediately notify activity monitor of the submission so the working
     // state transitions before the async write sequence in performSubmit().
@@ -366,13 +477,18 @@ export class TerminalInputController {
     // Not for a guarded submission (#12491): marking the agent working here
     // would fail its own admission check. performSubmit notifies at execution
     // time, which for a guarded line is only once it has been admitted.
-    if (guard === undefined && this.host.analysis.hasMonitor() && text.trim().length > 0) {
+    if (ownPrompt && this.host.analysis.hasMonitor() && text.trim().length > 0) {
       this.host.analysis.notifySubmission();
+    }
+    // Someone's prompt, by whoever submitted it (#16187). A guarded line is
+    // Daintree's own, typed only at a settled prompt, and is nobody's.
+    if (ownPrompt && text.trim().length > 0) {
+      stampPromptInput(this.host.terminalInfo, Date.now());
     }
 
     const admit =
       guard === "settled-prompt-strict"
-        ? () => this.admitStrict()
+        ? () => this.admitStrict(ASSISTANT_SEND_GATE)
         : guard === "settled-prompt"
           ? () =>
               !this.isInputLocked &&
@@ -380,24 +496,57 @@ export class TerminalInputController {
                 wakeGateSnapshot(this.host.terminalInfo),
                 wakeGateOptionsFor(this.host.terminalInfo.detectedAgentId)
               ).kind === "ready"
-          : undefined;
-    this.host.writeQueue.submit(text, token, onPtyWritten, admit, imagePaths);
+          : guard !== undefined && guard !== "no-choice-dialog"
+            ? this.admitExact(guard)
+            : undefined;
+    this.host.writeQueue.submit(text, token, onPtyWritten, admit, imagePaths, atChoice);
   }
 
   /**
-   * Only at a prompt settled since the lane last wrote to it, and never
-   * mid-turn. A prose question is still that prompt (#14475).
+   * The strict check, for the run main checked the line against: an agent
+   * that restarted in this PTY since is another run, whatever its prompt
+   * shows. A session learned since main read the pane is still that run; a
+   * known one that changed is not. Main may widen it for a Decisions answer
+   * (#16282): mid-turn, for an agent this record says queues input, and at a
+   * question asked in prose.
    */
-  private admitStrict(): boolean {
+  private admitExact(run: ExactPromptGuard): () => boolean {
+    // Main always says which incarnation it read; a guard without one pins the run the host holds now.
+    const incarnation = run.agentIncarnation ?? this.host.terminalInfo.agentIncarnation;
+    return () => {
+      const terminal = this.host.terminalInfo;
+      if (terminal.agentIncarnation !== incarnation) return false;
+      if (run.agentSessionId !== undefined && terminal.agentSessionId !== run.agentSessionId) {
+        return false;
+      }
+      return this.admitStrict({
+        acceptWorking:
+          run.acceptWorking === true &&
+          wakeGateOptionsFor(terminal.detectedAgentId).acceptWorking === true,
+        acceptQuestion: run.acceptQuestion === true,
+      });
+    };
+  }
+
+  /**
+   * Only at a prompt settled since the lane last wrote to it, and mid-turn
+   * only when `gate` accepts it. `gate` says whether a prose question is
+   * still that prompt (#14475): for an assistant's brief it is, for a held
+   * prompt it isn't. A turn the agent queues lines into takes another line
+   * whenever its composer is empty, as a notice line does.
+   */
+  private admitStrict(gate: WakeGateOptions): boolean {
     if (this.isInputLocked) return false;
     const terminal = this.host.terminalInfo;
+    const queuedBehindTurn = gate.acceptWorking === true && terminal.agentState === "working";
     if (
+      !queuedBehindTurn &&
       this.laneSubmittedAt !== undefined &&
       this.laneSubmittedAt >= (terminal.lastStateChange ?? 0)
     ) {
       return false;
     }
-    return evaluateWakeGate(wakeGateSnapshot(terminal), ASSISTANT_SEND_GATE).kind === "ready";
+    return evaluateWakeGate(wakeGateSnapshot(terminal), gate).kind === "ready";
   }
 
   /**
@@ -409,6 +558,12 @@ export class TerminalInputController {
    * can't trigger the shell-submit detection in {@link write} and auto-execute a
    * line. Trailing newlines in `text` are dropped — staging never submits. Used
    * by `host.sendToActiveAgent(text, { submit: false })` (#10558).
+   *
+   * The write takes its turn in the submit lane (#15554). Written while another
+   * submission's body waited for its Enter, the draft became part of that line
+   * and was submitted with it. Behind the lane it lands after every submission
+   * already accepted, and once written it is typed text like any other: a
+   * guarded submission queued after it sees the draft and stays out.
    */
   stage(text: string): void {
     const terminal = this.host.terminalInfo;
@@ -420,6 +575,27 @@ export class TerminalInputController {
     if (body.length === 0) {
       return;
     }
+    // Captured at enqueue so a draft that waited is dropped if a shutdown lock
+    // or cancellation came in meanwhile, or if another agent (or a relaunch of
+    // this one) owns the pty once the lane frees up.
+    const generation = this.inputGeneration;
+    const owner = this.captureOwner();
+    const launchHint = terminal.launchAgentId;
+    this.host.writeQueue.stage(() => {
+      // A plugin can address an agent known only by its launch hint. Detection
+      // of that agent landing while the draft waits is its arrival; any other
+      // agent detected by then is a recipient the draft was never meant for.
+      const detected = this.host.terminalInfo.detectedAgentId;
+      const recipient =
+        owner.agentId === undefined && detected === launchHint
+          ? { ...owner, agentId: detected }
+          : owner;
+      if (this.isStillOwnedBy(generation, recipient)) this.writeStaged(body);
+    });
+  }
+
+  private writeStaged(body: string): void {
+    const terminal = this.host.terminalInfo;
     terminal.lastInputTime = Date.now();
     const useBracketedPaste = body.includes("\n") || body.length > PASTE_THRESHOLD_CHARS;
     if (useBracketedPaste && supportsBracketedPaste(terminal)) {
@@ -500,10 +676,26 @@ export class TerminalInputController {
       }
     }
 
+    // A body left in the composer without its Enter is a draft from here on
+    // (#16282): a line the gate admits mid-turn would otherwise be submitted
+    // with it. Only while the run it was written to still holds the pty: a run
+    // that replaced it starts with an empty composer, and a stamp would hold
+    // that run until its next state change.
+    const leaveDraft = () => {
+      const t = this.host.terminalInfo;
+      if (!t.ptyProcess || t.isExited) return;
+      if (t.detectedAgentId !== owner.agentId || t.agentIncarnation !== owner.incarnation) return;
+      stampTypedInput(t, Date.now());
+    };
+
     let bodyWritten: boolean;
     if (imageSegments) {
       const outcome = await this.writeImageSegments(imageSegments, generation, owner);
-      if (outcome === "abandoned") return;
+      // Abandoned only after a paste went in.
+      if (outcome === "abandoned") {
+        leaveDraft();
+        return;
+      }
       bodyWritten = outcome === "written";
     } else if (useBracketedPaste && supportsBracketedPaste(terminal)) {
       // See `stage`: an unsanitised body could close the paste itself, and
@@ -527,6 +719,7 @@ export class TerminalInputController {
     const typedAtBodyWrite = carriesImages ? typedBeforeBody : terminal.lastTypedInputAt;
 
     if (this.isInputLocked || this.inputGeneration !== generation) {
+      leaveDraft();
       return;
     }
 
@@ -545,6 +738,7 @@ export class TerminalInputController {
     }
 
     if (this.isInputLocked || this.inputGeneration !== generation) {
+      leaveDraft();
       return;
     }
 
@@ -562,11 +756,14 @@ export class TerminalInputController {
     // body stays in the composer unsent, which is a draft from here on, as a
     // staged line is.
     if (ctx?.isWithdrawn?.() === true) {
-      this.host.terminalInfo.lastTypedInputAt = Date.now();
+      stampTypedInput(this.host.terminalInfo, Date.now());
       return;
     }
 
-    if (carriesImages && !this.isStillOwnedBy(generation, owner)) {
+    // The pty and generation outlive an agent quitting into its shell or being
+    // relaunched, so the checks above miss both; the Enter would then submit
+    // to a recipient that never received the body (#15553).
+    if (!this.isStillOwnedBy(generation, owner)) {
       return;
     }
 
@@ -639,10 +836,10 @@ export class TerminalInputController {
   }
 
   /**
-   * Whether a paced image submission may keep writing: the pty is still there,
-   * no shutdown or newer generation has taken the input, and the agent it was
-   * addressed to still owns the terminal. An agent that exited into its shell
-   * mid-sequence must not receive the rest of the pastes, let alone the Enter.
+   * Whether a submission may keep writing: the pty is still there, no shutdown
+   * or newer generation has taken the input, and the agent it was addressed to
+   * still owns the terminal. An agent that exited into its shell mid-sequence
+   * must not receive the rest of the pastes, let alone the Enter.
    */
   private isStillOwnedBy(generation: number, owner: AgentOwner): boolean {
     const terminal = this.host.terminalInfo;

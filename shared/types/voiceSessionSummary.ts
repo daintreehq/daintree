@@ -37,6 +37,8 @@ export const VOICE_STOP_REASONS = [
   "retarget",
   // A start in another view replaced it.
   "superseded",
+  // Another screen took control of the project whose draft it wrote into.
+  "lease_lost",
   "start_failed",
   // Abandoned before it began: a second press while arming, or a newer start.
   "cancelled",
@@ -198,6 +200,9 @@ export const VoiceSessionSummarySchema = z
     charsCommitted: count,
     // A chunk cleared the signal floor, yet nothing reached the draft.
     audioNoText: z.boolean(),
+    // The start of this session reopened a send still waiting in its draft
+    // (#15703), so the prompt that goes is built from more than one dictation.
+    reopenedSend: z.boolean(),
     // Main's report; null where it never arrived. The provider falls back to
     // the renderer's own reading of the settings.
     provider: VoiceSessionReportSchema.shape.provider,

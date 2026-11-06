@@ -34,10 +34,16 @@ import { userAgentRegistryClient } from "@/clients/userAgentRegistryClient";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
 import { buildAvailableAgentListing, listedAgentIds } from "@shared/utils/agentListing";
-import { unknownAgentIdMessage } from "@/utils/agentLaunchValidation";
+import { launchModelRefusal, unknownAgentIdMessage } from "@/utils/agentLaunchValidation";
 import { isAgentInstalled } from "@shared/utils/agentAvailability";
 import { hasSystemPromptOverride, resolveSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
+import {
+  agentPresetMutationFingerprint,
+  agentPresetMutationUpdates,
+  planAgentPresetMutation,
+  type AgentPresetMutationActionId,
+} from "./agentPresetMutation";
 import { appendHandbackInstruction, mintHandbackCode } from "@shared/utils/handback";
 import type { ActionContext } from "@shared/types/actions";
 import type { AgentPreset } from "@shared/config/agentRegistry";
@@ -290,6 +296,54 @@ const readAgentPresetSources = async (
       (projectId !== undefined ? projectScoped : scopeKnown),
   };
 };
+/**
+ * Plan and write one user-preset change (#16047) through the store and
+ * `updateAgent` Settings uses, so a preset made from a chat is stored exactly
+ * as one made by hand. Planned again here, after every await, rather than
+ * reusing the preview's plan: a preset removed meanwhile is refused, and a
+ * dialog-approved write whose plan no longer matches what the dialog showed
+ * (`ctx.hostApprovedPresetWrite`) is refused rather than written.
+ */
+async function runPresetWrite(
+  actionId: AgentPresetMutationActionId,
+  args: unknown,
+  ctx: ActionContext
+): Promise<{ presetId: string; name: string; agentDefaultCleared?: boolean }> {
+  const [{ useAgentSettingsStore }, { readPresetWriteSources }] = await Promise.all([
+    import("@/store/agentSettingsStore"),
+    import("./agentPresetSources"),
+  ]);
+  await useAgentSettingsStore.getState().initialize();
+  const plan = planAgentPresetMutation(
+    actionId,
+    args,
+    readPresetWriteSources(ctx.projectId),
+    `user-${crypto.randomUUID()}`
+  );
+  if (!plan.ok) throw new UnactionableTargetError(plan.message);
+  const { mutation } = plan;
+  // Planned after every await above, so this is what would be written; an
+  // approval for a change that has since moved doesn't cover it.
+  if (
+    ctx.hostApprovedPresetWrite !== undefined &&
+    agentPresetMutationFingerprint(mutation) !== ctx.hostApprovedPresetWrite
+  ) {
+    throw new Error(
+      "Preset write refused: the preset or its defaults changed after the user approved the change, so the approval doesn't cover what would be written. Nothing was written. Call again to raise a fresh confirmation."
+    );
+  }
+  await useAgentSettingsStore
+    .getState()
+    .updateAgent(mutation.agentId, agentPresetMutationUpdates(mutation));
+  const written = {
+    presetId: mutation.preset.id,
+    name: typeof mutation.preset.name === "string" ? mutation.preset.name : "",
+  };
+  return mutation.operation === "delete"
+    ? { ...written, agentDefaultCleared: mutation.wasAgentDefault }
+    : written;
+}
+
 /** Run for the per-agent shortcut actions (`agent.claude`, `agent.codex`, …). */
 export async function launchAgentShortcut(
   id: string,
@@ -324,6 +378,7 @@ export const agentActionRuns = {
       interactive,
       model,
       presetId,
+      accountId,
       activateDockOnCreate,
       env,
       excludeFromPersistence,
@@ -346,6 +401,7 @@ export const agentActionRuns = {
       interactive?: boolean;
       model?: string;
       presetId?: string | null;
+      accountId?: string | null;
       activateDockOnCreate?: boolean;
       env?: Record<string, string>;
       excludeFromPersistence?: boolean;
@@ -381,6 +437,13 @@ export const agentActionRuns = {
         "agentLaunchFlags already sets this agent's system-prompt instruction. Pass it in systemPrompt or agentLaunchFlags, not both."
       );
     }
+    const modelRefusal = launchModelRefusal(agentId, {
+      model,
+      interactive,
+      prompt,
+      agentLaunchFlags,
+    });
+    if (modelRefusal) throw new UnactionableTargetError(modelRefusal);
     // The handback instruction rides the prompt, so there is nothing to attach
     // it to without one — and a blank prompt is dropped by the launcher
     // (#12488).
@@ -436,22 +499,30 @@ export const agentActionRuns = {
       worktreeId,
       prompt:
         handbackCode !== undefined && prompt !== undefined
-          ? appendHandbackInstruction(prompt, handbackCode)
+          ? appendHandbackInstruction(prompt, handbackCode, "run")
           : prompt,
       ...(handbackCode !== undefined ? { handbackCode, promptAsWritten: prompt } : {}),
       systemPromptArgs: systemPromptArgs.args.length > 0 ? systemPromptArgs.args : undefined,
       interactive,
       modelId: model,
       presetId,
+      accountId,
       activateDockOnCreate,
       env,
       excludeFromPersistence,
       removeOnExit,
       agentLaunchFlags,
       spawnedBy,
+      // Host-stamped, never an argument: only Daintree's own scheduled launch
+      // makes a pane a scheduled run's (#15977).
+      scheduledRun: ctx?.scheduledRun,
       // Host-stamped, never an argument: it is what lets the plugin hold this
       // pane on restart later, and only this plugin (#14017).
       launchedByPluginId: ctx?.dispatchSource === "plugin" ? ctx.callerPluginId : undefined,
+      // Host-stamped, never an argument: the preset main asked the person
+      // about, which the launcher holds the launch to (#16324).
+      approvedPluginPreset:
+        ctx?.dispatchSource === "plugin" ? ctx.hostApprovedPluginPresetLaunch : undefined,
       focusPolicy,
       requestedId,
       force,
@@ -936,6 +1007,12 @@ export const agentActionRuns = {
       ),
     };
   },
+  "agent.createPreset": (args: unknown, ctx: ActionContext) =>
+    runPresetWrite("agent.createPreset", args, ctx),
+  "agent.updatePreset": (args: unknown, ctx: ActionContext) =>
+    runPresetWrite("agent.updatePreset", args, ctx),
+  "agent.deletePreset": (args: unknown, ctx: ActionContext) =>
+    runPresetWrite("agent.deletePreset", args, ctx),
   "agent.listModels": async (args: unknown) => {
     const { agentId } = AgentListModelsArgsSchema.parse(args ?? {});
     const registry = await agentCapabilitiesClient.getRegistry();

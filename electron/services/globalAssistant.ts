@@ -9,6 +9,7 @@ import {
 import { GlobalAssistantService, type GlobalAssistantDeps } from "./GlobalAssistantService.js";
 import { onAgentDefaultsChanged } from "./agentDefaults.js";
 import type { PtyClient } from "./PtyClient.js";
+import { getWindowRegistry } from "../window/windowRef.js";
 
 /** The deps the service runs with in the app, each service loaded on first use. */
 export function liveGlobalAssistantDeps(): GlobalAssistantDeps {
@@ -86,6 +87,10 @@ export function liveGlobalAssistantDeps(): GlobalAssistantDeps {
     kill: (terminalId) => {
       void ptyClient().then((pty) => pty?.kill(terminalId, "global-assistant-ended"));
     },
+    focusedWindows: () =>
+      (getWindowRegistry()?.focusOrder({ focusedOnly: true }) ?? [])
+        .filter((ctx) => !ctx.browserWindow.isDestroyed())
+        .map((ctx) => ctx.windowId),
   };
 }
 

@@ -633,6 +633,45 @@ describe("AgentVersionService resilience", () => {
     });
   });
 
+  describe("GitHub version feed", () => {
+    beforeEach(() => {
+      spawnMock.mockReset();
+    });
+
+    it("reads OpenCode's latest release from the active anomalyco/opencode repository", async () => {
+      const { config } = await import("../../../shared/config/agents/opencode.js");
+      (registryMock.getEffectiveAgentConfig as Mock).mockReturnValue(config);
+
+      // The archived repo still answers releases/latest with v0.0.55.
+      const tags: Record<string, string> = {
+        "https://api.github.com/repos/anomalyco/opencode/releases/latest": "v1.19.5",
+        "https://api.github.com/repos/opencode-ai/opencode/releases/latest": "v0.0.55",
+      };
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((async (
+        input: RequestInfo | URL
+      ) => {
+        const tag = tags[String(input)];
+        return tag
+          ? { ok: true, status: 200, json: async () => ({ tag_name: tag }), headers: new Headers() }
+          : { ok: false, status: 404, json: async () => ({}), headers: new Headers() };
+      }) as typeof fetch);
+      setSpawnSuccess("1.18.0\n");
+
+      const { service } = createService(async () => ({ opencode: "ready" }));
+      const result = await service.getVersion("opencode" as AgentId);
+
+      expect(result.installedVersion).toBe("1.18.0");
+      expect(result.latestVersion).toBe("1.19.5");
+      expect(result.updateAvailable).toBe(true);
+      const fetched = fetchSpy.mock.calls.map(([url]) => String(url));
+      expect(fetched).toContain("https://api.github.com/repos/anomalyco/opencode/releases/latest");
+      expect(fetched).not.toContain(
+        "https://api.github.com/repos/opencode-ai/opencode/releases/latest"
+      );
+      fetchSpy.mockRestore();
+    });
+  });
+
   describe("PyPI version feed", () => {
     // execFile is used for the installed-version probe; default to a synthetic
     // success so getInstalledVersion returns a parseable value and the

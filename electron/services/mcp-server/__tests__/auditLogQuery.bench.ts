@@ -7,7 +7,7 @@
 // now.
 import { writeFileSync } from "node:fs";
 import { deserialize, serialize } from "node:v8";
-import { bench, describe } from "vitest";
+import { test, describe } from "vitest";
 import { AuditService, type McpAuditLogStore } from "../auditLog.js";
 import type { McpAuditRecordQuery, McpLogRecord } from "../../../../shared/types/ipc/mcpServer.js";
 
@@ -65,20 +65,28 @@ function report() {
   );
 }
 
-const opts = { iterations: 30, warmupIterations: 3, time: 0, teardown: report };
+const opts = { hooks: { afterAll: report }, run: { iterations: 30, warmupIterations: 3, time: 0 } };
 
 describe(`activity strip refresh, ${N}-record log`, () => {
   const active = `help-${(N - 1) % 40}`;
-  bench("active session — full log", () => refresh("active full", active), opts);
-  bench(
-    "active session — narrow query",
-    () => refresh("active narrow", active, { helpSessionId: active, limit: LIMIT }),
-    opts
-  );
-  bench("quiet session — full log", () => refresh("quiet full", "help-quiet"), opts);
-  bench(
-    "quiet session — narrow query",
-    () => refresh("quiet narrow", "help-quiet", { helpSessionId: "help-quiet", limit: LIMIT }),
-    opts
-  );
+  test("active session — full log", async ({ bench }) => {
+    await bench("active session — full log", opts.hooks, () => refresh("active full", active)).run(
+      opts.run
+    );
+  });
+  test("active session — narrow query", async ({ bench }) => {
+    await bench("active session — narrow query", opts.hooks, () =>
+      refresh("active narrow", active, { helpSessionId: active, limit: LIMIT })
+    ).run(opts.run);
+  });
+  test("quiet session — full log", async ({ bench }) => {
+    await bench("quiet session — full log", opts.hooks, () =>
+      refresh("quiet full", "help-quiet")
+    ).run(opts.run);
+  });
+  test("quiet session — narrow query", async ({ bench }) => {
+    await bench("quiet session — narrow query", opts.hooks, () =>
+      refresh("quiet narrow", "help-quiet", { helpSessionId: "help-quiet", limit: LIMIT })
+    ).run(opts.run);
+  });
 });

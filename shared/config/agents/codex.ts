@@ -160,6 +160,10 @@ export const config: AgentConfig = {
     args: (sessionId: string) => ["resume", sessionId, "-C", "."],
     crossDirectoryResume: true,
     sessionIdPattern: "codex resume ([\\w-]+)",
+    // `codex resume <id> -C .` against a config folder that can't see the
+    // conversation prints the first form and exits 1; `codex exec resume`
+    // prints the second. Verified against `codex-cli 0.166.0`.
+    refusalPattern: "No saved session found with ID [\\w-]+|no rollout found for thread id",
     resumeLatestArgs: ["resume", "--last"],
     // Codex takes a gated Ctrl-C instead of `/quit` (#11851). Writing the slash
     // command left `/quit` sitting in the user's own transcript and in Codex's
@@ -201,15 +205,50 @@ export const config: AgentConfig = {
       perPressTimeoutMs: 1500,
     },
   },
+  // `codex resume <id>` typed into the pane's shell (#15994). Options as
+  // `codex-cli 0.166.0` lists them, global and on `resume` alike. `--last`
+  // turns the positional into a prompt, and `-i` takes several files, so it
+  // can swallow the id: both read as no id. The UUID shape keeps out a
+  // session name, which the CLI also accepts there.
+  resumeArgv: {
+    subcommand: "resume",
+    sessionIdPattern:
+      "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+    optionsWithValue: [
+      "-c",
+      "--config",
+      "--enable",
+      "--disable",
+      "--remote",
+      "--remote-auth-token-env",
+      "-m",
+      "--model",
+      "--local-provider",
+      "-p",
+      "--profile",
+      "-s",
+      "--sandbox",
+      "-C",
+      "--cd",
+      "--add-dir",
+      "-a",
+      "--ask-for-approval",
+    ],
+    excludedFlags: ["--last", "-i", "--image"],
+  },
   help: {
     args: [],
   },
   authCheck: {
-    // Codex CLI persists auth to ~/.codex/auth.json on all platforms.
-    // OPENAI_API_KEY is also a first-class auth signal for the CLI.
-    configPathsAll: [".codex/auth.json"],
+    // Codex CLI persists auth to auth.json in its home (~/.codex unless
+    // CODEX_HOME moves it) on all platforms. OPENAI_API_KEY is also a
+    // first-class auth signal for the CLI.
+    configHomePaths: ["auth.json"],
     envVar: "OPENAI_API_KEY",
   },
+  // CODEX_HOME moves auth.json, config.toml and sessions together; a home it is
+  // handed has to exist already (CodexQuotaProfiles).
+  account: { kind: "config-folder", envVar: "CODEX_HOME", defaultDir: ".codex" },
   prerequisites: [
     {
       tool: "codex",

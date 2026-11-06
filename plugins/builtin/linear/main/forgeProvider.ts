@@ -172,6 +172,25 @@ function issueFilter(repo: RepoRef, opts: ListOptions): Record<string, unknown> 
   return filter;
 }
 
+/**
+ * Linear's public `issues(orderBy:)` takes `createdAt` (its default) or
+ * `updatedAt` and always lists newest first; the argument that carries a
+ * direction, `sort`, is `[INTERNAL]` in its schema. An order it can't serve is
+ * refused by name, never answered with a page in some other order (#15604).
+ */
+function issueOrderBy(opts: ListOptions): "createdAt" | "updatedAt" {
+  const direction = opts.direction ?? "desc";
+  if (direction !== "desc") {
+    throw new Error(
+      `Linear lists issues newest first only, so direction "${direction}" can't be served. Omit direction or pass "desc".`
+    );
+  }
+  const sort = opts.sort ?? "created";
+  if (sort === "created") return "createdAt";
+  if (sort === "updated") return "updatedAt";
+  throw new Error(`Linear can't sort issues by "${sort}". Pass sort "created" or "updated".`);
+}
+
 async function findIssue(
   filter: Record<string, unknown>,
   op: Op = beginOp()
@@ -381,6 +400,7 @@ export const linearForgeProvider: ForgeIssueProviderImpl = {
   },
 
   async listIssues(repo: RepoRef, opts: ListOptions): Promise<Page<Issue>> {
+    const orderBy = issueOrderBy(opts);
     const first = Math.min(Math.max(opts.perPage ?? DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
     const data = await linearGraphQL<{
       issues: {
@@ -388,13 +408,13 @@ export const linearForgeProvider: ForgeIssueProviderImpl = {
         pageInfo: { hasNextPage: boolean; endCursor: string | null };
       };
     }>(
-      `query ($filter: IssueFilter, $first: Int!, $after: String) {
-        issues(filter: $filter, first: $first, after: $after, orderBy: updatedAt) {
+      `query ($filter: IssueFilter, $first: Int!, $after: String, $orderBy: PaginationOrderBy!) {
+        issues(filter: $filter, first: $first, after: $after, orderBy: $orderBy) {
           nodes { ${ISSUE_FIELDS} }
           pageInfo { hasNextPage endCursor }
         }
       }`,
-      { filter: issueFilter(repo, opts), first, after: opts.cursor ?? null }
+      { filter: issueFilter(repo, opts), first, after: opts.cursor ?? null, orderBy }
     );
     const { nodes, pageInfo } = data.issues;
     return {

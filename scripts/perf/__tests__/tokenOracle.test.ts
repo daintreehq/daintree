@@ -1,3 +1,4 @@
+import { deserialize, serialize } from "node:v8";
 import { describe, expect, it } from "vitest";
 import type { HunkTokens } from "react-diff-view";
 import { gradeTokens, hunksFor } from "../scenarios/diffTokenize";
@@ -22,10 +23,10 @@ const HUNKS = hunksFor({ path: "src/x.ts", changedLines: 40, seed: 7 }).hunks;
 const RESERVED = ["const", "return"] as const;
 
 /** One text node per line at its absolute index — a faithful tree, no highlighting. */
-function plainTokens(): HunkTokens {
+function plainTokens(hunks = HUNKS): HunkTokens {
   const old: unknown[][] = [];
   const now: unknown[][] = [];
-  for (const change of HUNKS.flatMap((hunk) => hunk.changes)) {
+  for (const change of hunks.flatMap((hunk) => hunk.changes)) {
     const record = change as {
       oldLineNumber?: number;
       newLineNumber?: number;
@@ -53,8 +54,8 @@ function plainTokens(): HunkTokens {
  * Tokens wrap lexemes and the gaps ride beside them, so `lineText` still
  * reconstructs the source exactly.
  */
-function realTokens(): HunkTokens {
-  const plain = plainTokens() as unknown as { old: unknown[][]; new: unknown[][] };
+function realTokens(hunks = HUNKS): HunkTokens {
+  const plain = plainTokens(hunks) as unknown as { old: unknown[][]; new: unknown[][] };
   // The category is chosen FROM the content, the way a lexer chooses it — a
   // fixture that cycled names regardless of text would be the very fake the
   // category contract exists to reject, and would fail its own oracle.
@@ -173,6 +174,45 @@ describe("diff token oracle", () => {
     // line out of hundreds is not a tokenizer that highlighted the file.
     expect(grade.tokenContentMisses).toBeGreaterThan(0);
     expect(grade.tokenHighlightMisses).toBe(2);
+  });
+
+  it("catches the same attack built from genuine holes rather than undefined", () => {
+    // The production tree is holey outside the hunks, so the attack has to be
+    // rejected in that representation too, not only as `.fill(undefined)`.
+    // The one entry is the REAL first line, so the content term can only fire
+    // by noticing the rendered lines that are missing.
+    const real = realTokens();
+    const holey = {
+      old: new Array(real.old.length),
+      new: new Array(real.new.length),
+    } as unknown as HunkTokens;
+    holey.old[0] = real.old[0]!;
+
+    const grade = gradeTokens(holey, HUNKS, "required", RESERVED);
+    expect(grade.tokenLineMisses).toBe(0);
+    expect(grade.tokenContentMisses).toBeGreaterThan(0);
+    expect(grade.tokenHighlightMisses).toBe(2);
+  });
+
+  it("scores a tree that is holey outside the hunks at zero, after a structured clone too", () => {
+    // The shape the tokenizer ships: every line a hunk carries, nothing else.
+    // Two hunks, so the generator's gap between them is genuinely holey.
+    const hunks = hunksFor({ path: "src/x.ts", changedLines: 80, seed: 7 }).hunks;
+    expect(hunks.length).toBe(2);
+    const real = realTokens(hunks);
+    const rendered = new Set(Object.keys(real.new).map(Number));
+    expect(rendered.size).toBeLessThan(real.new.length);
+    const cloned = deserialize(serialize(real)) as HunkTokens;
+    expect(cloned.new.length).toBe(real.new.length);
+    expect(Object.keys(cloned.new).map(Number)).toEqual([...rendered]);
+    expect(gradeTokens(cloned, hunks, "required", RESERVED)).toEqual({
+      tokenLineMisses: 0,
+      tokenContentMisses: 0,
+      tokenHighlightMisses: 0,
+      tokenCategoryMisses: 0,
+      tokenLexicalMisses: 0,
+      tokenStringMisses: 0,
+    });
   });
 
   it("catches a faithful tree with a single planted token element", () => {

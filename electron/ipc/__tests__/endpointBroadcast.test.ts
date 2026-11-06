@@ -34,17 +34,19 @@ import {
   broadcastToProjectRenderers,
   getProjectPushTargets,
   broadcastToProjectRenderersExcept,
+  broadcastToRemoteEndpoints,
   broadcastToRenderer,
   broadcastToVisibleRenderers,
   sendToRenderer,
   sendToRendererContext,
   setRemoteBoundViewFilter,
   typedBroadcast,
+  typedBroadcastToLocalViews,
   typedSend,
 } from "../utils.js";
-import { getAppWebContents } from "../../window/webContentsRegistry.js";
+import { getAppWebContents, isCachedViewWebContents } from "../../window/webContentsRegistry.js";
 import { getEndpointRegistry, _resetEndpointRegistryForTesting } from "../endpointRegistry.js";
-import type { ClientEndpoint, HostFrame } from "../endpoint.js";
+import type { ClientEndpoint, EndpointGroup, HostFrame } from "../endpoint.js";
 import type { IpcContext } from "../types.js";
 
 function endpoint(
@@ -65,6 +67,14 @@ function endpoint(
   };
 }
 
+function group(): EndpointGroup & { sendToAll: Mock<(frame: HostFrame) => void> } {
+  return { sendToAll: vi.fn<(frame: HostFrame) => void>() };
+}
+
+function grouped(handle: number, projectId: string | null, of: EndpointGroup) {
+  return Object.assign(endpoint(handle, projectId), { group: of });
+}
+
 function localView(id: number) {
   return { id, isDestroyed: () => false, send: vi.fn() };
 }
@@ -75,6 +85,7 @@ beforeEach(() => {
   hasProjectViewsMock.mockReset().mockReturnValue(false);
   projectViewsMock.mockReset().mockReturnValue([]);
   registeredViewsMock.mockReset().mockReturnValue([]);
+  vi.mocked(isCachedViewWebContents).mockReset().mockReturnValue(false);
 });
 
 describe("broadcast helpers with no remote endpoints", () => {
@@ -191,6 +202,76 @@ describe("broadcast helpers with remote endpoints", () => {
   });
 });
 
+describe("broadcast helpers with a link session's grouped endpoints (#15902)", () => {
+  it("push each session once from the global helpers, and ungrouped endpoints one by one", () => {
+    const studio = group();
+    const laptop = group();
+    const a = grouped(-1, "proj-1", studio);
+    const b = grouped(-2, "proj-2", studio);
+    const c = grouped(-3, "proj-1", laptop);
+    const loose = endpoint(-4, "proj-1");
+    for (const ep of [a, b, c, loose]) getEndpointRegistry().add(ep);
+
+    broadcastToRenderer("a:b", 1);
+    broadcastToVisibleRenderers("a:c", 2);
+    typedBroadcast("a:d" as never, { x: 3 } as never);
+    broadcastToRemoteEndpoints("events:push", [{ name: "system:wake", payload: {} }]);
+
+    const expected = [
+      [{ type: "event", channel: "a:b", args: [1] }],
+      [{ type: "event", channel: "a:c", args: [2] }],
+      [{ type: "event", channel: "a:d", args: [{ x: 3 }] }],
+      [{ type: "event", channel: "events:push", args: [{ name: "system:wake", payload: {} }] }],
+    ];
+    expect(studio.sendToAll.mock.calls).toEqual(expected);
+    expect(laptop.sendToAll.mock.calls).toEqual(expected);
+    expect(loose.send.mock.calls).toEqual(expected);
+    for (const ep of [a, b, c]) expect(ep.send).not.toHaveBeenCalled();
+  });
+
+  it("address each grouped endpoint for project-scoped and excluding pushes", () => {
+    hasProjectViewsMock.mockReturnValue(true);
+    const studio = group();
+    const a = grouped(-1, "proj-1", studio);
+    const b = grouped(-2, "proj-1", studio);
+    const c = grouped(-3, "proj-2", studio);
+    for (const ep of [a, b, c]) getEndpointRegistry().add(ep);
+
+    broadcastToProjectRenderers("proj-1", "terminal:data", "one");
+    broadcastToProjectRenderersExcept(null, new Set([-2]), "terminal:data", "all-but-b");
+    broadcastSlicedToProjectRenderers(
+      "resources:batch",
+      { t1: 1, t2: 2 },
+      (key) => (key === "t1" ? "proj-1" : "proj-2"),
+      (slice) => slice
+    );
+
+    expect(studio.sendToAll).not.toHaveBeenCalled();
+    expect(a.send.mock.calls.map(([frame]) => frame.args)).toEqual([
+      ["one"],
+      ["all-but-b"],
+      [{ t1: 1 }],
+    ]);
+    expect(b.send.mock.calls.map(([frame]) => frame.args)).toEqual([["one"], [{ t1: 1 }]]);
+    expect(c.send.mock.calls.map(([frame]) => frame.args)).toEqual([["all-but-b"], [{ t2: 2 }]]);
+  });
+
+  it("keep delivering to other sessions when one session's push throws", () => {
+    const broken = group();
+    broken.sendToAll.mockImplementation(() => {
+      throw new Error("link closing");
+    });
+    const healthy = group();
+    getEndpointRegistry().add(grouped(-1, null, broken));
+    getEndpointRegistry().add(grouped(-2, null, broken));
+    getEndpointRegistry().add(grouped(-3, null, healthy));
+
+    expect(() => broadcastToRenderer("a:b")).not.toThrow();
+    expect(broken.sendToAll).toHaveBeenCalledTimes(1);
+    expect(healthy.sendToAll).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("remote-bound view filter", () => {
   it("withholds a push only from the views the filter refuses, across every local helper", () => {
     const remoteBound = localView(1);
@@ -254,6 +335,47 @@ describe("remote-bound view filter", () => {
     second();
     broadcastToRenderer("a:b");
     expect(view.send).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("typedBroadcastToLocalViews", () => {
+  it("reaches every local view but the excluded one, and no remote endpoint", () => {
+    const sender = localView(1);
+    const cached = localView(2);
+    const otherWindow = localView(3);
+    localViews.push(sender, cached, otherWindow);
+    vi.mocked(isCachedViewWebContents).mockImplementation((id) => id === cached.id);
+    const remote = endpoint(-1, "proj-1");
+    getEndpointRegistry().add(remote);
+
+    typedBroadcastToLocalViews("a:d" as never, { x: 1 } as never, 1);
+
+    expect(sender.send).not.toHaveBeenCalled();
+    expect(cached.send).toHaveBeenCalledWith("a:d", { x: 1 });
+    expect(otherWindow.send).toHaveBeenCalledWith("a:d", { x: 1 });
+    expect(remote.send).not.toHaveBeenCalled();
+  });
+
+  it("keeps a send failure in one view from stopping the rest, and honours the remote-bound filter", () => {
+    const failing = Object.assign(localView(1), {
+      send: vi.fn(() => {
+        throw new Error("disposed");
+      }),
+    });
+    const withheld = localView(2);
+    const next = localView(3);
+    localViews.push(failing, withheld, next);
+    const uninstall = setRemoteBoundViewFilter((webContentsId) => webContentsId !== 2);
+
+    try {
+      typedBroadcastToLocalViews("a:d" as never, 7 as never);
+    } finally {
+      uninstall();
+    }
+
+    expect(failing.send).toHaveBeenCalled();
+    expect(withheld.send).not.toHaveBeenCalled();
+    expect(next.send).toHaveBeenCalledWith("a:d", 7);
   });
 });
 

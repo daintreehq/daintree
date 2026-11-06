@@ -228,7 +228,9 @@ describe("WorktreeCard row affordances polish (issue #8099)", () => {
 // styling and a tooltip when group-by-type or search is active.
 describe("WorktreeCard disabled drag handle (issue #8395)", () => {
   it("renders the disabled grip at the one unavailable level: 50% and cursor-not-allowed", () => {
-    expect(cardSource).toContain("cursor-not-allowed opacity-50");
+    // Shown where the gesture would be tried, on card hover, not at rest:
+    // during a search every card's dead grip ran down the list.
+    expect(cardSource).toContain("cursor-not-allowed opacity-0 group-hover/card:opacity-50");
   });
 
   it("hides the pointer-only grips from assistive tech instead of dead aria-labels", () => {
@@ -366,7 +368,10 @@ describe("collapsed alarm reaches the select overlay", () => {
     ).not.toBeNull();
     const gates = call![1]!;
     expect(gates).toMatch(/lifecycle:\s*chipState !== null/);
-    expect(gates).toMatch(/alarm:\s*!!effectiveIsCollapsed/);
+    // The sidebar card draws its alarm and attention marks on the title row in
+    // both modes, and the header always mounts both description nodes.
+    expect(gates).toMatch(/alarm:\s*true/);
+    expect(gates).toMatch(/attention:\s*true/);
     expect(gates).toMatch(/external:\s*isExternal/);
   });
 
@@ -383,8 +388,11 @@ describe("collapsed alarm reaches the select overlay", () => {
     // Focus-visible only: a pointer click focuses the overlay too, and a click
     // that selected the row should not also pop the alarm open under it.
     expect(cardSource).toMatch(/handleSelectFocus[\s\S]{0,200}matches\(":focus-visible"\)/);
+    // The overlay is no longer a tab stop (the grid points at it with
+    // aria-activedescendant), so the grid's keyboard cursor reveals the marks
+    // too; the overlay's own focus still does, for a programmatic focus.
     expect(openingTagWith(cardSource, "WorktreeHeader", "isKeyboardFocused=")).toMatch(
-      /isKeyboardFocused=\{isSelectFocusVisible\}/
+      /isKeyboardFocused=\{isSelectFocusVisible \|\| isKeyboardCursor\}/
     );
   });
 });

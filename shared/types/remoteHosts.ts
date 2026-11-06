@@ -1,4 +1,6 @@
 import type { CrashCause, WatchdogKillReason } from "./ipc/crashRecovery.js";
+import type { HostWakeSetup } from "./hostWake.js";
+import type { FolderMaterializeProgress } from "./ipc/fileTransfer.js";
 
 /**
  * Remote Hosts: shared vocabulary for the Shell (the machine you sit at) and
@@ -312,6 +314,12 @@ export interface HostDescriptor {
    * its resource is torn down. Absent for every host the user added.
    */
   ownerWorktreeId?: string;
+  /**
+   * How this machine can wake the host from the network (#16170), as the
+   * person recorded it; absent when nothing is set up. Dropped with the
+   * observations when the host is pointed at another target.
+   */
+  wake?: HostWakeSetup;
 }
 
 export type HostConnectionState =
@@ -357,6 +365,11 @@ export type HostConnectionState =
       /** As on `connecting`: the host said it was shutting down, and is still retried. */
       restarting?: true;
       /**
+       * The host's Daintree answered the attempt that failed (it refused the
+       * link, or closed a session it had just opened): ssh and the link got there.
+       */
+      answered?: true;
+      /**
        * Not retrying on its own: what was seen (ssh couldn't log in, Host mode
        * is off) doesn't change by trying again soon, so it waits for a
        * Connect. A host a window shows whose Daintree isn't listening is
@@ -392,10 +405,11 @@ export interface DriveLeaseHolder {
   leaseId: number;
   /**
    * The same while one client holds the project, across its windows, its
-   * reconnects and a restart of the Host; new whenever another client gets it
-   * or nobody held it. A view back from a lost link compares it to tell a
-   * blip from a project someone else may have driven meanwhile. Absent from
-   * Hosts that predate it.
+   * reconnects and a restart of the Host, and across a spell when nobody held
+   * it that no other client's window saw; new whenever someone else may have
+   * driven it. A view back from a lost link compares it to tell a blip from a
+   * project someone else may have driven meanwhile. Absent from Hosts that
+   * predate it.
    */
   tenureId?: string;
   /** The one renderer that drives: MCP dispatch, plugin prompts and terminal resize target it. */
@@ -434,11 +448,26 @@ export interface HostDriverObservation extends DriveLeaseObservation {
 /** Projects a summary names drivers for: the overview's line, not an inventory. */
 export const MAX_HOST_SUMMARY_DRIVERS = 32;
 
+/**
+ * A Host's agents by attention band. `waiting` is the runs in `needs-you`:
+ * stopped runs whose agent printed that it needs the user, and asks a Canopy
+ * reading found that the user hasn't seen — a stop with neither is never one;
+ * `blocked` the error waits; `idle` every other idle, finished or waiting run.
+ * Each host counts by its own build's rules, so an older one counts Canopy's
+ * readings alone.
+ */
+export interface HostAgentAttention {
+  waiting: number;
+  blocked: number;
+  idle: number;
+}
+
 /** Summary frame each host streams every few seconds to every connected client. */
 export interface HostMetricsSummary {
   hostId: HostId;
   sampledAt: number;
-  platform: HostPlatform;
+  /** "win32" only on a Windows Shell's own summary of itself: no Host runs there, so none crosses a link. */
+  platform: HostPlatform | "win32";
   /** Busy CPU as a percentage of all cores over the last interval; null when unmeasured. */
   cpuPercent: number | null;
   /**
@@ -500,6 +529,12 @@ export interface HostMetricsSummary {
    * tally must never pass for "nothing working".
    */
   agentsObserved: { working: number; waiting: number; idle: number } | null;
+  /**
+   * The same runs as the Host's fleet bands them, which is what a summary
+   * draws as asking: absent from older hosts and whenever
+   * {@link agentsObserved} is null.
+   */
+  agentAttention?: HostAgentAttention;
   /** Open projects; null when the read failed. */
   projectCount: number | null;
   /** Worktrees across open projects; null when the read failed. */
@@ -604,6 +639,8 @@ export interface MaterializeResult {
 export interface MaterializeOptions {
   /** Called with 0..1 while an upload is in flight (not called for local identity). */
   onProgress?: (fraction: number) => void;
+  /** A local folder's progress, in place of `onProgress`: only a remote window sends folders. */
+  onFolderProgress?: (progress: FolderMaterializeProgress) => void;
   signal?: AbortSignal;
   /** "inbox" (default) keeps uploads outside the worktree; "worktree" is the explicit Add to project drop. */
   destination?: { kind: "inbox" } | { kind: "worktree"; directory: string };

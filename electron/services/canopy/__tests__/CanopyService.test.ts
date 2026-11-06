@@ -25,7 +25,7 @@ import {
   type CanopyScreenInput,
 } from "../canopyProviders.js";
 import { CANOPY_REFLOW_MS } from "../canopyReflow.js";
-import { CANOPY_TURN_HOLD_MS } from "../canopyReads.js";
+import { CANOPY_READ_DWELL_MS, CANOPY_TURN_HOLD_MS } from "../canopyReads.js";
 
 /** A classifier reading; `blocked` defaults to the attention of an ask, else 0. */
 type Reading = Omit<ClassifierResult, "blocked"> & { blocked?: number };
@@ -4328,6 +4328,174 @@ describe("CanopyService refining attention", () => {
     expect(h.service.getRefinement("y", 1)).toBeUndefined();
   });
 
+  it("reads an ask at an approval or question wait the patterns named, as either kind", async () => {
+    const APPROVAL_SCREEN =
+      "Bash command\n\n  npm test\n\nDo you want to proceed?\n❯ 1. Yes\n  2. No";
+    const h = await makeHarness({
+      classify: async (input) =>
+        input.screen.includes("proceed?")
+          ? { ...QUESTION_READ, category: "approval", question: "Do you want to proceed?" }
+          : readScreen(input),
+    });
+    h.runs.push(
+      run("q", { agentState: "waiting", waitingReason: "question" }),
+      run("y", { agentState: "waiting", waitingReason: "approval" }),
+      run("e", { agentState: "waiting", waitingReason: "error" })
+    );
+    h.screens.set("q", ASK_SCREEN);
+    h.screens.set("y", APPROVAL_SCREEN);
+    h.screens.set("e", APPROVAL_SCREEN);
+    await h.service.refresh();
+    await vi.waitFor(() => {
+      expect(h.service.getRefinement("q", 1)).toMatchObject({
+        kind: "asked",
+        quote: "Want me to update the tests too?",
+      });
+      expect(h.service.getRefinement("y", 1)).toMatchObject({
+        kind: "asked",
+        quote: "Do you want to proceed?",
+      });
+    });
+    // An error wait is blocked whatever its screen asks.
+    expect(h.service.getRefinement("e", 1)).toBeUndefined();
+  });
+
+  it("says whether the user has read the ask, by that turn's read mark", async () => {
+    const changed = vi.fn();
+    const h = await makeHarness({ classify: readScreen, onRefinementsChanged: changed });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "question" }));
+    h.screens.set("a", ASK_SCREEN);
+    await h.service.refresh();
+    await vi.waitFor(() =>
+      expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: false })
+    );
+
+    changed.mockClear();
+    h.service.setRead("a", 1, true);
+    // The verdict holds; only whether it is news moves.
+    expect(h.service.getRefinement("a", 1)).toMatchObject({
+      kind: "asked",
+      quote: "Want me to update the tests too?",
+      seen: true,
+    });
+    // Heard with no panel open, so the fleet can move the run out of Needs you.
+    await vi.waitFor(() => expect(changed).toHaveBeenCalled());
+
+    h.service.setRead("a", 1, false);
+    expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: false });
+  });
+
+  it("takes an ask out of Needs you once its pane was looked at, panel closed, and a later ask is news again", async () => {
+    let now = 1_000_000;
+    const changed = vi.fn();
+    const h = await makeHarness({
+      classify: readScreen,
+      now: () => now,
+      onRefinementsChanged: changed,
+    });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "question", since: now }));
+    h.screens.set("a", ASK_SCREEN);
+    await h.service.refresh();
+    await vi.waitFor(() =>
+      expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: false })
+    );
+
+    // The panel is closed: only the pane's look is told.
+    h.service.setActive(false);
+    changed.mockClear();
+    h.service.markSeen("a", { viewId: 1, place: "pane", looking: true });
+    now += CANOPY_READ_DWELL_MS;
+    h.service.markSeen("a", { viewId: 1, place: "pane", looking: false });
+    expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: true });
+    await vi.waitFor(() => expect(changed).toHaveBeenCalled());
+
+    h.service.setActive(true);
+    h.runs[0] = run("a", { agentState: "working", since: now });
+    h.screens.set("a", "• Updating the tests (esc to interrupt)");
+    h.service.onFleetChanged();
+    await h.service.refresh();
+    now += CANOPY_TURN_HOLD_MS + 1_000;
+    await h.service.refresh();
+
+    h.runs[0] = run("a", { agentState: "waiting", waitingReason: "question", since: now });
+    h.screens.set("a", "⏺ Tests updated.\n\n  Want me to update the tests too?");
+    h.service.onFleetChanged();
+    now += CANOPY_TURN_HOLD_MS + 1_000;
+    await h.service.refresh();
+    await vi.waitFor(() =>
+      expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: false })
+    );
+  });
+
+  it("takes an ask out of Needs you once Canopy's panel showed it for the read dwell, not when arrowed past", async () => {
+    let now = 1_000_000;
+    const changed = vi.fn();
+    const h = await makeHarness({
+      classify: readScreen,
+      now: () => now,
+      onRefinementsChanged: changed,
+    });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "question", since: now }));
+    h.screens.set("a", ASK_SCREEN);
+    await h.service.refresh();
+    await vi.waitFor(() =>
+      expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: false })
+    );
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      // Arrowed past: the look ends short of the dwell, and nothing reads it after.
+      h.service.markSeen("a", { viewId: 1, place: "panel", looking: true });
+      now += CANOPY_READ_DWELL_MS - 1;
+      h.service.markSeen("a", { viewId: 1, place: "panel", looking: false });
+      now += CANOPY_READ_DWELL_MS;
+      vi.advanceTimersByTime(CANOPY_READ_DWELL_MS);
+      expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: false });
+
+      // Shown for the dwell, it is read then, with the panel still on it.
+      changed.mockClear();
+      h.service.markSeen("a", { viewId: 1, place: "panel", looking: true });
+      now += CANOPY_READ_DWELL_MS;
+      vi.advanceTimersByTime(CANOPY_READ_DWELL_MS);
+      expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: true });
+      vi.runOnlyPendingTimers();
+      expect(changed).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("takes a look in while the fleet is unknown, for the run it already holds", async () => {
+    let now = 1_000_000;
+    let known = true;
+    const changed = vi.fn();
+    const h = await makeHarness({
+      classify: readScreen,
+      now: () => now,
+      fleetKnown: () => known,
+      onRefinementsChanged: changed,
+    });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "question", since: now }));
+    h.screens.set("a", ASK_SCREEN);
+    await h.service.refresh();
+    await vi.waitFor(() =>
+      expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: false })
+    );
+
+    // A shard didn't answer: the fleet keeps its last rows, and the user reads the ask meanwhile.
+    known = false;
+    changed.mockClear();
+    h.service.markSeen("a", { viewId: 1, place: "pane", looking: true });
+    now += CANOPY_READ_DWELL_MS;
+    h.service.markSeen("a", { viewId: 1, place: "pane", looking: false });
+    expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: true });
+    await vi.waitFor(() => expect(changed).toHaveBeenCalled());
+
+    // A read or unread mark waits for the fleet: it moves the hand-back by run id.
+    expect(h.service.setRead("a", 1, false)).toBeNull();
+    expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: true });
+  });
+
   it("says whether the user has read the question wait it cleared, by that turn's read mark", async () => {
     const changed = vi.fn();
     const h = await makeHarness({
@@ -4383,6 +4551,21 @@ describe("CanopyService refining attention", () => {
     h.service.readerChanged();
     expect(h.service.getRefinement("a", 1)).toBeUndefined();
     await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1));
+  });
+
+  it("gives way to the user replying from the panel to an ask not yet read", async () => {
+    const changed = vi.fn();
+    const h = await makeHarness({ classify: readScreen, onRefinementsChanged: changed });
+    h.runs.push(run("a", { agentState: "waiting", waitingReason: "question" }));
+    h.screens.set("a", ASK_SCREEN);
+    await h.service.refresh();
+    await vi.waitFor(() =>
+      expect(h.service.getRefinement("a", 1)).toMatchObject({ kind: "asked", seen: false })
+    );
+    changed.mockClear();
+    h.service.markHandled("a", 1);
+    expect(h.service.getRefinement("a", 1)).toBeUndefined();
+    await vi.waitFor(() => expect(changed).toHaveBeenCalled());
   });
 
   it("gives way to the user archiving the run, and comes back with an unarchive", async () => {

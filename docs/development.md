@@ -8,11 +8,19 @@ npm run dev          # Main + Renderer concurrent dev
 npm run build        # Production build
 npm run check        # typecheck + codegen/wiring guards + lint ratchet + format
 npm run fix          # Auto-fix lint/format
-npm run test         # Vitest once
-npm run test:watch   # Vitest watch mode
+npm test -- <path>    # Vitest, only the tests covering your change
+npm run test:watch -- <path>  # Vitest watch mode
 npm run rebuild      # Rebuild node-pty for Electron
 npm run package      # Build + electron-builder
 ```
+
+## Worktrees
+
+Every worktree of this repo shares the main checkout's install through a `node_modules` link. Daintree's worktree setup makes it: `.daintree/config.json` runs `scripts/link-shared-node-modules.mjs`, which links a new worktree's `node_modules` to the main checkout's, then checks that each package the worktree's `package-lock.json` expects in the root install is there at its locked version. It is a presence and version check, not an integrity check: a missing `optional` package is skipped, since npm leaves out other platforms' binaries, and neither `resolved`/`integrity` nor extra packages are compared. It never replaces a `node_modules` that is already there. When the shared install is only behind, because the main checkout's `package-lock.json` is the worktree's but `npm ci` hasn't run there since it changed (the usual state after pulling a dependency bump), setup refreshes it: it runs `npm ci` in the main checkout and checks again. The install runs detached, so setup's 120-second limit can't cut it off halfway, under a lock in the main checkout's `.tmp/shared-install-refresh/`, so worktrees set up at once share one refresh rather than racing. Its output is in `npm-ci.log` there. Setup waits up to 100 seconds; an install still going after that ends setup `failed` with "Run setup again once it finishes", and the refresh carries on. A refresh whose `npm ci` failed ends setup `failed` even when every package checks out, since the native-module rebuild runs last, and every later setup says so too until an install in the main checkout replaces it. Other worktrees lose their `node_modules` while it reinstalls. It never refreshes on Windows, where a running app's open files can stop `npm ci` partway through removing the install. On any other mismatch setup ends `failed`, and the error that `worktree.waitUntilReady` returns and the worktree card shows leads with the fix, `npm ci` in the main checkout (after bringing its `package-lock.json` and the worktree's level when they differ), then lists the packages that differ. Never run `npm ci` inside a worktree; through the link it rebuilds the install every other worktree is using. The check doesn't cover native-module ABI, `.bin` links or a workspace package's own `node_modules`. A worktree made outside Daintree needs the link by hand: `DAINTREE_PROJECT_ROOT=<main checkout> node scripts/link-shared-node-modules.mjs` from the worktree.
+
+Any setup command can explain its own failure the same way: when the failing command's last line of output starts with `DAINTREE_SETUP_ERROR:`, the rest of that line (scrubbed, at most 500 characters) leads the setup error, ahead of the failed command; the setup status keeps only the first 200 characters, so the fix belongs at the start. Nothing else from its output is used.
+
+**Approving setup on each machine.** Setup commands from the repository run only once they are approved, per machine, so until then a new worktree's setup stops at `needs-approval`, which a batch run treats as a failed unit. Approve them once on each machine that creates worktrees, worker hosts included, before their first batch: open the project there (a window on that machine, or a Shell driving that host's project), choose **Review commands** on any of its worktree cards, the main one included, read what will run, and approve. The approval is stored in that machine's Daintree data and keyed by the project's path and the exact commands, so every later worktree there runs setup unattended until a change to the commands in `.daintree/config.json` asks again. A change to the script alone doesn't. A worktree that was already waiting when you approved may need **Run setup** on its own card. A config in `~/.daintree/projects/<sanitized project path>/config.json` (the path with each character a folder name can't hold turned into `_`, so `/Users/me/Projects/daintree` becomes `_Users_me_Projects_daintree`) also runs without approval, but it replaces the repository's config outright and stops following its changes, so don't use it to skip the approval.
 
 ## Architecture
 
@@ -106,10 +114,11 @@ For the layering behind this recipe — the envelope, the sender-validation wrap
 ## Testing
 
 ```bash
-npm run test              # Run once
-npm run test:watch        # Watch mode
-npm run test -- --run src/components  # Filter by path
+npm test -- src/components/__tests__/Foo.test.tsx  # Tests covering your change
+npm run test:watch -- <path>  # Watch mode
 ```
+
+Don't run the whole suite locally (15-20 minutes): CI runs it on every PR, sharded 6 ways behind `ci-ok`, together with `npm run check`. E2E does not run on PRs. Fix failures outside your files from the CI log.
 
 Tests live in `__tests__/` directories adjacent to source. Use Vitest. Mock IPC via `vi.mock()`.
 
@@ -179,13 +188,13 @@ The flag is gated on `app.isPackaged === false` (forwarded to the pty host as `D
 
 `.github/workflows/ci.yml` runs on push/PR to `main` and `develop`:
 
-1. **check** (Ubuntu): typecheck + lint + format (`npm run check`)
-2. **test** (Ubuntu): vitest unit tests, sharded 4 ways, minus the perf liveness guard
+1. **static** and **lint** (Ubuntu): typecheck, codegen and drift guards, format, and the ESLint ratchet (the pieces of `npm run check`)
+2. **test** (Ubuntu): vitest unit tests, sharded 6 ways, minus the perf liveness guard
 3. **perf-liveness** (Ubuntu): `scripts/perf/__tests__/scenarioLiveness.test.ts` on its own runner, ungated, so its per-scenario child processes stay off the shards' critical path
 4. **build** (Ubuntu only): production build verification
 5. **ci-ok**: aggregate gate that fails if any job failed — the sole required status check
 
-`check` and `test` default to Ubuntu on push/PR but can opt into Windows via `gh workflow run CI -f os=windows` (or `os=both`). Cross-platform build, smoke, and E2E live in `stabilize.yml` — the on-demand, agent-driven workflow (and the `stabilize` skill that drives it) that replaced the scheduled nightly; releases run per-OS via `release-macos.yml` / `release-linux.yml` / `release-windows.yml`. The only thing still on a nightly cron is `nightly-publish.yml`, which builds and publishes the macOS/Linux nightly auto-update binaries and runs no test suites (only a launch smoke before publishing).
+`static` and `lint` default to Ubuntu on push/PR but can opt into Windows via `gh workflow run CI -f os=windows` (or `os=both`). Cross-platform build, smoke, and E2E live in `stabilize.yml` — the on-demand, agent-driven workflow (and the `stabilize` skill that drives it) that replaced the scheduled nightly; releases run per-OS via `release-macos.yml` / `release-linux.yml` / `release-windows.yml`. The only thing still on a nightly cron is `nightly-publish.yml`, which builds and publishes the macOS/Linux nightly auto-update binaries and runs no test suites: only `check:preload-backdoors` after the build, and `scripts/run-packaged-smoke.mjs` on every packaged binary a feed offers (macOS arm64, universal and x64 on Intel, Linux x64 and arm64 AppImages) before any nightly binary or `latest*.yml` reaches R2.
 
 ## Compiler bailout tooling
 

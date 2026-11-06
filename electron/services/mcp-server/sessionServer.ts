@@ -23,6 +23,12 @@ import { resolveEffectiveActionDanger } from "../../../shared/utils/effectiveAct
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { SendKeysArgsSchema } from "../../../shared/utils/terminalKeys.js";
+import {
+  QUEUED_SEND_TTL_DEFAULT_SECONDS,
+  QUEUED_SEND_TTL_MAX_SECONDS,
+  QUEUED_SEND_TTL_MIN_SECONDS,
+  TERMINAL_CANCEL_QUEUED_SEND_TOOL,
+} from "../../../shared/types/queuedSend.js";
 import type { McpDispatchAuthorization } from "../../../shared/types/ipc/mcpServer.js";
 import type { DispatchEnvelope } from "./shared.js";
 import {
@@ -76,8 +82,38 @@ import { buildImageToolCallResult, isImageResultTool } from "./imageToolResult.j
 import { buildSurfaceManifest, MCP_SURFACE_TOOL_ID } from "./surfaceManifest.js";
 import { viewlessStatusArgsAreAnswerable } from "./terminalStatus.js";
 import { viewlessActionDanger } from "../viewless/viewlessActionCatalog.js";
+import {
+  AGENT_LAUNCH_IN_NEW_WORKTREE_TOOL,
+  createStepRequestKey,
+  runLaunchInNewWorktree,
+} from "./launchInNewWorktree.js";
 import { parseLastMessageReadArgs } from "./lastMessageArgs.js";
 import { withClosedPanelProcesses } from "./closedPanelProcesses.js";
+import type { ClosedPanelExitTarget } from "./closedPanelExits.js";
+import type { ActionError } from "../../../shared/types/actions.js";
+import {
+  DEFAULT_TERMINAL_EXIT_WAIT_MS,
+  TerminalWaitForExitArgsSchema,
+} from "../../../shared/types/terminalExitWait.js";
+import {
+  WORKTREE_DELETE_OWNED_TOOL,
+  refuseWorktreeDeleteWhileRunning,
+} from "./worktreeProcessGuard.js";
+import {
+  gitUnreadableRefusal,
+  planWorktreeRetirement,
+  refuseUnlessCleanAndPushed,
+  retirementChangedSomething,
+  retirementResult,
+  retirementStopped,
+  tearDownForRetirement,
+  untouched,
+  type RetirementAttribution,
+  type RetirementPlan,
+  type RetirementProgress,
+} from "./worktreeRetirement.js";
+import type { WorktreeGitObservation } from "./worktreeRetirementGit.js";
+import { WorktreeRetireOwnedArgsSchema } from "../../../shared/types/worktreeRetirement.js";
 import { LAST_MESSAGE_TEXT_MAX_BYTES } from "../../../shared/types/agentLastMessage.js";
 import type { OwnedResourceRecord } from "./resourceOwnership.js";
 import type { TerminalAdoptionRecord } from "./terminalAdoption.js";
@@ -112,14 +148,20 @@ import {
   ASSISTANT_TARGET_REFUSALS,
   AssistantStartArgsSchema,
   WORKER_STEER_REFUSALS,
+  type AgentReadQuotaResult,
 } from "../../../shared/types/assistantControl.js";
-import { HOST_CALL_TOOL, HOST_CONTROL_TOOL_IDS } from "../../../shared/types/hostControl.js";
+import {
+  HOST_CALL_TOOL,
+  HOST_CONTROL_TOOL_IDS,
+  HOST_STATUS_TOOL,
+} from "../../../shared/types/hostControl.js";
 import { auditCodeForHostControlRefusal, runHostControlTool } from "./hostControlTools.js";
 import {
   AssistantTargetError,
   type AssistantCaller,
   type AssistantTarget,
 } from "../assistants/AssistantTerminalControl.js";
+import type { WorkerSteerTarget } from "../assistants/GlobalWorkerSteer.js";
 import type { SessionServerDeps } from "./sessionServerDepsContract.js";
 import { createSessionContext } from "./sessionContext.js";
 import {
@@ -148,6 +190,8 @@ import {
   PROJECT_RUN_COMMAND_TOOL,
   TERMINAL_GET_STATUS_TOOL,
   TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL,
+  TERMINAL_WAIT_FOR_EXIT_TOOL,
+  WORKTREE_RETIRE_OWNED_TOOL,
 } from "./sessionToolIds.js";
 import type { CallFacts, CallOutcome, CallerAdmission } from "./sessionCallFacts.js";
 import {
@@ -164,10 +208,12 @@ import {
   HAND_OVER_HINT,
   OWNED_RESOURCE_TOOLS,
   SESSION_OWNERSHIP_NOTE,
+  closedIdsInclude,
   createOwnershipAccess,
   dispatchOwnedResource,
   filterTerminalListToOwned,
   prepareTerminalListDispatch,
+  noteClosedTerminals,
   readOwnedResourceId,
   recordOwnershipFromDispatch,
   type RendererOwnedResourceTool,
@@ -221,9 +267,14 @@ export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
   // agent wrote and dispatches nothing, so a closed workspace is no reason to
   // refuse it.
   TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL,
+  // Reads exits main kept and asks the pty-host to end a trash grace (#15728):
+  // a closed pane's process outlives its view.
+  TERMINAL_WAIT_FOR_EXIT_TOOL,
   // Terminal notices live in main and read the pty-host, so arming one needs
   // no project view.
   TERMINAL_NOTIFY_WHEN_IDLE_TOOL,
+  // A held prompt lives in main beside them (#16187).
+  TERMINAL_CANCEL_QUEUED_SEND_TOOL,
   // Assistants are found, started and quota read in main (#13496), from the
   // caller's own session, never a view.
   ASSISTANT_LIST_TOOL,
@@ -248,15 +299,19 @@ const ASSISTANT_TARGET_TOOLS: ReadonlySet<string> = new Set([
   "terminal.closeOwned",
   TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL,
 ]);
+/** Shown by the global Assistant through the steer's gate, on the owned reveal's own dispatch (#16096). */
+const GLOBAL_REVEAL_TOOL = "terminal.revealOwned";
 /**
  * The input tools the global Assistant may point at a worker it neither
- * launched nor was handed (#14551), and nothing else: closes, restarts and
- * injections keep the ownership ledger.
+ * launched nor was handed (#14551), and the reveal that shows the person that
+ * worker's panel (#16096), and nothing else: closes, restarts and injections
+ * keep the ownership ledger.
  */
 const GLOBAL_STEER_TOOLS: ReadonlySet<string> = new Set([
   "terminal.sendCommandOwned",
   "terminal.sendKeysOwned",
   "terminal.interruptOwned",
+  GLOBAL_REVEAL_TOOL,
 ]);
 /** The closes whose answer carries what the host saw of each closed panel's process (#14474). */
 const CLOSE_TOOLS: ReadonlySet<string> = new Set([
@@ -314,6 +369,7 @@ const AGENT_LAUNCH_TOOL = "agent.launch";
 const BATCH_REPLY_TEXT_BUDGET = 32_000;
 const AGENT_NAMING_LAUNCH_TOOLS: ReadonlySet<string> = new Set([
   AGENT_LAUNCH_TOOL,
+  AGENT_LAUNCH_IN_NEW_WORKTREE_TOOL,
   "workflow.startWorkOnIssue",
 ]);
 
@@ -326,6 +382,46 @@ function readStringArg(args: unknown, key: string): string | undefined {
   if (typeof args !== "object" || args === null || Array.isArray(args)) return undefined;
   const value = (args as Record<string, unknown>)[key];
   return typeof value === "string" ? value : undefined;
+}
+
+/** A send held for a worker's next prompt (#16187): nothing was written yet. */
+function isHeldReceipt(result: unknown): boolean {
+  return (
+    typeof result === "object" && result !== null && "queued" in result && result.queued === true
+  );
+}
+
+/**
+ * A steer send's `whenBusy` and how long it may be held (#16187), checked in
+ * main since the steer never reaches the action's own schema.
+ */
+function readQueueTtlSeconds(args: Record<string, unknown>): number {
+  const { whenBusy, queueTtlSeconds: ttl } = args;
+  if (whenBusy !== undefined && whenBusy !== "refuse" && whenBusy !== "queue") {
+    throw new AssistantTargetError(
+      "VALIDATION_ERROR",
+      "`whenBusy` is `refuse` or `queue`. Nothing was sent."
+    );
+  }
+  if (ttl === undefined) return QUEUED_SEND_TTL_DEFAULT_SECONDS;
+  if (whenBusy !== "queue") {
+    throw new AssistantTargetError(
+      "VALIDATION_ERROR",
+      '`queueTtlSeconds` goes only with `whenBusy: "queue"`. Nothing was sent.'
+    );
+  }
+  if (
+    typeof ttl !== "number" ||
+    !Number.isInteger(ttl) ||
+    ttl < QUEUED_SEND_TTL_MIN_SECONDS ||
+    ttl > QUEUED_SEND_TTL_MAX_SECONDS
+  ) {
+    throw new AssistantTargetError(
+      "VALIDATION_ERROR",
+      `\`queueTtlSeconds\` is a whole number of seconds from ${QUEUED_SEND_TTL_MIN_SECONDS} to ${QUEUED_SEND_TTL_MAX_SECONDS}. Nothing was sent.`
+    );
+  }
+  return ttl;
 }
 
 /**
@@ -669,6 +765,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     notifyDisplayImage,
     workspaceBinding,
     terminalNotify,
+    workerSteerQueue,
     hostControl,
     assistantControl,
     replyWaiter,
@@ -677,6 +774,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     requestCloseApproval,
     readTerminalCloseContext,
     readClosedPanelProcess,
+    waitForClosedPanelExits,
   } = deps;
 
   const session = createSessionContext(sessionId, deps);
@@ -824,6 +922,24 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       deps.relay !== undefined
         ? deps.relay.refuseWrite(projectId)
         : (deps.refuseWrite?.(projectId) ?? null);
+    // Ending the trash grace of panels this caller closed is a change main
+    // makes itself, so it answers to the drive rule for each project they
+    // were closed in (#13493, #15728): one principal can hold sessions in
+    // several. Null while it may go ahead.
+    const graceWriteRefusal = (
+      workspaceIds: Iterable<string | undefined>
+    ): { code: string; message: string } | null => {
+      const refuseWrite =
+        deps.relay !== undefined
+          ? (projectId: string | undefined) => deps.relay!.refuseWrite(projectId)
+          : deps.refuseWrite;
+      if (refuseWrite === undefined) return null;
+      for (const workspaceId of workspaceIds) {
+        const refusal = refuseWrite(workspaceId);
+        if (refusal) return refusal;
+      }
+      return null;
+    };
     // One agent-messaging call against an assistant this call named (#13496):
     // a send, an interrupt, a close or a read, with only what that tool takes.
     const runAssistantTarget = async (
@@ -877,35 +993,36 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           generation: parsed.data.generation,
         });
       }
-      if (ASSISTANT_INTERRUPT_TOOLS.has(actionId)) return control.interrupt(target);
+      if (ASSISTANT_INTERRUPT_TOOLS.has(actionId)) return control.interrupt(caller, target);
       return control.close(caller, target);
     };
-    // The global Assistant steering a worker it didn't launch (#14551), in
-    // the project this session is bound to and no other. Every argument the
-    // delegate would have validated is validated here, since none reaches it.
-    const runGlobalSteer = async (terminalId: string): Promise<unknown> => {
-      const steer = deps.globalSteer!;
+    const callArgs =
+      typeof args === "object" && args !== null && !Array.isArray(args)
+        ? (args as Record<string, unknown>)
+        : {};
+    // The run a global Assistant's call names (#14551, #16096), in the
+    // project this session is bound to and no other.
+    const globalSteerTarget = (terminalId: string): WorkerSteerTarget => {
       const projectId = sessionStore.sessionWorkspaceMap.get(sessionId);
       if (projectId === undefined) {
         throw new AssistantTargetError(
           WORKER_STEER_REFUSALS.notFound,
-          "This call isn't bound to a project, so it can't reach a terminal. Nothing was sent."
+          "This call isn't bound to a project, so it can't reach a terminal. Nothing was done."
         );
       }
-      const record =
-        typeof args === "object" && args !== null && !Array.isArray(args)
-          ? (args as Record<string, unknown>)
-          : {};
       const generation =
-        typeof record.generation === "number" &&
-        Number.isInteger(record.generation) &&
-        record.generation >= 0
-          ? record.generation
+        typeof callArgs.generation === "number" &&
+        Number.isInteger(callArgs.generation) &&
+        callArgs.generation >= 0
+          ? callArgs.generation
           : undefined;
-      const target = {
+      return {
         projectId,
         terminalId,
         generation,
+        // The principal admission captured, so keys this assistant wrote in
+        // an earlier session are still its own (#16094).
+        inputOwner: ownershipOwner,
         authorize: () => {
           if (sessionStore.getTier(sessionId) === null) {
             throw new AssistantTargetError(SESSION_GONE, SESSION_GONE_MESSAGE);
@@ -913,16 +1030,49 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           const refusal = assistantWriteRefusal(projectId);
           if (refusal) throw new AssistantTargetError(refusal.code, refusal.message);
         },
+        // A held prompt answers to the session that queued it through its
+        // principal, whose end drops it (#16187), not this MCP session, which
+        // closes when idle long before the worker's turn ends.
+        authorizeHeld: () => assistantWriteRefusal(projectId),
       };
+    };
+    // The global Assistant steering a worker it didn't launch (#14551). Every
+    // argument the delegate would have validated is validated here, since
+    // none reaches it.
+    const runGlobalSteer = async (terminalId: string): Promise<unknown> => {
+      const steer = deps.globalSteer!;
+      const target = globalSteerTarget(terminalId);
       if (actionId === "terminal.sendCommandOwned") {
-        const command = typeof record.command === "string" ? record.command : "";
+        const command = typeof callArgs.command === "string" ? callArgs.command : "";
         if (command.trim().length === 0) {
           throw new AssistantTargetError("VALIDATION_ERROR", "A send needs a non-empty `command`.");
         }
+        const ttlSeconds = readQueueTtlSeconds(callArgs);
         return steer.prompt(target, {
           command,
-          handback: record.handback === true,
+          handback: callArgs.handback === true,
           machineName: deps.relay?.shellName ?? "another machine",
+          ...(callArgs.whenBusy === "queue"
+            ? {
+                whenBusy: {
+                  queue: { ttlSeconds },
+                  // The notice armed for this call now follows the held
+                  // prompt: completed once it is written, cancelled if it
+                  // never is.
+                  takeNotice: () => {
+                    const notice = pendingNotify;
+                    pendingNotify = undefined;
+                    return notice;
+                  },
+                  // Without a notice, what this pane heard about the worker's
+                  // earlier prompt goes stale once this one is written, not now.
+                  onWritten: () => {
+                    const pane = tier === "external" ? null : ownPane();
+                    if (pane !== null) terminalNotify?.supersede(pane, terminalId);
+                  },
+                },
+              }
+            : {}),
         });
       }
       if (actionId === "terminal.sendKeysOwned") {
@@ -960,6 +1110,20 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // completes after the transport dropped still lands with the principal the
     // call was authorized under, where the pane's next session finds it.
     const ownershipOwner = sessionStore.resourceOwnership.ownerOf(sessionId);
+    // A status read naming a prompt held for a worker (#16187): only main
+    // holds it, so main adds its record to whatever answers the rest.
+    const queuedSendToken =
+      actionId === TERMINAL_GET_STATUS_TOOL ? readStringArg(args, "queuedSendToken") : undefined;
+    const withQueuedSend = (result: unknown): unknown =>
+      queuedSendToken === undefined ||
+      typeof result !== "object" ||
+      result === null ||
+      Array.isArray(result)
+        ? result
+        : {
+            ...result,
+            queuedSend: workerSteerQueue?.status(ownershipOwner, queuedSendToken) ?? null,
+          };
     // An api-key client (#12987): no bearer bound it, so its records are held
     // by the session and die with it. Asked of the owner, not the origin — a
     // pane's session has an `external` origin too.
@@ -1053,6 +1217,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // accidentally rewrite an action id or drop an ownership record (#11909).
     const ownedResource = OWNED_RESOURCE_TOOLS[actionId];
     let ownedResourceId: string | undefined;
+    // A worker the global Assistant shows the person without owning it
+    // (#16096), set by the gate; it is `ownedResourceId` too, so the answer
+    // names it, but no ledger record or hand-over admitted it.
+    let globalRevealTerminalId: string | undefined;
     // The record the gate accepted. A release drops only this record, so a
     // cleanup that completes after another session on the same bearer
     // recorded a new resource under the id cannot take the new one with it.
@@ -1065,6 +1233,19 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // frozen view inside the bridge still follows; a call caught there is no
     // different from one sent the moment before the take-back.
     let admittedAdoption: TerminalAdoptionRecord | undefined;
+    // A retirement the preflight cleared (#15737): what it closes and waits
+    // for, and what git saw, carried to the teardown just before the delete.
+    // `progress` is set once that teardown finished, and only then is the
+    // delete's answer read as the retirement's.
+    let retirement:
+      | {
+          worktreeId: string;
+          plan: RetirementPlan;
+          timeoutMs: number;
+          git: WorktreeGitObservation & { headOid: string };
+          progress?: RetirementProgress;
+        }
+      | undefined;
 
     const dispatchOwnedResourceAction = (
       entry: RendererOwnedResourceTool,
@@ -1087,9 +1268,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         resourceId
       );
 
+    const askedAt = Date.now();
     const recordDispatchOwnership = (envelope: DispatchEnvelope): void =>
       recordOwnershipFromDispatch(
-        { sessionId, actionId, sessionStore, ownershipOwner },
+        { sessionId, actionId, sessionStore, ownershipOwner, args, askedAt },
         { ownedResource, ownedResourceId, ownedResourceRecord },
         envelope
       );
@@ -1377,10 +1559,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         ) {
           emitToolCallStarted(false, false);
           try {
-            const result = await handleTerminalGetStatusViewless(
-              args,
-              assistantCaller.projectId,
-              new Set(assistantIds)
+            const result = withQueuedSend(
+              await handleTerminalGetStatusViewless(
+                args,
+                assistantCaller.projectId,
+                new Set(assistantIds)
+              )
             );
             outcome = { kind: "result", value: { ok: true, result } };
             return buildToolCallResult(result, {
@@ -1421,6 +1605,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           adoptedRecordFor(ownedResource!.resourceKind, steerTerminalId) === undefined
             ? steerTerminalId
             : undefined;
+        // A reveal is no write: it goes out on the owned reveal's own dispatch
+        // below, once the steer's gate has let it (#16096).
+        if (globalSteerTerminalId !== undefined && actionId === GLOBAL_REVEAL_TOOL) {
+          globalRevealTerminalId = globalSteerTerminalId;
+          ownedResourceId = globalSteerTerminalId;
+        }
 
         if (
           ownedResource !== undefined &&
@@ -1506,6 +1696,114 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             createdRecord === undefined && !readsByPinnedView
               ? sessionStore.terminalAdoption.get(ownershipOwner, resourceId)
               : undefined;
+        }
+
+        // An owned worktree delete waits for every process in the worktree to
+        // exit (#15729): `worktree.delete` closes nothing without
+        // `closeTerminals`, which this tool never sends, and git removes the
+        // directory from under whatever still runs there — a pane this
+        // session just closed that is still in its trash grace, or a terminal
+        // it never owned. Asked of the pty-host after ownership is settled, so
+        // an unowned id is still refused uniformly and never learns what runs
+        // in it, and before any question reaches the user. The delete's own D2
+        // dialog opens inside the delegated dispatch, so a terminal started
+        // while that dialog is up is not seen here. Only an owned delete
+        // awaits anything here: every other call keeps the tick ordering it
+        // had, which a reply wait set up above is sensitive to.
+        //
+        // Creation is read from the launch history, keyed by the run main
+        // tracks under the id, because a close releases the ledger record
+        // while the trashed process runs on — and a ledger record outlives a
+        // respawn the person made under the same id, so it never speaks for a
+        // run whose generation is known.
+        //
+        // A retirement (#15737) also reads which closes are on record, so it
+        // can wait for a pane this session already closed: only the close of
+        // the run now under the id, since a respawn is not what it closed.
+        const attributeWorktreeTerminal = (
+          terminalId: string,
+          launchGeneration: number | undefined
+        ): RetirementAttribution => {
+          const ledgerRecord = ownedRecordFor("terminal", terminalId) !== undefined;
+          const createdByThisSession =
+            launchGeneration === undefined
+              ? ledgerRecord
+              : sessionStore.workerCreations.get(terminalId, launchGeneration)?.owner ===
+                ownershipOwner;
+          const closed = sessionStore.resourceOwnership.closedRecord(ownershipOwner, terminalId);
+          return {
+            createdByThisSession,
+            closableByThisSession: createdByThisSession && ledgerRecord,
+            closedByThisSession:
+              closed?.launchGeneration !== undefined &&
+              closed.launchGeneration === launchGeneration,
+          };
+        };
+        if (actionId === WORKTREE_DELETE_OWNED_TOOL && ownedResourceId !== undefined) {
+          const refusal = await refuseWorktreeDeleteWhileRunning(
+            ownedResourceId,
+            deps.readTerminalProcesses,
+            attributeWorktreeTerminal
+          );
+          if (refusal !== undefined) {
+            outcome = { kind: "result", value: { ok: false, error: refusal } };
+            return buildToolError(refusal);
+          }
+        }
+
+        // A retirement's checks that change nothing (#15737), in the same
+        // place as the owned delete's: after ownership, so an unowned id is
+        // refused uniformly and learns nothing about the worktree, and before
+        // anything asks the user, so a dirty tree or someone else's process
+        // never raises a question. Clean and pushed first, from git; then the
+        // census, which also says what the teardown closes and waits for.
+        if (actionId === WORKTREE_RETIRE_OWNED_TOOL && ownedResourceId !== undefined) {
+          const parsed = WorktreeRetireOwnedArgsSchema.safeParse(args);
+          if (!parsed.success) {
+            const error: ActionError = {
+              code: "VALIDATION_ERROR",
+              message: `Invalid arguments: ${parsed.error.issues[0]?.message ?? "invalid input"}`,
+            };
+            outcome = { kind: "result", value: { ok: false, error } };
+            return buildToolError(error);
+          }
+          const refuse = (error: ActionError) => {
+            outcome = { kind: "result", value: { ok: false, error } };
+            return buildToolError(error);
+          };
+          let git: WorktreeGitObservation;
+          try {
+            if (deps.readWorktreeGit === undefined) throw new Error("No git reader.");
+            git = await deps.readWorktreeGit(ownedResourceId, extra.signal);
+          } catch {
+            return refuse(untouched(gitUnreadableRefusal(ownedResourceId)));
+          }
+          const unclean = refuseUnlessCleanAndPushed(ownedResourceId, git);
+          if (unclean !== undefined || git.headOid === null) {
+            return refuse(untouched(unclean ?? gitUnreadableRefusal(ownedResourceId)));
+          }
+          const planned = await planWorktreeRetirement(
+            ownedResourceId,
+            deps.readTerminalProcesses,
+            attributeWorktreeTerminal
+          );
+          if ("refusal" in planned) return refuse(planned.refusal);
+          if (planned.plan.awaitExit.length > 0 && waitForClosedPanelExits === undefined) {
+            return refuse(
+              untouched({
+                code: EXECUTION_ERROR_CODE,
+                message:
+                  `Worktree '${ownedResourceId}' was not retired: the pty host is not available, ` +
+                  `so no process exit can be observed.`,
+              })
+            );
+          }
+          retirement = {
+            worktreeId: ownedResourceId,
+            plan: planned.plan,
+            timeoutMs: parsed.data.timeoutMs ?? DEFAULT_TERMINAL_EXIT_WAIT_MS,
+            git: { ...git, headOid: git.headOid },
+          };
         }
 
         // The ask for a pane call above its tier (#12692). Placed after the
@@ -1631,8 +1929,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           );
         }
         if (AGENT_NAMING_LAUNCH_TOOLS.has(actionId)) {
+          // Checked on the composite too, before it creates a worktree its
+          // launch would then be refused into.
           const requestedId =
-            actionId === AGENT_LAUNCH_TOOL ? readStringArg(args, "requestedId") : undefined;
+            actionId === AGENT_LAUNCH_TOOL || actionId === AGENT_LAUNCH_IN_NEW_WORKTREE_TOOL
+              ? readStringArg(args, "requestedId")
+              : undefined;
           if (requestedId !== undefined && deps.isTerminalIdInUse(requestedId)) {
             const message =
               `A terminal with id '${requestedId}' already exists, so '${actionId}' will not ` +
@@ -1642,6 +1944,75 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               value: { ok: false, error: { code: "VALIDATION_ERROR", message } },
             };
             return buildToolError({ code: "VALIDATION_ERROR", message });
+          }
+        }
+
+        // One unit of work in one call (#15738): the create, the setup wait
+        // and the launch each run through this handler again as their single
+        // calls, so the session owns what they make, the launch's notice and
+        // reply wait work as on `agent.launch`, and each step dispatches with
+        // no view where it can. The composite adds no authority of its own.
+        if (actionId === AGENT_LAUNCH_IN_NEW_WORKTREE_TOOL) {
+          // What the launch step would refuse `notify` for is refused here,
+          // before a worktree is made for an agent that won't be launched.
+          if (
+            typeof args === "object" &&
+            args !== null &&
+            (args as Record<string, unknown>).notify === true
+          ) {
+            const refuse = (code: string, message: string) => {
+              outcome = {
+                kind: "result",
+                value: { ok: false, error: { code: auditCodeForNotifyRefusal(code), message } },
+              };
+              return buildToolError({ code, message });
+            };
+            const pane = tier === "external" ? null : ownPane();
+            if (pane === null || terminalNotify === undefined) {
+              return refuse(
+                NOTIFY_NOT_ELIGIBLE,
+                "`notify` types into the caller's own pane, and this connection has none: only an agent pane or an assistant session can ask for it. Nothing was created."
+              );
+            }
+            if (pane.relay !== undefined && pane.relay.callId === undefined) {
+              return refuse(
+                NOTIFY_NOT_ELIGIBLE,
+                "This relayed call carries no call id, so its notice could not reach the assistant that asked. Nothing was created."
+              );
+            }
+            if ((readStringArg(args, "prompt") ?? "").trim().length === 0) {
+              return refuse(
+                NOTIFY_VALIDATION_ERROR,
+                "`notify` needs a `prompt`: there is no work to finish without one. Nothing was created."
+              );
+            }
+          }
+          emitToolCallStarted(false, false);
+          const stepOptions =
+            confirmationsSkipped || relayCallId !== undefined
+              ? {
+                  ...(confirmationsSkipped ? { confirmationsSkipped: true } : {}),
+                  ...(relayCallId !== undefined ? { relayCallId } : {}),
+                }
+              : undefined;
+          try {
+            const answer = await runLaunchInNewWorktree(args, {
+              callTool: (name, stepArgs) =>
+                handleCallTool(
+                  { method: "tools/call", params: { name, arguments: stepArgs } },
+                  extra,
+                  stepOptions
+                ),
+              signal: extra.signal,
+              ...(dedupKey !== undefined
+                ? { createRequestKey: createStepRequestKey(dedupKey) }
+                : {}),
+            });
+            outcome = { kind: "result", value: answer.outcome };
+            return answer.result;
+          } catch (err) {
+            outcome = { kind: "throw", error: err };
+            throw err;
           }
         }
 
@@ -1801,6 +2172,23 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           return buildToolCallResult(value, {
             structuredContent: value as unknown as Record<string, unknown>,
           }) as CallToolResult;
+        }
+
+        // A held prompt is written long after this call returns (#16187);
+        // its notice, or a status read, says what became of it.
+        if (
+          waitForReply &&
+          globalSteerTerminalId !== undefined &&
+          actionId === "terminal.sendCommandOwned" &&
+          callArgs.whenBusy === "queue"
+        ) {
+          const message =
+            "`waitForReply` can't wait for a message that may be held: pass `notify: true` to hear when it is answered. Nothing was sent.";
+          outcome = {
+            kind: "result",
+            value: { ok: false, error: { code: "VALIDATION_ERROR", message } },
+          };
+          return buildToolError({ code: "VALIDATION_ERROR", message });
         }
 
         if (waitForReply && replyWaiter !== undefined) {
@@ -2019,7 +2407,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         if (viewlessStatusWorkspaceId !== undefined) {
           emitToolCallStarted(false, false);
           try {
-            const result = await handleTerminalGetStatusViewless(args, viewlessStatusWorkspaceId);
+            const result = withQueuedSend(
+              await handleTerminalGetStatusViewless(args, viewlessStatusWorkspaceId)
+            );
             outcome = { kind: "result", value: { ok: true, result } };
             return buildToolCallResult(result, {
               structuredContent: result as unknown as Record<string, unknown>,
@@ -2074,6 +2464,38 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         }
 
+        // Short-circuit: withdrawing a prompt held for a busy worker (#16187),
+        // which lives in main. Only the session that held it reaches it, by
+        // its principal, so another assistant's token finds nothing. Writes
+        // nothing, so it is never confirm-gated.
+        if (actionId === TERMINAL_CANCEL_QUEUED_SEND_TOOL) {
+          emitToolCallStarted(false, false);
+          const terminalId = readStringArg(args, "terminalId");
+          const token = readStringArg(args, "queuedSendToken");
+          const refuse = (code: "VALIDATION_ERROR" | "NOT_FOUND", message: string) => {
+            outcome = { kind: "result", value: { ok: false, error: { code, message } } };
+            return buildToolError({ code, message });
+          };
+          if (!terminalId || !token) {
+            return refuse(
+              "VALIDATION_ERROR",
+              "Pass the `terminalId` and the `queuedSendToken` a held send answered with."
+            );
+          }
+          const answer = workerSteerQueue?.cancel(ownershipOwner, terminalId, token) ?? null;
+          if (answer === null) {
+            return refuse(
+              "NOT_FOUND",
+              `This host holds no message of yours for terminal '${terminalId}' under that token. Held messages are kept in memory, so a restart forgets them.`
+            );
+          }
+          const result = { cancelled: answer.cancelled, queuedSend: answer.record };
+          outcome = { kind: "result", value: { ok: true, result } };
+          return buildToolCallResult(result, {
+            structuredContent: result as unknown as Record<string, unknown>,
+          });
+        }
+
         // Short-circuit: a Shell assistant's host tools (#13493) run in main
         // over the link. Only an assistant running in one of this machine's
         // own views gets past the runtime's own check (#13468), whatever
@@ -2084,9 +2506,21 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           emitToolCallStarted(false, false);
           try {
             // `host.call` carries the tier it was admitted at here: all it may have on the host.
+            // Its record says when what it ran there ran under this machine's
+            // own skip preference (#15698), which only this machine decides.
+            // `host.status` reads each project at that tier too (#16191), and asks nobody.
             const callContext =
-              actionId === HOST_CALL_TOOL && (tier === "core" || tier === "full")
-                ? { tier }
+              tier === "core" || tier === "full"
+                ? actionId === HOST_CALL_TOOL
+                  ? {
+                      tier,
+                      noteSkipPreference: () => {
+                        dispatchAuthorization = "skip-preference";
+                      },
+                    }
+                  : actionId === HOST_STATUS_TOOL
+                    ? { tier }
+                    : undefined
                 : undefined;
             const settled = await runHostControlTool(
               actionId,
@@ -2163,7 +2597,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                   "This machine can't read its Codex quota."
                 );
               }
-              result = { codex: await readQuota() };
+              const quota: AgentReadQuotaResult = {
+                claude: { source: "seen-in-panes", readings: deps.readClaudeUsage?.() ?? [] },
+                codex: await readQuota(),
+              };
+              result = quota;
             }
             outcome = { kind: "result", value: { ok: true, result } };
             return buildToolCallResult(result, {
@@ -2273,6 +2711,98 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           };
           return buildToolError(refusal);
         };
+
+        // Short-circuit: terminal.waitForExit runs in main (#15728). The exits
+        // it reports are ones main kept after the pty-host let a closed panel
+        // go, and its authority is the ownership ledger's record of what this
+        // owner closed, which no renderer can see. Never `danger: "confirm"`:
+        // ending a grace early only brings forward the stop the close already
+        // decided, for panels this caller closed itself.
+        if (actionId === TERMINAL_WAIT_FOR_EXIT_TOOL) {
+          emitToolCallStarted(false, false);
+          const parsed = TerminalWaitForExitArgsSchema.safeParse(args);
+          if (!parsed.success) {
+            const error: ActionError = {
+              code: "VALIDATION_ERROR",
+              message: `Invalid arguments: ${parsed.error.issues[0]?.message ?? "invalid input"}`,
+            };
+            outcome = { kind: "result", value: { ok: false, error } };
+            return buildToolError(error);
+          }
+          const targets: ClosedPanelExitTarget[] = [];
+          const closedIn = new Set<string | undefined>();
+          for (const terminalId of new Set(parsed.data.terminalIds)) {
+            const closed = sessionStore.resourceOwnership.closedRecord(ownershipOwner, terminalId);
+            if (closed === undefined) {
+              // One message for every miss, as for the owned tools: an id this
+              // caller never closed reads the same whoever's it is.
+              const error: ActionError = {
+                code: RESOURCE_NOT_OWNED_CODE,
+                message:
+                  `No terminal with id '${terminalId}' was closed by this session in the last ` +
+                  `10 minutes, so '${actionId}' will not wait for it. Nothing was waited for or ` +
+                  `stopped. Pass ids this connection closed with a close tool.`,
+              };
+              outcome = { kind: "result", value: { ok: false, error } };
+              return buildToolError(error);
+            }
+            targets.push({ terminalId, launchGeneration: closed.launchGeneration });
+            closedIn.add(closed.workspaceId);
+          }
+          const endGrace = parsed.data.endGrace === true;
+          // Asked now, and again right before each grace is ended.
+          const graceRefusal = () => graceWriteRefusal(closedIn);
+          if (endGrace) {
+            const refusal = graceRefusal();
+            if (refusal) return refuseRelayed(refusal);
+          }
+          if (waitForClosedPanelExits === undefined) {
+            const error: ActionError = {
+              code: EXECUTION_ERROR_CODE,
+              message: "The pty host is not available, so no exit can be observed.",
+            };
+            outcome = { kind: "result", value: { ok: false, error } };
+            return buildToolError(error);
+          }
+          try {
+            const result = await waitForClosedPanelExits(targets, {
+              timeoutMs: parsed.data.timeoutMs ?? DEFAULT_TERMINAL_EXIT_WAIT_MS,
+              endGrace,
+              signal: extra.signal,
+              authorizeEndGrace: () => {
+                const late = graceRefusal();
+                if (late) throw new RelayWriteRefused(late);
+              },
+            });
+            outcome = { kind: "result", value: { ok: true, result } };
+            // A wait can run up to a minute, so it keeps the grant that
+            // admitted it as the other waits do (#8442).
+            if (grantIssuedAt !== undefined || nativeGrantId !== undefined) {
+              if (grantIssuedAt !== undefined) {
+                sessionStore.grantCache.refresh(sessionId, actionId, grantIssuedAt);
+              }
+              if (nativeGrantId !== undefined) {
+                sessionStore.grantCache.refreshNativeGrant(nativeGrantId);
+              }
+              if (sessionStore.sessions.has(sessionId)) {
+                sessionStore.resetIdleTimer(sessionId);
+              } else if (sessionStore.httpSessions.has(sessionId)) {
+                sessionStore.resetHttpIdleTimer(sessionId);
+              }
+            }
+            return buildToolCallResult(result, {
+              structuredContent: result as unknown as Record<string, unknown>,
+            });
+          } catch (err) {
+            if (err instanceof RelayWriteRefused) return refuseRelayed(err.refusal);
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) throw err;
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: formatErrorMessage(err, "waitForExit failed"),
+            });
+          }
+        }
 
         // Short-circuit: project.runCheck runs entirely in the main process
         // (#11548). The action manifest entry (renderer) carries schema, tier,
@@ -2560,9 +3090,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // under the skip there is no typed-name gate either. The grant's use is
         // still spent. The assistant's protected close (#12881) settles the
         // preference above, where it would otherwise ask.
-        // With no frontend attached the host's base surface describes only the
-        // external tier, so an action the host runs itself is read from its own
-        // catalog, which restates each one's renderer danger (#13495).
+        // With no frontend attached the lookup reads the host's generated base
+        // surface; an action it lacks that the host runs itself falls back to its
+        // own catalog, which restates each one's renderer danger (#13495).
         const declaredDanger = entry?.danger ?? viewlessActionDanger(actionId);
         const confirmGated =
           declaredDanger !== undefined &&
@@ -2644,6 +3174,22 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           };
         };
 
+        // The incarnation each named close reaches, read before it is sent: a
+        // successor launched under the id while the close is out is not the
+        // process the caller closed (#15728).
+        // `terminal.closeAll` names none, so every tracked id is read instead;
+        // a closed id missing from the read is noted with no incarnation.
+        const closeGenerations = new Map<string, number | undefined>();
+        if (CLOSE_TOOLS.has(actionId)) {
+          const named =
+            actionId === "terminal.closeAll"
+              ? (deps.trackedTerminalIds?.() ?? [])
+              : namedTerminalIds(args);
+          for (const terminalId of named) {
+            closeGenerations.set(terminalId, deps.terminalGenerationOf?.(terminalId));
+          }
+        }
+
         // An assistant target runs in main (#13496), with the notice and the
         // reply wait set up above around it like any send. Its refusals are
         // its own words, and a refused send cancels the notice in `finally`.
@@ -2652,7 +3198,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         let assistantEnvelope: DispatchEnvelope | undefined;
         if (
           (assistantTarget !== undefined && assistantCaller !== null && assistantControl) ||
-          globalSteerTerminalId !== undefined
+          (globalSteerTerminalId !== undefined && globalRevealTerminalId === undefined)
         ) {
           try {
             const result =
@@ -2680,6 +3226,256 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
         }
 
+        // A retirement's teardown (#15737), after every gate that could still
+        // refuse without changing anything, and right before the delete it
+        // leads to. This session's panes in the worktree are closed as
+        // `terminal.closeOwned` closes them, with the same release and closed
+        // record, then their processes are waited for with their grace ended,
+        // then the worktree is checked again: closing takes a while, and an
+        // agent's last output can still dirty the tree. Nothing here asks the
+        // user; the delete's own confirmation is the one question.
+        if (retirement !== undefined) {
+          const retiring = retirement;
+          const closeEntry = OWNED_RESOURCE_TOOLS[
+            "terminal.closeOwned"
+          ] as RendererOwnedResourceTool;
+          const dispatchClose = (id: string, closeArgs: unknown): Promise<DispatchEnvelope> =>
+            relayCallId !== undefined
+              ? dispatchAction(id, closeArgs, false, undefined, relayCallId)
+              : dispatchAction(id, closeArgs, false);
+          const torn = await tearDownForRetirement(retiring.worktreeId, retiring.plan, {
+            signal: extra.signal,
+            closePane: async ({ terminalId, launchGeneration }) => {
+              const record = ownedRecordFor("terminal", terminalId);
+              if (record === undefined) {
+                return {
+                  code: RESOURCE_NOT_OWNED_CODE,
+                  message: `Pane '${terminalId}' is no longer this session's to close.`,
+                };
+              }
+              // The run the checks found, and no other: a pane restarted
+              // since then is a run they never looked at. Asked only when
+              // both runs are known; otherwise the ledger answers alone, as
+              // it does for `terminal.closeOwned`.
+              const generation = deps.terminalGenerationOf?.(terminalId);
+              if (
+                launchGeneration !== undefined &&
+                generation !== undefined &&
+                generation !== launchGeneration
+              ) {
+                return {
+                  code: "DISABLED",
+                  message: `Pane '${terminalId}' was restarted after the checks, so it was not closed.`,
+                };
+              }
+              const { envelope: dispatched } = await dispatchOwnedResource(
+                {
+                  sessionId,
+                  actionId: "terminal.closeOwned",
+                  args: { terminalId },
+                  sessionStore,
+                  ownershipOwner,
+                  adoptedRecordFor,
+                  admittedAdoption: undefined,
+                  dispatchToRenderer: dispatchClose,
+                  dispatchConfirmed: false,
+                  revealOwnedRun: deps.revealOwnedRun,
+                },
+                closeEntry,
+                terminalId
+              );
+              const closed: DispatchEnvelope =
+                readClosedPanelProcess !== undefined
+                  ? {
+                      ...dispatched,
+                      result: await withClosedPanelProcesses(
+                        dispatched.result,
+                        readClosedPanelProcess
+                      ),
+                    }
+                  : dispatched;
+              recordOwnershipFromDispatch(
+                { sessionId, actionId: "terminal.closeOwned", sessionStore, ownershipOwner },
+                {
+                  ownedResource: closeEntry,
+                  ownedResourceId: terminalId,
+                  ownedResourceRecord: record,
+                },
+                closed
+              );
+              noteClosedTerminals(
+                { sessionId, sessionStore, ownershipOwner },
+                closed,
+                () => generation
+              );
+              if (!closed.result.ok) return closed.result.error;
+              if (!closedIdsInclude(closed.result.result, terminalId)) {
+                return {
+                  code: EXECUTION_ERROR_CODE,
+                  message: `Closing pane '${terminalId}' reported nothing closed.`,
+                };
+              }
+              return undefined;
+            },
+            waitForExits: async (terminalIds) => {
+              const closedRecords = terminalIds.map((terminalId) => ({
+                terminalId,
+                record: sessionStore.resourceOwnership.closedRecord(ownershipOwner, terminalId),
+              }));
+              const closedIn = new Set(closedRecords.map(({ record }) => record?.workspaceId));
+              const refusalOf = (refusal: { code: string; message: string }): ActionError => ({
+                code: refusal.code as ActionError["code"],
+                message: refusal.message,
+              });
+              const early = graceWriteRefusal(closedIn);
+              if (early) return { error: refusalOf(early) };
+              try {
+                const result = await waitForClosedPanelExits!(
+                  closedRecords.map(({ terminalId, record }) => ({
+                    terminalId,
+                    launchGeneration: record?.launchGeneration,
+                  })),
+                  {
+                    timeoutMs: retiring.timeoutMs,
+                    endGrace: true,
+                    signal: extra.signal,
+                    authorizeEndGrace: () => {
+                      const late = graceWriteRefusal(closedIn);
+                      if (late) throw new RelayWriteRefused(late);
+                    },
+                  }
+                );
+                return { result };
+              } catch (err) {
+                if (err instanceof RelayWriteRefused) return { error: refusalOf(err.refusal) };
+                throw err;
+              }
+            },
+            recheck: async () => {
+              // The record the call was admitted on, by identity: a worktree
+              // deleted and recreated at the path since is another worktree.
+              if (ownedRecordFor("worktree", retiring.worktreeId) !== ownedResourceRecord) {
+                return {
+                  code: RESOURCE_NOT_OWNED_CODE,
+                  message: `Worktree '${retiring.worktreeId}' is no longer this session's to delete.`,
+                };
+              }
+              let git: WorktreeGitObservation;
+              try {
+                git = await deps.readWorktreeGit!(retiring.worktreeId, extra.signal);
+              } catch {
+                return gitUnreadableRefusal(retiring.worktreeId);
+              }
+              const unclean = refuseUnlessCleanAndPushed(retiring.worktreeId, git);
+              if (unclean !== undefined || git.headOid === null) {
+                return unclean ?? gitUnreadableRefusal(retiring.worktreeId);
+              }
+              retiring.git = { ...git, headOid: git.headOid };
+              return refuseWorktreeDeleteWhileRunning(
+                retiring.worktreeId,
+                deps.readTerminalProcesses,
+                attributeWorktreeTerminal
+              );
+            },
+          });
+          if (!torn.ok) {
+            outcome = { kind: "result", value: { ok: false, error: torn.error } };
+            return buildToolError(torn.error);
+          }
+          retiring.progress = torn.progress;
+        }
+
+        // The answer for a dispatch that threw, shared by the plain reply and
+        // a retirement's cause so the two never classify one error apart.
+        const dispatchFailure = (
+          err: unknown
+        ): { error: Parameters<typeof buildToolError>[0]; confirmationPending: boolean } => {
+          // Checked before the binding failure it extends: the workspace is
+          // reachable in principle, it just has nothing attached that could run
+          // this action, and the host has no form of it to run alone.
+          if (err instanceof NoFrontendAttachedError) {
+            const statusHint =
+              actionId === TERMINAL_GET_STATUS_TOOL
+                ? ` Status for specific terminals can still be read without one — call '${actionId}' again with an explicit 'terminalIds' array.`
+                : "";
+            return {
+              error: {
+                code: NO_FRONTEND_ATTACHED_CODE,
+                message: `${err.message}${statusHint}`,
+                retriable: true,
+              },
+              confirmationPending: false,
+            };
+          }
+          if (err instanceof RelayDrivenElsewhereError) {
+            return { error: { code: err.code, message: err.message }, confirmationPending: false };
+          }
+          if (err instanceof McpRouteBindingError) {
+            return {
+              error: {
+                code: bindingGoneCode(err),
+                message: err.message,
+                // Instance-derived: a workspace the user can reopen is retriable,
+                // a destroyed pinned view never is, and both report this code.
+                retriable: err.retriable,
+              },
+              confirmationPending: false,
+            };
+          }
+          // No live renderer to route the dispatch through (#10640). Every
+          // unconfirmed `danger: "confirm"` dispatch is forwarded to the
+          // renderer bridge so the human can approve it in a native
+          // ConfirmDialog (#11342); with no Daintree window open,
+          // `getActiveProjectWebContents` throws `RendererBridgeUnavailableError`.
+          if (err instanceof RendererBridgeUnavailableError) {
+            // Confirm-gated tool we KNOW needs human approval (manifest entry
+            // resolved): the action could not be confirmed, not that it failed
+            // mid-execution. Reclassify to CONFIRMATION_REQUIRED (audited as
+            // `confirmation-pending`, never retriable) with a machine-readable
+            // `confirmationChannel: "unavailable"` so an autonomous conductor
+            // can tell "needs a human I can't reach" apart from a transient
+            // error. Scoped to unconfirmed dispatches so an already-approved
+            // call that fails for any other reason isn't mislabelled.
+            if (entry?.danger === "confirm" && !dispatchConfirmed) {
+              return {
+                error: {
+                  code: CONFIRMATION_REQUIRED_CODE,
+                  message:
+                    `Action '${actionId}' requires confirmation, but no Daintree window is open to surface the ` +
+                    `approval dialog. The action was not run — a human must approve it in Daintree.`,
+                  details: { confirmationChannel: "unavailable" },
+                },
+                confirmationPending: true,
+              };
+            }
+            // Either a non-confirm tool, or a cold-cache call whose manifest
+            // entry couldn't be fetched (the manifest itself comes from the
+            // renderer, so `entry` is undefined here and the tool's danger is
+            // unknowable). We must not claim CONFIRMATION_REQUIRED without
+            // knowing the tool is confirm-gated. With Host-mode routing this is
+            // the typed, retriable "no frontend" refusal — a window may open,
+            // locally or from another machine; an unbound session names no
+            // workspace, so there is no project the host could run the action
+            // for on its own. Without it, the retriable EXECUTION_ERROR this
+            // has always been.
+            const message =
+              "No Daintree window is open, so the action surface is unavailable. Retry once a project window is open.";
+            return {
+              error: isMcpHostRoutingEnabled()
+                ? { code: NO_FRONTEND_ATTACHED_CODE, message, retriable: true }
+                : { code: EXECUTION_ERROR_CODE, message },
+              confirmationPending: false,
+            };
+          }
+          return {
+            error: {
+              code: EXECUTION_ERROR_CODE,
+              message: formatErrorMessage(err, "Action dispatch failed"),
+            },
+            confirmationPending: false,
+          };
+        };
+
         try {
           // An `*Owned` tool that cleared the gate above delegates to the real
           // action under its own id, with arguments rebuilt from scratch rather
@@ -2692,16 +3488,28 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // where the public tool takes `terminalId` (#12315).
           // `raised` answers the second half of a reveal — whether a window
           // actually came forward — and is vacuously true for everything else.
+          // A global Assistant's reveal of a worker it didn't launch (#16096)
+          // is the owned reveal's dispatch, sent only once the steer's gate
+          // has let the run it names through, and answered the same way.
           const { envelope: dispatched, raised } = assistantEnvelope
             ? { envelope: assistantEnvelope, raised: true }
-            : listPaging || ownedResource?.executor !== "renderer" || ownedResourceId === undefined
-              ? {
-                  envelope: listPaging
-                    ? await collectListPages()
-                    : await dispatchToRenderer(actionId, dispatchArgs),
-                  raised: true,
-                }
-              : await dispatchOwnedResourceAction(ownedResource, ownedResourceId);
+            : globalRevealTerminalId !== undefined
+              ? await deps.globalSteer!.reveal(globalSteerTarget(globalRevealTerminalId), () =>
+                  dispatchOwnedResourceAction(
+                    ownedResource as RendererOwnedResourceTool,
+                    globalRevealTerminalId!
+                  )
+                )
+              : listPaging ||
+                  ownedResource?.executor !== "renderer" ||
+                  ownedResourceId === undefined
+                ? {
+                    envelope: listPaging
+                      ? await collectListPages()
+                      : await dispatchToRenderer(actionId, dispatchArgs),
+                    raised: true,
+                  }
+                : await dispatchOwnedResourceAction(ownedResource, ownedResourceId);
           // A close trashes the panel and its process runs on through the
           // grace, so the answer says what the host saw of each one (#14474).
           // Every route a close takes ends here: renderer, viewless, owned,
@@ -2744,6 +3552,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // — "this session created it" is a fact about the session, not about
           // its privileges.
           recordDispatchOwnership(envelope);
+          // What it closed, so it can wait for those processes to exit after
+          // `terminal.closeOwned` released them (#15728).
+          if (CLOSE_TOOLS.has(actionId)) {
+            noteClosedTerminals({ sessionId, sessionStore, ownershipOwner }, envelope, (id) =>
+              closeGenerations.get(id)
+            );
+          }
           settleRestartHold?.(envelope.result.ok);
           settleRestartHold = undefined;
           // Hand the notice what the action reported: the send's submission
@@ -2758,7 +3573,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             envelope.result.ok &&
             NOTIFY_PROMPT_TOOLS.has(actionId) &&
             terminalNotify !== undefined &&
-            tier !== "external"
+            tier !== "external" &&
+            !isHeldReceipt(envelope.result.result)
           ) {
             // A prompt without `notify` still makes the pane's undelivered
             // notice about the target stale: typed after this prompt, it
@@ -2768,6 +3584,16 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             if (pane !== null && targetId !== undefined) terminalNotify.supersede(pane, targetId);
           }
           confirmationDecision = confirmationDecision ?? envelope.confirmationDecision;
+          // A relayed call the Shell ran under its own assistant's "Never ask"
+          // (#15698): that, not an unasked run, is what its audit says. Only a
+          // relayed session's: no other caller's view speaks for its preference.
+          if (
+            relayCallId !== undefined &&
+            dispatchAuthorization === undefined &&
+            envelope.authorization === "skip-preference"
+          ) {
+            dispatchAuthorization = "skip-preference";
+          }
           // "Allow for this session" on the ordinary confirm dialog of a pane's
           // own-tier tool (#12692). The bridge only reports the scope for an
           // approval that offered it; the pane check here is the one that
@@ -2800,86 +3626,76 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             return buildToolError({ code: "EXECUTION_ERROR", message });
           }
         } catch (err) {
-          outcome = { kind: "throw", error: err };
-          // Checked before the binding failure it extends: the workspace is
-          // reachable in principle, it just has nothing attached that could run
-          // this action, and the host has no form of it to run alone.
-          if (err instanceof NoFrontendAttachedError) {
-            const statusHint =
-              actionId === TERMINAL_GET_STATUS_TOOL
-                ? ` Status for specific terminals can still be read without one — call '${actionId}' again with an explicit 'terminalIds' array.`
-                : "";
-            return buildToolError({
-              code: NO_FRONTEND_ATTACHED_CODE,
-              message: `${err.message}${statusHint}`,
-              retriable: true,
-            });
-          }
-          if (err instanceof RelayDrivenElsewhereError) {
+          // The steer's gate refusing a reveal (#16096): its own words, as a
+          // refused steer's are.
+          if (globalRevealTerminalId !== undefined && err instanceof AssistantTargetError) {
+            outcome = {
+              kind: "result",
+              value: {
+                ok: false,
+                error: { code: auditCodeForAssistantRefusal(err.code), message: err.message },
+              },
+            };
             return buildToolError({ code: err.code, message: err.message });
           }
-          if (err instanceof McpRouteBindingError) {
-            return buildToolError({
-              code: bindingGoneCode(err),
-              message: err.message,
-              // Instance-derived: a workspace the user can reopen is retriable,
-              // a destroyed pinned view never is, and both report this code.
-              retriable: err.retriable,
+          outcome = { kind: "throw", error: err };
+          const failure = dispatchFailure(err);
+          // A retirement that already closed panes says so whatever the
+          // delete threw, so a caller never sees a bare failure that hides
+          // what changed (#15737). The cause is the plain answer below.
+          if (
+            retirement?.progress !== undefined &&
+            retirementChangedSomething(retirement.progress)
+          ) {
+            const error = retirementStopped(retirement.worktreeId, "delete", retirement.progress, {
+              code: failure.error.code as ActionError["code"],
+              message: failure.error.message,
+              ...(failure.error.details !== undefined ? { details: failure.error.details } : {}),
             });
+            outcome = { kind: "result", value: { ok: false, error } };
+            return buildToolError(error);
           }
-          // No live renderer to route the dispatch through (#10640). Every
-          // unconfirmed `danger: "confirm"` dispatch is forwarded to the
-          // renderer bridge so the human can approve it in a native
-          // ConfirmDialog (#11342); with no Daintree window open,
-          // `getActiveProjectWebContents` throws `RendererBridgeUnavailableError`.
-          if (err instanceof RendererBridgeUnavailableError) {
-            // Confirm-gated tool we KNOW needs human approval (manifest entry
-            // resolved): the action could not be confirmed, not that it failed
-            // mid-execution. Reclassify to CONFIRMATION_REQUIRED (audited as
-            // `confirmation-pending`, never retriable) with a machine-readable
-            // `confirmationChannel: "unavailable"` so an autonomous conductor
-            // can tell "needs a human I can't reach" apart from a transient
-            // error. Scoped to unconfirmed dispatches so an already-approved
-            // call that fails for any other reason isn't mislabelled.
-            if (entry?.danger === "confirm" && !dispatchConfirmed) {
-              const message =
-                `Action '${actionId}' requires confirmation, but no Daintree window is open to surface the ` +
-                `approval dialog. The action was not run — a human must approve it in Daintree.`;
-              const value: import("../../../shared/types/actions.js").ActionDispatchResult = {
+          if (failure.confirmationPending) {
+            outcome = {
+              kind: "result",
+              value: {
                 ok: false,
                 error: {
                   code: CONFIRMATION_REQUIRED_CODE,
-                  message,
-                  details: { confirmationChannel: "unavailable" },
+                  message: failure.error.message,
+                  details: failure.error.details,
                 },
-              };
-              outcome = { kind: "result", value };
-              return buildToolError({
-                code: CONFIRMATION_REQUIRED_CODE,
-                message,
-                details: { confirmationChannel: "unavailable" },
-              });
-            }
-            // Either a non-confirm tool, or a cold-cache call whose manifest
-            // entry couldn't be fetched (the manifest itself comes from the
-            // renderer, so `entry` is undefined here and the tool's danger is
-            // unknowable). We must not claim CONFIRMATION_REQUIRED without
-            // knowing the tool is confirm-gated. With Host-mode routing this is
-            // the typed, retriable "no frontend" refusal — a window may open,
-            // locally or from another machine; an unbound session names no
-            // workspace, so there is no project the host could run the action
-            // for on its own. Without it, the retriable EXECUTION_ERROR this
-            // has always been.
-            const message =
-              "No Daintree window is open, so the action surface is unavailable. Retry once a project window is open.";
-            return isMcpHostRoutingEnabled()
-              ? buildToolError({ code: NO_FRONTEND_ATTACHED_CODE, message, retriable: true })
-              : buildToolError({ code: EXECUTION_ERROR_CODE, message });
+              },
+            };
           }
-          return buildToolError({
-            code: EXECUTION_ERROR_CODE,
-            message: formatErrorMessage(err, "Action dispatch failed"),
-          });
+          return buildToolError(failure.error);
+        }
+
+        // A retirement answers for the whole call (#15737): what it closed and
+        // saw exit once the delete succeeded, and what it had already done
+        // when the delete did not.
+        if (retirement?.progress !== undefined) {
+          outcome = {
+            kind: "result",
+            value: outcome.value.ok
+              ? {
+                  ok: true,
+                  result: retirementResult(
+                    retirement.worktreeId,
+                    retirement.progress,
+                    retirement.git
+                  ),
+                }
+              : {
+                  ok: false,
+                  error: retirementStopped(
+                    retirement.worktreeId,
+                    "delete",
+                    retirement.progress,
+                    outcome.value.error
+                  ),
+                },
+          };
         }
 
         if (outcome.value.ok) {
@@ -2909,9 +3725,16 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               dispatchedWorkspace
             );
           }
-          const structuredContent = buildStructuredContent(entry, outcome.value.result);
+          const answered =
+            queuedSendToken !== undefined
+              ? withQueuedSend(outcome.value.result)
+              : outcome.value.result;
+          if (answered !== outcome.value.result) {
+            outcome = { kind: "result", value: { ok: true, result: answered } };
+          }
+          const structuredContent = buildStructuredContent(entry, answered);
           return withResolvedWorkspace(
-            buildToolCallResult(outcome.value.result, {
+            buildToolCallResult(answered, {
               ...(structuredContent ? { structuredContent } : {}),
             }),
             dispatchedWorkspace
@@ -2963,6 +3786,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       sessionScopedOwner &&
       (actionId === AGENT_LAUNCH_TOOL ||
         actionId === "agent.launchMany" ||
+        actionId === AGENT_LAUNCH_IN_NEW_WORKTREE_TOOL ||
         (actionId === "terminal.list" && ownedOnly));
     const answerPromise: Promise<CallToolResultLike> = notesOwnership
       ? repliedPromise.then((result) =>
@@ -2985,7 +3809,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         dedupKey,
         argsHash!,
         answerPromise,
-        () => outcome?.kind === "result" && outcome.value.ok
+        // The one-call launch's partial answer is kept as well: it names a
+        // worktree that exists, and a retry run again would make another.
+        () =>
+          outcome?.kind === "result" &&
+          (outcome.value.ok ||
+            (actionId === AGENT_LAUNCH_IN_NEW_WORKTREE_TOOL &&
+              outcome.value.error.code === "PARTIAL_SUCCESS"))
       );
     }
 

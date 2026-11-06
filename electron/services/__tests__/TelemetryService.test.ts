@@ -1922,6 +1922,28 @@ describe("consent withdrawn mid-session (#12404)", () => {
     expect(targets).toEqual([]);
   });
 
+  it("instructs the Sentry backend never to infer a main-process user's IP address", async () => {
+    const mod = await loadFreshModule();
+    await mod.initializeTelemetry();
+    const { BrowserClient } = await vi.importActual<typeof import("@sentry/electron/renderer")>(
+      "@sentry/electron/renderer"
+    );
+    const client = new BrowserClient({
+      dsn: "https://public@example.invalid/1",
+      dataCollection: (
+        sentryInitMock.mock.calls[0]![0] as { dataCollection?: { userInfo?: boolean } }
+      ).dataCollection,
+      integrations: [],
+      stackParser: () => [],
+      transport: () => ({ send: async () => ({}), flush: async () => true }),
+    });
+    try {
+      expect(client.getOptions()._metadata?.sdk?.settings?.infer_ip).toBe("never");
+    } finally {
+      await client.close();
+    }
+  });
+
   it("does not initialize Sentry when consent is withdrawn while the SDK module loads", async () => {
     setPrivacy({ telemetryLevel: "off", hasSeenPrompt: true });
     const mod = await loadFreshModule();

@@ -23,6 +23,7 @@ import {
   outsideDraftWrite,
   readImageChipPaths,
 } from "../inputEditorExtensions";
+import { composerDraftGeneration } from "../inputEditorExtensions/composerDraftGeneration";
 
 const views: EditorView[] = [];
 
@@ -160,6 +161,34 @@ describe("composer history", () => {
     type(view, 3, " new");
     undoKey(view);
     expect(view.state.doc.toString()).toBe("old");
+  });
+
+  // An attachment still on its way checks this to learn its draft is gone
+  // (#15599), and an empty draft just sent has nothing to undo either.
+  it("starts a new draft on every clear, with or without steps to drop, and not on edits", () => {
+    const view = mount("");
+    const bare = new EditorView({
+      parent: document.createElement("div"),
+      state: EditorState.create({ doc: "" }),
+    });
+    views.push(bare);
+    const first = composerDraftGeneration(view);
+
+    type(view, 0, "typed");
+    expect(composerDraftGeneration(view)).toBe(first);
+
+    clearComposerHistory(view);
+    const second = composerDraftGeneration(view);
+    expect(second).not.toBe(first);
+    clearComposerHistory(view);
+    expect(composerDraftGeneration(view)).not.toBe(second);
+
+    const bareBefore = composerDraftGeneration(bare);
+    const viewBefore = composerDraftGeneration(view);
+    clearComposerHistory(bare);
+    expect(composerDraftGeneration(bare)).not.toBe(bareBefore);
+    // Each composer's own: another one's send leaves this draft alone.
+    expect(composerDraftGeneration(view)).toBe(viewBefore);
   });
 });
 

@@ -252,6 +252,11 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     mode: "modal" as const,
   };
 
+  const threeRowProps = {
+    ...defaultProps,
+    results: [...defaultProps.results, makeProject({ id: "p3", name: "Project 3" })],
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     modifierKeysState.meta = false;
@@ -290,9 +295,13 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
   });
 
   it("moves the selection when ArrowUp is pressed on the results region", () => {
-    render(<ProjectSwitcherPalette {...defaultProps} />);
+    // From the second of three rows, so the step up is the short way round:
+    // on two rows up and down land on the same row and the palette steps the
+    // hook forward.
+    render(<ProjectSwitcherPalette {...threeRowProps} selectedIndex={1} />);
     fireEvent.keyDown(screen.getByTestId("palette-body"), { key: "ArrowUp" });
     expect(defaultProps.onSelectPrevious).toHaveBeenCalledTimes(1);
+    expect(defaultProps.onSelectNext).not.toHaveBeenCalled();
   });
 
   it("confirms the active project when Enter is pressed on the results region", () => {
@@ -343,7 +352,7 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
   });
 
   it("still calls onSelectPrevious on ArrowUp", () => {
-    render(<ProjectSwitcherPalette {...defaultProps} />);
+    render(<ProjectSwitcherPalette {...threeRowProps} selectedIndex={1} />);
     const input = screen.getByTestId("palette-input");
     fireEvent.keyDown(input, { key: "ArrowUp" });
     expect(defaultProps.onSelectPrevious).toHaveBeenCalledTimes(1);
@@ -381,7 +390,7 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     const footer = screen.getByTestId("palette-footer");
     expect(footer.textContent).not.toContain("Background");
     expect(footer.textContent).not.toContain("⌥↵");
-    expect(footer.textContent).toContain("Switch");
+    expect(footer.textContent).toContain("to switch");
   });
 
   it("footer never shows a background hint when Alt is held (dropdown mode)", () => {
@@ -390,7 +399,7 @@ describe("ProjectSwitcherPalette keyboard navigation", () => {
     const footer = screen.getByTestId("palette-footer");
     expect(footer.textContent).not.toContain("Background");
     expect(footer.textContent).not.toContain("⌥↵");
-    expect(footer.textContent).toContain("Switch");
+    expect(footer.textContent).toContain("to switch");
   });
 
   it("closes on Escape in modal mode, where the input owns the key", () => {
@@ -613,8 +622,8 @@ describe("ProjectSwitcherPalette with a project open in another window (#12597)"
     );
 
     const footer = screen.getByTestId("palette-footer");
-    expect(footer.textContent).toContain("Go to window");
-    expect(footer.textContent).not.toContain("Switch");
+    expect(footer.textContent).toContain("to go to window");
+    expect(footer.textContent).not.toContain("to switch");
   });
 
   it("says Go to window, not New window, while ⌘ is held", () => {
@@ -632,8 +641,8 @@ describe("ProjectSwitcherPalette with a project open in another window (#12597)"
     // Linux press — never a literal ⌘.
     expect(footer.textContent).toContain("Ctrl+↵");
     expect(footer.textContent).not.toContain("⌘");
-    expect(footer.textContent).toContain("Go to window");
-    expect(footer.textContent).not.toContain("New window");
+    expect(footer.textContent).toContain("to go to window");
+    expect(footer.textContent).not.toContain("new window");
   });
 
   it("says Switch, not New window, for a project this window already holds", () => {
@@ -647,8 +656,8 @@ describe("ProjectSwitcherPalette with a project open in another window (#12597)"
     );
 
     const footer = screen.getByTestId("palette-footer");
-    expect(footer.textContent).toContain("Switch");
-    expect(footer.textContent).not.toContain("New window");
+    expect(footer.textContent).toContain("to switch");
+    expect(footer.textContent).not.toContain("new window");
   });
 
   it("says New window, and opens one, for a project this window only keeps cached (#13274)", () => {
@@ -663,7 +672,7 @@ describe("ProjectSwitcherPalette with a project open in another window (#12597)"
       />
     );
 
-    expect(screen.getByTestId("palette-footer").textContent).toContain("New window");
+    expect(screen.getByTestId("palette-footer").textContent).toContain("to open in new window");
     fireEvent.keyDown(screen.getByTestId("palette-input"), { key: "Enter", metaKey: true });
     expect(onSelectNewWindow).toHaveBeenCalledWith(row);
   });
@@ -680,7 +689,7 @@ describe("ProjectSwitcherPalette with a project open in another window (#12597)"
       />
     );
 
-    expect(screen.getByTestId("palette-footer").textContent).toContain("New window");
+    expect(screen.getByTestId("palette-footer").textContent).toContain("to open in new window");
     fireEvent.keyDown(screen.getByTestId("palette-input"), { key: "Enter", metaKey: true });
     expect(onSelectNewWindow).toHaveBeenCalledWith(row);
   });
@@ -690,7 +699,7 @@ describe("ProjectSwitcherPalette with a project open in another window (#12597)"
     modifierKeysState.meta = true;
     render(<ProjectSwitcherPalette {...baseProps} results={[makeProject()]} />);
 
-    expect(screen.getByTestId("palette-footer").textContent).not.toContain("New window");
+    expect(screen.getByTestId("palette-footer").textContent).not.toContain("new window");
   });
 
   it("leaves routing to main: the keys dispatch exactly as before", () => {
@@ -973,9 +982,12 @@ describe("getNewWindowMenuLabel (#12597)", () => {
     const row = projectRow({ isOpenInThisWindow: true, openInOtherWindow: "cached" });
     expect(getProjectSwitcherEnterHint(row, true, true, true)).toEqual({
       keys: "↵",
-      label: "Switch",
+      label: "to switch",
     });
-    expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({ keys: "↵", label: "Switch" });
+    expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({
+      keys: "↵",
+      label: "to switch",
+    });
   });
 
   it("offers nothing for a project this window shows or is activating", () => {
@@ -1007,11 +1019,11 @@ describe("getProjectSwitcherEnterHint (#12597)", () => {
   it("keeps Switch and New window for a project nobody holds", () => {
     expect(getProjectSwitcherEnterHint(projectRow(), false, true)).toEqual({
       keys: "↵",
-      label: "Switch",
+      label: "to switch",
     });
     expect(getProjectSwitcherEnterHint(projectRow(), true, true, true)).toEqual({
       keys: "⌘↵",
-      label: "New window",
+      label: "to open in new window",
     });
   });
 
@@ -1029,11 +1041,11 @@ describe("getProjectSwitcherEnterHint (#12597)", () => {
     const row = projectRow({ openInOtherWindow: "foreground" });
     expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({
       keys: "↵",
-      label: "Go to window",
+      label: "to go to window",
     });
     expect(getProjectSwitcherEnterHint(row, true, true, true)).toEqual({
       keys: "⌘↵",
-      label: "Go to window",
+      label: "to go to window",
     });
   });
 
@@ -1041,25 +1053,28 @@ describe("getProjectSwitcherEnterHint (#12597)", () => {
     const row = projectRow({ openInOtherWindow: "cached" });
     expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({
       keys: "↵",
-      label: "Switch",
+      label: "to switch",
     });
     expect(getProjectSwitcherEnterHint(row, true, true, true)).toEqual({
       keys: "⌘↵",
-      label: "New window",
+      label: "to open in new window",
     });
   });
 
   it("says Switch on either key for a project this window shows or is activating", () => {
     const row = projectRow({ isOpenInThisWindow: true });
-    expect(getProjectSwitcherEnterHint(row, true, true)).toEqual({ keys: "↵", label: "Switch" });
+    expect(getProjectSwitcherEnterHint(row, true, true)).toEqual({ keys: "↵", label: "to switch" });
   });
 
   it("switches here, or takes it to a new window, for a project this window keeps cached", () => {
     const row = projectRow({ isOpenInThisWindow: true, isCachedInThisWindow: true });
-    expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({ keys: "↵", label: "Switch" });
+    expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({
+      keys: "↵",
+      label: "to switch",
+    });
     expect(getProjectSwitcherEnterHint(row, true, true, true)).toEqual({
       keys: "⌘↵",
-      label: "New window",
+      label: "to open in new window",
     });
   });
 
@@ -1067,33 +1082,37 @@ describe("getProjectSwitcherEnterHint (#12597)", () => {
     // Each of these falls through to the plain switch in the keyboard handler.
     expect(getProjectSwitcherEnterHint(projectRow(), true, false)).toEqual({
       keys: "↵",
-      label: "Switch",
+      label: "to switch",
     });
+    // Enter on the current project closes the palette, on either key.
     expect(getProjectSwitcherEnterHint(projectRow({ isActive: true }), true, true)).toEqual({
       keys: "↵",
-      label: "Switch",
+      label: "to close",
     });
     // A missing project's Enter opens the relocation dialog, and says so.
     expect(getProjectSwitcherEnterHint(projectRow({ isMissing: true }), true, true)).toEqual({
       keys: "↵",
-      label: "Locate",
+      label: "to locate",
     });
     expect(getProjectSwitcherEnterHint(presenceScratchRow, true, true)).toEqual({
       keys: "↵",
-      label: "Switch",
+      label: "to switch",
     });
   });
 
   it("never marks the current row as elsewhere, whatever presence says", () => {
     const row = projectRow({ isActive: true, openInOtherWindow: "foreground" });
-    expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({ keys: "↵", label: "Switch" });
+    expect(getProjectSwitcherEnterHint(row, false, true)).toEqual({
+      keys: "↵",
+      label: "to close",
+    });
   });
 
   it("keeps ↵ for an owned row when there is no new-window handler", () => {
     const row = projectRow({ openInOtherWindow: "foreground" });
     expect(getProjectSwitcherEnterHint(row, true, false)).toEqual({
       keys: "↵",
-      label: "Go to window",
+      label: "to go to window",
     });
   });
 });

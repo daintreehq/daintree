@@ -43,6 +43,7 @@ import {
   type FileBrowserPanelData,
 } from "@shared/types/panel";
 import { isForegroundDispatch } from "./dispatchSource";
+import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
 import { PANEL_LIMIT_ERROR_SUFFIX } from "./panelLimitError";
 import { paginate } from "@shared/utils/boundedOutput";
 import { GIT_PAGE_LIMIT_DEFAULT, GIT_PAGE_LIMIT_MAX } from "@shared/config/gitReadLimits";
@@ -383,16 +384,27 @@ export const worktreeContextActionRuns: {
   },
 
   "worktree.inject": async (args, ctx, callbacks) => {
-    const hasFocusedTerminal = Boolean(ctx.focusedTerminalId);
-    if (!hasFocusedTerminal) {
+    const focusedTerminalId = ctx.focusedTerminalId;
+    if (!focusedTerminalId) {
       throw new Error("No focused terminal to inject into");
+    }
+    // As `terminal.inject`: only a caller that reads the result needs the
+    // refusal here; a person sees the injection's own error surface. The
+    // guard reads panelStore, so it is imported lazily like the dialogs above.
+    if (!isForegroundDispatch(ctx.dispatchSource)) {
+      const { INPUT_LOCKED_INJECTION_REFUSAL, isTerminalInputLocked } =
+        await import("@/services/contextInjectionGuard");
+      if (isTerminalInputLocked(focusedTerminalId)) {
+        throw new UnactionableTargetError(INPUT_LOCKED_INJECTION_REFUSAL);
+      }
     }
     const worktreeId = args?.worktreeId;
     const targetWorktreeId = worktreeId ?? ctx.focusedWorktreeId ?? ctx.activeWorktreeId;
     if (!targetWorktreeId) {
       throw new Error("No worktree selected");
     }
-    callbacks.onInject(targetWorktreeId);
+    // The pane that was checked, not whatever holds focus when the hook runs.
+    callbacks.onInject(targetWorktreeId, focusedTerminalId);
   },
 
   "worktree.setLabelColor": async (args) => {

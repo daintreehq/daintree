@@ -17,6 +17,7 @@ import {
   type PanePluginServer,
 } from "../../../services/McpPaneConfigService.js";
 import { helpSessionService } from "../../../services/HelpSessionService.js";
+import { peekDriveLeaseService } from "../../../services/DriveLeaseService.js";
 import { isAssistantTerminalRecord } from "../../../services/assistantTerminal.js";
 import {
   findUntouchedClaudeSession,
@@ -34,6 +35,7 @@ import {
   ListBookmarksPayloadSchema,
 } from "../../../schemas/ipc.js";
 import { store } from "../../../store.js";
+import { decisionsHostServes, loadDecisionsModule } from "../../../window/serviceRefs.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { armSpawnConfirmation, settleSpawnConfirmation } from "./spawnConfirmation.js";
 import type {
@@ -96,6 +98,12 @@ interface RecipeSpawnBatchAdmission {
 }
 
 const recipeSpawnBatchAdmissions = new Map<string, RecipeSpawnBatchAdmission>();
+
+/** Whether the sender still drives the project, as a submit to it requires. */
+function isProjectDriver(ctx: IpcContext, projectId: string): boolean {
+  const lease = peekDriveLeaseService();
+  return !lease || !ctx.endpoint || lease.isDriving(projectId, ctx.endpoint);
+}
 
 function claimRecipeSpawnBatchAdmission(
   options: ValidatedTerminalSpawnOptions
@@ -175,6 +183,54 @@ function wireAssistantPluginActivity(mcpServerService: McpServerSingleton): void
   );
 }
 
+/**
+ * A launch of `agentId` gets `ask_human` (#16223). Under the owner's own
+ * switch, only an agent the owner switched on in Settings does, whatever an
+ * old Host record says. An enrolled Host serves its panes as its enrollment
+ * says: the owner's choice of agents never reaches it, and it has no Settings
+ * of its own to choose in. Read from the saved value as it stands, like the
+ * switch itself: every write of it goes through main's sanitiser, and nothing
+ * of Decisions joins the startup graph to read it.
+ */
+function decisionsServesAgent(
+  settings: unknown,
+  hostRecord: unknown,
+  agentId: string | undefined
+): boolean {
+  const owner = (typeof settings === "object" && settings !== null ? settings : {}) as {
+    enabled?: unknown;
+    askHumanAgents?: unknown;
+  };
+  if (owner.enabled !== true) return decisionsHostServes(hostRecord);
+  return (
+    agentId !== undefined &&
+    Array.isArray(owner.askHumanAgents) &&
+    owner.askHumanAgents.includes(agentId)
+  );
+}
+
+/**
+ * The listener port for a launch's `daintree-decisions` entry (#16012), or
+ * null for none. The setting, and on an enrolled Remote Host its record
+ * (#16022), are read before anything of Decisions is imported, so with
+ * Decisions off, or for an agent not switched on, this loads nothing and the
+ * launch is exactly what it was.
+ */
+async function resolveDecisionsLaunchPort(agentId: string | undefined): Promise<number | null> {
+  if (!decisionsServesAgent(store.get("decisions"), store.get("decisionsHost"), agentId)) {
+    return null;
+  }
+  try {
+    const decisions = await loadDecisionsModule(
+      () => import("../../../services/decisions/index.js")
+    );
+    return (await decisions?.decisionsLaunchPort()) ?? null;
+  } catch (err) {
+    console.warn("[TerminalSpawn] Couldn't reach Decisions; launching without it:", err);
+    return null;
+  }
+}
+
 function wirePaneTokenResolvers(mcpServerService: McpServerSingleton): void {
   mcpServerService.setPaneWorkspaceBindingResolver((token) =>
     mcpPaneConfigService.getPaneWorkspaceBindingForToken(token)
@@ -184,6 +240,9 @@ function wirePaneTokenResolvers(mcpServerService: McpServerSingleton): void {
   );
   mcpServerService.setPaneTerminalResolver((token) =>
     mcpPaneConfigService.getPaneIdForToken(token)
+  );
+  mcpServerService.setWorkerPrincipalResolver((paneId) =>
+    mcpPaneConfigService.getLaunchPrincipal(paneId)
   );
   mcpPaneConfigService.setOwnershipPrincipalRevokedListener((principal) =>
     mcpServerService.revokePaneBearer(principal)
@@ -236,11 +295,27 @@ import {
   isWindowsAgentExecutableFor,
   resolveWindowsAgentExecutable,
   type WindowsAgentExecutable,
+  type WindowsClaudeResumeChoice,
 } from "../../../utils/windowsAgentLaunch.js";
 import { windowsSystemTool } from "../../../utils/windowsExecutable.js";
 import { MAX_TERMINALS_PER_RECIPE_ADMISSION_BATCH } from "../../../../shared/utils/recipeSanitizer.js";
-import { buildCommandLaunchShell } from "./commandLaunch.js";
+import {
+  buildCommandLaunchShell,
+  buildRelayRemovalLaunch,
+  relayRemovalEnv,
+} from "./commandLaunch.js";
+import { scheduledRunForRecord } from "../../../../shared/utils/scheduledRunProvenance.js";
+import { admitScheduledSpawn } from "../../../services/scheduledRuns/scheduledRunAdmission.js";
 import { isHostThrowawayWorkspaceId } from "../../../../shared/config/hostThrowaway.js";
+import {
+  isDecisionsRemoveTerminalId,
+  isDecisionsUpdateTerminalId,
+} from "../../../../shared/config/terminalScreenPersistence.js";
+import { parseRelayRemovalCommand } from "../../../../shared/config/relayRemoval.js";
+import {
+  noteRelayRemovalLaunch,
+  spoilRelayRemovalLaunch,
+} from "../../../services/pty/relayRemovalLaunches.js";
 
 // Longest a Windows command launch waits for the default shell's PATH search,
 // matching the pty host's wait before it reports ready.
@@ -713,12 +788,47 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       launchAgentId === "claude"
         ? resolvePaneClaudeProjectsRoot({ shell: quotingShell, env: spawnEnv })
         : undefined;
-    if (claudePaneStore !== undefined) rememberClaudePaneStore(id, claudePaneStore);
     const untouchedSessionId = await findUntouchedClaudeSession(safeCommand, launchAgentId, {
       cwd,
       agentSessionId: validatedOptions.agentSessionId,
       projectsRoot: claudePaneStore ?? null,
     }).catch(() => undefined);
+    // A caller resuming one exact conversation would otherwise get an empty
+    // one wearing its id (#16019). Refused before anything is minted or armed.
+    if (untouchedSessionId && validatedOptions.exactResume === true) {
+      throw new Error(
+        `Terminal ${id.slice(0, 8)} has no Claude conversation to resume; refusing a fresh one under its id`
+      );
+    }
+    if (claudePaneStore !== undefined) rememberClaudePaneStore(id, claudePaneStore);
+
+    // Expand `${settings:*}` templates a plugin agent embedded in its command
+    // or args (e.g. `--token=${settings:apiToken}`). The agent's args were
+    // concatenated into `safeCommand` upstream by `generateAgentCommand`, so the
+    // literal template is sitting in this string. MCP servers already resolve
+    // these at spawn (PluginMcpSupervisor.resolveContribution); the agent path
+    // had no equivalent, so the unexpanded token reached the PTY and the agent
+    // failed to authenticate (#10619). The cheap `includes` pre-check keeps a
+    // plain-shell or built-in-agent spawn off the lazy PluginService load
+    // entirely; only a plugin-contributed agent with a template pays for it.
+    // An unconfigured setting throws `SettingTemplateError` (surfaced as the
+    // spawn IPC's rejection) rather than leaking a literal `${...}` to the wire.
+    // Resolved before any MCP wiring is minted, so a failure here leaves
+    // nothing to revoke.
+    if (launchAgentId && safeCommand.includes("${settings:")) {
+      const pluginId = getPluginIdForAgent(launchAgentId);
+      if (pluginId) {
+        const pluginService = await getPluginService();
+        safeCommand = await substituteSettingsTemplates(safeCommand, async (settingId) => {
+          const value = await pluginService.resolveSettingTemplate(pluginId, settingId);
+          // `resolveSettingTemplate` returns "" for an unset/missing setting;
+          // treat that as unresolved so the command never spawns with a blank
+          // secret silently swapped in.
+          if (!value) throw new SettingTemplateError(pluginId, settingId);
+          return value;
+        });
+      }
+    }
 
     const launchMcp =
       typeof launchAgentId === "string"
@@ -947,10 +1057,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // for this project, each with a grant minted for this launch alone. Those
       // are independent of the Daintree tier: a project with Daintree MCP "off"
       // still gets its plugin endpoints, with no Daintree entry and no pane
-      // token. The grants are keyed by this terminal id, so every path that
-      // revokes the pane config (PTY exit, sync and async spawn failure, a
-      // re-prepare on restart) revokes them too. Every await — settings, the
-      // PluginService load, server readiness — happens before
+      // token. The Decisions entry is independent of the tier too. The grants
+      // and bearers are keyed by this terminal id, so every path that revokes
+      // the pane config (PTY exit, sync and async spawn failure, a re-prepare
+      // on restart) revokes them too. Every await — settings, the
+      // PluginService load, Decisions, server readiness — happens before
       // `preparePaneConfig` mints anything, per the binding rule above.
       let preparedForThisLaunch = false;
       let launchPluginServers: PanePluginServer[] = [];
@@ -1011,8 +1122,17 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
             requiredPluginTools
           );
         }
+        // With Decisions on, a launch of an agent switched on for it gets
+        // `/mcp/decisions` with a bearer of its own, whatever the tier
+        // (#16012, #16223). The Assistant asks through its own tools, never
+        // as an agent pane.
+        const decisionsPort = isHelpTerminal
+          ? null
+          : await resolveDecisionsLaunchPort(launchAgentId);
+        let mcpServerService: McpServerSingleton | null = null;
+        let controlPort: number | null = null;
         if (tier !== "off" || pluginServers.length > 0) {
-          const mcpServerService = await getMcpServerService();
+          mcpServerService = await getMcpServerService();
           let ready: boolean;
           try {
             ready = mcpServerService.isRunning || (await mcpServerService.ensureReady());
@@ -1033,63 +1153,82 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
             );
           }
           const port = mcpServerService.currentPort;
-          if (ready && port) {
-            const prepared = await mcpPaneConfigService.preparePaneConfig({
-              paneId: id,
-              port,
-              tier,
-              injection: launchMcp,
-              inheritedEnv: { ...process.env, ...(spawnEnv ?? {}) },
-              cwd,
-              ...(pluginServers.length > 0
-                ? {
-                    plugin: {
-                      projectId: resolvedProject.id,
-                      servers: pluginServers,
-                      launchAgentIdHint: launchAgentId,
-                      isEligible: isPluginMcpServerStillEligible(resolvedProject.id),
-                    },
-                  }
-                : {}),
-            });
-            if (!prepared) {
-              requiredPluginToolStatuses = failUnpreparedPluginTools(
-                requiredPluginToolStatuses,
-                pluginServers,
-                resolvedProject.id
-              );
+          if (ready && port) controlPort = port;
+        }
+        // One listener serves every route, so the Decisions entry shares the
+        // control surface's port when it has one. A listener open for
+        // Decisions alone serves neither the control surface nor a plugin.
+        const launchPort = controlPort ?? decisionsPort;
+        // Already loaded by the route's hold; it takes the revocation notice
+        // for a Decisions bearer as for a control one.
+        if (decisionsPort !== null) mcpServerService ??= await getMcpServerService();
+        if (launchPort !== null) {
+          const prepared = await mcpPaneConfigService.preparePaneConfig({
+            paneId: id,
+            port: launchPort,
+            tier: controlPort !== null ? tier : "off",
+            injection: launchMcp,
+            inheritedEnv: { ...process.env, ...(spawnEnv ?? {}) },
+            cwd,
+            ...(controlPort !== null && pluginServers.length > 0
+              ? {
+                  plugin: {
+                    projectId: resolvedProject.id,
+                    servers: pluginServers,
+                    launchAgentIdHint: launchAgentId,
+                    isEligible: isPluginMcpServerStillEligible(resolvedProject.id),
+                  },
+                }
+              : {}),
+            ...(decisionsPort !== null ? { decisions: { workspaceId: resolvedProject.id } } : {}),
+          });
+          // Read as if Decisions weren't there: a config carrying neither
+          // Daintree's control entry nor a plugin grant handed no plugin over.
+          if (!prepared || (prepared.token === null && prepared.pluginServerKeys.length === 0)) {
+            requiredPluginToolStatuses = failUnpreparedPluginTools(
+              requiredPluginToolStatuses,
+              pluginServers,
+              resolvedProject.id
+            );
+          }
+          if (prepared) {
+            preparedForThisLaunch = true;
+            if (prepared.args.length > 0) {
+              safeCommand = `${safeCommand} ${prepared.args.map((arg) => quoteCommandArg(arg, quotingShell)).join(" ")}`;
             }
-            if (prepared) {
-              preparedForThisLaunch = true;
-              if (prepared.args.length > 0) {
-                safeCommand = `${safeCommand} ${prepared.args.map((arg) => quoteCommandArg(arg, quotingShell)).join(" ")}`;
-              }
-              if (Object.keys(prepared.env).length > 0) {
-                spawnEnv = mergeLaunchEnv(spawnEnv ?? {}, prepared.env);
-              }
-              if (prepared.token !== null) {
-                // Bind the bearer to the workspace this pane was launched in, so
-                // its MCP session acts there for its whole life instead of on
-                // whichever window has focus when a call lands (#12486).
-                // Registered before this IPC resolves, because the CLI's first
-                // handshake can race ahead of anything later. Revoked with the token on PTY exit.
-                wirePaneTokenResolvers(mcpServerService);
-                mcpPaneConfigService.registerPaneWorkspaceBinding(prepared.token, {
-                  workspaceId: resolvedProject.id,
-                  ...(launchViewWebContentsId !== null
-                    ? { launchWebContentsId: launchViewWebContentsId }
-                    : {}),
-                  ...(launchActionContext !== undefined
-                    ? { actionContext: launchActionContext }
-                    : {}),
-                  ...(tier === "full" && projSettings.daintreeMcpSkipConfirmations === true
-                    ? { skipConfirmations: true }
-                    : {}),
-                });
-                // Every format's hook for the orchestration bearer, whether or
-                // not the agent reads it from here.
-                spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_MCP_TOKEN: prepared.token };
-              }
+            if (Object.keys(prepared.env).length > 0) {
+              spawnEnv = mergeLaunchEnv(spawnEnv ?? {}, prepared.env);
+            }
+            // Revoking either bearer drops what the launch's principal owns,
+            // a queued Decisions answer included, so the listener is wired
+            // for a Decisions-only pane too.
+            if (
+              mcpServerService !== null &&
+              (prepared.token !== null || prepared.decisionsToken !== null)
+            ) {
+              wirePaneTokenResolvers(mcpServerService);
+            }
+            if (prepared.token !== null) {
+              // Bind the bearer to the workspace this pane was launched in, so
+              // its MCP session acts there for its whole life instead of on
+              // whichever window has focus when a call lands (#12486).
+              // Registered before this IPC resolves, because the CLI's first
+              // handshake can race ahead of anything later. Revoked with the token on PTY exit.
+              mcpPaneConfigService.registerPaneWorkspaceBinding(prepared.token, {
+                workspaceId: resolvedProject.id,
+                ...(launchViewWebContentsId !== null
+                  ? { launchWebContentsId: launchViewWebContentsId }
+                  : {}),
+                ...(launchActionContext !== undefined
+                  ? { actionContext: launchActionContext }
+                  : {}),
+                ...(tier === "full" && projSettings.daintreeMcpSkipConfirmations === true
+                  ? { skipConfirmations: true }
+                  : {}),
+              });
+              // Every format's hook for the orchestration bearer, whether or
+              // not the agent reads it from here.
+              spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_MCP_TOKEN: prepared.token };
             }
           }
         }
@@ -1162,32 +1301,6 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       });
     }
 
-    // Expand `${settings:*}` templates a plugin agent embedded in its command
-    // or args (e.g. `--token=${settings:apiToken}`). The agent's args were
-    // concatenated into `safeCommand` upstream by `generateAgentCommand`, so the
-    // literal template is sitting in this string. MCP servers already resolve
-    // these at spawn (PluginMcpSupervisor.resolveContribution); the agent path
-    // had no equivalent, so the unexpanded token reached the PTY and the agent
-    // failed to authenticate (#10619). The cheap `includes` pre-check keeps a
-    // plain-shell or built-in-agent spawn off the lazy PluginService load
-    // entirely; only a plugin-contributed agent with a template pays for it.
-    // An unconfigured setting throws `SettingTemplateError` (surfaced as the
-    // spawn IPC's rejection) rather than leaking a literal `${...}` to the wire.
-    if (launchAgentId && safeCommand.includes("${settings:")) {
-      const pluginId = getPluginIdForAgent(launchAgentId);
-      if (pluginId) {
-        const pluginService = await getPluginService();
-        safeCommand = await substituteSettingsTemplates(safeCommand, async (settingId) => {
-          const value = await pluginService.resolveSettingTemplate(pluginId, settingId);
-          // `resolveSettingTemplate` returns "" for an unset/missing setting;
-          // treat that as unresolved so the command never spawns with a blank
-          // secret silently swapped in.
-          if (!value) throw new SettingTemplateError(pluginId, settingId);
-          return value;
-        });
-      }
-    }
-
     // Resolve spawn shell and args: project overrides > spawn options >
     // defaults. For command launches, run the command through the shell's
     // startup arguments (POSIX `-lic` trap-wrap, PowerShell `-EncodedCommand`,
@@ -1222,18 +1335,70 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       });
     }
 
+    // Loaded only for a launch that asks, so every other spawn pays nothing.
+    const whenDoneLive =
+      validatedOptions.whenDone !== undefined
+        ? await import("../../../services/terminalWhenDone/terminalWhenDoneLive.js")
+        : null;
+
+    // Main can't see a Windows pane's Claude store (its PowerShell profile may
+    // move it), so the lookup above stays unsure there and an untouched pane
+    // would come back as a resume the CLI refuses. The launch script checks the
+    // pane's own store instead and assigns the id afresh when there is nothing
+    // to resume. A caller resuming one exact conversation keeps the refusal.
+    const windowsClaudeResume: WindowsClaudeResumeChoice | undefined = (() => {
+      if (!windowsAgentExecutable || launchAgentId !== "claude" || untouchedSessionId) return;
+      if (claudePaneStore !== null || validatedOptions.exactResume === true) return;
+      const relaunch = relaunchResumeAsAssignedSession(safeCommand, launchAgentId);
+      if (!relaunch) return;
+      if (spawnAgentSessionId && spawnAgentSessionId !== relaunch.sessionId) return;
+      return { assignedCommand: relaunch.command, sessionId: relaunch.sessionId };
+    })();
+
     try {
       // Inside the try: a failed resolution throws here, and the catch below is
       // what releases the pane config and help binding made above.
       const startupCommand = windowsAgentExecutable
-        ? buildWindowsAgentLaunchScript(safeCommand, windowsAgentExecutable, windowsAgentEnv())
+        ? buildWindowsAgentLaunchScript(
+            safeCommand,
+            windowsAgentExecutable,
+            windowsAgentEnv(),
+            windowsClaudeResume
+          )
         : safeCommand;
-      // A host's throwaway run (#14445) ends with its agent, so its exit is the agent's.
-      const commandLaunchShell = buildCommandLaunchShell(
-        startupCommand,
-        quotingShell,
-        isHostThrowawayWorkspaceId(projectId) ? "exit" : "keep-open"
-      );
+      // A relay removal's exit is the only word of how it went (#16202), so it
+      // runs nothing but the pinned CLI, as the PTY's own process. A removal
+      // pane without a command (a restart) is a plain shell.
+      const removalArgv =
+        isDecisionsRemoveTerminalId(id) && startupCommand.length > 0
+          ? parseRelayRemovalCommand(startupCommand)
+          : null;
+      if (isDecisionsRemoveTerminalId(id) && startupCommand.length > 0 && !removalArgv) {
+        throw new AppError({
+          code: "VALIDATION",
+          message: "A relay removal terminal runs only the relay removal",
+        });
+      }
+      // A host's throwaway run (#14445) ends with its agent, so its exit is the
+      // agent's. A Decisions relay update (#16201) ends with its CLI, whose exit
+      // is how Settings learns it finished, so a shell that can't host the
+      // wrapper (fish, nushell, Git Bash on Windows) hands it to sh or the
+      // system PowerShell rather than having it typed in.
+      const relayUpdate = isDecisionsUpdateTerminalId(id);
+      const commandLaunchShell = removalArgv
+        ? buildRelayRemovalLaunch(removalArgv, windowsSystemTool("cmd.exe"))
+        : (buildCommandLaunchShell(
+            startupCommand,
+            quotingShell,
+            isHostThrowawayWorkspaceId(projectId) || relayUpdate ? "exit" : "keep-open"
+          ) ??
+          (relayUpdate
+            ? buildCommandLaunchShell(
+                startupCommand,
+                process.platform === "win32" ? windowsSystemTool("powershell.exe") : "/bin/sh",
+                "exit"
+              )
+            : null));
       const resolvedArgs = commandLaunchShell ? commandLaunchShell.args : projectArgs;
       const spawnShell = commandLaunchShell
         ? commandLaunchShell.shell
@@ -1251,10 +1416,52 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       const postSpawnInput =
         safeCommand.length > 0 && !commandLaunchShell ? `${safeCommand}\r` : undefined;
 
+      // A scheduled run's first spawn registers the run in its history from
+      // these very values, or refuses (#15978). Last before the spawn, with
+      // no await between, so nothing can start a run that wasn't recorded.
+      const scheduledLaunch = admitScheduledSpawn({
+        terminalId: id,
+        projectId,
+        scheduledRun: validatedOptions.scheduledRun,
+        launchAgentId,
+        requestedCwd: validatedOptions.cwd || undefined,
+        cwd,
+        worktreeId: spawnWorktreeId,
+        agentLaunchFlags: validatedOptions.agentLaunchFlags,
+        agentModelId: validatedOptions.agentModelId,
+        agentPresetId: validatedOptions.agentPresetId,
+        agentSessionId: spawnAgentSessionId,
+        handbackCode: validatedOptions.handbackCode,
+        assistant: isHelpLaunch,
+      });
+      // A recipe step's When done (#16172) arms only a fresh agent launch whose
+      // prompt carries the instruction for its code, asked for by the
+      // project's driver: never the Assistant, a scheduled run, a restore, or
+      // an id main has a launch on record for, which a restart or a resume
+      // would be. A live id is refused by the host, which drops the arming.
+      const whenDone =
+        whenDoneLive !== null &&
+        validatedOptions.handbackCode !== undefined &&
+        projectId !== undefined &&
+        typeof launchAgentId === "string" &&
+        safeCommand.length > 0 &&
+        !isHelpLaunch &&
+        !helpSessionService.isHelpTerminal(id) &&
+        validatedOptions.scheduledRun === undefined &&
+        validatedOptions.restore !== true &&
+        getLifecycleLedger().currentGeneration(id) === undefined &&
+        isProjectDriver(ctx, projectId)
+          ? validatedOptions.whenDone
+          : undefined;
       if (pluginToolsLaunchProjectId !== null) {
         recordPluginToolsLaunch(id, pluginToolsLaunchProjectId);
       }
       armSpawnConfirmation(id);
+      // Last before the spawn: what tells the removal's watcher this incarnation
+      // is the removal. A plain shell under the id spoils that for good, so it
+      // can never be taken for the removal's, whichever spawn went first.
+      if (removalArgv) noteRelayRemovalLaunch(id);
+      else if (isDecisionsRemoveTerminalId(id)) spoilRelayRemovalLaunch(id);
       // Every terminal is an interactive shell. Agent launches inject their
       // command after the shell's first prompt renders — never `exec`'d over
       // the shell, so when the agent exits the shell reclaims the foreground.
@@ -1267,7 +1474,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         cols,
         rows,
         command: safeCommand || undefined,
-        env: spawnEnv,
+        env: removalArgv ? relayRemovalEnv(spawnEnv, windowsSystemTool("cmd.exe")) : spawnEnv,
         kind,
         launchAgentId,
         pluginPanelKindId: validatedOptions.pluginPanelKindId,
@@ -1290,6 +1497,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         isAssistantTerminal: isHelpLaunch || helpSessionService.isHelpTerminal(id),
         agentLaunchFlags: validatedOptions.agentLaunchFlags,
         agentModelId: validatedOptions.agentModelId,
+        scheduledRun: validatedOptions.scheduledRun,
         agentSessionId: spawnAgentSessionId,
         worktreeId: spawnWorktreeId,
         agentPresetId: validatedOptions.agentPresetId,
@@ -1297,6 +1505,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         originalAgentPresetId:
           validatedOptions.originalAgentPresetId ?? validatedOptions.agentPresetId,
         handbackCode: validatedOptions.handbackCode,
+        // Only the spawn that registered a scheduled run reports for it
+        // (#15982), and a launch armed with When done reports for its code.
+        ...((scheduledLaunch || whenDone !== undefined) &&
+        validatedOptions.handbackCode !== undefined
+          ? { handbackInstruction: "run" as const }
+          : {}),
         hasFirstPrompt: validatedOptions.hasFirstPrompt,
         // Executed immediately by PtyClient after the spawn message (FIFO on the
         // same channel), so users don't stare at a blank prompt; the shell stays
@@ -1307,6 +1521,19 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // natural exit left on the pane survives it — once the host confirms the
       // spawn (#12433).
       noteTerminalLaunch(id, { command: safeCommand, agentSessionId: spawnAgentSessionId });
+      if (whenDone !== undefined && whenDoneLive && validatedOptions.handbackCode !== undefined) {
+        // No generation means PtyClient refused the spawn without sending it.
+        const launchGeneration = getLifecycleLedger().currentGeneration(id);
+        if (launchGeneration !== undefined && projectId !== undefined) {
+          whenDoneLive.armWhenDoneLaunch({
+            terminalId: id,
+            projectId,
+            launchGeneration,
+            choice: whenDone,
+            code: validatedOptions.handbackCode,
+          });
+        }
+      }
       // The assistant lane's durable resume pointer, written the moment its
       // conversation exists so a quit or a main-process crash can't lose it
       // (#13205). Memory-first, so it is current before any later capture.
@@ -1408,6 +1635,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           agentModelId: info.agentModelId,
           cwd: info.cwd ?? undefined,
           branch,
+          ...scheduledRunForRecord(info),
           // A pane in the trash was the user's close, whatever ended it here.
           ...attributeClose(info, cause),
         },
@@ -1658,6 +1886,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
           cwd: info.cwd ?? undefined,
           branch,
           bookmark,
+          ...scheduledRunForRecord(info),
           ...attributeClose(info, "bookmark"),
         },
         { terminalId, generation }

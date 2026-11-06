@@ -91,7 +91,7 @@ export const config: AgentConfig = {
     },
     troubleshooting: [
       "Restart Daintree after installation to update PATH",
-      "Ensure Node.js and npm are installed first",
+      "For npm-based installation, ensure Node.js and npm are installed first",
       "Verify installation with: claude --version",
       "Run 'claude auth login' to authenticate after installing",
     ],
@@ -150,6 +150,10 @@ export const config: AgentConfig = {
     ],
     promptPatterns: ["^\\s*>\\s*", "^\\s*❯\\s*"],
     promptHintPatterns: ["bypass permissions", "^\\s*>\\s+Try\\b"],
+    // Its generic select footer ("↑/↓ choose · ←/→ change size · enter
+    // confirm · esc not now"), drawn under every unnumbered option list, such
+    // as the autocompact choice, whatever the dialog asks (#16209).
+    choiceDialogFooterPatterns: ["^\\s*↑/↓\\s.*\\benter\\s+(?:to\\s+)?confirm\\b"],
     completionPatterns: [
       // @generated:claude:completionPatterns:start
       "[✢✳✶✻✽●]\\s+\\w+\\s+for\\s+\\d",
@@ -165,11 +169,24 @@ export const config: AgentConfig = {
     fallbackConfidence: 0.75,
     promptConfidence: 0.85,
   },
+  // Captured from 2.1.317 (#16189): the prompt is `❯` and a no-break space at
+  // column 0, framed by `─` rules. The generated suggestion and the static
+  // `Try "…"` placeholder are drawn by one renderer, so only the placeholder's
+  // fixed wording tells them apart.
+  inputSuggestion: {
+    label: "Claude Code",
+    style: "dim",
+    promptRowPattern: "^❯(?:\\s|$)",
+    borderPattern: "^─{3,}",
+    placeholderPatterns: ['^Try ".*"$'],
+  },
   resume: {
     kind: "session-id",
     args: (sessionId: string) => ["--resume", sessionId],
     quitCommand: "/quit",
     sessionIdPattern: "claude --resume ([\\w-]+)",
+    // Interactive and `-p` alike, then exit 1. Verified against Claude Code 2.1.316.
+    refusalPattern: "No conversation found with session ID",
     resumeLatestArgs: ["--continue"],
     // #11782: Claude Code accepts the session id up front, so we mint it at
     // launch instead of scraping it back out at teardown. `--resume` reuses
@@ -189,6 +206,9 @@ export const config: AgentConfig = {
     configPathsAll: [".claude.json", ".claude/config.json"],
     envVar: "ANTHROPIC_API_KEY",
   },
+  // CLAUDE_CONFIG_DIR gives each folder its own settings, history and login,
+  // and keys the macOS Keychain entry to the folder too.
+  account: { kind: "config-folder", envVar: "CLAUDE_CONFIG_DIR", defaultDir: ".claude" },
   prerequisites: [
     {
       tool: "claude",
@@ -213,6 +233,11 @@ export const config: AgentConfig = {
       hint: "Any value stops telemetry and updates, and hides Monitor",
     },
   ],
+  // Each routed template follows its provider's published Claude Code setup.
+  // Claude Code appends `/v1/messages` to ANTHROPIC_BASE_URL, so the base is
+  // never an OpenAI-style `/v1` path. The key goes in ANTHROPIC_AUTH_TOKEN,
+  // left blank for the user to fill; an empty ANTHROPIC_API_KEY keeps an
+  // inherited Anthropic key from taking over where the provider's guide says so.
   providerTemplates: [
     {
       id: "anthropic-native",
@@ -225,6 +250,7 @@ export const config: AgentConfig = {
       description: "Anthropic-compatible via Z.AI.",
       env: {
         ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic",
+        ANTHROPIC_AUTH_TOKEN: "",
         ANTHROPIC_DEFAULT_OPUS_MODEL: "glm-5.2",
         ANTHROPIC_DEFAULT_SONNET_MODEL: "glm-4.7",
         ANTHROPIC_DEFAULT_HAIKU_MODEL: "glm-4.5-air",
@@ -236,29 +262,35 @@ export const config: AgentConfig = {
       name: "OpenRouter",
       description: "Model routing via OpenRouter.",
       env: {
-        ANTHROPIC_BASE_URL: "https://openrouter.ai/api/v1",
+        ANTHROPIC_BASE_URL: "https://openrouter.ai/api",
+        ANTHROPIC_AUTH_TOKEN: "",
+        ANTHROPIC_API_KEY: "",
       },
     },
     {
       id: "deepseek",
       name: "DeepSeek",
-      description: "OpenAI-compatible via DeepSeek.",
+      description: "Anthropic-compatible via DeepSeek.",
       env: {
-        ANTHROPIC_BASE_URL: "https://api.deepseek.com/v1",
+        ANTHROPIC_BASE_URL: "https://api.deepseek.com/anthropic",
+        ANTHROPIC_AUTH_TOKEN: "",
       },
     },
     {
       id: "ollama",
       name: "Ollama (local)",
-      description: "Local models via Ollama — no API key needed.",
+      description: "Local models via Ollama.",
       env: {
-        ANTHROPIC_BASE_URL: "http://localhost:11434/v1",
+        ANTHROPIC_BASE_URL: "http://localhost:11434",
+        // Ollama's documented non-secret placeholder; the local server ignores it.
+        ANTHROPIC_AUTH_TOKEN: "ollama",
+        ANTHROPIC_API_KEY: "",
       },
     },
     {
-      id: "custom-openai",
-      name: "Custom (OpenAI-compatible)",
-      description: "Custom OpenAI-compatible endpoint.",
+      id: "custom-anthropic",
+      name: "Custom (Anthropic-compatible)",
+      description: "Custom endpoint serving the Anthropic Messages API.",
     },
   ],
   completionSources: [

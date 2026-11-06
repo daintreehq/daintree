@@ -1,5 +1,5 @@
 import { getIpcDispatcher } from "../../ipc/dispatcher.js";
-import { LOCAL_CLIENT_ID } from "../../ipc/endpoint.js";
+import { LOCAL_CLIENT_ID, VIEWLESS_ENDPOINT_PREFIX } from "../../ipc/endpoint.js";
 import type { ClientEndpoint, ClientRef } from "../../ipc/endpoint.js";
 import { getLocalClientRef } from "../../ipc/localEndpoint.js";
 import type { SerializedError } from "../../../shared/types/ipc/errors.js";
@@ -16,7 +16,7 @@ import type { SerializedError } from "../../../shared/types/ipc/errors.js";
  */
 function createViewlessEndpoint(projectId: string): ClientEndpoint {
   return {
-    endpointId: `viewless:${projectId}`,
+    endpointId: `${VIEWLESS_ENDPOINT_PREFIX}${projectId}`,
     clientId: LOCAL_CLIENT_ID,
     projectId,
     kind: "local-view",

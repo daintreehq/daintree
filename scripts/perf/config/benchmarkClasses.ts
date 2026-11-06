@@ -16,6 +16,36 @@ export const FOREGROUND_TERMINAL_CLASS: BenchmarkClass = {
     "App-process CPU and device GPU time while a fixture agent launched through the toolbar renders deterministic output in visible WebGL terminals. Real working/waiting transitions are checked using OSC heartbeats. This does not measure model inference, arbitrary live-agent detection accuracy, other applications, or WindowServer's compositing cost. GPU time is not GPU-core occupancy.",
 };
 
+export const MODEL_CATALOG_CLASS: BenchmarkClass = {
+  kind: "mechanism",
+  family: "models.dev catalog",
+  fidelity: {
+    entryPoint: "public-api",
+    renderer: "absent",
+    electronTransport: "none",
+    pty: "none",
+    processTopology: "single-process",
+    externalDependencies: "hermetic",
+  },
+  claim:
+    "Event-loop busy time, longest stall and retained JS heap while the real AgentModelCatalogService loads a multi-megabyte models.dev catalog from disk or a mocked fetch under Node. This does not measure network transfer, Electron's net.fetch, V8 differences between Node and Electron, or anything else Main does at startup.",
+};
+
+export const BRANCH_NAME_AVAILABILITY_CLASS: BenchmarkClass = {
+  kind: "mechanism",
+  family: "new worktree branch-name check",
+  fidelity: {
+    entryPoint: "public-api",
+    renderer: "absent",
+    electronTransport: "none",
+    pty: "none",
+    processTopology: "partial",
+    externalDependencies: "hermetic",
+  },
+  claim:
+    "Wall time, git processes started, git stdout bytes and the longest observed timer gap per GitService.findAvailableBranchName() call against synthetic repositories of 300 to 20,000 packed refs under Node. This does not measure the IPC hop, the dialog's debounce or rendering, a cold disk cache, or tip commits larger than a one-line message.",
+};
+
 /**
  * What each scenario's numbers are allowed to be claimed to mean.
  *
@@ -119,6 +149,14 @@ const FAMILIES: readonly Family[] = [
       "Real ingest, chunking and retention against a fake IPty and a headless terminal. No Chromium scheduling and no paint: this is parse-side cost, not perceived latency.",
   },
   {
+    label: "agent output forwarding",
+    ids: ["PERF-037"],
+    kind: "mechanism",
+    fidelity: withFidelity({ pty: "fake" }),
+    claim:
+      "The real PtyDataPipeline and AgentOutputForwarder over a fake IPty, counting agent:output emits and their UTF-8 bytes on the host's event bus, which is what pty-host.ts sends to Main one message per emit. Chunk arrivals follow a declared rate on a virtual clock, so the batching is the forwarder's own but the timing is simulated. It counts what would cross to Main, not what Main spends on it: no utility-process transport, no Main handlers, no CPU reading.",
+  },
+  {
     label: "xterm write-to-parse",
     ids: ["PERF-033", "PERF-034"],
     kind: "mechanism",
@@ -219,6 +257,22 @@ const FAMILIES: readonly Family[] = [
       "Real git status, watchers, polling and quiescence against real repositories, with real git subprocesses. Backend detection is measured; whether the sidebar visibly updated is not. Spawn tallies count Node child starts only (see README).",
   },
   {
+    label: "large changeset diff stats",
+    ids: ["PERF-108", "PERF-109"],
+    kind: "mechanism",
+    fidelity: withFidelity({ processTopology: "partial" }),
+    claim:
+      "Real forced status passes and real git subprocesses over deterministic worktrees with thousands of stable modified files, sharing one process as a project's worktrees share its workspace host. The status utility is called directly, without a monitor, renderer or IPC. Git child CPU is a replay of the pass's recorded git commands, not the original children's own accounting, and is absent where python3 is unavailable; the longest stall is an event-loop observation gap read against an idle control, an upper bound on the longest synchronous block rather than its exact length; retained cache bytes are an accounting estimate, not heap usage.",
+  },
+  {
+    label: "untracked binary verdict retention",
+    ids: ["PERF-113"],
+    kind: "mechanism",
+    fidelity: withFidelity({ processTopology: "partial" }),
+    claim:
+      "Real forced status passes and real git subprocesses over a deterministic worktree holding ~54 MB of untracked binaries beside untracked text, with the status utility called directly, without a watcher, monitor, renderer or IPC. Bytes read are what `fs.promises.readFile` returned to the untracked line counter, not physical disk I/O, and the page cache is warm; CPU is this process's own (threadpool reads included, git children excluded); the longest stall is an event-loop observation gap read against an idle control, an upper bound on the longest synchronous block rather than its exact length. How often a real agent's writes force a pass is not modelled.",
+  },
+  {
     label: "terminal reflow and resize",
     ids: ["PERF-110", "PERF-111", "PERF-112"],
     kind: "mechanism",
@@ -258,11 +312,11 @@ const FAMILIES: readonly Family[] = [
   },
   {
     label: "diff tokenization",
-    ids: ["PERF-160", "PERF-161", "PERF-162", "PERF-163"],
+    ids: ["PERF-160", "PERF-161", "PERF-162", "PERF-163", "PERF-165"],
     kind: "mechanism",
     fidelity: PURE,
     claim:
-      "The real tokenizer and its oversized fallback. PERF-163 additionally measures how long the main thread was unavailable while it ran, against an idle calibration window — main-thread availability, not painted latency.",
+      "The real tokenizer and its oversized fallback. PERF-163 additionally measures how long the main thread was unavailable while it ran, against an idle calibration window — main-thread availability, not painted latency. PERF-165 adds response size and deserialize time for the same small hunk at three depths, measured with node:v8 serialize/deserialize as a structured-clone-compatible proxy — no Chromium worker transport, renderer scheduling or painted latency.",
   },
   {
     label: "diff tokenize admission",
@@ -271,6 +325,14 @@ const FAMILIES: readonly Family[] = [
     fidelity: withFidelity({ entryPoint: "public-api", electronTransport: "node-channel" }),
     claim:
       "The real DiffTokenizeClient, unmodified, admitting work to a real worker thread running the real tokenizer. Its own family because the subject is the CLIENT, not the tokenizer, and the transport is node:worker_threads rather than a Chromium Web Worker — so the latency includes real cross-thread serialization but nothing about Chromium's scheduler. It ends at a resolved token tree, not at a highlighted diff on screen.",
+  },
+  {
+    label: "rendered Markdown diff",
+    ids: ["PERF-419", "PERF-420"],
+    kind: "mechanism",
+    fidelity: withFidelity({ entryPoint: "public-api", electronTransport: "node-channel" }),
+    claim:
+      "The real Markdown diff engine on generated documents sized to #15679's table, built in-thread and through the unmodified MarkdownDiffClient on a real worker thread in the same run, graded for an exact model match. The stall figures are main-thread availability under node:worker_threads, including real cross-thread serialization — not Chromium's scheduler, the worker bundle's startup in Electron, the whole-file read, react-markdown rendering the blocks, or paint. PERF-420's completion time ends at a resolved model, not at a painted document.",
   },
   {
     label: "action palette ranking",
@@ -282,7 +344,7 @@ const FAMILIES: readonly Family[] = [
   },
   {
     label: "file picker",
-    ids: ["PERF-190", "PERF-191", "PERF-192"],
+    ids: ["PERF-190", "PERF-191", "PERF-192", "PERF-199"],
     kind: "mechanism",
     fidelity: withFidelity({ processTopology: "partial" }),
     claim:
@@ -380,6 +442,14 @@ const FAMILIES: readonly Family[] = [
       'The real Review Hub file section and diff shelf, mounted with react-dom and windowed by the real react-virtuoso, under jsdom. `renderer: "headless"` here means a DOM without layout — unlike the @xterm/headless family, and unlike anything else in this matrix. jsdom measures nothing, so the viewport is supplied by react-virtuoso\'s own VirtuosoMockContext: these are JS-thread mount and reconcile costs, NOT frames, and no compositor, paint or Chromium layout is present. A faster number here means React was asked to build less, which is the mechanism — it does not by itself mean the reviewer saw the list sooner. The child runs the ordinary vitest config: development React, and WITHOUT the React Compiler transform production ships, so memoisation the compiler would have inferred is absent from both arms.',
   },
   {
+    label: "diff table rendering",
+    ids: ["PERF-248"],
+    kind: "mechanism",
+    fidelity: withFidelity({ renderer: "headless", processTopology: "partial" }),
+    claim:
+      "The real DiffViewer, react-diff-view table and refractor token pass, mounted with react-dom under jsdom, counting the rows each commit adds and highlights. `renderer: \"headless\"` means a DOM without layout, as for PERF-247: no compositor, paint or Chromium layout, which is where most of the stall #15677 measured in Electron's Chromium actually was, so a shorter commit here does not by itself mean a shorter frame. Frames are driven by hand and the token pass is delivered on cue, so the worker's compute and transport are excluded (PERF-160..164 own them). The child runs the ordinary vitest config: development React, WITHOUT the React Compiler transform production ships.",
+  },
+  {
     label: "file viewer",
     ids: ["PERF-246"],
     kind: "mechanism",
@@ -417,6 +487,14 @@ const FAMILIES: readonly Family[] = [
     fidelity: PURE,
     claim:
       "Real palette resolution, contrast/APCA sweeps and colour maths. No theme-switch frame, so a 'fast' switch that leaves stale colours on screen passes.",
+  },
+  {
+    label: "theme module evaluation",
+    ids: ["PERF-306"],
+    kind: "mechanism",
+    fidelity: withFidelity({ entryPoint: "public-api", processTopology: "partial" }),
+    claim:
+      "The real theme module compiled and executed cold in a fresh Node process, as main and each renderer evaluate it at boot. Node, not Electron: no Vite chunk, no renderer scheduling, and the duration includes parsing an unminified bundle that carries zod, so linearisationCount, not the duration, is the reading that speaks for the derivation alone. A faster number is not first paint arriving sooner.",
   },
   {
     label: "notifications",
@@ -526,6 +604,14 @@ const FAMILIES: readonly Family[] = [
     }),
     claim:
       "The real ElementPickerHost and the real host process it forks, loading the registry's own resolvers to verify a fixed .svelte element and to map a fixed React frame through a map main fetched from a local origin. Node's fork stands in for utilityProcess, and tsx transpiles the host's own TypeScript as it loads, so a cold start reads somewhat slower than a packaged build's; the compiler, parser and decoder it loads are the shipped JavaScript. No renderer, page, extractor or click: it is not a click-to-inspector latency, and the heap reading is main's alone. PERF-413's plugin hosts are forked the same way, so their resident memory is a Node-plus-tsx reading, not a utility process's.",
+  },
+  {
+    label: "claude subagent poll",
+    ids: ["PERF-414", "PERF-415", "PERF-416", "PERF-417", "PERF-418"],
+    kind: "mechanism",
+    fidelity: PURE,
+    claim:
+      "The real `listSubagentsInDir` over real transcripts and sidecars on the local disk, with the pre-#15681 reader frozen beside it and measured in the same run. It is what one list costs main once the files are in the page cache — probes, sidecar opens, bytes read, wall, CPU and loop stall — not a poll's user-visible latency: no renderer, no IPC, no terminal lookup or directory discovery, and the sweeps run back to back rather than 5 s apart, so cache expiry between real polls is the unit tests' business. Bytes are what `read` returned from a warm cache, not disk traffic.",
   },
   {
     label: "terminal submit lane",

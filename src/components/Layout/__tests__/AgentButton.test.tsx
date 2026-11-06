@@ -17,7 +17,7 @@
  *    choices and warrants the picker.
  */
 import { useContext } from "react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, screen, act } from "@testing-library/react";
 import type { AgentSettings, CliAvailability } from "@shared/types";
 import { MenuActionSourceContext } from "@/components/ui/menu-source";
@@ -29,6 +29,10 @@ import {
 const dispatchMock = vi.fn();
 const updateWorktreePresetMock = vi.fn().mockResolvedValue(undefined);
 const updateAgentMock = vi.fn().mockResolvedValue(undefined);
+const updateWorktreeAccountMock = vi.fn().mockResolvedValue(undefined);
+// The host's answer to which panes are stopped on a usage limit (#16136).
+const readUsageLimitedPaneIdsMock = vi.fn().mockResolvedValue([]);
+let radioGroupOnValueChange: ((value: string) => void) | null = null;
 let dropdownCloseAutoFocusSpy: ((e: { preventDefault: () => void }) => void) | null = null;
 let dropdownPointerDownOutsideSpy: (() => void) | null = null;
 // Track the chevron dropdown's controlled-open contract (issue #10720): the
@@ -49,7 +53,7 @@ let mockCcrPresetsByAgent: Record<string, Array<{ id: string; name: string }>> =
 let mockProjectPresetsByAgent: Record<string, Array<{ id: string; name: string }>> = {};
 let mockMergedPresetsFn: (
   agentId: string
-) => Array<{ id: string; name: string; color?: string }> = () => [];
+) => Array<{ id: string; name: string; color?: string; accountId?: string }> = () => [];
 let mockExternalLinks: Array<{ label: string; url: string }> | undefined;
 
 vi.mock("@/services/ActionService", () => ({
@@ -65,6 +69,7 @@ vi.mock("@/store/agentSettingsStore", () => ({
       getState: () => ({
         updateWorktreePreset: updateWorktreePresetMock,
         updateAgent: updateAgentMock,
+        updateWorktreeAccount: updateWorktreeAccountMock,
       }),
     }
   ),
@@ -99,6 +104,11 @@ vi.mock("@/store/projectPresetsStore", () => ({
 
 let mockPanelsById: Record<string, unknown> = {};
 let mockPanelIds: string[] = [];
+// Runs the fleet places in `needs-you`: unread Canopy asks, the only waits that earn amber.
+let mockNeedsYou: ReadonlySet<string> = new Set();
+vi.mock("@/hooks/useRunFleetBand", () => ({
+  useFleetBandRunIds: () => mockNeedsYou,
+}));
 let mockPanelIdsByWorktreeId: Record<string, string[]> = {};
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: (selector: (s: Record<string, unknown>) => unknown) =>
@@ -246,6 +256,51 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     <div data-testid="preset-menu-label">{children}</div>
   ),
   DropdownMenuSeparator: () => <hr data-testid="preset-menu-separator" />,
+  DropdownMenuRadioGroup: ({
+    children,
+    value,
+    onValueChange,
+  }: {
+    children: React.ReactNode;
+    value?: string;
+    onValueChange?: (value: string) => void;
+  }) => {
+    radioGroupOnValueChange = onValueChange ?? null;
+    // The marked value, for tests that read where the radio stands (#16133).
+    return (
+      <div role="group" data-testid="dropdown-radio-group" data-value={value ?? ""}>
+        {children}
+      </div>
+    );
+  },
+  // Mirrors real Radix: the value changes whatever onSelect does, and the
+  // menu closes unless onSelect prevented it.
+  DropdownMenuRadioItem: ({
+    children,
+    value,
+    onSelect,
+  }: {
+    children: React.ReactNode;
+    value: string;
+    onSelect?: (e: Event) => void;
+  }) => (
+    <div
+      role="menuitemradio"
+      onClick={() => {
+        const event = new Event("select", { cancelable: true });
+        onSelect?.(event);
+        radioGroupOnValueChange?.(value);
+        if (!event.defaultPrevented) dropdownOnOpenChange?.(false);
+      }}
+    >
+      {children}
+    </div>
+  ),
+}));
+
+vi.mock("../AccountSwitchNotice", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../AccountSwitchNotice")>()),
+  readUsageLimitedPaneIds: (...args: unknown[]) => readUsageLimitedPaneIdsMock(...args),
 }));
 
 vi.mock("@/components/ui/context-menu", () => ({
@@ -384,6 +439,7 @@ vi.mock("lucide-react", () => ({
   ExternalLink: () => <span data-testid="external-link-icon" />,
   PanelBottom: () => <span data-testid="panel-bottom-icon" />,
   Unplug: () => <span data-testid="unplug-icon" />,
+  PinOff: () => <span data-testid="pin-off-icon" />,
   Bookmark: () => <span data-testid="bookmark-icon" />,
   FolderGit2: () => <span data-testid="folder-git-icon" />,
   PanelTop: () => <span data-testid="panel-top-icon" />,
@@ -396,6 +452,13 @@ vi.mock("lucide-react", () => ({
   // CheckCircle2 is pulled in transitively by terminalStateConfig.tsx for
   // STATE_LABELS (#9823); a stub satisfies its import graph.
   CheckCircle2: () => null,
+  // The account-switch confirm's checkboxes pull in the field and severity
+  // glyphs (#16136); stubs satisfy that graph too.
+  AlertTriangle: () => null,
+  Info: () => null,
+  XCircle: () => null,
+  CheckIcon: () => null,
+  MinusIcon: () => null,
 }));
 
 import { AgentButton } from "../AgentButton";
@@ -424,6 +487,43 @@ describe("AgentButton preset UX", () => {
     dropdownOpenState = undefined;
     dropdownOnOpenChange = null;
     mockProjectPresetsByAgent = {};
+  });
+
+  describe("account picker (#16133)", () => {
+    const COMPANY = { id: "company", name: "Company", configDir: "/Users/me/.codex-company" };
+    const PERSONAL = { id: "personal", name: "Personal", configDir: "/Users/me/.codex-personal" };
+
+    function renderCodex(entry: Record<string, unknown> = {}) {
+      mockMergedPresetsFn = () => [{ id: "work", name: "Work", accountId: "company" }];
+      mockSettings = settingsWith({
+        codex: { accounts: [COMPANY, PERSONAL], accountId: "personal", presetId: "work", ...entry },
+      });
+      return render(<AgentButton type="codex" availability="ready" />);
+    }
+
+    it("marks the saved preset's pinned account for a worktree that hasn't picked one", () => {
+      mockActiveWorktreeId = "wt1";
+      const { getByTestId } = renderCodex();
+      expect(getByTestId("dropdown-radio-group").getAttribute("data-value")).toBe("company");
+    });
+
+    it("marks the pin of the agent's preset when the worktree's own pick is gone", () => {
+      // The launch falls back to the agent's preset, so its pin is what signs in.
+      mockActiveWorktreeId = "wt1";
+      const { getByTestId } = renderCodex({ worktreePresets: { wt1: "deleted" } });
+      expect(getByTestId("dropdown-radio-group").getAttribute("data-value")).toBe("company");
+    });
+
+    it("marks the agent's default outside a worktree, the slot a pick writes there", () => {
+      const { getByTestId, getByText, getAllByTestId } = renderCodex();
+      expect(getByTestId("dropdown-radio-group").getAttribute("data-value")).toBe("personal");
+      // The trigger still names what a plain launch signs in as: the preset's pin.
+      const tooltips = getAllByTestId("tooltip-content").map((el) => el.textContent ?? "");
+      expect(tooltips.some((text) => text.includes("Work · Company"))).toBe(true);
+
+      fireEvent.click(getByText("Company"));
+      expect(updateAgentMock).toHaveBeenCalledWith("codex", { accountId: "company" });
+    });
   });
 
   describe("split threshold", () => {
@@ -1122,7 +1222,7 @@ describe("AgentButton preset UX", () => {
       const { getAllByTestId } = render(
         <AgentButton type="claude" availability={"ready" as unknown as CliAvailability[string]} />
       );
-      expect(tooltipTexts(getAllByTestId)).toContain("Set Claude preset");
+      expect(tooltipTexts(getAllByTestId)).toContain("Start Claude with a preset");
     });
 
     it("preserves the preset segment when the sign-in probe is unconfirmed", () => {
@@ -1369,6 +1469,44 @@ describe("AgentButton preset UX", () => {
   });
 
   describe("status dot badge", () => {
+    beforeEach(() => {
+      // Every waiting session here is an unread Canopy ask; working ones drop
+      // out of the set by their own observation.
+      mockNeedsYou = new Set(["panel-1", "panel-2"]);
+    });
+
+    afterEach(() => {
+      mockNeedsYou = new Set();
+    });
+
+    it("draws no amber pip for a prompt that asks nothing", () => {
+      mockNeedsYou = new Set();
+      mockSettings = settingsWith({ claude: {} });
+      mockPanelsById = { "panel-1": activePanel("waiting") };
+      mockPanelIds = ["panel-1"];
+      mockPanelIdsByWorktreeId = { "wt-1": ["panel-1"] };
+      mockActiveWorktreeId = "wt-1";
+
+      const { container } = render(<AgentButton type="claude" availability="ready" />);
+
+      const badge = container.querySelector('.relative span[aria-hidden="true"]');
+      expect(badge?.getAttribute("data-visible")).not.toBe("true");
+    });
+
+    it("draws the amber pip for an ask Canopy read on a finished turn", () => {
+      mockSettings = settingsWith({ claude: {} });
+      mockPanelsById = { "panel-1": activePanel("completed") };
+      mockPanelIds = ["panel-1"];
+      mockPanelIdsByWorktreeId = { "wt-1": ["panel-1"] };
+      mockActiveWorktreeId = "wt-1";
+
+      const { container } = render(<AgentButton type="claude" availability="ready" />);
+
+      const badge = container.querySelector('.relative span[aria-hidden="true"]');
+      expect(badge?.getAttribute("data-visible")).toBe("true");
+      expect(badge!.className).toMatch(/bg-state-waiting/);
+    });
+
     function activePanel(state: string): Record<string, unknown> {
       // `detectedAgentId` is what `getRuntimeOrBootAgentId` reads (via
       // `deriveTerminalChrome`); plain `agentId` on the panel is not used by
@@ -2403,5 +2541,123 @@ describe("AgentButton context menu — every actionable row leads with an icon",
     const content = screen.getByTestId("context-menu-content");
     expect(content.querySelectorAll('[role="menuitem"]').length).toBeGreaterThan(5);
     expect(rowsMissingLeadingIcon(content)).toEqual([]);
+  });
+});
+
+describe("account pick offers the panes stopped on a usage limit (#16136)", () => {
+  const COMPANY = { id: "company", name: "Company", configDir: "/Users/me/.claude-company" };
+  const pane = (id: string, extra: Record<string, unknown> = {}) => ({
+    id,
+    kind: "terminal",
+    title: `Claude ${id}`,
+    cwd: "/repo",
+    location: "grid",
+    launchAgentId: "claude",
+    worktreeId: "wt-B",
+    agentState: "waiting",
+    ...extra,
+  });
+
+  beforeEach(() => {
+    dispatchMock.mockClear();
+    updateWorktreeAccountMock.mockClear();
+    updateWorktreeAccountMock.mockResolvedValue(undefined);
+    readUsageLimitedPaneIdsMock.mockReset();
+    readUsageLimitedPaneIdsMock.mockResolvedValue(["p1"]);
+    mockActiveWorktreeId = "wt-A";
+    mockSettings = settingsWith({ claude: { accounts: [COMPANY] } });
+    mockMergedPresetsFn = () => [];
+    mockCcrPresetsByAgent = {};
+    mockProjectPresetsByAgent = {};
+    mockCliDetails = {};
+    mockPanelsById = { p1: pane("p1"), p2: pane("p2", { agentAccountId: "company" }) };
+    mockPanelIds = ["p1", "p2"];
+    mockPanelIdsByWorktreeId = { "wt-B": ["p1", "p2"] };
+    mockWorktrees = [];
+    dropdownOnOpenChange = null;
+    radioGroupOnValueChange = null;
+  });
+
+  function pickAccount(name: string) {
+    const row = screen
+      .getAllByRole("menuitemradio")
+      .find((candidate) => candidate.textContent === name);
+    if (!row) throw new Error(`no account row ${name}`);
+    fireEvent.click(row);
+  }
+
+  it("lists them under the pick, which keeps the picker open", async () => {
+    render(<AgentButton type="claude" availability="ready" />);
+    await act(async () => {
+      pickAccount("Company");
+    });
+
+    expect(updateWorktreeAccountMock).toHaveBeenCalledWith("claude", "wt-A", "company");
+    expect(readUsageLimitedPaneIdsMock).toHaveBeenCalledWith("claude", "company");
+    expect(screen.getByRole("status").textContent).toBe("1 Claude pane stopped on a usage limit");
+    expect(screen.getByText("Switch it to Company…")).toBeTruthy();
+  });
+
+  it("offers a move back to the default login too", async () => {
+    mockSettings = settingsWith({
+      claude: { accounts: [COMPANY], worktreeAccounts: { "wt-A": "company" } },
+    });
+    readUsageLimitedPaneIdsMock.mockResolvedValue(["p2"]);
+    render(<AgentButton type="claude" availability="ready" />);
+    await act(async () => {
+      pickAccount("Default login");
+    });
+
+    expect(readUsageLimitedPaneIdsMock).toHaveBeenCalledWith("claude", null);
+    expect(screen.getByText("Switch it to Default login…")).toBeTruthy();
+  });
+
+  it("asks nothing when the pick is the account already in use", async () => {
+    mockSettings = settingsWith({
+      claude: { accounts: [COMPANY], worktreeAccounts: { "wt-A": "company" } },
+    });
+    render(<AgentButton type="claude" availability="ready" />);
+    await act(async () => {
+      pickAccount("Company");
+    });
+
+    expect(readUsageLimitedPaneIdsMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("offers nothing when no pane is stopped on a limit", async () => {
+    readUsageLimitedPaneIdsMock.mockResolvedValue([]);
+    render(<AgentButton type="claude" availability="ready" />);
+    await act(async () => {
+      pickAccount("Company");
+    });
+
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("doesn't bring the offer back when the save lands after the picker closed", async () => {
+    let resolveSave: () => void = () => {};
+    updateWorktreeAccountMock.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (resolveSave = resolve))
+    );
+    render(<AgentButton type="claude" availability="ready" />);
+    pickAccount("Company");
+    act(() => dropdownOnOpenChange?.(false));
+    await act(async () => resolveSave());
+
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("drops the offer with Keep, and launches nothing", async () => {
+    render(<AgentButton type="claude" availability="ready" />);
+    await act(async () => {
+      pickAccount("Company");
+    });
+    act(() => {
+      fireEvent.click(screen.getByText("Keep"));
+    });
+
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(dispatchMock).not.toHaveBeenCalled();
   });
 });

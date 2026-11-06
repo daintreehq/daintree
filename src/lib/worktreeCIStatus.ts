@@ -1,9 +1,14 @@
-import { Check, CircleMinus, X } from "lucide-react";
+import { CircleMinus, type LucideIcon } from "lucide-react";
+import { SEVERITY_GLYPH } from "@/lib/statusSeverity";
 import type { CIStatus } from "@shared/types/forge";
 
 /**
- * A run still in flight is a dot; a settled one is a glyph. That is GitHub's own
- * vocabulary, and the one the forge dropdown rows already speak
+ * A run still in flight is a dot; a settled one is a glyph, and a settled
+ * result is a severity: passed is `SEVERITY_GLYPH.success`, failed is
+ * `SEVERITY_GLYPH.error`, the same circled marks every other result in the app
+ * wears (`docs/themes/component-contract.md` → Severity glyphs). A bare check
+ * or cross was lighter than the PR glyph beside it, so a failing run read as
+ * one more piece of metadata. The forge dropdown rows speak the same set
  * (`plugins/builtin/github/renderer/utils/prCIStatus.ts`) — a clock for pending
  * read as a duration rather than a state and put the two out of step.
  *
@@ -14,7 +19,7 @@ import type { CIStatus } from "@shared/types/forge";
  * where hue is gone and only shape is left to tell them apart.
  */
 export type CIStatusVisual =
-  | { kind: "icon"; Icon: typeof Check; colorClass: string; shortLabel: string; ariaLabel: string }
+  | { kind: "icon"; Icon: LucideIcon; colorClass: string; shortLabel: string; ariaLabel: string }
   | { kind: "dot"; colorClass: string; labelClass: string; shortLabel: string; ariaLabel: string };
 
 export function getCIStatusVisual(status: CIStatus | undefined | null): CIStatusVisual | null {
@@ -23,7 +28,7 @@ export function getCIStatusVisual(status: CIStatus | undefined | null): CIStatus
     case "success":
       return {
         kind: "icon",
-        Icon: Check,
+        Icon: SEVERITY_GLYPH.success,
         colorClass: "text-status-success",
         shortLabel: "passing",
         ariaLabel: "CI passing",
@@ -31,7 +36,7 @@ export function getCIStatusVisual(status: CIStatus | undefined | null): CIStatus
     case "failure":
       return {
         kind: "icon",
-        Icon: X,
+        Icon: SEVERITY_GLYPH.error,
         colorClass: "text-status-error",
         shortLabel: "failing",
         ariaLabel: "CI failing",

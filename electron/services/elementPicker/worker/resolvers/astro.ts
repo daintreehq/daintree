@@ -18,7 +18,8 @@ import { checkAstroAnchor, lexiconOf, type Lexicon } from "./astroSource.js";
 /**
  * Checks what Astro's compiler stamped on an element against the file it
  * names. Only the claims the Astro extractor makes are taken, each from the
- * element's own attributes: a `template-location` from
+ * element's own attributes or, once the dev toolbar has taken those off, its
+ * counterpart's in the markup as served: a `template-location` from
  * `data-astro-source-loc` (1-based line and column, `astroSourceLoc` in
  * `COORDINATE_CONVENTIONS`) and a `file-hint` from `data-astro-source-file`.
  * Anything else, or one in another convention, is `unsupported` rather than

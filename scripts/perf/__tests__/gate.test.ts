@@ -759,14 +759,28 @@ describe("workload floors", () => {
     expect(declaring.map((scenario) => scenario.id).sort()).toEqual([
       "PERF-034",
       "PERF-036",
+      "PERF-037",
+      "PERF-108",
+      "PERF-109",
+      "PERF-113",
       "PERF-163",
       "PERF-164",
+      "PERF-165",
+      "PERF-199",
       "PERF-247",
+      "PERF-248",
       "PERF-395",
       "PERF-406",
       "PERF-407",
       "PERF-408",
       "PERF-412",
+      "PERF-414",
+      "PERF-415",
+      "PERF-416",
+      "PERF-417",
+      "PERF-418",
+      "PERF-419",
+      "PERF-420",
     ]);
     for (const scenario of declaring) {
       for (const [metric, floor] of Object.entries(scenario.workloadFloors!)) {

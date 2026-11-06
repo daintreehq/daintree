@@ -42,6 +42,7 @@ const BASE_PANEL_FIELDS = [
   "kindRef",
   "title",
   "titleMode",
+  "displayEmoji",
   "worktreeId",
   "worktreeGitDir",
   "location",
@@ -138,6 +139,7 @@ function buildPanelSnapshot(
     ...(kindRef !== undefined && { kindRef }),
     title: t.title,
     ...(t.titleMode !== undefined && { titleMode: t.titleMode }),
+    ...(t.displayEmoji !== undefined && { displayEmoji: t.displayEmoji }),
     worktreeId: t.worktreeId,
     ...(worktreeGitDir !== undefined && { worktreeGitDir }),
     location: t.location === "trash" ? "grid" : t.location,
@@ -662,6 +664,20 @@ export class PanelPersistence {
   flush(): void {
     this.debouncedSave.flush();
     this.debouncedSaveTabGroups.flush();
+  }
+
+  /**
+   * {@link flush}, resolving once every layout write it started, or found
+   * already queued for any project, has settled. Never rejects. `flush()`
+   * followed by {@link whenIdle} can't promise that: the debounced save only
+   * claims its write slot a microtask after the flush.
+   */
+  async flushAndSettle(): Promise<void> {
+    await Promise.all([this.debouncedSave.flush(), this.debouncedSaveTabGroups.flush()]);
+    await Promise.all([
+      ...this.terminalWriteTailByProject.values(),
+      ...this.tabGroupWriteTailByProject.values(),
+    ]);
   }
 
   setProjectIdGetter(getter: () => string | null | undefined): void {

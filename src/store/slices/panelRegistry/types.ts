@@ -22,6 +22,9 @@ export type { AddPanelOptions };
  * behaviour; flags are opt-in for specific callers whose intent differs from
  * the standard graceful-restart flow.
  */
+/** The account a switch moves a pane to: its folder and the variable that carries it. `null` is the default login. */
+export type AccountSwitchTarget = { id: string; envVar: string; configDir: string } | null;
+
 export interface RestartTerminalOptions {
   /**
    * When `false`, suppresses session continuity from the kill: the session id
@@ -55,6 +58,23 @@ export interface RestartTerminalOptions {
    * pane into its own worktree.
    */
   keepCwd?: boolean;
+}
+
+export interface PresetRespawnOptions {
+  /**
+   * Relaunch the pane's conversation by its id under the new preset, rather
+   * than a new one (#16045). Refused before anything is torn down for an agent
+   * whose CLI refusal Daintree can't recognise, and after the teardown when no
+   * id turned up: never quietly a new conversation.
+   */
+  keepConversation?: boolean;
+}
+
+export interface PresetRespawnResult {
+  success: boolean;
+  error?: string;
+  /** The conversation the relaunch asked the CLI to reopen, when it kept one. */
+  resumedSessionId?: string;
 }
 
 export interface TrashedTerminalGroupMetadata {
@@ -150,6 +170,11 @@ export interface PanelRegistrySlice {
    * `newTitle` resets to the identity-derived default and unlocks.
    */
   updateTitle: (id: string, newTitle: string, source?: "user" | "automation") => void;
+  /**
+   * Give a panel a persona emoji (#16213), or none with `undefined`. Display
+   * only and apart from the title, so neither one resets the other.
+   */
+  setDisplayEmoji: (id: string, emoji: string | undefined) => void;
   updateLastObservedTitle: (id: string, title: string) => void;
   updateAgentState: (
     id: string,
@@ -162,6 +187,18 @@ export interface PanelRegistrySlice {
     sessionCost?: number,
     sessionTokens?: number
   ) => void;
+  /**
+   * Record a state the host reported without showing it: the pane keeps an
+   * overlay (directing) on screen, but the report still bounds what may follow
+   * and is what the next restore calls last seen.
+   */
+  noteAgentObservation: (id: string, agentState: AgentState, at: number) => void;
+  /**
+   * Copy the host's count of agent sessions in a terminal, down as well as up.
+   * Written before the state it came with, by the live listener and by resync
+   * alike, so the pane never names the wrong session beside that state.
+   */
+  setAgentIncarnation: (id: string, agentIncarnation: number) => void;
   updateActivity: (
     id: string,
     headline: string,
@@ -284,25 +321,41 @@ export interface PanelRegistrySlice {
   /**
    * Kill the current PTY and respawn it in the same panel slot using a
    * different preset. Fires as part of the fallback chain when a preset's
-   * provider is unavailable. No session resume (fresh spawn), since the
-   * upstream session we were talking to is the very thing that failed.
+   * provider is unavailable. A new conversation unless `keepConversation`
+   * (#16045): only a usage-limit hop on a preset that opted in asks for it.
    */
   activateFallbackPreset: (
     id: string,
     nextPresetId: string,
-    originalPresetId: string
-  ) => Promise<{ success: boolean; error?: string }>;
+    originalPresetId: string,
+    options?: PresetRespawnOptions
+  ) => Promise<PresetRespawnResult>;
   /**
    * Respawn an agent pane in place on another preset of the same agent
-   * (#13746). Always a new conversation: a session can't follow the pane into
-   * another preset's home. The chosen preset becomes the pane's own — fallback
-   * marking is reset — and its env replaces the saved launch layer so a cold
-   * restore comes back on it.
+   * (#13746). A new conversation by default: a session stored under one
+   * preset's config folder usually can't be found from another's.
+   * `keepConversation` (#16045) asks the CLI to reopen the same one instead.
+   * The chosen preset becomes the pane's own — fallback marking is reset — and
+   * its env replaces the saved launch layer so a cold restore comes back on it.
    */
   restartTerminalOnPreset: (
     id: string,
-    presetId: string
-  ) => Promise<{ success: boolean; error?: string }>;
+    presetId: string,
+    options?: PresetRespawnOptions
+  ) => Promise<PresetRespawnResult>;
+  /**
+   * Respawn an agent pane in place on another account (#16040), keeping its
+   * preset, model and flags. A new conversation by default: a session stored
+   * in one account's folder usually can't be found from another's.
+   * `keepConversation` (#16135) asks the CLI to reopen the same one instead.
+   * `null` is the CLI's default login. The account's folder replaces the one
+   * in the saved launch layer so a cold restore comes back on it.
+   */
+  restartTerminalOnAccount: (
+    id: string,
+    account: AccountSwitchTarget,
+    options?: PresetRespawnOptions
+  ) => Promise<PresetRespawnResult>;
   /** Open a terminal's Scratchpad column (#12835), or expand a collapsed one. */
   showScratchpad: (id: string) => void;
   /** Collapse the Scratchpad; an empty one is removed instead. */

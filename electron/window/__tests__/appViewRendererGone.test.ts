@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 vi.mock("electron", () => ({
-  app: { quit: vi.fn() },
+  app: { quit: vi.fn(), emit: vi.fn() },
   BrowserWindow: { getAllWindows: vi.fn(() => []) },
 }));
 
@@ -11,6 +11,11 @@ vi.mock("../../services/CrashRecoveryService.js", () => ({
 }));
 
 vi.mock("../../ipc/errorHandlers.js", () => ({ notifyError: vi.fn() }));
+vi.mock("../rendererReloadNotice.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../rendererReloadNotice.js")>()),
+  holdReloadNotice: vi.fn(),
+  dropReloadNotice: vi.fn(),
+}));
 
 const availableMemory = { mb: null as number | null };
 vi.mock("../../utils/systemMemory.js", () => ({
@@ -19,7 +24,9 @@ vi.mock("../../utils/systemMemory.js", () => ({
 
 vi.mock("../../utils/logger.js", () => ({ logError: vi.fn(), logWarn: vi.fn() }));
 
+import { app } from "electron";
 import { notifyError } from "../../ipc/errorHandlers.js";
+import { dropReloadNotice, holdReloadNotice } from "../rendererReloadNotice.js";
 import { logError, logWarn } from "../../utils/logger.js";
 import { attachAppViewRendererGoneHandler } from "../appViewRendererGone.js";
 import { isWindowRecreating } from "../../lifecycle/windowRecreationState.js";
@@ -41,7 +48,8 @@ function createHarness(
       | "evictCrashedCachedView"
       | "getLowMemoryFreeThresholdMb"
     > | null;
-    onRecreateWindow?: () => Promise<void>;
+    /** The rebuild the harness's prepare hands back. */
+    recreateWindow?: () => Promise<void>;
   } = {}
 ) {
   const handlers: Handler[] = [];
@@ -54,17 +62,19 @@ function createHarness(
     loadURL: vi.fn(),
   };
   const win = { id: 7, isDestroyed: vi.fn(() => false), destroy: vi.fn() };
+  const recreateWindow = opts.recreateWindow;
+  const prepareWindowRecreation = recreateWindow ? vi.fn(() => recreateWindow) : undefined;
   attachAppViewRendererGoneHandler({
     win: win as never,
     appWebContents: appWebContents as never,
     getProjectViewManager: () => (opts.pvm ?? null) as ProjectViewManager | null,
     getRecoveryUrl: (reason, exitCode) => `app://daintree/recovery.html?${reason}-${exitCode}`,
-    onRecreateWindow: opts.onRecreateWindow,
+    prepareWindowRecreation,
   });
   const crash = (reason: string, exitCode = 1) => {
     for (const handler of handlers) handler({}, { reason, exitCode });
   };
-  return { appWebContents, win, handlers, crash };
+  return { appWebContents, win, handlers, crash, prepareWindowRecreation };
 }
 
 /**
@@ -119,7 +129,12 @@ describe("app-view render-process-gone (#12954)", () => {
     expect(appWebContents.reload).not.toHaveBeenCalled();
     vi.runAllTimers();
     expect(appWebContents.reload).toHaveBeenCalledTimes(1);
-    expect(notifyError).toHaveBeenCalledTimes(1);
+    expect(holdReloadNotice).toHaveBeenCalledTimes(1);
+    expect(holdReloadNotice).toHaveBeenCalledWith(
+      appWebContents,
+      "The renderer process crashed and was automatically reloaded.",
+      "warning"
+    );
     expect(recordRendererGone).toHaveBeenCalledTimes(1);
     expect(recordRendererGone).toHaveBeenCalledWith(
       expect.objectContaining({ process: "app-view", projectId: "proj-a", webContentsId: 2 })
@@ -135,6 +150,10 @@ describe("app-view render-process-gone (#12954)", () => {
     expect(onViewCrashed).toHaveBeenCalledTimes(1);
     vi.runAllTimers();
     expect(appWebContents.reload).toHaveBeenCalledTimes(1);
+    expect(holdReloadNotice).toHaveBeenCalledWith(
+      appWebContents,
+      "The renderer was reloaded due to memory pressure."
+    );
     expect(recordRendererGone).not.toHaveBeenCalled();
   });
 
@@ -149,6 +168,18 @@ describe("app-view render-process-gone (#12954)", () => {
 
     expect(onViewCrashed).toHaveBeenCalledTimes(3);
     expect(appWebContents.loadURL).toHaveBeenCalledWith("app://daintree/recovery.html?crashed-1");
+    // Every death drops the notice the last reload held; the recovery page
+    // that ends the loop holds none of its own.
+    expect(dropReloadNotice).toHaveBeenCalledTimes(3);
+    expect(dropReloadNotice).toHaveBeenCalledWith(appWebContents);
+    expect(holdReloadNotice).toHaveBeenCalledTimes(2);
+    // Each death drops before its own hold, or a fresh notice would be wiped.
+    const drops = vi.mocked(dropReloadNotice).mock.invocationCallOrder;
+    const holds = vi.mocked(holdReloadNotice).mock.invocationCallOrder;
+    expect(drops[0]).toBeLessThan(holds[0]!);
+    expect(holds[0]).toBeLessThan(drops[1]!);
+    expect(drops[1]).toBeLessThan(holds[1]!);
+    expect(holds[1]).toBeLessThan(drops[2]!);
   });
 
   it.each([
@@ -169,8 +200,8 @@ describe("app-view render-process-gone (#12954)", () => {
       availableMemory.mb = memMb;
       const { pvm, onViewRendererGone } = createClaimingManager({ claimed: true, active, cached });
       pvm.getLowMemoryFreeThresholdMb = () => 500;
-      const onRecreateWindow = vi.fn(() => Promise.resolve());
-      const { appWebContents, win, crash } = createHarness({ pvm, onRecreateWindow });
+      const recreateWindow = vi.fn(() => Promise.resolve());
+      const { appWebContents, win, crash } = createHarness({ pvm, recreateWindow });
 
       for (let i = 0; i < crashes; i++) crash("crashed");
 
@@ -214,6 +245,7 @@ describe("app-view render-process-gone (#12954)", () => {
     expect(appWebContents.reload).not.toHaveBeenCalled();
     expect(appWebContents.loadURL).not.toHaveBeenCalled();
     expect(notifyError).not.toHaveBeenCalled();
+    expect(holdReloadNotice).not.toHaveBeenCalled();
     expect(recordRendererGone).toHaveBeenCalledTimes(1);
   });
 
@@ -227,21 +259,22 @@ describe("app-view render-process-gone (#12954)", () => {
     expect(pvm.evictCrashedCachedView).toHaveBeenCalledWith(appWebContents, "memory-eviction");
     expect(appWebContents.reload).not.toHaveBeenCalled();
     expect(notifyError).not.toHaveBeenCalled();
+    expect(holdReloadNotice).not.toHaveBeenCalled();
   });
 
   it("still sends a cached startup view's probable OOM to window recreation", async () => {
     availableMemory.mb = 100;
     const { pvm } = createClaimingManager({ claimed: true, active: false, cached: true });
     pvm.getLowMemoryFreeThresholdMb = () => 500;
-    const onRecreateWindow = vi.fn(() => Promise.resolve());
-    const { win, crash } = createHarness({ pvm, onRecreateWindow });
+    const recreateWindow = vi.fn(() => Promise.resolve());
+    const { win, crash } = createHarness({ pvm, recreateWindow });
 
     crash("crashed");
     await vi.runAllTimersAsync();
 
     expect(pvm.evictCrashedCachedView).not.toHaveBeenCalled();
     expect(win.destroy).toHaveBeenCalledTimes(1);
-    expect(onRecreateWindow).toHaveBeenCalledTimes(1);
+    expect(recreateWindow).toHaveBeenCalledTimes(1);
   });
 
   it("still recovers when the window has no manager yet", () => {
@@ -298,28 +331,69 @@ describe("app-view render-process-gone (#12954)", () => {
     availableMemory.mb = 100;
     const { pvm, onViewCrashed } = createClaimingManager({ claimed: true, active: true });
     pvm.getLowMemoryFreeThresholdMb = () => 500;
-    const onRecreateWindow = vi.fn(() => Promise.resolve());
-    const { win, crash } = createHarness({ pvm, onRecreateWindow });
+    const recreateWindow = vi.fn(() => Promise.resolve());
+    const { win, crash, prepareWindowRecreation } = createHarness({ pvm, recreateWindow });
 
     crash("crashed");
     expect(onViewCrashed).toHaveBeenCalledTimes(1);
     await vi.runAllTimersAsync();
 
     expect(win.destroy).toHaveBeenCalledTimes(1);
-    expect(onRecreateWindow).toHaveBeenCalledTimes(1);
+    expect(prepareWindowRecreation).toHaveBeenCalledTimes(1);
+    expect(recreateWindow).toHaveBeenCalledTimes(1);
     expect(isWindowRecreating()).toBe(false);
   });
 
+  it("replays the last window closing when the rebuild fails, so the lifetime rules still decide", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "linux" });
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const recreateWindow = vi.fn(() => Promise.reject(new Error("no window")));
+      const { crash } = createHarness({ recreateWindow });
+
+      crash("oom");
+      await vi.runAllTimersAsync();
+
+      // A process kept up with no window (an OS launch, an open scheduled run)
+      // stays up; anything else quits through that same handler.
+      expect(app.emit).toHaveBeenCalledExactlyOnceWith("window-all-closed");
+      expect(app.quit).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    }
+  });
+
+  it("prepares the recreation at the crash, before the window is destroyed (#15564)", async () => {
+    const recreateWindow = vi.fn(() => Promise.resolve());
+    const { win, crash, prepareWindowRecreation } = createHarness({ recreateWindow });
+
+    crash("oom");
+
+    expect(prepareWindowRecreation).toHaveBeenCalledTimes(1);
+    expect(win.destroy).not.toHaveBeenCalled();
+    expect(recreateWindow).not.toHaveBeenCalled();
+
+    await vi.runAllTimersAsync();
+
+    expect(win.destroy).toHaveBeenCalledTimes(1);
+    expect(recreateWindow).toHaveBeenCalledTimes(1);
+    expect(win.destroy.mock.invocationCallOrder[0]).toBeLessThan(
+      recreateWindow.mock.invocationCallOrder[0]!
+    );
+  });
+
   it("releases the recreation guard when recreating after an explicit oom fails", async () => {
-    const onRecreateWindow = vi.fn(() => Promise.reject(new Error("recreate failed")));
-    const { win, crash } = createHarness({ onRecreateWindow });
+    const recreateWindow = vi.fn(() => Promise.reject(new Error("recreate failed")));
+    const { win, crash } = createHarness({ recreateWindow });
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     crash("oom");
     await vi.runAllTimersAsync();
 
     expect(win.destroy).toHaveBeenCalledTimes(1);
-    expect(onRecreateWindow).toHaveBeenCalledTimes(1);
+    expect(recreateWindow).toHaveBeenCalledTimes(1);
     expect(isWindowRecreating()).toBe(false);
   });
 
@@ -379,14 +453,17 @@ describe("app-view render-process-gone (#12954)", () => {
       message: "The renderer process was restarted.",
     },
   ])("attributes the reload toast for $name", ({ reason, intent, message }) => {
-    const { crash } = createHarness();
+    const { appWebContents, crash } = createHarness();
     if (intent) noteTerminationIntent({ webContentsId: 2 }, "user force-restarted view");
 
     crash(reason, 9);
 
-    expect(notifyError).toHaveBeenCalledTimes(1);
-    const [error, options] = vi.mocked(notifyError).mock.calls[0];
-    expect((error as Error).message).toBe(message);
-    expect(options).toEqual({ source: "renderer-crash" });
+    expect(notifyError).not.toHaveBeenCalled();
+    expect(holdReloadNotice).toHaveBeenCalledTimes(1);
+    expect(holdReloadNotice).toHaveBeenCalledWith(
+      appWebContents,
+      message,
+      intent ? "info" : "warning"
+    );
   });
 });

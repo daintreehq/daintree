@@ -8,11 +8,17 @@ const registeredTaskRuns = new Map<string, () => unknown>();
 // Hoisted: the HelpSessionService mock factory now runs at import time
 // (globalServicesInit value-imports the singleton statically).
 const setMcpRegistry = vi.hoisted(() => vi.fn());
+const dbMaintenanceCalls = vi.hoisted(() => [] as string[]);
 const setProjectMetadataReader = vi.hoisted(() => vi.fn());
 let migrationCurrentVersion = 1;
 let migrationShouldThrow = false;
 let storeFreshAtBoot = false;
 const migrationRunCalls = vi.hoisted(() => ({ count: 0 }));
+const legacyAuditImport = vi.hoisted(() => ({
+  hasSources: false,
+  shouldThrow: false,
+  calls: [] as { migrationRuns: number; tasksRegistered: number }[],
+}));
 let mockLogRetentionDays: number | undefined = 30;
 const { pruneOldLogs, pruneOldLogsAsync, pruneHeapSnapshots, pruneHeapSnapshotsAsync } = vi.hoisted(
   () => ({
@@ -36,7 +42,12 @@ const {
     getPluginMcpConsentStore: vi.fn(),
   };
 });
-const registerCommandsMock = vi.hoisted(() => vi.fn());
+// Off by default: only the composed last-window-close test hands registrations
+// and the close on to the real queue.
+const deferredForward = vi.hoisted(() => ({
+  register: null as ((task: { name: string; run: () => unknown }) => void) | null,
+  resetForNextWindow: null as (() => void) | null,
+}));
 const {
   pluginInitialize,
   pluginGetPluginRoot,
@@ -86,6 +97,17 @@ vi.mock("../../store.js", () => ({
     set: vi.fn(),
   },
   wasStoreFreshAtBoot: vi.fn(() => storeFreshAtBoot),
+  hasLegacyAuditRingSources: vi.fn(() => legacyAuditImport.hasSources),
+}));
+
+vi.mock("../../services/persistence/legacyAuditRingImport.js", () => ({
+  importLegacyAuditRings: vi.fn(() => {
+    legacyAuditImport.calls.push({
+      migrationRuns: migrationRunCalls.count,
+      tasksRegistered: registeredTaskNames.length,
+    });
+    if (legacyAuditImport.shouldThrow) throw new Error("test-import-failure");
+  }),
 }));
 
 vi.mock("../../utils/logger.js", () => ({
@@ -103,6 +125,7 @@ vi.mock("../../utils/logger.js", () => ({
 vi.mock("../../services/TelemetryService.js", () => ({
   initializeTelemetry: vi.fn(),
   setOnboardingCompleteTag: vi.fn(),
+  trackEvent: vi.fn(),
 }));
 
 vi.mock("../../services/connectivity/index.js", () => ({
@@ -187,9 +210,13 @@ vi.mock("../../services/SystemSleepService.js", () => ({
 vi.mock("../../services/DatabaseMaintenanceService.js", () => ({
   getDatabaseMaintenanceService: () => ({
     initialize: vi.fn(),
-    startMaintenance: vi.fn(),
+    startMaintenance: vi.fn(() => dbMaintenanceCalls.push("startMaintenance")),
     dispose: vi.fn(),
   }),
+}));
+
+vi.mock("../../services/databaseBackupNotice.js", () => ({
+  installDatabaseBackupNotice: vi.fn(() => dbMaintenanceCalls.push("installNotice")),
 }));
 
 vi.mock("../../services/TrashedPidTracker.js", () => ({
@@ -200,9 +227,16 @@ vi.mock("../../services/TrashedPidTracker.js", () => ({
 // globalServicesInit for the disk-critical edge. A factory that omits them
 // throws only when that edge is actually exercised, so they must be present
 // for the onCriticalChange tests below.
+const manifestWorkspaceIds = vi.hoisted(() => ({ current: [] as string[] }));
+vi.mock("../../services/persistence/windowManifestStore.js", () => ({
+  readManifestWorkspaceIds: () => manifestWorkspaceIds.current,
+  writeOpenWindowsManifest: vi.fn(),
+}));
+
 vi.mock("../../services/ScratchCleanupService.js", () => ({
   initializeScratchCleanup: vi.fn(),
   runScratchCleanup: vi.fn(async () => {}),
+  setHeldWorkspaceIdsReader: vi.fn(() => () => {}),
 }));
 
 vi.mock("../../services/AssistantScratchService.js", () => ({
@@ -334,25 +368,66 @@ vi.mock("../../services/PendingHelpHibernationStore.js", () => ({
   getPendingHelpHibernationStore: vi.fn(() => ({ load: vi.fn(async () => {}) })),
 }));
 
-// globalServicesInit statically imports menu.ts (wireUpdateMenuState) and the
-// commands barrel (registerCommands); both pull electron/service graphs this
-// suite doesn't exercise — mock at the boundary.
+// globalServicesInit statically imports menu.ts (wireUpdateMenuState), which
+// pulls electron/service graphs this suite doesn't exercise — mock at the
+// boundary.
 vi.mock("../../menu.js", () => ({
   wireUpdateMenuState: vi.fn(),
-}));
-
-vi.mock("../../services/commands/index.js", () => ({
-  registerCommands: registerCommandsMock,
 }));
 
 vi.mock("../deferredInitQueue.js", () => ({
   registerDeferredTask: vi.fn((task: { name: string; run: () => unknown }) => {
     registeredTaskNames.push(task.name);
     registeredTaskRuns.set(task.name, task.run);
+    deferredForward.register?.(task);
   }),
   finalizeDeferredRegistration: vi.fn(),
   resetDeferredQueue: vi.fn(),
+  resetDeferredQueueForNextWindow: vi.fn(() => deferredForward.resetForNextWindow?.()),
 }));
+
+// Every Decisions module counts its own evaluation, so the boot task can be
+// shown to load none of them while the setting is off.
+const decisionsEvaluated = vi.hoisted(() => ({
+  index: 0,
+  service: 0,
+  settings: 0,
+  libraries: 0,
+  packages: 0,
+  start: vi.fn(async () => {}),
+}));
+vi.mock("../../services/decisions/index.js", () => {
+  decisionsEvaluated.index += 1;
+  return { startDecisionsIfEnabled: decisionsEvaluated.start };
+});
+vi.mock("../../services/decisions/DecisionsService.js", () => {
+  decisionsEvaluated.service += 1;
+  return {};
+});
+vi.mock("../../services/decisions/decisionsSettings.js", () => {
+  decisionsEvaluated.settings += 1;
+  return {};
+});
+vi.mock("../../services/decisions/libraries.js", () => {
+  decisionsEvaluated.libraries += 1;
+  return {};
+});
+vi.mock("@daintreehq/decisions-protocol", () => {
+  decisionsEvaluated.packages += 1;
+  return {};
+});
+vi.mock("@daintreehq/decisions-crypto", () => {
+  decisionsEvaluated.packages += 1;
+  return {};
+});
+vi.mock("@daintreehq/decisions-client", () => {
+  decisionsEvaluated.packages += 1;
+  return {};
+});
+vi.mock("@daintreehq/decisions-model", () => {
+  decisionsEvaluated.packages += 1;
+  return {};
+});
 
 vi.mock("electron", () => ({
   app: { exit: vi.fn(), getPath: vi.fn((name: string) => `/tmp/${name}`) },
@@ -378,6 +453,8 @@ import {
   setStopEventLoopLagMonitor,
   getStopAppMetricsMonitor,
   setStopAppMetricsMonitor,
+  _resetDecisionsModuleForTesting,
+  sealDecisionsModule,
 } from "../serviceRefs.js";
 import type { WindowRegistry } from "../WindowRegistry.js";
 import { app, ipcMain, powerMonitor } from "electron";
@@ -386,6 +463,7 @@ import { startAppMetricsMonitor } from "../../services/ProcessMemoryMonitor.js";
 import type { Mock } from "vitest";
 import { CHANNELS } from "../../ipc/channels.js";
 import { store } from "../../store.js";
+import { releaseDeferredQueueOnWindowClosed } from "../lastWindowClosed.js";
 import { projectVisibilityClock } from "../../services/projectVisibilityClock.js";
 import { notifyProjectPresenceChanged } from "../projectPresenceChanges.js";
 
@@ -692,11 +770,11 @@ describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
     });
 
     it("reads workspace states with a bounded fan-out", async () => {
-      // Not a style preference: `ProjectStateManager` cannot tell an EMFILE from
-      // a corrupt file, so a descriptor exhaustion here marks a workspace
-      // unreadable AND renames its healthy state.json to `.corrupted.*`. An
+      // Not a style preference: a descriptor exhaustion that outlasts
+      // `ProjectStateManager`'s read retry marks a workspace unreadable for the
+      // session, so it hydrates empty and the orphan pass stands down. An
       // unbounded read over every project and scratch would make the sweep the
-      // thing that destroys the state it exists to preserve.
+      // thing that costs the restores it exists to keep.
       projectStoreMock.getAllProjects.mockReturnValue(
         Array.from({ length: 40 }, (_, i) => ({ id: `proj-${i}` }))
       );
@@ -772,12 +850,14 @@ describe("initGlobalServices task ordering", () => {
     pluginActivateStartup.mockClear();
     setPluginDirResolver.mockClear();
     activateOpenFileInstaller.mockClear();
-    registerCommandsMock.mockClear();
     (app.exit as ReturnType<typeof vi.fn>).mockReset();
     migrationCurrentVersion = 1;
     migrationShouldThrow = false;
     storeFreshAtBoot = false;
     migrationRunCalls.count = 0;
+    legacyAuditImport.hasSources = false;
+    legacyAuditImport.shouldThrow = false;
+    legacyAuditImport.calls.length = 0;
     mockLogRetentionDays = 30;
     setGlobalServicesInitialized(false);
     _resetGlobalServiceStartsForTest();
@@ -834,14 +914,16 @@ describe("initGlobalServices task ordering", () => {
       "auto-updater",
       "windows-store-notifier",
       "ccr-config",
-      "builtin-commands",
       "idle-terminal-notification-service",
+      "scheduled-run-scheduler",
+      "schedule-os-job",
       "resource-profile-service",
       "plugin-service",
       "plugin-cli-server",
       "plugin-mcp-audit-warm",
       "mcp-server",
       "device-answer",
+      "decisions",
       "help-session-gc",
       "help-session-pty",
       "session-eviction",
@@ -867,19 +949,11 @@ describe("initGlobalServices task ordering", () => {
     }
   });
 
-  it("registers builtin-commands as a deferred task that fires registerCommands only when run", async () => {
+  it("registers no built-in commands task (#15759)", async () => {
     const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
     await initGlobalServices(fakeRegistry);
 
-    const run = registeredTaskRuns.get("builtin-commands");
-    expect(run).toBeDefined();
-    // Registration moved out of main-module eval (boot path) into the queue —
-    // the command-chunk imports must not fire before the drain.
-    expect(registerCommandsMock).not.toHaveBeenCalled();
-
-    run!();
-
-    expect(registerCommandsMock).toHaveBeenCalledTimes(1);
+    expect(registeredTaskNames).not.toContain("builtin-commands");
   });
 
   it("feeds raw powerMonitor suspend/resume into the event-loop lag monitor (#12887)", async () => {
@@ -1117,6 +1191,16 @@ describe("initGlobalServices task ordering", () => {
     expect(dbMaintIndex).toBeGreaterThan(sleepIndex);
   });
 
+  it("subscribes the backup-suspension notice before database maintenance can tick", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+    dbMaintenanceCalls.length = 0;
+
+    registeredTaskRuns.get("database-maintenance")!();
+
+    expect(dbMaintenanceCalls).toEqual(["installNotice", "startMaintenance"]);
+  });
+
   it("plugin-service task swaps in the live plugin:// resolver (#10322)", async () => {
     const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
     await initGlobalServices(fakeRegistry);
@@ -1290,6 +1374,53 @@ describe("initGlobalServices task ordering", () => {
     expect(trashedSpy).not.toHaveBeenCalled();
     expect(scratchSpy).not.toHaveBeenCalled();
     expect(assistantSpy).not.toHaveBeenCalled();
+  });
+
+  it("installs the scratch sweep's held-workspace reader before any deferred task runs (#15614)", async () => {
+    const { setHeldWorkspaceIdsReader } = await import("../../services/ScratchCleanupService.js");
+    const { claimProjectActivation } = await import("../projectActivationClaims.js");
+    const readerSpy = setHeldWorkspaceIdsReader as ReturnType<typeof vi.fn>;
+    readerSpy.mockClear();
+    let shown = "shown-scratch";
+    const pvm = {
+      getActiveProjectId: () => shown,
+      getOutgoingBridgeProjectId: () => null,
+      getAllViews: () => [{ projectId: "cached-scratch" }],
+    };
+    const fakeRegistry = {
+      all: () => [{ services: { projectViewManager: pvm } }],
+      size: 1,
+    } as unknown as WindowRegistry;
+    manifestWorkspaceIds.current = ["restoring-scratch"];
+
+    await initGlobalServices(fakeRegistry);
+
+    // Deferred tasks are only queued here, so a reader installed by now is in
+    // place before the boot sweep or the disk-critical edge can run.
+    expect(registeredTaskNames).toContain("scratch-cleanup");
+    expect(readerSpy).toHaveBeenCalledTimes(1);
+    const reader = readerSpy.mock.calls[0]![0] as () => Iterable<string>;
+
+    const release = claimProjectActivation("opening-scratch", 7);
+    try {
+      expect([...reader()].sort()).toEqual([
+        "cached-scratch",
+        "opening-scratch",
+        "restoring-scratch",
+        "shown-scratch",
+      ]);
+      // Read live on every call: windows switch and close between sweeps.
+      shown = "switched-scratch";
+      manifestWorkspaceIds.current = [];
+      expect([...reader()].sort()).toEqual([
+        "cached-scratch",
+        "opening-scratch",
+        "switched-scratch",
+      ]);
+    } finally {
+      release();
+      manifestWorkspaceIds.current = [];
+    }
   });
 
   it("deferred cleanup tasks invoke their service initializers when run (#8817)", async () => {
@@ -1572,6 +1703,50 @@ describe("initGlobalServices task ordering", () => {
     expect(getGlobalServicesInitialized()).toBe(true);
   });
 
+  it("imports legacy audit rings after the migrations and before any deferred task (#15615)", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    migrationCurrentVersion = 0;
+    legacyAuditImport.hasSources = true;
+
+    const result = await initGlobalServices(fakeRegistry);
+
+    expect(result).toBe("ok");
+    expect(legacyAuditImport.calls).toEqual([{ migrationRuns: 1, tasksRegistered: 0 }]);
+    expect(registeredTaskNames.length).toBeGreaterThan(0);
+  });
+
+  it("skips the legacy audit import when no source remains", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+
+    await initGlobalServices(fakeRegistry);
+
+    expect(legacyAuditImport.calls).toEqual([]);
+  });
+
+  it("keeps booting when the legacy audit import throws", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    legacyAuditImport.hasSources = true;
+    legacyAuditImport.shouldThrow = true;
+
+    const result = await initGlobalServices(fakeRegistry);
+
+    expect(result).toBe("ok");
+    expect(legacyAuditImport.calls).toHaveLength(1);
+    expect(registeredTaskNames.length).toBeGreaterThan(0);
+  });
+
+  it("does not import legacy audit rings when the migrations fail", async () => {
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    migrationCurrentVersion = 0;
+    migrationShouldThrow = true;
+    legacyAuditImport.hasSources = true;
+
+    const result = await initGlobalServices(fakeRegistry);
+
+    expect(result).toBe("exit-requested");
+    expect(legacyAuditImport.calls).toEqual([]);
+  });
+
   describe("shared between a window and the windowless Host runtime", () => {
     const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
 
@@ -1613,5 +1788,194 @@ describe("initGlobalServices task ordering", () => {
       expect(pluginInitialize).toHaveBeenCalledTimes(1);
       expect(activateOpenFileInstaller).toHaveBeenCalledTimes(1);
     });
+  });
+
+  // The once-guard means a window opened after the last one closed never
+  // registers the global tasks again, so the close must not drop any the drain
+  // hasn't reached (#15562).
+  describe("closing the only window while plugin-service holds the drain", () => {
+    it("runs every global task once and the replacement window's task once", async () => {
+      const queue =
+        await vi.importActual<typeof import("../deferredInitQueue.js")>("../deferredInitQueue.js");
+      queue.__resetDeferredQueueForTests();
+      const registry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+      // Counted by registration slot, so a name registered twice can't hide a rerun.
+      const globalStarts: number[] = [];
+      // Created up front so releasing it can't miss, and a one-shot left
+      // unconsumed by an early failure hands later tests a settled promise.
+      let releasePluginInit: () => void = () => {};
+      const pluginInitGate = new Promise<void>((resolve) => {
+        releasePluginInit = resolve;
+      });
+      pluginInitialize.mockImplementationOnce(() => pluginInitGate);
+      // Real bodies would boot services this suite doesn't mock; plugin-service
+      // runs for real so its awaited init is what holds the drain open.
+      deferredForward.register = (task) => {
+        const slot = globalStarts.push(0) - 1;
+        queue.registerDeferredTask({
+          name: task.name,
+          run: () => {
+            globalStarts[slot]++;
+            return task.name === "plugin-service" ? (task.run() as Promise<void>) : undefined;
+          },
+        });
+      };
+      deferredForward.resetForNextWindow = queue.resetDeferredQueueForNextWindow;
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      try {
+        const firstRun = ensureGlobalServicesInitialized(registry);
+        await firstRun;
+        const globalNames = [...registeredTaskNames];
+        const pluginSlot = globalNames.indexOf("plugin-service");
+        expect(pluginSlot).toBeGreaterThanOrEqual(0);
+        expect(pluginSlot).toBeLessThan(globalNames.length - 1);
+
+        // Window 1: its own task, then finalize — what initPerWindowServices does.
+        const windowStarts = { first: 0, replacement: 0 };
+        queue.registerDeferredTask({ name: "window-1", run: () => void windowStarts.first++ });
+        queue.finalizeDeferredRegistration();
+        queue.signalFirstInteractive(1);
+        await vi.waitFor(() => expect(pluginInitialize).toHaveBeenCalledTimes(1), {
+          timeout: 5_000,
+        });
+        expect(globalStarts[pluginSlot + 1]).toBe(0);
+
+        releaseDeferredQueueOnWindowClosed({ openWindowCount: 0, hostRuntimeActive: false });
+
+        expect(ensureGlobalServicesInitialized(registry)).toBe(firstRun);
+        await firstRun;
+        expect(registeredTaskNames).toEqual(globalNames);
+        queue.registerDeferredTask({
+          name: "window-2",
+          run: () => void windowStarts.replacement++,
+        });
+        queue.finalizeDeferredRegistration();
+        queue.signalFirstInteractive(2);
+
+        releasePluginInit();
+        await vi.waitFor(() => expect(windowStarts.first).toBe(1), { timeout: 5_000 });
+
+        expect(globalStarts).toEqual(globalNames.map(() => 1));
+        expect(windowStarts).toEqual({ first: 1, replacement: 1 });
+        expect(pluginInitialize).toHaveBeenCalledTimes(1);
+      } finally {
+        releasePluginInit();
+        deferredForward.register = null;
+        deferredForward.resetForNextWindow = null;
+        warn.mockRestore();
+        queue.__resetDeferredQueueForTests();
+      }
+    });
+  });
+});
+
+describe("Decisions boot task (#16001)", () => {
+  const evaluatedTotal = () =>
+    decisionsEvaluated.index +
+    decisionsEvaluated.service +
+    decisionsEvaluated.settings +
+    decisionsEvaluated.libraries +
+    decisionsEvaluated.packages;
+
+  /** Live resources by type; unrelated work finishing in between only lowers a count. */
+  const resourceCounts = () => {
+    const counts = new Map<string, number>();
+    for (const type of process.getActiveResourcesInfo()) {
+      counts.set(type, (counts.get(type) ?? 0) + 1);
+    }
+    return counts;
+  };
+
+  async function decisionsTask(
+    saved: unknown,
+    hostRecord?: unknown
+  ): Promise<() => Promise<unknown>> {
+    registeredTaskNames.length = 0;
+    registeredTaskRuns.clear();
+    await initGlobalServices({ all: () => [], size: 0 } as unknown as WindowRegistry);
+    const fallback = vi.mocked(store.get).getMockImplementation()!;
+    vi.mocked(store.get).mockImplementation((key: string) =>
+      key === "decisions" ? saved : key === "decisionsHost" ? hostRecord : fallback(key)
+    );
+    const run = registeredTaskRuns.get("decisions");
+    expect(run).toBeDefined();
+    return async () => run!();
+  }
+
+  let restoreStoreGet: (() => unknown) | undefined;
+  beforeEach(() => {
+    _resetDecisionsModuleForTesting();
+    decisionsEvaluated.start.mockClear();
+    const original = vi.mocked(store.get).getMockImplementation();
+    restoreStoreGet = () => vi.mocked(store.get).mockImplementation(original!);
+  });
+  afterEach(() => {
+    restoreStoreGet?.();
+    _resetDecisionsModuleForTesting();
+  });
+
+  // These run before the positive control below: a module, once evaluated, stays evaluated.
+  it.each([
+    ["absent", undefined],
+    ["off", { enabled: false }],
+    ["a non-boolean switch", { enabled: "true" }],
+  ])(
+    "with the setting %s, imports no Decisions module and leaves nothing running",
+    async (_label, saved) => {
+      const run = await decisionsTask(saved);
+      const readsBefore = vi.mocked(store.get).mock.calls.length;
+      const resourcesBefore = resourceCounts();
+      const powerSubscriptionsBefore = vi.mocked(powerMonitor.on).mock.calls.length;
+      const handlersBefore = vi.mocked(ipcMain.handle).mock.calls.length;
+
+      await run();
+
+      expect(evaluatedTotal()).toBe(0);
+      expect(decisionsEvaluated.start).not.toHaveBeenCalled();
+      const reads = vi
+        .mocked(store.get)
+        .mock.calls.slice(readsBefore)
+        .map(([key]) => key);
+      // The switch and an enrolled Host's record (#16022), both saved values, and nothing else.
+      expect(reads).toEqual(["decisions", "decisionsHost"]);
+      const grew = [...resourceCounts()].filter(
+        ([type, count]) => count > (resourcesBefore.get(type) ?? 0)
+      );
+      expect(grew).toEqual([]);
+      expect(vi.mocked(powerMonitor.on).mock.calls.length).toBe(powerSubscriptionsBefore);
+      expect(vi.mocked(ipcMain.handle).mock.calls.length).toBe(handlersBefore);
+    }
+  );
+
+  it("loads nothing once quit has sealed the loader, even with the setting on", async () => {
+    const run = await decisionsTask({ enabled: true });
+    sealDecisionsModule();
+
+    await run();
+
+    expect(evaluatedTotal()).toBe(0);
+    expect(decisionsEvaluated.start).not.toHaveBeenCalled();
+  });
+
+  it("loads the entry module and starts Decisions for an enrolled Host with the setting off (#16022)", async () => {
+    const run = await decisionsTask(
+      { enabled: false },
+      { deviceId: "dev_host_0001", ownerOffAt: null, revokedAt: null }
+    );
+
+    await run();
+
+    expect(decisionsEvaluated.index).toBe(1);
+    expect(decisionsEvaluated.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads the entry module and starts Decisions when the setting is on", async () => {
+    const run = await decisionsTask({ enabled: true });
+
+    await run();
+
+    expect(decisionsEvaluated.index).toBe(1);
+    expect(decisionsEvaluated.start).toHaveBeenCalledTimes(1);
   });
 });

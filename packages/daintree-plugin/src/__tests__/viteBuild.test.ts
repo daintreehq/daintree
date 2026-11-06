@@ -2,20 +2,163 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { execa } from "execa";
 import {
   resolveViteBin,
   findGuestConfig,
   findServerConfig,
   resolveVitePlan,
+  runViteBuild,
   spawnViteWatch,
 } from "../lib/viteBuild.js";
+
+// resolveViteBin reads through statSync; the negative cases stub it so a stray
+// node_modules/.bin/vite in an ancestor of the temp dir (or at "/") can't flip them.
+const fsStat = vi.hoisted(() => ({ statSync: vi.fn(), real: undefined as unknown }));
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  fsStat.real = actual.statSync;
+  fsStat.statSync.mockImplementation(actual.statSync);
+  return { ...actual, statSync: fsStat.statSync };
+});
+const stubNothingInstalled = () =>
+  fsStat.statSync.mockImplementation(() => {
+    throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+  });
+const restoreRealStat = () =>
+  fsStat.statSync.mockImplementation(fsStat.real as (...args: unknown[]) => unknown);
 
 const watcher = vi.hoisted(() => ({ then: vi.fn(), kill: vi.fn() }));
 vi.mock("execa", () => ({ execa: vi.fn(() => watcher) }));
 
 describe("viteBuild", () => {
   it("resolveViteBin throws a fix-it message when Vite isn't installed", () => {
-    expect(() => resolveViteBin("/nonexistent/plugin/dir")).toThrow(/Couldn't find Vite/);
+    stubNothingInstalled();
+    try {
+      expect(() => resolveViteBin("/nonexistent/plugin/dir")).toThrow(/Couldn't find Vite/);
+    } finally {
+      restoreRealStat();
+    }
+  });
+
+  describe("resolveViteBin lookup", () => {
+    let root: string;
+    const realPlatform = process.platform;
+
+    const installVite = async (
+      dir: string,
+      binName = realPlatform === "win32" ? "vite.cmd" : "vite"
+    ) => {
+      const bin = path.join(dir, "node_modules", ".bin", binName);
+      await fs.mkdir(path.dirname(bin), { recursive: true });
+      await fs.writeFile(bin, "");
+      return bin;
+    };
+    const setPlatform = (value: NodeJS.Platform) =>
+      Object.defineProperty(process, "platform", { value, configurable: true });
+
+    beforeEach(async () => {
+      // realpath: macOS tmpdir is a symlink, and resolveViteBin returns resolved paths.
+      root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "daintree-vitebin-")));
+    });
+
+    afterEach(async () => {
+      setPlatform(realPlatform);
+      await fs.rm(root, { recursive: true, force: true }).catch(() => {});
+    });
+
+    it("uses the plugin's own Vite for a standalone plugin", async () => {
+      const plugin = path.join(root, "plugin");
+      const bin = await installVite(plugin);
+      expect(resolveViteBin(plugin)).toBe(bin);
+    });
+
+    it("finds a Vite hoisted to the workspace root", async () => {
+      const bin = await installVite(root);
+      const plugin = path.join(root, "packages", "my-plugin");
+      await fs.mkdir(plugin, { recursive: true });
+      expect(resolveViteBin(plugin)).toBe(bin);
+    });
+
+    it("prefers the plugin's own Vite over an ancestor's", async () => {
+      await installVite(root);
+      const plugin = path.join(root, "packages", "my-plugin");
+      const own = await installVite(plugin);
+      expect(resolveViteBin(plugin)).toBe(own);
+    });
+
+    it("takes the nearest ancestor when several have Vite", async () => {
+      await installVite(root);
+      const mid = path.join(root, "packages");
+      const nearest = await installVite(mid);
+      const plugin = path.join(mid, "my-plugin");
+      await fs.mkdir(plugin, { recursive: true });
+      expect(resolveViteBin(plugin)).toBe(nearest);
+    });
+
+    it("skips a directory named vite and keeps walking", async () => {
+      const bin = await installVite(root);
+      const plugin = path.join(root, "packages", "my-plugin");
+      const binName = realPlatform === "win32" ? "vite.cmd" : "vite";
+      await fs.mkdir(path.join(plugin, "node_modules", ".bin", binName), { recursive: true });
+      expect(resolveViteBin(plugin)).toBe(bin);
+    });
+
+    it("ignores a node_modules directory that has no Vite bin", async () => {
+      const bin = await installVite(root);
+      const plugin = path.join(root, "packages", "my-plugin");
+      await fs.mkdir(path.join(plugin, "node_modules", ".bin"), { recursive: true });
+      await fs.writeFile(path.join(plugin, "node_modules", ".bin", "tsc"), "");
+      expect(resolveViteBin(plugin)).toBe(bin);
+    });
+
+    it("handles paths with spaces", async () => {
+      const bin = await installVite(path.join(root, "my workspace"));
+      const plugin = path.join(root, "my workspace", "packages", "my plugin");
+      await fs.mkdir(plugin, { recursive: true });
+      expect(resolveViteBin(plugin)).toBe(bin);
+    });
+
+    it("looks for the .cmd shim on Windows", async () => {
+      setPlatform("win32");
+      const bin = await installVite(root, "vite.cmd");
+      const plugin = path.join(root, "packages", "my-plugin");
+      // A bare `vite` (the POSIX bin) nearer the plugin must not be picked on Windows.
+      await installVite(plugin, "vite");
+      expect(resolveViteBin(plugin)).toBe(bin);
+    });
+
+    it("fails clearly, naming where it looked, when no ancestor has Vite", async () => {
+      const plugin = path.join(root, "packages", "my-plugin");
+      await fs.mkdir(plugin, { recursive: true });
+      stubNothingInstalled();
+      let message = "";
+      try {
+        resolveViteBin(plugin);
+      } catch (err) {
+        message = (err as Error).message;
+      } finally {
+        restoreRealStat();
+      }
+      expect(message).toContain("Couldn't find Vite");
+      expect(message).toContain(path.join(plugin, "node_modules", ".bin"));
+      expect(message).toContain("any parent directory");
+      expect(message).toContain("--skip-build");
+    });
+
+    it("runs the resolved bin with the plugin directory as cwd", async () => {
+      const bin = await installVite(root);
+      const plugin = path.join(root, "packages", "my plugin");
+      await fs.mkdir(plugin, { recursive: true });
+      vi.mocked(execa).mockReturnValueOnce(Promise.resolve({}) as never);
+      await runViteBuild(plugin, ["build"]);
+      expect(execa).toHaveBeenLastCalledWith(bin, ["build"], { cwd: plugin, stdio: "inherit" });
+      spawnViteWatch(plugin);
+      expect(execa).toHaveBeenLastCalledWith(bin, ["build", "--watch"], {
+        cwd: plugin,
+        stdio: "inherit",
+      });
+    });
   });
 
   it("returns a live watcher without awaiting the long-running process", () => {

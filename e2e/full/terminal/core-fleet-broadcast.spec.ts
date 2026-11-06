@@ -75,7 +75,7 @@ async function ensureProjectOpen(): Promise<void> {
     if (await worktreeBranch().isVisible()) return;
 
     const openProjectButton = ctx.window.getByRole("button", {
-      name: "Open project",
+      name: /^Open project\b/,
       exact: true,
     });
     const recentProject = ctx.window.locator("button", { hasText: projectName }).first();

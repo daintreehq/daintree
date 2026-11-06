@@ -32,7 +32,13 @@ import {
   FIELD_CONTROL_SIZE,
   FIELD_INPUT,
 } from "@/components/Worktree/views/WorktreeFormLayout";
-import { EMOJI_SLOT_CLASS, SlottedInputField, PathCaption } from "./projectDialogFields";
+import {
+  EMOJI_SLOT_CLASS,
+  SlottedInputField,
+  PathCaption,
+  ProjectGroupField,
+} from "./projectDialogFields";
+import { useProjectCreationGroup } from "@/hooks/useProjectCreationGroup";
 import {
   GITIGNORE_TEMPLATE_OPTIONS,
   DEFAULT_GITIGNORE_TEMPLATE_ID,
@@ -51,7 +57,10 @@ interface GitInitDialogProps {
    * fresh suggestion from the folder name.
    */
   initialIdentity?: ProjectCreationIdentity | null;
-  onSuccess: (identity: ProjectCreationIdentity) => void;
+  /** Group chosen one dialog earlier in the create-project flow, shown as the starting choice. */
+  initialGroupId?: string | null;
+  /** `groupId` is this dialog's answer: `null` for no group. */
+  onSuccess: (identity: ProjectCreationIdentity, groupId: string | null) => void;
   onCancel: () => void;
 }
 
@@ -183,6 +192,7 @@ export function GitInitDialog({
   isOpen,
   directoryPath,
   initialIdentity,
+  initialGroupId,
   onSuccess,
   onCancel,
 }: GitInitDialogProps) {
@@ -208,6 +218,13 @@ export function GitInitDialog({
   const commitMessageErrorId = useId();
   const templateHintId = useId();
 
+  // Keyed on the folder like the identity seed below, for the same reason.
+  const { groups, groupId, setGroupId } = useProjectCreationGroup(
+    isOpen,
+    initialGroupId,
+    directoryPath
+  );
+
   const trimmedProjectName = projectName.trim();
   // The name is seeded from the folder, so this only ever fires after the user
   // clears the field — the one state where the start button silently disables.
@@ -222,8 +239,8 @@ export function GitInitDialog({
       return;
     }
     hasFinalizedSuccessRef.current = true;
-    onSuccess({ name: trimmedProjectName, emoji });
-  }, [onSuccess, trimmedProjectName, emoji]);
+    onSuccess({ name: trimmedProjectName, emoji }, groupId);
+  }, [onSuccess, trimmedProjectName, emoji, groupId]);
 
   // Seed the identity row on open: the create-project flow already asked, so
   // reuse what it carried; reaching this dialog directly (opening a non-repo
@@ -662,6 +679,14 @@ export function GitInitDialog({
                   }
                 />
               </FormRow>
+
+              <ProjectGroupField
+                id="git-init-group"
+                groups={groups}
+                value={groupId}
+                onChange={setGroupId}
+                disabled={configDisabled}
+              />
 
               <FormRow
                 label="Gitignore"

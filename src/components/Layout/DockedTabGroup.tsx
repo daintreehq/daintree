@@ -23,7 +23,7 @@ import {
   TOUCH_SENSOR_OPTIONS,
 } from "@/components/DragDrop/dragActivation";
 import { LayoutGroup, AnimatePresence, m } from "framer-motion";
-import { Check, ChevronDown, CopyPlus } from "lucide-react";
+import { Check, ChevronDown, CopyPlus, PanelTopClose } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import {
@@ -111,8 +111,10 @@ import { UI_ANIMATION_DURATION, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDismissableTooltip } from "@/hooks/useDismissableTooltip";
-import { useHandBackRunIds, useRunHandBackState } from "@/hooks/useRunHandBackState";
-import { resolveSessionPresentation } from "@/lib/handBackPresentation";
+import { useFleetBandRunIds, useRunFleetBand } from "@/hooks/useRunFleetBand";
+import { usePaneObservation } from "@/hooks/useRunSessionPresentation";
+import { NEEDS_YOU_BANDS } from "@/lib/fleetAttention";
+import { resolvePaneSessionPresentation } from "@/lib/paneSessionPresentation";
 import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContext";
 import {
   consultPanelCloseGuards,
@@ -122,7 +124,12 @@ import {
 import { animatePanelMove } from "@/components/Panel/animatePanelMove";
 import { isScratchpadElement } from "@/lib/terminalScratchpad";
 import { reorderGroupTabsWithUndo } from "@/services/layout/reorderGroupTabs";
+import { pluralize } from "@/lib/pluralize";
+import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
+import { withDisplayEmoji } from "@shared/utils/displayIdentity";
+import { DockChipLabel } from "./DockChipLabel";
 
+import { useRevealDockChipOnOpen } from "./useRevealDockChipOnOpen";
 interface DockedTabGroupProps {
   group: TabGroup;
   panels: PtyPanelData[];
@@ -152,9 +159,11 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   // otherwise leave the hover tooltip stranded open.
   const commandTip = useDismissableTooltip();
   const stateTip = useDismissableTooltip();
+  const titleTip = useDismissableTooltip();
   const dismissTips = () => {
     commandTip.dismiss();
     stateTip.dismiss();
+    titleTip.dismiss();
   };
 
   const openDockTerminal = usePanelStore((s) => s.openDockTerminal);
@@ -187,7 +196,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     return panels.find((p) => p.id === activeTabId) ?? panels[0];
   }, [panels, activeTabId]);
   const activePanelId = activePanel?.id;
-  const activeHandBack = useRunHandBackState(activePanelId ?? "");
+  // Read before the early return below; the glyph resolves after it.
+  const activeBand = useRunFleetBand(activePanelId ?? "");
+  const activeObservation = usePaneObservation(activePanelId ?? null);
   const badge = useDockChipBadge(activePanelId ?? "");
   // The active tab's plugin report, like its agent glyph (#13820).
   const reportedActivity = usePluginPanelActivity(activePanelId ?? "");
@@ -202,6 +213,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     return id !== null && panels.some((p) => p.id === id) ? id : null;
   });
   const isOpen = openDockPanelId !== null;
+  const chipRef = useRevealDockChipOnOpen(isOpen);
 
   const [tabListEl, setTabListEl] = useState<HTMLDivElement | null>(null);
 
@@ -627,11 +639,14 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     }
   }, [activePanel, group.id, addPanel, addPanelToGroup, trashPanel, setActiveTab]);
 
-  const handBackRunIds = useHandBackRunIds();
-  const groupBlockedState = getGroupBlockedAgentState(panels, handBackRunIds);
+  const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
+  const groupBlockedState = getGroupBlockedAgentState(panels, needsYouRunIds);
   const blockedState = useDockBlockedState(groupBlockedState);
   const isDeprioritized = !isOpen && isGroupDeprioritized(panels);
   const showDockAgentHighlights = usePreferencesStore((s) => s.showDockAgentHighlights);
+  // The chip and its tabs name each session by its task, as the grid's tab
+  // strips do; the full "Claude: task" is the tooltip and the accessible name.
+  const showAgentTaskTitles = usePreferencesStore((s) => s.showAgentTaskTitles);
 
   // Plain-terminal activity for the group aggregates across tabs: any plain tab
   // running → spinner. The scope key tracks the plain contributors (see
@@ -706,29 +721,46 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     presetColor: brandColor,
   });
   const agentState = getDockDisplayAgentState(activePanel);
+  const displayAgentState = getTerminalAgentDisplayState(activeChrome, agentState);
+  // The run's fleet band decides the glyph, as on the pane's own chip: only a
+  // run in Needs you is a wait.
+  const shownAgentState = resolvePaneSessionPresentation(
+    displayAgentState,
+    activeBand,
+    activeObservation
+  );
   const isWorking = agentState === "working";
-  const isWaiting = agentState === "waiting";
+  const isWaiting = shownAgentState === "waiting";
   const isActive = isWorking || isWaiting;
   const commandText = activePanel.activityHeadline || activePanel.lastCommand;
   // Command text belongs to the active tab, so gate it on the active panel's own
   // status — not the group aggregate — so an idle active tab never shows a
   // background tab's command.
   const activePlainWorking = getDockDisplayActivityState(activePanel) === "working";
-  const displayTitle = activePanel.title;
-  const displayAgentState = getTerminalAgentDisplayState(activeChrome, agentState);
-  // A hand-back draws unread or done, as on the pane's own chip.
-  const shownAgentState = resolveSessionPresentation(
-    displayAgentState,
-    activePanel.agentState,
-    activePanel.waitingReason,
-    activeHandBack
-  );
+  const displayTitle = getTerminalDisplayTitle(activePanel, "compact", {
+    showTask: showAgentTaskTitles,
+  });
+  const fullTitle = getTerminalDisplayTitle(activePanel, "full", {
+    showTask: showAgentTaskTitles,
+  });
+
+  // A chip showing its task keeps the live command for the tooltip: inline,
+  // the two squeeze each other to nothing. A plain terminal titled by its own
+  // command ("npm run dev") doesn't repeat it either.
+  const showsTask = fullTitle !== displayTitle;
+  const showInlineCommand = !!commandText && !showsTask && commandText !== displayTitle;
+  const titleTooltip =
+    showsTask && commandText && (isActive || activePlainWorking)
+      ? `${fullTitle} — ${commandText}`
+      : fullTitle;
+  const showTitleTip = titleTooltip !== displayTitle || displayTitle.length > 18;
   // The glyph is smoothed (idle/missing shows as waiting); the words are not.
   const observedStateLabel = agentState ? getEffectiveStateLabel(agentState) : undefined;
-  // A hand-back is named for what it is drawn as; the observation rides along.
-  const isHandBack = shownAgentState !== displayAgentState;
+  // A state the band redrew is named for what it is drawn as; the observation
+  // rides along.
+  const isReinterpreted = shownAgentState !== displayAgentState;
   const stateLabel =
-    isHandBack && shownAgentState ? SESSION_LABELS[shownAgentState] : observedStateLabel;
+    isReinterpreted && shownAgentState ? SESSION_LABELS[shownAgentState] : observedStateLabel;
   const StateIcon = shownAgentState ? SESSION_ICONS[shownAgentState] : null;
   // Only where no agent glyph is drawn, and never folded into the agent state.
   const pluginActivity = displayAgentState ? null : reportedActivity;
@@ -736,12 +768,31 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const chipDeprioritized =
     isDeprioritized && pluginActivity?.shown !== "working" && pluginActivity?.shown !== "waiting";
 
+  // The whole group goes back to the grid together (`moveTerminalToGrid` moves a
+  // grouped panel's group).
+  const moveGroupToGrid = () => {
+    animatePanelMove(activePanel.id, "restore", () => {
+      const moved = moveTerminalToGrid(activePanel.id);
+      if (moved && openDockPanelId) closeDockTerminal(openDockPanelId);
+      return moved;
+    });
+  };
+
   return (
     <DockPopoverChildProvider>
       <Popover open={isOpen} onOpenChange={handleOpenChange}>
         <TerminalContextMenu terminalId={activePanel.id} forceLocation="dock">
           <PopoverTrigger asChild>
             <button
+              ref={chipRef}
+              // Keyboard arrival shows the full title the label may truncate,
+              // as hovering it does; the name itself is in the aria-label.
+              onFocus={(e) => {
+                if (showTitleTip && e.currentTarget.matches(":focus-visible")) {
+                  titleTip.onOpenChange(true);
+                }
+              }}
+              onBlur={() => titleTip.onOpenChange(false)}
               {...dragPointerListeners}
               data-dock-item=""
               className={cn(
@@ -767,13 +818,9 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               onDoubleClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                animatePanelMove(activePanel.id, "restore", () => {
-                  const moved = moveTerminalToGrid(activePanel.id);
-                  if (moved && openDockPanelId) closeDockTerminal(openDockPanelId);
-                  return moved;
-                });
+                moveGroupToGrid();
               }}
-              aria-label={`${activePanel.title}${displayAgentState ? (stateLabel ? ` — agent ${stateLabel}` : "") : pluginActivity ? pluginPanelActivityLabelSuffix(pluginActivity) : groupPlainWorking ? " — command running" : ""}${dockChipBadgeLabelSuffix(badge)} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
+              aria-label={`${fullTitle}${displayAgentState ? (stateLabel ? ` — agent ${stateLabel}` : "") : pluginActivity ? pluginPanelActivityLabelSuffix(pluginActivity) : groupPlainWorking ? " — command running" : ""}${dockChipBadgeLabelSuffix(badge)} (${panels.length} tabs) - Click to preview, double-click to move to grid, drag to reorder`}
             >
               <div className="flex items-center justify-center shrink-0">
                 <TerminalIcon
@@ -782,9 +829,18 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   className="w-3.5 h-3.5"
                 />
               </div>
-              <span className="truncate min-w-[48px] max-w-[140px] font-sans font-medium">
-                {displayTitle}
-              </span>
+              {showTitleTip ? (
+                <Tooltip open={titleTip.open} onOpenChange={titleTip.onOpenChange}>
+                  <TooltipTrigger asChild onPointerEnter={titleTip.onPointerEnter}>
+                    <DockChipLabel
+                      title={withDisplayEmoji(displayTitle, activePanel.displayEmoji)}
+                    />
+                  </TooltipTrigger>
+                  <TooltipContent side="top">{titleTooltip}</TooltipContent>
+                </Tooltip>
+              ) : (
+                <DockChipLabel title={withDisplayEmoji(displayTitle, activePanel.displayEmoji)} />
+              )}
               <DockChipBadge model={badge} />
 
               {/* Tab count indicator */}
@@ -792,7 +848,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                 ({panels.length})
               </span>
 
-              {(isActive || activePlainWorking) && commandText && (
+              {(isActive || activePlainWorking) && showInlineCommand && (
                 <>
                   <div className={DOCK_CHIP_RULE_CLASS} aria-hidden="true" />
                   <Tooltip open={commandTip.open} onOpenChange={commandTip.onOpenChange}>
@@ -836,7 +892,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
                     {stateLabel
-                      ? isHandBack
+                      ? isReinterpreted
                         ? `Agent ${stateLabel} · Observed: ${observedStateLabel}`
                         : `Agent ${stateLabel}`
                       : "No agent state observed"}
@@ -848,6 +904,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
         </TerminalContextMenu>
 
         <PopoverContent
+          aria-label={`Preview: ${fullTitle} (${pluralize(panels.length, "tab")})`}
           className="w-[700px] max-w-[90vw] max-h-[80vh] p-0 bg-daintree-bg/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden"
           style={{ height: popoverHeight }}
           side="top"
@@ -902,7 +959,12 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                           <SortableTabButton
                             key={panel.id}
                             id={panel.id}
-                            title={panel.title}
+                            title={getTerminalDisplayTitle(panel, "compact", {
+                              showTask: showAgentTaskTitles,
+                            })}
+                            fullTitle={getTerminalDisplayTitle(panel, "full", {
+                              showTask: showAgentTaskTitles,
+                            })}
                             chrome={tabChrome}
                             kind={panel.kind ?? "terminal"}
                             agentState={getDockDisplayAgentState(panel)}
@@ -942,7 +1004,12 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                             >
                               <SortableTabButton
                                 id={panel.id}
-                                title={panel.title}
+                                title={getTerminalDisplayTitle(panel, "compact", {
+                                  showTask: showAgentTaskTitles,
+                                })}
+                                fullTitle={getTerminalDisplayTitle(panel, "full", {
+                                  showTask: showAgentTaskTitles,
+                                })}
                                 chrome={tabChrome}
                                 kind={panel.kind ?? "terminal"}
                                 agentState={getDockDisplayAgentState(panel)}
@@ -1044,7 +1111,14 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                                   className="w-3.5 h-3.5"
                                 />
                               </span>
-                              <span className="mr-3 truncate">{panel.title}</span>
+                              <span className="mr-3 truncate">
+                                {withDisplayEmoji(
+                                  getTerminalDisplayTitle(panel, "compact", {
+                                    showTask: showAgentTaskTitles,
+                                  }),
+                                  panel.displayEmoji
+                                )}
+                              </span>
                               {isActive && (
                                 <Check
                                   className="ml-auto h-3.5 w-3.5 shrink-0 text-text-secondary"
@@ -1057,6 +1131,28 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                       </DropdownMenuContent>
                     </DropdownMenu>
                   )}
+                  {/* A single docked panel carries Move to grid in its own
+                      header; a group's member headers do not, so the group's
+                      strip carries it for all of them. */}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon-xs"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          moveGroupToGrid();
+                        }}
+                        onPointerDown={(e) => e.stopPropagation()}
+                        className="ml-auto mr-1.5 shrink-0 self-center focus-visible:outline-offset-[-2px] [&_svg]:size-3.5"
+                        aria-label="Move group to grid"
+                        data-testid="dock-group-move-to-grid"
+                      >
+                        <PanelTopClose aria-hidden="true" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Move group to grid</TooltipContent>
+                  </Tooltip>
                 </div>
               </LayoutGroup>
             </SortableContext>

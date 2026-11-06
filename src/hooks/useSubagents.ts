@@ -21,9 +21,10 @@ export const SUBAGENT_REFRESH_THROTTLE_MS = 20_000;
 
 /**
  * Claude's floor, and its polling interval while children can be running.
- * Its lookup is a directory listing plus a stat per child — a transcript is
- * only re-read once it has changed — so it can afford to keep up with a parent
- * that is delegating. Codex has no equivalent: each lookup spawns a process,
+ * Its lookup is a directory listing, a stat per child and one more per shown
+ * row's sidecar — a transcript or sidecar is only re-read once it has changed,
+ * and children past the list limit are never opened — so it can afford to
+ * keep up with a parent that is delegating. Codex has no equivalent: each lookup spawns a process,
  * and `notLoaded` children give it no liveness to keep up with anyway.
  */
 export const CLAUDE_SUBAGENT_POLL_MS = 5_000;

@@ -29,6 +29,8 @@ vi.mock("@/utils/recipeNotify", () => ({
 }));
 
 import { registerRecipeActions } from "../recipeActions";
+import { ConfirmationTimeoutError } from "../../confirmationTimeout";
+import { PANEL_LIMIT_CONFIRM_EXPIRED_REASON } from "../panelLimitError";
 import { resolveEffectiveActionDanger } from "../../effectiveDanger";
 
 type Worktree = {
@@ -212,6 +214,7 @@ describe("recipeActions adversarial", () => {
         dispatchSource: "agent",
         projectPath: "/repo",
         hostApprovedRecipeRun: { recipeId: "r1", terminalCount: 7, terminalsDigest: "deadbeef" },
+        dispatchDeadlineAt: 123_456,
       }
     );
 
@@ -223,6 +226,8 @@ describe("recipeActions adversarial", () => {
       expect.objectContaining({
         dispatchSource: "agent",
         hostApprovedRecipeRun: { recipeId: "r1", terminalCount: 7, terminalsDigest: "deadbeef" },
+        // And the deadline that bounds its panel-limit confirm (#15648).
+        dispatchDeadlineAt: 123_456,
       })
     );
   });
@@ -388,9 +393,32 @@ describe("recipeActions adversarial", () => {
 
     const run = setupActions();
 
-    await expect(run("recipe.run", { recipeId: "r1", worktreeId: "wt-1" }, {})).rejects.toThrow(
-      /Recipe launch failed: Panel limit reached/
+    const launch = run("recipe.run", { recipeId: "r1", worktreeId: "wt-1" }, {});
+    await expect(launch).rejects.toThrow(/Recipe launch failed: Panel limit reached/);
+    // A refusal is not a confirm that ran out of time (#15648).
+    await expect(launch).rejects.not.toBeInstanceOf(ConfirmationTimeoutError);
+    expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, expect.any(Object));
+  });
+
+  it("recipe.run reports a panel-limit confirm nobody answered in time as a confirmation timeout (#15648)", async () => {
+    const results = {
+      spawned: [],
+      failed: [
+        { index: 0, error: "Agent recipe terminal cap reached" },
+        { index: 1, error: PANEL_LIMIT_CONFIRM_EXPIRED_REASON },
+      ],
+    };
+    setRecipeState({ runRecipeWithResults: vi.fn().mockResolvedValue(results) });
+    setWorktreeMap(new Map([["wt-1", { path: "/repo/wt" }]]));
+
+    const run = setupActions();
+    const launch = run(
+      "recipe.run",
+      { recipeId: "r1", worktreeId: "wt-1" },
+      { dispatchSource: "agent" }
     );
+    await expect(launch).rejects.toBeInstanceOf(ConfirmationTimeoutError);
+    await expect(launch).rejects.toThrow(PANEL_LIMIT_CONFIRM_EXPIRED_REASON);
     expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, expect.any(Object));
   });
 

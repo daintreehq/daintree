@@ -23,7 +23,7 @@ export function createTerminalDataMultiplexer(ipcRenderer: PreloadIpcRenderer): 
         const subs = _terminalDataSubscribers.get(terminalId);
         if (!subs || subs.size === 0) return;
         // Accept string, Uint8Array, or Buffer (Node.js extends Uint8Array)
-        if (typeof data === "string" || data instanceof Uint8Array || Buffer.isBuffer(data)) {
+        if (typeof data === "string" || data instanceof Uint8Array) {
           const end = typeof streamEnd === "number" ? streamEnd : undefined;
           // Iterate the live Set directly — unlike the events:push dispatcher
           // (eventBus.ts), terminal data subscribers don't unsubscribe during dispatch,
@@ -44,8 +44,9 @@ export function createTerminalDataMultiplexer(ipcRenderer: PreloadIpcRenderer): 
       _terminalDataSubscribers.set(id, subs);
     }
     // Fresh wrapper per subscription so the same callback can subscribe twice
-    // and each cleanup removes only its own subscription.
-    const wrapped: TerminalDataSubscriber = (data) => callback(data);
+    // and each cleanup removes only its own subscription. It must pass the
+    // stream offset on: the restore fence drops covered chunks by it (#16259).
+    const wrapped: TerminalDataSubscriber = (data, streamEnd) => callback(data, streamEnd);
     subs.add(wrapped);
     return () => {
       const current = _terminalDataSubscribers.get(id);

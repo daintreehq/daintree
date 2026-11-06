@@ -88,6 +88,17 @@ export interface DockLaunchPresetChoice {
   isSelected: boolean;
 }
 
+/**
+ * One account an agent can launch on (#16133). `accountId: null` is the CLI's
+ * default login. `isSelected` marks the account a plain launch signs in as,
+ * which launching any choice leaves alone.
+ */
+export interface DockLaunchAccountChoice {
+  accountId: string | null;
+  label: string;
+  isSelected: boolean;
+}
+
 export interface DockLaunchAgent {
   id: string;
   name: string;
@@ -100,6 +111,11 @@ export interface DockLaunchAgent {
    * launch alongside the named ones.
    */
   presetChoices?: readonly DockLaunchPresetChoice[];
+  /**
+   * Present only when the agent has at least one saved account. Always begins
+   * with the default login, so an expanded row can offer it beside them.
+   */
+  accountChoices?: readonly DockLaunchAccountChoice[];
   /** Newly detected on this machine and not yet acted on — drives the "New" cue. */
   isNew?: boolean;
 }
@@ -241,6 +257,9 @@ export type DockLaunchCueId =
   | "hide-plugin-group"
   | "more";
 
+/** Heading over an expanded agent's account rows, when preset rows sit above them. */
+export const DOCK_LAUNCH_ACCOUNT_GROUP_LABEL = "Account";
+
 /** Heading for each named provenance group, matching the old preset submenu. */
 export const DOCK_LAUNCH_PRESET_GROUP_LABELS: Record<DockLaunchPresetGroup, string> = {
   default: "",
@@ -307,7 +326,24 @@ export type DockLaunchRow =
        * just restate what every row under it already is.
        */
       groupLabel?: string;
+    })
+  | (DockLaunchRowBase & {
+      /** One of an expanded agent's accounts, after its presets (#16133). */
+      kind: "account";
+      band: "presets";
+      item: DockLaunchAgentItem;
+      parentRowKey: string;
+      account: DockLaunchAccountChoice;
+      /** "Account", on the first account row when preset rows sit above it. */
+      groupLabel?: string;
     });
+
+/** A row an expanded agent contributes: one of its presets or one of its accounts. */
+export type DockLaunchChoiceRow = Extract<DockLaunchRow, { kind: "preset" | "account" }>;
+
+export function isDockLaunchChoiceRow(row: DockLaunchRow | undefined): row is DockLaunchChoiceRow {
+  return row?.kind === "preset" || row?.kind === "account";
+}
 
 /** The plugin group a row belongs to: a plugin entry, or the cue that hides its group. */
 export function getDockLaunchRowPluginGroup(row: DockLaunchRow): DockLaunchPluginGroup | undefined {
@@ -320,16 +356,42 @@ export function getDockLaunchRowPluginGroup(row: DockLaunchRow): DockLaunchPlugi
  * group, which is headed by the plugin it belongs to — that heading is the
  * attribution, so a row never has to say whose it is.
  */
-export function dockLaunchBandLabel(band: DockLaunchBandId, row: DockLaunchRow): string {
+export function dockLaunchBandLabel(
+  band: DockLaunchBandId,
+  row: DockLaunchRow,
+  surface?: DockLaunchSurface
+): string {
   if (band === "plugin-entries") {
     return getDockLaunchRowPluginGroup(row)?.pluginName ?? DOCK_LAUNCH_BAND_LABELS[band];
+  }
+  // An expansion that opens on an account has no presets above it.
+  if (band === "presets" && row.kind === "account") return DOCK_LAUNCH_ACCOUNT_GROUP_LABEL;
+  if (surface) {
+    // The launcher's header states where this surface lands things, so a band
+    // that lands there too says what it holds; only a band that lands somewhere
+    // else names the destination, where it is the one fact the row can't carry.
+    if (band === "dock-panels" && surface === "dock") return "Panels";
+    if (band === "grid-panels" && surface === "grid") return "Panels";
+    // A recipe opens in the grid whichever launcher runs it: a terminal's dock
+    // placement only lives in a cloned layout and is stripped from every stored
+    // recipe (`sanitizeRecipeTerminal`). Over the lone "Create a recipe" cue
+    // there is nothing to open, so the heading only names what it holds.
+    if (band === "recipes" && surface === "dock" && row.kind === "item") {
+      return "Recipes · open in grid";
+    }
   }
   return DOCK_LAUNCH_BAND_LABELS[band];
 }
 
+/** Where a surface lands what it launches, as its header and trigger say it. */
+export const DOCK_LAUNCH_SURFACE_HEADER: Record<DockLaunchSurface, string> = {
+  grid: "Launch in grid",
+  dock: "Launch in dock",
+};
+
 /** Narrowing helper — the item rows are the only ones carrying a launchable item. */
 export function getDockLaunchRowItem(row: DockLaunchRow): DockLaunchItem | undefined {
-  return row.kind === "item" || row.kind === "preset" ? row.item : undefined;
+  return row.kind === "cue" ? undefined : row.item;
 }
 
 /**
@@ -380,13 +442,54 @@ export function buildPresetChoices(
 }
 
 /**
+ * An agent's accounts as launcher choices, the default login first. Empty when
+ * there is no saved account, so the default login never stands alone.
+ */
+export function buildAccountChoices(
+  accounts: ReadonlyArray<{ id: string; name: string }>,
+  launchAccountId: string | null
+): DockLaunchAccountChoice[] {
+  if (accounts.length === 0) return [];
+  return [
+    { accountId: null, label: "Default login", isSelected: launchAccountId === null },
+    ...accounts.map((account) => ({
+      accountId: account.id,
+      label: account.name,
+      isSelected: launchAccountId === account.id,
+    })),
+  ];
+}
+
+/**
  * The sibling rows an expanded agent contributes, keyed to the exact parent row
- * so the same agent listed twice expands independently.
+ * so the same agent listed twice expands independently: its presets, then its
+ * accounts.
  */
 export function buildPresetRows(parentRow: DockLaunchRow): DockLaunchRow[] {
   if (parentRow.kind !== "item") return [];
   const { item } = parentRow;
   if (item.category !== "agent") return [];
+  const presetRows = buildPresetChoiceRows(parentRow, item);
+  const accounts = item.agent.accountChoices ?? [];
+  const accountRows = accounts.map((account, index): DockLaunchRow => ({
+    kind: "account",
+    // Its own namespace, so an account id can't collide with a preset id.
+    rowKey: `account:${parentRow.rowKey}:${
+      account.accountId === null ? "sentinel:default" : `id:${account.accountId}`
+    }`,
+    band: "presets",
+    item,
+    parentRowKey: parentRow.rowKey,
+    account,
+    groupLabel: index === 0 && presetRows.length > 0 ? DOCK_LAUNCH_ACCOUNT_GROUP_LABEL : undefined,
+  }));
+  return [...presetRows, ...accountRows];
+}
+
+function buildPresetChoiceRows(
+  parentRow: DockLaunchRow & { kind: "item" },
+  item: DockLaunchAgentItem
+): DockLaunchRow[] {
   const choices = item.agent.presetChoices;
   if (!choices || choices.length === 0) return [];
   // Headings only earn their space when they tell two groups apart — the old
@@ -430,14 +533,14 @@ export function insertExpandedPresetRows(
   return [...rows.slice(0, index + 1), ...presetRows, ...rows.slice(index + 1)];
 }
 
-/** True when a row can expand into preset children. */
+/** True when a row can expand into preset or account children. */
 export function rowHasPresets(row: DockLaunchRow | undefined): boolean {
   if (!row || row.kind !== "item") return false;
   const { item } = row;
   return (
     item.category === "agent" &&
     isAgentLaunchable(item.agent.availability) &&
-    (item.agent.presetChoices?.length ?? 0) > 0
+    (item.agent.presetChoices?.length ?? 0) + (item.agent.accountChoices?.length ?? 0) > 0
   );
 }
 
@@ -530,7 +633,7 @@ export interface BuildDockLaunchModelOptions extends DockLaunchPreconditions {
  * here rather than at the row so every consumer of the model agrees, and stated
  * as a reason the row can render rather than a bare boolean.
  */
-function panelPrecondition(
+export function panelPrecondition(
   kindId: string,
   { hasWorkspace, hasProject }: DockLaunchPreconditions
 ): DockLaunchDisabledState | undefined {
@@ -1251,11 +1354,17 @@ export function activateCreateRecipeCue(
 
 /**
  * What a launcher row may add to an agent launch beyond the agent and preset.
- * Only a plugin's agent entry passes one, and only its first turn — never a
- * flag, an env var or a preset of the plugin's choosing (#13788).
+ * A plugin's agent entry passes only its first turn — never a flag, an env var
+ * or a preset of the plugin's choosing (#13788) — and an account row only its
+ * account.
  */
 export interface DockLaunchAgentOptions {
   prompt?: string;
+  /**
+   * The account an account row launches on (#16133): `null` is the CLI's
+   * default login. Never a plugin entry's to choose.
+   */
+  accountId?: string | null;
 }
 
 export interface ActivateDockLaunchItemContext {
@@ -1324,7 +1433,8 @@ export function activateDockLaunchCue(
 export function activateDockLaunchItem(
   item: DockLaunchItem,
   ctx: ActivateDockLaunchItemContext,
-  presetId?: string | null
+  presetId?: string | null,
+  accountId?: string | null
 ): void {
   if (item.category === "agent") {
     const { agent } = item;
@@ -1338,7 +1448,8 @@ export function activateDockLaunchItem(
     // filters to `agentBand === "launch"` — it becomes eligible only once the
     // agent actually resolves.
     useActionMruStore.getState().recordActionMru(`${AGENT_MRU_PREFIX}${agent.id}`);
-    ctx.onLaunchAgent(agent.id, presetId);
+    if (accountId !== undefined) ctx.onLaunchAgent(agent.id, presetId, { accountId });
+    else ctx.onLaunchAgent(agent.id, presetId);
     return;
   }
 

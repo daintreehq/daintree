@@ -5,7 +5,7 @@ import {
   type CanopyCard,
   type CanopyCategory,
 } from "../../../shared/types/ipc/canopy.js";
-import { isHandBackStop } from "../../../shared/utils/runHandBack.js";
+import { isAskableStop } from "../../../shared/utils/canopyRefinement.js";
 import type { ClassifierResult } from "./canopyProviders.js";
 import { isUnread, type ReadTrack } from "./canopyReads.js";
 import { promptKey } from "./canopyScreen.js";
@@ -145,11 +145,14 @@ export function refinementOf(
   if (classified === null || evidence === null) return null;
   if (evidence.turn !== entry.reads.turn && !sameRead) return null;
   if (entry.pending || classified.confidence < ASK_CONFIDENCE) return null;
-  if (isHandBackStop(run.agentState, run.waitingReason)) {
-    // Read while stopped: a reading of the run at work says nothing of what it stopped on.
-    if (classified.category !== "question" || BUSY_READ_STATE.test(entry.readState)) return null;
+  if (!isAskableStop(run.agentState, run.waitingReason)) return null;
+  const seen = !isUnread(entry.reads);
+  if (classified.category === "question" || classified.category === "approval") {
+    // Read while stopped: a reading of the run at work says nothing of what it
+    // stopped on. Whatever wait the patterns named, the reading is the ask.
+    if (BUSY_READ_STATE.test(entry.readState)) return null;
     const quote = evidence.question?.trim();
-    return quote ? { kind: "asked", quote, readAt: entry.readAt } : null;
+    return quote ? { kind: "asked", quote, readAt: entry.readAt, seen } : null;
   }
   if (run.agentState === "waiting" && run.waitingReason === "question") {
     // Only a reading of this very wait can say it asks nothing.
@@ -157,9 +160,7 @@ export function refinementOf(
     if (classified.category !== "finished" && classified.category !== "idle") return null;
     if (classified.question !== null && classified.question.trim() !== "") return null;
     const quote = (evidence.status ?? entry.card?.activity ?? "").trim();
-    return quote
-      ? { kind: "not-asking", quote, readAt: entry.readAt, seen: !isUnread(entry.reads) }
-      : null;
+    return quote ? { kind: "not-asking", quote, readAt: entry.readAt, seen } : null;
   }
   return null;
 }

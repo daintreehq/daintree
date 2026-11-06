@@ -73,7 +73,6 @@ vi.mock("@/store", () => {
   return { usePanelStore };
 });
 
-vi.mock("@/hooks/useIsHibernated", () => ({ useIsHibernated: () => false }));
 vi.mock("@/hooks/usePluginContextMenuItems", () => ({ usePluginContextMenuItems: () => [] }));
 
 vi.mock("@/store/voiceRecordingStore", () => ({

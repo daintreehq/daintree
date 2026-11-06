@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ASSISTANT_SLOTS } from "../../../../shared/config/assistantSlots.js";
 import { NO_VIEW_HANDLE } from "../../../ipc/endpoint.js";
 import {
   spawnAndConfirm,
@@ -212,6 +213,56 @@ describe("startAssistantWithoutView (#13511, #13496)", () => {
       notReadyReason: "agent-error",
     });
     expect(deps.revoke).not.toHaveBeenCalled();
+  });
+
+  it("starts a schedule's run in its reserved terminal with its prompt, ready once at its prompt (#16169)", async () => {
+    const scheduled = {
+      terminalId: "terminal-reserved",
+      prompt: "Pick a host and run the nightly checks.",
+      scheduledRun: { scheduleId: "schedule-1", runId: "run-1" },
+    };
+    // At its prompt, working on the run's prompt rather than answering a greeting.
+    screens = [
+      ["› Pick a host and run the nightly checks.", "", "› Ask Codex to do anything"].join("\n"),
+    ];
+
+    const result = await start({
+      slot: undefined,
+      startedBy: { kind: "schedule", scheduleId: "schedule-1", runId: "run-1" },
+      scheduled,
+    });
+
+    expect(result).toMatchObject({
+      status: "started",
+      terminalId: "terminal-reserved",
+      ready: true,
+    });
+    // No greeting to wait on: the first look at its prompt is enough.
+    expect(clock).toBe(0);
+    expect(deps.spawn.mock.calls[0]![1]).toMatchObject({
+      terminalId: "terminal-reserved",
+      prompt: scheduled.prompt,
+      scheduledRun: scheduled.scheduledRun,
+    });
+  });
+
+  it("tries a slot keeping a stopped session's conversation last", async () => {
+    occupied = [0];
+    deps.keptSlots = () => [1];
+
+    await expect(start({ slot: undefined })).resolves.toMatchObject({ slot: 2 });
+    expect(deps.provision.mock.calls.map(([input]) => input.slot)).toEqual([2]);
+
+    // Every fresh slot is taken first, in order, before the kept one is touched.
+    const fresh = ASSISTANT_SLOTS.filter((slot) => slot !== 0 && slot !== 1);
+    deps.provision.mockClear();
+    for (const _slot of fresh) {
+      deps.provision.mockRejectedValueOnce(
+        Object.assign(new Error("taken"), { code: "LANE_OCCUPIED" })
+      );
+    }
+    await expect(start({ slot: undefined })).resolves.toMatchObject({ slot: 1 });
+    expect(deps.provision.mock.calls.map(([input]) => input.slot)).toEqual([...fresh, 1]);
   });
 });
 

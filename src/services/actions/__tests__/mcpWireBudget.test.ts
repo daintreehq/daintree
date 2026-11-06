@@ -118,6 +118,10 @@ const OVERSIZED_PARAMS_ALLOWLIST: Readonly<Record<string, string>> = {
   // on failure.
   "agent.launch": "single-round-trip launch; splitting it leaks a half-created panel on failure",
   "worktree.createWithRecipe": "composite create-plus-launch; splitting is the plain create tool",
+  // The create's source and every launch argument, in one call: the split is
+  // the three calls it exists to replace, with a worktree left behind when the
+  // last one fails (#15738).
+  "agent.launchInNewWorktree": "create, setup wait and launch in one call; split, it is three",
 };
 
 /**
@@ -579,7 +583,30 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // so `closedIds` alone told a cancelling caller the work had stopped. The
   // result schema is closed, so the field must be advertised or a client's
   // validator refuses the answer; its descriptions were trimmed first.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 57_700;
+  // 57_700 → 57_850 for #16040, measured at 57_828 B (+134 over develop's
+  // 57_694): `agent.launch` takes `accountId`, so a caller can launch on one of
+  // the agent's accounts, chosen apart from its preset, or explicitly on the
+  // CLI's default login.
+  // 57_850 → 59_000 for #16189, measured at 58_949 B (+1_132 over develop's
+  // 57_817): `inputLine` on `terminal.getStatus` and `terminal.getOutput`
+  // results, so a caller can tell the CLI's own suggested prompt from text
+  // someone typed, with the `truncated` flag its bounded text needs. Both
+  // result schemas are closed, so the field must be advertised on each; its
+  // descriptions were trimmed first.
+  // 59_000 → 60_000 for #16187, measured at 59_928 B (+979 over develop's
+  // 58_949): the owned send's receipt and the status read advertise a send held
+  // for a busy worker's next prompt (its token, expiry and what became of it).
+  // Both result schemas are closed, so the fields must be listed for a client's
+  // validator to accept the answer, though only the global Assistant can hold
+  // one; the arguments that hold and read one are withheld from this tier.
+  // Descriptions were trimmed to a clause or dropped first.
+  // 60_000 → 60_400 for #16210, measured at 60_367 B (+439 over develop's
+  // 59_928): `output` on `terminal.getStatus`'s submission record, what
+  // rendered after the caller's own send, so its answer can be read once the
+  // agent has printed past it. The result schema is closed, so the field must
+  // be advertised; the token argument's description was left as it was and
+  // the field's own were trimmed first.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 60_400;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -920,7 +947,86 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // down from full, so the default assistant reads a whole issue thread,
   // several agents' PRs in one call, and which check failed. In-app only, so
   // the external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 160_850;
+  // 160_850 → 162_140 for #15728, measured at 162_132 B: `terminal.waitForExit`
+  // joins core beside the closes, so a caller waits, bounded, for its closed
+  // panes' processes to exit (and can end their trash grace early) instead of
+  // polling a status that forgets them when the trash lets them go. In-app
+  // only, so the external ceiling does not move.
+  // 162_140 → 168_780 for #15738, measured at 168_746 B (+6_614):
+  // `agent.launchInNewWorktree` takes a managed worktree's source and every
+  // argument `agent.launch` takes, with the same descriptions, plus its setup
+  // budget, so one call starts a unit of work on a host with no window instead
+  // of four. The launch fields are repeated rather than summarised because
+  // they carry the warnings (credentials in `env`, what `excludeFromPersistence`
+  // hides) a caller needs at the point of use. Core only, so the external
+  // ceiling does not move.
+  // 168_780 → 169_340 for #15737, measured at 169_306 B: `worktree.retireOwned`
+  // joins core beside the owned delete, so retiring a finished worktree is one
+  // call instead of a status read, two listings, a close, a wait and the
+  // delete. No output schema, like the owned delete. In-app only, so the
+  // external ceiling does not move.
+  // 169_340 → 172_900 for #16047, measured at 172_872 B (+3_566): the user-preset
+  // create, edit and remove join core, so an assistant asked to set a preset up
+  // writes it the way Settings does instead of dropping files into a repository.
+  // Most of it is the preset's own fields, each described once, which a caller
+  // has to know to write one. No output schemas: each answers an id and a name,
+  // and a removal whether the agent default went with it. In-app
+  // only, so the external ceiling does not move.
+  // 172_900 → 173_000 for #16096, measured at 172_992 B (+120 over develop's
+  // 172_872): `terminal.revealOwned` takes `generation`, so the global
+  // Assistant shows the person the run it read. Withheld from external
+  // clients like the steer's, so the external ceiling does not move.
+  // 173_000 → 174_200 for #15727, measured at 174_160 B (+1_168):
+  // `agent.readQuota` answers the latest Claude Code usage-limit message per
+  // limit beside Codex's reading, so an orchestrator holding a weekly-limit
+  // policy reads it in one call instead of scraping a throwaway pane's
+  // `/usage`. Nearly all of it is the output schema: each reading's printed
+  // limit, what it said, its reset and the pane and time it showed, with the
+  // label that it isn't a live account reading. Assistant-only, so the
+  // external ceiling does not move.
+  // 174_200 → 174_500 for #16040, measured at 174_433 B (+268 over develop's
+  // 174_165): `agent.launch`'s `accountId`, carried in-app for the
+  // external⊆in-app subset invariant.
+  // 174_500 → 174_700 for #16133, measured at 174_599 B (+166 over develop's
+  // 174_433): the user-preset create and edit take `accountId`, so an
+  // assistant pins the account a preset launches on the way Settings does.
+  // In-app only, so the external ceiling does not move.
+  // 174_700 → 176_000 for #16170, measured at 175_922 B (+1_323 over develop's
+  // 174_599): `host.bringBack`, so an assistant can try to bring back a host
+  // whose link is down instead of only waiting for it. Nearly all of it is the
+  // output schema, the host tools' outcome envelope plus what the attempt
+  // observed (its end, the wake, whether ssh got in and a start went, ssh's
+  // own words). Assistant-only, so the external ceiling does not move.
+  // 176_000 → 177_900 for #16188, measured at 177_818 B (+1_852 over develop's
+  // 175_966): `host.watch` on agents, so the global Assistant arms one watch
+  // for an approval or question on any host instead of polling every project.
+  // Most of it is the arm's answer: the agents already waiting, each with the
+  // host, project, worktree, both run generations, reason and host-clock time,
+  // and how each host is heard. Assistant-only, so the external ceiling does
+  // not move.
+  // 177_900 → 179_000 for #16189, measured at 178_950 B (+1_132 over
+  // develop's 177_818): the same `inputLine` result field as the external
+  // ceiling's raise, carried in-app for the external⊆in-app subset invariant.
+  // 179_000 → 185_600 for #16191, measured at 185_534 B (+6_584 over develop's
+  // 178_950): `host.status`, one read of agents' status across projects and
+  // hosts in place of a `host.call` per project. 5_354 B of it is the output
+  // schema, which carries a status entry's own field descriptions: the global
+  // Assistant is never offered `terminal.getStatus`, so this is where it learns
+  // what `lastTypedInputAt`, `agentIncarnation` or `inputLine` mean. The entry
+  // leaves out `submission`, which no token here asks for. Assistant-only, so
+  // the external ceiling does not move.
+  // 185_600 → 188_300 for #16187, measured at 188_212 B (+2_678 over develop's
+  // 185_534): the global Assistant can hold a send for a busy worker's next
+  // prompt. `whenBusy` and `queueTtlSeconds` on the owned send,
+  // `queuedSendToken` on the status read, the held fields on both results, and
+  // `terminal.cancelQueuedSend` to withdraw one, whose answer is the held
+  // record. The record is the larger part, listed on the status read and the
+  // cancel because both results are closed. The external share is the raise
+  // above.
+  // 188_300 → 188_800 for #16210, measured at 188_716 B (+439 over develop's
+  // 188_277): the same submission `output` field as the external ceiling's
+  // raise, carried in-app for the external⊆in-app subset invariant.
+  const MAX_COHORT_PAYLOAD_BYTES = 188_800;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

@@ -110,7 +110,13 @@ export type SelectAllScope = "surface" | "self";
 export function useScopedSelectAll(
   ref: RefObject<HTMLElement | null>,
   enabled: boolean = true,
-  scope: SelectAllScope = "surface"
+  scope: SelectAllScope = "surface",
+  /**
+   * Runs once the chord is claimed, just before the selection is made — for a
+   * region that renders part of its content lazily and has to put the rest in
+   * the DOM first, or the selection would stop at what happened to be mounted.
+   */
+  beforeSelect?: () => void
 ): void {
   const handleKeyDown = useEffectEvent((event: KeyboardEvent) => {
     if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
@@ -143,6 +149,7 @@ export function useScopedSelectAll(
 
     event.preventDefault();
     event.stopPropagation();
+    beforeSelect?.();
     container.ownerDocument.defaultView?.getSelection()?.selectAllChildren(container);
   });
 

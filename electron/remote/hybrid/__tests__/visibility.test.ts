@@ -220,6 +220,9 @@ describe("installEndpointVisibility", () => {
 });
 
 describe("ViewVisibilityReporter", () => {
+  // A report must not be dropped unsent past a deadline: only a change sends another.
+  const NO_DEADLINE = { timeoutMs: 0 };
+
   function session() {
     return { isOpen: true, call: vi.fn(async () => null) };
   }
@@ -229,22 +232,30 @@ describe("ViewVisibilityReporter", () => {
     const s = session();
     reporter.noteEndpointOpened({ session: s as never, webContentsId: 10, endpointId: "view-10" });
     reporter.noteEndpointOpened({ session: s as never, webContentsId: 11, endpointId: "view-11" });
-    expect(s.call).toHaveBeenLastCalledWith(ENDPOINT_VISIBILITY_METHOD, {
-      endpointId: "view-11",
-      visible: false,
-    });
+    expect(s.call).toHaveBeenLastCalledWith(
+      ENDPOINT_VISIBILITY_METHOD,
+      {
+        endpointId: "view-11",
+        visible: false,
+      },
+      NO_DEADLINE
+    );
 
     reporter.noteViewActivated(1, 10);
-    expect(s.call).toHaveBeenLastCalledWith(ENDPOINT_VISIBILITY_METHOD, {
-      endpointId: "view-10",
-      visible: true,
-    });
+    expect(s.call).toHaveBeenLastCalledWith(
+      ENDPOINT_VISIBILITY_METHOD,
+      {
+        endpointId: "view-10",
+        visible: true,
+      },
+      NO_DEADLINE
+    );
 
     s.call.mockClear();
     reporter.noteViewActivated(1, 11);
     expect(s.call.mock.calls).toEqual([
-      [ENDPOINT_VISIBILITY_METHOD, { endpointId: "view-10", visible: false }],
-      [ENDPOINT_VISIBILITY_METHOD, { endpointId: "view-11", visible: true }],
+      [ENDPOINT_VISIBILITY_METHOD, { endpointId: "view-10", visible: false }, NO_DEADLINE],
+      [ENDPOINT_VISIBILITY_METHOD, { endpointId: "view-11", visible: true }, NO_DEADLINE],
     ]);
   });
 
@@ -257,10 +268,14 @@ describe("ViewVisibilityReporter", () => {
 
     const next = session();
     reporter.noteEndpointOpened({ session: next as never, webContentsId: 10, endpointId: "v" });
-    expect(next.call).toHaveBeenCalledWith(ENDPOINT_VISIBILITY_METHOD, {
-      endpointId: "v",
-      visible: true,
-    });
+    expect(next.call).toHaveBeenCalledWith(
+      ENDPOINT_VISIBILITY_METHOD,
+      {
+        endpointId: "v",
+        visible: true,
+      },
+      NO_DEADLINE
+    );
 
     reporter.noteEndpointClosed(10, "v");
     next.call.mockClear();
@@ -278,7 +293,7 @@ describe("ViewVisibilityReporter", () => {
     // View 20 is local: it has no endpoint, so only the host view's report goes out.
     reporter.noteViewActivated(1, 20);
     expect(s.call.mock.calls).toEqual([
-      [ENDPOINT_VISIBILITY_METHOD, { endpointId: "view-10", visible: false }],
+      [ENDPOINT_VISIBILITY_METHOD, { endpointId: "view-10", visible: false }, NO_DEADLINE],
     ]);
 
     reporter.noteViewActivated(1, 10);
@@ -286,9 +301,13 @@ describe("ViewVisibilityReporter", () => {
     s.call.mockClear();
     // A later re-report (a resumed session) no longer counts the closed window's view as shown.
     reporter.noteEndpointOpened({ session: s as never, webContentsId: 10, endpointId: "view-10" });
-    expect(s.call).toHaveBeenCalledWith(ENDPOINT_VISIBILITY_METHOD, {
-      endpointId: "view-10",
-      visible: false,
-    });
+    expect(s.call).toHaveBeenCalledWith(
+      ENDPOINT_VISIBILITY_METHOD,
+      {
+        endpointId: "view-10",
+        visible: false,
+      },
+      NO_DEADLINE
+    );
   });
 });

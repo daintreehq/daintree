@@ -1,4 +1,4 @@
-import { beforeAll, describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { beforeAll, describe, it, expect, beforeEach, afterAll, afterEach, vi } from "vitest";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 
 const mockSpawn = vi.fn().mockResolvedValue({ id: "test-1" });
@@ -114,6 +114,11 @@ vi.mock("@shared/types", async () => {
   };
 });
 
+const notifyRetiredModelDroppedMock = vi.hoisted(() => vi.fn());
+vi.mock("@/services/terminal/retiredModelNotice", () => ({
+  notifyRetiredModelDropped: notifyRetiredModelDroppedMock,
+}));
+
 vi.mock("@/store/ccrPresetsStore", () => ({
   useCcrPresetsStore: {
     getState: () => ({ ccrPresetsByAgent: {} }),
@@ -224,6 +229,27 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
     expect(payload.kind).toBe("terminal");
     expect(payload.launchAgentId).toBe("claude");
     expect(payload.agentLaunchFlags).toEqual(["--persisted-flag"]);
+  });
+
+  // #15977: a restarted scheduled run's agent is still the run's, so a session
+  // captured when it ends names it; a demoted shell has no session to name.
+  it("hands a restarted scheduled run's ids to the host, and none to a demoted shell", async () => {
+    const run = { scheduleId: "schedule-1", runId: "run-1" };
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      spawnedBy: "schedule" as const,
+      scheduledRun: run,
+    };
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+    await usePanelStore.getState().restartTerminal("test-1");
+    expect(mockSpawn.mock.calls[0]![0].scheduledRun).toEqual(run);
+
+    mockSpawn.mockClear();
+    const demoted = { ...active, agentState: "exited" as const, exitCode: 0 };
+    usePanelStore.setState({ panelsById: { [demoted.id]: demoted }, panelIds: [demoted.id] });
+    await usePanelStore.getState().restartTerminal("test-1");
+    expect(mockSpawn.mock.calls[0]![0].scheduledRun).toBeUndefined();
   });
 
   it("holds a restart to the pane's required plugin tools, and shows a refusal as the spawn banner (#14096)", async () => {
@@ -781,6 +807,55 @@ describe("restartTerminal and panes that run away from their conversation (#1243
 
     expect(mockSpawn).toHaveBeenCalled();
     expect(ptyAfterRestart().conversationCwd).toBeUndefined();
+  });
+
+  it("holds a hop on a plugin-approved pane to the fallback as it was approved (#16324)", async () => {
+    const { presetLaunchContent } = await import("@shared/utils/agentPresetLaunchConsent");
+    const approvals = await import("@/services/plugin/pluginPresetLaunchApprovals");
+    const amber = {
+      id: "amber-provider",
+      name: "Amber Provider",
+      color: "#ffbb33",
+      args: ["--provider", "amber"],
+    };
+    approvals.rememberApprovedPresetLaunch("test-1", {
+      agentId: "codex",
+      presetId: "blue-provider",
+      source: "custom",
+      content: "[]",
+      fallbacks: [["amber-provider", presetLaunchContent(amber)]],
+    });
+    try {
+      // What the respawn reads now: amber has gained bypass since the approval.
+      getMergedPresetMock.mockReturnValue({ ...amber, dangerousMode: "on" });
+      const pane = { ...movedPane, agentPresetId: "blue-provider" };
+      usePanelStore.setState({ panelsById: { [pane.id]: pane }, panelIds: [pane.id] });
+      mockKill.mockClear();
+      mockGracefulKill.mockClear();
+      const paint = (await import("@/services/TerminalInstanceService")).createTerminalPaintPlane();
+      const destroy = paint.destroy as ReturnType<typeof vi.fn>;
+      destroy.mockClear();
+
+      const refused = await usePanelStore
+        .getState()
+        .activateFallbackPreset("test-1", "amber-provider", "blue-provider");
+      expect(refused.success).toBe(false);
+      // Refused before anything was torn down: the running session is untouched.
+      expect(destroy).not.toHaveBeenCalled();
+      expect(mockKill).not.toHaveBeenCalled();
+      expect(mockGracefulKill).not.toHaveBeenCalled();
+      expect(mockSpawn).not.toHaveBeenCalled();
+      expect(ptyAfterRestart().isRestarting).toBeFalsy();
+
+      getMergedPresetMock.mockReturnValue(amber);
+      const hopped = await usePanelStore
+        .getState()
+        .activateFallbackPreset("test-1", "amber-provider", "blue-provider");
+      expect(hopped.success).toBe(true);
+      expect(mockSpawn).toHaveBeenCalled();
+    } finally {
+      approvals.forgetApprovedPresetLaunch("test-1");
+    }
   });
 
   it("refuses a fallback hop for a pane held for recovery", async () => {
@@ -1765,7 +1840,7 @@ describe("restartTerminal keeps the launch's standing instruction", () => {
       expect.any(String),
       expect.anything(),
       "claude",
-      expect.objectContaining({ systemPromptArgs: pair, presetArgs: "--provider amber" })
+      expect.objectContaining({ systemPromptArgs: pair, presetArgs: ["--provider", "amber"] })
     );
     expect(mockSpawn.mock.calls[0]![0].agentLaunchFlags).toEqual(["--rebuilt", ...pair]);
   });
@@ -2105,6 +2180,32 @@ describe("restartTerminalOnPreset", () => {
     expect(pane().agentPresetColor).toBe("#3366ff");
   });
 
+  it("lets go of a plugin's preset approval only once the person's switch took (#16324)", async () => {
+    const approvals = await import("@/services/plugin/pluginPresetLaunchApprovals");
+    approvals.rememberApprovedPresetLaunch("test-1", {
+      agentId: "codex",
+      presetId: "personal",
+      source: "custom",
+      content: "[]",
+      fallbacks: [["backup", "approved"]],
+    });
+    try {
+      seed();
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      mockSpawn.mockRejectedValueOnce(new Error("spawn failed"));
+      const failed = await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+      expect(failed.success).toBe(false);
+      // Rolled back onto the approved preset, so still held to its approval.
+      expect(approvals.fallbackHopApproved("test-1", "backup", "edited")).toBe(false);
+
+      const switched = await usePanelStore.getState().restartTerminalOnPreset("test-1", "work");
+      expect(switched).toEqual({ success: true });
+      expect(approvals.fallbackHopApproved("test-1", "backup", "edited")).toBe(true);
+    } finally {
+      approvals.forgetApprovedPresetLaunch("test-1");
+    }
+  });
+
   it("starts a new conversation: no session id survives into the new home", async () => {
     seed();
 
@@ -2132,6 +2233,30 @@ describe("restartTerminalOnPreset", () => {
     expect(pane().callerLaunchFlags).toEqual(["--verbose"]);
     expect(pane().agentLaunchFlags).not.toContain("--continue");
     expect(mockSpawn.mock.calls[0]![0].command).not.toContain("--continue");
+  });
+
+  it("respawns a multi-word preset element as one argument in both the command and its launch flags (#15638)", async () => {
+    const actual = await vi.importActual<typeof import("@shared/types")>("@shared/types");
+    const { generateAgentCommand } = await import("@shared/types");
+    vi.mocked(generateAgentCommand).mockImplementationOnce(actual.generateAgentCommand);
+    buildAgentLaunchFlagsMock.mockImplementationOnce(actual.buildAgentLaunchFlags);
+    getMergedPresetMock.mockImplementation((_agentId: string, presetId: string) =>
+      presetId === "prompted"
+        ? { id: "prompted", name: "Prompted", args: ["--system-prompt", "two words"] }
+        : presets[presetId]
+    );
+    seed();
+
+    await usePanelStore.getState().restartTerminalOnPreset("test-1", "prompted");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    const baseCommand = vi.mocked(generateAgentCommand).mock.calls[0]![0];
+    expect(payload.command).toContain("--system-prompt 'two words'");
+    expect(payload.agentLaunchFlags).toEqual(["--system-prompt", "two words"]);
+    expect(pane().agentLaunchFlags).toEqual(["--system-prompt", "two words"]);
+    expect(payload.command).toBe(
+      actual.buildLaunchCommandFromFlags(baseCommand, "claude", payload.agentLaunchFlags)
+    );
   });
 
   it("leaves a fallback hop's caller flags exactly as they were", async () => {
@@ -2238,6 +2363,533 @@ describe("restartTerminalOnPreset", () => {
     expect(pane().originalPresetId).toBe("personal");
     // A hop keeps the title: the fallback indicator says what it's running on.
     expect(pane().title).toBe("Claude [Personal]");
+  });
+  describe("keeping the conversation (#16045)", () => {
+    async function resumeBuilds(): Promise<void> {
+      const { buildResumeCommand } = await import("@shared/types");
+      vi.mocked(buildResumeCommand).mockImplementation(
+        (_agentId: string, sessionId: string) => `claude --resume ${sessionId}`
+      );
+    }
+
+    it("reopens the conversation the teardown captured, on the new preset's env", async () => {
+      seed({ command: "claude --persisted-flag" });
+      await resumeBuilds();
+      mockGracefulKill.mockResolvedValueOnce("sess-captured");
+
+      const result = await usePanelStore
+        .getState()
+        .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+
+      expect(result).toEqual({ success: true, resumedSessionId: "sess-captured" });
+      expect(mockGracefulKill).toHaveBeenCalledWith("test-1", { forRestart: true });
+      expect(mockKill).not.toHaveBeenCalled();
+      const payload = mockSpawn.mock.calls[0]![0];
+      expect(payload.command).toBe("claude --resume sess-captured");
+      expect(payload.agentSessionId).toBe("sess-captured");
+      expect(payload.env.CODEX_HOME).toBe("/home/me/.codex-2");
+      expect(pane().agentSessionId).toBe("sess-captured");
+      expect(pane().env).toEqual({ CODEX_HOME: "/home/me/.codex-2" });
+      // The resume is transient: a later plain restart rebuilds from the fresh command.
+      expect(pane().command).not.toContain("--resume");
+      expect(pane().presetSwitchResume).toMatchObject({
+        agentId: "claude",
+        sessionId: "sess-captured",
+        target: { kind: "preset", presetId: "work" },
+        prior: {
+          agentPresetId: "personal",
+          env: { CODEX_HOME: "/home/me/.codex", STALE_ONLY_ON_OLD: "1" },
+          cwd: "/some/path",
+        },
+      });
+    });
+
+    it("falls back to the pane's own id when the capture came from another agent", async () => {
+      seed({ detectedAgentId: "codex" });
+      await resumeBuilds();
+      mockGracefulKill.mockResolvedValueOnce("codex-thread-id");
+
+      await usePanelStore
+        .getState()
+        .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+
+      expect(mockSpawn.mock.calls[0]![0].command).toBe("claude --resume sess-personal");
+    });
+
+    it("starts nothing when no id turns up, rather than a new conversation", async () => {
+      seed({ agentSessionId: undefined });
+      await resumeBuilds();
+
+      const result = await usePanelStore
+        .getState()
+        .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+
+      expect(result.success).toBe(false);
+      expect(mockSpawn).not.toHaveBeenCalled();
+      expect(pane().agentPresetId).toBe("personal");
+      expect(pane().presetSwitchResume).toBeUndefined();
+      expect(pane().restartError?.context?.phase).toBe("preset-switch");
+    });
+
+    it("refuses an agent whose refusal it can't recognise before touching the process", async () => {
+      seed({ launchAgentId: "gemini" });
+
+      const result = await usePanelStore
+        .getState()
+        .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+
+      expect(result.success).toBe(false);
+      expect(mockGracefulKill).not.toHaveBeenCalled();
+      expect(mockKill).not.toHaveBeenCalled();
+      expect(mockSpawn).not.toHaveBeenCalled();
+      expect(pane().agentPresetId).toBe("personal");
+    });
+
+    it("starts Claude where the conversation began", async () => {
+      seed({ conversationCwd: "/where/it/began" });
+      await resumeBuilds();
+
+      await usePanelStore
+        .getState()
+        .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+
+      expect(mockSpawn.mock.calls[0]![0].cwd).toBe("/where/it/began");
+      expect(pane().cwd).toBe("/where/it/began");
+      expect(pane().conversationCwd).toBeUndefined();
+    });
+
+    it("keeps the run's first prompt, which a new conversation drops", async () => {
+      const firstPrompt = { via: "launch" as const, text: "fix the build", at: 1 };
+      seed({ firstPrompt });
+      await resumeBuilds();
+
+      await usePanelStore
+        .getState()
+        .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+
+      expect(pane().firstPrompt).toEqual(firstPrompt);
+      expect(mockSpawn.mock.calls[0]![0].hasFirstPrompt).toBe(true);
+    });
+
+    it("keeps the captured id through a failed spawn, with nothing left to watch", async () => {
+      seed();
+      await resumeBuilds();
+      mockGracefulKill.mockResolvedValueOnce("sess-captured");
+      mockSpawn.mockRejectedValueOnce(new Error("spawn failed"));
+
+      const result = await usePanelStore
+        .getState()
+        .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+
+      expect(result.success).toBe(false);
+      expect(pane().agentPresetId).toBe("personal");
+      expect(pane().agentSessionId).toBe("sess-captured");
+      expect(pane().presetSwitchResume).toBeUndefined();
+    });
+
+    it("never lets a resume selector in the new preset's flags pick the conversation", async () => {
+      buildAgentLaunchFlagsMock.mockReturnValue(["--verbose", "--continue"]);
+      seed();
+      await resumeBuilds();
+
+      await usePanelStore
+        .getState()
+        .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+
+      const { buildResumeCommand } = await import("@shared/types");
+      const flags = vi.mocked(buildResumeCommand).mock.calls[0]![2];
+      expect(flags).toContain("--verbose");
+      expect(flags).not.toContain("--continue");
+    });
+
+    it("puts the folder back with the conversation when the spawn fails", async () => {
+      // Codex reopens anywhere, so the launch moves to the filed folder and the
+      // origin is recorded; a failure must undo both or the id is misfiled.
+      const { setWorktreePathIndexAccessor } = await import("@/store/storeAccessors");
+      setWorktreePathIndexAccessor(
+        () =>
+          new Map([
+            ["wt-a", "/repo/.worktrees/a"],
+            ["wt-b", "/repo/.worktrees/b"],
+          ])
+      );
+      try {
+        seed({ launchAgentId: "codex", cwd: "/repo/.worktrees/a", worktreeId: "wt-b" });
+        await resumeBuilds();
+        mockSpawn.mockRejectedValueOnce(new Error("spawn failed"));
+
+        await usePanelStore
+          .getState()
+          .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+
+        expect(mockSpawn.mock.calls[0]![0].cwd).toBe("/repo/.worktrees/b");
+        expect(pane().cwd).toBe("/repo/.worktrees/a");
+        expect(pane().conversationCwd).toBeUndefined();
+      } finally {
+        setWorktreePathIndexAccessor(() => null);
+      }
+    });
+
+    it("files the conversation against a folder a move set while the spawn failed", async () => {
+      const { setWorktreePathIndexAccessor } = await import("@/store/storeAccessors");
+      setWorktreePathIndexAccessor(
+        () =>
+          new Map([
+            ["wt-a", "/repo/.worktrees/a"],
+            ["wt-b", "/repo/.worktrees/b"],
+          ])
+      );
+      try {
+        seed({ launchAgentId: "codex", cwd: "/repo/.worktrees/a", worktreeId: "wt-b" });
+        await resumeBuilds();
+        mockSpawn.mockImplementationOnce(async () => {
+          // What a live move writes while the spawn is out.
+          const moved = pane();
+          usePanelStore.setState({
+            panelsById: {
+              "test-1": { ...moved, cwd: "/elsewhere", conversationCwd: "/repo/.worktrees/a" },
+            },
+          });
+          throw new Error("spawn failed");
+        });
+
+        await usePanelStore
+          .getState()
+          .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+
+        expect(pane().cwd).toBe("/elsewhere");
+        expect(pane().conversationCwd).toBe("/repo/.worktrees/a");
+      } finally {
+        setWorktreePathIndexAccessor(() => null);
+      }
+    });
+
+    it("drops the switch's watch on the next restart", async () => {
+      seed();
+      await resumeBuilds();
+      await usePanelStore
+        .getState()
+        .restartTerminalOnPreset("test-1", "work", { keepConversation: true });
+      expect(pane().presetSwitchResume).toBeDefined();
+
+      await usePanelStore.getState().restartTerminal("test-1");
+
+      expect(pane().presetSwitchResume).toBeUndefined();
+    });
+
+    it("asks for the conversation on a fallback hop when the caller does", async () => {
+      seed();
+      await resumeBuilds();
+
+      const result = await usePanelStore
+        .getState()
+        .activateFallbackPreset("test-1", "work", "personal", { keepConversation: true });
+
+      expect(result.resumedSessionId).toBe("sess-personal");
+      expect(pane().isUsingFallback).toBe(true);
+      expect(pane().agentSessionId).toBe("sess-personal");
+    });
+  });
+});
+
+describe("accounts on restart and switch (#16040)", () => {
+  const presets: Record<string, { id: string; name: string; env?: Record<string, string> }> = {
+    zai: { id: "zai", name: "Z.ai", env: { ANTHROPIC_BASE_URL: "https://api.z.ai" } },
+    legacy: { id: "legacy", name: "Legacy", env: { CLAUDE_CONFIG_DIR: "/home/me/.claude-legacy" } },
+  };
+  const COMPANY = "/home/me/.claude-company";
+  const PERSONAL = "/home/me/.claude-personal";
+
+  beforeEach(async () => {
+    await usePanelStore.getState().reset();
+    vi.clearAllMocks();
+    getMergedPresetMock.mockImplementation((_agentId: string, presetId: string) =>
+      presetId ? presets[presetId] : undefined
+    );
+    buildAgentLaunchFlagsMock.mockReturnValue([]);
+    const { agentSettingsClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockResolvedValue({ agents: {} });
+  });
+
+  function seed(overrides: Partial<PtyPanelData> = {}): void {
+    const pane: PtyPanelData = {
+      ...agentPanelBase,
+      agentState: "waiting",
+      agentPresetId: "zai",
+      originalPresetId: "zai",
+      agentSessionId: "sess-1",
+      agentAccountId: "company",
+      env: { ANTHROPIC_BASE_URL: "https://api.z.ai", CLAUDE_CONFIG_DIR: COMPANY },
+      ...overrides,
+    };
+    usePanelStore.setState({ panelsById: { [pane.id]: pane }, panelIds: [pane.id] });
+  }
+
+  function pane(): PtyPanelData {
+    const panel = usePanelStore.getState().panelsById["test-1"];
+    if (!panel || !isPtyPanel(panel)) throw new Error("pane missing");
+    return panel;
+  }
+
+  it("keeps the pane's own account on a plain restart, whatever its preset now sets", async () => {
+    seed({ agentPresetId: "legacy", originalPresetId: "legacy" });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].env.CLAUDE_CONFIG_DIR).toBe(COMPANY);
+    expect(pane().agentAccountId).toBe("company");
+  });
+
+  it("keeps the pane's account across a preset switch", async () => {
+    seed();
+
+    await usePanelStore.getState().restartTerminalOnPreset("test-1", "legacy");
+
+    expect(mockSpawn.mock.calls[0]![0].env.CLAUDE_CONFIG_DIR).toBe(COMPANY);
+    expect(pane().env).toEqual({ CLAUDE_CONFIG_DIR: COMPANY });
+    expect(pane().agentAccountId).toBe("company");
+  });
+
+  it("switches only the account: same preset, a new conversation, the folder saved for restore", async () => {
+    seed({
+      title: "Claude [Z.ai]",
+      titleMode: "custom",
+      agentLaunchFlags: ["--persisted-flag", "--continue", "--verbose"],
+      callerLaunchFlags: ["--continue", "--verbose"],
+    });
+
+    const result = await usePanelStore.getState().restartTerminalOnAccount("test-1", {
+      id: "personal",
+      envVar: "CLAUDE_CONFIG_DIR",
+      configDir: PERSONAL,
+    });
+
+    expect(result).toEqual({ success: true });
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.env.CLAUDE_CONFIG_DIR).toBe(PERSONAL);
+    expect(payload.env.ANTHROPIC_BASE_URL).toBe("https://api.z.ai");
+    expect(payload.agentPresetId).toBe("zai");
+    expect(payload.agentSessionId).toBeUndefined();
+    expect(pane()).toMatchObject({
+      agentAccountId: "personal",
+      agentPresetId: "zai",
+      originalPresetId: "zai",
+      title: "Claude [Z.ai]",
+      env: { ANTHROPIC_BASE_URL: "https://api.z.ai", CLAUDE_CONFIG_DIR: PERSONAL },
+    });
+    expect(pane().agentSessionId).toBeUndefined();
+    // A caller's own resume selector would reopen the new folder's latest conversation.
+    expect(pane().callerLaunchFlags).toEqual(["--verbose"]);
+    expect(payload.command).not.toContain("--continue");
+  });
+
+  it("moves a pane back to the default login, leaving the variable to its preset", async () => {
+    seed({ agentPresetId: "legacy", originalPresetId: "legacy" });
+
+    await usePanelStore.getState().restartTerminalOnAccount("test-1", null);
+
+    expect(mockSpawn.mock.calls[0]![0].env.CLAUDE_CONFIG_DIR).toBe("/home/me/.claude-legacy");
+    expect(pane().agentAccountId).toBeUndefined();
+    expect(pane().env).toEqual({ CLAUDE_CONFIG_DIR: "/home/me/.claude-legacy" });
+  });
+
+  it("refuses to switch a pane whose preset can't be found, before touching the process", async () => {
+    seed({ agentPresetId: "still-loading", originalPresetId: "still-loading" });
+
+    const result = await usePanelStore.getState().restartTerminalOnAccount("test-1", {
+      id: "personal",
+      envVar: "CLAUDE_CONFIG_DIR",
+      configDir: PERSONAL,
+    });
+
+    expect(result.success).toBe(false);
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(pane().agentPresetId).toBe("still-loading");
+    expect(pane().agentAccountId).toBe("company");
+  });
+
+  it("switches the account of a pane with no preset", async () => {
+    seed({ agentPresetId: undefined, originalPresetId: undefined, env: undefined });
+
+    const result = await usePanelStore.getState().restartTerminalOnAccount("test-1", {
+      id: "personal",
+      envVar: "CLAUDE_CONFIG_DIR",
+      configDir: PERSONAL,
+    });
+
+    expect(result).toEqual({ success: true });
+    expect(mockSpawn.mock.calls[0]![0].env.CLAUDE_CONFIG_DIR).toBe(PERSONAL);
+    expect(pane().agentPresetId).toBeUndefined();
+  });
+
+  it("puts the old account back, persisted, when the respawn fails", async () => {
+    seed();
+    mockSpawn.mockRejectedValueOnce(new Error("spawn failed"));
+
+    const result = await usePanelStore.getState().restartTerminalOnAccount("test-1", {
+      id: "personal",
+      envVar: "CLAUDE_CONFIG_DIR",
+      configDir: PERSONAL,
+    });
+
+    expect(result.success).toBe(false);
+    expect(pane().agentAccountId).toBe("company");
+    expect(pane().env?.CLAUDE_CONFIG_DIR).toBe(COMPANY);
+    expect(pane().restartError?.context?.phase).toBe("account-switch");
+  });
+
+  describe("keeping the conversation (#16135)", () => {
+    const toPersonal = { id: "personal", envVar: "CLAUDE_CONFIG_DIR", configDir: PERSONAL };
+
+    async function resumeBuilds(): Promise<void> {
+      const { buildResumeCommand } = await import("@shared/types");
+      vi.mocked(buildResumeCommand).mockImplementation(
+        (_agentId: string, sessionId: string) => `claude --resume ${sessionId}`
+      );
+    }
+
+    it("reopens the captured conversation under the new account's folder, preset kept", async () => {
+      seed({ title: "Claude [Z.ai]", titleMode: "custom" });
+      await resumeBuilds();
+      mockGracefulKill.mockResolvedValueOnce("sess-captured");
+
+      const result = await usePanelStore
+        .getState()
+        .restartTerminalOnAccount("test-1", toPersonal, { keepConversation: true });
+
+      expect(result).toEqual({ success: true, resumedSessionId: "sess-captured" });
+      expect(mockGracefulKill).toHaveBeenCalledWith("test-1", { forRestart: true });
+      expect(mockKill).not.toHaveBeenCalled();
+      const payload = mockSpawn.mock.calls[0]![0];
+      expect(payload.command).toBe("claude --resume sess-captured");
+      expect(payload.agentSessionId).toBe("sess-captured");
+      expect(payload.env.CLAUDE_CONFIG_DIR).toBe(PERSONAL);
+      expect(payload.agentPresetId).toBe("zai");
+      expect(pane()).toMatchObject({
+        agentSessionId: "sess-captured",
+        agentAccountId: "personal",
+        agentPresetId: "zai",
+        title: "Claude [Z.ai]",
+        env: { ANTHROPIC_BASE_URL: "https://api.z.ai", CLAUDE_CONFIG_DIR: PERSONAL },
+      });
+      expect(pane().presetSwitchResume).toEqual({
+        agentId: "claude",
+        sessionId: "sess-captured",
+        target: { kind: "account", accountId: "personal" },
+        prior: expect.objectContaining({
+          agentPresetId: "zai",
+          agentAccountId: "company",
+          env: { ANTHROPIC_BASE_URL: "https://api.z.ai", CLAUDE_CONFIG_DIR: COMPANY },
+          cwd: "/some/path",
+        }),
+      });
+    });
+
+    it("watches a move to the default login on a pane with no preset", async () => {
+      seed({ agentPresetId: undefined, originalPresetId: undefined });
+      await resumeBuilds();
+
+      const result = await usePanelStore
+        .getState()
+        .restartTerminalOnAccount("test-1", null, { keepConversation: true });
+
+      expect(result.resumedSessionId).toBe("sess-1");
+      const payload = mockSpawn.mock.calls[0]![0];
+      expect(payload.command).toBe("claude --resume sess-1");
+      // No folder override is left behind: the default login is the CLI's own.
+      expect(payload.env?.CLAUDE_CONFIG_DIR).toBeUndefined();
+      expect(pane().env?.CLAUDE_CONFIG_DIR).toBeUndefined();
+      expect(pane().agentAccountId).toBeUndefined();
+      expect(pane().presetSwitchResume).toMatchObject({
+        target: { kind: "account", accountId: null },
+        prior: { agentAccountId: "company" },
+      });
+    });
+
+    it.each([
+      ["a saved account by its name", toPersonal, "on Personal."],
+      ["the default login", null, "on the default login."],
+      ["an account the settings no longer name", { ...toPersonal, id: "gone" }, "on that account."],
+    ])("names %s when no id turns up", async (_label, target, named) => {
+      seed({ agentSessionId: undefined });
+      await resumeBuilds();
+      const { agentSettingsClient } = await import("@/clients");
+      vi.mocked(agentSettingsClient.get).mockResolvedValue({
+        agents: {
+          claude: {
+            accounts: [
+              { id: "company", name: "Company", configDir: COMPANY },
+              { id: "personal", name: "Personal", configDir: PERSONAL },
+            ],
+          },
+        },
+      });
+
+      const result = await usePanelStore
+        .getState()
+        .restartTerminalOnAccount("test-1", target, { keepConversation: true });
+
+      expect(result.error?.endsWith(named)).toBe(true);
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
+    it("starts nothing when no id turns up, and says which account it was for", async () => {
+      seed({ agentSessionId: undefined });
+      await resumeBuilds();
+      const { agentSettingsClient } = await import("@/clients");
+      vi.mocked(agentSettingsClient.get).mockResolvedValue({
+        agents: {
+          claude: { accounts: [{ id: "personal", name: "Personal", configDir: PERSONAL }] },
+        },
+      });
+
+      const result = await usePanelStore
+        .getState()
+        .restartTerminalOnAccount("test-1", toPersonal, { keepConversation: true });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("on Personal");
+      expect(mockSpawn).not.toHaveBeenCalled();
+      expect(pane().agentAccountId).toBe("company");
+      expect(pane().env?.CLAUDE_CONFIG_DIR).toBe(COMPANY);
+      expect(pane().presetSwitchResume).toBeUndefined();
+      expect(pane().restartError?.context?.phase).toBe("account-switch");
+    });
+
+    it("refuses an agent whose refusal it can't recognise before touching the process", async () => {
+      seed({ launchAgentId: "gemini" });
+
+      const result = await usePanelStore
+        .getState()
+        .restartTerminalOnAccount("test-1", toPersonal, { keepConversation: true });
+
+      expect(result).toEqual({
+        success: false,
+        error: "agent can't keep its conversation on another account",
+      });
+      expect(mockGracefulKill).not.toHaveBeenCalled();
+      expect(mockKill).not.toHaveBeenCalled();
+      expect(mockSpawn).not.toHaveBeenCalled();
+      expect(pane().agentAccountId).toBe("company");
+    });
+
+    it("puts the old account back with the captured id when the spawn fails", async () => {
+      seed();
+      await resumeBuilds();
+      mockGracefulKill.mockResolvedValueOnce("sess-captured");
+      mockSpawn.mockRejectedValueOnce(new Error("spawn failed"));
+
+      const result = await usePanelStore
+        .getState()
+        .restartTerminalOnAccount("test-1", toPersonal, { keepConversation: true });
+
+      expect(result).toEqual({ success: false, error: "spawn failed" });
+      expect(mockSpawn).toHaveBeenCalledTimes(1);
+      expect(pane().agentAccountId).toBe("company");
+      expect(pane().env?.CLAUDE_CONFIG_DIR).toBe(COMPANY);
+      expect(pane().agentSessionId).toBe("sess-captured");
+      expect(pane().presetSwitchResume).toBeUndefined();
+    });
   });
 });
 
@@ -2772,5 +3424,345 @@ describe("restartTerminal starts a moved pane where it is filed (#14954)", () =>
 
     expect(mockSpawn.mock.calls[0]![0].command).not.toContain("--continue");
     expect(paneAfterRestart().callerLaunchFlags).toBeUndefined();
+  });
+});
+
+describe("restartTerminal with a retired Copilot model (#15652)", () => {
+  const retiredCopilot = {
+    ...agentPanelBase,
+    launchAgentId: "copilot",
+    title: "GitHub Copilot",
+    agentState: "idle" as const,
+    agentModelId: "claude-opus-4.6",
+    agentLaunchFlags: ["--model", "claude-opus-4.6", "--allow-all-tools"],
+    command: "copilot --model claude-opus-4.6 --allow-all-tools",
+  };
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    getMergedPresetMock.mockReturnValue(undefined);
+    buildAgentLaunchFlagsMock.mockReturnValue([]);
+    mockGracefulKill.mockResolvedValue(null);
+    const { agentSettingsClient, projectClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    (projectClient.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    const { getAgentConfig } = await import("@/config/agents");
+    vi.mocked(getAgentConfig).mockReturnValue({ command: "copilot" } as never);
+    // The real builders, so the command under test is the one that would run.
+    const actual = await vi.importActual<typeof import("@shared/types")>("@shared/types");
+    const shared = await import("@shared/types");
+    vi.mocked(shared.buildLaunchCommandFromFlags).mockImplementation(
+      actual.buildLaunchCommandFromFlags
+    );
+    vi.mocked(shared.buildResumeCommand).mockImplementation(actual.buildResumeCommand);
+    vi.mocked(shared.buildResumeLatestCommand).mockReturnValue(null as never);
+    vi.mocked(shared.generateAgentCommand).mockImplementation(actual.generateAgentCommand);
+    buildAgentLaunchFlagsMock.mockImplementation(actual.buildAgentLaunchFlags as never);
+    const { reset } = usePanelStore.getState();
+    await reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+  });
+
+  // `clearAllMocks` keeps implementations, so the file's stand-ins go back
+  // before any other block runs.
+  afterEach(async () => {
+    const { getAgentConfig } = await import("@/config/agents");
+    vi.mocked(getAgentConfig)
+      .mockReset()
+      .mockReturnValue({ command: "claude" } as never);
+    const shared = await import("@shared/types");
+    vi.mocked(shared.buildLaunchCommandFromFlags).mockReset().mockReturnValue("claude --flag");
+    vi.mocked(shared.buildResumeCommand)
+      .mockReset()
+      .mockReturnValue(null as never);
+    vi.mocked(shared.buildResumeLatestCommand)
+      .mockReset()
+      .mockReturnValue(null as never);
+    vi.mocked(shared.generateAgentCommand).mockReset().mockReturnValue("claude");
+    buildAgentLaunchFlagsMock.mockReset().mockReturnValue([]);
+  });
+
+  function show(panel: Record<string, unknown>) {
+    usePanelStore.setState({
+      panelsById: { [panel.id as string]: panel as unknown as PtyPanelData },
+      panelIds: [panel.id as string],
+    });
+  }
+
+  function paneAfterRestart(): PtyPanelData {
+    const panel = usePanelStore.getState().panelsById["test-1"];
+    if (!panel || !isPtyPanel(panel)) throw new Error("pane missing");
+    return panel;
+  }
+
+  it("relaunches on the CLI default and saves the launch without the retired model", async () => {
+    show(retiredCopilot);
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("copilot --allow-all-tools");
+    expect(payload.agentLaunchFlags).toEqual(["--allow-all-tools"]);
+    expect(payload.agentModelId).toBeUndefined();
+    const pane = paneAfterRestart();
+    expect(pane.agentModelId).toBeUndefined();
+    expect(pane.agentLaunchFlags).toEqual(["--allow-all-tools"]);
+    expect(pane.command).toBe("copilot --allow-all-tools");
+    expect(notifyRetiredModelDroppedMock).toHaveBeenCalledWith("copilot", ["claude-opus-4.6"], {
+      panelId: "test-1",
+      worktreeId: "wt-1",
+    });
+  });
+
+  describe("a pane saved with an interactive Vibe model (#15569)", () => {
+    const vibeWithModel = {
+      ...agentPanelBase,
+      launchAgentId: "mistral",
+      title: "Mistral Vibe (Small)",
+      agentState: "idle" as const,
+      agentModelId: "devstral-small",
+      agentLaunchFlags: ["--trust", "--model", "devstral-small"],
+      command: "vibe --trust --model devstral-small",
+    };
+
+    beforeEach(async () => {
+      const { getAgentConfig } = await import("@/config/agents");
+      vi.mocked(getAgentConfig).mockReturnValue({ command: "vibe" } as never);
+    });
+
+    it("resumes without it, which Vibe refuses on a resume, and claims no model", async () => {
+      mockGracefulKill.mockResolvedValue("abc-1");
+      show(vibeWithModel);
+
+      await usePanelStore.getState().restartTerminal("test-1");
+
+      const payload = mockSpawn.mock.calls[0]![0];
+      expect(payload.command).toBe("vibe --trust --resume abc-1");
+      expect(payload.agentModelId).toBeUndefined();
+      const pane = paneAfterRestart();
+      expect(pane.agentModelId).toBeUndefined();
+      expect(pane.agentLaunchFlags).toEqual(["--trust"]);
+      expect(pane.command).toBe("vibe --trust");
+      expect(notifyRetiredModelDroppedMock).not.toHaveBeenCalled();
+    });
+
+    it("starts over without it, which an interactive session ignores or rejects", async () => {
+      show(vibeWithModel);
+
+      await usePanelStore.getState().restartTerminal("test-1");
+
+      const payload = mockSpawn.mock.calls[0]![0];
+      expect(payload.command).toBe("vibe --trust");
+      expect(payload.agentLaunchFlags).toEqual(["--trust"]);
+      expect(payload.title).toBe("Mistral Vibe");
+      expect(paneAfterRestart().agentModelId).toBeUndefined();
+      expect(paneAfterRestart().title).toBe("Mistral Vibe");
+      expect(notifyRetiredModelDroppedMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps a rename the pane got rather than resetting it", async () => {
+      show({ ...vibeWithModel, title: "Vibe: docs", titleMode: "user" });
+
+      await usePanelStore.getState().restartTerminal("test-1");
+
+      expect(mockSpawn.mock.calls[0]![0].title).toBe("Vibe: docs");
+      expect(paneAfterRestart().title).toBe("Vibe: docs");
+    });
+  });
+
+  it("resumes the captured conversation without the retired model", async () => {
+    mockGracefulKill.mockResolvedValue("live-7");
+    show(retiredCopilot);
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("copilot --allow-all-tools --resume=live-7");
+    expect(payload.agentModelId).toBeUndefined();
+    // A resume keeps the saved command as the next fresh launch, so it too has
+    // to be the cleaned one.
+    expect(paneAfterRestart().command).toBe("copilot --allow-all-tools");
+  });
+
+  it("drops a retired model saved only in the caller's flags", async () => {
+    show({
+      ...retiredCopilot,
+      agentModelId: undefined,
+      agentLaunchFlags: ["--allow-all-tools", "--model=gpt-5.4"],
+      callerLaunchFlags: ["--model=gpt-5.4"],
+      command: "copilot --allow-all-tools --model=gpt-5.4",
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].command).toBe("copilot --allow-all-tools");
+    expect(paneAfterRestart().callerLaunchFlags).toBeUndefined();
+    expect(notifyRetiredModelDroppedMock).toHaveBeenCalledWith(
+      "copilot",
+      ["gpt-5.4"],
+      expect.anything()
+    );
+  });
+
+  it("relaunches a model Copilot still offers with the same --model", async () => {
+    show({
+      ...retiredCopilot,
+      agentModelId: "claude-sonnet-5.5",
+      agentLaunchFlags: ["--model", "claude-sonnet-5.5", "--allow-all-tools"],
+      command: "copilot --model claude-sonnet-5.5 --allow-all-tools",
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("copilot --model 'claude-sonnet-5.5' --allow-all-tools");
+    expect(payload.agentModelId).toBe("claude-sonnet-5.5");
+    expect(paneAfterRestart().agentModelId).toBe("claude-sonnet-5.5");
+    expect(notifyRetiredModelDroppedMock).not.toHaveBeenCalled();
+  });
+
+  it("rebuilds from settings when the retired model was the only saved flag", async () => {
+    const { agentSettingsClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+      agents: { copilot: { customFlags: "--yolo" } },
+    });
+    show({
+      ...retiredCopilot,
+      agentLaunchFlags: ["--model", "claude-opus-4.6"],
+      command: "copilot --model claude-opus-4.6",
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("copilot --yolo");
+    expect(payload.agentLaunchFlags).toEqual(["--yolo"]);
+    expect(paneAfterRestart().command).toBe("copilot --yolo");
+  });
+
+  it("drops a retired model the pane's preset adds back after the saved fields are cleaned", async () => {
+    getMergedPresetMock.mockReturnValue({ id: "old", name: "Old", args: ["--model", "gpt-5.4"] });
+    show({ ...retiredCopilot, agentPresetId: "old" });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("copilot --allow-all-tools");
+    expect(payload.agentLaunchFlags).toEqual(["--allow-all-tools"]);
+    expect(paneAfterRestart().agentLaunchFlags).toEqual(["--allow-all-tools"]);
+    expect(notifyRetiredModelDroppedMock).toHaveBeenCalledWith(
+      "copilot",
+      ["claude-opus-4.6", "gpt-5.4"],
+      expect.anything()
+    );
+  });
+
+  it("moves to another preset carrying neither the pane's nor the preset's retired model", async () => {
+    getMergedPresetMock.mockReturnValue({
+      id: "amber",
+      name: "Amber",
+      args: ["--amber", "--model", "gpt-5.4"],
+    });
+    show(retiredCopilot);
+
+    await usePanelStore.getState().restartTerminalOnPreset("test-1", "amber");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("copilot --amber");
+    expect(payload.agentLaunchFlags).toEqual(["--amber"]);
+    expect(payload.agentModelId).toBeUndefined();
+    const pane = paneAfterRestart();
+    expect(pane.agentModelId).toBeUndefined();
+    expect(pane.agentLaunchFlags).toEqual(["--amber"]);
+    expect(notifyRetiredModelDroppedMock).toHaveBeenCalledWith(
+      "copilot",
+      ["claude-opus-4.6", "gpt-5.4"],
+      expect.anything()
+    );
+  });
+
+  it("keeps the cleaned launch when a preset move's spawn fails after it was saved", async () => {
+    getMergedPresetMock.mockReturnValue({ id: "amber", name: "Amber", args: ["--amber"] });
+    mockSpawn.mockRejectedValueOnce(new Error("spawn failed"));
+    show(retiredCopilot);
+
+    await usePanelStore.getState().restartTerminalOnPreset("test-1", "amber");
+
+    const pane = paneAfterRestart();
+    expect(pane.agentModelId).toBeUndefined();
+    expect(pane.agentLaunchFlags).toEqual(["--allow-all-tools"]);
+    expect(pane.command).toBe("copilot --allow-all-tools");
+    expect(pane.callerLaunchFlags).toBeUndefined();
+    expect(notifyRetiredModelDroppedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the saved launch alone when a preset move fails before it starts", async () => {
+    getMergedPresetMock.mockReturnValue(undefined);
+    show(retiredCopilot);
+
+    await usePanelStore.getState().restartTerminalOnPreset("test-1", "missing");
+
+    expect(mockSpawn).not.toHaveBeenCalled();
+    const pane = paneAfterRestart();
+    expect(pane.agentModelId).toBe("claude-opus-4.6");
+    expect(pane.agentLaunchFlags).toEqual(retiredCopilot.agentLaunchFlags);
+    expect(pane.command).toBe(retiredCopilot.command);
+    expect(notifyRetiredModelDroppedMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("restartTerminal drops a saved exit (#15941)", () => {
+  it("saves the restarting pane without its exit, so a reload starts it", async () => {
+    const { panelPersistence } = await import("@/store/persistence/panelPersistence");
+    const { serializePtyPanel } = await import("@/panels/terminal/serializer");
+    const save = vi.spyOn(panelPersistence, "save").mockImplementation(() => {});
+    let finishSpawn: (value: { id: string }) => void = () => {};
+    mockSpawn.mockImplementationOnce(
+      () => new Promise<{ id: string }>((resolve) => (finishSpawn = resolve))
+    );
+    try {
+      const shell = {
+        id: "test-1",
+        kind: "terminal" as const,
+        title: "Dev server",
+        cwd: "/some/path",
+        command: "npm run dev",
+        cols: 80,
+        rows: 24,
+        location: "grid" as const,
+        isVisible: true,
+        exitCode: 3,
+        runtimeStatus: "exited" as const,
+      };
+      usePanelStore.setState({ panelsById: { [shell.id]: shell }, panelIds: [shell.id] });
+      expect(serializePtyPanel(shell).exitCode).toBe(3);
+
+      const restart = usePanelStore.getState().restartTerminal("test-1");
+      await vi.waitFor(() => expect(mockSpawn).toHaveBeenCalled());
+
+      // Saved while the new process is still on its way, the status still reads exited.
+      const saved = (save.mock.lastCall?.[0] as PtyPanelData[] | undefined)?.find(
+        (p) => p.id === "test-1"
+      );
+      expect(saved).toBeDefined();
+      expect(serializePtyPanel(saved!)).not.toHaveProperty("exitCode");
+
+      finishSpawn({ id: "test-1" });
+      await restart;
+      const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData;
+      expect(after.runtimeStatus).toBe("running");
+      expect(serializePtyPanel(after)).not.toHaveProperty("exitCode");
+    } finally {
+      save.mockRestore();
+    }
   });
 });

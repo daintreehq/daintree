@@ -1,13 +1,7 @@
-import { BrowserWindow, webContents } from "electron";
-import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
+import { webContents } from "electron";
 import { CHANNELS } from "../channels.js";
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
-import {
-  broadcastToRenderer,
-  sendToRenderer,
-  typedHandle,
-  typedHandleWithContext,
-} from "../utils.js";
+import { sendToWebContents, typedHandle, typedHandleWithContext } from "../utils.js";
 import { startOAuthLoopback } from "../../services/OAuthLoopbackService.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type {
@@ -76,7 +70,12 @@ interface CdpSession {
   // Per-session throttle for `Log.entryAdded` — browser-emitted entries
   // (CSP, network, deprecation) can flood. Keyed by source:level:url:line.
   logRateLimit: Map<string, { count: number; resetAt: number }>;
-  ownerWindow: BrowserWindow | null;
+  /**
+   * The renderer embedding the guest. Rows go to it rather than to its window's
+   * active app view: a cached project view keeps its guests running, and its
+   * panes are the only ones that know this guest's pane ids.
+   */
+  embedder: Electron.WebContents | null;
   messageListener: ((event: Electron.Event, method: string, params: unknown) => void) | null;
   detachListener: ((event: Electron.Event, reason: string) => void) | null;
 }
@@ -185,7 +184,7 @@ function getOrCreateSession(wcId: number): CdpSession {
       destroyListener: null,
       transitionQueue: Promise.resolve(),
       logRateLimit: new Map(),
-      ownerWindow: null,
+      embedder: null,
       messageListener: null,
       detachListener: null,
     };
@@ -654,9 +653,8 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     session.paneIds.add(paneId);
     session.groupDepthByPane.set(paneId, 0);
 
-    if (session.ownerWindow === null) {
-      const hostWc = wc.hostWebContents;
-      session.ownerWindow = hostWc ? getWindowForWebContents(hostWc) : null;
+    if (session.embedder === null || session.embedder.isDestroyed()) {
+      session.embedder = wc.hostWebContents ?? null;
     }
 
     if (!session.rowObjectIdsByPane.has(paneId)) {
@@ -714,15 +712,11 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
                   paneId: pid,
                   navigationGeneration: session.navigationGeneration,
                 };
-                if (session.ownerWindow && !session.ownerWindow.isDestroyed()) {
-                  sendToRenderer(
-                    session.ownerWindow,
-                    CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED,
-                    payload
-                  );
-                } else {
-                  broadcastToRenderer(CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, payload);
-                }
+                sendToWebContents(
+                  session.embedder,
+                  CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED,
+                  payload
+                );
               }
             }
           } catch (err) {
@@ -758,15 +752,11 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
                 paneId: pid,
                 navigationGeneration: session.navigationGeneration,
               };
-              if (session.ownerWindow && !session.ownerWindow.isDestroyed()) {
-                sendToRenderer(
-                  session.ownerWindow,
-                  CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED,
-                  payload
-                );
-              } else {
-                broadcastToRenderer(CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED, payload);
-              }
+              sendToWebContents(
+                session.embedder,
+                CHANNELS.WEBVIEW_CONSOLE_CONTEXT_CLEARED,
+                payload
+              );
             }
           } catch (err) {
             logWarn("CDP detach listener failed mid-teardown", {
@@ -879,11 +869,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
         navigationGeneration: session.navigationGeneration,
       };
 
-      if (session.ownerWindow && !session.ownerWindow.isDestroyed()) {
-        sendToRenderer(session.ownerWindow, CHANNELS.WEBVIEW_CONSOLE_MESSAGE, row);
-      } else {
-        broadcastToRenderer(CHANNELS.WEBVIEW_CONSOLE_MESSAGE, row);
-      }
+      emitConsoleRow(session, row);
 
       // Adjust depth AFTER emitting the group header row
       if (cdpType === "startGroup" || cdpType === "startGroupCollapsed") {
@@ -893,11 +879,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
   }
 
   function emitConsoleRow(session: CdpSession, row: SerializedConsoleRow): void {
-    if (session.ownerWindow && !session.ownerWindow.isDestroyed()) {
-      sendToRenderer(session.ownerWindow, CHANNELS.WEBVIEW_CONSOLE_MESSAGE, row);
-    } else {
-      broadcastToRenderer(CHANNELS.WEBVIEW_CONSOLE_MESSAGE, row);
-    }
+    sendToWebContents(session.embedder, CHANNELS.WEBVIEW_CONSOLE_MESSAGE, row);
   }
 
   function handleExceptionThrown(wcId: number, session: CdpSession, params: unknown): void {
@@ -1276,6 +1258,11 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
       });
     }
 
+    // Status goes to the view embedding this guest, captured before anything
+    // awaits: the user can switch projects while the system browser has the
+    // sign-in, and the window's active view then belongs to another project.
+    const embedder = wc.hostWebContents ?? null;
+
     let sessionStorageSnapshot =
       (providedSessionStorageSnapshot as Array<[string, string]> | undefined) ??
       (await getWebviewDialogService().consumeOAuthSessionStorage(panelId));
@@ -1310,17 +1297,14 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
       }
     }
 
-    // Resolve owner window once — used for status event broadcasts.
-    const ownerWindow = getWindowForWebContents(wc);
-
     // Step 2: Start loopback server, open system browser, wait for callback
     const loopbackResult = await startOAuthLoopback(authUrl, panelId);
     if (!loopbackResult.success) {
       // Suppress status event for cancelled flows — the renderer already
       // dismissed the banner via the Cancel button, and a second "Sign in"
       // preempting a first would flash a misleading "error" phase.
-      if (loopbackResult.cause !== "cancelled" && ownerWindow) {
-        sendToRenderer(ownerWindow, CHANNELS.WEBVIEW_OAUTH_LOOPBACK_STATUS, {
+      if (loopbackResult.cause !== "cancelled") {
+        sendToWebContents(embedder, CHANNELS.WEBVIEW_OAUTH_LOOPBACK_STATUS, {
           panelId,
           phase: loopbackResult.cause === "timed-out" ? "timed-out" : "error",
           message: loopbackResult.cause === "timed-out" ? "Sign-in timed out" : undefined,
@@ -1456,13 +1440,10 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
             });
 
           clearTimeout(timeout);
-          // Broadcast token-exchange-intercepted status to the renderer
-          if (ownerWindow) {
-            sendToRenderer(ownerWindow, CHANNELS.WEBVIEW_OAUTH_LOOPBACK_STATUS, {
-              panelId,
-              phase: "token-exchange-intercepted",
-            });
-          }
+          sendToWebContents(embedder, CHANNELS.WEBVIEW_OAUTH_LOOPBACK_STATUS, {
+            panelId,
+            phase: "token-exchange-intercepted",
+          });
           finishIntercept();
         };
 
@@ -1518,13 +1499,11 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     }
 
     if (navigationError) {
-      if (ownerWindow) {
-        sendToRenderer(ownerWindow, CHANNELS.WEBVIEW_OAUTH_LOOPBACK_STATUS, {
-          panelId,
-          phase: "error",
-          message: `Navigation failed: ${(navigationError as Error).message}`,
-        });
-      }
+      sendToWebContents(embedder, CHANNELS.WEBVIEW_OAUTH_LOOPBACK_STATUS, {
+        panelId,
+        phase: "error",
+        message: `Navigation failed: ${(navigationError as Error).message}`,
+      });
       throw new AppError({
         code: "INTERNAL",
         message: `OAuth callback navigation failed: ${(navigationError as Error).message}`,
@@ -1533,13 +1512,10 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
       });
     }
 
-    // Broadcast completion status
-    if (ownerWindow) {
-      sendToRenderer(ownerWindow, CHANNELS.WEBVIEW_OAUTH_LOOPBACK_STATUS, {
-        panelId,
-        phase: "completed",
-      });
-    }
+    sendToWebContents(embedder, CHANNELS.WEBVIEW_OAUTH_LOOPBACK_STATUS, {
+      panelId,
+      phase: "completed",
+    });
 
     return { success: true, callbackUrl, loopbackRedirectUri, originalRedirectUri };
   };

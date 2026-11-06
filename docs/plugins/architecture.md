@@ -40,10 +40,11 @@ A built-in plugin is Daintree code that happens to use the plugin contract. It d
 - **Its renderer lives in the host bundle.** There is no `plugin://` module for it, which changes how its panel views resolve — see [Built-in plugin views](#built-in-plugin-views).
 - **Activation failures are swallowed.** Main reports a built-in's activation as successful even when `activate()` throws, so a built-in's panel can still render against handlers that never registered. Handle missing handlers in the view rather than assuming activation succeeded.
 
-Four built-ins ship today, one directory each under `plugins/builtin/`:
+Five built-ins ship today, one directory each under `plugins/builtin/`:
 
 | Plugin                     | Contributes                                 | Default |
 | -------------------------- | ------------------------------------------- | ------- |
+| `daintree.beads`           | `forgeProviders`, `settings`                | Off     |
 | `daintree.github`          | `forgeProviders`, `fileDecorationProviders` | On      |
 | `daintree.gitlab`          | `forgeProviders`, `settings`                | On      |
 | `daintree.linear`          | `forgeProviders`, `settings`                | Off     |
@@ -514,9 +515,9 @@ What disclosure does:
 
 What the host derives from declared capabilities:
 
-- **Danger classification (live today).** When a manifest holds any high-risk token in `CONFIRM_TRIGGERING_CAPABILITIES` (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`, `agent:register`, `agent:input`), every action that plugin registers is raised to `effectiveDanger: "confirm"` — gating the renderer's confirm dialog, MRU-rail eligibility, and `repeatLast`. The host may only raise danger, never lower it. This is host-side UX policy on Daintree's own action system; it does **not** block the plugin from executing code or calling IPC directly.
+- **Danger classification (live today).** When a manifest holds any high-risk token in `CONFIRM_TRIGGERING_CAPABILITIES` (`shell:exec`, `git:write`, `fs:project-write`, `fs:user-data-write`, `agent:invoke`, `agent:register`, `agent:input`, `agent:launch-preset`), every action that plugin registers is raised to `effectiveDanger: "confirm"` — gating the renderer's confirm dialog, MRU-rail eligibility, and `repeatLast`. The host may only raise danger, never lower it. This is host-side UX policy on Daintree's own action system; it does **not** block the plugin from executing code or calling IPC directly.
 - **Compound-capability lattice (live, #9247).** Single capabilities that aren't individually irreversible can still combine into a threat. `manifestTriggersCompoundElevation()` (`electron/services/plugin/pluginDangerLattice.ts`) catches two compound classes: exfiltration (a sensitive read in `SENSITIVE_READ_CAPABILITIES` paired with an unconstrained `shell:exec` or `network:fetch` sink) and remote-controlled mutation (`network:fetch` paired with a local write or shell sink). A plugin attenuates the elevation by declaring a tight `scopes.network.allowedUrls` — a scoped `network:fetch` can't be remote-controlled, so the scope removes that class. Wildcard scopes are rejected at the schema boundary.
-- **Just-in-time consent (live, #10524).** Declaring a capability is necessary but not sufficient for the sanctioned host surfaces. The first time a plugin actually calls `host.process.spawn` (`shell:exec`), `host.fs.writeFile` / `appendFile` / `mkdir`, a writable `host.db` open of a project database, `db.backup` or `host.documents.renderPdf` (`fs:*-write`), `host.git.add`/`commit` (`git:write`), `host.sendToAgent` / `sendToActiveAgent` (`agent:input`), or `host.terminals.readScreen` (`terminal:read`), `ensureCapabilityConsent` (`pluginHostDeps.ts`) raises a first-use dialog through `PluginCapabilityConsentService`. A pinned grant makes later calls silent; a denial rejects with `PERMISSION_REQUIRED:`. Grants key on `(scopeKey, pluginId, capability)` with `scopeKey` taken from the host's own binding, so one project's approval never answers for another project's copy of the same manifest id. Built-in plugins skip the prompt. This is the only place a capability is a runtime gate rather than a label — and only on the host-mediated path.
+- **Just-in-time consent (live, #10524).** Declaring a capability is necessary but not sufficient for the sanctioned host surfaces. The first time a plugin actually calls `host.process.spawn` (`shell:exec`), `host.fs.writeFile` / `appendFile` / `mkdir`, a writable `host.db` open of a project database, `db.backup` or `host.documents.renderPdf` (`fs:*-write`), `host.git.add`/`commit` (`git:write`), `host.sendToAgent` / `sendToActiveAgent` (`agent:input`), or `host.terminals.readScreen` (`terminal:read`), `ensureCapabilityConsent` (`pluginHostDeps.ts`) raises a first-use dialog through `PluginCapabilityConsentService`. A pinned grant makes later calls silent; a denial rejects with `PERMISSION_REQUIRED:`. Grants key on `(scopeKey, pluginId, capability)` with `scopeKey` taken from the host's own binding, so one project's approval never answers for another project's copy of the same manifest id. Built-in plugins skip the prompt. A plugin's `agent.launch` naming a preset (`agent:launch-preset`, #16324) is gated the same way per preset, in main before the dispatch is forwarded: the grant also holds a fingerprint of the preset's source and content, an edit ends it, built-ins are asked too, and the renderer refuses the launch unless the preset it resolves has exactly the approved content. This is the only place a capability is a runtime gate rather than a label — and only on the host-mediated path.
 - **MCP consent tier (live, #9234).** A plugin's declared capabilities cap the danger tier its MCP server's tool surface can reach (`electron/services/plugin-mcp/PluginMcpTierAuth.ts`): a server that didn't declare a high-risk capability can't trigger a D2 confirmation just by advertising `destructiveHint: true` — the call is denied, not silently downgraded. See the trust model for the complete list.
 - **Agent MCP gate (live).** `contributes.agentMcp` is rejected at the manifest gate without `mcp:expose`, and `host.mcp.registerTools` throws `PERMISSION_REQUIRED:` without it. Declaring it exposes nothing: the plugin also needs the user's read-and-write agent access. See [Trust model → Agent MCP endpoints](./trust-model.md#agent-mcp-endpoints-mcpexpose).
 
@@ -534,15 +535,16 @@ Prior to #8321, the renderer trusted the plugin's self-reported `danger` field. 
 
 The host consults the set `CONFIRM_TRIGGERING_CAPABILITIES` (defined in `shared/config/pluginCapabilities.ts`; the derivation lives in `electron/services/plugin/pluginDangerLattice.ts`, which `PluginService.ts` calls):
 
-| Capability           | Effect            |
-| -------------------- | ----------------- |
-| `shell:exec`         | Raises to confirm |
-| `git:write`          | Raises to confirm |
-| `fs:project-write`   | Raises to confirm |
-| `fs:user-data-write` | Raises to confirm |
-| `agent:invoke`       | Raises to confirm |
-| `agent:register`     | Raises to confirm |
-| `agent:input`        | Raises to confirm |
+| Capability            | Effect            |
+| --------------------- | ----------------- |
+| `shell:exec`          | Raises to confirm |
+| `git:write`           | Raises to confirm |
+| `fs:project-write`    | Raises to confirm |
+| `fs:user-data-write`  | Raises to confirm |
+| `agent:invoke`        | Raises to confirm |
+| `agent:register`      | Raises to confirm |
+| `agent:input`         | Raises to confirm |
+| `agent:launch-preset` | Raises to confirm |
 
 When a plugin's declared manifest `capabilities` includes any of these tokens, every action that plugin registers gets `effectiveDanger: "confirm"` regardless of the self-reported value. The compound-capability lattice (`manifestTriggersCompoundElevation()`) raises danger for the multi-capability threat classes described under [Capability disclosure](#capability-disclosure).
 

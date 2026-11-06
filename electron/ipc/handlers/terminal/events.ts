@@ -18,6 +18,7 @@ import { getMcpServerServiceRef } from "../../../window/serviceRefs.js";
 import { peekDriveLeaseService } from "../../../services/DriveLeaseService.js";
 import {
   acceptCapturedAgentSession,
+  acceptObservedAgentSession,
   releaseSupersededCapturedSession,
 } from "../../../services/pty/agentSessionCapturePersistence.js";
 import type {
@@ -354,6 +355,16 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
     }
   );
   handlers.push(unsubSessionCaptured);
+
+  // The conversation a run's own argv resumes (#15994): a run the user started
+  // by hand, which neither capture names if it ends mid-turn.
+  const unsubSessionObserved = events.on(
+    "agent-session:observed",
+    (payload: DaintreeEventMap["agent-session:observed"]) => {
+      void acceptObservedAgentSession(payload);
+    }
+  );
+  handlers.push(unsubSessionObserved);
 
   // The same saved-pane id, learned while a Codex run is still going rather
   // than as it ends (#15268), so a quit or crash that skips both captures above

@@ -171,6 +171,7 @@ describe("the declared settings behind each section", () => {
       assistiveTechnology: "device",
       worktreePathPattern: "host",
       clientPreferences: "device",
+      worktreeSidebar: "device",
       toolbarLayout: "device",
       pluginSilences: "host",
       hardwareAcceleration: "device",

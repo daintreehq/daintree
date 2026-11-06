@@ -1,15 +1,20 @@
+import { z } from "zod";
 import { AppError } from "../../utils/errorTypes.js";
 import type { IpcContext } from "../types.js";
 import type {
   GlobalAssistantAttachment,
   GlobalAssistantView,
+  WindowGlobalAssistantPanel,
 } from "../../../shared/types/ipc/help.js";
 import type { AgentState } from "../../../shared/types/agent.js";
-import { LOCAL_HOST_ID } from "../../../shared/types/remoteHosts.js";
+import { AgentDirectorySubjectSchema } from "../../../shared/types/agentDirectory.js";
+import { LOCAL_HOST_ID, isLocalHostId } from "../../../shared/types/remoteHosts.js";
 import { events } from "../../services/events.js";
 import type { GlobalAssistantService } from "../../services/GlobalAssistantService.js";
 import { getGlobalAssistantService } from "../../services/globalAssistant.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
+import { getWindowRegistry } from "../../window/windowRef.js";
+import type { ProjectViewManager } from "../../window/ProjectViewManager.js";
 import { CHANNELS } from "../channels.js";
 import { broadcastToRenderer } from "../utils.js";
 
@@ -149,6 +154,13 @@ function requireId(value: unknown): string {
   return value;
 }
 
+function requireEligible(value: unknown): boolean {
+  if (typeof value !== "boolean") {
+    throw new AppError({ code: "VALIDATION", message: "Whether the view can type is required." });
+  }
+  return value;
+}
+
 export async function handleEnsureGlobalAssistant(ctx: IpcContext): Promise<GlobalAssistantView> {
   requireWindow(ctx);
   const instance = service();
@@ -160,13 +172,29 @@ export async function handleGetGlobalAssistantState(): Promise<GlobalAssistantVi
   return globalAssistantView(service());
 }
 
+/**
+ * `eligible` says whether the attaching view could type to the run now; one
+ * that can't (Canopy covers it) is never handed input that nobody holds.
+ */
 export async function handleAttachGlobalAssistant(
-  ctx: IpcContext
+  ctx: IpcContext,
+  eligible?: boolean
 ): Promise<GlobalAssistantAttachment> {
   const { webContentsId, windowId } = requireWindow(ctx);
+  const canType = eligible === undefined ? true : requireEligible(eligible);
   const instance = service();
-  const attachmentId = instance.attach(webContentsId, windowId);
+  const attachmentId = instance.attach(webContentsId, windowId, canType);
   return { attachmentId, state: globalAssistantView(instance) };
+}
+
+/** The attachment's view can, or can no longer, type to the run; it may fill a vacancy. */
+export async function handleSetGlobalAssistantInputEligible(
+  ctx: IpcContext,
+  attachmentId: string,
+  eligible: boolean
+): Promise<void> {
+  const { webContentsId } = requireWindow(ctx);
+  service().setEligible(requireId(attachmentId), webContentsId, requireEligible(eligible));
 }
 
 export async function handleDetachGlobalAssistant(
@@ -179,11 +207,17 @@ export async function handleDetachGlobalAssistant(
 
 export async function handleClaimGlobalAssistantInput(
   ctx: IpcContext,
-  attachmentId: string
+  attachmentId: string,
+  /** Move it only from this attachment of the same view, while it still holds it. */
+  from?: string
 ): Promise<GlobalAssistantView> {
   const { webContentsId } = requireWindow(ctx);
   const instance = service();
-  instance.claimInput(requireId(attachmentId), webContentsId);
+  instance.claimInput(
+    requireId(attachmentId),
+    webContentsId,
+    from === undefined ? undefined : requireId(from)
+  );
   return globalAssistantView(instance);
 }
 
@@ -235,4 +269,49 @@ export async function handleDiscardGlobalAssistant(
   requireGeneration(instance, expectedGeneration);
   await instance.discard();
   return globalAssistantView(instance);
+}
+
+const WindowGlobalAssistantPanelSchema = z.object({
+  showing: z.boolean(),
+  target: AgentDirectorySubjectSchema.nullable(),
+});
+
+/** The sender's own window's view manager, when the sender is one of that window's views. */
+function senderViewManager(ctx: IpcContext): ProjectViewManager | null {
+  const windowId = ctx.senderWindow?.id;
+  if (windowId === undefined) return null;
+  const manager = getWindowRegistry()?.getByWindowId(windowId)?.services.projectViewManager;
+  return manager?.ownsView(ctx.webContentsId) ? manager : null;
+}
+
+/**
+ * Whether the sender's window last showed the global assistant in its panel
+ * (#16099). Every switch entry point — the switcher, a notification, File →
+ * Recent Projects — lands the incoming view here, which is why it's held in
+ * main and read by the view rather than handed over by whoever switched.
+ */
+export async function handleGetWindowGlobalAssistantPanel(
+  ctx: IpcContext
+): Promise<WindowGlobalAssistantPanel | null> {
+  return senderViewManager(ctx)?.getGlobalAssistantPanel() ?? null;
+}
+
+/**
+ * The sender's panel, for its window to carry over a project switch. Ignored
+ * from any view but the one the window shows: a late report from a view just
+ * switched away from must not overwrite what the incoming view said.
+ */
+export async function handleReportWindowGlobalAssistantPanel(
+  ctx: IpcContext,
+  panel: WindowGlobalAssistantPanel
+): Promise<void> {
+  const parsed = WindowGlobalAssistantPanelSchema.safeParse(panel);
+  if (
+    !parsed.success ||
+    (parsed.data.target !== null &&
+      (parsed.data.target.scope.kind !== "global" || !isLocalHostId(parsed.data.target.hostId)))
+  ) {
+    throw new AppError({ code: "VALIDATION", message: "Invalid global assistant panel state." });
+  }
+  senderViewManager(ctx)?.recordGlobalAssistantPanel(ctx.webContentsId, parsed.data);
 }

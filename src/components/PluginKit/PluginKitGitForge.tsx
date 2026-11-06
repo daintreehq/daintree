@@ -339,7 +339,10 @@ function ForgeRow({ props, extra }: { props: PluginForgeRowBaseProps; extra: For
       data-selected={selected === true ? "true" : undefined}
       className={cn(
         // The github row's box: 64px, its state mark level with a 24px title line.
-        "group relative flex min-h-16 items-start gap-2.5 rounded-[var(--radius-md)] px-3 py-2.5 transition-colors duration-150 ease-out",
+        // `palette-row` is the hook the increased-contrast and forced-colours
+        // blocks outline a `data-selected` row by; the rest of the shared row
+        // class stays off, since its border would move this box.
+        "palette-row group relative flex min-h-16 items-start gap-2.5 rounded-[var(--radius-md)] px-3 py-2.5 transition-colors duration-150 ease-out",
         LIST_ROW_HOVER_CLASS,
         "data-[selected=true]:bg-overlay-highlight",
         str(className)

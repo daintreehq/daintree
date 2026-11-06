@@ -72,7 +72,7 @@ const DATA: IssueTooltipData = {
 function badge(extra: Partial<Parameters<typeof IssueBadge>[0]> = {}) {
   return (
     <TooltipProvider>
-      <IssueBadge issueNumber={42} worktreePath="/repo" isActive {...extra} />
+      <IssueBadge issueNumber={42} worktreePath="/repo" {...extra} />
     </TooltipProvider>
   );
 }
@@ -101,13 +101,13 @@ describe("IssueBadge cold-number gap (#8079)", () => {
   });
 
   it("shows the glyph alone inside the window, even across re-renders, then the number", () => {
-    const { rerender } = render(badge({ isHeadline: true }));
+    const { rerender } = render(badge());
     expect(trigger().textContent).not.toContain("#42");
 
     act(() => {
       vi.advanceTimersByTime(UI_DOHERTY_THRESHOLD - 50);
     });
-    rerender(badge({ isHeadline: true }));
+    rerender(badge());
     expect(trigger().textContent).not.toContain("#42");
 
     act(() => {
@@ -117,17 +117,24 @@ describe("IssueBadge cold-number gap (#8079)", () => {
   });
 
   it("shows the title straight away when it is already known", () => {
-    render(badge({ isHeadline: true, issueTitle: "Something is broken" }));
+    render(badge({ issueTitle: "Something is broken" }));
     expect(trigger().textContent).toContain("Something is broken");
   });
 });
 
 describe("IssueBadge trigger", () => {
-  it("is aria-disabled only while the card is inactive", () => {
-    const { rerender } = render(badge({ isActive: false }));
-    expect(trigger().getAttribute("aria-disabled")).toBe("true");
-    rerender(badge({ isActive: true }));
+  it("is a working control on every card, never aria-disabled (#15864)", () => {
+    // The badge no longer knows whether its card is the active one: it opens
+    // the issue from any card, so nothing about it can depend on selection.
+    render(badge({ issueTitle: "Something is broken" }));
     expect(trigger().getAttribute("aria-disabled")).toBeNull();
+  });
+
+  it("names the worktree it belongs to when given one", () => {
+    render(badge({ issueTitle: "Something is broken", worktreeLabel: "feature/login" }));
+    expect(trigger().getAttribute("aria-label")).toBe(
+      "Open issue #42: Something is broken for worktree feature/login"
+    );
   });
 
   it("names the item and its title", () => {
@@ -168,7 +175,7 @@ describe("IssueBadge trigger", () => {
 
   it("names the item and the settings route when no token is configured", () => {
     mockMissingCredential = true;
-    render(badge({ issueTitle: "Something is broken", isHeadline: true }));
+    render(badge({ issueTitle: "Something is broken" }));
     const name = trigger().getAttribute("aria-label") ?? "";
     expect(name).toMatch(/access token/);
     // Which item the badge is for survives the switch to the settings action.

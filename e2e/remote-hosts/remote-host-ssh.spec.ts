@@ -14,6 +14,7 @@ import {
   waitForTerminalText,
 } from "../helpers/terminal";
 import { SEL } from "../helpers/selectors";
+import { connectListeningFixtureHost } from "../helpers/remoteHostSetup";
 import {
   SSH_ALIAS,
   controlSocketsUnder,
@@ -393,24 +394,19 @@ test.describe.serial("Remote hosts: a Shell drives a Host over real ssh", () => 
     await expect(dialog).toBeVisible();
 
     await dialog.getByPlaceholder("user@devbox.local").fill(SSH_ALIAS);
-    await dialog.getByPlaceholder(SSH_ALIAS).fill(HOST_NAME);
+    await dialog.getByPlaceholder("devbox", { exact: true }).fill(HOST_NAME);
     await dialog.getByRole("button", { name: "Check host" }).click();
 
     // The probe ran over the real ssh: the wrapper saw it.
     await expect(dialog).toContainText(/SSH\s*Works/, { timeout: 60_000 });
     await expect(dialog).toContainText(/Platform\s*macOS/);
-    await expect(dialog).toContainText(/Matches this machine\s*Same build/);
+    await expect(dialog).toContainText("the same build as this machine");
     await expect(dialog).toContainText(/Host mode\s*Listening/);
     expect(await run.wrapper.invocations()).toContain(SSH_ALIAS);
     timings.probeMs = Date.now() - started;
 
-    await dialog.getByRole("button", { name: "Continue" }).click();
-    // Listening for this run, not switched on for good: skip the bootstrap,
-    // which would start the installed app at login on this Mac.
-    await expect(dialog).toContainText("isn't switched on there");
-    await dialog.getByRole("button", { name: "Skip" }).click();
-    await dialog.getByRole("button", { name: "Add host", exact: true }).click();
-    await expect(dialog).toBeHidden({ timeout: 60_000 });
+    // Keep Host mode scoped to this run, without installing a login item.
+    await connectListeningFixtureHost(page, dialog, HOST_NAME);
 
     const row = page.locator('[id="hosts-list"]');
     await expect(row).toContainText(HOST_NAME);
@@ -490,7 +486,7 @@ test.describe.serial("Remote hosts: a Shell drives a Host over real ssh", () => 
     timings.terminalMs = Date.now() - started;
   });
 
-  test("5. a killed ControlMaster: the banner says reconnecting, the link recovers, output is replayed", async () => {
+  test("5. a killed ControlMaster: the link reports the outage, recovers, and replays output", async () => {
     const page = run.remotePage!;
     const panel = getFirstGridPanel(page);
     const go = path.join(run.root, `go-${NONCE}`);
@@ -514,10 +510,15 @@ test.describe.serial("Remote hosts: a Shell drives a Host over real ssh", () => 
       for (const pid of masters) process.kill(pid, "SIGKILL");
       run.killedMaster = masters[0]!;
 
-      const banner = page
-        .getByRole("status")
-        .filter({ hasText: /Connection to .+ lost\. Reconnecting/ });
-      await expect(banner).toBeVisible({ timeout: 30_000 });
+      await expect
+        .poll(
+          async () => {
+            const hosts = await run.b.window.evaluate(() => window.electron.remoteHosts.list());
+            return hosts.find((entry) => entry.descriptor.id === run.hostId)?.connection.status;
+          },
+          { timeout: 10_000 }
+        )
+        .not.toBe("connected");
       timings.bannerAfterKillMs = Date.now() - killedAt;
 
       // The host emits while no Shell is attached.

@@ -141,6 +141,7 @@ describe("getRetryability", () => {
     for (const reason of [
       "auth-failed",
       "config-missing",
+      "push-config-unsupported",
       "dubious-ownership",
       // Auto-retrying a machine with no Git installed just spins.
       "git-not-installed",

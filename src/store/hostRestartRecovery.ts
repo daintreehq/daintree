@@ -119,6 +119,9 @@ export async function relaunchTerminalsLostToHostRestart(
               title: shownNow.title,
               titleMode: shownNow.titleMode,
             }),
+            // An emoji chosen or cleared while the link was down never reached the
+            // host's save either, so the view's word stands, none included.
+            displayEmoji: shownNow.displayEmoji,
           }
         : {};
     const launched = await usePanelStore.getState().addPanel({

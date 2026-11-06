@@ -1,6 +1,10 @@
 import type { ActionDefinition, ActionId } from "@shared/types/actions";
 import type { Worktree } from "@shared/types/worktree";
-import type { TerminalSpawnSource, AddPanelFocusPolicy } from "@shared/types/panel";
+import type {
+  TerminalSpawnSource,
+  AddPanelFocusPolicy,
+  ScheduledRunRef,
+} from "@shared/types/panel";
 import type { SettingsNavTarget } from "@/components/Settings";
 import type { AddPanelOptions } from "@/store";
 import type { PanelLimitSnapshot } from "@/store/panelLimitStore";
@@ -39,7 +43,13 @@ export type NavigationDirection = "up" | "down" | "left" | "right";
  * depends on the renderer hook (#11547).
  */
 export interface LaunchDecline {
-  reason: "panel-limit" | "already-launching" | "spawn-failed" | "unavailable" | "presets-loading";
+  reason:
+    | "panel-limit"
+    | "already-launching"
+    | "spawn-failed"
+    | "unavailable"
+    | "presets-loading"
+    | "missing-cli";
   /** The count and limits the refusal was judged on; set only for `panel-limit`. */
   panelLimit: PanelLimitSnapshot | null;
 }
@@ -75,14 +85,19 @@ export interface ActionCallbacks {
       interactive?: boolean;
       modelId?: string;
       presetId?: string | null;
+      accountId?: string | null;
       activateDockOnCreate?: boolean;
       env?: Record<string, string>;
       excludeFromPersistence?: boolean;
       removeOnExit?: boolean;
       agentLaunchFlags?: string[];
       spawnedBy?: TerminalSpawnSource;
+      /** The scheduled run this launch is for, from `ActionContext.scheduledRun` only (#15977). */
+      scheduledRun?: ScheduledRunRef;
       /** The plugin behind a plugin dispatch, from `ActionContext.callerPluginId` only. */
       launchedByPluginId?: string;
+      /** The preset a person approved for this plugin launch, from the context only (#16324). */
+      approvedPluginPreset?: import("@shared/utils/agentPresetLaunchConsent").HostApprovedPluginPresetLaunch;
       focusPolicy?: AddPanelFocusPolicy;
       requestedId?: string;
       force?: boolean;

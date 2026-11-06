@@ -7,6 +7,7 @@ import { getPendingHelpHibernationStore } from "../PendingHelpHibernationStore.j
 import { helpSessionService } from "../HelpSessionService.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
 import { getAssistantConfirmations } from "./assistantConfirmations.js";
+import { readAssistantIdentity } from "../assistantIdentity.js";
 
 let directory: LocalAgentDirectory | null = null;
 // Loaded on a read, never at import: this module is reached from install paths
@@ -37,6 +38,7 @@ export function getLocalAgentDirectory(): LocalAgentDirectory {
     pendingConfirmations: (owner, now) => getAssistantConfirmations().read(owner, now),
     paneNotices: (terminalId) =>
       mcpServer ? mcpServer.mcpServerService.getPaneNotifyState(terminalId) : undefined,
+    assistantIdentity: (scope) => readAssistantIdentity(scope),
     resumableLanes: async (projectId) => {
       const { projectStore } = await import("../ProjectStore.js");
       const store = getPendingHelpHibernationStore();

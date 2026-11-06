@@ -11,7 +11,7 @@
  * pointing at an open chip does not drop it back to the hover step.
  */
 export const DOCK_CHIP_CLASS =
-  "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition duration-150 max-w-[280px] bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-text-secondary hover:text-text-primary hover:bg-[var(--dock-item-bg-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px] cursor-grab active:cursor-grabbing";
+  "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition-[color,background-color,border-color] duration-150 ease-out max-w-[280px] bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-text-secondary hover:text-text-primary hover:bg-[var(--dock-item-bg-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px] cursor-grab active:cursor-grabbing";
 
 export const DOCK_CHIP_OPEN_CLASS =
   "bg-[var(--dock-item-bg-active)] hover:bg-[var(--dock-item-bg-active)] border-[var(--dock-item-border-active)] text-text-primary";

@@ -1,11 +1,30 @@
 /**
- * Color-vision-deficiency override maps extracted from the runtime applyAppTheme
- * module so they can be tested without importing DOM-coupled renderer code.
+ * Color-vision-deficiency override maps, and the writes a mode makes over a
+ * theme, kept out of the runtime applyAppTheme module so they can be tested
+ * without importing DOM-coupled renderer code.
  *
  * Each map stores hardcoded hex values that replace theme tokens when a CVD mode
  * is active. The maps are hand-authored to maintain distinguishability under
  * protanopia / deuteranopia (red-green) and tritanopia (blue-yellow).
  */
+
+import {
+  ACTIVITY_TEXT_INKS,
+  STATUS_INK_CONTRAST,
+  STATUS_TEXT_INKS,
+  SYNTAX_CANVAS_FLOORS,
+  SYNTAX_CANVAS_SURFACE,
+  TERMINAL_ANSI_LIGHTNESS_FLOOR,
+  isHexColor,
+} from "./contrast.js";
+import { hexToOklch, liftToContrast, oklchToHex } from "./oklch.js";
+import {
+  deriveActivityTextInks,
+  deriveDestructiveAction,
+  deriveDiffTextInks,
+  deriveStatusTextInks,
+} from "./themes.js";
+import type { AppColorScheme, AppThemeTokenKey, ColorVisionMode } from "./types.js";
 
 // Status base token -> its derived surface-wash token. When CVD mode patches a
 // status base color, the pre-baked surface rgba (computed from the *original*
@@ -29,6 +48,15 @@ const STATUS_TEXT_TOKENS: Record<string, string> = {
   "--theme-status-warning": "--theme-status-warning-text",
   "--theme-status-info": "--theme-status-info-text",
 };
+
+// Activity ink -> its text-grade twin, which the switcher's status sentences
+// paint. Lifted the same way as the status letter inks above.
+const ACTIVITY_TEXT_TOKENS: Record<string, string> = Object.fromEntries(
+  Object.entries(ACTIVITY_TEXT_INKS).map(([activity, text]) => [
+    `--theme-${activity}`,
+    `--theme-${text}`,
+  ])
+);
 
 // Wash alpha for the derived surfaces. The engine uses 0.10 (dark) / 0.08
 // (light); these static overrides apply across both polarities, and the
@@ -93,7 +121,10 @@ function withStatusSurfaces(overrides: Record<string, string>): Record<string, s
     const hex = overrides[baseToken];
     if (hex) result[surfaceToken] = hexToRgba(hex, CVD_STATUS_SURFACE_ALPHA);
   }
-  for (const [baseToken, textToken] of Object.entries(STATUS_TEXT_TOKENS)) {
+  for (const [baseToken, textToken] of Object.entries({
+    ...STATUS_TEXT_TOKENS,
+    ...ACTIVITY_TEXT_TOKENS,
+  })) {
     const hex = overrides[baseToken];
     if (hex) result[textToken] = hex;
   }
@@ -121,7 +152,6 @@ export const RED_GREEN_OVERRIDES: Record<string, string> = withDiffSurfaces(
     "--theme-activity-working": "#648fff",
     "--theme-pr-open": "#648fff",
     "--theme-pr-closed": "#fe6100",
-    "--theme-terminal-selection": "#1a1f2e",
     "--theme-terminal-red": "#d55e00",
     "--theme-terminal-green": "#009e73",
     "--theme-terminal-bright-red": "#fe6100",
@@ -184,3 +214,158 @@ export const ALL_CVD_TOKENS: ReadonlySet<string> = new Set([
   ...Object.keys(RED_GREEN_OVERRIDES),
   ...Object.keys(BLUE_YELLOW_OVERRIDES),
 ]);
+
+const COLOR_VISION_OVERRIDES: Partial<Record<ColorVisionMode, Record<string, string>>> = {
+  "red-green": RED_GREEN_OVERRIDES,
+  "blue-yellow": BLUE_YELLOW_OVERRIDES,
+};
+
+// The ANSI base/bright pairs a mode can recolour. A pair moves as one, by a single
+// lightness step, so it keeps the gap between its inks that the base/bright
+// distinctness check reads.
+const TERMINAL_ANSI_PAIRS: ReadonlyArray<readonly [AppThemeTokenKey, AppThemeTokenKey]> = [
+  ["terminal-red", "terminal-bright-red"],
+  ["terminal-green", "terminal-bright-green"],
+  ["terminal-yellow", "terminal-bright-yellow"],
+  ["terminal-blue", "terminal-bright-blue"],
+  ["terminal-magenta", "terminal-bright-magenta"],
+];
+
+// Over the floor, for rounding to hex bytes moving the lightness back a little.
+const TERMINAL_FIT_HEADROOM = 0.01;
+
+/**
+ * The terminal colours a mode writes over `scheme`. The maps' ANSI inks were
+ * picked for dark terminals, and every built-in theme's terminal is dark (light
+ * themes included), so there they ship as authored. On a terminal background they
+ * sit too close to, such as a custom theme's light one, each pair moves along
+ * lightness, away from the background and at its own hues, until both inks clear
+ * the gap the theme's own ANSI inks are held to. Without a scheme, or on a
+ * background the hex maths can't read, the map's raw values are all there is.
+ */
+export function getColorVisionTerminalWrites(
+  mode: ColorVisionMode,
+  scheme?: AppColorScheme
+): Record<string, string> {
+  const overrides = COLOR_VISION_OVERRIDES[mode];
+  if (!overrides) return {};
+  const writes: Record<string, string> = Object.fromEntries(
+    Object.entries(overrides).filter(([name]) => name.startsWith("--theme-terminal-"))
+  );
+  const background = scheme?.tokens["terminal-background"];
+  const backdrop =
+    typeof background === "string" && isHexColor(background) ? hexToOklch(background) : null;
+  if (!backdrop) return writes;
+
+  const lighter = backdrop.l < 0.5;
+  const goal = TERMINAL_ANSI_LIGHTNESS_FLOOR + TERMINAL_FIT_HEADROOM;
+  const clears = (lightness: number) =>
+    Math.abs(lightness - backdrop.l) >= TERMINAL_ANSI_LIGHTNESS_FLOOR;
+  for (const pair of TERMINAL_ANSI_PAIRS) {
+    const inks = pair.flatMap((token) => {
+      const name = `--theme-${token}`;
+      const seed = writes[name];
+      const color = seed === undefined ? null : hexToOklch(seed);
+      return color ? [{ name, color }] : [];
+    });
+    if (inks.every(({ color }) => clears(color.l))) continue;
+    // The step the ink nearest the background needs takes every ink in the pair
+    // past the floor on the side away from it; one pinned at black or white is
+    // further still. `oklchToHex` keeps lightness, and the headroom covers its
+    // rounding to bytes.
+    const step = Math.max(
+      ...inks.map(({ color }) =>
+        lighter ? backdrop.l + goal - color.l : color.l - (backdrop.l - goal)
+      )
+    );
+    for (const { name, color } of inks) {
+      const l = Math.min(1, Math.max(0, lighter ? color.l + step : color.l - step));
+      writes[name] = oklchToHex({ ...color, l });
+    }
+  }
+  return writes;
+}
+
+// Each text ink lifted from a status or activity ink, beside the ink it follows.
+const LIFTED_TEXT_INKS: ReadonlyArray<readonly [AppThemeTokenKey, AppThemeTokenKey]> = [
+  ["diff-text-insert", "status-success"],
+  ["diff-text-delete", "status-danger"],
+  ...(Object.entries(STATUS_TEXT_INKS) as Array<[AppThemeTokenKey, AppThemeTokenKey]>).map(
+    ([status, text]) => [text, status] as const
+  ),
+  ...(Object.entries(ACTIVITY_TEXT_INKS) as Array<[AppThemeTokenKey, AppThemeTokenKey]>).map(
+    ([activity, text]) => [text, activity] as const
+  ),
+];
+
+// Headroom over each floor for the compositor rounding a channel the other way,
+// the same margin the theme's own derived inks take.
+const FIT_HEADROOM = 0.05;
+
+/**
+ * Everything a colour-vision mode writes over `scheme`. The maps hold one hex per
+ * token for both polarities, so each syntax and graphical status ink a mode swaps
+ * in is moved along lightness, at its own hue, until it holds the floor this
+ * theme's own ink is held to on this theme's surfaces (#15580). The text inks and
+ * the destructive fill that follow a status or activity ink are then derived from
+ * the ink the mode actually paints, the way the theme derives its own; one whose
+ * source ink the mode leaves alone keeps the theme's. The terminal inks are fitted
+ * by `getColorVisionTerminalWrites`, which the terminals' own palette reads too.
+ * Without a scheme the map's raw values are all there is.
+ */
+export function getColorVisionWrites(
+  mode: ColorVisionMode,
+  scheme?: AppColorScheme
+): Record<string, string> {
+  const overrides = COLOR_VISION_OVERRIDES[mode];
+  if (!overrides) return {};
+  const writes = { ...overrides };
+  if (!scheme) return writes;
+  Object.assign(writes, getColorVisionTerminalWrites(mode, scheme));
+  const effective: Partial<Record<AppThemeTokenKey, string>> = { ...scheme.tokens };
+  for (const [name, value] of Object.entries(overrides)) {
+    effective[name.slice("--theme-".length) as AppThemeTokenKey] = value;
+  }
+
+  const fit = (
+    token: AppThemeTokenKey,
+    surfaces: readonly AppThemeTokenKey[],
+    minimum: number
+  ): void => {
+    const seed = overrides[`--theme-${token}`];
+    if (seed === undefined) return;
+    // A surface the hex maths can't read (a custom theme's `color-mix()`) is left
+    // out rather than guessed at; with none left the raw value stands.
+    const backdrops = surfaces
+      .map((surface) => scheme.tokens[surface])
+      .filter((value): value is string => typeof value === "string" && isHexColor(value));
+    let ink = liftToContrast(seed, backdrops, minimum + FIT_HEADROOM, scheme.type);
+    // A custom surface can leave room for the floor but not the headroom over it
+    // (a dark canvas at #767676 takes white to 4.54:1); the floor still holds.
+    if (ink === seed) ink = liftToContrast(seed, backdrops, minimum, scheme.type);
+    effective[token] = ink;
+    writes[`--theme-${token}`] = ink;
+  };
+  for (const [token, floor] of SYNTAX_CANVAS_FLOORS) fit(token, [SYNTAX_CANVAS_SURFACE], floor);
+  for (const token of STATUS_INK_CONTRAST.inks) {
+    fit(token, STATUS_INK_CONTRAST.surfaces, STATUS_INK_CONTRAST.minimum);
+  }
+
+  const inks: Partial<Record<AppThemeTokenKey, string>> = {
+    ...deriveDiffTextInks(effective, scheme.type),
+    ...deriveStatusTextInks(effective, scheme.type),
+    ...deriveActivityTextInks(effective, scheme.type),
+  };
+  for (const [token, status] of LIFTED_TEXT_INKS) {
+    const ink = inks[token];
+    if (`--theme-${status}` in overrides && ink !== undefined) writes[`--theme-${token}`] = ink;
+  }
+  // The destructive button's fills are derived from the danger ink too, so a mode
+  // that swaps the danger hue re-derives them rather than leaving the old red.
+  if ("--theme-status-danger" in overrides) {
+    for (const [token, value] of Object.entries(deriveDestructiveAction(effective, scheme.type))) {
+      if (value !== undefined) writes[`--theme-${token}`] = value;
+    }
+  }
+  return writes;
+}

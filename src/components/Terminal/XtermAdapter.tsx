@@ -10,6 +10,7 @@ import {
   UI_EXIT_EASING,
 } from "@/lib/animationUtils";
 import { isMac } from "@/lib/platform";
+import { isWindowCloseChord } from "@/services/terminal/inputUtils";
 import { TerminalRefreshTier } from "@/types";
 import {
   load as loadTerminalService,
@@ -484,6 +485,8 @@ export function XtermAdapter({
           if (isModifierOnly) {
             return true;
           }
+
+          if (isWindowCloseChord(event)) return false;
 
           // During IME/voice composition, let xterm's CompositionHelper handle the
           // full lifecycle (composed text + \r). keyCode 229 is Chromium's "Process"

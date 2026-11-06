@@ -47,44 +47,77 @@ function blockAt(offset: number): string {
   return CSS.slice(open + 1, close);
 }
 
+// The rule that steps the active card's edge back while an accent focus ring
+// is drawn somewhere in the sidebar. Scoped to the whole sidebar root, since a
+// ring on any of its controls competes with the edge, not only one in the row.
+const RECEDE_RULE =
+  /\.sidebar-root:has\(:focus-visible[^{]*\)\s*\.sidebar-worktree-card\[data-active="true"\]/;
+
+/** Every `inset Xpx 0 0 var(--theme-token)` term in a block, with its x offset. */
+function insetEdges(block: string): Array<{ x: number; token: string }> {
+  return Array.from(block.matchAll(/inset\s+(-?\d+)px\s+0\s+0\s+var\(--theme-([a-z-]+)\)/g)).map(
+    (m) => ({ x: Number(m[1]), token: m[2]! })
+  );
+}
+
 describe("sidebar selection accent", () => {
-  it("dims the active row's accent edge while a control inside it owns the focus ring", () => {
-    const offsets = ruleOffsets(
-      /\.sidebar-worktree-card\[data-active="true"\](?::not\(\[data-drop-target="true"\]\))?:has\(:focus-visible\)/
-    );
+  it("steps the active edge to a neutral ink while an accent focus ring shows in the sidebar", () => {
+    const offsets = ruleOffsets(RECEDE_RULE);
     expect(
       offsets.length,
-      "expected a rule scoping the active card's edge to the case where a descendant is focus-visible"
+      "expected a rule scoping the active card's edge to a focus-visible control in the sidebar"
     ).toBeGreaterThan(0);
 
     for (const offset of offsets) {
-      const block = blockAt(offset);
-      expect(
-        /color-mix\([^)]*--theme-accent-primary/.test(block),
-        "the focused-descendant rule must use a dimmed (color-mixed) accent, not the full-strength token"
-      ).toBe(true);
+      const edges = insetEdges(blockAt(offset));
+      expect(edges.length).toBeGreaterThan(0);
+      for (const edge of edges) {
+        // Not a faded accent: the stepped edge is a different, neutral token.
+        expect(edge.token).not.toBe("accent-primary");
+        expect(edge.x, "the stepped edge stays on the right").toBeLessThan(0);
+      }
     }
   });
 
-  it("orders the dimmed rule after the full-strength one so it actually wins", () => {
+  it("does not step back for the two focus targets that draw no accent ring", () => {
+    // The grid's own focus marks its cursor with a neutral edge and the search
+    // field's focus is neutral by ruling, so neither is a second accent.
+    const selector = CSS.match(RECEDE_RULE)?.[0] ?? "";
+    const has =
+      selector.match(/:has\((:focus-visible[^{]*?)\)\s*\.sidebar-worktree-card/)?.[1] ?? "";
+    expect(has).toContain(':not([role="grid"])');
+    expect(has).toContain(":not(input)");
+  });
+
+  it("keeps the full-strength accent edge when the sidebar loses focus", () => {
+    // Focus spends most of its time in a terminal, so the unfocused sidebar is
+    // the state selection is usually read in; a faded accent fell under 3:1.
+    expect(CSS).not.toMatch(/\.sidebar-root:not\(:focus-within\)/);
+    const activeBlocks = ruleOffsets(/\.sidebar-worktree-card\[data-active="true"\]/).map(blockAt);
+    for (const block of activeBlocks) {
+      expect(block).not.toMatch(/color-mix\([^)]*--theme-accent-primary/);
+    }
+  });
+
+  it("orders the stepped rule after the full-strength one so it actually wins", () => {
     // Same specificity would be a coin toss decided by source order, and this
     // file is unlayered — so order is the whole mechanism.
     const base = ruleOffsets(/\.sidebar-worktree-card\[data-active="true"\]\s*\{/);
-    const focused = ruleOffsets(
-      /\.sidebar-worktree-card\[data-active="true"\](?::not\(\[data-drop-target="true"\]\))?:has\(:focus-visible\)/
-    );
+    const stepped = ruleOffsets(RECEDE_RULE);
     expect(base.length).toBeGreaterThan(0);
-    expect(focused.length).toBeGreaterThan(0);
+    expect(stepped.length).toBeGreaterThan(0);
     expect(
-      Math.min(...focused),
-      "the focused-descendant rule must come after the base active-row rule"
+      Math.min(...stepped),
+      "the stepped rule must come after the base active-row rule"
     ).toBeGreaterThan(Math.min(...base));
   });
 
-  it("keeps the selection marker on the right edge in every mode, including forced colors", () => {
+  it("keeps the selection accent on the right edge in every mode, including forced colors", () => {
     // #9711 round 3, all themes. A left-edge fallback put the marker on the
     // opposite side for exactly the high-contrast users least able to absorb a
-    // second, different selection signal.
+    // second, different selection signal. The keyboard cursor may now draw on
+    // the active card's LEFT edge, but only in the neutral cursor ink; the
+    // accent itself never moves off the right.
     const activeRules = ruleOffsets(/\.sidebar-worktree-card\[data-active="true"\]/).map(blockAt);
     expect(activeRules.length).toBeGreaterThan(0);
     for (const block of activeRules) {
@@ -92,14 +125,31 @@ describe("sidebar selection accent", () => {
         /border-left\s*:/.test(block),
         "no active-row rule may mark selection on the left edge"
       ).toBe(false);
-      // The inset box-shadow form is a negative x-offset (right edge).
-      const inset = block.match(/inset\s+(-?\d+)px\s+0\s+0/);
-      if (inset) {
-        expect(
-          Number(inset[1]),
-          "the inset selection marker must sit on the right edge"
-        ).toBeLessThan(0);
+      for (const edge of insetEdges(block)) {
+        if (edge.token === "accent-primary") {
+          expect(edge.x, "the accent selection marker must sit on the right edge").toBeLessThan(0);
+        } else if (edge.x > 0) {
+          expect(edge.token, "a left edge on the active card is the cursor's neutral ink").toBe(
+            "selection-outline"
+          );
+        }
       }
+    }
+  });
+
+  it("marks the keyboard cursor on the active card without dropping the accent", () => {
+    // Tab often lands the cursor on the active row; with no mark there nothing
+    // changed on screen when focus arrived (WCAG 2.4.7).
+    const offsets = ruleOffsets(
+      /\[data-keyboard-cursor="true"\]\s*\.sidebar-worktree-card(?:\[data-label\])?\[data-active="true"\]/
+    );
+    expect(offsets.length).toBe(2);
+    for (const offset of offsets) {
+      const block = blockAt(offset);
+      expect(insetEdges(block).some((e) => e.token === "accent-primary" && e.x < 0)).toBe(true);
+      // A left edge, or on a labelled card (whose left edge is its colour bar)
+      // a perimeter, in the cursor's neutral ink.
+      expect(block).toContain("var(--theme-selection-outline)");
     }
   });
 });

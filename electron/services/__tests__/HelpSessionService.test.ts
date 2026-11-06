@@ -8,7 +8,10 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs/promises";
 import type { McpRuntimeSnapshot } from "../../../shared/types/ipc/mcpServer.js";
-import { assistantSlotKey as slotKey } from "../../../shared/config/assistantSlots.js";
+import {
+  MAX_ASSISTANT_SLOTS,
+  assistantSlotKey as slotKey,
+} from "../../../shared/config/assistantSlots.js";
 import { NO_VIEW_HANDLE } from "../../ipc/endpoint.js";
 import {
   setHostControlRuntime,
@@ -1008,6 +1011,44 @@ describe("HelpSessionService", () => {
       // The first view of its project takes it over.
       expect(service.detachedProjectIds()).toEqual(["proj-1"]);
       expect(service.detachedSlots("proj-1")).toEqual([0]);
+    });
+
+    it("remembers the run a schedule started it for, past its end (#16169)", async () => {
+      const scheduled = await service.provisionSession({
+        ...provisionInput(),
+        slot: 1,
+        windowId: NO_VIEW_HANDLE,
+        projectViewWebContentsId: NO_VIEW_HANDLE,
+        vacantOnly: true,
+        startedBy: { kind: "schedule", scheduleId: "schedule-1", runId: "run-1" },
+      });
+      if (!scheduled) throw new Error("expected result");
+      const asked = await startWithoutView();
+
+      expect(service.getScheduledRunOf(scheduled.sessionId)).toEqual({
+        scheduleId: "schedule-1",
+        runId: "run-1",
+      });
+      expect(service.getScheduledRunOf(asked.sessionId)).toBeNull();
+
+      await service.revokeSession(scheduled.sessionId);
+      expect(service.getSessionLane(scheduled.sessionId)).toBeNull();
+      // A launch it asked for before it ended still belongs to the run.
+      expect(service.getScheduledRunOf(scheduled.sessionId)).toEqual({
+        scheduleId: "schedule-1",
+        runId: "run-1",
+      });
+    });
+
+    it("refuses a schedule's start that names no run", async () => {
+      await expect(
+        service.provisionSession({
+          ...provisionInput(),
+          windowId: NO_VIEW_HANDLE,
+          projectViewWebContentsId: NO_VIEW_HANDLE,
+          startedBy: { kind: "schedule", scheduleId: "schedule-1", runId: "" },
+        })
+      ).rejects.toThrow(/startedBy/);
     });
 
     it("answers no project for a bearer that runs through a view", async () => {
@@ -2807,6 +2848,7 @@ describe("HelpSessionService", () => {
       expect(context?.projectPath).toBe("/tmp/project");
       expect([...(context?.serverNamesInUse ?? [])].sort()).toEqual([
         "daintree",
+        "daintree-decisions",
         "daintree-docs",
         "daintree-ledger",
         "daintree-runbooks",
@@ -3421,6 +3463,25 @@ describe("HelpSessionService", () => {
       await expect(service.provisionSession({ ...provisionInput(), slot: -1 })).rejects.toThrow(
         /slot/
       );
+      await expect(
+        service.provisionSession({ ...provisionInput(), slot: MAX_ASSISTANT_SLOTS })
+      ).rejects.toThrow(/slot/);
+    });
+
+    it("runs the highest lane a project allows beside the default one (#16218)", async () => {
+      const top = MAX_ASSISTANT_SLOTS - 1;
+      const laneZero = await service.provisionSession({ ...provisionInput(), slot: 0 });
+      const laneTop = await service.provisionSession({ ...provisionInput(), slot: top });
+      if (!laneZero || !laneTop) throw new Error("expected both provisions");
+      service.markTerminalForToken(laneZero.token, "term-slot-0");
+      service.markTerminalForToken(laneTop.token, "term-slot-top");
+
+      expect(service.getAssistantBackends("proj-1")).toEqual([
+        { terminalId: "term-slot-0", webContentsId: 42, slot: 0 },
+        { terminalId: "term-slot-top", webContentsId: 42, slot: top },
+      ]);
+      expect(service.validateToken(laneZero.token)).toBe("core");
+      expect(service.validateToken(laneTop.token)).toBe("core");
     });
 
     it("reports every live lane so a dead one can't mask a live sibling", async () => {

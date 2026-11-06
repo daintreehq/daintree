@@ -28,20 +28,23 @@ export type ProjectRowTone =
  * longer prints a status word at all — its rows say the state with a glyph and
  * in their accessible name — so the switcher is the caller that keeps this
  * honest today.
+ *
+ * Every hue here is a `*-text` twin, never the graphical ink the mark beside it
+ * paints. The sentence is small text on a row that also takes the highlight
+ * fill, and the graphical inks only hold 3:1 there (#15866).
  */
 export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
-  blocked: "text-status-danger",
-  waiting: "text-activity-waiting",
+  blocked: "text-status-danger-text",
+  waiting: "text-activity-waiting-text",
   // Finished-awaiting-review: the completed-state hue, distinct from both the
   // warning of a wait and the success-green of a healthy process. Never danger
   // — completion is the desired outcome, not a fault.
-  review: "text-activity-completed",
-  // Mark-only today: `working` is what a row draws when liveness has claimed a
-  // mark demand had no use for, and such a row has no sentence to colour. The
-  // entry stays because the map is total over the union — a tone must not be
-  // able to ship without an answer here — and because a surface with room for a
-  // "running" sentence should draw it in this hue rather than inventing one.
-  working: "text-activity-working",
+  review: "text-activity-completed-text",
+  // No demand sentence ever takes this tone: `working` is what a row's mark
+  // draws when liveness has claimed a slot demand had no use for. The row's
+  // running count ("2 running") is drawn in it instead, so a run reads in the
+  // same green on the line as in the mark.
+  working: "text-activity-working-text",
   running: "text-text-secondary",
   // Muted like the other settled states, and deliberately NOT the accent: a
   // snooze is the user telling this row to stop asking for them, so it must not
@@ -59,7 +62,7 @@ export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
   assistant: "text-text-secondary",
   // An assistant that failed says so in the danger hue — the severity is real
   // — while its dot stays hollow, so it never reads as a worker run.
-  "assistant-blocked": "text-status-danger",
+  "assistant-blocked": "text-status-danger-text",
 };
 
 /**
@@ -82,7 +85,8 @@ export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
  *
  * One standing exception: `review` keeps the completed hue, which derives from
  * `status-success` and so reads green in most palettes even though nothing is
- * executing. It predates this legend and the row's line always names the count
+ * executing. Every built-in keeps it apart from the working green, so the pie
+ * still splits when both are present (#15866). It predates this legend and the row's line always names the count
  * ("2 agents unread"), so it is recorded here rather than quietly reconciled.
  *
  * A hollow ring must never land on a row with something running. It used to:
@@ -112,13 +116,18 @@ export const ROW_DOT_CLASS: Record<ProjectRowTone, string> = {
   // facts and the switcher's greys already carry the settled ones. Colour alone
   // could not separate them — a dashed ring reads as temporarily suspended at a
   // glance, and survives both high-contrast modes and a colour-blind reader.
-  snoozed: "border border-dashed border-daintree-text/40",
+  snoozed: "border border-dashed border-text-secondary",
   // Hollow, because "finished" and "suspended" are settled states rather than
   // live ones. It used to sit on every dormant row too, which made a ring the
   // most common mark in the list and left it competing with the filled dots
   // that mean something — dormant rows draw no dot at all now (#11692), so the
   // ring is back to marking the two muted states that earned a line.
-  muted: "border border-daintree-text/20",
+  //
+  // Drawn in the secondary text ink rather than a fifth of the primary: at a
+  // 1px stroke the faint ring measured ~1.4:1 against the palette, under the
+  // 3:1 a state mark owes (WCAG 1.4.11), so "1 finished" had a mark nobody
+  // could see. Hollow is what keeps it quieter than the filled dots.
+  muted: "border border-text-secondary",
   // Amber, like any other wait. Only ever reached with nothing running — a
   // live row hands the mark to the run — so this is a project that has fully
   // stopped and has the assistant sitting at its prompt. Who is waiting is the
@@ -153,8 +162,8 @@ export const ROW_MARK_COLOR: Record<ProjectRowTone, string> = {
   review: "var(--color-activity-completed)",
   working: "var(--color-activity-working)",
   running: "var(--color-activity-working)",
-  snoozed: "rgb(from var(--color-text-primary) r g b / 0.4)",
-  muted: "rgb(from var(--color-text-primary) r g b / 0.2)",
+  snoozed: "var(--color-text-secondary)",
+  muted: "var(--color-text-secondary)",
   assistant: "var(--color-status-warning)",
   "assistant-blocked": "var(--color-status-danger)",
 };
@@ -547,10 +556,8 @@ function classifyWorkspaceActivity(
       // can compare it against the running count in front of it without
       // re-parsing a sentence.
       //
-      // "waiting" is honest again: a turn main watched an agent finish is
-      // counted as finished, not waiting, so what reaches this count is an
-      // approval, a question, or a prompt wait from before main was watching
-      // (#13238, which undoes the softening #13047 needed).
+      // "waiting" is honest: what reaches this count is only an ask a Canopy
+      // reading found and the user hasn't seen, as the fleet bands it (#16058).
       parts.push(agentStatePhrase(unblocked, "waiting"));
       if (blocked > 0) parts.push(`${blocked} ${AGENT_STATE_WORD.blocked}`);
     } else {

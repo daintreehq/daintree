@@ -1,7 +1,13 @@
 import { stripAssignedSessionIdArgs, type AddPanelOptions } from "@shared/types";
-import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
+import {
+  isPtyPanel,
+  type PanelInstance,
+  type PtyPanelData,
+  type ScheduledRunRef,
+} from "@shared/types/panel";
 import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
 import { splitCallerLaunchFlags } from "@shared/utils/callerLaunchFlags";
+import { readSpawnProvenance } from "@shared/utils/scheduledRunProvenance";
 
 /**
  * Narrow the preset environment out of the panel's untyped extension bag.
@@ -50,6 +56,7 @@ export function buildMissingCliRelaunchOptions(panel: PtyPanelData): AddPanelOpt
     // Without this a custom-titled relaunch reverts to detection-driven
     // titling, so the name the user chose is silently overwritten.
     titleMode: panel.titleMode,
+    ...(panel.displayEmoji && { displayEmoji: panel.displayEmoji }),
     cwd: panel.cwd ?? "",
     worktreeId: panel.worktreeId,
     location: panel.location === "dock" ? "dock" : "grid",
@@ -65,12 +72,14 @@ export function buildMissingCliRelaunchOptions(panel: PtyPanelData): AddPanelOpt
     // changes the relaunched pane's chrome, so the continued launch would not be
     // the launch that was originally asked for.
     agentPresetColor: panel.agentPresetColor,
+    agentAccountId: panel.agentAccountId,
     env: readPresetEnv(panel),
     // Since env is persisted onto the panel (#10922), dropping these would let
     // a session-scoped secret leak into the on-disk snapshot on relaunch.
     excludeFromPersistence: panel.excludeFromPersistence,
     removeOnExit: panel.removeOnExit,
     spawnedBy: panel.spawnedBy,
+    scheduledRun: panel.scheduledRun,
     focusPolicy: panel.focusPolicy,
   };
 }
@@ -83,11 +92,13 @@ export interface MissingCliContinueArgs {
   worktreeId?: string;
   model?: string;
   presetId: string | null;
+  accountId: string | null;
   activateDockOnCreate?: true;
   env?: Record<string, string>;
   excludeFromPersistence?: boolean;
   removeOnExit?: boolean;
-  spawnedBy?: PtyPanelData["spawnedBy"];
+  /** Never `"schedule"`: an argument can't claim it, so the run rides {@link missingCliContinueScheduledRun}. */
+  spawnedBy?: Exclude<PtyPanelData["spawnedBy"], "schedule">;
   focusPolicy?: PtyPanelData["focusPolicy"];
   /**
    * Only what the caller chose — its standing-instruction pair and its own
@@ -129,6 +140,9 @@ export function buildMissingCliContinueArgs(panel: PtyPanelData): MissingCliCont
     // Explicit null preserves a deliberately preset-free launch; forwarding
     // undefined would let the agent-level default reappear on recovery.
     presetId: panel.agentPresetId ?? null,
+    // The account the gate resolved, or explicitly the default login, so a
+    // changed default doesn't move the continued launch to another account.
+    accountId: panel.agentAccountId ?? null,
     // A dock replacement that doesn't activate starts parked and offscreen, so
     // the recovery the user just asked for would produce nothing visible.
     activateDockOnCreate: location === "dock" ? true : undefined,
@@ -141,9 +155,18 @@ export function buildMissingCliContinueArgs(panel: PtyPanelData): MissingCliCont
     // automated one came back attributed to the user.
     removeOnExit: panel.removeOnExit,
     focusPolicy: panel.focusPolicy,
-    spawnedBy: panel.spawnedBy,
+    spawnedBy: panel.spawnedBy === "schedule" ? undefined : panel.spawnedBy,
     ...(callerChosenFlags.length > 0 ? { agentLaunchFlags: callerChosenFlags } : {}),
   };
+}
+
+/**
+ * The scheduled run a gate stood in for (#15977), for the host to hand
+ * `agent.launch` as a dispatch option beside {@link buildMissingCliContinueArgs}:
+ * the continued launch is still the run's, and no argument can say so.
+ */
+export function missingCliContinueScheduledRun(panel: PtyPanelData): ScheduledRunRef | undefined {
+  return readSpawnProvenance(panel.spawnedBy, panel.scheduledRun).scheduledRun;
 }
 
 /** Key-sorted, undefined-pruned serialization so field order never splits two equal launches. */

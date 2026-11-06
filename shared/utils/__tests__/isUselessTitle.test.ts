@@ -38,6 +38,22 @@ describe("isUselessTitle", () => {
     expect(isUselessTitle("C:\\Users\\alice\\project")).toBe(true);
   });
 
+  it("filters the console titles Windows shells set, spaces and all", () => {
+    expect(
+      isUselessTitle(
+        "C:\\Program Files\\WindowsApps\\Microsoft.PowerShell_7.6.9.0_x64__8wekyb3d8bbwe\\pwsh.exe"
+      )
+    ).toBe(true);
+    expect(
+      isUselessTitle(
+        "Administrator: C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+      )
+    ).toBe(true);
+    expect(isUselessTitle("C:\\Users\\alice\\My Project")).toBe(true);
+    expect(isUselessTitle("C:\\repo: fixing the build")).toBe(false);
+    expect(isUselessTitle("Administrator: Fixing the installer")).toBe(false);
+  });
+
   it("filters shell prompts", () => {
     expect(isUselessTitle("alice@host:~/project$ ")).toBe(true);
     expect(isUselessTitle("alice@host:~")).toBe(true);

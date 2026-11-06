@@ -191,6 +191,45 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
   ),
   DropdownMenuSeparator: () => <hr />,
   DropdownMenuCheckboxItem: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  // The session picker's lane list: a radio item selects through its group, as Radix's
+  // does. One picker renders at a time, so the group hands its handler over a global
+  // (a mock factory can't import React to build a context).
+  DropdownMenuRadioGroup: ({
+    children,
+    value,
+    onValueChange,
+  }: {
+    children?: React.ReactNode;
+    value?: string;
+    onValueChange?: (value: string) => void;
+  }) => {
+    (globalThis as { __pickLane?: (value: string) => void }).__pickLane = onValueChange;
+    return (
+      <div role="group" data-value={value}>
+        {children}
+      </div>
+    );
+  },
+  DropdownMenuRadioItem: ({
+    children,
+    value,
+    textValue,
+  }: {
+    children?: React.ReactNode;
+    value: string;
+    textValue?: string;
+  }) => (
+    <button
+      type="button"
+      role="menuitemradio"
+      data-value={value}
+      data-text-value={textValue}
+      onClick={() => (globalThis as { __pickLane?: (value: string) => void }).__pickLane?.(value)}
+    >
+      {children}
+    </button>
+  ),
+  DropdownMenuMeta: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
 }));
 
 // The real primitive drags the keybinding graph in behind these suites' partial
@@ -239,15 +278,53 @@ function restartConversationButton(container: HTMLElement): HTMLButtonElement | 
   );
 }
 
-/** One item in one lane's own tab menu, or null where that lane's menu does not offer it. */
-function tabMenuItem(container: HTMLElement, slot: number, name: string): HTMLButtonElement | null {
-  const menu = container
-    .querySelector(`[role="tab"][data-slot="${slot}"]`)
-    ?.closest('[data-testid="tab-context-menu"]')
-    ?.querySelector('[data-testid="tab-context-menu-content"]');
+/** The panel as these suites render it, kept so a lane can be selected and redrawn. */
+let currentView: ReturnType<typeof render> | null = null;
+function renderPanel() {
+  currentView = render(<HelpPanel width={380} />);
+  return currentView;
+}
+
+/** The session picker's own menu items, rendered inline by the mocked primitives. */
+function pickerItem(container: HTMLElement, name: string): HTMLButtonElement | null {
+  const strip = container.querySelector("[data-session-strip]");
   return (
-    Array.from(menu?.querySelectorAll("button") ?? []).find((b) => b.textContent === name) ?? null
+    Array.from(strip?.querySelectorAll<HTMLButtonElement>("button") ?? []).find(
+      (b) => b.textContent === name
+    ) ?? null
   );
+}
+
+/** The lanes the picker lists, by the title each is found under. */
+function pickerLanes(container: HTMLElement): HTMLElement[] {
+  return Array.from(
+    container.querySelectorAll<HTMLElement>('[data-session-strip] [role="menuitemradio"]')
+  );
+}
+
+/**
+ * Pick a lane from the picker, then redraw it as the store would have: in this harness
+ * the flat fixture IS the lane on screen, so the picked lane's record becomes it.
+ */
+function selectLane(slot: number) {
+  const radio = document.querySelector<HTMLElement>(
+    `[data-session-strip] [role="menuitemradio"][data-value="${slot}"]`
+  );
+  if (!radio) throw new Error(`no lane ${slot} in the picker`);
+  fireEvent.click(radio);
+  const lane = helpPanelState.sessions[slot];
+  if (lane) Object.assign(helpPanelState, lane);
+  helpPanelState.activeSlot = slot;
+  currentView!.rerender(<HelpPanel width={380} />);
+}
+
+/**
+ * One lane's action from the picker, or null where it does not offer it. The picker
+ * acts on the lane it shows, so a lane in the background is selected first.
+ */
+function tabMenuItem(container: HTMLElement, slot: number, name: string): HTMLButtonElement | null {
+  if (slot !== helpPanelState.activeSlot) selectLane(slot);
+  return pickerItem(container, name);
 }
 
 vi.mock("@/components/icons/DaintreeIcon", () => ({
@@ -457,6 +534,11 @@ vi.mock("@/lib/sidebarToggle", () => ({
   suppressSidebarResizes: vi.fn(),
 }));
 
+// Where the open confirm would hand focus back, kept so a test can ask it.
+const confirmFocus = vi.hoisted(() => ({
+  restore: null as (() => HTMLElement | null) | null,
+}));
+
 vi.mock("@/components/ui/ConfirmDialog", () => ({
   ConfirmDialog: ({
     isOpen,
@@ -466,6 +548,7 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     cancelLabel = "Cancel",
     onConfirm,
     onClose,
+    restoreFocusTo,
   }: {
     isOpen: boolean;
     title: React.ReactNode;
@@ -474,8 +557,10 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     cancelLabel?: string;
     onConfirm: () => void;
     onClose?: () => void;
-  }) =>
-    isOpen ? (
+    restoreFocusTo?: () => HTMLElement | null;
+  }) => {
+    if (isOpen) confirmFocus.restore = restoreFocusTo ?? null;
+    return isOpen ? (
       <div role="dialog" data-testid="confirm-dialog">
         <h2 data-testid="dialog-title">{title}</h2>
         <p data-testid="dialog-description">{description}</p>
@@ -486,7 +571,8 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
           {confirmLabel}
         </button>
       </div>
-    ) : null,
+    ) : null;
+  },
 }));
 
 vi.mock("@/hooks/useEscapeStack", () => ({
@@ -717,9 +803,6 @@ beforeEach(() => {
   Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
 });
 
-/** The project lanes' tabs, not the global assistant's beside them. */
-const LANE_TABS = '[role="tab"]:not([data-slot="global"])';
-
 /**
  * Ending a lane's run clears only its resume pointer; a Claude or Codex transcript
  * stays where "Resume a past session…" finds it, so the confirm says so rather than
@@ -742,7 +825,9 @@ function expectNoPastSessionsNote(description: string | null) {
  */
 function expectWorkingCloseConfirm(description: string | null, agentName: string) {
   expect(description).toMatch(
-    new RegExp(`^${agentName} is working\\. Closing stops its current turn and closes this tab\\. `)
+    new RegExp(
+      `^${agentName} is working\\. Closing stops its current turn and closes this session\\. `
+    )
   );
   expect(description).toMatch(/can't resume this conversation in Daintree\.$/);
   expect(description).not.toMatch(/discard|delet/i);
@@ -776,7 +861,7 @@ describe("HelpPanel — + New session destructive reset", () => {
   it("offers no restart when there is no live terminal to restart", () => {
     helpPanelState.terminalId = null;
     helpPanelState.agentId = null;
-    const { container } = render(<HelpPanel width={380} />);
+    const { container } = renderPanel();
     expect(restartConversationButton(container)).toBeNull();
   });
 
@@ -792,7 +877,7 @@ describe("HelpPanel — + New session destructive reset", () => {
       windowId: 1,
     });
 
-    const { container, queryByTestId } = render(<HelpPanel width={380} />);
+    const { container, queryByTestId } = renderPanel();
     await act(async () => {
       fireEvent.click(restartConversationButton(container)!);
     });
@@ -823,7 +908,7 @@ describe("HelpPanel — + New session destructive reset", () => {
   it("shows the confirm dialog when the agent is working", () => {
     setupBoundTerminal({ agentState: "working", conversationTouched: false });
 
-    const { container, getByTestId } = render(<HelpPanel width={380} />);
+    const { container, getByTestId } = renderPanel();
     fireEvent.click(restartConversationButton(container)!);
 
     expect(panelStoreState.removePanel).not.toHaveBeenCalled();
@@ -837,7 +922,7 @@ describe("HelpPanel — + New session destructive reset", () => {
     setupBoundTerminal({ agentState: "working" });
     helpPanelState.agentId = "gemini";
 
-    const { container, getByTestId } = render(<HelpPanel width={380} />);
+    const { container, getByTestId } = renderPanel();
     fireEvent.click(restartConversationButton(container)!);
 
     expect(getByTestId("dialog-title").textContent).toBe("Restart this conversation?");
@@ -847,7 +932,7 @@ describe("HelpPanel — + New session destructive reset", () => {
   it("shows the confirm dialog when the conversation has been touched", () => {
     setupBoundTerminal({ agentState: "idle", conversationTouched: true });
 
-    const { container, getByTestId } = render(<HelpPanel width={380} />);
+    const { container, getByTestId } = renderPanel();
     fireEvent.click(restartConversationButton(container)!);
 
     expect(panelStoreState.removePanel).not.toHaveBeenCalled();
@@ -857,7 +942,7 @@ describe("HelpPanel — + New session destructive reset", () => {
   it("keeps the session intact when the user cancels the confirm dialog", () => {
     setupBoundTerminal({ agentState: "working" });
 
-    const { container, getByTestId, queryByTestId } = render(<HelpPanel width={380} />);
+    const { container, getByTestId, queryByTestId } = renderPanel();
     fireEvent.click(restartConversationButton(container)!);
     fireEvent.click(getByTestId("dialog-cancel"));
 
@@ -879,7 +964,7 @@ describe("HelpPanel — + New session destructive reset", () => {
       windowId: 1,
     });
 
-    const { container, getByTestId } = render(<HelpPanel width={380} />);
+    const { container, getByTestId } = renderPanel();
     fireEvent.click(restartConversationButton(container)!);
     await act(async () => {
       fireEvent.click(getByTestId("dialog-confirm"));
@@ -914,7 +999,7 @@ describe("HelpPanel — + New session destructive reset", () => {
       });
     });
 
-    const { container } = render(<HelpPanel width={380} />);
+    const { container } = renderPanel();
     await act(async () => {
       fireEvent.click(restartConversationButton(container)!);
     });
@@ -943,7 +1028,7 @@ describe("HelpPanel — + New session destructive reset", () => {
     });
     mockDispatch.mockResolvedValue({ ok: false });
 
-    const { container } = render(<HelpPanel width={380} />);
+    const { container } = renderPanel();
     await act(async () => {
       fireEvent.click(restartConversationButton(container)!);
     });
@@ -964,7 +1049,7 @@ describe("HelpPanel — + New session destructive reset", () => {
     mcpErr.code = "MCP_NOT_READY";
     mockProvisionSession.mockRejectedValueOnce(mcpErr);
 
-    const { container } = render(<HelpPanel width={380} />);
+    const { container } = renderPanel();
     await act(async () => {
       fireEvent.click(restartConversationButton(container)!);
     });
@@ -1007,7 +1092,7 @@ describe("HelpPanel — + New session destructive reset", () => {
         })
     );
 
-    const { container, rerender } = render(<HelpPanel width={380} />);
+    const { container, rerender } = renderPanel();
 
     await act(async () => {
       fireEvent.click(restartConversationButton(container)!);
@@ -1049,7 +1134,7 @@ describe("HelpPanel — restarting a paused lane (#14981)", () => {
   }
 
   async function renderPaused() {
-    const view = render(<HelpPanel width={380} />);
+    const view = renderPanel();
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
@@ -1063,7 +1148,7 @@ describe("HelpPanel — restarting a paused lane (#14981)", () => {
     });
   }
 
-  it("offers a restart beside Resume, in the header and in the lane's own tab menu", async () => {
+  it("offers a restart beside Resume, in the header and in the session picker", async () => {
     setupPausedLane();
 
     const { container, getByTestId } = await renderPaused();
@@ -1089,7 +1174,9 @@ describe("HelpPanel — restarting a paused lane (#14981)", () => {
 
     expect(getByTestId("dialog-title").textContent).toBe("Restart this conversation?");
     const description = getByTestId("dialog-description").textContent;
-    expect(description).toMatch(/^This tab starts a new conversation\. .*stays in past sessions/);
+    expect(description).toMatch(
+      /^This session starts a new conversation\. .*stays in past sessions/
+    );
     expect(mockDiscardConversation).not.toHaveBeenCalled();
     expect(helpPanelState.clearHibernateSession).not.toHaveBeenCalled();
   });
@@ -1214,7 +1301,6 @@ describe("HelpPanel — restarting a paused lane (#14981)", () => {
     expect(queryByTestId("help-resume-assistant")).toBeNull();
     expect(queryByTestId("help-restart-paused-conversation")).toBeNull();
     expect(restartConversationButton(container)).toBeNull();
-    expect(tabMenuItem(container, 0, "Restart conversation")).toBeNull();
     expect(tabMenuItem(container, 1, "Restart conversation")).toBeNull();
   });
 
@@ -1272,14 +1358,14 @@ describe("HelpPanel — Stop assistant (end session, #10989)", () => {
   it("hides the Stop assistant menu item when there is no live terminal", () => {
     helpPanelState.terminalId = null;
     helpPanelState.agentId = null;
-    const { container } = render(<HelpPanel width={380} />);
+    const { container } = renderPanel();
     expect(queryStopItem(container)).toBeNull();
   });
 
   it("ends immediately without a confirm and does NOT relaunch when idle and untouched", () => {
     setupBoundTerminal({ agentState: "idle", conversationTouched: false });
 
-    const { container, queryByTestId } = render(<HelpPanel width={380} />);
+    const { container, queryByTestId } = renderPanel();
     fireEvent.click(queryStopItem(container)!);
 
     expect(queryByTestId("confirm-dialog")).toBeNull();
@@ -1304,7 +1390,7 @@ describe("HelpPanel — Stop assistant (end session, #10989)", () => {
   it("shows the Stop assistant confirm when the agent is working (no teardown yet)", () => {
     setupBoundTerminal({ agentState: "working", conversationTouched: false });
 
-    const { container, getByTestId } = render(<HelpPanel width={380} />);
+    const { container, getByTestId } = renderPanel();
     fireEvent.click(queryStopItem(container)!);
 
     expect(panelStoreState.removePanel).not.toHaveBeenCalled();
@@ -1318,7 +1404,7 @@ describe("HelpPanel — Stop assistant (end session, #10989)", () => {
     setupBoundTerminal({ agentState: "working" });
     helpPanelState.agentId = "gemini";
 
-    const { container, getByTestId } = render(<HelpPanel width={380} />);
+    const { container, getByTestId } = renderPanel();
     fireEvent.click(queryStopItem(container)!);
 
     expect(getByTestId("dialog-title").textContent).toBe("Stop assistant?");
@@ -1328,7 +1414,7 @@ describe("HelpPanel — Stop assistant (end session, #10989)", () => {
   it("shows the confirm when the conversation has been touched even while idle", () => {
     setupBoundTerminal({ agentState: "idle", conversationTouched: true });
 
-    const { container, getByTestId } = render(<HelpPanel width={380} />);
+    const { container, getByTestId } = renderPanel();
     fireEvent.click(queryStopItem(container)!);
 
     expect(panelStoreState.removePanel).not.toHaveBeenCalled();
@@ -1338,7 +1424,7 @@ describe("HelpPanel — Stop assistant (end session, #10989)", () => {
   it("keeps the session intact when the user cancels the confirm", () => {
     setupBoundTerminal({ agentState: "working" });
 
-    const { container, getByTestId, queryByTestId } = render(<HelpPanel width={380} />);
+    const { container, getByTestId, queryByTestId } = renderPanel();
     fireEvent.click(queryStopItem(container)!);
     fireEvent.click(getByTestId("dialog-cancel"));
 
@@ -1351,7 +1437,7 @@ describe("HelpPanel — Stop assistant (end session, #10989)", () => {
   it("tears down and does not relaunch when the user confirms the stop", () => {
     setupBoundTerminal({ agentState: "working", conversationTouched: true });
 
-    const { container, getByTestId } = render(<HelpPanel width={380} />);
+    const { container, getByTestId } = renderPanel();
     fireEvent.click(queryStopItem(container)!);
     fireEvent.click(getByTestId("dialog-confirm"));
 
@@ -1389,7 +1475,7 @@ describe("HelpPanel — Stop assistant (end session, #10989)", () => {
         })
     );
 
-    const { container } = render(<HelpPanel width={380} />);
+    const { container } = renderPanel();
     // Start the relaunch (idle + untouched → immediate, no confirm); dispatch hangs.
     await act(async () => {
       fireEvent.click(restartConversationButton(container)!);
@@ -1480,19 +1566,20 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     };
   }
 
-  // Found by its family hook rather than by role: the close control is pointer-only and
-  // `aria-hidden`, because a focusable control inside a `tab` is the nesting ARIA
-  // forbids. The keyboard route is Delete on the focused tab, covered in
-  // HelpSessionTabs.test.tsx.
+  /** The picker's Close for the lane named `label`, selecting that lane first. */
   function closeButtonFor(container: HTMLElement, label: string): HTMLButtonElement {
-    const button = Array.from(
-      container.querySelectorAll<HTMLButtonElement>("[data-document-tab-close]")
-    ).find((b) => b.getAttribute("aria-label") === `Close ${label}`);
+    // A lane on its own agent is named "{title} — {agent}"; its row is found by title.
+    const title = label.split(" — ")[0];
+    const lane = pickerLanes(container).find((r) => r.getAttribute("data-text-value") === title);
+    if (!lane) throw new Error(`no close button for ${label}`);
+    const slot = Number(lane.getAttribute("data-value"));
+    if (slot !== helpPanelState.activeSlot) selectLane(slot);
+    const button = pickerItem(container, "Close session");
     if (!button) throw new Error(`no close button for ${label}`);
     return button;
   }
 
-  it("labels lanes by durable slot and names the body after the selected tab", () => {
+  it("labels lanes by durable slot and names the body after the selected lane", () => {
     // Sparse slots on purpose: lanes 0 and 2 with 1 closed. Position-based labels would
     // read "Session 1 / Session 2" here and rename a live conversation; slot-based ones
     // leave a gap that `openSlot` closes on its own. The strip's own tests build labels
@@ -1509,18 +1596,41 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       id: "term-3",
     };
 
-    const { container } = render(<HelpPanel width={380} />);
-    const tabs = Array.from(container.querySelectorAll<HTMLElement>(LANE_TABS));
+    const { container } = renderPanel();
+    expect(pickerLanes(container).map((r) => r.getAttribute("data-text-value"))).toEqual([
+      "Session 1",
+      "Session 3",
+    ]);
 
-    expect(tabs.map((t) => t.getAttribute("aria-label"))).toEqual(["Session 1", "Session 3"]);
-    expect(new Set(tabs.map((t) => t.id)).size).toBe(2);
+    // No tablist anywhere: the body is a region named by the lane the picker shows.
+    expect(container.querySelector('[role="tab"], [role="tabpanel"]')).toBeNull();
+    const picker = container.querySelector<HTMLElement>("[data-session-picker]")!;
+    const region = Array.from(container.querySelectorAll<HTMLElement>('[role="region"]')).find(
+      (el) => el.hasAttribute("aria-labelledby")
+    )!;
+    const label = document.getElementById(region.getAttribute("aria-labelledby")!);
+    expect(label?.textContent).toBe("Session 1");
+    expect(picker.contains(label)).toBe(true);
 
-    const body = container.querySelector('[role="tabpanel"]')!;
-    expect(body.getAttribute("aria-labelledby")).toBe(tabs[0]!.id);
-    expect(tabs[0]!.getAttribute("aria-controls")).toBe(body.id);
-
-    fireEvent.click(tabs[1]!);
+    fireEvent.click(pickerLanes(container)[1]!);
     expect(helpPanelState.setActiveSlot).toHaveBeenCalledWith(2);
+  });
+
+  it("hands the close and restart confirms back to the picker", () => {
+    setupTwoLanes({ frontAgentState: "working" });
+    onUnlistedAgent();
+    const { container, getByTestId } = renderPanel();
+    const picker = container.querySelector<HTMLElement>("[data-session-picker]")!;
+
+    // The picker outlives every lane it closes, cancelled or confirmed.
+    fireEvent.click(pickerItem(container, "Close session")!);
+    expect(getByTestId("dialog-title").textContent).toBe("Close Session 1?");
+    expect(confirmFocus.restore?.()).toBe(picker);
+    fireEvent.click(getByTestId("dialog-cancel"));
+
+    fireEvent.click(pickerItem(container, "Restart conversation")!);
+    expect(getByTestId("dialog-confirm").textContent).toBe("Restart conversation");
+    expect(confirmFocus.restore?.()).toBe(picker);
   });
 
   it("tears down only the closed lane and leaves the panel open on the survivor", () => {
@@ -1528,7 +1638,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     const survivor = acquireHelpSessionController(0);
     const closing = acquireHelpSessionController(1);
 
-    const { container } = render(<HelpPanel width={380} />);
+    const { container } = renderPanel();
     fireEvent.click(closeButtonFor(container, "Session 2"));
 
     // The closed lane's backend is gone…
@@ -1560,7 +1670,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       },
     };
 
-    const { container } = render(<HelpPanel width={380} />);
+    const { container } = renderPanel();
     fireEvent.click(closeButtonFor(container, "Session 1"));
 
     expect(helpPanelState.setOpen).toHaveBeenCalledWith(false);
@@ -1575,7 +1685,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       sessionId: null,
     };
 
-    const { container } = render(<HelpPanel width={380} />);
+    const { container } = renderPanel();
     fireEvent.click(closeButtonFor(container, "Session 2"));
 
     expect(helpPanelState.closeSlot).toHaveBeenCalledWith(1);
@@ -1613,7 +1723,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     setupTwoLanes({ backgroundAgentState: "working" });
     Object.assign(panelStoreState.panelsById["term-2"]!, { agentSessionId: "conv-back" });
 
-    const { container, queryByTestId } = render(<HelpPanel width={380} />);
+    const { container, queryByTestId } = renderPanel();
     fireEvent.click(closeButtonFor(container, "Session 2"));
 
     expect(queryByTestId("confirm-dialog")).toBeNull();
@@ -1634,7 +1744,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     setupTwoLanes({ backgroundAgentState: "working" });
     helpPanelState.sessions[1]!.agentId = "codex";
 
-    const { container, queryByTestId } = render(<HelpPanel width={380} />);
+    const { container, queryByTestId } = renderPanel();
     fireEvent.click(closeButtonFor(container, "Session 2 — Codex"));
 
     expect(queryByTestId("confirm-dialog")).toBeNull();
@@ -1660,7 +1770,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       },
     };
 
-    const { container, queryByTestId } = render(<HelpPanel width={380} />);
+    const { container, queryByTestId } = renderPanel();
     fireEvent.click(closeButtonFor(container, "Session 2"));
 
     expect(queryByTestId("confirm-dialog")).toBeNull();
@@ -1682,7 +1792,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     helpPanelState.conversationTouched = true;
     Object.assign(panelStoreState.panelsById["term-1"]!, { agentSessionId: "conv-front" });
 
-    const { container } = render(<HelpPanel width={380} />);
+    const { container } = renderPanel();
     fireEvent.click(closeButtonFor(container, "Session 1"));
 
     expect(helpPanelState.closeSlot).toHaveBeenCalledWith(0);
@@ -1698,7 +1808,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     setupTwoLanes({ backgroundAgentState: "working" });
     onUnlistedAgent();
 
-    const { container, getByTestId } = render(<HelpPanel width={380} />);
+    const { container, getByTestId } = renderPanel();
     fireEvent.click(closeButtonFor(container, "Session 2"));
 
     // Nothing torn down until the user answers.
@@ -1713,21 +1823,23 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     expect(helpPanelState.closeSlot).toHaveBeenCalledWith(1);
   });
 
-  it("gates the close on the closed lane's agent, not the one on screen", () => {
+  it("gates the close on the picked lane's agent, not the one it replaced", () => {
     setupTwoLanes({ backgroundAgentState: "working" });
     helpPanelState.sessions[1]!.agentId = "gemini";
 
     // Lanes on different agents name theirs in the tab.
-    const first = render(<HelpPanel width={380} />);
+    const first = renderPanel();
     fireEvent.click(closeButtonFor(first.container, "Session 2 — Gemini"));
     expectWorkingCloseConfirm(first.getByTestId("dialog-description").textContent, "Gemini");
     first.unmount();
 
-    // And the other way round: an unlisted agent in front, a listed one behind.
+    // And the other way round: an unlisted agent in front, a listed one behind. Lane 1
+    // was picked above, so lane 0 goes back in front first.
+    Object.assign(helpPanelState, helpPanelState.sessions[0], { activeSlot: 0 });
     helpPanelState.sessions[1]!.agentId = "codex";
     helpPanelState.agentId = "gemini";
     helpPanelState.sessions[0]!.agentId = "gemini";
-    const second = render(<HelpPanel width={380} />);
+    const second = renderPanel();
     fireEvent.click(closeButtonFor(second.container, "Session 2 — Codex"));
     expect(second.queryByTestId("confirm-dialog")).toBeNull();
     expect(helpPanelState.closeSlot).toHaveBeenCalledWith(1);
@@ -1746,26 +1858,17 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       lastObservedTitle: "✳ fix   auth\ntests",
     });
 
-    const { container } = render(<HelpPanel width={380} />);
-    const tabs = Array.from(container.querySelectorAll<HTMLElement>(LANE_TABS));
-
-    expect(tabs.map((t) => t.getAttribute("aria-label"))).toEqual(["Session 1", "fix auth tests"]);
+    const { container } = renderPanel();
+    expect(pickerLanes(container).map((r) => r.getAttribute("data-text-value"))).toEqual([
+      "Session 1",
+      "fix auth tests",
+    ]);
     // Full titles reach the pointer through the app tooltip, never a native `title`.
-    expect(tabs.some((t) => t.hasAttribute("title"))).toBe(false);
-    // The task title is what shows, not the lane number it replaced. Read without the
-    // tab's screen-reader state text, which is a description rather than the label.
-    const visible = (t: HTMLElement) => {
-      const copy = t.cloneNode(true);
-      if (!(copy instanceof HTMLElement)) throw new Error("tab did not clone");
-      copy.querySelectorAll(".sr-only").forEach((n) => n.remove());
-      return copy.textContent;
-    };
-    expect(visible(tabs[1]!)).toBe("fix auth tests");
-    expect(visible(tabs[0]!)).toBe("Session 1");
+    expect(container.querySelector("[data-session-strip] [title]")).toBeNull();
     expect(closeButtonFor(container, "fix auth tests")).toBeTruthy();
   });
 
-  it("caps a long task title in the tab and keeps the whole of it in the tooltip", () => {
+  it("keeps the whole of a long task title as the lane's name", () => {
     setupTwoLanes();
     const long = "refactor the assistant session strip so every lane carries a name";
     Object.assign(panelStoreState.panelsById["term-2"]!, {
@@ -1773,20 +1876,12 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       lastObservedTitle: long,
     });
 
-    const { container } = render(<HelpPanel width={380} />);
-    const tab = container.querySelectorAll<HTMLElement>(LANE_TABS)[1]!;
-    // The visible label only — the tab also holds its screen-reader state text.
-    const label = tab.querySelector(".truncate")!.textContent!;
-
-    expect(label.endsWith("…")).toBe(true);
-    expect(Array.from(label).length).toBeLessThanOrEqual(28);
-    expect(tab.hasAttribute("title")).toBe(false);
-    // Capped from the title's own opening, not replaced by something else.
-    expect(long.startsWith(label.slice(0, -1).trimEnd())).toBe(true);
-    // The whole title is the tab's name, and the tooltip that reveals it is driven off the
-    // label being capped — opened and read in HelpSessionTabs.test.tsx, since this suite
-    // stubs the tooltip primitives out.
-    expect(tab.getAttribute("aria-label")).toBe(long);
+    const { container } = renderPanel();
+    // The picker's list is where a title is read whole, and the trigger names a lane by
+    // it once picked; truncation is the trigger's CSS alone.
+    expect(pickerLanes(container)[1]!.getAttribute("data-text-value")).toBe(long);
+    selectLane(1);
+    expect(container.querySelector("[data-session-picker]")!.getAttribute("aria-label")).toBe(long);
   });
 
   it("drops a lane's task title once its agent exits", () => {
@@ -1796,10 +1891,11 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       lastObservedTitle: "fix auth tests",
     });
 
-    const { container } = render(<HelpPanel width={380} />);
-    const tabs = Array.from(container.querySelectorAll<HTMLElement>(LANE_TABS));
-
-    expect(tabs.map((t) => t.getAttribute("aria-label"))).toEqual(["Session 1", "Session 2"]);
+    const { container } = renderPanel();
+    expect(pickerLanes(container).map((r) => r.getAttribute("data-text-value"))).toEqual([
+      "Session 1",
+      "Session 2",
+    ]);
   });
 
   it("names the task in the close confirm, quoted as the entity being closed", () => {
@@ -1810,7 +1906,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       lastObservedTitle: "fix auth tests",
     });
 
-    const { container, getByTestId } = render(<HelpPanel width={380} />);
+    const { container, getByTestId } = renderPanel();
     fireEvent.click(closeButtonFor(container, "fix auth tests"));
 
     expect(getByTestId("dialog-title").textContent).toBe("Close 'fix auth tests'?");
@@ -1820,7 +1916,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     setupTwoLanes({ backgroundAgentState: "working" });
     onUnlistedAgent();
 
-    const { container, getByTestId, queryByTestId } = render(<HelpPanel width={380} />);
+    const { container, getByTestId, queryByTestId } = renderPanel();
     fireEvent.click(closeButtonFor(container, "Session 2"));
     fireEvent.click(getByTestId("dialog-cancel"));
 
@@ -1830,7 +1926,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     expect(helpPanelState.closeSlot).not.toHaveBeenCalled();
   });
 
-  describe("restarting from a lane's own tab menu (#13440)", () => {
+  describe("restarting a lane from the session picker (#13440)", () => {
     function primeRelaunch() {
       mockDispatch.mockResolvedValue({ ok: true, result: { terminalId: "terminal-fresh" } });
       mockProvisionSession.mockResolvedValue({
@@ -1843,16 +1939,18 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       });
     }
 
-    it("restarts the lane whose menu it came from, not the one in front", async () => {
+    it("restarts the lane the picker shows, not the one it was showing before", async () => {
       setupTwoLanes();
       primeRelaunch();
       const front = vi.spyOn(acquireHelpSessionController(0), "newSession");
       const back = vi.spyOn(acquireHelpSessionController(1), "newSession");
       const backController = acquireHelpSessionController(1);
 
-      const { container, queryByTestId } = render(<HelpPanel width={380} />);
+      const { container, queryByTestId } = renderPanel();
+      // Picked outside the act: its redraw has to land before the item is read.
+      const restart = tabMenuItem(container, 1, "Restart conversation")!;
       await act(async () => {
-        fireEvent.click(tabMenuItem(container, 1, "Restart conversation")!);
+        fireEvent.click(restart);
       });
 
       // Idle and untouched, so nothing to confirm.
@@ -1871,10 +1969,10 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       // …while the lane in front is left running.
       expect(panelStoreState.removePanel).not.toHaveBeenCalledWith("term-1");
       expect(mockRevokeSession).not.toHaveBeenCalledWith("sess-front");
-      // The lane is restarted in place: still open, still behind the tab strip, and
-      // still run by the same controller.
+      // The lane is restarted in place: still open, reached by picking it, and still run
+      // by the same controller.
       expect(helpPanelState.closeSlot).not.toHaveBeenCalled();
-      expect(helpPanelState.setActiveSlot).not.toHaveBeenCalled();
+      expect(helpPanelState.setActiveSlot).toHaveBeenCalledWith(1);
       expect(acquireHelpSessionController(1)).toBe(backController);
     });
 
@@ -1884,7 +1982,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       const front = vi.spyOn(acquireHelpSessionController(0), "newSession");
       const back = vi.spyOn(acquireHelpSessionController(1), "newSession");
 
-      const { container, getByTestId } = render(<HelpPanel width={380} />);
+      const { container, getByTestId } = renderPanel();
       fireEvent.click(tabMenuItem(container, 1, "Restart conversation")!);
 
       expect(back).not.toHaveBeenCalled();
@@ -1903,14 +2001,14 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       { front: "claude", back: "gemini", listed: false },
       { front: "gemini", back: "codex", listed: true },
     ])(
-      "says what holds for the restarted lane's agent ($back), not the one on screen ($front)",
+      "says what holds for the picked lane's agent ($back), not the one it replaced ($front)",
       ({ front, back, listed }) => {
         setupTwoLanes({ backgroundAgentState: "working" });
         helpPanelState.agentId = front;
         helpPanelState.sessions[0]!.agentId = front;
         helpPanelState.sessions[1]!.agentId = back;
 
-        const { container, getByTestId } = render(<HelpPanel width={380} />);
+        const { container, getByTestId } = renderPanel();
         fireEvent.click(tabMenuItem(container, 1, "Restart conversation")!);
 
         expect(getByTestId("dialog-title").textContent).toBe("Restart this conversation?");
@@ -1924,7 +2022,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       setupTwoLanes({ backgroundTouched: true });
       const back = vi.spyOn(acquireHelpSessionController(1), "newSession");
 
-      const { container, getByTestId } = render(<HelpPanel width={380} />);
+      const { container, getByTestId } = renderPanel();
       fireEvent.click(tabMenuItem(container, 1, "Restart conversation")!);
 
       expect(getByTestId("dialog-title").textContent).toBe("Restart this conversation?");
@@ -1937,9 +2035,11 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       primeRelaunch();
       const back = vi.spyOn(acquireHelpSessionController(1), "newSession");
 
-      const { container, queryByTestId } = render(<HelpPanel width={380} />);
+      const { container, queryByTestId } = renderPanel();
+      // Picked outside the act: its redraw has to land before the item is read.
+      const restart = tabMenuItem(container, 1, "Restart conversation")!;
       await act(async () => {
-        fireEvent.click(tabMenuItem(container, 1, "Restart conversation")!);
+        fireEvent.click(restart);
       });
 
       expect(queryByTestId("confirm-dialog")).toBeNull();
@@ -1950,7 +2050,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       setupTwoLanes({ backgroundAgentState: "working" });
       const back = vi.spyOn(acquireHelpSessionController(1), "newSession");
 
-      const { container, getByTestId, queryByTestId } = render(<HelpPanel width={380} />);
+      const { container, getByTestId, queryByTestId } = renderPanel();
       fireEvent.click(tabMenuItem(container, 1, "Restart conversation")!);
       fireEvent.click(getByTestId("dialog-cancel"));
 
@@ -1967,7 +2067,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       setupTwoLanes();
       helpPanelState.sessions[1] = { ...helpPanelState.sessions[1]!, ...missing };
 
-      const { container } = render(<HelpPanel width={380} />);
+      const { container } = renderPanel();
 
       expect(tabMenuItem(container, 0, "Restart conversation")).not.toBeNull();
       expect(tabMenuItem(container, 1, "Restart conversation")).toBeNull();
@@ -1984,7 +2084,7 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
       const front = vi.spyOn(acquireHelpSessionController(1), "newSession");
       const other = vi.spyOn(acquireHelpSessionController(0), "newSession");
 
-      const { container, getByTestId } = render(<HelpPanel width={380} />);
+      const { container, getByTestId } = renderPanel();
       fireEvent.click(restartConversationButton(container)!);
       await act(async () => {
         fireEvent.click(getByTestId("dialog-confirm"));

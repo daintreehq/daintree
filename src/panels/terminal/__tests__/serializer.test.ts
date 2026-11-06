@@ -114,6 +114,22 @@ describe("serializePtyPanel — spawnedBy", () => {
     expect(snapshot.agentPresetId).toBe("user-abc");
     expect(snapshot.agentModelId).toBe("opus");
   });
+
+  // #15977: the schedule source and its run are written together or not at all.
+  it("writes a scheduled run's source and ids as a pair", () => {
+    const run = { scheduleId: "schedule-1", runId: "run-1" };
+    expect(
+      serializePtyPanel(makePanel({ spawnedBy: "schedule", scheduledRun: run }))
+    ).toMatchObject({ spawnedBy: "schedule", scheduledRun: run });
+
+    const sourceOnly = serializePtyPanel(makePanel({ spawnedBy: "schedule" }));
+    expect("spawnedBy" in sourceOnly).toBe(false);
+    expect("scheduledRun" in sourceOnly).toBe(false);
+
+    const strayRun = serializePtyPanel(makePanel({ spawnedBy: "agent", scheduledRun: run }));
+    expect(strayRun.spawnedBy).toBe("agent");
+    expect("scheduledRun" in strayRun).toBe(false);
+  });
 });
 
 // Launch env persistence (#10922): a terminal launched via a preset/recipe
@@ -142,6 +158,31 @@ describe("serializePtyPanel — launch env (#10922)", () => {
     const panel = makePanel({ env: { PATH: "/evil/bin" } as Record<string, string> });
     const snapshot = serializePtyPanel(panel);
     expect("env" in snapshot).toBe(false);
+  });
+});
+
+describe("serializePtyPanel — account (#16040)", () => {
+  it("writes the account beside the launch env that holds its folder", () => {
+    const snapshot = serializePtyPanel(
+      makePanel({
+        agentAccountId: "personal",
+        env: { CLAUDE_CONFIG_DIR: "/Users/me/.claude-personal" },
+      })
+    );
+    expect(snapshot.agentAccountId).toBe("personal");
+    expect(snapshot.env).toEqual({ CLAUDE_CONFIG_DIR: "/Users/me/.claude-personal" });
+  });
+
+  it("writes no account for a pane on the default login", () => {
+    const snapshot = serializePtyPanel(makePanel({ env: { ANTHROPIC_BASE_URL: "https://x" } }));
+    expect("agentAccountId" in snapshot).toBe(false);
+  });
+
+  it("drops the account when no env survives to carry its folder", () => {
+    const snapshot = serializePtyPanel(
+      makePanel({ agentAccountId: "company", env: { PATH: "/evil" } as Record<string, string> })
+    );
+    expect("agentAccountId" in snapshot).toBe(false);
   });
 });
 
@@ -297,5 +338,51 @@ describe("serializePtyPanel — first prompt (#14592)", () => {
 
   it("omits the field for a run launched with no prompt", () => {
     expect("firstPrompt" in serializePtyPanel(makePanel())).toBe(false);
+  });
+});
+
+describe("serializePtyPanel — shown exit (#15941)", () => {
+  it("writes the code of an exit the pane still shows", () => {
+    const snapshot = serializePtyPanel(makePanel({ runtimeStatus: "exited", exitCode: 3 }));
+    expect(snapshot.exitCode).toBe(3);
+  });
+
+  it("writes a clean exit too, since zero is a code", () => {
+    const snapshot = serializePtyPanel(makePanel({ runtimeStatus: "exited", exitCode: 0 }));
+    expect(snapshot.exitCode).toBe(0);
+  });
+
+  it("omits a code the pane no longer shows", () => {
+    // A restart clears the code first and the status only once the new PTY is up.
+    expect(
+      "exitCode" in serializePtyPanel(makePanel({ runtimeStatus: "running", exitCode: 3 }))
+    ).toBe(false);
+    expect("exitCode" in serializePtyPanel(makePanel({ runtimeStatus: "exited" }))).toBe(false);
+  });
+
+  it("omits a value that was never an exit code", () => {
+    for (const exitCode of [1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(
+        "exitCode" in serializePtyPanel(makePanel({ runtimeStatus: "exited", exitCode }))
+      ).toBe(false);
+    }
+  });
+
+  it("omits an exit from a session-preserving teardown, which restores a new process", () => {
+    const snapshot = serializePtyPanel(
+      makePanel({ runtimeStatus: "exited", exitCode: 0, sessionPreservingExit: true })
+    );
+    expect("exitCode" in snapshot).toBe(false);
+  });
+
+  it("omits a held pane's exit along with the rest of its process state", () => {
+    const snapshot = serializePtyPanel(
+      makePanel({
+        runtimeStatus: "exited",
+        exitCode: 3,
+        restoreRecovery: { reason: "sibling-owns-resume-latest-slot" },
+      })
+    );
+    expect("exitCode" in snapshot).toBe(false);
   });
 });

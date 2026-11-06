@@ -80,7 +80,10 @@ export const voiceCaretField = StateField.define<VoiceCaret>({
         next = HIDDEN;
         continue;
       }
-      const at = effect.value.at ?? next.at;
+      // A position outside this text is ignored, as one left out is (#15716).
+      const given = effect.value.at;
+      const fits = typeof given !== "number" || (given >= 0 && given <= tr.newDoc.length);
+      const at = given !== undefined && fits ? given : next.at;
       if (phase !== next.phase || at !== next.at) next = { phase, at };
     }
     return next;

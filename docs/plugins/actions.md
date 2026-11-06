@@ -8,7 +8,7 @@ Two sets are absent by construction. Actions on the plugin-dispatch deny list ar
 
 `danger` is the host's own classification, not advice. A `confirm` action cannot run from `host.dispatch`: plugins have no confirmation path, so the dispatch resolves `{ ok: false }` with a `CONFIRMATION_REQUIRED` error and no dialog is shown to the user. Call `host.actions.canDispatch(id)` first: it resolves `"ok"` for a `safe` action, `"confirm"` for one the dispatch would refuse, and `"restricted"` for an unknown or unavailable id.
 
-`canDispatch` sees only the id, and some `safe` actions are refused for particular arguments. `terminal.new` with `command` or `cwd` is raised to `confirm` for a plugin and refused; without either it opens a plain terminal. `agent.launch` with non-empty `agentLaunchFlags`, `env` or `systemPrompt`, any `presetId`, or a `prompt` or `model` starting with `-` is raised to `confirm` for a plugin and refused, since those choose how the agent runs rather than give it a task; with a prompt, a `cwd` or a model name it launches as usual. `worktree.createWithRecipe` and `workflow.startWorkOnIssue` fail when the arguments carry a `recipeId`, so a plugin cannot start a recipe's terminals through them (and `recipe.run` is `confirm`). `file.showItemInFolder` fails when `allowOutsideRoots` is set. `session.bookmark.promote`, `session.bookmark.rename` and `session.bookmark.delete` fail when the dispatch has no project in scope, and when the session does not belong to that project. Each of these resolves `{ ok: false }` with an error rather than running.
+`canDispatch` sees only the id, and some `safe` actions are refused for particular arguments. `terminal.new` with `command` or `cwd` is raised to `confirm` for a plugin and refused; without either it opens a plain terminal. `agent.launch` with non-empty `agentLaunchFlags`, `env` or `systemPrompt`, any `presetId`, or a `prompt` or `model` starting with `-` is raised to `confirm` for a plugin and refused, since those choose how the agent runs rather than give it a task; with a prompt, a `cwd` or a model name it launches as usual. The one exception is a `presetId` naming one of the person's presets with none of the others, from a plugin that declares `agent:launch-preset`: the first launch on each preset asks the person, showing what the preset and its fallbacks turn on, and the grant ends when any of them changes or the person revokes it in the plugin's Permissions. A denied or unanswered prompt rejects `dispatch` with a `PERMISSION_REQUIRED:` error rather than resolving `{ ok: false }`, and in Host mode the prompt can't be shown, so the launch is refused. `presetId: null` stays refused. `worktree.createWithRecipe` and `workflow.startWorkOnIssue` fail when the arguments carry a `recipeId`, so a plugin cannot start a recipe's terminals through them (and `recipe.run` is `confirm`). `file.showItemInFolder` fails when `allowOutsideRoots` is set. `session.bookmark.promote`, `session.bookmark.rename` and `session.bookmark.delete` fail when the dispatch has no project in scope, and when the session does not belong to that project. Each of these resolves `{ ok: false }` with an error rather than running.
 
 An argument shown as `name?` is optional. Argument names come from each action's schema; the schema is the authority on their types and bounds.
 
@@ -17,19 +17,40 @@ An argument shown as `name?` is optional. Argument names come from each action's
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
+| `agent.aider` | Launch Aider | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
+| `agent.amp` | Launch Amp | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
+| `agent.antigravity` | Launch Antigravity | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
+| `agent.browser` | Launch browser | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
+| `agent.claude` | Launch Claude | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
+| `agent.codex` | Launch Codex | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
+| `agent.copilot` | Launch GitHub Copilot | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
+| `agent.crush` | Launch Crush | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
+| `agent.cursor` | Launch Cursor | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
 | `agent.focusNextAgent` | Focus next agent | safe | — |
 | `agent.focusNextWaiting` | Focus next waiting agent | safe | — |
+| `agent.focusNextWaitingGlobal` | Focus next waiting agent (all projects) | safe | — |
 | `agent.focusNextWorking` | Focus next working agent | safe | — |
 | `agent.focusPreviousAgent` | Focus previous agent | safe | — |
+| `agent.gemini` | Launch Gemini | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
 | `agent.getState` | Get agent state | safe | `agentId` |
-| `agent.launch` | Launch agent | safe | `agentId`, `activateDockOnCreate?`, `agentLaunchFlags?`, `cwd?`, `env?`, `excludeFromPersistence?`, `focusPolicy?`, `force?`, `handback?`, `interactive?`, `location?`, `model?`, `name?`, `notify?`, `presetId?`, `prompt?`, `removeOnExit?`, `replyLines?`, `requestedId?`, `spawnedBy?`, `systemPrompt?`, `waitForReply?`, `waitSeconds?`, `worktreeId?` |
+| `agent.goose` | Launch Goose | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
+| `agent.grok` | Launch Grok | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
+| `agent.interpreter` | Launch Open Interpreter | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
+| `agent.kimi` | Launch Kimi Code | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
+| `agent.kiro` | Launch Kiro | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
+| `agent.launch` | Launch agent | safe | `agentId`, `accountId?`, `activateDockOnCreate?`, `agentLaunchFlags?`, `cwd?`, `env?`, `excludeFromPersistence?`, `focusPolicy?`, `force?`, `handback?`, `interactive?`, `location?`, `model?`, `name?`, `notify?`, `presetId?`, `prompt?`, `removeOnExit?`, `replyLines?`, `requestedId?`, `spawnedBy?`, `systemPrompt?`, `waitForReply?`, `waitSeconds?`, `worktreeId?` |
 | `agent.listAvailable` | List available agents | safe | — |
 | `agent.listModels` | List agent models | safe | `agentId?` |
 | `agent.listPresets` | List agent presets | safe | `agentId`, `projectId?` |
 | `agent.listToolbar` | List toolbar agents | safe | — |
+| `agent.mistral` | Launch Mistral Vibe | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
+| `agent.opencode` | Launch OpenCode | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
+| `agent.palette` | Open quick switcher | safe | — |
+| `agent.qwen` | Launch Qwen Code | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
 | `agent.terminal` | Launch terminal | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
 | `agentSessionHistory.list` | List resumable sessions | safe | `limit?`, `offset?`, `projectId?`, `worktreeId?` |
 | `agentSessionHistory.resume` | Resume agent session | safe | `sessionId`, `worktreeId?`, `worktreePath?` |
+| `dock.focusNextWaiting` | Focus next blocked dock agent | safe | — |
 | `session.bookmark.delete` | Delete bookmark | confirm | `sessionId` |
 | `session.bookmark.promote` | Add bookmark to session | safe | `label`, `sessionId` |
 | `session.bookmark.rename` | Rename bookmark | safe | `label`, `sessionId` |
@@ -45,13 +66,18 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | --- | --- | --- | --- |
 | `app.developerMode.set` | Set developer mode | safe | `enabled`, `autoOpenDiagnostics?`, `focusEventsTab?` |
 | `app.exportConfig` | Export configuration… | safe | — |
+| `app.forceQuit` | Force quit app | safe | — |
 | `app.importConfig` | Import configuration… | confirm | — |
+| `app.newWindow` | New window | safe | `projectPath?` |
 | `app.pluginManager` | Open plugin manager | safe | — |
+| `app.quit` | Quit app | safe | — |
 | `app.reloadConfig` | Reload configuration | safe | — |
+| `app.settings` | Open settings | safe | — |
 | `app.settings.openTab` | Open settings tab | safe | `tab`, `sectionId?`, `subtab?` |
 | `app.theme.browser.open` | Browse themes… | safe | — |
 | `app.theme.pick` | Pick theme… | safe | — |
 | `app.theme.toggle` | Toggle dark/light theme | safe | — |
+| `modal.close` | Close modal | safe | — |
 
 ## artifacts
 
@@ -110,7 +136,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | --- | --- | --- | --- |
 | `diagnostics.openReview` | Send diagnostics | safe | `scope?` |
 | `diagnostics.openWhySlow` | Why am I slow? | safe | — |
-| `eventInspector.clear` | Clear event inspector | safe | — |
+| `eventInspector.clear` | Clear event inspector | confirm | — |
 | `eventInspector.getEvents` | Get events | safe | `cursor?`, `limit?`, `offset?`, `skip?` |
 | `eventInspector.getFiltered` | Get filtered events | safe | `after?`, `before?`, `categories?`, `category?`, `limit?`, `offset?`, `search?`, `terminalId?`, `types?`, `worktreeId?` |
 | `eventInspector.subscribe` | Subscribe to events | safe | — |
@@ -217,9 +243,13 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | --- | --- | --- | --- |
 | `help.displayImage` | Display documentation image | safe | `url`, `altText?`, `caption?` |
 | `help.gettingStarted.show` | Getting started | safe | — |
+| `help.launchAgent` | Launch help agent | safe | `agentId?`, `greeting?`, `slot?`, `vacantOnly?` |
 | `help.newSessionWithAgent` | New assistant session with agent | safe | `agentId` |
 | `help.openCommandsFolder` | Open assistant commands folder | safe | — |
 | `help.resumePastSession` | Resume past assistant session | safe | `agentId`, `sessionId`, `slot?` |
+| `help.shortcuts` | Keyboard shortcuts | safe | — |
+| `help.shortcutsAlt` | Keyboard shortcuts (Alt) | safe | — |
+| `help.togglePanel` | Toggle help panel | safe | — |
 | `help.tour.show` | Daintree Tour | safe | `tourId?` |
 | `help.tour.status` | Tour status | safe | `tourId?` |
 
@@ -256,11 +286,14 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | --- | --- | --- | --- |
 | `action.palette.open` | Open command palette | safe | — |
 | `find.inFocusedPanel` | Find in focused panel | safe | — |
+| `nav.focusRegion.next` | Focus next region | safe | — |
+| `nav.focusRegion.prev` | Focus previous region | safe | — |
 | `nav.quickSwitcher` | Quick switcher | safe | — |
 | `nav.showGrid` | Show grid | safe | — |
 | `nav.showProjectHome` | Show project home | safe | — |
 | `nav.showProjectSplit` | Show project home beside grid | safe | — |
 | `nav.toggleFocusMode` | Toggle focus mode | safe | — |
+| `nav.toggleSidebar` | Toggle sidebar | safe | — |
 | `ui.sidebar.showWorktrees` | Show worktrees in sidebar | safe | — |
 | `ui.sidebar.switchView` | Switch sidebar view | safe | `viewId?` |
 
@@ -270,11 +303,16 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | --- | --- | --- | --- |
 | `layout.apply` | Apply layout | safe | `layoutId` |
 | `notifications.toggle` | Toggle notification inbox | safe | — |
+| `panel.diagnosticsEvents` | Show events | safe | — |
+| `panel.diagnosticsLogs` | Show logs | safe | — |
+| `panel.diagnosticsMessages` | Show problems | safe | — |
 | `panel.focus` | Focus panel | safe | `panelId` |
 | `panel.focusIndex` | Focus panel by index | safe | `index` |
 | `panel.list` | List panels | safe | `location?`, `worktreeId?` |
 | `panel.openPluginPanel` | Open plugin panel | safe | `kind`, `initialArgs?`, `presentation?`, `reuseExisting?`, `size?`, `toggle?`, `worktreeId?` |
 | `panel.palette` | Panel palette | safe | — |
+| `panel.toggleDiagnostics` | Toggle diagnostics | safe | — |
+| `panel.togglePortal` | Toggle portal | safe | — |
 
 ## plugins
 
@@ -352,6 +390,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `project.getSettings` | Get project settings | safe | `projectId?` |
 | `project.getStats` | Get project stats | safe | `projectId?` |
 | `project.listGroups` | List project groups | safe | — |
+| `project.mruCycleOlder` | Switch to last workspace | safe | — |
 | `project.muteNotifications` | Mute project notifications | safe | `projectId` |
 | `project.openDialog` | Pick directory | safe | — |
 | `project.openInNewWindow` | Open project in new window | safe | — |
@@ -365,9 +404,11 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `project.sleep` | Sleep project | confirm | `projectId?` |
 | `project.sleepIdle` | Sleep idle projects | confirm | — |
 | `project.switch` | Switch project | safe | `projectId` |
+| `project.switcherPalette` | Open project switcher | safe | — |
 | `project.toggleNeverAutoSleep` | Never sleep automatically | safe | `enabled?`, `projectId?` |
 | `project.unarchive` | Unarchive project | safe | `projectId?` |
 | `project.update` | Update project | safe | `projectId`, `updates` |
+| `schedules.open` | Schedules… | safe | `projectId?`, `scheduleId?` |
 
 ## recipes
 
@@ -447,12 +488,17 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `fleet.trash` | Fleet: trash | confirm | `confirmed?` |
 | `idleTerminalNotify.closeProject` | Sleep idle project | safe | `projectId` |
 | `idleTerminalNotify.muteProject` | Mute idle terminal notifications | safe | `projectId` |
+| `layout.redo` | Redo layout change | safe | — |
+| `layout.undo` | Undo layout change | safe | — |
 | `panel.gridLayout.setStrategy` | Set grid layout strategy | safe | `strategy` |
 | `panel.gridLayout.setValue` | Set grid layout value | safe | `value` |
+| `tab.next` | Next tab | safe | — |
+| `tab.previous` | Previous tab | safe | — |
 | `terminal.arm` | Arm terminal | confirm | `terminalId` |
 | `terminal.armAll` | Arm all eligible | safe | `scope?` |
 | `terminal.armByState` | Arm by state | safe | `state`, `extend?`, `scope?` |
 | `terminal.armDefault` | Arm current worktree | safe | — |
+| `terminal.background` | Send to background | safe | `terminalId?` |
 | `terminal.bulkCommand` | Fleet: broadcast | safe | — |
 | `terminal.close` | Close terminal | safe | `terminalId?` |
 | `terminal.closeAll` | Close all terminals | safe | — |
@@ -462,8 +508,25 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.disarm` | Disarm terminal | safe | `terminalId` |
 | `terminal.disarmAll` | Disarm all | safe | — |
 | `terminal.duplicate` | Duplicate panel | safe | `focusPolicy?`, `spawnedBy?`, `terminalId?` |
+| `terminal.focusAlternate` | Focus alternate panel | safe | — |
+| `terminal.focusDock` | Focus dock | safe | — |
+| `terminal.focusDown` | Focus terminal down | safe | — |
+| `terminal.focusIndex1` | Focus terminal 1 | safe | — |
+| `terminal.focusIndex2` | Focus terminal 2 | safe | — |
+| `terminal.focusIndex3` | Focus terminal 3 | safe | — |
+| `terminal.focusIndex4` | Focus terminal 4 | safe | — |
+| `terminal.focusIndex5` | Focus terminal 5 | safe | — |
+| `terminal.focusIndex6` | Focus terminal 6 | safe | — |
+| `terminal.focusIndex7` | Focus terminal 7 | safe | — |
+| `terminal.focusIndex8` | Focus terminal 8 | safe | — |
+| `terminal.focusIndex9` | Focus terminal 9 | safe | — |
+| `terminal.focusLeft` | Focus terminal left | safe | — |
+| `terminal.focusNext` | Focus next terminal | safe | — |
+| `terminal.focusPrevious` | Focus previous terminal | safe | — |
+| `terminal.focusRight` | Focus terminal right | safe | — |
+| `terminal.focusUp` | Focus terminal up | safe | — |
 | `terminal.forceResume` | Force resume | safe | `terminalId?` |
-| `terminal.getStatus` | Get terminal status | safe | `includeOutput?`, `location?`, `submissionToken?`, `terminalIds?`, `worktreeId?` |
+| `terminal.getStatus` | Get terminal status | safe | `includeOutput?`, `location?`, `queuedSendToken?`, `submissionToken?`, `terminalIds?`, `worktreeId?` |
 | `terminal.gridLayout.setStrategy` | Set grid layout strategy | safe | `strategy` |
 | `terminal.gridLayout.setValue` | Set grid layout value | safe | `value` |
 | `terminal.info.get` | Get terminal info | safe | `terminalId?` |
@@ -473,10 +536,15 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.killAll` | Kill all terminals | confirm | `confirmed?` |
 | `terminal.killBatch` | Kill terminals | confirm | `terminalIds` |
 | `terminal.list` | List terminals | safe | `includeClientMetadata?`, `location?`, `owned?`, `terminalId?`, `worktreeId?` |
+| `terminal.maximize` | Maximize terminal | safe | — |
+| `terminal.moveDown` | Move terminal down | safe | — |
+| `terminal.moveLeft` | Move terminal left | safe | — |
+| `terminal.moveRight` | Move terminal right | safe | — |
 | `terminal.moveToDock` | Move to dock | safe | `terminalId?` |
 | `terminal.moveToGrid` | Move to grid | safe | `terminalId?` |
 | `terminal.moveToNewWorktree` | Move to new worktree… | safe | `terminalId?` |
 | `terminal.moveToWorktree` | Move to worktree | safe | `worktreeId`, `terminalId?` |
+| `terminal.moveUp` | Move terminal up | safe | — |
 | `terminal.new` | New terminal | safe | `command?`, `cwd?`, `focusPolicy?`, `spawnedBy?` |
 | `terminal.openWorktreeEditor` | Open focused terminal's worktree folder | safe | — |
 | `terminal.openWorktreeIssue` | Open focused terminal's worktree issue | safe | — |
@@ -484,18 +552,24 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminal.popStash` | Restore stashed input | safe | — |
 | `terminal.redraw` | Redraw terminal | safe | `terminalId?` |
 | `terminal.rename` | Rename terminal | safe | `name?`, `terminalId?` |
+| `terminal.reopenLast` | Reopen last closed | safe | — |
 | `terminal.restart` | Restart terminal | confirm | `confirmed?`, `terminalId?` |
-| `terminal.restartOnPreset` | Restart agent on preset | confirm | `presetId`, `confirmed?`, `terminalId?` |
+| `terminal.restartAll` | Restart all terminals | confirm | `confirmed?` |
+| `terminal.restartOnAccount` | Restart agent on account | confirm | `accountId`, `confirmed?`, `keepConversation?`, `terminalId?` |
+| `terminal.restartOnPreset` | Restart agent on preset | confirm | `presetId`, `confirmed?`, `keepConversation?`, `terminalId?` |
 | `terminal.restartService` | Restart terminal service | safe | — |
 | `terminal.resumeSessions` | Resume session… | safe | — |
-| `terminal.revealOwned` | Reveal owned terminal | safe | `terminalId` |
+| `terminal.revealOwned` | Reveal owned terminal | safe | `terminalId`, `generation?` |
+| `terminal.scrollToLastActivity` | Scroll to last activity | safe | — |
 | `terminal.sendToAgent` | Send to agent | safe | `terminalId?` |
+| `terminal.sessionFile.get` | Get agent session file | safe | `terminalId` |
 | `terminal.setHoldOnRestart` | Hold agent on restart | safe | `hold`, `terminalId` |
 | `terminal.startHeld` | Start held pane | confirm | `start`, `terminalId` |
 | `terminal.stashInput` | Stash input | safe | — |
 | `terminal.toggleDock` | Toggle dock | safe | `terminalId?` |
 | `terminal.toggleDockAll` | Toggle all dock | safe | — |
 | `terminal.toggleInputLock` | Toggle input lock | safe | `terminalId?` |
+| `terminal.toggleInputSurface` | Switch between hybrid input and terminal | safe | — |
 | `terminal.toggleMaximize` | Toggle maximize | safe | `terminalId?` |
 | `terminal.trash` | Trash terminal | safe | `terminalId?` |
 | `terminal.viewInfo` | View terminal info | safe | `terminalId?` |
@@ -507,6 +581,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
+| `ui.refresh` | Reload application | safe | — |
 | `ui.sidebar.resetWidth` | Reset sidebar width | safe | — |
 | `window.close` | Close window | safe | — |
 | `window.forceReload` | Force reload window | safe | — |
@@ -516,6 +591,20 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `window.zoomIn` | Zoom in | safe | — |
 | `window.zoomOut` | Zoom out | safe | — |
 | `window.zoomReset` | Reset zoom | safe | — |
+
+## voice
+
+| Action | Title | Danger | Arguments |
+| --- | --- | --- | --- |
+| `voiceInput.lockTarget` | Lock voice dictation to panel | safe | `panelId?` |
+| `voiceInput.openRecentDictations` | Recover a recent dictation | safe | — |
+| `voiceInput.recallRecentTarget` | Toggle voice dictation on recent target | safe | `panelId` |
+| `voiceInput.rewriteSelection` | Rewrite selection by voice | safe | — |
+| `voiceInput.stopAndSend` | Stop voice dictation and send | safe | — |
+| `voiceInput.toggle` | Toggle voice dictation | safe | — |
+| `voiceInput.toggleAssistant` | Toggle voice dictation in assistant | safe | — |
+| `voiceInput.togglePause` | Pause or resume voice dictation | safe | — |
+| `voiceInput.unlockTarget` | Unlock voice dictation | safe | — |
 
 ## workspace
 
@@ -545,23 +634,32 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `worktree.createWithRecipe` | Create managed worktree | safe | `source`, `focusPolicy?`, `recipeId?`, `spawnedBy?` |
 | `worktree.delete` | Delete worktree | confirm | `worktreeId`, `closeTerminals?`, `deleteBranch?`, `force?` |
 | `worktree.deleteOwned` | Delete owned worktree | confirm | `worktreeId` |
+| `worktree.down` | Worktree down | safe | — |
+| `worktree.downVim` | Worktree down (Vim) | safe | — |
+| `worktree.end` | Worktree end | safe | — |
 | `worktree.getAvailableBranch` | Get available branch name | safe | `branchName`, `rootPath?`, `worktreeId?`, `worktreePath?` |
 | `worktree.getCurrent` | Get current worktree | safe | — |
 | `worktree.getDefaultPath` | Get default worktree path | safe | `branchName`, `rootPath?`, `worktreeId?`, `worktreePath?` |
+| `worktree.home` | Worktree home | safe | — |
 | `worktree.inject` | Inject worktree context into focused terminal | safe | `worktreeId?` |
 | `worktree.lifecycle.retrySetup` | Retry setup | safe | `worktreeId?` |
 | `worktree.list` | List worktrees | safe | — |
 | `worktree.listBranches` | List branches | safe | `limit?`, `offset?`, `rootPath?`, `worktreeId?`, `worktreePath?` |
 | `worktree.markReviewed` | Mark reviewed | safe | `worktreeId?` |
+| `worktree.next` | Next worktree | safe | — |
 | `worktree.openChanges` | Open changes | safe | `worktreeId?` |
 | `worktree.openEditor` | Open in editor | safe | `worktreeId?` |
 | `worktree.openFileBrowser` | Browse files | safe | `revealKind?`, `revealPath?`, `worktreeId?` |
 | `worktree.openFileBrowserPanel` | Browse files | safe | `activateDockOnCreate?`, `location?`, `revealKind?`, `revealPath?`, `rootPath?`, `worktreeId?` |
 | `worktree.openIssue` | Open worktree issue | safe | `worktreeId?` |
+| `worktree.openPalette` | Open worktree palette | safe | — |
 | `worktree.openPR` | Open worktree pull request | safe | `worktreeId?` |
 | `worktree.openReviewHub` | Open review hub | safe | `mode?`, `worktreeId?` |
+| `worktree.overview` | Toggle worktree overview | safe | — |
 | `worktree.overview.close` | Close worktree overview | safe | — |
 | `worktree.overview.open` | Open worktree overview | safe | — |
+| `worktree.panel` | Open worktree panel | safe | — |
+| `worktree.previous` | Previous worktree | safe | — |
 | `worktree.quickCreate` | Quick create worktree | safe | — |
 | `worktree.reconcileTopology` | Reconcile worktree list | safe | — |
 | `worktree.refresh` | Refresh sidebar | safe | — |
@@ -580,6 +678,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `worktree.reveal` | Reveal worktree | safe | `worktreeId?` |
 | `worktree.reviewReadiness` | Review readiness | safe | `worktreeId?` |
 | `worktree.select` | Select worktree | safe | `worktreeId?` |
+| `worktree.selectSpace` | Select worktree (Space) | safe | — |
 | `worktree.sessions.clearHistory` | Clear session history | confirm | `confirmed?`, `worktreeId?` |
 | `worktree.sessions.closeCompleted` | Close completed sessions | safe | `worktreeId?` |
 | `worktree.sessions.endAll` | End all sessions | confirm | `confirmed?`, `worktreeId?` |
@@ -591,7 +690,18 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `worktree.setActive` | Set active worktree | safe | `worktreeId` |
 | `worktree.setCustomTitle` | Set worktree title | safe | `title`, `worktreeId` |
 | `worktree.setLabelColor` | Set worktree label colour | safe | `color`, `worktreeId` |
+| `worktree.switch1` | Switch to worktree 1 | safe | — |
+| `worktree.switch2` | Switch to worktree 2 | safe | — |
+| `worktree.switch3` | Switch to worktree 3 | safe | — |
+| `worktree.switch4` | Switch to worktree 4 | safe | — |
+| `worktree.switch5` | Switch to worktree 5 | safe | — |
+| `worktree.switch6` | Switch to worktree 6 | safe | — |
+| `worktree.switch7` | Switch to worktree 7 | safe | — |
+| `worktree.switch8` | Switch to worktree 8 | safe | — |
+| `worktree.switch9` | Switch to worktree 9 | safe | — |
 | `worktree.switchIndex` | Switch to worktree by index | safe | `index` |
+| `worktree.up` | Worktree up | safe | — |
+| `worktree.upVim` | Worktree up (Vim) | safe | — |
 | `worktree.waitForPullRequest` | Wait for worktree pull request | safe | `worktreeIds`, `timeoutMs?` |
 | `worktree.waitUntilReady` | Wait until worktree ready | safe | `timeoutMs?`, `worktreeId?`, `worktreePath?` |
 

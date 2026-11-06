@@ -32,8 +32,11 @@
  *
  * Some ids here never run in this view at all. The host's MCP server answers
  * them in its own main process — the batches (`*Many`, expanded there into
- * single calls this list already carries), `terminal.notifyWhenIdle`,
+ * single calls this list already carries) and `agent.launchInNewWorktree`
+ * (run there as the same create, wait and launch), `terminal.notifyWhenIdle`,
+ * `terminal.cancelQueuedSend`,
  * `mcp.surface`, `help.displayImage`, `skills.*`, `project.runCommand`,
+ * `terminal.waitForExit` (the exits and closes it reads are the host's),
  * `assistant.list`, `assistant.start` and `agent.readQuota` (a Shell's
  * assistant reaches the host's own assistants through them while it drives
  * the project), `host.list` (a host can be a Shell to hosts of its own), the
@@ -60,9 +63,15 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "agent.getState",
   "agent.launch",
   "agent.launchMany",
+  "agent.launchInNewWorktree",
   "agent.listAvailable",
   "agent.listModels",
   "agent.listPresets",
+  // The host's own user presets: agent settings are host channels, so the write
+  // lands where the agent runs, and each one raises this Shell's dialog (#16047).
+  "agent.createPreset",
+  "agent.updatePreset",
+  "agent.deletePreset",
   "agent.readQuota",
   "assistant.list",
   "assistant.start",
@@ -89,6 +98,7 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "skills.search",
   "slashCommands.list",
   "terminal.cancelWatch",
+  "terminal.cancelQueuedSend",
   "terminal.close",
   "terminal.closeMany",
   "terminal.closeOwned",
@@ -122,6 +132,7 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "terminal.sendKeysOwned",
   "terminal.setClientMetadata",
   "terminal.startHeld",
+  "terminal.waitForExit",
   "terminal.waitUntilIdle",
   "terminal.waitUntilIdleBatch",
   "terminal.watch",
@@ -130,6 +141,7 @@ export const HOST_DISPATCHABLE_ACTION_IDS: ReadonlySet<string> = new Set([
   "worktree.createWithRecipe",
   "worktree.delete",
   "worktree.deleteOwned",
+  "worktree.retireOwned",
   "worktree.getAvailableBranch",
   "worktree.getCurrent",
   "worktree.getDefaultPath",

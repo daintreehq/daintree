@@ -118,6 +118,18 @@ export type ProjectFocusOnActivateIntent =
    * project is showing rather than dropped with the dialog (#14991).
    */
   | { intent: "placement-note"; note: string }
+  /**
+   * A scheduled run's banner was clicked (#15988): bring forward the run's
+   * pane if this view still holds it, and otherwise open the schedule's
+   * history, or the list when the schedule is gone. `panelId` is null when
+   * the run never had a terminal to show.
+   */
+  | { intent: "focus-scheduled-run"; runId: string; scheduleId: string; panelId: string | null }
+  /**
+   * Open this project's Schedules view, at a schedule's page when one is named:
+   * an inbox entry for another project's scheduled run (#15983).
+   */
+  | { intent: "open-schedules"; scheduleId: string | null }
   | {
       /**
        * A plugin's OS banner was clicked (#13505): run its first action, which
@@ -264,9 +276,9 @@ export interface ProjectStats {
 export interface BulkProjectStatsEntry extends ProjectStats, AssistantPresenceEntry {
   activeAgentCount: number;
   /**
-   * Agents asking something of the user. A turn main watched an agent hand back
-   * counts as finished instead, even resting at its prompt; parked and snoozed
-   * runs are withheld.
+   * Agents the fleet bands as needing the user: an unseen ask a Canopy reading
+   * found, plus the blocked ones. A stop with no reading never counts; parked
+   * and snoozed runs are withheld.
    */
   waitingAgentCount: number;
   /**
@@ -280,12 +292,13 @@ export interface BulkProjectStatsEntry extends ProjectStats, AssistantPresenceEn
   oldestWaitingSince?: number;
   /**
    * Agents that handed work back — settled in `completed`, or at a plain prompt
-   * after a turn main watched. Presence, seen or not.
+   * after a turn main watched — and any wait while it is unread. Presence, seen
+   * or not.
    */
   completedAgentCount: number;
   /**
-   * Finished agents the user hasn't seen yet: by the run's own hand-back record
-   * when it has one, else by the project's acknowledgement watermark. Parked and
+   * Agents the fleet bands as unread: an unseen hand-back, or a wait no
+   * reading asked from that the user hasn't had in front of them. Parked and
    * snoozed runs are withheld. Subset of
    * {@link BulkProjectStatsEntry.completedAgentCount}.
    */
@@ -344,13 +357,14 @@ export interface ProjectStatusEntry extends AssistantPresenceEntry {
   oldestWaitingSince?: number;
   /**
    * Agents that handed work back — settled in `completed`, or at a plain prompt
-   * after a turn main watched. Presence, seen or not.
+   * after a turn main watched — and any wait while it is unread. Presence, seen
+   * or not.
    */
   completedAgentCount: number;
   /**
-   * Finished agents the user hasn't seen yet: by the run's own hand-back record
-   * when it has one (#13238), else because the completion postdates the
-   * project's acknowledgement watermark (`Project.lastCompletionSeenAt`).
+   * Agents the fleet bands as unread (#16058): an unseen hand-back by the run's
+   * own record (#13238), or a wait no reading asked from that the user hasn't
+   * had in front of them. A completion main never watched is never one.
    * Parked and snoozed runs are withheld. Holds the project in the switcher's
    * "Needs attention" band with no time-based expiry — work finished while the
    * user was away stays surfaced until actually seen. A subset of

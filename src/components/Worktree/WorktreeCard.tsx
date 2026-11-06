@@ -45,6 +45,7 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useResolvedPresentation } from "@/hooks/useResolvedPresentation";
 import { QuietGitDetails } from "./WorktreeCard/QuietGitDetails";
 import { cn } from "../../lib/utils";
+import { getWorktreeSidebarRowId } from "@/components/Sidebar/useWorktreeSidebarKeyboard";
 import {
   copyableBranchName,
   isExternalWorktree,
@@ -58,6 +59,7 @@ import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability";
 import { isAgentPinned } from "../../../shared/utils/agentPinned";
 import { FocusedSubLine } from "./WorktreeCard/FocusedSubLine";
+import { hasTextSelectionWithin, isCardContentEvent } from "./WorktreeCard/cardClickTarget";
 import { selectButtonDescribedBy, worktreeRowDescriptionId } from "./WorktreeCard/rowDescriptions";
 import { isTooltipFocusOpenSuppressed } from "@/lib/tooltipDismissRegistry";
 import { isTooltipSuppressedForElement } from "@/lib/tooltipFocusSuppression";
@@ -70,13 +72,15 @@ import { WorktreeDialogs } from "./WorktreeCard/WorktreeDialogs";
 import { notifyAttachmentFailure } from "./WorktreeCard/notifyAttachmentFailure";
 import { WorktreeHeader } from "./WorktreeCard/WorktreeHeader";
 import { WorktreeTerminalSection } from "./WorktreeCard/WorktreeTerminalSection";
+import { deriveSetupAlarm } from "./WorktreeCard/setupAlarm";
+import { syncLineHasNews } from "./WorktreeCard/syncLineNews";
 import { WslGitBanner } from "./WorktreeCard/WslGitBanner";
-import type { AggregateCounts } from "./WorktreeCard/aggregateCounts";
 import { useInputReceiptKey } from "./WorktreeCard/hooks/useInputReceiptKey";
 import { useWorktreeActions } from "./WorktreeCard/hooks/useWorktreeActions";
 import { copyContextWithFeedback } from "@/hooks/useWorktreeActions";
 import { copyWithToast } from "@/lib/copyWithToast";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
+import { WorktreeDensitySubmenu } from "./WorktreeDensitySubmenu";
 import {
   CONTEXT_COMPONENTS,
   WorktreeMenuItems,
@@ -91,10 +95,15 @@ import { useWorktreeDevServerSession } from "@/hooks/app/useWorktreeDevServerSes
 import { computeChipState } from "./utils/computeChipState";
 import { isAgentTerminal } from "@/utils/terminalType";
 import { isTerminalVisible } from "@/lib/terminalVisibility";
-import { deriveWorktreeAgentBuckets, isWorktreeMergedForCleanup } from "@/lib/worktreeAgentBuckets";
-import { useWorktreeAgentBucketInputs } from "@/hooks/useWorktreeAgentBucketInputs";
+import { isWorktreeMergedForCleanup } from "@/lib/worktreeAgentBuckets";
+import { useWorktreeAgentBuckets } from "@/hooks/useWorktreeAgentBucketInputs";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
-import { bulkParkAgents, selectParkTargets, type BulkParkVerb } from "@/lib/parkWorktreeAgents";
+import {
+  bulkParkAgents,
+  countParkTargets,
+  selectParkTargets,
+  type BulkParkVerb,
+} from "@/lib/parkWorktreeAgents";
 import { devServerMenuState } from "./utils/devServerMenuState";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { CHIP_LABELS, WorktreeStatusTick } from "./WorktreeCard/WorktreeStatusTick";
@@ -117,7 +126,8 @@ export interface WorktreeCardProps {
   isActive: boolean;
   isFocused: boolean;
   isSingleWorktree?: boolean;
-  aggregateCounts?: AggregateCounts;
+  /** The sidebar grid's keyboard cursor is on this card (grid keyboard-focused). */
+  isKeyboardCursor?: boolean;
   onSelect: () => void;
   onOpenEditor: () => void;
   onSaveLayout?: () => void;
@@ -151,7 +161,7 @@ export function WorktreeCard({
   isActive,
   isFocused,
   isSingleWorktree: _isSingleWorktree,
-  aggregateCounts: _aggregateCounts,
+  isKeyboardCursor = false,
   onSelect,
   onOpenEditor,
   onSaveLayout,
@@ -176,7 +186,10 @@ export function WorktreeCard({
   "use memo";
   const isMultiSelectEnabled = variant === "grid" && onToggleSelect !== undefined;
 
-  const handleCardClick = (e: React.MouseEvent) => {
+  const handleCardClick = (e: React.MouseEvent<HTMLElement>) => {
+    if (!isCardContentEvent(e) || isDraggingSort) return;
+    // `detail` is 0 for the select button's Enter/Space, which ends no drag.
+    if (e.detail > 0 && hasTextSelectionWithin(e.currentTarget)) return;
     if (isMultiSelectEnabled && (e.metaKey || e.ctrlKey || e.shiftKey)) {
       e.preventDefault();
       e.stopPropagation();
@@ -238,6 +251,9 @@ export function WorktreeCard({
     (state) => state.worktreeLabelColors[worktree.id] ?? null
   );
   const customTitle = useWorktreeFilterStore((state) => state.worktreeCustomTitles[worktree.id]);
+  // The sidebar card has two densities; the grid card has its own layout.
+  const cardDensity = useWorktreeFilterStore((state) => state.cardDensity);
+  const isCompactCard = variant === "sidebar" && cardDensity === "compact";
   const labelAriaSuffix = labelColor
     ? `, Label colour: ${worktreeLabelDisplayName(labelColor)}`
     : "";
@@ -251,21 +267,13 @@ export function WorktreeCard({
     toggleWorktreeCollapsed(worktree.id);
   };
 
-  const handleDoubleClick = (e: React.MouseEvent) => {
+  const handleDoubleClick = (e: React.MouseEvent<HTMLElement>) => {
     if (!canCollapse) return;
-    // Interactive children stop `click` propagation but `click` and `dblclick`
-    // are separate events, so a double-click on a control (More actions,
-    // Delete, the drag handle, issue/PR badges,
-    // the lifecycle "Show details" <summary>) still bubbles here and would
-    // toggle collapse. Only collapse when the double-click originates on the
-    // inert card body — the full-card select overlay or non-interactive
-    // content — not on a nested control (#10319).
-    const target = e.target;
-    if (!(target instanceof Element)) return;
-    const interactive = target.closest(
-      'button, a, summary, [role="button"], [role="menuitem"], input, select, textarea, [data-worktree-row-drag-handle]'
-    );
-    if (interactive && !interactive.hasAttribute("data-card-select-overlay")) return;
+    // Two quick clicks on a control (More actions, a disclosure, the drag
+    // handle) are two presses of that control, not a request to fold the card
+    // (#10319). The text-selection guard stays off here: a double-click
+    // selects a word on its own.
+    if (!isCardContentEvent(e)) return;
     e.stopPropagation();
     toggleWorktreeCollapsed(worktree.id);
   };
@@ -357,10 +365,7 @@ export function WorktreeCard({
   // Parking reads the fleet snapshot, not the panels: only a run the snapshot
   // carries can be parked, and a plain shell never appears there.
   const parking = useFleetSnapshotStore(
-    useShallow((state) => ({
-      parked: selectParkTargets(state.snapshot, worktreeTerminalIds, "unpark").length,
-      unparked: selectParkTargets(state.snapshot, worktreeTerminalIds, "park").length,
-    }))
+    useShallow((state) => countParkTargets(state.snapshot, worktreeTerminalIds))
   );
   const handleBulkPark = (verb: BulkParkVerb) => {
     const targets = selectParkTargets(
@@ -808,18 +813,15 @@ export function WorktreeCard({
   // cycling: a backgrounded agent is not counted there, so it must not mark
   // the card either. Every terminal here already belongs to this (existing)
   // worktree, so the orphan check has nothing to do.
-  const { runsById, pluginByWorktreeId } = useWorktreeAgentBucketInputs();
   const isInTrash = usePanelStore((state) => state.isInTrash);
-  const chipState = computeChipState(
-    deriveWorktreeAgentBuckets(
-      worktreeTerminals
-        .filter((t) => isAgentTerminal(t) && isTerminalVisible(t, isInTrash, NO_WORKTREE_IDS))
-        .map((t) => t.id),
-      runsById,
-      isWorktreeMergedForCleanup(worktree),
-      pluginByWorktreeId.get(worktree.id)
-    )
+  const agentBuckets = useWorktreeAgentBuckets(
+    worktreeTerminals
+      .filter((t) => isAgentTerminal(t) && isTerminalVisible(t, isInTrash, NO_WORKTREE_IDS))
+      .map((t) => t.id),
+    isWorktreeMergedForCleanup(worktree),
+    worktree.id
   );
+  const chipState = computeChipState(agentBuckets);
 
   // The active card used to opt out of being a drop target entirely — every
   // panel drag originated from the active worktree, so it could only ever be a
@@ -1107,6 +1109,37 @@ export function WorktreeCard({
     hideDevPreview,
   };
 
+  const lifecycleAlarm = deriveSetupAlarm(worktree, lifecycleLabel, Boolean(isLifecycleRunning));
+  // What the open card's body is already saying, so the title row's marks
+  // don't repeat it. Details' resting row names a conflict unless deleting or
+  // a lifecycle label outranks it there; the setup recovery and approval blocks
+  // sit outside the disclosure, so an open card always shows them.
+  const restingRowShowsLifecycle =
+    Boolean(lifecycleLabel) &&
+    (Boolean(isLifecycleRunning) || worktree.lifecycleStatus?.state !== "success");
+  const gitStateShownInBody =
+    !effectiveIsCollapsed &&
+    !isExpanded &&
+    gitStateIndicator?.kind === "conflicted" &&
+    reviewState === "conflicted" &&
+    !isBeingDeleted &&
+    !restingRowShowsLifecycle;
+  const lifecycleAlarmShownInBody = !effectiveIsCollapsed;
+  // On the compact card Details and Sessions share one footer row while
+  // Details is closed: two disclosures that each used a full row to say one
+  // line. Opening Sessions keeps its trigger in that row and lays the list out
+  // beneath, so the control does not move out from under the click.
+  // The pinned main card takes the compact footer in either density: it never
+  // scrolls away, so every row it spends is a row the list below loses. Not on
+  // a card showing setup recovery: that block sits under the summary row and
+  // needs the card's full width, not the width left beside the trigger.
+  const hasInlineFooter =
+    (isCompactCard || (variant === "sidebar" && isMainWorktree)) && lifecycleAlarm === null;
+  const isSessionsFooterInline = hasInlineFooter && !isExpanded && terminalCounts.total > 0;
+  // A card with no sessions keeps the trigger's slot empty on that row, so the
+  // age column sits on the same x on every card with the shared footer.
+  const reservesSessionsSlot = hasInlineFooter && !isExpanded && terminalCounts.total === 0;
+
   const ariaStatusParts: string[] = [spineState];
   if (gitStateIndicator) {
     ariaStatusParts.push(gitStateIndicator.label);
@@ -1149,6 +1182,9 @@ export function WorktreeCard({
             // of the card-in-card the standards for this component name as its
             // characteristic failure.
             variant === "grid" && "h-full rounded-lg",
+            // The header hides its infrastructure labels (port, attachment
+            // name) below a width, measured against the card, not the window.
+            variant === "sidebar" && "@container/card",
             isActive && variant !== "sidebar" && "bg-surface-panel-elevated",
             variant === "sidebar" && !isActive && "bg-transparent",
             isFocused && !isActive && variant === "grid" && "bg-overlay-soft",
@@ -1179,6 +1215,7 @@ export function WorktreeCard({
           // this — the class alone is on both variants, and that file is
           // unlayered, so an unscoped rule silently repaints the grid card.
           data-variant={variant}
+          data-density={variant === "sidebar" ? cardDensity : undefined}
           data-active={isActive && variant === "sidebar" ? "true" : undefined}
           data-has-grip={variant === "sidebar" && hasRowDragHandle ? "true" : undefined}
           data-hoverable={!isActive && variant === "sidebar" ? "true" : undefined}
@@ -1192,7 +1229,13 @@ export function WorktreeCard({
           aria-busy={isBeingDeleted && !deleteError ? "true" : undefined}
           role={variant === "grid" ? "group" : undefined}
           aria-current={variant === "grid" && isActive ? "true" : undefined}
-          aria-label={`Worktree: ${ariaName}${worktree.isCurrent ? " (current)" : ""}, Status: ${ariaStatusLabel}${labelAriaSuffix}`}
+          // The sidebar card is a plain container (no role), where a label is
+          // prohibited and never read; its select button carries these words.
+          aria-label={
+            variant === "sidebar"
+              ? undefined
+              : `Worktree: ${ariaName}${worktree.isCurrent ? " (current)" : ""}, Status: ${ariaStatusLabel}${labelAriaSuffix}`
+          }
           onMouseDown={isMultiSelectEnabled ? suppressShiftClickTextSelection : undefined}
           onClick={handleCardClick}
           onDoubleClick={handleDoubleClick}
@@ -1300,10 +1343,12 @@ export function WorktreeCard({
             </span>
           )}
 
-          {/* Sidebar only. This is a real keyboard target there: it is
-              tabbable, sidebar.css paints its focus ring via
-              `.sidebar-worktree-card:has(> button:focus-visible)`, and
-              Enter/Space produce a click that bubbles to `handleCardClick`.
+          {/* Sidebar only. It is the row's keyboard identity there, but not a
+              tab stop: the grid is one tab stop and points at this button with
+              `aria-activedescendant` (it carries the row's id), so a screen
+              reader hears the button's name and the marks that describe it as
+              the arrow keys move. A mouse click focuses it and lands in
+              `handleCardClick`.
 
               In the grid it was none of those things. It sat at `z-0` beneath
               the `relative z-10` content column, so no pointer could ever
@@ -1317,18 +1362,25 @@ export function WorktreeCard({
             <button
               type="button"
               ref={selectButtonRef}
+              id={getWorktreeSidebarRowId(worktree.id)}
+              tabIndex={-1}
               data-card-select-overlay=""
+              // row-select-target: the contrast modes' exemption for a full-row
+              // select button, which would otherwise box every card.
               className={cn(
-                "absolute inset-0 z-0 outline-hidden",
+                "row-select-target absolute inset-0 z-0 outline-hidden",
                 (isDraggingSort || isWorktreeSortDragging) && "pointer-events-none"
               )}
-              aria-label={`Select worktree: ${ariaName}${labelAriaSuffix}`}
+              aria-label={`Select worktree: ${ariaName}${worktree.isCurrent ? " (current)" : ""}, ${ariaStatusLabel}${labelAriaSuffix}`}
+              aria-current={isActive ? "true" : undefined}
               // The row's marks are non-focusable, so this button is where a
               // keyboard user meets them: described by each mark's words, and,
               // collapsed, revealing the alarm's tooltip while ringed.
               aria-describedby={selectButtonDescribedBy(worktree.id, {
                 lifecycle: chipState !== null,
-                alarm: !!effectiveIsCollapsed,
+                // The title row draws the alarm in both modes on the sidebar.
+                alarm: true,
+                attention: true,
                 devServer: !!devServerSession && isLiveDevServerStatus(devServerSession.status),
                 external: isExternal,
               })}
@@ -1408,7 +1460,10 @@ export function WorktreeCard({
                     <div
                       ref={dragHandleActivatorRef}
                       data-worktree-row-drag-handle=""
-                      className="shrink-0 w-4 flex items-center justify-center cursor-not-allowed opacity-50 touch-none select-none transition-colors motion-reduce:transition-none"
+                      // Dimmed to the unavailable level, but only where the
+                      // gesture would be tried: at rest during a search it ran a
+                      // column of dead grips down every card.
+                      className="shrink-0 w-4 flex items-center justify-center cursor-not-allowed opacity-0 group-hover/card:opacity-50 touch-none select-none transition-[color,opacity] motion-reduce:transition-none"
                       aria-hidden="true"
                     >
                       <GripVertical className="w-3 h-3" />
@@ -1495,10 +1550,16 @@ export function WorktreeCard({
                 "pe-4"
               )}
             >
-              {/* Expanded, pt-2 only: the body below supplies the gap to the
-                  next row. Both spending 8px put 16px between the branch line
-                  and the commit row, which read as a break in the middle of one
-                  cluster rather than as the space between two.
+              {/* Expanded, top padding only: the body below supplies the gap
+                  to the next row. Both spending 8px put 16px between the branch
+                  line and the commit row, which read as a break in the middle of
+                  one cluster rather than as the space between two.
+
+                  The sidebar's 12px (here and as the body's bottom padding) is
+                  the card's outer edge, and it has to be the largest gap on the
+                  card: 4px inside the identity rows, 8px before the activity
+                  row, 12px to the divider. At 8px the edge was barely wider than
+                  the gaps inside, so the divider alone said where a card ended.
 
                   Collapsed, there is no body below, so nothing supplies the
                   bottom gap and this padding is the card's whole vertical
@@ -1530,27 +1591,42 @@ export function WorktreeCard({
                   appears when the pointer arrives shifts the header sideways
                   under the cursor. */}
               <div
-                className={cn(effectiveIsCollapsed ? "py-1" : "pt-2", variant === "grid" && "pr-5")}
+                className={cn(
+                  effectiveIsCollapsed
+                    ? "py-1"
+                    : variant !== "sidebar"
+                      ? "pt-2"
+                      : isCompactCard
+                        ? "pt-3"
+                        : "pt-3.5",
+                  variant === "grid" && "pr-5"
+                )}
               >
                 <WorktreeHeader
                   worktree={worktree}
                   isActive={isActive}
                   variant={variant}
+                  density={cardDensity}
                   isMuted={isMuted}
                   isProjectNotificationsMuted={isProjectNotificationsMuted}
                   isMainWorktree={isMainWorktree}
                   isMainOnStandardBranch={isMainOnStandardBranch}
                   isPinned={isPinned}
                   isCollapsed={effectiveIsCollapsed}
-                  isKeyboardFocused={isSelectFocusVisible}
+                  // The grid's cursor reveals a row's marks the way Tab focus
+                  // on its select button used to, now that arrows move a
+                  // virtual cursor and the button is not a tab stop.
+                  isKeyboardFocused={isSelectFocusVisible || isKeyboardCursor}
                   canCollapse={canCollapse}
                   onToggleCollapse={handleToggleCollapse}
                   contentId={`worktree-body-${worktree.id}`}
                   branchLabel={branchLabel}
                   customTitle={customTitle}
+                  worktreeLabel={ariaName}
                   sessionStates={terminalCounts.byState}
                   sessionTotal={terminalCounts.total}
                   sessionUnread={terminalCounts.unread}
+                  sessionBlocked={terminalCounts.blocked}
                   environmentIcon={environmentIcon}
                   isLifecycleRunning={isLifecycleRunning}
                   resourceStatusLabel={resourceStatusLabel}
@@ -1578,6 +1654,9 @@ export function WorktreeCard({
                     onOpenPlan: openPlanFileForThisWorktree,
                   }}
                   gitStateIndicator={gitStateIndicator}
+                  lifecycleAlarm={lifecycleAlarm}
+                  gitStateShownInBody={gitStateShownInBody}
+                  lifecycleAlarmShownInBody={lifecycleAlarmShownInBody}
                   quietGit={quietGit}
                   menu={menuActions}
                 />
@@ -1590,15 +1669,33 @@ export function WorktreeCard({
                 />
               </div>
 
-              {/* pt-2, not pt-1. With the collapsed Details row's own 4px that
-                  puts 12px between the metadata cluster and the body, against
-                  2px between the metadata lines themselves — a 6:1 outer-to-
-                  inner ratio where the convention is 2:1 to 3:1, and 8-12px is
-                  where an 11px line stops reading as part of the block above
-                  it. At 4px the cluster was crowded against the body and the
-                  whole card read as one undifferentiated mass. */}
+              {/* Compact pt-1: with the Details row's own 4px that is 8px
+                  between the identity rows and the activity row, twice the 4px
+                  between the identity rows themselves, so the card reads as two
+                  groups rather than three equal lines. Comfortable keeps the
+                  same ratio at its own scale: 12px against its 4px line gap,
+                  and 14px at the card's edges so the edge stays the largest
+                  gap on the card. The grid's pt-2 does the same job against
+                  its taller metadata stack. */}
               {!effectiveIsCollapsed && (
-                <div id={`worktree-body-${worktree.id}`} className="pb-2.5 pt-2">
+                <div
+                  id={`worktree-body-${worktree.id}`}
+                  className={cn(
+                    variant !== "sidebar"
+                      ? "pb-2.5 pt-2"
+                      : isCompactCard
+                        ? "pb-3 pt-1"
+                        : "pb-3.5 pt-2",
+                    // The pinned main card never scrolls with the list, so an
+                    // opened Details or Sessions could take the whole sidebar
+                    // and leave the list no room. It scrolls inside itself
+                    // past half the window instead.
+                    variant === "sidebar" &&
+                      isMainWorktree &&
+                      (isExpanded || isTerminalsExpanded) &&
+                      "max-h-[50vh] overflow-y-auto overscroll-contain"
+                  )}
+                >
                   {worktree.isWslPath && !worktree.wslGitOptIn && !worktree.wslGitDismissed && (
                     <WslGitBanner
                       worktreeId={worktree.id}
@@ -1606,81 +1703,132 @@ export function WorktreeCard({
                       wslGitEligible={worktree.wslGitEligible}
                     />
                   )}
-                  <WorktreeDetailsSection
-                    variant={variant}
-                    worktree={worktree}
-                    homeDir={homeDir}
-                    isExpanded={isExpanded}
-                    hasChanges={hasChanges}
-                    computedSubtitle={computedSubtitle}
-                    reviewState={reviewState}
-                    effectiveNote={effectiveNote}
-                    effectiveSummary={effectiveSummary}
-                    worktreeErrors={worktreeErrors}
-                    isFocused={isFocused}
-                    isStale={isStaleCard}
-                    onToggleExpand={handleToggleExpand}
-                    onPathClick={openFileBrowserForThisWorktree}
-                    onDismissError={dismissError}
-                    onRetryError={handleErrorRetry}
-                    onOpenReviewHub={openReviewHubForThisWorktree}
-                    quietGitDetail={
-                      quietGit ? (
-                        <QuietGitDetails
-                          worktree={worktree}
-                          branchLabel={branchLabel}
-                          isActive={isActive}
-                          onOpenIssue={worktree.issueNumber ? handleOpenIssueExternal : undefined}
-                          onOpenPR={worktree.linked?.pr ? handleOpenPRExternal : undefined}
-                        />
-                      ) : undefined
-                    }
-                    isLifecycleRunning={isLifecycleRunning}
-                    lifecycleLabel={lifecycleLabel}
-                    isBeingDeleted={isBeingDeleted}
-                    deleteError={deleteError}
-                    hasResourceConfig={hasResourceConfig}
-                    resourceStatus={worktree.resourceStatus?.lastStatus}
-                    onResourceResume={hasResumeCommand ? handleResourceResume : undefined}
-                    onResourcePause={hasPauseCommand ? handleResourcePause : undefined}
-                    onResourceConnect={
-                      worktree.resourceConnectCommand ? handleResourceConnect : undefined
-                    }
-                    onResourceProvision={hasProvisionCommand ? handleResourceProvision : undefined}
-                    onResourceTeardown={hasTeardownCommand ? handleResourceTeardown : undefined}
-                    onResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
-                  />
+                  {/* Stacked below 20rem, where one row cannot hold a summary,
+                      a time and the sessions trigger without losing the words. */}
+                  <div
+                    className={cn(
+                      (isSessionsFooterInline || reservesSessionsSlot) &&
+                        "flex flex-col @xs/card:flex-row @xs/card:flex-wrap @xs/card:items-center @xs/card:gap-x-1"
+                    )}
+                  >
+                    <div
+                      className={cn(
+                        (isSessionsFooterInline || reservesSessionsSlot) && "min-w-0 flex-1"
+                      )}
+                    >
+                      <WorktreeDetailsSection
+                        variant={variant}
+                        worktree={worktree}
+                        homeDir={homeDir}
+                        isExpanded={isExpanded}
+                        hasChanges={hasChanges}
+                        computedSubtitle={computedSubtitle}
+                        reviewState={reviewState}
+                        effectiveNote={effectiveNote}
+                        effectiveSummary={effectiveSummary}
+                        worktreeErrors={worktreeErrors}
+                        isFocused={isFocused}
+                        isStale={isStaleCard}
+                        worktreeLabel={ariaName}
+                        onToggleExpand={handleToggleExpand}
+                        onPathClick={openFileBrowserForThisWorktree}
+                        onDismissError={dismissError}
+                        onRetryError={handleErrorRetry}
+                        onOpenReviewHub={openReviewHubForThisWorktree}
+                        quietGitDetail={
+                          quietGit ? (
+                            <QuietGitDetails
+                              worktree={worktree}
+                              branchLabel={branchLabel}
+                              isActive={isActive}
+                              worktreeLabel={ariaName}
+                              onOpenIssue={
+                                worktree.issueNumber ? handleOpenIssueExternal : undefined
+                              }
+                              onOpenPR={worktree.linked?.pr ? handleOpenPRExternal : undefined}
+                            />
+                          ) : undefined
+                        }
+                        isLifecycleRunning={isLifecycleRunning}
+                        lifecycleLabel={lifecycleLabel}
+                        isBeingDeleted={isBeingDeleted}
+                        deleteError={deleteError}
+                        hasResourceConfig={hasResourceConfig}
+                        resourceStatus={worktree.resourceStatus?.lastStatus}
+                        onResourceResume={hasResumeCommand ? handleResourceResume : undefined}
+                        onResourcePause={hasPauseCommand ? handleResourcePause : undefined}
+                        onResourceConnect={
+                          worktree.resourceConnectCommand ? handleResourceConnect : undefined
+                        }
+                        onResourceProvision={
+                          hasProvisionCommand ? handleResourceProvision : undefined
+                        }
+                        onResourceTeardown={hasTeardownCommand ? handleResourceTeardown : undefined}
+                        onResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
+                        syncDetail={
+                          variant === "sidebar" &&
+                          !quietGit &&
+                          !isMainWorktree &&
+                          (isCompactCard || !syncLineHasNews(worktree)) ? (
+                            <QuietGitDetails
+                              worktree={worktree}
+                              branchLabel={branchLabel}
+                              isActive={isActive}
+                              syncOnly
+                            />
+                          ) : undefined
+                        }
+                      />
+                    </div>
 
-                  <WorktreeTerminalSection
-                    variant={variant}
-                    worktreeId={worktree.id}
-                    onStartSession={() => handleOpenPanelPalette("user")}
-                    isExpanded={isTerminalsExpanded}
-                    counts={terminalCounts}
-                    terminals={worktreeTerminals}
-                    onToggle={handleToggleTerminals}
-                    onTerminalSelect={handleTerminalSelect}
-                  />
+                    <WorktreeTerminalSection
+                      variant={variant}
+                      worktreeId={worktree.id}
+                      worktreeLabel={ariaName}
+                      onStartSession={() => handleOpenPanelPalette("user")}
+                      isExpanded={isTerminalsExpanded}
+                      inline={isSessionsFooterInline}
+                      stateGlyphsElsewhere={variant === "sidebar"}
+                      counts={terminalCounts}
+                      terminals={worktreeTerminals}
+                      onToggle={handleToggleTerminals}
+                      onTerminalSelect={handleTerminalSelect}
+                    />
+                    {reservesSessionsSlot && (
+                      <div
+                        aria-hidden="true"
+                        className="hidden w-[3.625rem] shrink-0 @xs/card:block"
+                      />
+                    )}
+                  </div>
                 </div>
               )}
             </div>
           </div>
 
-          {deleteError && (
-            <WorktreeDeleteErrorBanner
-              message={deleteError}
-              onRetry={handleRetryDelete}
-              onDismiss={handleDismissDeleteError}
-            />
-          )}
+          {(deleteError || issueError) && (
+            // Inside the card's own gutter, so a failure reads as belonging to
+            // the card above it rather than as a band between two cards. A
+            // control region: its message is there to be read and copied, and
+            // pressing in it is never a request to switch worktrees.
+            <div data-card-control="" className={cn(variant === "sidebar" && "px-3 pb-2.5")}>
+              {deleteError && (
+                <WorktreeDeleteErrorBanner
+                  message={deleteError}
+                  onRetry={handleRetryDelete}
+                  onDismiss={handleDismissDeleteError}
+                />
+              )}
 
-          {issueError && (
-            <WorktreeIssueErrorBanner
-              message={issueError.message}
-              mutationType={issueError.type}
-              onRetry={handleRetryIssue}
-              onDismiss={handleDismissIssueError}
-            />
+              {issueError && (
+                <WorktreeIssueErrorBanner
+                  message={issueError.message}
+                  mutationType={issueError.type}
+                  onRetry={handleRetryIssue}
+                  onDismiss={handleDismissIssueError}
+                />
+              )}
+            </div>
           )}
 
           <WorktreeDialogs
@@ -1706,6 +1854,11 @@ export function WorktreeCard({
           components={CONTEXT_COMPONENTS}
           isPinned={isPinned}
           {...menuActions}
+          viewSubmenu={
+            variant === "sidebar" ? (
+              <WorktreeDensitySubmenu key="view" iconClassName="mr-2 h-3.5 w-3.5 shrink-0" />
+            ) : undefined
+          }
         />
       </ContextMenuContent>
     </ContextMenu>

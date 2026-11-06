@@ -29,13 +29,27 @@ export interface FleetFailureSnapshot {
    * the supervised run is superseded or dismissed (#10930).
    */
   disarmedCount: number;
+  /** The composer's image chips the broadcast carried, attached again on retry. */
+  imagePaths: readonly string[];
+  /**
+   * The failed targets' own text where it differed from `payload`, so a retry
+   * sends each what it was sent, not an image or a token its edit took out.
+   */
+  perTargetOverrides: Readonly<Record<string, string>>;
+}
+
+/** What a replayable failure carries beside its payload. */
+export interface FleetFailureReplay {
+  imagePaths?: readonly string[];
+  perTargetOverrides?: Readonly<Record<string, string>>;
 }
 
 interface FleetFailureState extends FleetFailureSnapshot {
   recordFailure: (
     payload: string | null,
     failedIds: Iterable<string>,
-    disarmedCount?: number
+    disarmedCount?: number,
+    replay?: FleetFailureReplay
   ) => void;
   /** Drop a single pane from the failure set (e.g. when retry succeeds). */
   dismissId: (id: string) => void;
@@ -44,30 +58,47 @@ interface FleetFailureState extends FleetFailureSnapshot {
 }
 
 const EMPTY_SET: Set<string> = new Set();
-
-export const useFleetFailureStore = create<FleetFailureState>((set) => ({
+const NO_IMAGES: readonly string[] = [];
+const NO_OVERRIDES: Readonly<Record<string, string>> = {};
+const EMPTY_FAILURE: FleetFailureSnapshot = {
   failedIds: EMPTY_SET,
   payload: null,
   disarmedCount: 0,
-  recordFailure: (payload, failedIds, disarmedCount = 0) => {
+  imagePaths: NO_IMAGES,
+  perTargetOverrides: NO_OVERRIDES,
+};
+
+export const useFleetFailureStore = create<FleetFailureState>((set) => ({
+  ...EMPTY_FAILURE,
+  recordFailure: (payload, failedIds, disarmedCount = 0, replay) => {
     const ids = new Set(failedIds);
     if (ids.size === 0) {
-      set({ failedIds: EMPTY_SET, payload: null, disarmedCount: 0 });
+      set(EMPTY_FAILURE);
       return;
     }
-    set({ failedIds: ids, payload, disarmedCount });
+    const overrides: Record<string, string> = {};
+    for (const [id, text] of Object.entries(replay?.perTargetOverrides ?? {})) {
+      if (ids.has(id)) overrides[id] = text;
+    }
+    set({
+      failedIds: ids,
+      payload,
+      disarmedCount,
+      imagePaths: replay?.imagePaths?.length ? [...replay.imagePaths] : NO_IMAGES,
+      perTargetOverrides: Object.keys(overrides).length > 0 ? overrides : NO_OVERRIDES,
+    });
   },
   dismissId: (id) =>
     set((s) => {
       if (!s.failedIds.has(id)) return {};
       const next = new Set(s.failedIds);
       next.delete(id);
-      if (next.size === 0) {
-        return { failedIds: EMPTY_SET, payload: null, disarmedCount: 0 };
-      }
-      return { failedIds: next };
+      if (next.size === 0) return EMPTY_FAILURE;
+      if (!Object.hasOwn(s.perTargetOverrides, id)) return { failedIds: next };
+      const { [id]: _dismissed, ...overrides } = s.perTargetOverrides;
+      return { failedIds: next, perTargetOverrides: overrides };
     }),
-  clear: () => set({ failedIds: EMPTY_SET, payload: null, disarmedCount: 0 }),
+  clear: () => set(EMPTY_FAILURE),
 }));
 
 /**

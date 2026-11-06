@@ -5,7 +5,7 @@ import {
   _resetHostStartedTerminalsForTesting,
   hostStartedTerminals,
 } from "../hostStartedTerminals.js";
-import { forgetViewlessTerminal } from "../projectStateAuthoring.js";
+import { backgroundViewlessTerminal, forgetViewlessTerminal } from "../projectStateAuthoring.js";
 
 const startedIds = (projectId: string) => hostStartedTerminals(projectId).map((t) => t.id);
 
@@ -103,5 +103,104 @@ describe("recordViewlessTerminal", () => {
 
     expect(read()).toBe(saved);
     expect(writes()).toBe(0);
+  });
+});
+
+describe("backgroundViewlessTerminal (#15982)", () => {
+  afterEach(() => _resetHostStartedTerminalsForTesting());
+
+  it("parks a grid or dock panel in the background, coming back where it was", async () => {
+    const saved: ProjectState = {
+      projectId: "proj-1",
+      sidebarWidth: 280,
+      terminals: [
+        { id: "t-0", kind: "terminal", title: "Shell", location: "grid" },
+        { ...SNAPSHOT, location: "dock" },
+      ],
+      tabGroups: [
+        { id: "g-1", location: "dock", activeTabId: "t-1", panelIds: ["t-1", "t-2"] },
+        { id: "g-2", location: "grid", activeTabId: "t-1", panelIds: ["t-1"] },
+      ],
+      terminalLayout: { focusedTerminalId: "t-1", maximizedTerminalId: "t-0" },
+      draftInputs: { "t-1": "half typed" },
+    };
+    const { writer, read } = writerOver(saved);
+    await recordViewlessTerminal(writer, "proj-1", SNAPSHOT);
+
+    await backgroundViewlessTerminal(writer, "proj-1", "t-1");
+
+    expect(read()).toEqual({
+      ...saved,
+      terminals: [
+        saved.terminals[0],
+        { ...SNAPSHOT, location: "background", backgroundRestoreLocation: "dock" },
+      ],
+      tabGroups: [{ id: "g-1", location: "dock", activeTabId: "t-2", panelIds: ["t-2"] }],
+      terminalLayout: { maximizedTerminalId: "t-0" },
+    });
+    expect(hostStartedTerminals("proj-1")).toEqual([
+      { id: "t-1", location: "background", heldBy: new Set() },
+    ]);
+  });
+
+  it("parks a grid panel to come back to the grid", async () => {
+    const saved: ProjectState = {
+      projectId: "proj-1",
+      sidebarWidth: 280,
+      terminals: [SNAPSHOT],
+    };
+    const { writer, read } = writerOver(saved);
+
+    await backgroundViewlessTerminal(writer, "proj-1", "t-1");
+
+    expect(read()?.terminals).toEqual([
+      { ...SNAPSHOT, location: "background", backgroundRestoreLocation: "grid" },
+    ]);
+  });
+
+  it("leaves a panel already parked, trashed or never saved alone", async () => {
+    for (const location of ["background", "trash"] as const) {
+      const saved: ProjectState = {
+        projectId: "proj-1",
+        sidebarWidth: 280,
+        terminals: [{ ...SNAPSHOT, location }],
+      };
+      const { writer, read, writes } = writerOver(saved);
+      await backgroundViewlessTerminal(writer, "proj-1", "t-1");
+      expect(read()).toBe(saved);
+      expect(writes()).toBe(0);
+    }
+    const { writer, writes } = writerOver(null);
+    await backgroundViewlessTerminal(writer, "proj-1", "t-1");
+    expect(writes()).toBe(0);
+  });
+
+  it("writes nothing when its caller no longer wants it by the time the queued write runs (#16171)", async () => {
+    const saved: ProjectState = { projectId: "proj-1", sidebarWidth: 280, terminals: [SNAPSHOT] };
+    let wanted = true;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let state: ProjectState | null = saved;
+    const writer: ProjectStateWriter = {
+      // Another project write is ahead in the queue.
+      enqueueProjectStateUpdate: async (_projectId, updater) => {
+        await gate;
+        const next = await updater(state);
+        if (next !== null) state = next;
+      },
+    };
+
+    await recordViewlessTerminal(writerOver(saved).writer, "proj-1", SNAPSHOT);
+    const recorded = structuredClone(hostStartedTerminals("proj-1"));
+
+    const backgrounding = backgroundViewlessTerminal(writer, "proj-1", "t-1", () => wanted);
+    const forgetting = forgetViewlessTerminal(writer, "proj-1", "t-1", () => wanted);
+    wanted = false;
+    release();
+    await Promise.all([backgrounding, forgetting]);
+
+    expect(state).toBe(saved);
+    expect(hostStartedTerminals("proj-1")).toEqual(recorded);
+    expect(startedIds("proj-1")).toEqual(["t-1"]);
   });
 });

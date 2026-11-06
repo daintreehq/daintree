@@ -123,6 +123,41 @@ describe("getActiveCompletionContext", () => {
     expect(ctx?.query).toBe("com");
   });
 
+  describe("a token typed against a word (#15872)", () => {
+    const WITH_HASH: ReadonlySet<ComposerTrigger> = new Set(["/", "$", "@", "#"]);
+
+    it.each([
+      ["/gith", "/githI found an issue"],
+      ["@src", "@srcnotes here"],
+      ["#148", "see #148that bug"],
+      ["$plug", "$plugwords"],
+    ])("ends %j where the word it was typed against starts", (typed, text) => {
+      const start = text.indexOf(typed);
+      const caret = start + typed.length;
+      const ctx = getActiveCompletionContext(text, caret, WITH_HASH, caret);
+      expect(ctx).toMatchObject({ start, tokenEnd: caret, query: typed.slice(1) });
+    });
+
+    it("ends at the word while the caret sits further back in what was typed", () => {
+      const text = "/githI found";
+      expect(getActiveCompletionContext(text, 3, ALL, 5)).toMatchObject({
+        tokenEnd: 5,
+        query: "gi",
+      });
+    });
+
+    it("runs to the whitespace for a boundary it can't use", () => {
+      const text = "/help /compact now";
+      const caret = "/help /com".length;
+      // Behind the caret: the caret is in the word, so the word is the query.
+      expect(getActiveCompletionContext(text, caret, ALL, caret - 1)?.tokenEnd).toBe(14);
+      // At or past the token's end, or absent.
+      expect(getActiveCompletionContext(text, caret, ALL, 14)?.tokenEnd).toBe(14);
+      expect(getActiveCompletionContext(text, caret, ALL, 16)?.tokenEnd).toBe(14);
+      expect(getActiveCompletionContext(text, caret, ALL)?.tokenEnd).toBe(14);
+    });
+  });
+
   it("activates for a bare trigger", () => {
     expect(getActiveCompletionContext("/", 1, ALL)).toMatchObject({ triggerChar: "/", query: "" });
     expect(getActiveCompletionContext("echo @", 6, ALL)).toMatchObject({

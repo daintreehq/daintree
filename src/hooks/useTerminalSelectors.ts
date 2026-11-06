@@ -5,15 +5,15 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import type { WorktreeSnapshot } from "@shared/types";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 import { getNarrowPanels } from "@/store/slices/panelRegistry/selectors";
+import { panelMatchesWorktreeScope } from "@/store/slices/panelRegistry/worktreeIndex";
 import { isTerminalOrphaned, isTerminalVisible } from "@/lib/terminalVisibility";
 import { isTerminalErrorClusterEligible } from "@/store/fleetEligibility";
-import { isAskingWait } from "@/lib/handBackPresentation";
-import { useHandBackRunIds } from "@/hooks/useRunHandBackState";
-import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import { isNeedsYouPane } from "@/lib/paneSessionPresentation";
+import { useFleetBandRunIds } from "@/hooks/useRunFleetBand";
 import {
   ATTENTION_FILTER_BANDS,
   DEMAND_BANDS,
-  fleetBandRunKey,
+  NEEDS_YOU_BANDS,
   UNREAD_FILTER_BANDS,
   type FleetBand,
 } from "@/lib/fleetAttention";
@@ -62,9 +62,10 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
   waitingCount: number;
 } {
   const worktreeIds = useWorktreeIds();
-  // A hand-back is not asking for anything, so it never reaches the title's
-  // `(N)` or the Dock badge — the same call every other waiting count makes.
-  const handBackIds = useHandBackRunIds();
+  // Only a run in Needs you reaches the title's `(N)` or the Dock badge — the
+  // same call every other waiting count makes. A prompt that asks nothing and
+  // a hand-back don't.
+  const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
 
   return usePanelStore(
     useShallow((state) => {
@@ -78,7 +79,7 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
         if (!isPtyPanel(panel)) continue;
         if (!isTerminalVisible(panel, state.isInTrash, worktreeIds)) continue;
 
-        if (!isAskingWait(handBackIds, panel)) continue;
+        if (!isNeedsYouPane(needsYouRunIds, panel)) continue;
 
         if (blurTime !== undefined) {
           if (panel.lastStateChange == null) continue;
@@ -93,14 +94,7 @@ export function useTerminalNotificationCounts(blurTime?: number | null): {
   );
 }
 
-const EMPTY_RUN_IDS: ReadonlySet<string> = new Set();
 const EMPTY_TERMINALS: PtyPanelData[] = [];
-
-/** Runs the fleet places in `bands`. Stable across fleet pushes that leave the set alone. */
-function useFleetBandRunIds(bands: ReadonlySet<FleetBand>): ReadonlySet<string> {
-  const key = useFleetSnapshotStore((s) => fleetBandRunKey(s.snapshot, bands));
-  return useMemo(() => (key === "" ? EMPTY_RUN_IDS : new Set(key.split("\n"))), [key]);
-}
 
 /**
  * Visible terminals whose fleet run sits in `bands`, so the dock's pills hold
@@ -128,8 +122,8 @@ function useFleetBandTerminals(bands: ReadonlySet<FleetBand>): PtyPanelData[] {
 
 /**
  * Agents asking for something: the sidebar's Attention bucket. A hand-back is
- * not one of them unless Canopy read an ask in it, and a parked or snoozed
- * agent has been shelved by the user.
+ * not one of them unless its agent said it needs the user or Canopy read an
+ * ask in it, and a parked or snoozed agent has been shelved by the user.
  */
 export function useWaitingTerminals(): PtyPanelData[] {
   return useFleetBandTerminals(ATTENTION_FILTER_BANDS);
@@ -220,11 +214,19 @@ const EMPTY_BACKGROUND_PANEL_STATS = Object.freeze({
 });
 
 /**
- * Get background panel stats for Zen Mode header display.
- * Returns count of active (grid) panels excluding the current one, and how many are
- * working (churning) vs waiting (blocked on the user) — the latter is otherwise
- * invisible while a single panel is maximized, since the other grid panels unmount.
- * @param excludeId - The ID of the current panel to exclude from counts
+ * What the Zen Mode header says about the panes a maximized one is hiding.
+ *
+ * `activeCount` counts what the grid would show around it: the other cells of
+ * the same worktree's grid, a tab group being one cell however many tabs it
+ * holds. Counted any other way the number could not be reconciled with the
+ * layout the user just left (seven tabs read as seven panes, another
+ * worktree's panes as this one's). The pane's own tab group is left out of
+ * everything, since its tabs stay on screen in the maximized header.
+ *
+ * `workingCount` and `waitingCount` count agents in those cells, background
+ * tabs included: an agent in a tab nobody can see is exactly the one the
+ * readout is for.
+ * @param excludeId - The maximized panel
  * @param enabled - When false (panel not maximized), skips the per-write panel scan
  */
 export function useBackgroundPanelStats(
@@ -235,23 +237,33 @@ export function useBackgroundPanelStats(
   workingCount: number;
   waitingCount: number;
 } {
-  const handBackIds = useHandBackRunIds();
+  const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
   return usePanelStore(
     useShallow((state) => {
       if (!enabled) return EMPTY_BACKGROUND_PANEL_STATS;
-      let active = 0;
+      const groupOf = new Map<string, string>();
+      for (const [groupId, group] of state.tabGroups ?? []) {
+        if (group.location !== "grid") continue;
+        for (const id of group.panelIds) groupOf.set(id, groupId);
+      }
+      const scope = state.panelsById[excludeId]?.worktreeId;
+      const ownGroup = groupOf.get(excludeId);
+      const cells = new Set<string>();
       let working = 0;
       let waiting = 0;
       for (const panel of getNarrowPanels(state.panelsById, state.panelIds)) {
-        if (panel.id !== excludeId && (panel.location === "grid" || panel.location === undefined)) {
-          active++;
-          if (isPtyPanel(panel)) {
-            if (panel.agentState === "working") working++;
-            else if (isAskingWait(handBackIds, panel)) waiting++;
-          }
+        if (panel.id === excludeId) continue;
+        if (panel.location !== "grid" && panel.location !== undefined) continue;
+        if (!panelMatchesWorktreeScope(panel.worktreeId, scope, "grid")) continue;
+        const groupId = groupOf.get(panel.id);
+        if (groupId !== undefined && groupId === ownGroup) continue;
+        cells.add(groupId ?? panel.id);
+        if (isPtyPanel(panel)) {
+          if (panel.agentState === "working") working++;
+          else if (isNeedsYouPane(needsYouRunIds, panel)) waiting++;
         }
       }
-      return { activeCount: active, workingCount: working, waitingCount: waiting };
+      return { activeCount: cells.size, workingCount: working, waitingCount: waiting };
     })
   );
 }

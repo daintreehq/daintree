@@ -8,6 +8,7 @@ import type { IdentityWatcher } from "./IdentityWatcher.js";
 import type { SemanticBufferManager } from "./SemanticBufferManager.js";
 import { handleOscColorQueries } from "./OscResponder.js";
 import { getLiveAgentId } from "./terminalTitle.js";
+import { forwardsAgentOutput } from "./AgentOutputForwarder.js";
 
 export interface PtyDataPipelineHost {
   readonly terminalInfo: TerminalInfo;
@@ -107,18 +108,21 @@ export class PtyDataPipeline {
     this.host.identityWatcher.observeOutput(data);
     this.host.semanticBufferManager.onData(data);
 
-    // Output mirror for agent consumers: keep a rolling recent-output
-    // buffer and emit agent:output whenever an agent is live (launched
-    // hint or detection). Plain terminals skip both to save work.
+    // Output mirror for agent consumers: keep a rolling recent-output buffer
+    // whenever an agent is live (launched hint or detection), and queue the
+    // chunk for Main's agent:output only when Main has a reader for it.
+    // Plain terminals skip both to save work.
     if (this.host.isAgentLive) {
       terminal.outputBuffer += data;
       if (terminal.outputBuffer.length > OUTPUT_BUFFER_SIZE) {
         terminal.outputBuffer = terminal.outputBuffer.slice(-OUTPUT_BUFFER_SIZE);
       }
 
-      const liveId = getLiveAgentId(terminal);
-      if (liveId) {
-        this.host.queueAgentOutput(liveId, data);
+      if (forwardsAgentOutput(terminal)) {
+        const liveId = getLiveAgentId(terminal);
+        if (liveId) {
+          this.host.queueAgentOutput(liveId, data);
+        }
       }
     }
   }

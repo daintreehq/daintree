@@ -179,24 +179,6 @@ export function selectContributionsForProject<T>(
   return forProject(items, pluginIdOf, projectId);
 }
 
-/** Plugin-owned panel kinds visible in a view of `projectId`. */
-export function getPluginPanelKindsForProject(projectId: string | null | undefined) {
-  return selectContributionsForProject(
-    getPluginPanelKinds(),
-    (config) => config.extensionId,
-    projectId
-  );
-}
-
-/** Plugin toolbar buttons visible in a view of `projectId`. */
-export function getPluginToolbarButtonsForProject(projectId: string | null | undefined) {
-  return selectContributionsForProject(
-    getAllPluginToolbarButtonConfigs(),
-    (config) => config.pluginId,
-    projectId
-  );
-}
-
 /** Plugin launch entries visible in a view of `projectId` (#13788). */
 export function getPluginLaunchEntriesForProject(projectId: string | null | undefined) {
   return selectContributionsForProject(
@@ -211,15 +193,6 @@ export function getPluginLayoutsForProject(projectId: string | null | undefined)
   return selectContributionsForProject(
     getAllPluginLayouts(),
     (layout) => layout.pluginId,
-    projectId
-  );
-}
-
-/** Plugin keybindings visible in a view of `projectId`. */
-export function getPluginKeybindingsForProject(projectId: string | null | undefined) {
-  return selectContributionsForProject(
-    getPluginKeybindings(),
-    (entry) => entry.pluginId,
     projectId
   );
 }
@@ -245,15 +218,6 @@ export function getPluginCustomIconsForProject(projectId: string | null | undefi
  */
 export function recipeOwner(recipe: TerminalRecipe): string | undefined {
   return recipe.origin?.pluginId;
-}
-
-/** Plugin context-menu items visible in a view of `projectId`. */
-export function getPluginContextMenuItemsForProject(projectId: string | null | undefined) {
-  return selectContributionsForProject(
-    getPluginContextMenuItems(),
-    (entry) => entry.pluginId,
-    projectId
-  );
 }
 
 interface PluginContributionBroadcasterDeps {

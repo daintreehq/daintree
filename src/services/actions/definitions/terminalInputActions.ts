@@ -15,14 +15,21 @@ import { planChoice } from "@shared/utils/terminalChoice";
 import {
   CHOOSE_SCREEN_LINES,
   keySequence,
+  screenChangedField,
   SEND_KEYS_GAP_MS,
   SEND_KEYS_SCREEN_LINES,
   SEND_KEYS_SETTLE_MS,
   SendKeysArgsSchema,
 } from "@shared/utils/terminalKeys";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
+import { isForegroundDispatch } from "./dispatchSource";
+import {
+  INPUT_LOCKED_INJECTION_REFUSAL,
+  isTerminalInputLocked,
+} from "@/services/contextInjectionGuard";
 import { assessTerminalInterrupt } from "@/utils/terminalInterrupt";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
+import { getTerminalInputBlock, getTerminalInputBlockMessage } from "@/services/terminal/inputGate";
 import { RunGenerationArgSchema } from "@shared/types/assistantControl";
 
 /**
@@ -58,8 +65,20 @@ const TerminalInterruptResultSchema = z.object({
   status: z
     .enum(["requested", "requested-unverified"])
     .describe(
-      "`requested`: keystrokes handed to an agent whose CLI names Escape as its interrupt. `requested-unverified`: that CLI names no interrupt key. Neither says the keystrokes arrived or the agent stopped; read the terminal's output."
+      "`requested`: keys sent to an agent whose CLI interrupts on Escape; `requested-unverified`: its CLI names none. Neither means they arrived or it stopped; read the terminal."
     ),
+});
+
+/**
+ * On an owned receipt admitted only because everything typed since the agent
+ * last settled was the caller's own keys (#16094), so a transcript shows why a
+ * terminal with input in it took more. Undescribed: the closed interrupt
+ * schema must advertise it, and its name and value say it on the wire.
+ */
+const InputSinceSettleSchema = z.literal("own-keys").optional();
+
+const OwnedTerminalInterruptResultSchema = TerminalInterruptResultSchema.extend({
+  inputSinceSettle: InputSinceSettleSchema,
 });
 
 const SEND_KEYS_DESCRIPTION =
@@ -72,6 +91,16 @@ const SendKeysResultSchema = z.object({
     .string()
     .optional()
     .describe("The terminal's last lines shortly after the keys, to check the dialog went."),
+  screenChanged: z
+    .boolean()
+    .optional()
+    .describe(
+      "Whether those lines differ from the same read just before the keys. Absent when either read failed. Not proof the CLI read them."
+    ),
+});
+
+const OwnedSendKeysResultSchema = SendKeysResultSchema.extend({
+  inputSinceSettle: InputSinceSettleSchema,
 });
 
 export function registerTerminalInputActions(
@@ -105,6 +134,13 @@ export function registerTerminalInputActions(
       // *before* the active-worktree no-op so a missing target is never
       // silently swallowed.
       requireExplicitTerminalIdForAgentDispatch("terminal.inject", terminalId, ctx);
+      // The injection runs after this returns, so a caller that reads the
+      // result is told here. A person pressing the key gets the injection's
+      // own error surface instead, which the hook refuses through.
+      const target = terminalId ?? usePanelStore.getState().focusedId;
+      if (target && !isForegroundDispatch(ctx.dispatchSource) && isTerminalInputLocked(target)) {
+        throw new UnactionableTargetError(INPUT_LOCKED_INJECTION_REFUSAL);
+      }
       const activeWorktreeId = callbacks.getActiveWorktreeId();
       if (activeWorktreeId) {
         // `terminalId` is undefined for interactive dispatch → the hook falls
@@ -304,7 +340,7 @@ export function registerTerminalInputActions(
         ),
       generation: RunGenerationArgSchema,
     }),
-    resultSchema: TerminalInterruptResultSchema,
+    resultSchema: OwnedTerminalInterruptResultSchema,
     mcpOutputSchema: true,
     run: async () => {
       throw new Error(
@@ -358,24 +394,54 @@ export function registerTerminalInputActions(
       if (keys === undefined) {
         throw new UnactionableTargetError("Pass `choose` or `keys`. Nothing was pressed.");
       }
+      const readScreen = async (): Promise<string | null> => {
+        const snapshot = await readTailSnapshot(
+          (options) => window.electron.terminal.getSerializedState(terminalId, options),
+          SEND_KEYS_SCREEN_LINES
+        ).catch(() => null);
+        return snapshot === null
+          ? null
+          : tailCapturedOutput(snapshot.data, SEND_KEYS_SCREEN_LINES, true).content;
+      };
+      // Read the same window as after the keys, so the result can say whether
+      // they changed anything (#16209).
+      const before = await readScreen();
       // One write per key, spaced out: a TUI reading a burst as one chunk can
-      // take an arrow and an Enter as a single unknown sequence.
+      // take an arrow and an Enter as a single unknown sequence. A key written
+      // while terminal input is blocked never leaves the renderer, so it is
+      // refused rather than reported pressed.
+      const pressed: string[] = [];
       for (const [index, key] of keys.entries()) {
         if (index > 0) await new Promise((resolve) => setTimeout(resolve, SEND_KEYS_GAP_MS));
+        // The screen reads were async: a lock taken meanwhile still stops the keys.
+        const panelNow = usePanelStore.getState().panelsById[terminalId];
+        const locked =
+          (panelNow !== undefined && isPtyPanel(panelNow) && panelNow.isInputLocked) ||
+          peekTerminalService()?.get(terminalId)?.isInputLocked;
+        const blocked = getTerminalInputBlock();
+        if (locked || blocked) {
+          const why = blocked
+            ? `Terminal ${terminalId} takes no input right now (${getTerminalInputBlockMessage(blocked)}).`
+            : `Terminal ${terminalId} has its input locked.`;
+          throw new UnactionableTargetError(
+            pressed.length === 0
+              ? `${why} Nothing was pressed.`
+              : `${why} ${pressed.length} of ${keys.length} keys were sent (${pressed.join(", ")}); the rest weren't. Read the screen before pressing more, and never resend the whole sequence.`
+          );
+        }
         terminalClient.write(terminalId, keySequence(key));
+        pressed.push(key);
       }
       // A wrong key on a dialog (Quit instead of Continue) shows up here, a
       // call sooner than a separate read would find it.
       await new Promise((resolve) => setTimeout(resolve, SEND_KEYS_SETTLE_MS));
-      const snapshot = await readTailSnapshot(
-        (options) => window.electron.terminal.getSerializedState(terminalId, options),
-        SEND_KEYS_SCREEN_LINES
-      ).catch(() => null);
-      const screen =
-        snapshot === null
-          ? undefined
-          : tailCapturedOutput(snapshot.data, SEND_KEYS_SCREEN_LINES, true).content;
-      return { terminalId, keys, ...(screen ? { screen } : {}) };
+      const screen = await readScreen();
+      return {
+        terminalId,
+        keys,
+        ...(screen ? { screen } : {}),
+        ...screenChangedField(before, screen),
+      };
     },
   }));
 
@@ -394,7 +460,7 @@ export function registerTerminalInputActions(
     keywords: ["key", "press", "dialog", "trust", "select", "owned"],
     palette: { mode: "hidden" },
     argsSchema: SendKeysArgsSchema,
-    resultSchema: SendKeysResultSchema,
+    resultSchema: OwnedSendKeysResultSchema,
     run: async () => {
       throw new Error(
         "terminal.sendKeysOwned must be invoked through the MCP main-process path, not renderer dispatch."

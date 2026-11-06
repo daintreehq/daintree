@@ -264,7 +264,15 @@ function TimeField({
   // Why a whole typed time was refused. While the draft stays the field is
   // invalid; once leaving it put the committed time back, the line says the
   // time wasn't changed, so what is on screen is always what the form holds.
-  const [refusal, setRefusal] = useState<{ reason: string; reverted: boolean } | null>(null);
+  // A refusal belongs to the value it was made against, like a draft: a new
+  // value from outside makes its "wasn't changed" untrue.
+  const [refusal, setRefusalState] = useState<{
+    reason: string;
+    reverted: boolean;
+    source: number | null;
+  } | null>(null);
+  const setRefusal = (next: { reason: string; reverted: boolean } | null) =>
+    setRefusalState(next === null ? null : { ...next, source: value });
   const typedInvalid = refusal !== null && !refusal.reverted;
   const setTypedInvalid = (invalidNow: boolean) =>
     setRefusal(invalidNow ? { reason: boundsReason(), reverted: false } : null);
@@ -272,7 +280,11 @@ function TimeField({
   const typed = typedState;
   const setTyped = (next: { segment: SegmentKind; digits: string } | null) =>
     setTypedState(next === null ? null : { ...next, source: value });
-  if ((held !== null && held.source !== value) || (typed !== null && typed.source !== value)) {
+  if (
+    (held !== null && held.source !== value) ||
+    (typed !== null && typed.source !== value) ||
+    (refusal !== null && refusal.source !== value)
+  ) {
     setHeld(null);
     setTyped(null);
     setTypedInvalid(false);
@@ -367,6 +379,9 @@ function TimeField({
   };
 
   const typeDigit = (kind: SegmentKind, digit: string) => {
+    // A new edit has begun, so the line about the last one is over, even for a
+    // held leading digit that doesn't reach apply().
+    if (refusal?.reverted) setRefusal(null);
     const [lo, hi] = range(kind);
     const digits = typed?.segment === kind ? typed.digits + digit : digit;
     let number = Number(digits);
@@ -399,6 +414,11 @@ function TimeField({
     } else if (key === "ArrowUp" || key === "ArrowDown") {
       event.preventDefault();
       stepSegment(kind, key === "ArrowUp" ? 1 : -1);
+    } else if (key === "Home" || key === "End") {
+      // The spin button's bounds, as its aria-valuemin and aria-valuemax say.
+      event.preventDefault();
+      setTyped(null);
+      apply({ ...shown, [kind]: range(kind)[key === "Home" ? 0 : 1] });
     } else if (key === "ArrowLeft" || key === "ArrowRight") {
       const target = segments[index + (key === "ArrowRight" ? 1 : -1)];
       if (target) {
@@ -460,6 +480,23 @@ function TimeField({
           onBlur={(event) => {
             if (!isOpen && focusLeft(event, focusScope.id)) onBlur?.();
           }}
+          onPointerDown={(event) => {
+            // The segments are only as big as their digits, so a press anywhere
+            // else in the box goes to the one nearest it, as a native field does.
+            if (disabled || event.button !== 0) return;
+            const target = event.target as HTMLElement;
+            if (target.closest("[data-segment], button")) return;
+            const nearest = [
+              ...(boxRef.current?.querySelectorAll<HTMLElement>("[data-segment]") ?? []),
+            ].reduce<{ el: HTMLElement; distance: number } | null>((best, el) => {
+              const rect = el.getBoundingClientRect();
+              const distance = Math.abs(event.clientX - (rect.left + rect.width / 2));
+              return best === null || distance < best.distance ? { el, distance } : best;
+            }, null);
+            if (!nearest) return;
+            event.preventDefault();
+            nearest.el.focus();
+          }}
           className={cn(
             TIME_FIELD,
             TIME_FIELD_DENSITY[compact ? "compact" : "default"],
@@ -493,12 +530,23 @@ function TimeField({
               // time, an empty one that may not be cleared, or a whole one out
               // of range) puts the committed time back. The field's own list
               // is not leaving it: it is modal, and closing it hands focus back
-              // to the segment it opened from.
+              // to the segment it opened from. Either way the line says so, or
+              // the time on screen changes back with nothing to say why.
               if (!focusLeft(event, focusScope.id)) return;
+              // A held leading digit (the 0 of a 12-hour "09") never reached the
+              // draft, but leaving drops it all the same.
+              const heldBelowRange =
+                typed !== null && Number(typed.digits) < range(typed.segment)[0];
               setTyped(null);
-              if (draft === null) return;
+              if (draft === null) {
+                if (heldBelowRange) setRefusal({ reason: `Enter a whole ${noun}`, reverted: true });
+                return;
+              }
               setDraft(null);
-              setRefusal(typedInvalid ? { reason: boundsReason(), reverted: true } : null);
+              setRefusal({
+                reason: typedInvalid ? boundsReason() : `Enter a whole ${noun}`,
+                reverted: true,
+              });
             }}
             className="flex min-w-0 flex-1 items-center py-1"
           >

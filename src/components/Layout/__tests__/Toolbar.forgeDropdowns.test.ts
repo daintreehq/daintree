@@ -104,7 +104,7 @@ describe("Forge stats token error UX — issue #5024", () => {
     // content and made the token-repair click read as disabled.
     for (const ref of ["buttonRef={issuesButtonRef}", "buttonRef={prsButtonRef}"]) {
       const button = source.slice(source.indexOf(ref), source.indexOf(ref) + 2500);
-      expect(button).toMatch(/tone=\{isTokenError \? "unavailable"/);
+      expect(button).toMatch(/tone=\{\s*isTokenError(?: \|\| \w+ === null)?\s*\?\s*"unavailable"/);
       expect(button).not.toMatch(/opacity-\d/);
     }
   });

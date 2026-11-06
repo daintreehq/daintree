@@ -15,6 +15,8 @@ import { ProjectWorktreeCreateDialog } from "./ProjectWorktreeCreateDialog";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useFleetPickerPaletteStore } from "@/store/fleetPickerPaletteStore";
+import { useDecisionsAttentionStore } from "@/store/decisionsAttentionStore";
+import { useSchedulesViewStore } from "@/store/schedulesViewStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useRecipeDialogState } from "./useRecipeDialogState";
 
@@ -33,6 +35,16 @@ const LazyRecipeEditor = lazy(() =>
 );
 const LazyRecipeManager = lazy(() =>
   import("@/components/TerminalRecipe/RecipeManager").then((m) => ({ default: m.RecipeManager }))
+);
+const LazyScheduleEditorHost = lazy(() =>
+  import("@/components/Schedules/ScheduleEditorHost").then((m) => ({
+    default: m.ScheduleEditorHost,
+  }))
+);
+const LazyDecisionsAttentionDialog = lazy(() =>
+  import("@/components/Decisions/DecisionsAttentionDialog").then((m) => ({
+    default: m.DecisionsAttentionDialog,
+  }))
 );
 
 /**
@@ -143,6 +155,15 @@ function ProjectDialogHost() {
   // workspace must not bring the palette back with the next one.
   useEffect(() => () => useFleetPickerPaletteStore.getState().close(), []);
 
+  // Opened from Project settings → Schedules, but hosted here: Settings unmounts
+  // the tab on a scope change, and a draft must outlive that.
+  const hasScheduleEditor = useSchedulesViewStore((state) => state.editor !== null);
+  // The opening outlives the host in its store; the next workspace starts without one.
+  useEffect(() => () => useSchedulesViewStore.getState().clearEditor(), []);
+  const isDecisionsAttentionOpen = useDecisionsAttentionStore((state) => state.isOpen);
+  const closeDecisionsAttention = useDecisionsAttentionStore((state) => state.close);
+  const shouldMountDecisionsAttention = useKeepMounted(isDecisionsAttentionOpen);
+
   return (
     <>
       <ErrorBoundary
@@ -200,9 +221,7 @@ function ProjectDialogHost() {
               initialIssue={createDialog.initialIssue}
               initialPR={createDialog.initialPR}
               initialRecipeId={createDialog.initialRecipeId}
-              initialBranchInput={createDialog.initialBranchInput}
-              initialAgentId={createDialog.initialAgentId}
-              initialPrompt={createDialog.initialPrompt}
+              restoreDraft={createDialog.restoreDraft}
             />
           </Suspense>
         </ErrorBoundary>
@@ -241,6 +260,33 @@ function ProjectDialogHost() {
               selectedIssues={bulkCreateDialog.selectedIssues}
               selectedPRs={bulkCreateDialog.selectedPRs}
               onComplete={closeBulkCreateDialog}
+            />
+          </Suspense>
+        )}
+      </ErrorBoundary>
+
+      <ErrorBoundary
+        variant="component"
+        componentName="ScheduleEditorHost"
+        resetKeys={[Number(hasScheduleEditor)]}
+      >
+        {hasScheduleEditor && (
+          <Suspense fallback={null}>
+            <LazyScheduleEditorHost />
+          </Suspense>
+        )}
+      </ErrorBoundary>
+
+      <ErrorBoundary
+        variant="component"
+        componentName="DecisionsAttentionDialog"
+        resetKeys={[Number(isDecisionsAttentionOpen)]}
+      >
+        {shouldMountDecisionsAttention && (
+          <Suspense fallback={null}>
+            <LazyDecisionsAttentionDialog
+              isOpen={isDecisionsAttentionOpen}
+              onClose={closeDecisionsAttention}
             />
           </Suspense>
         )}

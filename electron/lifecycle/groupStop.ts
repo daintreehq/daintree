@@ -158,13 +158,6 @@ export function readProcessState(
   return signalled ? "signalled" : "running";
 }
 
-export function isProcessTerminating(
-  identity: ProcIdentity,
-  read: ReadProcFile = readProcFile
-): boolean {
-  return TERMINATING_STATES.has(readProcessState(identity, read));
-}
-
 // Chromium rewrites each child's command line into one space-separated title
 // (setproctitle), so the arguments are not NUL-separated by the time Main reads
 // them.

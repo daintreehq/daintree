@@ -89,6 +89,12 @@ function tsxScript(file: string, fixedArgs: string[] = [], env?: Record<string, 
   return (rest) => spawnNode(["--import", "tsx", scriptPath, ...fixedArgs, ...rest], env);
 }
 
+// Same as tsxScript, with `global.gc` exposed for retained-heap readings.
+function tsxScriptWithGc(file: string): Runner {
+  const scriptPath = path.join(perfDir, file);
+  return (rest) => spawnNode(["--expose-gc", "--import", "tsx", scriptPath, ...rest]);
+}
+
 function harness(mode: PerfMode): Runner {
   const scriptPath = path.join(perfDir, "run.ts");
   return (rest) =>
@@ -181,6 +187,18 @@ export const REGISTRY: Record<string, Command> = {
     kind: "mechanism",
     runner: tsxScript("foreground-terminal.ts"),
   },
+  "claude-subagent-lookup": {
+    summary:
+      "Filesystem calls and event-loop time per Claude subagents/ lookup against a ~700-project store (#15669)",
+    kind: "mechanism",
+    runner: tsxScript("claude-subagent-lookup.ts"),
+  },
+  "branch-name-availability": {
+    summary:
+      "Wall time, git spawns, git stdout bytes and longest stall per New Worktree branch-name check at 300/3k/20k refs (#15663)",
+    kind: "mechanism",
+    runner: tsxScriptWithGc("branch-name-availability.ts"),
+  },
   // Modes set iteration counts and which scenarios are eligible; each needs
   // `--scenario <ONE-ID>`. Nothing schedules these — there is no perf CI.
   smoke: {
@@ -233,6 +251,12 @@ export const REGISTRY: Record<string, Command> = {
       "Assert the committed baseline files are usable — shape, provenance, no degenerate references",
     kind: "diagnostic",
     runner: tsxScript("verify-baselines.ts"),
+  },
+  "model-catalog": {
+    summary:
+      "models.dev catalog load through AgentModelCatalogService: stale-day refresh, warm start, retained heap, resolved-output oracle",
+    kind: "mechanism",
+    runner: tsxScriptWithGc("model-catalog-bench.ts"),
   },
   "cold-start": {
     summary: "Manual cold-start sampler (needs a packaged binary under release/)",

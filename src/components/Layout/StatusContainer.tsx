@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { PanelBottom, PanelTopClose } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
@@ -10,7 +9,6 @@ import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { TerminalIcon } from "@/components/Terminal/TerminalIcon";
 import type { PtyPanelData } from "@shared/types/panel";
-import type { PanelLocation } from "@shared/types";
 import type { ComponentType } from "react";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { useWorktreeNames } from "@/hooks/useWorktrees";
@@ -27,11 +25,10 @@ import {
   useDockPopoverFocusHandoff,
 } from "./dockStatusPill";
 import { pluralize } from "@/lib/pluralize";
-
-function getLocationIcon(location: PanelLocation | undefined) {
-  if (location === "dock") return <PanelBottom className="w-3 h-3" />;
-  return <PanelTopClose className="w-3 h-3" />;
-}
+import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
+import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
+import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { isBuiltInAgentId } from "@shared/config/agentIds";
 
 export interface StatusContainerConfig {
   icon: ComponentType<{ className?: string }>;
@@ -71,6 +68,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
   const hereTerminals = terminals.filter(isHere);
   const elsewhereTerminals = terminals.filter((t) => !isHere(t));
   const hereCount = hereTerminals.length;
+  const worktreeCount = new Set(terminals.map((t) => t.worktreeId ?? null)).size;
   // Lagged count keeps the label stable while the pill fades out via the
   // .dock-status-pill exit transition instead of flashing "(0)".
   const displayCount = useExitLaggedCount(count);
@@ -130,6 +128,10 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
           <div className="flex flex-col">
             <div className={DOCK_POPOVER_HEADER_CLASS}>
               <span className="text-xs font-medium text-text-secondary">{config.headerLabel}</span>
+              <span className="text-3xs font-medium text-text-secondary tabular-nums">
+                {pluralize(terminals.length, "agent")}
+                {worktreeCount > 1 && ` across ${worktreeCount} worktrees`}
+              </span>
             </div>
 
             <DockPopoverList>
@@ -144,11 +146,12 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
                           ? worktreeNames.get(terminal.worktreeId)
                           : undefined;
                       return (
-                        <button
+                        <ErroredAgentRow
                           key={terminal.id}
-                          type="button"
-                          data-dock-row=""
-                          onClick={() => {
+                          terminal={terminal}
+                          worktreeName={worktreeName}
+                          fallbackLabel={config.statusAriaLabel}
+                          onActivate={() => {
                             const worktreeId = terminal.worktreeId?.trim();
                             if (worktreeId && worktreeId !== activeWorktreeId) {
                               trackTerminalFocus(worktreeId, terminal.id);
@@ -159,47 +162,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
                             focusHandoff.markHandoff();
                             setIsOpen(false);
                           }}
-                          className={cn(
-                            "flex items-center justify-between gap-2.5 w-full px-2.5 py-1.5 rounded-[var(--radius-sm)] group text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
-                            DOCK_POPOVER_ROW_HOVER_CLASS
-                          )}
-                        >
-                          <div className="flex items-center gap-2 min-w-0 flex-1">
-                            <div className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
-                              <TerminalIcon
-                                kind={terminal.kind}
-                                chrome={deriveTerminalChrome(terminal)}
-                                className="h-3 w-3"
-                              />
-                            </div>
-                            <span className="text-xs truncate font-medium text-text-secondary group-hover:text-text-primary transition-colors">
-                              {terminal.title}
-                            </span>
-                            {worktreeName && (
-                              <span className="truncate text-3xs text-text-secondary">
-                                {worktreeName}
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="flex items-center gap-2.5 shrink-0">
-                            <Icon
-                              className={cn("w-3 h-3", config.iconColor)}
-                              aria-label={config.statusAriaLabel}
-                            />
-
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <div className="text-text-secondary">
-                                  {getLocationIcon(terminal.location)}
-                                </div>
-                              </TooltipTrigger>
-                              <TooltipContent side="bottom">
-                                {terminal.location === "dock" ? "Docked" : "On Grid"}
-                              </TooltipContent>
-                            </Tooltip>
-                          </div>
-                        </button>
+                        />
                       );
                     })}
                   </DockPopoverSection>
@@ -210,5 +173,85 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
         </PopoverContent>
       </Popover>
     </span>
+  );
+}
+
+interface ErroredAgentRowProps {
+  terminal: PtyPanelData;
+  worktreeName: string | undefined;
+  fallbackLabel: string;
+  onActivate: () => void;
+}
+
+/**
+ * One errored agent, in the Waiting and Unread rows' anatomy: name, then where
+ * and what, then the exit and its age. A clipped context shows whole while the
+ * row is hovered or holds keyboard focus, as theirs does.
+ */
+function ErroredAgentRow({
+  terminal,
+  worktreeName,
+  fallbackLabel,
+  onActivate,
+}: ErroredAgentRowProps) {
+  const [revealClipped, setRevealClipped] = useState(false);
+  const title = terminal.title || "Terminal";
+  // The task it was on when it exited: the shared rules drop an exited agent's
+  // task as no longer current, but here "Exit 1" already says it is history.
+  const task = getTerminalTaskTitle({
+    ...terminal,
+    agentState: undefined,
+    detectedAgentId:
+      terminal.detectedAgentId ??
+      (isBuiltInAgentId(terminal.launchAgentId) ? terminal.launchAgentId : undefined),
+  });
+  const context = [worktreeName, task].filter(Boolean).join(" · ");
+  const exitText =
+    typeof terminal.exitCode === "number" ? `Exit ${terminal.exitCode}` : fallbackLabel;
+
+  return (
+    <button
+      type="button"
+      data-dock-row=""
+      onClick={onActivate}
+      onFocus={(e) => setRevealClipped(e.currentTarget.matches(":focus-visible"))}
+      onBlur={() => setRevealClipped(false)}
+      aria-label={`Focus ${title}${task ? `: ${task}` : ""}${worktreeName ? ` in ${worktreeName}` : ""} — ${exitText.toLowerCase()}`}
+      className={cn(
+        "flex items-center gap-2 w-full h-7 px-2 rounded-[var(--radius-sm)] text-left outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
+        DOCK_POPOVER_ROW_HOVER_CLASS
+      )}
+    >
+      <TerminalIcon
+        kind={terminal.kind}
+        chrome={deriveTerminalChrome(terminal)}
+        className="h-3 w-3 shrink-0"
+      />
+      <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+        <span className="min-w-0 truncate text-xs font-medium text-text-primary">{title}</span>
+        {context && (
+          <TruncatedTooltip
+            content={context}
+            focusable={false}
+            open={revealClipped || undefined}
+            onOpenChange={(open) => !open && setRevealClipped(false)}
+            side="bottom"
+            align="start"
+          >
+            <span className="min-w-16 flex-1 basis-0 truncate text-xs text-text-secondary">
+              {context}
+            </span>
+          </TruncatedTooltip>
+        )}
+      </span>
+      <span className="shrink-0 text-3xs text-text-secondary tabular-nums">{exitText}</span>
+      {terminal.lastStateChange != null && (
+        <LiveTimeAgo
+          timestamp={terminal.lastStateChange}
+          noTooltip
+          className="min-w-6 shrink-0 text-right text-3xs text-text-secondary tabular-nums"
+        />
+      )}
+    </button>
   );
 }

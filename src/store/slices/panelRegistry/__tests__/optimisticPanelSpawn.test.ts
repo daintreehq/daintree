@@ -1163,12 +1163,15 @@ describe("a spawn whose answer was lost with the link (#13915)", () => {
       waitingReason: "prompt",
       // A host clock behind this machine's.
       lastStateChange: Date.now() - 60_000,
+      // The agent was already relaunched once in it.
+      agentIncarnation: 1,
     });
 
     await launchAgent("lost-skew");
     await drainMicrotasks(300);
 
     expect(getPtyPanel("lost-skew")?.agentState).toBe("waiting");
+    expect(getPtyPanel("lost-skew")?.agentIncarnation).toBe(1);
   });
 
   it("clears a launch error reported while it was asked, once the host has the terminal", async () => {

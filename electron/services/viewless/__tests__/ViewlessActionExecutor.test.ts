@@ -370,6 +370,48 @@ describe("viewless actions", () => {
       expect(ask.lines.some((line) => /teardown may also run/.test(line))).toBe(true);
     });
 
+    it("states every untracked file the status read counted, listed or not (#15559)", async () => {
+      const { deps, hosts } = setup();
+      const root = "/repo-wt/feature";
+      const listed = Array.from({ length: 200 }, (_, i) => ({
+        path: `${root}/out/f${String(i).padStart(3, "0")}.txt`,
+        status: "untracked" as const,
+        insertions: null,
+        deletions: null,
+      }));
+      hosts.getDeletePreview.mockResolvedValueOnce({
+        changes: {
+          worktreeId: root,
+          rootPath: root,
+          changedFileCount: 205,
+          omittedUntrackedCount: 5,
+          changes: listed,
+        },
+        risk: {
+          entries: [],
+          dirtyFiles: [],
+          untrackedFiles: [],
+          atRiskCommits: [],
+          requiresMechanicalForce: false,
+          incomplete: false,
+        },
+        teardown: null,
+      });
+      const requestApproval = vi.fn(async (_ask: ViewlessApprovalAsk) => ({
+        decision: "rejected" as const,
+      }));
+
+      await executeViewlessAction(
+        { ...request("worktree.delete", deleteArgs), requestApproval },
+        deps
+      );
+
+      const [ask] = requestApproval.mock.calls[0]!;
+      expect(ask.lines[0]).toBe("205 untracked files:");
+      // 200 listed + 5 counted, 12 shown.
+      expect(ask.lines).toContain("  …and 193 more");
+    });
+
     it("puts the plugins' notes to the person alongside the host's preview (#13805)", async () => {
       const { deps, hosts } = setup();
       const collectWorktreeDeleteNotes = vi.fn(async () => [
@@ -652,7 +694,30 @@ describe("viewless actions", () => {
         "t-1",
         "ls",
         receipt.submissionToken,
+        undefined,
+        undefined,
+        "no-choice-dialog",
       ]);
+    });
+
+    it("reports the host refusing a send into a choice dialog under its own code (#16209)", async () => {
+      const refusal = Object.assign(new Error("Nothing was sent."), {
+        code: "TERMINAL_CHOICE_DIALOG",
+      });
+      const { deps } = makeDeps({
+        getPtyReader: () => pty,
+        invoke: vi.fn().mockRejectedValue(refusal) as ViewlessDeps["invoke"],
+      });
+
+      const result = await executeViewlessAction(
+        request("terminal.sendCommand", { terminalId: "t-1", command: "ls" }),
+        deps
+      );
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: "TERMINAL_CHOICE_DIALOG", message: "Nothing was sent." },
+      });
     });
 
     it("bounds the echoed command exactly as the renderer does", async () => {
@@ -712,6 +777,7 @@ describe("viewless actions", () => {
       const [, , submitArgs] = invoke.mock.calls[0];
       expect(submitArgs[1]).toMatch(/^go\n\n/);
       expect(submitArgs[3]).toMatch(/^[a-z0-9]{6}$/);
+      expect(submitArgs[1]).toContain(`DAINTREE-NEEDS-YOU-${submitArgs[3]}`);
     });
 
     it("refuses an exited or trashed terminal", async () => {

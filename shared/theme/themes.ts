@@ -8,11 +8,15 @@ import type {
 import type { ThemePalette, ThemeStrategy } from "./palette.js";
 import type { ExtensionKey } from "./types.js";
 import {
+  ACTIVITY_TEXT_INKS,
+  ACTIVITY_TEXT_MIN_CONTRAST,
   DESTRUCTIVE_BUTTON_CONTRAST,
+  contrastRatioFromLuminance,
   DIFF_TEXT_MIN_CONTRAST,
   STATUS_TEXT_CONTRAST,
   STATUS_TEXT_INKS,
   getThemeContrastWarnings,
+  resolveActivityTextBackdrops,
   resolveDiffTextBackdrops,
   resolveStatusTextBackdrops,
 } from "./contrast.js";
@@ -68,55 +72,71 @@ export interface DaintreeTokenOptions {
   statusSurfaceOpacity?: number;
 }
 
+type DaintreeTokenInput = Partial<AppColorSchemeTokens> &
+  Pick<
+    AppColorSchemeTokens,
+    | "surface-canvas"
+    | "surface-sidebar"
+    | "surface-panel"
+    | "surface-panel-elevated"
+    | "surface-grid"
+    | "text-primary"
+    | "text-secondary"
+    | "text-muted"
+    | "text-inverse"
+    | "border-default"
+    | "accent-primary"
+    | "status-success"
+    | "status-warning"
+    | "status-danger"
+    | "status-info"
+    | "activity-active"
+    | "activity-idle"
+    | "activity-working"
+    | "activity-waiting"
+    | "terminal-selection"
+    | "terminal-red"
+    | "terminal-green"
+    | "terminal-yellow"
+    | "terminal-blue"
+    | "terminal-magenta"
+    | "terminal-cyan"
+    | "terminal-bright-red"
+    | "terminal-bright-green"
+    | "terminal-bright-yellow"
+    | "terminal-bright-blue"
+    | "terminal-bright-magenta"
+    | "terminal-bright-cyan"
+    | "terminal-bright-white"
+    | "syntax-comment"
+    | "syntax-punctuation"
+    | "syntax-number"
+    | "syntax-string"
+    | "syntax-operator"
+    | "syntax-keyword"
+    | "syntax-function"
+    | "syntax-link"
+    | "syntax-quote"
+    | "syntax-chip"
+  >;
+
 export function createDaintreeTokens(
   type: "dark" | "light",
-  tokens: Partial<AppColorSchemeTokens> &
-    Pick<
-      AppColorSchemeTokens,
-      | "surface-canvas"
-      | "surface-sidebar"
-      | "surface-panel"
-      | "surface-panel-elevated"
-      | "surface-grid"
-      | "text-primary"
-      | "text-secondary"
-      | "text-muted"
-      | "text-inverse"
-      | "border-default"
-      | "accent-primary"
-      | "status-success"
-      | "status-warning"
-      | "status-danger"
-      | "status-info"
-      | "activity-active"
-      | "activity-idle"
-      | "activity-working"
-      | "activity-waiting"
-      | "terminal-selection"
-      | "terminal-red"
-      | "terminal-green"
-      | "terminal-yellow"
-      | "terminal-blue"
-      | "terminal-magenta"
-      | "terminal-cyan"
-      | "terminal-bright-red"
-      | "terminal-bright-green"
-      | "terminal-bright-yellow"
-      | "terminal-bright-blue"
-      | "terminal-bright-magenta"
-      | "terminal-bright-cyan"
-      | "terminal-bright-white"
-      | "syntax-comment"
-      | "syntax-punctuation"
-      | "syntax-number"
-      | "syntax-string"
-      | "syntax-operator"
-      | "syntax-keyword"
-      | "syntax-function"
-      | "syntax-link"
-      | "syntax-quote"
-      | "syntax-chip"
-    >,
+  tokens: DaintreeTokenInput,
+  options?: DaintreeTokenOptions
+): AppColorSchemeTokens {
+  const resolved = createBaseDaintreeTokens(type, tokens, options);
+  followStatusForDiffText(resolved, tokens, type);
+  followStatusForText(resolved, tokens, type);
+  followActivityForText(resolved, tokens, type);
+  followDangerForDestructive(resolved, tokens, type);
+  return resolved;
+}
+
+/** The engine's tokens before the contrast follow-ups lift the derived inks. */
+function createBaseDaintreeTokens(
+  type: "dark" | "light",
+  tokens: DaintreeTokenInput,
   options?: DaintreeTokenOptions
 ): AppColorSchemeTokens {
   const dark = type === "dark";
@@ -274,10 +294,12 @@ export function createDaintreeTokens(
     // Dark lands on the `overlay-elevated` value on purpose: brand marks on a
     // highlighted row are already measured against that lift
     // (`brandMarkMatrix.test.ts`), and it sits in the band shipping palettes use
-    // for a fill-only active row. Light keeps the raised plane, which is already
-    // an opaque upward lift rather than an ink wash.
-    "overlay-highlight":
-      tokens["overlay-highlight"] ?? (dark ? withAlpha(overlayTone, 0.06) : overlayRaised),
+    // for a fill-only active row. Light is a neutral black wash, not the raised
+    // plane: an opaque plane tuned for white popovers landed on, or lighter
+    // than, the tinted sidebars (#16184), while a wash darkens every light
+    // surface by about the same step (1.17-1.19:1). Pure black rather than
+    // `overlayBase`, whose hue would tint a fill that must stay neutral.
+    "overlay-highlight": tokens["overlay-highlight"] ?? withAlpha(overlayTone, dark ? 0.06 : 0.075),
     "filter-selected-bg-soft":
       tokens["filter-selected-bg-soft"] ?? withAlpha(dark ? tint : overlayBase, dark ? 0.08 : 0.08),
     "filter-selected-bg-strong":
@@ -423,6 +445,10 @@ export function createDaintreeTokens(
     "status-success-text": tokens["status-success"],
     "status-warning-text": tokens["status-warning"],
     "status-info-text": tokens["status-info"],
+    // Lifted below, against the same rows plus the project switcher's.
+    "activity-working-text": tokens["activity-working"],
+    "activity-waiting-text": tokens["activity-waiting"],
+    "activity-completed-text": tokens["activity-completed"] ?? tokens["status-success"],
     // Derived below, from the final danger ink and text tokens.
     "destructive-fill": tokens["status-danger"],
     "destructive-fill-hover": tokens["status-danger"],
@@ -430,9 +456,6 @@ export function createDaintreeTokens(
     "destructive-foreground": tokens["text-inverse"],
     ...tokens,
   };
-  followStatusForDiffText(resolved, tokens, type);
-  followStatusForText(resolved, tokens, type);
-  followDangerForDestructive(resolved, tokens, type);
   return resolved;
 }
 
@@ -661,31 +684,11 @@ function followBorderStrongForInput(
   }
 }
 
-/**
- * On light, `overlay-highlight` is the `overlay-raised` plane unless the theme
- * names it — including when the theme retuned `overlay-raised` itself, which
- * most light themes do with an opaque hex. Same reason as `border-input` above:
- * the engine derives the highlight before token overrides are merged, so
- * without this a light theme's highlighted row would fall back to the engine's
- * `color-mix()` plane instead of the lift the theme chose. Dark's highlight is
- * its own alpha step and never follows.
- */
-function followRaisedForHighlight(
-  tokens: Record<string, unknown>,
-  overrides: Record<string, unknown> | undefined,
-  type: "dark" | "light"
-): void {
-  if (type !== "light") return;
-  if (typeof overrides?.["overlay-highlight"] === "string") return;
-  if (typeof tokens["overlay-raised"] === "string") {
-    tokens["overlay-highlight"] = tokens["overlay-raised"];
-  }
-}
-
 // Headroom over the gate for the compositor rounding a channel the other way
 // from `blendOverBackground`.
 const DIFF_TEXT_DERIVATION_TARGET = DIFF_TEXT_MIN_CONTRAST + 0.05;
 const STATUS_TEXT_DERIVATION_TARGET = STATUS_TEXT_CONTRAST.minimum + 0.05;
+const ACTIVITY_TEXT_DERIVATION_TARGET = ACTIVITY_TEXT_MIN_CONTRAST + 0.05;
 
 const DIFF_TEXT_SOURCES = [
   ["diff-text-insert", "status-success"],
@@ -693,6 +696,7 @@ const DIFF_TEXT_SOURCES = [
 ] as const;
 
 type StatusTextKey = (typeof STATUS_TEXT_INKS)[keyof typeof STATUS_TEXT_INKS];
+type ActivityTextKey = (typeof ACTIVITY_TEXT_INKS)[keyof typeof ACTIVITY_TEXT_INKS];
 
 /**
  * DiffStat's churn inks: each status ink lifted to the nearest lightness that
@@ -724,12 +728,13 @@ export function deriveStatusTextInks(
   type: "dark" | "light"
 ): Partial<Pick<AppColorSchemeTokens, StatusTextKey>> {
   const inks: Partial<Pick<AppColorSchemeTokens, StatusTextKey>> = {};
+  const rows = resolveDiffTextBackdrops(tokens);
   for (const [source, key] of Object.entries(STATUS_TEXT_INKS) as Array<
     [keyof typeof STATUS_TEXT_INKS, StatusTextKey]
   >) {
     const ink = tokens[source];
     if (typeof ink !== "string") continue;
-    const backdrops = resolveStatusTextBackdrops(ink, tokens).map((backdrop) => backdrop.hex);
+    const backdrops = resolveStatusTextBackdrops(ink, tokens, rows).map((backdrop) => backdrop.hex);
     inks[key] = liftToContrast(ink, backdrops, STATUS_TEXT_DERIVATION_TARGET, type);
   }
   return inks;
@@ -737,10 +742,9 @@ export function deriveStatusTextInks(
 
 /**
  * The churn inks follow the status inks unless the theme names them, and are
- * lifted from the final tokens for the same reason as the two follows above: a
+ * lifted from the final tokens for the same reason as the follow above: a
  * theme that retunes a status ink, a surface or a row fill after the engine ran
- * would otherwise keep inks measured against another theme's backdrops. Runs
- * after `followRaisedForHighlight`, since the highlight is one of them.
+ * would otherwise keep inks measured against another theme's backdrops.
  */
 function followStatusForDiffText(
   tokens: Record<string, unknown>,
@@ -767,11 +771,51 @@ function followStatusForText(
   }
 }
 
-type DestructiveKey =
-  | "destructive-fill"
-  | "destructive-fill-hover"
-  | "destructive-fill-active"
-  | "destructive-foreground";
+/**
+ * The activity sentence inks, lifted the same way against the status text rows
+ * and the project switcher's, where the sentences actually print (#15866).
+ */
+export function deriveActivityTextInks(
+  tokens: Partial<Record<AppThemeTokenKey, string>>,
+  type: "dark" | "light"
+): Partial<Pick<AppColorSchemeTokens, ActivityTextKey>> {
+  const backdrops = resolveActivityTextBackdrops(tokens, type).map((backdrop) => backdrop.hex);
+  const inks: Partial<Pick<AppColorSchemeTokens, ActivityTextKey>> = {};
+  for (const [source, key] of Object.entries(ACTIVITY_TEXT_INKS) as Array<
+    [keyof typeof ACTIVITY_TEXT_INKS, ActivityTextKey]
+  >) {
+    const ink = tokens[source];
+    if (typeof ink !== "string") continue;
+    let lifted = liftToContrast(ink, backdrops, ACTIVITY_TEXT_DERIVATION_TARGET, type);
+    // A custom surface can leave room for the floor but not the headroom over it;
+    // the floor still holds, and the gate would otherwise reject a repairable ink.
+    if (lifted === ink) lifted = liftToContrast(ink, backdrops, ACTIVITY_TEXT_MIN_CONTRAST, type);
+    inks[key] = lifted;
+  }
+  return inks;
+}
+
+/** The activity sentence inks follow their activity inks the same way. */
+function followActivityForText(
+  tokens: Record<string, unknown>,
+  overrides: Record<string, unknown> | undefined,
+  type: "dark" | "light"
+): void {
+  const inks = deriveActivityTextInks(tokens as Partial<Record<AppThemeTokenKey, string>>, type);
+  for (const key of Object.values(ACTIVITY_TEXT_INKS)) {
+    if (typeof overrides?.[key] === "string") continue;
+    if (inks[key] !== undefined) tokens[key] = inks[key];
+  }
+}
+
+const DESTRUCTIVE_KEYS = [
+  "destructive-fill",
+  "destructive-fill-hover",
+  "destructive-fill-active",
+  "destructive-foreground",
+] as const;
+
+type DestructiveKey = (typeof DESTRUCTIVE_KEYS)[number];
 
 /**
  * The destructive Button's fills and label. The label is the near-white end of
@@ -804,8 +848,13 @@ export function deriveDestructiveAction(
   const c = Math.max(start.c, DESTRUCTIVE_BUTTON_CONTRAST.minChroma);
   const at = (l: number) => oklchToHex({ ...start, c, l: Math.min(1, Math.max(0, l)) });
   const states = (l: number) => [at(l), at(l + hover), at(l + press)] as const;
+  const labelLuminance = relativeLuminance(label);
   const reads = (l: number) =>
-    states(l).every((fill) => contrastRatio(label, fill) >= DESTRUCTIVE_DERIVATION_TARGET);
+    states(l).every(
+      (fill) =>
+        contrastRatioFromLuminance(labelLuminance, relativeLuminance(fill)) >=
+        DESTRUCTIVE_DERIVATION_TARGET
+    );
   // Away from the label: down under a light label, up under a dark one.
   const end = ink.l >= start.l ? 0 : 1;
   let near = start.l;
@@ -851,15 +900,37 @@ function followDangerForDestructive(
   }
 }
 
+// Every token the contrast follow-ups write.
+const CONTRAST_FOLLOW_KEYS: readonly AppThemeTokenKey[] = [
+  ...DIFF_TEXT_SOURCES.map(([key]) => key),
+  ...Object.values(STATUS_TEXT_INKS),
+  ...Object.values(ACTIVITY_TEXT_INKS),
+  ...DESTRUCTIVE_KEYS,
+];
+
 function createThemeFromSource(source: BuiltInThemeSource): AppColorScheme {
-  const compiledTokens = compilePaletteToTokens(source.palette);
+  // With overrides, the follow-ups below rewrite every ink the compile's own
+  // contrast pass lifts, so that pass would be thrown away (#15673). A blank
+  // override of one of those inks is the exception: normalisation drops it but
+  // the follow-ups still defer to it, leaving the compile's lift in place. Read
+  // by key, as both of them read it, so an inherited blank counts too.
+  const overrides = source.tokens as Record<string, unknown> | undefined;
+  const followsReplaceLifts =
+    overrides !== undefined &&
+    !CONTRAST_FOLLOW_KEYS.some((key) => {
+      const value = overrides[key];
+      return typeof value === "string" && !value.trim();
+    });
+  const compiledTokens = compilePaletteToTokens(source.palette, {
+    contrastFollows: !followsReplaceLifts,
+  });
   const tokens = source.tokens
     ? normalizeAppThemeTokens(source.tokens, compiledTokens)
     : compiledTokens;
   if (source.tokens) followBorderStrongForInput(tokens, source.tokens);
-  if (source.tokens) followRaisedForHighlight(tokens, source.tokens, source.type);
   if (source.tokens) followStatusForDiffText(tokens, source.tokens, source.type);
   if (source.tokens) followStatusForText(tokens, source.tokens, source.type);
+  if (source.tokens) followActivityForText(tokens, source.tokens, source.type);
   if (source.tokens) followDangerForDestructive(tokens, source.tokens, source.type);
   const extensions = resolveStrategyExtensions(source.palette, source.extensions);
 
@@ -1160,11 +1231,7 @@ function relativeLuminance(hex: string): number {
 }
 
 function contrastRatio(foreground: string, background: string): number {
-  const l1 = relativeLuminance(foreground);
-  const l2 = relativeLuminance(background);
-  const lighter = Math.max(l1, l2);
-  const darker = Math.min(l1, l2);
-  return (lighter + 0.05) / (darker + 0.05);
+  return contrastRatioFromLuminance(relativeLuminance(foreground), relativeLuminance(background));
 }
 
 function pickReadableForeground(background: string, candidates: string[]): string {
@@ -1202,12 +1269,15 @@ export function getAppThemeWarnings(scheme: AppColorScheme): AppThemeValidationW
   return warnings;
 }
 
-function compilePaletteToTokens(palette: ThemePalette): AppColorSchemeTokens {
+function compilePaletteToTokens(
+  palette: ThemePalette,
+  { contrastFollows = true }: { contrastFollows?: boolean } = {}
+): AppColorSchemeTokens {
   const strategy = palette.strategy;
   const shadowStyle = strategy?.shadowStyle ?? (palette.type === "dark" ? "soft" : "light");
   const shadowProfiles = resolveShadowProfiles(shadowStyle);
 
-  return createDaintreeTokens(
+  return (contrastFollows ? createDaintreeTokens : createBaseDaintreeTokens)(
     palette.type,
     {
       "surface-grid": palette.surfaces.grid,
@@ -1304,9 +1374,9 @@ export function normalizeAppColorScheme(
   const normalizedTokens = normalizeAppThemeTokens(rawTokens ?? {}, baseScheme.tokens);
   Object.assign(normalizedTokens, normalizeAppThemeTokens(tokenOverrides, normalizedTokens));
   followBorderStrongForInput(normalizedTokens, tokenOverrides);
-  followRaisedForHighlight(normalizedTokens, tokenOverrides, resolvedType);
   followStatusForDiffText(normalizedTokens, tokenOverrides, resolvedType);
   followStatusForText(normalizedTokens, tokenOverrides, resolvedType);
+  followActivityForText(normalizedTokens, tokenOverrides, resolvedType);
   if (
     typeof tokenOverrides["accent-foreground"] !== "string" &&
     typeof normalizedTokens["accent-primary"] === "string"

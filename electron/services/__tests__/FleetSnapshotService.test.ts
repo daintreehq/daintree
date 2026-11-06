@@ -28,11 +28,15 @@ vi.mock("../AgentAvailabilityStore.js", () => ({
 }));
 
 import { FleetSnapshotService, STALL_QUIET_MS } from "../FleetSnapshotService.js";
+import { SNAPSHOT_TTL_MS } from "../sharedTerminalSnapshot.js";
 import {
   notifyCanopyRefinementsChanged,
   setCanopyRefinementSource,
 } from "../canopy/canopyRefinementSource.js";
+import { setAnswerAttention } from "../runAnswerAttentionSource.js";
 import type { FleetSnapshot } from "../../../shared/types/ipc/fleet.js";
+import { bandForRun } from "../../../shared/utils/fleetBands.js";
+import { computeProjectAgentCounts } from "../projectAgentCounts.js";
 
 const NOW = 1_830_001;
 
@@ -683,7 +687,7 @@ describe("FleetSnapshotService", () => {
     let record: { stoppedAt: number; seenAt?: number } | undefined = { stoppedAt: NOW - 1_000 };
     const getRecord = vi.fn((_id: string, _spawnedAt?: number) => record);
     const retain = vi.fn();
-    const handBacks = { getRecord, retain };
+    const handBacks = { getRecord, retain, onWaitChanged: () => () => {} };
     const service = new FleetSnapshotService(client as never, null, handBacks as never);
     service.start();
     service.refresh();
@@ -702,9 +706,199 @@ describe("FleetSnapshotService", () => {
     service.stop();
   });
 
+  it("carries a needs-you handback report to the row without its summary, and publishes a report-only change", async () => {
+    const handback = (report: "done" | "needs-you" | undefined) => ({
+      message: "Approve the deploy at https://example.test/runs/1",
+      ...(report !== undefined ? { report } : {}),
+      observedAt: NOW - 500,
+      truncated: false,
+    });
+    const at = (lastHandback?: ReturnType<typeof handback>) =>
+      terminal({
+        agentState: "waiting",
+        waitingReason: "prompt",
+        lastStateChange: NOW - 1_000,
+        ...(lastHandback !== undefined ? { lastHandback } : {}),
+      });
+    const client = makePtyClient([at(handback("done"))]);
+    const service = new FleetSnapshotService(client as never);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    expect(broadcastMock).toHaveBeenCalledTimes(1);
+    expect("handbackReport" in lastSnapshot().runs[0]).toBe(false);
+
+    // The report alone changes; no state moves, and the row still publishes.
+    client.setFleet([at(handback("needs-you"))]);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    expect(broadcastMock).toHaveBeenCalledTimes(2);
+    const row = lastSnapshot().runs[0];
+    expect(row.handbackReport).toBe("needs-you");
+    expect(JSON.stringify(row)).not.toContain("example.test");
+
+    client.setFleet([at(handback("needs-you"))]);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    expect(broadcastMock).toHaveBeenCalledTimes(2);
+
+    // The next prompt clears the terminal's handback, and the row drops it.
+    client.setFleet([at()]);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    expect(broadcastMock).toHaveBeenCalledTimes(3);
+    expect("handbackReport" in lastSnapshot().runs[0]).toBe(false);
+
+    // An older host's observation carries no report and places nothing.
+    client.setFleet([at(handback(undefined))]);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    expect(broadcastMock).toHaveBeenCalledTimes(3);
+    service.stop();
+  });
+
+  it("bands each run as the project counts do, from the same terminal records", async () => {
+    const records: Array<{
+      id: string;
+      agentState: string;
+      waitingReason?: string;
+      report?: "done" | "needs-you";
+    }> = [
+      { id: "needs-prompt", agentState: "waiting", waitingReason: "prompt", report: "needs-you" },
+      { id: "needs-done", agentState: "completed", report: "needs-you" },
+      {
+        id: "needs-question",
+        agentState: "waiting",
+        waitingReason: "question",
+        report: "needs-you",
+      },
+      { id: "needs-working", agentState: "working", report: "needs-you" },
+      { id: "needs-error", agentState: "waiting", waitingReason: "error", report: "needs-you" },
+      { id: "needs-idle", agentState: "idle", report: "needs-you" },
+      { id: "done-prompt", agentState: "waiting", waitingReason: "prompt", report: "done" },
+      { id: "bare-prompt", agentState: "waiting", waitingReason: "prompt" },
+      { id: "needs-parked", agentState: "waiting", waitingReason: "prompt", report: "needs-you" },
+      { id: "needs-seen", agentState: "waiting", waitingReason: "prompt", report: "needs-you" },
+    ];
+    const terminals = records.map(({ report, ...rest }) =>
+      terminal({
+        ...rest,
+        lastStateChange: NOW - 1_000,
+        ...(report !== undefined
+          ? { lastHandback: { message: null, report, observedAt: NOW - 500, truncated: false } }
+          : {}),
+      })
+    );
+    const handBackOf = (id: string) =>
+      id === "needs-seen" ? { stoppedAt: NOW - 2_000, seenAt: NOW - 1_500 } : undefined;
+    const parks = new Map([["needs-parked", { parkedAt: NOW - 100 }]]);
+    const handBacks = {
+      getRecord: (id: string) => handBackOf(id),
+      retain: () => {},
+      noteInventoryWait: () => {},
+      getWait: () => undefined,
+      onWaitChanged: () => () => {},
+    };
+    const runAttention = { getAll: () => parks, getActiveSnoozes: () => new Map() };
+    const client = makePtyClient(terminals);
+    const service = new FleetSnapshotService(
+      client as never,
+      runAttention as never,
+      handBacks as never
+    );
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    const rows = new Map(lastSnapshot().runs.map((row) => [row.runId, row]));
+    const needsYou: string[] = [];
+    for (const t of terminals) {
+      const row = rows.get(t.id)!;
+      const band = bandForRun(row);
+      if (band === "needs-you") needsYou.push(t.id);
+      const counts = computeProjectAgentCounts(
+        ["p1"],
+        [t as never],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        (id) => handBackOf(id),
+        parks
+      ).get("p1")!;
+      expect(counts.waiting - counts.blocked, t.id).toBe(band === "needs-you" ? 1 : 0);
+      expect(counts.blocked, t.id).toBe(band === "blocked" ? 1 : 0);
+      expect(counts.unacknowledgedCompleted, t.id).toBe(band === "review" ? 1 : 0);
+    }
+    expect(needsYou.sort()).toEqual(["needs-done", "needs-prompt", "needs-question", "needs-seen"]);
+    service.stop();
+  });
+
+  it("decorates an ask wait with its wait record, begun from the inventory, and re-publishes when it is seen", async () => {
+    const client = makePtyClient([
+      terminal({ agentState: "waiting", waitingReason: "approval", lastStateChange: NOW - 5_000 }),
+      terminal({ id: "t2", agentState: "waiting", waitingReason: "prompt", lastStateChange: NOW }),
+      // A state change older than the terminal's spawn belongs to no wait of this one.
+      terminal({
+        id: "t3",
+        agentState: "waiting",
+        waitingReason: "question",
+        lastStateChange: NOW - 120_000,
+      }),
+    ]);
+    let wait: { stoppedAt: number; seenAt?: number } | undefined = { stoppedAt: NOW - 5_000 };
+    let onWait: () => void = () => {};
+    const unsubscribe = vi.fn();
+    const handBacks = {
+      getRecord: () => undefined,
+      retain: vi.fn(),
+      noteInventoryWait: vi.fn(),
+      getWait: vi.fn((_id: string, _spawnedAt?: number) => wait),
+      onWaitChanged: vi.fn((listener: () => void) => {
+        onWait = listener;
+        return unsubscribe;
+      }),
+    };
+    const service = new FleetSnapshotService(client as never, null, handBacks as never);
+    service.start();
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+
+    const [asking, prompt] = lastSnapshot().runs;
+    expect(asking.wait).toEqual({ stoppedAt: NOW - 5_000 });
+    // A prompt is no ask wait: it carries no record, and none is begun for it.
+    expect(prompt.wait).toBeUndefined();
+    // Dated from the oldest the shared inventory can be, so a state heard
+    // since it was read overrules it.
+    expect(handBacks.noteInventoryWait).toHaveBeenCalledWith(
+      "t1",
+      NOW - 5_000,
+      NOW - SNAPSHOT_TTL_MS
+    );
+    expect(handBacks.noteInventoryWait).toHaveBeenCalledWith(
+      "t3",
+      NOW - 60_000,
+      NOW - SNAPSHOT_TTL_MS
+    );
+    expect(new Set(handBacks.noteInventoryWait.mock.calls.map(([id]) => id))).toEqual(
+      new Set(["t1", "t3"])
+    );
+    expect(handBacks.getWait).toHaveBeenCalledWith("t1", NOW - 60_000);
+    const published = broadcastMock.mock.calls.length;
+
+    // Seen is a fleet change on its own, with no agent state moving.
+    wait = { stoppedAt: NOW - 5_000, seenAt: NOW };
+    onWait();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(broadcastMock.mock.calls.length).toBe(published + 1);
+    expect(lastSnapshot().runs[0].wait).toEqual(wait);
+
+    service.stop();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
   it("decorates a run with Canopy's refinement for its incarnation, and re-publishes when it changes", async () => {
     const client = makePtyClient([terminal({ agentState: "completed", lastStateChange: NOW })]);
-    let refinement: { kind: "asked"; quote: string; readAt: number } | undefined = undefined;
+    let refinement: { kind: "asked"; quote: string; readAt: number; seen: boolean } | undefined =
+      undefined;
     const source = vi.fn((_id: string, _spawnedAt: number) => refinement);
     setCanopyRefinementSource(source);
     const service = new FleetSnapshotService(client as never);
@@ -716,7 +910,12 @@ describe("FleetSnapshotService", () => {
       expect(source).toHaveBeenCalledWith("t1", NOW - 60_000);
       const published = broadcastMock.mock.calls.length;
 
-      refinement = { kind: "asked", quote: "Want me to update the tests too?", readAt: NOW };
+      refinement = {
+        kind: "asked",
+        quote: "Want me to update the tests too?",
+        readAt: NOW,
+        seen: false,
+      };
       notifyCanopyRefinementsChanged();
       await vi.advanceTimersByTimeAsync(250);
       expect(broadcastMock.mock.calls.length).toBe(published + 1);
@@ -726,6 +925,13 @@ describe("FleetSnapshotService", () => {
       notifyCanopyRefinementsChanged();
       await vi.advanceTimersByTimeAsync(250);
       expect(broadcastMock.mock.calls.length).toBe(published + 1);
+
+      // The user reading the ask is: it moves the run out of Needs you.
+      refinement = { ...refinement, seen: true };
+      notifyCanopyRefinementsChanged();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(broadcastMock.mock.calls.length).toBe(published + 2);
+      expect(lastSnapshot().runs[0].canopy).toEqual(refinement);
 
       // Canopy going away takes every refinement with it.
       setCanopyRefinementSource(null);
@@ -737,9 +943,39 @@ describe("FleetSnapshotService", () => {
     }
   });
 
+  it("decorates a run with Decisions' answers needing attention, and re-publishes when they change", async () => {
+    const client = makePtyClient([terminal({ agentState: "completed", lastStateChange: NOW })]);
+    const service = new FleetSnapshotService(client as never);
+    try {
+      service.start();
+      service.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      expect(lastSnapshot().runs[0].answerAttention).toBeUndefined();
+      const published = broadcastMock.mock.calls.length;
+
+      setAnswerAttention(new Map([["t1", 2]]));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(broadcastMock.mock.calls.length).toBe(published + 1);
+      expect(lastSnapshot().runs[0].answerAttention).toBe(2);
+
+      // The same counts told again are no fleet change.
+      setAnswerAttention(new Map([["t1", 2]]));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(broadcastMock.mock.calls.length).toBe(published + 1);
+
+      // Decisions stopping takes every count with it.
+      setAnswerAttention(new Map());
+      await vi.advanceTimersByTimeAsync(250);
+      expect(lastSnapshot().runs[0].answerAttention).toBeUndefined();
+    } finally {
+      setAnswerAttention(new Map());
+      service.stop();
+    }
+  });
+
   it("withdraws Canopy's refinements from a degraded fleet without waiting for the host", async () => {
     const client = makePtyClient([terminal({ agentState: "completed", lastStateChange: NOW })]);
-    const refinement = { kind: "asked", quote: "Ship it?", readAt: NOW } as const;
+    const refinement = { kind: "asked", quote: "Ship it?", readAt: NOW, seen: false } as const;
     setCanopyRefinementSource(() => refinement);
     const service = new FleetSnapshotService(client as never);
     try {
@@ -763,12 +999,49 @@ describe("FleetSnapshotService", () => {
     }
   });
 
+  it("tells a degraded fleet a wait was seen without waiting for the host, and begins none from it", async () => {
+    const client = makePtyClient([
+      terminal({ agentState: "waiting", waitingReason: "approval", lastStateChange: NOW }),
+    ]);
+    let wait: { stoppedAt: number; seenAt?: number } | undefined = { stoppedAt: NOW };
+    let onWait: () => void = () => {};
+    const handBacks = {
+      getRecord: () => undefined,
+      retain: vi.fn(),
+      noteInventoryWait: vi.fn(),
+      getWait: () => wait,
+      onWaitChanged: (listener: () => void) => {
+        onWait = listener;
+        return () => {};
+      },
+    };
+    const service = new FleetSnapshotService(client as never, null, handBacks as never);
+    service.start();
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    expect(lastSnapshot().runs[0].wait).toEqual({ stoppedAt: NOW });
+
+    client.setFleet([], true);
+    service.refresh();
+    await vi.runOnlyPendingTimersAsync();
+    expect(lastSnapshot().degraded).toBe(true);
+    handBacks.noteInventoryWait.mockClear();
+
+    wait = { stoppedAt: NOW, seenAt: NOW + 1 };
+    onWait();
+    expect(lastSnapshot()).toMatchObject({ degraded: true });
+    expect(lastSnapshot().runs[0].wait).toEqual(wait);
+    expect(handBacks.noteInventoryWait).not.toHaveBeenCalled();
+    service.stop();
+  });
+
   it("never prunes hand-backs from a degraded read", async () => {
     const client = makePtyClient([terminal()]);
     const retain = vi.fn();
     const service = new FleetSnapshotService(client as never, null, {
       getRecord: () => undefined,
       retain,
+      onWaitChanged: () => () => {},
     } as never);
     service.refresh();
     await vi.runOnlyPendingTimersAsync();

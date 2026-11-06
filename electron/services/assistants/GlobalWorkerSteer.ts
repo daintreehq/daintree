@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { WORKER_STEER_REFUSALS } from "../../../shared/types/assistantControl.js";
+import type { QueuedSendReceipt } from "../../../shared/types/queuedSend.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import { isBuiltInAgentId } from "../../../shared/config/agentIds.js";
+import { classifyWorkerSteerCommand } from "../../../shared/config/workerSteerCommands.js";
 import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
 import { stampAssistantPrompt } from "../../../shared/utils/assistantProvenance.js";
 import { appendHandbackInstruction, mintHandbackCode } from "../../../shared/utils/handback.js";
@@ -13,14 +15,23 @@ import {
   SEND_KEYS_SCREEN_LINES,
   SEND_KEYS_SETTLE_MS,
   keySequence,
+  screenChangedField,
 } from "../../../shared/utils/terminalKeys.js";
 import {
   buildTerminalSendCommandReceipt,
+  MAX_ECHOED_COMMAND_CHARS,
   type TerminalSendCommandReceipt,
 } from "../../../shared/utils/terminalSendCommandResult.js";
+import {
+  foreignInputMoved,
+  foreignTypedInputAt,
+  typedSinceSettle,
+} from "../../../shared/utils/terminalInputProvenance.js";
 import { ASSISTANT_SEND_GATE, evaluateWakeGate } from "../../../shared/utils/terminalWakeGate.js";
+import type { PendingNotify } from "../mcp-server/terminalNotify.js";
 import type { PtyClient } from "../PtyClient.js";
 import { AssistantTargetError } from "./AssistantTerminalControl.js";
+import { HoldRefusedError, type WorkerSteerQueue } from "./WorkerSteerQueue.js";
 
 /** The pty-host record fields a steer reads. */
 export interface WorkerSteerRecord {
@@ -31,10 +42,18 @@ export interface WorkerSteerRecord {
   waitingReason?: WaitingReason;
   lastStateChange?: number;
   lastTypedInputAt?: number;
+  lastOwnedInput?: { owner: string; at: number };
+  lastForeignInputAt?: number;
   hasPendingSubmission?: boolean;
   isExited?: boolean;
   hasPty?: boolean;
   isTrashed?: boolean;
+  /** The run identity a held prompt is checked against before it is typed (#16187). */
+  agentIncarnation?: number;
+  agentSessionId?: string;
+  worktreeId?: string;
+  lastOwnedPromptInput?: { owner: string; at: number };
+  lastForeignPromptInputAt?: number;
 }
 
 export interface GlobalWorkerSteerDeps {
@@ -50,18 +69,28 @@ export interface GlobalWorkerSteerDeps {
   /** Under the strict settled-prompt guard, so the host admits it only while the gate still holds. */
   /**
    * `promptAsWritten` is the brief before its provenance stamp and handback
-   * instruction, for the run's first-prompt record (#15521).
+   * instruction, for the run's first-prompt record (#15521); `null` for a
+   * slash command, which is nobody's prompt.
+   */
+  /**
+   * `promptOwner` files the line as the steering assistant's prompt input once
+   * written (#16187), so a prompt another assistant holds for the worker
+   * drops on it.
    */
   submit(
     terminalId: string,
     text: string,
     submissionToken: string,
     handbackCode: string | undefined,
-    promptAsWritten: string
+    promptAsWritten: string | null,
+    promptOwner: string
   ): void;
-  write(terminalId: string, data: string): void;
+  /** `inputOwner` files the keys under the steering assistant in the pty host (#16094). */
+  write(terminalId: string, data: string, inputOwner: string): void;
   /** The pair's gap is scheduled in the pty-host, where IPC can't collapse it. */
-  doubleEscape(terminalId: string): void;
+  doubleEscape(terminalId: string, inputOwner: string): void;
+  /** Where a prompt for a busy worker is held (#16187); absent or null, none is. */
+  queue?: () => Pick<WorkerSteerQueue, "hold"> | null;
   sleep?: (ms: number) => Promise<void>;
 }
 
@@ -74,13 +103,47 @@ export interface WorkerSteerTarget {
   terminalId: string;
   generation: number | undefined;
   /**
-   * Asked right before every write: throws while the call may no longer
-   * write here (the drive rule, a session gone), so nothing more goes out.
+   * The steering assistant's ownership principal (#16094), stable across its
+   * sessions: keys written under it aren't a person's on its next call.
+   */
+  inputOwner: string;
+  /**
+   * Asked right before every write, and before a reveal: throws while the call
+   * may no longer act here (the drive rule, a session gone), so nothing more
+   * goes out.
    */
   authorize(): void;
+  /**
+   * Asked right before a held prompt is written (#16187), long after the call
+   * that queued it: what `authorize` asks but the call's own session, which
+   * closes when idle while the Assistant that queued it carries on. Null
+   * while it may go ahead. Absent, nothing is held for this caller.
+   */
+  authorizeHeld?: () => { code: string; message: string } | null;
 }
 
+/** What a send asks of a worker that isn't waiting at its prompt (#16187). */
+export interface WhenBusy {
+  /** Hold it for the worker's next prompt, for up to this long. */
+  queue: { ttlSeconds: number };
+  /** Takes the call's armed `notify` once the prompt is held, for the line to complete. */
+  takeNotice?: () => PendingNotify | undefined;
+  /** Told once the held line is written, when no notice follows it. */
+  onWritten?: () => void;
+}
+
+/** Said on a receipt admitted only because everything typed since the settle was the caller's own keys. */
+export type InputSinceSettle = "own-keys";
+
 const NOTHING_SENT = "Nothing was sent.";
+
+/** How a refusal from the reach gate names what the call would have done, and what it left undone. */
+interface ReachWording {
+  doing: string;
+  undone: string;
+}
+const STEERING: ReachWording = { doing: "Steering", undone: NOTHING_SENT };
+const SHOWING: ReachWording = { doing: "Showing the person", undone: "Nothing was shown." };
 
 function refuse(code: string, message: string): never {
   throw new AssistantTargetError(code, message);
@@ -89,29 +152,59 @@ function refuse(code: string, message: string): never {
 /**
  * Who else is at the terminal (#14551): a submission still being written, or
  * input since its agent last settled, which a draft in its composer is. An
- * unknown settle fails closed. Our own keys stamp the same field, so a
- * sequence passes the stamp it last read back to tell its keys from a person's.
+ * unknown settle fails closed. Keys the host filed under `owner` are the
+ * caller's own, in this call or an earlier one (#16094); mid-sequence, any
+ * input from someone else since `foreignBefore` was read stops the rest.
  */
 function personAtTerminal(
   terminalId: string,
   record: WorkerSteerRecord,
-  ownStamp?: number
+  owner: string,
+  sequence?: { foreignBefore: number | undefined }
 ): string | null {
   if (record.hasPendingSubmission === true) {
     return `A submission is still being written to terminal '${terminalId}'.`;
   }
-  const typed = record.lastTypedInputAt;
-  if (ownStamp !== undefined) {
-    return typed !== undefined && typed > ownStamp
+  if (sequence !== undefined) {
+    return foreignInputMoved(record, owner, sequence.foreignBefore)
       ? `Someone typed into terminal '${terminalId}' while the keys were going in.`
       : null;
   }
   if (record.lastStateChange === undefined) {
     return `Terminal '${terminalId}' hasn't been seen settling, so a draft in it can't be ruled out.`;
   }
-  return typed !== undefined && typed >= record.lastStateChange
+  return typedSinceSettle(record, owner) === "someone"
     ? `Someone has typed into terminal '${terminalId}' since its agent last settled, so their input stays as it is.`
     : null;
+}
+
+/** The receipt's note when only the caller's own keys were typed since the settle (#16094). */
+function inputSinceSettleOf(
+  record: WorkerSteerRecord,
+  owner: string
+): { inputSinceSettle: InputSinceSettle } | Record<string, never> {
+  return record.lastStateChange !== undefined && typedSinceSettle(record, owner) === "own-keys"
+    ? { inputSinceSettle: "own-keys" }
+    : {};
+}
+
+function slashRefusedWhy(
+  terminalId: string,
+  agentId: string | undefined,
+  allowed: readonly string[]
+): string {
+  const where = `terminal '${terminalId}' (${agentId ?? "unknown agent"}), which you neither launched nor were handed`;
+  const forms = allowed.map((form) => `\`${form}\``);
+  let why: string;
+  if (forms.length === 0) {
+    why = `No slash command runs in ${where}.`;
+  } else if (forms.length === 1) {
+    why = `The only slash command that runs in ${where} is ${forms[0]}, sent alone and exactly as written.`;
+  } else {
+    why = `The only slash commands that run in ${where} are ${forms.slice(0, -1).join(", ")} and ${forms.at(-1)}, each sent alone and exactly as written.`;
+  }
+  // A hand-over binds the pane to the global Assistant of the machine it runs on.
+  return `${why} ${NOTHING_SENT} To run ${forms.length === 0 ? "one" : "another"}, ask the person to type it there, or, for a pane on your own machine, to hand it to you (right-click > Hand to orchestrator > Global Assistant). Text that opens with \`/name\` is read as a command; to send it as a prompt, open it some other way.`;
 }
 
 /** Why a record is no agent worker to steer, or null while it is one. */
@@ -136,6 +229,11 @@ function noWorkerWhy(terminalId: string, record: WorkerSteerRecord): string | nu
  * generation names, and never one a person is typing into: all three are
  * read again right before each write, never trusted from the caller's read.
  * Answers say what was written, never what the agent did with it.
+ *
+ * Showing the person that worker's panel (#16096) reaches exactly as far,
+ * through the same gate, so a reveal and a prompt can't drift apart on what
+ * they'll reach. It writes nothing, so a person at the terminal and a steer
+ * still writing to it hold it back no more than they would a glance.
  */
 export class GlobalWorkerSteer {
   /** Runs a steer is writing to: a second, planned from the same screen, is refused. */
@@ -145,53 +243,200 @@ export class GlobalWorkerSteer {
 
   async prompt(
     target: WorkerSteerTarget,
-    request: { command: string; handback: boolean; machineName: string }
-  ): Promise<TerminalSendCommandReceipt> {
+    request: { command: string; handback: boolean; machineName: string; whenBusy?: WhenBusy }
+  ): Promise<TerminalSendCommandReceipt | QueuedSendReceipt> {
     return this.exclusive(target, async () => {
       const record = await this.requireWorker(target);
+      // An agent CLI runs a slash command only when it opens the input, so a
+      // stamped one arrives as prose (#16101): refused unless it is a fixed form.
+      const slash = classifyWorkerSteerCommand(request.command, record.detectedAgentId);
+      if (slash.kind === "refused") {
+        refuse(
+          WORKER_STEER_REFUSALS.commandNotAllowed,
+          slashRefusedWhy(target.terminalId, record.detectedAgentId, slash.allowed)
+        );
+      }
+      if (slash.kind === "slash" && request.handback) {
+        refuse(
+          "VALIDATION_ERROR",
+          `A handback adds its instruction to the text, so \`${slash.form}\` would arrive as a prompt. ${NOTHING_SENT} Send it without \`handback\`.`
+        );
+      }
       const verdict = evaluateWakeGate(record, ASSISTANT_SEND_GATE);
+      // Only a turn still running is waited out; every other refusal stands.
+      if (
+        verdict.kind === "hold" &&
+        verdict.reason === "working" &&
+        request.whenBusy !== undefined
+      ) {
+        return this.hold(target, record, slash.kind === "slash", request, request.whenBusy);
+      }
       if (verdict.kind !== "ready") {
         const typing = verdict.reason === "typing";
         refuse(
           typing ? WORKER_STEER_REFUSALS.typing : WORKER_STEER_REFUSALS.busy,
           typing
-            ? `${personAtTerminal(target.terminalId, record) ?? `Someone has typed into terminal '${target.terminalId}'.`} ${NOTHING_SENT}`
+            ? typedSinceSettle(record, target.inputOwner) === "own-keys"
+              ? // Keys can leave text in the input (a history entry, a placed
+                // suggestion) that the prompt's Enter would send along (#16094).
+                `The only input in terminal '${target.terminalId}' since its agent last settled is keys you sent, which can leave text at its prompt. ${NOTHING_SENT} Send once the agent settles again.`
+              : `${personAtTerminal(target.terminalId, record, target.inputOwner) ?? `Someone has typed into terminal '${target.terminalId}'.`} ${NOTHING_SENT}`
             : `Terminal '${target.terminalId}' isn't waiting at its agent's prompt (state: ${record.agentState ?? "unknown"}${
                 record.waitingReason ? `, ${record.waitingReason}` : ""
               }). ${NOTHING_SENT} Answer a dialog with keys, or send once it is waiting.`
         );
       }
-      const pending = personAtTerminal(target.terminalId, record);
+      const pending = personAtTerminal(target.terminalId, record, target.inputOwner);
       if (pending !== null) refuse(WORKER_STEER_REFUSALS.typing, `${pending} ${NOTHING_SENT}`);
       this.requireSameRun(target);
       target.authorize();
-      const stamped = stampAssistantPrompt(request.command, request.machineName);
       const submissionToken = randomUUID();
+      if (slash.kind === "slash") {
+        // A fixed form has no free text for the stamp's "quoted text is data" rule to guard.
+        this.deps.submit(
+          target.terminalId,
+          slash.form,
+          submissionToken,
+          undefined,
+          null,
+          target.inputOwner
+        );
+        return buildTerminalSendCommandReceipt(target.terminalId, slash.form, submissionToken);
+      }
+      const stamped = stampAssistantPrompt(request.command, request.machineName);
       // The host's strict guard asks the same gate again when it writes, so
       // a draft typed after this read still keeps the prompt out.
       if (request.handback) {
         const handbackCode = mintHandbackCode();
         this.deps.submit(
           target.terminalId,
-          appendHandbackInstruction(stamped, handbackCode),
+          appendHandbackInstruction(stamped, handbackCode, "run"),
           submissionToken,
           handbackCode,
-          request.command
+          request.command,
+          target.inputOwner
         );
       } else {
-        this.deps.submit(target.terminalId, stamped, submissionToken, undefined, request.command);
+        this.deps.submit(
+          target.terminalId,
+          stamped,
+          submissionToken,
+          undefined,
+          request.command,
+          target.inputOwner
+        );
       }
       return buildTerminalSendCommandReceipt(target.terminalId, request.command, submissionToken);
     });
   }
 
+  /**
+   * Hold a prompt for a worker mid-turn (#16187), under the checks an
+   * immediate send makes now and again right before it is typed. Nothing is
+   * written here.
+   */
+  private hold(
+    target: WorkerSteerTarget,
+    record: WorkerSteerRecord,
+    slash: boolean,
+    request: { command: string; handback: boolean; machineName: string },
+    whenBusy: WhenBusy
+  ): QueuedSendReceipt {
+    const { terminalId } = target;
+    const busy = `Terminal '${terminalId}' isn't waiting at its agent's prompt (state: ${record.agentState ?? "unknown"}).`;
+    // A command landing at a moment nobody saw is another risk from prose.
+    if (slash) {
+      refuse(
+        "VALIDATION_ERROR",
+        `${busy} A slash command isn't held for its next prompt. ${NOTHING_SENT} Send it once the agent is waiting.`
+      );
+    }
+    const queue = this.deps.queue?.() ?? null;
+    if (queue === null || target.authorizeHeld === undefined) {
+      refuse(
+        WORKER_STEER_REFUSALS.busy,
+        `${busy} This host can't hold a message for it right now. ${NOTHING_SENT} Send once it is waiting.`
+      );
+    }
+    // What would stop an immediate send at its next prompt stops this one now:
+    // a draft typed mid-turn is still in the composer when the turn ends.
+    const pending = personAtTerminal(terminalId, record, target.inputOwner);
+    if (pending !== null) refuse(WORKER_STEER_REFUSALS.typing, `${pending} ${NOTHING_SENT}`);
+    if (typedSinceSettle(record, target.inputOwner) === "own-keys") {
+      refuse(
+        WORKER_STEER_REFUSALS.typing,
+        `The only input in terminal '${terminalId}' since its agent last settled is keys you sent, which can leave text at its prompt. ${NOTHING_SENT} Send once the agent settles again.`
+      );
+    }
+    this.requireSameRun(target);
+    target.authorize();
+    const stamped = stampAssistantPrompt(request.command, request.machineName);
+    const handbackCode = request.handback ? mintHandbackCode() : undefined;
+    const authorizeHeld = target.authorizeHeld;
+    let held: ReturnType<WorkerSteerQueue["hold"]>;
+    try {
+      held = queue.hold({
+        principal: target.inputOwner,
+        projectId: target.projectId,
+        terminalId,
+        generation: target.generation!,
+        run: {
+          ...(record.agentIncarnation !== undefined
+            ? { agentIncarnation: record.agentIncarnation }
+            : {}),
+          ...(record.agentSessionId !== undefined ? { agentSessionId: record.agentSessionId } : {}),
+          ...(record.worktreeId !== undefined ? { worktreeId: record.worktreeId } : {}),
+          ...(record.lastOwnedPromptInput !== undefined
+            ? { lastOwnedPromptInput: record.lastOwnedPromptInput }
+            : {}),
+          ...(record.lastForeignPromptInputAt !== undefined
+            ? { lastForeignPromptInputAt: record.lastForeignPromptInputAt }
+            : {}),
+        },
+        // The same instruction an immediate send's handback carries.
+        text: handbackCode ? appendHandbackInstruction(stamped, handbackCode, "run") : stamped,
+        promptAsWritten: request.command,
+        ...(handbackCode !== undefined ? { handbackCode } : {}),
+        ttlSeconds: whenBusy.queue.ttlSeconds,
+        authorize: authorizeHeld,
+        isWriting: () => this.writing.has(terminalId),
+        ...(whenBusy.takeNotice !== undefined ? { takeNotice: whenBusy.takeNotice } : {}),
+        ...(whenBusy.onWritten !== undefined ? { onWritten: whenBusy.onWritten } : {}),
+      });
+    } catch (error) {
+      if (!(error instanceof HoldRefusedError)) throw error;
+      refuse(WORKER_STEER_REFUSALS.busy, `${busy} ${error.message} ${NOTHING_SENT}`);
+    }
+    const superseded = held.supersededToken
+      ? ` It replaces your earlier held message ${held.supersededToken}, which won't be sent.`
+      : "";
+    return {
+      sent: false,
+      queued: true,
+      terminalId,
+      command: request.command.slice(0, MAX_ECHOED_COMMAND_CHARS),
+      queuedSendToken: held.queuedSendToken,
+      expiresAt: held.expiresAt,
+      ...(held.supersededToken ? { supersededToken: held.supersededToken } : {}),
+      message: `Held, not sent: it is typed the next time the agent waits at its own prompt with nothing typed there, and dropped if someone else sends it input or the run changes first.${superseded} Check it with terminal.getStatus and this queuedSendToken; withdraw it with terminal.cancelQueuedSend.`,
+    };
+  }
+
   async keys(
     target: WorkerSteerTarget,
     request: { keys?: readonly string[]; choose?: string }
-  ): Promise<{ terminalId: string; keys: string[]; screen?: string }> {
+  ): Promise<{
+    terminalId: string;
+    keys: string[];
+    screen?: string;
+    screenChanged?: boolean;
+    inputSinceSettle?: InputSinceSettle;
+  }> {
     return this.exclusive(target, async () => {
-      const { terminalId } = target;
-      let record = await this.requireWorker(target);
+      const { terminalId, inputOwner } = target;
+      await this.requireWorker(target);
+      // The window read after the keys, read before them too (#16209).
+      const before = await this.readScreen(terminalId, SEND_KEYS_SCREEN_LINES).catch(() => null);
       let keys = request.keys ? [...request.keys] : undefined;
       if (request.choose !== undefined) {
         const plan = planChoice(
@@ -200,11 +445,12 @@ export class GlobalWorkerSteer {
         );
         if (!plan.ok) refuse("VALIDATION_ERROR", `${plan.reason} Nothing was pressed.`);
         keys = plan.keys;
-        record = await this.requireWorker(target);
       }
       if (keys === undefined || keys.length === 0) {
         refuse("VALIDATION_ERROR", "Pass `choose` or `keys`. Nothing was pressed.");
       }
+      // The reads were async: the checks below must see the worker as it is now.
+      let record = await this.requireWorker(target);
       const pressed: string[] = [];
       const stop = (code: string, why: string): never =>
         refuse(
@@ -213,7 +459,10 @@ export class GlobalWorkerSteer {
             ? `${why} Nothing was pressed.`
             : `${why} ${pressed.length} of ${keys!.length} keys were sent (${pressed.join(", ")}); the rest weren't. Read the screen before pressing more, and never resend the whole sequence.`
         );
-      let ownStamp: number | undefined;
+      // Read before the first key, never after one: a person's key that lands
+      // with ours must still be newer than this.
+      const sequence = { foreignBefore: foreignTypedInputAt(record, inputOwner) };
+      const admittedOver = inputSinceSettleOf(record, inputOwner);
       for (const [index, key] of keys.entries()) {
         if (index > 0) {
           await this.sleep(SEND_KEYS_GAP_MS);
@@ -228,7 +477,12 @@ export class GlobalWorkerSteer {
           const gone = noWorkerWhy(terminalId, record);
           if (gone !== null) stop(WORKER_STEER_REFUSALS.notAgent, gone);
         }
-        const person = personAtTerminal(terminalId, record, ownStamp);
+        const person = personAtTerminal(
+          terminalId,
+          record,
+          inputOwner,
+          index > 0 ? sequence : undefined
+        );
         if (person !== null) stop(WORKER_STEER_REFUSALS.typing, person);
         if (!this.isSameRun(target))
           stop(WORKER_STEER_REFUSALS.restarted, this.restartedWhy(target));
@@ -238,19 +492,8 @@ export class GlobalWorkerSteer {
           if (pressed.length === 0 || !(error instanceof AssistantTargetError)) throw error;
           stop(error.code, error.message);
         }
-        this.deps.write(terminalId, keySequence(key));
+        this.deps.write(terminalId, keySequence(key), inputOwner);
         pressed.push(key);
-        // Read back on the same host channel the key went down, so the stamp
-        // it left is the one the next key compares against.
-        if (index < keys.length - 1) {
-          const after = await this.deps.getTerminal(terminalId).catch(() => null);
-          if (!after)
-            stop(
-              WORKER_STEER_REFUSALS.notFound,
-              `Terminal '${terminalId}' can't be read right now.`
-            );
-          ownStamp = after!.lastTypedInputAt;
-        }
       }
       await this.sleep(SEND_KEYS_SETTLE_MS);
       const read = this.isSameRun(target)
@@ -258,7 +501,13 @@ export class GlobalWorkerSteer {
         : null;
       // Asked after the read as well: a successor's screen is never what these keys did.
       const screen = this.isSameRun(target) ? read : null;
-      return { terminalId, keys: pressed, ...(screen ? { screen } : {}) };
+      return {
+        terminalId,
+        keys: pressed,
+        ...(screen ? { screen } : {}),
+        ...screenChangedField(before, screen),
+        ...admittedOver,
+      };
     });
   }
 
@@ -267,6 +516,7 @@ export class GlobalWorkerSteer {
     agentId: string;
     agentStateAtDispatch: string | undefined;
     status: "requested" | "requested-unverified";
+    inputSinceSettle?: InputSinceSettle;
   }> {
     return this.exclusive(target, async () => {
       const record = await this.requireWorker(target);
@@ -284,18 +534,29 @@ export class GlobalWorkerSteer {
       );
       if (!assessment.eligible) refuse("VALIDATION_ERROR", assessment.reason);
       // An Escape clears a composer as readily as it stops a turn.
-      const person = personAtTerminal(target.terminalId, record);
+      const person = personAtTerminal(target.terminalId, record, target.inputOwner);
       if (person !== null) refuse(WORKER_STEER_REFUSALS.typing, `${person} Nothing was pressed.`);
       this.requireSameRun(target);
       target.authorize();
-      this.deps.doubleEscape(target.terminalId);
+      this.deps.doubleEscape(target.terminalId, target.inputOwner);
       return {
         terminalId: target.terminalId,
         agentId: assessment.agentId,
         agentStateAtDispatch: assessment.agentState,
         status: assessment.support === "advertised" ? "requested" : "requested-unverified",
+        ...inputSinceSettleOf(record, target.inputOwner),
       };
     });
+  }
+
+  /**
+   * Run `show`, the reveal, once the run passes the gate, right after its
+   * last read of it and the caller's `authorize`; never on a refusal.
+   */
+  async reveal<T>(target: WorkerSteerTarget, show: () => Promise<T>): Promise<T> {
+    await this.requireWorker(target, SHOWING);
+    target.authorize();
+    return show();
   }
 
   private async exclusive<T>(target: WorkerSteerTarget, run: () => Promise<T>): Promise<T> {
@@ -313,40 +574,47 @@ export class GlobalWorkerSteer {
     }
   }
 
-  /** The named run, if it is still an agent worker of this project; refused otherwise. */
-  private async requireWorker(target: WorkerSteerTarget): Promise<WorkerSteerRecord> {
+  /**
+   * The gate every reach goes through: the named run, if it is still an agent
+   * worker of this project; refused otherwise.
+   */
+  private async requireWorker(
+    target: WorkerSteerTarget,
+    wording: ReachWording = STEERING
+  ): Promise<WorkerSteerRecord> {
     const { terminalId, projectId } = target;
+    const { undone } = wording;
     if (target.generation === undefined) {
       refuse(
         "VALIDATION_ERROR",
-        `Steering an agent you didn't launch needs its 'generation': the 'incarnation' host.list gave for it. ${NOTHING_SENT}`
+        `${wording.doing} an agent you didn't launch needs its 'generation': the 'incarnation' host.list gave for it. ${undone}`
       );
     }
     if (this.deps.getTerminalProjectId(terminalId) !== projectId) {
       refuse(
         WORKER_STEER_REFUSALS.notFound,
-        `No terminal '${terminalId}' is in this project. ${NOTHING_SENT} Take the id from host.list or terminal.list here.`
+        `No terminal '${terminalId}' is in this project. ${undone} Take the id from host.list or terminal.list here.`
       );
     }
     if (this.deps.isAssistantTerminal(terminalId)) {
       refuse(
         WORKER_STEER_REFUSALS.notAgent,
-        `Terminal '${terminalId}' runs a Daintree Assistant, not a worker. ${NOTHING_SENT}`
+        `Terminal '${terminalId}' runs a Daintree Assistant, not a worker. ${undone}`
       );
     }
-    this.requireSameRun(target);
+    this.requireSameRun(target, undone);
     const record = await this.deps.getTerminal(terminalId).catch(() => null);
     if (!record || (record.projectId !== undefined && record.projectId !== projectId)) {
       refuse(
         WORKER_STEER_REFUSALS.notFound,
-        `Terminal '${terminalId}' can't be read right now. ${NOTHING_SENT}`
+        `Terminal '${terminalId}' can't be read right now. ${undone}`
       );
     }
     // The read was async: still the run the caller named.
-    this.requireSameRun(target);
+    this.requireSameRun(target, undone);
     const notWorker = noWorkerWhy(terminalId, record);
     if (notWorker !== null) {
-      refuse(WORKER_STEER_REFUSALS.notAgent, `${notWorker} ${NOTHING_SENT}`);
+      refuse(WORKER_STEER_REFUSALS.notAgent, `${notWorker} ${undone}`);
     }
     return record;
   }
@@ -362,11 +630,11 @@ export class GlobalWorkerSteer {
     return `Terminal '${target.terminalId}' isn't the run that generation named: it was restarted or replaced.`;
   }
 
-  private requireSameRun(target: WorkerSteerTarget): void {
+  private requireSameRun(target: WorkerSteerTarget, undone: string = NOTHING_SENT): void {
     if (!this.isSameRun(target)) {
       refuse(
         WORKER_STEER_REFUSALS.restarted,
-        `${this.restartedWhy(target)} ${NOTHING_SENT} List the agents again with host.list.`
+        `${this.restartedWhy(target)} ${undone} List the agents again with host.list.`
       );
     }
   }
@@ -388,8 +656,10 @@ export class GlobalWorkerSteer {
 export function liveGlobalWorkerSteer(deps: {
   pty: () => PtyClient | null;
   isAssistantTerminal(terminalId: string): boolean;
+  queue?: () => Pick<WorkerSteerQueue, "hold"> | null;
 }): GlobalWorkerSteer {
   return new GlobalWorkerSteer({
+    ...(deps.queue !== undefined ? { queue: deps.queue } : {}),
     getTerminalProjectId: (terminalId) => deps.pty()?.getTerminalProjectId(terminalId) ?? null,
     getLiveGeneration: (terminalId) => deps.pty()?.getLiveGeneration(terminalId) ?? null,
     isAssistantTerminal: (terminalId) =>
@@ -397,7 +667,7 @@ export function liveGlobalWorkerSteer(deps: {
     getTerminal: async (terminalId) => (await deps.pty()?.getTerminalAsync(terminalId)) ?? null,
     serializedState: (terminalId, options) =>
       deps.pty()?.getSerializedStateAsync(terminalId, options) ?? Promise.resolve(null),
-    submit: (terminalId, text, submissionToken, handbackCode, promptAsWritten) =>
+    submit: (terminalId, text, submissionToken, handbackCode, promptAsWritten, promptOwner) =>
       deps
         .pty()
         ?.submit(
@@ -407,9 +677,13 @@ export function liveGlobalWorkerSteer(deps: {
           handbackCode,
           "settled-prompt-strict",
           undefined,
-          promptAsWritten
+          promptAsWritten,
+          undefined,
+          promptOwner
         ),
-    write: (terminalId, data) => deps.pty()?.write(terminalId, data),
-    doubleEscape: (terminalId) => deps.pty()?.batchDoubleEscape([terminalId]),
+    write: (terminalId, data, inputOwner) =>
+      deps.pty()?.write(terminalId, data, undefined, inputOwner),
+    doubleEscape: (terminalId, inputOwner) =>
+      deps.pty()?.batchDoubleEscape([terminalId], inputOwner),
   });
 }

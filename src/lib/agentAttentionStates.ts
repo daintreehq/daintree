@@ -1,10 +1,10 @@
-import { isHandBackWait } from "./handBackPresentation";
+import { isNeedsYouPane } from "./paneSessionPresentation";
 import {
   getAttentionAgentState,
   type AttentionAgentState,
 } from "@/components/Worktree/terminalStateConfig";
 import { getRuntimeOrBootAgentId } from "@/utils/terminalType";
-import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 import type { AgentState } from "@shared/types";
 
 const ACTIVE_AGENT_STATES: ReadonlySet<AgentState | undefined> = new Set<AgentState | undefined>([
@@ -13,6 +13,22 @@ const ACTIVE_AGENT_STATES: ReadonlySet<AgentState | undefined> = new Set<AgentSt
   "waiting",
   "directing",
 ]);
+
+/**
+ * The pip one session earns: waiting only for a run the fleet places in
+ * `needs-you` that its pane still shows stopped, directing for the user's own
+ * unsent prompt, and null for any other live session — a prompt that asks
+ * nothing, a hand-back and an error wait included. Undefined for a session
+ * that is neither live nor asking, which callers leave out.
+ */
+export function sessionPipState(
+  needsYouRunIds: ReadonlySet<string>,
+  panel: PtyPanelData
+): AttentionAgentState | null | undefined {
+  if (isNeedsYouPane(needsYouRunIds, panel)) return "waiting";
+  if (!ACTIVE_AGENT_STATES.has(panel.agentState)) return undefined;
+  return panel.agentState === "directing" ? "directing" : null;
+}
 
 /**
  * Per-agent pip state across panels in the active worktree: an entry for every
@@ -28,13 +44,11 @@ const ACTIVE_AGENT_STATES: ReadonlySet<AgentState | undefined> = new Set<AgentSt
  * the shared launcher both draw the same dot, and a second copy is how the two
  * start disagreeing about what "running" means.
  */
-const NO_HAND_BACKS: ReadonlySet<string> = new Set();
-
 export function deriveAgentAttentionStates(
   panelsById: Record<string, PanelInstance>,
   panelIds: readonly string[],
   activeWorktreeId: string | null,
-  handBackRunIds: ReadonlySet<string> = NO_HAND_BACKS
+  needsYouRunIds: ReadonlySet<string>
 ): Map<string, AttentionAgentState | null> {
   const statesPerAgent = new Map<string, (AgentState | undefined)[]>();
   for (const pid of panelIds) {
@@ -50,10 +64,10 @@ export function deriveAgentAttentionStates(
     const agentId = getRuntimeOrBootAgentId(p);
     if (!agentId) continue;
     if (activeWorktreeId && p.worktreeId !== activeWorktreeId) continue;
-    if (!ACTIVE_AGENT_STATES.has(p.agentState)) continue;
+    const pip = sessionPipState(needsYouRunIds, p);
+    if (pip === undefined) continue;
     const arr = statesPerAgent.get(agentId) ?? [];
-    // A hand-back is not asking for anything, so it earns no amber dot.
-    arr.push(isHandBackWait(handBackRunIds, p) ? "completed" : p.agentState);
+    arr.push(pip ?? undefined);
     statesPerAgent.set(agentId, arr);
   }
   const result = new Map<string, AttentionAgentState | null>();

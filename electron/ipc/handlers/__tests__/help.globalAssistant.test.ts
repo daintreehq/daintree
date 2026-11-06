@@ -33,6 +33,15 @@ vi.mock("../../../services/events.js", () => ({
 }));
 const broadcast = vi.hoisted(() => vi.fn());
 vi.mock("../../utils.js", () => ({ broadcastToRenderer: broadcast }));
+const windows = vi.hoisted(() => ({ managers: new Map<number, unknown>() }));
+vi.mock("../../../window/windowRef.js", () => ({
+  getWindowRegistry: () => ({
+    getByWindowId: (id: number) => {
+      const manager = windows.managers.get(id);
+      return manager ? { services: { projectViewManager: manager } } : undefined;
+    },
+  }),
+}));
 
 function seen(terminalId: string, state: string) {
   for (const listener of bus.stateChanged) listener({ terminalId, state });
@@ -56,6 +65,7 @@ function makeService() {
     spawn: async () => true,
     revoke: async () => {},
     kill: () => {},
+    focusedWindows: () => [],
   });
 }
 
@@ -108,6 +118,31 @@ describe("global assistant IPC handlers", () => {
     broadcast.mockClear();
     await handlers.handleReleaseGlobalAssistantInput(ctx(20, 2), b.attachmentId);
     expect(broadcast).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves input between a view's attachments only while the one named still holds it (#16214)", async () => {
+    await handlers.handleEnsureGlobalAssistant(ctx(10, 1));
+    const panel = await handlers.handleAttachGlobalAssistant(ctx(10, 1));
+    const canopy = await handlers.handleAttachGlobalAssistant(ctx(10, 1));
+    const other = await handlers.handleAttachGlobalAssistant(ctx(20, 2));
+    const taken = await handlers.handleClaimGlobalAssistantInput(
+      ctx(10, 1),
+      canopy.attachmentId,
+      panel.attachmentId
+    );
+    expect(taken.inputOwner).toBe(canopy.attachmentId);
+    // Another window asks for it, and the hand-back that was on its way moves nothing.
+    const asked = await handlers.handleClaimGlobalAssistantInput(ctx(20, 2), other.attachmentId);
+    const handedBack = await handlers.handleClaimGlobalAssistantInput(
+      ctx(10, 1),
+      panel.attachmentId,
+      canopy.attachmentId
+    );
+    expect(handedBack.inputOwner).toBe(other.attachmentId);
+    expect(handedBack.inputEpoch).toBe(asked.inputEpoch);
+    await expect(
+      handlers.handleClaimGlobalAssistantInput(ctx(10, 1), panel.attachmentId, 5 as never)
+    ).rejects.toThrow(/attachment id/);
   });
 
   it("tells the windows the run's new subject when its PTY is respawned under it", async () => {
@@ -171,7 +206,56 @@ describe("global assistant IPC handlers", () => {
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 
-  it("moves input only on an explicit claim and frees it on release", async () => {
+  it("hands nobody's input only to a view that can type, and fills it once one can (#16098)", async () => {
+    const behindCanopy = await handlers.handleAttachGlobalAssistant(ctx(10, 1), false);
+    expect(behindCanopy.state.inputOwner).toBeNull();
+    await expect(
+      handlers.handleSetGlobalAssistantInputEligible(ctx(20, 2), behindCanopy.attachmentId, true)
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(
+      handlers.handleSetGlobalAssistantInputEligible(
+        ctx(10, 1),
+        behindCanopy.attachmentId,
+        "yes" as never
+      )
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    await expect(
+      handlers.handleAttachGlobalAssistant(ctx(10, 1), 1 as never)
+    ).rejects.toMatchObject({ code: "VALIDATION" });
+    expect((await handlers.handleGetGlobalAssistantState()).inputOwner).toBeNull();
+
+    broadcast.mockClear();
+    await handlers.handleSetGlobalAssistantInputEligible(
+      ctx(10, 1),
+      behindCanopy.attachmentId,
+      true
+    );
+    expect((await handlers.handleGetGlobalAssistantState()).inputOwner).toBe(
+      behindCanopy.attachmentId
+    );
+    expect(broadcast.mock.calls.at(-1)?.[1]).toMatchObject({
+      inputOwner: behindCanopy.attachmentId,
+    });
+  });
+
+  it("passes over a view that said it can no longer type", async () => {
+    const a = await handlers.handleAttachGlobalAssistant(ctx(10, 1));
+    const b = await handlers.handleAttachGlobalAssistant(ctx(20, 2));
+    const c = await handlers.handleAttachGlobalAssistant(ctx(30, 3));
+    await handlers.handleSetGlobalAssistantInputEligible(ctx(30, 3), c.attachmentId, false);
+    await handlers.handleDetachGlobalAssistant(ctx(10, 1), a.attachmentId);
+    expect((await handlers.handleGetGlobalAssistantState()).inputOwner).toBe(b.attachmentId);
+  });
+
+  it("tells every window when a departing owner's input moves to another", async () => {
+    const a = await handlers.handleAttachGlobalAssistant(ctx(10, 1));
+    const b = await handlers.handleAttachGlobalAssistant(ctx(20, 2));
+    broadcast.mockClear();
+    await handlers.handleDetachGlobalAssistant(ctx(10, 1), a.attachmentId);
+    expect(broadcast.mock.calls.at(-1)?.[1]).toMatchObject({ inputOwner: b.attachmentId });
+  });
+
+  it("moves input between holders only on an explicit claim and frees it on release", async () => {
     const a = await handlers.handleAttachGlobalAssistant(ctx(10, 1));
     const b = await handlers.handleAttachGlobalAssistant(ctx(20, 2));
     expect(b.state.inputOwner).toBe(a.attachmentId);
@@ -271,5 +355,85 @@ describe("global assistant IPC handlers", () => {
       await flush();
       expect(lastBroadcast()?.agentState).toBe("idle");
     });
+  });
+});
+
+describe("window global assistant panel IPC handlers (#16099)", () => {
+  const shown = {
+    showing: true,
+    target: {
+      hostId: "local",
+      scope: { kind: "global" as const },
+      terminalId: "g",
+      incarnation: 1,
+    },
+  };
+
+  function fakeManager(viewIds: number[], record: unknown = shown) {
+    return {
+      ownsView: (id: number) => viewIds.includes(id),
+      getGlobalAssistantPanel: vi.fn(() => record),
+      recordGlobalAssistantPanel: vi.fn(() => true),
+    };
+  }
+
+  beforeEach(() => {
+    windows.managers.clear();
+  });
+
+  it("answers a view with its own window's record, and nothing else", async () => {
+    const otherRecord = { showing: false, target: null };
+    windows.managers.set(1, fakeManager([10]));
+    windows.managers.set(2, fakeManager([20], otherRecord));
+
+    expect(await handlers.handleGetWindowGlobalAssistantPanel(ctx(10, 1))).toEqual(shown);
+    expect(await handlers.handleGetWindowGlobalAssistantPanel(ctx(20, 2))).toEqual(otherRecord);
+    // A webContents that isn't one of the window's views, or no window at all.
+    expect(await handlers.handleGetWindowGlobalAssistantPanel(ctx(20, 1))).toBeNull();
+    expect(await handlers.handleGetWindowGlobalAssistantPanel(ctx(10, null))).toBeNull();
+    expect(await handlers.handleGetWindowGlobalAssistantPanel(ctx(10, 3))).toBeNull();
+  });
+
+  it("hands a view's report to its window's manager under the sender's id", async () => {
+    const first = fakeManager([10]);
+    const second = fakeManager([20]);
+    windows.managers.set(1, first);
+    windows.managers.set(2, second);
+
+    await handlers.handleReportWindowGlobalAssistantPanel(ctx(10, 1), shown);
+    expect(first.recordGlobalAssistantPanel).toHaveBeenCalledWith(10, shown);
+    expect(second.recordGlobalAssistantPanel).not.toHaveBeenCalled();
+
+    await handlers.handleReportWindowGlobalAssistantPanel(ctx(20, 1), {
+      showing: false,
+      target: null,
+    });
+    expect(first.recordGlobalAssistantPanel).toHaveBeenCalledTimes(1);
+
+    await handlers.handleReportWindowGlobalAssistantPanel(ctx(20, 2), {
+      showing: true,
+      target: null,
+    });
+    expect(second.recordGlobalAssistantPanel).toHaveBeenCalledWith(20, {
+      showing: true,
+      target: null,
+    });
+  });
+
+  it("refuses a panel that isn't this machine's global assistant", async () => {
+    const manager = fakeManager([10]);
+    windows.managers.set(1, manager);
+    const refused = [
+      null,
+      { showing: "yes", target: null },
+      { showing: true, target: { ...shown.target, scope: { kind: "project", projectId: "p" } } },
+      { showing: true, target: { ...shown.target, hostId: "studio-01" } },
+    ];
+    for (const panel of refused) {
+      await expect(
+        handlers.handleReportWindowGlobalAssistantPanel(ctx(10, 1), panel as never)
+      ).rejects.toMatchObject({ code: "VALIDATION" });
+    }
+    expect(manager.recordGlobalAssistantPanel).not.toHaveBeenCalled();
   });
 });

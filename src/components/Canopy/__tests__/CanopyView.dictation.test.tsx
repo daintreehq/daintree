@@ -216,18 +216,9 @@ function installElectron(
   return canopy;
 }
 
-class FakeIntersectionObserver {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
-const realIntersectionObserver = globalThis.IntersectionObserver;
-
 beforeEach(() => {
   composers.clear();
   dictationFocus.mockClear();
-  window.localStorage.removeItem("daintree-canopy-acknowledged");
-  vi.stubGlobal("IntersectionObserver", FakeIntersectionObserver);
   __resetCanopySeenForTests();
   __resetCanopyPlaceForTests();
   vi.spyOn(document, "hasFocus").mockReturnValue(true);
@@ -255,7 +246,6 @@ afterEach(() => {
   });
   useVoiceRecordingStore.setState({ status: "idle", activeTarget: null, pendingTarget: null });
   window.localStorage.removeItem("daintree-canopy-order");
-  vi.stubGlobal("IntersectionObserver", realIntersectionObserver);
   vi.clearAllMocks();
   vi.restoreAllMocks();
 });

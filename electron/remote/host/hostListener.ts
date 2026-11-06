@@ -46,6 +46,7 @@ import {
 import { composeLinkActivity } from "./linkActivity.js";
 import { installCanopyHost } from "../canopy/hostInstall.js";
 import { installDeviceAnswerHost } from "../deviceAnswer/hostInstall.js";
+import { installDecisionsHost } from "../decisions/hostInstall.js";
 import { installVoicePaneHost } from "../voice/hostInstall.js";
 import { installAssistantSenderHost } from "../assistant/hostSenders.js";
 import { installHostMcpRelay, relayCallerOf } from "../assistant/hostMcpRelay.js";
@@ -178,16 +179,24 @@ async function buildHostListener(
   teardowns.push(() => host.dispose());
   teardowns.push(() => disposeAllTerminalBridges());
 
-  teardowns.push(admitHybridHostLegs());
+  teardowns.push(
+    admitHybridHostLegs({
+      onTransportChange: (listener) => host.sessionHost.onTransportChange(listener),
+    })
+  );
 
   // Each attached Shell's own alert choices, for what this host sends its views (#14701).
   teardowns.push(installNotificationPolicyHost(server));
   // Summaries to every attached Shell, and the overview's and fleet's session methods.
-  teardowns.push(await installHostMetricsHost(server));
+  teardowns.push(
+    await installHostMetricsHost(server, () => getHelpAssistantSettings().acceptRemoteControl)
+  );
   // Canopy for Shells reading this host from a view bound elsewhere.
   teardowns.push(installCanopyHost(server));
   // Devices paired with those Shells answering this host's agents, under its own lease.
   teardowns.push(installDeviceAnswerHost(server));
+  // The Decisions owner among those Shells enrolls this host as its own device (#16021).
+  teardowns.push(installDecisionsHost(server));
   // A Shell dictating into one of this host's panes reads its context here (#14782).
   teardowns.push(installVoicePaneHost(server));
   // The sender each Shell proves, for the tools this host runs for its
@@ -199,6 +208,13 @@ async function buildHostListener(
     acceptsRemoteControl: () => getHelpAssistantSettings().acceptRemoteControl,
     hasProject: async (projectId) => projectStore.getProjectById(projectId) !== null,
     throwawayRuns: () => getRemoteService("hostThrowawayRuns") ?? null,
+    endHeldSends: (senderId, helpSessionId) => {
+      void import("../../services/McpServerService.js")
+        .then(({ mcpServerService }) => mcpServerService.endRelayHeldSends(senderId, helpSessionId))
+        .catch((error: unknown) => {
+          logger.warn("Couldn't drop an ended session's held messages", { error });
+        });
+    },
     // Loaded on the first read: a host no Shell's assistant lists reads none.
     readAgents: async (options) => {
       const { getLocalAgentDirectory } =
@@ -269,8 +285,11 @@ async function buildHostListener(
   // A remote view reads only its own project's terminals, images and history.
   teardowns.push(getIpcDispatcher().setScopeGate(createRemoteScopeGate(resolvers)));
   teardowns.push(
-    setMcpDriveTargetResolver((projectId) => {
+    setMcpDriveTargetResolver((projectId, change) => {
       const target = lease.getDriveTarget(projectId);
+      if (target.kind === "vacant" && change) {
+        lease.noteSessionChange(projectId, change.linkSessionId);
+      }
       if (target.kind === "live") {
         return { state: "live", endpoint: target.endpoint, holderName: target.holder.clientName };
       }

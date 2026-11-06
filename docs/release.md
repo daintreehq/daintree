@@ -1,5 +1,7 @@
 # Release & Code Signing
 
+The workflow files and the one-time repository setup (R2 bucket and secrets) are mapped in [`.github/workflows/README.md`](../.github/workflows/README.md).
+
 ## Overview
 
 Releases are built by **three per-OS workflows** — `.github/workflows/release-macos.yml`, `release-linux.yml`, and `release-windows.yml` (#8052) — each triggered independently by the same `v*` tag (or manual `workflow_dispatch`). Each workflow runs a full vertical slice for its OS (checks → unit tests → e2e → build → R2 upload → website notify) and publishes to Cloudflare R2 the moment its own pipeline is green. A failure or hang in one OS only delays that OS; the other two ship unaffected, and re-running a failed OS is a single-workflow re-trigger. macOS builds universal, Windows x64+arm64, Linux x64+arm64 (native runners, separate `latest-linux.yml` / `latest-linux-arm64.yml` feeds).
@@ -71,18 +73,21 @@ xcrun notarytool history \
   --issuer 193e486e-1945-4dcd-9bb5-ae68d41441ef
 ```
 
+For one submission, such as the ID a timed-out build logged, use `info <id>` for its status or `log <id>` for Apple's report, with the same `--key`, `--key-id` and `--issuer` flags.
+
 ## macOS Notarization
 
 Notarization is enabled. All CI builds are signed and submitted to Apple's notarization service automatically.
 
 ### Key technical details
 
-- electron-builder 26.8.1. Notarization is **not** driven by electron-builder's built-in `@electron/notarize` integration (that package is only a transitive dep now). Instead a custom `afterSign` hook runs — `scripts/notarize-macos.cjs`, wired via the `afterSign` key in `electron-builder.config.cjs`.
+- Notarization is **not** driven by electron-builder's built-in `@electron/notarize` integration (that package is only a transitive dep now). Instead a custom `afterSign` hook runs — `scripts/notarize-macos.cjs`, wired via the `afterSign` key in `electron-builder.config.cjs`.
 - `mac.notarize` is set to `false` in `electron-builder.config.cjs`; the custom `afterSign` hook performs notarization itself, so the built-in path is intentionally disabled.
 - `APPLE_API_KEY` env var = **file path** to .p8 (not content, not Key ID)
 - `APPLE_API_KEY_ID` = 10-character Key ID
 - `APPLE_API_ISSUER` = Issuer UUID
-- The hook submits and waits as **two separate steps**: `notarytool submit` (120s exec timeout) then `notarytool wait --timeout 1800` (`WAIT_TIMEOUT_SECONDS`), bounded so an Apple delay can't block CI indefinitely. It persists a resumable `.notarization-state.json` in the out dir, so a re-run can reattach to an in-flight submission instead of resubmitting, and staples each arch on success.
+- The hook submits and waits as **two separate steps**: `notarytool submit` (120s exec timeout) then `notarytool wait --timeout 1800` (`WAIT_TIMEOUT_SECONDS`), bounded so an Apple delay can't block CI indefinitely, and staples each arch on success. A wait timeout fails the build with the submission ID in the log; the submission keeps going on Apple's side and can be checked by hand with `xcrun notarytool info <id>` (or `notarytool log <id>` for the report).
+- A workflow re-run does **not** reattach. The hook records each arch's submission in `.notarization-state.json` in the out dir (`release/`), but CI runners start from a clean checkout and nothing carries `release/` or the signed bundle across attempts, so a re-run rebuilds, re-signs and submits again, waiting behind the same Apple queue. The state only helps a re-run in the same out dir: a `submitted` or `accepted` entry is resumed (wait, or staple only) when its recorded CDHash (one per slice for a universal build) matches the bundle now at the app path. A rebuilt bundle with a different code signature, an entry with no recorded CDHash, or a bundle whose signature can't be read starts a fresh submission instead.
 
 ### Skip notarization flag
 

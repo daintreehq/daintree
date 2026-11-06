@@ -166,7 +166,11 @@ vi.mock("@/components/ui/emoji-picker", () => ({
   ),
 }));
 
+vi.mock("@/store/projectGroupsStore", () => import("@/store/__tests__/projectGroupsStoreMock"));
+
 import { CreateProjectFolderDialog } from "../CreateProjectFolderDialog";
+import { useProjectGroupsStore } from "@/store/projectGroupsStore";
+import { makeProjectGroup } from "@/store/__tests__/projectGroupsStoreMock";
 
 function emojiTrigger() {
   return screen.getByRole("button", { name: /choose project emoji/i });
@@ -189,6 +193,7 @@ async function renderDialog() {
 
 beforeEach(() => {
   getProjectTemplatesMock.mockResolvedValue([]);
+  useProjectGroupsStore.setState({ groups: [] });
 });
 
 describe("CreateProjectFolderDialog validation", () => {
@@ -288,6 +293,85 @@ describe("CreateProjectFolderDialog identity", () => {
       suggestProjectEmoji("my-api"),
       { disposition: "current" }
     );
+  });
+});
+
+describe("CreateProjectFolderDialog project group", () => {
+  // The suite's select stand-in labels every select "Template"; with no
+  // templates offered, the group picker is the only select on screen.
+  const groupSelect = () => screen.queryByRole<HTMLSelectElement>("combobox");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getHomeDirMock.mockResolvedValue("/Users/test");
+    createProjectFolderMock.mockResolvedValue(undefined);
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: { system: { getHomeDir: getHomeDirMock } },
+    });
+  });
+
+  async function create(): Promise<void> {
+    fireEvent.change(folderInput(), { target: { value: "my-api" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^create folder$/i }));
+    });
+  }
+
+  it("offers no group row while no groups exist", async () => {
+    await renderDialog();
+    expect(groupSelect()).toBeNull();
+  });
+
+  it("files the new folder under the chosen group", async () => {
+    useProjectGroupsStore.setState({
+      groups: [makeProjectGroup("g1", "Daintree"), makeProjectGroup("g2", "Clients", 1)],
+    });
+    await renderDialog();
+
+    expect(groupSelect()?.value).toBe("no-group");
+    fireEvent.change(groupSelect()!, { target: { value: "g2" } });
+    await create();
+
+    expect(createProjectFolderMock).toHaveBeenCalledWith(
+      "/Users/test",
+      "my-api",
+      suggestProjectEmoji("my-api"),
+      { disposition: "current", groupId: "g2" }
+    );
+  });
+
+  it("sends no group when the chosen one is deleted while the dialog is open", async () => {
+    useProjectGroupsStore.setState({
+      groups: [makeProjectGroup("g1", "Daintree"), makeProjectGroup("g2", "Clients", 1)],
+    });
+    await renderDialog();
+    fireEvent.change(groupSelect()!, { target: { value: "g1" } });
+
+    act(() => {
+      useProjectGroupsStore.setState({ groups: [makeProjectGroup("g2", "Clients")] });
+    });
+    expect(groupSelect()?.value).toBe("no-group");
+    await create();
+
+    expect(createProjectFolderMock).toHaveBeenCalledWith(
+      "/Users/test",
+      "my-api",
+      suggestProjectEmoji("my-api"),
+      { disposition: "current" }
+    );
+  });
+
+  it("starts from no group each time it opens", async () => {
+    useProjectGroupsStore.setState({ groups: [makeProjectGroup("g1", "Daintree")] });
+    const { onClose, rerender } = await renderDialog();
+    fireEvent.change(groupSelect()!, { target: { value: "g1" } });
+
+    rerender(<CreateProjectFolderDialog isOpen={false} onClose={onClose} />);
+    rerender(<CreateProjectFolderDialog isOpen={true} onClose={onClose} />);
+
+    await waitFor(() => expect(groupSelect()?.value).toBe("no-group"));
   });
 });
 

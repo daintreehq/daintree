@@ -7,6 +7,7 @@ import { isBuiltInAgentId } from "../../../shared/config/agentIds.js";
 import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../shared/config/mcpLimits.js";
 import { panelKindHasPty } from "../../../shared/config/panelKindRegistry.js";
 import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
+import { captureTerminalTail } from "../../../shared/utils/terminalInputLine.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { readClientMetadata } from "../../../shared/utils/mcpClientMetadata.js";
 import {
@@ -22,11 +23,16 @@ import {
   isClientMetadataEligible,
 } from "../../../shared/utils/panelCount.js";
 import { planChoice } from "../../../shared/utils/terminalChoice.js";
+import {
+  matchesTerminalLocationFilter,
+  TERMINAL_LOCATION_FILTERS,
+} from "../../../shared/utils/terminalLocationFilter.js";
 import { assessInterruptCandidate } from "../../../shared/utils/terminalInterrupt.js";
 import { formatNoPanelMessage } from "../../../shared/utils/terminalInOtherProject.js";
 import {
   CHOOSE_SCREEN_LINES,
   keySequence,
+  screenChangedField,
   SEND_KEYS_GAP_MS,
   SEND_KEYS_SCREEN_LINES,
   SEND_KEYS_SETTLE_MS,
@@ -57,7 +63,7 @@ import {
 const TerminalListArgsSchema = z
   .object({
     worktreeId: z.string().optional(),
-    location: z.enum(["grid", "dock", "trash", "background"]).optional(),
+    location: z.enum(TERMINAL_LOCATION_FILTERS).optional(),
     owned: z.boolean().optional(),
     terminalId: z.string().min(1).optional(),
     includeClientMetadata: z.boolean().optional(),
@@ -271,11 +277,7 @@ export async function runTerminalList(
   const listed = rows
     .filter((row) => (worktreeId ? row.worktreeId === worktreeId : true))
     .filter((row) => (terminalId ? row.panel.id === terminalId : true))
-    .filter((row) =>
-      location
-        ? row.location === location
-        : row.location !== "trash" && row.location !== "background"
-    )
+    .filter((row) => matchesTerminalLocationFilter(row.location, location))
     .map((row) => row.summary);
 
   // The limits a view would apply with none configured: no per-user setting is
@@ -311,23 +313,26 @@ export async function runTerminalGetOutput(
   const pty = deps.getPtyReader();
   if (!pty || pty.getTerminalProjectId(terminalId) !== project.id) return success(missing);
   // Raw output keeps the whole-buffer read, as the view's does: the
-  // serializer's erase escapes depend on the range it starts from.
-  const serialized = stripAnsi
-    ? await readTailSnapshot(
-        (options) => pty.getSerializedStateAsync(terminalId, options),
-        maxLines
-      )
-    : await pty.getSerializedStateAsync(terminalId);
+  // serializer's erase escapes depend on the range it starts from. The record
+  // names the agent whose input box the screen is read for (#16189); one that
+  // can't be read leaves the box `unknown`, never the output unread.
+  const [serialized, record] = await Promise.all([
+    stripAnsi
+      ? readTailSnapshot((options) => pty.getSerializedStateAsync(terminalId, options), maxLines)
+      : pty.getSerializedStateAsync(terminalId),
+    pty.getTerminalAsync(terminalId).catch(() => null),
+  ]);
   if (serialized === null) return success(missing);
 
-  const { content, lineCount, truncated } = tailCapturedOutput(
+  const { content, lineCount, truncated, inputLine } = captureTerminalTail(
     serialized.data,
     maxLines,
-    stripAnsi
+    stripAnsi,
+    record?.detectedAgentId ?? record?.launchAgentId
   );
   return success(
     fitTerminalOutputResult(
-      { terminalId, content, lineCount, truncated },
+      { terminalId, content, lineCount, truncated, inputLine },
       MCP_RESPONSE_TEXT_MAX_BYTES
     )
   );
@@ -343,7 +348,7 @@ export async function runTerminalGetOutput(
 const FleetStatusArgsSchema = z
   .object({
     worktreeId: z.string().optional(),
-    location: z.enum(["grid", "dock", "trash", "background"]).optional(),
+    location: z.enum(TERMINAL_LOCATION_FILTERS).optional(),
     submissionToken: z.string().min(1).max(128).optional(),
     includeOutput: z
       .union([
@@ -364,8 +369,8 @@ const MAX_STATUS_IDS = 256;
  * `terminal.getStatus` for named terminals, read off the pty-host; or, naming
  * none, for the project's fleet (#13501) as a view picks it: its panels in
  * layout order, filtered by worktree and by location, leaving out the trash
- * and background ones unless that location is asked for, then read the same
- * way. Panel locations come from the saved layout a view would hydrate. A
+ * and background ones unless that location, or every one, is asked for, then
+ * read the same way. Panel locations come from the saved layout a view would hydrate. A
  * fleet the pty-host could not list whole is refused rather than reported
  * short, since a missing terminal would read as one that isn't there.
  */
@@ -400,12 +405,7 @@ export async function runTerminalGetStatus(
   }
   const ids = panels
     .filter((panel) => {
-      const where = panelLocation(panel);
-      if (
-        location !== undefined ? where !== location : where === "trash" || where === "background"
-      ) {
-        return false;
-      }
+      if (!matchesTerminalLocationFilter(panelLocation(panel), location)) return false;
       return (
         worktreeId === undefined ||
         (panel.record?.worktreeId ?? panel.snapshot?.worktreeId) === worktreeId
@@ -600,6 +600,8 @@ export async function runTerminalSendKeys(
   if (keys === undefined) {
     return failure("VALIDATION_ERROR", "Pass `choose` or `keys`. Nothing was pressed.");
   }
+  // The window read after the keys, read before them too (#16209).
+  const before = await readScreen(SEND_KEYS_SCREEN_LINES).catch(() => null);
   // One write per key, spaced out, as the view's action writes them.
   for (const [index, key] of keys.entries()) {
     if (index > 0) await deps.sleep(SEND_KEYS_GAP_MS);
@@ -607,5 +609,10 @@ export async function runTerminalSendKeys(
   }
   await deps.sleep(SEND_KEYS_SETTLE_MS);
   const screen = await readScreen(SEND_KEYS_SCREEN_LINES).catch(() => null);
-  return success({ terminalId, keys, ...(screen ? { screen } : {}) });
+  return success({
+    terminalId,
+    keys,
+    ...(screen ? { screen } : {}),
+    ...screenChangedField(before, screen),
+  });
 }

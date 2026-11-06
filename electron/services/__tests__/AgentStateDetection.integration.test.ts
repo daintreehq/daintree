@@ -1,24 +1,24 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { PtyManager } from "../PtyManager.js";
+import { loadPtyIntegration } from "./helpers/nativePtyCapability.js";
 import { events, type DaintreeEventMap } from "../events.js";
 
 // Type for agent:state-changed event handler
 type AgentStateChangedHandler = (payload: DaintreeEventMap["agent:state-changed"]) => void;
 
-let PtyManagerClass: any;
-let testUtils: any;
+const loadSuiteModules = async () => ({
+  PtyManager: (await import("../PtyManager.js")).PtyManager,
+  testUtils: await import("./helpers/ptyTestUtils.js"),
+});
 
-try {
-  PtyManagerClass = (await import("../PtyManager.js")).PtyManager;
-  testUtils = await import("./helpers/ptyTestUtils.js");
-} catch (_error) {
-  console.warn("node-pty not available, skipping agent state detection tests");
-}
+const ptyIntegration = await loadPtyIntegration(loadSuiteModules);
 
-const shouldSkip = !PtyManagerClass;
-
-describe.skipIf(shouldSkip)("Agent State Detection Integration", () => {
-  const { cleanupPtyManager, waitForAgentStateChange, spawnShellTerminal, sleep } = testUtils || {};
+describe.skipIf(!ptyIntegration.available)("Agent State Detection Integration", () => {
+  // Vitest still runs a skipped suite's collector, so this body must not assume the modules loaded.
+  const { PtyManager: PtyManagerClass, testUtils } = (
+    ptyIntegration.available ? ptyIntegration.modules : { testUtils: {} }
+  ) as Awaited<ReturnType<typeof loadSuiteModules>>;
+  const { cleanupPtyManager, waitForAgentStateChange, spawnShellTerminal, sleep } = testUtils;
   let manager: PtyManager;
 
   beforeEach(() => {

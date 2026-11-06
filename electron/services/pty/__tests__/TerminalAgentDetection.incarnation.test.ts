@@ -7,6 +7,7 @@ import { AgentStateService } from "../AgentStateService.js";
 import { events } from "../../events.js";
 import type { DetectionResult } from "../../ProcessDetector.js";
 import type { TerminalInfo } from "../types.js";
+import { offerAgentRunArgvSession } from "../agentRunArgv.js";
 
 /**
  * The relaunch the pty cannot see (#12535), driven through the real state
@@ -153,5 +154,36 @@ describe("agent incarnation across a same-pty relaunch", () => {
     handleAgentDetection(h, { detectionState: "ambiguous", detected: false }, SPAWNED_AT);
 
     expect(terminal.agentIncarnation).toBe(0);
+  });
+
+  it("files a hand-typed resume under the run it started, not the one that quit (#15994)", () => {
+    const HAND_ID = "0199f8c1-2b4d-7e3a-9f10-5c6d7e8f9a0b";
+    const terminal = {
+      ...terminalInfo(),
+      launchAgentId: "codex",
+      launchGeneration: 4,
+      projectId: "proj-1",
+    } as TerminalInfo;
+    const h = host(terminal);
+    const codexRunning: DetectionResult = {
+      ...claudeRunning,
+      agentType: "codex",
+      processIconId: "codex",
+      processName: "codex",
+    };
+    const observed: unknown[] = [];
+    events.on("agent-session:observed", (payload) => observed.push(payload.run));
+
+    // The launched Codex quits to the shell…
+    handleAgentDetection(h, codexRunning, SPAWNED_AT);
+    handleAgentDetection(h, backAtShell, SPAWNED_AT);
+    // …and the user types `codex resume <id>` into it.
+    handleAgentDetection(h, codexRunning, SPAWNED_AT);
+    offerAgentRunArgvSession(terminal.id, terminal, {
+      agentType: "codex",
+      command: `codex resume ${HAND_ID}`,
+    });
+
+    expect(observed).toEqual([{ launchGeneration: 4, agentIncarnation: 1 }]);
   });
 });

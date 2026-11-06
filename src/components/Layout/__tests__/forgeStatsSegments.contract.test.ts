@@ -16,16 +16,16 @@ let button: string;
 let pill: string;
 let paused: string;
 let stripe: string;
-let placeholderToolbar: string;
+let placeholder: string;
 let css: string;
 
 beforeAll(async () => {
-  [button, pill, paused, stripe, placeholderToolbar, css] = await Promise.all([
+  [button, pill, paused, stripe, placeholder, css] = await Promise.all([
     read("ForgeStatsToolbarButton.tsx"),
     read("ForgeStatPill.tsx"),
     read("PRDetectionPausedIndicator.tsx"),
     read("ForgeStatusIndicator.tsx"),
-    read("Toolbar.tsx"),
+    read("ForgeStatsPlaceholder.tsx"),
     Promise.resolve(readToolbarCss()),
   ]);
 });
@@ -42,8 +42,10 @@ describe("forge stats strip segments", () => {
     // divide-x borders every child but the DOM-last, and the DOM-last child is
     // the absolutely positioned status stripe — the visually last segment kept
     // a right border that doubled the container edge.
-    for (const source of [button, placeholderToolbar]) {
-      for (const tag of tagsWithClass(source, "toolbar-stats ")) {
+    for (const source of [button, placeholder]) {
+      const containers = tagsWithClass(source, "toolbar-stats ");
+      expect(containers.length).toBeGreaterThan(0);
+      for (const tag of containers) {
         expect(tag).not.toMatch(/\bdivide-x\b/);
       }
     }

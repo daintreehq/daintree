@@ -128,6 +128,9 @@ export const theme: BuiltInThemeSource = {
     "search-match-badge-text": "#36CE94",
     "search-selected-result-border": "rgba(54,206,148,0.30)",
     "search-selected-result-icon": "#36CE94",
+    // Derived would be text-primary @42%, which measures 2.98:1 against the
+    // highlighted row on a panel surface, under the 3:1 its outline owes.
+    "selection-outline": "rgba(228,228,231,0.44)",
     "surface-toolbar": "#151211",
     // The resting edge of every text field. It is its own token, not the
     // `border-strong` the inputs used to share with dividers and card edges: an
@@ -223,8 +226,8 @@ export const theme: BuiltInThemeSource = {
     // Composited settings-sidebar-bg over the shell.
     "settings-sidebar-scroll-fade": "#1b1918",
     "sidebar-action-hover-bg": "rgba(255,255,255,0.05)",
-    "sidebar-active-bg": "rgba(255,255,255,0.065)",
-    "sidebar-hover-bg": "rgba(255,255,255,0.048)",
+    "sidebar-active-bg": "rgba(255,255,255,0.096)",
+    "sidebar-hover-bg": "rgba(255,255,255,0.064)",
     // No panel-focus overrides: the default theme keeps the app's stock focus
     // chrome by design.
     "toolbar-agent-hover-bg": "rgba(255,255,255,0.06)",

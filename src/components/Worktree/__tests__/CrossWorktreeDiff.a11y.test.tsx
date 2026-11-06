@@ -48,6 +48,7 @@ vi.mock("@/hooks/useAnimatedPresence", () => ({
 }));
 
 vi.mock("../DiffViewer", () => ({
+  DiffFilePath: ({ path }: { path: string }) => <span>{path}</span>,
   DiffViewer: () => <div data-testid="diff-viewer" />,
 }));
 

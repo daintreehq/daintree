@@ -802,8 +802,18 @@ describe("store Proxy", () => {
           ["nested.inner.value", 8],
         ];
         for (const [key, value] of ops) {
-          store.set(key as never, value as never);
-          direct.set(key, value);
+          let directError: Error | undefined;
+          try {
+            direct.set(key, value);
+          } catch (error) {
+            if (!(error instanceof Error)) throw error;
+            directError = error;
+          }
+          if (directError) {
+            expect(() => store.set(key as never, value as never)).toThrow(directError.message);
+          } else {
+            store.set(key as never, value as never);
+          }
           expect(store.get(key as never)).toEqual(direct.get(key));
           expect(fs.readFileSync(path.join(tempDir, "config.json"), "utf8")).toBe(
             fs.readFileSync(path.join(confDir, "config.json"), "utf8")

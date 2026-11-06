@@ -4,9 +4,13 @@ import type { SerializeAddon } from "@xterm/addon-serialize";
 import type { AgentState, AgentId, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalCheckResult } from "../../../shared/types/checkResult.js";
 import type { TerminalHandback } from "../../../shared/types/handback.js";
-import type { PanelKind, PanelTitleMode } from "../../../shared/types/panel.js";
+import type { PanelKind, PanelTitleMode, ScheduledRunRef } from "../../../shared/types/panel.js";
 import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
-import type { PtyHostSpawnOptions, TerminalResizeResult } from "../../../shared/types/pty-host.js";
+import type {
+  OwnedTypedInput,
+  PtyHostSpawnOptions,
+  TerminalResizeResult,
+} from "../../../shared/types/pty-host.js";
 import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
 import { PTY_MIRROR_SCROLLBACK } from "../../../shared/config/scrollback.js";
 import type { ProcessDetector } from "../ProcessDetector.js";
@@ -76,6 +80,26 @@ export interface TerminalPublicState {
    * sends by itself, so a click on the pane does not read as a draft.
    */
   lastTypedInputAt?: number;
+  /**
+   * The last of that input written for an assistant, and whose (#16094), so
+   * its own keys needn't read as a person's on its next call.
+   */
+  lastOwnedInput?: OwnedTypedInput;
+  /**
+   * The last of that input anyone but `lastOwnedInput`'s owner wrote: a
+   * person's, or another assistant's once a different one wrote after it.
+   * Kept apart rather than inferred from the owner's stamp, so a key typed
+   * between an assistant's check and its write is never filed under its own.
+   */
+  lastForeignInputAt?: number;
+  /**
+   * The last input the agent could have taken as a prompt written for an
+   * assistant, and whose (#16187): typed anywhere but an approval dialog, or
+   * a submission. Filed when it arrives, from the state then.
+   */
+  lastOwnedPromptInput?: OwnedTypedInput;
+  /** The last of that input anyone but `lastOwnedPromptInput`'s owner wrote. */
+  lastForeignPromptInputAt?: number;
   lastOutputTime: number;
   lastCheckTime: number;
   /**
@@ -120,10 +144,17 @@ export interface TerminalPublicState {
    * start, so the id alone can't say the teardown observed anything (#13226).
    */
   sessionIdCapturedAtTeardown?: boolean;
+  /**
+   * The Claude Code store this terminal's launch env names, resolved once at
+   * spawn (#16269). Absent when the env names one that can't be resolved.
+   */
+  claudeConfigDir?: string;
   /** Process-level flags captured at launch time (e.g. --dangerously-skip-permissions) */
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */
   agentModelId?: string;
+  /** The scheduled run this terminal was launched for (#15977). */
+  scheduledRun?: ScheduledRunRef;
   /** Resolved argv passed to pty.spawn() at launch time (for diagnostics) */
   spawnArgs?: string[];
   /** Exit code from the PTY process (set on any exit, preserved or not) */
@@ -150,6 +181,14 @@ export interface TerminalPublicState {
    * it, so the next settle publishes it to the renderer.
    */
   lastHandbackUnpublished?: boolean;
+  /**
+   * When this pane last showed an agent's usage-limit banner, kept until its
+   * agent works again (#16136): work that lasts past a hold after the banner
+   * and doesn't end on an error. The rate-limit chip forgets after a window;
+   * this is what an account switch lists. Set in `TerminalProcess` on each
+   * appearance, cleared in `AgentStateService`; ephemeral (not persisted).
+   */
+  usageLimitObservedAt?: number;
   /** Worktree the terminal was spawned in; used when persisting agent session history */
   worktreeId?: string;
   /** Last non-useless title observed from xterm OSC updates (renderer-synced) */
@@ -304,7 +343,20 @@ export interface PtyManagerEvents {
     exitCode: number,
     signal?: number,
     launchGeneration?: number,
-    preserveSession?: boolean
+    preserveSession?: boolean,
+    /** The exiting incarnation's `TerminalInfo.spawnedAt`. */
+    spawnedAt?: number
+  ) => void;
+  /**
+   * The exit of an incarnation a same-id respawn already replaced: its facts
+   * only. Nothing keyed by the id may act on it, since the id is the successor's.
+   */
+  "superseded-exit": (
+    id: string,
+    exitCode: number,
+    signal: number | undefined,
+    launchGeneration: number | undefined,
+    spawnedAt: number
   ) => void;
   error: (id: string, error: string) => void;
   "resize-result": (id: string, result: TerminalResizeResult) => void;

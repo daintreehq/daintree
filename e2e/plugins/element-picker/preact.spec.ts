@@ -6,8 +6,7 @@ import { selectInPreview } from "../helpers/previewDriver";
 
 /**
  * The Element Picker on a Preact app built by its own Vite preset, whose dev
- * transform puts each element's JSX location on its vnode. Reading it waits
- * on #13888, which adds Preact's extractor to the core catalog.
+ * transform puts each element's JSX location on its vnode.
  */
 const projectDir = registerFixtureProject(() => createSiteProject(PREACT));
 
@@ -24,7 +23,7 @@ test.describe.serial("Element Picker on a Preact dev server", () => {
     await selectInPreview(session(), "h1", "h1");
   });
 
-  test.fixme("a heading traces to the JSX that created it (#13888)", async () => {
+  test("a heading traces to the JSX that created it", async () => {
     await selectInPreview(session(), "h1", PREACT_HEADING);
   });
 });

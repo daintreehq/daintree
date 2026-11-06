@@ -8,6 +8,9 @@ import {
   probeDb,
   probeDbFile,
   attemptRecovery,
+  isRecoveryPending,
+  markRecoveryPending,
+  clearRecoveryPending,
 } from "./persistence/db.js";
 import { runDbWork } from "./persistence/dbWorkerClient.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
@@ -28,6 +31,35 @@ const QUICK_CHECK_DRAIN_TIMEOUT_MS = 2000;
 // backup and keep the last good one.
 const MAX_BACKUP_VERIFY_FAILURES = 3;
 
+export type BackupFileState =
+  { kind: "saved"; writtenAt: number } | { kind: "missing" } | { kind: "unreadable" };
+
+/**
+ * Backups stopped mid-session. `corruption`: the live database failed its full
+ * check, so the next launch will attempt recovery. `verification`: backup
+ * candidates kept failing their check while the live database was never found
+ * corrupt, so nothing is recovered. `backup` is the preserved file as found
+ * when the latch was set.
+ */
+export interface BackupSuspensionNotice {
+  reason: "corruption" | "verification";
+  backup: BackupFileState;
+}
+
+type BackupSuspensionListener = (notice: BackupSuspensionNotice) => void;
+
+function readBackupFileState(backupPath: string): BackupFileState {
+  try {
+    return { kind: "saved", writtenAt: fs.statSync(backupPath).mtimeMs };
+  } catch (error) {
+    // Only a confirmed absence may be reported as "no backup": a file that
+    // exists but can't be read is still what the next launch will try.
+    return (error as NodeJS.ErrnoException | null)?.code === "ENOENT"
+      ? { kind: "missing" }
+      : { kind: "unreadable" };
+  }
+}
+
 class DatabaseMaintenanceService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private removeSuspendListener: (() => void) | null = null;
@@ -40,9 +72,13 @@ class DatabaseMaintenanceService {
   // Latched when the live database is confirmed corrupt, or when candidates keep
   // failing verification. Recovery cannot run mid-session (the DB is open), so
   // the safe move is to stop backing up entirely and preserve the last good
-  // backup for the next boot's probe to restore from.
+  // backup for the next boot's probe to restore from. Only confirmed corruption
+  // is persisted (markRecoveryPending) — verification failures alone are not
+  // proof the live DB is bad, so they never force the next boot to recover.
   private backupsSuspended = false;
   private consecutiveVerifyFailures = 0;
+  private readonly suspensionListeners = new Set<BackupSuspensionListener>();
+  private readonly suspensionsAnnounced = new Set<BackupSuspensionNotice["reason"]>();
 
   initialize(wasCleanExit = false): void {
     if (this.initialized) return;
@@ -55,27 +91,15 @@ class DatabaseMaintenanceService {
     // this closes the boot→first-tick window and the corruption-recovery path.
     tightenFilePermissionsSync(getBackupPath());
 
-    // On clean-exit boots corruption is impossible — skip the O(size) page scan
-    // and do a cheap open instead. The full quick_check runs from the idle
-    // maintenance tick. On unclean exits (crash, power loss, SIGKILL) run the
-    // full scan immediately so recovery happens before getSharedDb() opens the file.
-    if (!probeDb(dbPath, !wasCleanExit)) {
-      console.error("[DatabaseMaintenance] Database corruption detected, attempting recovery");
-      const recovery = attemptRecovery(dbPath);
-      if (recovery === null) {
-        console.error(
-          "[DatabaseMaintenance] Recovery failed — corrupt database may still be in place"
-        );
-      } else {
-        this.pendingRecovery = recovery;
-        if (recovery.kind === "restored-from-backup") {
-          console.log("[DatabaseMaintenance] Recovery successful — restored from backup");
-        } else {
-          console.warn(
-            "[DatabaseMaintenance] No usable backup to restore — fresh database will be created"
-          );
-        }
-      }
+    // Clean-exit boots skip the O(size) page scan and do a cheap open instead;
+    // the full quick_check runs from the idle maintenance tick. On unclean exits
+    // (crash, power loss, SIGKILL) run the full scan immediately so recovery
+    // happens before getSharedDb() opens the file. A recovery left pending by an
+    // earlier session always gets the full scan.
+    if (isRecoveryPending(dbPath)) {
+      this.resolvePendingRecovery(dbPath);
+    } else if (!probeDb(dbPath, !wasCleanExit)) {
+      this.recoverCorruptDb(dbPath);
     } else if (wasCleanExit) {
       // Clean-exit boots skip the O(size) quick_check; run it once from the
       // first idle tick on the DB worker thread instead.
@@ -83,6 +107,55 @@ class DatabaseMaintenanceService {
     }
 
     console.log("[DatabaseMaintenance] Initialized (probe complete)");
+  }
+
+  /**
+   * A previous session confirmed corruption it could not recover from while the
+   * DB was open, so this boot runs the full scan whatever kind of exit preceded
+   * it. Only a proven "ok" clears that verdict: probeDb's fail-open `true` on an
+   * unreadable file is not evidence the corruption is gone, and neither is it
+   * grounds to quarantine a file this boot could not check.
+   */
+  private resolvePendingRecovery(dbPath: string): void {
+    const verdict = probeDbFile(dbPath);
+    if (verdict === "ok") {
+      clearRecoveryPending(dbPath);
+      console.log(
+        "[DatabaseMaintenance] Database passed its full check — clearing pending recovery"
+      );
+    } else if (verdict === "corrupt") {
+      this.recoverCorruptDb(dbPath);
+    } else {
+      this.backupsSuspended = true;
+      console.warn(
+        "[DatabaseMaintenance] Could not verify a database previously found corrupt — backups suspended, recovery stays pending"
+      );
+    }
+  }
+
+  private recoverCorruptDb(dbPath: string): void {
+    console.error("[DatabaseMaintenance] Database corruption detected, attempting recovery");
+    const recovery = attemptRecovery(dbPath);
+    if (recovery === null) {
+      // The corrupt file is still the one getSharedDb() will open: keep the last
+      // good backup out of reach and make the next boot try again.
+      this.backupsSuspended = true;
+      markRecoveryPending(dbPath);
+      console.error(
+        "[DatabaseMaintenance] Recovery failed — corrupt database may still be in place; backups suspended until a later boot recovers"
+      );
+      return;
+    }
+
+    clearRecoveryPending(dbPath);
+    this.pendingRecovery = recovery;
+    if (recovery.kind === "restored-from-backup") {
+      console.log("[DatabaseMaintenance] Recovery successful — restored from backup");
+    } else {
+      console.warn(
+        "[DatabaseMaintenance] No usable backup to restore — fresh database will be created"
+      );
+    }
   }
 
   /**
@@ -105,6 +178,37 @@ class DatabaseMaintenanceService {
    */
   restoreRecovery(recovery: DatabaseRecovery): void {
     this.pendingRecovery ??= recovery;
+  }
+
+  /**
+   * Told once per reason when backups stop mid-session. Boot-time suspensions
+   * are not reported here: they precede any renderer, and a recovery that ran
+   * reaches the user through `consumeRecovery()`.
+   */
+  onBackupsSuspended(listener: BackupSuspensionListener): () => void {
+    this.suspensionListeners.add(listener);
+    return () => {
+      this.suspensionListeners.delete(listener);
+    };
+  }
+
+  private announceSuspension(reason: BackupSuspensionNotice["reason"]): void {
+    // A latch reached while dispose() drains belongs to the next launch, whose
+    // recovery (or deferred check) reports it there.
+    if (this.disposed || this.suspensionsAnnounced.has(reason)) return;
+    // Corruption is the stronger claim; a later "backups stopped" would only
+    // muddy it.
+    if (reason === "verification" && this.suspensionsAnnounced.has("corruption")) return;
+    this.suspensionsAnnounced.add(reason);
+
+    const notice: BackupSuspensionNotice = { reason, backup: readBackupFileState(getBackupPath()) };
+    for (const listener of this.suspensionListeners) {
+      try {
+        listener(notice);
+      } catch (error) {
+        console.warn("[DatabaseMaintenance] Backup suspension listener failed:", error);
+      }
+    }
   }
 
   startMaintenance(): void {
@@ -250,10 +354,13 @@ class DatabaseMaintenanceService {
           return true;
         }
         this.backupsSuspended = true;
+        // Even mid-dispose: the next boot only sees this verdict through the marker.
+        markRecoveryPending(getDbPath());
         console.error(
           `[DatabaseMaintenance] Deferred quick_check reported corruption in ${getDbPath()} — backups suspended to preserve the existing backup:`,
           result
         );
+        this.announceSuspension("corruption");
         return false;
       })
       .catch((error: unknown) => {
@@ -383,6 +490,7 @@ class DatabaseMaintenanceService {
       console.error(
         `[DatabaseMaintenance] ${this.consecutiveVerifyFailures} backups in a row failed verification — suspending backups to preserve the existing backup at ${backupPath}`
       );
+      this.announceSuspension("verification");
     }
   }
 

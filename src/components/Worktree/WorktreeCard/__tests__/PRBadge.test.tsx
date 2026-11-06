@@ -58,14 +58,7 @@ const ciStatus = (state: CIStatusState): CIStatus => ({
 function renderBadge(extra: Partial<Parameters<typeof PRBadge>[0]> = {}) {
   return render(
     <TooltipProvider>
-      <PRBadge
-        prNumber={42}
-        prState="open"
-        isSubordinate={false}
-        worktreePath="/repo"
-        isActive
-        {...extra}
-      />
+      <PRBadge prNumber={42} prState="open" isSubordinate={false} worktreePath="/repo" {...extra} />
     </TooltipProvider>
   );
 }
@@ -186,7 +179,10 @@ describe("PRBadge CI rollup mark", () => {
 
     const button = screen.getByRole("button");
     expect(button.getAttribute("aria-label")).toContain("CI passing");
-    expect(button.querySelector(".lucide-check")).toBeTruthy();
+    // The shared success severity glyph (CheckCircle2), not a bare check.
+    expect(
+      button.querySelector('svg[class*="circle-check"], svg[class*="check-circle"]')
+    ).toBeTruthy();
     expect(button.querySelector(".status-mark")).toBeNull();
   });
 });

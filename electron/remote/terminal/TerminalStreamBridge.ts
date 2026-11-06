@@ -40,8 +40,11 @@ import { DEFAULT_TERMINAL_RING_BYTES, RingBudget, TerminalRing, type RingFrame }
  * throttles its PTY. While the client is away the bridge acks everything
  * itself, so no PTY stalls waiting for a renderer that is not there, and the
  * ring holds the output for the client's resume. A client that falls too far
- * behind, or stops acking for too long, is dropped to a snapshot resync well
- * before the pty-host would pause the PTY on its account.
+ * behind, or leaves output it was sent unacked for too long, is dropped to a
+ * snapshot resync well before the pty-host would pause the PTY on its account.
+ * Output that follows a resync is acked here too until the client shows it has
+ * applied the snapshot, so a snapshot slow to arrive or restore never times
+ * out the output queued behind it.
  */
 
 export interface TerminalStreamBridgeOptions {
@@ -82,7 +85,7 @@ export interface TerminalStreamBridgeOptions {
   maxOutstandingBytes?: number;
   /** Unacked bytes across all of this endpoint's terminals before the busiest one is resynced. */
   maxTotalOutstandingBytes?: number;
-  /** How long outstanding output may go without an ack before its terminal is resynced. */
+  /** How long output written to the link may go without an ack before its terminal is resynced. */
   ackTimeoutMs?: number;
   /** Queued interactive-lane bytes above which output waits in the ring. */
   busyBytes?: number;
@@ -118,9 +121,11 @@ interface StreamState {
   ring: TerminalRing;
   /** Newest seq queued for the client. */
   sentSeq: number;
-  /** Bytes queued for the client that the pty-host still counts against this port. */
+  /** Output bytes the pty-host still counts against this port, sent or not. */
   outstanding: number;
-  /** When the oldest unacked output went out without an ack since; 0 when nothing is owed. */
+  /** Seq through which output is settled with the pty-host; later frames are still charged. */
+  settledThrough: number;
+  /** Since when output written to the link has waited for an ack; 0 when none does. */
   owedSince: number;
   /** Order of last output, for retiring the least recently active stream. */
   lastActivity: number;
@@ -134,6 +139,50 @@ interface StreamState {
    * reset lands the client's restore fence may sit above the new offsets.
    */
   owedReplacement: boolean;
+  /** A reset the link refused, kept to post again as it is rather than snapshot afresh. */
+  heldReset: { boundary: number; snapshot: SerializedTerminalSnapshot | null } | null;
+  ledger: AckLedger;
+}
+
+/**
+ * The client's acks, set against what was posted to it. They carry only byte
+ * counts, in the order the frames went out, so a position in the posted bytes
+ * says which frames an ack covers: frames settled with the pty-host already (a
+ * replay, output that followed a reset) pay nothing back. Positions run over a
+ * terminal's life on this bridge, across sessions and PTY restarts, because
+ * the renderer's ack queue does.
+ */
+interface AckLedger {
+  /** Output bytes posted to the client: where the next frame starts. */
+  posted: number;
+  /** Bytes the client has acked, as it sent them. */
+  acked: number;
+  /** Where the client's next ack starts. */
+  ackedTo: number;
+  /** Through where posted frames have been written to the link. */
+  writtenTo: number;
+  /** Where posted output still charged against the pty-host starts; null when none is. */
+  chargedFrom: number | null;
+  /** Resets the renderer has not yet said it took: where each was posted, oldest first. */
+  unconfirmedResets: { at: number; incarnation: number; seq: number }[];
+  /**
+   * The latest reset, until the client shows it has applied it: where it was
+   * posted and how much the client had acked by then. Output meanwhile is
+   * settled on arrival.
+   */
+  applying: { at: number; acked: number } | null;
+}
+
+function newLedger(): AckLedger {
+  return {
+    posted: 0,
+    acked: 0,
+    ackedTo: 0,
+    writtenTo: 0,
+    chargedFrom: null,
+    unconfirmedResets: [],
+    applying: null,
+  };
 }
 
 /** A snapshot requested through the pty-host port, fenced against the stream. */
@@ -300,6 +349,13 @@ export class TerminalStreamBridge {
     this.abandonFences(true);
     for (const stream of this.streams.values()) {
       this.setOutstanding(stream, 0);
+      this.markSettled(stream);
+      if (stream.heldReset) {
+        // Taken from the old connection's mirror; the repaint below replaces it.
+        stream.heldReset = null;
+        stream.resetting = false;
+        this.markReset(stream, "pty-port-replaced");
+      }
       if (replaced) {
         this.markReset(stream, "pty-port-replaced");
         stream.owedReplacement = true;
@@ -347,7 +403,18 @@ export class TerminalStreamBridge {
     this.session = null;
     this.resumed = false;
     for (const cleanup of this.sessionCleanup.splice(0)) cleanup();
-    for (const stream of this.streams.values()) this.settleOutstanding(stream);
+    for (const stream of this.streams.values()) {
+      this.settleOutstanding(stream);
+      // The next session's resume says what the client has; a reset it never
+      // got is owed to that one instead.
+      stream.ledger.applying = null;
+      stream.ledger.unconfirmedResets = [];
+      if (stream.heldReset) {
+        stream.heldReset = null;
+        stream.resetting = false;
+        stream.needsReset = true;
+      }
+    }
     this.behind.clear();
     this.clearAckTimer();
   }
@@ -388,6 +455,9 @@ export class TerminalStreamBridge {
         continue;
       }
       this.settleOutstanding(stream);
+      // Whatever the client still acks from before this is settled already;
+      // its count says nothing about the frames that follow.
+      stream.ledger.ackedTo = stream.ledger.posted;
       if (stream.resetting) {
         outcomes.push({ id: entry.id, outcome: "reset" });
         continue;
@@ -423,6 +493,7 @@ export class TerminalStreamBridge {
       for (const stream of this.streams.values()) {
         if (mentioned.has(stream.id)) continue;
         this.settleOutstanding(stream);
+        stream.ledger.ackedTo = stream.ledger.posted;
         stream.sentSeq = stream.seq;
         stream.needsReset = false;
         stream.resetReason = null;
@@ -570,6 +641,8 @@ export class TerminalStreamBridge {
       // for a client that fell behind is not carried; the new incarnation
       // streams from seq 1 on top of the scrollback it already has.
       const owed = stream?.owedReplacement === true;
+      // The renderer's ack queue for the terminal runs on across the restart.
+      const ledger = stream?.ledger;
       if (stream) {
         // The PTY restarted under the same id: its old output is history the
         // client already has; the new incarnation streams from seq 1.
@@ -581,7 +654,7 @@ export class TerminalStreamBridge {
         this.ackPty(id, bytes);
         return;
       }
-      stream = this.createStream(id, incarnation);
+      stream = this.createStream(id, incarnation, ledger);
       if (owed) this.markReset(stream, "pty-port-replaced");
       stream.owedReplacement = owed;
     }
@@ -592,9 +665,12 @@ export class TerminalStreamBridge {
         ? { seq: stream.seq, data, bytes }
         : { seq: stream.seq, data, bytes, streamEnd }
     );
-    if (!this.canSend || stream.resetting) {
-      // Nobody to ack it, or it is about to be covered by a snapshot.
+    if (!this.canSend || stream.resetting || stream.ledger.applying) {
+      // Nobody to ack it, or it follows a reset the client has yet to apply
+      // and so can't ack in time: settled here, still sent.
       this.ackPty(id, bytes);
+      stream.settledThrough = stream.seq;
+      this.pump(stream);
       return;
     }
     this.setOutstanding(stream, stream.outstanding + bytes);
@@ -611,7 +687,7 @@ export class TerminalStreamBridge {
     this.pump(stream);
   }
 
-  private createStream(id: string, incarnation: number): StreamState {
+  private createStream(id: string, incarnation: number, ledger = newLedger()): StreamState {
     if (this.streams.size >= this.sweepAt) {
       this.sweep();
       this.sweepAt = Math.max(MIN_SWEEP_AT, this.streams.size * 2);
@@ -631,12 +707,15 @@ export class TerminalStreamBridge {
       ring: new TerminalRing(this.ringBytes, this.budget),
       sentSeq: 0,
       outstanding: 0,
+      settledThrough: 0,
       owedSince: 0,
       lastActivity: 0,
       needsReset: false,
       resetReason: null,
       resetting: false,
       owedReplacement: false,
+      heldReset: null,
+      ledger,
     };
     this.streams.set(id, stream);
     return stream;
@@ -653,6 +732,7 @@ export class TerminalStreamBridge {
   private retire(stream: StreamState, settle: boolean): void {
     if (settle) this.settleOutstanding(stream);
     else this.setOutstanding(stream, 0);
+    stream.heldReset = null;
     for (const [requestId, fence] of this.fences) {
       if (fence.stream !== stream) continue;
       clearTimeout(fence.timer);
@@ -672,12 +752,22 @@ export class TerminalStreamBridge {
   }
 
   private pump(stream: StreamState): void {
-    if (!this.canSend || stream.resetting) return;
+    if (!this.canSend) return;
+    if (stream.heldReset && !this.deliverReset(stream)) {
+      this.behind.add(stream);
+      return;
+    }
+    if (stream.resetting) return;
     if (stream.needsReset) {
       this.reset(stream);
       return;
     }
+    const ledger = stream.ledger;
     while (stream.sentSeq < stream.seq) {
+      // A client still restoring a snapshot defers what follows it without
+      // acking; past a window of it the rest waits here, and its acks (or the
+      // end of the restore) let more through.
+      if (ledger.applying && this.applyingWindowFull(ledger)) return;
       if (this.heldBack(stream)) {
         this.behind.add(stream);
         return;
@@ -690,19 +780,41 @@ export class TerminalStreamBridge {
         return;
       }
       const message = { type: "data", id: stream.id, data: frame.data, bytes: frame.bytes };
+      const from = ledger.posted;
+      const to = from + frame.bytes;
       const result = this.post(
         stream.id,
         stream.incarnation,
         frame.seq,
-        frame.streamEnd === undefined ? message : { ...message, streamEnd: frame.streamEnd }
+        frame.streamEnd === undefined ? message : { ...message, streamEnd: frame.streamEnd },
+        this.onFrameWritten(stream.id, ledger, to)
       );
       if (result === "refused") {
         this.behind.add(stream);
         return;
       }
       stream.sentSeq = frame.seq;
+      ledger.posted = to;
+      if (frame.seq > stream.settledThrough) ledger.chargedFrom ??= from;
     }
     this.behind.delete(stream);
+  }
+
+  private applyingWindowFull(ledger: AckLedger): boolean {
+    const applying = ledger.applying!;
+    const unacked = ledger.posted - applying.at - (ledger.acked - applying.acked);
+    return unacked >= this.maxOutstanding;
+  }
+
+  /** The ack clock starts once charged output has left for the client, not when it arrived. */
+  private onFrameWritten(id: string, ledger: AckLedger, to: number): () => void {
+    const session = this.session;
+    return () => {
+      const stream = this.streams.get(id);
+      if (this.session !== session || stream?.ledger !== ledger) return;
+      ledger.writtenTo = Math.max(ledger.writtenTo, to);
+      this.updateAckClock(stream, false);
+    };
   }
 
   /**
@@ -764,9 +876,12 @@ export class TerminalStreamBridge {
     clearTimeout(fence.timer);
     this.fences.delete(requestId);
     const stream = fence.stream;
-    stream.resetting = false;
-    if (this.disposed || this.streams.get(stream.id) !== stream) return;
+    if (this.disposed || this.streams.get(stream.id) !== stream) {
+      stream.resetting = false;
+      return;
+    }
     if (!this.canSend) {
+      stream.resetting = false;
       stream.needsReset = true;
       return;
     }
@@ -788,16 +903,29 @@ export class TerminalStreamBridge {
       snapshotLost = "snapshot-too-large";
     }
     if (snapshotLost !== null) this.logSnapshotLost(stream, snapshotLost);
-    const result = this.postReset(stream, boundary, snapshot);
-    if (result === "refused") {
-      stream.needsReset = true;
-      this.behind.add(stream);
-      return;
-    }
+    // Still resetting until the link takes it: output meanwhile is settled on
+    // arrival and follows the reset.
+    stream.heldReset = { boundary, snapshot };
+    this.pump(stream);
+  }
+
+  /** Post a captured reset; false when the link refused it, to be tried again as it is. */
+  private deliverReset(stream: StreamState): boolean {
+    const held = stream.heldReset!;
+    if (this.postReset(stream, held.boundary, held.snapshot) === "refused") return false;
+    stream.heldReset = null;
+    stream.resetting = false;
     stream.owedReplacement = false;
     stream.resetReason = null;
-    stream.sentSeq = boundary;
-    this.pump(stream);
+    stream.sentSeq = held.boundary;
+    const ledger = stream.ledger;
+    ledger.unconfirmedResets.push({
+      at: ledger.posted,
+      incarnation: stream.incarnation,
+      seq: held.boundary,
+    });
+    ledger.applying = { at: ledger.posted, acked: ledger.acked };
+    return true;
   }
 
   /** Records why a reset is owed; the first reason stands until a reset lands. */
@@ -873,15 +1001,24 @@ export class TerminalStreamBridge {
     }
   }
 
-  private post(id: string, incarnation: number, seq: number, message: unknown): EnqueueResult {
+  private post(
+    id: string,
+    incarnation: number,
+    seq: number,
+    message: unknown,
+    onWritten?: () => void
+  ): EnqueueResult {
     const session = this.session;
     if (!session) return "refused";
     try {
-      return session.post({
-        lane: Lane.INTERACTIVE,
-        kind: InteractiveKind.TERMINAL_OUT,
-        body: { endpointId: this.endpointId, terminalId: id, incarnation, seq, message },
-      });
+      return session.post(
+        {
+          lane: Lane.INTERACTIVE,
+          kind: InteractiveKind.TERMINAL_OUT,
+          body: { endpointId: this.endpointId, terminalId: id, incarnation, seq, message },
+        },
+        onWritten
+      );
     } catch {
       return "refused";
     }
@@ -893,17 +1030,11 @@ export class TerminalStreamBridge {
     const message = parsed.data;
     // The id is the client's claim; the host's spawn records decide.
     if (!this.owns(message.id)) return;
-    if (message.type === "ack") {
-      // Clamped: acks for frames the bridge already settled (a replay, a
-      // reset, an earlier session) must not be counted twice by the pty-host.
+    if (message.type === "ack" || message.type === "reset-ack") {
       const stream = this.streams.get(message.id);
       if (!stream) return;
-      const bytes = Math.min(message.bytes, stream.outstanding);
-      if (bytes <= 0) return;
-      this.setOutstanding(stream, stream.outstanding - bytes);
-      // Progress restarts the clock on whatever is still owed.
-      if (stream.outstanding > 0) stream.owedSince = Date.now();
-      this.ackPty(message.id, bytes);
+      if (message.type === "ack") this.onAck(stream, message.bytes);
+      else this.onResetAck(stream, message.incarnation, message.seq);
       return;
     }
     // Only the driver types into or sizes the PTY; anyone else's input would
@@ -926,21 +1057,112 @@ export class TerminalStreamBridge {
     this.opts.onInput?.();
   }
 
+  /**
+   * Pay back what an ack covers. Only the part that lands on output still
+   * charged against the pty-host reaches it; the part for frames settled here
+   * already (a replay, a reset's catch-up) pays down nothing newer.
+   */
+  private onAck(stream: StreamState, bytes: number): void {
+    if (bytes <= 0) return;
+    const ledger = stream.ledger;
+    ledger.acked += bytes;
+    const applying = ledger.applying;
+    if (applying) {
+      if (ledger.unconfirmedResets.length === 0) {
+        // The renderer took the reset before sending this, and acks output
+        // after a reset only once it has restored the snapshot.
+        ledger.applying = null;
+      } else if (ledger.acked > applying.at) {
+        // A client that predates reset-ack: it has now acked more than was
+        // ever posted before the reset, so some of this is for output after
+        // it. Which of its acks since were late ones for output before the
+        // reset can't be told, so it is placed as if none were: at worst a
+        // few catch-up acks then pay down live output, never the reverse,
+        // which would leave live output owed for good.
+        ledger.unconfirmedResets = [];
+        ledger.ackedTo = Math.min(ledger.posted, applying.at + ledger.acked - applying.acked);
+        ledger.applying = null;
+        this.updateAckClock(stream, true);
+        this.pump(stream);
+        return;
+      }
+    }
+    const start = ledger.ackedTo;
+    const end = Math.min(ledger.posted, start + bytes);
+    ledger.ackedTo = end;
+    const charged =
+      ledger.chargedFrom === null ? 0 : Math.max(0, end - Math.max(start, ledger.chargedFrom));
+    const credit = Math.min(charged, stream.outstanding);
+    if (credit > 0) {
+      this.setOutstanding(stream, stream.outstanding - credit);
+      this.ackPty(stream.id, credit);
+    }
+    this.updateAckClock(stream, end > start);
+    if (applying) this.pump(stream);
+  }
+
+  /**
+   * Every ack the renderer sent before this was for output from before the
+   * reset; it dropped the rest. Resets ahead of the one named never reached
+   * it. One that matches no reset posted on this session is ignored.
+   */
+  private onResetAck(stream: StreamState, incarnation?: number, seq?: number): void {
+    const ledger = stream.ledger;
+    const matches = (reset: { incarnation: number; seq: number }) =>
+      (incarnation === undefined || reset.incarnation === incarnation) &&
+      (seq === undefined || reset.seq === seq);
+    let index = ledger.unconfirmedResets.findIndex(matches);
+    if (index < 0) return;
+    // Resets at the same point had nothing posted between them: the last is the one it took.
+    const first = ledger.unconfirmedResets[index]!;
+    const same = (reset?: { incarnation: number; seq: number; at: number }) =>
+      reset?.incarnation === first.incarnation && reset.seq === first.seq && reset.at === first.at;
+    while (same(ledger.unconfirmedResets[index + 1])) index++;
+    ledger.unconfirmedResets.splice(0, index + 1);
+    ledger.ackedTo = first.at;
+    // From here an ack is for output after the reset, so only those count
+    // toward the restore window. Before it they can't be told apart from
+    // late ones for output before it, and let output through too.
+    if (ledger.applying && ledger.unconfirmedResets.length === 0) {
+      ledger.applying.acked = ledger.acked;
+    }
+  }
+
   private settleOutstanding(stream: StreamState): void {
     if (stream.outstanding > 0) this.ackPty(stream.id, stream.outstanding);
     this.setOutstanding(stream, 0);
+    this.markSettled(stream);
   }
 
-  /** Every change to a stream's unacked bytes goes through here, so the total and the ack clock stay right. */
+  /** Nothing up to the newest frame is charged any more: the client owes no ack for it. */
+  private markSettled(stream: StreamState): void {
+    stream.settledThrough = stream.seq;
+    stream.ledger.chargedFrom = null;
+    stream.owedSince = 0;
+  }
+
+  /** Every change to a stream's unacked bytes goes through here, so the total stays right. */
   private setOutstanding(stream: StreamState, bytes: number): void {
     this.totalOutstanding += bytes - stream.outstanding;
-    if (bytes > 0 && stream.outstanding === 0) {
+    stream.outstanding = bytes;
+  }
+
+  /**
+   * The clock runs while charged output the link has written waits for an
+   * ack: never for bytes still in the ring or the lane. Any progress restarts
+   * it on what is still owed.
+   */
+  private updateAckClock(stream: StreamState, progressed: boolean): void {
+    const ledger = stream.ledger;
+    const owed =
+      ledger.chargedFrom !== null &&
+      ledger.writtenTo > Math.max(ledger.ackedTo, ledger.chargedFrom);
+    if (!owed) {
+      stream.owedSince = 0;
+    } else if (progressed || stream.owedSince === 0) {
       stream.owedSince = Date.now();
       this.armAckTimer();
-    } else if (bytes === 0) {
-      stream.owedSince = 0;
     }
-    stream.outstanding = bytes;
   }
 
   private armAckTimer(): void {
@@ -964,7 +1186,7 @@ export class TerminalStreamBridge {
     const now = Date.now();
     let earliest = Infinity;
     for (const stream of [...this.streams.values()]) {
-      if (stream.outstanding === 0) continue;
+      if (stream.owedSince === 0) continue;
       if (now - stream.owedSince >= this.ackTimeoutMs) {
         this.markReset(stream, "ack-timeout");
         this.pump(stream);

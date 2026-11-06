@@ -1,3 +1,4 @@
+import { setRawStoreValue } from "../../utils/storeValues.js";
 // eager-import-allow: reads layout-seed records via store.get alongside capture and claim transitions so concurrent views cannot apply the same seed
 import { store } from "../../store.js";
 import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
@@ -103,7 +104,7 @@ function parseRecord(value: unknown): ProjectLayoutSeedRecord {
 function write(projectId: string, record: ProjectLayoutSeedRecord): void {
   // Whole-key rewrite: electron-store dot-notation would nest on a key
   // containing dots, and a project id is opaque.
-  store.set(STORE_KEY, { ...readAll(), [projectId]: record });
+  setRawStoreValue(store, STORE_KEY, { ...readAll(), [projectId]: record });
 }
 
 /** The project's seed, or `null` when its first hydrate has not been seen yet. */

@@ -6,6 +6,7 @@ import type {
   TerminalAgentObservation,
   TerminalRestoreProvenance,
   TerminalSpawnSource,
+  ScheduledRunRef,
 } from "../panel.js";
 import type { AgentId } from "../agent.js";
 import type { AgentState, WaitingReason } from "../agent.js";
@@ -64,12 +65,23 @@ export interface TerminalSpawnOptions {
   /** Model ID selected at launch time */
   agentModelId?: string;
   /**
+   * The scheduled run this terminal was launched for (#15977). Kept on the
+   * terminal record so a session captured when its agent ends names the run.
+   */
+  scheduledRun?: ScheduledRunRef;
+  /**
    * Session id already known at launch (#11782) — minted by Daintree and passed
    * to the CLI via `resume.assignSessionIdArgs`, or the id this launch resumes.
    * Recorded on the terminal record at spawn so a force quit, crash or SIGKILL
    * can't lose it.
    */
   agentSessionId?: string;
+  /**
+   * Refuse the spawn rather than start a fresh conversation under the id when
+   * the Claude conversation `command` resumes was never written (#12371): the
+   * caller needs that exact conversation or nothing (#16019).
+   */
+  exactResume?: boolean;
   /** Worktree the terminal is spawned in; persisted in agent session history */
   worktreeId?: string;
   /** Preset ID the agent is being launched with (needed for fallback chain lookup on exit). */
@@ -83,6 +95,12 @@ export interface TerminalSpawnOptions {
    * instruction is already in `command`. Never persisted.
    */
   handbackCode?: string;
+  /**
+   * A recipe step's When done (#16172): main arms this launch with it, its
+   * `handbackCode` as the outstanding request, when the launch is a fresh agent
+   * terminal. Never persisted, so a restart doesn't re-arm.
+   */
+  whenDone?: "background" | "close";
   /**
    * The pane already has its first-prompt record, or this launch hands the
    * agent the prompt that becomes it (#15521). Absent, the first send written
@@ -172,6 +190,8 @@ export interface TerminalState {
   agentModelId?: string;
   /** Surface that spawned this terminal, captured at creation (#12419). */
   spawnedBy?: TerminalSpawnSource;
+  /** The scheduled run a `schedule`-spawned terminal belongs to (#15977). */
+  scheduledRun?: ScheduledRunRef;
   /** Preset ID selected at launch time */
   agentPresetId?: string;
   /** Preset brand color captured at launch time */
@@ -180,6 +200,8 @@ export interface TerminalState {
   originalPresetId?: string;
   /** Captured launch env replayed on restore so a session keeps its provider environment (#10922) */
   env?: Record<string, string>;
+  /** The account the pane launched on (#16040); its folder is in `env` */
+  agentAccountId?: string;
   /** Whether this panel is currently running on a fallback preset */
   isUsingFallback?: boolean;
   /** How many fallback hops have been consumed */
@@ -196,6 +218,8 @@ export interface TerminalState {
   launchedByPluginId?: string;
   /** The launching plugin asked restore to hold the pane (#14017). Untrusted until sanitized. */
   holdOnRestart?: true;
+  /** The exit the pane still showed when saved (#15941). Untrusted until sanitized. */
+  exitCode?: number;
   /**
    * Extension ID of the plugin that registered this panel's kind, if applicable.
    * Preserved across save/restore so the placeholder can name the missing plugin
@@ -398,6 +422,11 @@ export interface TerminalInfoPayload {
   agentSessionId?: string;
   /** Live detected identity — the agent currently running. Source of truth for chrome. */
   detectedAgentId?: BuiltInAgentId;
+  /**
+   * The program reading the PTY has bracketed paste on, as the host's mirror
+   * last parsed it. False when nothing reads the output.
+   */
+  bracketedPasteMode?: boolean;
   /** Whether semantic analysis is enabled for this terminal */
   analysisEnabled?: boolean;
   /** Resize strategy: "default" (immediate) or "settled" (batched for TUI agents) */
@@ -436,6 +465,12 @@ export interface TerminalInfoPayload {
    * never read absence as zero.
    */
   agentIncarnation?: number;
+  /**
+   * When the pane last showed an agent's usage-limit banner, held until its
+   * agent works again or a new session starts (#16136). An observation of
+   * printed text, kept far longer than the header chip's window.
+   */
+  usageLimitObservedAt?: number;
 }
 
 import type { TerminalActivityPayload } from "../terminal.js";

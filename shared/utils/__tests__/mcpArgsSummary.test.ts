@@ -72,6 +72,7 @@ describe("summarizeMcpArgs", () => {
       credential: "x",
       bearerToken: "x",
       api_key: "x",
+      recoveryPassphrase: "x y",
     });
     expect(out).toContain('"token":"<redacted>"');
     expect(out).toContain('"apiKey":"<redacted>"');
@@ -80,6 +81,7 @@ describe("summarizeMcpArgs", () => {
     expect(out).toContain('"credential":"<redacted>"');
     expect(out).toContain('"bearerToken":"<redacted>"');
     expect(out).toContain('"api_key":"<redacted>"');
+    expect(out).toContain('"recoveryPassphrase":"<redacted>"');
   });
 
   it("redacts conservatively on key names that contain a sensitive substring", () => {

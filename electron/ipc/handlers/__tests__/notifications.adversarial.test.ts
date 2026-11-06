@@ -26,6 +26,7 @@ const notificationServiceMock = vi.hoisted(() => ({
 
 const agentNotificationServiceMock = vi.hoisted(() => ({
   syncWatchedPanels: vi.fn(),
+  setSelectedWorktree: vi.fn(),
   acknowledgeWaiting: vi.fn(),
   acknowledgeWorkingPulse: vi.fn(),
   setSessionMuteUntil: vi.fn(),
@@ -246,6 +247,35 @@ describe("notifications IPC adversarial", () => {
     // Listener uses fire-and-forget dynamic import — await microtask drain
     await drainMicrotasks();
     expect(agentNotificationServiceMock.syncWatchedPanels).toHaveBeenCalledWith(7, ["a", "b"]);
+  });
+
+  it("syncWatched records the sending view's selected worktree, null included", async () => {
+    const listener = getListener(CHANNELS.NOTIFICATION_SYNC_WATCHED);
+    listener(fakeEvent(createSender(7)) as Electron.IpcMainEvent, ["a"], {
+      activeWorktreeId: "/repo/wt-a",
+    });
+    listener(fakeEvent(createSender(8)) as Electron.IpcMainEvent, [], { activeWorktreeId: null });
+
+    await drainMicrotasks();
+    expect(agentNotificationServiceMock.setSelectedWorktree).toHaveBeenNthCalledWith(
+      1,
+      7,
+      "/repo/wt-a"
+    );
+    expect(agentNotificationServiceMock.setSelectedWorktree).toHaveBeenNthCalledWith(2, 8, null);
+  });
+
+  it("syncWatched leaves the last selection standing when none, or a malformed one, comes with it", async () => {
+    const listener = getListener(CHANNELS.NOTIFICATION_SYNC_WATCHED);
+    const event = fakeEvent(createSender(7)) as Electron.IpcMainEvent;
+    listener(event, ["a"]);
+    listener(event, ["a"], { activeWorktreeId: 42 });
+    listener(event, ["a"], { activeWorktreeId: "" });
+    listener(event, ["a"], "wt-a");
+
+    await drainMicrotasks();
+    expect(agentNotificationServiceMock.syncWatchedPanels).toHaveBeenCalledTimes(4);
+    expect(agentNotificationServiceMock.setSelectedWorktree).not.toHaveBeenCalled();
   });
 
   it("syncWatched ignores non-array payload", () => {

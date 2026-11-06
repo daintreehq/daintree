@@ -59,16 +59,18 @@ export async function addProjectByPath(
   if (!path.isAbsolute(projectPath)) {
     throw new Error("Project path must be absolute");
   }
-  // The two halves are validated independently and stay separate keys.
+  // Each part is validated independently and stays a separate key.
   // `normalizeCreationIdentity` drops a malformed identity WHOLE, so folding
-  // `gitBacked` in alongside `name`/`emoji` would make a lightweight-open
-  // payload fail the identity gate and be discarded in silence.
+  // `gitBacked` or `groupId` in alongside `name`/`emoji` would make a payload
+  // carrying only one of them fail the identity gate and be discarded in silence.
+  const groupId = normalizeCreationGroupId(options?.groupId);
   const project = await projectStore.addProject(projectPath, {
     // Narrowed rather than forwarded: a caller may only ever ask to *drop* the
     // git requirement. Anything else would let it assert a mode the folder
     // doesn't have, and `addProject` alone decides that a repository was found.
     ...(options?.gitBacked === false ? { gitBacked: false } : {}),
     identity: normalizeCreationIdentity(options?.identity),
+    ...(groupId ? { groupId } : {}),
     ...(internal?.fresh ? { fresh: true } : {}),
   });
   broadcastToRenderer(CHANNELS.PROJECT_UPDATED, project);
@@ -110,6 +112,21 @@ function normalizeCreationIdentity(
   if (CONTROL_CHARS.test(trimmedName) || CONTROL_CHARS.test(trimmedEmoji)) return undefined;
 
   return { name: trimmedName, emoji: trimmedEmoji };
+}
+
+// Group ids are minted as UUIDs; the bound only stops a compromised renderer
+// from handing the group lookup an arbitrarily long string.
+const MAX_CREATION_GROUP_ID_LENGTH = 128;
+
+/**
+ * A creation dialog's group, shape-checked only. Whether it names a group that
+ * still exists is decided by `addProject` at the moment it writes the row, the
+ * one point a group deleted mid-add can't slip past.
+ */
+function normalizeCreationGroupId(groupId: unknown): string | undefined {
+  if (typeof groupId !== "string") return undefined;
+  if (groupId.length === 0 || groupId.length > MAX_CREATION_GROUP_ID_LENGTH) return undefined;
+  return groupId;
 }
 
 /**

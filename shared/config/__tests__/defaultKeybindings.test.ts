@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildDefaultKeybindings } from "../defaultKeybindings.js";
+import { evaluate, parse } from "../../utils/whenClause/index.js";
 import type { KeybindingConfig } from "../../types/keybinding.js";
 
 function globalCombo(bindings: KeybindingConfig[], actionId: string): string[] {
@@ -49,10 +50,16 @@ describe("buildDefaultKeybindings", () => {
     }
   });
 
-  it("holds Cmd+Shift+Enter only while dictating, so the commit box keeps it otherwise", () => {
+  it("holds Cmd+Shift+Enter only while dictating or while a send it started waits, so the commit box keeps it otherwise", () => {
     const whenOf = (table: KeybindingConfig[]) =>
       table.find((b) => b.actionId === "voiceInput.stopAndSend")?.when;
-    expect(whenOf(mac)).toBe("dictationActive");
+    const holds = (context: Record<string, boolean>) => evaluate(parse(whenOf(mac)!), context);
+    expect(holds({ dictationActive: false, voiceSendWaiting: false })).toBe(false);
+    expect(holds({ dictationActive: true, voiceSendWaiting: false })).toBe(true);
+    // #15705: pressed again while its send waits on the cleanup, it sends what stands.
+    expect(holds({ dictationActive: false, voiceSendWaiting: true })).toBe(true);
+    // An older send still waiting doesn't take the key from a dictation running now.
+    expect(holds({ dictationActive: true, voiceSendWaiting: true })).toBe(true);
     expect(whenOf(windows)).toBeUndefined();
     expect(whenOf(linux)).toBeUndefined();
   });

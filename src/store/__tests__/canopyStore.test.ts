@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { isCanopyUnread, type CanopySnapshot } from "@shared/types/ipc/canopy";
 import { ALL_HOSTS_ID, useCanopyStore } from "../canopyStore";
 import { CANOPY_LIST_MAX_WIDTH, CANOPY_LIST_MIN_WIDTH } from "@/components/Canopy/canopyListWidth";
+import { CANOPY_DOCK_MAX_WIDTH, CANOPY_DOCK_MIN_WIDTH } from "@/components/Canopy/canopyDockWidth";
 
 const SPAWNED = 1_000;
 
@@ -515,5 +516,62 @@ describe("the list's width", () => {
     window.localStorage.removeItem(KEY);
     window.dispatchEvent(new StorageEvent("storage", { key: KEY }));
     expect(store.getState().listWidth).toBeNull();
+  });
+});
+
+describe("the docked global assistant (#16214)", () => {
+  const DOCKED = "daintree-canopy-global-docked";
+  const WIDTH = "daintree-canopy-dock-width";
+  afterEach(() => {
+    window.localStorage.removeItem(DOCKED);
+    window.localStorage.removeItem(WIDTH);
+    useCanopyStore.setState({ globalDocked: false, dockWidth: null });
+  });
+  const reload = async () => {
+    vi.resetModules();
+    return (await import("../canopyStore")).useCanopyStore;
+  };
+
+  it("starts undocked, and keeps the dock and its width across launches", async () => {
+    const store = await reload();
+    expect(store.getState().globalDocked).toBe(false);
+    expect(store.getState().dockWidth).toBeNull();
+    store.getState().setGlobalDocked(true);
+    store.getState().setDockWidth(500);
+    const reloaded = await reload();
+    expect(reloaded.getState().globalDocked).toBe(true);
+    expect(reloaded.getState().dockWidth).toBe(500);
+    reloaded.getState().setGlobalDocked(false);
+    reloaded.getState().setDockWidth(null);
+    const again = await reload();
+    expect(again.getState().globalDocked).toBe(false);
+    expect(again.getState().dockWidth).toBeNull();
+  });
+
+  it("holds the width inside its bounds, and ignores one that isn't a number", async () => {
+    const store = await reload();
+    store.getState().setDockWidth(CANOPY_DOCK_MIN_WIDTH - 100);
+    expect(store.getState().dockWidth).toBe(CANOPY_DOCK_MIN_WIDTH);
+    store.getState().setDockWidth(Number.NaN);
+    expect(store.getState().dockWidth).toBe(CANOPY_DOCK_MIN_WIDTH);
+    for (const stored of ["wide", "", "500px"]) {
+      window.localStorage.setItem(WIDTH, stored);
+      expect((await reload()).getState().dockWidth).toBeNull();
+    }
+    window.localStorage.setItem(WIDTH, String(CANOPY_DOCK_MAX_WIDTH * 2));
+    expect((await reload()).getState().dockWidth).toBe(CANOPY_DOCK_MAX_WIDTH);
+  });
+
+  it("follows a sibling view's dock and width as soon as that view sets them", async () => {
+    const store = await reload();
+    window.localStorage.setItem(DOCKED, "1");
+    window.dispatchEvent(new StorageEvent("storage", { key: DOCKED }));
+    expect(store.getState().globalDocked).toBe(true);
+    window.localStorage.setItem(WIDTH, "640");
+    window.dispatchEvent(new StorageEvent("storage", { key: WIDTH }));
+    expect(store.getState().dockWidth).toBe(640);
+    window.localStorage.removeItem(DOCKED);
+    window.dispatchEvent(new StorageEvent("storage", { key: DOCKED }));
+    expect(store.getState().globalDocked).toBe(false);
   });
 });

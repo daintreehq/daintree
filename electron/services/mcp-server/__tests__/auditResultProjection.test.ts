@@ -92,12 +92,15 @@ describe("projectAuditResult — handback carriers (#12488)", () => {
   const HANDBACK_TEXT = "HANDBACK-SENTINEL fixed the auth bug";
   const handback = {
     message: HANDBACK_TEXT,
+    report: "needs-you",
     observedAt: 1_700_000_000_000,
     submissionToken: "tok-1",
     truncated: false,
   };
   const reduced = {
     messageChars: HANDBACK_TEXT.length,
+    // Which marker the agent printed is its shape, not its words (#16190).
+    report: "needs-you",
     observedAt: 1_700_000_000_000,
     submissionToken: "tok-1",
     truncated: false,
@@ -126,6 +129,42 @@ describe("projectAuditResult — handback carriers (#12488)", () => {
     expect(JSON.stringify(projected)).not.toContain("SENTINEL");
   });
 
+  it("reduces a submission's captured output to its shape and keeps the record (#16210)", () => {
+    const answer = "SENTINEL the answer the worker wrote";
+    const projected = projectAuditResult("terminal.getStatus", {
+      terminals: [
+        {
+          terminalId: "t1",
+          submission: {
+            token: "tok-1",
+            phase: "pty_written",
+            at: 5,
+            output: { text: answer, truncated: true, state: "capturing" },
+          },
+        },
+        { terminalId: "t2", submission: { token: "tok-1", phase: "unknown" } },
+      ],
+      source: "pty",
+    });
+
+    expect(projected).toEqual({
+      terminals: [
+        {
+          terminalId: "t1",
+          submission: {
+            token: "tok-1",
+            phase: "pty_written",
+            at: 5,
+            output: { textChars: answer.length, truncated: true, state: "capturing" },
+          },
+        },
+        { terminalId: "t2", submission: { token: "tok-1", phase: "unknown" } },
+      ],
+      source: "pty",
+    });
+    expect(JSON.stringify(projected)).not.toContain("SENTINEL");
+  });
+
   it("reduces the handback on a single wait and on each batched row", () => {
     const single = projectAuditResult("terminal.waitUntilIdle", {
       terminalId: "t1",
@@ -144,6 +183,25 @@ describe("projectAuditResult — handback carriers (#12488)", () => {
     expect(single).toMatchObject({ terminalId: "t1", lastHandback: reduced });
     expect(batch).toMatchObject({ results: [{ terminalId: "t1", lastHandback: reduced }] });
     expect(JSON.stringify([single, batch])).not.toContain("SENTINEL");
+  });
+
+  it("keeps a done report as done", () => {
+    const projected = projectAuditResult("terminal.waitUntilIdle", {
+      terminalId: "t1",
+      lastHandback: { ...handback, report: "done" },
+    });
+
+    expect(projected).toMatchObject({ lastHandback: { ...reduced, report: "done" } });
+  });
+
+  it("records no report it doesn't recognise", () => {
+    const projected = projectAuditResult("terminal.waitUntilIdle", {
+      terminalId: "t1",
+      lastHandback: { message: null, report: "HANDBACK-SENTINEL", observedAt: 5, truncated: false },
+    });
+
+    expect(projected).toMatchObject({ lastHandback: { report: undefined } });
+    expect(JSON.stringify(projected)).not.toContain("SENTINEL");
   });
 
   it("records a bare handback as having no message", () => {
@@ -626,5 +684,156 @@ describe("host.watch audit (#14463)", () => {
     expect(
       JSON.stringify(projectAuditArgs("host.watch", { note: "NOTE-SENTINEL", operation: 5 }))
     ).not.toContain("SENTINEL");
+  });
+
+  it("records an agent watch as one, never who it named waiting or where (#16188)", () => {
+    const result = projectAuditResult("host.watch", {
+      outcome: "ok",
+      detail: null,
+      retryAfterMs: null,
+      armed: true,
+      watches: [
+        {
+          watchId: "hw-0b7a1c2e-0000-4000-8000-000000000002",
+          hostId: null,
+          hostName: null,
+          condition: {
+            connection: null,
+            memoryAvailableBytesAtLeast: null,
+            cpuIdleCoresAtLeast: null,
+            memoryPressureAtMost: null,
+            agentsWaiting: { waitingReasons: ["approval"], projectId: "PROJECT-SENTINEL" },
+          },
+          status: "armed",
+          lostReason: null,
+          delivery: "none",
+        },
+      ],
+      observed: null,
+      agents: {
+        matches: [{ terminalId: "TERMINAL-SENTINEL", worktreeId: "/PATH-SENTINEL" }],
+        omitted: 0,
+        hosts: [{ hostId: "studio", name: "NAME-SENTINEL", hears: "events" }],
+      },
+    });
+    const args = projectAuditArgs("host.watch", {
+      operation: "arm",
+      agentsWaiting: true,
+      waitingReasons: ["approval", "REASON-SENTINEL", "any"],
+      projectId: "p1",
+      note: "NOTE-SENTINEL",
+    });
+
+    expect(result).toMatchObject({ watches: [{ hostId: null, on: "agents", status: "armed" }] });
+    expect(args).toMatchObject({
+      operation: "arm",
+      agentsWaiting: true,
+      waitingReasons: ["approval", "any"],
+      projectId: "p1",
+      noted: true,
+    });
+    const audited = JSON.stringify([summarizeMcpResult(result), summarizeMcpArgs(args)]);
+    expect(audited).not.toContain("SENTINEL");
+  });
+});
+
+describe("host.bringBack audit (#16170)", () => {
+  it("records how the attempt ended and what it did, never ssh's words or the host's network", () => {
+    const result = projectAuditResult("host.bringBack", {
+      outcome: "ok",
+      detail: "PROSE-SENTINEL",
+      retryAfterMs: null,
+      answer: {
+        status: "not_wakeable",
+        wake: "not_on_lan",
+        reached: false,
+        startRequested: false,
+        observed: "ssh: connect to host OBSERVED-SENTINEL port 22: Operation timed out",
+        elapsedMs: 10_250,
+      },
+    });
+    expect(result).toEqual({
+      outcome: "ok",
+      status: "not_wakeable",
+      wake: "not_on_lan",
+      reached: false,
+      startRequested: false,
+      elapsedMs: 10_250,
+    });
+    const args = projectAuditArgs("host.bringBack", { hostId: "studio-01", extra: "ARG-SENTINEL" });
+    expect(args).toEqual({ hostId: "studio-01" });
+    const audited = JSON.stringify([summarizeMcpResult(result), summarizeMcpArgs(args)]);
+    expect(audited).not.toContain("SENTINEL");
+    expect(projectAuditResult("host.bringBack", "nope")).toEqual({ status: "unrecognized" });
+    expect(
+      projectAuditResult("host.bringBack", { outcome: "ok", answer: { status: "STATUS-SENTINEL" } })
+    ).toMatchObject({ status: null, wake: null });
+  });
+});
+
+describe("host.status audit (#16191)", () => {
+  it("records which projects were read and how each went, never a screen, handback or check", () => {
+    const result = projectAuditResult("host.status", {
+      hosts: [{ hostId: "studio-01", coverage: "ok" }],
+      targets: [
+        {
+          hostId: "studio-01",
+          projectId: "a3f9c2",
+          outcome: "ok",
+          detail: "DETAIL-SENTINEL",
+          retryAfterMs: null,
+          source: "pty",
+          unavailableFields: [],
+          complete: true,
+          omitted: 2,
+        },
+        { hostId: "studio-01", projectId: "PROJECT SENTINEL with words", outcome: "WEIRD" },
+      ],
+      terminals: [
+        {
+          terminalId: "t-1",
+          agentId: "claude",
+          agentState: "waiting",
+          recentOutput: "SCREEN-SENTINEL",
+          lastHandback: { message: "HANDBACK-SENTINEL", observedAt: 1, truncated: false },
+          lastCheckResult: {
+            command: "COMMAND-SENTINEL",
+            passed: false,
+            ranAt: 1,
+            failureSummary: "CHECK-SENTINEL",
+            truncated: false,
+          },
+          error: "ERROR-SENTINEL",
+          hostId: "studio-01",
+          projectId: "a3f9c2",
+        },
+      ],
+    });
+    expect(result).toEqual({
+      hosts: [{ hostId: "studio-01", coverage: "ok" }],
+      targets: [
+        { hostId: "studio-01", projectId: "a3f9c2", outcome: "ok", omitted: 2 },
+        { hostId: "studio-01", projectId: null, outcome: null, omitted: null },
+      ],
+      terminalCount: 1,
+    });
+    const args = projectAuditArgs("host.status", {
+      targets: [
+        { hostId: "studio-01", projectId: "a3f9c2", terminalIds: ["ID-SENTINEL", "t-2"] },
+        { hostId: "mini", projectId: "b4" },
+      ],
+      includeOutput: { lines: 5 },
+      note: "ARG-SENTINEL",
+    });
+    expect(args).toEqual({
+      targets: [
+        { hostId: "studio-01", projectId: "a3f9c2", terminalCount: 2 },
+        { hostId: "mini", projectId: "b4", terminalCount: null },
+      ],
+      includeOutput: true,
+    });
+    const audited = JSON.stringify([summarizeMcpResult(result), summarizeMcpArgs(args)]);
+    expect(audited).not.toContain("SENTINEL");
+    expect(projectAuditResult("host.status", "nope")).toEqual({ status: "unrecognized" });
   });
 });

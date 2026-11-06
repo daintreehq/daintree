@@ -5,6 +5,7 @@ import {
   getForgeIssueProviderImpl,
   getForgeProviderBaseImpl,
   getForgeProviderImpl,
+  getForgeProviderUnavailableError,
   listMatchingProviders,
 } from "../../services/forgeProviderRegistry.js";
 import { resolveForgeProvider } from "../../services/forgeProviderResolver.js";
@@ -50,6 +51,8 @@ export interface ResolvedForgeContext {
   namespaceId: string;
   /** The resolved provider's `contribution.id` — also the settings subtab key. */
   providerId: string;
+  /** The resolved provider's display name, from its `contribution.name`. */
+  providerName: string;
   repoRef: RepoRef;
   impl: ForgeProviderImpl;
 }
@@ -418,6 +421,9 @@ export async function resolveForCwd(
   }
 
   const namespaceId = makeForgeProviderId(resolved.entry.pluginId, resolved.entry.contribution.id);
+  // Before implicit activation: an installed plugin's provider never binds an
+  // impl, so activating would only start its worker to fail the same way.
+  throwIfForgeProviderUnavailable(namespaceId);
   let impl = getForgeProviderImpl(namespaceId);
   if (!impl) {
     // Implicit activation, mirroring the forge RPC server: lazy plugins
@@ -448,6 +454,7 @@ export async function resolveForCwd(
   const context: ResolvedForgeContext = {
     namespaceId,
     providerId: resolved.entry.contribution.id,
+    providerName: resolved.entry.contribution.name,
     repoRef: { ...repoRef, projectPath: mainWorktreePath },
     impl,
   };
@@ -479,6 +486,23 @@ export async function resolveIssueOverrideForCwd(
   return resolveIssueOverride(issueProviderOverride, mainWorktreePath, () =>
     resolveEffectiveRemoteUrl(gitService, cwd, forgeRemote, forgeProviderOverride)
   );
+}
+
+/**
+ * Whether the project binds its issues to a provider of their own (#13700),
+ * read from its settings alone: unlike {@link resolveIssueOverrideForCwd}, it
+ * never activates or asks that provider anything.
+ */
+export async function hasIssueOverrideForCwd(
+  cwd: string,
+  knownMainWorktreePath?: string
+): Promise<boolean> {
+  const gitService = gitServiceCache.getGitService(cwd);
+  if (!gitService) return false;
+  const { issueProviderOverride } = knownMainWorktreePath
+    ? await readProjectForgeSettingsAt(knownMainWorktreePath)
+    : await readProjectForgeSettings(gitService, cwd);
+  return Boolean(issueProviderOverride);
 }
 
 /**
@@ -670,6 +694,7 @@ async function resolveIssueOverride(
   }
 
   const namespaceId = makeForgeProviderId(entry.pluginId, entry.contribution.id);
+  throwIfForgeProviderUnavailable(namespaceId);
   let impl = getForgeIssueProviderImpl(namespaceId);
   if (!impl) {
     const pluginService = await getPluginService();
@@ -713,9 +738,20 @@ async function resolveIssueOverride(
   };
 }
 
+/**
+ * Throws the accurate error for a provider that can't run at all (an installed
+ * plugin's), where "not activated. Activate it in Settings." would send the
+ * user after a fix that doesn't exist.
+ */
+function throwIfForgeProviderUnavailable(namespaceId: string): void {
+  const unavailable = getForgeProviderUnavailableError(namespaceId);
+  if (unavailable) throw new Error(unavailable);
+}
+
 export function getImplForNamespace(namespaceId: string): ForgeProviderImpl {
   const impl = getForgeProviderImpl(namespaceId);
   if (!impl) {
+    throwIfForgeProviderUnavailable(namespaceId);
     throw new Error(`Forge provider "${namespaceId}" not activated. Activate it in Settings.`);
   }
   return impl;
@@ -725,6 +761,7 @@ export function getImplForNamespace(namespaceId: string): ForgeProviderImpl {
 export function getIssueImplForNamespace(namespaceId: string): ForgeIssueProviderImpl {
   const impl = getForgeIssueProviderImpl(namespaceId);
   if (!impl) {
+    throwIfForgeProviderUnavailable(namespaceId);
     throw new Error(`Forge provider "${namespaceId}" not activated. Activate it in Settings.`);
   }
   return impl;
@@ -744,6 +781,8 @@ export async function getImplForNamespaceActivating(
 ): Promise<ForgeProviderBaseImpl | undefined> {
   const existing = getForgeProviderBaseImpl(namespaceId);
   if (existing) return existing;
+  // Nothing to activate: an installed plugin's provider never binds an impl.
+  if (getForgeProviderUnavailableError(namespaceId)) return undefined;
   const pluginService = await getPluginService();
   await pluginService.activatePluginForForgeProvider(namespaceId);
   return getForgeProviderBaseImpl(namespaceId);

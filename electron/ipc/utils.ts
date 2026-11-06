@@ -6,10 +6,13 @@ import {
   getAllAppWebContents,
   getProjectForWebContents,
   getRegisteredProjectViews,
+  getShownAppWebContents,
   getWebContentsForProject,
   hasRegisteredProjectViews,
   isCachedViewWebContents,
 } from "../window/webContentsRegistry.js";
+import { getWindowRegistry } from "../window/windowRef.js";
+import { isViewHydrated } from "../window/viewHydration.js";
 import type { IpcInvokeMap, IpcEventMap } from "../types/index.js";
 import type { IpcContext } from "./types.js";
 import { ValidationError } from "./validationError.js";
@@ -24,7 +27,7 @@ import {
 import { AppError } from "../utils/errorTypes.js";
 import { assertIpcSecurityReady } from "./ipcGuard.js";
 import { isE2EFaultMode } from "../setup/runtimeFlags.js";
-import type { ClientEndpoint } from "./endpoint.js";
+import type { ClientEndpoint, EndpointGroup, HostFrame } from "./endpoint.js";
 import { getIpcDispatcher } from "./dispatcher.js";
 import { getEndpointRegistry } from "./endpointRegistry.js";
 import { getLocalClientRef, getLocalEndpoint } from "./localEndpoint.js";
@@ -381,6 +384,28 @@ export function sendToRenderer(
   }
 }
 
+/**
+ * Push to one particular renderer rather than a window's active app view. A
+ * push that belongs to a cached project view (a `<webview>` guest's embedder,
+ * say) has to reach that view while another project is on screen. False when
+ * nothing was sent.
+ */
+export function sendToWebContents(
+  webContents: WebContents | null | undefined,
+  channel: string,
+  ...args: unknown[]
+): boolean {
+  if (!webContents || webContents.isDestroyed()) return false;
+  if (isWithheldFromView(webContents.id, channel, args)) return false;
+  try {
+    webContents.send(channel, ...args);
+    return true;
+  } catch {
+    // A renderer torn down mid-send has nothing left to receive it.
+    return false;
+  }
+}
+
 function sendToEndpoints(
   endpoints: readonly ClientEndpoint[],
   exclude: ReadonlySet<number> | null,
@@ -398,14 +423,31 @@ function sendToEndpoints(
   }
 }
 
-function broadcastToRemoteEndpoints(
-  exclude: ReadonlySet<number> | null,
-  channel: string,
-  args: unknown[]
-): void {
+/**
+ * Pushes to every remote view. A link session's views share a group, so the
+ * session gets one copy for all of them; project-scoped and excluding pushes
+ * still address each endpoint, since a group can't leave any of its views out.
+ */
+export function broadcastToRemoteEndpoints(channel: string, args: unknown[]): void {
   const registry = getEndpointRegistry();
   if (!registry.hasRemote()) return;
-  sendToEndpoints(registry.getRemote(), exclude, channel, args);
+  const frame: HostFrame = { type: "event", channel, args };
+  let pushed: Set<EndpointGroup> | null = null;
+  for (const endpoint of registry.getRemote()) {
+    if (endpoint.kind !== "remote-view" || endpoint.isClosed()) continue;
+    const group = endpoint.group;
+    if (group) {
+      pushed ??= new Set();
+      if (pushed.has(group)) continue;
+      pushed.add(group);
+    }
+    try {
+      if (group) group.sendToAll(frame);
+      else endpoint.send(frame);
+    } catch {
+      // A closing link must not break delivery to the remaining endpoints.
+    }
+  }
 }
 
 /**
@@ -455,7 +497,7 @@ export function broadcastToRenderer(channel: string, ...args: unknown[]): void {
       }
     }
   }
-  broadcastToRemoteEndpoints(null, channel, args);
+  broadcastToRemoteEndpoints(channel, args);
 }
 
 /**
@@ -688,10 +730,11 @@ export function broadcastSlicedToProjectRenderers<T>(
  *   batches via LOGS_GET_ALL) — pushing them is wasted work in a cached
  *   renderer, and one that is frozen queues them unbounded in its task queue.
  * - Visibility-scoped effects whose audience is *defined* as the non-cached
- *   renderers at emission time (e.g. SOUND_TRIGGER — every view owns an
- *   AudioContext, so a global broadcast plays one copy per open project and
- *   un-freezes cached renderers). Dropping one must leave no stale state, no
- *   pending cleanup, and no missed user-significant information.
+ *   renderers at emission time. Dropping one must leave no stale state, no
+ *   pending cleanup, and no missed user-significant information. An effect the
+ *   machine should produce once, not once per window, wants
+ *   {@link sendToOneVisibleRenderer} instead: every window's shown view is
+ *   non-cached.
  *
  * If you cannot prove all three, use broadcastToRenderer. "Ephemeral" is not
  * the test: sound:cancel is a one-shot with nothing to replay, yet it must
@@ -714,7 +757,128 @@ export function broadcastToVisibleRenderers(channel: string, ...args: unknown[])
       }
     }
   }
-  broadcastToRemoteEndpoints(null, channel, args);
+  broadcastToRemoteEndpoints(channel, args);
+}
+
+const singleTargetByChannel = new Map<string, number>();
+
+function isSingleTargetEligible(wc: WebContents, channel: string, args: unknown[]): boolean {
+  return (
+    !wc.isDestroyed() &&
+    !wc.isCrashed() &&
+    !isCachedViewWebContents(wc.id) &&
+    !isWithheldFromView(wc.id, channel, args)
+  );
+}
+
+/** Rank per window: 0 for the window focused right now, then focus history. */
+function windowFocusRanks(): Map<number, number> {
+  const ranks = new Map<number, number>();
+  const order = getWindowRegistry()?.focusOrder() ?? [];
+  order.forEach((ctx, index) => {
+    const win = ctx.browserWindow;
+    if (win.isDestroyed()) return;
+    ranks.set(win.id, win.isFocused() ? 0 : index + 1);
+  });
+  return ranks;
+}
+
+/** The view a cold switch is holding on screen while the incoming one loads. */
+function isOutgoingBridge(wc: WebContents): boolean {
+  const win = getWindowForWebContents(wc);
+  if (!win || win.isDestroyed()) return false;
+  const pvm = getWindowRegistry()?.getByWindowId(win.id)?.services.projectViewManager;
+  const outgoing = pvm?.getOutgoingBridgeProjectId() ?? null;
+  return outgoing !== null && pvm?.getProjectIdForWebContents(wc.id) === outgoing;
+}
+
+function singleTargetCandidates(channel: string, args: unknown[]): WebContents[] {
+  const pool: WebContents[] = [];
+  const seen = new Set<number>();
+  const shownIds = new Set<number>();
+  const consider = (wc: WebContents, shown: boolean): void => {
+    if (wc.isDestroyed() || seen.has(wc.id)) return;
+    seen.add(wc.id);
+    if (shown) shownIds.add(wc.id);
+    if (isSingleTargetEligible(wc, channel, args)) pool.push(wc);
+  };
+  const shown = getShownAppWebContents();
+  for (const wc of shown) consider(wc, true);
+  // A cold switch points the window at the incoming view before it loads,
+  // while the outgoing one stays on screen, hydrated and listening. Other
+  // uncached views are left out: a background restore is never attached, and
+  // the efficiency sweep can freeze it before it is parked, so a send would
+  // succeed and play late.
+  const all = getAllAppWebContents();
+  for (const wc of all) {
+    if (!wc.isDestroyed() && !seen.has(wc.id) && isOutgoingBridge(wc)) consider(wc, false);
+  }
+  // No window has a registered shown view (early boot, or a window that never
+  // registered one): any uncached renderer, still only one of them. Not when a
+  // shown view exists but can't play (crashed): that would hand the sound to a
+  // background restore.
+  if (shown.length === 0 && pool.length === 0) {
+    for (const wc of all) consider(wc, false);
+  }
+  if (pool.length <= 1) return pool;
+
+  const sticky = singleTargetByChannel.get(channel);
+  const focusRanks = windowFocusRanks();
+  const keyOf = (wc: WebContents): number[] => {
+    const win = getWindowForWebContents(wc);
+    return [
+      isViewHydrated(wc.id) ? 0 : 1,
+      shownIds.has(wc.id) ? 0 : 1,
+      wc.id === sticky ? 0 : 1,
+      (win && focusRanks.get(win.id)) ?? Number.MAX_SAFE_INTEGER,
+    ];
+  };
+  const keyed = pool.map((wc) => ({ wc, key: keyOf(wc) }));
+  keyed.sort((a, b) => {
+    for (let i = 0; i < a.key.length; i++) {
+      if (a.key[i] !== b.key[i]) return a.key[i] - b.key[i];
+    }
+    return 0;
+  });
+  return keyed.map((entry) => entry.wc);
+}
+
+/**
+ * Sends to exactly one local renderer, then to every remote endpoint, for an
+ * effect this machine should produce once rather than once per window
+ * (#15682). SOUND_TRIGGER is the case: every app view owns an AudioContext,
+ * so even a visible-only broadcast played one copy per open window and kept
+ * every window's context awake through a pulse train.
+ *
+ * Candidates are each window's shown view and any outgoing view a cold switch
+ * still holds on screen. Choice, in order: a view whose current document has
+ * hydrated (its listeners are mounted) over one still booting; a window's
+ * shown view over one on its way out; the renderer that took this channel
+ * last, so focus moving between windows doesn't wake a second context; the
+ * window focused right now; then focus history. Unfocused and minimised
+ * windows still qualify, because another app being in front is the normal
+ * case for an attention sound. Cached, crashed and withheld views never do.
+ * The target is revalidated on every send, so a closed window simply loses
+ * its turn, and a send that throws falls through to the next candidate.
+ *
+ * Remote endpoints are other machines and each still gets its copy. Returns
+ * whether a local renderer took the push.
+ */
+export function sendToOneVisibleRenderer(channel: string, ...args: unknown[]): boolean {
+  let delivered = false;
+  for (const wc of singleTargetCandidates(channel, args)) {
+    try {
+      wc.send(channel, ...args);
+    } catch {
+      continue;
+    }
+    singleTargetByChannel.set(channel, wc.id);
+    delivered = true;
+    break;
+  }
+  if (!delivered) singleTargetByChannel.delete(channel);
+  broadcastToRemoteEndpoints(channel, args);
+  return delivered;
 }
 
 /**
@@ -1019,7 +1183,29 @@ export function typedBroadcast<K extends keyof IpcEventMap>(
       }
     }
   }
-  broadcastToRemoteEndpoints(null, channel as string, [payload]);
+  broadcastToRemoteEndpoints(channel as string, [payload]);
+}
+
+/**
+ * {@link typedBroadcast} for state this machine owns, such as its theme: every
+ * local app view hears it, cached ones included, and no remote endpoint does.
+ * `exceptWebContentsId` skips the view that made the change, which already
+ * shows it.
+ */
+export function typedBroadcastToLocalViews<K extends keyof IpcEventMap>(
+  channel: K,
+  payload: IpcEventMap[K],
+  exceptWebContentsId: number | null = null
+): void {
+  for (const wc of getAllAppWebContents()) {
+    if (wc.isDestroyed() || wc.id === exceptWebContentsId) continue;
+    if (isWithheldFromView(wc.id, channel as string, [payload])) continue;
+    try {
+      wc.send(channel as string, payload);
+    } catch {
+      // Silently ignore send failures during window initialization/disposal.
+    }
+  }
 }
 
 export function typedSend<K extends keyof IpcEventMap>(

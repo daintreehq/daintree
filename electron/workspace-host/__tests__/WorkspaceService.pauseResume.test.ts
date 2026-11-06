@@ -329,9 +329,11 @@ describe("WorkspaceService.refreshOnWake", () => {
     });
     vi.spyOn(m1, "updateGitStatus").mockImplementation(async () => {
       callOrder.push("updateGitStatus:wt-1");
+      return "ran";
     });
     vi.spyOn(m2, "updateGitStatus").mockImplementation(async () => {
       callOrder.push("updateGitStatus:wt-2");
+      return "ran";
     });
     mockPullRequestService.refresh.mockImplementation(() => {
       callOrder.push("pr-refresh");
@@ -401,6 +403,7 @@ describe("WorkspaceService.refreshOnWake", () => {
         maxInFlight = Math.max(maxInFlight, inFlight);
         await new Promise((r) => setTimeout(r, 5));
         inFlight--;
+        return "ran";
       });
     }
 

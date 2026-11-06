@@ -3,8 +3,10 @@ import { render, act } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { _resetForTests, registerEscape } from "@/lib/escapeStack";
 import { ESCAPE_BACKSTOP_DIALOG_ATTR } from "@/lib/dialogEscapeBackstop";
+import { APP_MODAL_SELECTOR } from "@/lib/appModal";
 import { PANE_DIALOG_ATTR } from "@/lib/paneDialog";
 import { claimVoiceWaitKeys } from "@/lib/voiceWaitKeys";
+import { claimWaitingSend } from "@/services/voiceDraftSend";
 import type { PaletteId } from "@/store/paletteStore";
 
 function parseComboLite(combo: string) {
@@ -20,6 +22,7 @@ function parseComboLite(combo: string) {
 }
 
 const mocks = vi.hoisted(() => ({
+  panelState: { focusedId: null as string | null },
   keybindingService: {
     resolveKeybinding: vi.fn(),
     getPendingChord: vi.fn<() => string | null>(() => null),
@@ -91,7 +94,7 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 vi.mock("../../store", () => ({
-  usePanelStore: { getState: () => ({ focusedId: null }) },
+  usePanelStore: { getState: () => ({ focusedId: mocks.panelState.focusedId }) },
   usePaletteStore: {
     getState: vi.fn(() => ({ activePaletteId: null })),
   },
@@ -131,9 +134,21 @@ function pressCmdW() {
   });
 }
 
+// Pins what each action is bound to right now, the way an override or an
+// imported profile would: every combo listed, none for an action left out.
+function bindTriggers(bindings: Record<string, string[]>) {
+  mocks.keybindingService.getTriggerCombos.mockImplementation(
+    (actionId: string) => bindings[actionId] ?? []
+  );
+  mocks.keybindingService.getEffectiveCombo.mockImplementation(
+    (actionId: string) => bindings[actionId]?.[0]
+  );
+}
+
 beforeEach(() => {
   _resetForTests();
   vi.clearAllMocks();
+  mocks.panelState.focusedId = null;
   mocks.keybindingService.getPendingChord.mockReturnValue(null);
   mocks.keybindingService.isCapturingShortcut.mockReturnValue(false);
   mocks.keybindingService.getTriggerCombos.mockImplementation((actionId: string) => {
@@ -273,6 +288,93 @@ describe("useGlobalKeybindings — isolated surfaces", () => {
     pressDictationIn(false, '<div class="cm-editor"><textarea></textarea></div>');
     expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
     expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+  });
+
+  // #15705: pressed again, it sends a waiting send it started wherever the keyboard is.
+  describe("while a send the stop-and-send key started waits", () => {
+    const STOP_AND_SEND_EVENT = { key: "d", code: "KeyD", metaKey: true, altKey: true };
+    const releases: Array<() => void> = [];
+    afterEach(() => releases.splice(0).forEach((release) => release()));
+    const claim = (sendNow?: () => void) => {
+      const release = claimWaitingSend("term-1", new Set(["s1"]), sendNow);
+      releases.push(release);
+      return release;
+    };
+
+    function isolatedTerminal(resolvesTo = "voiceInput.stopAndSend") {
+      mocks.keybindingService.getEffectiveCombo.mockImplementation((id: string) =>
+        id === "voiceInput.stopAndSend" ? "Cmd+Alt+D" : undefined
+      );
+      mocks.keybindingService.resolveKeybinding.mockReturnValue({
+        match: { actionId: resolvesTo },
+        chordPrefix: false,
+        shouldConsume: true,
+      });
+      render(<Host />);
+      const surface = document.createElement("div");
+      surface.setAttribute("data-keybindings-isolated", "");
+      surface.innerHTML = '<div class="xterm"><textarea></textarea></div>';
+      document.body.appendChild(surface);
+      const field = surface.querySelector("textarea")!;
+      const press = () => {
+        const event = new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          ...STOP_AND_SEND_EVENT,
+        });
+        field.dispatchEvent(event);
+        return event;
+      };
+      return { surface, press };
+    }
+
+    it("lets that key through from an isolated terminal until the send is gone", () => {
+      const release = claim(() => {});
+      const { surface, press } = isolatedTerminal();
+      try {
+        expect(press().defaultPrevented).toBe(true);
+        expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
+          "voiceInput.stopAndSend",
+          undefined,
+          expect.anything()
+        );
+
+        release();
+        mocks.actionService.dispatch.mockClear();
+        expect(press().defaultPrevented).toBe(false);
+        expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+      } finally {
+        surface.remove();
+      }
+    });
+
+    it("keeps it out for a send Enter started", () => {
+      claim();
+      const { surface, press } = isolatedTerminal();
+      try {
+        expect(press().defaultPrevented).toBe(false);
+        expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+      } finally {
+        surface.remove();
+      }
+    });
+
+    it("keeps out another action bound to the same keys", () => {
+      claim(() => {});
+      const { surface, press } = isolatedTerminal("acme.plugin.command");
+      try {
+        expect(press().defaultPrevented).toBe(false);
+        expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+      } finally {
+        surface.remove();
+      }
+    });
+
+    it("still keeps the dictation key out", () => {
+      claim(() => {});
+      pressDictationIn(false, '<div class="xterm"><textarea></textarea></div>');
+      expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -416,14 +518,15 @@ describe("useGlobalKeybindings — Cmd+W in a surface that owns its close", () =
   });
 
   it("never opens the grid pane's menu from inside the isolated surface", () => {
-    // Close rebound to Shift+F10, pressed on a control in the pane (a text
-    // field keeps unmodified keys for itself, by the editable rule).
-    mocks.keybindingService.getTriggerCombos.mockImplementation((id: string) =>
-      id === "terminal.close" ? ["Shift+F10"] : []
-    );
-    mocks.keybindingService.getEffectiveCombo.mockImplementation((id: string) =>
-      id === "terminal.contextMenu" ? "Shift+F10" : undefined
-    );
+    // Close rebound to Shift+F10 while the panel menu still holds it too,
+    // pressed on a control in the pane (a text field keeps unmodified keys for
+    // itself, by the editable rule). A panel is focused, so the menu route
+    // would dispatch if the isolated surface didn't keep it out.
+    mocks.panelState.focusedId = "panel-1";
+    bindTriggers({
+      "terminal.close": ["Shift+F10"],
+      "terminal.contextMenu": ["Shift+F10"],
+    });
     render(<Host />);
     const owner = document.createElement("section");
     owner.setAttribute("data-close-owner", "");
@@ -887,6 +990,37 @@ describe("useGlobalKeybindings — palette Escape capture", () => {
 
     const dialog = document.createElement("div");
     dialog.setAttribute("role", "dialog");
+    dialog.setAttribute("aria-modal", "true");
+    const xterm = document.createElement("div");
+    xterm.className = "xterm";
+    dialog.appendChild(xterm);
+    document.body.appendChild(dialog);
+
+    try {
+      const escapeHandler = vi.fn();
+      registerEscape(escapeHandler);
+
+      render(<Host />);
+      const event = dispatchEscape(xterm);
+
+      expect(escapeHandler).toHaveBeenCalledTimes(1);
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      expect(event.defaultPrevented).toBe(true);
+    } finally {
+      dialog.remove();
+    }
+  });
+
+  it("routes bare Escape before the xterm guard when a destructive alertdialog is visible", () => {
+    vi.mocked(usePaletteStore.getState).mockReturnValue(makePaletteState(null));
+    mocks.keybindingService.resolveKeybinding.mockReturnValue({
+      match: undefined,
+      chordPrefix: false,
+      shouldConsume: false,
+    });
+
+    const dialog = document.createElement("div");
+    dialog.setAttribute("role", "alertdialog");
     dialog.setAttribute("aria-modal", "true");
     const xterm = document.createElement("div");
     xterm.className = "xterm";
@@ -1422,6 +1556,129 @@ describe("useGlobalKeybindings — region focus key bypass (issue #7303)", () =>
       input.remove();
     }
   });
+
+  // An override can hold several combos (an imported profile, or an agent
+  // calling keybinding.setOverride), and every one of them is live.
+  describe.each<[string, () => HTMLElement]>([
+    ["a text input", () => document.createElement("input")],
+    [
+      "a contenteditable",
+      () => {
+        const el = document.createElement("div");
+        // jsdom doesn't implement isContentEditable.
+        Object.defineProperty(el, "isContentEditable", { value: true });
+        return el;
+      },
+    ],
+    [
+      "a terminal",
+      () => {
+        const el = document.createElement("div");
+        el.className = "xterm";
+        return el;
+      },
+    ],
+  ])("with several combos bound, from %s", (_label, makeSurface) => {
+    let surface: HTMLElement;
+
+    function press(init: KeyboardEventInit): KeyboardEvent {
+      const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+      act(() => {
+        surface.dispatchEvent(event);
+      });
+      return event;
+    }
+
+    beforeEach(() => {
+      surface = makeSurface();
+      document.body.appendChild(surface);
+    });
+
+    afterEach(() => {
+      surface.remove();
+      mocks.keybindingService.resolveKeybinding.mockReset();
+    });
+
+    it("lets a later combo of focusRegion.next escape, not only the first", () => {
+      bindTriggers({
+        "nav.focusRegion.next": ["F6", "F7"],
+        "nav.focusRegion.prev": ["Shift+F6"],
+      });
+      mocks.keybindingService.resolveKeybinding.mockReturnValue({
+        match: { actionId: "nav.focusRegion.next" },
+        chordPrefix: false,
+        shouldConsume: true,
+      });
+      render(<Host />);
+
+      const event = press({ key: "F7" });
+
+      expect(mocks.keybindingService.resolveKeybinding).toHaveBeenCalledTimes(1);
+      expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
+        "nav.focusRegion.next",
+        undefined,
+        expect.anything()
+      );
+      expect(event.defaultPrevented).toBe(true);
+    });
+
+    it("lets a later combo of focusRegion.prev escape, not only the first", () => {
+      bindTriggers({
+        "nav.focusRegion.next": ["F6"],
+        "nav.focusRegion.prev": ["Shift+F6", "Shift+F7"],
+      });
+      mocks.keybindingService.resolveKeybinding.mockReturnValue({
+        match: { actionId: "nav.focusRegion.prev" },
+        chordPrefix: false,
+        shouldConsume: true,
+      });
+      render(<Host />);
+
+      const event = press({ key: "F7", shiftKey: true });
+
+      expect(mocks.keybindingService.resolveKeybinding).toHaveBeenCalledTimes(1);
+      expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
+        "nav.focusRegion.prev",
+        undefined,
+        expect.anything()
+      );
+      expect(event.defaultPrevented).toBe(true);
+    });
+
+    it("keeps a printable combo as ordinary typing while the others still escape", () => {
+      bindTriggers({ "nav.focusRegion.next": ["F6", "q"], "nav.focusRegion.prev": [] });
+      mocks.keybindingService.resolveKeybinding.mockReturnValue({
+        match: { actionId: "nav.focusRegion.next" },
+        chordPrefix: false,
+        shouldConsume: true,
+      });
+      render(<Host />);
+
+      const typed = press({ key: "q" });
+
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      expect(mocks.actionService.dispatch).not.toHaveBeenCalled();
+      expect(typed.defaultPrevented).toBe(false);
+
+      press({ key: "F6" });
+
+      expect(mocks.keybindingService.resolveKeybinding).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not let the bare key through when a later combo needs a modifier", () => {
+      bindTriggers({ "nav.focusRegion.next": ["F6", "Cmd+F7"], "nav.focusRegion.prev": [] });
+      mocks.keybindingService.resolveKeybinding.mockReturnValue({
+        match: undefined,
+        chordPrefix: false,
+        shouldConsume: false,
+      });
+      render(<Host />);
+
+      press({ key: "F7" });
+
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe("useGlobalKeybindings — IME composition guard", () => {
@@ -1651,6 +1908,189 @@ describe("useGlobalKeybindings — row-menu stand-down", () => {
   });
 });
 
+describe("useGlobalKeybindings — panel menu keys follow the action's bindings", () => {
+  const SHIFT_F10 = { key: "F10", shiftKey: true };
+  const MENU_KEY = { key: "ContextMenu" };
+  const NO_MATCH = { match: undefined, chordPrefix: false, shouldConsume: false };
+
+  function press(init: KeyboardEventInit, target: HTMLElement = document.body): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event;
+  }
+
+  function dispatchedActionIds(): string[] {
+    return mocks.actionService.dispatch.mock.calls.map(([actionId]) => actionId);
+  }
+
+  beforeEach(() => {
+    mocks.panelState.focusedId = "panel-1";
+    mocks.keybindingService.resolveKeybinding.mockReturnValue(NO_MATCH);
+  });
+
+  afterEach(() => {
+    mocks.keybindingService.resolveKeybinding.mockReset();
+    document.querySelectorAll("body > div:not([id])").forEach((node) => node.remove());
+  });
+
+  it.each([
+    ["Shift+F10", SHIFT_F10],
+    ["ContextMenu", MENU_KEY],
+  ])("opens the focused panel's menu on %s while it is bound", (_name, init) => {
+    bindTriggers({ "terminal.contextMenu": ["Shift+F10", "ContextMenu"] });
+    render(<Host />);
+
+    const event = press(init);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(mocks.actionService.dispatch).toHaveBeenCalledWith(
+      "terminal.contextMenu",
+      { terminalId: "panel-1" },
+      { source: "keybinding" }
+    );
+    expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+  });
+
+  it("still reaches the panel's menu from a text field while the key is bound", () => {
+    bindTriggers({ "terminal.contextMenu": ["Shift+F10", "ContextMenu"] });
+    render(<Host />);
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    try {
+      const event = press(SHIFT_F10, input);
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(dispatchedActionIds()).toEqual(["terminal.contextMenu"]);
+    } finally {
+      input.remove();
+    }
+  });
+
+  it("routes a key the user kept wherever it sits in the override, and only that key", () => {
+    bindTriggers({ "terminal.contextMenu": ["F9", "ContextMenu"] });
+    render(<Host />);
+
+    expect(press(MENU_KEY).defaultPrevented).toBe(true);
+    expect(dispatchedActionIds()).toEqual(["terminal.contextMenu"]);
+
+    mocks.actionService.dispatch.mockClear();
+    press(SHIFT_F10);
+    expect(dispatchedActionIds()).toEqual([]);
+    expect(mocks.keybindingService.resolveKeybinding).toHaveBeenCalledTimes(1);
+  });
+
+  describe("after the action is rebound to F9", () => {
+    beforeEach(() => {
+      bindTriggers({ "terminal.contextMenu": ["F9"] });
+    });
+
+    it.each([
+      ["Shift+F10", SHIFT_F10],
+      ["ContextMenu", MENU_KEY],
+    ])("no longer opens the panel's menu on %s", (_name, init) => {
+      render(<Host />);
+
+      const event = press(init);
+
+      expect(dispatchedActionIds()).toEqual([]);
+      expect(event.defaultPrevented).toBe(false);
+      // Handed to ordinary resolution, which is where whatever else holds it runs.
+      expect(mocks.keybindingService.resolveKeybinding).toHaveBeenCalledTimes(1);
+    });
+
+    it("opens it on F9, through ordinary resolution", () => {
+      mocks.keybindingService.resolveKeybinding.mockReturnValue({
+        match: { actionId: "terminal.contextMenu" },
+        chordPrefix: false,
+        shouldConsume: true,
+      });
+      render(<Host />);
+
+      const event = press({ key: "F9" });
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(mocks.actionService.dispatch).toHaveBeenCalledTimes(1);
+      expect(mocks.actionService.dispatch).toHaveBeenCalledWith("terminal.contextMenu", undefined, {
+        source: "keybinding",
+      });
+    });
+
+    it.each([
+      ["Shift+F10", SHIFT_F10],
+      ["ContextMenu", MENU_KEY],
+    ])("runs another action that now holds %s", (_name, init) => {
+      mocks.keybindingService.resolveKeybinding.mockReturnValue({
+        match: { actionId: "nav.toggleSidebar" },
+        chordPrefix: false,
+        shouldConsume: true,
+      });
+      render(<Host />);
+
+      const event = press(init);
+
+      expect(event.defaultPrevented).toBe(true);
+      expect(dispatchedActionIds()).toEqual(["nav.toggleSidebar"]);
+    });
+
+    it("keeps Shift+F10 typing in a text field, as any unmodified key is", () => {
+      render(<Host />);
+      const input = document.createElement("input");
+      document.body.appendChild(input);
+      try {
+        const event = press(SHIFT_F10, input);
+
+        expect(event.defaultPrevented).toBe(false);
+        expect(dispatchedActionIds()).toEqual([]);
+        expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+      } finally {
+        input.remove();
+      }
+    });
+  });
+
+  // The stand-down follows the physical key, not the binding: a surface with
+  // its own menu keeps both keys whatever the panel menu is bound to.
+  describe.each<[string, string]>([
+    ["a surface that owns its rows' menus", `<div data-row-menu=""><div id="target"></div></div>`],
+    ["an already-open menu", `<div role="menu"><div id="target" role="menuitem"></div></div>`],
+  ])("inside %s", (_owner, html) => {
+    it.each<[string, KeyboardEventInit, string[]]>([
+      ["Shift+F10", SHIFT_F10, ["Shift+F10", "ContextMenu"]],
+      ["ContextMenu", MENU_KEY, ["Shift+F10", "ContextMenu"]],
+      ["Shift+F10 after a rebind to F9", SHIFT_F10, ["F9"]],
+      ["ContextMenu after a rebind to F9", MENU_KEY, ["F9"]],
+    ])("leaves %s to its owner", (_key, init, combos) => {
+      bindTriggers({ "terminal.contextMenu": combos });
+      render(<Host />);
+      const host = document.createElement("div");
+      host.innerHTML = html;
+      document.body.appendChild(host);
+
+      const event = press(init, host.querySelector<HTMLElement>("#target")!);
+
+      expect(event.defaultPrevented).toBe(false);
+      expect(dispatchedActionIds()).toEqual([]);
+      expect(mocks.keybindingService.resolveKeybinding).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    ["Shift+F10", SHIFT_F10],
+    ["ContextMenu", MENU_KEY],
+  ])("treats an explicitly empty override as off for %s", (_name, init) => {
+    bindTriggers({ "terminal.contextMenu": [] });
+    render(<Host />);
+
+    const event = press(init);
+
+    expect(dispatchedActionIds()).toEqual([]);
+    expect(event.defaultPrevented).toBe(false);
+    expect(mocks.keybindingService.resolveKeybinding).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("command HUD direct completion", () => {
   beforeEach(() => {
     mocks.keybindingService.getPendingChord.mockReturnValue("Cmd+K");
@@ -1740,7 +2180,7 @@ describe("useGlobalKeybindings — per-keystroke document scans", () => {
       act(() => {
         xterm.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
       });
-      expect(querySelector).toHaveBeenCalledWith('[role="dialog"][aria-modal="true"]');
+      expect(querySelector).toHaveBeenCalledWith(APP_MODAL_SELECTOR);
       expect(querySelector).toHaveBeenCalledWith(`[${ESCAPE_BACKSTOP_DIALOG_ATTR}]`);
       xterm.remove();
     } finally {

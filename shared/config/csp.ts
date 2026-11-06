@@ -3,12 +3,6 @@ import { getDevServerOrigins, getDevServerWebSocketOrigins } from "./devServer.j
 // Custom protocol scheme the renderer fetches/loads from.
 const FILE_SCHEMES = "daintree-file:";
 
-// Sandboxed HTML file preview scheme (#11191). Only appears in `frame-src` so
-// the file panel can mount a `daintree-html://<token>/…` iframe; the framed
-// document's own scripts/assets are governed by the per-document CSP the
-// protocol handler serves (scoped to its exact token authority), never this one.
-const HTML_PREVIEW_SCHEME = "daintree-html:";
-
 // Inline PDF preview (#11427). Appears in `frame-src`, so the file viewer can
 // mount a `daintree-pdf://load?…` iframe that Chromium hands to its built-in
 // PDFium viewer, and in `connect-src` for the HEAD the viewer sends first — a
@@ -130,7 +124,9 @@ export function getDaintreeAppProdCSP(options?: DaintreeCspOptions): string {
     "style-src 'self' 'unsafe-inline'",
     `connect-src 'self' ${FILE_SCHEMES} ${PDF_PREVIEW_SCHEME} ${PLUGIN_SCHEME}`,
     `img-src 'self' ${GITHUB_AVATARS} ${GRAVATAR} ${DAINTREE_DOCS} ${FILE_SCHEMES} data: blob:`,
-    "font-src 'self' data:",
+    // plugin: lets a plugin view @font-face a font file it ships (#16286), as
+    // passive as the narration media-src already takes from the same scheme.
+    `font-src 'self' data: ${PLUGIN_SCHEME}`,
     // daintree-media:: the file viewer points <video>/<audio> straight at the
     // range-serving scheme rather than a blob of the whole file (#12242).
     // FILE_SCHEMES stays here for media loaded by tag from that scheme; the
@@ -139,7 +135,7 @@ export function getDaintreeAppProdCSP(options?: DaintreeCspOptions): string {
     // plugin tour narration, bundled or proxied from a declared host (#12773).
     `media-src 'self' ${MEDIA_SCHEME} ${FILE_SCHEMES} ${DAINTREE_CDN} ${PLUGIN_SCHEME} blob:`,
     "worker-src 'self' blob:",
-    `frame-src 'self' ${HTML_PREVIEW_SCHEME} ${PDF_PREVIEW_SCHEME} ${FRAME_LOCALHOST}`,
+    `frame-src 'self' ${PDF_PREVIEW_SCHEME} ${FRAME_LOCALHOST}`,
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'none'",
@@ -170,11 +166,11 @@ export function getDaintreeAppDevCSP(): string {
     `style-src 'self' ${origins} 'unsafe-inline'`,
     `connect-src 'self' ${origins} ${wsOrigins} ${FILE_SCHEMES} ${PDF_PREVIEW_SCHEME} ${PLUGIN_SCHEME}`,
     `img-src 'self' ${origins} ${GITHUB_AVATARS} ${GRAVATAR} ${DAINTREE_DOCS} ${FILE_SCHEMES} data: blob:`,
-    `font-src 'self' ${origins} data:`,
+    `font-src 'self' ${origins} data: ${PLUGIN_SCHEME}`,
     // Mirrors the production policy — see getDaintreeAppProdCSP.
     `media-src 'self' ${MEDIA_SCHEME} ${FILE_SCHEMES} ${DAINTREE_CDN} ${PLUGIN_SCHEME} blob:`,
     "worker-src 'self' blob:",
-    `frame-src 'self' ${HTML_PREVIEW_SCHEME} ${PDF_PREVIEW_SCHEME} ${FRAME_LOCALHOST}`,
+    `frame-src 'self' ${PDF_PREVIEW_SCHEME} ${FRAME_LOCALHOST}`,
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'none'",

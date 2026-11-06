@@ -20,8 +20,10 @@ interface NonGitFolderDialogProps {
    * what lets {@link GitInitDialog} derive a suggestion from the folder name.
    */
   initialIdentity?: ProjectCreationIdentity | null;
+  /** Group chosen one dialog earlier, forwarded to git setup like the identity. */
+  initialGroupId?: string | null;
   onOpenWithoutGit: () => void;
-  onInitSuccess: (identity: ProjectCreationIdentity) => void;
+  onInitSuccess: (identity: ProjectCreationIdentity, groupId: string | null) => void;
   onCancel: () => void;
 }
 
@@ -37,6 +39,7 @@ export function NonGitFolderDialog({
   directoryPath,
   initialStep,
   initialIdentity,
+  initialGroupId,
   onOpenWithoutGit,
   onInitSuccess,
   onCancel,
@@ -58,6 +61,7 @@ export function NonGitFolderDialog({
         isOpen={isOpen}
         directoryPath={directoryPath}
         initialIdentity={initialIdentity}
+        initialGroupId={initialGroupId}
         onSuccess={onInitSuccess}
         onCancel={onCancel}
       />

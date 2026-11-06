@@ -1,14 +1,13 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Project } from "@shared/types";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
-import type { HostId } from "@shared/types/remoteHosts";
+import { isLocalHostId, type HostId } from "@shared/types/remoteHosts";
 import { ALL_HOSTS_ID, useCanopyStore, type CanopyScope } from "@/store/canopyStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { pluralize } from "@/lib/pluralize";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
-import { isProjectViewCached } from "@/lib/viewCacheState";
 import { useAgentDirectory } from "@/hooks/useAgentDirectory";
 import { useAssistantWork } from "@/hooks/useAssistantWork";
 import type { HostMenuRow } from "@/components/Hosts/hostModel";
@@ -26,13 +25,16 @@ import {
   workLinkOf,
   workLinksByRun,
 } from "./canopyRelationships";
-import { allHostsKey, parseAllHostsKey } from "./canopyAllHosts";
+import { allHostsKey } from "./canopyAllHosts";
 import { unlessHostDisconnected, type CanopyApi } from "./canopyHostSource";
 import { placeOf } from "./canopyInboxPlace";
 import { isWorkerEntry, projectCanopyInbox } from "./canopyInboxProjection";
 import { useListReorderMotion } from "./useListReorderMotion";
-import { useCanopyRowsViewed } from "./useCanopyRowsViewed";
-import { canopyCardDomId } from "./CanopyCard";
+
+/** This machine's global Daintree Assistant: the one Canopy can dock. */
+export function isOwnGlobalAssistant(item: CanopyAssistantItem): boolean {
+  return item.subject.scope.kind === "global" && isLocalHostId(item.subject.hostId);
+}
 
 /**
  * What the inbox lists: the roles shown, the assistants and the work one of
@@ -106,7 +108,10 @@ export function useCanopyInboxFilters({
   // Assistants come from this machine's own directory, never from the reader:
   // another host's can't be listed from here yet, and All hosts lists this one's.
   const assistantsReadable = !otherHost || everyHost;
-  const directory = useAgentDirectory(isOpen && assistantsReadable);
+  // The global assistant docked beside the agents (#16214) is this machine's
+  // whichever host they run on, so its row is read while it is docked.
+  const globalDocked = useCanopyStore((s) => s.globalDocked);
+  const directory = useAgentDirectory(isOpen && (assistantsReadable || globalDocked));
   const handbacksSeen = useCanopyStore((s) => s.assistantHandbacksSeen);
   const seeAssistantHandback = useCanopyStore((s) => s.seeAssistantHandback);
   const ownHostName = everyHost
@@ -124,6 +129,18 @@ export function useCanopyInboxFilters({
     });
   }, [assistantsReadable, directory, projects, ownHostName, handbacksSeen, scope]);
   const assistantAsks = assistantItems.filter((item) => item.ask !== null).length;
+  // Its row, whatever the list shows: no filter, scope or host hides the dock.
+  const globalItem = useMemo(() => {
+    if (!assistantsReadable) {
+      return (
+        buildAssistantItems(directory, {
+          projectName: () => null,
+          seen: handbacksSeen,
+        }).find(isOwnGlobalAssistant) ?? null
+      );
+    }
+    return assistantItems.find(isOwnGlobalAssistant) ?? null;
+  }, [assistantsReadable, directory, handbacksSeen, assistantItems]);
   // "Show its work" (#14166): the workers one assistant made or was handed,
   // from each host's own records of it. Every host shown is read, since an
   // assistant here starts workers on others too.
@@ -286,51 +303,6 @@ export function useCanopyInboxFilters({
     return first?.role === "assistant" ? first.item : null;
   }, [projection]);
   const workerNavigation = useMemo(() => projection.navigation.filter(isWorkerEntry), [projection]);
-  // An urgent prompt counts as seen once its row has been in view for a second
-  // in the focused, open panel, or its pane is opened: a row below the fold
-  // nobody scrolled to keeps its ask on the badge. Runs another scope or the
-  // Unread filter hides stay on it too.
-  const acknowledge = useCanopyStore((s) => s.acknowledge);
-  const scrollerRef = useRef<HTMLDivElement>(null);
-  const viewable = isOpen && (everyHost || !otherHost) && !isProjectViewCached();
-  const rowsKey = visible.map((item) => item.runId).join(" ");
-  // Opening a run's pane is looking at its ask, whether or not the row was in view.
-  const acknowledgeOpened = useCallback(
-    (runId: string) => {
-      if (!isOpen || isProjectViewCached()) return;
-      if (everyHost) {
-        const run = parseAllHostsKey(runId);
-        if (run?.hostId === ownHostId) acknowledge([run.id]);
-      } else if (!otherHost) acknowledge([runId]);
-    },
-    [isOpen, otherHost, everyHost, ownHostId, acknowledge]
-  );
-  const viewedRuns = useCanopyRowsViewed(
-    scrollerRef,
-    viewable,
-    rowsKey,
-    `${listed.length}`,
-    canopyCardDomId,
-    acknowledgeOpened
-  );
-  // Before paint, so a close in the same moment can't lose a look already taken.
-  useLayoutEffect(() => {
-    // A view nobody can see acknowledges nothing, for the moment before it
-    // closes; and the badge counts the window's own host, never another's runs.
-    if (!isOpen || isProjectViewCached()) return;
-    const seen = visible.filter((item) => viewedRuns.has(item.runId));
-    if (everyHost) {
-      // Only the asks this host's rows show: another host's run is never one of them.
-      const own = seen.flatMap((item) => {
-        const run = parseAllHostsKey(item.runId);
-        return run?.hostId === ownHostId ? [run.id] : [];
-      });
-      if (own.length > 0) acknowledge(own);
-      return;
-    }
-    if (otherHost || seen.length === 0) return;
-    acknowledge(seen.map((item) => item.runId));
-  }, [isOpen, otherHost, everyHost, ownHostId, visible, viewedRuns, acknowledge]);
   // Main holds a native page back only for an ask the panel shows: told the
   // rows as listed, filters included, whenever they change — and told again
   // when another host's link comes back, having dropped what it was told.
@@ -391,6 +363,8 @@ export function useCanopyInboxFilters({
     seeAssistantHandback,
     assistantItems,
     assistantAsks,
+    globalDocked,
+    globalItem,
     workOf,
     showWorkOf,
     workPartial,
@@ -413,8 +387,6 @@ export function useCanopyInboxFilters({
     workerNavigation,
     firstAssistant,
     listRef,
-    scrollerRef,
-    acknowledgeOpened,
     onlyReadMatch,
   };
 }

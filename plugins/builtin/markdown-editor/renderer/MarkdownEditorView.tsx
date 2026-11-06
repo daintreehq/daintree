@@ -411,8 +411,12 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
       {record.conflict && (
         <InlineStatusBanner
           severity="warning"
-          title="File changed on disk"
-          description="Your draft is kept and saving is held. Compare the two, load the disk version, or save the draft elsewhere."
+          title={record.conflict.tooLarge ? "File on disk is over 2 MiB" : "File changed on disk"}
+          description={
+            record.conflict.tooLarge
+              ? "It grew past the editor's limit, so it can't be compared or loaded here. Your draft is kept and saving is held; save the draft elsewhere."
+              : "Your draft is kept and saving is held. Compare the two, load the disk version, or save the draft elsewhere."
+          }
           role="status"
           ariaLive="polite"
           actions={[
@@ -426,6 +430,7 @@ export function MarkdownEditorView(props: FileEditorViewProps) {
               id: "load-disk",
               label: "Load disk version",
               onClick: () => setConfirmLoadDisk(true),
+              disabled: record.conflict.tooLarge,
             },
             {
               id: "save-as",

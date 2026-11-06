@@ -162,9 +162,9 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
       // given workspace is `branchChipState`'s contract, unit-tested in
       // src/lib/__tests__/workspaceIdentity.test.ts — here we only prove the pill is
       // wired to it and can still reserve width without showing a branch.
-      const chipIndex = source.indexOf("toolbar-project-chip shrink-0");
+      const chipIndex = source.indexOf('"toolbar-project-chip inline-flex');
       expect(chipIndex).toBeGreaterThan(-1);
-      const beforeChip = source.slice(Math.max(0, chipIndex - 300), chipIndex);
+      const beforeChip = source.slice(Math.max(0, chipIndex - 1200), chipIndex);
       expect(beforeChip).toMatch(/chipState !== "hidden"\s*&&\s*\(/);
 
       // What the reserved chip looks like — a placeholder bone, not a transparent
@@ -184,7 +184,9 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
     });
 
     it("project switcher button takes its accessible label from the active workspace", () => {
-      expect(source).toContain("aria-label={workspaceIdentity.ariaLabel}");
+      // Plus the branch the chip shows: the button's own label wins over
+      // anything inside it, so the chip cannot carry the branch itself.
+      expect(source).toContain("aria-label={`${workspaceIdentity.ariaLabel}${chipSpoken}`}");
     });
   });
 
@@ -654,7 +656,7 @@ describe("Toolbar strip — composition invariants", () => {
       // it would still be a zero-width flex item costing gap-1.5.
       expect(source).not.toMatch(/<div className="app-no-drag">\s*\{renderOverflowMenu\(/);
       expect(source).toMatch(
-        /data-toolbar-overflow-trigger=""[\s\S]{0,600}?className=\{cn\(toolbarIconButtonClass, "app-no-drag"\)\}/
+        /data-toolbar-overflow-trigger=""[\s\S]{0,600}?className=\{cn\(toolbarIconButtonClass, "app-no-drag[^"]*"/
       );
     });
 
@@ -680,7 +682,9 @@ describe("Toolbar strip — composition invariants", () => {
     });
 
     it("the overflow engine is told what a group boundary costs", () => {
-      expect(source).toMatch(/useToolbarOverflow\([\s\S]*?pinnedIds,\s*resolveToolbarGroup\s*\)/);
+      // The same divider runs the render draws (panels and utilities share one).
+      expect(source).toMatch(/useToolbarOverflow\([\s\S]*?pinnedIds,\s*resolveDividerRun,/);
+      expect(source).toMatch(/getToolbarDividerAfterIds\([\s\S]*?resolveDividerRun\s*\)/);
     });
   });
 });

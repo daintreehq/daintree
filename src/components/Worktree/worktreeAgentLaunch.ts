@@ -25,8 +25,20 @@ export interface FirstAgentLaunch {
 
 export type SetupWaitOutcome = WorktreeSetupState | "still-running" | "error";
 
+/**
+ * Setup outcomes an agent starts after. A failed or timed-out setup counts:
+ * setup has reported its outcome (a timed-out plugin step may still be winding
+ * down), and most failures are something the agent can fix inside the tree.
+ * The worktree card shows the failure either way.
+ */
+type AgentStartingOutcome = "ready" | "failed" | "timed-out";
+
+function setupLetsAgentStart(outcome: SetupWaitOutcome): outcome is AgentStartingOutcome {
+  return outcome === "ready" || outcome === "failed" || outcome === "timed-out";
+}
+
 export type AgentNotStartedReason =
-  | Exclude<SetupWaitOutcome, "ready" | "pending" | "running">
+  | Exclude<SetupWaitOutcome, AgentStartingOutcome | "pending" | "running">
   | "recipe-has-agent"
   | "layout-has-agent"
   | "launch-failed";
@@ -116,10 +128,6 @@ async function launchOrNotify(launch: FirstAgentLaunch): Promise<void> {
 
 function describeReason(reason: AgentNotStartedReason, agentName: string): string {
   switch (reason) {
-    case "failed":
-      return "Worktree setup failed.";
-    case "timed-out":
-      return "Worktree setup timed out.";
     case "needs-approval":
       return "Worktree setup is waiting for you to approve its commands.";
     case "still-running":
@@ -181,9 +189,9 @@ export function notifyAgentNotStarted(
 }
 
 /**
- * Starts the agent once setup reports ready. Anything short of ready — a
- * failure, a pending approval, or setup outlasting the budget — hands the
- * launch back to the user instead of starting into an unprepared tree.
+ * Starts the agent once setup has finished, whether it succeeded, failed or
+ * timed out. A pending approval, setup outlasting the budget, or a state that
+ * couldn't be read hands the launch back to the user instead.
  */
 export async function startFirstAgentWhenReady(launch: FirstAgentLaunch): Promise<void> {
   let outcome: SetupWaitOutcome;
@@ -192,7 +200,7 @@ export async function startFirstAgentWhenReady(launch: FirstAgentLaunch): Promis
   } catch {
     outcome = "error";
   }
-  if (outcome !== "ready") {
+  if (!setupLetsAgentStart(outcome)) {
     notifyAgentNotStarted(
       launch,
       outcome === "pending" || outcome === "running" ? "still-running" : outcome
@@ -213,9 +221,9 @@ export interface AgentLayoutLaunch {
 
 /**
  * The same rule as the first agent's, for a recipe or cloned layout that
- * starts one: it runs once setup reports ready — plugin setup steps included
- * (#13807) — and is handed back with a way to run it when setup ends any other
- * way, instead of starting an agent into an unprepared tree.
+ * starts one: it runs once setup has finished — plugin setup steps included
+ * (#13807) — even when it failed or timed out (#16242), and is handed back
+ * with a way to run it when setup is still going or waiting for approval.
  */
 export async function runAgentLayoutWhenReady(launch: AgentLayoutLaunch): Promise<void> {
   let outcome: SetupWaitOutcome;
@@ -224,7 +232,7 @@ export async function runAgentLayoutWhenReady(launch: AgentLayoutLaunch): Promis
   } catch {
     outcome = "error";
   }
-  if (outcome === "ready") {
+  if (setupLetsAgentStart(outcome)) {
     await launch.run();
     return;
   }

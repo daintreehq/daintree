@@ -82,6 +82,11 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   // fire-and-forget — renderer→main `ipcRenderer.send` of the same answer,
   // pushed whenever it changes so eviction can read it synchronously.
   "project:panel-recovery-state",
+  // fire-and-forget — renderer→main `ipcRenderer.send` of whether the view has
+  // flush work registered for the cached edge, and its answer for each edge
+  // (`app:view-cached` carries the id), consumed by cachedViewFlush.ts.
+  "app:view-cached-flush-armed",
+  "app:view-cached-flushed",
   "mcp:dispatch-action-response",
   "mcp:get-manifest-response",
   "plugin:dispatch-action-response",
@@ -102,6 +107,14 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   // `host.reloadPanel()` request (#12610). Paired with the
   // `plugin:panel-reload-request` event declared in IpcEventMap.
   "plugin:panel-reload-response",
+  // fire-and-forget — renderer→main `ipcRenderer.send` reply carrying the
+  // result of a scheduled run's launch (#15978). Paired with the
+  // `schedules:launch-request` event declared in IpcEventMap.
+  "schedules:launch-response",
+  // fire-and-forget — renderer→main `ipcRenderer.send` reply saying whether
+  // someone is using a pane (#16171). Paired with the
+  // `terminal-when-done:in-use-query` event declared in IpcEventMap.
+  "terminal-when-done:in-use-reply",
   // fire-and-forget — renderer→main `ipcRenderer.send` batches of plugin view
   // cost observations, and the subscribe/unsubscribe edges of the perf snapshot
   // feed (paired with `plugin:perf-snapshots-changed` in IpcEventMap).

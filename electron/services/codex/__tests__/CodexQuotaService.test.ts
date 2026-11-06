@@ -257,6 +257,57 @@ describe("readCodexQuotaProfiles (#13686)", () => {
     expect(profiles[0]?.key).not.toBe(profiles[1]?.key);
   });
 
+  it("reads each account's folder and labels it with the account, beside a preset on the same home (#16040)", async () => {
+    const third = path.join(root, "third");
+    mkdirSync(third);
+    agentSettings.value = {
+      agents: {
+        codex: {
+          accounts: [
+            { id: "company", name: "Company", configDir: second },
+            { id: "lab", name: "Lab", configDir: third },
+          ],
+          customPresets: [{ id: "legacy", name: "Legacy", env: { CODEX_HOME: second } }],
+        },
+      },
+    };
+    respondPerHome((home) => (home === second ? 80 : home === third ? 30 : 10));
+    const profiles = await readCodexQuotaProfiles();
+    expect(
+      profiles.map((p) => [p.isDefault, p.accountNames ?? [], p.presetNames, used(p.result)])
+    ).toEqual([
+      [true, [], [], 10],
+      [false, ["Company"], ["Legacy"], 80],
+      [false, ["Lab"], [], 30],
+    ]);
+  });
+
+  it("files a preset under the account it pins, over its own CODEX_HOME (#16133)", async () => {
+    const third = path.join(root, "third");
+    mkdirSync(third);
+    agentSettings.value = {
+      agents: {
+        codex: {
+          accounts: [{ id: "lab", name: "Lab", configDir: third }],
+          customPresets: [
+            { id: "pinned", name: "Pinned", accountId: "lab", env: { CODEX_HOME: second } },
+            { id: "bare-pin", name: "Bare pin", accountId: "lab" },
+            // Its launches are refused, so no reading speaks for it.
+            { id: "gone", name: "Gone", accountId: "removed", env: { CODEX_HOME: second } },
+          ],
+        },
+      },
+    };
+    respondPerHome((home) => (home === third ? 30 : 10));
+    const profiles = await readCodexQuotaProfiles();
+    expect(
+      profiles.map((p) => [p.isDefault, p.accountNames ?? [], p.presetNames, used(p.result)])
+    ).toEqual([
+      [true, [], [], 10],
+      [false, ["Lab"], ["Pinned", "Bare pin"], 30],
+    ]);
+  });
+
   it("folds presets that share a home, including one pointing at the default", async () => {
     presets(
       { id: "a", name: "Work", env: { CODEX_HOME: second } },

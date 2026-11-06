@@ -93,11 +93,9 @@ fs.appendFileSync(
 );
 const idFlag = argv.findIndex((a) => a === "--session-id" || a === "--resume");
 const sessionId = idFlag >= 0 ? argv[idFlag + 1] : undefined;
-// Daintree never looks for a transcript on Windows, and a drive-letter cwd is
-// no valid directory name there.
-if (sessionId && process.platform !== "win32") {
+if (sessionId) {
   const configDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude");
-  const projectDir = path.join(configDir, "projects", process.cwd().replace(/[\\/]/g, "-"));
+  const projectDir = path.join(configDir, "projects", process.cwd().replace(/[:\\/]/g, "-"));
   fs.mkdirSync(projectDir, { recursive: true });
   fs.appendFileSync(path.join(projectDir, sessionId + ".jsonl"), "");
 }
@@ -235,7 +233,7 @@ function readRestoreFile(file: string): string {
 }
 
 test.describe.serial("Startup: agent terminals across multiple worktrees", () => {
-  // Handed from the restart journey to the quarantined scrollback check below.
+  // Handed from the restart journey to the scrollback check below.
   let restoredPlain: { window: Page; terminalId: string; marker: string } | null = null;
   test.beforeAll(async () => {
     userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-e2e-startup-restore-"));
@@ -499,16 +497,6 @@ test.describe.serial("Startup: agent terminals across multiple worktrees", () =>
     expect((await listTerminals(w)).length).toBe(savedTerminals.length);
   });
   test("restored plain terminal shows its pre-quit scrollback", async () => {
-    // The pty host replays the `.restore` file on a cold restart (its mirror
-    // holds the marker and the banner), but the respawned plain terminal gets
-    // no scrollback restore task in the renderer's restore phase, so the pane
-    // only ever shows the fresh shell. Remove the skip once that is fixed.
-    test.info().annotations.push({
-      type: "quarantine",
-      description:
-        "2026-09-30 plain-terminal scrollback replayed by the pty host is not shown after a cold restart (renderer restore phase respawn branch schedules no scrollback restore)",
-    });
-    test.skip(true, "restored scrollback is not rendered; see quarantine annotation");
     expect(restoredPlain, "restart journey must run first").not.toBeNull();
     const { window, terminalId, marker } = restoredPlain!;
     await expect

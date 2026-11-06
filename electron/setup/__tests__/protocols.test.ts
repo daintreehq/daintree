@@ -1,4 +1,4 @@
-import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach, onTestFinished } from "vitest";
 import path from "path";
 import { Readable } from "node:stream";
 
@@ -41,6 +41,12 @@ vi.mock("electron", () => ({
       },
     })),
   },
+}));
+
+// Stands in for the preview session's identity; only contents carrying it are previews.
+const PREVIEW_SESSION = vi.hoisted(() => ({ webRequest: { onBeforeRequest: vi.fn() } }));
+vi.mock("../htmlPreviewSession.js", () => ({
+  isHtmlPreviewContents: (contents: { session?: unknown }) => contents.session === PREVIEW_SESSION,
 }));
 
 // The tour-audio route re-resolves every hop's hostname; keep that off the network.
@@ -145,6 +151,24 @@ vi.mock("../../window/windowRef.js", () => ({
   getMainWindow: vi.fn(() => mockMainWindow),
 }));
 
+// Same contract as the real helper: nothing for a missing or destroyed
+// renderer, and a send that throws counts as not sent.
+vi.mock("../../ipc/utils.js", () => ({
+  sendToWebContents: (
+    wc: { isDestroyed: () => boolean; send: (...args: unknown[]) => void } | null | undefined,
+    channel: string,
+    ...args: unknown[]
+  ) => {
+    if (!wc || wc.isDestroyed()) return false;
+    try {
+      wc.send(channel, ...args);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+}));
+
 vi.mock("../../ipc/channels.js", () => ({
   CHANNELS: {
     WEBVIEW_FIND_SHORTCUT: "webview:find-shortcut",
@@ -152,6 +176,9 @@ vi.mock("../../ipc/channels.js", () => ({
     WEBVIEW_CLOSE_SHORTCUT: "webview:close-shortcut",
     WEBVIEW_NAVIGATION_BLOCKED: "webview:navigation-blocked",
     WEBVIEW_DIALOG_DISMISS: "webview:dialog-dismiss",
+    WEBVIEW_DIALOG_REQUEST: "webview:dialog-request",
+    WEBVIEW_UNRESPONSIVE: "webview:unresponsive",
+    WEBVIEW_RESPONSIVE: "webview:responsive",
   },
 }));
 
@@ -165,8 +192,10 @@ import {
   setupWebviewCSP,
 } from "../protocols.js";
 import { mintHtmlPreviewToken, _resetHtmlPreviewTokensForTests } from "../htmlPreviewTokens.js";
+import { createDaintreeHtmlProtocolHandler } from "../protocols/html.js";
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
 import { setRemoteWebviewSrcGate } from "../../window/webviewSrcGate.js";
+import { PATH_CANONICAL_HEADER, PREVIEW_REFUSAL_HEADER } from "../../../shared/types/ipc/files.js";
 
 const mockedGetWebviewDialogService = vi.mocked(getWebviewDialogService);
 
@@ -190,6 +219,11 @@ function createMockWebContents(type: "webview" | "window" | "browserView"): Mock
   } as unknown as MockWebContents & {
     _eventHandlers: Map<string, ((...args: unknown[]) => void)[]>;
   };
+}
+
+/** A project view's renderer standing in as a guest's embedder. */
+function embedderWith(send: (...args: unknown[]) => void, destroyed = false) {
+  return { id: 99, isDestroyed: () => destroyed, send };
 }
 
 function getEventHandlers(
@@ -334,20 +368,17 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
     });
   });
 
-  describe("js-dialog routing via BrowserWindow.fromWebContents", () => {
-    it("sends dialog request to the parent window resolved from hostWebContents", () => {
+  describe("guest push routing to the embedder", () => {
+    it("sends dialog request to the guest's embedder", () => {
       const mockSend = vi.fn();
-      mockFromWebContents.mockReturnValue({
-        isDestroyed: () => false,
-        webContents: { send: mockSend },
-      });
       mockedGetWebviewDialogService.mockReturnValue({
         registerDialog: vi.fn(() => "panel-1"),
         getPanelId: vi.fn(),
       } as unknown as ReturnType<typeof getWebviewDialogService>);
 
       const contents = createMockWebContents("webview");
-      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents =
+        embedderWith(mockSend);
       simulateWebContentsCreated(contents);
 
       const jsDialogHandlers = getEventHandlers(contents, "js-dialog");
@@ -374,11 +405,162 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       );
     });
 
-    it("resolves dialog when no parent window is found", () => {
-      mockFromWebContents.mockReturnValue(null);
-      const mockResolveDialog = vi.fn();
+    const OAUTH_POPUP_URL =
+      "https://oauth.provider.com/authorize?client_id=test&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A5173%2Fcallback&code_challenge=abc123";
+
+    it("delivers every guest push to its embedder while another project's view is active", () => {
+      // Project A's view embeds the guest and sits cached; project B's view is
+      // the window's active app view, which is all a window-level send reaches.
+      const embedderSend = vi.fn();
+      const activeViewSend = vi.fn();
+      mockFromWebContents.mockReturnValue({
+        isDestroyed: () => false,
+        webContents: { id: 202, isDestroyed: () => false, send: activeViewSend },
+      });
       mockedGetWebviewDialogService.mockReturnValue({
-        registerDialog: vi.fn(() => "panel-1"),
+        registerDialog: vi.fn(() => "panel-a"),
+        getPanelId: vi.fn(() => "panel-a"),
+        getPanelKind: vi.fn(() => "dev-preview"),
+        cancelPendingForGuest: vi.fn(),
+        storeOAuthSessionStorage: vi.fn(),
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      try {
+        const contents = createMockWebContents("webview");
+        (contents as unknown as { hostWebContents: unknown }).hostWebContents =
+          embedderWith(embedderSend);
+        simulateWebContentsCreated(contents);
+
+        const isMac = process.platform === "darwin";
+        const key = (k: string) => ({
+          type: "keyDown",
+          key: k,
+          meta: isMac,
+          control: !isMac,
+          alt: false,
+          shift: false,
+        });
+        getEventHandlers(contents, "js-dialog")[0](
+          { preventDefault: vi.fn() },
+          "http://localhost:5173",
+          "Leave?",
+          "confirm",
+          "",
+          vi.fn()
+        );
+        getEventHandlers(contents, "will-navigate")[0](
+          { preventDefault: vi.fn() },
+          "https://example.com/"
+        );
+        const openHandler = vi.mocked(contents.setWindowOpenHandler).mock.calls[0]![0] as (d: {
+          url: string;
+        }) => { action: string };
+        expect(openHandler({ url: OAUTH_POPUP_URL })).toEqual({ action: "deny" });
+        getEventHandlers(contents, "unresponsive")[0]();
+        getEventHandlers(contents, "responsive")[0]();
+        const beforeInput = getEventHandlers(contents, "before-input-event")[0];
+        beforeInput({ preventDefault: vi.fn() }, key("f"));
+        beforeInput({ preventDefault: vi.fn() }, key("r"));
+        beforeInput({ preventDefault: vi.fn() }, key("w"));
+        getEventHandlers(contents, "did-navigate")[0]({}, "http://localhost:5173/next", 200, "OK");
+
+        expect(embedderSend.mock.calls).toEqual([
+          [
+            "webview:dialog-request",
+            expect.objectContaining({ panelId: "panel-a", type: "confirm", message: "Leave?" }),
+          ],
+          [
+            "webview:navigation-blocked",
+            expect.objectContaining({ panelId: "panel-a", url: "https://example.com/" }),
+          ],
+          [
+            "webview:navigation-blocked",
+            expect.objectContaining({ panelId: "panel-a", url: OAUTH_POPUP_URL }),
+          ],
+          ["webview:unresponsive", { panelId: "panel-a" }],
+          ["webview:responsive", { panelId: "panel-a" }],
+          ["webview:find-shortcut", { panelId: "panel-a", shortcut: "find" }],
+          ["webview:reload-shortcut", { panelId: "panel-a" }],
+          ["webview:close-shortcut", { panelId: "panel-a" }],
+          ["webview:dialog-dismiss", { panelId: "panel-a" }],
+        ]);
+        expect(activeViewSend).not.toHaveBeenCalled();
+      } finally {
+        mockFromWebContents.mockReturnValue(null);
+      }
+    });
+
+    it("resolves the dialog when the embedder cannot take the request", () => {
+      const mockResolveDialog = vi.fn();
+      const registerDialog = vi.fn((_dialogId: string) => "panel-1");
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog,
+        getPanelId: vi.fn(),
+        resolveDialog: mockResolveDialog,
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = embedderWith(() => {
+        throw new Error("render frame disposed");
+      });
+      simulateWebContentsCreated(contents);
+
+      getEventHandlers(contents, "js-dialog")[0](
+        { preventDefault: vi.fn() },
+        "http://localhost:3000",
+        "Sure?",
+        "confirm",
+        "",
+        vi.fn()
+      );
+
+      // Nobody will answer it, so the page is released with the dialog's
+      // cancel answer instead of hanging on a prompt no view shows.
+      expect(mockResolveDialog).toHaveBeenCalledWith(registerDialog.mock.calls[0]![0], false);
+    });
+
+    it.each([
+      ["has no embedder", undefined],
+      ["has a destroyed embedder", embedderWith(vi.fn(), true)],
+      [
+        "has an embedder whose send throws",
+        embedderWith(() => {
+          throw new Error("render frame disposed");
+        }),
+      ],
+    ])("leaves Cmd/Ctrl+R to the page when the guest %s", (_label, embedder) => {
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog: vi.fn(),
+        getPanelId: vi.fn(() => "panel-1"),
+        getPanelKind: vi.fn(() => "dev-preview"),
+      } as unknown as ReturnType<typeof getWebviewDialogService>);
+
+      const contents = createMockWebContents("webview");
+      if (embedder) {
+        (contents as unknown as { hostWebContents: unknown }).hostWebContents = embedder;
+      }
+      simulateWebContentsCreated(contents);
+
+      const isMac = process.platform === "darwin";
+      const event = { preventDefault: vi.fn() };
+      getEventHandlers(contents, "before-input-event")[0](event, {
+        type: "keyDown",
+        key: "r",
+        meta: isMac,
+        control: !isMac,
+        alt: false,
+        shift: false,
+      });
+
+      // No view will reload, so swallowing the key would leave nothing happening.
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    });
+
+    it("resolves dialog when the guest has no embedder", () => {
+      const mockResolveDialog = vi.fn();
+      const registerDialog = vi.fn((_dialogId: string) => "panel-1");
+      mockedGetWebviewDialogService.mockReturnValue({
+        registerDialog,
         getPanelId: vi.fn(),
         resolveDialog: mockResolveDialog,
       } as unknown as ReturnType<typeof getWebviewDialogService>);
@@ -391,22 +573,19 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       const mockCallback = vi.fn();
       jsDialogHandlers[0](mockEvent, "http://localhost:3000", "Alert", "alert", "", mockCallback);
 
-      expect(mockResolveDialog).toHaveBeenCalledWith(expect.any(String), true);
+      expect(mockResolveDialog).toHaveBeenCalledWith(registerDialog.mock.calls[0]![0], true);
     });
 
-    it("sends find shortcut to the parent window resolved from hostWebContents", () => {
+    it("sends find shortcut to the guest's embedder", () => {
       const mockSend = vi.fn();
-      mockFromWebContents.mockReturnValue({
-        isDestroyed: () => false,
-        webContents: { send: mockSend },
-      });
       mockedGetWebviewDialogService.mockReturnValue({
         registerDialog: vi.fn(),
         getPanelId: vi.fn(() => "panel-1"),
       } as unknown as ReturnType<typeof getWebviewDialogService>);
 
       const contents = createMockWebContents("webview");
-      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents =
+        embedderWith(mockSend);
       simulateWebContentsCreated(contents);
 
       const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
@@ -428,12 +607,8 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       });
     });
 
-    it("sends reload shortcut (Cmd/Ctrl+R) to the parent window and prevents default (#9497)", () => {
+    it("sends reload shortcut (Cmd/Ctrl+R) to the embedder and prevents default (#9497)", () => {
       const mockSend = vi.fn();
-      mockFromWebContents.mockReturnValue({
-        isDestroyed: () => false,
-        webContents: { send: mockSend },
-      });
       mockedGetWebviewDialogService.mockReturnValue({
         registerDialog: vi.fn(),
         getPanelId: vi.fn(() => "panel-1"),
@@ -441,7 +616,8 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       } as unknown as ReturnType<typeof getWebviewDialogService>);
 
       const contents = createMockWebContents("webview");
-      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents =
+        embedderWith(mockSend);
       simulateWebContentsCreated(contents);
 
       const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
@@ -463,10 +639,6 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
 
     it("does not swallow Cmd/Ctrl+R for non-dev-preview webviews like browser panels (#9497)", () => {
       const mockSend = vi.fn();
-      mockFromWebContents.mockReturnValue({
-        isDestroyed: () => false,
-        webContents: { send: mockSend },
-      });
       mockedGetWebviewDialogService.mockReturnValue({
         registerDialog: vi.fn(),
         getPanelId: vi.fn(() => "panel-browser-1"),
@@ -474,7 +646,8 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       } as unknown as ReturnType<typeof getWebviewDialogService>);
 
       const contents = createMockWebContents("webview");
-      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents =
+        embedderWith(mockSend);
       simulateWebContentsCreated(contents);
 
       const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
@@ -494,10 +667,6 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
 
     it("ignores Cmd/Ctrl+Shift+R so it does not shadow other reload variants (#9497)", () => {
       const mockSend = vi.fn();
-      mockFromWebContents.mockReturnValue({
-        isDestroyed: () => false,
-        webContents: { send: mockSend },
-      });
       mockedGetWebviewDialogService.mockReturnValue({
         registerDialog: vi.fn(),
         getPanelId: vi.fn(() => "panel-1"),
@@ -505,7 +674,8 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       } as unknown as ReturnType<typeof getWebviewDialogService>);
 
       const contents = createMockWebContents("webview");
-      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents =
+        embedderWith(mockSend);
       simulateWebContentsCreated(contents);
 
       const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
@@ -523,12 +693,8 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       expect(mockSend).not.toHaveBeenCalledWith("webview:reload-shortcut", expect.anything());
     });
 
-    it("sends close shortcut (Cmd/Ctrl+W) to the parent window and prevents default for dev-preview webviews (#10859)", () => {
+    it("sends close shortcut (Cmd/Ctrl+W) to the embedder and prevents default for dev-preview webviews (#10859)", () => {
       const mockSend = vi.fn();
-      mockFromWebContents.mockReturnValue({
-        isDestroyed: () => false,
-        webContents: { send: mockSend },
-      });
       mockedGetWebviewDialogService.mockReturnValue({
         registerDialog: vi.fn(),
         getPanelId: vi.fn(() => "panel-1"),
@@ -536,7 +702,8 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       } as unknown as ReturnType<typeof getWebviewDialogService>);
 
       const contents = createMockWebContents("webview");
-      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents =
+        embedderWith(mockSend);
       simulateWebContentsCreated(contents);
 
       const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
@@ -562,10 +729,6 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
 
     it("also sends close shortcut (Cmd/Ctrl+W) for non-dev-preview webviews like browser panels — unlike reload, no panel-kind gate applies (#10859)", () => {
       const mockSend = vi.fn();
-      mockFromWebContents.mockReturnValue({
-        isDestroyed: () => false,
-        webContents: { send: mockSend },
-      });
       mockedGetWebviewDialogService.mockReturnValue({
         registerDialog: vi.fn(),
         getPanelId: vi.fn(() => "panel-browser-1"),
@@ -573,7 +736,8 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       } as unknown as ReturnType<typeof getWebviewDialogService>);
 
       const contents = createMockWebContents("webview");
-      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents =
+        embedderWith(mockSend);
       simulateWebContentsCreated(contents);
 
       const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
@@ -596,10 +760,6 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
 
     it("swallows Cmd/Ctrl+W from an unregistered webview guest so it never closes the window (#13634)", () => {
       const mockSend = vi.fn();
-      mockFromWebContents.mockReturnValue({
-        isDestroyed: () => false,
-        webContents: { send: mockSend },
-      });
       mockedGetWebviewDialogService.mockReturnValue({
         registerDialog: vi.fn(),
         getPanelId: vi.fn(() => undefined),
@@ -607,7 +767,8 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       } as unknown as ReturnType<typeof getWebviewDialogService>);
 
       const contents = createMockWebContents("webview");
-      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents =
+        embedderWith(mockSend);
       simulateWebContentsCreated(contents);
 
       const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
@@ -626,8 +787,8 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       expect(mockSend).not.toHaveBeenCalled();
     });
 
-    it("swallows Cmd/Ctrl+W even when the guest's parent window can't be resolved (#13634)", () => {
-      mockFromWebContents.mockReturnValue(null);
+    it("swallows Cmd/Ctrl+W even when the guest's embedder is gone (#13634)", () => {
+      const mockSend = vi.fn();
       mockedGetWebviewDialogService.mockReturnValue({
         registerDialog: vi.fn(),
         getPanelId: vi.fn(() => "panel-1"),
@@ -635,7 +796,10 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       } as unknown as ReturnType<typeof getWebviewDialogService>);
 
       const contents = createMockWebContents("webview");
-      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = embedderWith(
+        mockSend,
+        true
+      );
       simulateWebContentsCreated(contents);
 
       const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
@@ -655,10 +819,6 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
 
     it("ignores Cmd/Ctrl+Shift+W so it does not shadow other shortcuts (#10859)", () => {
       const mockSend = vi.fn();
-      mockFromWebContents.mockReturnValue({
-        isDestroyed: () => false,
-        webContents: { send: mockSend },
-      });
       mockedGetWebviewDialogService.mockReturnValue({
         registerDialog: vi.fn(),
         getPanelId: vi.fn(() => "panel-1"),
@@ -666,7 +826,8 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       } as unknown as ReturnType<typeof getWebviewDialogService>);
 
       const contents = createMockWebContents("webview");
-      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents =
+        embedderWith(mockSend);
       simulateWebContentsCreated(contents);
 
       const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
@@ -687,10 +848,6 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
 
     it("ignores Cmd+Ctrl+W — the opposite-platform modifier disqualifies the close chord (#10859)", () => {
       const mockSend = vi.fn();
-      mockFromWebContents.mockReturnValue({
-        isDestroyed: () => false,
-        webContents: { send: mockSend },
-      });
       mockedGetWebviewDialogService.mockReturnValue({
         registerDialog: vi.fn(),
         getPanelId: vi.fn(() => "panel-1"),
@@ -698,7 +855,8 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       } as unknown as ReturnType<typeof getWebviewDialogService>);
 
       const contents = createMockWebContents("webview");
-      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents =
+        embedderWith(mockSend);
       simulateWebContentsCreated(contents);
 
       const beforeInputHandlers = getEventHandlers(contents, "before-input-event");
@@ -731,14 +889,13 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       };
 
       function guestKeyHandler(send = vi.fn()) {
-        mockFromWebContents.mockReturnValue({ isDestroyed: () => false, webContents: { send } });
         // Not registered with a panel: the key mustn't depend on it.
         mockedGetWebviewDialogService.mockReturnValue({
           registerDialog: vi.fn(),
           getPanelId: vi.fn(() => undefined),
         } as unknown as ReturnType<typeof getWebviewDialogService>);
         const contents = createMockWebContents("webview");
-        (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+        (contents as unknown as { hostWebContents: unknown }).hostWebContents = embedderWith(send);
         simulateWebContentsCreated(contents);
         return getEventHandlers(contents, "before-input-event")[0];
       }
@@ -782,10 +939,6 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       mockSend: ReturnType<typeof vi.fn>;
     } {
       const mockSend = vi.fn();
-      mockFromWebContents.mockReturnValue({
-        isDestroyed: () => false,
-        webContents: { send: mockSend },
-      });
       const cancelPendingForGuest = vi.fn();
       mockedGetWebviewDialogService.mockReturnValue({
         registerDialog: vi.fn(),
@@ -794,7 +947,8 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       } as unknown as ReturnType<typeof getWebviewDialogService>);
 
       const contents = createMockWebContents("webview");
-      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents =
+        embedderWith(mockSend);
       simulateWebContentsCreated(contents);
       return { contents, cancelPendingForGuest, mockSend };
     }
@@ -815,12 +969,8 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       expect(mockSend).toHaveBeenCalledWith("webview:dialog-dismiss", { panelId: "panel-1" });
     });
 
-    it("dismisses on destroyed using the cached parent window after hostWebContents is gone", () => {
+    it("dismisses on destroyed through the cached embedder after hostWebContents is gone", () => {
       const mockSend = vi.fn();
-      mockFromWebContents.mockReturnValue({
-        isDestroyed: () => false,
-        webContents: { send: mockSend },
-      });
       const cancelPendingForGuest = vi.fn();
       mockedGetWebviewDialogService.mockReturnValue({
         registerDialog: vi.fn(() => "panel-1"),
@@ -829,10 +979,11 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       } as unknown as ReturnType<typeof getWebviewDialogService>);
 
       const contents = createMockWebContents("webview");
-      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents =
+        embedderWith(mockSend);
       simulateWebContentsCreated(contents);
 
-      // A dialog is shown while the guest is alive — this caches the parent window.
+      // A dialog is shown while the guest is alive — this caches the embedder.
       const jsDialogHandlers = getEventHandlers(contents, "js-dialog");
       jsDialogHandlers[0](
         { preventDefault: vi.fn() },
@@ -843,11 +994,15 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
         vi.fn()
       );
 
-      // The guest is then destroyed: hostWebContents is unreachable and the live
-      // lookup returns null, so the destroy handler must fall back to the cached
-      // window captured during the guest's lifetime.
+      // The guest is then destroyed: Electron throws on any property read of a
+      // destroyed WebContents, so the destroy handler must use the embedder it
+      // cached during the guest's lifetime.
       (contents as unknown as { isDestroyed: () => boolean }).isDestroyed = () => true;
-      mockFromWebContents.mockReturnValue(null);
+      Object.defineProperty(contents, "hostWebContents", {
+        get: () => {
+          throw new Error("Object has been destroyed");
+        },
+      });
       mockSend.mockClear();
 
       getEventHandlers(contents, "destroyed")[0]();
@@ -858,10 +1013,6 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
 
     it("does not notify the renderer when no panel is registered for the guest", () => {
       const mockSend = vi.fn();
-      mockFromWebContents.mockReturnValue({
-        isDestroyed: () => false,
-        webContents: { send: mockSend },
-      });
       const cancelPendingForGuest = vi.fn();
       mockedGetWebviewDialogService.mockReturnValue({
         registerDialog: vi.fn(),
@@ -870,7 +1021,8 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       } as unknown as ReturnType<typeof getWebviewDialogService>);
 
       const contents = createMockWebContents("webview");
-      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents =
+        embedderWith(mockSend);
       simulateWebContentsCreated(contents);
 
       getEventHandlers(contents, "did-navigate")[0]({}, "http://localhost:3000/next", 200, "OK");
@@ -891,7 +1043,7 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       } as unknown as ReturnType<typeof getWebviewDialogService>);
 
       const contents = createMockWebContents("webview");
-      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = embedderWith(vi.fn());
       contents.executeJavaScript.mockResolvedValue([
         ["kc_code_verifier", "verifier-123"],
         ["kc_state", "state-123"],
@@ -915,19 +1067,16 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       expect(contents.executeJavaScript).toHaveBeenCalledTimes(1);
     });
 
-    it("sends navigation-blocked to parent when will-navigate blocks a non-localhost URL", () => {
+    it("sends navigation-blocked to the embedder when will-navigate blocks a non-localhost URL", () => {
       const mockSend = vi.fn();
-      mockFromWebContents.mockReturnValue({
-        isDestroyed: () => false,
-        webContents: { send: mockSend },
-      });
       mockedGetWebviewDialogService.mockReturnValue({
         registerDialog: vi.fn(),
         getPanelId: vi.fn(() => "panel-42"),
       } as unknown as ReturnType<typeof getWebviewDialogService>);
 
       const contents = createMockWebContents("webview");
-      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents =
+        embedderWith(mockSend);
       simulateWebContentsCreated(contents);
 
       const handler = getEventHandlers(contents, "will-navigate")[0];
@@ -942,19 +1091,16 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       });
     });
 
-    it("sends navigation-blocked to parent when will-redirect blocks a non-localhost URL", () => {
+    it("sends navigation-blocked to the embedder when will-redirect blocks a non-localhost URL", () => {
       const mockSend = vi.fn();
-      mockFromWebContents.mockReturnValue({
-        isDestroyed: () => false,
-        webContents: { send: mockSend },
-      });
       mockedGetWebviewDialogService.mockReturnValue({
         registerDialog: vi.fn(),
         getPanelId: vi.fn(() => "panel-7"),
       } as unknown as ReturnType<typeof getWebviewDialogService>);
 
       const contents = createMockWebContents("webview");
-      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents =
+        embedderWith(mockSend);
       simulateWebContentsCreated(contents);
 
       const handler = getEventHandlers(contents, "will-redirect")[0];
@@ -971,16 +1117,14 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
 
     it("does not send IPC when panelId is not registered", () => {
       const mockSend = vi.fn();
-      mockFromWebContents.mockReturnValue({
-        isDestroyed: () => false,
-        webContents: { send: mockSend },
-      });
       mockedGetWebviewDialogService.mockReturnValue({
         registerDialog: vi.fn(),
         getPanelId: vi.fn(() => undefined),
       } as unknown as ReturnType<typeof getWebviewDialogService>);
 
       const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents =
+        embedderWith(mockSend);
       simulateWebContentsCreated(contents);
 
       const handler = getEventHandlers(contents, "will-navigate")[0];
@@ -991,18 +1135,18 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       expect(mockSend).not.toHaveBeenCalled();
     });
 
-    it("does not crash when parent window is destroyed", () => {
-      mockFromWebContents.mockReturnValue({
-        isDestroyed: () => true,
-        webContents: { send: vi.fn() },
-      });
+    it("does not crash or send when the embedder is destroyed", () => {
+      const mockSend = vi.fn();
       mockedGetWebviewDialogService.mockReturnValue({
         registerDialog: vi.fn(),
         getPanelId: vi.fn(() => "panel-1"),
       } as unknown as ReturnType<typeof getWebviewDialogService>);
 
       const contents = createMockWebContents("webview");
-      (contents as unknown as { hostWebContents: unknown }).hostWebContents = { id: 99 };
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents = embedderWith(
+        mockSend,
+        true
+      );
       simulateWebContentsCreated(contents);
 
       const handler = getEventHandlers(contents, "will-navigate")[0];
@@ -1010,16 +1154,15 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
 
       expect(() => handler(event, "https://example.com")).not.toThrow();
       expect(event.preventDefault).toHaveBeenCalledTimes(1);
+      expect(mockSend).not.toHaveBeenCalled();
     });
 
     it("does not send IPC for localhost URLs", () => {
       const mockSend = vi.fn();
-      mockFromWebContents.mockReturnValue({
-        isDestroyed: () => false,
-        webContents: { send: mockSend },
-      });
 
       const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents =
+        embedderWith(mockSend);
       simulateWebContentsCreated(contents);
 
       const handler = getEventHandlers(contents, "will-navigate")[0];
@@ -1044,7 +1187,6 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
   describe("blocked navigation IPC notification", () => {
     beforeEach(() => {
       mockSend.mockClear();
-      mockFromWebContents.mockReturnValue(mockMainWindow);
       mockedGetWebviewDialogService.mockReturnValue({
         registerDialog: vi.fn(),
         getPanelId: vi.fn(() => "panel-browser-1"),
@@ -1053,6 +1195,8 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
 
     it("sends canOpenExternal false for javascript: URLs", () => {
       const contents = createMockWebContents("webview");
+      (contents as unknown as { hostWebContents: unknown }).hostWebContents =
+        embedderWith(mockSend);
       simulateWebContentsCreated(contents);
 
       const handler = getEventHandlers(contents, "will-navigate")[0];
@@ -1143,10 +1287,10 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
     function guest(embedderId: number, partition?: string): MockWebContents {
       const contents = createMockWebContents("webview");
       const extra = contents as unknown as {
-        hostWebContents: { id: number };
+        hostWebContents: ReturnType<typeof embedderWith>;
         session?: { partition: string };
       };
-      extra.hostWebContents = { id: embedderId };
+      extra.hostWebContents = { ...embedderWith(vi.fn()), id: embedderId };
       if (partition) extra.session = { partition };
       simulateWebContentsCreated(contents);
       return contents;
@@ -1227,6 +1371,27 @@ describe("setupWebviewCSP — webview guest navigation restriction", () => {
       expect(localOnBeforeRequest).not.toHaveBeenCalled();
     });
 
+    it("leaves HTML preview guests to their own lockdown, in remote and local views alike (#15793)", () => {
+      for (const embedderId of [REMOTE_EMBEDDER, LOCAL_EMBEDDER]) {
+        const preview = createMockWebContents("webview");
+        Object.assign(preview, { hostWebContents: { id: embedderId }, session: PREVIEW_SESSION });
+        simulateWebContentsCreated(preview);
+        // No external popup routing and no localhost-only rule, which would
+        // refuse the page's own relative links.
+        expect(preview.setWindowOpenHandler).not.toHaveBeenCalled();
+        expect(getEventHandlers(preview, "will-navigate")).toHaveLength(0);
+        expect(getEventHandlers(preview, "will-redirect")).toHaveLength(0);
+      }
+
+      // The remote guard's listener would replace the preview session's own
+      // request filter and resolve hostnames for it.
+      const embedder = createMockWebContents("window");
+      embedder.id = REMOTE_EMBEDDER;
+      simulateWebContentsCreated(embedder);
+      getEventHandlers(embedder, "did-attach-webview")[0]!({}, { session: PREVIEW_SESSION });
+      expect(PREVIEW_SESSION.webRequest.onBeforeRequest).not.toHaveBeenCalled();
+    });
+
     it("leaves guests in a local view on today's rules", () => {
       const preview = guest(LOCAL_EMBEDDER);
       expect(blocks(preview, "will-navigate", "http://localhost:3000/")).toBe(false);
@@ -1256,48 +1421,6 @@ describe("setupWebviewCSP — partition CSP wiring", () => {
     // Browser sessions are per-project and created lazily; setup no longer opens a
     // singleton persist:browser session for identity comparison (#9965).
     expect(partitions).not.toContain("persist:browser");
-  });
-
-  it("passes daintree-html:// preview responses through without overwriting their CSP (#11191)", async () => {
-    const { session } = await import("electron");
-    const { mergeCspHeaders } = await import("../../utils/webviewCsp.js");
-    const fromPartition = vi.mocked(session.fromPartition);
-    vi.mocked(mergeCspHeaders).mockClear();
-
-    let captured:
-      | ((details: unknown, callback: (r: { responseHeaders?: unknown }) => void) => void)
-      | undefined;
-    fromPartition.mockImplementation((partition: string) => {
-      const onHeadersReceived = vi.fn(
-        (
-          _filter: unknown,
-          listener: (details: unknown, callback: (r: { responseHeaders?: unknown }) => void) => void
-        ) => {
-          if (partition === "persist:daintree") captured = listener;
-        }
-      );
-      return { webRequest: { onHeadersReceived } } as unknown as Electron.Session;
-    });
-
-    setupWebviewCSP();
-    expect(captured).toBeDefined();
-
-    // A daintree-html preview iframe already carries its own token-scoped CSP;
-    // the app overlay must NOT replace it (that would break the sandboxed page's
-    // scripts and re-expose connect-src daintree-file:).
-    const previewHeaders = {
-      "Content-Security-Policy": ["sandbox allow-scripts; default-src 'none'"],
-    };
-    let previewResult: { responseHeaders?: unknown } | undefined;
-    captured!({ url: "daintree-html://tok/index.html", responseHeaders: previewHeaders }, (r) => {
-      previewResult = r;
-    });
-    expect(previewResult?.responseHeaders).toBe(previewHeaders);
-    expect(vi.mocked(mergeCspHeaders)).not.toHaveBeenCalled();
-
-    // A normal app response still gets the app CSP overlay applied.
-    captured!({ url: "app://daintree/index.html", responseHeaders: {} }, () => {});
-    expect(vi.mocked(mergeCspHeaders)).toHaveBeenCalledTimes(1);
   });
 
   it("passes daintree-pdf:// responses through without stamping a CSP on them (#11427)", async () => {
@@ -1583,7 +1706,7 @@ describe("protocol registration", () => {
     // in app.whenReady() before any per-project session is created.
     const schemes = handle.mock.calls.map((c) => c[0] as string);
     expect(new Set(schemes)).toEqual(
-      new Set(["app", "daintree-file", "daintree-html", "daintree-pdf", "daintree-media"])
+      new Set(["app", "daintree-file", "daintree-pdf", "daintree-media"])
     );
     // Each exactly once: a duplicate handle() for one scheme throws in Electron.
     expect(schemes).toHaveLength(new Set(schemes).size);
@@ -2133,6 +2256,113 @@ describe("createDaintreeFileProtocolHandler — symlink containment", () => {
     } finally {
       relativeSpy.mockRestore();
     }
+  });
+
+  // A rendered Markdown image HEADs its own URL after each refresh to learn
+  // whether ticks naming other directories can be skipped for it (#15678).
+  describe("HEAD canonical-path probe (#15678)", () => {
+    function makeHead(filePath: string, rootPath: string, origin?: string): GlobalRequest {
+      const url = new URL("daintree-file://load");
+      url.searchParams.set("path", filePath);
+      url.searchParams.set("root", rootPath);
+      return new Request(url.toString(), {
+        method: "HEAD",
+        headers: origin ? { Origin: origin } : undefined,
+      }) as GlobalRequest;
+    }
+
+    async function installStatHandle(stats: { size: number; nlink?: number }) {
+      const fs = await import("fs/promises");
+      const handle = {
+        read: vi.fn(),
+        stat: vi.fn().mockResolvedValue({ ...stats, isFile: () => true }),
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+      vi.mocked(fs.open).mockResolvedValue(
+        handle as unknown as Awaited<ReturnType<typeof fs.open>>
+      );
+      return handle;
+    }
+
+    it("answers from a stat of the open file, without reading it", async () => {
+      const fs = await import("fs/promises");
+      vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+      const handle = await installStatHandle({ size: 2048, nlink: 1 });
+
+      const handler = await captureHandler("daintree-file");
+      const response = await handler(makeHead("/project/docs/img/a.png", "/project"));
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Length")).toBe("2048");
+      expect(response.headers.get(PATH_CANONICAL_HEADER)).toBe("true");
+      expect((await response.arrayBuffer()).byteLength).toBe(0);
+      expect(handle.read).not.toHaveBeenCalled();
+      expect(handle.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("says a path reached through a symlink is not canonical", async () => {
+      const fs = await import("fs/promises");
+      vi.mocked(fs.realpath).mockImplementation((p) =>
+        Promise.resolve(
+          p === path.normalize("/project/docs/img/a.png")
+            ? path.normalize("/project/assets/a.png")
+            : (p as string)
+        )
+      );
+      await installStatHandle({ size: 10, nlink: 1 });
+
+      const handler = await captureHandler("daintree-file");
+      const response = await handler(makeHead("/project/docs/img/a.png", "/project"));
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get(PATH_CANONICAL_HEADER)).toBe("false");
+    });
+
+    it("says a hard-linked file is not canonical", async () => {
+      const fs = await import("fs/promises");
+      vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+      await installStatHandle({ size: 10, nlink: 2 });
+
+      const handler = await captureHandler("daintree-file");
+      const response = await handler(makeHead("/project/docs/img/a.png", "/project"));
+
+      expect(response.headers.get(PATH_CANONICAL_HEADER)).toBe("false");
+    });
+
+    it("refuses a path outside the root without vouching for anything", async () => {
+      const fs = await import("fs/promises");
+      vi.mocked(fs.realpath).mockImplementation((p) =>
+        Promise.resolve(
+          p === path.normalize("/project/docs/img/a.png")
+            ? path.normalize("/etc/passwd")
+            : (p as string)
+        )
+      );
+
+      const handler = await captureHandler("daintree-file");
+      const response = await handler(makeHead("/project/docs/img/a.png", "/project"));
+
+      expect(response.status).toBe(404);
+      expect(response.headers.get(PATH_CANONICAL_HEADER)).toBeNull();
+      expect(fs.open).not.toHaveBeenCalled();
+    });
+
+    it("exposes the answer to the trusted app origin's fetch", async () => {
+      const fs = await import("fs/promises");
+      vi.mocked(fs.realpath).mockImplementation((p) => Promise.resolve(p as string));
+      await installStatHandle({ size: 10, nlink: 1 });
+
+      const handler = await captureHandler("daintree-file");
+      const response = await handler(
+        makeHead("/project/docs/img/a.png", "/project", "app://daintree")
+      );
+
+      const exposed = (response.headers.get("Access-Control-Expose-Headers") ?? "")
+        .split(",")
+        .map((name) => name.trim().toLowerCase());
+      expect(exposed).toContain(PATH_CANONICAL_HEADER.toLowerCase());
+      expect(exposed).toContain(PREVIEW_REFUSAL_HEADER.toLowerCase());
+    });
   });
 });
 
@@ -3384,6 +3614,31 @@ describe("createPluginProtocolHandler", () => {
       expect(response.status).toBe(502);
     });
 
+    it("answers 502 when the host's DNS check outlives the deadline", async () => {
+      const { default: dns } = await import("node:dns/promises");
+      let release: (answer: Array<{ address: string; family: number }>) => void = () => {};
+      vi.mocked(dns.lookup).mockImplementationOnce(
+        () => new Promise((resolve) => (release = resolve as typeof release)) as never
+      );
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      // Outside the body, so a regression that hangs the request still frees
+      // the lookup and the real timers.
+      onTestFinished(async () => {
+        vi.useRealTimers();
+        release([{ address: "93.184.216.34", family: 4 }]);
+        await new Promise((resolve) => setImmediate(resolve));
+      });
+      const netFetch = vi.fn(async () => new Response("abc", { status: 200 }));
+
+      const pending = tourAudioHandler(netFetch)(
+        makeRequest("plugin://pi-abc/__dtv-2/__dta/welcome/publish")
+      );
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect((await pending).status).toBe(502);
+      expect(netFetch).not.toHaveBeenCalled();
+    });
+
     it("refuses an answer that isn't audio", async () => {
       const netFetch = vi.fn(
         async () =>
@@ -3410,6 +3665,85 @@ describe("createPluginProtocolHandler", () => {
       }
       expect(netFetch).not.toHaveBeenCalled();
       expect(fs.open).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("bundled fonts (#16286)", () => {
+    // An @font-face load is a CORS request from the app document, and the
+    // response is nosniff: the view only gets its font if the type is a real
+    // font type and the trusted origin is echoed, on a fresh load and on the
+    // revalidation every non-fingerprinted font makes.
+    async function useRealMimeTypes(): Promise<void> {
+      const appProtocol = await import("../../utils/appProtocol.js");
+      const actual = await vi.importActual<typeof import("../../utils/appProtocol.js")>(
+        "../../utils/appProtocol.js"
+      );
+      vi.mocked(appProtocol.getMimeType).mockImplementation(actual.getMimeType);
+    }
+
+    it.each([
+      ["inter-latin.woff2", "font/woff2"],
+      ["inter-latin.woff", "font/woff"],
+      ["inter-latin.ttf", "font/ttf"],
+      ["inter-latin.otf", "font/otf"],
+    ])("serves %s as %s with the trusted document's grant", async (file, type) => {
+      const fs = await import("fs/promises");
+      const bytes = Buffer.from([0x77, 0x4f, 0x46, 0x32]);
+      const handle = makeFileHandle(bytes);
+      vi.mocked(fs.open).mockResolvedValue(
+        handle as unknown as Awaited<ReturnType<typeof fs.open>>
+      );
+      await useRealMimeTypes();
+
+      const response = await buildHandler()(
+        makeRequest(`plugin://my-plugin/__dtv-3/view/fonts/${file}`, {
+          headers: { Origin: "app://daintree" },
+        })
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Type")).toBe(type);
+      expect(response.headers.get("X-Content-Type-Options")).toBe("nosniff");
+      expect(response.headers.get("Access-Control-Allow-Origin")).toBe("app://daintree");
+      expect(response.headers.get("Vary")).toBe("Origin");
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
+      expect(handle.readFile).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(fs.open).mock.calls[0]?.[0]).toBe(
+        path.join(PLUGIN_ROOT, "view", "fonts", file)
+      );
+    });
+
+    it("keeps the grant on a font's 304 revalidation", async () => {
+      const appProtocol = await import("../../utils/appProtocol.js");
+      await useRealMimeTypes();
+      vi.mocked(appProtocol.isNotModified).mockReturnValueOnce(true);
+
+      const response = await buildHandler()(
+        makeRequest("plugin://my-plugin/view/fonts/inter-latin.woff2", {
+          headers: { Origin: "app://daintree", "If-Modified-Since": PLUGIN_MTIME.toUTCString() },
+        })
+      );
+
+      expect(response.status).toBe(304);
+      expect(response.headers.get("Content-Type")).toBe("font/woff2");
+      expect(response.headers.get("Access-Control-Allow-Origin")).toBe("app://daintree");
+      expect(response.headers.get("Vary")).toBe("Origin");
+    });
+
+    it("withholds the grant from a page that is not the app document", async () => {
+      await useRealMimeTypes();
+
+      const response = await buildHandler()(
+        makeRequest("plugin://my-plugin/view/fonts/inter-latin.woff2", {
+          headers: { Origin: "https://evil.example" },
+        })
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Type")).toBe("font/woff2");
+      expect(await response.text()).toBe("data");
+      expect(response.headers.get("Vary")).toBe("Origin");
+      expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
     });
   });
 });
@@ -3706,12 +4040,7 @@ describe("createDaintreeHtmlProtocolHandler — sandboxed HTML preview (#11191)"
   let token: string;
 
   async function captureHandler(): Promise<ProtocolHandler> {
-    const handle = vi.fn();
-    const mockSession = { protocol: { handle } } as unknown as Electron.Session;
-    registerProtocolsForSession(mockSession, "/tmp/dist");
-    const call = handle.mock.calls.find((c) => c[0] === "daintree-html");
-    if (!call) throw new Error("handler for daintree-html not registered");
-    return call[1] as ProtocolHandler;
+    return createDaintreeHtmlProtocolHandler() as ProtocolHandler;
   }
 
   function makeRequest(authority: string, relPath: string): GlobalRequest {
@@ -3756,8 +4085,6 @@ describe("createDaintreeHtmlProtocolHandler — sandboxed HTML preview (#11191)"
     expect(csp).toContain("sandbox allow-scripts");
     expect(csp).toContain("connect-src 'none'");
     expect(csp).toContain("default-src 'none'");
-    // WebRTC isn't governed by connect-src, so it's blocked explicitly.
-    expect(csp).toContain("webrtc 'block'");
     // Egress-limiting response headers.
     expect(response.headers.get("Referrer-Policy")).toBe("no-referrer");
     expect(response.headers.get("X-DNS-Prefetch-Control")).toBe("off");
@@ -4322,7 +4649,6 @@ describe("applyDaintreeAppCspToSession — preview response pass-through", () =>
 
   it.each([
     ["daintree-pdf://load?path=%2Frepo%2Fa.pdf"],
-    ["daintree-html://tok/index.html"],
     ["chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/index.html"],
   ])("passes %s through untouched", async (url) => {
     const { listener, mergeCspHeaders } = await captureListener();

@@ -98,15 +98,16 @@ async function waitForSetup(
     if (field(status.result, "timedOut") === true) continue;
     switch (field(status.result, "setupState")) {
       // Unknown means this host did not track it (a restart, an adopted
-      // worktree): there is nothing to wait for, and the tree exists.
+      // worktree): there is nothing to wait for, and the tree exists. A
+      // failed or timed-out setup has reported its outcome, and the agent is
+      // often what fixes it; the worktree card shows the failure.
       case "ready":
       case "unknown":
+      case "failed":
+      case "timed-out":
         return null;
       case "needs-approval":
         return `worktree ${branch} was created, but its setup needs your approval`;
-      case "failed":
-      case "timed-out":
-        return `worktree ${branch} was created, but its setup failed`;
       default:
         continue;
     }
@@ -119,9 +120,10 @@ async function waitForSetup(
  * launch `prompt`, which the agent would submit as its first turn.
  *
  * For a new worktree this is the same composition an agent would script:
- * create it, wait for its setup, then launch into it. A setup that fails, needs
- * the user's approval or is still running after the waits stops the handoff
- * there, reporting the worktree it made. The draft itself goes through the same
+ * create it, wait for its setup, then launch into it, even when that setup
+ * failed or timed out. A setup that needs the user's approval or is still
+ * running after the waits stops the handoff there, reporting the worktree it
+ * made. The draft itself goes through the same
  * gate as every other handoff, once the new pane is in the store, so a pane
  * that locked or exited while it started is refused rather than drafted into.
  *

@@ -73,8 +73,10 @@ describe("useAutocompleteItems", () => {
     // Key stays the raw path (for staleness); insertText is the canonical @token.
     expect(win!.key).toBe("src\\utils\\log.ts");
     expect(win!.insertText).toBe("@src\\utils\\log.ts");
-    // Trailing separator → empty basename → falls back to the full path.
-    expect(trailing!.label).toBe("src/dir/");
+    // A directory is named by its last segment, separator kept, under its
+    // parent, rather than repeating its own path as its description.
+    expect(trailing!.label).toBe("dir/");
+    expect(trailing!.description).toBe("src");
     expect(trailing!.insertText).toBe("@src/dir/");
   });
 

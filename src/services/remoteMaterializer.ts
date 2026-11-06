@@ -12,10 +12,19 @@ import {
 } from "@shared/types/remoteHosts";
 import type {
   FileTransferEvent,
+  FolderMaterializeProgress,
+  FolderPackChange,
+  FolderUploadCheck,
+  FolderUploadSummary,
   LocalFileStat,
+  LocalFolderSummaryResult,
+  SummarizeLocalFolderPayload,
   TransferDestination,
+  UploadLocalFolderPayload,
+  UploadLocalFolderResult,
   UploadResult,
 } from "@shared/types/ipc/fileTransfer";
+import type { FolderUploadProblem } from "@shared/types/folderUpload";
 import { formatBytes } from "@/lib/formatBytes";
 import { notify } from "@/lib/notify";
 import { isMac } from "@/lib/platform";
@@ -24,14 +33,17 @@ import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { isClientAppError } from "@/utils/clientAppError";
 import { mintOperationId } from "@/clients/operationsClient";
 import { askUploadQuestion } from "@/components/Terminal/uploads/uploadConfirm";
+import { folderRefusal } from "@/components/Terminal/uploads/folderRefusal";
 
 /**
  * `materialize` for a window attached to a remote host: whatever is dropped,
  * pasted or attached here becomes a file on the host, and the host path is
  * what gets inserted. Local files and bytes are uploaded into the host inbox
- * (or, for Add to project, into a folder of the project); a pasted image is
- * captured here and uploaded by the clipboard split; a path from this
- * window's own file browser is already on the host and passes through.
+ * (or, for Add to project, into a folder of the project); a local folder is
+ * read here, asked about, and sent whole into the inbox once confirmed; a
+ * pasted image is captured here and uploaded by the clipboard split; a path
+ * from this window's own file browser is already on the host and passes
+ * through.
  *
  * Every failure names the host or this machine, and is reported once here;
  * nothing is inserted for a source that failed.
@@ -58,6 +70,8 @@ export interface RemoteMaterializerDeps {
       destination: TransferDestination;
       opId: string;
     }): Promise<UploadResult>;
+    summarizeLocalFolder(payload: SummarizeLocalFolderPayload): Promise<LocalFolderSummaryResult>;
+    uploadLocalFolder(payload: UploadLocalFolderPayload): Promise<UploadLocalFolderResult>;
     cancel(payload: { opId: string }): Promise<void>;
     onEvent(callback: (event: FileTransferEvent) => void): () => void;
   };
@@ -67,6 +81,13 @@ export interface RemoteMaterializerDeps {
   }): Promise<{ filePath: string; thumbnailDataUrl: string }>;
   confirmLargeUpload(request: { name: string; bytes: number; hostLabel: string }): Promise<boolean>;
   confirmReplace(request: { name: string; folder: string; hostLabel: string }): Promise<boolean>;
+  /** The folder question; `signal` withdraws it when the folder's chip is cancelled. */
+  confirmFolder(
+    request: { check: FolderUploadCheck; hostLabel: string },
+    signal: AbortSignal | undefined
+  ): Promise<boolean>;
+  /** The key held for Add to project, as this machine's keyboard names it ("Option"). */
+  addToProjectKey: string;
   reportFailure(failure: { title: string; message: string; code?: string }): void;
   mintOperationId(): string;
 }
@@ -115,6 +136,103 @@ export function isCancelledMaterialize(error: unknown): boolean {
   return codeOf(error) === "CANCELLED";
 }
 
+/**
+ * Main reads and packs at most two folders at once for a view and refuses a
+ * third outright, and keeps only the newest eight summaries a view made. A
+ * folder holds its turn from being read until its send ends, so a drop of
+ * several folders takes turns here and a summary still waiting on its
+ * question is never the one main lets go.
+ */
+const FOLDERS_AT_ONCE = 2;
+
+/**
+ * A cancelled walk keeps its place in main until it has actually stopped, and
+ * other views count against main's overall cap, so a read refused as busy is
+ * asked again a few times before the refusal stands.
+ */
+const BUSY_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000, 2_000, 2_000];
+
+function pause(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(cancelled());
+      return;
+    }
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(cancelled());
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+/**
+ * Up to `size` holders at once, admitted in the order they asked. A wait the
+ * signal aborts leaves the line, cancelled.
+ */
+function createTurns(size: number): (signal: AbortSignal | undefined) => Promise<() => void> {
+  let free = size;
+  const waiting: Array<() => void> = [];
+  const passOn = () => {
+    const admit = waiting.shift();
+    if (admit) admit();
+    else free++;
+  };
+  return (signal) =>
+    new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(cancelled());
+        return;
+      }
+      let released = false;
+      const release = () => {
+        if (released) return;
+        released = true;
+        passOn();
+      };
+      if (free > 0) {
+        free--;
+        resolve(release);
+        return;
+      }
+      const admit = () => {
+        signal?.removeEventListener("abort", leave);
+        resolve(release);
+      };
+      const leave = () => {
+        const index = waiting.indexOf(admit);
+        if (index >= 0) waiting.splice(index, 1);
+        reject(cancelled());
+      };
+      waiting.push(admit);
+      signal?.addEventListener("abort", leave, { once: true });
+    });
+}
+
+const CHANGE_TEXT: Record<FolderPackChange, string> = {
+  gone: "was removed",
+  modified: "was changed",
+  type: "was swapped for a different kind of item",
+  new: "was added",
+};
+
+/** A host's refusal of what arrived, in the folder question's own words. */
+function hostRefusalText(
+  problem: FolderUploadProblem,
+  summary: FolderUploadSummary,
+  hostLabel: string
+): string {
+  const { title, detail, paths } = folderRefusal(problem, summary);
+  const shown = paths.slice(0, 3).join(", ");
+  const named = paths.length > 3 ? `${shown} and ${paths.length - 3} more` : shown;
+  const what = title.charAt(0).toLowerCase() + title.slice(1);
+  return `${hostLabel} refused the folder: ${what}${named ? ` (${named})` : ""}. ${detail}`;
+}
+
 export function createRemoteMaterializer(deps: RemoteMaterializerDeps): MaterializeFn {
   const label = (hostId: HostId) =>
     hostId === deps.hostId ? deps.hostLabel() : hostId === LOCAL_HOST_ID ? deps.localLabel : hostId;
@@ -138,13 +256,23 @@ export function createRemoteMaterializer(deps: RemoteMaterializerDeps): Material
     options: MaterializeOptions | undefined,
     start: (opId: string) => Promise<T>
   ): Promise<T> => {
-    const { signal, onProgress } = options ?? {};
+    const { signal, onProgress, onFolderProgress } = options ?? {};
     if (signal?.aborted) throw cancelled();
     const opId = deps.mintOperationId();
     const offProgress = deps.fileTransfer.onEvent((event) => {
-      if (event.type !== "progress" || event.opId !== opId || event.totalBytes <= 0) return;
+      if (event.type === "host-pick-request" || event.opId !== opId) return;
       try {
-        onProgress?.(event.transferredBytes / event.totalBytes);
+        if (event.type === "progress") {
+          if (event.totalBytes > 0) onProgress?.(event.transferredBytes / event.totalBytes);
+          return;
+        }
+        onFolderProgress?.({
+          phase: event.phase,
+          filesDone: event.filesDone,
+          filesTotal: event.filesTotal,
+          transferredBytes: event.transferredBytes,
+          totalBytes: event.totalBytes,
+        });
       } catch {
         // Progress is advisory.
       }
@@ -163,6 +291,8 @@ export function createRemoteMaterializer(deps: RemoteMaterializerDeps): Material
       signal?.removeEventListener("abort", onAbort);
     }
   };
+
+  const folderTurns = createTurns(FOLDERS_AT_ONCE);
 
   /**
    * Add to project met a file of the same name: replace it only if the user
@@ -199,6 +329,94 @@ export function createRemoteMaterializer(deps: RemoteMaterializerDeps): Material
     return replaced;
   };
 
+  const summarizeWhenFree = async (
+    localPath: string,
+    options: MaterializeOptions | undefined
+  ): Promise<LocalFolderSummaryResult> => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await upload(options, (opId) =>
+          deps.fileTransfer.summarizeLocalFolder({ localPath, opId })
+        );
+      } catch (error) {
+        const delay = BUSY_RETRY_DELAYS_MS[attempt];
+        if (codeOf(error) !== "RATE_LIMITED" || delay === undefined) throw error;
+        await pause(delay, options?.signal);
+      }
+    }
+  };
+
+  /**
+   * A folder from this machine: read here, shown in the folder question, and
+   * sent whole into the host inbox once the person confirms it. A refused
+   * folder's question is its report, naming the limit or the names that
+   * stopped it, so closing it ends here without another word. A cancel from
+   * the chip stops whichever step is running, the question included, and
+   * nothing is inserted even if the host had already finished.
+   */
+  const materializeLocalFolder = async (
+    localPath: string,
+    name: string,
+    options: MaterializeOptions | undefined
+  ): Promise<MaterializeResult> => {
+    const host = deps.hostLabel();
+    if (options?.destination?.kind === "worktree") {
+      throw new MaterializeError(
+        "UNSUPPORTED",
+        `Add to project takes files only. Drop ${name} without holding ${deps.addToProjectKey} to send the folder to the inbox on ${host}.`
+      );
+    }
+    const signal = options?.signal;
+    const report = (progress: FolderMaterializeProgress) => {
+      try {
+        options?.onFolderProgress?.(progress);
+      } catch {
+        // Progress is advisory.
+      }
+    };
+    report({ phase: "waiting" });
+    const release = await folderTurns(signal);
+    let result: UploadLocalFolderResult;
+    let summary: FolderUploadSummary;
+    try {
+      report({ phase: "reading" });
+      const summarized = await summarizeWhenFree(localPath, options);
+      report({ phase: "waiting" });
+      const check: FolderUploadCheck =
+        summarized.status === "ready"
+          ? { status: "ready", summary: summarized.summary }
+          : summarized;
+      const confirmed = await deps.confirmFolder({ check, hostLabel: host }, signal);
+      if (!confirmed || summarized.status !== "ready" || signal?.aborted) throw cancelled();
+      summary = summarized.summary;
+      const { handle } = summarized;
+      result = await upload(options, (opId) =>
+        deps.fileTransfer.uploadLocalFolder({
+          hostId: deps.hostId,
+          handle,
+          destination: { kind: "inbox", bucket: "files" },
+          opId,
+        })
+      );
+    } finally {
+      release();
+    }
+    switch (result.status) {
+      case "sent":
+        return { hostPath: result.hostPath, displayName: name, bytes: result.totals.totalBytes };
+      case "changed":
+        throw new MaterializeError(
+          "FOLDER_CHANGED",
+          `${result.path} ${CHANGE_TEXT[result.change]} on ${deps.localLabel} after the folder was checked, so nothing was sent. Drop the folder again to send it as it is now.`
+        );
+      case "refused":
+        throw new MaterializeError(
+          "FOLDER_REFUSED",
+          hostRefusalText(result.problem, summary, host)
+        );
+    }
+  };
+
   const materializeLocalFile = async (
     localPath: string,
     options: MaterializeOptions | undefined
@@ -206,15 +424,11 @@ export function createRemoteMaterializer(deps: RemoteMaterializerDeps): Material
     const name = basename(localPath) || localPath;
     const host = deps.hostLabel();
     const stat = await deps.fileTransfer.statLocalFile({ localPath });
+    if (options?.signal?.aborted) throw cancelled();
     if (!stat) {
       throw new MaterializeError("INVALID_PATH", `Couldn't read ${name} on ${deps.localLabel}.`);
     }
-    if (stat.isDirectory) {
-      throw new MaterializeError(
-        "UNSUPPORTED",
-        `${name} is a folder. Sending folders to ${host} isn't available yet.`
-      );
-    }
+    if (stat.isDirectory) return materializeLocalFolder(localPath, name, options);
     if (stat.size > UPLOAD_REFUSE_BYTES) {
       throw new MaterializeError(
         "PAYLOAD_TOO_LARGE",
@@ -305,8 +519,12 @@ export function createRemoteMaterializer(deps: RemoteMaterializerDeps): Material
 
   return async (source, options) => {
     try {
-      return await resolve(source, options);
+      const result = await resolve(source, options);
+      if (options?.signal?.aborted) throw cancelled();
+      return result;
     } catch (error) {
+      // Once cancelled from its chip, whatever a step answered late is not news.
+      if (options?.signal?.aborted) throw cancelled();
       const code = codeOf(error);
       // Nothing to say: the user cancelled, or pasted with no image to send.
       if (code !== "CANCELLED" && code !== "CLIPBOARD_EMPTY") {
@@ -344,6 +562,9 @@ export function createViewRemoteMaterializer(hostId: HostId): MaterializeFn {
     saveClipboardImage: (options) => window.electron.clipboard.saveImage(options),
     confirmLargeUpload: (request) => askUploadQuestion({ kind: "large", ...request }),
     confirmReplace: (request) => askUploadQuestion({ kind: "replace", ...request }),
+    confirmFolder: (request, signal) =>
+      askUploadQuestion({ kind: "folder", ...request }, signal ? { signal } : {}),
+    addToProjectKey: isMac() ? "Option" : "Alt",
     reportFailure: ({ title, message, code }) => {
       const projectId = code === "DRIVEN_ELSEWHERE" ? getViewWorkspaceId() : null;
       if (projectId) {

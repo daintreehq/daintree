@@ -27,6 +27,7 @@ export {
   BookmarkPlus, // a worktree with no review mark yet — marking it sets the first one
   Bot, // a commit author that is a bot account (a `[bot]` name) with no picture — shape says machine where initials would say person
   Cable, // a project attachment — a resource the whole project shares (a tunnel, a test device) that one worktree holds at a time
+  CalendarClock, // a project schedule — an agent run set to start on a cadence
   ChartNoAxesColumn, // frecency sort order ("Most used" — decayed access score)
   CheckCheck, // Canopy: the readers think an agent's task is done and Daintree sees it stopped — a suggestion to close it, distinct from the observed finished ring (DoneCircle)
   CircuitBoard, // an infrastructure branch (infra/) — system wiring, kept apart from the host machine's Server
@@ -37,12 +38,14 @@ export {
   CircleHelp, // workspace whose metadata is missing (removed while its agents ran)
   CirclePause, // the Park action in menus, and paused statuses elsewhere — a parked run's own mark is ParkedCircle on the family's ring
   CircleSlash, // something refused or skipped (MCP calls, clones, conflicts) — an agent blocked on an error draws BlockedCircle on the family's ring
+  CircleStop, // a scheduled run that ended without a verdict — interrupted, stopped, replaced, or exited with no code seen
   CircleX, // anything that failed: CI, an environment, a pane that could not load — the cross the PR badge already uses, enclosed so a glyph standing alone reads as a verdict rather than a dismiss control
   Clock, // recency sort order (most recently opened first); a canopy row's time in its current state
   CloudOff, // a remote or forge that could not be reached — the same glyph the PR and issue badges show when detection is paused
   Coffee, // Daintree keeping the machine from idle-sleeping while agents work — the long-standing keep-awake metaphor
   FileStack, // artifacts an agent left in a terminal — the code, patches and files pulled from its output
   FileText, // view selected file path in the read-only file viewer
+  FlagTriangleRight, // a terminal's When done choice — what it does once its agent reports it finished, kept apart from the finished ring (DoneCircle)
   FolderClosed, // a project group — related repositories filed together in the switcher
   FolderDown, // clone a repository — a folder arriving, beside Open project's FolderOpen and Create project's FolderPlus
   FolderGit2, // git worktree (single), and any count of worktrees
@@ -74,21 +77,27 @@ export {
   Package, // plugin (a packaged extension) — plugin tray, unresolved plugin glyphs
   PanelTop, // the app toolbar — the strip along the top of the window
   Paperclip, // attach files to a composer draft — the same references a drop or a paste inserts
+  Play, // start a schedule's run now, outside its cadence
   Plug, // agent (integration that plugs into the host system), including an agent's own branch namespace with no brand mark; also a terminal handed to an agent pane, paired with Unplug to take it back
   Plus, // the toolbar launcher — "make me a new thing" (agent, panel)
   Radar, // an agent pane waiting to hear about other terminals, which Daintree may type a notice into — distinct from BellDot, the user's own watch alert
+  Rows3, // sidebar density — how much room each worktree card takes (Comfortable or Compact)
   ScreenShare, // other machines connected to this one — the host's connected-machines pill
   Server, // a machine a window runs on — the toolbar's host switcher, beside the project pill
   ServerOff, // the window's host with its link down — the same machine, crossed out, never an alarm
   ServerCog, // a worktree's runtime — dev-server and remote-environment lifecycle
   Settings2, // managing a list of things in Settings — hosts, presets — kept apart from Settings, which is project settings
   Shuffle, // a refactor branch (refactor/) — paths rearranged, kept apart from the worktree overview's Layers
+  SmilePlus, // an assistant or agent with no persona emoji yet — choosing one gives it a face beside its name
   Sprout, // origin / first step (main worktree, first agent launch)
   SquareDashedMousePointer, // the dev preview's Element Picker — pick an element on the page to hand to an agent, on its toolbar button and its plugin tile alike
+  SquareTerminal, // a scheduled run's terminal still in the grid — Open brings that pane forward
   Star, // the default recipe a new worktree launches — kept apart from Pin, which means pinned to the canvas
   Tag, // a worktree's colour label — the identity a user pins to a card, kept apart from Pin, which is its position
   Telescope, // Canopy: the long view out over every agent, read off its screen and laid out by what it needs from you — binoculars read clumsy at 16px, and both trees read as the notifications bell beside it
+  Timer, // a scheduled run still open, timed since its terminal started — which says nothing about whether the agent is working
   TriangleAlert, // a setting failing validation, a pane's CPU or memory in its amber band, or a request the app refused (a file reference with no agent to take it) — a shape, not a hue, so it survives forced colors
   Unplug, // taking a link back — a terminal from an agent pane, or this device's link to a host, which stops nothing there; also detaching a project attachment (Cable) from the worktree holding it
+  UserRound, // an agent's account — who it signs in as, chosen apart from its preset (#16040)
   Workflow, // terminal recipe / scripted command sequence
 } from "lucide-react";

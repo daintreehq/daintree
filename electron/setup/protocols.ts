@@ -1,7 +1,6 @@
 import { app, protocol } from "electron";
 import { createAppProtocolHandler } from "./protocols/app.js";
 import { createDaintreeFileProtocolHandler } from "./protocols/file.js";
-import { createDaintreeHtmlProtocolHandler } from "./protocols/html.js";
 import { createDaintreeMediaProtocolHandler } from "./protocols/media.js";
 import { createDaintreePdfProtocolHandler } from "./protocols/pdf.js";
 import { registerPluginProtocolForSession } from "./protocols/plugin.js";
@@ -45,8 +44,11 @@ export { applyDaintreeAppCspToSession, setupWebviewCSP } from "./protocols/sessi
 const registeredSessions = new WeakSet<Electron.Session>();
 
 /**
- * Register app://, daintree-file://, daintree-html://, daintree-pdf://,
- * daintree-media:// and plugin:// protocol handlers on a specific session.
+ * Register app://, daintree-file://, daintree-pdf://, daintree-media:// and
+ * plugin:// protocol handlers on a specific session. daintree-html:// is
+ * deliberately absent: previews load only in their own session
+ * (htmlPreviewSession.ts), so no app session can frame one without its
+ * WebRTC lockdown.
  * Safe to call multiple times — skips sessions that are already configured.
  * Used for per-project session partitions that don't inherit the default session's handlers.
  *
@@ -62,7 +64,6 @@ export function registerProtocolsForSession(ses: Electron.Session, distPath: str
 
   ses.protocol.handle("app", createAppProtocolHandler(distPath));
   ses.protocol.handle("daintree-file", createDaintreeFileProtocolHandler());
-  ses.protocol.handle("daintree-html", createDaintreeHtmlProtocolHandler());
   ses.protocol.handle("daintree-pdf", createDaintreePdfProtocolHandler());
   ses.protocol.handle("daintree-media", createDaintreeMediaProtocolHandler());
   registerPluginProtocolForSession(ses);
@@ -86,10 +87,6 @@ export function registerDeepLinkProtocolClient(): void {
 
 export function registerDaintreeFileProtocol(): void {
   protocol.handle("daintree-file", createDaintreeFileProtocolHandler());
-}
-
-export function registerDaintreeHtmlProtocol(): void {
-  protocol.handle("daintree-html", createDaintreeHtmlProtocolHandler());
 }
 
 export function registerDaintreePdfProtocol(): void {

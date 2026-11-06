@@ -7,6 +7,11 @@
  * parent is an exact lookup — no cwd-and-recency correlation, no ambiguity to
  * refuse. Reading the store is the hard half; see `ClaudeSubagentReader` for
  * the #4100 boundary this sits on and what is actually on disk.
+ *
+ * The store is the one the pane was launched against, read off its host
+ * record: an account pane writes under the account's folder, not Daintree's
+ * own `~/.claude` (#16269). Because the session id is exact, looking there is
+ * no guess either.
  */
 
 import path from "path";
@@ -42,13 +47,15 @@ function unavailable(
 export interface ResolvedTerminal {
   cwd: string;
   parentSessionId: string;
+  /** The Claude store the pane's launch env names; absent when it couldn't be resolved. */
+  configDir?: string;
 }
 
 /**
  * Read the terminal's identity from the pty-host record rather than trusting
  * the renderer. The renderer supplies only a terminal id, so a compromised or
- * buggy caller cannot point this at another folder's Claude history — the cwd
- * and the session id both come from the host.
+ * buggy caller cannot point this at another folder's Claude history — the cwd,
+ * the session id and the store all come from the host.
  */
 export async function resolveClaudeTerminal(terminalId: string): Promise<
   | ResolvedTerminal
@@ -73,15 +80,23 @@ export async function resolveClaudeTerminal(terminalId: string): Promise<
   // A pane launched before #11782, or one restored without its id, has no
   // addressable parent. Nothing to correlate against, so say so.
   if (!info.agentSessionId) return { status: "unavailable", reason: "no-session" };
-  return { cwd: info.cwd, parentSessionId: info.agentSessionId };
+  return {
+    cwd: info.cwd,
+    parentSessionId: info.agentSessionId,
+    ...(info.claudeConfigDir !== undefined && { configDir: info.claudeConfigDir }),
+  };
 }
 
 export async function listClaudeSubagents(terminalId: string): Promise<AgentSubagentsResult> {
   const resolved = await resolveClaudeTerminal(terminalId);
   if ("status" in resolved) return resolved;
+  // Daintree's own store is no stand-in: an empty list from the wrong store
+  // looks exactly like a session that never delegated.
+  const configDir = resolved.configDir;
+  if (!configDir) return unavailable("store-unknown");
 
   try {
-    const dir = await findSubagentsDir(resolved.cwd, resolved.parentSessionId);
+    const dir = await findSubagentsDir(resolved.cwd, resolved.parentSessionId, { configDir });
     return {
       status: "ok",
       provider: "claude",
@@ -104,9 +119,11 @@ export async function readClaudeSubagentTranscript(
   // The id becomes a filename, so it is checked before it is joined rather than
   // after: a traversal-shaped id must never reach `path.join` at all.
   if (!isSafeSubagentId(subagentId)) return unavailable("subagent-not-found");
+  const configDir = resolved.configDir;
+  if (!configDir) return unavailable("store-unknown");
 
   try {
-    const dir = await findSubagentsDir(resolved.cwd, resolved.parentSessionId);
+    const dir = await findSubagentsDir(resolved.cwd, resolved.parentSessionId, { configDir });
     if (!dir) return unavailable("no-session");
 
     // Membership check before the read. The renderer names a child id, and

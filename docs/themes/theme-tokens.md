@@ -158,13 +158,20 @@ The four `*-surface` washes are built with `withAlpha` (plain `rgba` for a hex i
 
 Drive state chips in panel headers and worktree card indicators.
 
-| Token                | Purpose                              | Derived?                  |
-| -------------------- | ------------------------------------ | ------------------------- |
-| `activity-active`    | Real-time working indicator (vivid)  | Required                  |
-| `activity-working`   | Animated spinner color               | Required                  |
-| `activity-waiting`   | Agent waiting for user input (amber) | Required                  |
-| `activity-idle`      | Inactive/dormant state               | Required                  |
-| `activity-completed` | Finished successfully                | Derived: `status-success` |
+| Token | Purpose | Derived? |
+| --- | --- | --- |
+| `activity-active` | Real-time working indicator (vivid) | Required |
+| `activity-working` | Animated spinner color | Required |
+| `activity-waiting` | Agent waiting for user input (amber) | Required |
+| `activity-idle` | Inactive/dormant state | Required |
+| `activity-completed` | Finished successfully | Derived: `status-success` |
+| `activity-working-text` | Text-grade working ink for status sentences such as the project switcher's "2 running" | Derived: `activity-working` lifted along OKLCH lightness until it holds 4.5:1 on every backdrop `diff-text-*` answers to, and on the switcher's rows at rest and highlighted |
+| `activity-waiting-text` | Text-grade waiting ink | Derived: same rule |
+| `activity-completed-text` | Text-grade completed ink ("2 agents unread") | Derived: same rule |
+
+The activity inks are graphical, held to 3:1 for the spinners, rings and dots beside a status sentence, so a sentence paints the `*-text` twin. The switcher's dark palette surface is a translucent material over whichever plane sits beneath it, which none of the display surfaces spell, so those rows are measured as well. A theme that names one keeps it, and the contrast gate reports it if it falls short. Colour-vision modes lift them again from the hues they swap in.
+
+`activity-completed` must stay apart from `activity-working`: the switcher's two-tone mark draws a project with runs going and runs finished-unread as a pie of the two. A theme whose `status-success` is its working green names `activity-completed` itself, as bondi, atacama, bali, serengeti and svalbard do.
 
 ## Overlay Tokens
 
@@ -183,9 +190,9 @@ A single-knob color input (`overlay-base`) drives the entire opacity ladder.
 | `overlay-selected` | Selected state | tone 4% | base 8% |
 | `overlay-elevated` | Elevated hover | tone 6% | base 10% |
 | `overlay-raised` | Active tab, focused pane, pressed chip | aliases `overlay-selected` | `color-mix(elevated 92%, text-primary)` |
-| `overlay-highlight` | The highlighted row in a list, palette or menu | tone 6% | aliases `overlay-raised` |
+| `overlay-highlight` | The highlighted row in a list, palette or menu | tone 6% | tone 7.5% |
 
-Two things the table can't show. **Dark and light take their tint from different places** for the last five rows: dark composites the neutral polarity tone, light composites the hued `overlay-base`, and the light alphas are roughly doubled — the eye's luminance discrimination is compressed near white, so mirroring dark's alphas left light's fills sub-threshold. **`overlay-raised` is not an alpha at all on light**: it is a real opaque plane mixed toward `text-primary`, an upward lift over the recessed containers rather than an ink wash, which is what makes a selected palette row read on a near-white surface. On dark it aliases `overlay-selected` byte-for-byte.
+Two things the table can't show. **Dark and light take their tint from different places** for `overlay-hover` through `overlay-elevated`: dark composites the neutral polarity tone, light composites the hued `overlay-base`, and the light alphas are roughly doubled — the eye's luminance discrimination is compressed near white, so mirroring dark's alphas left light's fills sub-threshold. **`overlay-raised` is not an alpha at all on light**: it is a real opaque plane mixed toward `text-primary`, an upward lift over the recessed containers rather than an ink wash, for the armed toolbar control and the settings scope. On dark it aliases `overlay-selected` byte-for-byte. **`overlay-highlight` is neutral on both polarities**: light used to alias `overlay-raised`, but an opaque plane tuned for white popovers landed on, or lighter than, the tinted sidebars, so light takes pure black at 7.5%, which darkens every light surface by about the same step (1.17–1.19:1, #16184).
 
 **See [Canonical Interaction State Recipes](./interaction-state-recipes.md)** for hover/focus implementation patterns using these overlay tokens.
 
@@ -482,8 +489,9 @@ Import and add to `shared/theme/builtInThemes/index.ts`.
 | Border | 7 (5 ladder + `border-input` + `selection-outline`) |
 | Accent | 9 (6 primary + 3 secondary) |
 | Focus | 1 (`focus-ring`) |
-| Status | 8 (4 colors + 4 `*-surface` washes) |
-| Activity | 5 |
+| Status | 12 (4 colors + 4 `*-surface` washes + 4 `*-text` twins) |
+| Destructive | 4 (3 fills + `destructive-foreground`) |
+| Activity | 8 (5 inks + 3 `*-text` twins) |
 | Overlay | 12 (base + 5 ladder + hover/active/selected/elevated/raised/highlight) |
 | Filter-selected | 2 |
 | Wash | 3 |
@@ -499,7 +507,7 @@ Import and add to `shared/theme/builtInThemes/index.ts`.
 | UI Utility | 15 (4 scrollbar + 3 panel-state + 2 state-chip + 2 label-pill + 2 grain + focus-ring-offset + chrome-noise-texture) |
 | Form | 2 (`knob-base` + `state-modified`) |
 | Diff | 10 |
-| **Total** | **159** |
+| **Total** | **170** |
 
 This must equal `APP_THEME_TOKEN_KEYS.length` in `shared/theme/types.ts`, which is the contract — if the two disagree, the array wins and this table is stale.
 

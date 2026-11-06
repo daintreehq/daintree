@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const appMock = vi.hoisted(() => ({
   on: vi.fn(),
   exit: vi.fn(),
+  quit: vi.fn(),
   getPath: vi.fn(() => "/tmp/test-shutdown"),
 }));
 
@@ -69,6 +70,14 @@ vi.mock("../../services/CrashLoopGuardService.js", () => ({
   getCrashLoopGuard: vi.fn(() => crashLoopGuardMock),
 }));
 
+const panelSuspectLedgerMock = vi.hoisted(() => ({
+  markCleanLaunch: vi.fn(),
+}));
+
+vi.mock("../../services/PanelSuspectLedgerService.js", () => ({
+  getPanelSuspectLedger: vi.fn(() => panelSuspectLedgerMock),
+}));
+
 const quitWarningMock = vi.hoisted(() => ({
   getActiveAgentCount: vi.fn(() => 0),
   showQuitWarning: vi.fn(() => Promise.resolve(true)),
@@ -102,6 +111,15 @@ vi.mock("../../services/ProjectCommandService.js", () => ({
   projectCommandService: projectCommandServiceMock,
 }));
 
+const schedulePreconditionsMock = vi.hoisted(() => ({
+  disposeSchedulePreconditions: vi.fn(),
+}));
+
+vi.mock(
+  "../../services/scheduledRuns/scheduledRunPrecondition.js",
+  () => schedulePreconditionsMock
+);
+
 const mcpServerMock = vi.hoisted(() => ({
   stop: vi.fn(() => Promise.resolve()),
 }));
@@ -115,6 +133,30 @@ const deviceAnswerMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../../services/deviceAnswer/index.js", () => deviceAnswerMock);
+
+// Shutdown must never import Decisions itself: only the load the serviceRefs
+// mock hands back is stopped. An import of the entry module or a library counts here.
+const decisionsEntryEvaluated = vi.hoisted(() => ({ count: 0 }));
+vi.mock("../../services/decisions/index.js", () => {
+  decisionsEntryEvaluated.count += 1;
+  return { stopDecisions: vi.fn() };
+});
+vi.mock("@daintreehq/decisions-protocol", () => {
+  decisionsEntryEvaluated.count += 1;
+  return {};
+});
+vi.mock("@daintreehq/decisions-crypto", () => {
+  decisionsEntryEvaluated.count += 1;
+  return {};
+});
+vi.mock("@daintreehq/decisions-client", () => {
+  decisionsEntryEvaluated.count += 1;
+  return {};
+});
+vi.mock("@daintreehq/decisions-model", () => {
+  decisionsEntryEvaluated.count += 1;
+  return {};
+});
 
 // The shutdown chain reaches this module through a dynamic import, so the export
 // is exposed behind a getter that can be armed to throw. Arming it makes the
@@ -140,6 +182,7 @@ vi.mock("../../ipc/utils.js", () => ({
 
 const signalShutdownMock = vi.hoisted(() => ({
   isSignalShutdown: vi.fn(() => false),
+  setSignalShutdown: vi.fn(),
   clearSafetyBeltTimer: vi.fn(),
 }));
 
@@ -176,16 +219,42 @@ const closeSharedDbMock = vi.hoisted(() => ({
 
 vi.mock("../../services/persistence/db.js", () => closeSharedDbMock);
 
+const scheduledRunSchedulerMock = vi.hoisted(() => ({
+  stopScheduledRunScheduler: vi.fn(() => Promise.resolve()),
+}));
+vi.mock(
+  "../../services/scheduledRuns/scheduledRunSchedulerLive.js",
+  () => scheduledRunSchedulerMock
+);
+
+const scheduleOsJobMock = vi.hoisted(() => ({
+  stopScheduleOsJob: vi.fn(() => Promise.resolve()),
+}));
+vi.mock("../../services/scheduledRuns/scheduleOsJobLive.js", () => scheduleOsJobMock);
+
 const vadDrainMock = vi.hoisted(() => ({
   waitForRetiringVadProcesses: vi.fn((_budgetMs: number) => Promise.resolve(0)),
 }));
 
 vi.mock("../../services/voice/openaiVadProcess.js", () => vadDrainMock);
 
+const readerDrainMock = vi.hoisted(() => ({
+  waitForRetiringReaders: vi.fn((_budgetMs: number) => Promise.resolve(0)),
+}));
+
+vi.mock("../../services/canopy/canopyReaderProcess.js", () => readerDrainMock);
+
 const closeTelemetryMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
 vi.mock("../../services/TelemetryService.js", () => ({
   closeTelemetry: closeTelemetryMock,
+}));
+
+// relaunchApp arms a real waiter process; the relaunch tests only need to see it armed.
+const armRelaunchMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../armRelaunch.js", () => ({
+  armRelaunch: armRelaunchMock,
 }));
 
 const isSmokeTestMock = vi.hoisted(() => ({ value: false }));
@@ -251,6 +320,7 @@ const serviceRefsMock = vi.hoisted(() => {
   let agentNotification: { dispose: () => void } | null = null;
   let autoUpdater: { dispose: () => void } | null = null;
   let windowsStoreNotifier: { dispose: () => void } | null = null;
+  let decisions: Promise<{ stopDecisions: () => Promise<void> }> | null = null;
   return {
     setInitialState: (state: {
       ccr?: typeof ccr;
@@ -260,6 +330,7 @@ const serviceRefsMock = vi.hoisted(() => {
       agentNotification?: typeof agentNotification;
       autoUpdater?: typeof autoUpdater;
       windowsStoreNotifier?: typeof windowsStoreNotifier;
+      decisions?: typeof decisions;
     }) => {
       ccr = state.ccr ?? null;
       resourceProfile = state.resourceProfile ?? null;
@@ -268,6 +339,7 @@ const serviceRefsMock = vi.hoisted(() => {
       agentNotification = state.agentNotification ?? null;
       autoUpdater = state.autoUpdater ?? null;
       windowsStoreNotifier = state.windowsStoreNotifier ?? null;
+      decisions = state.decisions ?? null;
     },
     getCcrConfigService: vi.fn(() => ccr),
     setCcrConfigService: vi.fn((v: typeof ccr) => {
@@ -298,6 +370,7 @@ const serviceRefsMock = vi.hoisted(() => {
     setWindowsStoreNotifierServiceRef: vi.fn((v: typeof windowsStoreNotifier) => {
       windowsStoreNotifier = v;
     }),
+    sealDecisionsModule: vi.fn(() => decisions),
   };
 });
 
@@ -337,6 +410,7 @@ import {
   POST_PTY_TEARDOWN_RESERVE_MS,
   PROJECT_GRACEFUL_KILL_TIMEOUT_MS,
   SHUTDOWN_DEADLINE_MS,
+  CANOPY_READER_DRAIN_BUDGET_MS,
   SHUTDOWN_TAIL_TIMEOUT_MS,
   VAD_DRAIN_BUDGET_MS,
 } from "../shutdownConfig.js";
@@ -377,6 +451,8 @@ describe("registerShutdownHandler", () => {
     quitWarningMock.showQuitWarning.mockResolvedValue(true);
     ccrConfigMock.stopWatching.mockResolvedValue(undefined);
     serviceRefsMock.setInitialState({});
+    // A queued drain a failed test never consumed must not answer for the next one.
+    readerDrainMock.waitForRetiringReaders.mockReset().mockResolvedValue(0);
   });
 
   async function setup(overrides?: Partial<ShutdownDeps>) {
@@ -454,6 +530,117 @@ describe("registerShutdownHandler", () => {
     // Paired devices stop answering before any terminal is enumerated or killed.
     expect(order[1]).toBe("device-answer-stop");
     expect(order).toContain("pty-dispose");
+  });
+
+  it("imports no Decisions module at quit when nothing loaded it", async () => {
+    const { beforeQuitCb } = await setup();
+    const exited = new Promise<void>((resolve) => {
+      appMock.exit.mockImplementationOnce(() => resolve());
+    });
+
+    await beforeQuitCb(makeEvent());
+    await exited;
+
+    expect(serviceRefsMock.sealDecisionsModule).toHaveBeenCalledOnce();
+    expect(decisionsEntryEvaluated.count).toBe(0);
+    expect(appMock.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("seals the Decisions loader in the same step that halts deferred startup", async () => {
+    const order: string[] = [];
+    deferredInitQueueMock.haltDeferredQueue.mockImplementationOnce(() => {
+      order.push("halt");
+      // Anything awaited between halting and sealing would run this first.
+      queueMicrotask(() => order.push("next-microtask"));
+    });
+    serviceRefsMock.sealDecisionsModule.mockImplementationOnce(() => {
+      order.push("seal");
+      return null;
+    });
+    const { beforeQuitCb } = await setup();
+    const exited = new Promise<void>((resolve) => {
+      appMock.exit.mockImplementationOnce(() => resolve());
+    });
+
+    await beforeQuitCb(makeEvent());
+    await exited;
+
+    expect(order.slice(0, 3)).toEqual(["halt", "seal", "next-microtask"]);
+  });
+
+  it("finishes stopping a Decisions load still under way before any PTY is enumerated", async () => {
+    const order: string[] = [];
+    const later = () => new Promise<void>((resolve) => setTimeout(resolve, 20));
+    const stopDecisions = vi.fn(async () => {
+      order.push("decisions-stop");
+      await later();
+      order.push("decisions-stopped");
+    });
+    // The load and the stop each finish a little later, so a step that didn't
+    // wait for either would let PTY enumeration overtake it.
+    serviceRefsMock.setInitialState({
+      decisions: later().then(() => ({ stopDecisions })),
+    });
+    const ptyClient = {
+      gracefulKillByProject: vi.fn(async () => []),
+      getPartialGracefulKillResults: vi.fn(() => []),
+      getAllTerminalsAsync: vi.fn(async () => {
+        order.push("pty-enumerate");
+        return [];
+      }),
+      finishAgentSessionCaptures: vi.fn(async () => ({ complete: true, pending: 0 })),
+      dispose: vi.fn(),
+    };
+    const { beforeQuitCb } = await setup({ getPtyClient: vi.fn(() => ptyClient as never) });
+    const exited = new Promise<void>((resolve) => {
+      appMock.exit.mockImplementationOnce(() => resolve());
+    });
+
+    await beforeQuitCb(makeEvent());
+    await exited;
+
+    expect(stopDecisions).toHaveBeenCalledOnce();
+    expect(order).toEqual(["decisions-stop", "decisions-stopped", "pty-enumerate"]);
+    expect(decisionsEntryEvaluated.count).toBe(0);
+  });
+
+  it("finishes a clean shutdown when the Decisions stop fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const stopDecisions = vi.fn(async () => {
+      throw new Error("socket wedged");
+    });
+    serviceRefsMock.setInitialState({ decisions: Promise.resolve({ stopDecisions }) });
+    const { beforeQuitCb } = await setup();
+    const exited = new Promise<void>((resolve) => {
+      appMock.exit.mockImplementationOnce(() => resolve());
+    });
+
+    await beforeQuitCb(makeEvent());
+    await exited;
+
+    expect(stopDecisions).toHaveBeenCalledOnce();
+    expect(appMock.exit).toHaveBeenCalledWith(0);
+    expect(warn).toHaveBeenCalledWith("[MAIN] Decisions stop failed:", expect.any(Error));
+    warn.mockRestore();
+  });
+
+  it("finishes a clean shutdown when the Decisions load fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const failedLoad = Promise.reject(new Error("chunk missing"));
+    // Handled here too, so the rejection can't be reported before shutdown awaits it.
+    failedLoad.catch(() => {});
+    serviceRefsMock.setInitialState({ decisions: failedLoad });
+    const { beforeQuitCb } = await setup();
+    const exited = new Promise<void>((resolve) => {
+      appMock.exit.mockImplementationOnce(() => resolve());
+    });
+
+    await beforeQuitCb(makeEvent());
+    await exited;
+
+    expect(appMock.exit).toHaveBeenCalledWith(0);
+    expect(warn).toHaveBeenCalledWith("[MAIN] Decisions stop failed:", expect.any(Error));
+    warn.mockRestore();
   });
 
   it("finishes a clean shutdown when stopping Remote Hosts fails", async () => {
@@ -602,6 +789,273 @@ describe("registerShutdownHandler", () => {
     } finally {
       setExitConfirmationPending(false);
     }
+  });
+
+  describe("closing the last window off macOS", () => {
+    const originalPlatform = process.platform;
+
+    beforeEach(() => {
+      Object.defineProperty(process, "platform", { value: "win32" });
+    });
+
+    afterEach(() => {
+      Object.defineProperty(process, "platform", { value: originalPlatform });
+    });
+
+    it("becomes a quit, which can warn, while an agent is working", async () => {
+      vi.useFakeTimers({ toFake: ["setImmediate"] });
+      try {
+        quitWarningMock.getActiveAgentCount.mockReturnValue(1);
+        const { routeLastWindowCloseThroughQuit } = await import("../shutdown.js");
+        expect(routeLastWindowCloseThroughQuit()).toBe(true);
+        expect(appMock.quit).not.toHaveBeenCalled();
+        vi.runAllTimers();
+        expect(appMock.quit).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("lets the window close when nothing would be warned about", async () => {
+      quitWarningMock.getActiveAgentCount.mockReturnValue(0);
+      const { routeLastWindowCloseThroughQuit } = await import("../shutdown.js");
+      expect(routeLastWindowCloseThroughQuit()).toBe(false);
+    });
+
+    it("holds the window while the warning it raised is still open", async () => {
+      const { setExitConfirmationPending } = await import("../attachedShells.js");
+      quitWarningMock.getActiveAgentCount.mockReturnValue(0);
+      setExitConfirmationPending(true);
+      try {
+        const { routeLastWindowCloseThroughQuit } = await import("../shutdown.js");
+        expect(routeLastWindowCloseThroughQuit()).toBe(true);
+        expect(appMock.quit).not.toHaveBeenCalled();
+      } finally {
+        setExitConfirmationPending(false);
+      }
+    });
+
+    it("also asks for a shell another machine has attached", async () => {
+      const { setAttachedShellsProvider } = await import("../attachedShells.js");
+      quitWarningMock.getActiveAgentCount.mockReturnValue(0);
+      setAttachedShellsProvider(() => [{ clientName: "MacBook Pro" }]);
+      vi.useFakeTimers({ toFake: ["setImmediate"] });
+      try {
+        const { routeLastWindowCloseThroughQuit } = await import("../shutdown.js");
+        expect(routeLastWindowCloseThroughQuit()).toBe(true);
+        vi.runAllTimers();
+        expect(appMock.quit).toHaveBeenCalledOnce();
+      } finally {
+        vi.useRealTimers();
+        setAttachedShellsProvider(null);
+      }
+    });
+
+    it("lets a signal shutdown close the window without asking", async () => {
+      quitWarningMock.getActiveAgentCount.mockReturnValue(1);
+      signalShutdownMock.isSignalShutdown.mockReturnValue(true);
+      try {
+        const { routeLastWindowCloseThroughQuit } = await import("../shutdown.js");
+        expect(routeLastWindowCloseThroughQuit()).toBe(false);
+      } finally {
+        signalShutdownMock.isSignalShutdown.mockReturnValue(false);
+      }
+    });
+
+    it("does nothing on macOS, where closing the window never quits", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      quitWarningMock.getActiveAgentCount.mockReturnValue(1);
+      const { routeLastWindowCloseThroughQuit } = await import("../shutdown.js");
+      expect(routeLastWindowCloseThroughQuit()).toBe(false);
+    });
+  });
+
+  describe("termination while the quit warning is open (#15563)", () => {
+    // clearAllMocks keeps queued once-implementations, so a test that fails
+    // before consuming one would hand it to the next test.
+    afterEach(() => {
+      appMock.exit.mockReset();
+      appMock.quit.mockReset();
+      signalShutdownMock.setSignalShutdown.mockReset();
+      quitWarningMock.showQuitWarning.mockReset();
+    });
+
+    async function setupOpenWarning() {
+      const warning = {
+        answer: (_confirmed: boolean) => {},
+        fail: (_err: Error) => {},
+      };
+      quitWarningMock.getActiveAgentCount.mockReturnValue(1);
+      quitWarningMock.showQuitWarning.mockImplementationOnce(
+        () =>
+          new Promise<boolean>((resolve, reject) => {
+            warning.answer = resolve;
+            warning.fail = reject;
+          })
+      );
+      const coordinator = await import("../shutdownCoordinator.js");
+      const startShutdown = vi.spyOn(coordinator, "startShutdown");
+      const ctx = await setup({
+        windowRegistry: {
+          getPrimary: () => ({ browserWindow: {} as Electron.BrowserWindow }),
+        } as unknown as ShutdownDeps["windowRegistry"],
+      });
+      const userQuit = ctx.beforeQuitCb(makeEvent());
+      expect(quitWarningMock.showQuitWarning).toHaveBeenCalledOnce();
+      expect(coordinator.getActiveShutdown()).toBeNull();
+      return { ...ctx, coordinator, startShutdown, userQuit, warning };
+    }
+
+    function nextExit() {
+      return new Promise<void>((resolve) => {
+        appMock.exit.mockImplementationOnce(() => resolve());
+      });
+    }
+
+    it.each([
+      ["Quit Anyway", true],
+      ["Cancel", false],
+      ["a failed dialog", new Error("message box failed")],
+    ])(
+      "lets a signal claim the shutdown at once, and the warning's late %s adds no second request",
+      async (_answer, outcome) => {
+        const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        try {
+          const { beforeQuitCb, coordinator, startShutdown, userQuit, warning } =
+            await setupOpenWarning();
+          const { isExitConfirmationPending } = await import("../attachedShells.js");
+          const exited = nextExit();
+
+          signalShutdownMock.isSignalShutdown.mockReturnValue(true);
+          const signalQuit = makeEvent();
+          void beforeQuitCb(signalQuit);
+
+          // Claimed inside the signal's own app.quit(), with the warning still open.
+          expect(signalQuit.preventDefault).toHaveBeenCalled();
+          expect(coordinator.getActiveShutdown()).toMatchObject({
+            initiator: "app-quit",
+            phase: "cleaning",
+          });
+          expect(startShutdown).toHaveBeenCalledExactlyOnceWith("app-quit", expect.any(Function));
+          expect(crashRecoveryMock.takeBackup).toHaveBeenCalledOnce();
+
+          if (typeof outcome === "boolean") warning.answer(outcome);
+          else warning.fail(outcome);
+          await userQuit;
+          expect(isExitConfirmationPending()).toBe(false);
+          await exited;
+
+          expect(startShutdown).toHaveBeenCalledOnce();
+          expect(deferredInitQueueMock.haltDeferredQueue).toHaveBeenCalledOnce();
+          expect(openWindowsTrackerMock.freezeAndSnapshotOpenWindows).toHaveBeenCalledOnce();
+          expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledOnce();
+          expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(0);
+        } finally {
+          consoleSpy.mockRestore();
+        }
+      }
+    );
+
+    it("finishes a signal's shutdown with the warning never answered", async () => {
+      const { beforeQuitCb, startShutdown, userQuit, warning } = await setupOpenWarning();
+      const exited = nextExit();
+
+      signalShutdownMock.isSignalShutdown.mockReturnValue(true);
+      void beforeQuitCb(makeEvent());
+      await exited;
+
+      expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(0);
+      expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledOnce();
+      expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledOnce();
+
+      warning.answer(true);
+      await userQuit;
+      expect(startShutdown).toHaveBeenCalledOnce();
+      expect(appMock.exit).toHaveBeenCalledOnce();
+    });
+
+    it.each([
+      ["Quit Anyway", true],
+      ["Cancel", false],
+    ])("does the same for a Windows session-end and a late %s", async (_answer, confirmed) => {
+      const originalPlatform = process.platform;
+      vi.doMock("../../projectMenuState.js", () => ({ refreshProjectMenuState: vi.fn() }));
+      vi.doMock("../../windowMenuState.js", () => ({
+        noteWindowClosing: vi.fn(),
+        refreshOpenWindowMenu: vi.fn(),
+      }));
+      vi.doMock("../../setup/deepLinkInstall.js", () => ({
+        extractDaintreeUrl: vi.fn(),
+        handleDaintreeUrl: vi.fn(),
+      }));
+
+      try {
+        const { beforeQuitCb, coordinator, startShutdown, userQuit, warning } =
+          await setupOpenWarning();
+        const { registerWindowSessionEndHandler } = await import("../appLifecycle.js");
+        const win = { on: vi.fn() };
+        Object.defineProperty(process, "platform", { value: "win32" });
+        try {
+          registerWindowSessionEndHandler(win as unknown as Electron.BrowserWindow);
+        } finally {
+          Object.defineProperty(process, "platform", { value: originalPlatform });
+        }
+        const sessionEnd = win.on.mock.calls.find(
+          ([name]) => name === "session-end"
+        )![1] as () => void;
+
+        signalShutdownMock.setSignalShutdown.mockImplementationOnce(() => {
+          signalShutdownMock.isSignalShutdown.mockReturnValue(true);
+        });
+        const sessionEndQuit = makeEvent();
+        appMock.quit.mockImplementationOnce(() => void beforeQuitCb(sessionEndQuit));
+        const exited = nextExit();
+
+        sessionEnd();
+
+        expect(sessionEndQuit.preventDefault).toHaveBeenCalled();
+        expect(coordinator.getActiveShutdown()?.initiator).toBe("app-quit");
+        expect(startShutdown).toHaveBeenCalledOnce();
+
+        warning.answer(confirmed);
+        await userQuit;
+        await exited;
+
+        expect(startShutdown).toHaveBeenCalledOnce();
+        expect(deferredInitQueueMock.haltDeferredQueue).toHaveBeenCalledOnce();
+        expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(0);
+      } finally {
+        vi.doUnmock("../../projectMenuState.js");
+        vi.doUnmock("../../windowMenuState.js");
+        vi.doUnmock("../../setup/deepLinkInstall.js");
+      }
+    });
+
+    it("still absorbs a second quit without a signal, and Cancel leaves the app running", async () => {
+      const { beforeQuitCb, startShutdown, userQuit, warning } = await setupOpenWarning();
+
+      const secondQuit = makeEvent();
+      await beforeQuitCb(secondQuit);
+
+      expect(secondQuit.preventDefault).toHaveBeenCalled();
+      expect(quitWarningMock.showQuitWarning).toHaveBeenCalledOnce();
+      expect(startShutdown).not.toHaveBeenCalled();
+
+      warning.answer(false);
+      await userQuit;
+
+      expect(startShutdown).not.toHaveBeenCalled();
+      expect(deferredInitQueueMock.haltDeferredQueue).not.toHaveBeenCalled();
+      expect(appMock.exit).not.toHaveBeenCalled();
+
+      // The next quit asks again, and a confirmation shuts down.
+      const exited = nextExit();
+      await beforeQuitCb(makeEvent());
+      await exited;
+      expect(quitWarningMock.showQuitWarning).toHaveBeenCalledTimes(2);
+      expect(startShutdown).toHaveBeenCalledExactlyOnceWith("app-quit", expect.any(Function));
+      expect(appMock.exit).toHaveBeenCalledExactlyOnceWith(0);
+    });
   });
 
   it("does not ask about attached Shells when there is no window to ask in", async () => {
@@ -756,6 +1210,46 @@ describe("registerShutdownHandler", () => {
       expect(callOrder).toEqual(["dispose", "closeSharedDb"]);
     });
 
+    it("waits for the scheduled-run scheduler to stop before closeSharedDb", async () => {
+      const callOrder: string[] = [];
+      scheduledRunSchedulerMock.stopScheduledRunScheduler.mockImplementationOnce(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        callOrder.push("scheduler-stop");
+      });
+      closeSharedDbMock.closeSharedDb.mockImplementation(() => {
+        callOrder.push("closeSharedDb");
+      });
+
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      expect(callOrder).toEqual(["scheduler-stop", "closeSharedDb"]);
+    });
+
+    it("lets a rewrite of the schedules' OS job finish before the app exits", async () => {
+      const callOrder: string[] = [];
+      scheduleOsJobMock.stopScheduleOsJob.mockImplementationOnce(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        callOrder.push("os-job-stop");
+      });
+      appMock.exit.mockImplementationOnce(() => {
+        callOrder.push("exit");
+      });
+
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+      });
+
+      expect(callOrder).toEqual(["os-job-stop", "exit"]);
+    });
+
     it("still calls closeSharedDb and exits when dispose fails", async () => {
       dbMaintenanceMock.dispose.mockRejectedValue(new Error("dispose boom"));
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -864,6 +1358,156 @@ describe("registerShutdownHandler", () => {
 
         expect(appMock.exit).toHaveBeenCalledWith(0);
         expect(warnSpy).toHaveBeenCalledWith("[MAIN] 1 VAD process(es) still draining at quit");
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+  });
+
+  describe("Canopy reader drain at quit (#15538)", () => {
+    // The chain's lazy imports can outrun vi.waitFor's one-second default under load.
+    const WAIT = { timeout: 5_000 };
+
+    it("waits for the reader Canopy teardown retired before exiting", async () => {
+      const order: string[] = [];
+      let releaseDrain!: () => void;
+      const drained = new Promise<void>((resolve) => {
+        releaseDrain = resolve;
+      });
+      readerDrainMock.waitForRetiringReaders.mockImplementationOnce(async (budgetMs) => {
+        order.push(`reader-wait:${budgetMs}`);
+        await drained;
+        order.push("reader-drained");
+        return 0;
+      });
+      let releaseDispose!: () => void;
+      const disposeHeld = new Promise<void>((resolve) => {
+        releaseDispose = resolve;
+      });
+      dbMaintenanceMock.dispose.mockImplementationOnce(() => {
+        order.push("dbMaintenance.dispose");
+        return disposeHeld;
+      });
+      let markDbClosed!: () => void;
+      const dbClosed = new Promise<void>((resolve) => {
+        markDbClosed = resolve;
+      });
+      closeSharedDbMock.closeSharedDb.mockImplementationOnce(() => {
+        order.push("closeSharedDb");
+        markDbClosed();
+      });
+      const exited = new Promise<void>((resolve) => {
+        appMock.exit.mockImplementationOnce(() => {
+          order.push("exit");
+          resolve();
+        });
+      });
+
+      try {
+        const { beforeQuitCb } = await setup({
+          getCleanupIpcHandlers: vi.fn(() => () => {
+            order.push("cleanupIpc");
+          }),
+        });
+        await beforeQuitCb(makeEvent());
+
+        // The wait must start while a disposal is still holding the chain,
+        // not queue up behind the disposals.
+        await vi.waitFor(() => expect(order).toContain("dbMaintenance.dispose"), WAIT);
+        await vi.waitFor(
+          () => expect(order).toContain(`reader-wait:${CANOPY_READER_DRAIN_BUDGET_MS}`),
+          WAIT
+        );
+        expect(order).not.toContain("closeSharedDb");
+
+        releaseDispose();
+        await dbClosed;
+        // Give an unblocked chain every chance to run on to its telemetry flush.
+        for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+        expect(closeTelemetryMock).not.toHaveBeenCalled();
+        expect(order).not.toContain("exit");
+
+        releaseDrain();
+        await exited;
+        expect(order.indexOf("cleanupIpc")).toBeLessThan(
+          order.indexOf(`reader-wait:${CANOPY_READER_DRAIN_BUDGET_MS}`)
+        );
+        expect(order.slice(-2)).toEqual(["reader-drained", "exit"]);
+      } finally {
+        releaseDispose();
+        releaseDrain();
+      }
+    });
+
+    it("starts the reader wait alongside the VAD drain, not after it", async () => {
+      let releaseVad: (() => void) | undefined;
+      vadDrainMock.waitForRetiringVadProcesses.mockImplementationOnce(
+        () =>
+          new Promise<number>((resolve) => {
+            releaseVad = () => resolve(0);
+          })
+      );
+      let readerWaitStarted = false;
+      readerDrainMock.waitForRetiringReaders.mockImplementationOnce(async () => {
+        readerWaitStarted = true;
+        return 0;
+      });
+      const exited = new Promise<void>((resolve) => {
+        appMock.exit.mockImplementationOnce(() => resolve());
+      });
+
+      try {
+        const { beforeQuitCb } = await setup({});
+        await beforeQuitCb(makeEvent());
+
+        await vi.waitFor(() => expect(releaseVad).toBeDefined(), WAIT);
+        await vi.waitFor(() => expect(readerWaitStarted).toBe(true), WAIT);
+        expect(appMock.exit).not.toHaveBeenCalled();
+        releaseVad?.();
+        await exited;
+      } finally {
+        releaseVad?.();
+      }
+    });
+
+    it("exits cleanly when a reader is still draining at the budget", async () => {
+      readerDrainMock.waitForRetiringReaders.mockResolvedValueOnce(1);
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const exited = new Promise<void>((resolve) => {
+        appMock.exit.mockImplementationOnce(() => resolve());
+      });
+
+      try {
+        const { beforeQuitCb } = await setup({});
+        await beforeQuitCb(makeEvent());
+        await exited;
+
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+        expect(warnSpy).toHaveBeenCalledWith(
+          "[MAIN] 1 Canopy reader process(es) still draining at quit"
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("exits cleanly when the reader drain fails", async () => {
+      readerDrainMock.waitForRetiringReaders.mockRejectedValueOnce(new Error("boom"));
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const exited = new Promise<void>((resolve) => {
+        appMock.exit.mockImplementationOnce(() => resolve());
+      });
+
+      try {
+        const { beforeQuitCb } = await setup({});
+        await beforeQuitCb(makeEvent());
+        await exited;
+
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+        expect(warnSpy).toHaveBeenCalledWith(
+          "[MAIN] Canopy reader drain at quit failed:",
+          expect.any(Error)
+        );
       } finally {
         warnSpy.mockRestore();
       }
@@ -1098,6 +1742,11 @@ describe("registerShutdownHandler", () => {
       // POSIX checks spawn detached, so nothing else reaps them on quit.
       expect(projectCheckServiceMock.dispose).toHaveBeenCalledTimes(1);
       expect(projectCommandServiceMock.dispose).toHaveBeenCalledTimes(1);
+      expect(schedulePreconditionsMock.disposeSchedulePreconditions).toHaveBeenCalledTimes(1);
+      // Before the exit: nothing runs after it to reap a precondition's group.
+      expect(
+        schedulePreconditionsMock.disposeSchedulePreconditions.mock.invocationCallOrder[0]
+      ).toBeLessThan(appMock.exit.mock.invocationCallOrder[0]!);
     });
 
     it("waits for the plugin-spawned children to be killed before exiting (#12216)", async () => {
@@ -1506,6 +2155,22 @@ describe("registerShutdownHandler", () => {
       // Quitting closed nothing the user had: never a Trash entry.
       expect(record.closedBy).toBe("shutdown");
       expect(record.trash).toBeUndefined();
+      expect(record).not.toHaveProperty("scheduledRun");
+    });
+
+    it("names a scheduled run's ids on the record a quit journals (#15977)", async () => {
+      const run = { scheduleId: "schedule-1", runId: "run-1" };
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-1" }] as never);
+      const ptyClient = makePtyClient({
+        getAllTerminalsAsync: vi.fn(async () => [{ ...agentTerminal, scheduledRun: run }]),
+        gracefulKillByProject: vi.fn(async () => [{ id: "t1", agentSessionId: "sess-1" }]),
+      });
+      const { beforeQuitCb } = await setup({ getPtyClient: () => ptyClient });
+
+      await beforeQuitCb(makeEvent());
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalled());
+
+      expect(persistAgentSessionMock.mock.calls[0][0]).toMatchObject({ scheduledRun: run });
     });
 
     it("stops the memory-leak auto-restart before any terminal is snapshotted or killed (#14703)", async () => {
@@ -2208,6 +2873,93 @@ describe("registerShutdownHandler", () => {
     });
   });
 
+  // An app-initiated relaunch (GPU mitigation, hardware-acceleration toggle,
+  // state reset) runs this same chain, so only its real outcome may mark the
+  // exit clean (#16273).
+  describe("app-initiated relaunch", () => {
+    beforeEach(() => {
+      mcpServerMock.stop.mockReturnValue(Promise.resolve());
+      performanceTraceMock.stopPerformanceTraceIfActive.mockReturnValue(Promise.resolve());
+    });
+
+    async function setupRelaunch() {
+      const { registerShutdownHandler } = await import("../shutdown.js");
+      registerShutdownHandler(makeDeps());
+      const { relaunchApp } = await import("../appRelaunch.js");
+      return relaunchApp;
+    }
+
+    it("records a clean exit once the chain settles clean, before exiting into the relaunch", async () => {
+      const relaunchApp = await setupRelaunch();
+
+      relaunchApp("gpu-mitigation");
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalledWith(0));
+
+      expect(armRelaunchMock).toHaveBeenCalledTimes(1);
+      expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledTimes(1);
+      expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalledTimes(1);
+      // Not idempotent: a second call would advance suspect-panel decay twice.
+      expect(panelSuspectLedgerMock.markCleanLaunch).toHaveBeenCalledTimes(1);
+      expect(panelSuspectLedgerMock.markCleanLaunch.mock.invocationCallOrder[0]).toBeLessThan(
+        appMock.exit.mock.invocationCallOrder[0]
+      );
+    });
+
+    it("writes no clean-exit marker until the relaunch's chain settles", async () => {
+      let releaseCleanup: () => void = () => {};
+      mcpServerMock.stop.mockReturnValue(
+        new Promise<void>((resolve) => {
+          releaseCleanup = resolve;
+        })
+      );
+      const relaunchApp = await setupRelaunch();
+
+      relaunchApp("gpu-mitigation");
+      await vi.waitFor(() => expect(mcpServerMock.stop).toHaveBeenCalled());
+      expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
+      expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
+      expect(panelSuspectLedgerMock.markCleanLaunch).not.toHaveBeenCalled();
+      expect(appMock.exit).not.toHaveBeenCalled();
+
+      releaseCleanup();
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalledWith(0));
+      expect(crashRecoveryMock.cleanupOnExit).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves running.lock in place when the chain times out, and still relaunches", async () => {
+      vi.useFakeTimers();
+      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      mcpServerMock.stop.mockReturnValue(new Promise(() => {}));
+
+      try {
+        const relaunchApp = await setupRelaunch();
+        relaunchApp("gpu-mitigation");
+
+        await vi.waitFor(() => expect(mcpServerMock.stop).toHaveBeenCalled());
+        // Only the chain's own cleanup budget, short of the coordinator's
+        // SHUTDOWN_DEADLINE_MS, so the exit comes from the timeout this test
+        // names rather than the outer backstop.
+        await vi.advanceTimersByTimeAsync(CLEANUP_TIMEOUT_MS);
+
+        expect(consoleSpy).toHaveBeenCalledWith(
+          "[MAIN] Error during cleanup:",
+          expect.objectContaining({ message: expect.stringContaining("Hard shutdown timeout") })
+        );
+        expect(
+          consoleSpy.mock.calls.some(([message]) => String(message).includes("deadline"))
+        ).toBe(false);
+        expect(armRelaunchMock).toHaveBeenCalledTimes(1);
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+        expect(crashRecoveryMock.cleanupOnExit).not.toHaveBeenCalled();
+        expect(crashLoopGuardMock.markCleanExit).not.toHaveBeenCalled();
+        expect(panelSuspectLedgerMock.markCleanLaunch).not.toHaveBeenCalled();
+      } finally {
+        consoleSpy.mockRestore();
+        vi.useRealTimers();
+      }
+    });
+  });
+
   // L12: a termination signal sent to the whole process group (logout,
   // `pkill daintree`). Chromium aborts the browser within milliseconds of its
   // GPU process dying there, so the chain is cut short after its synchronous
@@ -2259,6 +3011,10 @@ describe("registerShutdownHandler", () => {
       expect(crashLoopGuardMock.markCleanExit).toHaveBeenCalled();
       expect(projectCheckServiceMock.dispose).toHaveBeenCalled();
       expect(projectCommandServiceMock.dispose).toHaveBeenCalled();
+      expect(schedulePreconditionsMock.disposeSchedulePreconditions).toHaveBeenCalled();
+      expect(
+        schedulePreconditionsMock.disposeSchedulePreconditions.mock.invocationCallOrder[0]
+      ).toBeLessThan(appMock.exit.mock.invocationCallOrder[0]!);
       expect(signalShutdownMock.clearSafetyBeltTimer).toHaveBeenCalled();
       // None of the chain's awaited work had been reached.
       expect(closeSharedDbMock.closeSharedDb).not.toHaveBeenCalled();

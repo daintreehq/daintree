@@ -1,11 +1,15 @@
 import {
   HOST_CONTROL_OUTCOMES,
   HOST_ENSURE_ACCEPTABLE,
+  HOST_STATUS_COVERAGE,
   HOST_WATCH_DELIVERIES,
   HOST_WATCH_LOST_REASONS,
   HOST_WATCH_STATUSES,
+  HOST_WATCH_WAITING_REASONS,
 } from "../../../shared/types/hostControl.js";
+import { HANDBACK_REPORTS } from "../../../shared/types/handback.js";
 import { isHostSettingKey } from "../../../shared/types/hostSettings.js";
+import { HOST_BRING_BACK_STATUSES, HOST_WAKE_RESULTS } from "../../../shared/types/hostWake.js";
 import {
   AGENT_LAST_MESSAGE_UNAVAILABLE_REASONS,
   type AgentLastMessageUnavailableReason,
@@ -76,15 +80,16 @@ function projectLastMessage(result: unknown): Record<string, unknown> {
 }
 
 /**
- * A handback reduced to its shape (#12488): the marker was seen, when, for which
- * submission, and how long the message was — never the message, which is text
- * the agent wrote.
+ * A handback reduced to its shape (#12488): the marker was seen, which form it
+ * took, when, for which submission, and how long the message was — never the
+ * message, which is text the agent wrote.
  */
 function reduceHandback(value: unknown): unknown {
   const handback = asRecord(value);
   if (handback === null) return null;
   return {
     messageChars: typeof handback.message === "string" ? handback.message.length : null,
+    report: HANDBACK_REPORTS.find((report) => report === handback.report),
     observedAt: typeof handback.observedAt === "number" ? handback.observedAt : null,
     submissionToken:
       typeof handback.submissionToken === "string" ? handback.submissionToken : undefined,
@@ -92,10 +97,36 @@ function reduceHandback(value: unknown): unknown {
   };
 }
 
+/**
+ * A submission record with its captured output (#16210) reduced to the same
+ * kind of shape: how much there was and how the capture stood, never the text.
+ */
+function reduceSubmission(value: unknown): unknown {
+  const submission = asRecord(value);
+  if (submission === null || !Object.hasOwn(submission, "output")) return value;
+  const output = asRecord(submission.output);
+  return {
+    ...submission,
+    output:
+      output === null
+        ? null
+        : {
+            textChars: typeof output.text === "string" ? output.text.length : null,
+            truncated: output.truncated === true,
+            state: typeof output.state === "string" ? output.state : null,
+          },
+  };
+}
+
 function withReducedHandback(entry: unknown): unknown {
   const record = asRecord(entry);
-  if (record === null || !Object.hasOwn(record, "lastHandback")) return entry;
-  return { ...record, lastHandback: reduceHandback(record.lastHandback) };
+  if (record === null) return entry;
+  const reduced = Object.hasOwn(record, "lastHandback")
+    ? { ...record, lastHandback: reduceHandback(record.lastHandback) }
+    : record;
+  return Object.hasOwn(record, "submission")
+    ? { ...reduced, submission: reduceSubmission(record.submission) }
+    : reduced;
 }
 
 /**
@@ -131,9 +162,48 @@ function finiteNumber(value: unknown): number | null {
 const HOST_ID_PATTERN = /^[\w.-]{1,64}$/;
 const HOST_OUTCOMES: ReadonlySet<string> = new Set(HOST_CONTROL_OUTCOMES);
 const ENSURE_ACCEPTABLE: ReadonlySet<string> = new Set(HOST_ENSURE_ACCEPTABLE);
+const HOST_BRING_BACK_STATUS_SET: ReadonlySet<string> = new Set(HOST_BRING_BACK_STATUSES);
+const HOST_WAKE_RESULT_SET: ReadonlySet<string> = new Set(HOST_WAKE_RESULTS);
 
 function auditHostId(value: unknown): string | null {
   return typeof value === "string" && HOST_ID_PATTERN.test(value) ? value : null;
+}
+
+/** A project id is a hash or a UUID: one word-shaped token, never a sentence. */
+const PROJECT_ID_PATTERN = /^[\w.-]{1,128}$/;
+const HOST_STATUS_COVERAGE_SET: ReadonlySet<string> = new Set(HOST_STATUS_COVERAGE);
+
+function auditProjectId(value: unknown): string | null {
+  return typeof value === "string" && PROJECT_ID_PATTERN.test(value) ? value : null;
+}
+
+/** Which projects were read and how each went, and how many terminals came back. */
+function projectHostStatus(result: unknown): Record<string, unknown> {
+  const record = asRecord(result);
+  if (record === null) return { status: "unrecognized" };
+  return {
+    hosts: Array.isArray(record.hosts)
+      ? record.hosts.map((entry) => {
+          const host = asRecord(entry);
+          return {
+            hostId: auditHostId(host?.hostId),
+            coverage: fromSet(host?.coverage, HOST_STATUS_COVERAGE_SET),
+          };
+        })
+      : null,
+    targets: Array.isArray(record.targets)
+      ? record.targets.map((entry) => {
+          const target = asRecord(entry);
+          return {
+            hostId: auditHostId(target?.hostId),
+            projectId: auditProjectId(target?.projectId),
+            outcome: fromSet(target?.outcome, HOST_OUTCOMES),
+            omitted: finiteNumber(target?.omitted),
+          };
+        })
+      : null,
+    terminalCount: Array.isArray(record.terminals) ? record.terminals.length : null,
+  };
 }
 
 function fromSet(value: unknown, allowed: ReadonlySet<string>): string | null {
@@ -192,6 +262,7 @@ function projectPanelCapture(result: unknown): Record<string, unknown> {
 const WATCH_STATUSES: ReadonlySet<string> = new Set(HOST_WATCH_STATUSES);
 const WATCH_LOST_REASONS: ReadonlySet<string> = new Set(HOST_WATCH_LOST_REASONS);
 const WATCH_DELIVERIES: ReadonlySet<string> = new Set(HOST_WATCH_DELIVERIES);
+const WATCH_WAITING_REASONS: ReadonlySet<string> = new Set([...HOST_WATCH_WAITING_REASONS, "any"]);
 
 const WATCH_ID_PATTERN = /^hw-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -206,7 +277,14 @@ function projectHostWatch(value: unknown): Record<string, unknown> {
   return {
     watchId: auditWatchId(watch?.watchId),
     hostId: auditHostId(watch?.hostId),
-    on: condition === null ? null : condition.connection != null ? "connection" : "capacity",
+    on:
+      condition === null
+        ? null
+        : condition.connection != null
+          ? "connection"
+          : condition.agentsWaiting != null
+            ? "agents"
+            : "capacity",
     status: fromSet(watch?.status, WATCH_STATUSES),
     lostReason: fromSet(watch?.lostReason, WATCH_LOST_REASONS),
     delivery: fromSet(watch?.delivery, WATCH_DELIVERIES),
@@ -298,6 +376,25 @@ const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown
       };
     },
   ],
+  [
+    "host.bringBack",
+    // How the attempt ended and what it did, never ssh's words, the host's adapter or its LAN (#16170).
+    (result) => {
+      const record = asRecord(result);
+      if (record === null) return { status: "unrecognized" };
+      const answer = asRecord(record.answer);
+      return {
+        outcome: fromSet(record.outcome, HOST_OUTCOMES),
+        status: fromSet(answer?.status, HOST_BRING_BACK_STATUS_SET),
+        wake: fromSet(answer?.wake, HOST_WAKE_RESULT_SET),
+        reached: answer?.reached === true,
+        startRequested: answer?.startRequested === true,
+        elapsedMs: finiteNumber(answer?.elapsedMs),
+      };
+    },
+  ],
+  // Never a screen, a handback or a check's words (#16191): outcomes and counts.
+  ["host.status", projectHostStatus],
   ["plugin.capturePanel", projectPanelCapture],
   ["project.runCommand", projectCommandRun],
 ]);
@@ -336,9 +433,41 @@ const AUDIT_ARGS_PROJECTIONS: ReadonlyMap<string, (args: unknown) => unknown> = 
         memoryAvailableBytesAtLeast: finiteNumber(record?.memoryAvailableBytesAtLeast),
         cpuIdleCoresAtLeast: finiteNumber(record?.cpuIdleCoresAtLeast),
         memoryPressureAtMost: pressure === "normal" || pressure === "warn" ? pressure : null,
+        agentsWaiting: record?.agentsWaiting === true,
+        waitingReasons: Array.isArray(record?.waitingReasons)
+          ? record.waitingReasons.filter((reason): reason is string =>
+              WATCH_WAITING_REASONS.has(reason as string)
+            )
+          : null,
+        projectId: typeof record?.projectId === "string" ? record.projectId : null,
         expiresInSeconds: finiteNumber(record?.expiresInSeconds),
         noted: typeof record?.note === "string",
         watchId: auditWatchId(record?.watchId),
+      };
+    },
+  ],
+  ["host.bringBack", (args) => ({ hostId: auditHostId(asRecord(args)?.hostId) })],
+  [
+    "host.status",
+    // The projects named and how many terminals in each, and whether output was asked for.
+    (args) => {
+      const record = asRecord(args);
+      return {
+        targets: Array.isArray(record?.targets)
+          ? record.targets.map((entry) => {
+              const target = asRecord(entry);
+              return {
+                hostId: auditHostId(target?.hostId),
+                projectId: auditProjectId(target?.projectId),
+                terminalCount: Array.isArray(target?.terminalIds)
+                  ? target.terminalIds.length
+                  : null,
+              };
+            })
+          : null,
+        includeOutput:
+          record?.includeOutput === true ||
+          (record?.includeOutput !== null && typeof record?.includeOutput === "object"),
       };
     },
   ],

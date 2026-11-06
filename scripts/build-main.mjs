@@ -6,6 +6,7 @@ import { fileURLToPath } from "url";
 import { pluginSdkRuntimeBuildConfig } from "./lib/plugin-sdk-runtime.mjs";
 import { mainBundlePlugins } from "./lib/main-bundle.mjs";
 import { MAIN_EXTERNAL, MAIN_PRELOAD_ENTRY, mainEsmEntryPoints } from "./main-build-entries.mjs";
+import { runProjectSync } from "./typecheck.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, "..");
@@ -572,27 +573,26 @@ function validateCommandHandlerExtensions() {
 /**
  * Typecheck plugin code (`tsconfig.plugins.json`) before emitting output so a
  * type error in a built-in/sample plugin's main code fails the build instead of
- * surfacing at runtime (#10620). Uses `tsc --noEmit` — never `tsc -b`, which
- * emits `.js` into the source tree and would clobber the esbuild output. Skipped
- * in watch mode (a full typecheck would stall the watcher); a banner points devs
- * at `npm run check`.
+ * surfacing at runtime (#10620). Runs the `plugins` project from
+ * `scripts/typecheck.mjs`, so it uses the same TS7 compiler and arguments as
+ * `npm run typecheck` (`--noEmit`, never `tsc -b`, which emits `.js` into the
+ * source tree and would clobber the esbuild output). Skipped in watch mode (a
+ * full typecheck would stall the watcher); a banner points devs at
+ * `npm run check`.
  */
-function runPluginTypecheck() {
-  if (isWatch) {
+export function runPluginTypecheck({
+  watch = isWatch,
+  runProject = runProjectSync,
+  exit = (code) => process.exit(code),
+} = {}) {
+  if (watch) {
     console.log("[Build] Plugin types skipped in watch mode — run npm run check to typecheck.");
     return;
   }
-  const tscPath = path.join(root, "node_modules", "typescript", "bin", "tsc");
-  const result = spawnSync(process.execPath, [tscPath, "--noEmit", "-p", "tsconfig.plugins.json"], {
-    stdio: "inherit",
-    cwd: root,
-  });
-  if (result.status !== 0) {
-    if (result.error) {
-      console.error("[Build] Plugin typecheck spawn failed:", result.error);
-    }
+  const status = runProject("plugins");
+  if (status !== 0) {
     console.error("[Build] Plugin typecheck failed.");
-    process.exit(result.status ?? 1);
+    exit(status);
   }
 }
 
@@ -618,8 +618,12 @@ export function mainEsmConfig({ production, watch = false }) {
       ...mainBundlePlugins({ isProd: production }),
       ...(watch ? [createReadyMarkerPlugin()] : []),
     ],
+    // The import is aliased because the banner is raw text esbuild never renames
+    // around: a bundled ESM module that imports `createRequire` itself (fflate's
+    // node build, under the Decisions libraries) would otherwise declare it twice
+    // in one chunk, and that chunk fails to load.
     banner: {
-      js: `import { createRequire } from 'module'; const require = createRequire(import.meta.url);`,
+      js: `import { createRequire as __daintreeCreateRequire } from 'module'; const require = __daintreeCreateRequire(import.meta.url);`,
     },
   };
 }
@@ -656,7 +660,9 @@ async function run() {
     // Clean both the electron host bundles and the built-in plugin outputs
     // so a renamed source file or removed contribution does not survive
     // between production builds and ship inside `dist-electron/**/*`.
-    for (const dir of ["dist-electron/electron", "dist-electron/plugins"]) {
+    // `dist-electron/shared` is no build output: typecheck emitted shared/
+    // there until #16279, and a checkout's leftover copy would still ship.
+    for (const dir of ["dist-electron/electron", "dist-electron/plugins", "dist-electron/shared"]) {
       const abs = path.join(root, dir);
       if (fs.existsSync(abs)) {
         fs.rmSync(abs, { recursive: true, force: true });

@@ -87,6 +87,17 @@ describe("worktreeCreateResultFromOutcome", () => {
     });
     expect(() => worktreeCreateResultFromOutcome({ branch: "b" })).toThrow();
   });
+
+  it("keeps a fresh-base create's start commit, and invents none (#15733)", () => {
+    const startCommit = "d".repeat(40);
+    expect(worktreeCreateResultFromOutcome({ ...created, startCommit })).toEqual({
+      ...created,
+      startCommit,
+    });
+    expect(worktreeCreateResultFromOutcome({ ...created, startCommit: 42 })).not.toHaveProperty(
+      "startCommit"
+    );
+  });
 });
 
 describe("worktreeClient.retryProjectLoad (#14313)", () => {

@@ -1,8 +1,17 @@
+import type { GitDiffSide } from "../git.js";
+
 export interface DiffMediaReadFileVersionsPayload {
   /** Absolute worktree root the file path is resolved against. */
   cwd: string;
   /** Repo-relative path of the image file. */
   filePath: string;
+  /**
+   * Which comparison the two sides make. `staged` reads HEAD and the index,
+   * `unstaged` reads the index and the working tree; absent reads HEAD and the
+   * working tree. The response keeps its `head`/`working` keys either way, as
+   * the old and new side of whichever comparison was asked for.
+   */
+  side?: GitDiffSide;
   /**
    * Side versions the caller already holds. A side whose content still
    * matches comes back `unchanged` instead of resending its bytes.
@@ -10,6 +19,7 @@ export interface DiffMediaReadFileVersionsPayload {
   known?: DiffMediaKnownVersions;
 }
 
+/** Keyed by response slot, so `head` is the index's version on an `unstaged` request. */
 export interface DiffMediaKnownVersions {
   head?: string;
   working?: string;
@@ -27,6 +37,7 @@ export type DiffMediaSide =
     }
   | { ok: false; error: DiffMediaSideError };
 
+/** `head` is the comparison's old side and `working` its new side; see `side` on the payload. */
 export interface DiffMediaFileVersions {
   head: DiffMediaSide;
   working: DiffMediaSide;

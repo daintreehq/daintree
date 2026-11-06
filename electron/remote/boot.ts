@@ -11,22 +11,25 @@ import { resolveLiveWebContents } from "../window/webContentsRegistry.js";
 import { getWindowRegistry } from "../window/windowRef.js";
 import { toDisposable } from "../utils/lifecycle.js";
 import { isRemoteHostSupported } from "./buildGate.js";
-import { initRemoteHostsClient } from "./client/initClient.js";
+import { initRemoteHostsClient, type EnsureHostRunning } from "./client/initClient.js";
 import { defaultCommandRunner } from "./client/commandRunner.js";
 import { closeSshMasters, exitStaleSshMasters } from "./client/sshTransport.js";
 import { installViewReverseRequests } from "./client/viewRequests.js";
 import { installHostFileClient } from "./files/clientInstall.js";
+import { folderPackDir, sweepFolderPacks } from "./files/localFolderPack.js";
 import { installHostUploadClient } from "./files/uploadClient.js";
 import { installHostMetricsClient } from "./metrics/clientInstall.js";
 import { installCanopyHostsClient } from "./canopy/clientInstall.js";
 import { installDeviceAnswerHostsClient } from "./deviceAnswer/clientInstall.js";
+import { installDecisionsHostsClient } from "./decisions/clientInstall.js";
 import { installVoicePaneHostsClient } from "./voice/clientInstall.js";
 import { installHostControl, installHostControlLinkClient } from "./assistant/install.js";
-import { getRemoteService } from "./runtime.js";
+import { getRemoteService, requireRemoteService } from "./runtime.js";
 import {
   acceptLocalPushForRemoteView,
   installHybridSplits,
   installNotificationPolicyPush,
+  releaseHostNotifications,
   ViewVisibilityReporter,
 } from "./hybrid/index.js";
 import { installClipboardSplits } from "./hybrid/clipboard.js";
@@ -78,10 +81,20 @@ export { setRemoteHostsWindowOpener } from "./client/initClient.js";
 export interface StartRemoteHostsOptions {
   /** Host mode is on for this launch: listen for remote Shells. */
   hostMode: boolean;
-  /** How the Shell reaches a host; system ssh unless given (the integration harness dials a local socket). */
-  createTransport?: (descriptor: HostDescriptor) => LinkTransport;
+  /**
+   * How the Shell reaches a host; system ssh unless given (the integration
+   * harness dials a local socket). `ensureRunning` is the start a transport
+   * calls when ssh reaches the host with no Daintree serving.
+   */
+  createTransport?: (descriptor: HostDescriptor, ensureRunning: EnsureHostRunning) => LinkTransport;
   /** Where Host mode listens; the platform's socket path unless given. */
   hostLocation?: HostSocketLocation;
+  /**
+   * The app has begun quitting. A start in flight stops at its next step, as
+   * it does for a stop, rather than run on until the quit's stop step reaches
+   * it; that stop still takes down whatever it got as far as.
+   */
+  halted?: () => boolean;
 }
 
 type Teardown = () => void | Promise<void>;
@@ -115,6 +128,9 @@ function startClient(options: StartRemoteHostsOptions): void {
   // app runs; on stop, every master this process used is told to exit, so no
   // ssh outlives the app.
   teardowns.push(() => closeSshMasters(MASTER_EXIT_TIMEOUT_MS));
+  // Folder archives a crashed launch left behind, before this one packs any.
+  const packDir = folderPackDir(app.getPath("userData"));
+  void sweepFolderPacks(packDir).catch(() => {});
   let hostForView: (webContentsId: number) => string | null = () => null;
   let activated = false;
   // Tells each host which of its views a window is actually showing, so its
@@ -154,7 +170,7 @@ function startClient(options: StartRemoteHostsOptions): void {
     };
     teardowns.push(installHostFileClient(endpointFeed, hostForView));
     // Dropped, pasted and attached files, sent from this machine to the view's host.
-    teardowns.push(installHostUploadClient(endpointFeed, hostForView));
+    teardowns.push(installHostUploadClient(endpointFeed, hostForView, packDir));
     // Host plugins' prompts, consent and view bundles for the views driving their projects.
     teardowns.push(
       installPluginClient(endpointFeed, (webContentsId) => hostForView(webContentsId))
@@ -191,6 +207,14 @@ function startClient(options: StartRemoteHostsOptions): void {
         visibility.noteEndpointClosed(webContentsId, endpointId);
         detachClientTerminalRelayFor(webContentsId, hostId, endpointId);
         detachClientWorktreeRelayFor(webContentsId, hostId, endpointId);
+        releaseHostNotifications(hostId, webContentsId);
+      })
+    );
+    // A fresh session reopens views without closing them first, but the host
+    // dropped the old endpoints and with them any way to close their banners.
+    teardowns.push(
+      client.manager.onSessionAttached((hostId, { resumed }) => {
+        if (!resumed) releaseHostNotifications(hostId);
       })
     );
     // Runs before the overrides are uninstalled (teardowns run in reverse).
@@ -307,22 +331,35 @@ function startClient(options: StartRemoteHostsOptions): void {
       sessionFor: client.sessionFor,
     })
   );
+  // The Decisions owner here enrolls the hosts it connects to as devices (#16021).
+  teardowns.push(
+    installDecisionsHostsClient({
+      registry: client.registry,
+      manager: client.manager,
+      sessionFor: client.sessionFor,
+    })
+  );
   // Dictation into a host's pane reads the pane's context from that host (#14782).
   teardowns.push(installVoicePaneHostsClient({ sessionFor: client.sessionFor }));
   // This Shell's assistants' reach into its hosts: `host.list` and `host.call` (#13493).
-  const observeHosts = () =>
-    client.client.list().map(({ descriptor, connection, summary }) => ({
-      hostId: descriptor.id,
-      name: descriptor.name,
-      connection,
-      lastSeenAt: descriptor.lastSeenAt,
-      summary,
-      summaryReceipt: summary
-        ? (getRemoteService("hostMetrics")?.receiptOf(summary) ?? null)
-        : null,
-      lastHandshake: descriptor.lastHandshake,
-      disconnectedByPerson: client.client.isDisconnectedByPerson(descriptor.id),
-    }));
+  const observeHosts = () => {
+    const metrics = getRemoteService("hostMetrics");
+    return client.client.list().map(({ descriptor, connection, summary }) => {
+      const onLink =
+        summary && metrics ? metrics.cameOn(summary, client.sessionFor(descriptor.id)) : null;
+      return {
+        hostId: descriptor.id,
+        name: descriptor.name,
+        connection,
+        lastSeenAt: descriptor.lastSeenAt,
+        summary,
+        summaryReceipt: summary ? (metrics?.receiptOf(summary) ?? null) : null,
+        ...(onLink !== null ? { summaryFromCurrentLink: onLink } : {}),
+        lastHandshake: descriptor.lastHandshake,
+        disconnectedByPerson: client.client.isDisconnectedByPerson(descriptor.id),
+      };
+    });
+  };
   teardowns.push(
     installHostControl({
       observeHosts,
@@ -333,6 +370,8 @@ function startClient(options: StartRemoteHostsOptions): void {
         client.manager.touch(hostId);
         await client.client.connectAndWait(hostId, timeoutMs);
       },
+      // The same attempt the host's row joins (#16170).
+      bringBack: (hostId) => requireRemoteService("hostBringBack").bringBack(hostId),
       isHostControlEnabled: (hostId) =>
         client.registry.get(hostId)?.assistantControlEnabled === true,
       // What `host.watch` hears (#14463): nothing a host isn't already sending.
@@ -347,6 +386,9 @@ function startClient(options: StartRemoteHostsOptions): void {
           for (const off of offs) off();
         };
       },
+      // What an agent `host.watch` hears of hosts (#16188): only links already up.
+      watchHostAgents: (listener) =>
+        getRemoteService("hostMetrics")?.onAgentWaiting(listener) ?? (() => {}),
     })
   );
   // The sender each session proves to a host before a call is relayed there.
@@ -358,6 +400,11 @@ function startClient(options: StartRemoteHostsOptions): void {
         if (client.manager.connectionState(hostId).status !== "connected") {
           await client.client.connectAndWait(hostId, HOST_CALL_CONNECT_MS);
         }
+        const session = client.sessionFor(hostId);
+        return session?.isOpen ? session : null;
+      },
+      // An agent watch's arm reads over a link only while it is up (#16188).
+      openSession: (hostId) => {
         const session = client.sessionFor(hostId);
         return session?.isOpen ? session : null;
       },
@@ -387,6 +434,7 @@ export class HostModeListenError extends Error {
 export async function startRemoteHosts(options: StartRemoteHostsOptions): Promise<void> {
   if (started) return;
   started = true;
+  const halted = (): boolean => !started || options.halted?.() === true;
   // The worktree port override needs the broker, which exists only once the
   // workspace client has finished wiring. Both boot paths start it before
   // this runs; wait out one still in flight, but never start one here.
@@ -397,7 +445,7 @@ export async function startRemoteHosts(options: StartRemoteHostsOptions): Promis
       logger.warn("Workspace client failed; remote worktree ports are off", { error });
     }
   }
-  if (!started) return;
+  if (halted()) return;
   // A master a crashed launch left behind still holds its port forwards; this
   // launch would otherwise reuse it. Only the system ssh transport makes masters.
   if (!options.createTransport) {
@@ -406,16 +454,18 @@ export async function startRemoteHosts(options: StartRemoteHostsOptions): Promis
       path.join(app.getPath("userData"), "rh"),
       MASTER_EXIT_TIMEOUT_MS
     );
-    if (!started) return;
+    if (halted()) return;
   }
   // This machine's throwaway runs (#14445), for its own assistants and any
   // Shell's; owned by the host role, so a Shell restarted alone keeps them.
   const { registerHostThrowawayRuns } = await import("../services/throwaway/index.js");
-  if (!started) return;
+  if (halted()) return;
   ownedBy("host").push(registerHostThrowawayRuns());
   startClient(options);
   if (__DAINTREE_REMOTE_HOST_ROLE__ && isRemoteHostSupported()) {
     const { startHostRole } = await import("./hostBoot.js");
+    // A stop during the load already drained the ledger: nothing would tear a listener down.
+    if (halted()) return;
     const host = ownedBy("host");
     const listenError = await startHostRole(options, (teardown) => host.push(teardown));
     if (listenError) throw new HostModeListenError(listenError.error);

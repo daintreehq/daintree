@@ -460,11 +460,12 @@ describe("cold restore of agents that resume by history alone (#13847)", () => {
     expect(byId.get("old")?.sessionLostOnRestore).toBe("sibling-owns-resume-latest-slot");
   });
 
-  it("starts Interpreter fresh rather than leave its picker on the pane", async () => {
+  it("reopens Open Interpreter's latest session in its folder when no id was captured", async () => {
     const byId = await restore([pane("i", "interpreter")]);
 
+    expect(byId.get("i")?.command).toBe("interpreter resume --last");
     expect(byId.get("i")?.command).not.toContain("--conversations");
-    expect(byId.get("i")?.sessionLostOnRestore).toBe("no-resume-path");
+    expect(byId.get("i")?.sessionLostOnRestore).toBeUndefined();
   });
 
   it("keeps Aider's auto-commits off when a deleted preset voids its captured flags", async () => {
@@ -688,5 +689,124 @@ describe("held same-folder Codex panes named by their launch prompts (#15269)", 
       sessionId: "sess-parser",
     });
     expect(byId.get("parser")?.command).not.toContain("resume");
+  });
+});
+
+describe("restore of a pane saved showing its exit (#15941)", () => {
+  it("brings a plain terminal back exited instead of starting it again", async () => {
+    const snapshot = serializePtyPanel({
+      id: "dev",
+      kind: "terminal",
+      title: "Dev server",
+      cwd: "/repo",
+      location: "grid",
+      command: "npm run dev",
+      runtimeStatus: "exited",
+      exitCode: 3,
+    } as PtyPanelData);
+
+    const byId = await restore([
+      { id: "dev", title: "Dev server", kind: "terminal", location: "grid", ...snapshot },
+    ]);
+
+    expect(byId.get("dev")).toMatchObject({ requestedId: "dev", restoredExitCode: 3 });
+  });
+
+  it.each([
+    ["dock", "dock", undefined],
+    ["background", "background", "dock"],
+  ] as const)(
+    "brings one saved in the %s back exited where it was",
+    async (_label, location, backgroundRestoreLocation) => {
+      const snapshot = serializePtyPanel({
+        id: "dev",
+        kind: "terminal",
+        title: "Dev server",
+        cwd: "/repo",
+        location,
+        runtimeStatus: "exited",
+        exitCode: 1,
+      } as PtyPanelData);
+
+      const byId = await restore([
+        {
+          id: "dev",
+          title: "Dev server",
+          kind: "terminal",
+          location,
+          ...(backgroundRestoreLocation && { backgroundRestoreLocation }),
+          ...snapshot,
+        },
+      ]);
+
+      expect(byId.get("dev")).toMatchObject({ location, restoredExitCode: 1 });
+    }
+  );
+
+  it("keeps a shell that once ran an agent a plain exited shell", async () => {
+    const snapshot = serializePtyPanel({
+      id: "dev",
+      kind: "terminal",
+      title: "zsh",
+      cwd: "/repo",
+      location: "grid",
+      everDetectedAgent: true,
+      runtimeStatus: "exited",
+      exitCode: 0,
+    } as PtyPanelData);
+
+    const byId = await restore([
+      { id: "dev", title: "zsh", kind: "terminal", location: "grid", ...snapshot },
+    ]);
+
+    expect(byId.get("dev")?.launchAgentId).toBeUndefined();
+    expect(byId.get("dev")?.restoredExitCode).toBe(0);
+  });
+
+  it("reattaches to a host record with no process left, showing the saved exit", async () => {
+    const snapshot = serializePtyPanel({
+      id: "dev",
+      kind: "terminal",
+      title: "zsh",
+      cwd: "/repo",
+      location: "grid",
+      everDetectedAgent: true,
+      runtimeStatus: "exited",
+      exitCode: 0,
+    } as PtyPanelData);
+    const record: BackendTerminalInfo = {
+      id: "dev",
+      kind: "terminal",
+      cwd: "/repo",
+      spawnedAt: 1,
+      hasPty: false,
+      everDetectedAgent: true,
+    };
+
+    const byId = await restore(
+      [{ id: "dev", title: "zsh", kind: "terminal", location: "grid", ...snapshot }],
+      { backendTerminalMap: new Map([["dev", record]]) }
+    );
+
+    expect(byId.get("dev")).toMatchObject({ existingId: "dev", restoredExitCode: 0 });
+  });
+
+  it("starts a terminal saved while it ran, as before", async () => {
+    const snapshot = serializePtyPanel({
+      id: "dev",
+      kind: "terminal",
+      title: "Dev server",
+      cwd: "/repo",
+      location: "grid",
+      command: "npm run dev",
+      runtimeStatus: "running",
+    } as PtyPanelData);
+
+    const byId = await restore([
+      { id: "dev", title: "Dev server", kind: "terminal", location: "grid", ...snapshot },
+    ]);
+
+    expect(byId.get("dev")?.restoredExitCode).toBeUndefined();
+    expect(byId.get("dev")?.command).toBe("npm run dev");
   });
 });

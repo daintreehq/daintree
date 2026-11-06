@@ -1,7 +1,7 @@
 const path = require("path");
 const fs = require("fs");
 const os = require("os");
-const { execFileSync } = require("child_process");
+const { execFileSync, spawnSync } = require("child_process");
 const { resignHelpers } = require("./resign-helpers-macos.cjs");
 
 const NOTARIZATION_STATE_FILE = ".notarization-state.json";
@@ -11,12 +11,18 @@ const STAPLE_RETRY_DELAYS_MS = [15000, 30000, 60000];
 function readState(outDir) {
   const statePath = path.join(outDir, NOTARIZATION_STATE_FILE);
   if (!fs.existsSync(statePath)) return null;
+  let parsed;
   try {
-    return JSON.parse(fs.readFileSync(statePath, "utf-8"));
+    parsed = JSON.parse(fs.readFileSync(statePath, "utf-8"));
   } catch {
     console.warn("[notarize-macos] Could not parse notarization state file — starting fresh");
     return null;
   }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    console.warn("[notarize-macos] Notarization state file is not an object — starting fresh");
+    return null;
+  }
+  return parsed;
 }
 
 function writeState(outDir, state) {
@@ -35,6 +41,54 @@ function runNotaryTool(args, options) {
   if (keyId) fullArgs.push("--key-id", keyId);
   if (issuer) fullArgs.push("--issuer", issuer);
   return execFileSync("xcrun", fullArgs, { encoding: "utf-8", ...options });
+}
+
+// Mach-O slices per electron-builder Arch enum value (x64 = 1, arm64 = 3,
+// universal = 4). Each slice of a universal binary carries its own signature,
+// and `codesign -d` shows only the host's unless asked for a slice. It prints
+// its details to stderr, hence spawnSync.
+const ARCH_SLICES = { 1: ["x86_64"], 3: ["arm64"], 4: ["arm64", "x86_64"] };
+
+function readSliceCdhash(appPath, slice) {
+  const args = slice ? ["-dvvv", "--arch", slice, appPath] : ["-dvvv", appPath];
+  const result = spawnSync("codesign", args, { encoding: "utf-8", timeout: 60000 });
+  const output = `${result.stdout || ""}${result.stderr || ""}`;
+  const match = !result.error && result.status === 0 && output.match(/^CDHash=([0-9a-f]{40})$/im);
+  if (!match) {
+    const detail = result.error ? result.error.message : output.trim() || `exit ${result.status}`;
+    console.warn(
+      `[notarize-macos] Could not read the code signature of ${appPath}` +
+        `${slice ? ` (${slice})` : ""}: ${detail}`
+    );
+    return null;
+  }
+  return match[1].toLowerCase();
+}
+
+// The main executable's code directory hash seals Info.plist and CodeResources,
+// which lists the cdhash of every nested binary, so it identifies the whole
+// signed bundle, and it is what stapler looks the ticket up by. A stored
+// submission is only reused for a bundle with the same CDHash on every slice.
+function readBundleIdentity(appPath, arch) {
+  const slices = ARCH_SLICES[arch];
+  if (!slices) return readSliceCdhash(appPath, null);
+  const parts = [];
+  for (const slice of slices) {
+    const cdhash = readSliceCdhash(appPath, slice);
+    if (!cdhash) return null;
+    parts.push(`${slice}=${cdhash}`);
+  }
+  return parts.join(",");
+}
+
+function timeoutError(submissionId) {
+  return new Error(
+    `[notarize-macos] Notarization wait timed out (${WAIT_TIMEOUT_SECONDS}s). ` +
+      `Submission ID: ${submissionId}; it continues on Apple's side, check it with ` +
+      `\`xcrun notarytool info ${submissionId}\` or \`xcrun notarytool log ${submissionId}\`. ` +
+      `A re-run on a fresh CI runner rebuilds and submits again; only a re-run in the same out dir, ` +
+      `with the saved state and a bundle with the same code signature, reattaches to it.`
+  );
 }
 
 function zipApp(appPath) {
@@ -81,19 +135,33 @@ exports.default = async function afterSign(context) {
 
   const state = readState(outDir) || {};
   const archKey = String(arch);
+  const cdhash = readBundleIdentity(appPath, arch);
+  const entry = state[archKey];
+  const resumable =
+    typeof entry?.submissionId === "string" &&
+    entry.submissionId !== "" &&
+    (entry.status === "accepted" || entry.status === "submitted");
 
-  if (state[archKey]?.submissionId && state[archKey]?.status === "accepted") {
+  if (resumable && (!cdhash || entry.cdhash !== cdhash)) {
+    const recorded = typeof entry.cdhash === "string" && entry.cdhash ? entry.cdhash : "none";
+    console.log(
+      `[notarize-macos] Not resuming ${entry.status} submission ${entry.submissionId} (arch ${archKey}): ` +
+        `it was recorded for bundle CDHash ${recorded}, the bundle at ${appPath} has ` +
+        `${cdhash || "an unreadable CDHash"} — submitting fresh`
+    );
+    await submitAndWait(state, archKey, appPath, appName, outDir, cdhash);
+  } else if (resumable && entry.status === "accepted") {
     await stapleApp(appPath, appName, archKey);
-    state[archKey] = { ...state[archKey], status: "stapled", timestamp: new Date().toISOString() };
+    state[archKey] = { ...entry, status: "stapled", timestamp: new Date().toISOString() };
     writeState(outDir, state);
-  } else if (state[archKey]?.submissionId && state[archKey]?.status === "submitted") {
-    await reattachAndWait(state, archKey, appPath, appName, outDir);
+  } else if (resumable) {
+    await reattachAndWait(state, archKey, appPath, appName, outDir, cdhash);
   } else {
-    await submitAndWait(state, archKey, appPath, appName, outDir);
+    await submitAndWait(state, archKey, appPath, appName, outDir, cdhash);
   }
 };
 
-async function reattachAndWait(state, archKey, appPath, appName, outDir) {
+async function reattachAndWait(state, archKey, appPath, appName, outDir, cdhash) {
   const { submissionId } = state[archKey];
   console.log(`[notarize-macos] Reattaching to submission ${submissionId} (arch ${archKey})`);
 
@@ -108,17 +176,19 @@ async function reattachAndWait(state, archKey, appPath, appName, outDir) {
         `[notarize-macos] Notarization not accepted for ${submissionId}: status=${result.status}`
       );
     }
-    state[archKey] = { submissionId, status: "accepted", timestamp: new Date().toISOString() };
+    state[archKey] = {
+      submissionId,
+      status: "accepted",
+      cdhash,
+      timestamp: new Date().toISOString(),
+    };
     writeState(outDir, state);
   } catch (err) {
     if (err.status === 124) {
       console.log(
         `[notarize-macos] Wait timed out for ${submissionId} — submission continues server-side`
       );
-      throw new Error(
-        `[notarize-macos] Notarization wait timed out (${WAIT_TIMEOUT_SECONDS}s). ` +
-          `Submission ID: ${submissionId}. Re-run the workflow to reattach and staple.`
-      );
+      throw timeoutError(submissionId);
     }
     throw err;
   }
@@ -128,7 +198,7 @@ async function reattachAndWait(state, archKey, appPath, appName, outDir) {
   writeState(outDir, state);
 }
 
-async function submitAndWait(state, archKey, appPath, appName, outDir) {
+async function submitAndWait(state, archKey, appPath, appName, outDir, cdhash) {
   console.log(`[notarize-macos] Zipping ${appPath} for submission`);
 
   let zipPath;
@@ -166,7 +236,12 @@ async function submitAndWait(state, archKey, appPath, appName, outDir) {
 
   console.log(`[notarize-macos] Submitted: ${submissionId}`);
 
-  state[archKey] = { submissionId, status: "submitted", timestamp: new Date().toISOString() };
+  state[archKey] = {
+    submissionId,
+    status: "submitted",
+    cdhash,
+    timestamp: new Date().toISOString(),
+  };
   writeState(outDir, state);
 
   try {
@@ -185,15 +260,17 @@ async function submitAndWait(state, archKey, appPath, appName, outDir) {
       console.log(
         `[notarize-macos] Wait timed out for ${submissionId} — submission continues server-side`
       );
-      throw new Error(
-        `[notarize-macos] Notarization wait timed out (${WAIT_TIMEOUT_SECONDS}s). ` +
-          `Submission ID: ${submissionId}. Re-run the workflow to reattach and staple.`
-      );
+      throw timeoutError(submissionId);
     }
     throw err;
   }
 
-  state[archKey] = { submissionId, status: "accepted", timestamp: new Date().toISOString() };
+  state[archKey] = {
+    submissionId,
+    status: "accepted",
+    cdhash,
+    timestamp: new Date().toISOString(),
+  };
   writeState(outDir, state);
 
   await stapleApp(appPath, appName, archKey);

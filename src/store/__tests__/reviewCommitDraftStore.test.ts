@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { useReviewCommitDraftStore } from "../reviewCommitDraftStore";
+import { hasTypedCommitDraft, useReviewCommitDraftStore } from "../reviewCommitDraftStore";
 
 const draftFor = (path: string) => useReviewCommitDraftStore.getState().draftsByWorktree[path];
 
@@ -61,5 +61,19 @@ describe("reviewCommitDraftStore (#15007)", () => {
 
     expect(draftFor("/repo/a")).toBeUndefined();
     expect(draftFor("/repo/b")).toBe("fix: b");
+  });
+
+  it("counts a draft as typed work only while it has text (#15574)", () => {
+    const { setDraft, clearCommitted } = useReviewCommitDraftStore.getState();
+    expect(hasTypedCommitDraft()).toBe(false);
+
+    setDraft("/repo/a", "  ");
+    expect(hasTypedCommitDraft()).toBe(false);
+
+    setDraft("/repo/b", "feat: b");
+    expect(hasTypedCommitDraft()).toBe(true);
+
+    clearCommitted("/repo/b", "feat: b");
+    expect(hasTypedCommitDraft()).toBe(false);
   });
 });

@@ -58,6 +58,30 @@ vi.mock("@/components/ui/context-menu", async (importOriginal) => ({
     <div data-testid="context-menu-content">{children}</div>
   ),
   ContextMenuSeparator: () => <hr data-testid="menu-separator" />,
+  ContextMenuSub: ({ children }: { children: ReactNode }) => (
+    <div data-testid="menu-sub">{children}</div>
+  ),
+  ContextMenuSubTrigger: ({ children }: { children: ReactNode }) => (
+    <div data-testid="menu-sub-trigger">{children}</div>
+  ),
+  ContextMenuSubContent: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  ContextMenuRadioGroup: ({ value, children }: { value: string; children: ReactNode }) => (
+    <div role="group" data-value={value}>
+      {children}
+    </div>
+  ),
+  ContextMenuRadioItem: ({ value, children }: { value: string; children: ReactNode }) => (
+    <div role="menuitemradio" data-value={value}>
+      {children}
+    </div>
+  ),
+  // View ▸ ends with the plain Collapse / Expand all rows, which are Radix
+  // items and so need a Menu ancestor the stubbed content does not provide.
+  ContextMenuItem: ({ disabled, children }: { disabled?: boolean; children: ReactNode }) => (
+    <div role="menuitem" data-plain-item="" aria-disabled={disabled ? "true" : undefined}>
+      {children}
+    </div>
+  ),
   ContextMenuActionItem: ({
     actionId,
     args,
@@ -74,6 +98,8 @@ vi.mock("@/components/ui/context-menu", async (importOriginal) => ({
 }));
 
 const { Sidebar } = await import("../Sidebar");
+const { hostFileManagerRevealLabel } = await import("@/hooks/useHostPlatform");
+const { useWorktreeFilterStore } = await import("@/store/worktreeFilterStore");
 
 const GIT_PROJECT: WorkspaceRoot = {
   kind: "project",
@@ -139,11 +165,32 @@ describe("Sidebar background context menu — workspace kind (#11499)", () => {
     ]);
   });
 
+  it("offers the card density under View for a git-backed project, set to the stored value", () => {
+    workspaceRoot.mockReturnValue(GIT_PROJECT);
+
+    renderSidebar();
+
+    expect(screen.getByTestId("menu-sub-trigger").textContent).toContain("View");
+    expect(screen.getAllByRole("menuitemradio").map((el) => el.getAttribute("data-value"))).toEqual(
+      ["comfortable", "compact"]
+    );
+    expect(screen.getByRole("group").getAttribute("data-value")).toBe(
+      useWorktreeFilterStore.getState().cardDensity
+    );
+    // The list-level fold follows the density choice, after a separator.
+    const sub = screen.getByTestId("menu-sub");
+    const folds = Array.from(sub.querySelectorAll("[data-plain-item]")).map((el) => el.textContent);
+    expect(folds).toEqual(["Collapse all cards", "Expand all cards"]);
+    const group = screen.getByRole("group");
+    expect(group.nextElementSibling?.getAttribute("data-testid")).toBe("menu-separator");
+  });
+
   it("drops every worktree entry in a scratch", () => {
     workspaceRoot.mockReturnValue(SCRATCH);
 
     renderSidebar();
     const ids = renderedActionIds();
+    expect(screen.queryByTestId("menu-sub-trigger")).toBeNull();
 
     expect(ids).not.toContain("worktree.createDialog.open");
     expect(ids).not.toContain("worktree.refresh");
@@ -186,7 +233,10 @@ describe("Sidebar background context menu — workspace kind (#11499)", () => {
       .getAllByRole("menuitem")
       .find((el) => el.getAttribute("data-action-id") === "system.openPath");
     expect(reveal?.getAttribute("data-args")).toBe(JSON.stringify({ path: SCRATCH.path }));
-    expect(reveal?.textContent).toContain("Reveal workspace in Finder");
+    // A local window names the host's own file manager, as the card menus do,
+    // rather than saying Finder on every platform.
+    expect(reveal?.textContent).toBe(hostFileManagerRevealLabel());
+    expect(reveal?.textContent).not.toContain("workspace");
   });
 
   it("keeps project settings for a folder opened without git, but not its worktree entries", () => {

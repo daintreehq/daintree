@@ -96,6 +96,7 @@ vi.mock("../projectQuarantineCleanup.js", () => ({
 
 import { ProjectStore } from "../ProjectStore.js";
 import { ProjectIdentityFiles } from "../ProjectIdentityFiles.js";
+import { readProjectGroups, writeProjectGroups } from "../projectGroupsDocument.js";
 import { setWritesSuppressed, resetWritesSuppressedForTesting } from "../diskPressureState.js";
 
 async function makeDir(name: string): Promise<string> {
@@ -144,6 +145,67 @@ describe("opening a folder without git (#11405)", () => {
     expect(store.getProjectById(project.id)?.gitBacked).toBe(false);
   });
 
+  it("files a newly adopted folder under the group it was created with", async () => {
+    writeProjectGroups([
+      { id: "g1", name: "Daintree", position: 0, sortMode: "mostUsed", createdAt: 0 },
+    ]);
+    const folder = await makeDir("downloads");
+
+    const project = await store.addProject(folder, { gitBacked: false, groupId: "g1" });
+
+    expect(project.groupId).toBe("g1");
+    expect(store.getProjectById(project.id)?.groupId).toBe("g1");
+  });
+
+  it("adopts the folder ungrouped when its group no longer exists", async () => {
+    const folder = await makeDir("downloads");
+
+    const project = await store.addProject(folder, { gitBacked: false, groupId: "gone" });
+
+    expect(project.groupId).toBeUndefined();
+    expect(sqlite.prepare("SELECT group_id FROM projects WHERE id = ?").get(project.id)).toEqual({
+      group_id: null,
+    });
+  });
+
+  it("adopts the folder ungrouped when its group is deleted during the add's last await", async () => {
+    writeProjectGroups([
+      { id: "g1", name: "Daintree", position: 0, sortMode: "mostUsed", createdAt: 0 },
+    ]);
+    const lookUp = store.getProjectByPath.bind(store);
+    vi.spyOn(store, "getProjectByPath").mockImplementation(async (projectPath) => {
+      writeProjectGroups(readProjectGroups().filter((group) => group.id !== "g1"));
+      return lookUp(projectPath);
+    });
+    const folder = await makeDir("downloads");
+
+    const project = await store.addProject(folder, { gitBacked: false, groupId: "g1" });
+
+    expect(project.groupId).toBeUndefined();
+    expect(store.getProjectById(project.id)?.groupId).toBeUndefined();
+  });
+
+  it("keeps a lightweight row's membership through re-adds and promotion to a repository", async () => {
+    writeProjectGroups([
+      { id: "g1", name: "Daintree", position: 0, sortMode: "mostUsed", createdAt: 0 },
+      { id: "g2", name: "Clients", position: 1, sortMode: "mostUsed", createdAt: 1 },
+    ]);
+    const folder = await makeDir("adopted");
+    const first = await store.addProject(folder, { gitBacked: false, groupId: "g1" });
+
+    const reopened = await store.addProject(folder, { gitBacked: false, groupId: "g2" });
+    expect(reopened.groupId).toBe("g1");
+
+    // What git init on an adopted folder lands on: the creation choice it
+    // carries must not refile the row that already exists.
+    repoPaths.add(folder);
+    const promoted = await store.addProject(folder, { groupId: "g2" });
+
+    expect(promoted.id).toBe(first.id);
+    expect(promoted.groupId).toBe("g1");
+    expect(store.getProjectById(first.id)?.groupId).toBe("g1");
+  });
+
   it("reopens a known lightweight folder without opting in again", async () => {
     const folder = await makeDir("downloads");
     const first = await store.addProject(folder, { gitBacked: false });
@@ -178,6 +240,21 @@ describe("opening a folder without git (#11405)", () => {
     expect(promoted.id).toBe(lightweight.id);
     expect(promoted.gitBacked).toBeUndefined();
     expect(store.getAllProjects()).toHaveLength(1);
+  });
+
+  it("tells registry listeners of a lightweight add and of its promotion, not of a plain reopen", async () => {
+    const folder = await makeDir("adopted");
+    const heard = vi.fn();
+    store.onProjectRegistryChanged(heard);
+
+    await store.addProject(folder, { gitBacked: false });
+    expect(heard).toHaveBeenCalledTimes(1);
+    await store.addProject(folder);
+    expect(heard).toHaveBeenCalledTimes(1);
+
+    repoPaths.add(folder);
+    await store.addProject(folder);
+    expect(heard).toHaveBeenCalledTimes(2);
   });
 
   it("persists a mode change even while writes are suppressed", async () => {
