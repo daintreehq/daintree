@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vites
 import fs from "fs";
 import path from "path";
 import Module from "module";
+import { patchNodePtyFork } from "./patchNodePtyFork.cjs";
 import { patchNodePtyConptySource } from "./patchNodePtyConpty.cjs";
 
 const mockRebuild = vi.fn();
@@ -33,11 +34,25 @@ const UNPATCHED_CONPTY = fs.readFileSync(
   "utf8"
 );
 const PATCHED_CONPTY = patchNodePtyConptySource(UNPATCHED_CONPTY);
+const AGENT_PATH = path.resolve(
+  __dirname,
+  "..",
+  "node_modules",
+  "node-pty",
+  "lib",
+  "windowsPtyAgent.js"
+);
+const AGENT_SOURCE = fs.readFileSync(
+  path.join(__dirname, "__fixtures__", "node-pty-windows-fork-beta18.js.txt"),
+  "utf8"
+);
+const PATCHED_AGENT = patchNodePtyFork(AGENT_SOURCE);
 
-function serveFiles({ gyp = UNPATCHED_GYP, conpty = PATCHED_CONPTY } = {}) {
+function serveFiles({ gyp = UNPATCHED_GYP, conpty = PATCHED_CONPTY, agent = PATCHED_AGENT } = {}) {
   mockReadFileSync.mockImplementation((file: string) => {
     if (file === BINDING_GYP) return gyp;
     if (file === CONPTY_CC) return conpty;
+    if (file === AGENT_PATH) return agent;
     throw new Error(`ENOENT: unexpected read of ${file}`);
   });
 }
@@ -281,6 +296,24 @@ describe("postinstall", () => {
     expect(errorCalls).toMatch(/Postinstall failures \(2\)/);
     expect(errorCalls).toMatch(/node-pty binding\.gyp patch/);
     expect(errorCalls).toMatch(/win-job-object/);
+  });
+
+  it("installs the Windows helper fix before rebuilding node-pty", async () => {
+    serveFiles({ gyp: PATCHED_GYP, agent: AGENT_SOURCE });
+    await runPostinstall();
+    expect(mockWriteFileSync).toHaveBeenCalledWith(AGENT_PATH, PATCHED_AGENT);
+    expect(mockWriteFileSync.mock.invocationCallOrder[0]).toBeLessThan(
+      mockRebuild.mock.invocationCallOrder[0]
+    );
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("fails the install when the Windows helper no longer matches", async () => {
+    serveFiles({ gyp: PATCHED_GYP, agent: "changed dependency" });
+    await runPostinstall();
+    expect(process.exitCode).toBe(1);
+    expect(consoleErrorSpy.mock.calls.flat().join(" ")).toMatch(/Windows helper patch/);
+    expect(rebuiltModules()).toContain("node-pty");
   });
 
   it("patches node-pty's conpty.cc before rebuilding node-pty", async () => {

@@ -5,6 +5,7 @@ const { rebuild } = require("@electron/rebuild");
 const { version: electronVersion } = require("electron/package.json");
 const { patchNodePtyBindingGyp } = require("./patchNodePtyBinding.cjs");
 const { patchNodePtyConptySource } = require("./patchNodePtyConpty.cjs");
+const { patchNodePtyFork } = require("./patchNodePtyFork.cjs");
 
 const NATIVE_MODULES = ["node-pty", "win-job-object", "posix-pty-reaper", "mac-phys-footprint"];
 
@@ -24,10 +25,17 @@ function patchNodePtyConpty() {
   if (patched !== source) fs.writeFileSync(conptyPath, patched);
 }
 
+function patchNodePtyWindowsHelper() {
+  const agentPath = path.join(buildPath, "node_modules", "node-pty", "lib", "windowsPtyAgent.js");
+  const source = fs.readFileSync(agentPath, "utf8");
+  const patched = patchNodePtyFork(source);
+  if (patched !== source) fs.writeFileSync(agentPath, patched);
+}
+
 async function runPostinstall() {
   const failures = [];
 
-  // Both patches must land before the node-pty rebuild below, which is what
+  // Native patches must land before the node-pty rebuild below, which is what
   // compiles them in. A failure still lets the rebuilds run so the install
   // stays usable; the non-zero exit is what stops CI and release builds from
   // shipping without them.
@@ -40,6 +48,11 @@ async function runPostinstall() {
     patchNodePtyConpty();
   } catch (err) {
     failures.push({ module: "node-pty conpty.cc patch", error: err });
+  }
+  try {
+    patchNodePtyWindowsHelper();
+  } catch (err) {
+    failures.push({ module: "node-pty Windows helper patch", error: err });
   }
 
   // better-sqlite3 is intentionally NOT rebuilt: since v13 it is an N-API
