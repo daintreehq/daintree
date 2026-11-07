@@ -2708,8 +2708,7 @@ describe("canopy IPC", () => {
 
     const holds = async (sender: unknown) => {
       const result = (await invoke(CANOPY_METHOD_CHANNELS.getSizeHolds, sender)) as
-        | { data: string[] }
-        | string[];
+        { data: string[] } | string[];
       return Array.isArray(result) ? result : result.data;
     };
 

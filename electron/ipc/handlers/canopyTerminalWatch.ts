@@ -531,11 +531,7 @@ export function claimWatchedSize(webContentsId: number, watchId: number): void {
 }
 
 /** {@link claimWatchedSize} for a reply sent by the run, if the view still streams that incarnation. */
-export function claimWatchedRunSize(
-  webContentsId: number,
-  runId: string,
-  spawnedAt: number
-): void {
+export function claimWatchedRunSize(webContentsId: number, runId: string, spawnedAt: number): void {
   for (const slot of SLOTS) {
     const watch = watches.get(watchKey(webContentsId, slot));
     if (watch?.runId === runId && watch.spawnedAt === spawnedAt) {

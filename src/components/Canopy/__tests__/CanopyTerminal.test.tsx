@@ -732,7 +732,14 @@ describe("CanopyTerminal", () => {
 
         // The panel's own box moves, and the PTY with it: neither is the user's doing here.
         view.frame.getBoundingClientRect = () =>
-          ({ width: 638.6, height: 504.6, top: 0, left: 0, right: 638.6, bottom: 504.6 }) as DOMRect;
+          ({
+            width: 638.6,
+            height: 504.6,
+            top: 0,
+            left: 0,
+            right: 638.6,
+            bottom: 504.6,
+          }) as DOMRect;
         await following(120, 36);
         await settle();
         expect(terminalResize).not.toHaveBeenCalled();
