@@ -938,6 +938,24 @@ describe("a panel on this machine holding the size (#16333)", () => {
       expect(resizes(first.pty)).toEqual([[120, 36]]);
     });
 
+    it("counts a hold that went across and back once, leaving the pane's own echo the pane's", async () => {
+      const { first, watchId } = await pair();
+      resizeWatchedTerminal(first.pty, 1, first.watchId, 110, 32);
+      claimWatchedSize(2, watchId);
+      claimWatchedSize(1, first.watchId);
+      echo(first.emitter, 110, 32);
+
+      // The pane happens to fit that same size.
+      yieldSizeToPane("run-1");
+      echo(first.emitter, 110, 32);
+
+      claimWatchedSize(1, first.watchId);
+      resizeWatchedTerminal(first.pty, 1, first.watchId, 100, 30);
+      vi.mocked(first.pty.resize).mockClear();
+      stopTerminalWatch(1);
+      expect(resizes(first.pty)).toEqual([[110, 32]]);
+    });
+
     it("lets a window put away before it ever measured go, without touching the other's hold", async () => {
       const first = await held(1);
       const second = fakeSender(2);
