@@ -957,6 +957,12 @@ describe("McpServerService", () => {
         description: "Read worktree state",
         kind: "query",
       }),
+      // On the full tool set alone (#16335), for the same reason as the next.
+      createManifestEntry({
+        id: "canopy.openWindow" as ActionId,
+        title: "Open Canopy in new window",
+        description: "Open Canopy's own window",
+      }),
       // On the full tool set, and externally (#12340). The fixture has to
       // carry it or the subset assertions below read its absence from this
       // manifest as an absence from the allowlist.
