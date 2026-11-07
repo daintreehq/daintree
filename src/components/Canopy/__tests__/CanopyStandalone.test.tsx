@@ -306,6 +306,8 @@ async function answerWatch(runId: string, watchId: number, screen: string) {
   await vi.waitFor(() => expect(watches.some((watch) => watch.runId === runId)).toBe(true));
   const watch = watches.find((candidate) => candidate.runId === runId)!;
   await act(async () => watch.answer({ watchId, snapshot: { data: screen, cols: 80, rows: 24 } }));
+  // It paints once its character widths are set, which can take a task longer.
+  await vi.waitFor(() => expect(xterm.current!.writes).toContain(screen));
 }
 
 let canopy: ReturnType<typeof installElectron>;
@@ -554,11 +556,13 @@ describe("Canopy's inbox with no dialog and no project", () => {
     const host = hostFrame();
     render(<CanopyView frame={host.frame} />);
     await settle();
+    await answerWatch(selectedRun()!.replace(/^canopy-card-/, ""), 7, "SCREEN");
 
-    await act(async () => {
-      fireEvent.keyDown(document.querySelector("[data-canopy-terminal]")!, { key: "Escape" });
-    });
+    // In one task, as xterm does it: the gesture the key opens ends with the next.
+    fireEvent.keyDown(document.querySelector("[data-canopy-terminal]")!, { key: "Escape" });
+    xterm.current!.emitData("\x1b");
 
+    expect(canopy.terminalInput).toHaveBeenCalledWith(7, "\x1b");
     expect(host.close).not.toHaveBeenCalled();
   });
 
@@ -605,6 +609,7 @@ describe("Canopy's inbox with no dialog and no project", () => {
     });
     await answerWatch("first", 7, "SCREEN");
 
+    await vi.waitFor(() => expect(resolveCanopyReplyDictation().ok).toBe(true));
     const dictation = resolveCanopyReplyDictation();
     if (!dictation.ok) throw new Error(dictation.message);
     expect(dictation.target.terminalId).toBeUndefined();
