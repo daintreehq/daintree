@@ -2188,6 +2188,63 @@ describe("canopy IPC", () => {
       expect(state.writes).toEqual(["a"]);
     });
 
+    describe("holding the global session's size (#16333)", () => {
+      const globalSubject = {
+        hostId: "local",
+        scope: { kind: "global" },
+        terminalId: "global-1",
+        incarnation: 1,
+      };
+
+      async function heldByOwner() {
+        assistants.global = {
+          terminalId: "global-1",
+          generation: 5,
+          owner: 7,
+          holder: { attachmentId: "a7", epoch: 2 },
+        };
+        const owner = await openAssistant(fakeSender(7), globalSubject, {
+          attachmentId: "a7",
+          inputEpoch: 2,
+        });
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, owner.sender, owner.watchId, 100, 30);
+        return owner;
+      }
+
+      it("takes no size back for a window that only reads the session", async () => {
+        const owner = await heldByOwner();
+        await invoke(CANOPY_METHOD_CHANNELS.takeTerminalSize, fakeSender(5), "global-1");
+
+        // Input moved to another window: this one reads, and its click claims nothing.
+        assistants.global!.holder = { attachmentId: "a9", epoch: 3 };
+        await invoke(CANOPY_METHOD_CHANNELS.terminalClaimSize, owner.sender, owner.watchId);
+
+        assistants.global!.holder = { attachmentId: "a7", epoch: 2 };
+        ptyClient.resize.mockClear();
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, owner.sender, owner.watchId, 100, 30);
+        expect(ptyClient.resize).not.toHaveBeenCalled();
+      });
+
+      it("tells the windows when the drive takes its hold away", async () => {
+        const pushed = () =>
+          pushes.mock.calls
+            .filter(
+              ([channel, envelope]) =>
+                channel === CHANNELS.EVENTS_PUSH &&
+                (envelope as { name: string }).name === "terminal:canopy-size-holds-changed"
+            )
+            .map(([, envelope]) => (envelope as { payload: string[] }).payload);
+        lease.holder = "self";
+        await heldByOwner();
+        expect(pushed().at(-1)).toEqual(["global-1"]);
+
+        lease.holder = "other";
+        for (const listener of lease.listeners) listener();
+
+        expect(pushed().at(-1)).toEqual([]);
+      });
+    });
+
     it("keeps the global session streaming beside a pane, through the panel closing (#16214)", async () => {
       assistants.global = { terminalId: "global-1", generation: 5, owner: 7 };
       const sender = fakeSender(7);
