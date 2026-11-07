@@ -41,7 +41,7 @@ const PRIVILEGE_WARNING =
 // An archive installs into the user folder, so it is app-wide, not scoped to one
 // project; a single grant answers for every project.
 const SCOPE_WARNING =
-  "It's installed for the whole app and available in every project, and one permission grant covers all of them.";
+  "It's installed for the whole app, not a single project, so it can be available in every project and a permission grant can apply to all of them.";
 
 const INSTALL_DESCRIPTION = `Installing writes this archive into Daintree's plugins folder, replacing any installed plugin with the same ID. ${PRIVILEGE_WARNING} ${SCOPE_WARNING}`;
 
