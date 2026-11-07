@@ -7,12 +7,7 @@ import type {
 } from "../../viewless/viewlessAgentResume.js";
 
 const resume = vi.hoisted(() =>
-  vi.fn<
-    (
-      request: AgentSessionPaneRequest,
-      options?: { unreportedStarted?: boolean }
-    ) => Promise<AgentSessionPaneResult>
-  >()
+  vi.fn<(request: AgentSessionPaneRequest) => Promise<AgentSessionPaneResult>>()
 );
 const describeWorkspace = vi.hoisted(() => vi.fn());
 
@@ -70,14 +65,6 @@ describe("agent.resumeOwned in main (#16341)", () => {
     await run(authorize, "project-2");
 
     expect(authorize).toHaveBeenCalledWith("project-2");
-  });
-
-  it("reads a spawn that never reports as no start, since nothing waits on it after", async () => {
-    launches();
-
-    await run();
-
-    expect(resume.mock.calls[0]![1]).toEqual({ unreportedStarted: false });
   });
 
   it("answers `launched` with the workspace the ledger records it under", async () => {

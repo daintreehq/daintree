@@ -151,9 +151,7 @@ export async function spawnHostAssistantLive(
 
 /** Reopen a saved agent session as a pane of its worktree (#16000); see `resumeAgentSessionAsPane`. */
 export async function resumeAgentSessionAsPaneLive(
-  request: import("./viewlessAgentResume.js").AgentSessionPaneRequest,
-  /** What no spawn report in time means; see `spawnAndConfirm`. */
-  options?: { unreportedStarted?: boolean }
+  request: import("./viewlessAgentResume.js").AgentSessionPaneRequest
 ): Promise<import("./viewlessAgentResume.js").AgentSessionPaneResult> {
   const [{ resumeAgentSessionAsPane }, { spawnAndConfirm }, { getPtyClient }, { stat }, deps] =
     await Promise.all([
@@ -172,8 +170,7 @@ export async function resumeAgentSessionAsPaneLive(
           await spawn();
           return true;
         },
-        terminalId,
-        options
+        terminalId
       ),
   });
 }

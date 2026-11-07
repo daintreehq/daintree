@@ -717,7 +717,6 @@ describe("resumeAgentSessionAsPane", () => {
     const getProjectState = deps.getProjectState;
     deps.getProjectState = async (projectId) => {
       const state = await getProjectState(projectId);
-      // The last read: a yield here would let a check placed before it run first.
       await new Promise((resolve) => setImmediate(resolve));
       order.push("layout read");
       return state;
@@ -733,8 +732,8 @@ describe("resumeAgentSessionAsPane", () => {
       makeRuntime()
     );
 
-    expect(order.at(-1)).toBe("asked");
-    expect(order).toContain("layout read");
+    // The panel count reads the layout first; the holder scan's read is the last.
+    expect(order).toEqual(["layout read", "layout read", "asked"]);
     expect(authorizeSpawn).toHaveBeenCalledTimes(1);
     expect(result).toEqual({
       status: "refused",
