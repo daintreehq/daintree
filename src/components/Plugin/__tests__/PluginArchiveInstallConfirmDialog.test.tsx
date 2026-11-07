@@ -733,6 +733,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
 
       expect(screen.getByText("Install 'Acme Tool'?")).toBeTruthy();
       expect(screen.getByText(/replacing any installed plugin with the same ID/)).toBeTruthy();
+      expect(screen.getByText(/available in every project/)).toBeTruthy();
       expect(installedRowText()).toBeNull();
       armConfirm();
       expect(confirmButton().hasAttribute("aria-disabled")).toBe(false);
@@ -749,6 +750,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
         /Installing replaces the installed v1\.0\.0 with this newer v1\.2\.3\./
       );
       expect(description.textContent).toContain("full Node.js privileges");
+      expect(description.textContent).toContain("available in every project");
       expect(screen.queryByText(/replacing any installed plugin/)).toBeNull();
       expect(installedRowText()).toBe("Replaces installed v1.0.0Update");
       expect(confirmBadgeTone()).toBe("outline");
