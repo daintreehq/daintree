@@ -29,8 +29,11 @@ const LAUNCHED: AgentSessionPaneResult = {
   savedInLayout: true,
 };
 
-const run = (authorize?: () => void, projectId: string | null = "project-1", args: unknown = ARGS) =>
-  handleAgentResumeOwned(args, projectId, new AbortController().signal, authorize);
+const run = (
+  authorize?: () => void,
+  projectId: string | null = "project-1",
+  args: unknown = ARGS
+) => handleAgentResumeOwned(args, projectId, new AbortController().signal, authorize);
 
 /** The helper as the launching call sees it: asked, then answered. */
 function launches(result: AgentSessionPaneResult = LAUNCHED) {
