@@ -1233,7 +1233,12 @@ describe("a window whose bounds are its own (the Canopy window, #16336)", () => 
 
     openCanopy();
 
-    expect(winInstance.setBounds).toHaveBeenCalledWith({ x: 640, y: 200, width: 1280, height: 860 });
+    expect(winInstance.setBounds).toHaveBeenCalledWith({
+      x: 640,
+      y: 200,
+      width: 1280,
+      height: 860,
+    });
   });
 
   it("saves under its own key alone, so a project window never opens where it was", () => {

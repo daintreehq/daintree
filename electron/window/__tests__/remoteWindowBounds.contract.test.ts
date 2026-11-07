@@ -166,9 +166,7 @@ describe("the Canopy window's wiring", () => {
     const callback = factory?.arguments[0];
     const [setup] = factory ? callsTo(factory, "setupBrowserWindow") : [];
     const options = setup?.arguments[1] as ts.ObjectLiteralExpression;
-    const reveal = options.properties.find(
-      (property) => property.name?.getText() === "revealMode"
-    );
+    const reveal = options.properties.find((property) => property.name?.getText() === "revealMode");
 
     expect(callback && ts.isArrowFunction(callback)).toBe(true);
     const [parameter] = (callback as ts.ArrowFunction).parameters;

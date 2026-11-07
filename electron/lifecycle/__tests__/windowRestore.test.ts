@@ -565,7 +565,10 @@ describe("restoreWindowFleet", () => {
       "stays quiet when the focused window comes back %s",
       async (result) => {
         const onPrimaryWindowUp = vi.fn();
-        h = harness({ records: [record("a")], hadManifest: true, onPrimaryWindowUp }, async () => result);
+        h = harness(
+          { records: [record("a")], hadManifest: true, onPrimaryWindowUp },
+          async () => result
+        );
         await restoreWindowFleet(h.deps);
         expect(onPrimaryWindowUp).not.toHaveBeenCalled();
       }
