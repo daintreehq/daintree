@@ -2,10 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
-import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { buildPilotGroups, type PilotWorkspaceMeta } from "@/components/Pilot/pilotRows";
 import { buildCanopyInbox } from "./canopyModel";
+import { useCanopyFrame } from "./canopyFrame";
 import { ALL_HOSTS_LABEL } from "./CanopyHostPicker";
 import {
   ownCanopyApi,
@@ -58,6 +58,7 @@ export function useCanopyInboxData({
   /** The hosts read together when `hostId` is All hosts. */
   hostRows: readonly HostMenuRow[] | null;
 }) {
+  const frame = useCanopyFrame();
   // Another host is read through its own Canopy and shown as it read it: its
   // runs can be read, archived and marked here, and nothing else is done to
   // them until it can reach them. The window's own stores never hold its data.
@@ -151,7 +152,10 @@ export function useCanopyInboxData({
   const hostProjects = useHostProjectLists(
     everyHost ? remoteIds : hostId === null ? NO_HOSTS : [hostId]
   );
-  const storedScope = useCanopyStore((s) => s.scope);
+  // A host with no project leaves the user's choice alone, for the windows that have one.
+  const inProject = frame.host === "dialog";
+  const remembered = useCanopyStore((s) => s.scope);
+  const storedScope: CanopyScope = inProject ? remembered : "all";
   const setScope = useCanopyStore((s) => s.setScope);
   // "This project" is the window's own project: another host shows all of its own.
   const scope: CanopyScope = otherHost ? "all" : storedScope;
@@ -180,9 +184,9 @@ export function useCanopyInboxData({
   useEffect(() => {
     if (!isOpen) return;
     safeFireAndForget(
-      unlessHostDisconnected(api.setScope(scope === "project" ? getViewWorkspaceId() : null))
+      unlessHostDisconnected(api.setScope(scope === "project" ? frame.workspaceId() : null))
     );
-  }, [isOpen, scope, api, recoveries]);
+  }, [isOpen, scope, api, recoveries, frame]);
 
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
@@ -260,7 +264,7 @@ export function useCanopyInboxData({
   const baseItems = useMemo(() => {
     if (!fleet) return [];
     // No project on another host is the one this window shows.
-    const here = otherHost ? null : getViewWorkspaceId();
+    const here = otherHost ? null : frame.workspaceId();
     const runs =
       scope === "project" ? fleet.runs.filter((run) => run.workspaceId === here) : fleet.runs;
     const groups = buildPilotGroups(runs, {
@@ -284,9 +288,10 @@ export function useCanopyInboxData({
       new Map((canopy?.glances ?? []).map((entry) => [entry.runId, entry])),
       new Map((canopy?.reads ?? []).map((entry) => [entry.runId, entry]))
     );
-  }, [fleet, workspaces, nowMs, canopy, scope, otherHost, readerOff, merged]);
+  }, [fleet, workspaces, nowMs, canopy, scope, otherHost, readerOff, merged, frame]);
 
   return {
+    inProject,
     otherHost,
     everyHost,
     readerOff,

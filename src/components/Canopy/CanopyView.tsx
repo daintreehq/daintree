@@ -12,7 +12,6 @@ import { Globe, Keyboard, RefreshCw } from "lucide-react";
 import { formatWaitAge } from "@/lib/projectRowStatus";
 import { Telescope } from "@/components/icons";
 import { useCanopyStore } from "@/store/canopyStore";
-import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 import { latestUndoOnly, UNDO_TOAST_DURATION_MS } from "@/lib/undoToast";
@@ -56,6 +55,13 @@ import { CanopyPitch } from "./CanopyPitch";
 import { CanopyListColumn } from "./CanopyListColumn";
 import { CANOPY_TITLE } from "./canopyTerms";
 import { CanopyHeaderCenter, CanopyHostPicker, useCanopyHostRows } from "./CanopyHostPicker";
+import {
+  CANOPY_DIALOG_FRAME,
+  CanopyFrameProvider,
+  useCanopyFrame,
+  type CanopyFrame,
+} from "./canopyFrame";
+import { CanopyCloseButton, CanopySurface } from "./CanopySurface";
 import { CanopyHostOffer, CanopyHostOutdated } from "./CanopyHostOffer";
 import { useCanopyInboxData } from "./useCanopyInboxData";
 import { useCanopyInboxOrder } from "./useCanopyInboxOrder";
@@ -75,7 +81,6 @@ import {
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { isActiveVoiceSession } from "@shared/types";
 import { placeOf } from "./canopyInboxPlace";
-import { restoreInItsProject } from "./canopyRestoreElsewhere";
 import type { CanopyTrashItem } from "./canopyTrash";
 import { parseAllHostsKey } from "./canopyAllHosts";
 import { CanopyAssistantPane, CanopyAssistantRow } from "./CanopyAssistantList";
@@ -220,7 +225,7 @@ async function hideCanopy(): Promise<void> {
  * work to look at, and working agents gone a while without a look. Pilot's
  * population, with the words and the controls to act without leaving the panel.
  */
-export function CanopyView() {
+export function CanopyView({ frame = CANOPY_DIALOG_FRAME }: { frame?: CanopyFrame }) {
   const [bulkTargets, setBulkTargets] = useState<readonly BulkTarget[] | null>(null);
   // Frozen when the person opens it: hosts listed later are not in this run.
   const openBulk = useCallback((rows: readonly HostMenuRow[]) => {
@@ -237,6 +242,15 @@ export function CanopyView() {
   useEffect(() => {
     if (!panelOpen) setBulkTargets(null);
   }, [panelOpen]);
+  // A standalone host shows the inbox for as long as it mounts it: nothing else
+  // opens it there. Hidden, it stays shut, as it does everywhere.
+  const standalone = frame.host === "standalone";
+  useLayoutEffect(() => {
+    if (!standalone) return;
+    const { open, close } = useCanopyStore.getState();
+    open();
+    return close;
+  }, [standalone]);
   const transportFor = useCallback(
     (target: BulkTarget) =>
       canopyBulkTransport(target.hostId, {
@@ -249,7 +263,7 @@ export function CanopyView() {
     []
   );
   return (
-    <>
+    <CanopyFrameProvider value={frame}>
       <CanopyPanel onEnableAll={openBulk} />
       <CanopyBulkEnableDialog
         isOpen={bulkTargets !== null}
@@ -257,15 +271,17 @@ export function CanopyView() {
         targets={bulkTargets ?? NO_BULK_TARGETS}
         deps={{ transportFor }}
       />
-    </>
+    </CanopyFrameProvider>
   );
 }
 
 const NO_BULK_TARGETS: readonly BulkTarget[] = [];
 
 function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow[]) => void }) {
+  const frame = useCanopyFrame();
+  const inDialog = frame.host === "dialog";
+  const close = frame.close;
   const isOpen = useCanopyStore((s) => s.isOpen);
-  const close = useCanopyStore((s) => s.close);
   const activated = useCanopyStore((s) => s.snapshot?.activated ?? null);
   // The offer to turn reading on is one press from the list, never in front of it.
   const [pitchOpen, setPitchOpen] = useState(false);
@@ -296,12 +312,12 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
   useEffect(() => {
     if (!hostListed) setHostId(null);
   }, [hostListed, setHostId]);
-  useOverlayClaim("canopy", isOpen);
+  useOverlayClaim("canopy", isOpen && inDialog);
   // A view put in the background — another project shown in its place — can
   // be seen by no one: an inbox left open there would keep its pages held
   // back, and hold an agent's terminal at its size.
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || !inDialog) return;
     // Already there: opened by a key while the panel's code loaded, and the
     // project switched away before it mounted.
     if (isProjectViewCached()) {
@@ -311,7 +327,7 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
     return subscribeProjectViewLifecycle((phase) => {
       if (phase === "cached") close();
     });
-  }, [isOpen, close]);
+  }, [isOpen, inDialog, close]);
   // What had the keyboard when the panel opened, kept here because the dialog
   // can be replaced while open (loading, then the offer or the inbox), and a
   // new one would take the old one's own content for its opener.
@@ -398,26 +414,23 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
   // inbox, so neither flashes before the other replaces it.
   if (activated === null) {
     return (
-      <AppDialog
+      <CanopySurface
         isOpen={isOpen}
-        onClose={close}
-        placement="window"
         // Nothing to land on yet, and Close is no place for a reflexive Enter.
         initialFocus="none"
         restoreFocusTo={restoreOnReplace}
         preferRestoreFocusTo
-        data-testid="canopy-dialog"
       >
         <AppDialog.Header>
           <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
           <CanopyHeaderCenter>{hostPicker}</CanopyHeaderCenter>
-          <AppDialog.CloseButton />
+          <CanopyCloseButton />
         </AppDialog.Header>
         {/* The keyboard waits here, inside the dialog, rather than on
             whatever opened it — a terminal behind the scrim would take the
             keys — and not on Close, where a reflexive Enter would dismiss it. */}
         <div ref={loadingRef} tabIndex={-1} className="flex-1" aria-busy="true" />
-      </AppDialog>
+      </CanopySurface>
     );
   }
 
@@ -425,21 +438,14 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
   // nothing it read is shown, and Canopy isn't offered until it is updated.
   if (outdatedOwnHost && !allHosts) {
     return (
-      <AppDialog
-        isOpen={isOpen}
-        onClose={close}
-        placement="window"
-        restoreFocusTo={restoreOnReplace}
-        preferRestoreFocusTo
-        data-testid="canopy-dialog"
-      >
+      <CanopySurface isOpen={isOpen} restoreFocusTo={restoreOnReplace} preferRestoreFocusTo>
         <AppDialog.Header>
           <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
           <CanopyHeaderCenter>{hostPicker}</CanopyHeaderCenter>
-          <AppDialog.CloseButton />
+          <CanopyCloseButton />
         </AppDialog.Header>
         <CanopyHostOutdated hostName="this host" />
-      </AppDialog>
+      </CanopySurface>
     );
   }
 
@@ -449,7 +455,6 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
     return (
       <CanopyPitch
         isOpen={isOpen}
-        onClose={close}
         onTurnOn={() => window.electron.canopy.setMode("on").then(applySnapshot)}
         onHide={hideCanopy}
         restoreFocusTo={restoreOnReplace}
@@ -641,10 +646,11 @@ function CanopyInbox({
   /** The window's own host with its reader off: opens the pitch. */
   onOfferReading?: (() => void) | null;
 }) {
+  const frame = useCanopyFrame();
   const isOpen = useCanopyStore((s) => s.isOpen);
-  const close = useCanopyStore((s) => s.close);
   const setGlobalDocked = useCanopyStore((s) => s.setGlobalDocked);
   const {
+    inProject,
     otherHost,
     everyHost,
     readerOff,
@@ -802,7 +808,6 @@ function CanopyInbox({
     focusAfterClose,
   } = useCanopyInboxFocus({
     isOpen,
-    close,
     hostId,
     ownHostId,
     otherHost,
@@ -1009,16 +1014,16 @@ function CanopyInbox({
   }, [hostId, isOpen]);
   const onRestoreElsewhere = useCallback(
     (item: CanopyTrashItem) =>
-      restoreInItsProject(
+      frame.restoreElsewhere(
         item,
-        { hostId, ownHostId },
+        placeOf({ runId: item.runId, workspaceId: item.row.run.workspaceId }, hostId, ownHostId),
         {
           closeForTerminal,
           // A panel since closed, or showing another host, is the user's newer choice.
           stillShows: () => showsHost(hostId) && useCanopyStore.getState().isOpen,
         }
       ),
-    [hostId, ownHostId, closeForTerminal, showsHost]
+    [frame, hostId, ownHostId, closeForTerminal, showsHost]
   );
   useEffect(() => {
     if (restored === null) return;
@@ -1064,12 +1069,12 @@ function CanopyInbox({
   const dockAnnounces = useCallback(
     (workspaceId: string) => {
       if (otherHost && !everyHost) return false;
-      const here = getViewWorkspaceId();
+      const here = frame.workspaceId();
       if (!everyHost) return workspaceId === here;
       const place = parseAllHostsKey(workspaceId);
       return place !== null && place.hostId === ownHostId && place.id === here;
     },
-    [otherHost, everyHost, ownHostId]
+    [frame, otherHost, everyHost, ownHostId]
   );
   const trashActed = useTrashExpiryAnnouncer({
     active: isOpen,
@@ -1473,7 +1478,7 @@ function CanopyInbox({
             : { value: filter.id, label: filter.label }
         )}
       />
-      {!otherHost && (
+      {!otherHost && inProject && (
         <SegmentedRadioGroup<"all" | "project">
           aria-label="Agents to show"
           className="mr-3"
@@ -1526,22 +1531,19 @@ function CanopyInbox({
           </Tooltip>
         )}
       </span>
-      <AppDialog.CloseButton />
+      <CanopyCloseButton />
     </>
   );
 
   return (
-    <AppDialog
+    <CanopySurface
       isOpen={isOpen}
-      onClose={close}
-      placement="window"
       // The panel lands on its first run itself, two frames in; the dialog's own
       // first-control focus would race it. With no rows to land on, the first
       // control takes focus instead of leaving it on whatever opened the panel.
       initialFocus={items.length > 0 && !hostHeld ? "none" : "first"}
       restoreFocusTo={() => focusAfterClose() ?? restoreOpener()}
       preferRestoreFocusTo
-      data-testid="canopy-dialog"
     >
       <AppDialog.Header>
         {hostPicker ? (
@@ -2325,6 +2327,6 @@ function CanopyInbox({
           <LazyParkRunDialog key={parkRunId} runId={parkRunId} onClose={closePark} />
         </Suspense>
       )}
-    </AppDialog>
+    </CanopySurface>
   );
 }

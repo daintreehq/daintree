@@ -11,6 +11,7 @@ import { CANOPY_DEMO_FRAME_COUNT, canopyDemoItems } from "./canopyDemo";
 import { itemNeedsAttention } from "./canopyModel";
 import { useListReorderMotion } from "./useListReorderMotion";
 import { CanopyHeaderCenter } from "./CanopyHostPicker";
+import { CanopyCloseButton, CanopySurface } from "./CanopySurface";
 import { canopyListStyle } from "./canopyListWidth";
 import { CANOPY_LOCAL, CANOPY_STOP, CANOPY_TITLE } from "./canopyTerms";
 
@@ -37,7 +38,6 @@ const POINTS = [
 
 interface CanopyPitchProps {
   isOpen: boolean;
-  onClose: () => void;
   /** The user turned Canopy on: its model downloads and screens are read on this computer. */
   onTurnOn: () => Promise<void>;
   /** The user doesn't want Canopy: its ways in go, all but Settings. */
@@ -60,7 +60,6 @@ const FAILED: Record<"on" | "hide", string> = {
  */
 export function CanopyPitch({
   isOpen,
-  onClose,
   onTurnOn,
   onHide,
   restoreFocusTo,
@@ -92,18 +91,15 @@ export function CanopyPitch({
   };
 
   return (
-    <AppDialog
+    <CanopySurface
       isOpen={isOpen}
-      onClose={onClose}
-      placement="window"
       initialFocus="none"
       {...(restoreFocusTo ? { restoreFocusTo, preferRestoreFocusTo: true } : {})}
-      data-testid="canopy-dialog"
     >
       <AppDialog.Header>
         <AppDialog.Title icon={<Telescope />}>{CANOPY_TITLE}</AppDialog.Title>
         <CanopyHeaderCenter>{hostPicker}</CanopyHeaderCenter>
-        <AppDialog.CloseButton />
+        <CanopyCloseButton />
       </AppDialog.Header>
       <div className="canopy-frame flex min-h-0 flex-1">
         <DemoInbox paused={!isOpen} />
@@ -170,7 +166,7 @@ export function CanopyPitch({
           </div>
         </section>
       </div>
-    </AppDialog>
+    </CanopySurface>
   );
 }
 

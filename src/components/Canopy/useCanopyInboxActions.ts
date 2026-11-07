@@ -3,14 +3,10 @@ import type { RefObject } from "react";
 import type { CanopyReadMark } from "@shared/types/ipc/canopy";
 import type { HostId } from "@shared/types/remoteHosts";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { useCanopyStore } from "@/store/canopyStore";
-import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 import { pluralize } from "@/lib/pluralize";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import { consumePaletteFocusRestoreSuppression } from "@/components/ui/paletteFocusRestore";
-import { switchToHost } from "@/components/Hosts/hostSwitching";
 import type { AgentSnoozeDurationOption } from "@shared/utils/agentSnoozeDurations";
 import { itemArchived, itemSubject, type CanopyItem } from "./canopyModel";
 import {
@@ -21,6 +17,7 @@ import {
 } from "./CanopyCard";
 import type { CanopyRowMenuActions } from "./CanopyRowMenu";
 import type { CanopyApi, CanopyTerminalApi } from "./canopyHostSource";
+import { useCanopyFrame } from "./canopyFrame";
 import { placeOf } from "./canopyInboxPlace";
 
 /** An error toast whose one recovery is the place the action can be done by hand. */
@@ -102,6 +99,7 @@ export function useCanopyInboxActions({
   menuOpenChanged: (open: boolean) => void;
   requestRank: () => void;
 }) {
+  const frame = useCanopyFrame();
   // A deliberate act on a run reads it at once — going to it, a click,
   // answering, replying — through the turn it showed. Merely arriving on it
   // reads it only once it has stayed in front of the user (main's dwell).
@@ -118,46 +116,14 @@ export function useCanopyInboxActions({
   const handlers = useMemo<CanopyCardHandlers>(() => {
     const openRun = (item: CanopyItem, newWindow = false) => {
       readNow(item);
-      const place = placeOf(item, hostId, ownHostId);
-      if (place.hostId !== null) {
-        // Another host's run: the window moves to that host and project (or a
-        // new one opens there, or the window already showing it comes
-        // forward), and the pane is focused wherever it lands. The panel
-        // stays open on a switch that didn't happen; its toast says why, and
-        // its Retry closes the panel once it lands.
-        const focusIntent = { intent: "focus-panel", panelId: place.runId } as const;
-        const placeHostId = place.hostId;
-        void switchToHost(placeHostId, newWindow, place.workspaceId, {
-          focusIntent,
-          onLanded: () => {
-            // A panel since closed, or showing another host, is the user's newer choice.
-            if (!showsHost(hostId)) return;
-            if (useCanopyStore.getState().isOpen) closeForTerminal(item.runId);
-          },
-        });
-        return;
-      }
-      const args = { runId: place.runId, workspaceId: place.workspaceId };
-      if (place.workspaceId !== getViewWorkspaceId()) {
-        // The switch replaces this view, so the panel closes first; the view
-        // is kept, and the panel opens where it was left when it comes back.
-        closeForTerminal(item.runId);
-        void actionService.dispatch("pilot.openRun", args, { source: "user" });
-        return;
-      }
-      // Here already: focus the terminal while the panel is still open, and
-      // close only once that worked. `pilot.openRun` arms the palette's
-      // focus-restore suppression on success, so the close can't hand focus
-      // back to whatever opened the panel.
-      void actionService.dispatch("pilot.openRun", args, { source: "user" }).then((result) => {
-        if (!result.ok) return;
-        // `pilot.openRun` arms the palettes' one-shot restore suppression; this
-        // is a dialog, which hands focus on by its own target instead, so the
-        // flag is taken here rather than left for the next palette to close.
-        consumePaletteFocusRestoreSuppression();
-        captureFocusAfterClose();
-        closeForTerminal(item.runId);
-      });
+      frame.goToRun(
+        { place: placeOf(item, hostId, ownHostId), listedRunId: item.runId, newWindow },
+        {
+          stillShows: () => showsHost(hostId) && useCanopyStore.getState().isOpen,
+          closeForTerminal,
+          captureFocusAfterClose,
+        }
+      );
     };
     // The incarnation on screen, so main refuses a terminal respawned since.
     const target = (item: CanopyItem) => ({ spawnedAt: item.row.run.spawnedAt });

@@ -144,6 +144,42 @@ interface BodyEdges {
 
 const AppDialogContext = createContext<AppDialogContextValue | null>(null);
 
+const NO_DESCRIPTION = () => () => {};
+const NO_BODY_EDGES = () => {};
+
+/**
+ * A window dialog's header, title and close button for a host that fills its
+ * own window: none of the dialog around them, so no portal, focus trap, or
+ * Escape layer. The host draws the surface and says what closing does.
+ */
+export function AppDialogWindowChrome({
+  onClose,
+  children,
+}: {
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  const titleId = useId();
+  const descriptionId = useId();
+  return (
+    <AppDialogContext.Provider
+      value={{
+        onClose,
+        titleId,
+        descriptionId,
+        variant: "default",
+        dismissible: true,
+        registerDescription: NO_DESCRIPTION,
+        placement: "window",
+        bodyEdges: null,
+        reportBodyEdges: NO_BODY_EDGES,
+      }}
+    >
+      {children}
+    </AppDialogContext.Provider>
+  );
+}
+
 export interface AppDialogProps {
   isOpen: boolean;
   onClose: () => void;
