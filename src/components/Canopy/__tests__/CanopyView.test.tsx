@@ -237,18 +237,16 @@ function installElectron(
   return canopy;
 }
 
-/** The status bar's offer: there whether or not the callout above the list is. */
-async function openOffer() {
-  const bar = document.querySelector<HTMLElement>("[data-canopy-status]")!;
-  await act(async () => {
-    fireEvent.click(within(bar).getByRole("button", { name: "Turn on reading", hidden: true }));
-  });
-  await frames();
-}
-
 /** The callout offering reading above a listed inbox; null while it isn't shown. */
 function readingCallout(): HTMLElement | null {
   return document.querySelector<HTMLElement>("[data-canopy-reading-offer]");
+}
+
+/** Every control on the page that asks to turn reading on, by what it says. */
+function readingAsks(): string[] {
+  return [...document.querySelectorAll<HTMLElement>("button")]
+    .map((button) => button.textContent?.trim() ?? "")
+    .filter((words) => /^turn on/i.test(words));
 }
 
 function screenButton(root: HTMLElement, name: string): HTMLElement {
@@ -567,24 +565,44 @@ describe("CanopyView search", () => {
 });
 
 describe("CanopyView", () => {
-  it("lists the agents Daintree observes with the reader off, offering reading beside them", async () => {
-    const canopy = installElectron({ ...canopySnapshot, activated: false, cards: [], glances: [] });
-    useCanopyStore.setState({
-      snapshot: { ...canopySnapshot, activated: false, cards: [], glances: [] },
-    });
+  it("opens on the pitch with the reader off, with no reading callout or status-bar offer", async () => {
+    const off = { ...canopySnapshot, activated: false, cards: [], glances: [] };
+    const canopy = installElectron(off);
+    useCanopyStore.setState({ snapshot: off });
     render(<CanopyView />);
     await frames();
     const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
-    expect(dialog.querySelector("[role=listbox]")).not.toBeNull();
-    expect(dialog.querySelectorAll("[data-canopy-card]").length).toBeGreaterThan(0);
-    expect(dialog.textContent).not.toContain("Reading the screen");
-    expect(dialog.textContent).not.toContain("Checking who needs you");
-    expect(dialog.querySelector('button[aria-label="Refresh"]')).toBeNull();
-    expect(dialog.querySelector("[data-canopy-pitch], #canopy-pitch-title")).toBeNull();
+    expect(dialog.querySelector(".canopy-frame #canopy-pitch-title")).not.toBeNull();
+    // The agents Daintree observes wait behind it, unlisted, and nothing else asks first.
+    expect(dialog.querySelector("[role=listbox]")).toBeNull();
+    expect(readingCallout()).toBeNull();
+    expect(dialog.querySelector("[data-canopy-status]")).toBeNull();
+    expect(readingAsks()).toEqual(["Turn on Canopy"]);
     expect(canopy.setMode).not.toHaveBeenCalled();
-    await openOffer();
-    expect(document.getElementById("canopy-pitch-title")).not.toBeNull();
-    expect(canopy.setMode).not.toHaveBeenCalled();
+  });
+
+  it("turns reading on from the pitch's one ask, with nothing further to confirm", async () => {
+    const off = { ...canopySnapshot, activated: false, cards: [], glances: [] };
+    const canopy = installElectron(off);
+    useCanopyStore.setState({ snapshot: off });
+    render(<CanopyView />);
+    await frames();
+    const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
+    expect(readingAsks()).toEqual(["Turn on Canopy"]);
+    await act(async () => {
+      fireEvent.click(screenButton(dialog, "Turn on Canopy"));
+    });
+    await frames();
+    expect(canopy.setMode).toHaveBeenCalledTimes(1);
+    expect(canopy.setMode).toHaveBeenCalledWith("on");
+    // Straight to the user's own agents: no second offer stands between.
+    expect(document.getElementById("canopy-pitch-title")).toBeNull();
+    expect(
+      document.querySelectorAll("[data-testid=canopy-dialog] [role=listbox] [data-canopy-card]")
+        .length
+    ).toBeGreaterThan(0);
+    expect(readingCallout()).toBeNull();
+    expect(readingAsks()).toEqual([]);
   });
 
   it("covers the window, with nothing of the app behind it and no picture taken of it", async () => {
@@ -600,11 +618,14 @@ describe("CanopyView", () => {
       const layer = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
       expect(layer.className).not.toMatch(/\bbackdrop-blur-|\bbg-scrim-/);
       expect(layer.firstElementChild?.className ?? "").not.toMatch(/\bmax-w-/);
-      // The inbox and the offer share one frame, so the list stays put between them.
-      expect(layer.querySelector(".canopy-frame [role=listbox]")).not.toBeNull();
-      await openOffer();
+      // The offer and the inbox share one frame, so the list stays put between them.
+      expect(layer.querySelector(".canopy-frame #canopy-pitch-title")).not.toBeNull();
+      await act(async () => {
+        fireEvent.click(screenButton(layer, "Turn on Canopy"));
+      });
+      await frames();
       expect(
-        document.querySelector("[data-testid=canopy-dialog] .canopy-frame #canopy-pitch-title")
+        document.querySelector("[data-testid=canopy-dialog] .canopy-frame [role=listbox]")
       ).not.toBeNull();
       expect(createObjectURL).not.toHaveBeenCalled();
       expect(document.querySelector("img[src^='blob:']")).toBeNull();
@@ -624,85 +645,27 @@ describe("CanopyView", () => {
       document
         .querySelector<HTMLElement>("[data-testid=canopy-dialog] .canopy-list-column")!
         .style.getPropertyValue("--canopy-list-width");
+    expect(document.getElementById("canopy-pitch-title")).not.toBeNull();
+    expect(listWidth()).toBe("600px");
+    const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
+    await act(async () => {
+      fireEvent.click(screenButton(dialog, "Turn on Canopy"));
+    });
+    await frames();
     expect(document.querySelector("[data-testid=canopy-list-resize]")).not.toBeNull();
     expect(listWidth()).toBe("600px");
-    await openOffer();
-    expect(document.getElementById("canopy-pitch-title")).not.toBeNull();
-    expect(listWidth()).toBe("600px");
   });
 
-  it("offers reading above a listed inbox with the reader off, opening the pitch from it", async () => {
-    const off = { ...canopySnapshot, activated: false, cards: [], glances: [] };
-    const canopy = installElectron(off);
-    useCanopyStore.setState({ snapshot: off });
-    render(<CanopyView />);
-    await frames();
-    const callout = readingCallout()!;
-    expect(callout.textContent).toContain("on this computer");
-    // Above the list, never among its rows.
-    const rows = [...document.querySelectorAll<HTMLElement>("[data-canopy-card]")];
-    expect(rows.length).toBeGreaterThan(0);
-    expect(
-      rows.every((row) => callout.compareDocumentPosition(row) === Node.DOCUMENT_POSITION_FOLLOWING)
-    ).toBe(true);
-    // The status bar keeps its own offer beside it.
-    const bar = document.querySelector<HTMLElement>("[data-canopy-status]")!;
-    expect(within(bar).queryByRole("button", { name: "Turn on reading" })).not.toBeNull();
-    await act(async () => {
-      fireEvent.click(within(callout).getByRole("button", { name: "Turn on reading" }));
-    });
-    await frames();
-    expect(document.getElementById("canopy-pitch-title")).not.toBeNull();
-    expect(canopy.setMode).not.toHaveBeenCalled();
-  });
-
-  it("puts the reading callout away for good, keeping the status bar's offer and the keyboard", async () => {
-    const off = { ...canopySnapshot, activated: false, cards: [], glances: [] };
-    installElectron(off);
-    useCanopyStore.setState({ snapshot: off });
-    const { unmount } = render(<CanopyView />);
-    await frames();
-    const dismiss = within(readingCallout()!).getByRole("button", {
-      name: "Dismiss reading offer",
-    });
-    act(() => dismiss.focus());
-    await act(async () => {
-      fireEvent.click(dismiss);
-    });
-    await frames();
-    expect(readingCallout()).toBeNull();
-    expect(document.activeElement?.getAttribute("aria-label")).toBe("Search agents");
-    const bar = document.querySelector<HTMLElement>("[data-canopy-status]")!;
-    expect(within(bar).queryByRole("button", { name: "Turn on reading" })).not.toBeNull();
-    // Closed and opened again: still away.
-    unmount();
-    render(<CanopyView />);
-    await frames();
-    expect(document.querySelector("[data-canopy-card]")).not.toBeNull();
-    expect(readingCallout()).toBeNull();
-  });
-
-  it("offers no reading callout with the reader on, or over an empty list", async () => {
+  it("offers no reading callout or status-bar offer over the inbox with the reader on", async () => {
     installElectron();
-    const { unmount } = render(<CanopyView />);
+    render(<CanopyView />);
     await frames();
     expect(document.querySelector("[data-canopy-card]")).not.toBeNull();
     expect(readingCallout()).toBeNull();
-    unmount();
-
-    const off = { ...canopySnapshot, activated: false, cards: [], glances: [] };
-    installElectron(off);
-    useCanopyStore.setState({ snapshot: off });
-    useFleetSnapshotStore.setState({
-      snapshot: { ...useFleetSnapshotStore.getState().snapshot!, runs: [] },
-    });
-    render(<CanopyView />);
-    await frames();
-    expect(document.body.textContent).toContain("Launch an agent from the toolbar");
-    expect(readingCallout()).toBeNull();
+    expect(readingAsks()).toEqual([]);
   });
 
-  it("still offers reading, quietly, when the reader is off and no agent runs", async () => {
+  it("opens on the pitch with the reader off and no agent running, never an empty inbox", async () => {
     const off = { ...canopySnapshot, activated: false, cards: [], glances: [] };
     installElectron(off);
     useCanopyStore.setState({ snapshot: off });
@@ -711,9 +674,20 @@ describe("CanopyView", () => {
     });
     render(<CanopyView />);
     await frames();
-    expect(document.body.textContent).toContain("Launch an agent from the toolbar");
-    await openOffer();
     expect(document.getElementById("canopy-pitch-title")).not.toBeNull();
+    expect(document.body.textContent).not.toContain("Launch an agent from the toolbar");
+    expect(document.querySelector("[data-canopy-status]")).toBeNull();
+    expect(readingAsks()).toEqual(["Turn on Canopy"]);
+  });
+
+  it("shows the pitch over a reading callout put away before", async () => {
+    const off = { ...canopySnapshot, activated: false };
+    installElectron(off);
+    useCanopyStore.setState({ snapshot: off, readingOfferDismissed: true });
+    render(<CanopyView />);
+    await frames();
+    expect(document.getElementById("canopy-pitch-title")).not.toBeNull();
+    expect(readingAsks()).toEqual(["Turn on Canopy"]);
   });
 
   it("reads nothing until the user turns it on, showing a demo and what turning it on does", async () => {
@@ -721,7 +695,6 @@ describe("CanopyView", () => {
     useCanopyStore.setState({ snapshot: { ...canopySnapshot, activated: false } });
     render(<CanopyView />);
     await frames();
-    await openOffer();
     const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
     // What turning it on does, and how to stop, said where it is turned on.
     expect(dialog.textContent).toContain("Nothing it reads leaves this computer.");
@@ -759,7 +732,6 @@ describe("CanopyView", () => {
     notifySpy.mockClear();
     render(<CanopyView />);
     await frames();
-    await openOffer();
     const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
     await act(async () => {
       fireEvent.click(screenButton(dialog, "Hide Canopy"));
@@ -792,7 +764,6 @@ describe("CanopyView", () => {
     notifySpy.mockClear();
     render(<CanopyView />);
     await frames();
-    await openOffer();
     const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
     await act(async () => {
       fireEvent.click(screenButton(dialog, "Hide Canopy"));
@@ -826,7 +797,6 @@ describe("CanopyView", () => {
     notifySpy.mockClear();
     render(<CanopyView />);
     await frames();
-    await openOffer();
     const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
     await act(async () => {
       fireEvent.click(screenButton(dialog, "Hide Canopy"));
@@ -858,7 +828,6 @@ describe("CanopyView", () => {
     vi.mocked(notify).mockClear();
     render(<CanopyView />);
     await frames();
-    await openOffer();
     const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
     await act(async () => {
       fireEvent.click(screenButton(dialog, "Hide Canopy"));
@@ -2492,24 +2461,6 @@ describe("CanopyView", () => {
     expect(labelHidden("canopy-needs-you-label")).toBe(false);
     expect(labelHidden("canopy-everything-else-label")).toBe(false);
     expect(body.querySelector("[data-canopy-list]")!.hasAttribute("data-band-headings")).toBe(true);
-  });
-
-  it("words the empty band as the header does with the reader off, never as the all-clear", async () => {
-    useFleetSnapshotStore.setState({
-      snapshot: {
-        runs: [run("working", { agentState: "working", since: NOW - 30_000 })],
-        changedAt: NOW,
-        degraded: false,
-        lastSuccessfulAt: NOW,
-      },
-    });
-    const off = { ...canopySnapshot, activated: false, cards: [], glances: [] };
-    installElectron(off);
-    useCanopyStore.setState({ snapshot: off });
-    render(<CanopyView />);
-    await frames();
-    expect(summaryWords()).toContain("No agent is waiting on you");
-    expect(bandWords()).toBe("No agent is waiting on you");
   });
 
   it("says nothing is unread in a line of its own, with when each comes back", async () => {

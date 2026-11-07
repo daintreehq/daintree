@@ -884,18 +884,20 @@ describe("CanopyView role filter", () => {
     expect(countOf("canopy-inbox-label")).not.toBeNull();
   });
 
-  it("offers reading above the workers, never above the assistants alone", async () => {
+  it("asks for reading in the pitch alone with the reader off, whichever role the list shows", async () => {
     const off = { ...canopySnapshot, activated: false, cards: [], glances: [] };
     installElectron().setActive.mockResolvedValue(off);
     useCanopyStore.setState({ snapshot: off, roleFilter: "assistants" });
     render(<CanopyView />);
     await settle();
-    expect(assistantRows().length).toBeGreaterThan(0);
+    expect(document.getElementById("canopy-pitch-title")).not.toBeNull();
+    expect(assistantRows()).toHaveLength(0);
     expect(document.querySelector("[data-canopy-reading-offer]")).toBeNull();
     act(() => useCanopyStore.getState().setRoleFilter("all"));
     await settle();
-    expect(workerIds().length).toBeGreaterThan(0);
-    expect(document.querySelector("[data-canopy-reading-offer]")).not.toBeNull();
+    expect(document.getElementById("canopy-pitch-title")).not.toBeNull();
+    expect(document.querySelector("[role=listbox]")).toBeNull();
+    expect(document.querySelector("[data-canopy-reading-offer]")).toBeNull();
   });
 });
 

@@ -50,7 +50,7 @@ export function CanopyStatusBar({
   reader: CanopySnapshot["reader"];
   model: CanopySnapshot["model"];
   waiting: CanopySnapshot["waiting"];
-  /** With the reader off: the way to turn it on, offered once and quietly. */
+  /** With another host's reader off: the way to its offer, quietly. This computer's has the pitch. */
   offer?: (() => void) | null;
 }) {
   const holdUp = canopyModelHoldUp(model) ?? (waiting === "retrying" ? "Waiting to retry…" : null);
