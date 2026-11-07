@@ -46,10 +46,10 @@ export function broadcastFleetRawInput(originId: string, data: string): boolean 
   // Mirror the origin's xterm onData → onUserInput path on every non-origin
   // target so the `directing` indicator fires fleet-wide. Pass the raw
   // payload (not "") so Phase 2 escalation still kicks in for large pastes —
-  // see #3565.
+  // see #3565. A follower's pane wasn't touched, so no Canopy hold moves for it.
   for (const id of targets) {
     if (id === originId) continue;
-    withTerminalService((service) => service.notifyUserInput(id, data), id);
+    withTerminalService((service) => service.notifyUserInput(id, data, { takesSize: false }), id);
   }
   // Plain Enter is a submit. Mirror the structured-submit pattern from
   // `fleetExecution.ts`: optimistically advance `directing → working` for

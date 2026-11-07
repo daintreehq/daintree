@@ -527,8 +527,9 @@ export function claimWatchedSize(webContentsId: number, watchId: number): void {
     // The other panel's size was never the pane's, whatever this one's echoes said.
     watch.ownerSize = other.ownerSize;
     watch.heldSize = other.heldSize;
-    // Its echoes still to come are a panel's, not the pane's.
-    watch.pendingHolds = [...other.pendingHolds];
+    // Their echoes still to come are a panel's, not the pane's, and this
+    // panel's own predate the other's hold.
+    watch.pendingHolds = [...watch.pendingHolds, ...other.pendingHolds].slice(-MAX_PENDING_HOLDS);
     holders.set(watch.runId, watch.key);
     follow(other);
   }

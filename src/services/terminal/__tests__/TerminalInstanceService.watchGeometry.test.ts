@@ -67,7 +67,11 @@ vi.mock("../TerminalAddonManager", () => ({
 type WatchTestService = {
   instances: Map<string, ManagedTerminal>;
   prewarmTerminal: (id: string, type: string, options: Record<string, unknown>) => unknown;
-  notifyUserInput: (id: string, data?: string, options?: { automatic?: boolean }) => void;
+  notifyUserInput: (
+    id: string,
+    data?: string,
+    options?: { automatic?: boolean; takesSize?: boolean }
+  ) => void;
   runResizePass: (ids: string[], options?: { immediate?: boolean }) => void;
   destroy: (id: string) => void;
   dispose: () => void;
@@ -501,15 +505,18 @@ describe("TerminalInstanceService — a terminal a Canopy panel on another machi
       await settle();
     });
 
-    it("takes the size for Return, a paste or the pane's composer, which name no payload", () => {
+    it("takes the size for Return, a paste or the pane's composer", () => {
       service.notifyUserInput("t1");
       expect(takeTerminalSize).toHaveBeenCalledWith("t1");
     });
 
-    it("takes nothing for a fleet follower: the fleet names what it sent, and this pane wasn't touched", () => {
-      service.notifyUserInput("t1", "typed at the origin");
-      expect(takeTerminalSize).not.toHaveBeenCalled();
-    });
+    it.each([["typed at the origin"], [""]])(
+      "takes nothing for input that says no one was at the pane, payload or none: %j",
+      (payload) => {
+        service.notifyUserInput("t1", payload, { takesSize: false });
+        expect(takeTerminalSize).not.toHaveBeenCalled();
+      }
+    );
 
     it("takes nothing for input the user didn't send", () => {
       service.notifyUserInput("t1", "", { automatic: true });

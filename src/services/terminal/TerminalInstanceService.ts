@@ -726,15 +726,19 @@ class TerminalInstanceService {
    * file's path landing): it still counts as activity, but leaves the input
    * epoch alone so it cannot make other pending drops look overtaken.
    */
-  notifyUserInput(id: string, data = "", options: { automatic?: boolean } = {}): void {
+  notifyUserInput(
+    id: string,
+    data = "",
+    options: { automatic?: boolean; takesSize?: boolean } = {}
+  ): void {
     // A fleet follower is told about the origin's raw input, which can be a
     // reply or a mouse report rather than anything the user typed.
     if (!options.automatic && !isTerminalReply(data) && !isMouseReport(data)) {
       this.noteUserInput(id);
     }
     // What skips xterm's onData: Return, a word jump, a paste, the pane's own
-    // composer. Only the fleet names its payload, and a follower's pane wasn't touched.
-    if (data === "" && !options.automatic) takeCanopySize(id);
+    // composer. Input that reached this terminal without anyone at the pane says so.
+    if (options.takesSize !== false && !options.automatic) takeCanopySize(id);
     this.onUserInput(id, data);
   }
 

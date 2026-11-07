@@ -921,6 +921,23 @@ describe("a panel on this machine holding the size (#16333)", () => {
       expect(resizes(first.pty)).toEqual([[120, 36]]);
     });
 
+    it("keeps its own hold still on its way when one comes across from the other panel", async () => {
+      const first = await held(1);
+      const second = fakeSender(2);
+      const other = await open(first.pty, second.sender, "run-1");
+      resizeWatchedTerminal(first.pty, 1, first.watchId, 110, 32);
+      yieldSizeToPane("run-1");
+      claimWatchedSize(2, other.watchId!);
+      resizeWatchedTerminal(first.pty, 2, other.watchId!, 90, 28);
+
+      claimWatchedSize(1, first.watchId);
+      echo(first.emitter, 110, 32);
+
+      vi.mocked(first.pty.resize).mockClear();
+      stopTerminalWatch(1);
+      expect(resizes(first.pty)).toEqual([[120, 36]]);
+    });
+
     it("lets a window put away before it ever measured go, without touching the other's hold", async () => {
       const first = await held(1);
       const second = fakeSender(2);

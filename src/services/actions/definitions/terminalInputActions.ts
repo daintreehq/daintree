@@ -21,8 +21,8 @@ import {
   SEND_KEYS_SETTLE_MS,
   SendKeysArgsSchema,
 } from "@shared/utils/terminalKeys";
-import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 import { isForegroundDispatch } from "./dispatchSource";
+import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 import {
   INPUT_LOCKED_INJECTION_REFUSAL,
   isTerminalInputLocked,
@@ -245,7 +245,10 @@ export function registerTerminalInputActions(
             bracketedPasteMode: managed.terminal.modes.bracketedPasteMode,
           })
         );
-        peekTerminalService()?.notifyUserInput(targetId);
+        // An agent can dispatch this too, and only a person moves a Canopy hold.
+        peekTerminalService()?.notifyUserInput(targetId, "", {
+          takesSize: isForegroundDispatch(ctx?.dispatchSource),
+        });
       } catch {
         // Clipboard API may be denied
       }
