@@ -584,13 +584,28 @@ describe("CanopyView", () => {
   it("turns reading on from the pitch's one ask, with nothing further to confirm", async () => {
     const off = { ...canopySnapshot, activated: false, cards: [], glances: [] };
     const canopy = installElectron(off);
+    let answer: () => void = () => {};
+    canopy.setMode.mockImplementationOnce(
+      (mode) =>
+        new Promise((resolve) => {
+          answer = () => resolve({ ...off, mode, modeRevision: 5, activated: mode === "on" });
+        })
+    );
     useCanopyStore.setState({ snapshot: off });
     render(<CanopyView />);
     await frames();
     const dialog = document.querySelector<HTMLElement>("[data-testid=canopy-dialog]")!;
     expect(readingAsks()).toEqual(["Turn on Canopy"]);
+    const turnOn = screenButton(dialog, "Turn on Canopy");
     await act(async () => {
-      fireEvent.click(screenButton(dialog, "Turn on Canopy"));
+      fireEvent.click(turnOn);
+    });
+    // A second press while the first is under way asks for nothing more.
+    await act(async () => {
+      fireEvent.click(turnOn);
+    });
+    await act(async () => {
+      answer();
     });
     await frames();
     expect(canopy.setMode).toHaveBeenCalledTimes(1);
@@ -654,6 +669,24 @@ describe("CanopyView", () => {
     await frames();
     expect(document.querySelector("[data-testid=canopy-list-resize]")).not.toBeNull();
     expect(listWidth()).toBe("600px");
+  });
+
+  it("closes from the pitch with reading still off, and shows the pitch on the next opening", async () => {
+    const off = { ...canopySnapshot, mode: "unset" as const, activated: false };
+    const canopy = installElectron(off);
+    useCanopyStore.setState({ snapshot: off, mode: "unset" });
+    render(<CanopyView />);
+    await frames();
+    expect(document.getElementById("canopy-pitch-title")).not.toBeNull();
+    await act(async () => {
+      fireEvent.click(within(document.body).getByRole("button", { name: "Close dialog" }));
+    });
+    expect(useCanopyStore.getState().isOpen).toBe(false);
+    act(() => useCanopyStore.getState().open());
+    await frames();
+    expect(document.getElementById("canopy-pitch-title")).not.toBeNull();
+    expect(readingAsks()).toEqual(["Turn on Canopy"]);
+    expect(canopy.setMode).not.toHaveBeenCalled();
   });
 
   it("offers no reading callout or status-bar offer over the inbox with the reader on", async () => {
@@ -2086,6 +2119,38 @@ describe("CanopyView", () => {
     }
   });
 
+  it("goes from the loading panel straight to the pitch once main says reading is off", async () => {
+    const opener = document.createElement("button");
+    document.body.appendChild(opener);
+    opener.focus();
+    try {
+      const off = { ...canopySnapshot, mode: "unset" as const, activated: false };
+      useCanopyStore.setState({ snapshot: null, mode: "unset" });
+      const canopy = installElectron(off);
+      let answer: (snapshot: CanopySnapshot) => void = () => {};
+      canopy.setActive.mockReturnValue(
+        new Promise<CanopySnapshot>((resolve) => {
+          answer = resolve;
+        })
+      );
+      render(<CanopyView />);
+      await frames();
+      // Neither the pitch nor the inbox before main has said.
+      expect(document.getElementById("canopy-pitch-title")).toBeNull();
+      expect(document.querySelector("[role=listbox]")).toBeNull();
+      await act(async () => {
+        answer(off);
+      });
+      await frames();
+      expect(document.getElementById("canopy-pitch-title")).not.toBeNull();
+      expect(document.querySelector("[role=listbox]")).toBeNull();
+      expect(readingCallout()).toBeNull();
+      expect(document.activeElement?.id).toBe("canopy-pitch-title");
+    } finally {
+      opener.remove();
+    }
+  });
+
   it("hands the keyboard to the offer when reading is turned off while the inbox is open", async () => {
     const opener = document.createElement("button");
     document.body.appendChild(opener);
@@ -2101,6 +2166,8 @@ describe("CanopyView", () => {
           .getState()
           .applySnapshot({ ...canopySnapshot, mode: "unset", activated: false });
       });
+      expect(document.getElementById("canopy-pitch-title")).not.toBeNull();
+      expect(document.querySelector("[role=listbox]")).toBeNull();
       expect(document.activeElement).not.toBe(opener);
       expect(document.activeElement?.closest("[data-testid=canopy-dialog]")).not.toBeNull();
     } finally {
