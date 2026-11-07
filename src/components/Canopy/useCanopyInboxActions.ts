@@ -474,15 +474,17 @@ export function useCanopyInboxActions({
     onToggleRead: toggleRead,
     onReread: function reread(item) {
       safeFireAndForget(
-        api.reread(item.runId, { spawnedAt: item.row.run.spawnedAt }).catch((error: unknown) =>
-          failToast(
-            "Couldn't read the screen again",
-            error,
-            frame.goToRun
-              ? { label: "Go to terminal", onClick: () => handlers.onOpen(item) }
-              : undefined
+        api
+          .reread(item.runId, { spawnedAt: item.row.run.spawnedAt })
+          .catch((error: unknown) =>
+            failToast(
+              "Couldn't read the screen again",
+              error,
+              frame.goToRun
+                ? { label: "Go to terminal", onClick: () => handlers.onOpen(item) }
+                : undefined
+            )
           )
-        )
       );
     },
     onArchive: handlers.onArchive,
