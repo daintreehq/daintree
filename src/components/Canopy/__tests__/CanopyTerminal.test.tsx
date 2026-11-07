@@ -107,20 +107,13 @@ const cell = vi.hoisted(() => ({ current: null as null | { width: number; height
 vi.mock("@/services/terminal/TerminalResizeController", () => ({
   getXtermCellDimensions: () => cell.current,
 }));
-const pane = vi.hoisted(() => ({ events: [] as string[] }));
 const reportError = vi.hoisted(() => vi.fn());
 vi.mock("@/utils/rendererGlobalErrorHandlers", () => ({
   reportRendererGlobalError: reportError,
 }));
 vi.mock("@/services/TerminalInstanceService", () => {
-  const terminalInstanceService = {
-    holdGeometry: (id: string) => {
-      pane.events.push(`hold ${id}`);
-      return () => pane.events.push(`release ${id}`);
-    },
-  };
   return {
-    createTerminalPaintPlane: () => terminalInstanceService,
+    createTerminalPaintPlane: () => ({}),
   };
 });
 
@@ -179,6 +172,7 @@ let pushChunk: (chunk: CanopyTerminalData) => void = () => {};
 let openStream: (view: CanopyTerminalView) => void = () => {};
 const terminalInput = vi.fn(async () => {});
 const terminalResize = vi.fn(async (_watchId: number, _cols: number, _rows: number) => {});
+const terminalClaimSize = vi.fn(async (_watchId: number) => {});
 
 beforeAll(() => {
   if (typeof globalThis.ResizeObserver === "undefined") {
@@ -196,7 +190,7 @@ beforeAll(() => {
 beforeEach(() => {
   _resetCanopyWatchBurstForTests();
   terminalInput.mockClear();
-  pane.events.length = 0;
+  terminalClaimSize.mockClear();
   Object.defineProperty(window, "electron", {
     configurable: true,
     writable: true,
@@ -210,6 +204,7 @@ beforeEach(() => {
         unwatchTerminal: vi.fn(async () => {}),
         terminalInput,
         terminalResize,
+        terminalClaimSize,
       },
     },
   });
@@ -712,6 +707,89 @@ describe("CanopyTerminal", () => {
       expect(terminalResize).toHaveBeenCalledWith(7, 99, 30);
     });
 
+    it("asks for a grid the PTY already has, as holding it is what stills the other views", async () => {
+      cell.current = { width: 8, height: 16 };
+      const view = mount();
+      view.frame.getBoundingClientRect = paneRect;
+      await open({ watchId: 7, snapshot: { data: "", cols: 99, rows: 30 } });
+      await settle();
+      expect(terminalResize).toHaveBeenCalledTimes(1);
+      expect(terminalResize).toHaveBeenCalledWith(7, 99, 30);
+    });
+
+    describe("while another surface has the size (#16333)", () => {
+      const following = (cols: number, rows: number) =>
+        act(async () =>
+          pushChunk({ kind: "resize", watchId: 7, runId: "run-1", cols, rows, following: true })
+        );
+
+      it("draws the PTY's grid and asks for nothing, whatever moves", async () => {
+        const view = await openSized();
+        terminalResize.mockClear();
+        await following(140, 40);
+        await settle();
+        expect(xterm.current!.resizes.at(-1)).toEqual([140, 40]);
+
+        // The panel's own box moves, and the PTY with it: neither is the user's doing here.
+        view.frame.getBoundingClientRect = () =>
+          ({ width: 638.6, height: 504.6, top: 0, left: 0, right: 638.6, bottom: 504.6 }) as DOMRect;
+        await following(120, 36);
+        await settle();
+        expect(terminalResize).not.toHaveBeenCalled();
+        expect(xterm.current!.resizes.at(-1)).toEqual([120, 36]);
+      });
+
+      it("takes the size on a click, not on the other buttons", async () => {
+        const view = await openSized();
+        await following(140, 40);
+        fireEvent.mouseDown(view.frame, { button: 2 });
+        expect(terminalClaimSize).not.toHaveBeenCalled();
+        fireEvent.mouseDown(view.frame, { button: 0 });
+        expect(terminalClaimSize).toHaveBeenCalledWith(7);
+      });
+
+      it("takes the size on a keystroke, never on what a program or a glance sends", async () => {
+        const view = await openSized();
+        await following(140, 40);
+        // Window focus tells the program, and it asks where the cursor is: no gesture at all.
+        xterm.current!.emitData("\x1b[I");
+        xterm.current!.emitData("\x1b[24;1R");
+        expect(terminalClaimSize).not.toHaveBeenCalled();
+        // Hovering over a program that asks for every motion goes out as input.
+        fireEvent.mouseMove(view.frame, { buttons: 0 });
+        xterm.current!.emitData("\x1b[<35;14;5M");
+        expect(terminalInput).toHaveBeenCalledWith(7, "\x1b[<35;14;5M");
+        expect(terminalClaimSize).not.toHaveBeenCalled();
+
+        fireEvent.keyDown(view.frame, { key: "y" });
+        xterm.current!.emitData("y");
+        expect(terminalClaimSize).toHaveBeenCalledWith(7);
+      });
+
+      it("claims nothing while it has the size", async () => {
+        const view = await openSized();
+        fireEvent.mouseDown(view.frame, { button: 0 });
+        fireEvent.keyDown(view.frame, { key: "y" });
+        xterm.current!.emitData("y");
+        expect(terminalClaimSize).not.toHaveBeenCalled();
+      });
+
+      it("asks for its grid once main says the size is its again, even one the PTY has", async () => {
+        await openSized();
+        await following(99, 30);
+        terminalResize.mockClear();
+        await settle();
+        expect(terminalResize).not.toHaveBeenCalled();
+
+        await act(async () =>
+          pushChunk({ kind: "resize", watchId: 7, runId: "run-1", cols: 99, rows: 30 })
+        );
+        await settle();
+        expect(terminalResize).toHaveBeenCalledTimes(1);
+        expect(terminalResize).toHaveBeenCalledWith(7, 99, 30);
+      });
+    });
+
     it("puts its grid back to the PTY's when the size is refused", async () => {
       await openSized(async () => {
         throw new Error("rate limited");
@@ -721,33 +799,10 @@ describe("CanopyTerminal", () => {
     });
   });
 
-  it("freezes the terminal's own pane while streaming, and lets it go only once main has the PTY back", async () => {
-    let handBack: () => void = () => {};
-    window.electron.canopy.unwatchTerminal = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          handBack = () => {
-            pane.events.push("handed back");
-            resolve();
-          };
-        })
-    );
-    const { unmount } = mount();
-    expect(pane.events).toEqual([]);
-    await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
-    expect(pane.events).toEqual(["hold run-1"]);
-
-    unmount();
-    expect(pane.events).toEqual(["hold run-1"]);
-    await act(async () => handBack());
-    expect(pane.events).toEqual(["hold run-1", "handed back", "release run-1"]);
-  });
-
-  it("freezes no pane for a stream that opens only after the view went away", async () => {
+  it("lets go of a stream that opens only after the view went away", async () => {
     const { unmount } = mount();
     unmount();
     await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
-    expect(pane.events).toEqual([]);
     // Only the stream it was answered with: never a view-wide release, which
     // would end a stream another pane opened meanwhile (#14454).
     expect(vi.mocked(window.electron.canopy.unwatchTerminal).mock.calls).toEqual([[7]]);
@@ -768,7 +823,7 @@ describe("CanopyTerminal", () => {
     ],
     ["anything else, reporting it", "[AppError|INTERNAL] stream lost", 1],
   ] as const)(
-    "lets its pane go when ending its stream fails on %s",
+    "ends quietly when ending its stream fails on %s",
     async (_case, message, reports) => {
       window.electron.canopy.unwatchTerminal = vi.fn(async () => {
         throw new Error(message);
@@ -779,7 +834,6 @@ describe("CanopyTerminal", () => {
       await act(async () => {
         for (let i = 0; i < 5; i++) await Promise.resolve();
       });
-      expect(pane.events).toEqual(["hold run-1", "release run-1"]);
       expect(reportError).toHaveBeenCalledTimes(reports);
 
       reportError.mockClear();
@@ -822,6 +876,7 @@ describe("CanopyTerminal", () => {
         unwatchTerminal: vi.fn(async () => {}),
         terminalInput: vi.fn(async () => {}),
         terminalResize: vi.fn(async () => {}),
+        terminalClaimSize: vi.fn(async () => {}),
         terminalSubmit: vi.fn(async () => {}),
         terminalSendKey: vi.fn(async () => {}),
         submitReply: vi.fn(async () => {}),
@@ -863,7 +918,7 @@ describe("CanopyTerminal", () => {
       };
     }
 
-    it("sizes a terminal its host says it takes the size of, at the user's font, freezing no pane here (#14497)", async () => {
+    it("sizes a terminal its host says it takes the size of, at the user's font (#14497)", async () => {
       cell.current = { width: 8, height: 16 };
       const remote = remoteApi();
       const view = mountRemote(remote);
@@ -879,8 +934,6 @@ describe("CanopyTerminal", () => {
         await new Promise((resolve) => setTimeout(resolve, PAST_SIZE_SETTLE_MS));
       });
       expect(remote.api.terminalResize).toHaveBeenCalledWith(3, 99, 30);
-      // Its pane is frozen on its own host, never in this view.
-      expect(pane.events).toEqual([]);
       // Drawn at the host's grid until the host says the PTY took the new one.
       expect(xterm.current!.resizes).toEqual([[200, 60]]);
       await act(async () =>
@@ -890,7 +943,7 @@ describe("CanopyTerminal", () => {
       expect(terminalResize).not.toHaveBeenCalled();
     });
 
-    it("follows the size the host's own window gave the terminal, freezing and sizing nothing", async () => {
+    it("follows the size the host's own window gave the terminal, sizing nothing", async () => {
       cell.current = { width: 8, height: 16 };
       const remote = remoteApi();
       const view = mountRemote(remote);
@@ -905,14 +958,13 @@ describe("CanopyTerminal", () => {
       });
       expect(remote.api.terminalResize).not.toHaveBeenCalled();
       expect(xterm.current!.resizes).toEqual([[90, 30]]);
-      expect(pane.events).toEqual([]);
       remote.push({ kind: "data", watchId: 3, runId: "run-1", data: "x" });
       expect(xterm.current!.writes).toEqual(["S", "x"]);
       // Nor does the local window's own channel hear any of it.
       expect(terminalResize).not.toHaveBeenCalled();
     });
 
-    it("sizes and freezes by the terminal's own id when the route says the run is this machine's", async () => {
+    it("sizes the terminal when the route says the run is this machine's", async () => {
       cell.current = { width: 8, height: 16 };
       const remote = remoteApi();
       remote.api.ownSizedId = (key) => (key === "own:run-1" ? "run-1" : null);
@@ -932,7 +984,6 @@ describe("CanopyTerminal", () => {
       await act(async () => {
         await new Promise((resolve) => setTimeout(resolve, PAST_SIZE_SETTLE_MS));
       });
-      expect(pane.events).toEqual(["hold run-1"]);
       expect(remote.api.terminalResize).toHaveBeenCalledWith(3, 99, 30);
     });
 

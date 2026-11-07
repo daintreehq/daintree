@@ -545,6 +545,10 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
         ? terminalFor(watch.hostId).terminalResize(watch.raw, cols, rows)
         : Promise.resolve();
     },
+    terminalClaimSize: (mine) => {
+      const watch = watchOf(mine);
+      return watch ? terminalFor(watch.hostId).terminalClaimSize(watch.raw) : Promise.resolve();
+    },
     terminalSubmit: (mine, text, imagePaths) => {
       const watch = watchOf(mine);
       return watch

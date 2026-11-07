@@ -227,18 +227,6 @@ describe("TerminalInstanceService — watching a project another frontend drives
     expect(resize).not.toHaveBeenCalled();
   });
 
-  it("ignores a PTY echo while this view drives, even for a pane Canopy holds", async () => {
-    await service.prewarmTerminal("t1", "terminal", {});
-    service.holdGeometry("t1");
-    gate.setDriveLeaseSnapshot(lease({ drivingHere: true }));
-    const before = grid("t1");
-
-    expect(capturedResizeResultCb).toBeTypeOf("function");
-    capturedResizeResultCb!("t1", echo(150, 45));
-
-    expect(grid("t1")).toEqual(before);
-  });
-
   it("keeps the grid through a failed resize's echo", async () => {
     await service.prewarmTerminal("t1", "terminal", {});
     answerFrom({ t1: [200, 50] });
@@ -371,22 +359,6 @@ describe("TerminalInstanceService — watching a project another frontend drives
 
     gate.setDriveLeaseSnapshot(null);
     expect(locked("t1")).toBe(false);
-  });
-
-  it("keeps Canopy's hold when the watch ends, and re-fits only once both let go", async () => {
-    await service.prewarmTerminal("t1", "terminal", {});
-    const releaseCanopy = service.holdGeometry("t1");
-    gate.setDriveLeaseSnapshot(lease());
-    await settle();
-    const pass = vi.spyOn(service, "runResizePass").mockImplementation(() => {});
-
-    gate.setDriveLeaseSnapshot(null);
-    expect(locked("t1")).toBe(true);
-    expect(pass).not.toHaveBeenCalled();
-
-    releaseCanopy();
-    expect(locked("t1")).toBe(false);
-    expect(pass).toHaveBeenCalledWith(["t1"]);
   });
 
   it("releases a destroyed terminal's hold so its reused id starts clean", async () => {

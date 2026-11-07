@@ -256,8 +256,18 @@ export type CanopyTerminalData =
       /** End offset in the terminal's output stream, for fencing against the snapshot. */
       streamEnd?: number;
     }
-  /** The PTY took a new size from the pane that owns it. */
-  | { kind: "resize"; watchId: number; runId: string; cols: number; rows: number }
+  /**
+   * The PTY's grid, or the stream saying afresh what it is. `following` says the
+   * panel takes no size of its own until the user interacts with it (#16333).
+   */
+  | {
+      kind: "resize";
+      watchId: number;
+      runId: string;
+      cols: number;
+      rows: number;
+      following?: boolean;
+    }
   /** The terminal exited or its host went down; the stream takes no more input. */
   | { kind: "ended"; watchId: number; runId: string };
 

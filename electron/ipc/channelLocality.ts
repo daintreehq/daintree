@@ -166,6 +166,8 @@ export const CHANNEL_LOCALITY = {
   "canopy:submit-reply": "host",
   "canopy:terminal-data": "host",
   "canopy:terminal-input": "host",
+  "canopy:take-terminal-size": "host",
+  "canopy:terminal-claim-size": "host",
   "canopy:terminal-resize": "host",
   "canopy:terminal-send-key": "host",
   "canopy:terminal-submit": "host",

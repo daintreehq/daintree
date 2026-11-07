@@ -457,6 +457,14 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: void;
   };
+  "canopy:take-terminal-size": {
+    args: [terminalId: string];
+    result: void;
+  };
+  "canopy:terminal-claim-size": {
+    args: [watchId: number];
+    result: void;
+  };
   "canopy:terminal-input": {
     args: [watchId: number, data: string];
     result: void;

@@ -1051,25 +1051,6 @@ class TerminalInstanceService {
     this.resizeController.lockResize(id, locked, customTtlMs);
   }
 
-  /**
-   * Freeze this terminal's pane while another view draws it at its own size —
-   * Canopy's live pane holds the PTY at the panel's grid. Without it the two
-   * take turns resizing the agent, and each turn is a full redraw. The release
-   * re-measures the pane once nothing holds it; call it after the other view
-   * has handed the PTY back, so the pane's own size lands last.
-   */
-  holdGeometry(id: string): () => void {
-    this.resizeController.holdGeometry(id);
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      if (this.resizeController.releaseGeometry(id) && this.instances.has(id)) {
-        this.runResizePass([id]);
-      }
-    };
-  }
-
   private layoutTransitionTimer: number | undefined;
   private layoutTransitionDeadline = 0;
   private readonly layoutTransitionPendingIds = new Set<string>();
@@ -1376,7 +1357,7 @@ class TerminalInstanceService {
         // The PTY was last sized by the other frontend, and the pane's box was
         // never applied while held: no cache may dedup the re-fit away, even
         // where the pane's grid is the one xterm already holds. A pane still
-        // locked or held by Canopy carries this to whichever pass frees it.
+        // locked carries this to whichever pass frees it.
         managed.lastWidth = 0;
         managed.lastHeight = 0;
         managed.reassertPtyGrid = true;

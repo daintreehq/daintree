@@ -17,10 +17,7 @@ import { systemClient } from "@/clients/systemClient";
 import { getEffectiveScrollbarWidth, getXtermOptions } from "@/config/xtermConfig";
 import { keybindingService } from "@/services/KeybindingService";
 import { getXtermCellDimensions } from "@/services/terminal/TerminalResizeController";
-import {
-  peek as peekTerminalService,
-  subscribeWhenReady as subscribeTerminalServiceWhenReady,
-} from "@/services/terminal/terminalInstanceServiceAccessor";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import {
   activateUnicode11,
   createImageAddon,
@@ -57,6 +54,7 @@ import {
 import { streamRangeOf, stripCoveredOutput } from "@/services/terminal/streamFence";
 import {
   createSurrogatePairJoiner,
+  isMouseReport,
   isTerminalReply,
   isWindowCloseChord,
 } from "@/services/terminal/inputUtils";
@@ -392,6 +390,12 @@ export function CanopyTerminal({
 
     // Another host's terminal is sized only once its watch answer says the host takes it.
     let holdsSize = localId !== null;
+    // Another surface has the size: this pane draws the PTY's grid, clipped,
+    // until the user's own click, keystroke or reply takes the size back.
+    let following = false;
+    // The size is this pane's to take: main is asked even for a grid the PTY
+    // already has, as holding is what stops the terminal's other views fitting.
+    let mustHold = true;
 
     let inset = FRAME_PADDING_PX;
     const bufferChange = terminal.buffer.onBufferChange((buffer) => {
@@ -415,7 +419,7 @@ export function CanopyTerminal({
         const watchId = stream.watchId;
         const cell = getXtermCellDimensions(terminal);
         // A host that doesn't take the size keeps the one its own window gave it.
-        if (disposed || watchId === null || cell === null || !holdsSize) return;
+        if (disposed || watchId === null || cell === null || !holdsSize || following) return;
         // The list's or the dock's edge is still moving: the drag's end asks again.
         if (isCanopyEdgeDragging(useCanopyStore.getState())) return;
         // Fractional bounds, truncated, as the grid pane measures them: a
@@ -427,7 +431,8 @@ export function CanopyTerminal({
         if (cols < MIN_COLS || rows < MIN_ROWS) return;
         // Against what the PTY holds, not what xterm was last told: a hold the
         // terminal's own pane has since overridden is asked for again.
-        if (ptySize !== null && cols === ptySize.cols && rows === ptySize.rows) return;
+        if (!mustHold && ptySize !== null && cols === ptySize.cols && rows === ptySize.rows) return;
+        mustHold = false;
         // Ahead of the PTY's echo, so output drawn for the new size lands on it.
         // Another host's echo is awaited instead: it may let the hold go
         // unanswered (the view lost the drive), and the pane stays on the PTY's grid.
@@ -484,12 +489,14 @@ export function CanopyTerminal({
     let view: CanopyTerminalView | null = null;
     // A stream that opened while the link still read as down: shown, not typed into.
     let heldWatchId: number | null = null;
-    let releasePane: (() => void) | null = null;
     let fence: number | undefined;
     const early: CanopyTerminalData[] = [];
     const apply = (chunk: CanopyTerminalData) => {
       if (view === null || chunk.watchId !== view.watchId) return;
       if (chunk.kind === "resize") {
+        const nowFollowing = chunk.following === true;
+        if (following && !nowFollowing) mustHold = true;
+        following = nowFollowing;
         ptySize = { cols: chunk.cols, rows: chunk.rows };
         terminal.resize(chunk.cols, chunk.rows);
         requestAnimationFrame(() => {
@@ -586,6 +593,17 @@ export function CanopyTerminal({
       frame.scrollLeft += event.deltaX;
     };
     frame.addEventListener("wheel", sideways, { capture: true, passive: false });
+    const claimSize = () => {
+      const watchId = stream.watchId;
+      if (!following || watchId === null) return;
+      api
+        .terminalClaimSize(watchId)
+        .catch((error: unknown) => logWarn("[Canopy] couldn't take the size", { error }));
+    };
+    const claimOnPress = (event: globalThis.MouseEvent) => {
+      if (event.button === 0) claimSize();
+    };
+    frame.addEventListener("mousedown", claimOnPress, true);
     const joinSurrogatePairs = createSurrogatePairJoiner();
     const forwardInput = (data: string) => {
       const watchId = stream.watchId;
@@ -595,6 +613,7 @@ export function CanopyTerminal({
       if (!gesture || watchId === null || isTerminalReply(data) || reconnectingRef.current) {
         return;
       }
+      if (!isMouseReport(data)) claimSize();
       api.terminalInput(watchId, data).then(
         () => {
           if (isTerminalSubmission(data)) onSubmittedRef.current?.();
@@ -667,6 +686,7 @@ export function CanopyTerminal({
             const data = formatForTerminalPaste(text, {
               bracketedPasteMode: terminal.modes.bracketedPasteMode,
             });
+            claimSize();
             return api.terminalInput(watchId, data);
           })
           .catch((error: unknown) => logWarn("[Canopy] paste refused", { error }));
@@ -779,11 +799,9 @@ export function CanopyTerminal({
       }
       view = opened;
       holdsSize = localId !== null || opened.holdsSize === true;
-      // The pane in this view is frozen only for a terminal this view sizes;
-      // another host freezes its own.
-      if (localId !== null && releasePane === null) {
-        releasePane = subscribeTerminalServiceWhenReady((service) => service.holdGeometry(localId));
-      }
+      // A new stream is a new selection, which takes the size as a first one does.
+      following = false;
+      mustHold = true;
       const snapshot = opened.snapshot;
       ptySize = { cols: snapshot.cols, rows: snapshot.rows };
       terminal.resize(snapshot.cols, snapshot.rows);
@@ -852,6 +870,7 @@ export function CanopyTerminal({
       unsubscribeListDrag();
       for (const type of GESTURE_EVENTS) frame.removeEventListener(type, markGesture, true);
       frame.removeEventListener("mousedown", startDrag, true);
+      frame.removeEventListener("mousedown", claimOnPress, true);
       frame.removeEventListener("mousemove", markHover, true);
       endDrag();
       frame.removeEventListener("wheel", sideways, true);
@@ -862,20 +881,14 @@ export function CanopyTerminal({
       terminal.dispose();
       terminalRef.current = null;
       onStreamChangeRef.current?.({ watchId: null, ended: false, secretPrompt: false });
-      // The pane re-measures only once main has handed the PTY back, so a size
-      // it took meanwhile lands after the one main restores, not before it.
-      const release = releasePane;
       // Only its own stream, by id: another pane in this view may have opened
       // one since, which this cleanup must leave alone. A stream still opening
       // is let go when its answer arrives, below.
       const ownWatchId = view?.watchId ?? null;
       if (ownWatchId !== null) {
-        safeFireAndForget(
-          unlessHostDisconnected(api.unwatchTerminal(ownWatchId)).finally(() => release?.()),
-          { context: "Ending the canopy terminal stream" }
-        );
-      } else {
-        release?.();
+        safeFireAndForget(unlessHostDisconnected(api.unwatchTerminal(ownWatchId)), {
+          context: "Ending the canopy terminal stream",
+        });
       }
     };
   }, [runId, spawnedAt, api, generation]);

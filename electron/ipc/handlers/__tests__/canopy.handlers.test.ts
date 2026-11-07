@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TRASH_TTL_MS } from "../../../../shared/config/trash.js";
 
@@ -30,6 +31,8 @@ const state = vi.hoisted(() => ({
   submits: [] as string[],
   releaseMirror: (() => {}) as () => void,
   mode: "on" as string,
+  /** The window each fake sender sits in. */
+  windows: new Map<unknown, unknown>(),
   packaged: false,
   generation: 1 as number | null,
   /** The project the pty-host's record names; null once the terminal has exited. */
@@ -84,7 +87,10 @@ vi.mock("../../../services/DriveLeaseService.js", async (importOriginal) => ({
 
 vi.mock("electron", () => ({
   ipcMain: ipcMainMock,
-  BrowserWindow: { fromWebContents: () => null, getAllWindows: () => [] },
+  BrowserWindow: {
+    fromWebContents: (sender: unknown) => state.windows.get(sender) ?? null,
+    getAllWindows: () => [],
+  },
   webContents: { fromId: () => undefined },
   safeStorage: {},
   app: {
@@ -322,6 +328,7 @@ describe("canopy IPC", () => {
     ipcHandlers.clear();
     vi.clearAllMocks();
     state.runs = [{ runId: "run-1", spawnedAt: 100, workspaceId: "project-1" }];
+    state.windows.clear();
     state.views = [];
     state.record = { spawnedAt: 100 };
     state.screen = MENU;
@@ -2670,6 +2677,198 @@ describe("canopy IPC", () => {
       view.close();
       expect(activeTerminalWatches().has(-7)).toBe(false);
       expect(release).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("who holds a terminal's size (#16333)", () => {
+    function fakeWindow() {
+      const emitter = new EventEmitter();
+      return Object.assign(emitter, {
+        minimized: false,
+        visible: true,
+        isDestroyed: () => false,
+        isMinimized(this: { minimized: boolean }) {
+          return this.minimized;
+        },
+        isVisible(this: { visible: boolean }) {
+          return this.visible;
+        },
+      });
+    }
+
+    async function openHeld(sender = fakeSender(4)) {
+      const view = (await invoke(CANOPY_METHOD_CHANNELS.watchTerminal, sender, "run-1", {
+        spawnedAt: 100,
+      })) as { data?: { watchId: number }; watchId?: number };
+      const watchId = (view.data ?? view).watchId!;
+      await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+      ptyClient.resize.mockClear();
+      return { sender, watchId };
+    }
+
+    const holds = async (sender: unknown) => {
+      const result = (await invoke(CANOPY_METHOD_CHANNELS.getSizeHolds, sender)) as
+        | { data: string[] }
+        | string[];
+      return Array.isArray(result) ? result : result.data;
+    };
+
+    it("publishes a hold from a window here, and lets a pane's interaction take it", async () => {
+      const { sender, watchId } = await openHeld();
+      const pane = fakeSender(5);
+      expect(await holds(pane)).toEqual(["run-1"]);
+
+      await invoke(CANOPY_METHOD_CHANNELS.takeTerminalSize, pane, "run-1");
+      expect(await holds(pane)).toEqual([]);
+      expect(ptyClient.resize).not.toHaveBeenCalled();
+
+      await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+      expect(ptyClient.resize).not.toHaveBeenCalled();
+    });
+
+    it("leaves the size where it is for a view that doesn't drive the project", async () => {
+      lease.holder = "self";
+      await openHeld();
+      lease.holder = "other";
+      await invoke(CANOPY_METHOD_CHANNELS.takeTerminalSize, fakeSender(5), "run-1");
+      lease.holder = "self";
+      expect(await holds(fakeSender(5))).toEqual(["run-1"]);
+    });
+
+    it.each([
+      ["a click or a keystroke", CANOPY_METHOD_CHANNELS.terminalClaimSize, []],
+      ["a key from the composer", CANOPY_METHOD_CHANNELS.terminalSendKey, ["escape"]],
+      ["a message from the composer", CANOPY_METHOD_CHANNELS.terminalSubmit, ["navy"]],
+    ] as const)("takes the size back on %s", async (_case, channel, args) => {
+      const { sender, watchId } = await openHeld();
+      await invoke(CANOPY_METHOD_CHANNELS.takeTerminalSize, fakeSender(5), "run-1");
+
+      await invoke(channel, sender, watchId, ...args);
+      await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+
+      expect(ptyClient.resize).toHaveBeenCalledWith("run-1", 100, 30);
+      expect(await holds(sender)).toEqual(["run-1"]);
+    });
+
+    it.each([
+      [
+        "a reply by the run",
+        (sender: unknown) =>
+          invoke(CANOPY_METHOD_CHANNELS.submitReply, sender, "run-1", { spawnedAt: 100 }, "navy"),
+      ],
+      [
+        "an answer by the run",
+        (sender: unknown) =>
+          invoke(CANOPY_METHOD_CHANNELS.answer, sender, "run-1", { spawnedAt: 100 }, "Yes"),
+      ],
+    ] as const)("takes the size back on %s", async (_case, send) => {
+      const { sender, watchId } = await openHeld();
+      await invoke(CANOPY_METHOD_CHANNELS.takeTerminalSize, fakeSender(5), "run-1");
+
+      await send(sender);
+      await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+
+      expect(ptyClient.resize).toHaveBeenCalledWith("run-1", 100, 30);
+    });
+
+    it("takes nothing for a panel that doesn't drive the project", async () => {
+      lease.holder = "self";
+      const { sender, watchId } = await openHeld();
+      await invoke(CANOPY_METHOD_CHANNELS.takeTerminalSize, fakeSender(5), "run-1");
+      lease.holder = "other";
+      await invoke(CANOPY_METHOD_CHANNELS.terminalClaimSize, sender, watchId);
+      lease.holder = "self";
+      await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+      expect(ptyClient.resize).not.toHaveBeenCalled();
+    });
+
+    it.each(["minimize", "hide"] as const)(
+      "lets go when its window is put away by %s, and not again on its return",
+      async (event) => {
+        const win = fakeWindow();
+        const sender = fakeSender(4);
+        state.windows.set(sender, win);
+        const { watchId } = await openHeld(sender);
+
+        win.emit(event);
+
+        expect(ptyClient.resize).toHaveBeenCalledWith("run-1", 80, 24);
+        expect(await holds(sender)).toEqual([]);
+
+        ptyClient.resize.mockClear();
+        win.emit("restore");
+        win.emit("show");
+        win.emit("focus");
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+        expect(ptyClient.resize).not.toHaveBeenCalled();
+      }
+    );
+
+    it("listens to a window once, however many of its views open Canopy", async () => {
+      const win = fakeWindow();
+      const first = fakeSender(4);
+      const second = fakeSender(6);
+      state.windows.set(first, win);
+      state.windows.set(second, win);
+      await openHeld(first);
+      await invoke(CANOPY_METHOD_CHANNELS.watchTerminal, second, "run-1", { spawnedAt: 100 });
+      expect(win.listenerCount("minimize")).toBe(1);
+      expect(win.listenerCount("hide")).toBe(1);
+    });
+
+    it("leaves the views of every other window alone", async () => {
+      const sender = fakeSender(4);
+      state.windows.set(sender, fakeWindow());
+      const elsewhere = fakeWindow();
+      const bystander = fakeSender(6);
+      state.windows.set(bystander, elsewhere);
+      await invoke(CANOPY_METHOD_CHANNELS.setActive, bystander, true);
+      await openHeld(sender);
+
+      elsewhere.emit("minimize");
+
+      expect(await holds(sender)).toEqual(["run-1"]);
+      expect(ptyClient.resize).not.toHaveBeenCalled();
+    });
+
+    it("takes no size for a measure that lands after the window went", async () => {
+      const win = fakeWindow();
+      const sender = fakeSender(4);
+      state.windows.set(sender, win);
+      const view = (await invoke(CANOPY_METHOD_CHANNELS.watchTerminal, sender, "run-1", {
+        spawnedAt: 100,
+      })) as { data?: { watchId: number }; watchId?: number };
+      win.minimized = true;
+
+      await invoke(
+        CANOPY_METHOD_CHANNELS.terminalResize,
+        sender,
+        (view.data ?? view).watchId!,
+        100,
+        30
+      );
+
+      expect(ptyClient.resize).not.toHaveBeenCalled();
+      expect(await holds(sender)).toEqual([]);
+    });
+
+    it("tells the windows when the drive takes a local hold away, for the driver's panes to fit", async () => {
+      const pushed = () =>
+        pushes.mock.calls
+          .filter(
+            ([channel, envelope]) =>
+              channel === CHANNELS.EVENTS_PUSH &&
+              (envelope as { name: string }).name === "terminal:canopy-size-holds-changed"
+          )
+          .map(([, envelope]) => (envelope as { payload: string[] }).payload);
+      lease.holder = "self";
+      await openHeld();
+      expect(pushed().at(-1)).toEqual(["run-1"]);
+
+      lease.holder = "other";
+      for (const listener of lease.listeners) listener();
+
+      expect(pushed().at(-1)).toEqual([]);
     });
   });
 

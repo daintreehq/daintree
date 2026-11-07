@@ -2,12 +2,14 @@ import { onHostResync } from "@/store/hostResyncSignal";
 import { logWarn } from "@/utils/logger";
 
 /**
- * The terminals a Canopy panel on another machine holds at its own size
- * (#14497). Main is the only authority: this mirrors its list. Their panes
- * follow the PTY's grid instead of fitting, as a Canopy panel in the pane's
- * own view freezes it.
+ * The terminals a Canopy panel holds at its own size, on this machine or
+ * another (#14497, #16333). Main is the only authority: this mirrors its list.
+ * Their panes follow the PTY's grid instead of fitting.
  */
 let held: ReadonlySet<string> = new Set();
+// Asked once per list: a hold from another machine stands, and every keystroke
+// in its pane would otherwise ask again.
+const asked = new Set<string>();
 const listeners = new Set<() => void>();
 let offPush: (() => void) | null = null;
 let offResync: (() => void) | null = null;
@@ -20,8 +22,23 @@ export function isCanopySizeHeld(terminalId: string): boolean {
   return held.has(terminalId);
 }
 
+/**
+ * The user typed or clicked in this terminal's pane, which takes the size back
+ * from a panel. Main lets go, and the pane fits again on hearing it has.
+ */
+export function takeCanopySize(terminalId: string): void {
+  if (!held.has(terminalId) || asked.has(terminalId)) return;
+  const take = window.electron.canopy?.takeTerminalSize;
+  if (!take) return;
+  asked.add(terminalId);
+  take(terminalId).catch((error: unknown) => {
+    logWarn("[canopySizeHolds] Couldn't take the terminal's size back", { error });
+  });
+}
+
 function apply(terminalIds: readonly string[]): void {
   held = new Set(terminalIds);
+  asked.clear();
   for (const listener of [...listeners]) listener();
 }
 
@@ -61,6 +78,7 @@ function stop(): void {
   offResync?.();
   offResync = null;
   held = new Set();
+  asked.clear();
 }
 
 export function subscribeCanopySizeHolds(listener: () => void): () => void {
