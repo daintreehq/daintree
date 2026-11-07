@@ -59,7 +59,7 @@ import type {
 } from "@/store/voiceRecordingStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 
-import { useWorktreeStore } from "@/hooks/useWorktreeStore";
+import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { VoiceInputButton } from "./VoiceInputButton";
 import { DictationCancelConfirmOverlay, useDictationCancelConfirm } from "./DictationCancelConfirm";
 import { DICTATION_CANCEL_CONFIRM_PROMPT } from "@/lib/pressAgain";
@@ -635,12 +635,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const panelOwnTitle = usePanelStore((s) => s.panelsById[terminalId]?.title);
     // Selects the drawn label, not the snapshot: the agent's own git-status
     // passes replace the snapshot while the user is typing here.
-    const panelWorktreeLabel = useWorktreeStore((s) => {
+    // Optional: Canopy's reply can stand outside any project, with no worktrees to name.
+    const panelWorktreeLabel = useWorktreeStoreOptional((s) => {
       const worktree = panelWorktreeId ? s.worktrees.get(panelWorktreeId) : undefined;
       return worktree?.isMainWorktree ? worktree.name : worktree?.branch || worktree?.name;
-    });
-    const panelWorktreePath = useWorktreeStore((s) =>
-      panelWorktreeId ? s.worktrees.get(panelWorktreeId)?.path : undefined
+    }, undefined);
+    const panelWorktreePath = useWorktreeStoreOptional(
+      (s) => (panelWorktreeId ? s.worktrees.get(panelWorktreeId)?.path : undefined),
+      undefined
     );
     const isVoiceRecording = activeVoicePanelId === voiceId && voiceStatus === "recording";
     const isVoiceConnecting = activeVoicePanelId === voiceId && voiceStatus === "connecting";

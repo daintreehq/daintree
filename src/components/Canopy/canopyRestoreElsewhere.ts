@@ -1,4 +1,3 @@
-import type { HostId } from "@shared/types/remoteHosts";
 import type { ProjectFocusOnActivateIntent } from "@shared/types/ipc/project";
 import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -6,7 +5,7 @@ import { switchToHost } from "@/components/Hosts/hostSwitching";
 import { notify } from "@/lib/notify";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
-import { placeOf } from "./canopyInboxPlace";
+import type { placeOf } from "./canopyInboxPlace";
 import type { CanopyTrashItem } from "./canopyTrash";
 
 /**
@@ -19,15 +18,10 @@ import type { CanopyTrashItem } from "./canopyTrash";
  */
 export function restoreInItsProject(
   item: Pick<CanopyTrashItem, "runId" | "spawnedAt" | "expiresAt" | "row">,
-  shown: { hostId: HostId | null; ownHostId: HostId },
+  place: ReturnType<typeof placeOf>,
   panel: { closeForTerminal: (runId: string) => void; stillShows: () => boolean }
 ): void {
   if (!panel.stillShows()) return;
-  const place = placeOf(
-    { runId: item.runId, workspaceId: item.row.run.workspaceId },
-    shown.hostId,
-    shown.ownHostId
-  );
   const focusIntent: ProjectFocusOnActivateIntent = {
     intent: "restore-trashed",
     runId: place.runId,

@@ -3,7 +3,6 @@ import type { Project } from "@shared/types";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 import { isLocalHostId, type HostId } from "@shared/types/remoteHosts";
 import { ALL_HOSTS_ID, useCanopyStore, type CanopyScope } from "@/store/canopyStore";
-import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { pluralize } from "@/lib/pluralize";
@@ -11,6 +10,7 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useAgentDirectory } from "@/hooks/useAgentDirectory";
 import { useAssistantWork } from "@/hooks/useAssistantWork";
 import type { HostMenuRow } from "@/components/Hosts/hostModel";
+import { useCanopyFrame } from "./canopyFrame";
 import { unmatchedTerms, type CanopyInbox, type CanopyItem } from "./canopyModel";
 import {
   assistantMatches,
@@ -112,6 +112,7 @@ export function useCanopyInboxFilters({
   // whichever host they run on, so its row is read while it is docked.
   const globalDocked = useCanopyStore((s) => s.globalDocked);
   const directory = useAgentDirectory(isOpen && (assistantsReadable || globalDocked));
+  const frame = useCanopyFrame();
   const handbacksSeen = useCanopyStore((s) => s.assistantHandbacksSeen);
   const seeAssistantHandback = useCanopyStore((s) => s.seeAssistantHandback);
   const ownHostName = everyHost
@@ -125,9 +126,9 @@ export function useCanopyInboxFilters({
       projectEmoji: (id) => byId.get(id)?.emoji || null,
       hostName: ownHostName,
       seen: handbacksSeen,
-      projectId: scope === "project" ? getViewWorkspaceId() : null,
+      projectId: scope === "project" ? frame.workspaceId() : null,
     });
-  }, [assistantsReadable, directory, projects, ownHostName, handbacksSeen, scope]);
+  }, [assistantsReadable, directory, projects, ownHostName, handbacksSeen, scope, frame]);
   const assistantAsks = assistantItems.filter((item) => item.ask !== null).length;
   // Its row, whatever the list shows: no filter, scope or host hides the dock.
   const globalItem = useMemo(() => {

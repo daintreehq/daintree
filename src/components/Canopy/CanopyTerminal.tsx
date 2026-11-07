@@ -676,7 +676,7 @@ export function CanopyTerminal({
         const active = document.activeElement;
         if (active !== null && frame.contains(active)) return;
         // A dialog the menu opened (the file viewer) keeps the keyboard.
-        const around = frame.closest('[role="dialog"]');
+        const around = frame.closest('[role="dialog"], [data-canopy-standalone]');
         if (active === null || active === document.body || around?.contains(active)) {
           terminal.focus();
         }

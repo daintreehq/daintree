@@ -70,6 +70,7 @@ import { CanopyTitle } from "./CanopyTitle";
 import type { CanopyAsideActions } from "./CanopyRowMenu";
 import { ownCanopyTerminalApi, type CanopyTerminalApi } from "./canopyHostSource";
 import { parseAllHostsKey } from "./canopyAllHosts";
+import { useCanopyFrame } from "./canopyFrame";
 import {
   DICTATION_OWNER_ATTR,
   canopyReplyVoiceId,
@@ -80,7 +81,6 @@ import {
   useVoiceRecordingStore,
   type VoiceRecordingTarget,
 } from "@/store/voiceRecordingStore";
-import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { VoiceMicNoticeBanner } from "@/components/Terminal/VoiceMicNoticeBanner";
 
 const LazyHybridInputBar = lazy(() =>
@@ -610,10 +610,11 @@ export function CanopyCard({
     frame = requestAnimationFrame(() => attempt(1));
     return true;
   };
+  const frame = useCanopyFrame();
   // Its own dictation, apart from the grid pane's composer on the same terminal.
   // Main reads keyterms, vocabulary and file links from the terminal only when
   // this view's project owns it: another project's or host's gives it none.
-  const ownsContext = otherHostId === undefined && run.workspaceId === getViewWorkspaceId();
+  const ownsContext = otherHostId === undefined && run.workspaceId === frame.workspaceId();
   const voiceTarget: VoiceRecordingTarget = {
     panelId: canopyReplyVoiceId(item.runId, otherHostId),
     panelTitle: `Reply to ${row.title}`,

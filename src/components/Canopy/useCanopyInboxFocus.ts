@@ -11,7 +11,8 @@ import {
 } from "./canopyInboxProjection";
 import { canopyCardDomId, type CanopyCardHandle, type CanopyPaneFocus } from "./CanopyCard";
 import type { CanopyAssistantItem, CanopyRoleFilter } from "./canopyAssistants";
-import { canopyAssistantDomId, openAssistantItem } from "./openAssistantItem";
+import { canopyAssistantDomId } from "./openAssistantItem";
+import { CANOPY_SURFACE, useCanopyFrame } from "./canopyFrame";
 import { placeOf } from "./canopyInboxPlace";
 import { mainViewFocusedAgentId } from "./canopyMainViewFocus";
 import { canopyResumeTarget, type CanopyResume } from "./canopyResume";
@@ -38,7 +39,6 @@ function reportReplyHidden(why: string): void {
  */
 export function useCanopyInboxFocus({
   isOpen,
-  close,
   hostId,
   ownHostId,
   otherHost,
@@ -60,7 +60,6 @@ export function useCanopyInboxFocus({
   seeAssistantHandback,
 }: {
   isOpen: boolean;
-  close: () => void;
   /** The other host the panel shows, or null for the window's own. */
   hostId: HostId | null;
   ownHostId: HostId;
@@ -85,6 +84,7 @@ export function useCanopyInboxFocus({
   roleFilter: CanopyRoleFilter;
   seeAssistantHandback: (assistantId: string, observedAt: number) => void;
 }) {
+  const frame = useCanopyFrame();
   const searchRef = useRef<HTMLInputElement>(null);
   const [assistantId, setAssistantId] = useState<string | null>(null);
   const [assistantRefusal, setAssistantRefusal] = useState<{ id: string; text: string } | null>(
@@ -236,7 +236,7 @@ export function useCanopyInboxFocus({
     touchedRef.current = false;
     const touch = (event: Event) => {
       const target = event.target;
-      if (target instanceof Element && target.closest('[data-testid="canopy-dialog"]')) {
+      if (target instanceof Element && target.closest(CANOPY_SURFACE)) {
         touchedRef.current = true;
       }
     };
@@ -582,10 +582,9 @@ export function useCanopyInboxFocus({
     if (item.handbackAt !== null) seeAssistantHandback(item.id, item.handbackAt);
     if (!keepSelection) setAssistantId(item.id);
     setAssistantRefusal(null);
-    void openAssistantItem(item).then((refused) => {
-      if (!mountedRef.current) return;
-      if (refused === null) close();
-      else setAssistantRefusal({ id: item.id, text: refused });
+    const mounted = () => mountedRef.current;
+    void frame.openAssistant(item, mounted).then((refused) => {
+      if (refused !== null && mounted()) setAssistantRefusal({ id: item.id, text: refused });
     });
   };
   const selectAssistant = useCallback((id: string) => setAssistantId(id), []);
