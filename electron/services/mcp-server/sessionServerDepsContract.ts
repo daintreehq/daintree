@@ -188,6 +188,17 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     authorize?: () => void
   ) => Promise<import("../../../shared/types/projectCommand.js").ProjectCommandRunResult>;
   /**
+   * Execute `agent.resumeOwned` in the main process (#16341), in the project
+   * the session is bound to. Throws {@link McpError} on invalid args; resolves
+   * with a refusal for every reason the session couldn't be reopened.
+   */
+  handleAgentResumeOwned: (
+    rawArgs: unknown,
+    signal: AbortSignal,
+    /** Asked once more right before the spawn, for the project it runs in; throws to refuse. */
+    authorize?: (projectId: string) => void
+  ) => Promise<import("./agentResumeOwned.js").AgentResumeOwnedAnswer>;
+  /**
    * Read `terminal.getStatus` off the pty-host for one workspace, with no
    * renderer (#12316). Used only as a fallback when the bound workspace has no
    * live view: the renderer answer is richer, and this one reports which fields
@@ -353,6 +364,14 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    * `projectId`, when named, is that one.
    */
   refuseWrite?: (projectId: string | undefined) => { code: string; message: string } | null;
+  /**
+   * Set for a session on this host that neither of those covers, one in a
+   * view: why a change main makes itself may not run, or null while a view
+   * here drives `projectId`, else the session's own project, or nobody does.
+   * A view another machine drives only watches, and nothing starts behind it
+   * (#16341).
+   */
+  refuseViewWrite?: (projectId: string | undefined) => { code: string; message: string } | null;
   /**
    * The caller's own pane, from its credential: a pane bearer's terminal, or
    * the terminal a help session is bound to. Null for everything else — an

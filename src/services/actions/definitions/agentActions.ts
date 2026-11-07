@@ -11,6 +11,10 @@ import {
 } from "./schemas";
 import { z } from "zod";
 import { AGENT_REGISTRY } from "@/config/agents";
+import {
+  AgentResumeOwnedArgsSchema,
+  AgentResumeOwnedResultSchema,
+} from "@shared/types/agentSessionSchemas";
 import { NOTIFY_ARG_DESCRIPTION, NotifyReplyLinesSchema } from "@shared/types/terminalNotify";
 import { AgentLaunchManyArgsSchema } from "@shared/types/mcpBatch";
 import {
@@ -523,6 +527,46 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     mcpOutputSchema: true,
     run: (args: unknown, ctx: ActionContext) =>
       runAgentAction("agentSessionHistory.resume", args, ctx, callbacks),
+  }));
+
+  // Manifest-only, like `project.runCheck`, and executed in main (#16341): the
+  // journal, the drive lease and the ownership ledger are all there, and a
+  // recovery loop has to run with no view open. Never dispatched from a view,
+  // which is why `agentSessionHistory.resume` above can't take its place.
+  actions.set("agent.resumeOwned", () => ({
+    id: "agent.resumeOwned",
+    title: "Resume agent session as an owned pane",
+    description:
+      "Reopen a closed session as a new pane you own. `launched` means it is starting, not that the agent is ready. `existing`: a live pane holds it, so nothing launched and this call doesn't make it yours. `refused` gives the reason.",
+    category: "agent",
+    kind: "command",
+    danger: "safe",
+    // Starts an agent outside any view with the journaled launch flags, which a
+    // plugin's launch may not choose.
+    denyPluginDispatch: true,
+    scope: "renderer",
+    // Hidden for the same reason as `terminal.closeOwned`: only the MCP
+    // main-process path can reach it.
+    palette: { mode: "hidden" },
+    argsSchema: AgentResumeOwnedArgsSchema,
+    examples: [
+      {
+        args: { worktreeId: "wt-1", agentId: "claude", sessionId: "sess-abc123" },
+        description: "Reopen one journaled session in the worktree it ran in",
+      },
+    ],
+    resultSchema: AgentResumeOwnedResultSchema,
+    mcpOutputSchema: true,
+    mcpAnnotations: {
+      readOnlyHint: false,
+      idempotentHint: false,
+      destructiveHint: false,
+    },
+    run: async () => {
+      throw new Error(
+        "agent.resumeOwned must be invoked through the MCP main-process path, not renderer dispatch."
+      );
+    },
   }));
 
   actions.set("session.bookmarkAndClose", () => ({

@@ -593,7 +593,10 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // 25_765 B (+142 over develop's 25_623): withdrawing a send held for a busy
   // worker. The prose has to say a line already going in isn't taken back, and
   // that the answer says which. Assistant-only, off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 25_780;
+  // 25_780 → 26_000 for `agent.resumeOwned` (#16341), measured at 25_992 B. The
+  // prose has to say a pane that holds the session isn't handed over, and that a
+  // starting process isn't a ready agent. Off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 26_000;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1648,6 +1651,7 @@ describe("plugin-dispatch injection guard (#10558)", () => {
       "assistant.list": {},
       "assistant.start": {},
       "agent.readQuota": {},
+      "agent.resumeOwned": { worktreeId: "wt-1", agentId: "claude", sessionId: "sess-1" },
       "host.list": {},
       "host.call": { hostId: "h-placeholder", projectId: "p-placeholder", tool: "terminal.list" },
       "host.ensureProject": { hostId: "h-placeholder" },

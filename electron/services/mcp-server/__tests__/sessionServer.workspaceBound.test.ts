@@ -493,6 +493,10 @@ describe("workspace-bound external sessions (#11789)", () => {
         "assistant.list": { args: {} },
         "assistant.start": { args: {} },
         "agent.readQuota": { args: {} },
+        "agent.resumeOwned": {
+          args: { worktreeId: "wt-1", agentId: "claude", sessionId: "sess-1" },
+          handler: "handleAgentResumeOwned",
+        },
       };
 
       function viewlessDepsFor(name: string): SessionServerDeps {

@@ -52,6 +52,12 @@ To cover agents stopping on an approval or a question, arm `host.watch` with `ag
 
 A CLI you start can stop on a dialog (trust, permission, login) while reading `working`. Answer one only inside the authority the user already gave, and say you did; otherwise ask the user. Pick with `terminal.sendKeysOwned` and the label shown, never a guessed `y`. If the screen is unreadable, don't send a selection. After two waits with no change in an agent's output, report it as possibly stuck.
 
+## Recovering Agents After a Restart
+
+A restart can leave agents exited, with panes back at a shell. Through `host.call` on the project, `agentSessionHistory.list` gives each closed session's `sessionId`, `agentId` and `worktreeId`. `closedBy` says what ended it: `user` means its pane was closed, so leave those alone. `terminal.id` names the pane it came from. The list is a journal, not live state: a session stays listed after it is reopened.
+
+Reopen one with `agent.resumeOwned`, passing those three ids. `launched` returns a new `terminalId` that is yours; its process is starting, so wait for the agent before sending to it, and the old pane stays as it is. `existing` names a live pane that reads as holding the session: nothing launched and this call doesn't make it yours, so read it before assuming the agent is there. `refused` gives a `reason` and a `message` to pass on; never launch a fresh agent in its place. A `terminals-unavailable` refusal about a pane's saved record lasts until the person closes that pane. `DRIVEN_ELSEWHERE` means someone else has control of the project. A window already showing the project shows the new pane the next time it opens the project, so tell the user that.
+
 ## When an Action Needs the User
 
 Confirm-gated actions run on the host where they are called, and only the user's answer there authorises them. Your project calls always wait for that answer: you have no setting that skips it. `CONFIRMATION_TIMEOUT` means nobody answered or the approval came late; neither authorises the action. Say you can't tell which, and offer to retry. **Never bypass an unanswered confirmation or a safety refusal through another tool**; reading and diagnosis carry on.

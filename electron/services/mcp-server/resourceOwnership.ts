@@ -463,6 +463,13 @@ const SUCCESS_EXTRACTORS: Record<
     const terminalId = readString(result, "terminalId");
     return terminalId === undefined ? [] : [{ kind: "terminal", id: terminalId }];
   },
+  // Only a pane the call itself started (#16341). `existing` names a live pane
+  // that already held the session: knowing a session id is no claim on it.
+  "agent.resumeOwned": (result) => {
+    if (result.status !== "launched") return [];
+    const terminalId = readString(result, "terminalId");
+    return terminalId === undefined ? [] : [{ kind: "terminal", id: terminalId }];
+  },
   // Opens a panel on a ladder tier and hands its id back (#12407). Without it
   // a pane bearer that started work on an issue could not type into the
   // terminal it had just opened. The agent terminal only: the worktree it

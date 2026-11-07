@@ -1026,7 +1026,13 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 188_300 → 188_800 for #16210, measured at 188_716 B (+439 over develop's
   // 188_277): the same submission `output` field as the external ceiling's
   // raise, carried in-app for the external⊆in-app subset invariant.
-  const MAX_COHORT_PAYLOAD_BYTES = 188_800;
+  // 188_800 → 190_300 for #16341, measured at 190_238 B: the global Assistant can
+  // reopen an exited agent after a restart instead of a person relaunching each
+  // one. `agent.resumeOwned` and its refusal reasons, plus `closedBy` and
+  // `terminal` on the session records, which is how it tells a session the person
+  // closed from one that died. Off the external surface, so that ceiling doesn't
+  // move.
+  const MAX_COHORT_PAYLOAD_BYTES = 190_300;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

@@ -1410,6 +1410,11 @@ describe("McpServerService", () => {
       // the live allowlists, so an id tiered without an entry here fails as a
       // missing tool rather than as the fixture gap it actually is.
       createManifestEntry({
+        id: "agent.resumeOwned" as ActionId,
+        title: "Resume agent session as an owned pane",
+        description: "Reopen a closed session as a new pane the caller owns",
+      }),
+      createManifestEntry({
         id: "agentSessionHistory.resume" as ActionId,
         title: "Resume Agent Session",
         description:
