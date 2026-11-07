@@ -271,7 +271,7 @@ import { events } from "../../../services/events.js";
 import { getDefaultPanelTitle } from "../../../../shared/config/panelKindRegistry.js";
 import { canopyPanelsListing, registerCanopyHandlers } from "../canopy.js";
 import { CANOPY_METHOD_CHANNELS } from "../canopy.preload.js";
-import { activeTerminalWatches } from "../canopyTerminalWatch.js";
+import { activeTerminalWatches, sizeHolds } from "../canopyTerminalWatch.js";
 import { getIpcDispatcher } from "../../dispatcher.js";
 import { resetCanopyTrashRemovalsForTests } from "../../../services/pty/canopyTrashRemovals.js";
 import type { ClientEndpoint } from "../../endpoint.js";
@@ -878,12 +878,18 @@ describe("canopy IPC", () => {
     state.releaseMirror = release;
     const sender = fakeSender(3);
     await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, true);
-    await invoke(CANOPY_METHOD_CHANNELS.watchTerminal, sender, "run-1", { spawnedAt: 100 });
+    const opened = (await invoke(CANOPY_METHOD_CHANNELS.watchTerminal, sender, "run-1", {
+      spawnedAt: 100,
+    })) as { data?: { watchId: number }; watchId?: number };
+    const { watchId } = opened.data ?? opened;
+    await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
     expect(release).not.toHaveBeenCalled();
+    expect(sizeHolds()).toEqual(["run-1"]);
 
     sender.emit("destroyed");
 
     expect(release).toHaveBeenCalledTimes(1);
+    expect(sizeHolds()).toEqual([]);
     expect(active(await invoke(CANOPY_METHOD_CHANNELS.getSnapshot, fakeSender(4)))).toBe(false);
   });
 

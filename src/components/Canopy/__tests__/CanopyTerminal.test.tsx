@@ -10,6 +10,10 @@ import {
   type MockInstance,
 } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import {
+  selectEffectiveTheme,
+  useTerminalColorSchemeStore,
+} from "@/store/terminalColorSchemeStore";
 import type { ILinkHandler } from "@xterm/xterm";
 import type { CanopyTerminalData, CanopyTerminalView } from "@shared/types/ipc/canopy";
 import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
@@ -27,6 +31,7 @@ const xterm = vi.hoisted(() => ({
     widths: string[];
     resizes: Array<[number, number]>;
     emitData: (data: string) => void;
+    options: Record<string, unknown>;
   },
 }));
 
@@ -50,6 +55,7 @@ vi.mock("@xterm/xterm", () => ({
         widths: [],
         resizes: [],
         emitData: (data) => this.onDataListener?.(data),
+        options: this.options,
       };
     }
     element: HTMLElement | undefined;
@@ -254,6 +260,24 @@ async function open(view: CanopyTerminalView) {
 }
 
 describe("CanopyTerminal", () => {
+  it("follows a palette changed elsewhere, and stops following once gone", async () => {
+    const view = mount();
+    await vi.waitFor(() => expect(xterm.current).not.toBeNull());
+    const options = xterm.current!.options;
+    const before = options.theme;
+    const scheme = useTerminalColorSchemeStore.getState().selectedSchemeId;
+
+    act(() => useTerminalColorSchemeStore.getState().setSelectedSchemeId("dracula"));
+
+    expect(options.theme).not.toBe(before);
+    expect(options.theme).toBe(selectEffectiveTheme(useTerminalColorSchemeStore.getState()));
+
+    const shown = options.theme;
+    view.unmount();
+    act(() => useTerminalColorSchemeStore.getState().setSelectedSchemeId(scheme));
+    expect(options.theme).toBe(shown);
+  });
+
   it("paints the snapshot, then only the early output it does not already hold", async () => {
     mount();
     // Arrives before the call that opened the stream has returned.

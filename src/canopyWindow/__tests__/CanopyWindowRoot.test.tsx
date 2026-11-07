@@ -17,6 +17,8 @@ const loadProjects = vi.hoisted(() => vi.fn(async () => {}));
 const loadScratches = vi.hoisted(() => vi.fn(async () => {}));
 const loadOverrides = vi.hoisted(() => vi.fn(async () => {}));
 const projectShell = vi.hoisted(() => vi.fn());
+const hydrateNotifications = vi.hoisted(() => vi.fn(async () => {}));
+const toasterProps = vi.hoisted(() => [] as Array<{ standalone: boolean | undefined }>);
 
 vi.mock("@/components/Canopy/CanopyView", () => ({
   CanopyView: ({ frame }: { frame: CanopyFrame }) => {
@@ -24,7 +26,12 @@ vi.mock("@/components/Canopy/CanopyView", () => ({
     return <div data-testid="inbox" />;
   },
 }));
-vi.mock("@/components/ui/toaster", () => ({ Toaster: () => null }));
+vi.mock("@/components/ui/toaster", () => ({
+  Toaster: ({ standalone }: { standalone?: boolean }) => {
+    toasterProps.push({ standalone });
+    return null;
+  },
+}));
 vi.mock("@/hooks/useAppThemeConfig", () => ({ useAppThemeConfig: vi.fn() }));
 vi.mock("@/hooks/useTerminalConfig", () => ({ useTerminalConfig: vi.fn() }));
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
@@ -48,6 +55,9 @@ vi.mock("@/store/scratchStore", () => ({
   useScratchStore: { getState: () => ({ loadScratches }) },
 }));
 vi.mock("@/store/rendererStoreOrchestrator", () => ({ initStoreOrchestrator: projectShell }));
+vi.mock("@/store/notificationSettingsStore", () => ({
+  useNotificationSettingsStore: { getState: () => ({ hydrate: hydrateNotifications }) },
+}));
 
 import { CanopyWindowRoot } from "../CanopyWindowRoot";
 import { CANOPY_WINDOW_FRAME } from "../canopyWindowFrame";
@@ -76,6 +86,7 @@ function snapshot(mode: CanopySnapshot["mode"]): CanopySnapshot {
 
 beforeEach(() => {
   shownFrames.length = 0;
+  toasterProps.length = 0;
   vi.clearAllMocks();
   useCanopyStore.setState({ snapshot: null, mode: "unset" });
   Object.defineProperty(window, "electron", {
@@ -127,6 +138,15 @@ describe("CanopyWindowRoot", () => {
     expect(loadOverrides).toHaveBeenCalled();
   });
 
+  it("keeps the user's notification settings, and offers no toast control it can't run", async () => {
+    render(<CanopyWindowRoot />);
+    await act(async () => {});
+
+    expect(hydrateNotifications).toHaveBeenCalled();
+    expect(toasterProps.every((props) => props.standalone === true)).toBe(true);
+    expect(toasterProps.length).toBeGreaterThan(0);
+  });
+
   it("stops everything it started when it goes", async () => {
     const view = render(<CanopyWindowRoot />);
     await act(async () => {});
@@ -151,7 +171,7 @@ describe("the Canopy window's frame", () => {
   it("says what a restore needs rather than moving anything", () => {
     const panel = { stillShows: vi.fn(() => true), closeForTerminal: vi.fn() };
 
-    CANOPY_WINDOW_FRAME.restoreElsewhere({} as never, {} as never, panel);
+    Reflect.apply(CANOPY_WINDOW_FRAME.restoreElsewhere, undefined, [undefined, undefined, panel]);
 
     expect(notifyMock).toHaveBeenCalledWith(
       expect.objectContaining({ title: "Project isn't open" })
@@ -160,8 +180,8 @@ describe("the Canopy window's frame", () => {
   });
 
   it("refuses to open an assistant in words, for its pane to show", async () => {
-    await expect(CANOPY_WINDOW_FRAME.openAssistant({} as never, () => true)).resolves.toMatch(
-      /Assistant panel/
-    );
+    const refusal: unknown = await Reflect.apply(CANOPY_WINDOW_FRAME.openAssistant, undefined, []);
+
+    expect(refusal).toMatch(/Assistant panel/);
   });
 });

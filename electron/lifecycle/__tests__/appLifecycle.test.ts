@@ -467,6 +467,27 @@ describe("registerAppLifecycleHandlers – second-instance", () => {
     expect(dispatchOpenDirPathMock).toHaveBeenCalledExactlyOnceWith(cliDir);
   });
 
+  it("brings a window with no project forward when nothing else is up to relaunch to", async () => {
+    const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+    const { markProjectlessView } = await import("../../window/projectlessViews.js");
+    const canopyWindow = makeBrowserWindow();
+    const canopyView = { id: 502, once: vi.fn() };
+    markProjectlessView(canopyView as never, canopyWindow as never);
+    registerAppLifecycleHandlers(makeOpts());
+
+    const secondInstanceCall = appMock.on.mock.calls.find(
+      ([event]: string[]) => event === "second-instance"
+    );
+    (secondInstanceCall![1] as (event: unknown, commandLine: string[], cwd: string) => void)(
+      {},
+      ["daintree"],
+      "/"
+    );
+
+    expect(canopyWindow.focus).toHaveBeenCalledTimes(1);
+    canopyView.once.mock.calls.find(([event]) => event === "destroyed")?.[1]();
+  });
+
   it("focuses primary window when no CLI path is provided", async () => {
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     const mainWindow = makeBrowserWindow();

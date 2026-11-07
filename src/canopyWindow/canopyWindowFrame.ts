@@ -1,5 +1,6 @@
 import { standaloneCanopyFrame } from "@/components/Canopy/canopyFrame";
 import { notify } from "@/lib/notify";
+import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 /**
  * The Canopy window's answers to what only a host can decide. It holds no
@@ -7,7 +8,7 @@ import { notify } from "@/lib/notify";
  * until Go to pane can reach it, and what needs a project says which one to open.
  */
 export const CANOPY_WINDOW_FRAME = standaloneCanopyFrame({
-  close: () => void window.electron.window.close(),
+  close: () => safeFireAndForget(window.electron.window.close(), { context: "Closing Canopy" }),
   goToRun: null,
   restoreElsewhere: () => {
     notify({

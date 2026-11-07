@@ -73,7 +73,7 @@ describe("canopy actions", () => {
       focus.mockResolvedValue(true);
       useCanopyStore.setState({ mode: "on", isOpen: false });
 
-      await definition("canopy.toggle").run({}, {} as never);
+      await definition("canopy.toggle").run(undefined, {});
 
       expect(focus).toHaveBeenCalledTimes(1);
       expect(useCanopyStore.getState().isOpen).toBe(false);
@@ -84,7 +84,7 @@ describe("canopy actions", () => {
       focus.mockResolvedValue(false);
       useCanopyStore.setState({ mode: "on", isOpen: false });
 
-      await definition("canopy.toggle").run({}, {} as never);
+      await definition("canopy.toggle").run(undefined, {});
 
       expect(useCanopyStore.getState().isOpen).toBe(true);
     });
@@ -93,7 +93,7 @@ describe("canopy actions", () => {
       installWindowApi();
       useCanopyStore.setState({ mode: "on", isOpen: true });
 
-      await definition("canopy.toggle").run({}, {} as never);
+      await definition("canopy.toggle").run(undefined, {});
 
       expect(focus).not.toHaveBeenCalled();
       expect(useCanopyStore.getState().isOpen).toBe(false);
@@ -103,7 +103,7 @@ describe("canopy actions", () => {
       installWindowApi();
       useCanopyStore.setState({ mode: "unset", isOpen: false });
 
-      await definition("canopy.toggle").run({}, {} as never);
+      await definition("canopy.toggle").run(undefined, {});
 
       expect(focus).not.toHaveBeenCalled();
       expect(useCanopyStore.getState().isOpen).toBe(true);
@@ -126,7 +126,7 @@ describe("canopy actions", () => {
       expect(openWindow.isVisible?.({})).toBe(true);
       expect(openWindow.isEnabled?.({})).toBe(true);
 
-      await openWindow.run({}, {} as never);
+      await openWindow.run(undefined, {});
 
       expect(open).toHaveBeenCalledTimes(1);
       expect(useCanopyStore.getState().isOpen).toBe(false);
@@ -137,7 +137,7 @@ describe("canopy actions", () => {
       open.mockRejectedValueOnce(new Error("no"));
       useCanopyStore.setState({ mode: "on", isOpen: true });
 
-      await expect(definition("canopy.openWindow").run({}, {} as never)).rejects.toThrow("no");
+      await expect(definition("canopy.openWindow").run(undefined, {})).rejects.toThrow("no");
 
       expect(useCanopyStore.getState().isOpen).toBe(true);
     });

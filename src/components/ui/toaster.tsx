@@ -133,7 +133,15 @@ function ToastProgress({ progress }: { progress: NotificationProgress }) {
   );
 }
 
-function Toast({ notification, isTopmost }: { notification: Notification; isTopmost: boolean }) {
+function Toast({
+  notification,
+  isTopmost,
+  standalone,
+}: {
+  notification: Notification;
+  isTopmost: boolean;
+  standalone: boolean;
+}) {
   const { dismissNotification, removeNotification } = useNotificationStore(
     useShallow((state) => ({
       dismissNotification: state.dismissNotification,
@@ -697,7 +705,8 @@ function Toast({ notification, isTopmost }: { notification: Notification; isTopm
           })()}
         </div>
 
-        {(notification.context?.projectId || notification.context?.eventKind) &&
+        {!standalone &&
+          (notification.context?.projectId || notification.context?.eventKind) &&
           (() => {
             const eventKind = notification.context?.eventKind;
             return (
@@ -791,7 +800,11 @@ function OverflowPill({ count }: { count: number }) {
   );
 }
 
-export function Toaster() {
+/**
+ * `standalone` is for a root with no actions and no notification center: its
+ * toasts leave out the controls that would reach for them.
+ */
+export function Toaster({ standalone = false }: { standalone?: boolean }) {
   const notifications = useNotificationStore((state) => state.notifications);
   const evictedToInboxCount = useNotificationHistoryStore((s) => s.evictedToInboxCount);
   const [mounted, setMounted] = useState(false);
@@ -804,7 +817,8 @@ export function Toaster() {
     (notification) => notification.placement !== "grid-bar"
   );
 
-  if (!mounted || (toastNotifications.length === 0 && evictedToInboxCount === 0)) return null;
+  const overflow = standalone ? 0 : evictedToInboxCount;
+  if (!mounted || (toastNotifications.length === 0 && overflow === 0)) return null;
 
   // Newest renders first (top of the visual stack). Only the topmost active
   // notification owns the Escape handler — the parent decides which one
@@ -825,9 +839,10 @@ export function Toaster() {
           key={notification.id}
           notification={notification}
           isTopmost={notification.id === topmostActiveId}
+          standalone={standalone}
         />
       ))}
-      {evictedToInboxCount > 0 && <OverflowPill count={evictedToInboxCount} />}
+      {overflow > 0 && <OverflowPill count={overflow} />}
     </div>,
     document.body
   );

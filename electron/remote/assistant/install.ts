@@ -6,6 +6,7 @@ import { getLocalAgentDirectory } from "../../services/assistants/localAgentDire
 import { events } from "../../services/events.js";
 import { helpSessionService } from "../../services/HelpSessionService.js";
 import { peekGlobalAssistantService } from "../../services/globalAssistant.js";
+import { isProjectlessAppView } from "../../window/projectlessViews.js";
 import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
 import { setHostControlRuntime } from "../../services/mcp-server/hostControlTools.js";
 import { readAssistantConfirmationsSkipped } from "../../services/mcp-server/assistantConfirmationsPreference.js";
@@ -273,7 +274,10 @@ export function installHostControl(deps: HostControlInstallDeps): () => void {
     const webContentsId = isGlobalAssistantId(
       helpSessionService.getSessionLane(helpSessionId)?.projectId ?? ""
     )
-      ? (peekGlobalAssistantService()?.presenterWebContentsId() ?? null)
+      ? (peekGlobalAssistantService()?.presenterWebContentsId(
+          // The Canopy window shows the assistant but mounts no approval dialog.
+          (id) => !isProjectlessAppView(id)
+        ) ?? null)
       : helpSessionService.getWebContentsIdForSessionId(helpSessionId);
     return webContentsId === null || isRemoteEndpointHandle(webContentsId) ? null : webContentsId;
   };

@@ -517,7 +517,9 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
 
   const getLiveWindow = (): BrowserWindow | null => {
     const win = opts.windowRegistry?.getPrimary()?.browserWindow ?? opts.getMainWindow();
-    return win && !win.isDestroyed() ? win : null;
+    if (win && !win.isDestroyed()) return win;
+    // Nothing else is up: a relaunch still has this window to bring forward.
+    return getProjectlessWindows()[0] ?? null;
   };
 
   // Nothing is on screen — a windowless launch, or macOS after the last window

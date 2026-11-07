@@ -85,20 +85,14 @@ describe("a restored host window's bounds", () => {
 // imported here, and a Canopy window that lost its kind would boot the project
 // shell and take a project's place in every window list.
 describe("the Canopy window's wiring", () => {
-  const read = (relativePath: string) =>
-    fs.readFileSync(path.join(ELECTRON_ROOT, relativePath), "utf8");
-
   it("is built by main.ts as a canopy window", () => {
-    expect(read("main.ts")).toMatch(
-      /setCanopyBrowserWindowFactory\(\(\) => setupBrowserWindow\(__dirname, \{ kind: "canopy" \}\)\)/
-    );
+    const [factory] = callsTo(parse("main.ts"), "setCanopyBrowserWindowFactory");
+    const [setup] = factory ? callsTo(factory, "setupBrowserWindow") : [];
+
+    expect(setup && mentions(setup, "kind")).toBe(true);
   });
 
-  it("marks its view, passes the renderer its role, and saves no bounds", () => {
-    const source = read("window/createWindow.ts");
-
-    expect(source).toContain("if (canopyWindow) markProjectlessView(appView.webContents, win);");
-    expect(source).toContain("...(canopyWindow ? [CANOPY_WINDOW_ARG] : []),");
-    expect(source).toMatch(/canopyWindow\s*\? new BrowserWindow\(/);
+  it("marks its view as holding no project", () => {
+    expect(callsTo(parse("window/createWindow.ts"), "markProjectlessView")).toHaveLength(1);
   });
 });

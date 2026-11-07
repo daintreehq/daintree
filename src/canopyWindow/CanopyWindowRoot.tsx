@@ -12,6 +12,7 @@ import { keybindingService } from "@/services/KeybindingService";
 import { initKeybindingOverridesSync } from "@/services/keybindingOverridesSync";
 import { initTerminalConfigSync } from "@/services/terminalConfigSync";
 import { setupFleetSnapshotListeners } from "@/store/fleetSnapshotStore";
+import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -43,6 +44,10 @@ export function CanopyWindowRoot() {
     safeFireAndForget(keybindingService.loadOverrides(), {
       context: "Reading the shortcuts Canopy shows",
     });
+    // Its toasts keep the quiet hours and off switch the user set.
+    safeFireAndForget(useNotificationSettingsStore.getState().hydrate(), {
+      context: "Reading the notification settings",
+    });
     return () => {
       for (const stop of stops) stop();
     };
@@ -54,7 +59,7 @@ export function CanopyWindowRoot() {
           <CanopyView frame={CANOPY_WINDOW_FRAME} />
         </ErrorBoundary>
       </div>
-      <Toaster />
+      <Toaster standalone />
       <AccessibilityAnnouncer />
     </TooltipProvider>
   );

@@ -17,6 +17,7 @@ import type {
 } from "../../services/plugin-capability/PluginCapabilityConsentService.js";
 import { getMainWindow } from "../../window/windowRef.js";
 import { getAppWebContents } from "../../window/webContentsRegistry.js";
+import { isProjectlessWindow } from "../../window/projectlessViews.js";
 import { onWebContentsDestroyed } from "../../window/webContentsDestroyed.js";
 import type { ClientEndpoint } from "../endpoint.js";
 import { resolvePluginFrontend } from "../../services/plugin/pluginFrontendRouting.js";
@@ -101,7 +102,8 @@ let consentBridgeInstalled = false;
 /** Pick the window that should host a capability consent prompt. */
 function resolvePromptWindow(): BrowserWindow | null {
   const focused = BrowserWindow.getFocusedWindow();
-  if (focused && !focused.isDestroyed()) return focused;
+  // A window with no project mounts no consent dialog, so it goes unanswered there.
+  if (focused && !focused.isDestroyed() && !isProjectlessWindow(focused)) return focused;
   const primary = getMainWindow();
   if (primary && !primary.isDestroyed()) return primary;
   return null;

@@ -32,7 +32,7 @@ function failToast(
     message: formatErrorMessage(error, "Something went wrong."),
     context: { eventKind: "agent" },
     duration: 6000,
-    ...(recovery ? { actions: [recovery] } : {}),
+    actions: recovery ? [recovery] : [],
   });
 }
 

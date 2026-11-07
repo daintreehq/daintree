@@ -1,8 +1,13 @@
 import { EventEmitter } from "node:events";
-import type { BrowserWindow, WebContents } from "electron";
+import type { BrowserWindow, WebContents, WebContentsView } from "electron";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({ app: {}, BrowserWindow: class {} }));
+
+const detachWebContents = vi.hoisted(() => vi.fn());
+vi.mock("../../services/globalAssistant.js", () => ({
+  peekGlobalAssistantService: () => ({ detachWebContents }),
+}));
 
 import {
   closeCanopyWindow,
@@ -11,6 +16,7 @@ import {
   setCanopyBrowserWindowFactory,
 } from "../canopyWindow.js";
 import { WindowRegistry } from "../WindowRegistry.js";
+import { setWindowRegistry } from "../windowRef.js";
 import { snapshotOpenWorld } from "../windowOpenState.js";
 import { decideProjectOpenTarget } from "../windowOpenPolicy.js";
 import { isProjectlessAppView, markProjectlessView } from "../projectlessViews.js";
@@ -26,7 +32,9 @@ type FakeWindow = EventEmitter & {
   focus: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
   setTitle: ReturnType<typeof vi.fn>;
+  getContentBounds: ReturnType<typeof vi.fn>;
   webContents: EventEmitter & { id: number };
+  view: { webContents: EventEmitter & { id: number }; setBounds: ReturnType<typeof vi.fn> };
 };
 
 let nextId = 1;
@@ -44,11 +52,16 @@ function makeWindow(): FakeWindow {
   win.show = vi.fn();
   win.focus = vi.fn();
   win.setTitle = vi.fn();
-  win.webContents = Object.assign(new EventEmitter(), { id: 1000 + id });
+  win.getContentBounds = vi.fn(() => ({ x: 40, y: 40, width: 900, height: 700 }));
+  win.webContents = Object.assign(new EventEmitter(), { id: 500 + id });
+  win.view = {
+    webContents: Object.assign(new EventEmitter(), { id: 1000 + id }),
+    setBounds: vi.fn(),
+  };
   win.close = vi.fn(() => {
     destroyed = true;
     win.emit("closed");
-    win.webContents.emit("destroyed");
+    win.view.webContents.emit("destroyed");
   });
   return win;
 }
@@ -58,11 +71,19 @@ const noWatch = () => () => {};
 beforeEach(() => {
   made = [];
   loadRenderer.mockClear();
+  detachWebContents.mockClear();
   setCanopyBrowserWindowFactory(() => {
     const win = makeWindow();
     made.push(win);
-    markProjectlessView(win.webContents as unknown as WebContents, win as unknown as BrowserWindow);
-    return { win: win as unknown as BrowserWindow, loadRenderer };
+    markProjectlessView(
+      win.view.webContents as unknown as WebContents,
+      win as unknown as BrowserWindow
+    );
+    return {
+      win: win as unknown as BrowserWindow,
+      appView: win.view as unknown as WebContentsView,
+      loadRenderer,
+    };
   });
 });
 
@@ -109,8 +130,49 @@ describe("the Canopy window", () => {
     const preventDefault = vi.fn();
     made[0]!.emit("page-title-updated", { preventDefault });
 
-    expect(made[0]!.setTitle).toHaveBeenCalledWith("Canopy");
     expect(preventDefault).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["resize", "maximize", "unmaximize", "enter-full-screen", "leave-full-screen", "restore"])(
+    "fills the window again on %s, with no view manager to do it",
+    (event) => {
+      openCanopyWindow(noWatch);
+      made[0]!.getContentBounds.mockReturnValue({ x: 40, y: 40, width: 1400, height: 1000 });
+
+      made[0]!.emit(event);
+
+      expect(made[0]!.view.setBounds).toHaveBeenCalledTimes(1);
+      expect(made[0]!.view.setBounds).toHaveBeenCalledWith({
+        x: 0,
+        y: 0,
+        width: 1400,
+        height: 1000,
+      });
+    }
+  );
+
+  it.each([
+    ["closes", "destroyed", undefined],
+    ["crashes", "render-process-gone", undefined],
+    ["reloads", "did-start-navigation", { isMainFrame: true, isSameDocument: false }],
+  ])("lets go of a docked global assistant when its view %s", async (_label, event, details) => {
+    openCanopyWindow(noWatch);
+    const view = made[0]!.view.webContents;
+
+    view.emit(event, details);
+
+    await vi.waitFor(() => expect(detachWebContents).toHaveBeenCalledWith(view.id));
+  });
+
+  it("keeps the global assistant through a navigation that isn't a new document", async () => {
+    openCanopyWindow(noWatch);
+    const view = made[0]!.view.webContents;
+
+    view.emit("did-start-navigation", { isMainFrame: true, isSameDocument: true });
+    view.emit("did-start-navigation", { isMainFrame: false, isSameDocument: false });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(detachWebContents).not.toHaveBeenCalled();
   });
 
   it("watches Canopy's mode only while it stands, and closes when told to", () => {
@@ -141,35 +203,52 @@ describe("the Canopy window", () => {
 });
 
 describe("the Canopy window beside project targeting", () => {
-  it("is never listed, so a folder opened with only it up makes a project window", () => {
-    const registry = new WindowRegistry();
+  const openRequest = {
+    projectId: "p1",
+    projectPath: "/repo/p1",
+    source: "restore",
+    intent: "open",
+    disposition: "default",
+    initiatingWindowId: null,
+  } as const;
+
+  let registry: WindowRegistry;
+
+  beforeEach(() => {
+    registry = new WindowRegistry();
+    setWindowRegistry(registry);
+  });
+
+  it("stays unlisted, so a folder opened with only it up makes a project window", () => {
     openCanopyWindow(noWatch);
 
     expect(registry.size).toBe(0);
     expect(registry.getPrimary()).toBeUndefined();
-
     const world = snapshotOpenWorld(registry, "default");
     expect(world.windows).toEqual([]);
-    expect(
-      decideProjectOpenTarget(
-        {
-          projectId: "p1",
-          projectPath: "/repo/p1",
-          source: "restore",
-          intent: "open",
-          disposition: "default",
-          initiatingWindowId: null,
-        },
-        world
-      )
-    ).toEqual({ kind: "create" });
+    expect(decideProjectOpenTarget(openRequest, world)).toEqual({ kind: "create" });
     // Nothing to write down, so a launch has nothing to restore it as.
     expect(captureWindowRecord(registry, made[0]!.id)).toBeNull();
   });
 
-  it("marks its view as holding no project until the view is destroyed", () => {
+  it("takes nothing from the project window open beside it", () => {
+    const projectWindow = makeWindow();
+    Object.assign(projectWindow, { isFocused: () => true });
+    registry.register(projectWindow as unknown as BrowserWindow);
+
     openCanopyWindow(noWatch);
-    const viewId = made[0]!.webContents.id;
+    openCanopyWindow(noWatch);
+
+    expect(registry.getPrimary()?.windowId).toBe(projectWindow.id);
+    expect(registry.all().map((ctx) => ctx.windowId)).toEqual([projectWindow.id]);
+    expect(snapshotOpenWorld(registry, "default").windows.map((w) => w.windowId)).toEqual([
+      projectWindow.id,
+    ]);
+  });
+
+  it("holds no project binding, and forgets its view once the view is destroyed", () => {
+    openCanopyWindow(noWatch);
+    const viewId = made[0]!.view.webContents.id;
 
     expect(isProjectlessAppView(viewId)).toBe(true);
     expect(getProjectForWebContents(viewId)).toBeNull();

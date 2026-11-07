@@ -106,6 +106,7 @@ import {
   _resetCapabilityConsentBridgeForTest,
 } from "../pluginCapability.js";
 import { registerAppView, unregisterAppView } from "../../../window/webContentsRegistry.js";
+import { markProjectlessView } from "../../../window/projectlessViews.js";
 import { broadcastToRenderer } from "../../utils.js";
 import {
   getPluginCapabilityConsentService,
@@ -518,6 +519,20 @@ describe("pluginCapability consent bridge — delivery acknowledgement (#11708)"
 });
 
 describe("pluginCapability consent bridge — unpromptable states (#11708)", () => {
+  it("never puts a prompt to a focused window with no project, which mounts no dialog", async () => {
+    const dispose = registerPluginCapabilityHandlers();
+    markProjectlessView(harness!.appWebContents as never, harness!.win as never);
+
+    const outcome = await startGatedCall();
+
+    expect(harness!.appWebContents.send).not.toHaveBeenCalled();
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.err.message).toContain("could not present");
+
+    harness!.appWebContents.destroy();
+    dispose();
+  });
+
   it("fails fast as undeliverable when there is no window to prompt in", async () => {
     const dispose = registerPluginCapabilityHandlers();
     unregisterAppView(harness!.win as never);
