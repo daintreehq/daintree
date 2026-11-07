@@ -491,6 +491,8 @@ describe("the Canopy window's record (#16336)", () => {
     ["null", null],
     ["not JSON", "{not json"],
     ["a JSON array", "[]"],
+    ["JSON null", "null"],
+    ["a JSON scalar", "true"],
   ])("reads %s as closed", (_label, raw) => {
     expect(parseCanopyWindowOpen(raw)).toBe(false);
   });

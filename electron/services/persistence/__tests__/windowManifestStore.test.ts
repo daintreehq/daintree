@@ -57,6 +57,18 @@ describe("readManifestWorkspaceIds (#15614)", () => {
     expect(readManifestWorkspaceIds()).toEqual(["project-a"]);
   });
 
+  it("replaces the stored marker as the Canopy window closes and opens again", () => {
+    const stored = () =>
+      db.select({ value: schema.appState.value }).from(schema.appState).get()?.value;
+
+    writeOpenWindowsManifest([{ projectId: "project-a" }], { canopyWindowOpen: true });
+    writeOpenWindowsManifest([{ projectId: "project-a" }], { canopyWindowOpen: false });
+    expect(parseCanopyWindowOpen(stored())).toBe(false);
+
+    writeOpenWindowsManifest([{ projectId: "project-a" }], { canopyWindowOpen: true });
+    expect(parseCanopyWindowOpen(stored())).toBe(true);
+  });
+
   it("throws on a stored manifest it cannot read rather than answer nothing", () => {
     db.insert(schema.appState).values({ key: OPEN_WINDOWS_KEY, value: "{not json" }).run();
 

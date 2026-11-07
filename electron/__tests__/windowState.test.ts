@@ -1177,12 +1177,16 @@ describe("a window whose bounds are its own (the Canopy window, #16336)", () => 
     createSeparateWindowWithState({ show: false }, CANOPY_BOUNDS_KEY, CANOPY_SIZE);
   const projectBounds = { x: 100, y: 100, width: 1200, height: 800, isMaximized: false };
 
-  /** Back the mocked store with a real object, so saves accumulate as electron-store's do. */
+  /**
+   * Back the mocked store with a real object, so saves accumulate as
+   * electron-store's do. Reads hand out a copy, as electron-store's do, so
+   * only what is written back through `set` is stored.
+   */
   function makeStateful(initial: Record<string, unknown> = {}) {
     let state: Record<string, unknown> = { ...initial };
-    windowStatesStoreMock.get.mockImplementation(() => state);
+    windowStatesStoreMock.get.mockImplementation(() => ({ ...state }));
     windowStatesStoreMock.set.mockImplementation((_key: string, value: Record<string, unknown>) => {
-      state = value;
+      state = { ...value };
     });
     return () => state;
   }
@@ -1217,12 +1221,38 @@ describe("a window whose bounds are its own (the Canopy window, #16336)", () => 
     winInstance.getBounds.mockReturnValue({ x: 300, y: 200, width: 1300, height: 900 });
 
     openCanopy();
+    // Linux maximizes a hidden window only once it is shown.
+    onceHandlers.get("show")?.();
 
     expect(constructorCalls[0]).toEqual(
       expect.objectContaining({ x: 300, y: 200, width: 1300, height: 900 })
     );
     expect(winInstance.center).not.toHaveBeenCalled();
     expect(winInstance.maximize).toHaveBeenCalledTimes(1);
+  });
+
+  it("comes back unmaximized when it wasn't", () => {
+    makeStateful({
+      [CANOPY_BOUNDS_KEY]: { x: 300, y: 200, width: 1300, height: 900, isMaximized: false },
+    });
+
+    openCanopy();
+    onceHandlers.get("show")?.();
+
+    expect(winInstance.maximize).not.toHaveBeenCalled();
+  });
+
+  it("saves that it was maximized, with the bounds it had before", () => {
+    const getState = makeStateful();
+    openCanopy();
+    winInstance.isMaximized.mockReturnValue(true);
+    winInstance.getNormalBounds.mockReturnValue({ x: 220, y: 90, width: 1280, height: 860 });
+
+    eventHandlers.get("close")!();
+
+    expect(getState()[CANOPY_BOUNDS_KEY]).toEqual(
+      expect.objectContaining({ x: 220, y: 90, width: 1280, height: 860, isMaximized: true })
+    );
   });
 
   it("pulls a spot saved on a display that's gone back onto one that remains", () => {

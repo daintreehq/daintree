@@ -1164,6 +1164,16 @@ if (!gotTheLock) {
     const isProjectOwned = (projectId: string): boolean =>
       findOtherProjectOwner(windowRegistry, projectId, {}) !== null;
     const isShuttingDown = (): boolean => getActiveShutdown() !== null;
+    // Open at the last quit: back beside the focused window, not after the
+    // whole fleet, which can take minutes.
+    const reopenCanopyWindow = (): void => {
+      if (isShuttingDown()) return;
+      try {
+        restoreCanopyWindow();
+      } catch (error) {
+        console.warn("[MAIN] Restoring the Canopy window failed:", error);
+      }
+    };
 
     const startupRestore = restoreWindowFleet({
       records: fleetRecords,
@@ -1186,18 +1196,7 @@ if (!gotTheLock) {
       // no remote work before the restore has settled.
       onRemoteHostsNeeded: (hostIds) =>
         remoteHostsLaunch?.need(hostsStillSetUp(hostIds, store.get("remoteHosts")?.hosts)),
-      // Open at the last quit: back beside the focused window, not after the
-      // whole fleet, which can take minutes.
-      onPrimaryWindowUp: restoreCanopy
-        ? () => {
-            if (isShuttingDown()) return;
-            try {
-              restoreCanopyWindow();
-            } catch (error) {
-              console.warn("[MAIN] Restoring the Canopy window failed:", error);
-            }
-          }
-        : undefined,
+      onPrimaryWindowUp: restoreCanopy ? reopenCanopyWindow : undefined,
     });
 
     // Installed before the startup window boots: its renderer resolves the
@@ -1240,6 +1239,7 @@ if (!gotTheLock) {
             }
           },
           readManifest: readOpenWindowsManifestSync,
+          restoreCanopyWindow: reopenCanopyWindow,
           restoreLiveProjects: store.get("sessionRestore")?.enabled !== false,
           createWindow: (projectId, opts) => createWindow(undefined, projectId, opts),
           suppressSaves: suppressOpenWindowsSaves,

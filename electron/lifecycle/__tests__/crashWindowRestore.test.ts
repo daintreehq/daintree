@@ -225,6 +225,35 @@ describe("restoreFleetAfterCrash", () => {
     expect(deps.enableSaves).not.toHaveBeenCalled();
   });
 
+  it("reopens the Canopy window the manifest had open, before the saves it rewrites (#16336)", async () => {
+    const restoreCanopyWindow = vi.fn();
+    const { deps, events } = harness({
+      readManifest: () => ({
+        hadManifest: true,
+        records: [{ projectId: "a" }],
+        canopyWindow: true,
+      }),
+      restoreCanopyWindow: () => {
+        restoreCanopyWindow();
+        events.push("canopy");
+      },
+    });
+
+    await restoreFleetAfterCrash(deps);
+
+    expect(restoreCanopyWindow).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(["suppress", "canopy", "create:a", "enable", "resume:true"]);
+  });
+
+  it("opens no Canopy window the manifest didn't have open", async () => {
+    const restoreCanopyWindow = vi.fn();
+    const { deps } = harness({ restoreCanopyWindow });
+
+    await restoreFleetAfterCrash(deps);
+
+    expect(restoreCanopyWindow).not.toHaveBeenCalled();
+  });
+
   it("skips picker windows", async () => {
     const { deps, createWindow } = harness({
       readManifest: () => ({
