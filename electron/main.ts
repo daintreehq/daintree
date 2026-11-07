@@ -88,6 +88,7 @@ import { helpSessionService } from "./services/HelpSessionService.js";
 import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
 import { setCanopyBrowserWindowFactory } from "./window/canopyWindow.js";
+import { restoreCanopyWindow } from "./ipc/handlers/canopyWindow.js";
 import { createWindowRecreation } from "./window/windowRecreation.js";
 import { hasPendingOpen, isWindowBound, reserveWindowForOpen } from "./window/windowOpenState.js";
 import { distributePortsToView, getRemoteViewHooks } from "./window/portDistribution.js";
@@ -161,6 +162,7 @@ import { initializeProcessDeathLogger } from "./services/ProcessDeathLogger.js";
 import {
   readLastActiveProjectIdSync,
   readOpenWindowsManifestSync,
+  type OpenWindowsManifestRead,
 } from "./services/persistence/readLastProjectId.js";
 import {
   clearPendingWindowRecreation,
@@ -1081,7 +1083,9 @@ if (!gotTheLock) {
     return windowId;
   }
 
-  setCanopyBrowserWindowFactory(() => setupBrowserWindow(__dirname, { kind: "canopy" }));
+  setCanopyBrowserWindowFactory((revealMode) =>
+    setupBrowserWindow(__dirname, { kind: "canopy", revealMode })
+  );
 
   function readLaunchSignals(): LaunchIntentSignals {
     return {
@@ -1104,7 +1108,11 @@ if (!gotTheLock) {
     fallbackProjectId: string | undefined,
     { savesHeld }: { savesHeld: boolean }
   ): Promise<void> {
-    const { hadManifest, records: restoreRecords } = shouldRestoreWindowFleet(launchIntent)
+    const {
+      hadManifest,
+      records: restoreRecords,
+      canopyWindow: restoreCanopy,
+    }: OpenWindowsManifestRead = shouldRestoreWindowFleet(launchIntent)
       ? readOpenWindowsManifestSync()
       : { hadManifest: false, records: [] };
 
@@ -1156,6 +1164,16 @@ if (!gotTheLock) {
     const isProjectOwned = (projectId: string): boolean =>
       findOtherProjectOwner(windowRegistry, projectId, {}) !== null;
     const isShuttingDown = (): boolean => getActiveShutdown() !== null;
+    // Open at the last quit: back beside the focused window, not after the
+    // whole fleet, which can take minutes.
+    const reopenCanopyWindow = (): void => {
+      if (isShuttingDown()) return;
+      try {
+        restoreCanopyWindow();
+      } catch (error) {
+        console.warn("[MAIN] Restoring the Canopy window failed:", error);
+      }
+    };
 
     const startupRestore = restoreWindowFleet({
       records: fleetRecords,
@@ -1178,6 +1196,7 @@ if (!gotTheLock) {
       // no remote work before the restore has settled.
       onRemoteHostsNeeded: (hostIds) =>
         remoteHostsLaunch?.need(hostsStillSetUp(hostIds, store.get("remoteHosts")?.hosts)),
+      onPrimaryWindowUp: restoreCanopy ? reopenCanopyWindow : undefined,
     });
 
     // Installed before the startup window boots: its renderer resolves the
@@ -1220,6 +1239,7 @@ if (!gotTheLock) {
             }
           },
           readManifest: readOpenWindowsManifestSync,
+          restoreCanopyWindow: reopenCanopyWindow,
           restoreLiveProjects: store.get("sessionRestore")?.enabled !== false,
           createWindow: (projectId, opts) => createWindow(undefined, projectId, opts),
           suppressSaves: suppressOpenWindowsSaves,

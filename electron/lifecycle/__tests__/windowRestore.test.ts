@@ -528,6 +528,62 @@ describe("restoreWindowFleet", () => {
     expect(onRemoteHostsNeeded).not.toHaveBeenCalled();
   });
 
+  describe("once the focused window is up (#16336)", () => {
+    it("says so before any other window and while saves are still held", async () => {
+      const seen: Array<{ windows: number; resumed: number }> = [];
+      const onPrimaryWindowUp = vi.fn(() => {
+        seen.push({
+          windows: h.createWindow.mock.calls.length,
+          resumed: h.resumeSaves.mock.calls.length,
+        });
+      });
+      h = harness({
+        records: [record("a"), record("b"), record("c")],
+        hadManifest: true,
+        onPrimaryWindowUp,
+      });
+      await restoreWindowFleet(h.deps);
+
+      expect(onPrimaryWindowUp).toHaveBeenCalledTimes(1);
+      expect(seen).toEqual([{ windows: 1, resumed: 0 }]);
+      expect(h.persisted()).toBe(true);
+    });
+
+    it("says so for a lone window, before the save that ends the restore", async () => {
+      const resumedAtHook: number[] = [];
+      h = harness({
+        records: [],
+        hadManifest: false,
+        fallbackProjectId: "last-active",
+        onPrimaryWindowUp: () => resumedAtHook.push(h.resumeSaves.mock.calls.length),
+      });
+      await restoreWindowFleet(h.deps);
+      expect(resumedAtHook).toEqual([0]);
+    });
+
+    it.each(["exit-requested", "not-registered"] as const)(
+      "stays quiet when the focused window comes back %s",
+      async (result) => {
+        const onPrimaryWindowUp = vi.fn();
+        h = harness(
+          { records: [record("a")], hadManifest: true, onPrimaryWindowUp },
+          async () => result
+        );
+        await restoreWindowFleet(h.deps);
+        expect(onPrimaryWindowUp).not.toHaveBeenCalled();
+      }
+    );
+
+    it("stays quiet when the focused window fails to open", async () => {
+      const onPrimaryWindowUp = vi.fn();
+      h = harness({ records: [record("a")], hadManifest: true, onPrimaryWindowUp }, async () => {
+        throw new Error("no window");
+      });
+      await expect(restoreWindowFleet(h.deps)).rejects.toThrow("no window");
+      expect(onPrimaryWindowUp).not.toHaveBeenCalled();
+    });
+  });
+
   it("opens one picker window when every saved project was deleted", async () => {
     h = harness({ records: [], hadManifest: true, fallbackProjectId: "unrelated" });
     await restoreWindowFleet(h.deps);

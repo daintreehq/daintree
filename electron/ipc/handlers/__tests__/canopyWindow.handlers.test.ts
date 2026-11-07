@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({
 const windowMock = vi.hoisted(() => ({
   openCanopyWindow: vi.fn(),
   focusCanopyWindow: vi.fn(() => false),
+  hasCanopyWindowOpenedThisSession: vi.fn(() => false),
 }));
 const ipcHandlers = vi.hoisted(() => new Map<string, (...args: unknown[]) => unknown>());
 
@@ -28,7 +29,7 @@ vi.mock("../canopy.js", () => ({
   },
 }));
 
-import { registerCanopyWindowHandlers } from "../canopyWindow.js";
+import { registerCanopyWindowHandlers, restoreCanopyWindow } from "../canopyWindow.js";
 import { CANOPY_WINDOW_METHOD_CHANNELS } from "../canopyWindow.preload.js";
 
 registerCanopyWindowHandlers();
@@ -52,6 +53,8 @@ beforeEach(() => {
   state.observers.clear();
   windowMock.openCanopyWindow.mockReset();
   windowMock.focusCanopyWindow.mockReset();
+  windowMock.hasCanopyWindowOpenedThisSession.mockReset();
+  windowMock.hasCanopyWindowOpenedThisSession.mockReturnValue(false);
 });
 
 describe("the Canopy window's IPC", () => {
@@ -90,5 +93,42 @@ describe("the Canopy window's IPC", () => {
     windowMock.focusCanopyWindow.mockReturnValue(true);
     const answer = (await invoke(CANOPY_WINDOW_METHOD_CHANNELS.focus)) as { data?: boolean };
     expect(answer?.data ?? answer).toBe(true);
+  });
+});
+
+describe("restoring the Canopy window at launch (#16336)", () => {
+  it("opens it behind the focused window while Canopy is on", () => {
+    expect(restoreCanopyWindow()).toBe(true);
+    expect(windowMock.openCanopyWindow).toHaveBeenCalledTimes(1);
+    expect(windowMock.openCanopyWindow.mock.calls[0]?.[1]).toEqual({ revealMode: "showInactive" });
+  });
+
+  it("closes what it restored once Canopy stops being on", () => {
+    restoreCanopyWindow();
+    const watch = windowMock.openCanopyWindow.mock.calls[0]?.[0] as (
+      close: () => void
+    ) => () => void;
+    const close = vi.fn();
+    const stop = watch(close);
+
+    for (const observer of state.observers) observer({ mode: "on" } as CanopySnapshot);
+    expect(close).not.toHaveBeenCalled();
+    for (const observer of state.observers) observer({ mode: "hidden" } as CanopySnapshot);
+    expect(close).toHaveBeenCalledTimes(1);
+
+    stop();
+    expect(state.observers.size).toBe(0);
+  });
+
+  it.each(["unset", "hidden"])("opens nothing with Canopy %s", (mode) => {
+    state.mode = mode;
+    expect(restoreCanopyWindow()).toBe(false);
+    expect(windowMock.openCanopyWindow).not.toHaveBeenCalled();
+  });
+
+  it("opens nothing once a Canopy window has stood this session", () => {
+    windowMock.hasCanopyWindowOpenedThisSession.mockReturnValue(true);
+    expect(restoreCanopyWindow()).toBe(false);
+    expect(windowMock.openCanopyWindow).not.toHaveBeenCalled();
   });
 });

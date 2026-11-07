@@ -149,10 +149,110 @@ describe("the Canopy window's wiring", () => {
     );
   });
 
-  it("gives a Canopy window no saved bounds, which would become a project window's fallback", () => {
+  // Its bounds are kept apart (#16336): the project placement would save them as
+  // the fallback the next project window opens at.
+  it("places a Canopy window at bounds of its own, and a project window as before", () => {
     const placed = canopyTernaries().find((node) => mentions(node, "createWindowWithState"));
 
+    const [separate] = placed ? callsTo(placed.whenTrue, "createSeparateWindowWithState") : [];
+    const key = separate?.arguments[1];
+    expect(key && ts.isIdentifier(key) && key.text).toBe("CANOPY_BOUNDS_KEY");
     expect(placed && mentions(placed.whenTrue, "createWindowWithState")).toBe(false);
     expect(placed && mentions(placed.whenFalse, "createWindowWithState")).toBe(true);
+    expect(placed && mentions(placed.whenFalse, "createSeparateWindowWithState")).toBe(false);
+  });
+
+  it("is built by main.ts with the reveal mode it was asked for", () => {
+    const [factory] = callsTo(parse("main.ts"), "setCanopyBrowserWindowFactory");
+    const callback = factory?.arguments[0];
+    const [setup] = factory ? callsTo(factory, "setupBrowserWindow") : [];
+    const options = setup?.arguments[1] as ts.ObjectLiteralExpression;
+    const reveal = options.properties.find((property) => property.name?.getText() === "revealMode");
+
+    expect(callback && ts.isArrowFunction(callback)).toBe(true);
+    const [parameter] = (callback as ts.ArrowFunction).parameters;
+    // Handed on as it came, not transformed on the way.
+    const handed =
+      reveal && ts.isShorthandPropertyAssignment(reveal)
+        ? reveal.name.text
+        : reveal && ts.isPropertyAssignment(reveal) && ts.isIdentifier(reveal.initializer)
+          ? reveal.initializer.text
+          : undefined;
+    expect(handed).toBe(parameter!.name.getText());
+  });
+
+  describe("in main.ts's launch restore", () => {
+    const main = parse("main.ts");
+
+    function property(
+      call: ts.CallExpression | undefined,
+      name: string
+    ): ts.PropertyAssignment | ts.ShorthandPropertyAssignment | undefined {
+      const deps = call?.arguments[0];
+      if (!deps || !ts.isObjectLiteralExpression(deps)) return undefined;
+      return deps.properties.find(
+        (p): p is ts.PropertyAssignment | ts.ShorthandPropertyAssignment =>
+          (ts.isPropertyAssignment(p) || ts.isShorthandPropertyAssignment(p)) &&
+          p.name.getText() === name
+      );
+    }
+
+    function initializerOf(name: string): ts.Expression | undefined {
+      let found: ts.Expression | undefined;
+      const visit = (node: ts.Node) => {
+        if (ts.isVariableDeclaration(node) && node.name.getText() === name) {
+          found = node.initializer;
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(main);
+      return found;
+    }
+
+    /** The binding the manifest's `canopyWindow` marker is read into. */
+    function markerBinding(): ts.BindingElement | undefined {
+      let found: ts.BindingElement | undefined;
+      const visit = (node: ts.Node) => {
+        if (ts.isBindingElement(node) && node.propertyName?.getText() === "canopyWindow") {
+          found = node;
+        }
+        ts.forEachChild(node, visit);
+      };
+      visit(main);
+      return found;
+    }
+
+    it("reopens it once the focused window is up, only when the manifest had it open", () => {
+      const hook = property(callsTo(main, "restoreWindowFleet")[0], "onPrimaryWindowUp");
+      const guard = hook && ts.isPropertyAssignment(hook) ? hook.initializer : undefined;
+      expect(guard && ts.isConditionalExpression(guard)).toBe(true);
+      const conditional = guard as ts.ConditionalExpression;
+
+      // The guard is the marker as read: no default stands in for a missing one.
+      const binding = markerBinding();
+      expect(binding?.name.getText()).toBe(conditional.condition.getText());
+      expect(binding?.initializer).toBeUndefined();
+
+      expect(ts.isIdentifier(conditional.whenTrue)).toBe(true);
+      const reopen = initializerOf(conditional.whenTrue.getText());
+      expect(reopen && callsTo(reopen, "restoreCanopyWindow")).toHaveLength(1);
+      expect(ts.isIdentifier(conditional.whenFalse) && conditional.whenFalse.text).toBe(
+        "undefined"
+      );
+    });
+
+    it("reopens it the same way when a crash recovery brings the fleet back", () => {
+      const fleetHook = property(callsTo(main, "restoreWindowFleet")[0], "onPrimaryWindowUp");
+      const crashHook = property(callsTo(main, "restoreFleetAfterCrash")[0], "restoreCanopyWindow");
+      const reopen =
+        fleetHook && ts.isPropertyAssignment(fleetHook)
+          ? (fleetHook.initializer as ts.ConditionalExpression).whenTrue.getText()
+          : undefined;
+
+      expect(reopen).toBeDefined();
+      expect(
+        crashHook && ts.isPropertyAssignment(crashHook) && crashHook.initializer.getText()
+      ).toBe(reopen);
+    });
   });
 });

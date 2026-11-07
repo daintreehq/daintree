@@ -1,16 +1,20 @@
 import type { BrowserWindow, WebContentsView } from "electron";
-import type { CreateWindowResult } from "./createWindow.js";
+import type { CreateWindowResult, SetupBrowserWindowOptions } from "./createWindow.js";
+import { setCanopyWindowOpen } from "./openWindowsTracker.js";
 
 const CANOPY_WINDOW_TITLE = "Canopy";
 
-type CanopyBrowserWindowFactory = () => Pick<
-  CreateWindowResult,
-  "win" | "appView" | "loadRenderer"
->;
+type CanopyRevealMode = NonNullable<SetupBrowserWindowOptions["revealMode"]>;
+
+type CanopyBrowserWindowFactory = (
+  revealMode: CanopyRevealMode
+) => Pick<CreateWindowResult, "win" | "appView" | "loadRenderer">;
 
 let createBrowserWindow: CanopyBrowserWindowFactory | null = null;
 let canopyWindow: BrowserWindow | null = null;
 let stopWatchingMode: (() => void) | null = null;
+/** A Canopy window has stood this session, whether or not it still does. */
+let openedThisSession = false;
 
 /** Set at boot, which holds the preload's path; handed in so IPC needn't import window setup. */
 export function setCanopyBrowserWindowFactory(create: CanopyBrowserWindowFactory): void {
@@ -84,19 +88,35 @@ function detachGlobalAssistantWithView(view: WebContentsView): void {
 }
 
 /**
+ * Whether a Canopy window has stood this session. A launch restore that comes
+ * after one would reopen a window the user already opened, or already closed.
+ */
+export function hasCanopyWindowOpenedThisSession(): boolean {
+  return openedThisSession;
+}
+
+/**
  * Open the one Canopy window, or bring it forward. Never registered with the
  * window registry, which is how it stays out of everything that picks a window
- * for a project: an open, a restore, the manifest, a project-scoped action.
+ * for a project: an open, a restore, the project window list of the manifest,
+ * a project-scoped action. The manifest records it apart (#16336).
  *
  * `watchMode` is told to close the window when Canopy stops being on, and
  * returns how to stop watching; it runs for as long as the window stands.
+ *
+ * `revealMode: "showInactive"` is a launch restore's: it opens behind the
+ * window the user is in, and leaves one that already stands where it is.
  */
-export function openCanopyWindow(watchMode: (close: () => void) => () => void): void {
-  if (focusCanopyWindow()) return;
+export function openCanopyWindow(
+  watchMode: (close: () => void) => () => void,
+  { revealMode = "show" }: { revealMode?: CanopyRevealMode } = {}
+): void {
+  if (revealMode === "showInactive" ? liveCanopyWindow() : focusCanopyWindow()) return;
   if (!createBrowserWindow) throw new Error("The Canopy window opened before the app set it up");
 
-  const { win, appView, loadRenderer } = createBrowserWindow();
+  const { win, appView, loadRenderer } = createBrowserWindow(revealMode);
   canopyWindow = win;
+  openedThisSession = true;
   keepViewFillingWindow(win, appView);
   detachGlobalAssistantWithView(appView);
   win.setTitle(CANOPY_WINDOW_TITLE);
@@ -106,7 +126,11 @@ export function openCanopyWindow(watchMode: (close: () => void) => () => void): 
   win.once("closed", () => {
     stopWatchingMode?.();
     stopWatchingMode = null;
-    if (canopyWindow === win) canopyWindow = null;
+    if (canopyWindow === win) {
+      canopyWindow = null;
+      setCanopyWindowOpen(false);
+    }
   });
+  setCanopyWindowOpen(true);
   loadRenderer("canopy window");
 }

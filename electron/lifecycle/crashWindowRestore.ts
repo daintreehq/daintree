@@ -46,7 +46,13 @@ export interface CrashFleetRestoreDeps extends Pick<
    * window did not ask for the rest of the set to appear.
    */
   waitForRequesterHydrated: () => Promise<boolean>;
-  readManifest: () => { hadManifest: boolean; records: OpenWindowRecord[] };
+  readManifest: () => { hadManifest: boolean; records: OpenWindowRecord[]; canopyWindow?: true };
+  /**
+   * Reopen the Canopy window the manifest had open (#16336). A clean restore
+   * rewrites the manifest from the live windows, so leaving it out would
+   * forget it for every launch after this one.
+   */
+  restoreCanopyWindow?: () => void;
   /** The user's session-restore setting — whether windows get their background projects. */
   restoreLiveProjects: boolean;
   /**
@@ -71,7 +77,7 @@ export async function restoreFleetAfterCrash(deps: CrashFleetRestoreDeps): Promi
   const requesterLive = await deps.waitForRequesterHydrated();
   if (!requesterLive || deps.isShuttingDown()) return;
 
-  const { hadManifest, records } = deps.readManifest();
+  const { hadManifest, records, canopyWindow } = deps.readManifest();
   if (!hadManifest) return;
 
   // Picker windows have nothing to restore, and the recovery window already
@@ -110,6 +116,7 @@ export async function restoreFleetAfterCrash(deps: CrashFleetRestoreDeps): Promi
     onBackgroundWindowFailed: deps.onBackgroundWindowFailed,
     isProjectOwned: deps.isProjectOwned,
     isShuttingDown: deps.isShuttingDown,
+    onPrimaryWindowUp: canopyWindow ? deps.restoreCanopyWindow : undefined,
   });
 }
 

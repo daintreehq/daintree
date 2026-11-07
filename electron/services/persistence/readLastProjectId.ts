@@ -25,6 +25,7 @@ import {
   OPEN_WINDOWS_KEY,
   filterRestorableWindows,
   isReadableOpenWindowsManifest,
+  parseCanopyWindowOpen,
   parseOpenWindowsManifest,
   type OpenWindowRecord,
 } from "./windowManifest.js";
@@ -239,6 +240,13 @@ export interface OpenWindowsManifestRead {
   hadManifest: boolean;
   /** Windows still restorable, most-recently-focused first. */
   records: OpenWindowRecord[];
+  /**
+   * The Canopy window was open (#16336). Reported whatever the window list
+   * holds, and kept out of `hadManifest`, which speaks for project windows
+   * alone: a session with only Canopy open still launches into the last-active
+   * project, with Canopy beside it.
+   */
+  canopyWindow?: true;
 }
 
 const NO_MANIFEST: OpenWindowsManifestRead = { hadManifest: false, records: [] };
@@ -266,8 +274,11 @@ export function readOpenWindowsManifestSync(): OpenWindowsManifestRead {
       // the manifest named windows, and project deletion emptied it.
       if (!isReadableOpenWindowsManifest(row?.value ?? null)) return NO_MANIFEST;
 
+      const canopy = parseCanopyWindowOpen(row?.value ?? null)
+        ? { canopyWindow: true as const }
+        : {};
       const records = parseOpenWindowsManifest(row?.value ?? null);
-      if (records.length === 0) return NO_MANIFEST;
+      if (records.length === 0) return { ...NO_MANIFEST, ...canopy };
 
       // Background workspaces are validated alongside foreground ones, in the
       // same two queries: an id that reaches the restore loop unvalidated is an
@@ -276,7 +287,7 @@ export function readOpenWindowsManifestSync(): OpenWindowsManifestRead {
       const workspaceIds = [
         ...new Set(records.flatMap((r) => [r.projectId, ...(r.backgroundProjectIds ?? [])])),
       ].filter((id): id is string => id !== null);
-      if (workspaceIds.length === 0) return { hadManifest: true, records };
+      if (workspaceIds.length === 0) return { hadManifest: true, records, ...canopy };
 
       // Positively shaped on both sides, so an id that is neither reaches no
       // query at all. Sending it to `projects` would find nothing today, but it
@@ -297,6 +308,7 @@ export function readOpenWindowsManifestSync(): OpenWindowsManifestRead {
       return {
         hadManifest: true,
         records: filterRestorableWindows(records, existingWorkspaceIds),
+        ...canopy,
       };
     } finally {
       sqlite.close();
