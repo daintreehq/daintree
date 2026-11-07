@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Telescope } from "@/components/icons";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { useHostPlatform } from "@/hooks/useHostPlatform";
+import { actionService } from "@/services/ActionService";
 import { useCanopyStore } from "@/store/canopyStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { CANOPY_LOCAL, CANOPY_STOP, canopyLocalOn, canopyStopOn } from "./canopyTerms";
@@ -146,7 +147,10 @@ export function CanopyPaneOffer({
         action={{
           id: "open-canopy",
           label: "Open Canopy",
-          onClick: () => useCanopyStore.getState().open(),
+          // Through the toggle, so a Canopy window opened since comes forward.
+          onClick: () => {
+            void actionService.dispatch("canopy.toggle", undefined, { source: "user" });
+          },
         }}
         autoDismissAfter={TURNED_ON_DISMISS_MS}
         onClose={close}

@@ -467,6 +467,49 @@ describe("registerAppLifecycleHandlers – second-instance", () => {
     expect(dispatchOpenDirPathMock).toHaveBeenCalledExactlyOnceWith(cliDir);
   });
 
+  describe("with only a window that holds no project up", () => {
+    const canopyView = { id: 502, once: vi.fn() };
+
+    afterEach(() => {
+      canopyView.once.mock.calls.find(([event]) => event === "destroyed")?.[1]();
+      canopyView.once.mockClear();
+    });
+
+    async function relaunch(commandLine: string[], overrides?: Partial<AppLifecycleOptions>) {
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      const { markProjectlessView } = await import("../../window/projectlessViews.js");
+      const canopyWindow = makeBrowserWindow();
+      markProjectlessView(canopyView as never, canopyWindow as never);
+      registerAppLifecycleHandlers(makeOpts(overrides));
+      const secondInstanceCall = appMock.on.mock.calls.find(
+        ([event]: string[]) => event === "second-instance"
+      );
+      (secondInstanceCall![1] as (event: unknown, line: string[], cwd: string) => void)(
+        {},
+        commandLine,
+        "/"
+      );
+      return canopyWindow;
+    }
+
+    it("brings that window forward on a plain relaunch", async () => {
+      const canopyWindow = await relaunch(["daintree"]);
+
+      expect(canopyWindow.focus).toHaveBeenCalledTimes(1);
+    });
+
+    it("gets a project window for an install, which that window can't show", async () => {
+      const dntr = nodePath.join(cliDir, "plugin.dntr");
+      fs.writeFileSync(dntr, "");
+      const onCreateWindow = vi.fn();
+
+      const canopyWindow = await relaunch(["daintree", dntr], { onCreateWindow });
+
+      expect(canopyWindow.focus).not.toHaveBeenCalled();
+      expect(onCreateWindow).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("focuses primary window when no CLI path is provided", async () => {
     const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
     const mainWindow = makeBrowserWindow();
@@ -982,6 +1025,25 @@ describe("registerAppLifecycleHandlers – window-all-closed", () => {
       winListeners.close(event);
 
       expect(event.preventDefault).not.toHaveBeenCalled();
+    });
+
+    it("doesn't warn of a quit while a window with no project keeps the app up", async () => {
+      const onLastWindowClose = vi.fn(() => true);
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      const { markProjectlessView } = await import("../../window/projectlessViews.js");
+      const listed: { browserWindow?: unknown } = {};
+      registerAppLifecycleHandlers(
+        makeOpts({ onLastWindowClose, windowRegistry: { all: () => [listed] } as never })
+      );
+      const { fakeWin, winListeners } = createWindow();
+      listed.browserWindow = fakeWin;
+      const canopyView = { id: 501, once: vi.fn() };
+      markProjectlessView(canopyView as never, { isDestroyed: () => false } as never);
+
+      winListeners.close!(closeEvent());
+
+      expect(onLastWindowClose).not.toHaveBeenCalled();
+      canopyView.once.mock.calls.find(([event]) => event === "destroyed")?.[1]();
     });
 
     it("leaves a window alone while another stays open", async () => {

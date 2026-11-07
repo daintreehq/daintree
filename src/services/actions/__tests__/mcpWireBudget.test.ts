@@ -1032,7 +1032,11 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // `terminal` on the session records, which is how it tells a session the person
   // closed from one that died. Off the external surface, so that ceiling doesn't
   // move.
-  const MAX_COHORT_PAYLOAD_BYTES = 190_300;
+  // 190_300 → 190_450 for #16335, measured at 190_417 B (+179 over develop's
+  // 190_238): `canopy.openWindow`, so an assistant can open Canopy's own window.
+  // It takes no arguments, so nearly all of it is the description. Assistant-only,
+  // so the external ceiling does not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 190_450;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

@@ -18,6 +18,7 @@ import {
 import { isMac } from "@/lib/platform";
 import { isNewWindowClick } from "@/components/Hosts/hostSwitching";
 import { canReplyTo } from "./CanopyCard";
+import { useCanopyFrame } from "./canopyFrame";
 import { itemArchived, type CanopyItem } from "./canopyModel";
 
 /** Setting a run aside, on the window's own host: Pilot's park and snooze. */
@@ -58,6 +59,7 @@ export function CanopyRowMenu({
   children,
   ...actions
 }: CanopyRowMenuActions & { item: CanopyItem; children: ReactNode }) {
+  const canGoTo = useCanopyFrame().goToRun !== null;
   const archived = itemArchived(item);
   const canSetAside = actions.canSetAside(item);
   const parked = item.row.run.park !== undefined;
@@ -82,13 +84,15 @@ export function CanopyRowMenu({
       >
         {/* On click rather than select, so a Cmd/Ctrl-click keeps its modifier;
             a key select clicks too, with none held. */}
-        <ContextMenuItem
-          aria-keyshortcuts="Enter"
-          onClick={(event) => actions.onOpen(item, isNewWindowClick(event))}
-        >
-          Go to terminal
-          <ContextMenuShortcut shortcut="Enter" />
-        </ContextMenuItem>
+        {canGoTo && (
+          <ContextMenuItem
+            aria-keyshortcuts="Enter"
+            onClick={(event) => actions.onOpen(item, isNewWindowClick(event))}
+          >
+            Go to terminal
+            <ContextMenuShortcut shortcut="Enter" />
+          </ContextMenuItem>
+        )}
         {canReplyTo(item) && (
           <ContextMenuItem
             aria-keyshortcuts="R"

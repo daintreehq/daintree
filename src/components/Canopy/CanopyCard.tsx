@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { KeyboardEvent } from "react";
+import type { KeyboardEvent, MouseEvent } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -611,6 +611,7 @@ export function CanopyCard({
     return true;
   };
   const frame = useCanopyFrame();
+  const canGoTo = frame.goToRun !== null;
   // Its own dictation, apart from the grid pane's composer on the same terminal.
   // Main reads keyterms, vocabulary and file links from the terminal only when
   // this view's project owns it: another project's or host's gives it none.
@@ -934,12 +935,14 @@ export function CanopyCard({
           <span id={`${domId}-trash-confirm`} role="status" className="sr-only">
             {trashArmed ? "Press Trash terminal again to trash it" : ""}
           </span>
-          <HeaderControl
-            label="Go to terminal"
-            onClick={(event) => onOpen(item, isNewWindowClick(event))}
-          >
-            <SquareArrowOutUpRight aria-hidden="true" />
-          </HeaderControl>
+          {canGoTo && (
+            <HeaderControl
+              label="Go to terminal"
+              onClick={(event) => onOpen(item, isNewWindowClick(event))}
+            >
+              <SquareArrowOutUpRight aria-hidden="true" />
+            </HeaderControl>
+          )}
         </div>
         {/* The agent's state chip, in the reserved box at the far right where every agent pane keeps it. */}
         {agentId !== undefined && (
@@ -1078,7 +1081,12 @@ export function CanopyCard({
           reconnecting={reconnecting}
           onStreamChange={setStream}
           onSubmitted={() => onSent(item)}
-          onGoTo={(event) => onOpen(item, isNewWindowClick(event))}
+          {...(canGoTo
+            ? {
+                onGoTo: (event: MouseEvent<HTMLButtonElement>) =>
+                  onOpen(item, isNewWindowClick(event)),
+              }
+            : {})}
         />
         {/* Always one line, choices or none, so an ask arriving or answered
             never moves the terminal's foot: choices shrink and truncate rather
@@ -1125,25 +1133,29 @@ export function CanopyCard({
                 {keysFrom === "list" && <Kbd className="shrink-0">R</Kbd>}
               </Button>
             )}
-            <Button
-              variant="ghost"
-              size="xs"
-              aria-keyshortcuts={
-                keysFrom === "list" || keysFrom === "search"
-                  ? "Enter"
-                  : keysFrom === "reply"
-                    ? comboToAriaKeyshortcuts(REPLY_GO_TO_TERMINAL, isMac())
-                    : undefined
-              }
-              onClick={(event) => onOpen(item, isNewWindowClick(event))}
-            >
-              <SquareArrowOutUpRight aria-hidden="true" />
-              Go to terminal
-              {(keysFrom === "list" || keysFrom === "search") && <Kbd className="shrink-0">↵</Kbd>}
-              {keysFrom === "reply" && (
-                <KbdChord shortcut={REPLY_GO_TO_TERMINAL} className="shrink-0" />
-              )}
-            </Button>
+            {canGoTo && (
+              <Button
+                variant="ghost"
+                size="xs"
+                aria-keyshortcuts={
+                  keysFrom === "list" || keysFrom === "search"
+                    ? "Enter"
+                    : keysFrom === "reply"
+                      ? comboToAriaKeyshortcuts(REPLY_GO_TO_TERMINAL, isMac())
+                      : undefined
+                }
+                onClick={(event) => onOpen(item, isNewWindowClick(event))}
+              >
+                <SquareArrowOutUpRight aria-hidden="true" />
+                Go to terminal
+                {(keysFrom === "list" || keysFrom === "search") && (
+                  <Kbd className="shrink-0">↵</Kbd>
+                )}
+                {keysFrom === "reply" && (
+                  <KbdChord shortcut={REPLY_GO_TO_TERMINAL} className="shrink-0" />
+                )}
+              </Button>
+            )}
           </span>
         </div>
         {canReply && voiceMicNotice && <VoiceMicNoticeBanner notice={voiceMicNotice} />}

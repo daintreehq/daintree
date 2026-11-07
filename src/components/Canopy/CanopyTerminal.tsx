@@ -44,6 +44,7 @@ import { hasUsableRenderer } from "@/services/terminal/xtermRendererProbe";
 import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { isCanopyEdgeDragging, useCanopyStore } from "@/store/canopyStore";
+import { useAppThemeStore } from "@/store/appThemeStore";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { useScreenReaderStore } from "@/store/screenReaderStore";
 import {
@@ -461,6 +462,13 @@ export function CanopyTerminal({
       terminal.options.fontFamily = font.fontFamily;
       requestPanelSize();
     });
+    // The panel's terminal can outlive a change of palette made in another
+    // window. The selector is cached, so a set with nothing new costs xterm nothing.
+    const applyTheme = () => {
+      terminal.options.theme = selectEffectiveTheme(useTerminalColorSchemeStore.getState());
+    };
+    const unsubscribeColors = useTerminalColorSchemeStore.subscribe(applyTheme);
+    const unsubscribeAppTheme = useAppThemeStore.subscribe(applyTheme);
 
     // A grid that fits sits at the top of the pane, the way it does in the
     // terminal's own pane; one taller than the pane keeps its bottom rows,
@@ -867,6 +875,8 @@ export function CanopyTerminal({
       bufferChange.dispose();
       dimensionsChange.dispose();
       unsubscribeFont();
+      unsubscribeColors();
+      unsubscribeAppTheme();
       unsubscribeListDrag();
       for (const type of GESTURE_EVENTS) frame.removeEventListener(type, markGesture, true);
       frame.removeEventListener("mousedown", startDrag, true);

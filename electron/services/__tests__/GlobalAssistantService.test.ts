@@ -503,6 +503,22 @@ describe("GlobalAssistantService", () => {
       expect(service.getState().inputOwner).toBeNull();
     });
 
+    it("passes over a view that can't put a question, and asks nowhere if that's all there is", async () => {
+      const service = new GlobalAssistantService(makeDeps().deps);
+      await service.ensureSession();
+      service.attach(10, 1);
+      const canopy = service.attach(20, 2);
+      service.claimInput(canopy, 20);
+      const notCanopy = (id: number) => id !== 20;
+
+      expect(service.presenterWebContentsId(notCanopy)).toBe(10);
+
+      service.detachWebContents(10);
+      expect(service.presenterWebContentsId(notCanopy)).toBeNull();
+      expect(service.presenterWebContentsId()).toBe(20);
+      await service.discard();
+    });
+
     it("asks questions in the view holding input, else the latest reader, and nowhere once none is left (#14161)", async () => {
       const service = new GlobalAssistantService(makeDeps().deps);
       service.attach(10, 1);

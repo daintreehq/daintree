@@ -256,6 +256,14 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("./canopy.js").CanopyTerminalView;
   };
+  "canopy-window:focus": {
+    args: [];
+    result: boolean;
+  };
+  "canopy-window:open": {
+    args: [];
+    result: void;
+  };
   "canopy:answer": {
     args: [runId: string, target: import("./canopy.js").CanopyTarget, label: string];
     result: void;

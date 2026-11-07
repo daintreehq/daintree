@@ -70,6 +70,7 @@ vi.mock("../../window/windowRef.js", () => ({
 }));
 
 import { sendToOneVisibleRenderer, setRemoteBoundViewFilter } from "../utils.js";
+import { markProjectlessView } from "../../window/projectlessViews.js";
 import { markViewHydrated, _resetViewHydrationForTesting } from "../../window/viewHydration.js";
 import { getEndpointRegistry, _resetEndpointRegistryForTesting } from "../endpointRegistry.js";
 import type { ClientEndpoint, EndpointGroup, HostFrame } from "../endpoint.js";
@@ -179,6 +180,18 @@ beforeEach(() => {
 });
 
 describe("sendToOneVisibleRenderer", () => {
+  it("never hands the effect to a view with no listener for it, which would swallow it", () => {
+    const view = Object.assign(makeView(null), { once: vi.fn() });
+    state.shown = [view];
+    state.all = [view];
+    markProjectlessView(view as never, {} as never);
+
+    expect(sendToOneVisibleRenderer("sound:one", 1)).toBe(false);
+    expect(view.send).not.toHaveBeenCalled();
+
+    view.once.mock.calls.find(([event]) => event === "destroyed")?.[1]();
+  });
+
   it("delivers to exactly one renderer with several windows open — the focused one", () => {
     const a = openWindow();
     const b = openWindow({ focused: true });

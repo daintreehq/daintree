@@ -1,6 +1,7 @@
 import type { Project } from "../types/index.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { getWindowForWebContents } from "../window/webContentsRegistry.js";
+import { isProjectlessAppView } from "../window/projectlessViews.js";
 import { getProjectIdFromSenderUrl } from "./senderIdentity.js";
 import type { HandlerDependencies, IpcContext } from "./types.js";
 
@@ -48,6 +49,9 @@ export function resolveScopedProjectForIpcContext(
       ? resolveWorkspaceById(ctx.projectId)
       : { project: null, workspaceId: null };
   }
+  // A view that holds no project has none to read, and the process-wide manager
+  // below would otherwise answer for it.
+  if (isProjectlessAppView(ctx.webContentsId)) return { project: null, workspaceId: null };
   const senderWindow = ctx.senderWindow ?? getWindowForWebContents(ctx.event.sender);
   const pvm =
     (senderWindow &&

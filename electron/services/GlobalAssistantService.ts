@@ -143,13 +143,16 @@ export class GlobalAssistantService {
    * The view a question for the running assistant is put to the person in
    * (#14161): the one that holds its input, else the latest to attach. Null
    * while no view shows it, so nothing is asked in a window that doesn't.
+   * `canAsk` leaves out a view that shows it but can't put a question.
    */
-  presenterWebContentsId(): number | null {
+  presenterWebContentsId(canAsk: (webContentsId: number) => boolean = () => true): number | null {
     if (!this.run) return null;
     const owner = this.inputOwner !== null ? this.attachments.get(this.inputOwner) : undefined;
-    if (owner) return owner.webContentsId;
+    if (owner && canAsk(owner.webContentsId)) return owner.webContentsId;
     let latest: Attachment | undefined;
-    for (const attachment of this.attachments.values()) latest = attachment;
+    for (const attachment of this.attachments.values()) {
+      if (canAsk(attachment.webContentsId)) latest = attachment;
+    }
     return latest?.webContentsId ?? null;
   }
 

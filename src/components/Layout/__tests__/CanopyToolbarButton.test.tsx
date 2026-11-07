@@ -1,12 +1,18 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
-import { act, render } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { CanopyCard, CanopySnapshot } from "@shared/types/ipc/canopy";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CanopyToolbarButton } from "../CanopyToolbarButton";
+
+const dispatchMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+vi.mock("@/services/ActionService", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/services/ActionService")>();
+  return { ...actual, actionService: { ...actual.actionService, dispatch: dispatchMock } };
+});
 
 function snapshot(activated: boolean, cards: CanopyCard[] = []): CanopySnapshot {
   return {
@@ -214,5 +220,43 @@ describe("CanopyToolbarButton", () => {
   it("flags nothing until Canopy is turned on: the button opens the offer, not the inbox", async () => {
     setFleet([asking("r1")]);
     expect(await pip(false)).toMatchObject({ label: "Canopy", visible: "false" });
+  });
+});
+
+describe("Open in new window", () => {
+  afterEach(() => dispatchMock.mockClear());
+
+  async function openMenu(activated: boolean) {
+    const view = renderButton(activated);
+    await act(async () => {});
+    fireEvent.contextMenu(view.container.querySelector("button")!);
+    await act(async () => {});
+  }
+
+  it("is on the right-click menu once Canopy is on, and runs the action", async () => {
+    await openMenu(true);
+
+    fireEvent.click(screen.getByRole("menuitem", { name: "Open in new window" }));
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "canopy.openWindow",
+      undefined,
+      expect.objectContaining({ source: "context-menu" })
+    );
+  });
+
+  it("isn't offered with Canopy off", async () => {
+    await openMenu(false);
+
+    expect(screen.queryByRole("menuitem", { name: "Open in new window" })).toBeNull();
+  });
+
+  it("leaves the button's click to the toggle, which decides where Canopy opens", async () => {
+    const view = renderButton(true);
+    await act(async () => {});
+
+    fireEvent.click(view.container.querySelector("button")!);
+
+    expect(dispatchMock).toHaveBeenCalledWith("canopy.toggle", undefined, { source: "user" });
   });
 });

@@ -297,7 +297,8 @@ import { getBuildChannelLabel } from "../../shared/config/distribution.js";
 import { getPluginMenuItems } from "../services/pluginMenuRegistry.js";
 import { getPluginTours } from "../services/plugin/PluginTourRegistry.js";
 import { isPluginVisibleInProject } from "../services/plugin/projectPluginVisibility.js";
-import { webContents, app, Menu, dialog } from "electron";
+import { BrowserWindow, webContents, app, Menu, dialog } from "electron";
+import { markProjectlessView } from "../window/projectlessViews.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { getWorkspaceClientRef } from "../window/windowServices.js";
 import { AppError } from "../utils/errorTypes.js";
@@ -620,6 +621,61 @@ describe("createApplicationMenu", () => {
       item!.click!({} as Electron.MenuItem, undefined, {} as Electron.KeyboardEvent);
       expect(mockWebContents.setZoomLevel).toHaveBeenCalledWith(1.5);
     });
+  });
+});
+
+describe("a menu command with a window that holds no project focused", () => {
+  const canopyView = { id: 701, once: vi.fn() };
+  const canopyWindow = Object.assign(Object.create(BrowserWindow.prototype), {
+    id: 70,
+    isDestroyed: () => false,
+  }) as Electron.BrowserWindow;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedTemplate = [];
+    markProjectlessView(canopyView as never, canopyWindow);
+  });
+
+  afterEach(() => {
+    windowRefMock.getWindowRegistry.mockReturnValue(null);
+    canopyView.once.mock.calls.find(([event]) => event === "destroyed")?.[1]();
+  });
+
+  function closeProject(): void {
+    createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
+    getAppWebContentsMock.mockClear();
+    const item = findMenuItem(capturedTemplate, "File", "Close Project");
+    item!.click!({} as Electron.MenuItem, canopyWindow, {} as Electron.KeyboardEvent);
+  }
+
+  it("goes to the project window last used, which comes forward", () => {
+    const projectWindow = { id: 2, isDestroyed: () => false, show: vi.fn() };
+    windowRefMock.getWindowRegistry.mockReturnValue({
+      getPrimary: () => ({ browserWindow: projectWindow, services: {} }),
+      getByWindowId: () => undefined,
+      all: () => [],
+    });
+
+    closeProject();
+
+    expect(getAppWebContentsMock).toHaveBeenCalledWith(projectWindow);
+    expect(getAppWebContentsMock).not.toHaveBeenCalledWith(canopyWindow);
+    expect(projectWindow.show).toHaveBeenCalledTimes(1);
+  });
+
+  it("goes nowhere once no project window is left", () => {
+    const destroyed = { id: 3, isDestroyed: () => true, show: vi.fn() };
+    windowRefMock.getWindowRegistry.mockReturnValue({
+      getPrimary: () => ({ browserWindow: destroyed, services: {} }),
+      getByWindowId: () => undefined,
+      all: () => [],
+    });
+
+    closeProject();
+
+    expect(getAppWebContentsMock).not.toHaveBeenCalled();
+    expect(destroyed.show).not.toHaveBeenCalled();
   });
 });
 

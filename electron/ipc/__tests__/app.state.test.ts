@@ -2308,6 +2308,22 @@ describe("app:hydrate host fields", () => {
     expect(result.systemTmpDir).toBe(os.tmpdir());
   });
 
+  it("leaves one-shot notices for a project window when a view with no project boots", async () => {
+    const { markProjectlessView } = await import("../../window/projectlessViews.js");
+    const storeModule = await import("../../store.js");
+    const view = { id: 8801, once: vi.fn() };
+    markProjectlessView(view as never, {} as never);
+
+    const result = await invokeBoot({ senderId: view.id });
+
+    view.once.mock.calls.find(([event]) => event === "destroyed")?.[1]();
+    expect(storeModule.consumePendingSettingsRecovery).not.toHaveBeenCalled();
+    expect(consumeDatabaseRecovery).not.toHaveBeenCalled();
+    expect(crashService.consumePanelFilter).not.toHaveBeenCalled();
+    expect(result.settingsRecovery).toBeNull();
+    expect(result.databaseRecovery).toBeNull();
+  });
+
   it("leaves this machine's one-shot notices alone when answering a remote Shell", async () => {
     const { getIpcDispatcher, _resetIpcDispatcherForTesting } = await import("../dispatcher.js");
     const { wrapError, wrapSuccess } =

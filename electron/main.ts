@@ -87,6 +87,7 @@ import { buildMemoryAttribution } from "./utils/memoryAttribution.js";
 import { helpSessionService } from "./services/HelpSessionService.js";
 import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
+import { setCanopyBrowserWindowFactory } from "./window/canopyWindow.js";
 import { createWindowRecreation } from "./window/windowRecreation.js";
 import { hasPendingOpen, isWindowBound, reserveWindowForOpen } from "./window/windowOpenState.js";
 import { distributePortsToView, getRemoteViewHooks } from "./window/portDistribution.js";
@@ -1079,6 +1080,8 @@ if (!gotTheLock) {
     }
     return windowId;
   }
+
+  setCanopyBrowserWindowFactory(() => setupBrowserWindow(__dirname, { kind: "canopy" }));
 
   function readLaunchSignals(): LaunchIntentSignals {
     return {

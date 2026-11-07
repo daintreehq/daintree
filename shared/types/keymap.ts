@@ -193,6 +193,7 @@ export type BuiltInKeyAction =
   | "pilot.toggle"
   | "pilot.openProject"
   | "canopy.toggle"
+  | "canopy.openWindow"
   | "project.switcherPalette"
   | "project.mruCycleOlder"
   | "project.openInNewWindow"
@@ -396,6 +397,7 @@ export const KEY_ACTION_VALUES: ReadonlySet<string> = new Set<string>([
   "pilot.toggle",
   "pilot.openProject",
   "canopy.toggle",
+  "canopy.openWindow",
   "project.switcherPalette",
   "project.mruCycleOlder",
   "project.openInNewWindow",
