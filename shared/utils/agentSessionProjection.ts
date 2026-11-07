@@ -1,4 +1,8 @@
-import { AgentFacingSessionRecordSchema } from "../types/agentSessionSchemas.js";
+import {
+  AgentFacingSessionRecordSchema,
+  AgentSessionCloseCauseSchema,
+  AgentSessionTerminalSchema,
+} from "../types/agentSessionSchemas.js";
 import type {
   AgentSessionBookmarkMetadata,
   AgentSessionRecord,
@@ -50,6 +54,15 @@ export function toAgentFacingRecord(record: AgentSessionRecord): AgentSessionRec
     // documented to survive. The scalar spreads above stay `!== undefined` on
     // purpose so falsy-but-present values (`isInputLocked: false`) survive.
     ...(record.bookmark ? { bookmark: toAgentFacingBookmark(record.bookmark) } : {}),
+    // Checked here rather than left to `keepRepresentableRecords`: a cause only a
+    // newer build journals costs the field, never the session a recovery loop is
+    // looking for.
+    ...(AgentSessionCloseCauseSchema.safeParse(record.closedBy).success && {
+      closedBy: record.closedBy,
+    }),
+    ...(AgentSessionTerminalSchema.safeParse(record.terminal).success && {
+      terminal: { id: record.terminal!.id, spawnedAt: record.terminal!.spawnedAt },
+    }),
   };
 }
 

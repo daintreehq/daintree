@@ -192,6 +192,7 @@ import {
   TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL,
   TERMINAL_WAIT_FOR_EXIT_TOOL,
   WORKTREE_RETIRE_OWNED_TOOL,
+  AGENT_RESUME_OWNED_TOOL,
 } from "./sessionToolIds.js";
 import type { CallFacts, CallOutcome, CallerAdmission } from "./sessionCallFacts.js";
 import {
@@ -280,6 +281,9 @@ export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
   ASSISTANT_LIST_TOOL,
   ASSISTANT_START_TOOL,
   AGENT_READ_QUOTA_TOOL,
+  // Reopens a session from the journal main holds (#16341), with or without a
+  // view: recovering after a restart can't wait for a window to open.
+  AGENT_RESUME_OWNED_TOOL,
 ]);
 
 /**
@@ -751,6 +755,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     handleSkillsLoad,
     handleProjectRunCheck,
     handleProjectRunCommand,
+    handleAgentResumeOwned,
     handleTerminalGetStatusViewless,
     appendAuditRecord: appendSessionAuditRecord,
     getCachedManifest,
@@ -2870,6 +2875,49 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             return buildToolError({
               code: EXECUTION_ERROR_CODE,
               message: formatErrorMessage(err, "project.runCheck failed"),
+            });
+          }
+        }
+
+        // Short-circuit: agent.resumeOwned runs in main (#16341). It spawns
+        // through a host channel, which no lease policy covers on this path, so
+        // the drive rule is asked here: now, and again right before the spawn,
+        // since the reads between can take a while. Never `danger: "confirm"`:
+        // the same callers can already launch an agent. The pane it started
+        // goes to the ledger from the answer, as a dispatch's creation does.
+        if (actionId === AGENT_RESUME_OWNED_TOOL) {
+          emitToolCallStarted(false, false);
+          const relay = deps.relay;
+          const refuseWrite = relay
+            ? () => relay.refuseWrite(undefined)
+            : deps.refuseWrite
+              ? () => deps.refuseWrite!(undefined)
+              : deps.refuseViewWrite;
+          const refusal = refuseWrite?.();
+          if (refusal) return refuseRelayed(refusal);
+          try {
+            const envelope = await handleAgentResumeOwned(
+              args,
+              extra.signal,
+              refuseWrite
+                ? () => {
+                    const late = refuseWrite();
+                    if (late) throw new RelayWriteRefused(late);
+                  }
+                : undefined
+            );
+            recordDispatchOwnership(envelope);
+            outcome = { kind: "result", value: envelope.result };
+            return buildToolCallResult(envelope.result.result, {
+              structuredContent: envelope.result.result as unknown as Record<string, unknown>,
+            });
+          } catch (err) {
+            if (err instanceof RelayWriteRefused) return refuseRelayed(err.refusal);
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) throw err;
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: formatErrorMessage(err, "agent.resumeOwned failed"),
             });
           }
         }

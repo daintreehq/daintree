@@ -17,6 +17,23 @@ export const AgentSessionBookmarkMetadataSchema = z.object({
   isInputLocked: z.boolean().optional(),
 });
 
+// What ended a journaled session, as `AgentSessionCloseCause` names it (#16341).
+export const AgentSessionCloseCauseSchema = z.enum([
+  "user",
+  "kill",
+  "restart",
+  "shutdown",
+  "sleep",
+  "exit",
+  "bookmark",
+]);
+
+// One incarnation of one terminal: a restart keeps the id and moves `spawnedAt`.
+export const AgentSessionTerminalSchema = z.object({
+  id: z.string(),
+  spawnedAt: z.number(),
+});
+
 export const AgentSessionRecordSchema = z.object({
   sessionId: z.string(),
   agentId: z.string(),
@@ -32,6 +49,10 @@ export const AgentSessionRecordSchema = z.object({
   branch: z.string().optional(),
   // Present when the user has pinned this session as a durable bookmark (#11288).
   bookmark: AgentSessionBookmarkMetadataSchema.optional(),
+  // Absent on records journaled before they were kept. What tells a session the
+  // person closed from one that died, and which pane it came from (#16341).
+  closedBy: AgentSessionCloseCauseSchema.optional(),
+  terminal: AgentSessionTerminalSchema.optional(),
 });
 
 // Agent-facing projection of the bookmark metadata (#11530). The full schema
@@ -58,3 +79,43 @@ export const AgentFacingBookmarkMetadataSchema = z.object({
 export const AgentFacingSessionRecordSchema = AgentSessionRecordSchema.extend({
   bookmark: AgentFacingBookmarkMetadataSchema.optional(),
 });
+
+// Why a saved session wasn't reopened as a pane (#16000), as the tool reports it (#16341).
+export const AgentSessionPaneRefusalSchema = z.enum([
+  "no-session-id",
+  "unknown-agent",
+  "no-resume-support",
+  "unknown-project",
+  "history-unavailable",
+  "worktrees-unavailable",
+  "worktree-gone",
+  "other-worktree",
+  "terminals-unavailable",
+  "panel-limit",
+  "missing-cli",
+  "spawn-failed",
+  "cancelled",
+  "not-authorized",
+]);
+
+export type AgentSessionPaneRefusal = z.infer<typeof AgentSessionPaneRefusalSchema>;
+
+// `agent.resumeOwned` (#16341). No project: the call runs in the one its session
+// is bound to. No flags, command or directory: those come from the journal.
+export const AgentResumeOwnedArgsSchema = z.object({
+  worktreeId: z.string().min(1).describe("The worktree the session ran in."),
+  agentId: z.string().min(1).describe("The session record's `agentId`."),
+  sessionId: z.string().min(1).describe("The session record's `sessionId`, exactly."),
+});
+
+// Top-level object, for `buildToolOutputSchema`. Every field is required and
+// individually nullable, as on `agent.launch`.
+export const AgentResumeOwnedResultSchema = z.object({
+  status: z.enum(["launched", "existing", "refused"]),
+  terminalId: z.string().nullable(),
+  savedInLayout: z.boolean().nullable(),
+  reason: AgentSessionPaneRefusalSchema.nullable(),
+  message: z.string().nullable(),
+});
+
+export type AgentResumeOwnedResult = z.infer<typeof AgentResumeOwnedResultSchema>;

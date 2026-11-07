@@ -689,6 +689,67 @@ describe("resumeAgentSessionAsPane", () => {
     expect(second).toEqual(first);
   });
 
+  it("asks authorizeSpawn after every read, and spawns nothing when it refuses (#16341)", async () => {
+    const { deps, invoke, store, pty } = resumeDeps();
+    const authorizeSpawn = vi.fn(() => {
+      // The whole read path has run by the time the launch is asked about.
+      expect(pty.getAllTerminalsWithCompletenessAsync).toHaveBeenCalled();
+      return "studio-02 has control of this project.";
+    });
+
+    const result = await resumeAgentSessionAsPane(
+      { ...REQUEST, authorizeSpawn },
+      deps,
+      makeRuntime()
+    );
+
+    expect(authorizeSpawn).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      status: "refused",
+      reason: "not-authorized",
+      message: "studio-02 has control of this project.",
+    });
+    expect(spawns(invoke)).toHaveLength(0);
+    expect(store.read()?.terminals ?? []).toHaveLength(0);
+  });
+
+  it("asks only the call that launches, never one that joins it (#16341)", async () => {
+    const { deps, invoke } = resumeDeps();
+    const runtime = makeRuntime();
+    const first = vi.fn(() => null);
+    const second = vi.fn(() => "never asked");
+
+    const [launched, joined] = await Promise.all([
+      resumeAgentSessionAsPane({ ...REQUEST, authorizeSpawn: first }, deps, runtime),
+      resumeAgentSessionAsPane({ ...REQUEST, authorizeSpawn: second }, deps, runtime),
+    ]);
+
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).not.toHaveBeenCalled();
+    expect(joined).toEqual(launched);
+    expect(spawns(invoke)).toHaveLength(1);
+  });
+
+  it("launches for a joiner when only the first caller was refused (#16341)", async () => {
+    const { deps, invoke } = resumeDeps();
+    const runtime = makeRuntime();
+    const second = vi.fn(() => null);
+
+    const [refusedFirst, launched] = await Promise.all([
+      resumeAgentSessionAsPane(
+        { ...REQUEST, authorizeSpawn: () => "not this caller" },
+        deps,
+        runtime
+      ),
+      resumeAgentSessionAsPane({ ...REQUEST, authorizeSpawn: second }, deps, runtime),
+    ]);
+
+    expect(refusedFirst).toMatchObject({ status: "refused", reason: "not-authorized" });
+    expect(launched).toMatchObject({ status: "launched" });
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(spawns(invoke)).toHaveLength(1);
+  });
+
   it("launches again after an earlier call for the session threw", async () => {
     const { deps, invoke } = resumeDeps();
     const getCliDetail = deps.agents.getCliDetail;

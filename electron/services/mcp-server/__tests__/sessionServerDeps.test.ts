@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { webContentsById } = vi.hoisted(() => ({
   webContentsById: new Map<number, { isDestroyed: () => boolean }>(),
@@ -13,6 +13,7 @@ import {
   type SessionServerDepsHost,
   type SessionServerDepsSource,
 } from "../sessionServerDeps.js";
+import { setMcpDriveTargetResolver, type McpDriveTarget } from "../driveTarget.js";
 import { SessionBindingError } from "../rendererBridge.js";
 import { helpNotifyKey } from "../terminalNotify.js";
 import type { AssistantControlBinding, McpSessionOrigin } from "../shared.js";
@@ -76,6 +77,75 @@ function registryShowing(webContentsId: number, workspaceId: string): WindowRegi
         : undefined,
   } as unknown as WindowRegistry;
 }
+
+describe("a session in a view reopening a saved session (#16341)", () => {
+  let restore: (() => void) | undefined;
+
+  afterEach(() => {
+    restore?.();
+    restore = undefined;
+  });
+
+  function inView() {
+    const deps = fakeSource();
+    deps.handleAgentResumeOwned = vi.fn();
+    deps.sessionStore.sessionWebContentsMap.set("s", 7);
+    webContentsById.set(7, { isDestroyed: () => false });
+    const { state, host } = mutableHost();
+    state.registry = registryShowing(7, WS_A);
+    return { deps, sessionDeps: createSessionServerDeps(deps, host, { sessionId: "s" }) };
+  }
+
+  const driven = (target: McpDriveTarget) => {
+    restore = setMcpDriveTargetResolver(() => target);
+  };
+
+  it("runs while routing is off, a view here drives, or nobody does", () => {
+    const { sessionDeps } = inView();
+    expect(sessionDeps.refuseViewWrite?.()).toBeNull();
+
+    driven({ state: "vacant" });
+    expect(sessionDeps.refuseViewWrite?.()).toBeNull();
+
+    driven({ state: "live", endpoint: { kind: "local-view", isClosed: () => false } as never });
+    expect(sessionDeps.refuseViewWrite?.()).toBeNull();
+  });
+
+  it("refuses behind another machine's drive, naming it", () => {
+    const { sessionDeps } = inView();
+    driven({
+      state: "live",
+      endpoint: { kind: "remote-view", linkSessionId: "link-1", isClosed: () => false } as never,
+      holderName: "studio-02",
+    });
+
+    const refusal = sessionDeps.refuseViewWrite?.();
+
+    expect(refusal?.code).toBe("DRIVEN_ELSEWHERE");
+    expect(refusal?.message).toContain("studio-02");
+  });
+
+  it("refuses while the holder can't be reached", () => {
+    const { sessionDeps } = inView();
+    driven({ state: "unavailable", reason: "reserved" });
+
+    expect(sessionDeps.refuseViewWrite?.()?.code).toBe("DRIVEN_ELSEWHERE");
+  });
+
+  it("reopens in the project the view shows", async () => {
+    const { deps, sessionDeps } = inView();
+    const { signal } = new AbortController();
+
+    await sessionDeps.handleAgentResumeOwned({ sessionId: "x" }, signal);
+
+    expect(deps.handleAgentResumeOwned).toHaveBeenCalledWith(
+      { sessionId: "x" },
+      WS_A,
+      signal,
+      undefined
+    );
+  });
+});
 
 describe("createSessionServerDeps", () => {
   it("asks the host for a help session's registry, binding and terminal when a call needs them", async () => {

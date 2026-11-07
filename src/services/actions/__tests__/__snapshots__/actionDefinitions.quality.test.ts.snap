@@ -600,6 +600,27 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "agent",
     "danger": "safe",
     "dangerRationale": undefined,
+    "description": "Reopen a closed session as a new pane you own. \`launched\` means the terminal started, not that the agent is ready. \`existing\`: a live pane holds it, so nothing launched and it isn't yours. \`refused\` gives the reason.",
+    "examples": [
+      {
+        "args": {
+          "agentId": "claude",
+          "sessionId": "sess-abc123",
+          "worktreeId": "wt-1",
+        },
+        "description": "Reopen one journaled session in the worktree it ran in",
+      },
+    ],
+    "id": "agent.resumeOwned",
+    "keywords": undefined,
+    "kind": "command",
+    "requiresArgs": true,
+    "title": "Resume agent session as an owned pane",
+  },
+  {
+    "category": "agent",
+    "danger": "safe",
+    "dangerRationale": undefined,
     "description": "Open a plain shell terminal with no agent attached, for running ordinary commands. Use an agent launch instead when the intent is to start an AI CLI. This creates a visible panel and starts a shell process, so it consumes resources until closed.",
     "examples": undefined,
     "id": "agent.terminal",

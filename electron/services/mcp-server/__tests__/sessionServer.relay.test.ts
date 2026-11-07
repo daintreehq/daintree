@@ -45,6 +45,7 @@ const MANIFEST = [
   entry("terminal.notifyWhenIdle", "command"),
   entry("terminal.closeOwned", "command"),
   entry("terminal.waitForExit", "command"),
+  entry("agent.resumeOwned", "command"),
 ];
 
 interface Harness {
@@ -85,6 +86,7 @@ async function relayed(
     handleSkillsLoad: vi.fn(),
     handleProjectRunCheck: vi.fn().mockResolvedValue({ passed: true }),
     handleProjectRunCommand: vi.fn(),
+    handleAgentResumeOwned: vi.fn(),
     handleTerminalGetStatusViewless: vi
       .fn()
       .mockResolvedValue({ terminals: [], source: "pty", unavailableFields: [] }),
@@ -407,6 +409,107 @@ describe("a relayed session (#13493)", () => {
       expect(relay.store.getOrigin("relay-session")).toBe("external");
     }
   );
+
+  describe("reopening a saved session as an owned pane (#16341)", () => {
+    const RESUME = {
+      name: "agent.resumeOwned",
+      arguments: { worktreeId: "wt-1", agentId: "claude", sessionId: "sess-1" },
+    };
+    const ANSWER = {
+      terminalId: "terminal-1",
+      savedInLayout: null,
+      reason: null,
+      message: null,
+    };
+    const answered = (status: "launched" | "existing") =>
+      vi.fn().mockResolvedValue({
+        result: { ok: true, result: { ...ANSWER, status } },
+        dispatchedWorkspace: { kind: "project", workspaceId: "project-1", workspacePath: "/p" },
+      });
+
+    it("gives the caller the pane it started, so its owned tools reach it", async () => {
+      const relay = await relayed("full", { handleAgentResumeOwned: answered("launched") });
+
+      const result = await relay.client.callTool(RESUME);
+
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        status: "launched",
+        terminalId: "terminal-1",
+      });
+      expect(relay.deps.dispatchAction).not.toHaveBeenCalled();
+      expect(
+        relay.store.resourceOwnership.get("relay-session", "terminal", "terminal-1")
+      ).toMatchObject({ workspaceId: "project-1" });
+    });
+
+    it("never claims a pane that already held the session", async () => {
+      const relay = await relayed("full", { handleAgentResumeOwned: answered("existing") });
+
+      const result = await relay.client.callTool(RESUME);
+
+      expect(result.structuredContent).toMatchObject({
+        status: "existing",
+        terminalId: "terminal-1",
+      });
+      expect(
+        relay.store.resourceOwnership.get("relay-session", "terminal", "terminal-1")
+      ).toBeUndefined();
+    });
+
+    it("asks nothing of the journal while another machine drives the project", async () => {
+      const refuseWrite = vi.fn(() => ({
+        code: "DRIVEN_ELSEWHERE",
+        message: "studio-02 has control of this project.",
+      }));
+      const relay = await relayed("full", { relay: { shellName: "greg-mbp", refuseWrite } });
+
+      const result = await relay.client.callTool(RESUME);
+
+      expect(errorCode(result as { content: unknown })).toBe("DRIVEN_ELSEWHERE");
+      expect(relay.deps.handleAgentResumeOwned).not.toHaveBeenCalled();
+    });
+
+    it("asks once more right before the spawn, and records nothing when refused", async () => {
+      const refuseWrite = vi.fn(() => null as { code: string; message: string } | null);
+      const handleAgentResumeOwned = vi.fn(
+        async (_args: unknown, _signal: AbortSignal, authorize?: () => void) => {
+          // A takeover lands while the journal and the worktrees are read.
+          refuseWrite.mockReturnValue({
+            code: "DRIVEN_ELSEWHERE",
+            message: "studio-02 has control of this project.",
+          });
+          authorize?.();
+          return { result: { ok: true, result: { ...ANSWER, status: "launched" } } };
+        }
+      );
+      const relay = await relayed("full", {
+        relay: { shellName: "greg-mbp", refuseWrite },
+        handleAgentResumeOwned: handleAgentResumeOwned as never,
+      });
+
+      const result = await relay.client.callTool(RESUME);
+
+      expect(errorCode(result as { content: unknown })).toBe("DRIVEN_ELSEWHERE");
+      expect(refuseWrite).toHaveBeenCalledTimes(2);
+      expect(
+        relay.store.resourceOwnership.get("relay-session", "terminal", "terminal-1")
+      ).toBeUndefined();
+    });
+
+    it("holds a session in a view to the view's drive rule", async () => {
+      const refuseViewWrite = vi.fn(() => ({
+        code: "DRIVEN_ELSEWHERE",
+        message: "studio-02 has control of this project.",
+      }));
+      const inView = await relayed("full", { refuseViewWrite }, false);
+
+      const result = await inView.client.callTool(RESUME);
+
+      expect(errorCode(result as { content: unknown })).toBe("DRIVEN_ELSEWHERE");
+      expect(inView.deps.handleAgentResumeOwned).not.toHaveBeenCalled();
+    });
+  });
 
   // A relay is admitted to the runner (#13501); these hold it to the drive rule.
   describe("the command runner, past its own caller gate", () => {

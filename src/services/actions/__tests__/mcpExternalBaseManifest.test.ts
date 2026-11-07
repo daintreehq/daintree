@@ -63,6 +63,7 @@ const MAIN_PROCESS_TOOLS = [
   "assistant.list",
   "assistant.start",
   "agent.readQuota",
+  "agent.resumeOwned",
 ];
 
 /**

@@ -97,6 +97,9 @@ export const GLOBAL_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
   "agent.listPresets",
   "agent.listModels",
   "agent.readQuota",
+  // Reopens a session in a pane recorded as the assistant's (#16341), unlike
+  // `agentSessionHistory.resume`, withheld below.
+  "agent.resumeOwned",
   "agentSessionHistory.list",
   "assistant.list",
   "assistant.start",

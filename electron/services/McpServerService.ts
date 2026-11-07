@@ -57,6 +57,7 @@ import { getEndpointRegistry } from "../ipc/endpointRegistry.js";
 import { onRendererScopeChanged } from "../window/webContentsRegistry.js";
 import { handleWaitUntilIdle, handleWaitUntilIdleBatch } from "./mcp-server/waitUntilIdle.js";
 import { handleSkillsSearch, handleSkillsLoad } from "./mcp-server/skills.js";
+import { handleAgentResumeOwned } from "./mcp-server/agentResumeOwned.js";
 import { handleProjectRunCheck } from "./mcp-server/projectCheck.js";
 import { handleProjectRunCommand } from "./mcp-server/projectCommand.js";
 import {
@@ -527,6 +528,8 @@ export class McpServerService {
         handleProjectRunCheck(rawArgs, signal, authorize),
       handleProjectRunCommand: (rawArgs, signal, authorize) =>
         handleProjectRunCommand(rawArgs, signal, authorize),
+      handleAgentResumeOwned: (rawArgs, projectId, signal, authorize) =>
+        handleAgentResumeOwned(rawArgs, projectId, signal, authorize),
       handleTerminalGetStatusViewless: (rawArgs, workspaceId, admittedAssistants) =>
         handleTerminalGetStatusViewless(rawArgs, workspaceId, admittedAssistants),
       machineName: () => (localMachineName ??= machineDisplayName()),

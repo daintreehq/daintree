@@ -545,6 +545,103 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "agent",
     danger: "safe",
     description:
+      "Reopen a closed session as a new pane you own. `launched` means the terminal started, not that the agent is ready. `existing`: a live pane holds it, so nothing launched and it isn't yours. `refused` gives the reason.",
+    enabled: true,
+    examples: [
+      {
+        args: {
+          worktreeId: "wt-1",
+          agentId: "claude",
+          sessionId: "sess-abc123",
+        },
+        description: "Reopen one journaled session in the worktree it ran in",
+      },
+    ],
+    id: "agent.resumeOwned",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        worktreeId: {
+          type: "string",
+          minLength: 1,
+          description: "The worktree the session ran in.",
+        },
+        agentId: {
+          type: "string",
+          minLength: 1,
+          description: "The session record's `agentId`.",
+        },
+        sessionId: {
+          type: "string",
+          minLength: 1,
+          description: "The session record's `sessionId`, exactly.",
+        },
+      },
+      required: ["worktreeId", "agentId", "sessionId"],
+    },
+    kind: "command",
+    mcpAnnotations: {
+      readOnlyHint: false,
+      idempotentHint: false,
+      destructiveHint: false,
+    },
+    name: "agent.resumeOwned",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        status: {
+          type: "string",
+          enum: ["launched", "existing", "refused"],
+        },
+        terminalId: {
+          type: ["string", "null"],
+        },
+        savedInLayout: {
+          type: ["boolean", "null"],
+        },
+        reason: {
+          anyOf: [
+            {
+              type: "string",
+              enum: [
+                "no-session-id",
+                "unknown-agent",
+                "no-resume-support",
+                "unknown-project",
+                "history-unavailable",
+                "worktrees-unavailable",
+                "worktree-gone",
+                "other-worktree",
+                "terminals-unavailable",
+                "panel-limit",
+                "missing-cli",
+                "spawn-failed",
+                "cancelled",
+                "not-authorized",
+              ],
+            },
+            {
+              type: "null",
+            },
+          ],
+        },
+        message: {
+          type: ["string", "null"],
+        },
+      },
+      required: ["status", "terminalId", "savedInLayout", "reason", "message"],
+      additionalProperties: false,
+    },
+    requiresArgs: true,
+    title: "Resume agent session as an owned pane",
+  },
+  {
+    band: "reversible",
+    category: "agent",
+    danger: "safe",
+    description:
       "List closed agent sessions that can be relaunched, from the on-disk journal: which sessions exist, no transcript text. Needs a worktree or project scope and fails when none resolves. Old sessions are pruned, so absence proves nothing.",
     enabled: true,
     examples: [
@@ -661,6 +758,23 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                   },
                 },
                 required: ["bookmarkedAt", "label"],
+                additionalProperties: false,
+              },
+              closedBy: {
+                type: "string",
+                enum: ["user", "kill", "restart", "shutdown", "sleep", "exit", "bookmark"],
+              },
+              terminal: {
+                type: "object",
+                properties: {
+                  id: {
+                    type: "string",
+                  },
+                  spawnedAt: {
+                    type: "number",
+                  },
+                },
+                required: ["id", "spawnedAt"],
                 additionalProperties: false,
               },
             },

@@ -258,6 +258,14 @@ export interface SessionServerDepsSource {
     /** Asked once more right before the spawn; throws to refuse (#13493). */
     authorize?: () => void
   ) => Promise<import("../../../shared/types/projectCommand.js").ProjectCommandRunResult>;
+  /** `projectId` is the session's bound project, resolved by {@link createSessionServerDeps}. */
+  handleAgentResumeOwned: (
+    rawArgs: unknown,
+    projectId: string | null,
+    signal: AbortSignal,
+    /** Asked once more right before the spawn; throws to refuse. */
+    authorize?: () => void
+  ) => Promise<import("./agentResumeOwned.js").AgentResumeOwnedAnswer>;
   handleTerminalGetStatusViewless: import("./sessionServer.js").SessionServerDeps["handleTerminalGetStatusViewless"];
   handleTerminalReadLastMessageOwned: import("./sessionServer.js").OwnedMainExecutors["handleTerminalReadLastMessageOwned"];
   /** How this machine names itself to people, for the stamp on what its assistants send. */
@@ -1102,6 +1110,8 @@ export function createSessionServerDeps(
     handleSkillsLoad: (rawArgs) => deps.handleSkillsLoad(rawArgs, { projectId: skillsProjectId() }),
     handleProjectRunCheck: deps.handleProjectRunCheck,
     handleProjectRunCommand: deps.handleProjectRunCommand,
+    handleAgentResumeOwned: (rawArgs, signal, authorize) =>
+      deps.handleAgentResumeOwned(rawArgs, skillsProjectId(), signal, authorize),
     handleTerminalGetStatusViewless: deps.handleTerminalGetStatusViewless,
     handleTerminalReadLastMessageOwned: deps.handleTerminalReadLastMessageOwned,
     isTerminalIdInUse: deps.isTerminalIdInUse,
@@ -1191,6 +1201,17 @@ export function createSessionServerDeps(
                 },
               }
             : {}),
+          refuseViewWrite: () => {
+            const projectId = skillsProjectId();
+            if (projectId === null) return null;
+            const standing = relayWriteStanding(projectId, null, true);
+            if (standing.kind === "vacant" || standing.kind === "own-view") return null;
+            const refused =
+              standing.kind === "unavailable"
+                ? new DriveHolderUnavailableError(projectId)
+                : new RelayDrivenElsewhereError(projectId, standing.holderName, { local: true });
+            return { code: "DRIVEN_ELSEWHERE", message: refused.message };
+          },
           // Whichever help session this transport is bound to; the runtime decides if it may (#13493).
           hostControl: bindHostControl(() => deps.sessionStore.sessionHelpIdMap.get(sessionId)),
         }),
