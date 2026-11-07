@@ -32,6 +32,8 @@ export function takeCanopySize(terminalId: string): void {
   if (!take) return;
   asked.add(terminalId);
   take(terminalId).catch((error: unknown) => {
+    // Nothing moved, so no new list is coming to clear this: the next keystroke asks.
+    asked.delete(terminalId);
     logWarn("[canopySizeHolds] Couldn't take the terminal's size back", { error });
   });
 }

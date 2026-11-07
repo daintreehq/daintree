@@ -500,10 +500,13 @@ describe("createAllHostsRoute", () => {
 
   it("takes the size back only on this machine: another host's hold answers to the drive lease", async () => {
     invoke.mockResolvedValue({ watchId: 1, snapshot: null });
+    ownCalls.watchTerminal.mockResolvedValueOnce({ watchId: 41, snapshot: null });
     const { terminalApi } = createAllHostsRoute("own", ["own", "remote"]);
     const own = await terminalApi.watchTerminal(allHostsKey("own", "t1"), { spawnedAt: 1 });
+    expect(own.watchId).not.toBe(41);
     await terminalApi.terminalClaimSize(own.watchId!);
-    expect(ownCalls.terminalClaimSize).toHaveBeenCalledTimes(1);
+    // By the host's own stream number, not the one the route gave the pane.
+    expect(ownCalls.terminalClaimSize.mock.calls).toEqual([[41]]);
 
     const remote = await terminalApi.watchTerminal(allHostsKey("remote", "t1"), { spawnedAt: 1 });
     ownCalls.terminalClaimSize.mockClear();

@@ -35,7 +35,8 @@ describe("takeCanopySize (#16333)", () => {
   afterEach(() => unsubscribe());
 
   it("asks nothing for a terminal no panel holds", () => {
-    takeCanopySize("t1");
+    push(["t1"]);
+    takeCanopySize("t2");
     expect(takeTerminalSize).not.toHaveBeenCalled();
   });
 
@@ -56,11 +57,14 @@ describe("takeCanopySize (#16333)", () => {
     expect(takeTerminalSize).toHaveBeenCalledTimes(2);
   });
 
-  it("says when the host refused, and leaves the pane as it was", async () => {
-    takeTerminalSize.mockRejectedValue(new Error("rate limited"));
+  it("says when the host refused, and asks again on the next interaction", async () => {
+    takeTerminalSize.mockRejectedValueOnce(new Error("rate limited"));
     push(["t1"]);
     takeCanopySize("t1");
     await vi.waitFor(() => expect(logWarn).toHaveBeenCalledTimes(1));
     expect(isCanopySizeHeld("t1")).toBe(true);
+
+    takeCanopySize("t1");
+    expect(takeTerminalSize).toHaveBeenCalledTimes(2);
   });
 });

@@ -10,7 +10,7 @@ import {
 } from "@/lib/viewCacheState";
 import { terminalClient } from "@/clients";
 import { getDriveLeaseSnapshot, subscribeDriveLeaseSnapshot } from "./inputGate";
-import { isCanopySizeHeld, subscribeCanopySizeHolds } from "./canopySizeHolds";
+import { isCanopySizeHeld, subscribeCanopySizeHolds, takeCanopySize } from "./canopySizeHolds";
 import { TerminalRefreshTier } from "@/types";
 import type { AgentState } from "@/types";
 import type { RendererTerminalBufferCounts } from "@shared/types/memoryAccounting";
@@ -732,6 +732,9 @@ class TerminalInstanceService {
     if (!options.automatic && !isTerminalReply(data) && !isMouseReport(data)) {
       this.noteUserInput(id);
     }
+    // What skips xterm's onData: Return, a word jump, a paste, the pane's own
+    // composer. Only the fleet names its payload, and a follower's pane wasn't touched.
+    if (data === "" && !options.automatic) takeCanopySize(id);
     this.onUserInput(id, data);
   }
 

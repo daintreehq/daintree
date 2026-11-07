@@ -227,6 +227,17 @@ describe("TerminalInstanceService — watching a project another frontend drives
     expect(resize).not.toHaveBeenCalled();
   });
 
+  it("ignores a PTY echo while this view drives", async () => {
+    await service.prewarmTerminal("t1", "terminal", {});
+    gate.setDriveLeaseSnapshot(lease({ drivingHere: true }));
+    const before = grid("t1");
+
+    expect(capturedResizeResultCb).toBeTypeOf("function");
+    capturedResizeResultCb!("t1", echo(150, 45));
+
+    expect(grid("t1")).toEqual(before);
+  });
+
   it("keeps the grid through a failed resize's echo", async () => {
     await service.prewarmTerminal("t1", "terminal", {});
     answerFrom({ t1: [200, 50] });
@@ -377,6 +388,7 @@ describe("TerminalInstanceService — a terminal a Canopy panel on another machi
   let gate: InputGate;
   let pushHolds: (terminalIds: string[]) => void;
   let hydrate: string[];
+  const takeTerminalSize = vi.fn(async (_terminalId: string) => {});
 
   beforeEach(async () => {
     vi.resetModules();
@@ -395,7 +407,7 @@ describe("TerminalInstanceService — a terminal a Canopy panel on another machi
             return () => {};
           }),
         },
-        canopy: { getSizeHolds: vi.fn(async () => hydrate) },
+        canopy: { getSizeHolds: vi.fn(async () => hydrate), takeTerminalSize },
       },
     });
 
@@ -463,6 +475,46 @@ describe("TerminalInstanceService — a terminal a Canopy panel on another machi
     await settle();
 
     expect(locked("t1")).toBe(false);
+  });
+
+  it("keeps a pane held while a panel still holds it, and re-fits once both let go", async () => {
+    await service.prewarmTerminal("t1", "terminal", {});
+    gate.setDriveLeaseSnapshot(lease());
+    pushHolds(["t1"]);
+    await settle();
+    const pass = vi.spyOn(service, "runResizePass").mockImplementation(() => {});
+
+    gate.setDriveLeaseSnapshot(null);
+    expect(locked("t1")).toBe(true);
+    expect(pass).not.toHaveBeenCalled();
+
+    pushHolds([]);
+    expect(locked("t1")).toBe(false);
+    expect(pass).toHaveBeenCalledTimes(1);
+  });
+
+  describe("input that skips xterm's onData (#16333)", () => {
+    beforeEach(async () => {
+      takeTerminalSize.mockClear();
+      await service.prewarmTerminal("t1", "terminal", {});
+      pushHolds(["t1"]);
+      await settle();
+    });
+
+    it("takes the size for Return, a paste or the pane's composer, which name no payload", () => {
+      service.notifyUserInput("t1");
+      expect(takeTerminalSize).toHaveBeenCalledWith("t1");
+    });
+
+    it("takes nothing for a fleet follower: the fleet names what it sent, and this pane wasn't touched", () => {
+      service.notifyUserInput("t1", "typed at the origin");
+      expect(takeTerminalSize).not.toHaveBeenCalled();
+    });
+
+    it("takes nothing for input the user didn't send", () => {
+      service.notifyUserInput("t1", "", { automatic: true });
+      expect(takeTerminalSize).not.toHaveBeenCalled();
+    });
   });
 
   it("keeps a pane held while another frontend still drives the project", async () => {

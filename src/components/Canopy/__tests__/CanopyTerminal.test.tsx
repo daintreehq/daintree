@@ -241,6 +241,7 @@ function mount(onGoTo?: () => void) {
 /** Fractional, as layout reports it: 838.6 × 504.6 holds no more than 838 × 504. */
 const paneRect = () =>
   ({ width: 838.6, height: 504.6, top: 0, left: 0, right: 838.6, bottom: 504.6 }) as DOMRect;
+const narrowerRect = () => ({ ...paneRect(), width: 638.6, right: 638.6 });
 
 /** Past the pane's size settle, so a hold it would ask for has been asked for. */
 const PAST_SIZE_SETTLE_MS = 200;
@@ -731,15 +732,7 @@ describe("CanopyTerminal", () => {
         expect(xterm.current!.resizes.at(-1)).toEqual([140, 40]);
 
         // The panel's own box moves, and the PTY with it: neither is the user's doing here.
-        view.frame.getBoundingClientRect = () =>
-          ({
-            width: 638.6,
-            height: 504.6,
-            top: 0,
-            left: 0,
-            right: 638.6,
-            bottom: 504.6,
-          }) as DOMRect;
+        view.frame.getBoundingClientRect = narrowerRect;
         await following(120, 36);
         await settle();
         expect(terminalResize).not.toHaveBeenCalled();
@@ -749,6 +742,7 @@ describe("CanopyTerminal", () => {
       it("takes the size on a click, not on the other buttons", async () => {
         const view = await openSized();
         await following(140, 40);
+        fireEvent.mouseDown(view.frame, { button: 1 });
         fireEvent.mouseDown(view.frame, { button: 2 });
         expect(terminalClaimSize).not.toHaveBeenCalled();
         fireEvent.mouseDown(view.frame, { button: 0 });
@@ -771,6 +765,21 @@ describe("CanopyTerminal", () => {
         fireEvent.keyDown(view.frame, { key: "y" });
         xterm.current!.emitData("y");
         expect(terminalClaimSize).toHaveBeenCalledWith(7);
+      });
+
+      it("stays on the PTY's grid when a claim is refused, and claims again on the next click", async () => {
+        const view = await openSized();
+        await following(140, 40);
+        terminalResize.mockClear();
+        terminalClaimSize.mockRejectedValueOnce(new Error("refused"));
+
+        fireEvent.mouseDown(view.frame, { button: 0 });
+        await settle();
+        expect(terminalResize).not.toHaveBeenCalled();
+        expect(xterm.current!.resizes.at(-1)).toEqual([140, 40]);
+
+        fireEvent.mouseDown(view.frame, { button: 0 });
+        expect(terminalClaimSize).toHaveBeenCalledTimes(2);
       });
 
       it("claims nothing while it has the size", async () => {
@@ -1307,6 +1316,22 @@ describe("CanopyTerminal links, as the run's grid pane opens them (#15332)", () 
     await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
     openMenu(frame);
     await act(async () => screen.getByText("Paste").click());
+    expect(terminalInput).toHaveBeenCalledWith(7, "ls");
+  });
+
+  it("takes the size back for what it pastes from its menu (#16333)", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { readText: async () => "ls", writeText: async () => {} },
+    });
+    const { frame } = mount();
+    await open({ watchId: 7, snapshot: { data: "", cols: 80, rows: 24 } });
+    await act(async () =>
+      pushChunk({ kind: "resize", watchId: 7, runId: "run-1", cols: 80, rows: 24, following: true })
+    );
+    openMenu(frame);
+    await act(async () => screen.getByText("Paste").click());
+    expect(terminalClaimSize).toHaveBeenCalledWith(7);
     expect(terminalInput).toHaveBeenCalledWith(7, "ls");
   });
 

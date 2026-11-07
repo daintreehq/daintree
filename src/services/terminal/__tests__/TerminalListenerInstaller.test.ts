@@ -311,8 +311,8 @@ describe("installTerminalBoundListeners", () => {
       expect(writeTerminalInputOrFleetMock).toHaveBeenCalledWith("t1", "\x1b[12;4R");
 
       // Keys that aren't typing a prompt are still the user's.
-      for (const key of ["\x1b", "\x1b[D", "\x03"]) captured.onData!(key);
-      expect(takeCanopySizeMock).toHaveBeenCalledTimes(3);
+      for (const key of ["y", "\x1b", "\x1b[D", "\x03"]) captured.onData!(key);
+      expect(takeCanopySizeMock).toHaveBeenCalledTimes(4);
       expect(takeCanopySizeMock).toHaveBeenLastCalledWith("t1");
     });
 
@@ -322,6 +322,7 @@ describe("installTerminalBoundListeners", () => {
         managed.hostElement.dispatchEvent(new MouseEvent("pointerdown", { button }));
 
       managed.hostElement.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+      press(1);
       press(2);
       expect(takeCanopySizeMock).not.toHaveBeenCalled();
 

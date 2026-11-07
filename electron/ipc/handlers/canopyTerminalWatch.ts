@@ -303,7 +303,8 @@ export async function watchTerminal(
         return;
       }
       const current = watch.appliedSize ?? watch.heldSize;
-      if (!sameSize(current, watch.ownerSize)) {
+      // A hold still on its way moves the PTY after this, whatever it last reported.
+      if (watch.pendingHolds.length > 0 || !sameSize(current, watch.ownerSize)) {
         ptyClient.resize(runId, watch.ownerSize.cols, watch.ownerSize.rows);
       }
     },
@@ -378,6 +379,9 @@ export async function watchTerminal(
   if (snapshot && watch.ownerSize === null) {
     watch.ownerSize = { cols: snapshot.cols, rows: snapshot.rows };
   }
+  // Told to follow before it had a grid to say so with; the view holds this
+  // back for the stream's answer, as it does any chunk ahead of it.
+  if (watch.following) watch.announceGrid();
   return {
     watchId,
     snapshot: snapshot
@@ -523,6 +527,8 @@ export function claimWatchedSize(webContentsId: number, watchId: number): void {
     // The other panel's size was never the pane's, whatever this one's echoes said.
     watch.ownerSize = other.ownerSize;
     watch.heldSize = other.heldSize;
+    // Its echoes still to come are a panel's, not the pane's.
+    watch.pendingHolds = [...other.pendingHolds];
     holders.set(watch.runId, watch.key);
     follow(other);
   }
@@ -566,19 +572,19 @@ export function publishSizeHolds(): void {
 }
 
 /**
- * The drive lease moved. A panel on another machine that lost the drive lets
- * go of its hold with nothing handed back, so the new driver's panes fit
- * again; one that may size again is told the PTY's grid, which has it ask for
- * its own once more.
+ * The drive lease moved. A panel that lost the drive lets go of its hold with
+ * nothing handed back, so the new driver's panes fit again; one that may size
+ * again is told the PTY's grid, which has it ask for its own once more. One
+ * that follows goes on following: a lease moving is nothing the user did to it.
  */
 export function followDriveLeaseChange(): void {
   for (const [key, watch] of watches) {
-    if (!watch.remote || !watch.isCurrent()) continue;
+    if (!watch.isCurrent()) continue;
     if (!watch.mayResize()) {
       if (holders.get(watch.runId) === key) holders.delete(watch.runId);
       watch.heldSize = null;
       watch.pendingHolds = [];
-    } else if (watch.heldSize === null) {
+    } else if (watch.heldSize === null && !watch.following) {
       watch.announceGrid();
     }
   }
