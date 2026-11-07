@@ -133,23 +133,27 @@ describe("the Canopy window", () => {
     expect(preventDefault).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["resize", "maximize", "unmaximize", "enter-full-screen", "leave-full-screen", "restore"])(
-    "fills the window again on %s, with no view manager to do it",
-    (event) => {
-      openCanopyWindow(noWatch);
-      made[0]!.getContentBounds.mockReturnValue({ x: 40, y: 40, width: 1400, height: 1000 });
+  it.each([
+    "resize",
+    "maximize",
+    "unmaximize",
+    "enter-full-screen",
+    "leave-full-screen",
+    "restore",
+  ])("fills the window again on %s, with no view manager to do it", (event) => {
+    openCanopyWindow(noWatch);
+    made[0]!.getContentBounds.mockReturnValue({ x: 40, y: 40, width: 1400, height: 1000 });
 
-      made[0]!.emit(event);
+    made[0]!.emit(event);
 
-      expect(made[0]!.view.setBounds).toHaveBeenCalledTimes(1);
-      expect(made[0]!.view.setBounds).toHaveBeenCalledWith({
-        x: 0,
-        y: 0,
-        width: 1400,
-        height: 1000,
-      });
-    }
-  );
+    expect(made[0]!.view.setBounds).toHaveBeenCalledTimes(1);
+    expect(made[0]!.view.setBounds).toHaveBeenCalledWith({
+      x: 0,
+      y: 0,
+      width: 1400,
+      height: 1000,
+    });
+  });
 
   it.each([
     ["closes", "destroyed", undefined],

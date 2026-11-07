@@ -62,6 +62,8 @@ function makeHarness(): Harness {
 }
 
 let harness: Harness | null = null;
+/** A window focused in place of the harness's, which stays the primary one. */
+let focusedInstead: Harness["win"] | null = null;
 
 vi.mock("electron", () => ({
   app: {
@@ -70,7 +72,7 @@ vi.mock("electron", () => ({
   },
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
   BrowserWindow: {
-    getFocusedWindow: () => harness?.win ?? null,
+    getFocusedWindow: () => focusedInstead ?? harness?.win ?? null,
     getAllWindows: () => (harness ? [harness.win] : []),
     fromWebContents: () => null,
   },
@@ -519,17 +521,28 @@ describe("pluginCapability consent bridge — delivery acknowledgement (#11708)"
 });
 
 describe("pluginCapability consent bridge — unpromptable states (#11708)", () => {
-  it("never puts a prompt to a focused window with no project, which mounts no dialog", async () => {
+  it("puts a prompt to the project window behind a focused window with no project", async () => {
     const dispose = registerPluginCapabilityHandlers();
-    markProjectlessView(harness!.appWebContents as never, harness!.win as never);
+    const canopy = makeHarness();
+    registerAppView(canopy.win as never, canopy.appView as never);
+    markProjectlessView(canopy.appWebContents as never, canopy.win as never);
+    focusedInstead = canopy.win;
 
-    const outcome = await startGatedCall();
+    const settled = startGatedCall();
 
-    expect(harness!.appWebContents.send).not.toHaveBeenCalled();
-    expect(outcome.ok).toBe(false);
-    if (!outcome.ok) expect(outcome.err.message).toContain("could not present");
+    expect(canopy.appWebContents.send).not.toHaveBeenCalled();
+    expect(harness!.appWebContents.send).toHaveBeenCalledTimes(1);
+    const requestId = pushedRequestId(harness!.appWebContents);
+    await handleAcknowledgeConsent(ctx(harness!.appWebContents.id), { requestId });
+    await handleResolveConsent(ctx(harness!.appWebContents.id), {
+      requestId,
+      decision: "approved-once",
+    });
+    await expect(settled).resolves.toEqual({ ok: true });
 
-    harness!.appWebContents.destroy();
+    focusedInstead = null;
+    unregisterAppView(canopy.win as never);
+    canopy.appWebContents.destroy();
     dispose();
   });
 
