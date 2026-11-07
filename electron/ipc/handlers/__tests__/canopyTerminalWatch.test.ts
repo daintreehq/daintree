@@ -6,16 +6,20 @@ import {
   activeTerminalWatches,
   assistantWatchSlot,
   beginWatchRequest,
+  claimWatchedRunSize,
+  claimWatchedSize,
   followDriveLeaseChange,
   onSizeHoldsChange,
-  remoteSizeHolds,
+  releaseViewSizeHolds,
   resizeWatchedTerminal,
+  sizeHolds,
   stopAllTerminalWatches,
   stopTerminalWatch,
   stopTerminalWatchById,
   stopWorkerTerminalWatches,
   watchTerminal,
   watchedTerminal,
+  yieldSizeToPane,
 } from "../canopyTerminalWatch.js";
 
 function fakePty(snapshot: unknown = { data: "screen", cols: 120, rows: 36 }) {
@@ -643,10 +647,10 @@ describe("a panel on another machine holding the size (#14497)", () => {
     const off = onSizeHoldsChange((ids) => heard.push(ids));
     const { view, sent } = await openRemote(fake, { may: true });
     resizeWatchedTerminal(fake.pty, -5, view.watchId!, 100, 30);
-    expect(remoteSizeHolds()).toEqual(["run-1"]);
+    expect(sizeHolds()).toEqual(["run-1"]);
     fake.generation.current = 2;
     fake.emitter.emit("spawn-result", "run-1", { success: true });
-    expect(remoteSizeHolds()).toEqual([]);
+    expect(sizeHolds()).toEqual([]);
     expect(heard.at(-1)).toEqual([]);
     expect(sent).toContainEqual(expect.objectContaining({ kind: "ended" }));
     // Nothing of the predecessor's is handed to the successor.
@@ -670,7 +674,7 @@ describe("a panel on another machine holding the size (#14497)", () => {
 
     authority.may = false;
     followDriveLeaseChange();
-    expect(remoteSizeHolds()).toEqual([]);
+    expect(sizeHolds()).toEqual([]);
 
     // The new driver's pane takes the PTY.
     fake.emitter.emit("resize-result", "run-1", {
@@ -685,7 +689,7 @@ describe("a panel on another machine holding the size (#14497)", () => {
     authority.may = true;
     followDriveLeaseChange();
     // Nothing is held until the panel asks, and it is told the grid to ask against.
-    expect(remoteSizeHolds()).toEqual([]);
+    expect(sizeHolds()).toEqual([]);
     expect(sent).toEqual([
       { kind: "resize", watchId: view.watchId, runId: "run-1", cols: 160, rows: 45 },
     ]);
@@ -694,5 +698,528 @@ describe("a panel on another machine holding the size (#14497)", () => {
     stopTerminalWatch(-5);
     // The hold was given up with the drive, so there is nothing to hand back.
     expect(fake.pty.resize).not.toHaveBeenCalled();
+  });
+});
+
+describe("a panel on this machine holding the size (#16333)", () => {
+  const resizes = (pty: PtyClient) =>
+    (pty.resize as unknown as ReturnType<typeof vi.fn>).mock.calls.map((call) => call.slice(1));
+
+  const echo = (emitter: EventEmitter, cols: number, rows: number) =>
+    emitter.emit("resize-result", "run-1", {
+      launchGeneration: 1,
+      requestedCols: cols,
+      requestedRows: rows,
+      appliedCols: cols,
+      appliedRows: rows,
+      outcome: "applied",
+    });
+
+  /** A panel that holds run-1 at 100x30, its pane having been 120x36. */
+  async function held(id = 1) {
+    const fake = fakePty();
+    const view = fakeSender(id);
+    const opened = await open(fake.pty, view.sender, "run-1");
+    resizeWatchedTerminal(fake.pty, id, opened.watchId!, 100, 30);
+    echo(fake.emitter, 100, 30);
+    vi.mocked(fake.pty.resize).mockClear();
+    view.sent.length = 0;
+    return { ...fake, ...view, watchId: opened.watchId! };
+  }
+
+  it("tells every other view here, so a pane elsewhere follows the PTY instead of fitting", async () => {
+    const { pty } = fakePty();
+    const { sender } = fakeSender(1);
+    const heard: string[][] = [];
+    const off = onSizeHoldsChange((ids) => heard.push(ids));
+    const view = await open(pty, sender, "run-1");
+
+    resizeWatchedTerminal(pty, sender.id, view.watchId!, 100, 30);
+    expect(heard.at(-1)).toEqual(["run-1"]);
+    expect(sizeHolds()).toEqual(["run-1"]);
+
+    stopTerminalWatch(sender.id);
+    expect(heard.at(-1)).toEqual([]);
+    off();
+  });
+
+  it("publishes the release only after the size is handed back, so the pane's fit lands last", async () => {
+    const { pty } = await held();
+    const order: string[] = [];
+    vi.mocked(pty.resize).mockImplementation(() => void order.push("handed back"));
+    const off = onSizeHoldsChange(() => order.push("released"));
+    stopTerminalWatch(1);
+    expect(order).toEqual(["handed back", "released"]);
+    off();
+  });
+
+  describe("a pane's interaction taking the size", () => {
+    it("lets go without moving the PTY: the pane's own fit does that, once", async () => {
+      const { pty, sent, watchId } = await held();
+      const heard: string[][] = [];
+      const off = onSizeHoldsChange((ids) => heard.push(ids));
+
+      yieldSizeToPane("run-1");
+
+      expect(heard).toEqual([[]]);
+      expect(pty.resize).not.toHaveBeenCalled();
+      expect(sent).toEqual([
+        { kind: "resize", watchId, runId: "run-1", cols: 100, rows: 30, following: true },
+      ]);
+      off();
+    });
+
+    it("leaves the panel following: no measure re-holds, and it draws what the pane set", async () => {
+      const { pty, emitter, sent, watchId } = await held();
+      yieldSizeToPane("run-1");
+      echo(emitter, 132, 40);
+      sent.length = 0;
+
+      resizeWatchedTerminal(pty, 1, watchId, 100, 30);
+      echo(emitter, 140, 42);
+
+      expect(pty.resize).not.toHaveBeenCalled();
+      expect(sizeHolds()).toEqual([]);
+      expect(sent).toEqual([
+        { kind: "resize", watchId, runId: "run-1", cols: 140, rows: 42, following: true },
+      ]);
+    });
+
+    it("hands nothing back when the following panel closes: the size is already the pane's", async () => {
+      const { pty, emitter } = await held();
+      yieldSizeToPane("run-1");
+      echo(emitter, 132, 40);
+      stopTerminalWatch(1);
+      expect(pty.resize).not.toHaveBeenCalled();
+    });
+
+    it("does nothing for a terminal no panel holds", async () => {
+      const { pty, sent } = await held();
+      yieldSizeToPane("run-2");
+      expect(sent).toEqual([]);
+      expect(sizeHolds()).toEqual(["run-1"]);
+      expect(pty.resize).not.toHaveBeenCalled();
+    });
+
+    it("ends a hold whose terminal was silently replaced, unfreezing the successor's panes", async () => {
+      const { emitter, generation, sent } = await held();
+      const heard: string[][] = [];
+      const off = onSizeHoldsChange((ids) => heard.push(ids));
+      generation.current = 2;
+      emitter.emit("spawn-result", "run-1", { success: true });
+      expect(heard.at(-1)).toEqual([]);
+      expect(sent).toContainEqual(expect.objectContaining({ kind: "ended" }));
+      off();
+    });
+  });
+
+  describe("the panel's own interaction taking it back", () => {
+    it("lets the next measure hold again, and hands back the pane's newest size", async () => {
+      const { pty, emitter, sent, watchId } = await held();
+      yieldSizeToPane("run-1");
+      echo(emitter, 132, 40);
+      sent.length = 0;
+
+      claimWatchedSize(1, watchId);
+      expect(sent).toEqual([{ kind: "resize", watchId, runId: "run-1", cols: 132, rows: 40 }]);
+      expect(pty.resize).not.toHaveBeenCalled();
+
+      resizeWatchedTerminal(pty, 1, watchId, 100, 30);
+      echo(emitter, 100, 30);
+      expect(resizes(pty)).toEqual([[100, 30]]);
+      expect(sizeHolds()).toEqual(["run-1"]);
+
+      vi.mocked(pty.resize).mockClear();
+      stopTerminalWatch(1);
+      expect(resizes(pty)).toEqual([[132, 40]]);
+    });
+
+    it("needs a panel that is following: the holder claims nothing", async () => {
+      const { sent, watchId } = await held();
+      claimWatchedSize(1, watchId);
+      expect(sent).toEqual([]);
+    });
+
+    it("finds the stream of a reply sent by the run, and only its incarnation's", async () => {
+      const { pty, sent, watchId } = await held();
+      yieldSizeToPane("run-1");
+      sent.length = 0;
+
+      claimWatchedRunSize(1, "run-1", 99);
+      claimWatchedRunSize(1, "run-2", 100);
+      expect(sent).toEqual([]);
+
+      claimWatchedRunSize(1, "run-1", 100);
+      resizeWatchedTerminal(pty, 1, watchId, 100, 30);
+      expect(sizeHolds()).toEqual(["run-1"]);
+    });
+  });
+
+  describe("two panels showing the terminal", () => {
+    async function pair() {
+      const first = await held(1);
+      const second = fakeSender(2);
+      // Opened under the first panel's hold, so its snapshot reports the panel's size.
+      vi.mocked(first.pty.getSerializedStateAsync).mockResolvedValueOnce({
+        data: "screen",
+        cols: 100,
+        rows: 30,
+      } as Awaited<ReturnType<PtyClient["getSerializedStateAsync"]>>);
+      const opened = await open(first.pty, second.sender, "run-1");
+      const watchId = opened.watchId!;
+      // The second measures, finds the size taken, and is told so.
+      resizeWatchedTerminal(first.pty, 2, watchId, 90, 28);
+      return { first, second, watchId };
+    }
+
+    it("follows the first window's hold rather than fighting it", async () => {
+      const { first, second, watchId } = await pair();
+      expect(first.pty.resize).not.toHaveBeenCalled();
+      expect(second.sent.at(-1)).toMatchObject({ kind: "resize", watchId, following: true });
+    });
+
+    it("leaves both following when the pane takes the size, so neither re-holds on a measure", async () => {
+      const { first, second, watchId } = await pair();
+      yieldSizeToPane("run-1");
+      resizeWatchedTerminal(first.pty, 1, first.watchId, 100, 30);
+      resizeWatchedTerminal(first.pty, 2, watchId, 90, 28);
+      expect(first.pty.resize).not.toHaveBeenCalled();
+      expect(second.sent.at(-1)).toMatchObject({ following: true });
+    });
+
+    it("passes the hold across on the other's interaction, with no gap for a pane to fit in", async () => {
+      const { first, watchId } = await pair();
+      const heard: string[][] = [];
+      const off = onSizeHoldsChange((ids) => heard.push(ids));
+
+      claimWatchedSize(2, watchId);
+
+      expect(heard).toEqual([]);
+      expect(sizeHolds()).toEqual(["run-1"]);
+      expect(first.sent.at(-1)).toMatchObject({ kind: "resize", following: true });
+
+      resizeWatchedTerminal(first.pty, 2, watchId, 90, 28);
+      resizeWatchedTerminal(first.pty, 1, first.watchId, 100, 30);
+      expect(resizes(first.pty)).toEqual([[90, 28]]);
+
+      // What goes back is the pane's size, never the first panel's.
+      vi.mocked(first.pty.resize).mockClear();
+      stopTerminalWatch(2);
+      expect(resizes(first.pty)).toEqual([[120, 36]]);
+      off();
+    });
+
+    it("keeps a late echo of the first panel's hold from passing as the pane's size", async () => {
+      const { first, watchId } = await pair();
+      // Still on its way when the second panel takes over.
+      resizeWatchedTerminal(first.pty, 1, first.watchId, 110, 32);
+      claimWatchedSize(2, watchId);
+      echo(first.emitter, 110, 32);
+
+      vi.mocked(first.pty.resize).mockClear();
+      stopTerminalWatch(2);
+      expect(resizes(first.pty)).toEqual([[120, 36]]);
+    });
+
+    it("keeps its own hold still on its way when one comes across from the other panel", async () => {
+      const first = await held(1);
+      const second = fakeSender(2);
+      const other = await open(first.pty, second.sender, "run-1");
+      resizeWatchedTerminal(first.pty, 1, first.watchId, 110, 32);
+      yieldSizeToPane("run-1");
+      claimWatchedSize(2, other.watchId!);
+      resizeWatchedTerminal(first.pty, 2, other.watchId!, 90, 28);
+
+      claimWatchedSize(1, first.watchId);
+      echo(first.emitter, 110, 32);
+
+      vi.mocked(first.pty.resize).mockClear();
+      stopTerminalWatch(1);
+      expect(resizes(first.pty)).toEqual([[120, 36]]);
+    });
+
+    it("counts a hold that went across and back once, leaving the pane's own echo the pane's", async () => {
+      const { first, watchId } = await pair();
+      resizeWatchedTerminal(first.pty, 1, first.watchId, 110, 32);
+      claimWatchedSize(2, watchId);
+      claimWatchedSize(1, first.watchId);
+      echo(first.emitter, 110, 32);
+
+      // The pane happens to fit that same size.
+      yieldSizeToPane("run-1");
+      echo(first.emitter, 110, 32);
+
+      claimWatchedSize(1, first.watchId);
+      resizeWatchedTerminal(first.pty, 1, first.watchId, 100, 30);
+      vi.mocked(first.pty.resize).mockClear();
+      stopTerminalWatch(1);
+      expect(resizes(first.pty)).toEqual([[110, 32]]);
+    });
+
+    it("lets a window put away before it ever measured go, without touching the other's hold", async () => {
+      const first = await held(1);
+      const second = fakeSender(2);
+      const opened = await open(first.pty, second.sender, "run-1");
+
+      releaseViewSizeHolds(2);
+
+      expect(first.pty.resize).not.toHaveBeenCalled();
+      expect(sizeHolds()).toEqual(["run-1"]);
+      expect(second.sent.at(-1)).toMatchObject({ kind: "resize", following: true });
+
+      // Nothing the first window does later hands the size to a window no one can read.
+      stopTerminalWatch(1);
+      vi.mocked(first.pty.resize).mockClear();
+      resizeWatchedTerminal(first.pty, 2, opened.watchId!, 90, 28);
+      expect(first.pty.resize).not.toHaveBeenCalled();
+      expect(sizeHolds()).toEqual([]);
+    });
+  });
+
+  describe("a window put away", () => {
+    it("lets go, the PTY going back to the pane's size before the panes hear", async () => {
+      const { pty, sent, watchId } = await held();
+      const order: string[] = [];
+      vi.mocked(pty.resize).mockImplementation(() => void order.push("handed back"));
+      const off = onSizeHoldsChange(() => order.push("released"));
+
+      releaseViewSizeHolds(1);
+
+      expect(resizes(pty)).toEqual([[120, 36]]);
+      expect(order).toEqual(["handed back", "released"]);
+      expect(sizeHolds()).toEqual([]);
+      expect(sent.at(-1)).toMatchObject({ kind: "resize", watchId, following: true });
+      expect(activeTerminalWatches().has(1)).toBe(true);
+      off();
+    });
+
+    it("takes nothing back on the window's return: only the user's interaction does", async () => {
+      const { pty, emitter, watchId } = await held();
+      releaseViewSizeHolds(1);
+      echo(emitter, 120, 36);
+      vi.mocked(pty.resize).mockClear();
+
+      resizeWatchedTerminal(pty, 1, watchId, 100, 30);
+
+      expect(pty.resize).not.toHaveBeenCalled();
+      expect(sizeHolds()).toEqual([]);
+    });
+
+    it("hands back even when the PTY last reported the pane's size, if a hold is on its way", async () => {
+      const { pty, emitter, watchId } = await held();
+      yieldSizeToPane("run-1");
+      echo(emitter, 120, 36);
+      claimWatchedSize(1, watchId);
+      resizeWatchedTerminal(pty, 1, watchId, 100, 30);
+      vi.mocked(pty.resize).mockClear();
+
+      releaseViewSizeHolds(1);
+
+      expect(resizes(pty)).toEqual([[120, 36]]);
+    });
+
+    it("tells a panel put away while its stream opened, once it has a grid to say so with", async () => {
+      const fake = fakePty("manual");
+      const view = fakeSender(1);
+      const opening = open(fake.pty, view.sender, "run-1");
+      await vi.waitFor(() => expect(fake.pty.getSerializedStateAsync).toHaveBeenCalled());
+
+      releaseViewSizeHolds(1);
+      expect(view.sent).toEqual([]);
+
+      fake.resolveSnapshots({ data: "screen", cols: 120, rows: 36 });
+      const opened = await opening;
+
+      expect(view.sent).toEqual([
+        {
+          kind: "resize",
+          watchId: opened.watchId,
+          runId: "run-1",
+          cols: 120,
+          rows: 36,
+          following: true,
+        },
+      ]);
+    });
+
+    it("is heard twice as once: a repeat hands nothing back again", async () => {
+      const { pty, emitter } = await held();
+      releaseViewSizeHolds(1);
+      echo(emitter, 120, 36);
+      vi.mocked(pty.resize).mockClear();
+      releaseViewSizeHolds(1);
+      expect(pty.resize).not.toHaveBeenCalled();
+    });
+
+    it("lets a new selection take the size as a first one does", async () => {
+      const { pty, sender } = await held();
+      releaseViewSizeHolds(1);
+      vi.mocked(pty.resize).mockClear();
+
+      const reopened = await open(pty, sender, "run-1");
+      resizeWatchedTerminal(pty, 1, reopened.watchId!, 100, 30);
+
+      expect(resizes(pty)).toEqual([[100, 30]]);
+      expect(sizeHolds()).toEqual(["run-1"]);
+    });
+  });
+
+  describe("the drive lease moving", () => {
+    async function drivenHold() {
+      const fake = fakePty();
+      const view = fakeSender(1);
+      const authority = { may: true };
+      const opened = await watchTerminal(
+        fake.pty,
+        view.sender,
+        "run-1",
+        100,
+        beginWatchRequest(1),
+        1,
+        () => authority.may
+      );
+      resizeWatchedTerminal(fake.pty, 1, opened.watchId!, 100, 30);
+      echo(fake.emitter, 100, 30);
+      vi.mocked(fake.pty.resize).mockClear();
+      view.sent.length = 0;
+      return { ...fake, ...view, authority, watchId: opened.watchId! };
+    }
+
+    it("lets go with nothing handed back, and asks again when the drive returns", async () => {
+      const { pty, emitter, sent, authority, watchId } = await drivenHold();
+      authority.may = false;
+      followDriveLeaseChange();
+      expect(sizeHolds()).toEqual([]);
+
+      // The new driver's pane takes the PTY.
+      echo(emitter, 150, 45);
+      sent.length = 0;
+      authority.may = true;
+      followDriveLeaseChange();
+
+      // No stale hold comes back: nothing is held until the panel asks.
+      expect(sizeHolds()).toEqual([]);
+      expect(sent).toEqual([{ kind: "resize", watchId, runId: "run-1", cols: 150, rows: 45 }]);
+      expect(pty.resize).not.toHaveBeenCalled();
+    });
+
+    it("leaves a following panel following: the lease moving is nothing the user did to it", async () => {
+      const { emitter, sent, authority } = await drivenHold();
+      yieldSizeToPane("run-1");
+      echo(emitter, 120, 36);
+      authority.may = false;
+      followDriveLeaseChange();
+      sent.length = 0;
+
+      authority.may = true;
+      followDriveLeaseChange();
+
+      expect(sent).toEqual([]);
+    });
+  });
+
+  describe("a hold from another machine", () => {
+    async function remoteHold() {
+      const fake = fakePty();
+      const { sender, sent } = fakeSender(-5);
+      const view = await watchTerminal(
+        fake.pty,
+        sender,
+        "run-1",
+        100,
+        beginWatchRequest(sender.id),
+        1,
+        () => true,
+        null,
+        true
+      );
+      resizeWatchedTerminal(fake.pty, -5, view.watchId!, 100, 30);
+      vi.mocked(fake.pty.resize).mockClear();
+      sent.length = 0;
+      return { ...fake, sent, watchId: view.watchId! };
+    }
+
+    it("stands against a pane's interaction", async () => {
+      const { pty, sent } = await remoteHold();
+      yieldSizeToPane("run-1");
+      expect(sizeHolds()).toEqual(["run-1"]);
+      expect(sent).toEqual([]);
+      expect(pty.resize).not.toHaveBeenCalled();
+    });
+
+    it("stands against any window here being put away", async () => {
+      const { pty } = await remoteHold();
+      releaseViewSizeHolds(-5);
+      expect(sizeHolds()).toEqual(["run-1"]);
+      expect(pty.resize).not.toHaveBeenCalled();
+    });
+
+    it("stands against a panel here claiming it, which goes on following", async () => {
+      const fake = fakePty();
+      const local = fakeSender(1);
+      const view = await open(fake.pty, local.sender, "run-1");
+      releaseViewSizeHolds(1);
+      const remote = fakeSender(-5);
+      const opened = await watchTerminal(
+        fake.pty,
+        remote.sender,
+        "run-1",
+        100,
+        beginWatchRequest(-5),
+        1,
+        () => true,
+        null,
+        true
+      );
+      resizeWatchedTerminal(fake.pty, -5, opened.watchId!, 100, 30);
+      local.sent.length = 0;
+
+      claimWatchedSize(1, view.watchId!);
+
+      expect(local.sent).toEqual([]);
+      expect(sizeHolds()).toEqual(["run-1"]);
+      vi.mocked(fake.pty.resize).mockClear();
+      stopTerminalWatch(-5);
+      resizeWatchedTerminal(fake.pty, 1, view.watchId!, 90, 28);
+      expect(resizes(fake.pty)).not.toContainEqual([90, 28]);
+    });
+
+    it("never tells a panel from another machine to follow when a pane takes a hold from here", async () => {
+      const { pty, sent } = await held();
+      const remote = fakeSender(-5);
+      const opened = await watchTerminal(
+        pty,
+        remote.sender,
+        "run-1",
+        100,
+        beginWatchRequest(-5),
+        1,
+        () => true,
+        null,
+        true
+      );
+
+      yieldSizeToPane("run-1");
+
+      expect(sent.at(-1)).toMatchObject({ following: true });
+      expect(remote.sent).toEqual([]);
+      vi.mocked(pty.resize).mockClear();
+      resizeWatchedTerminal(pty, -5, opened.watchId!, 90, 28);
+      expect(resizes(pty)).toEqual([[90, 28]]);
+    });
+
+    it("leaves a panel here asking again rather than following, as the hold ends with the drive", async () => {
+      const { pty } = await remoteHold();
+      const local = fakeSender(1);
+      const view = await open(pty, local.sender, "run-1");
+
+      resizeWatchedTerminal(pty, 1, view.watchId!, 90, 28);
+      expect(local.sent).toEqual([]);
+
+      stopTerminalWatch(-5);
+      vi.mocked(pty.resize).mockClear();
+      resizeWatchedTerminal(pty, 1, view.watchId!, 90, 28);
+      expect(resizes(pty)).toEqual([[90, 28]]);
+    });
   });
 });

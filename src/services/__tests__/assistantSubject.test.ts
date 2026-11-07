@@ -8,6 +8,7 @@ const canopy = vi.hoisted(() => ({
   unwatchTerminal: vi.fn(),
   terminalInput: vi.fn(),
   terminalResize: vi.fn(),
+  terminalClaimSize: vi.fn(),
   terminalSubmit: vi.fn(),
   terminalSendKey: vi.fn(),
   onTerminalData: vi.fn(() => () => {}),
@@ -117,6 +118,12 @@ describe("assistant subject adapter", () => {
     expect(canopy.watchAssistantTerminal).toHaveBeenCalledWith(subject);
     expect(canopy.watchTerminal).not.toHaveBeenCalled();
     await expect(api.answer("t1", { spawnedAt: 1 }, "Yes")).rejects.toThrow();
+  });
+
+  it("takes the size back through this machine's Canopy, as any panel does (#16333)", async () => {
+    const api = assistantTerminalApi(subject);
+    await api.terminalClaimSize(9);
+    expect(canopy.terminalClaimSize).toHaveBeenCalledWith(9);
   });
 
   it("types to the global session only under the input stamp it was opened with", async () => {

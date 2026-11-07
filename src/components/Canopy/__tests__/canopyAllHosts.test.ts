@@ -14,6 +14,7 @@ const ownCalls = vi.hoisted(() => ({
   unwatchTerminal: vi.fn(() => Promise.resolve()),
   terminalInput: vi.fn(() => Promise.resolve()),
   terminalResize: vi.fn((_watchId: number, _cols: number, _rows: number) => Promise.resolve()),
+  terminalClaimSize: vi.fn((_watchId: number) => Promise.resolve()),
   setMode: vi.fn(() => Promise.resolve()),
   refresh: vi.fn(() => Promise.resolve()),
   setRead: vi.fn((): Promise<unknown> => Promise.resolve(null)),
@@ -495,6 +496,24 @@ describe("createAllHostsRoute", () => {
     expect(ownCalls.terminalResize).not.toHaveBeenCalled();
     // By the host's own stream number, not the one the route gave the pane.
     expect(invoke).toHaveBeenCalledWith("remote", "canopy:terminal-resize", 1, 99, 30);
+  });
+
+  it("takes the size back only on this machine: another host's hold answers to the drive lease", async () => {
+    invoke.mockResolvedValue({ watchId: 1, snapshot: null });
+    ownCalls.watchTerminal.mockResolvedValueOnce({ watchId: 41, snapshot: null });
+    const { terminalApi } = createAllHostsRoute("own", ["own", "remote"]);
+    const own = await terminalApi.watchTerminal(allHostsKey("own", "t1"), { spawnedAt: 1 });
+    expect(own.watchId).not.toBe(41);
+    await terminalApi.terminalClaimSize(own.watchId!);
+    // By the host's own stream number, not the one the route gave the pane.
+    expect(ownCalls.terminalClaimSize.mock.calls).toEqual([[41]]);
+
+    const remote = await terminalApi.watchTerminal(allHostsKey("remote", "t1"), { spawnedAt: 1 });
+    ownCalls.terminalClaimSize.mockClear();
+    invoke.mockClear();
+    await terminalApi.terminalClaimSize(remote.watchId!);
+    expect(ownCalls.terminalClaimSize).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it("keeps the host's word on sizing through the renumbered stream (#14497)", async () => {

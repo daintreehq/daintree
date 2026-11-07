@@ -156,6 +156,12 @@ export interface GeneratedElectronAPI {
     submitReply(
       ...args: IpcInvokeMap["canopy:submit-reply"]["args"]
     ): Promise<IpcInvokeMap["canopy:submit-reply"]["result"]>;
+    takeTerminalSize(
+      ...args: IpcInvokeMap["canopy:take-terminal-size"]["args"]
+    ): Promise<IpcInvokeMap["canopy:take-terminal-size"]["result"]>;
+    terminalClaimSize(
+      ...args: IpcInvokeMap["canopy:terminal-claim-size"]["args"]
+    ): Promise<IpcInvokeMap["canopy:terminal-claim-size"]["result"]>;
     terminalInput(
       ...args: IpcInvokeMap["canopy:terminal-input"]["args"]
     ): Promise<IpcInvokeMap["canopy:terminal-input"]["result"]>;

@@ -67,7 +67,11 @@ vi.mock("../TerminalAddonManager", () => ({
 type WatchTestService = {
   instances: Map<string, ManagedTerminal>;
   prewarmTerminal: (id: string, type: string, options: Record<string, unknown>) => unknown;
-  holdGeometry: (id: string) => () => void;
+  notifyUserInput: (
+    id: string,
+    data?: string,
+    options?: { automatic?: boolean; takesSize?: boolean }
+  ) => void;
   runResizePass: (ids: string[], options?: { immediate?: boolean }) => void;
   destroy: (id: string) => void;
   dispose: () => void;
@@ -227,9 +231,8 @@ describe("TerminalInstanceService — watching a project another frontend drives
     expect(resize).not.toHaveBeenCalled();
   });
 
-  it("ignores a PTY echo while this view drives, even for a pane Canopy holds", async () => {
+  it("ignores a PTY echo while this view drives", async () => {
     await service.prewarmTerminal("t1", "terminal", {});
-    service.holdGeometry("t1");
     gate.setDriveLeaseSnapshot(lease({ drivingHere: true }));
     const before = grid("t1");
 
@@ -373,22 +376,6 @@ describe("TerminalInstanceService — watching a project another frontend drives
     expect(locked("t1")).toBe(false);
   });
 
-  it("keeps Canopy's hold when the watch ends, and re-fits only once both let go", async () => {
-    await service.prewarmTerminal("t1", "terminal", {});
-    const releaseCanopy = service.holdGeometry("t1");
-    gate.setDriveLeaseSnapshot(lease());
-    await settle();
-    const pass = vi.spyOn(service, "runResizePass").mockImplementation(() => {});
-
-    gate.setDriveLeaseSnapshot(null);
-    expect(locked("t1")).toBe(true);
-    expect(pass).not.toHaveBeenCalled();
-
-    releaseCanopy();
-    expect(locked("t1")).toBe(false);
-    expect(pass).toHaveBeenCalledWith(["t1"]);
-  });
-
   it("releases a destroyed terminal's hold so its reused id starts clean", async () => {
     await service.prewarmTerminal("t1", "terminal", {});
     gate.setDriveLeaseSnapshot(lease());
@@ -405,6 +392,7 @@ describe("TerminalInstanceService — a terminal a Canopy panel on another machi
   let gate: InputGate;
   let pushHolds: (terminalIds: string[]) => void;
   let hydrate: string[];
+  const takeTerminalSize = vi.fn(async (_terminalId: string) => {});
 
   beforeEach(async () => {
     vi.resetModules();
@@ -423,7 +411,7 @@ describe("TerminalInstanceService — a terminal a Canopy panel on another machi
             return () => {};
           }),
         },
-        canopy: { getSizeHolds: vi.fn(async () => hydrate) },
+        canopy: { getSizeHolds: vi.fn(async () => hydrate), takeTerminalSize },
       },
     });
 
@@ -491,6 +479,49 @@ describe("TerminalInstanceService — a terminal a Canopy panel on another machi
     await settle();
 
     expect(locked("t1")).toBe(false);
+  });
+
+  it("keeps a pane held while a panel still holds it, and re-fits once both let go", async () => {
+    await service.prewarmTerminal("t1", "terminal", {});
+    gate.setDriveLeaseSnapshot(lease());
+    pushHolds(["t1"]);
+    await settle();
+    const pass = vi.spyOn(service, "runResizePass").mockImplementation(() => {});
+
+    gate.setDriveLeaseSnapshot(null);
+    expect(locked("t1")).toBe(true);
+    expect(pass).not.toHaveBeenCalled();
+
+    pushHolds([]);
+    expect(locked("t1")).toBe(false);
+    expect(pass).toHaveBeenCalledTimes(1);
+  });
+
+  describe("input that skips xterm's onData (#16333)", () => {
+    beforeEach(async () => {
+      takeTerminalSize.mockClear();
+      await service.prewarmTerminal("t1", "terminal", {});
+      pushHolds(["t1"]);
+      await settle();
+    });
+
+    it("takes the size for Return, a paste or the pane's composer", () => {
+      service.notifyUserInput("t1");
+      expect(takeTerminalSize).toHaveBeenCalledWith("t1");
+    });
+
+    it.each([["typed at the origin"], [""]])(
+      "takes nothing for input that says no one was at the pane, payload or none: %j",
+      (payload) => {
+        service.notifyUserInput("t1", payload, { takesSize: false });
+        expect(takeTerminalSize).not.toHaveBeenCalled();
+      }
+    );
+
+    it("takes nothing for input the user didn't send", () => {
+      service.notifyUserInput("t1", "", { automatic: true });
+      expect(takeTerminalSize).not.toHaveBeenCalled();
+    });
   });
 
   it("keeps a pane held while another frontend still drives the project", async () => {

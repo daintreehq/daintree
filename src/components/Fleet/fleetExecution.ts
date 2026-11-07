@@ -202,7 +202,11 @@ function submitTarget(submission: ResolvedSubmission, retry: boolean): Promise<v
 
 function noteUserInput(terminalId: string, payload: string): void {
   if (!isHostQualifiedTargetId(terminalId))
-    withTerminalService((service) => service.notifyUserInput(terminalId, payload), terminalId);
+    withTerminalService(
+      // Sent from the fleet's own controls: no one was at this pane.
+      (service) => service.notifyUserInput(terminalId, payload, { takesSize: false }),
+      terminalId
+    );
 }
 
 function noteSubmitted(terminalId: string): void {

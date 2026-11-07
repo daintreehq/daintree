@@ -176,6 +176,7 @@ export interface CanopyTerminalApi {
   unwatchTerminal: ElectronCanopy["unwatchTerminal"];
   terminalInput: ElectronCanopy["terminalInput"];
   terminalResize: ElectronCanopy["terminalResize"];
+  terminalClaimSize: ElectronCanopy["terminalClaimSize"];
   terminalSubmit: ElectronCanopy["terminalSubmit"];
   terminalSendKey: ElectronCanopy["terminalSendKey"];
   /** A reply by run, for one whose card and stream are gone by the time it goes. */
@@ -195,6 +196,7 @@ export const ownCanopyTerminalApi: CanopyTerminalApi = {
   unwatchTerminal: (...args) => window.electron.canopy.unwatchTerminal(...args),
   terminalInput: (...args) => window.electron.canopy.terminalInput(...args),
   terminalResize: (...args) => window.electron.canopy.terminalResize(...args),
+  terminalClaimSize: (...args) => window.electron.canopy.terminalClaimSize(...args),
   terminalSubmit: (...args) => window.electron.canopy.terminalSubmit(...args),
   terminalSendKey: (...args) => window.electron.canopy.terminalSendKey(...args),
   submitReply: (...args) => window.electron.canopy.submitReply(...args),
@@ -216,6 +218,8 @@ export function remoteCanopyTerminalApi(hostId: HostId): CanopyTerminalApi {
     unwatchTerminal: on("canopy:unwatch-terminal"),
     terminalInput: on("canopy:terminal-input"),
     terminalResize: on("canopy:terminal-resize"),
+    // A panel never follows there: another host's holds answer to its drive lease.
+    terminalClaimSize: () => Promise.resolve(),
     terminalSubmit: on("canopy:terminal-submit"),
     terminalSendKey: on("canopy:terminal-send-key"),
     submitReply: on("canopy:submit-reply"),

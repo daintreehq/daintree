@@ -118,6 +118,8 @@ export const CHANNEL_LEASE_POLICY = {
   "canopy:submit-reply": "handler",
   "canopy:terminal-data": "free",
   "canopy:terminal-input": "handler",
+  "canopy:take-terminal-size": "handler",
+  "canopy:terminal-claim-size": "handler",
   "canopy:terminal-resize": "handler",
   "canopy:terminal-send-key": "handler",
   "canopy:terminal-submit": "handler",

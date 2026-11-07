@@ -1,7 +1,7 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { stat } from "node:fs/promises";
-import { app, webContents } from "electron";
+import { app, webContents, type BrowserWindow } from "electron";
 import type {
   CanopyLookPlace,
   CanopyMode,
@@ -79,14 +79,18 @@ import {
   beginWatchRequest,
   isCurrentWatchRequest,
   followDriveLeaseChange,
+  claimWatchedRunSize,
+  claimWatchedSize,
   onSizeHoldsChange,
-  remoteSizeHolds,
+  releaseViewSizeHolds,
+  sizeHolds,
   stopAllTerminalWatches,
   stopWorkerTerminalWatches,
   resizeWatchedTerminal,
   stopTerminalWatch,
   stopTerminalWatchById,
   watchTerminal,
+  yieldSizeToPane,
   watchedTerminal,
 } from "./canopyTerminalWatch.js";
 import { isImageAttachmentPath } from "../../../shared/utils/imageAttachmentInput.js";
@@ -252,6 +256,9 @@ const viewScopes = new Map<number, string | null>();
 const viewShown = new Map<number, ReadonlySet<string>>();
 /** Views that already carry lifecycle listeners, with the way to take them off. */
 const watchedViews = new Map<number, () => void>();
+/** The window each of those views sits in, for its put-away events to find them. */
+const viewWindows = new Map<number, BrowserWindow>();
+const heardWindows = new WeakSet<BrowserWindow>();
 /** Canopy views of another Shell, which no broadcast reaches: told each snapshot by name. */
 const snapshotObservers = new Set<(snapshot: CanopySnapshot) => void>();
 
@@ -1316,6 +1323,27 @@ function viewOf(ctx: IpcContext): ProjectPushTarget {
 }
 
 /**
+ * A window put away lets go of the sizes its views hold. Heard once per window,
+ * however many of its views open Canopy, and only once one has; the listeners
+ * go with the window and find no views once Canopy is done with them.
+ */
+function followWindow(viewId: number, win: BrowserWindow | null): void {
+  if (!win) return;
+  viewWindows.set(viewId, win);
+  if (heardWindows.has(win)) return;
+  heardWindows.add(win);
+  const letGo = () => {
+    for (const [id, owner] of viewWindows) if (owner === win) releaseViewSizeHolds(id);
+  };
+  win.on("minimize", letGo);
+  win.on("hide", letGo);
+}
+
+/** A measure can land after the window went, ahead of nothing that would say so. */
+const isPutAway = (win: BrowserWindow | null): boolean =>
+  win !== null && (win.isMinimized() || !win.isVisible());
+
+/**
  * Forget a view's panel once it stops showing it without saying so: a local
  * view by its own lifecycle, a remote one when its endpoint closes. A remote
  * view's reload keeps its endpoint, so its panel is forgotten when it next
@@ -1325,6 +1353,7 @@ function watchView(ctx: IpcContext): void {
   const id = ctx.webContentsId;
   if (watchedViews.has(id)) return;
   const sender = ctx.event?.sender;
+  if (sender) followWindow(id, ctx.senderWindow);
   if (!sender) {
     const closed = ctx.endpoint.onClose(() => {
       watchedViews.delete(id);
@@ -1346,9 +1375,11 @@ function watchView(ctx: IpcContext): void {
   sender.on("render-process-gone", onGone);
   const unwatchDestroyed = onWebContentsDestroyed(sender, () => {
     watchedViews.delete(id);
+    viewWindows.delete(id);
     forgetView(id);
   });
   watchedViews.set(id, () => {
+    viewWindows.delete(id);
     sender.removeListener("did-start-navigation", onNavigate);
     sender.removeListener("render-process-gone", onGone);
     unwatchDestroyed();
@@ -1581,7 +1612,8 @@ export const canopyNamespace = defineIpcNamespace({
           throw new Error("That agent isn't running any more.");
         }
         const remote = isViewer(ctx);
-        if (remote) followDriveLease();
+        // A hold from here is published too, and the lease can take it away.
+        followDriveLease();
         const view = await watchTerminal(
           ptyClient,
           viewOf(ctx),
@@ -1627,6 +1659,7 @@ export const canopyNamespace = defineIpcNamespace({
         const binding = await resolveLiveAssistant(subject, await liveAssistantSources(), stamp);
         if (!isCurrentWatchRequest(viewId, ticket, slot)) return { watchId: null, snapshot: null };
         const ptyClient = requirePtyClient();
+        followDriveLease();
         const { terminalId } = binding.subject;
         return watchTerminal(
           ptyClient,
@@ -1788,12 +1821,36 @@ export const canopyNamespace = defineIpcNamespace({
 
     /** The model, and whether it is on this machine. */
     /**
-     * The terminals a panel on another machine holds at its own size, for a
-     * window here to freeze their panes. Not gated on Canopy: any window with
-     * the terminal open needs it, and with Canopy off the list is empty.
+     * The terminals a panel holds at its own size, for a window to draw their
+     * panes at the PTY's grid. Not gated on Canopy: any window with the
+     * terminal open needs it, and with Canopy off the list is empty.
      */
     getSizeHolds: op(CANOPY_METHOD_CHANNELS.getSizeHolds, async (): Promise<string[]> =>
-      remoteSizeHolds()
+      sizeHolds()
+    ),
+
+    /**
+     * The user typed or clicked in a terminal's own pane. Asked by whoever may
+     * type there, as `terminal:input` would let them; the view's own fit then
+     * moves the PTY, so no size is named here.
+     */
+    takeTerminalSize: op(
+      CANOPY_METHOD_CHANNELS.takeTerminalSize,
+      async (ctx, terminalId: string): Promise<void> => {
+        checkRateLimit(CANOPY_METHOD_CHANNELS.takeTerminalSize, 60, 10_000);
+        assertRunId(terminalId);
+        if (isViewer(ctx) || !drivesRun(ctx, terminalId)) return;
+        const { endpoint } = ctx;
+        // A remote view may touch only its own project's terminals.
+        if (
+          endpoint.kind === "remote-view" &&
+          requirePtyClient().getTerminalProjectId(terminalId) !== endpoint.projectId
+        ) {
+          return;
+        }
+        yieldSizeToPane(terminalId);
+      },
+      { withContext: true }
     ),
 
     getModel: op(CANOPY_METHOD_CHANNELS.getModel, async (): Promise<CanopyModelInfo> =>
@@ -1856,7 +1913,27 @@ export const canopyNamespace = defineIpcNamespace({
         if (watched && !drivesRun(ctx, watched.runId)) return;
         // Another window's session to size: this one only reads it.
         if (watched && !watched.mayType) return;
+        if (isPutAway(ctx.senderWindow)) {
+          releaseViewSizeHolds(ctx.webContentsId);
+          return;
+        }
         resizeWatchedTerminal(requirePtyClient(), ctx.webContentsId, watchId, cols, rows);
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * The user clicked or typed in a panel that follows the PTY's grid. Typing
+     * sent through `terminalInput` doesn't claim by itself: that also carries
+     * the mouse reports of hovering over a program that asks for them.
+     */
+    terminalClaimSize: op(
+      CANOPY_METHOD_CHANNELS.terminalClaimSize,
+      async (ctx, watchId: number): Promise<void> => {
+        if (!Number.isSafeInteger(watchId)) throw new Error("Invalid watch");
+        const watched = watchedTerminal(ctx.webContentsId, watchId);
+        if (!watched || !watched.mayType || !drivesRun(ctx, watched.runId)) return;
+        claimWatchedSize(ctx.webContentsId, watchId);
       },
       { withContext: true }
     ),
@@ -1871,6 +1948,7 @@ export const canopyNamespace = defineIpcNamespace({
         const watched = requireWatched(ctx.webContentsId, watchId);
         assertMayType(watched);
         assertDrivesRun(ctx, watched.runId);
+        claimWatchedSize(ctx.webContentsId, watchId);
         requirePtyClient().sendKey(watched.runId, key);
         if (!watched.assistant && key === "enter") {
           service?.noteUserSent(watched.runId, watched.spawnedAt);
@@ -1904,6 +1982,7 @@ export const canopyNamespace = defineIpcNamespace({
         // Input may have moved to another window while the host answered.
         assertMayType(current);
         assertDrivesRun(ctx, watched.runId);
+        claimWatchedSize(ctx.webContentsId, watchId);
         submitTo(watched.runId, text, imagePaths);
         if (!watched.assistant) {
           service?.noteUserSent(watched.runId, watched.spawnedAt);
@@ -1944,6 +2023,7 @@ export const canopyNamespace = defineIpcNamespace({
         }
         // Control can move to another screen while the host answered.
         assertDrivesRun(ctx, runId);
+        claimWatchedRunSize(ctx.webContentsId, runId, target.spawnedAt);
         submitTo(runId, text, imagePaths);
         service?.noteUserSent(runId, target.spawnedAt);
         service?.markHandled(runId, target.spawnedAt);
@@ -2231,6 +2311,7 @@ export const canopyNamespace = defineIpcNamespace({
         assertDrivesRun(ctx, runId);
         if (!isAnswerLabel(label)) throw new Error("Invalid option");
         await assertNotGlobalAssistant(runId);
+        claimWatchedRunSize(ctx.webContentsId, runId, target.spawnedAt);
         await answerRunByLabel({
           pty: requirePtyClient(),
           runId,

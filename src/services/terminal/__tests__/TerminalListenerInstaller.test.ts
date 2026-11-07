@@ -46,6 +46,10 @@ vi.mock("@shared/config/agentRegistry", async (importOriginal) => {
   };
 });
 
+const takeCanopySizeMock = vi.hoisted(() => vi.fn<(id: string) => void>());
+
+vi.mock("../canopySizeHolds", () => ({ takeCanopySize: takeCanopySizeMock }));
+
 const writeReplyMock = vi.hoisted(() => vi.fn<(id: string, data: string) => void>());
 
 vi.mock("@/clients", () => ({
@@ -287,6 +291,58 @@ describe("installTerminalBoundListeners", () => {
     // A focus report, a cursor-position reply and a mouse report are not typing.
     for (const reply of ["\x1b[I", "\x1b[12;4R", "\x1b[<0;10;5M"]) captured.onData!(reply);
     expect(deps.noteUserInput).toHaveBeenCalledTimes(4);
+  });
+
+  describe("taking the size back from a Canopy panel (#16333)", () => {
+    function install() {
+      const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+      const terminal = makeMockTerminal(captured);
+      const managed = installOnMock(terminal, makeDeps());
+      return { captured, managed };
+    }
+
+    it("takes it on a keystroke, a query's reply never counting as one", () => {
+      const { captured } = install();
+      for (const reply of ["\x1b[I", "\x1b[O", "\x1b[12;4R", "\x1b[?1;2c", "\x1b[<0;10;5M"]) {
+        captured.onData!(reply);
+      }
+      expect(takeCanopySizeMock).not.toHaveBeenCalled();
+      // The replies still reach the program: this pane is its only answerer.
+      expect(writeTerminalInputOrFleetMock).toHaveBeenCalledWith("t1", "\x1b[12;4R");
+
+      // Keys that aren't typing a prompt are still the user's.
+      for (const key of ["y", "\x1b", "\x1b[D", "\x03"]) captured.onData!(key);
+      expect(takeCanopySizeMock).toHaveBeenCalledTimes(4);
+      expect(takeCanopySizeMock).toHaveBeenLastCalledWith("t1");
+    });
+
+    it("takes it on a click into the terminal, not on the other buttons or on focus", () => {
+      const { managed } = install();
+      const press = (button: number) =>
+        managed.hostElement.dispatchEvent(new MouseEvent("pointerdown", { button }));
+
+      managed.hostElement.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+      press(1);
+      press(2);
+      expect(takeCanopySizeMock).not.toHaveBeenCalled();
+
+      press(0);
+      expect(takeCanopySizeMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops listening with the rest of the pane", () => {
+      const { managed } = install();
+      for (const dispose of managed.listeners) dispose();
+      managed.hostElement.dispatchEvent(new MouseEvent("pointerdown", { button: 0 }));
+      expect(takeCanopySizeMock).not.toHaveBeenCalled();
+    });
+
+    it("takes nothing for typing the pane drops", () => {
+      const { captured, managed } = install();
+      managed.isInputLocked = true;
+      captured.onData!("y");
+      expect(takeCanopySizeMock).not.toHaveBeenCalled();
+    });
   });
 
   it("forwards observed agent titles via window.electron.terminal.updateObservedTitle and panel store (drift #2 fix)", () => {
