@@ -8,6 +8,11 @@ const detachWebContents = vi.hoisted(() => vi.fn());
 vi.mock("../../services/globalAssistant.js", () => ({
   peekGlobalAssistantService: () => ({ detachWebContents }),
 }));
+const setCanopyWindowOpen = vi.hoisted(() => vi.fn());
+vi.mock("../openWindowsTracker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../openWindowsTracker.js")>()),
+  setCanopyWindowOpen,
+}));
 
 import {
   closeCanopyWindow,
@@ -44,6 +49,8 @@ type FakeWindow = EventEmitter & {
 
 let nextId = 1;
 let made: FakeWindow[] = [];
+/** The reveal mode each window was built with, in order. */
+let reveals: string[] = [];
 const loadRenderer = vi.fn();
 
 function makeWindow(): FakeWindow {
@@ -77,11 +84,14 @@ const noWatch = () => () => {};
 
 beforeEach(() => {
   made = [];
+  reveals = [];
   loadRenderer.mockClear();
   detachWebContents.mockClear();
-  setCanopyBrowserWindowFactory(() => {
+  setCanopyWindowOpen.mockClear();
+  setCanopyBrowserWindowFactory((revealMode) => {
     const win = makeWindow();
     made.push(win);
+    reveals.push(revealMode);
     markProjectlessView(
       win.view.webContents as unknown as WebContents,
       win as unknown as BrowserWindow
@@ -234,6 +244,56 @@ describe("the Canopy window", () => {
     const fresh = await import("../canopyWindow.js");
 
     expect(() => fresh.openCanopyWindow(noWatch)).toThrow(/before the app set it up/);
+  });
+});
+
+describe("the Canopy window across launches (#16336)", () => {
+  it("is built to show and take focus when asked for", () => {
+    openCanopyWindow(noWatch);
+    expect(reveals).toEqual(["show"]);
+  });
+
+  it("is built behind the focused window when a launch restores it", () => {
+    openCanopyWindow(noWatch, { revealMode: "showInactive" });
+    expect(reveals).toEqual(["showInactive"]);
+  });
+
+  it("leaves a standing window where it is when a launch restores it", () => {
+    openCanopyWindow(noWatch);
+    openCanopyWindow(noWatch, { revealMode: "showInactive" });
+
+    expect(made).toHaveLength(1);
+    expect(made[0]!.show).not.toHaveBeenCalled();
+    expect(made[0]!.focus).not.toHaveBeenCalled();
+  });
+
+  it("tells the manifest as it opens and as it closes, and not when brought forward", () => {
+    openCanopyWindow(noWatch);
+    openCanopyWindow(noWatch);
+    expect(setCanopyWindowOpen.mock.calls).toEqual([[true]]);
+
+    closeCanopyWindow();
+    expect(setCanopyWindowOpen.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it("is known to have stood this session once opened, closed or not", async () => {
+    vi.resetModules();
+    const fresh = await import("../canopyWindow.js");
+    fresh.setCanopyBrowserWindowFactory(() => {
+      const win = makeWindow();
+      made.push(win);
+      return {
+        win: win as unknown as BrowserWindow,
+        appView: win.view as unknown as WebContentsView,
+        loadRenderer,
+      };
+    });
+
+    expect(fresh.hasCanopyWindowOpenedThisSession()).toBe(false);
+    fresh.openCanopyWindow(noWatch);
+    expect(fresh.hasCanopyWindowOpenedThisSession()).toBe(true);
+    fresh.closeCanopyWindow();
+    expect(fresh.hasCanopyWindowOpenedThisSession()).toBe(true);
   });
 });
 

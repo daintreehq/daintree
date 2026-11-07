@@ -63,13 +63,14 @@ vi.mock("../services/ProjectStore.js", () => ({
 }));
 
 import {
+  createSeparateWindowWithState,
   createWindowWithState,
   pruneWindowStateForPath,
   pruneWindowStateForScratch,
   pruneWindowStatesForHost,
   rekeyWindowStateForPath,
 } from "../windowState.js";
-import { folderlessBoundsKey } from "../window/windowBoundsKeys.js";
+import { CANOPY_BOUNDS_KEY, folderlessBoundsKey } from "../window/windowBoundsKeys.js";
 
 describe("createWindowWithState", () => {
   // Helper: fire the deferred 'show' handler (fullscreen is applied after show)
@@ -1167,5 +1168,123 @@ describe("createWindowWithState", () => {
 
       expect(windowStatesStoreMock.set).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("a window whose bounds are its own (the Canopy window, #16336)", () => {
+  const CANOPY_SIZE = { width: 1280, height: 860 };
+  const openCanopy = () =>
+    createSeparateWindowWithState({ show: false }, CANOPY_BOUNDS_KEY, CANOPY_SIZE);
+  const projectBounds = { x: 100, y: 100, width: 1200, height: 800, isMaximized: false };
+
+  /** Back the mocked store with a real object, so saves accumulate as electron-store's do. */
+  function makeStateful(initial: Record<string, unknown> = {}) {
+    let state: Record<string, unknown> = { ...initial };
+    windowStatesStoreMock.get.mockImplementation(() => state);
+    windowStatesStoreMock.set.mockImplementation((_key: string, value: Record<string, unknown>) => {
+      state = value;
+    });
+    return () => state;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    constructorCalls.length = 0;
+    eventHandlers.clear();
+    onceHandlers.clear();
+    winInstance.getBounds.mockReturnValue({ x: 100, y: 100, width: 1200, height: 800 });
+    winInstance.getNormalBounds.mockReturnValue({ x: 100, y: 100, width: 1200, height: 800 });
+    winInstance.isMaximized.mockReturnValue(false);
+    winInstance.isFullScreen.mockReturnValue(false);
+    winInstance.isDestroyed.mockReturnValue(false);
+  });
+
+  it("first opens centred at its own size, borrowing no project window's bounds", () => {
+    makeStateful({ "/proj/a": projectBounds, __legacy__: projectBounds });
+
+    openCanopy();
+
+    const options = constructorCalls[0] as Record<string, unknown>;
+    expect(options).toEqual(expect.objectContaining(CANOPY_SIZE));
+    expect(options.x).toBeUndefined();
+    expect(winInstance.center).toHaveBeenCalledTimes(1);
+  });
+
+  it("comes back at its saved bounds, maximized if it was", () => {
+    makeStateful({
+      [CANOPY_BOUNDS_KEY]: { x: 300, y: 200, width: 1300, height: 900, isMaximized: true },
+    });
+    winInstance.getBounds.mockReturnValue({ x: 300, y: 200, width: 1300, height: 900 });
+
+    openCanopy();
+
+    expect(constructorCalls[0]).toEqual(
+      expect.objectContaining({ x: 300, y: 200, width: 1300, height: 900 })
+    );
+    expect(winInstance.center).not.toHaveBeenCalled();
+    expect(winInstance.maximize).toHaveBeenCalledTimes(1);
+  });
+
+  it("pulls a spot saved on a display that's gone back onto one that remains", () => {
+    makeStateful({
+      [CANOPY_BOUNDS_KEY]: { x: 4000, y: 200, width: 1280, height: 860, isMaximized: false },
+    });
+    winInstance.getBounds.mockReturnValue({ x: 4000, y: 200, width: 1280, height: 860 });
+
+    openCanopy();
+
+    expect(winInstance.setBounds).toHaveBeenCalledWith({ x: 640, y: 200, width: 1280, height: 860 });
+  });
+
+  it("saves under its own key alone, so a project window never opens where it was", () => {
+    const getState = makeStateful();
+    createWindowWithState({ show: false }, "/proj/a");
+    eventHandlers.get("close")!();
+    const legacy = getState().__legacy__;
+
+    winInstance.getNormalBounds.mockReturnValue({ x: 600, y: 40, width: 1280, height: 860 });
+    openCanopy();
+    eventHandlers.get("close")!();
+
+    expect(getState()[CANOPY_BOUNDS_KEY]).toEqual(
+      expect.objectContaining({ x: 600, y: 40, width: 1280, height: 860 })
+    );
+    expect(getState().__legacy__).toEqual(legacy);
+
+    constructorCalls.length = 0;
+    createWindowWithState({ show: false }, "/proj/new");
+    expect(constructorCalls[0]).toEqual(
+      expect.objectContaining({ x: 130, y: 130, width: 1200, height: 800 })
+    );
+  });
+
+  it("is never what a window that knows no workspace yet opens at", () => {
+    makeStateful({
+      [CANOPY_BOUNDS_KEY]: { x: 600, y: 40, width: 1280, height: 860, isMaximized: true },
+    });
+
+    createWindowWithState({ show: false });
+
+    const options = constructorCalls[0] as Record<string, unknown>;
+    expect(options).toEqual(expect.objectContaining({ width: 1200, height: 800 }));
+    expect(options.x).toBeUndefined();
+    expect(winInstance.maximize).not.toHaveBeenCalled();
+  });
+
+  it("keeps its bounds through the cap on workspace entries, and takes no slot in it", () => {
+    const canopyBounds = { x: 600, y: 40, width: 1280, height: 860, isMaximized: false };
+    const getState = makeStateful({ [CANOPY_BOUNDS_KEY]: canopyBounds });
+    for (let i = 0; i < 55; i++) {
+      createWindowWithState({ show: false }, `/proj/${i}`);
+      eventHandlers.get("close")!();
+    }
+
+    const state = getState();
+    expect(state[CANOPY_BOUNDS_KEY]).toEqual(canopyBounds);
+    expect(
+      Object.keys(state).filter((key) => key !== "__legacy__" && key !== CANOPY_BOUNDS_KEY)
+    ).toHaveLength(50);
+    expect(state["/proj/4"]).toBeUndefined();
+    expect(state["/proj/5"]).toBeDefined();
   });
 });

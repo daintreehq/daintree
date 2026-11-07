@@ -149,10 +149,45 @@ describe("the Canopy window's wiring", () => {
     );
   });
 
-  it("gives a Canopy window no saved bounds, which would become a project window's fallback", () => {
+  // Its bounds are kept apart (#16336): the project placement would save them as
+  // the fallback the next project window opens at.
+  it("places a Canopy window at bounds of its own, and a project window as before", () => {
     const placed = canopyTernaries().find((node) => mentions(node, "createWindowWithState"));
 
+    expect(placed && mentions(placed.whenTrue, "createSeparateWindowWithState")).toBe(true);
+    expect(placed && mentions(placed.whenTrue, "CANOPY_BOUNDS_KEY")).toBe(true);
     expect(placed && mentions(placed.whenTrue, "createWindowWithState")).toBe(false);
     expect(placed && mentions(placed.whenFalse, "createWindowWithState")).toBe(true);
+    expect(placed && mentions(placed.whenFalse, "createSeparateWindowWithState")).toBe(false);
+  });
+
+  it("is built by main.ts with the reveal mode it was asked for", () => {
+    const [factory] = callsTo(parse("main.ts"), "setCanopyBrowserWindowFactory");
+    const callback = factory?.arguments[0];
+    const [setup] = factory ? callsTo(factory, "setupBrowserWindow") : [];
+    const options = setup?.arguments[1] as ts.ObjectLiteralExpression;
+    const reveal = options.properties.find(
+      (property) => property.name?.getText() === "revealMode"
+    );
+
+    expect(callback && ts.isArrowFunction(callback)).toBe(true);
+    const [parameter] = (callback as ts.ArrowFunction).parameters;
+    expect(reveal && mentions(reveal, parameter!.name.getText())).toBe(true);
+  });
+
+  it("is restored by main.ts once the focused window is up, only when it was open", () => {
+    const [restore] = callsTo(parse("main.ts"), "restoreWindowFleet");
+    const deps = restore?.arguments[0] as ts.ObjectLiteralExpression;
+    const hook = deps.properties.find(
+      (property): property is ts.PropertyAssignment =>
+        ts.isPropertyAssignment(property) && property.name.getText() === "onPrimaryWindowUp"
+    );
+    const guard = hook?.initializer;
+
+    expect(guard && ts.isConditionalExpression(guard)).toBe(true);
+    const conditional = guard as ts.ConditionalExpression;
+    expect(conditional.condition.getText()).toBe("restoreCanopy");
+    expect(callsTo(conditional.whenTrue, "restoreCanopyWindow")).toHaveLength(1);
+    expect(conditional.whenFalse.getText()).toBe("undefined");
   });
 });

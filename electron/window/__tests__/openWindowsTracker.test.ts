@@ -1,7 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { OpenWindowRecord } from "../../services/persistence/windowManifest.js";
+import type {
+  OpenWindowRecord,
+  OpenWindowsManifestExtras,
+} from "../../services/persistence/windowManifest.js";
 
-const writeOpenWindowsManifest = vi.fn<(records: OpenWindowRecord[]) => void>();
+const writeOpenWindowsManifest =
+  vi.fn<(records: OpenWindowRecord[], extras?: OpenWindowsManifestExtras) => void>();
 const getActiveShutdown = vi.fn<() => { initiator: string; phase: string } | null>(() => null);
 
 // Both mocks use explicit factories rather than spreading `importOriginal()`:
@@ -10,7 +14,8 @@ const getActiveShutdown = vi.fn<() => { initiator: string; phase: string } | nul
 // locally and fails on CI. windowManifest.js itself is dependency-free, so the
 // constants below come from the real module.
 vi.mock("../../services/persistence/windowManifestStore.js", () => ({
-  writeOpenWindowsManifest: (records: OpenWindowRecord[]) => writeOpenWindowsManifest(records),
+  writeOpenWindowsManifest: (records: OpenWindowRecord[], extras?: OpenWindowsManifestExtras) =>
+    writeOpenWindowsManifest(records, extras),
 }));
 
 vi.mock("../../lifecycle/shutdownCoordinator.js", () => ({
@@ -36,6 +41,7 @@ import {
   saveBeforeLastWindowCloses,
   saveOpenWindowsNow,
   scheduleOpenWindowsSave,
+  setCanopyWindowOpen,
   setPendingBackgroundRestores,
   setPendingRemoteRestore,
   setPendingWindowRecreation,
@@ -96,6 +102,12 @@ function makeRegistry(wins: FakeWindow[]): WindowRegistry {
 function lastWritten(): OpenWindowRecord[] {
   const calls = writeOpenWindowsManifest.mock.calls;
   return calls[calls.length - 1][0];
+}
+
+/** Whether the last write recorded the Canopy window as open. */
+function lastWroteCanopyOpen(): boolean {
+  const calls = writeOpenWindowsManifest.mock.calls;
+  return calls[calls.length - 1][1]?.canopyWindowOpen === true;
 }
 
 beforeEach(() => {
@@ -708,6 +720,126 @@ describe("freezeAndSnapshotOpenWindows", () => {
       throw new Error("db closed");
     });
     expect(() => freezeAndSnapshotOpenWindows()).not.toThrow();
+  });
+});
+
+describe("the Canopy window (#16336)", () => {
+  const platform = process.platform;
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: platform });
+  });
+
+  const track = (wins: FakeWindow[], readOnly = false) =>
+    initOpenWindowsTracker({ registry: makeRegistry(wins), readOnly });
+
+  it("is saved open as it opens, beside the windows and never as one of them", () => {
+    track([{ windowId: 1, projectId: "a" }]);
+    setCanopyWindowOpen(true);
+    expect(writeOpenWindowsManifest).toHaveBeenCalledTimes(1);
+    expect(lastWritten()).toEqual([{ projectId: "a" }]);
+    expect(lastWroteCanopyOpen()).toBe(true);
+  });
+
+  it("is saved closed as it closes, and stays so in every later save", () => {
+    track([{ windowId: 1, projectId: "a" }]);
+    setCanopyWindowOpen(true);
+    setCanopyWindowOpen(false);
+    expect(lastWroteCanopyOpen()).toBe(false);
+    scheduleOpenWindowsSave();
+    vi.runAllTimers();
+    expect(writeOpenWindowsManifest).toHaveBeenCalledTimes(3);
+    expect(lastWroteCanopyOpen()).toBe(false);
+  });
+
+  it("writes nothing for a report that changes nothing", () => {
+    track([{ windowId: 1, projectId: "a" }]);
+    setCanopyWindowOpen(false);
+    setCanopyWindowOpen(true);
+    setCanopyWindowOpen(true);
+    expect(writeOpenWindowsManifest).toHaveBeenCalledTimes(1);
+  });
+
+  it("rides along in every save while it stands", () => {
+    track([{ windowId: 1, projectId: "a" }]);
+    setCanopyWindowOpen(true);
+    writeOpenWindowsManifest.mockClear();
+    scheduleOpenWindowsSave();
+    vi.runAllTimers();
+    expect(lastWroteCanopyOpen()).toBe(true);
+  });
+
+  it("stays open in the quit's snapshot, whatever closes after it", () => {
+    track([{ windowId: 1, projectId: "a" }]);
+    setCanopyWindowOpen(true);
+    writeOpenWindowsManifest.mockClear();
+    getActiveShutdown.mockReturnValue({ initiator: "app-quit", phase: "cleaning" });
+
+    freezeAndSnapshotOpenWindows();
+    setCanopyWindowOpen(false);
+    saveOpenWindowsNow(1);
+
+    expect(writeOpenWindowsManifest).toHaveBeenCalledTimes(1);
+    expect(lastWroteCanopyOpen()).toBe(true);
+  });
+
+  it("is not saved by a recovery launch, which never writes", () => {
+    track([{ windowId: 1, projectId: "a" }], true);
+    setCanopyWindowOpen(true);
+    expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
+  });
+
+  it("waits out the restore fan-out, and lands with the save that ends it", () => {
+    track([{ windowId: 1, projectId: "a" }]);
+    suppressOpenWindowsSaves();
+    setCanopyWindowOpen(true);
+    expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
+    resumeOpenWindowsSaves(true);
+    expect(writeOpenWindowsManifest).toHaveBeenCalledTimes(1);
+    expect(lastWroteCanopyOpen()).toBe(true);
+  });
+
+  it("leaves the stored manifest alone when the fan-out died partway", () => {
+    track([{ windowId: 1, projectId: "a" }]);
+    suppressOpenWindowsSaves();
+    setCanopyWindowOpen(true);
+    resumeOpenWindowsSaves(false);
+    expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
+  });
+
+  it.each(["win32", "linux"])(
+    "is saved with no project window beside it on %s, where it keeps the app running",
+    (value) => {
+      Object.defineProperty(process, "platform", { value });
+      track([{ windowId: 1, projectId: "a" }]);
+      setCanopyWindowOpen(true);
+
+      // The last project window closes while the Canopy window stays.
+      saveOpenWindowsNow(1);
+      expect(lastWritten()).toEqual([]);
+      expect(lastWroteCanopyOpen()).toBe(true);
+    }
+  );
+
+  it.each(["win32", "linux"])(
+    "keeps it open on %s when it is the last window to close, since that close is the quit",
+    (value) => {
+      Object.defineProperty(process, "platform", { value });
+      track([]);
+      setCanopyWindowOpen(true);
+      writeOpenWindowsManifest.mockClear();
+
+      setCanopyWindowOpen(false);
+      expect(writeOpenWindowsManifest).not.toHaveBeenCalled();
+    }
+  );
+
+  it("is saved closed on darwin when it closes with no project window, as the app runs on", () => {
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    track([]);
+    setCanopyWindowOpen(true);
+    setCanopyWindowOpen(false);
+    expect(lastWritten()).toEqual([]);
+    expect(lastWroteCanopyOpen()).toBe(false);
   });
 });
 
