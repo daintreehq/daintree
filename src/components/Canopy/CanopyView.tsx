@@ -499,6 +499,10 @@ function TitleDot() {
 }
 
 function CanopyShortcuts() {
+  const frame = useCanopyFrame();
+  const canGoTo = frame.goToRun !== null;
+  // Reaching Canopy again is for a project window; its own window is already here.
+  const reachedByShortcut = frame.host === "dialog";
   const step = isMac() ? "Cmd" : "Alt";
   // How to get here again: the user's own binding, and double-Shift while on.
   const toggle = useEffectiveCombo("canopy.toggle");
@@ -511,15 +515,17 @@ function CanopyShortcuts() {
     {
       heading: "Anywhere",
       rows: [
-        ...(toggle ? [{ keys: [toggle], label: "Open or close Canopy" }] : []),
-        ...(doubleShift ? [{ keys: ["Shift"], label: "Twice quickly: open or close Canopy" }] : []),
+        ...(toggle && reachedByShortcut ? [{ keys: [toggle], label: "Open or close Canopy" }] : []),
+        ...(doubleShift && reachedByShortcut
+          ? [{ keys: ["Shift"], label: "Twice quickly: open or close Canopy" }]
+          : []),
       ],
     },
     {
       heading: "In the search",
       rows: [
         { keys: ["ArrowUp", "ArrowDown"], label: "Move" },
-        { keys: ["Enter"], label: "Go to terminal" },
+        ...(canGoTo ? [{ keys: ["Enter"], label: "Go to terminal" }] : []),
         { keys: ["Tab"], label: "Into the list, where the keys below act" },
         { keys: ["Escape"], label: "Clear the search, then close" },
       ],
@@ -530,7 +536,7 @@ function CanopyShortcuts() {
         { keys: ["ArrowUp", "ArrowDown"], label: "Move" },
         { keys: ["J", "K"], label: "Move down or up" },
         { keys: ["Home", "End"], label: "First or last agent" },
-        { keys: ["Enter"], label: "Go to terminal" },
+        ...(canGoTo ? [{ keys: ["Enter"], label: "Go to terminal" }] : []),
         {
           keys: ["1", "9"],
           range: true,
@@ -560,7 +566,7 @@ function CanopyShortcuts() {
           label: "In a reply: send, then go to the next agent below that needs you or is unread",
         },
         { keys: ["Shift+Enter"], label: "New line in a reply" },
-        { keys: [REPLY_GO_TO_TERMINAL], label: "In a reply: go to terminal" },
+        ...(canGoTo ? [{ keys: [REPLY_GO_TO_TERMINAL], label: "In a reply: go to terminal" }] : []),
         { keys: ["Escape"], label: "Back to the list from a reply" },
         ...(paneClose
           ? [

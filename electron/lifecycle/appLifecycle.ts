@@ -8,6 +8,7 @@ import type { WindowRegistry } from "../window/WindowRegistry.js";
 import { refreshProjectMenuState } from "../projectMenuState.js";
 import { noteWindowClosing, refreshOpenWindowMenu } from "../windowMenuState.js";
 import { onWindowTitlesChanged } from "../window/windowTitle.js";
+import { getProjectlessWindows } from "../window/webContentsRegistry.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { setSignalShutdown, setSafetyBeltTimer } from "./signalShutdownState.js";
 import { finishIfGroupStop } from "./groupStop.js";
@@ -644,8 +645,9 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
   const closingQuits = (win: BrowserWindow): boolean => {
     if (getActiveShutdown() !== null || isWindowRecreating()) return false;
     if (opts.keepsRunningWithoutWindows?.() || opts.scheduledRuns?.hasOpen()) return false;
+    // A window with no project keeps the process up too, unlisted as it is.
     const others = opts.windowRegistry
-      ? opts.windowRegistry.all().map((ctx) => ctx.browserWindow)
+      ? [...opts.windowRegistry.all().map((ctx) => ctx.browserWindow), ...getProjectlessWindows()]
       : BrowserWindow.getAllWindows();
     return others.every((other) => other === win || other.isDestroyed());
   };

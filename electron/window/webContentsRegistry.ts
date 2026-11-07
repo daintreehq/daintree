@@ -362,6 +362,36 @@ export function registerAppView(win: BrowserWindow, view: WebContentsView): void
 }
 
 /**
+ * The windows that hold no project, each by its one app view. Their view hears
+ * what every view hears, but a project's push, a project open and a single
+ * listener's effect all look past it. Kept here, under the broadcast code that
+ * reads it, so nothing below the window layer depends on who made the window.
+ */
+const projectlessViews = new Map<number, BrowserWindow>();
+
+/** Register a window's only view as an app view that belongs to no project. */
+export function registerProjectlessAppView(win: BrowserWindow, view: WebContentsView): void {
+  registerAppView(win, view);
+  const wcId = view.webContents.id;
+  projectlessViews.set(wcId, win);
+  view.webContents.once("destroyed", () => projectlessViews.delete(wcId));
+}
+
+export function isProjectlessAppView(webContentsId: number): boolean {
+  return projectlessViews.has(webContentsId);
+}
+
+export function isProjectlessWindow(win: BrowserWindow): boolean {
+  for (const held of projectlessViews.values()) if (held === win) return true;
+  return false;
+}
+
+/** Windows no project lives in, which the window registry never lists. */
+export function getProjectlessWindows(): BrowserWindow[] {
+  return [...projectlessViews.values()].filter((win) => !win.isDestroyed());
+}
+
+/**
  * Unregister the app view for a window.
  */
 export function unregisterAppView(win: BrowserWindow): void {

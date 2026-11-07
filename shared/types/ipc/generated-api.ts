@@ -219,6 +219,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["canopy-host:watch-assistant"]["args"]
     ): Promise<IpcInvokeMap["canopy-host:watch-assistant"]["result"]>;
   };
+  canopyWindow: {
+    focus(
+      ...args: IpcInvokeMap["canopy-window:focus"]["args"]
+    ): Promise<IpcInvokeMap["canopy-window:focus"]["result"]>;
+    open(
+      ...args: IpcInvokeMap["canopy-window:open"]["args"]
+    ): Promise<IpcInvokeMap["canopy-window:open"]["result"]>;
+  };
   claude: {
     findReplySpan(
       ...args: IpcInvokeMap["claude:find-reply-span"]["args"]

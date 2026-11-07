@@ -87,6 +87,7 @@ import { buildMemoryAttribution } from "./utils/memoryAttribution.js";
 import { helpSessionService } from "./services/HelpSessionService.js";
 import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
+import { setCanopyBrowserWindowFactory } from "./window/canopyWindow.js";
 import { createWindowRecreation } from "./window/windowRecreation.js";
 import { hasPendingOpen, isWindowBound, reserveWindowForOpen } from "./window/windowOpenState.js";
 import { distributePortsToView, getRemoteViewHooks } from "./window/portDistribution.js";
@@ -578,6 +579,8 @@ if (!gotTheLock) {
       getMainProcessWatchdogClient: getMainProcessWatchdogClientRef,
     });
   }
+
+  setCanopyBrowserWindowFactory(() => setupBrowserWindow(__dirname, { kind: "canopy" }));
 
   // A new window for a folder is routed like every other open (#12594): an
   // empty window other than the one that asked is reused, and a window already

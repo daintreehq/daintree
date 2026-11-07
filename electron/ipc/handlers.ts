@@ -76,6 +76,7 @@ import { registerCopyTreeHistoryHandlers } from "./handlers/copyTreeHistory.js";
 import { registerScheduledRunsHandlers } from "./handlers/scheduledRuns.js";
 import { registerFleetHandlers } from "./handlers/fleet.js";
 import { registerCanopyHandlers } from "./handlers/canopy.js";
+import { registerCanopyWindowHandlers } from "./handlers/canopyWindow.js";
 import { registerVoiceInputHandlers } from "./handlers/voiceInput.js";
 import { registerVoiceDictionaryHandlers } from "./handlers/voiceDictionary.js";
 import { registerRecentDictationsHandlers } from "./handlers/recentDictations.js";
@@ -262,6 +263,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerScheduledRunsHandlers());
     register(() => registerFleetHandlers());
     register(() => registerCanopyHandlers());
+    register(() => registerCanopyWindowHandlers());
     register(() => registerVoiceInputHandlers(deps));
     register(() => registerVoiceDictionaryHandlers());
     register(() => registerRecentDictationsHandlers());

@@ -10,6 +10,7 @@ import {
   getWebContentsForProject,
   hasRegisteredProjectViews,
   isCachedViewWebContents,
+  isProjectlessAppView,
 } from "../window/webContentsRegistry.js";
 import { getWindowRegistry } from "../window/windowRef.js";
 import { isViewHydrated } from "../window/viewHydration.js";
@@ -534,7 +535,11 @@ export function getProjectRendererTargets(projectId: string | null): WebContents
   if (projectId !== null && hasRegisteredProjectViews()) {
     return getWebContentsForProject(projectId);
   }
-  return getAllAppWebContents().filter((wc) => !wc.isDestroyed());
+  // One project's push with no project view up yet goes to whatever may become
+  // one; a view that holds no project never will.
+  return getAllAppWebContents().filter(
+    (wc) => !wc.isDestroyed() && (projectId === null || !isProjectlessAppView(wc.id))
+  );
 }
 
 /**
@@ -639,6 +644,7 @@ function deliverToLocalProjectViews(
   for (const wc of targets) {
     // getWebContentsForProject already drops destroyed views.
     if (exclude?.has(wc.id) || (!scoped && wc.isDestroyed())) continue;
+    if (projectId !== null && isProjectlessAppView(wc.id)) continue;
     if (isWithheldFromView(wc.id, channel, args)) continue;
     try {
       wc.send(channel, ...args);
@@ -767,6 +773,7 @@ function isSingleTargetEligible(wc: WebContents, channel: string, args: unknown[
     !wc.isDestroyed() &&
     !wc.isCrashed() &&
     !isCachedViewWebContents(wc.id) &&
+    !isProjectlessAppView(wc.id) &&
     !isWithheldFromView(wc.id, channel, args)
   );
 }

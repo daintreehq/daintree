@@ -5,6 +5,7 @@ import {
   getWindowForWebContents,
   registerWebContents,
   registerAppView,
+  registerProjectlessAppView,
 } from "./webContentsRegistry.js";
 import { attachActiveViewFocus } from "./activeViewFocus.js";
 import { attachUnresponsiveDialog } from "./unresponsiveDialog.js";
@@ -46,6 +47,7 @@ import {
   INITIAL_COLOR_SCHEME_ARG,
   INSTANCE_ROLE_ARG,
 } from "./skeletonCss.js";
+import { CANOPY_WINDOW_ARG } from "../../shared/types/canopyWindow.js";
 import { getMinimumWindowSize, getPlatformWindowOptions } from "./platformWindowOptions.js";
 import { getLinuxWindowIconOption } from "./linuxWindowIcon.js";
 import { showWindowInactive } from "./showWindowInactive.js";
@@ -167,7 +169,16 @@ export interface SetupBrowserWindowOptions {
    * asked for and should get focus.
    */
   revealMode?: "show" | "showInactive";
+  /**
+   * What the window holds. A "canopy" window has one view and no project: no
+   * saved bounds (they would become the fallback a project window opens at),
+   * no webview tag, and its view is registered as belonging to no project.
+   */
+  kind?: "project" | "canopy";
 }
+
+/** Where a Canopy window starts: wide enough for its list beside a live terminal. */
+const CANOPY_WINDOW_SIZE = { width: 1280, height: 860 };
 
 export interface CreateWindowResult {
   win: BrowserWindow;
@@ -188,7 +199,9 @@ export function setupBrowserWindow(
     initialProjectId,
     remoteWorkspaceKey,
     revealMode = "show",
+    kind = "project",
   } = options;
+  const canopyWindow = kind === "canopy";
   let smokeTestTimer: ReturnType<typeof setTimeout> | undefined;
   let _smokeRendererUnresponsive = false;
 
@@ -244,17 +257,20 @@ export function setupBrowserWindow(
   // The BrowserWindow itself does NOT load the app — it's a shell.
   // The React app lives in a WebContentsView attached to win.contentView.
   console.log("[MAIN] Creating window...");
-  const win = createWindowWithState(
-    {
-      show: false,
-      ...getMinimumWindowSize(),
-      ...getPlatformWindowOptions(windowBg),
-      ...getLinuxWindowIconOption(),
-      backgroundColor: windowBg,
-    },
-    resolveBoundsKey(projectPath, initialProjectId ?? remoteWorkspaceKey),
-    appWindowStateTracking
-  );
+  const windowOptions = {
+    show: false,
+    ...getMinimumWindowSize(),
+    ...getPlatformWindowOptions(windowBg),
+    ...getLinuxWindowIconOption(),
+    backgroundColor: windowBg,
+  };
+  const win = canopyWindow
+    ? new BrowserWindow({ ...windowOptions, ...CANOPY_WINDOW_SIZE })
+    : createWindowWithState(
+        windowOptions,
+        resolveBoundsKey(projectPath, initialProjectId ?? remoteWorkspaceKey),
+        appWindowStateTracking
+      );
   markPerformance(PERF_MARKS.MAIN_WINDOW_CREATED);
 
   // Record the overlay colour the constructor just applied natively, so the
@@ -297,7 +313,7 @@ export function setupBrowserWindow(
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      webviewTag: true,
+      webviewTag: !canopyWindow,
       navigateOnDragDrop: false,
       // bypassHeatCheck writes the V8 code cache on the first load instead of
       // Chromium's default third-load heat check, so launch 2 after an
@@ -316,12 +332,14 @@ export function setupBrowserWindow(
         // forward main-process CLI switches), so window.electron.demo and the
         // demo overlay components are available when launched with --demo-mode.
         ...(isDemoMode ? ["--demo-mode"] : []),
+        ...(canopyWindow ? [CANOPY_WINDOW_ARG] : []),
       ],
     },
   });
 
   // Register the app view so IPC helpers route to the correct webContents
-  registerAppView(win, appView);
+  if (canopyWindow) registerProjectlessAppView(win, appView);
+  else registerAppView(win, appView);
 
   // Attach the view to the window and size it to fill the content area.
   // Ongoing resize handling is delegated to ProjectViewManager (which tracks the active view).
@@ -575,7 +593,10 @@ export function setupBrowserWindow(
     // native item stays clickable and registered, which keeps the shortcut
     // working when focus is in a guest webview or DevTools where this
     // handler never fires.
-    appWebContents.setIgnoreMenuShortcuts(isCloseShortcut || isRendererOwnedShortcut(input));
+    // A Canopy window has no pane for Cmd+W to close, so Close Window keeps it.
+    appWebContents.setIgnoreMenuShortcuts(
+      (isCloseShortcut && !canopyWindow) || isRendererOwnedShortcut(input)
+    );
   });
 
   attachAppViewRendererGoneHandler({

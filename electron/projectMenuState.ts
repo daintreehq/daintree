@@ -1,6 +1,7 @@
 import { Menu } from "electron";
 import { projectStore } from "./services/ProjectStore.js";
 import { getWindowRegistry } from "./window/windowRef.js";
+import { getProjectlessWindows } from "./window/webContentsRegistry.js";
 
 // Stable ids for the File-menu items gated on "is a project open". Live mutation
 // through Menu.getApplicationMenu().getMenuItemById() is the only way to keep
@@ -23,7 +24,7 @@ export function hasOpenApplicationWindow(): boolean {
   // means no app window at all. Native panels (About) aren't registered, so one
   // opened while windowless can't be closed from here — its own close button
   // still works, and that rare case beats a dead item in every windowless menu.
-  return Boolean(registry.getPrimary());
+  return Boolean(registry.getPrimary()) || getProjectlessWindows().length > 0;
 }
 
 /**

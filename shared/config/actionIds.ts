@@ -287,6 +287,7 @@ export const BUILT_IN_ACTION_IDS = [
 
   // -- canopyActions --
   "canopy.toggle",
+  "canopy.openWindow",
   "canopy.markAllRead",
   "project.getAll",
   "project.getCurrent",

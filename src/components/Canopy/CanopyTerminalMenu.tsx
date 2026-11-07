@@ -8,6 +8,7 @@ import {
   type TerminalOutputMenuTarget,
 } from "@/components/Terminal/contextMenu/terminalOutputMenuActions";
 import { actionService } from "@/services/ActionService";
+import { useCanopyFrame } from "./canopyFrame";
 import { reportFileLinkFailure } from "@/services/terminal/FileLinksAddon";
 import { grantClickedHostFile } from "@/services/terminal/clickedHostFile";
 import type { WorktreeScope } from "@shared/utils/path";
@@ -106,9 +107,17 @@ function CanopyTerminalMenuItems({
   defer: (run: () => void) => void;
 }) {
   const source = useMenuActionSource();
+  // Files open in the viewer and panels of a project window, which only the
+  // dialog stands in; a link's own copy needs neither.
+  const inProjectWindow = useCanopyFrame().host === "dialog";
+  const fileState = inProjectWindow ? state : null;
   const onAction = (actionId: string) => {
     const current = handle.current;
     if (!current) return;
+    if (!inProjectWindow && actionId.startsWith("copy-link:")) {
+      current.copy(actionId.slice("copy-link:".length));
+      return;
+    }
     if (actionId === "copy") {
       if (state?.selection) current.copy(state.selection);
       return;
@@ -128,10 +137,10 @@ function CanopyTerminalMenuItems({
       hasSelection={Boolean(state?.selection)}
       hoveredUrl={state?.hoveredUrl ?? null}
       hoveredUrlPluginName={state?.hoveredUrlPluginName ?? null}
-      hoveredFilePath={state?.hoveredFilePath ?? null}
-      hoveredFileKind={state?.hoveredFileKind ?? null}
-      hoveredFileScope={state?.hoveredFileScope ?? null}
-      selectionFilePath={state?.selectionFilePath ?? null}
+      hoveredFilePath={fileState?.hoveredFilePath ?? null}
+      hoveredFileKind={fileState?.hoveredFileKind ?? null}
+      hoveredFileScope={fileState?.hoveredFileScope ?? null}
+      selectionFilePath={fileState?.selectionFilePath ?? null}
       onViewSelectedFile={(path) => defer(() => viewFile(path, source))}
       separatorAfter={false}
       onOpenInFileBrowser={(scope, path, kind) =>

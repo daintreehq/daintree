@@ -227,6 +227,7 @@ export const CORE_TIER_TOOLS = [
  */
 export const FULL_TIER_ADDONS = [
   ACTIONS_LIST_TOOL,
+  "canopy.openWindow",
   "worktree.getCurrent",
   "worktree.setActive",
   "worktree.reviewReadiness",

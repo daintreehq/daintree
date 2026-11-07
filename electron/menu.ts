@@ -24,7 +24,11 @@ import { getPluginMenuItems } from "./services/pluginMenuRegistry.js";
 import { getPluginToursForProject } from "./services/plugin/PluginContributionBroadcaster.js";
 import { isPluginVisibleInProject } from "./services/plugin/projectPluginVisibility.js";
 import { evaluateWhen } from "./services/WhenClauseService.js";
-import { getAppWebContents, getProjectForWebContents } from "./window/webContentsRegistry.js";
+import {
+  getAppWebContents,
+  getProjectForWebContents,
+  isProjectlessWindow,
+} from "./window/webContentsRegistry.js";
 import { openFolderInNewWindow } from "./window/newWindowOpen.js";
 import {
   isWindowOnRemoteHost,
@@ -218,7 +222,13 @@ export function createApplicationMenu(
     browserWindow: Electron.BaseWindow | undefined
   ): BrowserWindow | null => {
     if (browserWindow instanceof BrowserWindow && !browserWindow.isDestroyed()) {
-      return browserWindow;
+      if (!isProjectlessWindow(browserWindow)) return browserWindow;
+      // Every command here acts on a project, and this window holds none: it
+      // goes to the project window last used, which comes forward to show it.
+      const projectWindow = getWindowRegistry()?.getPrimary()?.browserWindow ?? mainWindow;
+      if (projectWindow.isDestroyed()) return null;
+      projectWindow.show();
+      return projectWindow;
     }
 
     if (!mainWindow.isDestroyed()) {

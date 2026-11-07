@@ -44,7 +44,8 @@ export interface CanopyFrame {
   workspaceId: () => string | null;
   /** The user put the inbox away: its close button, or Escape. */
   close: () => void;
-  goToRun: (run: CanopyGoToRun, panel: CanopyPanelHold) => void;
+  /** Null where a run's pane can't be reached from: the inbox offers no way to it. */
+  goToRun: ((run: CanopyGoToRun, panel: CanopyPanelHold) => void) | null;
   /** A trashed run its own project has to bring back. */
   restoreElsewhere: (
     item: CanopyTrashItem,

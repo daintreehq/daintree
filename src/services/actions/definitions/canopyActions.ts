@@ -58,7 +58,7 @@ export function registerCanopyActions(actions: ActionRegistry): void {
     id: "canopy.toggle",
     title: "Open Canopy",
     description:
-      "Open or close Canopy, the bird's-eye view of every agent across all projects, read off its screen and ordered by what it needs from the user",
+      "Open or close Canopy, the bird's-eye view of every agent across all projects, read off its screen and ordered by what it needs from the user. While Canopy has its own window, brings that window forward",
     category: "project",
     kind: "command",
     danger: "safe",
@@ -69,7 +69,31 @@ export function registerCanopyActions(actions: ActionRegistry): void {
     disabledReason: () => (canopyShown() ? undefined : CANOPY_HIDDEN_REASON),
     keywords: ["canopy", "inbox", "agents", "waiting", "summary", "overview", "fleet"],
     run: async () => {
+      const { mode, isOpen } = useCanopyStore.getState();
+      // Only an on Canopy can have a window, and a panel open here closes as ever.
+      if (mode === "on" && !isOpen && (await window.electron.canopyWindow.focus())) return;
       useCanopyStore.getState().toggle();
+    },
+  }));
+
+  actions.set("canopy.openWindow", () => ({
+    id: "canopy.openWindow",
+    title: "Open Canopy in new window",
+    description:
+      "Open Canopy in a window of its own, showing every project and host, or bring that window forward if it is already open",
+    category: "project",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    nonRepeatable: true,
+    isVisible: canopyOn,
+    isEnabled: canopyOn,
+    disabledReason: () => (canopyOn() ? undefined : CANOPY_OFF_REASON),
+    keywords: ["canopy", "inbox", "agents", "window", "monitor", "detach"],
+    run: async () => {
+      await window.electron.canopyWindow.open();
+      // The window shows what a panel here would, and both would size a terminal.
+      useCanopyStore.getState().close();
     },
   }));
 

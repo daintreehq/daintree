@@ -2,7 +2,13 @@ import { useCallback, useState } from "react";
 import { Telescope } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
+import {
+  ContextMenu,
+  ContextMenuActionItem,
+  ContextMenuContent,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
 import { useAriaKeyshortcuts, useEffectiveCombo, useShortcutHintHover } from "@/hooks";
 import { useCanopyStore } from "@/store/canopyStore";
@@ -72,6 +78,8 @@ export function CanopyToolbarButton({
   const handleClick = useCallback(() => {
     void actionService.dispatch(CANOPY_ACTION_ID, undefined, { source: "user" });
   }, []);
+  // A window of its own is for a Canopy that is on, as the action says.
+  const windowOffered = useCanopyStore((s) => s.mode === "on");
 
   return (
     <ContextMenu>
@@ -126,6 +134,14 @@ export function CanopyToolbarButton({
         </span>
       </ContextMenuTrigger>
       <ContextMenuContent className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto">
+        {windowOffered && (
+          <>
+            <ContextMenuActionItem actionId="canopy.openWindow">
+              Open in new window
+            </ContextMenuActionItem>
+            <ContextMenuSeparator />
+          </>
+        )}
         <ToolbarContextMenuItems buttonId="canopy" side="right" />
       </ContextMenuContent>
     </ContextMenu>

@@ -24,7 +24,7 @@ import { placeOf } from "./canopyInboxPlace";
 function failToast(
   title: string,
   error: unknown,
-  recovery: { label: string; onClick: () => void }
+  recovery: { label: string; onClick: () => void } | undefined
 ) {
   notify({
     type: "error",
@@ -32,7 +32,7 @@ function failToast(
     message: formatErrorMessage(error, "Something went wrong."),
     context: { eventKind: "agent" },
     duration: 6000,
-    actions: [recovery],
+    ...(recovery ? { actions: [recovery] } : {}),
   });
 }
 
@@ -115,6 +115,7 @@ export function useCanopyInboxActions({
 
   const handlers = useMemo<CanopyCardHandlers>(() => {
     const openRun = (item: CanopyItem, newWindow = false) => {
+      if (!frame.goToRun) return;
       readNow(item);
       frame.goToRun(
         { place: placeOf(item, hostId, ownHostId), listedRunId: item.runId, newWindow },
@@ -127,7 +128,8 @@ export function useCanopyInboxActions({
     };
     // The incarnation on screen, so main refuses a terminal respawned since.
     const target = (item: CanopyItem) => ({ spawnedAt: item.row.run.spawnedAt });
-    const goTo = (item: CanopyItem) => ({ label: "Go to terminal", onClick: () => openRun(item) });
+    const goTo = (item: CanopyItem) =>
+      frame.goToRun ? { label: "Go to terminal", onClick: () => openRun(item) } : undefined;
     const archive = (item: CanopyItem, expectTurn?: number) =>
       expectTurn === undefined
         ? api.archive(item.runId, target(item))
@@ -473,10 +475,13 @@ export function useCanopyInboxActions({
     onReread: function reread(item) {
       safeFireAndForget(
         api.reread(item.runId, { spawnedAt: item.row.run.spawnedAt }).catch((error: unknown) =>
-          failToast("Couldn't read the screen again", error, {
-            label: "Go to terminal",
-            onClick: () => handlers.onOpen(item),
-          })
+          failToast(
+            "Couldn't read the screen again",
+            error,
+            frame.goToRun
+              ? { label: "Go to terminal", onClick: () => handlers.onOpen(item) }
+              : undefined
+          )
         )
       );
     },

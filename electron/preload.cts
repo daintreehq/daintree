@@ -98,6 +98,7 @@ import { buildHostSwitchPreloadBindings } from "./ipc/handlers/hostSwitch.preloa
 import { buildProjectMatchPreloadBindings } from "./ipc/handlers/projectMatch.preload.js";
 import { buildHostMetricsPreloadBindings } from "./ipc/handlers/hostMetrics.preload.js";
 import { buildCanopyHostPreloadBindings } from "./ipc/handlers/canopyHost.preload.js";
+import { buildCanopyWindowPreloadBindings } from "./ipc/handlers/canopyWindow.preload.js";
 import { buildPortForwardsPreloadBindings } from "./ipc/handlers/portForwards.preload.js";
 import { buildPluginParityPreloadBindings } from "./ipc/handlers/pluginParity.preload.js";
 import { buildSettingsCopyPreloadBindings } from "./ipc/handlers/settingsCopy.preload.js";
@@ -345,6 +346,10 @@ const instanceRole: "attended" | "worker" = rawInstanceRole === "worker" ? "work
 const SURFACE_HOST_ARG = "--daintree-surface-host=";
 const surfaceHostId: string | null =
   process.argv.find((a) => a.startsWith(SURFACE_HOST_ARG))?.slice(SURFACE_HOST_ARG.length) ?? null;
+
+// The Canopy window's role: makes src/main.tsx mount Canopy's own root instead
+// of the project app shell. Mirrors CANOPY_WINDOW_ARG in shared/types/canopyWindow.ts.
+const isCanopyWindow = process.argv.includes("--daintree-window-kind=canopy");
 
 const E2E_MODE_ARG = "--daintree-e2e-mode";
 const E2E_SKIP_FIRST_RUN_DIALOGS_ARG = "--daintree-e2e-skip-first-run-dialogs";
@@ -2924,6 +2929,7 @@ function buildElectronApi(): ElectronAPI {
       onEvent: (callback: (event: IpcEventMap["canopy-host:event"]) => void) =>
         _typedOn("canopy-host:event", callback),
     },
+    canopyWindow: buildCanopyWindowPreloadBindings(_unwrappingInvoke),
     portForwards: {
       ...buildPortForwardsPreloadBindings(_unwrappingInvoke),
       onEvent: (callback: (event: IpcEventMap["port-forwards:event"]) => void) =>
@@ -4051,6 +4057,8 @@ contextBridge.exposeInMainWorld("__DAINTREE_INSTANCE_ROLE__", {
 contextBridge.exposeInMainWorld("__DAINTREE_SURFACE_HOST__", {
   surfaceId: surfaceHostId,
 });
+
+contextBridge.exposeInMainWorld("__DAINTREE_CANOPY_WINDOW__", isCanopyWindow);
 
 // Flush the per-view preload evaluation cost (#9770). Runs at preload bottom —
 // before any renderer page script — so the main process can attribute the
