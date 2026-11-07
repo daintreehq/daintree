@@ -31,14 +31,17 @@ const answer = (
  * pane may answer `launched`, the one status the ledger records. That call is the
  * one `authorizeSpawn` was asked of; one that joined it reads as `existing`.
  *
+ * No readiness wait follows this launch, so a spawn that never reports is no start.
+ *
  * @param projectId The project the session is bound to, never one the caller names.
- * @param authorize Asked right before the spawn; throws to refuse, which rethrows here.
+ * @param authorize Asked right before the spawn, for that same project, however the
+ *   session's binding has moved since; throws to refuse, which rethrows here.
  */
 export async function handleAgentResumeOwned(
   rawArgs: unknown,
   projectId: string | null,
   signal: AbortSignal,
-  authorize?: () => void
+  authorize?: (projectId: string) => void
 ): Promise<AgentResumeOwnedAnswer> {
   const parsed = AgentResumeOwnedArgsSchema.safeParse(rawArgs);
   if (!parsed.success) {
@@ -63,21 +66,24 @@ export async function handleAgentResumeOwned(
   const { describeViewlessWorkspace, resumeAgentSessionAsPaneLive } =
     await import("../viewless/index.js");
   const started = { asked: false, refusal: undefined as unknown };
-  const resumed = await resumeAgentSessionAsPaneLive({
-    ...parsed.data,
-    projectId,
-    signal,
-    authorizeSpawn: () => {
-      try {
-        authorize?.();
-      } catch (err) {
-        started.refusal = err;
-        return formatErrorMessage(err, "This call may not start a terminal here.");
-      }
-      started.asked = true;
-      return null;
+  const resumed = await resumeAgentSessionAsPaneLive(
+    {
+      ...parsed.data,
+      projectId,
+      signal,
+      authorizeSpawn: () => {
+        try {
+          authorize?.(projectId);
+        } catch (err) {
+          started.refusal = err;
+          return formatErrorMessage(err, "This call may not start a terminal here.");
+        }
+        started.asked = true;
+        return null;
+      },
     },
-  });
+    { unreportedStarted: false }
+  );
   if (started.refusal !== undefined) throw started.refusal;
 
   if (resumed.status === "refused") {

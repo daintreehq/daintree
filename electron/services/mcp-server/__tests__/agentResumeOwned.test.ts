@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { McpError } from "@modelcontextprotocol/sdk/types.js";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { AgentResumeOwnedResultSchema } from "../../../../shared/types/agentSessionSchemas.js";
 import type {
   AgentSessionPaneRequest,
@@ -7,7 +7,12 @@ import type {
 } from "../../viewless/viewlessAgentResume.js";
 
 const resume = vi.hoisted(() =>
-  vi.fn<(request: AgentSessionPaneRequest) => Promise<AgentSessionPaneResult>>()
+  vi.fn<
+    (
+      request: AgentSessionPaneRequest,
+      options?: { unreportedStarted?: boolean }
+    ) => Promise<AgentSessionPaneResult>
+  >()
 );
 const describeWorkspace = vi.hoisted(() => vi.fn());
 
@@ -53,9 +58,26 @@ describe("agent.resumeOwned in main (#16341)", () => {
   it("reopens in the session's own project, whatever the arguments say", async () => {
     launches();
 
-    await run(undefined, "project-1", { ...ARGS, projectId: "project-2" });
+    await run(undefined, "project-2", { ...ARGS, projectId: "project-3" });
 
-    expect(resume.mock.calls[0]![0]).toMatchObject({ ...ARGS, projectId: "project-1" });
+    expect(resume.mock.calls[0]![0]).toMatchObject({ ...ARGS, projectId: "project-2" });
+  });
+
+  it("asks `authorize` about the project it captured", async () => {
+    launches();
+    const authorize = vi.fn();
+
+    await run(authorize, "project-2");
+
+    expect(authorize).toHaveBeenCalledWith("project-2");
+  });
+
+  it("reads a spawn that never reports as no start, since nothing waits on it after", async () => {
+    launches();
+
+    await run();
+
+    expect(resume.mock.calls[0]![1]).toEqual({ unreportedStarted: false });
   });
 
   it("answers `launched` with the workspace the ledger records it under", async () => {
@@ -138,7 +160,10 @@ describe("agent.resumeOwned in main (#16341)", () => {
   it.each([{}, { ...ARGS, sessionId: "" }, { ...ARGS, worktreeId: 7 }, null])(
     "refuses malformed arguments %j as invalid params",
     async (args) => {
-      await expect(run(undefined, "project-1", args)).rejects.toBeInstanceOf(McpError);
+      const failure = await run(undefined, "project-1", args).catch((err: unknown) => err);
+
+      expect(failure).toBeInstanceOf(McpError);
+      expect((failure as McpError).code).toBe(ErrorCode.InvalidParams);
       expect(resume).not.toHaveBeenCalled();
     }
   );
@@ -150,11 +175,12 @@ describe("agent.resumeOwned in main (#16341)", () => {
       "existing",
       { status: "existing", projectId: "project-1", worktreeId: "wt-1", terminalId: "terminal-1" },
     ],
-  ])("answers `%s` with every field the advertised schema requires", async (_name, helper) => {
+  ])("answers `%s` with every field the advertised schema requires", async (status, helper) => {
     launches(helper);
 
     const { result } = await run();
 
+    expect(result.result.status).toBe(status);
     expect(AgentResumeOwnedResultSchema.parse(result.result)).toEqual(result.result);
   });
 });

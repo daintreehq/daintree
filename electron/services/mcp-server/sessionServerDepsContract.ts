@@ -195,8 +195,8 @@ export interface SessionServerDeps extends OwnedMainExecutors {
   handleAgentResumeOwned: (
     rawArgs: unknown,
     signal: AbortSignal,
-    /** Asked once more right before the spawn; throws to refuse. */
-    authorize?: () => void
+    /** Asked once more right before the spawn, for the project it runs in; throws to refuse. */
+    authorize?: (projectId: string) => void
   ) => Promise<import("./agentResumeOwned.js").AgentResumeOwnedAnswer>;
   /**
    * Read `terminal.getStatus` off the pty-host for one workspace, with no
@@ -367,10 +367,11 @@ export interface SessionServerDeps extends OwnedMainExecutors {
   /**
    * Set for a session on this host that neither of those covers, one in a
    * view: why a change main makes itself may not run, or null while a view
-   * here drives its project or nobody does. A view another machine drives
-   * only watches, and nothing starts behind it (#16341).
+   * here drives `projectId`, else the session's own project, or nobody does.
+   * A view another machine drives only watches, and nothing starts behind it
+   * (#16341).
    */
-  refuseViewWrite?: () => { code: string; message: string } | null;
+  refuseViewWrite?: (projectId: string | undefined) => { code: string; message: string } | null;
   /**
    * The caller's own pane, from its credential: a pane bearer's terminal, or
    * the terminal a help session is bound to. Null for everything else — an

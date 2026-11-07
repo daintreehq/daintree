@@ -537,7 +537,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.resumeOwned",
     title: "Resume agent session as an owned pane",
     description:
-      "Reopen a closed session as a new pane you own. `launched` means the terminal started, not that the agent is ready. `existing`: a live pane holds it, so nothing launched and it isn't yours. `refused` gives the reason.",
+      "Reopen a closed session as a new pane you own. `launched` means the terminal started, not that the agent is ready. `existing`: a live pane holds it, so nothing launched and this call doesn't make it yours. `refused` gives the reason.",
     category: "agent",
     kind: "command",
     danger: "safe",

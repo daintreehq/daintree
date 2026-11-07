@@ -491,6 +491,28 @@ describe("resumeAgentSessionAsPane", () => {
     expect(result).toMatchObject({ status: "existing", terminalId: "pane-1" });
   });
 
+  // The fleet a restart leaves (#16341): the pane sits at its shell, and both its
+  // terminal and its saved record still name the session it was running.
+  it("launches beside a pane back at its shell whose saved record names the session", async () => {
+    const { deps, invoke } = resumeDeps({
+      terminals: {
+        "pane-1": { agentSessionId: SESSION, worktreeId: WORKTREE.id, agentState: "exited" },
+      },
+      state: {
+        projectId: PROJECT.id,
+        sidebarWidth: 350,
+        terminals: [
+          { id: "pane-1", kind: "terminal", location: "grid", agentSessionId: SESSION },
+        ] as PanelSnapshot[],
+      },
+    });
+
+    const result = await resumeAgentSessionAsPane(REQUEST, deps, makeRuntime());
+
+    expect(result).toMatchObject({ status: "launched" });
+    expect(spawns(invoke)).toHaveLength(1);
+  });
+
   it.each([
     ["trashed", { isTrashed: true }],
     ["being closed", { isClosing: true }],
@@ -690,10 +712,18 @@ describe("resumeAgentSessionAsPane", () => {
   });
 
   it("asks authorizeSpawn after every read, and spawns nothing when it refuses (#16341)", async () => {
-    const { deps, invoke, store, pty } = resumeDeps();
+    const { deps, invoke, store } = resumeDeps();
+    const order: string[] = [];
+    const getProjectState = deps.getProjectState;
+    deps.getProjectState = async (projectId) => {
+      const state = await getProjectState(projectId);
+      // The last read: a yield here would let a check placed before it run first.
+      await new Promise((resolve) => setImmediate(resolve));
+      order.push("layout read");
+      return state;
+    };
     const authorizeSpawn = vi.fn(() => {
-      // The whole read path has run by the time the launch is asked about.
-      expect(pty.getAllTerminalsWithCompletenessAsync).toHaveBeenCalled();
+      order.push("asked");
       return "studio-02 has control of this project.";
     });
 
@@ -703,6 +733,8 @@ describe("resumeAgentSessionAsPane", () => {
       makeRuntime()
     );
 
+    expect(order.at(-1)).toBe("asked");
+    expect(order).toContain("layout read");
     expect(authorizeSpawn).toHaveBeenCalledTimes(1);
     expect(result).toEqual({
       status: "refused",
@@ -726,6 +758,7 @@ describe("resumeAgentSessionAsPane", () => {
 
     expect(first).toHaveBeenCalledTimes(1);
     expect(second).not.toHaveBeenCalled();
+    expect(launched).toMatchObject({ status: "launched" });
     expect(joined).toEqual(launched);
     expect(spawns(invoke)).toHaveLength(1);
   });

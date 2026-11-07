@@ -78,7 +78,7 @@ describe("session history with no frontend (#14549)", () => {
       ok: true,
       result: { sessions: [{ closedBy: "exit", terminal: { id: "terminal-1", spawnedAt: 42 } }] },
     });
-    expect(result.ok && result.result).not.toHaveProperty("sessions.0.trash");
+    expect(result).not.toHaveProperty("result.sessions.0.trash");
   });
 
   it("pages the journal and narrows to a named worktree", async () => {

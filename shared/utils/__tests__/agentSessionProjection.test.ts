@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import type { AgentSessionRecord } from "../../types/ipc/agentSessionHistory.js";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import type { z } from "zod";
+import { AgentSessionCloseCauseSchema } from "../../types/agentSessionSchemas.js";
+import type {
+  AgentSessionCloseCause,
+  AgentSessionRecord,
+} from "../../types/ipc/agentSessionHistory.js";
 import { pageAgentFacingSessions, toAgentFacingRecord } from "../agentSessionProjection.js";
 
 const RECORD: AgentSessionRecord = {
@@ -16,15 +21,21 @@ const degraded = (fields: Record<string, unknown>) =>
   ({ ...RECORD, ...fields }) as unknown as AgentSessionRecord;
 
 describe("what ended a session, in the agent-facing record (#16341)", () => {
-  it("carries the close cause and the terminal it came from", () => {
-    const projected = toAgentFacingRecord({
-      ...RECORD,
-      closedBy: "exit",
-      terminal: { id: "terminal-1", spawnedAt: 42 },
-    });
+  it("advertises every cause the journal records", () => {
+    expectTypeOf<
+      z.infer<typeof AgentSessionCloseCauseSchema>
+    >().toEqualTypeOf<AgentSessionCloseCause>();
+  });
 
-    expect(projected.closedBy).toBe("exit");
-    expect(projected.terminal).toEqual({ id: "terminal-1", spawnedAt: 42 });
+  it.each(AgentSessionCloseCauseSchema.options)("carries a close cause of `%s`", (closedBy) => {
+    const { sessions } = pageAgentFacingSessions(
+      [{ ...RECORD, closedBy, terminal: { id: "terminal-1", spawnedAt: 42 } }],
+      0,
+      20
+    );
+
+    expect(sessions[0]?.closedBy).toBe(closedBy);
+    expect(sessions[0]?.terminal).toEqual({ id: "terminal-1", spawnedAt: 42 });
   });
 
   it("adds neither key to a record journaled before they were kept", () => {

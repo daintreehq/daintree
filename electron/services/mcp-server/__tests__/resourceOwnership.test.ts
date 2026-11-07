@@ -562,8 +562,8 @@ describe("a resumed session's pane (#16341)", () => {
     ]);
   });
 
-  it("records nothing for a live pane that already held the session", () => {
-    expect(extractOwnedResourcesFromDispatch("agent.resumeOwned", answer("existing"))).toEqual([]);
+  it.each(["existing", "refused"])("records nothing for an `%s` answer", (status) => {
+    expect(extractOwnedResourcesFromDispatch("agent.resumeOwned", answer(status))).toEqual([]);
   });
 });
 

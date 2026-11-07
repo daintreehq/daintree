@@ -263,8 +263,8 @@ export interface SessionServerDepsSource {
     rawArgs: unknown,
     projectId: string | null,
     signal: AbortSignal,
-    /** Asked once more right before the spawn; throws to refuse. */
-    authorize?: () => void
+    /** Asked once more right before the spawn, for the project it runs in; throws to refuse. */
+    authorize?: (projectId: string) => void
   ) => Promise<import("./agentResumeOwned.js").AgentResumeOwnedAnswer>;
   handleTerminalGetStatusViewless: import("./sessionServer.js").SessionServerDeps["handleTerminalGetStatusViewless"];
   handleTerminalReadLastMessageOwned: import("./sessionServer.js").OwnedMainExecutors["handleTerminalReadLastMessageOwned"];
@@ -1201,8 +1201,8 @@ export function createSessionServerDeps(
                 },
               }
             : {}),
-          refuseViewWrite: () => {
-            const projectId = skillsProjectId();
+          refuseViewWrite: (named) => {
+            const projectId = named ?? skillsProjectId();
             if (projectId === null) return null;
             const standing = relayWriteStanding(projectId, null, true);
             if (standing.kind === "vacant" || standing.kind === "own-view") return null;

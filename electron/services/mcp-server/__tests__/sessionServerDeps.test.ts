@@ -96,19 +96,22 @@ describe("a session in a view reopening a saved session (#16341)", () => {
     return { deps, sessionDeps: createSessionServerDeps(deps, host, { sessionId: "s" }) };
   }
 
-  const driven = (target: McpDriveTarget) => {
-    restore = setMcpDriveTargetResolver(() => target);
+  /** The lease's answer for the view's project; every other project is vacant. */
+  const driven = (target: McpDriveTarget, projectId = WS_A) => {
+    restore = setMcpDriveTargetResolver((asked) =>
+      asked === projectId ? target : { state: "vacant" }
+    );
   };
 
   it("runs while routing is off, a view here drives, or nobody does", () => {
     const { sessionDeps } = inView();
-    expect(sessionDeps.refuseViewWrite?.()).toBeNull();
+    expect(sessionDeps.refuseViewWrite?.(undefined)).toBeNull();
 
     driven({ state: "vacant" });
-    expect(sessionDeps.refuseViewWrite?.()).toBeNull();
+    expect(sessionDeps.refuseViewWrite?.(undefined)).toBeNull();
 
     driven({ state: "live", endpoint: { kind: "local-view", isClosed: () => false } as never });
-    expect(sessionDeps.refuseViewWrite?.()).toBeNull();
+    expect(sessionDeps.refuseViewWrite?.(undefined)).toBeNull();
   });
 
   it("refuses behind another machine's drive, naming it", () => {
@@ -119,30 +122,44 @@ describe("a session in a view reopening a saved session (#16341)", () => {
       holderName: "studio-02",
     });
 
-    const refusal = sessionDeps.refuseViewWrite?.();
+    const refusal = sessionDeps.refuseViewWrite?.(undefined);
 
     expect(refusal?.code).toBe("DRIVEN_ELSEWHERE");
     expect(refusal?.message).toContain("studio-02");
+  });
+
+  it("asks about the project it is named, once the view that showed it has gone", () => {
+    const { deps, sessionDeps } = inView();
+    driven({
+      state: "live",
+      endpoint: { kind: "remote-view", linkSessionId: "link-1", isClosed: () => false } as never,
+      holderName: "studio-02",
+    });
+    deps.sessionStore.sessionWebContentsMap.delete("s");
+
+    expect(sessionDeps.refuseViewWrite?.(undefined)).toBeNull();
+    expect(sessionDeps.refuseViewWrite?.(WS_A)?.code).toBe("DRIVEN_ELSEWHERE");
   });
 
   it("refuses while the holder can't be reached", () => {
     const { sessionDeps } = inView();
     driven({ state: "unavailable", reason: "reserved" });
 
-    expect(sessionDeps.refuseViewWrite?.()?.code).toBe("DRIVEN_ELSEWHERE");
+    expect(sessionDeps.refuseViewWrite?.(undefined)?.code).toBe("DRIVEN_ELSEWHERE");
   });
 
-  it("reopens in the project the view shows", async () => {
+  it("reopens in the project the view shows, asking the caller's own check", async () => {
     const { deps, sessionDeps } = inView();
     const { signal } = new AbortController();
+    const authorize = vi.fn();
 
-    await sessionDeps.handleAgentResumeOwned({ sessionId: "x" }, signal);
+    await sessionDeps.handleAgentResumeOwned({ sessionId: "x" }, signal, authorize);
 
     expect(deps.handleAgentResumeOwned).toHaveBeenCalledWith(
       { sessionId: "x" },
       WS_A,
       signal,
-      undefined
+      authorize
     );
   });
 });

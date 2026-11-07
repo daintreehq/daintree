@@ -2889,25 +2889,36 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           emitToolCallStarted(false, false);
           const relay = deps.relay;
           const refuseWrite = relay
-            ? () => relay.refuseWrite(undefined)
-            : deps.refuseWrite
-              ? () => deps.refuseWrite!(undefined)
-              : deps.refuseViewWrite;
-          const refusal = refuseWrite?.();
+            ? (projectId: string | undefined) => relay.refuseWrite(projectId)
+            : (deps.refuseWrite ?? deps.refuseViewWrite);
+          const refusal = refuseWrite?.(undefined);
           if (refusal) return refuseRelayed(refusal);
           try {
             const envelope = await handleAgentResumeOwned(
               args,
               extra.signal,
               refuseWrite
-                ? () => {
-                    const late = refuseWrite();
+                ? (projectId) => {
+                    const late = refuseWrite(projectId);
                     if (late) throw new RelayWriteRefused(late);
                   }
                 : undefined
             );
             recordDispatchOwnership(envelope);
             outcome = { kind: "result", value: envelope.result };
+            if (grantIssuedAt !== undefined || nativeGrantId !== undefined) {
+              if (grantIssuedAt !== undefined) {
+                sessionStore.grantCache.refresh(sessionId, actionId, grantIssuedAt);
+              }
+              if (nativeGrantId !== undefined) {
+                sessionStore.grantCache.refreshNativeGrant(nativeGrantId);
+              }
+              if (sessionStore.sessions.has(sessionId)) {
+                sessionStore.resetIdleTimer(sessionId);
+              } else if (sessionStore.httpSessions.has(sessionId)) {
+                sessionStore.resetHttpIdleTimer(sessionId);
+              }
+            }
             return buildToolCallResult(envelope.result.result, {
               structuredContent: envelope.result.result as unknown as Record<string, unknown>,
             });

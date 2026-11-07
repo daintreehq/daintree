@@ -44,8 +44,8 @@ export interface AgentSessionPaneRequest {
    */
   signal?: AbortSignal;
   /**
-   * Asked last, with nothing awaited between it and the spawn, so a view that
-   * takes the project's lease during the reads above still stops the launch
+   * Asked right before the spawn is sent, after every read, so a view that
+   * takes the project's lease during those reads still stops the launch
    * (#16341). A message refuses. Only the call that launches is asked: one that
    * joins it isn't, which is how a caller tells its pane from a pane it joined.
    */

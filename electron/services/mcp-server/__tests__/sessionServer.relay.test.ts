@@ -7,6 +7,7 @@ vi.mock("electron", () => ({
   app: { getVersion: () => "0.0.0-test" },
 }));
 
+import { globalAssistantMayRelay } from "../../../../shared/config/globalAssistant.js";
 import { createSessionServer, type SessionServerDeps } from "../sessionServer.js";
 import { SessionStore } from "../sessionStore.js";
 import { RelayDrivenElsewhereError } from "../rendererBridge.js";
@@ -473,13 +474,13 @@ describe("a relayed session (#13493)", () => {
     it("asks once more right before the spawn, and records nothing when refused", async () => {
       const refuseWrite = vi.fn(() => null as { code: string; message: string } | null);
       const handleAgentResumeOwned = vi.fn(
-        async (_args: unknown, _signal: AbortSignal, authorize?: () => void) => {
+        async (_args: unknown, _signal: AbortSignal, authorize?: (projectId: string) => void) => {
           // A takeover lands while the journal and the worktrees are read.
           refuseWrite.mockReturnValue({
             code: "DRIVEN_ELSEWHERE",
             message: "studio-02 has control of this project.",
           });
-          authorize?.();
+          authorize?.("project-1");
           return { result: { ok: true, result: { ...ANSWER, status: "launched" } } };
         }
       );
@@ -492,9 +493,25 @@ describe("a relayed session (#13493)", () => {
 
       expect(errorCode(result as { content: unknown })).toBe("DRIVEN_ELSEWHERE");
       expect(refuseWrite).toHaveBeenCalledTimes(2);
+      expect(refuseWrite).toHaveBeenLastCalledWith("project-1");
       expect(
         relay.store.resourceOwnership.get("relay-session", "terminal", "terminal-1")
       ).toBeUndefined();
+    });
+
+    it("reaches the calling Shell's global Assistant, which withholds the view's resume", async () => {
+      const relay = await relayed("full", {
+        handleAgentResumeOwned: answered("launched"),
+        relay: { shellName: "greg-mbp", global: true, refuseWrite: vi.fn(() => null) },
+      });
+
+      const result = await relay.client.callTool(RESUME);
+
+      expect(result.structuredContent).toMatchObject({ status: "launched" });
+      expect(
+        relay.store.resourceOwnership.get("relay-session", "terminal", "terminal-1")
+      ).toBeDefined();
+      expect(globalAssistantMayRelay("agentSessionHistory.resume")).toBe(false);
     });
 
     it("holds a session in a view to the view's drive rule", async () => {
@@ -680,6 +697,7 @@ describe("host.call on this machine's own assistant session (#13493)", () => {
       handleSkillsLoad: vi.fn(),
       handleProjectRunCheck: vi.fn(),
       handleProjectRunCommand: vi.fn(),
+      handleAgentResumeOwned: vi.fn(),
       handleTerminalGetStatusViewless: vi.fn(),
       handleTerminalReadLastMessageOwned: vi.fn(),
       isTerminalIdInUse: vi.fn(() => false),
@@ -749,6 +767,7 @@ describe("host.call on this machine's own assistant session (#13493)", () => {
       handleSkillsLoad: vi.fn(),
       handleProjectRunCheck: vi.fn(),
       handleProjectRunCommand: vi.fn(),
+      handleAgentResumeOwned: vi.fn(),
       handleTerminalGetStatusViewless: vi.fn(),
       handleTerminalReadLastMessageOwned: vi.fn(),
       isTerminalIdInUse: vi.fn(() => false),
