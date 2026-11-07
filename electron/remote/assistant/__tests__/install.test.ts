@@ -93,9 +93,19 @@ vi.mock("../../../services/HelpSessionService.js", () => ({
     ensureAssistantControl: async () => {},
   },
 }));
-vi.mock("../../../services/globalAssistant.js", () => ({
-  peekGlobalAssistantService: () => null,
+const globalAssistant = vi.hoisted(() => ({
+  /** The views showing it, the one holding its input first. Null: no service. */
+  views: null as number[] | null,
 }));
+vi.mock("../../../services/globalAssistant.js", () => ({
+  peekGlobalAssistantService: () =>
+    globalAssistant.views && {
+      presenterWebContentsId: (canAsk: (id: number) => boolean = () => true) =>
+        globalAssistant.views!.find(canAsk) ?? null,
+    },
+}));
+const askHostApprovalInWindow = vi.hoisted(() => vi.fn(async () => "approved"));
+vi.mock("../../client/viewRequests.js", () => ({ askHostApprovalInWindow }));
 vi.mock("../../../services/ProjectStore.js", () => ({
   projectStore: {
     getProjectById: (id: string) => (["proj-1", "proj-2"].includes(id) ? { id } : null),
@@ -168,6 +178,7 @@ import type { ThrowawayCallAnswer } from "../linkMethods.js";
 import type { HostDescriptor } from "../../../../shared/types/remoteHosts.js";
 import { TEST_HANDSHAKE } from "../../link/__tests__/linkTestUtils.js";
 import { HostRegistry } from "../../client/HostRegistry.js";
+import { markProjectlessView } from "../../../window/projectlessViews.js";
 import { IDLE_RELEASE_MS, RemoteHostManager } from "../../client/RemoteHostManager.js";
 import { TransportError } from "../../client/transport.js";
 
@@ -390,6 +401,54 @@ describe("installHostControl (#13493)", () => {
     expect(allowed).toMatchObject({ ok: true, value: { outcome: "ok" } });
 
     off();
+  });
+
+  describe("asking the person for the global assistant", () => {
+    const canopyView = { id: 77, once: vi.fn() };
+
+    /** What the runtime was given to put a host's question to the person. */
+    function askApproval(): (ask: { helpSessionId: string }) => Promise<unknown> {
+      const runtime = hostControl.runtime as unknown as {
+        deps: { askApproval: (ask: { helpSessionId: string }) => Promise<unknown> };
+      };
+      return runtime.deps.askApproval;
+    }
+
+    beforeEach(() => {
+      askHostApprovalInWindow.mockClear();
+      markProjectlessView(canopyView as never, {} as never);
+      running.set(`${GLOBAL_ASSISTANT_ID}:0`, {
+        sessionId: "global",
+        terminalId: "t-global",
+        projectViewWebContentsId: 0,
+      });
+    });
+
+    afterEach(() => {
+      globalAssistant.views = null;
+      canopyView.once.mock.calls.find(([event]) => event === "destroyed")?.[1]();
+      canopyView.once.mockClear();
+    });
+
+    it("passes over the Canopy window, which has no dialog, for a view that does", async () => {
+      globalAssistant.views = [canopyView.id, 40];
+      const off = installHostControl({ observeHosts: () => [], isHostControlEnabled: () => false });
+
+      await askApproval()({ helpSessionId: "global" });
+
+      expect(askHostApprovalInWindow).toHaveBeenCalledWith(40, expect.anything());
+      off();
+    });
+
+    it("asks nowhere when only the Canopy window shows it", async () => {
+      globalAssistant.views = [canopyView.id];
+      const off = installHostControl({ observeHosts: () => [], isHostControlEnabled: () => false });
+
+      await expect(askApproval()({ helpSessionId: "global" })).resolves.toBeNull();
+
+      expect(askHostApprovalInWindow).not.toHaveBeenCalled();
+      off();
+    });
   });
 
   it("never treats a project lane with no view of its project as this machine's own", () => {

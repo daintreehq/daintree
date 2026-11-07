@@ -85,14 +85,59 @@ describe("a restored host window's bounds", () => {
 // imported here, and a Canopy window that lost its kind would boot the project
 // shell and take a project's place in every window list.
 describe("the Canopy window's wiring", () => {
+  const createWindow = parse("window/createWindow.ts");
+
+  /** The ternaries that branch on being a Canopy window. */
+  function canopyTernaries(): ts.ConditionalExpression[] {
+    const found: ts.ConditionalExpression[] = [];
+    const visit = (node: ts.Node) => {
+      if (
+        ts.isConditionalExpression(node) &&
+        ts.isIdentifier(node.condition) &&
+        node.condition.text === "canopyWindow"
+      ) {
+        found.push(node);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(createWindow);
+    return found;
+  }
+
   it("is built by main.ts as a canopy window", () => {
     const [factory] = callsTo(parse("main.ts"), "setCanopyBrowserWindowFactory");
     const [setup] = factory ? callsTo(factory, "setupBrowserWindow") : [];
+    const options = setup?.arguments[1] as ts.ObjectLiteralExpression;
+    const kind = options.properties.find(
+      (property): property is ts.PropertyAssignment =>
+        ts.isPropertyAssignment(property) &&
+        ts.isIdentifier(property.name) &&
+        property.name.text === "kind"
+    );
 
-    expect(setup && mentions(setup, "kind")).toBe(true);
+    expect(kind && ts.isStringLiteral(kind.initializer) && kind.initializer.text).toBe("canopy");
   });
 
-  it("marks its view as holding no project", () => {
-    expect(callsTo(parse("window/createWindow.ts"), "markProjectlessView")).toHaveLength(1);
+  it("marks only a Canopy window's view as holding no project", () => {
+    const [mark] = callsTo(createWindow, "markProjectlessView");
+    const guard = mark?.parent.parent;
+
+    expect(guard && ts.isIfStatement(guard) && guard.expression.getText()).toBe("canopyWindow");
+  });
+
+  it("passes the Canopy role to a Canopy window's renderer alone", () => {
+    expect(canopyTernaries().some((node) => mentions(node.whenTrue, "CANOPY_WINDOW_ARG"))).toBe(
+      true
+    );
+    expect(canopyTernaries().some((node) => mentions(node.whenFalse, "CANOPY_WINDOW_ARG"))).toBe(
+      false
+    );
+  });
+
+  it("gives a Canopy window no saved bounds, which would become a project window's fallback", () => {
+    const placed = canopyTernaries().find((node) => mentions(node, "createWindowWithState"));
+
+    expect(placed && mentions(placed.whenTrue, "createWindowWithState")).toBe(false);
+    expect(placed && mentions(placed.whenFalse, "createWindowWithState")).toBe(true);
   });
 });

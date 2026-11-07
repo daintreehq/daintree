@@ -33,8 +33,13 @@ type FakeWindow = EventEmitter & {
   close: ReturnType<typeof vi.fn>;
   setTitle: ReturnType<typeof vi.fn>;
   getContentBounds: ReturnType<typeof vi.fn>;
+  contentView: EventEmitter;
   webContents: EventEmitter & { id: number };
-  view: { webContents: EventEmitter & { id: number }; setBounds: ReturnType<typeof vi.fn> };
+  view: {
+    webContents: EventEmitter & { id: number };
+    setBounds: ReturnType<typeof vi.fn>;
+    getBounds: ReturnType<typeof vi.fn>;
+  };
 };
 
 let nextId = 1;
@@ -53,10 +58,12 @@ function makeWindow(): FakeWindow {
   win.focus = vi.fn();
   win.setTitle = vi.fn();
   win.getContentBounds = vi.fn(() => ({ x: 40, y: 40, width: 900, height: 700 }));
+  win.contentView = new EventEmitter();
   win.webContents = Object.assign(new EventEmitter(), { id: 500 + id });
   win.view = {
     webContents: Object.assign(new EventEmitter(), { id: 1000 + id }),
     setBounds: vi.fn(),
+    getBounds: vi.fn(() => ({ x: 0, y: 0, width: 900, height: 700 })),
   };
   win.close = vi.fn(() => {
     destroyed = true;
@@ -153,6 +160,24 @@ describe("the Canopy window", () => {
       width: 1400,
       height: 1000,
     });
+  });
+
+  it("grows back into height the content area regains with no resize", () => {
+    openCanopyWindow(noWatch);
+    made[0]!.view.getBounds.mockReturnValue({ x: 0, y: 0, width: 900, height: 670 });
+
+    made[0]!.contentView.emit("bounds-changed");
+
+    expect(made[0]!.view.setBounds).toHaveBeenCalledWith({ x: 0, y: 0, width: 900, height: 700 });
+  });
+
+  it("stays full size while the content area shrinks under it, so the PTY keeps its size", () => {
+    openCanopyWindow(noWatch);
+    made[0]!.getContentBounds.mockReturnValue({ x: 40, y: 40, width: 900, height: 670 });
+
+    made[0]!.contentView.emit("bounds-changed");
+
+    expect(made[0]!.view.setBounds).not.toHaveBeenCalled();
   });
 
   it.each([

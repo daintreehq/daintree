@@ -48,6 +48,15 @@ function keepViewFillingWindow(win: BrowserWindow, view: WebContentsView): void 
   win.on("enter-full-screen", fill);
   win.on("leave-full-screen", fill);
   win.on("restore", fill);
+  // Linux's auto-hidden menu bar gives its height back with no `resize`, as
+  // ProjectViewManager's growth handler says. Only growth: while the menu is
+  // open the view stays full size, clipped, rather than resize the PTY twice.
+  win.contentView.on("bounds-changed", () => {
+    if (win.isDestroyed()) return;
+    const area = win.getContentBounds();
+    const bounds = view.getBounds();
+    if (bounds.width < area.width || bounds.height < area.height) fill();
+  });
 }
 
 /**
