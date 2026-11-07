@@ -4151,6 +4151,14 @@ interface PluginMcpCaller {
     readonly projectId: string;
     readonly terminalId: string;
     readonly launchAgentIdHint?: string;
+    /**
+     * `"assistant"` when the host issued this credential to the project's Daintree
+     * Assistant; absent for every other launch. Fixed at issue and never taken
+     * from what the client sends. It describes the credential, so it is no more
+     * proof of what is calling than the rest of this record, and never proof that
+     * a person asked: other agents' replies are submitted into the Assistant's pane.
+     */
+    readonly consumer?: "assistant";
 }
 /** A JSON Schema object describing a tool's arguments or result. Must be `type: "object"`. */
 type PluginMcpJsonSchema = {

@@ -95,6 +95,7 @@ function projectMcpCaller(caller: PluginMcpCaller): PluginMcpCaller {
     ...(caller.launchAgentIdHint !== undefined
       ? { launchAgentIdHint: caller.launchAgentIdHint }
       : {}),
+    ...(caller.consumer !== undefined ? { consumer: caller.consumer } : {}),
   };
 }
 
