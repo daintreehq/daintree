@@ -67,7 +67,7 @@ vi.mock("../TerminalAddonManager", () => ({
 type WatchTestService = {
   instances: Map<string, ManagedTerminal>;
   prewarmTerminal: (id: string, type: string, options: Record<string, unknown>) => unknown;
-  holdGeometry: (id: string) => () => void;
+  notifyUserInput: (id: string, data?: string, options?: { automatic?: boolean }) => void;
   runResizePass: (ids: string[], options?: { immediate?: boolean }) => void;
   destroy: (id: string) => void;
   dispose: () => void;
