@@ -71,6 +71,7 @@ import { PERF_MARKS } from "../../../../shared/perf/marks.js";
 import { readHydrateTerminalConfig } from "../../../services/AppHydrationService.js";
 import { consumePrefetchedHydrateResult } from "../../../services/prefetchHydrateCache.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
+import { isProjectlessAppView } from "../../../window/projectlessViews.js";
 import { notifyAppViewPainted } from "../../../setup/deepLinkInstall.js";
 import { resolveScopedProjectForIpcContext } from "../../projectContext.js";
 import { getValidatedOverrides } from "../keybinding.js";
@@ -315,6 +316,10 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // A remote Shell merges only this machine's host half of the answer, so
     // nothing addressed to this machine's own windows may be consumed for it.
     const forRemoteShell = ctx?.endpoint?.kind === "remote-view";
+    // Nor for a view that holds no project: it has nowhere to show any of them,
+    // and the project window that does would never hear.
+    const leavesOneShots =
+      forRemoteShell || (ctx !== undefined && isProjectlessAppView(ctx.webContentsId));
 
     // Until the legacy global record has an owner, the prefetch cache cannot
     // stand in for this handler: `buildSwitchHydrateResult` performs no writes,
@@ -340,7 +345,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // likely to be waiting.
     const crashService = getCrashRecoveryService();
     const canUseCrashPanelFilter =
-      !forRemoteShell &&
+      !leavesOneShots &&
       (!workspaceId ||
         (currentProject !== null &&
           (persistedLegacyOwnerId === undefined || persistedLegacyOwnerId === workspaceId)));
@@ -410,10 +415,10 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         skippedPanelCount: 0,
         crashCount: cacheGuard.getCrashCount(),
         lastCrashAt: cacheGuard.getLastCrashTimestamp(),
-        settingsRecovery: forRemoteShell ? null : consumePendingSettingsRecovery(),
+        settingsRecovery: leavesOneShots ? null : consumePendingSettingsRecovery(),
         // Boot-time DB recovery is one-shot and predates the prefetch, so it is
         // consumed live here — the cached payload always carries a null for it.
-        databaseRecovery: forRemoteShell ? null : getDatabaseMaintenanceService().consumeRecovery(),
+        databaseRecovery: leavesOneShots ? null : getDatabaseMaintenanceService().consumeRecovery(),
         // Crash-loop quarantine notifications are gated on safe mode; the
         // fast path runs only when safe mode is inactive, so clear the field.
         crashLoopStateRecovery: null,
@@ -874,7 +879,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     );
 
     return {
-      ...readShellHydrateFields({ consumeOneShots: !forRemoteShell }),
+      ...readShellHydrateFields({ consumeOneShots: !leavesOneShots }),
       ...readHostPlatformFields(),
       appState: appState as import("../../../../shared/types/ipc/app.js").AppState,
       terminalConfig: readHydrateTerminalConfig(),
