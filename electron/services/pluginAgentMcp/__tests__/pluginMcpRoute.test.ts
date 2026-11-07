@@ -458,6 +458,8 @@ describe("PluginMcpRoute", () => {
   });
 
   it("leaves consumer off the caller of a grant issued to an agent pane", async () => {
+    // The answer on record must not decide it: only the grant does.
+    setProjectAssistantAgentMcpAccess(PROJECT_A, INSTANCE, "read-write");
     const { token } = issue();
     const { client } = await connect(token);
     await client.callTool({ name: "lookup", arguments: { id: "r-1" } });
