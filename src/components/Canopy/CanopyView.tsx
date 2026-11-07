@@ -243,14 +243,18 @@ export function CanopyView({ frame = CANOPY_DIALOG_FRAME }: { frame?: CanopyFram
     if (!panelOpen) setBulkTargets(null);
   }, [panelOpen]);
   // A standalone host shows the inbox for as long as it mounts it: nothing else
-  // opens it there. Hidden, it stays shut, as it does everywhere.
+  // opens it there. Hidden, it stays shut as it does everywhere, and comes back
+  // with Canopy. Shut already, the host left the place it stood for the next opening.
   const standalone = frame.host === "standalone";
+  const hidden = useCanopyStore((s) => s.mode === "hidden");
   useLayoutEffect(() => {
-    if (!standalone) return;
-    const { open, close } = useCanopyStore.getState();
-    open();
-    return close;
-  }, [standalone]);
+    if (!standalone || hidden) return;
+    useCanopyStore.getState().open();
+    return () => {
+      const { isOpen, close } = useCanopyStore.getState();
+      if (isOpen) close();
+    };
+  }, [standalone, hidden]);
   const transportFor = useCallback(
     (target: BulkTarget) =>
       canopyBulkTransport(target.hostId, {

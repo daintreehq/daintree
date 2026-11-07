@@ -1,4 +1,4 @@
-import { useLayoutEffect, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
 import { AppDialog, AppDialogWindowChrome, type AppDialogProps } from "@/components/ui/AppDialog";
 import {
   isTopmostDialogBackstop,
@@ -53,11 +53,17 @@ function StandaloneSurface({
   close: () => void;
   children: ReactNode;
 }) {
+  // Read when Escape lands: registering again for a new closer would put this
+  // surface back on top of a dialog open over it, as AppDialog's comment says.
+  const closeRef = useRef(close);
+  useEffect(() => {
+    closeRef.current = close;
+  }, [close]);
   // Escape reaches the host as it reaches the dialog: from the list, after the
   // search has cleared, and never past a dialog or a menu open inside the inbox.
   useLayoutEffect(() => {
     if (!isOpen) return;
-    const closeThis = () => close();
+    const closeThis = () => closeRef.current();
     const unregister = registerDialogEscapeBackstop(closeThis);
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.isComposing || event.repeat) return;
@@ -70,7 +76,7 @@ function StandaloneSurface({
       document.removeEventListener("keydown", onKeyDown);
       unregister();
     };
-  }, [isOpen, close]);
+  }, [isOpen]);
   if (!isOpen) return null;
   return (
     <AppDialogWindowChrome onClose={close}>

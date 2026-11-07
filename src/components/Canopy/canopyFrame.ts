@@ -36,7 +36,7 @@ export interface CanopyPanelHold {
  * What hosts Canopy's inbox, and what only a host can decide. The dialog in a
  * project view is one; a host with no dialog and no project is the other. No
  * decision has a default, so a new host can't inherit moving a project window
- * it doesn't have.
+ * it doesn't have. A host keeps one frame for as long as it mounts the inbox.
  */
 export interface CanopyFrame {
   host: "dialog" | "standalone";

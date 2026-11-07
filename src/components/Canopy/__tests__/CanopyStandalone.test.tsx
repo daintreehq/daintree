@@ -10,6 +10,7 @@ import type {
   CanopyTrashEntry,
 } from "@shared/types/ipc/canopy";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
+import { AppDialog } from "@/components/ui/AppDialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 /** The app root provides tooltips; the rows' action buttons need one. No project provider is here. */
@@ -132,12 +133,12 @@ vi.mock("@/lib/viewCacheState", async (importOriginal) => ({
 }));
 
 import { CanopyView } from "../CanopyView";
-import { standaloneCanopyFrame, type CanopyFrame } from "../canopyFrame";
+import type { CanopyAssistantItem } from "../canopyAssistants";
+import { standaloneCanopyFrame } from "../canopyFrame";
 import { CANOPY_TITLE } from "../canopyTerms";
 import { _resetCanopyWatchBurstForTests } from "../CanopyTerminal";
 import { __resetCanopyPlaceForTests } from "../CanopyPlace";
 import { __resetCanopySeenForTests } from "@/lib/canopySeen";
-import { registerDialogEscapeBackstop } from "@/lib/dialogEscapeBackstop";
 import { resolveCanopyReplyDictation } from "@/services/canopyReplyDictation";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { load as loadTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
@@ -150,8 +151,6 @@ import { useUIStore } from "@/store/uiStore";
 await loadTerminalService();
 
 const NOW = Date.now();
-/** Past the terminal's wait between watches, which spares a run stepped straight past. */
-const PAST_WATCH_BURST_MS = 200;
 
 const snapshot: CanopySnapshot = {
   mode: "on",
@@ -273,13 +272,12 @@ function installElectron() {
   return canopy;
 }
 
-function hostFrame(overrides: Partial<CanopyFrame> = {}) {
+function hostFrame(refusal: string | null = null) {
   const decisions = {
     close: vi.fn(),
     goToRun: vi.fn(),
     restoreElsewhere: vi.fn(),
-    openAssistant: vi.fn(async (): Promise<string | null> => null),
-    ...overrides,
+    openAssistant: vi.fn(async (_item: CanopyAssistantItem) => refusal),
   };
   return { ...decisions, frame: standaloneCanopyFrame(decisions) };
 }
@@ -303,7 +301,9 @@ function selectedRun() {
   return document.querySelector("[data-canopy-card][aria-selected=true]")?.id;
 }
 
+/** The terminal waits a moment between watches, sparing a run stepped straight past. */
 async function answerWatch(runId: string, watchId: number, screen: string) {
+  await vi.waitFor(() => expect(watches.some((watch) => watch.runId === runId)).toBe(true));
   const watch = watches.find((candidate) => candidate.runId === runId)!;
   await act(async () => watch.answer({ watchId, snapshot: { data: screen, cols: 80, rows: 24 } }));
 }
@@ -357,6 +357,8 @@ afterEach(() => {
     orders: {},
     workOf: null,
     hostId: null,
+    resume: null,
+    trashExpanded: false,
   });
   window.localStorage.removeItem("daintree-canopy-order");
   xterm.current = null;
@@ -383,6 +385,8 @@ describe("Canopy's inbox with no dialog and no project", () => {
     expect(canopy.setScope).toHaveBeenCalledWith(null);
     expect(canopy.setScope).not.toHaveBeenCalledWith(expect.any(String));
     expect(useCanopyStore.getState().scope).toBe("project");
+    expect(useCanopyStore.getState().orders.all).toBeDefined();
+    expect(useCanopyStore.getState().orders.project).toBeUndefined();
   });
 
   it("takes no scope from a view it stands in, whatever the view says it is", async () => {
@@ -418,13 +422,9 @@ describe("Canopy's inbox with no dialog and no project", () => {
     await act(async () => {
       fireEvent.click(card(other));
     });
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, PAST_WATCH_BURST_MS));
-    });
     expect(selectedRun()).toBe(`canopy-card-${other}`);
-    expect(canopy.watchTerminal).toHaveBeenCalledWith(other, expect.anything());
-    expect(canopy.unwatchTerminal).toHaveBeenCalledWith(7);
     await answerWatch(other, 8, "OTHER");
+    expect(canopy.unwatchTerminal).toHaveBeenCalledWith(7);
     expect(xterm.current!.writes).toEqual(["OTHER"]);
   });
 
@@ -459,6 +459,7 @@ describe("Canopy's inbox with no dialog and no project", () => {
     });
     expect(dispatchMock).not.toHaveBeenCalled();
     expect(switchToHostMock).not.toHaveBeenCalled();
+    expect(host.close).not.toHaveBeenCalled();
     expect(useCanopyStore.getState().isOpen).toBe(true);
     expect(surface()).not.toBeNull();
   });
@@ -487,28 +488,76 @@ describe("Canopy's inbox with no dialog and no project", () => {
     render(<CanopyView frame={host.frame} />);
     await settle();
 
-    const menu = document.createElement("div");
-    menu.setAttribute("role", "menu");
-    menu.setAttribute("data-state", "open");
-    document.body.appendChild(menu);
+    fireEvent.contextMenu(card("first"), { clientX: 5, clientY: 5 });
+    const items = await within(document.body).findAllByRole("menuitem", { hidden: true });
+    await act(async () => {
+      fireEvent.keyDown(items[0]!, { key: "Escape" });
+    });
+    await vi.waitFor(() => expect(document.querySelector("[role=menu]")).toBeNull());
+    expect(host.close).not.toHaveBeenCalled();
+
     await act(async () => {
       fireEvent.keyDown(card("first"), { key: "Escape" });
     });
-    menu.remove();
+    expect(host.close).toHaveBeenCalledTimes(1);
+  });
 
+  it("keeps Escape for a dialog open over the inbox, even past a new closer", async () => {
+    const host = hostFrame();
+    const closeDialog = vi.fn();
+    const shown = (frame: typeof host.frame, dialogOpen: boolean) => (
+      <>
+        <CanopyView frame={frame} />
+        <AppDialog isOpen={dialogOpen} onClose={closeDialog}>
+          <AppDialog.Title>Park agent</AppDialog.Title>
+        </AppDialog>
+      </>
+    );
+    const view = render(shown(host.frame, false));
+    await settle();
+    view.rerender(shown(host.frame, true));
+    await settle();
+
+    const replaced = hostFrame();
+    view.rerender(shown(replaced.frame, true));
+    await settle();
+    await act(async () => {
+      fireEvent.keyDown(document.body, { key: "Escape" });
+    });
+    expect(closeDialog).toHaveBeenCalledTimes(1);
+    expect(host.close).not.toHaveBeenCalled();
+    expect(replaced.close).not.toHaveBeenCalled();
+
+    view.rerender(shown(replaced.frame, false));
+    await settle();
+    await act(async () => {
+      fireEvent.keyDown(document.body, { key: "Escape" });
+    });
+    expect(replaced.close).toHaveBeenCalledTimes(1);
     expect(host.close).not.toHaveBeenCalled();
   });
 
-  it("keeps Escape for a dialog open over the inbox", async () => {
+  it("leaves a held Escape, and one an input method took, alone", async () => {
     const host = hostFrame();
     render(<CanopyView frame={host.frame} />);
     await settle();
 
-    const unregister = registerDialogEscapeBackstop(() => {});
     await act(async () => {
-      fireEvent.keyDown(card("first"), { key: "Escape" });
+      fireEvent.keyDown(card("first"), { key: "Escape", repeat: true });
+      fireEvent.keyDown(card("first"), { key: "Escape", isComposing: true });
     });
-    unregister();
+
+    expect(host.close).not.toHaveBeenCalled();
+  });
+
+  it("leaves Escape in the terminal to the agent", async () => {
+    const host = hostFrame();
+    render(<CanopyView frame={host.frame} />);
+    await settle();
+
+    await act(async () => {
+      fireEvent.keyDown(document.querySelector("[data-canopy-terminal]")!, { key: "Escape" });
+    });
 
     expect(host.close).not.toHaveBeenCalled();
   });
@@ -553,9 +602,6 @@ describe("Canopy's inbox with no dialog and no project", () => {
     await settle();
     await act(async () => {
       fireEvent.click(card("first"));
-    });
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, PAST_WATCH_BURST_MS));
     });
     await answerWatch("first", 7, "SCREEN");
 
@@ -659,7 +705,7 @@ describe("Canopy's inbox with no dialog and no project", () => {
 
     it("is opened by the host, and says why it couldn't be", async () => {
       const refusal = "This assistant's session has ended.";
-      const host = hostFrame({ openAssistant: vi.fn(async () => refusal) });
+      const host = hostFrame(refusal);
       render(<CanopyView frame={host.frame} />);
       await settle();
       await chooseAssistant();
@@ -667,6 +713,7 @@ describe("Canopy's inbox with no dialog and no project", () => {
       await pressAssistantButton("Open in Assistant");
 
       expect(host.openAssistant).toHaveBeenCalledTimes(1);
+      expect(host.openAssistant.mock.calls[0]![0].subject).toEqual(assistantEntry().subject);
       expect(openInAssistantMock).not.toHaveBeenCalled();
       expect(surface()!.textContent).toContain(refusal);
       expect(host.close).not.toHaveBeenCalled();
@@ -683,6 +730,7 @@ describe("Canopy's inbox with no dialog and no project", () => {
       expect(host.openAssistant).toHaveBeenCalledTimes(1);
       expect(host.close).not.toHaveBeenCalled();
       expect(useCanopyStore.getState().isOpen).toBe(true);
+      expect(surface()).not.toBeNull();
     });
 
     it("leaves the remembered scope alone when it shows the assistant's work", async () => {
@@ -697,24 +745,63 @@ describe("Canopy's inbox with no dialog and no project", () => {
     });
   });
 
-  it("shows nothing once Canopy is hidden, and opens on nothing while it is", async () => {
-    const first = render(<CanopyView frame={hostFrame().frame} />);
+  it("shows nothing once Canopy is hidden, and comes back with it", async () => {
+    render(<CanopyView frame={hostFrame().frame} />);
     await settle();
     expect(surface()).not.toBeNull();
 
     await act(async () => {
-      useCanopyStore.getState().applySnapshot({ ...snapshot, mode: "hidden" });
+      useCanopyStore.getState().applySnapshot({ ...snapshot, mode: "hidden", activated: false });
     });
     expect(surface()).toBeNull();
-    first.unmount();
 
+    await act(async () => {
+      useCanopyStore.getState().applySnapshot({ ...snapshot, mode: "unset" });
+    });
+    await settle();
+    expect(surface()).not.toBeNull();
+    expect(card("first")).not.toBeNull();
+  });
+
+  it("reads nothing at all when it opens on a hidden Canopy", async () => {
+    useCanopyStore.setState({
+      mode: "hidden",
+      snapshot: { ...snapshot, mode: "hidden", activated: false },
+    });
     render(<CanopyView frame={hostFrame().frame} />);
     await settle();
+
     expect(surface()).toBeNull();
+    expect(useCanopyStore.getState().isOpen).toBe(false);
+    expect(canopy.setActive).not.toHaveBeenCalled();
+    expect(canopy.watchTerminal).not.toHaveBeenCalled();
+  });
+
+  it("keeps the place a host closed for, when it unmounts the inbox after", async () => {
+    let closeForTerminal: (listedRunId: string) => void = () => {};
+    const host = hostFrame();
+    host.goToRun.mockImplementation(
+      (_run, panel: { closeForTerminal: typeof closeForTerminal }) => {
+        closeForTerminal = panel.closeForTerminal;
+      }
+    );
+    const view = render(<CanopyView frame={host.frame} />);
+    await settle();
+    await act(async () => {
+      fireEvent.keyDown(card("first"), { key: "Enter" });
+    });
+
+    await act(async () => closeForTerminal("first"));
+    view.unmount();
+
+    expect(useCanopyStore.getState().resume?.runId).toBe("first");
   });
 
   it("lets everything go with the host", async () => {
-    const view = render(<CanopyView frame={hostFrame().frame} />);
+    const host = hostFrame();
+    const unsubscribe = vi.fn();
+    canopy.onSnapshotUpdated.mockReturnValue(unsubscribe);
+    const view = render(<CanopyView frame={host.frame} />);
     await settle();
     expect(useCanopyStore.getState().isOpen).toBe(true);
     const shownRun = selectedRun()!.replace(/^canopy-card-/, "");
@@ -726,5 +813,11 @@ describe("Canopy's inbox with no dialog and no project", () => {
     expect(useCanopyStore.getState().isOpen).toBe(false);
     expect(canopy.setActive).toHaveBeenLastCalledWith(false);
     expect(canopy.unwatchTerminal).toHaveBeenCalledWith(7);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      fireEvent.keyDown(document.body, { key: "Escape" });
+    });
+    expect(host.close).not.toHaveBeenCalled();
   });
 });
