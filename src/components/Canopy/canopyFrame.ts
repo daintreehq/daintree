@@ -123,9 +123,7 @@ export function standaloneCanopyFrame(
   return { ...decisions, host: "standalone", workspaceId: () => null };
 }
 
-const CanopyFrameContext = createContext<CanopyFrame>(CANOPY_DIALOG_FRAME);
-
-export const CanopyFrameProvider = CanopyFrameContext;
+export const CanopyFrameContext = createContext<CanopyFrame>(CANOPY_DIALOG_FRAME);
 
 export function useCanopyFrame(): CanopyFrame {
   return use(CanopyFrameContext);

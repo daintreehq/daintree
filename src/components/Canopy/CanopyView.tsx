@@ -57,7 +57,7 @@ import { CANOPY_TITLE } from "./canopyTerms";
 import { CanopyHeaderCenter, CanopyHostPicker, useCanopyHostRows } from "./CanopyHostPicker";
 import {
   CANOPY_DIALOG_FRAME,
-  CanopyFrameProvider,
+  CanopyFrameContext,
   useCanopyFrame,
   type CanopyFrame,
 } from "./canopyFrame";
@@ -263,7 +263,7 @@ export function CanopyView({ frame = CANOPY_DIALOG_FRAME }: { frame?: CanopyFram
     []
   );
   return (
-    <CanopyFrameProvider value={frame}>
+    <CanopyFrameContext value={frame}>
       <CanopyPanel onEnableAll={openBulk} />
       <CanopyBulkEnableDialog
         isOpen={bulkTargets !== null}
@@ -271,7 +271,7 @@ export function CanopyView({ frame = CANOPY_DIALOG_FRAME }: { frame?: CanopyFram
         targets={bulkTargets ?? NO_BULK_TARGETS}
         deps={{ transportFor }}
       />
-    </CanopyFrameProvider>
+    </CanopyFrameContext>
   );
 }
 

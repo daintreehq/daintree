@@ -295,6 +295,7 @@ export function useCanopyInboxActions({
       },
     };
   }, [
+    frame,
     readNow,
     focusCardNow,
     selectNow,
