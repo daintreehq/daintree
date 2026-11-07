@@ -69,6 +69,7 @@ import {
   sendToRenderer,
   broadcastToRenderer,
   broadcastToProjectRenderers,
+  getProjectRendererTargets,
   broadcastToVisibleRenderers,
   sendToRendererContext,
   sendToWebContents,
@@ -84,6 +85,7 @@ import {
   consumeRestoreQuota,
   _resetRateLimitQueuesForTest,
 } from "../utils.js";
+import { markProjectlessView } from "../../window/projectlessViews.js";
 import { _resetIpcGuardForTesting, markIpcSecurityReady } from "../ipcGuard.js";
 
 describe("ipc utils", () => {
@@ -348,6 +350,38 @@ describe("broadcastToProjectRenderers", () => {
     vi.clearAllMocks();
     hasRegisteredProjectViewsMock.mockReturnValue(false);
     getWebContentsForProjectMock.mockReturnValue([]);
+  });
+
+  describe("with only a view that holds no project up", () => {
+    const send = vi.fn();
+    const view = { id: 77, isDestroyed: () => false, send, once: vi.fn() };
+
+    beforeEach(() => {
+      send.mockClear();
+      browserWindowGetAllWindowsMock.mockReturnValue([
+        { isDestroyed: () => false, webContents: view },
+      ]);
+      markProjectlessView(view as never, {} as never);
+    });
+
+    afterEach(() => {
+      browserWindowGetAllWindowsMock.mockReturnValue([]);
+      view.once.mock.calls.find(([event]) => event === "destroyed")?.[1]();
+    });
+
+    it("keeps one project's push from it, so a push asking a project to act finds no one", () => {
+      broadcastToProjectRenderers("p1", "terminal:status", { id: "t1" });
+
+      expect(send).not.toHaveBeenCalled();
+      expect(getProjectRendererTargets("p1")).toEqual([]);
+    });
+
+    it("still gives it what is for every view", () => {
+      broadcastToProjectRenderers(null, "canopy:snapshot-updated", { mode: "on" });
+
+      expect(send).toHaveBeenCalledWith("canopy:snapshot-updated", { mode: "on" });
+      expect(getProjectRendererTargets(null)).toEqual([view]);
+    });
   });
 
   it("sends only to the owning project's views when registered", () => {

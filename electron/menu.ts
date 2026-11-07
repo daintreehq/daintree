@@ -24,11 +24,8 @@ import { getPluginMenuItems } from "./services/pluginMenuRegistry.js";
 import { getPluginToursForProject } from "./services/plugin/PluginContributionBroadcaster.js";
 import { isPluginVisibleInProject } from "./services/plugin/projectPluginVisibility.js";
 import { evaluateWhen } from "./services/WhenClauseService.js";
-import {
-  getAppWebContents,
-  getProjectForWebContents,
-  isProjectlessWindow,
-} from "./window/webContentsRegistry.js";
+import { getAppWebContents, getProjectForWebContents } from "./window/webContentsRegistry.js";
+import { isProjectlessWindow } from "./window/projectlessViews.js";
 import { openFolderInNewWindow } from "./window/newWindowOpen.js";
 import {
   isWindowOnRemoteHost,

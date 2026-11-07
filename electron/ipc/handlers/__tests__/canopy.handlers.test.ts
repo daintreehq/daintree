@@ -873,6 +873,20 @@ describe("canopy IPC", () => {
     expect(active(snapshot)).toBe(false);
   });
 
+  it("leaves nothing behind when a view closes with a terminal showing", async () => {
+    const release = vi.fn();
+    state.releaseMirror = release;
+    const sender = fakeSender(3);
+    await invoke(CANOPY_METHOD_CHANNELS.setActive, sender, true);
+    await invoke(CANOPY_METHOD_CHANNELS.watchTerminal, sender, "run-1", { spawnedAt: 100 });
+    expect(release).not.toHaveBeenCalled();
+
+    sender.emit("destroyed");
+
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(active(await invoke(CANOPY_METHOD_CHANNELS.getSnapshot, fakeSender(4)))).toBe(false);
+  });
+
   it("stays active while any view has the panel open", async () => {
     const a = fakeSender(1);
     const b = fakeSender(2);

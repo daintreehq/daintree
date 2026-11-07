@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, cleanup, fireEvent, render as rtlRender, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render as rtlRender,
+  screen,
+  within,
+} from "@testing-library/react";
 import type { ReactElement } from "react";
 import type { AgentDirectory, AgentDirectoryLiveEntry } from "@shared/types/agentDirectory";
 import type {
@@ -439,6 +446,35 @@ describe("Canopy's inbox with no dialog and no project", () => {
     await settle();
 
     expect(document.querySelector("[data-canopy-detail] .cm-editor")).not.toBeNull();
+  });
+
+  it("offers no way to a pane where the host has none, by button, menu or key", async () => {
+    const { frame } = hostFrame();
+    render(<CanopyView frame={{ ...frame, goToRun: null }} />);
+    await settle();
+
+    await act(async () => {
+      fireEvent.click(card("second"));
+    });
+    await settle();
+    expect(surface()!.textContent).not.toContain("Go to terminal");
+
+    await act(async () => {
+      fireEvent.contextMenu(card("second"));
+    });
+    await settle();
+    expect(screen.getByRole("menuitem", { name: /Reply/ })).toBeTruthy();
+    expect(screen.queryByRole("menuitem", { name: /Go to terminal/ })).toBeNull();
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(card("second"), { key: "Enter" });
+    });
+    expect(dispatchMock).not.toHaveBeenCalled();
+    expect(switchToHostMock).not.toHaveBeenCalled();
+    expect(surface()).not.toBeNull();
   });
 
   it("hands Go to terminal to the host, and neither moves nor closes anything itself", async () => {

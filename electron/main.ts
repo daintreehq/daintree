@@ -580,8 +580,6 @@ if (!gotTheLock) {
     });
   }
 
-  setCanopyBrowserWindowFactory(() => setupBrowserWindow(__dirname, { kind: "canopy" }));
-
   // A new window for a folder is routed like every other open (#12594): an
   // empty window other than the one that asked is reused, and a window already
   // showing the project is brought forward instead (#12596) — decided before
@@ -1082,6 +1080,8 @@ if (!gotTheLock) {
     }
     return windowId;
   }
+
+  setCanopyBrowserWindowFactory(() => setupBrowserWindow(__dirname, { kind: "canopy" }));
 
   function readLaunchSignals(): LaunchIntentSignals {
     return {

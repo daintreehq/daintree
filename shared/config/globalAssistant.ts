@@ -159,6 +159,7 @@ export const GLOBAL_ALLOWED_TOOLS: ReadonlySet<string> = new Set([
  * guard test can tell a deliberate refusal from a tool nobody placed.
  */
 export const GLOBAL_WITHHELD_TOOLS: ReadonlySet<string> = new Set([
+  "canopy.openWindow",
   "project.runCommand",
   "project.runCheck",
   "project.openOnHost",

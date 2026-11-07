@@ -984,6 +984,25 @@ describe("registerAppLifecycleHandlers – window-all-closed", () => {
       expect(event.preventDefault).not.toHaveBeenCalled();
     });
 
+    it("doesn't warn of a quit while a window with no project keeps the app up", async () => {
+      const onLastWindowClose = vi.fn(() => true);
+      const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");
+      const { markProjectlessView } = await import("../../window/projectlessViews.js");
+      const listed: { browserWindow?: unknown } = {};
+      registerAppLifecycleHandlers(
+        makeOpts({ onLastWindowClose, windowRegistry: { all: () => [listed] } as never })
+      );
+      const { fakeWin, winListeners } = createWindow();
+      listed.browserWindow = fakeWin;
+      const canopyView = { id: 501, once: vi.fn() };
+      markProjectlessView(canopyView as never, { isDestroyed: () => false } as never);
+
+      winListeners.close!(closeEvent());
+
+      expect(onLastWindowClose).not.toHaveBeenCalled();
+      canopyView.once.mock.calls.find(([event]) => event === "destroyed")?.[1]();
+    });
+
     it("leaves a window alone while another stays open", async () => {
       const onLastWindowClose = vi.fn(() => true);
       const { registerAppLifecycleHandlers } = await import("../appLifecycle.js");

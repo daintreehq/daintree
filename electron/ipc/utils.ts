@@ -10,8 +10,8 @@ import {
   getWebContentsForProject,
   hasRegisteredProjectViews,
   isCachedViewWebContents,
-  isProjectlessAppView,
 } from "../window/webContentsRegistry.js";
+import { isProjectlessAppView } from "../window/projectlessViews.js";
 import { getWindowRegistry } from "../window/windowRef.js";
 import { isViewHydrated } from "../window/viewHydration.js";
 import type { IpcInvokeMap, IpcEventMap } from "../types/index.js";

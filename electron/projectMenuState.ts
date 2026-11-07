@@ -1,7 +1,7 @@
 import { Menu } from "electron";
 import { projectStore } from "./services/ProjectStore.js";
 import { getWindowRegistry } from "./window/windowRef.js";
-import { getProjectlessWindows } from "./window/webContentsRegistry.js";
+import { getProjectlessWindows } from "./window/projectlessViews.js";
 
 // Stable ids for the File-menu items gated on "is a project open". Live mutation
 // through Menu.getApplicationMenu().getMenuItemById() is the only way to keep

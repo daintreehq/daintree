@@ -596,7 +596,11 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // 25_780 → 26_000 for `agent.resumeOwned` (#16341), measured at 25_992 B. The
   // prose has to say a pane that holds the session isn't handed over, and that a
   // starting process isn't a ready agent. Off the external surface.
-  const MAX_COHORT_TOTAL_BYTES = 26_000;
+  // 26_000 → 26_150 for `canopy.openWindow` (#16335), measured at 26_125 B (+133
+  // over develop's 25_992): the assistant can open Canopy's own window. It has to
+  // say what the window shows, and that an open one comes forward instead.
+  // Assistant-only, off the external surface.
+  const MAX_COHORT_TOTAL_BYTES = 26_150;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

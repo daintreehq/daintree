@@ -1,6 +1,7 @@
 import type { Project } from "../types/index.js";
 import { projectStore } from "../services/ProjectStore.js";
-import { getWindowForWebContents, isProjectlessAppView } from "../window/webContentsRegistry.js";
+import { getWindowForWebContents } from "../window/webContentsRegistry.js";
+import { isProjectlessAppView } from "../window/projectlessViews.js";
 import { getProjectIdFromSenderUrl } from "./senderIdentity.js";
 import type { HandlerDependencies, IpcContext } from "./types.js";
 

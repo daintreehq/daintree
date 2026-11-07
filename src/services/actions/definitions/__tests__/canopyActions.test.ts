@@ -51,6 +51,98 @@ describe("canopy actions", () => {
     }
   );
 
+  describe("with a Canopy window", () => {
+    const focus = vi.fn<() => Promise<boolean>>();
+    const open = vi.fn<() => Promise<void>>(async () => {});
+
+    function installWindowApi(): void {
+      Object.defineProperty(window, "electron", {
+        value: { canopyWindow: { focus, open } },
+        configurable: true,
+        writable: true,
+      });
+    }
+
+    afterEach(() => {
+      focus.mockReset();
+      open.mockClear();
+    });
+
+    it("brings the window forward instead of opening the panel here", async () => {
+      installWindowApi();
+      focus.mockResolvedValue(true);
+      useCanopyStore.setState({ mode: "on", isOpen: false });
+
+      await definition("canopy.toggle").run({}, {} as never);
+
+      expect(focus).toHaveBeenCalledTimes(1);
+      expect(useCanopyStore.getState().isOpen).toBe(false);
+    });
+
+    it("opens the panel again once the window is gone", async () => {
+      installWindowApi();
+      focus.mockResolvedValue(false);
+      useCanopyStore.setState({ mode: "on", isOpen: false });
+
+      await definition("canopy.toggle").run({}, {} as never);
+
+      expect(useCanopyStore.getState().isOpen).toBe(true);
+    });
+
+    it("closes a panel open here rather than leaving it behind the window", async () => {
+      installWindowApi();
+      useCanopyStore.setState({ mode: "on", isOpen: true });
+
+      await definition("canopy.toggle").run({}, {} as never);
+
+      expect(focus).not.toHaveBeenCalled();
+      expect(useCanopyStore.getState().isOpen).toBe(false);
+    });
+
+    it("asks nothing of main before Canopy is on, when no window can exist", async () => {
+      installWindowApi();
+      useCanopyStore.setState({ mode: "unset", isOpen: false });
+
+      await definition("canopy.toggle").run({}, {} as never);
+
+      expect(focus).not.toHaveBeenCalled();
+      expect(useCanopyStore.getState().isOpen).toBe(true);
+    });
+
+    it.each(["unset", "hidden"] as const)("isn't offered with Canopy %s", (mode) => {
+      useCanopyStore.setState({ mode });
+      const openWindow = definition("canopy.openWindow");
+
+      expect(openWindow.isVisible?.({})).toBe(false);
+      expect(openWindow.isEnabled?.({})).toBe(false);
+      expect(openWindow.disabledReason?.({})).toMatch(/isn't on/);
+    });
+
+    it("is offered once Canopy is on, and takes over from a panel open here", async () => {
+      installWindowApi();
+      useCanopyStore.setState({ mode: "on", isOpen: true });
+      const openWindow = definition("canopy.openWindow");
+
+      expect(openWindow.isVisible?.({})).toBe(true);
+      expect(openWindow.isEnabled?.({})).toBe(true);
+
+      await openWindow.run({}, {} as never);
+
+      expect(open).toHaveBeenCalledTimes(1);
+      expect(useCanopyStore.getState().isOpen).toBe(false);
+    });
+
+    it("leaves the panel open when the window couldn't open", async () => {
+      installWindowApi();
+      open.mockRejectedValueOnce(new Error("no"));
+      useCanopyStore.setState({ mode: "on", isOpen: true });
+
+      await expect(definition("canopy.openWindow").run({}, {} as never)).rejects.toThrow("no");
+
+      expect(useCanopyStore.getState().isOpen).toBe(true);
+    });
+  });
+
   it("marks read only this project's agents when Canopy is set to This project", async () => {
     const markAllRead = vi.fn(async () => []);
     Object.defineProperty(window, "electron", {

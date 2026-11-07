@@ -5,8 +5,8 @@ import {
   getWindowForWebContents,
   registerWebContents,
   registerAppView,
-  registerProjectlessAppView,
 } from "./webContentsRegistry.js";
+import { markProjectlessView } from "./projectlessViews.js";
 import { attachActiveViewFocus } from "./activeViewFocus.js";
 import { attachUnresponsiveDialog } from "./unresponsiveDialog.js";
 import { getWindowRegistry } from "./windowRef.js";
@@ -338,8 +338,8 @@ export function setupBrowserWindow(
   });
 
   // Register the app view so IPC helpers route to the correct webContents
-  if (canopyWindow) registerProjectlessAppView(win, appView);
-  else registerAppView(win, appView);
+  registerAppView(win, appView);
+  if (canopyWindow) markProjectlessView(appView.webContents, win);
 
   // Attach the view to the window and size it to fill the content area.
   // Ongoing resize handling is delegated to ProjectViewManager (which tracks the active view).

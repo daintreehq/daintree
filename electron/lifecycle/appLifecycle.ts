@@ -8,7 +8,7 @@ import type { WindowRegistry } from "../window/WindowRegistry.js";
 import { refreshProjectMenuState } from "../projectMenuState.js";
 import { noteWindowClosing, refreshOpenWindowMenu } from "../windowMenuState.js";
 import { onWindowTitlesChanged } from "../window/windowTitle.js";
-import { getProjectlessWindows } from "../window/webContentsRegistry.js";
+import { getProjectlessWindows } from "../window/projectlessViews.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { setSignalShutdown, setSafetyBeltTimer } from "./signalShutdownState.js";
 import { finishIfGroupStop } from "./groupStop.js";
