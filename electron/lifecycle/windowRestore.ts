@@ -95,6 +95,12 @@ export interface RestoreWindowFleetDeps {
    * the rest of the fleet, so their dials don't wait on local windows (#15888).
    */
   onRemoteHostsNeeded?: (hostIds: string[]) => void;
+  /**
+   * The focused window is up and global init has settled; the rest of the
+   * fleet follows. Called while saves are still held, so whatever it opens
+   * (the Canopy window, #16336) is in the save that ends the restore.
+   */
+  onPrimaryWindowUp?: () => void;
 }
 
 /**
@@ -262,6 +268,7 @@ export async function restoreWindowFleet(deps: RestoreWindowFleetDeps): Promise<
 
     const hostIds = hostsNamedBy(records);
     if (hostIds.length > 0) deps.onRemoteHostsNeeded?.(hostIds);
+    deps.onPrimaryWindowUp?.();
 
     let backgroundClean = true;
     // Background windows come up one at a time, each waiting for the last to

@@ -207,6 +207,54 @@ describe("readOpenWindowsManifestSync", () => {
     expect(readOpenWindowsManifestSync()).toEqual({ hadManifest: false, records: [] });
   });
 
+  describe("with the Canopy window open at the last save (#16336)", () => {
+    const withCanopy = (windows: unknown[]): string =>
+      JSON.stringify({ version: OPEN_WINDOWS_MANIFEST_VERSION, windows, canopyWindow: true });
+
+    it("reports it beside a manifest that names no window, which still reads as none", () => {
+      withDb({ manifest: withCanopy([]) });
+      expect(readOpenWindowsManifestSync()).toEqual({
+        hadManifest: false,
+        records: [],
+        canopyWindow: true,
+      });
+    });
+
+    it("reports it beside windows named only on the picker, without a workspace query", () => {
+      withDb({ manifest: withCanopy([{ projectId: null }]) });
+      expect(readOpenWindowsManifestSync()).toEqual({
+        hadManifest: true,
+        records: [{ projectId: null }],
+        canopyWindow: true,
+      });
+      expect(prepare.mock.calls.some(([sql]) => sql.includes("FROM projects"))).toBe(false);
+    });
+
+    it("keeps it when the windows beside it were all deleted", () => {
+      withDb({ manifest: withCanopy([{ projectId: PROJECT_GONE }]), existingProjectIds: [] });
+      expect(readOpenWindowsManifestSync()).toEqual({
+        hadManifest: true,
+        records: [],
+        canopyWindow: true,
+      });
+    });
+
+    it("keeps it beside the surviving windows", () => {
+      withDb({
+        manifest: withCanopy([{ projectId: PROJECT_A }, { projectId: PROJECT_GONE }]),
+        existingProjectIds: [PROJECT_A],
+      });
+      const result = readOpenWindowsManifestSync();
+      expect(ids(result.records)).toEqual([PROJECT_A]);
+      expect(result.canopyWindow).toBe(true);
+    });
+
+    it("reports nothing of it from a manifest it cannot read", () => {
+      withDb({ manifest: withCanopy([{ projectId: 42 }]) });
+      expect(readOpenWindowsManifestSync()).toEqual({ hadManifest: false, records: [] });
+    });
+  });
+
   it("reports no manifest when every entry is malformed", () => {
     withDb({ manifest: manifestJson([{ projectId: 42 }, "junk"]) });
     expect(readOpenWindowsManifestSync()).toEqual({ hadManifest: false, records: [] });

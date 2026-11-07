@@ -16,6 +16,7 @@ import {
   parseOpenWindowsManifest,
   serializeOpenWindowsManifest,
   type OpenWindowRecord,
+  type OpenWindowsManifestExtras,
 } from "./windowManifest.js";
 
 /**
@@ -28,8 +29,11 @@ import {
  * throwing, so a late write here would resurrect a connection mid-shutdown
  * instead of failing loudly). This function just performs the write.
  */
-export function writeOpenWindowsManifest(records: OpenWindowRecord[]): void {
-  const value = serializeOpenWindowsManifest(records);
+export function writeOpenWindowsManifest(
+  records: OpenWindowRecord[],
+  extras: OpenWindowsManifestExtras = {}
+): void {
+  const value = serializeOpenWindowsManifest(records, extras);
   getSharedDb()
     .insert(appStateTable)
     .values({ key: OPEN_WINDOWS_KEY, value })

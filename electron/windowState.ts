@@ -1,6 +1,10 @@
 import { BrowserWindow, screen } from "electron";
 import { windowStatesStore, type WindowStateEntry } from "./store.js";
-import { hostBoundsKeyPrefix, scratchBoundsKey } from "./window/windowBoundsKeys.js";
+import {
+  hostBoundsKeyPrefix,
+  isSeparateBoundsKey,
+  scratchBoundsKey,
+} from "./window/windowBoundsKeys.js";
 
 const LEGACY_KEY = "__legacy__";
 const MRU_OFFSET_PX = 30;
@@ -102,8 +106,9 @@ function getMruBounds(): WindowStateBounds | null {
     return { isFullScreen: false, ...windowStates[LEGACY_KEY] };
   }
 
-  // Last resort: pick any entry (any saved state gives better defaults than none)
-  const keys = Object.keys(windowStates);
+  // Last resort: pick any entry (any saved state gives better defaults than none),
+  // except bounds that belong to one window alone.
+  const keys = Object.keys(windowStates).filter((key) => !isSeparateBoundsKey(key));
   if (keys.length > 0) {
     return { isFullScreen: false, ...windowStates[keys[0]] };
   }
@@ -144,12 +149,28 @@ interface ResolvedWindowBounds extends WindowStateBounds {
   ownSaved: boolean;
 }
 
-function resolveWindowBounds(key: string | null | undefined): ResolvedWindowBounds {
+interface WindowSize {
+  width: number;
+  height: number;
+}
+
+/**
+ * @param separateSize Set for a window whose bounds are its own: without saved
+ *   bounds it opens at this size rather than borrow another window's.
+ */
+function resolveWindowBounds(
+  key: string | null | undefined,
+  separateSize: WindowSize | null = null
+): ResolvedWindowBounds {
   // 1. Try per-workspace state
   const windowStates = windowStatesStore.get("windowStates") ?? {};
   if (key) {
     if (windowStates[key]) {
       return { isFullScreen: false, ...windowStates[key], ownSaved: true };
+    }
+
+    if (separateSize) {
+      return { ...separateSize, isMaximized: false, isFullScreen: false, ownSaved: false };
     }
 
     // 2. MRU cascade for new workspace windows
@@ -252,7 +273,9 @@ type WindowStatesMap = Record<string, WindowStateEntry>;
 // keys, so the earliest workspace keys are the least-recently-touched — evict
 // them first when over the cap. `__legacy__` is never counted or evicted.
 function commitWindowStates(windowStates: WindowStatesMap): void {
-  const workspaceKeys = Object.keys(windowStates).filter((k) => k !== LEGACY_KEY);
+  const workspaceKeys = Object.keys(windowStates).filter(
+    (k) => k !== LEGACY_KEY && !isSeparateBoundsKey(k)
+  );
   const overflow = workspaceKeys.length - WINDOW_STATE_MRU_CAP;
   for (let i = 0; i < overflow; i++) {
     delete windowStates[workspaceKeys[i]];
@@ -260,8 +283,20 @@ function commitWindowStates(windowStates: WindowStatesMap): void {
   windowStatesStore.set("windowStates", windowStates);
 }
 
-function saveWindowStates(key: string | null | undefined, bounds: WindowStateBounds): void {
+function saveWindowStates(
+  key: string | null | undefined,
+  bounds: WindowStateBounds,
+  separate = false
+): void {
   const windowStates: WindowStatesMap = windowStatesStore.get("windowStates") ?? {};
+  if (separate) {
+    // Bounds of its own are saved under its key alone: as `__legacy__` or the
+    // most recent save, they would be where the next project window opens.
+    if (!key) return;
+    windowStates[key] = bounds;
+    commitWindowStates(windowStates);
+    return;
+  }
   if (key) {
     // Delete then re-add so a touched key moves to the most-recent slot in
     // insertion order and can't be picked as the eviction victim below.
@@ -413,7 +448,31 @@ export function createWindowWithState(
   initialKey?: string | null,
   tracking?: WindowStateTracking
 ): BrowserWindow {
-  const windowState = resolveWindowBounds(initialKey);
+  return createWindowAtSavedBounds(options, initialKey, tracking, null);
+}
+
+/**
+ * Create a window whose bounds are its own, saved under `key` alone (the
+ * Canopy window, #16336). It comes back where it was, or opens centred at
+ * `defaultSize`, and a saved spot on a display that's gone is pulled onto one
+ * that remains, as a project window's is. Its bounds never become where a
+ * project window opens, and a project window's never become its.
+ */
+export function createSeparateWindowWithState(
+  options: Electron.BrowserWindowConstructorOptions,
+  key: string,
+  defaultSize: WindowSize
+): BrowserWindow {
+  return createWindowAtSavedBounds(options, key, undefined, defaultSize);
+}
+
+function createWindowAtSavedBounds(
+  options: Electron.BrowserWindowConstructorOptions,
+  initialKey: string | null | undefined,
+  tracking: WindowStateTracking | undefined,
+  separateSize: WindowSize | null
+): BrowserWindow {
+  const windowState = resolveWindowBounds(initialKey, separateSize);
 
   const win = new BrowserWindow({
     ...options,
@@ -576,7 +635,7 @@ export function createWindowWithState(
       isFullScreen,
     };
 
-    saveWindowStates(saveKey, entry);
+    saveWindowStates(saveKey, entry, separateSize !== null);
     boundsKey = saveKey;
   };
 

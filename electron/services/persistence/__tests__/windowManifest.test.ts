@@ -7,6 +7,7 @@ import {
   filterRestorableWindows,
   isReadableOpenWindowsManifest,
   isRemoteWorkspaceKey,
+  parseCanopyWindowOpen,
   parseOpenWindowsManifest,
   serializeOpenWindowsManifest,
   type OpenWindowRecord,
@@ -422,5 +423,75 @@ describe("background host projects (#13932)", () => {
       ...local.slice(0, MAX_BACKGROUND_PROJECTS_PER_WINDOW),
       ...remote.slice(0, MAX_BACKGROUND_HOST_PROJECTS_PER_WINDOW),
     ]);
+  });
+});
+
+describe("the Canopy window's record (#16336)", () => {
+  const records = [record("alpha"), record(null), record("beta")];
+
+  it("round-trips beside the windows it was saved with", () => {
+    const raw = serializeOpenWindowsManifest(records, { canopyWindowOpen: true });
+    expect(parseCanopyWindowOpen(raw)).toBe(true);
+    expect(parseOpenWindowsManifest(raw)).toEqual(records);
+  });
+
+  it("round-trips closed as no record at all", () => {
+    expect(
+      parseCanopyWindowOpen(serializeOpenWindowsManifest(records, { canopyWindowOpen: false }))
+    ).toBe(false);
+  });
+
+  it("is never read as a project or picker window, nor takes one's place under the cap", () => {
+    const full = Array.from({ length: MAX_RESTORED_WINDOWS }, (_, i) => record(`p${i}`));
+    const raw = serializeOpenWindowsManifest(full, { canopyWindowOpen: true });
+    expect(parseOpenWindowsManifest(raw)).toEqual(full);
+    expect(parseCanopyWindowOpen(raw)).toBe(true);
+  });
+
+  it("stands alone in a manifest that names no window, which still reads as empty", () => {
+    const raw = serializeOpenWindowsManifest([], { canopyWindowOpen: true });
+    expect(isReadableOpenWindowsManifest(raw)).toBe(true);
+    expect(parseOpenWindowsManifest(raw)).toEqual([]);
+    expect(parseCanopyWindowOpen(raw)).toBe(true);
+  });
+
+  it("leaves a manifest written before it reading, and writing, exactly as it did", () => {
+    const before =
+      '{"version":1,"windows":[{"projectId":"alpha","backgroundProjectIds":["beta"]},{"projectId":null}]}';
+    const parsed = parseOpenWindowsManifest(before);
+
+    expect(parsed).toEqual([{ projectId: "alpha", backgroundProjectIds: ["beta"] }, record(null)]);
+    expect(parseCanopyWindowOpen(before)).toBe(false);
+    expect(serializeOpenWindowsManifest(parsed)).toBe(before);
+  });
+
+  it.each([
+    ["a string", "yes"],
+    ["a number", 1],
+    ["an object", {}],
+    ["false", false],
+  ])("reads a marker that is %s as closed, and keeps the windows", (_label, marker) => {
+    const raw = JSON.stringify({
+      version: OPEN_WINDOWS_MANIFEST_VERSION,
+      windows: [{ projectId: "alpha" }],
+      canopyWindow: marker,
+    });
+    expect(parseCanopyWindowOpen(raw)).toBe(false);
+    expect(parseOpenWindowsManifest(raw)).toEqual([record("alpha")]);
+  });
+
+  it.each([
+    ["another version", { version: OPEN_WINDOWS_MANIFEST_VERSION + 1, windows: [] }],
+    ["no window list", { version: OPEN_WINDOWS_MANIFEST_VERSION }],
+  ])("refuses a marker in a manifest with %s", (_label, envelope) => {
+    expect(parseCanopyWindowOpen(JSON.stringify({ ...envelope, canopyWindow: true }))).toBe(false);
+  });
+
+  it.each([
+    ["null", null],
+    ["not JSON", "{not json"],
+    ["a JSON array", "[]"],
+  ])("reads %s as closed", (_label, raw) => {
+    expect(parseCanopyWindowOpen(raw)).toBe(false);
   });
 });

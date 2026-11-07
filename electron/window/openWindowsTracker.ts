@@ -217,6 +217,20 @@ export function clearPendingWindowRecreation(windowId: number): void {
   pendingWindowRecreations.delete(windowId);
 }
 
+/**
+ * Whether the Canopy window is open (#16336). It is never in the registry, so
+ * it says so itself. Held apart from whether a save may run: a change while
+ * saves are held lands with the next save that may.
+ */
+let canopyWindowOpen = false;
+
+/** The Canopy window opened or closed. Saved now, under the same gates as any window. */
+export function setCanopyWindowOpen(open: boolean): void {
+  if (canopyWindowOpen === open) return;
+  canopyWindowOpen = open;
+  saveOpenWindowsNow();
+}
+
 let state: TrackerState | null = null;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 /** Latched at shutdown. Permanent by design — nothing resumes after it. */
@@ -465,9 +479,12 @@ function persist(excludeWindowId?: number): void {
     // — it describes the one they are leaving. Writing it would replace the
     // fleet the previous save captured with nothing, and the next launch would
     // fall back to a single project (#12320). macOS survives windowless, so an
-    // empty set there is a real state and still lands.
-    if (records.length === 0 && process.platform !== "darwin") return;
-    writeOpenWindowsManifest(records);
+    // empty set there is a real state and still lands. An open Canopy window
+    // keeps the process up too, so no project windows beside it is a real
+    // state; and when it is the last window to close, that close is the quit,
+    // and it comes back next launch as a last project window would.
+    if (records.length === 0 && !canopyWindowOpen && process.platform !== "darwin") return;
+    writeOpenWindowsManifest(records, { canopyWindowOpen });
   } catch (error) {
     // Losing the manifest costs the user a manual window next launch. It must
     // never take down a window close or the shutdown chain with it.
@@ -576,6 +593,7 @@ export function resetOpenWindowsTrackerForTests(): void {
   state = null;
   frozen = false;
   suppressed = false;
+  canopyWindowOpen = false;
   pendingBackgroundRestores.clear();
   pendingRemoteRestores.clear();
   pendingRemoteBackgroundRestores.clear();

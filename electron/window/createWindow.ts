@@ -15,7 +15,12 @@ import { toggleWindowFullscreen } from "./fullscreen.js";
 import { sendFullscreenChange } from "./fullscreenBroadcast.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import path from "path";
-import { createWindowWithState, disposeWindowStateTracking } from "../windowState.js";
+import {
+  createSeparateWindowWithState,
+  createWindowWithState,
+  disposeWindowStateTracking,
+} from "../windowState.js";
+import { CANOPY_BOUNDS_KEY } from "./windowBoundsKeys.js";
 import { store } from "../store.js";
 import type { AppColorScheme } from "../../shared/theme/index.js";
 import {
@@ -170,8 +175,8 @@ export interface SetupBrowserWindowOptions {
    */
   revealMode?: "show" | "showInactive";
   /**
-   * What the window holds. A "canopy" window has one view and no project: no
-   * saved bounds (they would become the fallback a project window opens at),
+   * What the window holds. A "canopy" window has one view and no project:
+   * bounds of its own (never the fallback a project window opens at, #16336),
    * no webview tag, and its view is registered as belonging to no project.
    */
   kind?: "project" | "canopy";
@@ -265,7 +270,7 @@ export function setupBrowserWindow(
     backgroundColor: windowBg,
   };
   const win = canopyWindow
-    ? new BrowserWindow({ ...windowOptions, ...CANOPY_WINDOW_SIZE })
+    ? createSeparateWindowWithState(windowOptions, CANOPY_BOUNDS_KEY, CANOPY_WINDOW_SIZE)
     : createWindowWithState(
         windowOptions,
         resolveBoundsKey(projectPath, initialProjectId ?? remoteWorkspaceKey),

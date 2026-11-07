@@ -79,6 +79,20 @@ export interface OpenWindowRecord {
 export interface OpenWindowsManifest {
   version: number;
   windows: OpenWindowRecord[];
+  /**
+   * The Canopy window was open (#16336). It sits beside the window list rather
+   * than in it: it holds no workspace, so it is never counted against
+   * {@link MAX_RESTORED_WINDOWS} or restored as a project or picker window, and
+   * a build that predates it ignores the field instead of reading an entry
+   * with no project as a picker. Omitted when closed, so a manifest without a
+   * Canopy window serializes exactly as it did before.
+   */
+  canopyWindow?: true;
+}
+
+/** What the manifest holds beside its window list. */
+export interface OpenWindowsManifestExtras {
+  canopyWindowOpen?: boolean;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -161,6 +175,27 @@ export function parseOpenWindowsManifest(raw: string | null | undefined): OpenWi
 }
 
 /**
+ * Whether a stored manifest says the Canopy window was open. Read apart from
+ * the window list, under the same envelope rules: anything this version can't
+ * read says no, and a malformed marker costs only itself, never the windows.
+ */
+export function parseCanopyWindowOpen(raw: string | null | undefined): boolean {
+  if (!raw) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return false;
+  }
+  return (
+    isRecord(parsed) &&
+    parsed.version === OPEN_WINDOWS_MANIFEST_VERSION &&
+    Array.isArray(parsed.windows) &&
+    parsed.canopyWindow === true
+  );
+}
+
+/**
  * Attach a validated background list to a record whose foreground already
  * parsed.
  *
@@ -233,13 +268,17 @@ export function capBackgroundProjectIds(
  * as it did before #12320 — which is what keeps the pre-existing shape tests
  * meaningful instead of merely updated.
  */
-export function serializeOpenWindowsManifest(records: OpenWindowRecord[]): string {
+export function serializeOpenWindowsManifest(
+  records: OpenWindowRecord[],
+  { canopyWindowOpen = false }: OpenWindowsManifestExtras = {}
+): string {
   const manifest: OpenWindowsManifest = {
     version: OPEN_WINDOWS_MANIFEST_VERSION,
     windows: records.slice(0, MAX_RESTORED_WINDOWS).map(({ projectId, backgroundProjectIds }) => {
       const ids = parseBackgroundProjectIds(backgroundProjectIds, projectId);
       return ids.length > 0 ? { projectId, backgroundProjectIds: ids } : { projectId };
     }),
+    ...(canopyWindowOpen ? { canopyWindow: true as const } : {}),
   };
   return JSON.stringify(manifest);
 }
