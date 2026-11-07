@@ -38,7 +38,12 @@ const TITLE_LABEL_MAX = 60;
 const PRIVILEGE_WARNING =
   "Plugins run with full Node.js privileges — there's no sandbox and no signature check.";
 
-const INSTALL_DESCRIPTION = `Installing writes this archive into Daintree's plugins folder, replacing any installed plugin with the same ID. ${PRIVILEGE_WARNING}`;
+// An archive installs into the user folder, so it is app-wide, not scoped to one
+// project; a single grant answers for every project.
+const SCOPE_WARNING =
+  "It's installed for the whole app, not a single project, so it can be available in every project and a permission grant can apply to all of them.";
+
+const INSTALL_DESCRIPTION = `Installing writes this archive into Daintree's plugins folder, replacing any installed plugin with the same ID. ${PRIVILEGE_WARNING} ${SCOPE_WARNING}`;
 
 function replacementSentence(
   kind: ArchiveReplacementKind,
@@ -284,7 +289,7 @@ export function PluginArchiveInstallConfirmDialog() {
   const effect =
     replacement === null
       ? INSTALL_DESCRIPTION
-      : `${replacementSentence(replacement.kind, replacement.installedVersion, current.manifest.version)} ${PRIVILEGE_WARNING}`;
+      : `${replacementSentence(replacement.kind, replacement.installedVersion, current.manifest.version)} ${PRIVILEGE_WARNING} ${SCOPE_WARNING}`;
   const description = remoteTrust ? `${effect} ${remoteTrust}` : effect;
 
   return (
