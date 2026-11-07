@@ -619,7 +619,7 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): AppLife
     }
     // Unless this process runs windowless, a relaunch with nothing on screen
     // behaves as it always has (the folder routing above still applies).
-    if (!opts.keepsRunningWithoutWindows?.() && !stopWaitingOnRuns) return;
+    if (!opts.keepsRunningWithoutWindows?.() && !stopWaitingOnRuns && !projectlessWindow) return;
     if (!app.isReady() || !(opts.isLaunchSettled?.() ?? true)) {
       // The launch is still bringing up its own windows or its windowless
       // Host; decided once it has, against whatever is on screen then.

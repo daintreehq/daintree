@@ -118,11 +118,26 @@ describe("the Canopy window's wiring", () => {
     expect(kind && ts.isStringLiteral(kind.initializer) && kind.initializer.text).toBe("canopy");
   });
 
+  it("takes being a Canopy window from the kind it was asked for", () => {
+    const found: ts.VariableDeclaration[] = [];
+    const visit = (node: ts.Node) => {
+      if (ts.isVariableDeclaration(node) && node.name.getText() === "canopyWindow")
+        found.push(node);
+      ts.forEachChild(node, visit);
+    };
+    visit(createWindow);
+
+    expect(found.map((declaration) => declaration.initializer?.getText())).toEqual([
+      'kind === "canopy"',
+    ]);
+  });
+
   it("marks only a Canopy window's view as holding no project", () => {
     const [mark] = callsTo(createWindow, "markProjectlessView");
     const guard = mark?.parent.parent;
 
     expect(guard && ts.isIfStatement(guard) && guard.expression.getText()).toBe("canopyWindow");
+    expect(guard && ts.isIfStatement(guard) && guard.thenStatement).toBe(mark?.parent);
   });
 
   it("passes the Canopy role to a Canopy window's renderer alone", () => {

@@ -503,10 +503,7 @@ describe("registerAppLifecycleHandlers – second-instance", () => {
       fs.writeFileSync(dntr, "");
       const onCreateWindow = vi.fn();
 
-      const canopyWindow = await relaunch(["daintree", dntr], {
-        onCreateWindow,
-        keepsRunningWithoutWindows: () => true,
-      });
+      const canopyWindow = await relaunch(["daintree", dntr], { onCreateWindow });
 
       expect(canopyWindow.focus).not.toHaveBeenCalled();
       expect(onCreateWindow).toHaveBeenCalledTimes(1);

@@ -162,18 +162,24 @@ describe("the Canopy window", () => {
     });
   });
 
-  it("grows back into height the content area regains with no resize", () => {
+  it.each([
+    ["height", { width: 900, height: 670 }],
+    ["width", { width: 870, height: 700 }],
+  ])("grows back into %s the content area regains with no resize", (_label, size) => {
     openCanopyWindow(noWatch);
-    made[0]!.view.getBounds.mockReturnValue({ x: 0, y: 0, width: 900, height: 670 });
+    made[0]!.view.getBounds.mockReturnValue({ x: 0, y: 0, ...size });
 
     made[0]!.contentView.emit("bounds-changed");
 
     expect(made[0]!.view.setBounds).toHaveBeenCalledWith({ x: 0, y: 0, width: 900, height: 700 });
   });
 
-  it("stays full size while the content area shrinks under it, so the PTY keeps its size", () => {
+  it.each([
+    ["height", { width: 900, height: 670 }],
+    ["width", { width: 870, height: 700 }],
+  ])("stays full size while the content area loses %s, so the PTY keeps its size", (_l, size) => {
     openCanopyWindow(noWatch);
-    made[0]!.getContentBounds.mockReturnValue({ x: 40, y: 40, width: 900, height: 670 });
+    made[0]!.getContentBounds.mockReturnValue({ x: 40, y: 40, ...size });
 
     made[0]!.contentView.emit("bounds-changed");
 
