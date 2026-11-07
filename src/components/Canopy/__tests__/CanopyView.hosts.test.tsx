@@ -853,6 +853,22 @@ describe("the Canopy host picker", () => {
     expect(document.querySelector("[data-canopy-reading-offer]")).toBeNull();
   });
 
+  it("offers reading quietly under the picked host's empty list, never in a callout over it", async () => {
+    installElectron();
+    remoteCanopy = canopySnapshot({ mode: "unset", activated: false });
+    remoteFleet = fleet([]);
+    useCanopyStore.setState({ hostId: "studio" });
+    render(<CanopyView />);
+    await settle();
+    expect(document.body.textContent).toContain("No agents are running on studio-01");
+    expect(document.querySelector("[data-canopy-reading-offer]")).toBeNull();
+    const bar = document.querySelector<HTMLElement>("[data-canopy-status]")!;
+    fireEvent.click(within(bar).getByRole("button", { name: "Turn on reading" }));
+    await settle();
+    expect(document.body.textContent).toContain("Canopy is off on studio-01");
+    expect(state.invoke).not.toHaveBeenCalledWith("studio", "canopy:set-mode", "on");
+  });
+
   it("offers reading above the picked host's workers, never above the assistants alone", async () => {
     installElectron();
     remoteCanopy = canopySnapshot({ mode: "unset", activated: false });
