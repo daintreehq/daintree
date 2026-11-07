@@ -287,17 +287,11 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
   const close = frame.close;
   const isOpen = useCanopyStore((s) => s.isOpen);
   const activated = useCanopyStore((s) => s.snapshot?.activated ?? null);
-  // The offer to turn reading on is one press from the list, never in front of it.
-  const [pitchOpen, setPitchOpen] = useState(false);
-  useEffect(() => {
-    if (!isOpen || activated !== false) setPitchOpen(false);
-  }, [isOpen, activated]);
   const outdatedOwnHost = useCanopyStore((s) => s.outdatedHost);
   const applySnapshot = useCanopyStore((s) => s.applySnapshot);
   // Another host the panel shows, or null for the window's own.
   const hostId = useCanopyStore((s) => s.hostId);
   const setHostId = useCanopyStore((s) => s.setHostId);
-  useEffect(() => setPitchOpen(false), [hostId]);
   const allHosts = hostId === ALL_HOSTS_ID;
   const hostRows = useCanopyHostRows(hostId ?? canopyOwnHostId());
   const hostPicker = hostRows ? (
@@ -453,9 +447,9 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
     );
   }
 
-  // Until the user turns it on, nothing is read: the list is what Daintree
-  // observes, and the pitch waits behind the offer in the status bar.
-  if (activated === false && pitchOpen) {
+  // Until the user turns it on, nothing is read: the pitch is the one place
+  // that asks, so nothing in front of it asks first.
+  if (activated === false) {
     return (
       <CanopyPitch
         isOpen={isOpen}
@@ -473,7 +467,6 @@ function CanopyPanel({ onEnableAll }: { onEnableAll: (rows: readonly HostMenuRow
       hostRow={null}
       hostRows={null}
       hostPicker={hostPicker}
-      onOfferReading={activated === false ? () => setPitchOpen(true) : null}
     />
   );
 }
@@ -642,7 +635,6 @@ function CanopyInbox({
   hostRow,
   hostRows,
   hostPicker,
-  onOfferReading = null,
 }: {
   /** What had the keyboard when the panel opened, while it is still there. */
   restoreOpener: () => HTMLElement | null;
@@ -653,8 +645,6 @@ function CanopyInbox({
   /** The hosts read together when `hostId` is All hosts. */
   hostRows: readonly HostMenuRow[] | null;
   hostPicker: React.ReactNode;
-  /** The window's own host with its reader off: opens the pitch. */
-  onOfferReading?: (() => void) | null;
 }) {
   const frame = useCanopyFrame();
   const isOpen = useCanopyStore((s) => s.isOpen);
@@ -983,10 +973,9 @@ function CanopyInbox({
   }, [hostId]);
   const hostOfferShown = hostOffer && hostOfferOpen;
   const hostHeld = hostOfferShown || hostOutdated;
-  const offerReading =
-    readerOff && !hostOutdated
-      ? (onOfferReading ?? (hostOffer ? () => setHostOfferOpen(true) : null))
-      : null;
+  // Another host's offer, one press from its list. The window's own host
+  // shows the pitch in place of its list, so it is never offered here.
+  const offerReading = readerOff && hostOffer ? () => setHostOfferOpen(true) : null;
   const readingOfferDismissed = useCanopyStore((s) => s.readingOfferDismissed);
   const dismissReadingOffer = useCanopyStore((s) => s.dismissReadingOffer);
 
@@ -1713,10 +1702,10 @@ function CanopyInbox({
             )}
           </div>
         )}
-        {/* A listed inbox with the reader off reads as broken unless it says
-            why: the offer once, above it, until put away. An empty one has
-            the status bar's offer under its own message, and the assistants
-            alone aren't what reading reads. */}
+        {/* Another host's listed inbox with its reader off reads as broken
+            unless it says why: the offer once, above it, until put away. An
+            empty one has the status bar's offer under its own message, and
+            the assistants alone aren't what reading reads. */}
         {offerReading &&
           !readingOfferDismissed &&
           !hostHeld &&
@@ -1750,8 +1739,7 @@ function CanopyInbox({
                   />
                 }
               >
-                Get a short summary of what each agent did, from a small model on{" "}
-                {otherHost ? hostName : "this computer"}.
+                Get a short summary of what each agent did, from a small model on {hostName}.
               </Callout>
             </div>
           )}

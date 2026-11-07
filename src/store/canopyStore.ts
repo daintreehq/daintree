@@ -89,8 +89,9 @@ interface CanopyState {
   assistantHandbacksSeen: AssistantHandbacksSeen;
   seeAssistantHandback: (assistantId: string, observedAt: number) => void;
   /**
-   * The callout offering reading above a listed inbox was put away: for good,
-   * on every host and across launches. The status bar's offer stays.
+   * The callout offering reading above another host's listed inbox was put
+   * away: for good, on every host and across launches. The status bar's offer
+   * stays. This computer's own reader is offered by the pitch, which has none.
    */
   readingOfferDismissed: boolean;
   dismissReadingOffer: () => void;

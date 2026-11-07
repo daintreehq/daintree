@@ -369,8 +369,16 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   state.listeners.clear();
-  useCanopyStore.setState({ isOpen: false, snapshot: null, mode: "unset", hostId: null });
+  useCanopyStore.setState({
+    isOpen: false,
+    snapshot: null,
+    mode: "unset",
+    hostId: null,
+    readingOfferDismissed: false,
+    roleFilter: "all",
+  });
   window.localStorage.removeItem("daintree-canopy-order");
+  window.localStorage.removeItem("daintree-canopy-reading-offer-dismissed");
   vi.clearAllMocks();
 });
 
@@ -819,6 +827,94 @@ describe("the Canopy host picker", () => {
     // The button left with the inbox: the keyboard lands on the offer's heading, not Turn on.
     expect(document.activeElement?.id).toBe("canopy-host-offer-title");
     expect(state.invoke).not.toHaveBeenCalledWith("studio", "canopy:set-mode", "on");
+  });
+
+  it("puts the picked host's reading callout away for good, keeping the status bar's offer and the keyboard", async () => {
+    installElectron();
+    remoteCanopy = canopySnapshot({ mode: "unset", activated: false });
+    useCanopyStore.setState({ hostId: "studio" });
+    const { unmount } = render(<CanopyView />);
+    await settle();
+    const dismiss = within(
+      document.querySelector<HTMLElement>("[data-canopy-reading-offer]")!
+    ).getByRole("button", { name: "Dismiss reading offer" });
+    act(() => dismiss.focus());
+    fireEvent.click(dismiss);
+    await settle();
+    expect(document.querySelector("[data-canopy-reading-offer]")).toBeNull();
+    expect(document.activeElement?.getAttribute("aria-label")).toBe("Search agents");
+    const bar = document.querySelector<HTMLElement>("[data-canopy-status]")!;
+    expect(within(bar).queryByRole("button", { name: "Turn on reading" })).not.toBeNull();
+    // Closed and opened again: still away.
+    unmount();
+    render(<CanopyView />);
+    await settle();
+    expect(document.getElementById("canopy-card-remote-run")).not.toBeNull();
+    expect(document.querySelector("[data-canopy-reading-offer]")).toBeNull();
+  });
+
+  it("offers reading quietly under the picked host's empty list, never in a callout over it", async () => {
+    installElectron();
+    remoteCanopy = canopySnapshot({ mode: "unset", activated: false });
+    remoteFleet = fleet([]);
+    useCanopyStore.setState({ hostId: "studio" });
+    render(<CanopyView />);
+    await settle();
+    expect(document.body.textContent).toContain("No agents are running on studio-01");
+    expect(document.querySelector("[data-canopy-reading-offer]")).toBeNull();
+    const bar = document.querySelector<HTMLElement>("[data-canopy-status]")!;
+    fireEvent.click(within(bar).getByRole("button", { name: "Turn on reading" }));
+    await settle();
+    expect(document.body.textContent).toContain("Canopy is off on studio-01");
+    expect(state.invoke).not.toHaveBeenCalledWith("studio", "canopy:set-mode", "on");
+  });
+
+  it("offers reading above the picked host's workers, never above the assistants alone", async () => {
+    installElectron();
+    remoteCanopy = canopySnapshot({ mode: "unset", activated: false });
+    useCanopyStore.setState({ hostId: "studio", roleFilter: "assistants" });
+    render(<CanopyView />);
+    await settle();
+    expect(document.getElementById("canopy-card-remote-run")).toBeNull();
+    expect(document.querySelector("[data-canopy-reading-offer]")).toBeNull();
+    act(() => useCanopyStore.getState().setRoleFilter("all"));
+    await settle();
+    expect(document.getElementById("canopy-card-remote-run")).not.toBeNull();
+    expect(document.querySelector("[data-canopy-reading-offer]")).not.toBeNull();
+  });
+
+  it("words the empty band as the header does with the picked host's reader off, never as the all-clear", async () => {
+    installElectron();
+    remoteFleet = workingFleet(["remote-run"]);
+    remoteCanopy = canopySnapshot({ mode: "unset", activated: false });
+    useCanopyStore.setState({ hostId: "studio" });
+    render(<CanopyView />);
+    await settle();
+    expect(summaryWords()).toContain("No agent is waiting on you");
+    expect(bandWords()).toBe("No agent is waiting on you");
+  });
+
+  it("shows this computer's pitch with its reader off, while a picked host keeps its own offer", async () => {
+    const off = canopySnapshot({ mode: "unset", activated: false });
+    const own = installElectron();
+    own.setActive.mockResolvedValue(off);
+    useCanopyStore.setState({ snapshot: off });
+    remoteCanopy = off;
+    render(<CanopyView />);
+    await settle();
+    expect(document.getElementById("canopy-pitch-title")).not.toBeNull();
+    expect(document.querySelector("[data-canopy-reading-offer]")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Turn on reading" })).toBeNull();
+    // The pitch keeps the picker: another host is one pick away, with its list and its offer.
+    expect(screen.getByTestId("canopy-host-picker")).toBeTruthy();
+    act(() => useCanopyStore.getState().setHostId("studio"));
+    await settle();
+    expect(document.getElementById("canopy-pitch-title")).toBeNull();
+    expect(document.getElementById("canopy-card-remote-run")).not.toBeNull();
+    expect(document.querySelector("[data-canopy-reading-offer]")?.textContent ?? "").toContain(
+      "on studio-01"
+    );
+    expect(own.setMode).not.toHaveBeenCalled();
   });
 
   it("says why a host can't be reached, never showing another host's agents instead", async () => {
