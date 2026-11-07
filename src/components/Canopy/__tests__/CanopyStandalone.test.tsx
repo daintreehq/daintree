@@ -583,12 +583,11 @@ describe("Canopy's inbox with no dialog and no project", () => {
     await act(async () => {
       fireEvent.keyDown(menu, { key: "Escape" });
     });
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+    // Radix restores focus a task after closing, and the menu's refocus a task after that.
+    await vi.waitFor(() => {
+      expect(document.querySelector("[data-canopy-terminal-menu]")).toBeNull();
+      expect(xterm.current!.focused).toBeGreaterThan(before);
     });
-
-    expect(document.querySelector("[data-canopy-terminal-menu]")).toBeNull();
-    expect(xterm.current!.focused).toBeGreaterThan(before);
   });
 
   it("takes Z back from anywhere in the surface", async () => {
