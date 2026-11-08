@@ -1076,7 +1076,10 @@ describe("main-screen launch env (#16355)", () => {
 
   it("is never paired with a flag that forces the alternate screen", () => {
     for (const { id, capabilities } of declaring) {
-      expect(capabilities?.altScreenFlag, `${id} both forces and forbids alt screen`).toBeUndefined();
+      expect(
+        capabilities?.altScreenFlag,
+        `${id} both forces and forbids alt screen`
+      ).toBeUndefined();
     }
   });
 });

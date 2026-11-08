@@ -3986,7 +3986,12 @@ describe("terminal spawn handler - main-screen launch env (#16355)", () => {
   async function spawnWith(options: Record<string, unknown>): Promise<Record<string, string>> {
     registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
     const handler = getSpawnHandler();
-    await handler({} as Electron.IpcMainInvokeEvent, { cols: 80, rows: 24, cwd: tmpDir, ...options });
+    await handler({} as Electron.IpcMainInvokeEvent, {
+      cols: 80,
+      rows: 24,
+      cwd: tmpDir,
+      ...options,
+    });
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
     return (ptyClient.spawn.mock.calls[0][1].env ?? {}) as Record<string, string>;
   }
@@ -4074,9 +4079,7 @@ describe("terminal spawn handler - main-screen launch env (#16355)", () => {
   });
 
   it("wins over a value the user's preset or project env sets", async () => {
-    const overridden = Object.fromEntries(
-      Object.keys(claudeInlineEnv()).map((key) => [key, "0"])
-    );
+    const overridden = Object.fromEntries(Object.keys(claudeInlineEnv()).map((key) => [key, "0"]));
 
     const env = await spawnWith({
       command: "claude",
@@ -4111,7 +4114,10 @@ describe("terminal spawn handler - main-screen launch env (#16355)", () => {
     );
     expect(agentId).toBeDefined();
 
-    const env = await spawnWith({ command: AGENT_REGISTRY[agentId!].command, launchAgentId: agentId });
+    const env = await spawnWith({
+      command: AGENT_REGISTRY[agentId!].command,
+      launchAgentId: agentId,
+    });
 
     for (const key of Object.keys(claudeInlineEnv())) expect(env[key]).toBeUndefined();
   });
