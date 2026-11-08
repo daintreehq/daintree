@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef } from "react";
 import type { FocusEvent, KeyboardEvent, RefObject } from "react";
+import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { describeAnchor } from "./DiffNoteWidgets";
 import {
@@ -25,6 +26,13 @@ export function selectionLines(selection: DiffNoteLineSelection): DiffNoteLines 
     startLine: Math.min(selection.anchor, selection.head),
     endLine: Math.max(selection.anchor, selection.head),
   };
+}
+
+/** The line number now standing where `gone` stood: its dataset outlives its row. */
+export function findLineNumber(root: ParentNode, gone: HTMLElement): HTMLElement | null {
+  const { noteSide, noteLine } = gone.dataset;
+  if (noteSide === undefined || noteLine === undefined) return null;
+  return root.querySelector(`[data-note-side="${noteSide}"][data-note-line="${noteLine}"]`);
 }
 
 function isTarget(node: EventTarget | null): node is HTMLElement {
@@ -118,19 +126,37 @@ export function useDiffNoteGutterKeys({
   onOpenLines,
 }: DiffNoteGutterKeysOptions) {
   const stopRef = useRef<HTMLElement | null>(null);
+  const gutterFocusedRef = useRef(false);
 
   // Every commit, not on a dependency: the stop's row can go with a staged
   // batch, a refresh, a layout switch or a collapse, and checking it is a pointer
   // read until one of those takes it. tabIndex is read as well as isConnected, as
   // switching notes off and on again keeps the node but wipes its attribute.
+  //
+  // React delivers no blur for an element it unmounts, so this is also where a
+  // focused number going is noticed: nothing else would clear what it was doing,
+  // and the keyboard would drop to the top of the document.
   useLayoutEffect(() => {
-    if (!enabled) return;
     const stop = stopRef.current;
-    if (stop?.isConnected && stop.tabIndex === 0) return;
-    const first = rootRef.current?.querySelector<HTMLElement>(TARGET_SELECTOR) ?? null;
-    if (first) first.tabIndex = 0;
-    stopRef.current = first;
+    if (enabled ? stop?.isConnected && stop.tabIndex === 0 : stop === null) return;
+    hintRef.current?.removeAttribute("data-active");
+    setSelection(null);
+    const root = enabled ? rootRef.current : null;
+    const next = root
+      ? ((stop && findLineNumber(root, stop)) ?? root.querySelector<HTMLElement>(TARGET_SELECTOR))
+      : null;
+    if (next) next.tabIndex = 0;
+    stopRef.current = next;
+    const refocus = gutterFocusedRef.current && document.activeElement === document.body;
+    gutterFocusedRef.current = false;
+    if (next && refocus) next.focus({ preventScroll: true });
   });
+
+  // Both this and the key's own case below. With anything on the stack, the Assistant
+  // say, the global handler dispatches it in capture and the key never gets here;
+  // with a dialog open it stands aside, and only stopping the key here keeps the
+  // dialog from closing with the selection.
+  useEscapeStack(selection !== null, () => setSelection(null));
 
   const extendSelection = (from: HTMLElement, step: 1 | -1) => {
     const root = rootRef.current;
@@ -208,6 +234,7 @@ export function useDiffNoteGutterKeys({
   const onFocus = (event: FocusEvent<HTMLElement>) => {
     const element = event.target;
     if (!isTarget(element)) return;
+    gutterFocusedRef.current = true;
     if (stopRef.current !== element) {
       if (stopRef.current) stopRef.current.tabIndex = -1;
       element.tabIndex = 0;
@@ -218,7 +245,11 @@ export function useDiffNoteGutterKeys({
   };
 
   const onBlur = (event: FocusEvent<HTMLElement>) => {
-    if (!isTarget(event.target) || isTarget(event.relatedTarget)) return;
+    if (!isTarget(event.target)) return;
+    // Another file's line number is still leaving this one.
+    const next = event.relatedTarget;
+    if (isTarget(next) && event.currentTarget.contains(next)) return;
+    gutterFocusedRef.current = false;
     hintRef.current?.removeAttribute("data-active");
     setSelection(null);
   };

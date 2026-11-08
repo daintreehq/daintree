@@ -196,9 +196,15 @@ describe("DiffViewer staged rows", () => {
     fireEvent.keyDown(last, { key: "ArrowDown" });
     expect(document.activeElement).toBe(last);
 
-    await runUntil(() => rowCount(container) === ROWS);
-    expect(document.activeElement).toBe(last);
-    expect(stops()).toEqual([String(DIFF_ROW_BATCH)]);
+    const mounted = new Set<number>();
+    await runUntil(() => {
+      mounted.add(rowCount(container));
+      expect(stops()).toEqual([String(DIFF_ROW_BATCH)]);
+      expect(document.activeElement).toBe(last);
+      return rowCount(container) === ROWS;
+    });
+    // Checked between batches, not just at either end of them.
+    expect(mounted.size).toBeGreaterThan(2);
 
     fireEvent.keyDown(last, { key: "ArrowDown" });
     expect(document.activeElement).toBe(

@@ -107,6 +107,7 @@ import {
   type DiffNoteCloseVia,
 } from "./DiffNoteWidgets";
 import {
+  findLineNumber,
   selectionLines,
   useDiffNoteGutterKeys,
   type DiffNoteLineSelection,
@@ -1127,6 +1128,7 @@ function FileDiff({
   // after a click beside one, or the Add file note button — so closing it hands
   // focus back.
   const draftOpenerRef = useRef<HTMLElement | null>(null);
+  const fileRootRef = useRef<HTMLDivElement | null>(null);
   const rememberDraftOpener = useCallback(() => {
     const active = document.activeElement;
     draftOpenerRef.current = active instanceof HTMLElement ? active : null;
@@ -1172,7 +1174,15 @@ function FileDiff({
 
   const closeNoteDraft = useCallback(
     (via: DiffNoteCloseVia) => {
-      returnFocusTo(draftOpenerRef.current, via);
+      // A layout switch under an open draft remounts whatever opened it.
+      const opener = draftOpenerRef.current;
+      const root = fileRootRef.current;
+      returnFocusTo(
+        opener && !opener.isConnected && root
+          ? (findLineNumber(root, opener) ?? root.querySelector<HTMLElement>('[role="region"]'))
+          : opener,
+        via
+      );
       draftOpenerRef.current = null;
       setNoteDraft(null);
       clearComposerDraft(draftOwnerId);
@@ -1288,7 +1298,6 @@ function FileDiff({
     };
   }, [notesEnabled, startLineDraft]);
 
-  const fileRootRef = useRef<HTMLDivElement | null>(null);
   const noteKeysHintRef = useRef<HTMLParagraphElement | null>(null);
   const gutterKeys = useDiffNoteGutterKeys({
     rootRef: fileRootRef,

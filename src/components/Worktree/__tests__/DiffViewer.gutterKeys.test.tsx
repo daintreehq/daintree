@@ -4,6 +4,7 @@ import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DiffViewer, _flushLangLoadsForTests, _resetLangStateForTests } from "../DiffViewer";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { dispatchEscape, hasHandlers } from "@/lib/escapeStack";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useDiffNotesStore } from "@/store/diffNotesStore";
 import { readDiffViewerCss } from "@/__tests__/support/cssManifest";
@@ -81,6 +82,28 @@ function selectedNewLines(container: HTMLElement): string[] {
     .map((row) => row.querySelector('[data-note-side="new"]')?.textContent ?? "");
 }
 
+/** jsdom has no input modality, so what `:focus-visible` says is the test's to set. */
+function mockFocusVisible(element: HTMLElement, visible: boolean) {
+  const original = element.matches.bind(element);
+  return vi
+    .spyOn(element, "matches")
+    .mockImplementation((selector) =>
+      selector === ":focus-visible" ? visible : original(selector)
+    );
+}
+
+function rerenderAs(
+  rerender: (ui: ReactElement) => void,
+  viewType: "unified" | "split",
+  diff = DIFF
+) {
+  rerender(
+    <TooltipProvider>
+      <DiffViewer diff={diff} viewType={viewType} annotations={ANNOTATIONS} />
+    </TooltipProvider>
+  );
+}
+
 function savedAnchor() {
   return Object.values(useDiffNotesStore.getState().notes)[0]?.anchor;
 }
@@ -155,11 +178,21 @@ describe("hovering a line number with notes on", () => {
   });
 
   it("gates the pointer on notes being on, and leaves split's placeholders out", () => {
-    const css = readDiffViewerCss();
-    const pointer = /([^{}]+)\{\s*cursor:\s*pointer;?\s*\}/.exec(css)?.[1]?.trim() ?? "";
-    expect(pointer).toContain("[data-notes-enabled]");
-    expect(pointer).toContain(":not(.diff-gutter-omit)");
+    const css = readDiffViewerCss().replace(/\/\*[\s\S]*?\*\//g, "");
+    const pointerSelectors = Array.from(css.matchAll(/([^{}]+)\{[^{}]*cursor:\s*pointer[^{}]*\}/g))
+      .flatMap((match) => (match[1] ?? "").split(","))
+      .map((selector) => selector.trim())
+      .filter((selector) => selector.includes("diff-gutter"));
+    expect(pointerSelectors.length).toBeGreaterThan(0);
+    for (const selector of pointerSelectors) {
+      expect(selector).toContain("[data-notes-enabled]");
+      expect(selector).toContain(":not(.diff-gutter-omit)");
+    }
     expect(css).toMatch(/\.diff-viewer\s+\.diff-gutter\s*\{[^}]*cursor:\s*default/);
+
+    // The attribute those rules key on, on an ancestor of the cells they style.
+    const { container } = renderUnified();
+    expect(container.querySelector("td.diff-gutter")?.closest("[data-notes-enabled]")).toBeTruthy();
   });
 });
 
@@ -188,25 +221,26 @@ describe("explaining the gestures", () => {
     const hint = container.querySelector<HTMLElement>(".diff-note-keys");
     const first = lineNumber(container, "new", 1);
 
-    const matches = vi.spyOn(first, "matches").mockImplementation((selector) => {
-      if (selector === ":focus-visible") return false;
-      return selector === "[data-note-line]";
-    });
+    const clicked = mockFocusVisible(first, false);
     first.focus();
     expect(hint?.hasAttribute("data-active")).toBe(false);
     first.blur();
-    matches.mockRestore();
+    clicked.mockRestore();
 
-    const keyboardFocused = vi.spyOn(first, "matches").mockReturnValue(true);
+    const keyboard = mockFocusVisible(first, true);
     first.focus();
     expect(hint?.hasAttribute("data-active")).toBe(true);
     expect(hint?.textContent).not.toMatch(/shift\+enter/i);
-    keyboardFocused.mockRestore();
+    keyboard.mockRestore();
 
     press("Enter");
     // Focus went to the composer, so the keys are no longer in play.
     expect(hint?.hasAttribute("data-active")).toBe(false);
     expect(hint?.textContent).toMatch(/shift\+enter/i);
+
+    expect(readDiffViewerCss()).toMatch(
+      /\.diff-note-keys:not\(\[data-active\]\)\s*\{[^}]*display:\s*none/
+    );
   });
 });
 
@@ -284,8 +318,71 @@ index 0123456..1234567 100644
     rerender(ui());
     expect(container.querySelector("[data-note-line]")).toBeNull();
     expect(container.querySelector(".diff-line-number[tabindex]")).toBeNull();
+    expect(container.querySelector("[data-notes-enabled]")).toBeNull();
     rerender(ui(ANNOTATIONS));
     expect(tabStops(container)).toEqual(["new 1"]);
+    expect(container.querySelector("[data-notes-enabled]")).toBeTruthy();
+  });
+
+  it("keeps its line through a layout switch that remounts every row", () => {
+    const { container, rerender } = renderUnified();
+    act(() => lineNumber(container, "new", 41).focus());
+    act(() => screen.getByLabelText("Add file note").focus());
+
+    rerenderAs(rerender, "split");
+
+    expect(tabStops(container)).toEqual(["new 41"]);
+    // Focus was elsewhere, so the switch has no business taking it.
+    expect(document.activeElement).toBe(screen.getByLabelText("Add file note"));
+  });
+
+  it("carries the keyboard across when the focused number's row remounts, dropping its selection", () => {
+    const { container, rerender } = renderUnified();
+    lineNumber(container, "new", 1).focus();
+    press("ArrowDown", { shiftKey: true });
+    expect(selectedNewLines(container)).toEqual(["1", "2"]);
+
+    rerenderAs(rerender, "split");
+
+    expect(focusedLine()).toBe("new 2");
+    expect(tabStops(container)).toEqual(["new 2"]);
+    expect(container.querySelectorAll("td.diff-gutter-selected")).toHaveLength(0);
+    expect(hasHandlers()).toBe(false);
+    press("Enter");
+    expect(screen.getByLabelText("New note on line 2")).toBeTruthy();
+  });
+
+  it("gives each file its own stop and its own selection", () => {
+    const { container } = renderUnified(`${DIFF}diff --git a/src/b.ts b/src/b.ts
+index 0123456..abcdefg 100644
+--- a/src/b.ts
++++ b/src/b.ts
+@@ -1,2 +1,3 @@
+ first
++second
+ third
+`);
+    const [fileA, fileB] = Array.from(container.querySelectorAll<HTMLElement>("[data-diff-file]"));
+    if (!fileA || !fileB) throw new Error("expected two files");
+    expect(tabStops(fileA)).toEqual(["new 1"]);
+    expect(tabStops(fileB)).toEqual(["new 1"]);
+
+    const hintA = fileA.querySelector<HTMLElement>(".diff-note-keys");
+    const firstA = lineNumber(fileA, "new", 1);
+    const keyboard = mockFocusVisible(firstA, true);
+    firstA.focus();
+    keyboard.mockRestore();
+    expect(hintA?.hasAttribute("data-active")).toBe(true);
+    press("ArrowDown", { shiftKey: true });
+    expect(selectedNewLines(fileA)).toEqual(["1", "2"]);
+
+    // Straight from one file's gutter to the other's, which a click can do.
+    act(() => lineNumber(fileB, "new", 2).focus());
+
+    expect(selectedNewLines(fileA)).toEqual([]);
+    expect(hintA?.hasAttribute("data-active")).toBe(false);
+    expect(tabStops(fileA)).toEqual(["new 2"]);
+    expect(tabStops(fileB)).toEqual(["new 2"]);
   });
 });
 
@@ -338,6 +435,58 @@ describe("moving between line numbers", () => {
     lineNumber(container, "new", 3).focus();
     press("ArrowLeft");
     expect(focusedLine()).toBe("old 2");
+  });
+
+  describe("crossing to the nearest number in the other column", () => {
+    // Reading order: old 1, new 1, new 2, new 3, old 5, new 4.
+    const TWO_REMOVALS = `diff --git a/src/a.ts b/src/a.ts
+index 0123456..abcdefg 100644
+--- a/src/a.ts
++++ b/src/a.ts
+@@ -1,6 +1,4 @@
+-gone1
+ keep2
+ keep3
+ keep4
+-gone5
+ keep6
+`;
+
+    it.each([
+      // The closer one, whichever way the key points and wherever it sits in the DOM.
+      ["new", 1, "ArrowRight", "old 1"],
+      ["new", 3, "ArrowLeft", "old 5"],
+      // Equally far: the way the key points.
+      ["new", 2, "ArrowLeft", "old 1"],
+      ["new", 2, "ArrowRight", "old 5"],
+    ] as const)("from %s %i with %s lands on %s", (side, line, key, expected) => {
+      const { container } = renderSplit(TWO_REMOVALS);
+      lineNumber(container, side, line).focus();
+      press(key);
+      expect(focusedLine()).toBe(expected);
+    });
+
+    it("looks later in the table as well as earlier", () => {
+      const { container } = renderSplit();
+      lineNumber(container, "new", 1).focus();
+      press("ArrowLeft");
+      expect(focusedLine()).toBe("old 2");
+    });
+  });
+
+  it("leaves the key alone in a split file with two columns but nothing in the other", () => {
+    const { container } = renderSplit(`diff --git a/src/a.ts b/src/a.ts
+index 0123456..abcdefg 100644
+--- a/src/a.ts
++++ b/src/a.ts
+@@ -1,2 +1,3 @@
+ one
++two
+ three
+`);
+    lineNumber(container, "new", 1).focus();
+    expect(press("ArrowLeft")).toBe(true);
+    expect(focusedLine()).toBe("new 1");
   });
 
   it("has nowhere to cross to in a one-sided file, and leaves the key alone", () => {
@@ -402,6 +551,34 @@ describe("starting a note from the keyboard", () => {
     });
     expect(savedAnchor()).toMatchObject({ side: "new", startLine: 2, endLine: 2 });
     expect(focusedLine()).toBe("new 2");
+  });
+
+  it("hands focus to the same line when a layout switch remounted the one that opened it", () => {
+    const { container, rerender } = renderUnified();
+    lineNumber(container, "new", 2).focus();
+    press("Enter");
+
+    rerenderAs(rerender, "split");
+    expect(screen.getByLabelText("New note on line 2")).toBeTruthy();
+
+    fireEvent.keyDown(screen.getByLabelText("New note on line 2"), { key: "Escape" });
+    expect(focusedLine()).toBe("new 2");
+  });
+
+  it("falls back to the diff region when no line number opened it", () => {
+    const { container, rerender } = renderUnified();
+    const region = container.querySelector<HTMLElement>('[role="region"]');
+    const cell = lineNumber(container, "new", 2).closest("td");
+    if (!region || !cell) throw new Error("expected a region and a gutter cell");
+    act(() => region.focus());
+    fireEvent.click(cell);
+
+    // Unified's region and centered split's sit at different depths, so it remounts too.
+    rerenderAs(rerender, "split");
+
+    fireEvent.keyDown(screen.getByLabelText("New note on line 2"), { key: "Escape" });
+    expect(document.activeElement?.getAttribute("role")).toBe("region");
+    expect(document.activeElement).not.toBe(region);
   });
 });
 
@@ -506,6 +683,51 @@ index 0123456..abcdefg 100644
     expect(selectedNewLines(container)).toEqual(["41"]);
   });
 
+  it("gives way to a click on an open draft's own line, where no autofocus blurs it", () => {
+    const { container } = renderUnified();
+    lineNumber(container, "new", 1).focus();
+    press("Enter");
+    const composer = screen.getByLabelText("New note on line 1");
+
+    lineNumber(container, "new", 2).focus();
+    press("ArrowDown", { shiftKey: true });
+    expect(selectedNewLines(container)).toEqual(["2", "3"]);
+
+    fireEvent.click(lineNumber(container, "new", 1));
+
+    expect(screen.getByLabelText("New note on line 1")).toBe(composer);
+    expect(selectedNewLines(container)).toEqual(["1"]);
+  });
+
+  it("outranks an open draft: only it highlights, and Shift+Enter opens it rather than extending", () => {
+    const { container } = renderUnified();
+    lineNumber(container, "new", 1).focus();
+    press("Enter");
+
+    lineNumber(container, "new", 2).focus();
+    press("ArrowDown", { shiftKey: true });
+    expect(selectedNewLines(container)).toEqual(["2", "3"]);
+
+    press("Enter", { shiftKey: true });
+    expect(screen.getByLabelText("New note on lines 2–3")).toBeTruthy();
+    expect(selectedNewLines(container)).toEqual(["2", "3"]);
+  });
+
+  it("doesn't outlive the revision it was made on", () => {
+    const { container, rerender } = renderUnified();
+    lineNumber(container, "new", 1).focus();
+    press("ArrowDown", { shiftKey: true });
+    expect(selectedNewLines(container)).toEqual(["1", "2"]);
+
+    // Same revision line, so the view and its focused row carry on under new text.
+    rerenderAs(rerender, "unified", DIFF.replace("+added\n", "+rewritten\n"));
+
+    expect(focusedLine()).toBe("new 2");
+    expect(selectedNewLines(container)).toEqual([]);
+    press("Enter");
+    expect(screen.getByLabelText("New note on line 2")).toBeTruthy();
+  });
+
   it("clears with Escape, and only then lets Escape reach the host", () => {
     const onHostKeyDown = vi.fn();
     const { container } = renderDiff(
@@ -519,12 +741,27 @@ index 0123456..abcdefg 100644
     lineNumber(container, "new", 1).focus();
     press("ArrowDown", { shiftKey: true });
 
-    press("Escape");
+    expect(press("Escape")).toBe(false);
     expect(selectedNewLines(container)).toEqual([]);
     expect(escapesSeen()).toBe(0);
 
-    press("Escape");
+    expect(press("Escape")).toBe(true);
     expect(escapesSeen()).toBe(1);
+  });
+
+  it("answers the Escape stack too, which the global handler runs before the key gets here", () => {
+    const { container } = renderUnified();
+    expect(hasHandlers()).toBe(false);
+
+    lineNumber(container, "new", 1).focus();
+    press("ArrowDown", { shiftKey: true });
+    expect(hasHandlers()).toBe(true);
+
+    act(() => {
+      dispatchEscape();
+    });
+    expect(selectedNewLines(container)).toEqual([]);
+    expect(hasHandlers()).toBe(false);
   });
 });
 
@@ -547,6 +784,22 @@ describe("extending an open draft from the keyboard", () => {
     const extended = screen.getByLabelText("New note on lines 1–2");
     expect(extended instanceof HTMLTextAreaElement && extended.value).toBe("Covers both");
     expect(document.activeElement).toBe(extended);
+  });
+
+  it.each([
+    ["past hidden lines", "new", 3, "new", 40, "New note on line 40"],
+    ["onto the other side", "new", 1, "old", 2, "New note on line 2 (removed lines)"],
+  ] as const)("moves the draft rather than extending %s", (_case, side, line, toSide, toLine, label) => {
+    const { container } = renderUnified();
+    lineNumber(container, side, line).focus();
+    press("Enter");
+    fireEvent.change(document.activeElement!, { target: { value: "Kept" } });
+
+    lineNumber(container, toSide, toLine).focus();
+    press("Enter", { shiftKey: true });
+
+    const moved = screen.getByLabelText(label);
+    expect(moved instanceof HTMLTextAreaElement && moved.value).toBe("Kept");
   });
 
   it("starts fresh when there is no draft to extend", () => {
