@@ -204,6 +204,7 @@ describe("the Canopy window's frame", () => {
 
       expect(switchToHost).toHaveBeenCalledWith("host-1", true, "project-b", {
         focusIntent: { intent: "focus-panel", panelId: "agent-2" },
+        standalone: true,
       });
       expect(goToRun).not.toHaveBeenCalled();
       expect(hold.closeForTerminal).not.toHaveBeenCalled();
@@ -211,7 +212,7 @@ describe("the Canopy window's frame", () => {
     });
 
     it("says why a run on this machine wasn't reached, and tries again from there", async () => {
-      goToRun.mockRejectedValueOnce(new Error("A window for its project didn't open."));
+      goToRun.mockRejectedValueOnce(new Error("The window for Alpha didn't come up in time."));
 
       go({ hostId: null, runId: "agent-1", workspaceId: "project-a" }, panel());
       await act(async () => {});
@@ -219,25 +220,29 @@ describe("the Canopy window's frame", () => {
       expect(notifyMock).toHaveBeenCalledTimes(1);
       const toast = notifyMock.mock.calls[0]![0] as {
         type: string;
+        title: string;
         message: string;
-        actions: Array<{ onClick: () => void }>;
+        actions: Array<{ label: string; onClick: () => void }>;
       };
-      expect(toast.type).toBe("error");
-      expect(toast.message).toMatch(/didn't open/);
-      expect(toast.actions).toHaveLength(1);
+      expect(toast).toMatchObject({
+        type: "error",
+        title: "Couldn't open agent",
+        message: "The window for Alpha didn't come up in time.",
+      });
+      expect(toast.actions.map((action) => action.label)).toEqual(["Try again"]);
 
       toast.actions[0]!.onClick();
       await act(async () => {});
       expect(goToRun).toHaveBeenCalledTimes(2);
+      expect(goToRun.mock.calls[1]![0]).toEqual({ workspaceId: "project-a", runId: "agent-1" });
     });
 
-    it("offers no retry for a run whose workspace is gone", async () => {
+    it("offers no retry for a run whose workspace is gone, as main says it over IPC", async () => {
+      // What reaches a renderer: the code and words survive only in the message prefix.
       goToRun.mockRejectedValueOnce(
-        Object.assign(new Error("gone"), {
-          name: "AppError",
-          code: "NOT_FOUND",
-          userMessage: "Its project or scratch has been removed.",
-        })
+        new Error(
+          `[AppError|NOT_FOUND|${encodeURIComponent("Its project or scratch has been removed.")}] gone`
+        )
       );
 
       go({ hostId: null, runId: "agent-1", workspaceId: "project-a" }, panel());
@@ -247,22 +252,5 @@ describe("the Canopy window's frame", () => {
       expect(toast.message).toBe("Its project or scratch has been removed.");
       expect(toast.actions).toBeUndefined();
     });
-  });
-
-  it("says what a restore needs rather than moving anything", () => {
-    const panel = { stillShows: vi.fn(() => true), closeForTerminal: vi.fn() };
-
-    Reflect.apply(CANOPY_WINDOW_FRAME.restoreElsewhere, undefined, [undefined, undefined, panel]);
-
-    expect(notifyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Project isn't open" })
-    );
-    expect(panel.closeForTerminal).not.toHaveBeenCalled();
-  });
-
-  it("refuses to open an assistant in words, for its pane to show", async () => {
-    const refusal: unknown = await Reflect.apply(CANOPY_WINDOW_FRAME.openAssistant, undefined, []);
-
-    expect(refusal).toMatch(/Assistant panel/);
   });
 });

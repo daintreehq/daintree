@@ -125,6 +125,13 @@ function landed(webContents: FakeWebContents) {
   );
 }
 
+/** The panes a view was told to focus, in order. */
+function focusedPanes(webContents: FakeWebContents) {
+  return webContents.send.mock.calls
+    .filter(([channel]) => channel === CHANNELS.PROJECT_FOCUS_ON_ACTIVATE)
+    .map(([, intent]) => (intent as { panelId: string }).panelId);
+}
+
 /** Opens a window showing the workspace, as main's `createWindow` would, hydrated or not. */
 function openerThatOpens({ hydrated = true }: { hydrated?: boolean } = {}) {
   const opened: Array<ReturnType<typeof addWindow>> = [];
@@ -206,9 +213,13 @@ describe("Go to pane from the Canopy window (#16337)", () => {
   it("focuses the pane in a new window only once its view has hydrated", async () => {
     const { opened } = openerThatOpens({ hydrated: false });
 
-    const going = goToCanopyRun({ workspaceId: PROJECT, runId: RUN });
+    let settled = false;
+    const going = goToCanopyRun({ workspaceId: PROJECT, runId: RUN }).then(() => {
+      settled = true;
+    });
     await vi.waitFor(() => expect(opened).toHaveLength(1));
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(settled).toBe(false);
     expect(landed(opened[0]!.appWebContents)).toBe(false);
 
     hydrate(opened[0]!.appWebContents);
@@ -218,17 +229,45 @@ describe("Go to pane from the Canopy window (#16337)", () => {
     expect(landed(opened[0]!.appWebContents)).toBe(true);
   });
 
-  it("opens one window when Go to pane is pressed again while it opens", async () => {
+  it("opens one window when Go to pane is pressed again before it has one", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const opened: Array<ReturnType<typeof addWindow>> = [];
+    const opener = vi.fn(async (workspaceId: string) => {
+      await gate;
+      const window = addWindow(workspaceId);
+      nav.hydrated.add(window.appWebContents.id);
+      opened.push(window);
+      return window.windowId;
+    });
+    setCanopyRunWindowOpener(opener);
+
+    const first = goToCanopyRun({ workspaceId: PROJECT, runId: "agent-1" });
+    await vi.waitFor(() => expect(opener).toHaveBeenCalledTimes(1));
+    const second = goToCanopyRun({ workspaceId: PROJECT, runId: "agent-2" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    release();
+    await Promise.all([first, second]);
+
+    expect(opener).toHaveBeenCalledTimes(1);
+    expect(focusedPanes(opened[0]!.appWebContents)).toEqual(["agent-1", "agent-2"]);
+  });
+
+  it("lands a later press after the one that opened the window, never before it", async () => {
     const { opener, opened } = openerThatOpens({ hydrated: false });
 
-    const first = goToCanopyRun({ workspaceId: PROJECT, runId: RUN });
+    const first = goToCanopyRun({ workspaceId: PROJECT, runId: "agent-1" });
     await vi.waitFor(() => expect(opened).toHaveLength(1));
-    const second = goToCanopyRun({ workspaceId: PROJECT, runId: RUN });
+    // The window is up and shows the project, but its view hasn't hydrated.
+    const second = goToCanopyRun({ workspaceId: PROJECT, runId: "agent-2" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
     hydrate(opened[0]!.appWebContents);
     await Promise.all([first, second]);
 
     expect(opener).toHaveBeenCalledTimes(1);
-    expect(landed(opened[0]!.appWebContents)).toBe(true);
+    expect(focusedPanes(opened[0]!.appWebContents)).toEqual(["agent-1", "agent-2"]);
   });
 
   it("rejects when no window could open, and when one never comes up", async () => {
@@ -239,14 +278,36 @@ describe("Go to pane from the Canopy window (#16337)", () => {
 
     vi.useFakeTimers();
     const { opened } = openerThatOpens({ hydrated: false });
-    const going = goToCanopyRun({ workspaceId: PROJECT, runId: RUN });
-    const outcome = going.then(
+    const outcome = goToCanopyRun({ workspaceId: PROJECT, runId: RUN }).then(
       () => "resolved",
       (error: { code?: string }) => error.code
     );
     await vi.advanceTimersByTimeAsync(CANOPY_RUN_OPENING_TIMEOUT_MS);
     expect(await outcome).toBe("PROJECT_OPEN_FAILED");
     expect(landed(opened[0]!.appWebContents)).toBe(false);
+  });
+
+  it("gives up on a window whose opening stalls, and a later press opens afresh", async () => {
+    vi.useFakeTimers();
+    const opener = vi.fn(() => new Promise<number | null>(() => {}));
+    setCanopyRunWindowOpener(opener);
+    const attempt = () =>
+      goToCanopyRun({ workspaceId: PROJECT, runId: RUN }).then(
+        () => "resolved",
+        (error: { code?: string }) => error.code
+      );
+
+    const first = attempt();
+    await vi.advanceTimersByTimeAsync(CANOPY_RUN_OPENING_TIMEOUT_MS - 1);
+    expect(opener).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await first).toBe("PROJECT_OPEN_FAILED");
+
+    const second = attempt();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(opener).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(CANOPY_RUN_OPENING_TIMEOUT_MS);
+    expect(await second).toBe("PROJECT_OPEN_FAILED");
   });
 
   it("opens nothing for a project that is gone, or whose folder is missing", async () => {
@@ -317,6 +378,16 @@ describe("Go to pane from the Canopy window, for a run in a scratch", () => {
     expect(owner.pvm.setPendingFocusIntent).toHaveBeenCalledWith(SCRATCH, FOCUS);
     expect(nav.switchToLocal).toHaveBeenCalledWith(owner.windowId, SCRATCH);
     expect(owner.appWebContents.send).not.toHaveBeenCalled();
+  });
+
+  it("says so when that window couldn't come back to this machine", async () => {
+    const owner = addWindow(null, [SCRATCH]);
+    nav.remoteWindows.add(owner.windowId);
+    nav.switchToLocal.mockRejectedValueOnce(new Error("The host went away"));
+
+    await expect(goToCanopyRun({ workspaceId: SCRATCH, runId: RUN })).rejects.toThrow(
+      "The host went away"
+    );
   });
 
   it("opens a window on a scratch no window has, and nothing for one that is gone", async () => {

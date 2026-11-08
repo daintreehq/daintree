@@ -129,7 +129,9 @@ export function openScheduledRunFromNotification(target: ScheduledRunNotificatio
     scheduleId: target.scheduleId,
     panelId: target.terminalId,
   };
-  const redirect = (owner: ProjectOwner): void => redirectToProjectOwner(owner, project, intent);
+  const redirect = (owner: ProjectOwner): void => {
+    redirectToProjectOwner(owner, project, intent);
+  };
   if (landInOwner(registry, project.id, intent, redirect)) return;
 
   const context = localWindow(registry);

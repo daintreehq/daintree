@@ -36,7 +36,8 @@ function goToLocalRun(workspaceId: string, runId: string): void {
  * Go to pane from a window with no project of its own (#16337): the run is
  * reached where it lives, and this window stays open on its selection. Another
  * host's run lands in a window on that host, the one already showing its
- * project or a new one, never this one; that switch says itself why it failed.
+ * project or a new one, never this one. That switch says itself why it failed,
+ * offering only a recovery this window can run.
  */
 function goToRun({ place }: CanopyGoToRun): void {
   if (place.hostId === null) {
@@ -45,6 +46,7 @@ function goToRun({ place }: CanopyGoToRun): void {
   }
   void switchToHost(place.hostId, true, place.workspaceId, {
     focusIntent: { intent: "focus-panel", panelId: place.runId },
+    standalone: true,
   });
 }
 

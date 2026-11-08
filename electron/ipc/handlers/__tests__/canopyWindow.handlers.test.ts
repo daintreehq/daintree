@@ -33,6 +33,7 @@ vi.mock("../canopy.js", () => ({
   },
 }));
 
+import { AppError } from "../../../utils/errorTypes.js";
 import { registerCanopyWindowHandlers, restoreCanopyWindow } from "../canopyWindow.js";
 import { CANOPY_WINDOW_METHOD_CHANNELS } from "../canopyWindow.preload.js";
 
@@ -132,11 +133,20 @@ describe("Go to pane from the Canopy window (#16337)", () => {
     expect(goToCanopyRun).not.toHaveBeenCalled();
   });
 
-  it("passes on why a run couldn't be reached", async () => {
-    goToCanopyRun.mockRejectedValue(new Error("no window opened"));
-    expect(
-      await refused(invokeFrom(CANOPY_VIEW_ID, CANOPY_WINDOW_METHOD_CHANNELS.goToRun, target))
-    ).toBe(true);
+  it("passes on why a run couldn't be reached, in the words its toast shows", async () => {
+    goToCanopyRun.mockRejectedValue(
+      new AppError({
+        code: "NOT_FOUND",
+        message: "The run's workspace no longer exists",
+        userMessage: "Its project or scratch has been removed.",
+      })
+    );
+    const answer = invokeFrom(CANOPY_VIEW_ID, CANOPY_WINDOW_METHOD_CHANNELS.goToRun, target);
+
+    await expect(answer).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      userMessage: "Its project or scratch has been removed.",
+    });
   });
 });
 

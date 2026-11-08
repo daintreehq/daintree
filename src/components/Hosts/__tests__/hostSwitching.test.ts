@@ -337,3 +337,87 @@ describe("switchToHost", () => {
     expect(toast.actions.map((action) => action.label)).toEqual(["Retry"]);
   });
 });
+
+describe("a switch asked from a window with no project shell (#16337)", () => {
+  const goTo = () =>
+    switchToHost("h1", true, "p", {
+      focusIntent: { intent: "focus-panel", panelId: "agent-1" },
+      standalone: true,
+    });
+  const labels = () =>
+    (m.notify.mock.calls[0]![0] as { actions: Array<{ label: string }> }).actions.map(
+      (action) => action.label
+    );
+
+  it.each([
+    [
+      "ssh couldn't log in",
+      studio({
+        status: "unreachable",
+        lastSeenAt: null,
+        detail: "Permission denied (publickey).",
+        stoppedRetrying: true,
+      }),
+      new ClientAppError("HOST_SSH_ACCESS_DENIED", "ssh couldn't log in to studio-01"),
+    ],
+    [
+      "the host was never set up",
+      studio({ status: "unreachable", lastSeenAt: null, detail: null, hostModeOff: true }),
+      new ClientAppError("HOST_MODE_OFF", "Daintree isn't running in Host mode on studio-01"),
+    ],
+    [
+      "the host says the project is gone",
+      studio({ status: "connected", rttMs: 1, handshake: HANDSHAKE }),
+      new ClientAppError("NOT_FOUND", "Host h1 has no project p"),
+    ],
+    [
+      "the host runs an older build",
+      studio({
+        status: "version-mismatch",
+        mismatch: { kind: "version", local: "1.4.0", remote: "1.3.0" },
+        remote: HANDSHAKE,
+      }),
+      new ClientAppError("HOST_VERSION_MISMATCH", "different build"),
+    ],
+  ])(
+    "offers trying the same switch again when %s, not a place this window can't show",
+    async (_label, entry, error) => {
+      registerHostProjectPickerHost();
+      m.hosts = [entry];
+      m.switchWindowHost.mockRejectedValueOnce(error).mockResolvedValue({ outcome: "switched" });
+
+      await goTo();
+
+      expect(labels()).toEqual(["Retry"]);
+      (
+        m.notify.mock.calls[0]![0] as { actions: Array<{ onClick: () => void }> }
+      ).actions[0]!.onClick();
+      await vi.waitFor(() => expect(m.switchWindowHost).toHaveBeenCalledTimes(2));
+      expect(m.switchWindowHost.mock.calls[1]![0]).toEqual({
+        hostId: "h1",
+        newWindow: true,
+        projectId: "p",
+        focusIntent: { intent: "focus-panel", panelId: "agent-1" },
+      });
+      expect(m.dispatchEvent).not.toHaveBeenCalled();
+      expect(currentHostProjectPickerRequest()).toBeNull();
+    }
+  );
+
+  it("still offers this machine's own update, which runs anywhere", async () => {
+    m.hosts = [
+      studio({
+        status: "version-mismatch",
+        mismatch: { kind: "version", local: "1.3.0", remote: "1.4.0" },
+        remote: HANDSHAKE,
+      }),
+    ];
+    m.switchWindowHost.mockRejectedValue(
+      new ClientAppError("HOST_VERSION_MISMATCH", "different build")
+    );
+
+    await goTo();
+
+    expect(labels()).toEqual(["Update this machine"]);
+  });
+});

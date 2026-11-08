@@ -10,6 +10,7 @@ import {
   revealWindow,
   type ProjectOwner,
 } from "./projectOwnership.js";
+import type { WindowRegistry } from "./WindowRegistry.js";
 import { getWindowRegistry } from "./windowRef.js";
 import { isWindowOnRemoteHost, switchWindowToLocal } from "./windowHost.js";
 import {
@@ -66,14 +67,16 @@ function noWindow(): AppError {
  * rejects a scratch, so a window holding one in its cache is asked to open the
  * run itself, as its fleet overview would: its renderer saves the layout it
  * leaves and carries the pane to focus. Anywhere else the intent is parked for
- * the switch that lands the scratch.
+ * the switch that lands the scratch. Returns that switch when main makes it, so
+ * its failure is the request's.
  */
 function redirectToScratchOwner(
   owner: ProjectOwner,
   { workspaceId, runId }: CanopyRunTarget,
   intent: ProjectFocusOnActivateIntent
-): void {
+): Promise<void> | undefined {
   const { context, projectViewManager, state } = owner;
+  let switching: Promise<void> | undefined;
   if (state === "cached" && !isWindowOnRemoteHost(context.windowId)) {
     requestOwnerAction(owner, "pilot.openRun", { runId, workspaceId });
   } else {
@@ -81,13 +84,14 @@ function redirectToScratchOwner(
     // On a host now, its renderer would ask the host for a scratch it doesn't
     // have: the window comes back to this machine, onto the scratch.
     if (state === "cached") {
-      void switchWindowToLocal(context.windowId, workspaceId).catch((error: unknown) => {
-        console.warn("[CanopyWindow] Couldn't bring a window back to its scratch:", error);
-      });
+      switching = switchWindowToLocal(context.windowId, workspaceId).then(() => undefined);
     }
   }
   revealWindow(context.browserWindow);
+  return switching;
 }
+
+type OwnerRedirect = (owner: ProjectOwner) => Promise<void> | undefined;
 
 /**
  * How an owner that isn't showing the run's workspace is brought to it, or a
@@ -97,7 +101,7 @@ function redirectToScratchOwner(
 function ownerRedirect(
   target: CanopyRunTarget,
   intent: ProjectFocusOnActivateIntent
-): { redirect: (owner: ProjectOwner) => void; canOpen: boolean } {
+): { redirect: OwnerRedirect; canOpen: boolean } {
   if (isScratchWorkspaceId(target.workspaceId)) {
     if (!scratchStore.getScratchById(target.workspaceId)) throw gone();
     return { redirect: (owner) => redirectToScratchOwner(owner, target, intent), canOpen: true };
@@ -105,11 +109,32 @@ function ownerRedirect(
   const project = projectStore.getProjectById(target.workspaceId);
   if (!project) throw gone();
   return {
-    redirect: (owner) => redirectToProjectOwner(owner, project, intent),
+    redirect: (owner) => {
+      redirectToProjectOwner(owner, project, intent);
+      return undefined;
+    },
     // A window already showing a project whose folder has gone still reaches
     // the pane; a new one would open on nothing.
     canOpen: project.status !== "missing",
   };
+}
+
+/**
+ * Lands the intent in the window holding the workspace; false when none does.
+ * Settles once a switch main makes to get it there has.
+ */
+async function landInHolder(
+  registry: WindowRegistry,
+  workspaceId: string,
+  intent: ProjectFocusOnActivateIntent,
+  redirect: OwnerRedirect
+): Promise<boolean> {
+  const pending: { switching?: Promise<void> } = {};
+  const landed = landInOwner(registry, workspaceId, intent, (owner) => {
+    pending.switching = redirect(owner);
+  });
+  await pending.switching;
+  return landed;
 }
 
 function openWindowFor(workspaceId: string): Promise<boolean> {
@@ -145,18 +170,22 @@ function openWindowFor(workspaceId: string): Promise<boolean> {
  * Canopy window shows no project, so the run is reached where it lives: a
  * window holding its workspace comes forward, activating it there if it is
  * cached, and focuses the pane; with none, a new window opens on it and
- * focuses the pane once its view has hydrated. No other window is moved, and
- * a Go to pane while one opens for the same workspace waits for it rather
- * than opening a second. Resolves once the run is on its way; rejects with
- * why when it can't be reached.
+ * focuses the pane once its view has hydrated. No other window is moved. A Go
+ * to pane while a window opens for the same workspace waits for it, so it
+ * opens no second window and lands after the one that opened it, never
+ * before. Resolves once the run is on its way; rejects with why when it can't
+ * be reached.
  */
 export async function goToCanopyRun(target: CanopyRunTarget): Promise<void> {
+  const { workspaceId } = target;
+  const inFlight = opening.get(workspaceId);
+  if (inFlight) await inFlight;
   if (getActiveShutdown() !== null) return;
   const registry = getWindowRegistry();
   if (!registry) throw noWindow();
   const intent: ProjectFocusOnActivateIntent = { intent: "focus-panel", panelId: target.runId };
   const { redirect, canOpen } = ownerRedirect(target, intent);
-  if (landInOwner(registry, target.workspaceId, intent, redirect)) return;
+  if (await landInHolder(registry, workspaceId, intent, redirect)) return;
   if (!canOpen) {
     throw new AppError({
       code: "NOT_FOUND",
@@ -165,12 +194,14 @@ export async function goToCanopyRun(target: CanopyRunTarget): Promise<void> {
     });
   }
 
-  const opened = await openWindowFor(target.workspaceId);
+  const opened = await openWindowFor(workspaceId);
   if (getActiveShutdown() !== null) return;
   if (!opened) throw noWindow();
   // Routed again once it is up, so the pane is focused in the window that
   // shows the workspace now, as it is for one that already did.
-  if (!landInOwner(registry, target.workspaceId, intent, ownerRedirect(target, intent).redirect)) {
+  if (
+    !(await landInHolder(registry, workspaceId, intent, ownerRedirect(target, intent).redirect))
+  ) {
     throw noWindow();
   }
 }
