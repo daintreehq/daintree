@@ -320,6 +320,35 @@ describe("assertProjectDirectory under a hung filesystem", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("holds stat and access to one deadline, so a late access can't outlive it", async () => {
+    // stat answers a second before the deadline; access then hangs on the stale
+    // mount. With a deadline of its own the access would stay unstalled, and a
+    // retry would queue behind it instead of failing fast.
+    statMock.mockReturnValue(
+      new Promise<Stats>((resolve) =>
+        setTimeout(() => resolve(statsFor(true)), PROJECT_DIRECTORY_STAT_TIMEOUT_MS - 1_000)
+      )
+    );
+    accessMock.mockReturnValue(new Promise<void>(() => {}));
+
+    const first = expect(assertProjectDirectory(FOLDER)).rejects.toMatchObject({
+      code: "PROJECT_OPEN_FAILED",
+    });
+    await vi.advanceTimersByTimeAsync(PROJECT_DIRECTORY_STAT_TIMEOUT_MS + 1);
+    await first;
+
+    statMock.mockClear();
+    let settled = false;
+    const retry = assertProjectDirectory(FOLDER).finally(() => {
+      settled = true;
+    });
+    retry.catch(() => {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toBe(true);
+    await expect(retry).rejects.toMatchObject({ code: "PROJECT_OPEN_FAILED" });
+    expect(statMock).not.toHaveBeenCalled();
+  });
+
   it("issues separate syscalls for different paths", async () => {
     statMock.mockReturnValue(new Promise<Stats>(() => {}));
 

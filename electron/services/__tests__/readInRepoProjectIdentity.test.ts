@@ -1,10 +1,21 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
 import { ProjectIdentityFiles } from "../ProjectIdentityFiles.js";
+import { __resetProjectIoForTests, projectIo } from "../projectIoGate.js";
 
 const MAX_PROJECT_NAME_LENGTH = 100;
+
+// How a read of an online-only placeholder fails on macOS once Main's libuv
+// workers stop materializing them (#16361): libuv has no name for EDEADLK.
+function placeholderReadError(): NodeJS.ErrnoException {
+  return Object.assign(new Error("Unknown system error -11: open"), {
+    errno: -11,
+    code: "Unknown system error -11",
+    syscall: "open",
+  });
+}
 
 describe("readInRepoProjectIdentity", () => {
   let tmpDir: string;
@@ -16,6 +27,7 @@ describe("readInRepoProjectIdentity", () => {
   });
 
   afterEach(async () => {
+    __resetProjectIoForTests();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -63,6 +75,32 @@ describe("readInRepoProjectIdentity", () => {
       }
     }
   );
+
+  it("marks an online-only placeholder's failed read as unavailable", async () => {
+    await writeProjectJson(JSON.stringify({ version: 1, name: "Cloud" }));
+    const readSpy = vi.spyOn(fs, "readFile").mockRejectedValueOnce(placeholderReadError());
+    try {
+      expect(await identityFiles.readInRepoProjectIdentity(tmpDir)).toEqual({
+        found: false,
+        unavailable: true,
+      });
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
+  it("marks a read the project I/O gate refused as unavailable", async () => {
+    await writeProjectJson(JSON.stringify({ version: 1, name: "Stalled" }));
+    // A request under this root that never returns stalls the root.
+    void projectIo
+      .run(tmpDir, () => new Promise<never>(() => {}), { timeoutMs: 1 })
+      .catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(await identityFiles.readInRepoProjectIdentity(tmpDir)).toEqual({
+      found: false,
+      unavailable: true,
+    });
+  });
 
   it("returns empty object when file contains invalid JSON", async () => {
     await writeProjectJson("not valid json {{{");

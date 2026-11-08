@@ -56,10 +56,14 @@ function probeOnce(directoryPath: string): Promise<DirectoryProbe> {
   const pending = inFlightProbes.get(directoryPath);
   if (pending) return pending;
 
+  // One deadline for both syscalls, so an access that starts late can't hold
+  // the folder's gate slot unstalled past the caller's own timeout.
+  const bound = {
+    timeoutMs: PROJECT_DIRECTORY_STAT_TIMEOUT_MS,
+    deadline: performance.now() + PROJECT_DIRECTORY_STAT_TIMEOUT_MS,
+  };
   const started = (async (): Promise<DirectoryProbe> => {
-    const stats = await projectIo.run(directoryPath, () => fs.stat(directoryPath), {
-      timeoutMs: PROJECT_DIRECTORY_STAT_TIMEOUT_MS,
-    });
+    const stats = await projectIo.run(directoryPath, () => fs.stat(directoryPath), bound);
     if (!stats.isDirectory()) return { isDirectory: false };
     // A successful stat says nothing about our access to the directory itself —
     // it only needs execute permission on the *parent*. A folder with its own
@@ -69,7 +73,7 @@ function probeOnce(directoryPath: string): Promise<DirectoryProbe> {
     await projectIo.run(
       directoryPath,
       () => fs.access(directoryPath, fsConstants.R_OK | fsConstants.X_OK),
-      { timeoutMs: PROJECT_DIRECTORY_STAT_TIMEOUT_MS }
+      bound
     );
     return { isDirectory: true };
   })().finally(() => {

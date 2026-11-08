@@ -23,7 +23,12 @@ interface DatalessPolicyAddon {
   disableThreadPoolDatalessMaterialization?: (
     threads: number,
     timeoutMs: number
-  ) => Promise<{ requested: number; applied: number; errors: number[] }> | null;
+  ) => Promise<{
+    requested: number;
+    applied: number;
+    errors: number[];
+    processPolicy: number;
+  }> | null;
 }
 
 /** Long enough for an idle pool at boot; a busy thread is reported, not waited for. */

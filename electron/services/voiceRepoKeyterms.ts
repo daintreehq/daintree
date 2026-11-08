@@ -1,4 +1,4 @@
-import { readdir, readFile, realpath, stat } from "node:fs/promises";
+import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
 import { holdsCredentialOrId } from "./voiceKeytermSecrets.js";
@@ -10,6 +10,17 @@ import { projectIo } from "./projectIoGate.js";
  * libuv pool, and none outlives the caller's deadline in the queue.
  */
 type ProjectRead = <T>(request: () => Promise<T>) => Promise<T>;
+
+// Listings are read as names and typed one gated lstat at a time: readdir's
+// `withFileTypes` lstats every entry the filesystem leaves untyped all at once,
+// so one admitted request could hold several workers on a hung mount.
+async function isDirectory(io: ProjectRead, path: string): Promise<boolean> {
+  try {
+    return (await io(() => lstat(path))).isDirectory();
+  } catch {
+    return false;
+  }
+}
 
 // A manifest bigger than this is generated output, not something a person wrote.
 const MAX_MANIFEST_BYTES = 256 * 1024;
@@ -117,12 +128,12 @@ async function workspaceDirs(
       try {
         const parent = await io(() => realpath(join(realRoot, segments[0]!)));
         if (!isWithin(realRoot, parent)) continue;
-        const entries = await io(() => readdir(parent, { withFileTypes: true }));
-        for (const entry of entries) {
-          if (dirs.length >= MAX_WORKSPACE_PACKAGES) break;
-          if (entry.isDirectory() && !entry.name.startsWith(".")) {
-            dirs.push(join(parent, entry.name));
-          }
+        const entries = await io(() => readdir(parent));
+        for (const name of entries) {
+          if (dirs.length >= MAX_WORKSPACE_PACKAGES || spent()) break;
+          if (name.startsWith(".")) continue;
+          const dir = join(parent, name);
+          if (await isDirectory(io, dir)) dirs.push(dir);
         }
       } catch {
         // The glob's parent doesn't exist.
@@ -175,11 +186,11 @@ export async function deriveRepoNames(root: string, deadline = Infinity): Promis
   }
 
   try {
-    const entries = spent() ? [] : await io(() => readdir(realRoot, { withFileTypes: true }));
-    for (const entry of entries.slice(0, MAX_TOP_LEVEL_ENTRIES)) {
-      if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
-      if (IGNORED_DIRECTORIES.has(entry.name.toLowerCase())) continue;
-      names.push(entry.name);
+    const entries = spent() ? [] : await io(() => readdir(realRoot));
+    for (const name of entries.slice(0, MAX_TOP_LEVEL_ENTRIES)) {
+      if (spent()) break;
+      if (name.startsWith(".") || IGNORED_DIRECTORIES.has(name.toLowerCase())) continue;
+      if (await isDirectory(io, join(realRoot, name))) names.push(name);
     }
   } catch {
     // An unreadable root yields only what the manifest gave.

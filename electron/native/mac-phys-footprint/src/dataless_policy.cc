@@ -108,6 +108,10 @@ class PolicyWork : public Napi::AsyncWorker {
       errors.Set(i, Napi::Number::New(env, r.errors[i]));
     }
     result.Set("errors", errors);
+    // What children inherit; this function must never change it.
+    result.Set("processPolicy",
+               Napi::Number::New(env, getiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES,
+                                                     IOPOL_SCOPE_PROCESS)));
     r.deferred.Resolve(result);
   }
 
@@ -115,11 +119,12 @@ class PolicyWork : public Napi::AsyncWorker {
 };
 
 // disableThreadPoolDatalessMaterialization(threads: number, timeoutMs: number):
-//   Promise<{ requested: number; applied: number; errors: number[] }>
+//   Promise<{ requested: number; applied: number; errors: number[]; processPolicy: number }>
 //
 // `applied` counts distinct threads confirmed OFF, so it falls short of
 // `requested` when the pool is smaller, a thread was busy past the barrier, or
-// the kernel refused the policy (its errno is in `errors`).
+// the kernel refused the policy (its errno is in `errors`). `processPolicy` is
+// the process-wide setting afterwards (-1 when unreadable).
 Napi::Value DisableThreadPoolDatalessMaterialization(const Napi::CallbackInfo& info) {
   Napi::Env env = info.Env();
 

@@ -3,6 +3,8 @@ export interface ThreadPoolPolicyResult {
   requested: number;
   applied: number;
   errors: number[];
+  /** The process-wide policy afterwards, which children inherit; -1 when unreadable. */
+  processPolicy: number;
 }
 export function disableThreadPoolDatalessMaterialization(
   threads: number,

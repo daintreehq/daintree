@@ -42,37 +42,35 @@ describe("applyMainFileIoPolicy", () => {
 
   it("asks for one rendezvous per libuv worker", async () => {
     process.env.UV_THREADPOOL_SIZE = "6";
-    const disable = vi.fn(async (threads: number) => ({
+    const disable = vi.fn(async (threads: number, _timeoutMs: number) => ({
       requested: threads,
       applied: threads,
       errors: [],
+      processPolicy: 0,
     }));
     await applyMainFileIoPolicy({
       platform: "darwin",
       load: () => ({ disableThreadPoolDatalessMaterialization: disable }),
     });
-    expect(disable).toHaveBeenCalledWith(6, expect.any(Number));
+    expect(disable).toHaveBeenCalledTimes(1);
+    expect(disable.mock.calls[0]![0]).toBe(6);
+    expect(disable.mock.calls[0]![1]).toBeGreaterThan(0);
     expect(logInfo).toHaveBeenCalledWith(expect.any(String), { workers: 6 });
     expect(logWarn).not.toHaveBeenCalled();
   });
 
-  it("reports a policy that reached only some workers", async () => {
+  it.each([
+    ["a worker the barrier never reached", { requested: 4, applied: 3, errors: [] }],
+    ["every worker reached but one refusal", { requested: 4, applied: 4, errors: [22] }],
+  ])("warns instead of claiming success for %s", async (_label, result) => {
     await applyMainFileIoPolicy({
       platform: "darwin",
       load: () => ({
-        disableThreadPoolDatalessMaterialization: async () => ({
-          requested: 4,
-          applied: 3,
-          errors: [22],
-        }),
+        disableThreadPoolDatalessMaterialization: async () => ({ ...result, processPolicy: 0 }),
       }),
     });
     expect(logInfo).not.toHaveBeenCalled();
-    expect(logWarn).toHaveBeenCalledWith(expect.any(String), {
-      requested: 4,
-      applied: 3,
-      errors: [22],
-    });
+    expect(logWarn).toHaveBeenCalledWith(expect.any(String), result);
   });
 
   it("carries on when the addon is missing, unavailable or throws", async () => {

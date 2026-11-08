@@ -1382,6 +1382,63 @@ describe("RunCommandDetector", () => {
       readSpy.mockRestore();
     });
 
+    it("keeps the last full result when a changed file can't be read", async () => {
+      const pkgPath = path.join(tempDir, "package.json");
+      await fs.writeFile(pkgPath, JSON.stringify({ name: "t", scripts: { dev: "vite" } }), "utf-8");
+      const first = await detector.detect(tempDir);
+      expect(first.map((cmd) => cmd.name)).toEqual(["dev"]);
+
+      await fs.writeFile(
+        pkgPath,
+        JSON.stringify({ name: "t", scripts: { dev: "vite", build: "vite build" } }),
+        "utf-8"
+      );
+      // How an online-only placeholder's read fails once Main stops downloading them.
+      const placeholder = Object.assign(new Error("Unknown system error -11"), {
+        errno: -11,
+        code: "Unknown system error -11",
+        syscall: "read",
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const readSpy = vi.spyOn(fs, "readFile").mockRejectedValueOnce(placeholder);
+      try {
+        expect(await detector.detect(tempDir)).toEqual(first);
+      } finally {
+        readSpy.mockRestore();
+        warn.mockRestore();
+      }
+
+      // The partial pass wasn't cached, so the next read picks up the change.
+      expect((await detector.detect(tempDir)).map((cmd) => cmd.name)).toEqual(["dev", "build"]);
+    });
+
+    it("treats a stat that fails other than by absence as unknown, not missing", async () => {
+      const pkgPath = path.join(tempDir, "package.json");
+      await fs.writeFile(pkgPath, JSON.stringify({ name: "t", scripts: { dev: "vite" } }), "utf-8");
+      await fs.writeFile(path.join(tempDir, "bun.lock"), "", "utf-8");
+      const first = await detector.detect(tempDir);
+      expect(first.map((cmd) => cmd.command)).toEqual(["bun run dev"]);
+
+      await fs.writeFile(
+        pkgPath,
+        JSON.stringify({ name: "t2", scripts: { dev: "vite" } }),
+        "utf-8"
+      );
+      const realStat = fs.stat;
+      const statSpy = vi
+        .spyOn(fs, "stat")
+        .mockImplementation(((target: string) =>
+          String(target).endsWith("bun.lock")
+            ? Promise.reject(Object.assign(new Error("EIO"), { code: "EIO", syscall: "stat" }))
+            : realStat(target)) as typeof fs.stat);
+      try {
+        // An unreadable lockfile must not flip the runner to npm.
+        expect((await detector.detect(tempDir)).map((cmd) => cmd.command)).toEqual(["bun run dev"]);
+      } finally {
+        statSpy.mockRestore();
+      }
+    });
+
     it("re-scans when package.json appears after an empty detection", async () => {
       const empty = await detector.detect(tempDir);
       expect(empty).toEqual([]);

@@ -181,6 +181,17 @@ function parseSuggestedThemeId(value: unknown): string | undefined {
   return BUILT_IN_APP_SCHEMES.some((scheme) => scheme.id === id) ? id : undefined;
 }
 
+/**
+ * The file couldn't be read, as opposed to being read and found malformed:
+ * filesystem errors carry the failing syscall, and the gate refuses on its own.
+ */
+function isUnreadable(error: unknown): boolean {
+  return (
+    isProjectIoError(error) ||
+    (error instanceof Error && typeof (error as NodeJS.ErrnoException).syscall === "string")
+  );
+}
+
 export class ProjectIdentityFiles {
   private readonly settingsWriteQueues = new Map<string, Promise<void>>();
 
@@ -272,6 +283,11 @@ export class ProjectIdentityFiles {
     // Daintree, so it is always carried forward the same way.
     let id = data.id !== undefined && isValidProjectId(data.id) ? data.id : undefined;
     const existing = await this.readInRepoProjectIdentity(projectPath);
+    // Rebuilding over a file that couldn't be read (an online-only placeholder,
+    // a stalled mount) would drop the id and theme it may hold (#16361).
+    if (existing.unavailable) {
+      throw new Error(`${DAINTREE_PROJECT_JSON} in ${projectPath} can't be read right now`);
+    }
     if (id === undefined) id = existing.id;
 
     const payload: {
@@ -327,7 +343,9 @@ export class ProjectIdentityFiles {
    * be replaced by it. Only {@link changeInRepoVoiceDictionary} changes it.
    * The field is carried over verbatim from any file that parses, a newer
    * version's included; one that doesn't parse is replaced as it always was,
-   * since nothing in it could be read.
+   * since nothing in it could be read. One that can't be read at all (an
+   * online-only placeholder, a stalled mount) may still hold the vocabulary,
+   * so the write is refused instead (#16361).
    */
   async writeInRepoSettings(projectPath: string, settings: ProjectSettings): Promise<void> {
     return this.queueSettingsWrite(projectPath, async () => {
@@ -352,7 +370,10 @@ export class ProjectIdentityFiles {
         (payload as Record<keyof ProjectSettings, unknown>)[key] = value;
       }
 
-      const existing = await this.readSettingsFileObject(projectPath).catch(() => null);
+      const existing = await this.readSettingsFileObject(projectPath).catch((error: unknown) => {
+        if (isUnreadable(error)) throw error;
+        return null;
+      });
       if (existing && Object.hasOwn(existing, "voiceDictionary")) {
         (payload as Record<string, unknown>).voiceDictionary = existing.voiceDictionary;
       }
@@ -627,11 +648,10 @@ export class ProjectIdentityFiles {
     scanComplete: boolean;
   }> {
     const recipesDir = path.join(projectPath, DAINTREE_RECIPES_DIR);
-    let entries;
+    let names: string[];
     try {
-      entries = await projectIo.run(projectPath, () =>
-        fs.readdir(recipesDir, { withFileTypes: true })
-      );
+      // Names only: see listDaintreeDirNames for why types are read per entry.
+      names = await this.listDaintreeDirNames(projectPath, recipesDir);
     } catch (error) {
       if (error instanceof Error && "code" in error && error.code === "ENOENT")
         return { recipes: [], hashes: new Map(), dirExists: false, scanComplete: true };
@@ -649,12 +669,13 @@ export class ProjectIdentityFiles {
     // is genuinely skipped and does NOT taint the scan, otherwise one committed
     // bad file would wedge pruning forever.
     let scanComplete = true;
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+    for (const name of names) {
+      if (!name.endsWith(".json")) continue;
       try {
-        const content = await projectIo.run(projectPath, () =>
-          fs.readFile(path.join(recipesDir, entry.name), "utf-8")
-        );
+        const filePath = path.join(recipesDir, name);
+        const stats = await projectIo.run(projectPath, () => fs.lstat(filePath));
+        if (!stats.isFile()) continue;
+        const content = await projectIo.run(projectPath, () => fs.readFile(filePath, "utf-8"));
         const parsed = JSON.parse(stripUtf8Bom(content));
         if (typeof parsed !== "object" || parsed === null) {
           continue;
@@ -665,7 +686,7 @@ export class ProjectIdentityFiles {
           // the same id on every read (a random UUID here would churn the id
           // across the concurrent reconcile + getInRepoRecipes reads). The id
           // is treated as opaque from here on and is persisted on next write.
-          parsed.id = `inrepo-${entry.name.replace(/\.json$/, "")}`;
+          parsed.id = `inrepo-${name.replace(/\.json$/, "")}`;
         }
         // Tag scope explicitly so callers discriminate in-repo recipes by the
         // `scope` field rather than the id prefix — opaque-UUID in-repo recipes
@@ -679,7 +700,7 @@ export class ProjectIdentityFiles {
         const result = TerminalRecipeSchema.safeParse(parsed);
         if (!result.success) {
           console.warn(
-            `[ProjectIdentityFiles] Skipping invalid recipe: ${entry.name}`,
+            `[ProjectIdentityFiles] Skipping invalid recipe: ${name}`,
             z.prettifyError(result.error)
           );
           continue;
@@ -691,7 +712,7 @@ export class ProjectIdentityFiles {
           // keep the first occurrence and warn loudly rather than letting the
           // hash map and reconciliation silently collapse them.
           console.warn(
-            `[ProjectIdentityFiles] Duplicate recipe id "${result.data.id}" in ${entry.name} — keeping first occurrence, change this file's id`
+            `[ProjectIdentityFiles] Duplicate recipe id "${result.data.id}" in ${name} — keeping first occurrence, change this file's id`
           );
           continue;
         }
@@ -704,7 +725,7 @@ export class ProjectIdentityFiles {
         const forwardIncompat = detectRecipeForwardIncompat(result.data);
         if (forwardIncompat) {
           console.warn(
-            `[ProjectIdentityFiles] ${entry.name} holds content this build does not support — ` +
+            `[ProjectIdentityFiles] ${name} holds content this build does not support — ` +
               `it will not round-trip: ${describeRecipeForwardIncompat(forwardIncompat)}`
           );
         }
@@ -714,14 +735,12 @@ export class ProjectIdentityFiles {
         // in-repo recipe can't smuggle injected fields into the spawn path.
         let sanitizedTerminals = sanitizeRecipeTerminals(result.data.terminals);
         if (sanitizedTerminals.length === 0) {
-          console.warn(
-            `[ProjectIdentityFiles] Skipping recipe with no valid terminals: ${entry.name}`
-          );
+          console.warn(`[ProjectIdentityFiles] Skipping recipe with no valid terminals: ${name}`);
           continue;
         }
         if (sanitizedTerminals.length > MAX_TERMINALS_PER_RECIPE) {
           console.warn(
-            `[ProjectIdentityFiles] Capping recipe ${entry.name} at ${MAX_TERMINALS_PER_RECIPE} terminals (had ${sanitizedTerminals.length})`
+            `[ProjectIdentityFiles] Capping recipe ${name} at ${MAX_TERMINALS_PER_RECIPE} terminals (had ${sanitizedTerminals.length})`
           );
           sanitizedTerminals = sanitizedTerminals.slice(0, MAX_TERMINALS_PER_RECIPE);
         }
@@ -751,16 +770,24 @@ export class ProjectIdentityFiles {
         // authoritative so a permanently-bad file never blocks pruning.
         if (error instanceof Error && "code" in error) {
           scanComplete = false;
-          console.warn(`[ProjectIdentityFiles] Could not read recipe file: ${entry.name}`, error);
+          console.warn(`[ProjectIdentityFiles] Could not read recipe file: ${name}`, error);
         } else {
-          console.warn(
-            `[ProjectIdentityFiles] Skipping malformed recipe file: ${entry.name}`,
-            error
-          );
+          console.warn(`[ProjectIdentityFiles] Skipping malformed recipe file: ${name}`, error);
         }
       }
     }
     return { recipes, hashes, dirExists: true, scanComplete };
+  }
+
+  /**
+   * A `.daintree/` directory's entry names, as one gated request. Callers lstat
+   * each name they keep through the gate rather than asking `readdir` for
+   * `withFileTypes`, which lstats every entry the filesystem leaves untyped all
+   * at once: a mount that lists quickly and then hangs on metadata would hold
+   * several of Main's libuv workers through a single admitted request (#16361).
+   */
+  private listDaintreeDirNames(projectPath: string, dir: string): Promise<string[]> {
+    return projectIo.run(projectPath, () => fs.readdir(dir));
   }
 
   /**
@@ -769,11 +796,9 @@ export class ProjectIdentityFiles {
    */
   async readInRepoPresets(projectPath: string): Promise<Record<string, AgentPreset[]>> {
     const presetsDir = path.join(projectPath, DAINTREE_PRESETS_DIR);
-    let agentDirs;
+    let agentDirs: string[];
     try {
-      agentDirs = await projectIo.run(projectPath, () =>
-        fs.readdir(presetsDir, { withFileTypes: true })
-      );
+      agentDirs = await this.listDaintreeDirNames(projectPath, presetsDir);
     } catch (error) {
       if (error instanceof Error && "code" in error && error.code === "ENOENT") return {};
       throw error;
@@ -781,20 +806,24 @@ export class ProjectIdentityFiles {
 
     const result: Record<string, AgentPreset[]> = {};
 
-    for (const agentEntry of agentDirs) {
-      if (!agentEntry.isDirectory()) continue;
-      const agentId = agentEntry.name;
+    for (const agentId of agentDirs) {
+      const agentDir = path.join(presetsDir, agentId);
+      try {
+        const stats = await projectIo.run(projectPath, () => fs.lstat(agentDir));
+        if (!stats.isDirectory()) continue;
+      } catch (error) {
+        // A refused read would fail every later one too; give up on the lot.
+        if (isProjectIoError(error)) throw error;
+        continue;
+      }
       if (!SAFE_AGENT_ID.test(agentId)) {
         console.warn(`[ProjectIdentityFiles] Skipping unsafe preset subdir: ${agentId}`);
         continue;
       }
 
-      const agentDir = path.join(presetsDir, agentId);
-      let fileEntries;
+      let fileEntries: string[];
       try {
-        fileEntries = await projectIo.run(projectPath, () =>
-          fs.readdir(agentDir, { withFileTypes: true })
-        );
+        fileEntries = await this.listDaintreeDirNames(projectPath, agentDir);
       } catch (error) {
         // A refused read would fail every later one too; give up on the lot.
         if (isProjectIoError(error)) throw error;
@@ -803,12 +832,13 @@ export class ProjectIdentityFiles {
 
       const presets: AgentPreset[] = [];
       const seenIds = new Set<string>();
-      for (const entry of fileEntries) {
-        if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      for (const fileName of fileEntries) {
+        if (!fileName.endsWith(".json")) continue;
         try {
-          const content = await projectIo.run(projectPath, () =>
-            fs.readFile(path.join(agentDir, entry.name), "utf-8")
-          );
+          const filePath = path.join(agentDir, fileName);
+          const stats = await projectIo.run(projectPath, () => fs.lstat(filePath));
+          if (!stats.isFile()) continue;
+          const content = await projectIo.run(projectPath, () => fs.readFile(filePath, "utf-8"));
           const parsed = JSON.parse(stripUtf8Bom(content));
           if (
             typeof parsed !== "object" ||
@@ -830,7 +860,7 @@ export class ProjectIdentityFiles {
                       parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed,
                   };
             console.warn(
-              `[ProjectIdentityFiles] Skipping invalid preset: ${agentId}/${entry.name}`,
+              `[ProjectIdentityFiles] Skipping invalid preset: ${agentId}/${fileName}`,
               summary
             );
             continue;
@@ -841,7 +871,7 @@ export class ProjectIdentityFiles {
             // machines. Keep the first occurrence and warn loudly so the
             // contributor renames one.
             console.warn(
-              `[ProjectIdentityFiles] Duplicate preset id "${parsed.id}" in ${agentId}/${entry.name} — keeping first occurrence, rename this file`
+              `[ProjectIdentityFiles] Duplicate preset id "${parsed.id}" in ${agentId}/${fileName} — keeping first occurrence, rename this file`
             );
             continue;
           }
@@ -850,7 +880,7 @@ export class ProjectIdentityFiles {
         } catch (error) {
           if (isProjectIoError(error)) throw error;
           console.warn(
-            `[ProjectIdentityFiles] Skipping malformed preset file: ${agentId}/${entry.name}`,
+            `[ProjectIdentityFiles] Skipping malformed preset file: ${agentId}/${fileName}`,
             error
           );
         }

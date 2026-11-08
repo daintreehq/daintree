@@ -78,8 +78,11 @@ interface Lane {
 
 interface Waiter {
   key: string;
+  /** On the gate's clock; a queued request is never started at or past it. */
+  expiresAt: number;
   start: () => void;
   fail: (error: ProjectIoError) => void;
+  expire: () => void;
 }
 
 export class ProjectIoGate {
@@ -135,7 +138,7 @@ export class ProjectIoGate {
     }
 
     const activeLane = lane ?? this.createLane(key);
-    const startedAt = this.now();
+    const enqueuedAt = this.now();
 
     return new Promise<T>((resolve, reject) => {
       let started = false;
@@ -151,6 +154,7 @@ export class ProjectIoGate {
 
       const waiter: Waiter = {
         key,
+        expiresAt: enqueuedAt + budgetMs,
         start: () => {
           started = true;
           activeLane.queued--;
@@ -177,11 +181,7 @@ export class ProjectIoGate {
           activeLane.queued--;
           if (finishCaller()) reject(error);
         },
-      };
-
-      const timer = setTimeout(() => {
-        if (!started) {
-          this.queue = this.queue.filter((queued) => queued !== waiter);
+        expire: () => {
           waiter.fail(
             new ProjectIoError(
               "PROJECT_IO_TIMEOUT",
@@ -189,11 +189,18 @@ export class ProjectIoGate {
               `Timed out after ${budgetMs}ms waiting to read under ${key}`
             )
           );
+        },
+      };
+
+      const timer = setTimeout(() => {
+        if (!started) {
+          this.queue = this.queue.filter((queued) => queued !== waiter);
+          waiter.expire();
           this.dropIfIdle(key, activeLane);
           return;
         }
         stalledHere = true;
-        this.markStalled(key, activeLane, this.now() - startedAt);
+        this.markStalled(key, activeLane, this.now() - enqueuedAt);
         if (finishCaller()) {
           reject(
             new ProjectIoError(
@@ -229,7 +236,16 @@ export class ProjectIoGate {
   private pump(): void {
     if (this.inFlight >= this.limits.maxInFlight || this.queue.length === 0) return;
     const remaining: Waiter[] = [];
+    // A slot can free up after a queued request's deadline but before its
+    // timer has run; issuing it then would spend a worker on a read nobody
+    // is waiting for.
+    const expired: Waiter[] = [];
+    const now = this.now();
     for (const waiter of this.queue) {
+      if (now >= waiter.expiresAt) {
+        expired.push(waiter);
+        continue;
+      }
       const lane = this.lanes.get(waiter.key);
       if (
         this.inFlight < this.limits.maxInFlight &&
@@ -243,6 +259,11 @@ export class ProjectIoGate {
       }
     }
     this.queue = remaining;
+    for (const waiter of expired) {
+      waiter.expire();
+      const lane = this.lanes.get(waiter.key);
+      if (lane) this.dropIfIdle(waiter.key, lane);
+    }
   }
 
   private markStalled(key: string, lane: Lane, elapsedMs: number): void {

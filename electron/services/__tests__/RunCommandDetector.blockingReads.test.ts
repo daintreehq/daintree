@@ -63,6 +63,29 @@ async function within<T>(ms: number, promise: Promise<T>): Promise<T> {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Waits for a reader to block on one of the FIFOs and opens it for writing
+ * without writing: the reader's open() returns and its read() then waits on
+ * this descriptor, so its worker stays pinned until the caller closes it.
+ */
+async function pinBlockedReader(
+  fifos: string[],
+  timeoutMs: number
+): Promise<{ fifo: string; fd: number }> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    for (const fifo of fifos) {
+      try {
+        return { fifo, fd: openSync(fifo, fsConstants.O_WRONLY | fsConstants.O_NONBLOCK) };
+      } catch {
+        // ENXIO: no reader on this one yet.
+      }
+    }
+    await sleep(5);
+  }
+  throw new Error("no read ever blocked on the project's files");
+}
+
 describe.skipIf(process.platform === "win32")(
   "RunCommandDetector with reads that never finish",
   () => {
@@ -97,37 +120,36 @@ describe.skipIf(process.platform === "win32")(
       );
 
       const detector = new RunCommandDetector();
-      let settled = false;
-      const detection = detector.detect(projectRoot).finally(() => {
-        settled = true;
-      });
+      const detection = detector.detect(projectRoot);
       pending.push(detection);
-      // Let the detector issue the reads it is going to issue.
-      await sleep(100);
+      const pinned = await pinBlockedReader(fifos, 5_000);
+      try {
+        // A worker is held by the project's read for everything below.
+        const [text, stats, , real] = await within(
+          2_000,
+          Promise.all([
+            fs.readFile(unrelated, "utf-8"),
+            fs.stat(unrelated),
+            fs.access(unrelated),
+            fs.realpath(unrelated),
+          ])
+        );
+        expect(text).toBe("still readable");
+        expect(stats.isFile()).toBe(true);
+        expect(path.basename(real)).toBe("unrelated.txt");
 
-      const [text, stats, , real] = await within(
-        2_000,
-        Promise.all([
-          fs.readFile(unrelated, "utf-8"),
-          fs.stat(unrelated),
-          fs.access(unrelated),
-          fs.realpath(unrelated),
-        ])
-      );
-      expect(text).toBe("still readable");
-      expect(stats.isFile()).toBe(true);
-      expect(path.basename(real)).toBe("unrelated.txt");
-      // The project's read really is hanging while all of that ran.
-      expect(settled).toBe(false);
+        const healthy = await within(2_000, new RunCommandDetector().detect(healthyRoot));
+        expect(healthy.map((cmd) => cmd.command)).toEqual(["npm run dev"]);
 
-      const healthy = await within(2_000, new RunCommandDetector().detect(healthyRoot));
-      expect(healthy.map((cmd) => cmd.command)).toEqual(["npm run dev"]);
-
-      // The hung project reads as nothing detected rather than an endless wait.
-      expect(await within(5_000, detection)).toEqual([]);
-      // Asking again while the read is still stuck fails fast and pins no second worker.
-      expect(await within(1_000, detector.detect(projectRoot))).toEqual([]);
-      expect(releaseBlockedReaders(fifos)).toBe(1);
+        // The hung project reads as nothing detected rather than an endless wait.
+        expect(await within(5_000, detection)).toEqual([]);
+        // Asking again while the read is still stuck fails fast, and no second
+        // read ever blocks on the project's other files.
+        expect(await within(1_000, detector.detect(projectRoot))).toEqual([]);
+        expect(releaseBlockedReaders(fifos.filter((fifo) => fifo !== pinned.fifo))).toBe(0);
+      } finally {
+        closeSync(pinned.fd);
+      }
     });
   }
 );

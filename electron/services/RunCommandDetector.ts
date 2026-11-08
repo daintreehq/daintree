@@ -137,7 +137,12 @@ class DetectionRun {
           this.present.add(name);
           return `${stat.mtimeMs}:${stat.size}`;
         } catch (error) {
-          if (isProjectIoError(error)) this.incomplete = true;
+          // Only a proven absence is an answer; EIO, EACCES or a refused
+          // request leave the file unknown, not missing.
+          const code = (error as NodeJS.ErrnoException | undefined)?.code;
+          if (isProjectIoError(error) || (code !== "ENOENT" && code !== "ENOTDIR")) {
+            this.incomplete = true;
+          }
           return "-";
         }
       })
@@ -199,8 +204,12 @@ export class RunCommandDetector {
     ]);
 
     const commands = results.flat();
-    // A partial result must not outlive the stall that caused it.
-    if (!run.incomplete) this.cache.set(projectPath, { signature, commands });
+    if (run.incomplete) {
+      // A partial result must not outlive the stall that caused it, nor stand
+      // in for a full one read earlier.
+      return cached ? cached.commands : commands;
+    }
+    this.cache.set(projectPath, { signature, commands });
     return commands;
   }
 

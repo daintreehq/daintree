@@ -83,11 +83,17 @@ describe("ProjectIoGate", () => {
     await expect(second).resolves.toBe("B");
   });
 
-  it("never holds more than the global allowance across roots", () => {
+  it("never holds more than the global allowance across roots", async () => {
     void gate.run("/one", () => control.request("/one/x"));
     void gate.run("/two", () => control.request("/two/x"));
     void gate.run("/three", () => control.request("/three/x"));
+    void gate.run("/four", () => control.request("/four/x"));
     expect(control.issued()).toEqual(["/one/x", "/two/x"]);
+
+    // A freed slot admits exactly one of the roots waiting behind it.
+    control.settle("/one/x");
+    await flush();
+    expect(control.issued()).toEqual(["/two/x", "/three/x"]);
   });
 
   it("passes the request's own errors through untouched", async () => {
@@ -184,6 +190,25 @@ describe("ProjectIoGate", () => {
     expect(
       await codeOf(gate.run("/p", () => control.request("/p/late"), { deadline: clock }))
     ).toBe("PROJECT_IO_TIMEOUT");
+
+    const shortTimeout = gate.run("/p", () => control.request("/p/short"), {
+      timeoutMs: 30,
+      deadline: clock + 5_000,
+    });
+    advance(30);
+    expect(await codeOf(shortTimeout)).toBe("PROJECT_IO_TIMEOUT");
+  });
+
+  it("never starts a queued request whose deadline passed before its timer ran", async () => {
+    void gate.run("/p", () => control.request("/p/first"), { timeoutMs: 5_000 });
+    const overdue = gate.run("/p", () => control.request("/p/overdue"), { timeoutMs: 100 });
+
+    // The clock moves past the deadline, but the timer hasn't been dispatched
+    // when the slot frees up.
+    clock += 200;
+    control.settle("/p/first");
+    expect(await codeOf(overdue)).toBe("PROJECT_IO_TIMEOUT");
+    expect(control.request).not.toHaveBeenCalledWith("/p/overdue");
   });
 
   it("caps how many requests one root may queue", async () => {
@@ -192,9 +217,16 @@ describe("ProjectIoGate", () => {
       limits: { maxQueuedPerRoot: 2 },
     });
     void small.run("/p", () => control.request("/p/1"));
-    void small.run("/p", () => control.request("/p/2")).catch(() => {});
-    void small.run("/p", () => control.request("/p/3")).catch(() => {});
+    const second = small.run("/p", () => control.request("/p/2"));
+    const third = small.run("/p", () => control.request("/p/3"));
     expect(await codeOf(small.run("/p", () => control.request("/p/4")))).toBe("PROJECT_IO_BUSY");
+
+    control.settle("/p/1");
+    await flush();
+    control.settle("/p/2", "two");
+    await expect(second).resolves.toBe("two");
+    control.settle("/p/3", "three");
+    await expect(third).resolves.toBe("three");
   });
 
   it("normalises the root so equivalent spellings share one lane", () => {
