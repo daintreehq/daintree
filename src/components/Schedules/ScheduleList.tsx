@@ -437,7 +437,7 @@ export function ScheduleList({
                       variant="outline"
                       size="sm"
                       onClick={() => onCreateFromStarter(starter)}
-                      aria-label={`Start from ${starter.name}`}
+                      aria-label={`Use starter: ${starter.name}`}
                       data-schedule-starter={starter.id}
                     >
                       Use starter

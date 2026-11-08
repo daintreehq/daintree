@@ -149,7 +149,7 @@ describe("ProjectSchedulesTab — the list", () => {
     await screen.findByText(/Add a schedule to run an agent/);
     expect(document.querySelectorAll("[data-schedule-starter]").length).toBeGreaterThan(1);
 
-    fireEvent.click(screen.getByRole("button", { name: "Start from Nightly bug hunt" }));
+    fireEvent.click(screen.getByRole("button", { name: "Use starter: Nightly bug hunt" }));
 
     await waitFor(() => expect(editor()).not.toBeNull());
     expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Nightly bug hunt");
