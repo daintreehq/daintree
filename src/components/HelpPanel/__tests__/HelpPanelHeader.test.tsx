@@ -296,7 +296,7 @@ describe("HelpPanelHeader", () => {
     expect(getByTestId("assistant-scope-global").getAttribute("aria-label")).toBeNull();
   });
 
-  it("names the restart item for the conversation it discards", () => {
+  it("names the clear item for the conversation it discards", () => {
     const onRestartConversation = vi.fn();
     const { getByText, queryByText } = renderHeader({
       canRestartConversation: true,
@@ -308,13 +308,13 @@ describe("HelpPanelHeader", () => {
     // And never mirrored here: the strip's "+" is that action's single home.
     expect(queryByText("Open parallel session")).toBeNull();
 
-    fireEvent.click(getByText("Restart conversation"));
+    fireEvent.click(getByText("Clear conversation"));
     expect(onRestartConversation).toHaveBeenCalledTimes(1);
   });
 
-  it("hides the restart item when there is no conversation to restart", () => {
+  it("hides the clear item when there is no conversation to clear", () => {
     const { queryByText } = renderHeader({ canRestartConversation: false });
-    expect(queryByText("Restart conversation")).toBeNull();
+    expect(queryByText("Clear conversation")).toBeNull();
   });
 
   it("shows the Stop assistant item only when canEndSession is true", () => {

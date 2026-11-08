@@ -132,7 +132,7 @@ export function useHelpSessionLanes({
     )
   );
 
-  // The header's "Restart conversation" gate, per lane, so each tab's menu offers
+  // The header's "Clear conversation" gate, per lane, so each tab's menu offers
   // the same item exactly where the overflow menu would for that lane. A paused
   // lane joins it below: only the lane on screen is peeked, so a background tab
   // offers it once it is selected.

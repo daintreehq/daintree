@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { CircleHelp, CircleStop, Ellipsis, Globe, RotateCw } from "lucide-react";
+import { CircleHelp, CircleStop, Ellipsis, Eraser, Globe } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -227,8 +227,8 @@ export function GlobalAssistantPane({
                       destructive
                       onSelect={() => setPendingConfirm({ kind: "restart", generation })}
                     >
-                      <RotateCw className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-                      Restart conversation
+                      <Eraser className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                      Clear conversation
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                   </>
@@ -346,7 +346,7 @@ export function GlobalAssistantPane({
         title={
           pendingConfirm?.kind === "discard"
             ? "Stop the global assistant?"
-            : "Restart the global assistant's conversation?"
+            : "Clear the global assistant's conversation?"
         }
         description={
           pendingConfirm?.kind === "discard"
@@ -354,7 +354,7 @@ export function GlobalAssistantPane({
             : "Its agent stops in every window and a new conversation starts"
         }
         confirmLabel={
-          pendingConfirm?.kind === "discard" ? "Stop global assistant" : "Restart conversation"
+          pendingConfirm?.kind === "discard" ? "Stop global assistant" : "Clear conversation"
         }
         variant="destructive"
         onConfirm={() => {

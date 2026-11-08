@@ -2323,10 +2323,10 @@ describe("HelpPanel — + New session clears hibernated entry", () => {
 
     const { container } = render(<HelpPanel width={380} />);
 
-    // The restart control moved from a header "+" into the overflow menu, where it is
+    // The clear control moved from a header "+" into the overflow menu, where it is
     // named for the conversation it discards.
     const restartBtn = Array.from(container.querySelectorAll("button")).find((b) =>
-      b.textContent?.includes("Restart conversation")
+      b.textContent?.includes("Clear conversation")
     )!;
     expect(restartBtn).toBeTruthy();
 

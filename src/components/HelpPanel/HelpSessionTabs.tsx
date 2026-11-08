@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { ChevronsUpDown, Plus, RotateCw, SquareTerminal, X } from "lucide-react";
+import { ChevronsUpDown, Eraser, Plus, SquareTerminal, X } from "lucide-react";
 import { SpinnerCircle, InteractingCircle } from "@/components/icons";
 import { BrandMark } from "@/components/icons/BrandMark";
 import { getAgentConfig } from "@/config/agents";
@@ -161,7 +161,7 @@ export interface HelpSessionTab {
   agentId?: string | null;
   /**
    * The lane has a live terminal and agent, or is the paused lane on screen — the
-   * header's own gate for "Restart conversation".
+   * header's own gate for "Clear conversation".
    */
   canRestart?: boolean;
   /** A terminal and an agent are bound, so a lane at its prompt reads as ready. */
@@ -186,7 +186,7 @@ interface HelpSessionTabsProps {
   activeSlot: number;
   onSelect: (slot: number) => void;
   onClose: (slot: number) => void;
-  /** Restart the selected lane's conversation, offered where its lane says it can. */
+  /** Clear the selected lane's conversation, offered where its lane says it can. */
   onRestart?: (slot: number) => void;
   /** Whether "New session" can act. False parks the item rather than removing it. */
   canOpenSession?: boolean;
@@ -502,8 +502,8 @@ export function HelpSessionTabs({
               header's overflow item is. */}
           {canRestart && (
             <DropdownMenuItem destructive onSelect={() => onRestart?.(activeTab.slot)}>
-              <RotateCw data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
-              Restart conversation
+              <Eraser data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+              Clear conversation
             </DropdownMenuItem>
           )}
           <DropdownMenuItem onSelect={() => onClose(activeTab.slot)}>
