@@ -800,7 +800,7 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "help",
     danger: "safe",
     description:
-      "List the other Daintree Assistants running in this project, and its vacant slots. Address one by its terminalId with the agent messaging tools; a send passes its generation.",
+      "List the other Daintree Assistants running in this project, its vacant slots and the global one. Address one by its terminalId with the agent messaging tools; a send passes its generation.",
     enabled: true,
     id: "assistant.list",
     inputSchema: {
@@ -894,8 +894,41 @@ export const MCP_VIEWLESS_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           },
           description: "Slots a start may use.",
         },
+        global: {
+          anyOf: [
+            {
+              type: "object",
+              properties: {
+                terminalId: {
+                  type: "string",
+                },
+                generation: {
+                  type: "number",
+                },
+                agentState: {
+                  anyOf: [
+                    {
+                      type: "string",
+                      enum: ["idle", "working", "waiting", "directing", "completed", "exited"],
+                    },
+                    {
+                      type: "null",
+                    },
+                  ],
+                  description: "As last observed; not proof of what it is doing.",
+                },
+              },
+              required: ["terminalId", "generation", "agentState"],
+              additionalProperties: false,
+            },
+            {
+              type: "null",
+            },
+          ],
+          description: "This machine's global Assistant: send and status only. Null if none runs.",
+        },
       },
-      required: ["projectId", "assistants", "vacantSlots"],
+      required: ["projectId", "assistants", "vacantSlots", "global"],
       additionalProperties: false,
     },
     requiresArgs: false,

@@ -647,13 +647,23 @@ describe("one assistant addressing another (#13496)", () => {
     machineName: "studio-01",
   };
   const TARGET: AssistantTarget = {
+    scope: "project",
     projectId: "proj-1",
     slot: 1,
     sessionId: "session-1",
     terminalId: ASSISTANT_TERMINAL,
     attached: true,
   };
-  const LISTED = { projectId: "proj-1", assistants: [], vacantSlots: [2, 3] };
+  const GLOBAL_TERMINAL = "terminal-global";
+  const GLOBAL_TARGET: AssistantTarget = {
+    scope: "global",
+    projectId: GLOBAL_ASSISTANT_ID,
+    slot: 0,
+    sessionId: "global-session",
+    terminalId: GLOBAL_TERMINAL,
+    attached: false,
+  };
+  const LISTED = { projectId: "proj-1", assistants: [], vacantSlots: [2, 3], global: null };
   const RECEIPT = {
     terminalId: ASSISTANT_TERMINAL,
     submissionToken: "tok-1",
@@ -676,9 +686,15 @@ describe("one assistant addressing another (#13496)", () => {
     mutable.sessionHelpIdMap = new Map([["sess", "hub"]]);
     mutable.sessionOriginMap.set("sess", options.origin ?? "help");
     const control = {
-      isAssistantTerminal: vi.fn((terminalId: string) => terminalId === ASSISTANT_TERMINAL),
-      resolve: vi.fn((_caller: AssistantCaller, terminalId: string) =>
-        terminalId === ASSISTANT_TERMINAL ? TARGET : null
+      isAssistantTerminal: vi.fn(
+        (terminalId: string) => terminalId === ASSISTANT_TERMINAL || terminalId === GLOBAL_TERMINAL
+      ),
+      resolve: vi.fn((_caller: AssistantCaller, terminalId: string): AssistantTarget | null =>
+        terminalId === ASSISTANT_TERMINAL
+          ? TARGET
+          : terminalId === GLOBAL_TERMINAL
+            ? GLOBAL_TARGET
+            : null
       ),
       list: vi.fn(async () => LISTED),
       start: vi.fn(async () => ({ assistant: {}, ready: true, notReadyReason: null })),
@@ -709,6 +725,8 @@ describe("one assistant addressing another (#13496)", () => {
             "agent.readQuota",
             "terminal.sendCommand",
             "terminal.sendCommandOwned",
+            "terminal.sendCommandMany",
+            "terminal.sendKeys",
             "terminal.closeOwned",
             "terminal.close",
             "terminal.closeMany",
@@ -966,7 +984,8 @@ describe("one assistant addressing another (#13496)", () => {
     expect(deps.handleTerminalGetStatusViewless).toHaveBeenCalledWith(
       { terminalIds: [ASSISTANT_TERMINAL, "terminal-pane"] },
       "proj-1",
-      new Set([ASSISTANT_TERMINAL])
+      new Set([ASSISTANT_TERMINAL]),
+      undefined
     );
     expect(deps.dispatchAction).not.toHaveBeenCalled();
   });
@@ -1079,5 +1098,119 @@ describe("one assistant addressing another (#13496)", () => {
     });
     expect(toolErrorPayload(result).code).toBe("ASSISTANT_NOT_FOUND");
     expect(control.submit).not.toHaveBeenCalled();
+  });
+  describe("this machine's global Assistant (#16410)", () => {
+    it("sends to it in main, with the generation and handback it was given", async () => {
+      const { deps, control } = assistantDeps({ caller: CALLER });
+      const server = await serve(deps);
+      const result = await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: GLOBAL_TERMINAL, command: "Raise", generation: 2, handback: true },
+      });
+      expect(result.isError).toBeFalsy();
+      expect(control.submit).toHaveBeenCalledWith(CALLER, GLOBAL_TARGET, {
+        command: "Raise",
+        generation: 2,
+        handback: true,
+      });
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["notify", { notify: true }],
+      ["waitForReply", { waitForReply: true }],
+    ])("refuses a send with %s, sending nothing", async (_name, extra) => {
+      const { deps, control } = assistantDeps({ caller: CALLER });
+      const server = await serve(deps);
+      const result = await callTool(server, {
+        name: "terminal.sendCommand",
+        arguments: { terminalId: GLOBAL_TERMINAL, command: "x", generation: 2, ...extra },
+      });
+      expect(toolErrorPayload(result).code).toBe("ASSISTANT_GLOBAL_SEND_ONLY");
+      expect(control.submit).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["terminal.sendKeys", { keys: ["Enter"], generation: 2 }],
+      ["terminal.interruptOwned", {}],
+      ["terminal.close", {}],
+      ["terminal.readLastMessageOwned", {}],
+      ["terminal.getOutput", {}],
+      ["terminal.waitUntilIdle", {}],
+    ])("refuses %s on it before anything runs", async (name, extra) => {
+      const { deps, control } = assistantDeps({ caller: CALLER });
+      const server = await serve(deps);
+      const result = await callTool(server, {
+        name,
+        arguments: { terminalId: GLOBAL_TERMINAL, ...extra },
+      });
+      expect(toolErrorPayload(result).code).toBe("ASSISTANT_GLOBAL_SEND_ONLY");
+      for (const method of ["sendKeys", "interrupt", "close", "readReply"] as const) {
+        expect(control[method]).not.toHaveBeenCalled();
+      }
+      expect(deps.handleWaitUntilIdle).not.toHaveBeenCalled();
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("reads its status across the workspace line, and never its screen", async () => {
+      const { deps } = assistantDeps({ caller: CALLER });
+      const server = await serve(deps);
+      await callTool(server, {
+        name: "terminal.getStatus",
+        arguments: { terminalIds: [GLOBAL_TERMINAL] },
+      });
+      expect(deps.handleTerminalGetStatusViewless).toHaveBeenCalledWith(
+        { terminalIds: [GLOBAL_TERMINAL] },
+        "proj-1",
+        new Set([GLOBAL_TERMINAL]),
+        GLOBAL_TERMINAL
+      );
+
+      vi.mocked(deps.handleTerminalGetStatusViewless).mockClear();
+      const withOutput = await callTool(server, {
+        name: "terminal.getStatus",
+        arguments: { terminalIds: [GLOBAL_TERMINAL], includeOutput: true },
+      });
+      expect(toolErrorPayload(withOutput).code).toBe("ASSISTANT_GLOBAL_SEND_ONLY");
+      expect(deps.handleTerminalGetStatusViewless).not.toHaveBeenCalled();
+    });
+
+    it("leaves it out of a batch send, sending the rest", async () => {
+      const { deps, control } = assistantDeps({ caller: CALLER });
+      const server = await serve(deps);
+      const result = await callTool(server, {
+        name: "terminal.sendCommandMany",
+        arguments: {
+          sends: [
+            { terminalId: GLOBAL_TERMINAL, command: "x", generation: 2 },
+            { terminalId: ASSISTANT_TERMINAL, command: "y", generation: 4 },
+          ],
+        },
+      });
+      expect(result.structuredContent).toMatchObject({
+        results: [
+          { target: GLOBAL_TERMINAL, ok: false, error: { code: "ASSISTANT_GLOBAL_SEND_ONLY" } },
+          { target: ASSISTANT_TERMINAL, ok: true },
+        ],
+      });
+      expect(control.submit).toHaveBeenCalledTimes(1);
+      expect(control.submit).toHaveBeenCalledWith(CALLER, TARGET, expect.anything());
+    });
+
+    it("keeps its scrollback and prompt context from a project's assistant", async () => {
+      const { deps } = assistantDeps({ caller: CALLER });
+      const server = await serve(deps);
+      await expect(
+        callHandler(server, "resources/read", {
+          uri: `daintree://terminal/${GLOBAL_TERMINAL}/scrollback`,
+        })
+      ).rejects.toThrow(/Unknown resource URI/);
+      await getPrompt(server, {
+        name: "triage_failed_agent",
+        arguments: { terminal_id: GLOBAL_TERMINAL },
+      });
+      const dispatched = vi.mocked(deps.dispatchAction).mock.calls.map((call) => call[0]);
+      expect(dispatched).not.toContain("terminal.getOutput");
+    });
   });
 });

@@ -351,6 +351,42 @@ const ASSISTANT_WATCH_TOOLS: ReadonlySet<string> = new Set([
   "terminal.info.get",
 ]);
 
+/**
+ * What a project's assistant may do with this machine's global Assistant
+ * (#16410): send it a prompt and read its status. Its screen is the person's
+ * own conversation, so nothing that quotes it is admitted: no output, no
+ * last-message read, and no `notify` or `waitForReply` on a send, which both
+ * quote the screen they settle on. Null when the call may go ahead.
+ */
+function globalTargetRefusal(actionId: string, args: unknown): { code: string; message: string } | null {
+  const record =
+    typeof args === "object" && args !== null && !Array.isArray(args)
+      ? (args as Record<string, unknown>)
+      : {};
+  if (ASSISTANT_SEND_TOOLS.has(actionId)) {
+    if (record.notify !== true && record.waitForReply !== true) return null;
+    return {
+      code: ASSISTANT_TARGET_REFUSALS.globalSendOnly,
+      message:
+        "A send to the global Assistant takes no `notify` or `waitForReply`: both quote its screen, the person's own conversation. Nothing was sent. Read its status with the send's `submissionToken` for its handback.",
+    };
+  }
+  if (actionId === TERMINAL_GET_STATUS_TOOL) {
+    const output = record.includeOutput;
+    if (output === undefined || output === null || output === false) return null;
+    return {
+      code: ASSISTANT_TARGET_REFUSALS.globalSendOnly,
+      message:
+        "The global Assistant's screen is the person's own conversation, so its status is read without `includeOutput`.",
+    };
+  }
+  return {
+    code: ASSISTANT_TARGET_REFUSALS.globalSendOnly,
+    message:
+      "The global Assistant is the person's own conversation, so a project's assistant may only send to it and read its status. Nothing was done.",
+  };
+}
+
 /** Every terminal id a call's arguments name, by `terminalId` or `terminalIds`. */
 function namedTerminalIds(args: unknown): string[] {
   if (typeof args !== "object" || args === null || Array.isArray(args)) return [];
@@ -967,7 +1003,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         }
         return control.readReply(target, read.options.maxBytes ?? LAST_MESSAGE_TEXT_MAX_BYTES);
       }
-      const refusal = assistantWriteRefusal(target.projectId);
+      // A send up to the global answers to the drive rule of the caller's own project.
+      const refusal = assistantWriteRefusal(
+        target.scope === "global" ? caller.projectId : target.projectId
+      );
       if (refusal) throw new AssistantTargetError(refusal.code, refusal.message);
       if (ASSISTANT_SEND_TOOLS.has(actionId)) {
         const command = typeof record.command === "string" ? record.command : "";
@@ -1547,6 +1586,28 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             });
           }
         }
+        // This machine's global Assistant, for a project's assistant here
+        // (#16410): refused here unless the call is a send or a status read
+        // that quotes none of its screen, before anything is read or sent.
+        const globalAssistantId =
+          assistantCaller === null
+            ? undefined
+            : assistantIds.find(
+                (id) => assistantControl!.resolve(assistantCaller, id)?.scope === "global"
+              );
+        if (globalAssistantId !== undefined) {
+          const refusal = globalTargetRefusal(actionId, args);
+          if (refusal !== null) {
+            outcome = {
+              kind: "result",
+              value: {
+                ok: false,
+                error: { code: auditCodeForAssistantRefusal(refusal.code), message: refusal.message },
+              },
+            };
+            return buildToolError(refusal);
+          }
+        }
         const assistantTarget: AssistantTarget | undefined =
           assistantIds.length > 0 &&
           assistantCaller !== null &&
@@ -1568,7 +1629,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               await handleTerminalGetStatusViewless(
                 args,
                 assistantCaller.projectId,
-                new Set(assistantIds)
+                new Set(assistantIds),
+                globalAssistantId
               )
             );
             outcome = { kind: "result", value: { ok: true, result } };
@@ -2096,6 +2158,24 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                   code: USER_REJECTED_CODE,
                   message:
                     "This panel was not approved for closing, so it was not closed. Do not retry it or ask again on its behalf.",
+                },
+              });
+              continue;
+            }
+            // The global Assistant takes one plain send at a time (#16410):
+            // a batch's waits and notices would quote its screen.
+            if (
+              assistantCaller !== null &&
+              assistantControl?.resolve(assistantCaller, item.target)?.scope === "global"
+            ) {
+              waits.push(undefined);
+              results.push({
+                target: item.target,
+                ok: false,
+                error: {
+                  code: ASSISTANT_TARGET_REFUSALS.globalSendOnly,
+                  message:
+                    "The global Assistant isn't sent to in a batch. Nothing was sent to it; use `terminal.sendCommand`.",
                 },
               });
               continue;

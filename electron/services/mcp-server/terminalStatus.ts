@@ -1,4 +1,5 @@
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { GLOBAL_ASSISTANT_ID } from "../../../shared/config/globalAssistant.js";
 import { panelKindHasPty } from "../../../shared/config/panelKindRegistry.js";
 import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../shared/config/mcpLimits.js";
 import { readTailSnapshot } from "../../../shared/utils/artifactParser.js";
@@ -310,16 +311,20 @@ export async function buildViewlessTerminalStatus(
   deps: ViewlessTerminalStatusDeps,
   workspaceId: string,
   rawArgs: unknown,
-  admittedAssistants?: ReadonlySet<string>
+  admittedAssistants?: ReadonlySet<string>,
+  admittedGlobal?: string
 ): Promise<TerminalStatusResult> {
   const { terminalIds, lines, stripAnsi, includeOutput, submissionToken } = parseArgs(rawArgs);
   const uniqueIds = [...new Set(terminalIds)];
+  // The global Assistant a project's assistant named (#16410) is the one id
+  // read outside the workspace, and only where the global's own run is.
+  const workspaceOf = (id: string) => (id === admittedGlobal ? GLOBAL_ASSISTANT_ID : workspaceId);
 
   const placed = new Set<string>();
   const unplaced: string[] = [];
   for (const id of uniqueIds) {
     const owner = deps.ptyClient.getTerminalProjectId(id);
-    if (owner === workspaceId) placed.add(id);
+    if (owner === workspaceOf(id)) placed.add(id);
     // `null` means untracked, not foreign — the inventory decides those. A
     // non-null owner that is some other workspace is settled here: never
     // looked up, so never routed at its shard.
@@ -343,14 +348,15 @@ export async function buildViewlessTerminalStatus(
     const record = fetched[index];
     // `getTerminalAsync` folds an RPC failure into `null`, so this means "not
     // found or unreadable" — never evidence that the terminal has exited.
-    if (record && isVisibleToBoundSession(record, workspaceId, admittedAssistants)) {
+    if (record && isVisibleToBoundSession(record, workspaceOf(id), admittedAssistants)) {
       records.set(id, record);
     }
   });
 
   const outputs = new Map<string, (CapturedTail & { inputLine: TerminalInputLine }) | null>();
   if (includeOutput) {
-    const readable = lookupIds.filter((id) => records.has(id));
+    // The global's screen is the person's own conversation: never read for a project.
+    const readable = lookupIds.filter((id) => records.has(id) && id !== admittedGlobal);
     const snapshots = await Promise.all(
       // Raw output keeps the whole-buffer read: the serializer's erase escapes
       // depend on the range it starts from, so a capped read is not byte-identical.
@@ -400,6 +406,13 @@ export async function buildViewlessTerminalStatus(
       };
     }
     const entry = buildEntry(record, submissionToken);
+    // Its handback is shown only to the send that asked for it, by that send's token.
+    if (
+      id === admittedGlobal &&
+      (submissionToken === undefined || entry.lastHandback?.submissionToken !== submissionToken)
+    ) {
+      delete entry.lastHandback;
+    }
     if (includeOutput) {
       const tail = outputs.get(id) ?? null;
       entry.recentOutput = tail?.content ?? null;
@@ -430,7 +443,8 @@ export async function buildViewlessTerminalStatus(
 export async function handleTerminalGetStatusViewless(
   rawArgs: unknown,
   workspaceId: string,
-  admittedAssistants?: ReadonlySet<string>
+  admittedAssistants?: ReadonlySet<string>,
+  admittedGlobal?: string
 ): Promise<TerminalStatusResult> {
   const ptyClient = getPtyClient();
   if (!ptyClient) {
@@ -439,5 +453,11 @@ export async function handleTerminalGetStatusViewless(
       "The terminal backend is not available, so terminal status cannot be read without a live view."
     );
   }
-  return buildViewlessTerminalStatus({ ptyClient }, workspaceId, rawArgs, admittedAssistants);
+  return buildViewlessTerminalStatus(
+    { ptyClient },
+    workspaceId,
+    rawArgs,
+    admittedAssistants,
+    admittedGlobal
+  );
 }

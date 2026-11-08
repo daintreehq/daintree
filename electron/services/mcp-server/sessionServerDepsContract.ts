@@ -208,7 +208,9 @@ export interface SessionServerDeps extends OwnedMainExecutors {
     rawArgs: unknown,
     workspaceId: string,
     /** Assistant terminals an assistant caller named and may read (#13496). */
-    admittedAssistants?: ReadonlySet<string>
+    admittedAssistants?: ReadonlySet<string>,
+    /** This machine's global Assistant, when the caller named it and may read its status (#16410). */
+    admittedGlobal?: string
   ) => Promise<import("../../../shared/types/terminalStatus.js").TerminalStatusResult>;
   /**
    * Whether a terminal with this id is already live anywhere in the app, read

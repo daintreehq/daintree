@@ -58,11 +58,12 @@ export function createSessionContext(sessionId: string, deps: SessionServerDeps)
   const assistantCallerNow = (): AssistantCaller | null =>
     assistantControl !== undefined ? (deps.assistantCaller?.() ?? null) : null;
   // Whether a read outside the tool calls' own gate may name this terminal
-  // (#13496): an assistant's only for an assistant caller it resolves for.
+  // (#13496): an assistant's only for an assistant caller it resolves for,
+  // and never the global Assistant, whose screen no project reads (#16410).
   const mayNameTerminal = (tier: McpTier, terminalId: string): boolean => {
     if (assistantControl?.isAssistantTerminal(terminalId) !== true) return true;
     const caller = tier === "external" ? null : assistantCallerNow();
-    return caller !== null && assistantControl.resolve(caller, terminalId) !== null;
+    return caller !== null && assistantControl.resolve(caller, terminalId)?.scope === "project";
   };
 
   return {

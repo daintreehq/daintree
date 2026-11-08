@@ -8,6 +8,7 @@ import {
   liveAssistantTerminalControl,
 } from "../AssistantTerminalControl.js";
 import { MAX_ASSISTANT_SLOTS } from "../../../../shared/config/assistantSlots.js";
+import { GLOBAL_ASSISTANT_ID, GLOBAL_ASSISTANT_SLOT } from "../../../../shared/config/globalAssistant.js";
 import { buildHandbackInstruction } from "../../../../shared/utils/handback.js";
 import { stampTypedInput } from "../../../../shared/utils/terminalInputProvenance.js";
 import type { RunningLane, RunningLaneSession } from "../../HelpSessionService.js";
@@ -112,6 +113,7 @@ describe("AssistantTerminalControl (#13496)", () => {
       getLiveGeneration: (terminalId) => byTerminal(terminalId)?.generation ?? null,
       serializedState: async () => ({ data: "screen" }),
       sleep: async () => {},
+      projectName: (projectId) => (projectId === PROJECT ? "Web App" : null),
       ...mocks,
     };
     control = new AssistantTerminalControl(deps);
@@ -906,6 +908,113 @@ describe("AssistantTerminalControl (#13496)", () => {
       });
     });
   });
+
+  describe("the global Assistant (#16410)", () => {
+    const GLOBAL_CALLER: AssistantCaller = {
+      kind: "local",
+      helpSessionId: "global-session",
+      projectId: GLOBAL_ASSISTANT_ID,
+      machineName: "studio-01",
+    };
+    const addGlobal = (options: Partial<Omit<Lane, "lane" | "running">> = {}) =>
+      addLane(GLOBAL_ASSISTANT_SLOT, "t-global", {
+        projectId: GLOBAL_ASSISTANT_ID,
+        sessionId: "global-session",
+        attached: false,
+        ...options,
+      });
+
+    it("resolves this machine's global for a project's own assistant here, and nobody else", () => {
+      addGlobal();
+      expect(control.resolve(LOCAL, "t-global")).toMatchObject({
+        scope: "global",
+        projectId: GLOBAL_ASSISTANT_ID,
+        sessionId: "global-session",
+      });
+      // Another machine's assistant has its own machine's global.
+      expect(control.resolve(RELAY, "t-global")).toBeNull();
+      // The global never addresses itself.
+      expect(control.resolve(GLOBAL_CALLER, "t-global")).toBeNull();
+      addLane(1, "t-one");
+      expect(control.resolve(LOCAL, "t-one")?.scope).toBe("project");
+    });
+
+    it("lists it on its own, outside the project's assistants and slots", async () => {
+      addGlobal({ generation: 7, record: atPrompt({ agentState: "working" }) });
+      addLane(1, "t-one");
+
+      const listed = await control.list(LOCAL);
+      expect(listed.global).toEqual({ terminalId: "t-global", generation: 7, agentState: "working" });
+      expect(listed.assistants.map((entry) => entry.terminalId)).toEqual(["t-one"]);
+      expect(listed.vacantSlots).toContain(GLOBAL_ASSISTANT_SLOT);
+      expect((await control.list(RELAY)).global).toBeNull();
+    });
+
+    it("lists none while no global runs, or before its run has a generation", async () => {
+      expect((await control.list(LOCAL)).global).toBeNull();
+      addGlobal();
+      lanes[0]!.generation = null as never;
+      expect((await control.list(LOCAL)).global).toBeNull();
+    });
+
+    it("stamps a send up with the project it came from, never as a brief", async () => {
+      addGlobal();
+      const target = control.require(LOCAL, "t-global");
+      await control.submit(LOCAL, target, {
+        command: "Can studio-02 take the GPU run?",
+        generation: 3,
+        handback: true,
+      });
+      const [terminalId, text, , code, promptAsWritten] = mocks.submit.mock.calls[0]!;
+      expect(terminalId).toBe("t-global");
+      expect(promptAsWritten).toBe("Can studio-02 take the GPU run?");
+      const first = String(text).split("\n")[0]!;
+      expect(first).toMatch(
+        /^From the Daintree Assistant of the project "Web App" on Greg's Mac mini\. /
+      );
+      expect(first).not.toMatch(/orchestrator's brief/);
+      expect(String(text).endsWith(buildHandbackInstruction(code!, "run"))).toBe(true);
+    });
+
+    it("names the project by its id when its name can't be read", async () => {
+      addGlobal();
+      const caller: AssistantCaller = { ...LOCAL, projectId: "proj-unnamed" };
+      await control.submit(caller, control.require(caller, "t-global"), {
+        command: "Hi",
+        generation: 3,
+        handback: false,
+      });
+      expect(String(mocks.submit.mock.calls[0]![1])).toMatch(/of the project "proj-unnamed" on /);
+    });
+
+    it("refuses a send while the global is busy, as any assistant would", async () => {
+      addGlobal({ record: atPrompt({ agentState: "working" }) });
+      await expect(
+        control.submit(LOCAL, control.require(LOCAL, "t-global"), {
+          command: "Hi",
+          generation: 3,
+          handback: false,
+        })
+      ).rejects.toMatchObject({ code: "ASSISTANT_BUSY" });
+      expect(mocks.submit).not.toHaveBeenCalled();
+    });
+
+    it("refuses keys, an interrupt, a close or a reply read, doing nothing", async () => {
+      addGlobal({ startedBy: { kind: "local", askingHelpSessionId: "hub-session" } });
+      const target = control.require(LOCAL, "t-global");
+      const refused = { code: "ASSISTANT_GLOBAL_SEND_ONLY" };
+      await expect(
+        control.sendKeys(LOCAL, target, { keys: ["Enter"], choose: undefined, generation: 3 })
+      ).rejects.toMatchObject(refused);
+      await expect(control.interrupt(LOCAL, target)).rejects.toMatchObject(refused);
+      await expect(control.close(LOCAL, target)).rejects.toMatchObject(refused);
+      await expect(control.readReply(target, 1_000)).rejects.toMatchObject(refused);
+      expect(mocks.write).not.toHaveBeenCalled();
+      expect(mocks.doubleEscape).not.toHaveBeenCalled();
+      expect(mocks.revoke).not.toHaveBeenCalled();
+      expect(mocks.extractReply).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe("liveAssistantTerminalControl (#15521)", () => {
@@ -927,6 +1036,7 @@ describe("liveAssistantTerminalControl (#15521)", () => {
       },
       pty: () => pty as never,
       extractReply: () => ({ reply: null, reachedHandback: false }),
+      projectName: () => null,
     });
 
     await control.submit(LOCAL, control.require(LOCAL, "t-one"), {
@@ -966,6 +1076,7 @@ describe("liveAssistantTerminalControl (#15521)", () => {
       },
       pty: () => pty as never,
       extractReply: () => ({ reply: null, reachedHandback: false }),
+      projectName: () => null,
     });
     const target = control.require(LOCAL, "t-one");
 

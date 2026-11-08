@@ -14,6 +14,7 @@ import {
   viewlessStatusArgsAreAnswerable,
 } from "../terminalStatus.js";
 import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../../shared/config/mcpLimits.js";
+import { GLOBAL_ASSISTANT_ID } from "../../../../shared/config/globalAssistant.js";
 import type { TerminalSubmissionRecord } from "../../../../shared/types/terminalSubmission.js";
 
 const WORKSPACE = "ws-1";
@@ -295,6 +296,81 @@ describe("buildViewlessTerminalStatus results", () => {
     expect(d.ptyClient.getTerminalAsync).not.toHaveBeenCalled();
     expect(d.ptyClient.getTerminalsForProjectAsync).not.toHaveBeenCalled();
     expect(result.terminals[0]?.error).toBe("Terminal not found or status unavailable");
+  });
+
+  describe("the global Assistant a project's assistant named (#16410)", () => {
+    const globalRecord = (overrides: Record_ = {}) =>
+      record({
+        id: "g",
+        projectId: GLOBAL_ASSISTANT_ID,
+        isAssistantTerminal: true,
+        agentState: "waiting",
+        lastHandback: { message: "Use studio-02", observedAt: 5, submissionToken: "mine", truncated: false },
+        ...overrides,
+      });
+
+    it("reads its status outside the workspace, and only where the global's own run is", async () => {
+      const d = deps([globalRecord()], { owners: { g: GLOBAL_ASSISTANT_ID } });
+      const read = await buildViewlessTerminalStatus(
+        d,
+        WORKSPACE,
+        { terminalIds: ["g"] },
+        new Set(["g"]),
+        "g"
+      );
+      expect(read.terminals[0]).toMatchObject({ terminalId: "g", agentState: "waiting" });
+
+      // Not admitted, it is any other workspace's id: never looked up.
+      const unnamed = deps([globalRecord()], { owners: { g: GLOBAL_ASSISTANT_ID } });
+      const refused = await buildViewlessTerminalStatus(unnamed, WORKSPACE, {
+        terminalIds: ["g"],
+      });
+      expect(unnamed.ptyClient.getTerminalAsync).not.toHaveBeenCalled();
+      expect(refused.terminals[0]?.error).toBe("Terminal not found or status unavailable");
+    });
+
+    it("never admits another workspace's terminal under the global's id", async () => {
+      const d = deps([globalRecord({ projectId: "ws-other" })], { owners: { g: "ws-other" } });
+      const result = await buildViewlessTerminalStatus(
+        d,
+        WORKSPACE,
+        { terminalIds: ["g"] },
+        new Set(["g"]),
+        "g"
+      );
+      expect(d.ptyClient.getTerminalAsync).not.toHaveBeenCalled();
+      expect(result.terminals[0]?.error).toBe("Terminal not found or status unavailable");
+    });
+
+    it("shows its handback only to the send that asked for it", async () => {
+      const read = (submissionToken?: string) =>
+        buildViewlessTerminalStatus(
+          deps([globalRecord()], { owners: { g: GLOBAL_ASSISTANT_ID } }),
+          WORKSPACE,
+          { terminalIds: ["g"], ...(submissionToken ? { submissionToken } : {}) },
+          new Set(["g"]),
+          "g"
+        );
+      expect((await read("mine")).terminals[0]?.lastHandback?.message).toBe("Use studio-02");
+      expect((await read("theirs")).terminals[0]?.lastHandback).toBeUndefined();
+      expect((await read()).terminals[0]?.lastHandback).toBeUndefined();
+    });
+
+    it("never reads its screen", async () => {
+      const d = deps([globalRecord()], {
+        owners: { g: GLOBAL_ASSISTANT_ID },
+        serialized: { g: { data: "the person's conversation" } },
+      });
+      const result = await buildViewlessTerminalStatus(
+        d,
+        WORKSPACE,
+        { terminalIds: ["g"], includeOutput: true },
+        new Set(["g"]),
+        "g"
+      );
+      expect(d.ptyClient.getSerializedStateAsync).not.toHaveBeenCalled();
+      expect(JSON.stringify(result)).not.toContain("the person's conversation");
+    });
   });
 
   it("answers every row unavailable when the inventory read fails", async () => {
