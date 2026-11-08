@@ -315,17 +315,17 @@ describe("ScheduleEditor: Run when Daintree isn't running under the project's sw
     [
       "starting Daintree is off",
       { ...STARTS, startWhenClosed: false },
-      "Turn on Start Daintree for due schedules for this project to use this",
+      'Turn on the "Start Daintree for due schedules" switch in the Schedules tab for this project to use this',
     ],
     [
       "schedules are off",
       { ...STARTS, schedulesOn: false },
-      "Turn on Schedules on for this project to use this",
+      'Turn on the "Schedules on" switch in the Schedules tab for this project to use this',
     ],
     [
       "both are off",
       { ...STARTS, schedulesOn: false, startWhenClosed: false },
-      "Turn on Schedules on and Start Daintree for due schedules for this project to use this",
+      'Turn on the "Schedules on" and "Start Daintree for due schedules" switches in the Schedules tab for this project to use this',
     ],
   ])(
     "never reads as on while %s, and says which switch it waits on",
