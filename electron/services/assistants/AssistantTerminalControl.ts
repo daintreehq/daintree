@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { MAX_ASSISTANT_SLOTS } from "../../../shared/config/assistantSlots.js";
+import { isGlobalAssistantId } from "../../../shared/config/globalAssistant.js";
 import type { AgentLastMessageObserved } from "../../../shared/types/agentLastMessage.js";
 import {
   ASSISTANT_TARGET_REFUSALS,
@@ -7,12 +8,16 @@ import {
   type AssistantListResult,
   type AssistantStartArgs,
   type AssistantStartResult,
+  type GlobalAssistantEntry,
 } from "../../../shared/types/assistantControl.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import type { TerminalHandback } from "../../../shared/types/handback.js";
 import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
-import { stampAssistantPrompt } from "../../../shared/utils/assistantProvenance.js";
+import {
+  stampAssistantPrompt,
+  stampUpwardAssistantPrompt,
+} from "../../../shared/utils/assistantProvenance.js";
 import { appendHandbackInstruction, mintHandbackCode } from "../../../shared/utils/handback.js";
 import { assessInterruptCandidate } from "../../../shared/utils/terminalInterrupt.js";
 import { buildTerminalSendCommandReceipt } from "../../../shared/utils/terminalSendCommandResult.js";
@@ -68,8 +73,13 @@ export type AssistantCaller =
       machineName: string;
     };
 
-/** A running assistant a caller named. */
+/**
+ * A running assistant a caller named: another of its project's, or this
+ * machine's global Assistant (#16410), which a project's own assistant on
+ * this machine may send to and read the status of, and nothing else.
+ */
 export interface AssistantTarget {
+  scope: "project" | "global";
   projectId: string;
   slot: number;
   sessionId: string;
@@ -120,6 +130,8 @@ export interface AssistantTerminalControlDeps {
   /** Raw bytes, as a person's keystrokes arrive, filed under `inputOwner`. */
   write(terminalId: string, data: string, inputOwner: string): void;
   launch(request: AssistantLaunchRequest): Promise<AssistantLaunchResult>;
+  /** A project's name as its person set it, for the stamp on a message to the global (#16410). */
+  projectName(projectId: string): string | null;
   /** Ends the session, which kills its PTY. */
   revoke(sessionId: string): Promise<void>;
   now?: () => number;
@@ -230,8 +242,31 @@ export function wasStartedBy(target: AssistantTarget, caller: AssistantCaller): 
   );
 }
 
+/**
+ * Whether `caller` may address this machine's global Assistant (#16410): a
+ * project's own assistant here, and nobody else. Another machine's assistant
+ * reaches this one through `host.call` and has its own machine's global, and
+ * the global never addresses itself.
+ */
+function reachesGlobal(caller: AssistantCaller): boolean {
+  return caller.kind === "local" && !isGlobalAssistantId(caller.projectId);
+}
+
+const GLOBAL_SEND_ONLY_MESSAGE =
+  "The global Assistant is the person's own conversation, so a project's assistant may only send to it and read its status. Nothing was done.";
+
 const OWN_KEYS_HELD_MESSAGE =
   "The only input at the assistant's prompt since it settled is keys you sent, which can leave text there. Nothing was sent; send once it has settled again.";
+
+/** Refuses everything but a send at the global Assistant, whatever path reached here. */
+function requireProjectScope(target: AssistantTarget): void {
+  if (target.scope === "global") {
+    throw new AssistantTargetError(
+      ASSISTANT_TARGET_REFUSALS.globalSendOnly,
+      GLOBAL_SEND_ONLY_MESSAGE
+    );
+  }
+}
 
 function busyMessage(verdict: Exclude<WakeGateVerdict, { kind: "ready" }>): string {
   switch (verdict.reason) {
@@ -272,15 +307,18 @@ export class AssistantTerminalControl {
 
   /**
    * The assistant `terminalId` names in the caller's project, other than the
-   * caller itself; null for anything else.
+   * caller itself, or this machine's global Assistant for a caller that
+   * reaches it; null for anything else.
    */
   resolve(caller: AssistantCaller, terminalId: string): AssistantTarget | null {
     for (const lane of this.deps.listRunningLanes()) {
-      if (lane.projectId !== caller.projectId) continue;
+      const scope = this.scopeOf(caller, lane.projectId);
+      if (scope === null) continue;
       const running = this.deps.getRunningLaneSession(lane.projectId, lane.slot);
       if (running?.terminalId !== terminalId) continue;
       if (caller.kind === "local" && running.sessionId === caller.helpSessionId) return null;
       return {
+        scope,
         projectId: lane.projectId,
         slot: lane.slot,
         sessionId: running.sessionId,
@@ -304,17 +342,29 @@ export class AssistantTerminalControl {
     return target;
   }
 
+  private scopeOf(caller: AssistantCaller, laneProjectId: string): AssistantTarget["scope"] | null {
+    if (laneProjectId === caller.projectId) return "project";
+    return isGlobalAssistantId(laneProjectId) && reachesGlobal(caller) ? "global" : null;
+  }
+
   async list(caller: AssistantCaller): Promise<AssistantListResult> {
     const assistants: AssistantEntry[] = [];
     const occupied = new Set<number>();
+    let global: GlobalAssistantEntry | null = null;
     for (const lane of this.deps.listRunningLanes()) {
-      if (lane.projectId !== caller.projectId) continue;
+      if (lane.projectId !== caller.projectId) {
+        if (global === null && this.scopeOf(caller, lane.projectId) === "global") {
+          global = await this.globalEntryFor(lane);
+        }
+        continue;
+      }
       occupied.add(lane.slot);
       const running = this.deps.getRunningLaneSession(lane.projectId, lane.slot);
       if (!running) continue;
       if (caller.kind === "local" && running.sessionId === caller.helpSessionId) continue;
       const entry = await this.entryFor(
         {
+          scope: "project",
           projectId: lane.projectId,
           slot: lane.slot,
           sessionId: running.sessionId,
@@ -331,7 +381,17 @@ export class AssistantTerminalControl {
     const vacantSlots = Array.from({ length: MAX_ASSISTANT_SLOTS }, (_, slot) => slot).filter(
       (slot) => !occupied.has(slot)
     );
-    return { projectId: caller.projectId, assistants, vacantSlots };
+    return { projectId: caller.projectId, assistants, vacantSlots, global };
+  }
+
+  /** The global Assistant's lane as a listing shows it; null while its run has no generation. */
+  private async globalEntryFor(lane: RunningLane): Promise<GlobalAssistantEntry | null> {
+    const running = this.deps.getRunningLaneSession(lane.projectId, lane.slot);
+    if (!running) return null;
+    const generation = this.deps.getLiveGeneration(running.terminalId);
+    if (generation === null) return null;
+    const record = await this.deps.getTerminal(running.terminalId).catch(() => null);
+    return { terminalId: running.terminalId, generation, agentState: record?.agentState ?? null };
   }
 
   async start(caller: AssistantCaller, args: AssistantStartArgs): Promise<AssistantStartResult> {
@@ -353,6 +413,7 @@ export class AssistantTerminalControl {
       throw new AssistantTargetError(ASSISTANT_TARGET_REFUSALS.startRefused, message);
     }
     const target: AssistantTarget = {
+      scope: "project",
       projectId: caller.projectId,
       slot: result.slot,
       sessionId: result.sessionId,
@@ -445,7 +506,15 @@ export class AssistantTerminalControl {
     }
     // The read was async: the run must still be the one the caller named.
     this.requireGeneration(caller, target, request.generation);
-    const stamped = stampAssistantPrompt(request.command, caller.machineName);
+    // A message up to the global is raised with it, never a brief for it to carry out.
+    const stamped =
+      target.scope === "global"
+        ? stampUpwardAssistantPrompt(
+            request.command,
+            this.deps.projectName(caller.projectId) ?? caller.projectId,
+            caller.machineName
+          )
+        : stampAssistantPrompt(request.command, caller.machineName);
     const submissionToken = randomUUID();
     if (request.handback) {
       const handbackCode = mintHandbackCode();
@@ -485,6 +554,7 @@ export class AssistantTerminalControl {
     screenChanged?: boolean;
     inputSinceSettle?: "own-keys";
   }> {
+    requireProjectScope(target);
     this.requireGeneration(caller, target, request.generation);
     const inputOwner = inputOwnerOf(caller);
     const readScreen = async (lines: number) => {
@@ -621,6 +691,7 @@ export class AssistantTerminalControl {
     agentStateAtDispatch: string | undefined;
     status: "requested" | "requested-unverified";
   }> {
+    requireProjectScope(target);
     const record = await this.deps.getTerminal(target.terminalId);
     const assessment = assessInterruptCandidate(
       record
@@ -650,6 +721,7 @@ export class AssistantTerminalControl {
 
   /** Ends an assistant this caller started, and only that one: its session goes, and its PTY. */
   async close(caller: AssistantCaller, target: AssistantTarget): Promise<{ closedIds: string[] }> {
+    requireProjectScope(target);
     if (!wasStartedBy(target, caller)) {
       throw new AssistantTargetError(
         ASSISTANT_TARGET_REFUSALS.notStarter,
@@ -670,6 +742,7 @@ export class AssistantTerminalControl {
    * transcript read measures its own, and the newest text is kept.
    */
   async readReply(target: AssistantTarget, maxBytes: number): Promise<AgentLastMessageObserved> {
+    requireProjectScope(target);
     const record = await this.deps.getTerminal(target.terminalId);
     const handback = record?.lastHandback;
     let snapshot: { data: string } | null;
@@ -762,6 +835,7 @@ export function liveAssistantTerminalControl(deps: {
   };
   pty: () => PtyClient | null;
   extractReply: AssistantTerminalControlDeps["extractReply"];
+  projectName: AssistantTerminalControlDeps["projectName"];
 }): AssistantTerminalControl {
   return new AssistantTerminalControl({
     listRunningLanes: () => deps.help.listRunningLanes(),
@@ -793,5 +867,6 @@ export function liveAssistantTerminalControl(deps: {
     },
     revoke: (sessionId) => deps.help.revokeSession(sessionId),
     extractReply: deps.extractReply,
+    projectName: deps.projectName,
   });
 }

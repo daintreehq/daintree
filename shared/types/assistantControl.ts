@@ -61,10 +61,25 @@ export const AssistantEntrySchema = z.object({
 });
 export type AssistantEntry = z.infer<typeof AssistantEntrySchema>;
 
+/**
+ * This machine's global Assistant, as a project's assistant may address it
+ * (#16410): a send and a status read, nothing else, since it is the person's
+ * own conversation. Its state is as last observed; the status read has the rest.
+ */
+export const GlobalAssistantEntrySchema = z.object({
+  terminalId: z.string(),
+  generation: z.number(),
+  agentState: AssistantEntrySchema.shape.agentState,
+});
+export type GlobalAssistantEntry = z.infer<typeof GlobalAssistantEntrySchema>;
+
 export const AssistantListResultSchema = z.object({
   projectId: z.string(),
   assistants: z.array(AssistantEntrySchema),
   vacantSlots: z.array(z.number()).describe("Slots a start may use."),
+  global: GlobalAssistantEntrySchema.nullable().describe(
+    "This machine's global Assistant: send and status only. Null if none runs."
+  ),
 });
 export type AssistantListResult = z.infer<typeof AssistantListResultSchema>;
 
@@ -147,6 +162,8 @@ export const ASSISTANT_TARGET_REFUSALS = {
   notStarter: "ASSISTANT_NOT_STARTED_BY_YOU",
   /** Starting one was refused: no project, no vacant slot, or it could not launch. */
   startRefused: "ASSISTANT_START_REFUSED",
+  /** The global Assistant takes a project assistant's send or status read, nothing else (#16410). */
+  globalSendOnly: "ASSISTANT_GLOBAL_SEND_ONLY",
 } as const;
 
 /**

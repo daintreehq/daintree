@@ -1036,7 +1036,13 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 190_238): `canopy.openWindow`, so an assistant can open Canopy's own window.
   // It takes no arguments, so nearly all of it is the description. Assistant-only,
   // so the external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 190_450;
+  // 190_450 → 190_950 for #16410, measured at 190_937 B (+520 over develop's
+  // 190_417): `assistant.list` names this machine's global Assistant, so a
+  // project's assistant can raise something with it. Nearly all of it is the
+  // `global` entry on the listing's closed output schema: its terminal, run
+  // generation and observed state. Assistant-only, so the external ceiling does
+  // not move.
+  const MAX_COHORT_PAYLOAD_BYTES = 190_950;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
