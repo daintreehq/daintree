@@ -117,6 +117,7 @@ git fetch origin
 git checkout --detach origin/main
 git merge --no-ff release-fix/vX.Y.Z -m "chore(release): merge release fix into main for vX.Y.Z"
 test "$(node -p "require('./package.json').version")" = "X.Y.Z"
+npm run db:freeze -- --check
 git tag -f -a vX.Y.Z -m "Release vX.Y.Z"
 MAIN=$(git rev-parse HEAD)
 git checkout --detach origin/develop

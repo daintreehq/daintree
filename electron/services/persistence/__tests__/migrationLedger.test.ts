@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -95,10 +95,11 @@ describe("findLedgerDrift", () => {
   });
 
   it.each([
-    ["when", { when: 2500 }, /^0001_add_widgets: when changed from 2000 to 2500/],
-    ["idx", { idx: 7 }, /^0001_add_widgets: idx changed from 1 to 7/],
-    ["breakpoints", { breakpoints: false }, /^0001_add_widgets: breakpoints changed/],
-  ] as const)("names a shipped migration whose %s changed", (_field, change, message) => {
+    ["later when", { when: 2500 }, /^0001_add_widgets: when changed from 2000 to 2500/],
+    ["earlier when", { when: 1500 }, /^0001_add_widgets: when changed from 2000 to 1500/],
+    ["different idx", { idx: 7 }, /^0001_add_widgets: idx changed from 1 to 7/],
+    ["different breakpoints", { breakpoints: false }, /^0001_add_widgets: breakpoints changed/],
+  ] as const)("names a shipped migration with a %s", (_label, change, message) => {
     const entries = withEntry(1, change);
     expect(findLedgerDrift(shippedLedger, sourceOf(entries))).toEqual([
       expect.stringMatching(message),
@@ -116,6 +117,15 @@ describe("findLedgerDrift", () => {
     const entries = [shipped[0]];
     expect(findLedgerDrift(shippedLedger, sourceOf(entries))).toEqual([
       "0001_add_widgets: shipped in a release but is no longer in the journal",
+    ]);
+  });
+
+  it("names a shipped migration whose SQL file is gone", () => {
+    const entries = [...shipped, unshipped];
+    const sql = sqlOf(entries);
+    delete sql["0001_add_widgets"];
+    expect(findLedgerDrift(shippedLedger, sourceOf(entries, sql))).toEqual([
+      "0001_add_widgets: 0001_add_widgets.sql is missing",
     ]);
   });
 
@@ -148,6 +158,18 @@ describe("findJournalProblems", () => {
     ]);
   });
 
+  it("names an idx that repeats the one before it, even when the tag is right", () => {
+    expect(findJournalProblems(sourceOf(withEntry(2, { idx: 1 })))).toEqual([
+      "0002_add_gadgets: idx 1 sits at position 2; idx must count up from 0",
+    ]);
+  });
+
+  it("names a when that isn't an integer timestamp", () => {
+    expect(findJournalProblems(sourceOf(withEntry(2, { when: 2500.5 })))).toEqual([
+      "0002_add_gadgets: when 2500.5 is not an integer timestamp",
+    ]);
+  });
+
   it("names a tag whose prefix doesn't match its idx", () => {
     const entries = withEntry(2, { tag: "0005_add_gadgets" });
     expect(findJournalProblems(sourceOf(entries))).toEqual([
@@ -169,7 +191,12 @@ describe("findJournalProblems", () => {
 
 describe("freezeMigrations", () => {
   it("appends only the migrations the ledger doesn't hold yet", () => {
-    const appended = [...shipped, unshipped, entry(3, "add_sprockets", 4000)];
+    // breakpoints false proves the freeze records the entry's own value.
+    const appended = [
+      ...shipped,
+      unshipped,
+      { ...entry(3, "add_sprockets", 4000), breakpoints: false },
+    ];
     const { ledger, added } = freezeMigrations(shippedLedger, sourceOf(appended));
     expect(added.map((m) => m.tag)).toEqual(["0002_add_gadgets", "0003_add_sprockets"]);
     expect(ledger.migrations.slice(0, shipped.length)).toEqual(shippedLedger.migrations);
@@ -218,7 +245,13 @@ describe("freezeMigrationLedger", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("writes the new migration into the ledger file, and nothing on a rerun", () => {
+  it("writes the new migration into the ledger file, and nothing on a dry run or rerun", () => {
+    const shippedOnly = fs.readFileSync(ledgerPath, "utf8");
+    expect(
+      freezeMigrationLedger(migrations, ledgerPath, { dryRun: true }).map((m) => m.tag)
+    ).toEqual(["0002_add_gadgets"]);
+    expect(fs.readFileSync(ledgerPath, "utf8")).toBe(shippedOnly);
+
     expect(freezeMigrationLedger(migrations, ledgerPath).map((m) => m.tag)).toEqual([
       "0002_add_gadgets",
     ]);
@@ -228,7 +261,13 @@ describe("freezeMigrationLedger", () => {
     ).toEqual([]);
     expect(readMigrationLedger(ledgerPath).migrations).toHaveLength(3);
 
-    expect(freezeMigrationLedger(migrations, ledgerPath)).toEqual([]);
+    const write = vi.spyOn(fs, "writeFileSync");
+    try {
+      expect(freezeMigrationLedger(migrations, ledgerPath)).toEqual([]);
+      expect(write).not.toHaveBeenCalled();
+    } finally {
+      write.mockRestore();
+    }
     expect(fs.readFileSync(ledgerPath, "utf8")).toBe(frozen);
   });
 
