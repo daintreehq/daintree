@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { forgeClient } from "@/clients";
 import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
-import type { Issue, IssueComment } from "@shared/types/forge";
+import type { Issue, IssueComment, Page } from "@shared/types/forge";
 import {
   ISSUE_PROMPT_MAX_COMMENTS,
   formatIssuePromptContext,
@@ -57,9 +57,9 @@ async function readRecentComments(
   let cursor: string | null = null;
   const seenCursors = new Set<string>();
   for (let page = 0; page < ISSUE_COMMENT_MAX_PAGES; page++) {
-    let result;
+    let result: Page<IssueComment>;
     try {
-      const pageCursor = cursor;
+      const pageCursor: string | null = cursor;
       result = await beforeDeadline(
         () =>
           forgeClient.listIssueComments(cwd, issueNumber, {

@@ -183,9 +183,7 @@ export function formatIssuePromptContext(source: IssuePromptSource): IssuePrompt
         const byline = [author || "unknown author", formatDate(comment.createdAt)]
           .filter(Boolean)
           .join(", ");
-        const body =
-          mark(capBlock(comment.body, ISSUE_PROMPT_COMMENT_MAX_CHARS)) ||
-          "(empty)";
+        const body = mark(capBlock(comment.body, ISSUE_PROMPT_COMMENT_MAX_CHARS)) || "(empty)";
         return `${byline}:\n${body}`;
       });
       const total = Math.max(comments.total, recent.length);
@@ -213,8 +211,7 @@ export function formatIssuePromptContext(source: IssuePromptSource): IssuePrompt
       bodyHeading.length -
       gaps
   );
-  const body =
-    mark(capBlock(issue.body, Math.max(0, bodyBudget))) || "(no description)";
+  const body = mark(capBlock(issue.body, Math.max(0, bodyBudget))) || "(no description)";
 
   const quoted = [header, `${bodyHeading}${body}`, commentsSection]
     .filter((part) => part.length > 0)

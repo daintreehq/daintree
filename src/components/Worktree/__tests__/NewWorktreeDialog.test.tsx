@@ -3566,9 +3566,10 @@ describe("NewWorktreeDialog — the issue in the first prompt (#16380)", () => {
     await advanceTimersGradually(300);
   }
 
-  function launchedPrompt(): string | undefined {
+  function launchedPrompt(): unknown {
     const launch = mockDispatch.mock.calls.find(([id]) => id === "agent.launch");
-    return (launch?.[1] as { prompt?: string } | undefined)?.prompt;
+    const args: unknown = launch?.[1];
+    return args !== null && typeof args === "object" && "prompt" in args ? args.prompt : undefined;
   }
 
   it("offers the issue unchecked, and reads nothing until it is asked for", async () => {
@@ -3693,12 +3694,13 @@ describe("NewWorktreeDialog — the issue in the first prompt (#16380)", () => {
 
     await submit();
     // The agent is handed back to start by hand, with the user's prompt only.
-    const handBack = mockNotify.mock.calls
-      .map(([payload]) => payload as { action?: { label: string; onClick: () => void } })
-      .find((payload) => payload.action?.label === "Start Claude");
+    const { notify } = await import("@/lib/notify");
+    const handBack = vi
+      .mocked(notify)
+      .mock.calls.find(([payload]) => payload.action?.label === "Start Claude")?.[0].action;
     expect(handBack).toBeDefined();
     await act(async () => {
-      handBack!.action!.onClick();
+      await handBack!.onClick();
     });
     await advanceTimersGradually(300);
     expect(launchedPrompt()).toBe(PROMPT);
@@ -3713,7 +3715,12 @@ describe("NewWorktreeDialog — the issue in the first prompt (#16380)", () => {
       name: "Agent recipe",
       terminals: [{ type: "claude" }],
     };
-    const shells = { id: "r1", name: "Team recipe", terminals: [{ type: "terminal" }] };
+    const shells = {
+      id: "r1",
+      name: "Team recipe",
+      terminals: [{ type: "terminal" }],
+      createdAt: 0,
+    };
     const getState = useRecipeStore.getState;
     const spy = vi.spyOn(useRecipeStore, "getState").mockImplementation(() => ({
       ...getState(),

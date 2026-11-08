@@ -139,9 +139,7 @@ describe("formatIssuePromptContext", () => {
   });
 
   it("marks a shortened backtick run as a cut", () => {
-    const result = formatIssuePromptContext(
-      source({ issue: { ...ISSUE, body: "`".repeat(50) } })
-    );
+    const result = formatIssuePromptContext(source({ issue: { ...ISSUE, body: "`".repeat(50) } }));
     expect(result.truncated).toBe(true);
   });
 
