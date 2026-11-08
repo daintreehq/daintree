@@ -470,9 +470,8 @@ export class TerminalReconciliationWatchdog {
     // the 6s repair cooldown and spend heavy budget on a guaranteed no-op, so
     // both geometry branches below skip the attempt and fall through to the
     // cheaper render-pause / WebGL layers, retrying once the stream pauses.
-    // Main-buffer only: the gate in reconcileGeometryFresh sits after the
-    // alt-buffer early-return, so an alt-buffer reconcile is never deferred
-    // by writes.
+    // Main-buffer only: reconcileGeometryFresh applies that gate to the main
+    // buffer alone, so an alt-buffer reconcile is never deferred by writes.
     const streamingDeferred = !managed.isAltBuffer && hasStreamingWrites(managed, now);
 
     // Reveal-pending guaranteed redraw (#10632). The project-switch suppression
@@ -531,18 +530,12 @@ export class TerminalReconciliationWatchdog {
     // (== REVEAL_CONCURRENCY) so a grid that all diverges at once never lands as
     // a single long task.
     //
-    // Main buffer only (#11443). `reconcileGeometryFresh` returns early for an
-    // alt-screen pane by design (#10805 — never reflow a live TUI's frame out
-    // from under its own SIGWINCH redraw), so the repair issued here is a
-    // structural no-op for one: the divergence can never close, every tick
-    // burns a heavy-budget slot another pane could use, and after
-    // WATCHDOG_MAX_GEOMETRY_REPAIR_ATTEMPTS the breaker latches
-    // `geometryRepairGaveUp` permanently — which then blocks the pane's
-    // legitimate main-buffer repairs once it leaves the alternate screen, since
-    // only genuine convergence or a re-attach re-arms it. An alt pane's geometry
-    // is owned by the ResizeObserver-driven applyResize path and the app's own
-    // redraw; the render-pause and WebGL layers below still cover it.
-    if (!managed.isAltBuffer && !inSynchronizedBlock && !resizeTransitioning) {
+    // Alt-screen panes included (#16359). `reconcileGeometryFresh` moves an alt
+    // pane's xterm and PTY together, outside any synchronized block, so the
+    // app's own SIGWINCH redraw repaints the frame at the new size — the repair
+    // converges in one tick, and the breaker below stays a guard against a
+    // genuine fight rather than a latch that structural no-ops always trip.
+    if (!inSynchronizedBlock && !resizeTransitioning) {
       const proposal = managed.fitAddon.proposeDimensions?.();
       if (proposal && proposal.cols > 1 && proposal.rows > 1) {
         // Normalize before comparing, exactly as the diagnostic does. Both

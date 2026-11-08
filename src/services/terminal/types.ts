@@ -45,9 +45,10 @@ export type PostCompleteHook = (output: string) => void | Promise<void>;
  * without the bypass the one load-bearing step of Redraw is dead on exactly the
  * terminals it exists for.
  *
- * Still enforced under `force`: the alt-screen exclusion (#10805), host
- * visibility, the >=50px box floor, cell-metric availability, the
- * serialized-restore parking, and the pre-resize drain of held ingest bytes.
+ * Still enforced under `force`: an alt-screen pane's wait for an open
+ * synchronized-output block to close (#10805, #16359), host visibility, the
+ * >=50px box floor, cell-metric availability, the serialized-restore parking,
+ * and the pre-resize drain of held ingest bytes.
  *
  * Also note what `force` implies beyond the stream gate: it routes the repair
  * through the lock-exempt atomic reconcile rather than `fit()`, so it can land
