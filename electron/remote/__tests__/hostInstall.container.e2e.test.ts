@@ -30,7 +30,7 @@ import {
   type FeedTls,
 } from "./harness/containerHost.js";
 import { waitUntil } from "./harness/poll.js";
-import { makeShortTempRoot } from "./harness/privateSshd.js";
+import { listProcesses, makeShortTempRoot } from "./harness/privateSshd.js";
 import {
   feedEntryFor,
   sha512Base64Of,
@@ -523,6 +523,10 @@ describe.skipIf(!ENABLED)(
       async () => {
         await Promise.all(hosts.map((host) => host.dispose()));
         expect(await remainingContainers()).toEqual([]);
+        const processes = await listProcesses();
+        for (const host of hosts) {
+          expect(processes.filter((row) => row.command.includes(host.root))).toEqual([]);
+        }
       },
       TEST_TIMEOUT_MS
     );

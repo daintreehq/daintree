@@ -126,6 +126,8 @@ export async function makeFeedTls(dir: string): Promise<FeedTls> {
 }
 
 export interface ContainerHost {
+  /** This machine's directory on the client: its key, ssh_config and control sockets. */
+  root: string;
   target: string;
   connection: HostConnection;
   home: string;
@@ -337,6 +339,7 @@ export async function startContainerHost(tls: FeedTls): Promise<ContainerHost> {
     const feed = feedId;
     const host = hostId;
     return {
+      root,
       target: ALIAS,
       connection: { kind: "ssh", target: ALIAS },
       home: HOST_HOME,
