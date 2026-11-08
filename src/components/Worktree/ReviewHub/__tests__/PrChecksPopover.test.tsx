@@ -893,12 +893,19 @@ describe("PrChecksPopover", () => {
 
       it("never offers a merge without waiting, whatever the read carries", async () => {
         getChecksMock.mockResolvedValue({ checks: [check()] });
+        // Everything a bypass needs, so GitLab's no-preview declaration is
+        // the only thing in the way.
         getPRMock.mockResolvedValue({
-          ...gitlabMR({ detailed_merge_status: "not_approved" }),
+          ...gitlabMR(),
+          mergeStatus: "blocked",
           mergeQueueRequired: false,
           viewerCanMergeAsAdmin: true,
         });
-        getRepoMetadataMock.mockResolvedValue(gitlabMetadata);
+        getRepoMetadataMock.mockResolvedValue({
+          ...gitlabMetadata,
+          autoMergeSupported: true,
+          mergeSettings: { allowedMethods: ["merge"], autoMergeAllowed: true },
+        });
         renderPopover({ prUrl: WEB_URL });
 
         await openAndSettle();

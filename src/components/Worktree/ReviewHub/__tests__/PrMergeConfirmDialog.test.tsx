@@ -224,6 +224,11 @@ describe("PrMergeConfirmDialog", () => {
         { ...admin, mergeQueueRequired: true },
         /merge queue/,
       ],
+      [
+        "GitHub is still working out whether it can merge",
+        { ...admin, mergeStatus: "unknown" as const },
+        /waiting on requirements/,
+      ],
     ])("blocks rather than arming auto-merge when %s", async (_name, overrides, hint) => {
       getPRMock.mockResolvedValue(pr(overrides));
       renderDialog(request({ mode: "bypass", method: "squash" }));
@@ -233,6 +238,8 @@ describe("PrMergeConfirmDialog", () => {
       expect(isDisabled(button)).toBe(true);
       expect(screen.queryByRole("button", { name: "Enable auto-merge" })).toBeNull();
       expect(screen.queryByRole("button", { name: "Merge when ready" })).toBeNull();
+      // Nothing it would skip is claimed over a read that doesn't allow it.
+      expect(screen.queryByTestId("pr-merge-bypass-requirements")).toBeNull();
     });
 
     it("offers the ordinary merge, under a notice, once nothing is left to skip", async () => {

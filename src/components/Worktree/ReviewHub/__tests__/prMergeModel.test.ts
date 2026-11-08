@@ -322,22 +322,36 @@ describe("describeUnmetRequirements", () => {
     ).toEqual(["Changes requested"]);
   });
 
-  it("counts the required checks past the first few rather than listing them all", () => {
-    const checks = preparePrChecks(
-      Array.from({ length: 7 }, (_, i) =>
-        run({ name: `job${i}`, conclusion: "failure", required: true })
-      )
-    );
-    const { items } = describeUnmetRequirements(pr(), checks);
-    expect(items).toHaveLength(6);
-    expect(items[5]).toBe("2 more required checks not passed");
-  });
+  it.each([
+    [5, 5, null],
+    [6, 5, "1 more required check not passed"],
+    [8, 5, "3 more required checks not passed"],
+  ])(
+    "names the first few of %i unmet required checks and counts the rest",
+    (total, named, rest) => {
+      const checks = preparePrChecks(
+        Array.from({ length: total }, (_, i) =>
+          run({ name: `job${i}`, conclusion: "failure", required: true })
+        )
+      );
+      const { items } = describeUnmetRequirements(pr(), checks);
+      expect(items.filter((item) => item.startsWith("Required check "))).toHaveLength(named);
+      expect(items.at(-1)).toBe(rest ?? `Required check job${named - 1}: Failed`);
+    }
+  );
 
   it("says the branch rules aren't met when GitHub itemised nothing, never guessing which", () => {
     expect(describeUnmetRequirements(pr({ reviewDecision: "APPROVED" }), [])).toEqual({
       items: ["Branch rules on develop not met"],
       checksUnread: false,
     });
+  });
+
+  it("claims no unmet branch rules GitHub didn't report", () => {
+    expect(describeUnmetRequirements(pr({ mergeStatus: "behind" }), []).items).toEqual([
+      "Not up to date with develop",
+    ]);
+    expect(describeUnmetRequirements(pr({ mergeStatus: "unknown" }), []).items).toEqual([]);
   });
 
   it("says when the checks couldn't be read", () => {

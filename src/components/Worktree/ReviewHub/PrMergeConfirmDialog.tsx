@@ -25,6 +25,7 @@ import { pluralize } from "@/lib/pluralize";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   MERGE_STATUS_UNREPORTED_REASON,
+  canMergeWithoutWaiting,
   confirmBlockReason,
   describeMergeRejection,
   describeUnmetRequirements,
@@ -372,8 +373,10 @@ export function PrMergeConfirmDialog({
     rejection !== null
       ? describeMergeRejection(rejection.message, rejection.mode, { baseRef, queue })
       : null;
+  // Only over a read that allows it: a blocked bypass has nothing to skip,
+  // and a status GitHub hasn't settled says nothing about what's unmet.
   const unmet =
-    loadedPr && mode === "bypass"
+    loadedPr && mode === "bypass" && canMergeWithoutWaiting(loadedPr)
       ? describeUnmetRequirements(
           loadedPr,
           preview.kind === "loaded" ? (preview.checks ?? null) : null

@@ -285,7 +285,9 @@ export function describeUnmetRequirements(
     const rest = unmetChecks.length - MAX_NAMED_CHECKS;
     items.push(`${pluralize(rest, "more required check")} not passed`);
   }
-  if (items.length === 0) items.push(`Branch rules on ${pr.baseRef} not met`);
+  if (items.length === 0 && pr.mergeStatus === "blocked") {
+    items.push(`Branch rules on ${pr.baseRef} not met`);
+  }
   return { items, checksUnread: checks === null };
 }
 

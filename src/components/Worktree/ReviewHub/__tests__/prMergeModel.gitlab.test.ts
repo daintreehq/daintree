@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { PR } from "@shared/types/forge";
 import type { ForgeRepoMetadataPayload } from "@shared/types/ipc/forge";
 import {
   graphqlMergeRequestToForgePR,
@@ -93,16 +94,38 @@ describe("derivePrMergeControl for a GitLab merge request", () => {
   });
 
   // GitHub's admin bypass has no GitLab counterpart in the normalized PR (#16385).
-  it("never offers a merge without waiting, from either mapper", () => {
-    const blocked = [
+  it("never carries the permission a merge without waiting needs, from either mapper", () => {
+    const mapped = [
       mergeRequestToForgePR(restMR({ detailed_merge_status: "not_approved" }), HOST),
       graphqlMergeRequestToForgePR(graphqlMR({ detailedMergeStatus: "NOT_APPROVED" }), HOST),
-    ];
-    for (const pr of blocked) {
+    ].filter((pr): pr is PR => pr !== null);
+    expect(mapped).toHaveLength(2);
+    for (const pr of mapped) {
       expect("viewerCanMergeAsAdmin" in pr).toBe(false);
       expect(canMergeWithoutWaiting(pr)).toBe(false);
-      expect(derivePrMergeControl(pr, GITLAB_METADATA)).toMatchObject({ kind: "unavailable" });
     }
+  });
+
+  it("keeps GitLab's no-preview declaration ahead of the bypass, whatever else the read says", () => {
+    // Everything a bypass needs, so the declaration is the only thing in the way.
+    const eligible: PR = {
+      ...mergeRequestToForgePR(restMR(), HOST),
+      mergeStatus: "blocked",
+      mergeQueueRequired: false,
+      viewerCanMergeAsAdmin: true,
+    };
+    const permissive: ForgeRepoMetadataPayload = {
+      ...GITLAB_METADATA,
+      autoMergeSupported: true,
+      mergeSettings: { allowedMethods: ["merge"], autoMergeAllowed: true },
+    };
+    expect(derivePrMergeControl(eligible, permissive)).toMatchObject({
+      kind: "unavailable",
+      reason: "unsupported",
+    });
+    // The declaration alone is what holds it back.
+    const { mergePreviewSupported: _declared, ...undeclared } = permissive;
+    expect(derivePrMergeControl(eligible, undeclared)).toMatchObject({ bypass: true });
   });
 
   // The declaration is the only thing that ends the retry: a provider that

@@ -439,6 +439,14 @@ describe("pending forge-side merges (#13747)", () => {
     expect(GET_PR_QUERY).toContain("viewerCanMergeAsAdmin");
   });
 
+  it("keeps GitHub's denial of a merge without waiting as a denial", () => {
+    expect(toForgePR(node({ viewerCanMergeAsAdmin: false })).viewerCanMergeAsAdmin).toBe(false);
+    // Anything but a boolean is unreported, not a grant.
+    expect("viewerCanMergeAsAdmin" in toForgePR(node({ viewerCanMergeAsAdmin: "true" }))).toBe(
+      false
+    );
+  });
+
   it.each([
     ["SEARCH_QUERY", SEARCH_QUERY],
     ["GET_PR_QUERY", GET_PR_QUERY],
