@@ -2,14 +2,28 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hosts = vi.hoisted(
-  () => [] as Array<{ projectPath: string; dispose: ReturnType<typeof vi.fn> }>
+  () =>
+    [] as Array<{
+      projectPath: string;
+      dispose: ReturnType<typeof vi.fn>;
+      onDispose: ReturnType<typeof vi.fn>;
+      setStatusDownloadGate: ReturnType<typeof vi.fn>;
+    }>
 );
+const gate = vi.hoisted(() => ({
+  start: vi.fn((): (() => void) | null => null),
+}));
 
 vi.mock("electron", () => ({}));
+vi.mock("../statusDownloadGate.js", () => ({
+  gateGitStatusOnDownload: gate.start,
+}));
 vi.mock("../../WorkspaceHostProcess.js", () => ({
   WorkspaceHostProcess: class {
     projectPath: string;
     dispose = vi.fn();
+    onDispose = vi.fn();
+    setStatusDownloadGate = vi.fn();
     send = vi.fn();
     on = vi.fn();
     setLogLevelOverrides = vi.fn();
@@ -44,10 +58,48 @@ const REMOTE_VIEW = -9;
 beforeEach(() => {
   vi.useFakeTimers();
   hosts.length = 0;
+  gate.start.mockReset().mockReturnValue(null);
 });
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("WorkspaceHostPool status download gate", () => {
+  it("gates every way a host comes to exist, under its project's id", async () => {
+    const pool = new WorkspaceHostPool({ config: {}, emit: vi.fn() });
+
+    await pool.loadProject(PROJECT, LOCAL_WINDOW);
+    pool.prewarmProject(path.resolve("/srv/other"));
+    await pool.replaceHost(pool.entries.get(PROJECT)!, "unspecified");
+
+    expect(gate.start.mock.calls.map(([root, id]: unknown[]) => [root, id])).toEqual([
+      [PROJECT, `id-for-${PROJECT}`],
+      [path.resolve("/srv/other"), `id-for-${path.resolve("/srv/other")}`],
+      [PROJECT, `id-for-${PROJECT}`],
+    ]);
+  });
+
+  it("points the gate at its own host and stops it with that host", async () => {
+    const stop = vi.fn();
+    gate.start.mockReturnValue(stop);
+    const pool = new WorkspaceHostPool({ config: {}, emit: vi.fn() });
+    await pool.loadProject(PROJECT, LOCAL_WINDOW);
+    const host = hosts[0]!;
+
+    const apply = (gate.start.mock.calls[0] as unknown[])[2] as (gate: string) => void;
+    apply("held");
+    expect(host.setStatusDownloadGate).toHaveBeenCalledWith("held");
+    expect(host.onDispose).toHaveBeenCalledWith(stop);
+  });
+
+  it("has nothing to stop for a project it doesn't apply to", async () => {
+    const pool = new WorkspaceHostPool({ config: {}, emit: vi.fn() });
+    await pool.loadProject(PROJECT, LOCAL_WINDOW);
+
+    expect(hosts[0]!.onDispose).not.toHaveBeenCalled();
+    expect(hosts[0]!.setStatusDownloadGate).not.toHaveBeenCalled();
+  });
 });
 
 describe("WorkspaceHostPool holders", () => {

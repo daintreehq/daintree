@@ -12,6 +12,7 @@ import type {
   MonitorConfig,
   WorkspaceHostDisposePending,
   WorkspaceHostDisposePhase,
+  StatusDownloadGate,
 } from "../../shared/types/workspace-host.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { BrokerError, RequestResponseBroker } from "./rpc/RequestResponseBroker.js";
@@ -195,6 +196,8 @@ export class WorkspaceHostProcess extends EventEmitter {
    * every `ready` (initial + restarts) so a host restart doesn't silently
    * revert monitor fetch cadence to the unthrottled default. */
   private fetchThrottleMultiplierCache = 1;
+  private statusDownloadGateCache: StatusDownloadGate = "open";
+  private readonly disposeCallbacks: Array<() => void> = [];
 
   /** Last forge provider-matcher table relayed from main. Replayed on every
    * `ready` (initial + restarts) so a restarted host can still resolve remote
@@ -386,6 +389,24 @@ export class WorkspaceHostProcess extends EventEmitter {
     }
   }
 
+  /**
+   * Whether status passes may run, from what Main has seen of `.git`. A restart
+   * replays it on `ready`, before its `load-project` can start any pass. Sent
+   * only when it changes, since it is re-derived on every change to the counts.
+   */
+  setStatusDownloadGate(gate: StatusDownloadGate): void {
+    if (gate === this.statusDownloadGateCache) return;
+    this.statusDownloadGateCache = gate;
+    if (this.isInitialized && this.child) {
+      this.send({ type: "set-status-download-gate", gate });
+    }
+  }
+
+  /** `callback` runs once this host is disposed. A crash restart doesn't count. */
+  onDispose(callback: () => void): void {
+    this.disposeCallbacks.push(callback);
+  }
+
   relayFetchThrottle(multiplier: number): void {
     this.fetchThrottleMultiplierCache = multiplier;
     if (this.isInitialized && this.child) {
@@ -558,6 +579,8 @@ export class WorkspaceHostProcess extends EventEmitter {
   dispose(reason: WorkspaceHostDisposeReason = "unspecified"): void {
     if (this.isDisposed) return;
     this.isDisposed = true;
+
+    for (const callback of this.disposeCallbacks.splice(0)) callback();
 
     if (this.healthCheckInterval) {
       clearInterval(this.healthCheckInterval);
@@ -1158,6 +1181,11 @@ export class WorkspaceHostProcess extends EventEmitter {
           type: "apply-fetch-throttle",
           multiplier: this.fetchThrottleMultiplierCache,
         });
+
+        // A fresh process starts open, so only a closed gate needs replaying.
+        if (this.statusDownloadGateCache !== "open") {
+          this.send({ type: "set-status-download-gate", gate: this.statusDownloadGateCache });
+        }
 
         // Replay the cached provider-matcher table so a restarted host can
         // resolve remote URLs without waiting for the next registry change.

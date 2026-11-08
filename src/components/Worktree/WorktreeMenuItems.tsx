@@ -2,6 +2,7 @@ import { Fragment } from "react";
 import type * as React from "react";
 import type { WorktreeState } from "../../types";
 import type { WorktreeAttachment } from "@shared/types/worktree";
+import { WAITING_FOR_DOWNLOAD_LABEL } from "@/utils/onlineOnlyFilesCopy";
 import {
   ContextMenuItem,
   ContextMenuLabel,
@@ -599,9 +600,11 @@ export function WorktreeMenuItems({
     : worktree?.isDetached
       ? "No branch checked out"
       : isStatusUnknown
-        ? worktree?.gitStatusUnanswered
-          ? "Git status not answered"
-          : "Checking status…"
+        ? worktree?.gitStatusWaitingForDownload
+          ? WAITING_FOR_DOWNLOAD_LABEL
+          : worktree?.gitStatusUnanswered
+            ? "Git status not answered"
+            : "Checking status…"
         : hasUncommittedChanges
           ? "Commit or stash first"
           : baseBehind === 0

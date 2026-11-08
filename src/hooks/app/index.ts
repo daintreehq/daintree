@@ -9,6 +9,7 @@ export { useAppHydration } from "./useAppHydration";
 export { useShortcutHints } from "./useShortcutHints";
 export { usePanelStoreBootstrap } from "./usePanelStoreBootstrap";
 export { useCloudSyncWarning } from "./useCloudSyncWarning";
+export { useOnlineOnlyFilesSync } from "./useOnlineOnlyFilesSync";
 export { useRosettaWarning } from "./useRosettaWarning";
 export { useAccessibilityAnnouncements } from "./useAccessibilityAnnouncements";
 export { useGettingStartedChecklist } from "./useGettingStartedChecklist";

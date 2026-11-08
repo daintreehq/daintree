@@ -6,6 +6,7 @@ import { HostMemoryStallBanner } from "./HostMemoryStallBanner";
 import { SafeModeBanner } from "./SafeModeBanner";
 import { RestoreConfirmationBanner } from "./RestoreConfirmationBanner";
 import { MissingPrerequisiteBanner } from "./MissingPrerequisiteBanner";
+import { OnlineOnlyFilesBanner } from "./OnlineOnlyFilesBanner";
 import { CloudSyncBanner } from "./CloudSyncBanner";
 import { RosettaBanner } from "./RosettaBanner";
 import { useEffect, useState } from "react";
@@ -44,6 +45,8 @@ function activeBanner(slot: ReturnType<typeof useGlobalBannerPriority>) {
       return <MissingPrerequisiteBanner />;
     case "plugin-document":
       return <PluginDocumentWarning />;
+    case "online-only-files":
+      return <OnlineOnlyFilesBanner />;
     case "cloud-sync":
       return <CloudSyncBanner />;
     case "rosetta":

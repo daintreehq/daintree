@@ -275,6 +275,29 @@ describe("useWorktreeStatus — computedSubtitle", () => {
     ).toEqual({ text: "Git status not answered", tone: "warning" });
   });
 
+  it("says it is waiting for the download rather than checking", () => {
+    expect(
+      getSubtitle({
+        worktreeChanges: null,
+        gitStatusWaitingForDownload: true,
+        // A read that timed out before the walk answered is no longer the story.
+        gitStatusUnanswered: { reason: "timed-out", since: 1_700_000_000_000 },
+        prTitle: "feat: dark mode",
+        prState: "open",
+        ...prLinked({ prState: "open", prTitle: "feat: dark mode" }),
+      })
+    ).toEqual({ text: "Waiting for files to download", tone: "muted" });
+  });
+
+  it("keeps the last observed status while waiting for a download", () => {
+    expect(
+      getSubtitle({
+        worktreeChanges: makeChanges({ lastCommitMessage: "fix: earlier" }),
+        gitStatusWaitingForDownload: true,
+      })
+    ).toEqual({ text: "fix: earlier", tone: "muted" });
+  });
+
   it("keeps reading the last observed status when a later read goes unanswered", () => {
     expect(
       getSubtitle({

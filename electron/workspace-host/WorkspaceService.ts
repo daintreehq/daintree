@@ -1,5 +1,5 @@
 import os from "os";
-import type { InotifyLimit } from "../../shared/types/workspace-host.js";
+import type { InotifyLimit, StatusDownloadGate } from "../../shared/types/workspace-host.js";
 import { randomUUID } from "node:crypto";
 import PQueue from "p-queue";
 import { existsSync } from "fs";
@@ -560,6 +560,7 @@ async function readWorktreeFileForDiff(
 
 export class WorkspaceService {
   private monitors = new Map<string, WorktreeMonitor>();
+  private statusDownloadGate: StatusDownloadGate = "open";
   private readonly statusTiming = new StatusTimingRecorder();
   private readonly emitGate = new WorktreeEmitGate();
   /** Tail of the sweep chain — load, refresh and delete never sweep at once. */
@@ -1211,6 +1212,12 @@ export class WorkspaceService {
       sendEvent: (event) => this.sendEvent(event),
     };
     this.topologyWatcher = new TopologyWatcher(topologyHost);
+  }
+
+  /** Every worktree shares the one `.git`, so they all wait or resume together. */
+  setStatusDownloadGate(gate: StatusDownloadGate): void {
+    this.statusDownloadGate = gate;
+    for (const monitor of this.monitors.values()) monitor.setStatusDownloadGate(gate);
   }
 
   async loadProject(
@@ -2154,6 +2161,7 @@ export class WorkspaceService {
     // its neighbours, so start() never arms a watcher or poll loop the rest of
     // the host has let go of — and inherits the current attenuation.
     monitor.applyPollingPermissions(this.appliedPermissions);
+    if (this.statusDownloadGate !== "open") monitor.setStatusDownloadGate(this.statusDownloadGate);
 
     if (skipInitialGitStatus) {
       monitor.startWithoutGitStatus();
@@ -3533,6 +3541,18 @@ export class WorkspaceService {
    * than trusting this field.
    */
   private async inventorySubmoduleRisk(worktreePath: string): Promise<SubmoduleDeleteRisk> {
+    const incomplete: SubmoduleDeleteRisk = {
+      entries: [],
+      dirtyFiles: [],
+      untrackedFiles: [],
+      atRiskCommits: [],
+      requiresMechanicalForce: false,
+      incomplete: true,
+    };
+    // The inventory runs its own `git status`, in the parent and in every module.
+    // Only once `.git` is known to need it: refusing during the first walk would
+    // turn away a delete of a repository with nothing outstanding.
+    if (this.statusDownloadGate === "held") return incomplete;
     try {
       return await withTimeout(
         buildSubmoduleDeleteRisk(worktreePath, { signal: this._shutdownController.signal }),
@@ -3543,14 +3563,7 @@ export class WorkspaceService {
       logWarn(
         `[WorkspaceHost] submodule delete risk inventory failed for ${worktreePath}: ${formatErrorMessage(error, "unknown failure")}`
       );
-      return {
-        entries: [],
-        dirtyFiles: [],
-        untrackedFiles: [],
-        atRiskCommits: [],
-        requiresMechanicalForce: false,
-        incomplete: true,
-      };
+      return incomplete;
     }
   }
 

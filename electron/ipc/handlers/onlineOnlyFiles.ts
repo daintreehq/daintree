@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { detectCloudSyncService } from "../../../shared/utils/cloudSyncDetection.js";
 import type { ProjectOnlineOnlyFiles } from "../../../shared/types/onlineOnlyFiles.js";
-import { ProjectOnlineOnlyService } from "../../services/ProjectOnlineOnlyService.js";
+import { getProjectOnlineOnlyService } from "../../services/ProjectOnlineOnlyService.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { resolveScopedProjectForIpcContext } from "../projectContext.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
@@ -9,7 +9,7 @@ import { ONLINE_ONLY_FILES_METHOD_CHANNELS } from "./onlineOnlyFiles.preload.js"
 
 export function createOnlineOnlyFilesNamespace(deps: HandlerDependencies) {
   // Holds nothing and starts nothing until a project in a cloud folder is watched.
-  const service = new ProjectOnlineOnlyService();
+  const service = getProjectOnlineOnlyService();
 
   const namespace = defineIpcNamespace({
     name: "onlineOnlyFiles",

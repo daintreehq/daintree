@@ -21,9 +21,7 @@ vi.mock("../../projectContext.js", () => ({
   resolveScopedProjectForIpcContext: resolveProject,
 }));
 vi.mock("../../../services/ProjectOnlineOnlyService.js", () => ({
-  ProjectOnlineOnlyService: vi.fn(function () {
-    return serviceMock;
-  }),
+  getProjectOnlineOnlyService: () => serviceMock,
 }));
 
 import { registerOnlineOnlyFilesHandlers } from "../onlineOnlyFiles.js";

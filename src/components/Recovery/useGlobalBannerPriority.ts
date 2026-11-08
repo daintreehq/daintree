@@ -2,6 +2,11 @@ import { usePanelStore } from "@/store/panelStore";
 import { useSafeModeStore } from "@/store/safeModeStore";
 import { useRestoreConfirmationStore } from "@/store/restoreConfirmationStore";
 import { useCloudSyncBannerStore } from "@/store/cloudSyncBannerStore";
+import {
+  selectOnlineOnlyOutstanding,
+  selectOnlineOnlyUnsettled,
+  useOnlineOnlyFilesStore,
+} from "@/store/onlineOnlyFilesStore";
 import { useRosettaBannerStore } from "@/store/rosettaBannerStore";
 import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
 import { useEffect, useSyncExternalStore } from "react";
@@ -24,6 +29,7 @@ export type GlobalBannerSlot =
   | "restore-confirmation"
   | "missing-prerequisite"
   | "plugin-document"
+  | "online-only-files"
   | "cloud-sync"
   | "rosetta"
   | null;
@@ -40,6 +46,7 @@ export type GlobalBannerSlot =
 //   restore-confirmation — informational "session recovered" toast-banner
 //   missing-prerequisite — a fatal tool (Git) isn't installed (#11763)
 //   plugin-document    — plugin registrations need document replacement
+//   online-only-files  — what this project's files have and haven't downloaded yet
 //   cloud-sync         — project sits in a synced folder; environmental warning
 //   rosetta            — x64 build translated on Apple Silicon; permanent perf warning
 // Watchdog sits below host-crash because a live host failure is more urgent
@@ -71,6 +78,13 @@ export type GlobalBannerSlot =
 // static — nothing in the app can change it, only reinstalling the native
 // build — so any more actionable banner deserves the slot first.
 //
+// online-only-files sits above cloud-sync because it says what is true now where
+// cloud-sync only says where the project lives. Dismissing it doesn't hand the
+// slot back to cloud-sync: advice to move the project isn't what someone waiting
+// on a download needs. cloud-sync also waits out the first walk, so a project
+// with files outstanding never flashes it first, and one with none gets it as
+// it always has. A project this doesn't apply to settles as soon as `watch` answers.
+//
 // host-connection sits above host-crash because in a remote window the host
 // runs the terminals, git and agents: with the link down, nothing below it is
 // reachable, and a local backend problem is not what the user can act on first.
@@ -99,6 +113,8 @@ export function useGlobalBannerPriority(): GlobalBannerSlot {
   const dismissed = useGlobalBannerDismissalStore((s) => s.dismissed);
   const resetDismissal = useGlobalBannerDismissalStore((s) => s.reset);
   const cloudSyncService = useCloudSyncBannerStore((s) => s.service);
+  const onlineOnlyOutstanding = useOnlineOnlyFilesStore(selectOnlineOnlyOutstanding);
+  const onlineOnlyUnsettled = useOnlineOnlyFilesStore(selectOnlineOnlyUnsettled);
   const rosettaVisible = useRosettaBannerStore((s) => s.visible);
   const prerequisiteVisible = useMissingPrerequisiteStore(selectMissingPrerequisiteVisible);
   const documentDiagnostics = useSyncExternalStore(
@@ -111,7 +127,15 @@ export function useGlobalBannerPriority(): GlobalBannerSlot {
   useEffect(() => {
     if (!watchdogDisabled) resetDismissal("watchdog-disabled");
     if (!pluginsNeedReload) resetDismissal("plugin-document");
-  }, [watchdogDisabled, pluginsNeedReload, resetDismissal]);
+    // A later batch of files is news again. Still walking says nothing either way.
+    if (!onlineOnlyOutstanding && !onlineOnlyUnsettled) resetDismissal("online-only-files");
+  }, [
+    watchdogDisabled,
+    pluginsNeedReload,
+    onlineOnlyOutstanding,
+    onlineOnlyUnsettled,
+    resetDismissal,
+  ]);
 
   if (hostBanner !== null) return "host-connection";
   if (backendStatus !== "connected") return "host-crash";
@@ -122,7 +146,10 @@ export function useGlobalBannerPriority(): GlobalBannerSlot {
   if (restoreVisible) return "restore-confirmation";
   if (prerequisiteVisible) return "missing-prerequisite";
   if (pluginsNeedReload && !dismissed.has("plugin-document")) return "plugin-document";
-  if (cloudSyncService !== null) return "cloud-sync";
+  if (onlineOnlyOutstanding && !dismissed.has("online-only-files")) return "online-only-files";
+  if (cloudSyncService !== null && !onlineOnlyOutstanding && !onlineOnlyUnsettled) {
+    return "cloud-sync";
+  }
   if (rosettaVisible) return "rosetta";
   return null;
 }

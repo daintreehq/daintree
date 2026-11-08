@@ -55,6 +55,7 @@ const SLOT_IS_RECOVERY: Record<Exclude<GlobalBannerSlot, null>, boolean> = {
   // stay actionable — a missing Git doesn't make them un-fixable.
   "missing-prerequisite": false,
   "plugin-document": false,
+  "online-only-files": false,
   "cloud-sync": false,
   rosetta: false,
 };

@@ -15,7 +15,7 @@ import {
   type ScrollerProps,
   type VirtuosoHandle,
 } from "react-virtuoso";
-import { FolderOpen, LayoutGrid, Plus, RefreshCw, Zap } from "lucide-react";
+import { CloudDownload, FolderOpen, LayoutGrid, Plus, RefreshCw, Zap } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { boundedErrorText } from "@/utils/errorText";
@@ -63,6 +63,9 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useWorktreeSelectionStore, useProjectStore } from "@/store";
+import { useOnlineOnlyFilesStore } from "@/store/onlineOnlyFilesStore";
+import { WAITING_FOR_DOWNLOAD_LABEL } from "@/utils/onlineOnlyFilesCopy";
+import { gitStatusWaitsForDownload } from "@shared/utils/onlineOnlyFiles";
 import type { PendingCreation } from "@/store/worktreeStore";
 import { DeletedWorktreeCard } from "@/components/Sidebar/DeletedWorktreeCard";
 import { DeletedWorktreeGroup } from "@/components/Sidebar/DeletedWorktreeGroup";
@@ -768,6 +771,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // loading: a stalled reconnect during the first hydration leaves `isLoading`
   // up for good, and the skeleton would hide the only recovery.
   const showSkeleton = (isLoading || sidebarFailure !== null) && !isFailureSettled;
+  const gitWaitsForDownload = useOnlineOnlyFilesStore((s) => gitStatusWaitsForDownload(s.files));
   const worktreeLoadErrorBanner =
     loadFailure !== null && error === null && isFailureSettled ? (
       <WorktreeLoadErrorBanner error={loadFailure} />
@@ -838,6 +842,31 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     return (
       <>
         <WorkspaceRootSidebar workspace={workspaceRoot} homeDir={homeDir} />
+        {restartConfirmDialog}
+      </>
+    );
+  }
+
+  // A load that failed on `.git` placeholders retries itself once they're down,
+  // so neither its Retry nor the nudge to open a repository is the next step.
+  if (worktrees.length === 0 && gitWaitsForDownload) {
+    return (
+      <>
+        <div className="flex flex-col h-full">
+          <div className={cn(SIDEBAR_HEADER_ROW, "border-b border-divider")}>
+            <SidebarViewHeading className="truncate text-text-primary font-semibold text-sm tracking-wide">
+              Worktrees
+            </SidebarViewHeading>
+          </div>
+          {errorBanner}
+          <EmptyState
+            variant="zero-data"
+            scale="sidebar"
+            icon={<CloudDownload />}
+            title={WAITING_FOR_DOWNLOAD_LABEL}
+            className="flex-1"
+          />
+        </div>
         {restartConfirmDialog}
       </>
     );

@@ -252,6 +252,24 @@ describe("WorkspaceService agent-activity elevation", () => {
     expect(service["backgroundGitWatcherLru"].has(wtPath("agent-made"))).toBe(false);
   });
 
+  it("monitors created while the download gate is closed start with it closed", async () => {
+    service.setStatusDownloadGate("held");
+
+    await service["addNewWorktreeMonitor"](createTestWorktree("late"), false, true);
+
+    const monitor = service["monitors"].get(wtPath("late"));
+    expect(monitor!.getSnapshot().gitStatusWaitingForDownload).toBe(true);
+    await expect(monitor!.getFreshChanges()).rejects.toThrow("waiting for downloads");
+  });
+
+  it("monitors created with the download gate open aren't told anything", async () => {
+    await service["addNewWorktreeMonitor"](createTestWorktree("late"), false, true);
+
+    expect(
+      service["monitors"].get(wtPath("late"))!.getSnapshot().gitStatusWaitingForDownload
+    ).toBeUndefined();
+  });
+
   it("setAgentActivity for an unknown worktree id is retained but harmless", () => {
     const a = registerMonitor("a");
     service.setAgentActivity([wtPath("not-yet-discovered")]);

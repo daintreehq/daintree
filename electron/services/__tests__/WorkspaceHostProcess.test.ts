@@ -2060,3 +2060,99 @@ describe("WorkspaceHostProcess — fetch-throttle relay", () => {
     host.dispose();
   });
 });
+
+function statusGatesSentTo(child: MockUtilityChild): string[] {
+  return child.postMessage.mock.calls
+    .map(([message]) => message as { type?: string; gate?: string })
+    .filter((message) => message?.type === "set-status-download-gate")
+    .map((message) => message.gate as string);
+}
+
+describe("WorkspaceHostProcess status download gate", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    forkMock.mockReset();
+    mockChildren.length = 0;
+    appMock.removeAllListeners();
+    forkMock.mockImplementation(() => new MockUtilityChild());
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function createHost() {
+    const { WorkspaceHostProcess } = await import("../WorkspaceHostProcess.js");
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+    return host;
+  }
+
+  it("sends nothing for a gate that's always been open", async () => {
+    const host = await createHost();
+    const child = mockChildren[0] as MockUtilityChild;
+
+    child.emit("message", { type: "ready" });
+
+    expect(statusGatesSentTo(child)).toEqual([]);
+    host.dispose();
+  });
+
+  it("delivers a gate closed before ready ahead of anything that could start a pass", async () => {
+    const host = await createHost();
+    const child = mockChildren[0] as MockUtilityChild;
+
+    host.setStatusDownloadGate("pending");
+    expect(statusGatesSentTo(child)).toEqual([]);
+
+    child.emit("message", { type: "ready" });
+    expect(statusGatesSentTo(child)).toEqual(["pending"]);
+    host.dispose();
+  });
+
+  it("sends only real changes once running", async () => {
+    const host = await createHost();
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", { type: "ready" });
+
+    host.setStatusDownloadGate("held");
+    host.setStatusDownloadGate("held");
+    host.setStatusDownloadGate("open");
+
+    expect(statusGatesSentTo(child)).toEqual(["held", "open"]);
+    host.dispose();
+  });
+
+  it("replays a closed gate to the new child after a crash restart", async () => {
+    const host = await createHost();
+    const firstChild = mockChildren[0] as MockUtilityChild;
+    firstChild.emit("message", { type: "ready" });
+    host.setStatusDownloadGate("held");
+
+    firstChild.emit("exit", 1);
+    host.manualRestart();
+    const secondChild = mockChildren[1] as MockUtilityChild;
+    secondChild.emit("message", { type: "ready" });
+
+    expect(statusGatesSentTo(secondChild)).toEqual(["held"]);
+    host.dispose();
+  });
+
+  it("runs dispose callbacks once, on dispose and not on a crash", async () => {
+    const host = await createHost();
+    const child = mockChildren[0] as MockUtilityChild;
+    const disposed = vi.fn();
+    host.onDispose(disposed);
+    child.emit("message", { type: "ready" });
+
+    child.emit("exit", 1);
+    expect(disposed).not.toHaveBeenCalled();
+
+    host.dispose();
+    host.dispose();
+    expect(disposed).toHaveBeenCalledTimes(1);
+  });
+});

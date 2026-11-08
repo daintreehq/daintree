@@ -66,6 +66,7 @@ function makeHost(overrides: Partial<SnapshotBuilderHost> = {}): SnapshotBuilder
     fetchAuthFailed: false,
     fetchNetworkFailed: false,
     gitStatusUnanswered: null,
+    gitStatusWaitingForDownload: false,
     hasRemote: undefined,
     isFetchInFlight: false,
     matchedForgeProviderId: null,
@@ -175,6 +176,14 @@ describe("SnapshotBuilder", () => {
     expect(
       new SnapshotBuilder(makeHost({ gitStatusUnanswered: unanswered })).build().gitStatusUnanswered
     ).toEqual(unanswered);
+  });
+
+  it("carries the wait for a download only while it holds", () => {
+    expect(new SnapshotBuilder(makeHost()).build().gitStatusWaitingForDownload).toBeUndefined();
+    expect(
+      new SnapshotBuilder(makeHost({ gitStatusWaitingForDownload: true })).build()
+        .gitStatusWaitingForDownload
+    ).toBe(true);
   });
 
   it("carries the command approval flag only when approval is outstanding", () => {

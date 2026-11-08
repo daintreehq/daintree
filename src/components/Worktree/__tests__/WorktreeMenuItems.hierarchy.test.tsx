@@ -1130,6 +1130,19 @@ describe("Git submenu — start rows", () => {
     expect(row.textContent).not.toContain("Checking status");
   });
 
+  it("says a row is waiting for the download when that's why status is unknown", () => {
+    const { container } = renderWorktreeMenu({
+      worktree: makeWorktree({
+        baseBranchName: "develop",
+        baseBehindCount: 3,
+        gitStatusWaitingForDownload: true,
+      }),
+    });
+    const row = gitRow(container, "Rebase onto");
+    expect(row.disabled).toBe(true);
+    expect(row.textContent).toContain("Waiting for files to download");
+  });
+
   it("dispatches nothing from a disabled row", () => {
     const { container } = renderWorktreeMenu({ worktree: integrable({ baseBehindCount: 0 }) });
     gitRow(container, "Rebase onto").click();

@@ -521,6 +521,12 @@ export interface Worktree {
   gitStatusUnanswered?: GitStatusUnanswered;
 
   /**
+   * Git status isn't being run here because `.git` still holds online-only
+   * files. `worktreeChanges` still holds whatever was last observed.
+   */
+  gitStatusWaitingForDownload?: boolean;
+
+  /**
    * `false` when `git remote` lists nothing: a local-only repo, which has
    * nothing to fetch and nothing wrong with it. `true` when it lists any;
    * absent until a fetch attempt has read the list.
