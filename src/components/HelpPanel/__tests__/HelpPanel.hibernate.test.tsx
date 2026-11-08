@@ -683,7 +683,9 @@ describe("HelpPanel — resume from hibernated session", () => {
       render(<HelpPanel width={380} />);
     });
 
-    expect(mockBuildResumeCommand).toHaveBeenCalledWith("claude", "abc-123", undefined);
+    // Started with the executable a launch starts now: the registry command, with
+    // nothing detected here (#16399).
+    expect(mockBuildResumeCommand).toHaveBeenCalledWith("claude", "abc-123", undefined, "claude");
     expect(panelStoreState.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "terminal",
@@ -942,7 +944,9 @@ describe("HelpPanel — Resume affordance for eviction-captured sessions", () =>
     });
 
     // Resumes the captured session via the agent's --resume command...
-    expect(mockBuildResumeCommand).toHaveBeenCalledWith("claude", "abc-123", undefined);
+    // Started with the executable a launch starts now: the registry command, with
+    // nothing detected here (#16399).
+    expect(mockBuildResumeCommand).toHaveBeenCalledWith("claude", "abc-123", undefined, "claude");
     expect(panelStoreState.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
         launchAgentId: "claude",
@@ -1204,7 +1208,9 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
         removeOnExit: true,
       })
     );
-    expect(mockBuildResumeCommand).toHaveBeenCalledWith("claude", "abc-123", undefined);
+    // Started with the executable a launch starts now: the registry command, with
+    // nothing detected here (#16399).
+    expect(mockBuildResumeCommand).toHaveBeenCalledWith("claude", "abc-123", undefined, "claude");
     // Auto-resuming a stranded session is recovery, NOT billed-auto-launch
     // consent — same separation as the manual Resume CTA (#10699).
     expect(helpPanelState.setAutoLaunchEnabled).not.toHaveBeenCalled();
@@ -1868,10 +1874,12 @@ describe("HelpPanel — resume preserves user-configured launch flags", () => {
       render(<HelpPanel width={380} />);
     });
 
-    expect(mockBuildResumeCommand).toHaveBeenCalledWith("claude", "abc-123", [
-      "--model",
-      "claude-opus-4-5",
-    ]);
+    expect(mockBuildResumeCommand).toHaveBeenCalledWith(
+      "claude",
+      "abc-123",
+      ["--model", "claude-opus-4-5"],
+      "claude"
+    );
     expect(panelStoreState.addPanel).toHaveBeenCalledWith(
       expect.objectContaining({
         agentLaunchFlags: ["--model", "claude-opus-4-5"],

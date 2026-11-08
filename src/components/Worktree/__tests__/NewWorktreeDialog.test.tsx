@@ -80,6 +80,15 @@ vi.mock("@/clients/systemClient", () => ({
   },
 }));
 
+// Cloned layouts start the executable this view's CLI detection resolves, which
+// these tests don't load: the registry command stands.
+vi.mock("@/utils/agentLaunchCommand", () => ({
+  resolveCurrentAgentLaunchBaseCommand: vi.fn(async () => undefined),
+  getCurrentLaunchCliDetail: vi.fn(async () => undefined),
+  resolveAgentLaunchBaseCommand: vi.fn((registryCommand: string) => registryCommand),
+  rebaseToCurrentAgentLaunch: vi.fn(async (command: string) => command),
+}));
+
 vi.mock("@/config/agents", () => ({
   getAgentConfig: (id: string) =>
     id === "claude"
