@@ -6138,7 +6138,8 @@ export class WorkspaceService {
    */
   private scheduleForgeReselect(): void {
     // A folder with no repository has no remotes to reselect from, and the
-    // shared read falls back to the project root — so without this the matcher relay would spawn `git remote -v` there and, on its bounded
+    // shared read falls back to the project root — so without this the
+    // matcher relay would spawn `git remote -v` there and, on its bounded
     // re-arm, up to three more times per registry change (#11405 × #11408).
     // Left at `=== false` where the monitor-minting guards moved to `!== true`:
     // a matcher push reaching a host whose probe failed can still spawn one
