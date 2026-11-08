@@ -2,6 +2,7 @@ import { notify } from "@/lib/notify";
 import { pluralize } from "@/lib/pluralize";
 import { useNotificationStore } from "@/store/notificationStore";
 import { useNotificationHistoryStore } from "@/store/slices/notificationHistorySlice";
+import { useProjectStore } from "@/store/projectStore";
 
 /**
  * One grid-bar notice for every terminal in this project view whose stall
@@ -14,8 +15,10 @@ import { useNotificationHistoryStore } from "@/store/slices/notificationHistoryS
  */
 const escalated = new Set<string>();
 let noticeId: string | null = null;
-
-const NOTICE_KEY = "terminal-output-stalled";
+// The incident's inbox key, fixed when it starts. Project-scoped because the
+// inbox is shared across windows, and another project's incident must not
+// archive this one's row.
+let noticeKey: string | null = null;
 
 function noticeMessage(count: number): string {
   return count === 1
@@ -28,15 +31,16 @@ function liveNotice(id: string) {
 }
 
 function updateNoticeCount(): void {
-  if (noticeId === null) return;
-  const live = liveNotice(noticeId);
-  // Gone means the user dismissed it, and this incident doesn't post again.
-  if (!live) return;
   const message = noticeMessage(escalated.size);
-  useNotificationStore.getState().updateNotification(noticeId, { message });
-  if (live.historyEntryId) {
-    useNotificationHistoryStore.getState().updateEntryMessage(live.historyEntryId, message);
+  // No live row means the user dismissed it, and this incident doesn't post again.
+  if (noticeId !== null && liveNotice(noticeId)) {
+    useNotificationStore.getState().updateNotification(noticeId, { message });
   }
+  // The inbox row outlives a dismissed bar, and exists even when quiet hours
+  // kept the bar from showing at all.
+  const history = useNotificationHistoryStore.getState();
+  const entry = history.entries.find((e) => e.supersedeKey === noticeKey && !e.archivedAt);
+  if (entry) history.updateEntryMessage(entry.id, message);
 }
 
 export function reportTerminalStallEscalated(terminalId: string): void {
@@ -46,6 +50,8 @@ export function reportTerminalStallEscalated(terminalId: string): void {
     updateNoticeCount();
     return;
   }
+  const projectId = useProjectStore.getState().currentProject?.id;
+  noticeKey = projectId ? `terminal-output-stalled:${projectId}` : "terminal-output-stalled";
   noticeId =
     notify({
       type: "warning",
@@ -53,8 +59,8 @@ export function reportTerminalStallEscalated(terminalId: string): void {
       placement: "grid-bar",
       title: "Terminal output stalled",
       message: noticeMessage(1),
-      supersedeKey: NOTICE_KEY,
-      context: { eventKind: "recovery" },
+      supersedeKey: noticeKey,
+      context: projectId ? { eventKind: "recovery", projectId } : { eventKind: "recovery" },
     }) || null;
 }
 
@@ -68,9 +74,11 @@ export function clearTerminalStallEscalation(terminalId: string): void {
     useNotificationStore.getState().removeNotification(noticeId);
   }
   noticeId = null;
+  noticeKey = null;
 }
 
 export function __resetTerminalStallNoticeForTests(): void {
   escalated.clear();
   noticeId = null;
+  noticeKey = null;
 }

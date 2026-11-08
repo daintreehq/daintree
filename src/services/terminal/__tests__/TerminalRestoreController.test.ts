@@ -676,11 +676,13 @@ describe("TerminalRestoreController", () => {
 
     describe("settlePendingWrites", () => {
       // Holds the barrier write's callback, the way xterm does while chunks
-      // accepted before it are still parsing. Every other write behaves as usual.
-      function holdBarrier(): () => void {
+      // accepted before it are still parsing. `onBarrier` sees the terminal at
+      // the moment the barrier is queued. Every other write behaves as usual.
+      function holdBarrier(onBarrier?: () => void): () => void {
         let releaseBarrier: (() => void) | undefined;
         mockTerminal.write = vi.fn((data: string, callback?: () => void) => {
           if (data === "" && callback) {
+            onBarrier?.();
             releaseBarrier = callback;
             return;
           }
@@ -692,13 +694,22 @@ describe("TerminalRestoreController", () => {
       it("holds the reset until writes xterm already accepted have parsed", async () => {
         const { terminalClient } = await import("@/clients");
         vi.mocked(terminalClient.getSerializedState).mockResolvedValue(snapshot("small-state"));
-        const releaseBarrier = holdBarrier();
         const managed = makeManagedTerminal();
         instances.set("t1", managed);
+        // Queued any earlier and live output could still land behind it.
+        let windowOpenAtBarrier: boolean | undefined;
+        const releaseBarrier = holdBarrier(() => {
+          windowOpenAtBarrier = managed.isSerializedRestoreInProgress;
+        });
 
         const promise = controller.fetchAndRestore("t1", { settlePendingWrites: true });
         await flushMicrotasks();
+        expect(windowOpenAtBarrier).toBe(true);
         expect(mockTerminal.reset).not.toHaveBeenCalled();
+        expect(mockTerminal.write).not.toHaveBeenCalledWith(
+          expect.stringContaining("small-state"),
+          expect.anything()
+        );
 
         releaseBarrier();
         const result = await promise;
@@ -713,6 +724,11 @@ describe("TerminalRestoreController", () => {
         holdBarrier();
         const managed = makeManagedTerminal();
         instances.set("t1", managed);
+        // A replay written while the window is still open would just be deferred again.
+        const windowOpenAtReplay: boolean[] = [];
+        vi.mocked(writeDataSpy).mockImplementation(() => {
+          windowOpenAtReplay.push(managed.isSerializedRestoreInProgress);
+        });
 
         const promise = controller.fetchAndRestore("t1", { settlePendingWrites: true });
         await flushMicrotasks();
@@ -724,19 +740,103 @@ describe("TerminalRestoreController", () => {
         expect(result).toBe(false);
         expect(mockTerminal.reset).not.toHaveBeenCalled();
         expect(managed.isSerializedRestoreInProgress).toBe(false);
+        expect(writeDataSpy).toHaveBeenCalledTimes(1);
         expect(writeDataSpy).toHaveBeenCalledWith("t1", "held-during-wait", 1);
+        expect(windowOpenAtReplay).toEqual([false]);
         expect(managed.deferredOutput).toHaveLength(0);
       });
 
-      it("queues no barrier when the caller doesn't ask for one", async () => {
+      it("abandons on the barrier's deadline even while the snapshot fetch hangs", async () => {
+        const { terminalClient } = await import("@/clients");
+        vi.mocked(terminalClient.getSerializedState).mockImplementation(
+          () => new Promise(() => {})
+        );
+        holdBarrier();
+        const managed = makeManagedTerminal();
+        instances.set("t1", managed);
+
+        const promise = controller.fetchAndRestore("t1", { settlePendingWrites: true });
+        await flushMicrotasks();
+        managed.deferredOutput.push({ data: "held-during-wait", chunkCount: 1 });
+        await vi.advanceTimersByTimeAsync(5000);
+
+        await expect(promise).resolves.toBe(false);
+        expect(managed.isSerializedRestoreInProgress).toBe(false);
+        expect(writeDataSpy).toHaveBeenCalledWith("t1", "held-during-wait", 1);
+      });
+
+      it("leaves a newer restore's window and output alone when its barrier times out", async () => {
+        const { terminalClient } = await import("@/clients");
+        vi.mocked(terminalClient.getSerializedState).mockResolvedValue(snapshot("small-state"));
+        holdBarrier();
+        const managed = makeManagedTerminal();
+        instances.set("t1", managed);
+
+        const promise = controller.fetchAndRestore("t1", { settlePendingWrites: true });
+        await flushMicrotasks();
+        // A newer restore claims the terminal and opens its own window.
+        managed.restoreGeneration++;
+        managed.restoreWindowToken++;
+        managed.deferredOutput.push({ data: "successor-output", chunkCount: 1 });
+
+        await vi.advanceTimersByTimeAsync(5000);
+
+        await expect(promise).resolves.toBe(false);
+        expect(managed.isSerializedRestoreInProgress).toBe(true);
+        expect(writeDataSpy).not.toHaveBeenCalled();
+        expect(managed.deferredOutput).toHaveLength(1);
+      });
+
+      it.each([undefined, false])(
+        "queues no barrier unless the caller asks for one (%s)",
+        async (settlePendingWrites) => {
+          const { terminalClient } = await import("@/clients");
+          vi.mocked(terminalClient.getSerializedState).mockResolvedValue(snapshot("small-state"));
+          const managed = makeManagedTerminal();
+          instances.set("t1", managed);
+
+          await controller.fetchAndRestore("t1", { settlePendingWrites });
+
+          expect(mockTerminal.write).not.toHaveBeenCalledWith("", expect.any(Function));
+          expect(mockTerminal.reset).toHaveBeenCalledTimes(1);
+        }
+      );
+    });
+
+    describe("signal", () => {
+      it("drops a snapshot that arrives after the caller aborted", async () => {
+        const { terminalClient } = await import("@/clients");
+        let resolveFetch!: (value: SerializedTerminalSnapshot | null) => void;
+        vi.mocked(terminalClient.getSerializedState).mockImplementation(
+          () => new Promise((resolve) => (resolveFetch = resolve))
+        );
+        const managed = makeManagedTerminal();
+        instances.set("t1", managed);
+        const controllerAbort = new AbortController();
+
+        const promise = controller.fetchAndRestore("t1", { signal: controllerAbort.signal });
+        await flushMicrotasks();
+        managed.deferredOutput.push({ data: "held-during-fetch", chunkCount: 1 });
+        controllerAbort.abort();
+        resolveFetch(snapshot("late-state"));
+
+        await expect(promise).resolves.toBe(false);
+        expect(mockTerminal.reset).not.toHaveBeenCalled();
+        expect(managed.isSerializedRestoreInProgress).toBe(false);
+        expect(writeDataSpy).toHaveBeenCalledWith("t1", "held-during-fetch", 1);
+      });
+
+      it("restores normally when the signal never aborts", async () => {
         const { terminalClient } = await import("@/clients");
         vi.mocked(terminalClient.getSerializedState).mockResolvedValue(snapshot("small-state"));
         const managed = makeManagedTerminal();
         instances.set("t1", managed);
 
-        await controller.fetchAndRestore("t1");
+        const result = await controller.fetchAndRestore("t1", {
+          signal: new AbortController().signal,
+        });
 
-        expect(mockTerminal.write).not.toHaveBeenCalledWith("", expect.any(Function));
+        expect(result).toBe(true);
         expect(mockTerminal.reset).toHaveBeenCalledTimes(1);
       });
     });

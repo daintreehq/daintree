@@ -47,19 +47,30 @@ export interface ForceResumeCycleWatchdog {
  */
 type StallStage = "watching" | "recovering" | "recovered" | "escalated";
 
-function withTimeout(work: Promise<boolean>, ms: number): Promise<boolean> {
+/**
+ * Runs `work` with a deadline. On expiry the signal aborts, so a snapshot that
+ * arrives late is dropped instead of resetting a pane the watchdog has already
+ * escalated, or that a Retry is now redrawing.
+ */
+function withDeadline(
+  work: (signal: AbortSignal) => Promise<boolean>,
+  ms: number
+): Promise<boolean> {
+  const controller = new AbortController();
   return new Promise<boolean>((resolve) => {
-    const timer = setTimeout(() => resolve(false), ms);
-    work.then(
-      (result) => {
-        clearTimeout(timer);
-        resolve(result);
-      },
-      () => {
-        clearTimeout(timer);
-        resolve(false);
-      }
-    );
+    const timer = setTimeout(() => {
+      controller.abort();
+      resolve(false);
+    }, ms);
+    const settle = (result: boolean) => {
+      clearTimeout(timer);
+      resolve(result);
+    };
+    try {
+      work(controller.signal).then(settle, () => settle(false));
+    } catch {
+      settle(false);
+    }
   });
 }
 
@@ -74,8 +85,8 @@ async function resyncFromHost(id: string, manual: boolean): Promise<boolean> {
   if (!service) return false;
   try {
     if (manual) service.resetRenderer(id, { force: true });
-    return await withTimeout(
-      service.fetchAndRestore(id, { settlePendingWrites: true }),
+    return await withDeadline(
+      (signal) => service.fetchAndRestore(id, { settlePendingWrites: true, signal }),
       RECOVERY_TIMEOUT_MS
     );
   } catch (error) {
@@ -231,10 +242,13 @@ class ForceResumeStallWatch {
  * the project view is on screen resync the pane from the host's headless copy.
  * Only if that resync fails, or three more force-resumes follow it, does the
  * pane show its error banner and join the shared grid-bar notice
- * (`terminalStallNotice`). A natural drain, or the view being hidden or shown,
- * clears everything.
+ * (`terminalStallNotice`). A natural drain, the view being hidden or shown, or
+ * a restart (`restartKey`) clears everything.
  */
-export function useForceResumeCycleWatchdog(id: string): ForceResumeCycleWatchdog {
+export function useForceResumeCycleWatchdog(
+  id: string,
+  restartKey?: number
+): ForceResumeCycleWatchdog {
   const [showBanner, setShowBanner] = useState(false);
   const [isRetrying, setIsRetrying] = useState(false);
   const watchRef = useRef<ForceResumeStallWatch | null>(null);
@@ -250,7 +264,9 @@ export function useForceResumeCycleWatchdog(id: string): ForceResumeCycleWatchdo
       watch.dispose();
       if (watchRef.current === watch) watchRef.current = null;
     };
-  }, [id]);
+    // A restart keeps the id but starts a new process: its predecessor's
+    // stall, which no drain will now clear, must not carry over.
+  }, [id, restartKey]);
 
   const retry = useCallback(() => {
     watchRef.current?.retry();

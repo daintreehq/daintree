@@ -8,9 +8,13 @@ vi.mock("@/lib/notify", () => ({
   notify: (payload: unknown) => notifyMock(payload),
 }));
 
-const fetchAndRestoreMock = vi.fn(
-  (_id: string, _options?: { settlePendingWrites?: boolean }): Promise<boolean> =>
-    Promise.resolve(true)
+vi.mock("@/store/projectStore", () => ({
+  useProjectStore: { getState: () => ({ currentProject: { id: "p1" } }) },
+}));
+
+type ResyncOptions = { settlePendingWrites?: boolean; signal?: AbortSignal };
+const fetchAndRestoreMock = vi.fn((_id: string, _options?: ResyncOptions): Promise<boolean> =>
+  Promise.resolve(true)
 );
 const resetRendererMock = vi.fn((_id: string, _options?: { force?: boolean }) => true);
 let serviceLoaded = true;
@@ -18,7 +22,7 @@ vi.mock("@/services/terminal/terminalInstanceServiceAccessor", () => ({
   peek: () =>
     serviceLoaded
       ? {
-          fetchAndRestore: (id: string, options?: { settlePendingWrites?: boolean }) =>
+          fetchAndRestore: (id: string, options?: ResyncOptions) =>
             fetchAndRestoreMock(id, options),
           resetRenderer: (id: string, options?: { force?: boolean }) =>
             resetRendererMock(id, options),
@@ -78,6 +82,8 @@ import {
 } from "../useForceResumeCycleWatchdog";
 import { __resetTerminalStallNoticeForTests } from "../terminalStallNotice";
 import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
+
+const RESYNC_OPTIONS = { settlePendingWrites: true, signal: expect.any(AbortSignal) };
 
 function emitMetric(payload: Partial<TerminalReliabilityMetricPayload>): void {
   const full: TerminalReliabilityMetricPayload = {
@@ -164,12 +170,13 @@ describe("useForceResumeCycleWatchdog", () => {
 
       forceResume();
       forceResume();
+      await settle();
       expect(fetchAndRestoreMock).not.toHaveBeenCalled();
       forceResume();
       await settle();
 
       expect(fetchAndRestoreMock).toHaveBeenCalledTimes(1);
-      expect(fetchAndRestoreMock).toHaveBeenCalledWith("t1", { settlePendingWrites: true });
+      expect(fetchAndRestoreMock).toHaveBeenCalledWith("t1", RESYNC_OPTIONS);
       // The automatic path leaves the forced renderer repair to the manual one.
       expect(resetRendererMock).not.toHaveBeenCalled();
       expect(result.current.showBanner).toBe(false);
@@ -180,6 +187,7 @@ describe("useForceResumeCycleWatchdog", () => {
       const { result } = renderHook(() => useForceResumeCycleWatchdog("t1"));
 
       await stallUntilResync();
+      expect(fetchAndRestoreMock).toHaveBeenCalledTimes(1);
       // Two more force-resumes are short of a new streak, and the output then
       // drains on its own: nothing was ever shown.
       forceResume();
@@ -255,6 +263,108 @@ describe("useForceResumeCycleWatchdog", () => {
       expect(fetchAndRestoreMock.mock.calls.map(([id]) => id)).toEqual(["t1", "t2"]);
       await act(async () => finishers[1]!(true));
     });
+
+    it("drops a queued resync whose terminal drained while it waited", async () => {
+      let finishFirst!: (ok: boolean) => void;
+      fetchAndRestoreMock.mockImplementationOnce(
+        () => new Promise<boolean>((resolve) => (finishFirst = resolve))
+      );
+      renderHook(() => useForceResumeCycleWatchdog("t1"));
+      renderHook(() => useForceResumeCycleWatchdog("t2"));
+
+      for (let i = 0; i < 3; i++) {
+        forceResume("t1");
+        emitMetric({ terminalId: "t2", durationMs: 9950 });
+      }
+      await settle();
+      emitMetric({ terminalId: "t2", durationMs: 120 });
+      await act(async () => finishFirst(true));
+      await settle();
+
+      expect(fetchAndRestoreMock.mock.calls.map(([id]) => id)).toEqual(["t1"]);
+    });
+
+    it.each([
+      ["fails", () => Promise.resolve(false)],
+      ["never settles", () => new Promise<boolean>(() => {})],
+    ])("moves on to the next queued resync when one %s", async (_label, first) => {
+      fetchAndRestoreMock.mockImplementationOnce(first);
+      renderHook(() => useForceResumeCycleWatchdog("t1"));
+      renderHook(() => useForceResumeCycleWatchdog("t2"));
+
+      for (let i = 0; i < 3; i++) {
+        forceResume("t1");
+        emitMetric({ terminalId: "t2", durationMs: 9950 });
+      }
+      await settle();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+
+      expect(fetchAndRestoreMock.mock.calls.map(([id]) => id)).toEqual(["t1", "t2"]);
+    });
+
+    it("ignores a resync that settles after a natural drain reset the episode", async () => {
+      let finishResync!: (ok: boolean) => void;
+      fetchAndRestoreMock.mockImplementationOnce(
+        () => new Promise<boolean>((resolve) => (finishResync = resolve))
+      );
+      const { result } = renderHook(() => useForceResumeCycleWatchdog("t1"));
+
+      await stallUntilResync();
+      naturalDrain();
+      await act(async () => finishResync(false));
+      await settle();
+
+      expect(result.current.showBanner).toBe(false);
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("doesn't spend automatic recovery on a success that arrives after a drain", async () => {
+      let finishResync!: (ok: boolean) => void;
+      fetchAndRestoreMock.mockImplementationOnce(
+        () => new Promise<boolean>((resolve) => (finishResync = resolve))
+      );
+      const { result } = renderHook(() => useForceResumeCycleWatchdog("t1"));
+
+      await stallUntilResync();
+      naturalDrain();
+      await act(async () => finishResync(true));
+      await stallUntilResync();
+
+      // A fresh episode resyncs again rather than escalating straight away.
+      expect(fetchAndRestoreMock).toHaveBeenCalledTimes(2);
+      expect(result.current.showBanner).toBe(false);
+    });
+
+    it("aborts a resync that outlives its deadline so a late snapshot isn't applied", async () => {
+      fetchAndRestoreMock.mockImplementationOnce(() => new Promise<boolean>(() => {}));
+      renderHook(() => useForceResumeCycleWatchdog("t1"));
+
+      await stallUntilResync();
+      const signal = fetchAndRestoreMock.mock.calls[0]![1]!.signal!;
+      expect(signal.aborted).toBe(false);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+      expect(signal.aborted).toBe(true);
+    });
+
+    it("leaves nothing behind when the pane unmounts mid-resync", async () => {
+      let finishResync!: (ok: boolean) => void;
+      fetchAndRestoreMock.mockImplementationOnce(
+        () => new Promise<boolean>((resolve) => (finishResync = resolve))
+      );
+      const { unmount } = renderHook(() => useForceResumeCycleWatchdog("t1"));
+
+      await stallUntilResync();
+      unmount();
+      await act(async () => finishResync(false));
+      await settle();
+
+      expect(notifyMock).not.toHaveBeenCalled();
+    });
   });
 
   describe("escalation", () => {
@@ -271,8 +381,16 @@ describe("useForceResumeCycleWatchdog", () => {
       );
     });
 
-    it("escalates when the resync throws", async () => {
-      fetchAndRestoreMock.mockRejectedValueOnce(new Error("host gone"));
+    it.each([
+      ["rejects", () => Promise.reject(new Error("host gone"))],
+      [
+        "throws",
+        () => {
+          throw new Error("service torn down");
+        },
+      ],
+    ])("escalates when the resync %s", async (_label, failure) => {
+      fetchAndRestoreMock.mockImplementationOnce(failure);
       const { result } = renderHook(() => useForceResumeCycleWatchdog("t1"));
 
       await stallUntilResync();
@@ -340,6 +458,25 @@ describe("useForceResumeCycleWatchdog", () => {
       expect(fetchAndRestoreMock).toHaveBeenCalledTimes(1);
     });
 
+    it("treats 9899 mid-streak as a drain that resets it", async () => {
+      renderHook(() => useForceResumeCycleWatchdog("t1"));
+
+      forceResume();
+      forceResume();
+      act(() => {
+        vi.advanceTimersByTime(10_000);
+      });
+      emitMetric({ durationMs: 9899 });
+      forceResume();
+      forceResume();
+      await settle();
+      expect(fetchAndRestoreMock).not.toHaveBeenCalled();
+
+      forceResume();
+      await settle();
+      expect(fetchAndRestoreMock).toHaveBeenCalledTimes(1);
+    });
+
     it("resets the streak on a confirmed natural drain", async () => {
       renderHook(() => useForceResumeCycleWatchdog("t1"));
 
@@ -373,19 +510,22 @@ describe("useForceResumeCycleWatchdog", () => {
       expect(notifyMock).toHaveBeenCalledTimes(2);
     });
 
-    it("does not count a metric with no durationMs, and does not reset on one", async () => {
-      renderHook(() => useForceResumeCycleWatchdog("t1"));
+    it.each([undefined, NaN, Infinity, -Infinity])(
+      "neither counts nor resets on an ambiguous durationMs (%s)",
+      async (durationMs) => {
+        renderHook(() => useForceResumeCycleWatchdog("t1"));
 
-      forceResume();
-      forceResume();
-      emitMetric({ durationMs: undefined });
-      await settle();
-      expect(fetchAndRestoreMock).not.toHaveBeenCalled();
+        forceResume();
+        forceResume();
+        emitMetric({ durationMs });
+        await settle();
+        expect(fetchAndRestoreMock).not.toHaveBeenCalled();
 
-      forceResume();
-      await settle();
-      expect(fetchAndRestoreMock).toHaveBeenCalledTimes(1);
-    });
+        forceResume();
+        await settle();
+        expect(fetchAndRestoreMock).toHaveBeenCalledTimes(1);
+      }
+    );
 
     it("ignores metrics for other terminals and non-pause-end types", async () => {
       renderHook(() => useForceResumeCycleWatchdog("t1"));
@@ -400,7 +540,7 @@ describe("useForceResumeCycleWatchdog", () => {
 
       forceResume();
       await settle();
-      expect(fetchAndRestoreMock).toHaveBeenCalledWith("t1", { settlePendingWrites: true });
+      expect(fetchAndRestoreMock).toHaveBeenCalledWith("t1", RESYNC_OPTIONS);
     });
   });
 
@@ -424,6 +564,43 @@ describe("useForceResumeCycleWatchdog", () => {
       expect(result.current.showBanner).toBe(false);
       expect(fetchAndRestoreMock).not.toHaveBeenCalled();
       expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("doesn't count a pause that began while the view was cached", async () => {
+      renderHook(() => useForceResumeCycleWatchdog("t1"));
+
+      cacheView();
+      act(() => {
+        vi.advanceTimersByTime(30_000);
+      });
+      activateView();
+      // Ends 1.5s after the switch back, so it began while the view was cached.
+      act(() => {
+        vi.advanceTimersByTime(1500);
+      });
+      emitMetric({ durationMs: 9950 });
+      forceResume();
+      forceResume();
+      await settle();
+      expect(fetchAndRestoreMock).not.toHaveBeenCalled();
+
+      forceResume();
+      await settle();
+      expect(fetchAndRestoreMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("doesn't count pauses that began before the pane mounted", async () => {
+      renderHook(() => useForceResumeCycleWatchdog("t1"));
+
+      for (let i = 0; i < 3; i++) {
+        act(() => {
+          vi.advanceTimersByTime(100);
+        });
+        emitMetric({ durationMs: 9950 });
+      }
+      await settle();
+
+      expect(fetchAndRestoreMock).not.toHaveBeenCalled();
     });
 
     it("drops a streak built before the view was cached", async () => {
@@ -454,6 +631,11 @@ describe("useForceResumeCycleWatchdog", () => {
       expect(result.current.showBanner).toBe(false);
       activateView();
       expect(result.current.showBanner).toBe(false);
+
+      // The terminal left the incident with its banner, so a new stall posts again.
+      fetchAndRestoreMock.mockResolvedValueOnce(false);
+      await stallUntilResync();
+      expect(notifyMock).toHaveBeenCalledTimes(2);
     });
 
     it("ignores the result of a resync that settles after the view was cached", async () => {
@@ -490,21 +672,56 @@ describe("useForceResumeCycleWatchdog", () => {
       await settle();
 
       expect(resetRendererMock).toHaveBeenCalledWith("t1", { force: true });
-      expect(fetchAndRestoreMock).toHaveBeenCalledWith("t1", { settlePendingWrites: true });
+      expect(fetchAndRestoreMock).toHaveBeenCalledWith("t1", RESYNC_OPTIONS);
       expect(result.current.showBanner).toBe(false);
       expect(result.current.isRetrying).toBe(false);
+
+      // It also left the incident: the next escalation posts a fresh notice.
+      await stallUntilResync();
+      expect(result.current.showBanner).toBe(true);
+      expect(notifyMock).toHaveBeenCalledTimes(2);
     });
 
     it("keeps the banner when the retry's resync fails", async () => {
       const { result } = renderHook(() => useForceResumeCycleWatchdog("t1"));
       await escalate(result);
 
+      fetchAndRestoreMock.mockClear();
       fetchAndRestoreMock.mockResolvedValueOnce(false);
       act(() => result.current.retry());
+      expect(result.current.isRetrying).toBe(true);
       await settle();
 
+      expect(fetchAndRestoreMock).toHaveBeenCalledTimes(1);
       expect(result.current.showBanner).toBe(true);
       expect(result.current.isRetrying).toBe(false);
+
+      // A failed attempt doesn't lock the button.
+      act(() => result.current.retry());
+      await settle();
+      expect(fetchAndRestoreMock).toHaveBeenCalledTimes(2);
+      expect(result.current.showBanner).toBe(false);
+    });
+
+    it("ignores a retry that succeeds after the view was cached", async () => {
+      const { result } = renderHook(() => useForceResumeCycleWatchdog("t1"));
+      await escalate(result);
+      let finishRetry!: (ok: boolean) => void;
+      fetchAndRestoreMock.mockImplementationOnce(
+        () => new Promise<boolean>((resolve) => (finishRetry = resolve))
+      );
+
+      act(() => result.current.retry());
+      cacheView();
+      await act(async () => finishRetry(true));
+      activateView();
+      fetchAndRestoreMock.mockClear();
+      await stallUntilResync();
+
+      // The new episode still has its automatic resync: the late success
+      // didn't mark it spent.
+      expect(fetchAndRestoreMock).toHaveBeenCalledTimes(1);
+      expect(result.current.showBanner).toBe(false);
     });
 
     it("escalates on the next streak after a successful retry", async () => {
@@ -571,6 +788,27 @@ describe("useForceResumeCycleWatchdog", () => {
       await stallUntilResync("t2");
       expect(notifyMock).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it("starts over when the terminal restarts under the same id", async () => {
+    fetchAndRestoreMock.mockResolvedValueOnce(false);
+    const { result, rerender } = renderHook(
+      ({ restartKey }) => useForceResumeCycleWatchdog("t1", restartKey),
+      { initialProps: { restartKey: 0 } }
+    );
+
+    await stallUntilResync();
+    expect(result.current.showBanner).toBe(true);
+
+    rerender({ restartKey: 1 });
+    expect(result.current.showBanner).toBe(false);
+
+    // The new process gets its own automatic resync, and its own notice.
+    fetchAndRestoreMock.mockClear();
+    fetchAndRestoreMock.mockResolvedValueOnce(false);
+    await stallUntilResync();
+    expect(fetchAndRestoreMock).toHaveBeenCalledTimes(1);
+    expect(notifyMock).toHaveBeenCalledTimes(2);
   });
 
   it("tears down the old subscription and resets state when the id changes", async () => {

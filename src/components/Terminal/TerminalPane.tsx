@@ -786,7 +786,7 @@ function TerminalPaneComponent({
     showBanner: showForceResumeStall,
     isRetrying: isRetryingForceResumeStall,
     retry: retryForceResumeStall,
-  } = useForceResumeCycleWatchdog(id);
+  } = useForceResumeCycleWatchdog(id, restartKey);
 
   const {
     cancel: cancelInjection,

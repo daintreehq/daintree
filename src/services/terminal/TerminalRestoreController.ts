@@ -44,6 +44,8 @@ export interface FetchAndRestoreOptions {
    * time the restore is abandoned rather than painted over stale output.
    */
   settlePendingWrites?: boolean;
+  /** Abort to drop the snapshot if it arrives after the caller gave up on it. */
+  signal?: AbortSignal;
 }
 
 // Bounds the barrier `settlePendingWrites` waits on. A parser that can't get
@@ -618,15 +620,32 @@ export class TerminalRestoreController {
       this.endRestoreWindow(managed, restoreWindow);
     };
 
+    // Gives up before anything is written: the window closes if it's still
+    // ours, and output held meanwhile replays unless a newer restore owns it.
+    const abandon = (): false => {
+      releaseIfStillOwned();
+      if (
+        this.deps.getInstance(id) === managed &&
+        managed.restoreGeneration === restoreGeneration
+      ) {
+        this.replayDeferred(id, managed);
+      }
+      return false;
+    };
+
     try {
-      // Opened after the window, so nothing new can queue behind the barrier.
-      const writesSettled = options.settlePendingWrites
-        ? this.settlePendingWrites(managed)
-        : Promise.resolve(true);
-      const [snapshot, settled] = await Promise.all([
-        terminalClient.getSerializedState(id),
-        writesSettled,
-      ]);
+      const fetching = terminalClient.getSerializedState(id);
+      // Awaited below; this only keeps a rejection that lands while the barrier
+      // is pending from being reported as unhandled.
+      fetching.catch(() => undefined);
+
+      // Queued after the window opened, so nothing new can land behind it.
+      if (options.settlePendingWrites && !(await this.settlePendingWrites(managed))) {
+        logWarn(`Abandoned fetch-and-restore for ${id}: accepted writes did not parse in time`);
+        return abandon();
+      }
+
+      const snapshot = await fetching;
 
       // Check staleness after IPC round-trip
       const current = this.deps.getInstance(id);
@@ -635,12 +654,9 @@ export class TerminalRestoreController {
         return false;
       }
 
-      if (!settled) {
-        logWarn(`Abandoned fetch-and-restore for ${id}: accepted writes did not parse in time`);
-        releaseIfStillOwned();
-        this.replayDeferred(id, managed);
-        return false;
-      }
+      // The caller stopped waiting; a snapshot it no longer expects must not
+      // reset the pane under whatever it has done since.
+      if (options.signal?.aborted) return abandon();
 
       // restoreFetchedState will take over the isSerializedRestoreInProgress flag
       const result = await this.restoreFetchedState(
