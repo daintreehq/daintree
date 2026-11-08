@@ -8,6 +8,7 @@ import type {
   ProjectSwitchResult,
 } from "../../shared/types/ipc/project.js";
 import type { Project } from "../../shared/types/project.js";
+import type { BuiltInActionId } from "../../shared/types/actions.js";
 import { hasPendingActivation } from "./projectActivationClaims.js";
 import { isWindowOnRemoteHost, switchWindowToLocal } from "./windowHost.js";
 import { cachedViewBusy } from "./cachedViewBusy.js";
@@ -309,20 +310,42 @@ function ownerSwitchRenderer(
   return getAppWebContents(browserWindow);
 }
 
+function requestOwnerSwitch(appWebContents: WebContents, projectId: string): void {
+  sendOwnerAction(appWebContents, "project.switch", { projectId });
+}
+
 /**
- * Ask the chosen renderer to switch. A view still loading — a window whose only
- * view is still booting — has no listener yet, and a send before
+ * Ask a window on this machine to run one of its renderer's actions, from the
+ * renderer a switch there would run in. For a switch `project.switch` can't
+ * make: it rejects a scratch, which `pilot.openRun` routes by its id instead.
+ */
+export function requestOwnerAction(
+  owner: Pick<ProjectOwner, "context" | "projectViewManager">,
+  actionId: BuiltInActionId,
+  args: Record<string, unknown>
+): void {
+  sendOwnerAction(
+    ownerSwitchRenderer(owner.projectViewManager, owner.context.browserWindow),
+    actionId,
+    args
+  );
+}
+
+/**
+ * Ask the chosen renderer to run an action. A view still loading — a window
+ * whose only view is still booting — has no listener yet, and a send before
  * `did-finish-load` is dropped with no queue, so it waits for the load
  * (`isLoadingMainFrame`, not `isLoading`, which a loading subframe would hold
  * open indefinitely).
  */
-function requestOwnerSwitch(appWebContents: WebContents, projectId: string): void {
+function sendOwnerAction(
+  appWebContents: WebContents,
+  actionId: BuiltInActionId,
+  args: Record<string, unknown>
+): void {
   const send = (): void => {
     if (appWebContents.isDestroyed()) return;
-    appWebContents.send(CHANNELS.MENU_ACTION, {
-      actionId: "project.switch",
-      args: { projectId },
-    });
+    appWebContents.send(CHANNELS.MENU_ACTION, { actionId, args });
   };
   if (appWebContents.isDestroyed()) return;
   if (appWebContents.isLoadingMainFrame()) {

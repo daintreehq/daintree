@@ -12,6 +12,8 @@ type CanopyBrowserWindowFactory = (
 
 let createBrowserWindow: CanopyBrowserWindowFactory | null = null;
 let canopyWindow: BrowserWindow | null = null;
+/** The window's one view, which a WebContents id is checked against. */
+let canopyViewWebContentsId: number | null = null;
 let stopWatchingMode: (() => void) | null = null;
 /** A Canopy window has stood this session, whether or not it still does. */
 let openedThisSession = false;
@@ -33,6 +35,14 @@ export function focusCanopyWindow(): boolean {
   win.show();
   win.focus();
   return true;
+}
+
+/**
+ * Whether a call came from the Canopy window's own view: what only that window
+ * may ask for, like going to a run's pane in the window that has it.
+ */
+export function isCanopyWindowView(webContentsId: number): boolean {
+  return liveCanopyWindow() !== null && canopyViewWebContentsId === webContentsId;
 }
 
 export function closeCanopyWindow(): void {
@@ -116,6 +126,7 @@ export function openCanopyWindow(
 
   const { win, appView, loadRenderer } = createBrowserWindow(revealMode);
   canopyWindow = win;
+  canopyViewWebContentsId = appView.webContents.id;
   openedThisSession = true;
   keepViewFillingWindow(win, appView);
   detachGlobalAssistantWithView(appView);
@@ -128,6 +139,7 @@ export function openCanopyWindow(
     stopWatchingMode = null;
     if (canopyWindow === win) {
       canopyWindow = null;
+      canopyViewWebContentsId = null;
       setCanopyWindowOpen(false);
     }
   });
