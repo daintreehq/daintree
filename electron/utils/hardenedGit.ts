@@ -14,6 +14,9 @@ import { tightenDirPermissionsSync } from "./fs.js";
 import { detectWslPath } from "./wsl.js";
 import { resolveExecutableForSpawn, windowsSystemTool } from "./windowsExecutable.js";
 import { INHERITED_GIT_ENV_PASSTHROUGH, getSanitizedProcessEnv } from "./gitEnv.js";
+import { superviseGitChildren } from "./gitProcessLifecycle.js";
+
+export { GIT_KILL_GRACE_MS } from "./gitProcessLifecycle.js";
 
 // Deferred import keeps simple-git out of the eager pre-paint main bundle —
 // esbuild's `splitting: true` emits it as a lazy chunk (issue #10395). Kicked
@@ -328,6 +331,9 @@ async function nativeGitBinary(platform: NodeJS.Platform): Promise<string | unde
  * and the env is applied here, once: `.env()` replaces the spawn env wholesale
  * (issue #7058), and simple-git refuses any `GIT_*` key the instance was not
  * built to allow, so a later `.env()` adding one would throw at spawn time.
+ *
+ * Every instance's children are supervised, so a timeout or abort that git
+ * ignores still ends the process (`superviseGitChildren`).
  */
 function buildSimpleGit(
   simpleGit: SimpleGitFactory,
@@ -335,6 +341,18 @@ function buildSimpleGit(
   binary: string | [string, string] | undefined,
   owned: NodeJS.ProcessEnv,
   unsafe: UnsafeFlags = UNSAFE_FLAGS
+): SimpleGit {
+  const git = constructSimpleGit(simpleGit, options, binary, owned, unsafe);
+  superviseGitChildren(git, options.baseDir ?? "");
+  return git;
+}
+
+function constructSimpleGit(
+  simpleGit: SimpleGitFactory,
+  options: SimpleGitConfig,
+  binary: string | [string, string] | undefined,
+  owned: NodeJS.ProcessEnv,
+  unsafe: UnsafeFlags
 ): SimpleGit {
   const env = { ...getSanitizedProcessEnv(), ...owned };
   const allowEnvironment = [...INHERITED_GIT_ENV_PASSTHROUGH, ...Object.keys(owned)];

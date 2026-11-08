@@ -292,6 +292,8 @@ function makePass(path: string) {
     mood: "stable",
     summary: undefined,
     worktreeChanges: null,
+    onStatusUnanswered() {},
+    onStatusAnswered() {},
     clearPRInfo() {},
     clearLinked() {},
     onBranchChanged() {},

@@ -1638,6 +1638,72 @@ describe("createWorktreeStore — external classification updates", () => {
   });
 });
 
+// Pins the unanswered git status observation into `snapshotsEqual`: it changes
+// nothing else in the snapshot, so an unpinned field would never reach the card.
+describe("createWorktreeStore — unanswered git status", () => {
+  const since = 1_700_000_000_000;
+
+  it("surfaces an update whose only change is the unanswered observation, and its clearing", () => {
+    const store = createWorktreeStore();
+    store.getState().applyUpdate(makeSnapshot("wt-1"), nextV());
+    const clearMap = store.getState().worktrees;
+
+    store
+      .getState()
+      .applyUpdate(
+        makeSnapshot("wt-1", { gitStatusUnanswered: { reason: "timed-out", since } }),
+        nextV()
+      );
+    expect(store.getState().worktrees).not.toBe(clearMap);
+    expect(store.getState().worktrees.get("wt-1")?.gitStatusUnanswered?.reason).toBe("timed-out");
+
+    const timedOutMap = store.getState().worktrees;
+    store.getState().applyUpdate(
+      makeSnapshot("wt-1", {
+        gitStatusUnanswered: { reason: "previous-still-running", since },
+      }),
+      nextV()
+    );
+    expect(store.getState().worktrees).not.toBe(timedOutMap);
+
+    expect(store.getState().worktrees.get("wt-1")?.gitStatusUnanswered).toEqual({
+      reason: "previous-still-running",
+      since,
+    });
+
+    // A new streak can carry the same reason with a later start.
+    const earlierStreakMap = store.getState().worktrees;
+    store.getState().applyUpdate(
+      makeSnapshot("wt-1", {
+        gitStatusUnanswered: { reason: "previous-still-running", since: since + 60_000 },
+      }),
+      nextV()
+    );
+    expect(store.getState().worktrees).not.toBe(earlierStreakMap);
+    expect(store.getState().worktrees.get("wt-1")?.gitStatusUnanswered?.since).toBe(since + 60_000);
+
+    const stillRunningMap = store.getState().worktrees;
+    store.getState().applyUpdate(makeSnapshot("wt-1"), nextV());
+    expect(store.getState().worktrees).not.toBe(stillRunningMap);
+    expect(store.getState().worktrees.get("wt-1")?.gitStatusUnanswered).toBeUndefined();
+  });
+
+  it("does not churn the map identity for an unchanged observation", () => {
+    const store = createWorktreeStore();
+    const unanswered = { reason: "timed-out" as const, since };
+    store
+      .getState()
+      .applyUpdate(makeSnapshot("wt-1", { gitStatusUnanswered: unanswered }), nextV());
+    const mapBefore = store.getState().worktrees;
+
+    store
+      .getState()
+      .applyUpdate(makeSnapshot("wt-1", { gitStatusUnanswered: { ...unanswered } }), nextV());
+
+    expect(store.getState().worktrees).toBe(mapBefore);
+  });
+});
+
 describe("createWorktreeStore — topologyWatcherDark (#9908)", () => {
   it("setTopologyWatcherDark toggles the flag", () => {
     const store = createWorktreeStore();

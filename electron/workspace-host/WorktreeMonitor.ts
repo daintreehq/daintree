@@ -2,7 +2,11 @@ import { access } from "fs/promises";
 import type { InotifyLimit } from "../../shared/types/workspace-host.js";
 import type { WslGitInvocation } from "../utils/hardenedGit.js";
 import type PQueue from "p-queue";
-import type { WorktreeChanges } from "../../shared/types/git.js";
+import type {
+  GitStatusUnanswered,
+  GitStatusUnansweredReason,
+  WorktreeChanges,
+} from "../../shared/types/git.js";
 import type {
   Worktree,
   WorktreeMood,
@@ -46,6 +50,12 @@ const FS_OP_TIMEOUT_MS = 5_000;
 // await nothing else bounded, so no pass can hold the single-flight slot, or
 // leave the card looking current, indefinitely.
 const STATUS_PASS_WATCHDOG_MS = 40_000;
+// After a status read goes unanswered, no automatic pass starts until this
+// backoff elapses: 30s, doubling per consecutive unanswered read, up to 5 min.
+// A git blocked on files that are still downloading only competes with the
+// download, and every retry is another process waiting on the same files.
+const STATUS_RETRY_BACKOFF_BASE_MS = 30_000;
+const STATUS_RETRY_BACKOFF_MAX_MS = 300_000;
 const RESOURCE_POLL_DEFAULT_ACTIVE_MS = 30_000;
 const RESOURCE_POLL_DEFAULT_BACKGROUND_MS = 300_000;
 const HEARTBEAT_GAP_MULTIPLIER = 3;
@@ -222,6 +232,11 @@ export class WorktreeMonitor {
   // by the time the queued request runs.
   private resumeCatchUpNeedsForce: boolean = false;
   private _hasInitialStatus: boolean = false;
+  // The current streak of status reads that ended without an answer, and the
+  // earliest an automatic pass may start again. Both clear on an answer.
+  private _gitStatusUnanswered: GitStatusUnanswered | null = null;
+  private statusUnansweredStreak = 0;
+  private statusRetryNotBefore = 0;
 
   // File watcher state — owned by `watcherController`. The remaining fields
   // here are inputs to the controller's host interface (read by the watcher
@@ -744,6 +759,9 @@ export class WorktreeMonitor {
       get fetchNetworkFailed() {
         return monitor._fetchNetworkFailed;
       },
+      get gitStatusUnanswered() {
+        return monitor._gitStatusUnanswered;
+      },
       get hasRemote() {
         return monitor._hasRemote;
       },
@@ -950,6 +968,9 @@ export class WorktreeMonitor {
       set worktreeChanges(value: WorktreeChanges | null) {
         monitor.worktreeChanges = value;
       },
+      onStatusUnanswered: (reason: GitStatusUnansweredReason) =>
+        monitor.recordStatusUnanswered(reason),
+      onStatusAnswered: () => monitor.clearStatusUnanswered(),
       clearPRInfo: () => monitor.clearPRInfo(),
       clearLinked: () => monitor.clearLinked(),
       onBranchChanged: (branch: string) => monitor.callbacks.onBranchChanged?.(monitor.id, branch),
@@ -1915,7 +1936,11 @@ export class WorktreeMonitor {
         this.watcherController.update();
       }
     }
-    await this.updateGitStatus(true);
+    // A user refresh skips the unanswered-read backoff, never the check that
+    // the git stopped last time has exited.
+    await (options?.automatic
+      ? this.updateGitStatus(true)
+      : this.updateGitStatus(true, { userInitiated: true }));
   }
 
   /**
@@ -2281,7 +2306,8 @@ export class WorktreeMonitor {
 
     const cooldown = Math.max(
       this.config.pollIntervalMax,
-      this.pollingStrategy.calculateNextInterval()
+      this.pollingStrategy.calculateNextInterval(),
+      this.statusRetryNotBefore - Date.now()
     );
     const jitter = Math.random() * 2000;
 
@@ -2312,7 +2338,7 @@ export class WorktreeMonitor {
     );
     const jitterRange = Math.min(2000, Math.floor(baseInterval * 0.2));
     const jitter = jitterRange > 0 ? Math.floor(Math.random() * jitterRange) : 0;
-    const delayMs = baseInterval + jitter;
+    const delayMs = Math.max(baseInterval + jitter, this.statusRetryNotBefore - Date.now());
 
     this.pollingTimer = setTimeout(() => {
       this.pollingTimer = null;
@@ -2496,8 +2522,16 @@ export class WorktreeMonitor {
   /**
    * One status pass under the watchdog. On expiry it gives up on exactly the
    * pass it started, never a newer one, and rejects.
+   *
+   * While an unanswered read's backoff runs, only a pass the user asked for
+   * starts. Everything else is `skipped`; the poll the backoff reschedules
+   * runs the forced pass a degraded card gets, which covers what they wanted.
    */
-  async updateGitStatus(forceRefresh: boolean = false): Promise<GitStatusPassOutcome> {
+  async updateGitStatus(
+    forceRefresh: boolean = false,
+    options?: { userInitiated?: boolean }
+  ): Promise<GitStatusPassOutcome> {
+    if (!options?.userInitiated && Date.now() < this.statusRetryNotBefore) return "skipped";
     const lifecycle = this._pollAbortController.signal;
     const abandon = new AbortController();
     const pass = this.gitStatusPass.run(forceRefresh, abandon.signal);
@@ -2521,20 +2555,43 @@ export class WorktreeMonitor {
   }
 
   /**
-   * The abandoned pass never finished, so the last snapshot is no longer a
-   * current observation. Shown as stale until a full read replaces it; an
-   * error mood already on the card stays.
+   * The abandoned pass never finished. Its git is being stopped by the
+   * abandon; refreshes parked behind it wait out the backoff like everything
+   * else, and the forced pass after it covers them.
    */
   private handleStatusPassExpired(): void {
+    this.recordStatusUnanswered("timed-out");
+  }
+
+  /**
+   * A status read ended without an answer. The last snapshot is no longer a
+   * current observation: it is shown as stale (an error mood already on the
+   * card stays) with what was seen, and automatic passes hold off until the
+   * backoff for this streak elapses.
+   */
+  private recordStatusUnanswered(reason: GitStatusUnansweredReason): void {
     if (!this._isRunning) return;
+    const now = Date.now();
+    this._gitStatusUnanswered = { reason, since: this._gitStatusUnanswered?.since ?? now };
+    this.statusUnansweredStreak++;
+    this.statusRetryNotBefore =
+      now +
+      Math.min(
+        STATUS_RETRY_BACKOFF_BASE_MS * 2 ** (this.statusUnansweredStreak - 1),
+        STATUS_RETRY_BACKOFF_MAX_MS
+      );
     this.gitStatusPass.markDegraded();
-    if (this._hasInitialStatus && this.mood !== "error") {
-      this.mood = "stale";
-      this.emitUpdate();
-    }
-    // Refreshes parked behind the hung pass (watcher events, resume catch-up)
-    // get their fresh pass now instead of waiting for the next one to finish.
-    this.watcherController.flushPendingIfReady(true);
+    if (this._hasInitialStatus && this.mood !== "error") this.mood = "stale";
+    // Emitted before a first status too: a card with nothing yet should say
+    // the read went unanswered rather than read as still checking.
+    this.emitUpdate();
+  }
+
+  /** A status read answered; the pass that observed it emits. */
+  private clearStatusUnanswered(): void {
+    this._gitStatusUnanswered = null;
+    this.statusUnansweredStreak = 0;
+    this.statusRetryNotBefore = 0;
   }
 
   /**

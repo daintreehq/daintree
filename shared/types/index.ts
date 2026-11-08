@@ -13,6 +13,8 @@ export type {
   StagingFileEntry,
   StagingStatus,
   RepoState,
+  GitStatusUnanswered,
+  GitStatusUnansweredReason,
   ConflictXYCode,
   ConflictedFileEntry,
   RebaseAction,

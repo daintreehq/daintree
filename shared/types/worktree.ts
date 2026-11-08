@@ -1,4 +1,4 @@
-import type { FileChangeDetail, RepoState, WorktreeChanges } from "./git.js";
+import type { FileChangeDetail, GitStatusUnanswered, RepoState, WorktreeChanges } from "./git.js";
 import type { CIStatusState } from "./forge.js";
 import type { PluginWorktreeLinked } from "./plugin.js";
 
@@ -493,6 +493,13 @@ export interface Worktree {
    * count from one that's intentionally suppressed.
    */
   fetchNetworkFailed?: boolean;
+
+  /**
+   * The last git status read for this worktree ended without an answer: it
+   * timed out, or a git already stopped there had not exited. Absent once a
+   * read answers. `worktreeChanges` still holds whatever was last observed.
+   */
+  gitStatusUnanswered?: GitStatusUnanswered;
 
   /**
    * `false` when `git remote` lists nothing: a local-only repo, which has

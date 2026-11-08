@@ -145,6 +145,7 @@ vi.mock("../../services/worktree/index.js", () => ({
 import { WorktreeMonitor } from "../WorktreeMonitor.js";
 import type { WorktreeMonitorConfig, WorktreeMonitorCallbacks } from "../WorktreeMonitor.js";
 import { getGitDir } from "../../utils/gitUtils.js";
+import { GitStatusUnansweredError } from "../../utils/errorTypes.js";
 import { stat, readFile } from "fs/promises";
 
 const TEST_WORKTREE: Worktree = {
@@ -2174,7 +2175,12 @@ describe("WorktreeMonitor", () => {
       await vi.advanceTimersByTimeAsync(45_000);
       await hung;
       expect(isUpdating()).toBe(false);
+      // The expiry is reported even before a first status has published.
+      expect(callbacks.onUpdate).toHaveBeenCalledTimes(1);
+      expect(monitor.getSnapshot().gitStatusUnanswered?.reason).toBe("timed-out");
 
+      // Past the backoff the expiry started.
+      await vi.advanceTimersByTimeAsync(30_000);
       const next = poll();
       await vi.advanceTimersByTimeAsync(0);
       expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(2);
@@ -2191,15 +2197,16 @@ describe("WorktreeMonitor", () => {
       releaseHung(result("late"));
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(callbacks.onUpdate).not.toHaveBeenCalled();
+      expect(callbacks.onUpdate).toHaveBeenCalledTimes(1);
       expect(monitor.getSnapshot().worktreeChanges).toBeNull();
       expect(isUpdating()).toBe(true);
 
       releaseNext(result("fresh"));
       await next;
 
-      expect(callbacks.onUpdate).toHaveBeenCalledTimes(1);
+      expect(callbacks.onUpdate).toHaveBeenCalledTimes(2);
       expect(monitor.getSnapshot().worktreeChanges?.lastCommitMessage).toBe("fresh");
+      expect(monitor.getSnapshot().gitStatusUnanswered).toBeUndefined();
       expect(isUpdating()).toBe(false);
 
       monitor.stop();
@@ -2321,7 +2328,8 @@ describe("WorktreeMonitor", () => {
       expect(monitor.getSnapshot().mood).toBe("stale");
       expect(monitor.isCircuitBreakerTripped()).toBe(false);
 
-      await vi.advanceTimersByTimeAsync(2 * POLL_THEN_EXPIRE_MS);
+      // Each expiry is followed by its backoff (30s, then 60s) before the next pass.
+      await vi.advanceTimersByTimeAsync(30_000 + 40_000 + 60_000 + 40_000);
       expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(4);
       expect(monitor.isCircuitBreakerTripped()).toBe(true);
       expect(monitor.getSnapshot().mood).toBe("error");
@@ -2329,13 +2337,16 @@ describe("WorktreeMonitor", () => {
 
       // The dependency answers again, with exactly what it said before.
       mockGetWorktreeChangesWithStats.mockReset().mockResolvedValue(dirty);
-      // Cooldown retry: max(pollIntervalMax, interval) with jitter pinned to 0.
-      await vi.advanceTimersByTimeAsync(TEST_CONFIG.pollIntervalMax);
+      // Cooldown retry: the third expiry's 120s backoff outlasts pollIntervalMax.
+      await vi.advanceTimersByTimeAsync(120_000 - 1);
+      expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
 
       expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
       expect(monitor.isCircuitBreakerTripped()).toBe(false);
       expect(monitor.getSnapshot().mood).toBe("active");
       expect(monitor.getSnapshot().summary).toBe(observedSummary);
+      expect(monitor.getSnapshot().gitStatusUnanswered).toBeUndefined();
 
       monitor.stop();
     });
@@ -2361,27 +2372,129 @@ describe("WorktreeMonitor", () => {
       await vi.advanceTimersByTimeAsync(2_000);
       expect(monitor.getSnapshot().mood).toBe("stale");
 
-      // The next poll gets the slot and runs a pass of its own.
+      // The slot is free, but the next poll waits out the expiry's backoff
+      // before it runs a pass of its own.
       await vi.advanceTimersByTimeAsync(2_000);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(28_000);
       expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(3);
 
       monitor.stop();
     });
 
-    it("runs a refresh parked behind the hung pass as soon as the watchdog gives up", async () => {
+    it("stops the hung pass's git and holds refreshes behind the backoff, except the user's", async () => {
       mockGetWorktreeChangesWithStats.mockReset().mockImplementation(never);
       const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
       (monitor as unknown as { _isRunning: boolean })._isRunning = true;
 
       monitor.triggerRefreshIfUpdating();
       await vi.advanceTimersByTimeAsync(0);
+      const hung = mockGetWorktreeChangesWithStats.mock.calls[0][1] as {
+        abandonSignal: AbortSignal;
+      };
       // Arrives while the first pass holds the slot, so it is parked.
       monitor.triggerRefreshIfUpdating();
       await vi.advanceTimersByTimeAsync(39_999);
-      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+      expect(hung.abandonSignal.aborted).toBe(false);
 
       await vi.advanceTimersByTimeAsync(1);
+      // The read is abandoned, which stops its git, and nothing is stacked on
+      // the files it was stuck on: the parked refresh and a new one both wait.
+      expect(hung.abandonSignal.aborted).toBe(true);
+      monitor.triggerRefreshIfUpdating();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+
+      void monitor.refresh().catch(() => {});
+      await vi.advanceTimersByTimeAsync(0);
       expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(2);
+
+      monitor.stop();
+    });
+
+    it("waits out a backoff that doubles while status stays unanswered, then clears it on an answer", async () => {
+      await useRealPollingStrategy();
+      const callbacks = makeCallbacks();
+      const monitor = await startSeeded(callbacks);
+      mockGetWorktreeChangesWithStats.mockImplementation(never);
+
+      await vi.advanceTimersByTimeAsync(POLL_THEN_EXPIRE_MS);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(2);
+      const since = monitor.getSnapshot().gitStatusUnanswered?.since;
+      expect(monitor.getSnapshot().gitStatusUnanswered).toEqual({
+        reason: "timed-out",
+        since: expect.any(Number),
+      });
+      expect(monitor.getSnapshot().worktreeChanges).toMatchObject({ changedFileCount: 1 });
+
+      // The git stopped at expiry has not exited, so the next read refuses.
+      mockGetWorktreeChangesWithStats.mockRejectedValue(
+        new GitStatusUnansweredError("previous-still-running", TEST_WORKTREE.path)
+      );
+      // Not even a skipped attempt: the poll itself is scheduled past the backoff.
+      const attempts = vi.spyOn(monitor, "updateGitStatus");
+      await vi.advanceTimersByTimeAsync(30_000 - 1);
+      expect(attempts).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(3);
+      expect(monitor.getSnapshot().gitStatusUnanswered).toEqual({
+        reason: "previous-still-running",
+        since,
+      });
+      expect(monitor.getSnapshot().mood).toBe("stale");
+
+      attempts.mockClear();
+      await vi.advanceTimersByTimeAsync(60_000 - 1);
+      expect(attempts).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(4);
+
+      // The third failure trips the breaker; its retry waits out the backoff too.
+      expect(monitor.isCircuitBreakerTripped()).toBe(true);
+      mockGetWorktreeChangesWithStats.mockReset().mockResolvedValue(dirty);
+      attempts.mockClear();
+      await vi.advanceTimersByTimeAsync(120_000 - 1);
+      expect(attempts).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+      expect(monitor.getSnapshot().gitStatusUnanswered).toBeUndefined();
+      expect(monitor.getSnapshot().mood).toBe("active");
+
+      // Answered: the base cadence is back.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(2);
+
+      monitor.stop();
+    });
+
+    it("doubles the backoff up to a cap, keeps the streak's start, and starts over after an answer", async () => {
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, makeCallbacks(), "main");
+      (monitor as unknown as { _isRunning: boolean })._isRunning = true;
+      const internals = monitor as unknown as {
+        recordStatusUnanswered(reason: "timed-out"): void;
+        clearStatusUnanswered(): void;
+        statusRetryNotBefore: number;
+      };
+      const firstAt = Date.now();
+      const waits: number[] = [];
+      for (let i = 0; i < 7; i++) {
+        internals.recordStatusUnanswered("timed-out");
+        waits.push(internals.statusRetryNotBefore - Date.now());
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+
+      const cap = waits[waits.length - 1];
+      for (let i = 1; i < waits.length; i++) {
+        expect(waits[i]).toBe(Math.min(waits[i - 1] * 2, cap));
+      }
+      expect(waits.filter((wait) => wait === cap).length).toBeGreaterThan(1);
+      expect(monitor.getSnapshot().gitStatusUnanswered?.since).toBe(firstAt);
+
+      internals.clearStatusUnanswered();
+      expect(monitor.getSnapshot().gitStatusUnanswered).toBeUndefined();
+      internals.recordStatusUnanswered("timed-out");
+      expect(internals.statusRetryNotBefore - Date.now()).toBe(waits[0]);
+      expect(monitor.getSnapshot().gitStatusUnanswered?.since).toBe(Date.now());
 
       monitor.stop();
     });

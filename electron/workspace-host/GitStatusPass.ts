@@ -5,7 +5,7 @@ import type { WslGitInvocation } from "../utils/hardenedGit.js";
 import { invalidateGitStatusCache, getWorktreeChangesWithStats } from "../utils/git.js";
 import { getGitDir } from "../utils/gitUtils.js";
 import { getRepoOperationState } from "../utils/gitRepoOperationState.js";
-import { WorktreeRemovedError } from "../utils/errorTypes.js";
+import { GitStatusUnansweredError, WorktreeRemovedError } from "../utils/errorTypes.js";
 import { categorizeWorktree } from "../services/worktree/mood.js";
 import type { AdaptivePollingStrategy, NoteFileReader } from "../services/worktree/index.js";
 import {
@@ -14,8 +14,12 @@ import {
   deriveIssueTitleFromBranch,
 } from "../services/issueExtractor.js";
 import { claimIssueFromBranch, type ClaimedIssue } from "../services/issueBranchClaim.js";
-import { timeoutSignal, withTimeout } from "../utils/withTimeout.js";
-import type { WorktreeChanges, RepoState } from "../../shared/types/git.js";
+import { TimeoutError, timeoutSignal, withTimeout } from "../utils/withTimeout.js";
+import type {
+  GitStatusUnansweredReason,
+  WorktreeChanges,
+  RepoState,
+} from "../../shared/types/git.js";
 import type { WorktreeMood } from "../../shared/types/worktree.js";
 import type { WatcherController } from "./WatcherController.js";
 import type { StatPrecheck } from "./StatPrecheck.js";
@@ -109,6 +113,10 @@ export interface GitStatusPassHost {
   summary: string | undefined;
   worktreeChanges: WorktreeChanges | null;
 
+  /** A status read ended without an answer; the host records it and backs off. */
+  onStatusUnanswered(reason: GitStatusUnansweredReason): void;
+  /** A status read answered, so nothing it recorded as unanswered still holds. */
+  onStatusAnswered(): void;
   clearPRInfo(): void;
   clearLinked(): void;
   onBranchChanged(branch: string): void;
@@ -387,6 +395,10 @@ export class GitStatusPass {
     // silently suppress the next retry.
     let checkSucceeded = false;
     const signal = claim.lifecycleSignal;
+    // The pass's own git (HEAD, divergence, summary log) stops when the pass
+    // is abandoned, not only when the monitor stops. The changes read keys its
+    // reusable instance on the lifecycle and takes the abandon signal itself.
+    const passSignal = abandonSignal ? AbortSignal.any([signal, abandonSignal]) : signal;
 
     try {
       if (forceRefresh) {
@@ -411,7 +423,7 @@ export class GitStatusPass {
       }
 
       // Detect branch changes by reading HEAD directly
-      const headState = await this.readHead(signal);
+      const headState = await this.readHead(passSignal);
       if (!this.isLive(claim)) {
         return;
       }
@@ -474,7 +486,9 @@ export class GitStatusPass {
       // Caught where it starts: it is awaited only after the plan-file probes,
       // so a rejection in between (createGit on a worktree deleted outside
       // Daintree) went unhandled and took the workspace host down.
-      const baseDivergencePromise = this.baseDivergence.compute(hasUpstream).catch(() => null);
+      const baseDivergencePromise = this.baseDivergence
+        .compute(hasUpstream, passSignal)
+        .catch(() => null);
 
       const planResults = await Promise.allSettled(
         PLAN_FILE_CANDIDATES.map((candidate) =>
@@ -583,7 +597,7 @@ export class GitStatusPass {
         isInitialLoad ||
         this.degraded ||
         (this.host.worktreeChanges && this.host.worktreeChanges.changedFileCount === 0)
-          ? await this.fetchLastCommitMessage(newChanges, signal)
+          ? await this.fetchLastCommitMessage(newChanges, passSignal)
           : undefined;
 
       let nextMood = this.host.mood;
@@ -629,6 +643,7 @@ export class GitStatusPass {
       this.baseCompareRefValue = nextBaseCompareRef;
       this.host.hasInitialStatus = true;
       this.degraded = false;
+      this.host.onStatusAnswered();
 
       this.host.emitUpdate();
       checkSucceeded = true;
@@ -646,6 +661,18 @@ export class GitStatusPass {
         return;
       }
 
+      // Not answering is not a failure of the worktree: the last snapshot stays
+      // on the card, marked as no longer current, and the host backs off. A
+      // read that timed out before git started (a stalled stat of the
+      // worktree) went unanswered just the same.
+      if (error instanceof GitStatusUnansweredError || error instanceof TimeoutError) {
+        this.degraded = true;
+        this.host.onStatusUnanswered(
+          error instanceof GitStatusUnansweredError ? error.reason : "timed-out"
+        );
+        throw error;
+      }
+
       const errorMessage = (error as Error).message || "";
       if (errorMessage.includes("index.lock")) {
         this.watcherController.markPending();
@@ -653,6 +680,7 @@ export class GitStatusPass {
         return;
       }
 
+      this.host.onStatusAnswered();
       this.host.mood = "error";
       this.degraded = true;
       this.host.emitUpdate();
