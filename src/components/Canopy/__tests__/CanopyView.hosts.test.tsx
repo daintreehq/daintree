@@ -1017,9 +1017,9 @@ describe("the Canopy host picker", () => {
     await settle();
 
     expect(useCanopyStore.getState().hostId).toBe("studio");
-    expect(
-      document.querySelector("[data-canopy-card][aria-selected=true]")?.id
-    ).toBe("canopy-card-remote-other");
+    expect(document.querySelector("[data-canopy-card][aria-selected=true]")?.id).toBe(
+      "canopy-card-remote-other"
+    );
     expect(useCanopyStore.getState().popOutLanding).toBeNull();
   });
 

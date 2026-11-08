@@ -168,7 +168,11 @@ let popOutSeq = 0;
 
 function failPendingPopOut(userMessage: string): void {
   pendingPopOut?.settle(
-    new AppError({ code: "CANCELLED", message: "The Canopy window didn't take the pop-out up", userMessage })
+    new AppError({
+      code: "CANCELLED",
+      message: "The Canopy window didn't take the pop-out up",
+      userMessage,
+    })
   );
 }
 

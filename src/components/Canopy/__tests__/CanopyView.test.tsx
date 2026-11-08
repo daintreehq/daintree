@@ -3436,7 +3436,9 @@ describe("popping the dialog out into the Canopy window (#16338)", () => {
     const { container } = render(<CanopyView />);
     await frames();
 
-    fireEvent.click(within(container.ownerDocument.body).getByRole("button", { name: "Open in new window" }));
+    fireEvent.click(
+      within(container.ownerDocument.body).getByRole("button", { name: "Open in new window" })
+    );
 
     expect(dispatchMock).toHaveBeenCalledWith("canopy.openWindow", undefined, { source: "user" });
   });

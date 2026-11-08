@@ -646,8 +646,7 @@ export function readsWithHostedService(snapshot: CanopySnapshot): boolean {
 
 /** The row a dialog popped out had selected: a worker by its listed key, or an assistant. */
 export type CanopyPopOutSelection =
-  | { kind: "worker"; runId: string }
-  | { kind: "assistant"; assistantId: string };
+  { kind: "worker"; runId: string } | { kind: "assistant"; assistantId: string };
 
 /**
  * Where a dialog popped out into the Canopy window stood (#16338). The host is

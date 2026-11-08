@@ -68,7 +68,9 @@ function notifyWindowFailed(error: unknown): void {
         label: "Try again",
         variant: "primary",
         onClick: () =>
-          safeFireAndForget(actionService.dispatch("canopy.openWindow", undefined, { source: "user" })),
+          safeFireAndForget(
+            actionService.dispatch("canopy.openWindow", undefined, { source: "user" })
+          ),
       },
     ],
   });

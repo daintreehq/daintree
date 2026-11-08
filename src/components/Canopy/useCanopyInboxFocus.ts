@@ -301,12 +301,7 @@ export function useCanopyInboxFocus({
       return;
     }
     focusAfterCloseRef.current = null;
-    if (
-      landedRef.current ||
-      items.length === 0 ||
-      replyReveal !== null ||
-      popOutLanding !== null
-    ) {
+    if (landedRef.current || items.length === 0 || replyReveal !== null || popOutLanding !== null) {
       return;
     }
     // The search it was left with is in force before the run is picked from it.
