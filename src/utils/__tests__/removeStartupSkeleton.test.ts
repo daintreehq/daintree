@@ -85,10 +85,16 @@ describe("removeStartupSkeleton", () => {
     const { removeStartupSkeleton } = await import("../removeStartupSkeleton");
     const el = addSkeleton();
     el.setAttribute("data-startup-stage", "hydrating");
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      get: () => "hidden",
+    });
 
     removeStartupSkeleton();
 
+    // The frames are still queued, as a hidden view's would be.
     expect(rafQueue.length).toBeGreaterThan(0);
+    expect(notifyFirstInteractive).not.toHaveBeenCalled();
     expect(el.getAttribute("data-startup-stage")).toBe("ready");
   });
 

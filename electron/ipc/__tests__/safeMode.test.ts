@@ -70,7 +70,11 @@ vi.mock("../utils.js", async (importOriginal) => {
 });
 
 import { registerSafeModeHandlers } from "../handlers/safeMode.js";
-import { _resetStartupInvokeTrackerForTesting, markStartupStep } from "../startupInvokeTracker.js";
+import {
+  _resetStartupInvokeTrackerForTesting,
+  startupStepper,
+  trackStartupInvoke,
+} from "../startupInvokeTracker.js";
 
 async function invokeClear(panelId: unknown) {
   const cleanup = registerSafeModeHandlers();
@@ -162,6 +166,25 @@ describe("app:restart-in-safe-mode handler", () => {
     expect(relaunchMock.relaunchApp).not.toHaveBeenCalled();
   });
 
+  it("leaves an exit that began while the confirm was open alone", async () => {
+    let answer: (value: { response: number }) => void = () => {};
+    dialogMock.showMessageBox.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve;
+      })
+    );
+    const pending = invokeRestart();
+    await vi.waitFor(() => expect(dialogMock.showMessageBox).toHaveBeenCalled());
+
+    shutdownMock.getActiveShutdown.mockReturnValue({ initiator: "app-quit", phase: "cleaning" });
+    answer({ response: 0 });
+
+    expect(await pending).toEqual({ started: false });
+    expect(crashLoopGuard.requestSafeModeBoot).not.toHaveBeenCalled();
+    expect(crashLoopGuard.cancelSafeModeBootRequest).not.toHaveBeenCalled();
+    expect(relaunchMock.relaunchApp).not.toHaveBeenCalled();
+  });
+
   it("withdraws the request when the relaunch is refused", async () => {
     relaunchMock.relaunchApp.mockReturnValue("unavailable");
 
@@ -204,24 +227,37 @@ describe("app:report-startup-stuck handler", () => {
 
   it("logs the invokes a stuck view is still waiting on, with the boot step, once", async () => {
     const sender = { id: 11 };
-    // A boot payload stuck in main: register a never-settling app:boot.
-    const { typedHandleWithContext } = await import("../utils.js");
-    const unregisterBoot = typedHandleWithContext("app:boot", () => new Promise(() => {}));
-    void call("app:boot", sender);
-    markStartupStep(11, "project-state-read");
+    // A boot payload stuck in main, as the dispatcher records it.
+    trackStartupInvoke(sender, "app:boot", () => {
+      startupStepper(11)("project-state-read");
+      return new Promise(() => {});
+    });
 
-    await call("app:report-startup-stuck", sender, "before-hydration");
-    await call("app:report-startup-stuck", sender, "before-hydration");
-    unregisterBoot();
+    await call("app:report-startup-stuck", sender, "booting");
+    await call("app:report-startup-stuck", sender, "booting");
 
     expect(loggerMock.logWarn).toHaveBeenCalledTimes(1);
     const [, context] = loggerMock.logWarn.mock.calls[0] as [string, Record<string, unknown>];
     expect(context).toMatchObject({
       webContentsId: 11,
-      rendererStage: "before-hydration",
+      rendererStage: "booting",
       bootRequested: true,
       pendingCount: 1,
       pending: [{ channel: "app:boot", step: "project-state-read" }],
+    });
+  });
+
+  it("reports a document that never booted on its own, not the previous document's boot", async () => {
+    const sender = { id: 13 };
+    trackStartupInvoke(sender, "app:boot", () => new Promise(() => {}));
+
+    await call("app:report-startup-stuck", sender, "before-boot");
+
+    const [, context] = loggerMock.logWarn.mock.calls[0] as [string, Record<string, unknown>];
+    expect(context).toMatchObject({
+      rendererStage: "before-boot",
+      bootRequested: false,
+      pending: [],
     });
   });
 

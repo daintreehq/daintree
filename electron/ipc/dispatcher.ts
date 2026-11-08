@@ -8,6 +8,7 @@ import { createKeyedLogLimiter } from "../utils/keyedLogLimiter.js";
 import { requiresDriveLease } from "./channelLeasePolicy.js";
 import { getChannelLocality } from "./channelLocality.js";
 import { notifyIpcEnvelopeRejected } from "./envelopeRejections.js";
+import { trackStartupInvoke } from "./startupInvokeTracker.js";
 import type {
   ClientEndpoint,
   EndpointInvocation,
@@ -305,9 +306,21 @@ export class IpcDispatcherImpl implements IpcDispatcher<IpcContext> {
   /**
    * Entry point for every `ipcMain` invoke after sender validation. With no
    * router installed, or a sender that is not bound to a remote host, the
-   * local listener runs exactly as before.
+   * local listener runs exactly as before. Recorded while the sender is
+   * starting up, forwarded calls included, for the stuck card's report.
    */
   dispatchLocalInvoke(
+    channel: string,
+    event: IpcMainInvokeEvent,
+    args: unknown[],
+    listener: LocalInvokeListener
+  ): Promise<IpcEnvelope> {
+    return trackStartupInvoke(event.sender, channel, () =>
+      this.routeLocalInvoke(channel, event, args, listener)
+    ) as Promise<IpcEnvelope>;
+  }
+
+  private routeLocalInvoke(
     channel: string,
     event: IpcMainInvokeEvent,
     args: unknown[],

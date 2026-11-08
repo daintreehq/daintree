@@ -3,6 +3,7 @@ import { isElectronAvailable } from "@/hooks/useElectron";
 import { markRendererPerformance } from "@/utils/performance";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { logError } from "@/utils/logger";
+import { markStartupStage } from "@/utils/startupStage";
 
 /**
  * React's `use()` hook reads these non-standard fields off a thenable
@@ -63,6 +64,7 @@ export function getBootPromise(): Promise<BootResult> {
   markRendererPerformance(PERF_MARKS.RENDERER_APP_BOOT_IPC_SENT);
   try {
     bootPromise = annotate(window.electron.app.boot());
+    markStartupStage("booting");
   } catch (error) {
     // This runs at module-eval time, before `bootstrap().catch()` is wired and
     // outside any React error boundary — a synchronous throw from a partially

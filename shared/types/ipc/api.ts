@@ -641,6 +641,14 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * re-hydrate the panel in the current session.
      */
     clearQuarantinedPanel(panelId: string): Promise<{ cleared: boolean }>;
+    /**
+     * Restart into safe mode after a native confirm, from the startup stuck
+     * card. `started: false` when the user cancelled or another quit or restart
+     * already owns the exit.
+     */
+    restartInSafeMode(): Promise<{ started: boolean }>;
+    /** Log, once per document, what startup was still waiting on when the stuck card appeared. */
+    reportStartupStuck(rendererStage: string): Promise<void>;
     /** Fire-and-forget skeleton-parsed reveal signal sent before module-graph eval. */
     skeletonParsed(): void;
     notifyFirstInteractive(): Promise<void>;

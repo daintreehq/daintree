@@ -887,6 +887,19 @@ describe("CrashLoopGuardService requested safe mode", () => {
     expect(next.isSafeMode()).toBe(false);
   });
 
+  it("throws when the request can't be written, leaving the state file as it was", () => {
+    const requesting = new CrashLoopGuardService();
+    requesting.initialize();
+    const before = fs.readFileSync(statePath, "utf8");
+    utilsMock.resilientAtomicWriteFileSync.mockImplementationOnce(() => {
+      throw new Error("ENOSPC");
+    });
+
+    expect(() => requesting.requestSafeModeBoot()).toThrow("ENOSPC");
+    expect(fs.readFileSync(statePath, "utf8")).toBe(before);
+    expect(isSafeModeActive(tmpDir)).toBe(false);
+  });
+
   it("can withdraw a request whose relaunch never happened", () => {
     const requesting = new CrashLoopGuardService();
     requesting.initialize();

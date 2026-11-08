@@ -25,7 +25,7 @@ import {
   getProjectLayoutSeed,
 } from "../../../services/plugin/projectLayoutSeeds.js";
 import { relaunchApp } from "../../../lifecycle/appRelaunch.js";
-import { endStartupTracking, markStartupStep } from "../../startupInvokeTracker.js";
+import { endStartupTracking, startupStepper } from "../../startupInvokeTracker.js";
 import { getDatabaseMaintenanceService } from "../../../services/DatabaseMaintenanceService.js";
 import { noteDatabaseNoticeRendererReady } from "../../../services/databaseBackupNotice.js";
 import { USAGE_WINDOW_MS, MAX_USES_PER_ENTRY } from "../../../../shared/utils/actionUsage.js";
@@ -310,7 +310,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // before the GPU process reports it is the provisional all-disabled status.
     // Only the first few hundred milliseconds of a session ever wait here.
     // Each awaited step is labelled for the stuck card's report (#16401).
-    const step = (label: string): void => markStartupStep(ctx?.webContentsId, label);
+    const step = startupStepper(ctx?.webContentsId);
     step("gpu-report");
     await whenGpuReported(GPU_REPORT_WAIT_MS);
     const { project: currentProject, workspaceId } = resolveWorkspaceForHydration(ctx);

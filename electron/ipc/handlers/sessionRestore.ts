@@ -2,6 +2,7 @@
 import { store } from "../../store.js";
 import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
 import { markViewHydrated } from "../../window/viewHydration.js";
+import { endStartupTracking } from "../startupInvokeTracker.js";
 import type { SessionRestoreConfig } from "../../../shared/types/ipc/sessionRestore.js";
 import type { HandlerDependencies } from "../types.js";
 import { defineIpcNamespace, op } from "../define.js";
@@ -47,6 +48,9 @@ export function registerSessionRestoreHandlers(deps: HandlerDependencies): () =>
           // on this host is waiting on it.
           if (ctx.event === null) return;
           markViewHydrated(ctx.event.sender);
+          // A view restored in the background never composites, so this, not
+          // first-interactive, is where its startup ends.
+          endStartupTracking(ctx.webContentsId);
           const senderWindow = getWindowForWebContents(ctx.event.sender);
           const pvm =
             (senderWindow &&

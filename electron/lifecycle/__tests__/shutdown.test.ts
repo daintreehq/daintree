@@ -2893,6 +2893,7 @@ describe("registerShutdownHandler", () => {
       const relaunchApp = await setupRelaunch();
 
       expect(relaunchApp("safe-mode-request")).toBe("started");
+      expect(armRelaunchMock).toHaveBeenCalledTimes(1);
       expect(relaunchApp("safe-mode-request")).toBe("already-shutting-down");
       expect(armRelaunchMock).toHaveBeenCalledTimes(1);
       await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalledWith(0));

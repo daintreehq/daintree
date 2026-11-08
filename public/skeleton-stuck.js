@@ -50,11 +50,12 @@
   // waiting on. `animationstart` is the card's own reveal (it also fires for
   // the reduced-motion zero-length run), so a hidden view reports when it is
   // shown rather than on a timer of its own.
-  if (card && skeleton && app && typeof app.reportStartupStuck === "function") {
+  var canReport = Boolean(app && typeof app.reportStartupStuck === "function");
+  if (card && skeleton) {
     var reported = false;
     var waitingForVisible = false;
     var report = function () {
-      if (reported || !skeleton.isConnected) return;
+      if (reported || !canReport || !skeleton.isConnected) return;
       var stage = skeleton.getAttribute("data-startup-stage");
       if (stage === "ready") return;
       if (document.visibilityState === "hidden") {
@@ -66,7 +67,7 @@
       }
       reported = true;
       try {
-        var sent = app.reportStartupStuck(stage || "before-hydration");
+        var sent = app.reportStartupStuck(stage || "before-boot");
         if (sent && typeof sent.catch === "function") sent.catch(function () {});
       } catch (_err) {
         // Best-effort diagnostics: the card itself still works.
@@ -79,7 +80,12 @@
       report();
     };
     card.addEventListener("animationstart", function (event) {
-      if (event.target === card) report();
+      if (event.target !== card) return;
+      if (skeleton.getAttribute("data-startup-stage") === "ready") return;
+      // Loading has stalled and the card is what's live now: a region left
+      // busy may keep assistive tech from announcing it or its error line.
+      skeleton.setAttribute("aria-busy", "false");
+      report();
     });
   }
 })();

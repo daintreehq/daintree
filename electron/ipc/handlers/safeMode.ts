@@ -10,8 +10,11 @@ import { CHANNELS } from "../channels.js";
 import { SAFE_MODE_METHOD_CHANNELS } from "./safeMode.preload.js";
 import type { IpcContext } from "../types.js";
 
-/** What the renderer had reached when its stuck card appeared. */
-const RENDERER_STARTUP_STAGES = new Set(["before-hydration", "hydrating"]);
+/**
+ * What the renderer had reached when its stuck card appeared: `before-boot`
+ * when this document never sent `app:boot` (its entry graph didn't run).
+ */
+const RENDERER_STARTUP_STAGES = new Set(["before-boot", "booting", "hydrating"]);
 
 /**
  * The restart stops every terminal in every window, not just the stuck one, so
@@ -100,11 +103,16 @@ export const safeModeNamespace = defineIpcNamespace({
       async (ctx: IpcContext, rendererStage: string): Promise<void> => {
         const sender = ctx.event?.sender;
         if (!sender) return;
-        const snapshot = claimStartupWaitSnapshot(sender, CHANNELS.APP_REPORT_STARTUP_STUCK);
+        const stage = RENDERER_STARTUP_STAGES.has(rendererStage) ? rendererStage : "unknown";
+        const snapshot = claimStartupWaitSnapshot(
+          sender,
+          CHANNELS.APP_REPORT_STARTUP_STUCK,
+          stage !== "before-boot"
+        );
         if (!snapshot) return;
         logWarn("Startup stuck card shown", {
           webContentsId: ctx.webContentsId,
-          rendererStage: RENDERER_STARTUP_STAGES.has(rendererStage) ? rendererStage : "unknown",
+          rendererStage: stage,
           ...snapshot,
         });
       },
