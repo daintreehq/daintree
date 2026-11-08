@@ -868,6 +868,7 @@ function CanopyInbox({
     seeAssistantHandback,
     pluginViewIds: pluginViews.map((view) => view.id),
     assistantsLoaded: !assistantsReadable || directory !== null,
+    hostKnown: hostId === null || everyHost || hostRow !== null,
   });
   const shownPluginView = pluginViews.find((view) => view.id === shownPluginViewId) ?? null;
 

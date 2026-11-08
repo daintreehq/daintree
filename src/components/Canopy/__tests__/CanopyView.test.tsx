@@ -115,6 +115,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { __resetCanopySeenForTests } from "@/lib/canopySeen";
 import { __resetCanopyPlaceForTests } from "../CanopyPlace";
 import { CANOPY_REVEAL_MS } from "../canopyOrder";
+import { captureCanopyPopOut } from "../canopyPopOut";
 
 const NOW = Date.now();
 
@@ -3426,5 +3427,58 @@ describe("CanopyView", () => {
     act(() => useCanopyStore.setState({ isOpen: true }));
     render(<CanopyView />);
     expect(order()).toEqual(["working", "waiting", "asking"]);
+  });
+});
+
+describe("popping the dialog out into the Canopy window (#16338)", () => {
+  it("offers the window from its header, through the same action as the toolbar's menu", async () => {
+    installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+
+    fireEvent.click(within(container.ownerDocument.body).getByRole("button", { name: "Open in new window" }));
+
+    expect(dispatchMock).toHaveBeenCalledWith("canopy.openWindow", undefined, { source: "user" });
+  });
+
+  it("offers no window while Canopy isn't on here", async () => {
+    installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    act(() => useCanopyStore.setState({ mode: "unset" }));
+
+    expect(
+      within(container.ownerDocument.body).queryByRole("button", { name: "Open in new window" })
+    ).toBeNull();
+  });
+
+  it("carries the row the user selected, naming this window's host", async () => {
+    installElectron();
+    const { container } = render(<CanopyView />);
+    await frames();
+    const chosen = cards(container)[1]!.id.replace(/^canopy-card-/, "");
+
+    fireEvent.click(cards(container)[1]!);
+
+    expect(captureCanopyPopOut()).toMatchObject({
+      hostId: "local",
+      query: "",
+      selection: { kind: "worker", runId: chosen },
+    });
+  });
+
+  it("carries the search as typed, and the read rows Unread keeps listed", async () => {
+    installElectron({ ...canopySnapshot, reads: [unreadMark("working", 1)] });
+    const { container } = render(<CanopyView />);
+    await frames();
+    fireEvent.click(screenButton(container.ownerDocument.body, "Unread1"));
+
+    await search("work");
+
+    expect(captureCanopyPopOut()).toMatchObject({
+      query: "work",
+      unreadOnly: true,
+      keptUnread: ["working"],
+    });
   });
 });

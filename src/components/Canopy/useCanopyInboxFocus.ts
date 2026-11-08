@@ -62,6 +62,7 @@ export function useCanopyInboxFocus({
   seeAssistantHandback,
   pluginViewIds,
   assistantsLoaded,
+  hostKnown,
 }: {
   isOpen: boolean;
   /** The other host the panel shows, or null for the window's own. */
@@ -91,6 +92,8 @@ export function useCanopyInboxFocus({
   pluginViewIds: readonly string[];
   /** The assistants have been listed, or can't be here: one not among them isn't there. */
   assistantsLoaded: boolean;
+  /** The host list names the host shown: until then, an unlisted one may only not be read yet. */
+  hostKnown: boolean;
 }) {
   const frame = useCanopyFrame();
   const searchRef = useRef<HTMLInputElement>(null);
@@ -587,7 +590,11 @@ export function useCanopyInboxFocus({
       settle();
       return;
     }
-    if (hostId !== popOutLanding.hostId || appliedQuery !== popOutLanding.query) return;
+    // Its host's list, named in the host list, with its search in force: the
+    // panel holds an unlisted host only while a landing waits on it.
+    if (hostId !== popOutLanding.hostId || !hostKnown || appliedQuery !== popOutLanding.query) {
+      return;
+    }
     const selection = popOutLanding.selection;
     // Nothing selected, or not found: the inbox lands as any opening does.
     if (selection === null) {
@@ -623,6 +630,7 @@ export function useCanopyInboxFocus({
     popOutLanding,
     shownStoreHostId,
     hostId,
+    hostKnown,
     appliedQuery,
     loaded,
     visible,
