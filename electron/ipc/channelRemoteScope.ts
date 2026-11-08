@@ -44,6 +44,7 @@ export const CHANNEL_REMOTE_SCOPE: Readonly<Record<string, RemoteScopeTarget>> =
   "claude:list-subagents": TERMINAL_FIELD,
   "claude:read-subagent-transcript": TERMINAL_FIELD,
   "claude:find-reply-span": TERMINAL_FIELD,
+  "claude:read-context-usage": TERMINAL_FIELD,
   "codex:list-subagents": TERMINAL_FIELD,
   "codex:read-subagent-transcript": TERMINAL_FIELD,
   // A folder in no project is anyone's to ask about; another project's is not.

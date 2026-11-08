@@ -134,6 +134,7 @@ export const CHANNEL_LEASE_POLICY = {
   "claude:read-subagent-transcript": "free",
   "claude:find-reply-span": "free",
   "claude:read-usage": "free",
+  "claude:read-context-usage": "free",
   "clipboard:pick-attachments": "free",
   "clipboard:save-image": "free",
   "clipboard:thumbnail-from-path": "free",

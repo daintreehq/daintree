@@ -189,6 +189,7 @@ export const CHANNEL_LOCALITY = {
   "claude:find-reply-span": "host",
   // What the host's own panes showed, under the host's own accounts.
   "claude:read-usage": "host",
+  "claude:read-context-usage": "host",
   "cli:get-status": "shell",
   "cli:install": "shell",
   "clipboard:pick-attachments": "hybrid",
