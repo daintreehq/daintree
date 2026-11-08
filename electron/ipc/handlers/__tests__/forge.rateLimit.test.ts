@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { ForgeProviderImpl, RepoRef } from "../../../../shared/types/forge.js";
+import { REMOTE_BRANCH_TIP_TIMEOUT_MS } from "../../../utils/remoteBranchTip.js";
 
 const ipcMainMock = vi.hoisted(() => ({
   handle: vi.fn(),
@@ -418,14 +419,14 @@ describe("forge handlers — rate limiting", () => {
       await ask();
       expect(createBackgroundFetchGitMock).not.toHaveBeenCalled();
 
+      const timeout = vi.spyOn(AbortSignal, "timeout");
       await deriveNewPRLinkMock.mock.calls[0][0].openNetworkGit();
 
-      const [cwd, options] = createBackgroundFetchGitMock.mock.calls[0] as unknown as [
-        string,
-        { signal: AbortSignal },
-      ];
-      expect(cwd).toBe("/tmp/project");
-      expect(options.signal).toBeInstanceOf(AbortSignal);
+      expect(timeout).toHaveBeenCalledWith(REMOTE_BRANCH_TIP_TIMEOUT_MS);
+      expect(createBackgroundFetchGitMock).toHaveBeenCalledWith("/tmp/project", {
+        signal: timeout.mock.results[0]?.value,
+      });
+      timeout.mockRestore();
     });
 
     it("answers rather than rejects for a repository no provider recognises", async () => {

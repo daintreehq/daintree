@@ -167,10 +167,25 @@ describe("deriveNewPRLink", () => {
       git(repo, ["remote", "add", "fork", makeBare()]);
       git(repo, ["push", "-q", "fork", "topic"]);
 
-      const { answer, openNetworkGit } = derive(repo);
+      await expect(derive(repo).answer).resolves.toEqual({ state: "unavailable" });
+    });
 
-      await expect(answer).resolves.toEqual({ state: "unavailable" });
-      expect(openNetworkGit).not.toHaveBeenCalled();
+    it("links a branch on the forge's remote even when another remote has the name too", async () => {
+      const repo = makeRepo();
+      git(repo, ["remote", "add", "fork", makeBare()]);
+      git(repo, ["push", "-q", "fork", "topic"]);
+      git(repo, ["push", "-q", "origin", "topic"]);
+
+      await expect(derive(repo).answer).resolves.toMatchObject({ state: "ready" });
+    });
+
+    it("says unpushed when the configured remote lacks it, whatever another remote has", async () => {
+      const repo = makeRepo();
+      git(repo, ["remote", "add", "fork", makeBare()]);
+      git(repo, ["push", "-q", "fork", "topic"]);
+      git(repo, ["config", "branch.topic.pushRemote", "origin"]);
+
+      await expect(derive(repo).answer).resolves.toEqual({ state: "unpushed" });
     });
 
     it("offers nothing for a branch that pushes to a different repository", async () => {

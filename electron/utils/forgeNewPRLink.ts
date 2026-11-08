@@ -32,17 +32,23 @@ export async function deriveNewPRLink(input: NewPRLinkInput): Promise<ForgeNewPR
   const { git, forgeRemote, head } = input;
   const remotes = (await git.getRemotes()).map((remote) => remote.name);
 
-  const remoteHead = await resolveRemoteHead(git, head, remotes, forgeRemote);
-  if (remoteHead === null) return UNAVAILABLE;
+  const destination = await resolveRemoteHead(git, head, remotes, forgeRemote);
+  if (destination === null) return UNAVAILABLE;
+  const { branch, configured } = destination;
 
-  const pushed = await isOnRemote(input, remoteHead);
+  const pushed = await isOnRemote(input, branch);
   if (pushed === null) return UNAVAILABLE;
-  if (!pushed) return { state: "unpushed" };
+  if (!pushed) {
+    // With no destination configured, a ref on another remote may be where this
+    // branch went, so its absence here doesn't make it unpushed.
+    const elsewhere = !configured && (await isOnAnotherRemote(input, remotes));
+    return elsewhere ? UNAVAILABLE : { state: "unpushed" };
+  }
 
   const base = await resolveRemoteBase(input, remotes);
-  if (base === null || base === remoteHead) return UNAVAILABLE;
+  if (base === null || base === branch) return UNAVAILABLE;
 
-  const url = input.buildUrl({ base, head: remoteHead });
+  const url = input.buildUrl({ base, head: branch });
   return url === null ? UNAVAILABLE : { state: "ready", url };
 }
 
@@ -52,20 +58,27 @@ async function resolveRemoteHead(
   head: string,
   remotes: readonly string[],
   forgeRemote: string
-): Promise<string | null> {
+): Promise<{ branch: string; configured: boolean } | null> {
   const { push } = await resolveGitPushAndUpstream(git, head, remotes);
   if (push.status === "resolved") {
-    return push.destination.remote === forgeRemote ? push.destination.branch : null;
+    return push.destination.remote === forgeRemote
+      ? { branch: push.destination.branch, configured: true }
+      : null;
   }
-  if (push.reason !== "ambiguous") return null;
   // Several remotes and no config naming one is every fresh branch in a fork
-  // setup, so the forge's remote can still be asked about it under its own
-  // name, unless a ref shows the branch went to one of the others.
+  // setup, so the forge's remote can still be asked about it under its own name.
+  return push.reason === "ambiguous" ? { branch: head, configured: false } : null;
+}
+
+async function isOnAnotherRemote(
+  { git, forgeRemote, head }: NewPRLinkInput,
+  remotes: readonly string[]
+): Promise<boolean> {
   const others = remotes.filter((remote) => remote !== forgeRemote);
-  const elsewhere = await Promise.all(
+  const found = await Promise.all(
     others.map((remote) => refExists(git, `refs/remotes/${remote}/${head}`))
   );
-  return elsewhere.includes(true) ? null : head;
+  return found.includes(true);
 }
 
 /**
