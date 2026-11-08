@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { cn } from "@/lib/utils";
 import { BrandMark } from "@/components/icons";
 import {
@@ -12,7 +12,6 @@ import {
 import type { PanelKind } from "@/types";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { resolveTerminalRunIcon } from "./terminalRunIconRegistry";
-import { getAgentConfig } from "@/config/agents";
 import { isPluginCustomIconKey } from "@shared/config/pluginCustomIcon";
 import {
   getPluginAgentRegistrySnapshot,
@@ -59,21 +58,19 @@ function semanticId(iconId: string | null | undefined): PluginIconId | undefined
  * plugins load, so an agent's chrome can predate its registry entry and hold the
  * bare agent id. Nothing re-derives it until an input changes, which for an agent
  * with no `detection` block is never, so its icon and colour are read live here.
- * Agent chrome only: a panel or process tool sharing an agent's id keeps its own.
+ *
+ * Read off the snapshot rather than through `getAgentConfig`: React Compiler
+ * caches a call on its arguments, so the subscription alone wouldn't refresh it.
  */
 function useLiveAgentChrome(chrome: TerminalChromeDescriptor): TerminalChromeDescriptor {
   const pluginAgents = useSyncExternalStore(
     subscribeToPluginAgentRegistry,
     getPluginAgentRegistrySnapshot
   );
-  return useMemo(() => {
-    // Referenced so this re-reads when the registry changes; `getAgentConfig`
-    // reads the merged registry, not this snapshot.
-    void pluginAgents;
-    const config = chrome.isAgent && chrome.agentId ? getAgentConfig(chrome.agentId) : undefined;
-    if (!config || config.iconId === chrome.iconId) return chrome;
-    return { ...chrome, iconId: config.iconId, color: config.color };
-  }, [pluginAgents, chrome]);
+  const { agentId } = chrome;
+  if (!agentId || chrome.iconId !== agentId || !Object.hasOwn(pluginAgents, agentId)) return chrome;
+  const { iconId, color } = pluginAgents[agentId]!;
+  return { ...chrome, iconId, color: chrome.presetColor ?? color };
 }
 
 export interface TerminalIconProps {

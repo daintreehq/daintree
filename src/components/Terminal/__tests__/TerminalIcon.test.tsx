@@ -397,6 +397,21 @@ describe("TerminalIcon", () => {
         expect(container.querySelector("[data-plugin-icon]")).toBeNull();
       });
 
+      it("keeps a preset's colour when the registry arrives after its chrome was derived", () => {
+        setPluginAgentRegistry({});
+        const chrome = deriveTerminalChrome({ launchAgentId: "pi", presetColor: "#ff3366" });
+        const { container } = render(<TerminalIcon kind="agent" chrome={chrome} />);
+
+        act(() => setPluginAgentRegistry({ pi: { ...agent, id: "pi", iconId: KEY } }));
+
+        expect(container.querySelector("svg")!.getAttribute("data-plugin-icon")).toBe(KEY);
+        expect(
+          container
+            .querySelector("[data-terminal-icon-color]")!
+            .getAttribute("data-terminal-icon-color")
+        ).toBe("#ff3366");
+      });
+
       it("keeps a panel or process tool on its own glyph when an agent shares its id", () => {
         setPluginAgentRegistry({ puzzle: { ...agent, id: "puzzle", iconId: KEY } });
 

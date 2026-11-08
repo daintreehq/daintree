@@ -353,6 +353,19 @@ describe("pluginAgentRegistry subscription (issue #9879)", () => {
     expect(listener).toHaveBeenCalledTimes(1);
   });
 
+  it("wakes no one when an empty registry replaces an empty one", () => {
+    // A plugin-free renderer's mount-time pull hands over a fresh `{}`, and every
+    // mounted TerminalIcon subscribes.
+    const before = getPluginAgentRegistrySnapshot();
+    const listener = vi.fn();
+    subscribeToPluginAgentRegistry(listener);
+
+    setPluginAgentRegistry({});
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(getPluginAgentRegistrySnapshot()).toBe(before);
+  });
+
   it("notifies subscribers when setPluginAgentRegistry replaces the snapshot", () => {
     const listener = vi.fn();
     subscribeToPluginAgentRegistry(listener);

@@ -34,6 +34,8 @@ export interface TerminalChromeInput {
 export interface TerminalChromeDescriptor {
   iconId: string | null;
   color?: string;
+  /** The preset colour `color` was taken from, when one was. */
+  presetColor?: string;
   label: string;
   isAgent: boolean;
   agentId: AgentId | null;
@@ -212,6 +214,7 @@ export function deriveTerminalChrome(input: TerminalChromeInput = {}): TerminalC
     return {
       iconId: config?.iconId ?? identity.iconId,
       color: presetColor ?? config?.color ?? getPanelKindColor(kind),
+      ...(presetColor ? { presetColor } : undefined),
       label: config?.name ?? agentId,
       isAgent: true,
       agentId,
