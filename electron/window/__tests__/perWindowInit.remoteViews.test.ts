@@ -25,7 +25,6 @@ vi.mock("../../services/AgentVersionService.js", () => ({ AgentVersionService: c
 vi.mock("../../services/AgentModelCatalogService.js", () => ({
   AgentModelCatalogService: class {},
 }));
-vi.mock("../../services/AgentUpdateHandler.js", () => ({ AgentUpdateHandler: class {} }));
 vi.mock("../../services/PortalManager.js", () => ({ PortalManager: class {} }));
 vi.mock("../../services/EventBuffer.js", () => ({ EventBuffer: class {} }));
 vi.mock("../../services/ProjectSwitchService.js", () => ({ ProjectSwitchService: class {} }));

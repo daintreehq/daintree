@@ -37,9 +37,7 @@ export const config: AgentConfig = {
     args: ["--version"],
   },
   // No `update` entry: Grok Build is a self-updating managed binary (`grok
-  // update`, with stable/alpha channels), so Daintree doesn't drive its
-  // upgrade. The AgentUpdateHandler priority list has no self-update key, so a
-  // declared command wouldn't be selectable by the default path anyway.
+  // update`, with stable/alpha channels), so Daintree doesn't drive its upgrade.
   install: {
     docsUrl: "https://docs.x.ai/build/overview",
     byOs: {

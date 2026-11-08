@@ -173,8 +173,6 @@ export type {
   AgentCliBlockReason,
   AgentVersionInfo,
   AgentUpdateSettings,
-  StartAgentUpdatePayload,
-  StartAgentUpdateResult,
   PrerequisiteSpec,
   PrerequisiteSeverity,
   PrerequisiteCheckResult,

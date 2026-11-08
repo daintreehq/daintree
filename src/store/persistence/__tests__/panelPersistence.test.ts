@@ -55,8 +55,6 @@ const createMockProjectClient = () => ({
   setTerminalSizes: vi.fn().mockResolvedValue(undefined),
   getDraftInputs: vi.fn().mockResolvedValue({}),
   setDraftInputs: vi.fn().mockResolvedValue(undefined),
-  readClaudeMd: vi.fn().mockResolvedValue(null),
-  writeClaudeMd: vi.fn().mockResolvedValue(undefined),
   createFolder: vi.fn().mockResolvedValue(""),
   enableInRepoSettings: vi.fn().mockResolvedValue({}),
   disableInRepoSettings: vi.fn().mockResolvedValue({}),

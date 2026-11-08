@@ -52,7 +52,6 @@ vi.mock("../../window/deferredInitQueue.js", () => ({
 }));
 
 vi.mock("../../window/serviceRefs.js", () => ({
-  getAgentUpdateHandler: () => null,
   getAgentVersionService: () => null,
   getCliAvailabilityServiceRef: () => null,
   getPtyClient: () => mocks.ptyClient,

@@ -190,21 +190,6 @@ export interface AgentUpdateSettings {
   lastAutoCheck: number | null;
 }
 
-/** Payload for starting an agent update */
-export interface StartAgentUpdatePayload {
-  agentId: AgentId;
-  /** Preferred update method (e.g., "npm", "brew") */
-  method?: string;
-}
-
-/** Result of starting an agent update */
-export interface StartAgentUpdateResult {
-  /** Terminal ID where update is running */
-  terminalId: string;
-  /** Update command being executed */
-  command: string;
-}
-
 /** Severity level for a prerequisite check */
 export type PrerequisiteSeverity = "fatal" | "warn" | "silent";
 

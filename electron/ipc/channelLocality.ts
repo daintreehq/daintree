@@ -989,7 +989,6 @@ export const CHANNEL_LOCALITY = {
   "project:panel-recovery-reply": "shell",
   "project:panel-recovery-state": "shell",
   "project:prefetch-hydrate": "hybrid",
-  "project:read-claude-md": "host",
   "project:remove": "host",
   "project:removed": "host",
   "project:reopen": "hybrid",
@@ -1010,7 +1009,6 @@ export const CHANNEL_LOCALITY = {
   "project:update-recipe": "host",
   "project:updated": "host",
   "project:worktree-load-status": "host",
-  "project:write-claude-md": "host",
   // Dictation text recovered on the machine that heard it; never crosses a link.
   "recent-dictations:changed": "shell",
   "recent-dictations:list": "shell",
@@ -1157,7 +1155,6 @@ export const CHANNEL_LOCALITY = {
   "system:set-agent-update-settings": "host",
   "system:show-item-in-folder": "hybrid",
   "system:show-item-in-folder-unconfined": "hybrid",
-  "system:start-agent-update": "host",
   "telemetry:get": "shell",
   "telemetry:mark-prompt-shown": "shell",
   "telemetry:preview-event-batch": "shell",
