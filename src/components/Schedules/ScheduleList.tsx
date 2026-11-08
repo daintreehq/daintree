@@ -9,7 +9,7 @@ import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
-import { SettingsEmptyRow, SettingsGroup } from "@/components/Settings/SettingsGroup";
+import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
 import { resolveAgentIcon } from "@/config/agentIcons";
 import { getBrandColorHex } from "@/lib/colorUtils";
@@ -407,45 +407,46 @@ export function ScheduleList({
             </Skeleton>
           </SettingsGroup>
         ) : state.snapshot === null ? null : schedules.length === 0 ? (
-          <SettingsGroup>
-            <SettingsEmptyRow
-              action={
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={onCreate}
-                  ref={addButtonRef}
-                  data-schedules-new=""
-                >
-                  <Plus />
-                  Add schedule
-                </Button>
-              }
-            >
-              Add a schedule to run an agent with your prompt, such as every night at 2:00&nbsp;AM
-            </SettingsEmptyRow>
-            <div
-              role="group"
-              aria-label="Starter schedules"
-              className="space-y-1 border-t border-border-subtle p-3"
-            >
-              <p className="pb-1 text-xs text-text-secondary">Or start from one of these</p>
+          <>
+            <SettingsGroup>
+              <SettingsEmptyRow
+                action={
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={onCreate}
+                    ref={addButtonRef}
+                    data-schedules-new=""
+                  >
+                    <Plus />
+                    Add schedule
+                  </Button>
+                }
+              >
+                Add a schedule to run an agent with your prompt, such as every night at 2:00&nbsp;AM
+              </SettingsEmptyRow>
+            </SettingsGroup>
+            <SettingsGroup label="Starters">
               {SCHEDULE_STARTERS.map((starter) => (
-                <button
+                <SettingsRow
                   key={starter.id}
-                  type="button"
-                  onClick={() => onCreateFromStarter(starter)}
-                  data-schedule-starter={starter.id}
-                  className="flex w-full items-baseline justify-between gap-4 rounded-md px-2 py-1.5 text-left text-sm text-text-primary hover:bg-overlay-subtle"
-                >
-                  <span className="truncate">{starter.name}</span>
-                  <span className="shrink-0 text-xs text-text-secondary">
-                    {starter.description}
-                  </span>
-                </button>
+                  label={starter.name}
+                  description={starter.description}
+                  control={
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => onCreateFromStarter(starter)}
+                      aria-label={`Start from ${starter.name}`}
+                      data-schedule-starter={starter.id}
+                    >
+                      Use starter
+                    </Button>
+                  }
+                />
               ))}
-            </div>
-          </SettingsGroup>
+            </SettingsGroup>
+          </>
         ) : (
           <SettingsGroup>
             {schedules.map((schedule) => (

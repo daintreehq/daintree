@@ -147,10 +147,9 @@ describe("ProjectSchedulesTab — the list", () => {
     client.list.mockResolvedValue(snapshot([]));
     renderTab();
     await screen.findByText(/Add a schedule to run an agent/);
-    const starters = screen.getByRole("group", { name: "Starter schedules" });
-    expect(starters.querySelectorAll("[data-schedule-starter]").length).toBeGreaterThan(1);
+    expect(document.querySelectorAll("[data-schedule-starter]").length).toBeGreaterThan(1);
 
-    fireEvent.click(screen.getByRole("button", { name: /Nightly bug hunt/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Start from Nightly bug hunt" }));
 
     await waitFor(() => expect(editor()).not.toBeNull());
     expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe("Nightly bug hunt");
