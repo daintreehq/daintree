@@ -245,6 +245,48 @@ describe("PrChecksPopover", () => {
     for (const name of names) expect(name).not.toMatch(/of \d/);
   });
 
+  it("still numbers links whose qualified names read the same", async () => {
+    getChecksMock.mockResolvedValue({
+      checks: [
+        // Two shards of one workflow, and a status literally named like a
+        // qualified row: the qualifier alone can't tell any of these apart.
+        check({
+          name: "build",
+          conclusion: "failure",
+          workflow: "CI",
+          detailsUrl: "https://e.com/a",
+        }),
+        check({
+          name: "build",
+          conclusion: "failure",
+          workflow: "CI",
+          detailsUrl: "https://e.com/b",
+        }),
+        check({ name: "CI / build", conclusion: "failure", detailsUrl: "https://e.com/c" }),
+        check({
+          name: "build",
+          conclusion: "failure",
+          workflow: "Release",
+          detailsUrl: "https://e.com/d",
+        }),
+      ],
+    });
+    renderPopover();
+    await openAndSettle();
+    await screen.findByTestId("pr-checks-list");
+
+    const buttons = screen.getAllByRole("button", { name: /open details for/i });
+    const labels = buttons.map((b) => b.getAttribute("aria-label"));
+    expect(labels).toEqual([
+      "Open details for CI / build (Failed), 1 of 3",
+      "Open details for CI / build (Failed), 2 of 3",
+      "Open details for CI / build (Failed), 3 of 3",
+      "Open details for Release / build (Failed)",
+    ]);
+    fireEvent.click(buttons[2]!);
+    expect(onOpenExternal).toHaveBeenCalledWith("https://e.com/c");
+  });
+
   it("keeps details names distinct even when name, outcome and requiredness all repeat", async () => {
     getChecksMock.mockResolvedValue({
       checks: [

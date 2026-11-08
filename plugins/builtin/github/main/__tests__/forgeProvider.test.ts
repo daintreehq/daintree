@@ -4484,6 +4484,17 @@ describe("checks.getChecks", () => {
       },
     });
 
+    /** The rejection a read settles with, so a test can check it is the one it injected. */
+    async function rejectionOf(read: Promise<unknown>): Promise<Error> {
+      try {
+        await read;
+      } catch (error) {
+        if (error instanceof Error) return error;
+        throw new Error("expected the read to reject with an Error", { cause: error });
+      }
+      throw new Error("expected the read to reject");
+    }
+
     /** What octokit throws for a response that carried `errors` beside its `data`. */
     function partialResponseError(data: unknown, paths: Array<unknown[] | undefined>) {
       return Object.assign(new Error("Resource not accessible by personal access token"), {
@@ -4525,19 +4536,26 @@ describe("checks.getChecks", () => {
         )
         .mockRejectedValueOnce(
           partialResponseError(
-            checksResponse([
-              actionsRun("build", null),
-              { __typename: "StatusContext", context: "legacy", state: "SUCCESS" },
-              actionsRun("test", null),
-            ]),
+            checksResponse(
+              [
+                actionsRun("build", null),
+                { __typename: "StatusContext", context: "legacy", state: "SUCCESS" },
+                actionsRun("test", null),
+              ],
+              { hasNextPage: true, endCursor: "C2" }
+            ),
             [
               [...NODES_PATH, 0, "checkSuite", "workflowRun"],
               [...NODES_PATH, 2, "checkSuite", "workflowRun", "workflow"],
             ]
           )
-        );
+        )
+        .mockResolvedValueOnce(checksResponse([actionsRun("e2e", "Nightly")]));
       const result = await githubForgeProvider.checks!.getChecks(repo, 42);
-      expect(result?.checks.map((c) => c.name)).toEqual(["lint", "build", "legacy", "test"]);
+      // The recovered page was not the last, so the read still followed its cursor.
+      expect(mockGraphQLClient.mock.calls[2][1]).toMatchObject({ cursor: "C2" });
+      expect(result?.checks.map((c) => c.name)).toEqual(["lint", "build", "legacy", "test", "e2e"]);
+      expect(result?.checks[4]).toMatchObject({ workflow: "Nightly" });
       expect(result?.checks[0]).toMatchObject({ workflow: "CI" });
       expect(result?.checks[1]).toMatchObject({ app: "GitHub Actions" });
       expect(result?.checks[1]).not.toHaveProperty("workflow");
@@ -4556,28 +4574,60 @@ describe("checks.getChecks", () => {
         ],
       ],
       ["a workflowRun error outside the check list", [["repository", "checkSuite", "workflowRun"]]],
+      [
+        "a full-length path through a different commit",
+        [[...NODES_PATH.slice(0, 4), 1, ...NODES_PATH.slice(5), 0, "checkSuite", "workflowRun"]],
+      ],
+      [
+        "a node index that is not a list index",
+        [[...NODES_PATH, "0", "checkSuite", "workflowRun"]],
+      ],
     ])("still fails on %s", async (_label, paths) => {
-      mockGraphQLClient.mockRejectedValueOnce(
-        partialResponseError(checksResponse([actionsRun("build", null)]), paths)
-      );
-      await expect(githubForgeProvider.checks!.getChecks(repo, 43)).rejects.toThrow();
+      const injected = partialResponseError(checksResponse([actionsRun("build", null)]), paths);
+      mockGraphQLClient.mockRejectedValueOnce(injected);
+      const error = await rejectionOf(githubForgeProvider.checks!.getChecks(repo, 43));
+      expect(error.cause).toBe(injected);
     });
 
-    it("never reads a recovered response that lost its PR or a check as a smaller answer", async () => {
-      const workflowRunError = [[...NODES_PATH, 0, "checkSuite", "workflowRun"]];
-      mockGraphQLClient.mockRejectedValueOnce(
-        partialResponseError(
-          { repository: { pullRequest: null }, rateLimit: { cost: 1, remaining: 1, resetAt: "" } },
-          workflowRunError
-        )
-      );
-      await expect(githubForgeProvider.checks!.getChecks(repo, 44)).rejects.toThrow();
+    const withRollup = (mutate: (rollup: Record<string, unknown>) => void) => {
+      const response = checksResponse([actionsRun("build", null)]);
+      mutate(response.repository.pullRequest.commits.nodes[0]!.commit.statusCheckRollup);
+      return response;
+    };
 
-      mockGraphQLClient.mockRejectedValueOnce(
-        partialResponseError(checksResponse([null, actionsRun("build", "CI")]), workflowRunError)
-      );
-      await expect(githubForgeProvider.checks!.getChecks(repo, 45)).rejects.toThrow();
-    });
+    it.each([
+      [
+        "lost its PR",
+        { repository: { pullRequest: null }, rateLimit: { cost: 1, remaining: 1, resetAt: "" } },
+      ],
+      [
+        "lost its rollup",
+        (() => {
+          const response = checksResponse([]);
+          (
+            response.repository.pullRequest.commits.nodes[0]!.commit as Record<string, unknown>
+          ).statusCheckRollup = null;
+          return response;
+        })(),
+      ],
+      [
+        "lost its node list",
+        withRollup((r) => (r.contexts = { pageInfo: { hasNextPage: false } })),
+      ],
+      ["lost a check", checksResponse([null, actionsRun("build", "CI")])],
+      ["lost its pagination flag", withRollup((r) => (r.contexts = { nodes: [], pageInfo: {} }))],
+    ])(
+      "rethrows rather than reading a recovered response that %s as a smaller answer",
+      async (_label, data) => {
+        const injected = partialResponseError(data, [
+          [...NODES_PATH, 0, "checkSuite", "workflowRun"],
+        ]);
+        mockGraphQLClient.mockRejectedValueOnce(injected);
+        const error = await rejectionOf(githubForgeProvider.checks!.getChecks(repo, 44));
+        // The original error, not a later TypeError or "no such PR" standing in for it.
+        expect(error.cause).toBe(injected);
+      }
+    );
 
     it("does not recover the roll-up, which never asked for workflowRun", async () => {
       mockGraphQLClient.mockRejectedValueOnce(

@@ -539,12 +539,15 @@ describe("registerForgeDataHandlers", () => {
       expect(result.checks[0]).not.toHaveProperty("rawData");
     });
 
-    it("omits a blank workflow or app name rather than forwarding it", async () => {
-      useImpl(withChecks([{ ...fullCheck, workflow: "  ", app: "" }]));
+    it.each([
+      ["empty", ""],
+      ["whitespace-only", " \t "],
+    ])("omits an %s workflow or app name rather than forwarding it", async (label, blank) => {
+      useImpl(withChecks([{ ...fullCheck, workflow: blank, app: blank }]));
       registerForgeDataHandlers();
 
       const result = (await findHandler("forge:get-checks")(null, {
-        cwd: "/repo",
+        cwd: `/repo-${label}`,
         prNumber: 721,
       })) as { checks: Array<Record<string, unknown>> };
 
