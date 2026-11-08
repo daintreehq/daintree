@@ -1802,6 +1802,11 @@ export const CHANNELS = {
   CANOPY_WINDOW_OPEN: "canopy-window:open",
   CANOPY_WINDOW_FOCUS: "canopy-window:focus",
   CANOPY_WINDOW_GO_TO_RUN: "canopy-window:go-to-run",
+  CANOPY_WINDOW_POP_OUT: "canopy-window:pop-out",
+  CANOPY_WINDOW_PEEK_POP_OUT: "canopy-window:peek-pop-out",
+  CANOPY_WINDOW_ACKNOWLEDGE_POP_OUT: "canopy-window:acknowledge-pop-out",
+  CANOPY_WINDOW_POP_OUT_WAITING: "canopy-window:pop-out-waiting",
+  CANOPY_WINDOW_POPPED_OUT: "canopy-window:popped-out",
 
   // Remote Hosts: portForwards (shell).
   PORT_FORWARDS_LIST: "port-forwards:list",

@@ -84,6 +84,7 @@ vi.mock("@/services/assistantSubject", () => ({
 }));
 
 import { CanopyView } from "../CanopyView";
+import { captureCanopyPopOut } from "../canopyPopOut";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -682,6 +683,23 @@ describe("CanopyView role filter", () => {
     expect(told.filter((id) => !workers.has(String(id)))).toEqual([]);
     expect(canopy.watchTerminal).not.toHaveBeenCalled();
     expect(assistantRows()).toHaveLength(2);
+  });
+
+  it("carries a selected assistant into the Canopy window, which lands on it (#16338)", async () => {
+    const dialog = render(<CanopyView />);
+    await settle();
+    fireEvent.click(assistantRows()[1]!);
+    const carried = captureCanopyPopOut();
+    expect(carried.selection?.kind).toBe("assistant");
+    dialog.unmount();
+
+    useCanopyStore.getState().receivePopOut(carried);
+    render(<CanopyView />);
+    await settle();
+
+    expect(assistantRows()[1]!.getAttribute("aria-selected")).toBe("true");
+    expect(document.querySelector("[data-testid=canopy-assistant-pane]")).not.toBeNull();
+    expect(useCanopyStore.getState().popOutLanding).toBeNull();
   });
 
   it("walks from the last worker down into the assistants with the keyboard", async () => {

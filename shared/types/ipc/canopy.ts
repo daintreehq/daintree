@@ -660,3 +660,32 @@ export interface CanopyUntrashOutcome {
 export function readsWithHostedService(snapshot: CanopySnapshot): boolean {
   return "tier" in snapshot;
 }
+
+/** The row a dialog popped out had selected: a worker by its listed key, or an assistant. */
+export type CanopyPopOutSelection =
+  { kind: "worker"; runId: string } | { kind: "assistant"; assistantId: string };
+
+/**
+ * Where a dialog popped out into the Canopy window stood (#16338). The host is
+ * always named, this machine's or another's, or All hosts' `"*"`: a project
+ * view on another host has that host for its own, which the window doesn't.
+ * No scope: the window has no project, so it shows every project's agents.
+ */
+export interface CanopyPopOut {
+  hostId: string;
+  query: string;
+  selection: CanopyPopOutSelection | null;
+  roleFilter: "all" | "workers" | "assistants";
+  unreadOnly: boolean;
+  /** Runs read while Unread was on, still listed so the row in front of the user stays. */
+  keptUnread: string[];
+  archivedExpanded: boolean;
+  trashExpanded: boolean;
+  workOf: { assistantId: string; name: string } | null;
+}
+
+/** A pop-out waiting for the Canopy window to take it up. */
+export interface CanopyPendingPopOut {
+  id: number;
+  popOut: CanopyPopOut;
+}

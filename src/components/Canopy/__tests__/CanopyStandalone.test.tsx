@@ -12,12 +12,14 @@ import {
 import type { ReactElement } from "react";
 import type { AgentDirectory, AgentDirectoryLiveEntry } from "@shared/types/agentDirectory";
 import type {
+  CanopyPopOut,
   CanopySnapshot,
   CanopyTerminalData,
   CanopyTerminalView,
   CanopyTrashEntry,
 } from "@shared/types/ipc/canopy";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
+import { LOCAL_HOST_ID } from "@shared/types/remoteHosts";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
@@ -1113,5 +1115,203 @@ describe("app-wide plugin views in the Canopy window (#16344)", () => {
     ).toHaveLength(1);
     await showPlugin("Triage");
     expect(screen.queryByText("Launch an agent from the toolbar and it shows up here.")).toBeNull();
+  });
+});
+
+describe("taking up a dialog popped out into the window (#16338)", () => {
+  const popOut = (over: Partial<CanopyPopOut> = {}): CanopyPopOut => ({
+    hostId: LOCAL_HOST_ID,
+    query: "",
+    selection: null,
+    roleFilter: "all",
+    unreadOnly: false,
+    keptUnread: [],
+    archivedExpanded: false,
+    trashExpanded: false,
+    workOf: null,
+    ...over,
+  });
+
+  function search() {
+    return surface()!.querySelector<HTMLInputElement>("input[role=combobox]")!;
+  }
+
+  /** The row an opening lands on by itself, and the other one. */
+  async function defaultAndOther(): Promise<{ landed: string; other: string }> {
+    const view = render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+    const landed = selectedRun()!.replace(/^canopy-card-/, "");
+    view.unmount();
+    useCanopyStore.setState({ isOpen: false, popOutLanding: null });
+    return { landed, other: landed === "first" ? "second" : "first" };
+  }
+
+  afterEach(() =>
+    useCanopyStore.setState({ popOutLanding: null, roleFilter: "all", unreadOnly: false })
+  );
+
+  it("offers no window of its own to pop out into", async () => {
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+
+    expect(within(surface()!).queryByRole("button", { name: "Open in new window" })).toBeNull();
+  });
+
+  it("moves a window already open to the dialog's row and filters", async () => {
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+    const landed = selectedRun()!.replace(/^canopy-card-/, "");
+    const other = landed === "first" ? "second" : "first";
+
+    await act(async () => {
+      useCanopyStore
+        .getState()
+        .receivePopOut(
+          popOut({ selection: { kind: "worker", runId: other }, trashExpanded: true })
+        );
+    });
+    await settle();
+
+    expect(selectedRun()).toBe(`canopy-card-${other}`);
+    expect(document.activeElement).toBe(search());
+    expect(useCanopyStore.getState().trashExpanded).toBe(true);
+    expect(useCanopyStore.getState().popOutLanding).toBeNull();
+  });
+
+  it("puts the dialog's search back in an open window", async () => {
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+
+    await act(async () => {
+      useCanopyStore.getState().receivePopOut(popOut({ query: "deploy" }));
+    });
+    await settle();
+
+    expect(search().value).toBe("deploy");
+    expect(useCanopyStore.getState().popOutLanding).toBeNull();
+  });
+
+  it("lands a new window on the dialog's row, not the one an opening picks", async () => {
+    const { other } = await defaultAndOther();
+    useCanopyStore
+      .getState()
+      .receivePopOut(popOut({ selection: { kind: "worker", runId: other } }));
+
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+
+    expect(selectedRun()).toBe(`canopy-card-${other}`);
+    expect(useCanopyStore.getState().popOutLanding).toBeNull();
+  });
+
+  it("lands as any opening does when the dialog's row has gone", async () => {
+    const { landed } = await defaultAndOther();
+    useCanopyStore
+      .getState()
+      .receivePopOut(popOut({ selection: { kind: "worker", runId: "gone" } }));
+
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+
+    expect(selectedRun()).toBe(`canopy-card-${landed}`);
+    expect(useCanopyStore.getState().popOutLanding).toBeNull();
+  });
+
+  it("gives way to the user acting in the window first", async () => {
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+    const landed = selectedRun()!.replace(/^canopy-card-/, "");
+    const other = landed === "first" ? "second" : "first";
+    // Rows that never load hold the landing back until the user acts.
+    useFleetSnapshotStore.setState({ snapshot: null });
+    await act(async () => {
+      useCanopyStore
+        .getState()
+        .receivePopOut(popOut({ selection: { kind: "worker", runId: other } }));
+    });
+    expect(useCanopyStore.getState().popOutLanding).not.toBeNull();
+    await act(async () => {
+      fireEvent.pointerDown(surface()!);
+    });
+    useFleetSnapshotStore.setState({ snapshot: FLEET });
+    await settle();
+
+    expect(useCanopyStore.getState().popOutLanding).toBeNull();
+    expect(selectedRun()).not.toBe(`canopy-card-${other}`);
+  });
+
+  it("waits for a terminal's match before taking the dialog's row as gone", async () => {
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+    const landed = selectedRun()!.replace(/^canopy-card-/, "");
+    const other = landed === "first" ? "second" : "first";
+    let answer!: (runIds: string[]) => void;
+    canopy.searchScreens.mockImplementation(
+      () => new Promise<string[]>((resolve) => (answer = resolve))
+    );
+
+    await act(async () => {
+      useCanopyStore
+        .getState()
+        .receivePopOut(popOut({ query: "needle", selection: { kind: "worker", runId: other } }));
+    });
+    // The terminals are asked once the search's wait on the typing is over, not yet answered.
+    await vi.waitFor(() => expect(canopy.searchScreens).toHaveBeenCalled());
+    expect(canopy.searchScreens).toHaveBeenCalled();
+    expect(useCanopyStore.getState().popOutLanding).not.toBeNull();
+
+    await act(async () => answer([other]));
+    await settle();
+
+    expect(selectedRun()).toBe(`canopy-card-${other}`);
+    expect(useCanopyStore.getState().popOutLanding).toBeNull();
+  });
+
+  it("keeps the dialog's assistant when its role filter comes with it", async () => {
+    const second = assistantEntry();
+    second.subject = { ...second.subject, terminalId: "help-1", lane: 1 };
+    directory = { ...directory, entries: [assistantEntry(), second] };
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+    const rows = () => [...document.querySelectorAll<HTMLElement>("[data-canopy-assistant]")];
+    await vi.waitFor(() => expect(rows()).toHaveLength(2));
+    const assistantId = decodeURIComponent(rows()[1]!.id.replace(/^canopy-assistant-/, ""));
+
+    await act(async () => {
+      useCanopyStore
+        .getState()
+        .receivePopOut(
+          popOut({ roleFilter: "assistants", selection: { kind: "assistant", assistantId } })
+        );
+    });
+    await settle();
+
+    expect(useCanopyStore.getState().roleFilter).toBe("assistants");
+    expect(rows()[1]!.getAttribute("aria-selected")).toBe("true");
+    expect(rows()[0]!.getAttribute("aria-selected")).not.toBe("true");
+    expect(useCanopyStore.getState().popOutLanding).toBeNull();
+  });
+
+  it("gives up on rows that never come", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      useFleetSnapshotStore.setState({ snapshot: null });
+      useCanopyStore
+        .getState()
+        .receivePopOut(popOut({ selection: { kind: "worker", runId: "first" } }));
+      render(<CanopyView frame={hostFrame().frame} />);
+      await act(async () => {});
+      await act(async () => {
+        vi.advanceTimersByTime(9_999);
+      });
+      expect(useCanopyStore.getState().popOutLanding).not.toBeNull();
+
+      await act(async () => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(useCanopyStore.getState().popOutLanding).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

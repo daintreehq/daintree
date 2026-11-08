@@ -69,6 +69,7 @@ import {
   useCanopySeenTracking,
   usePluginPanelActivitySeenTracking,
   useCanopySnapshotSync,
+  useCanopyPoppedOut,
   useCanopyDoubleShift,
   useWorktreeCustomTitlesSync,
   useReviewMarksSync,
@@ -267,6 +268,7 @@ function AppInner() {
   const { activeWorktreeId: liveActiveWorktreeId, defaultTerminalCwd } = useActiveWorktreeSync();
   useAgentActivityBroadcast();
   useCanopySnapshotSync();
+  useCanopyPoppedOut();
   useWorktreeCustomTitlesSync();
   useReviewMarksSync();
   useCanopySeenTracking();

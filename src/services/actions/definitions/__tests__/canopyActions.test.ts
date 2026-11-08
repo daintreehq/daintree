@@ -3,8 +3,9 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ActionRegistry } from "../../actionTypes";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
-import type { CanopySnapshot } from "@shared/types/ipc/canopy";
+import type { CanopyPopOut, CanopySnapshot } from "@shared/types/ipc/canopy";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
+import { notify } from "@/lib/notify";
 
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
@@ -54,10 +55,11 @@ describe("canopy actions", () => {
   describe("with a Canopy window", () => {
     const focus = vi.fn<() => Promise<boolean>>();
     const open = vi.fn<() => Promise<void>>(async () => {});
+    const popOut = vi.fn<(popOut: CanopyPopOut) => Promise<void>>(async () => {});
 
     function installWindowApi(): void {
       Object.defineProperty(window, "electron", {
-        value: { canopyWindow: { focus, open } },
+        value: { canopyWindow: { focus, open, popOut } },
         configurable: true,
         writable: true,
       });
@@ -66,6 +68,10 @@ describe("canopy actions", () => {
     afterEach(() => {
       focus.mockReset();
       open.mockClear();
+      popOut.mockReset();
+      popOut.mockResolvedValue(undefined);
+      vi.mocked(notify).mockClear();
+      useCanopyStore.setState({ hostId: null, unreadOnly: false });
     });
 
     it("brings the window forward instead of opening the panel here", async () => {
@@ -118,9 +124,9 @@ describe("canopy actions", () => {
       expect(openWindow.disabledReason?.({})).toMatch(/isn't on/);
     });
 
-    it("is offered once Canopy is on, and takes over from a panel open here", async () => {
+    it("is offered once Canopy is on, and opens the window when no panel is open here", async () => {
       installWindowApi();
-      useCanopyStore.setState({ mode: "on", isOpen: true });
+      useCanopyStore.setState({ mode: "on", isOpen: false });
       const openWindow = definition("canopy.openWindow");
 
       expect(openWindow.isVisible?.({})).toBe(true);
@@ -129,17 +135,84 @@ describe("canopy actions", () => {
       await openWindow.run(undefined, {});
 
       expect(open).toHaveBeenCalledTimes(1);
+      expect(popOut).not.toHaveBeenCalled();
+    });
+
+    it("pops a panel open here out into the window, closing it only once the window has it (#16338)", async () => {
+      installWindowApi();
+      let taken!: () => void;
+      popOut.mockImplementationOnce(() => new Promise<void>((resolve) => (taken = resolve)));
+      useCanopyStore.setState({ mode: "on", isOpen: true, unreadOnly: true });
+
+      const running = definition("canopy.openWindow").run(undefined, {});
+      await Promise.resolve();
+
+      expect(open).not.toHaveBeenCalled();
+      expect(popOut).toHaveBeenCalledTimes(1);
+      expect(popOut.mock.calls[0]![0].unreadOnly).toBe(true);
+      expect(useCanopyStore.getState().isOpen).toBe(true);
+
+      taken();
+      await running;
       expect(useCanopyStore.getState().isOpen).toBe(false);
     });
 
-    it("leaves the panel open when the window couldn't open", async () => {
+    it("leaves the panel exactly as it was when the window didn't take it, and says so", async () => {
       installWindowApi();
-      open.mockRejectedValueOnce(new Error("no"));
-      useCanopyStore.setState({ mode: "on", isOpen: true });
+      popOut.mockRejectedValueOnce(new Error("no"));
+      useCanopyStore.setState({ mode: "on", isOpen: true, hostId: "*", unreadOnly: true });
+      const before = useCanopyStore.getState();
 
       await expect(definition("canopy.openWindow").run(undefined, {})).rejects.toThrow("no");
 
-      expect(useCanopyStore.getState().isOpen).toBe(true);
+      const after = useCanopyStore.getState();
+      expect(after.isOpen).toBe(true);
+      expect(after.hostId).toBe(before.hostId);
+      expect(after.unreadOnly).toBe(before.unreadOnly);
+      expect(notify).toHaveBeenCalledTimes(1);
+      const toast = vi.mocked(notify).mock.calls[0]![0];
+      expect(toast.type).toBe("error");
+      expect(toast.actions?.map((action) => action.label)).toEqual(["Try again"]);
+    });
+
+    it("says a double click's one failure once, owning the toast", async () => {
+      installWindowApi();
+      let refuse!: (error: Error) => void;
+      popOut.mockImplementationOnce(() => new Promise<void>((_, reject) => (refuse = reject)));
+      useCanopyStore.setState({ mode: "on", isOpen: true });
+      const openWindow = definition("canopy.openWindow");
+
+      const first = openWindow.run(undefined, {});
+      const second = openWindow.run(undefined, {});
+      refuse(new Error("no"));
+
+      await expect(first).rejects.toThrow("no");
+      await expect(second).rejects.toThrow("no");
+      expect(popOut).toHaveBeenCalledTimes(1);
+      expect(notify).toHaveBeenCalledTimes(1);
+      expect(openWindow.selfNotifiesOnExecutionError).toBe(true);
+    });
+
+    it("never pops the Canopy window out into itself", async () => {
+      installWindowApi();
+      window.__DAINTREE_CANOPY_WINDOW__ = true;
+      useCanopyStore.setState({ mode: "on", isOpen: true });
+
+      await definition("canopy.openWindow").run(undefined, {});
+
+      expect(popOut).not.toHaveBeenCalled();
+      expect(open).toHaveBeenCalledTimes(1);
+      delete window.__DAINTREE_CANOPY_WINDOW__;
+    });
+
+    it("says why when the window couldn't open with no panel here", async () => {
+      installWindowApi();
+      open.mockRejectedValueOnce(new Error("no"));
+      useCanopyStore.setState({ mode: "on", isOpen: false });
+
+      await expect(definition("canopy.openWindow").run(undefined, {})).rejects.toThrow("no");
+
+      expect(notify).toHaveBeenCalledTimes(1);
     });
   });
 

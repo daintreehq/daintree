@@ -1564,6 +1564,10 @@ export interface IpcEventMap {
   "file-transfer:event": import("./fileTransfer.js").FileTransferEvent;
   "host-metrics:event": import("./hostMetrics.js").HostMetricsEvent;
   "canopy-host:event": import("./canopyHost.js").CanopyHostEvent;
+  // A pop-out waits for the Canopy window to take it up (#16338).
+  "canopy-window:pop-out-waiting": void;
+  // A dialog moved into the Canopy window: the other views' dialogs close.
+  "canopy-window:popped-out": void;
   "port-forwards:event": import("./portForwards.js").PortForwardsEvent;
 
   // Worktree events

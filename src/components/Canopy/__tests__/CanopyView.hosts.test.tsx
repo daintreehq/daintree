@@ -376,6 +376,7 @@ afterEach(() => {
     hostId: null,
     readingOfferDismissed: false,
     roleFilter: "all",
+    popOutLanding: null,
   });
   window.localStorage.removeItem("daintree-canopy-order");
   window.localStorage.removeItem("daintree-canopy-reading-offer-dismissed");
@@ -991,6 +992,66 @@ describe("the Canopy host picker", () => {
     expect(state.release).toHaveBeenCalledWith("studio");
   });
 
+  it("keeps a popped-out dialog's host while the window's host list is still on its way (#16338)", async () => {
+    // A new window reads its host list as it boots, after the pop-out may land.
+    state.hosts = [];
+    remoteFleet = fleet(["remote-run", "remote-other"]);
+    installElectron();
+    useCanopyStore.getState().receivePopOut({
+      hostId: "studio",
+      query: "",
+      selection: { kind: "worker", runId: "remote-other" },
+      roleFilter: "all",
+      unreadOnly: false,
+      keptUnread: [],
+      archivedExpanded: false,
+      trashExpanded: false,
+      workOf: null,
+    });
+    const { rerender } = render(<CanopyView />);
+    await settle();
+    expect(useCanopyStore.getState().hostId).toBe("studio");
+
+    state.hosts = [host("studio", "studio-01")];
+    rerender(<CanopyView />);
+    await settle();
+
+    expect(useCanopyStore.getState().hostId).toBe("studio");
+    expect(document.querySelector("[data-canopy-card][aria-selected=true]")?.id).toBe(
+      "canopy-card-remote-other"
+    );
+    expect(useCanopyStore.getState().popOutLanding).toBeNull();
+  });
+
+  it("keeps a popped-out dialog's host through the user acting before the host list came (#16338)", async () => {
+    state.hosts = [];
+    installElectron();
+    useCanopyStore.getState().receivePopOut({
+      hostId: "studio",
+      query: "",
+      selection: { kind: "worker", runId: "remote-run" },
+      roleFilter: "all",
+      unreadOnly: false,
+      keptUnread: [],
+      archivedExpanded: false,
+      trashExpanded: false,
+      workOf: null,
+    });
+    const { rerender } = render(<CanopyView />);
+    await settle();
+    fireEvent.pointerDown(document.querySelector("[data-testid=canopy-dialog]")!);
+    rerender(<CanopyView />);
+    await settle();
+    expect(useCanopyStore.getState().hostId).toBe("studio");
+
+    state.hosts = [host("studio", "studio-01")];
+    rerender(<CanopyView />);
+    await settle();
+
+    expect(useCanopyStore.getState().hostId).toBe("studio");
+    expect(useCanopyStore.getState().popOutLanding).toBeNull();
+  });
+
   it("says the list is what the host last showed once its link drops", async () => {
     installElectron();
     useCanopyStore.setState({ hostId: "studio" });
@@ -1096,6 +1157,29 @@ describe("All hosts", () => {
     expect(screen.getByTestId("canopy-host-picker").getAttribute("data-host-id")).toBe("*");
     // A read scope: no "This project" switch.
     expect(screen.queryByRole("radiogroup", { name: "Agents to show" })).toBeNull();
+  });
+
+  it("lands a popped-out dialog on its own host's run, never another's under the same id (#16338)", async () => {
+    installElectron();
+    for (const hostId of ["studio", "local"]) {
+      useCanopyStore.getState().receivePopOut({
+        hostId: ALL_HOSTS_ID,
+        query: "",
+        selection: { kind: "worker", runId: allHostsKey(hostId, "shared-run") },
+        roleFilter: "all",
+        unreadOnly: false,
+        keptUnread: [],
+        archivedExpanded: false,
+        trashExpanded: false,
+        workOf: null,
+      });
+      const view = render(<CanopyView />);
+      await settle();
+
+      expect(cardOf(hostId, "shared-run")!.getAttribute("aria-selected")).toBe("true");
+      expect(useCanopyStore.getState().popOutLanding).toBeNull();
+      view.unmount();
+    }
   });
 
   it("opens on this machine's run the main view has focused, never another host's under the same id", async () => {
