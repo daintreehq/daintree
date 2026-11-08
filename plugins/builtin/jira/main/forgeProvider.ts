@@ -132,18 +132,25 @@ let cachedViewer: { scope: string; viewer: Viewer } | null = null;
 /** Who an issue was assigned to before "Assign to me": `null` when nobody was. */
 type PreviousAssignee = { accountId: string; user: ForgeUser } | null;
 
+/** What a run of assignments in a row found, and how many of their Undos are left. */
+interface PreviousAssigneeRun {
+  previous: PreviousAssignee;
+  count: number;
+}
+
 /**
- * By connection and issue, one record per "Assign to me" still open to Undo,
+ * By connection and issue, what each "Assign to me" still open to Undo found,
  * latest last. Jira issues take one assignee, so the Undo has to put that person
  * back rather than leave the issue unassigned, and leave it alone when it was
  * already the viewer's. Two worktrees made from one issue each offer an Undo, so
  * the second assignment, which finds the issue already the viewer's, must not
- * take the first one's record. Undo is offered for seconds, so only the latest
- * few are kept.
+ * take the first one's record. Assignments in a row that found the same assignee
+ * share one run, so only a change of hands adds one. Undo is offered for
+ * seconds, so only the latest few issues are kept.
  */
-const previousAssignees = new Map<string, PreviousAssignee[]>();
+const previousAssignees = new Map<string, PreviousAssigneeRun[]>();
 const PREVIOUS_ASSIGNEES_LIMIT = 50;
-const PREVIOUS_ASSIGNEES_PER_ISSUE = 10;
+const PREVIOUS_ASSIGNEE_RUNS_PER_ISSUE = 10;
 
 export function clearJiraCaches(): void {
   statsCache.clear();
@@ -180,28 +187,37 @@ function previousAssigneeKey(op: Op, issueId: string): string {
 }
 
 function rememberPreviousAssignee(key: string, previous: PreviousAssignee): void {
-  const records = [...(previousAssignees.get(key) ?? []), previous];
+  const runs = previousAssignees.get(key) ?? [];
+  const latest = runs.at(-1);
+  if (latest && (latest.previous?.accountId ?? null) === (previous?.accountId ?? null)) {
+    latest.count++;
+  } else {
+    runs.push({ previous, count: 1 });
+    // Past the cap, the oldest after the first go: the first is who the issue
+    // goes back to once every Undo has run.
+    if (runs.length > PREVIOUS_ASSIGNEE_RUNS_PER_ISSUE) runs.splice(1, 1);
+  }
   previousAssignees.delete(key);
-  // Past the cap, the oldest after the first go: the first is who the issue
-  // goes back to once every Undo has run.
-  previousAssignees.set(
-    key,
-    records.length > PREVIOUS_ASSIGNEES_PER_ISSUE
-      ? [records[0], ...records.slice(-(PREVIOUS_ASSIGNEES_PER_ISSUE - 1))]
-      : records
-  );
+  previousAssignees.set(key, runs);
   if (previousAssignees.size > PREVIOUS_ASSIGNEES_LIMIT) {
     const oldest = previousAssignees.keys().next().value;
     if (oldest !== undefined) previousAssignees.delete(oldest);
   }
 }
 
-function forgetPreviousAssignee(key: string, record: PreviousAssignee): void {
-  const records = previousAssignees.get(key);
-  const index = records?.lastIndexOf(record) ?? -1;
-  if (!records || index < 0) return;
-  records.splice(index, 1);
-  if (records.length === 0) previousAssignees.delete(key);
+/** What the latest assignment still open to Undo found; `undefined` when none is. */
+function latestPreviousAssignee(key: string): PreviousAssignee | undefined {
+  return previousAssignees.get(key)?.at(-1)?.previous;
+}
+
+/** One Undo is used up. Assignments and Undos for an issue run in turn, so it's the latest. */
+function forgetLatestPreviousAssignee(key: string): void {
+  const runs = previousAssignees.get(key);
+  const latest = runs?.at(-1);
+  if (!runs || !latest) return;
+  if (--latest.count > 0) return;
+  runs.pop();
+  if (runs.length === 0) previousAssignees.delete(key);
 }
 
 const assignmentQueues = new Map<string, Promise<void>>();
@@ -597,11 +613,11 @@ export const jiraForgeProvider: ForgeIssueProviderImpl = {
       const issue = await requireIssueNode(repo, issueNumber, ["assignee"], op);
       const key = previousAssigneeKey(op, issue.id);
       // `undefined` when nothing is remembered.
-      const previous = previousAssignees.get(key)?.at(-1);
+      const previous = latestPreviousAssignee(key);
       // Someone else has picked the issue up since: this Undo has nothing of
       // ours left to undo, and its record goes with it.
       if (issue.fields?.assignee?.accountId !== viewer.accountId) {
-        if (previous !== undefined) forgetPreviousAssignee(key, previous);
+        forgetLatestPreviousAssignee(key);
         return assigneesOf(issue);
       }
       // With nothing remembered this only takes the issue off the viewer, which
@@ -612,13 +628,13 @@ export const jiraForgeProvider: ForgeIssueProviderImpl = {
       }
       // That assignment found the issue already the viewer's.
       if (previous?.accountId === viewer.accountId) {
-        forgetPreviousAssignee(key, previous);
+        forgetLatestPreviousAssignee(key);
         return assigneesOf(issue);
       }
       // Hand it back to whoever "Assign to me" took it from. A failure keeps
       // the record, so trying again still knows who that was.
       await setAssignee(issue.id, previous?.accountId ?? null, op);
-      forgetPreviousAssignee(key, previous);
+      forgetLatestPreviousAssignee(key);
       return previous ? [previous.user] : [];
     });
   },

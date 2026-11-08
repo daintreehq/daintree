@@ -835,16 +835,43 @@ describe("assignment", () => {
     await expect(undo()).resolves.toEqual([BOB_USER]);
   });
 
-  it("still hands the issue back after more assignments than it keeps records for", async () => {
-    for (let i = 0; i < 11; i++) await assign();
-    for (let i = 0; i < 9; i++) await expect(undo()).resolves.toEqual([ADA_USER]);
-    await expect(undo()).resolves.toEqual([BOB_USER]);
+  it("keeps every Undo of many assignments, handing the issue back only at the last", async () => {
+    for (let i = 0; i < 12; i++) await assign();
+    for (let i = 0; i < 11; i++) await expect(undo()).resolves.toEqual([ADA_USER]);
     await expect(undo()).resolves.toEqual([BOB_USER]);
     expect(assignees["ENG-12"]).toBe(BOB);
     expect(writes().map((write) => write.body)).toEqual([
       { accountId: "acc-ada" },
       { accountId: "acc-bob" },
     ]);
+  });
+
+  it("never takes away an issue that was the viewer's all along", async () => {
+    assignees["ENG-12"] = ADA;
+    for (let i = 0; i < 12; i++) await assign();
+    for (let i = 0; i < 12; i++) await expect(undo()).resolves.toEqual([ADA_USER]);
+    expect(assignees["ENG-12"]).toBe(ADA);
+    expect(writes()).toEqual([]);
+  });
+
+  it("goes back to who had the issue first after it changes hands many times", async () => {
+    assignees["ENG-12"] = null;
+    // Each round the viewer takes the issue and someone else takes it back.
+    for (let i = 0; i < 12; i++) {
+      await assign();
+      assignees["ENG-12"] = i % 2 ? BOB : CAROL;
+    }
+    const undone: unknown[] = [];
+    for (let i = 0; i < 10; i++) {
+      assignees["ENG-12"] = ADA;
+      undone.push(await undo());
+    }
+    // Only the latest hand-overs are kept, and the first: nobody had it.
+    expect(undone).toEqual([
+      ...Array.from({ length: 9 }, (_, i) => (i % 2 ? [BOB_USER] : [CAROL_USER])),
+      [],
+    ]);
+    expect(assignees["ENG-12"]).toBeNull();
   });
 
   it("uses up only its own record when someone else has the issue", async () => {
@@ -916,6 +943,9 @@ describe("assignment", () => {
     settings = next;
     await expect(undo()).resolves.toEqual([]);
     expect(assignees["ENG-12"]).toBeNull();
+    expect(String(fetchMock.mock.calls.at(-1)?.[0])).toBe(
+      `${next.siteUrl}/rest/api/3/issue/id-ENG-12/assignee`
+    );
   });
 
   it("knows the viewer by account id too", async () => {
