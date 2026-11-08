@@ -8,6 +8,7 @@ import {
 } from "../ClaudeUsageObservations.js";
 import {
   defaultClaudeConfigDir,
+  paneDisplayTitle,
   readClaudeUsageAccounts,
   type ClaudeUsageDeps,
   type ClaudeUsageSettings,
@@ -38,6 +39,8 @@ function deps(overrides: Partial<ClaudeUsageDeps> = {}): ClaudeUsageDeps {
     // The link is the work folder under another name.
     canonicalKey: async (dir) => (dir === LINK_TO_WORK ? WORK : dir),
     processEnv: {},
+    // The probe saw a login shell that exports no folder.
+    readShellObservation: () => ({ shell: "/bin/zsh", env: {} }),
     ...overrides,
   };
 }
@@ -128,19 +131,75 @@ describe("readClaudeUsageAccounts (#16370)", () => {
     ]);
   });
 
-  it("folds two spellings of one folder into one group, newest per limit", async () => {
-    recordClaudeUsageObservation(
-      record({ terminalId: "t1", usedPercent: 40, observedAt: 1_000, configDir: WORK })
-    );
-    recordClaudeUsageObservation(
-      record({ terminalId: "t2", usedPercent: 60, observedAt: 2_000, configDir: LINK_TO_WORK })
+  it("matches an account saved under another spelling of its folder", async () => {
+    recordClaudeUsageObservation(record({ configDir: WORK }));
+
+    const accounts = await readClaudeUsageAccounts(
+      deps({
+        readSettings: async () => ({
+          claude: { accounts: [{ ...workAccount, configDir: LINK_TO_WORK }] },
+          globalEnv: undefined,
+        }),
+      })
     );
 
-    const accounts = await readClaudeUsageAccounts(deps());
+    expect(accounts.map((account) => [account.kind, account.accountNames])).toEqual([
+      ["account", ["Work"]],
+    ]);
+  });
 
-    expect(accounts).toHaveLength(1);
-    expect(accounts[0]!.kind).toBe("account");
-    expect(accounts[0]!.readings.map((reading) => reading.usedPercent)).toEqual([60]);
+  it("files every pane off the folder a login shell exports as unknown, newest per limit", async () => {
+    const exported = path.join(os.tmpdir(), "daintree-16370", ".claude-profile");
+    const observation = { shell: "/bin/zsh", env: { CLAUDE_CONFIG_DIR: exported } };
+    // The shell's profile may have moved any of these panes; their launch folders are not proof.
+    recordClaudeUsageObservation(record({ terminalId: "t1", usedPercent: 10, observedAt: 3_000 }));
+    recordClaudeUsageObservation(
+      record({ terminalId: "t2", usedPercent: 20, observedAt: 4_000, configDir: WORK })
+    );
+    recordClaudeUsageObservation(
+      record({ terminalId: "t3", usedPercent: 30, observedAt: 2_000, configDir: STRAY })
+    );
+    // A pane launched on the exported folder is on it either way.
+    recordClaudeUsageObservation(
+      record({ terminalId: "t4", usedPercent: 40, observedAt: 1_000, configDir: exported })
+    );
+
+    const accounts = await readClaudeUsageAccounts(
+      deps({ readShellObservation: () => observation })
+    );
+
+    expect(
+      accounts.map((account) => [
+        account.kind,
+        account.readings.map((reading) => [reading.terminalId, reading.usedPercent]),
+      ])
+    ).toEqual([
+      ["default", [["t4", 40]]],
+      // Newest of the three, though neither first nor last seen.
+      ["unknown", [["t2", 20]]],
+    ]);
+  });
+
+  it("files nothing as any login's when a login shell exports a folder that can't be resolved", async () => {
+    recordClaudeUsageObservation(record({}));
+    recordClaudeUsageObservation(record({ terminalId: "t2", configDir: WORK }));
+
+    const accounts = await readClaudeUsageAccounts(
+      deps({
+        readShellObservation: () => ({ shell: "/bin/zsh", env: { CLAUDE_CONFIG_DIR: "rel" } }),
+      })
+    );
+
+    expect(accounts.map((account) => account.kind)).toEqual(["unknown"]);
+  });
+
+  it("trusts each pane's launch folder when no probe has answered", async () => {
+    recordClaudeUsageObservation(record({}));
+    recordClaudeUsageObservation(record({ terminalId: "t2", configDir: WORK }));
+
+    const accounts = await readClaudeUsageAccounts(deps({ readShellObservation: () => undefined }));
+
+    expect(accounts.map((account) => account.kind)).toEqual(["default", "account"]);
   });
 
   it("lists a removed account's readings as another folder, not under any login", async () => {
@@ -219,5 +278,24 @@ describe("defaultClaudeConfigDir (#16370)", () => {
     expect(
       defaultClaudeConfigDir(settings({ globalEnv: { CLAUDE_CONFIG_DIR: "relative" } }), {})
     ).toBeUndefined();
+  });
+});
+
+describe("paneDisplayTitle (#16370)", () => {
+  it("names the pane as its header does, with the agent's task", () => {
+    expect(
+      paneDisplayTitle({
+        title: "Claude",
+        titleMode: "default",
+        lastObservedTitle: "Fix flaky tests",
+        detectedAgentId: "claude",
+        agentState: "working",
+      })
+    ).toBe("Claude: Fix flaky tests");
+  });
+
+  it("is null for a pane with nothing to call it", () => {
+    expect(paneDisplayTitle({ title: "  " })).toBeNull();
+    expect(paneDisplayTitle({})).toBeNull();
   });
 });

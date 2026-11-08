@@ -22,10 +22,7 @@ import {
   CLAUDE_USAGE_STATEMENTS,
   CLAUDE_USAGE_WINDOWS,
 } from "../../../shared/types/ipc/agentQuota.js";
-import {
-  recordClaudeUsageObservation,
-  type ClaudeUsageRecord,
-} from "../claude/ClaudeUsageObservations.js";
+import { observeClaudeUsage, type ClaudeUsageRecord } from "../claude/ClaudeUsageObservations.js";
 
 const FALLBACK_REASONS: ReadonlySet<AgentFallbackReason> = new Set([
   "connection",
@@ -247,7 +244,7 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
     // plugin or notice has a use for it.
     case "agent-claude-usage-observed": {
       const observation = claudeUsageObservation(event);
-      if (observation !== null) recordClaudeUsageObservation(observation);
+      if (observation !== null) void observeClaudeUsage(observation);
       return true;
     }
 

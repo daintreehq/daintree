@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import {
   CLAUDE_USAGE_WINDOWS,
   type ClaudeUsageObservation,
@@ -6,9 +7,10 @@ import {
 
 /**
  * A reading with the Claude Code config folder of the pane that showed it:
- * which account it is for (#16370). Null when the pane's launch env named a
- * folder that can't be resolved, which is never taken for any account's.
- * Main's alone: the folder never reaches a renderer or an MCP caller.
+ * which account it is for (#16370), in {@link canonicalClaudeConfigDir}'s
+ * form as of when it showed. Null when the pane's launch env named a folder
+ * that can't be resolved, which is never taken for any account's. Main's
+ * alone: the folder never reaches a renderer or an MCP caller.
  */
 export interface ClaudeUsageRecord extends ClaudeUsageObservation {
   configDir: string | null;
@@ -22,6 +24,36 @@ export interface ClaudeUsageRecord extends ClaudeUsageObservation {
  * order they were first seen in.
  */
 const latest = new Map<string | null, Map<ClaudeUsageWindow, ClaudeUsageRecord>>();
+
+// Windows paths are case-insensitive, so two spellings of one folder share a key.
+function folderIdentity(dir: string): string {
+  return process.platform === "win32" ? dir.toLowerCase() : dir;
+}
+
+/**
+ * One key per folder however it's spelled. The promise `realpath` resolves
+ * symlinks and returns the on-disk case on a case-insensitive volume; a folder
+ * it can't resolve keeps its spelling. Never rejects.
+ */
+export async function canonicalClaudeConfigDir(dir: string): Promise<string> {
+  try {
+    return folderIdentity(await realpath(dir));
+  } catch {
+    return folderIdentity(dir);
+  }
+}
+
+/**
+ * Record a pane's reading under its folder as the folder is now, so a link
+ * later pointed elsewhere doesn't carry this reading to another login.
+ */
+export async function observeClaudeUsage(
+  record: ClaudeUsageRecord,
+  canonical: (dir: string) => Promise<string> = canonicalClaudeConfigDir
+): Promise<void> {
+  const configDir = record.configDir === null ? null : await canonical(record.configDir);
+  recordClaudeUsageObservation({ ...record, configDir });
+}
 
 export function recordClaudeUsageObservation(record: ClaudeUsageRecord): void {
   let byWindow = latest.get(record.configDir);

@@ -7,7 +7,6 @@
  */
 
 import { createHash } from "node:crypto";
-import { realpath } from "node:fs/promises";
 import { CLAUDE_USAGE_WINDOWS } from "../../../shared/types/ipc/agentQuota.js";
 import type {
   ClaudeUsageAccount,
@@ -18,9 +17,21 @@ import type {
 import type { AgentSettingsEntry } from "../../../shared/types/agentSettings.js";
 import { sanitizeAgentAccounts } from "../../../shared/utils/agentAccounts.js";
 import { sanitizeAgentEnv } from "../../../shared/utils/agentPresets.js";
+import {
+  composeTitledPanel,
+  type TitledPanel,
+} from "../../../shared/utils/terminalTitleDisplay.js";
+import {
+  getShellEnvironmentObservation,
+  type ShellEnvironmentObservation,
+} from "../../setup/shellEnvironmentObservation.js";
 import { hasEnvVar } from "../pty/EnvironmentFilter.js";
 import { resolveLaunchClaudeConfigDir } from "./claudeConfigDir.js";
-import { readClaudeUsageRecords, type ClaudeUsageRecord } from "./ClaudeUsageObservations.js";
+import {
+  canonicalClaudeConfigDir,
+  readClaudeUsageRecords,
+  type ClaudeUsageRecord,
+} from "./ClaudeUsageObservations.js";
 
 type EnvLike = Readonly<Record<string, string | undefined>>;
 
@@ -29,14 +40,16 @@ const CONFIG_DIR_VAR = "CLAUDE_CONFIG_DIR";
 /** What one usage read needs from outside the store, injectable for tests. */
 export interface ClaudeUsageDeps {
   readSettings: () => Promise<ClaudeUsageSettings>;
-  /** The pane's title and project, or null when its host no longer knows it. */
+  /** The pane as its header names it, or null when its host doesn't answer for it. */
   describePane: (
     terminalId: string
   ) => Promise<{ title: string | null; projectName: string | null } | null>;
-  /** One key per directory however it's spelled; falls back to the spelling. */
+  /** The key the store files a folder under, for comparing saved folders with it. */
   canonicalKey: (dir: string) => Promise<string>;
   /** Main's own environment, the layer under every launch's. */
   processEnv: EnvLike;
+  /** What the user's login shell exported, when the startup probe saw it. */
+  readShellObservation: () => ShellEnvironmentObservation | undefined;
 }
 
 export interface ClaudeUsageSettings {
@@ -60,6 +73,21 @@ export function defaultClaudeConfigDir(
   const layers: EnvLike[] = [agentEnv, settings.globalEnv ?? {}, processEnv];
   const named = layers.find((layer) => hasEnvVar(layer, CONFIG_DIR_VAR));
   return resolveLaunchClaudeConfigDir(named ?? {});
+}
+
+/**
+ * The folder the user's login shell exports, when the startup probe saw it
+ * export one. A pane's shell runs that profile after Daintree hands it its
+ * env, so the export can replace whatever folder the pane was launched with,
+ * and main never sees which it did. `null` when it exports one that can't be
+ * resolved; `undefined` when it exports none, or no probe has answered.
+ */
+function shellProfileConfigDir(
+  observation: ShellEnvironmentObservation | undefined
+): string | null | undefined {
+  const exported = observation?.env[CONFIG_DIR_VAR];
+  if (exported === undefined) return undefined;
+  return resolveLaunchClaudeConfigDir({ [CONFIG_DIR_VAR]: exported }) ?? null;
 }
 
 function accountKey(identity: string | null): string {
@@ -90,9 +118,9 @@ interface Group {
 }
 
 /**
- * The latest reading per limit for each login that has one. A folder two
- * spellings name is one group; a pane whose folder couldn't be resolved is
- * never put under any login's, the default's included.
+ * The latest reading per limit for each login that has one. A pane whose
+ * folder couldn't be resolved, or whose shell profile may have replaced it,
+ * is never put under any login's, the default's included.
  */
 export async function readClaudeUsageAccounts(
   deps: ClaudeUsageDeps = defaultDeps()
@@ -103,9 +131,13 @@ export async function readClaudeUsageAccounts(
   const settings = await deps
     .readSettings()
     .catch((): ClaudeUsageSettings => ({ claude: undefined, globalEnv: undefined }));
-  const defaultDir = defaultClaudeConfigDir(settings, deps.processEnv);
-  const defaultIdentity =
-    defaultDir === undefined ? undefined : await deps.canonicalKey(defaultDir);
+  const profileDir = shellProfileConfigDir(deps.readShellObservation());
+  const profileIdentity = profileDir ? await deps.canonicalKey(profileDir) : profileDir;
+  // A profile that exports a folder is where a launch with no account of its
+  // own ends up, whatever Daintree's layers name.
+  const defaultDir =
+    profileDir === undefined ? defaultClaudeConfigDir(settings, deps.processEnv) : profileDir;
+  const defaultIdentity = defaultDir ? await deps.canonicalKey(defaultDir) : undefined;
   const accounts = sanitizeAgentAccounts(settings.claude?.accounts);
   const accountIdentities = await Promise.all(
     accounts.map((account) => deps.canonicalKey(account.configDir))
@@ -113,11 +145,18 @@ export async function readClaudeUsageAccounts(
 
   const groups = new Map<string | null, Group>();
   for (const record of records) {
-    const identity = record.configDir === null ? null : await deps.canonicalKey(record.configDir);
+    // Only a pane already on the profile's folder is certain to still be on it.
+    const identity =
+      profileIdentity !== undefined && record.configDir !== profileIdentity
+        ? null
+        : record.configDir;
     let group = groups.get(identity);
     if (group === undefined) {
-      const named = accounts.filter((_, index) => accountIdentities[index] === identity);
-      const firstIndex = accountIdentities.indexOf(identity ?? "\0");
+      const named =
+        identity === null
+          ? []
+          : accounts.filter((_, index) => accountIdentities[index] === identity);
+      const firstIndex = identity === null ? -1 : accountIdentities.indexOf(identity);
       const kind: ClaudeUsageAccountKind =
         identity === null
           ? "unknown"
@@ -129,7 +168,7 @@ export async function readClaudeUsageAccounts(
       group = {
         identity,
         kind,
-        accountNames: identity === null ? [] : named.map((account) => account.name),
+        accountNames: named.map((account) => account.name),
         order: firstIndex < 0 ? Number.MAX_SAFE_INTEGER : firstIndex,
         byWindow: new Map(),
       };
@@ -178,25 +217,25 @@ export async function readClaudeUsageAccounts(
   }));
 }
 
-// Windows paths are case-insensitive, so two spellings of one folder share a group.
-function folderIdentity(dir: string): string {
-  return process.platform === "win32" ? dir.toLowerCase() : dir;
-}
-
-/**
- * The promise `realpath` resolves symlinks and returns the on-disk case on a
- * case-insensitive volume; a folder it can't resolve keeps its spelling.
- */
-async function canonicalFolderKey(dir: string): Promise<string> {
-  try {
-    return folderIdentity(await realpath(dir));
-  } catch {
-    return folderIdentity(dir);
-  }
-}
-
 function nonEmpty(value: unknown): string | null {
   return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
+}
+
+/** The title the pane's header shows: a user's title, then the agent's task. */
+export function paneDisplayTitle(info: Partial<TitledPanel>): string | null {
+  return nonEmpty(
+    composeTitledPanel(
+      {
+        title: info.title ?? "",
+        titleMode: info.titleMode,
+        lastObservedTitle: info.lastObservedTitle,
+        detectedAgentId: info.detectedAgentId,
+        agentState: info.agentState,
+        cwd: info.cwd,
+      },
+      "full"
+    )
+  );
 }
 
 function defaultDeps(): ClaudeUsageDeps {
@@ -218,9 +257,10 @@ function defaultDeps(): ClaudeUsageDeps {
         const { projectStore } = await import("../ProjectStore.js");
         projectName = nonEmpty(projectStore.getProjectById(info.projectId)?.name);
       }
-      return { title: nonEmpty(info.title), projectName };
+      return { title: paneDisplayTitle(info), projectName };
     },
-    canonicalKey: canonicalFolderKey,
+    canonicalKey: canonicalClaudeConfigDir,
     processEnv: process.env,
+    readShellObservation: getShellEnvironmentObservation,
   };
 }

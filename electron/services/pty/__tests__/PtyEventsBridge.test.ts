@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { bridgePtyEvent } from "../PtyEventsBridge.js";
 import { events } from "../../events.js";
 import { HANDBACK_MESSAGE_MAX_CHARS } from "../../../../shared/types/handback.js";
@@ -450,7 +450,7 @@ describe("bridgePtyEvent", () => {
       timestamp: 1_793_590_000_000,
     } as const;
 
-    it("records the parsed fields for agent.readQuota and keeps them off the bus", () => {
+    it("records the parsed fields for agent.readQuota and keeps them off the bus", async () => {
       const heard: unknown[] = [];
       events.on("agent:claude-usage-observed", (payload) => heard.push(payload));
 
@@ -458,6 +458,8 @@ describe("bridgePtyEvent", () => {
       expect(bridgePtyEvent({ ...observed, line: "You've used 87%…" } as never)).toBe(true);
 
       expect(heard).toEqual([]);
+      // Recorded once the folder is resolved; this one doesn't exist, so its spelling stands.
+      await vi.waitFor(() => expect(readClaudeUsageRecords()).toHaveLength(1));
       expect(readClaudeUsageRecords()).toEqual([
         {
           terminalId: "term-4",
@@ -475,8 +477,9 @@ describe("bridgePtyEvent", () => {
       ["no folder", { configDir: undefined }],
       ["an empty folder", { configDir: "" }],
       ["a folder that isn't a string", { configDir: 42 }],
-    ])("files one with %s under no account (#16370)", (_name, change) => {
+    ])("files one with %s under no account (#16370)", async (_name, change) => {
       expect(bridgePtyEvent({ ...observed, ...change } as never)).toBe(true);
+      await vi.waitFor(() => expect(readClaudeUsageRecords()).toHaveLength(1));
       expect(readClaudeUsageRecords()).toEqual([
         expect.objectContaining({ terminalId: "term-4", configDir: null }),
       ]);

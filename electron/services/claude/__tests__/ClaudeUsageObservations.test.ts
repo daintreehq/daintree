@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   clearClaudeUsageObservations,
+  observeClaudeUsage,
   readClaudeUsageObservations,
   readClaudeUsageRecords,
   recordClaudeUsageObservation,
@@ -114,6 +115,55 @@ describe("ClaudeUsageObservations", () => {
       withoutFolder(reading({ terminalId: "t1", usedPercent: 80, observedAt: 3_000 })),
     ]);
     expect(readings.every((entry) => !("configDir" in entry))).toBe(true);
+  });
+
+  it("answers agent.readQuota with the newer reading even when its folder was seen second", () => {
+    recordClaudeUsageObservation(reading({ terminalId: "t1", usedPercent: 40, observedAt: 1_000 }));
+    recordClaudeUsageObservation(
+      reading({
+        terminalId: "t2",
+        usedPercent: 70,
+        observedAt: 2_000,
+        configDir: "/home/me/.claude-work",
+      })
+    );
+
+    expect(readClaudeUsageObservations()).toEqual([
+      withoutFolder(reading({ terminalId: "t2", usedPercent: 70, observedAt: 2_000 })),
+    ]);
+  });
+
+  it("files a reading under its folder as resolved when it showed (#16370)", async () => {
+    // A link first points at one login's folder, then at another's.
+    let target = "/accounts/work";
+    const canonical = async (dir: string) => (dir === "/accounts/current" ? target : dir);
+
+    await observeClaudeUsage(
+      reading({ terminalId: "t1", usedPercent: 80, configDir: "/accounts/current" }),
+      canonical
+    );
+    target = "/accounts/personal";
+    await observeClaudeUsage(
+      reading({
+        terminalId: "t2",
+        usedPercent: 20,
+        observedAt: 2_000,
+        configDir: "/accounts/current",
+      }),
+      canonical
+    );
+    await observeClaudeUsage(reading({ terminalId: "t3", configDir: null }), canonical);
+
+    expect(readClaudeUsageRecords()).toEqual([
+      reading({ terminalId: "t1", usedPercent: 80, configDir: "/accounts/work" }),
+      reading({
+        terminalId: "t2",
+        usedPercent: 20,
+        observedAt: 2_000,
+        configDir: "/accounts/personal",
+      }),
+      reading({ terminalId: "t3", configDir: null }),
+    ]);
   });
 
   it("keeps a reading after its reset has passed", () => {

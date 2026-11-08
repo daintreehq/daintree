@@ -19,33 +19,45 @@ export function useClaudeUsage(enabled: boolean): {
   const [accounts, setAccounts] = useState<ClaudeUsageAccount[] | null>(null);
   const [failed, setFailed] = useState(false);
   const requestRef = useRef(0);
+  const pendingRef = useRef(false);
 
   const refresh = useCallback(() => {
     const request = ++requestRef.current;
+    pendingRef.current = true;
+    const settle = (apply: () => void) => {
+      if (request !== requestRef.current) return;
+      pendingRef.current = false;
+      apply();
+    };
     claudeClient.readUsage().then(
-      (next) => {
-        if (request !== requestRef.current) return;
-        setAccounts(next);
-        setFailed(false);
-      },
-      () => {
-        if (request !== requestRef.current) return;
-        setFailed(true);
-      }
+      (next) =>
+        settle(() => {
+          setAccounts(next);
+          setFailed(false);
+        }),
+      () => settle(() => setFailed(true))
     );
   }, []);
 
+  // A read slower than the interval would otherwise be superseded by every
+  // tick and never land. Retry still supersedes.
+  const poll = useCallback(() => {
+    if (!pendingRef.current) refresh();
+  }, [refresh]);
+
   useEffect(() => {
     if (!enabled) return;
-    refresh();
+    poll();
     const requests = requestRef;
+    const pending = pendingRef;
     return () => {
       // Drop any answer still in flight: it belongs to a mount that's gone.
       requests.current++;
+      pending.current = false;
     };
-  }, [enabled, refresh]);
+  }, [enabled, poll]);
 
-  useVisibilityAwareInterval(refresh, CLAUDE_USAGE_POLL_MS, enabled);
+  useVisibilityAwareInterval(poll, CLAUDE_USAGE_POLL_MS, enabled);
 
   return { accounts: enabled ? accounts : null, failed: enabled && failed, refresh };
 }

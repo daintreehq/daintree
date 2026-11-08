@@ -289,8 +289,10 @@ export function claudeWindowLabel(window: ClaudeUsageReading["window"]): string 
   return window.charAt(0).toUpperCase() + window.slice(1);
 }
 
+// No title is all a closed pane and a host that didn't answer have in common,
+// so neither is claimed.
 function paneSource(reading: ClaudeUsageReading): string {
-  const pane = reading.paneTitle ?? "a pane that's no longer open";
+  const pane = reading.paneTitle ?? "a pane";
   return reading.projectName ? `${pane} (${reading.projectName})` : pane;
 }
 
@@ -430,6 +432,20 @@ function ClaudeUsage() {
       </SettingsGroup>
     ));
   }
+  // What's shown stays, but a read that failed since says so.
+  const refreshFailed = accounts !== null && failed && (
+    <SettingsGroup>
+      <SettingsRow
+        label="Couldn't check for newer readings"
+        description="What's shown above may be out of date"
+        control={
+          <Button size="sm" variant="outline" onClick={refresh}>
+            Retry
+          </Button>
+        }
+      />
+    </SettingsGroup>
+  );
 
   return (
     <SettingsSection
@@ -437,6 +453,7 @@ function ClaudeUsage() {
       description="Claude Code's own usage messages, as your panes showed them. Not a live account reading."
     >
       {body}
+      {refreshFailed}
     </SettingsSection>
   );
 }

@@ -421,7 +421,8 @@ const claudeReading = (overrides: Partial<ClaudeUsageReading> = {}): ClaudeUsage
   window: "weekly limit",
   statement: "used",
   usedPercent: 87,
-  resetsAt: NOW + 3 * 60 * 60_000,
+  // A minute on: the same day in any zone NOW's minute allows, so it reads "Resets at".
+  resetsAt: NOW + 60_000,
   observedAt: NOW - 5 * 60_000,
   terminalId: "t1",
   paneTitle: "Fix tests",
@@ -498,13 +499,58 @@ describe("AgentQuotaSection for Claude Code (#16370)", () => {
     expect(screen.queryByText("Stale")).toBeNull();
   });
 
-  it("names a pane its host no longer knows without guessing a title", async () => {
+  it("names a pane its host can't describe without claiming it closed", async () => {
     readUsage.mockResolvedValue([
       claudeAccount({ readings: [claudeReading({ paneTitle: null, projectName: null })] }),
     ]);
     await renderFor("claude");
 
-    expect(document.body.textContent).toContain("Seen 5m ago in a pane that's no longer open");
+    expect(document.body.textContent).toContain("Seen 5m ago in a pane");
+    expect(document.body.textContent).not.toMatch(/closed|no longer open/);
+  });
+
+  it("numbers folders no account names, each with its own readings", async () => {
+    readUsage.mockResolvedValue([
+      claudeAccount({
+        key: "o1",
+        kind: "other",
+        readings: [claudeReading({ usedPercent: 11 })],
+      }),
+      claudeAccount({
+        key: "o2",
+        kind: "other",
+        readings: [claudeReading({ usedPercent: 22, terminalId: "t2" })],
+      }),
+    ]);
+    await renderFor("claude");
+
+    expect(
+      meters().map((m) => [m.getAttribute("aria-label"), m.getAttribute("aria-valuenow")])
+    ).toEqual([
+      ["Other config folder 1 weekly limit used", "11"],
+      ["Other config folder 2 weekly limit used", "22"],
+    ]);
+  });
+
+  it("keeps the readings and offers Retry when a later read fails", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      readUsage.mockResolvedValueOnce([claudeAccount()]).mockRejectedValueOnce(new Error("gone"));
+      await renderFor("claude");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+
+      expect(meters()).toHaveLength(1);
+      expect(screen.getByText("Couldn't check for newer readings")).toBeTruthy();
+      readUsage.mockResolvedValueOnce([claudeAccount()]);
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      });
+      expect(screen.queryByText("Couldn't check for newer readings")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("puts each login's readings under its own name", async () => {
@@ -552,7 +598,7 @@ describe("AgentQuotaSection for Claude Code (#16370)", () => {
     useAgentSettingsStore.setState({
       settings: {
         agents: { claude: { accounts: [{ id: "a1", name: "Work", configDir: "/w" }] } },
-      } as unknown as AgentSettings,
+      } as AgentSettings,
     });
     readUsage.mockResolvedValue([claudeAccount()]);
     await renderFor("claude");
