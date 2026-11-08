@@ -259,6 +259,72 @@ describe("pluginAgentRegistry (issue #9560)", () => {
     });
   });
 
+  describe("executable names (#16469)", () => {
+    const claimed = (agentId: string) => getPluginAgentRegistry()[agentId]?.executableNames;
+
+    beforeEach(() => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("carries the claimed names lowercased and once each, and nothing when none", () => {
+      registerPluginAgents("acme.plugin", [
+        { ...ACME_AGENT, executableNames: ["Mini", "mini", "mini-swe-agent"] },
+        { ...ACME_AGENT, id: "quiet-agent" },
+      ]);
+      expect(claimed("acme-agent")).toEqual(["mini", "mini-swe-agent"]);
+      expect(getPluginAgentRegistry()["quiet-agent"]).not.toHaveProperty("executableNames");
+    });
+
+    it("gives neither plugin a name both claim, and only that name", () => {
+      registerPluginAgents("pi.plugin", [{ ...ACME_AGENT, id: "pi", executableNames: ["pi"] }]);
+      registerPluginAgents("other.plugin", [
+        { ...ACME_AGENT, id: "other-pi", executableNames: ["pi", "other"] },
+      ]);
+      expect(claimed("pi")).toBeUndefined();
+      expect(claimed("other-pi")).toEqual(["other"]);
+    });
+
+    it("hands the name back once the competing plugin unloads", () => {
+      registerPluginAgents("pi.plugin", [{ ...ACME_AGENT, id: "pi", executableNames: ["pi"] }]);
+      registerPluginAgents("other.plugin", [
+        { ...ACME_AGENT, id: "other-pi", executableNames: ["pi"] },
+      ]);
+      expect(claimed("pi")).toBeUndefined();
+      unregisterPluginAgents("other.plugin");
+      expect(claimed("pi")).toEqual(["pi"]);
+    });
+
+    it("counts a claim from an agent that lost its id to an earlier plugin", () => {
+      // The second plugin's `pi` never reaches the flattened snapshot, so only
+      // counting before flattening sees that two plugins claim the name.
+      registerPluginAgents("first.plugin", [{ ...ACME_AGENT, id: "pi", executableNames: ["pi"] }]);
+      registerPluginAgents("second.plugin", [
+        { ...ACME_AGENT, id: "pi", name: "Second", executableNames: ["pi"] },
+      ]);
+      expect(getEffectiveAgentConfig("pi")?.name).toBe(ACME_AGENT.name);
+      expect(claimed("pi")).toBeUndefined();
+    });
+
+    it("counts two agents of one plugin claiming the same name as a contest", () => {
+      registerPluginAgents("acme.plugin", [
+        { ...ACME_AGENT, id: "one", executableNames: ["shared"] },
+        { ...ACME_AGENT, id: "two", executableNames: ["shared"] },
+      ]);
+      expect(claimed("one")).toBeUndefined();
+      expect(claimed("two")).toBeUndefined();
+    });
+
+    it("survives the structured clone the snapshot broadcast goes through", () => {
+      registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, executableNames: ["acme"] }]);
+      const cloned = structuredClone(getPluginAgentRegistry());
+      setPluginAgentRegistry(cloned);
+      expect(claimed("acme-agent")).toEqual(["acme"]);
+    });
+  });
+
   describe("declared resume (#13687)", () => {
     const HERMES: PluginAgentContribution = {
       ...ACME_AGENT,

@@ -5,6 +5,10 @@ import {
   getPtyPowerLevel,
   resetPtyPowerLevelForTesting,
 } from "../../../services/pty/ptyPowerPolicy.js";
+import {
+  clearPluginAgentRegistryForTests,
+  getPluginAgentRegistry,
+} from "../../../../shared/config/pluginAgentRegistry.js";
 
 function makeCtx(withPool = true) {
   const resourceGovernor = { setPowerLevel: vi.fn(), setResourceProfile: vi.fn() };
@@ -54,5 +58,47 @@ describe("set-power-policy (#12515)", () => {
 
     expect(getPtyPowerLevel()).toBe("saving");
     expect(resourceGovernor.setPowerLevel).toHaveBeenCalledWith("saving");
+  });
+});
+
+describe("set-plugin-agent-registry (#16469)", () => {
+  afterEach(() => {
+    clearPluginAgentRegistryForTests();
+  });
+
+  it("revokes against the registry it just installed", () => {
+    const registry = {
+      pi: { id: "pi", name: "Pi", command: "pi", color: "#3366ff", iconId: "terminal" },
+    };
+    const seen: unknown[] = [];
+    const revokeUnregisteredAgents = vi.fn(() => seen.push(getPluginAgentRegistry()));
+    const ctx = {
+      analysisWorkerPool: { setPluginAgentRegistry: vi.fn() },
+      ptyManager: { revokeUnregisteredAgents },
+    } as unknown as HostContext;
+
+    createResourceConfigHandlers(ctx)["set-plugin-agent-registry"]({ registry });
+
+    expect(revokeUnregisteredAgents).toHaveBeenCalledTimes(1);
+    expect(seen).toEqual([registry]);
+  });
+
+  it("still installs the registry when a revocation sweep throws", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const registry = {};
+    const ctx = {
+      analysisWorkerPool: null,
+      ptyManager: {
+        revokeUnregisteredAgents: () => {
+          throw new Error("boom");
+        },
+      },
+    } as unknown as HostContext;
+
+    expect(() =>
+      createResourceConfigHandlers(ctx)["set-plugin-agent-registry"]({ registry })
+    ).not.toThrow();
+    expect(getPluginAgentRegistry()).toBe(registry);
+    warn.mockRestore();
   });
 });

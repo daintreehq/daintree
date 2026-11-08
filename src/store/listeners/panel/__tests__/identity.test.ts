@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
 import type {
@@ -85,6 +85,10 @@ const handleAgentEndMock = vi.hoisted(() => vi.fn());
 vi.mock("@/services/terminal/agentEndRecovery", () => ({ handleAgentEnd: handleAgentEndMock }));
 
 import { setupIdentityListeners, _resetChangedFileBaseline } from "../identity";
+import {
+  clearPluginAgentRegistryForTests,
+  setPluginAgentRegistry,
+} from "@shared/config/pluginAgentRegistry";
 import { notify } from "@/lib/notify";
 
 function makePayload(overrides: Partial<AgentStateChangePayload> = {}): AgentStateChangePayload {
@@ -692,4 +696,77 @@ describe("identity listener — a launched run's end (#16045)", () => {
       d.dispose();
     }
   );
+});
+
+describe("identity listener — plugin agent in a plain terminal (#16469)", () => {
+  const PI = {
+    id: "pi",
+    name: "Pi",
+    command: "pi",
+    color: "#3366ff",
+    iconId: "terminal",
+    executableNames: ["pi"],
+  };
+
+  function detect(agentType: string): void {
+    for (const cb of onAgentDetectedHandlers) {
+      cb({ terminalId: "term-1", agentType, processName: agentType, timestamp: nextTimestamp() });
+    }
+  }
+
+  function pane() {
+    const panel = usePanelStore.getState().panelsById["term-1"];
+    if (!panel || !isPtyPanel(panel)) throw new Error("pane missing");
+    return panel;
+  }
+
+  beforeEach(() => {
+    clearPluginAgentRegistryForTests();
+  });
+  afterEach(() => {
+    clearPluginAgentRegistryForTests();
+  });
+
+  it("takes the plugin agent's identity and name", () => {
+    setPluginAgentRegistry({ pi: PI });
+    setupPanel();
+    const d = setupIdentityListeners();
+
+    detect("pi");
+
+    expect(pane()).toMatchObject({
+      detectedAgentId: "pi",
+      everDetectedAgent: true,
+      agentState: "idle",
+      title: "Pi",
+      runtimeIdentity: expect.objectContaining({ kind: "agent", agentId: "pi" }),
+    });
+    d.dispose();
+  });
+
+  it("keeps the host's identity when this view's plugin registry hasn't arrived", () => {
+    setupPanel();
+    const d = setupIdentityListeners();
+
+    detect("pi");
+
+    expect(pane().detectedAgentId).toBe("pi");
+    d.dispose();
+  });
+
+  it("goes back to a plain terminal when the host revokes it", () => {
+    setPluginAgentRegistry({ pi: PI });
+    setupPanel();
+    const d = setupIdentityListeners();
+    detect("pi");
+
+    for (const cb of onAgentExitedHandlers) {
+      cb({ terminalId: "term-1", agentType: "pi", timestamp: nextTimestamp() });
+    }
+
+    expect(pane()).toMatchObject({ agentState: "exited", title: "Terminal" });
+    expect(pane().detectedAgentId).toBeUndefined();
+    expect(pane().runtimeIdentity).toBeUndefined();
+    d.dispose();
+  });
 });

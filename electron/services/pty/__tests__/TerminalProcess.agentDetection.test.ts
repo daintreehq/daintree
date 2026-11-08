@@ -9,6 +9,10 @@ import { makeAgentResult, makeNoAgentResult } from "../../ProcessDetector.js";
 import { events } from "../../events.js";
 import { DEFAULT_SCROLLBACK } from "../types.js";
 import { PLAIN_SHELL_SCROLLBACK_MAX } from "../../../../shared/config/scrollback.js";
+import {
+  clearPluginAgentRegistryForTests,
+  setPluginAgentRegistry,
+} from "../../../../shared/config/pluginAgentRegistry.js";
 
 vi.mock("../../../utils/windowsTreeKill.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../utils/windowsTreeKill.js")>()),
@@ -1543,6 +1547,145 @@ describe("TerminalProcess — invalid PTY PID gating (#10787)", () => {
       (pty as { pid: number }).pid = 9876;
       (terminal as unknown as { startProcessDetector: () => void }).startProcessDetector();
       expect(getProcessDetector(terminal)).toBeDefined();
+    } finally {
+      terminal.dispose();
+    }
+  });
+});
+
+describe("TerminalProcess plugin agent typed into a plain terminal (#16469)", () => {
+  const PI = {
+    id: "pi",
+    name: "Pi",
+    command: "pi",
+    color: "#3366ff",
+    iconId: "terminal",
+    executableNames: ["pi"],
+    detection: { primaryPatterns: ["Working"] },
+  };
+  let exited: Array<{ agentType?: string; exitKind?: string; agentEnd?: unknown }>;
+  let unsubscribe: () => void;
+
+  async function typePi(terminal: TerminalProcess): Promise<void> {
+    const pty = getMockPty(terminal);
+    terminal.write("pi\r");
+    pty.__emitData("pi\r\n");
+    pty.__emitData("Pi ready.\r\n");
+    await vi.advanceTimersByTimeAsync(2000);
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    clearPluginAgentRegistryForTests();
+    exited = [];
+    unsubscribe = events.on("agent:exited", (payload) => {
+      exited.push({
+        agentType: payload.agentType,
+        exitKind: payload.exitKind,
+        agentEnd: payload.agentEnd,
+      });
+    });
+  });
+
+  afterEach(() => {
+    unsubscribe();
+    clearPluginAgentRegistryForTests();
+    vi.useRealTimers();
+  });
+
+  it("stays a plain terminal while no plugin claims the name", async () => {
+    setPluginAgentRegistry({ pi: { ...PI, executableNames: undefined } });
+    const terminal = createPlainTerminal("t-pi-unclaimed");
+    try {
+      await typePi(terminal);
+      expect(terminal.getInfo().detectedAgentId).toBeUndefined();
+      expect(terminal.getInfo().analysisEnabled).toBe(false);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("promotes to the plugin agent, then demotes when the prompt returns", async () => {
+    setPluginAgentRegistry({ pi: PI });
+    const terminal = createPlainTerminal("t-pi-promote");
+    const pty = getMockPty(terminal);
+    try {
+      await typePi(terminal);
+      const info = terminal.getInfo();
+      expect(info.detectedAgentId).toBe("pi");
+      expect(info.launchAgentId).toBeUndefined();
+      expect(info.analysisEnabled).toBe(true);
+      expect(info.title).toBe("Pi");
+
+      pty.__emitData("\r\ngpriday@macbook daintree-app % ");
+      await vi.advanceTimersByTimeAsync(600);
+
+      expect(terminal.getInfo().detectedAgentId).toBeUndefined();
+      expect(exited).toEqual([expect.objectContaining({ agentType: "pi", exitKind: "subcommand" })]);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("demotes without an exit when the plugin unloads, and stays demoted", async () => {
+    setPluginAgentRegistry({ pi: PI });
+    const updateAgentState = vi.fn();
+    const terminal = createPlainTerminal("t-pi-unload", {
+      agentStateService: {
+        handleActivityState: () => {},
+        updateAgentState,
+        emitAgentKilled: () => {},
+        emitAgentCompleted: () => {},
+      } as unknown as TerminalProcessDeps["agentStateService"],
+    });
+    const pty = getMockPty(terminal);
+    try {
+      await typePi(terminal);
+      expect(terminal.getInfo().detectedAgentId).toBe("pi");
+      updateAgentState.mockClear();
+
+      setPluginAgentRegistry({});
+      terminal.revokeUnregisteredAgent();
+
+      const info = terminal.getInfo();
+      expect(info.detectedAgentId).toBeUndefined();
+      expect(info.analysisEnabled).toBe(false);
+      expect(info.agentState).toBe("exited");
+      expect(info.title).toBe("Terminal");
+      // Identity withdrawn, not a process that ended: no exit kind, no session
+      // capture, and no state-machine exit that would read as a completion.
+      expect(exited).toEqual([{ agentType: "pi", exitKind: undefined, agentEnd: undefined }]);
+      expect(updateAgentState).not.toHaveBeenCalled();
+
+      // The CLI is still running and still printing.
+      pty.__emitData("Working on it\r\n");
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(terminal.getInfo().detectedAgentId).toBeUndefined();
+
+      // A second sweep finds nothing left to revoke.
+      terminal.revokeUnregisteredAgent();
+      expect(exited).toHaveLength(1);
+    } finally {
+      terminal.dispose();
+    }
+  });
+
+  it("leaves a built-in agent alone when the plugin registry changes", async () => {
+    setPluginAgentRegistry({ pi: PI });
+    const terminal = createPlainTerminal("t-claude-sweep");
+    const pty = getMockPty(terminal);
+    try {
+      terminal.write("claude\r");
+      pty.__emitData("claude\r\n");
+      pty.__emitData("Starting Claude Code...\r\n");
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
+
+      setPluginAgentRegistry({});
+      terminal.revokeUnregisteredAgent();
+
+      expect(terminal.getInfo().detectedAgentId).toBe("claude");
+      expect(exited).toHaveLength(0);
     } finally {
       terminal.dispose();
     }
