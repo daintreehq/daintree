@@ -131,7 +131,12 @@ describe("a project registered before its clone finished (#16352)", () => {
       job,
     });
 
-    expect(project).toMatchObject({ path: target, name: "Widgets", emoji: "🧩", cloneState: "cloning" });
+    expect(project).toMatchObject({
+      path: target,
+      name: "Widgets",
+      emoji: "🧩",
+      cloneState: "cloning",
+    });
     expect(store.getProjectById(project.id)?.cloneState).toBe("cloning");
     expect(store.getCloneJob(project.id)).toEqual(job);
     expect(getRepositoryRoot).not.toHaveBeenCalled();
@@ -160,7 +165,10 @@ describe("a project registered before its clone finished (#16352)", () => {
 
     expect(store.setCloneState(project.id, "failed", failedJob).cloneState).toBe("failed");
     expect(store.getProjectsAwaitingClone()).toEqual([
-      { project: expect.objectContaining({ id: project.id, cloneState: "failed" }), job: failedJob },
+      {
+        project: expect.objectContaining({ id: project.id, cloneState: "failed" }),
+        job: failedJob,
+      },
     ]);
   });
 

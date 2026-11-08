@@ -147,9 +147,8 @@ export async function removeProjectWithCleanup(
   // A clone still running for the project stops first, and its partial
   // checkout goes with it, so nothing keeps writing a folder no row owns
   // (#16352). Nothing has used the service without a clone to release.
-  const { peekProjectCloneService } = await import(
-    "../../../services/projectClone/ProjectCloneService.js"
-  );
+  const { peekProjectCloneService } =
+    await import("../../../services/projectClone/ProjectCloneService.js");
   await peekProjectCloneService()?.releaseForRemoval(projectId);
 
   if (deps.ptyClient) {

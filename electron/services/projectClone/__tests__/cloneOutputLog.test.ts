@@ -29,7 +29,9 @@ describe("CloneOutputLog", () => {
 
   it("scrubs credentials from every line it keeps", () => {
     const log = new CloneOutputLog();
-    log.append("fatal: unable to access 'https://x-access-token:ghp_abcdefghijklmnopqrstuvwxyz0123456789@github.com/o/r.git/'\n");
+    log.append(
+      "fatal: unable to access 'https://x-access-token:ghp_abcdefghijklmnopqrstuvwxyz0123456789@github.com/o/r.git/'\n"
+    );
     const [line] = log.snapshot();
     expect(line).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz0123456789");
     expect(line).toContain("github.com/o/r.git");

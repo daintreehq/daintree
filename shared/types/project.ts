@@ -206,9 +206,7 @@ export interface Project {
  * ended without one. Nothing that reads the repository, its worktrees or its
  * folder applies until the clone succeeds.
  */
-export function isAwaitingClone(
-  project: Pick<Project, "cloneState"> | null | undefined
-): boolean {
+export function isAwaitingClone(project: Pick<Project, "cloneState"> | null | undefined): boolean {
   return project?.cloneState !== undefined && project?.cloneState !== null;
 }
 

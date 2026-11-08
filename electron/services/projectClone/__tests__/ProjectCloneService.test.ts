@@ -110,7 +110,11 @@ const fsMock = vi.hoisted(() => ({
 vi.mock("fs/promises", () => ({ default: fsMock, ...fsMock }));
 
 import { ProjectCloneService } from "../ProjectCloneService.js";
-import { isCheckoutPendingPath, isCheckoutPendingProject, resetCheckoutGateForTests } from "../checkoutGate.js";
+import {
+  isCheckoutPendingPath,
+  isCheckoutPendingProject,
+  resetCheckoutGateForTests,
+} from "../checkoutGate.js";
 import { broadcastToProjectRenderers } from "../../../ipc/utils.js";
 import { projectStore } from "../../ProjectStore.js";
 import { GitOperationError } from "../../../utils/errorTypes.js";
@@ -229,9 +233,13 @@ describe("ProjectCloneService", () => {
   it("keeps a failed clone on its project with git's scrubbed error, and retries it", async () => {
     const { project } = await service.start(request("widgets"));
     h.calls[0]!.reject(
-      new GitOperationError("auth-failed", "Authentication failed for https://u:secret-token-value@host/r", {
-        op: "clone",
-      })
+      new GitOperationError(
+        "auth-failed",
+        "Authentication failed for https://u:secret-token-value@host/r",
+        {
+          op: "clone",
+        }
+      )
     );
     await flush();
 
@@ -265,7 +273,14 @@ describe("ProjectCloneService", () => {
 
   it("reads a failed clone from an earlier session back from its row", async () => {
     h.rows.set("old", {
-      project: { id: "old", path: "/work/old", name: "old", emoji: "🌲", lastOpened: 1, cloneState: "failed" },
+      project: {
+        id: "old",
+        path: "/work/old",
+        name: "old",
+        emoji: "🌲",
+        lastOpened: 1,
+        cloneState: "failed",
+      },
       job: { url: "git@github.com:acme/old.git", shallow: true, error: "Repository not found" },
     });
 
@@ -278,7 +293,10 @@ describe("ProjectCloneService", () => {
     });
 
     await service.retry("old");
-    expect(h.calls[0]!.options).toMatchObject({ url: "git@github.com:acme/old.git", depth: "shallow" });
+    expect(h.calls[0]!.options).toMatchObject({
+      url: "git@github.com:acme/old.git",
+      depth: "shallow",
+    });
   });
 
   it("records a clone the app quit on as failed, not as stopped", async () => {
@@ -302,7 +320,14 @@ describe("ProjectCloneService", () => {
   describe("recoverInterrupted", () => {
     const seed = (id: string, state: ProjectCloneState) =>
       h.rows.set(id, {
-        project: { id, path: `/work/${id}`, name: id, emoji: "🌲", lastOpened: 1, cloneState: state },
+        project: {
+          id,
+          path: `/work/${id}`,
+          name: id,
+          emoji: "🌲",
+          lastOpened: 1,
+          cloneState: state,
+        },
         job: { url: `https://github.com/acme/${id}.git`, shallow: false },
       });
 

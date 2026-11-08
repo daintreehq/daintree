@@ -457,9 +457,8 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
   await settleWithin(
     (async () => {
       try {
-        const { peekProjectCloneService } = await import(
-          "../services/projectClone/ProjectCloneService.js"
-        );
+        const { peekProjectCloneService } =
+          await import("../services/projectClone/ProjectCloneService.js");
         await peekProjectCloneService()?.shutdown(CLONE_STOP_BUDGET_MS);
       } catch (err) {
         console.warn("[MAIN] Background clones stop failed:", err);

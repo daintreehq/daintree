@@ -985,7 +985,9 @@ export class ProjectStore {
     const row = getSharedDb()
       .select()
       .from(projectsTable)
-      .where(and(eq(projectsTable.path, normalizedPath), sql`${projectsTable.cloneState} IS NOT NULL`))
+      .where(
+        and(eq(projectsTable.path, normalizedPath), sql`${projectsTable.cloneState} IS NOT NULL`)
+      )
       .get();
     return row ? rowToProject(row) : null;
   }

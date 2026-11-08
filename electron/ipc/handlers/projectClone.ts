@@ -2,10 +2,7 @@ import { defineIpcNamespace, op } from "../define.js";
 import type { IpcContext } from "../types.js";
 import { PROJECT_CLONE_METHOD_CHANNELS } from "./projectClone.preload.js";
 import { getProjectCloneService } from "../../services/projectClone/ProjectCloneService.js";
-import {
-  normalizeCreationGroupId,
-  normalizeCreationIdentity,
-} from "./projectCrud/crud.js";
+import { normalizeCreationGroupId, normalizeCreationIdentity } from "./projectCrud/crud.js";
 import { AppError } from "../../utils/errorTypes.js";
 import type {
   ProjectCloneJobSnapshot,

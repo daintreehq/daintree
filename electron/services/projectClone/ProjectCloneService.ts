@@ -111,7 +111,9 @@ export class ProjectCloneService {
     // The row's path is the git root the finished clone will resolve to, which
     // is realpath'd: a symlinked parent must not leave the two disagreeing.
     const canonicalParent = await fs.realpath(target.parentPath);
-    const projectPath = path.normalize(path.join(canonicalParent, target.folderName)).normalize("NFC");
+    const projectPath = path
+      .normalize(path.join(canonicalParent, target.folderName))
+      .normalize("NFC");
     if (await projectStore.getProjectByPath(projectPath)) {
       throw new Error(`A project is already registered at ${projectPath}`);
     }
@@ -123,7 +125,10 @@ export class ProjectCloneService {
       }
     }
 
-    const persisted: PersistedCloneJob = { url: target.url, shallow: request.shallowClone === true };
+    const persisted: PersistedCloneJob = {
+      url: target.url,
+      shallow: request.shallowClone === true,
+    };
     const project = projectStore.insertCloningProject(projectPath, {
       ...(creation.identity ? { identity: creation.identity } : {}),
       ...(creation.groupId ? { groupId: creation.groupId } : {}),
