@@ -43,6 +43,7 @@ import { usePluginBridge } from "./hooks/usePluginBridge";
 import { useScheduledRunLaunchBridge } from "./hooks/useScheduledRunLaunchBridge";
 import { useScheduledRunFinishBridge } from "./hooks/useScheduledRunFinishBridge";
 import { useTerminalWhenDoneBridge } from "./hooks/useTerminalWhenDoneBridge";
+import { useHeldComposerSendBridge } from "./hooks/useHeldComposerSendBridge";
 import { useScheduledRunInboxBridge } from "./hooks/useScheduledRunInboxBridge";
 import { usePluginPromptBridge } from "./hooks/usePluginPromptBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
@@ -170,6 +171,7 @@ function AppInner() {
   useScheduledRunLaunchBridge();
   useScheduledRunFinishBridge();
   useTerminalWhenDoneBridge();
+  useHeldComposerSendBridge();
   usePluginPromptBridge();
   const { homeDir } = useHomeDir();
 

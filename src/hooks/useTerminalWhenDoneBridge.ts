@@ -3,12 +3,13 @@ import { isPtyPanel } from "@shared/types/panel";
 import { usePanelStore } from "@/store/panelStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useTerminalWhenDoneStore } from "@/store/terminalWhenDoneStore";
+import { hasHeldComposerSend } from "@/store/heldComposerSendStore";
 
 /**
  * Whether someone is using a pane in this view (#16171), so its When done
  * choice must leave it where it is: it, or its expanded composer, holds real
- * keyboard focus in a focused window, or its composer holds a draft that
- * closing it would lose. Anything else (a glance, the pointer over it) can't
+ * keyboard focus in a focused window, or its composer holds a draft or a
+ * held send that closing it would lose. Anything else (a glance, the pointer over it) can't
  * be observed, so it doesn't count.
  */
 export function isTerminalPaneInUseHere(terminalId: string): boolean {
@@ -22,6 +23,8 @@ export function isTerminalPaneInUseHere(terminalId: string): boolean {
       if (composer?.getAttribute("data-composer-terminal-id") === terminalId) return true;
     }
   }
+  // A send held for the pane's next prompt (#16379) is a draft closing would lose.
+  if (hasHeldComposerSend(terminalId)) return true;
   // Drafts are keyed by the composer's project scope, so match the id alone.
   for (const [key, draft] of useTerminalInputStore.getState().draftInputs) {
     if (draft.trim() === "") continue;
