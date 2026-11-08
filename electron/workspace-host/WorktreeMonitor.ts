@@ -1137,14 +1137,14 @@ export class WorktreeMonitor {
   }
 
   /**
-   * Resolved when `WorkspaceService` matches the origin URL against the
+   * Resolved when `ForgeRemoteDetector` matches the origin URL against the
    * relayed provider-matcher table — at monitor start and again on every
    * table change. Gates forge affordances ("Sign in to refresh", PR badge) —
    * unmatched remotes silently hide them even when an auth failure is
    * recorded.
    *
-   * Guarded against post-stop emits: `probeForgeRemoteAsync` is a fire-and-
-   * forget async call that may resolve after the monitor is torn down (e.g.
+   * Guarded against post-stop emits: `ForgeRemoteDetector.probeMonitor` is a
+   * fire-and-forget async call that may resolve after the monitor is torn down (e.g.
    * worktree removal, project switch). Without this check the late resolution
    * would emit a `worktree-update` after `worktree-removed`, re-adding a
    * ghost card to the renderer.

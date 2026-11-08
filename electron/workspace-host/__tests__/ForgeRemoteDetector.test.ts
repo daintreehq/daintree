@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
+import { resolve as pathResolve } from "path";
 import {
   ForgeRemoteDetector,
   type ForgeRemoteDetectorHost,
@@ -30,6 +31,10 @@ const UPSTREAM = remote("upstream", "https://github.com/upstream/app.git");
 const MIRROR = remote("mirror", "https://github.com/mirror/app.git");
 const GITHUB = "daintree.github.github";
 const DEBOUNCE_MS = 250;
+// Apart from the project root, so a fingerprint taken from the wrong file reads
+// as unreadable rather than as the real config.
+const COMMON_DIR = "/common/.git";
+const COMMON_CONFIG = pathResolve(COMMON_DIR, "config");
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -80,8 +85,13 @@ describe("ForgeRemoteDetector", () => {
     configStat = { ino: 1, mtimeMs: 1000, ctimeMs: 1000, size: 200 };
     mocks.getRemotes.mockResolvedValue([]);
     mocks.createHardenedGit.mockImplementation(async () => ({ getRemotes: mocks.getRemotes }));
-    mocks.getGitCommonDir.mockResolvedValue("/repo/.git");
-    mocks.stat.mockImplementation(async () => ({ ...configStat }));
+    mocks.getGitCommonDir.mockImplementation(async (path) =>
+      path === "/repo" ? COMMON_DIR : null
+    );
+    mocks.stat.mockImplementation(async (path) => {
+      if (path === COMMON_CONFIG) return { ...configStat };
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    });
     mocks.existsSync.mockReturnValue(true);
 
     monitors = new Map();
@@ -162,6 +172,24 @@ describe("ForgeRemoteDetector", () => {
       // The URLs and the signature never cross to the host.
       expect(onRemotesChanged).toHaveBeenCalledWith();
       expect(main.remoteFetchUrl).toBe(ORIGIN.refs.fetch);
+    });
+
+    it("signals a renamed or repointed remote, but not a reordered table", async () => {
+      await seed([ORIGIN, UPSTREAM]);
+      mocks.getRemotes.mockResolvedValue([UPSTREAM, ORIGIN]);
+      touchConfig();
+      await configWritten();
+      expect(onRemotesChanged).not.toHaveBeenCalled();
+
+      mocks.getRemotes.mockResolvedValue([remote("fork", ORIGIN.refs.fetch), UPSTREAM]);
+      touchConfig();
+      await configWritten();
+      expect(onRemotesChanged).toHaveBeenCalledTimes(1);
+
+      mocks.getRemotes.mockResolvedValue([remote("fork", MIRROR.refs.fetch), UPSTREAM]);
+      touchConfig();
+      await configWritten();
+      expect(onRemotesChanged).toHaveBeenCalledTimes(2);
     });
 
     it("discards a seed that spans an observed config write", async () => {
@@ -297,8 +325,12 @@ describe("ForgeRemoteDetector", () => {
       mocks.getRemotes.mockResolvedValue([ORIGIN]);
       touchConfig();
       await configWritten();
+      const held = detector["remoteRead"];
+      const reads = mocks.getRemotes.mock.calls.length;
       startRead.reject(new Error("git spawn failed"));
       await probe;
+      expect(detector["remoteRead"]).toBe(held);
+      expect(mocks.getRemotes).toHaveBeenCalledTimes(reads);
       mocks.getRemotes.mockClear();
 
       const late = addMonitor("late");
@@ -354,10 +386,12 @@ describe("ForgeRemoteDetector", () => {
         detector.setProviderMatchers([{ providerId: "other", hostnames: ["github.com"] }]);
       }
       expect(main.matchedForgeProviderId).toBe("other");
+      expect(vi.getTimerCount()).toBe(1);
 
       await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
       await flush();
       expect(mocks.getRemotes).toHaveBeenCalledTimes(1);
+      expect(main.urlWrites).toBe(1);
     });
 
     it("never bumps the config probe sequence, so an in-flight reprobe still lands", async () => {
@@ -471,7 +505,7 @@ describe("ForgeRemoteDetector", () => {
     const POLL_MS = 5 * 60 * 1000;
 
     function configStats(): number {
-      return mocks.stat.mock.calls.filter(([p]) => p.endsWith("config")).length;
+      return mocks.stat.mock.calls.filter(([p]) => p === COMMON_CONFIG).length;
     }
 
     it("is not armed by a start while backgrounded, nor kept through a pause", async () => {
@@ -495,11 +529,17 @@ describe("ForgeRemoteDetector", () => {
       detector.pause();
       await detector.resume();
       await detector.resume();
+      expect(vi.getTimerCount()).toBe(1);
       mocks.stat.mockClear();
 
-      await vi.advanceTimersByTimeAsync(POLL_MS * 2 + DEBOUNCE_MS);
+      await vi.advanceTimersByTimeAsync(POLL_MS + DEBOUNCE_MS);
       await flush();
-      expect(configStats()).toBe(2);
+      expect(configStats()).toBe(1);
+
+      detector.pause();
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(POLL_MS * 2);
+      expect(configStats()).toBe(1);
     });
 
     it("has nothing to settle when detection isn't running", async () => {
@@ -517,8 +557,7 @@ describe("ForgeRemoteDetector", () => {
       mocks.stat.mockImplementation(
         (p) =>
           new Promise<ConfigStat>((resolve) => {
-            if (p.endsWith("config")) releases.push(() => resolve({ ...configStat }));
-            else resolve({ ...configStat });
+            if (p === COMMON_CONFIG) releases.push(() => resolve({ ...configStat }));
           })
       );
 
