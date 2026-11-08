@@ -2687,7 +2687,9 @@ describe("IdentityWatcher", () => {
       // A failure lands before the replay: the replayed chunk is judged on it.
       state.visibleLines = ["bash: codex: command not found", "runner@host:/repo$ "];
       state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      vi.mocked(getTrailingNonBlankLines).mockClear();
       vi.advanceTimersByTime(FOREGROUND_PROBE_FOLLOW_UP_MS);
+      expect(getTrailingNonBlankLines).toHaveBeenCalledTimes(1);
       expect(clear).not.toHaveBeenCalledWith("prompt-return");
       watcher.dispose();
     });

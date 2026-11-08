@@ -234,6 +234,15 @@ describe("getTrailingNonBlankLines", () => {
     expect(getTrailingNonBlankLines(chunk, 4)).toEqual(wholeChunkTailLines(chunk, 4));
   });
 
+  it("treats an ESC that a removed CSI joins to `\\` as an OSC terminator in the window", () => {
+    // The window holds no BEL and no raw ST, but CSI removal turns
+    // `ESC ESC[0m \` into one, closing the OSC opened before the window.
+    const chunk = "\x1b]x\n1\n2\x1b\x1b[0m\\$";
+
+    expect(getTrailingNonBlankLines(chunk, 1)).toEqual(["$"]);
+    expect(getTrailingNonBlankLines(chunk, 4)).toEqual(wholeChunkTailLines(chunk, 4));
+  });
+
   it("windows past an OSC opener that nothing in the window could close", () => {
     // Without a BEL or ST after it the opener matches no OSC, so its payload
     // is visible text and the window strips as the whole would.
