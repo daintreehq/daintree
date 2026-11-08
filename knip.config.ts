@@ -142,7 +142,6 @@ const baseConfig: KnipConfig = {
     // re-exports appear unused despite being public API surfaces.
     "src/components/ActionPalette/index.ts",
     "src/components/QuickSwitcher/index.ts",
-    "src/components/TerminalPalette/index.ts",
     "src/components/ThemePalette/index.ts",
 
     // why: codegen test fixtures loaded dynamically by

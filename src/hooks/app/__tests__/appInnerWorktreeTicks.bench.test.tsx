@@ -48,7 +48,6 @@ const { createWorktreeStore } = await import("@/store/createWorktreeStore");
 const { useWorktreeSelectionStore } = await import("@/store/worktreeStore");
 const { usePaletteStore } = await import("@/store/paletteStore");
 const { useProjectStore } = await import("@/store/projectStore");
-const { actionService } = await import("@/services/ActionService");
 const { markHostActivationApplied, _resetHostAppliedActivationForTesting } =
   await import("@/store/worktreeActivationOrigin");
 
@@ -101,7 +100,6 @@ let resumeIdentities = 0;
 type Wiring = ReturnType<typeof usePaletteWiring>;
 
 interface HostProps {
-  newTerminalPalette: Wiring["newTerminalPalette"];
   worktreePalette: Wiring["worktreePalette"];
   resumeSession: ReturnType<typeof useResumeAgentSession>;
   defaultTerminalCwd: string;
@@ -133,14 +131,13 @@ function ModalHostSpy(props: HostProps) {
 }
 
 function AppInnerHarness({ isWorktreeOverviewOpen }: { isWorktreeOverviewOpen: boolean }) {
-  const { worktrees, isLoading, newTerminalPalette, worktreePalette } = usePaletteWiring({
+  const { worktrees, isLoading, worktreePalette } = usePaletteWiring({
     isWorktreeOverviewOpen,
   });
   const { activeWorktreeId, defaultTerminalCwd } = useActiveWorktreeSync();
   const resumeSession = useResumeAgentSession();
   return (
     <ModalHostSpy
-      newTerminalPalette={newTerminalPalette}
       worktreePalette={worktreePalette}
       resumeSession={resumeSession}
       defaultTerminalCwd={defaultTerminalCwd}
@@ -283,28 +280,6 @@ describe("AppInner worktree-tick re-renders", () => {
     expect(rows()).toHaveLength(WORKTREE_COUNT);
     act(() => tick(store, OTHER, 3));
     expect(rows().find((w) => w.id === OTHER)!.modifiedCount).toBe(3);
-  });
-
-  it("launches the new-terminal palette into the active worktree's current path", async () => {
-    const dispatch = vi
-      .spyOn(actionService, "dispatch")
-      .mockResolvedValue({ ok: true, result: undefined });
-    const { store } = mount();
-    act(() => update(store, ACTIVE, { path: "/repo/moved" }));
-    await act(() =>
-      host().newTerminalPalette.handleSelect({
-        id: "claude",
-        launchAgentId: "claude",
-        label: "Claude",
-        description: "",
-        icon: null,
-      })
-    );
-    expect(dispatch).toHaveBeenCalledWith(
-      "agent.launch",
-      expect.objectContaining({ worktreeId: ACTIVE, cwd: "/repo/moved" }),
-      { source: "user" }
-    );
   });
 
   it("resumes against the worktree map at call time", async () => {

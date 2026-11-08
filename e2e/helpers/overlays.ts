@@ -4,7 +4,6 @@ import { T_SHORT } from "./timeouts";
 
 const BLOCKING_PALETTE_SELECTORS = [
   SEL.actionPalette.dialog,
-  '[role="dialog"][aria-label="New terminal palette"]',
   '[role="dialog"][aria-label="Panel palette"]',
   SEL.projectSwitcher.palette,
   '[role="dialog"][aria-label="Worktree palette"]',

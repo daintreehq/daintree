@@ -15,7 +15,6 @@ export { useDiskSpaceWarnings } from "./useDiskSpaceWarnings";
 
 export { useQuickSwitcher } from "./useQuickSwitcher";
 export type { QuickSwitcherItem, UseQuickSwitcherReturn } from "./useQuickSwitcher";
-export { useNewTerminalPalette } from "./useNewTerminalPalette";
 export { usePanelPalette } from "./usePanelPalette";
 export type { PanelKindOption, UsePanelPaletteReturn } from "./usePanelPalette";
 export { useProjectSwitcherPalette } from "./useProjectSwitcherPalette";

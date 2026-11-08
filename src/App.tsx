@@ -184,7 +184,6 @@ function AppInner() {
   const {
     worktrees,
     isLoading,
-    newTerminalPalette,
     panelPalette,
     projectSwitcherPalette,
     actionPalette,
@@ -199,7 +198,6 @@ function AppInner() {
     isProjectSwitcherModalOpen,
     shouldMountQuickSwitcher,
     shouldMountSendToAgentPalette,
-    shouldMountNewTerminalPalette,
     shouldMountWorktreePalette,
     shouldMountQuickCreatePalette,
     shouldMountPanelPalette,
@@ -377,7 +375,7 @@ function AppInner() {
     usePaletteStore.getState().closePalette("log-level");
   }, []);
 
-  useAppEventListeners({ onOpenNewTerminalPalette: newTerminalPalette.open });
+  useAppEventListeners();
 
   const { handleErrorRetry, handleCancelRetry } = useErrorRetry();
 
@@ -614,8 +612,6 @@ function AppInner() {
                 shouldMountQuickSwitcher={shouldMountQuickSwitcher}
                 sendToAgentPalette={sendToAgentPalette}
                 shouldMountSendToAgentPalette={shouldMountSendToAgentPalette}
-                newTerminalPalette={newTerminalPalette}
-                shouldMountNewTerminalPalette={shouldMountNewTerminalPalette}
                 worktreePalette={worktreePalette}
                 shouldMountWorktreePalette={shouldMountWorktreePalette}
                 quickCreatePalette={quickCreatePalette}

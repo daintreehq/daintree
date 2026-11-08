@@ -1,9 +1,10 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { readFakeAgentLaunchLog, type FakeAgentLaunchRecord } from "../../helpers/fakeAgent";
 import { SEL } from "../../helpers/selectors";
+import { dispatchAction } from "../../helpers/actions";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 import {
   writeCcrConfig,
@@ -26,7 +27,7 @@ import {
 
 // Every place a preset can be launched from — the launcher's flat preset rows,
 // the toolbar button's context menu, a plain toolbar click with a saved
-// default, and the new-terminal palette — and what the launched CLI actually
+// default, and the panel palette — and what the launched CLI actually
 // received. The fake `claude` records its argv and env on every launch.
 
 const CUSTOM_ID = "user-e2e-surface-custom";
@@ -117,16 +118,18 @@ async function launchFrom(gesture: () => Promise<void>): Promise<FakeAgentLaunch
   return record;
 }
 
-async function openNewTerminalPalette(page: Page) {
-  // Its only opener is this event — there is no production keyboard or toolbar
-  // trigger (see useAppEventListeners).
-  await page.evaluate(() =>
-    window.dispatchEvent(new CustomEvent("daintree:open-new-terminal-palette"))
-  );
-  const dialog = page.locator(SEL.newTerminalPalette.dialog);
+async function openPanelPalette(page: Page) {
+  const result = await dispatchAction(page, "panel.palette");
+  expect(result.ok, "panel.palette dispatch").toBe(true);
+  const dialog = page.locator(SEL.panelPalette.dialog);
   await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
   return dialog;
 }
+
+// Agent rows carry the `agent:` prefix, whose colon a `#id` selector would read
+// as a pseudo-class.
+const panelPaletteAgentOption = (dialog: Locator, agentId: string) =>
+  dialog.locator(`[id="panel-option-agent:${agentId}"]`);
 
 test.describe("Presets: launch surfaces", () => {
   test.beforeAll(async () => {
@@ -329,33 +332,19 @@ test.describe("Presets: launch surfaces", () => {
       });
     });
 
-    test.describe("new-terminal palette", () => {
+    test.describe("panel palette", () => {
       test.afterEach(async () => {
-        if (await ctx.window.locator(SEL.newTerminalPalette.dialog).isVisible()) {
+        if (await ctx.window.locator(SEL.panelPalette.dialog).isVisible()) {
           await ctx.window.keyboard.press("Escape");
         }
-        await expect(ctx.window.locator(SEL.newTerminalPalette.dialog)).toBeHidden();
+        await expect(ctx.window.locator(SEL.panelPalette.dialog)).toBeHidden();
       });
 
       test("89. The palette lists the installed Claude agent option", async () => {
-        const dialog = await openNewTerminalPalette(ctx.window);
-        const claudeOption = dialog.locator("#new-terminal-option-claude");
+        const dialog = await openPanelPalette(ctx.window);
+        const claudeOption = panelPaletteAgentOption(dialog, "claude");
         await expect(claudeOption).toBeVisible({ timeout: T_MEDIUM });
         await expect(claudeOption).toContainText(/Claude/i);
-      });
-
-      test("90. The palette always lists the plain terminal and browser options", async () => {
-        const dialog = await openNewTerminalPalette(ctx.window);
-        await expect(dialog.locator(SEL.newTerminalPalette.terminalOption)).toBeVisible({
-          timeout: T_MEDIUM,
-        });
-        await expect(dialog.locator(SEL.newTerminalPalette.browserOption)).toBeVisible({
-          timeout: T_SHORT,
-        });
-        // It offers agents, not preset counts.
-        await expect(
-          dialog.locator(SEL.newTerminalPalette.options).getByText(/preset/i)
-        ).toHaveCount(0);
       });
 
       test("91/92. Launching Claude from the palette spawns a panel with presets present", async () => {
@@ -365,8 +354,8 @@ test.describe("Presets: launch surfaces", () => {
           `${SEL.panel.gridPanel}[data-launch-agent-id="claude"]`
         );
         const panelsBefore = await claudePanels.count();
-        const dialog = await openNewTerminalPalette(ctx.window);
-        const claudeOption = dialog.locator("#new-terminal-option-claude");
+        const dialog = await openPanelPalette(ctx.window);
+        const claudeOption = panelPaletteAgentOption(dialog, "claude");
         await expect(claudeOption).toBeVisible({ timeout: T_MEDIUM });
 
         await launchFrom(async () => {

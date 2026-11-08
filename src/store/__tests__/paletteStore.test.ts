@@ -7,7 +7,7 @@ describe("paletteStore", () => {
   });
 
   it("openPalette replaces a previously open palette (mutual exclusion)", () => {
-    usePaletteStore.getState().openPalette("new-terminal");
+    usePaletteStore.getState().openPalette("panel");
     usePaletteStore.getState().openPalette("action");
     expect(usePaletteStore.getState().activePaletteId).toBe("action");
   });
@@ -20,7 +20,7 @@ describe("paletteStore", () => {
 
   it("closePalette is a no-op when id does not match (stale close guard)", () => {
     usePaletteStore.getState().openPalette("action");
-    usePaletteStore.getState().closePalette("new-terminal");
+    usePaletteStore.getState().closePalette("panel");
     expect(usePaletteStore.getState().activePaletteId).toBe("action");
   });
 });

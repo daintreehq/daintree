@@ -185,7 +185,6 @@ const PALETTE_FILES = [
   "src/components/ActionPalette/ActionPaletteItem.tsx",
   "src/components/QuickSwitcher/QuickSwitcherItem.tsx",
   "src/components/ThemePalette/ThemePalette.tsx",
-  "src/components/TerminalPalette/NewTerminalPalette.tsx",
   "src/components/LogLevelPalette/LogLevelPalette.tsx",
   "src/components/PanelPalette/PanelPalette.tsx",
   "src/components/Terminal/PromptHistoryPalette.tsx",
@@ -199,7 +198,6 @@ const PALETTE_FILES = [
 /** Palettes whose every row carries a second line (a path, a description). */
 const ALWAYS_TWO_LINE_FILES = [
   "src/components/Worktree/WorktreePalette.tsx",
-  "src/components/TerminalPalette/NewTerminalPalette.tsx",
   "src/components/Terminal/RecentDictationsPalette.tsx",
 ];
 

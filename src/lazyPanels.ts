@@ -65,12 +65,6 @@ export const LazyCrossWorktreeDiff = lazyWithPreload(
 );
 export const preloadCrossWorktreeDiff = LazyCrossWorktreeDiff.preload;
 
-export const LazyNewTerminalPalette = lazyWithPreload(
-  () => import("./components/TerminalPalette/NewTerminalPalette"),
-  (m) => m.NewTerminalPalette
-);
-export const preloadNewTerminalPalette = LazyNewTerminalPalette.preload;
-
 export const LazySendToAgentPalette = lazyWithPreload(
   () => import("./components/Terminal/SendToAgentPalette"),
   (m) => m.SendToAgentPalette
