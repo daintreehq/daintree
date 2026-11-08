@@ -484,7 +484,7 @@ describe("GlobalAssistantPane (#14454)", () => {
     // The menu stays for docs; it offers nothing that would act on the hidden successor.
     fireEvent.pointerDown(screen.getByTestId("help-global-more"), { button: 0, ctrlKey: false });
     await screen.findByText("Open docs");
-    expect(screen.queryByText("Restart conversation")).toBeNull();
+    expect(screen.queryByText("Clear conversation")).toBeNull();
     expect(screen.queryByText("Stop global assistant")).toBeNull();
     expect(screen.queryByTestId("help-global-take-input")).toBeNull();
   });
@@ -498,8 +498,8 @@ describe("GlobalAssistantPane (#14454)", () => {
     renderPane();
     await flush();
     fireEvent.pointerDown(screen.getByTestId("help-global-more"), { button: 0, ctrlKey: false });
-    fireEvent.click(await screen.findByText("Restart conversation"));
-    fireEvent.click(await screen.findByRole("button", { name: "Restart conversation" }));
+    fireEvent.click(await screen.findByText("Clear conversation"));
+    fireEvent.click(await screen.findByRole("button", { name: "Clear conversation" }));
     await flush();
     expect(useHelpPanelStore.getState().globalTarget).toBeNull();
     expect(screen.getByTestId("global-terminal").getAttribute("data-run")).toBe("g2");
@@ -570,9 +570,9 @@ describe("GlobalAssistantPane (#14454)", () => {
     renderPane();
     await flush();
     fireEvent.pointerDown(screen.getByTestId("help-global-more"), { button: 0, ctrlKey: false });
-    fireEvent.click(await screen.findByText("Restart conversation"));
+    fireEvent.click(await screen.findByText("Clear conversation"));
     expect(help.restartGlobalAssistant).not.toHaveBeenCalled();
-    fireEvent.click(await screen.findByRole("button", { name: "Restart conversation" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Clear conversation" }));
     await flush();
     expect(help.restartGlobalAssistant).toHaveBeenCalledWith(7);
   });
