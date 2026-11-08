@@ -72,6 +72,7 @@ describe("useCanopyPluginViews", () => {
       goToRun: vi.fn(),
       restoreElsewhere: vi.fn(),
       openAssistant: vi.fn(async () => null),
+      takesTerminalSize: "on-use",
     });
     const inWindow = renderHook(() => useCanopyPluginViews(), {
       wrapper: wrapperFor(standalone),
