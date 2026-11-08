@@ -1288,6 +1288,45 @@ describe("one assistant addressing another (#13496)", () => {
       });
     });
 
+    it("carries no reply on a batch item whose send failed after its wait ended", async () => {
+      const { deps, control } = assistantDeps({ caller: CALLER });
+      control.submit
+        .mockRejectedValueOnce(
+          new AssistantTargetError("ASSISTANT_BUSY", "Mid-turn. Nothing was sent.")
+        )
+        .mockResolvedValueOnce(RECEIPT);
+      deps.replyWaiter = {
+        wait: vi.fn(() => ({
+          bind: vi.fn(),
+          cancel: vi.fn(),
+          promise: Promise.resolve({
+            terminalId: ASSISTANT_TERMINAL,
+            outcome: "timeout" as const,
+            reply: { text: "captured screen", lineCount: 1, truncated: false },
+          }),
+        })),
+      } as unknown as SessionServerDeps["replyWaiter"];
+      const server = await serve(deps);
+      const result = await callTool(server, {
+        name: "terminal.sendCommandMany",
+        arguments: {
+          sends: [
+            { terminalId: ASSISTANT_TERMINAL, command: "x", generation: 4 },
+            { terminalId: ASSISTANT_TERMINAL, command: "y", generation: 4 },
+          ],
+          waitForReply: true,
+        },
+      });
+      const results = (result.structuredContent as { results: Array<Record<string, unknown>> })
+        .results;
+      expect(results[0]).toMatchObject({ ok: false });
+      expect(results[0]).not.toHaveProperty("reply");
+      expect(results[1]).toMatchObject({
+        ok: true,
+        reply: { reply: { text: "captured screen" } },
+      });
+    });
+
     it("keeps its scrollback and prompt context from a project's assistant", async () => {
       const { deps } = assistantDeps({ caller: CALLER });
       const server = await serve(deps);
