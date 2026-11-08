@@ -130,6 +130,8 @@ export interface LinkClientOptions {
   quietAfterMs?: number;
   /** How long a session that outlived a sleep has to answer after the wake before it is redialled. */
   wakeProbeMs?: number;
+  /** How long a session open across a network change has to answer before it is redialled. */
+  networkProbeMs?: number;
   /**
    * When the host was last heard from by any link before this one (the
    * registry's record), so a link made after a release or at launch still
@@ -174,6 +176,20 @@ const QUIET_CHECK_MS = 1_000;
  * network is back; one that didn't is redialled well before the idle timeout.
  */
 const WAKE_PROBE_MS = 5_000;
+const WAKE_PROBE_REASON = "no answer after wake";
+/**
+ * Long enough for a link whose route survived a network change to answer a
+ * ping; one that went with the old interface is given up well before ssh's
+ * keepalives would notice.
+ */
+const NETWORK_PROBE_MS = 3_000;
+const NETWORK_PROBE_REASON = "no answer after network change";
+/**
+ * Least time from the start of one dial to an early one that a network
+ * change or a focused window asks for, so signals that repeat (an address
+ * flapping, a person switching windows) pull a retry forward at most this often.
+ */
+const EARLY_DIAL_GAP_MS = 2_000;
 /** Longest a stop waits for its GOODBYE to leave before letting go of the transport. */
 const GOODBYE_WAIT_MS = 2_000;
 
@@ -236,6 +252,16 @@ export class LinkClient {
   private restartExpiry: ReturnType<typeof setTimeout> | null = null;
   /** What the last logged failure said, so a host down for hours logs once, not every retry. */
   private lastLoggedFailure: string | null = null;
+  /** When the last dial started: an early one keeps {@link EARLY_DIAL_GAP_MS} from it. */
+  private lastDialAt: number | null = null;
+  /** Network changes heard, and how many there had been when the last dial started. */
+  private networkChanges = 0;
+  private networkChangesAtDial = 0;
+  /**
+   * The last session stopped answering after a wake or a network change: the
+   * next dial asks the transport not to reuse a connection made before it.
+   */
+  private routeSuspect = false;
   private generation = 0;
   private readonly releasing = new Set<Promise<void>>();
   private readonly released = new WeakMap<LinkTransportConnection, Promise<void>>();
@@ -333,10 +359,37 @@ export class LinkClient {
   noteSystemResumed(): void {
     if (!this.running) return;
     if (this.current?.isOpen) {
-      this.current.probe(this.options.wakeProbeMs ?? WAKE_PROBE_MS, "no answer after wake");
+      this.current.probe(this.options.wakeProbeMs ?? WAKE_PROBE_MS, WAKE_PROBE_REASON);
       return;
     }
     if (this.state.status === "unreachable" && this.state.retryAt !== null) this.retryNow();
+  }
+
+  /**
+   * This machine's network changed (an address came or went). A session open
+   * across it has to answer within the network probe or is redialled; a
+   * retry the backoff was holding goes now, or once the last dial is
+   * {@link EARLY_DIAL_GAP_MS} old. An attempt under way is left to finish,
+   * and should it fail, its retry comes as soon.
+   */
+  noteNetworkChanged(): void {
+    if (!this.running) return;
+    this.networkChanges++;
+    const session = this.current;
+    if (session?.isOpen) {
+      // A probe still waiting keeps its deadline: a network that keeps changing mustn't postpone it.
+      if (!session.probing) {
+        session.probe(this.options.networkProbeMs ?? NETWORK_PROBE_MS, NETWORK_PROBE_REASON);
+      }
+      return;
+    }
+    this.dialSoon();
+  }
+
+  /** A window showing this host came to the front: a retry the backoff was holding goes as soon as {@link noteNetworkChanged}'s would. */
+  noteForegrounded(): void {
+    if (!this.running) return;
+    this.dialSoon();
   }
 
   async stop(): Promise<void> {
@@ -361,6 +414,11 @@ export class LinkClient {
     const generation = ++this.generation;
     const stale = () => generation !== this.generation || !this.running;
     this.attempt++;
+    this.lastDialAt = this.now();
+    this.networkChangesAtDial = this.networkChanges;
+    // Once: a fresh dial below goes through whatever this one set up.
+    let routeSuspect = this.routeSuspect;
+    this.routeSuspect = false;
     const dial = {
       hostId: this.options.hostId ?? null,
       attempt: this.attempt,
@@ -384,7 +442,9 @@ export class LinkClient {
         connection = await this.options.transport.open(abort.signal, {
           mayStart: !this.restartAnnounced,
           ...(fresh ? { fresh: true } : {}),
+          ...(routeSuspect ? { routeSuspect: true } : {}),
         });
+        routeSuspect = false;
       } catch (err) {
         if (this.attemptAbort === abort) this.attemptAbort = null;
         if (stale()) return;
@@ -713,6 +773,14 @@ export class LinkClient {
       // Before the state below: whoever hears it records when the host was last seen.
       this.lastSeenAt = Math.max(this.lastSeenAt ?? 0, session.lastReceivedAt);
       this.noteClose(info);
+      // Whatever carried it died under it, and a dial through the same ssh
+      // master would ride that dead connection until keepalives end it.
+      if (
+        info.by === "local" &&
+        (info.reason === NETWORK_PROBE_REASON || info.reason === WAKE_PROBE_REASON)
+      ) {
+        this.routeSuspect = true;
+      }
       // Down from now: releasing the old forward can take as long as a stalled
       // transport does, and the link must not read as connected meanwhile.
       this.setState(this.connecting(this.attempt + 1));
@@ -796,7 +864,12 @@ export class LinkClient {
       announced ? Math.min(maxMs, RESTART_RETRY_MS) : maxMs,
       initialMs * 2 ** Math.min(this.failures - 1, 30)
     );
-    const delay = Math.max(0, Math.round(base * (1 - jitter * this.random())));
+    let delay = Math.max(0, Math.round(base * (1 - jitter * this.random())));
+    // The network changed while this attempt was out, so it may have tried the old one.
+    if (!options.parked && this.networkChanges !== this.networkChangesAtDial) {
+      const now = this.now();
+      delay = Math.min(delay, this.earliestEarlyDial(now) - now);
+    }
     const retry = options.parked ? "stopped" : "scheduled";
     const signature = [
       options.failure ?? "",
@@ -821,11 +894,39 @@ export class LinkClient {
       retryAt: options.parked ? null : this.now() + delay,
     });
     if (options.parked) return;
+    this.scheduleRetry(delay);
+  }
+
+  private scheduleRetry(delay: number): void {
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
       if (this.running) void this.connect();
     }, delay);
     this.retryTimer.unref?.();
+  }
+
+  /** The soonest an early dial may go: now, unless the last dial started too recently. */
+  private earliestEarlyDial(now: number): number {
+    return this.lastDialAt === null ? now : Math.max(now, this.lastDialAt + EARLY_DIAL_GAP_MS);
+  }
+
+  /**
+   * Bring forward a retry the backoff is holding. Links that aren't waiting on
+   * one (connected, dialling, a version mismatch, stopped retrying) are left be.
+   */
+  private dialSoon(): void {
+    const state = this.state;
+    if (state.status !== "unreachable" || state.retryAt === null) return;
+    const now = this.now();
+    const at = this.earliestEarlyDial(now);
+    if (at >= state.retryAt) return;
+    this.clearRetry();
+    if (at <= now) {
+      void this.connect();
+      return;
+    }
+    this.setState({ ...state, retryAt: at });
+    this.scheduleRetry(at - now);
   }
 
   /** Info when what went wrong changed since the last one logged, debug while it repeats. */

@@ -769,6 +769,15 @@ export class SshTransport implements LinkTransport {
       this.known = null;
       this.streamLocal = "unverified";
     }
+    if (options?.routeSuspect) {
+      // The link through this master just stopped answering, and a master
+      // whose connection died stays up until its keepalives give out, taking
+      // every command and forward with it: retire it so this dial starts one
+      // on the network as it is now. What runs through it is this host's and
+      // was riding the same connection.
+      this.known = null;
+      await this.exitMaster(controlPathFor(this.options.clientDir, this.options.target), 1_500);
+    }
     let known = this.known;
     if (known && known.configStamp !== (await this.configStamp())) {
       this.known = known = null;

@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import path from "node:path";
-import { app, type WebContents } from "electron";
+import { app, type BrowserWindow, type Event, type WebContents } from "electron";
 import type { HostRestartImpact, RemoteHostsEvent } from "../../../shared/types/ipc/remoteHosts.js";
 import { MetricsLinkMethod, RestartImpactSchema } from "../metrics/linkMethods.js";
 import {
@@ -65,6 +65,7 @@ import { clearPendingRemoteRestoresForHost } from "../../window/openWindowsTrack
 import { forgetRemoteRestoresForHost } from "../../window/remoteWindowRestore.js";
 import { clearHostPartitions } from "../../services/sessionCacheCleaner.js";
 import { getSystemSleepService } from "../../services/SystemSleepService.js";
+import { watchNetwork } from "../../utils/networkWatch.js";
 import { forgetHostState, type HostStateCleanup } from "./forgetHostState.js";
 import { HostRegistry, type RemoteHostsStore } from "./HostRegistry.js";
 import {
@@ -123,6 +124,9 @@ export function setHostAgentsSource(source: AgentsSource | null): void {
 
 /** How long an update waits for a host it has to dial before asking it what a restart ends. */
 const RESTART_IMPACT_CONNECT_MS = 15_000;
+
+/** How often the network is compared while an ssh host's connection is wanted. */
+const HOST_NETWORK_POLL_MS = 1_000;
 
 /** `onRegistered` runs synchronously, before window setup awaits anything. */
 type WindowOpener = (options?: { onRegistered?: (windowId: number) => void }) => Promise<number>;
@@ -829,9 +833,16 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     reverseRequests: answerReverseRequest,
     session: { awakeSince },
     awakeSince,
+    watchNetwork: (onChange) => watchNetwork(onChange, { intervalMs: HOST_NETWORK_POLL_MS }),
   });
   const stopWakeWatch = sleep.onWake(() => manager.systemResumed());
   const bindings = new WindowHostBinding();
+  const onWindowFocus = (_event: Event, window: BrowserWindow) => {
+    if (window.isDestroyed()) return;
+    const hostId = bindings.get(window.id);
+    if (!isLocalHostId(hostId)) manager.hostForegrounded(hostId);
+  };
+  app.on("browser-window-focus", onWindowFocus);
   const remoteRouter = new RemoteRouterImpl(manager, bindings, senders);
   router = remoteRouter;
   const client: RemoteHostsClient = new RemoteHostsClient({
@@ -999,6 +1010,7 @@ export function initRemoteHostsClient(hooks: RemoteHostsClientHooks = {}): {
     registry,
     async dispose() {
       stopWakeWatch();
+      app.off("browser-window-focus", onWindowFocus);
       stopStartRechecks();
       stopOwnedHostCleanup();
       unregister();
