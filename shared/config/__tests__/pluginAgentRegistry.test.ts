@@ -124,6 +124,29 @@ describe("pluginAgentRegistry (issue #9560)", () => {
     });
   });
 
+  describe("declared permissionBypassArgs (#16374)", () => {
+    it("copies the args onto the config without claiming assistant support", () => {
+      const declared = ["--approval", "never"];
+      registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, permissionBypassArgs: declared }]);
+      const config = getEffectiveAgentConfig("acme-agent");
+      expect(config?.permissionBypassArgs).toEqual(["--approval", "never"]);
+      expect(config?.permissionBypassArgs).not.toBe(declared);
+      expect(config?.supports).toBeUndefined();
+    });
+
+    it("leaves the field absent when nothing is declared", () => {
+      registerPluginAgents("acme.plugin", [ACME_AGENT]);
+      expect(getEffectiveAgentConfig("acme-agent")).not.toHaveProperty("permissionBypassArgs");
+    });
+
+    it("survives the structured clone the snapshot broadcast goes through", () => {
+      registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, permissionBypassArgs: ["--yolo"] }]);
+      const cloned = structuredClone(getPluginAgentRegistry());
+      setPluginAgentRegistry(cloned);
+      expect(getEffectiveAgentConfig("acme-agent")?.permissionBypassArgs).toEqual(["--yolo"]);
+    });
+  });
+
   describe("declared resume (#13687)", () => {
     const HERMES: PluginAgentContribution = {
       ...ACME_AGENT,

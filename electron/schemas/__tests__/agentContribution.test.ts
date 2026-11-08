@@ -379,7 +379,7 @@ describe("permissionBypassArgs (#16374)", () => {
     expect(parses(["--token=${settings:apiToken}"])).toBe(false);
   });
 
-  it("rejects a manifest whose default args already carry the declared flag", () => {
+  describe("kept out of args every launch or resume carries", () => {
     const schema = getPluginManifestSchema("user");
     const withAgent = (agent: Record<string, unknown>) =>
       schema.safeParse(
@@ -388,24 +388,63 @@ describe("permissionBypassArgs (#16374)", () => {
           contributes: { agents: [{ ...VALID_AGENT, ...agent }] },
         })
       );
+    const issuePaths = (agent: Record<string, unknown>) =>
+      withAgent(agent).error?.issues.map((issue) => issue.path.join(".")) ?? [];
 
-    const carried = withAgent({ args: ["--tui", "--yolo"], permissionBypassArgs: ["--yolo"] });
-    expect(carried.success).toBe(false);
-    expect(carried.error?.issues.map((issue) => issue.path.join("."))).toContain(
-      "contributes.agents.0.args"
-    );
-    expect(
-      withAgent({
-        args: ["--approval", "never"],
-        permissionBypassArgs: ["--approval", "never"],
-      }).success
-    ).toBe(false);
+    it("rejects a declared flag in the default args", () => {
+      expect(issuePaths({ args: ["--tui", "--yolo"], permissionBypassArgs: ["--yolo"] })).toEqual([
+        "contributes.agents.0.args",
+      ]);
+      expect(
+        issuePaths({ args: ["--approval", "never"], permissionBypassArgs: ["--approval", "never"] })
+      ).toEqual(["contributes.agents.0.args"]);
+    });
 
-    expect(
-      withAgent({ args: ["--approval", "ask"], permissionBypassArgs: ["--approval", "never"] })
-        .success
-    ).toBe(true);
-    expect(withAgent({ args: ["--tui"], permissionBypassArgs: ["--yolo"] }).success).toBe(true);
-    expect(withAgent({ permissionBypassArgs: ["--yolo"] }).success).toBe(true);
+    it("rejects any one declared option, not only the whole declaration", () => {
+      expect(
+        issuePaths({ args: ["--yes"], permissionBypassArgs: ["--yes", "--approval", "never"] })
+      ).toEqual(["contributes.agents.0.args"]);
+      expect(
+        issuePaths({
+          args: ["--approval", "never"],
+          permissionBypassArgs: ["--yes", "--approval", "never"],
+        })
+      ).toEqual(["contributes.agents.0.args"]);
+    });
+
+    it("rejects a declared flag in resume args", () => {
+      expect(
+        issuePaths({
+          permissionBypassArgs: ["--yolo"],
+          resume: { kind: "project-scoped", args: ["--continue", "--yolo"] },
+        })
+      ).toEqual(["contributes.agents.0.resume.args"]);
+      expect(
+        issuePaths({
+          permissionBypassArgs: ["--yolo"],
+          resume: {
+            kind: "session-id",
+            args: ["--resume", "{sessionId}"],
+            resumeLatestArgs: ["--continue", "--yolo"],
+          },
+        })
+      ).toEqual(["contributes.agents.0.resume.resumeLatestArgs"]);
+    });
+
+    it("allows the same option with another value, and a shared option prefix", () => {
+      expect(
+        withAgent({ args: ["--approval", "ask"], permissionBypassArgs: ["--approval", "never"] })
+          .success
+      ).toBe(true);
+      expect(
+        withAgent({
+          args: ["-c", "model=fast"],
+          permissionBypassArgs: ["-c", "approval_policy=never"],
+        }).success
+      ).toBe(true);
+      expect(withAgent({ args: ["--tui"], permissionBypassArgs: ["--yolo"] }).success).toBe(true);
+      expect(withAgent({ permissionBypassArgs: ["--yolo"] }).success).toBe(true);
+      expect(withAgent({ args: ["--yolo"] }).success).toBe(true);
+    });
   });
 });

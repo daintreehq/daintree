@@ -325,7 +325,10 @@ export function PluginArchiveInstallConfirmDialog() {
           description, and the denser blocks below need the larger step. */}
       <div className="pt-3 space-y-4">
         <ArchiveIdentityCard intent={current} replacement={replacement} />
-        <ArchivePermissions capabilities={current.manifest.capabilities} />
+        <ArchivePermissions
+          capabilities={current.manifest.capabilities}
+          permissionBypassAgents={current.manifest.permissionBypassAgents}
+        />
         <ArchiveRecipes recipes={current.manifest.recipes} />
         <ArchiveProjectTemplates templates={current.manifest.projectTemplates} />
         {error !== null && (
@@ -534,7 +537,13 @@ function ArchiveProjectTemplates({
  * thing read. Filtered through the built-in list (not the raw manifest array)
  * so duplicates collapse and ordering never depends on declaration order.
  */
-function ArchivePermissions({ capabilities }: { capabilities: readonly string[] }) {
+function ArchivePermissions({
+  capabilities,
+  permissionBypassAgents,
+}: {
+  capabilities: readonly string[];
+  permissionBypassAgents: readonly string[];
+}) {
   const declared = new Set(capabilities);
   const granted = BUILT_IN_PLUGIN_CAPABILITIES.filter((c) => declared.has(c)).sort(
     (a, b) =>
@@ -565,7 +574,11 @@ function ArchivePermissions({ capabilities }: { capabilities: readonly string[] 
           )}
           <ul className="space-y-2 pt-0.5">
             {granted.map((capability: BuiltInPluginCapability) => (
-              <CapabilityRow key={capability} capability={capability} />
+              <CapabilityRow
+                key={capability}
+                capability={capability}
+                permissionBypassAgents={permissionBypassAgents}
+              />
             ))}
           </ul>
         </>

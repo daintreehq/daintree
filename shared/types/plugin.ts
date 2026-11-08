@@ -3975,6 +3975,13 @@ export interface PluginArchiveManifestPreview {
    * install is where the user first hears about it.
    */
   projectTemplates: Array<{ title: string; projectPlugins: string[] }>;
+  /**
+   * Contributed agents, by name, that declare the flag their CLI takes to skip
+   * permission prompts (#16374). Declaring it turns nothing on, but the agent
+   * then runs without prompts whenever the person's Skip permission prompts
+   * setting says so, which install is the place to say.
+   */
+  permissionBypassAgents: string[];
 }
 
 /**

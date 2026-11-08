@@ -426,6 +426,38 @@ describe("PluginDetailPane capabilities", () => {
     expect(screen.getByText("https://api.example.com/v1")).toBeTruthy();
   });
 
+  it("names an agent that can skip permission prompts under the agent:register row (#16374)", () => {
+    const agent = { command: "acme", color: "#3366ff", iconId: "claude" };
+    const base = makePlugin().manifest;
+    renderPane(
+      withCapabilities(["agent:register"], {
+        manifest: {
+          ...base,
+          capabilities: ["agent:register"],
+          contributes: {
+            ...base.contributes,
+            agents: [
+              { ...agent, id: "hermes", name: "Hermes", permissionBypassArgs: ["--yolo"] },
+              { ...agent, id: "plain", name: "Plain" },
+            ],
+          },
+        },
+      })
+    );
+    expect(
+      screen.getByText(
+        "Hermes can run without permission prompts when you turn on Skip permission prompts"
+      )
+    ).toBeTruthy();
+    expect(screen.queryByText(/Plain can run/)).toBeNull();
+  });
+
+  it("says nothing about permission prompts when no agent declares a bypass flag (#16374)", () => {
+    renderPane(withCapabilities(["agent:register"]));
+    expect(screen.getByText("Register agent CLIs")).toBeTruthy();
+    expect(screen.queryByText(/without permission prompts/)).toBeNull();
+  });
+
   it("renders capabilities in BUILT_IN_PLUGIN_CAPABILITIES order, not manifest order", () => {
     // Declared shell:exec first, but fs:project-read sorts earlier in the canon.
     renderPane(withCapabilities(["shell:exec", "fs:project-read"]));

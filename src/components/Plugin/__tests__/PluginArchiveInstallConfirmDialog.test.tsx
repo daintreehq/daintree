@@ -61,6 +61,7 @@ function intent(overrides: Partial<PluginArchiveInstallIntent> = {}): PluginArch
       capabilities: ["fs:project-read", "network:fetch"],
       recipes: { count: 0, names: [] },
       projectTemplates: [],
+      permissionBypassAgents: [],
     },
     ...overrides,
   };
@@ -154,6 +155,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           capabilities: ["fs:project-read", "shell:exec", "network:fetch"],
           recipes: { count: 0, names: [] },
           projectTemplates: [],
+          permissionBypassAgents: [],
         },
       })
     );
@@ -183,6 +185,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           capabilities: ["network:fetch", "git:write"],
           recipes: { count: 0, names: [] },
           projectTemplates: [],
+          permissionBypassAgents: [],
         },
       })
     );
@@ -205,6 +208,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           capabilities: ["fs:project-read", "clipboard:read"],
           recipes: { count: 0, names: [] },
           projectTemplates: [],
+          permissionBypassAgents: [],
         },
       })
     );
@@ -214,6 +218,36 @@ describe("PluginArchiveInstallConfirmDialog", () => {
       screen.queryByText("Requests sensitive permissions — review before installing")
     ).toBeNull();
     expect(screen.queryByText("Can run arbitrary commands on your machine")).toBeNull();
+  });
+
+  it("says which contributed agents can run without permission prompts (#16374)", () => {
+    render(<PluginArchiveInstallConfirmDialog />);
+    const base = intent().manifest;
+    enqueue(
+      intent({
+        manifest: {
+          ...base,
+          capabilities: ["agent:register"],
+          permissionBypassAgents: ["Hermes", "Atlas"],
+        },
+      })
+    );
+
+    expect(screen.getByText("Register agent CLIs")).toBeTruthy();
+    expect(
+      screen.getByText(
+        "Hermes and Atlas can run without permission prompts when you turn on Skip permission prompts"
+      )
+    ).toBeTruthy();
+  });
+
+  it("says nothing about permission prompts for agents that declare no bypass flag (#16374)", () => {
+    render(<PluginArchiveInstallConfirmDialog />);
+    const base = intent().manifest;
+    enqueue(intent({ manifest: { ...base, capabilities: ["agent:register"] } }));
+
+    expect(screen.getByText("Register agent CLIs")).toBeTruthy();
+    expect(screen.queryByText(/without permission prompts/)).toBeNull();
   });
 
   it("says so explicitly when no authors or capabilities are declared", () => {
@@ -228,6 +262,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           capabilities: [],
           recipes: { count: 0, names: [] },
           projectTemplates: [],
+          permissionBypassAgents: [],
         },
       })
     );
@@ -248,6 +283,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           capabilities: [],
           recipes: { count: 0, names: [] },
           projectTemplates: [],
+          permissionBypassAgents: [],
         },
       })
     );
@@ -268,6 +304,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           capabilities: [],
           recipes: { count: 0, names: [] },
           projectTemplates: [],
+          permissionBypassAgents: [],
         },
       })
     );
@@ -289,6 +326,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           capabilities: [],
           recipes: { count: 0, names: [] },
           projectTemplates: [],
+          permissionBypassAgents: [],
         },
       })
     );
@@ -311,6 +349,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           capabilities: [],
           recipes: { count: 0, names: [] },
           projectTemplates: [],
+          permissionBypassAgents: [],
         } as unknown as PluginArchiveInstallIntent["manifest"],
       })
     );
@@ -330,6 +369,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
           capabilities: [],
           recipes: { count: 0, names: [] },
           projectTemplates: [],
+          permissionBypassAgents: [],
         },
       })
     );

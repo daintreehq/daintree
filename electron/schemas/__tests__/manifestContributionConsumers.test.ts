@@ -1983,6 +1983,16 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       ],
       note: "Kept as data on resumeTemplate across the snapshot broadcast, then expanded into the function-shaped resume in each process's effective registry.",
     },
+    permissionBypassArgs: {
+      mode: "derived-input",
+      consumers: [
+        { file: AGENT_REGISTRY, symbol: "contributionToAgentConfig" },
+        { file: "shared/types/agentSettings.ts", symbol: "getDefaultDangerousArgs" },
+        { file: "shared/types/agentSettings.ts", symbol: "isAgentBypassSupported" },
+        { file: "electron/setup/archiveInstallIntent.ts", symbol: "permissionBypassAgents" },
+      ],
+      note: "Names the CLI's bypass flag only: it is the agent's default bypass args and its eligibility for the global skip switch, added to a launch only when the resolved setting is on, and the agents declaring it are named in the install consent.",
+    },
   },
   processTools: {
     command: {
