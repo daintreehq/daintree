@@ -9,15 +9,15 @@ export type DiffNoteSide = "old" | "new";
  * lets a moved diff mark the note stale instead of pinning it to whatever line
  * now sits at that number.
  */
-export type DiffNoteAnchor =
-  | { kind: "file" }
-  | {
-      kind: "lines";
-      side: DiffNoteSide;
-      startLine: number;
-      endLine: number;
-      contentHash: string;
-    };
+export type DiffNoteAnchor = { kind: "file" } | (DiffNoteLines & { contentHash: string });
+
+/** A run of lines on one side, before a note has been written against their text. */
+export interface DiffNoteLines {
+  kind: "lines";
+  side: DiffNoteSide;
+  startLine: number;
+  endLine: number;
+}
 
 export interface DiffNote {
   id: string;
@@ -114,6 +114,22 @@ export function hashLineRange(
   return hashText(joined);
 }
 
+/** The rows a range covers, skipping any line that isn't rendered. */
+export function changeKeysForLines(
+  index: DiffLineIndex,
+  side: DiffNoteSide,
+  startLine: number,
+  endLine: number
+): string[] {
+  const lines = side === "old" ? index.old : index.new;
+  const keys: string[] = [];
+  for (let line = startLine; line <= endLine; line++) {
+    const info = lines.get(line);
+    if (info) keys.push(info.key);
+  }
+  return keys;
+}
+
 export type DiffNotePlacement =
   | { status: "file" }
   | { status: "anchored"; widgetKey: string; selectedKeys: string[] }
@@ -134,18 +150,13 @@ export function placeDiffNote(note: DiffNote, index: DiffLineIndex): DiffNotePla
   const hash = hashLineRange(index, anchor.side, anchor.startLine, anchor.endLine);
   if (hash === null) return { status: "unplaced" };
   if (hash !== anchor.contentHash) return { status: "stale" };
-  const lines = anchor.side === "old" ? index.old : index.new;
-  const selectedKeys: string[] = [];
-  for (let line = anchor.startLine; line <= anchor.endLine; line++) {
-    const info = lines.get(line);
-    if (info) selectedKeys.push(info.key);
-  }
+  const selectedKeys = changeKeysForLines(index, anchor.side, anchor.startLine, anchor.endLine);
   const last = selectedKeys[selectedKeys.length - 1];
   if (last === undefined) return { status: "unplaced" };
   return { status: "anchored", widgetKey: last, selectedKeys };
 }
 
-export function formatDiffNoteLines(anchor: DiffNoteAnchor): string {
+export function formatDiffNoteLines(anchor: { kind: "file" } | DiffNoteLines): string {
   if (anchor.kind === "file") return "whole file";
   const range =
     anchor.startLine === anchor.endLine
