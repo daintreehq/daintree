@@ -32,6 +32,66 @@ import {
 const noop = () => {};
 
 describe("AutocompleteMenu", () => {
+  describe("note", () => {
+    const rows: AutocompleteItem[] = [{ key: "/one", label: "/one", insertText: "/one" }];
+
+    it("sits outside the rows, where the arrow keys and Enter never reach it", () => {
+      const onSelect = vi.fn();
+      const onClick = vi.fn();
+      const { container } = render(
+        <AutocompleteMenu
+          isOpen
+          items={rows}
+          selectedIndex={0}
+          onSelect={onSelect}
+          emptyMessage="No matches"
+          note={{ text: "Something to know", onClick }}
+        />
+      );
+
+      expect(screen.getAllByRole("option")).toHaveLength(1);
+      const listbox = screen.getByRole("listbox");
+      const note = container.querySelector<HTMLElement>("[data-autocomplete-note]")!;
+      expect(listbox.contains(note)).toBe(false);
+      expect(note.tabIndex).toBe(-1);
+
+      fireEvent.click(note);
+      expect(onClick).toHaveBeenCalledTimes(1);
+      expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    it("stays while the rows narrow to none, and is spoken", () => {
+      const { container } = render(
+        <AutocompleteMenu
+          isOpen
+          items={[]}
+          selectedIndex={-1}
+          onSelect={noop}
+          emptyMessage="No matches"
+          note={{ text: "Something to know", onClick: noop }}
+        />
+      );
+
+      expect(container.querySelector("[data-autocomplete-note]")?.textContent).toBe(
+        "Something to know"
+      );
+      expect(screen.getByRole("status").textContent).toContain("Something to know");
+    });
+
+    it("isn't drawn without one", () => {
+      const { container } = render(
+        <AutocompleteMenu
+          isOpen
+          items={rows}
+          selectedIndex={0}
+          onSelect={noop}
+          emptyMessage="No matches"
+        />
+      );
+      expect(container.querySelector("[data-autocomplete-note]")).toBeNull();
+    });
+  });
+
   it("moves the one cursor with the pointer instead of lighting a second row", () => {
     const onHoverIndex = vi.fn();
     const rows: AutocompleteItem[] = ["/one", "/two", "/three"].map((label) => ({

@@ -304,7 +304,12 @@ describe("invokeForEndpoint", () => {
     expect(raw).not.toHaveBeenCalled();
   });
 
-  it.each([SHELL_CHANNEL, UNCLASSIFIED_CHANNEL])(
+  it.each([
+    SHELL_CHANNEL,
+    UNCLASSIFIED_CHANNEL,
+    "user-prompt-templates:list",
+    "user-prompt-templates:open-folder",
+  ])(
     "refuses %s over a link even with a context handler",
     async (channel) => {
       const handler = vi.fn(() => "ran");
@@ -445,6 +450,35 @@ describe("remote router", () => {
     cleanups.push(typedHandle(SHELL_CHANNEL as never, (() => "local") as never));
     await expect(invokeLocal(SHELL_CHANNEL, makeEvent())).resolves.toEqual(wrapSuccess("local"));
     expect(router.forwardInvoke).not.toHaveBeenCalled();
+  });
+
+  // A person's prompt templates are this machine's, even in a window on a host
+  // (#16398), while the plugin templates beside them come from that host.
+  it.each(["user-prompt-templates:list", "user-prompt-templates:open-folder"])(
+    "answers %s from this machine for a window driving a host",
+    async (channel) => {
+      const router = installRouter();
+      const handler = vi.fn(() => "from-this-machine");
+      cleanups.push(typedHandle(channel as never, handler as never));
+
+      await expect(invokeLocal(channel, makeEvent())).resolves.toEqual(
+        wrapSuccess("from-this-machine")
+      );
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(router.forwardInvoke).not.toHaveBeenCalled();
+    }
+  );
+
+  it("sends a window driving a host to that host for its plugins, templates included", async () => {
+    const router = installRouter();
+    const local = vi.fn(() => "this-machine's plugins");
+    ipcMainMock.handle("plugin:list", local);
+
+    await expect(invokeLocal("plugin:list", makeEvent())).resolves.toEqual(wrapSuccess("from-host"));
+
+    expect(router.forwardInvoke).toHaveBeenCalledWith("box", 5, "plugin:list", []);
+    expect(local).not.toHaveBeenCalled();
   });
 
   it("leaves senders that are not remote-bound untouched", async () => {

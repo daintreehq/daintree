@@ -1464,6 +1464,10 @@ export const CHANNELS = {
   AGENT_TOOLBAR_PINS_SET: "agent-toolbar-pins:set",
   AGENT_TOOLBAR_PINS_CHANGED: "agent-toolbar-pins:changed",
 
+  // The person's own prompt templates, from a folder on this machine (#16398)
+  USER_PROMPT_TEMPLATES_LIST: "user-prompt-templates:list",
+  USER_PROMPT_TEMPLATES_OPEN_FOLDER: "user-prompt-templates:open-folder",
+
   // An agent's accounts (#16040)
   AGENT_ACCOUNTS_ADD: "agent-accounts:add",
   AGENT_ACCOUNTS_REMOVE: "agent-accounts:remove",

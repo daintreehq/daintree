@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { buildSlashCommandsPreloadBindings } from "../handlers/slashCommands.preload.js";
+import { buildUserPromptTemplatesPreloadBindings } from "../handlers/userPromptTemplates.preload.js";
 import { buildGlobalEnvPreloadBindings } from "../handlers/globalEnv.preload.js";
 import { buildHelpPreloadBindings } from "../handlers/help.preload.js";
 import { buildAccessibilityPreloadBindings } from "../handlers/accessibility.preload.js";
@@ -387,6 +388,21 @@ describe("leaf preload namespace bindings", () => {
 
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("privacy:set-telemetry-level", "errors");
+    });
+  });
+
+  describe("userPromptTemplates", () => {
+    it("routes list() and openFolder() to their channels", async () => {
+      const invoke = vi.fn().mockResolvedValue(undefined);
+      const bindings = buildUserPromptTemplatesPreloadBindings(invoke);
+
+      await bindings.list();
+      await bindings.openFolder();
+
+      expect(invoke.mock.calls).toEqual([
+        ["user-prompt-templates:list"],
+        ["user-prompt-templates:open-folder"],
+      ]);
     });
   });
 

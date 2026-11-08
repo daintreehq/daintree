@@ -1986,6 +1986,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["terminal-when-done:set"]["args"]
     ): Promise<IpcInvokeMap["terminal-when-done:set"]["result"]>;
   };
+  userPromptTemplates: {
+    list(
+      ...args: IpcInvokeMap["user-prompt-templates:list"]["args"]
+    ): Promise<IpcInvokeMap["user-prompt-templates:list"]["result"]>;
+    openFolder(
+      ...args: IpcInvokeMap["user-prompt-templates:open-folder"]["args"]
+    ): Promise<IpcInvokeMap["user-prompt-templates:open-folder"]["result"]>;
+  };
   voiceDictionary: {
     acceptSuggestion(
       ...args: IpcInvokeMap["voice-dictionary:accept-suggestion"]["args"]

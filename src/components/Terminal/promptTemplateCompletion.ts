@@ -1,7 +1,7 @@
-import type { PluginPromptTemplate } from "@/store/pluginRuntimeStore";
+import type { PromptTemplateEntry } from "@/hooks/usePromptTemplates";
 import type { AutocompleteItem } from "./AutocompleteMenu";
 
-/** The `/` menu's band for plugin prompt templates (#13799), after the agent's own commands. */
+/** The `/` menu's band for prompt templates (#13799), after the agent's own commands. */
 export const PROMPT_TEMPLATE_BAND = "Prompt templates";
 
 const WORD_BREAK = /[^\p{L}\p{N}]+/u;
@@ -12,18 +12,18 @@ function words(text: string): string[] {
 
 /**
  * How well a template answers a `/` query, or null when it does not. Every
- * word typed must start a word of the title, the template's id or the plugin's
- * name, or sit inside the title; a title hit ranks above the rest. The
+ * word typed must start a word of the title, the template's id or the name of
+ * who it belongs to, or sit inside the title; a title hit ranks above the rest. The
  * description is left out: the menu narrows on every keystroke, and prose
  * matches there would put templates beside commands they have nothing to do with.
  */
-export function scorePromptTemplate(entry: PluginPromptTemplate, query: string): number | null {
+export function scorePromptTemplate(entry: PromptTemplateEntry, query: string): number | null {
   const terms = words(query);
   if (terms.length === 0) return query.trim() === "" ? 0 : null;
   const title = entry.template.title.toLowerCase();
   const titleWords = words(title);
   const idWords = words(entry.template.id);
-  const pluginWords = words(entry.pluginName);
+  const sourceWords = words(entry.sourceName);
 
   let total = 0;
   for (const term of terms) {
@@ -31,24 +31,24 @@ export function scorePromptTemplate(entry: PluginPromptTemplate, query: string):
     else if (titleWords.some((w) => w.startsWith(term))) total += 6;
     else if (idWords.some((w) => w.startsWith(term))) total += 5;
     else if (title.includes(term)) total += 4;
-    else if (pluginWords.some((w) => w.startsWith(term))) total += 3;
+    else if (sourceWords.some((w) => w.startsWith(term))) total += 3;
     else return null;
   }
   return total;
 }
 
 /**
- * The templates a `/` query matches, best first and otherwise in the order the
- * plugins declare them, as rows of the template band. A row inserts nothing:
+ * The templates a `/` query matches, best first and otherwise in the order
+ * given, as rows of the template band. A row inserts nothing:
  * picking it opens the template's form or fills the draft (`template`).
  */
 export function toPromptTemplateItems(
-  templates: readonly PluginPromptTemplate[],
+  templates: readonly PromptTemplateEntry[],
   query: string
 ): AutocompleteItem[] {
   return templates
     .map((entry, order) => ({ entry, order, score: scorePromptTemplate(entry, query) }))
-    .filter((c): c is { entry: PluginPromptTemplate; order: number; score: number } => {
+    .filter((c): c is { entry: PromptTemplateEntry; order: number; score: number } => {
       return c.score !== null;
     })
     .sort((a, b) => b.score - a.score || a.order - b.order)
@@ -57,7 +57,7 @@ export function toPromptTemplateItems(
       label: entry.template.title,
       insertText: "",
       description: entry.template.description,
-      badge: entry.pluginName,
+      badge: entry.sourceName,
       group: PROMPT_TEMPLATE_BAND,
       template: { key: entry.key, opensForm: entry.template.args.length > 0 },
     }));

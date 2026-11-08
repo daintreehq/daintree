@@ -1418,6 +1418,15 @@ export const SETTINGS_REGISTRY = [
         ],
       },
       {
+        id: "agents-prompt-templates",
+        subtab: "general",
+        subtabLabel: "General",
+        section: "Prompt templates",
+        title: "Prompt templates",
+        description: "Your own reusable prompts, kept as Markdown files, in every agent's composer",
+        keywords: ["prompt", "template", "markdown", "folder", "slash", "composer", "frontmatter"],
+      },
+      {
         id: "agents-hybrid-input",
         subtab: "general",
         subtabLabel: "General",

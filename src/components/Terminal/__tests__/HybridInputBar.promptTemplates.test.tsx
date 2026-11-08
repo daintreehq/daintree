@@ -5,6 +5,8 @@ import { EditorView, runScopeHandlers } from "@codemirror/view";
 import { undo } from "@codemirror/commands";
 import type { PtyPanelData } from "@shared/types/panel";
 import { getBuiltinSlashCommands } from "@shared/types";
+import type { PromptTemplateArgument, PromptTemplateContribution } from "@shared/types/plugin";
+import type { UserPromptTemplatesSnapshot } from "@shared/types/ipc/userPromptTemplates";
 import type { PluginPromptTemplate } from "@/store/pluginRuntimeStore";
 
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -18,6 +20,11 @@ import {
 } from "@/store/dictationRangeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import {
+  _resetUserPromptTemplateStoreForTest,
+  useUserPromptTemplateStore,
+} from "@/store/userPromptTemplateStore";
+import { actionService } from "@/services/ActionService";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { toSlashAutocompleteItems } from "@/hooks/slashAutocompleteItems";
 import { HybridInputBar } from "../HybridInputBar";
@@ -71,6 +78,7 @@ beforeEach(() => {
   setCurrentViewStore(createWorktreeStore());
   useTerminalInputStore.setState({ draftInputs: new Map() });
   usePluginRuntimeStore.setState({ promptTemplates: [] });
+  _resetUserPromptTemplateStoreForTest();
   useProjectStore.setState({ currentProject: null });
   const panel = {
     id: TERMINAL_ID,
@@ -589,6 +597,155 @@ describe("HybridInputBar prompt templates in the `/` menu", () => {
     expect(refresh).toHaveBeenCalledTimes(1);
     await type("/");
     expect(refresh).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("HybridInputBar's own prompt templates in the `/` menu", () => {
+  const mine = (body = "Run the tests.", args: PromptTemplateArgument[] = []) => ({
+    id: "boilerplate",
+    title: "Add my boilerplate",
+    description: "From a file in my folder.",
+    body,
+    args,
+  });
+
+  const withFolder = (read: () => UserPromptTemplatesSnapshot) => {
+    const list = vi.fn(async () => read());
+    Reflect.set(window.electron, "userPromptTemplates", { list });
+    return list;
+  };
+
+  const folder = (
+    templates: PromptTemplateContribution[],
+    problems: UserPromptTemplatesSnapshot["problems"] = []
+  ): UserPromptTemplatesSnapshot => ({ directory: "/me/.daintree/templates", templates, problems });
+
+  it("lists a template from the folder in the band, attributed to the person", async () => {
+    withFolder(() => folder([mine()]));
+    const { type, rows, bands } = await renderComposer("");
+
+    await type("/boiler");
+
+    expect(bands()).toContain(PROMPT_TEMPLATE_BAND);
+    expect(rows()).toEqual([expect.stringContaining("Add my boilerplate")]);
+    expect(rows()[0]).toContain("You");
+  });
+
+  it("offers it in every project, beside that project's plugin templates", async () => {
+    withFolder(() => folder([mine()]));
+    useProjectStore.setState({
+      currentProject: { id: "p1", name: "Repo", path: "/repo", emoji: "", lastOpened: 0 },
+    });
+    const { type, labels } = await renderComposer("", [entry("Run them.")]);
+
+    await type("/boiler");
+
+    expect(labels()).toEqual(["Add my boilerplate", "Add boilerplate"]);
+  });
+
+  it.each([["Enter"], ["Tab"]])("fills the draft on %s and sends nothing", async (key) => {
+    withFolder(() => folder([mine()]));
+    const { view, type, press, onSend } = await renderComposer("");
+
+    await type("/boiler");
+    await press(key);
+
+    expect(view.state.doc.toString()).toBe("Run the tests.");
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("opens the same form for its arguments, says whose it is, and sends nothing", async () => {
+    withFolder(() =>
+      folder([mine("Tell {{who}} when done.", [{ name: "who", label: "Who", required: true }])])
+    );
+    const { view, type, press, onSend } = await renderComposer("");
+
+    await type("/boiler");
+    await press("Enter");
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog.textContent).toContain("Your template");
+    fireEvent.change(screen.getByLabelText("Who"), { target: { value: "Ada" } });
+    fireEvent.click(screen.getByRole("button", { name: "Fill draft" }));
+    await act(async () => {});
+
+    expect(view.state.doc.toString()).toBe("Tell Ada when done.");
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("reads the folder once per opening, so a saved or removed file shows at the next `/`", async () => {
+    let templates = [mine()];
+    const list = withFolder(() => folder(templates));
+    const { type, press, rows, view } = await renderComposer("");
+    expect(list).not.toHaveBeenCalled();
+
+    await type("/b");
+    await type("oiler");
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(rows()).toHaveLength(1);
+
+    await press("Escape");
+    await act(async () => {
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" } });
+    });
+    templates = [];
+
+    await type("/boiler");
+    expect(list).toHaveBeenCalledTimes(2);
+    expect(rows()).toEqual([]);
+  });
+
+  it("closes the form when the next read finds its file gone", async () => {
+    withFolder(() => folder([mine("Tell {{who}}.", [{ name: "who", label: "Who" }])]));
+    const { type, press } = await renderComposer("");
+
+    await type("/boiler");
+    await press("Enter");
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+
+    act(() => {
+      useUserPromptTemplateStore.setState({ templates: [] });
+    });
+    await act(async () => {});
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("names a left-out file's problem in the menu and goes to it in Settings", async () => {
+    const dispatch = vi
+      .spyOn(actionService, "dispatch")
+      .mockResolvedValue({ ok: true } as Awaited<ReturnType<typeof actionService.dispatch>>);
+    withFolder(() => folder([mine()], [{ fileName: "bad.md", reason: "title is missing" }]));
+    const { type, rows, container } = await renderComposer("");
+
+    await type("/boiler");
+
+    expect(rows()).toEqual([expect.stringContaining("Add my boilerplate")]);
+    const note = container.querySelector<HTMLElement>("[data-autocomplete-note]")!;
+    expect(note.textContent).toContain("weren't loaded");
+    fireEvent.click(note);
+    expect(dispatch).toHaveBeenCalledWith(
+      "app.settings.openTab",
+      expect.objectContaining({ tab: "agents", sectionId: "agents-prompt-templates" }),
+      { source: "user" }
+    );
+  });
+
+  it("shows no note while the folder is healthy, or in another menu", async () => {
+    withFolder(() => folder([mine()]));
+    const { type, container, view } = await renderComposer("");
+    await type("/boiler");
+    expect(container.querySelector("[data-autocomplete-note]")).toBeNull();
+
+    act(() => {
+      useUserPromptTemplateStore.setState({
+        problems: [{ fileName: "bad.md", reason: "title is missing" }],
+      });
+    });
+    await act(async () => {
+      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: "" } });
+    });
+    await type("@");
+    expect(container.querySelector("[data-autocomplete-note]")).toBeNull();
   });
 });
 
