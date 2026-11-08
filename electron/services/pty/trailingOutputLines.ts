@@ -49,7 +49,10 @@ function lineStartAtOrBefore(text: string, offset: number): number {
  * towards true only costs a whole-text strip.
  */
 function oscMayCrossWindowStart(text: string, start: number): boolean {
-  const opener = Math.max(text.lastIndexOf("\x1b]", start - 1), text.lastIndexOf("\x1b\x1b", start - 1));
+  const opener = Math.max(
+    text.lastIndexOf("\x1b]", start - 1),
+    text.lastIndexOf("\x1b\x1b", start - 1)
+  );
   if (opener === -1) return false;
   const bel = text.indexOf("\x07", opener + 1);
   if (bel !== -1 && bel < start) return false;
