@@ -560,8 +560,9 @@ describe("a popped-out place across the window's own changes (#16338)", () => {
 
     reload(view);
     reload(view);
-    // The first reload commits; the second still replaces that page.
+    // The first reload commits, or fails; the second still replaces that page.
     view.emit("did-navigate");
+    view.emit("did-fail-load", {}, -3, "ERR_ABORTED", "app://", true);
     expect(peekPendingPopOut()).toBeNull();
 
     view.emit("did-stop-loading");
