@@ -310,22 +310,22 @@ describe("ScheduleEditor: Run when Daintree isn't running (#15990)", () => {
   });
 });
 
-describe("ScheduleEditor: Run when Daintree isn't running under the project's switches (#16168)", () => {
+describe("ScheduleEditor: Run when Daintree isn't running under the project's switches (#16168, #16448)", () => {
   it.each([
     [
       "starting Daintree is off",
       { ...STARTS, startWhenClosed: false },
-      "Turn on Start Daintree for due schedules for this project to use this",
+      'Turn on "Start Daintree for due schedules" in the Schedules tab behind the editor to use this',
     ],
     [
       "schedules are off",
       { ...STARTS, schedulesOn: false },
-      "Turn on Schedules on for this project to use this",
+      'Turn on "Schedules on" in the Schedules tab behind the editor to use this',
     ],
     [
       "both are off",
       { ...STARTS, schedulesOn: false, startWhenClosed: false },
-      "Turn on Schedules on and Start Daintree for due schedules for this project to use this",
+      'Turn on "Schedules on" and "Start Daintree for due schedules" in the Schedules tab behind the editor to use this',
     ],
   ])(
     "never reads as on while %s, and says which switch it waits on",

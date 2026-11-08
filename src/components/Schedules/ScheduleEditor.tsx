@@ -45,6 +45,7 @@ import { logError } from "@/utils/logger";
 import { useFirstAgentOptions } from "@/components/Worktree/hooks/useFirstAgentOptions";
 import { useScheduleLaunchOptions } from "./useScheduleLaunchOptions";
 import { CadencePicker } from "./CadencePicker";
+import { SCHEDULES_ON_LABEL, START_WHEN_CLOSED_LABEL } from "./ScheduleSwitches";
 import { scheduleOsJobKindHere } from "./scheduleOsJobKind";
 import { choiceFromCron, choiceIssue, type CadenceChoice } from "./cadenceChoice";
 import {
@@ -188,11 +189,13 @@ function runWhenClosedGateReason(switches: ProjectScheduleSwitches | null): stri
   if (!switches) return null;
   const { schedulesOn, startWhenClosed } = switches;
   if (!schedulesOn && !startWhenClosed) {
-    return "Turn on Schedules on and Start Daintree for due schedules for this project to use this";
+    return `Turn on "${SCHEDULES_ON_LABEL}" and "${START_WHEN_CLOSED_LABEL}" in the Schedules tab behind the editor to use this`;
   }
-  if (!schedulesOn) return "Turn on Schedules on for this project to use this";
+  if (!schedulesOn) {
+    return `Turn on "${SCHEDULES_ON_LABEL}" in the Schedules tab behind the editor to use this`;
+  }
   if (!startWhenClosed) {
-    return "Turn on Start Daintree for due schedules for this project to use this";
+    return `Turn on "${START_WHEN_CLOSED_LABEL}" in the Schedules tab behind the editor to use this`;
   }
   return null;
 }
