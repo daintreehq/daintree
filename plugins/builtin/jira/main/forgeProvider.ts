@@ -133,13 +133,17 @@ let cachedViewer: { scope: string; viewer: Viewer } | null = null;
 type PreviousAssignee = { accountId: string; user: ForgeUser } | null;
 
 /**
- * By connection and issue. Jira issues take one assignee, so the Undo has to put
- * that person back rather than leave the issue unassigned, and leave it alone
- * when it was already the viewer's. Undo is offered for seconds, so only the
- * latest few are kept.
+ * By connection and issue, one record per "Assign to me" still open to Undo,
+ * latest last. Jira issues take one assignee, so the Undo has to put that person
+ * back rather than leave the issue unassigned, and leave it alone when it was
+ * already the viewer's. Two worktrees made from one issue each offer an Undo, so
+ * the second assignment, which finds the issue already the viewer's, must not
+ * take the first one's record. Undo is offered for seconds, so only the latest
+ * few are kept.
  */
-const previousAssignees = new Map<string, PreviousAssignee>();
+const previousAssignees = new Map<string, PreviousAssignee[]>();
 const PREVIOUS_ASSIGNEES_LIMIT = 50;
+const PREVIOUS_ASSIGNEES_PER_ISSUE = 10;
 
 export function clearJiraCaches(): void {
   statsCache.clear();
@@ -176,12 +180,21 @@ function previousAssigneeKey(op: Op, issueId: string): string {
 }
 
 function rememberPreviousAssignee(key: string, previous: PreviousAssignee): void {
+  const records = [...(previousAssignees.get(key) ?? []), previous];
   previousAssignees.delete(key);
-  previousAssignees.set(key, previous);
+  previousAssignees.set(key, records.slice(-PREVIOUS_ASSIGNEES_PER_ISSUE));
   if (previousAssignees.size > PREVIOUS_ASSIGNEES_LIMIT) {
     const oldest = previousAssignees.keys().next().value;
     if (oldest !== undefined) previousAssignees.delete(oldest);
   }
+}
+
+function forgetPreviousAssignee(key: string, record: PreviousAssignee): void {
+  const records = previousAssignees.get(key);
+  const index = records?.lastIndexOf(record) ?? -1;
+  if (!records || index < 0) return;
+  records.splice(index, 1);
+  if (records.length === 0) previousAssignees.delete(key);
 }
 
 /** Normalize a stored project key, or `null` when it can't be one. */
@@ -241,6 +254,7 @@ async function setAssignee(issueId: string, accountId: string | null, op: Op): P
   await jiraRequest<void>(op.connection, `/issue/${encodeURIComponent(issueId)}/assignee`, {
     method: "PUT",
     body: { accountId },
+    noContent: true,
   });
 }
 
@@ -369,7 +383,7 @@ function pageSizeOf(perPage: number | undefined): number {
 }
 
 /** A comment cursor is the offset of the page's first comment, as this hands it out. */
-function offsetOf(cursor: string | undefined): number {
+function offsetOf(cursor: string | null | undefined): number {
   if (!cursor) return 0;
   const offset = /^\d+$/.test(cursor) ? Number(cursor) : NaN;
   if (!Number.isSafeInteger(offset)) throw new Error("Invalid Jira comments cursor");
@@ -378,6 +392,7 @@ function offsetOf(cursor: string | undefined): number {
 
 interface JiraCommentsResponse {
   startAt?: number;
+  maxResults?: number;
   total?: number;
   comments?: JiraCommentNode[];
 }
@@ -410,10 +425,13 @@ const issueCommentCapability: IssueCommentCapability = {
     const comments = data.comments ?? [];
     const next = (typeof data.startAt === "number" ? data.startAt : startAt) + comments.length;
     const total = typeof data.total === "number" ? data.total : null;
+    // Jira may serve fewer than were asked for, and says how many it meant to.
+    const pageSize =
+      typeof data.maxResults === "number" && data.maxResults > 0 ? data.maxResults : maxResults;
     // An empty page ends the thread whatever the total says, or a total that
     // drifted up would hand out the same cursor forever.
     const hasMore =
-      comments.length > 0 && (total === null ? comments.length >= maxResults : next < total);
+      comments.length > 0 && (total === null ? comments.length >= pageSize : next < total);
     return {
       items: comments.map((node) => mapComment(node, op.connection.siteUrl, issue.key)),
       nextCursor: hasMore ? String(next) : null,
@@ -542,21 +560,27 @@ export const jiraForgeProvider: ForgeIssueProviderImpl = {
     const viewer = await requireViewerFor(username, op);
     const issue = await requireIssueNode(repo, issueNumber, ["assignee"], op);
     const key = previousAssigneeKey(op, issue.id);
-    const previous = previousAssignees.get(key) ?? null;
-    // Only take the issue off the viewer, and only if "Assign to me" put it
-    // there: if someone else picked it up since, or it was already the
-    // viewer's, there is nothing of ours to undo.
-    if (
-      issue.fields?.assignee?.accountId !== viewer.accountId ||
-      previous?.accountId === viewer.accountId
-    ) {
+    // Someone else has picked the issue up since: nothing of ours is left to undo.
+    if (issue.fields?.assignee?.accountId !== viewer.accountId) {
       previousAssignees.delete(key);
+      return assigneesOf(issue);
+    }
+    // `undefined` when nothing is remembered: then this only takes the issue
+    // off the viewer, which is what an agent's unassign asks for.
+    const previous = previousAssignees.get(key)?.at(-1);
+    if (previous === undefined) {
+      await setAssignee(issue.id, null, op);
+      return [];
+    }
+    // That assignment found the issue already the viewer's.
+    if (previous?.accountId === viewer.accountId) {
+      forgetPreviousAssignee(key, previous);
       return assigneesOf(issue);
     }
     // Hand it back to whoever "Assign to me" took it from. A failure keeps the
     // record, so trying again still knows who that was.
     await setAssignee(issue.id, previous?.accountId ?? null, op);
-    previousAssignees.delete(key);
+    forgetPreviousAssignee(key, previous);
     return previous ? [previous.user] : [];
   },
   createIssue: () => notSupported("Creating issues"),

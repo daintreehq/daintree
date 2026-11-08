@@ -650,70 +650,115 @@ const ADA = {
   avatarUrls: { "48x48": "https://avatars.example/ada.png" },
 };
 const BOB = { accountId: "acc-bob", displayName: "Bob Jones" };
+const CAROL = { accountId: "acc-carol", displayName: "Carol Diaz" };
 const ADA_USER = {
   login: "Ada Lovelace",
   avatarUrl: "https://avatars.example/ada.png",
   rawData: { accountId: "acc-ada" },
 };
 const BOB_USER = { login: "Bob Jones", rawData: { accountId: "acc-bob" } };
+const CAROL_USER = { login: "Carol Diaz", rawData: { accountId: "acc-carol" } };
+
+type Person = typeof ADA | typeof BOB | typeof CAROL;
 
 describe("identity", () => {
+  const current = () => jiraForgeProvider.identity!.getCurrentUser();
+
   it("answers with the connection's own account, read once", async () => {
     route({ "/myself": () => json(ADA) });
-    await expect(jiraForgeProvider.identity?.getCurrentUser()).resolves.toEqual(ADA_USER);
-    await expect(jiraForgeProvider.identity?.getCurrentUser()).resolves.toEqual(ADA_USER);
+    await expect(current()).resolves.toEqual(ADA_USER);
+    await expect(current()).resolves.toEqual(ADA_USER);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it("reads the account again once the connection changes", async () => {
     route({ "/myself": () => json(ADA) });
-    await jiraForgeProvider.identity?.getCurrentUser();
+    await current();
     settings = { siteUrl: SITE, email: "bob@example.com" };
     route({ "/myself": () => json(BOB) });
-    await expect(jiraForgeProvider.identity?.getCurrentUser()).resolves.toEqual(BOB_USER);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await expect(current()).resolves.toEqual(BOB_USER);
+    settings = { siteUrl: "https://other.atlassian.net", email: "bob@example.com" };
+    fetchMock.mockImplementation(async () => json(CAROL));
+    await expect(current()).resolves.toEqual(CAROL_USER);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("is null until connected, without calling Jira", async () => {
     settings = { siteUrl: SITE };
-    await expect(jiraForgeProvider.identity?.getCurrentUser()).resolves.toBeNull();
+    await expect(current()).resolves.toBeNull();
     setMemoryToken(null);
     settings = { siteUrl: SITE, email: "ada@example.com" };
-    await expect(jiraForgeProvider.identity?.getCurrentUser()).resolves.toBeNull();
+    await expect(current()).resolves.toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("is null for a refused credential, but lets any other failure through", async () => {
+  it("is null for a refused credential", async () => {
     route({ "/myself": () => json({}, 401) });
-    await expect(jiraForgeProvider.identity?.getCurrentUser()).resolves.toBeNull();
+    await expect(current()).resolves.toBeNull();
     // Replayed from the cooldown, and still read as refused.
-    await expect(jiraForgeProvider.identity?.getCurrentUser()).resolves.toBeNull();
-    clearJiraCaches();
-    route({ "/myself": () => json({ errorMessages: ["Down for maintenance"] }, 503) });
-    await expect(jiraForgeProvider.identity?.getCurrentUser()).rejects.toThrow(/maintenance/);
+    await expect(current()).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("is null for a credential Jira served as anonymous", async () => {
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(JSON.stringify({}), {
+          status: 200,
+          headers: { "X-Seraph-LoginReason": "AUTHENTICATED_FAILED" },
+        })
+    );
+    await expect(current()).resolves.toBeNull();
+    await expect(current()).resolves.toBeNull();
+  });
+
+  it.each([
+    [403, /No permission/],
+    [429, /rate limit/],
+    [503, /maintenance/],
+  ])("lets a %s through rather than reading it as signed out", async (status, message) => {
+    const errorMessages = [status === 403 ? "No permission" : "Down for maintenance"];
+    route({ "/myself": () => json({ errorMessages }, status) });
+    await expect(current()).rejects.toThrow(message);
+  });
+
+  it("doesn't take an answer with no account for a user", async () => {
+    route({ "/myself": () => json({ displayName: "Ada Lovelace" }) });
+    await expect(current()).rejects.toThrow(/didn't recognize this account/);
   });
 });
 
 describe("assignment", () => {
-  let assignee: typeof ADA | typeof BOB | null;
+  const PEOPLE: Person[] = [ADA, BOB, CAROL];
+  let assignees: Record<string, Person | null>;
   let failNextWrite: boolean;
 
-  beforeEach(() => {
-    assignee = BOB;
-    failNextWrite = false;
-    route({
-      "/myself": () => json(ADA),
-      "GET /issue/ENG-12": () => json(node("ENG-12", { assignee })),
-      "PUT /issue/id-ENG-12/assignee": (body) => {
+  function routeIssues(viewer: unknown = ADA) {
+    const answers: Parameters<typeof route>[0] = { "GET /myself": () => json(viewer) };
+    for (const key of Object.keys(assignees)) {
+      answers[`GET /issue/${key}`] = () => json(node(key, { assignee: assignees[key] }));
+      answers[`PUT /issue/id-${key}/assignee`] = (body) => {
         if (failNextWrite) {
           failNextWrite = false;
-          return json({ errorMessages: ["Bob Jones cannot be assigned issues."] }, 400);
+          return json({ errorMessages: ["That person cannot be assigned issues."] }, 400);
         }
-        assignee = body.accountId === ADA.accountId ? ADA : body.accountId ? BOB : null;
+        assignees[key] = PEOPLE.find((person) => person.accountId === body.accountId) ?? null;
         return new Response(null, { status: 204 });
-      },
-    });
+      };
+    }
+    route(answers);
+  }
+
+  beforeEach(() => {
+    assignees = { "ENG-12": BOB, "ENG-13": CAROL };
+    failNextWrite = false;
+    routeIssues();
   });
+
+  const assign = (number = 12, username = "Ada Lovelace") =>
+    jiraForgeProvider.assignIssue(REPO, number, username);
+  const undo = (number = 12, username = "Ada Lovelace") =>
+    jiraForgeProvider.unassignIssue(REPO, number, username);
 
   function writes() {
     return requests()
@@ -722,14 +767,10 @@ describe("assignment", () => {
   }
 
   it("assigns the connected account, and Undo hands the issue back to who had it", async () => {
-    await expect(jiraForgeProvider.assignIssue(REPO, 12, "Ada Lovelace")).resolves.toEqual([
-      ADA_USER,
-    ]);
-    expect(assignee).toBe(ADA);
-    await expect(jiraForgeProvider.unassignIssue(REPO, 12, "Ada Lovelace")).resolves.toEqual([
-      BOB_USER,
-    ]);
-    expect(assignee).toBe(BOB);
+    await expect(assign()).resolves.toEqual([ADA_USER]);
+    expect(assignees["ENG-12"]).toBe(ADA);
+    await expect(undo()).resolves.toEqual([BOB_USER]);
+    expect(assignees["ENG-12"]).toBe(BOB);
     expect(writes()).toEqual([
       { path: "/issue/id-ENG-12/assignee", body: { accountId: "acc-ada" } },
       { path: "/issue/id-ENG-12/assignee", body: { accountId: "acc-bob" } },
@@ -737,10 +778,10 @@ describe("assignment", () => {
   });
 
   it("leaves an issue that nobody had unassigned again on Undo", async () => {
-    assignee = null;
-    await jiraForgeProvider.assignIssue(REPO, 12, "Ada Lovelace");
-    await expect(jiraForgeProvider.unassignIssue(REPO, 12, "Ada Lovelace")).resolves.toEqual([]);
-    expect(assignee).toBeNull();
+    assignees["ENG-12"] = null;
+    await assign();
+    await expect(undo()).resolves.toEqual([]);
+    expect(assignees["ENG-12"]).toBeNull();
     expect(writes().map((write) => write.body)).toEqual([
       { accountId: "acc-ada" },
       { accountId: null },
@@ -748,75 +789,104 @@ describe("assignment", () => {
   });
 
   it("leaves an issue that was already the viewer's alone, and its Undo too", async () => {
-    assignee = ADA;
-    await expect(jiraForgeProvider.assignIssue(REPO, 12, "Ada Lovelace")).resolves.toEqual([
-      ADA_USER,
-    ]);
-    await expect(jiraForgeProvider.unassignIssue(REPO, 12, "Ada Lovelace")).resolves.toEqual([
-      ADA_USER,
-    ]);
-    expect(assignee).toBe(ADA);
+    assignees["ENG-12"] = ADA;
+    await expect(assign()).resolves.toEqual([ADA_USER]);
+    await expect(undo()).resolves.toEqual([ADA_USER]);
+    expect(assignees["ENG-12"]).toBe(ADA);
     expect(writes()).toEqual([]);
   });
 
-  it("doesn't undo over someone who has taken the issue since", async () => {
-    await jiraForgeProvider.assignIssue(REPO, 12, "Ada Lovelace");
-    assignee = BOB;
-    await expect(jiraForgeProvider.unassignIssue(REPO, 12, "Ada Lovelace")).resolves.toEqual([
-      BOB_USER,
+  it("keeps each worktree's Undo when two are made from one issue", async () => {
+    await assign();
+    // The second finds the issue already the viewer's.
+    await assign();
+    await expect(undo()).resolves.toEqual([ADA_USER]);
+    expect(assignees["ENG-12"]).toBe(ADA);
+    await expect(undo()).resolves.toEqual([BOB_USER]);
+    expect(assignees["ENG-12"]).toBe(BOB);
+    expect(writes().map((write) => write.body)).toEqual([
+      { accountId: "acc-ada" },
+      { accountId: "acc-bob" },
     ]);
+  });
+
+  it("remembers each issue's previous assignee separately", async () => {
+    await assign(12);
+    await assign(13);
+    await expect(undo(12)).resolves.toEqual([BOB_USER]);
+    await expect(undo(13)).resolves.toEqual([CAROL_USER]);
+    expect(assignees).toEqual({ "ENG-12": BOB, "ENG-13": CAROL });
+  });
+
+  it("doesn't undo over someone who has taken the issue since", async () => {
+    await assign();
+    assignees["ENG-12"] = CAROL;
+    await expect(undo()).resolves.toEqual([CAROL_USER]);
+    expect(assignees["ENG-12"]).toBe(CAROL);
     expect(writes()).toHaveLength(1);
   });
 
   it("takes the issue off the viewer when there's nobody to hand it back to", async () => {
-    assignee = ADA;
-    await expect(jiraForgeProvider.unassignIssue(REPO, 12, "Ada Lovelace")).resolves.toEqual([]);
-    expect(assignee).toBeNull();
+    assignees["ENG-12"] = ADA;
+    await expect(undo()).resolves.toEqual([]);
+    expect(assignees["ENG-12"]).toBeNull();
+  });
+
+  it("remembers nothing from an assignment Jira refused", async () => {
+    failNextWrite = true;
+    await expect(assign()).rejects.toThrow(/cannot be assigned/);
+    expect(assignees["ENG-12"]).toBe(BOB);
+    // Assigned in Jira instead: an unassign now only takes it off the viewer.
+    assignees["ENG-12"] = ADA;
+    await expect(undo()).resolves.toEqual([]);
+    expect(assignees["ENG-12"]).toBeNull();
   });
 
   it("still knows who to hand the issue back to after a failed Undo", async () => {
-    await jiraForgeProvider.assignIssue(REPO, 12, "Ada Lovelace");
+    await assign();
     failNextWrite = true;
-    await expect(jiraForgeProvider.unassignIssue(REPO, 12, "Ada Lovelace")).rejects.toThrow(
-      /cannot be assigned/
-    );
-    expect(assignee).toBe(ADA);
-    await expect(jiraForgeProvider.unassignIssue(REPO, 12, "Ada Lovelace")).resolves.toEqual([
-      BOB_USER,
-    ]);
-    expect(assignee).toBe(BOB);
+    await expect(undo()).rejects.toThrow(/cannot be assigned/);
+    expect(assignees["ENG-12"]).toBe(ADA);
+    await expect(undo()).resolves.toEqual([BOB_USER]);
+    expect(assignees["ENG-12"]).toBe(BOB);
   });
 
-  it("doesn't carry what it remembers over to another connection", async () => {
-    await jiraForgeProvider.assignIssue(REPO, 12, "Ada Lovelace");
-    jiraForgeProvider.setCredentials({ kind: "bearer", value: "token-2" });
-    await expect(jiraForgeProvider.unassignIssue(REPO, 12, "Ada Lovelace")).resolves.toEqual([]);
-    expect(assignee).toBeNull();
+  it("doesn't carry what it remembers over to a new token", async () => {
+    await assign();
+    jiraForgeProvider.setCredentials?.({ kind: "bearer", value: "token-2" });
+    await expect(undo()).resolves.toEqual([]);
+    expect(assignees["ENG-12"]).toBeNull();
+  });
+
+  it("doesn't carry what it remembers over to another site or email", async () => {
+    await assign();
+    // Nothing is cleared: only the connection the history was kept for changes.
+    settings = { siteUrl: SITE, email: "ada@work.example" };
+    await expect(undo()).resolves.toEqual([]);
+    expect(assignees["ENG-12"]).toBeNull();
   });
 
   it("knows the viewer by account id too", async () => {
-    await expect(jiraForgeProvider.assignIssue(REPO, 12, "acc-ada")).resolves.toEqual([ADA_USER]);
+    await expect(assign(12, "acc-ada")).resolves.toEqual([ADA_USER]);
   });
 
   it("refuses to assign anyone but the connected account", async () => {
-    await expect(jiraForgeProvider.assignIssue(REPO, 12, "Bob Jones")).rejects.toThrow(
-      /only be assigned to you/
-    );
-    await expect(jiraForgeProvider.unassignIssue(REPO, 12, "acc-bob")).rejects.toThrow(
-      /only be assigned to you/
-    );
+    await expect(assign(12, "Bob Jones")).rejects.toThrow(/only be assigned to you/);
+    await expect(undo(12, "acc-bob")).rejects.toThrow(/only be assigned to you/);
+    expect(writes()).toEqual([]);
+  });
+
+  it("assigns nobody when Jira names no account", async () => {
+    routeIssues({ displayName: "Ada Lovelace" });
+    await expect(assign()).rejects.toThrow(/didn't recognize this account/);
     expect(writes()).toEqual([]);
   });
 
   it("refuses an issue Jira doesn't have, or one that has moved away", async () => {
-    route({ "/myself": () => json(ADA), "/issue/ENG-12": () => json({}, 404) });
-    await expect(jiraForgeProvider.assignIssue(REPO, 12, "Ada Lovelace")).rejects.toThrow(
-      "Jira issue ENG-12 wasn't found"
-    );
-    route({ "/myself": () => json(ADA), "/issue/ENG-12": () => json(node("OPS-3")) });
-    await expect(jiraForgeProvider.unassignIssue(REPO, 12, "Ada Lovelace")).rejects.toThrow(
-      "Jira issue ENG-12 wasn't found"
-    );
+    route({ "GET /myself": () => json(ADA), "GET /issue/ENG-12": () => json({}, 404) });
+    await expect(assign()).rejects.toThrow("Jira issue ENG-12 wasn't found");
+    route({ "GET /myself": () => json(ADA), "GET /issue/ENG-12": () => json(node("OPS-3")) });
+    await expect(undo()).rejects.toThrow("Jira issue ENG-12 wasn't found");
     expect(writes()).toEqual([]);
   });
 });
@@ -830,7 +900,7 @@ describe("issue comments", () => {
     };
   }
 
-  function comment(id: string, author: typeof ADA | typeof BOB, text: string, created: string) {
+  function comment(id: string, author: Person, text: string, created: string) {
     return { id, author, body: adf(text), created, updated: created };
   }
 
@@ -844,8 +914,8 @@ describe("issue comments", () => {
 
   it("lists the thread oldest first, with author, time and readable text", async () => {
     route({
-      "/issue/ENG-12": () => json(node("ENG-12")),
-      "/issue/id-ENG-12/comment": () =>
+      "GET /issue/ENG-12": () => json(node("ENG-12")),
+      "GET /issue/id-ENG-12/comment": () =>
         json({
           startAt: 0,
           maxResults: 20,
@@ -893,8 +963,8 @@ describe("issue comments", () => {
       comment(`1000${i}`, ADA, text, `2026-10-0${i + 1}T00:00:00.000+0000`)
     );
     route({
-      "/issue/ENG-12": () => json(node("ENG-12")),
-      "/issue/id-ENG-12/comment": () => {
+      "GET /issue/ENG-12": () => json(node("ENG-12")),
+      "GET /issue/id-ENG-12/comment": () => {
         const url = commentRequests().at(-1)!;
         const startAt = Number(url.searchParams.get("startAt"));
         const max = Number(url.searchParams.get("maxResults"));
@@ -909,10 +979,61 @@ describe("issue comments", () => {
     expect(second).toMatchObject({ nextCursor: null, hasMore: false });
   });
 
+  it("moves on from where Jira says the page started, by what it returned", async () => {
+    route({
+      "GET /issue/ENG-12": () => json(node("ENG-12")),
+      "GET /issue/id-ENG-12/comment": () =>
+        json({
+          startAt: 5,
+          total: 50,
+          comments: [
+            comment("10005", ADA, "f", "2026-10-03T10:00:00.000+0000"),
+            comment("10006", BOB, "g", "2026-10-03T11:00:00.000+0000"),
+          ],
+        }),
+    });
+    await expect(list()).resolves.toMatchObject({ nextCursor: "7", hasMore: true });
+  });
+
+  it("goes by the page size Jira used when it gives no total", async () => {
+    const page = (count: number) =>
+      Array.from({ length: count }, (_, i) =>
+        comment(`2${i}`, ADA, `c${i}`, "2026-10-03T10:00:00.000+0000")
+      );
+    let answer: unknown;
+    route({
+      "GET /issue/ENG-12": () => json(node("ENG-12")),
+      "GET /issue/id-ENG-12/comment": () => json(answer),
+    });
+    // Asked for 100, given Jira's own 50: a full page of its size means more.
+    answer = { startAt: 0, maxResults: 50, comments: page(50) };
+    await expect(list({ perPage: 100 })).resolves.toMatchObject({
+      nextCursor: "50",
+      hasMore: true,
+    });
+    answer = { startAt: 50, maxResults: 50, comments: page(10) };
+    await expect(list({ perPage: 100, cursor: "50" })).resolves.toMatchObject({
+      nextCursor: null,
+      hasMore: false,
+    });
+    // Nothing about the page at all: the request is all there is to go by.
+    answer = { comments: page(3) };
+    await expect(list({ perPage: 3, cursor: "6" })).resolves.toMatchObject({
+      nextCursor: "9",
+      hasMore: true,
+    });
+    answer = {};
+    await expect(list({ cursor: "9" })).resolves.toEqual({
+      items: [],
+      nextCursor: null,
+      hasMore: false,
+    });
+  });
+
   it("stops at an empty page whatever the total says", async () => {
     route({
-      "/issue/ENG-12": () => json(node("ENG-12")),
-      "/issue/id-ENG-12/comment": () => json({ startAt: 4, total: 9, comments: [] }),
+      "GET /issue/ENG-12": () => json(node("ENG-12")),
+      "GET /issue/id-ENG-12/comment": () => json({ startAt: 4, total: 9, comments: [] }),
     });
     await expect(list({ cursor: "4" })).resolves.toMatchObject({
       items: [],
@@ -923,8 +1044,8 @@ describe("issue comments", () => {
 
   it("reads a thread nobody has commented on as an empty page", async () => {
     route({
-      "/issue/ENG-12": () => json(node("ENG-12")),
-      "/issue/id-ENG-12/comment": () => json({ startAt: 0, total: 0, comments: [] }),
+      "GET /issue/ENG-12": () => json(node("ENG-12")),
+      "GET /issue/id-ENG-12/comment": () => json({ startAt: 0, total: 0, comments: [] }),
     });
     await expect(list()).resolves.toEqual({
       items: [],
@@ -936,15 +1057,18 @@ describe("issue comments", () => {
 
   it("bounds the page size", async () => {
     route({
-      "/issue/ENG-12": () => json(node("ENG-12")),
-      "/issue/id-ENG-12/comment": () => json({ startAt: 0, total: 0, comments: [] }),
+      "GET /issue/ENG-12": () => json(node("ENG-12")),
+      "GET /issue/id-ENG-12/comment": () => json({ startAt: 0, total: 0, comments: [] }),
     });
-    await list({ perPage: 500 });
-    await list({ perPage: 0 });
-    await list({ perPage: Number.NaN });
+    for (const perPage of [500, 0, 2.9, Number.NaN, Infinity, -Infinity]) {
+      await list({ perPage });
+    }
     expect(commentRequests().map((url) => url.searchParams.get("maxResults"))).toEqual([
       "100",
       "1",
+      "2",
+      "20",
+      "20",
       "20",
     ]);
   });
@@ -958,21 +1082,21 @@ describe("issue comments", () => {
   );
 
   it("throws for an issue Jira doesn't have, rather than reading as nobody replied", async () => {
-    route({ "/issue/ENG-12": () => json({}, 404) });
+    route({ "GET /issue/ENG-12": () => json({}, 404) });
     await expect(list()).rejects.toThrow("Jira issue ENG-12 wasn't found");
     expect(commentRequests()).toEqual([]);
   });
 
   it("refuses an issue that has moved to another project", async () => {
-    route({ "/issue/ENG-12": () => json(node("OPS-3")) });
+    route({ "GET /issue/ENG-12": () => json(node("OPS-3")) });
     await expect(list()).rejects.toThrow("Jira issue ENG-12 wasn't found");
     expect(commentRequests()).toEqual([]);
   });
 
   it("links comments by the key Jira answered with, after a project rename", async () => {
     route({
-      "/issue/ENG-12": () => json(node("CORE-12")),
-      "/issue/id-CORE-12/comment": () =>
+      "GET /issue/ENG-12": () => json(node("CORE-12")),
+      "GET /issue/id-CORE-12/comment": () =>
         json({
           startAt: 0,
           total: 1,

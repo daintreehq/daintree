@@ -112,6 +112,8 @@ export async function jiraRequest<T>(
     timeoutMs?: number;
     /** A deliberate check, like saving a token: goes out whatever the cooldown says. */
     ignoreCooldown?: boolean;
+    /** A write Jira answers with 204 and nothing to read, like setting the assignee. */
+    noContent?: boolean;
   } = {}
 ): Promise<T> {
   const connectionKey = connectionKeyOf(connection);
@@ -193,10 +195,12 @@ export async function jiraRequest<T>(
     );
   }
 
-  // A write like setting the assignee answers 204 with nothing to read. Any
-  // other body that isn't JSON (a proxy's error page) reads as no payload.
+  // A body that isn't JSON (a proxy's error page) reads as no payload, and so
+  // does an empty one from a request that expected to read something.
   const payload =
-    response.status === 204 ? undefined : ((await response.json().catch(() => null)) as unknown);
+    options.noContent && response.status === 204
+      ? undefined
+      : ((await response.json().catch(() => null)) as unknown);
   if (!response.ok) {
     throw new JiraApiError(
       errorFromBody(payload, [authorization, connection.token, connection.email]) ??
