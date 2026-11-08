@@ -4873,6 +4873,14 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { worktreeId: string; enabled: boolean }];
     result: void;
   };
+  "worktree-disk-usage:cancel": {
+    args: [request: import("./worktreeDiskUsage.js").WorktreeDiskUsageCancelRequest];
+    result: void;
+  };
+  "worktree-disk-usage:measure": {
+    args: [request: import("./worktreeDiskUsage.js").WorktreeDiskUsageMeasureRequest];
+    result: import("./worktreeDiskUsage.js").WorktreeDiskUsageResult;
+  };
   "worktree-titles:hydrate": {
     args: [legacyTitles: Record<string, string>];
     result: import("./worktreeTitles.js").WorktreeTitlesSnapshot | null;

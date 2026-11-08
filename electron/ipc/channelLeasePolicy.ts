@@ -796,6 +796,8 @@ export const CHANNEL_LEASE_POLICY = {
   "worktree-config:reprobe-wsl": "free",
   "worktree-config:set-pattern": "free",
   "worktree-config:set-wsl-git": "free",
+  "worktree-disk-usage:cancel": "free",
+  "worktree-disk-usage:measure": "free",
   "worktree-titles:changed": "free",
   "worktree-titles:hydrate": "free",
   // Clears only titles of worktrees the host confirms are gone, whoever asks.

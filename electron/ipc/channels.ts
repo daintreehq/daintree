@@ -22,6 +22,9 @@ export const CHANNELS = {
   WORKTREE_RESTART_SERVICE: "worktree:restart-service",
   WORKTREE_RETRY_PROJECT_LOAD: "worktree:retry-project-load",
   WORKTREE_RETRY_AUTH_FETCH: "worktree:retry-auth-fetch",
+  // Sizes for the Worktrees overview (#16393), measured only while it asks.
+  WORKTREE_DISK_USAGE_MEASURE: "worktree-disk-usage:measure",
+  WORKTREE_DISK_USAGE_CANCEL: "worktree-disk-usage:cancel",
   PROJECT_WORKTREE_LOAD_STATUS: "project:worktree-load-status",
 
   TERMINAL_SPAWN: "terminal:spawn",
