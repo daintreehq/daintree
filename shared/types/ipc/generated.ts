@@ -3637,9 +3637,9 @@ export interface GeneratedIpcInvokeMap {
       status:
         | "cancelled"
         | "unreachable"
+        | "started"
         | "connected"
         | "woken"
-        | "started"
         | "not_wakeable"
         | "not_startable"
         | "version_mismatch"
