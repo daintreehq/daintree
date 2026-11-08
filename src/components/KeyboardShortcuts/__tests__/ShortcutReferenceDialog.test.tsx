@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { ShortcutReferenceDialog } from "../ShortcutReferenceDialog";
 import type { RegisteredKeybindingConfig } from "@/services/KeybindingService";
+import { usePreferencesStore } from "@/store/preferencesStore";
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -117,6 +118,7 @@ describe("ShortcutReferenceDialog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     seed();
+    usePreferencesStore.setState({ doubleShiftOpensCanopy: true });
   });
 
   describe("opening", () => {
@@ -282,6 +284,54 @@ describe("ShortcutReferenceDialog", () => {
       render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
       const controlsId = search().getAttribute("aria-controls");
       expect(controlsId && document.getElementById(controlsId)).toBeTruthy();
+    });
+  });
+
+  describe("fixed shortcuts", () => {
+    it("lists them under their categories beside the bindable shortcuts", () => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      const worktrees = screen.getByRole("region", { name: "Worktrees" });
+      expect(worktrees.textContent).toContain("Move through the worktree list");
+      expect(worktrees.textContent).toContain("Reorder worktree");
+      const panels = screen.getByRole("region", { name: "Panels" });
+      expect(panels.textContent).toContain("Reorder panel");
+      expect(panels.textContent).toContain("Reorder tab");
+    });
+
+    it.each([
+      ["reorder", ["Reorder worktree", "Reorder panel", "Reorder tab"]],
+      ["canopy", ["Open Canopy with a double tap"]],
+      ["shift", ["Open Canopy with a double tap"]],
+      ["space", ["Open worktree", "Reorder panel", "Reorder tab"]],
+    ])("finds the fixed rows for %s and no others", (query, expected) => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      type(query);
+      const fixed = new Set([
+        "Move through the worktree list",
+        "Open worktree",
+        "Reorder worktree",
+        "Reorder panel",
+        "Reorder tab",
+        "Open Canopy with a double tap",
+      ]);
+      expect(rowNames().filter((name) => fixed.has(name))).toEqual(expected);
+    });
+
+    it("follows the double-tap Shift preference while the dialog is open", () => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      expect(screen.queryByText("Open Canopy with a double tap")).not.toBeNull();
+      act(() => usePreferencesStore.setState({ doubleShiftOpensCanopy: false }));
+      expect(screen.queryByText("Open Canopy with a double tap")).toBeNull();
+      act(() => usePreferencesStore.setState({ doubleShiftOpensCanopy: true }));
+      expect(screen.queryByText("Open Canopy with a double tap")).not.toBeNull();
+    });
+
+    it("lists double-tap Shift only while its preference is on", () => {
+      usePreferencesStore.setState({ doubleShiftOpensCanopy: false });
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      expect(screen.queryByText("Open Canopy with a double tap")).toBeNull();
+      type("shift");
+      expect(screen.queryByText("Open Canopy with a double tap")).toBeNull();
     });
   });
 

@@ -4,6 +4,7 @@ import {
   KEYBINDING_CATEGORY_ORDER,
 } from "@shared/config/defaultKeybindings";
 import {
+  buildFixedShortcutEntries,
   buildShortcutEntries,
   collapseNumberedSeries,
   groupByCategory,
@@ -12,6 +13,7 @@ import {
   searchShortcuts,
   type ReferenceBinding,
 } from "../shortcutReferenceModel";
+import { FIXED_SHORTCUTS } from "../fixedShortcuts";
 import { parseChord } from "@/lib/kbdShortcut";
 
 function registry(isWindows: boolean, isLinux = false): ReferenceBinding[] {
@@ -353,5 +355,28 @@ describe("searchShortcuts", () => {
     for (const mac of [true, false]) {
       expect(searchShortcuts(withPlus, "+", mac)!.map((e) => e.description)).toEqual(["Bare plus"]);
     }
+  });
+});
+
+describe("buildFixedShortcutEntries", () => {
+  const entries = buildFixedShortcutEntries(FIXED_SHORTCUTS);
+
+  it("makes one actionless, uncustomized row per fixed shortcut", () => {
+    expect(entries).toHaveLength(FIXED_SHORTCUTS.length);
+    expect(new Set(entries.map((e) => e.id)).size).toBe(entries.length);
+    for (const entry of entries) {
+      expect(entry.actionIds).toEqual([]);
+      expect(entry.isCustom).toBe(false);
+    }
+  });
+
+  it("searches by key, name and category", () => {
+    const names = (query: string) =>
+      searchShortcuts(entries, query, true)!.map((e) => e.description);
+    expect(names("j")).toContain("Move through the worktree list");
+    expect(names("⌥↓")).toEqual(["Reorder worktree"]);
+    expect(names("panels")).toEqual(["Reorder panel", "Reorder tab"]);
+    expect(names("space")).toEqual(["Open worktree", "Reorder panel", "Reorder tab"]);
+    expect(names("up")).toEqual(["Move through the worktree list"]);
   });
 });

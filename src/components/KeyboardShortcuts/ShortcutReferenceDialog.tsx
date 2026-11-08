@@ -7,7 +7,10 @@ import { KbdChord } from "@/components/ui/Kbd";
 import { describeChord } from "@/lib/kbdShortcut";
 import { isMac } from "@/lib/platform";
 import { keybindingService } from "../../services/KeybindingService";
+import { usePreferencesStore } from "@/store/preferencesStore";
+import { DOUBLE_SHIFT_SHORTCUT, FIXED_SHORTCUTS } from "./fixedShortcuts";
 import {
+  buildFixedShortcutEntries,
   buildShortcutEntries,
   collapseNumberedSeries,
   groupByCategory,
@@ -66,6 +69,9 @@ function ShortcutRow({ entry, mac, groupScope, categoryLabel }: ShortcutRowProps
       <span className="min-w-0 text-sm leading-5 text-text-primary">
         {entry.description}
         {categoryLabel && <span className="ml-2 text-xs text-text-secondary">{categoryLabel}</span>}
+        {entry.detail && (
+          <span className="block text-xs leading-4 text-text-secondary">{entry.detail}</span>
+        )}
         {/* Hidden from the tree: the spoken binding below already says "customized". */}
         {entry.isCustom && (
           <span
@@ -143,12 +149,21 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
     return unsubscribe;
   }, []);
 
+  const doubleShiftOpensCanopy = usePreferencesStore((s) => s.doubleShiftOpensCanopy);
+
   const entries = useMemo(() => {
     void bindingsVersion;
-    return buildShortcutEntries(keybindingService.getAllBindingsWithEffectiveCombos(), (id) =>
-      keybindingService.hasOverride(id)
+    const bound = buildShortcutEntries(
+      keybindingService.getAllBindingsWithEffectiveCombos(),
+      (id) => keybindingService.hasOverride(id)
     );
-  }, [bindingsVersion]);
+    // Double-tap Shift is listed only while its preference is on: switched off,
+    // the key does nothing and the reference shouldn't promise it.
+    const fixed = buildFixedShortcutEntries(
+      doubleShiftOpensCanopy ? [...FIXED_SHORTCUTS, DOUBLE_SHIFT_SHORTCUT] : FIXED_SHORTCUTS
+    );
+    return [...bound, ...fixed];
+  }, [bindingsVersion, doubleShiftOpensCanopy]);
 
   const groups = useMemo(() => groupByCategory(entries), [entries]);
 

@@ -23,6 +23,7 @@ import { SettingsSwitchCard } from "./SettingsSwitchCard";
 import { usePreferencesStore } from "@/store/preferencesStore";
 import { useCanopyStore } from "@/store/canopyStore";
 import { SettingsShortcutCapture } from "@/components/KeyboardShortcuts";
+import { FIXED_SHORTCUTS } from "@/components/KeyboardShortcuts/fixedShortcuts";
 import { pluralize } from "@/lib/pluralize";
 
 interface ShortcutBinding extends RegisteredKeybindingConfig {
@@ -217,46 +218,6 @@ function ShortcutRow({
     </div>
   );
 }
-
-interface FixedShortcut {
-  label: string;
-  /** Alternative keys, each a combo string `KbdChord` can render. */
-  keys: string[];
-  description: string;
-}
-
-// Worktree-list navigation and drag-handle reordering live outside the keybinding
-// engine (useWorktreeSidebarKeyboard's roving focus, dnd-kit's keyboard sensor), so
-// they are documented as fixed rather than offered as rows that could never fire.
-const FIXED_SHORTCUTS: FixedShortcut[] = [
-  {
-    label: "Move through the worktree list",
-    keys: ["Up", "Down", "J", "K"],
-    description: "PageUp, PageDown, Home and End jump further",
-  },
-  {
-    label: "Open worktree",
-    keys: ["Space"],
-    description: "Enter or Right moves into the row's actions",
-  },
-  {
-    label: "Reorder worktree",
-    keys: ["Alt+Up", "Alt+Down"],
-    description: "With the worktree focused in the sidebar",
-  },
-  {
-    label: "Reorder panel",
-    keys: ["Space"],
-    description:
-      "Focus the panel header, press Space to pick it up, move with the arrow keys, Space to drop, Esc to cancel",
-  },
-  {
-    label: "Reorder tab",
-    keys: ["Space"],
-    description:
-      "Focus the active tab, press Space to pick it up, move with the arrow keys, Space to drop",
-  },
-];
 
 const DOUBLE_SHIFT_TITLE = "Double-tap Shift opens Canopy";
 const DOUBLE_SHIFT_SUBTITLE =
