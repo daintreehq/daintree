@@ -29,6 +29,18 @@ describe("toast routing for a remote-bound view (#16409)", () => {
   });
 
   it.each([
+    ["pluginActions", { pluginActions: [{ label: "View copies", actionId: "app.forceQuit" }] }],
+    ["action", { action: { label: "View copies", ipcChannel: "clipboard:write-text", data: "x" } }],
+    ["hostSwitchFailure", { hostSwitchFailure: { hostId: "h", projectId: "p", code: null } }],
+    ["urgent", { urgent: true }],
+    ["context", { context: { projectId: "p" } }],
+  ])("drops a host's duplicate-install toast that also carries %s", (_field, extra) => {
+    expect(acceptHostPush(CHANNELS.NOTIFICATION_SHOW_TOAST, [{ ...copiesToast, ...extra }])).toBe(
+      false
+    );
+  });
+
+  it.each([
     [{ ...ordinaryToast, agentCliCopies: {} }],
     [{ ...ordinaryToast, agentCliCopies: { agentId: "" } }],
     [{ ...ordinaryToast, agentCliCopies: { agentId: 7 } }],

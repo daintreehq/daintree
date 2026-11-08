@@ -234,12 +234,15 @@ export function AgentSettings({
   // Refetched after a user-initiated refresh so the surfaced path/blocked
   // state stays in sync.
   const [cliDetails, setCliDetails] = useState<AgentCliDetails>({});
+  const [hasCliDetails, setHasCliDetails] = useState(false);
   const fetchCliDetails = useCallback(async () => {
     try {
       const details = await cliAvailabilityClient.getDetails();
       setCliDetails(details);
     } catch (error) {
       logError("[AgentSettings] Failed to fetch CLI details", error);
+    } finally {
+      setHasCliDetails(true);
     }
   }, []);
 
@@ -589,12 +592,18 @@ export function AgentSettings({
             onRefresh={() => void handleRefreshCliAvailability()}
           />
 
-          {isAgentLaunchable(cliAvailability[activeAgent.id]) && (
+          {/* Also while detection loads: the duplicate-install toast opens this section
+              by id, and only gets one chance to land on it. */}
+          {(isCliLoading || isAgentLaunchable(cliAvailability[activeAgent.id])) && (
             // Keyed so one agent's copies never show under another while it loads.
             <AgentCliCopiesSection
               key={activeAgent.id}
               agentId={activeAgent.id}
-              launchPath={cliDetails[activeAgent.id]?.resolvedPath ?? null}
+              launchPath={
+                !isCliLoading && hasCliDetails
+                  ? (cliDetails[activeAgent.id]?.resolvedPath ?? null)
+                  : undefined
+              }
               isActive={isActive}
               isRefreshing={isRefreshingCli}
               onRefresh={handleRefreshCliAvailability}

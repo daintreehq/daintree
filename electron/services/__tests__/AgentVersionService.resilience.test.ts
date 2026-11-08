@@ -220,6 +220,31 @@ describe("AgentVersionService resilience", () => {
       ]);
     });
 
+    it("frees its slot when a copy never gets as far as spawning", async () => {
+      const { service } = createCopiesService(["/hung-a/claude", "/hung-b/claude", "/a/claude"]);
+      const realProbe = (
+        service as unknown as { runVersionProbe: (path: string) => Promise<string> }
+      ).runVersionProbe.bind(service);
+      (
+        service as unknown as { runVersionProbe: (path: string) => Promise<string> }
+      ).runVersionProbe = (path) =>
+        path.startsWith("/hung") ? new Promise(() => {}) : realProbe(path);
+      setSpawnOutputs({ "/a/claude": "1.0.0\n" });
+
+      vi.useFakeTimers();
+      try {
+        const copies = service.getCopies("claude");
+        await vi.advanceTimersByTimeAsync(15_000);
+        await expect(copies).resolves.toEqual([
+          { path: "/hung-a/claude", version: null, launches: true },
+          { path: "/hung-b/claude", version: null, launches: false },
+          { path: "/a/claude", version: "1.0.0", launches: false },
+        ]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("runs at most two probes at once, across agents", async () => {
       const paths = ["/a/claude", "/b/claude", "/c/claude", "/d/claude", "/e/claude"];
       const { service } = createCopiesService(paths);
@@ -235,7 +260,7 @@ describe("AgentVersionService resilience", () => {
       };
 
       const first = service.getCopies("claude");
-      const second = service.getCopies("claude");
+      const second = service.getCopies("codex");
       await flush();
       expect(children).toHaveLength(2);
 

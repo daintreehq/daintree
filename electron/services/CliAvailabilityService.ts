@@ -19,7 +19,7 @@ import {
 import { refreshPath, expandWindowsEnvVars } from "../setup/environment.js";
 import { store } from "../store.js";
 import { CHANNELS } from "../ipc/channels.js";
-import { broadcastToRenderer } from "../ipc/utils.js";
+import { broadcastToRenderer, hasBroadcastAudience } from "../ipc/utils.js";
 import { getDefaultWslDistro } from "../utils/wsl.js";
 import { findAllOnPath, withPathProbeSlot } from "../utils/findOnPath.js";
 import {
@@ -184,12 +184,14 @@ function windowsLaunchCandidates(filePath: string): string[] {
 
 /**
  * What makes two found paths one copy: the file they resolve to, so a symlink and
- * its target are not two installs. On Windows it is that file's directory, for the
- * same reason as {@link dedupePathsByDirectory}.
+ * its target are not two installs. Windows folds case, and also counts the found
+ * path's directory, since one install there is `claude.cmd` beside `claude.exe`
+ * (see {@link dedupePathsByDirectory}). Links into one shared directory stay apart.
  */
-async function copyIdentity(candidate: string): Promise<string> {
-  const file = await withPathProbeSlot(() => realpath(candidate)).catch(() => candidate);
-  return process.platform === "win32" ? pathWin32.dirname(file).toLowerCase() : file;
+async function copyIdentities(candidate: string, signal: AbortSignal): Promise<string[]> {
+  const file = await withPathProbeSlot(() => realpath(candidate), signal).catch(() => candidate);
+  if (process.platform !== "win32") return [file];
+  return [file.toLowerCase(), `${pathWin32.dirname(candidate).toLowerCase()}\\`];
 }
 
 export class CliAvailabilityService {
@@ -394,29 +396,46 @@ export class CliAvailabilityService {
     if (!launchPath) return [];
 
     const copies = [launchPath];
+    const deadline = new AbortController();
     let timeoutHandle: NodeJS.Timeout | undefined;
     const timeoutPromise = new Promise<void>((resolve) => {
-      timeoutHandle = setTimeout(resolve, CliAvailabilityService.CHECK_TIMEOUT_MS);
+      timeoutHandle = setTimeout(() => {
+        deadline.abort();
+        resolve();
+      }, CliAvailabilityService.CHECK_TIMEOUT_MS);
     });
+    const collected = this.collectCopies(config, launchPath, copies, deadline.signal).catch(
+      (error: unknown) => {
+        if (!deadline.signal.aborted) {
+          logger.warn("Couldn't finish listing CLI copies", { agentId, error: String(error) });
+        }
+      }
+    );
     try {
-      await Promise.race([this.collectCopies(config, launchPath, copies), timeoutPromise]);
+      await Promise.race([collected, timeoutPromise]);
     } finally {
       if (timeoutHandle) clearTimeout(timeoutHandle);
     }
     return [...copies];
   }
 
-  /** Appends to `copies` as each is confirmed, so a deadline keeps what was found by then. */
+  /**
+   * Appends to `copies` as each is confirmed, so a deadline keeps what was found by
+   * then. File probes take the PATH search's slots, so a hung mount holds those two
+   * threads rather than one more of the pool's four per opening of the page, and
+   * nothing new starts once the deadline has passed.
+   */
   private async collectCopies(
     config: AgentConfig,
     launchPath: string,
-    copies: string[]
+    copies: string[],
+    signal: AbortSignal
   ): Promise<void> {
-    const seen = new Set([await copyIdentity(launchPath)]);
+    const seen = new Set(await copyIdentities(launchPath, signal));
     const add = async (candidate: string): Promise<void> => {
-      const identity = await copyIdentity(candidate);
-      if (seen.has(identity)) return;
-      seen.add(identity);
+      const identities = await copyIdentities(candidate, signal);
+      if (signal.aborted || identities.some((identity) => seen.has(identity))) return;
+      for (const identity of identities) seen.add(identity);
       copies.push(candidate);
     };
 
@@ -435,12 +454,12 @@ export class CliAvailabilityService {
       ...(pypiPackage ? synthesisePypiProbePaths(command, pypiPackage) : []),
     ];
     for (const fixedPath of fixedPaths) {
-      const probe = await this.probeNativePaths([fixedPath]);
+      const probe = await withPathProbeSlot(() => this.probeNativePaths([fixedPath]), signal);
       if (probe.status === "found") await add(probe.path);
     }
 
     if (config.packages?.npm ?? config.npmGlobalPackage) {
-      const probe = await this.probeNpmGlobal(command);
+      const probe = await withPathProbeSlot(() => this.probeNpmGlobal(command), signal);
       if (probe.status === "found") await add(probe.path);
     }
   }
@@ -1015,10 +1034,7 @@ export class CliAvailabilityService {
 
       const milestoneKey = `duplicate-cli-warning:${agentId}`;
       if (milestones[milestoneKey]) continue;
-      // Claim the key before any await-free work below can broadcast it, so an
-      // overlapping pass that re-read the store cannot broadcast it too.
       if (this.notifiedDuplicateInstalls.has(milestoneKey)) continue;
-      this.notifiedDuplicateInstalls.add(milestoneKey);
 
       const config = configById.get(agentId);
       const agentName = config?.name ?? agentId;
@@ -1027,14 +1043,23 @@ export class CliAvailabilityService {
       const preview = others.slice(0, PREVIEW_LIMIT).join(", ");
       const remainder = others.length - PREVIEW_LIMIT;
       const alsoFound = remainder > 0 ? `${preview}, and ${remainder} more` : preview;
+      const toast = {
+        type: "warning",
+        title: `Multiple ${agentName} installations found`,
+        message: `Launches ${active}. Also found: ${alsoFound}.`,
+        agentCliCopies: { agentId },
+      };
+
+      // The milestone records having told someone, so with nobody to tell (a window
+      // showing only a remote host, a host with no view attached) a later pass tries.
+      if (!hasBroadcastAudience(CHANNELS.NOTIFICATION_SHOW_TOAST, toast)) continue;
+
+      // Claim the key before any await-free work below can broadcast it, so an
+      // overlapping pass that re-read the store cannot broadcast it too.
+      this.notifiedDuplicateInstalls.add(milestoneKey);
 
       try {
-        broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
-          type: "warning",
-          title: `Multiple ${agentName} installations found`,
-          message: `Launches ${active}. Also found: ${alsoFound}.`,
-          agentCliCopies: { agentId },
-        });
+        broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, toast);
       } catch (err) {
         logger.error("Failed to broadcast duplicate-install toast", err, { agentId });
         // Release the claim: a broadcast that never reached the renderer should

@@ -95,14 +95,14 @@ describe("useMainProcessToastListener", () => {
     act(() => {
       capturedCallback!({
         type: "warning",
-        title: "Multiple Claude installations found",
-        message: "Launches /a/claude. Also found: /b/claude.",
-        agentCliCopies: { agentId: "claude" },
+        title: "Multiple Codex installations found",
+        message: "Launches /a/codex. Also found: /b/codex.",
+        agentCliCopies: { agentId: "codex" },
       });
     });
 
     const action = notifyMock.mock.calls[0]![0].action!;
-    const target = { tab: "agents", subtab: "claude", sectionId: "agents-cli-copies" };
+    const target = { tab: "agents", subtab: "codex", sectionId: "agents-cli-copies" };
     expect(action.label).toBe("View copies");
     // What keeps the button on the inbox row, where a startup toast can end up.
     expect(action.actionId).toBe("app.settings.openTab");

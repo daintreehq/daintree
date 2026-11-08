@@ -26,14 +26,17 @@ export function AgentCliCopiesSection({
   onRefresh,
 }: {
   agentId: string;
-  /** The path launches start, known before the copies are read. */
-  launchPath: string | null;
+  /** The path launches start: `undefined` until detection details are in, `null` if there is none. */
+  launchPath: string | null | undefined;
   /** Reading the copies runs each of them, so only while this page is on screen. */
   isActive: boolean;
   isRefreshing: boolean;
   onRefresh: () => Promise<void>;
 }) {
-  const [copies, setCopies] = useState<AgentCliCopy[] | null>(null);
+  const [loaded, setLoaded] = useState<{
+    copies: AgentCliCopy[];
+    launchPath: string | null | undefined;
+  } | null>(null);
   const [failed, setFailed] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const latestRequest = useRef(0);
@@ -45,9 +48,9 @@ export function AgentCliCopiesSection({
     const request = ++latestRequest.current;
     setIsLoading(true);
     try {
-      const next = await cliAvailabilityClient.getCopies(agentId);
+      const copies = await cliAvailabilityClient.getCopies(agentId);
       if (request !== latestRequest.current) return;
-      setCopies(next);
+      setLoaded({ copies, launchPath });
       setFailed(false);
     } catch (error) {
       if (request !== latestRequest.current) return;
@@ -56,26 +59,32 @@ export function AgentCliCopiesSection({
     } finally {
       if (request === latestRequest.current) setIsLoading(false);
     }
-  }, [agentId]);
+  }, [agentId, launchPath]);
 
-  // Also on a new launch path, which is what a re-check elsewhere on the page changes.
+  // Anything still on its way answers a page that has moved on.
+  const abandonRequests = useCallback(() => {
+    latestRequest.current++;
+  }, []);
+
+  // Waits for the launch path rather than reading once without it and again with it.
   useEffect(() => {
-    if (isActive) void load();
-    return () => {
-      // Anything still on its way answers a page that has moved on.
-      latestRequest.current++;
-    };
-  }, [isActive, load, launchPath]);
+    if (isActive && launchPath !== undefined) void load();
+    return abandonRequests;
+  }, [isActive, launchPath, load, abandonRequests]);
 
   const handleRecheck = async () => {
+    const before = latestRequest.current;
     await onRefresh();
-    await load();
+    // Left the page meanwhile, or a new launch path has already started the read.
+    if (latestRequest.current === before) await load();
   };
 
-  // The launching path is known straight away; its version takes a probe to read.
-  const pendingLaunchRow: (Omit<AgentCliCopy, "version"> & { version?: string | null })[] =
-    launchPath ? [{ path: launchPath, launches: true }] : [];
-  const rows = copies && copies.length > 0 ? copies : pendingLaunchRow;
+  // A list read for another launch path says the wrong copy launches, so it gives
+  // way to the path alone, whose version takes a probe to read.
+  const current =
+    loaded && loaded.launchPath === launchPath && loaded.copies.length > 0 ? loaded.copies : null;
+  const rows: (Omit<AgentCliCopy, "version"> & { version?: string | null })[] =
+    current ?? (launchPath ? [{ path: launchPath, launches: true }] : []);
 
   const where = remoteHostName === null ? "" : ` on ${remoteHostName}`;
   const description =
@@ -114,7 +123,9 @@ export function AgentCliCopiesSection({
         ))}
         {rows.length === 0 && !failed && (
           <SettingsEmptyRow>
-            {showChecking ? "Checking for copies…" : "No copies found. Re-check after installing."}
+            {isLoading || launchPath === undefined
+              ? "Checking for copies…"
+              : "No copies found. Re-check after installing."}
           </SettingsEmptyRow>
         )}
         {failed && (

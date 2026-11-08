@@ -31,6 +31,7 @@ export class AgentVersionService {
   private cache = new Map<AgentId, CachedVersionInfo>();
   private readonly CACHE_TTL_MS = 12 * 60 * 60 * 1000;
   private readonly TIMEOUT_MS = 10000;
+  private readonly COPY_PROBE_START_GRACE_MS = 5000;
   // Grace window after `exit` for stdout to flush before we settle without
   // waiting on `close` (which a pipe-inheriting grandchild can stall forever).
   private readonly EXIT_DRAIN_MS = 200;
@@ -156,7 +157,7 @@ export class AgentVersionService {
   private async readCopyVersion(path: string, args: string[]): Promise<string | null> {
     try {
       return this.reportedVersion(
-        await this.withCopyProbeSlot(() => this.runVersionProbe(path, args))
+        await this.withCopyProbeSlot(() => this.withCopyProbeDeadline(path, args))
       );
     } catch {
       return null;
@@ -176,6 +177,25 @@ export class AgentVersionService {
       .map((line) => line.trim())
       .find(Boolean);
     return firstLine ? scrubSecrets(firstLine).slice(0, REPORTED_LINE_MAX_LENGTH) : null;
+  }
+
+  /**
+   * The probe's own deadline starts once its child spawns, and working out how to
+   * spawn a Windows path reads the disk first. A share that dropped since the copy
+   * was found must not hold a slot for good, leaving every other agent's copies
+   * waiting behind it.
+   */
+  private async withCopyProbeDeadline(path: string, args: string[]): Promise<string> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<string>((resolve) => {
+      timer = setTimeout(() => resolve(""), this.TIMEOUT_MS + this.COPY_PROBE_START_GRACE_MS);
+      timer.unref?.();
+    });
+    try {
+      return await Promise.race([this.runVersionProbe(path, args), deadline]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private async withCopyProbeSlot<T>(task: () => Promise<T>): Promise<T> {

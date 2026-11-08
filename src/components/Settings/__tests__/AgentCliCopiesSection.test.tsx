@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import type { AgentCliCopy } from "@shared/types/ipc/system";
 import { AgentCliCopiesSection } from "../AgentCliCopiesSection";
 
@@ -27,6 +27,11 @@ function renderSection(overrides: Partial<Parameters<typeof AgentCliCopiesSectio
     ...overrides,
   };
   return { props, ...render(<AgentCliCopiesSection {...props} />) };
+}
+
+/** The settings row holding this path, so a version or marker is checked against its own copy. */
+function rowOf(path: string): HTMLElement {
+  return screen.getByText(path).closest("[data-settings-row]") as HTMLElement;
 }
 
 function deferred<T>() {
@@ -60,9 +65,21 @@ describe("AgentCliCopiesSection", () => {
 
   it("anchors the section the duplicate-install toast opens", () => {
     getCopies.mockReturnValue(new Promise(() => {}));
-    const { container } = renderSection({ launchPath: null });
+    const { container } = renderSection({ launchPath: undefined });
 
     expect(container.querySelector("#agents-cli-copies")).toBeTruthy();
+    expect(screen.getByText("Checking for copies…")).toBeTruthy();
+  });
+
+  it("waits for the launch path rather than reading twice on the way in", async () => {
+    getCopies.mockResolvedValue([launching]);
+    const { props, rerender } = renderSection({ launchPath: undefined });
+    expect(getCopies).not.toHaveBeenCalled();
+
+    rerender(<AgentCliCopiesSection {...props} launchPath="/a/claude" />);
+
+    await screen.findByText("Reports 1.0.0");
+    expect(getCopies).toHaveBeenCalledTimes(1);
   });
 
   it("lists every copy with its path and version, and marks only the launching one", async () => {
@@ -70,10 +87,10 @@ describe("AgentCliCopiesSection", () => {
     renderSection();
 
     await screen.findByText("Reports 2.0.0");
-    expect(screen.getByText("/a/claude")).toBeTruthy();
-    expect(screen.getByText("Reports 1.0.0")).toBeTruthy();
-    expect(screen.getByText("/b/claude")).toBeTruthy();
-    expect(screen.getAllByText("Launches")).toHaveLength(1);
+    expect(within(rowOf("/a/claude")).getByText("Reports 1.0.0")).toBeTruthy();
+    expect(within(rowOf("/a/claude")).getByText("Launches")).toBeTruthy();
+    expect(within(rowOf("/b/claude")).getByText("Reports 2.0.0")).toBeTruthy();
+    expect(within(rowOf("/b/claude")).queryByText("Launches")).toBeNull();
     expect(screen.getByText(/2 copies found\. Daintree launches the marked one\./)).toBeTruthy();
   });
 
@@ -139,6 +156,20 @@ describe("AgentCliCopiesSection", () => {
     expect(order).toEqual(["refresh", "read"]);
   });
 
+  it("runs nothing for a page left while its Re-check was running", async () => {
+    getCopies.mockResolvedValue([launching]);
+    const refresh = deferred<void>();
+    const { unmount } = renderSection({ onRefresh: () => refresh.promise });
+    await screen.findByText("Reports 1.0.0");
+    getCopies.mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: /Re-check/ }));
+    unmount();
+    await act(async () => refresh.resolve());
+
+    expect(getCopies).not.toHaveBeenCalled();
+  });
+
   it("disables Re-check while a check runs", async () => {
     getCopies.mockResolvedValue([launching]);
     renderSection({ isRefreshing: true });
@@ -173,11 +204,34 @@ describe("AgentCliCopiesSection", () => {
     await screen.findByText("Reports 3.0.0");
 
     await act(async () => first.resolve([launching]));
-    await waitFor(() => expect(screen.queryByText("/a/claude")).toBeNull());
-    expect(screen.getByText("/new/claude")).toBeTruthy();
+    expect(screen.queryByText("/a/claude")).toBeNull();
+    expect(within(rowOf("/new/claude")).getByText("Launches")).toBeTruthy();
   });
 
-  it("says nothing was found when the read comes back empty with no known path", async () => {
+  it("drops a list that marks the old launching copy, even when the new read fails", async () => {
+    getCopies.mockResolvedValueOnce([launching, stale]);
+    const { props, rerender } = renderSection();
+    await screen.findByText("Reports 2.0.0");
+
+    getCopies.mockRejectedValueOnce(new Error("Host disconnected"));
+    rerender(<AgentCliCopiesSection {...props} launchPath="/b/claude" />);
+
+    await screen.findByText("Couldn't read the copies of this CLI");
+    expect(screen.queryByText("/a/claude")).toBeNull();
+    expect(within(rowOf("/b/claude")).getByText("Launches")).toBeTruthy();
+  });
+
+  it("trusts a fresh read over a launch path this page hasn't refetched", async () => {
+    // A passive re-check moved the launching copy without this page's details following.
+    getCopies.mockResolvedValue([{ path: "/new/claude", version: "3.0.0", launches: true }]);
+    renderSection({ launchPath: "/a/claude" });
+
+    await screen.findByText("Reports 3.0.0");
+    expect(within(rowOf("/new/claude")).getByText("Launches")).toBeTruthy();
+    expect(screen.queryByText("/a/claude")).toBeNull();
+  });
+
+  it("says nothing was found when the agent has no launch path and the read comes back empty", async () => {
     getCopies.mockResolvedValue([]);
     renderSection({ launchPath: null });
 
