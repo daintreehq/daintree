@@ -245,7 +245,12 @@ describe("buildFleetBroadcastRecipeContext", () => {
       issueKey: "ENG-42",
       issueTitle: "Fix the login race",
     });
-    expect(buildFleetBroadcastRecipeContext("tg")?.issueKey).toBeUndefined();
+    expect(buildFleetBroadcastRecipeContext("tg")).toEqual({
+      issueNumber: 42,
+      prNumber: 101,
+      worktreePath: "/tmp/wt-g",
+      branchName: "feature/wt-g",
+    });
   });
 
   it("falls back to worktree.name when branch is unset", () => {

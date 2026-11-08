@@ -5,6 +5,7 @@ import {
   getAvailableVariables,
   hasRecipeVariables,
   recipeContextFromWorktree,
+  splitByRecipeVariables,
   recipeIssueContextFromIssue,
   segmentRecipePrompt,
 } from "../recipeVariables";
@@ -291,7 +292,39 @@ describe("tracker issues (#16381)", () => {
     expect(detectUnresolvedVariables("{{issue_number}} {{number}}", { issueKey: "ENG-9" })).toEqual(
       []
     );
+    expect(
+      replaceRecipeVariables("{{issue_number}} {{number}}", { issueKey: "ENG-9", prNumber: 5 })
+    ).toBe("ENG-9 ENG-9");
     expect(replaceRecipeVariables("{{number}}", { issueKey: "  ", prNumber: 5 })).toBe("#5");
+  });
+
+  it.each([
+    ["CR", "a\rb"],
+    ["LF", "a\nb"],
+    ["tab", "a\tb"],
+    ["line separator", "a\u2028b"],
+    ["paragraph separator", "a\u2029b"],
+    ["spaced break", "a  \n  b"],
+  ])("folds a %s in a title to one space", (_name, issueTitle) => {
+    expect(replaceRecipeVariables("[{{issue_title}}]", { issueTitle })).toBe("[a b]");
+  });
+
+  it.each([
+    ["NUL", "\u0000"],
+    ["ESC", "\u001b"],
+    ["BEL", "\u0007"],
+    ["DEL", "\u007f"],
+    ["C1 CSI", "\u009b"],
+  ])("drops a %s from a title", (_name, control) => {
+    expect(replaceRecipeVariables("[{{issue_title}}]", { issueTitle: `a${control}b` })).toBe(
+      "[ab]"
+    );
+  });
+
+  it("keeps a title's own letters, accents and symbols", () => {
+    expect(
+      replaceRecipeVariables("{{issue_title}}", { issueTitle: "Café — naïve 修复 ✓ ¿por qué?" })
+    ).toBe("Café — naïve 修复 ✓ ¿por qué?");
   });
 
   it("keeps a title or key to one line of printable text", () => {
@@ -325,14 +358,42 @@ describe("tracker issues (#16381)", () => {
   it("lists {{issue_title}} wherever the known variables are read", () => {
     expect(getAvailableVariables().map((v) => v.name)).toContain("issue_title");
     expect(hasRecipeVariables("About {{ISSUE_TITLE}}")).toBe(true);
+    expect(hasRecipeVariables("About {{issue_titles}}")).toBe(false);
+    expect(hasRecipeVariables("About {{ISSUE_TITLE}}")).toBe(true);
+    expect(splitByRecipeVariables("About {{ISSUE_TITLE}}.")).toEqual([
+      { text: "About ", isVar: false },
+      { text: "{{ISSUE_TITLE}}", isVar: true },
+      { text: ".", isVar: false },
+    ]);
   });
 
   it("takes a worktree's key only with the provider that owns it", () => {
-    const base = { path: "/w", branch: "eng-42", issueNumber: 42, issueTitle: "Fix it" };
+    const base = {
+      path: "/w",
+      branch: "eng-42",
+      issueNumber: 42,
+      issueTitle: "Fix it",
+      linked: {
+        providerId: "github",
+        pr: {
+          ref: { number: 99, owner: "o", repo: "r", providerId: "github", rawData: {} },
+          url: "https://example.com",
+          state: "open" as const,
+        },
+      },
+    };
+    const forge = {
+      issueNumber: 42,
+      issueKey: undefined,
+      issueTitle: "Fix it",
+      prNumber: 99,
+      worktreePath: "/w",
+      branchName: "eng-42",
+    };
     expect(
       recipeContextFromWorktree({ ...base, issueProviderId: "linear", issueKey: "ENG-42" })
-    ).toMatchObject({ issueNumber: 42, issueKey: "ENG-42", issueTitle: "Fix it" });
-    expect(recipeContextFromWorktree({ ...base, issueKey: "ENG-42" }).issueKey).toBeUndefined();
+    ).toEqual({ ...forge, issueKey: "ENG-42" });
+    expect(recipeContextFromWorktree({ ...base, issueKey: "ENG-42" })).toEqual(forge);
   });
 
   it("takes an issue's key only when a provider served it", () => {

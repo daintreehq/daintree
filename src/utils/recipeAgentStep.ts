@@ -29,6 +29,24 @@ export type ResolvedRecipeAgentStep =
     }
   | { ok: false; reason: string };
 
+/**
+ * Whether the first word of `rawPrompt` as launch resolves it is all the
+ * author's own text. A substituted value anywhere in it (`-{{issue_title}}`)
+ * makes it the value's, and a variable that resolves empty adds nothing.
+ */
+function leadingWordIsAuthored(rawPrompt: string, context: RecipeContext): boolean {
+  let started = false;
+  for (const segment of segmentRecipePrompt(rawPrompt, context)) {
+    if (segment.kind === "missing") continue;
+    const text = started ? segment.text : segment.text.trimStart();
+    if (text === "") continue;
+    if (segment.kind === "value" || segment.kind === "variable") return false;
+    started = true;
+    if (/\s/.test(text)) return true;
+  }
+  return true;
+}
+
 // `{{plugin.<name>}}` is a variable only in a plugin's own recipe, where one
 // the run gave no value is empty; anywhere else it is text the user typed.
 function recipeStepContext(recipe: TerminalRecipe, context: RecipeContext): RecipeContext {
@@ -48,9 +66,10 @@ function recipeStepContext(recipe: TerminalRecipe, context: RecipeContext): Reci
  * A plugin's recipe is held to the rule a plugin's `agent.launch` is (#13762):
  * most CLIs take the first turn as a positional argument, so one starting
  * with "-" is an option rather than a task, and a plugin variable is a way for
- * one to arrive. A user's recipe is held to it only where a variable did the
- * starting: an issue's title is anyone's to write (#16381). A system prompt this agent can't take is refused rather than
- * dropped, since the recipe relies on it.
+ * one to arrive. A user's recipe is held to it only where a variable spells
+ * part of that option: an issue's title is anyone's to write (#16381). A
+ * system prompt this agent can't take is refused rather than dropped, since
+ * the recipe relies on it.
  */
 export function resolveRecipeAgentStep(
   recipe: TerminalRecipe,
@@ -67,9 +86,12 @@ export function resolveRecipeAgentStep(
   // to exactly that here, so a dialog showing it shows what launches.
   const initialPrompt =
     promptAsWritten?.replace(/\r\n/g, " ").replace(/\n/g, " ").trim() || undefined;
-  // An author's own leading dash in a user recipe is theirs to launch; one a
-  // substituted value put there (an issue's title, a plugin's variable) is not.
-  if (initialPrompt?.startsWith("-") && (fromPlugin || !rawPrompt?.startsWith("-"))) {
+  // An author's own leading option in a user recipe is theirs to launch; one a
+  // substituted value spelled (an issue's title, a plugin's variable) is not.
+  if (
+    initialPrompt?.startsWith("-") &&
+    (fromPlugin || !leadingWordIsAuthored(rawPrompt ?? "", stepContext))
+  ) {
     return {
       ok: false,
       reason:

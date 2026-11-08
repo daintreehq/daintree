@@ -2650,7 +2650,7 @@ describe("NewWorktreeDialog — first agent and prompt (#12796)", () => {
     recipePickerCalls.selected = {
       id: "r1",
       name: "Shell recipe",
-      terminals: [{ type: "terminal", command: "ls" }],
+      terminals: [{ type: "terminal" }],
     };
     const runRecipe = vi.mocked(useRecipeStore((s) => s.runRecipeWithResults));
     runRecipe.mockRejectedValueOnce(new Error("panel limit")).mockResolvedValue({
@@ -2685,14 +2685,20 @@ describe("NewWorktreeDialog — first agent and prompt (#12796)", () => {
 
     expect(runRecipe).toHaveBeenCalledTimes(1);
     const context = runRecipe.mock.calls[0]![3];
-    expect(context).toMatchObject({
+    expect(context).toEqual({
       issueNumber: 4019283746519283,
       issueKey: "ENG-42",
       issueTitle: "Fix the login race",
+      prNumber: undefined,
+      worktreePath: "/test/root-worktrees/feature/test",
+      branchName: "feature/test",
     });
     const retry = mockNotify.mock.calls
-      .flatMap(([payload]) => payload.actions ?? [])
-      .find((action: { label: string }) => action.label === "Retry recipe");
+      .flatMap(
+        ([payload]) =>
+          (payload as { actions?: Array<{ label: string; onClick: () => void }> }).actions ?? []
+      )
+      .find((action) => action.label === "Retry recipe");
     await act(async () => {
       retry!.onClick();
       await vi.advanceTimersByTimeAsync(0);

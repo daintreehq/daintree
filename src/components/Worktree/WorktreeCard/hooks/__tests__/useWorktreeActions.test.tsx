@@ -18,12 +18,15 @@ vi.mock("@/lib/accessibility", () => ({
   closeAndAnnounce: (clear: () => void) => clear(),
 }));
 
-// Self-contained factory (no top-level refs, no generics) so vitest's mock
-// hoisting stays happy. The hook only reads `runRecipeWithResults` via the
-// selector at render; the handlers under test don't touch the recipe store.
+const runRecipeWithResults = vi.hoisted(() =>
+  vi.fn((..._args: unknown[]) => Promise.resolve({ spawned: [], failed: [] }))
+);
+
+// Self-contained factory apart from the hoisted spy, so vitest's mock hoisting
+// stays happy. The hook reads `runRecipeWithResults` via the selector at render.
 vi.mock("@/store/recipeStore", () => {
   const state = {
-    runRecipeWithResults: () => Promise.resolve([]),
+    runRecipeWithResults: (...args: unknown[]) => runRecipeWithResults(...args),
     getRecipeById: () => undefined,
     currentProjectId: null,
   };
@@ -56,10 +59,10 @@ function makeWorktree(overrides: Partial<WorktreeState> = {}): WorktreeState {
   };
 }
 
-function renderActions() {
+function renderActions(overrides: Partial<WorktreeState> = {}) {
   return renderHook(() =>
     useWorktreeActions({
-      worktree: makeWorktree(),
+      worktree: makeWorktree(overrides),
       teardownCommands: [],
     })
   );
@@ -67,6 +70,41 @@ function renderActions() {
 
 beforeEach(() => {
   dispatch.mockClear();
+  runRecipeWithResults.mockClear();
+});
+
+describe("useWorktreeActions — running a recipe from the card (#16381)", () => {
+  it("names a provider-served issue by its key, with its title", async () => {
+    const { result } = renderActions({
+      issueNumber: 4019283746519283,
+      issueTitle: "Crash on save",
+      issueProviderId: "beads",
+      issueKey: "bd-a1b2",
+    });
+
+    await act(() => result.current.handleRunRecipe("recipe-1"));
+
+    expect(runRecipeWithResults).toHaveBeenCalledWith("recipe-1", "/test/wt-1", "wt-1", {
+      issueNumber: 4019283746519283,
+      issueKey: "bd-a1b2",
+      issueTitle: "Crash on save",
+      prNumber: undefined,
+      worktreePath: "/test/wt-1",
+      branchName: "feature/test",
+    });
+  });
+
+  it("drops a key no provider owns, leaving the code forge's number", async () => {
+    const { result } = renderActions({ issueNumber: 42, issueKey: "ENG-42" });
+
+    await act(() => result.current.handleRunRecipe("recipe-1"));
+
+    expect(runRecipeWithResults.mock.calls[0]![3]).toMatchObject({
+      issueNumber: 42,
+      issueKey: undefined,
+      issueTitle: "Fix the thing",
+    });
+  });
 });
 
 describe("useWorktreeActions — session-wide destructive items defer to the action's confirm", () => {
