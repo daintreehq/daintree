@@ -791,6 +791,7 @@ export type DaintreeEventMap = {
    */
   "agent:claude-usage-observed": ClaudeUsageObservation & {
     configDir: string | null;
+    shell: string | null;
     timestamp: number;
   };
 

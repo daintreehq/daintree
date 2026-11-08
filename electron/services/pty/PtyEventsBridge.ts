@@ -104,7 +104,8 @@ function claudeUsageObservation(
   }
   if (resetsAt !== null && !isFiniteNumber(resetsAt)) return null;
   if (!isFiniteNumber(observedAt)) return null;
-  return { terminalId, window, statement, usedPercent, resetsAt, observedAt, configDir };
+  const shell = typeof event.shell === "string" && event.shell !== "" ? event.shell : null;
+  return { terminalId, window, statement, usedPercent, resetsAt, observedAt, configDir, shell };
 }
 
 /** The terminal an agent event is about, wherever its shape carries it. */

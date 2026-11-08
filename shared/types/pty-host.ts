@@ -892,6 +892,8 @@ export type PtyHostEvent =
        * when the launch env named one that can't be resolved.
        */
       configDir: string | null;
+      /** The shell the pane started, whose startup files may have changed that folder. */
+      shell: string | null;
       timestamp: number;
     }
   | {

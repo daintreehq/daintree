@@ -14,16 +14,25 @@ import {
  */
 export interface ClaudeUsageRecord extends ClaudeUsageObservation {
   configDir: string | null;
+  /** The shell the pane started, as the pty host named it; null when unknown. */
+  shell: string | null;
 }
 
 /**
- * The latest Claude Code usage message seen per config folder and limit on
- * this machine (#15727, #16370), from every pane on every pty host. Kept for
- * the app's life and never aged out: a reading whose reset has passed is still
- * what a pane showed, and its own times say how old it is. Folders keep the
- * order they were first seen in.
+ * The latest Claude Code usage message seen per config folder, shell and limit
+ * on this machine (#15727, #16370), from every pane on every pty host. The
+ * shell is part of the key because it decides whether the folder is certain:
+ * a reading that is couldn't be replaced by one that isn't. Kept for the app's
+ * life and never aged out: a reading whose reset has passed is still what a
+ * pane showed, and its own times say how old it is. Keys keep the order they
+ * were first seen in.
  */
-const latest = new Map<string | null, Map<ClaudeUsageWindow, ClaudeUsageRecord>>();
+const latest = new Map<string, Map<ClaudeUsageWindow, ClaudeUsageRecord>>();
+
+function sourceKey(record: ClaudeUsageRecord): string {
+  return JSON.stringify([record.configDir, record.shell]);
+}
+let generation = 0;
 
 // Windows paths are case-insensitive, so two spellings of one folder share a key.
 function folderIdentity(dir: string): string {
@@ -51,15 +60,19 @@ export async function observeClaudeUsage(
   record: ClaudeUsageRecord,
   canonical: (dir: string) => Promise<string> = canonicalClaudeConfigDir
 ): Promise<void> {
+  const startedIn = generation;
   const configDir = record.configDir === null ? null : await canonical(record.configDir);
+  // A clear while the folder resolved drops this reading with the rest.
+  if (startedIn !== generation) return;
   recordClaudeUsageObservation({ ...record, configDir });
 }
 
 export function recordClaudeUsageObservation(record: ClaudeUsageRecord): void {
-  let byWindow = latest.get(record.configDir);
+  const key = sourceKey(record);
+  let byWindow = latest.get(key);
   if (byWindow === undefined) {
     byWindow = new Map();
-    latest.set(record.configDir, byWindow);
+    latest.set(key, byWindow);
   }
   const current = byWindow.get(record.window);
   // Shards report independently, so an older sighting can arrive second.
@@ -68,8 +81,8 @@ export function recordClaudeUsageObservation(record: ClaudeUsageRecord): void {
 }
 
 /**
- * The latest reading per config folder and limit: folders in the order first
- * seen, limits in {@link CLAUDE_USAGE_WINDOWS} order within each.
+ * The latest reading per config folder, shell and limit: sources in the order
+ * first seen, limits in {@link CLAUDE_USAGE_WINDOWS} order within each.
  */
 export function readClaudeUsageRecords(): ClaudeUsageRecord[] {
   return [...latest.values()].flatMap((byWindow) =>
@@ -103,5 +116,6 @@ export function readClaudeUsageObservations(): ClaudeUsageObservation[] {
 }
 
 export function clearClaudeUsageObservations(): void {
+  generation++;
   latest.clear();
 }

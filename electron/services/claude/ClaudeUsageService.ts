@@ -131,7 +131,8 @@ export async function readClaudeUsageAccounts(
   const settings = await deps
     .readSettings()
     .catch((): ClaudeUsageSettings => ({ claude: undefined, globalEnv: undefined }));
-  const profileDir = shellProfileConfigDir(deps.readShellObservation());
+  const observation = deps.readShellObservation();
+  const profileDir = shellProfileConfigDir(observation);
   const profileIdentity = profileDir ? await deps.canonicalKey(profileDir) : profileDir;
   // A profile that exports a folder is where a launch with no account of its
   // own ends up, whatever Daintree's layers name.
@@ -145,9 +146,12 @@ export async function readClaudeUsageAccounts(
 
   const groups = new Map<string | null, Group>();
   for (const record of records) {
-    // Only a pane already on the profile's folder is certain to still be on it.
+    // In the shell the probe ran, only a pane already on the profile's folder
+    // is certain to still be on it. A pane in another shell never ran that
+    // profile, so its launch folder stands, as it does with no probe at all.
+    const ranProfile = record.shell === null || record.shell === observation?.shell;
     const identity =
-      profileIdentity !== undefined && record.configDir !== profileIdentity
+      profileIdentity !== undefined && ranProfile && record.configDir !== profileIdentity
         ? null
         : record.configDir;
     let group = groups.get(identity);

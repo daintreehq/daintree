@@ -447,6 +447,7 @@ describe("bridgePtyEvent", () => {
       resetsAt: 1_793_599_200_000,
       observedAt: 1_793_590_000_000,
       configDir: "/home/me/.claude-work",
+      shell: "/bin/zsh",
       timestamp: 1_793_590_000_000,
     } as const;
 
@@ -469,6 +470,7 @@ describe("bridgePtyEvent", () => {
           resetsAt: 1_793_599_200_000,
           observedAt: 1_793_590_000_000,
           configDir: "/home/me/.claude-work",
+          shell: "/bin/zsh",
         },
       ]);
     });
@@ -482,6 +484,18 @@ describe("bridgePtyEvent", () => {
       await vi.waitFor(() => expect(readClaudeUsageRecords()).toHaveLength(1));
       expect(readClaudeUsageRecords()).toEqual([
         expect.objectContaining({ terminalId: "term-4", configDir: null }),
+      ]);
+    });
+
+    it.each([
+      ["no shell", { shell: undefined }],
+      ["an empty shell", { shell: "" }],
+      ["a shell that isn't a string", { shell: 7 }],
+    ])("records one with %s as of unknown shell (#16370)", async (_name, change) => {
+      expect(bridgePtyEvent({ ...observed, ...change } as never)).toBe(true);
+      await vi.waitFor(() => expect(readClaudeUsageRecords()).toHaveLength(1));
+      expect(readClaudeUsageRecords()).toEqual([
+        expect.objectContaining({ terminalId: "term-4", shell: null }),
       ]);
     });
 

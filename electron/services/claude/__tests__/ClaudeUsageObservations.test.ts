@@ -16,10 +16,15 @@ const reading = (overrides: Partial<ClaudeUsageRecord>): ClaudeUsageRecord => ({
   resetsAt: 2_000,
   observedAt: 1_000,
   configDir: "/home/me/.claude",
+  shell: "/bin/zsh",
   ...overrides,
 });
 
-const withoutFolder = ({ configDir: _configDir, ...observation }: ClaudeUsageRecord) => observation;
+const withoutFolder = ({
+  configDir: _configDir,
+  shell: _shell,
+  ...observation
+}: ClaudeUsageRecord) => observation;
 
 describe("ClaudeUsageObservations", () => {
   afterEach(() => clearClaudeUsageObservations());
@@ -82,6 +87,18 @@ describe("ClaudeUsageObservations", () => {
     ]);
   });
 
+  it("keeps readings from panes in different shells apart, though their folder is one", () => {
+    recordClaudeUsageObservation(reading({ terminalId: "t1", usedPercent: 80, observedAt: 1_000 }));
+    recordClaudeUsageObservation(
+      reading({ terminalId: "t2", usedPercent: 30, observedAt: 2_000, shell: "/bin/bash" })
+    );
+
+    expect(readClaudeUsageRecords().map((record) => [record.terminalId, record.shell])).toEqual([
+      ["t1", "/bin/zsh"],
+      ["t2", "/bin/bash"],
+    ]);
+  });
+
   it("answers agent.readQuota with the newest per limit across folders, without the folder", () => {
     recordClaudeUsageObservation(reading({ terminalId: "t1", usedPercent: 80, observedAt: 3_000 }));
     recordClaudeUsageObservation(
@@ -114,7 +131,7 @@ describe("ClaudeUsageObservations", () => {
       ),
       withoutFolder(reading({ terminalId: "t1", usedPercent: 80, observedAt: 3_000 })),
     ]);
-    expect(readings.every((entry) => !("configDir" in entry))).toBe(true);
+    expect(readings.every((entry) => !("configDir" in entry) && !("shell" in entry))).toBe(true);
   });
 
   it("answers agent.readQuota with the newer reading even when its folder was seen second", () => {
@@ -164,6 +181,20 @@ describe("ClaudeUsageObservations", () => {
       }),
       reading({ terminalId: "t3", configDir: null }),
     ]);
+  });
+
+  it("drops a reading whose folder was still resolving when the store was cleared", async () => {
+    let finish: (dir: string) => void = () => {};
+    const pending = observeClaudeUsage(
+      reading({}),
+      () => new Promise<string>((resolve) => (finish = resolve))
+    );
+
+    clearClaudeUsageObservations();
+    finish("/home/me/.claude");
+    await pending;
+
+    expect(readClaudeUsageRecords()).toEqual([]);
   });
 
   it("keeps a reading after its reset has passed", () => {

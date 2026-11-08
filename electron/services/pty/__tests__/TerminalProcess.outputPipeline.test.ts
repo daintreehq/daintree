@@ -503,6 +503,8 @@ describe("TerminalProcess Claude usage observation (#15727)", () => {
         observedAt: expect.any(Number),
         // No CLAUDE_CONFIG_DIR in the launch env: Claude's own folder.
         configDir: path.join(os.homedir(), ".claude"),
+        // The shell whose startup files could still move that folder.
+        shell: "/bin/zsh",
         timestamp: seen[0]?.observedAt,
       },
     ]);

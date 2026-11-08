@@ -27,6 +27,7 @@ const record = (overrides: Partial<ClaudeUsageRecord>): ClaudeUsageRecord => ({
   resetsAt: 5_000,
   observedAt: 1_000,
   configDir: HOME_CLAUDE,
+  shell: "/bin/zsh",
   ...overrides,
 });
 
@@ -191,6 +192,27 @@ describe("readClaudeUsageAccounts (#16370)", () => {
     );
 
     expect(accounts.map((account) => account.kind)).toEqual(["unknown"]);
+  });
+
+  it("keeps a pane's launch folder when its shell isn't the one whose profile exports a folder", async () => {
+    const observation = { shell: "/bin/zsh", env: { CLAUDE_CONFIG_DIR: STRAY } };
+    recordClaudeUsageObservation(record({ terminalId: "t1", configDir: WORK, shell: "/bin/bash" }));
+    recordClaudeUsageObservation(record({ terminalId: "t2", configDir: WORK, shell: null }));
+
+    const accounts = await readClaudeUsageAccounts(
+      deps({ readShellObservation: () => observation })
+    );
+
+    // The bash pane never ran zsh's profile; a pane of unknown shell might have.
+    expect(
+      accounts.map((account) => [
+        account.kind,
+        account.readings.map((reading) => reading.terminalId),
+      ])
+    ).toEqual([
+      ["account", ["t1"]],
+      ["unknown", ["t2"]],
+    ]);
   });
 
   it("trusts each pane's launch folder when no probe has answered", async () => {
