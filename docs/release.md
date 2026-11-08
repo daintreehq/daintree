@@ -8,6 +8,8 @@ Releases are built by **three per-OS workflows** — `.github/workflows/release-
 
 Use the `release` skill (`.claude/skills/release/`) to ship a release. After one question, the version, it runs unattended: the dry-run decision, the changelog, the gitflow merges, the tag, watching all three workflows to green, and recovering from failures.
 
+The release commit also carries the output of `npm run db:freeze`, which records the database migrations the release ships so a later edit to one fails CI ([persistence-and-migrations.md](architecture/persistence-and-migrations.md#drizzle-migrations)).
+
 ## Release Notes Format
 
 `CHANGELOG.md` is the chronological record; each release prepends a `## [X.Y.Z] - YYYY-MM-DD` section with an intro paragraph and `###` Breaking Changes / Features / Bug Fixes / Performance sections, grouped by `**Area**` when long. The GitHub Release body is that section without its heading line. The full rules for shape, voice, what is left out and how long a section should be live in [`.claude/skills/release/references/release-notes.md`](../.claude/skills/release/references/release-notes.md).

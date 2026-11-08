@@ -175,3 +175,16 @@ export function freezeMigrations(
   const added = toFrozenMigrations(source).slice(ledger.migrations.length);
   return { ledger: { migrations: [...ledger.migrations, ...added] }, added };
 }
+
+/** `npm run db:freeze`: writes the ledger only when something new was frozen. */
+export function freezeMigrationLedger(
+  migrationsFolder: string,
+  ledgerPath: string
+): FrozenMigration[] {
+  const { ledger, added } = freezeMigrations(
+    readMigrationLedger(ledgerPath),
+    readMigrationSource(migrationsFolder)
+  );
+  if (added.length > 0) fs.writeFileSync(ledgerPath, serializeMigrationLedger(ledger));
+  return added;
+}

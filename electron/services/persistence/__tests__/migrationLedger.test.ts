@@ -1,13 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import {
   findJournalProblems,
   findLedgerDrift,
+  freezeMigrationLedger,
   freezeMigrations,
   readMigrationLedger,
   readMigrationSource,
+  serializeMigrationLedger,
   toFrozenMigrations,
   type JournalEntry,
   type MigrationLedger,
@@ -185,5 +189,55 @@ describe("freezeMigrations", () => {
     expect(() => freezeMigrations(shippedLedger, outOfOrder)).toThrow(
       /0002_add_gadgets: when 1500 is not later/
     );
+  });
+});
+
+describe("freezeMigrationLedger", () => {
+  let tmpDir: string;
+  let migrations: string;
+  let ledgerPath: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-migration-ledger-"));
+    migrations = path.join(tmpDir, "migrations");
+    ledgerPath = path.join(tmpDir, "frozen-migrations.json");
+    const entries = [...shipped, unshipped];
+    fs.mkdirSync(path.join(migrations, "meta"), { recursive: true });
+    fs.writeFileSync(
+      path.join(migrations, "meta", "_journal.json"),
+      JSON.stringify({ version: "7", dialect: "sqlite", entries })
+    );
+    fs.writeFileSync(path.join(migrations, "meta", "0000_snapshot.json"), "{}");
+    for (const [tag, sql] of Object.entries(sqlOf(entries))) {
+      fs.writeFileSync(path.join(migrations, `${tag}.sql`), sql);
+    }
+    fs.writeFileSync(ledgerPath, serializeMigrationLedger(shippedLedger));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("writes the new migration into the ledger file, and nothing on a rerun", () => {
+    expect(freezeMigrationLedger(migrations, ledgerPath).map((m) => m.tag)).toEqual([
+      "0002_add_gadgets",
+    ]);
+    const frozen = fs.readFileSync(ledgerPath, "utf8");
+    expect(
+      findLedgerDrift(readMigrationLedger(ledgerPath), readMigrationSource(migrations))
+    ).toEqual([]);
+    expect(readMigrationLedger(ledgerPath).migrations).toHaveLength(3);
+
+    expect(freezeMigrationLedger(migrations, ledgerPath)).toEqual([]);
+    expect(fs.readFileSync(ledgerPath, "utf8")).toBe(frozen);
+  });
+
+  it("leaves the ledger file untouched when a shipped migration drifted", () => {
+    fs.appendFileSync(path.join(migrations, "0001_add_widgets.sql"), "-- tweak\n");
+    const before = fs.readFileSync(ledgerPath, "utf8");
+    expect(() => freezeMigrationLedger(migrations, ledgerPath)).toThrow(
+      /0001_add_widgets: SQL changed after it shipped/
+    );
+    expect(fs.readFileSync(ledgerPath, "utf8")).toBe(before);
   });
 });

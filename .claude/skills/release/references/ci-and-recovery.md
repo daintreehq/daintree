@@ -109,7 +109,7 @@ A fix pushed blind costs an hour per guess. Before pushing one, make the failure
 
 ### Re-tag
 
-In `WT`, with every fix proven on `release-fix/vX.Y.Z` and every old run terminal:
+In `WT`, with every fix proven on `release-fix/vX.Y.Z` and every old run terminal (a fix that added a database migration also needs `npm run db:freeze` committed on that branch):
 
 ```bash
 set -euo pipefail
