@@ -443,13 +443,31 @@ describe("PtyClient fabric", () => {
       client.dispose();
     });
 
-    it("RAM-scales the shard heap budget and mirrors it into the governor env", () => {
-      const client = createFabricClient();
-      const arg = forks[0].execArgv.find((a) => a.startsWith("--max-old-space-size="));
-      const heapMb = Number(arg?.split("=")[1]);
-      expect(heapMb).toBeGreaterThanOrEqual(512);
-      expect(heapMb).toBeLessThanOrEqual(2048);
-      expect(forks[0].env.DAINTREE_PTY_HEAP_BUDGET_MB).toBe(String(heapMb));
+    it("RAM-scales the default and project shard heaps alike and mirrors them into the governor env", () => {
+      const totalmem = vi.spyOn(os, "totalmem").mockReturnValue(32 * 1024 ** 3);
+      try {
+        const client = createFabricClient();
+        client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+
+        for (const shard of [defaultShard(), projectShard("project-a")]) {
+          expect(shard.execArgv).toContain("--max-old-space-size=1024");
+          expect(shard.env.DAINTREE_PTY_HEAP_BUDGET_MB).toBe("1024");
+        }
+        client.dispose();
+      } finally {
+        totalmem.mockRestore();
+      }
+    });
+
+    it("lets an explicit memoryLimitMb override the RAM-scaled budget on every shard", () => {
+      const client = new PtyClientClass({ fabric: true, maxProjectShards: 4, memoryLimitMb: 768 });
+      defaultShard().child.emit("message", { type: "ready" });
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+
+      for (const shard of [defaultShard(), projectShard("project-a")]) {
+        expect(shard.execArgv).toContain("--max-old-space-size=768");
+        expect(shard.env.DAINTREE_PTY_HEAP_BUDGET_MB).toBe("768");
+      }
       client.dispose();
     });
   });

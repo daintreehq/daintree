@@ -92,8 +92,9 @@ import type { WorkerMemoryAccounting } from "../../../electron/services/pty/anal
  * The heap budget this family asks the governor for when the environment has no
  * opinion of its own.
  *
- * 2048 MiB is a shipped value, not an invented one: it is what `PtyHostLifecycle`
- * gives a RAM-scaled fabric shard. It is preferred over the 512 legacy default
+ * 2048 MiB is a shipped value, not an invented one: it is the RAM-scaled heap
+ * `PtyHostLifecycle` gives a host on a 64 GB machine. It is preferred over the 512
+ * a small machine gets
  * so the scripted worker-memory term stays the binding constraint by a wide
  * margin at every rung of the utilization ladder — see `workerTermDominates`.
  */

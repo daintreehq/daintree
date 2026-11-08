@@ -180,6 +180,7 @@ describe("PtyClient Handshake Protocol", () => {
         [],
         expect.objectContaining({
           execArgv: expect.arrayContaining(["--max-old-space-size=1024"]),
+          env: expect.objectContaining({ DAINTREE_PTY_HEAP_BUDGET_MB: "1024" }),
         })
       );
     });
