@@ -66,11 +66,14 @@ const suitesOf = (job) => {
   return suite.includes("${{") ? [] : [suite];
 };
 
-// Jobs that actually ship bits, found by the action they run rather than by
-// name — a second publisher added under any other job id still gets traced.
+// Jobs that actually ship bits, found by what they run rather than by name — a
+// second publisher added under any other job id still gets traced. A job that
+// pushes to another repository (the Homebrew tap) publishes too.
 const publishersOf = (jobs) =>
   Object.keys(jobs).filter((id) =>
-    (jobs[id].steps ?? []).some((step) => step.uses?.includes("/publish-daintree"))
+    (jobs[id].steps ?? []).some(
+      (step) => step.uses?.includes("/publish-daintree") || /\bgit push\b/.test(step.run ?? "")
+    )
   );
 
 // A job with no `if:` is implicitly `if: success()`, which is what makes a
@@ -124,6 +127,19 @@ describe("release workflow e2e gating contract (#11117)", () => {
       expect(publishers.length).toBeGreaterThan(0);
     }
   );
+
+  it("traces a job that only pushes to another repository as a publisher", () => {
+    const pushOnly = {
+      gate: { uses: E2E_WORKFLOW },
+      tap: { needs: ["gate"], steps: [{ run: "git add x\ngit push origin HEAD" }] },
+      lint: { steps: [{ run: "npm run lint" }] },
+    };
+    expect(publishersOf(pushOnly)).toEqual(["tap"]);
+    const macos = workflows.find((w) => w.file === "release-macos.yml");
+    expect(macos.publishers).toEqual(
+      expect.arrayContaining(["publish-daintree", "publish-homebrew-tap"])
+    );
+  });
 
   it.each(workflows)("$file: every build directly needs every gate", ({ jobs, gates, builds }) => {
     for (const build of builds) {
