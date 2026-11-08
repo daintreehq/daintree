@@ -140,7 +140,7 @@ describe("KbdChord keyboard layout", () => {
     const { container } = render(<KbdChord shortcut="Cmd+/" isMac={false} />);
     await act(async () => {});
     expect(keys(container)).toEqual(["Ctrl", "!"]);
-    expect(container.querySelector(".sr-only")?.textContent).toBe("Ctrl !");
+    expect(container.querySelector(".sr-only")?.textContent).toBe("Ctrl Exclamation Mark");
 
     layout = new Map([...letters, ["Slash", "/"]] as [string, string][]);
     await act(async () => {

@@ -159,10 +159,13 @@ function startWatching(): void {
 
 /** Calls `listener` when the labels change; the layout is watched while anyone listens. */
 export function subscribeKeyLabels(listener: () => void): () => void {
-  listeners.add(listener);
+  // A wrapper per subscription, so a stale disposer for a listener that has
+  // since subscribed again can't remove the newer registration.
+  const registration = () => listener();
+  listeners.add(registration);
   startWatching();
   return () => {
-    if (!listeners.delete(listener) || listeners.size > 0) return;
+    if (!listeners.delete(registration) || listeners.size > 0) return;
     stopWatching?.();
     stopWatching = null;
     readGeneration++;

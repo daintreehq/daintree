@@ -435,9 +435,50 @@ function spokenToken(rawToken: string, isMac: boolean): string {
   return rawToken;
 }
 
-/** A layout label read aloud: its name when it has one ("." → "Period"). */
+// The symbols other layouts put on the physically matched keys. Named because
+// a screen reader set to skip punctuation would otherwise drop the key.
+const SPOKEN_LAYOUT_SYMBOLS: Record<string, string> = {
+  "!": "Exclamation Mark",
+  "?": "Question Mark",
+  ":": "Colon",
+  "^": "Caret",
+  $: "Dollar",
+  "*": "Asterisk",
+  "<": "Less Than",
+  ">": "Greater Than",
+  "#": "Number Sign",
+  "&": "Ampersand",
+  "%": "Percent",
+  "@": "At",
+  "~": "Tilde",
+  "|": "Vertical Bar",
+  _: "Underscore",
+  '"': "Double Quote",
+  "(": "Left Parenthesis",
+  ")": "Right Parenthesis",
+  "{": "Left Brace",
+  "}": "Right Brace",
+  "§": "Section",
+  "°": "Degree",
+  "´": "Acute Accent",
+  "¨": "Diaeresis",
+  "¸": "Cedilla",
+  "¤": "Currency Sign",
+  "½": "One Half",
+  "²": "Superscript Two",
+  "¡": "Inverted Exclamation Mark",
+  "¿": "Inverted Question Mark",
+  "«": "Left Guillemet",
+  "»": "Right Guillemet",
+  "€": "Euro",
+  "£": "Pound",
+};
+
+/** A layout label read aloud: its name when it has one ("." → "Period", "!" → "Exclamation Mark"). */
 function spokenLabel(label: string): string {
-  return ownLookup(SPOKEN_KEY_NAMES, label) ?? labelCap(label);
+  return (
+    ownLookup(SPOKEN_KEY_NAMES, label) ?? ownLookup(SPOKEN_LAYOUT_SYMBOLS, label) ?? labelCap(label)
+  );
 }
 
 // The glyphs a literal key cap draws, as the token names the spoken tables use.

@@ -504,9 +504,13 @@ describe("layout key labels", () => {
   });
 
   it("is today's text with no labels or an empty map", () => {
-    for (const combo of ["Cmd+/", "Cmd+Shift+[", "Cmd+Alt+`", "Cmd+K ;"]) {
-      expect(parseChord(combo, true, new Map())).toEqual(parseChord(combo, true));
-      expect(formatChordText(combo, false, undefined)).toBe(formatChordText(combo, false));
+    for (const keyLabels of [undefined, new Map<string, string>()]) {
+      expect(parseChord("Cmd+Shift+[", true, keyLabels)).toEqual([["⌘", "⇧", "["]]);
+      expect(parseChord("Cmd+K ;", true, keyLabels)).toEqual([["⌘", "K"], [";"]]);
+      expect(formatChordText("Cmd+Alt+`", false, keyLabels)).toBe("Ctrl+Alt+`");
+      expect(labelWithShortcut("Help", "Cmd+/", true, keyLabels)).toBe("Help (⌘/)");
+      expect(describeChord("Cmd+/", false, keyLabels)).toBe("Ctrl Slash");
+      expect(comboToAriaKeyshortcuts("Cmd+/", true, keyLabels)).toBe("Meta+/");
     }
   });
 
@@ -514,7 +518,8 @@ describe("layout key labels", () => {
     expect(describeChord("Cmd+/", true)).toBe("Command Slash");
     expect(describeChord("Cmd+/", true, new Map([["/", "."]]))).toBe("Command Period");
     expect(comboToAriaKeyshortcuts("Cmd+=", true, new Map([["=", "+"]]))).toBe("Meta+Plus");
-    expect(describeChord("Cmd+/", true, azerty)).toBe("Command !");
+    expect(describeChord("Cmd+/", true, azerty)).toBe("Command Exclamation Mark");
+    expect(describeChord("Cmd+[", false, azerty)).toBe("Ctrl Caret");
     expect(describeChord("Cmd+K ;", false, azerty)).toBe("Ctrl K, then M");
     expect(comboToAriaKeyshortcuts("Cmd+/", true, azerty)).toBe("Meta+!");
     expect(comboToAriaKeyshortcuts("Cmd+Shift+[", false, azerty)).toBe("Control+Shift+^");

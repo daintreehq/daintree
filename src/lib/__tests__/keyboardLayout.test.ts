@@ -176,7 +176,8 @@ describe("keyboard layout store", () => {
 
   it("re-reads on focus and notifies only when the labels change", async () => {
     let current = US;
-    installKeyboard(async () => current);
+    const getLayoutMap = vi.fn(async () => current);
+    installKeyboard(getLayoutMap);
     const listener = vi.fn();
     const unsubscribe = subscribeKeyLabels(listener);
     await flush();
@@ -193,8 +194,16 @@ describe("keyboard layout store", () => {
     expect(getKeyLabels().get("/")).toBe("!");
 
     current = US;
+    const reads = getLayoutMap.mock.calls.length;
+    Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
     document.dispatchEvent(new Event("visibilitychange"));
     await flush();
+    expect(getLayoutMap).toHaveBeenCalledTimes(reads);
+
+    Reflect.deleteProperty(document, "visibilityState");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flush();
+    expect(getLayoutMap).toHaveBeenCalledTimes(reads + 1);
     expect(listener).toHaveBeenCalledTimes(2);
     expect(getKeyLabels()).toBe(US_KEY_LABELS);
     unsubscribe();
@@ -216,7 +225,7 @@ describe("keyboard layout store", () => {
 
     // Modified or composed keystrokes say nothing about the base layer.
     press("KeyQ", "@", { altKey: true });
-    press("KeyQ", "Q", { shiftKey: true });
+    press("Slash", "?", { shiftKey: true });
     press("KeyQ", "œ", { metaKey: true });
     press("KeyQ", "x", { isComposing: true });
     press("KeyQ", "x", { repeat: true });
@@ -264,19 +273,23 @@ describe("keyboard layout store", () => {
     let current = US;
     const getLayoutMap = vi.fn(async () => current);
     installKeyboard(getLayoutMap);
-    const unsubscribe = subscribeKeyLabels(() => {});
+    const listener = vi.fn();
+    const unsubscribe = subscribeKeyLabels(listener);
     await flush();
 
     press("KeyA", "ф");
     await flush();
     expect(getLayoutMap).toHaveBeenCalledTimes(2);
 
-    current = AZERTY;
+    // Only a letter moves (QWERTZ's Y and Z), so the labels stay US while the
+    // layout behind them is a different one.
+    current = new Map([...US, ["KeyY", "z"], ["KeyZ", "y"]]);
     window.dispatchEvent(new Event("focus"));
     await flush();
     press("KeyA", "ф");
     await flush();
     expect(getLayoutMap).toHaveBeenCalledTimes(4);
+    expect(listener).not.toHaveBeenCalled();
     unsubscribe();
   });
 
@@ -313,11 +326,13 @@ describe("keyboard layout store", () => {
   });
 
   it("stops watching with the last subscriber and drops a read in flight", async () => {
-    const read = deferred<Map<string, string>>();
-    const getLayoutMap = vi.fn(() => read.promise);
+    const pending = deferred<Map<string, string>>();
+    let call = 0;
+    const getLayoutMap = vi.fn(() => (call++ === 0 ? Promise.resolve(US) : pending.promise));
     installKeyboard(getLayoutMap);
     const first = subscribeKeyLabels(() => {});
     const second = subscribeKeyLabels(() => {});
+    await flush();
     expect(getLayoutMap).toHaveBeenCalledTimes(1);
 
     first();
@@ -325,12 +340,33 @@ describe("keyboard layout store", () => {
     expect(getLayoutMap).toHaveBeenCalledTimes(2);
 
     second();
-    read.resolve(AZERTY);
+    pending.resolve(AZERTY);
     await flush();
     expect(getKeyLabels()).toBe(US_KEY_LABELS);
 
+    // KeyQ typing "a" disagrees with the US read that landed, so only a
+    // listener left behind would read again.
     window.dispatchEvent(new Event("focus"));
+    document.dispatchEvent(new Event("visibilitychange"));
     press("KeyQ", "a");
+    await flush();
     expect(getLayoutMap).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores a stale disposer for a listener that subscribed again", async () => {
+    const getLayoutMap = vi.fn(async () => US);
+    installKeyboard(getLayoutMap);
+    const listener = () => {};
+    const stale = subscribeKeyLabels(listener);
+    stale();
+    const live = subscribeKeyLabels(listener);
+    await flush();
+    const reads = getLayoutMap.mock.calls.length;
+
+    stale();
+    window.dispatchEvent(new Event("focus"));
+    await flush();
+    expect(getLayoutMap).toHaveBeenCalledTimes(reads + 1);
+    live();
   });
 });
