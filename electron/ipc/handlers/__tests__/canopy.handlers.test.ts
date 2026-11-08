@@ -100,6 +100,7 @@ vi.mock("electron", () => ({
   app: {
     getPath: () => "/tmp",
     getAppPath: () => "/repo",
+    getVersion: () => "1.4.0",
     get isPackaged() {
       return state.packaged;
     },
@@ -239,10 +240,13 @@ vi.mock("../../../services/canopy/canopyLocalReader.js", () => ({
   CanopyLocalReader: vi.fn(function CanopyLocalReader() {
     return localReader;
   }),
+  tryReaderModel: vi.fn(async () => {}),
 }));
 const models = vi.hoisted(() => ({
   ensure: vi.fn(async () => {}),
   dispose: vi.fn(),
+  cancel: vi.fn(),
+  currentDir: vi.fn((): string | null => "/repo/electron/resources/canopy-reader"),
   state: vi.fn(() => ({ id: "daintreehq/canopy-reader-17m", status: "ready" as const })),
   info: vi.fn(async () => ({
     id: "daintreehq/canopy-reader-17m",
@@ -255,12 +259,16 @@ const models = vi.hoisted(() => ({
 const removeDownloadedModels = vi.hoisted(() =>
   vi.fn(async (_root: string, _signal?: AbortSignal) => {})
 );
+const removeStaleUpdates = vi.hoisted(() =>
+  vi.fn(async (_root: string, _signal?: AbortSignal) => {})
+);
 vi.mock("../../../services/canopy/canopyModels.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../services/canopy/canopyModels.js")>()),
   CanopyModels: vi.fn(function CanopyModels() {
     return models;
   }),
   removeDownloadedModels,
+  removeStaleUpdates,
 }));
 const broadcasts = vi.hoisted(() => vi.fn());
 const pushes = vi.hoisted(() => vi.fn());
@@ -280,6 +288,7 @@ import { getDefaultPanelTitle } from "../../../../shared/config/panelKindRegistr
 import { canopyPanelsListing, registerCanopyHandlers } from "../canopy.js";
 import type { CanopySnapshot, CanopyTerminalView } from "../../../../shared/types/ipc/canopy.js";
 import { CanopyModels } from "../../../services/canopy/canopyModels.js";
+import { tryReaderModel } from "../../../services/canopy/canopyLocalReader.js";
 import { CANOPY_METHOD_CHANNELS } from "../canopy.preload.js";
 import { activeTerminalWatches, sizeHolds } from "../canopyTerminalWatch.js";
 import { markProjectlessView } from "../../../window/projectlessViews.js";
@@ -890,9 +899,82 @@ describe("canopy IPC", () => {
     expect(vi.mocked(CanopyModels).mock.calls[0]?.[0]).toBe(
       path.join("/repo", "electron", "resources", "canopy-reader")
     );
+    // Updates go beside the user's data, never where earlier versions downloaded to.
+    const options = vi.mocked(CanopyModels).mock.calls[0]?.[2];
+    expect(options).toEqual({
+      updates: path.join("/tmp", "canopy", "reader-updates"),
+      trial: expect.any(Function),
+      build: "1.4.0",
+    });
+
+    expect(models.cancel).not.toHaveBeenCalled();
     await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "unset");
+    // An update under way stops.
+    expect(models.cancel).toHaveBeenCalled();
     // No read was made, so no reader was ever started.
     expect(localReader.read).not.toHaveBeenCalled();
+
+    // An update runs in a reader of its own first, stopping when the update does.
+    const stop = new AbortController();
+    vi.mocked(tryReaderModel).mockRejectedValueOnce(new Error("Model took too long to load"));
+    await expect(
+      options!.trial!("/tmp/canopy/reader-updates/x.download", stop.signal)
+    ).rejects.toThrow("Model took too long to load");
+    expect(tryReaderModel).toHaveBeenCalledWith(
+      "/tmp/canopy/reader-updates/x.download",
+      stop.signal
+    );
+  });
+
+  it.each(["unset", "hidden"] as const)(
+    "stops an update a retry began before any service was made, once Canopy is %s",
+    async (mode) => {
+      state.mode = "on";
+      await invoke(CANOPY_METHOD_CHANNELS.retryModel, fakeSender(9));
+      expect(models.ensure).toHaveBeenCalled();
+      await invoke(CANOPY_METHOD_CHANNELS.setMode, fakeSender(9), mode);
+      expect(models.cancel).toHaveBeenCalled();
+    }
+  );
+
+  it("lets the last copy's reader go and reads every screen again once an update is in place, and not as one downloads", async () => {
+    let told: (() => void) | undefined;
+    vi.mocked(CanopyModels).mockImplementationOnce(function (_dir: string, onChange: () => void) {
+      told = onChange;
+      return models as unknown as CanopyModels;
+    } as never);
+    state.mode = "on";
+    await invoke(CANOPY_METHOD_CHANNELS.setActive, fakeSender(9), true);
+    // A screen read starts the reader.
+    await vi.waitFor(() => expect(localReader.read).toHaveBeenCalled());
+    // The shipped copy checks out: every screen is read with it.
+    localReader.read.mockClear();
+    told?.();
+    await vi.waitFor(() => expect(localReader.read).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // An update's progress: the copy in use reads on, and what it read stands.
+    localReader.read.mockClear();
+    told?.();
+    told?.();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(localReader.release).not.toHaveBeenCalled();
+    expect(localReader.read).not.toHaveBeenCalled();
+
+    const update = path.join("/tmp", "canopy", "reader-updates", "b".repeat(40));
+    models.currentDir.mockReturnValue(update);
+    models.installedDir.mockResolvedValue(update);
+    try {
+      told?.();
+      expect(localReader.release).toHaveBeenCalledTimes(1);
+      // The screen is read again, by the update.
+      await vi.waitFor(() => expect(localReader.read).toHaveBeenCalled());
+      // Told again with the same copy in use: nothing more to let go.
+      told?.();
+      expect(localReader.release).toHaveBeenCalledTimes(1);
+    } finally {
+      models.currentDir.mockReturnValue("/repo/electron/resources/canopy-reader");
+      models.installedDir.mockResolvedValue("/repo/electron/resources/canopy-reader");
+    }
   });
 
   it("says what the model is and whether it is on this machine, as the models say", async () => {
@@ -1000,6 +1082,11 @@ describe("canopy IPC", () => {
         expect(removeDownloadedModels).toHaveBeenCalledWith(
           path.join("/tmp", "canopy", "models"),
           expect.any(AbortSignal)
+        );
+        // An update an app update made stale goes too, whatever the mode.
+        expect(removeStaleUpdates).toHaveBeenCalledWith(
+          path.join("/tmp", "canopy", "reader-updates"),
+          removeDownloadedModels.mock.calls[0]![1]
         );
         // Torn down while it runs: it is told to stop.
         const signal = removeDownloadedModels.mock.calls[0]![1] as AbortSignal;

@@ -164,6 +164,72 @@ describe("CanopySettingsTab", () => {
     }
   });
 
+  it("says which revision reads, and whether it is the shipped copy or an update, only while Canopy reads", () => {
+    const shipped = "eb00edfd11d640d412e6b9fffcf812c795d308d4";
+    const api = install("on", {
+      model: { id: MODEL_ID, status: "ready", revision: shipped, source: "bundled" },
+    });
+    const { container, queryByRole, rerender } = render(<CanopySettingsTab />);
+    expect(container.textContent).toContain("Revision eb00edf");
+    expect(container.textContent).toContain("comes with Daintree");
+    expect(container.textContent).not.toMatch(/update|download/i);
+    expect(queryByRole("progressbar")).toBeNull();
+    // Nothing to do about it: no control beyond the two switches.
+    expect(queryByRole("button")).toBeNull();
+
+    useCanopyStore.setState({
+      mode: "on",
+      snapshot: snapshot({
+        mode: "on",
+        activated: true,
+        model: { id: MODEL_ID, status: "ready", revision: "1234567890abcdef", source: "update" },
+      }),
+    });
+    rerender(<CanopySettingsTab />);
+    expect(container.textContent).toContain("Revision 1234567");
+    expect(container.textContent).toContain("An update from Hugging Face");
+
+    // Off, nothing reads, so there is nothing to say.
+    useCanopyStore.setState({
+      mode: "unset",
+      snapshot: snapshot({
+        model: { id: MODEL_ID, status: "ready", revision: shipped, source: "bundled" },
+      }),
+    });
+    rerender(<CanopySettingsTab />);
+    expect(container.textContent).not.toContain("Revision");
+    expect(api.getModel).not.toHaveBeenCalled();
+  });
+
+  it("shows an update on its way, with its progress, while the copy in use reads", () => {
+    const at = (received: number): CanopySnapshot["model"] => ({
+      id: MODEL_ID,
+      status: "ready",
+      revision: "eb00edfd11d640d412e6b9fffcf812c795d308d4",
+      source: "bundled",
+      update: { revision: "fedcba9876543210", received, total: 20_971_520 },
+    });
+    install("on", { model: at(5_242_880) });
+    const { container, getByRole, queryByRole, rerender } = render(<CanopySettingsTab />);
+    expect(container.textContent).toContain("Downloading revision fedcba9");
+    expect(container.textContent).toContain("5 MB of 20 MB");
+    expect(container.textContent).toContain("reads with revision eb00edf until it's in place");
+    const fraction = () => {
+      const bar = getByRole("progressbar", { name: "Model update" });
+      return Number(bar.getAttribute("aria-valuenow")) / Number(bar.getAttribute("aria-valuemax"));
+    };
+    expect(fraction()).toBe(0.25);
+    expect(queryByRole("button")).toBeNull();
+
+    useCanopyStore.setState({
+      mode: "on",
+      snapshot: snapshot({ mode: "on", activated: true, model: at(15_728_640) }),
+    });
+    rerender(<CanopySettingsTab />);
+    expect(container.textContent).toContain("15 MB of 20 MB");
+    expect(fraction()).toBe(0.75);
+  });
+
   it("says when the model that ships with Daintree fails its check, offering no download", () => {
     const error = "The model that comes with Daintree is missing or damaged.";
     const api = install("on", { model: { id: MODEL_ID, status: "failed", error } });

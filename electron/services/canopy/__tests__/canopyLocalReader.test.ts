@@ -431,3 +431,127 @@ describe("CanopyLocalReader", () => {
     });
   });
 });
+
+describe("tryReaderModel", () => {
+  function trialProcess(outcome: { load?: Error | "never"; read?: Error; exit?: "held" } = {}) {
+    let exited!: () => void;
+    const process = {
+      ready:
+        outcome.load === "never"
+          ? new Promise<void>(() => {})
+          : outcome.load
+            ? Promise.reject(outcome.load)
+            : Promise.resolve(),
+      read: vi.fn(async () => {
+        if (outcome.read) throw outcome.read;
+        return { reading: reading(), ms: 9 };
+      }),
+      whenExited: new Promise<void>((resolve) => (exited = resolve)),
+      retire: vi.fn(() => {
+        if (outcome.exit !== "held") exited();
+      }),
+      exit: () => exited(),
+    };
+    process.ready.catch(() => {});
+    return process;
+  }
+
+  it("loads the model in its own reader, reads one screen, and waits for that reader to exit", async () => {
+    const { tryReaderModel } = await import("../canopyLocalReader.js");
+    const p = trialProcess({ exit: "held" });
+    const dirs: string[] = [];
+    let done = false;
+    const trying = tryReaderModel("/updates/abc.download", undefined, (dir) => {
+      dirs.push(dir);
+      return p as never;
+    }).then(() => (done = true));
+    await vi.waitFor(() => expect(p.retire).toHaveBeenCalledTimes(1));
+    expect(dirs).toEqual(["/updates/abc.download"]);
+    expect(p.read).toHaveBeenCalledTimes(1);
+    // Its folder is not to be moved while it holds the files.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(done).toBe(false);
+    p.exit();
+    await trying;
+    expect(done).toBe(true);
+  });
+
+  it.each([
+    ["can't load", { load: new Error("This model needs a newer version of Daintree") }],
+    ["can't read a screen", { read: new Error("Tokenizer has no [SEP]") }],
+  ] as const)("throws for a model that %s, letting its reader go", async (_label, outcome) => {
+    const { tryReaderModel } = await import("../canopyLocalReader.js");
+    const p = trialProcess(outcome);
+    await expect(tryReaderModel("/updates/abc.download", undefined, () => p as never)).rejects.toBe(
+      "load" in outcome ? outcome.load : outcome.read
+    );
+    expect(p.retire).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops a load once told to, letting its reader go", async () => {
+    const { tryReaderModel } = await import("../canopyLocalReader.js");
+    const p = trialProcess({ load: "never" });
+    const stop = new AbortController();
+    const trying = tryReaderModel("/updates/abc.download", stop.signal, () => p as never);
+    stop.abort();
+    const thrown = await trying.then(
+      () => null,
+      (e: unknown) => e
+    );
+    expect((thrown as Error).message).toBe("cancelled");
+    expect(p.retire).toHaveBeenCalledTimes(1);
+    expect(p.read).not.toHaveBeenCalled();
+  });
+
+  it("stops a read once told to, letting its reader go and its signal be", async () => {
+    const { tryReaderModel } = await import("../canopyLocalReader.js");
+    const p = trialProcess();
+    p.read.mockImplementation(() => new Promise(() => {}));
+    const stop = new AbortController();
+    const removed = vi.spyOn(stop.signal, "removeEventListener");
+    const trying = tryReaderModel("/updates/abc.download", stop.signal, () => p as never).then(
+      () => null,
+      (e: unknown) => e
+    );
+    await vi.waitFor(() => expect(p.read).toHaveBeenCalled());
+    stop.abort();
+    expect(((await trying) as Error).message).toBe("cancelled");
+    expect(p.retire).toHaveBeenCalledTimes(1);
+    expect(removed).toHaveBeenCalledWith("abort", expect.any(Function));
+  });
+
+  it("says the reader hasn't exited ahead of why it failed, its folder not to be moved", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { tryReaderModel } = await import("../canopyLocalReader.js");
+      const why = new Error("Tokenizer has no [SEP]");
+      const p = trialProcess({ read: why, exit: "held" });
+      const trying = tryReaderModel("/updates/abc.download", undefined, () => p as never).then(
+        () => null,
+        (e: unknown) => e
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      const thrown = (await trying) as Error;
+      expect(thrown.message).toMatch(/hasn't exited/);
+      expect(thrown.cause).toBe(why);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("leaves a model whose reader won't exit to a later try, its folder not to be moved", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { tryReaderModel } = await import("../canopyLocalReader.js");
+      const p = trialProcess({ exit: "held" });
+      const trying = tryReaderModel("/updates/abc.download", undefined, () => p as never).then(
+        () => null,
+        (e: unknown) => e
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(((await trying) as Error).message).toMatch(/hasn't exited/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

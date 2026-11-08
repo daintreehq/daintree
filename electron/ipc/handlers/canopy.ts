@@ -64,14 +64,16 @@ import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore
 import { searchScreens } from "../../services/canopy/canopyScreenSearch.js";
 import { readInputLines } from "../../services/canopy/canopyInputLines.js";
 import { isCanopyMode, readCanopyMode } from "../../services/canopy/canopyMode.js";
-import { CanopyLocalReader } from "../../services/canopy/canopyLocalReader.js";
+import { CanopyLocalReader, tryReaderModel } from "../../services/canopy/canopyLocalReader.js";
 import {
   CANOPY_MODEL,
   CanopyModels,
   canopyModelName,
   removeDownloadedModels,
+  removeStaleUpdates,
 } from "../../services/canopy/canopyModels.js";
 import { store } from "../../store.js";
+import { isE2EMode, isSmokeTest } from "../../setup/runtimeFlags.js";
 import { hostInstanceId } from "../../services/hostInstance.js";
 import { traced } from "../../services/canopy/canopyTrace.js";
 import {
@@ -180,8 +182,8 @@ function currentPlan(): CanopyPlan {
 
 let models: CanopyModels | null = null;
 let reader: CanopyLocalReader | null = null;
-/** Whether the model was ready when last told, so only a change wakes the service. */
-let modelWasReady = false;
+/** The folder the model was read from when last told, so only a change wakes the service. */
+let modelDirWas: string | null = null;
 
 /**
  * Where the app ships the reader model (#16415): its resources once packaged,
@@ -193,9 +195,24 @@ function bundledModelDir(): string {
     : path.join(app.getAppPath(), "electron", "resources", "canopy-reader");
 }
 
+/**
+ * Where newer revisions fetched from Hugging Face live (#16416), or null where
+ * none are looked for: test runs read the shipped copy and nothing else.
+ */
+function modelUpdatesDir(): string | null {
+  if (isE2EMode || isSmokeTest) return null;
+  return path.join(app.getPath("userData"), "canopy", "reader-updates");
+}
+
 /** Made on first use: a user who never turns Canopy on never checks the model. */
 function getModels(): CanopyModels {
-  models ??= new CanopyModels(bundledModelDir(), onModelsChanged);
+  models ??= new CanopyModels(bundledModelDir(), onModelsChanged, {
+    updates: modelUpdatesDir(),
+    // An update is loaded and read with once in a reader of its own before
+    // the reader in use lets go of the copy that works.
+    trial: (dir, signal) => tryReaderModel(dir, signal),
+    build: app.getVersion(),
+  });
   return models;
 }
 
@@ -208,10 +225,16 @@ function modelReady(): boolean {
   return models?.state()?.status === "ready";
 }
 
+/**
+ * A model that arrives, goes, or is replaced by an update has every screen
+ * read again by the one now in use; progress alone only tells the views.
+ */
 function onModelsChanged(): void {
-  const ready = modelReady();
-  if (ready !== modelWasReady) {
-    modelWasReady = ready;
+  const dir = models?.currentDir() ?? null;
+  if (dir !== modelDirWas) {
+    // The last copy's reader lets go of its files, so they can be deleted.
+    if (modelDirWas !== null) reader?.release();
+    modelDirWas = dir;
     service?.readerChanged();
   } else {
     service?.modelChanged();
@@ -219,9 +242,10 @@ function onModelsChanged(): void {
 }
 
 /**
- * With Canopy on, checks the shipped model, once a launch and never on the
- * launch's own path: nothing waits for it, and screens are read once it checks
- * out (`onModelsChanged`).
+ * With Canopy on, checks the model to read with, once a launch and never on
+ * the launch's own path, then looks for a newer revision on Hugging Face:
+ * nothing waits for either, screens are read once a copy checks out, and again
+ * once an update is in place (`onModelsChanged`).
  */
 function ensureModel(): void {
   if (readCanopyMode() !== "on") return;
@@ -334,7 +358,12 @@ export function changeCanopyMode(
   }
   if (mode !== was) modeRevision++;
   store.set("canopyMode", mode);
-  if (mode !== "on") stopWorkerTerminalWatches();
+  if (mode !== "on") {
+    stopWorkerTerminalWatches();
+    // An update under way stops, keeping what it fetched: a look begun
+    // before any service was made included.
+    models?.cancel();
+  }
   // Nothing was started, and nothing is wanted: no service to tell, but
   // every view still hears the change, as a service would have told them.
   if (!service && mode !== "on") {
@@ -2767,13 +2796,20 @@ export function registerCanopyHandlers(): () => void {
       payload: terminalIds,
     })
   );
-  // Whatever Canopy's mode: a user who hid it has a downloaded model too.
+  // Whatever Canopy's mode: a user who hid it has a downloaded model too, and
+  // an update an app update has made stale, deleted without a look online.
   const stopCleanup = new AbortController();
   const downloadedModelsCleanup = setTimeout(() => {
     removeDownloadedModels(
       path.join(app.getPath("userData"), "canopy", "models"),
       stopCleanup.signal
     ).catch((error: unknown) => console.warn("[Canopy] Couldn't delete downloaded models:", error));
+    const updates = modelUpdatesDir();
+    if (updates !== null) {
+      removeStaleUpdates(updates, stopCleanup.signal).catch((error: unknown) =>
+        console.warn("[Canopy] Couldn't delete stale model updates:", error)
+      );
+    }
   }, DOWNLOADED_MODELS_CLEANUP_DELAY_MS);
   downloadedModelsCleanup.unref?.();
   return () => {
@@ -2816,6 +2852,6 @@ export function registerCanopyHandlers(): () => void {
     reader = null;
     models?.dispose();
     models = null;
-    modelWasReady = false;
+    modelDirWas = null;
   };
 }

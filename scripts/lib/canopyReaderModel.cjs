@@ -67,11 +67,40 @@ async function prepareModel({
 } = {}) {
   const missing = invalidFiles(dir, manifest);
   if (missing.length === 0) return { fetched: [] };
+  await checkPublished(manifest, fetchImpl);
   fs.mkdirSync(dir, { recursive: true });
   for (const spec of missing) {
     await fetchFile(dir, manifest, spec, fetchImpl, log);
   }
   return { fetched: missing.map((spec) => spec.name) };
+}
+
+/**
+ * The app orders reader revisions by when Hugging Face published them, and
+ * never reads with one older than it ships (#16416): the manifest's
+ * `published` has to be the pinned revision's own date. Asked of the Hub API,
+ * which counts no download.
+ */
+async function checkPublished(manifest, fetchImpl) {
+  const url = `${HF}/api/models/${manifest.id}/revision/${manifest.revision}`;
+  const response = await fetchImpl(url, {
+    headers: { "User-Agent": USER_AGENT },
+    signal: AbortSignal.timeout(FILE_TIMEOUT_MS),
+  });
+  if (!response.ok) {
+    throw new Error(`Looking up ${manifest.revision.slice(0, 12)} failed: HTTP ${response.status}`);
+  }
+  const detail = await response.json();
+  const published = Date.parse(manifest.published);
+  if (
+    detail.sha !== manifest.revision ||
+    !Number.isFinite(published) ||
+    Date.parse(detail.lastModified) !== published
+  ) {
+    throw new Error(
+      `published in ${path.relative(ROOT, MANIFEST_PATH)} is ${manifest.published}, but Hugging Face published ${manifest.revision.slice(0, 12)} at ${detail.lastModified}`
+    );
+  }
 }
 
 /** One pinned file into place: checked before it is written, staged beside it, then renamed over it. */
