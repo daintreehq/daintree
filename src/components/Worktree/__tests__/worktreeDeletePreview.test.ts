@@ -37,6 +37,7 @@ import {
   observedAtRiskCommits,
   WorktreeDeletePreviewError,
   type WorktreeDeletePreview,
+  type WorktreeDeletePreviewOutcome,
   type WorktreeSubmoduleRiskState,
 } from "../worktreeDeletePreview";
 
@@ -782,19 +783,18 @@ describe("worktreeDeleteBlockedBy (#12115)", () => {
 });
 
 describe("worktreeDeleteRefusedBy (#16436)", () => {
-  const preview = (submodules: WorktreeSubmoduleRiskState) =>
-    ({
-      state: "verified",
-      preview: {
-        trackedChangeCount: 0,
-        untrackedFileCount: 0,
-        hasTrackedChanges: false,
-        hasUntrackedFiles: false,
-        changes: [],
-        rootPath: "/repo/wt-1",
-        submodules,
-      },
-    }) as const;
+  const preview = (submodules: WorktreeSubmoduleRiskState): WorktreeDeletePreviewOutcome => ({
+    state: "verified",
+    preview: {
+      trackedChangeCount: 0,
+      untrackedFileCount: 0,
+      hasTrackedChanges: false,
+      hasUntrackedFiles: false,
+      changes: [],
+      rootPath: "/repo/wt-1",
+      submodules,
+    },
+  });
   const seen = emptyRisk({ incomplete: true, atRiskCommits: [{ oid: "abc", subject: "s" }] });
 
   it("refuses wherever either surface would: the narrow refusal plus a partial walk's commits", () => {

@@ -243,8 +243,16 @@ describe("mcpConfirmStore", () => {
         .getState()
         .setPreview("a", { lines: ["⚠ held"], worktreeDeleteBlock: "unverified" });
       useMcpConfirmStore.getState().resolveCurrent("rejected");
+      // The same id asked again with no fetch of its own: a retry left behind
+      // by the settled request would be found and run here.
+      void requestMcpConfirmation(pendingFixture({ requestId: "a" }));
+      useMcpConfirmStore
+        .getState()
+        .setPreview("a", { lines: ["⚠ held"], worktreeDeleteBlock: "unverified" });
       useMcpConfirmStore.getState().retryPreview("a");
       expect(settledRetry).not.toHaveBeenCalled();
+      expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+      useMcpConfirmStore.getState().resolveCurrent("rejected");
 
       const expiredRetry = vi.fn();
       void requestMcpConfirmation(pendingFixture({ requestId: "b" }), undefined, {

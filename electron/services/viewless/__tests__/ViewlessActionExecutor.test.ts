@@ -7,7 +7,9 @@ import {
   type ViewlessApprovalAsk,
   type ViewlessDeps,
   type ViewlessPtyReader,
+  type ViewlessWorkspaceHosts,
 } from "../ViewlessActionExecutor.js";
+import type { SubmoduleDeleteRisk } from "../../../../shared/types/submodule.js";
 import {
   makeDeps,
   makeHosts,
@@ -17,6 +19,11 @@ import {
   PROJECT,
   request,
 } from "./viewlessTestDeps.js";
+
+/** What the project's host answers for a delete preview it could read. */
+type DeletePreviewRead = NonNullable<
+  Awaited<ReturnType<ViewlessWorkspaceHosts["getDeletePreview"]>>
+>;
 
 describe("viewless actions", () => {
   it("covers exactly the agent-facing actions", () => {
@@ -363,35 +370,43 @@ describe("viewless actions", () => {
         changedFileCount: 0,
         changes: [],
       };
-      const risk = {
+      const risk: SubmoduleDeleteRisk = {
         entries: [],
         dirtyFiles: [],
         untrackedFiles: [],
-        atRiskCommits: [] as { oid: string; subject: string }[],
+        atRiskCommits: [],
         requiresMechanicalForce: false,
         incomplete: false,
       };
-      for (const [read, message] of [
+      const seen = [{ oid: "a1b2c3d4e5f6", subject: "Vendored fix" }];
+      const reads: [DeletePreviewRead, RegExp][] = [
         [
-          {
-            changes: clean,
-            risk: { ...risk, atRiskCommits: [{ oid: "a1b2c3d4e5f6", subject: "Vendored fix" }] },
-          },
+          { changes: clean, risk: { ...risk, atRiskCommits: seen }, teardown: null },
           /1 submodule commit \(a1b2c3d4 Vendored fix\) is on no remote/,
         ],
         // The parent status failed, but the inventory finished and saw them.
         [
-          {
-            changes: "unreadable" as const,
-            risk: { ...risk, atRiskCommits: [{ oid: "a1b2c3d4e5f6", subject: "Vendored fix" }] },
-          },
+          { changes: "unreadable", risk: { ...risk, atRiskCommits: seen }, teardown: null },
           /on no remote/,
         ],
-        [{ changes: clean, risk: { ...risk, incomplete: true } }, /couldn't be fully checked/],
-        [{ changes: clean, risk: "unreadable" as const }, /couldn't be fully checked/],
-      ] as const) {
+        // The parent status failed and the walk stopped short, but it saw them.
+        [
+          {
+            changes: "unreadable",
+            risk: { ...risk, incomplete: true, atRiskCommits: seen },
+            teardown: null,
+          },
+          /at least 1 submodule commit .* are on no remote/,
+        ],
+        [
+          { changes: clean, risk: { ...risk, incomplete: true }, teardown: null },
+          /couldn't be fully checked/,
+        ],
+        [{ changes: clean, risk: "unreadable", teardown: null }, /couldn't be fully checked/],
+      ];
+      for (const [read, message] of reads) {
         const { deps, hosts, invoke } = setup();
-        hosts.getDeletePreview.mockResolvedValueOnce({ ...read, teardown: null });
+        hosts.getDeletePreview.mockResolvedValueOnce(read);
         const requestApproval = vi.fn(async (_ask: ViewlessApprovalAsk) => ({
           decision: "approved" as const,
           deadline: Date.now() + 60_000,
@@ -404,8 +419,9 @@ describe("viewless actions", () => {
 
         expect(requestApproval).not.toHaveBeenCalled();
         expect(result).toMatchObject({ ok: false, error: { code: "EXECUTION_ERROR" } });
-        expect(result.ok === false && result.error.message).toMatch(message);
-        expect(result.ok === false && result.error.message).toContain("Nothing was deleted.");
+        const refused = result?.ok === false ? result.error.message : "";
+        expect(refused).toMatch(message);
+        expect(refused).toContain("Nothing was deleted.");
         expect(invoke).not.toHaveBeenCalledWith(
           PROJECT.id,
           CHANNELS.WORKTREE_DELETE,
@@ -414,34 +430,37 @@ describe("viewless actions", () => {
       }
     });
 
-    it("still asks when only the parent status failed and the inventory refuses nothing", async () => {
+    it("still asks when the parent status failed and the inventory saw nothing to refuse on", async () => {
       // The host re-reads both for itself and may proceed, as a view's own
-      // confirm treats the same state.
-      const { deps, hosts } = setup();
-      hosts.getDeletePreview.mockResolvedValueOnce({
-        changes: "unreadable",
-        risk: {
-          entries: [],
-          dirtyFiles: [],
-          untrackedFiles: [],
-          atRiskCommits: [],
-          requiresMechanicalForce: false,
-          incomplete: true,
-        },
-        teardown: null,
-      });
-      const requestApproval = vi.fn(async (_ask: ViewlessApprovalAsk) => ({
-        decision: "rejected" as const,
-      }));
+      // confirm treats the same states: a completed inventory that found
+      // nothing, and one that stopped short without seeing any commits.
+      for (const incomplete of [false, true]) {
+        const { deps, hosts } = setup();
+        hosts.getDeletePreview.mockResolvedValueOnce({
+          changes: "unreadable",
+          risk: {
+            entries: [],
+            dirtyFiles: [],
+            untrackedFiles: [],
+            atRiskCommits: [],
+            requiresMechanicalForce: false,
+            incomplete,
+          },
+          teardown: null,
+        });
+        const requestApproval = vi.fn(async (_ask: ViewlessApprovalAsk) => ({
+          decision: "rejected" as const,
+        }));
 
-      await executeViewlessAction(
-        { ...request("worktree.delete", deleteArgs), requestApproval },
-        deps
-      );
+        await executeViewlessAction(
+          { ...request("worktree.delete", deleteArgs), requestApproval },
+          deps
+        );
 
-      expect(requestApproval).toHaveBeenCalledTimes(1);
-      const [ask] = requestApproval.mock.calls[0]!;
-      expect(ask.lines[0]).toMatch(/Could not verify current changes/);
+        expect(requestApproval).toHaveBeenCalledTimes(1);
+        const [ask] = requestApproval.mock.calls[0]!;
+        expect(ask.lines[0]).toMatch(/Could not verify current changes/);
+      }
     });
 
     it("says when the host couldn't read what the delete would discard", async () => {

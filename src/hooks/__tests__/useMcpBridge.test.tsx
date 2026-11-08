@@ -1477,15 +1477,58 @@ describe("useMcpBridge", () => {
         expect(useMcpConfirmStore.getState().current?.worktreeDeleteBlock).toBe("at-risk-commits");
       });
 
+      const shown = useMcpConfirmStore.getState().current?.preview;
+      expect(shown).toContain("  a1b2c3d Vendored fix");
+
       mocks.teardownPreview.mockRejectedValueOnce(new Error("port gone"));
       useMcpConfirmStore.getState().retryPreview("req-held");
       await vi.waitFor(() => {
         expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
       });
       expect(useMcpConfirmStore.getState().current?.worktreeDeleteBlock).toBe("at-risk-commits");
+      expect(useMcpConfirmStore.getState().current?.preview).toEqual(shown);
       expect(mocks.buildPreview).toHaveBeenCalledTimes(2);
 
       useMcpConfirmStore.getState().resolveCurrent("rejected");
+    });
+
+    it("never takes its approval evidence from a fetch that lands after the answer", async () => {
+      // The dialog holds approval while the fetch reads; this is the answer
+      // arriving anyway. The late fetch puts up a gate nobody typed, and the
+      // approval must not be taken as covering it.
+      let land: (preview: unknown) => void = () => {};
+      mocks.buildPreview
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              land = resolve;
+            })
+        )
+        .mockResolvedValue(dirty);
+      renderHook(() => useMcpBridge());
+
+      const dispatched = dispatchHandler?.({
+        requestId: "req-late",
+        actionId: "worktree.delete",
+        args: { worktreeId: "wt-1", force: true },
+      });
+      await vi.waitFor(() => {
+        expect(useMcpConfirmStore.getState().current?.previewPending).toBe(true);
+      });
+
+      useMcpConfirmStore.getState().resolveCurrent("approved");
+      land(dirty);
+      await dispatched;
+
+      expect(mocks.dispatch).not.toHaveBeenCalled();
+      expect(sendDispatchActionResponse).toHaveBeenCalledWith({
+        requestId: "req-late",
+        result: {
+          ok: false,
+          error: { code: "CONFIRMATION_REQUIRED", message: expect.stringContaining("feature/x") },
+        },
+        confirmationDecision: "approved",
+      });
     });
   });
 
