@@ -56,7 +56,10 @@ export interface FleetConfirmLabels {
   expired: string;
 }
 
-export function buildConfirmLabels(kind: FleetPendingActionKind, count: number): FleetConfirmLabels {
+export function buildConfirmLabels(
+  kind: FleetPendingActionKind,
+  count: number
+): FleetConfirmLabels {
   const { verb, target, noun } = CONFIRM_COPY[kind];
   const capitalized = noun.charAt(0).toUpperCase() + noun.slice(1);
   return {
