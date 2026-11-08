@@ -581,6 +581,8 @@ export type AgentResumeTemplate =
   | {
       kind: "session-id";
       args: string[];
+      /** Expands into {@link AgentResume} `assignSessionIdArgs` (#16470). */
+      assignSessionIdArgs?: string[];
       sessionIdPattern?: string;
       quitCommand?: string;
       resumeLatestArgs?: string[];
@@ -593,6 +595,12 @@ export type AgentResumeTemplate =
 
 const SESSION_ID_PLACEHOLDER = "{sessionId}";
 
+function fillSessionIdPlaceholder(args: readonly string[], sessionId: string): string[] {
+  // A replacer function, so `$&` or `$1` inside a captured id is inserted
+  // literally instead of being read as a replacement pattern.
+  return args.map((arg) => arg.replace(SESSION_ID_PLACEHOLDER, () => sessionId));
+}
+
 function expandResumeTemplate(template: AgentResumeTemplate): AgentResume {
   const args = [...template.args];
   if (template.kind === "project-scoped") {
@@ -603,11 +611,13 @@ function expandResumeTemplate(template: AgentResumeTemplate): AgentResume {
     };
   }
   const resumeLatestArgs = template.resumeLatestArgs ? [...template.resumeLatestArgs] : undefined;
+  const assignArgs = template.assignSessionIdArgs ? [...template.assignSessionIdArgs] : undefined;
   return {
     kind: "session-id",
-    // A replacer function, so `$&` or `$1` inside a captured id is inserted
-    // literally instead of being read as a replacement pattern.
-    args: (sessionId) => args.map((arg) => arg.replace(SESSION_ID_PLACEHOLDER, () => sessionId)),
+    args: (sessionId) => fillSessionIdPlaceholder(args, sessionId),
+    ...(assignArgs
+      ? { assignSessionIdArgs: (sessionId: string) => fillSessionIdPlaceholder(assignArgs, sessionId) }
+      : {}),
     ...(template.sessionIdPattern ? { sessionIdPattern: template.sessionIdPattern } : {}),
     ...(resumeLatestArgs ? { resumeLatestArgs } : {}),
     // The type wants a quit command on every non-escalating `session-id`

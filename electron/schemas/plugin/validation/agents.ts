@@ -158,6 +158,10 @@ export function validateAgentPermissionBypass(
       [["args"], agent.args],
       [["resume", "args"], agent.resume?.args],
       [
+        ["resume", "assignSessionIdArgs"],
+        agent.resume?.kind === "session-id" ? agent.resume.assignSessionIdArgs : undefined,
+      ],
+      [
         ["resume", "resumeLatestArgs"],
         agent.resume?.kind === "session-id" ? agent.resume.resumeLatestArgs : undefined,
       ],

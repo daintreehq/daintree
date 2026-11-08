@@ -192,15 +192,24 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
       }
     }
   }
+  // Only an agent no longer registered gets here with one: its plugin has gone,
+  // and the shape of its id flag with it, so the id can't be taken back off the
+  // command. Leaving the command out refuses the copy, which would otherwise
+  // open the same conversation as its source (#16470).
+  const holdsSourceSession =
+    isPtyPanel(panel) &&
+    !!panel.launchAgentId &&
+    !!panel.agentSessionId &&
+    !!panel.command?.includes(panel.agentSessionId);
   return {
-    command: isPtyPanel(panel) ? panel.command : undefined,
+    command: isPtyPanel(panel) && !holdsSourceSession ? panel.command : undefined,
     env: undefined,
     agentLaunchFlags: isPtyPanel(panel) ? panel.agentLaunchFlags : undefined,
     callerLaunchFlags: isPtyPanel(panel) ? panel.callerLaunchFlags : undefined,
     preset: undefined,
     presetWasStale: false,
     agentSessionId: undefined,
-    replaysSourceCommand: isPtyPanel(panel) && panel.command !== undefined,
+    replaysSourceCommand: isPtyPanel(panel) && !holdsSourceSession && panel.command !== undefined,
   };
 }
 
