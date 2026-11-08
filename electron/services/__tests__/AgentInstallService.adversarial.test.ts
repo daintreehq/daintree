@@ -26,6 +26,7 @@ import {
 } from "../AgentInstallService.js";
 import { virtualWindowsFiles } from "../../utils/__tests__/helpers/virtualWindowsFs.js";
 import { config as antigravityConfig } from "../../../shared/config/agents/antigravity.js";
+import { config as claudeConfig } from "../../../shared/config/agents/claude.js";
 import { resetWindowsExecutableCache } from "../../utils/windowsExecutable.js";
 
 const NODE_DIR = "C:\\Program Files\\nodejs";
@@ -223,6 +224,87 @@ describe("AgentInstallService adversarial", () => {
         expect(spawnMock).not.toHaveBeenCalled();
       }
     );
+  });
+
+  // The native installer is a pipe into a shell and stays copy-only; Homebrew's
+  // cask and WinGet are plain programs with arguments, so they may run here.
+  describe("Claude installers (#16375)", () => {
+    const platforms = [
+      ["darwin", "macos"],
+      ["linux", "linux"],
+      ["win32", "windows"],
+    ] as const;
+    const pipesIntoShell = (command: string) => /\|\s*(?:bash|iex)\b/.test(command);
+    const methods = platforms.flatMap(([platform, os]) =>
+      (claudeConfig.install?.byOs?.[os] ?? []).map(
+        (block, methodIndex) => [platform, block.label ?? "", methodIndex, block] as const
+      )
+    );
+
+    it.each(methods.filter(([, , , block]) => block.commands?.some(pipesIntoShell)))(
+      "%s %s is copy-only and never spawns",
+      async (platform, _label, methodIndex, block) => {
+        expect(isBlockExecutable(block)).toBe(false);
+        setPlatform(platform);
+        getAgentConfigMock.mockReturnValue(claudeConfig);
+
+        const result = await runAgentInstall(
+          { agentId: "claude", jobId: "j1", methodIndex },
+          vi.fn()
+        );
+
+        expect(result.success).toBe(false);
+        expect(result.error).toMatch(/requires manual execution/);
+        expect(spawnMock).not.toHaveBeenCalled();
+      }
+    );
+
+    it("runs the Homebrew cask install without a shell", async () => {
+      setPlatform("darwin");
+      getAgentConfigMock.mockReturnValue(claudeConfig);
+      const methodIndex = claudeConfig.install!.byOs!.macos!.findIndex(
+        (block) => block.label === "Homebrew"
+      );
+      const [brew, ...args] =
+        claudeConfig.install!.byOs!.macos![methodIndex]!.commands![0]!.split(" ");
+      const child = makeFakeChild();
+      spawnMock.mockReturnValue(child);
+
+      const pending = runAgentInstall({ agentId: "claude", jobId: "j1", methodIndex }, vi.fn());
+      await spawned();
+      child.emitClose(0);
+
+      expect((await pending).success).toBe(true);
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      expect(spawnMock.mock.calls[0]?.[0]).toBe(brew);
+      expect(spawnMock.mock.calls[0]?.[1]).toEqual(args);
+      expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({ shell: false });
+    });
+
+    it("runs the WinGet install by absolute path with its agreement flags", async () => {
+      setPlatform("win32");
+      windowsInstallPath();
+      getAgentConfigMock.mockReturnValue(claudeConfig);
+      const methodIndex = claudeConfig.install!.byOs!.windows!.findIndex(
+        (block) => block.label === "winget"
+      );
+      const [, ...args] =
+        claudeConfig.install!.byOs!.windows![methodIndex]!.commands![0]!.split(" ");
+      const child = makeFakeChild();
+      spawnMock.mockReturnValue(child);
+
+      const pending = runAgentInstall({ agentId: "claude", jobId: "j1", methodIndex }, vi.fn());
+      await spawned();
+      child.emitClose(0);
+
+      expect((await pending).success).toBe(true);
+      expect(spawnMock.mock.calls[0]?.[0]).toBe(`${WINDOWS_APPS}\\winget.exe`);
+      expect(spawnMock.mock.calls[0]?.[1]).toEqual(args);
+      expect(spawnMock.mock.calls[0]?.[1]).toEqual(
+        expect.arrayContaining(["--accept-source-agreements", "--accept-package-agreements"])
+      );
+      expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({ shell: false });
+    });
   });
 
   describe("runAgentInstall", () => {

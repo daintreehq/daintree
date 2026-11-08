@@ -60,16 +60,46 @@ export const config: AgentConfig = {
   update: {
     npm: "npm install -g @anthropic-ai/claude-code@latest",
   },
+  // The commands follow https://code.claude.com/docs/en/setup. Agent Setup
+  // defaults to a platform's first block, which is a one-click install, so each
+  // list opens with the first method that needs no Node: Homebrew and WinGet
+  // run without a shell, while the native installer's pipe into a shell keeps it
+  // copy-only. Linux has no such package manager, so npm stays its default.
+  // The native installer is a standalone binary in ~/.local/bin, no npm and no
+  // root, so it also works where a system Node (apt, NodeSource) keeps its
+  // global packages in a root-owned folder.
   install: {
-    docsUrl: "https://github.com/anthropics/claude-code",
+    docsUrl: "https://code.claude.com/docs/en/setup",
     byOs: {
       macos: [
+        {
+          label: "Homebrew",
+          commands: ["brew install --cask claude-code"],
+        },
+        {
+          label: "curl",
+          commands: ["curl -fsSL https://claude.ai/install.sh | bash"],
+        },
         {
           label: "npm",
           commands: ["npm install -g @anthropic-ai/claude-code"],
         },
       ],
       windows: [
+        {
+          label: "winget",
+          // The agreement flags are part of the canonical command, as for every
+          // other winget install here, so the copied and the one-click command
+          // are the same string: without them winget waits on a source-agreement
+          // prompt that piped stdio never shows.
+          commands: [
+            "winget install --id Anthropic.ClaudeCode -e --source winget --accept-source-agreements --accept-package-agreements",
+          ],
+        },
+        {
+          label: "PowerShell",
+          commands: ["irm https://claude.ai/install.ps1 | iex"],
+        },
         {
           label: "npm",
           commands: ["npm install -g @anthropic-ai/claude-code"],
@@ -80,9 +110,6 @@ export const config: AgentConfig = {
           label: "npm",
           commands: ["npm install -g @anthropic-ai/claude-code"],
         },
-        // Anthropic's native installer: a standalone binary in ~/.local/bin,
-        // no npm and no root, so it works where a system Node (apt,
-        // NodeSource) keeps its global packages in a root-owned folder.
         {
           label: "curl",
           commands: ["curl -fsSL https://claude.ai/install.sh | bash"],
@@ -91,7 +118,7 @@ export const config: AgentConfig = {
     },
     troubleshooting: [
       "Restart Daintree after installation to update PATH",
-      "For npm-based installation, ensure Node.js and npm are installed first",
+      "npm installs need Node.js 22 or later; the native installer, Homebrew and WinGet don't",
       "Verify installation with: claude --version",
       "Run 'claude auth login' to authenticate after installing",
     ],
@@ -217,7 +244,7 @@ export const config: AgentConfig = {
       label: "Claude CLI",
       versionArgs: ["--version"],
       severity: "fatal",
-      installUrl: "https://github.com/anthropics/claude-code",
+      installUrl: "https://code.claude.com/docs/en/setup",
     },
   ],
   envSuggestions: [

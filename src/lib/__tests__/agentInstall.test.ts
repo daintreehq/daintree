@@ -640,4 +640,74 @@ describe("agentInstall", () => {
       expect(findNonNpmInstallBlock(null)).toBeNull();
     });
   });
+
+  // Claude's install help is what the missing-CLI gate and Agent Setup render:
+  // the gate lists every block, and Setup runs the first one on a click.
+  describe("Claude install help (#16375)", () => {
+    const oses = ["macos", "linux", "windows"] as const;
+    const load = async (os: (typeof oses)[number]) => {
+      const { getAgentConfig } = await import("../../../shared/config/agentRegistry");
+      return getAgentConfig("claude")!.install!.byOs![os]!;
+    };
+    const commandsOf = (blocks: readonly { commands?: string[] }[]) =>
+      blocks.flatMap((block) => block.commands ?? []);
+
+    it.each([
+      ["macos", /^curl -fsSL https:\/\/claude\.ai\/install\.sh \| bash$/],
+      ["linux", /^curl -fsSL https:\/\/claude\.ai\/install\.sh \| bash$/],
+      ["windows", /^irm https:\/\/claude\.ai\/install\.ps1 \| iex$/],
+    ] as const)("%s offers Anthropic's native installer beside npm", async (os, installer) => {
+      const { isNpmGlobalInstall } = await import("../agentInstall");
+      const commands = commandsOf(await load(os));
+      expect(commands.some((command) => installer.test(command))).toBe(true);
+      expect(commands.some(isNpmGlobalInstall)).toBe(true);
+    });
+
+    it("offers a package manager only on the OS that has it", async () => {
+      const uses = (os: (typeof oses)[number], tool: string) =>
+        load(os).then((blocks) => commandsOf(blocks).some((c) => c.startsWith(`${tool} `)));
+      expect(await uses("macos", "brew")).toBe(true);
+      expect(await uses("windows", "winget")).toBe(true);
+      expect(await uses("linux", "brew")).toBe(false);
+      expect(await uses("linux", "winget")).toBe(false);
+      expect(await uses("macos", "winget")).toBe(false);
+      expect(await uses("windows", "brew")).toBe(false);
+    });
+
+    it("installs the Homebrew cask, not a formula of the same name", async () => {
+      const brew = commandsOf(await load("macos")).filter((c) => c.startsWith("brew "));
+      expect(brew.length).toBeGreaterThan(0);
+      for (const command of brew) expect(command).toMatch(/^brew install --cask claude-code$/);
+    });
+
+    it("lets WinGet install unattended, under the id Anthropic documents", async () => {
+      const winget = commandsOf(await load("windows")).filter((c) => c.startsWith("winget "));
+      expect(winget.length).toBeGreaterThan(0);
+      for (const command of winget) {
+        expect(command).toMatch(/\s--id Anthropic\.ClaudeCode(?:\s|$)/);
+        expect(command).toContain("--accept-source-agreements");
+        expect(command).toContain("--accept-package-agreements");
+      }
+    });
+
+    it("keeps every shell-syntax installer copy-only and every other method one-click", async () => {
+      const { isBlockExecutable } = await import("../agentInstall");
+      for (const os of oses) {
+        for (const block of await load(os)) {
+          const pipesIntoShell = (block.commands ?? []).some((c) => /\|\s*(?:bash|iex)\b/.test(c));
+          expect(isBlockExecutable(block), `${os} ${block.label}`).toBe(!pipesIntoShell);
+        }
+      }
+    });
+
+    it.each(oses)("%s opens on a one-click method that works without a shell", async (os) => {
+      const { isBlockExecutable } = await import("../agentInstall");
+      expect(isBlockExecutable((await load(os))[0]!)).toBe(true);
+    });
+
+    it.each(oses)("%s has a fallback that avoids npm's global folder", async (os) => {
+      const { findNonNpmInstallBlock } = await import("../agentInstall");
+      expect(findNonNpmInstallBlock(await load(os))).not.toBeNull();
+    });
+  });
 });
