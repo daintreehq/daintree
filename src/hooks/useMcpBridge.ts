@@ -20,7 +20,9 @@ import {
   settleWorktreeDeleteOutcome,
   worktreeDeleteBlockedBy,
   worktreeDeleteContentRisk,
+  worktreeDeleteRefusedBy,
   type WorktreeDeletePreviewOutcome,
+  type WorktreeSubmoduleDeleteBlock,
 } from "@/components/Worktree/worktreeDeletePreview";
 import { deriveEffectiveTier } from "@/services/actions/deriveEffectiveTier";
 import { isProtectedBranch as isProtectedBranchName } from "@shared/utils/gitConstants";
@@ -956,6 +958,11 @@ export interface McpConfirmPreviewResult {
   /** Present only when the fetch put a D3 typed-name gate up (#12115). */
   typedNameTarget?: string;
   /**
+   * Why the host will refuse this worktree delete outright (#16436), from the
+   * same fetch as the lines. Never present beside {@link typedNameTarget}.
+   */
+  worktreeDeleteBlock?: WorktreeSubmoduleDeleteBlock;
+  /**
    * What a spawning recipe dispatch's preview offered, for the approval to
    * carry into the run (#12263). Built from the same resolved recipe the lines
    * describe, so the count travelling with the approval is by construction the
@@ -1034,6 +1041,10 @@ export async function buildMcpConfirmPreview(
           ? [...formatWorktreeDeletePreviewLines(null), ...formatTeardownPreviewLines(teardown)]
           : // Monitor gone / already removed → nothing meaningful to preview.
             [];
+    // A delete the host refuses whatever the approver says is unapprovable,
+    // not a tier: no gate goes up for it, plain or forced (#16436).
+    const worktreeDeleteBlock = worktreeDeleteRefusedBy(outcome);
+    if (worktreeDeleteBlock !== null) return { lines, worktreeDeleteBlock };
     const gate = resolveWorktreeDeleteGate(target, outcome);
     return gate.state === "required" ? { lines, typedNameTarget: gate.typedNameTarget } : { lines };
   }

@@ -314,9 +314,9 @@ export function worktreeDeleteContentRisk(
  *
  * The MCP bridge reads a refusal here as "no typed-name gate, the host will
  * refuse", so this must never widen: a failed parent read leaves tracked
- * changes unknown, and that state has to keep its typed-name gate there. The
- * local dialog, which can refuse outright, adds {@link observedAtRiskCommits}
- * on top of this rather than through it.
+ * changes unknown, and that state has to keep its typed-name gate there. A
+ * surface that can refuse outright reads {@link worktreeDeleteRefusedBy}, which
+ * adds {@link observedAtRiskCommits} on top of this rather than through it.
  */
 export function worktreeDeleteBlockedBy(
   outcome: WorktreeDeletePreviewOutcome
@@ -331,11 +331,26 @@ export function worktreeDeleteBlockedBy(
  * True when a failed-parent outcome still carries at-risk commits the
  * submodule walk observed before it stopped. Evidence even from a partial
  * walk, and the host refuses on it — so a surface that can refuse outright
- * (the local dialog) holds the dispatch on it. Deliberately separate from
- * {@link worktreeDeleteBlockedBy}; see there.
+ * holds the dispatch on it, through {@link worktreeDeleteRefusedBy}.
+ * Deliberately separate from {@link worktreeDeleteBlockedBy}; see there.
  */
 export function observedAtRiskCommits(outcome: WorktreeDeletePreviewOutcome): boolean {
   return outcome.state === "failed" && (outcome.submodules?.risk?.atRiskCommits.length ?? 0) > 0;
+}
+
+/**
+ * The refusal a surface that can refuse outright shows for this outcome:
+ * {@link worktreeDeleteBlockedBy} plus {@link observedAtRiskCommits}. The local
+ * dialog and the MCP confirm both refuse on it, so the two reach the same
+ * blocked verdict for the same worktree (#16436). Never a tier input: the
+ * pre-dispatch gate keeps reading `worktreeDeleteBlockedBy` alone.
+ */
+export function worktreeDeleteRefusedBy(
+  outcome: WorktreeDeletePreviewOutcome
+): WorktreeSubmoduleDeleteBlock | null {
+  return (
+    worktreeDeleteBlockedBy(outcome) ?? (observedAtRiskCommits(outcome) ? "at-risk-commits" : null)
+  );
 }
 
 /** Max file rows shown in a compact preview before collapsing the tail. */

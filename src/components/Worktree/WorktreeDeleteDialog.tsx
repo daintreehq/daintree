@@ -17,7 +17,6 @@ import {
   buildSubmoduleCommitRows,
   buildSubmoduleFileRows,
   groupAtRiskCommits,
-  observedAtRiskCommits,
   splitDisplayChanges,
   submoduleCommitsAreCapped,
   submoduleDeleteBlock,
@@ -27,8 +26,8 @@ import {
   settleWorktreeDeleteOutcome,
   summarizeWorktreeChanges,
   teardownPhaseNoun,
-  worktreeDeleteBlockedBy,
   worktreeDeleteContentRisk,
+  worktreeDeleteRefusedBy,
   PREVIEW_FILE_LIMIT,
   type WorktreeDeletePreview,
   type WorktreeSubmoduleRiskState,
@@ -543,9 +542,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     // completed, and a completed inventory is what the host refuses on.
     //
     // Commits a partial walk observed before a parent failure hold it here as
-    // well. This surface can refuse outright, so it does; the shared predicate
-    // stays narrower because the MCP bridge reads a refusal as "no gate".
-    if (worktreeDeleteBlockedBy(outcome) !== null || observedAtRiskCommits(outcome)) {
+    // well: this surface can refuse outright, and so can the MCP confirm, which
+    // refuses on the same predicate (#16436).
+    if (worktreeDeleteRefusedBy(outcome) !== null) {
       setIsDeleting(false);
       return;
     }

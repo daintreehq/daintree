@@ -96,7 +96,10 @@ import {
   unseenTimeoutResult,
   worktreeDeleteGateRefusal,
 } from "../useMcpBridge";
-import type { WorktreeDeletePreviewOutcome } from "@/components/Worktree/worktreeDeletePreview";
+import {
+  WorktreeDeletePreviewError,
+  type WorktreeDeletePreviewOutcome,
+} from "@/components/Worktree/worktreeDeletePreview";
 import { TerminalSpawnSourceSchema } from "@/services/actions/definitions/schemas";
 import { hasCautionLine } from "@/lib/mcpPreviewLines";
 import type { SubmoduleDeleteRisk } from "@shared/types/submodule";
@@ -3881,6 +3884,120 @@ describe("buildMcpConfirmPreview (#11343, #11538)", () => {
       force: false,
     });
     expect(lines).toEqual(["⚠ Could not verify current changes — proceed with caution."]);
+  });
+
+  describe("a delete the host refuses outright (#16436)", () => {
+    function cleanPreview(submodules: unknown, over: Record<string, unknown> = {}) {
+      return {
+        trackedChangeCount: 0,
+        untrackedFileCount: 0,
+        hasTrackedChanges: false,
+        hasUntrackedFiles: false,
+        changes: [],
+        rootPath: "/repo/wt-1",
+        submodules,
+        ...over,
+      };
+    }
+
+    beforeEach(() => {
+      mocks.worktrees.clear();
+      mocks.worktrees.set("wt-1", {
+        id: "wt-1",
+        path: "/repo/wt-1",
+        name: "feature-x",
+        branch: "feature/x",
+        isCurrent: false,
+        isMainWorktree: false,
+      });
+    });
+
+    it("blocks on submodule commits no known remote has, with no typed-name gate", async () => {
+      // Tracked changes under force would otherwise earn the D3 gate; the host
+      // throws on the commits before it reads `force`, so there is nothing to
+      // attest to.
+      mocks.buildPreview.mockResolvedValue(
+        cleanPreview(
+          {
+            status: "verified",
+            risk: emptySubmoduleRisk({
+              atRiskCommits: [{ oid: "a1b2c3d4e5f6", subject: "Vendored fix" }],
+            }),
+          },
+          { hasTrackedChanges: true, trackedChangeCount: 2 }
+        )
+      );
+      for (const force of [false, true]) {
+        const result = await buildMcpConfirmPreview({
+          kind: "worktreeDelete",
+          worktreeId: "wt-1",
+          force,
+        });
+        expect(result.worktreeDeleteBlock).toBe("at-risk-commits");
+        expect(result.typedNameTarget).toBeUndefined();
+      }
+    });
+
+    it("blocks on a submodule check that could not finish, or could not be read", async () => {
+      for (const risk of [null, emptySubmoduleRisk({ incomplete: true })]) {
+        mocks.buildPreview.mockResolvedValue(cleanPreview({ status: "unverified", risk }));
+        const result = await buildMcpConfirmPreview({
+          kind: "worktreeDelete",
+          worktreeId: "wt-1",
+          force: true,
+        });
+        expect(result.worktreeDeleteBlock).toBe("unverified");
+        expect(result.typedNameTarget).toBeUndefined();
+      }
+    });
+
+    it("blocks on commits a partial walk saw even when the parent status read failed", async () => {
+      // The same verdict the local dialog reaches for this outcome.
+      mocks.buildPreview.mockRejectedValue(
+        new WorktreeDeletePreviewError(
+          {
+            status: "unverified",
+            risk: emptySubmoduleRisk({
+              incomplete: true,
+              atRiskCommits: [{ oid: "abc", subject: "s" }],
+            }),
+          },
+          new Error("status timeout")
+        )
+      );
+      const result = await buildMcpConfirmPreview({
+        kind: "worktreeDelete",
+        worktreeId: "wt-1",
+        force: true,
+      });
+      expect(result.worktreeDeleteBlock).toBe("at-risk-commits");
+      expect(result.typedNameTarget).toBeUndefined();
+    });
+
+    it("does not block when only the parent status failed, and keeps the gate there", async () => {
+      // The host re-reads both for itself and may proceed, so this stays an
+      // approvable, gated delete rather than a refusal.
+      mocks.buildPreview.mockRejectedValue(new Error("timeout"));
+      const result = await buildMcpConfirmPreview({
+        kind: "worktreeDelete",
+        worktreeId: "wt-1",
+        force: true,
+      });
+      expect(result.worktreeDeleteBlock).toBeUndefined();
+      expect(result.typedNameTarget).toBe("feature/x");
+    });
+
+    it("does not block a clean worktree", async () => {
+      mocks.buildPreview.mockResolvedValue(
+        cleanPreview({ status: "verified", risk: emptySubmoduleRisk() })
+      );
+      const result = await buildMcpConfirmPreview({
+        kind: "worktreeDelete",
+        worktreeId: "wt-1",
+        force: false,
+      });
+      expect(result.worktreeDeleteBlock).toBeUndefined();
+    });
   });
 
   it("offers the push review it previewed, and only for a push", async () => {
