@@ -437,9 +437,7 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
         [...byHost].map(async ([hostId, group]): Promise<CanopyUntrashOutcome[]> => {
           const mineOf = new Map(group.map(({ mine, receipt }) => [receipt, mine]));
           try {
-            const answered = await apiFor(hostId).untrashBatch(
-              group.map(({ receipt }) => receipt)
-            );
+            const answered = await apiFor(hostId).untrashBatch(group.map(({ receipt }) => receipt));
             return answered.flatMap((outcome) => {
               const mine = mineOf.get(outcome.receipt);
               return mine === undefined ? [] : [{ ...outcome, receipt: mine }];

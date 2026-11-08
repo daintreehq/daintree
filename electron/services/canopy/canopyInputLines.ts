@@ -1,9 +1,9 @@
-import type {
-  CanopyInputLineReading,
-  CanopyRunTarget,
-} from "../../../shared/types/ipc/canopy.js";
+import type { CanopyInputLineReading, CanopyRunTarget } from "../../../shared/types/ipc/canopy.js";
 import type { TerminalInputLineState } from "../../../shared/types/terminalStatus.js";
-import { inputSuggestionRuleFor, observeInputLine } from "../../../shared/utils/terminalInputLine.js";
+import {
+  inputSuggestionRuleFor,
+  observeInputLine,
+} from "../../../shared/utils/terminalInputLine.js";
 import type { PtyClient } from "../PtyClient.js";
 
 /** Screens read at once for one ask: a bulk trash names up to the trash's own limit. */

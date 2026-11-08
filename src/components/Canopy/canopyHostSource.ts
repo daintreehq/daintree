@@ -6,11 +6,7 @@ import type { BulkTransport } from "@shared/utils/canopyBulkEnable";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
 import type { CanopyHostChannel } from "@shared/types/ipc/canopyHost";
-import type {
-  CanopyRunTarget,
-  CanopySnapshot,
-  CanopyTrashOutcome,
-} from "@shared/types/ipc/canopy";
+import type { CanopyRunTarget, CanopySnapshot, CanopyTrashOutcome } from "@shared/types/ipc/canopy";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 import type { IpcInvokeMap } from "@shared/types/ipc/maps";
 import { LOCAL_HOST_ID, type HostId } from "@shared/types/remoteHosts";

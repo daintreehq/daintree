@@ -625,8 +625,7 @@ export interface CanopyInputLineReading {
  * already left the fleet), or why that run alone was not trashed.
  */
 export type CanopyTrashOutcome =
-  | { runId: string; receipt: number | null }
-  | { runId: string; error: string };
+  { runId: string; receipt: number | null } | { runId: string; error: string };
 
 /** One receipt of a bulk Undo: put back, or why that one was not. */
 export interface CanopyUntrashOutcome {

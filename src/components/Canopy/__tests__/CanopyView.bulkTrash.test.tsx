@@ -102,18 +102,15 @@ function installElectron() {
     setActive: vi.fn(async () => baseSnapshot),
     refresh: vi.fn(async () => {}),
     trash: vi.fn(async (): Promise<number | null> => null),
-    trashBatch: vi.fn(
-      async (targets: CanopyRunTarget[]): Promise<CanopyTrashOutcome[]> =>
-        targets.map((target, index) => ({ runId: target.runId, receipt: index + 1 }))
+    trashBatch: vi.fn(async (targets: CanopyRunTarget[]): Promise<CanopyTrashOutcome[]> =>
+      targets.map((target, index) => ({ runId: target.runId, receipt: index + 1 }))
     ),
     untrash: vi.fn(async () => {}),
-    untrashBatch: vi.fn(
-      async (receipts: number[]): Promise<CanopyUntrashOutcome[]> =>
-        receipts.map((receipt) => ({ receipt }))
+    untrashBatch: vi.fn(async (receipts: number[]): Promise<CanopyUntrashOutcome[]> =>
+      receipts.map((receipt) => ({ receipt }))
     ),
-    readInputLines: vi.fn(
-      async (targets: CanopyRunTarget[]): Promise<CanopyInputLineReading[]> =>
-        targets.map((target) => ({ runId: target.runId, state: "empty" }))
+    readInputLines: vi.fn(async (targets: CanopyRunTarget[]): Promise<CanopyInputLineReading[]> =>
+      targets.map((target) => ({ runId: target.runId, state: "empty" }))
     ),
     restoreTrashed: vi.fn(async (runId: string) => ({ runId })),
     removeTrashed: vi.fn(async () => {}),
@@ -255,11 +252,7 @@ describe("CanopyView bulk trash of search results", () => {
   });
 
   it("lists exactly the search's results, with project and observed state", async () => {
-    await open([
-      run("a"),
-      run("b", { workspaceId: "p2" }),
-      run("c", { title: "Ship docs" }),
-    ]);
+    await open([run("a"), run("b", { workspaceId: "p2" }), run("c", { title: "Ship docs" })]);
     await search("review");
     await openReview();
     const rows = reviewRows();
@@ -337,7 +330,8 @@ describe("CanopyView bulk trash of search results", () => {
     await frames();
     expect(reviewRows()).toHaveLength(0);
     expect(document.body.textContent).toContain("Trashed 2 agents");
-    const row = document.getElementById("canopy-card-a") ?? document.getElementById("canopy-card-b");
+    const row =
+      document.getElementById("canopy-card-a") ?? document.getElementById("canopy-card-b");
     await act(async () => {
       fireEvent.keyDown(row!, { key: "z" });
     });

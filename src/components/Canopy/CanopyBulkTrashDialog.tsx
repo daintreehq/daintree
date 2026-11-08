@@ -209,7 +209,9 @@ export function CanopyBulkTrashDialog({
                 key={item.runId}
                 data-run-id={item.runId}
                 data-hold={hold}
-                data-outcome={phase === "done" ? (went ? "trashed" : failure ? "failed" : "left") : undefined}
+                data-outcome={
+                  phase === "done" ? (went ? "trashed" : failure ? "failed" : "left") : undefined
+                }
               >
                 <label className="flex items-start gap-2.5 py-1">
                   <Checkbox

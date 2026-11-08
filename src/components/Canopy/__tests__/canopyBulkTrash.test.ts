@@ -51,9 +51,7 @@ describe("hasReplyDraft", () => {
   it("finds another host's reply only under that host's scope", () => {
     const remote = makeDraftKey("r1", isolatedComposerScope("remote"));
     const shownAllHosts = item(allHostsKey("remote", "r1"), undefined, allHostsKey("remote", "p1"));
-    expect(hasReplyDraft(drafts([[remote, "go on"]]), shownAllHosts, ALL_HOSTS_ID, own)).toBe(
-      true
-    );
+    expect(hasReplyDraft(drafts([[remote, "go on"]]), shownAllHosts, ALL_HOSTS_ID, own)).toBe(true);
     expect(hasReplyDraft(drafts([[remote, "go on"]]), item("r1"), "remote", own)).toBe(true);
     // The same id on the window's own host is another terminal.
     expect(hasReplyDraft(drafts([[remote, "go on"]]), item("r1"), null, own)).toBe(false);
