@@ -426,13 +426,30 @@ describe("terminalStore process detection listeners", () => {
     cleanup();
   });
 
-  it("ignores unknown agentType values for detectedAgentId", () => {
+  it("takes the host's agent id for a plugin agent, registered here or not (#16469)", () => {
+    // The host only reports an agent it recognises, and this view's copy of the
+    // plugin registry may not have arrived yet.
     const cleanup = setupTerminalStoreListeners();
     const detected = handlers.agentDetected;
 
     detected?.({
       terminalId: "term-1",
-      agentType: "not-a-real-agent",
+      agentType: "pi",
+      processName: "pi",
+      timestamp: Date.now(),
+    });
+
+    expect(getPtyPanel("term-1")?.detectedAgentId).toBe("pi");
+    cleanup();
+  });
+
+  it("ignores an empty agentType for detectedAgentId", () => {
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+
+    detected?.({
+      terminalId: "term-1",
+      agentType: "",
       processIconId: "mystery",
       processName: "mystery",
       timestamp: Date.now(),
@@ -513,7 +530,7 @@ describe("terminalStore process detection listeners", () => {
     cleanup();
   });
 
-  it("does not call applyAgentPromotion when agentType is not a built-in agent", () => {
+  it("applies runtime promotion for a plugin agent the host detected (#16469)", () => {
     const cleanup = setupTerminalStoreListeners();
     const detected = handlers.agentDetected;
 
@@ -521,7 +538,24 @@ describe("terminalStore process detection listeners", () => {
 
     detected?.({
       terminalId: "term-1",
-      agentType: "not-a-real-agent",
+      agentType: "pi",
+      processName: "pi",
+      timestamp: Date.now(),
+    });
+
+    expect(applyAgentPromotionMock).toHaveBeenCalledWith("term-1", "pi");
+    cleanup();
+  });
+
+  it("does not call applyAgentPromotion for a detection without an agent", () => {
+    const cleanup = setupTerminalStoreListeners();
+    const detected = handlers.agentDetected;
+
+    applyAgentPromotionMock.mockClear();
+
+    detected?.({
+      terminalId: "term-1",
+      agentType: "",
       processIconId: "mystery",
       processName: "mystery",
       timestamp: Date.now(),
