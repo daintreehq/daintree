@@ -282,6 +282,47 @@ describe("readCodexQuotaProfiles (#13686)", () => {
     ]);
   });
 
+  it("names each account's id beside its name, so accounts sharing a name stay apart (#16407)", async () => {
+    const third = path.join(root, "third");
+    mkdirSync(third);
+    agentSettings.value = {
+      agents: {
+        codex: {
+          accounts: [
+            { id: "company", name: "Work", configDir: second },
+            { id: "lab", name: "Work", configDir: third },
+            { id: "alias", name: "Alias", configDir: defaultHome },
+          ],
+        },
+      },
+    };
+    respondPerHome((home) => (home === second ? 80 : home === third ? 30 : 10));
+    const profiles = await readCodexQuotaProfiles();
+    expect(profiles.map((p) => [p.isDefault, p.accountIds ?? [], used(p.result)])).toEqual([
+      [true, ["alias"], 10],
+      [false, ["company"], 80],
+      [false, ["lab"], 30],
+    ]);
+  });
+
+  it("keeps the ids of every account whose home folds into one row (#16407)", async () => {
+    const link = path.join(root, "link");
+    symlinkSync(second, link, "junction");
+    agentSettings.value = {
+      agents: {
+        codex: {
+          accounts: [
+            { id: "company", name: "Company", configDir: second },
+            { id: "alias", name: "Alias", configDir: link },
+          ],
+        },
+      },
+    };
+    respondPerHome(() => 5);
+    const profiles = await readCodexQuotaProfiles();
+    expect(profiles.map((p) => p.accountIds ?? [])).toEqual([[], ["company", "alias"]]);
+  });
+
   it("files a preset under the account it pins, over its own CODEX_HOME (#16133)", async () => {
     const third = path.join(root, "third");
     mkdirSync(third);
@@ -472,6 +513,29 @@ describe("readCodexQuotaProfiles (#13686)", () => {
       expect(runSession).toHaveBeenCalledTimes(2);
       // The identity stays in main.
       expect(JSON.stringify(profiles)).not.toMatch(/ws-1|example\.com/);
+    });
+
+    it("keeps the ids of the accounts in every home that folds into one login (#16407)", async () => {
+      const third = path.join(root, "third");
+      mkdirSync(third);
+      agentSettings.value = {
+        agents: {
+          codex: {
+            accounts: [
+              { id: "company", name: "Company", configDir: second },
+              { id: "lab", name: "Lab", configDir: third },
+            ],
+          },
+        },
+      };
+      respondAs(() => ({ accountId: "ws-1", email: "me@example.com" }));
+      const profiles = await readCodexQuotaProfiles();
+      expect(profiles).toHaveLength(1);
+      expect(profiles[0]).toMatchObject({
+        isDefault: true,
+        accountIds: ["company", "lab"],
+        accountNames: ["Company", "Lab"],
+      });
     });
 
     it("keeps two users of one Team workspace apart", async () => {

@@ -22,6 +22,8 @@ export interface CodexQuotaProfileTarget {
   presetOrder: number[];
   /** The Codex accounts (#16040) whose folder this is, in account order. */
   accountNames?: string[];
+  /** Their ids, parallel to `accountNames` until a merge drops a repeated name. */
+  accountIds?: string[];
   invalid?: CodexQuotaProfileHomeReason;
   /**
    * Main's own home, read by inheriting main's env rather than naming it, and
@@ -140,6 +142,7 @@ export function resolveCodexQuotaProfiles(
     const existing = byHome.get(homeIdentity(home));
     if (existing) {
       existing.accountNames = [...(existing.accountNames ?? []), account.name];
+      existing.accountIds = [...(existing.accountIds ?? []), account.id];
       continue;
     }
     const target: CodexQuotaProfileTarget = {
@@ -148,6 +151,7 @@ export function resolveCodexQuotaProfiles(
       presetNames: [],
       presetOrder: [],
       accountNames: [account.name],
+      accountIds: [account.id],
     };
     byHome.set(homeIdentity(home), target);
     targets.push(target);

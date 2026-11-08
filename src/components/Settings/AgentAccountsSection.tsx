@@ -3,6 +3,7 @@ import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { actionService } from "@/services/ActionService";
+import { useAgentAccountHeadroom } from "@/hooks/useAgentAccountHeadroom";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { getAgentConfigFolderAccount } from "@shared/config/agentRegistry";
 import type { AgentAccount, AgentSettingsEntry } from "@shared/types";
@@ -57,6 +58,9 @@ export function AgentAccountsSection({
   const offerGenerationRef = useRef(0);
   const [switchRequest, setSwitchRequest] = useState<AccountSwitchRequest | null>(null);
   const offerPaneIds = useAccountSwitchPaneIds(offer);
+  // Quota is read only while the list of accounts is showing (#16407).
+  const [defaultListOpen, setDefaultListOpen] = useState(false);
+  const headroomFor = useAgentAccountHeadroom(agentId, defaultListOpen);
 
   const declaration = getAgentConfigFolderAccount(agentId);
   if (!declaration) return null;
@@ -169,9 +173,18 @@ export function AgentAccountsSection({
                 }
               })();
             }}
+            onOpenChange={setDefaultListOpen}
             options={[
-              { value: DEFAULT_LOGIN, label: "Default login" },
-              ...accounts.map((account) => ({ value: account.id, label: account.name })),
+              {
+                value: DEFAULT_LOGIN,
+                label: "Default login",
+                description: headroomFor({ kind: "default" })?.text,
+              },
+              ...accounts.map((account) => ({
+                value: account.id,
+                label: account.name,
+                description: headroomFor({ kind: "account", accountId: account.id })?.text,
+              })),
             ]}
             isModified={hasSavedDefault}
             onReset={() => {

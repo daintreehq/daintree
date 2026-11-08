@@ -11,6 +11,7 @@ import { SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { useCodexQuota } from "@/hooks/useCodexQuota";
 import { useClaudeUsage } from "@/hooks/useClaudeUsage";
 import { windowLabel } from "@/utils/codexQuotaFormat";
+import { claudeWindowLabel } from "@/utils/agentAccountHeadroom";
 import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
 import {
   CODEX_QUOTA_STALE_AFTER_MS,
@@ -284,10 +285,7 @@ export function claudeStatementText(
   }
 }
 
-/** "weekly limit" as Claude Code names it, in sentence case for a row label. */
-export function claudeWindowLabel(window: ClaudeUsageReading["window"]): string {
-  return window.charAt(0).toUpperCase() + window.slice(1);
-}
+export { claudeWindowLabel };
 
 // No title is all a closed pane and a host that didn't answer have in common,
 // so neither is claimed.

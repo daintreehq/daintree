@@ -304,12 +304,10 @@ function mergePresets(into: PresetLabels, from: PresetLabels): void {
   into.presetOrder = merged.map((entry) => entry.order);
 }
 
-function mergeAccountNames(
-  into: string[] | undefined,
-  from: string[] | undefined
-): string[] | undefined {
+/** Account names, or ids, joined in order without repeating one already held. */
+function mergeUnique(into: string[] | undefined, from: string[] | undefined): string[] | undefined {
   if (!from?.length) return into;
-  return [...(into ?? []), ...from.filter((name) => !into?.includes(name))];
+  return [...(into ?? []), ...from.filter((value) => !into?.includes(value))];
 }
 
 /**
@@ -329,7 +327,8 @@ async function foldBySameDirectory(targets: CodexQuotaProfileTarget[]): Promise<
     const existing = byKey.get(homeKey);
     if (existing) {
       mergePresets(existing, target);
-      existing.accountNames = mergeAccountNames(existing.accountNames, target.accountNames);
+      existing.accountNames = mergeUnique(existing.accountNames, target.accountNames);
+      existing.accountIds = mergeUnique(existing.accountIds, target.accountIds);
       existing.isDefault ||= target.isDefault;
       continue;
     }
@@ -369,6 +368,7 @@ async function readProfiles(force: boolean): Promise<CodexQuotaProfile[]> {
       isDefault: target.isDefault,
       presetNames: target.presetNames,
       ...(target.accountNames?.length && { accountNames: target.accountNames }),
+      ...(target.accountIds?.length && { accountIds: target.accountIds }),
       result,
     };
     // Two homes signed into one login are one row (#13702). It saves a row,
@@ -380,8 +380,10 @@ async function readProfiles(force: boolean): Promise<CodexQuotaProfile[]> {
     if (sameAccount) {
       mergePresets(sameAccount.labels, target);
       sameAccount.profile.presetNames = sameAccount.labels.presetNames;
-      const accountNames = mergeAccountNames(sameAccount.profile.accountNames, target.accountNames);
+      const accountNames = mergeUnique(sameAccount.profile.accountNames, target.accountNames);
       if (accountNames?.length) sameAccount.profile.accountNames = accountNames;
+      const accountIds = mergeUnique(sameAccount.profile.accountIds, target.accountIds);
+      if (accountIds?.length) sameAccount.profile.accountIds = accountIds;
       sameAccount.profile.isDefault ||= profile.isDefault;
       if (result.fetchedAt > sameAccount.profile.result.fetchedAt) {
         sameAccount.profile.result = result;

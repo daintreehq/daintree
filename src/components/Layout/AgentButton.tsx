@@ -46,7 +46,10 @@ import {
   type AccountSwitchNoticeState,
   type AccountSwitchRequest,
 } from "./AccountSwitchNotice";
+import { AccountChoiceText } from "@/components/Terminal/AccountHeadroomHint";
+import { useAgentAccountHeadroom } from "@/hooks/useAgentAccountHeadroom";
 import { useWorktrees } from "@/hooks/useWorktrees";
+import { presetNamesAccountFolder } from "@/utils/agentAccountHeadroom";
 import { actionService } from "@/services/ActionService";
 import {
   ContextMenu,
@@ -333,6 +336,13 @@ export function AgentButton({
     })
   );
 
+  // Quota is read only while the picker is open and the agent has accounts to
+  // choose between (#16407).
+  const hasSavedAccounts =
+    !!getAgentConfigFolderAccount(type) &&
+    sanitizeAgentAccounts(agentSettings?.agents?.[type]?.accounts).length > 0;
+  const accountHeadroom = useAgentAccountHeadroom(type, dropdownOpen && hasSavedAccounts);
+
   const config = getAgentConfig(type);
   if (!config) return null;
   // The agent's own mark, as the launcher's agent rows draw it.
@@ -376,6 +386,15 @@ export function AgentButton({
     : resolveEffectiveAccountId(entry, null);
   const savedAccount =
     savedAccountId === null ? undefined : accounts.find((account) => account.id === savedAccountId);
+  // A launch on the default login still runs the preset it settles on, whose
+  // own folder, if it names one, is the login's (#16407).
+  const defaultLoginHeadroom = accountHeadroom({
+    kind: "default",
+    presetNamesFolder: presetNamesAccountFolder(
+      type,
+      resolveSettledSavedPreset(presets, entry, activeWorktreeId)
+    ),
+  });
   // CCR presets carry the routing prefix in their stored name; strip it for
   // display so the tooltip and menu surfaces show the same human label.
   const presetDisplayName = (preset: { name: string; displayTitle?: string }) =>
@@ -1038,7 +1057,7 @@ export function AgentButton({
                         value={DEFAULT_LOGIN_VALUE}
                         onSelect={(event) => event.preventDefault()}
                       >
-                        Default login
+                        <AccountChoiceText name="Default login" headroom={defaultLoginHeadroom} />
                       </DropdownMenuRadioItem>
                       {accounts.map((account) => (
                         <DropdownMenuRadioItem
@@ -1046,7 +1065,10 @@ export function AgentButton({
                           value={account.id}
                           onSelect={(event) => event.preventDefault()}
                         >
-                          {account.name}
+                          <AccountChoiceText
+                            name={account.name}
+                            headroom={accountHeadroom({ kind: "account", accountId: account.id })}
+                          />
                         </DropdownMenuRadioItem>
                       ))}
                     </DropdownMenuRadioGroup>
