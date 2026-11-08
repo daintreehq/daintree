@@ -10,6 +10,7 @@ import {
 } from "../utils/onlineOnlyScan.js";
 import { getPowerPolicy } from "../window/powerPolicy.js";
 import type { CloudSyncService } from "../../shared/utils/cloudSyncDetection.js";
+import { hasOnlineOnlyEntries } from "../../shared/utils/onlineOnlyFiles.js";
 import type {
   OnlineOnlyFilesSide,
   ProjectOnlineOnlyFiles,
@@ -29,6 +30,10 @@ const NOBODY_LOOKING_FACTOR = 5;
 
 const SIDES: readonly OnlineOnlyScanSide[] = ["git", "workingTree"];
 
+const NOTHING_TO_DISPOSE = { dispose() {} };
+
+type OnlineOnlyListener = (files: ProjectOnlineOnlyFiles) => void;
+
 export interface OnlineOnlyScanner {
   probe(root: string, options: OnlineOnlyScanOptions): OnlineOnlyPass<OnlineOnlyRootShape>;
   scan(
@@ -47,7 +52,7 @@ export interface OnlineOnlyProject {
 interface WatchedProject {
   root: string;
   snapshot: ProjectOnlineOnlyFiles;
-  holders: Map<string, ClientEndpoint>;
+  holders: Map<string, OnlineOnlyListener>;
   timers: Map<OnlineOnlyScanSide, ReturnType<typeof setTimeout>>;
   running: Set<OnlineOnlyPass<unknown>>;
   walkedMs: Record<OnlineOnlyScanSide, number>;
@@ -69,14 +74,15 @@ function sameSide(a: OnlineOnlyFilesSide | null, b: OnlineOnlyFilesSide): boolea
     a !== null &&
     a.files === b.files &&
     a.directories === b.directories &&
-    a.complete === b.complete
+    a.complete === b.complete &&
+    a.rootOnlineOnly === b.rootOnlineOnly
   );
 }
 
 /**
- * Counts each watched project's online-only files for as long as a view asks.
- * Nothing runs for a project no view is holding, so a project outside a cloud
- * folder, or one nobody asked about, costs no process, timer or listener.
+ * Counts each watched project's online-only files for as long as a view, or the
+ * project's workspace host, asks. Nothing runs for a project nobody is holding,
+ * so a project outside a cloud folder costs no process, timer or listener.
  */
 export class ProjectOnlineOnlyService {
   private readonly projects = new Map<string, WatchedProject>();
@@ -95,6 +101,7 @@ export class ProjectOnlineOnlyService {
   // child beside one that won't die. An entry goes when its child really exits.
   private readonly childGone = new Map<string, Promise<void>>();
   private revision = 0;
+  private observers = 0;
 
   constructor(
     private readonly scanner: OnlineOnlyScanner = realScanner,
@@ -109,6 +116,49 @@ export class ProjectOnlineOnlyService {
     }
     this.release(endpoint);
 
+    const watched = this.hold(
+      project,
+      endpoint.endpointId,
+      (files) =>
+        endpoint.send({
+          type: "event",
+          channel: CHANNELS.ONLINE_ONLY_FILES_CHANGED,
+          args: [files],
+        }),
+      endpoint.onClose(() => this.release(endpoint))
+    );
+    return watched.snapshot;
+  }
+
+  release(endpoint: ClientEndpoint): void {
+    this.releaseHolder(endpoint.endpointId);
+  }
+
+  /**
+   * Main's own interest in a project, shared with any view watching it so there
+   * is only ever the one walk. Hears every change until released.
+   */
+  observe(
+    project: OnlineOnlyProject,
+    listener: OnlineOnlyListener
+  ): { files: ProjectOnlineOnlyFiles; release: () => void } {
+    const holderId = `observer:${++this.observers}`;
+    const watched = this.hold(project, holderId, listener, NOTHING_TO_DISPOSE);
+    return { files: watched.snapshot, release: () => this.releaseHolder(holderId) };
+  }
+
+  dispose(): void {
+    for (const { closed } of this.held.values()) closed.dispose();
+    this.held.clear();
+    for (const project of [...this.projects.values()]) this.stop(project);
+  }
+
+  private hold(
+    project: OnlineOnlyProject,
+    holderId: string,
+    listener: OnlineOnlyListener,
+    closed: { dispose(): void }
+  ): WatchedProject {
     let watched = this.projects.get(project.id);
     if (watched && watched.root !== project.path) {
       watched = this.moveTo(watched, project);
@@ -116,27 +166,18 @@ export class ProjectOnlineOnlyService {
       watched = this.begin(project);
     }
 
-    watched.holders.set(endpoint.endpointId, endpoint);
-    this.held.set(endpoint.endpointId, {
-      project: watched,
-      closed: endpoint.onClose(() => this.release(endpoint)),
-    });
-    return watched.snapshot;
+    watched.holders.set(holderId, listener);
+    this.held.set(holderId, { project: watched, closed });
+    return watched;
   }
 
-  release(endpoint: ClientEndpoint): void {
-    const held = this.held.get(endpoint.endpointId);
+  private releaseHolder(holderId: string): void {
+    const held = this.held.get(holderId);
     if (!held) return;
-    this.held.delete(endpoint.endpointId);
+    this.held.delete(holderId);
     held.closed.dispose();
-    held.project.holders.delete(endpoint.endpointId);
+    held.project.holders.delete(holderId);
     if (held.project.holders.size === 0) this.stop(held.project);
-  }
-
-  dispose(): void {
-    for (const { closed } of this.held.values()) closed.dispose();
-    this.held.clear();
-    for (const project of [...this.projects.values()]) this.stop(project);
   }
 
   private begin(project: OnlineOnlyProject): WatchedProject {
@@ -164,9 +205,9 @@ export class ProjectOnlineOnlyService {
   private moveTo(previous: WatchedProject, project: OnlineOnlyProject): WatchedProject {
     this.stop(previous);
     const moved = this.begin(project);
-    for (const [endpointId, endpoint] of previous.holders) {
-      moved.holders.set(endpointId, endpoint);
-      const held = this.held.get(endpointId);
+    for (const [holderId, listener] of previous.holders) {
+      moved.holders.set(holderId, listener);
+      const held = this.held.get(holderId);
       if (held) held.project = moved;
     }
     return moved;
@@ -189,7 +230,7 @@ export class ProjectOnlineOnlyService {
     if (seen === null || project.stopped) return;
     this.record(project, side, seen);
 
-    const floor = seen.files + seen.directories > 0 ? OUTSTANDING_REST_MS : SETTLED_REST_MS;
+    const floor = hasOnlineOnlyEntries(seen) ? OUTSTANDING_REST_MS : SETTLED_REST_MS;
     const rest = Math.max(floor, project.walkedMs[side] * REST_PER_WALK_MS);
     const timer = setTimeout(
       () => void this.walkSide(project, side),
@@ -213,9 +254,10 @@ export class ProjectOnlineOnlyService {
     );
     if (shape === null) return null;
     if (shape === "no-git") return { files: 0, directories: 0, complete: true };
-    if (shape === "root-online-only" || shape === "unknown") {
-      return { files: 0, directories: 0, complete: false };
+    if (shape === "root-online-only") {
+      return { files: 0, directories: 0, complete: false, rootOnlineOnly: true };
     }
+    if (shape === "unknown") return { files: 0, directories: 0, complete: false };
 
     const seen = await this.runPass(project, "git", () =>
       this.scanner.scan(project.root, "git", { budgetMs: WALK_BUDGET_MS.git })
@@ -278,16 +320,19 @@ export class ProjectOnlineOnlyService {
   private record(project: WatchedProject, side: OnlineOnlyScanSide, seen: OnlineOnlyFilesSide) {
     if (sameSide(project.snapshot[side], seen)) return;
     project.snapshot = { ...project.snapshot, [side]: seen, revision: ++this.revision };
-    for (const endpoint of project.holders.values()) {
+    for (const listener of project.holders.values()) {
       try {
-        endpoint.send({
-          type: "event",
-          channel: CHANNELS.ONLINE_ONLY_FILES_CHANGED,
-          args: [project.snapshot],
-        });
+        listener(project.snapshot);
       } catch {
         // Silently ignore send failures on a closing link.
       }
     }
   }
+}
+
+let shared: ProjectOnlineOnlyService | null = null;
+
+/** The one service, so a project's views and its workspace host share a walk. */
+export function getProjectOnlineOnlyService(): ProjectOnlineOnlyService {
+  return (shared ??= new ProjectOnlineOnlyService());
 }

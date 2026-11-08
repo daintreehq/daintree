@@ -11,6 +11,8 @@ export interface OnlineOnlyFilesSide {
    * without a download. The counts are then only what it saw, and a zero says nothing.
    */
   complete: boolean;
+  /** The project folder itself is online-only, so nothing inside it could be looked at. Only ever set on `git`. */
+  rootOnlineOnly?: boolean;
 }
 
 /** A project's online-only files. `null` from a read means none of this applies to the project. */

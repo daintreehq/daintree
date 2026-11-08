@@ -1,5 +1,5 @@
 import { access } from "fs/promises";
-import type { InotifyLimit } from "../../shared/types/workspace-host.js";
+import type { InotifyLimit, StatusDownloadGate } from "../../shared/types/workspace-host.js";
 import type { WslGitInvocation } from "../utils/hardenedGit.js";
 import type PQueue from "p-queue";
 import type {
@@ -235,6 +235,10 @@ export class WorktreeMonitor {
   // The current streak of status reads that ended without an answer, and the
   // earliest an automatic pass may start again. Both clear on an answer.
   private _gitStatusUnanswered: GitStatusUnanswered | null = null;
+  private statusDownloadGate: StatusDownloadGate = "open";
+  // One per running updateGitStatus call, so closing the gate can stop the git
+  // of whichever one holds the pass.
+  private readonly passAbandons = new Set<AbortController>();
   private statusUnansweredStreak = 0;
   private statusRetryNotBefore = 0;
 
@@ -761,6 +765,9 @@ export class WorktreeMonitor {
       },
       get gitStatusUnanswered() {
         return monitor._gitStatusUnanswered;
+      },
+      get gitStatusWaitingForDownload() {
+        return monitor.statusDownloadGate === "held";
       },
       get hasRemote() {
         return monitor._hasRemote;
@@ -2168,6 +2175,9 @@ export class WorktreeMonitor {
    * closed.
    */
   getFreshChanges(): Promise<WorktreeChanges> {
+    if (this.statusDownloadGate === "held") {
+      return Promise.reject(new Error(`Git status is waiting for downloads: ${this.path}`));
+    }
     return getWorktreeChangesWithStats(this.path, {
       forceRefresh: true,
       wsl: this.wslInvocation,
@@ -2526,14 +2536,18 @@ export class WorktreeMonitor {
    * While an unanswered read's backoff runs, only a pass the user asked for
    * starts. Everything else is `skipped`; the poll the backoff reschedules
    * runs the forced pass a degraded card gets, which covers what they wanted.
+   * A closed download gate skips all of them, the user's too: git would only
+   * block on the placeholders, and opening the gate queues the pass that's owed.
    */
   async updateGitStatus(
     forceRefresh: boolean = false,
     options?: { userInitiated?: boolean }
   ): Promise<GitStatusPassOutcome> {
+    if (this.statusDownloadGate !== "open") return "skipped";
     if (!options?.userInitiated && Date.now() < this.statusRetryNotBefore) return "skipped";
     const lifecycle = this._pollAbortController.signal;
     const abandon = new AbortController();
+    this.passAbandons.add(abandon);
     const pass = this.gitStatusPass.run(forceRefresh, abandon.signal);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const expired = new Promise<"expired">((resolve) => {
@@ -2544,14 +2558,48 @@ export class WorktreeMonitor {
       result = await Promise.race([pass, expired]);
     } finally {
       clearTimeout(timer);
+      this.passAbandons.delete(abandon);
     }
     if (result === "expired") {
       abandon.abort();
       // A stop already dropped the pass, and a restart's card isn't its to mark.
-      if (!lifecycle.aborted) this.handleStatusPassExpired();
+      // A closed gate dropped it too, and says why the read never answered.
+      if (!lifecycle.aborted && this.statusDownloadGate === "open") {
+        this.handleStatusPassExpired();
+      }
       throw new TimeoutError(`status pass watchdog: ${this.path}`);
     }
     return result;
+  }
+
+  /**
+   * Hold status passes back, or let them run, per what Main saw of `.git`. The
+   * poll loop keeps ticking through a closed gate, since a skipped pass spawns
+   * nothing, so opening it only has to queue the one pass that's owed. A paused
+   * monitor gets that from resume's catch-up instead, and `markDegraded` makes
+   * sure it's a real read.
+   */
+  setStatusDownloadGate(gate: StatusDownloadGate): void {
+    const previous = this.statusDownloadGate;
+    if (gate === previous) return;
+    this.statusDownloadGate = gate;
+
+    if (gate === "held") {
+      for (const abandon of this.passAbandons) abandon.abort();
+      // A streak built against placeholders says nothing about the next read.
+      this.clearStatusUnanswered();
+      this.gitStatusPass.markDegraded();
+      if (this._hasInitialStatus && this.mood !== "error") this.mood = "stale";
+      if (this._isRunning) this.emitUpdate();
+      return;
+    }
+
+    if (!this._isRunning) return;
+    if (previous === "held") this.emitUpdate();
+    if (gate !== "open") return;
+    // Failures against placeholders say nothing about the next read either.
+    if (this.pollingStrategy.isCircuitBreakerTripped()) this.pollingStrategy.reset();
+    void this.queueStatusPassThenPoll(() => true);
   }
 
   /**

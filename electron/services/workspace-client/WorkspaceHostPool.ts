@@ -3,6 +3,7 @@ import os from "node:os";
 import { type WebContents } from "electron";
 import path from "path";
 import { WorkspaceHostProcess, type WorkspaceHostDisposeReason } from "../WorkspaceHostProcess.js";
+import { gateGitStatusOnDownload } from "./statusDownloadGate.js";
 import { store } from "../../store.js";
 import { computeDefaultWarmWorkspaceHosts } from "../../utils/warmWorkspaceHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
@@ -251,8 +252,14 @@ export class WorkspaceHostPool {
     })();
   }
 
-  private createHost(normalizedPath: string): WorkspaceHostProcess {
+  private createHost(normalizedPath: string, projectId: string): WorkspaceHostProcess {
     const host = new WorkspaceHostProcess(normalizedPath, this.config);
+    // Here so a prewarm, a replacement and a retry all start with it closed: a
+    // load's first status pass can't wait for a view to come and ask.
+    const stopGate = gateGitStatusOnDownload(normalizedPath, projectId, (gate) =>
+      host.setStatusDownloadGate(gate)
+    );
+    if (stopGate) host.onDispose(stopGate);
     host.setLogLevelOverrides(this.logLevelOverridesCache);
     host.relayFetchThrottle(this.fetchThrottleMultiplierCache);
     if (this.forgeProviderMatchersCache !== null) {
@@ -335,9 +342,8 @@ export class WorkspaceHostPool {
       }
     }
 
-    const host = this.createHost(normalizedPath);
-
     const projectId = projectStore.resolveProjectIdForPath(normalizedPath);
+    const host = this.createHost(normalizedPath, projectId);
     const initPromise = this.makeInitPromise(host, normalizedPath, projectId);
 
     const newEntry: ProcessEntry = {
@@ -401,9 +407,8 @@ export class WorkspaceHostPool {
 
     if (this.entries.has(normalizedPath)) return;
 
-    const host = this.createHost(normalizedPath);
-
     const projectId = projectStore.resolveProjectIdForPath(normalizedPath);
+    const host = this.createHost(normalizedPath, projectId);
     const initPromise = this.makeInitPromise(host, normalizedPath, projectId);
 
     const entry: ProcessEntry = {
@@ -768,7 +773,7 @@ export class WorkspaceHostPool {
    */
   replaceHost(entry: ProcessEntry, reason: WorkspaceHostDisposeReason): Promise<void> {
     const oldHost = entry.host;
-    const host = this.createHost(entry.projectPath);
+    const host = this.createHost(entry.projectPath, entry.projectId);
     const initPromise = this.makeInitPromise(host, entry.projectPath, entry.projectId);
     entry.host = host;
     entry.initPromise = initPromise;

@@ -50,6 +50,7 @@ import { notifyViewPainted } from "./utils/removeStartupSkeleton";
 import {
   usePanelStoreBootstrap,
   useCloudSyncWarning,
+  useOnlineOnlyFilesSync,
   useRosettaWarning,
   useAccessibilityAnnouncements,
   useUnloadCleanup,
@@ -466,6 +467,7 @@ function AppInner() {
   // App lifecycle hooks
   usePanelStoreBootstrap();
   useCloudSyncWarning(homeDir);
+  useOnlineOnlyFilesSync();
   useRosettaWarning(bootResult);
   useAccessibilityAnnouncements();
   // A switch to another host shows its screen from the start, can be

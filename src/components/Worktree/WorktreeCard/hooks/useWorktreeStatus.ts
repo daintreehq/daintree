@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { WorktreeState } from "@/types";
 import { getWorktreeBranchLabel, isMainWorktreeOnStandardBranch } from "@/lib/worktreeHeadline";
 import { MAIN_WORKTREE_NOTE_TTL_MS, deriveEffectiveNote } from "@/lib/worktreeAiNote";
+import { WAITING_FOR_DOWNLOAD_LABEL } from "@/utils/onlineOnlyFilesCopy";
 
 export type SpineState = "dirty" | "current" | "stale" | "idle";
 
@@ -170,6 +171,11 @@ export function useWorktreeStatus({
 
     if (firstLineLastCommitMessage) {
       return { text: firstLineLastCommitMessage, tone: "muted" };
+    }
+
+    // Git isn't being asked at all until `.git` has downloaded.
+    if (worktree.worktreeChanges == null && worktree.gitStatusWaitingForDownload) {
+      return { text: WAITING_FOR_DOWNLOAD_LABEL, tone: "muted" };
     }
 
     // Git was asked and never answered: "Checking status…" would claim a

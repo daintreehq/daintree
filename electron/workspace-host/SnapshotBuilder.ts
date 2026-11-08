@@ -80,6 +80,7 @@ export interface SnapshotBuilderHost {
   readonly fetchAuthFailed: boolean;
   readonly fetchNetworkFailed: boolean;
   readonly gitStatusUnanswered: GitStatusUnanswered | null;
+  readonly gitStatusWaitingForDownload: boolean;
   readonly hasRemote: boolean | undefined;
   readonly isFetchInFlight: boolean;
   readonly matchedForgeProviderId: string | null;
@@ -233,6 +234,7 @@ export class SnapshotBuilder {
       fetchAuthFailed: this.host.fetchAuthFailed || undefined,
       fetchNetworkFailed: this.host.fetchNetworkFailed || undefined,
       gitStatusUnanswered: this.host.gitStatusUnanswered ?? undefined,
+      gitStatusWaitingForDownload: this.host.gitStatusWaitingForDownload || undefined,
       // Verbatim: `false` is the answer that matters, so it must survive.
       hasRemote: this.host.hasRemote,
       // Read in-flight state authoritatively at snapshot time (lesson #1700)

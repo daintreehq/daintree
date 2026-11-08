@@ -15,7 +15,7 @@ import {
   type ScrollerProps,
   type VirtuosoHandle,
 } from "react-virtuoso";
-import { FolderOpen, LayoutGrid, Plus, RefreshCw, Zap } from "lucide-react";
+import { CloudDownload, FolderOpen, LayoutGrid, Plus, RefreshCw, Zap } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { boundedErrorText } from "@/utils/errorText";
@@ -63,6 +63,9 @@ import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { useWorktreeSelectionStore, useProjectStore } from "@/store";
+import { useOnlineOnlyFilesStore } from "@/store/onlineOnlyFilesStore";
+import { WAITING_FOR_DOWNLOAD_LABEL } from "@/utils/onlineOnlyFilesCopy";
+import { gitStatusWaitsForDownload } from "@shared/utils/onlineOnlyFiles";
 import type { PendingCreation } from "@/store/worktreeStore";
 import { DeletedWorktreeCard } from "@/components/Sidebar/DeletedWorktreeCard";
 import { DeletedWorktreeGroup } from "@/components/Sidebar/DeletedWorktreeGroup";
@@ -768,8 +771,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // loading: a stalled reconnect during the first hydration leaves `isLoading`
   // up for good, and the skeleton would hide the only recovery.
   const showSkeleton = (isLoading || sidebarFailure !== null) && !isFailureSettled;
+  // A load that failed on `.git` placeholders retries itself once they're down,
+  // so Retry and "Couldn't load" would only send the user after the wrong thing.
+  const gitWaitsForDownload = useOnlineOnlyFilesStore((s) => gitStatusWaitsForDownload(s.files));
   const worktreeLoadErrorBanner =
-    loadFailure !== null && error === null && isFailureSettled ? (
+    loadFailure !== null && error === null && isFailureSettled && !gitWaitsForDownload ? (
       <WorktreeLoadErrorBanner error={loadFailure} />
     ) : null;
 
@@ -923,7 +929,15 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           {/* A failed load or a missing connection already has an open
               project — the "Open a Git repository" nudge would contradict the
               banner, so the banner stands alone as the actionable state. */}
-          {loadFailure === null && !isProjectDisconnected && (
+          {gitWaitsForDownload && (
+            <EmptyState
+              variant="zero-data"
+              scale="sidebar"
+              icon={<CloudDownload />}
+              title={WAITING_FOR_DOWNLOAD_LABEL}
+            />
+          )}
+          {!gitWaitsForDownload && loadFailure === null && !isProjectDisconnected && (
             <EmptyState
               variant="zero-data"
               scale="sidebar"
