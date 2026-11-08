@@ -4,6 +4,7 @@ import { act, render } from "@testing-library/react";
 import { TerminalIcon } from "../TerminalIcon";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { setPluginAgentRegistry } from "@shared/config/pluginAgentRegistry";
+import { setUserRegistry } from "@shared/config/agentRegistry";
 import { setPluginCustomIcons } from "@/components/icons/pluginCustomIconStore";
 import {
   PLUGIN_ICON_COMPONENTS,
@@ -410,6 +411,41 @@ describe("TerminalIcon", () => {
             .querySelector("[data-terminal-icon-color]")!
             .getAttribute("data-terminal-icon-color")
         ).toBe("#ff3366");
+      });
+
+      it("lets the agent's colour replace a stale one the caller echoes back", () => {
+        setPluginAgentRegistry({});
+        const chrome = deriveTerminalChrome({ kind: "terminal", launchAgentId: "pi" });
+        const color = (brandColor: string) => {
+          const { container } = render(
+            <TerminalIcon kind="terminal" chrome={chrome} brandColor={brandColor} />
+          );
+          return container
+            .querySelector("[data-terminal-icon-color]")!
+            .getAttribute("data-terminal-icon-color");
+        };
+
+        act(() => setPluginAgentRegistry({ pi: { ...agent, id: "pi", iconId: KEY } }));
+
+        expect(color(chrome.color!)).toBe(agent.color);
+        expect(color("#ff3366")).toBe("#ff3366");
+      });
+
+      it("keeps a user agent's mark when a plugin agent shares its id", () => {
+        const userAgent = { ...agent, id: "pi", iconId: "codex", color: "#ff3366" };
+        setUserRegistry({ pi: userAgent });
+        setPluginAgentRegistry({ pi: { ...agent, id: "pi", iconId: KEY } });
+        try {
+          const { container } = render(
+            <TerminalIcon kind="agent" chrome={deriveTerminalChrome({ launchAgentId: "pi" })} />
+          );
+          const marker = container.querySelector("[data-terminal-icon-id]")!;
+          expect(container.querySelector("[data-plugin-icon]")).toBeNull();
+          expect(marker.getAttribute("data-terminal-icon-id")).toBe("codex");
+          expect(marker.getAttribute("data-terminal-icon-color")).toBe(userAgent.color);
+        } finally {
+          setUserRegistry({});
+        }
       });
 
       it("keeps a panel or process tool on its own glyph when an agent shares its id", () => {

@@ -10,6 +10,7 @@ import {
   type PluginIconId,
 } from "@/components/icons/pluginIconRegistry";
 import type { PanelKind } from "@/types";
+import { getAgentConfig } from "@/config/agents";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { resolveTerminalRunIcon } from "./terminalRunIconRegistry";
 import { isPluginCustomIconKey } from "@shared/config/pluginCustomIcon";
@@ -54,23 +55,28 @@ function semanticId(iconId: string | null | undefined): PluginIconId | undefined
 }
 
 /**
+ * Takes the snapshot as an argument so React Compiler, which caches a call on its
+ * arguments, re-reads when the registry changes. `getAgentConfig` rather than the
+ * snapshot's own entry, so a user agent sharing the id keeps its precedence.
+ */
+function readPluginAgent(agentId: string, pluginAgents: Record<string, unknown>) {
+  return Object.hasOwn(pluginAgents, agentId) ? getAgentConfig(agentId) : undefined;
+}
+
+/**
  * Callers memoise chrome, and a pane restored at startup derives it before
  * plugins load, so an agent's chrome can predate its registry entry and hold the
  * bare agent id. Nothing re-derives it until an input changes, which for an agent
  * with no `detection` block is never, so its icon and colour are read live here.
- *
- * Read off the snapshot rather than through `getAgentConfig`: React Compiler
- * caches a call on its arguments, so the subscription alone wouldn't refresh it.
  */
 function useLiveAgentChrome(chrome: TerminalChromeDescriptor): TerminalChromeDescriptor {
   const pluginAgents = useSyncExternalStore(
     subscribeToPluginAgentRegistry,
     getPluginAgentRegistrySnapshot
   );
-  const { agentId } = chrome;
-  if (!agentId || chrome.iconId !== agentId || !Object.hasOwn(pluginAgents, agentId)) return chrome;
-  const { iconId, color } = pluginAgents[agentId]!;
-  return { ...chrome, iconId, color: chrome.presetColor ?? color };
+  const config = chrome.agentId ? readPluginAgent(chrome.agentId, pluginAgents) : undefined;
+  if (!config) return chrome;
+  return { ...chrome, iconId: config.iconId, color: chrome.presetColor ?? config.color };
 }
 
 export interface TerminalIconProps {
@@ -81,7 +87,8 @@ export interface TerminalIconProps {
 }
 
 export function TerminalIcon({ kind, chrome, className, brandColor }: TerminalIconProps) {
-  const resolvedChrome = useLiveAgentChrome(chrome ?? deriveTerminalChrome({ kind }));
+  const callerChrome = chrome ?? deriveTerminalChrome({ kind });
+  const resolvedChrome = useLiveAgentChrome(callerChrome);
   const iconId = resolvedChrome.iconId ?? "terminal";
   const finalProps = {
     className: cn("w-4 h-4", className),
@@ -106,7 +113,10 @@ export function TerminalIcon({ kind, chrome, className, brandColor }: TerminalIc
     );
   }, [kind, iconId, resolvedChrome.agentId, resolvedChrome.processId, resolvedChrome.label]);
 
-  const markerColor = brandColor ?? resolvedChrome.color;
+  // Most callers echo `chrome.color` back as `brandColor`. Only a different value
+  // is an override: the echo would pin a stale colour over the live one.
+  const markerColor =
+    (brandColor !== callerChrome.color ? brandColor : undefined) ?? resolvedChrome.color;
   const withIconMarker = (icon: ReactNode, markerIconId = iconId) => (
     <span
       className="contents"
@@ -134,9 +144,8 @@ export function TerminalIcon({ kind, chrome, className, brandColor }: TerminalIc
 
   const RunIcon = resolveTerminalRunIcon(resolvedChrome.iconId);
   if (RunIcon) {
-    const runBrandColor = brandColor ?? resolvedChrome.color;
     return withIconMarker(
-      <BrandMark brandColor={runBrandColor} className={finalProps.className}>
+      <BrandMark brandColor={markerColor} className={finalProps.className}>
         <RunIcon {...finalProps} />
       </BrandMark>
     );
