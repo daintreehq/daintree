@@ -17,10 +17,7 @@ export const WORKSPACE_LANDING_TIMEOUT_MS = 60_000;
  * buffers nothing. `then(false)` if it closes, doesn't hydrate within a
  * minute, or Daintree starts quitting first.
  */
-export function afterHydrated(
-  webContents: WebContents,
-  then: (hydrated: boolean) => void
-): void {
+export function afterHydrated(webContents: WebContents, then: (hydrated: boolean) => void): void {
   if (isViewHydrated(webContents.id)) {
     then(getActiveShutdown() === null);
     return;

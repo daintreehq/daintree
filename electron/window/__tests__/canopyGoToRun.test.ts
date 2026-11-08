@@ -252,9 +252,9 @@ describe("Go to pane from the Canopy window (#16337)", () => {
   it("opens nothing for a project that is gone, or whose folder is missing", async () => {
     const { opener } = openerThatOpens();
 
-    await expect(goToCanopyRun({ workspaceId: "c".repeat(64), runId: RUN })).rejects.toMatchObject(
-      { code: "NOT_FOUND" }
-    );
+    await expect(goToCanopyRun({ workspaceId: "c".repeat(64), runId: RUN })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
     nav.projects.set(PROJECT, { id: PROJECT, name: "Alpha", path: "/alpha", status: "missing" });
     await expect(goToCanopyRun({ workspaceId: PROJECT, runId: RUN })).rejects.toMatchObject({
       code: "NOT_FOUND",

@@ -12,7 +12,11 @@ import {
 } from "./projectOwnership.js";
 import { getWindowRegistry } from "./windowRef.js";
 import { isWindowOnRemoteHost, switchWindowToLocal } from "./windowHost.js";
-import { landInOwner, untilWindowHydrated, WORKSPACE_LANDING_TIMEOUT_MS } from "./workspaceLanding.js";
+import {
+  landInOwner,
+  untilWindowHydrated,
+  WORKSPACE_LANDING_TIMEOUT_MS,
+} from "./workspaceLanding.js";
 
 /**
  * Opens a new window on this machine showing the workspace and resolves with
