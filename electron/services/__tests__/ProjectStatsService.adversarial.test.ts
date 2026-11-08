@@ -872,13 +872,18 @@ describe("ProjectStatsService overlapping triggers (#16417)", () => {
   });
 
   it("still broadcasts when every read outlasts the poll", async () => {
-    const { ptyClient } = slowHost();
+    const { ptyClient, host } = slowHost();
     const svc = new ProjectStatsService(ptyClient as never);
     svc.start();
 
-    await vi.advanceTimersByTimeAsync(READ_MS * 4);
+    // Every read differs, so suppression cannot hide one, and each landing starts
+    // the next: a dropped poll would leave a gap and skip a sample.
+    for (const count of [1, 2, 3, 4]) {
+      host.terminals = agents(count);
+      await vi.advanceTimersByTimeAsync(READ_MS);
+    }
 
-    expect(broadcasts()).toEqual([3]);
+    expect(broadcasts()).toEqual([1, 2, 3]);
     svc.stop();
   });
 
@@ -928,7 +933,8 @@ describe("ProjectStatsService overlapping triggers (#16417)", () => {
     await vi.advanceTimersByTimeAsync(350);
 
     // A poll tolerates a read a TTL old, and invalidating for it would detach
-    // the fleet poller's share of the same read.
+    // the fleet poller's share of the same read. It still gets its own compute.
+    expect(projectStoreMock.getAllProjects).toHaveBeenCalledTimes(2);
     expect(ptyClient.getAllTerminalsAsync).toHaveBeenCalledTimes(1);
     expect(broadcasts()).toEqual([3]);
     svc.stop();
@@ -1007,6 +1013,78 @@ describe("ProjectStatsService overlapping triggers (#16417)", () => {
     expect(broadcastMock).not.toHaveBeenCalled();
     expect(ptyClient.getAllTerminalsAsync).toHaveBeenCalledTimes(1);
     expect(svc.getLastBroadcast()).toEqual({});
+  });
+
+  it("stop() during the terminal read never reaches the per-workspace fallback", async () => {
+    const ptyClient = makePtyClient();
+    let resolveTerminals!: (terminals: unknown[]) => void;
+    ptyClient.getAllTerminalsAsync.mockReturnValue(
+      new Promise((resolve) => {
+        resolveTerminals = resolve;
+      })
+    );
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+
+    svc.stop();
+    // An unowned live terminal is what would send the compute back to the host.
+    resolveTerminals([{ id: "t0", kind: "terminal" }]);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(ptyClient.getProjectStats).not.toHaveBeenCalled();
+  });
+
+  it("a read stop() retired cannot land over the restarted one", async () => {
+    const ptyClient = makePtyClient();
+    let resolveRetired!: (terminals: unknown[]) => void;
+    let resolveRestarted!: (terminals: unknown[]) => void;
+    ptyClient.getAllTerminalsAsync
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveRetired = resolve;
+        })
+      )
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveRestarted = resolve;
+        })
+      );
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+
+    svc.stop();
+    svc.start();
+    svc.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+
+    resolveRestarted(agents(1));
+    await vi.advanceTimersByTimeAsync(0);
+    resolveRetired(agents(3));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(broadcasts()).toEqual([1]);
+    expect(svc.getLastBroadcast().p1?.processCount).toBe(1);
+    svc.stop();
+  });
+
+  it("a trigger queued before stop() does not carry into the restart", async () => {
+    const { ptyClient } = slowHost();
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.updatePollInterval(1_000_000);
+    svc.start();
+    svc.refresh();
+    svc.refresh();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    svc.stop();
+    svc.start();
+    svc.refresh();
+    await vi.advanceTimersByTimeAsync(READ_MS + 1);
+
+    expect(ptyClient.getAllTerminalsAsync).toHaveBeenCalledTimes(2);
+    svc.stop();
   });
 
   it("stop() during the per-workspace fallback drops the compute too", async () => {
@@ -1427,6 +1505,80 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
 
     expect(ptyClient.getProjectStats).toHaveBeenCalledWith("p1");
     svc.stop();
+  });
+
+  describe("a degraded snapshot after a healthy one (#16417)", () => {
+    const terminal = (id: string, projectId: string) => ({ id, projectId, kind: "terminal" });
+    const read = (terminals: unknown[], degraded: boolean) => ({
+      terminals,
+      degraded,
+      shardsTotal: 2,
+      shardsFailed: degraded ? 1 : 0,
+    });
+
+    async function seenHealthy(ptyClient: FakePtyClient, svc: ProjectStatsService) {
+      ptyClient.getAllTerminalsWithCompletenessAsync.mockResolvedValue(
+        read([terminal("a", "p1"), terminal("b", "p2"), terminal("c", "p2")], false)
+      );
+      svc.refresh();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(payload().p2.processCount).toBe(2);
+    }
+
+    it("keeps the row of a workspace it says nothing about, and updates the one it answered", async () => {
+      const ptyClient = makePtyClient();
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
+      const svc = new ProjectStatsService(ptyClient as never);
+      await seenHealthy(ptyClient, svc);
+
+      ptyClient.getAllTerminalsWithCompletenessAsync.mockResolvedValue(
+        read([terminal("a", "p1"), terminal("d", "p1")], true)
+      );
+      svc.refresh();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(payload().p1.processCount).toBe(2);
+      expect(payload().p2.processCount).toBe(2);
+      svc.stop();
+    });
+
+    it("believes the zero once a complete read reports it", async () => {
+      const ptyClient = makePtyClient();
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
+      const svc = new ProjectStatsService(ptyClient as never);
+      await seenHealthy(ptyClient, svc);
+
+      ptyClient.getAllTerminalsWithCompletenessAsync.mockResolvedValue(
+        read([terminal("a", "p1")], true)
+      );
+      svc.refresh();
+      await vi.advanceTimersByTimeAsync(0);
+      ptyClient.getAllTerminalsWithCompletenessAsync.mockResolvedValue(
+        read([terminal("a", "p1")], false)
+      );
+      svc.refresh();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(payload().p2.processCount).toBe(0);
+      svc.stop();
+    });
+
+    it("does not bring back a workspace removed while it is degraded", async () => {
+      const ptyClient = makePtyClient();
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
+      const svc = new ProjectStatsService(ptyClient as never);
+      await seenHealthy(ptyClient, svc);
+
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+      ptyClient.getAllTerminalsWithCompletenessAsync.mockResolvedValue(
+        read([terminal("a", "p1")], true)
+      );
+      svc.refresh();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(Object.keys(payload())).toEqual(["p1"]);
+      svc.stop();
+    });
   });
 
   it("reads a shard missing from a degraded snapshot as zero, without a per-project retry", async () => {

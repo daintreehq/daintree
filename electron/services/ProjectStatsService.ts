@@ -291,8 +291,9 @@ export class ProjectStatsService {
    * A degraded snapshot is NOT a reason to fall back: the shard that just timed
    * out on the fan-out would time out again per workspace, after it, and every
    * trigger waits on this compute meanwhile — slowing every workspace's stats for
-   * the length of the outage. A missing shard reads as zero, which is what its
-   * failed per-workspace reads resolved to before.
+   * the length of the outage. A missing shard reads as zero here, which is what
+   * its failed per-workspace reads resolved to before; the caller keeps any row
+   * it already has for one.
    */
   private async getTerminalCounts(
     projectIds: readonly string[],
@@ -342,7 +343,9 @@ export class ProjectStatsService {
         return;
       }
 
-      const { terminals: allTerminals } = await getSharedTerminalSnapshot(this.ptyClient);
+      const { terminals: allTerminals, degraded } = await getSharedTerminalSnapshot(
+        this.ptyClient
+      );
       if (this.generation !== gen) return;
       const terminalCounts = await this.getTerminalCounts(projectIds, allTerminals);
       if (this.generation !== gen) return;
@@ -431,6 +434,18 @@ export class ProjectStatsService {
             ? { assistantStateSince: counts.assistantStateSince }
             : {}),
         };
+      }
+
+      // A shard that did not answer contributed no terminals, which is not a true
+      // zero, and a published zero lets the switcher sleep a project without asking.
+      // A project lives on one shard, so a workspace with terminals in this read was
+      // answered; one without keeps its row until a complete read says otherwise.
+      if (degraded) {
+        const answered = new Set(allTerminals.map((terminal) => terminal.projectId));
+        for (const id of Object.keys(statusMap)) {
+          const last = this.lastBroadcast[id];
+          if (last && !answered.has(id)) statusMap[id] = last;
+        }
       }
 
       // Not on the wire, so it is kept current whether or not the payload moved.
