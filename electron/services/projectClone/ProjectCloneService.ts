@@ -102,8 +102,11 @@ export class ProjectCloneService {
   private readonly jobs = new Map<string, CloneJob>();
   /** One Retry at a time per project; a second request joins the first. */
   private readonly pendingRetries = new Map<string, Promise<void>>();
-  /** Projects whose removal has begun: no retry may start a clone for them. */
-  private readonly removing = new Set<string>();
+  /**
+   * Removals under way per project: no retry may start a clone for one. Counted,
+   * so one removal failing can't lift the exclusion another still holds.
+   */
+  private readonly removing = new Map<string, number>();
   private sealed = false;
   private hooks: ProjectCloneServiceHooks = {};
 
@@ -229,7 +232,7 @@ export class ProjectCloneService {
    * removal that fails leaves a project that still has no checkout.
    */
   async releaseForRemoval(projectId: string): Promise<(removed: boolean) => void> {
-    this.removing.add(projectId);
+    this.removing.set(projectId, (this.removing.get(projectId) ?? 0) + 1);
     // A retry already past its folder check either sees the removal and stops
     // or has launched, and is stopped below with the rest.
     const retrying = this.pendingRetries.get(projectId);
@@ -242,8 +245,13 @@ export class ProjectCloneService {
       }
       if (job.run) await job.run.catch(() => {});
     }
+    let ended = false;
     return (removed) => {
-      this.removing.delete(projectId);
+      if (ended) return;
+      ended = true;
+      const left = (this.removing.get(projectId) ?? 1) - 1;
+      if (left > 0) this.removing.set(projectId, left);
+      else this.removing.delete(projectId);
       if (!removed) return;
       const current = this.jobs.get(projectId);
       if (current?.publishTimer) clearTimeout(current.publishTimer);

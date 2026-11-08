@@ -2,20 +2,38 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Project } from "../../../shared/types/project.js";
 
 const h = vi.hoisted(() => ({
-  windows: [] as Array<{ windowId: number; services: { projectViewManager?: unknown } }>,
+  windows: [] as Array<{
+    windowId: number;
+    browserWindow: { isDestroyed: () => boolean };
+    services: { projectViewManager?: unknown };
+  }>,
   workspace: null as null | {
     loadProject: ReturnType<typeof vi.fn>;
     unregisterWindow: ReturnType<typeof vi.fn>;
+    isWindowAttached: ReturnType<typeof vi.fn>;
+    attachDirectPort: ReturnType<typeof vi.fn>;
+    getHostForProject: ReturnType<typeof vi.fn>;
   },
+  broker: { brokerPort: vi.fn() },
   pending: new Map<number, string[]>(),
+  presenceListeners: new Set<() => void>(),
 }));
 
 vi.mock("../windowRef.js", () => ({
   getWindowRegistry: () => ({ all: () => h.windows }),
 }));
-vi.mock("../serviceRefs.js", () => ({ getWorkspaceClientRef: () => h.workspace }));
+vi.mock("../serviceRefs.js", () => ({
+  getWorkspaceClientRef: () => h.workspace,
+  getWorktreePortBrokerRef: () => h.broker,
+}));
 vi.mock("../projectActivationClaims.js", () => ({
   getPendingActivationProjectIds: (windowId: number) => h.pending.get(windowId) ?? [],
+}));
+vi.mock("../projectPresenceChanges.js", () => ({
+  onProjectPresenceChanged: (listener: () => void) => {
+    h.presenceListeners.add(listener);
+    return () => h.presenceListeners.delete(listener);
+  },
 }));
 
 import { loadClonedProjectInWindows } from "../clonedProjectActivation.js";
@@ -28,29 +46,54 @@ const project: Project = {
   lastOpened: 1,
 };
 
+const VIEW = { isDestroyed: () => false };
+
 function pvm(active: string | null) {
-  return {
+  const manager = {
     active,
-    getActiveProjectId: vi.fn(function (this: { active: string | null }) {
-      return this.active;
-    }),
+    getActiveProjectId: vi.fn(() => manager.active),
+    getActiveView: vi.fn(() => ({ webContents: VIEW })),
     releaseCachedView: vi.fn(() => true),
   };
+  return manager;
+}
+
+function windowOf(windowId: number, manager: ReturnType<typeof pvm>) {
+  return {
+    windowId,
+    browserWindow: { isDestroyed: () => false },
+    services: { projectViewManager: manager },
+  };
+}
+
+/** A claim is released: what the claims module announces. */
+function settleClaims(windowId: number): void {
+  h.pending.delete(windowId);
+  for (const listener of [...h.presenceListeners]) listener();
+}
+
+async function flush(): Promise<void> {
+  for (let i = 0; i < 5; i++) await Promise.resolve();
 }
 
 describe("loadClonedProjectInWindows (#16352)", () => {
   beforeEach(() => {
     h.windows = [];
     h.pending.clear();
+    h.presenceListeners.clear();
+    h.broker.brokerPort.mockReset();
     h.workspace = {
       loadProject: vi.fn().mockResolvedValue("cold"),
       unregisterWindow: vi.fn(),
+      isWindowAttached: vi.fn(() => false),
+      attachDirectPort: vi.fn(),
+      getHostForProject: vi.fn(() => ({ id: "host" })),
     };
   });
 
   it("loads the workspace for every window showing the project", async () => {
     const showing = pvm("p-clone");
-    h.windows = [{ windowId: 1, services: { projectViewManager: showing } }];
+    h.windows = [windowOf(1, showing)];
 
     await loadClonedProjectInWindows(project);
 
@@ -60,7 +103,7 @@ describe("loadClonedProjectInWindows (#16352)", () => {
 
   it("lets a window holding it in its cache open it fresh next time", async () => {
     const elsewhere = pvm("p-other");
-    h.windows = [{ windowId: 2, services: { projectViewManager: elsewhere } }];
+    h.windows = [windowOf(2, elsewhere)];
 
     await loadClonedProjectInWindows(project);
 
@@ -68,18 +111,9 @@ describe("loadClonedProjectInWindows (#16352)", () => {
     expect(h.workspace!.loadProject).not.toHaveBeenCalled();
   });
 
-  it("leaves a window with a switch in flight to that switch", async () => {
-    h.windows = [{ windowId: 1, services: { projectViewManager: pvm("p-clone") } }];
-    h.pending.set(1, ["p-next"]);
-
-    await loadClonedProjectInWindows(project);
-
-    expect(h.workspace!.loadProject).not.toHaveBeenCalled();
-  });
-
   it("never loads a second workspace over a switch that started during its load", async () => {
     const showing = pvm("p-clone");
-    h.windows = [{ windowId: 1, services: { projectViewManager: showing } }];
+    h.windows = [windowOf(1, showing)];
     h.workspace!.loadProject.mockImplementation(async () => {
       // The window moves on while the host loads; that switch's own load is
       // newer and owns the mapping.
@@ -91,5 +125,51 @@ describe("loadClonedProjectInWindows (#16352)", () => {
 
     expect(h.workspace!.loadProject).toHaveBeenCalledTimes(1);
     expect(h.workspace!.unregisterWindow).not.toHaveBeenCalled();
+  });
+
+  describe("a window with a switch in flight", () => {
+    it("waits for the switch, then loads and hands the view its ports if it stayed", async () => {
+      h.windows = [windowOf(1, pvm("p-clone"))];
+      h.pending.set(1, ["p-next"]);
+
+      await loadClonedProjectInWindows(project);
+      // The switch may already have asked for its own workspace.
+      expect(h.workspace!.loadProject).not.toHaveBeenCalled();
+
+      // It failed before activating anything: the window still shows the clone.
+      settleClaims(1);
+      await flush();
+
+      expect(h.workspace!.loadProject).toHaveBeenCalledExactlyOnceWith("/work/widgets", 1);
+      expect(h.workspace!.attachDirectPort).toHaveBeenCalledWith(1, VIEW);
+      expect(h.broker.brokerPort).toHaveBeenCalledWith({ id: "host" }, VIEW);
+      expect(h.presenceListeners.size).toBe(0);
+    });
+
+    it("leaves the window to a switch that went elsewhere", async () => {
+      const manager = pvm("p-clone");
+      h.windows = [windowOf(1, manager)];
+      h.pending.set(1, ["p-next"]);
+
+      await loadClonedProjectInWindows(project);
+      manager.active = "p-next";
+      settleClaims(1);
+      await flush();
+
+      expect(h.workspace!.loadProject).not.toHaveBeenCalled();
+    });
+
+    it("leaves the window to a switch that landed here and loaded it", async () => {
+      h.windows = [windowOf(1, pvm("p-other"))];
+      h.pending.set(1, ["p-clone"]);
+      h.workspace!.isWindowAttached.mockReturnValue(true);
+
+      await loadClonedProjectInWindows(project);
+      h.windows[0]!.services.projectViewManager = pvm("p-clone");
+      settleClaims(1);
+      await flush();
+
+      expect(h.workspace!.loadProject).not.toHaveBeenCalled();
+    });
   });
 });

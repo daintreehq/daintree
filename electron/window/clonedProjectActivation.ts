@@ -1,7 +1,57 @@
 import type { Project } from "../../shared/types/project.js";
+import type { WorkspaceClient } from "../services/WorkspaceClient.js";
+import type { WindowContext } from "./WindowRegistry.js";
 import { getPendingActivationProjectIds } from "./projectActivationClaims.js";
-import { getWorkspaceClientRef } from "./serviceRefs.js";
+import { onProjectPresenceChanged } from "./projectPresenceChanges.js";
+import { getWorkspaceClientRef, getWorktreePortBrokerRef } from "./serviceRefs.js";
 import { getWindowRegistry } from "./windowRef.js";
+
+/** How long a window's in-flight switch may hold the reconciliation back. */
+const SETTLE_TIMEOUT_MS = 60_000;
+
+function hasActivationInFlight(ctx: WindowContext): boolean {
+  return getPendingActivationProjectIds(ctx.windowId).length > 0;
+}
+
+/**
+ * Load the project's workspace for a window still showing it once that
+ * window's in-flight switch has settled, and hand the view its ports: its
+ * reload into the ready project has usually happened by then, and it found no
+ * workspace to take them from. A switch that went elsewhere, or one that
+ * landed here and loaded the workspace itself, leaves nothing to do.
+ */
+function reconcileWhenSettled(ctx: WindowContext, project: Project, workspace: WorkspaceClient) {
+  let done = false;
+  const finish = () => {
+    done = true;
+    unsubscribe();
+    clearTimeout(timer);
+  };
+  const check = () => {
+    if (done || hasActivationInFlight(ctx)) return;
+    finish();
+    const pvm = ctx.services.projectViewManager;
+    if (ctx.browserWindow.isDestroyed() || pvm?.getActiveProjectId() !== project.id) return;
+    if (workspace.isWindowAttached(ctx.windowId, project.path)) return;
+    void workspace
+      .loadProject(project.path, ctx.windowId)
+      .then(() => {
+        if (pvm.getActiveProjectId() !== project.id) return;
+        const webContents = pvm.getActiveView()?.webContents;
+        if (!webContents || webContents.isDestroyed()) return;
+        workspace.attachDirectPort(ctx.windowId, webContents);
+        const host = workspace.getHostForProject(project.path);
+        const broker = getWorktreePortBrokerRef();
+        if (host && broker) broker.brokerPort(host, webContents);
+      })
+      .catch((error: unknown) => {
+        console.warn("[ProjectClone] Couldn't load the cloned project's workspace:", error);
+      });
+  };
+  const unsubscribe = onProjectPresenceChanged(check);
+  const timer = setTimeout(finish, SETTLE_TIMEOUT_MS);
+  timer.unref?.();
+}
 
 /**
  * A clone has just become a checkout (#16352). Every window showing the project
@@ -10,11 +60,11 @@ import { getWindowRegistry } from "./windowRef.js";
  * ports on ready, as any reloaded view does. A cached view still holding the
  * cloning page is let go, so the project opens fresh next time.
  *
- * A window with an activation in flight is left alone: that switch may already
- * have asked for its own workspace, and a load issued here would supersede it.
- * A switch landing on this project reconciles the load itself once its swap
- * settles (`activateProjectView`). Any switch that starts after the load below
- * asks for its workspace later, so it owns the window's mapping.
+ * A window with an activation in flight is not loaded now: that switch may
+ * already have asked for its own workspace, and a load issued here would
+ * supersede it. It is reconciled once the switch settles. Any switch that
+ * starts after the load below asks for its workspace later, so it owns the
+ * window's mapping.
  */
 export async function loadClonedProjectInWindows(project: Project): Promise<void> {
   const registry = getWindowRegistry();
@@ -25,12 +75,15 @@ export async function loadClonedProjectInWindows(project: Project): Promise<void
     registry.all().map(async (ctx) => {
       const pvm = ctx.services.projectViewManager;
       if (!pvm) return;
+      if (hasActivationInFlight(ctx)) {
+        if (workspace) reconcileWhenSettled(ctx, project, workspace);
+        return;
+      }
       if (pvm.getActiveProjectId() !== project.id) {
         pvm.releaseCachedView(project.id);
         return;
       }
       if (!workspace) return;
-      if (getPendingActivationProjectIds(ctx.windowId).length > 0) return;
       try {
         await workspace.loadProject(project.path, ctx.windowId);
       } catch (error) {

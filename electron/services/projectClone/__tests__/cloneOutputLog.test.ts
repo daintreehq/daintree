@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { scrubSecrets } from "../../../../shared/utils/secretScrubber.js";
 import { CloneOutputLog } from "../cloneOutputLog.js";
 
 describe("CloneOutputLog", () => {
@@ -72,16 +73,21 @@ describe("CloneOutputLog credentials across boundaries", () => {
   it("scrubs a long line before cutting it to length", () => {
     const log = new CloneOutputLog();
     const padding = "x".repeat(380);
-    log.append(`${padding} https://user:${TOKEN}@example.com/repo.git\n`);
+    const raw = `${padding} https://user:${TOKEN}@example.com/repo.git`;
+    log.append(`${raw}\n`);
     const [line] = log.snapshot();
-    expect(line).not.toContain(TOKEN.slice(0, 10));
-    expect(line!.startsWith(padding)).toBe(true);
+    const scrubbed = scrubSecrets(raw);
+    expect(line).toBe(scrubbed.length > 400 ? `${scrubbed.slice(0, 399)}…` : scrubbed);
+    expect(line).not.toContain("ghp_");
   });
 
-  it("redacts credentials a length cut left without their @", () => {
+  it("shows nothing of a credential the raw line limit cut through", () => {
     const log = new CloneOutputLog();
-    log.append(`remote: https://user:secretpass${"y".repeat(20_000)}`);
-    log.append("\n");
-    expect(log.snapshot().join("\n")).not.toContain("secretpass");
+    log.append(`remote: https://user:${"A".repeat(20_000)}`);
+    log.append(`PRIVATE-SUFFIX@example.com/repo.git\nnext line\n`);
+    const shown = log.snapshot();
+    expect(shown.join("\n")).not.toContain("PRIVATE-SUFFIX");
+    expect(shown.join("\n")).not.toContain("AAAA");
+    expect(shown).toEqual(["remote: https://[redacted]", "next line"]);
   });
 });

@@ -368,6 +368,22 @@ describe("ProjectCloneService", () => {
     expect(service.getSnapshot(project.id)!.status).toBe("cancelled");
   });
 
+  it("holds retries off until every overlapping removal has ended", async () => {
+    const { project } = await service.start(request("widgets"));
+    h.calls[0]!.reject(new Error("boom"));
+    await flush();
+
+    const endA = await service.releaseForRemoval(project.id);
+    const endB = await service.releaseForRemoval(project.id);
+    endA(false);
+    endA(false);
+
+    await expect(service.retry(project.id)).rejects.toThrow(/being removed/);
+    endB(false);
+    await service.retry(project.id);
+    expect(h.calls).toHaveLength(2);
+  });
+
   it("lets a second Retry join the first instead of launching another clone", async () => {
     const { project } = await service.start(request("widgets"));
     h.calls[0]!.reject(new Error("boom"));

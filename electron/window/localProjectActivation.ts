@@ -59,7 +59,8 @@ export async function completeLocalProjectActivation(
     }),
   });
 
-  if (clients.workspace && isAwaitingClone(project)) {
+  // Read fresh: the clone may have landed since the caller read the row.
+  if (clients.workspace && isAwaitingClone(projectStore.getProjectById(project.id) ?? project)) {
     // No checkout to load yet (#16352); the window lets go of the workspace
     // it was attached to, and the clone's success loads this one.
     clients.workspace.unregisterWindow(targetWindow.id);

@@ -37,6 +37,12 @@ export class CloneOutputLog {
   private current = "";
   /** A `\r` ended the last chunk: a `\n` next turns the redraw into a line. */
   private pendingCarriageReturn = false;
+  /**
+   * The line outgrew {@link MAX_RAW_LINE_CHARS}: the rest of it is dropped up
+   * to its real end, since a fragment shown on its own could carry the second
+   * half of a credential with nothing left to recognise it by.
+   */
+  private overflowed = false;
 
   append(chunk: string): void {
     for (const char of chunk) {
@@ -53,9 +59,10 @@ export class CloneOutputLog {
         this.pendingCarriageReturn = true;
         if (this.current.trim().length > 0) this.live = displayLine(this.current);
         this.current = "";
-      } else {
+        this.overflowed = false;
+      } else if (!this.overflowed) {
         this.current += char;
-        if (this.current.length >= MAX_RAW_LINE_CHARS) this.commitCurrent();
+        if (this.current.length >= MAX_RAW_LINE_CHARS) this.overflowed = true;
       }
     }
   }
@@ -94,6 +101,7 @@ export class CloneOutputLog {
   private commitCurrent(): void {
     const raw = this.current;
     this.current = "";
+    this.overflowed = false;
     this.live = null;
     if (raw.trim().length > 0) this.push(displayLine(raw));
   }
