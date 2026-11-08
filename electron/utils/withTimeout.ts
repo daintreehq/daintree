@@ -10,9 +10,11 @@
  * `timeoutSignal` returns an AbortSignal that fires after `ms` (or when an
  * optional parent signal aborts). Pass it to fs/promises calls that accept a
  * `signal` option (`readFile` does; `stat` and `access` do NOT — bound those
- * with `withTimeout`) so a hung syscall is actually cancelled and its libuv
- * threadpool slot released — otherwise repeated hangs on a dead mount exhaust
- * the (default 4-thread) pool and stall ALL fs work process-wide.
+ * with `withTimeout`). Neither releases a libuv worker already blocked in a
+ * syscall: `readFile` checks the signal between chunks, so an open() or read()
+ * stuck on a dead mount or an online-only placeholder keeps its worker either
+ * way. Repeated hangs exhaust the (default 4-thread) pool and stall ALL fs work
+ * process-wide, which is what `projectIoGate` bounds for project files (#16361).
  *
  * Both rely solely on `setTimeout`, so they remain deterministic under fake
  * timers in tests (unlike `AbortSignal.timeout`, which uses an internal timer).
