@@ -62,7 +62,7 @@ function RecipeListItem({
         aria-selected={isSelected}
         role="option"
       >
-        <Settings2 className="w-4 h-4 text-daintree-text/50" />
+        <Settings2 className="w-4 h-4 text-text-secondary" />
         <span className="text-sm text-text-secondary">Customize…</span>
       </button>
     );

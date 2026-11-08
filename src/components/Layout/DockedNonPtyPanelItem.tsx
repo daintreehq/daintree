@@ -223,7 +223,7 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
 
         <PopoverContent
           aria-label={`Preview: ${displayTitle}`}
-          className="w-[700px] max-w-[90vw] max-h-[80vh] p-0 bg-daintree-bg/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden"
+          className="w-[700px] max-w-[90vw] max-h-[80vh] p-0 bg-surface-canvas/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden"
           style={{ height: popoverHeight }}
           side="top"
           align="start"

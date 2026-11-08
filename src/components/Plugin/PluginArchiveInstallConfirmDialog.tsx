@@ -408,11 +408,11 @@ function ArchiveIdentityCard({
           </div>
         )}
         <div className="flex items-start gap-1.5 text-2xs text-text-secondary">
-          <FileArchive className="w-3 h-3 shrink-0 mt-[1.5px] text-daintree-text/35" aria-hidden />
+          <FileArchive className="w-3 h-3 shrink-0 mt-[1.5px] text-text-secondary" aria-hidden />
           <span className="font-mono break-all min-w-0">{archiveFileName}</span>
         </div>
         <div className="flex items-start gap-1.5 text-2xs text-text-secondary">
-          <Users className="w-3 h-3 shrink-0 mt-[1.5px] text-daintree-text/35" aria-hidden />
+          <Users className="w-3 h-3 shrink-0 mt-[1.5px] text-text-secondary" aria-hidden />
           {manifest.authors.length > 0 ? (
             <span className="break-words min-w-0">{formatAuthors(manifest.authors)}</span>
           ) : (
