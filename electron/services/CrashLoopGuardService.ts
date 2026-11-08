@@ -32,6 +32,13 @@ interface CrashLoopState {
   launches: number[];
   cleanExit: boolean;
   lastReset: number;
+  /**
+   * One-shot: the user asked for the next launch to boot in safe mode (#16401).
+   * Survives the clean exit of the relaunch that carries it, and is consumed by
+   * the launch it applies to. Optional so the file stays readable both ways
+   * across versions.
+   */
+  safeModeRequested?: boolean;
 }
 
 function freshState(): CrashLoopState {
@@ -86,6 +93,8 @@ export class CrashLoopGuardService {
 
     const state = this.readState();
     const now = Date.now();
+    const safeModeRequested = state.safeModeRequested === true;
+    delete state.safeModeRequested;
 
     this.previousExitClean = state.cleanExit;
 
@@ -110,7 +119,7 @@ export class CrashLoopGuardService {
     state.cleanExit = false;
 
     this.crashCount = state.crashes;
-    this.safeMode = state.crashes >= CRASH_THRESHOLD;
+    this.safeMode = state.crashes >= CRASH_THRESHOLD || safeModeRequested;
     this.relaunchAllowed = state.crashes < HARD_STOP_THRESHOLD;
 
     try {
@@ -120,7 +129,11 @@ export class CrashLoopGuardService {
     }
 
     if (this.safeMode) {
-      console.warn(`[CrashLoopGuard] Safe mode activated (${state.crashes} consecutive crashes)`);
+      console.warn(
+        safeModeRequested && state.crashes < CRASH_THRESHOLD
+          ? "[CrashLoopGuard] Safe mode activated (requested by the user)"
+          : `[CrashLoopGuard] Safe mode activated (${state.crashes} consecutive crashes)`
+      );
     }
     if (!this.relaunchAllowed) {
       console.error(
@@ -183,6 +196,31 @@ export class CrashLoopGuardService {
     this.relaunchAllowed = true;
     this.crashCount = 0;
     this.lastCrashAt = undefined;
+  }
+
+  /**
+   * Make the next launch boot in safe mode, without the crashes that normally
+   * earn it — the startup stuck card's way out when hydration never finishes
+   * (#16401). Throws if the disk write fails, for the same reason as
+   * `resetForNormalBoot`: the caller must not restart on a request that never
+   * reached disk.
+   */
+  requestSafeModeBoot(): void {
+    const state = this.readState();
+    state.safeModeRequested = true;
+    this.writeState(state);
+  }
+
+  /** Withdraw a request whose relaunch never happened. Best-effort. */
+  cancelSafeModeBootRequest(): void {
+    try {
+      const state = this.readState();
+      if (state.safeModeRequested !== true) return;
+      delete state.safeModeRequested;
+      this.writeState(state);
+    } catch (err) {
+      console.error("[CrashLoopGuard] Failed to withdraw the safe mode request:", err);
+    }
   }
 
   markCleanExit(): void {
@@ -353,6 +391,7 @@ export function isSafeModeActive(userDataPath?: string): boolean {
       typeof parsed.lastReset === "number" &&
       Number.isFinite(parsed.lastReset)
     ) {
+      if (parsed.safeModeRequested === true) return true;
       if (parsed.cleanExit) return false;
       const now = Date.now();
       const recentLaunches = parsed.launches.filter((ts) => now - ts < CRASH_WINDOW_MS);
