@@ -33,6 +33,8 @@ export class ProjectStatsService {
   private acknowledgeableCompletionAt = new Map<string, number>();
   private pollIntervalMs = DEFAULT_POLL_INTERVAL_MS;
   private generation = 0;
+  private inFlight: Promise<void> | null = null;
+  private rerunRequested = false;
 
   /**
    * `runAttention` is optional so the harness and any caller that only wants
@@ -102,7 +104,7 @@ export class ProjectStatsService {
   /** An explicit recompute, so it reads the host afresh rather than a sibling's snapshot. */
   refresh(): void {
     invalidateSharedTerminalSnapshot(this.ptyClient);
-    void this.computeAndBroadcast();
+    this.scheduleCompute();
   }
 
   /**
@@ -171,8 +173,11 @@ export class ProjectStatsService {
   stop(): void {
     // Always bump generation so an in-flight computeAndBroadcast — including
     // one started by a pre-start refresh() — is invalidated before any
-    // post-stop write or broadcast can fire.
+    // post-stop write or broadcast can fire. Its slot goes with it, so a restart
+    // reads at once rather than queueing behind a run that can no longer publish.
     this.generation++;
+    this.inFlight = null;
+    this.rerunRequested = false;
     if (!this.started) return;
     this.started = false;
 
@@ -191,7 +196,7 @@ export class ProjectStatsService {
 
   private armPollInterval(): void {
     const clear = setAlignedInterval(() => {
-      void this.computeAndBroadcast();
+      this.scheduleCompute();
     }, this.pollIntervalMs);
     this.intervalSlot.value = toDisposable(clear);
   }
@@ -202,8 +207,37 @@ export class ProjectStatsService {
     }
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;
-      void this.computeAndBroadcast();
+      this.scheduleCompute();
     }, DEBOUNCE_MS);
+  }
+
+  /**
+   * One compute at a time; triggers that arrive during it collapse into one more.
+   *
+   * The poll, the event debounce and `refresh()` fire independently, and a read
+   * can take a shard's whole RPC timeout. When each newer run cancelled the older
+   * one, reads outlasting the gap between triggers meant no run ever finished, and
+   * since unchanged payloads are suppressed, a change that was lost stayed lost
+   * until some count moved again (#16417).
+   *
+   * The re-run needs no invalidation of its own. Every trigger carrying host state
+   * has invalidated the shared snapshot by now, which keeps any older read out of
+   * the cache, and the rest read what they changed after the await.
+   */
+  private scheduleCompute(): void {
+    if (this.inFlight !== null) {
+      this.rerunRequested = true;
+      return;
+    }
+    const gen = this.generation;
+    this.inFlight = this.computeAndBroadcast().finally(() => {
+      // stop() retired this run and released its slot, which may be another's now.
+      if (this.generation !== gen) return;
+      this.inFlight = null;
+      if (!this.rerunRequested) return;
+      this.rerunRequested = false;
+      this.scheduleCompute();
+    });
   }
 
   private shallowEqual(a: ProjectStatusMap, b: ProjectStatusMap): boolean {
@@ -255,11 +289,10 @@ export class ProjectStatsService {
    * because the host's matcher runs on them before the trash filter does.
    *
    * A degraded snapshot is NOT a reason to fall back: the shard that just timed
-   * out on the fan-out would time out again per workspace, after it, and two
-   * back-to-back timeouts outlast the poll that would supersede this compute —
-   * starving every workspace's stats for the length of the outage. A missing
-   * shard reads as zero, which is what its failed per-workspace reads resolved
-   * to before.
+   * out on the fan-out would time out again per workspace, after it, and every
+   * trigger waits on this compute meanwhile — slowing every workspace's stats for
+   * the length of the outage. A missing shard reads as zero, which is what its
+   * failed per-workspace reads resolved to before.
    */
   private async getTerminalCounts(
     projectIds: readonly string[],
@@ -289,7 +322,7 @@ export class ProjectStatsService {
   private async computeAndBroadcast(): Promise<void> {
     if (!this.ptyClient) return;
 
-    const gen = ++this.generation;
+    const gen = this.generation;
 
     try {
       // Scratches ride the same map: a scratch terminal is already stamped with
@@ -300,7 +333,6 @@ export class ProjectStatsService {
       const allScratches = scratchStore.getAllScratches();
       const projectIds = [...allProjects.map((p) => p.id), ...allScratches.map((s) => s.id)];
       if (projectIds.length === 0) {
-        if (this.generation !== gen) return;
         // Track the empty broadcast so a later non-empty result with the
         // same shape as the prior non-empty broadcast still fires
         // (shallowEqual would otherwise suppress it).

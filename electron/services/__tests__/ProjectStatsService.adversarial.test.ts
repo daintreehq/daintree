@@ -726,7 +726,7 @@ describe("ProjectStatsService adversarial", () => {
     svc.stop();
   });
 
-  it("race guard: a slow older compute does not overwrite a newer broadcast", async () => {
+  it("race guard: an older read cannot land over a newer one, because the newer waits for it", async () => {
     const ptyClient = makePtyClient();
     projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
 
@@ -745,32 +745,27 @@ describe("ProjectStatsService adversarial", () => {
 
     // The older read carries stale data (three live terminals), the newer the truth (one).
     const liveTerminal = (id: string) => ({ id, projectId: "p1", kind: "terminal" });
+    const lastProcessCount = () =>
+      (broadcastMock.mock.calls.at(-1)![1] as Record<string, { processCount: number }>).p1
+        .processCount;
 
     const svc = new ProjectStatsService(ptyClient as never);
-    svc.refresh(); // older compute — generation 1
+    svc.refresh();
     await Promise.resolve();
-    svc.refresh(); // newer compute — generation 2
-    await Promise.resolve();
-
-    // Resolve newer first → newer broadcast commits
-    resolveNewTerminals([liveTerminal("t1")]);
-    await vi.runAllTimersAsync();
+    svc.refresh();
     await Promise.resolve();
 
-    expect(broadcastMock).toHaveBeenCalled();
-    const broadcastsAfterNew = broadcastMock.mock.calls.length;
-    const lastPayload = broadcastMock.mock.calls.at(-1)![1] as Record<
-      string,
-      { processCount: number }
-    >;
-    expect(lastPayload.p1.processCount).toBe(1);
+    // The newer read has not left while the older one is out.
+    expect(ptyClient.getAllTerminalsAsync).toHaveBeenCalledTimes(1);
 
-    // Now resolve the older compute — it must NOT broadcast the stale 3
     resolveOldTerminals([liveTerminal("t1"), liveTerminal("t2"), liveTerminal("t3")]);
-    await vi.runAllTimersAsync();
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(lastProcessCount()).toBe(3);
+    expect(ptyClient.getAllTerminalsAsync).toHaveBeenCalledTimes(2);
 
-    expect(broadcastMock.mock.calls.length).toBe(broadcastsAfterNew);
+    resolveNewTerminals([liveTerminal("t1")]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(lastProcessCount()).toBe(1);
     svc.stop();
   });
 
@@ -833,6 +828,234 @@ describe("ProjectStatsService adversarial", () => {
     await Promise.resolve();
 
     expect(broadcastMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Recomputes overlap whenever a read outlasts the gap between triggers (#16417).
+ * Each read samples the host when it is sent and lands later, like a slow shard.
+ */
+describe("ProjectStatsService overlapping triggers (#16417)", () => {
+  const READ_MS = 6_000;
+
+  const agents = (count: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      id: `t${i}`,
+      projectId: "p1",
+      kind: "terminal",
+    }));
+
+  function slowHost(readMs = READ_MS) {
+    const ptyClient = makePtyClient();
+    const host = { terminals: agents(3), outstanding: 0, mostOutstanding: 0 };
+    ptyClient.getAllTerminalsAsync.mockImplementation(() => {
+      const sampled = host.terminals;
+      host.outstanding++;
+      host.mostOutstanding = Math.max(host.mostOutstanding, host.outstanding);
+      return new Promise((resolve) => {
+        setTimeout(() => {
+          host.outstanding--;
+          resolve(sampled);
+        }, readMs);
+      });
+    });
+    return { ptyClient, host };
+  }
+
+  const broadcasts = () =>
+    broadcastMock.mock.calls.map(
+      ([, payload]) => (payload as Record<string, { processCount: number }>).p1?.processCount
+    );
+
+  beforeEach(() => {
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+  });
+
+  it("still broadcasts when every read outlasts the poll", async () => {
+    const { ptyClient } = slowHost();
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.start();
+
+    await vi.advanceTimersByTimeAsync(READ_MS * 4);
+
+    expect(broadcasts()).toEqual([3]);
+    svc.stop();
+  });
+
+  it("still broadcasts while events keep arriving closer together than a read", async () => {
+    const { ptyClient, host } = slowHost();
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.updatePollInterval(1_000_000);
+    svc.start();
+    svc.refresh();
+
+    for (let elapsed = 0; elapsed < READ_MS * 4; elapsed += 1_000) {
+      // Every sample differs, so suppression cannot hide a read that did land.
+      host.terminals = agents(host.terminals.length + 1);
+      eventEmitter.emit("terminal:trashed");
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+
+    expect(broadcasts().length).toBeGreaterThanOrEqual(3);
+    svc.stop();
+  });
+
+  it("does not answer a queued event from the read it interrupted, even inside the TTL", async () => {
+    const { ptyClient, host } = slowHost(400);
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.updatePollInterval(1_000_000);
+    svc.start();
+    svc.refresh();
+    await vi.advanceTimersByTimeAsync(50);
+
+    // The debounce fires at 250 with the read still out, which lands at 400.
+    host.terminals = agents(0);
+    eventEmitter.emit("terminal:trashed");
+    await vi.advanceTimersByTimeAsync(800);
+
+    expect(ptyClient.getAllTerminalsAsync).toHaveBeenCalledTimes(2);
+    expect(broadcasts()).toEqual([3, 0]);
+    svc.stop();
+  });
+
+  it("answers a queued poll from the read it waited for while that read is inside the TTL", async () => {
+    const { ptyClient } = slowHost(300);
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.updatePollInterval(200);
+    svc.start();
+    svc.refresh();
+
+    await vi.advanceTimersByTimeAsync(350);
+
+    // A poll tolerates a read a TTL old, and invalidating for it would detach
+    // the fleet poller's share of the same read.
+    expect(ptyClient.getAllTerminalsAsync).toHaveBeenCalledTimes(1);
+    expect(broadcasts()).toEqual([3]);
+    svc.stop();
+  });
+
+  it("publishes the state after the final trigger once triggers stop", async () => {
+    const { ptyClient, host } = slowHost();
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.updatePollInterval(1_000_000);
+    svc.start();
+    svc.refresh();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    host.terminals = agents(1);
+    eventEmitter.emit("terminal:trashed");
+    await vi.advanceTimersByTimeAsync(1_000);
+    host.terminals = agents(0);
+    eventEmitter.emit("agent:state-changed");
+    await vi.advanceTimersByTimeAsync(READ_MS * 3);
+
+    expect(broadcasts().at(-1)).toBe(0);
+    // The triggers collapse into one more read rather than one read each.
+    expect(ptyClient.getAllTerminalsAsync).toHaveBeenCalledTimes(2);
+    svc.stop();
+  });
+
+  it("keeps one read outstanding however the triggers arrive", async () => {
+    const { ptyClient, host } = slowHost();
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.updatePollInterval(1_000);
+    svc.start();
+    svc.refresh();
+    eventEmitter.emit("terminal:trashed");
+    svc.refresh();
+
+    await vi.advanceTimersByTimeAsync(READ_MS * 3);
+
+    expect(host.mostOutstanding).toBe(1);
+    svc.stop();
+  });
+
+  it("reads again for a trigger whose read failed", async () => {
+    const { ptyClient, host } = slowHost();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    ptyClient.getAllTerminalsWithCompletenessAsync.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error("shard gone")), READ_MS);
+        })
+    );
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    host.terminals = agents(1);
+    svc.refresh();
+    await vi.advanceTimersByTimeAsync(READ_MS * 2);
+
+    expect(broadcasts()).toEqual([1]);
+    svc.stop();
+    consoleError.mockRestore();
+  });
+
+  it("stop() drops the read in flight and the trigger waiting behind it", async () => {
+    const { ptyClient } = slowHost();
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.updatePollInterval(1_000_000);
+    svc.start();
+    svc.refresh();
+    svc.refresh();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    svc.stop();
+    await vi.advanceTimersByTimeAsync(READ_MS * 3);
+
+    expect(broadcastMock).not.toHaveBeenCalled();
+    expect(ptyClient.getAllTerminalsAsync).toHaveBeenCalledTimes(1);
+    expect(svc.getLastBroadcast()).toEqual({});
+  });
+
+  it("stop() during the per-workspace fallback drops the compute too", async () => {
+    const ptyClient = makePtyClient();
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([{ id: "t0", kind: "terminal" }]);
+    let resolveStats!: (stats: { projectId: string; terminalCount: number }) => void;
+    ptyClient.getProjectStats.mockReturnValue(
+      new Promise((resolve) => {
+        resolveStats = resolve;
+      })
+    );
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ptyClient.getProjectStats).toHaveBeenCalledTimes(1);
+
+    svc.stop();
+    resolveStats({ projectId: "p1", terminalCount: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(broadcastMock).not.toHaveBeenCalled();
+    expect(svc.getLastBroadcast()).toEqual({});
+  });
+
+  it("a restart reads at once, and the read stop() retired cannot speak for it", async () => {
+    const { ptyClient, host } = slowHost();
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.updatePollInterval(1_000_000);
+    svc.start();
+    svc.refresh();
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    svc.stop();
+    svc.start();
+    host.terminals = agents(1);
+    svc.refresh();
+    expect(ptyClient.getAllTerminalsAsync).toHaveBeenCalledTimes(2);
+
+    // Lands while the restarted read is out, and must not free its slot.
+    await vi.advanceTimersByTimeAsync(READ_MS - 1_000);
+    expect(broadcastMock).not.toHaveBeenCalled();
+    host.terminals = agents(2);
+    svc.refresh();
+    expect(ptyClient.getAllTerminalsAsync).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(READ_MS * 2);
+
+    expect(broadcasts()).toEqual([1, 2]);
+    svc.stop();
   });
 });
 
