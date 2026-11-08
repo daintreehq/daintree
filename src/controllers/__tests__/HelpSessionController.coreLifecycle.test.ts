@@ -888,6 +888,12 @@ describe("HelpSessionController — a fresh start over a kept conversation (#164
         expect.objectContaining({ slot: 0, vacantOnly: true })
       );
     });
+    // Reserved again, which never adopts or resumes, rather than a plain launch.
+    const reservations = vi
+      .mocked(helpPanelState.setTerminal)
+      .mock.calls.map((call) => call[1])
+      .filter((id) => /^terminal-/.test(String(id)));
+    expect(new Set(reservations).size).toBe(2);
     expect(window.electron.help.takePendingHibernation).not.toHaveBeenCalled();
     expect(window.electron.help.discardConversation).not.toHaveBeenCalled();
     ctrl.stop();

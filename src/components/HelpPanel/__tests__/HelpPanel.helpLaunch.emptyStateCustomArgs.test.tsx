@@ -947,6 +947,28 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
     expect(mockProvisionSession).not.toHaveBeenCalled();
   });
 
+  it("never starts a default that can't resume over a kept conversation (#16495)", async () => {
+    setUpStripNewSession();
+    helpPanelState.preferredAgentId = "crush";
+    cliAvailabilityState.availability = { crush: "ready" };
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["crush"]);
+    keepLanes({
+      1: { agentId: "claude" },
+      2: { agentId: "claude" },
+      3: { agentId: "claude" },
+      4: { agentId: "claude" },
+      5: { agentId: "claude" },
+    });
+
+    render(<HelpPanel width={380} />);
+    await act(async () => {
+      fireEvent.click(newSessionItem());
+    });
+
+    expect(helpPanelState.openSlot).toHaveBeenCalledWith(1);
+    expect(acquireHelpSessionController(1)["_queuedLaunch"]).toBeNull();
+  });
+
   it("opens nothing in a slot a launch in flight has claimed (#16495)", async () => {
     setUpStripNewSession();
     keepLanes({});
