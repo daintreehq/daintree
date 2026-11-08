@@ -1,10 +1,18 @@
 import type { AgentInstallBlock } from "@shared/config/agentRegistry";
-import { extractInspectUrl } from "@/lib/agentInstall";
+import type { InstallTarget } from "@/services/terminal/installCommandHandoff";
 import { CopyableCommand } from "./CopyableCommand";
+import { InstallCommandRows } from "./InstallCommandRows";
 
 export { CopyableCommand };
 
-export function InstallBlock({ block }: { block: AgentInstallBlock }) {
+export function InstallBlock({
+  block,
+  target,
+}: {
+  block: AgentInstallBlock;
+  /** What the commands install, re-checked once one has run in a terminal. */
+  target: InstallTarget;
+}) {
   return (
     <div className="rounded-[var(--radius-md)] border border-border-default bg-surface-canvas/50 p-3">
       {block.label && (
@@ -19,9 +27,7 @@ export function InstallBlock({ block }: { block: AgentInstallBlock }) {
       )}
       {block.commands && block.commands.length > 0 && (
         <div className="space-y-1.5">
-          {block.commands.map((cmd) => (
-            <CopyableCommand key={cmd} command={cmd} inspectUrl={extractInspectUrl(cmd)} />
-          ))}
+          <InstallCommandRows commands={block.commands} target={target} />
         </div>
       )}
       {block.notes && block.notes.length > 0 && (

@@ -5,7 +5,8 @@
 export const SINGLE_CHAR_SHELL_PROMPT_PATTERN = /^\s*[>›❯⟩$#%]\s*$/;
 export const SHELL_ONLY_SINGLE_CHAR_PROMPT_PATTERN = /^\s*[$#%]\s*$/;
 export const AGENT_ONLY_SINGLE_CHAR_PROMPT_PATTERN = /^\s*[>❯›]\s*$/;
-export const POSIX_USER_HOST_PROMPT_PATTERN = /^\s*[A-Za-z0-9_.-]+@\S+(?:\s+[^\r\n]*)?\s*[#$%>]\s*$/;
+export const POSIX_USER_HOST_PROMPT_PATTERN =
+  /^\s*[A-Za-z0-9_.-]+@\S+(?:\s+[^\r\n]*)?\s*[#$%>]\s*$/;
 export const DECORATED_SHELL_PROMPT_PATTERN = /^\s*[➜➤➟➔❯›]\s+.*$/;
 // Same as above but without the `❯`/`›` glyphs. While an agent owns the
 // terminal those glyphs are the agent's own composer/input prompt (Codex uses

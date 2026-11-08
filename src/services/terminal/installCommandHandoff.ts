@@ -14,8 +14,7 @@ import { load as loadTerminalService } from "./terminalInstanceServiceAccessor";
 
 /** What a staged install command is meant to make available, so it can be re-checked. */
 export type InstallTarget =
-  | { kind: "prerequisite"; tool: string }
-  | { kind: "agent"; agentId: string };
+  { kind: "prerequisite"; tool: string } | { kind: "agent"; agentId: string };
 
 export interface InstallCommandRequest {
   line: string;
@@ -71,7 +70,9 @@ export function isStageableInstallLine(line: string): boolean {
 
 function isPanelGone(id: string): boolean {
   const panel = usePanelStore.getState().panelsById[id];
-  return !panel || panel.location === "trash" || (isPtyPanel(panel) && panel.spawnStatus === "failed");
+  return (
+    !panel || panel.location === "trash" || (isPtyPanel(panel) && panel.spawnStatus === "failed")
+  );
 }
 
 type TerminalService = Awaited<ReturnType<typeof loadTerminalService>>;
@@ -224,7 +225,8 @@ function notifyNotTyped(line: string): void {
   notify({
     type: "warning",
     title: "Couldn't type the command",
-    message: "The terminal didn't reach a prompt Daintree recognizes. Copy the command and paste it there.",
+    message:
+      "The terminal didn't reach a prompt Daintree recognizes. Copy the command and paste it there.",
     context: { eventKind: "host" },
     action: {
       label: "Copy command",
@@ -269,7 +271,9 @@ export async function openInstallCommandInTerminal(
     }
     terminalClient.write(
       id,
-      formatForTerminalPaste(line, { bracketedPasteMode: managed.terminal.modes.bracketedPasteMode })
+      formatForTerminalPaste(line, {
+        bracketedPasteMode: managed.terminal.modes.bracketedPasteMode,
+      })
     );
     // A dialog that closed to show this terminal hands focus back on its way out.
     service.focus(id);
@@ -283,7 +287,8 @@ export async function openInstallCommandInTerminal(
       context: { eventKind: "host" },
       action: {
         label: "Copy command",
-        onClick: () => void navigator.clipboard.writeText(sanitizeForClipboard(line)).catch(() => {}),
+        onClick: () =>
+          void navigator.clipboard.writeText(sanitizeForClipboard(line)).catch(() => {}),
       },
     });
     return null;

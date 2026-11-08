@@ -15,7 +15,6 @@ import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import {
   classifyNpmPermissionFailure,
   detectOS,
-  extractInspectUrl,
   findNonNpmInstallBlock,
   getInstallBlocksForCurrentOS,
   isBlockExecutable,
@@ -27,6 +26,7 @@ import { systemClient } from "@/clients";
 import { useAgentSettingsStore } from "@/store";
 import { DEFAULT_DANGEROUS_ARGS, resolveDangerousMode } from "@shared/types/agentSettings";
 import { CopyableCommand } from "./CopyableCommand";
+import { InstallCommandRows } from "./InstallCommandRows";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
@@ -432,9 +432,10 @@ export function AgentCliStep({
                   <div className="text-2xs text-text-secondary mb-1">
                     Run this command in your terminal. It will be detected automatically.
                   </div>
-                  {currentBlock.commands.map((cmd) => (
-                    <CopyableCommand key={cmd} command={cmd} inspectUrl={extractInspectUrl(cmd)} />
-                  ))}
+                  <InstallCommandRows
+                    commands={currentBlock.commands}
+                    target={{ kind: "agent", agentId }}
+                  />
                 </div>
               )}
 
@@ -480,13 +481,10 @@ export function AgentCliStep({
                   {currentBlock?.commands && !npmPermissionFailure && (
                     <div className="space-y-1">
                       <div className="text-2xs text-text-secondary">Or install manually:</div>
-                      {currentBlock.commands.map((cmd) => (
-                        <CopyableCommand
-                          key={cmd}
-                          command={cmd}
-                          inspectUrl={extractInspectUrl(cmd)}
-                        />
-                      ))}
+                      <InstallCommandRows
+                        commands={currentBlock.commands}
+                        target={{ kind: "agent", agentId }}
+                      />
                     </div>
                   )}
                 </div>
