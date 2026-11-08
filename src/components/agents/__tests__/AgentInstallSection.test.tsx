@@ -102,6 +102,8 @@ describe("AgentInstallSection tri-state rendering", () => {
     // state is launchable and the CLI resolves credentials at run time.
     expect(container.textContent).toContain("no credentials were detected");
     expect(container.textContent).not.toMatch(/will prompt/i);
+    // The launchable path belongs to the page's Detected CLI section, not a second row here.
+    expect(container.textContent).not.toContain("/usr/local/bin/claude");
   });
 
   it("renders the WSL 'Needs setup' message for installed WSL agents (not an auth nudge)", () => {

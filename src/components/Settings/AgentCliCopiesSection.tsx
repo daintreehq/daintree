@@ -80,7 +80,7 @@ export function AgentCliCopiesSection({
   const where = remoteHostName === null ? "" : ` on ${remoteHostName}`;
   const description =
     rows.length > 1
-      ? `${pluralize(rows.length, "copy", "copies")} found${where}. Daintree launches the marked one`
+      ? `${pluralize(rows.length, "copy", "copies")} found${where}. Daintree launches the marked one.`
       : remoteHostName !== null
         ? `Found${where}`
         : undefined;
@@ -114,7 +114,7 @@ export function AgentCliCopiesSection({
         ))}
         {rows.length === 0 && !failed && (
           <SettingsEmptyRow>
-            {showChecking ? "Checking for copies…" : "No copies found. Re-check after installing"}
+            {showChecking ? "Checking for copies…" : "No copies found. Re-check after installing."}
           </SettingsEmptyRow>
         )}
         {failed && (

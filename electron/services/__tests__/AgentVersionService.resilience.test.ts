@@ -98,6 +98,163 @@ describe("AgentVersionService resilience", () => {
     vi.clearAllMocks();
   });
 
+  describe("getCopies (#16409)", () => {
+    function createCopiesService(paths: string[]) {
+      const findCopies = vi.fn(async () => paths);
+      return {
+        service: new AgentVersionService({ findCopies } as unknown as CliAvailabilityService),
+        findCopies,
+      };
+    }
+
+    /** Each path prints its own output; a path with no entry fails to start. */
+    function setSpawnOutputs(outputs: Record<string, string>): void {
+      spawnMock.mockImplementation(((command: string) => {
+        const child = makeFakeChild();
+        queueMicrotask(() => {
+          const output = outputs[command];
+          if (output === undefined) {
+            child.emit("error", Object.assign(new Error("gone"), { code: "ENOENT" }));
+            return;
+          }
+          child.stdout.emit("data", Buffer.from(output));
+          child.emit("exit", 0, null);
+          child.emit("close", 0, null);
+        });
+        return child;
+      }) as never);
+    }
+
+    beforeEach(() => {
+      (registryMock.getEffectiveAgentConfig as Mock).mockReturnValue({
+        id: "claude",
+        command: "claude",
+        version: { args: ["--version"] },
+      });
+    });
+
+    it("asks each copy by its own path and marks the first as the launching one", async () => {
+      const { service } = createCopiesService(["/a/claude", "/b/claude"]);
+      setSpawnOutputs({
+        "/a/claude": "1.0.0 (Claude Code)\n",
+        "/b/claude": "2.0.0 (Claude Code)\n",
+      });
+
+      await expect(service.getCopies("claude")).resolves.toEqual([
+        { path: "/a/claude", version: "1.0.0", launches: true },
+        { path: "/b/claude", version: "2.0.0", launches: false },
+      ]);
+      expect(spawnMock.mock.calls.map((call) => call[0])).toEqual(["/a/claude", "/b/claude"]);
+      expect(spawnMock.mock.calls[0]?.[1]).toEqual(["--version"]);
+    });
+
+    it("never runs the registry command, which PATH would resolve to one copy", async () => {
+      const { service } = createCopiesService(["/a/claude"]);
+      setSpawnOutputs({ "/a/claude": "1.0.0\n" });
+
+      await service.getCopies("claude");
+
+      expect(spawnMock.mock.calls.map((call) => call[0])).not.toContain("claude");
+    });
+
+    it("shows what a copy printed rather than coercing it into a version", async () => {
+      const { service } = createCopiesService(["/a/claude"]);
+      setSpawnOutputs({ "/a/claude": "\u001b[31mbuild 12\u001b[0m\nmore output\n" });
+
+      await expect(service.getCopies("claude")).resolves.toEqual([
+        { path: "/a/claude", version: "build 12", launches: true },
+      ]);
+    });
+
+    it("caps and scrubs a printed line", async () => {
+      const { service } = createCopiesService(["/a/claude", "/b/claude"]);
+      setSpawnOutputs({
+        "/a/claude": `${"x".repeat(200)}\n`,
+        "/b/claude": "bad token ghp_abcdefghijklmnopqrstuvwxyz0123456789\n",
+      });
+
+      const [long, secret] = await service.getCopies("claude");
+      expect(long?.version).toHaveLength(80);
+      expect(secret?.version).not.toContain("abcdefghijklmnopqrstuvwxyz");
+    });
+
+    it("reports nothing for a copy that can't run, without losing the others", async () => {
+      const { service } = createCopiesService(["/a/claude", "/gone/claude"]);
+      setSpawnOutputs({ "/a/claude": "1.0.0\n" });
+
+      await expect(service.getCopies("claude")).resolves.toEqual([
+        { path: "/a/claude", version: "1.0.0", launches: true },
+        { path: "/gone/claude", version: null, launches: false },
+      ]);
+    });
+
+    it("runs nothing for an agent that declares no version command", async () => {
+      (registryMock.getEffectiveAgentConfig as Mock).mockReturnValue({
+        id: "plugin-agent",
+        command: "plugin-agent",
+      });
+      const { service } = createCopiesService(["/a/plugin-agent"]);
+
+      await expect(service.getCopies("plugin-agent")).resolves.toEqual([
+        { path: "/a/plugin-agent", version: null, launches: true },
+      ]);
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
+
+    it("lists nothing for an agent the registry doesn't know", async () => {
+      (registryMock.getEffectiveAgentConfig as Mock).mockReturnValue(undefined);
+      const { service, findCopies } = createCopiesService(["/a/claude"]);
+
+      await expect(service.getCopies("nope")).resolves.toEqual([]);
+      expect(findCopies).not.toHaveBeenCalled();
+    });
+
+    it("re-reads every time, so an update shows without waiting out a cache", async () => {
+      const { service } = createCopiesService(["/a/claude"]);
+      setSpawnOutputs({ "/a/claude": "1.0.0\n" });
+      await service.getCopies("claude");
+
+      setSpawnOutputs({ "/a/claude": "1.1.0\n" });
+      await expect(service.getCopies("claude")).resolves.toEqual([
+        { path: "/a/claude", version: "1.1.0", launches: true },
+      ]);
+    });
+
+    it("runs at most two probes at once, across agents", async () => {
+      const paths = ["/a/claude", "/b/claude", "/c/claude", "/d/claude", "/e/claude"];
+      const { service } = createCopiesService(paths);
+      const children: Array<ReturnType<typeof makeFakeChild>> = [];
+      spawnMock.mockImplementation((() => {
+        const child = makeFakeChild();
+        children.push(child);
+        return child;
+      }) as never);
+      const flush = async () => {
+        for (let i = 0; i < 10; i++) await Promise.resolve();
+        await new Promise((resolve) => setImmediate(resolve));
+      };
+
+      const first = service.getCopies("claude");
+      const second = service.getCopies("claude");
+      await flush();
+      expect(children).toHaveLength(2);
+
+      let finished = 0;
+      while (finished < paths.length * 2) {
+        const child = children[finished]!;
+        child.stdout.emit("data", Buffer.from("1.0.0\n"));
+        child.emit("exit", 0, null);
+        child.emit("close", 0, null);
+        finished++;
+        await flush();
+        expect(children.length - finished).toBeLessThanOrEqual(2);
+      }
+
+      await expect(first).resolves.toHaveLength(paths.length);
+      await expect(second).resolves.toHaveLength(paths.length);
+    });
+  });
+
   function createService(checkAvailabilityImpl: () => Promise<Record<string, unknown>>) {
     const cliAvailabilityService = {
       checkAvailability: vi.fn(checkAvailabilityImpl),

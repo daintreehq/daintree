@@ -68,6 +68,7 @@ vi.mock("child_process", () => ({
 
 vi.mock("../../utils/findOnPath.js", () => ({
   findAllOnPath: vi.fn(pathFixtureLookup),
+  withPathProbeSlot: (task: () => Promise<unknown>) => task(),
 }));
 
 // Windows-path files for the PATH search and the npm shim lookup, which read the disk.
@@ -98,6 +99,7 @@ vi.mock("../../setup/environment.js", () => ({
 // Mock fs/promises for auth checks
 vi.mock("fs/promises", () => ({
   access: vi.fn().mockRejectedValue(new Error("ENOENT")),
+  realpath: vi.fn(async (path: string) => path),
   constants: { R_OK: 4, X_OK: 1 },
 }));
 
@@ -190,6 +192,7 @@ describe("CliAvailabilityService", () => {
     // clearAllMocks() clears call history but NOT implementations.
     const fs = await import("fs/promises");
     vi.mocked(fs.access).mockRejectedValue(new Error("ENOENT"));
+    vi.mocked(fs.realpath).mockImplementation((async (path: string) => path) as never);
     // Default async execFile (npm-global / WSL probes) to "not found" —
     // clearAllMocks wipes mock impls, so we reapply the factory default after each clear.
     mockedExecFile.mockImplementation(defaultExecFileImpl as never);
@@ -2210,6 +2213,26 @@ describe("CliAvailabilityService", () => {
       expect(payload.message).toContain("/Users/x/.local/bin/claude");
     });
 
+    it("names the agent so the toast can open its copies, and reports without advising", async () => {
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        const argv = args as string[] | undefined;
+        if (argv?.[1] === "claude") {
+          return Buffer.from("/opt/homebrew/bin/claude\n/Users/x/.local/bin/claude\n");
+        }
+        return Buffer.from("");
+      });
+
+      await service.checkAvailability();
+
+      const payload = mockedBroadcast.mock.calls.find(
+        (call) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
+      )?.[1] as { message: string; agentCliCopies?: { agentId: string } };
+      expect(payload.agentCliCopies).toEqual({ agentId: "claude" });
+      expect(payload.message).toBe(
+        "Launches /opt/homebrew/bin/claude. Also found: /Users/x/.local/bin/claude."
+      );
+    });
+
     it("does not re-fire the toast on subsequent refresh() calls (milestone guard)", async () => {
       mockedExecFileSync.mockImplementation((_file, args) => {
         const argv = args as string[] | undefined;
@@ -2458,13 +2481,153 @@ describe("CliAvailabilityService", () => {
       );
       expect(toastCalls).toHaveLength(1);
       const message = (toastCalls[0][1] as { message: string }).message;
-      expect(message).toContain("Active: /a/bin/claude");
+      expect(message).toContain("Launches /a/bin/claude");
       expect(message).toContain("/b/bin/claude");
       expect(message).toContain("/c/bin/claude");
       // Tail entries should be summarized, not enumerated, to keep the toast short.
       expect(message).not.toContain("/d/bin/claude");
       expect(message).not.toContain("/e/bin/claude");
       expect(message).toContain("and 2 more");
+    });
+  });
+
+  describe("findCopies (#16409)", () => {
+    const claudeConfig = () => getAgentConfig("claude")!;
+
+    /** Claude on PATH at `onPath`, npm's global prefix at `npmPrefix`, and these files on disk. */
+    async function arrange(options: {
+      onPath?: string[];
+      files?: string[];
+      npmPrefix?: string;
+    }): Promise<void> {
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        if (cmdOf(args) === "claude" && options.onPath) {
+          return Buffer.from(`${options.onPath.join("\n")}\n`);
+        }
+        throw new Error("not found");
+      });
+      const { access } = await import("fs/promises");
+      vi.mocked(access).mockImplementation(async (path) => {
+        if (options.files?.includes(String(path))) return;
+        throw new Error("ENOENT");
+      });
+      if (options.npmPrefix) {
+        mockedExecFile.mockImplementation(((...args: unknown[]) => {
+          const callback = args.find(
+            (a): a is (err: unknown, stdout?: string) => void => typeof a === "function"
+          );
+          queueMicrotask(() => callback?.(null, `${options.npmPrefix}\n`));
+          return {} as never;
+        }) as never);
+      }
+    }
+
+    it("goes through every layer, not just the first that answered, launching copy first", async () => {
+      await arrange({
+        onPath: ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"],
+        files: ["/Users/test/.local/bin/claude", "/npm-prefix/bin/claude"],
+        npmPrefix: "/npm-prefix",
+      });
+      await service.checkAvailability();
+
+      await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([
+        "/opt/homebrew/bin/claude",
+        "/usr/local/bin/claude",
+        "/Users/test/.local/bin/claude",
+        "/npm-prefix/bin/claude",
+      ]);
+    });
+
+    it("finds a copy the check never reached, when the launching one came from a later layer", async () => {
+      // Nothing on PATH, so the native layer answered the check first.
+      await arrange({
+        files: ["/Users/test/.local/bin/claude", "/npm-prefix/bin/claude"],
+        npmPrefix: "/npm-prefix",
+      });
+      await service.checkAvailability();
+      expect(service.getDetails()!.claude?.via).toBe("native");
+
+      await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([
+        "/Users/test/.local/bin/claude",
+        "/npm-prefix/bin/claude",
+      ]);
+    });
+
+    it("counts a symlink and its target as one copy across layers, keeping the launching spelling", async () => {
+      await arrange({
+        onPath: ["/opt/homebrew/bin/claude"],
+        files: ["/Users/test/.local/bin/claude", "/npm-prefix/bin/claude"],
+        npmPrefix: "/npm-prefix",
+      });
+      const { realpath } = await import("fs/promises");
+      vi.mocked(realpath).mockImplementation((async (path: string) =>
+        path === "/npm-prefix/bin/claude" ? "/Users/test/.local/bin/claude" : path) as never);
+      await service.checkAvailability();
+
+      await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([
+        "/opt/homebrew/bin/claude",
+        "/Users/test/.local/bin/claude",
+      ]);
+    });
+
+    it("treats one Windows install directory as one copy, whatever its case", async () => {
+      await arrange({ onPath: ["/opt/homebrew/bin/claude"] });
+      await service.checkAvailability();
+      Object.defineProperty(process, "platform", { value: "win32", writable: true });
+      process.env.PATH = "C:\\Tools;C:\\Other";
+      virtualWindowsFiles.set({
+        "C:\\Tools\\claude.cmd": "",
+        "C:\\Other\\claude.cmd": "",
+      });
+      const details = service.getDetails()!;
+      details.claude = { ...details.claude!, resolvedPath: "c:\\TOOLS\\claude.cmd" };
+
+      await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([
+        "c:\\TOOLS\\claude.cmd",
+        "C:\\Other\\claude.cmd",
+      ]);
+    });
+
+    it("runs a check first when none has published details yet", async () => {
+      await arrange({ onPath: ["/opt/homebrew/bin/claude"] });
+
+      await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([
+        "/opt/homebrew/bin/claude",
+      ]);
+    });
+
+    it("lists nothing for an agent with no launchable copy", async () => {
+      await arrange({});
+      await service.checkAvailability();
+
+      await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([]);
+    });
+
+    it("keeps the launching copy when another location never answers", async () => {
+      await arrange({ onPath: ["/opt/homebrew/bin/claude"] });
+      await service.checkAvailability();
+      const { access } = await import("fs/promises");
+      vi.mocked(access).mockImplementation(() => new Promise<void>(() => {}));
+
+      vi.useFakeTimers();
+      try {
+        const copies = service.findCopies("claude", claudeConfig());
+        await vi.advanceTimersByTimeAsync(10_000);
+        await expect(copies).resolves.toEqual(["/opt/homebrew/bin/claude"]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("asks npm for its prefix once per check, however often the page is opened", async () => {
+      await arrange({ onPath: ["/opt/homebrew/bin/claude"], npmPrefix: "/npm-prefix" });
+      await service.checkAvailability();
+
+      await service.findCopies("claude", claudeConfig());
+      await service.findCopies("claude", claudeConfig());
+
+      const npmCalls = mockedExecFile.mock.calls.filter((call) => call[0] === "npm");
+      expect(npmCalls).toHaveLength(1);
     });
   });
 

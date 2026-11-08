@@ -5,6 +5,7 @@ import { BrandMark } from "@/components/icons";
 import {
   isAgentInstalled,
   isAgentBlocked,
+  isAgentLaunchable,
   isAgentUnauthenticated,
 } from "@shared/utils/agentAvailability";
 import type { AgentAvailabilityState, AgentCliDetail } from "@shared/types";
@@ -264,13 +265,15 @@ export function AgentInstallSection({
   const binaryFound = isAgentInstalled(availability);
   const hasBlocks = !binaryFound && !!installBlocks && installBlocks.length > 0;
   const troubleshooting = agentConfig?.install?.troubleshooting ?? [];
-  const location = detail?.resolvedPath
-    ? detail.via === "wsl"
-      ? `Available via WSL (${detail.wslDistro ?? "distro"})`
-      : detail.via === "npm-global"
-        ? `npm global: ${detail.resolvedPath}`
-        : `Resolved path: ${detail.resolvedPath}`
-    : null;
+  // A launchable agent's path is on the page already, in its Detected CLI section.
+  const location =
+    detail?.resolvedPath && !isAgentLaunchable(availability)
+      ? detail.via === "wsl"
+        ? `Available via WSL (${detail.wslDistro ?? "distro"})`
+        : detail.via === "npm-global"
+          ? `npm global: ${detail.resolvedPath}`
+          : `Resolved path: ${detail.resolvedPath}`
+      : null;
 
   return (
     <SettingsSection
