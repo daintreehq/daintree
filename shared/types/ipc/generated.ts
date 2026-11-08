@@ -4623,6 +4623,14 @@ export interface GeneratedIpcInvokeMap {
     args: [id: string];
     result: void;
   };
+  "user-prompt-templates:list": {
+    args: [];
+    result: import("./userPromptTemplates.js").UserPromptTemplatesSnapshot;
+  };
+  "user-prompt-templates:open-folder": {
+    args: [];
+    result: import("./userPromptTemplates.js").UserPromptTemplatesFolderResult;
+  };
   "voice-dictionary:accept-suggestion": {
     args: [__0: { word: string; utterance?: string | undefined }];
     result: import("./api.js").VoiceDictionaryChange;

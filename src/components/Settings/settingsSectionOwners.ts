@@ -29,6 +29,7 @@ export const SECTION_SETTINGS = {
     "terminalConfig.hybridInputAutoFocus",
     "remoteHostsPreferences",
   ],
+  promptTemplates: ["folder:prompt-templates"],
   twoPaneSplit: ["storage:daintree-two-pane-split"],
   gridLayout: ["appState.panelGridConfig"],
   scrollback: ["terminalConfig.scrollbackLines"],

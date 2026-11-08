@@ -109,6 +109,7 @@ The plugin sub-index links onward to getting-started, the manifest reference, co
 | [brand/digital-ecology.md](./brand/digital-ecology.md) | The "digital ecology" brand metaphor that guides illustration and icon choices. |
 | [sound-design.md](./sound-design.md) | How notification earcons are procedurally synthesized, and how to add new ones. |
 | [voice-input.md](./voice-input.md) | The voice dictation / streaming transcription pipeline across both processes. |
+| [prompt-templates.md](./prompt-templates.md) | A person's own prompt templates in `~/.daintree/templates` — the file format, when they're read, and which machine they come from in a remote window. |
 | [assistant-custom-commands.md](./assistant-custom-commands.md) | User-authored commands/skills for assistant sessions — source folders, per-agent mapping, sync mechanics. |
 | [architecture/assistant-run-checkpoints.md](./architecture/assistant-run-checkpoints.md) | Durable Assistant run checkpoints — layout, launch context, discard and retention rules. |
 

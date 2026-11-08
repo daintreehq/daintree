@@ -48,7 +48,9 @@ import { PromptHistoryPalette } from "./PromptHistoryPalette";
 import { useCanopyStore } from "@/store/canopyStore";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
-import { usePluginPromptTemplates } from "@/hooks/usePluginPromptTemplates";
+import { usePromptTemplates } from "@/hooks/usePromptTemplates";
+import { actionService } from "@/services/ActionService";
+import { useUserPromptTemplateStore } from "@/store/userPromptTemplateStore";
 import { renderPromptTemplate } from "@shared/utils/pluginPromptTemplates";
 import { useProjectStore } from "@/store/projectStore";
 import { usePanelStore, useVoiceRecordingStore } from "@/store";
@@ -433,6 +435,18 @@ const EMPTY_STALE_KEYS: ReadonlySet<string> = new Set<string>();
 const NO_CONTEXT_CHIP_PROVIDERS: ReadonlyMap<string, ContextReferenceChipProvider> = new Map();
 const NO_CONTEXT_ITEMS: ContextProviderItem[] = [];
 const NO_TEMPLATE_ITEMS: AutocompleteItem[] = [];
+
+/** A file left out of the templates folder would otherwise just be absent from the menu. */
+const TEMPLATE_PROBLEMS_NOTE = {
+  text: "Some prompt templates weren't loaded. See why in Settings > CLI agents",
+  onClick: () => {
+    void actionService.dispatch(
+      "app.settings.openTab",
+      { tab: "agents", subtab: "general", sectionId: "agents-prompt-templates" },
+      { source: "user" }
+    );
+  },
+};
 // As long as a scratch refusal stays, counted from when the border shows it.
 const FILE_REFERENCE_NOTE_MS = 6_000;
 
@@ -1035,13 +1049,22 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
 
     const { commandMap } = useSlashCommandList({ agentId, projectPath: cwd });
 
-    // A plugin's prompt templates (#13799) share the `/` menu, in a band of
-    // their own after the agent's commands.
-    const promptTemplates = usePluginPromptTemplates(currentProjectId);
+    // Prompt templates (#13799, #16398) share the `/` menu, in a band of their
+    // own after the agent's commands.
+    const promptTemplates = usePromptTemplates(currentProjectId);
+    const hasTemplateProblems = useUserPromptTemplateStore((s) => s.problems.length > 0);
     const isSlashMenuOpen = isCompleting && triggerChar === "/";
-    // A plugin attached in dev mode announces itself without a provenance event.
+    // A plugin attached in dev mode announces itself without a provenance event,
+    // and a file saved in the templates folder doesn't announce itself at all. An
+    // expanded composer keeps its menu open across a trip to another app, which is
+    // where such a file gets saved.
     useEffect(() => {
-      if (isSlashMenuOpen) usePluginRuntimeStore.getState().refresh();
+      if (!isSlashMenuOpen) return;
+      usePluginRuntimeStore.getState().refresh();
+      const readTemplates = () => useUserPromptTemplateStore.getState().refresh();
+      readTemplates();
+      window.addEventListener("focus", readTemplates);
+      return () => window.removeEventListener("focus", readTemplates);
     }, [isSlashMenuOpen]);
     const templateItems = useMemo(
       () =>
@@ -1052,6 +1075,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     );
     // Held by key and read back through the live list, so a plugin that is
     // disabled, unloaded or changed while its form is open takes the form with it.
+    // So does a template file found gone by the next read of the folder.
     const [activeTemplateKey, setActiveTemplateKey] = useState<string | null>(null);
     useEffect(() => {
       if (activeTemplateKey !== null && !promptTemplates.some((t) => t.key === activeTemplateKey)) {
@@ -2720,6 +2744,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                       ? "No files match"
                       : "No matches"
               }
+              note={isSlashMenuOpen && hasTemplateProblems ? TEMPLATE_PROBLEMS_NOTE : undefined}
             />
             {isDragOverCompact && <FileDropOverlay className="rounded-md" />}
             {/* A prompt marker, not a control: it is what makes the box read as
@@ -3013,7 +3038,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           <PromptTemplateForm
             key={activeTemplate.key}
             title={activeTemplate.template.title}
-            pluginName={activeTemplate.pluginName}
+            attribution={activeTemplate.attribution}
             args={activeTemplate.template.args}
             onSubmit={handleTemplateSubmit}
             onCancel={() => setActiveTemplateKey(null)}

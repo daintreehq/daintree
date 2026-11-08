@@ -1367,6 +1367,7 @@ export const SETTINGS_REGISTRY = [
     settings: ["agentSettings", "userAgentRegistry", "agentUpdateSettings"],
     sectionSettings: {
       Input: SECTION_SETTINGS.agentInput,
+      "Prompt templates": SECTION_SETTINGS.promptTemplates,
     },
     label: "CLI agents",
     icon: <Plug className="w-4 h-4" />,
@@ -1418,6 +1419,15 @@ export const SETTINGS_REGISTRY = [
           "keyboard shortcut",
           ...BUILT_IN_AGENT_IDS,
         ],
+      },
+      {
+        id: "agents-prompt-templates",
+        subtab: "general",
+        subtabLabel: "General",
+        section: "Prompt templates",
+        title: "Prompt templates",
+        description: "Your own reusable prompts, kept as Markdown files, in every agent's composer",
+        keywords: ["prompt", "template", "markdown", "folder", "slash", "composer", "frontmatter"],
       },
       {
         id: "agents-hybrid-input",

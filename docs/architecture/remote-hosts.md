@@ -80,6 +80,8 @@ One multiplexed byte stream per session, framed in `electron/remote/link/frames.
 
 `electron/ipc/channelLocality.ts` classifies every channel as `host` (the work: projects, terminals, git, files, agents, plugins, forge, MCP, persistence), `shell` (the machine you're at: windows, menus, theme, keybindings, sound, native notifications, updates, voice, browser surfaces) or `hybrid` (needs a split). `CHANNEL_LOCALITY` is total over `ChannelName`, so an unclassified channel fails typecheck; `EVENT_LOCALITY` covers event-only names; `NAMESPACE_LOCALITY` gives the Remote Hosts namespaces by prefix; dynamic `plugin:{id}:{channel}` is `host`. `getChannelLocality` returns `"host" | "shell" | "hybrid" | null`. `npm run check:channel-locality` (part of `npm run check`) fails on any channel string registered outside `CHANNELS` that isn't classified. A new channel needs an entry here as well as in `CHANNELS`.
 
+A remote window's prompt templates come from both sides: `plugin:list` is `host`, so plugin templates are the host's, and `user-prompt-templates:*` is `shell`, so a person's own [templates](../prompt-templates.md) are read from the folder on the machine at the keyboard, which the host never lists or reads. A template that's chosen becomes an ordinary draft, and travels as any other draft does.
+
 The `mcp:` request/response bridge and the plugin prompt and consent bridges are `shell` although the work is host work: they join a machine's main process to its own views, and a host reaches a remote view through the link's reverse requests, which that view's Shell answers over them.
 
 ## Terminal and worktree streams

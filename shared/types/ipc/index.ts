@@ -39,4 +39,5 @@ export * from "./telemetryPreview.js";
 export * from "./help.js";
 export * from "./agentDefaults.js";
 export * from "./agentToolbarPins.js";
+export * from "./userPromptTemplates.js";
 export * from "./agentAccounts.js";

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { PluginPromptTemplate } from "@/store/pluginRuntimeStore";
+import type { PromptTemplateEntry } from "@/hooks/usePromptTemplates";
 import {
   promptTemplateTokenCut,
   scorePromptTemplate,
@@ -9,14 +9,13 @@ import {
 function template(
   key: string,
   title: string,
-  overrides: Partial<PluginPromptTemplate["template"]> & { pluginName?: string } = {}
-): PluginPromptTemplate {
-  const { pluginName = "Acme CRM", ...rest } = overrides;
+  overrides: Partial<PromptTemplateEntry["template"]> & { sourceName?: string } = {}
+): PromptTemplateEntry {
+  const { sourceName = "Acme CRM", ...rest } = overrides;
   return {
     key,
-    pluginId: "acme",
-    pluginName,
-    projectId: null,
+    sourceName,
+    attribution: `From ${sourceName}`,
     template: {
       id: key.split("::")[1] ?? key,
       title,
@@ -32,7 +31,7 @@ const reconcile = template("acme::reconcile", "Reconcile this month");
 const invoice = template("acme::dunning", "Chase overdue invoices", {
   args: [{ name: "client", label: "Client" }],
 });
-const standup = template("team::standup", "Write the standup", { pluginName: "Team Notes" });
+const standup = template("team::standup", "Write the standup", { sourceName: "Team Notes" });
 
 describe("scorePromptTemplate", () => {
   it("matches every template on a bare `/`", () => {
@@ -54,7 +53,7 @@ describe("scorePromptTemplate", () => {
   it("ranks the start of the title above a later word, and both above the plugin's name", () => {
     const start = scorePromptTemplate(reconcile, "rec")!;
     const word = scorePromptTemplate(template("x::y", "Monthly reconcile"), "rec")!;
-    const plugin = scorePromptTemplate(template("x::y", "Monthly", { pluginName: "Rec" }), "rec")!;
+    const plugin = scorePromptTemplate(template("x::y", "Monthly", { sourceName: "Rec" }), "rec")!;
     expect(start).toBeGreaterThan(word);
     expect(word).toBeGreaterThan(plugin);
   });
@@ -97,7 +96,7 @@ describe("toPromptTemplateItems", () => {
 
   it("keeps two plugins' templates apart when they declare the same id", () => {
     const ours = template("acme::reconcile", "Reconcile this month");
-    const theirs = template("ledger::reconcile", "Reconcile this month", { pluginName: "Ledger" });
+    const theirs = template("ledger::reconcile", "Reconcile this month", { sourceName: "Ledger" });
     const items = toPromptTemplateItems([ours, theirs], "");
     expect(new Set(items.map((item) => item.key)).size).toBe(2);
     expect(items.map((item) => item.template?.key)).toEqual([

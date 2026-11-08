@@ -165,6 +165,7 @@ describe("the declared settings behind each section", () => {
       panelLimits: "device",
       projectViews: "device",
       agentInput: "device",
+      promptTemplates: "device",
       twoPaneSplit: "device",
       gridLayout: "device",
       scrollback: "device",
@@ -202,6 +203,7 @@ describe("search results", () => {
     expect(owned("terminal-panel-limits")).toBe("device");
     expect(owned("agents-hybrid-input")).toBe("device");
     expect(owned("agents-hybrid-focus")).toBe("device");
+    expect(owned("agents-prompt-templates")).toBe("device");
     expect(owned("general-keep-awake")).toBe("device");
     expect(owned("general-session-restore")).toBe("host");
     expect(owned("project-theme")).toBe("device");

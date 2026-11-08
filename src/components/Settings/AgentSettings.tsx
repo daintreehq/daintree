@@ -42,6 +42,7 @@ import { AgentHelpOutput } from "./AgentHelpOutput";
 import { AgentInstallSection } from "@/components/agents/AgentCard";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AgentInputSettings } from "./AgentInputSettings";
+import { UserPromptTemplatesSection } from "./UserPromptTemplatesSection";
 import { AgentInventorySection } from "./AgentInventorySection";
 import { AgentQuotaSection } from "./AgentQuotaSection";
 import { AgentAccountsSection } from "./AgentAccountsSection";
@@ -576,6 +577,8 @@ export function AgentSettings({
       )}
 
       {isGeneralActive && <AgentInputSettings />}
+
+      {isGeneralActive && <UserPromptTemplatesSection />}
 
       {!isGeneralActive && activeAgent && (
         <>

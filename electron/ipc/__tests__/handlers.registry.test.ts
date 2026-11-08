@@ -24,6 +24,7 @@ const registerMocks = vi.hoisted(() => ({
   registerCopyTreeHandlers: vi.fn(),
   registerAiHandlers: vi.fn(),
   registerSlashCommandHandlers: vi.fn(),
+  registerUserPromptTemplatesHandlers: vi.fn(),
   registerSystemShellHandlers: vi.fn(),
   registerEditorConfigHandlers: vi.fn(),
   registerWindowChromeHandlers: vi.fn(),
@@ -108,6 +109,9 @@ vi.mock("../handlers/ai.js", () => ({
 }));
 vi.mock("../handlers/slashCommands.js", () => ({
   registerSlashCommandHandlers: registerMocks.registerSlashCommandHandlers,
+}));
+vi.mock("../handlers/userPromptTemplates.js", () => ({
+  registerUserPromptTemplatesHandlers: registerMocks.registerUserPromptTemplatesHandlers,
 }));
 vi.mock("../handlers/systemShell.js", () => ({
   registerSystemShellHandlers: registerMocks.registerSystemShellHandlers,

@@ -1271,6 +1271,11 @@ export const CHANNEL_LOCALITY = {
   "user-agent-registry:get": "host",
   "user-agent-registry:remove": "host",
   "user-agent-registry:update": "host",
+  // A person's templates follow them across hosts, so a remote window reads the
+  // folder on the machine at the keyboard (#16398). Plugin templates stay the
+  // host's, through `plugin:list`.
+  "user-prompt-templates:list": "shell",
+  "user-prompt-templates:open-folder": "shell",
   "voice-dictionary:accept-suggestion": "shell",
   "voice-dictionary:add": "shell",
   "voice-dictionary:add-to-project": "host",

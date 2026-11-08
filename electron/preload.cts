@@ -54,6 +54,7 @@ import {
   buildGitDiscardPreloadBindings,
 } from "./ipc/handlers/fileMutation.preload.js";
 import { buildSlashCommandsPreloadBindings } from "./ipc/handlers/slashCommands.preload.js";
+import { buildUserPromptTemplatesPreloadBindings } from "./ipc/handlers/userPromptTemplates.preload.js";
 import { buildGlobalEnvPreloadBindings } from "./ipc/handlers/globalEnv.preload.js";
 import { buildAccessibilityPreloadBindings } from "./ipc/handlers/accessibility.preload.js";
 import { buildConfigBundlePreloadBindings } from "./ipc/handlers/configBundle.preload.js";
@@ -1245,6 +1246,7 @@ function buildElectronApi(): ElectronAPI {
 
     // Slash Commands API
     slashCommands: buildSlashCommandsPreloadBindings(_unwrappingInvoke),
+    userPromptTemplates: buildUserPromptTemplatesPreloadBindings(_unwrappingInvoke),
 
     // Artifact API
     artifact: {
