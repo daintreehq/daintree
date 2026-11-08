@@ -41,7 +41,7 @@ import {
   acquireHelpSessionController,
   useHelpSessionController,
 } from "@/controllers/helpSessionControllerRegistry";
-import { assistantSlotKey } from "@shared/config/assistantSlots";
+import { ASSISTANT_SLOTS, assistantSlotKey } from "@shared/config/assistantSlots";
 import { HelpPanelBanners } from "./HelpPanelBanners";
 import {
   closeSessionDescription,
@@ -56,6 +56,14 @@ import { HelpPanelResizeHandle } from "./HelpPanelResizeHandle";
 import { useHelpPanelResize } from "./useHelpPanelResize";
 import { useHelpPanelRevealFocus } from "./useHelpPanelRevealFocus";
 import { useHelpSessionLanes, type PausedLane } from "./useHelpSessionLanes";
+import { claimedHelpLaneKeys } from "@/lib/helpLaneClaims";
+import {
+  canStartOverKeptLane,
+  freshSessionLaunch,
+  pickNewSessionSlot,
+  readKeptLanes,
+  withMirroredLanes,
+} from "./keptLanes";
 import { useGlobalAssistantActivity } from "./useGlobalAssistantActivity";
 import { FigureRail } from "./FigureRail";
 import { useHelpPanelStore, selectSlot } from "@/store/helpPanelStore";
@@ -1024,17 +1032,57 @@ export function HelpPanel({
   // new tab itself rather than leaving that to the tab's auto-launch, which only
   // runs with "Start when the panel opens" on (#14976). Queued before the tab's
   // first input sync; with several agents and no default, the tab asks instead.
-  // A tab that turns out to hold a captured conversation (a cold view whose
-  // lanes are still being listed) is left to offer its own Resume: the default
-  // agent started there would replace that conversation.
+  //
+  // A lane that only holds a captured conversation has no tab (#16495), so the
+  // tab opens in a slot nothing is kept for, and one no launch has claimed. With
+  // none of those left it starts a new conversation over one past sessions keeps.
+  // Any other tab holding a conversation, and every one when main's lanes couldn't
+  // be read, is left to offer its own Resume or Start: a plain launch there would
+  // resume that conversation, or take its place.
   const handleNewSession = useCallback(() => {
-    const slot = handleOpenParallelSession();
-    if (slot === null || !launchableAgentId) return;
-    const { hibernateSessions } = useHelpPanelStore.getState();
-    if (activeWorkspaceId && hibernateSessions[assistantSlotKey(activeWorkspaceId, slot)]) return;
-    acquireHelpSessionController(slot).launchWhenReady({
-      agentId: launchableAgentId,
-      replaceExisting: true,
+    const workspaceId = activeWorkspaceId;
+    const reading = workspaceId
+      ? readKeptLanes(workspaceId).catch((err) => {
+          logWarn("HelpPanel: failed to read kept lanes for a new session", err);
+          return "unread" as const;
+        })
+      : Promise.resolve(null);
+    void reading.then((read) => {
+      const mainKept = read === "unread" ? null : read;
+      const { sessions, hibernateSessions } = useHelpPanelStore.getState();
+      const kept =
+        mainKept && workspaceId
+          ? withMirroredLanes(mainKept, workspaceId, hibernateSessions)
+          : null;
+      const isTaken = (slot: number) =>
+        slot in sessions ||
+        (workspaceId !== null && claimedHelpLaneKeys.has(assistantSlotKey(workspaceId, slot)));
+      const picked = kept ? pickNewSessionSlot(kept, isTaken) : null;
+      const pick =
+        picked?.replacesKept && !(launchableAgentId && canStartOverKeptLane(launchableAgentId))
+          ? null
+          : picked;
+      const target = pick?.slot ?? ASSISTANT_SLOTS.find((slot) => !isTaken(slot));
+      if (target === undefined) return;
+      const slot = handleOpenParallelSession(target);
+      if (slot === null || !launchableAgentId || read === "unread") return;
+      const controller = acquireHelpSessionController(slot);
+      if (pick?.slot === slot) {
+        controller.launchWhenReady(
+          pick.replacesKept
+            ? freshSessionLaunch(launchableAgentId)
+            : { agentId: launchableAgentId, replaceExisting: true }
+        );
+        return;
+      }
+      if (
+        workspaceId &&
+        (kept?.some((lane) => lane.slot === slot) ||
+          hibernateSessions[assistantSlotKey(workspaceId, slot)])
+      ) {
+        return;
+      }
+      controller.launchWhenReady({ agentId: launchableAgentId, replaceExisting: true });
     });
   }, [activeWorkspaceId, handleOpenParallelSession, launchableAgentId]);
 

@@ -818,6 +818,88 @@ describe("HelpSessionController — newSession on a paused lane (#14981)", () =>
   });
 });
 
+describe("HelpSessionController — a fresh start over a kept conversation (#16495)", () => {
+  function freshLaunch() {
+    return {
+      agentId: "claude",
+      replaceExisting: true,
+      requestedId: `terminal-${crypto.randomUUID()}`,
+      checkVersion: true,
+      vacantOnly: true,
+    };
+  }
+
+  it("refuses an occupied lane rather than taking it, and keeps main's pointer through Retry", async () => {
+    const ctrl = new HelpSessionController();
+    syncWorkspaceInputs(ctrl, { id: "proj-1", path: "/repo" }, { terminalId: null });
+
+    ctrl.launch(freshLaunch());
+    helpPanelState.terminalId = vi.mocked(helpPanelState.setTerminal).mock.calls[0]?.[1] ?? null;
+    await vi.waitFor(() => {
+      expect(window.electron.help.provisionSession).toHaveBeenCalledTimes(1);
+    });
+    expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+      expect.objectContaining({ slot: 0, vacantOnly: true })
+    );
+    // Its own mirror goes, so nothing resumes it here; main's pointer stays until
+    // a new session spawns over it.
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
+    expect(window.electron.help.takePendingHibernation).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(helpPanelState.clearTerminal).toHaveBeenCalledWith(0);
+    });
+
+    helpPanelState.terminalId = null;
+    ctrl.retryLaunch("claude");
+    await vi.waitFor(() => {
+      expect(window.electron.help.provisionSession).toHaveBeenCalledTimes(2);
+    });
+    expect(vi.mocked(window.electron.help.provisionSession).mock.calls[1]?.[0]).toMatchObject({
+      vacantOnly: true,
+    });
+    expect(window.electron.help.discardConversation).not.toHaveBeenCalled();
+    expect(window.electron.help.takePendingHibernation).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+
+  it("starts afresh again, not a resume, once a version it was held back for is current", async () => {
+    vi.mocked(window.electron.system.getAgentVersion).mockResolvedValue({
+      installedVersion: "0.5.0",
+      latestVersion: null,
+    } as never);
+    const ctrl = new HelpSessionController();
+    syncWorkspaceInputs(ctrl, { id: "proj-1", path: "/repo" }, { terminalId: null });
+
+    ctrl.launch(freshLaunch());
+    helpPanelState.terminalId = vi.mocked(helpPanelState.setTerminal).mock.calls[0]?.[1] ?? null;
+    await vi.waitFor(() => {
+      expect(ctrl.getSnapshot().assistantVersionTooOld).toMatchObject({ agentId: "claude" });
+    });
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+
+    helpPanelState.terminalId = null;
+    vi.mocked(window.electron.system.getAgentVersion).mockResolvedValue({
+      installedVersion: "99.0.0",
+      latestVersion: null,
+    } as never);
+    ctrl.checkVersionAgain();
+    await vi.waitFor(() => {
+      expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+        expect.objectContaining({ slot: 0, vacantOnly: true })
+      );
+    });
+    // Reserved again, which never adopts or resumes, rather than a plain launch.
+    const reservations = vi
+      .mocked(helpPanelState.setTerminal)
+      .mock.calls.map((call) => call[1])
+      .filter((id) => /^terminal-/.test(String(id)));
+    expect(new Set(reservations).size).toBe(2);
+    expect(window.electron.help.takePendingHibernation).not.toHaveBeenCalled();
+    expect(window.electron.help.discardConversation).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+});
+
 describe("HelpSessionController — terminal PTY exit slides the sidebar out (#10989)", () => {
   function bindLiveSession(
     ctrl: HelpSessionController,
