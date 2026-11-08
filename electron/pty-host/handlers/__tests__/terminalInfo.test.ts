@@ -2,6 +2,10 @@ import { describe, it, expect, expectTypeOf, vi } from "vitest";
 import { mapTerminalInfo } from "../terminalInfo.js";
 import type { HostContext } from "../types.js";
 import type { PtyHostTerminalInfo } from "../../../../shared/types/pty-host.js";
+import {
+  clearPluginAgentRegistryForTests,
+  setPluginAgentRegistry,
+} from "../../../../shared/config/pluginAgentRegistry.js";
 
 function createCtx(overrides: Partial<HostContext> = {}): HostContext {
   const ptyManager = {
@@ -365,7 +369,7 @@ describe("mapTerminalInfo", () => {
     expect(result.hasPty).toBe(true);
   });
 
-  it("narrows detectedAgentId to BuiltInAgentId, dropping unknown values", () => {
+  it("narrows detectedAgentId to an agent the host recognises, dropping unknown values", () => {
     const ctx = createCtx();
     expect(mapTerminalInfo(makeTerminal({ detectedAgentId: "claude" }), ctx).detectedAgentId).toBe(
       "claude"
@@ -373,6 +377,30 @@ describe("mapTerminalInfo", () => {
     expect(
       mapTerminalInfo(makeTerminal({ detectedAgentId: "not-an-agent" }), ctx).detectedAgentId
     ).toBeUndefined();
+  });
+
+  it("keeps a plugin agent's id only while that agent holds an executable name (#16469)", () => {
+    const ctx = createCtx();
+    const pi = {
+      id: "pi",
+      name: "Pi",
+      command: "pi",
+      color: "#3366ff",
+      iconId: "terminal",
+      supportsContextInjection: false,
+    };
+    try {
+      setPluginAgentRegistry({ pi: { ...pi, executableNames: ["pi"] } });
+      expect(mapTerminalInfo(makeTerminal({ detectedAgentId: "pi" }), ctx).detectedAgentId).toBe(
+        "pi"
+      );
+      setPluginAgentRegistry({ pi });
+      expect(
+        mapTerminalInfo(makeTerminal({ detectedAgentId: "pi" }), ctx).detectedAgentId
+      ).toBeUndefined();
+    } finally {
+      clearPluginAgentRegistryForTests();
+    }
   });
 });
 

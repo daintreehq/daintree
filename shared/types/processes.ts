@@ -1,6 +1,5 @@
 import type { AgentId } from "./agent.js";
 import type { PanelKind } from "./panel.js";
-import type { BuiltInAgentId } from "../config/agentIds.js";
 
 /** One process in a sampled tree: basename only, never a command line. */
 export interface ProcessTreeMember {
@@ -44,7 +43,7 @@ export interface HostProcessInventoryTerminal {
   cwd: string;
   worktreeId?: string;
   launchAgentId?: AgentId;
-  detectedAgentId?: BuiltInAgentId;
+  detectedAgentId?: AgentId;
   isAssistantTerminal: boolean;
   spawnedAt: number;
   isTrashed: boolean;

@@ -5,7 +5,7 @@ import {
   detectCommandIdentity,
   stripCommandExecutableExtension,
 } from "../ProcessDetector/commandParser.js";
-import { AGENT_CLI_NAMES } from "../ProcessDetector/registries.js";
+import { getAgentCliNames } from "../ProcessDetector/registries.js";
 
 /**
  * Interactive shells, by executable basename. A root process outside this set
@@ -72,7 +72,7 @@ export interface AgentTreeCensus {
 function runsAgent(proc: Pick<ProcessInfo, "comm" | "command">, agentId: string): boolean {
   if (isPlainShellName(proc.comm)) return false;
   const name = stripCommandExecutableExtension(executableName(proc.comm));
-  if (AGENT_CLI_NAMES[name] === agentId) return true;
+  if (getAgentCliNames()[name] === agentId) return true;
   return detectCommandIdentity(proc.command)?.agentType === agentId;
 }
 

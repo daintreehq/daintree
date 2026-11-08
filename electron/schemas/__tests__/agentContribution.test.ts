@@ -4,7 +4,16 @@ import {
   LAUNCH_MCP_ENV_ONLY_FORMATS,
   LAUNCH_MCP_FORMATS,
 } from "../../../shared/config/launchMcp.js";
-import { AgentContributionSchema, getPluginManifestSchema } from "../plugin.js";
+import {
+  AgentContributionSchema,
+  getPluginManifestSchema,
+  resolveAgentExecutableNames,
+} from "../plugin.js";
+import { AGENT_CLI_NAMES } from "../../services/ProcessDetector/registries.js";
+import {
+  PROCESS_TOOL_ICON_BY_COMMAND,
+  getProcessToolConfig,
+} from "../../../shared/config/processToolRegistry.js";
 
 const VALID_AGENT = {
   id: "acme-agent",
@@ -1031,6 +1040,122 @@ describe("discovery metadata (#16468)", () => {
 
     it("leaves a dotted name that isn't a launcher alone", () => {
       expect(withAgent({ command: "acme.dev", packages: { npm: "acme" } }).success).toBe(true);
+    });
+  });
+});
+
+describe("executableNames (#16469)", () => {
+  const withNames = (executableNames: unknown) =>
+    AgentContributionSchema.safeParse({ ...VALID_AGENT, executableNames });
+
+  it("accepts bare lowercase names, and an empty list that claims none", () => {
+    expect(withNames(["mini", "mini-swe-agent"]).success).toBe(true);
+    expect(withNames([]).success).toBe(true);
+  });
+
+  it("refuses every name the command parser reads as a launcher", () => {
+    // The parser's shells, prefix runners and version-manager shims, and the
+    // package-manager exec subcommands.
+    const executors = ["sh", "bash", "zsh", "fish", "pwsh", "cmd", "env", "sudo", "doas"];
+    const prefixes = ["nohup", "nice", "time", "stdbuf", "setsid", "command"];
+    const shims = ["mise", "asdf", "rtx", "direnv", "pipx", "rye", "pdm", "hatch"];
+    for (const name of [...executors, ...prefixes, ...shims, "exec", "dlx", "x"]) {
+      expect(withNames([name]).success, name).toBe(false);
+    }
+  });
+
+  it("refuses every runtime and package manager the parser looks past", () => {
+    const launchers = Object.entries(PROCESS_TOOL_ICON_BY_COMMAND)
+      .filter(([, iconId]) => {
+        const tier = getProcessToolConfig(iconId)?.tier;
+        return tier === "runtime" || tier === "package-manager";
+      })
+      .map(([name]) => name)
+      .filter((name) => /^[a-z0-9][a-z0-9._-]*$/.test(name) && !name.includes("."));
+    expect(launchers).toEqual(expect.arrayContaining(["node", "npx", "uvx", "python3", "pnpm"]));
+    for (const name of launchers) {
+      expect(withNames([name]).success, name).toBe(false);
+    }
+  });
+
+  it("keeps the process-tool rules: case, extensions, reserved keys", () => {
+    expect(withNames(["Pi"]).success).toBe(false);
+    expect(withNames(["pi.exe"]).success).toBe(false);
+    expect(withNames(["constructor"]).success).toBe(false);
+    expect(withNames(["./bin/pi"]).success).toBe(false);
+  });
+
+  it("rejects a repeated name and an unbounded list", () => {
+    expect(withNames(["pi", "pi"]).success).toBe(false);
+    expect(withNames(Array.from({ length: 17 }, (_, i) => `pi${i}`)).success).toBe(false);
+  });
+
+  describe("manifest-level checks", () => {
+    const schema = getPluginManifestSchema("user");
+    const parseAgents = (agents: Record<string, unknown>[]) =>
+      schema.safeParse(manifestWith({ capabilities: ["agent:register"], contributes: { agents } }));
+    const errorCodes = (result: ReturnType<typeof parseAgents>) =>
+      result.success
+        ? []
+        : result.error.issues.map(
+            (issue) => (issue as { params?: { errorCode?: string } }).params?.errorCode
+          );
+
+    it("refuses a name a built-in agent or tool owns", () => {
+      const builtInAgentName = Object.keys(AGENT_CLI_NAMES)[0];
+      const builtInToolName = Object.keys(PROCESS_TOOL_ICON_BY_COMMAND).find(
+        (name) => withNames([name]).success
+      );
+      expect(builtInToolName).toBeDefined();
+      for (const name of [builtInAgentName, builtInToolName]) {
+        expect(
+          errorCodes(parseAgents([{ ...VALID_AGENT, executableNames: [name] }])),
+          name
+        ).toContain("agent_executable_name_reserved");
+      }
+    });
+
+    it("refuses two agents in one manifest claiming the same name", () => {
+      const result = parseAgents([
+        { ...VALID_AGENT, executableNames: ["pi"] },
+        { ...VALID_AGENT, id: "other-agent", executableNames: ["pi"] },
+      ]);
+      expect(errorCodes(result)).toContain("agent_executable_name_duplicate");
+    });
+
+    it("leaves a manifest without executableNames as it was", () => {
+      expect(parseAgents([{ ...VALID_AGENT, command: "pi" }]).success).toBe(true);
+    });
+  });
+
+  describe("resolveAgentExecutableNames", () => {
+    it("claims a bare lowercase command's own name when the list is omitted", () => {
+      expect(resolveAgentExecutableNames({ command: "pi" })).toEqual(["pi"]);
+      expect(resolveAgentExecutableNames({ command: "mini-swe-agent" })).toEqual([
+        "mini-swe-agent",
+      ]);
+    });
+
+    it("claims nothing implicitly for a mixed-case command", () => {
+      // `Hermes` and `hermes` are different programs on a case-sensitive disk.
+      expect(resolveAgentExecutableNames({ command: "Hermes" })).toEqual([]);
+    });
+
+    it("takes a declared list as written, so an empty one opts out", () => {
+      expect(
+        resolveAgentExecutableNames({
+          command: "mini",
+          executableNames: ["mini", "mini-swe-agent"],
+        })
+      ).toEqual(["mini", "mini-swe-agent"]);
+      expect(resolveAgentExecutableNames({ command: "pi", executableNames: [] })).toEqual([]);
+    });
+
+    it("claims nothing implicitly for a launcher, a built-in, or a plugin-relative command", () => {
+      const builtInAgentName = Object.keys(AGENT_CLI_NAMES)[0];
+      for (const command of ["node", "npx", "uvx", "bash", "./bin/agent.mjs", builtInAgentName]) {
+        expect(resolveAgentExecutableNames({ command }), command).toEqual([]);
+      }
     });
   });
 });

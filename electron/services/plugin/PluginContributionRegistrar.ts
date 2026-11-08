@@ -1,4 +1,4 @@
-import { isBuiltInActionId } from "../../schemas/plugin.js";
+import { isBuiltInActionId, resolveAgentExecutableNames } from "../../schemas/plugin.js";
 import { PROJECT_SURFACE_SLOTS, fileEditorSlotKey } from "../../../shared/types/plugin.js";
 import type {
   PluginLaunchEntryTarget,
@@ -564,11 +564,14 @@ export class PluginContributionRegistrar {
     const { resolveIconId } = pending;
 
     if (manifest.contributes.agents.length > 0) {
+      // Executable names resolve here, where the launcher and built-in rules
+      // live, so the shared registry only sees the names an agent claims.
       registerPluginAgents(
         pluginId,
         manifest.contributes.agents.map((agent) => ({
           ...agent,
           iconId: resolveIconId(agent.iconId),
+          executableNames: resolveAgentExecutableNames(agent),
         })),
         pluginDir
       );

@@ -718,6 +718,8 @@ describe("PluginService integration — agent contributions (issue #9560)", () =
     const config = getEffectiveAgentConfig("acme-agent");
     expect(config?.name).toBe("Acme Agent");
     expect(config?.command).toBe("acme");
+    // Its bare command is the name it claims in a plain terminal (#16469).
+    expect(config?.executableNames).toEqual(["acme"]);
 
     expect(vi.mocked(broadcastToRenderer)).toHaveBeenCalledWith("events:push", {
       name: "plugin:agents-changed",
@@ -777,6 +779,32 @@ describe("PluginService integration — agent contributions (issue #9560)", () =
 
     expect(getPluginIdForAgent("hermes")).toBe(shadowed);
     expect(recorded()).toContainEqual(declared[shadowed]);
+  });
+
+  it("registers no executable name for an agent that declares none (#16469)", async () => {
+    await writePlugin("acme.quiet-agent", {
+      name: "acme.quiet-agent",
+      version: "1.0.0",
+      capabilities: ["agent:register"],
+      contributes: {
+        agents: [
+          {
+            id: "quiet-agent",
+            name: "Quiet",
+            command: "quiet",
+            color: "#3366ff",
+            iconId: "terminal",
+            executableNames: [],
+          },
+        ],
+      },
+    });
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+
+    expect(getPluginAgentRegistry()["quiet-agent"]).toBeDefined();
+    expect(getPluginAgentRegistry()["quiet-agent"]).not.toHaveProperty("executableNames");
   });
 
   it("does not register agents when the manifest omits the agent:register capability", async () => {

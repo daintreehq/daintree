@@ -4,6 +4,7 @@ import type { ParsedPluginManifest } from "../manifestShape.js";
 import { buildManifestValidationContext } from "./context.js";
 import { validateAccountConnections, validateServiceNames } from "./accounts.js";
 import {
+  validateAgentExecutableNames,
   validateAgentIds,
   validateAgentMcp,
   validateAgentDiscovery,
@@ -78,6 +79,7 @@ export function validatePluginManifest(
   validateAgentPermissionBypass(manifest, ctx);
   validateAgentPromptFormTerminator(manifest, ctx);
   validateAgentDiscovery(manifest, ctx);
+  validateAgentExecutableNames(manifest, ctx);
   validateProcessTools(manifest, ctx);
   validateContributedActionIds(manifest, ctx, context);
   validatePanelActionSurfaces(manifest, ctx, context);

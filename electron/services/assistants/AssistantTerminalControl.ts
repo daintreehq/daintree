@@ -10,8 +10,7 @@ import {
   type AssistantStartResult,
   type GlobalAssistantEntry,
 } from "../../../shared/types/assistantControl.js";
-import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
-import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
+import type { AgentId, AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalHandback } from "../../../shared/types/handback.js";
 import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
 import {
@@ -20,6 +19,7 @@ import {
 } from "../../../shared/utils/assistantProvenance.js";
 import { appendHandbackInstruction, mintHandbackCode } from "../../../shared/utils/handback.js";
 import { assessInterruptCandidate } from "../../../shared/utils/terminalInterrupt.js";
+import { isBuiltInAgentId } from "../../../shared/config/agentIds.js";
 import { buildTerminalSendCommandReceipt } from "../../../shared/utils/terminalSendCommandResult.js";
 import { planChoice } from "../../../shared/utils/terminalChoice.js";
 import {
@@ -90,7 +90,7 @@ export interface AssistantTarget {
 
 /** The pty-host record fields the control reads. */
 export interface AssistantTerminalRecord {
-  detectedAgentId?: BuiltInAgentId;
+  detectedAgentId?: AgentId;
   launchAgentId?: string;
   agentState?: AgentState;
   waitingReason?: WaitingReason;
@@ -700,7 +700,8 @@ export class AssistantTerminalControl {
             trashed: record.isTrashed === true,
             ...(record.hasPty !== undefined ? { hasPty: record.hasPty } : {}),
             exited: record.isExited === true,
-            agentId: record.detectedAgentId,
+            // Interrupt keys are a built-in capability; a plugin agent has none.
+            agentId: isBuiltInAgentId(record.detectedAgentId) ? record.detectedAgentId : undefined,
             ...(record.agentState !== undefined ? { agentState: record.agentState } : {}),
             ...(record.waitingReason !== undefined ? { waitingReason: record.waitingReason } : {}),
           }

@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   classifyAgentTree,
   hasAgentProcess,
   isPlainShellName,
   type AgentTreeCensus,
 } from "../agentProcessTree.js";
+import {
+  clearPluginAgentRegistryForTests,
+  setPluginAgentRegistry,
+} from "../../../../shared/config/pluginAgentRegistry.js";
 
 interface Proc {
   pid: number;
@@ -236,5 +240,37 @@ describe("hasAgentProcess", () => {
   it("cannot say when the census has no row for the terminal's root", () => {
     expect(hasAgentProcess(census([CLAUDE_EXE]), PWSH.pid, "claude")).toBeUndefined();
     expect(hasAgentProcess(census([]), PWSH.pid, "claude")).toBeUndefined();
+  });
+});
+
+describe("plugin agents (#16469)", () => {
+  const ZSH: Proc = { pid: 30, ppid: 1, comm: "zsh", command: "-zsh" };
+  // Named only by its `comm`: the command line is a path the parser can't read
+  // as this agent.
+  const BY_COMM: Proc = { pid: 31, ppid: 30, comm: "pi", command: "/opt/pi/libexec/run" };
+  // Named only by its argv: the process is the runtime that runs it.
+  const BY_ARGV: Proc = { pid: 32, ppid: 30, comm: "node", command: "node /usr/local/bin/pi" };
+  const PI_AGENT = {
+    id: "pi-agent",
+    name: "Pi",
+    command: "pi",
+    color: "#3366ff",
+    iconId: "terminal",
+    supportsContextInjection: false,
+  };
+
+  afterEach(() => {
+    clearPluginAgentRegistryForTests();
+  });
+
+  it("finds a plugin agent by its executable name, from comm or argv", () => {
+    expect(hasAgentProcess(census([ZSH, BY_COMM]), ZSH.pid, "pi-agent")).toBe(false);
+    expect(hasAgentProcess(census([ZSH, BY_ARGV]), ZSH.pid, "pi-agent")).toBe(false);
+
+    setPluginAgentRegistry({ "pi-agent": { ...PI_AGENT, executableNames: ["pi"] } });
+    expect(hasAgentProcess(census([ZSH, BY_COMM]), ZSH.pid, "pi-agent")).toBe(true);
+    expect(hasAgentProcess(census([ZSH, BY_ARGV]), ZSH.pid, "pi-agent")).toBe(true);
+    // A tree no one has verified for this agent can't be classified.
+    expect(classifyAgentTree(census([ZSH, BY_COMM]), ZSH.pid, "pi-agent")).toBe("unknown");
   });
 });

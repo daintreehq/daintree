@@ -1,4 +1,4 @@
-import { isBuiltInAgentId, type BuiltInAgentId } from "../../../shared/config/agentIds.js";
+import type { AgentId } from "../../../shared/types/agent.js";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import type { DetectionResult, DetectionState } from "../ProcessDetector.js";
 import { events } from "../events.js";
@@ -13,6 +13,7 @@ import { logIdentityDebug } from "./identityDebug.js";
 import { buildPatternConfig } from "./terminalActivityPatterns.js";
 import type { AgentEndObservation } from "../../../shared/types/ipc/agent.js";
 import { captureAgentEndSession } from "./agentEndCapture.js";
+import { isDetectableAgentId } from "../ProcessDetector/registries.js";
 
 export interface TerminalAgentDetectionHost {
   readonly id: string;
@@ -81,8 +82,10 @@ export function handleAgentDetection(
   // instead. #5773
   let justClearedDetection = false;
 
-  if (isDetected && result.agentType && isBuiltInAgentId(result.agentType)) {
-    const detectedAgentId: BuiltInAgentId = result.agentType;
+  // Built-ins, or a plugin agent that holds an executable name right now — an
+  // observation made before its plugin unloaded promotes nothing (#16469).
+  if (isDetected && result.agentType && isDetectableAgentId(result.agentType)) {
+    const detectedAgentId: AgentId = result.agentType;
     const previous = terminal.detectedAgentId;
     terminal.everDetectedAgent = true;
 
@@ -253,4 +256,48 @@ export function handleAgentDetection(
       lastCommand,
     });
   }
+}
+
+/**
+ * Demote a terminal whose detected agent the registry no longer recognises
+ * (#16469): its plugin unloaded, or another plugin now claims its only name.
+ * That is not an exit — the process may still be running — so no session end
+ * is captured. The state machine takes the `kill` path to idle, which settles
+ * every waiter and pulse on that state without the completion an `exit` would
+ * report, while the agent id is still on the terminal to carry it. Then the
+ * identity, its monitor and its default title go, and the `"subcommand"` exit
+ * a prompt return sends tells every listener the shell outlived the agent.
+ */
+export function revokeDetectedAgent(host: TerminalAgentDetectionHost): void {
+  const terminal = host.terminalInfo;
+  const previousAgent = terminal.detectedAgentId;
+  if (terminal.wasKilled || !previousAgent || isDetectableAgentId(previousAgent)) return;
+
+  logIdentityDebug(
+    `[IdentityDebug] terminal-demote-apply term=${host.id.slice(-8)} ` +
+      `reason=agent-unregistered agent=${previousAgent}`
+  );
+  host.stopActivityMonitor();
+  terminal.analysisEnabled = false;
+  if (terminal.agentState !== undefined && terminal.agentState !== "exited") {
+    host.agentStateService.updateAgentState(terminal, { type: "kill" });
+    // What the renderer sets on this `agent:exited`, and what releases a
+    // launched pane's affinity: the agent is gone from this terminal.
+    terminal.agentState = "exited";
+    terminal.lastStateChange = Date.now();
+  }
+  terminal.detectedAgentId = undefined;
+  terminal.detectedProcessIconId = undefined;
+  host.lastDetectedProcessIconId = undefined;
+  const nextTitle = computeDefaultTitle(terminal);
+  if ((terminal.titleMode ?? "default") === "default") {
+    terminal.title = nextTitle;
+  }
+  events.emit("agent:exited", {
+    terminalId: host.id,
+    agentType: previousAgent,
+    defaultTitle: nextTitle,
+    timestamp: Date.now(),
+    exitKind: "subcommand",
+  });
 }

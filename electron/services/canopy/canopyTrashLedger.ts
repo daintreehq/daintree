@@ -1,8 +1,7 @@
 import type { CanopyTrashEntry } from "../../../shared/types/ipc/canopy.js";
 import type { FleetRunRow } from "../../../shared/types/ipc/fleet.js";
 import type { PanelKind, PanelTitleMode } from "../../../shared/types/panel.js";
-import type { AgentState } from "../../../shared/types/agent.js";
-import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
+import type { AgentId, AgentState } from "../../../shared/types/agent.js";
 import { classifyRun } from "../projectAgentCounts.js";
 
 /** What the ledger reads off the host's record of a terminal it heard trashed. */
@@ -21,7 +20,7 @@ export interface TrashedTerminalRecord {
   hasPty?: boolean;
   agentState?: AgentState;
   lastStateChange?: number;
-  detectedAgentId?: BuiltInAgentId;
+  detectedAgentId?: AgentId;
   launchAgentId?: string;
   everDetectedAgent?: boolean;
   agentPresetColor?: string;

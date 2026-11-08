@@ -1,5 +1,10 @@
 import type { PanelKind, AgentState } from "@/types";
-import { coerceAgentState, coerceWaitingReason, type WaitingReason } from "@shared/types/agent";
+import {
+  coerceAgentState,
+  coerceWaitingReason,
+  type AgentId,
+  type WaitingReason,
+} from "@shared/types/agent";
 import type { BrowserHistory } from "@shared/types/browser";
 import type {
   FileViewMode,
@@ -18,7 +23,6 @@ import type {
 } from "@shared/types/panel";
 import type { GitStatus } from "@shared/types/git";
 import type { AddPanelOptionsBase } from "@shared/types/addPanelOptions";
-import type { BuiltInAgentId } from "@shared/config/agentIds";
 import type { ResumeOnRestart } from "@shared/types/agentSettings";
 import { getAgentConfig, sanitizeAgentEnv } from "@/config/agents";
 import { isAccountId } from "@shared/utils/agentAccounts";
@@ -319,7 +323,7 @@ interface BackendTerminalData {
    * never read absence as zero.
    */
   agentIncarnation?: number;
-  detectedAgentId?: BuiltInAgentId;
+  detectedAgentId?: AgentId;
   detectedProcessId?: string;
   /** False once the host's record outlived its process. */
   hasPty?: boolean;
@@ -348,7 +352,7 @@ interface ReconnectedTerminalData {
    * never read absence as zero.
    */
   agentIncarnation?: number;
-  detectedAgentId?: BuiltInAgentId;
+  detectedAgentId?: AgentId;
   detectedProcessId?: string;
 }
 

@@ -143,6 +143,46 @@ export function validateAgentIds(manifest: ParsedPluginManifest, ctx: z.Refineme
   });
 }
 
+// A declared agent executable name is the identity a plain terminal promotes
+// to (#16469), so it may never be a name a built-in agent or tool already
+// owns: built-ins win at runtime, and the claim would validate and then never
+// fire. Two agents in one manifest declaring the same name is a typo, and at
+// runtime it would cost both of them the name.
+export function validateAgentExecutableNames(
+  manifest: ParsedPluginManifest,
+  ctx: z.RefinementCtx
+): void {
+  const claimedBy = new Map<string, string>();
+  manifest.contributes.agents.forEach((agent, index) => {
+    agent.executableNames?.forEach((name, nameIndex) => {
+      const path = ["contributes", "agents", index, "executableNames", nameIndex];
+      if (
+        Object.hasOwn(AGENT_CLI_NAMES, name) ||
+        Object.hasOwn(PROCESS_TOOL_ICON_BY_COMMAND, name)
+      ) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path,
+          message: `Agent executable name "${name}" belongs to a built-in agent or tool — plugin agents must claim new names.`,
+          params: { errorCode: "agent_executable_name_reserved" },
+        });
+        return;
+      }
+      const owner = claimedBy.get(name);
+      if (owner !== undefined && owner !== agent.id) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path,
+          message: `Agent executable name "${name}" is already claimed by agent "${owner}" in this manifest.`,
+          params: { errorCode: "agent_executable_name_duplicate" },
+        });
+        return;
+      }
+      claimedBy.set(name, agent.id);
+    });
+  });
+}
+
 // A declared bypass flag rides only a launch the person's setting turns it on
 // for (#16374). The same flag in args every launch or resume carries would
 // skip prompts past an "off" veto, so none of them may hold a declared option

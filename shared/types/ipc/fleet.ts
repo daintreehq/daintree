@@ -1,5 +1,4 @@
-import type { AgentState, WaitingReason } from "../agent.js";
-import type { BuiltInAgentId } from "../../config/agentIds.js";
+import type { AgentId, AgentState, WaitingReason } from "../agent.js";
 import type { PanelTitleMode } from "../panel.js";
 
 /**
@@ -185,7 +184,7 @@ export interface FleetRunRow {
   /** Worktree the run is in, when the terminal carries one. */
   worktreeId?: string;
   /** Runtime-detected agent identity, absent before detection commits. */
-  agentId?: BuiltInAgentId;
+  agentId?: AgentId;
   agentState?: AgentState;
   /** `"error"` distinguishes blocked-after-failure from waiting-on-input. */
   waitingReason?: WaitingReason;

@@ -2,8 +2,7 @@ import type { PersistableFlowStatus, TerminalRuntimeStatus } from "@/types";
 import type { PanelKind } from "@/types";
 import type { TabGroup } from "@/types";
 import { getDefaultPanelTitle, panelKindHasPty } from "@shared/config/panelKindRegistry";
-import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
-import { isBuiltInAgentId } from "@shared/config/agentIds";
+import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { ABSOLUTE_MAX_GRID_TERMINALS } from "@/lib/terminalLayout";
 import { deriveTerminalChrome, type TerminalChromeInput } from "@/utils/terminalChrome";
 import { logError, logWarn } from "@/utils/logger";
@@ -201,16 +200,14 @@ export function getDefaultTitle(
   kind: PanelKind | undefined,
   identity?: DefaultTitleIdentity
 ): string {
+  // The effective registry, like the host's `computeDefaultTitle`: a plugin
+  // agent detected in a plain terminal is named like a built-in (#16469).
   const chromeAgentId = deriveTerminalChrome({ kind, ...identity }).agentId;
-  if (chromeAgentId && isBuiltInAgentId(chromeAgentId)) {
-    return AGENT_REGISTRY[chromeAgentId]?.name ?? chromeAgentId;
-  }
-  if (
-    identity?.launchAgentId &&
-    identity.everDetectedAgent !== true &&
-    isBuiltInAgentId(identity.launchAgentId)
-  ) {
-    return AGENT_REGISTRY[identity.launchAgentId]?.name ?? identity.launchAgentId;
+  const chromeName = chromeAgentId ? getEffectiveAgentConfig(chromeAgentId)?.name : undefined;
+  if (chromeName) return chromeName;
+  if (identity?.launchAgentId && identity.everDetectedAgent !== true) {
+    const launchName = getEffectiveAgentConfig(identity.launchAgentId)?.name;
+    if (launchName) return launchName;
   }
   return getDefaultPanelTitle(kind ?? "terminal");
 }
