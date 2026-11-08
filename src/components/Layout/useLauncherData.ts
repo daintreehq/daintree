@@ -13,12 +13,15 @@ import { getAgentConfig, getAgentIds } from "@/config/agents";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
 import type { DockLaunchAgent, DockLaunchInventoryState } from "./dockLaunchItems";
-import type { RecipeContext } from "@/utils/recipeVariables";
+import { recipeIssueContext, type RecipeContext } from "@/utils/recipeVariables";
 
 interface ActiveWorktreeFields {
   path: string;
   branch: string | undefined;
   issueNumber: number | undefined;
+  issueTitle: string | undefined;
+  issueProviderId: string | undefined;
+  issueKey: string | undefined;
   prNumber: number | undefined;
 }
 
@@ -68,6 +71,9 @@ export function useLauncherData(): LauncherData {
         path: w.path,
         branch: w.branch,
         issueNumber: w.issueNumber,
+        issueTitle: w.issueTitle,
+        issueProviderId: w.issueProviderId,
+        issueKey: w.issueKey,
         prNumber: w.linked?.pr?.ref.number,
       };
     })
@@ -153,7 +159,7 @@ export function useLauncherData(): LauncherData {
     () =>
       activeWorktree
         ? {
-            issueNumber: activeWorktree.issueNumber,
+            ...recipeIssueContext(activeWorktree),
             prNumber: activeWorktree.prNumber,
             branchName: activeWorktree.branch,
             worktreePath: activeWorktree.path,

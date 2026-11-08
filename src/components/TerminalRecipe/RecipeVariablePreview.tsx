@@ -1,7 +1,11 @@
 import { useMemo } from "react";
 import { AlertTriangle } from "lucide-react";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
-import { segmentRecipePrompt, type RecipeContext } from "@/utils/recipeVariables";
+import {
+  recipeContextFromWorktree,
+  segmentRecipePrompt,
+  type RecipeContext,
+} from "@/utils/recipeVariables";
 import {
   RECIPE_VARIABLE_EMPTY_TOKEN,
   RECIPE_VARIABLE_TOKEN,
@@ -26,15 +30,10 @@ export function RecipeVariablePreview({ initialPrompt, worktreeId }: RecipeVaria
     worktreeId ? state.worktrees.get(worktreeId) : undefined
   );
 
-  const context: RecipeContext | null = useMemo(() => {
-    if (!worktreeSnap) return null;
-    return {
-      issueNumber: worktreeSnap.issueNumber,
-      prNumber: worktreeSnap.linked?.pr?.ref.number,
-      worktreePath: worktreeSnap.path,
-      branchName: worktreeSnap.branch,
-    };
-  }, [worktreeSnap]);
+  const context: RecipeContext | null = useMemo(
+    () => (worktreeSnap ? recipeContextFromWorktree(worktreeSnap) : null),
+    [worktreeSnap]
+  );
 
   const segments = segmentRecipePrompt(initialPrompt, context);
   // Nothing to preview when the prompt has no {{…}} at all: it would only

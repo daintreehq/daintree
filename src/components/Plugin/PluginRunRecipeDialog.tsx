@@ -19,7 +19,7 @@ import {
   type PluginAgentToolsProblem,
 } from "@/utils/pluginRecipeAgentTools";
 import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
-import type { RecipeContext } from "@/utils/recipeVariables";
+import { recipeContextFromWorktree, type RecipeContext } from "@/utils/recipeVariables";
 import { pluralize } from "@/lib/pluralize";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isAgentRecipeType, type TerminalRecipe } from "@shared/types/project";
@@ -240,13 +240,7 @@ export function PluginRunRecipeDialog() {
 
   const context: RecipeContext | null =
     prompt && worktree
-      ? {
-          issueNumber: worktree.issueNumber,
-          prNumber: worktree.linked?.pr?.ref.number,
-          worktreePath: worktree.path,
-          branchName: worktree.branch,
-          pluginVariables: prompt.request.variables,
-        }
+      ? { ...recipeContextFromWorktree(worktree), pluginVariables: prompt.request.variables }
       : null;
   const preview = recipe && context ? previewSteps(recipe, context) : null;
 

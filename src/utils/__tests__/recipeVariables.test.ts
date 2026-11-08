@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   replaceRecipeVariables,
   detectUnresolvedVariables,
+  getAvailableVariables,
+  hasRecipeVariables,
+  recipeContextFromWorktree,
+  recipeIssueContextFromIssue,
   segmentRecipePrompt,
 } from "../recipeVariables";
 import type { RecipeContext } from "../recipeVariables";
@@ -278,5 +282,66 @@ describe("tracker issues (#16381)", () => {
       { kind: "text", text: "About " },
       { kind: "value", text: "Fix the login race", name: "issue_title" },
     ]);
+  });
+
+  it("names the issue by its key even without a number, and before a PR", () => {
+    expect(replaceRecipeVariables("{{issue_number}} {{number}}", { issueKey: "ENG-9" })).toBe(
+      "ENG-9 ENG-9"
+    );
+    expect(detectUnresolvedVariables("{{issue_number}} {{number}}", { issueKey: "ENG-9" })).toEqual(
+      []
+    );
+    expect(replaceRecipeVariables("{{number}}", { issueKey: "  ", prNumber: 5 })).toBe("#5");
+  });
+
+  it("keeps a title or key to one line of printable text", () => {
+    const context: RecipeContext = {
+      issueKey: "ENG-\u001b[2J42",
+      issueTitle: "  Fix\r\nthe\tlogin\u2028race\u0007\u009b31m  ",
+    };
+    expect(replaceRecipeVariables("{{issue_number}}: {{issue_title}}", context)).toBe(
+      "ENG-[2J42: Fix the login race31m"
+    );
+  });
+
+  it("treats a title with nothing printable as missing, everywhere launch looks", () => {
+    const context: RecipeContext = { issueNumber: 3, issueTitle: "\r\n\u0007 " };
+    expect(replaceRecipeVariables("[{{issue_title}}]", context)).toBe("[]");
+    expect(detectUnresolvedVariables("{{issue_title}}", context)).toEqual(["issue_title"]);
+    expect(segmentRecipePrompt("{{issue_title}}", context)).toEqual([
+      { kind: "missing", text: "{{issue_title}}", name: "issue_title" },
+    ]);
+  });
+
+  it("inserts a title literally, never expanding what it contains", () => {
+    expect(
+      replaceRecipeVariables("{{issue_title}}", {
+        issueTitle: "$& {{branch_name}}",
+        branchName: "main",
+      })
+    ).toBe("$& {{branch_name}}");
+  });
+
+  it("lists {{issue_title}} wherever the known variables are read", () => {
+    expect(getAvailableVariables().map((v) => v.name)).toContain("issue_title");
+    expect(hasRecipeVariables("About {{ISSUE_TITLE}}")).toBe(true);
+  });
+
+  it("takes a worktree's key only with the provider that owns it", () => {
+    const base = { path: "/w", branch: "eng-42", issueNumber: 42, issueTitle: "Fix it" };
+    expect(
+      recipeContextFromWorktree({ ...base, issueProviderId: "linear", issueKey: "ENG-42" })
+    ).toMatchObject({ issueNumber: 42, issueKey: "ENG-42", issueTitle: "Fix it" });
+    expect(recipeContextFromWorktree({ ...base, issueKey: "ENG-42" }).issueKey).toBeUndefined();
+  });
+
+  it("takes an issue's key only when a provider served it", () => {
+    const issue = { number: 42, title: "Fix it", key: "ENG-42" };
+    expect(recipeIssueContextFromIssue({ ...issue, providerId: "linear" })).toEqual({
+      issueNumber: 42,
+      issueKey: "ENG-42",
+      issueTitle: "Fix it",
+    });
+    expect(recipeIssueContextFromIssue(issue).issueKey).toBeUndefined();
   });
 });

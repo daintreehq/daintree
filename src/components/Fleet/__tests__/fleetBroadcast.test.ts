@@ -226,6 +226,31 @@ describe("buildFleetBroadcastRecipeContext", () => {
     expect(buildFleetBroadcastRecipeContext("t2")).toBeNull();
   });
 
+  it("names a provider-served issue by its key and carries its title (#16381)", () => {
+    const worktrees = new Map<string, WorktreeSnapshot>();
+    worktrees.set(
+      "wt-l",
+      makeWorktree("wt-l", {
+        branch: "eng-42-fix",
+        issueNumber: 42,
+        issueTitle: "Fix the login race",
+        issueProviderId: "linear",
+        issueKey: "ENG-42",
+      })
+    );
+    worktrees.set("wt-g", makeWorktree("wt-g", { issueNumber: 42, issueKey: "ENG-42" }));
+    installViewStore(worktrees);
+    seedPanels([
+      makeAgent("tl", { worktreeId: "wt-l" }),
+      makeAgent("tg", { worktreeId: "wt-g" }),
+    ]);
+    expect(buildFleetBroadcastRecipeContext("tl")).toMatchObject({
+      issueKey: "ENG-42",
+      issueTitle: "Fix the login race",
+    });
+    expect(buildFleetBroadcastRecipeContext("tg")?.issueKey).toBeUndefined();
+  });
+
   it("falls back to worktree.name when branch is unset", () => {
     const worktrees = new Map<string, WorktreeSnapshot>();
     worktrees.set("wt-x", makeWorktree("wt-x", { branch: undefined, name: "fallback-name" }));

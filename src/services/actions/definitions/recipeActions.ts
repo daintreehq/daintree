@@ -10,6 +10,7 @@ import { useRecipeEditorActivityStore } from "@/store/recipeEditorActivityStore"
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { getWorktreePathIndex } from "@/store/storeAccessors";
 import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
+import { recipeContextFromWorktree } from "@/utils/recipeVariables";
 import { ConfirmationTimeoutError } from "../confirmationTimeout";
 import { PANEL_LIMIT_CONFIRM_EXPIRED_REASON } from "./panelLimitError";
 import {
@@ -216,10 +217,8 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
         }
 
         const recipeContext = {
-          issueNumber: worktree?.issueNumber,
-          prNumber: worktree?.linked?.pr?.ref.number,
+          ...(worktree ? recipeContextFromWorktree(worktree) : {}),
           worktreePath,
-          branchName: worktree?.branch,
         };
         // Always forward dispatchSource so runRecipeWithResults can apply the
         // agent-source terminal cap, and the host's record of what an approver

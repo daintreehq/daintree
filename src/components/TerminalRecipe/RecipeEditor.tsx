@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { Fragment, useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { FolderGit2, FolderOpen, GitBranch, Globe, Plus, Trash2 } from "lucide-react";
 import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types";
 import {
@@ -43,6 +43,7 @@ import {
   FormSection,
 } from "@/components/Worktree/views";
 import { RecipeVariablePreview } from "@/components/TerminalRecipe/RecipeVariablePreview";
+import { getAvailableVariables } from "@/utils/recipeVariables";
 import { getAgentConfig } from "@/config/agents";
 import {
   GLOBAL_SCOPE_LABEL,
@@ -53,6 +54,8 @@ import {
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { getRecipeScope } from "@/utils/recipeScope";
 import { pluralize } from "@/lib/pluralize";
+
+const RECIPE_VARIABLES = getAvailableVariables();
 
 function cloneTerminal(t: RecipeTerminal): RecipeTerminal {
   return { ...t, env: t.env ? { ...t.env } : {} };
@@ -908,9 +911,13 @@ export function RecipeEditor({
                             hint={hint(
                               `terminal-initial-prompt-help-${index}`,
                               <>
-                                Variables: <code>{"{{issue_number}}"}</code>,{" "}
-                                <code>{"{{pr_number}}"}</code>, <code>{"{{number}}"}</code>,{" "}
-                                <code>{"{{worktree_path}}"}</code>, <code>{"{{branch_name}}"}</code>
+                                Variables:{" "}
+                                {RECIPE_VARIABLES.map((variable, i) => (
+                                  <Fragment key={variable.name}>
+                                    {i > 0 && ", "}
+                                    <code>{`{{${variable.name}}}`}</code>
+                                  </Fragment>
+                                ))}
                               </>
                             )}
                           >

@@ -2,7 +2,7 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { isTerminalFleetBroadcastTarget } from "@/store/fleetEligibility";
 import { usePanelStore } from "@/store/panelStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
-import type { RecipeContext } from "@/utils/recipeVariables";
+import { recipeContextFromWorktree, type RecipeContext } from "@/utils/recipeVariables";
 import { getArmedCrossHostTargets } from "./crossHostFleet";
 
 /**
@@ -112,10 +112,5 @@ export function buildFleetBroadcastRecipeContext(terminalId: string): RecipeCont
     return null;
   }
   if (!worktree) return null;
-  return {
-    issueNumber: worktree.issueNumber,
-    prNumber: worktree.linked?.pr?.ref.number,
-    worktreePath: worktree.path,
-    branchName: worktree.branch ?? worktree.name,
-  };
+  return { ...recipeContextFromWorktree(worktree), branchName: worktree.branch ?? worktree.name };
 }

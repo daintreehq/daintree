@@ -38,6 +38,7 @@ import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { isHostWindows } from "@/hooks/useHostPlatform";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { linkProviderIssue } from "@/utils/linkProviderIssue";
+import { recipeIssueContextFromIssue, type RecipeContext } from "@/utils/recipeVariables";
 import { useNewWorktreeProjectSettings } from "./hooks/useNewWorktreeProjectSettings";
 import { useBranchInput } from "./hooks/useBranchInput";
 import { useBranchValidation } from "./hooks/useBranchValidation";
@@ -1059,18 +1060,21 @@ export function NewWorktreeDialog({
           if (recipeStartsAgent) {
             layoutAgentConflict = "recipe-has-agent";
           }
+          // From the issue as picked, not the worktree: a provider's link
+          // lands on the snapshot only after the attach round-trips.
+          const recipeContext: RecipeContext = {
+            ...(snapIssue ? recipeIssueContextFromIssue(snapIssue) : {}),
+            prNumber: snapInitialPR?.number,
+            worktreePath: snapWorktreePath,
+            branchName: fullBranchName,
+          };
           const runRecipe = async () => {
             try {
               const results = await runRecipeWithResults(
                 snapSelectedRecipe.id,
                 snapWorktreePath,
                 worktreeId,
-                {
-                  issueNumber: snapIssue?.number,
-                  prNumber: snapInitialPR?.number,
-                  worktreePath: snapWorktreePath,
-                  branchName: fullBranchName,
-                }
+                recipeContext
               );
               notifyRecipeSpawnFailures(results, {
                 recipeName: snapSelectedRecipe.name,
@@ -1082,12 +1086,6 @@ export function NewWorktreeDialog({
               const recipeId = snapSelectedRecipe.id;
               const recipePath = snapWorktreePath;
               const recipeWorktreeId = worktreeId;
-              const recipeContext = {
-                issueNumber: snapIssue?.number,
-                prNumber: snapInitialPR?.number,
-                worktreePath: recipePath,
-                branchName: fullBranchName,
-              };
               notify({
                 type: "warning",
                 title: "Couldn't run recipe",

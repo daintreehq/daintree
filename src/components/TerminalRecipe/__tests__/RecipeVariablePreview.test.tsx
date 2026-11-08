@@ -193,4 +193,27 @@ describe("RecipeVariablePreview", () => {
       "on main"
     );
   });
+
+  it("previews a tracker issue by its key, with its title (#16381)", () => {
+    mockSnapshot = {
+      path: "/tmp/test",
+      branch: "eng-42-fix",
+      issueNumber: 42,
+      issueTitle: "Fix the login race",
+      issueProviderId: "linear",
+      issueKey: "ENG-42",
+    };
+
+    const { container } = renderPreview("Work on {{issue_number}}: {{issue_title}}", "wt-1");
+
+    expect(segments(container, "value")).toEqual(["ENG-42", "Fix the login race"]);
+  });
+
+  it("warns that {{issue_title}} launches empty when no issue is linked", () => {
+    mockSnapshot = { path: "/tmp/test", branch: "main" };
+
+    const { container } = renderPreview("About {{issue_title}}", "wt-1");
+
+    expect(segments(container, "missing")).toEqual(["{{issue_title}} (empty)"]);
+  });
 });
