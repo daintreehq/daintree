@@ -343,9 +343,7 @@ export class ProjectStatsService {
         return;
       }
 
-      const { terminals: allTerminals, degraded } = await getSharedTerminalSnapshot(
-        this.ptyClient
-      );
+      const { terminals: allTerminals, degraded } = await getSharedTerminalSnapshot(this.ptyClient);
       if (this.generation !== gen) return;
       const terminalCounts = await this.getTerminalCounts(projectIds, allTerminals);
       if (this.generation !== gen) return;
