@@ -19,7 +19,6 @@ import {
   type ClassifierResult,
   type DescriberResult,
 } from "./canopyProviders.js";
-import { CanopyModelUnrunnable } from "./canopyModels.js";
 import { cleanStatusLine } from "./canopyScreen.js";
 import { irreversibleReason } from "./canopyRisk.js";
 
@@ -143,10 +142,9 @@ export function toCanopyReading(reading: Reading, input: CanopyScreenInput): Can
 
 /**
  * Loads the model in `dir` in a reader process of its own, reads one screen
- * with it, and waits for that process to exit. Throws
- * `CanopyModelUnrunnable` when the reader says the model can't load or read
- * here; any other failure (a timeout, a lost process, one slow to exit) may
- * pass, and a later try may do better (#16416). Stops once `signal` aborts.
+ * with it, and waits for that process to exit, so the folder can be moved
+ * (#16416). Throws when the model can't load or read, when the process won't
+ * exit, or once `signal` aborts.
  */
 export async function tryReaderModel(
   dir: string,
@@ -185,13 +183,12 @@ export async function tryReaderModel(
     }),
   ]);
   clearTimeout(timer);
-  if (failure !== null) {
-    if (failure instanceof CanopyReaderError && failure.reported) {
-      throw new CanopyModelUnrunnable(failure.message, { cause: failure });
-    }
-    throw failure;
+  if (!exited) {
+    throw new Error("the trial reader hasn't exited yet", {
+      cause: failure ?? undefined,
+    });
   }
-  if (!exited) throw new Error("the trial reader hasn't exited yet");
+  if (failure !== null) throw failure;
 }
 
 /**

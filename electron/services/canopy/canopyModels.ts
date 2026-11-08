@@ -86,8 +86,13 @@ const STAGING = ".download";
 const INSTALL = "install.json";
 /** The same record in a download's folder, written first, so a download stopped part way says what it was. */
 const PENDING = "download.json";
-/** A revision this build fetched and couldn't run: the same record, beside the folders, so it isn't fetched again. */
+/**
+ * A revision whose run failed on this build: the same record, with the build
+ * and how many runs failed, beside the folders.
+ */
 const REJECTED = ".rejected";
+/** Runs of one revision that may fail on one build before that build stops fetching it. */
+const MAX_FAILED_RUNS = 3;
 /** Far past the reader's ~21 MB: a Hub answer naming more is not this model. */
 const MAX_MODEL_BYTES = 512 * 1024 * 1024;
 
@@ -326,11 +331,19 @@ interface Operation {
 }
 
 /**
- * A fetched revision this build can never read with, whatever its hashes say:
- * noted so it isn't fetched again by this build. Any other failure to run one
- * is tried again on a later launch.
+ * A fetched revision didn't run here, whatever its hashes say. Each counts
+ * against it on this build (`lasting` uses every try at once); what was
+ * fetched stays for the next launch's try until the tries run out.
  */
-export class CanopyModelUnrunnable extends Error {}
+class FailedRun extends Error {
+  constructor(
+    message: string,
+    readonly lasting: boolean,
+    options?: ErrorOptions
+  ) {
+    super(message, options);
+  }
+}
 
 export interface CanopyModelsOptions {
   /**
@@ -344,10 +357,10 @@ export interface CanopyModelsOptions {
   /**
    * Runs a fetched revision before it is read with, from its folder, and
    * stops once `signal` aborts. A revision it throws for is never put in
-   * place; `CanopyModelUnrunnable` keeps this build from fetching it again.
+   * place; after `MAX_FAILED_RUNS` on this build, it isn't fetched again.
    */
   trial?: (dir: string, signal: AbortSignal) => Promise<void>;
-  /** Names this build: a revision it couldn't run may run on another. */
+  /** Names this build: a revision that failed to run here may run on another. */
   build?: string;
 }
 
@@ -515,12 +528,9 @@ export class CanopyModels {
       this.tell();
       if (previous?.source === "update") await this.discard(previous.revision.revision);
     } catch (error) {
-      if (error instanceof CanopyModelUnrunnable) {
-        console.warn(
-          `[Canopy] Model update ${target.revision} can't be read with here:`,
-          error.message
-        );
-        await this.reject(target);
+      if (error instanceof FailedRun) {
+        console.warn(`[Canopy] Model update ${target.revision} didn't run here:`, error.message);
+        await this.failedRun(target, error.lasting);
       } else if (!signal.aborted) {
         // The copy in use reads on; what was fetched is kept for the next try.
         console.warn("[Canopy] Model update failed:", formatErrorMessage(error, ""));
@@ -633,7 +643,7 @@ export class CanopyModels {
     // the reader opens has to say so too.
     const meta: unknown = JSON.parse(await readFile(path.join(staging, "config.json"), "utf8"));
     if (!isReaderMeta(meta))
-      throw new CanopyModelUnrunnable("its config.json is not one this build reads");
+      throw new FailedRun("its config.json is not one this build reads", true);
     if (signal.aborted) throw new Error("cancelled");
     // Run where it was fetched, before anything reads with it: one stopped
     // here is tried again, never put in place untried.
@@ -642,11 +652,7 @@ export class CanopyModels {
         await this.trial(staging, signal);
       } catch (error) {
         if (signal.aborted) throw new Error("cancelled", { cause: error });
-        if (error instanceof CanopyModelUnrunnable) throw error;
-        // Kept as it is: the next launch runs it again.
-        throw new Error(`it didn't run here this time: ${formatErrorMessage(error, "")}`, {
-          cause: error,
-        });
+        throw new FailedRun(formatErrorMessage(error, "it didn't run"), false, { cause: error });
       }
     }
     if (signal.aborted) throw new Error("cancelled");
@@ -666,37 +672,47 @@ export class CanopyModels {
     this.tell();
   }
 
-  /** A revision this build fetched and couldn't run, so it isn't fetched again; another build tries. */
-  private async wasRejected(revision: string): Promise<boolean> {
+  /** Runs of `revision` that failed on this build; another build starts again from none. */
+  private async failedRuns(revision: string): Promise<number> {
     try {
       const raw = JSON.parse(
         await readFile(path.join(this.updates!, `${revision}${REJECTED}`), "utf8")
-      ) as { build?: unknown };
-      return (raw.build ?? null) === this.build;
+      ) as { build?: unknown; failures?: unknown };
+      if ((raw.build ?? null) !== this.build) return 0;
+      return typeof raw.failures === "number" && Number.isFinite(raw.failures) ? raw.failures : 0;
     } catch {
-      return false;
+      return 0;
     }
   }
 
+  /** This build has run out of tries for `revision`: it isn't fetched again. */
+  private async wasRejected(revision: string): Promise<boolean> {
+    return (await this.failedRuns(revision)) >= MAX_FAILED_RUNS;
+  }
+
   /**
-   * Remembers `target` as one this build can't run, and lets its files go.
-   * The record goes with it, so the sweep deletes it once the shipped copy
+   * Counts a failed run of `target` against this build, and tries it again on
+   * the next launch from what was fetched, until the tries run out: then its
+   * files go. The record stays, so the sweep deletes it once the shipped copy
    * has caught up.
    */
-  private async reject(target: CanopyModelRevision): Promise<void> {
+  private async failedRun(target: CanopyModelRevision, lasting: boolean): Promise<void> {
+    // Not again this launch, whatever else asks.
     this.newest = null;
     const root = this.updates!;
+    const failures = lasting ? MAX_FAILED_RUNS : (await this.failedRuns(target.revision)) + 1;
     const record = JSON.stringify({
       id: CANOPY_MODEL,
       revision: target.revision,
       published: target.published,
       files: target.files,
       build: this.build,
+      failures,
     });
     await writeFile(path.join(root, `${target.revision}${REJECTED}`), record, "utf8").catch(
       (error: unknown) => console.warn("[Canopy] Couldn't note a model update that failed:", error)
     );
-    await this.discard(`${target.revision}${STAGING}`);
+    if (failures >= MAX_FAILED_RUNS) await this.discard(`${target.revision}${STAGING}`);
   }
 
   /** Partly fetched revisions other than `keep`: the Hub has moved on from them. */

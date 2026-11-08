@@ -15,7 +15,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CANOPY_MODEL,
-  CanopyModelUnrunnable,
   CanopyModels,
   removeStaleUpdates,
   type CanopyModelFileSpec,
@@ -466,6 +465,18 @@ describe("CanopyModels, updating the shipped model from Hugging Face", () => {
     ]);
   });
 
+  it("fetches nothing of a revision whose files each fit but together are far larger than this model", async () => {
+    const huge = repo(NEWER, SHIPPED_AT + DAY);
+    huge.sizes = { "model.int8.onnx": 300 * 1024 * 1024, "tokenizer.json": 300 * 1024 * 1024 };
+    const { fetchMock, requests } = hub(huge);
+    vi.stubGlobal("fetch", fetchMock);
+    await models().ensure();
+
+    expect(requests.map((r) => r.url)).toEqual([
+      `https://huggingface.co/api/models/${CANOPY_MODEL}?blobs=true`,
+    ]);
+  });
+
   it("stops a resumed file once what was kept and what comes pass the size the Hub published", async () => {
     const newer = repo(NEWER, SHIPPED_AT + DAY);
     started(newer);
@@ -668,35 +679,41 @@ describe("CanopyModels, updating the shipped model from Hugging Face", () => {
     expect(await m.installedDir()).toBe(path.join(updates, NEWER));
   });
 
-  it("never reads with a revision that can't run here, and this build never fetches it again", async () => {
+  it("never reads with a revision that won't run here, and stops fetching it once this build's tries run out", async () => {
     const newer = repo(NEWER, SHIPPED_AT + DAY);
-    const first = hub(newer);
-    vi.stubGlobal("fetch", first.fetchMock);
     const trial = vi.fn(async () => {
-      throw new CanopyModelUnrunnable("This model needs a newer version of Daintree");
+      throw new Error("Reader process exited");
     });
-    const m = models(() => {}, { trial, build: "1.4.0" });
-    await m.ensure();
+    const launch = async () => {
+      const hubbed = hub(newer);
+      vi.stubGlobal("fetch", hubbed.fetchMock);
+      const m = models(() => {}, { trial, build: "1.4.0" });
+      await m.ensure();
+      expect(await m.installedDir()).toBe(shippedDir);
+      expect(m.state()).toMatchObject({ source: "bundled" });
+      expect(m.state()).not.toHaveProperty("update");
+      expect(existsSync(path.join(updates, NEWER))).toBe(false);
+      // Not again this launch.
+      await m.ensure();
+      return hubbed;
+    };
 
-    expect(trial).toHaveBeenCalledTimes(1);
-    expect(await m.installedDir()).toBe(shippedDir);
-    expect(m.state()).toMatchObject({ source: "bundled" });
-    expect(m.state()).not.toHaveProperty("update");
-    expect(existsSync(path.join(updates, NEWER))).toBe(false);
+    const first = await launch();
+    expect(fetchedFiles(first.requests)).toContain("model.int8.onnx");
+    // Tried again from what was fetched: only config.json is asked for again.
+    const second = await launch();
+    expect(fetchedFiles(second.requests)).toEqual(["reader.json", "config.json"]);
+    await launch();
+    expect(trial).toHaveBeenCalledTimes(3);
     expect(existsSync(path.join(updates, `${NEWER}.download`))).toBe(false);
 
-    // The next launch: the Hub names it still, and nothing of it is fetched or run.
-    const second = hub(newer);
-    vi.stubGlobal("fetch", second.fetchMock);
-    const next = models(() => {}, { trial, build: "1.4.0" });
-    await next.ensure();
-    expect(fetchedFiles(second.requests)).toEqual([]);
-    expect(trial).toHaveBeenCalledTimes(1);
-    expect(await next.installedDir()).toBe(shippedDir);
+    // Out of tries: the Hub names it still, and nothing of it is fetched or run.
+    const fourth = await launch();
+    expect(fetchedFiles(fourth.requests)).toEqual([]);
+    expect(trial).toHaveBeenCalledTimes(3);
 
-    // Another build may read it: it tries.
-    const third = hub(newer);
-    vi.stubGlobal("fetch", third.fetchMock);
+    // Another build may run it: it tries.
+    vi.stubGlobal("fetch", hub(newer).fetchMock);
     const later = models(() => {}, { trial: async () => {}, build: "1.5.0" });
     await later.ensure();
     expect(await later.installedDir()).toBe(path.join(updates, NEWER));
@@ -714,7 +731,6 @@ describe("CanopyModels, updating the shipped model from Hugging Face", () => {
     await m.ensure();
 
     expect(await m.installedDir()).toBe(shippedDir);
-    expect(existsSync(path.join(updates, `${NEWER}.rejected`))).toBe(false);
     // What was fetched stays for the next try.
     expect(existsSync(path.join(updates, `${NEWER}.download`, "model.int8.onnx"))).toBe(true);
 
