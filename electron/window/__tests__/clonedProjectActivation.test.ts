@@ -182,5 +182,30 @@ describe("loadClonedProjectInWindows (#16352)", () => {
       expect(h.workspace!.attachDirectPort).toHaveBeenCalledExactlyOnceWith(1, VIEW);
       expect(h.presenceListeners.size).toBe(0);
     });
+
+    it("tries again at once when the overtaking switch settled before its load did", async () => {
+      h.windows = [windowOf(1, pvm("p-clone"))];
+      h.pending.set(1, ["p-next"]);
+      await loadClonedProjectInWindows(project);
+      let attached = true;
+      h.workspace!.isWindowAttached.mockImplementation(() => attached);
+      // A newer switch takes the window and fails before this load resolves:
+      // the load lands detached, and the rollback re-attaches without a word.
+      h.workspace!.loadProject.mockImplementationOnce(async () => {
+        attached = false;
+        return "cold";
+      });
+      h.workspace!.loadProject.mockImplementationOnce(async () => {
+        attached = true;
+        return "warm";
+      });
+
+      settleClaims(1);
+      await flush();
+
+      expect(h.workspace!.loadProject).toHaveBeenCalledTimes(2);
+      expect(h.workspace!.attachDirectPort).toHaveBeenCalledExactlyOnceWith(1, VIEW);
+      expect(h.presenceListeners.size).toBe(0);
+    });
   });
 });

@@ -65,6 +65,9 @@ function reconcileWhenSettled(
   const unsubscribe = onProjectPresenceChanged(check);
   const timer = setTimeout(finish, SETTLE_TIMEOUT_MS);
   timer.unref?.();
+  // A retry may arm after the overtaking switch has already settled, and a
+  // rollback re-attaching the window announces nothing.
+  check();
 }
 
 /**
