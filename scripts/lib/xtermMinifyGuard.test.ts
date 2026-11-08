@@ -2,16 +2,15 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { rolldown, type OutputOptions } from "rolldown";
+import { rolldown, type OutputOptions, type Plugin as RolldownPlugin } from "rolldown";
 import { build } from "vite";
 import {
   PROBE_STEPS,
-  bundleXterm,
   checkXtermBuild,
+  moduleUrl,
   probeXtermParser,
-  replayMinify,
-  verifyXtermParser,
   xtermMinifyIdentifiersGuardPlugin,
 } from "./xtermMinifyGuard.js";
 
@@ -20,42 +19,64 @@ const XTERM_FILE = path.join(
   "lib",
   "xterm.mjs"
 );
+const XTERM_SOURCE = readFileSync(XTERM_FILE, "utf8");
 const REQUEST_MODE = /requestMode\(\w+,\w+\)\{/;
+const THROW_LIKE_XTERM_6_0 = (match: string) =>
+  `${match}throw new ReferenceError("i is not defined");`;
 
 const scratch = mkdtempSync(path.join(tmpdir(), "xterm-minify-guard-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+let outputs = 0;
 
-async function bundleWithGuard(
-  input: string,
+/** The renderer's shape: xterm loaded lazily from its own group chunk, modules wrapped in initializers. */
+const lazyXtermEntry: RolldownPlugin = {
+  name: "lazy-xterm-entry",
+  resolveId: (id) => (id === "entry" ? "\0entry" : null),
+  load: (id) => (id === "\0entry" ? 'export const load = () => import("@xterm/xterm");' : null),
+};
+
+/** Writes a bundle through the guard and returns the written xterm chunk's URL. */
+async function writeWithGuard(
   minify: OutputOptions["minify"],
-  extraPlugins: Parameters<typeof rolldown>[0]["plugins"] = []
+  plugins: RolldownPlugin[] = [lazyXtermEntry],
+  input = "entry"
 ) {
+  const dir = path.join(scratch, `out-${outputs++}`);
   const bundle = await rolldown({
     input,
     logLevel: "silent",
-    plugins: [xtermMinifyIdentifiersGuardPlugin(), extraPlugins],
+    plugins: [...plugins, xtermMinifyIdentifiersGuardPlugin() as RolldownPlugin],
   });
   try {
-    await bundle.generate({ format: "esm", minify });
+    const { output } = await bundle.write({
+      dir,
+      format: "esm",
+      minify,
+      strictExecutionOrder: true,
+      codeSplitting: { groups: [{ name: "vendor-xterm", test: /@xterm[\\/]xterm[\\/]/ }] },
+    });
+    const chunk = output.find((entry) => entry.fileName.startsWith("vendor-xterm-"));
+    return chunk ? pathToFileURL(path.join(dir, chunk.fileName)).href : null;
   } finally {
     await bundle.close();
   }
 }
 
-/** The minify options a plugin hook sees for this output. */
-async function normalizedMinify(minify: OutputOptions["minify"]) {
-  let seen: unknown;
-  const bundle = await rolldown({
-    input: XTERM_FILE,
-    logLevel: "silent",
-    plugins: [{ name: "spy", renderStart: (options) => void (seen = options.minify) }],
-  });
-  try {
-    await bundle.generate({ format: "esm", minify });
-  } finally {
-    await bundle.close();
-  }
-  return seen as OutputOptions["minify"];
+/** Rewrites the xterm chunk after the minifier, the way a later post-processor would. */
+function rewriteXtermChunk(pattern: RegExp, replace: (match: string) => string): RolldownPlugin {
+  return {
+    name: "rewrite-xterm-chunk",
+    generateBundle(_options, bundle) {
+      const chunk = Object.values(bundle).find(
+        (entry) => entry.type === "chunk" && entry.moduleIds.some((id) => id.endsWith("xterm.mjs"))
+      );
+      if (chunk?.type !== "chunk") throw new Error("no xterm chunk to rewrite");
+      const rewritten = chunk.code.replace(pattern, replace);
+      if (rewritten === chunk.code)
+        throw new Error(`${pattern} matched nothing in the xterm chunk`);
+      chunk.code = rewritten;
+    },
+  };
 }
 
 function sabotage(code: string, pattern: RegExp | string, replace: (match: string) => string) {
@@ -66,60 +87,67 @@ function sabotage(code: string, pattern: RegExp | string, replace: (match: strin
 }
 
 function replyAfter(replies: string[], ...steps: string[]) {
-  let from = 0;
-  for (const step of steps) from = PROBE_STEPS.indexOf(step, from) + 1;
-  return replies[from - 1];
+  let index = -1;
+  for (const step of steps) {
+    index = PROBE_STEPS.indexOf(step, index + 1);
+    expect(index, `probe step ${JSON.stringify(step)}`).not.toBe(-1);
+  }
+  return replies[index];
 }
 
 describe("xterm's minifier guard", () => {
-  it("refuses a Vite minifier it cannot check", async () => {
-    await expect(
-      build({
-        configFile: false,
-        logLevel: "silent",
-        plugins: [xtermMinifyIdentifiersGuardPlugin()],
-        build: { write: false, minify: "terser" },
-      })
-    ).rejects.toThrow("can only check Oxc output");
-  });
-
   it.each([true, { mangle: true, compress: true }, { mangle: false }, false, "dce-only"] as const)(
-    "accepts xterm minified with %j",
+    "accepts the xterm chunk minified with %j",
     async (minify) => {
-      await expect(verifyXtermParser(XTERM_FILE, minify)).resolves.toBeUndefined();
+      await expect(writeWithGuard(minify)).resolves.toMatch(/vendor-xterm-/);
     }
   );
 
-  it.each([
-    true,
-    { mangle: false },
-    { compress: false, mangle: true },
-    { compress: false, mangle: false },
-    { mangle: { toplevel: false } },
-    "dce-only",
-    false,
-  ] as const)("replays the hook's view of %j as the same minifier", async (minify) => {
-    const seen = await normalizedMinify(minify);
-    expect(await normalizedMinify(replayMinify(seen))).toEqual(seen);
+  it("fails the build when the written chunk's requestMode throws, as xterm 6.0's did", async () => {
+    await expect(
+      writeWithGuard(true, [lazyXtermEntry, rewriteXtermChunk(REQUEST_MODE, THROW_LIKE_XTERM_6_0)])
+    ).rejects.toThrow(/broke xterm's parser: probing it threw ReferenceError: i is not defined/);
   });
 
-  it("checks xterm in a Vite build with the build's target", async () => {
+  it("fails the build when the written chunk answers a query differently", async () => {
+    await expect(
+      writeWithGuard(true, [lazyXtermEntry, rewriteXtermChunk(/\$y`/, () => "$z`")])
+    ).rejects.toThrow(/broke xterm's parser: it answers "\\u001b\[2\$p" with "\\u001b\[2;4\$z"/);
+  });
+
+  it("fails a bundle without xterm rather than passing it unchecked", async () => {
+    const fixture: RolldownPlugin = {
+      name: "fixture",
+      resolveId: (id) => (id === "fixture" ? "\0fixture" : null),
+      load: (id) => (id === "\0fixture" ? "export const value = 1;" : null),
+    };
+    await expect(writeWithGuard(true, [fixture], "fixture")).rejects.toThrow(
+      "expected one written chunk holding @xterm/xterm/lib/xterm.mjs, found 0"
+    );
+  });
+
+  it("checks the xterm chunk a Vite build writes", async () => {
     await expect(
       build({
         configFile: false,
         logLevel: "silent",
         plugins: [xtermMinifyIdentifiersGuardPlugin()],
         build: {
-          write: false,
+          outDir: path.join(scratch, "vite"),
           target: "chrome148",
-          rolldownOptions: { input: XTERM_FILE },
+          rolldownOptions: {
+            input: XTERM_FILE,
+            preserveEntrySignatures: "exports-only",
+            plugins: [rewriteXtermChunk(REQUEST_MODE, THROW_LIKE_XTERM_6_0)],
+          },
         },
       })
-    ).resolves.toBeDefined();
+    ).rejects.toThrow(/broke xterm's parser: probing it threw ReferenceError/);
   });
 
-  it("reads mode state through requestMode in the mangled build", async () => {
-    const { replies, firstLine } = await probeXtermParser(await bundleXterm(XTERM_FILE, true));
+  it("reads mode state through requestMode in the mangled chunk", async () => {
+    const url = await writeWithGuard(true);
+    const { replies, firstLine } = await probeXtermParser(url!);
     expect(firstLine).toBe("probe-complete");
     expect(replyAfter(replies, "\x1b[4h", "\x1b[4$p")).toBe("\x1b[4;1$y");
     expect(replyAfter(replies, "\x1b[4l", "\x1b[4$p")).toBe("\x1b[4;2$y");
@@ -128,54 +156,26 @@ describe("xterm's minifier guard", () => {
     expect(replyAfter(replies, "\x1b[?1000h", "\x1b[?1000$p")).toBe("\x1b[?1000;1$y");
   });
 
-  it("fails when the minified requestMode throws, as xterm 6.0's did", async () => {
-    const shipped = sabotage(
-      await bundleXterm(XTERM_FILE, true),
-      REQUEST_MODE,
-      (match) => `${match}throw new ReferenceError("i is not defined");`
-    );
-    await expect(checkXtermBuild(XTERM_FILE, shipped)).rejects.toThrow(
-      /broke xterm's parser: its parser threw: ReferenceError: i is not defined/
-    );
-  });
-
-  it("fails when the minified build answers a query differently", async () => {
-    const shipped = sabotage(await bundleXterm(XTERM_FILE, true), "$y`", () => "$z`");
-    await expect(checkXtermBuild(XTERM_FILE, shipped)).rejects.toThrow(
-      /broke xterm's parser: it answers "\\u001b\[2\$p" with "\\u001b\[2;4\$z"/
-    );
-  });
-
   it("fails when the probe can no longer drive xterm's own build", async () => {
     const silentReference = path.join(scratch, "xterm.mjs");
     writeFileSync(
       silentReference,
-      sabotage(readFileSync(XTERM_FILE, "utf8"), REQUEST_MODE, (match) => `${match}return !0;`)
+      sabotage(XTERM_SOURCE, REQUEST_MODE, (match) => `${match}return !0;`)
     );
-    await expect(
-      checkXtermBuild(silentReference, await bundleXterm(XTERM_FILE, true))
-    ).rejects.toThrow("no longer drives xterm's own build");
+    await expect(checkXtermBuild(silentReference, moduleUrl(XTERM_SOURCE))).rejects.toThrow(
+      "no longer drives xterm's own build"
+    );
+  });
+
+  it("fails when the shipped build exposes no Terminal", async () => {
+    await expect(checkXtermBuild(XTERM_FILE, moduleUrl("export const value = 1;"))).rejects.toThrow(
+      "probing it threw Error: expected one xterm Terminal export, found 0"
+    );
   });
 
   it("terminates a probe that never finishes", async () => {
     await expect(
-      probeXtermParser("setInterval(() => {}, 1000); await new Promise(() => {});", 500)
+      probeXtermParser(moduleUrl("setInterval(() => {}, 1000); await new Promise(() => {});"), 500)
     ).rejects.toThrow("did not finish within 500 ms");
-  });
-
-  it("checks the xterm module in a real bundle", async () => {
-    await expect(bundleWithGuard(XTERM_FILE, true)).resolves.toBeUndefined();
-  });
-
-  it("fails a bundle without xterm rather than passing it unchecked", async () => {
-    await expect(
-      bundleWithGuard("fixture", true, [
-        {
-          name: "fixture",
-          resolveId: (id) => (id === "fixture" ? "\0fixture" : null),
-          load: (id) => (id === "\0fixture" ? "export const value = 1;" : null),
-        },
-      ])
-    ).rejects.toThrow("expected one @xterm/xterm/lib/xterm.mjs module in the bundle, found 0");
   });
 });

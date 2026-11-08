@@ -18,10 +18,38 @@ const GLOBALS = [
 ];
 
 /**
- * @param {{ code: string, steps: string[], trailer: string }} probe
+ * A code-split chunk exports Rolldown's private interface: aliased bindings,
+ * module namespaces, and lazy module initializers that must run before a
+ * namespace's getters return anything. Calling every argument-less export runs
+ * those initializers; whatever else that calls either throws (a class) or is
+ * harmless, and only an unambiguous `Terminal` is accepted.
+ */
+function findTerminal(module) {
+  for (const value of Object.values(module)) {
+    if (typeof value !== "function" || value.length !== 0) continue;
+    try {
+      value();
+    } catch {
+      // Not an initializer.
+    }
+  }
+  const candidates = new Set();
+  for (const value of [module, ...Object.values(module)]) {
+    if (value && typeof value === "object" && typeof value.Terminal === "function") {
+      candidates.add(value.Terminal);
+    }
+  }
+  if (candidates.size !== 1) {
+    throw new Error(`expected one xterm Terminal export, found ${candidates.size}`);
+  }
+  return [...candidates][0];
+}
+
+/**
+ * @param {{ url: string, steps: string[], trailer: string }} probe
  * @returns {Promise<{ replies: string[], firstLine: string }>}
  */
-async function run({ code, steps, trailer }) {
+async function run({ url, steps, trailer }) {
   const dom = new JSDOM("<!doctype html><body></body>", {
     pretendToBeVisual: true,
     virtualConsole: new VirtualConsole(),
@@ -33,9 +61,7 @@ async function run({ code, steps, trailer }) {
       writable: true,
     });
   }
-  const { Terminal } = await import(
-    `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`
-  );
+  const Terminal = findTerminal(await import(url));
   const terminal = new Terminal();
   let pending = "";
   const subscription = terminal.onData((data) => {

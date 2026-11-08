@@ -1,11 +1,8 @@
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
-import { rolldown, type OutputOptions } from "rolldown";
 import type { Plugin } from "vite";
-import { escapeChunkToAscii, hasTwoByteCharacters } from "./ascii-only-chunks.mjs";
-
-type Minify = OutputOptions["minify"];
 
 export interface XtermProbeResult {
   replies: string[];
@@ -47,40 +44,22 @@ export const PROBE_STEPS: readonly string[] = [
 /** Printed after every step; a parser that crashed mid-stream drops it. */
 export const PROBE_TRAILER = "probe-complete";
 
+export function moduleUrl(code: string): string {
+  return `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`;
+}
+
 /**
- * Output options as a hook sees them, made fit to pass to `generate()` again.
- * Normalizing drops a disabled `mangle` or `compress`, which an options object
- * would otherwise turn back on, and folds a suffix into the compress target that
- * `generate()` refuses, so the build's own target replaces it.
+ * Runs the probe steps against the build of xterm a module URL exports, in a
+ * worker it always terminates. A code-split chunk resolves its imports from
+ * disk, so it is probed by file URL from the written bundle.
  */
-export function replayMinify(minify: Minify, target?: string | string[] | false): Minify {
-  if (typeof minify !== "object") return minify;
-  const { compress = false, mangle = false, ...rest } = minify;
-  if (typeof compress !== "object") return { ...rest, compress, mangle };
-  const { target: _normalizedTarget, ...compressOptions } = compress;
-  return { ...rest, mangle, compress: target ? { ...compressOptions, target } : compressOptions };
-}
-
-/** xterm's own ESM build, minified as one output chunk would be. */
-export async function bundleXterm(xtermFile: string, minify: Minify): Promise<string> {
-  const bundle = await rolldown({ input: xtermFile, logLevel: "silent" });
-  try {
-    const { output } = await bundle.generate({ format: "esm", minify });
-    const code = output[0].code;
-    return hasTwoByteCharacters(code) ? escapeChunkToAscii("xterm.mjs", code) : code;
-  } finally {
-    await bundle.close();
-  }
-}
-
-/** Runs the probe steps against one build of xterm, in a worker it always terminates. */
 export function probeXtermParser(
-  code: string,
+  url: string,
   timeoutMs = PROBE_TIMEOUT_MS
 ): Promise<XtermProbeResult> {
   return new Promise((resolve, reject) => {
     const worker = new Worker(PROBE_WORKER, {
-      workerData: { code, steps: PROBE_STEPS, trailer: PROBE_TRAILER },
+      workerData: { url, steps: PROBE_STEPS, trailer: PROBE_TRAILER },
     });
     let settled = false;
     const settle = (error: Error | null, result?: XtermProbeResult) => {
@@ -112,20 +91,15 @@ function describeDivergence(reference: XtermProbeResult, shipped: XtermProbeResu
   return null;
 }
 
-/** Fails when xterm minified with these options parses differently from its own build. */
-export async function verifyXtermParser(xtermFile: string, minify: Minify): Promise<void> {
-  await checkXtermBuild(xtermFile, await bundleXterm(xtermFile, minify));
-}
-
 /**
  * Fails when the shipped build answers any probe step differently from the
  * build xterm publishes, or stops parsing. The reference must answer every
  * query, so a probe that can no longer drive xterm fails instead of passing.
  */
-export async function checkXtermBuild(xtermFile: string, shippedCode: string): Promise<void> {
+export async function checkXtermBuild(xtermFile: string, shippedUrl: string): Promise<void> {
   const [reference, shipped] = await Promise.allSettled([
-    probeXtermParser(readFileSync(xtermFile, "utf8")),
-    probeXtermParser(shippedCode),
+    probeXtermParser(moduleUrl(readFileSync(xtermFile, "utf8"))),
+    probeXtermParser(shippedUrl),
   ]);
   if (reference.status === "rejected") {
     throw new Error(`The xterm parser probe could not run xterm's own build: ${reference.reason}`);
@@ -135,48 +109,49 @@ export async function checkXtermBuild(xtermFile: string, shippedCode: string): P
   );
   if (unanswered !== -1 || reference.value.firstLine !== PROBE_TRAILER) {
     throw new Error(
-      "The xterm parser probe no longer drives xterm's own build, so it cannot check the minified one."
+      "The xterm parser probe no longer drives xterm's own build, so it cannot check the shipped one."
     );
   }
   const divergence =
     shipped.status === "rejected"
-      ? `its parser threw: ${shipped.reason}`
+      ? `probing it threw ${shipped.reason}`
       : describeDivergence(reference.value, shipped.value);
   if (divergence) {
     throw new Error(
-      `The minifier broke xterm's parser: ${divergence}. Keep its identifiers unmangled until the minifier is fixed.`
+      `The build broke xterm's parser: ${divergence}. If mangling did it, keep xterm's identifiers unmangled.`
     );
   }
 }
 
 /**
- * Fails the build when the output minifier changes how xterm's parser answers
- * DECRQM. It re-minifies xterm's own module with the output's resolved minify
- * options and compares both builds, so it can vouch for Oxc output only.
+ * Fails the build when the xterm chunk it wrote answers DECRQM differently from
+ * the build xterm publishes. It probes the written file, after every chunk
+ * rewrite, so whatever minified or re-printed the chunk is what gets checked.
  */
 export function xtermMinifyIdentifiersGuardPlugin(): Plugin {
-  let target: string | string[] | false | undefined;
   return {
     name: "xterm-minify-identifiers-guard",
     apply: "build",
-    configResolved(config) {
-      if (config.build.minify !== "oxc" && config.build.minify !== false) {
-        throw new Error("The xterm parser guard can only check Oxc output or an unminified build.");
-      }
-      target = config.build.target;
-    },
-    async generateBundle(options, bundle) {
-      const xtermFiles = new Set<string>();
-      for (const output of Object.values(bundle)) {
-        if (output.type !== "chunk") continue;
-        for (const id of output.moduleIds) if (XTERM_MODULE.test(id)) xtermFiles.add(id);
-      }
-      if (xtermFiles.size !== 1) {
-        throw new Error(
-          `The xterm parser guard expected one @xterm/xterm/lib/xterm.mjs module in the bundle, found ${xtermFiles.size}.`
+    writeBundle: {
+      order: "post",
+      async handler(options, bundle) {
+        const chunks = Object.values(bundle).flatMap((output) =>
+          output.type === "chunk" && output.moduleIds.some((id) => XTERM_MODULE.test(id))
+            ? [output]
+            : []
         );
-      }
-      await verifyXtermParser([...xtermFiles][0], replayMinify(options.minify, target));
+        if (chunks.length !== 1 || !options.dir) {
+          throw new Error(
+            `The xterm parser guard expected one written chunk holding @xterm/xterm/lib/xterm.mjs, found ${chunks.length}.`
+          );
+        }
+        const [chunk] = chunks;
+        const xtermFile = chunk.moduleIds.find((id) => XTERM_MODULE.test(id))!;
+        await checkXtermBuild(
+          xtermFile,
+          pathToFileURL(path.join(options.dir, chunk.fileName)).href
+        );
+      },
     },
   };
 }
