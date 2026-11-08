@@ -29,6 +29,7 @@ export * from "./projectPresence.js";
 export * from "./maps.js";
 export * from "./agentSessionHistory.js";
 export * from "./agentSubagents.js";
+export * from "./agentContextUsage.js";
 export * from "./api.js";
 export * from "./crashRecovery.js";
 export * from "./webviewConsole.js";

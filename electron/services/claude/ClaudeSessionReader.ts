@@ -40,6 +40,10 @@ import {
   type AgentLastMessageUnavailableReason,
   type AgentUnansweredToolUse,
 } from "../../../shared/types/agentLastMessage.js";
+import type {
+  AgentContextUsageResult,
+  AgentContextUsageUnavailableReason,
+} from "../../../shared/types/ipc/agentContextUsage.js";
 import {
   deriveProjectSlug,
   isContainedDirectory,
@@ -863,6 +867,147 @@ export async function readClaudeRecentReplies(
   } catch (error) {
     if (signal?.aborted) throw error;
     return [];
+  } finally {
+    await handle?.close();
+  }
+}
+
+/**
+ * Bytes read per step back by {@link readClaudeContextUsage}. The newest
+ * request is normally a few lines from the end, behind only the turn's closing
+ * records.
+ */
+const USAGE_CHUNK_BYTES = 64 * 1024;
+/**
+ * Its ceiling: room for one large tool result a turn was interrupted after,
+ * and no more, since this runs once per turn per pane.
+ */
+const USAGE_MAX_SCAN_BYTES = 2 * 1024 * 1024;
+
+/** What Claude Code names the model on a record it wrote itself, an API error or an interruption, without a request behind it. */
+const SYNTHETIC_MODEL = "<synthetic>";
+
+export interface ClaudeContextUsageOptions {
+  signal?: AbortSignal;
+  chunkBytes?: number;
+  maxScanBytes?: number;
+}
+
+type UsageRecord =
+  | { kind: "request"; contextTokens: number; recordedAt: number | null }
+  | { kind: "unrecognized" }
+  | { kind: "compaction" };
+
+/** A token count, 0 for an optional one that is absent, or undefined when it isn't a count. */
+function tokenCount(value: unknown, optional: boolean): number | undefined {
+  if (optional && (value === undefined || value === null)) return 0;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+/**
+ * The part of a record that says what one main-conversation request carried,
+ * or null for a record that says nothing about it.
+ *
+ * Every block of one API message repeats the message's usage, so whichever of
+ * them is read first answers for it. A compaction boundary ends the search:
+ * whatever was sent before it is no longer the context.
+ */
+function parseUsageRecord(line: string): UsageRecord | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const record = parsed as Record<string, unknown>;
+  if (record.isSidechain === true) return null;
+  if (record.type === "system" && record.subtype === "compact_boundary") {
+    return { kind: "compaction" };
+  }
+  if (record.type !== "assistant" || record.isMeta === true || record.isApiErrorMessage === true) {
+    return null;
+  }
+  const message = record.message;
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return { kind: "unrecognized" };
+  }
+  const { model, usage } = message as Record<string, unknown>;
+  if (model === SYNTHETIC_MODEL) return null;
+  if (!usage || typeof usage !== "object" || Array.isArray(usage)) return { kind: "unrecognized" };
+  const counts = usage as Record<string, unknown>;
+  const input = tokenCount(counts.input_tokens, false);
+  const cacheWrite = tokenCount(counts.cache_creation_input_tokens, true);
+  const cacheRead = tokenCount(counts.cache_read_input_tokens, true);
+  if (input === undefined || cacheWrite === undefined || cacheRead === undefined) {
+    return { kind: "unrecognized" };
+  }
+  const contextTokens = input + cacheWrite + cacheRead;
+  // Nothing was sent: a record Claude Code wrote without a request behind it.
+  if (contextTokens === 0) return null;
+  const timestamp = typeof record.timestamp === "string" ? Date.parse(record.timestamp) : NaN;
+  return {
+    kind: "request",
+    contextTokens,
+    recordedAt: Number.isFinite(timestamp) ? timestamp : null,
+  };
+}
+
+function usageUnavailable(reason: AgentContextUsageUnavailableReason): AgentContextUsageResult {
+  return { status: "unavailable", reason };
+}
+
+/**
+ * The context the session's most recent main-conversation request carried
+ * (#16371): its input, cache-write and cache-read tokens, the sum Claude Code's
+ * own status line reports, read newest first from the end of the transcript.
+ *
+ * Subagent records, Claude Code's own stand-in replies and records that sent
+ * nothing are stepped over. The newest request whose usage isn't in a shape
+ * this recognises answers `unrecognized` rather than letting an older one
+ * stand in for it, and a compaction with no request since answers that there
+ * is none. One file is opened for reading and closed; nothing is kept.
+ */
+export async function readClaudeContextUsage(
+  location: ClaudeSessionLocation,
+  options: ClaudeContextUsageOptions = {}
+): Promise<AgentContextUsageResult> {
+  const { signal } = options;
+  if (!isSafeSessionId(location.sessionId)) return usageUnavailable("no-session");
+
+  let handle: FileHandle | null = null;
+  try {
+    signal?.throwIfAborted();
+    const transcript = await findTranscript(location, signal);
+    if (!transcript) return usageUnavailable("no-request");
+    const opened = await openVerified(transcript.file, transcript.rootReal);
+    if (!opened) return usageUnavailable("store-unreadable");
+    handle = opened.handle;
+
+    const state: ScanState = { partialTail: false, capReached: false };
+    for await (const bytes of linesFromEnd(handle, opened.stats.size, state, {
+      chunkBytes: options.chunkBytes ?? USAGE_CHUNK_BYTES,
+      maxScanBytes: options.maxScanBytes ?? USAGE_MAX_SCAN_BYTES,
+      signal,
+    })) {
+      const record = parseUsageRecord(bytes.toString("utf8"));
+      if (!record) continue;
+      if (record.kind === "compaction") return usageUnavailable("no-request");
+      if (record.kind === "unrecognized") return usageUnavailable("unrecognized");
+      return {
+        status: "ok",
+        provider: "claude",
+        contextTokens: record.contextTokens,
+        recordedAt: record.recordedAt,
+      };
+    }
+    return usageUnavailable(state.capReached ? "search-cap-reached" : "no-request");
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    if (isAbsence(error)) return usageUnavailable("no-request");
+    return usageUnavailable("store-unreadable");
   } finally {
     await handle?.close();
   }

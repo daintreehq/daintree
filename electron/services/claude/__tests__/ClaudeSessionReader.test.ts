@@ -31,6 +31,7 @@ vi.mock("fs/promises", async (importOriginal) => {
 import {
   fitWithinResponseCap,
   locateClaudeTranscript,
+  readClaudeContextUsage,
   readClaudeLastMessage,
   readClaudeRecentReplies,
   tailWithinJsonBytes,
@@ -1278,5 +1279,166 @@ describe("readClaudeRecentReplies", () => {
 
     expect(fsHook.opened).toHaveLength(3);
     for (const handle of fsHook.opened) expect(handle.fd).toBe(-1);
+  });
+});
+
+describe("readClaudeContextUsage (#16371)", () => {
+  const usage = (input: number, cacheWrite: number, cacheRead: number, output = 50) => ({
+    input_tokens: input,
+    cache_creation_input_tokens: cacheWrite,
+    cache_read_input_tokens: cacheRead,
+    output_tokens: output,
+  });
+  const LATER = "2026-09-18T10:05:00.000Z";
+
+  function request(
+    id: string,
+    counts: Record<string, unknown> | undefined,
+    extra: Record<string, unknown> = {},
+    model = "claude-opus-5-5"
+  ): string {
+    return JSON.stringify({
+      type: "assistant",
+      isSidechain: false,
+      message: {
+        id,
+        model,
+        role: "assistant",
+        content: [text("…")],
+        ...(counts !== undefined && { usage: counts }),
+      },
+      timestamp: STAMP,
+      ...extra,
+    });
+  }
+
+  function readUsage(options: Parameters<typeof readClaudeContextUsage>[1] = {}) {
+    return readClaudeContextUsage({ projectsRoot, cwd: CWD, sessionId: SESSION }, options);
+  }
+
+  it("sums the newest main request's input, cache-write and cache-read tokens", async () => {
+    await seed([
+      prompt("first"),
+      request("msg_1", usage(10, 1_000, 20_000)),
+      prompt("second"),
+      request("msg_2", usage(4, 1_098, 125_615, 385), { timestamp: LATER }),
+      system("turn_duration"),
+    ]);
+
+    expect(await readUsage()).toEqual({
+      status: "ok",
+      provider: "claude",
+      contextTokens: 4 + 1_098 + 125_615,
+      recordedAt: Date.parse(LATER),
+    });
+  });
+
+  it("steps over subagent, synthetic, meta and API-error records", async () => {
+    await seed([
+      request("msg_1", usage(2, 3_000, 40_000)),
+      request("msg_side", usage(9, 9_000, 900_000), { isSidechain: true }),
+      request("msg_meta", usage(9, 9_000, 900_000), { isMeta: true }),
+      request("msg_err", usage(9, 9_000, 900_000), { isApiErrorMessage: true }),
+      request("msg_synth", usage(0, 0, 0), {}, "<synthetic>"),
+      request("msg_zero", usage(0, 0, 0)),
+    ]);
+
+    const result = await readUsage();
+
+    expect(result).toMatchObject({ status: "ok", contextTokens: 43_002 });
+  });
+
+  it("counts absent cache fields as zero", async () => {
+    await seed([request("msg_1", { input_tokens: 1_234, output_tokens: 5 })]);
+
+    expect(await readUsage()).toMatchObject({ status: "ok", contextTokens: 1_234 });
+  });
+
+  // An older request standing in for a newer one whose shape changed would be
+  // a confident wrong number.
+  it("answers unrecognized when the newest request's usage isn't a shape it knows", async () => {
+    await seed([
+      request("msg_1", usage(2, 3_000, 40_000)),
+      request("msg_2", { input_tokens: "12", cache_read_input_tokens: 5 }),
+    ]);
+    expect(await readUsage()).toEqual({ status: "unavailable", reason: "unrecognized" });
+
+    await seed([request("msg_1", usage(2, 3_000, 40_000)), request("msg_2", undefined)]);
+    expect(await readUsage()).toEqual({ status: "unavailable", reason: "unrecognized" });
+
+    await seed([request("msg_1", usage(-1, 0, 5))]);
+    expect(await readUsage()).toEqual({ status: "unavailable", reason: "unrecognized" });
+  });
+
+  it("answers no-request after a compaction no request has followed yet", async () => {
+    await seed([
+      request("msg_1", usage(2, 3_000, 180_000)),
+      system("compact_boundary"),
+      prompt("summary", { isCompactSummary: true }),
+    ]);
+    expect(await readUsage()).toEqual({ status: "unavailable", reason: "no-request" });
+
+    await seed([
+      request("msg_1", usage(2, 3_000, 180_000)),
+      system("compact_boundary"),
+      prompt("summary", { isCompactSummary: true }),
+      prompt("next"),
+      request("msg_2", usage(3, 2_000, 15_000)),
+    ]);
+    expect(await readUsage()).toMatchObject({ status: "ok", contextTokens: 17_003 });
+  });
+
+  it("answers no-request for a missing transcript or one with no request", async () => {
+    expect(await readUsage()).toEqual({ status: "unavailable", reason: "no-request" });
+
+    await seed([prompt("hello")]);
+    expect(await readUsage()).toEqual({ status: "unavailable", reason: "no-request" });
+  });
+
+  it("skips a last line still being written", async () => {
+    await seed([request("msg_1", usage(1, 1, 1))], {
+      trailing: request("msg_2", usage(5, 5, 5)).slice(0, 40),
+    });
+
+    expect(await readUsage()).toMatchObject({ status: "ok", contextTokens: 3 });
+  });
+
+  it("stops at its ceiling rather than reading the whole file", async () => {
+    await seed([request("msg_1", usage(1, 1, 1)), toolResult("toolu_1", "x".repeat(4_096))]);
+
+    expect(await readUsage({ chunkBytes: 512, maxScanBytes: 1_024 })).toEqual({
+      status: "unavailable",
+      reason: "search-cap-reached",
+    });
+  });
+
+  it("refuses an unsafe session id without touching the store", async () => {
+    const result = await readClaudeContextUsage({
+      projectsRoot,
+      cwd: CWD,
+      sessionId: "../escape",
+    });
+
+    expect(result).toEqual({ status: "unavailable", reason: "no-session" });
+    expect(fsHook.opened).toHaveLength(0);
+  });
+
+  it("refuses a transcript that is a symlink", async () => {
+    const real = path.join(root, "elsewhere.jsonl");
+    await writeFile(real, request("msg_1", usage(1, 1, 1)) + "\n", "utf8");
+    const dir = path.join(projectsRoot, deriveProjectSlug(CWD));
+    await mkdir(dir, { recursive: true });
+    await symlink(real, path.join(dir, `${SESSION}.jsonl`));
+
+    expect(await readUsage()).toEqual({ status: "unavailable", reason: "store-unreadable" });
+  });
+
+  it("closes the file it opened", async () => {
+    await seed([request("msg_1", usage(1, 1, 1))]);
+
+    await readUsage();
+
+    expect(fsHook.opened).toHaveLength(1);
+    await expect(fsHook.opened[0]!.stat()).rejects.toThrow();
   });
 });
