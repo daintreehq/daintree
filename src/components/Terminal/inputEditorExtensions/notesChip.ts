@@ -25,8 +25,14 @@ const appliedSources = new WeakMap<EditorView, PendingDiffNotes | null>();
 
 export function applyDiffNotesChipSource(view: EditorView, source: PendingDiffNotes | null): void {
   appliedSources.set(view, source);
-  // An open card would go on promising what the notes were when it opened.
-  view.dispatch({ effects: [setDiffNotesChipSource.of(source), closeHoverTooltips] });
+  // An open card would go on promising what the notes were when it opened. A
+  // draft that names no notes has no such card, and any other is left open.
+  const namesNotes = (view.state.field(notesChipField, false)?.tokens.length ?? 0) > 0;
+  view.dispatch({
+    effects: namesNotes
+      ? [setDiffNotesChipSource.of(source), closeHoverTooltips]
+      : setDiffNotesChipSource.of(source),
+  });
 }
 
 /**

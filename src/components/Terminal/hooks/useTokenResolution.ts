@@ -230,6 +230,11 @@ export interface SendTextOptions {
    */
   onHandedOff?: (accepted: Promise<boolean> | void) => void;
   /**
+   * Told when the draft is only `@notes` with no notes behind it, which is no
+   * prompt at all, so the draft stays and the send doesn't go.
+   */
+  onNothingToSend?: () => void;
+  /**
    * Sent for a composer that has unmounted (#15510): the disabled state it
    * last rendered is stale, and a `submit` checks its destination itself.
    */
@@ -359,6 +364,7 @@ export function useTokenResolution({
           diffNotes.length === 0 &&
           draftIsOnlyNotesTokens(text)
         ) {
+          options?.onNothingToSend?.();
           return false;
         }
         // The expansion's awaits can outlast the agent: a shell is behind the

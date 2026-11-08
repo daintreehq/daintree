@@ -487,6 +487,8 @@ const SEND_HELD_STATUS = "Not sent. The draft is still here.";
 const DISABLED_CONTROL_MIX = "45%";
 const DISABLED_CONTROL_INK = "color-mix(in oklab, var(--ib-fg) 45%, var(--ib-bg))";
 const SPOKEN_SEND_TOO_SHORT_CAPTION = "Too short to send by voice · Enter to send";
+const NO_DIFF_NOTES_CAPTION = "Not sent · No notes to send";
+const NO_DIFF_NOTES_STATUS = "Not sent: there are no diff notes to send. The draft is still here.";
 const CROSS_HOST_CAPTION: Record<CrossHostRefusal, string> = {
   context: "Not sent · Context can't reach another host",
   image: "Not sent · Images can't reach another host",
@@ -1491,6 +1493,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       refused: boolean;
       tooShort?: true;
       crossHost?: CrossHostRefusal;
+      noDiffNotes?: true;
       retires?: VoiceScratchRefusal | VoiceFileReferenceNote | null;
     } | null>(null);
     const dropSendRefusal = (dictationKeepsReply = false) =>
@@ -1536,6 +1539,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const noteCrossHostRefusal = (reason: CrossHostRefusal) => {
       ++submitAttemptRef.current;
       setSendNote({ terminalId, refused: true, crossHost: reason });
+    };
+    const noteNoDiffNotes = () => {
+      ++submitAttemptRef.current;
+      setSendNote({ terminalId, refused: true, noDiffNotes: true });
     };
 
     // Every way this composer sends — Enter, a picked slash command, a prompt
@@ -1680,6 +1687,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         keepDraft,
         dictationSessions: voiceSend?.sessions,
         dictated: voiceSend !== undefined,
+        onNothingToSend: noteNoDiffNotes,
         ...(departed && { departed: true }),
         // Routed at its key press: through the route, in place of `submitText`.
         ...(route && {
@@ -1805,12 +1813,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       ? SPOKEN_SEND_TOO_SHORT_CAPTION
       : ownSendNote?.crossHost
         ? CROSS_HOST_CAPTION[ownSendNote.crossHost]
-        : "Not sent";
+        : ownSendNote?.noDiffNotes
+          ? NO_DIFF_NOTES_CAPTION
+          : "Not sent";
     const sendRefusedStatus = ownSendNote?.tooShort
       ? SPOKEN_SEND_TOO_SHORT_STATUS
       : ownSendNote?.crossHost
         ? CROSS_HOST_STATUS[ownSendNote.crossHost]
-        : SEND_HELD_STATUS;
+        : ownSendNote?.noDiffNotes
+          ? NO_DIFF_NOTES_STATUS
+          : SEND_HELD_STATUS;
     // A refused send retires the voice note it found on the border, never a
     // newer one. One the send took outlives it: it says what went out.
     const retiredNote = isSendRefused ? (ownSendNote?.retires ?? null) : null;

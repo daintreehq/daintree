@@ -196,6 +196,19 @@ describe("HybridInputBar @notes", () => {
     expect(useTerminalInputStore.getState().getDraftInput("term-1")).toBe("Fix @notes now");
   });
 
+  it("says why a draft of only @notes with nothing pending didn't go, and keeps it", async () => {
+    const { submitText, type, pressEnter, container } = await mount();
+
+    await type("@notes ");
+    await pressEnter();
+
+    expect(submitText).not.toHaveBeenCalled();
+    expect(container.querySelector("[data-send-refused-caption]")?.textContent).toBe(
+      "Not sent · No notes to send"
+    );
+    expect(useTerminalInputStore.getState().getDraftInput("term-1")).toBe("@notes ");
+  });
+
   it("gives an ordinary send no token", async () => {
     addNote();
     const { submitText, type, pressEnter } = await mount();

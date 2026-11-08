@@ -12,6 +12,9 @@ const getSubmissions = vi.hoisted(() =>
 );
 vi.mock("@/clients", () => ({ terminalClient: { getSubmissions } }));
 
+const logWarn = vi.hoisted(() => vi.fn());
+vi.mock("@/utils/logger", () => ({ logWarn }));
+
 import { clearDiffNotesOnceWritten } from "../diffNotesDelivery";
 
 const found = (phase: TerminalSubmissionPhase): Record<string, TerminalSubmissionLookup> => ({
@@ -30,6 +33,7 @@ describe("clearDiffNotesOnceWritten", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     getSubmissions.mockReset();
+    logWarn.mockReset();
     useDiffNotesStore.setState({ notes: {}, editingIds: {} });
   });
 
@@ -85,6 +89,7 @@ describe("clearDiffNotesOnceWritten", () => {
     clearDiffNotesOnceWritten("t1", "tok", [rejected]);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(stillPending(rejected)).toBe(true);
+    expect(logWarn).toHaveBeenCalledTimes(1);
   });
 
   it("waits out a token still on its way to the host, but not one that never arrives", async () => {

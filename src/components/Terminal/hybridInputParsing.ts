@@ -433,13 +433,19 @@ export function canSpellAtNotesPath(filePath: string): boolean {
   return getAllAtNotesTokens(formatAtNotesToken(filePath))[0]?.filePath === filePath;
 }
 
-/** Where a quoted `@notes:` path closes, or -1 if it doesn't on its line. */
+/**
+ * Where a quoted `@notes:` path closes, or -1 if it doesn't on its line. A quote
+ * with more of a word after it opens something else, such as a later token's
+ * path, and isn't this one's end.
+ */
 function closingNotesQuote(text: string, pathStart: number): number {
   let close = pathStart;
   while (close < text.length && text[close] !== '"' && !/[\n\r]/.test(text[close]!)) {
     close += text[close] === "\\" && text[close + 1] === '"' ? 2 : 1;
   }
-  return text[close] === '"' ? close : -1;
+  if (text[close] !== '"') return -1;
+  const after = text[close + 1];
+  return after === undefined || /[\s.,;:!?)\]}'"]/.test(after) ? close : -1;
 }
 
 /**

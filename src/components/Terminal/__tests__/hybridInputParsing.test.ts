@@ -259,6 +259,16 @@ describe("@notes", () => {
     expect(token).toEqual({ start: 4, end: 19, filePath: "src/a.ts" });
   });
 
+  it("reads a later token whole when an earlier quote never closed", () => {
+    expect(getAllAtNotesTokens('@notes:"src/a.ts then @notes:"other b.ts" now')).toEqual([
+      { start: 22, end: 41, filePath: "other b.ts" },
+    ]);
+    // A sentence can follow a closing quote directly.
+    expect(getAllAtNotesTokens('@notes:"a b.ts", then')).toEqual([
+      { start: 0, end: 15, filePath: "a b.ts" },
+    ]);
+  });
+
   it("ignores what only looks like the token", () => {
     for (const text of [
       "me@notes",
@@ -320,6 +330,9 @@ describe("@notes", () => {
     expect(getActiveCompletionContext(text, 3, triggers)?.tokenEnd).toBe(10);
     // Typed against a word, the token still ends there.
     expect(getActiveCompletionContext(text, 10, triggers, 10)?.tokenEnd).toBe(10);
+    // A later token's opening quote isn't this one's end: nothing past the word goes.
+    const unclosed = '@notes:"src/a.ts then @notes:"other.ts"';
+    expect(getActiveCompletionContext(unclosed, 10, triggers)?.tokenEnd).toBe(16);
   });
 
   it("tells a draft of only @notes from one with something to say", () => {

@@ -83,11 +83,20 @@ describe("notesChipField", () => {
     expect(chips(view)[0]!.label).toBe("No notes");
   });
 
-  it("closes an open card when the notes change, so it can't promise a stale count", () => {
-    const view = mount("Fix @notes now");
-    const dispatch = vi.spyOn(view, "dispatch");
-    applyDiffNotesChipSource(view, source([note("a", "a.ts")]));
-    expect(dispatch.mock.calls[0]![0]).toMatchObject({
+  it("closes an open card when the notes change, only for a draft that names them", () => {
+    const named = mount("Fix @notes now");
+    applyDiffNotesChipSource(named, source([]));
+    const namedDispatch = vi.spyOn(named, "dispatch");
+    applyDiffNotesChipSource(named, source([note("a", "a.ts")]));
+    expect(namedDispatch.mock.calls[0]![0]).toMatchObject({
+      effects: expect.arrayContaining([closeHoverTooltips]),
+    });
+
+    const unnamed = mount("Just a prompt @src/a.ts");
+    applyDiffNotesChipSource(unnamed, source([]));
+    const unnamedDispatch = vi.spyOn(unnamed, "dispatch");
+    applyDiffNotesChipSource(unnamed, source([note("a", "a.ts")]));
+    expect(unnamedDispatch.mock.calls[0]![0]).not.toMatchObject({
       effects: expect.arrayContaining([closeHoverTooltips]),
     });
   });

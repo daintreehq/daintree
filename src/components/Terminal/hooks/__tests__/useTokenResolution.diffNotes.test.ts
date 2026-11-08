@@ -43,6 +43,7 @@ function seedAgent(overrides: Partial<PtyPanelData> = {}): void {
 function setup(paramOverrides: Partial<Parameters<typeof useTokenResolution>[0]> = {}) {
   const addToHistory = vi.fn();
   const onSend = vi.fn();
+  const clearDraftInput = vi.fn();
   const { result } = renderHook(() =>
     useTokenResolution({
       latestRef: {
@@ -54,7 +55,7 @@ function setup(paramOverrides: Partial<Parameters<typeof useTokenResolution>[0]>
           onSend,
           addToHistory,
           resetHistoryIndex: vi.fn(),
-          clearDraftInput: vi.fn(),
+          clearDraftInput,
         },
       },
       applyEditorValue: vi.fn(),
@@ -66,7 +67,7 @@ function setup(paramOverrides: Partial<Parameters<typeof useTokenResolution>[0]>
       ...paramOverrides,
     })
   );
-  return { sendText: result.current.sendText, addToHistory, onSend };
+  return { sendText: result.current.sendText, addToHistory, onSend, clearDraftInput };
 }
 
 const NOTE_INPUT = {
@@ -209,16 +210,19 @@ describe("useTokenResolution with @notes", () => {
   it("won't send a draft that is only @notes with nothing behind it, and keeps the draft", async () => {
     useDiffNotesStore.setState({ notes: {} });
     const submit = vi.fn(async () => true);
-    const { sendText, addToHistory } = setup();
+    const onNothingToSend = vi.fn();
+    const { sendText, addToHistory, clearDraftInput } = setup();
 
     let sent!: boolean;
     await act(async () => {
-      sent = await sendText("@notes", { submit });
+      sent = await sendText("@notes", { submit, onNothingToSend });
     });
 
     expect(sent).toBe(false);
+    expect(onNothingToSend).toHaveBeenCalledTimes(1);
     expect(submit).not.toHaveBeenCalled();
     expect(addToHistory).not.toHaveBeenCalled();
+    expect(clearDraftInput).not.toHaveBeenCalled();
   });
 
   it("still sends @notes with nothing behind it once there's something else to say", async () => {

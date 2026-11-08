@@ -38,12 +38,7 @@ async function watchForWrite(terminalId: string, submissionToken: string): Promi
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, delay));
     delay = Math.min(delay * 2, WRITE_POLL_MAX_MS);
-    let lookup;
-    try {
-      lookup = (await terminalClient.getSubmissions([terminalId], submissionToken))[terminalId];
-    } catch {
-      return false;
-    }
+    const lookup = (await terminalClient.getSubmissions([terminalId], submissionToken))[terminalId];
     if (lookup?.status === "absent") {
       if (++absentReads > ABSENT_READS_ALLOWED) return false;
       continue;
