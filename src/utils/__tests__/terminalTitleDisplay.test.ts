@@ -1,6 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { getTerminalDisplayTitle, getTerminalTaskTitle } from "../terminalTitleDisplay";
 import type { TerminalInstance } from "@shared/types/panel";
+import {
+  clearPluginAgentRegistryForTests,
+  setPluginAgentRegistry,
+} from "@shared/config/pluginAgentRegistry";
 
 function ptyPanel(overrides: Partial<TerminalInstance> = {}): TerminalInstance {
   return {
@@ -271,5 +275,36 @@ describe("getTerminalDisplayTitle", () => {
       location: "grid",
     };
     expect(getTerminalDisplayTitle(browser, "full")).toBe("Browser");
+  });
+});
+
+describe("plugin agent titles (#16469)", () => {
+  afterEach(() => {
+    clearPluginAgentRegistryForTests();
+  });
+
+  it("recognises a plugin agent's own name once its registry arrives", () => {
+    const panel = ptyPanel({
+      title: "Work",
+      titleMode: "custom",
+      detectedAgentId: "hermes",
+      lastObservedTitle: "Hermes Agent",
+    });
+    // Nothing names the agent yet, so the title reads as a task.
+    expect(getTerminalTaskTitle(panel)).toBe("Hermes Agent");
+
+    setPluginAgentRegistry({
+      hermes: {
+        id: "hermes",
+        name: "Hermes Agent",
+        command: "hermes",
+        color: "#3366ff",
+        iconId: "terminal",
+        supportsContextInjection: false,
+      },
+    });
+
+    // Same panel fields: only the registry changed, and the echo is now known.
+    expect(getTerminalTaskTitle(panel)).toBeNull();
   });
 });

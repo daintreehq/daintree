@@ -2925,6 +2925,7 @@ describe("plugin agents started in a plain terminal (#16469)", () => {
       command: id,
       color: "#3366ff",
       iconId: "terminal",
+      supportsContextInjection: false,
       ...(executableNames ? { executableNames } : {}),
     };
   }
@@ -3056,9 +3057,31 @@ describe("plugin agents started in a plain terminal (#16469)", () => {
     detector.stop();
   });
 
-  it("drops typed-command evidence for a revoked agent and refuses a stale one", () => {
+  it("forgets a pending confirmation for a revoked agent", () => {
     register(pluginAgent("pi", ["pi"]));
-    const { callback, detector } = treeDetector("t-pi-shell", []);
+    const { cache, detector } = treeDetector("t-pi-pending", [
+      { pid: 200, comm: "pi", command: "pi" },
+    ]);
+    // One pass: a candidate one confirmation short of committing.
+    detector.start();
+    expect(detector.getLastDetected()).toBeNull();
+
+    setPluginAgentRegistry({});
+    expect(detector.dropRevokedAgentEvidence()).toBe(true);
+
+    // Registered again at once: had the pending pass survived, this second
+    // pass would commit it.
+    register(pluginAgent("pi", ["pi"]));
+    cache.emitRefresh();
+    expect(detector.getLastDetected()).toBeNull();
+    cache.emitRefresh();
+    expect(detector.getLastDetected()).toBe("pi");
+    detector.stop();
+  });
+
+  it("drops typed-command evidence for a revoked agent so it can't come back", () => {
+    register(pluginAgent("pi", ["pi"]));
+    const { cache, callback, detector } = treeDetector("t-pi-shell", []);
     detector.start();
     const identity = detectCommandIdentity("pi")!;
     expect(identity.agentType).toBe("pi");
@@ -3070,8 +3093,31 @@ describe("plugin agents started in a plain terminal (#16469)", () => {
     expect(detector.dropRevokedAgentEvidence()).toBe(true);
     expect(detector.getLastDetected()).toBeNull();
 
-    // A capture made before the plugin unloaded, replayed afterwards.
+    // The typed command is still inside its sticky window, and the tree is
+    // empty: only the retained shell evidence could promote on these passes.
     callback.mockClear();
+    cache.emitRefresh();
+    register(pluginAgent("pi", ["pi"]));
+    cache.emitRefresh();
+    cache.emitRefresh();
+    expect(agentCalls(callback, "pi")).toHaveLength(0);
+    expect(detector.getLastDetected()).toBeNull();
+    detector.stop();
+  });
+
+  it("refuses a typed command resolved before its plugin agent lost that name", () => {
+    register(pluginAgent("pi", ["pi"]));
+    const { callback, detector } = treeDetector("t-pi-stale", []);
+    detector.start();
+    // A capture made before the plugin unloaded, replayed afterwards.
+    const identity = detectCommandIdentity("pi")!;
+    setPluginAgentRegistry({});
+    detector.injectShellCommandEvidence(identity, "pi");
+    expect(agentCalls(callback, "pi")).toHaveLength(0);
+
+    // Its agent still holds another name, but `pi` is now contested.
+    register(pluginAgent("pi", ["pi", "pi-alt"]), pluginAgent("other", ["pi"]));
+    expect(isDetectableAgentId("pi")).toBe(true);
     detector.injectShellCommandEvidence(identity, "pi");
     expect(agentCalls(callback, "pi")).toHaveLength(0);
     expect(detector.getLastDetected()).toBeNull();

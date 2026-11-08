@@ -381,7 +381,14 @@ describe("mapTerminalInfo", () => {
 
   it("keeps a plugin agent's id only while that agent holds an executable name (#16469)", () => {
     const ctx = createCtx();
-    const pi = { id: "pi", name: "Pi", command: "pi", color: "#3366ff", iconId: "terminal" };
+    const pi = {
+      id: "pi",
+      name: "Pi",
+      command: "pi",
+      color: "#3366ff",
+      iconId: "terminal",
+      supportsContextInjection: false,
+    };
     try {
       setPluginAgentRegistry({ pi: { ...pi, executableNames: ["pi"] } });
       expect(mapTerminalInfo(makeTerminal({ detectedAgentId: "pi" }), ctx).detectedAgentId).toBe(

@@ -135,6 +135,17 @@ export function isDetectableAgentId(agentId: string | null | undefined): boolean
   return cachedPluginAgentIds.has(agentId);
 }
 
+/**
+ * Does this executable name still promote to this agent? Always for a
+ * built-in; for a plugin agent only while the name is still its own, so an
+ * identity resolved before another plugin contested the name, or before its
+ * plugin unloaded, no longer counts (#16469).
+ */
+export function isCurrentAgentClaim(name: string, agentId: string): boolean {
+  if (isBuiltInAgentId(agentId)) return true;
+  return getAgentCliNames()[name.toLowerCase()] === agentId;
+}
+
 /** Command name → icon id derived from `AGENT_REGISTRY`. Built-in agents only. */
 const AGENT_ICON_BY_COMMAND: Record<string, string> = Object.fromEntries(
   Object.entries(AGENT_REGISTRY).flatMap(([id, config]) => {

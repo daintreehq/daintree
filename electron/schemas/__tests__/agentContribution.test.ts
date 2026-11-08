@@ -10,7 +10,10 @@ import {
   resolveAgentExecutableNames,
 } from "../plugin.js";
 import { AGENT_CLI_NAMES } from "../../services/ProcessDetector/registries.js";
-import { PROCESS_TOOL_ICON_BY_COMMAND } from "../../../shared/config/processToolRegistry.js";
+import {
+  PROCESS_TOOL_ICON_BY_COMMAND,
+  getProcessToolConfig,
+} from "../../../shared/config/processToolRegistry.js";
 
 const VALID_AGENT = {
   id: "acme-agent",
@@ -1051,13 +1054,26 @@ describe("executableNames (#16469)", () => {
   });
 
   it("refuses every name the command parser reads as a launcher", () => {
-    // Shells, prefix runners, version-manager shims, the exec subcommands, and
-    // the runtimes and package managers the parser looks past.
-    for (const name of ["bash", "env", "sudo", "mise", "direnv", "pipx", "exec", "dlx", "x"]) {
+    // The parser's shells, prefix runners and version-manager shims, and the
+    // package-manager exec subcommands.
+    const executors = ["sh", "bash", "zsh", "fish", "pwsh", "cmd", "env", "sudo", "doas"];
+    const prefixes = ["nohup", "nice", "time", "stdbuf", "setsid", "command"];
+    const shims = ["mise", "asdf", "rtx", "direnv", "pipx", "rye", "pdm", "hatch"];
+    for (const name of [...executors, ...prefixes, ...shims, "exec", "dlx", "x"]) {
       expect(withNames([name]).success, name).toBe(false);
     }
-    for (const name of ["npx", "uvx", "node", "python3", "npm", "pnpm"]) {
-      expect(Object.hasOwn(PROCESS_TOOL_ICON_BY_COMMAND, name), name).toBe(true);
+  });
+
+  it("refuses every runtime and package manager the parser looks past", () => {
+    const launchers = Object.entries(PROCESS_TOOL_ICON_BY_COMMAND)
+      .filter(([, iconId]) => {
+        const tier = getProcessToolConfig(iconId)?.tier;
+        return tier === "runtime" || tier === "package-manager";
+      })
+      .map(([name]) => name)
+      .filter((name) => /^[a-z0-9][a-z0-9._-]*$/.test(name) && !name.includes("."));
+    expect(launchers).toEqual(expect.arrayContaining(["node", "npx", "uvx", "python3", "pnpm"]));
+    for (const name of launchers) {
       expect(withNames([name]).success, name).toBe(false);
     }
   });
@@ -1113,9 +1129,16 @@ describe("executableNames (#16469)", () => {
   });
 
   describe("resolveAgentExecutableNames", () => {
-    it("claims a bare command's own name when the list is omitted", () => {
+    it("claims a bare lowercase command's own name when the list is omitted", () => {
       expect(resolveAgentExecutableNames({ command: "pi" })).toEqual(["pi"]);
-      expect(resolveAgentExecutableNames({ command: "Hermes" })).toEqual(["hermes"]);
+      expect(resolveAgentExecutableNames({ command: "mini-swe-agent" })).toEqual([
+        "mini-swe-agent",
+      ]);
+    });
+
+    it("claims nothing implicitly for a mixed-case command", () => {
+      // `Hermes` and `hermes` are different programs on a case-sensitive disk.
+      expect(resolveAgentExecutableNames({ command: "Hermes" })).toEqual([]);
     });
 
     it("takes a declared list as written, so an empty one opts out", () => {

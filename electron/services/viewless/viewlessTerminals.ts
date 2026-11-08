@@ -98,9 +98,11 @@ async function readOwnTerminal(
  * exited. Built-in agents only, the ones with an interrupt convention.
  */
 function runtimeAgentId(record: ViewlessTerminalRecord) {
-  if (isBuiltInAgentId(record.detectedAgentId)) return record.detectedAgentId;
+  // Precedence first, then the built-in check: a plugin agent detected in a
+  // pane launched as a built-in is not that built-in (#16469).
   const exited = record.isExited === true || record.agentState === "exited";
-  return !exited && isBuiltInAgentId(record.launchAgentId) ? record.launchAgentId : undefined;
+  const agentId = record.detectedAgentId ?? (exited ? undefined : record.launchAgentId);
+  return isBuiltInAgentId(agentId) ? agentId : undefined;
 }
 
 interface ListedPanel {

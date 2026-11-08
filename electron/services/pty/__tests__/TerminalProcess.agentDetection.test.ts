@@ -1560,6 +1560,7 @@ describe("TerminalProcess plugin agent typed into a plain terminal (#16469)", ()
     command: "pi",
     color: "#3366ff",
     iconId: "terminal",
+    supportsContextInjection: false,
     executableNames: ["pi"],
     detection: { primaryPatterns: ["Working"] },
   };
@@ -1631,10 +1632,15 @@ describe("TerminalProcess plugin agent typed into a plain terminal (#16469)", ()
 
   it("demotes without an exit when the plugin unloads, and stays demoted", async () => {
     setPluginAgentRegistry({ pi: PI });
-    const updateAgentState = vi.fn();
+    // The terminal record is mutated after the call, so read its agent then.
+    const agentAtUpdate: Array<string | undefined> = [];
+    const updateAgentState = vi.fn((terminal: { detectedAgentId?: string }) => {
+      agentAtUpdate.push(terminal.detectedAgentId);
+    });
+    const handleActivityState = vi.fn();
     const terminal = createPlainTerminal("t-pi-unload", {
       agentStateService: {
-        handleActivityState: () => {},
+        handleActivityState,
         updateAgentState,
         emitAgentKilled: () => {},
         emitAgentCompleted: () => {},
@@ -1645,6 +1651,8 @@ describe("TerminalProcess plugin agent typed into a plain terminal (#16469)", ()
       await typePi(terminal);
       expect(terminal.getInfo().detectedAgentId).toBe("pi");
       updateAgentState.mockClear();
+      agentAtUpdate.length = 0;
+      const stopMonitor = vi.spyOn(terminal, "stopActivityMonitor");
 
       setPluginAgentRegistry({});
       terminal.revokeUnregisteredAgent();
@@ -1654,15 +1662,21 @@ describe("TerminalProcess plugin agent typed into a plain terminal (#16469)", ()
       expect(info.analysisEnabled).toBe(false);
       expect(info.agentState).toBe("exited");
       expect(info.title).toBe("Terminal");
-      // Identity withdrawn, not a process that ended: no exit kind, no session
-      // capture, and no state-machine exit that would read as a completion.
-      expect(exited).toEqual([{ agentType: "pi", exitKind: undefined, agentEnd: undefined }]);
-      expect(updateAgentState).not.toHaveBeenCalled();
+      expect(stopMonitor).toHaveBeenCalled();
+      // Identity withdrawn, not a process that ended: the shell outlived the
+      // agent, nothing captured its session, and the state machine went the
+      // kill way to idle rather than reporting an exit that reads as a
+      // completion — with the agent's id still on the terminal.
+      expect(exited).toEqual([{ agentType: "pi", exitKind: "subcommand", agentEnd: undefined }]);
+      expect(updateAgentState.mock.calls.map(([, event]) => event)).toEqual([{ type: "kill" }]);
+      expect(agentAtUpdate).toEqual(["pi"]);
 
-      // The CLI is still running and still printing.
+      // The CLI is still running and still printing, to a monitor that's gone.
+      handleActivityState.mockClear();
       pty.__emitData("Working on it\r\n");
       await vi.advanceTimersByTimeAsync(5000);
       expect(terminal.getInfo().detectedAgentId).toBeUndefined();
+      expect(handleActivityState).not.toHaveBeenCalled();
 
       // A second sweep finds nothing left to revoke.
       terminal.revokeUnregisteredAgent();
@@ -1683,9 +1697,20 @@ describe("TerminalProcess plugin agent typed into a plain terminal (#16469)", ()
       await vi.advanceTimersByTimeAsync(2000);
       expect(terminal.getInfo().detectedAgentId).toBe("claude");
 
+      // A pass that proposed Pi, one confirmation short, when its plugin goes.
+      const detector = terminal.getInfo().processDetector as unknown as {
+        pendingDetected: { agentType?: string } | null;
+        setLaunchAnchored: (anchored: boolean) => void;
+      };
+      detector.pendingDetected = { agentType: "pi" };
+      const setLaunchAnchored = vi.spyOn(detector, "setLaunchAnchored");
+
       setPluginAgentRegistry({});
       terminal.revokeUnregisteredAgent();
 
+      expect(detector.pendingDetected).toBeNull();
+      // Claude still owns the pane, so its anchor stays as it was.
+      expect(setLaunchAnchored).not.toHaveBeenCalled();
       expect(terminal.getInfo().detectedAgentId).toBe("claude");
       expect(exited).toHaveLength(0);
     } finally {

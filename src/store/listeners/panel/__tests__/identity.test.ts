@@ -705,6 +705,7 @@ describe("identity listener — plugin agent in a plain terminal (#16469)", () =
     command: "pi",
     color: "#3366ff",
     iconId: "terminal",
+    supportsContextInjection: false,
     executableNames: ["pi"],
   };
 
@@ -749,8 +750,26 @@ describe("identity listener — plugin agent in a plain terminal (#16469)", () =
     const d = setupIdentityListeners();
 
     detect("pi");
-
     expect(pane().detectedAgentId).toBe("pi");
+
+    // The registry lands afterwards and names the pane.
+    setPluginAgentRegistry({ pi: PI });
+    expect(pane().title).toBe("Pi");
+
+    // A plugin reload that renames its agent renames the pane too.
+    setPluginAgentRegistry({ pi: { ...PI, name: "Pi Agent" } });
+    expect(pane().title).toBe("Pi Agent");
+    d.dispose();
+  });
+
+  it("leaves a renamed pane's title alone when the registry changes", () => {
+    setupPanel({ titleMode: "user", title: "My pane" });
+    const d = setupIdentityListeners();
+    detect("pi");
+
+    setPluginAgentRegistry({ pi: PI });
+
+    expect(pane().title).toBe("My pane");
     d.dispose();
   });
 
@@ -760,8 +779,15 @@ describe("identity listener — plugin agent in a plain terminal (#16469)", () =
     const d = setupIdentityListeners();
     detect("pi");
 
+    // The host revokes once the plugin is gone; this view hears both.
+    setPluginAgentRegistry({});
     for (const cb of onAgentExitedHandlers) {
-      cb({ terminalId: "term-1", agentType: "pi", timestamp: nextTimestamp() });
+      cb({
+        terminalId: "term-1",
+        agentType: "pi",
+        timestamp: nextTimestamp(),
+        exitKind: "subcommand",
+      });
     }
 
     expect(pane()).toMatchObject({ agentState: "exited", title: "Terminal" });

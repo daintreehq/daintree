@@ -86,19 +86,20 @@ describe("set-plugin-agent-registry (#16469)", () => {
   it("still installs the registry when a revocation sweep throws", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const registry = {};
+    const revokeUnregisteredAgents = vi.fn(() => {
+      throw new Error("boom");
+    });
     const ctx = {
       analysisWorkerPool: null,
-      ptyManager: {
-        revokeUnregisteredAgents: () => {
-          throw new Error("boom");
-        },
-      },
+      ptyManager: { revokeUnregisteredAgents },
     } as unknown as HostContext;
 
     expect(() =>
       createResourceConfigHandlers(ctx)["set-plugin-agent-registry"]({ registry })
     ).not.toThrow();
+    expect(revokeUnregisteredAgents).toHaveBeenCalledTimes(1);
     expect(getPluginAgentRegistry()).toBe(registry);
+    expect(warn).toHaveBeenCalled();
     warn.mockRestore();
   });
 });

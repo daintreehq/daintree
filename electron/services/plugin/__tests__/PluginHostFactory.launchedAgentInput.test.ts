@@ -279,6 +279,17 @@ describe("host.agents input on agents the plugin launched (#14018)", () => {
     });
   });
 
+  it("doesn't interrupt a plugin agent with the built-in its pane was launched as (#16469)", async () => {
+    const h = makeHarness();
+    // Launched as Claude, which exited to its shell; Pi now runs there.
+    await launch(h, {
+      terminal: agent({ launchAgentId: "claude", detectedAgentId: "pi", agentState: "working" }),
+    });
+    const result = await hostFor(h).agents.interrupt("t-1");
+    expect(result.status).not.toBe("sent");
+    expect(pty.batchDoubleEscape).not.toHaveBeenCalled();
+  });
+
   it("refuses to interrupt an idle agent rather than reporting it stopped", async () => {
     const h = makeHarness();
     await launch(h, { terminal: agent({ agentState: "idle" }) });

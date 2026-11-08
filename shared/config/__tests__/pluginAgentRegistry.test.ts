@@ -320,6 +320,8 @@ describe("pluginAgentRegistry (issue #9560)", () => {
     it("survives the structured clone the snapshot broadcast goes through", () => {
       registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, executableNames: ["acme"] }]);
       const cloned = structuredClone(getPluginAgentRegistry());
+      setPluginAgentRegistry({});
+      expect(claimed("acme-agent")).toBeUndefined();
       setPluginAgentRegistry(cloned);
       expect(claimed("acme-agent")).toEqual(["acme"]);
     });

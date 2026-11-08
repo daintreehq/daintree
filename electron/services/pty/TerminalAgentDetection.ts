@@ -262,10 +262,11 @@ export function handleAgentDetection(
  * Demote a terminal whose detected agent the registry no longer recognises
  * (#16469): its plugin unloaded, or another plugin now claims its only name.
  * That is not an exit — the process may still be running — so no session end
- * is captured and the agent state machine reports no exit, which would read
- * as a completion. The identity, its activity monitor and its default title
- * go, and `agent:exited` without an `exitKind` tells every listener the pane
- * is a plain terminal again.
+ * is captured. The state machine takes the `kill` path to idle, which settles
+ * every waiter and pulse on that state without the completion an `exit` would
+ * report, while the agent id is still on the terminal to carry it. Then the
+ * identity, its monitor and its default title go, and the `"subcommand"` exit
+ * a prompt return sends tells every listener the shell outlived the agent.
  */
 export function revokeDetectedAgent(host: TerminalAgentDetectionHost): void {
   const terminal = host.terminalInfo;
@@ -276,15 +277,18 @@ export function revokeDetectedAgent(host: TerminalAgentDetectionHost): void {
     `[IdentityDebug] terminal-demote-apply term=${host.id.slice(-8)} ` +
       `reason=agent-unregistered agent=${previousAgent}`
   );
-  terminal.detectedAgentId = undefined;
-  terminal.detectedProcessIconId = undefined;
-  host.lastDetectedProcessIconId = undefined;
   host.stopActivityMonitor();
   terminal.analysisEnabled = false;
   if (terminal.agentState !== undefined && terminal.agentState !== "exited") {
+    host.agentStateService.updateAgentState(terminal, { type: "kill" });
+    // What the renderer sets on this `agent:exited`, and what releases a
+    // launched pane's affinity: the agent is gone from this terminal.
     terminal.agentState = "exited";
     terminal.lastStateChange = Date.now();
   }
+  terminal.detectedAgentId = undefined;
+  terminal.detectedProcessIconId = undefined;
+  host.lastDetectedProcessIconId = undefined;
   const nextTitle = computeDefaultTitle(terminal);
   if ((terminal.titleMode ?? "default") === "default") {
     terminal.title = nextTitle;
@@ -294,5 +298,6 @@ export function revokeDetectedAgent(host: TerminalAgentDetectionHost): void {
     agentType: previousAgent,
     defaultTitle: nextTitle,
     timestamp: Date.now(),
+    exitKind: "subcommand",
   });
 }

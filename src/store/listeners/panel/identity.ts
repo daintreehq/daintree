@@ -12,6 +12,9 @@ import { reduceAgentDetected, reduceAgentExited } from "./identityReducer";
 import { logIdentityDebugDev, recordIdentityEventDev } from "./identityDiagnostics";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { hostObservedAt } from "@shared/utils/restoreProvenance";
+import { isBuiltInAgentId } from "@shared/config/agentIds";
+import { subscribeToPluginAgentRegistry } from "@shared/config/pluginAgentRegistry";
+import { getDefaultTitle } from "@/store/slices/panelRegistry/helpers";
 
 // Per-terminal baseline of `changedFileCount` captured the first time an
 // agent enters "working" in a session. Compared against the count at
@@ -43,8 +46,36 @@ function readChangedFileCount(worktreeId: string | undefined): number | null {
   return snapshot?.worktreeChanges?.changedFileCount ?? 0;
 }
 
+/**
+ * Re-derive the default title of every pane a plugin agent runs in (#16469).
+ * The agent's name reaches this view with the plugin registry, which can land
+ * after the detection that named the pane, and changes when the plugin
+ * reloads. Built-in names never change, so their panes are left alone.
+ */
+function syncPluginAgentDefaultTitles(): void {
+  usePanelStore.setState((state) => {
+    let panelsById: typeof state.panelsById | null = null;
+    for (const [id, panel] of Object.entries(state.panelsById)) {
+      if (!panel || !isPtyPanel(panel) || (panel.titleMode ?? "default") !== "default") continue;
+      const agentId = panel.detectedAgentId;
+      if (agentId === undefined || isBuiltInAgentId(agentId)) continue;
+      const title = getDefaultTitle(panel.kind, {
+        detectedAgentId: agentId,
+        launchAgentId: panel.launchAgentId,
+        everDetectedAgent: panel.everDetectedAgent,
+      });
+      if (title.length === 0 || title === panel.title) continue;
+      panelsById ??= { ...state.panelsById };
+      panelsById[id] = { ...panel, title };
+    }
+    return panelsById ? { panelsById } : state;
+  });
+}
+
 export function setupIdentityListeners(): DisposableStore {
   const d = new DisposableStore();
+
+  d.add(toDisposable(subscribeToPluginAgentRegistry(syncPluginAgentDefaultTitles)));
 
   d.add(
     toDisposable(

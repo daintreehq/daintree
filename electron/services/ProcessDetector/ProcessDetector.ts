@@ -20,7 +20,7 @@ import type { AgentProcessObserver, DetectionCallback } from "./types.js";
 import type { DetectionEvidenceSource } from "./types.js";
 import { isChromiumChildProcess, redactArgv } from "./commandParser.js";
 import { buildDetectedCandidate, selectPreferredCandidate } from "./candidateHelpers.js";
-import { isDetectableAgentId } from "./registries.js";
+import { isCurrentAgentClaim, isDetectableAgentId } from "./registries.js";
 import { parseE2ETimerOverrideMs } from "../../../shared/config/e2eTimerOverrides.js";
 
 export { type DetectionResult } from "./types.js";
@@ -195,9 +195,12 @@ export class ProcessDetector {
     commandText?: string,
     observedAt: number = Date.now()
   ): void {
-    // A command resolved before its plugin agent lost its name (#16469) is no
+    // A command resolved before its plugin agent lost that name (#16469) is no
     // longer evidence of that agent; whatever else it named still counts.
-    if (identity.agentType !== undefined && !isDetectableAgentId(identity.agentType)) {
+    if (
+      identity.agentType !== undefined &&
+      !isCurrentAgentClaim(identity.processName, identity.agentType)
+    ) {
       if (identity.processIconId === undefined) return;
       identity = { processIconId: identity.processIconId, processName: identity.processName };
     }

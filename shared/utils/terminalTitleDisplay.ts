@@ -95,10 +95,10 @@ interface ObservedTask {
 // Bounded memo over the exact fields `computeObservedTask` reads. Title
 // surfaces (tab strips, headers, dock rows) re-derive titles on every
 // panel-store flush — per animation frame during agent output — while the
-// inputs only change on real title/identity transitions. An agent's name and
-// command only change when its plugin reloads, so the six fields determine
-// the result (a reload can at worst keep an old affix filter). FIFO eviction: the
-// live working set is panels × recent titles, far below the cap.
+// inputs only change on real title/identity transitions. A plugin agent's name
+// and command arrive or change with its plugin, so they are part of the key.
+// FIFO eviction: the live working set is panels × recent titles, far below
+// the cap.
 const OBSERVED_TASK_CACHE_MAX = 500;
 const observedTaskCache = new Map<string, ObservedTask | null>();
 
@@ -106,9 +106,15 @@ function getObservedTask(panel: TitledPanel): ObservedTask | null {
   // JSON-encoded tuple: field values are OSC/terminal-controlled strings, so
   // a delimiter-join could collide across positions; JSON escaping cannot.
   // null stands in for undefined to keep it distinct from an empty string.
+  const agent =
+    panel.detectedAgentId === undefined
+      ? undefined
+      : getEffectiveAgentConfig(panel.detectedAgentId);
   const key = JSON.stringify([
     panel.titleMode ?? "default",
     panel.detectedAgentId ?? null,
+    agent?.name ?? null,
+    agent?.command ?? null,
     panel.agentState === "exited",
     panel.lastObservedTitle ?? null,
     panel.title,

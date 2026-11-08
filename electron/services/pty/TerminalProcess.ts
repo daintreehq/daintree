@@ -2238,14 +2238,16 @@ export class TerminalProcess {
    * the plugin agent registry.
    */
   revokeUnregisteredAgent(): void {
-    const droppedEvidence = this.processDetector?.dropRevokedAgentEvidence() ?? false;
-    const detected = this.terminalInfo.detectedAgentId;
-    const revoked = detected !== undefined && !isDetectableAgentId(detected);
-    if (!droppedEvidence && !revoked) return;
+    const committed = this.processDetector?.getLastDetected() ?? null;
+    this.processDetector?.dropRevokedAgentEvidence();
     // A runtime promotion latches the detector's anchor; the next agent typed
-    // into this shell has to earn it again.
-    this.processDetector?.setLaunchAnchored(Boolean(this.terminalInfo.launchAgentId));
-    if (!revoked) return;
+    // into this shell has to earn it again. Only when the committed agent was
+    // the one revoked — a built-in that still owns the pane keeps its anchor.
+    if (committed !== null && !isDetectableAgentId(committed)) {
+      this.processDetector?.setLaunchAnchored(Boolean(this.terminalInfo.launchAgentId));
+    }
+    const detected = this.terminalInfo.detectedAgentId;
+    if (detected === undefined || isDetectableAgentId(detected)) return;
     this.flushAgentOutput();
     revokeDetectedAgent(this.agentDetectionHost());
   }

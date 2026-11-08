@@ -272,16 +272,18 @@ const MAX_AGENT_EXECUTABLE_NAMES = 16;
 /**
  * The executable names a contributed agent claims (#16469). Declared names are
  * taken as written (the schema and the manifest-level checks have vetted them).
- * Without a declaration a bare `command` claims its own lowercased name, the
+ * Without a declaration a bare lowercase `command` claims its own name, the
  * way a built-in agent's command does, unless that name fails the same rules
- * or a built-in agent or tool already owns it. A plugin-relative `./` command
- * claims nothing: the process it starts is named after its interpreter.
+ * or a built-in agent or tool already owns it. A mixed-case command claims
+ * nothing implicitly — on a case-sensitive filesystem `Pi` and `pi` are two
+ * programs — and neither does a plugin-relative `./` command, whose process is
+ * named after its interpreter.
  */
 export function resolveAgentExecutableNames(
   agent: Pick<PluginAgentContribution, "command" | "executableNames">
 ): string[] {
   if (agent.executableNames) return [...agent.executableNames];
-  const name = agent.command.toLowerCase();
+  const name = agent.command;
   if (!AgentExecutableNameSchema.safeParse(name).success) return [];
   if (Object.hasOwn(AGENT_CLI_NAMES, name) || Object.hasOwn(PROCESS_TOOL_ICON_BY_COMMAND, name)) {
     return [];

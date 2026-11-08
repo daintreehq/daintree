@@ -245,19 +245,32 @@ describe("hasAgentProcess", () => {
 
 describe("plugin agents (#16469)", () => {
   const ZSH: Proc = { pid: 30, ppid: 1, comm: "zsh", command: "-zsh" };
-  const PI: Proc = { pid: 31, ppid: 30, comm: "pi", command: "pi --model fast" };
+  // Named only by its `comm`: the command line is a path the parser can't read
+  // as this agent.
+  const BY_COMM: Proc = { pid: 31, ppid: 30, comm: "pi", command: "/opt/pi/libexec/run" };
+  // Named only by its argv: the process is the runtime that runs it.
+  const BY_ARGV: Proc = { pid: 32, ppid: 30, comm: "node", command: "node /usr/local/bin/pi" };
+  const PI_AGENT = {
+    id: "pi-agent",
+    name: "Pi",
+    command: "pi",
+    color: "#3366ff",
+    iconId: "terminal",
+    supportsContextInjection: false,
+  };
 
   afterEach(() => {
     clearPluginAgentRegistryForTests();
   });
 
-  it("finds a plugin agent by its executable name while the name is held", () => {
-    const pi = { id: "pi", name: "Pi", command: "pi", color: "#3366ff", iconId: "terminal" };
-    expect(hasAgentProcess(census([ZSH, PI]), ZSH.pid, "pi")).toBe(false);
+  it("finds a plugin agent by its executable name, from comm or argv", () => {
+    expect(hasAgentProcess(census([ZSH, BY_COMM]), ZSH.pid, "pi-agent")).toBe(false);
+    expect(hasAgentProcess(census([ZSH, BY_ARGV]), ZSH.pid, "pi-agent")).toBe(false);
 
-    setPluginAgentRegistry({ pi: { ...pi, executableNames: ["pi"] } });
-    expect(hasAgentProcess(census([ZSH, PI]), ZSH.pid, "pi")).toBe(true);
+    setPluginAgentRegistry({ "pi-agent": { ...PI_AGENT, executableNames: ["pi"] } });
+    expect(hasAgentProcess(census([ZSH, BY_COMM]), ZSH.pid, "pi-agent")).toBe(true);
+    expect(hasAgentProcess(census([ZSH, BY_ARGV]), ZSH.pid, "pi-agent")).toBe(true);
     // A tree no one has verified for this agent can't be classified.
-    expect(classifyAgentTree(census([ZSH, PI]), ZSH.pid, "pi")).toBe("unknown");
+    expect(classifyAgentTree(census([ZSH, BY_COMM]), ZSH.pid, "pi-agent")).toBe("unknown");
   });
 });
