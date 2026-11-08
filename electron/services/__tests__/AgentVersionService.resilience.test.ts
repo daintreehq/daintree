@@ -1,10 +1,16 @@
 vi.mock("../../utils/windowsCliSpawn.js", () => ({
-  cliSpawnTarget: (command: string, args: string[]) => ({ command, args, shell: false }),
+  cliSpawnTarget: (command: string, args: string[]) => {
+    const target = { command, args, shell: false };
+    return spawnTargetGate.wait ? spawnTargetGate.wait.then(() => target) : target;
+  },
 }));
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { stubProcessKillForFile } from "../../__tests__/helpers/processKillGuard.js";
 import { EventEmitter } from "events";
 import type { AgentId } from "../../../shared/types/agent.js";
+
+// Holds spawn-target resolution open, as a Windows path on a dropped share would.
+const spawnTargetGate = vi.hoisted(() => ({ wait: null as Promise<void> | null }));
 
 const registryMock = vi.hoisted(() => ({
   getEffectiveAgentIds: vi.fn(),
@@ -241,6 +247,31 @@ describe("AgentVersionService resilience", () => {
           { path: "/a/claude", version: "1.0.0", launches: false },
         ]);
       } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("doesn't spawn a probe that was given up on while working out how to start it", async () => {
+      const { service } = createCopiesService(["/slow/claude"]);
+      let finishResolving!: () => void;
+      spawnTargetGate.wait = new Promise<void>((resolve) => {
+        finishResolving = resolve;
+      });
+      setSpawnOutputs({ "/slow/claude": "1.0.0\n" });
+
+      vi.useFakeTimers();
+      try {
+        const copies = service.getCopies("claude");
+        await vi.advanceTimersByTimeAsync(15_000);
+        await expect(copies).resolves.toEqual([
+          { path: "/slow/claude", version: null, launches: true },
+        ]);
+
+        finishResolving();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(spawnMock).not.toHaveBeenCalled();
+      } finally {
+        spawnTargetGate.wait = null;
         vi.useRealTimers();
       }
     });

@@ -170,6 +170,23 @@ describe("AgentCliCopiesSection", () => {
     expect(getCopies).not.toHaveBeenCalled();
   });
 
+  it("reads after the Re-check even when the tab came back while it ran", async () => {
+    getCopies.mockResolvedValue([launching]);
+    const refresh = deferred<void>();
+    const { props, rerender } = renderSection({ onRefresh: () => refresh.promise });
+    await screen.findByText("Reports 1.0.0");
+
+    fireEvent.click(screen.getByRole("button", { name: /Re-check/ }));
+    rerender(<AgentCliCopiesSection {...props} isActive={false} />);
+    rerender(<AgentCliCopiesSection {...props} isActive />);
+    await act(async () => {});
+
+    getCopies.mockResolvedValue([{ ...launching, version: "1.1.0" }]);
+    await act(async () => refresh.resolve());
+
+    await screen.findByText("Reports 1.1.0");
+  });
+
   it("disables Re-check while a check runs", async () => {
     getCopies.mockResolvedValue([launching]);
     renderSection({ isRefreshing: true });
@@ -229,6 +246,22 @@ describe("AgentCliCopiesSection", () => {
     await screen.findByText("Reports 3.0.0");
     expect(within(rowOf("/new/claude")).getByText("Launches")).toBeTruthy();
     expect(screen.queryByText("/a/claude")).toBeNull();
+  });
+
+  it("keeps a list read for a launch path that arrived during its Re-check", async () => {
+    getCopies.mockResolvedValue([launching]);
+    const refresh = deferred<void>();
+    const { props, rerender } = renderSection({ onRefresh: () => refresh.promise });
+    await screen.findByText("Reports 1.0.0");
+
+    const moved = [{ path: "/new/claude", version: "3.0.0", launches: true }];
+    getCopies.mockResolvedValue(moved);
+    fireEvent.click(screen.getByRole("button", { name: /Re-check/ }));
+    rerender(<AgentCliCopiesSection {...props} launchPath="/new/claude" />);
+    await act(async () => refresh.resolve());
+
+    await screen.findByText("Reports 3.0.0");
+    expect(within(rowOf("/new/claude")).getByText("Launches")).toBeTruthy();
   });
 
   it("says nothing was found when the agent has no launch path and the read comes back empty", async () => {

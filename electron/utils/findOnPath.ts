@@ -33,45 +33,59 @@ import path from "path";
  * than each taking a thread of their own.
  */
 const MAX_CONCURRENT_PATH_PROBES = 2;
-let activeProbes = 0;
-const probeQueue: Array<() => void> = [];
 
-/**
- * Runs `task` once a slot is free. Aborting `signal` while the task is still
- * queued drops it from the queue and rejects with the abort reason, so a lookup
- * that gave up behind two hung probes leaves nothing behind to run later.
- */
-export function withPathProbeSlot<T>(task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    if (signal?.aborted) {
-      reject(signal.reason);
-      return;
-    }
-    const onAbort = () => {
-      const index = probeQueue.indexOf(run);
-      if (index !== -1) probeQueue.splice(index, 1);
-      reject(signal?.reason);
-    };
-    const run = () => {
-      signal?.removeEventListener("abort", onAbort);
-      activeProbes++;
-      new Promise<T>((settle) => settle(task())).then(resolve, reject).finally(() => {
-        activeProbes--;
-        probeQueue.shift()?.();
-      });
-    };
-    if (activeProbes < MAX_CONCURRENT_PATH_PROBES) {
-      run();
-      return;
-    }
-    probeQueue.push(run);
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
+export interface ProbeLimiter {
+  /**
+   * Runs `task` once a slot is free. Aborting `signal` while the task is still
+   * queued drops it from the queue and rejects with the abort reason, so a lookup
+   * that gave up behind hung probes leaves nothing behind to run later.
+   */
+  withSlot<T>(task: () => Promise<T>, signal?: AbortSignal): Promise<T>;
+  queueDepth(): number;
 }
+
+export function createProbeLimiter(maxConcurrent: number): ProbeLimiter {
+  let activeProbes = 0;
+  const probeQueue: Array<() => void> = [];
+  return {
+    withSlot<T>(task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+      return new Promise<T>((resolve, reject) => {
+        if (signal?.aborted) {
+          reject(signal.reason);
+          return;
+        }
+        const onAbort = () => {
+          const index = probeQueue.indexOf(run);
+          if (index !== -1) probeQueue.splice(index, 1);
+          reject(signal?.reason);
+        };
+        const run = () => {
+          signal?.removeEventListener("abort", onAbort);
+          activeProbes++;
+          new Promise<T>((settle) => settle(task())).then(resolve, reject).finally(() => {
+            activeProbes--;
+            probeQueue.shift()?.();
+          });
+        };
+        if (activeProbes < maxConcurrent) {
+          run();
+          return;
+        }
+        probeQueue.push(run);
+        signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    },
+    queueDepth: () => probeQueue.length,
+  };
+}
+
+const pathProbes = createProbeLimiter(MAX_CONCURRENT_PATH_PROBES);
+
+export const withPathProbeSlot = pathProbes.withSlot;
 
 /** Test seam — lookups waiting for a probe slot. */
 export function __pathProbeQueueDepthForTests(): number {
-  return probeQueue.length;
+  return pathProbes.queueDepth();
 }
 
 const DEFAULT_TIMEOUT_MS = 5_000;

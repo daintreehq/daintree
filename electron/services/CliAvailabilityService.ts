@@ -21,7 +21,7 @@ import { store } from "../store.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { broadcastToRenderer, hasBroadcastAudience } from "../ipc/utils.js";
 import { getDefaultWslDistro } from "../utils/wsl.js";
-import { findAllOnPath, withPathProbeSlot } from "../utils/findOnPath.js";
+import { createProbeLimiter, findAllOnPath } from "../utils/findOnPath.js";
 import {
   findWindowsCommand,
   scanWindowsPath,
@@ -83,6 +83,14 @@ const WINDOWS_EXECUTABLE_PRIORITY = new Map<string, number>([
 ]);
 
 const WINDOWS_APPENDED_EXTENSIONS = [".cmd", ".exe", ".bat", ".com"];
+
+/**
+ * File lookups for listing an agent's copies. One thread at most, so a location on
+ * a hung mount can't take the pool's four a page opening at a time. Not the PATH
+ * search's slots: losing those to this optional listing would read as every agent
+ * missing from then on.
+ */
+const copyLookups = createProbeLimiter(1);
 
 /**
  * Whether `p` names one location wherever it is resolved from. On Windows
@@ -189,7 +197,7 @@ function windowsLaunchCandidates(filePath: string): string[] {
  * (see {@link dedupePathsByDirectory}). Links into one shared directory stay apart.
  */
 async function copyIdentities(candidate: string, signal: AbortSignal): Promise<string[]> {
-  const file = await withPathProbeSlot(() => realpath(candidate), signal).catch(() => candidate);
+  const file = await copyLookups.withSlot(() => realpath(candidate), signal).catch(() => candidate);
   if (process.platform !== "win32") return [file];
   return [file.toLowerCase(), `${pathWin32.dirname(candidate).toLowerCase()}\\`];
 }
@@ -421,9 +429,7 @@ export class CliAvailabilityService {
 
   /**
    * Appends to `copies` as each is confirmed, so a deadline keeps what was found by
-   * then. File probes take the PATH search's slots, so a hung mount holds those two
-   * threads rather than one more of the pool's four per opening of the page, and
-   * nothing new starts once the deadline has passed.
+   * then, and nothing new starts once it has passed.
    */
   private async collectCopies(
     config: AgentConfig,
@@ -454,12 +460,12 @@ export class CliAvailabilityService {
       ...(pypiPackage ? synthesisePypiProbePaths(command, pypiPackage) : []),
     ];
     for (const fixedPath of fixedPaths) {
-      const probe = await withPathProbeSlot(() => this.probeNativePaths([fixedPath]), signal);
+      const probe = await copyLookups.withSlot(() => this.probeNativePaths([fixedPath]), signal);
       if (probe.status === "found") await add(probe.path);
     }
 
     if (config.packages?.npm ?? config.npmGlobalPackage) {
-      const probe = await withPathProbeSlot(() => this.probeNpmGlobal(command), signal);
+      const probe = await copyLookups.withSlot(() => this.probeNpmGlobal(command), signal);
       if (probe.status === "found") await add(probe.path);
     }
   }

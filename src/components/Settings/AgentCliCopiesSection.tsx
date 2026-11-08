@@ -40,6 +40,8 @@ export function AgentCliCopiesSection({
   const [failed, setFailed] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const latestRequest = useRef(0);
+  const latestLaunchPath = useRef(launchPath);
+  const isOnPage = useRef(false);
   // Copies are read where the agents run, so a remote window names that host.
   const remoteHostName = useRemoteHostName();
   const showChecking = useDeferredLoading(isLoading, UI_INLINE_LOADING_GATE_MS);
@@ -50,7 +52,7 @@ export function AgentCliCopiesSection({
     try {
       const copies = await cliAvailabilityClient.getCopies(agentId);
       if (request !== latestRequest.current) return;
-      setLoaded({ copies, launchPath });
+      setLoaded({ copies, launchPath: latestLaunchPath.current });
       setFailed(false);
     } catch (error) {
       if (request !== latestRequest.current) return;
@@ -59,24 +61,26 @@ export function AgentCliCopiesSection({
     } finally {
       if (request === latestRequest.current) setIsLoading(false);
     }
-  }, [agentId, launchPath]);
+  }, [agentId]);
 
   // Anything still on its way answers a page that has moved on.
-  const abandonRequests = useCallback(() => {
+  const leavePage = useCallback(() => {
+    isOnPage.current = false;
     latestRequest.current++;
   }, []);
 
   // Waits for the launch path rather than reading once without it and again with it.
   useEffect(() => {
+    isOnPage.current = isActive;
+    latestLaunchPath.current = launchPath;
     if (isActive && launchPath !== undefined) void load();
-    return abandonRequests;
-  }, [isActive, launchPath, load, abandonRequests]);
+    return leavePage;
+  }, [isActive, launchPath, load, leavePage]);
 
   const handleRecheck = async () => {
-    const before = latestRequest.current;
     await onRefresh();
-    // Left the page meanwhile, or a new launch path has already started the read.
-    if (latestRequest.current === before) await load();
+    // Asked for what's there now, so even a read begun during the refresh won't do.
+    if (isOnPage.current) await load();
   };
 
   // A list read for another launch path says the wrong copy launches, so it gives

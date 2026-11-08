@@ -186,13 +186,17 @@ export class AgentVersionService {
    * waiting behind it.
    */
   private async withCopyProbeDeadline(path: string, args: string[]): Promise<string> {
+    const abandoned = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<string>((resolve) => {
-      timer = setTimeout(() => resolve(""), this.TIMEOUT_MS + this.COPY_PROBE_START_GRACE_MS);
+      timer = setTimeout(() => {
+        abandoned.abort();
+        resolve("");
+      }, this.TIMEOUT_MS + this.COPY_PROBE_START_GRACE_MS);
       timer.unref?.();
     });
     try {
-      return await Promise.race([this.runVersionProbe(path, args), deadline]);
+      return await Promise.race([this.runVersionProbe(path, args, abandoned.signal), deadline]);
     } finally {
       clearTimeout(timer);
     }
@@ -325,10 +329,15 @@ export class AgentVersionService {
    * empty string → `parseVersion` → null → "indeterminate" → the launch proceeds
    * rather than blocking on an outdated-CLI gate).
    */
-  private async runVersionProbe(command: string, args: string[]): Promise<string> {
+  private async runVersionProbe(
+    command: string,
+    args: string[],
+    abandoned?: AbortSignal
+  ): Promise<string> {
     // An npm-installed agent is a `.cmd` shim on Windows (see windowsCliSpawn).
     const env = buildProbeEnv();
     const target = await cliSpawnTarget(command, args, process.platform, { env });
+    if (abandoned?.aborted) return "";
     return new Promise<string>((resolve, reject) => {
       // `detached` puts the child in its own process group (POSIX) so the
       // deadline can SIGKILL the entire tree, including a grandchild that

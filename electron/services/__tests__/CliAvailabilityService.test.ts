@@ -68,8 +68,12 @@ vi.mock("child_process", () => ({
 
 vi.mock("../../utils/findOnPath.js", () => ({
   findAllOnPath: vi.fn(pathFixtureLookup),
-  withPathProbeSlot: (task: () => Promise<unknown>, signal?: AbortSignal) =>
-    signal?.aborted ? Promise.reject(signal.reason) : task(),
+  // Unlimited: a case that hangs a lookup must not hold the slot for the next case.
+  createProbeLimiter: () => ({
+    withSlot: (task: () => Promise<unknown>, signal?: AbortSignal) =>
+      signal?.aborted ? Promise.reject(signal.reason) : task(),
+    queueDepth: () => 0,
+  }),
 }));
 
 // Windows-path files for the PATH search and the npm shim lookup, which read the disk.
