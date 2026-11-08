@@ -1639,8 +1639,8 @@ describe("CloneRepoDialog", () => {
 
       await fillAndClone();
 
-      const cancel = screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement;
-      expect(cancel.disabled).toBe(true);
+      const cancel = screen.getByRole("button", { name: "Cancel" });
+      expect(cancel.getAttribute("aria-disabled")).toBe("true");
       fireEvent.click(cancel);
       expect(onCancel).not.toHaveBeenCalled();
       // A second press can't hand over a second clone.
@@ -1650,9 +1650,9 @@ describe("CloneRepoDialog", () => {
       expect(onStartBackground).toHaveBeenCalledTimes(1);
 
       await act(async () => accept());
-      expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(
-        false
-      );
+      expect(
+        screen.getByRole("button", { name: "Cancel" }).getAttribute("aria-disabled")
+      ).toBeNull();
     });
 
     it("keeps waiting on the clone itself in a remote-bound view", async () => {
