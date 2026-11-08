@@ -66,11 +66,60 @@ describe("jiraRequest", () => {
     expect(JSON.parse(init.body)).toEqual({ jql: 'project = "ENG"' });
   });
 
+  it("sends a PUT and reads a 204 as success when the write expects no content", async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+    await expect(
+      jiraRequest(CONNECTION, "/issue/ENG-12/assignee", {
+        method: "PUT",
+        body: { accountId: null },
+        noContent: true,
+      })
+    ).resolves.toBeUndefined();
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body)).toEqual({ accountId: null });
+  });
+
+  it.each([
+    ["GET", {}],
+    ["PUT", { method: "PUT" as const, body: {} }],
+    ["PUT", { method: "PUT" as const, body: {}, noContent: false }],
+  ])("reads a 204 to a %s that expected an answer as unreadable", async (_, options) => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+    const error = await jiraRequest(CONNECTION, "/issue/ENG-12", options).catch(
+      (err: unknown) => err
+    );
+    expect(error).toBeInstanceOf(JiraApiError);
+    expect((error as JiraApiError).message).toMatch(/couldn't read/);
+  });
+
+  it.each([
+    ["an empty", ""],
+    ["an HTML", "<html>login</html>"],
+  ])("reads %s 200 as unreadable, whatever the method", async (_, body) => {
+    for (const options of [{}, { method: "PUT" as const, body: {}, noContent: true }]) {
+      fetchMock.mockResolvedValueOnce(new Response(body, { status: 200 }));
+      const error = await jiraRequest(CONNECTION, "/issue/ENG-12", options).catch(
+        (err: unknown) => err
+      );
+      expect(error).toBeInstanceOf(JiraApiError);
+      expect((error as JiraApiError).message).toMatch(/couldn't read/);
+    }
+  });
+
   it("reads a 401 as a rejected credential", async () => {
     fetchMock.mockResolvedValue(json({}, { status: 401 }));
     const error = await failure();
     expect(error.status).toBe(401);
     expect(error.message).toMatch(/rejected the email and API token/);
+    expect(error.credentialRejected).toBe(true);
+  });
+
+  it("doesn't read a refused request as a refused credential", async () => {
+    fetchMock.mockResolvedValueOnce(json({ errorMessages: ["No permission"] }, { status: 403 }));
+    expect((await failure()).credentialRejected).toBe(false);
+    fetchMock.mockResolvedValueOnce(json({}, { status: 429 }));
+    expect((await failure()).credentialRejected).toBe(false);
   });
 
   it.each(["AUTHENTICATED_FAILED", "AUTHENTICATION_DENIED"])(
@@ -82,6 +131,7 @@ describe("jiraRequest", () => {
       );
       const error = await failure("/search/jql");
       expect(error.message).toMatch(/rejected the email and API token/);
+      expect(error.credentialRejected).toBe(true);
     }
   );
 
@@ -197,6 +247,7 @@ describe("jiraRequest", () => {
       const repeat = await failure();
       expect(repeat.message).toMatch(/rejected/);
       expect(repeat.status).toBe(401);
+      expect(repeat.credentialRejected).toBe(true);
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
       vi.advanceTimersByTime(5 * 60_000);
@@ -249,6 +300,21 @@ describe("jiraRequest", () => {
       vi.advanceTimersByTime(60 * 60_000);
       await failure();
       expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("lifts once a write Jira answers with no content succeeds", async () => {
+      fetchMock.mockImplementationOnce(async () => json({}, { status: 401 }));
+      await failure();
+      fetchMock.mockImplementationOnce(async () => new Response(null, { status: 204 }));
+      await jiraRequest(CONNECTION, "/issue/ENG-12/assignee", {
+        method: "PUT",
+        body: { accountId: "abc" },
+        noContent: true,
+        ignoreCooldown: true,
+      });
+      fetchMock.mockImplementationOnce(async () => json({ accountId: "abc" }));
+      await expect(jiraRequest(CONNECTION, "/myself")).resolves.toEqual({ accountId: "abc" });
+      expect(fetchMock).toHaveBeenCalledTimes(3);
     });
 
     it("doesn't hold one connection's failure against another", async () => {

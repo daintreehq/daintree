@@ -3,7 +3,11 @@ import type {
   Credentials,
   FetchOptions,
   ForgeIssueProviderImpl,
+  ForgeUser,
+  IdentityCapability,
   Issue,
+  IssueComment,
+  IssueCommentCapability,
   ListOptions,
   Page,
   RepoRef,
@@ -22,11 +26,22 @@ import {
   type JiraConnection,
 } from "./JiraClient.js";
 import { buildIssueJql, issueFilterJql, issueKeyInSearch, textSearchClause } from "./jql.js";
-import { ISSUE_FIELDS, issueNumberOf, mapIssue, type JiraIssueNode } from "./mappers.js";
+import {
+  ISSUE_FIELDS,
+  issueNumberOf,
+  mapComment,
+  mapIssue,
+  mapUser,
+  type JiraCommentNode,
+  type JiraIssueNode,
+  type JiraUserNode,
+} from "./mappers.js";
 
 const DEFAULT_PAGE_SIZE = 50;
 /** Jira caps a search that returns fields at 100 per page, whatever is asked for. */
 const MAX_PAGE_SIZE = 100;
+const DEFAULT_COMMENTS_PAGE_SIZE = 20;
+const MAX_COMMENTS_PAGE_SIZE = 100;
 
 /** Jira project keys: letters and digits, starting with a letter. */
 const PROJECT_KEY_PATTERN = /^[A-Z][A-Z0-9_]{0,15}$/;
@@ -85,26 +100,152 @@ async function readConnectionSettings(): Promise<{
   return { siteUrl: normalizeSiteUrl(settings.siteUrl), email: normalizeEmail(settings.email) };
 }
 
-async function beginOp(): Promise<Op> {
+/** `null` until a token, site and email are all set. */
+async function connectedOp(): Promise<Op | null> {
   const token = getToken();
   const version = getTokenVersion();
   const { siteUrl, email } = await readConnectionSettings();
-  if (!token || !siteUrl || !email) {
-    throw new JiraApiError(NOT_CONNECTED_MESSAGE);
-  }
+  if (!token || !siteUrl || !email) return null;
   return {
     connection: { siteUrl, email, token },
     scope: `${version}\u0000${siteUrl}\u0000${email}`,
   };
 }
 
+async function beginOp(): Promise<Op> {
+  const op = await connectedOp();
+  if (!op) throw new JiraApiError(NOT_CONNECTED_MESSAGE);
+  return op;
+}
+
 const statsCache = new Map<string, { at: number; issueCount: number | null }>();
 let statsCacheScope: string | null = null;
+
+interface Viewer {
+  accountId: string;
+  user: ForgeUser;
+}
+
+/** The connection's own account, for the connection it was read under. */
+let cachedViewer: { scope: string; viewer: Viewer } | null = null;
+
+/** Who an issue was assigned to before "Assign to me": `null` when nobody was. */
+type PreviousAssignee = { accountId: string; user: ForgeUser } | null;
+
+/** What a run of assignments in a row found, and how many of their Undos are left. */
+interface PreviousAssigneeRun {
+  previous: PreviousAssignee;
+  count: number;
+}
+
+/**
+ * By connection and issue, what each "Assign to me" still open to Undo found,
+ * latest last. Jira issues take one assignee, so the Undo has to put that person
+ * back rather than leave the issue unassigned, and leave it alone when it was
+ * already the viewer's. Two worktrees made from one issue each offer an Undo, so
+ * the second assignment, which finds the issue already the viewer's, must not
+ * take the first one's record. Assignments in a row that found the same assignee
+ * share one run, so only a change of hands adds one. Undo is offered for
+ * seconds, so only the latest few issues are kept.
+ */
+const previousAssignees = new Map<string, PreviousAssigneeRun[]>();
+const PREVIOUS_ASSIGNEES_LIMIT = 50;
+const PREVIOUS_ASSIGNEE_RUNS_PER_ISSUE = 10;
 
 export function clearJiraCaches(): void {
   statsCache.clear();
   statsCacheScope = null;
+  cachedViewer = null;
+  previousAssignees.clear();
   clearJiraCooldown();
+}
+
+async function getViewer(op: Op): Promise<Viewer> {
+  if (cachedViewer?.scope === op.scope) return cachedViewer.viewer;
+  const node = await jiraRequest<JiraUserNode>(op.connection, "/myself");
+  if (!node.accountId) throw new JiraApiError("Jira didn't recognize this account");
+  const viewer = { accountId: node.accountId, user: mapUser(node) };
+  cachedViewer = { scope: op.scope, viewer };
+  return viewer;
+}
+
+/**
+ * The host only ever assigns the viewer ("Assign to me" and its Undo), passing
+ * the login `getCurrentUser` gave it, so assigning anyone else is refused rather
+ * than guessed at.
+ */
+async function requireViewerFor(username: string, op: Op): Promise<Viewer> {
+  const viewer = await getViewer(op);
+  if (username !== viewer.user.login.trim() && username !== viewer.accountId) {
+    throw new Error("Jira issues can only be assigned to you from Daintree");
+  }
+  return viewer;
+}
+
+function previousAssigneeKey(op: Op, issueId: string): string {
+  return `${op.scope}\u0000${issueId}`;
+}
+
+function rememberPreviousAssignee(key: string, previous: PreviousAssignee): void {
+  const runs = previousAssignees.get(key) ?? [];
+  const latest = runs.at(-1);
+  if (latest && (latest.previous?.accountId ?? null) === (previous?.accountId ?? null)) {
+    // The same account; its newest name and avatar are what an Undo hands back.
+    latest.previous = previous;
+    latest.count++;
+  } else {
+    runs.push({ previous, count: 1 });
+    // Past the cap, the oldest after the first go: the first is who the issue
+    // goes back to once every Undo has run.
+    if (runs.length > PREVIOUS_ASSIGNEE_RUNS_PER_ISSUE) runs.splice(1, 1);
+  }
+  previousAssignees.delete(key);
+  previousAssignees.set(key, runs);
+  if (previousAssignees.size > PREVIOUS_ASSIGNEES_LIMIT) {
+    const oldest = previousAssignees.keys().next().value;
+    if (oldest !== undefined) previousAssignees.delete(oldest);
+  }
+}
+
+/** What the latest assignment still open to Undo found; `undefined` when none is. */
+function latestPreviousAssignee(key: string): PreviousAssignee | undefined {
+  return previousAssignees.get(key)?.at(-1)?.previous;
+}
+
+/** One Undo is used up. Assignments and Undos for an issue run in turn, so it's the latest. */
+function forgetLatestPreviousAssignee(key: string): void {
+  const runs = previousAssignees.get(key);
+  const latest = runs?.at(-1);
+  if (!runs || !latest) return;
+  if (--latest.count > 0) return;
+  runs.pop();
+  if (runs.length === 0) previousAssignees.delete(key);
+}
+
+const assignmentQueues = new Map<string, Promise<void>>();
+
+/**
+ * Runs an assign or Undo for one issue after any still under way for it, so
+ * each reads the assignee, writes and keeps its record without another landing
+ * in between and leaving the records out of order.
+ */
+function queueAssignment<T>(
+  op: Op,
+  repo: RepoRef,
+  issueNumber: number,
+  run: () => Promise<T>
+): Promise<T> {
+  const key = `${op.scope}\u0000${repo.repo}-${issueNumber}`;
+  const result = (assignmentQueues.get(key) ?? Promise.resolve()).then(run);
+  const settled = result.then(
+    () => undefined,
+    () => undefined
+  );
+  assignmentQueues.set(key, settled);
+  void settled.then(() => {
+    if (assignmentQueues.get(key) === settled) assignmentQueues.delete(key);
+  });
+  return result;
 }
 
 /** Normalize a stored project key, or `null` when it can't be one. */
@@ -120,18 +261,57 @@ function notSupported(action: string): Promise<never> {
   );
 }
 
-async function fetchIssue(idOrKey: string, op: Op): Promise<Issue | null> {
+async function findIssueNode(
+  idOrKey: string,
+  fields: readonly string[],
+  op: Op
+): Promise<JiraIssueNode | null> {
   try {
-    const node = await jiraRequest<JiraIssueNode>(
+    return await jiraRequest<JiraIssueNode>(
       op.connection,
-      `/issue/${encodeURIComponent(idOrKey)}?fields=${ISSUE_FIELDS.join(",")}`
+      `/issue/${encodeURIComponent(idOrKey)}?fields=${fields.join(",")}`
     );
-    return mapIssue(node, op.connection.siteUrl);
   } catch (err) {
     // Jira answers an unknown issue and one the account can't see alike.
     if (err instanceof JiraApiError && err.status === 404) return null;
     throw err;
   }
+}
+
+async function fetchIssue(idOrKey: string, op: Op): Promise<Issue | null> {
+  const node = await findIssueNode(idOrKey, ISSUE_FIELDS, op);
+  return node ? mapIssue(node, op.connection.siteUrl) : null;
+}
+
+/**
+ * The project's issue with this number, by the same rule as `getIssue`: a moved
+ * issue answers to its old key with a new number, and isn't this one.
+ */
+async function requireIssueNode(
+  repo: RepoRef,
+  number: number,
+  fields: readonly string[],
+  op: Op
+): Promise<JiraIssueNode> {
+  const key = `${repo.repo}-${number}`;
+  const node = await findIssueNode(key, fields, op);
+  if (!node || issueNumberOf(node.key) !== number) {
+    throw new JiraApiError(`Jira issue ${key} wasn't found`, 404);
+  }
+  return node;
+}
+
+async function setAssignee(issueId: string, accountId: string | null, op: Op): Promise<void> {
+  await jiraRequest<void>(op.connection, `/issue/${encodeURIComponent(issueId)}/assignee`, {
+    method: "PUT",
+    body: { accountId },
+    noContent: true,
+  });
+}
+
+function assigneesOf(node: JiraIssueNode): ForgeUser[] {
+  const assignee = node.fields?.assignee;
+  return assignee ? [mapUser(assignee)] : [];
 }
 
 interface JiraSearchResponse {
@@ -235,6 +415,83 @@ const repoStatsCapability: RepoStatsCapability = {
   },
 };
 
+const identityCapability: IdentityCapability = {
+  async getCurrentUser(): Promise<ForgeUser | null> {
+    const op = await connectedOp();
+    if (!op) return null;
+    try {
+      return (await getViewer(op)).user;
+    } catch (err) {
+      if (err instanceof JiraApiError && err.credentialRejected) return null;
+      throw err;
+    }
+  },
+};
+
+function pageSizeOf(perPage: number | undefined): number {
+  if (typeof perPage !== "number" || !Number.isFinite(perPage)) return DEFAULT_COMMENTS_PAGE_SIZE;
+  return Math.min(Math.max(Math.trunc(perPage), 1), MAX_COMMENTS_PAGE_SIZE);
+}
+
+/** A comment cursor is the offset of the page's first comment, as this hands it out. */
+function offsetOf(cursor: string | null | undefined): number {
+  if (!cursor) return 0;
+  const offset = /^\d+$/.test(cursor) ? Number(cursor) : NaN;
+  if (!Number.isSafeInteger(offset)) throw new Error("Invalid Jira comments cursor");
+  return offset;
+}
+
+interface JiraCommentsResponse {
+  startAt?: number;
+  maxResults?: number;
+  total?: number;
+  comments?: JiraCommentNode[];
+}
+
+/**
+ * Oldest first, the contract's order and Jira's own, asked for by name anyway.
+ * The issue is looked up first so a missing one throws rather than reading as a
+ * thread nobody has replied to, and so a moved one is refused as `getIssue`
+ * refuses it, though Jira would serve its comments under the old key.
+ */
+const issueCommentCapability: IssueCommentCapability = {
+  async listIssueComments(
+    repo: RepoRef,
+    issueNumber: number,
+    opts: ListOptions
+  ): Promise<Page<IssueComment>> {
+    const startAt = offsetOf(opts.cursor);
+    const maxResults = pageSizeOf(opts.perPage);
+    const op = await beginOp();
+    const issue = await requireIssueNode(repo, issueNumber, ["summary"], op);
+    const query = new URLSearchParams({
+      startAt: String(startAt),
+      maxResults: String(maxResults),
+      orderBy: "created",
+    });
+    const data = await jiraRequest<JiraCommentsResponse>(
+      op.connection,
+      `/issue/${encodeURIComponent(issue.id)}/comment?${query}`
+    );
+    const comments = data.comments ?? [];
+    const next = (typeof data.startAt === "number" ? data.startAt : startAt) + comments.length;
+    const total = typeof data.total === "number" ? data.total : null;
+    // Jira may serve fewer than were asked for, and says how many it meant to.
+    const pageSize =
+      typeof data.maxResults === "number" && data.maxResults > 0 ? data.maxResults : maxResults;
+    // An empty page ends the thread whatever the total says, or a total that
+    // drifted up would hand out the same cursor forever.
+    const hasMore =
+      comments.length > 0 && (total === null ? comments.length >= pageSize : next < total);
+    return {
+      items: comments.map((node) => mapComment(node, op.connection.siteUrl, issue.key)),
+      nextCursor: hasMore ? String(next) : null,
+      hasMore,
+      ...(total === null ? {} : { totalCount: total }),
+    };
+  },
+};
+
 export const jiraForgeProvider: ForgeIssueProviderImpl = {
   async getCredentials(): Promise<Credentials | null> {
     const token = getToken();
@@ -331,8 +588,58 @@ export const jiraForgeProvider: ForgeIssueProviderImpl = {
     return `https://${repo.host}/issues/?jql=${encodeURIComponent(jql)}`;
   },
 
-  assignIssue: () => notSupported("Assigning issues"),
-  unassignIssue: () => notSupported("Unassigning issues"),
+  async assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]> {
+    const op = await beginOp();
+    const viewer = await requireViewerFor(username, op);
+    return queueAssignment(op, repo, issueNumber, async () => {
+      const issue = await requireIssueNode(repo, issueNumber, ["assignee"], op);
+      const before = issue.fields?.assignee ?? null;
+      const key = previousAssigneeKey(op, issue.id);
+      if (before?.accountId === viewer.accountId) {
+        rememberPreviousAssignee(key, viewer);
+        return assigneesOf(issue);
+      }
+      await setAssignee(issue.id, viewer.accountId, op);
+      rememberPreviousAssignee(
+        key,
+        before?.accountId ? { accountId: before.accountId, user: mapUser(before) } : null
+      );
+      return [viewer.user];
+    });
+  },
+
+  async unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]> {
+    const op = await beginOp();
+    const viewer = await requireViewerFor(username, op);
+    return queueAssignment(op, repo, issueNumber, async () => {
+      const issue = await requireIssueNode(repo, issueNumber, ["assignee"], op);
+      const key = previousAssigneeKey(op, issue.id);
+      // `undefined` when nothing is remembered.
+      const previous = latestPreviousAssignee(key);
+      // Someone else has picked the issue up since: this Undo has nothing of
+      // ours left to undo, and its record goes with it.
+      if (issue.fields?.assignee?.accountId !== viewer.accountId) {
+        forgetLatestPreviousAssignee(key);
+        return assigneesOf(issue);
+      }
+      // With nothing remembered this only takes the issue off the viewer, which
+      // is what an agent's unassign asks for.
+      if (previous === undefined) {
+        await setAssignee(issue.id, null, op);
+        return [];
+      }
+      // That assignment found the issue already the viewer's.
+      if (previous?.accountId === viewer.accountId) {
+        forgetLatestPreviousAssignee(key);
+        return assigneesOf(issue);
+      }
+      // Hand it back to whoever "Assign to me" took it from. A failure keeps
+      // the record, so trying again still knows who that was.
+      await setAssignee(issue.id, previous?.accountId ?? null, op);
+      forgetLatestPreviousAssignee(key);
+      return previous ? [previous.user] : [];
+    });
+  },
   createIssue: () => notSupported("Creating issues"),
   closeIssue: () => notSupported("Closing issues"),
   reopenIssue: () => notSupported("Reopening issues"),
@@ -341,5 +648,7 @@ export const jiraForgeProvider: ForgeIssueProviderImpl = {
   addIssueLabel: () => notSupported("Adding labels"),
   removeIssueLabel: () => notSupported("Removing labels"),
 
+  identity: identityCapability,
+  issueComments: issueCommentCapability,
   repoStats: repoStatsCapability,
 };

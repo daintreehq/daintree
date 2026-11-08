@@ -1,4 +1,9 @@
-import type { ForgeUser, Issue, NormalizedIssueState } from "../../../../shared/types/forge.js";
+import type {
+  ForgeUser,
+  Issue,
+  IssueComment,
+  NormalizedIssueState,
+} from "../../../../shared/types/forge.js";
 import { siteHostOf } from "../shared/connection.js";
 import { adfToText } from "./adf.js";
 
@@ -40,6 +45,13 @@ export interface JiraIssueNode {
     updated?: string | null;
     resolutiondate?: string | null;
   } | null;
+}
+
+export interface JiraCommentNode {
+  id: string;
+  author?: JiraUserNode | null;
+  body?: unknown;
+  created?: string | null;
 }
 
 /**
@@ -120,5 +132,18 @@ export function mapIssue(node: JiraIssueNode, siteUrl: string): Issue {
     branchName: suggestBranchName(node.key, title),
     // Not the node: a description's document tree can dwarf everything else here.
     rawData: { id: node.id, key: node.key },
+  };
+}
+
+/** `issueKey` is the key Jira answered with, which a renamed project changes. */
+export function mapComment(node: JiraCommentNode, siteUrl: string, issueKey: string): IssueComment {
+  const id = String(node.id);
+  return {
+    id,
+    body: adfToText(node.body),
+    url: `${siteUrl}/browse/${issueKey}?focusedCommentId=${encodeURIComponent(id)}`,
+    ...(node.author ? { author: mapUser(node.author) } : {}),
+    createdAt: toEpoch(node.created) ?? 0,
+    rawData: { id },
   };
 }

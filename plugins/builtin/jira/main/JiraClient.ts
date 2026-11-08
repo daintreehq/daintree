@@ -20,11 +20,14 @@ const MAX_RATE_LIMIT_COOLDOWN_MS = 60 * 60_000;
 /** Jira API failure. Messages never carry the credential or the request's headers. */
 export class JiraApiError extends Error {
   readonly status: number | undefined;
+  /** Jira refused the email and token themselves, not just this request. */
+  readonly credentialRejected: boolean;
 
-  constructor(message: string, status?: number) {
+  constructor(message: string, status?: number, credentialRejected = false) {
     super(message);
     this.name = "JiraApiError";
     this.status = status;
+    this.credentialRejected = credentialRejected;
   }
 }
 
@@ -54,8 +57,13 @@ export function setMemoryToken(token: string | null): void {
   tokenVersion++;
 }
 
-let cooldown: { connectionKey: string; until: number; status: number; message: string } | null =
-  null;
+let cooldown: {
+  connectionKey: string;
+  until: number;
+  status: number;
+  message: string;
+  credentialRejected: boolean;
+} | null = null;
 
 let cooldownEpoch = 0;
 
@@ -99,11 +107,13 @@ export async function jiraRequest<T>(
   connection: JiraConnection,
   path: string,
   options: {
-    method?: "GET" | "POST";
+    method?: "GET" | "POST" | "PUT";
     body?: unknown;
     timeoutMs?: number;
     /** A deliberate check, like saving a token: goes out whatever the cooldown says. */
     ignoreCooldown?: boolean;
+    /** A write Jira answers with 204 and nothing to read, like setting the assignee. */
+    noContent?: boolean;
   } = {}
 ): Promise<T> {
   const connectionKey = connectionKeyOf(connection);
@@ -115,7 +125,7 @@ export async function jiraRequest<T>(
     cooldown?.connectionKey === connectionKey &&
     Date.now() < cooldown.until
   ) {
-    throw new JiraApiError(cooldown.message, cooldown.status);
+    throw new JiraApiError(cooldown.message, cooldown.status, cooldown.credentialRejected);
   }
   const authorization = Buffer.from(`${connection.email}:${connection.token}`).toString("base64");
   let response: Response;
@@ -150,9 +160,10 @@ export async function jiraRequest<T>(
         until: Date.now() + REJECTED_COOLDOWN_MS,
         status: response.status,
         message: REJECTED_MESSAGE,
+        credentialRejected: true,
       };
     }
-    throw new JiraApiError(REJECTED_MESSAGE, response.status);
+    throw new JiraApiError(REJECTED_MESSAGE, response.status, true);
   }
   if (response.status === 429) {
     const seconds = retryAfterSeconds(response);
@@ -167,6 +178,7 @@ export async function jiraRequest<T>(
           ),
         status: 429,
         message: RATE_LIMITED_MESSAGE,
+        credentialRejected: false,
       };
     }
     throw new JiraApiError(
@@ -183,8 +195,12 @@ export async function jiraRequest<T>(
     );
   }
 
-  // A body that isn't JSON (a proxy's error page) reads as no payload.
-  const payload = (await response.json().catch(() => null)) as unknown;
+  // A body that isn't JSON (a proxy's error page) reads as no payload, and so
+  // does an empty one from a request that expected to read something.
+  const payload =
+    options.noContent && response.status === 204
+      ? undefined
+      : ((await response.json().catch(() => null)) as unknown);
   if (!response.ok) {
     throw new JiraApiError(
       errorFromBody(payload, [authorization, connection.token, connection.email]) ??
