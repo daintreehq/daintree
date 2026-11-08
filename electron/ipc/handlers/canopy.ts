@@ -55,7 +55,12 @@ import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore
 import { searchScreens } from "../../services/canopy/canopyScreenSearch.js";
 import { isCanopyMode, readCanopyMode } from "../../services/canopy/canopyMode.js";
 import { CanopyLocalReader } from "../../services/canopy/canopyLocalReader.js";
-import { CANOPY_MODEL, CanopyModels, canopyModelName } from "../../services/canopy/canopyModels.js";
+import {
+  CANOPY_MODEL,
+  CanopyModels,
+  canopyModelName,
+  removeDownloadedModels,
+} from "../../services/canopy/canopyModels.js";
 import { store } from "../../store.js";
 import { hostInstanceId } from "../../services/hostInstance.js";
 import { traced } from "../../services/canopy/canopyTrace.js";
@@ -167,16 +172,19 @@ let reader: CanopyLocalReader | null = null;
 /** Whether the model was ready when last told, so only a change wakes the service. */
 let modelWasReady = false;
 
-/** Made on first use: a user who never turns Canopy on never looks for a model. */
+/**
+ * Where the app ships the reader model (#16415): its resources once packaged,
+ * else where the build fetched it.
+ */
+function bundledModelDir(): string {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "canopy-reader")
+    : path.join(app.getAppPath(), "electron", "resources", "canopy-reader");
+}
+
+/** Made on first use: a user who never turns Canopy on never checks the model. */
 function getModels(): CanopyModels {
-  models ??= new CanopyModels(
-    path.join(app.getPath("userData"), "canopy", "models"),
-    onModelsChanged,
-    // An update replaces the files the reader has open, and what the last
-    // revision read is read again by the new one.
-    () => reader?.release(),
-    () => service?.readerChanged()
-  );
+  models ??= new CanopyModels(bundledModelDir(), onModelsChanged);
   return models;
 }
 
@@ -186,7 +194,7 @@ function getReader(): CanopyLocalReader {
 }
 
 function modelReady(): boolean {
-  return models?.state().status === "ready";
+  return models?.state()?.status === "ready";
 }
 
 function onModelsChanged(): void {
@@ -200,19 +208,22 @@ function onModelsChanged(): void {
 }
 
 /**
- * With Canopy on, gets the model here if it isn't, or its newest revision if
- * an older one is, and once it is ready deletes any other: a model an earlier
- * Daintree chose included.
+ * With Canopy on, checks the shipped model, once a launch and never on the
+ * launch's own path: nothing waits for it, and screens are read once it checks
+ * out (`onModelsChanged`).
  */
 function ensureModel(): void {
   if (readCanopyMode() !== "on") return;
   void getModels()
     .ensure()
-    .then(async () => {
-      if (models?.state().status === "ready") await models.remove(true);
-    })
-    .catch((error: unknown) => console.error("[Canopy] Model download failed:", error));
+    .catch((error: unknown) => console.error("[Canopy] Model check failed:", error));
 }
+
+/**
+ * How long after launch the models earlier versions downloaded into the user
+ * data folder are deleted: late enough to stay off the launch's own path.
+ */
+const DOWNLOADED_MODELS_CLEANUP_DELAY_MS = 30_000;
 
 /**
  * What Canopy shows with no service made since launch: nothing. Sequence 0,
@@ -325,9 +336,7 @@ export function changeCanopyMode(
   if (mode === "on") {
     ensureModel();
   } else {
-    // Off lets the model go; a download under way stops, keeping what it fetched.
     reader?.release();
-    models?.cancel();
   }
   return canopy.getSnapshot();
 }
@@ -1857,24 +1866,27 @@ export const canopyNamespace = defineIpcNamespace({
       getModels().info()
     ),
 
-    /** Tries a failed or stopped download again. */
+    /**
+     * Kept for Shells from before the model shipped with Daintree, which offer
+     * to retry its download: it checks the shipped model, once a launch, and
+     * fetches nothing.
+     */
     retryModel: op(CANOPY_METHOD_CHANNELS.retryModel, async (): Promise<CanopySnapshot> => {
       ensureModel();
       return service ? service.getSnapshot() : hiddenOrIdleSnapshot();
     }),
 
     /**
-     * Deletes the downloaded model, at any time. With Canopy on that turns it
-     * off first, by the same guarded change as any other turn-off, so every view
-     * hears it and nothing downloads the model again on the next launch.
+     * Kept for Shells from before the model shipped with Daintree, which offer
+     * to delete it: the model is part of the app now, so nothing is deleted and
+     * Canopy stays as it is.
      */
     removeModels: op(CANOPY_METHOD_CHANNELS.removeModels, async (): Promise<CanopySnapshot> => {
-      checkRateLimit(CANOPY_METHOD_CHANNELS.removeModels, 10, 10_000);
-      if (readCanopyMode() === "on") changeCanopyMode("unset");
-      reader?.release();
-      models?.cancel();
-      await getModels().remove(false);
-      return service ? service.getSnapshot() : hiddenOrIdleSnapshot();
+      throw new AppError({
+        code: "UNSUPPORTED",
+        message: "Canopy's model ships with Daintree",
+        userMessage: "Canopy's model comes with Daintree and can't be deleted on its own.",
+      });
     }),
 
     /** Raw keystrokes from the live view, for the terminal it is streaming. */
@@ -2590,8 +2602,16 @@ export function registerCanopyHandlers(): () => void {
       payload: terminalIds,
     })
   );
+  // Whatever Canopy's mode: a user who hid it has a downloaded model too.
+  const downloadedModelsCleanup = setTimeout(() => {
+    removeDownloadedModels(path.join(app.getPath("userData"), "canopy", "models")).catch(
+      (error: unknown) => console.warn("[Canopy] Couldn't delete downloaded models:", error)
+    );
+  }, DOWNLOADED_MODELS_CLEANUP_DELAY_MS);
+  downloadedModelsCleanup.unref?.();
   return () => {
     unregister();
+    clearTimeout(downloadedModelsCleanup);
     offTrashed();
     offTrashCleared();
     offRestored();
@@ -2626,7 +2646,8 @@ export function registerCanopyHandlers(): () => void {
     service = null;
     reader?.release();
     reader = null;
-    models?.cancel();
+    models?.dispose();
     models = null;
+    modelWasReady = false;
   };
 }

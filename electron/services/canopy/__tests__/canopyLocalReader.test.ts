@@ -323,11 +323,11 @@ describe("CanopyLocalReader", () => {
     expect(h.made[0]!.read).toHaveBeenCalledTimes(2);
   });
 
-  it("starts nothing while the model isn't here, and says it is on its way", async () => {
+  it("starts nothing when the model didn't check out, and reports it rather than retrying", async () => {
     const h = await harness(null);
     await expect(h.reader.read(input({ lines }), signal())).rejects.toMatchObject({
-      message: "model not downloaded",
-      transient: true,
+      message: "model not available",
+      transient: false,
     });
     expect(h.made).toHaveLength(0);
   });

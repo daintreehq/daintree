@@ -15,10 +15,10 @@ describe("readCanopyMode", () => {
     }
   });
 
-  it("reads anything else as unset, so nothing unreadable ever turns reading on", () => {
+  it("reads anything else as the default, on: the reader ships with Daintree and reads locally", () => {
     for (const value of [undefined, null, true, "ON", "off", 1, {}]) {
       stored.value = value;
-      expect(readCanopyMode()).toBe("unset");
+      expect(readCanopyMode()).toBe("on");
       expect(isCanopyMode(value)).toBe(false);
     }
   });
