@@ -203,8 +203,9 @@ The flag is gated on `app.isPackaged === false` (forwarded to the pty host as `D
 1. **static** and **lint** (Ubuntu): typecheck, codegen and drift guards, format, and the ESLint ratchet (the pieces of `npm run check`)
 2. **test** (Ubuntu): vitest unit tests, sharded 6 ways, minus the perf liveness guard
 3. **perf-liveness** (Ubuntu): `scripts/perf/__tests__/scenarioLiveness.test.ts` on its own runner, ungated, so its per-scenario child processes stay off the shards' critical path
-4. **build** (Ubuntu only): production build verification
-5. **ci-ok**: aggregate gate that fails if any job failed — the sole required status check
+4. **host-scripts-macos** (macOS): `electron/remote/client/__tests__/hostInstaller.realShell.test.ts`, so the host installer's swap and rollback scripts run under a Mac's `/bin/sh` and BSD tools as well as Linux's
+5. **build** (Ubuntu only): production build verification
+6. **ci-ok**: aggregate gate that fails if any job failed — the sole required status check
 
 `static` and `lint` default to Ubuntu on push/PR but can opt into Windows via `gh workflow run CI -f os=windows` (or `os=both`). Cross-platform build, smoke, and E2E live in `stabilize.yml` — the on-demand, agent-driven workflow (and the `stabilize` skill that drives it) that replaced the scheduled nightly; releases run per-OS via `release-macos.yml` / `release-linux.yml` / `release-windows.yml`. The only thing still on a nightly cron is `nightly-publish.yml`, which builds and publishes the macOS/Linux nightly auto-update binaries and runs no test suites: only `check:preload-backdoors` after the build, and `scripts/run-packaged-smoke.mjs` on every packaged binary a feed offers (macOS arm64, universal and x64 on Intel, Linux x64 and arm64 AppImages) before any nightly binary or `latest*.yml` reaches R2.
 
