@@ -1136,8 +1136,9 @@ describe("CanopyTerminal", () => {
       it("waits for a use again on a stream opened afresh when the link comes back", async () => {
         const remote = remoteApi();
         const view = mountUnused(remote);
-        await openSizable(remote);
+        // Used while the first stream was still opening: that use is the first stream's alone.
         fireEvent.mouseDown(view.frame, { button: 0 });
+        await openSizable(remote);
         await pastSettle();
         expect(remote.api.terminalResize).toHaveBeenCalledTimes(1);
 
