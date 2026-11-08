@@ -17,6 +17,7 @@ vi.mock("../openWindowsTracker.js", async (importOriginal) => ({
 import {
   closeCanopyWindow,
   focusCanopyWindow,
+  isCanopyWindowView,
   openCanopyWindow,
   setCanopyBrowserWindowFactory,
 } from "../canopyWindow.js";
@@ -140,6 +141,18 @@ describe("the Canopy window", () => {
     expect(made).toHaveLength(2);
     expect(focusCanopyWindow()).toBe(true);
     expect(made[0]!.focus).not.toHaveBeenCalled();
+  });
+
+  it("knows its own view, and nothing else, as long as it stands", () => {
+    expect(isCanopyWindowView(1001)).toBe(false);
+    openCanopyWindow(noWatch);
+    const win = made[0]!;
+
+    expect(isCanopyWindowView(win.view.webContents.id)).toBe(true);
+    expect(isCanopyWindowView(win.webContents.id)).toBe(false);
+
+    closeCanopyWindow();
+    expect(isCanopyWindowView(win.view.webContents.id)).toBe(false);
   });
 
   it("keeps its own title against the page's", () => {
