@@ -288,19 +288,19 @@ export class ProjectStatsService {
    * and once it has, the snapshot carries the id. Trashed terminals count here
    * because the host's matcher runs on them before the trash filter does.
    *
-   * A degraded snapshot is NOT a reason to fall back: the shard that just timed
-   * out on the fan-out would time out again per workspace, after it, and every
-   * trigger waits on this compute meanwhile — slowing every workspace's stats for
-   * the length of the outage. A missing shard reads as zero here, which is what
-   * its failed per-workspace reads resolved to before; the caller keeps any row
-   * it already has for one.
+   * A degraded snapshot never falls back, even for an unowned terminal: the shard
+   * that just timed out on the fan-out would time out again per workspace, after
+   * it, with every trigger waiting on this compute, and `getProjectStats` reports
+   * that failure as a count of zero. A missing shard reads as zero here; the caller
+   * keeps any row it already has for one.
    */
   private async getTerminalCounts(
     projectIds: readonly string[],
-    terminals: ReadonlyArray<{ projectId?: string; isExited?: boolean; isTrashed?: boolean }>
+    terminals: ReadonlyArray<{ projectId?: string; isExited?: boolean; isTrashed?: boolean }>,
+    degraded: boolean
   ): Promise<Map<string, number>> {
     const counts = new Map<string, number>();
-    if (terminals.some((t) => !t.projectId && !t.isExited)) {
+    if (!degraded && terminals.some((t) => !t.projectId && !t.isExited)) {
       const results = await Promise.allSettled(
         projectIds.map((id) => this.ptyClient!.getProjectStats(id).then((s) => [id, s] as const))
       );
@@ -345,7 +345,7 @@ export class ProjectStatsService {
 
       const { terminals: allTerminals, degraded } = await getSharedTerminalSnapshot(this.ptyClient);
       if (this.generation !== gen) return;
-      const terminalCounts = await this.getTerminalCounts(projectIds, allTerminals);
+      const terminalCounts = await this.getTerminalCounts(projectIds, allTerminals, degraded);
       if (this.generation !== gen) return;
 
       // Acknowledgement watermarks ride the same rows already fetched.

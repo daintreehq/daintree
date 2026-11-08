@@ -1542,6 +1542,24 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
       svc.stop();
     });
 
+    it("counts from the snapshot for an unowned terminal rather than asking a hung host", async () => {
+      const ptyClient = makePtyClient();
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
+      const svc = new ProjectStatsService(ptyClient as never);
+      await seenHealthy(ptyClient, svc);
+
+      ptyClient.getAllTerminalsWithCompletenessAsync.mockResolvedValue(
+        read([terminal("a", "p1"), terminal("d", "p1"), { id: "u", kind: "terminal" }], true)
+      );
+      svc.refresh();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(ptyClient.getProjectStats).not.toHaveBeenCalled();
+      expect(payload().p1.processCount).toBe(2);
+      expect(payload().p2.processCount).toBe(2);
+      svc.stop();
+    });
+
     it("believes the zero once a complete read reports it", async () => {
       const ptyClient = makePtyClient();
       projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
