@@ -1542,21 +1542,56 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
       svc.stop();
     });
 
-    it("counts from the snapshot for an unowned terminal rather than asking a hung host", async () => {
+    it("takes the host's count for an unowned terminal over the row it would have kept", async () => {
       const ptyClient = makePtyClient();
       projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
       const svc = new ProjectStatsService(ptyClient as never);
       await seenHealthy(ptyClient, svc);
 
+      ptyClient.getProjectStats.mockImplementation(async (id: string) => ({
+        projectId: id,
+        terminalCount: id === "p2" ? 3 : 0,
+      }));
+      ptyClient.getAllTerminalsWithCompletenessAsync.mockResolvedValue(
+        read([terminal("a", "p1"), { id: "u", kind: "terminal" }], true)
+      );
+      svc.refresh();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(payload().p2.processCount).toBe(3);
+      svc.stop();
+    });
+
+    it("still asks the host about an unowned terminal, whose owner that query stamps", async () => {
+      const ptyClient = makePtyClient();
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
+      const svc = new ProjectStatsService(ptyClient as never);
+      await seenHealthy(ptyClient, svc);
+
+      // A hung shard's per-workspace query resolves to zero, like the rest here.
       ptyClient.getAllTerminalsWithCompletenessAsync.mockResolvedValue(
         read([terminal("a", "p1"), terminal("d", "p1"), { id: "u", kind: "terminal" }], true)
       );
       svc.refresh();
       await vi.advanceTimersByTimeAsync(0);
 
-      expect(ptyClient.getProjectStats).not.toHaveBeenCalled();
+      expect(ptyClient.getProjectStats).toHaveBeenCalledWith("p1");
       expect(payload().p1.processCount).toBe(2);
       expect(payload().p2.processCount).toBe(2);
+      svc.stop();
+    });
+
+    it("does not let a per-workspace timeout zero what a complete snapshot saw", async () => {
+      const ptyClient = makePtyClient();
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+      ptyClient.getAllTerminalsWithCompletenessAsync.mockResolvedValue(
+        read([terminal("a", "p1"), { id: "u", kind: "terminal" }], false)
+      );
+      const svc = new ProjectStatsService(ptyClient as never);
+      svc.refresh();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(payload().p1.processCount).toBe(1);
       svc.stop();
     });
 
