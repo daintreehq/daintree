@@ -303,9 +303,10 @@ describe("preparePrChecks workflow and app qualifiers", () => {
   });
 
   it("leaves a legacy status bare beside a same-named check that has a source", () => {
-    expect(labels([check({ name: "build" }), check({ name: "build", workflow: "CI" })])).toEqual(
-      ["build", "CI / build"]
-    );
+    expect(labels([check({ name: "build" }), check({ name: "build", workflow: "CI" })])).toEqual([
+      "build",
+      "CI / build",
+    ]);
   });
 
   it("counts a collision across sections, so a failure is qualified against a namesake that passed", () => {
