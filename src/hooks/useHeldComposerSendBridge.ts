@@ -3,29 +3,38 @@ import { composerHoldClient } from "@/clients/composerHoldClient";
 import { notify } from "@/lib/notify";
 import { useHeldComposerSendStore } from "@/store/heldComposerSendStore";
 import { usePanelStore } from "@/store/panelStore";
-import type { ComposerHoldChange } from "@shared/types/ipc/composerHold";
+
+type PanelsById = ReturnType<typeof usePanelStore.getState>["panelsById"];
 
 /**
- * A drop its pane can't show: the pane was closed, or is in the trash. The
- * inbox says so, without the message, which stays in the pane's row should it
- * come back from the trash.
+ * A drop its pane can't show, because the pane was closed or is in the
+ * trash, whether the drop or the close came first. The inbox says so once,
+ * without the message, which stays in the pane's row should it come back from
+ * the trash.
  */
-function noteDropOutOfSight(change: ComposerHoldChange): void {
-  if (change.ended?.outcome.kind !== "dropped") return;
-  const panel = usePanelStore.getState().panelsById[change.terminalId];
-  if (panel !== undefined && panel.location !== "trash") return;
-  if (panel === undefined) useHeldComposerSendStore.getState().clearDropped(change.terminalId);
-  const title = panel?.title?.trim();
-  const message = title
-    ? `“${title}” closed before its held message was sent.`
-    : "A pane closed before its held message was sent.";
-  notify({
-    type: "info",
-    title: "Held message not sent",
-    message,
-    inboxMessage: message,
-    priority: "low",
-  });
+function reportDropsOutOfSight(
+  panels: PanelsById,
+  previous: PanelsById,
+  reported: Set<string>
+): void {
+  for (const [terminalId, note] of Object.entries(useHeldComposerSendStore.getState().dropped)) {
+    const panel = panels[terminalId];
+    if (panel !== undefined && panel.location !== "trash") continue;
+    if (reported.has(note.token)) continue;
+    reported.add(note.token);
+    const title = (panel ?? previous[terminalId])?.title?.trim();
+    const message = title
+      ? `“${title}” closed before its held message was sent.`
+      : "A pane closed before its held message was sent.";
+    notify({
+      type: "info",
+      title: "Held message not sent",
+      message,
+      inboxMessage: message,
+      priority: "low",
+    });
+  }
+  useHeldComposerSendStore.getState().forgetDroppedExcept(new Set(Object.keys(panels)));
 }
 
 /**
@@ -38,10 +47,13 @@ export function useHeldComposerSendBridge(): void {
     if (!window.electron?.composerHold) return;
     let disposed = false;
     const changedSinceSnapshot = new Set<string>();
+    const reported = new Set<string>();
     const offChanged = composerHoldClient.onChanged((change) => {
       changedSinceSnapshot.add(change.terminalId);
       useHeldComposerSendStore.getState().applyChange(change);
-      noteDropOutOfSight(change);
+      if (change.ended?.outcome.kind !== "dropped") return;
+      const { panelsById } = usePanelStore.getState();
+      reportDropsOutOfSight(panelsById, panelsById, reported);
     });
     void composerHoldClient
       .list()
@@ -61,9 +73,7 @@ export function useHeldComposerSendBridge(): void {
       });
     const offPanels = usePanelStore.subscribe((state, previous) => {
       if (state.panelsById === previous.panelsById) return;
-      useHeldComposerSendStore
-        .getState()
-        .forgetDroppedExcept(new Set(Object.keys(state.panelsById)));
+      reportDropsOutOfSight(state.panelsById, previous.panelsById, reported);
     });
     return () => {
       disposed = true;

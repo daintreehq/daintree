@@ -156,7 +156,7 @@ describe("HeldComposerSendRow", () => {
     expect(screen.queryByTestId("held-composer-send-dropped")).toBeNull();
   });
 
-  it("offers the text to copy, not to edit, when the pane has no composer", () => {
+  it("offers the text to copy, not to edit, when the pane has no composer", async () => {
     useHeldComposerSendStore.getState().applyChange({
       terminalId: "t1",
       held: null,
@@ -171,7 +171,10 @@ describe("HeldComposerSendRow", () => {
       "the agent's terminal ended"
     );
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
-    expect(screen.getByRole("button", { name: "Copy message" })).toBeTruthy();
+    const writeText = vi.fn(async (_text: string) => {});
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    fireEvent.click(screen.getByRole("button", { name: "Copy message" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("held text"));
   });
 
   it("keeps Withdraw but not Edit for a held send the pane can't edit into", () => {

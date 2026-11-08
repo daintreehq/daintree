@@ -50,7 +50,7 @@ function drivesProject(ctx: IpcContext, projectId: string): boolean {
   return !lease || !ctx.endpoint || lease.isDriving(projectId, ctx.endpoint);
 }
 
-async function handleHold(
+export async function handleHold(
   ctx: IpcContext,
   terminalId: string,
   text: string,
@@ -83,14 +83,17 @@ async function handleHold(
   const generation = ptyClient.getLiveGeneration(id);
   if (generation === null) return notBusy;
   const info = await ptyClient.getTerminalAsync(id).catch(() => null);
+  // A restart during the read started a run this wasn't written for, and a
+  // read that failed says nothing about whether sending now is safe: neither
+  // is held nor sent.
+  const unavailable: ComposerHoldResult = { held: false, reason: "unavailable" };
+  if (info === null || ptyClient.getLiveGeneration(id) !== generation) return unavailable;
   if (!holdsComposerSend(info)) return notBusy;
   if (info.projectId !== undefined && info.projectId !== projectId) return notBusy;
   const { getComposerSendHold } =
     await import("../../services/composerHold/composerSendHoldLive.js");
   const hold = await getComposerSendHold();
-  // Read again after the awaits. A restart in between started a run it wasn't
-  // written for, so it is neither held nor sent there.
-  if (ptyClient.getLiveGeneration(id) !== generation) return { held: false, reason: "unavailable" };
+  if (ptyClient.getLiveGeneration(id) !== generation) return unavailable;
   if (!drivesProject(ctx, projectId)) return notBusy;
   const admission = hold.hold({
     terminalId: id,

@@ -108,8 +108,21 @@ describe("useHeldComposerSendBridge", () => {
     expect(notify).toHaveBeenCalledTimes(1);
     expect(useHeldComposerSendStore.getState().dropped.gone).toBeUndefined();
 
-    act(() => client.push?.(dropped("t1")));
+    act(() => client.push?.(dropped("t1", "b")));
     act(() => panels.set({ panelsById: {} }));
     expect(useHeldComposerSendStore.getState().dropped).toEqual({});
+  });
+
+  it("says so in the inbox when the pane closes after its send dropped, once", async () => {
+    renderHook(() => useHeldComposerSendBridge());
+    await waitFor(() => expect(client.list).toHaveBeenCalled());
+    act(() => client.push?.(dropped("t1")));
+    expect(notify).not.toHaveBeenCalled();
+
+    act(() => panels.set({ panelsById: { t1: { title: "Gemini", location: "trash" } } }));
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0]![0].message).toContain("Gemini");
+    act(() => panels.set({ panelsById: {} }));
+    expect(notify).toHaveBeenCalledTimes(1);
   });
 });

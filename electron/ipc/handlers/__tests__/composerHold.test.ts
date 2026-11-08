@@ -1,6 +1,21 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../../window/serviceRefs.js", () => ({ getPtyClient: () => null }));
+const pty = vi.hoisted(() => ({
+  generation: 4 as number | null,
+  read: undefined as undefined | (() => Promise<unknown>),
+  client: {
+    getTerminalProjectId: () => "project-1",
+    getLiveGeneration: () => pty.generation,
+    getTerminalAsync: () => pty.read!(),
+  },
+}));
+vi.mock("../../../window/serviceRefs.js", () => ({ getPtyClient: () => pty.client }));
+
+const queue = vi.hoisted(() => ({ hold: vi.fn() }));
+vi.mock("../../../services/composerHold/composerSendHoldLive.js", () => ({
+  getComposerSendHold: async () => queue,
+  peekComposerSendHold: () => queue,
+}));
 vi.mock("../../../services/DriveLeaseService.js", () => ({ peekDriveLeaseService: () => null }));
 vi.mock("../../../../shared/config/agentRegistry.js", async (importOriginal) => {
   const actual =
@@ -16,7 +31,8 @@ vi.mock("../../../../shared/config/agentRegistry.js", async (importOriginal) => 
   };
 });
 
-import { holdsComposerSend } from "../composerHold.js";
+import { handleHold, holdsComposerSend } from "../composerHold.js";
+import type { IpcContext } from "../../types.js";
 import type { NotifyTerminalInfo } from "../../../services/mcp-server/terminalNotify.js";
 
 function info(overrides: Partial<NotifyTerminalInfo> = {}): NotifyTerminalInfo {
@@ -50,5 +66,61 @@ describe("holdsComposerSend", () => {
     expect(holdsComposerSend(info({ isExited: true }))).toBe(false);
     expect(holdsComposerSend(info({ isTrashed: true }))).toBe(false);
     expect(holdsComposerSend(info({ isClosing: true }))).toBe(false);
+  });
+});
+
+describe("handleHold", () => {
+  const ctx = { projectId: "project-1", endpoint: undefined } as unknown as IpcContext;
+
+  beforeEach(() => {
+    pty.generation = 4;
+    queue.hold.mockReset().mockReturnValue({ ok: true, send: { token: "t" } });
+  });
+
+  it("holds for this view's busy agent", async () => {
+    pty.read = async () => info({ projectId: "project-1" });
+    await expect(handleHold(ctx, "term-1", "ship it")).resolves.toMatchObject({ held: true });
+    expect(queue.hold).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalId: "term-1", projectId: "project-1", generation: 4 })
+    );
+  });
+
+  it("answers unavailable, never send-now, for a run restarted during the read", async () => {
+    pty.read = async () => {
+      pty.generation = 5;
+      return info({ agentState: "waiting", waitingReason: "prompt" });
+    };
+    await expect(handleHold(ctx, "term-1", "ship it")).resolves.toEqual({
+      held: false,
+      reason: "unavailable",
+    });
+    expect(queue.hold).not.toHaveBeenCalled();
+  });
+
+  it("answers unavailable for a terminal it couldn't read", async () => {
+    pty.read = async () => {
+      throw new Error("timed out");
+    };
+    await expect(handleHold(ctx, "term-1", "ship it")).resolves.toEqual({
+      held: false,
+      reason: "unavailable",
+    });
+  });
+
+  it("lets a settled agent's send go as before", async () => {
+    pty.read = async () => info({ agentState: "waiting", waitingReason: "prompt" });
+    await expect(handleHold(ctx, "term-1", "ship it")).resolves.toEqual({
+      held: false,
+      reason: "not-busy",
+    });
+  });
+
+  it("passes on the queue's refusal", async () => {
+    pty.read = async () => info();
+    queue.hold.mockReturnValue({ ok: false, reason: "already-held" });
+    await expect(handleHold(ctx, "term-1", "ship it")).resolves.toEqual({
+      held: false,
+      reason: "already-held",
+    });
   });
 });
