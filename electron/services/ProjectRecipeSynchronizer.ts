@@ -105,6 +105,43 @@ export class ProjectRecipeSynchronizer {
   }
 
   /**
+   * Stores this machine's copy of a team recipe the renderer just wrote to
+   * `.daintree/recipes/`, env values included (#16446). The committed file
+   * blanks every value and reconciliation restores them only from this mirror,
+   * so without it a value set in the editor is gone on the next load.
+   *
+   * The entry takes the shape reconciliation would give it, so the next
+   * reconcile changes nothing but what the canonical file changed: the
+   * machine-local scope and usage fields stay those of the existing entry, and a
+   * new entry carries none, as a backfilled one doesn't.
+   */
+  async writeInRepoRecipeMirror(projectId: string, recipe: TerminalRecipe): Promise<void> {
+    const {
+      projectId: _p,
+      worktreeId: _w,
+      lastUsedAt: _l,
+      usageHistory: _u,
+      shadowedBy: _s,
+      ...shared
+    } = recipe;
+    await this.fileStore.enqueueRecipesUpdate(projectId, async (readFileStoreRecipes) => {
+      const recipes = await readFileStoreRecipes();
+      const index = recipes.findIndex((r) => r.id === recipe.id);
+      if (index === -1) return [...recipes, shared];
+      const existing = recipes[index]!;
+      const next = [...recipes];
+      next[index] = {
+        ...shared,
+        projectId: existing.projectId,
+        worktreeId: existing.worktreeId,
+        lastUsedAt: existing.lastUsedAt,
+        usageHistory: existing.usageHistory,
+      };
+      return next;
+    });
+  }
+
+  /**
    * Refuses a write into `.daintree/recipes/` that would delete content this
    * build cannot represent (#12261).
    *

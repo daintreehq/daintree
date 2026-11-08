@@ -15,6 +15,8 @@ const projectStoreMock = vi.hoisted(() => ({
   deleteRecipe: vi.fn(),
   readInRepoRecipes: vi.fn(() => []),
   writeInRepoRecipe: vi.fn(),
+  writeInRepoRecipeChecked: vi.fn(),
+  writeInRepoRecipeMirror: vi.fn(),
   assertInRepoRecipesForwardCompatible: vi.fn(),
   deleteInRepoRecipe: vi.fn(),
   reconcileProjectRecipes: vi.fn(() => []),
@@ -287,6 +289,41 @@ describe("projectRecipes IPC adversarial", () => {
       })
     ).rejects.toThrow(/secret.*github-pat|GITHUB_TOKEN/i);
     expect(projectStoreMock.writeInRepoRecipe).not.toHaveBeenCalled();
+    expect(projectStoreMock.writeInRepoRecipeChecked).not.toHaveBeenCalled();
+    expect(projectStoreMock.writeInRepoRecipeMirror).not.toHaveBeenCalled();
+  });
+
+  it("updateInRepoRecipe keeps env values in the local mirror once the shared file is written", async () => {
+    projectStoreMock.getProjectById.mockReturnValueOnce({ path: "/repo" } as never);
+    const order: string[] = [];
+    projectStoreMock.writeInRepoRecipeChecked.mockImplementationOnce(async () => {
+      order.push("file");
+    });
+    projectStoreMock.writeInRepoRecipeMirror.mockImplementationOnce(async () => {
+      order.push("mirror");
+    });
+    const recipe = { ...validRecipe(), terminals: [{ type: "terminal", env: { PORT: "4000" } }] };
+
+    await getHandler(CHANNELS.PROJECT_UPDATE_INREPO_RECIPE)(fakeEvent(), {
+      projectId: "p1",
+      recipe,
+    });
+
+    expect(order).toEqual(["file", "mirror"]);
+    expect(projectStoreMock.writeInRepoRecipeMirror).toHaveBeenCalledWith("p1", recipe);
+  });
+
+  it("updateInRepoRecipe leaves the mirror alone when the shared file write is refused", async () => {
+    projectStoreMock.getProjectById.mockReturnValueOnce({ path: "/repo" } as never);
+    projectStoreMock.writeInRepoRecipeChecked.mockRejectedValueOnce(new Error("stale"));
+
+    await expect(
+      getHandler(CHANNELS.PROJECT_UPDATE_INREPO_RECIPE)(fakeEvent(), {
+        projectId: "p1",
+        recipe: { ...validRecipe(), terminals: [{ type: "terminal", env: { PORT: "4000" } }] },
+      })
+    ).rejects.toThrow("stale");
+    expect(projectStoreMock.writeInRepoRecipeMirror).not.toHaveBeenCalled();
   });
 
   it("addRecipe rejects a context-dependent secret (AWS key named via env key)", async () => {

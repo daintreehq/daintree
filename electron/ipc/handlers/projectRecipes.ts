@@ -282,6 +282,9 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
       // for the old recipe id self-heals on the next loadRecipes.
       await projectStore.deleteInRepoRecipe(project.path, previousName);
     }
+    // The file just written keeps env names only; this machine's values live
+    // in the mirror, which reconciliation reads them back from (#16446).
+    await projectStore.writeInRepoRecipeMirror(projectId, recipe);
   };
   handlers.push(
     typedHandle(CHANNELS.PROJECT_UPDATE_INREPO_RECIPE, handleProjectUpdateInRepoRecipe)

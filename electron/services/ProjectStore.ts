@@ -491,6 +491,10 @@ export class ProjectStore {
     return this.recipeSynchronizer.writeInRepoRecipeChecked(projectPath, recipe, options);
   }
 
+  async writeInRepoRecipeMirror(projectId: string, recipe: TerminalRecipe): Promise<void> {
+    return this.recipeSynchronizer.writeInRepoRecipeMirror(projectId, recipe);
+  }
+
   async assertInRepoRecipesForwardCompatible(
     projectPath: string,
     recipeNames: string[]

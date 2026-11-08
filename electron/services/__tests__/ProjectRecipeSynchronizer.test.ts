@@ -108,4 +108,75 @@ describe("ProjectRecipeSynchronizer", () => {
     expect(diskCallsInTurn).toEqual([true, true]);
     expect(mirror.map((r) => r.id).sort()).toEqual(["canonical-only", "local-only"]);
   });
+
+  describe("writeInRepoRecipeMirror", () => {
+    const projectId = "a".repeat(64);
+
+    it("keeps a team recipe's env values through the next reconcile, while the file blanks them", async () => {
+      const recipe = makeRecipe({
+        id: "team-env",
+        name: "Team Env",
+        scope: "inrepo",
+        worktreeId: "wt-1",
+        terminals: [{ type: "terminal", command: "npm run dev", env: { PORT: "4000", MODE: "" } }],
+      });
+
+      await sync.writeInRepoRecipeChecked(projectPath, recipe);
+      await sync.writeInRepoRecipeMirror(projectId, recipe);
+
+      const file = JSON.parse(
+        await fs.readFile(path.join(projectPath, ".daintree", "recipes", "team-env.json"), "utf-8")
+      ) as TerminalRecipe;
+      expect(file.terminals[0]!.env).toEqual({ PORT: "", MODE: "" });
+      // A new entry is shaped like a backfilled one: no machine-local scope.
+      expect(mirror).toHaveLength(1);
+      expect(mirror[0]!.projectId).toBeUndefined();
+      expect(mirror[0]!.worktreeId).toBeUndefined();
+
+      await sync.reconcileProjectRecipes(projectPath, projectId);
+
+      expect(mirror).toHaveLength(1);
+      expect(mirror[0]!.terminals[0]!.env).toEqual({ PORT: "4000", MODE: "" });
+    });
+
+    it("replaces an existing entry's content but keeps its machine-local fields", async () => {
+      const other = makeRecipe({ id: "other", name: "Other" });
+      mirror = [
+        makeRecipe({
+          id: "team-env",
+          name: "Old Name",
+          scope: "inrepo",
+          projectId,
+          worktreeId: "wt-1",
+          lastUsedAt: 50,
+          usageHistory: [40, 50],
+          terminals: [{ type: "terminal", env: { STALE: "x" } }],
+        }),
+        other,
+      ];
+
+      await sync.writeInRepoRecipeMirror(
+        projectId,
+        makeRecipe({
+          id: "team-env",
+          name: "New Name",
+          scope: "inrepo",
+          projectId: "renderer-copy",
+          lastUsedAt: 10,
+          shadowedBy: "New Name",
+          terminals: [{ type: "claude", env: { FRESH: "y" } }],
+        })
+      );
+
+      expect(mirror[1]).toBe(other);
+      const entry = mirror[0]!;
+      expect(entry.name).toBe("New Name");
+      expect(entry.terminals).toEqual([{ type: "claude", env: { FRESH: "y" } }]);
+      expect(entry.projectId).toBe(projectId);
+      expect(entry.worktreeId).toBe("wt-1");
+      expect(entry.lastUsedAt).toBe(50);
+      expect(entry.usageHistory).toEqual([40, 50]);
+      expect(entry).not.toHaveProperty("shadowedBy");
+    });
+  });
 });
