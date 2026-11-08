@@ -7,7 +7,7 @@ export const config: AgentConfig = {
   // -x/--execute runs one-shot. The TUI ignores positionals, so the
   // interactive positional form is best-effort.
   initialPromptForm: {
-    interactive: { args: ["{prompt}"], shortfall: "may-ignore" },
+    interactive: { args: ["{prompt}"], caveat: "may-be-ignored" },
     headless: { args: ["-x", "{prompt}"] },
   },
   color: "#F34E3F",

@@ -1,6 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { generateAgentCommand } from "../agentSettings.js";
-import { AGENT_REGISTRY } from "../../config/agentRegistry.js";
+import {
+  AGENT_REGISTRY,
+  PROMPT_FORM_PLACEHOLDER,
+  setUserRegistry,
+} from "../../config/agentRegistry.js";
+import type { AgentConfig } from "../../config/agentRegistry.js";
+import {
+  registerPluginAgents,
+  clearPluginAgentRegistryForTests,
+} from "../../config/pluginAgentRegistry.js";
 import { BUILT_IN_AGENT_IDS } from "../../config/agentIds.js";
 import { setAgentCommandDialectResolver } from "../../utils/shellEscape.js";
 import type { GenerateAgentCommandOptions } from "../agentSettings.js";
@@ -303,5 +312,120 @@ describe("built-in launch commands across prompt forms", () => {
         },
       }
     `);
+  });
+});
+
+describe("built-in prompt form declarations", () => {
+  it("carry the prompt as exactly one whole argument in every declared form", () => {
+    for (const config of Object.values(AGENT_REGISTRY)) {
+      for (const form of Object.values(config.initialPromptForm ?? {})) {
+        const whole = form.args.filter((arg) => arg === PROMPT_FORM_PLACEHOLDER);
+        const embedded = form.args.filter(
+          (arg) => arg !== PROMPT_FORM_PLACEHOLDER && arg.includes(PROMPT_FORM_PLACEHOLDER)
+        );
+        expect({ agent: config.id, whole: whole.length, embedded }).toEqual({
+          agent: config.id,
+          whole: 1,
+          embedded: [],
+        });
+      }
+    }
+  });
+});
+
+describe("agents that declare no prompt form", () => {
+  afterEach(() => {
+    clearPluginAgentRegistryForTests();
+    setUserRegistry({});
+  });
+
+  const agentBase = { name: "Agent", color: "#3366ff", iconId: "terminal" };
+
+  it("hand a plugin agent the prompt positionally in both modes", () => {
+    registerPluginAgents("me.extra-agents", [
+      { ...agentBase, id: "pi", command: "pi", args: ["--profile", "work"] },
+    ]);
+    for (const interactive of [true, false]) {
+      expect(generateAgentCommand("pi", {}, "pi", { interactive, initialPrompt: "Fix it" })).toBe(
+        "pi --profile 'work' 'Fix it'"
+      );
+    }
+  });
+
+  it("hand a user agent, an unknown agent and an unnamed one the prompt positionally", () => {
+    setUserRegistry({
+      mine: { ...agentBase, id: "mine", command: "mine", supportsContextInjection: false },
+    });
+    expect(generateAgentCommand("mine", {}, "mine", { initialPrompt: "Fix it" })).toBe(
+      "mine 'Fix it'"
+    );
+    expect(
+      generateAgentCommand("ghost", {}, "ghost", { interactive: false, initialPrompt: "Fix it" })
+    ).toBe("ghost 'Fix it'");
+    expect(generateAgentCommand("tool", {}, undefined, { initialPrompt: "Fix it" })).toBe(
+      "tool 'Fix it'"
+    );
+  });
+});
+
+describe("a declared prompt form", () => {
+  afterEach(() => setUserRegistry({}));
+
+  function declare(config: Partial<AgentConfig>): void {
+    setUserRegistry({
+      task: {
+        id: "task",
+        name: "Task",
+        command: "task",
+        color: "#3366ff",
+        iconId: "terminal",
+        supportsContextInjection: false,
+        ...config,
+      },
+    });
+  }
+
+  it("quotes a declared word the shell would split, keeping the prompt one argument", () => {
+    declare({
+      initialPromptForm: {
+        interactive: { args: ["--task", PROMPT_FORM_PLACEHOLDER, "--mode", "fast; rm -rf"] },
+        headless: { args: ["--print", PROMPT_FORM_PLACEHOLDER] },
+      },
+    });
+    expect(generateAgentCommand("task", {}, "task", { initialPrompt: "-n it's broken" })).toBe(
+      "task --task '-n it'\\''s broken' --mode 'fast; rm -rf'"
+    );
+    expect(
+      generateAgentCommand("task", {}, "task", { interactive: false, initialPrompt: "Fix it" })
+    ).toBe("task --print 'Fix it'");
+  });
+
+  it("swaps a registry subcommand only where the registry carries it", () => {
+    const form = {
+      subcommand: { name: "run", replaces: "session" },
+      args: ["-t", PROMPT_FORM_PLACEHOLDER],
+    };
+    declare({
+      args: ["session", "--verbose"],
+      initialPromptForm: { interactive: form, headless: form },
+    });
+    expect(generateAgentCommand("task", {}, "task", { initialPrompt: "Fix it" })).toBe(
+      "task run --verbose -t 'Fix it'"
+    );
+
+    // The same word in a preset is that preset's value, not the subcommand.
+    declare({ args: ["--verbose"], initialPromptForm: { interactive: form, headless: form } });
+    expect(
+      generateAgentCommand("task", {}, "task", {
+        initialPrompt: "Fix it",
+        presetArgs: ["--name", "session"],
+      })
+    ).toBe("task run --verbose --name 'session' -t 'Fix it'");
+  });
+
+  it("applies nothing to a launch without a prompt", () => {
+    for (const initialPrompt of [undefined, "", "   "]) {
+      expect(generateAgentCommand("goose", {}, "goose", { initialPrompt })).toBe("goose 'session'");
+    }
   });
 });

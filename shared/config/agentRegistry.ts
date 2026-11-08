@@ -652,13 +652,13 @@ export interface AgentPromptForm {
   /**
    * Set when the CLI is known not to open this mode on the prompt, as the
    * CLI itself was observed to behave:
-   * - `may-ignore`: the CLI can start without acting on it (a TUI that drops
-   *   positionals, or one with no flag to pre-seed its input).
+   * - `may-be-ignored`: the CLI can start without acting on it (a TUI that
+   *   drops positionals, or one with no flag to pre-seed its input).
    * - `exits-after-reply`: the CLI answers the prompt and exits instead of
    *   staying in the mode.
-   * Omitted means nothing is known against it.
+   * Omitted means no limitation is recorded, not that the form was verified.
    */
-  shortfall?: "may-ignore" | "exits-after-reply";
+  caveat?: "may-be-ignored" | "exits-after-reply";
 }
 
 /** An agent's {@link AgentPromptForm} for each launch mode. */

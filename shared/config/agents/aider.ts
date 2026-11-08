@@ -10,7 +10,7 @@ export const config: AgentConfig = {
   // Positionals are filenames, and -m sends one message then exits: no
   // interactive-with-prompt mode exists.
   initialPromptForm: {
-    interactive: { args: ["-m", "{prompt}"], shortfall: "exits-after-reply" },
+    interactive: { args: ["-m", "{prompt}"], caveat: "exits-after-reply" },
     headless: { args: ["-m", "{prompt}"] },
   },
   color: "#14B014",
