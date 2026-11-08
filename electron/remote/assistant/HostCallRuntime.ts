@@ -952,8 +952,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     () => this.clock().mono,
     RELAY_NOTICE_WINDOW_MS
   );
-  /** Each host's latest read of the agents it lists, for those launches: when it started, and whether it is out. */
-  private readonly launchedAgentReads = new Map<HostId, { at: number; out: boolean }>();
+  /** Each host's latest read of the agents it lists, for those launches: when it started, and its end while out. */
+  private readonly launchedAgentReads = new Map<HostId, { at: number; end: (() => void) | null }>();
   /**
    * Hosts each help session asked to hold a message for a worker (#16187), so
    * its end reaches them: a held message is never typed after it.
@@ -1054,6 +1054,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     const host = this.deps.hosts().find((candidate) => candidate.hostId === hostId);
     if (!host) {
       this.launchedAgents.forgetHost(hostId);
+      this.launchedAgentReads.get(hostId)?.end?.();
       this.launchedAgentReads.delete(hostId);
       return false;
     }
@@ -1078,17 +1079,20 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     if (!list) return;
     const at = this.clock().mono;
     const last = this.launchedAgentReads.get(hostId);
-    if (last !== undefined && (last.out || at - last.at < LAUNCHED_AGENTS_READ_MS)) return;
-    const read = { at, out: true };
+    if (last !== undefined && (last.end !== null || at - last.at < LAUNCHED_AGENTS_READ_MS)) return;
+    const read: { at: number; end: (() => void) | null } = { at, end: null };
     this.launchedAgentReads.set(hostId, read);
-    void withinMs(
-      Promise.resolve().then(() => list(hostId)),
-      LAUNCHED_AGENTS_READ_TIMEOUT_MS,
-      null
-    )
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // Ended early by dispose or the host's removal, so no timer outlives either.
+    const late = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), LAUNCHED_AGENTS_READ_TIMEOUT_MS);
+      read.end = () => resolve(null);
+    });
+    void Promise.race([Promise.resolve().then(() => list(hostId)), late])
       .then(
         (listed) => {
           if (this.disposed || listed === null || !listed.complete) return;
+          if (this.launchedAgentReads.get(hostId) !== read) return;
           const terminalIds = new Set(listed.targets.map((target) => target.terminalId));
           this.launchedAgents.listed(hostId, terminalIds, at);
         },
@@ -1097,7 +1101,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         }
       )
       .finally(() => {
-        read.out = false;
+        clearTimeout(timer);
+        read.end = null;
       });
   }
 
@@ -1503,7 +1508,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       this.noticePins.set(callId, pin);
     }
     const launch = this.tracksLaunch(hostId, tool);
-    if (launch) this.launchedAgents.launching(hostId, callId);
+    if (launch) this.launchedAgents.launching(hostId, run.sessionId, callId);
     let settled = false;
     return {
       ran: (result) => {
@@ -1515,7 +1520,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
       notRun: () => {
         if (settled) return;
         settled = true;
-        if (launch) this.launchedAgents.launchFailed(callId);
+        if (launch) this.launchedAgents.launchFailed(hostId, callId);
         if (pin !== undefined) {
           if (this.noticePins.get(callId) === pin) this.noticePins.delete(callId);
           if (this.settledPins.get(callId) === pin) this.settledPins.delete(callId);
@@ -1535,6 +1540,8 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     if (out !== undefined) return { hostId: out.hostId, helpSessionId: out.helpSessionId };
     const pin = this.pinOf(callId);
     if (pin !== undefined) return { hostId: pin.hostId, helpSessionId: pin.run.sessionId };
+    const launch = this.launchedAgents.launchOf(callId);
+    if (launch !== null) return launch;
     for (const [key, marks] of this.prompted) {
       const mark = marks.find((candidate) => candidate.callId === callId);
       if (mark !== undefined) {
@@ -1581,6 +1588,7 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
     this.hostWatches.dispose();
     this.throwawaySessions.clear();
     this.launchedAgents.clear();
+    for (const read of this.launchedAgentReads.values()) read.end?.();
     this.launchedAgentReads.clear();
     this.heldSendHosts.clear();
     this.callsOut.clear();
@@ -1730,8 +1738,10 @@ export class HostCallRuntime implements HostControlRuntimeHandle {
         // A tool error may still have run some of a batch before it failed.
         case "done": {
           noted.ran(answer.result);
-          // A resend's too: it may be the answer its first send lost.
-          if (this.tracksLaunch(args.hostId, args.tool)) {
+          // A resend's too: it may be the answer its first send lost. One with
+          // nothing readable (a tool that threw or ran out of time after it
+          // was dispatched) may still have launched, so it stays held as lost.
+          if (this.tracksLaunch(args.hostId, args.tool) && answer.result.structured !== null) {
             this.launchedAgents.launched(
               args.hostId,
               callId,

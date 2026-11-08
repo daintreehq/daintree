@@ -13,11 +13,12 @@ const MAX_LAUNCHED_AGENTS = 512;
 /** Agents seen ended, kept so an answer replayed from before can't bring one back. */
 const MAX_ENDED_AGENTS = 1024;
 /**
- * How long a terminal a launch just named may go unlisted: the host answers
- * once the panel exists and its process is starting, which a list read at
- * that moment may not show yet.
+ * How long an agent the host has never listed is given to show up: a launch
+ * answers once its pane exists, and the pane may wait on memory pressure or a
+ * drive lease before its process starts. One that never shows, a spawn that
+ * failed after the answer, is let go after this rather than held for days.
  */
-export const LAUNCHED_AGENT_LISTING_GRACE_MS = 30_000;
+export const LAUNCHED_AGENT_UNLISTED_MS = 10 * 60_000;
 
 export function launchesAgents(tool: string): boolean {
   return AGENT_LAUNCH_TOOLS.has(tool);
@@ -55,9 +56,15 @@ interface Hold {
   until: number;
 }
 
+interface Launch extends Hold {
+  helpSessionId: string;
+}
+
 interface Agent extends Hold {
   terminalId: string;
   learntAt: number;
+  /** The host has listed it: the next full list without it means it ended. */
+  listed: boolean;
 }
 
 const agentKey = (hostId: HostId, terminalId: string): string => `${hostId}\u0000${terminalId}`;
@@ -66,14 +73,15 @@ const agentKey = (hostId: HostId, terminalId: string): string => `${hostId}\u000
  * The agents this Shell's assistants launched on hosts (#16492), so a host's
  * link stays up while they may still run there and every window reads the
  * host's own counts of them. Each is held until a full list of the host's
- * agents, read after it was named, no longer lists it, or its bound passes.
- * A launch whose answer was lost may have started an agent this Shell can't
- * name, so it is held for the whole bound. Bounds are kept on a monotonic
- * clock, and nothing here runs a timer: each is read when the idle sweep asks.
+ * agents no longer lists it (one it never listed is first given time to
+ * start), or its bound passes. A launch whose answer was lost or unreadable
+ * may have started an agent this Shell can't name, so it is held for the
+ * whole bound. Bounds are kept on a monotonic clock, and nothing here runs a
+ * timer: each is read when the idle sweep asks.
  */
 export class LaunchedAgents {
   /** Launches sent whose answer hasn't named their terminals yet, by callId. */
-  private readonly launches = new Map<string, Hold>();
+  private readonly launches = new Map<string, Launch>();
   private readonly agents = new Map<string, Agent>();
   private readonly ended = new Set<string>();
 
@@ -82,18 +90,24 @@ export class LaunchedAgents {
     private readonly holdMs: number
   ) {}
 
-  /** A launch about to be sent: held until its answer names what it started. A resend keeps the first send's bound. */
-  launching(hostId: HostId, callId: string): void {
+  /** A launch about to be sent: held until its answer names what it started. */
+  launching(hostId: HostId, helpSessionId: string, callId: string): void {
     const now = this.mono();
     this.prune(now);
     if (this.launches.has(callId)) return;
-    this.launches.set(callId, { hostId, until: now + this.holdMs });
+    this.launches.set(callId, { hostId, helpSessionId, until: now + this.holdMs });
     trim(this.launches, MAX_LAUNCHED_AGENTS);
   }
 
-  /** The launch sent under `callId` is known not to have started anything. */
-  launchFailed(callId: string): void {
-    this.launches.delete(callId);
+  /** Who a launch still held under `callId` was sent by, so another can't take its id over. */
+  launchOf(callId: string): { hostId: HostId; helpSessionId: string } | null {
+    const launch = this.launches.get(callId);
+    return launch ? { hostId: launch.hostId, helpSessionId: launch.helpSessionId } : null;
+  }
+
+  /** The launch sent to `hostId` under `callId` is known not to have started anything. */
+  launchFailed(hostId: HostId, callId: string): void {
+    if (this.launches.get(callId)?.hostId === hostId) this.launches.delete(callId);
   }
 
   /** A launch's answer named the terminals it started, none when it started nothing. */
@@ -107,7 +121,7 @@ export class LaunchedAgents {
     for (const terminalId of terminalIds) {
       const key = agentKey(hostId, terminalId);
       if (this.ended.has(key) || this.agents.has(key)) continue;
-      this.agents.set(key, { hostId, terminalId, until, learntAt: now });
+      this.agents.set(key, { hostId, terminalId, until, learntAt: now, listed: false });
     }
     trim(this.agents, MAX_LAUNCHED_AGENTS);
   }
@@ -121,13 +135,18 @@ export class LaunchedAgents {
   }
 
   /**
-   * A full list of the host's agent terminals, read from `readAt`: an agent
-   * named long enough before it and missing from it has ended there.
+   * A full list of the host's agent terminals, asked for at `readAt`. An
+   * agent missing from it has ended there once the host has listed it
+   * before, or once it was named long enough before the read to have started.
    */
   listed(hostId: HostId, terminalIds: ReadonlySet<string>, readAt: number): void {
     for (const [key, agent] of [...this.agents]) {
-      if (agent.hostId !== hostId || terminalIds.has(agent.terminalId)) continue;
-      if (agent.learntAt + LAUNCHED_AGENT_LISTING_GRACE_MS > readAt) continue;
+      if (agent.hostId !== hostId) continue;
+      if (terminalIds.has(agent.terminalId)) {
+        agent.listed = true;
+        continue;
+      }
+      if (!agent.listed && agent.learntAt + LAUNCHED_AGENT_UNLISTED_MS > readAt) continue;
       this.agents.delete(key);
       this.ended.add(key);
     }

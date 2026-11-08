@@ -472,6 +472,7 @@ describe("ProjectHostsGroup", () => {
     presence = [has("linux")];
     lists.linux = [worktree("remote-p", "feature/a", [working("t1"), waiting("t2")])];
     const { rerender } = render(<ProjectHostsGroup projectId={PROJECT} />);
+    expect(hasRow("linux")).toBe(false);
     expect(locate).not.toHaveBeenCalled();
     expect(listWorktrees).not.toHaveBeenCalledWith({ hostId: "linux" });
 
