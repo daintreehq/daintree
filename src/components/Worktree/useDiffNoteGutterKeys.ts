@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef } from "react";
-import type { FocusEvent, KeyboardEvent } from "react";
+import type { FocusEvent, KeyboardEvent, RefObject } from "react";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { describeAnchor } from "./DiffNoteWidgets";
 import { hashLineRange, type DiffLineIndex, type DiffNoteLines, type DiffNoteSide } from "./diffNotes";
@@ -76,6 +76,10 @@ function acrossColumns(root: HTMLElement, from: HTMLElement, step: 1 | -1): HTML
 }
 
 interface DiffNoteGutterKeysOptions {
+  /** Holds the table. The handlers below go on this same element. */
+  rootRef: RefObject<HTMLElement | null>;
+  /** The keys hint, shown while a line number has keyboard focus. */
+  hintRef: RefObject<HTMLElement | null>;
   enabled: boolean;
   /** Split columns: Up and Down keep to a column, Left and Right cross it. */
   columns: boolean;
@@ -98,6 +102,8 @@ interface DiffNoteGutterKeysOptions {
  * -1 and never writes the attribute again, since the prop doesn't change.
  */
 export function useDiffNoteGutterKeys({
+  rootRef,
+  hintRef,
   enabled,
   columns,
   lineIndex,
@@ -106,8 +112,6 @@ export function useDiffNoteGutterKeys({
   onStartDraft,
   onOpenLines,
 }: DiffNoteGutterKeysOptions) {
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const hintRef = useRef<HTMLParagraphElement | null>(null);
   const stopRef = useRef<HTMLElement | null>(null);
 
   // Every commit, not on a dependency: the stop's row can go with a staged
@@ -214,5 +218,5 @@ export function useDiffNoteGutterKeys({
     setSelection(null);
   };
 
-  return { rootRef, hintRef, onKeyDown, onFocus, onBlur };
+  return { onKeyDown, onFocus, onBlur };
 }

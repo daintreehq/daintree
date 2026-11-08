@@ -1288,7 +1288,11 @@ function FileDiff({
     };
   }, [notesEnabled, startLineDraft]);
 
+  const fileRootRef = useRef<HTMLDivElement | null>(null);
+  const noteKeysHintRef = useRef<HTMLParagraphElement | null>(null);
   const gutterKeys = useDiffNoteGutterKeys({
+    rootRef: fileRootRef,
+    hintRef: noteKeysHintRef,
     enabled: notesEnabled,
     columns: viewType === "split" && isTwoColumnDiff(diffType),
     lineIndex: renderedLineIndex,
@@ -1859,7 +1863,7 @@ function FileDiff({
 
   return (
     <div
-      ref={gutterKeys.rootRef}
+      ref={fileRootRef}
       className="mb-2"
       style={fileStyle}
       data-diff-file=""
@@ -1953,7 +1957,7 @@ function FileDiff({
               numbers have roved. Every number's description, so it stays in the
               DOM while hidden. */}
           {notesEnabled && (
-            <p ref={gutterKeys.hintRef} id={noteKeysHintId} className="diff-note-keys">
+            <p ref={noteKeysHintRef} id={noteKeysHintId} className="diff-note-keys">
               Arrow keys move · Shift+arrows select lines · Enter adds a note
               {noteDraft?.kind === "lines" && " · Shift+Enter extends the open note"}
             </p>

@@ -146,8 +146,8 @@
    untargeted ones, and the scroll margin clears the sticky file header. */
 .diff-viewer .diff-line-number[data-note-line] {
   display: inline-block;
-  margin-inline: -4px;
-  padding-inline: 4px;
+  margin-inline: -3px;
+  padding-inline: 3px;
   border-radius: var(--radius-xs);
   scroll-margin-block: 56px;
 }
