@@ -104,6 +104,17 @@ export function JiraSettingsTab() {
     );
   };
 
+  // A connection that didn't check out must not replace one that did: the saved
+  // token would go on working against settings it was never checked with.
+  const restoreConnection = async (previous: { siteUrl: string; email: string } | null) => {
+    if (!previous) return;
+    try {
+      await writeConnection(previous.siteUrl, previous.email);
+    } catch (err) {
+      logError("Failed to restore the Jira connection", err);
+    }
+  };
+
   const handleSave = async () => {
     if (busyRef.current) return;
     const nextSiteUrl = normalizeSiteUrl(siteUrl);
@@ -119,16 +130,6 @@ export function JiraSettingsTab() {
     busyRef.current = true;
     setIsSaving(true);
     let previous: { siteUrl: string; email: string } | null = null;
-    // A connection that didn't check out must not replace one that did: the saved
-    // token would go on working against settings it was never checked with.
-    const restoreConnection = async () => {
-      if (!previous) return;
-      try {
-        await writeConnection(previous.siteUrl, previous.email);
-      } catch (err) {
-        logError("Failed to restore the Jira connection", err);
-      }
-    };
     try {
       const snapshot = await window.electron.plugin.getSettingValues(JIRA_PLUGIN_ID, "user", null);
       previous = {
@@ -147,12 +148,12 @@ export function JiraSettingsTab() {
         setSignedInAs(validation.account ?? null);
         void actionService.dispatch("worktree.refresh", undefined, { source: "user" });
       } else {
-        await restoreConnection();
+        await restoreConnection(previous);
         setSaveError(validation.error || "Jira didn't accept these details");
       }
     } catch (err) {
       logError("Failed to save the Jira connection", err);
-      await restoreConnection();
+      await restoreConnection(previous);
       setSaveError("Couldn't save the Jira connection");
     } finally {
       busyRef.current = false;

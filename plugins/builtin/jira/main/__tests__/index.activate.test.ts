@@ -1,6 +1,8 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { getPluginManifestSchema } from "../../../../../electron/schemas/plugin.js";
+import { validateForgeImplRoles } from "../../../../../electron/services/forgeProviderRegistry.js";
 import { DEFAULT_DISABLED_PLUGIN_IDS } from "../../../../../shared/config/pluginDefaults.js";
 import { BUILTIN_JIRA_PROVIDER_ID } from "../../../../../shared/utils/forgeProviderIds.js";
 import type { PluginHostApi } from "../../../../../shared/types/plugin.js";
@@ -44,6 +46,15 @@ afterEach(() => {
 describe("manifest", () => {
   const manifest = JSON.parse(readFileSync(resolve(__dirname, "../../plugin.json"), "utf8"));
   const provider = manifest.contributes.forgeProviders[0];
+
+  it("is a manifest the host accepts", () => {
+    const parsed = getPluginManifestSchema("builtin").safeParse(manifest);
+    expect(parsed.success ? null : parsed.error.issues).toBeNull();
+  });
+
+  it("declares roles its implementation can serve", () => {
+    expect(validateForgeImplRoles(provider, jiraForgeProvider)).toBeNull();
+  });
 
   it("agrees with the id the host knows it by", () => {
     expect(`${manifest.name}.${provider.id}`).toBe(BUILTIN_JIRA_PROVIDER_ID);

@@ -11,14 +11,11 @@ const MAX_ERROR_MESSAGE_LENGTH = 300;
 /** Jira API failure. Messages never carry the credential or the request's headers. */
 export class JiraApiError extends Error {
   readonly status: number | undefined;
-  /** `true` when Jira refused the credential, as opposed to a failed request. */
-  readonly credentialRejected: boolean;
 
-  constructor(message: string, options: { status?: number; credentialRejected?: boolean } = {}) {
+  constructor(message: string, status?: number) {
     super(message);
     this.name = "JiraApiError";
-    this.status = options.status;
-    this.credentialRejected = options.credentialRejected ?? false;
+    this.status = status;
   }
 }
 
@@ -103,18 +100,15 @@ export async function jiraRequest<T>(
     response.status === 401 ||
     FAILED_LOGIN_REASONS.some((reason) => loginReason.includes(reason))
   ) {
-    throw new JiraApiError(REJECTED_MESSAGE, {
-      status: response.status,
-      credentialRejected: true,
-    });
+    throw new JiraApiError(REJECTED_MESSAGE, response.status);
   }
   if (response.status === 429) {
-    throw new JiraApiError(rateLimitMessage(response), { status: 429 });
+    throw new JiraApiError(rateLimitMessage(response), 429);
   }
   if (response.status >= 300 && response.status < 400) {
     throw new JiraApiError(
       "Jira redirected the request instead of answering. Check the site URL in Settings → Code forge.",
-      { status: response.status }
+      response.status
     );
   }
 
@@ -123,13 +117,11 @@ export async function jiraRequest<T>(
   if (!response.ok) {
     throw new JiraApiError(
       errorFromBody(payload) ?? `Jira request failed (HTTP ${response.status})`,
-      { status: response.status }
+      response.status
     );
   }
   if (payload === null) {
-    throw new JiraApiError("Jira sent a response Daintree couldn't read", {
-      status: response.status,
-    });
+    throw new JiraApiError("Jira sent a response Daintree couldn't read", response.status);
   }
   return payload as T;
 }

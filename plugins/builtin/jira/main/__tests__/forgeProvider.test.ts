@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import {
+  claimIssueFromBranch,
+  normalizeIssueBranchKeys,
+  setIssueBranchClaim,
+} from "../../../../../electron/services/issueBranchClaim.js";
 import type { RepoRef } from "../../../../../shared/types/forge.js";
+import { issueBranchName } from "../../../../../shared/utils/issueBranchName.js";
 import {
   clearJiraCaches,
   jiraForgeProvider,
@@ -438,6 +444,39 @@ describe("issue lookup", () => {
 
   it("claims branches by the project's key", async () => {
     await expect(jiraForgeProvider.getIssueBranchKeys!(REPO)).resolves.toEqual(["ENG"]);
+  });
+});
+
+describe("through the host's own branch handling", () => {
+  afterEach(() => {
+    setIssueBranchClaim(null);
+  });
+
+  it("creates a branch from an issue that the same provider then claims", async () => {
+    route({ "/search/jql": () => json({ issues: [node("ENG-12")], isLast: true }) });
+    const { items } = await jiraForgeProvider.listIssues(REPO, {});
+
+    const branch = issueBranchName(items[0], "feature/issue-12");
+    expect(branch).toBe("ENG-12-summary-of-eng-12");
+
+    const keys = normalizeIssueBranchKeys(await jiraForgeProvider.getIssueBranchKeys!(REPO));
+    setIssueBranchClaim({ providerId: "daintree.jira.jira", keys });
+    expect(claimIssueFromBranch(branch)).toMatchObject({
+      issueProviderId: "daintree.jira.jira",
+      issueKey: "ENG-12",
+      number: 12,
+    });
+    // A branch made by hand claims the same issue, whatever its case or prefix.
+    expect(claimIssueFromBranch("jo/eng-12-fix")).toMatchObject({ issueKey: "ENG-12" });
+  });
+
+  it("looks a claimed branch's key back up", async () => {
+    setIssueBranchClaim({ providerId: "daintree.jira.jira", keys: ["ENG"] });
+    const claim = claimIssueFromBranch("eng-12-fix");
+    route({ "/issue/ENG-12": () => json(node("ENG-12")) });
+    await expect(jiraForgeProvider.getIssueById!(REPO, claim!.issueKey)).resolves.toMatchObject({
+      url: `${SITE}/browse/ENG-12`,
+    });
   });
 });
 

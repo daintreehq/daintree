@@ -139,6 +139,23 @@ describe("adfToText", () => {
     ).toBe("- [ ] open\n- [x] closed\n\n- ship it");
   });
 
+  it("indents a task list nested directly in a task list", () => {
+    expect(
+      adfToText(
+        doc({
+          type: "taskList",
+          content: [
+            { type: "taskItem", attrs: { state: "TODO" }, content: [text("parent")] },
+            {
+              type: "taskList",
+              content: [{ type: "taskItem", attrs: { state: "DONE" }, content: [text("child")] }],
+            },
+          ],
+        })
+      )
+    ).toBe("- [ ] parent\n  - [x] child");
+  });
+
   it("renders tables a row to a line", () => {
     expect(
       adfToText(

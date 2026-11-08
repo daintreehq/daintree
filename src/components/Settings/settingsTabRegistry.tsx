@@ -1557,6 +1557,8 @@ export const SETTINGS_REGISTRY = [
           "gitlab",
           "gitea",
           "linear",
+          "jira",
+          "atlassian",
           "API",
         ],
       },

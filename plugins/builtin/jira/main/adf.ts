@@ -28,6 +28,8 @@ const INLINE_TYPES = new Set([
   "mediaInline",
 ]);
 
+const LIST_TYPES = new Set(["bulletList", "orderedList", "taskList", "decisionList"]);
+
 function isNode(value: unknown): value is AdfNode {
   return typeof value === "object" && value !== null;
 }
@@ -84,6 +86,10 @@ function renderList(
 ): string {
   return childrenOf(node)
     .map((item, index) => {
+      // A task list nests its sublists directly, with no item of their own.
+      if (typeof item.type === "string" && LIST_TYPES.has(item.type)) {
+        return prefixLines(renderNode(item, depth + 1), "  ", "  ");
+      }
       const marker = markerFor(item, index);
       return prefixLines(renderChildren(item, depth + 1, "\n"), marker, " ".repeat(marker.length));
     })

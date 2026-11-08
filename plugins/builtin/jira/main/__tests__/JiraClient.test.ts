@@ -61,7 +61,6 @@ describe("jiraRequest", () => {
   it("reads a 401 as a rejected credential", async () => {
     fetchMock.mockResolvedValue(json({}, { status: 401 }));
     const error = await failure();
-    expect(error.credentialRejected).toBe(true);
     expect(error.status).toBe(401);
     expect(error.message).toMatch(/rejected the email and API token/);
   });
@@ -74,7 +73,7 @@ describe("jiraRequest", () => {
         json({ issues: [], isLast: true }, { headers: { "X-Seraph-LoginReason": reason } })
       );
       const error = await failure("/search/jql");
-      expect(error.credentialRejected).toBe(true);
+      expect(error.message).toMatch(/rejected the email and API token/);
     }
   );
 
@@ -89,7 +88,6 @@ describe("jiraRequest", () => {
     fetchMock.mockResolvedValue(json({}, { status: 429, headers: { "Retry-After": "30" } }));
     const error = await failure();
     expect(error.status).toBe(429);
-    expect(error.credentialRejected).toBe(false);
     expect(error.message).toBe("Jira's rate limit was reached. Try again in 30s.");
   });
 

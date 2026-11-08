@@ -39,7 +39,8 @@ const ISSUE_ID_PATTERN = /^(?:\d+|[A-Z][A-Z0-9_]*-\d+)$/;
  */
 const STATS_CACHE_TTL_MS = 5 * 60_000;
 
-const NOT_CONNECTED_MESSAGE = "Jira isn't connected. Add your site, email and API token in Settings → Code forge.";
+const NOT_CONNECTED_MESSAGE =
+  "Jira isn't connected. Add your site, email and API token in Settings → Code forge.";
 
 interface ConnectionSettings {
   siteUrl?: unknown;
@@ -87,7 +88,7 @@ async function beginOp(): Promise<Op> {
   const version = getTokenVersion();
   const { siteUrl, email } = await readConnectionSettings();
   if (!token || !siteUrl || !email) {
-    throw new JiraApiError(NOT_CONNECTED_MESSAGE, { credentialRejected: true });
+    throw new JiraApiError(NOT_CONNECTED_MESSAGE);
   }
   return {
     connection: { siteUrl, email, token },
