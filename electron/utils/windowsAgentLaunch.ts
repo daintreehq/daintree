@@ -1,5 +1,6 @@
 import { WINDOWS_PS_UTF8_BOOTSTRAP } from "../services/pty/terminalShell.js";
-import { quotePowerShellArg } from "../../shared/utils/shellEscape.js";
+import { launchPromptMatchText } from "../../shared/utils/launchPromptArg.js";
+import { isSafeShellOption, quotePowerShellArg } from "../../shared/utils/shellEscape.js";
 import {
   resolveWindowsCliTarget,
   windowsCliSpawnTarget,
@@ -12,6 +13,44 @@ import { windowsEnvValue } from "./windowsExecutable.js";
 /** Decode generated argv literals without evaluating any PowerShell source. */
 export function parseWindowsAgentCommand(command: string): string[] {
   return parseWords(command, Infinity);
+}
+
+// What `quoteLaunchPrompt` writes after a backtick in a double-quoted prompt. A
+// backtick before anything else stays as written.
+const DOUBLE_QUOTED_ESCAPES: Readonly<Record<string, string>> = {
+  n: "\n",
+  t: "\t",
+  "`": "`",
+  $: "$",
+  "{": "{",
+  "“": "“",
+  "”": "”",
+  "„": "„",
+};
+
+/**
+ * A launch run directly in PowerShell, not through the launch script, can reach
+ * an npm shim's cmd.exe, which ends its command line at the first line break and
+ * would quietly drop the rest of the prompt. Only a crash replay that rebuilds
+ * its carrier runs that way. A command that doesn't parse or holds no line break
+ * or tab comes back as it was.
+ */
+export function windowsCommandWithPromptOnOneLine(command: string): string {
+  let words: string[];
+  try {
+    words = parseWindowsAgentCommand(command);
+  } catch {
+    return command;
+  }
+  if (!words.some((word) => /[\n\t]/.test(word))) return command;
+  const [file = "", ...args] = words;
+  return [
+    `& ${quotePowerShellArg(file)}`,
+    ...args.map((arg) => {
+      if (isSafeShellOption(arg)) return arg;
+      return quotePowerShellArg(/[\n\t]/.test(arg) ? launchPromptMatchText(arg) : arg);
+    }),
+  ].join(" ");
 }
 
 function parseWords(command: string, limit: number): string[] {
@@ -29,6 +68,12 @@ function parseWords(command: string, limit: number): string[] {
       let closed = false;
       while (offset < source.length) {
         const char = source[offset++];
+        const escape = quote === '"' && char === "`" ? DOUBLE_QUOTED_ESCAPES[source[offset]] : null;
+        if (escape) {
+          word += escape;
+          offset++;
+          continue;
+        }
         const delimiter = char === quote || (quote === "'" && /[\u2018-\u201b]/.test(char));
         if (delimiter) {
           if (source[offset] === char) {

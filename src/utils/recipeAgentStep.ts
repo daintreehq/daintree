@@ -84,10 +84,9 @@ export function resolveRecipeAgentStep(
   const rawPrompt = terminal.initialPrompt?.trim();
   const promptAsWritten =
     (rawPrompt ? replaceRecipeVariables(rawPrompt, stepContext) : "").trim() || undefined;
-  // The command builder sends the first turn as one trimmed line; resolve it
-  // to exactly that here, so a dialog showing it shows what launches.
-  const initialPrompt =
-    promptAsWritten?.replace(/\r\n/g, " ").replace(/\n/g, " ").trim() || undefined;
+  // The command builder trims the first turn and reads CRLF as one line break;
+  // resolve it to exactly that here, so a dialog showing it shows what launches.
+  const initialPrompt = promptAsWritten?.replace(/\r\n/g, "\n").trim() || undefined;
   // An author's own leading option in a user recipe is theirs to launch; one a
   // substituted value spelled (an issue's title, a plugin's variable) is not.
   if (

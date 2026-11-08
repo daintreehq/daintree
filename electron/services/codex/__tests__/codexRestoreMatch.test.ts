@@ -8,17 +8,16 @@ import {
   type RestoreMatchPane,
   type RestoreMatchThread,
 } from "../codexRestoreMatch.js";
-import {
-  generateAgentCommand,
-  launchPromptArgText,
-} from "../../../../shared/types/agentSettings.js";
+import { generateAgentCommand } from "../../../../shared/types/agentSettings.js";
 import { appendHandbackInstruction } from "../../../../shared/utils/handback.js";
+import { launchPromptMatchText } from "../../../../shared/utils/launchPromptArg.js";
+import { setAgentCommandDialectResolver } from "../../../../shared/utils/shellEscape.js";
 
 const AT = 1_800_000_000_000;
 
 /** What the renderer sends for a recorded launch prompt. */
 function paneHash(text: string): string {
-  return hashPromptText(launchPromptArgText(text));
+  return hashPromptText(launchPromptMatchText(text));
 }
 
 function thread(
@@ -38,18 +37,38 @@ function pane(
 }
 
 describe("promptHashesForFirstMessage", () => {
-  it("recognizes a launch prompt in the single-line form the CLI received", () => {
+  it("recognizes a launch prompt with the line breaks the CLI receives (#16378)", () => {
     const written = "  Triage #12\n\nRead the logs\r\nthen report  \n";
-    // What the CLI got, spelled out rather than derived: trimmed, each line
-    // break one space, and the launch command carries exactly this.
-    const received = "Triage #12  Read the logs then report";
+    // What the CLI gets, spelled out rather than derived: trimmed, with its lines,
+    // and the launch command carries exactly this.
+    const received = "Triage #12\n\nRead the logs\nthen report";
 
-    expect(
-      generateAgentCommand("codex", {}, "codex", { initialPrompt: written }).endsWith(
-        `'${received}'`
-      )
-    ).toBe(true);
+    setAgentCommandDialectResolver(() => "posix");
+    try {
+      expect(
+        generateAgentCommand("codex", {}, "codex", { initialPrompt: written }).endsWith(
+          `"$(printf '%b' 'Triage #12\\n\\nRead the logs\\nthen report')"`
+        )
+      ).toBe(true);
+    } finally {
+      setAgentCommandDialectResolver(null);
+    }
     expect(promptHashesForFirstMessage(received)).toContain(paneHash(written));
+  });
+
+  it("recognizes the single-line form of a launch from before #16378", () => {
+    const written = "  Triage #12\n\nRead the logs\r\nthen report  \n";
+
+    expect(promptHashesForFirstMessage("Triage #12  Read the logs then report")).toContain(
+      paneHash(written)
+    );
+  });
+
+  it("recognizes a prompt with tabs under either form", () => {
+    const written = "func main() {\n\treturn\n}";
+
+    expect(promptHashesForFirstMessage(written)).toContain(paneHash(written));
+    expect(promptHashesForFirstMessage("func main() {  return }")).toContain(paneHash(written));
   });
 
   it("keeps a lone carriage return, as the launch command does", () => {
@@ -63,14 +82,25 @@ describe("promptHashesForFirstMessage", () => {
 
   it("recognizes the written prompt under the handback instruction appended at launch", () => {
     const written = "Review the parser\nand fix what you find  \n";
-    const delivered = launchPromptArgText(appendHandbackInstruction(written, "ab12cd"));
+    const delivered = launchPromptMatchText(appendHandbackInstruction(written, "ab12cd"));
 
     expect(promptHashesForFirstMessage(delivered)).toContain(paneHash(written));
   });
 
+  it("recognizes the written prompt under the instruction with its line breaks kept", () => {
+    const written = "Review the parser\nand fix what you find  \n";
+    const delivered = appendHandbackInstruction(written, "ab12cd");
+
+    expect(delivered).toContain("\n\n");
+    expect(promptHashesForFirstMessage(delivered)).toContain(paneHash(written));
+    expect(
+      promptHashesForFirstMessage(appendHandbackInstruction(written, "ab12cd", "run"))
+    ).toContain(paneHash(written));
+  });
+
   it("recognizes the written prompt under a scheduled run's instruction (#15982)", () => {
     const written = "Triage the new issues\n";
-    const delivered = launchPromptArgText(appendHandbackInstruction(written, "ab12cd", "run"));
+    const delivered = launchPromptMatchText(appendHandbackInstruction(written, "ab12cd", "run"));
 
     expect(promptHashesForFirstMessage(delivered)).toContain(paneHash(written));
     // Every marker must carry the one code.
@@ -79,7 +109,7 @@ describe("promptHashesForFirstMessage", () => {
   });
 
   it("does not strip an instruction whose two markers disagree", () => {
-    const delivered = launchPromptArgText(appendHandbackInstruction("Fix it", "ab12cd")).replace(
+    const delivered = launchPromptMatchText(appendHandbackInstruction("Fix it", "ab12cd")).replace(
       /END-ab12cd$/,
       "END-zz99zz"
     );

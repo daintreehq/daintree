@@ -1149,6 +1149,66 @@ describe("terminal spawn handler - cwd fallback (#5139: worktree is now renderer
     expect(ptyClient.write).not.toHaveBeenCalled();
   });
 
+  // On Windows an agent launch always runs through PowerShell's wrapper.
+  describe.skipIf(process.platform === "win32")(
+    "a built multi-line prompt typed into a wrapper-less shell (#16378)",
+    () => {
+      const COMMAND = `claude "$(printf '%b' 'one\\n\\ntwo\\0047s')"`;
+
+      async function typedInto(shell: string): Promise<string | undefined> {
+        registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+        const handler = getSpawnHandler();
+        const os = await import("os");
+        await handler(
+          {} as Electron.IpcMainInvokeEvent,
+          {
+            cwd: os.homedir(),
+            cols: 80,
+            rows: 24,
+            shell,
+            command: COMMAND,
+            launchAgentId: "claude",
+          } as unknown as Parameters<typeof handler>[1]
+        );
+        const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+        // The saved command keeps the prompt's lines for a later launch elsewhere.
+        expect(spawnArgs.command).toBe(COMMAND);
+        return spawnArgs.postSpawnInput;
+      }
+
+      it("types a form fish reads, keeping the line breaks", async () => {
+        expect(await typedInto("/usr/bin/fish")).toBe(
+          `claude (printf '%b' 'one\\n\\ntwo\\0047s' | string collect)\r`
+        );
+      });
+
+      it("types a double-quoted string into nushell, keeping the line breaks", async () => {
+        expect(await typedInto("/usr/bin/nu")).toBe(`claude "one\\n\\ntwo's"\r`);
+      });
+
+      it("types the prompt on one line into a shell with no form to rely on", async () => {
+        expect(await typedInto("/bin/tcsh")).toBe(`claude 'one  two'\\''s'\r`);
+      });
+
+      it("leaves a command that isn't an agent launch as the user wrote it", async () => {
+        registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+        const handler = getSpawnHandler();
+        const os = await import("os");
+        await handler(
+          {} as Electron.IpcMainInvokeEvent,
+          {
+            cwd: os.homedir(),
+            cols: 80,
+            rows: 24,
+            shell: "/bin/tcsh",
+            command: COMMAND,
+          } as unknown as Parameters<typeof handler>[1]
+        );
+        expect(ptyClient.spawn.mock.calls[0][1].postSpawnInput).toBe(`${COMMAND}\r`);
+      });
+    }
+  );
+
   it.skipIf(process.platform === "win32")(
     "omits postSpawnInput for a wrapper-capable shell — the command rides args (#11339)",
     async () => {
@@ -1953,6 +2013,28 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.command).not.toContain("--dangerously-skip-permissions");
     expect(spawnArgs.command).toContain("--resume abc");
+  });
+
+  it("keeps a prompt's own spacing when stripping the bypass flag from a help launch (#16378)", async () => {
+    mockValidateToken.mockImplementation((token) => (token === "help-token" ? "core" : false));
+    mockGetBypassPermissions.mockImplementation(() => false);
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+
+    const prompt = `"$(printf '%b' 'if x:\\n    indented  twice')"`;
+    const handler = getSpawnHandler();
+    await handler(
+      {} as Electron.IpcMainInvokeEvent,
+      {
+        cols: 80,
+        rows: 24,
+        cwd: tmpDir,
+        command: `claude --dangerously-skip-permissions --model x ${prompt}`,
+        launchAgentId: "claude",
+        env: { DAINTREE_MCP_TOKEN: "help-token" },
+      } as unknown as Parameters<typeof handler>[1]
+    );
+
+    expect(ptyClient.spawn.mock.calls[0][1].command).toContain(`claude --model x ${prompt}`);
   });
 
   it("strips lookalike =false and appends canonical --dangerously-skip-permissions when bypass is on", async () => {

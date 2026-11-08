@@ -290,6 +290,7 @@ import {
 import { refreshWindowsPathForSpawn } from "../../../setup/windowsPath.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { quoteCommandArg, isPowerShellShell } from "../../../../shared/utils/shellEscape.js";
+import { typedLaunchCommand } from "../../../../shared/utils/launchPromptArg.js";
 import {
   buildWindowsAgentLaunchScript,
   isWindowsAgentExecutableFor,
@@ -879,11 +880,11 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         // the session's stored preference or the agent's `permissionBypass`
         // opt-out.
         const dangerousEscaped = dangerous.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        const stripPattern = new RegExp(`(^|\\s)${dangerousEscaped}(?:=\\S*)?(?=\\s|$)`, "g");
-        safeCommand = safeCommand
-          .replace(stripPattern, "$1")
-          .replace(/\s{2,}/g, " ")
-          .trim();
+        // Takes its leading whitespace along, rather than tidying the gap with a
+        // pass over the whole command, which would close up the spaces inside a
+        // prompt (a scheduled Assistant run's brief, say).
+        const stripPattern = new RegExp(`(^|\\s+)${dangerousEscaped}(?:=\\S*)?(?=\\s|$)`, "g");
+        safeCommand = safeCommand.replace(stripPattern, "").trim();
         if (bypassPermissions && agentAllowsBypass) {
           safeCommand = safeCommand.length > 0 ? `${safeCommand} ${dangerous}` : dangerous;
         }
@@ -1425,8 +1426,12 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // rejected spawn can't type it into a pre-existing live PTY (#11341).
       // Wrapper shells already carry the command in `args`, so they replay
       // faithfully with no postSpawnInput.
+      // Only an agent launch can carry a built prompt; any other command is the
+      // user's own text and goes in as written.
       const postSpawnInput =
-        safeCommand.length > 0 && !commandLaunchShell ? `${safeCommand}\r` : undefined;
+        safeCommand.length > 0 && !commandLaunchShell
+          ? `${launchAgentId ? typedLaunchCommand(safeCommand, quotingShell) : safeCommand}\r`
+          : undefined;
 
       // A scheduled run's first spawn registers the run in its history from
       // these very values, or refuses (#15978). Last before the spawn, with

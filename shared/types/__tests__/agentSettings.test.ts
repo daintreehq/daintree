@@ -31,6 +31,8 @@ import {
   agentClipboardDirectory,
 } from "../agentSettings.js";
 import { setUserRegistry } from "../../config/agentRegistry.js";
+import { BUILT_IN_AGENT_IDS } from "../../config/agentIds.js";
+import { quoteLaunchPrompt } from "../../utils/launchPromptArg.js";
 import {
   registerPluginAgents,
   clearPluginAgentRegistryForTests,
@@ -424,6 +426,59 @@ describe("generateAgentCommand copilot prompt injection", () => {
     });
     expect(cmd).not.toContain("-i");
     expect(cmd).toContain("Fix the bug");
+  });
+});
+
+describe("generateAgentCommand with a multi-line prompt (#16378)", () => {
+  forcePosixPlatform();
+  afterEach(() => setAgentCommandDialectResolver(null));
+
+  const prompt = '# Plan\n\n- it\'s one\n\t- "two"';
+  const shapes = BUILT_IN_AGENT_IDS.flatMap((id) => [
+    [id, true],
+    [id, false],
+  ]) as ReadonlyArray<readonly [string, boolean]>;
+  const command = (id: string, interactive: boolean, initialPrompt: string) =>
+    generateAgentCommand(id, {}, id, { initialPrompt, interactive });
+
+  // Everything but the prompt's own word stays as a single-line launch has it.
+  it.each(shapes)("%s (interactive %s) carries it as one built word", (id, interactive) => {
+    const word = `"$(printf '%b' '# Plan\\n\\n- it\\0047s one\\n\\t- \\0042two\\0042')"`;
+    const built = command(id, interactive, prompt);
+
+    const baseline = command(id, interactive, "PLACEHOLDER");
+    expect(baseline).toContain("'PLACEHOLDER'");
+    expect(built).toContain(word);
+    expect(built).toBe(baseline.replace("'PLACEHOLDER'", word));
+    // eslint-disable-next-line no-control-regex
+    expect(built).not.toMatch(/[\x00-\x1F\x7F]/);
+  });
+
+  it.each(shapes)("%s (interactive %s) carries it under PowerShell too", (id, interactive) => {
+    setAgentCommandDialectResolver(() => "windows");
+    const word = `"# Plan\`n\`n- it's one\`n\`t- ""two"""`;
+    const built = command(id, interactive, prompt);
+
+    const baseline = command(id, interactive, "PLACEHOLDER");
+    expect(baseline).toContain("'PLACEHOLDER'");
+    expect(built).toContain(word);
+    expect(built).toBe(baseline.replace("'PLACEHOLDER'", word));
+    // eslint-disable-next-line no-control-regex
+    expect(built).not.toMatch(/[\x00-\x1F\x7F]/);
+  });
+
+  it("stays one word for a command rewrite, whatever the prompt holds", () => {
+    const relaunch = relaunchResumeAsAssignedSession(
+      `claude --resume 11111111-1111-4111-8111-111111111111 ${quoteLaunchPrompt(
+        `say "x --resume 22222222-2222-4222-8222-222222222222  y"\nnext`
+      )}`,
+      "claude"
+    );
+
+    expect(relaunch?.sessionId).toBe("11111111-1111-4111-8111-111111111111");
+    expect(relaunch?.command).toContain(
+      `"$(printf '%b' 'say \\0042x --resume 22222222-2222-4222-8222-222222222222  y\\0042\\nnext')"`
+    );
   });
 });
 

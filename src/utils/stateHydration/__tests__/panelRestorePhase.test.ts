@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { Mock } from "vitest";
 import { createHash } from "crypto";
 import type { CodexRestoreMatchRequest } from "@shared/types/ipc/agentSubagents";
-import { launchPromptArgText } from "@shared/types/agentSettings";
+import { launchPromptMatchText } from "@shared/utils/launchPromptArg";
 import {
   registerPluginAgents,
   clearPluginAgentRegistryForTests,
@@ -3019,7 +3019,7 @@ describe("restorePanelsPhase — naming held panes' conversations by launch prom
     expect(byId.get("c")?.allowResumeLatest).toBe(false);
   });
 
-  it("sends a digest of the prompt as the CLI received it, never the prompt", async () => {
+  it("sends a digest of the prompt as restore compares it, never the prompt", async () => {
     const prompt = "  Review the parser\nand report back  ";
 
     await restore([
@@ -3027,7 +3027,9 @@ describe("restorePanelsPhase — naming held panes' conversations by launch prom
       codexPane("a", prompt),
     ]);
 
-    const expected = createHash("sha256").update(launchPromptArgText(prompt), "utf8").digest("hex");
+    const expected = createHash("sha256")
+      .update(launchPromptMatchText(prompt), "utf8")
+      .digest("hex");
     expect(sentPanes()).toEqual([{ key: "a", promptHash: expected, at: AT, resolve: true }]);
     expect(JSON.stringify(matchRestoreSessionsMock.mock.calls[0]?.[0])).not.toContain("parser");
   });
