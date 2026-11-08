@@ -320,6 +320,34 @@ describe("TerminalContextMenu — a backgrounded panel", () => {
     );
   });
 
+  // The generic list's kinds: every one of them reaches this menu from a
+  // Background row, and none may offer what the terminal menu refuses above.
+  it.each(["file", "file-browser", "diff", "acme.dashboard"])(
+    "gives a backgrounded %s panel the same way back and no moves",
+    (kind) => {
+      renderMenu({ id: "panel-1", title: "Panel", kind, worktreeId: "wt-1", location: "background" });
+
+      expect(screen.queryByText("Send to background")).toBeNull();
+      expect(screen.queryByText("Move to grid")).toBeNull();
+      expect(screen.queryByText("Move to dock")).toBeNull();
+      expect(screen.queryByText("Move to worktree…")).toBeNull();
+      expect(screen.queryByText("Reload panel")).toBeNull();
+      expect(screen.getByText("Trash panel")).toBeTruthy();
+      expect(screen.getByText("Remove panel")).toBeTruthy();
+
+      fireEvent.click(screen.getByText("Restore from background"));
+      expect(restoreBackgroundTerminal).toHaveBeenCalledWith("panel-1");
+      expect(activateTerminal).toHaveBeenCalledWith("panel-1");
+    }
+  );
+
+  it("keeps the generic list's moves for a panel that is not backgrounded", () => {
+    renderMenu({ id: "panel-1", title: "Panel", kind: "file", worktreeId: "wt-1", location: "grid" });
+    expect(screen.queryByText("Restore from background")).toBeNull();
+    expect(screen.getByText("Send to background")).toBeTruthy();
+    expect(screen.getByText("Move to worktree…")).toBeTruthy();
+  });
+
   it("restores like the row's own Restore: to the pane's worktree, focused", () => {
     renderMenu({ ...terminal, location: "background", worktreeId: "wt-2" });
     fireEvent.click(screen.getByText("Restore from background"));

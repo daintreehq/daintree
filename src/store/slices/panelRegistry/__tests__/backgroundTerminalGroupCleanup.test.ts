@@ -673,3 +673,75 @@ describe("backgroundPanelGroup anchor-removal regression (#8944)", () => {
     expect(state.panelsById["t3"]!.location).toBe("grid");
   });
 });
+
+describe.each(["file", "file-browser", "diff", "browser", "review", "acme.widget"])(
+  "a backgrounded %s panel",
+  (kind) => {
+    beforeEach(() => {
+      usePanelStore.getState().reset();
+      usePanelStore.setState({
+        panelsById: {},
+        panelIds: [],
+        tabGroups: new Map(),
+        trashedTerminals: new Map(),
+        backgroundedTerminals: new Map(),
+      });
+    });
+
+    function makePanel(id: string, location: "grid" | "dock") {
+      return { id, kind, title: `Panel ${id}`, location, worktreeId: "wt-1" } as MockTerminal;
+    }
+
+    it.each(["grid", "dock"] as const)("comes back to the %s it was sent from", (location) => {
+      // A kind the dock can't host is rescued to the grid, which is the store's
+      // existing rule for a saved dock target and not what this pins.
+      setTerminals([makePanel("p1", location)]);
+
+      usePanelStore.getState().backgroundTerminal("p1");
+      expect(usePanelStore.getState().panelsById["p1"]!.location).toBe("background");
+
+      usePanelStore.getState().restoreBackgroundTerminal("p1");
+
+      const state = usePanelStore.getState();
+      expect(state.backgroundedTerminals.has("p1")).toBe(false);
+      expect(["grid", location]).toContain(state.panelsById["p1"]!.location);
+      expect(state.panelsById["p1"]!.title).toBe("Panel p1");
+    });
+
+    it("comes back with the tabs it was sent with, and the same one active", () => {
+      setTerminals([makePanel("p1", "grid"), makePanel("p2", "grid")]);
+      usePanelStore.setState({
+        tabGroups: new Map([
+          [
+            "group-1",
+            { id: "group-1", panelIds: ["p1", "p2"], activeTabId: "p2", location: "grid" },
+          ],
+        ]),
+      });
+
+      usePanelStore.getState().backgroundPanelGroup("p1");
+      usePanelStore.getState().restoreBackgroundTerminal("p1");
+
+      const state = usePanelStore.getState();
+      expect(state.panelsById["p1"]!.location).toBe("grid");
+      expect(state.panelsById["p2"]!.location).toBe("grid");
+      const [group] = [...state.tabGroups.values()];
+      expect(group?.panelIds).toEqual(["p1", "p2"]);
+      expect(group?.activeTabId).toBe("p2");
+    });
+
+    it("leaves nothing behind when removed, and kills no terminal", async () => {
+      const { terminalClient } = await import("@/clients");
+      setTerminals([makePanel("p1", "grid")]);
+
+      usePanelStore.getState().backgroundTerminal("p1");
+      usePanelStore.getState().removePanel("p1");
+
+      const state = usePanelStore.getState();
+      expect(state.panelsById["p1"]).toBeUndefined();
+      expect(state.panelIds).not.toContain("p1");
+      expect(state.backgroundedTerminals.has("p1")).toBe(false);
+      expect(terminalClient.kill).not.toHaveBeenCalled();
+    });
+  }
+);

@@ -1177,6 +1177,49 @@ describe("useDevServer adversarial races", () => {
     expect(getStateMock).toHaveBeenCalledTimes(2);
   });
 
+  it("starts again on remount when Main stopped the session while no pane was listening", async () => {
+    // Backgrounding: the store moves the panel, the pane unmounts, and Main's
+    // stop lands after it. The stopped event reaches no subscriber, so what the
+    // next mount reads from getState() is all it can know.
+    let running = false;
+    const runningState = (projectId: string) =>
+      buildState({
+        panelId: "panel-1",
+        projectId,
+        status: "running",
+        terminalId: "term-1",
+        url: "http://localhost:3000/",
+      });
+    ensureMock.mockImplementation((request: { projectId: string }) => {
+      running = true;
+      return Promise.resolve(runningState(request.projectId));
+    });
+    getStateMock.mockImplementation((request: { projectId: string }) =>
+      Promise.resolve(
+        running
+          ? runningState(request.projectId)
+          : buildState({ panelId: "panel-1", projectId: request.projectId, status: "stopped" })
+      )
+    );
+
+    const props = { panelId: "panel-1", devCommand: "npm run dev", cwd: "/repo" };
+
+    const { unmount, result } = renderHook(() => useDevServer(props));
+    await waitFor(() => {
+      expect(ensureMock).toHaveBeenCalledTimes(1);
+      expect(result.current.status).toBe("running");
+    });
+
+    unmount();
+    running = false;
+
+    const { result: restored } = renderHook(() => useDevServer(props));
+    await waitFor(() => {
+      expect(ensureMock).toHaveBeenCalledTimes(2);
+      expect(restored.current.status).toBe("running");
+    });
+  });
+
   it("remount after stop() sends only a non-resume ensure, which Main refuses (#13169)", async () => {
     let userStopped = false;
     ensureMock.mockImplementation((request: { projectId: string; resumeUserStopped?: boolean }) => {

@@ -408,6 +408,48 @@ describe("useBackgroundedTerminals", () => {
     expect(result.current).toHaveLength(1);
     expect(result.current[0]!.id).toBe("t1");
   });
+
+  // Every kind a menu can send to background. A file browser, a diff and a
+  // plugin panel also fall outside the narrowed panel read path, so dropping
+  // only the PTY check would still lose them.
+  it.each(["file", "file-browser", "diff", "browser", "dev-preview", "review", "acme.widget"])(
+    "lists a backgrounded %s panel",
+    (kind) => {
+      setupBoth([
+        { id: "parked", kind, location: "background" },
+        { id: "shown", kind, location: "grid" },
+        { id: "trashed", kind, location: "trash" },
+      ]);
+
+      const { result } = renderHook(() => useBackgroundedTerminals());
+      expect(result.current.map((p) => p.id)).toEqual(["parked"]);
+    }
+  );
+
+  it("keeps panel order across kinds", () => {
+    setupBoth([
+      { id: "a", kind: "diff", location: "background" },
+      { id: "b", kind: "terminal", location: "background" },
+      { id: "c", kind: "acme.widget", location: "background" },
+    ]);
+
+    const { result } = renderHook(() => useBackgroundedTerminals());
+    expect(result.current.map((p) => p.id)).toEqual(["a", "b", "c"]);
+  });
+
+  it("holds a non-terminal panel to the same orphan rule as a terminal", () => {
+    const worktrees = new Map([["wt-1", { worktreeId: "wt-1" }]]);
+    setupBoth(
+      [
+        { id: "here", kind: "file-browser", location: "background", worktreeId: "wt-1" },
+        { id: "gone", kind: "file-browser", location: "background", worktreeId: "wt-gone" },
+      ],
+      worktrees
+    );
+
+    const { result } = renderHook(() => useBackgroundedTerminals());
+    expect(result.current.map((p) => p.id)).toEqual(["here"]);
+  });
 });
 
 describe("useErrorTerminals", () => {

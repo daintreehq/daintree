@@ -87,7 +87,7 @@ function MoveToNewWorktreeItem({ onSelect }: { onSelect: () => void }) {
   );
 }
 
-function RestoreFromBackgroundItem({ onAction }: { onAction: MenuActionHandler }) {
+export function RestoreFromBackgroundItem({ onAction }: { onAction: MenuActionHandler }) {
   return (
     <ContextMenuItem onSelect={() => onAction("restore-from-background")}>
       <RotateCcw className={ICON_CLASS} aria-hidden="true" />

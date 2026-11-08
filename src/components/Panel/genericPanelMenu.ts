@@ -74,7 +74,12 @@ export interface GenericPanelMenuCommand {
 }
 
 export interface GenericPanelMenuInput {
-  location: "grid" | "dock";
+  /**
+   * A backgrounded panel's way back is a restore, which the right-click menu
+   * draws above this list: moving it or parking it again would leave its
+   * background bookkeeping behind. The header never sees one, having no pane.
+   */
+  location: "grid" | "dock" | "background";
   isMaximized: boolean;
   isDockable: boolean;
   canMoveToWorktree: boolean;
@@ -272,12 +277,12 @@ export function getGenericPanelMenuGroups({
       icon: isMaximized ? Minimize2 : Maximize2,
       shortcutActionId: "terminal.maximize",
     });
-  } else {
+  } else if (location === "dock") {
     layout.push({ id: "move-to-grid", label: "Move to grid", icon: PanelTopClose });
   }
 
   return [
-    layout,
+    ...(layout.length > 0 ? [layout] : []),
     [
       { id: "rename", label: "Rename panel", icon: Pencil },
       ...(canReload ? [{ id: "reload" as const, label: "Reload panel", icon: RotateCw }] : []),
@@ -285,7 +290,9 @@ export function getGenericPanelMenuGroups({
     ...(pluginContributed.length > 0 ? [pluginContributed] : []),
     ...(pluginOwned.length > 0 ? [pluginOwned] : []),
     [
-      { id: "background", label: "Send to background", icon: ArrowDownFromLine },
+      ...(location === "background"
+        ? []
+        : [{ id: "background" as const, label: "Send to background", icon: ArrowDownFromLine }]),
       { id: "trash", label: "Trash panel", icon: Trash2 },
       { id: "kill", label: "Remove panel", icon: OctagonX, destructive: true },
     ],

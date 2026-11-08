@@ -563,7 +563,13 @@ export function useDevServer({
     window.electron.devPreview
       .getState({ panelId, projectId: currentProjectId })
       .then((state) => {
-        if (!cancelled) applyState(state);
+        if (cancelled) return;
+        // Main stopped this server while no pane was subscribed (sending the
+        // panel to background unmounts it before the stop lands), so the
+        // stopped event that drops the cache went unheard. Left cached, the
+        // restored panel would skip its ensure and stay stopped.
+        if (state.status === "stopped") persistedEnsureCache.delete(panelId);
+        applyState(state);
       })
       .catch((err) => {
         if (!cancelled) applyInvokeError(err);

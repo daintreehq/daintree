@@ -10,7 +10,7 @@ import { handleDockEscapeKeyDown } from "./dockPopoverGuard";
 import { cn } from "@/lib/utils";
 import { BellDot } from "@/components/icons";
 import { usePanelStore } from "@/store";
-import type { PtyPanelData } from "@shared/types/panel";
+import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 import { closeAndAnnounce } from "@/lib/accessibility";
 import type { TrashedTerminalGroupMetadata } from "@/store/slices";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -49,6 +49,11 @@ import {
   killTerminalDescription,
 } from "./killTerminalStrings";
 import { pluralize } from "@/lib/pluralize";
+import {
+  consultPanelCloseGuards,
+  hasPanelCloseGuard,
+  isPanelClosePending,
+} from "@/services/panelCloseGuard";
 import { getTerminalTaskTitle } from "@/utils/terminalTitleDisplay";
 
 interface BackgroundContainerProps {
@@ -57,21 +62,51 @@ interface BackgroundContainerProps {
 
 interface BackgroundDisplaySingle {
   type: "single";
-  terminal: PtyPanelData;
+  terminal: PanelInstance;
 }
 
 interface BackgroundDisplayGroup {
   type: "group";
   groupRestoreId: string;
   groupMetadata: TrashedTerminalGroupMetadata;
-  terminals: PtyPanelData[];
+  terminals: PanelInstance[];
 }
 
 type BackgroundDisplayItem = BackgroundDisplaySingle | BackgroundDisplayGroup;
 
+interface RemovalCopy {
+  title: string;
+  description: string;
+  confirmLabel: string;
+  announcement: string;
+}
+
+/** Only a terminal has anything to kill; any other panel is removed. */
+function getRemovalCopy(panel: PanelInstance | undefined): RemovalCopy {
+  const name = panel?.title?.trim() || undefined;
+  if (!panel || isPtyPanel(panel)) {
+    return {
+      title: KILL_TERMINAL_TITLE,
+      description: killTerminalDescription(name),
+      confirmLabel: KILL_TERMINAL_CONFIRM_LABEL,
+      announcement: name ? `${name} killed` : "Terminal killed",
+    };
+  }
+  return {
+    title: name ? `Remove '${name}'?` : "Remove panel?",
+    description: "This skips the trash, so it can't be restored.",
+    confirmLabel: "Remove panel",
+    announcement: name ? `${name} removed` : "Panel removed",
+  };
+}
+
 export function BackgroundContainer({ compact = false }: BackgroundContainerProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [killConfirmId, setKillConfirmId] = useState<string | null>(null);
+  // Set when the dialog opens and left alone when it closes: the dialog keeps
+  // drawing it through its exit animation, after the target is gone.
+  const [removalCopy, setRemovalCopy] = useState(() => getRemovalCopy(undefined));
+  const [isUnsavedWorkPromptOpen, setIsUnsavedWorkPromptOpen] = useState(false);
   const terminals = useBackgroundedTerminals();
   const backgroundedTerminals = usePanelStore((state) => state.backgroundedTerminals);
   const watchedPanels = usePanelStore((state) => state.watchedPanels);
@@ -107,7 +142,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
   // hand-back are not counted.
   const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
   const waitingCount = useMemo(
-    () => terminals.filter((t) => isNeedsYouPane(needsYouRunIds, t)).length,
+    () => terminals.filter((t) => isPtyPanel(t) && isNeedsYouPane(needsYouRunIds, t)).length,
     [terminals, needsYouRunIds]
   );
   const hereCount = useMemo(
@@ -120,10 +155,10 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
       string,
       {
         metadata: TrashedTerminalGroupMetadata | undefined;
-        terminals: PtyPanelData[];
+        terminals: PanelInstance[];
       }
     >();
-    const singles: PtyPanelData[] = [];
+    const singles: PanelInstance[] = [];
 
     for (const terminal of terminals) {
       const bgInfo = backgroundedTerminals.get(terminal.id);
@@ -186,7 +221,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
   const focusHandoff = useDockPopoverFocusHandoff();
 
   const handleRestoreSingle = useCallback(
-    (terminal: PtyPanelData) => {
+    (terminal: PanelInstance) => {
       const worktreeId = terminal.worktreeId?.trim();
       if (worktreeId && worktreeId !== activeWorktreeId) {
         trackTerminalFocus(worktreeId, terminal.id);
@@ -258,23 +293,36 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
     [watchedPanels, watchPanel, unwatchPanel]
   );
 
-  const killTarget = useMemo(
-    () => (killConfirmId ? terminals.find((t) => t.id === killConfirmId) : undefined),
-    [killConfirmId, terminals]
+  const handleRemoveRequest = useCallback(
+    (panel: PanelInstance) => {
+      const { id } = panel;
+      if (!hasPanelCloseGuard(id)) {
+        setRemovalCopy(getRemovalCopy(panel));
+        setKillConfirmId(id);
+        return;
+      }
+      // Removing skips the trash, not the unsaved-work prompt (#12323), and that
+      // prompt is the confirmation. A second press while it's up waits on it.
+      if (isPanelClosePending(id)) return;
+      setIsUnsavedWorkPromptOpen(true);
+      void consultPanelCloseGuards([id]).then((proceed) => {
+        setIsUnsavedWorkPromptOpen(false);
+        if (proceed) removePanel(id);
+      });
+    },
+    [removePanel]
   );
 
   const handleKillConfirm = useCallback(() => {
     if (killConfirmId) {
-      const target = terminals.find((t) => t.id === killConfirmId);
       removePanel(killConfirmId);
-      closeAndAnnounce(
-        () => setKillConfirmId(null),
-        target?.title ? `${target.title} killed` : "Terminal killed"
-      );
+      closeAndAnnounce(() => setKillConfirmId(null), removalCopy.announcement);
       return;
     }
     setKillConfirmId(null);
-  }, [killConfirmId, removePanel, terminals]);
+  }, [killConfirmId, removePanel, removalCopy]);
+
+  const isRemovalDialogOpen = killConfirmId !== null || isUnsavedWorkPromptOpen;
 
   const count = terminals.length;
   const worktreeCount = new Set(terminals.map((t) => t.worktreeId ?? null)).size;
@@ -340,16 +388,16 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
           onCloseAutoFocus={focusHandoff.onCloseAutoFocus}
           onKeyDown={focusHandoff.onContentKeyDown}
           onPointerDownOutside={(e) => {
-            // Keep the popover anchored while the kill confirm dialog is open;
+            // Keep the popover anchored while a removal dialog is open;
             // AppDialog is a react-dom portal with no Radix marker on its root,
             // so we gate on local state rather than a DOM selector.
-            if (killConfirmId !== null) e.preventDefault();
+            if (isRemovalDialogOpen) e.preventDefault();
           }}
           onInteractOutside={(e) => {
-            if (killConfirmId !== null) e.preventDefault();
+            if (isRemovalDialogOpen) e.preventDefault();
           }}
           onEscapeKeyDown={(e) => {
-            if (killConfirmId === null) return;
+            if (!isRemovalDialogOpen) return;
             e.preventDefault();
             // Blocking alone left Escape closing nothing: AppDialog's backstop
             // stands down while this popover is open unless the keypress is
@@ -388,7 +436,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
                             onRestoreGroup={handleRestoreGroup}
                             onRestoreSingle={handleRestoreSingle}
                             onWatchToggle={handleWatchToggle}
-                            onKill={(id) => setKillConfirmId(id)}
+                            onRemove={handleRemoveRequest}
                           />
                         );
                       }
@@ -399,12 +447,12 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
                       return (
                         <BackgroundSingleItem
                           key={item.terminal.id}
-                          terminal={item.terminal}
+                          panel={item.terminal}
                           worktreeName={worktreeName}
                           isWatched={watchedPanels.has(item.terminal.id)}
                           onRestore={handleRestoreSingle}
                           onWatchToggle={handleWatchToggle}
-                          onKill={(id) => setKillConfirmId(id)}
+                          onRemove={handleRemoveRequest}
                         />
                       );
                     })}
@@ -418,10 +466,10 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
         <ConfirmDialog
           isOpen={killConfirmId !== null}
           onClose={() => setKillConfirmId(null)}
-          title={KILL_TERMINAL_TITLE}
-          description={killTerminalDescription(killTarget?.title || undefined)}
+          title={removalCopy.title}
+          description={removalCopy.description}
           variant="destructive"
-          confirmLabel={KILL_TERMINAL_CONFIRM_LABEL}
+          confirmLabel={removalCopy.confirmLabel}
           onConfirm={handleKillConfirm}
         />
       </Popover>
@@ -430,53 +478,58 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
 }
 
 interface BackgroundSingleItemProps {
-  terminal: PtyPanelData;
+  panel: PanelInstance;
   worktreeName: string | undefined;
   isWatched: boolean;
-  onRestore: (terminal: PtyPanelData) => void;
+  onRestore: (panel: PanelInstance) => void;
   onWatchToggle: (terminal: PtyPanelData) => void;
-  onKill: (terminalId: string) => void;
+  onRemove: (panel: PanelInstance) => void;
   compact?: boolean;
 }
 
 function BackgroundSingleItem({
-  terminal,
+  panel,
   worktreeName,
   isWatched,
   onRestore,
   onWatchToggle,
-  onKill,
+  onRemove,
   compact = false,
 }: BackgroundSingleItemProps) {
+  // Agent state, task, activity and Watch belong to a terminal's run.
+  const terminal = isPtyPanel(panel) ? panel : undefined;
   // The pane's display state through the run's fleet band, as on the pane's
   // own chip: amber only for a run in Needs you.
-  const chrome = deriveTerminalChrome(terminal);
+  const chrome = deriveTerminalChrome(panel);
   const agentState = useRunSessionPresentation(
-    terminal.id,
-    getTerminalAgentDisplayState(chrome, terminal.agentState)
+    panel.id,
+    getTerminalAgentDisplayState(chrome, terminal?.agentState)
   );
   const StateIcon = agentState ? SESSION_ICONS[agentState] : null;
   const stateLabel = agentState ? SESSION_LABELS[agentState] : null;
   const stateColor = agentState ? SESSION_COLORS[agentState] : null;
-  const title = terminal.title || "Terminal";
+  const title = panel.title || chrome.label;
   // The task is what tells two backgrounded "Claude" rows apart, as on the
   // Waiting and Unread rows.
-  const task = getTerminalTaskTitle(terminal);
+  const task = terminal ? getTerminalTaskTitle(terminal) : null;
   const name = task ? `${title}: ${task}` : title;
+  const activityHeadline = terminal?.activityHeadline;
+  const lastStateChange = terminal?.lastStateChange;
+  const removeLabel = terminal ? `Kill ${name}` : `Remove ${name}`;
   const hasMeta =
     !!worktreeName ||
     !!(StateIcon && stateLabel) ||
-    !!terminal.activityHeadline ||
-    terminal.lastStateChange != null;
+    !!activityHeadline ||
+    lastStateChange != null;
 
   return (
     // The row's state is its glyph and label, not a coloured rail: a row in a
     // popover list is highlighted by hover or focus alone, as in the other three.
     // Right-click is this panel's own menu.
-    <TerminalContextMenu terminalId={terminal.id} proxy>
+    <TerminalContextMenu terminalId={panel.id} proxy>
       <div
         data-testid="background-single-item"
-        data-agent-state={terminal.agentState ?? "unknown"}
+        data-agent-state={terminal?.agentState ?? "unknown"}
         data-dock-row=""
         className={cn(
           "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] group",
@@ -486,7 +539,7 @@ function BackgroundSingleItem({
       >
         <div className="shrink-0 opacity-70 group-hover:opacity-100 transition-opacity">
           <TerminalIcon
-            kind={terminal.kind}
+            kind={panel.kind}
             chrome={chrome}
             className={compact ? "h-2.5 w-2.5" : "h-3 w-3"}
           />
@@ -494,7 +547,7 @@ function BackgroundSingleItem({
 
         {/* Clicking the row restores it, as clicking a Waiting or Unread row
             opens it; the Restore button stays the row's keyboard target. */}
-        <div className="flex-1 min-w-0 cursor-pointer" onClick={() => onRestore(terminal)}>
+        <div className="flex-1 min-w-0 cursor-pointer" onClick={() => onRestore(panel)}>
           <div className="flex items-baseline gap-1.5 min-w-0">
             <span
               className={cn(
@@ -518,7 +571,7 @@ function BackgroundSingleItem({
           {hasMeta && (
             <div className="flex items-center gap-1.5 mt-0.5 text-2xs text-text-secondary">
               {worktreeName && <span className="truncate">{worktreeName}</span>}
-              {worktreeName && (stateLabel || terminal.activityHeadline) && (
+              {worktreeName && (stateLabel || activityHeadline) && (
                 <span aria-hidden="true">·</span>
               )}
               {StateIcon && stateLabel && (
@@ -533,21 +586,19 @@ function BackgroundSingleItem({
                   <span>{stateLabel}</span>
                 </span>
               )}
-              {terminal.activityHeadline && (
+              {activityHeadline && (
                 <>
                   {(worktreeName || stateLabel) && <span aria-hidden="true">·</span>}
-                  <span className="truncate italic text-text-secondary">
-                    {terminal.activityHeadline}
-                  </span>
+                  <span className="truncate italic text-text-secondary">{activityHeadline}</span>
                 </>
               )}
-              {terminal.lastStateChange != null && (
+              {lastStateChange != null && (
                 <>
-                  {(worktreeName || stateLabel || terminal.activityHeadline) && (
+                  {(worktreeName || stateLabel || activityHeadline) && (
                     <span aria-hidden="true">·</span>
                   )}
                   <LiveTimeAgo
-                    timestamp={terminal.lastStateChange}
+                    timestamp={lastStateChange}
                     className="text-2xs text-text-secondary shrink-0 tabular-nums"
                   />
                 </>
@@ -557,27 +608,29 @@ function BackgroundSingleItem({
         </div>
 
         <div className="flex gap-0.5 shrink-0">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onWatchToggle(terminal);
-                }}
-                // A toggle's name stays put; `pressed` announces the state. The
-                // glyph shows the state too: BellDot is the pane header's
-                // "watching" mark, where a slashed bell read as muted.
-                aria-label="Watch for completion"
-                pressed={isWatched}
-                data-testid="bg-watch-button"
-              >
-                {isWatched ? <BellDot aria-hidden="true" /> : <Bell aria-hidden="true" />}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">Watch for completion</TooltipContent>
-          </Tooltip>
+          {terminal && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onWatchToggle(terminal);
+                  }}
+                  // A toggle's name stays put; `pressed` announces the state. The
+                  // glyph shows the state too: BellDot is the pane header's
+                  // "watching" mark, where a slashed bell read as muted.
+                  aria-label="Watch for completion"
+                  pressed={isWatched}
+                  data-testid="bg-watch-button"
+                >
+                  {isWatched ? <BellDot aria-hidden="true" /> : <Bell aria-hidden="true" />}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Watch for completion</TooltipContent>
+            </Tooltip>
+          )}
 
           {/* A group member restores on its own too: Restore is every row's
               keyboard target, so a member without one would land on Watch. */}
@@ -588,7 +641,7 @@ function BackgroundSingleItem({
                 size="icon-sm"
                 onClick={(e) => {
                   e.stopPropagation();
-                  onRestore(terminal);
+                  onRestore(panel);
                 }}
                 aria-label={`Restore ${name}`}
                 data-testid="bg-restore-button"
@@ -607,15 +660,15 @@ function BackgroundSingleItem({
                 size="icon-sm"
                 onClick={(e) => {
                   e.stopPropagation();
-                  onKill(terminal.id);
+                  onRemove(panel);
                 }}
-                aria-label={`Kill ${name}`}
+                aria-label={removeLabel}
                 data-testid="bg-kill-button"
               >
                 <OctagonX aria-hidden="true" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent side="bottom">{`Kill ${name}`}</TooltipContent>
+            <TooltipContent side="bottom">{removeLabel}</TooltipContent>
           </Tooltip>
         </div>
       </div>
@@ -633,24 +686,26 @@ function BackgroundGroupItem({
   onRestoreGroup,
   onRestoreSingle,
   onWatchToggle,
-  onKill,
+  onRemove,
 }: {
   groupRestoreId: string;
   groupMetadata: TrashedTerminalGroupMetadata;
-  terminals: PtyPanelData[];
+  terminals: PanelInstance[];
   worktreeNames: ReadonlyMap<string, string>;
   showWorktree: boolean;
   watchedPanels: Set<string>;
   onRestoreGroup: (groupRestoreId: string, metadata: TrashedTerminalGroupMetadata) => void;
-  onRestoreSingle: (terminal: PtyPanelData) => void;
+  onRestoreSingle: (panel: PanelInstance) => void;
   onWatchToggle: (terminal: PtyPanelData) => void;
-  onKill: (terminalId: string) => void;
+  onRemove: (panel: PanelInstance) => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(true);
   const tabCount = terminals.length;
   const groupName = `Tab group (${pluralize(tabCount, "tab")})`;
   const needsYouRunIds = useFleetBandRunIds(NEEDS_YOU_BANDS);
-  const groupWaiting = terminals.filter((t) => isNeedsYouPane(needsYouRunIds, t)).length;
+  const groupWaiting = terminals.filter(
+    (t) => isPtyPanel(t) && isNeedsYouPane(needsYouRunIds, t)
+  ).length;
   // Named on the header too, so a collapsed group still says where it lives.
   const groupWorktreeId = groupMetadata.worktreeId ?? terminals[0]?.worktreeId;
   const groupWorktreeName =
@@ -736,12 +791,12 @@ function BackgroundGroupItem({
               return (
                 <BackgroundSingleItem
                   key={terminal.id}
-                  terminal={terminal}
+                  panel={terminal}
                   worktreeName={worktreeName}
                   isWatched={watchedPanels.has(terminal.id)}
                   onRestore={onRestoreSingle}
                   onWatchToggle={onWatchToggle}
-                  onKill={onKill}
+                  onRemove={onRemove}
                   compact
                 />
               );
