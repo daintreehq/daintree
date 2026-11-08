@@ -1,3 +1,4 @@
+import type { AgentContextUsageResult } from "@shared/types/ipc/agentContextUsage";
 import type {
   AgentSubagentsResult,
   AgentSubagentTranscriptResult,
@@ -33,5 +34,10 @@ export const claudeClient = {
    */
   readUsage: (): Promise<ClaudeUsageAccount[]> => {
     return window.electron.claude.readUsage();
+  },
+
+  /** The context the pane's most recent main-conversation request carried, read from its transcript on the host. */
+  readContextUsage: (payload: { terminalId: string }): Promise<AgentContextUsageResult> => {
+    return window.electron.claude.readContextUsage(payload);
   },
 } as const;

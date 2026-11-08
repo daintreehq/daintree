@@ -593,6 +593,7 @@ export const CHANNELS = {
   CLAUDE_READ_SUBAGENT_TRANSCRIPT: "claude:read-subagent-transcript",
   CLAUDE_FIND_REPLY_SPAN: "claude:find-reply-span",
   CLAUDE_READ_USAGE: "claude:read-usage",
+  CLAUDE_READ_CONTEXT_USAGE: "claude:read-context-usage",
 
   TERMINAL_SESSION_FILE_GET: "terminal-session-file:get",
 

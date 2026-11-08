@@ -6,6 +6,7 @@ import {
   REPLY_SPAN_HOST_TIMEOUT_MS,
   REPLY_SPAN_SELECTION_MAX_CHARS,
 } from "../../../shared/config/replySpanLimits.js";
+import type { AgentContextUsageResult } from "../../../shared/types/ipc/agentContextUsage.js";
 import type {
   AgentSubagentsResult,
   AgentSubagentTranscriptResult,
@@ -23,6 +24,7 @@ const id = z.string().trim().min(1).max(ID_MAX);
 
 const listSchema = z.object({ terminalId: id });
 const readSchema = z.object({ terminalId: id, subagentId: id });
+const contextUsageSchema = z.object({ terminalId: id });
 const replySpanSchema = z.object({
   terminalId: id,
   selection: z.string().min(1).max(REPLY_SPAN_SELECTION_MAX_CHARS),
@@ -88,6 +90,20 @@ export const claudeNamespace = defineIpcNamespace({
         await import("../../services/claude/ClaudeUsageService.js");
       return readClaudeUsageAccounts();
     }),
+    readContextUsage: opValidated(
+      CLAUDE_METHOD_CHANNELS.readContextUsage,
+      contextUsageSchema,
+      async ({ terminalId }): Promise<AgentContextUsageResult> => {
+        const { readClaudePaneContextUsageWithin } =
+          await import("../../services/claude/ClaudeContextUsage.js");
+        // Nothing is logged: a filesystem error names a path under the user's home.
+        try {
+          return await readClaudePaneContextUsageWithin(terminalId);
+        } catch {
+          return { status: "unavailable", reason: "store-unreadable" };
+        }
+      }
+    ),
   },
 });
 
