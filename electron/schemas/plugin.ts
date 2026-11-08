@@ -81,6 +81,7 @@ export {
 } from "./plugin/providers.js";
 export {
   ViewContributionSchema,
+  CanopyViewContributionSchema,
   SurfaceViewSlotSchema,
   SurfaceContributionsSchema,
 } from "./plugin/views.js";

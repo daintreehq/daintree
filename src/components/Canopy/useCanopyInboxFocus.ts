@@ -58,6 +58,7 @@ export function useCanopyInboxFocus({
   setQuery,
   roleFilter,
   seeAssistantHandback,
+  pluginViewIds,
 }: {
   isOpen: boolean;
   /** The other host the panel shows, or null for the window's own. */
@@ -83,6 +84,8 @@ export function useCanopyInboxFocus({
   setQuery: (query: string) => void;
   roleFilter: CanopyRoleFilter;
   seeAssistantHandback: (assistantId: string, observedAt: number) => void;
+  /** The plugin views the window offers, by hosted id; none in the dialog. */
+  pluginViewIds: readonly string[];
 }) {
   const frame = useCanopyFrame();
   const searchRef = useRef<HTMLInputElement>(null);
@@ -91,6 +94,12 @@ export function useCanopyInboxFocus({
     null
   );
   const [focusedId, setFocusedId] = useState<string | null>(null);
+  // A plugin view chosen in place of the pane. Only the person's own pick of a
+  // run or an assistant puts it away; a recovery moving the selection beneath
+  // it doesn't, and one whose plugin is gone gives the pane back on its own.
+  const [pluginViewId, setPluginViewId] = useState<string | null>(null);
+  const shownPluginViewId =
+    pluginViewId !== null && pluginViewIds.includes(pluginViewId) ? pluginViewId : null;
   // Where the keyboard goes in the next agent's pane, for the run it was meant for.
   const [paneFocus, setPaneFocus] = useState<{ runId: string; focus: CanopyPaneFocus } | null>(
     null
@@ -111,11 +120,15 @@ export function useCanopyInboxFocus({
     workersShown &&
     focusedId !== null &&
     items.some((item) => item.runId === focusedId && inWork(item));
+  // Nothing of the inbox is in the pane while a plugin view is: no run counts
+  // as looked at, and no row reads as the one shown.
   const selectedAssistant: CanopyAssistantItem | null =
-    shownAssistants.find((item) => item.id === assistantId) ??
-    (!workerChosen && (visible.length === 0 || focusedIndex === -1) ? firstAssistant : null);
+    shownPluginViewId !== null
+      ? null
+      : (shownAssistants.find((item) => item.id === assistantId) ??
+        (!workerChosen && (visible.length === 0 || focusedIndex === -1) ? firstAssistant : null));
   const focusedItem =
-    selectedAssistant !== null || !workersShown
+    shownPluginViewId !== null || selectedAssistant !== null || !workersShown
       ? null
       : focusedIndex !== -1
         ? visible[focusedIndex]!
@@ -148,15 +161,23 @@ export function useCanopyInboxFocus({
   // terminal" just focused, rather than whatever opened the panel.
   const focusAfterCloseRef = useRef<HTMLElement | null>(null);
   // The run selected, its row brought into view, the keyboard left where it is.
-  const selectNow = useCallback((runId: string) => {
+  const selectRun = useCallback((runId: string) => {
     setPaneFocus(null);
     setReplyFocus(null);
     setAssistantId(null);
     setFocusedId(runId);
     document.getElementById(canopyCardDomId(runId))?.scrollIntoView({ block: "nearest" });
   }, []);
+  const selectNow = useCallback(
+    (runId: string) => {
+      setPluginViewId(null);
+      selectRun(runId);
+    },
+    [selectRun]
+  );
 
   const focusCardNow = useCallback((runId: string) => {
+    setPluginViewId(null);
     setPaneFocus(null);
     setReplyFocus(null);
     setAssistantId(null);
@@ -261,6 +282,7 @@ export function useCanopyInboxFocus({
     if (!isOpen) {
       landedRef.current = false;
       setFocusedId(null);
+      setPluginViewId(null);
       setReplyFocus(null);
       setQuery("");
       return;
@@ -427,7 +449,7 @@ export function useCanopyInboxFocus({
     }
     const index = topOwedRef.current ? 0 : Math.min(lastIndexRef.current, visible.length - 1);
     topOwedRef.current = false;
-    selectNow(visible[index]!.runId);
+    selectRun(visible[index]!.runId);
   }, [
     isOpen,
     appliedQuery,
@@ -435,6 +457,7 @@ export function useCanopyInboxFocus({
     focusedIndex,
     visible,
     selectNow,
+    selectRun,
     assistantId,
     shownAssistants,
     firstAssistant,
@@ -443,6 +466,7 @@ export function useCanopyInboxFocus({
   // Select a run and take the keyboard into its pane — its composer or its
   // terminal — rather than onto its row.
   const openPaneNow = useCallback((runId: string, focus: CanopyPaneFocus) => {
+    setPluginViewId(null);
     setPaneFocus({ runId, focus });
     setReplyFocus(null);
     setFocusedId(runId);
@@ -491,6 +515,7 @@ export function useCanopyInboxFocus({
     }
     landedRef.current = true;
     restoreRef.current = null;
+    setPluginViewId(null);
     setAssistantId(null);
     setPaneFocus(null);
     setReplyFocus({ runId: item.runId, id: replyReveal.id });
@@ -564,12 +589,14 @@ export function useCanopyInboxFocus({
   // A row took focus (click, Tab, pointer): it is the selection, with the
   // keyboard on the row rather than carried into the pane.
   const selectRow = (runId: string) => {
+    setPluginViewId(null);
     setPaneFocus(null);
     setReplyFocus(null);
     setAssistantId(null);
     setFocusedId(runId);
   };
   const focusAssistantNow = (id: string) => {
+    setPluginViewId(null);
     setAssistantId(id);
     const element = document.getElementById(canopyAssistantDomId(id));
     element?.focus({ preventScroll: false });
@@ -580,14 +607,20 @@ export function useCanopyInboxFocus({
   // From the docked global assistant, the agent beside it stays selected.
   const openAssistant = (item: CanopyAssistantItem, keepSelection = false) => {
     if (item.handbackAt !== null) seeAssistantHandback(item.id, item.handbackAt);
-    if (!keepSelection) setAssistantId(item.id);
+    if (!keepSelection) {
+      setPluginViewId(null);
+      setAssistantId(item.id);
+    }
     setAssistantRefusal(null);
     const mounted = () => mountedRef.current;
     void frame.openAssistant(item, mounted).then((refused) => {
       if (refused !== null && mounted()) setAssistantRefusal({ id: item.id, text: refused });
     });
   };
-  const selectAssistant = useCallback((id: string) => setAssistantId(id), []);
+  const selectAssistant = useCallback((id: string) => {
+    setPluginViewId(null);
+    setAssistantId(id);
+  }, []);
   const settlePaneFocus = useCallback(
     (runId: string) => setPaneFocus((current) => (current?.runId === runId ? null : current)),
     []
@@ -655,6 +688,8 @@ export function useCanopyInboxFocus({
     searchRef,
     refreshRef,
     detailRef,
+    shownPluginViewId,
+    showPluginView: setPluginViewId,
     focusedIndex,
     activeIndex,
     focusedItem,

@@ -13,10 +13,12 @@ import { initKeybindingOverridesSync } from "@/services/keybindingOverridesSync"
 import { initTerminalConfigSync } from "@/services/terminalConfigSync";
 import { setupFleetSnapshotListeners } from "@/store/fleetSnapshotStore";
 import { useNotificationSettingsStore } from "@/store/notificationSettingsStore";
+import { usePluginHostedViewsStore } from "@/store/pluginHostedViewsStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { CANOPY_WINDOW_FRAME } from "./canopyWindowFrame";
+import { CanopyPluginSupport } from "./CanopyPluginSupport";
 
 /**
  * The Canopy window's whole renderer: the inbox and only what it reads, with
@@ -27,6 +29,9 @@ export function CanopyWindowRoot() {
   useAppThemeConfig();
   useTerminalConfig();
   useCanopySnapshotSync();
+  const offersPluginViews = usePluginHostedViewsStore(
+    (state) => state.views?.some((view) => view.location === "canopy") ?? false
+  );
   useEffect(() => {
     const stops = [
       initTerminalConfigSync(),
@@ -61,6 +66,7 @@ export function CanopyWindowRoot() {
       </div>
       <Toaster standalone />
       <AccessibilityAnnouncer />
+      {offersPluginViews && <CanopyPluginSupport />}
     </TooltipProvider>
   );
 }

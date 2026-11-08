@@ -23,7 +23,12 @@ import {
 } from "./providers.js";
 import { validateContributedActionIds, validateEventRoutes } from "./actions.js";
 import { validateDatabases } from "./databases.js";
-import { validateDefaultLayout, validateSurfaceViews, validateViews } from "./views.js";
+import {
+  validateCanopyViews,
+  validateDefaultLayout,
+  validateSurfaceViews,
+  validateViews,
+} from "./views.js";
 import {
   validateLaunchEntries,
   validateLayouts,
@@ -89,6 +94,7 @@ export function validatePluginManifest(
   validateDefaultLayout(manifest, ctx);
   validateApplication(manifest, ctx, context);
   validateToolbarButtons(manifest, ctx, context);
+  validateCanopyViews(manifest, ctx, context);
   validateLaunchEntries(manifest, ctx, context);
   validateSearchProviders(manifest, ctx, context);
   validateRecipes(manifest, ctx);
