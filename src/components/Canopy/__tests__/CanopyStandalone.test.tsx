@@ -3,6 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import {
   act,
   cleanup,
+  createEvent,
   fireEvent,
   render as rtlRender,
   screen,
@@ -130,6 +131,39 @@ vi.mock("@/services/assistantSubject", async (importOriginal) => ({
   openInAssistant: openInAssistantMock,
 }));
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
+// The plugin's own module loads over `plugin://` and has its own suites: here
+// the pane records what Canopy mounted, with a control of the view's own.
+const pluginMounts = vi.hoisted(
+  () => [] as Array<{ host: string; mountId: string; viewId: string; kitHostInstalled: boolean }>
+);
+const installKitHost = vi.hoisted(() => vi.fn());
+vi.mock("@/components/Plugin/PluginHostedView", async () => {
+  const { createPortal } = await import("react-dom");
+  return {
+    PluginHostedView: (props: {
+      host: string;
+      mountId: string;
+      source: { view: { id: string } };
+    }) => {
+      pluginMounts.push({
+        host: props.host,
+        mountId: props.mountId,
+        viewId: props.source.view.id,
+        kitHostInstalled: installKitHost.mock.calls.length > 0,
+      });
+      return (
+        <div data-testid="plugin-view">
+          <input aria-label="Plugin filter" />
+          {/* A dialog the view opened: drawn into the page, outside its box. */}
+          {createPortal(<input aria-label="Plugin dialog field" />, document.body)}
+        </div>
+      );
+    },
+  };
+});
+vi.mock("@/services/plugin/appPluginKitHost", () => ({
+  installAppPluginKitHost: installKitHost,
+}));
 const lifecycle = vi.hoisted(() => new Set<(phase: string) => void>());
 vi.mock("@/lib/viewCacheState", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/viewCacheState")>()),
@@ -153,6 +187,12 @@ import { useCanopyStore } from "@/store/canopyStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useUIStore } from "@/store/uiStore";
+import { isMac } from "@/lib/platform";
+import {
+  _resetPluginHostedViewsStoreForTest,
+  usePluginHostedViewsStore,
+} from "@/store/pluginHostedViewsStore";
+import type { PluginCanopyHostedViewDescriptor } from "@shared/types/plugin";
 
 // The service mock never evaluates the real module, so nothing builds it.
 await loadTerminalService();
@@ -272,6 +312,12 @@ function installElectron() {
       fleet: {},
       terminal: { restore: vi.fn() },
       system: { openExternal: vi.fn() },
+      // The docked global assistant, still attaching: enough to draw its pane.
+      help: {
+        onGlobalAssistantChanged: vi.fn(() => () => {}),
+        attachGlobalAssistant: vi.fn(() => new Promise(() => {})),
+        detachGlobalAssistant: vi.fn(async () => {}),
+      },
     },
     configurable: true,
     writable: true,
@@ -861,5 +907,211 @@ describe("Canopy's inbox with no dialog and no project", () => {
       fireEvent.keyDown(document.body, { key: "Escape" });
     });
     expect(host.close).not.toHaveBeenCalled();
+  });
+});
+
+function canopyPluginView(viewId: string, title: string): PluginCanopyHostedViewDescriptor {
+  return {
+    id: `plugin-view:acme.beads/${viewId}`,
+    pluginId: "acme.beads",
+    viewId,
+    location: "canopy",
+    name: `Beads ${title}`,
+    title,
+    pluginName: "Beads",
+    iconId: "list",
+    componentPath: `plugin://acme.beads/__dtv-1/${viewId}.js`,
+  };
+}
+
+describe("app-wide plugin views in the Canopy window (#16344)", () => {
+  const TRIAGE = canopyPluginView("triage", "Triage");
+
+  function offer(views: PluginCanopyHostedViewDescriptor[]) {
+    act(() => usePluginHostedViewsStore.setState({ views }));
+  }
+
+  function pluginRow(title: string) {
+    return within(surface()!).getByRole("option", { name: new RegExp(title) });
+  }
+
+  async function showPlugin(title: string) {
+    await act(async () => {
+      fireEvent.click(pluginRow(title));
+    });
+    await vi.waitFor(() => expect(screen.queryByTestId("plugin-view")).not.toBeNull());
+  }
+
+  beforeEach(() => {
+    pluginMounts.length = 0;
+    _resetPluginHostedViewsStoreForTest();
+  });
+  afterEach(() => {
+    _resetPluginHostedViewsStoreForTest();
+    useCanopyStore.setState({ globalDocked: false });
+  });
+
+  it("adds nothing while no plugin offers a view", async () => {
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+    expect(document.querySelector("[data-canopy-plugins]")).toBeNull();
+  });
+
+  it("lists the offered views and fills the pane with the one chosen, as Canopy's own", async () => {
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+    offer([canopyPluginView("timesheet", "Timesheet"), TRIAGE]);
+
+    const rows = within(surface()!)
+      .getAllByRole("option")
+      .filter((row) => row.hasAttribute("data-canopy-plugin-row"));
+    expect(rows.map((row) => row.textContent)).toEqual(["TimesheetBeads", "TriageBeads"]);
+    // Focus alone starts nothing: the view mounts when it is chosen.
+    act(() => pluginRow("Triage").focus());
+    expect(pluginMounts).toEqual([]);
+
+    await showPlugin("Triage");
+    // The kit's host is in before the view first draws: a kit control reads it as it renders.
+    expect(pluginMounts[0]).toEqual({
+      host: "canopy",
+      mountId: `canopy:${TRIAGE.id}`,
+      viewId: TRIAGE.id,
+      kitHostInstalled: true,
+    });
+    expect(pluginRow("Triage").getAttribute("aria-selected")).toBe("true");
+    // No run reads as the one in the pane while the plugin's view is.
+    expect(selectedRun()).toBeUndefined();
+    expect(document.querySelector("[data-canopy-detail]")).toBeNull();
+  });
+
+  it("gives the pane back to the run the person picks, or to a search", async () => {
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+    offer([TRIAGE]);
+    await showPlugin("Triage");
+
+    await act(async () => {
+      fireEvent.click(card("second"));
+    });
+    expect(screen.queryByTestId("plugin-view")).toBeNull();
+    expect(selectedRun()).toBe("canopy-card-second");
+    expect(pluginRow("Triage").getAttribute("aria-selected")).toBe("false");
+
+    await showPlugin("Triage");
+    const search = within(surface()!).getByRole("combobox", { name: "Search agents" });
+    // Even a search that matches no agent: it is the inbox the person went back to.
+    await act(async () => {
+      fireEvent.change(search, { target: { value: "nothing matches this" } });
+    });
+    expect(screen.queryByTestId("plugin-view")).toBeNull();
+  });
+
+  it("keeps ⌘↑/⌘↓ inside the view, its dialogs included, the view's own", async () => {
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+    offer([TRIAGE]);
+    await showPlugin("Triage");
+    const step = { key: "ArrowDown", ...(isMac() ? { metaKey: true } : { altKey: true }) };
+
+    for (const name of ["Plugin filter", "Plugin dialog field"]) {
+      const field = screen.getByRole("textbox", { name });
+      const press = createEvent.keyDown(field, step);
+      await act(async () => {
+        fireEvent(field, press);
+      });
+      expect(press.defaultPrevented).toBe(false);
+      expect(screen.queryByTestId("plugin-view")).not.toBeNull();
+    }
+    // From the search, the list and the docked global assistant they still
+    // step through the agents, taking the pane back.
+    act(() => useCanopyStore.setState({ globalDocked: true }));
+    const from = [
+      within(surface()!).getByRole("combobox", { name: "Search agents" }),
+      document.querySelector<HTMLElement>("[data-canopy-list]")!,
+      document.querySelector<HTMLElement>("[data-canopy-global]")!,
+    ];
+    for (const target of from) {
+      await showPlugin("Triage");
+      await act(async () => {
+        fireEvent.keyDown(target, step);
+      });
+      expect(screen.queryByTestId("plugin-view")).toBeNull();
+      expect(selectedRun()).toBeDefined();
+    }
+  });
+
+  it("keeps the view up when the keyboard drops out of it", async () => {
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+    offer([TRIAGE]);
+    await showPlugin("Triage");
+
+    act(() => (document.activeElement as HTMLElement | null)?.blur());
+    expect(document.activeElement).toBe(document.body);
+    // The fleet moves while the keyboard is nowhere: no run is gone to.
+    act(() => useFleetSnapshotStore.setState({ snapshot: { ...FLEET, changedAt: NOW + 1 } }));
+    await settle();
+    expect(screen.queryByTestId("plugin-view")).not.toBeNull();
+    expect(selectedRun()).toBeUndefined();
+  });
+
+  it("gives the pane back when the plugin stops offering the view", async () => {
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+    offer([TRIAGE]);
+    await showPlugin("Triage");
+
+    offer([]);
+    expect(screen.queryByTestId("plugin-view")).toBeNull();
+    expect(document.querySelector("[data-canopy-plugins]")).toBeNull();
+    expect(document.querySelector("[data-canopy-detail]")).not.toBeNull();
+  });
+
+  it("keeps Escape from closing Canopy, handing the keyboard back to the view's row", async () => {
+    const host = hostFrame();
+    render(<CanopyView frame={host.frame} />);
+    await settle();
+    offer([TRIAGE]);
+    await showPlugin("Triage");
+
+    const input = screen.getByRole("textbox", { name: "Plugin filter" });
+    act(() => input.focus());
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Escape" });
+    });
+    expect(host.close).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(pluginRow("Triage"));
+    expect(screen.queryByTestId("plugin-view")).not.toBeNull();
+    // A dialog of the view's own takes its Escape where it listens, past this box.
+    const seen = vi.fn();
+    document.addEventListener("keydown", seen);
+    const dialogField = screen.getByRole("textbox", { name: "Plugin dialog field" });
+    act(() => dialogField.focus());
+    await act(async () => {
+      fireEvent.keyDown(dialogField, { key: "Escape" });
+    });
+    document.removeEventListener("keydown", seen);
+    expect(seen).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(dialogField);
+    // Z there is the view's letter, not Canopy's undo.
+    const press = new KeyboardEvent("keydown", { key: "z", bubbles: true, cancelable: true });
+    act(() => {
+      screen.getByTestId("plugin-view").dispatchEvent(press);
+    });
+    expect(press.defaultPrevented).toBe(false);
+  });
+
+  it("lists the views with no agent running, and says how to start one beside them", async () => {
+    useFleetSnapshotStore.setState({ snapshot: { ...FLEET, runs: [] } });
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+    offer([TRIAGE]);
+
+    expect(pluginRow("Triage")).not.toBeNull();
+    expect(
+      within(surface()!).getAllByText("Launch an agent from the toolbar and it shows up here.")
+    ).toHaveLength(1);
+    await showPlugin("Triage");
+    expect(screen.queryByText("Launch an agent from the toolbar and it shows up here.")).toBeNull();
   });
 });

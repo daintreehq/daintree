@@ -3,10 +3,11 @@ import type { PluginHostedViewDescriptor, ViewLocation } from "@shared/types/plu
 import { logWarn } from "@/utils/logger";
 
 /**
- * This project view's copy of main's hosted-view registry (#13770): the plugin
- * views that mount outside the panel grid, already narrowed by main to what this
+ * This view's copy of main's hosted-view registry (#13770): the plugin views
+ * that mount outside the panel grid, already narrowed by main to what this
  * project may see — a project plugin's only in its own project, an installed
- * plugin's wherever it is visible.
+ * plugin's wherever it is visible. The Canopy window, which has no project,
+ * gets the installed plugins' alone.
  *
  * Every snapshot is complete, so each one replaces the last. A plugin reload
  * arrives as a snapshot carrying the new module URL; a plugin that stops, is

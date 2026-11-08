@@ -1110,6 +1110,29 @@ export class PluginContributionRegistrar {
         },
       ];
     });
+    // Panel views the plugin offers in the Canopy window, which belongs to no
+    // project. Validation refuses them for a project plugin or an instanced
+    // package; an instance bound to a project is skipped here all the same,
+    // since its view would run there with that project's binding.
+    if (!isProject && (binding.projectId == null || binding.projectId.length === 0)) {
+      for (const { viewId } of manifest.contributes.canopyViews ?? []) {
+        const view = viewsByBareId.get(viewId);
+        const panel = manifest.contributes.panels.find((entry) => entry.id === viewId);
+        if (view?.location !== "panel" || panel === undefined || panel.hasPty === true) continue;
+        hostedViews.push({
+          id: pluginHostedViewKindId(pluginId, viewId),
+          pluginId,
+          viewId,
+          componentPath: buildPluginViewUrl(authority, view.componentPath, plugin.viewGeneration),
+          location: "canopy",
+          name: `${pluginName} ${panel.name}`,
+          title: panel.name,
+          pluginName,
+          iconId: resolveIconId(panel.iconId),
+          ...(panel.stateVersion !== undefined ? { stateVersion: panel.stateVersion } : {}),
+        });
+      }
+    }
     if (hostedViews.length > 0) {
       registerPluginHostedViews(pluginId, hostedViews);
       this.deps.broadcaster.scheduleHostedViewsBroadcast();

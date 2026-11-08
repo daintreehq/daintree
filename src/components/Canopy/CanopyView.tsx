@@ -86,6 +86,8 @@ import type { CanopyTrashItem } from "./canopyTrash";
 import { parseAllHostsKey } from "./canopyAllHosts";
 import { CanopyAssistantPane, CanopyAssistantRow } from "./CanopyAssistantList";
 import { CanopyDetailSplit } from "./CanopyDetailSplit";
+import { CanopyPluginSection } from "./CanopyPluginSection";
+import { canopyPluginRowDomId, useCanopyPluginViews } from "./canopyPluginViews";
 import { CanopyGlobalAssistant } from "./CanopyGlobalAssistant";
 import { isOwnGlobalAssistant } from "./useCanopyInboxFilters";
 import { canopyAssistantDomId } from "./openAssistantItem";
@@ -107,6 +109,14 @@ import { readsWithHostedService, type CanopyTrashEntry } from "@shared/types/ipc
 // Loaded on first use: the dialog pulls in Pilot's row and band modules.
 const LazyParkRunDialog = lazy(() =>
   import("@/components/Fleet/ParkRunDialog").then((m) => ({ default: m.ParkRunDialog }))
+);
+// Off the inbox's chunk: only a window offering a plugin view loads the
+// plugin loader and the kit, and the kit's host is in before the first draws.
+const LazyCanopyPluginView = lazy(() =>
+  import("./CanopyPluginView").then((m) => {
+    m.installCanopyPluginKitHost();
+    return { default: m.CanopyPluginView };
+  })
 );
 
 interface HostIssue {
@@ -651,6 +661,7 @@ function CanopyInbox({
   const frame = useCanopyFrame();
   const isOpen = useCanopyStore((s) => s.isOpen);
   const setGlobalDocked = useCanopyStore((s) => s.setGlobalDocked);
+  const pluginViews = useCanopyPluginViews();
   const {
     inProject,
     otherHost,
@@ -817,6 +828,8 @@ function CanopyInbox({
     captureFocusAfterClose,
     closeForTerminal,
     focusAfterClose,
+    shownPluginViewId,
+    showPluginView,
   } = useCanopyInboxFocus({
     isOpen,
     hostId,
@@ -838,7 +851,9 @@ function CanopyInbox({
     setQuery,
     roleFilter,
     seeAssistantHandback,
+    pluginViewIds: pluginViews.map((view) => view.id),
   });
+  const shownPluginView = pluginViews.find((view) => view.id === shownPluginViewId) ?? null;
 
   useLayoutEffect(() => placeOrder(), [placeOrder, orderWake]);
   const { reserveUndo, undoReads, undoLine } = useCanopyInboxUndo({ hostId, api });
@@ -1023,7 +1038,9 @@ function CanopyInbox({
   // A run put back from the Trash comes into the inbox selected, once it is
   // back in the fleet: the same run, or the pane resuming its session. Anything
   // the user selects from the press on, another host or the panel closing, wins.
-  const shownRunId = selectedAssistant?.id ?? focusedItem?.runId ?? null;
+  // What the pane shows: a plugin's view counts, so a restore settling after
+  // the person chose one doesn't take the pane from it.
+  const shownRunId = shownPluginView?.id ?? selectedAssistant?.id ?? focusedItem?.runId ?? null;
   const shownRunIdRef = useRef(shownRunId);
   useLayoutEffect(() => {
     shownRunIdRef.current = shownRunId;
@@ -1571,6 +1588,36 @@ function CanopyInbox({
     </>
   );
 
+  // Nothing to list but the plugins the window offers: the inbox's own words for
+  // having no agent, in the pane beside them rather than in place of the list.
+  const listsOnlyPlugins = items.length === 0 && !listsAssistants && !listsTrash && !globalDocked;
+  const listsNothing = listsOnlyPlugins && pluginViews.length === 0;
+  const noAgentsWords =
+    scope === "project" && fleet !== null && fleet.runs.length > 0 ? (
+      <>
+        <p className="text-sm text-text-secondary">
+          No agents in this project. Other projects have {pluralize(fleet.runs.length, "agent")}.
+        </p>
+        <Button variant="outline" size="sm" onClick={() => setScope("all")}>
+          Show all projects
+        </Button>
+      </>
+    ) : everyHost ? (
+      <p className="text-sm text-text-secondary">
+        {hostIssues.length > 0
+          ? "No agents on the hosts that answered."
+          : "No agents are running on any host. Each one shows up here once it starts."}
+      </p>
+    ) : otherHost ? (
+      <p className="text-sm text-text-secondary">
+        No agents are running on {hostName}. Each one shows up here once it starts.
+      </p>
+    ) : (
+      <p className="text-sm text-text-secondary">
+        Launch an agent from the toolbar and it shows up here.
+      </p>
+    );
+
   return (
     <CanopySurface
       isOpen={isOpen}
@@ -1635,7 +1682,22 @@ function CanopyInbox({
       <div
         ref={bodyRef}
         className="canopy-frame flex min-h-0 flex-1 flex-col"
-        onKeyDownCapture={onAgentStepKeyDownCapture}
+        onKeyDownCapture={(event) => {
+          // While a plugin's view is in the pane, ⌘↑/⌘↓ step the agents only
+          // from the search, the list and the docked global assistant:
+          // anywhere else they are the view's, its dialogs and menus too,
+          // which sit outside this box.
+          if (
+            shownPluginView !== null &&
+            !(
+              event.target instanceof Element &&
+              event.target.closest("[data-canopy-list], [data-canopy-search], [data-canopy-global]")
+            )
+          ) {
+            return;
+          }
+          onAgentStepKeyDownCapture(event);
+        }}
         onKeyDown={onNavigationKeyDown}
       >
         {hostTrouble && (
@@ -1780,7 +1842,7 @@ function CanopyInbox({
               </Callout>
             </div>
           )}
-        {!hostHeld && (items.length > 0 || listsAssistants || listsTrash || globalDocked) && (
+        {!hostHeld && !listsNothing && (
           // An inbox: what needs you down a sidebar, most urgent first, the rest
           // folded away beneath it, and the selected agent's own terminal beside
           // it, drawn as its pane.
@@ -1792,7 +1854,11 @@ function CanopyInbox({
                   focusedOnOpen
                   inputRef={searchRef}
                   value={query}
-                  onChange={(event) => setQuery(event.target.value)}
+                  onChange={(event) => {
+                    // A search is for agents: the pane goes back to the inbox.
+                    showPluginView(null);
+                    setQuery(event.target.value);
+                  }}
                   onPaste={(event) => {
                     // A pasted column would lose its line breaks to the
                     // single-line field and glue into one word: each line
@@ -2216,6 +2282,13 @@ function CanopyInbox({
                   acted={trashActed}
                 />
               </div>
+              {pluginViews.length > 0 && (
+                <CanopyPluginSection
+                  views={pluginViews}
+                  shownId={shownPluginView?.id ?? null}
+                  onShow={showPluginView}
+                />
+              )}
               {undoLine && (
                 <div
                   data-canopy-undo-line=""
@@ -2259,7 +2332,20 @@ function CanopyInbox({
                 ) : null
               }
             >
-              {selectedGlobal ? null : selectedAssistant !== null ? (
+              {shownPluginView !== null ? (
+                <Suspense fallback={null}>
+                  <LazyCanopyPluginView
+                    view={shownPluginView}
+                    onShowInbox={() => {
+                      showPluginView(null);
+                      searchRef.current?.focus({ preventScroll: true });
+                    }}
+                    onEscape={() =>
+                      document.getElementById(canopyPluginRowDomId(shownPluginView.id))?.focus()
+                    }
+                  />
+                </Suspense>
+              ) : selectedGlobal ? null : selectedAssistant !== null ? (
                 <CanopyAssistantPane
                   key={selectedAssistant.id}
                   item={selectedAssistant}
@@ -2348,6 +2434,11 @@ function CanopyInbox({
                             Turn off Unread to see every agent's terminal here.
                           </p>
                         </>
+                      ) : listsOnlyPlugins ? (
+                        // Said once the fleet has answered, as it is with no plugins.
+                        fleet !== null && !fleet.degraded ? (
+                          noAgentsWords
+                        ) : null
                       ) : (
                         <>
                           <p className="text-sm text-text-primary">Nothing in the inbox</p>
@@ -2363,55 +2454,20 @@ function CanopyInbox({
             </CanopyDetailSplit>
           </div>
         )}
-        {!hostHeld &&
-          fleet !== null &&
-          !fleet.degraded &&
-          items.length === 0 &&
-          !listsAssistants &&
-          !listsTrash &&
-          !globalDocked && (
-            <div className="flex flex-1 flex-col items-center justify-center gap-3">
-              {scope === "project" && fleet.runs.length > 0 ? (
-                <>
-                  <p className="text-sm text-text-secondary">
-                    No agents in this project. Other projects have{" "}
-                    {pluralize(fleet.runs.length, "agent")}.
-                  </p>
-                  <Button variant="outline" size="sm" onClick={() => setScope("all")}>
-                    Show all projects
-                  </Button>
-                </>
-              ) : everyHost ? (
-                <p className="text-sm text-text-secondary">
-                  {hostIssues.length > 0
-                    ? "No agents on the hosts that answered."
-                    : "No agents are running on any host. Each one shows up here once it starts."}
-                </p>
-              ) : otherHost ? (
-                <p className="text-sm text-text-secondary">
-                  No agents are running on {hostName}. Each one shows up here once it starts.
-                </p>
-              ) : (
-                <p className="text-sm text-text-secondary">
-                  Launch an agent from the toolbar and it shows up here.
-                </p>
-              )}
-            </div>
-          )}
-        {offerReading &&
-          !hostHeld &&
-          items.length === 0 &&
-          !listsAssistants &&
-          !listsTrash &&
-          !globalDocked && (
-            <CanopyStatusBar
-              host={otherHost ? hostName : null}
-              model={undefined}
-              reader={undefined}
-              waiting={undefined}
-              offer={offerReading}
-            />
-          )}
+        {!hostHeld && fleet !== null && !fleet.degraded && listsNothing && (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3">
+            {noAgentsWords}
+          </div>
+        )}
+        {offerReading && !hostHeld && listsNothing && (
+          <CanopyStatusBar
+            host={otherHost ? hostName : null}
+            model={undefined}
+            reader={undefined}
+            waiting={undefined}
+            offer={offerReading}
+          />
+        )}
       </div>
       {parkRunId !== null && (
         <Suspense fallback={null}>

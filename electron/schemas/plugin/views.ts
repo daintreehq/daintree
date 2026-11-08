@@ -138,6 +138,17 @@ export const ViewContributionSchema = z
   .strict();
 
 /**
+ * `contributes.canopyViews`: a panel view offered in the Canopy window. The
+ * cross-checks — a declared, non-PTY `location: "panel"` view, named once, by
+ * an app-wide plugin — run with the manifest's other references.
+ */
+export const CanopyViewContributionSchema = z
+  .object({
+    viewId: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+  })
+  .strict();
+
+/**
  * A surface slot that renders a plugin view: `viewId` names an entry in this
  * manifest's own `contributes.views`, cross-checked in `superRefine` exactly
  * like `forgeProviders.viewRefs` (#10620) — a dangling id would mount nothing

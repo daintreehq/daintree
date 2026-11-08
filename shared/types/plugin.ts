@@ -286,6 +286,22 @@ export interface ToolbarButtonPopover {
 }
 
 /**
+ * One of the plugin's panel views offered in the Canopy window, which spans
+ * every project and has none of its own. Naming the view is the author saying
+ * it works without a project: no `worktreeId`, `openRequest`, `requestReload`
+ * or `setTitle`, and `"project"`/`"local"` settings that follow the app's
+ * active project. App-wide plugins only.
+ */
+export interface CanopyViewContribution {
+  /**
+   * A `contributes.views[].id` with `location: "panel"` whose panel is not
+   * `hasPty`. The same view stays spawnable as a panel; in Canopy it sees
+   * `hostContext.kind === "canopy"`, under its panel's name and icon.
+   */
+  viewId: string;
+}
+
+/**
  * A toolbar button does one thing on click: dispatch `actionId`, or open
  * `popover`. Declaring both is a manifest error.
  *
@@ -1189,14 +1205,15 @@ export interface PluginSettingsPageContribution {
  * as narrow as the sidebar's minimum width. `"fileEditor"` is a view-backed
  * file editor inside the file panel. `"popover"` is the anchored popover
  * a toolbar button opens (`contributes.toolbarButtons[].popover`), again one of
- * the plugin's panel views.
+ * the plugin's panel views. `"canopy"` is the Canopy window
+ * (`contributes.canopyViews`), a panel view shown with no project around it.
  *
  * Open-ended: hosts added later arrive as new members, so a view that switches
  * on this must give unknown kinds a sensible default rather than treat the list
  * as exhaustive.
  */
 export type PluginViewHostKind =
-  "panel" | "surface" | "settings" | "sidebar" | "fileEditor" | "popover";
+  "panel" | "surface" | "settings" | "sidebar" | "fileEditor" | "popover" | "canopy";
 
 export interface PluginViewHostContext {
   readonly kind: PluginViewHostKind;
@@ -1210,8 +1227,9 @@ export interface PluginViewHostContext {
 
 /**
  * A plugin view that mounts outside the panel grid — every `contributes.views`
- * entry whose location is not `"panel"`. Registered by main at plugin load,
- * never as a panel kind, so nothing can spawn it from the launcher, palette or
+ * entry whose location is not `"panel"`, and every panel view named in
+ * `contributes.canopyViews`. Registered by main at plugin load, never as a
+ * panel kind of its own, so nothing can spawn it from the launcher, palette or
  * dock, and served only to the views of projects that may see the plugin.
  */
 interface PluginHostedViewDescriptorBase {
@@ -1253,10 +1271,28 @@ export interface PluginSidebarHostedViewDescriptor extends PluginHostedViewDescr
   when?: string;
 }
 
+/**
+ * A panel view an app-wide plugin offers in the Canopy window
+ * (`contributes.canopyViews`). Its `viewId` names a `location: "panel"` view,
+ * so it carries what its row needs from that view's panel.
+ */
+export interface PluginCanopyHostedViewDescriptor extends PluginHostedViewDescriptorBase {
+  location: "canopy";
+  /** The panel's `name`: the row's title. */
+  title: string;
+  /** The plugin's display name, which attributes the row. */
+  pluginName: string;
+  /** The panel's `iconId`, with a custom SVG reference resolved to its runtime key. */
+  iconId?: string;
+  /** The panel's `stateVersion`, which judges a persisted bag as it does on the panel. */
+  stateVersion?: number;
+}
+
 export type PluginHostedViewDescriptor =
   | PluginSettingsHostedViewDescriptor
   | PluginFileEditorHostedViewDescriptor
-  | PluginSidebarHostedViewDescriptor;
+  | PluginSidebarHostedViewDescriptor
+  | PluginCanopyHostedViewDescriptor;
 
 /**
  * The synthetic view-kind id a hosted view mounts under. It names no panel
@@ -2906,6 +2942,12 @@ export interface PluginManifest {
   contributes: {
     panels: PanelContribution[];
     toolbarButtons: ToolbarButtonContribution[];
+    /**
+     * Panel views offered in the Canopy window. Optional in the type but
+     * always materialized by the manifest schema's `.default([])`. Refused for
+     * a `scope: "project"` plugin and an `instanceMode: "project"` package.
+     */
+    canopyViews?: CanopyViewContribution[];
     menuItems: MenuItemContribution[];
     keybindings: KeybindingContribution[];
     contextMenus: ContextMenuContribution[];

@@ -45,6 +45,7 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `themes` | Rejected — the app theme is one machine-wide selection painted into every window, with no per-project theme to narrow to |
 | `forgeProviders` | Rejected — forge providers need synchronous host methods that cannot cross the plugin worker's message port |
 | `projectTemplates` | Rejected — a template is offered while a new project folder is being created, before any project exists for a project plugin to belong to. Ship the template from an installed plugin |
+| `canopyViews` | Rejected — the Canopy window spans every project and belongs to none, so a project's plugin has no project to run its view in there. An `"instanceMode": "project"` package is refused for the same reason |
 | `fileEditors` | Allowed, view-backed only — editors apply only in the plugin's own project and may also match project-relative `paths`, and an Edit editor may be the `default` for them. A `slot` is built-in only |
 
 Each rejection is a manifest error naming the obstacle, not a silent drop, and each is deferred rather than closed — the reason says what has to be built before the rule can go.
@@ -642,6 +643,32 @@ A `menu` lists your own actions only — a built-in or another plugin's id fails
 ```
 
 `viewId` names a `location: "panel"` view whose panel is not `hasPty` (`toolbar_popover_view_unknown`, `toolbar_popover_view_settings`, `toolbar_popover_view_sidebar`, `toolbar_popover_view_file_editor` and `toolbar_popover_view_pty` otherwise). The same view stays spawnable as a panel. The host draws the popover itself — 450 by up to 500 pixels, clamped to the room on screen — anchored under the promoted button, or under the plugin tray or the toolbar's overflow menu when the button is picked from one of their rows. It stays open while a dialog, menu or picker your view opened is up, and closes on Escape or a click outside; closing it from inside hands focus back to the button that opened it. Only one plugin popover is open at a time. Your view mounts fresh on each opening, with `hostContext.kind` set to `"popover"` and `hostContext.close()` to dismiss it, after a quick-add submits for example. Like a project surface, it has no panel record behind it: `persistState` writes to the durable view-state store and `initialArgs` reads it back on the next opening, `setHasUnsavedChanges` is offered, and the other panel-record props are absent (see [Views → State outside the grid](./views.md#state-outside-the-grid)). A popover button takes `when` and [`host.setToolbarButtonState`](./host-api.md#settoolbarbuttonstate) like any other: a disabled or busy one doesn't open, and an open popover closes when its button's `when` turns false. Works the same for installed and project plugins.
+
+## Canopy views — _Shipped_
+
+The Canopy window watches every project at once, so it is where a tool that spans projects belongs: an issue tracker across all your repositories, a timesheet. An installed plugin offers it one of its panel views by naming it:
+
+```json
+{
+  "contributes": {
+    "panels": [{ "id": "triage", "name": "Triage", "iconId": "list", "color": "#7c3aed" }],
+    "views": [{ "id": "triage", "componentPath": "dist/triage.js", "location": "panel" }],
+    "canopyViews": [{ "viewId": "triage" }]
+  }
+}
+```
+
+`viewId` names a `location: "panel"` view whose panel is not `hasPty` (`canopy_view_unknown`, `canopy_view_not_panel` and `canopy_view_pty` otherwise), each at most once (`canopy_view_duplicate`), five at most. The same view stays a panel in every project window. Canopy lists it under Plugins, below its inbox, by the panel's `name` and `iconId` with your plugin's name beneath, and choosing it fills Canopy's pane with your view; picking an agent or searching gives the pane back to the inbox. Only the Canopy window offers it: the Canopy dialog inside a project window doesn't.
+
+Naming a view is your word that it works with no project around it, because Canopy gives it none:
+
+- `hostContext.kind` is `"canopy"`, and there is no panel record: `worktreeId`, `openRequest`, `requestReload`, `setTitle` and the panel toolbar and menu setters are absent.
+- `persistState` and `initialArgs` work, with your panel's `stateVersion`, in one bag per view for the Canopy window, apart from every project's (see [Views → State outside the grid](./views.md#state-outside-the-grid)).
+- Your plugin's `"project"` and `"local"` settings follow the app's active project, as they do from any window, and writing one fails while no project is active. Keep what the view needs in `"user"` settings, or read a repository's own value from your backend.
+- Actions run in a project window, so dispatching one from your view in Canopy, a built-in or your own, fails; call your own backend instead.
+- Escape is yours: one your view leaves alone takes the keyboard back to its row in the list, and never closes Canopy.
+
+Only an app-wide plugin can offer one. A `"scope": "project"` plugin or an `"instanceMode": "project"` package is refused (`canopyViews_project_scope_forbidden`): Canopy belongs to no project for it to run in.
 
 ## Launch entries — _Shipped_
 

@@ -637,6 +637,23 @@ function isProjectPluginInstanceKey(pluginId: string): boolean {
 }
 
 /**
+ * The view a hosted kind id names: one mounted outside the grid by its own
+ * location, or a panel view an app-wide instance offers in Canopy. Any other
+ * panel view stays reachable only through its panel kind.
+ */
+function findHostedView(plugin: LoadedPlugin, viewId: string) {
+  const { contributes } = plugin.manifest;
+  const hosted = contributes.views.find((v) => v.id === viewId && v.location !== "panel");
+  if (hosted !== undefined) return hosted;
+  const projectId = plugin.binding?.projectId;
+  if (plugin.origin === "project" || (projectId != null && projectId.length > 0)) return undefined;
+  if (!(contributes.canopyViews ?? []).some((entry) => entry.viewId === viewId)) return undefined;
+  const panel = contributes.panels.find((entry) => entry.id === viewId);
+  if (panel === undefined || panel.hasPty === true) return undefined;
+  return contributes.views.find((v) => v.id === viewId && v.location === "panel");
+}
+
+/**
  * Project-plugin lifecycle goes to the file logger, not `console.*`. A trust
  * decision that failed to persist and a manifest that would not parse are both
  * only diagnosable after the fact, and the packaged app has no console to read
@@ -3596,9 +3613,7 @@ export class PluginService {
     options: { remoteFrontend?: boolean }
   ): Promise<PluginActivationResult> {
     const plugin = this.plugins.get(pluginId);
-    const view = plugin?.manifest.contributes.views.find(
-      (v) => v.id === viewId && v.location !== "panel"
-    );
+    const view = plugin ? findHostedView(plugin, viewId) : undefined;
     if (!plugin || !view) return { ok: true };
     if (options.remoteFrontend && plugin.manifest.remote === "unsupported") {
       console.warn(

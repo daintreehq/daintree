@@ -33,6 +33,9 @@ vi.mock("@/components/ui/toaster", () => ({
     return null;
   },
 }));
+vi.mock("../CanopyPluginSupport", () => ({
+  CanopyPluginSupport: () => <div data-testid="plugin-support" />,
+}));
 vi.mock("@/hooks/useAppThemeConfig", () => ({ useAppThemeConfig: vi.fn() }));
 vi.mock("@/hooks/useTerminalConfig", () => ({ useTerminalConfig: vi.fn() }));
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
@@ -61,6 +64,10 @@ vi.mock("@/store/notificationSettingsStore", () => ({
   useNotificationSettingsStore: { getState: () => ({ hydrate: hydrateNotifications }) },
 }));
 
+import {
+  _resetPluginHostedViewsStoreForTest,
+  usePluginHostedViewsStore,
+} from "@/store/pluginHostedViewsStore";
 import { CanopyWindowRoot } from "../CanopyWindowRoot";
 import { CANOPY_WINDOW_FRAME } from "../canopyWindowFrame";
 
@@ -109,7 +116,10 @@ beforeEach(() => {
   });
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  _resetPluginHostedViewsStoreForTest();
+});
 
 describe("CanopyWindowRoot", () => {
   it("shows the inbox in the window's own frame, with no project shell", async () => {
@@ -149,6 +159,45 @@ describe("CanopyWindowRoot", () => {
     expect(hydrateNotifications).toHaveBeenCalled();
     expect(toasterProps.every((props) => props.standalone === true)).toBe(true);
     expect(toasterProps.length).toBeGreaterThan(0);
+  });
+
+  it("leans on plugin support only while some plugin offers Canopy a view (#16344)", async () => {
+    const view = render(<CanopyWindowRoot />);
+    await act(async () => {});
+    expect(view.queryByTestId("plugin-support")).toBeNull();
+
+    const base = {
+      pluginId: "acme.beads",
+      viewId: "triage",
+      componentPath: "plugin://acme.beads/__dtv-1/triage.js",
+    };
+    act(() =>
+      usePluginHostedViewsStore.setState({
+        views: [
+          { ...base, id: "plugin-view:acme.beads/prefs", location: "settings", name: "Beads" },
+        ],
+      })
+    );
+    expect(view.queryByTestId("plugin-support")).toBeNull();
+
+    act(() =>
+      usePluginHostedViewsStore.setState({
+        views: [
+          {
+            ...base,
+            id: "plugin-view:acme.beads/triage",
+            location: "canopy",
+            name: "Beads Triage",
+            title: "Triage",
+            pluginName: "Beads",
+          },
+        ],
+      })
+    );
+    expect(view.queryByTestId("plugin-support")).not.toBeNull();
+
+    act(() => usePluginHostedViewsStore.setState({ views: [] }));
+    expect(view.queryByTestId("plugin-support")).toBeNull();
   });
 
   it("stops everything it started when it goes", async () => {
