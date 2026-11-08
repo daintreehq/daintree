@@ -22,7 +22,7 @@ let canopyWindow: BrowserWindow | null = null;
 let canopyViewWebContents: WebContents | null = null;
 /** Bumped as the view starts each new document: a pop-out is answered for by the one that took it up. */
 let canopyViewDocument = 0;
-/** Between a new document's start and its commit or failure: only the page leaving can ask then. */
+/** From a new document's start until the view stops loading: only a page leaving can ask then. */
 let canopyViewNavigating = false;
 /** A Canopy window has stood this session, whether or not it still does. */
 let openedThisSession = false;
@@ -150,17 +150,14 @@ export function openCanopyWindow(
     canopyViewDocument += 1;
     canopyViewNavigating = true;
   });
-  // Committed, failed or stopped: whichever page stands now is told again, so
-  // one an aborted reload left in place still takes it up.
-  const navigationEnded = (): void => {
+  // Stopped loading, which waits out every navigation still under way, one
+  // queued behind another's commit included, and comes for one cancelled too:
+  // whichever page stands now is told again, so one an aborted reload left in
+  // place still takes it up.
+  appView.webContents.on("did-stop-loading", () => {
     if (!owns() || !canopyViewNavigating) return;
     canopyViewNavigating = false;
     if (pendingPopOut) tellPopOutWaiting();
-  };
-  appView.webContents.on("did-navigate", navigationEnded);
-  appView.webContents.on("did-stop-loading", navigationEnded);
-  appView.webContents.on("did-fail-load", (_event, _code, _description, _url, isMainFrame) => {
-    if (isMainFrame) navigationEnded();
   });
   appView.webContents.on("render-process-gone", () => {
     if (owns()) failPendingPopOut("Its window stopped before Canopy moved.");

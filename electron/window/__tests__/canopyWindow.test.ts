@@ -529,23 +529,22 @@ describe("a popped-out place across the window's own changes (#16338)", () => {
     let taken = false;
     void popOutToCanopyWindow(place, noWatch).then(() => (taken = true));
     const view = made[0]!.view.webContents;
-    // The window's own first load commits before its page asks.
+    // The window's own first load is done before its page asks.
     reload(view);
-    view.emit("did-navigate");
+    view.emit("did-stop-loading");
     const { id } = peekPendingPopOut()!;
 
     // The page that took it up is replaced before its answer lands, and while
     // it leaves it can't take the place up again either.
     reload(view);
-    expect(acknowledgePopOut(id)).toBe(false);
     expect(peekPendingPopOut()).toBeNull();
     expect(acknowledgePopOut(id)).toBe(false);
     await Promise.resolve();
     expect(taken).toBe(false);
 
-    // The new page is told once it stands, and its answer counts.
+    // The new page is told once loading stops, and its answer counts.
     view.send.mockClear();
-    view.emit("did-navigate");
+    view.emit("did-stop-loading");
     expect(view.send).toHaveBeenCalledWith("canopy-window:pop-out-waiting");
     expect(peekPendingPopOut()?.id).toBe(id);
     // A navigation within the page changes nothing.
@@ -555,7 +554,21 @@ describe("a popped-out place across the window's own changes (#16338)", () => {
     expect(taken).toBe(true);
   });
 
-  it("lets the page an aborted reload left in place take the place up again", async () => {
+  it("keeps a page whose commit a second reload is queued behind from taking the place up", () => {
+    void popOutToCanopyWindow(place, noWatch).catch(() => {});
+    const view = made[0]!.view.webContents;
+
+    reload(view);
+    reload(view);
+    // The first reload commits; the second still replaces that page.
+    view.emit("did-navigate");
+    expect(peekPendingPopOut()).toBeNull();
+
+    view.emit("did-stop-loading");
+    expect(peekPendingPopOut()).not.toBeNull();
+  });
+
+  it("lets the page a cancelled reload left in place take the place up again", async () => {
     let taken = false;
     void popOutToCanopyWindow(place, noWatch).then(() => (taken = true));
     const view = made[0]!.view.webContents;
@@ -564,7 +577,8 @@ describe("a popped-out place across the window's own changes (#16338)", () => {
     reload(view);
     expect(acknowledgePopOut(id)).toBe(false);
     view.send.mockClear();
-    view.emit("did-fail-load", {}, -3, "ERR_ABORTED", "app://", true);
+    // Cancelled before it committed: loading stops with no failure reported.
+    view.emit("did-stop-loading");
 
     expect(view.send).toHaveBeenCalledWith("canopy-window:pop-out-waiting");
     expect(peekPendingPopOut()?.id).toBe(id);
