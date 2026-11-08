@@ -437,7 +437,7 @@ const NO_TEMPLATE_ITEMS: AutocompleteItem[] = [];
 
 /** A file left out of the templates folder would otherwise just be absent from the menu. */
 const TEMPLATE_PROBLEMS_NOTE = {
-  text: "Some prompt templates weren't loaded. See why in Settings",
+  text: "Some prompt templates weren't loaded. See why in Settings > CLI agents",
   onClick: () => {
     void actionService.dispatch(
       "app.settings.openTab",
@@ -1054,11 +1054,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const hasTemplateProblems = useUserPromptTemplateStore((s) => s.problems.length > 0);
     const isSlashMenuOpen = isCompleting && triggerChar === "/";
     // A plugin attached in dev mode announces itself without a provenance event,
-    // and a file saved in the templates folder doesn't announce itself at all.
+    // and a file saved in the templates folder doesn't announce itself at all. An
+    // expanded composer keeps its menu open across a trip to another app, which is
+    // where such a file gets saved.
     useEffect(() => {
       if (!isSlashMenuOpen) return;
       usePluginRuntimeStore.getState().refresh();
-      useUserPromptTemplateStore.getState().refresh();
+      const readTemplates = () => useUserPromptTemplateStore.getState().refresh();
+      readTemplates();
+      window.addEventListener("focus", readTemplates);
+      return () => window.removeEventListener("focus", readTemplates);
     }, [isSlashMenuOpen]);
     const templateItems = useMemo(
       () =>

@@ -55,26 +55,34 @@ describe("AutocompleteMenu", () => {
       expect(listbox.contains(note)).toBe(false);
       expect(note.tabIndex).toBe(-1);
 
+      // A press that takes focus would close the menu before the click landed.
+      expect(fireEvent.mouseDown(note)).toBe(false);
       fireEvent.click(note);
       expect(onClick).toHaveBeenCalledTimes(1);
       expect(onSelect).not.toHaveBeenCalled();
     });
 
     it("stays while the rows narrow to none, and is spoken", () => {
-      const { container } = render(
+      const menu = (items: AutocompleteItem[]) => (
         <AutocompleteMenu
           isOpen
-          items={[]}
-          selectedIndex={-1}
+          items={items}
+          selectedIndex={items.length > 0 ? 0 : -1}
           onSelect={noop}
           emptyMessage="No matches"
           note={{ text: "Something to know", onClick: noop }}
         />
       );
+      const { container, rerender } = render(menu(rows));
+      expect(screen.getByRole("status").textContent).toContain("Something to know");
 
+      rerender(menu([]));
+
+      expect(screen.queryAllByRole("option")).toHaveLength(0);
       expect(container.querySelector("[data-autocomplete-note]")?.textContent).toBe(
         "Something to know"
       );
+      expect(screen.getByRole("status").textContent).toContain("No matches");
       expect(screen.getByRole("status").textContent).toContain("Something to know");
     });
 

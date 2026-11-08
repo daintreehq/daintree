@@ -58,6 +58,14 @@ describe("parseUserPromptTemplate", () => {
     expect("template" in parsed && parsed.template.body).toBe("First\r\n---\r\nSecond");
   });
 
+  it("keeps the indentation a prompt opens with, and drops only the blank lines around it", () => {
+    const parsed = parseUserPromptTemplate(
+      "t",
+      "---\ntitle: T\ndescription: D\n---\n\n    indented\nnext\n\n"
+    );
+    expect("template" in parsed && parsed.template.body).toBe("    indented\nnext");
+  });
+
   it("merges a shared anchor the way other YAML the person writes does", () => {
     const parsed = parseUserPromptTemplate(
       "t",
@@ -239,16 +247,18 @@ describe("readUserPromptTemplates", () => {
   });
 
   it("reads a file with a byte order mark", async () => {
-    await write("bom.md", `﻿${VALID}`);
+    await write("bom.md", `\uFEFF${VALID}`);
     const { templates, problems } = await readUserPromptTemplates(dir);
     expect(problems).toEqual([]);
     expect(templates.map((t) => t.id)).toEqual(["bom"]);
   });
 
-  it("stops at the file cap and says so", async () => {
+  it("stops at the file cap before reading what's past it, and says so", async () => {
     await Promise.all(
-      Array.from({ length: 101 }, (_, i) => write(`t${String(i).padStart(3, "0")}.md`))
+      Array.from({ length: 100 }, (_, i) => write(`t${String(i).padStart(3, "0")}.md`))
     );
+    // Reading it would report it, so its absence shows it was never opened.
+    await write("t100.md", "not a template");
     const { templates, problems } = await readUserPromptTemplates(dir);
     expect(templates).toHaveLength(100);
     expect(templates.at(-1)?.id).toBe("t099");

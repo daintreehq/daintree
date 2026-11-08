@@ -113,6 +113,24 @@ describe("userPromptTemplateStore", () => {
     expect(ids()).toEqual(["a"]);
   });
 
+  it("reads once however many composers ask to start, and again on every refresh", () => {
+    const { list } = deferredReads();
+    state().init();
+    state().init();
+    expect(list).toHaveBeenCalledTimes(1);
+    state().refresh();
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops a read still in flight when reset", async () => {
+    const { reads } = deferredReads();
+    state().refresh();
+    _resetUserPromptTemplateStoreForTest();
+    reads[0]!.resolve(snapshot(["before-the-reset"]));
+    await flush();
+    expect(ids()).toEqual([]);
+  });
+
   it("does nothing on a bridge without the namespace", () => {
     Reflect.set(window, "electron", {});
     expect(() => state().refresh()).not.toThrow();

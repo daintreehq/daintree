@@ -7,6 +7,7 @@ import { deviceOwnerPhrase, useRemoteHostName } from "@/hooks/useSettingsOwner";
 import { logError } from "@/utils/logger";
 import { SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsSection } from "./SettingsSection";
+import { SECTION_SETTINGS } from "./settingsSectionOwners";
 
 /**
  * Where a person's prompt templates live and which of their files were left out.
@@ -26,21 +27,24 @@ export function UserPromptTemplatesSection() {
     return () => window.removeEventListener("focus", refresh);
   }, []);
 
-  const handleOpenFolder = () => {
-    void window.electron.userPromptTemplates.openFolder().then(
-      (result) => {
-        setOpenFailed(!result.opened);
-        useUserPromptTemplateStore.getState().refresh();
-      },
-      (err) => {
-        logError("Failed to open the prompt templates folder", err);
-        setOpenFailed(true);
-      }
-    );
+  const handleOpenFolder = async () => {
+    try {
+      const { opened } = await window.electron.userPromptTemplates.openFolder();
+      setOpenFailed(!opened);
+    } catch (err) {
+      logError("Failed to open the prompt templates folder", err);
+      setOpenFailed(true);
+    }
+    // Opening may have just made the folder, so it has a path to show now.
+    useUserPromptTemplateStore.getState().refresh();
   };
 
   return (
-    <SettingsSection id="agents-prompt-templates" title="Prompt templates">
+    <SettingsSection
+      id="agents-prompt-templates"
+      title="Prompt templates"
+      settings={SECTION_SETTINGS.promptTemplates}
+    >
       <SettingsGroup>
         <SettingsRow
           label="Templates folder"
@@ -54,7 +58,7 @@ export function UserPromptTemplatesSection() {
             </>
           }
           control={
-            <Button variant="outline" size="sm" onClick={handleOpenFolder}>
+            <Button variant="outline" size="sm" onClick={() => void handleOpenFolder()}>
               <FolderOpen />
               {remoteHostName ? `Open folder on ${deviceOwnerPhrase()}` : "Open folder"}
             </Button>

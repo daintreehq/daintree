@@ -133,10 +133,11 @@ async function readTemplateFile(
 
 /**
  * Reads the folder as it stands. There's no watcher and nothing held between
- * calls: the list is only ever seen when a `/` menu or the settings page opens,
- * and each of those asks again, so a saved file shows the next time anyone
- * looks. A half-saved file is reported this once and gone on the next read. A
- * missing folder is the normal empty state and is not created.
+ * calls: the list is only ever seen in a `/` menu or the settings section, and
+ * each of those asks again as it opens and as its window comes back, so a saved
+ * file shows the next time anyone looks. A half-saved file is reported this once
+ * and gone on the next read. A missing folder is the normal empty state and is
+ * not created.
  */
 export async function readUserPromptTemplates(
   directory: string = getUserPromptTemplatesDir()

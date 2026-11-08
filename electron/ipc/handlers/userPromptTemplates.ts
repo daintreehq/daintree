@@ -6,7 +6,7 @@ import type {
   UserPromptTemplatesSnapshot,
 } from "../../../shared/types/ipc/userPromptTemplates.js";
 
-// Loaded on first use: nothing reads the folder until someone opens a `/` menu.
+// Loaded on first use, so an install with no agent composer open pays nothing.
 const loadService = () => import("../../services/userPromptTemplates.js");
 
 export const userPromptTemplatesNamespace = defineIpcNamespace({

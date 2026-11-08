@@ -117,13 +117,29 @@ describe("UserPromptTemplatesSection", () => {
     expect(screen.getByText(/Couldn't open the folder/)).toBeTruthy();
   });
 
+  it("says so when asking to open it fails, and clears that once it works", async () => {
+    openFolder.mockRejectedValueOnce(new Error("gone"));
+    await renderSection();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Open folder" }));
+    });
+    expect(screen.getByText(/Couldn't open the folder/)).toBeTruthy();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Open folder" }));
+    });
+    expect(screen.queryByText(/Couldn't open the folder/)).toBeNull();
+  });
+
   it("says a remote window's templates come from this machine, not the host", async () => {
     Reflect.set(window, "__DAINTREE_HOST_ID__", { id: "studio-01" });
     setHostPlatformInfo({ hostName: "studio-01" });
     await renderSection();
-    const group = screen.getByRole("group", { name: "Prompt templates" });
+    const group = screen.getByRole("group", { name: /^Prompt templates/ });
+    expect(group.querySelector("h4")?.textContent).toMatch(/This (Mac|PC|machine)$/);
     expect(group.textContent).toMatch(/read from this (Mac|PC|machine)/);
     expect(group.textContent).toContain("while you work on studio-01");
+    expect(group.textContent).not.toContain("On studio-01");
     expect(
       screen.getByRole("button", { name: /^Open folder on this (Mac|PC|machine)$/ })
     ).toBeTruthy();
@@ -132,7 +148,7 @@ describe("UserPromptTemplatesSection", () => {
 
   it("doesn't mention other machines in a local window", async () => {
     await renderSection();
-    const group = screen.getByRole("group", { name: "Prompt templates" });
+    const group = screen.getByRole("group", { name: /^Prompt templates/ });
     expect(group.textContent).not.toContain("read from");
   });
 });

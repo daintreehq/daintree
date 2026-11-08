@@ -1367,6 +1367,7 @@ export const SETTINGS_REGISTRY = [
     settings: ["agentSettings", "userAgentRegistry", "agentUpdateSettings"],
     sectionSettings: {
       Input: SECTION_SETTINGS.agentInput,
+      "Prompt templates": SECTION_SETTINGS.promptTemplates,
     },
     label: "CLI agents",
     icon: <Plug className="w-4 h-4" />,

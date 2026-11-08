@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import type { PluginPromptTemplate } from "@/store/pluginRuntimeStore";
 import { useUserPromptTemplateStore } from "@/store/userPromptTemplateStore";
 import type { PromptTemplateContribution } from "@shared/types/plugin";
@@ -43,6 +43,11 @@ export function mergePromptTemplates(
 export function usePromptTemplates(projectId: string | undefined): PromptTemplateEntry[] {
   const pluginTemplates = usePluginPromptTemplates(projectId);
   const userTemplates = useUserPromptTemplateStore((s) => s.templates);
+  // Before the first `/`, not at it: with no row to pick yet, Enter on a token
+  // sends it to the agent as typed.
+  useEffect(() => {
+    useUserPromptTemplateStore.getState().init();
+  }, []);
   return useMemo(
     () => mergePromptTemplates(userTemplates, pluginTemplates),
     [userTemplates, pluginTemplates]

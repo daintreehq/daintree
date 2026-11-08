@@ -631,16 +631,32 @@ describe("HybridInputBar's own prompt templates in the `/` menu", () => {
     expect(rows()[0]).toContain("You");
   });
 
-  it("offers it in every project, beside that project's plugin templates", async () => {
+  it.each(["p1", "p2"])("offers it in project %s, ahead of the plugins' on a tie", async (id) => {
     withFolder(() => folder([mine()]));
     useProjectStore.setState({
-      currentProject: { id: "p1", name: "Repo", path: "/repo", emoji: "", lastOpened: 0 },
+      currentProject: { id, name: "Repo", path: `/${id}`, emoji: "", lastOpened: 0 },
     });
     const { type, labels } = await renderComposer("", [entry("Run them.")]);
 
     await type("/boiler");
 
     expect(labels()).toEqual(["Add my boilerplate", "Add boilerplate"]);
+  });
+
+  it("has the row ready before the first `/` is answered, so Enter can't send the token", async () => {
+    const list = vi
+      .fn<() => Promise<UserPromptTemplatesSnapshot>>()
+      .mockResolvedValueOnce(folder([mine()]))
+      .mockImplementation(() => new Promise(() => {}));
+    Reflect.set(window.electron, "userPromptTemplates", { list });
+    const { view, type, press, onSend } = await renderComposer("");
+
+    await type("/boiler");
+    expect(list).toHaveBeenCalledTimes(2);
+    await press("Enter");
+
+    expect(view.state.doc.toString()).toBe("Run the tests.");
+    expect(onSend).not.toHaveBeenCalled();
   });
 
   it.each([["Enter"], ["Tab"]])("fills the draft on %s and sends nothing", async (key) => {
@@ -677,7 +693,7 @@ describe("HybridInputBar's own prompt templates in the `/` menu", () => {
     let templates = [mine()];
     const list = withFolder(() => folder(templates));
     const { type, press, rows, view } = await renderComposer("");
-    expect(list).not.toHaveBeenCalled();
+    list.mockClear();
 
     await type("/b");
     await type("oiler");
@@ -693,6 +709,27 @@ describe("HybridInputBar's own prompt templates in the `/` menu", () => {
     await type("/boiler");
     expect(list).toHaveBeenCalledTimes(2);
     expect(rows()).toEqual([]);
+  });
+
+  it("reads again when the window comes back with the menu still open", async () => {
+    let templates = [mine()];
+    const list = withFolder(() => folder(templates));
+    const { type, rows } = await renderComposer("");
+
+    await type("/boiler");
+    expect(rows()).toHaveLength(1);
+
+    templates = [];
+    await act(async () => {
+      window.dispatchEvent(new Event("focus"));
+    });
+    expect(rows()).toEqual([]);
+
+    // The menu closes and its listener goes with it.
+    await type(" ");
+    list.mockClear();
+    window.dispatchEvent(new Event("focus"));
+    expect(list).not.toHaveBeenCalled();
   });
 
   it("closes the form when the next read finds its file gone", async () => {
@@ -732,8 +769,9 @@ describe("HybridInputBar's own prompt templates in the `/` menu", () => {
 
   it("shows no note while the folder is healthy, or in another menu", async () => {
     withFolder(() => folder([mine()]));
-    const { type, container, view } = await renderComposer("");
+    const { type, container, view, rows } = await renderComposer("");
     await type("/boiler");
+    expect(rows()).toHaveLength(1);
     expect(container.querySelector("[data-autocomplete-note]")).toBeNull();
 
     act(() => {

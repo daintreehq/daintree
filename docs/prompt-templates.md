@@ -39,7 +39,7 @@ Type `/` in any agent's composer. Templates are under the "Prompt templates" hea
 
 ## Changes
 
-There's no restart and no watcher. The folder is read each time a `/` menu opens and each time the settings section is opened or its window comes back, so an added, edited or removed file shows the next time you look.
+There's no restart and no watcher. The folder is read when a project's first composer appears, each time a `/` menu opens, when the settings section opens, and when you come back to the window with either of those open, so an added, edited or removed file shows the next time you look.
 
 ## A file that can't be used
 
@@ -47,4 +47,4 @@ A bad file is left out and the others still load. The `/` menu says some templat
 
 ## Remote Hosts
 
-Your templates are yours, not the machine's, so they come from the machine at the keyboard. A window driving a Remote Host reads this machine's folder and offers those templates beside the plugin templates of the host it's working on; the host never sees the folder or the files. A window on the host itself reads the host's folder. See [channel locality](./architecture/remote-hosts.md#channel-locality).
+Your templates are yours, not the machine's, so they come from the machine at the keyboard. A window driving a Remote Host reads this machine's folder and offers those templates beside the plugin templates of the host it's working on, and the host never lists or reads the folder. A template you choose becomes an ordinary draft in that window, and travels as anything else you type there does. A window on the host itself reads the host's folder. See [channel locality](./architecture/remote-hosts.md#channel-locality).
