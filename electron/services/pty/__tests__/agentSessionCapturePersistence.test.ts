@@ -1069,6 +1069,232 @@ describe("captured agent session persistence (#12433)", () => {
     });
   });
 
+  describe("a farewell that leaves the launch-assigned id (#16377)", () => {
+    const LAUNCH_ID = "b385c7f7-e72d-476d-ae70-c608446c8b81";
+    const ENDED_ID = "af2ad2f5-cbb1-4eb8-a5cc-26f56d37b075";
+
+    function claudePane(overrides: Partial<TerminalSnapshot> = {}): TerminalSnapshot {
+      return pane({
+        launchAgentId: "claude",
+        title: "Claude",
+        agentSessionId: LAUNCH_ID,
+        ...overrides,
+      });
+    }
+
+    /** A Claude spawn the host confirmed, handed `agentSessionId` at launch. */
+    function launchClaude(
+      intent: { command?: string; agentSessionId?: string } = {
+        command: "claude",
+        agentSessionId: LAUNCH_ID,
+      },
+      options: { confirmed?: boolean } = {}
+    ): number {
+      const generation = launch({ launchAgentId: "claude" });
+      noteTerminalLaunch(TERMINAL_ID, intent);
+      if (options.confirmed !== false) releaseSupersededCapturedSession(TERMINAL_ID, generation);
+      return generation;
+    }
+
+    function farewell(
+      generation: number,
+      boundary: "exit" | "demotion",
+      overrides: { incarnation?: number; sessionId?: string } = {}
+    ): CapturedAgentSession {
+      return capture(boundary === "exit" ? generation : null, {
+        boundary,
+        run: { launchGeneration: generation, agentIncarnation: overrides.incarnation ?? 0 },
+        record: { sessionId: overrides.sessionId ?? ENDED_ID, agentId: "claude", title: "Claude" },
+      });
+    }
+
+    it.each(["exit", "demotion"] as const)(
+      "moves the pane to where the launched run ended (%s)",
+      async (boundary) => {
+        const generation = launchClaude();
+        await seed([claudePane()]);
+
+        await expect(writeBackCapturedSessionId(farewell(generation, boundary))).resolves.toBe(
+          "superseded"
+        );
+        expect((await savedPane())?.agentSessionId).toBe(ENDED_ID);
+      }
+    );
+
+    it.each(["exit", "demotion"] as const)(
+      "journals only the conversation it ended in (%s)",
+      async (boundary) => {
+        const generation = launchClaude();
+        await seed([claudePane()]);
+
+        await expect(persistCapturedAgentSession(farewell(generation, boundary))).resolves.toEqual({
+          journal: "written",
+          pane: "superseded",
+        });
+        const history = await readSessionHistory(userDataDir);
+        expect(history.map((r) => r.sessionId)).toEqual([ENDED_ID]);
+      }
+    );
+
+    it("leaves the pane alone for a later run in the shell the launched one left", async () => {
+      const generation = launchClaude();
+      await seed([claudePane()]);
+
+      await expect(
+        writeBackCapturedSessionId(farewell(generation, "demotion", { incarnation: 1 }))
+      ).resolves.toBe("ineligible-boundary");
+      await expect(
+        writeBackCapturedSessionId(farewell(generation, "exit", { incarnation: 1 }))
+      ).resolves.toBe("conflict");
+      expect((await savedPane())?.agentSessionId).toBe(LAUNCH_ID);
+    });
+
+    it("leaves an id the renderer changed since the launch", async () => {
+      const generation = launchClaude();
+      await seed([claudePane({ agentSessionId: "chosen-by-user" })]);
+
+      await expect(writeBackCapturedSessionId(farewell(generation, "demotion"))).resolves.toBe(
+        "ineligible-boundary"
+      );
+      await expect(writeBackCapturedSessionId(farewell(generation, "exit"))).resolves.toBe(
+        "conflict"
+      );
+      expect((await savedPane())?.agentSessionId).toBe("chosen-by-user");
+    });
+
+    it("needs the host to have confirmed the launch", async () => {
+      // A refused spawn leaves the previous process running on whatever it had.
+      const generation = launchClaude(undefined, { confirmed: false });
+      await seed([claudePane()]);
+
+      await expect(writeBackCapturedSessionId(farewell(generation, "demotion"))).resolves.toBe(
+        "ineligible-boundary"
+      );
+      await expect(writeBackCapturedSessionId(farewell(generation, "exit"))).resolves.toBe(
+        "conflict"
+      );
+      expect((await savedPane())?.agentSessionId).toBe(LAUNCH_ID);
+    });
+
+    it("refuses a farewell from a run the pane has since relaunched past", async () => {
+      const first = launchClaude();
+      launchClaude({ command: "claude", agentSessionId: "relaunched-on" });
+      await seed([claudePane({ agentSessionId: "relaunched-on" })]);
+
+      await expect(writeBackCapturedSessionId(farewell(first, "exit"))).resolves.toBe(
+        "stale-generation"
+      );
+      expect((await savedPane())?.agentSessionId).toBe("relaunched-on");
+    });
+
+    it.each([
+      ["exit", "unchanged"],
+      ["demotion", "ineligible-boundary"],
+    ] as const)(
+      "journals a %s farewell naming the launch id once, as before",
+      async (boundary, paneOutcome) => {
+        const generation = launchClaude();
+        await seed([claudePane()]);
+
+        await expect(
+          persistCapturedAgentSession(farewell(generation, boundary, { sessionId: LAUNCH_ID }))
+        ).resolves.toEqual({ journal: "written", pane: paneOutcome });
+        const history = await readSessionHistory(userDataDir);
+        expect(history.map((r) => r.sessionId)).toEqual([LAUNCH_ID]);
+        expect(persistAgentSession).toHaveBeenCalledTimes(1);
+        expect((await savedPane())?.agentSessionId).toBe(LAUNCH_ID);
+      }
+    );
+
+    it("needs the confirmed launch to be the farewell's own generation", async () => {
+      // The first launch was confirmed on A; the relaunch was requested and
+      // the pane still reads A, but the host never confirmed that spawn.
+      launchClaude();
+      const second = launchClaude(undefined, { confirmed: false });
+      await seed([claudePane()]);
+
+      await expect(writeBackCapturedSessionId(farewell(second, "demotion"))).resolves.toBe(
+        "ineligible-boundary"
+      );
+      await expect(writeBackCapturedSessionId(farewell(second, "exit"))).resolves.toBe("conflict");
+      expect((await savedPane())?.agentSessionId).toBe(LAUNCH_ID);
+    });
+
+    it("needs an exit's run to belong to the generation it closes", async () => {
+      const generation = launchClaude();
+      await seed([claudePane()]);
+
+      await expect(
+        writeBackCapturedSessionId({
+          ...farewell(generation, "exit"),
+          run: { launchGeneration: generation + 1, agentIncarnation: 0 },
+        })
+      ).resolves.toBe("conflict");
+      expect((await savedPane())?.agentSessionId).toBe(LAUNCH_ID);
+    });
+
+    it("yields to a later run whose own claim reached the pane first", async () => {
+      // A restored `codex resume A`: its run left A for B and quit, and the
+      // user typed `codex resume A` again. That run's argv lands while the
+      // launched run's farewell is still on its way.
+      const generation = launch();
+      noteTerminalLaunch(TERMINAL_ID, {
+        command: `codex resume ${LAUNCH_ID}`,
+        agentSessionId: LAUNCH_ID,
+      });
+      releaseSupersededCapturedSession(TERMINAL_ID, generation);
+      await seed([pane({ agentSessionId: LAUNCH_ID })]);
+      await expect(
+        acceptObservedAgentSession({
+          terminalId: TERMINAL_ID,
+          agentId: "codex",
+          projectId: PROJECT_ID,
+          sessionId: LAUNCH_ID,
+          run: { launchGeneration: generation, agentIncarnation: 1 },
+        })
+      ).resolves.toBe("unchanged");
+
+      await expect(
+        writeBackCapturedSessionId(
+          capture(null, {
+            boundary: "demotion",
+            run: { launchGeneration: generation, agentIncarnation: 0 },
+            record: { sessionId: ENDED_ID },
+          })
+        )
+      ).resolves.toBe("ineligible-boundary");
+      expect((await savedPane())?.agentSessionId).toBe(LAUNCH_ID);
+    });
+
+    it("is kept by a relaunch that resumes it", async () => {
+      const generation = launchClaude();
+      await seed([claudePane()]);
+      await writeBackCapturedSessionId(farewell(generation, "demotion"));
+
+      launchClaude({ command: "claude", agentSessionId: ENDED_ID });
+      await expect(sealAndDrainCapturedSessionPersistence(5_000)).resolves.toEqual({
+        drained: true,
+        pending: 0,
+      });
+
+      expect((await savedPane())?.agentSessionId).toBe(ENDED_ID);
+    });
+
+    it("is released by a fresh relaunch like any id this module wrote", async () => {
+      const generation = launchClaude();
+      await seed([claudePane()]);
+      await writeBackCapturedSessionId(farewell(generation, "demotion"));
+
+      launchClaude({ command: "claude", agentSessionId: "brand-new" });
+      await expect(sealAndDrainCapturedSessionPersistence(5_000)).resolves.toEqual({
+        drained: true,
+        pending: 0,
+      });
+
+      expect((await savedPane())?.agentSessionId).toBeUndefined();
+    });
+  });
+
   describe("an id a run's own argv names (#15994)", () => {
     const HAND_ID = "0199f8c1-2b4d-7e3a-9f10-5c6d7e8f9a0b";
 

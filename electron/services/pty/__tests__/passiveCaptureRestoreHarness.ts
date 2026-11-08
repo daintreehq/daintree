@@ -5,6 +5,8 @@ export { generateProjectId } from "../../projectStorePaths.js";
 export { getLifecycleLedger, disposeLifecycleLedger } from "../lifecycleLedger.js";
 export {
   acceptObservedAgentSession,
+  noteTerminalLaunch,
+  releaseSupersededCapturedSession,
   writeBackCapturedSessionId,
   resetCapturedSessionPersistenceForTests,
 } from "../agentSessionCapturePersistence.js";

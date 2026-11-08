@@ -1782,6 +1782,11 @@ export function dropUnselectedAgentModel<
 const ASSIGNABLE_SESSION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** Whether `sessionId` has the one shape an id-assigning CLI takes or mints: a UUID. */
+export function isAssignableSessionId(sessionId: string): boolean {
+  return ASSIGNABLE_SESSION_ID_PATTERN.test(sessionId);
+}
+
 /** Drop one layer of matching quotes, the kind `escapeShellArg` wraps a word in. */
 function unquoteShellWord(word: string): string {
   const quote = word[0];
