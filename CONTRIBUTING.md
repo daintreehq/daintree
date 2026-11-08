@@ -2,7 +2,7 @@
 
 Thanks for your interest in Daintree.
 
-**Daintree doesn't accept external pull requests.** All of the code is written by AI coding agents running through my own development workflow, which takes an issue through research, planning, implementation, tests and review in one pass. That pipeline is set up and running, and I'd rather it did the work than merge code written outside it. Pull requests from outside the project are closed without review, so please don't spend your time on one.
+**Daintree doesn't accept external pull requests.** All of the code is written by AI coding agents running through my own development workflow, which takes an issue through research, planning, implementation, tests and review in one pass. That pipeline is set up and running, and I'd rather it did the work than merge code written outside it. Only collaborators can open pull requests on this repository.
 
 **Issues are a different story: they're very welcome.** Issues are how Daintree decides what to improve. Every one gets read, and every one is taken into account. Writing the code stopped being the expensive part a while ago. Knowing precisely what's wrong, where it lives, and which decisions are still open is the part that's still hard, and that's exactly what a good issue does. A well-researched issue is the most useful thing you can send.
 
