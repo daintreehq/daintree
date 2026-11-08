@@ -33,6 +33,7 @@ import {
   settleWorktreeDeleteOutcome,
   worktreeDeleteBlockedBy,
   worktreeDeleteContentRisk,
+  worktreeDeleteRefusedBy,
   observedAtRiskCommits,
   WorktreeDeletePreviewError,
   type WorktreeDeletePreview,
@@ -777,6 +778,47 @@ describe("worktreeDeleteBlockedBy (#12115)", () => {
 
   it("has nothing to block on for an already-removed worktree", () => {
     expect(worktreeDeleteBlockedBy({ state: "gone" })).toBeNull();
+  });
+});
+
+describe("worktreeDeleteRefusedBy (#16436)", () => {
+  const preview = (submodules: WorktreeSubmoduleRiskState) =>
+    ({
+      state: "verified",
+      preview: {
+        trackedChangeCount: 0,
+        untrackedFileCount: 0,
+        hasTrackedChanges: false,
+        hasUntrackedFiles: false,
+        changes: [],
+        rootPath: "/repo/wt-1",
+        submodules,
+      },
+    }) as const;
+  const seen = emptyRisk({ incomplete: true, atRiskCommits: [{ oid: "abc", subject: "s" }] });
+
+  it("refuses wherever either surface would: the narrow refusal plus a partial walk's commits", () => {
+    expect(worktreeDeleteRefusedBy(preview({ status: "unverified", risk: seen }))).toBe(
+      "at-risk-commits"
+    );
+    expect(worktreeDeleteRefusedBy(preview({ status: "unverified", risk: null }))).toBe(
+      "unverified"
+    );
+    expect(
+      worktreeDeleteRefusedBy({ state: "failed", submodules: { status: "unverified", risk: seen } })
+    ).toBe("at-risk-commits");
+  });
+
+  it("refuses nothing the narrow predicate exempts and nothing observed", () => {
+    expect(worktreeDeleteRefusedBy(preview(CLEAR))).toBeNull();
+    expect(worktreeDeleteRefusedBy({ state: "failed", submodules: null })).toBeNull();
+    expect(
+      worktreeDeleteRefusedBy({
+        state: "failed",
+        submodules: { status: "unverified", risk: emptyRisk({ incomplete: true }) },
+      })
+    ).toBeNull();
+    expect(worktreeDeleteRefusedBy({ state: "gone" })).toBeNull();
   });
 });
 

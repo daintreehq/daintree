@@ -1391,6 +1391,104 @@ describe("useMcpBridge", () => {
     expect(mocks.dispatch).toHaveBeenCalledTimes(1);
   });
 
+  describe("an agent's delete the host refuses outright (#16436)", () => {
+    const dirty = {
+      trackedChangeCount: 1,
+      untrackedFileCount: 0,
+      hasTrackedChanges: true,
+      hasUntrackedFiles: false,
+      changes: [{ path: "src/app.ts", status: "modified", insertions: null, deletions: null }],
+      rootPath: "/repo/wt-1",
+      submodules: { status: "verified", risk: emptySubmoduleRisk() },
+    };
+    const held = {
+      ...dirty,
+      submodules: {
+        status: "verified",
+        risk: emptySubmoduleRisk({
+          atRiskCommits: [{ oid: "a1b2c3d4e5f6", subject: "Vendored fix" }],
+        }),
+      },
+    };
+
+    beforeEach(() => {
+      mocks.get.mockReturnValue(confirmManifestEntry());
+      mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+      mocks.worktrees.set("wt-1", {
+        id: "wt-1",
+        path: "/repo/wt-1",
+        name: "feature-x",
+        branch: "feature/x",
+        isCurrent: false,
+        isMainWorktree: false,
+      });
+    });
+
+    it("holds it unapprovable, and a Retry that finds it cleared puts the real gate up", async () => {
+      // Pushed between the two reads: the re-check finds a dirty tree whose
+      // force delete is D3, and the dispatch-time re-check finds the same.
+      mocks.buildPreview.mockResolvedValueOnce(held).mockResolvedValue(dirty);
+      renderHook(() => useMcpBridge());
+
+      const dispatched = dispatchHandler?.({
+        requestId: "req-held",
+        actionId: "worktree.delete",
+        args: { worktreeId: "wt-1", force: true },
+      });
+
+      await vi.waitFor(() => {
+        const current = useMcpConfirmStore.getState().current;
+        expect(current?.previewPending).toBe(false);
+        expect(current?.worktreeDeleteBlock).toBe("at-risk-commits");
+      });
+      expect(useMcpConfirmStore.getState().current?.previewRetryable).toBe(true);
+      expect(useMcpConfirmStore.getState().current?.typedNameTarget).toBeUndefined();
+
+      useMcpConfirmStore.getState().resolveCurrent("approved");
+      await Promise.resolve();
+      expect(useMcpConfirmStore.getState().current?.requestId).toBe("req-held");
+      expect(mocks.dispatch).not.toHaveBeenCalled();
+
+      useMcpConfirmStore.getState().retryPreview("req-held");
+      await vi.waitFor(() => {
+        const current = useMcpConfirmStore.getState().current;
+        expect(current?.previewPending).toBe(false);
+        expect(current?.worktreeDeleteBlock).toBeUndefined();
+        expect(current?.typedNameTarget).toBe("feature/x");
+      });
+
+      // The approval carries the name the re-check put up, so the
+      // dispatch-time re-check, which wants the same name, lets it run.
+      useMcpConfirmStore.getState().resolveCurrent("approved");
+      await dispatched;
+      expect(mocks.dispatch).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the refusal when the Retry itself fails", async () => {
+      mocks.buildPreview.mockResolvedValue(held);
+      renderHook(() => useMcpBridge());
+
+      void dispatchHandler?.({
+        requestId: "req-held",
+        actionId: "worktree.delete",
+        args: { worktreeId: "wt-1" },
+      });
+      await vi.waitFor(() => {
+        expect(useMcpConfirmStore.getState().current?.worktreeDeleteBlock).toBe("at-risk-commits");
+      });
+
+      mocks.teardownPreview.mockRejectedValueOnce(new Error("port gone"));
+      useMcpConfirmStore.getState().retryPreview("req-held");
+      await vi.waitFor(() => {
+        expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+      });
+      expect(useMcpConfirmStore.getState().current?.worktreeDeleteBlock).toBe("at-risk-commits");
+      expect(mocks.buildPreview).toHaveBeenCalledTimes(2);
+
+      useMcpConfirmStore.getState().resolveCurrent("rejected");
+    });
+  });
+
   it("leaves a non-force MCP delete ungated and re-checks nothing (#12115)", async () => {
     mocks.get.mockReturnValue(confirmManifestEntry());
     mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
@@ -3972,19 +4070,34 @@ describe("buildMcpConfirmPreview (#11343, #11538)", () => {
       });
       expect(result.worktreeDeleteBlock).toBe("at-risk-commits");
       expect(result.typedNameTarget).toBeUndefined();
+      // The evidence behind the refusal is on screen, not only the failed read.
+      expect(result.lines[0]).toMatch(/Could not verify current changes/);
+      expect(result.lines).toContain("  abc s");
     });
 
     it("does not block when only the parent status failed, and keeps the gate there", async () => {
       // The host re-reads both for itself and may proceed, so this stays an
-      // approvable, gated delete rather than a refusal.
-      mocks.buildPreview.mockRejectedValue(new Error("timeout"));
-      const result = await buildMcpConfirmPreview({
-        kind: "worktreeDelete",
-        worktreeId: "wt-1",
-        force: true,
-      });
-      expect(result.worktreeDeleteBlock).toBeUndefined();
-      expect(result.typedNameTarget).toBe("feature/x");
+      // approvable, gated delete rather than a refusal — and says nothing
+      // about a refusal it isn't making.
+      for (const error of [
+        new Error("timeout"),
+        new WorktreeDeletePreviewError(
+          { status: "unverified", risk: emptySubmoduleRisk({ incomplete: true }) },
+          new Error("timeout")
+        ),
+      ]) {
+        mocks.buildPreview.mockRejectedValue(error);
+        const result = await buildMcpConfirmPreview({
+          kind: "worktreeDelete",
+          worktreeId: "wt-1",
+          force: true,
+        });
+        expect(result.worktreeDeleteBlock).toBeUndefined();
+        expect(result.typedNameTarget).toBe("feature/x");
+        expect(result.lines).toEqual([
+          "⚠ Could not verify current changes — proceed with caution.",
+        ]);
+      }
     });
 
     it("does not block a clean worktree", async () => {

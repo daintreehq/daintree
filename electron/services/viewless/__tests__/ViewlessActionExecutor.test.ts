@@ -353,6 +353,97 @@ describe("viewless actions", () => {
       );
     });
 
+    // #16436: the view this is asked in has only the lines, so it can't hold
+    // approval back the way its own confirm does. A delete the host would
+    // throw on is refused here instead, before anyone is asked.
+    it("refuses, without asking, a delete the host would refuse outright", async () => {
+      const clean = {
+        worktreeId: "/repo-wt/feature",
+        rootPath: "/repo-wt/feature",
+        changedFileCount: 0,
+        changes: [],
+      };
+      const risk = {
+        entries: [],
+        dirtyFiles: [],
+        untrackedFiles: [],
+        atRiskCommits: [] as { oid: string; subject: string }[],
+        requiresMechanicalForce: false,
+        incomplete: false,
+      };
+      for (const [read, message] of [
+        [
+          {
+            changes: clean,
+            risk: { ...risk, atRiskCommits: [{ oid: "a1b2c3d4e5f6", subject: "Vendored fix" }] },
+          },
+          /1 submodule commit \(a1b2c3d4 Vendored fix\) is on no remote/,
+        ],
+        // The parent status failed, but the inventory finished and saw them.
+        [
+          {
+            changes: "unreadable" as const,
+            risk: { ...risk, atRiskCommits: [{ oid: "a1b2c3d4e5f6", subject: "Vendored fix" }] },
+          },
+          /on no remote/,
+        ],
+        [{ changes: clean, risk: { ...risk, incomplete: true } }, /couldn't be fully checked/],
+        [{ changes: clean, risk: "unreadable" as const }, /couldn't be fully checked/],
+      ] as const) {
+        const { deps, hosts, invoke } = setup();
+        hosts.getDeletePreview.mockResolvedValueOnce({ ...read, teardown: null });
+        const requestApproval = vi.fn(async (_ask: ViewlessApprovalAsk) => ({
+          decision: "approved" as const,
+          deadline: Date.now() + 60_000,
+        }));
+
+        const result = await executeViewlessAction(
+          { ...request("worktree.delete", deleteArgs), requestApproval },
+          deps
+        );
+
+        expect(requestApproval).not.toHaveBeenCalled();
+        expect(result).toMatchObject({ ok: false, error: { code: "EXECUTION_ERROR" } });
+        expect(result.ok === false && result.error.message).toMatch(message);
+        expect(result.ok === false && result.error.message).toContain("Nothing was deleted.");
+        expect(invoke).not.toHaveBeenCalledWith(
+          PROJECT.id,
+          CHANNELS.WORKTREE_DELETE,
+          expect.anything()
+        );
+      }
+    });
+
+    it("still asks when only the parent status failed and the inventory refuses nothing", async () => {
+      // The host re-reads both for itself and may proceed, as a view's own
+      // confirm treats the same state.
+      const { deps, hosts } = setup();
+      hosts.getDeletePreview.mockResolvedValueOnce({
+        changes: "unreadable",
+        risk: {
+          entries: [],
+          dirtyFiles: [],
+          untrackedFiles: [],
+          atRiskCommits: [],
+          requiresMechanicalForce: false,
+          incomplete: true,
+        },
+        teardown: null,
+      });
+      const requestApproval = vi.fn(async (_ask: ViewlessApprovalAsk) => ({
+        decision: "rejected" as const,
+      }));
+
+      await executeViewlessAction(
+        { ...request("worktree.delete", deleteArgs), requestApproval },
+        deps
+      );
+
+      expect(requestApproval).toHaveBeenCalledTimes(1);
+      const [ask] = requestApproval.mock.calls[0]!;
+      expect(ask.lines[0]).toMatch(/Could not verify current changes/);
+    });
+
     it("says when the host couldn't read what the delete would discard", async () => {
       const { deps, hosts } = setup();
       hosts.getDeletePreview.mockRejectedValueOnce(new Error("host gone"));

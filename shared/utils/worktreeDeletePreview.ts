@@ -353,6 +353,27 @@ export function worktreeDeleteRefusedBy(
   );
 }
 
+/**
+ * What each refusal is called and what clears it, for every surface that
+ * refuses on it (the local dialog's banner and footer, the MCP confirm's), so
+ * the same worktree reads the same way wherever the delete is asked for.
+ */
+export const WORKTREE_DELETE_BLOCK_COPY: Record<
+  WorktreeSubmoduleDeleteBlock,
+  { title: string; hint: string }
+> = {
+  "at-risk-commits": {
+    title: "Push the submodule commits first",
+    // What the check actually measures, so the hint promises exactly what
+    // clears it: a push, or a fetch that proves the remote already has it.
+    hint: "Delete unavailable until the submodule commits are on a remote",
+  },
+  unverified: {
+    title: "Couldn't finish checking this worktree's submodules",
+    hint: "Delete unavailable until the submodule check completes",
+  },
+};
+
 /** Max file rows shown in a compact preview before collapsing the tail. */
 export const PREVIEW_FILE_LIMIT = 12;
 

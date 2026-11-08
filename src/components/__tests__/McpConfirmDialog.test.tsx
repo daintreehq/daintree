@@ -335,7 +335,7 @@ describe("McpConfirmDialog", () => {
         visibility = "hidden";
         act(() => {
           document.dispatchEvent(new Event("visibilitychange"));
-          useMcpConfirmStore.getState().setPreview("req-preview", ["worktree wt-1"]);
+          useMcpConfirmStore.getState().setPreview("req-preview", { lines: ["worktree wt-1"] });
         });
         await act(async () => {
           await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS);
@@ -425,7 +425,7 @@ describe("McpConfirmDialog", () => {
           await vi.advanceTimersByTimeAsync(MCP_CONFIRM_DECISION_MS - 5_000);
         });
         act(() => {
-          useMcpConfirmStore.getState().setPreview("req-late-preview", ["M src/app.ts"]);
+          useMcpConfirmStore.getState().setPreview("req-late-preview", { lines: ["M src/app.ts"] });
         });
         await act(async () => {
           await vi.advanceTimersByTimeAsync(5_000);
@@ -1006,6 +1006,134 @@ describe("McpConfirmDialog", () => {
     expect(screen.queryByLabelText(/to confirm$/)).toBeNull();
   });
 
+  // #16436: the host throws on these before it reads `force`, so the dialog
+  // must not offer an approval, or a typed name, that could only end in a toast.
+  describe("a delete the host refuses outright (#16436)", () => {
+    const HELD_LINES = [
+      "No uncommitted changes in the worktree itself.",
+      "⚠ 1 commit inside submodules is on no remote this clone knows about — the worktree cannot be deleted until it is pushed:",
+      "  a1b2c3d Vendored fix",
+    ];
+
+    it("offers only Cancel, says why, and puts up no typed-name gate", async () => {
+      vi.useFakeTimers();
+      try {
+        const pending = requestMcpConfirmation({
+          requestId: "req-held",
+          actionId: "worktree.delete",
+          actionTitle: "Delete worktree",
+          actionDescription: "Permanently delete a worktree.",
+          argsSummary: '{"worktreeId":"wt-1","force":true}',
+          danger: "confirm",
+          previewPending: true,
+        });
+        render(<McpConfirmDialog />);
+        act(() => {
+          useMcpConfirmStore.getState().setPreview("req-held", {
+            lines: HELD_LINES,
+            worktreeDeleteBlock: "at-risk-commits",
+          });
+        });
+        // Past the cooldown, which would otherwise disable the button on its own.
+        act(() => {
+          vi.advanceTimersByTime(1200);
+        });
+
+        expect(screen.queryByLabelText(/to confirm$/)).toBeNull();
+        expect(screen.getByText("Push the submodule commits first")).toBeTruthy();
+        expect(
+          screen.getByText("Delete unavailable until the submodule commits are on a remote")
+        ).toBeTruthy();
+        const confirmBtn = screen.getByRole("button", { name: "Delete worktree" });
+        expect(confirmBtn.getAttribute("aria-disabled")).toBe("true");
+        // No Retry without a fetch to re-run.
+        expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+
+        act(() => {
+          fireEvent.click(confirmBtn);
+        });
+        await expectStillPending(pending);
+
+        act(() => {
+          fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+        });
+        await expect(pending).resolves.toEqual({ decision: "rejected" });
+      } finally {
+        vi.runOnlyPendingTimers();
+        vi.useRealTimers();
+      }
+    });
+
+    it("re-checks on Retry, keeps the refusal up while it reads, and reopens approval once it clears", async () => {
+      vi.useFakeTimers();
+      try {
+        const retry = vi.fn();
+        void requestMcpConfirmation(
+          {
+            requestId: "req-retry",
+            actionId: "worktree.delete",
+            actionTitle: "Delete worktree",
+            actionDescription: "Permanently delete a worktree.",
+            argsSummary: '{"worktreeId":"wt-1"}',
+            danger: "confirm",
+            previewPending: true,
+          },
+          undefined,
+          { retryPreview: retry }
+        );
+        render(<McpConfirmDialog />);
+        act(() => {
+          useMcpConfirmStore.getState().setPreview("req-retry", {
+            lines: ["⚠ Could not finish checking this worktree's submodules."],
+            worktreeDeleteBlock: "unverified",
+          });
+        });
+        act(() => {
+          vi.advanceTimersByTime(1200);
+        });
+        expect(
+          screen.getByText("Couldn't finish checking this worktree's submodules")
+        ).toBeTruthy();
+
+        const retryBtn = screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement;
+        act(() => {
+          retryBtn.focus();
+          fireEvent.click(retryBtn);
+        });
+        expect(retry).toHaveBeenCalledTimes(1);
+        expect(
+          screen.getByText("Couldn't finish checking this worktree's submodules")
+        ).toBeTruthy();
+        expect(screen.getByText("Checking again")).toBeTruthy();
+        expect((screen.getByRole("button", { name: "Retry" }) as HTMLButtonElement).disabled).toBe(
+          true
+        );
+        expect(
+          screen.getByRole("button", { name: "Delete worktree" }).getAttribute("aria-disabled")
+        ).toBe("true");
+
+        act(() => {
+          useMcpConfirmStore
+            .getState()
+            .setPreview("req-retry", { lines: ["No uncommitted changes."] });
+        });
+
+        expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+        expect(
+          screen.getByRole("button", { name: "Delete worktree" }).hasAttribute("aria-disabled")
+        ).toBe(false);
+        expect(useAnnouncerStore.getState().polite?.msg).toBe(
+          "Checked again — deleting is no longer blocked"
+        );
+        // The Retry that had focus went with the refusal.
+        expect(document.activeElement?.getAttribute("data-confirm-role")).toBe("cancel");
+      } finally {
+        vi.runOnlyPendingTimers();
+        vi.useRealTimers();
+      }
+    });
+  });
+
   // #12692: an agent pane is asked, not refused, above its tier — and may keep
   // allowing the tool for the rest of the session.
   describe("agent-pane approval (#12692)", () => {
@@ -1404,7 +1532,9 @@ describe("McpConfirmDialog", () => {
 
       // Only the preview landing unblocks it.
       act(() => {
-        useMcpConfirmStore.getState().setPreview("req-pending", ["No uncommitted changes."]);
+        useMcpConfirmStore
+          .getState()
+          .setPreview("req-pending", { lines: ["No uncommitted changes."] });
       });
       expect(
         screen.getByRole("button", { name: "Delete worktree" }).hasAttribute("aria-disabled")
@@ -1427,7 +1557,7 @@ describe("McpConfirmDialog", () => {
     act(() => {
       useMcpConfirmStore
         .getState()
-        .setPreview("req-title", ["Branch: main", "  abcdef1 Fix — Ada"]);
+        .setPreview("req-title", { lines: ["Branch: main", "  abcdef1 Fix — Ada"] });
     });
 
     expect(screen.getByText("Branch and local commits")).toBeTruthy();
@@ -1724,7 +1854,7 @@ describe("McpConfirmDialog", () => {
     render(<McpConfirmDialog />);
 
     act(() => {
-      useMcpConfirmStore.getState().setPreview("req-empty", []);
+      useMcpConfirmStore.getState().setPreview("req-empty", { lines: [] });
     });
 
     expect(screen.getByText("Working tree changes")).toBeTruthy();

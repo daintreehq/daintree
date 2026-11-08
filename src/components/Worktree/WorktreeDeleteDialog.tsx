@@ -29,6 +29,7 @@ import {
   worktreeDeleteContentRisk,
   worktreeDeleteRefusedBy,
   PREVIEW_FILE_LIMIT,
+  WORKTREE_DELETE_BLOCK_COPY,
   type WorktreeDeletePreview,
   type WorktreeSubmoduleRiskState,
 } from "@/components/Worktree/worktreeDeletePreview";
@@ -905,11 +906,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
         role="alert"
         animated={false}
         className="rounded-[var(--radius-md)]"
-        title={
-          submoduleBlock === "at-risk-commits"
-            ? "Push the submodule commits first"
-            : "Couldn't finish checking this worktree's submodules"
-        }
+        title={WORKTREE_DELETE_BLOCK_COPY[submoduleBlock].title}
         description={
           <>
             {submoduleBlock === "at-risk-commits" ? (
@@ -955,14 +952,10 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // force would send them somewhere that does not help. The in-flight check
   // comes LAST — it also disables the primary, but it is the least specific
   // thing we can say, and the seed snapshot often already has a better one.
-  const blockedHint = isBlocked
+  const blockedHint = submoduleBlock
     ? previewPending
       ? "Checking again"
-      : submoduleBlock === "at-risk-commits"
-        ? // What the check actually measures, so the hint promises exactly what
-          // clears it: a push, or a fetch that proves the remote already has it.
-          "Delete unavailable until the submodule commits are on a remote"
-        : "Delete unavailable until the submodule check completes"
+      : WORKTREE_DELETE_BLOCK_COPY[submoduleBlock].hint
     : force || (!hasChanges && !forceRequiredBySubmodules)
       ? previewPending
         ? "Checking this worktree for uncommitted work"
