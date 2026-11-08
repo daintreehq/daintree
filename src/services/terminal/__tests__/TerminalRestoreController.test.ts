@@ -914,6 +914,33 @@ describe("TerminalRestoreController", () => {
       expect(await promise).toBe(true);
     });
 
+    it("gives up an authoritative restore when accepted writes don't settle (#16497)", async () => {
+      vi.mocked(terminalClient.getSerializedState).mockResolvedValue(snapshot("state"));
+      mockTerminal.write.mockImplementation((data: string, callback?: () => void) => {
+        if (data === "") return;
+        baseWriteImpl(data, callback);
+      });
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      const promise = controller.fetchAndRestore("t1", { authoritative: true });
+      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(2000);
+
+      expect(await promise).toBe(false);
+      expect(mockTerminal.reset).not.toHaveBeenCalled();
+      expect(managed.isSerializedRestoreInProgress).toBe(false);
+    });
+
+    it("leaves a pane another restore owns to that restore (#16497)", async () => {
+      vi.mocked(terminalClient.getSerializedState).mockClear();
+      instances.set("t1", makeManagedTerminal({ isSerializedRestoreInProgress: true }));
+
+      expect(await controller.fetchAndRestore("t1", { authoritative: true })).toBe(false);
+      expect(terminalClient.getSerializedState).not.toHaveBeenCalled();
+      expect(mockTerminal.reset).not.toHaveBeenCalled();
+    });
+
     it("paints an empty snapshot as a blank screen only when authoritative (#16497)", async () => {
       vi.mocked(terminalClient.getSerializedState).mockResolvedValue(snapshot(""));
       instances.set("t1", makeManagedTerminal());

@@ -53,7 +53,9 @@ export interface FetchAndRestoreOptions {
   /**
    * The host snapshot is the pane's truth and the pane may be streaming:
    * settles pending writes as `settlePendingWrites` does, and takes an empty
-   * snapshot as a blank screen rather than as nothing to restore.
+   * snapshot as a blank screen rather than as nothing to restore. Never
+   * starts while another restore owns the pane (its writer could still queue
+   * a chunk behind the barrier); the caller retries.
    */
   authoritative?: boolean;
 }
@@ -631,6 +633,7 @@ export class TerminalRestoreController {
       logWarn(`Cannot fetch-and-restore: terminal ${id} not found`);
       return false;
     }
+    if (options.authoritative && managed.isSerializedRestoreInProgress) return false;
 
     // Deliberately does NOT bump restoreGeneration: that would cancel any
     // in-flight replay, and a fetch that then came back null would have killed

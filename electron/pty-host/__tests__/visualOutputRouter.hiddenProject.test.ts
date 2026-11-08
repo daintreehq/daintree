@@ -6,7 +6,11 @@ import { createConnectionHandlers } from "../handlers/connection.js";
 import { createTerminalQueryHandlers } from "../handlers/terminalQueries.js";
 import type { HandlerMap, HostContext, RendererConnection } from "../handlers/types.js";
 import { HIDDEN_VIEW_SKIP_REASON, type PtyHostEvent } from "../../../shared/types/pty-host.js";
-import { IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES, IPC_MAX_PAUSE_MS } from "../../services/pty/types.js";
+import {
+  IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES,
+  IPC_MAX_PAUSE_MS,
+  IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES,
+} from "../../services/pty/types.js";
 
 // A full-width TUI redraw row: box-drawing characters are 3 bytes in UTF-8.
 const REDRAW = "─".repeat(1365) + "\r\n";
@@ -305,14 +309,17 @@ describe("visual routing for a project no window shows (#16497)", () => {
   });
 
   it("keeps hidden debt out of the aggregate gate that paces the project on screen", () => {
-    const hidden = Array.from({ length: 20 }, (_, i) => `h${i}`);
+    const hidden = Array.from({ length: 24 }, (_, i) => `h${i}`);
     const h = createHarness(hidden, "proj-a", ["s1"]);
     show(h, "proj-b");
-    // Twenty frozen cached panes fill their budgets: far past the aggregate
-    // high watermark if they counted toward it.
-    for (let t = 0; t < 2000; t += TICK_MS) {
+    // Frozen cached panes fill their budgets: together far past the aggregate
+    // high watermark, were they counted toward it.
+    const chunksToFill = Math.ceil(IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES / REDRAW_BYTES) + 1;
+    for (let i = 0; i < chunksToFill; i++) {
       for (const id of hidden) h.router.routeOutput(id, REDRAW, undefined);
     }
+    const hiddenDebt = hidden.reduce((sum, id) => sum + h.ipcQueue.getHiddenQueuedBytes(id), 0);
+    expect(hiddenDebt).toBeGreaterThan(IPC_TOTAL_QUEUE_HIGH_WATERMARK_BYTES);
 
     // The shown terminal's port is saturated, so its copy goes over IPC as the
     // only delivery and is paced by the IPC ledger.
@@ -321,6 +328,30 @@ describe("visual routing for a project no window shows (#16497)", () => {
 
     expect(h.ipcQueue.getQueuedBytes("s1")).toBe(REDRAW_BYTES);
     expect(h.coordinators.get("s1")!.isReadPaused).toBe(false);
+  });
+
+  it("keeps a hidden project hidden when the last port fails", () => {
+    const h = createHarness(["a1"], "proj-a");
+    show(h, "proj-b");
+    h.rendererConnections.clear();
+
+    const durationMs = IPC_MAX_PAUSE_MS * 2;
+    const written = runAgents(h, ["a1"], durationMs);
+
+    expect(h.rawPauses.get("a1")).toBe(0);
+    expect(written.get("a1")).toBe(durationMs / TICK_MS);
+    expect(h.ipcQueue.getQueuedBytes("a1")).toBe(0);
+    expect(statusEvents(h).filter((e) => e.reason === HIDDEN_VIEW_SKIP_REASON)).toHaveLength(1);
+  });
+
+  it("keeps the fallback primary at startup, before any project is routed", () => {
+    const h = createHarness(["a1"], "proj-a");
+    h.rendererConnections.clear();
+
+    runAgents(h, ["a1"], IPC_MAX_PAUSE_MS * 1.5);
+
+    expect(h.ipcQueue.getHiddenQueuedBytes("a1")).toBe(0);
+    expect(h.coordinators.get("a1")!.isReadPaused).toBe(true);
   });
 
   it("treats a project shown in a window whose port failed as on screen", () => {

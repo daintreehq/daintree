@@ -376,9 +376,31 @@ describe("IpcQueueManager hidden-view balance (#16497)", () => {
     vi.useRealTimers();
   });
 
-  it("settles acks against the hidden balance before the primary ledger", () => {
+  it("carries unpaused primary debt over to the hidden balance", () => {
     mgr.addBytes("t1", 500);
     mgr.addHiddenBytes("t1", 300);
+
+    expect(mgr.getQueuedBytes("t1")).toBe(0);
+    expect(mgr.getHiddenQueuedBytes("t1")).toBe(800);
+    expect(mgr.getTotalQueuedBytes()).toBe(0);
+  });
+
+  it("leaves a paused terminal's primary debt to its safety timer", () => {
+    mgr.addBytes("t1", HIGH_BYTES);
+    expect(mgr.applyBackpressure("t1", 70)).toBe(true);
+    mgr.addHiddenBytes("t1", 300);
+
+    expect(mgr.getQueuedBytes("t1")).toBe(HIGH_BYTES);
+    expect(mgr.getHiddenQueuedBytes("t1")).toBe(300);
+
+    vi.advanceTimersByTime(IPC_MAX_PAUSE_MS);
+    expect(mgr.getQueuedBytes("t1")).toBe(0);
+    expect(mgr.getHiddenQueuedBytes("t1")).toBe(300);
+  });
+
+  it("settles acks against the hidden balance before primary debt charged after it", () => {
+    mgr.addHiddenBytes("t1", 300);
+    mgr.addBytes("t1", 500);
 
     mgr.removeBytes("t1", 200);
     expect(mgr.getHiddenQueuedBytes("t1")).toBe(100);
@@ -391,8 +413,8 @@ describe("IpcQueueManager hidden-view balance (#16497)", () => {
   });
 
   it("keeps hidden bytes out of the aggregate but in the diagnostics snapshot", () => {
-    mgr.addBytes("t1", 500);
     mgr.addHiddenBytes("t1", 300);
+    mgr.addBytes("t1", 500);
     mgr.addHiddenBytes("t2", 700);
 
     expect(mgr.getTotalQueuedBytes()).toBe(500);
@@ -400,10 +422,7 @@ describe("IpcQueueManager hidden-view balance (#16497)", () => {
     expect(snapshot.totalPendingBytes).toBe(1500);
     expect(
       Object.fromEntries(snapshot.perTerminal.map((e) => [e.terminalId, e.pendingBytes]))
-    ).toEqual({
-      t1: 800,
-      t2: 700,
-    });
+    ).toEqual({ t1: 800, t2: 700 });
   });
 
   it("clears the hidden balance and the skip notice with the queue", () => {

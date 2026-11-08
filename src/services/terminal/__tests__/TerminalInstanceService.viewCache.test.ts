@@ -643,7 +643,10 @@ describe("TerminalInstanceService repaint after a hidden-view skip (#16497)", ()
       expect(restores).toHaveLength(attempt);
       restores.at(-1)!.settle(false);
       await settleMicrotasks();
-      vi.advanceTimersByTime(1000);
+      vi.advanceTimersByTime(999);
+      await settleMicrotasks();
+      expect(restores).toHaveLength(attempt);
+      vi.advanceTimersByTime(1);
       await settleMicrotasks();
     }
     // Out of timed retries: the next reactivation tries again.
@@ -658,6 +661,54 @@ describe("TerminalInstanceService repaint after a hidden-view skip (#16497)", ()
     emit("revealed");
     await settleMicrotasks();
     expect(restores).toHaveLength(4);
+  });
+
+  it("spends timed retries only on panes that have them left", async () => {
+    vi.useFakeTimers();
+    service.instances.set("a", makeManaged());
+    service.instances.set("b", makeManaged());
+    service.noteHiddenOutputSkipped("a");
+    await settleMicrotasks();
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      restores.at(-1)!.settle(false);
+      await settleMicrotasks();
+      vi.advanceTimersByTime(1000);
+      await settleMicrotasks();
+    }
+    expect(restores.map((r) => r.id)).toEqual(["a", "a", "a"]);
+
+    // Another pane's notice and its timed retry leave the exhausted one alone.
+    service.noteHiddenOutputSkipped("b");
+    await settleMicrotasks();
+    expect(restores.map((r) => r.id)).toEqual(["a", "a", "a", "b"]);
+    restores.at(-1)!.settle(false);
+    await settleMicrotasks();
+    vi.advanceTimersByTime(1000);
+    await settleMicrotasks();
+    expect(restores.map((r) => r.id)).toEqual(["a", "a", "a", "b", "b"]);
+
+    // A reactivation retries it.
+    restores.at(-1)!.settle(true);
+    await settleMicrotasks();
+    emit("revealed");
+    await settleMicrotasks();
+    expect(restores.map((r) => r.id)).toEqual(["a", "a", "a", "b", "b", "a"]);
+  });
+
+  it("does not hand a failed repaint to a pane recreated under the same id", async () => {
+    vi.useFakeTimers();
+    service.instances.set("a", makeManaged());
+    service.noteHiddenOutputSkipped("a");
+    await settleMicrotasks();
+
+    service.instances.set("a", makeManaged());
+    restores[0]!.settle(false);
+    await settleMicrotasks();
+    vi.advanceTimersByTime(5000);
+    emit("revealed");
+    await settleMicrotasks();
+
+    expect(restores).toHaveLength(1);
   });
 
   it("waits for the view to come back, then repaints each skipped pane once, one at a time", async () => {

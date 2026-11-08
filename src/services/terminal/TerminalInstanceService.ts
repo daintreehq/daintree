@@ -135,7 +135,7 @@ function canAutoInitializeTerminalIngest(): boolean {
 const SUPPRESSED_VIEW_WEBGL_RELEASE_DELAY_MS = 20_000;
 // A repaint after a hidden-view skip that fails (null snapshot, a timeout, a
 // competing restore taking the pane) is retried on a timer this many times;
-// past that it waits for the next reactivation or skip notice.
+// past that it waits for the next reactivation or its own next skip notice.
 const HIDDEN_SKIP_REPAINT_TIMED_ATTEMPTS = 3;
 const HIDDEN_SKIP_REPAINT_RETRY_MS = 1000;
 
@@ -614,7 +614,7 @@ class TerminalInstanceService {
     for (const managed of this.instances.values()) {
       resumeXtermRender(managed.terminal);
     }
-    this.repaintHiddenSkips();
+    this.repaintHiddenSkips(true);
   }
 
   /**
@@ -1508,17 +1508,25 @@ class TerminalInstanceService {
    * marked, and each restore writes a whole snapshot into its xterm. A pane
    * whose repaint fails keeps its obligation.
    */
-  private repaintHiddenSkips(): void {
+  private repaintHiddenSkips(includeExhausted = false): void {
     if (this.hiddenSkipRepaintRunning) return;
     this.hiddenSkipRepaintRunning = true;
-    const failed = new Map<string, number>();
+    // Keyed by the instance the attempt ran against, so a failure never
+    // carries over to a pane recreated under the same id.
+    const failed = new Map<string, { managed: ManagedTerminal; failures: number }>();
     void (async () => {
       try {
         // Map iteration also visits ids marked while an earlier one restores.
         for (const [id, failures] of this.hiddenSkipRepaints) {
           if (isProjectViewCached()) break;
+          // Only a reactivation retries a pane out of timed attempts; a timer or
+          // another pane's notice leaves it for that (or its own next notice).
+          if (!includeExhausted && failures >= HIDDEN_SKIP_REPAINT_TIMED_ATTEMPTS) continue;
           this.hiddenSkipRepaints.delete(id);
-          if (!this.instances.has(id)) continue;
+          // The latest attempt's outcome is the one that counts.
+          failed.delete(id);
+          const managed = this.instances.get(id);
+          if (!managed) continue;
           // The worker mirror paints its own snapshots, which a host repaint
           // would race; history release stays out of worker mode for the same
           // reason.
@@ -1531,14 +1539,14 @@ class TerminalInstanceService {
               error,
             });
           }
-          if (!restored) failed.set(id, failures + 1);
+          if (!restored) failed.set(id, { managed, failures: failures + 1 });
         }
       } finally {
         this.hiddenSkipRepaintRunning = false;
         let retry = false;
-        for (const [id, failures] of failed) {
+        for (const [id, { managed, failures }] of failed) {
           // A fresh notice meanwhile already re-marked it with a clean count.
-          if (this.hiddenSkipRepaints.has(id) || !this.instances.has(id)) continue;
+          if (this.hiddenSkipRepaints.has(id) || this.instances.get(id) !== managed) continue;
           logWarn(`[TerminalInstanceService] ${id}: repaint after hidden-view skip failed`);
           this.hiddenSkipRepaints.set(id, failures);
           if (failures < HIDDEN_SKIP_REPAINT_TIMED_ATTEMPTS) retry = true;

@@ -59,7 +59,22 @@ export class IpcQueueManager {
   }
 
   addHiddenBytes(id: string, bytes: number): void {
-    this.hiddenQueuedBytes.set(id, (this.hiddenQueuedBytes.get(id) ?? 0) + bytes);
+    // A terminal whose project was just hidden can still owe acks for primary
+    // copies its view took while shown. They come back from that same view,
+    // ahead of the hidden ones, so they move to the hidden balance: every ack
+    // then settles the balance it belongs to, and none of them keeps holding
+    // the aggregate gate. A held pause keeps its own debt; its safety timer
+    // clears it.
+    const primary = this.queuedBytes.get(id) ?? 0;
+    let carried = 0;
+    if (primary > 0 && !this.pausedTerminals.has(id)) {
+      this.queuedBytes.delete(id);
+      const previousTotal = this.totalQueuedBytes;
+      this.totalQueuedBytes = Math.max(0, this.totalQueuedBytes - primary);
+      this.sweepAggregateResume(previousTotal);
+      carried = primary;
+    }
+    this.hiddenQueuedBytes.set(id, (this.hiddenQueuedBytes.get(id) ?? 0) + carried + bytes);
   }
 
   getHiddenQueuedBytes(id: string): number {
@@ -67,10 +82,11 @@ export class IpcQueueManager {
   }
 
   removeBytes(id: string, bytes: number): void {
-    // Acks carry no transport, so the hidden balance is settled first: a stale
-    // primary balance (an IPC copy nobody received) must not keep absorbing
-    // acks for bytes the cached view did parse, or its budget never recovers.
-    // Showing the project clears whatever primary debt is left behind.
+    // Acks carry no transport. Primary debt older than the hidden copies was
+    // carried over by addHiddenBytes, so what is left of it here is a paused
+    // terminal's or one charged after the hidden copies: settle the hidden
+    // balance first so a cached view that keeps up keeps its budget. Showing
+    // the project clears whatever is left behind.
     const hidden = this.hiddenQueuedBytes.get(id) ?? 0;
     if (hidden > 0) {
       const settled = Math.min(bytes, hidden);

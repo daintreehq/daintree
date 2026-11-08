@@ -155,9 +155,7 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
     const needsEligibleFallback =
       termProjectId !== null && fallbackEligibleProjects.has(termProjectId);
     const portDeliveredWebContentsIds: number[] = [];
-    // No window shows this project and no port can take its output, so the
-    // IPC fallback below can only reach cached views of it.
-    let projectShownNowhere = false;
+    let portTargetFound = false;
 
     if (
       !isSuspended &&
@@ -172,11 +170,7 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
         if (filtered) continue;
         targets.push({ windowId, conn });
       }
-      // Visibility comes from the window map, not the connected ports: a
-      // window keeps its project through a failed port, and its view is then
-      // a shown, primary IPC consumer.
-      projectShownNowhere =
-        termProjectId !== null && targets.length === 0 && !isProjectOnScreen(termProjectId);
+      portTargetFound = targets.length > 0;
 
       // Encode only when a target window remains after project filtering — a
       // fully-filtered chunk falls through to the IPC fallback's original string.
@@ -292,6 +286,19 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
       }
       // If at capacity on all ports, fall through to SAB or IPC fallback
     }
+
+    // No window shows this project and no port can take its output, so the IPC
+    // fallback below can only reach cached views of it. Visibility comes from
+    // the window map, not the connected ports: a window keeps its project
+    // through a failed port (its view is then a shown, primary IPC consumer),
+    // and a hidden project stays hidden when the last port fails. An empty map
+    // is startup, before any project is routed: the fallback is primary there.
+    const projectShownNowhere =
+      termProjectId !== null &&
+      !portTargetFound &&
+      !isSmokeTestTerminalId(id) &&
+      windowProjectMap.size > 0 &&
+      !isProjectOnScreen(termProjectId);
 
     // PRIORITY 2: SHARED ARRAY BUFFER (Zero-Copy Fallback)
     // FUTURE_SAB: This entire branch is unreachable in production. SharedArrayBuffer
