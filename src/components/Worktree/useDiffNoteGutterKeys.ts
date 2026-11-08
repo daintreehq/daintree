@@ -130,15 +130,15 @@ export function useDiffNoteGutterKeys({
 
   // Every commit, not on a dependency: the stop's row can go with a staged
   // batch, a refresh, a layout switch or a collapse, and checking it is a pointer
-  // read until one of those takes it. tabIndex is read as well as isConnected, as
-  // switching notes off and on again keeps the node but wipes its attribute.
+  // read until one of those takes it. Notes going off forgets it, since that keeps
+  // the node but wipes its attribute.
   //
   // React delivers no blur for an element it unmounts, so this is also where a
   // focused number going is noticed: nothing else would clear what it was doing,
   // and the keyboard would drop to the top of the document.
   useLayoutEffect(() => {
     const stop = stopRef.current;
-    if (enabled ? stop?.isConnected && stop.tabIndex === 0 : stop === null) return;
+    if (enabled ? stop?.isConnected : stop === null) return;
     hintRef.current?.removeAttribute("data-active");
     setSelection(null);
     const root = enabled ? rootRef.current : null;
