@@ -696,6 +696,9 @@ export function TrashContainer({
           onClose={() => {
             setEmptyTrashConfirmOpen(false);
             isExecutingRef.current = false;
+            // Same as a cancelled removal: the popover only stepped aside for
+            // the dialog, so hand the user back to it.
+            setIsOpen(true);
           }}
           title="Empty trash?"
           description={`${pluralize(trashedTerminals.length, "panel")} will be permanently removed.`}
