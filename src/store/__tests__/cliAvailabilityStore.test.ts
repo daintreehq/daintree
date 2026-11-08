@@ -23,11 +23,8 @@ vi.mock("@/config/agents", () => ({
   getAgentIds: () => ["claude", "gemini", "codex", "opencode", "cursor"],
 }));
 
-import {
-  useCliAvailabilityStore,
-  cleanupCliAvailabilityStore,
-  whenCliHostSynced,
-} from "../cliAvailabilityStore";
+import { useCliAvailabilityStore, cleanupCliAvailabilityStore } from "../cliAvailabilityStore";
+import { whenCliHostSynced } from "../cliHostSync";
 
 const defaultAvail = {
   claude: "missing",

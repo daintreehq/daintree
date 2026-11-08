@@ -4,7 +4,8 @@ import {
   rebaseAgentLaunchCommand,
   resolveAgentLaunchBaseCommandFor,
 } from "@shared/utils/agentLaunchCommand";
-import { useCliAvailabilityStore, whenCliHostSynced } from "@/store/cliAvailabilityStore";
+import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import { whenCliHostSynced } from "@/store/cliHostSync";
 import { getHostPlatformInfo, hostShellDialect, isRemoteWindow } from "@/hooks/useHostPlatform";
 
 export async function getCurrentLaunchCliDetail(

@@ -6,6 +6,7 @@ import { getAgentIds } from "@/config/agents";
 import { isElectronAvailable } from "@/hooks/useElectron";
 import { safeJSONParse } from "./persistence/safeStorage";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { resetCliHostSync, trackCliHostSync } from "./cliHostSync";
 
 interface CliAvailabilityState {
   availability: CliAvailability;
@@ -134,16 +135,6 @@ let epoch = 0;
 let initPromise: Promise<void> | null = null;
 let refreshPromise: Promise<void> | null = null;
 let syncSeq = 0;
-let pendingHostSync: Promise<void> | null = null;
-
-/**
- * Settles once this view has read the host's latest check after being told the
- * copy an agent launches changed. A launch waits on it, so it never starts the
- * copy this view held before the change.
- */
-export function whenCliHostSynced(): Promise<void> {
-  return pendingHostSync ?? Promise.resolve();
-}
 
 // Fetch availability and details in one pass so the UI never renders a
 // "Needs Setup" nudge for an agent whose availability already arrived as
@@ -318,12 +309,9 @@ export const useCliAvailabilityStore = create<CliAvailabilityStore>()(
           // The view keeps what it had until its next refresh, as after any failed read.
         }
       })();
-      // Set before the first await above returns control, so a launch begun
-      // after the change was heard waits for this read.
-      pendingHostSync = run;
-      void run.finally(() => {
-        if (pendingHostSync === run) pendingHostSync = null;
-      });
+      // Recorded before anything else runs, so a launch begun after the change
+      // was heard waits for this read.
+      trackCliHostSync(run);
       return run;
     },
   }))
@@ -333,7 +321,7 @@ export function cleanupCliAvailabilityStore() {
   epoch++;
   initPromise = null;
   refreshPromise = null;
-  pendingHostSync = null;
+  resetCliHostSync();
   useCliAvailabilityStore.setState({
     availability: defaultAvailability(),
     details: {},
