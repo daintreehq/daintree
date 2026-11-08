@@ -81,37 +81,36 @@ export async function readClaudePaneContextUsage(
 }
 
 /**
- * Reads still running, one per terminal. A read past its deadline keeps its
- * slot until it settles, so a stalled store holds one read per pane rather
- * than one per turn.
+ * The last read queued per terminal. Reads of one terminal run one after
+ * another, so a stalled store holds one read per pane rather than one per
+ * turn, and a caller never takes an answer read before it asked.
  */
-const running = new Map<string, Promise<AgentContextUsageResult>>();
+const queued = new Map<string, Promise<AgentContextUsageResult>>();
 
 /**
  * {@link readClaudePaneContextUsage} with a deadline that holds whether or not
- * the filesystem honours the abort.
+ * the filesystem honours the abort. A caller the deadline has already answered
+ * starts no read of its own.
  */
 export async function readClaudePaneContextUsageWithin(
   terminalId: string,
   deps: ClaudeContextUsageDeps & { deadlineMs?: number } = {}
 ): Promise<AgentContextUsageResult> {
   const deadlineMs = deps.deadlineMs ?? CONTEXT_USAGE_HOST_DEADLINE_MS;
-  let work = running.get(terminalId);
-  if (!work) {
-    const signal = AbortSignal.timeout(deadlineMs);
-    const started: Promise<AgentContextUsageResult> = readClaudePaneContextUsage(
-      terminalId,
-      signal,
-      deps
+  let answered = false;
+  const work: Promise<AgentContextUsageResult> = (queued.get(terminalId) ?? Promise.resolve())
+    .then(() =>
+      answered
+        ? unavailable("store-unreadable")
+        : readClaudePaneContextUsage(terminalId, AbortSignal.timeout(deadlineMs), deps)
     )
-      // Nothing is logged: a filesystem error names a path under the user's home.
-      .catch(() => unavailable("store-unreadable"))
-      .finally(() => {
-        if (running.get(terminalId) === started) running.delete(terminalId);
-      });
-    running.set(terminalId, started);
-    work = started;
-  }
+    // Nothing is logged: a filesystem error names a path under the user's home.
+    .catch(() => unavailable("store-unreadable"));
+  queued.set(terminalId, work);
+  void work.finally(() => {
+    if (queued.get(terminalId) === work) queued.delete(terminalId);
+  });
+
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<AgentContextUsageResult>((resolve) => {
     timer = setTimeout(() => resolve(unavailable("store-unreadable")), deadlineMs);
@@ -119,6 +118,7 @@ export async function readClaudePaneContextUsageWithin(
   try {
     return await Promise.race([work, deadline]);
   } finally {
+    answered = true;
     clearTimeout(timer);
   }
 }

@@ -70,18 +70,19 @@ function remember(key: string, entry: CachedReading): void {
 /**
  * A reading asked for no earlier than `due`. A request already in flight that
  * started before then may have read the transcript before the turn's last
- * records reached it, so it is waited out and a fresh one asked.
+ * records reached it, so it is waited out and a fresh one asked, unless the
+ * caller has stopped wanting one by then.
  */
 function read(
   terminalId: string,
   key: string,
-  due: number
+  due: number,
+  wanted: () => boolean
 ): Promise<ClaudeContextUsageReading | null> {
   const pending = inFlight.get(key);
   if (pending) {
-    return pending.at >= due
-      ? pending.request
-      : pending.request.then(() => read(terminalId, key, due));
+    if (pending.at >= due) return pending.request;
+    return pending.request.then(() => (wanted() ? read(terminalId, key, due, wanted) : null));
   }
   const at = Date.now();
   // Started inside the chain so a bridge that throws outright still settles.
@@ -114,8 +115,8 @@ function read(
  * Reads follow turn boundaries, never output: two reads each time the pane
  * settles after working, and one when a pane mounts already settled. Changes
  * between settled states (waiting, typing a reply, completed) are the same
- * boundary, and work resuming cancels the reads still pending. The reading stays on screen
- * through the next turn, since its time says how old it is.
+ * boundary, and work resuming cancels the reads still pending. The reading
+ * stays on screen through the next turn, since its time says how old it is.
  */
 export function useClaudeContextUsage(
   terminalId: string,
@@ -158,7 +159,7 @@ export function useClaudeContextUsage(
     const schedule = (delay: number) => {
       const due = Date.now() + delay;
       return setTimeout(() => {
-        void read(terminalId, key, due).then((reading) => {
+        void read(terminalId, key, due, () => live).then((reading) => {
           if (live) setEntry({ key, reading });
         });
       }, delay);

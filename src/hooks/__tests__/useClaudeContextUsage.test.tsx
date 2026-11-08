@@ -140,6 +140,21 @@ describe("useClaudeContextUsage", () => {
     expect(result.current?.contextTokens).toBe(81_000);
   });
 
+  it("asks nothing more once work resumes behind a follow-up still queued", async () => {
+    let answer: (value: AgentContextUsageResult) => void = () => {};
+    readContextUsage.mockImplementation(
+      () => new Promise<AgentContextUsageResult>((resolve) => (answer = resolve))
+    );
+    const { rerender } = mount({ agentState: "working" });
+    rerender({ enabled: true, agentState: "waiting", generation: "1:0" });
+    await advance(CONTEXT_USAGE_FOLLOW_UP_READ_MS);
+    rerender({ enabled: true, agentState: "working", generation: "1:0" });
+    await act(async () => answer(ok(80_000)));
+    await advance(CONTEXT_USAGE_FOLLOW_UP_READ_MS);
+
+    expect(readContextUsage).toHaveBeenCalledTimes(1);
+  });
+
   // A turn's reads are spent once its cycle runs: going quiet and coming back
   // without working again is no new turn.
   it("doesn't count one turn twice", async () => {

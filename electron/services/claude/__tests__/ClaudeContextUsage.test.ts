@@ -209,6 +209,26 @@ describe("readClaudePaneContextUsageWithin", () => {
     expect(read).toHaveBeenCalledTimes(2);
   });
 
+  // The first read stalls past its deadline and then comes back with what it
+  // read before it; a caller that asked after that deadline gets a read of its
+  // own, not that late one.
+  it("never hands a later caller a read that started before it asked", async () => {
+    const { read, settle } = stalled();
+    const late: AgentContextUsageResult = { ...OK, contextTokens: 10 };
+    const fresh: AgentContextUsageResult = { ...OK, contextTokens: 20 };
+
+    await readClaudePaneContextUsageWithin("t-1", { ...deps(), read, deadlineMs: 20 });
+    read.mockResolvedValueOnce(fresh);
+    const second = readClaudePaneContextUsageWithin("t-1", { ...deps(), read, deadlineMs: 5_000 });
+    // It waits for the stalled one rather than reading beside it.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(read).toHaveBeenCalledTimes(1);
+    settle(late);
+
+    expect(await second).toEqual(fresh);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it("answers the read's own result when it comes in time", async () => {
     expect(await readClaudePaneContextUsageWithin("t-1", deps())).toMatchObject({
       status: "ok",
