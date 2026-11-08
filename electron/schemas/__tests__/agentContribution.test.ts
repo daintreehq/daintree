@@ -23,7 +23,7 @@ function manifestWith(overrides: Record<string, unknown>) {
 }
 
 describe("a prompt form's -- beside launchMcp (#16404)", () => {
-  const schema = getPluginManifestSchema("installed");
+  const schema = getPluginManifestSchema("user");
   const terminated = { args: ["--", "{prompt}"] };
   const flagged = { args: ["--task", "{prompt}"] };
   const issues = (agent: Record<string, unknown>) =>
