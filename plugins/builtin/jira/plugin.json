@@ -40,7 +40,7 @@
         "name": "Jira Cloud",
         "matches": [],
         "roles": ["issues"],
-        "capabilities": ["issues"],
+        "capabilities": ["issues", "assignees", "identity"],
         "credentialFields": [
           {
             "id": "token",

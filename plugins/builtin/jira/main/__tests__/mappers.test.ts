@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { validateBranchName } from "../../../../../shared/utils/pathPattern.js";
-import { issueNumberOf, mapIssue, normalizeIssueState, suggestBranchName } from "../mappers.js";
+import {
+  issueNumberOf,
+  mapComment,
+  mapIssue,
+  normalizeIssueState,
+  suggestBranchName,
+} from "../mappers.js";
 
 const SITE = "https://acme.atlassian.net";
 
@@ -138,5 +144,17 @@ describe("mapIssue", () => {
       branchName: "ENG-1",
     });
     expect(issue.author).toBeUndefined();
+  });
+});
+
+describe("mapComment", () => {
+  it("reads a comment with no author or date it can use", () => {
+    expect(mapComment({ id: "10001", body: null, created: "not a date" }, SITE, "ENG-1")).toEqual({
+      id: "10001",
+      body: "",
+      url: `${SITE}/browse/ENG-1?focusedCommentId=10001`,
+      createdAt: 0,
+      rawData: { id: "10001" },
+    });
   });
 });
