@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { ShortcutReferenceDialog } from "../ShortcutReferenceDialog";
 import type { RegisteredKeybindingConfig } from "@/services/KeybindingService";
+import { usePreferencesStore } from "@/store/preferencesStore";
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -117,6 +118,7 @@ describe("ShortcutReferenceDialog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     seed();
+    usePreferencesStore.setState({ doubleShiftOpensCanopy: true });
   });
 
   describe("opening", () => {
@@ -282,6 +284,39 @@ describe("ShortcutReferenceDialog", () => {
       render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
       const controlsId = search().getAttribute("aria-controls");
       expect(controlsId && document.getElementById(controlsId)).toBeTruthy();
+    });
+  });
+
+  describe("fixed shortcuts", () => {
+    it("lists them under their categories beside the bindable shortcuts", () => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      const worktrees = screen.getByRole("region", { name: "Worktrees" });
+      expect(worktrees.textContent).toContain("Move through the worktree list");
+      expect(worktrees.textContent).toContain("Reorder worktree");
+      const panels = screen.getByRole("region", { name: "Panels" });
+      expect(panels.textContent).toContain("Reorder panel");
+      expect(panels.textContent).toContain("Reorder tab");
+    });
+
+    it.each(["worktree", "reorder", "canopy", "shift"])("finds them by searching %s", (query) => {
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      type(query);
+      const names = rowNames().join("|");
+      expect(names).toMatch(
+        query === "worktree"
+          ? /Move through the worktree list/
+          : query === "reorder"
+            ? /Reorder worktree/
+            : /Open Canopy with a double tap/
+      );
+    });
+
+    it("lists double-tap Shift only while its preference is on", () => {
+      usePreferencesStore.setState({ doubleShiftOpensCanopy: false });
+      render(<ShortcutReferenceDialog isOpen={true} onClose={vi.fn()} />);
+      expect(screen.queryByText("Open Canopy with a double tap")).toBeNull();
+      type("shift");
+      expect(screen.queryByText("Open Canopy with a double tap")).toBeNull();
     });
   });
 

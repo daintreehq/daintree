@@ -1,5 +1,6 @@
 import Fuse from "fuse.js";
 import { KEYBINDING_CATEGORY_ORDER } from "@shared/config/defaultKeybindings";
+import type { FixedShortcut } from "./fixedShortcuts";
 
 /** The slice of a registered binding the reference needs. */
 export interface ReferenceBinding {
@@ -30,6 +31,8 @@ export interface ShortcutEntry {
   alternatives: ShortcutAlternative[];
   /** The user changed or cleared at least one of the keys. */
   isCustom: boolean;
+  /** How-to text under the name; set on fixed shortcuts, whose name alone doesn't say what to do. */
+  detail?: string;
   /** Set when a numbered family ("Focus terminal 1…9") was folded into this row. */
   collapsedFrom?: string[];
 }
@@ -89,6 +92,23 @@ export function buildShortcutEntries(
   }
 
   return entries;
+}
+
+/**
+ * Rows for keys the keybinding engine never sees (list navigation, drag-handle
+ * reordering, double-tap Shift). They carry no action and can't be customized,
+ * so they read and search like any other row.
+ */
+export function buildFixedShortcutEntries(fixed: readonly FixedShortcut[]): ShortcutEntry[] {
+  return fixed.map((shortcut) => ({
+    id: `${shortcut.category}\u0000fixed\u0000${shortcut.label}`,
+    actionIds: [],
+    description: shortcut.label,
+    category: shortcut.category,
+    detail: shortcut.description,
+    alternatives: shortcut.keys.map((combo) => ({ combo, scope: "global" })),
+    isCustom: false,
+  }));
 }
 
 const SERIES_DESCRIPTION = /^(.*\S) (\d)$/;
