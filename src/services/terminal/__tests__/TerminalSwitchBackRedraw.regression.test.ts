@@ -12,17 +12,17 @@
 // grid wraps at the wrong width (the "garbled line flow") and its renderer is
 // left paused — exactly the two halves a manual Redraw fixes.
 //
-// Buffer mode splits the recovery lanes (#11443): a main-buffer pane is re-fit
-// by the geometry-convergence branch, while an alt-screen pane is excluded from
-// it (reconcileGeometryFresh refuses to reflow a live TUI) and gets only the
-// paint half here, with its grid owned by the app's SIGWINCH redraw and the
-// ResizeObserver-driven resize on reattach.
+// Both buffer modes take the geometry-convergence branch. An alt-screen pane
+// (#16359) gets its xterm and PTY moved together and the app's own SIGWINCH
+// redraw repaints the frame; the fake records what xterm held at the moment
+// each PTY resize reached the app.
 //
 // The `reconcileRevealGeometry` dep mirrors what the real
-// TerminalInstanceService does, INCLUDING the present-ordering guarantee:
-// reconcileGeometryFresh only succeeds against a foreground-renderable host
-// (checkVisibility + non-zero box), so a repaint is never issued into an
-// occluded surface. That is what makes the "dead zone" assertions meaningful.
+// TerminalInstanceService does, and its geometry half IS the real
+// `TerminalResizeController.reconcileGeometryFresh`, which only succeeds
+// against a foreground-renderable host (checkVisibility + non-zero box), so a
+// repaint is never issued into an occluded surface. That is what makes the
+// "dead zone" assertions meaningful.
 //
 // WEBGL-LANE CAVEAT (documented per the issue's hard requirement; ACCEPTED as a
 // follow-up, not part of this fix): E2E runs the DOM renderer with WebGL OFF, so
@@ -41,11 +41,18 @@ import {
   WATCHDOG_INTERVAL_MS,
   type ReconciliationWatchdogDeps,
 } from "../TerminalReconciliationWatchdog";
+import { TerminalResizeController } from "../TerminalResizeController";
 import {
   __resetSidebarHydrationLockForTests,
   unlockSidebarHydration,
 } from "@/lib/layoutTransitionLock";
 import type { ManagedTerminal } from "../types";
+
+const { ptyResizeMock } = vi.hoisted(() => ({ ptyResizeMock: vi.fn() }));
+
+vi.mock("@/clients", () => ({
+  terminalClient: { resize: ptyResizeMock },
+}));
 
 vi.mock("@/utils/logger", () => ({
   logDebug: vi.fn(),
@@ -69,6 +76,11 @@ interface FakeAgent {
   onScreen: boolean;
   /** Count of local atlas repairs (the WebGL stale-glyph-model reset). */
   atlasRepairs: number;
+  /**
+   * Every PTY resize the app received, with the grid xterm already held when
+   * the SIGWINCH arrived — the grid the app's redraw lands in.
+   */
+  sigwinch: Array<{ cols: number; rows: number; xtermCols: number; xtermRows: number }>;
 }
 
 function newAgent(): FakeAgent {
@@ -81,6 +93,7 @@ function newAgent(): FakeAgent {
     synchronized: false,
     onScreen: true,
     atlasRepairs: 0,
+    sigwinch: [],
   };
 }
 
@@ -115,6 +128,11 @@ function buildManaged(agent: FakeAgent, isAltBuffer: boolean): ManagedTerminal {
     get rows() {
       return agent.rows;
     },
+    resize: vi.fn((cols: number, rows: number) => {
+      agent.cols = cols;
+      agent.rows = rows;
+    }),
+    scrollToBottom: vi.fn(),
     refresh: vi.fn(),
     _core: {
       _renderService: {
@@ -148,10 +166,6 @@ function buildManaged(agent: FakeAgent, isAltBuffer: boolean): ManagedTerminal {
     isDetached: false,
     isResizeSuppressed: false,
     isUserScrolledBack: false,
-    // Buffer mode decides which recovery lane owns the pane: a main-buffer CLI
-    // converges through the geometry-convergence branch, while a live alt-screen
-    // agent TUI is excluded from it (#11443) and recovers via the reveal-pending
-    // obligation plus its own SIGWINCH redraw.
     isAltBuffer,
     lastActiveTime: Date.now(),
     lastWidth: 0,
@@ -183,6 +197,19 @@ function buildDeps(
   instances: Map<string, ManagedTerminal>,
   agents: Map<string, FakeAgent>
 ): ReconciliationWatchdogDeps {
+  const resizeController = new TerminalResizeController({
+    getInstance: (id) => instances.get(id),
+    dataBuffer: {
+      getQueuedBytes: () => 0,
+      flushForTerminal: vi.fn(),
+      resetForTerminal: vi.fn(),
+      resumeFlush: vi.fn(),
+    } as unknown as ConstructorParameters<typeof TerminalResizeController>[0]["dataBuffer"],
+  });
+  ptyResizeMock.mockImplementation((id: string, cols: number, rows: number) => {
+    const agent = agents.get(id);
+    if (agent) agent.sigwinch.push({ cols, rows, xtermCols: agent.cols, xtermRows: agent.rows });
+  });
   return {
     getInstances: () => instances.entries(),
     setVisible: vi.fn(),
@@ -198,24 +225,16 @@ function buildDeps(
     isWebGLActive: vi.fn(() => true),
     shouldHaveWebGL: vi.fn(() => false),
     ensureWebGL: vi.fn(),
-    // Mirror TerminalInstanceService.reconcileRevealGeometry +
-    // TerminalResizeController.reconcileGeometryFresh: atomic xterm+PTY re-fit to
-    // the FRESH container measurement plus a local atlas repair — but ONLY when
-    // the host is foreground-renderable. Returns false on an occluded box so the
-    // watchdog keeps the obligation and never repaints into a culled surface.
+    // Mirror TerminalInstanceService.reconcileRevealGeometry: the real
+    // reconcileGeometryFresh (atomic xterm+PTY re-fit to the FRESH container
+    // measurement, refused on an occluded box) and then a local atlas repair.
+    // A false keeps the watchdog's obligation and never repaints into a culled
+    // surface.
     reconcileRevealGeometry: vi.fn((id: string) => {
       const agent = agents.get(id);
       if (!agent) return false;
-      if (!agent.onScreen) return false; // present-ordering guarantee
+      if (!resizeController.reconcileGeometryFresh(id)) return false;
       agent.atlasRepairs += 1;
-      // reconcileGeometryFresh takes its alt-buffer early return BEFORE any
-      // measurement (#10805): the atlas/paint half still runs and the boolean
-      // still reports measurability, but the grid is deliberately untouched. A
-      // fake that converged here would hide the fact that the geometry lane is
-      // structurally a no-op for these panes.
-      if (instances.get(id)?.isAltBuffer) return true;
-      agent.cols = agent.containerCols;
-      agent.rows = agent.containerRows;
       return true;
     }),
     isStoreBackgrounded: vi.fn(() => false),
@@ -308,51 +327,119 @@ describe("#10632 switch-back redraw — closed-loop convergence", () => {
     expect(agent.atlasRepairs).toBeGreaterThan(0); // local atlas repaired (WebGL path stand-in)
   });
 
-  it("path A (alt-screen TUI): recovers paint without the geometry lane, and never latches the breaker (#11443)", () => {
-    // Same switch-back as path A, but the pane is a live alt-screen TUI. Its
-    // grid is NOT the watchdog's to re-fit — reconcileGeometryFresh returns
-    // before measuring so the app's own SIGWINCH redraw and the
-    // ResizeObserver-driven resize own it. What the watchdog must still deliver
-    // is the paint half, and what it must never do is spend a convergence
-    // budget it cannot win: a latched give-up would outlive the alternate
-    // screen and bar the pane's later main-buffer repairs.
-    const agent = mount("opencode", { altBuffer: true });
-    const managed = instances.get("opencode")!;
+  it("path A (alt-screen TUI): a switch-back with a size change moves both grids, xterm first (#16359)", () => {
+    // Same switch-back as path A, but the pane is a live full-screen TUI
+    // (Crush, htop in a shell pane). Its container narrowed while the project
+    // was hidden; on return xterm and the PTY must both land on the new size,
+    // with xterm already holding it when the SIGWINCH reaches the app, so the
+    // app's own redraw is what repaints the frame.
+    const agent = mount("crush", { altBuffer: true });
+    const managed = instances.get("crush")!;
     deps = buildDeps(instances, agents);
     watchdog = new TerminalReconciliationWatchdog(deps);
 
     agent.onScreen = false;
     agent.containerCols = 90;
+    agent.containerRows = 30;
     agent.paused = true;
     vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+    expect(agent.sigwinch).toEqual([]);
 
     agent.onScreen = true;
     managed.attachGeneration += 1;
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+
+    expect(agent.cols).toBe(90);
+    expect(agent.rows).toBe(30);
+    expect(agent.sigwinch).toEqual([{ cols: 90, rows: 30, xtermCols: 90, xtermRows: 30 }]);
+    expect(agent.paused).toBe(false);
+    expect(agent.atlasRepairs).toBeGreaterThan(0);
+    // A live TUI's viewport is never scrolled; the frame is the app's.
+    expect(managed.terminal.scrollToBottom).not.toHaveBeenCalled();
+
+    // Converged means quiet: no further resizes, and no breaker state left over.
+    for (let i = 0; i < 6; i++) vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+    expect(agent.sigwinch).toHaveLength(1);
+    expect(managed.geometryRepairGaveUp).toBeFalsy();
+  });
+
+  it("path B (alt-screen TUI, long dwell): the background-resize obligation lands the real size on foreground", () => {
+    // The window was resized while the project sat hidden. The background
+    // path does not size a full-screen TUI to its window-ratio estimate; it
+    // leaves the obligation (#16359), and the watchdog discharges it against
+    // real layout once the pane is back on screen.
+    const agent = mount("htop", { altBuffer: true });
+    const managed = instances.get("htop")!;
+    deps = buildDeps(instances, agents);
+    watchdog = new TerminalReconciliationWatchdog(deps);
+
+    agent.onScreen = false;
+    agent.containerCols = 150;
+    agent.containerRows = 50;
+    managed.isDetached = true;
     managed.revealPendingRepair = true;
     managed.revealPendingGeneration = managed.attachGeneration;
 
     vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+    expect(managed.revealPendingRepair).toBe(true);
+    expect(agent.sigwinch).toEqual([]);
 
-    // Paint recovered, obligation discharged.
-    expect(agent.paused).toBe(false);
-    expect(agent.atlasRepairs).toBeGreaterThan(0);
+    agent.onScreen = true;
+    managed.isDetached = false;
+    managed.attachGeneration += 1;
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+
+    expect(agent.cols).toBe(150);
+    expect(agent.rows).toBe(50);
+    expect(agent.sigwinch).toEqual([{ cols: 150, rows: 50, xtermCols: 150, xtermRows: 50 }]);
     expect(managed.revealPendingRepair).toBe(false);
-    // Grid left to the app and real layout — the watchdog did not re-fit it.
+  });
+
+  it("rapid switches inside the suppression window: the watchdog resizes an alt-screen pane once, to the final size", () => {
+    // Watchdog lane only: each switch-away arms the project-switch suppression
+    // (as `detachTerminalsForProjectSwitch` does) and each return lands inside
+    // it, so the watchdog must not chase intermediate sizes the user never sees
+    // settle. Once the last suppression clears, both grids land on the final
+    // container in one resize. The reveal sweep and the suppression-clear
+    // redraw are separate lanes, covered by their own suites.
+    const agent = mount("goose", { altBuffer: true });
+    const managed = instances.get("goose")!;
+    deps = buildDeps(instances, agents);
+    watchdog = new TerminalReconciliationWatchdog(deps);
+
+    for (const cols of [90, 140, 100]) {
+      managed.isResizeSuppressed = true;
+      agent.onScreen = false;
+      agent.containerCols = cols;
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      agent.onScreen = true;
+      managed.attachGeneration += 1;
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(agent.sigwinch).toEqual([]);
+    }
     expect(agent.cols).toBe(120);
 
-    // The divergence outlives the reveal, but no amount of ticking may burn the
-    // breaker on a repair that structurally cannot converge.
-    const callsAfterReveal = vi.mocked(deps.reconcileRevealGeometry).mock.calls.length;
-    for (let i = 0; i < 12; i++) vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
-    expect(vi.mocked(deps.reconcileRevealGeometry).mock.calls.length).toBe(callsAfterReveal);
-    expect(managed.geometryRepairAttempts ?? 0).toBe(0);
-    expect(managed.geometryRepairGaveUp).toBeFalsy();
-
-    // Leaving the alternate screen hands the pane back to the geometry lane,
-    // which converges it on the next tick — proving nothing latched.
-    managed.isAltBuffer = false;
+    managed.isResizeSuppressed = false;
     vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
-    expect(agent.cols).toBe(90);
+
+    expect(agent.cols).toBe(100);
+    expect(agent.sigwinch).toEqual([{ cols: 100, rows: 40, xtermCols: 100, xtermRows: 40 }]);
+  });
+
+  it("alt-screen TUI: never resizes into an open synchronized-output block", () => {
+    const agent = mount("crush", { altBuffer: true });
+    deps = buildDeps(instances, agents);
+    watchdog = new TerminalReconciliationWatchdog(deps);
+
+    agent.containerCols = 80;
+    agent.synchronized = true;
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+    expect(agent.sigwinch).toEqual([]);
+    expect(agent.cols).toBe(120);
+
+    agent.synchronized = false;
+    vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+    expect(agent.sigwinch).toEqual([{ cols: 80, rows: 40, xtermCols: 80, xtermRows: 40 }]);
   });
 
   it("path B (long dwell): the guaranteed redraw obligation survives the off-screen dead zone and discharges on foreground", () => {

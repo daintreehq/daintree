@@ -2614,7 +2614,8 @@ class TerminalInstanceService {
    * fixed chrome doesn't scale. `applyBackgroundResize` moves xterm and the
    * PTY together, so agents wrap at the right width the whole time and the
    * parser never trails the grid the app is drawing for; alt-screen panes are
-   * excluded and both grids stay at their pre-background size. By reattach
+   * excluded, keep both grids at their pre-background size, and are left to
+   * the reveal repair with an obligation the watchdog also honours. By reattach
    * the wake path's `applyDeferredResize` therefore finds cache == current and
    * early-returns; only `reconcileGeometryFresh` on reveal corrects the
    * residual error between the scaled estimate and real layout.
@@ -2652,12 +2653,18 @@ class TerminalInstanceService {
     const heightRatio = height / session.basis.height;
     for (const [id, managed] of this.instances) {
       if (!managed.isOpened) continue;
-      // Never resize a live alt-screen TUI from here (#11443) — see the choke
-      // point in `applyBackgroundResize`. Skipping before the origin capture
-      // also keeps the anchor keyed to first eligibility, so a pane that leaves
-      // the alternate screen mid-session still scales from its pre-background
-      // size rather than a partially-applied one.
-      if (managed.isAltBuffer) continue;
+      // Never size a live alt-screen TUI to this estimate (#11443) — see the
+      // choke point in `applyBackgroundResize`. Its box did change, though, so
+      // hand it to the reveal repair, which measures real layout (#16359).
+      // Skipping before the origin capture also keeps the anchor keyed to first
+      // eligibility, so a pane that leaves the alternate screen mid-session
+      // still scales from its pre-background size rather than a
+      // partially-applied one.
+      if (managed.isAltBuffer) {
+        managed.revealPendingRepair = true;
+        managed.revealPendingGeneration = managed.attachGeneration;
+        continue;
+      }
       let origin = session.origin.get(id);
       if (!origin) {
         if (managed.lastWidth <= 0 || managed.lastHeight <= 0) continue;
@@ -2829,7 +2836,8 @@ class TerminalInstanceService {
     // fit()/sendPtyResize/maybeReflow on reveal: for an unchanged window they
     // are same-size host no-ops, and a real reflow of a live alt frame is the
     // out-of-band hazard #10632 / #10805 guard against. Genuine size changes
-    // are handled by the ResizeObserver-driven applyResize path.
+    // are handled by the ResizeObserver-driven applyResize path and the
+    // reveal-time `reconcileGeometryFresh`, which moves both grids together.
     if (managed.isAltBuffer) return;
 
     // Re-measure container dimensions after wake so latestCols/latestRows
@@ -3190,14 +3198,12 @@ class TerminalInstanceService {
     // stale until the next click or heartbeat. The redundant tick is cheap;
     // the lost repair is not.
 
-    // Re-arm the geometry circuit breaker only on DEMONSTRATED main-buffer
-    // convergence. reconcileGeometryFresh's boolean is measurability, not
-    // convergence: an alt-buffer pane returns true without touching geometry,
-    // and `resizeTerminal` parks the xterm resize during a serialized restore.
+    // Re-arm the geometry circuit breaker only on DEMONSTRATED convergence.
+    // reconcileGeometryFresh's boolean is measurability, not convergence:
+    // `resizeTerminal` parks the xterm resize during a serialized restore.
     // Comparing the live grid against the geometry just measured is the only
     // real signal, and it mirrors what the watchdog's converged branch does.
     if (
-      !managed.isAltBuffer &&
       managed.terminal.cols === managed.latestCols &&
       managed.terminal.rows === managed.latestRows
     ) {
