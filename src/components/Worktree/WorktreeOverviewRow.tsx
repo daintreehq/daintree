@@ -148,7 +148,7 @@ export function WorktreeOverviewColumnHeaders({
             Size
           </button>
         </TooltipTrigger>
-        <TooltipContent side="top" className="max-w-[280px] text-xs">
+        <TooltipContent side="top" className="text-xs">
           <span className="flex flex-col gap-1">
             <span>Order by size, largest first</span>
             <span className="text-text-secondary">{APPROXIMATE_SIZE_NOTE}</span>
@@ -185,7 +185,7 @@ function WorktreeSizeCell({ usage }: { usage: WorktreeDiskUsage | undefined }) {
             <span className="sr-only">Size unknown</span>
           </div>
         </TooltipTrigger>
-        <TooltipContent side="top" className="max-w-[260px] text-xs">
+        <TooltipContent side="top" className="text-xs">
           Couldn&apos;t measure this worktree&apos;s size
         </TooltipContent>
       </Tooltip>
@@ -200,7 +200,7 @@ function WorktreeSizeCell({ usage }: { usage: WorktreeDiskUsage | undefined }) {
           <span className="sr-only">About {size} on disk</span>
         </div>
       </TooltipTrigger>
-      <TooltipContent side="top" className="max-w-[260px] text-xs">
+      <TooltipContent side="top" className="text-xs">
         {APPROXIMATE_SIZE_NOTE}
       </TooltipContent>
     </Tooltip>
