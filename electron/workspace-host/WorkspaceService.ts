@@ -46,7 +46,6 @@ import type {
   WorktreeSetupStatus,
   WorktreeSetupState,
   WorktreeTeardownPreview,
-  WslGitEligibility,
 } from "../../shared/types/worktree.js";
 
 /**
@@ -98,7 +97,6 @@ import { WorktreeEmitGate } from "./WorktreeEmitGate.js";
 import { branchRefName, readBranchCommitterDates } from "../utils/branchCommitterDates.js";
 import { withTimeout } from "../utils/withTimeout.js";
 import { sweepWorktreeAdminEntries } from "./worktreeAdminSweep.js";
-import { detectWslPath, getDefaultWslDistro } from "../utils/wsl.js";
 import {
   getGitDir,
   getGitCommonDir,
@@ -186,33 +184,7 @@ import {
   resolveProjectAttachmentsDir,
 } from "./projectAttachmentStore.js";
 import { TopologyWatcher, type TopologyWatcherHost } from "./TopologyWatcher.js";
-
-function normalizePathKeyForPrefix(value: string): string {
-  const normalized = value.replace(/\\/g, "/").replace(/\/+$/, "");
-  return normalized === "" && value.startsWith("/") ? "/" : normalized;
-}
-
-function pathParentForPrefix(value: string): string {
-  const normalized = normalizePathKeyForPrefix(value);
-  if (normalized === "/") return "/";
-  const slashIndex = normalized.lastIndexOf("/");
-  if (slashIndex <= 0) return slashIndex === 0 ? "/" : normalized;
-  return normalized.slice(0, slashIndex);
-}
-
-function isPathKeyAtOrUnder(candidate: string, parent: string): boolean {
-  const normalizedCandidate = normalizePathKeyForPrefix(candidate);
-  const normalizedParent = normalizePathKeyForPrefix(parent);
-  const comparableCandidate =
-    process.platform === "win32" ? normalizedCandidate.toLowerCase() : normalizedCandidate;
-  const comparableParent =
-    process.platform === "win32" ? normalizedParent.toLowerCase() : normalizedParent;
-
-  return (
-    comparableCandidate === comparableParent ||
-    comparableCandidate.startsWith(comparableParent === "/" ? "/" : `${comparableParent}/`)
-  );
-}
+import { WslGitEligibilityTracker } from "./WslGitEligibilityTracker.js";
 
 // Re-export so existing test imports (`probeGitLfsAvailable` from
 // `../WorkspaceService.js`) continue to work without modification.
@@ -677,8 +649,6 @@ export class WorkspaceService {
   // The resume reprobe the PR poller waits on; see `resume()`.
   private pendingResumeSettle: Promise<void> | null = null;
   private latestForgeReprobe: Promise<void> | null = null;
-  // Stopped by `pause()` rather than by an unload, so `resume()` restarts it.
-  private wslDistroPollerSuspended = false;
   // Credential changes that reached this host while backgrounded, the latest
   // per provider, replayed once PR work resumes — they would otherwise fetch
   // every worktree and poll PRs in a host nothing is looking at. Per provider
@@ -732,26 +702,8 @@ export class WorkspaceService {
    *  re-notify. */
   private readonly authFailureConfirmedNotified = new Set<string>();
 
-  /** Per-worktree WSL git opt-in state forwarded from main on load and toggle. */
-  private wslGitByWorktree: Record<string, { enabled: boolean; dismissed: boolean }> = {};
-  /** Cached default WSL distro (populated lazily on first WSL-path detection). */
-  private wslDefaultDistroPromise: Promise<string | null> | null = null;
-  /**
-   * Last default distro the poller observed. `undefined` until the first probe
-   * seeds it (so the first poll tick can't spuriously diff against it). `null`
-   * means the probe ran but found no default (WSL absent / probe failed).
-   */
-  private wslLastKnownDefaultDistro: string | null | undefined = undefined;
-  /** Background poll handle that watches for WSL default-distro changes. */
-  private wslDistroPoller: ReturnType<typeof setInterval> | null = null;
-  /**
-   * Monotonic guard so a slow probe (poll or reprobe) that resolves after a
-   * newer probe — or after a project switch — discards its stale result instead
-   * of overwriting fresher state or refreshing the next project's monitors.
-   */
-  private wslProbeSeq = 0;
-  /** How often to re-check the WSL default distro (Windows only). */
-  private static readonly WSL_DISTRO_POLL_INTERVAL_MS = 60_000;
+  // Windows WSL git routing: opt-ins, default-distro probe and its poll.
+  private readonly wslGit: WslGitEligibilityTracker;
 
   // Watches `.git/worktrees/` for external worktree create/delete and drives
   // serialized reconciliation, the dark/recovered signal, and the
@@ -1212,6 +1164,14 @@ export class WorkspaceService {
       sendEvent: (event) => this.sendEvent(event),
     };
     this.topologyWatcher = new TopologyWatcher(topologyHost);
+
+    this.wslGit = new WslGitEligibilityTracker({
+      get backgrounded() {
+        return self.backgrounded;
+      },
+      monitors: this.monitors,
+      sendEvent: (event) => this.sendEvent(event),
+    });
   }
 
   /** Every worktree shares the one `.git`, so they all wait or resume together. */
@@ -1256,10 +1216,7 @@ export class WorkspaceService {
       this.projectRootPath = projectRootPath;
       this.projectId = projectId;
       if (wslGitByWorktree && typeof wslGitByWorktree === "object") {
-        // Merge instead of replacing: a `set-wsl-opt-in` message arriving
-        // during this load-project's async work would otherwise be silently
-        // overwritten. The most recent in-memory value wins on conflict.
-        this.wslGitByWorktree = { ...wslGitByWorktree, ...this.wslGitByWorktree };
+        this.wslGit.mergePersistedOptIns(wslGitByWorktree);
       }
       if (forgeSettings) {
         this.forgeRemoteName = forgeSettings.forgeRemote;
@@ -1347,7 +1304,7 @@ export class WorkspaceService {
       // foreign keys stay in the in-memory mirror for the duration of this
       // load and are sent through to main untouched. The next load of the
       // owning project picks them up.
-      this.pruneStaleWslGitEntries(worktrees);
+      this.wslGit.pruneStale(worktrees, this.projectRootPath);
 
       this.statusTiming.markLoaded();
       this.sendEvent({ type: "load-project-result", requestId, success: true });
@@ -1560,174 +1517,19 @@ export class WorkspaceService {
   }
 
   /**
-   * Create, configure, and register a monitor for a single worktree.
-   *
-   * Used by syncMonitors' new-monitor branch AND by createWorktree to install
-   * a monitor for a freshly created worktree. Unlike syncMonitors, this does
-   * NOT touch any other monitor — which matters for createWorktree, where
-   * syncMonitors' remove-stale loop would drop every other non-main monitor
-   * because the one-element array is interpreted as the authoritative set.
-   *
-   * If a monitor already exists for `wt.id`, this is a no-op (race safety for
-   * overlapping create/delete on the same path).
-   */
-  /**
-   * Detect whether a worktree is mounted via WSL and, if so, attach the
-   * detection metadata + persisted opt-in state. No-op on non-Windows. Bind
-   * time only — the result is folded into the `Worktree` passed to
-   * `WorktreeMonitor`.
-   */
-  private async enrichWorktreeWithWsl(wt: Worktree): Promise<Worktree> {
-    if (process.platform !== "win32") return wt;
-    const detected = detectWslPath(wt.path);
-    if (!detected) return wt;
-
-    if (!this.wslDefaultDistroPromise) {
-      this.wslDefaultDistroPromise = getDefaultWslDistro().catch(() => null);
-    }
-    const defaultDistro = await this.wslDefaultDistroPromise;
-    // Seed the poller's baseline from the first resolved probe so its first
-    // tick compares against a real value (no spurious refresh on a stable box).
-    this.wslLastKnownDefaultDistro = defaultDistro;
-    // Now that we know a WSL worktree exists, arm the background distro watcher
-    // (idempotent — only the first WSL worktree actually starts the interval).
-    this.startWslDistroPoller();
-    const eligibility = this.computeWslEligibility(detected.distro, defaultDistro);
-    const persisted = this.wslGitByWorktree[wt.id];
-
-    return {
-      ...wt,
-      isWslPath: true,
-      wslDistro: detected.distro,
-      wslPosixPath: detected.posixPath,
-      wslGitEligible: eligibility,
-      wslGitOptIn: Boolean(persisted?.enabled),
-      wslGitDismissed: Boolean(persisted?.dismissed),
-    };
-  }
-
-  /**
-   * Compute three-state WSL git eligibility for a worktree distro against the
-   * current default distro. `null` default (probe failed / WSL absent) maps to
-   * `'unprobed'` rather than `'ineligible'` so the renderer can offer a
-   * re-check instead of a wrong "git runs via Windows" note. UNC paths are
-   * case-insensitive on Windows and `wsl --list --verbose` returns canonical
-   * case (e.g. "Ubuntu"), so compare case-insensitively.
-   */
-  private computeWslEligibility(
-    distro: string | undefined,
-    defaultDistro: string | null
-  ): WslGitEligibility {
-    if (!distro || defaultDistro === null) return "unprobed";
-    return defaultDistro.toLowerCase() === distro.toLowerCase() ? "eligible" : "ineligible";
-  }
-
-  /**
-   * Arm the Windows-only background watcher that re-checks the WSL default
-   * distro. The default distro can change mid-session (`wsl --set-default`,
-   * install/uninstall) and the renderer has no OS event to subscribe to, so we
-   * poll. Idempotent — a second call while already running is a no-op.
-   */
-  private startWslDistroPoller(): void {
-    if (process.platform !== "win32") return;
-    if (this.wslDistroPoller) return;
-    // A first WSL enrichment can finish after the host was backgrounded; arm
-    // on the way back to the foreground instead.
-    if (this.backgrounded) {
-      this.wslDistroPollerSuspended = true;
-      return;
-    }
-    this.wslDistroPoller = setInterval(() => {
-      void this.pollWslDefaultDistro();
-    }, WorkspaceService.WSL_DISTRO_POLL_INTERVAL_MS);
-    // Don't keep the host process alive solely for this poll.
-    this.wslDistroPoller.unref?.();
-  }
-
-  /** Stop the WSL distro watcher (project switch / dispose). */
-  private stopWslDistroPoller(): void {
-    // Bump the sequence so any in-flight probe (poll or reprobe) sees itself
-    // superseded and bails before mutating state — otherwise a probe awaiting
-    // across a project switch could refresh the next project's monitors with
-    // this project's distro.
-    this.wslProbeSeq++;
-    this.wslDistroPollerSuspended = false;
-    if (this.wslDistroPoller) {
-      clearInterval(this.wslDistroPoller);
-      this.wslDistroPoller = null;
-    }
-  }
-
-  /**
-   * Probe the default distro under a sequence guard. Returns whether this probe
-   * is still the most recent one — a later probe (concurrent reprobe, or a
-   * project switch via `stopWslDistroPoller`) supersedes an earlier one so the
-   * stale result is discarded rather than overwriting fresher state.
-   */
-  private async probeDefaultDistro(): Promise<{ distro: string | null; current: boolean }> {
-    const seq = ++this.wslProbeSeq;
-    const distro = await getDefaultWslDistro().catch(() => null);
-    return { distro, current: seq === this.wslProbeSeq };
-  }
-
-  /** Commit a fresh probe result to the cache and fan it out to all monitors. */
-  private applyDefaultDistro(distro: string | null): void {
-    this.wslLastKnownDefaultDistro = distro;
-    this.wslDefaultDistroPromise = Promise.resolve(distro);
-    this.refreshWslEligibilityForAllMonitors(distro);
-  }
-
-  /**
-   * One poll tick: re-probe the default distro and, when it changed, invalidate
-   * the cache and refresh every WSL monitor's eligibility so existing worktrees
-   * stop using a stale decision.
-   */
-  private async pollWslDefaultDistro(): Promise<void> {
-    const { distro, current } = await this.probeDefaultDistro();
-    if (!current) return;
-    if (distro === this.wslLastKnownDefaultDistro) return;
-    this.applyDefaultDistro(distro);
-  }
-
-  /**
-   * Recompute and push WSL git eligibility to every active WSL monitor against
-   * the given default distro. Non-WSL monitors are skipped.
-   */
-  private refreshWslEligibilityForAllMonitors(defaultDistro: string | null): void {
-    for (const monitor of this.monitors.values()) {
-      if (!monitor.isWslPath) continue;
-      monitor.setWslEligible(this.computeWslEligibility(monitor.wslDistro, defaultDistro));
-    }
-  }
-
-  /**
    * Re-probe the WSL default distro on demand (renderer "Re-check" button) and
-   * refresh all WSL monitors. Sets the target monitor to `'unprobed'` first so
-   * the banner shows a pending state while the probe runs. The probe is shared
-   * across all worktrees, so we refresh every WSL monitor, not just the target.
+   * refresh all WSL monitors.
    */
-  async reprobeWslForWorktree(worktreeId: string): Promise<void> {
-    if (process.platform !== "win32") return;
-    const monitor = this.monitors.get(worktreeId);
-    if (!monitor || !monitor.isWslPath) return;
-    monitor.setWslEligible("unprobed");
-    const { distro, current } = await this.probeDefaultDistro();
-    if (!current) return;
-    this.applyDefaultDistro(distro);
+  reprobeWslForWorktree(worktreeId: string): Promise<void> {
+    return this.wslGit.reprobe(worktreeId);
   }
 
   /**
-   * Update WSL git routing state for a single worktree. Persists the new
-   * preference into the in-memory map and forwards to the matching monitor
-   * (which re-emits its snapshot). Called by the workspace-host message
-   * handler in response to renderer-driven IPC.
+   * Update WSL git routing state for a single worktree. Called by the
+   * workspace-host message handler in response to renderer-driven IPC.
    */
   setWslOptIn(worktreeId: string, enabled: boolean, dismissed: boolean): void {
-    this.wslGitByWorktree[worktreeId] = { enabled, dismissed };
-    const monitor = this.monitors.get(worktreeId);
-    if (monitor) {
-      monitor.setWslOptIn(enabled, dismissed);
-    }
+    this.wslGit.setOptIn(worktreeId, enabled, dismissed);
   }
 
   /**
@@ -1780,18 +1582,10 @@ export class WorkspaceService {
     const canonicalRoot = monitor.getWorktreeChanges()?.rootPath;
     if (canonicalRoot && canonicalRoot !== monitor.path) releaseWorktreeDiffStats(canonicalRoot);
 
-    // Drop the in-memory wsl-git opt-in entry (keyed by monitor.id, matching
-    // the lookup shape used by `enrichWorktreeWithWsl`) and tell main to
-    // drop the persistent one. Idempotent on the main side: `clearWslGitEntry`
-    // is a no-op if the key is missing, and does a case-insensitive lookup
-    // on win32 to handle legacy mixed-case persisted keys.
-    if (Object.prototype.hasOwnProperty.call(this.wslGitByWorktree, monitor.id)) {
-      delete this.wslGitByWorktree[monitor.id];
-      this.sendEvent({
-        type: "clear-wsl-git-opt-in",
-        worktreeId: monitor.id,
-      });
-    }
+    // Keyed by monitor.id, matching the lookup shape `enrichWorktree` uses.
+    // Sent before `worktree-removed` so main's persistent-store prune lands
+    // ahead of any renderer refresh that consults the worktree list.
+    this.wslGit.forgetWorktree(monitor.id);
 
     this.sendEvent({
       type: "worktree-removed",
@@ -1801,40 +1595,6 @@ export class WorkspaceService {
       generation: monitor.generation,
     });
     events.emit("sys:worktree:remove", { worktreeId: monitor.id, timestamp: Date.now() });
-  }
-
-  /**
-   * Bulk self-heal of `wslGitByWorktree` after `loadProject` lands the live
-   * worktree set (#9926, review #1). Walks the in-memory mirror and emits
-   * one `clear-wsl-git-opt-in` per key that (a) is not in the live set AND
-   * (b) is rooted under this project's parent directory. Foreign-project
-   * keys are left in the in-memory mirror for the duration of this load
-   * and never reach main — otherwise loading project A would silently
-   * erase project B's valid opt-ins from the global persisted map on every
-   * load/prewarm/host-restart. The next load of the owning project picks
-   * the foreign keys up and prunes them on that cycle.
-   */
-  private pruneStaleWslGitEntries(worktrees: Worktree[]): void {
-    const projectParent = this.projectRootPath ? pathParentForPrefix(this.projectRootPath) : null;
-    const projectRoot = this.projectRootPath
-      ? normalizePathKeyForPrefix(this.projectRootPath)
-      : null;
-    const liveIds = new Set(worktrees.map((wt) => wt.id));
-    for (const key of Object.keys(this.wslGitByWorktree)) {
-      if (liveIds.has(key)) continue;
-      if (
-        projectParent &&
-        normalizePathKeyForPrefix(key) !== projectRoot &&
-        !isPathKeyAtOrUnder(key, projectParent)
-      ) {
-        continue;
-      }
-      delete this.wslGitByWorktree[key];
-      this.sendEvent({
-        type: "clear-wsl-git-opt-in",
-        worktreeId: key,
-      });
-    }
   }
 
   // --- Background git-watcher budget (LRU) ---
@@ -2003,6 +1763,18 @@ export class WorkspaceService {
     }
   }
 
+  /**
+   * Create, configure, and register a monitor for a single worktree.
+   *
+   * Used by syncMonitors' new-monitor branch AND by createWorktree to install
+   * a monitor for a freshly created worktree. Unlike syncMonitors, this does
+   * NOT touch any other monitor — which matters for createWorktree, where
+   * syncMonitors' remove-stale loop would drop every other non-main monitor
+   * because the one-element array is interpreted as the authoritative set.
+   *
+   * If a monitor already exists for `wt.id`, this is a no-op (race safety for
+   * overlapping create/delete on the same path).
+   */
   private async addNewWorktreeMonitor(
     wt: Worktree,
     isActive: boolean,
@@ -2041,8 +1813,7 @@ export class WorkspaceService {
     skipInitialGitStatus: boolean,
     deferWatcherBudget: boolean
   ): Promise<void> {
-    const enrichedWt = await this.enrichWorktreeWithWsl(wt);
-    wt = enrichedWt;
+    wt = await this.wslGit.enrichWorktree(wt);
 
     await ensureNoteFile(wt.path);
     const claimedIssue = wt.branch ? claimIssueFromBranch(wt.branch, wt.name) : null;
@@ -6106,10 +5877,7 @@ export class WorkspaceService {
     // a host nothing is looking at. Nothing else watches `.git/config` while
     // paused either — `resume()` reprobes once to catch what it missed.
     this.disarmForgeConfigBackstop();
-    if (this.wslDistroPoller) {
-      this.stopWslDistroPoller();
-      this.wslDistroPollerSuspended = true;
-    }
+    this.wslGit.pause();
     try {
       os.setPriority(process.pid, os.constants.priority.PRIORITY_LOW);
     } catch {
@@ -6130,10 +5898,7 @@ export class WorkspaceService {
     // screen is locked or every window is hidden must not start polling that
     // the app-wide policy has withdrawn.
     this.reconcilePolling();
-    if (this.wslDistroPollerSuspended) {
-      this.wslDistroPollerSuspended = false;
-      this.startWslDistroPoller();
-    }
+    this.wslGit.resume();
     if (wasBackgrounded && this.forgeRemoteDetectionActive) {
       this.armForgeConfigBackstop();
       // Settle the remotes before the PR poller restarts on the provider it
@@ -6373,7 +6138,7 @@ export class WorkspaceService {
     this.topologyWatcher.stop();
     // Stop the WSL distro poller before clearing monitors so a poll tick can't
     // fire setWslEligible against a half-torn-down or next-project monitor map.
-    this.stopWslDistroPoller();
+    this.wslGit.resetForProjectSwitch();
     this.topologyWatcher.clearQueue();
     this.prService.cleanup();
     this.deferredCredentialUpdates.clear();
@@ -6408,8 +6173,6 @@ export class WorkspaceService {
     this.projectRootPath = null;
     this.projectId = null;
     this.projectEnvVars = {};
-    this.wslDefaultDistroPromise = null;
-    this.wslLastKnownDefaultDistro = undefined;
 
     clearGitDirCache();
     clearGitCommonDirCache();
@@ -6543,7 +6306,7 @@ export class WorkspaceService {
     this.fetchCoordinator.destroy();
     // stop() clears the pending sets and their safety timers.
     this.topologyWatcher.stop();
-    this.stopWslDistroPoller();
+    this.wslGit.stop();
     this.topologyWatcher.clearQueue();
     this.prService.cleanup();
     this.deferredCredentialUpdates.clear();
