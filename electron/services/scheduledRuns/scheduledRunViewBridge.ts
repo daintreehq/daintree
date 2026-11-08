@@ -119,6 +119,7 @@ export function requestScheduledLaunchInView(
       requestId,
       args: { ...request.args },
       scheduledRun: request.scheduledRun,
+      ...(request.newWorktree ? { newWorktree: true as const } : {}),
     };
     // A cached view may be frozen, and a frozen renderer never answers, or
     // finishes loading.

@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createSchedule } from "@shared/utils/scheduledRuns";
-import type { ProjectScheduleSwitches, Schedule } from "@shared/types/scheduledRuns";
+import type { ProjectScheduleSwitches, Schedule, ScheduledRun } from "@shared/types/scheduledRuns";
 import type { ScheduleOsJobStatus, SchedulesSnapshot } from "@shared/types/ipc/schedules";
 
 // No jest-dom in this repo — plain DOM reads only.
@@ -19,7 +19,7 @@ const client = vi.hoisted(() => ({
   create: vi.fn(),
   update: vi.fn(),
   listRuns: vi.fn(async () => []),
-  listScheduleRuns: vi.fn(async () => []),
+  listScheduleRuns: vi.fn(async (): Promise<ScheduledRun[]> => []),
   onRunsChanged: vi.fn(() => () => {}),
 }));
 vi.mock("@/clients/schedulesClient", () => ({ schedulesClient: client }));
@@ -27,8 +27,14 @@ const dispatch = vi.hoisted(() => vi.fn());
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 const reveal = vi.hoisted(() => vi.fn());
 vi.mock("@/services/scheduledRunLanding", () => ({ revealRunTerminal: reveal }));
-vi.mock("@/hooks/useWorktrees", () => ({ useWorktrees: () => ({ worktrees: [] }) }));
-vi.mock("@/hooks/useResumeAgentSession", () => ({ useResumeAgentSession: () => vi.fn() }));
+const worktreeList = vi.hoisted(() => ({
+  current: [] as Array<{ id: string; path: string; name: string; isMainWorktree: boolean }>,
+}));
+vi.mock("@/hooks/useWorktrees", () => ({
+  useWorktrees: () => ({ worktrees: worktreeList.current }),
+}));
+const resumeSession = vi.hoisted(() => vi.fn());
+vi.mock("@/hooks/useResumeAgentSession", () => ({ useResumeAgentSession: () => resumeSession }));
 vi.mock("@/components/Worktree/hooks/useFirstAgentOptions", () => ({
   useFirstAgentOptions: () => [{ id: "claude", name: "Claude", iconId: "claude" }],
 }));
@@ -373,6 +379,117 @@ describe("ProjectSchedulesTab — the project's switches (#16168)", () => {
 
     expect(await screen.findByText("Schedules off")).toBeTruthy();
     expect(await screen.findByText(/Schedules are off for this project/)).toBeTruthy();
+  });
+});
+
+describe("ProjectSchedulesTab — a run in its own new worktree (#16369)", () => {
+  const RUN_WORKTREE = "/repo-worktrees/schedule-nightly-a";
+  const runAt = (worktreeId: string, overrides: Partial<ScheduledRun> = {}): ScheduledRun => ({
+    id: "run-1",
+    scheduleId: "s1",
+    projectId: "p1",
+    origin: { trigger: "run-now", dueAt: null, occurrenceKey: null, coalesced: null },
+    createdAt: NOW - 500,
+    terminalId: "terminal-1",
+    terminalSpawnedAt: NOW - 400,
+    settlement: {
+      state: "settled",
+      settledAt: NOW - 100,
+      outcome: "done",
+      evidence: { kind: "handback", report: "done", summary: null, truncated: false },
+    },
+    process: {
+      agent: { state: "not-started" },
+      pty: {
+        state: "exited",
+        startedAt: NOW - 400,
+        exitedAt: NOW - 100,
+        exitCode: 0,
+        signal: null,
+      },
+    },
+    pane: { state: "none" },
+    resume: {
+      agentId: "claude",
+      agentSessionId: "0b6e3f9c-0d3e-4a55-8a0e-4b6ad8d6e9a1",
+      cwd: worktreeId,
+      worktreeId,
+      agentLaunchFlags: [],
+      agentModelId: null,
+      agentPresetId: null,
+    },
+    newWorktree: { branch: "schedule-nightly-a", baseBranch: "main", worktreeId },
+    ...overrides,
+  });
+
+  afterEach(() => {
+    worktreeList.current = [];
+    resumeSession.mockReset();
+    client.listScheduleRuns.mockReset();
+    client.listScheduleRuns.mockImplementation(async () => []);
+  });
+
+  it("names the base on the schedule's page and the branch on the run's row", async () => {
+    client.list.mockResolvedValue(
+      snapshot([
+        {
+          ...NIGHTLY,
+          launch: {
+            ...NIGHTLY.launch,
+            newWorktree: { baseBranch: "origin/develop", fromRemote: true },
+          },
+        },
+      ])
+    );
+    client.listScheduleRuns.mockResolvedValue([runAt(RUN_WORKTREE)]);
+    renderTab();
+    fireEvent.click(await screen.findByRole("button", { name: "Run history of Nightly audit" }));
+
+    expect(await screen.findByText(/New worktree from origin\/develop/)).toBeTruthy();
+    expect(await screen.findByText("schedule-nightly-a")).toBeTruthy();
+    expect(screen.queryByText(/Main checkout/)).toBeNull();
+  });
+
+  it("names no branch on a run whose worktree was never made", async () => {
+    client.list.mockResolvedValue(snapshot([NIGHTLY]));
+    client.listScheduleRuns.mockResolvedValue([
+      runAt(RUN_WORKTREE, {
+        terminalId: null,
+        terminalSpawnedAt: null,
+        resume: null,
+        process: { agent: { state: "not-started" }, pty: { state: "not-started" } },
+        settlement: {
+          state: "settled",
+          settledAt: NOW - 100,
+          outcome: "failed",
+          evidence: { kind: "launch-error", message: "The new worktree couldn't be created" },
+        },
+        newWorktree: { branch: "schedule-nightly-a", baseBranch: "main", worktreeId: null },
+      }),
+    ]);
+    renderTab();
+    fireEvent.click(await screen.findByRole("button", { name: "Run history of Nightly audit" }));
+
+    expect(await screen.findByText("The new worktree couldn't be created")).toBeTruthy();
+    expect(screen.queryByText("schedule-nightly-a")).toBeNull();
+  });
+
+  it("resumes in the run's own worktree, whatever the schedule says now", async () => {
+    worktreeList.current = [
+      { id: RUN_WORKTREE, path: RUN_WORKTREE, name: "run", isMainWorktree: false },
+    ];
+    client.list.mockResolvedValue(
+      snapshot([{ ...NIGHTLY, launch: { ...NIGHTLY.launch, worktreeId: "/edited/since" } }])
+    );
+    client.listScheduleRuns.mockResolvedValue([runAt(RUN_WORKTREE)]);
+    renderTab();
+    fireEvent.click(await screen.findByRole("button", { name: "Run history of Nightly audit" }));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Resume run from/ }));
+
+    expect(resumeSession).toHaveBeenCalledWith(
+      expect.objectContaining({ worktreeId: RUN_WORKTREE, cwd: RUN_WORKTREE })
+    );
   });
 });
 

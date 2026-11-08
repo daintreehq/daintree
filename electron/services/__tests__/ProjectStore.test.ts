@@ -181,6 +181,13 @@ const CREATE_TABLES_SQL = `
     project_id TEXT NOT NULL,
     evaluated_through INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS scheduled_run_worktree_claims (
+    schedule_id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    base_branch TEXT NOT NULL,
+    from_remote INTEGER NOT NULL
+  );
 `;
 
 let sqlite: Database.Database;
@@ -1739,6 +1746,11 @@ describe("ProjectStore.onProjectRegistryChanged", () => {
     );
     insertPoint.run("beta-schedule", beta.id);
     insertPoint.run("alpha-schedule", alphaId);
+    const insertClaim = sqlite.prepare(
+      "INSERT INTO scheduled_run_worktree_claims (schedule_id, project_id, branch, base_branch, from_remote) VALUES (?, ?, 'b', 'main', 0)"
+    );
+    insertClaim.run("beta-schedule", beta.id);
+    insertClaim.run("alpha-schedule", alphaId);
 
     const deleted = vi.fn();
     const committedFirst: boolean[] = [];
@@ -1756,6 +1768,9 @@ describe("ProjectStore.onProjectRegistryChanged", () => {
       .pluck()
       .all();
     expect(points).toEqual(["alpha-schedule"]);
+    expect(
+      sqlite.prepare("SELECT schedule_id FROM scheduled_run_worktree_claims").pluck().all()
+    ).toEqual(["alpha-schedule"]);
     // Their runs will never end, so the deletion itself is announced.
     expect(deleted).toHaveBeenCalledTimes(1);
     expect(deleted).toHaveBeenCalledWith({

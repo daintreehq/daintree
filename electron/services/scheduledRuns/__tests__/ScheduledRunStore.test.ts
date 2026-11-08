@@ -276,3 +276,111 @@ describe("ScheduledRunStore", () => {
     expect(warn).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("worktree claims (#16369)", () => {
+  const claim = {
+    scheduleId: "schedule-1",
+    projectId: "project-1",
+    branch: "schedule-nightly-a",
+    baseBranch: "origin/develop",
+    fromRemote: true,
+  };
+  const madeRun = (id: string, branch = claim.branch) =>
+    run(id, { newWorktree: { branch, baseBranch: claim.baseBranch, worktreeId: "/wt" } });
+
+  it("survives a restart, boolean and all", () => {
+    new ScheduledRunStore(sqlite).saveWorktreeClaim(claim);
+    sqlite.close();
+
+    const reopened = openDb(dbPath, migrationsFolder).sqlite;
+    sqlite = reopened;
+
+    expect(new ScheduledRunStore(reopened).worktreeClaim("schedule-1")).toEqual(claim);
+  });
+
+  it("holds one per schedule, a new one replacing the old", () => {
+    const store = new ScheduledRunStore(sqlite);
+    store.saveWorktreeClaim(claim);
+    store.saveWorktreeClaim({ ...claim, branch: "schedule-nightly-b", fromRemote: false });
+
+    expect(store.worktreeClaim("schedule-1")).toMatchObject({
+      branch: "schedule-nightly-b",
+      fromRemote: false,
+    });
+    expect(store.worktreeClaim("schedule-2")).toBeNull();
+  });
+
+  it("goes in the insert that records the run", () => {
+    const store = new ScheduledRunStore(sqlite);
+    store.saveWorktreeClaim(claim);
+
+    store.insert(madeRun("run-1"));
+
+    expect(store.worktreeClaim("schedule-1")).toBeNull();
+    expect(store.get("run-1")?.newWorktree?.branch).toBe(claim.branch);
+  });
+
+  it("stays when the insert fails, so a retry still finds it", () => {
+    const store = new ScheduledRunStore(sqlite);
+    store.saveWorktreeClaim(claim);
+    const dueAt = T0;
+    const origin = {
+      trigger: "scheduled" as const,
+      dueAt,
+      occurrenceKey: occurrenceKeyFor(dueAt),
+      coalesced: null,
+    };
+    store.insert(run("run-0", { origin }));
+
+    expect(() => store.insert({ ...madeRun("run-1"), origin })).toThrow(ScheduledRunConflictError);
+
+    expect(store.worktreeClaim("schedule-1")).toEqual(claim);
+    expect(store.get("run-1")).toBeNull();
+  });
+
+  it("commits with the run or not at all, the evaluation point included", () => {
+    const store = new ScheduledRunStore(sqlite);
+    store.saveWorktreeClaim(claim);
+    sqlite.exec(`
+      CREATE TRIGGER refuse_claim_delete BEFORE DELETE ON scheduled_run_worktree_claims
+      BEGIN SELECT RAISE(ABORT, 'disk full'); END;
+    `);
+    const origin = {
+      trigger: "scheduled" as const,
+      dueAt: T0,
+      occurrenceKey: occurrenceKeyFor(T0),
+      coalesced: null,
+    };
+
+    expect(() => store.insert({ ...madeRun("run-1"), origin })).toThrow("disk full");
+
+    expect(store.get("run-1")).toBeNull();
+    expect(store.evaluationPoint("schedule-1")).toBeNull();
+    expect(store.worktreeClaim("schedule-1")).toEqual(claim);
+  });
+
+  it("leaves a claim for another branch alone", () => {
+    const store = new ScheduledRunStore(sqlite);
+    store.saveWorktreeClaim(claim);
+
+    store.insert(madeRun("run-1", "schedule-nightly-other"));
+    store.dropWorktreeClaim("schedule-1", "schedule-nightly-other");
+
+    expect(store.worktreeClaim("schedule-1")).toEqual(claim);
+  });
+
+  it("is deleted with its schedule or project", () => {
+    const store = new ScheduledRunStore(sqlite);
+    store.saveWorktreeClaim(claim);
+    store.saveWorktreeClaim({ ...claim, scheduleId: "schedule-2" });
+    store.saveWorktreeClaim({ ...claim, scheduleId: "schedule-3", projectId: "project-2" });
+
+    store.deleteForSchedule("schedule-2");
+    expect(store.worktreeClaim("schedule-2")).toBeNull();
+    expect(store.worktreeClaim("schedule-1")).toEqual(claim);
+
+    store.deleteForProject("project-1");
+    expect(store.worktreeClaim("schedule-1")).toBeNull();
+    expect(store.worktreeClaim("schedule-3")).not.toBeNull();
+  });
+});

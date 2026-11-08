@@ -89,6 +89,11 @@ export interface WorkspaceHostPoolDeps {
    * project. A dormant host backed by one outlives the idle grace (#12519).
    */
   hasLiveProjectView?: (projectId: string) => boolean;
+  /**
+   * Whether main is using the project's host for something it can't get back
+   * if the host goes: no reclaim of a dormant host touches it meanwhile.
+   */
+  isHostBusy?: (projectId: string) => boolean;
 }
 
 export class WorkspaceHostPool {
@@ -135,6 +140,7 @@ export class WorkspaceHostPool {
   private emit: EmitFn;
   private onProjectSwitch?: (windowId: number) => void;
   private hasLiveProjectView: (projectId: string) => boolean;
+  private isHostBusy: (projectId: string) => boolean;
   private routeHostEventFn: RouteHostEventFn | null = null;
 
   constructor(deps: WorkspaceHostPoolDeps) {
@@ -151,6 +157,7 @@ export class WorkspaceHostPool {
     this.emit = deps.emit;
     this.onProjectSwitch = deps.onProjectSwitch;
     this.hasLiveProjectView = deps.hasLiveProjectView ?? (() => false);
+    this.isHostBusy = deps.isHostBusy ?? (() => false);
   }
 
   setRouteHostEvent(fn: RouteHostEventFn): void {
@@ -636,10 +643,18 @@ export class WorkspaceHostPool {
     }
   }
 
+  private isBusy(entry: ProcessEntry): boolean {
+    try {
+      return this.isHostBusy(entry.projectId);
+    } catch {
+      return false;
+    }
+  }
+
   private enforceDormantCap(): void {
     const dormant: Array<[string, ProcessEntry]> = [];
     for (const [path, entry] of this.entries) {
-      if (entry.refCount <= 0 && entry.cleanupTimeout !== null) {
+      if (entry.refCount <= 0 && entry.cleanupTimeout !== null && !this.isBusy(entry)) {
         dormant.push([path, entry]);
       }
     }
@@ -682,12 +697,18 @@ export class WorkspaceHostPool {
     entry.cleanupTimeout = setTimeout(() => {
       entry.cleanupTimeout = null;
       if (this.entries.get(projectPath) !== entry || entry.refCount > 0) return;
+      if (this.isBusy(entry)) {
+        this.armDormantTimer(projectPath, entry);
+        return;
+      }
       if (this.isViewBacked(entry)) {
         // Re-asserted each period rather than trusted: a prewarm nobody
         // attached to was never paused, and neither is a process that
         // restarted after its last pause.
         this.backgroundIfDormant(projectPath, entry);
         this.armDormantTimer(projectPath, entry);
+        // A host a busy hold kept out of the cap's count comes back into it here.
+        this.enforceDormantCap();
         return;
       }
       entry.host.dispose("idle-grace");
@@ -705,7 +726,7 @@ export class WorkspaceHostPool {
   reclaimDormantHosts(): number {
     let reclaimed = 0;
     for (const [path, entry] of [...this.entries]) {
-      if (entry.refCount > 0) continue;
+      if (entry.refCount > 0 || this.isBusy(entry)) continue;
       this.evictEntry(path, entry, "memory-pressure");
       reclaimed++;
     }

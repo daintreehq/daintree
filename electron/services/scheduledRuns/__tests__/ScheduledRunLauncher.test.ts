@@ -143,6 +143,14 @@ beforeEach(() => {
       spawnAssistantFor(request);
       return { status: "started" as const };
     }),
+    worktreeHost: {
+      list: vi.fn(async () => {
+        throw new Error("No schedule here starts a new worktree");
+      }),
+      create: vi.fn(async () => {
+        throw new Error("No schedule here starts a new worktree");
+      }),
+    },
     runPrecondition: vi.fn(async () => null),
     closeRunTerminal: vi.fn(async () => null),
     removeRunPane: vi.fn(async () => {}),

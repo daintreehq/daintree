@@ -196,6 +196,11 @@ function RunRow({
               {detail.text}
             </p>
           )}
+          {run.newWorktree && run.newWorktree.worktreeId !== null && (
+            <p className="mt-0.5 break-words text-xs text-text-secondary">
+              In worktree <span className="font-mono">{run.newWorktree.branch}</span>
+            </p>
+          )}
           {workers.length > 0 && (
             // What the Assistant's launches were answered with, never how those agents did.
             <div className="mt-1 text-xs text-text-secondary">

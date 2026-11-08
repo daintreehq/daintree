@@ -1,5 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  _resetScheduledRunAdmissionForTest,
+  reserveScheduledLaunch,
+} from "../scheduledRuns/scheduledRunAdmission.js";
 
 const { mockHosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -2646,6 +2650,7 @@ describe("WorkspaceClient multi-process manager", () => {
       const projectIdFor = (p: string) => `id-for-${path.resolve(p)}`;
 
       afterEach(() => {
+        _resetScheduledRunAdmissionForTest();
         liveViewProjectIds.clear();
         getWebContentsForProject.mockReset();
         getWebContentsForProject.mockImplementation(liveViewsFor);
@@ -2765,6 +2770,57 @@ describe("WorkspaceClient multi-process manager", () => {
         await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
         expect(h(0).dispose).toHaveBeenCalledTimes(1);
         expect(h(1).dispose).toHaveBeenCalledTimes(1);
+      });
+
+      it("reclaims no host a scheduled launch is waiting in, however it would go (#16369)", async () => {
+        for (let i = 0; i < 5; i++) await loadOn(`/project-${i}`, i + 1, i);
+        const reservation = reserveScheduledLaunch({
+          runId: "run-1",
+          scheduleId: "schedule-1",
+          projectId: projectIdFor("/project-0"),
+          terminalId: "terminal-1",
+          agentId: "claude",
+          admit: () => {},
+        });
+        for (let i = 1; i <= 5; i++) client.unregisterWindow(i);
+
+        // The warm cap goes for the next one along, though this is the oldest.
+        expect(h(0).dispose).not.toHaveBeenCalled();
+        expect(h(1).dispose).toHaveBeenCalledWith("warm-cap");
+
+        client.reclaimDormantHosts();
+        expect(h(0).dispose).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+        expect(h(0).dispose).not.toHaveBeenCalled();
+
+        reservation.withdraw();
+        reservation.finish();
+        await vi.advanceTimersByTimeAsync(180_000);
+        expect(h(0).dispose).toHaveBeenCalledWith("idle-grace");
+      });
+
+      it("holds the warm cap again within a grace period of a hold ending (#16369)", async () => {
+        for (let i = 0; i < 5; i++) {
+          await loadOn(`/project-${i}`, i + 1, i);
+          liveViewProjectIds.add(projectIdFor(`/project-${i}`));
+        }
+        const reservation = reserveScheduledLaunch({
+          runId: "run-1",
+          scheduleId: "schedule-1",
+          projectId: projectIdFor("/project-0"),
+          terminalId: "terminal-1",
+          agentId: "claude",
+          admit: () => {},
+        });
+        for (let i = 1; i <= 5; i++) client.unregisterWindow(i);
+        expect(h(0).dispose).not.toHaveBeenCalled();
+
+        reservation.withdraw();
+        reservation.finish();
+        await vi.advanceTimersByTimeAsync(180_000);
+
+        expect(h(0).dispose).toHaveBeenCalledWith("warm-cap");
       });
 
       it("a warm load does not re-attach a host reclaimed while it waited on readiness", async () => {

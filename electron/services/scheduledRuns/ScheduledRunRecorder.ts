@@ -3,6 +3,7 @@
 import type {
   ScheduledRun,
   ScheduledRunEvidence,
+  ScheduledRunNewWorktree,
   ScheduledRunOrigin,
   ScheduledRunProcess,
   ScheduledRunResume,
@@ -14,7 +15,7 @@ import {
   SCHEDULED_RUN_WORKERS_MAX,
 } from "../../../shared/utils/scheduledRuns.js";
 import type { DaintreeEventMap } from "../events.js";
-import type { ScheduledRunStore } from "./ScheduledRunStore.js";
+import type { ScheduledRunStore, ScheduledRunWorktreeClaim } from "./ScheduledRunStore.js";
 
 export interface RegisterScheduledLaunchInput {
   readonly id: string;
@@ -32,6 +33,8 @@ export interface RegisterScheduledLaunchInput {
   readonly handbackCode?: string | null;
   /** The run launches the project's Daintree Assistant (#16169), whose workers it lists. */
   readonly assistant?: true;
+  /** The worktree made for the run (#16369); recording it consumes its branch's claim. */
+  readonly newWorktree?: ScheduledRunNewWorktree;
 }
 
 export interface RegisterRefusedLaunchInput {
@@ -43,6 +46,8 @@ export interface RegisterRefusedLaunchInput {
   readonly terminalId?: string | null;
   /** Why it didn't start, worded for the person reading the history. */
   readonly message: string;
+  /** The worktree made for the run (#16369); recording it consumes its branch's claim. */
+  readonly newWorktree?: ScheduledRunNewWorktree;
 }
 
 export interface RegisterScheduledSkipInput {
@@ -277,6 +282,7 @@ export class ScheduledRunRecorder {
       process: { agent: { state: "not-started" }, pty: { state: "not-started" } },
       pane: { state: "none" },
       resume: input.resume,
+      ...(input.newWorktree ? { newWorktree: input.newWorktree } : {}),
       ...(input.assistant ? { assistant: true as const, workers: [] } : {}),
     };
     this.store.transaction(() => {
@@ -308,8 +314,23 @@ export class ScheduledRunRecorder {
     return this.insertSettled(
       input,
       { kind: "launch-error", message: input.message },
-      this.windowless()
+      this.windowless(),
+      input.newWorktree
     );
+  }
+
+  /** The branch an earlier launch of the schedule claimed and no run has recorded yet. */
+  worktreeClaim(scheduleId: string): ScheduledRunWorktreeClaim | null {
+    return this.store.worktreeClaim(scheduleId);
+  }
+
+  /** Commits the claim before returning, so the caller creates only after. */
+  saveWorktreeClaim(claim: ScheduledRunWorktreeClaim): void {
+    this.store.saveWorktreeClaim(claim);
+  }
+
+  dropWorktreeClaim(scheduleId: string, branch: string): void {
+    this.store.dropWorktreeClaim(scheduleId, branch);
   }
 
   /**
@@ -364,7 +385,8 @@ export class ScheduledRunRecorder {
       "id" | "scheduleId" | "projectId" | "origin" | "terminalId"
     >,
     evidence: ScheduledRunEvidence,
-    inboxPending: boolean
+    inboxPending: boolean,
+    newWorktree?: ScheduledRunNewWorktree
   ): ScheduledRun {
     const timestamp = this.now();
     const run: ScheduledRun = {
@@ -384,6 +406,7 @@ export class ScheduledRunRecorder {
       process: { agent: { state: "not-started" }, pty: { state: "not-started" } },
       pane: { state: "none" },
       resume: null,
+      ...(newWorktree ? { newWorktree } : {}),
     };
     this.store.transaction(() => {
       this.store.insert(run, { inboxPending });

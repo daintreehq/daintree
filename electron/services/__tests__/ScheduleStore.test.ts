@@ -322,6 +322,7 @@ describe("ScheduleStore", () => {
       presetId: "fast",
       prompt: "\n  Spaced.\n",
       worktreeId: "/w",
+      newWorktree: null,
     };
     const edited = saved(
       await store.update(PROJECT, created.id, created.updatedAt, { policies, launch })
@@ -551,7 +552,24 @@ describe("ScheduleStore", () => {
       fs.mkdirSync(path.join(root, PROJECT), { recursive: true });
       fs.writeFileSync(
         schedulesFile(),
-        JSON.stringify({ _schemaVersion: 1, schedules: [opted] }, null, 2)
+        JSON.stringify(
+          {
+            _schemaVersion: 1,
+            schedules: [
+              {
+                ...opted,
+                launch: {
+                  agentId: opted.launch.agentId,
+                  presetId: opted.launch.presetId,
+                  prompt: opted.launch.prompt,
+                  worktreeId: opted.launch.worktreeId,
+                },
+              },
+            ],
+          },
+          null,
+          2
+        )
       );
       const store = newStore();
       const migrated = { schedulesOn: true, startWhenClosed: true, schedulesOnSince: null };

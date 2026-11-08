@@ -3993,6 +3993,7 @@ export interface GeneratedIpcInvokeMap {
         agentModelId: string | null;
         agentPresetId: string | null;
       } | null;
+      newWorktree?: { branch: string; baseBranch: string; worktreeId: string | null } | undefined;
       assistant?: true | undefined;
       workers?:
         | {
@@ -4114,6 +4115,7 @@ export interface GeneratedIpcInvokeMap {
         agentModelId: string | null;
         agentPresetId: string | null;
       } | null;
+      newWorktree?: { branch: string; baseBranch: string; worktreeId: string | null } | undefined;
       assistant?: true | undefined;
       workers?:
         | {

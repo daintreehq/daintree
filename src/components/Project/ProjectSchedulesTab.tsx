@@ -35,6 +35,7 @@ import { useLastRuns } from "@/components/Schedules/useLastRuns";
 import { useScheduleRuns } from "@/components/Schedules/useScheduleRuns";
 import { useScheduleLaunchOptions } from "@/components/Schedules/useScheduleLaunchOptions";
 import { useWorktreeChoices } from "@/components/Schedules/useWorktreeChoices";
+import { scheduleWorktreeLabel } from "@/components/Schedules/scheduleWords";
 
 type Page = { kind: "list" } | { kind: "history"; id: string };
 
@@ -448,11 +449,7 @@ export function ProjectSchedulesTab({ isOpen, isActive, onClose }: ProjectSchedu
                 schedule={shown}
                 now={now}
                 schedulesOn={state.snapshot?.switches.schedulesOn ?? false}
-                worktreeLabel={
-                  shown.launch.worktreeId === null
-                    ? null
-                    : (worktrees.labels.get(shown.launch.worktreeId) ?? "Missing worktree")
-                }
+                worktreeLabel={scheduleWorktreeLabel(shown.launch, worktrees.labels)}
                 presetName={shown.launch.presetId === null ? null : (shownPreset?.name ?? null)}
                 presetMissing={presetMissing}
                 runsState={runsState}

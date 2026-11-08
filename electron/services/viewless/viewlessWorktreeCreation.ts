@@ -221,3 +221,41 @@ export async function runWorktreeCreateWithRecipe(
     assignmentError,
   });
 }
+
+/**
+ * Creates a scheduled run's new worktree (#16369), the way main creates one for
+ * any caller with no view, on the exact branch the run claimed: a name already
+ * taken is refused, never suffixed or checked out, so a retry can't make a second
+ * worktree. Answers its id, and rejects with the reason.
+ */
+export async function createScheduledRunWorktree(
+  project: Project,
+  request: { branch: string; baseBranch: string; fromRemote: boolean },
+  deps: ViewlessDeps
+): Promise<string> {
+  const result = await runWorktreeCreateWithRecipe(
+    {
+      workspaceId: project.id,
+      actionId: "worktree.createWithRecipe",
+      args: {
+        source: {
+          kind: "newBranch",
+          branchName: request.branch,
+          baseBranch: request.baseBranch,
+          fromRemote: request.fromRemote,
+          collisionPolicy: "error",
+        },
+      },
+      confirmed: true,
+    },
+    project,
+    deps
+  );
+  if (!result.ok) throw new Error(result.error.message);
+  const worktreeId: unknown =
+    typeof result.result === "object" && result.result !== null
+      ? Reflect.get(result.result, "worktreeId")
+      : undefined;
+  if (typeof worktreeId !== "string") throw new Error("The create answered with no worktree.");
+  return worktreeId;
+}
