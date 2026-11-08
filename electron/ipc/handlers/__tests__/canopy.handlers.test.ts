@@ -3185,14 +3185,26 @@ describe("canopy IPC", () => {
         // The keystroke's gesture claims, and the panel's next measure holds.
         await invoke(CANOPY_METHOD_CHANNELS.terminalClaimSize, reopened.sender, shown.watchId);
         await invoke(CANOPY_METHOD_CHANNELS.terminalInput, reopened.sender, shown.watchId, "y");
-        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, reopened.sender, shown.watchId, 100, 30);
+        await invoke(
+          CANOPY_METHOD_CHANNELS.terminalResize,
+          reopened.sender,
+          shown.watchId,
+          100,
+          30
+        );
         expect(ptyClient.resize.mock.calls).toEqual([["run-1", 100, 30]]);
         expect(await holds(reopened.sender)).toEqual(["run-1"]);
 
         // Main lets go and moves nothing: the pane's own fit is the one resize.
         await invoke(CANOPY_METHOD_CHANNELS.takeTerminalSize, fakeSender(5), "run-1");
         expect(await holds(reopened.sender)).toEqual([]);
-        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, reopened.sender, shown.watchId, 100, 30);
+        await invoke(
+          CANOPY_METHOD_CHANNELS.terminalResize,
+          reopened.sender,
+          shown.watchId,
+          100,
+          30
+        );
         reopened.sender.emit("destroyed");
         expect(ptyClient.resize).toHaveBeenCalledTimes(1);
       });
@@ -3216,7 +3228,13 @@ describe("canopy IPC", () => {
         const shown = await select(sender, "run-1");
         expect(ptyClient.resize).not.toHaveBeenCalled();
 
-        await invoke(CANOPY_METHOD_CHANNELS.submitReply, sender, "run-1", { spawnedAt: 100 }, "navy");
+        await invoke(
+          CANOPY_METHOD_CHANNELS.submitReply,
+          sender,
+          "run-1",
+          { spawnedAt: 100 },
+          "navy"
+        );
         await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, shown.watchId, 100, 30);
 
         expect(ptyClient.resize.mock.calls).toEqual([["run-1", 100, 30]]);

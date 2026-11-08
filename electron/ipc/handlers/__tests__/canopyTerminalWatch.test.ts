@@ -1267,7 +1267,14 @@ describe("a view that takes the size only once used (#16339)", () => {
 
     expect(opened.following).toBe(true);
     expect(sent).toEqual([
-      { kind: "resize", watchId: opened.watchId, runId: "run-1", cols: 120, rows: 36, following: true },
+      {
+        kind: "resize",
+        watchId: opened.watchId,
+        runId: "run-1",
+        cols: 120,
+        rows: 36,
+        following: true,
+      },
     ]);
     expect(pty.resize).not.toHaveBeenCalled();
     expect(sizeHolds()).toEqual([]);
