@@ -90,6 +90,29 @@ describe("BehavioralControls — skip permissions control", () => {
     rerender(<BehavioralControls {...makeProps({ dangerousMode: "on" })} />);
     expect(region(container).queryByText("Inherited from global setting")).toBeNull();
   });
+
+  it("renders whichever inherit hint the scope supplies, and none once a choice is explicit", () => {
+    const region = (container: HTMLElement) => {
+      const el = container.querySelector("#agents-skip-permissions");
+      if (!(el instanceof HTMLElement)) throw new Error("skip-permissions region not found");
+      return within(el);
+    };
+    for (const inheritHint of [
+      "The global setting doesn't apply to this agent",
+      "Inherited from agent default",
+    ]) {
+      const { container, rerender, unmount } = render(
+        <BehavioralControls {...makeProps({ inheritHint })} />
+      );
+      expect(region(container).getByText(inheritHint)).toBeTruthy();
+      expect(region(container).queryByText("Inherited from global setting")).toBeNull();
+      for (const dangerousMode of ["on", "off"] as const) {
+        rerender(<BehavioralControls {...makeProps({ inheritHint, dangerousMode })} />);
+        expect(region(container).queryByText(inheritHint), dangerousMode).toBeNull();
+      }
+      unmount();
+    }
+  });
 });
 
 describe("BehavioralControls — alt-screen mode control (#10876)", () => {

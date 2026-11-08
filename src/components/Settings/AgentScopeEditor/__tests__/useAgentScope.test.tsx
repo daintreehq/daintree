@@ -130,6 +130,18 @@ describe("useAgentScope — skip-permissions Default follows the global switch (
     }
   });
 
+  it("tracks the global switch turning off", () => {
+    setGlobalSkip(true);
+    const { result, rerender } = renderHook(() => useAgentScope(makeProps("antigravity")));
+    expect(result.current.inheritResolvesToOn).toBe(true);
+
+    setGlobalSkip(false);
+    rerender();
+    expect(result.current.inheritResolvesToOn).toBe(false);
+    expect(result.current.effectiveSkipPerms).toBe(false);
+    expect(result.current.inheritHint).toBe("Inherited from global setting");
+  });
+
   it("keeps Default off and says the global doesn't apply for an agent with no bypass flag", () => {
     setGlobalSkip(true);
     const { result } = renderHook(() => useAgentScope(makeProps("opencode")));
@@ -156,6 +168,21 @@ describe("useAgentScope — skip-permissions Default follows the global switch (
     const { result } = renderHook(() => useAgentScope(makeProps("opencode", entry)));
     expect(result.current.scopeKind).toBe("custom");
     expect(result.current.inheritHint).toBe("Inherited from agent default");
+  });
+
+  it("layers a custom preset's mode over the agent's global-inherited On", () => {
+    setGlobalSkip(true);
+    const withPreset = (dangerousMode?: "off" | "on"): AgentSettingsEntry => ({
+      customPresets: [{ id: "user-1", name: "My preset", ...(dangerousMode && { dangerousMode }) }],
+      presetId: "user-1",
+    });
+    const inherit = renderHook(() => useAgentScope(makeProps("gemini", withPreset())));
+    expect(inherit.result.current.inheritResolvesToOn).toBe(true);
+    expect(inherit.result.current.effectiveSkipPerms).toBe(true);
+
+    const vetoed = renderHook(() => useAgentScope(makeProps("gemini", withPreset("off"))));
+    expect(vetoed.result.current.dangerousMode).toBe("off");
+    expect(vetoed.result.current.effectiveSkipPerms).toBe(false);
   });
 });
 
