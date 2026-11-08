@@ -1,6 +1,7 @@
 import { classifyGitError, extractGitErrorMessage } from "../../shared/utils/gitOperationErrors.js";
 import type { ErrorRetryability, GitOperationReason } from "../../shared/types/ipc/errors.js";
 import type { AppErrorCode, AppErrorDetails } from "../../shared/types/appError.js";
+import type { GitStatusUnansweredReason } from "../../shared/types/git.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 
 export class DaintreeError extends Error {
@@ -86,6 +87,25 @@ export function toGitOperationError(
 export class WorktreeRemovedError extends GitError {
   constructor(path: string, cause?: Error) {
     super("Worktree directory no longer exists", { path }, cause);
+  }
+}
+
+/**
+ * A git status read ended without an answer, for the reason given. Says nothing
+ * about whether the worktree exists or what state it is in.
+ */
+export class GitStatusUnansweredError extends GitError {
+  readonly reason: GitStatusUnansweredReason;
+
+  constructor(reason: GitStatusUnansweredReason, path: string, cause?: Error) {
+    super(
+      reason === "timed-out"
+        ? "Git status did not answer in time"
+        : "An earlier git in this worktree has not exited yet",
+      { path, reason },
+      cause
+    );
+    this.reason = reason;
   }
 }
 

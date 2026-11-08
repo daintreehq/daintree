@@ -123,6 +123,20 @@ export interface StagingFileEntry {
  */
 export type RepoState = "CLEAN" | "DIRTY" | "MERGING" | "REBASING" | "CHERRY_PICKING" | "REVERTING";
 
+/**
+ * Why a worktree's git status read ended without an answer. `timed-out`: git
+ * ran past its time limit and was stopped. `previous-still-running`: a git
+ * already stopped in that worktree had not exited, so no new one was started.
+ */
+export type GitStatusUnansweredReason = "timed-out" | "previous-still-running";
+
+/** A git status read that did not answer, as observed. Cleared by the next read that does. */
+export interface GitStatusUnanswered {
+  reason: GitStatusUnansweredReason;
+  /** Epoch ms of the first unanswered read since status last answered. */
+  since: number;
+}
+
 /** XY code from `git status --porcelain=v2` unmerged (`u`) entries. */
 export type ConflictXYCode = "UU" | "AA" | "DD" | "AU" | "UA" | "DU" | "UD";
 

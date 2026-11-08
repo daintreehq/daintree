@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { basename, join as pathJoin } from "node:path";
-import { GitError, WorktreeRemovedError } from "../errorTypes.js";
+import { GitError, GitStatusUnansweredError, WorktreeRemovedError } from "../errorTypes.js";
 import { TimeoutError } from "../withTimeout.js";
 import { simpleGitMissingBinaryError } from "../../../shared/testing/simpleGitErrorFixtures.js";
 
@@ -12,6 +12,11 @@ const mockGit = {
 };
 
 const readFileMock = vi.hoisted(() => vi.fn().mockResolvedValue(Buffer.from("line1\nline2\n")));
+const hasStoppedGitChildMock = vi.hoisted(() => vi.fn((_dir: string) => false));
+
+vi.mock("../gitProcessLifecycle.js", () => ({
+  hasStoppedGitChild: hasStoppedGitChildMock,
+}));
 
 vi.mock("../hardenedGit.js", () => ({
   createHardenedGit: vi.fn(() => mockGit),
@@ -361,7 +366,7 @@ describe("getWorktreeChangesWithStats in-flight deduplication", () => {
     // The abandoned read lands while the fresh one is still in flight; its
     // cleanup must leave the fresh entry for the next caller to join.
     releaseAbandoned({ ...emptyStatus, modified: ["late.ts"] });
-    await expect(abandoned).resolves.toMatchObject({ changedFileCount: 1 });
+    await expect(abandoned).rejects.toThrow();
     const joined = getWorktreeChangesWithStats(cwd, { signal: lifecycle.signal });
 
     releaseFresh(emptyStatus);
@@ -1714,6 +1719,11 @@ describe("getWorktreeChangesWithStats cancellation (#12460)", () => {
     (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 1000 });
   });
 
+  /** The abort signal the nth git instance was built with. */
+  function instanceSignal(factory: typeof createHardenedGit | typeof createWslHardenedGit, n = 0) {
+    return vi.mocked(factory).mock.calls[n][1] as AbortSignal;
+  }
+
   it("hands the caller's signal to the status git so aborting kills the child", async () => {
     const cwd = "/cancel-test/" + Math.random();
     const controller = new AbortController();
@@ -1721,7 +1731,10 @@ describe("getWorktreeChangesWithStats cancellation (#12460)", () => {
 
     await getWorktreeChangesWithStats(cwd, { forceRefresh: true, signal: controller.signal });
 
-    expect(vi.mocked(createHardenedGit)).toHaveBeenCalledWith(cwd, controller.signal);
+    expect(vi.mocked(createHardenedGit)).toHaveBeenCalledWith(cwd, expect.any(AbortSignal));
+    expect(instanceSignal(createHardenedGit).aborted).toBe(false);
+    controller.abort();
+    expect(instanceSignal(createHardenedGit).aborted).toBe(true);
   });
 
   it("reuses one git instance per caller signal and builds a fresh one for a new signal", async () => {
@@ -1738,7 +1751,11 @@ describe("getWorktreeChangesWithStats cancellation (#12460)", () => {
     const restarted = new AbortController();
     await getWorktreeChangesWithStats(cwd, { forceRefresh: true, signal: restarted.signal });
     expect(vi.mocked(createHardenedGit)).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(createHardenedGit)).toHaveBeenLastCalledWith(cwd, restarted.signal);
+    monitor.abort();
+    expect(instanceSignal(createHardenedGit, 0).aborted).toBe(true);
+    expect(instanceSignal(createHardenedGit, 1).aborted).toBe(false);
+    restarted.abort();
+    expect(instanceSignal(createHardenedGit, 1).aborted).toBe(true);
 
     await getWorktreeChangesWithStats(cwd, true);
     await getWorktreeChangesWithStats(cwd, true);
@@ -1824,7 +1841,85 @@ describe("getWorktreeChangesWithStats cancellation (#12460)", () => {
       signal: controller.signal,
     });
 
-    expect(vi.mocked(createWslHardenedGit)).toHaveBeenCalledWith(wsl, controller.signal);
+    expect(vi.mocked(createWslHardenedGit)).toHaveBeenCalledWith(wsl, expect.any(AbortSignal));
+    controller.abort();
+    expect(instanceSignal(createWslHardenedGit).aborted).toBe(true);
+  });
+
+  it("kills an abandoned read's git and builds a fresh instance for the next read", async () => {
+    const cwd = "/cancel-test/" + Math.random();
+    const lifecycle = new AbortController();
+    const abandon = new AbortController();
+    let releaseAbandoned!: (value: unknown) => void;
+    mockGit.status
+      .mockReturnValueOnce(new Promise((resolve) => (releaseAbandoned = resolve)))
+      .mockResolvedValue(emptyStatus);
+
+    const abandoned = getWorktreeChangesWithStats(cwd, {
+      forceRefresh: true,
+      signal: lifecycle.signal,
+      abandonSignal: abandon.signal,
+    });
+    await vi.waitFor(() => expect(mockGit.status).toHaveBeenCalledTimes(1));
+    abandon.abort();
+
+    expect(instanceSignal(createHardenedGit).aborted).toBe(true);
+    expect(lifecycle.signal.aborted).toBe(false);
+
+    await getWorktreeChangesWithStats(cwd, { forceRefresh: true, signal: lifecycle.signal });
+    expect(vi.mocked(createHardenedGit)).toHaveBeenCalledTimes(2);
+    expect(instanceSignal(createHardenedGit, 1).aborted).toBe(false);
+
+    // The abandoned read's later commands never run once its status lands.
+    const rawCalls = mockGit.raw.mock.calls.length;
+    releaseAbandoned({ ...emptyStatus, modified: ["late.ts"] });
+    await expect(abandoned).rejects.toThrow();
+    expect(mockGit.raw.mock.calls.length).toBe(rawCalls);
+    expect(logError).not.toHaveBeenCalled();
+  });
+
+  it("starts no git while a git it stopped in the worktree is still running", async () => {
+    const cwd = "/cancel-test/" + Math.random();
+    hasStoppedGitChildMock.mockImplementation((dir) => dir === cwd);
+    try {
+      const read = getWorktreeChangesWithStats(cwd, { forceRefresh: true });
+      await expect(read).rejects.toBeInstanceOf(GitStatusUnansweredError);
+      await expect(read).rejects.toMatchObject({ reason: "previous-still-running" });
+    } finally {
+      hasStoppedGitChildMock.mockReset().mockReturnValue(false);
+    }
+
+    expect(vi.mocked(createHardenedGit)).not.toHaveBeenCalled();
+    expect(mockGit.status).not.toHaveBeenCalled();
+  });
+
+  it("checks the WSL route's directory for a stopped git too", async () => {
+    const cwd = "/cancel-test/" + Math.random();
+    const wsl = { distro: "Ubuntu", uncPath: "\\wsl$\Ubuntu\stuck", posixPath: "/stuck" };
+    hasStoppedGitChildMock.mockImplementation((dir) => dir === wsl.uncPath);
+    try {
+      await expect(
+        getWorktreeChangesWithStats(cwd, { forceRefresh: true, wsl })
+      ).rejects.toMatchObject({ reason: "previous-still-running" });
+    } finally {
+      hasStoppedGitChildMock.mockReset().mockReturnValue(false);
+    }
+    expect(vi.mocked(createWslHardenedGit)).not.toHaveBeenCalled();
+  });
+
+  it("reports a status git stopped by the block timeout as unanswered, never as removed", async () => {
+    const cwd = "/cancel-test/" + Math.random();
+    const timeout = Object.assign(new Error("block timeout reached"), { plugin: "timeout" });
+    mockGit.status.mockRejectedValue(timeout);
+
+    const read = getWorktreeChangesWithStats(cwd, { forceRefresh: true });
+    await expect(read).rejects.toBeInstanceOf(GitStatusUnansweredError);
+    await expect(read).rejects.toMatchObject({ reason: "timed-out" });
+    expect(logError).toHaveBeenCalledWith(
+      "Git worktree changes operation failed",
+      expect.anything(),
+      { cwd }
+    );
   });
 
   it("does not cache the empty commit log a cancelled read falls back to", async () => {
