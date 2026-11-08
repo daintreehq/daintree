@@ -137,7 +137,11 @@ const pluginMounts = vi.hoisted(
 );
 const installKitHost = vi.hoisted(() => vi.fn());
 vi.mock("@/components/Plugin/PluginHostedView", () => ({
-  PluginHostedView: (props: { host: string; mountId: string; source: { view: { id: string } } }) => {
+  PluginHostedView: (props: {
+    host: string;
+    mountId: string;
+    source: { view: { id: string } };
+  }) => {
     pluginMounts.push({ host: props.host, mountId: props.mountId, viewId: props.source.view.id });
     return (
       <div data-testid="plugin-view">

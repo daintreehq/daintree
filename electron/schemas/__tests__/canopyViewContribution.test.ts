@@ -49,7 +49,10 @@ describe("contributes.canopyViews", () => {
   });
 
   it("materializes an empty list when the manifest declares none", () => {
-    const result = getPluginManifestSchema("user").safeParse({ name: "acme.none", version: "1.0.0" });
+    const result = getPluginManifestSchema("user").safeParse({
+      name: "acme.none",
+      version: "1.0.0",
+    });
     expect(result.success).toBe(true);
     if (result.success) expect(result.data.contributes.canopyViews).toEqual([]);
   });
@@ -82,7 +85,10 @@ describe("contributes.canopyViews", () => {
   });
 
   it("refuses a project plugin and a per-project package, which Canopy has no project for", () => {
-    const project = parse([{ viewId: "triage" }], { origin: "project", extra: { scope: "project" } });
+    const project = parse([{ viewId: "triage" }], {
+      origin: "project",
+      extra: { scope: "project" },
+    });
     expect(codes(project)).toContain("canopyViews_project_scope_forbidden");
     const instanced = parse([{ viewId: "triage" }], { extra: { instanceMode: "project" } });
     expect(codes(instanced)).toContain("canopyViews_project_scope_forbidden");
