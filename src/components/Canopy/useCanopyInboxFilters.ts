@@ -165,6 +165,8 @@ export function useCanopyInboxFilters({
     [workReadings, everyHost]
   );
   const workPartial = workOf !== null && hostsWithPartialWork(workReadings, workHosts).length > 0;
+  // Every host's work has been read once: a worker missing from the narrowed list now isn't in it.
+  const workRead = workOf === null || workHosts.every((id) => workReadings.has(id));
   const assistantNames = useMemo(
     () =>
       new Map(assistantItems.map((item) => [item.id, `Daintree Assistant · ${item.scopeLabel}`])),
@@ -239,8 +241,10 @@ export function useCanopyInboxFilters({
   const landingKept =
     popOutLanding !== null && popOutLanding.hostId === hostId ? popOutLanding.keptUnread : null;
   useEffect(() => {
-    if (landingKept === null || landingKept.length === 0) return;
-    setKeptUnread(new Set(landingKept));
+    if (landingKept === null) return;
+    setKeptUnread((kept) =>
+      landingKept.length === 0 && kept.size === 0 ? kept : new Set(landingKept)
+    );
   }, [landingKept]);
   // The inbox as listed: every run in it, or with the filter on, the unread.
   const filtered = useMemo(
@@ -380,6 +384,7 @@ export function useCanopyInboxFilters({
     workOf,
     showWorkOf,
     workPartial,
+    workRead,
     workLabelOf,
     shownAssistants,
     bandAssistants,

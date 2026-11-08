@@ -63,6 +63,7 @@ export function useCanopyInboxFocus({
   pluginViewIds,
   assistantsLoaded,
   hostKnown,
+  rowsSettled,
 }: {
   isOpen: boolean;
   /** The other host the panel shows, or null for the window's own. */
@@ -94,6 +95,8 @@ export function useCanopyInboxFocus({
   assistantsLoaded: boolean;
   /** The host list names the host shown: until then, an unlisted one may only not be read yet. */
   hostKnown: boolean;
+  /** The host's rows are in, and the terminals' matches and work links they're filtered by. */
+  rowsSettled: boolean;
 }) {
   const frame = useCanopyFrame();
   const searchRef = useRef<HTMLInputElement>(null);
@@ -561,90 +564,6 @@ export function useCanopyInboxFocus({
     }, REPLY_REVEAL_WAIT_MS);
     return () => clearTimeout(timer);
   }, [isOpen, replyReveal, loaded]);
-  // A dialog popped out into this window (#16338): its search goes in at once,
-  // and its row is selected once the host it was listed under shows here with
-  // its rows in, after the host reset above. What the user does here first,
-  // a host picked or a row clicked, stands instead.
-  const landingSearchedRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (!isOpen || popOutLanding === null || landingSearchedRef.current === popOutLanding.id) {
-      return;
-    }
-    landingSearchedRef.current = popOutLanding.id;
-    landingTouchedRef.current = false;
-    restoreRef.current = null;
-    // Its arrival is the search being put back, not a new one to select the top of.
-    if (popOutLanding.query !== appliedQuery) restoredQueryRef.current = popOutLanding.query;
-    if (popOutLanding.query !== query) setQuery(popOutLanding.query);
-  }, [isOpen, popOutLanding, query, appliedQuery, setQuery]);
-  const shownStoreHostId = useCanopyStore((s) => s.hostId);
-  useEffect(() => {
-    if (!isOpen || popOutLanding === null) return;
-    const settle = () => useCanopyStore.getState().settlePopOutLanding(popOutLanding.id);
-    if (shownStoreHostId !== popOutLanding.hostId || landingTouchedRef.current) {
-      settle();
-      return;
-    }
-    // Its host's list, named in the host list, with its search in force: the
-    // panel holds an unlisted host only while a landing waits on it.
-    if (hostId !== popOutLanding.hostId || !hostKnown || appliedQuery !== popOutLanding.query) {
-      return;
-    }
-    const selection = popOutLanding.selection;
-    // Nothing selected, or not found: the inbox lands as any opening does.
-    if (selection === null) {
-      settle();
-      return;
-    }
-    let domId: string;
-    if (selection.kind === "worker") {
-      if (!loaded) return;
-      settle();
-      const shown =
-        visible.some((item) => item.runId === selection.runId) ||
-        (!searching && items.some((item) => item.runId === selection.runId && inWork(item)));
-      if (!shown) return;
-      setAssistantId(null);
-      setFocusedId(selection.runId);
-      domId = canopyCardDomId(selection.runId);
-    } else {
-      const shown = shownAssistants.some((item) => item.id === selection.assistantId);
-      if (!shown && !assistantsLoaded) return;
-      settle();
-      if (!shown) return;
-      setAssistantId(selection.assistantId);
-      domId = canopyAssistantDomId(selection.assistantId);
-    }
-    landedRef.current = true;
-    setPaneFocus(null);
-    setReplyFocus(null);
-    document.getElementById(domId)?.scrollIntoView({ block: "nearest" });
-    searchRef.current?.focus({ preventScroll: true });
-  }, [
-    isOpen,
-    popOutLanding,
-    shownStoreHostId,
-    hostId,
-    hostKnown,
-    appliedQuery,
-    loaded,
-    visible,
-    searching,
-    items,
-    inWork,
-    shownAssistants,
-    assistantsLoaded,
-  ]);
-  // A host that never lists its rows here doesn't hold the landing forever.
-  useEffect(() => {
-    if (!isOpen || popOutLanding === null) return;
-    const id = popOutLanding.id;
-    const timer = setTimeout(
-      () => useCanopyStore.getState().settlePopOutLanding(id),
-      POP_OUT_LANDING_WAIT_MS
-    );
-    return () => clearTimeout(timer);
-  }, [isOpen, popOutLanding]);
   const settleReplyFocus = useCallback(
     (id: number) => setReplyFocus((current) => (current?.id === id ? null : current)),
     []
@@ -796,6 +715,101 @@ export function useCanopyInboxFocus({
     setAssistantId(null);
     setAssistantRefusal(null);
   }, [isOpen, roleFilter]);
+
+  // A dialog popped out into this window (#16338): its search goes in at once,
+  // and its row is selected once the host it was listed under shows here,
+  // named in the host list, with its rows in. Last of the effects, so no reset
+  // above (a host or a role changed with it) takes the row back in the same
+  // pass. A host picked here first ends it; the user acting here first leaves
+  // the row to them, though the host stays held until the host list names it.
+  const landingSearchedRef = useRef<number | null>(null);
+  // The restored search is the landing's alone: one given up never blocks a
+  // later search from selecting its top match.
+  const dropLandingSearch = useCallback((landingQuery: string) => {
+    if (restoredQueryRef.current === landingQuery) restoredQueryRef.current = null;
+  }, []);
+  useEffect(() => {
+    if (!isOpen || popOutLanding === null || landingSearchedRef.current === popOutLanding.id) {
+      return;
+    }
+    landingSearchedRef.current = popOutLanding.id;
+    landingTouchedRef.current = false;
+    restoreRef.current = null;
+    // Its arrival is the search being put back, not a new one to select the top of.
+    restoredQueryRef.current = popOutLanding.query !== appliedQuery ? popOutLanding.query : null;
+    if (popOutLanding.query !== query) setQuery(popOutLanding.query);
+  }, [isOpen, popOutLanding, query, appliedQuery, setQuery]);
+  const shownStoreHostId = useCanopyStore((s) => s.hostId);
+  useEffect(() => {
+    if (!isOpen || popOutLanding === null) return;
+    const settle = () => {
+      dropLandingSearch(popOutLanding.query);
+      useCanopyStore.getState().settlePopOutLanding(popOutLanding.id);
+    };
+    if (shownStoreHostId !== popOutLanding.hostId) {
+      settle();
+      return;
+    }
+    if (hostId !== popOutLanding.hostId || !hostKnown) return;
+    const selection = popOutLanding.selection;
+    // Nothing selected, or the user went first: the inbox lands as any opening does.
+    if (selection === null || landingTouchedRef.current) {
+      settle();
+      return;
+    }
+    if (appliedQuery !== popOutLanding.query) return;
+    let domId: string;
+    if (selection.kind === "worker") {
+      const shown =
+        visible.some((item) => item.runId === selection.runId) ||
+        (!searching && items.some((item) => item.runId === selection.runId && inWork(item)));
+      // Not listed yet is not gone until the host's rows, the terminals'
+      // matches and the assistants' work links are in.
+      if (!shown && !rowsSettled) return;
+      settle();
+      if (!shown) return;
+      setAssistantId(null);
+      setFocusedId(selection.runId);
+      domId = canopyCardDomId(selection.runId);
+    } else {
+      const shown = shownAssistants.some((item) => item.id === selection.assistantId);
+      if (!shown && !assistantsLoaded) return;
+      settle();
+      if (!shown) return;
+      setAssistantId(selection.assistantId);
+      domId = canopyAssistantDomId(selection.assistantId);
+    }
+    landedRef.current = true;
+    setPaneFocus(null);
+    setReplyFocus(null);
+    document.getElementById(domId)?.scrollIntoView({ block: "nearest" });
+    searchRef.current?.focus({ preventScroll: true });
+  }, [
+    isOpen,
+    popOutLanding,
+    shownStoreHostId,
+    hostId,
+    hostKnown,
+    appliedQuery,
+    rowsSettled,
+    visible,
+    searching,
+    items,
+    inWork,
+    shownAssistants,
+    assistantsLoaded,
+    dropLandingSearch,
+  ]);
+  // A host that never lists its rows here doesn't hold the landing forever.
+  useEffect(() => {
+    if (!isOpen || popOutLanding === null) return;
+    const { id, query: landingQuery } = popOutLanding;
+    const timer = setTimeout(() => {
+      dropLandingSearch(landingQuery);
+      useCanopyStore.getState().settlePopOutLanding(id);
+    }, POP_OUT_LANDING_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [isOpen, popOutLanding, dropLandingSearch]);
 
   return {
     searchRef,

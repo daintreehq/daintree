@@ -20,7 +20,8 @@ let createBrowserWindow: CanopyBrowserWindowFactory | null = null;
 let canopyWindow: BrowserWindow | null = null;
 /** The window's one view, which a WebContents id is checked against. */
 let canopyViewWebContents: WebContents | null = null;
-let stopWatchingMode: (() => void) | null = null;
+/** Bumped as the view starts each new document: a pop-out is answered for by the one that took it up. */
+let canopyViewDocument = 0;
 /** A Canopy window has stood this session, whether or not it still does. */
 let openedThisSession = false;
 
@@ -136,22 +137,26 @@ export function openCanopyWindow(
   openedThisSession = true;
   keepViewFillingWindow(win, appView);
   detachGlobalAssistantWithView(appView);
-  // A reload asks again as it boots; a renderer gone can't take anything up.
-  appView.webContents.on("render-process-gone", () =>
-    failPendingPopOut("Its window stopped before Canopy moved.")
-  );
+  // A window replaced since speaks for nothing that is waiting now.
+  const owns = () => canopyWindow === win;
+  // A reload takes a waiting pop-out up again as it boots; the page it
+  // replaces can no longer answer for it, nor can a renderer that is gone.
+  appView.webContents.on("did-start-navigation", (details) => {
+    if (owns() && details.isMainFrame && !details.isSameDocument) canopyViewDocument += 1;
+  });
+  appView.webContents.on("render-process-gone", () => {
+    if (owns()) failPendingPopOut("Its window stopped before Canopy moved.");
+  });
   win.setTitle(CANOPY_WINDOW_TITLE);
   // The page's own <title> would otherwise replace it on load.
   win.on("page-title-updated", (event) => event.preventDefault());
-  stopWatchingMode = watchMode(closeCanopyWindow);
+  const stopWatchingMode = watchMode(closeCanopyWindow);
   win.once("closed", () => {
-    stopWatchingMode?.();
-    stopWatchingMode = null;
-    if (canopyWindow === win) {
-      canopyWindow = null;
-      canopyViewWebContents = null;
-      setCanopyWindowOpen(false);
-    }
+    stopWatchingMode();
+    if (!owns()) return;
+    canopyWindow = null;
+    canopyViewWebContents = null;
+    setCanopyWindowOpen(false);
     failPendingPopOut("Its window closed before Canopy moved.");
   });
   setCanopyWindowOpen(true);
@@ -160,6 +165,8 @@ export function openCanopyWindow(
 
 interface PendingPopOut extends CanopyPendingPopOut {
   settle: (error: AppError | null) => void;
+  /** The view's document when it last asked for this pop-out, null before it has. */
+  askedBy: number | null;
 }
 
 /** The one pop-out under way: a second waits its turn rather than replace the first's place. */
@@ -204,6 +211,7 @@ export function popOutToCanopyWindow(
     const entry: PendingPopOut = {
       id: ++popOutSeq,
       popOut,
+      askedBy: null,
       settle: (error) => {
         if (pendingPopOut !== entry) return;
         pendingPopOut = null;
@@ -240,12 +248,18 @@ export function popOutToCanopyWindow(
 
 /** The pop-out waiting for the window, kept until the window says it has it. */
 export function peekPendingPopOut(): CanopyPendingPopOut | null {
-  return pendingPopOut ? { id: pendingPopOut.id, popOut: pendingPopOut.popOut } : null;
+  if (!pendingPopOut) return null;
+  pendingPopOut.askedBy = canopyViewDocument;
+  return { id: pendingPopOut.id, popOut: pendingPopOut.popOut };
 }
 
-/** The window has the pop-out's place. False for one no longer waiting. */
+/**
+ * The window has the pop-out's place. False for one no longer waiting, or
+ * when the page that took it up has since been replaced: the new page asks
+ * for it again.
+ */
 export function acknowledgePopOut(id: number): boolean {
-  if (pendingPopOut?.id !== id) return false;
+  if (pendingPopOut?.id !== id || pendingPopOut.askedBy !== canopyViewDocument) return false;
   pendingPopOut.settle(null);
   return true;
 }

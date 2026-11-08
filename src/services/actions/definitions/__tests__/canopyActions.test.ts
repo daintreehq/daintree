@@ -175,6 +175,36 @@ describe("canopy actions", () => {
       expect(toast.actions?.map((action) => action.label)).toEqual(["Try again"]);
     });
 
+    it("says a double click's one failure once, owning the toast", async () => {
+      installWindowApi();
+      let refuse!: (error: Error) => void;
+      popOut.mockImplementationOnce(() => new Promise<void>((_, reject) => (refuse = reject)));
+      useCanopyStore.setState({ mode: "on", isOpen: true });
+      const openWindow = definition("canopy.openWindow");
+
+      const first = openWindow.run(undefined, {});
+      const second = openWindow.run(undefined, {});
+      refuse(new Error("no"));
+
+      await expect(first).rejects.toThrow("no");
+      await expect(second).rejects.toThrow("no");
+      expect(popOut).toHaveBeenCalledTimes(1);
+      expect(notify).toHaveBeenCalledTimes(1);
+      expect(openWindow.selfNotifiesOnExecutionError).toBe(true);
+    });
+
+    it("never pops the Canopy window out into itself", async () => {
+      installWindowApi();
+      window.__DAINTREE_CANOPY_WINDOW__ = true;
+      useCanopyStore.setState({ mode: "on", isOpen: true });
+
+      await definition("canopy.openWindow").run(undefined, {});
+
+      expect(popOut).not.toHaveBeenCalled();
+      expect(open).toHaveBeenCalledTimes(1);
+      delete window.__DAINTREE_CANOPY_WINDOW__;
+    });
+
     it("says why when the window couldn't open with no panel here", async () => {
       installWindowApi();
       open.mockRejectedValueOnce(new Error("no"));

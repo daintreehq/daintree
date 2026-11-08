@@ -26,7 +26,8 @@ const goToRunSchema = z.object({ workspaceId: id, runId: id });
 const listedKey = z.string().min(1).max(2048);
 const popOutSchema = z.object({
   hostId: id,
-  query: z.string().max(10_000),
+  // The search field takes a pasted list of any length; this only bounds the message.
+  query: z.string().max(1_000_000),
   selection: z
     .discriminatedUnion("kind", [
       z.object({ kind: z.literal("worker"), runId: listedKey }),
@@ -91,8 +92,8 @@ export const canopyWindowNamespace = defineIpcNamespace({
     /**
      * Move a project view's dialog into the Canopy window (#16338), opening it
      * or bringing it forward. Resolves once the window has the dialog's place,
-     * when every other view's dialog is told to close; the asking view closes
-     * its own. Refused or failed, nothing closes anywhere.
+     * when every view's dialog is told to close. Refused or failed, nothing
+     * closes anywhere.
      */
     popOut: opValidated(
       CANOPY_WINDOW_METHOD_CHANNELS.popOut,
@@ -106,7 +107,9 @@ export const canopyWindowNamespace = defineIpcNamespace({
         }
         refuseUnlessCanopyIsOn();
         await popOutToCanopyWindow(popOut, closeWhenCanopyIsOff);
-        typedBroadcastToLocalViews(CHANNELS.CANOPY_WINDOW_POPPED_OUT, undefined, ctx.webContentsId);
+        // The asking view hears it too: a reload since may have opened a new
+        // dialog its first page can no longer close.
+        typedBroadcastToLocalViews(CHANNELS.CANOPY_WINDOW_POPPED_OUT, undefined);
       },
       { withContext: true }
     ),

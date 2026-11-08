@@ -116,14 +116,14 @@ export function registerCanopyActions(actions: ActionRegistry): void {
     keywords: ["canopy", "inbox", "agents", "window", "monitor", "detach"],
     selfNotifiesOnExecutionError: true,
     run: async () => {
+      // A panel open here moves into the window where it stood, closing once
+      // the window has its place: the window shows what it would, and both
+      // would size a terminal.
+      if (useCanopyStore.getState().isOpen && window.__DAINTREE_CANOPY_WINDOW__ !== true) {
+        await popOutCanopyDialog(notifyWindowFailed);
+        return;
+      }
       try {
-        // A panel open here moves into the window where it stood, closing once
-        // the window has its place: the window shows what it would, and both
-        // would size a terminal.
-        if (useCanopyStore.getState().isOpen && window.__DAINTREE_CANOPY_WINDOW__ !== true) {
-          await popOutCanopyDialog();
-          return;
-        }
         await window.electron.canopyWindow.open();
       } catch (error) {
         notifyWindowFailed(error);

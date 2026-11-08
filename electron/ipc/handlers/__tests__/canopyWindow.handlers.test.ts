@@ -216,17 +216,37 @@ describe("popping a dialog out into the Canopy window (#16338)", () => {
     workOf: { assistantId: "assistant-1", name: "Planner" },
   };
 
-  it("hands the place to the window, then closes every other view's dialog", async () => {
-    expect(
-      await refused(invokeFrom(PROJECT_VIEW_ID, CANOPY_WINDOW_METHOD_CHANNELS.popOut, place))
-    ).toBe(false);
+  it("hands the place to the window, and only once it has it closes every view's dialog", async () => {
+    let taken!: () => void;
+    windowMock.popOutToCanopyWindow.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (taken = resolve))
+    );
+    let answered = false;
+    const answer = Promise.resolve(
+      invokeFrom(PROJECT_VIEW_ID, CANOPY_WINDOW_METHOD_CHANNELS.popOut, place)
+    ).then((result) => {
+      answered = true;
+      return result;
+    });
+    await vi.waitFor(() => expect(windowMock.popOutToCanopyWindow).toHaveBeenCalledTimes(1));
 
     expect(windowMock.popOutToCanopyWindow).toHaveBeenCalledWith(place, expect.any(Function));
-    expect(broadcastToLocalViews).toHaveBeenCalledWith(
-      "canopy-window:popped-out",
-      undefined,
-      PROJECT_VIEW_ID
-    );
+    expect(broadcastToLocalViews).not.toHaveBeenCalled();
+    expect(answered).toBe(false);
+
+    taken();
+    expect(await refused(answer)).toBe(false);
+    // The asking view too: a reload since may have opened a dialog its first page can't close.
+    expect(broadcastToLocalViews).toHaveBeenCalledWith("canopy-window:popped-out", undefined);
+  });
+
+  it("takes a search as long as a pasted list", async () => {
+    const query = Array.from({ length: 2_000 }, (_, i) => `term-${i}`).join(", ");
+    expect(
+      await refused(
+        invokeFrom(PROJECT_VIEW_ID, CANOPY_WINDOW_METHOD_CHANNELS.popOut, { ...place, query })
+      )
+    ).toBe(false);
   });
 
   it("closes no dialog anywhere when the window didn't take it", async () => {
@@ -259,7 +279,21 @@ describe("popping a dialog out into the Canopy window (#16338)", () => {
     ["no host", { ...place, hostId: "" }],
     ["an unknown role", { ...place, roleFilter: "everyone" }],
     ["an unknown selection", { ...place, selection: { kind: "pane", runId: "r" } }],
-    ["no filters", { hostId: "local", query: "" }],
+    ...(
+      [
+        "query",
+        "selection",
+        "roleFilter",
+        "unreadOnly",
+        "keptUnread",
+        "archivedExpanded",
+        "trashExpanded",
+        "workOf",
+      ] as const
+    ).map((key) => {
+      const { [key]: _dropped, ...rest } = place;
+      return [`no ${key}`, rest] as const;
+    }),
   ])("refuses a place with %s", async (_label, payload) => {
     expect(
       await refused(invokeFrom(PROJECT_VIEW_ID, CANOPY_WINDOW_METHOD_CHANNELS.popOut, payload))
@@ -281,12 +315,21 @@ describe("popping a dialog out into the Canopy window (#16338)", () => {
   });
 
   it("takes the window's word that it has the place, and no other view's", async () => {
+    for (const taken of [true, false]) {
+      windowMock.acknowledgePopOut.mockReturnValueOnce(taken);
+      const answer = (await invokeFrom(
+        CANOPY_VIEW_ID,
+        CANOPY_WINDOW_METHOD_CHANNELS.acknowledgePopOut,
+        { id: 4 }
+      )) as { data?: unknown };
+      expect(answer?.data ?? answer).toBe(taken);
+    }
+    expect(windowMock.acknowledgePopOut).toHaveBeenCalledWith(4);
     expect(
       await refused(
-        invokeFrom(CANOPY_VIEW_ID, CANOPY_WINDOW_METHOD_CHANNELS.acknowledgePopOut, { id: 4 })
+        invokeFrom(CANOPY_VIEW_ID, CANOPY_WINDOW_METHOD_CHANNELS.acknowledgePopOut, { id: 0 })
       )
-    ).toBe(false);
-    expect(windowMock.acknowledgePopOut).toHaveBeenCalledWith(4);
+    ).toBe(true);
 
     windowMock.acknowledgePopOut.mockClear();
     expect(

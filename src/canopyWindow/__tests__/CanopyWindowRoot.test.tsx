@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
-import type { CanopySnapshot } from "@shared/types/ipc/canopy";
+import type { CanopyPendingPopOut, CanopySnapshot } from "@shared/types/ipc/canopy";
 import type { CanopyFrame } from "@/components/Canopy/canopyFrame";
 import { useCanopyStore } from "@/store/canopyStore";
 
@@ -76,7 +76,8 @@ const offSnapshot = vi.fn();
 const closeWindow = vi.fn(async () => {});
 const goToRun = vi.fn(async (_target: { workspaceId: string; runId: string }) => {});
 const offPopOutWaiting = vi.fn();
-const peekPopOut = vi.fn(async () => null);
+const peekPopOut = vi.fn(async (): Promise<CanopyPendingPopOut | null> => null);
+const acknowledgePopOut = vi.fn(async (_ack: { id: number }) => true);
 
 function snapshot(mode: CanopySnapshot["mode"]): CanopySnapshot {
   return {
@@ -114,7 +115,7 @@ beforeEach(() => {
       canopyWindow: {
         goToRun,
         peekPopOut,
-        acknowledgePopOut: vi.fn(async () => true),
+        acknowledgePopOut,
         onPopOutWaiting: () => offPopOutWaiting,
       },
     },
@@ -150,11 +151,28 @@ describe("CanopyWindowRoot", () => {
     expect(useCanopyStore.getState().snapshot?.busy).toBe(true);
   });
 
-  it("asks for a dialog popped out before it booted", async () => {
+  it("takes up a dialog popped out before it booted, and says so", async () => {
+    peekPopOut.mockResolvedValueOnce({
+      id: 21,
+      popOut: {
+        hostId: "studio",
+        query: "deploy",
+        selection: { kind: "worker", runId: "run-2" },
+        roleFilter: "workers",
+        unreadOnly: false,
+        keptUnread: [],
+        archivedExpanded: false,
+        trashExpanded: false,
+        workOf: null,
+      },
+    });
     render(<CanopyWindowRoot />);
     await act(async () => {});
 
-    expect(peekPopOut).toHaveBeenCalledTimes(1);
+    expect(useCanopyStore.getState().hostId).toBe("studio");
+    expect(useCanopyStore.getState().popOutLanding?.query).toBe("deploy");
+    expect(acknowledgePopOut).toHaveBeenCalledWith({ id: 21 });
+    useCanopyStore.setState({ hostId: null, roleFilter: "all", popOutLanding: null });
   });
 
   it("reads what labels the rows and the shortcuts it shows", async () => {

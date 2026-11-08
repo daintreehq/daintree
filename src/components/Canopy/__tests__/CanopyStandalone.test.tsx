@@ -1229,6 +1229,7 @@ describe("taking up a dialog popped out into the window (#16338)", () => {
         .getState()
         .receivePopOut(popOut({ selection: { kind: "worker", runId: other } }));
     });
+    expect(useCanopyStore.getState().popOutLanding).not.toBeNull();
     await act(async () => {
       fireEvent.pointerDown(surface()!);
     });
@@ -1237,5 +1238,82 @@ describe("taking up a dialog popped out into the window (#16338)", () => {
 
     expect(useCanopyStore.getState().popOutLanding).toBeNull();
     expect(selectedRun()).not.toBe(`canopy-card-${other}`);
+  });
+
+  it("waits for a terminal's match before taking the dialog's row as gone", async () => {
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+    const landed = selectedRun()!.replace(/^canopy-card-/, "");
+    const other = landed === "first" ? "second" : "first";
+    let answer!: (runIds: string[]) => void;
+    canopy.searchScreens.mockImplementation(
+      () => new Promise<string[]>((resolve) => (answer = resolve))
+    );
+
+    await act(async () => {
+      useCanopyStore
+        .getState()
+        .receivePopOut(popOut({ query: "needle", selection: { kind: "worker", runId: other } }));
+    });
+    // Past the search's wait on the typing: the terminals are asked, not yet answered.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    });
+    expect(canopy.searchScreens).toHaveBeenCalled();
+    expect(useCanopyStore.getState().popOutLanding).not.toBeNull();
+
+    await act(async () => answer([other]));
+    await settle();
+
+    expect(selectedRun()).toBe(`canopy-card-${other}`);
+    expect(useCanopyStore.getState().popOutLanding).toBeNull();
+  });
+
+  it("keeps the dialog's assistant when its role filter comes with it", async () => {
+    const second = assistantEntry();
+    second.subject = { ...second.subject, terminalId: "help-1", lane: 1 };
+    directory = { ...directory, entries: [assistantEntry(), second] };
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+    const rows = () => [...document.querySelectorAll<HTMLElement>("[data-canopy-assistant]")];
+    await vi.waitFor(() => expect(rows()).toHaveLength(2));
+    const assistantId = decodeURIComponent(rows()[1]!.id.replace(/^canopy-assistant-/, ""));
+
+    await act(async () => {
+      useCanopyStore
+        .getState()
+        .receivePopOut(
+          popOut({ roleFilter: "assistants", selection: { kind: "assistant", assistantId } })
+        );
+    });
+    await settle();
+
+    expect(useCanopyStore.getState().roleFilter).toBe("assistants");
+    expect(rows()[1]!.getAttribute("aria-selected")).toBe("true");
+    expect(rows()[0]!.getAttribute("aria-selected")).not.toBe("true");
+    expect(useCanopyStore.getState().popOutLanding).toBeNull();
+  });
+
+  it("gives up on rows that never come", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      useFleetSnapshotStore.setState({ snapshot: null });
+      useCanopyStore
+        .getState()
+        .receivePopOut(popOut({ selection: { kind: "worker", runId: "first" } }));
+      render(<CanopyView frame={hostFrame().frame} />);
+      await act(async () => {});
+      await act(async () => {
+        vi.advanceTimersByTime(9_999);
+      });
+      expect(useCanopyStore.getState().popOutLanding).not.toBeNull();
+
+      await act(async () => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(useCanopyStore.getState().popOutLanding).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

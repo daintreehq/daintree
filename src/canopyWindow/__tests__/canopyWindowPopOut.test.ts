@@ -97,6 +97,19 @@ describe("the Canopy window taking up a popped-out dialog (#16338)", () => {
     stop();
   });
 
+  it("takes up each new pop-out through the same subscription", async () => {
+    peekPopOut.mockResolvedValueOnce(pending(14, "one"));
+    const stop = receiveCanopyPopOuts();
+    await flush();
+    peekPopOut.mockResolvedValueOnce(pending(15, "two"));
+    waiting();
+    await flush();
+
+    expect(useCanopyStore.getState().popOutLanding?.query).toBe("two");
+    expect(acknowledgePopOut).toHaveBeenLastCalledWith({ id: 15 });
+    stop();
+  });
+
   it("lands once on the same pop-out asked for twice, answering both", async () => {
     peekPopOut.mockResolvedValue(pending(13, "twice"));
 

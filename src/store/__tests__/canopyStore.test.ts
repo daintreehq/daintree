@@ -618,6 +618,23 @@ describe("taking up a dialog popped out into the Canopy window (#16338)", () => 
     expect(state.archivedExpanded).toBe(true);
     expect(state.trashExpanded).toBe(true);
     expect(state.workOf).toEqual(place.workOf);
+
+    // And back the other way, over a window that had them set.
+    useCanopyStore.getState().receivePopOut({
+      ...place,
+      roleFilter: "assistants",
+      unreadOnly: false,
+      archivedExpanded: false,
+      trashExpanded: false,
+      workOf: null,
+    });
+    const again = useCanopyStore.getState();
+    expect(again.roleFilter).toBe("assistants");
+    expect(again.unreadOnly).toBe(false);
+    expect(again.archivedExpanded).toBe(false);
+    expect(again.trashExpanded).toBe(false);
+    expect(again.workOf).toBeNull();
+    useCanopyStore.getState().receivePopOut(place);
     expect(state.popOutLanding).toMatchObject({
       query: "deploy failed",
       selection: { kind: "worker", runId: "run-2" },
@@ -678,6 +695,47 @@ describe("taking up a dialog popped out into the Canopy window (#16338)", () => 
     expect(useCanopyStore.getState().hostId).toBe("studio");
 
     useCanopyStore.getState().close();
+    expect(useCanopyStore.getState().popOutLanding).toBeNull();
+  });
+
+  it.each([
+    ["toggled shut", () => useCanopyStore.getState().toggle()],
+    [
+      "left for a terminal",
+      () =>
+        useCanopyStore
+          .getState()
+          .closeForTerminal({ at: Date.now(), hostId: null, query: "", runId: "a", order: [] }),
+    ],
+    [
+      "hidden",
+      () =>
+        useCanopyStore.getState().applySnapshot({
+          mode: "hidden",
+          activated: false,
+          dispositions: [],
+          seen: [],
+          reads: [],
+          scope: null,
+          active: false,
+          busy: false,
+          refreshedAt: null,
+          cards: [],
+          lastError: null,
+          failedRuns: [],
+          glances: [],
+        }),
+    ],
+    [
+      "asked for a dictated reply",
+      () => useCanopyStore.getState().revealReply({ runId: "run-1", hostScope: null }),
+    ],
+  ])("forgets the landing once %s", (_label, leave) => {
+    useCanopyStore.setState({ mode: "on", isOpen: true });
+    useCanopyStore.getState().receivePopOut(place);
+
+    leave();
+
     expect(useCanopyStore.getState().popOutLanding).toBeNull();
   });
 });

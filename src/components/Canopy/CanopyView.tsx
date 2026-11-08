@@ -748,6 +748,7 @@ function CanopyInbox({
     workOf,
     showWorkOf,
     workPartial,
+    workRead,
     workLabelOf,
     shownAssistants,
     bandAssistants,
@@ -869,6 +870,7 @@ function CanopyInbox({
     pluginViewIds: pluginViews.map((view) => view.id),
     assistantsLoaded: !assistantsReadable || directory !== null,
     hostKnown: hostId === null || everyHost || hostRow !== null,
+    rowsSettled: revealRunsLoaded && (screenAsk === null || onScreen !== null) && workRead,
   });
   const shownPluginView = pluginViews.find((view) => view.id === shownPluginViewId) ?? null;
 

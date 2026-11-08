@@ -47,13 +47,18 @@ let poppingOut: Promise<void> | null = null;
 /**
  * Move this view's open dialog into the Canopy window (#16338). The dialog
  * closes only once the window has its place; refused or failed, it stays
- * exactly as it was. A second ask while one is under way joins it.
+ * exactly as it was. A second ask while one is under way joins it, and only
+ * the first is told of its failure, so one attempt says so once.
  */
-export function popOutCanopyDialog(): Promise<void> {
+export function popOutCanopyDialog(onFailed: (error: unknown) => void): Promise<void> {
   if (poppingOut) return poppingOut;
-  const attempt = window.electron.canopyWindow.popOut(captureCanopyPopOut()).then(() => {
-    useCanopyStore.getState().close();
-  });
+  const attempt = window.electron.canopyWindow.popOut(captureCanopyPopOut()).then(
+    () => useCanopyStore.getState().close(),
+    (error: unknown) => {
+      onFailed(error);
+      throw error;
+    }
+  );
   poppingOut = attempt;
   const clear = () => {
     if (poppingOut === attempt) poppingOut = null;

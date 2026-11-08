@@ -1023,6 +1023,35 @@ describe("the Canopy host picker", () => {
     expect(useCanopyStore.getState().popOutLanding).toBeNull();
   });
 
+  it("keeps a popped-out dialog's host through the user acting before the host list came (#16338)", async () => {
+    state.hosts = [];
+    installElectron();
+    useCanopyStore.getState().receivePopOut({
+      hostId: "studio",
+      query: "",
+      selection: { kind: "worker", runId: "remote-run" },
+      roleFilter: "all",
+      unreadOnly: false,
+      keptUnread: [],
+      archivedExpanded: false,
+      trashExpanded: false,
+      workOf: null,
+    });
+    const { rerender } = render(<CanopyView />);
+    await settle();
+    fireEvent.pointerDown(document.querySelector("[data-testid=canopy-dialog]")!);
+    rerender(<CanopyView />);
+    await settle();
+    expect(useCanopyStore.getState().hostId).toBe("studio");
+
+    state.hosts = [host("studio", "studio-01")];
+    rerender(<CanopyView />);
+    await settle();
+
+    expect(useCanopyStore.getState().hostId).toBe("studio");
+    expect(useCanopyStore.getState().popOutLanding).toBeNull();
+  });
+
   it("says the list is what the host last showed once its link drops", async () => {
     installElectron();
     useCanopyStore.setState({ hostId: "studio" });

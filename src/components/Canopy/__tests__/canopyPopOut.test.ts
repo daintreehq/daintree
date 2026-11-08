@@ -10,8 +10,10 @@ import {
 } from "../canopyPopOut";
 
 const popOut = vi.fn<(place: CanopyPopOut) => Promise<void>>();
+const onFailed = vi.fn();
 
 beforeEach(() => {
+  onFailed.mockReset();
   popOut.mockReset();
   popOut.mockResolvedValue(undefined);
   Object.defineProperty(window, "electron", {
@@ -116,7 +118,7 @@ describe("popping the dialog out", () => {
     let taken!: () => void;
     popOut.mockImplementationOnce(() => new Promise<void>((resolve) => (taken = resolve)));
 
-    const done = popOutCanopyDialog();
+    const done = popOutCanopyDialog(onFailed);
     await Promise.resolve();
     expect(useCanopyStore.getState().isOpen).toBe(true);
 
@@ -130,19 +132,22 @@ describe("popping the dialog out", () => {
       mode: "on",
       isOpen: true,
       hostId: "studio",
+      roleFilter: "assistants",
       unreadOnly: true,
+      archivedExpanded: true,
+      trashExpanded: true,
       workOf: { assistantId: "assistant-1", name: "Planner" },
     });
-    const before = useCanopyStore.getState();
+    const stop = registerCanopyInboxPlace(() => inboxPlace());
+    const before = captureCanopyPopOut();
     popOut.mockRejectedValueOnce(new Error("Its window closed before Canopy moved."));
 
-    await expect(popOutCanopyDialog()).rejects.toThrow("closed");
+    await expect(popOutCanopyDialog(onFailed)).rejects.toThrow("closed");
 
-    const after = useCanopyStore.getState();
-    expect(after.isOpen).toBe(true);
-    expect(after.hostId).toBe(before.hostId);
-    expect(after.unreadOnly).toBe(before.unreadOnly);
-    expect(after.workOf).toBe(before.workOf);
+    expect(useCanopyStore.getState().isOpen).toBe(true);
+    expect(captureCanopyPopOut()).toEqual(before);
+    expect(onFailed).toHaveBeenCalledTimes(1);
+    stop();
   });
 
   it("joins a pop-out already under way rather than asking twice", async () => {
@@ -150,14 +155,30 @@ describe("popping the dialog out", () => {
     let taken!: () => void;
     popOut.mockImplementationOnce(() => new Promise<void>((resolve) => (taken = resolve)));
 
-    const first = popOutCanopyDialog();
-    const second = popOutCanopyDialog();
+    const first = popOutCanopyDialog(onFailed);
+    const second = popOutCanopyDialog(onFailed);
     expect(second).toBe(first);
     expect(popOut).toHaveBeenCalledTimes(1);
 
     taken();
     await first;
-    await popOutCanopyDialog();
+    await popOutCanopyDialog(onFailed);
     expect(popOut).toHaveBeenCalledTimes(2);
+  });
+
+  it("says a joined attempt's failure once", async () => {
+    useCanopyStore.setState({ mode: "on", isOpen: true });
+    let refuse!: (error: Error) => void;
+    popOut.mockImplementationOnce(() => new Promise<void>((_, reject) => (refuse = reject)));
+    const otherCaller = vi.fn();
+
+    const first = popOutCanopyDialog(onFailed);
+    const second = popOutCanopyDialog(otherCaller);
+    refuse(new Error("no"));
+
+    await expect(first).rejects.toThrow("no");
+    await expect(second).rejects.toThrow("no");
+    expect(onFailed).toHaveBeenCalledTimes(1);
+    expect(otherCaller).not.toHaveBeenCalled();
   });
 });

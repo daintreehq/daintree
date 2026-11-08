@@ -3469,7 +3469,7 @@ describe("popping the dialog out into the Canopy window (#16338)", () => {
     });
   });
 
-  it("carries the search as typed, and the read rows Unread keeps listed", async () => {
+  it("carries the search as typed, and the rows Unread keeps listed", async () => {
     installElectron({ ...canopySnapshot, reads: [unreadMark("working", 1)] });
     const { container } = render(<CanopyView />);
     await frames();

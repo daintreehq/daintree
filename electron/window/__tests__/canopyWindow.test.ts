@@ -415,8 +415,11 @@ describe("popping a dialog out into the window (#16338)", () => {
     expect(pending?.popOut).toEqual(place);
     // Asking doesn't take it: a reload, or a second ask, still finds it.
     expect(peekPendingPopOut()?.id).toBe(pending!.id);
+    // Another pop-out's answer settles nothing.
+    expect(acknowledgePopOut(pending!.id + 1)).toBe(false);
     await Promise.resolve();
     expect(seen.value).toBeNull();
+    expect(peekPendingPopOut()?.id).toBe(pending!.id);
 
     expect(acknowledgePopOut(pending!.id)).toBe(true);
     await Promise.resolve();
@@ -464,7 +467,9 @@ describe("popping a dialog out into the window (#16338)", () => {
     const seen = outcome(popOutToCanopyWindow(place, noWatch));
     const id = peekPendingPopOut()!.id;
 
-    await vi.advanceTimersByTimeAsync(CANOPY_POP_OUT_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(CANOPY_POP_OUT_TIMEOUT_MS - 1);
+    expect(seen.value).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
 
     expect(seen.value).toMatch(/in time/);
     expect(peekPendingPopOut()).toBeNull();
@@ -483,5 +488,83 @@ describe("popping a dialog out into the window (#16338)", () => {
     acknowledgePopOut(id);
     await Promise.resolve();
     expect(first.value).toBe("taken");
+  });
+});
+
+describe("a popped-out place across the window's own changes (#16338)", () => {
+  const place: CanopyPopOut = {
+    hostId: "local",
+    query: "",
+    selection: null,
+    roleFilter: "all",
+    unreadOnly: false,
+    keptUnread: [],
+    archivedExpanded: false,
+    trashExpanded: false,
+    workOf: null,
+  };
+
+  afterEach(() => vi.useRealTimers());
+
+  it("lets no earlier pop-out's deadline fail the next", async () => {
+    vi.useFakeTimers();
+    const first = popOutToCanopyWindow(place, noWatch);
+    acknowledgePopOut(peekPendingPopOut()!.id);
+    await first;
+    await vi.advanceTimersByTimeAsync(CANOPY_POP_OUT_TIMEOUT_MS / 2);
+    let failed = false;
+    popOutToCanopyWindow(place, noWatch).catch(() => (failed = true));
+
+    await vi.advanceTimersByTimeAsync(CANOPY_POP_OUT_TIMEOUT_MS / 2 + 1);
+
+    expect(failed).toBe(false);
+    expect(peekPendingPopOut()).not.toBeNull();
+  });
+
+  it("takes no answer from a page reloaded since it took the place up: the new page asks again", async () => {
+    let taken = false;
+    void popOutToCanopyWindow(place, noWatch).then(() => (taken = true));
+    const view = made[0]!.view.webContents;
+    view.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+    const { id } = peekPendingPopOut()!;
+
+    // The page that took it up is replaced before its answer lands.
+    view.emit("did-start-navigation", { isMainFrame: true, isSameDocument: false });
+    expect(acknowledgePopOut(id)).toBe(false);
+    await Promise.resolve();
+    expect(taken).toBe(false);
+
+    // A navigation within the page changes nothing.
+    expect(peekPendingPopOut()?.id).toBe(id);
+    view.emit("did-start-navigation", { isMainFrame: true, isSameDocument: true });
+    expect(acknowledgePopOut(id)).toBe(true);
+    await Promise.resolve();
+    expect(taken).toBe(true);
+  });
+
+  it("lets a window replaced before its close was told fail nothing of the next one's", async () => {
+    const stops: Array<ReturnType<typeof vi.fn>> = [];
+    const watch = () => {
+      const stop = vi.fn();
+      stops.push(stop);
+      return stop;
+    };
+    openCanopyWindow(watch);
+    const old = made[0]!;
+    // Gone, but its closed event not yet delivered.
+    old.isDestroyed.mockReturnValue(true);
+    let failed = false;
+    popOutToCanopyWindow(place, watch).catch(() => (failed = true));
+    expect(made).toHaveLength(2);
+
+    old.emit("closed");
+    old.view.webContents.emit("render-process-gone", {}, { reason: "crashed" });
+    await Promise.resolve();
+
+    expect(failed).toBe(false);
+    expect(peekPendingPopOut()).not.toBeNull();
+    expect(stops[0]).toHaveBeenCalledTimes(1);
+    expect(stops[1]).not.toHaveBeenCalled();
+    expect(isCanopyWindowView(made[1]!.view.webContents.id)).toBe(true);
   });
 });
