@@ -891,9 +891,9 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
       ]);
     });
 
-    it("reads at the listed main worktree once the load knows it", async () => {
+    it("falls back to the listed main worktree once the project root is gone", async () => {
       // The project root may be a linked worktree that is later removed; the
-      // main worktree outlives it.
+      // main worktree outlives it. `/test/root` does not exist on disk.
       const { createHardenedGit } = await import("../../utils/hardenedGit.js");
       service["forgeMainWorktreePath"] = "/test/main";
       registerMonitor("/old/main", { isMainWorktree: true });
@@ -909,6 +909,11 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
         "/test/main",
         "/test/main",
       ]);
+      service["projectRootPath"] = os.tmpdir();
+      vi.mocked(createHardenedGit).mockClear();
+      await fireConfigChange();
+      expect(vi.mocked(createHardenedGit).mock.calls[0]?.[0]).toBe(os.tmpdir());
+
       service["stopForgeRemoteDetection"]();
       expect(service["forgeMainWorktreePath"]).toBeNull();
     });

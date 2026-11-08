@@ -633,10 +633,10 @@ export class WorkspaceService {
   // Replaced by every reprobe that finds the config moved, so a read the slot
   // no longer holds is stale and must not be applied.
   private forgeRemoteRead: ForgeRemoteRead | null = null;
-  // The main worktree as this host's own load listed it — never taken from a
-  // monitor, which may belong to a project being switched away from. Reads
-  // prefer it to the project root, which can be a linked worktree that is
-  // later removed.
+  // The main worktree as this host's own enumeration listed it — never taken
+  // from a monitor, which may belong to a project being switched away from.
+  // Reads fall back to it once the project root, which can be a linked
+  // worktree, has been removed.
   private forgeMainWorktreePath: string | null = null;
   // The project's selected forge remote *name* (#11408). Kept on the service
   // (not just handed to `pullRequestService`) because `readForgeRemotes` needs
@@ -2773,8 +2773,12 @@ export class WorkspaceService {
    * from its path would hand that repo's remotes to every incoming monitor.
    */
   private forgeRemoteCwd(): string | null {
-    if (!this.projectRootPath) return null;
-    return this.forgeMainWorktreePath ?? this.projectRootPath;
+    const root = this.projectRootPath;
+    if (!root) return null;
+    // The root first: it is where the load-time read ran, and a linked
+    // worktree's own `config.worktree` can define remotes the main one lacks.
+    if (this.forgeMainWorktreePath && !existsSync(root)) return this.forgeMainWorktreePath;
+    return root;
   }
 
   /** The shared remote table, starting a read only when none is held. */
@@ -3700,6 +3704,7 @@ export class WorkspaceService {
     }
 
     const worktrees = await this.listService.mapToWorktrees(rawWorktrees);
+    this.forgeMainWorktreePath = worktrees.find((wt) => wt.isMainWorktree)?.path ?? null;
 
     await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true);
   }
