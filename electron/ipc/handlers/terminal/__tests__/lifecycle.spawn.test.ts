@@ -4017,14 +4017,60 @@ describe("terminal spawn handler - main-screen launch env (#16355)", () => {
     expect(env).toMatchObject(claudeInlineEnv());
   });
 
-  it("carries it on a resume, as a restart or restore relaunches the pane", async () => {
+  it.each([
+    ["a restart's", false],
+    ["a restore's", true],
+  ])("carries it on %s resume of the pane", async (_label, restore) => {
     const env = await spawnWith({
       command: "claude --resume 0b6a1c2e-6f4b-4f43-9d55-1b7b2f1f8a10",
       launchAgentId: "claude",
       agentSessionId: "0b6a1c2e-6f4b-4f43-9d55-1b7b2f1f8a10",
+      restore,
     });
 
     expect(env).toMatchObject(claudeInlineEnv());
+  });
+
+  it("carries it on a Claude pane spawned before its command is known", async () => {
+    const env = await spawnWith({ launchAgentId: "claude" });
+
+    expect(env).toMatchObject(claudeInlineEnv());
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "carries it into a shell that types the command in, which the PTY pool can serve",
+    async () => {
+      getDefaultShellMock.mockReturnValue("/usr/local/bin/fish");
+      try {
+        const env = await spawnWith({ command: "claude", launchAgentId: "claude" });
+
+        const spawnArgs = ptyClient.spawn.mock.calls[0][1];
+        expect(spawnArgs.shell).toBeUndefined();
+        expect(spawnArgs.postSpawnInput).toBe("claude\r");
+        expect(env).toMatchObject(claudeInlineEnv());
+      } finally {
+        getDefaultShellMock.mockReturnValue("/bin/zsh");
+      }
+    }
+  );
+
+  it("replaces a differently-cased copy of the variable on Windows", async () => {
+    const realPlatform = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      const lowered = Object.fromEntries(
+        Object.keys(claudeInlineEnv()).map((key) => [key.toLowerCase(), "0"])
+      );
+
+      const env = await spawnWith({ command: "claude", launchAgentId: "claude", env: lowered });
+
+      for (const [key, value] of Object.entries(claudeInlineEnv())) {
+        const copies = Object.entries(env).filter(([k]) => k.toUpperCase() === key.toUpperCase());
+        expect(copies).toEqual([[key, value]]);
+      }
+    } finally {
+      Object.defineProperty(process, "platform", { value: realPlatform, configurable: true });
+    }
   });
 
   it("wins over a value the user's preset or project env sets", async () => {

@@ -868,6 +868,15 @@ export interface AgentConfig {
      */
     defaultInlineMode?: boolean;
     /**
+     * Environment that keeps the CLI's renderer on the main screen whatever its
+     * own config picks, for a CLI whose full-screen mode is chosen in the user's
+     * settings rather than by a flag (#16355). Unlike {@link inlineModeFlag} no
+     * setting governs it: the spawn handler sets it on every launch of the agent,
+     * over any value the launch env already carries. Display-only, and never a
+     * write to the user's config.
+     */
+    inlineModeEnv?: Readonly<Record<string, string>>;
+    /**
      * Purely decorative TUI effects the CLI draws regardless of work progress,
      * and the launch arguments that switch them off. Injected on every spawn,
      * restart and resume unless the user's per-agent `decorativeEffects`

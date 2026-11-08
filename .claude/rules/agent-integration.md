@@ -26,7 +26,7 @@ paths:
 
 Two sanctioned exceptions:
 
-- A **display-only** launch switch declared as a registry capability with a user-facing setting (`inlineModeFlag`/`altScreenFlag`, `decorations`).
+- A **display-only** launch switch declared as a registry capability: one Daintree applies on every launch to keep the agent on the main screen, through a flag (`inlineModeFlag`) or an environment variable (`inlineModeEnv`), or one behind a user-facing setting (`decorations`). Always at launch, never through the user's config.
 - Handing an agent Daintree's **own** MCP servers beside the user's through `capabilities.launchMcp` — additive only, nothing written into the repo or the agent's config dir (`docs/plugins/agent-extensions.md`, "Reaching an agent").
 
 ## Observed state
