@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { generateAgentCommand } from "../agentSettings.js";
 import {
@@ -14,6 +15,7 @@ import {
 import { BUILT_IN_AGENT_IDS } from "../../config/agentIds.js";
 import { setAgentCommandDialectResolver } from "../../utils/shellEscape.js";
 import type { GenerateAgentCommandOptions } from "../agentSettings.js";
+import type { PluginAgentContribution } from "../plugin.js";
 
 const originalPlatform = process.platform;
 
@@ -477,6 +479,137 @@ describe("agents that declare no prompt form", () => {
         generateAgentCommand("tool", {}, undefined, { interactive, initialPrompt: "Fix it" })
       ).toBe("tool 'Fix it'");
     }
+  });
+});
+
+// Shapes from a survey of community CLIs (#16404), read from their source rather
+// than run, so these prove what the launch hands over, not each CLI's behaviour.
+describe("a plugin agent's declared prompt form", () => {
+  afterEach(() => clearPluginAgentRegistryForTests());
+
+  function declare(contribution: Partial<PluginAgentContribution> & { id: string }): void {
+    registerPluginAgents("me.extra-agents", [
+      { ...agentBase, command: contribution.id, ...contribution },
+    ]);
+  }
+
+  it("puts a task-only CLI's prompt after its flag, and the flag nowhere without a task", () => {
+    const form: AgentPromptForm = { args: ["--task", PROMPT_FORM_PLACEHOLDER] };
+    declare({ id: "mini", initialPromptForm: { interactive: form, headless: form } });
+    for (const interactive of [true, false]) {
+      expect(
+        generateAgentCommand("mini", {}, "mini", { interactive, initialPrompt: "Fix it" })
+      ).toBe("mini --task 'Fix it'");
+      for (const initialPrompt of [undefined, "", "   "]) {
+        expect(generateAgentCommand("mini", {}, "mini", { interactive, initialPrompt })).toBe(
+          "mini"
+        );
+      }
+    }
+  });
+
+  it("gives each mode its own form and keeps the selected profile in both", () => {
+    declare({
+      id: "hermes",
+      args: ["--profile", "work", "chat"],
+      initialPromptForm: {
+        interactive: { args: ["--query", PROMPT_FORM_PLACEHOLDER] },
+        headless: {
+          subcommand: { name: "run", replaces: "chat" },
+          args: [PROMPT_FORM_PLACEHOLDER],
+        },
+      },
+    });
+    const launch = { initialPrompt: "Fix it", presetArgs: ["--profile", "travel"] };
+    expect(generateAgentCommand("hermes", {}, "hermes", launch)).toBe(
+      "hermes --profile 'work' 'chat' --profile 'travel' --query 'Fix it'"
+    );
+    expect(generateAgentCommand("hermes", {}, "hermes", { ...launch, interactive: false })).toBe(
+      "hermes --profile 'work' run --profile 'travel' 'Fix it'"
+    );
+  });
+
+  it("leaves the registry's subcommand alone on a launch with no prompt", () => {
+    declare({
+      id: "hermes",
+      args: ["chat"],
+      initialPromptForm: {
+        interactive: { args: ["--query", PROMPT_FORM_PLACEHOLDER] },
+        headless: {
+          subcommand: { name: "run", replaces: "chat" },
+          args: [PROMPT_FORM_PLACEHOLDER],
+        },
+      },
+    });
+    expect(generateAgentCommand("hermes", {}, "hermes", { interactive: false })).toBe(
+      "hermes 'chat'"
+    );
+  });
+
+  it("uses the positional prompt interactively and the flag for a one-shot run", () => {
+    declare({
+      id: "pi",
+      initialPromptForm: {
+        interactive: { args: [PROMPT_FORM_PLACEHOLDER] },
+        headless: { args: ["--print", PROMPT_FORM_PLACEHOLDER] },
+      },
+    });
+    expect(generateAgentCommand("pi", {}, "pi", { initialPrompt: "Fix it" })).toBe("pi 'Fix it'");
+    expect(
+      generateAgentCommand("pi", {}, "pi", { interactive: false, initialPrompt: "Fix it" })
+    ).toBe("pi --print 'Fix it'");
+  });
+
+  it("quotes for the shell that runs the launch", () => {
+    declare({
+      id: "mini",
+      initialPromptForm: {
+        interactive: { args: ["--task", PROMPT_FORM_PLACEHOLDER] },
+        headless: { args: ["--task", PROMPT_FORM_PLACEHOLDER] },
+      },
+    });
+    setAgentCommandDialectResolver(() => "windows");
+    expect(generateAgentCommand("mini", {}, "mini", { initialPrompt: PROMPT })).toBe(
+      "mini --task 'Fix the bug''s edge'"
+    );
+  });
+
+  // A real shell, so the assertion is the argv a CLI would receive.
+  describe.skipIf(originalPlatform === "win32")("as the argv a CLI receives", () => {
+    const argvOf = (command: string) =>
+      execFileSync("/bin/sh", ["-c", command], { encoding: "utf8" }).split("\0").slice(0, -1);
+
+    it.each([
+      ["spaces", "fix  the   bug"],
+      ["single quotes", "it's 'quoted'"],
+      ["double quotes", 'say "hi"'],
+      ["a leading hyphen", "-n do it"],
+      ["a leading double hyphen", "--version"],
+      ["shell syntax", "$(whoami) `id` $HOME ; rm -rf * | cat > x"],
+      ["line breaks", "one\n\n  two\tthree"],
+    ])("passes a prompt with %s as one literal argument", (_name, prompt) => {
+      declare({
+        id: "printf",
+        command: "printf",
+        args: ["%s\\0"],
+        initialPromptForm: {
+          interactive: { args: ["--task", PROMPT_FORM_PLACEHOLDER, "--"] },
+          headless: { args: ["--", PROMPT_FORM_PLACEHOLDER] },
+        },
+      });
+      setAgentCommandDialectResolver(() => "posix");
+      expect(
+        argvOf(generateAgentCommand("printf", {}, "printf", { initialPrompt: prompt }))
+      ).toEqual(["--task", prompt, "--"]);
+      expect(
+        argvOf(
+          generateAgentCommand("printf", {}, "printf", {
+            interactive: false,
+            initialPrompt: prompt,
+          })
+        )
+      ).toEqual(["--", prompt]);
+    });
   });
 });
 

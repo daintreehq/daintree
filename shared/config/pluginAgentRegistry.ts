@@ -110,6 +110,9 @@ function contributionToAgentConfig(
     ...(npm || pypi ? { packages: { ...(npm ? { npm } : {}), ...(pypi ? { pypi } : {}) } } : {}),
     ...(contribution.detection ? { detection: contribution.detection } : {}),
     ...(contribution.resume ? { resumeTemplate: contribution.resume } : {}),
+    ...(contribution.initialPromptForm
+      ? { initialPromptForm: contribution.initialPromptForm }
+      : {}),
     ...(contribution.launchMcp
       ? { capabilities: { launchMcp: buildLaunchMcpInjection(contribution.launchMcp.format) } }
       : {}),

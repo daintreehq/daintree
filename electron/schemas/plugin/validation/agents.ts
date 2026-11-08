@@ -165,6 +165,8 @@ export function validateAgentPermissionBypass(
         ["resume", "resumeLatestArgs"],
         agent.resume?.kind === "session-id" ? agent.resume.resumeLatestArgs : undefined,
       ],
+      [["initialPromptForm", "interactive", "args"], agent.initialPromptForm?.interactive.args],
+      [["initialPromptForm", "headless", "args"], agent.initialPromptForm?.headless.args],
     ];
     for (const [field, args] of carriers) {
       if (!args) continue;
