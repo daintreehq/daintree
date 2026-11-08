@@ -57,6 +57,7 @@ import { GitStatusPass, type GitStatusPassHost } from "../GitStatusPass.js";
 import { StatPrecheck } from "../StatPrecheck.js";
 import { BaseDivergence } from "../BaseDivergence.js";
 import { GitStatusUnansweredError } from "../../utils/errorTypes.js";
+import { TimeoutError } from "../../utils/withTimeout.js";
 import type { WatcherController } from "../WatcherController.js";
 import type { AdaptivePollingStrategy } from "../../services/worktree/index.js";
 import type { NoteFileReader } from "../../services/worktree/index.js";
@@ -828,24 +829,43 @@ describe("GitStatusPass", () => {
       );
     });
 
-    it("stops the pass's divergence git when the pass is abandoned", async () => {
-      mockGetWorktreeChangesWithStats.mockResolvedValue(dirty());
-      vi.mocked(categorizeWorktree).mockResolvedValue("active");
-      let divergenceSignal: AbortSignal | undefined;
-      const compute = vi.fn((_hasUpstream: boolean, signal?: AbortSignal) => {
-        divergenceSignal = signal;
-        return new Promise<null>(() => {});
-      });
-      const { pass, host } = makePass({}, { compute } as unknown as BaseDivergence);
-      const abandon = new AbortController();
+    it.each(["abandon", "stop"] as const)(
+      "stops the pass's divergence git on %s",
+      async (ending) => {
+        mockGetWorktreeChangesWithStats.mockResolvedValue(dirty());
+        vi.mocked(categorizeWorktree).mockResolvedValue("active");
+        let divergenceSignal: AbortSignal | undefined;
+        let finish!: (value: null) => void;
+        const compute = vi.fn((_hasUpstream: boolean, signal?: AbortSignal) => {
+          divergenceSignal = signal;
+          return new Promise<null>((resolve) => (finish = resolve));
+        });
+        const lifecycle = new AbortController();
+        const abandon = new AbortController();
+        const { pass } = makePass({ abortSignal: lifecycle.signal }, {
+          compute,
+        } as unknown as BaseDivergence);
 
-      void pass.run(false, abandon.signal);
-      await vi.waitFor(() => expect(compute).toHaveBeenCalled());
-      expect(divergenceSignal?.aborted).toBe(false);
+        const running = pass.run(false, abandon.signal);
+        await vi.waitFor(() => expect(compute).toHaveBeenCalled());
+        expect(divergenceSignal?.aborted).toBe(false);
 
-      abandon.abort();
-      expect(divergenceSignal?.aborted).toBe(true);
-      expect(host.abortSignal.aborted).toBe(false);
+        (ending === "abandon" ? abandon : lifecycle).abort();
+        expect(divergenceSignal?.aborted).toBe(true);
+        finish(null);
+        await running;
+      }
+    );
+
+    it("reports a read that timed out before git started as unanswered", async () => {
+      const made = makeSeededPass();
+      mockGetWorktreeChangesWithStats.mockRejectedValue(new TimeoutError("stat: /test/worktree"));
+
+      await expect(made.pass.run(false)).rejects.toBeInstanceOf(TimeoutError);
+
+      expect(made.host.onStatusUnanswered).toHaveBeenCalledWith("timed-out");
+      expect(made.host.onStatusAnswered).not.toHaveBeenCalled();
+      expect(made.pass.isDegraded).toBe(true);
     });
 
     it.each(["timed-out", "previous-still-running"] as const)(

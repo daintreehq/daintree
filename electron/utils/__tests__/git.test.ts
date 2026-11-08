@@ -1895,7 +1895,7 @@ describe("getWorktreeChangesWithStats cancellation (#12460)", () => {
 
   it("checks the WSL route's directory for a stopped git too", async () => {
     const cwd = "/cancel-test/" + Math.random();
-    const wsl = { distro: "Ubuntu", uncPath: "\\wsl$\Ubuntu\stuck", posixPath: "/stuck" };
+    const wsl = { distro: "Ubuntu", uncPath: String.raw`\\wsl$\Ubuntu\stuck`, posixPath: "/stuck" };
     hasStoppedGitChildMock.mockImplementation((dir) => dir === wsl.uncPath);
     try {
       await expect(
@@ -1905,6 +1905,61 @@ describe("getWorktreeChangesWithStats cancellation (#12460)", () => {
       hasStoppedGitChildMock.mockReset().mockReturnValue(false);
     }
     expect(vi.mocked(createWslHardenedGit)).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["another plugin's error with the same message", "abort", "block timeout reached"],
+    ["another timeout plugin message", "timeout", "spawn timed out"],
+  ])("leaves a near miss (%s) a plain git failure", async (_name, plugin, message) => {
+    const cwd = "/cancel-test/" + Math.random();
+    mockGit.status.mockRejectedValue(Object.assign(new Error(message), { plugin }));
+
+    await expect(
+      getWorktreeChangesWithStats(cwd, { forceRefresh: true })
+    ).rejects.not.toBeInstanceOf(GitStatusUnansweredError);
+  });
+
+  it("rethrows a block timeout unchanged when the owner had already cancelled", async () => {
+    const cwd = "/cancel-test/" + Math.random();
+    const owner = new AbortController();
+    const timeout = Object.assign(new Error("block timeout reached"), { plugin: "timeout" });
+    mockGit.status.mockImplementation(async () => {
+      owner.abort();
+      throw timeout;
+    });
+
+    await expect(
+      getWorktreeChangesWithStats(cwd, { forceRefresh: true, signal: owner.signal })
+    ).rejects.toBe(timeout);
+    expect(logError).not.toHaveBeenCalled();
+  });
+
+  it("cancels an instance abandoned while it was still being built", async () => {
+    const cwd = "/cancel-test/" + Math.random();
+    const lifecycle = new AbortController();
+    const abandon = new AbortController();
+    let finishBuild!: (git: typeof mockGit) => void;
+    vi.mocked(createHardenedGit).mockImplementationOnce(
+      () => new Promise((resolve) => (finishBuild = resolve)) as never
+    );
+    mockGit.status.mockResolvedValue(emptyStatus);
+
+    const read = getWorktreeChangesWithStats(cwd, {
+      forceRefresh: true,
+      signal: lifecycle.signal,
+      abandonSignal: abandon.signal,
+    });
+    await vi.waitFor(() => expect(createHardenedGit).toHaveBeenCalledTimes(1));
+    abandon.abort();
+    finishBuild(mockGit);
+
+    await expect(read).rejects.toThrow();
+    expect(instanceSignal(createHardenedGit).aborted).toBe(true);
+    expect(mockGit.status).not.toHaveBeenCalled();
+
+    await getWorktreeChangesWithStats(cwd, { forceRefresh: true, signal: lifecycle.signal });
+    expect(createHardenedGit).toHaveBeenCalledTimes(2);
+    expect(instanceSignal(createHardenedGit, 1).aborted).toBe(false);
   });
 
   it("reports a status git stopped by the block timeout as unanswered, never as removed", async () => {

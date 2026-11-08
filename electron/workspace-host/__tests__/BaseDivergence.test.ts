@@ -284,6 +284,33 @@ describe("BaseDivergence", () => {
     expect(divergence.availableRemotes).toEqual(["origin", "upstream"]);
   });
 
+  it("keeps the last real resolution through a cancelled re-resolution", async () => {
+    installRepo({
+      remotes: ["origin", "upstream"],
+      remoteBaseRefs: ["refs/remotes/origin/main", "refs/remotes/upstream/main"],
+      revList: { "upstream/main...HEAD": "0\t0\n", "main...HEAD": "0\t0\n" },
+    });
+    const answer = mockGitRaw.getMockImplementation()!;
+    const statPrecheck = makeStatPrecheck();
+    const divergence = new BaseDivergence(makeHost(), statPrecheck);
+    await divergence.compute(false);
+    expect(divergence.availableRemotes).toEqual(["origin", "upstream"]);
+
+    // The config moves, so the next pass re-resolves, and is abandoned mid-way.
+    vi.mocked(statPrecheck.statMtime).mockResolvedValue(2_000);
+    const pass = new AbortController();
+    mockGitRaw.mockImplementation(async (args: string[]) => {
+      if (args[0] === "remote") {
+        pass.abort();
+        throw new Error("Abort signal received");
+      }
+      return answer(args);
+    });
+    await divergence.compute(false, pass.signal);
+
+    expect(divergence.availableRemotes).toEqual(["origin", "upstream"]);
+  });
+
   it("reuses the cached result when the stat-derived key is unchanged", async () => {
     installRepo({
       remoteBaseRefs: ["refs/remotes/origin/main"],

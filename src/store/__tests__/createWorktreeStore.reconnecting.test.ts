@@ -1666,6 +1666,24 @@ describe("createWorktreeStore — unanswered git status", () => {
     );
     expect(store.getState().worktrees).not.toBe(timedOutMap);
 
+    expect(store.getState().worktrees.get("wt-1")?.gitStatusUnanswered).toEqual({
+      reason: "previous-still-running",
+      since,
+    });
+
+    // A new streak can carry the same reason with a later start.
+    const earlierStreakMap = store.getState().worktrees;
+    store.getState().applyUpdate(
+      makeSnapshot("wt-1", {
+        gitStatusUnanswered: { reason: "previous-still-running", since: since + 60_000 },
+      }),
+      nextV()
+    );
+    expect(store.getState().worktrees).not.toBe(earlierStreakMap);
+    expect(store.getState().worktrees.get("wt-1")?.gitStatusUnanswered?.since).toBe(
+      since + 60_000
+    );
+
     const stillRunningMap = store.getState().worktrees;
     store.getState().applyUpdate(makeSnapshot("wt-1"), nextV());
     expect(store.getState().worktrees).not.toBe(stillRunningMap);

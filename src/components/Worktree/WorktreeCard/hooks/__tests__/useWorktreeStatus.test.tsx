@@ -275,13 +275,13 @@ describe("useWorktreeStatus — computedSubtitle", () => {
     ).toEqual({ text: "Git status not answered", tone: "warning" });
   });
 
-  it("keeps the last observed status when a later read goes unanswered", () => {
+  it("keeps reading the last observed status when a later read goes unanswered", () => {
     expect(
       getSubtitle({
-        worktreeChanges: makeChanges({ lastCommitMessage: "Ship it" }),
+        worktreeChanges: makeChanges({ lastCommitMessage: undefined }),
         gitStatusUnanswered: { reason: "previous-still-running", since: 1_700_000_000_000 },
       })
-    ).toEqual({ text: "Ship it", tone: "muted" });
+    ).toEqual({ text: "No recent activity", tone: "muted" });
   });
 
   it("still prefers an open PR title while git status is unresolved", () => {

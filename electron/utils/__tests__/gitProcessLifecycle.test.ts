@@ -23,11 +23,10 @@ class FakeChild extends EventEmitter {
     return this.delivers;
   }
 
-  exit(signal: NodeJS.Signals | null = null): void {
+  exit(signal: NodeJS.Signals | null = null, events: Array<"exit" | "close"> = ["exit", "close"]) {
     this.signalCode = signal;
     this.exitCode = signal ? null : 0;
-    this.emit("exit", this.exitCode, signal);
-    this.emit("close", this.exitCode, signal);
+    for (const event of events) this.emit(event, this.exitCode, signal);
   }
 }
 
@@ -144,6 +143,66 @@ describe("superviseGitChildren", () => {
     expect(child.kill("SIGINT")).toBe(true);
     child.delivers = false;
     expect(child.kill("SIGINT")).toBe(false);
+  });
+
+  it.each([["exit"], ["close"]] as const)(
+    "takes `%s` alone as exit evidence",
+    (event) => {
+      const child = supervised();
+      child.kill("SIGINT");
+      child.exit("SIGINT", [event]);
+
+      expect(hasStoppedGitChild("/repo")).toBe(false);
+      vi.advanceTimersByTime(GIT_KILL_GRACE_MS);
+      expect(child.signals).toEqual(["SIGINT"]);
+    }
+  );
+
+  it("keeps a directory on record until its last stopped child exits", () => {
+    const { git, spawn } = makeGit();
+    superviseGitChildren(git, "/repo");
+    const first = new FakeChild();
+    const second = new FakeChild();
+    spawn(first);
+    spawn(second);
+
+    first.kill("SIGINT");
+    second.kill("SIGINT");
+    first.exit("SIGINT");
+    expect(hasStoppedGitChild("/repo")).toBe(true);
+
+    second.exit("SIGINT");
+    expect(hasStoppedGitChild("/repo")).toBe(false);
+  });
+
+  it("keeps the first deadline when the child is signalled again", () => {
+    const child = supervised();
+
+    child.kill("SIGINT");
+    vi.advanceTimersByTime(GIT_KILL_GRACE_MS - 1);
+    child.kill("SIGINT");
+    vi.advanceTimersByTime(1);
+
+    expect(child.signals).toEqual(["SIGINT", "SIGINT", "SIGKILL"]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("kills the stopped children still running when the process exits", () => {
+    const before = new Set(process.listeners("exit"));
+    const stopped = supervised("/repo");
+    const healthy = supervised("/other");
+    const gone = supervised("/gone");
+
+    stopped.kill("SIGINT");
+    gone.kill("SIGINT");
+    gone.exit("SIGINT");
+    const hooks = process.listeners("exit").filter((listener) => !before.has(listener));
+    expect(hooks).toHaveLength(1);
+    hooks[0](0);
+
+    expect(stopped.signals).toEqual(["SIGINT", "SIGKILL"]);
+    expect(healthy.signals).toEqual([]);
+    expect(gone.signals).toEqual(["SIGINT"]);
   });
 
   it("builds without supervision when simple-git's plugin store is missing", () => {

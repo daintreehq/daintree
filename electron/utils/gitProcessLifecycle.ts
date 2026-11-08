@@ -17,6 +17,7 @@ interface PluginStoreLike {
 // SIGKILL too (an uninterruptible wait) stays here until the kernel lets it go.
 const stoppedChildren = new Map<string, Set<ChildProcess>>();
 let seamMissingReported = false;
+let exitHookInstalled = false;
 
 function hasExited(child: ChildProcess): boolean {
   return child.exitCode !== null || child.signalCode !== null;
@@ -77,6 +78,7 @@ function superviseChild(child: ChildProcess, dir: string): void {
       stoppedChildren.set(dir, stopped);
     }
     stopped.add(child);
+    installExitHook();
     if (graceTimer === undefined && sig !== "SIGKILL" && sig !== 9) {
       graceTimer = setTimeout(() => {
         if (!hasExited(child)) signal("SIGKILL");
@@ -85,6 +87,25 @@ function superviseChild(child: ChildProcess, dir: string): void {
     }
     return sent;
   };
+}
+
+/**
+ * A host shutting down exits on its own deadline (about a second, see
+ * `hostShutdown.ts`), before a grace timer could fire, and a child outlives
+ * its parent. Whatever was stopped and is still running goes on the way out.
+ */
+function killStoppedChildrenOnExit(): void {
+  for (const stopped of stoppedChildren.values()) {
+    for (const child of stopped) {
+      if (!hasExited(child)) child.kill("SIGKILL");
+    }
+  }
+}
+
+function installExitHook(): void {
+  if (exitHookInstalled) return;
+  exitHookInstalled = true;
+  process.once("exit", killStoppedChildrenOnExit);
 }
 
 /**
@@ -98,4 +119,6 @@ export function hasStoppedGitChild(dir: string): boolean {
 export function _resetGitProcessLifecycleForTesting(): void {
   stoppedChildren.clear();
   seamMissingReported = false;
+  process.removeListener("exit", killStoppedChildrenOnExit);
+  exitHookInstalled = false;
 }

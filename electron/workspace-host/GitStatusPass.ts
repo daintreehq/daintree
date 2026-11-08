@@ -14,7 +14,7 @@ import {
   deriveIssueTitleFromBranch,
 } from "../services/issueExtractor.js";
 import { claimIssueFromBranch, type ClaimedIssue } from "../services/issueBranchClaim.js";
-import { timeoutSignal, withTimeout } from "../utils/withTimeout.js";
+import { TimeoutError, timeoutSignal, withTimeout } from "../utils/withTimeout.js";
 import type {
   GitStatusUnansweredReason,
   WorktreeChanges,
@@ -662,10 +662,14 @@ export class GitStatusPass {
       }
 
       // Not answering is not a failure of the worktree: the last snapshot stays
-      // on the card, marked as no longer current, and the host backs off.
-      if (error instanceof GitStatusUnansweredError) {
+      // on the card, marked as no longer current, and the host backs off. A
+      // read that timed out before git started (a stalled stat of the
+      // worktree) went unanswered just the same.
+      if (error instanceof GitStatusUnansweredError || error instanceof TimeoutError) {
         this.degraded = true;
-        this.host.onStatusUnanswered(error.reason);
+        this.host.onStatusUnanswered(
+          error instanceof GitStatusUnansweredError ? error.reason : "timed-out"
+        );
         throw error;
       }
 

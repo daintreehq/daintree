@@ -901,6 +901,7 @@ export async function getWorktreeChangesWithStats(
       const git: SimpleGit = changesGit.git;
       // Aborted when the owner stops or this read is abandoned.
       const readSignal = changesGit.controller.signal;
+      readSignal.throwIfAborted();
 
       // Fast path: with the static facts (toplevel, realpath) cached for this
       // exact directory inode AND an unambiguous fs-resolved HEAD OID, the
