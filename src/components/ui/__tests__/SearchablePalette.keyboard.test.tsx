@@ -181,6 +181,25 @@ describe("SearchablePalette keyboard navigation (non-composing)", () => {
     expect(prevented).toBe(false);
   });
 
+  it.each(["Home", "End"])("leaves %s to the field while a modifier is held", (key) => {
+    const onHoverIndex = vi.fn();
+    renderPalette({ onHoverIndex, selectedIndex: 1 });
+    const input = screen.getByRole("combobox");
+    for (const mod of ["shiftKey", "metaKey", "ctrlKey", "altKey"]) {
+      const notCancelled = fireEvent.keyDown(input, { key, [mod]: true });
+      expect(notCancelled).toBe(true);
+    }
+    expect(onHoverIndex).not.toHaveBeenCalled();
+  });
+
+  it.each(["Home", "End"])("leaves %s to the field while an IME is composing", (key) => {
+    const onHoverIndex = vi.fn();
+    renderPalette({ onHoverIndex, selectedIndex: 1 });
+    const notCancelled = fireEvent.keyDown(screen.getByRole("combobox"), { key, keyCode: 229 });
+    expect(notCancelled).toBe(true);
+    expect(onHoverIndex).not.toHaveBeenCalled();
+  });
+
   it("moves the cursor through onSelectIndex, not the hover handler, when both exist", () => {
     const onHoverIndex = vi.fn();
     const onSelectIndex = vi.fn();
