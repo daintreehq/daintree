@@ -357,4 +357,84 @@ describe("cliAvailabilityStore", () => {
       expect(refreshMock).toHaveBeenCalledTimes(2);
     });
   });
+
+  describe("syncFromHost (#16399)", () => {
+    const chosenAvail = { ...installedAvail, claude: "missing" };
+    const chosenDetails = {
+      claude: {
+        state: "missing",
+        resolvedPath: null,
+        via: null,
+        chosenPath: "/gone/claude",
+      },
+    };
+
+    it("takes the host's latest check without probing again", async () => {
+      refreshMock.mockResolvedValueOnce(installedAvail);
+      await useCliAvailabilityStore.getState().initialize();
+      getMock.mockResolvedValueOnce(chosenAvail);
+      getDetailsMock.mockResolvedValueOnce(chosenDetails);
+
+      await useCliAvailabilityStore.getState().syncFromHost();
+
+      const state = useCliAvailabilityStore.getState();
+      expect(state.availability).toEqual(chosenAvail);
+      expect(state.details).toEqual(chosenDetails);
+      expect(refreshMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("lets a refresh begun before the change finish first, so its older answer can't land last", async () => {
+      refreshMock.mockResolvedValueOnce(installedAvail);
+      await useCliAvailabilityStore.getState().initialize();
+
+      let finishRefresh!: (value: unknown) => void;
+      refreshMock.mockReturnValueOnce(
+        new Promise((resolve) => {
+          finishRefresh = resolve;
+        })
+      );
+      const refreshing = useCliAvailabilityStore.getState().refresh(true);
+      getMock.mockResolvedValueOnce(chosenAvail);
+      getDetailsMock.mockResolvedValueOnce({}).mockResolvedValueOnce(chosenDetails);
+      const syncing = useCliAvailabilityStore.getState().syncFromHost();
+
+      finishRefresh(installedAvail);
+      await refreshing;
+      await syncing;
+
+      expect(useCliAvailabilityStore.getState().availability).toEqual(chosenAvail);
+      expect(useCliAvailabilityStore.getState().details).toEqual(chosenDetails);
+    });
+
+    it("keeps the latest of two syncs, whichever answers last", async () => {
+      let answerFirst!: (value: unknown) => void;
+      getMock
+        .mockReturnValueOnce(
+          new Promise((resolve) => {
+            answerFirst = resolve;
+          })
+        )
+        .mockResolvedValueOnce(chosenAvail);
+      getDetailsMock.mockResolvedValue(chosenDetails);
+
+      const first = useCliAvailabilityStore.getState().syncFromHost();
+      await vi.waitFor(() => expect(getMock).toHaveBeenCalledTimes(1));
+      const second = useCliAvailabilityStore.getState().syncFromHost();
+      await second;
+      answerFirst(installedAvail);
+      await first;
+
+      expect(useCliAvailabilityStore.getState().availability).toEqual(chosenAvail);
+    });
+
+    it("keeps what the view had when the host can't be read", async () => {
+      refreshMock.mockResolvedValueOnce(installedAvail);
+      await useCliAvailabilityStore.getState().initialize();
+      getMock.mockRejectedValueOnce(new Error("Host disconnected"));
+
+      await expect(useCliAvailabilityStore.getState().syncFromHost()).resolves.toBeUndefined();
+
+      expect(useCliAvailabilityStore.getState().availability).toEqual(installedAvail);
+    });
+  });
 });

@@ -18,6 +18,14 @@ interface MockPanelState {
 }
 let mockState: MockPanelState;
 
+// The launch executable comes from this view's CLI detection, which these tests
+// don't load: stand it in directly.
+vi.mock("@/utils/agentLaunchCommand", () => ({
+  resolveCurrentAgentLaunchBaseCommand: vi.fn(async () => undefined),
+  getCurrentLaunchCliDetail: vi.fn(async () => undefined),
+  resolveAgentLaunchBaseCommand: vi.fn((registryCommand: string) => registryCommand),
+}));
+
 vi.mock("@/store/panelStore", () => ({
   usePanelStore: { getState: () => mockState },
 }));
@@ -40,6 +48,7 @@ import {
   restoreClosedTerminals,
   getLiveTerminalIdsForWorktree,
 } from "@/components/Worktree/worktreeDeleteHelper";
+import { resolveCurrentAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 
 const getInfoMock = vi.fn<(id: string) => Promise<{ hasPty: boolean }>>();
 // `waitForTerminalsToClose` reads `window.electron.terminal.getInfo`; stub just
@@ -148,6 +157,7 @@ describe("closeTerminalsForWorktree", () => {
 describe("restoreClosedTerminals", () => {
   it("relaunches with a resume command for a resume-capable agent session", async () => {
     buildResumeCommandMock.mockReturnValue("claude --resume sess-1");
+    vi.mocked(resolveCurrentAgentLaunchBaseCommand).mockResolvedValueOnce("/chosen/claude");
 
     await restoreClosedTerminals([
       {
@@ -162,7 +172,14 @@ describe("restoreClosedTerminals", () => {
       },
     ]);
 
-    expect(buildResumeCommandMock).toHaveBeenCalledWith("claude", "sess-1", ["--flag"]);
+    // The executable a launch starts now, the chosen copy included (#16399).
+    expect(resolveCurrentAgentLaunchBaseCommand).toHaveBeenCalledWith("claude");
+    expect(buildResumeCommandMock).toHaveBeenCalledWith(
+      "claude",
+      "sess-1",
+      ["--flag"],
+      "/chosen/claude"
+    );
     expect(addPanelMock).toHaveBeenCalledTimes(1);
     expect(addPanelMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -203,7 +220,8 @@ describe("restoreClosedTerminals", () => {
       "sess-9",
       // Reconciled from an empty snapshot: codex gains its screen-mode and
       // decorations tokens rather than replaying `undefined` verbatim.
-      expect.arrayContaining(["-c", "tui.whimsy=false"])
+      expect.arrayContaining(["-c", "tui.whimsy=false"]),
+      undefined
     );
     expect(addPanelMock).toHaveBeenCalledWith(expect.objectContaining({ command: "codex" }));
   });

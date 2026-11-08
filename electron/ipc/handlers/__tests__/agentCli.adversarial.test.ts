@@ -8,6 +8,7 @@ const ipcMainMock = vi.hoisted(() => ({
 
 const getAgentIdsMock = vi.hoisted(() => vi.fn(() => ["claude", "codex"]));
 const sendToRendererMock = vi.hoisted(() => vi.fn());
+const broadcastToRendererMock = vi.hoisted(() => vi.fn());
 const getWindowForWebContentsMock = vi.hoisted(() => vi.fn());
 const runAgentInstallMock = vi.hoisted(() => vi.fn());
 const storeMock = vi.hoisted(() => ({
@@ -29,6 +30,7 @@ vi.mock("../../../../shared/config/agentRegistry.js", async (importOriginal) => 
 
 vi.mock("../../utils.js", () => ({
   sendToRenderer: sendToRendererMock,
+  broadcastToRenderer: broadcastToRendererMock,
   // Mirrors the real helper: a local sender with no window gets nothing.
   sendToRendererContext: (
     ctx: { senderWindow: Electron.BrowserWindow | null },
@@ -157,6 +159,124 @@ describe("agentCli IPC adversarial", () => {
       await expect(
         getHandler(CHANNELS.AGENT_CLI_COPIES_LIST)(fakeEvent(), "claude")
       ).resolves.toEqual([]);
+    });
+  });
+
+  describe("agent-cli-copies:choose and :reset (#16399)", () => {
+    function registerChoice(found: string[]) {
+      const order: string[] = [];
+      const cliAvailabilityService = {
+        findCopies: vi.fn(async () => found),
+        setChosenCopy: vi.fn(() => order.push("set")),
+        refresh: vi.fn(async () => {
+          order.push("refresh");
+          return {};
+        }),
+      };
+      const agentVersionService = { invalidate: vi.fn(() => order.push("invalidate")) };
+      broadcastToRendererMock.mockImplementation(() => order.push("broadcast"));
+      register({
+        cliAvailabilityService: cliAvailabilityService as never,
+        agentVersionService: agentVersionService as never,
+      });
+      return { cliAvailabilityService, agentVersionService, order };
+    }
+
+    it("records a copy this machine finds, then re-checks and tells every view", async () => {
+      const { cliAvailabilityService, agentVersionService, order } = registerChoice([
+        "/opt/homebrew/bin/claude",
+        "/usr/local/bin/claude",
+      ]);
+
+      await getHandler(CHANNELS.AGENT_CLI_COPIES_CHOOSE)(
+        fakeEvent(),
+        "claude",
+        "/usr/local/bin/claude"
+      );
+
+      expect(cliAvailabilityService.findCopies).toHaveBeenCalledWith(
+        "claude",
+        expect.objectContaining({ id: "claude" })
+      );
+      expect(cliAvailabilityService.setChosenCopy).toHaveBeenCalledWith(
+        "claude",
+        "/usr/local/bin/claude"
+      );
+      expect(agentVersionService.invalidate).toHaveBeenCalledWith("claude");
+      expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.AGENT_CLI_COPIES_CHANGED, {
+        agentId: "claude",
+      });
+      // Views reread only once the re-check has published what now launches.
+      expect(order).toEqual(["set", "invalidate", "refresh", "broadcast"]);
+    });
+
+    it.each([
+      ["a path no layer found", "/tmp/evil"],
+      ["a wrapper command", "/usr/bin/env claude"],
+      ["a path spelled differently", "/usr/local/bin/../bin/claude"],
+    ])("refuses %s", async (_label, path) => {
+      const { cliAvailabilityService } = registerChoice(["/usr/local/bin/claude"]);
+
+      await expect(
+        getHandler(CHANNELS.AGENT_CLI_COPIES_CHOOSE)(fakeEvent(), "claude", path)
+      ).rejects.toThrow("wasn't found on this machine");
+      expect(cliAvailabilityService.setChosenCopy).not.toHaveBeenCalled();
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["", "/usr/local/bin/claude", "Invalid agentId"],
+      [42, "/usr/local/bin/claude", "Invalid agentId"],
+      ["claude", "", "Invalid path"],
+      ["claude", ["/usr/local/bin/claude"], "Invalid path"],
+      ["toString", "/usr/local/bin/claude", "Unknown agent"],
+    ])("refuses agent %j with path %j", async (agentId, path, message) => {
+      const { cliAvailabilityService } = registerChoice(["/usr/local/bin/claude"]);
+
+      await expect(
+        getHandler(CHANNELS.AGENT_CLI_COPIES_CHOOSE)(fakeEvent(), agentId, path)
+      ).rejects.toThrow(message);
+      expect(cliAvailabilityService.findCopies).not.toHaveBeenCalled();
+      expect(cliAvailabilityService.setChosenCopy).not.toHaveBeenCalled();
+    });
+
+    it("refuses rather than pretending, when detection isn't running", async () => {
+      register({ cliAvailabilityService: undefined });
+
+      await expect(
+        getHandler(CHANNELS.AGENT_CLI_COPIES_CHOOSE)(fakeEvent(), "claude", "/usr/local/bin/claude")
+      ).rejects.toThrow("CLI detection isn't available");
+    });
+
+    it("clears the choice, re-checks and tells every view", async () => {
+      const { cliAvailabilityService, agentVersionService, order } = registerChoice([]);
+
+      await getHandler(CHANNELS.AGENT_CLI_COPIES_RESET)(fakeEvent(), "claude");
+
+      expect(cliAvailabilityService.setChosenCopy).toHaveBeenCalledWith("claude", null);
+      expect(agentVersionService.invalidate).toHaveBeenCalledWith("claude");
+      expect(order).toEqual(["set", "invalidate", "refresh", "broadcast"]);
+    });
+
+    it("still tells every view when the re-check fails, since the choice already changed", async () => {
+      const { cliAvailabilityService } = registerChoice([]);
+      cliAvailabilityService.refresh.mockRejectedValueOnce(new Error("probe crashed"));
+
+      await expect(
+        getHandler(CHANNELS.AGENT_CLI_COPIES_RESET)(fakeEvent(), "claude")
+      ).rejects.toThrow("probe crashed");
+      expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.AGENT_CLI_COPIES_CHANGED, {
+        agentId: "claude",
+      });
+    });
+
+    it("refuses to reset an agent that isn't registered", async () => {
+      const { cliAvailabilityService } = registerChoice([]);
+
+      await expect(
+        getHandler(CHANNELS.AGENT_CLI_COPIES_RESET)(fakeEvent(), "toString")
+      ).rejects.toThrow("Unknown agent");
+      expect(cliAvailabilityService.setChosenCopy).not.toHaveBeenCalled();
     });
   });
 

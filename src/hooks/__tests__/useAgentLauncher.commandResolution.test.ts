@@ -107,6 +107,49 @@ describe("resolveAgentLaunchBaseCommand", () => {
   });
 });
 
+describe("a chosen copy (#16399)", () => {
+  it("launches the chosen copy the check confirmed", () => {
+    expect(
+      resolveAgentLaunchBaseCommand(
+        "claude",
+        detail({ resolvedPath: "/b/claude", via: "chosen", chosenPath: "/b/claude" }),
+        "posix"
+      )
+    ).toBe("/b/claude");
+  });
+
+  it.each([
+    ["missing", null],
+    ["blocked", "/My Tools/claude"],
+  ] as const)(
+    "still starts a chosen copy that's %s, so the launch fails there instead of on PATH's copy",
+    (state, resolvedPath) => {
+      expect(
+        resolveAgentLaunchBaseCommand(
+          "claude",
+          detail({ state, resolvedPath, via: null, chosenPath: "/My Tools/claude" }),
+          "posix"
+        )
+      ).toBe("'/My Tools/claude'");
+    }
+  );
+
+  it("quotes a chosen Windows copy for PowerShell", () => {
+    expect(
+      resolveAgentLaunchBaseCommand(
+        "claude",
+        detail({
+          state: "missing",
+          resolvedPath: null,
+          via: null,
+          chosenPath: String.raw`C:\Tools\claude.cmd`,
+        }),
+        "windows"
+      )
+    ).toBe(String.raw`& 'C:\Tools\claude.cmd'`);
+  });
+});
+
 describe("a leading ~ launching on a Linux host from a macOS client", () => {
   afterEach(() => {
     _resetHostPlatformForTests();
