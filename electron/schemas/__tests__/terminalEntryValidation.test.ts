@@ -464,7 +464,7 @@ describe("Terminal Entry Validation Schemas", () => {
     });
 
     it("admits the command a multi-line launch prompt generates, under either dialect (#16378)", () => {
-      const prompt = "# Plan\n\n- it's one\n\t- \"two\" $(id)\r\nend";
+      const prompt = '# Plan\n\n- it\'s one\n\t- "two" $(id)\r\nend';
       try {
         for (const dialect of ["posix", "windows"] as const) {
           setAgentCommandDialectResolver(() => dialect);

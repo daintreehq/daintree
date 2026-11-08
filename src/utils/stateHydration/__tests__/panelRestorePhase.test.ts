@@ -3027,7 +3027,9 @@ describe("restorePanelsPhase — naming held panes' conversations by launch prom
       codexPane("a", prompt),
     ]);
 
-    const expected = createHash("sha256").update(launchPromptMatchText(prompt), "utf8").digest("hex");
+    const expected = createHash("sha256")
+      .update(launchPromptMatchText(prompt), "utf8")
+      .digest("hex");
     expect(sentPanes()).toEqual([{ key: "a", promptHash: expected, at: AT, resolve: true }]);
     expect(JSON.stringify(matchRestoreSessionsMock.mock.calls[0]?.[0])).not.toContain("parser");
   });

@@ -52,11 +52,13 @@ describe("quoteLaunchPrompt", () => {
       }
     );
 
-    describe.skipIf(process.platform === "win32").each(
-      ["/bin/sh", "/bin/bash", "/bin/zsh", "/bin/dash", "/bin/ksh"].filter((shell) =>
-        existsSync(shell)
-      )
-    )("as read by %s", (shell) => {
+    describe
+      .skipIf(process.platform === "win32")
+      .each(
+        ["/bin/sh", "/bin/bash", "/bin/zsh", "/bin/dash", "/bin/ksh"].filter((shell) =>
+          existsSync(shell)
+        )
+      )("as read by %s", (shell) => {
       it.each(Object.entries(MULTI_LINE_PROMPTS))("delivers the prompt whole: %s", (_n, prompt) => {
         const printArgv = `"${process.execPath}" -e 'process.stdout.write(JSON.stringify(process.argv.slice(1)))' --`;
         const out = execFileSync(

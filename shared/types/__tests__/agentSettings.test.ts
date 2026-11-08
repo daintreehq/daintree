@@ -433,7 +433,7 @@ describe("generateAgentCommand with a multi-line prompt (#16378)", () => {
   forcePosixPlatform();
   afterEach(() => setAgentCommandDialectResolver(null));
 
-  const prompt = "# Plan\n\n- it's one\n\t- \"two\"";
+  const prompt = '# Plan\n\n- it\'s one\n\t- "two"';
   const shapes = BUILT_IN_AGENT_IDS.flatMap((id) => [
     [id, true],
     [id, false],
