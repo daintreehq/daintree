@@ -7,7 +7,11 @@ import { useClaudeContextUsage } from "@/hooks/useClaudeContextUsage";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { TimeAgo } from "@/components/ui/TimeAgo";
 import { cn } from "@/lib/utils";
-import { HEADER_CHIP_CLASS, HEADER_CHIP_FOCUS_CLASS, HEADER_CHIP_SURFACE } from "./terminalHeaderChip";
+import {
+  HEADER_CHIP_CLASS,
+  HEADER_CHIP_FOCUS_CLASS,
+  HEADER_CHIP_SURFACE,
+} from "./terminalHeaderChip";
 
 /**
  * How much context a Claude Code pane's most recent main-conversation request
@@ -28,9 +32,7 @@ export function ClaudeContextUsageChip({ terminalId }: { terminalId: string }) {
         // Live detection first, launch affinity until it rehydrates, and
         // nothing once the agent has exited back to the shell.
         isClaude:
-          pty !== undefined &&
-          pty.hasPty !== false &&
-          getBuiltInRuntimeAgentId(pty) === "claude",
+          pty !== undefined && pty.hasPty !== false && getBuiltInRuntimeAgentId(pty) === "claude",
         agentState: pty?.agentState,
         // A respawn, or Claude Code started again in the same shell, is
         // another session, and must not show the one before it.

@@ -134,7 +134,10 @@ describe("readClaudePaneContextUsage", () => {
     ["the terminal went away", null],
     ["the PTY was replaced", { spawnedAt: 2_000 }],
     ["Claude Code was started again", { agentIncarnation: 1 }],
-    ["the pane moved to another session", { agentSessionId: "2bd2578c-b710-4302-90c1-b222c4c29aa2" }],
+    [
+      "the pane moved to another session",
+      { agentSessionId: "2bd2578c-b710-4302-90c1-b222c4c29aa2" },
+    ],
     ["the agent exited", { isExited: true }],
   ])("drops a reading taken while %s", async (_label, change) => {
     getTerminalAsync
