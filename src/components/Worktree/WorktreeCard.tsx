@@ -351,16 +351,13 @@ export function WorktreeCard({
   // Input-time receipt — fires the moment a row terminal is pinged (well
   // before the polled `dominantAgentState` border-flash). Acknowledges the
   // input itself, not its outcome, so any agent-state staleness is irrelevant.
-  // `pingSeq` is the authoritative trigger so back-to-back taps of the same
-  // terminal both produce a receipt (Zustand `Object.is` would suppress the
-  // re-render if we keyed off `pingedId` alone).
-  const pingedId = usePanelStore((state) => state.pingedId);
-  const pingSeq = usePanelStore((state) => state.pingSeq);
+  // The hook watches the ping through a store subscription so only the card
+  // that owns the pinged terminal re-renders.
   const worktreeTerminalIds = useMemo(
     () => worktreeTerminals.map((t) => t.id),
     [worktreeTerminals]
   );
-  const receiptKey = useInputReceiptKey(pingedId, pingSeq, worktreeTerminalIds);
+  const receiptKey = useInputReceiptKey(worktreeTerminalIds);
   // Parking reads the fleet snapshot, not the panels: only a run the snapshot
   // carries can be parked, and a plain shell never appears there.
   const parking = useFleetSnapshotStore(

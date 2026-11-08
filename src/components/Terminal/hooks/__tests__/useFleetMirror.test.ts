@@ -132,6 +132,35 @@ describe("useFleetMirror", () => {
     expect(draftOf("term-3")).toBe("fresh draft");
   });
 
+  it("primary pushes its draft to a pane that joins the fleet afterwards", () => {
+    render({ isFleetPrimary: true, value: "test draft" });
+    expect(draftOf("term-3")).toBe("");
+
+    act(() => {
+      useFleetArmingStore.getState().armIds(["term-1", "term-2", "term-3"]);
+    });
+
+    expect(draftOf("term-3")).toBe("test draft");
+  });
+
+  it("does not re-render a non-primary pane when fleet membership changes", () => {
+    let renders = 0;
+    renderHook(() => {
+      renders++;
+      return useFleetMirror(params());
+    });
+    const before = renders;
+
+    act(() => {
+      useFleetArmingStore.getState().armIds(["term-1", "term-2", "term-3"]);
+    });
+    act(() => {
+      useFleetArmingStore.getState().clear();
+    });
+
+    expect(renders).toBe(before);
+  });
+
   it("pushes nothing from a disabled primary", () => {
     useTerminalInputStore.getState().setDraftInput("term-2", "b's own", "proj-1");
 

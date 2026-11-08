@@ -174,6 +174,7 @@ import {
 import { useComposerMeasure } from "./hooks/useComposerMeasure";
 import { useEditorScrollEdges } from "./hooks/useEditorScrollEdges";
 import { useAutocompleteApply } from "./hooks/useAutocompleteApply";
+import { useFleetMembership } from "./hooks/useFleetMembership";
 import { useFleetMirror } from "./hooks/useFleetMirror";
 import { useSendHandBack, type SendHandBack } from "./hooks/useSendHandBack";
 import { useEditorDomHandlers } from "./hooks/useEditorDomHandlers";
@@ -837,11 +838,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     }, [terminalId, projectId, getDraftInput]);
 
     // Fleet hybrid-input mirroring
-    const armedIds = useFleetArmingStore((s) => s.armedIds);
-    const isArmed = !isolated && armedIds.has(terminalId);
-    const fleetSize = armedIds.size;
-    const isFleetPrimary = isFocusedTerminal && isArmed && fleetSize >= 2;
-    const isFleetFollower = !isFocusedTerminal && isArmed && fleetSize >= 2;
+    const { isArmed, isFleetComposing } = useFleetMembership(terminalId, { isolated });
+    const isFleetPrimary = isFocusedTerminal && isFleetComposing;
+    const isFleetFollower = !isFocusedTerminal && isFleetComposing;
 
     const wasFollowingDriverRef = useRef(followsDriver);
     const wasFleetFollowerRef = useRef(isFleetFollower);

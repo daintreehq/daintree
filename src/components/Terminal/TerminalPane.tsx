@@ -88,6 +88,7 @@ import {
 } from "@/store";
 import { selectHomeFocusTarget } from "@/store/terminalInputStore";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
+import { useFleetMembership } from "./hooks/useFleetMembership";
 import { selectMicNoticeForPanel, useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
 import { errorsClient } from "@/clients";
@@ -592,15 +593,14 @@ function TerminalPaneComponent({
   // so the visual rule is just "bright header = part of the active set".
   // The fleet ribbon (which only mounts at size>=2) tells the user when
   // typing actually broadcasts.
-  const armedIds = useFleetArmingStore((state) => state.armedIds);
-  const isArmed = armedIds.has(id);
+  const { isArmed, isFleetComposing } = useFleetMembership(id);
   const isSelected = isArmed;
   // A "follower" is any armed pane that isn't currently the focused/origin
   // pane while the fleet is broadcasting (size >= 2). The follower stripe
   // is suppressed on a single-armed seed selection because nothing fans out
   // until a second pane joins.
-  const isFleetFollower = isArmed && !isFocused && armedIds.size >= 2;
-  const isFleetPrimary = isArmed && isFocused && armedIds.size >= 2;
+  const isFleetFollower = isFleetComposing && !isFocused;
+  const isFleetPrimary = isFleetComposing && isFocused;
 
   // Consolidate terminal state selectors to avoid multiple scans and ensure consistent snapshots
   const terminalState = usePanelStore(
@@ -743,7 +743,8 @@ function TerminalPaneComponent({
       hasAgentIdentity: effectiveAgentId !== undefined,
       hybridInputEnabled,
       isFleetArmed: isArmed,
-      fleetSize: armedIds.size,
+      // Only the two-member threshold matters here, so the pane never needs the real size.
+      fleetSize: isFleetComposing ? 2 : 0,
     });
 
   // Below `showHybridInputBar`/`isHybridInputDisabled` because it needs both:
@@ -753,7 +754,7 @@ function TerminalPaneComponent({
     route: resolveWorktreeMoveRoute({
       isHybridInputDisabled,
       hasHybridInputBar: showHybridInputBar,
-      isFleetComposing: isArmed && armedIds.size >= 2,
+      isFleetComposing,
     }),
     inputBarRef,
   });

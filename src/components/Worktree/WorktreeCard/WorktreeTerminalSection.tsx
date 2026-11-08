@@ -425,7 +425,7 @@ export function WorktreeTerminalSection({
   const [hintDismissed, setHintDismissed] = useState(
     () => localStorage.getItem(FLEET_HINT_DISMISSED_KEY) === "1"
   );
-  const armedIdsSize = useFleetArmingStore((s) => s.armedIds.size);
+  const fleetIsEmpty = useFleetArmingStore((s) => s.armedIds.size === 0);
 
   const { visibleTerminalStates, terminalSessionAriaLabel, collapsedTriggerLabel } = useMemo(() => {
     const { visibleStates, label, breakdown } = summarizeSessionStates(
@@ -694,7 +694,7 @@ export function WorktreeTerminalSection({
       items={orderedWorktreeTerminals.map((t) => getAccordionDragId(t.id))}
       strategy={verticalListSortingStrategy}
     >
-      {eligibleTerminals.length >= 2 && armedIdsSize === 0 && !hintDismissed && (
+      {eligibleTerminals.length >= 2 && fleetIsEmpty && !hintDismissed && (
         <div className="flex items-center justify-between gap-2 border border-transparent py-1 pl-6 pr-2.5 text-2xs text-text-secondary">
           {/* Every click toggles, modifier or not, so the hint names the
               two gestures that exist rather than a Shift variant that does

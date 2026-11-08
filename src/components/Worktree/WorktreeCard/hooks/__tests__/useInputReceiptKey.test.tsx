@@ -1,112 +1,135 @@
 /** @vitest-environment jsdom */
-import { describe, it, expect } from "vitest";
-import { renderHook } from "@testing-library/react";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import { act, renderHook } from "@testing-library/react";
 import { useInputReceiptKey } from "../useInputReceiptKey";
+import { usePanelStore } from "@/store/panelStore";
 
-type Props = { pinged: string | null; seq: number; ids: string[] };
+const ping = (id: string) => act(() => usePanelStore.getState().pingTerminal(id));
 
 describe("useInputReceiptKey", () => {
-  it("does not increment on initial mount even when seq > 0 and id matches", () => {
-    // Mount snapshots the current seq into the ref; only subsequent advances
-    // count as pings. This avoids flashing every card when a card mounts mid
-    // session with a stale (but still-live) `pingedId`.
-    const { result } = renderHook(() => useInputReceiptKey("t-1", 5, ["t-1"]));
+  beforeEach(() => {
+    vi.useFakeTimers();
+    usePanelStore.setState({ pingedId: null, pingSeq: 0 });
+  });
+
+  afterEach(() => {
+    act(() => {
+      vi.runOnlyPendingTimers();
+    });
+    vi.useRealTimers();
+  });
+
+  it("does not increment on mount when a ping for one of its terminals is already live", () => {
+    // Only changes after the subscription starts count as pings. This avoids
+    // flashing every card that mounts mid-session with a stale (but still-live)
+    // `pingedId`.
+    usePanelStore.setState({ pingedId: "t-1", pingSeq: 5 });
+    const { result } = renderHook(() => useInputReceiptKey(["t-1"]));
     expect(result.current).toBe(0);
   });
 
-  it("increments when seq advances and pingedId matches a card terminal", () => {
-    const { result, rerender } = renderHook(
-      ({ pinged, seq, ids }: Props) => useInputReceiptKey(pinged, seq, ids),
-      { initialProps: { pinged: null, seq: 0, ids: ["t-1", "t-2"] } as Props }
-    );
+  it("increments when a ping targets one of the card's terminals", () => {
+    const { result } = renderHook(() => useInputReceiptKey(["t-1", "t-2"]));
     expect(result.current).toBe(0);
 
-    rerender({ pinged: "t-1", seq: 1, ids: ["t-1", "t-2"] });
+    ping("t-2");
     expect(result.current).toBe(1);
   });
 
-  it("does not increment when seq advances but pingedId belongs to another card", () => {
-    const { result, rerender } = renderHook(
-      ({ pinged, seq, ids }: Props) => useInputReceiptKey(pinged, seq, ids),
-      { initialProps: { pinged: null, seq: 0, ids: ["t-1"] } as Props }
-    );
-    rerender({ pinged: "other-terminal", seq: 1, ids: ["t-1"] });
+  it("does not increment when the ping belongs to another card", () => {
+    const { result } = renderHook(() => useInputReceiptKey(["t-1"]));
+    ping("other-terminal");
     expect(result.current).toBe(0);
   });
 
-  it("does not increment on the 1.6s null clear (seq does not advance)", () => {
-    const { result, rerender } = renderHook(
-      ({ pinged, seq, ids }: Props) => useInputReceiptKey(pinged, seq, ids),
-      { initialProps: { pinged: null, seq: 0, ids: ["t-1"] } as Props }
-    );
+  it("does not increment on the 1.6s null clear", () => {
+    const { result } = renderHook(() => useInputReceiptKey(["t-1"]));
 
-    rerender({ pinged: "t-1", seq: 1, ids: ["t-1"] });
+    ping("t-1");
     expect(result.current).toBe(1);
 
-    // The 1.6s clear in `pingTerminal` does NOT advance `pingSeq` — the
-    // clearing path is `set({ pingedId: null })` only.
-    rerender({ pinged: null, seq: 1, ids: ["t-1"] });
+    act(() => {
+      vi.advanceTimersByTime(1600);
+    });
+    expect(usePanelStore.getState().pingedId).toBeNull();
     expect(result.current).toBe(1);
   });
 
-  it("re-keys on back-to-back pings of the SAME terminal (the gap fix)", () => {
-    // Without the seq counter, `pingTerminal` calling `set({ pingedId: id })`
-    // twice with the same id would be `Object.is`-equal and emit no update,
-    // dropping the second receipt.
-    const { result, rerender } = renderHook(
-      ({ pinged, seq, ids }: Props) => useInputReceiptKey(pinged, seq, ids),
-      { initialProps: { pinged: null, seq: 0, ids: ["t-1"] } as Props }
-    );
+  it("re-keys on back-to-back pings of the SAME terminal", () => {
+    // `pingedId` holds the same value across both taps; only `pingSeq` tells
+    // them apart.
+    const { result } = renderHook(() => useInputReceiptKey(["t-1"]));
 
-    rerender({ pinged: "t-1", seq: 1, ids: ["t-1"] });
+    ping("t-1");
     expect(result.current).toBe(1);
 
-    rerender({ pinged: "t-1", seq: 2, ids: ["t-1"] });
+    ping("t-1");
     expect(result.current).toBe(2);
   });
 
-  it("does not re-fire when terminalIds change but seq is unchanged", () => {
-    const { result, rerender } = renderHook(
-      ({ pinged, seq, ids }: Props) => useInputReceiptKey(pinged, seq, ids),
-      { initialProps: { pinged: null, seq: 0, ids: ["t-1"] } as Props }
-    );
+  it("does not re-fire when terminalIds change while the same ping is live", () => {
+    const { result, rerender } = renderHook(({ ids }) => useInputReceiptKey(ids), {
+      initialProps: { ids: ["t-1"] },
+    });
 
-    rerender({ pinged: "t-1", seq: 1, ids: ["t-1"] });
+    ping("t-1");
     expect(result.current).toBe(1);
 
-    // Terminal added; same ping still live. The receipt must NOT double-flash
-    // for one logical input event.
-    rerender({ pinged: "t-1", seq: 1, ids: ["t-1", "t-2"] });
+    // Terminal added; the ping that already fired must not flash a second time.
+    rerender({ ids: ["t-1", "t-2"] });
     expect(result.current).toBe(1);
   });
 
-  it("does not increment when terminalIds is empty even on a seq advance", () => {
-    const { result, rerender } = renderHook(
-      ({ pinged, seq, ids }: Props) => useInputReceiptKey(pinged, seq, ids),
-      { initialProps: { pinged: null, seq: 0, ids: [] } as Props }
-    );
-
-    rerender({ pinged: "t-1", seq: 1, ids: [] });
+  it("does not increment when the card has no terminals", () => {
+    const { result } = renderHook(() => useInputReceiptKey([]));
+    ping("t-1");
     expect(result.current).toBe(0);
   });
 
-  it("fires when an already-live ping's target terminal joins this card mid-flight", () => {
-    // Race scenario: a ping fires before the card sees the terminal in its
-    // membership list. The seq is still the latest, and the terminal is now a
-    // member, but seq hasn't advanced — so the receipt does NOT fire on the
-    // late join. This is intentional: we acknowledge inputs at their moment,
-    // not after-the-fact when the structural state catches up.
-    const { result, rerender } = renderHook(
-      ({ pinged, seq, ids }: Props) => useInputReceiptKey(pinged, seq, ids),
-      { initialProps: { pinged: "t-1", seq: 1, ids: [] } as Props }
-    );
+  it("acknowledges only inputs at their moment: a terminal that joins mid-ping does not fire late", () => {
+    const { result, rerender } = renderHook(({ ids }) => useInputReceiptKey(ids), {
+      initialProps: { ids: [] as string[] },
+    });
+    ping("t-1");
     expect(result.current).toBe(0);
 
-    rerender({ pinged: "t-1", seq: 1, ids: ["t-1"] });
+    rerender({ ids: ["t-1"] });
     expect(result.current).toBe(0);
 
-    // A NEW ping (seq advances) on the now-known terminal does fire.
-    rerender({ pinged: "t-1", seq: 2, ids: ["t-1"] });
+    // A NEW ping on the now-known terminal does fire.
+    ping("t-1");
     expect(result.current).toBe(1);
+  });
+
+  it("re-renders only the card that owns the pinged terminal", () => {
+    let rendersA = 0;
+    let rendersB = 0;
+    renderHook(() => {
+      rendersA++;
+      return useInputReceiptKey(["a-1"]);
+    });
+    renderHook(() => {
+      rendersB++;
+      return useInputReceiptKey(["b-1"]);
+    });
+    const [baseA, baseB] = [rendersA, rendersB];
+
+    ping("a-1");
+    expect(rendersA).toBe(baseA + 1);
+    expect(rendersB).toBe(baseB);
+
+    // The clear 1.6s later touches neither card.
+    act(() => {
+      vi.advanceTimersByTime(1600);
+    });
+    expect(rendersA).toBe(baseA + 1);
+    expect(rendersB).toBe(baseB);
+  });
+
+  it("stops listening once unmounted", () => {
+    const { result, unmount } = renderHook(() => useInputReceiptKey(["t-1"]));
+    unmount();
+    ping("t-1");
+    expect(result.current).toBe(0);
   });
 });
