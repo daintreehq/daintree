@@ -443,33 +443,53 @@ describe("PtyClient fabric", () => {
       client.dispose();
     });
 
-    it("RAM-scales the default and project shard heaps alike and mirrors them into the governor env", () => {
-      const totalmem = vi.spyOn(os, "totalmem").mockReturnValue(32 * 1024 ** 3);
-      try {
-        const client = createFabricClient();
-        client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+    it.each([
+      [32, 1024],
+      [64, 2048],
+    ])(
+      "RAM-scales the default and project shard heaps alike on a %i GB machine to %i MB",
+      (totalMemGb, expectedMb) => {
+        const totalmem = vi.spyOn(os, "totalmem").mockReturnValue(totalMemGb * 1024 ** 3);
+        try {
+          const client = createFabricClient();
+          client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
 
-        for (const shard of [defaultShard(), projectShard("project-a")]) {
-          expect(shard.execArgv).toContain("--max-old-space-size=1024");
-          expect(shard.env.DAINTREE_PTY_HEAP_BUDGET_MB).toBe("1024");
+          for (const shard of [defaultShard(), projectShard("project-a")]) {
+            expect(shard.execArgv).toContain(`--max-old-space-size=${expectedMb}`);
+            expect(shard.env.DAINTREE_PTY_HEAP_BUDGET_MB).toBe(String(expectedMb));
+          }
+          client.dispose();
+        } finally {
+          totalmem.mockRestore();
         }
-        client.dispose();
-      } finally {
-        totalmem.mockRestore();
       }
-    });
+    );
 
-    it("lets an explicit memoryLimitMb override the RAM-scaled budget on every shard", () => {
-      const client = new PtyClientClass({ fabric: true, maxProjectShards: 4, memoryLimitMb: 768 });
-      defaultShard().child.emit("message", { type: "ready" });
-      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+    it.each([
+      [true, 768, 768],
+      [true, 0, 256],
+      [false, 768, 768],
+      [false, 0, 256],
+    ])(
+      "with fabric=%s, a memoryLimitMb of %i overrides the 64 GB budget and forks at %i MB",
+      (fabric, memoryLimitMb, expectedMb) => {
+        const totalmem = vi.spyOn(os, "totalmem").mockReturnValue(64 * 1024 ** 3);
+        try {
+          const client = new PtyClientClass({ fabric, maxProjectShards: 4, memoryLimitMb });
+          defaultShard().child.emit("message", { type: "ready" });
+          client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
 
-      for (const shard of [defaultShard(), projectShard("project-a")]) {
-        expect(shard.execArgv).toContain("--max-old-space-size=768");
-        expect(shard.env.DAINTREE_PTY_HEAP_BUDGET_MB).toBe("768");
+          expect(forks).toHaveLength(fabric ? 2 : 1);
+          for (const shard of forks) {
+            expect(shard.execArgv).toContain(`--max-old-space-size=${expectedMb}`);
+            expect(shard.env.DAINTREE_PTY_HEAP_BUDGET_MB).toBe(String(expectedMb));
+          }
+          client.dispose();
+        } finally {
+          totalmem.mockRestore();
+        }
       }
-      client.dispose();
-    });
+    );
   });
 
   describe("shard ready replay", () => {
