@@ -8,6 +8,7 @@ import {
   validateAgentMcp,
   validateAgentDiscovery,
   validateAgentPermissionBypass,
+  validateAgentPromptFormTerminator,
   validateAgentRegistration,
   validateMcpServerSettingsTokens,
   validateProcessTools,
@@ -75,6 +76,7 @@ export function validatePluginManifest(
   validateAssistantKnowledge(manifest, ctx);
   validateAgentIds(manifest, ctx);
   validateAgentPermissionBypass(manifest, ctx);
+  validateAgentPromptFormTerminator(manifest, ctx);
   validateAgentDiscovery(manifest, ctx);
   validateProcessTools(manifest, ctx);
   validateContributedActionIds(manifest, ctx, context);

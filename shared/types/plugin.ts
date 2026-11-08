@@ -34,7 +34,11 @@ import type {
   PluginCanDispatchResult,
 } from "./actions.js";
 import type { AgentState, WaitingReason } from "./agent.js";
-import type { AgentDetectionConfig, AgentResumeTemplate } from "../config/agentRegistry.js";
+import type {
+  AgentDetectionConfig,
+  AgentInitialPromptForm,
+  AgentResumeTemplate,
+} from "../config/agentRegistry.js";
 import type { LaunchMcpFormat } from "../config/launchMcp.js";
 import type {
   ContextProviderContribution,
@@ -2745,6 +2749,12 @@ export interface PluginAgentContribution {
    * `continuity` tier.
    */
   resume?: AgentResumeTemplate;
+  /**
+   * How the CLI takes the prompt a launch opens with, interactive and headless
+   * (#16404). Plain data, the same form a built-in agent declares. Unset, the
+   * prompt goes last as a bare positional argument.
+   */
+  initialPromptForm?: AgentInitialPromptForm;
   /**
    * Optional additive launch mechanism (#13803): the CLI's own way of merging
    * extra MCP servers over the user's, which Daintree uses to hand the agent its

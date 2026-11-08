@@ -562,6 +562,67 @@ export const AgentPackagesContributionSchema = z
     message: "packages must name an npm or a pypi package",
   });
 
+/** The element of a prompt form's args a launch replaces with the prompt. */
+const PROMPT_TOKEN = "{prompt}";
+
+/**
+ * One fixed word of a prompt form. `TerminalSpawnOptionsSchema` refuses a
+ * command holding any control character, so one here is caught at the manifest
+ * rather than on every launch; the form describes argv's shape, so `{prompt}`
+ * is the only thing in it a launch fills in.
+ */
+const PluginAgentPromptFormArgSchema = z
+  .string()
+  .min(1)
+  .max(256)
+  // eslint-disable-next-line no-control-regex
+  .refine((arg) => !/[\x00-\x1F\x7F-\x9F]/.test(arg), {
+    message: "A prompt form's args can't contain control characters",
+  })
+  .refine((arg) => !arg.includes(SESSION_ID_TOKEN) && !arg.includes("${"), {
+    message: `A prompt form's args can't carry ${SESSION_ID_TOKEN} or a \${settings:…} template`,
+  });
+
+/** A subcommand word: a launch swaps it in as is, so it can't be an option or a template. */
+const PluginAgentSubcommandWordSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/, {
+    message:
+      "A prompt form's subcommand must be one word of letters, digits, '.', '_' or '-', starting with a letter or digit",
+  });
+
+/**
+ * One launch mode's first-prompt form (#16404), the data a built-in agent
+ * declares in its config. Only a whole `{prompt}` element is replaced, so one
+ * embedded in a longer arg would reach the CLI as literal text.
+ */
+const AgentPromptFormSchema = z
+  .object({
+    args: z
+      .array(PluginAgentPromptFormArgSchema)
+      .min(1)
+      .max(20)
+      .refine(
+        (args) =>
+          args.filter((arg) => arg === PROMPT_TOKEN).length === 1 &&
+          args.every((arg) => arg === PROMPT_TOKEN || !arg.includes(PROMPT_TOKEN)),
+        {
+          message: `A prompt form's args must contain ${PROMPT_TOKEN} exactly once, as a whole arg`,
+        }
+      ),
+    subcommand: z
+      .object({
+        name: PluginAgentSubcommandWordSchema,
+        replaces: PluginAgentSubcommandWordSchema,
+      })
+      .strict()
+      .optional(),
+    caveat: z.enum(["may-be-ignored", "exits-after-reply"]).optional(),
+  })
+  .strict();
+
 export const AgentContributionSchema = z
   .object({
     id: z
@@ -585,6 +646,11 @@ export const AgentContributionSchema = z
     packages: AgentPackagesContributionSchema.optional(),
     detection: AgentDetectionConfigSchema.optional(),
     resume: AgentResumeConfigSchema.optional(),
+    // Both modes, as a built-in agent declares them: a launch reads its own.
+    initialPromptForm: z
+      .object({ interactive: AgentPromptFormSchema, headless: AgentPromptFormSchema })
+      .strict()
+      .optional(),
     launchMcp: z
       .object({ format: z.enum(LAUNCH_MCP_FORMATS) })
       .strict()

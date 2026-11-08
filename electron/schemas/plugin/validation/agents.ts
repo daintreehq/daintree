@@ -2,6 +2,7 @@ import { z } from "zod";
 import { SAFE_ID_PATTERN } from "../../pluginIdentifiers.js";
 import { AGENT_MCP_MAX_TOOLS_PER_ENDPOINT } from "../../../../shared/types/plugin.js";
 import { isBuiltInAgentId } from "../../../../shared/config/agentIds.js";
+import { LAUNCH_MCP_ENV_ONLY_FORMATS } from "../../../../shared/config/launchMcp.js";
 import { PROCESS_TOOL_ICON_BY_COMMAND } from "../../../../shared/config/processToolRegistry.js";
 import { AGENT_CLI_NAMES } from "../../../services/ProcessDetector/registries.js";
 import { RESERVED_AGENT_MCP_TOOL_NAMES } from "../../../services/pluginAgentMcp/types.js";
@@ -165,6 +166,8 @@ export function validateAgentPermissionBypass(
         ["resume", "resumeLatestArgs"],
         agent.resume?.kind === "session-id" ? agent.resume.resumeLatestArgs : undefined,
       ],
+      [["initialPromptForm", "interactive", "args"], agent.initialPromptForm?.interactive.args],
+      [["initialPromptForm", "headless", "args"], agent.initialPromptForm?.headless.args],
     ];
     for (const [field, args] of carriers) {
       if (!args) continue;
@@ -239,6 +242,28 @@ export function validateAgentDiscovery(manifest: ParsedPluginManifest, ctx: z.Re
         "agent_native_path_not_command"
       );
     });
+  });
+}
+
+// A launch MCP format's flags join the command at spawn, after the prompt form.
+// Behind a form's `--` a CLI would read them as positionals, and the agent would
+// start without its tools. The env-var formats add no flags.
+export function validateAgentPromptFormTerminator(
+  manifest: ParsedPluginManifest,
+  ctx: z.RefinementCtx
+): void {
+  manifest.contributes.agents.forEach((agent, index) => {
+    const { initialPromptForm: form, launchMcp } = agent;
+    if (!form || !launchMcp || LAUNCH_MCP_ENV_ONLY_FORMATS.has(launchMcp.format)) return;
+    for (const mode of ["interactive", "headless"] as const) {
+      if (!form[mode].args.includes("--")) continue;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["contributes", "agents", index, "initialPromptForm", mode, "args"],
+        message: `Agent "${agent.id}" has "--" in its ${mode} prompt form, but launchMcp format "${launchMcp.format}" adds flags after the form, where the CLI would read them as positional arguments.`,
+        params: { errorCode: "agent_prompt_form_terminator" },
+      });
+    }
   });
 }
 

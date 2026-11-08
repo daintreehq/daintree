@@ -2016,6 +2016,15 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       ],
       note: "Kept as data on resumeTemplate across the snapshot broadcast, then expanded into the function-shaped resume in each process's effective registry.",
     },
+    initialPromptForm: {
+      mode: "verbatim",
+      consumers: [
+        { file: AGENT_REGISTRY, symbol: "contributionToAgentConfig" },
+        { file: "shared/config/agentRegistry.ts", symbol: "getAgentPromptForm" },
+        { file: "shared/types/agentSettings.ts", symbol: "appendPromptForm" },
+      ],
+      note: "Copied as data onto the runtime agent config, where a launch with a prompt reads its mode's form to build the prompt's arguments.",
+    },
     permissionBypassArgs: {
       mode: "derived-input",
       consumers: [

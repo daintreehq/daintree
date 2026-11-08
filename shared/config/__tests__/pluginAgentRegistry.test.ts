@@ -9,6 +9,7 @@ import {
   getPluginAgentRegistrySnapshot,
 } from "../pluginAgentRegistry.js";
 import {
+  getAgentPromptForm,
   getEffectiveAgentConfig,
   isEffectivelyRegisteredAgent,
   isBuiltInAgent,
@@ -213,6 +214,48 @@ describe("pluginAgentRegistry (issue #9560)", () => {
       registerPluginAgents("acme.plugin", [DISCOVERABLE]);
       unregisterPluginAgents("acme.plugin");
       expect(getEffectiveAgentConfig("acme-agent")).toBeUndefined();
+    });
+  });
+
+  describe("declared initialPromptForm (#16404)", () => {
+    const FORM = {
+      interactive: { args: ["--task", "{prompt}"] },
+      headless: {
+        subcommand: { name: "run", replaces: "chat" },
+        args: ["--print", "{prompt}"],
+        caveat: "exits-after-reply" as const,
+      },
+    };
+
+    it("carries the form onto the effective config", () => {
+      registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, initialPromptForm: FORM }]);
+      expect(getEffectiveAgentConfig("acme-agent")?.initialPromptForm).toEqual(FORM);
+    });
+
+    it("leaves the field absent when nothing is declared", () => {
+      registerPluginAgents("acme.plugin", [ACME_AGENT]);
+      expect(getEffectiveAgentConfig("acme-agent")).not.toHaveProperty("initialPromptForm");
+    });
+
+    it("survives the structured clone the snapshot broadcast goes through", () => {
+      registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, initialPromptForm: FORM }]);
+      const cloned = structuredClone(getPluginAgentRegistry());
+      setPluginAgentRegistry({});
+      expect(getAgentPromptForm("acme-agent", "headless")).toEqual({ args: ["{prompt}"] });
+      setPluginAgentRegistry(cloned);
+      expect(getAgentPromptForm("acme-agent", "interactive")).toEqual(FORM.interactive);
+      expect(getAgentPromptForm("acme-agent", "headless")).toEqual(FORM.headless);
+    });
+
+    it("never lets a declared form replace a built-in's", () => {
+      const builtIn = getEffectiveAgentConfig("claude")?.initialPromptForm;
+      expect(builtIn).toBeDefined();
+      expect(builtIn).not.toEqual(FORM);
+      registerPluginAgents("acme.plugin", [
+        { ...ACME_AGENT, id: "claude", initialPromptForm: FORM },
+      ]);
+      expect(getPluginAgentRegistry().claude?.initialPromptForm).toEqual(FORM);
+      expect(getEffectiveAgentConfig("claude")?.initialPromptForm).toEqual(builtIn);
     });
   });
 

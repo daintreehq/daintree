@@ -3,6 +3,11 @@ import {
   PANEL_LIMIT_DECLINED_REASON,
 } from "@/services/actions/definitions/panelLimitError";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearPluginAgentRegistryForTests,
+  registerPluginAgents,
+} from "@shared/config/pluginAgentRegistry";
+import type { PluginAgentContribution } from "@shared/types/plugin";
 
 const {
   addRecipeMock,
@@ -5039,6 +5044,44 @@ describe("plugin recipe panels, variables and agent tools (#13797)", () => {
     // The panel step is not an agent and never reaches the PTY spawn path.
     expect(addTerminalMock).toHaveBeenCalledTimes(1);
     expect(addTerminalMock.mock.calls[0]?.[0].command).toContain("Review Invoice 42 on feature/x");
+  });
+
+  describe("a plugin agent's first prompt (#16404)", () => {
+    afterEach(() => clearPluginAgentRegistryForTests());
+
+    const launchedCommand = async (
+      initialPromptForm?: PluginAgentContribution["initialPromptForm"]
+    ) => {
+      registerPluginAgents("acme.tools", [
+        {
+          id: "mini",
+          name: "Mini",
+          command: "mini",
+          color: "#3366ff",
+          iconId: "claude",
+          ...(initialPromptForm ? { initialPromptForm } : {}),
+        },
+      ]);
+      await run(
+        { terminals: [{ type: "mini", initialPrompt: "Review {{plugin.record}}" }] },
+        { record: "Invoice 42" }
+      );
+      expect(addTerminalMock).toHaveBeenCalledTimes(1);
+      return addTerminalMock.mock.calls[0]?.[0].command;
+    };
+
+    it("launches with the prompt after the flag the agent declares", async () => {
+      await expect(
+        launchedCommand({
+          interactive: { args: ["--task", "{prompt}"] },
+          headless: { args: ["--print", "{prompt}"] },
+        })
+      ).resolves.toBe("mini --task 'Review Invoice 42'");
+    });
+
+    it("launches with a positional prompt when the agent declares nothing", async () => {
+      await expect(launchedCommand()).resolves.toBe("mini 'Review Invoice 42'");
+    });
   });
 
   it("records the agent's first turn with its line breaks, and none for a step without one (#14592)", async () => {
