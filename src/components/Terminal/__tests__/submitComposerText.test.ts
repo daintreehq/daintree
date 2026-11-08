@@ -214,6 +214,23 @@ describe("submitPaneComposerText holding for a busy agent (#16379)", () => {
     expect(client.submit).not.toHaveBeenCalled();
   });
 
+  it("neither holds nor types a send main couldn't hold", async () => {
+    holdClient.hold.mockResolvedValue({ held: false, reason: "unavailable" });
+    const hooks = pane({});
+
+    await expect(submitPaneComposerText("t1", "ship it", [], hooks)).resolves.toBe(false);
+    expect(client.submit).not.toHaveBeenCalled();
+    expect(hooks.hold.onHeld).not.toHaveBeenCalled();
+  });
+
+  it("neither holds nor types a send when main can't be asked", async () => {
+    holdClient.hold.mockRejectedValue(new Error("no handler"));
+    const hooks = pane({});
+
+    await expect(submitPaneComposerText("t1", "ship it", [], hooks)).resolves.toBe(false);
+    expect(client.submit).not.toHaveBeenCalled();
+  });
+
   it("sends at once when main finds the agent no longer busy", async () => {
     holdClient.hold.mockResolvedValue({ held: false, reason: "not-busy" });
     client.submit.mockResolvedValue(undefined);

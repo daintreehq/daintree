@@ -48,6 +48,11 @@ export interface ComposerHoldRequest {
   imagePaths: readonly string[];
   /** The terminal as read when the send was held: the run it is for and its input so far. */
   info: NotifyTerminalInfo;
+  /**
+   * Whether the screen that held it still drives the project, asked again
+   * before it is typed: a send from a screen that stopped driving isn't.
+   */
+  authorize(): boolean;
 }
 
 export type ComposerHoldAdmission =
@@ -61,6 +66,7 @@ interface Entry {
   readonly agentSessionId: string | undefined;
   readonly worktreeId: string | undefined;
   readonly promptBaseline: number | undefined;
+  readonly authorize: () => boolean;
   /** Nothing more is typed or withdrawn. */
   ended: boolean;
   /** Its outcome went to the project's views. */
@@ -105,6 +111,7 @@ export class ComposerSendHold {
       agentSessionId: info.agentSessionId,
       worktreeId: info.worktreeId,
       promptBaseline: foreignPromptInputAt(info, COMPOSER_PROMPT_OWNER),
+      authorize: request.authorize,
       ended: false,
       published: false,
     };
@@ -208,6 +215,13 @@ export class ComposerSendHold {
     if (foreignPromptInputMoved(info, COMPOSER_PROMPT_OWNER, entry.promptBaseline)) {
       return drop("typed");
     }
+    let authorized: boolean;
+    try {
+      authorized = entry.authorize();
+    } catch {
+      authorized = false;
+    }
+    if (!authorized) return drop("driven-elsewhere");
     const verdict = evaluateWakeGate(info, EXACT_PROMPT_GATE);
     return verdict.kind === "ready" ? verdict : { kind: "held", reason: verdict.reason };
   }
@@ -265,10 +279,14 @@ export class ComposerSendHold {
     const { terminalId } = entry.send;
     // A send held since this one stopped is what the pane holds now.
     const current = this.entries.get(terminalId);
+    const { token, text, imagePaths } = entry.send;
     this.safePublish(entry.projectId, {
       terminalId,
       held: current === undefined ? null : copyOf(current.send),
-      ended: { token: entry.send.token, outcome },
+      ended:
+        outcome.kind === "dropped"
+          ? { token, outcome, text, imagePaths: [...imagePaths] }
+          : { token, outcome },
     });
   }
 

@@ -12,11 +12,19 @@ export const COMPOSER_HOLD_TTL_MS = 60 * 60_000;
  * it was held. `restarted`: the agent's run was restarted or replaced.
  * `closed`: the pane was closed. `ended`: its terminal or agent ended.
  * `expired`: its time ran out. `stopped`: the pane's line stopped taking it,
- * such as its notices being stopped. `unconfirmed`: it went to the terminal,
- * but whether it was written is unknown, so it is never sent again.
+ * such as its notices being stopped. `driven-elsewhere`: another screen took
+ * over driving the project. `unconfirmed`: it went to the terminal, but
+ * whether it was written is unknown, so it is never sent again.
  */
 export type ComposerHoldDropReason =
-  "typed" | "restarted" | "closed" | "ended" | "expired" | "stopped" | "unconfirmed";
+  | "typed"
+  | "restarted"
+  | "closed"
+  | "ended"
+  | "expired"
+  | "stopped"
+  | "driven-elsewhere"
+  | "unconfirmed";
 
 /** A send held for a pane, as main holds it. */
 export interface HeldComposerSend {
@@ -39,17 +47,30 @@ export type ComposerHoldOutcome =
 
 /**
  * Main's push when a pane's held send changes: `held` is what it holds now,
- * null once nothing is; `ended` says what became of the one that was.
+ * null once nothing is; `ended` says what became of the one that was. A
+ * dropped one carries its text and images, so a view that never saw it held
+ * can still give them back.
  */
 export interface ComposerHoldChange {
   terminalId: string;
   held: HeldComposerSend | null;
-  ended?: { token: string; outcome: ComposerHoldOutcome };
+  ended?: {
+    token: string;
+    outcome: ComposerHoldOutcome;
+    text?: string;
+    imagePaths?: string[];
+  };
 }
 
-/** The answer to a hold request: `held: false` means send it as any other. */
+/**
+ * The answer to a hold request. `not-busy`: send it as any other.
+ * `already-held`: the pane holds one, so this one isn't sent. `unavailable`:
+ * it couldn't be held, and isn't sent either, since sending now is what holding
+ * it was for.
+ */
 export type ComposerHoldResult =
-  { held: true; send: HeldComposerSend } | { held: false; reason: "not-busy" | "already-held" };
+  | { held: true; send: HeldComposerSend }
+  | { held: false; reason: "not-busy" | "already-held" | "unavailable" };
 
 export interface ComposerHoldWithdrawResult {
   /** False once it is on its way to the terminal or has ended. */

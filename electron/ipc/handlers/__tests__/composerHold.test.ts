@@ -2,6 +2,19 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../../../window/serviceRefs.js", () => ({ getPtyClient: () => null }));
 vi.mock("../../../services/DriveLeaseService.js", () => ({ peekDriveLeaseService: () => null }));
+vi.mock("../../../../shared/config/agentRegistry.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../../../shared/config/agentRegistry.js")>();
+  return {
+    ...actual,
+    getEffectiveAgentConfig: (id: string) =>
+      id === "queuer"
+        ? { capabilities: { queuesInputWhileWorking: true } }
+        : id === "plain"
+          ? { capabilities: {} }
+          : actual.getEffectiveAgentConfig(id),
+  };
+});
 
 import { holdsComposerSend } from "../composerHold.js";
 import type { NotifyTerminalInfo } from "../../../services/mcp-server/terminalNotify.js";
@@ -15,7 +28,9 @@ describe("holdsComposerSend", () => {
     expect(holdsComposerSend(info())).toBe(true);
   });
 
-  it("keeps the immediate send for a CLI that queues input mid-turn", () => {
+  it("keeps the immediate send for any CLI declared to queue input mid-turn", () => {
+    expect(holdsComposerSend(info({ detectedAgentId: "queuer" }))).toBe(false);
+    expect(holdsComposerSend(info({ detectedAgentId: "plain" }))).toBe(true);
     expect(holdsComposerSend(info({ detectedAgentId: "claude" }))).toBe(false);
     expect(holdsComposerSend(info({ detectedAgentId: "codex" }))).toBe(false);
   });

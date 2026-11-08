@@ -2,6 +2,7 @@ import { useState, type ReactElement } from "react";
 import { Clock } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Callout } from "@/components/ui/Callout";
+import { CopyButton } from "@/components/ui/CopyButton";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { composerHoldClient } from "@/clients/composerHoldClient";
 import { pluralize } from "@/lib/pluralize";
@@ -22,6 +23,7 @@ const DROP_REASON: Record<ComposerHoldDropReason, string> = {
   ended: "the agent's terminal ended",
   expired: "it waited an hour",
   stopped: "the pane's notices were stopped",
+  "driven-elsewhere": "another screen took over driving this project",
   unconfirmed: "Daintree couldn't confirm it reached the agent",
 };
 
@@ -53,6 +55,8 @@ function restoreToDraft(terminalId: string, projectId: string | undefined, text:
 export interface HeldComposerSendRowProps {
   terminalId: string;
   agentId?: string;
+  /** The pane's composer is there to take the text back: otherwise it is offered to copy. */
+  canEdit: boolean;
 }
 
 /**
@@ -64,6 +68,7 @@ export interface HeldComposerSendRowProps {
 export function HeldComposerSendRow({
   terminalId,
   agentId,
+  canEdit,
 }: HeldComposerSendRowProps): ReactElement | null {
   const held = useHeldComposerSendStore((s) => s.held[terminalId]);
   const dropped = useHeldComposerSendStore((s) => s.dropped[terminalId]);
@@ -111,7 +116,7 @@ export function HeldComposerSendRow({
         data-testid="held-composer-send"
         className="mx-2 mb-1"
         action={
-          sending ? undefined : (
+          sending || !canEdit ? undefined : (
             <Button variant="ghost" size="xs" disabled={busy} onClick={() => void withdraw(true)}>
               Edit
             </Button>
@@ -149,16 +154,20 @@ export function HeldComposerSendRow({
       data-testid="held-composer-send-dropped"
       className="mx-2 mb-1"
       action={
-        <Button
-          variant="ghost"
-          size="xs"
-          onClick={() => {
-            useHeldComposerSendStore.getState().clearDropped(terminalId);
-            restoreToDraft(terminalId, projectId, dropped.text);
-          }}
-        >
-          Edit
-        </Button>
+        canEdit ? (
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => {
+              useHeldComposerSendStore.getState().clearDropped(terminalId);
+              restoreToDraft(terminalId, projectId, dropped.text);
+            }}
+          >
+            Edit
+          </Button>
+        ) : (
+          <CopyButton text={dropped.text} label="Copy message" variant="ghost" size="xs" />
+        )
       }
       dismiss={
         <DismissButton

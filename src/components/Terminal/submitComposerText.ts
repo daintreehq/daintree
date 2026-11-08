@@ -53,9 +53,10 @@ export interface PaneComposerHold {
 }
 
 /**
- * Asks main to hold the send. Null when it can't be asked: the send then goes
- * as any other, and is refused there if it must be. Input that is blocked is
- * never held, so it is refused the way it always was.
+ * Asks main to hold the send. Null when input is blocked: it is never held,
+ * and is refused the way it always was. A hold main couldn't take, or a
+ * question it couldn't answer, isn't sent either: sending now into a busy
+ * agent is what holding it was for.
  */
 async function requestComposerHold(
   id: string,
@@ -71,7 +72,7 @@ async function requestComposerHold(
     return await composerHoldClient.hold(id, text, attachable.length > 0 ? attachable : undefined);
   } catch (err) {
     logWarn("[TerminalPane] hold failed", { id, error: err });
-    return null;
+    return { held: false, reason: "unavailable" };
   }
 }
 
@@ -111,6 +112,7 @@ export async function submitPaneComposerText(
         hold.onRefused();
         return false;
       }
+      if (answer?.reason === "unavailable") return false;
       if (!pane.canTakeInput()) return false;
     }
   }

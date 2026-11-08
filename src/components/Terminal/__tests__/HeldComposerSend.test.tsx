@@ -60,19 +60,20 @@ beforeEach(() => {
   useHeldComposerSendStore.setState({ held: {}, dropped: {}, refused: {}, endedTokens: [] });
   withdraw.mockReset();
   requestPaneFocus.mockReset();
+  inputs.bumpExternalDraftRevision.mockReset();
   drafts.clear();
   pane("working");
 });
 
 describe("HeldComposerSendRow", () => {
   it("shows nothing while nothing is held or dropped", () => {
-    const { container } = render(<HeldComposerSendRow terminalId="t1" agentId="gemini" />);
+    const { container } = render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
     expect(container.textContent).toBe("");
   });
 
   it("says what the send waits for and shows its first line", () => {
     useHeldComposerSendStore.getState().noteHeld(send());
-    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" />);
+    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
     const row = screen.getByTestId("held-composer-send");
     expect(row.textContent).toContain("back at its prompt");
     expect(row.textContent).toContain("fix the failing tests");
@@ -82,7 +83,7 @@ describe("HeldComposerSendRow", () => {
   it("says when the pane waits on a question rather than its prompt", () => {
     pane("waiting", "question");
     useHeldComposerSendStore.getState().noteHeld(send());
-    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" />);
+    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
     expect(screen.getByTestId("held-composer-send").textContent).toContain(
       "waiting on a question, not its prompt"
     );
@@ -92,10 +93,11 @@ describe("HeldComposerSendRow", () => {
     withdraw.mockResolvedValue(true);
     drafts.set("t1", "a newer thought");
     useHeldComposerSendStore.getState().noteHeld(send({ text: "held text" }));
-    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" />);
+    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     await waitFor(() => expect(drafts.get("t1")).toBe("held text\n\na newer thought"));
+    expect(inputs.bumpExternalDraftRevision).toHaveBeenCalledTimes(1);
     expect(withdraw).toHaveBeenCalledWith("t1", "token-1");
     expect(requestPaneFocus).toHaveBeenCalledWith("t1", "hybridInput");
   });
@@ -103,7 +105,7 @@ describe("HeldComposerSendRow", () => {
   it("leaves the draft alone when the send was already on its way", async () => {
     withdraw.mockResolvedValue(false);
     useHeldComposerSendStore.getState().noteHeld(send());
-    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" />);
+    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     await waitFor(() => expect(withdraw).toHaveBeenCalledTimes(1));
@@ -113,7 +115,7 @@ describe("HeldComposerSendRow", () => {
   it("withdraws without touching the draft", async () => {
     withdraw.mockResolvedValue(true);
     useHeldComposerSendStore.getState().noteHeld(send());
-    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" />);
+    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
 
     fireEvent.click(screen.getByRole("button", { name: "Withdraw held message" }));
     await waitFor(() => expect(withdraw).toHaveBeenCalledWith("t1", "token-1"));
@@ -122,14 +124,14 @@ describe("HeldComposerSendRow", () => {
 
   it("offers nothing to press once the send is on its way", () => {
     useHeldComposerSendStore.getState().noteHeld(send({ status: "sending" }));
-    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" />);
+    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
     expect(screen.queryAllByRole("button")).toEqual([]);
   });
 
   it("says a second send waits on this one", () => {
     useHeldComposerSendStore.getState().noteHeld(send());
     useHeldComposerSendStore.getState().noteRefused("t1");
-    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" />);
+    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
     expect(screen.getByTestId("held-composer-send").textContent).toContain(
       "Edit or withdraw it to send another"
     );
@@ -137,7 +139,7 @@ describe("HeldComposerSendRow", () => {
 
   it("says why a dropped send wasn't sent, and gives its text back", () => {
     useHeldComposerSendStore.getState().noteHeld(send({ text: "held text" }));
-    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" />);
+    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit />);
     act(() =>
       useHeldComposerSendStore.getState().applyChange({
         terminalId: "t1",
@@ -150,6 +152,32 @@ describe("HeldComposerSendRow", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     expect(drafts.get("t1")).toBe("held text");
+    expect(inputs.bumpExternalDraftRevision).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId("held-composer-send-dropped")).toBeNull();
+  });
+
+  it("offers the text to copy, not to edit, when the pane has no composer", () => {
+    useHeldComposerSendStore.getState().applyChange({
+      terminalId: "t1",
+      held: null,
+      ended: {
+        token: "token-1",
+        outcome: { kind: "dropped", reason: "ended" },
+        text: "held text",
+      },
+    });
+    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit={false} />);
+    expect(screen.getByTestId("held-composer-send-dropped").textContent).toContain(
+      "the agent's terminal ended"
+    );
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Copy message" })).toBeTruthy();
+  });
+
+  it("keeps Withdraw but not Edit for a held send the pane can't edit into", () => {
+    useHeldComposerSendStore.getState().noteHeld(send());
+    render(<HeldComposerSendRow terminalId="t1" agentId="gemini" canEdit={false} />);
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Withdraw held message" })).toBeTruthy();
   });
 });

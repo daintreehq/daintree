@@ -2061,9 +2061,12 @@ function TerminalPaneComponent({
                 )}
               </div>
 
-              {showHybridInputBar && (
-                <HeldComposerSendRow terminalId={id} agentId={effectiveAgentId} />
-              )}
+              {/* Outlives the composer: an agent that exited still says what became of the send. */}
+              <HeldComposerSendRow
+                terminalId={id}
+                agentId={effectiveAgentId}
+                canEdit={showHybridInputBar && !isHybridInputDisabled}
+              />
               {showHybridInputBar && (
                 <Suspense fallback={null}>
                   <LazyHybridInputBar

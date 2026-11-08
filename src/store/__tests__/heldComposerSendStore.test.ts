@@ -39,15 +39,45 @@ describe("heldComposerSendStore", () => {
     });
   });
 
-  it("forgets a delivered or withdrawn send without a note", () => {
-    store().applyChange({ terminalId: "t1", held: send("a") });
+  it.each([{ kind: "delivered" as const }, { kind: "withdrawn" as const }])(
+    "forgets a $kind send without a note",
+    (outcome) => {
+      store().applyChange({ terminalId: "t1", held: send("a") });
+      store().applyChange({ terminalId: "t1", held: null, ended: { token: "a", outcome } });
+      expect(store().held).toEqual({});
+      expect(store().dropped).toEqual({});
+    }
+  );
+
+  it("keeps a drop's text from the push when this view never saw it held", () => {
     store().applyChange({
       terminalId: "t1",
       held: null,
-      ended: { token: "a", outcome: { kind: "delivered" } },
+      ended: {
+        token: "a",
+        outcome: { kind: "dropped", reason: "ended" },
+        text: "from main",
+        imagePaths: ["/tmp/a.png"],
+      },
     });
-    expect(store().held).toEqual({});
-    expect(store().dropped).toEqual({});
+    expect(store().dropped.t1).toEqual({
+      token: "a",
+      text: "from main",
+      imagePaths: ["/tmp/a.png"],
+      reason: "ended",
+    });
+  });
+
+  it("forgets drop notes for panes the view no longer has", () => {
+    for (const id of ["t1", "t2"]) {
+      store().applyChange({
+        terminalId: id,
+        held: null,
+        ended: { token: id, outcome: { kind: "dropped", reason: "closed" }, text: "x" },
+      });
+    }
+    store().forgetDroppedExcept(new Set(["t2"]));
+    expect(Object.keys(store().dropped)).toEqual(["t2"]);
   });
 
   it("never brings back a send whose outcome arrived before the answer to its hold", () => {
@@ -73,6 +103,8 @@ describe("heldComposerSendStore", () => {
 
     store().noteHeld(send("b"));
     expect(store().dropped).toEqual({});
+    expect(store().refused).toEqual({});
+    store().noteRefused("t1");
     store().applyChange({ terminalId: "t1", held: send("c") });
     expect(store().refused).toEqual({});
   });

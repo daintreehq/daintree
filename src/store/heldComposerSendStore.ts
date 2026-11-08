@@ -34,6 +34,8 @@ interface HeldComposerSendState {
   noteHeld: (send: HeldComposerSend) => void;
   noteRefused: (terminalId: string) => void;
   clearDropped: (terminalId: string) => void;
+  /** A pane this view no longer has takes its dropped send's text with it. */
+  forgetDroppedExcept: (terminalIds: ReadonlySet<string>) => void;
 }
 
 function without<T>(record: Readonly<Record<string, T>>, key: string): Record<string, T> {
@@ -54,13 +56,15 @@ export const useHeldComposerSendStore = create<HeldComposerSendState>((set) => (
       if (ended !== undefined) {
         endedTokens = [...endedTokens, ended.token].slice(-MAX_ENDED_TOKENS);
         const previous = state.held[terminalId];
-        if (ended.outcome.kind === "dropped" && previous?.token === ended.token) {
+        const known = previous?.token === ended.token ? previous : undefined;
+        const text = ended.text ?? known?.text;
+        if (ended.outcome.kind === "dropped" && text !== undefined) {
           dropped = {
             ...dropped,
             [terminalId]: {
               token: ended.token,
-              text: previous.text,
-              imagePaths: previous.imagePaths,
+              text,
+              imagePaths: ended.imagePaths ?? known?.imagePaths ?? [],
               reason: ended.outcome.reason,
             },
           };
@@ -98,6 +102,7 @@ export const useHeldComposerSendStore = create<HeldComposerSendState>((set) => (
       return {
         held: { ...state.held, [send.terminalId]: send },
         dropped: without(state.dropped, send.terminalId),
+        refused: without(state.refused, send.terminalId),
       };
     }),
 
@@ -110,6 +115,15 @@ export const useHeldComposerSendStore = create<HeldComposerSendState>((set) => (
     set((state) => {
       const dropped = without(state.dropped, terminalId);
       return dropped === state.dropped ? state : { dropped };
+    }),
+
+  forgetDroppedExcept: (terminalIds) =>
+    set((state) => {
+      const gone = Object.keys(state.dropped).filter((id) => !terminalIds.has(id));
+      if (gone.length === 0) return state;
+      let dropped = state.dropped;
+      for (const id of gone) dropped = without(dropped, id);
+      return { dropped };
     }),
 }));
 

@@ -44,6 +44,12 @@ export function holdsComposerSend(info: NotifyTerminalInfo | null): info is Noti
   );
 }
 
+/** Whether `ctx`'s screen drives `projectId`, read now: a lease can move at any time. */
+function drivesProject(ctx: IpcContext, projectId: string): boolean {
+  const lease = peekDriveLeaseService();
+  return !lease || !ctx.endpoint || lease.isDriving(projectId, ctx.endpoint);
+}
+
 async function handleHold(
   ctx: IpcContext,
   terminalId: string,
@@ -73,8 +79,7 @@ async function handleHold(
   const ptyClient = getPtyClient();
   if (!projectId || !ptyClient || ctx.endpoint?.kind === "remote-view") return notBusy;
   if (ptyClient.getTerminalProjectId(id) !== projectId) return notBusy;
-  const lease = peekDriveLeaseService();
-  if (lease && ctx.endpoint && !lease.isDriving(projectId, ctx.endpoint)) return notBusy;
+  if (!drivesProject(ctx, projectId)) return notBusy;
   const generation = ptyClient.getLiveGeneration(id);
   if (generation === null) return notBusy;
   const info = await ptyClient.getTerminalAsync(id).catch(() => null);
@@ -83,8 +88,10 @@ async function handleHold(
   const { getComposerSendHold } =
     await import("../../services/composerHold/composerSendHoldLive.js");
   const hold = await getComposerSendHold();
-  // Read again after the awaits: a restart in between is a run it wasn't for.
-  if (ptyClient.getLiveGeneration(id) !== generation) return notBusy;
+  // Read again after the awaits. A restart in between started a run it wasn't
+  // written for, so it is neither held nor sent there.
+  if (ptyClient.getLiveGeneration(id) !== generation) return { held: false, reason: "unavailable" };
+  if (!drivesProject(ctx, projectId)) return notBusy;
   const admission = hold.hold({
     terminalId: id,
     projectId,
@@ -92,9 +99,10 @@ async function handleHold(
     text,
     imagePaths: imagePaths ?? [],
     info,
+    authorize: () => drivesProject(ctx, projectId),
   });
   if (admission.ok) return { held: true, send: admission.send };
-  return admission.reason === "already-held" ? { held: false, reason: "already-held" } : notBusy;
+  return { held: false, reason: admission.reason };
 }
 
 async function handleWithdraw(
@@ -106,10 +114,13 @@ async function handleWithdraw(
   if (typeof token !== "string" || token.length === 0 || token.length > 128) {
     throw new AppError({ code: "VALIDATION", message: "token must be a non-empty string" });
   }
-  if (!ctx.projectId) return { withdrawn: false };
+  const projectId = ctx.projectId;
+  if (!projectId) return { withdrawn: false };
   const { peekComposerSendHold } =
     await import("../../services/composerHold/composerSendHoldLive.js");
-  return { withdrawn: peekComposerSendHold()?.withdraw(id, token, ctx.projectId) ?? false };
+  // Only the screen driving the project takes back what is waiting for its prompt.
+  if (!drivesProject(ctx, projectId)) return { withdrawn: false };
+  return { withdrawn: peekComposerSendHold()?.withdraw(id, token, projectId) ?? false };
 }
 
 async function handleList(ctx: IpcContext): Promise<HeldComposerSend[]> {

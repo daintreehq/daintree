@@ -8,6 +8,7 @@ import {
 
 const PROJECT = "project-1";
 const T = "term-1";
+const T2 = "term-2";
 
 function working(overrides: Partial<NotifyTerminalInfo> = {}): NotifyTerminalInfo {
   return {
@@ -41,8 +42,15 @@ function setup() {
     },
     release,
   }));
-  const generations = new Map<string, number>([[T, 7]]);
-  const projects = new Map<string, string>([[T, PROJECT]]);
+  const generations = new Map<string, number>([
+    [T, 7],
+    [T2, 3],
+  ]);
+  const projects = new Map<string, string>([
+    [T, PROJECT],
+    [T2, PROJECT],
+  ]);
+  const driving = { value: true };
   const terminals = new Map<string, NotifyTerminalInfo | null>([[T, working()]]);
   const published: ComposerHoldChange[] = [];
   const hold = new ComposerSendHold({
@@ -55,8 +63,16 @@ function setup() {
     now: () => now,
     newToken: () => `token-${++token}`,
   });
-  const request = (text = "fix the tests", info = working()) =>
-    hold.hold({ terminalId: T, projectId: PROJECT, generation: 7, text, imagePaths: [], info });
+  const request = (text = "fix the tests", info = working(), terminalId = T) =>
+    hold.hold({
+      terminalId,
+      projectId: PROJECT,
+      generation: generations.get(terminalId)!,
+      text,
+      imagePaths: ["/tmp/shot.png"],
+      info,
+      authorize: () => driving.value,
+    });
   const ended = () => published.flatMap((change) => (change.ended ? [change.ended.outcome] : []));
   return {
     hold,
@@ -69,6 +85,7 @@ function setup() {
     published,
     request,
     ended,
+    driving,
     advance: (ms: number) => {
       now += ms;
     },
@@ -83,7 +100,9 @@ describe("ComposerSendHold", () => {
     expect(h.published.at(-1)?.held?.text).toBe("fix the tests");
 
     expect(h.request("again")).toEqual({ ok: false, reason: "already-held" });
-    expect(h.wakes).toHaveLength(1);
+    expect(h.request("elsewhere", working(), T2).ok).toBe(true);
+    expect(h.request("again", working(), T2)).toEqual({ ok: false, reason: "already-held" });
+    expect(h.wakes).toHaveLength(2);
   });
 
   it("is ready only at the agent's own prompt", () => {
@@ -164,6 +183,41 @@ describe("ComposerSendHold", () => {
     wake!.beforeType();
     wake!.report({ kind: "ambiguous", reason: "unconfirmed" });
     expect(h.ended()).toEqual([{ kind: "dropped", reason: "unconfirmed" }]);
+    expect(wake!.recheck(atPrompt()).kind).toBe("unavailable");
+    expect(wake!.beforeType()).toBe(false);
+    expect(h.hold.list(PROJECT)).toEqual([]);
+    expect(h.request("next").ok).toBe(true);
+  });
+
+  it("drops once the screen that held it no longer drives the project", () => {
+    const h = setup();
+    h.request();
+    expect(h.wakes[0]!.recheck(atPrompt())).toEqual({ kind: "ready" });
+    h.driving.value = false;
+    expect(h.wakes[0]!.recheck(atPrompt())).toEqual({
+      kind: "unavailable",
+      reason: "driven-elsewhere",
+    });
+    expect(h.ended()).toEqual([{ kind: "dropped", reason: "driven-elsewhere" }]);
+  });
+
+  it("gives a dropped send's text and images to the views, never a delivered one's", () => {
+    const dropped = setup();
+    dropped.request("held text");
+    dropped.hold.endForTerminal(T, "closed");
+    expect(dropped.published.at(-1)?.ended).toMatchObject({
+      text: "held text",
+      imagePaths: ["/tmp/shot.png"],
+    });
+
+    const delivered = setup();
+    delivered.request("held text");
+    delivered.wakes[0]!.beforeType();
+    delivered.wakes[0]!.report(
+      { kind: "delivered" },
+      { phase: "pty_written", submissionToken: "line-1" }
+    );
+    expect(delivered.published.at(-1)?.ended?.text).toBeUndefined();
   });
 
   it("withdraws a waiting send for its own project only", () => {
@@ -214,11 +268,14 @@ describe("ComposerSendHold", () => {
 
   it("names the send held since when an earlier one's outcome lands late", async () => {
     const h = setup();
-    h.request("first");
+    const first = h.request("first");
     h.wakes[0]!.report({ kind: "unavailable", reason: "stopped" });
-    expect(h.request("second").ok).toBe(true);
+    const second = h.request("second");
+    if (!first.ok || !second.ok) throw new Error("not held");
     await vi.waitFor(() => expect(h.ended()).toHaveLength(1));
-    expect(h.published.at(-1)?.held?.text).toBe("second");
+    const last = h.published.at(-1);
+    expect(last?.ended?.token).toBe(first.send.token);
+    expect(last?.held?.token).toBe(second.send.token);
   });
 
   it("lets the wake engine go once nothing is held, and takes it again for the next", async () => {
