@@ -180,10 +180,15 @@ interface PaneClaim {
  * farewell is the only word on where it ended. Only the run the generation
  * launched, read from the host-confirmed launch: the pane may replace it only
  * while it still holds that id, since anything else there is a renderer edit.
+ * Once a claim of this generation has written the pane, that claim decides:
+ * a later run's argv can land ahead of this farewell, whose delivery yields.
  */
-function launchIdLeftByFarewell(claim: PaneClaim): string | undefined {
+function launchIdLeftByFarewell(
+  claim: PaneClaim,
+  authored: AuthoredId | undefined
+): string | undefined {
   if (claim.source !== "exit" && claim.source !== "demotion") return undefined;
-  if (claim.incarnation !== 0) return undefined;
+  if (claim.incarnation !== 0 || authored?.generation === claim.generation) return undefined;
   const launch = confirmedLaunches.get(claim.terminalId);
   if (launch?.generation !== claim.generation || launch.projectId !== claim.projectId) {
     return undefined;
@@ -214,7 +219,7 @@ function decidePaneWriteback(state: ProjectState | null, claim: PaneClaim): Pane
   if (
     claim.source === "demotion" &&
     !argvClaimOfRun(authored, claim) &&
-    launchIdLeftByFarewell(claim) === undefined
+    launchIdLeftByFarewell(claim, authored) === undefined
   ) {
     return "ineligible-boundary";
   }
@@ -250,7 +255,7 @@ function decidePaneWriteback(state: ProjectState | null, claim: PaneClaim): Pane
   if (claim.source === "demotion") {
     if (!pane.agentSessionId) return "ineligible-boundary";
     if (pane.agentSessionId === sessionId) return "unchanged";
-    if (launchIdLeftByFarewell(claim) === pane.agentSessionId) {
+    if (launchIdLeftByFarewell(claim, authored) === pane.agentSessionId) {
       pane.agentSessionId = sessionId;
       return "superseded";
     }
@@ -275,7 +280,7 @@ function decidePaneWriteback(state: ProjectState | null, claim: PaneClaim): Pane
     pane.agentSessionId = sessionId;
     return "superseded";
   }
-  if (launchIdLeftByFarewell(claim) === pane.agentSessionId) {
+  if (launchIdLeftByFarewell(claim, authored) === pane.agentSessionId) {
     pane.agentSessionId = sessionId;
     return "superseded";
   }

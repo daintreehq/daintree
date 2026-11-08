@@ -1,5 +1,8 @@
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
-import { supportsSessionIdAssignment } from "../../../shared/types/agentSettings.js";
+import {
+  isAssignableSessionId,
+  supportsSessionIdAssignment,
+} from "../../../shared/types/agentSettings.js";
 import type { AgentEndObservation } from "../../../shared/types/ipc/agent.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { createLogger } from "../../utils/logger.js";
@@ -180,8 +183,15 @@ export function captureAgentEndSession(args: AgentEndCaptureArgs): AgentEndObser
     // Choosing the id doesn't pin the conversation: Claude Code's `/resume`
     // and `/clear` move the run to another session without touching argv, and
     // the farewell names the one it ended in (#16377). Only a complete
-    // farewell naming another id overrides the assigned one.
-    if (match.kind === "match" && match.sessionId !== terminal.agentSessionId) {
+    // farewell naming another id overrides the assigned one, and only a UUID,
+    // the one shape these CLIs mint: an exit with no farewell (a double
+    // Ctrl-C prints none) leaves the conversation's own last lines in the
+    // window, where `claude --resume abc123` is prose, not a session.
+    if (
+      match.kind === "match" &&
+      match.sessionId !== terminal.agentSessionId &&
+      isAssignableSessionId(match.sessionId)
+    ) {
       // The host's copy is what a renderer reload and a later close read, so
       // it follows the launched run to where it ended. A later run in the same
       // shell is another conversation, not this pane's.

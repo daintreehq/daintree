@@ -1187,12 +1187,81 @@ describe("captured agent session persistence (#12433)", () => {
       expect((await savedPane())?.agentSessionId).toBe("relaunched-on");
     });
 
-    it("treats a demotion that names the launch id as before", async () => {
+    it.each([
+      ["exit", "unchanged"],
+      ["demotion", "ineligible-boundary"],
+    ] as const)(
+      "journals a %s farewell naming the launch id once, as before",
+      async (boundary, paneOutcome) => {
+        const generation = launchClaude();
+        await seed([claudePane()]);
+
+        await expect(
+          persistCapturedAgentSession(farewell(generation, boundary, { sessionId: LAUNCH_ID }))
+        ).resolves.toEqual({ journal: "written", pane: paneOutcome });
+        const history = await readSessionHistory(userDataDir);
+        expect(history.map((r) => r.sessionId)).toEqual([LAUNCH_ID]);
+        expect(persistAgentSession).toHaveBeenCalledTimes(1);
+        expect((await savedPane())?.agentSessionId).toBe(LAUNCH_ID);
+      }
+    );
+
+    it("needs the confirmed launch to be the farewell's own generation", async () => {
+      // The first launch was confirmed on A; the relaunch was requested and
+      // the pane still reads A, but the host never confirmed that spawn.
+      launchClaude();
+      const second = launchClaude(undefined, { confirmed: false });
+      await seed([claudePane()]);
+
+      await expect(writeBackCapturedSessionId(farewell(second, "demotion"))).resolves.toBe(
+        "ineligible-boundary"
+      );
+      await expect(writeBackCapturedSessionId(farewell(second, "exit"))).resolves.toBe("conflict");
+      expect((await savedPane())?.agentSessionId).toBe(LAUNCH_ID);
+    });
+
+    it("needs an exit's run to belong to the generation it closes", async () => {
       const generation = launchClaude();
       await seed([claudePane()]);
 
       await expect(
-        writeBackCapturedSessionId(farewell(generation, "demotion", { sessionId: LAUNCH_ID }))
+        writeBackCapturedSessionId({
+          ...farewell(generation, "exit"),
+          run: { launchGeneration: generation + 1, agentIncarnation: 0 },
+        })
+      ).resolves.toBe("conflict");
+      expect((await savedPane())?.agentSessionId).toBe(LAUNCH_ID);
+    });
+
+    it("yields to a later run whose own claim reached the pane first", async () => {
+      // A restored `codex resume A`: its run left A for B and quit, and the
+      // user typed `codex resume A` again. That run's argv lands while the
+      // launched run's farewell is still on its way.
+      const generation = launch();
+      noteTerminalLaunch(TERMINAL_ID, {
+        command: `codex resume ${LAUNCH_ID}`,
+        agentSessionId: LAUNCH_ID,
+      });
+      releaseSupersededCapturedSession(TERMINAL_ID, generation);
+      await seed([pane({ agentSessionId: LAUNCH_ID })]);
+      await expect(
+        acceptObservedAgentSession({
+          terminalId: TERMINAL_ID,
+          agentId: "codex",
+          projectId: PROJECT_ID,
+          sessionId: LAUNCH_ID,
+          run: { launchGeneration: generation, agentIncarnation: 1 },
+        })
+      ).resolves.toBe("unchanged");
+
+      await expect(
+        writeBackCapturedSessionId(
+          capture(null, {
+            boundary: "demotion",
+            run: { launchGeneration: generation, agentIncarnation: 0 },
+            record: { sessionId: ENDED_ID },
+          })
+        )
       ).resolves.toBe("ineligible-boundary");
       expect((await savedPane())?.agentSessionId).toBe(LAUNCH_ID);
     });
@@ -1203,7 +1272,10 @@ describe("captured agent session persistence (#12433)", () => {
       await writeBackCapturedSessionId(farewell(generation, "demotion"));
 
       launchClaude({ command: "claude", agentSessionId: ENDED_ID });
-      await sealAndDrainCapturedSessionPersistence(5_000);
+      await expect(sealAndDrainCapturedSessionPersistence(5_000)).resolves.toEqual({
+        drained: true,
+        pending: 0,
+      });
 
       expect((await savedPane())?.agentSessionId).toBe(ENDED_ID);
     });
@@ -1214,7 +1286,10 @@ describe("captured agent session persistence (#12433)", () => {
       await writeBackCapturedSessionId(farewell(generation, "demotion"));
 
       launchClaude({ command: "claude", agentSessionId: "brand-new" });
-      await sealAndDrainCapturedSessionPersistence(5_000);
+      await expect(sealAndDrainCapturedSessionPersistence(5_000)).resolves.toEqual({
+        drained: true,
+        pending: 0,
+      });
 
       expect((await savedPane())?.agentSessionId).toBeUndefined();
     });
