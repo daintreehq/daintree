@@ -998,14 +998,16 @@ describe("runHostInstall", () => {
       );
     });
 
-    it("won't call a build unchanged when only its file name says which it is", async () => {
+    it("says it can't confirm the build when there's no commit to compare", async () => {
       const deps = makeDeps({
         shell: failingSwap("none"),
         probes: [macProbe({ build: '{"daintreeBuildInfo":1,"version":"1.3.0"}', hostMode: false })],
       });
-      await expect(install(deps)).rejects.toThrow(
-        /Couldn't put the new build in place.*couldn't be restored on the host/s
+      const failure = install(deps);
+      await expect(failure).rejects.toThrow(
+        /Couldn't put the new build in place.*couldn't be confirmed/s
       );
+      await expect(failure).rejects.not.toThrow(/couldn't be restored/);
     });
 
     it("says it was put back when the rollback restored it", async () => {

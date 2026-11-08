@@ -1086,7 +1086,13 @@ export async function runHostInstall(
         }));
 
     type Recovery =
-      "unchanged" | "restarted" | "restored" | "no-previous" | "not-restored" | "lock-lost";
+      | "unchanged"
+      | "restarted"
+      | "restored"
+      | "no-previous"
+      | "not-restored"
+      | "unconfirmed"
+      | "lock-lost";
 
     /** Stop whatever the swap started, put the previous build back, start it, and check it. */
     const recover = async (): Promise<Recovery> => {
@@ -1142,9 +1148,9 @@ export async function runHostInstall(
       // what's there, or put it back itself.
       if (swapped && previous) return "restored";
       if (wasRunning) return "restarted";
-      // A build known only by its file name can't be told from what the swap just
-      // put at that name, so it isn't called unchanged.
-      return probe.install?.commit != null ? "unchanged" : "not-restored";
+      // With no commit to compare, the read-back can't tell this build from what the
+      // swap put there: an AppImage's version can come from its file name alone.
+      return probe.install?.commit != null ? "unchanged" : "unconfirmed";
     };
 
     const RECOVERY_NOTE: Record<Exclude<Recovery, "unchanged">, string> = {
@@ -1154,6 +1160,7 @@ export async function runHostInstall(
         : "The previous build was put back.",
       "no-previous": "There was no previous build to put back.",
       "not-restored": "Daintree couldn't be restored on the host; check it at the machine.",
+      unconfirmed: "Which build is on the host couldn't be confirmed; check it at the machine.",
       "lock-lost":
         "Another device may be updating the host now, so nothing more was changed there; check it at the machine.",
     };
