@@ -60,7 +60,7 @@ export function reportTerminalStallEscalated(terminalId: string): void {
       title: "Terminal output stalled",
       message: noticeMessage(1),
       supersedeKey: noticeKey,
-      context: projectId ? { eventKind: "recovery", projectId } : { eventKind: "recovery" },
+      context: { eventKind: "recovery", ...(projectId ? { projectId } : {}) },
     }) || null;
 }
 

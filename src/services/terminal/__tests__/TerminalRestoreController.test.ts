@@ -826,6 +826,34 @@ describe("TerminalRestoreController", () => {
         expect(writeDataSpy).toHaveBeenCalledWith("t1", "held-during-fetch", 1);
       });
 
+      it("releases the window as soon as the caller aborts, even if the fetch hangs", async () => {
+        const { terminalClient } = await import("@/clients");
+        let resolveFetch!: (value: SerializedTerminalSnapshot | null) => void;
+        vi.mocked(terminalClient.getSerializedState).mockImplementation(
+          () => new Promise((resolve) => (resolveFetch = resolve))
+        );
+        const managed = makeManagedTerminal();
+        instances.set("t1", managed);
+        const controllerAbort = new AbortController();
+
+        const promise = controller.fetchAndRestore("t1", {
+          settlePendingWrites: true,
+          signal: controllerAbort.signal,
+        });
+        await flushMicrotasks();
+        managed.deferredOutput.push({ data: "held-during-fetch", chunkCount: 1 });
+        controllerAbort.abort();
+
+        await expect(promise).resolves.toBe(false);
+        expect(managed.isSerializedRestoreInProgress).toBe(false);
+        expect(writeDataSpy).toHaveBeenCalledWith("t1", "held-during-fetch", 1);
+
+        // The host answering afterwards changes nothing.
+        resolveFetch(snapshot("late-state"));
+        await flushMicrotasks();
+        expect(mockTerminal.reset).not.toHaveBeenCalled();
+      });
+
       it("restores normally when the signal never aborts", async () => {
         const { terminalClient } = await import("@/clients");
         vi.mocked(terminalClient.getSerializedState).mockResolvedValue(snapshot("small-state"));

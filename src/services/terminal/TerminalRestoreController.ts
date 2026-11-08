@@ -44,13 +44,37 @@ export interface FetchAndRestoreOptions {
    * time the restore is abandoned rather than painted over stale output.
    */
   settlePendingWrites?: boolean;
-  /** Abort to drop the snapshot if it arrives after the caller gave up on it. */
+  /**
+   * Abort to give up while the snapshot is still on its way: the window closes
+   * and held output replays at once, and a late snapshot is never applied. A
+   * replay already under way finishes; it is writing a snapshot that is good.
+   */
   signal?: AbortSignal;
 }
 
 // Bounds the barrier `settlePendingWrites` waits on. A parser that can't get
 // through the backlog in this long won't paint a snapshot either.
 const PENDING_WRITES_SETTLE_TIMEOUT_MS = 5000;
+
+const ABORTED = Symbol("aborted");
+
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T | typeof ABORTED> {
+  if (signal.aborted) return Promise.resolve(ABORTED);
+  return new Promise((resolve, reject) => {
+    const onAbort = () => resolve(ABORTED);
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      }
+    );
+  });
+}
 
 export interface RestoreControllerDeps {
   getInstance: (id: string) => ManagedTerminal | undefined;
@@ -645,7 +669,14 @@ export class TerminalRestoreController {
         return abandon();
       }
 
-      const snapshot = await fetching;
+      // The caller stopping waiting releases the window now rather than when a
+      // slow host finally answers, and a snapshot it no longer expects must not
+      // reset the pane under whatever it has done since.
+      const fetched = options.signal
+        ? await untilAborted(fetching, options.signal)
+        : await fetching;
+      if (fetched === ABORTED) return abandon();
+      const snapshot = fetched;
 
       // Check staleness after IPC round-trip
       const current = this.deps.getInstance(id);
@@ -653,10 +684,6 @@ export class TerminalRestoreController {
         releaseIfStillOwned();
         return false;
       }
-
-      // The caller stopped waiting; a snapshot it no longer expects must not
-      // reset the pane under whatever it has done since.
-      if (options.signal?.aborted) return abandon();
 
       // restoreFetchedState will take over the isSerializedRestoreInProgress flag
       const result = await this.restoreFetchedState(

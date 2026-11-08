@@ -110,6 +110,7 @@ describe("terminalStallNotice", () => {
       priority: "low",
       placement: "grid-bar",
       message: "Something else",
+      context: { eventKind: "recovery" },
     });
     reportTerminalStallEscalated("t1");
     reportTerminalStallEscalated("t2");
