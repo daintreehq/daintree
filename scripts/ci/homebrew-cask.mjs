@@ -9,7 +9,8 @@
 // never reach users.
 import { createHash } from "node:crypto";
 import { appendFileSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 export const RELEASES_BASE_URL = "https://updates.daintree.org/releases";
@@ -123,8 +124,11 @@ export async function sha256OfUrl(
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
+      // identity: fetch decodes a compressed body, which would make its
+      // Content-Length the size of different bytes from the ones hashed.
       const response = await fetchImpl(url, {
         redirect: "follow",
+        headers: { "accept-encoding": "identity" },
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (!response.ok || !response.body) {
@@ -136,8 +140,10 @@ export async function sha256OfUrl(
         hash.update(chunk);
         bytes += chunk.length;
       }
+      const encoding = response.headers.get("content-encoding");
       const expected = Number(response.headers.get("content-length"));
-      if (Number.isFinite(expected) && expected > 0 && bytes !== expected) {
+      const unencoded = !encoding || encoding === "identity";
+      if (unencoded && Number.isFinite(expected) && expected > 0 && bytes !== expected) {
         throw new Error(`GET ${url} ended after ${bytes} of ${expected} bytes`);
       }
       if (bytes === 0) throw new Error(`GET ${url} returned an empty body`);
@@ -221,6 +227,7 @@ async function main() {
       setOutput("written", "false");
       return;
     }
+    await mkdir(path.dirname(args.out), { recursive: true });
     await writeFile(args.out, result.cask, "utf8");
     setOutput("written", "true");
     console.log(`[homebrew] wrote ${args.out} for daintree ${args.version}`);

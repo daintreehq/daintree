@@ -1,10 +1,11 @@
 import { describe, it, expect } from "vitest";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import {
-  CASK_ARCHES,
   compareVersions,
   dmgUrl,
   generateCask,
@@ -14,26 +15,44 @@ import {
   sha256OfUrl,
 } from "./homebrew-cask.mjs";
 
-const fixture = readFileSync(
-  path.join(path.dirname(fileURLToPath(import.meta.url)), "__fixtures__/homebrew/daintree.rb"),
-  "utf8"
-);
+const here = path.dirname(fileURLToPath(import.meta.url));
+const SCRIPT = path.join(here, "homebrew-cask.mjs");
+const fixture = readFileSync(path.join(here, "__fixtures__/homebrew/daintree.rb"), "utf8");
 
 const ARM_SHA = "a".repeat(64);
 const INTEL_SHA = "b".repeat(64);
+const ARM_URL = "https://updates.daintree.org/releases/Daintree-0.49.0-arm64.dmg";
+const INTEL_URL = "https://updates.daintree.org/releases/Daintree-0.49.0-x64.dmg";
 const sha256Hex = (data) => createHash("sha256").update(data).digest("hex");
 
 function fakeFetch(bodies) {
   const calls = [];
-  const fetchImpl = async (url) => {
-    calls.push(url);
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
     const body = bodies[url];
     if (body === undefined) return new Response("missing", { status: 404 });
-    if (typeof body === "function") return body();
+    if (typeof body === "function") return body(init);
     return new Response(body, { headers: { "content-length": String(Buffer.byteLength(body)) } });
   };
-  return { fetchImpl, calls };
+  return { fetchImpl, calls, urls: () => calls.map((c) => c.url) };
 }
+
+function streamOf(chunks) {
+  return new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk));
+      controller.close();
+    },
+  });
+}
+
+// The fixture is the cask with 1.2.3 and placeholder hashes; swapping those
+// out gives the expected output without going through renderCask.
+const expectedCask = (version, arm, intel) =>
+  fixture
+    .replace('version "1.2.3"', `version "${version}"`)
+    .replace(ARM_SHA, arm)
+    .replace(INTEL_SHA, intel);
 
 describe("renderCask", () => {
   it("matches the checked-in cask", () => {
@@ -90,10 +109,16 @@ describe("versions", () => {
     expect(isStableVersion(undefined)).toBe(false);
   });
 
-  it("compares numerically, not lexically", () => {
-    expect(compareVersions("0.10.0", "0.9.0")).toBe(1);
-    expect(compareVersions("0.9.9", "0.10.0")).toBe(-1);
-    expect(compareVersions("1.0.0", "1.0.0")).toBe(0);
+  it.each([
+    ["0.10.0", "0.9.0", 1],
+    ["0.9.9", "0.10.0", -1],
+    ["1.0.0", "0.99.99", 1],
+    ["2.0.0", "10.0.0", -1],
+    ["0.49.1", "0.49.0", 1],
+    ["0.49.0", "0.49.10", -1],
+    ["1.0.0", "1.0.0", 0],
+  ])("compares %s with %s numerically", (a, b, expected) => {
+    expect(compareVersions(a, b)).toBe(expected);
   });
 
   it("reads the version stanza of an existing cask", () => {
@@ -101,19 +126,26 @@ describe("versions", () => {
     expect(parseCaskVersion('cask "daintree" do\nend\n')).toBeNull();
   });
 
-  it("builds the electron-builder DMG name for an arch", () => {
-    expect(dmgUrl("0.49.0", "x64")).toBe(
-      "https://updates.daintree.org/releases/Daintree-0.49.0-x64.dmg"
-    );
+  it("builds the electron-builder DMG name for each arch", () => {
+    expect(dmgUrl("0.49.0", "arm64")).toBe(ARM_URL);
+    expect(dmgUrl("0.49.0", "x64")).toBe(INTEL_URL);
   });
 });
 
 describe("sha256OfUrl", () => {
-  it("hashes the streamed body", async () => {
-    const { fetchImpl } = fakeFetch({ "https://x/a.dmg": "dmg bytes" });
+  it("hashes every chunk of the streamed body", async () => {
+    const fetchImpl = async () => new Response(streamOf(["dmg ", "in ", "chunks"]));
     await expect(sha256OfUrl("https://x/a.dmg", { fetchImpl })).resolves.toBe(
-      sha256Hex("dmg bytes")
+      sha256Hex("dmg in chunks")
     );
+  });
+
+  it("follows redirects, asks for the bytes unencoded and bounds the request", async () => {
+    const { fetchImpl, calls } = fakeFetch({ "https://x/a.dmg": "dmg bytes" });
+    await sha256OfUrl("https://x/a.dmg", { fetchImpl });
+    expect(calls[0].init.redirect).toBe("follow");
+    expect(calls[0].init.headers).toEqual({ "accept-encoding": "identity" });
+    expect(calls[0].init.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("retries a server error and hashes the retry", async () => {
@@ -126,20 +158,44 @@ describe("sha256OfUrl", () => {
     expect(attempt).toBe(2);
   });
 
-  it("gives up after its last attempt", async () => {
-    const { fetchImpl, calls } = fakeFetch({});
-    await expect(
-      sha256OfUrl("https://x/a.dmg", { fetchImpl, attempts: 3, retryDelayMs: 0 })
-    ).rejects.toThrow(/HTTP 404/);
-    expect(calls).toHaveLength(3);
+  it("retries a truncated body and hashes the complete retry", async () => {
+    let attempt = 0;
+    const fetchImpl = async () =>
+      ++attempt === 1
+        ? new Response("dmg", { headers: { "content-length": "9" } })
+        : new Response("dmg bytes", { headers: { "content-length": "9" } });
+    await expect(sha256OfUrl("https://x/a.dmg", { fetchImpl, retryDelayMs: 0 })).resolves.toBe(
+      sha256Hex("dmg bytes")
+    );
+    expect(attempt).toBe(2);
   });
 
-  it("rejects a body shorter than its content-length", async () => {
-    const fetchImpl = async () =>
-      new Response("partial", { headers: { "content-length": "1000" } });
+  it.each([1, 2, 3])("makes exactly %i attempt(s) before giving up", async (attempts) => {
+    const { fetchImpl, calls } = fakeFetch({});
     await expect(
-      sha256OfUrl("https://x/a.dmg", { fetchImpl, attempts: 2, retryDelayMs: 0 })
-    ).rejects.toThrow(/ended after 7 of 1000 bytes/);
+      sha256OfUrl("https://x/a.dmg", { fetchImpl, attempts, retryDelayMs: 0 })
+    ).rejects.toThrow(/HTTP 404/);
+    expect(calls).toHaveLength(attempts);
+  });
+
+  it.each([
+    ["shorter", "partial", "1000", /ended after 7 of 1000 bytes/],
+    ["longer", "too long", "3", /ended after 8 of 3 bytes/],
+  ])("rejects a body %s than its content-length", async (_label, body, length, message) => {
+    const fetchImpl = async () => new Response(body, { headers: { "content-length": length } });
+    await expect(
+      sha256OfUrl("https://x/a.dmg", { fetchImpl, attempts: 1, retryDelayMs: 0 })
+    ).rejects.toThrow(message);
+  });
+
+  it("skips the length check on an encoded response, whose length counts other bytes", async () => {
+    const fetchImpl = async () =>
+      new Response("decoded dmg bytes", {
+        headers: { "content-encoding": "gzip", "content-length": "5" },
+      });
+    await expect(sha256OfUrl("https://x/a.dmg", { fetchImpl, attempts: 1 })).resolves.toBe(
+      sha256Hex("decoded dmg bytes")
+    );
   });
 
   it("rejects an empty body", async () => {
@@ -148,25 +204,42 @@ describe("sha256OfUrl", () => {
       sha256OfUrl("https://x/a.dmg", { fetchImpl, attempts: 1, retryDelayMs: 0 })
     ).rejects.toThrow(/empty body/);
   });
+
+  it("times out a response whose headers never arrive", async () => {
+    const fetchImpl = (_url, init) =>
+      new Promise((_resolve, reject) =>
+        init.signal.addEventListener("abort", () => reject(init.signal.reason))
+      );
+    await expect(
+      sha256OfUrl("https://x/a.dmg", { fetchImpl, attempts: 1, timeoutMs: 20 })
+    ).rejects.toThrow(/timeout/i);
+  });
+
+  it("times out a body that stalls partway", async () => {
+    const fetchImpl = async (_url, init) =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("partial"));
+            init.signal.addEventListener("abort", () => controller.error(init.signal.reason));
+          },
+        })
+      );
+    await expect(
+      sha256OfUrl("https://x/a.dmg", { fetchImpl, attempts: 1, timeoutMs: 20 })
+    ).rejects.toThrow(/timeout/i);
+  });
 });
 
 describe("generateCask", () => {
-  const bodies = {
-    [dmgUrl("0.49.0", CASK_ARCHES.arm)]: "arm64 dmg",
-    [dmgUrl("0.49.0", CASK_ARCHES.intel)]: "x64 dmg",
-  };
+  const bodies = { [ARM_URL]: "arm64 dmg", [INTEL_URL]: "x64 dmg" };
+  const expected = expectedCask("0.49.0", sha256Hex("arm64 dmg"), sha256Hex("x64 dmg"));
 
   it("hashes the published arm64 and x64 DMGs for the version", async () => {
-    const { fetchImpl, calls } = fakeFetch(bodies);
+    const { fetchImpl, urls } = fakeFetch(bodies);
     const result = await generateCask({ version: "0.49.0", fetchImpl });
-    expect(result.written).toBe(true);
-    expect(calls.sort()).toEqual(Object.keys(bodies).sort());
-    expect(result.cask).toBe(
-      renderCask({
-        version: "0.49.0",
-        sha256: { arm64: sha256Hex("arm64 dmg"), x64: sha256Hex("x64 dmg") },
-      })
-    );
+    expect(urls().sort()).toEqual([ARM_URL, INTEL_URL]);
+    expect(result).toEqual({ written: true, existingVersion: null, cask: expected });
   });
 
   it("leaves a newer cask alone without downloading anything", async () => {
@@ -178,13 +251,15 @@ describe("generateCask", () => {
   });
 
   it.each([
-    ["an older", 'version "0.48.2"', "0.48.2"],
-    ["the same", 'version "0.49.0"', "0.49.0"],
-  ])("replaces %s version", async (_label, stanza, existingVersion) => {
-    const { fetchImpl } = fakeFetch(bodies);
-    const existing = fixture.replace('version "1.2.3"', stanza);
+    ["an older", "0.48.2"],
+    ["a patch-older", "0.48.9"],
+    ["the same", "0.49.0"],
+  ])("replaces %s version", async (_label, existingVersion) => {
+    const { fetchImpl, urls } = fakeFetch(bodies);
+    const existing = fixture.replace('version "1.2.3"', `version "${existingVersion}"`);
     const result = await generateCask({ version: "0.49.0", existing, fetchImpl });
-    expect(result).toMatchObject({ written: true, existingVersion });
+    expect(urls().sort()).toEqual([ARM_URL, INTEL_URL]);
+    expect(result).toEqual({ written: true, existingVersion, cask: expected });
   });
 
   it.each([
@@ -206,9 +281,69 @@ describe("generateCask", () => {
   });
 
   it("fails when a DMG for the version was never published", async () => {
-    const { fetchImpl } = fakeFetch({ [dmgUrl("0.49.0", "arm64")]: "arm64 dmg" });
+    const { fetchImpl } = fakeFetch({ [ARM_URL]: "arm64 dmg" });
     await expect(generateCask({ version: "0.49.0", fetchImpl, retryDelayMs: 0 })).rejects.toThrow(
       /Daintree-0\.49\.0-x64\.dmg returned HTTP 404/
     );
   });
+});
+
+// Only the paths that finish before any download, so these never touch the network.
+describe("CLI", () => {
+  const runCli = (args, env = {}) =>
+    spawnSync(process.execPath, [SCRIPT, ...args], {
+      encoding: "utf8",
+      env: { ...process.env, GITHUB_OUTPUT: "", ...env },
+    });
+
+  function withTempDir(fn) {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "homebrew-cask-"));
+    try {
+      return fn(dir);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it.each([
+    ["no arguments", []],
+    ["no --out", ["--version", "0.49.0"]],
+    ["an unknown flag", ["--version", "0.49.0", "--out", "x.rb", "--force"]],
+    ["a flag with no value", ["--version"]],
+  ])("fails on %s", (_label, args) => {
+    const result = runCli(args);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/::error::/);
+  });
+
+  it("skips a version older than the tap's and says so in GITHUB_OUTPUT", () =>
+    withTempDir((dir) => {
+      const existing = path.join(dir, "daintree.rb");
+      const out = path.join(dir, "out", "daintree.rb");
+      const output = path.join(dir, "github-output");
+      writeFileSync(existing, fixture.replace('version "1.2.3"', 'version "9.0.0"'));
+      writeFileSync(output, "");
+      const result = runCli(["--version", "0.49.0", "--out", out, "--existing", existing], {
+        GITHUB_OUTPUT: output,
+      });
+      expect(result.status).toBe(0);
+      expect(result.stdout).toMatch(/::notice::.*9\.0\.0, newer than 0\.49\.0/);
+      expect(readFileSync(output, "utf8")).toBe("written=false\n");
+      expect(existsSync(out)).toBe(false);
+    }));
+
+  it("fails, writing nothing, when the existing cask can't be read", () =>
+    withTempDir((dir) => {
+      const out = path.join(dir, "daintree.rb");
+      const output = path.join(dir, "github-output");
+      writeFileSync(output, "");
+      // A directory where the cask should be: unreadable, but not missing.
+      const result = runCli(["--version", "0.49.0", "--out", out, "--existing", dir], {
+        GITHUB_OUTPUT: output,
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toMatch(/::error::.*EISDIR/);
+      expect(readFileSync(output, "utf8")).toBe("");
+      expect(existsSync(out)).toBe(false);
+    }));
 });

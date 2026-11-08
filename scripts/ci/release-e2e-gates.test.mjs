@@ -128,6 +128,19 @@ describe("release workflow e2e gating contract (#11117)", () => {
     }
   );
 
+  it("traces a job that only pushes to another repository as a publisher", () => {
+    const pushOnly = {
+      gate: { uses: E2E_WORKFLOW },
+      tap: { needs: ["gate"], steps: [{ run: "git add x\ngit push origin HEAD" }] },
+      lint: { steps: [{ run: "npm run lint" }] },
+    };
+    expect(publishersOf(pushOnly)).toEqual(["tap"]);
+    const macos = workflows.find((w) => w.file === "release-macos.yml");
+    expect(macos.publishers).toEqual(
+      expect.arrayContaining(["publish-daintree", "publish-homebrew-tap"])
+    );
+  });
+
   it.each(workflows)("$file: every build directly needs every gate", ({ jobs, gates, builds }) => {
     for (const build of builds) {
       expect(needsOf(jobs[build]), `${build} must gate on all of: ${gates.join(", ")}`).toEqual(

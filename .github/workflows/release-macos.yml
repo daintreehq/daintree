@@ -466,9 +466,12 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 30
     # One tap writer across every tag, so two releases never race on its branch.
+    # queue: max keeps every waiting job; the default keeps only the newest
+    # arrival, so re-running an old tag could cancel a newer release's update.
     concurrency:
       group: homebrew-tap
       cancel-in-progress: false
+      queue: max
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
       HOMEBREW_NO_ANALYTICS: "1"
