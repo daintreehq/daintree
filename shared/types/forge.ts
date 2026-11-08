@@ -660,6 +660,11 @@ export interface PR {
   /** Whether the viewer may cancel a pending auto-merge, when reported. */
   viewerCanDisableAutoMerge?: boolean;
   /**
+   * Whether the forge lets the viewer merge without waiting for the base
+   * branch's requirements (GitHub's admin bypass), when reported.
+   */
+  viewerCanMergeAsAdmin?: boolean;
+  /**
    * The commits this PR would merge, newest last — single-PR reads only.
    * `items` can hold fewer than `totalCount` when the forge capped the read.
    */
