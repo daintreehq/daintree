@@ -124,7 +124,9 @@ describe("UserPromptTemplatesSection", () => {
     const group = screen.getByRole("group", { name: "Prompt templates" });
     expect(group.textContent).toMatch(/read from this (Mac|PC|machine)/);
     expect(group.textContent).toContain("while you work on studio-01");
-    expect(screen.getByRole("button", { name: /^Open folder on this (Mac|PC|machine)$/ })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /^Open folder on this (Mac|PC|machine)$/ })
+    ).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Open folder on studio-01" })).toBeNull();
   });
 

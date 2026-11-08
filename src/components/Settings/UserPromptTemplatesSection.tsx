@@ -46,8 +46,8 @@ export function UserPromptTemplatesSection() {
           label="Templates folder"
           description={
             <>
-              Markdown files here join the <code className="font-mono">/</code> menu of every
-              agent, in every project.
+              Markdown files here join the <code className="font-mono">/</code> menu of every agent,
+              in every project.
               {remoteHostName &&
                 ` They're read from ${deviceOwnerPhrase()}, including while you work on ${remoteHostName}.`}
               {directory && <code className="mt-1 block font-mono break-all">{directory}</code>}

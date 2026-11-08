@@ -309,24 +309,21 @@ describe("invokeForEndpoint", () => {
     UNCLASSIFIED_CHANNEL,
     "user-prompt-templates:list",
     "user-prompt-templates:open-folder",
-  ])(
-    "refuses %s over a link even with a context handler",
-    async (channel) => {
-      const handler = vi.fn(() => "ran");
-      getIpcDispatcher().registerInvoke(channel, handler);
-      const { endpoint } = makeRemoteEndpoint();
+  ])("refuses %s over a link even with a context handler", async (channel) => {
+    const handler = vi.fn(() => "ran");
+    getIpcDispatcher().registerInvoke(channel, handler);
+    const { endpoint } = makeRemoteEndpoint();
 
-      const envelope = await getIpcDispatcher().invokeForEndpoint(
-        { endpoint, client: REMOTE_CLIENT },
-        channel,
-        []
-      );
+    const envelope = await getIpcDispatcher().invokeForEndpoint(
+      { endpoint, client: REMOTE_CLIENT },
+      channel,
+      []
+    );
 
-      expect(envelope.ok).toBe(false);
-      if (!envelope.ok) expect(envelope.error.code).toBe("CHANNEL_NOT_REMOTABLE");
-      expect(handler).not.toHaveBeenCalled();
-    }
-  );
+    expect(envelope.ok).toBe(false);
+    if (!envelope.ok) expect(envelope.error.code).toBe("CHANNEL_NOT_REMOTABLE");
+    expect(handler).not.toHaveBeenCalled();
+  });
 
   it("refuses a hybrid channel over a link until a split admits it", async () => {
     const handler = vi.fn(() => "host-half");
@@ -475,7 +472,9 @@ describe("remote router", () => {
     const local = vi.fn(() => "this-machine's plugins");
     ipcMainMock.handle("plugin:list", local);
 
-    await expect(invokeLocal("plugin:list", makeEvent())).resolves.toEqual(wrapSuccess("from-host"));
+    await expect(invokeLocal("plugin:list", makeEvent())).resolves.toEqual(
+      wrapSuccess("from-host")
+    );
 
     expect(router.forwardInvoke).toHaveBeenCalledWith("box", 5, "plugin:list", []);
     expect(local).not.toHaveBeenCalled();

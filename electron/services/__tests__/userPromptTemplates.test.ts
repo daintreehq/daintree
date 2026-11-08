@@ -98,9 +98,9 @@ describe("parseUserPromptTemplate", () => {
       "title:"
     );
     const longest = "x".repeat(8192);
-    expect("template" in parseUserPromptTemplate("t", `---\ntitle: T\ndescription: D\n---\n${longest}`)).toBe(
-      true
-    );
+    expect(
+      "template" in parseUserPromptTemplate("t", `---\ntitle: T\ndescription: D\n---\n${longest}`)
+    ).toBe(true);
     expect(reasonFor(`---\ntitle: T\ndescription: D\n---\n${longest}x`)).toContain("limit");
   });
 

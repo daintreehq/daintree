@@ -30,8 +30,7 @@ const FRONTMATTER_PATTERN = /^---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*(?=\r?\
 const FrontmatterSchema = PromptTemplateContributionSchema.omit({ id: true, body: true });
 
 export type ParsedUserPromptTemplate =
-  | { template: PromptTemplateContribution }
-  | { reason: string };
+  { template: PromptTemplateContribution } | { reason: string };
 
 export function getUserPromptTemplatesDir(): string {
   return path.join(os.homedir(), ".daintree", "templates");
@@ -103,7 +102,9 @@ function errorCode(err: unknown): string | undefined {
 }
 
 /** The file's text, a reason it can't be used, or null if it has since gone. */
-async function readTemplateFile(filePath: string): Promise<{ text: string } | { reason: string } | null> {
+async function readTemplateFile(
+  filePath: string
+): Promise<{ text: string } | { reason: string } | null> {
   let handle: fs.FileHandle;
   try {
     // Links are followed: this is the person's own folder, and a dotfiles setup
@@ -178,7 +179,10 @@ export async function readUserPromptTemplates(
       problems.push({ fileName, reason: file.reason });
       continue;
     }
-    const parsed = parseUserPromptTemplate(fileName.slice(0, -MARKDOWN_EXTENSION.length), file.text);
+    const parsed = parseUserPromptTemplate(
+      fileName.slice(0, -MARKDOWN_EXTENSION.length),
+      file.text
+    );
     if ("reason" in parsed) problems.push({ fileName, reason: parsed.reason });
     else templates.push(parsed.template);
   }
