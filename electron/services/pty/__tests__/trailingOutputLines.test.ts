@@ -93,6 +93,7 @@ const ODD_FRAGMENTS = [
   "\\",
   "\x1bD",
   "\u2028",
+  "\u2029",
 ];
 
 const LINE_BREAKS = ["\r", "\n", "\r\n", "\r\n", "\r\n", "\n\n"];
@@ -130,13 +131,24 @@ describe("getTrailingNonBlankLines", () => {
       strip.mockClear();
       const actual = getTrailingNonBlankLines(text, 4);
       if (longestStripInput() < text.length) windowed++;
+      const input = JSON.stringify(text);
       if (JSON.stringify(actual) !== JSON.stringify(expected)) {
-        expect({ text, actual }).toEqual({ text, actual: expected });
+        expect({ iteration, input, count: 4, actual }).toEqual({
+          iteration,
+          input,
+          count: 4,
+          actual: expected,
+        });
       }
       const expectedLast = wholeChunkTailLines(text, 1);
       const actualLast = getTrailingNonBlankLines(text, 1);
       if (JSON.stringify(actualLast) !== JSON.stringify(expectedLast)) {
-        expect({ text, actualLast }).toEqual({ text, actualLast: expectedLast });
+        expect({ iteration, input, count: 1, actual: actualLast }).toEqual({
+          iteration,
+          input,
+          count: 1,
+          actual: expectedLast,
+        });
       }
     }
     // Enough inputs must take the windowed path, or this only proves the
@@ -149,7 +161,8 @@ describe("getTrailingNonBlankLines", () => {
     for (let i = 0; i < 400; i++) {
       chunk += `\x1b[2K\x1b[38;5;245m│ agent output line ${i} with some width\x1b[0m\r\n`;
     }
-    chunk += "\x1b]0;user@host: ~/repo\x07\x1b[01;32muser@host\x1b[00m:\x1b[01;34m~/repo\x1b[00m$ ";
+    chunk +=
+      "\x1b]0;user@host: ~/repo\x07\x1b[01;32muser@host\x1b[00m:\x1b[01;34m~/repo\x1b[00m$ \r\n";
 
     expect(getTrailingNonBlankLines(chunk, 4)).toEqual([
       "│ agent output line 397 with some width",
@@ -157,13 +170,15 @@ describe("getTrailingNonBlankLines", () => {
       "│ agent output line 399 with some width",
       "user@host:~/repo$",
     ]);
+    // One window is enough only when CRLF counts as a single line break.
+    expect(strip).toHaveBeenCalledTimes(1);
     expect(longestStripInput()).toBeLessThan(chunk.length / 20);
   });
 
   it("widens past trailing blank lines to reach the lines above them", () => {
     let chunk = "";
     for (let i = 0; i < 200; i++) chunk += `line ${i}\r\n`;
-    chunk += "user@host:~/repo$ ";
+    chunk += "user@host:~/repo$ \r\n";
     for (let i = 0; i < 40; i++) chunk += "\x1b[2K   \r\n";
 
     expect(getTrailingNonBlankLines(chunk, 4)).toEqual([
@@ -175,7 +190,7 @@ describe("getTrailingNonBlankLines", () => {
     expect(longestStripInput()).toBeLessThan(chunk.length / 2);
   });
 
-  it("strips a long blank line once rather than on every widening", () => {
+  it("bounds the stripping a long blank tail costs across widenings", () => {
     let chunk = "";
     for (let i = 0; i < 20; i++) chunk += `line ${i}\r\n`;
     chunk += "user@host:~/repo$ \r\n";
@@ -217,6 +232,31 @@ describe("getTrailingNonBlankLines", () => {
     chunk += "\x1b\x1b[0m]0;t\n1\n2\n3\n4\n5\n6\n7\n8\n9\x07user@host:~$ ";
 
     expect(getTrailingNonBlankLines(chunk, 4)).toEqual(wholeChunkTailLines(chunk, 4));
+  });
+
+  it("windows past an OSC opener that nothing in the window could close", () => {
+    // Without a BEL or ST after it the opener matches no OSC, so its payload
+    // is visible text and the window strips as the whole would.
+    let chunk = "\x1b]0;never closed\r\n";
+    for (let i = 0; i < 200; i++) chunk += `line ${i}\r\n`;
+    chunk += "user@host:~/repo$ ";
+
+    expect(getTrailingNonBlankLines(chunk, 4)).toEqual(wholeChunkTailLines(chunk, 4));
+    strip.mockClear();
+    getTrailingNonBlankLines(chunk, 4);
+    expect(longestStripInput()).toBeLessThan(chunk.length / 10);
+  });
+
+  it("skips stripping text it would strip whole when the marker is absent", () => {
+    const marker = /[#$%>]/;
+    const repaint =
+      "\x1b[12;33H\x1b[38;2;105;105;105m⠁\x1b[12;35H⢀ Working (12s • esc to interrupt)";
+
+    expect(getTrailingNonBlankLines(repaint, 4, marker)).toEqual([]);
+    expect(strip).not.toHaveBeenCalled();
+    expect(getTrailingNonBlankLines(`${repaint}\x1b[13;1Huser@host:~$ `, 4, marker)).toEqual(
+      wholeChunkTailLines(`${repaint}\x1b[13;1Huser@host:~$ `, 4)
+    );
   });
 
   it("returns every non-blank line when there are fewer than asked for", () => {

@@ -11,10 +11,16 @@ import {
 import type { ProcessDetector } from "../../ProcessDetector.js";
 import { INITIAL_FOREGROUND_SENTINEL } from "../ForegroundProcessGroupProbe.js";
 import { getTrailingNonBlankLines } from "../trailingOutputLines.js";
+import { stripAnsi } from "../AgentPatternDetector.js";
 
 vi.mock("../trailingOutputLines.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../trailingOutputLines.js")>();
   return { ...actual, getTrailingNonBlankLines: vi.fn(actual.getTrailingNonBlankLines) };
+});
+
+vi.mock("../AgentPatternDetector.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../AgentPatternDetector.js")>();
+  return { ...actual, stripAnsi: vi.fn(actual.stripAnsi) };
 });
 
 interface FakeDelegateState {
@@ -103,6 +109,8 @@ function createFakeDelegate(overrides: Partial<FakeDelegateState> = {}): {
 describe("IdentityWatcher", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.mocked(getTrailingNonBlankLines).mockClear();
+    vi.mocked(stripAnsi).mockClear();
   });
 
   afterEach(() => {
@@ -2577,6 +2585,26 @@ describe("IdentityWatcher", () => {
       watcher.dispose();
     });
 
+    it("strips only the tail of a large repaint and none of a cursor-addressed one", async () => {
+      const { watcher } = await makeCommittedClaude();
+      const repaint = agentRepaint(300);
+
+      vi.mocked(stripAnsi).mockClear();
+      watcher.observeOutput(repaint);
+      const longestStrip = Math.max(
+        ...vi.mocked(stripAnsi).mock.calls.map(([text]) => text.length)
+      );
+      expect(longestStrip).toBeLessThan(repaint.length / 20);
+
+      // A Codex-style frame: cursor moves and cells, no line break to window on.
+      vi.mocked(stripAnsi).mockClear();
+      watcher.observeOutput(
+        "\x1b[12;33H\x1b[38;2;105;105;105m⠁\x1b[12;35H⢀ Working (12s • esc to interrupt)".repeat(50)
+      );
+      expect(stripAnsi).not.toHaveBeenCalled();
+      watcher.dispose();
+    });
+
     it("demotes on a styled prompt that ends a large agent repaint", async () => {
       const { state, clear, watcher } = await makeCommittedClaude();
 
@@ -2591,7 +2619,8 @@ describe("IdentityWatcher", () => {
     });
 
     it("still lets failure output in the mirror veto a prompt that ends a large repaint", async () => {
-      const { state, clear, watcher } = await makeCommittedClaude();
+      const { delegate, state, clear, watcher } = await makeCommittedClaude();
+      const readMirror = vi.spyOn(delegate, "getLastNLines");
 
       state.foreground = { shellPgid: 123, foregroundPgid: 123 };
       state.visibleLines = ["bash: claude: command not found", "user@host:~/repo$ "];
@@ -2599,6 +2628,66 @@ describe("IdentityWatcher", () => {
       state.ptyDescendantCount = 0;
       watcher.observeOutput(agentRepaint(300, COLORED_PROMPT));
 
+      expect(readMirror).toHaveBeenCalled();
+      expect(clear).not.toHaveBeenCalledWith("prompt-return");
+      watcher.dispose();
+    });
+
+    it.each([
+      ["CRLF", "\r\n"],
+      ["LF", "\n"],
+      ["CR", "\r"],
+    ])(
+      "reads a prompt as the fourth non-blank line from the end but not the fifth (%s)",
+      async (_name, eol) => {
+        const blank = `\x1b[2K\x1b[38;5;245m   \x1b[0m${eol}`;
+        for (const [after, demotes] of [
+          [3, true],
+          [4, false],
+        ] as const) {
+          const { state, clear, watcher } = await makeCommittedClaude();
+          state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+          state.visibleLines = ["working"];
+          state.cursorLine = "";
+          state.ptyDescendantCount = 0;
+
+          let chunk = "";
+          for (let i = 0; i < 100; i++) chunk += `step ${i}${eol}${blank}`;
+          chunk += `user@host:~/repo$ ${eol}${blank}`;
+          for (let i = 0; i < after; i++) chunk += `after ${i}${eol}${blank}`;
+          watcher.observeOutput(chunk);
+
+          if (demotes) {
+            expect(clear).toHaveBeenCalledWith("prompt-return");
+          } else {
+            expect(clear).not.toHaveBeenCalledWith("prompt-return");
+          }
+          watcher.dispose();
+        }
+      }
+    );
+
+    it("re-reads failure output when a stale prompt read is replayed", () => {
+      const clear = vi.fn();
+      const { delegate, state } = createFakeDelegate({
+        detectedAgentId: "codex",
+        processDetector: { clearShellCommandEvidence: clear } as unknown as ProcessDetector,
+      });
+      const watcher = new IdentityWatcher(delegate);
+      state.foreground = { shellPgid: 123, foregroundPgid: 456 };
+      watcher.observeOutput("some output");
+      state.foreground = null;
+      vi.advanceTimersByTime(FOREGROUND_PROBE_KEEPWARM_MS + 1);
+
+      state.visibleLines = ["Codex exited", "runner@host:/repo$ "];
+      state.cursorLine = "runner@host:/repo$ ";
+      watcher.observeOutput(agentRepaint(100, "runner@host:/repo$ "));
+      expect(clear).not.toHaveBeenCalled();
+
+      // A failure lands before the replay: the replayed chunk is judged on it.
+      state.visibleLines = ["bash: codex: command not found", "runner@host:/repo$ "];
+      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      vi.advanceTimersByTime(FOREGROUND_PROBE_FOLLOW_UP_MS);
       expect(clear).not.toHaveBeenCalledWith("prompt-return");
       watcher.dispose();
     });
@@ -2617,8 +2706,25 @@ describe("IdentityWatcher", () => {
 
       vi.mocked(getTrailingNonBlankLines).mockClear();
       watcher.observeOutput(agentRepaint(50));
-
       expect(getTrailingNonBlankLines).toHaveBeenCalledTimes(1);
+
+      // A prompt the busy foreground holds back from demoting is scanned once too.
+      vi.mocked(getTrailingNonBlankLines).mockClear();
+      watcher.observeOutput(agentRepaint(50, COLORED_PROMPT));
+      expect(getTrailingNonBlankLines).toHaveBeenCalledTimes(1);
+      watcher.dispose();
+    });
+
+    it("stops scanning a process command's output once its prompt has been seen", () => {
+      const { delegate } = createFakeDelegate({ ptyDescendantCount: 1 });
+      const watcher = new IdentityWatcher(delegate);
+      watcher.onShellSubmit("pnpm dev");
+      watcher.observeOutput(agentRepaint(50, COLORED_PROMPT));
+      expect(getTrailingNonBlankLines).toHaveBeenCalledTimes(1);
+
+      vi.mocked(getTrailingNonBlankLines).mockClear();
+      watcher.observeOutput(agentRepaint(50));
+      expect(getTrailingNonBlankLines).not.toHaveBeenCalled();
       watcher.dispose();
     });
   });

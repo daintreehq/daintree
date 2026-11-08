@@ -99,12 +99,11 @@ const UNAMBIGUOUS_SHELL_PROMPT_PATTERNS = [
   CMD_PROMPT_PATTERN,
 ] as const;
 
-// Every unambiguous prompt shape needs one of these on its line, and
-// stripping and splitting only remove characters, so a chunk with none of
-// them cannot carry a prompt. Cursor-addressed TUIs send whole repaints with
-// no line break to window on.
+// Every unambiguous prompt shape, agent glyphs excluded, needs one of these
+// on its line, and stripping only removes characters, so a chunk without one
+// cannot carry a prompt. Cursor-addressed TUIs repaint with no line break to
+// window on, and this spares stripping the whole repaint.
 const PROMPT_CHARACTER_PATTERN = /[#$%>➜➤➟➔]/;
-const PROMPT_CHARACTER_PATTERN_WITH_AGENT_GLYPHS = /[#$%>➜➤➟➔❯›]/;
 
 const ACTIVE_AGENT_PROMPT_PATTERN =
   /(?:welcome to claude code|claude code v\d|openai codex|tips for getting started|\?\s+for\s+shortcuts|welcome\s+back!)/i;
@@ -579,7 +578,7 @@ export class IdentityWatcher {
       this.identity?.processIconId &&
       !this.identity.agentType
     ) {
-      chunkHasPrompt = this.hasUnambiguousShellPromptInText(data, true);
+      chunkHasPrompt = this.hasUnambiguousShellPromptInText(data);
       if (chunkHasPrompt) this.sawPromptAfterSubmit = true;
     }
     if (
@@ -592,7 +591,7 @@ export class IdentityWatcher {
     }
 
     const hasReturnedShellPromptOutput =
-      chunkHasPrompt ?? this.hasUnambiguousShellPromptInText(data, true);
+      chunkHasPrompt ?? this.hasUnambiguousShellPromptInText(data);
     // Failure output only vetoes a returned prompt, which agent output rarely carries.
     const hasRecentCommandFailureOutput =
       hasReturnedShellPromptOutput && this.hasRecentCommandFailureOutput();
@@ -726,14 +725,13 @@ export class IdentityWatcher {
     );
   }
 
-  private hasUnambiguousShellPromptInText(text: string, agentCommitted = false): boolean {
-    const promptCharacter = agentCommitted
-      ? PROMPT_CHARACTER_PATTERN
-      : PROMPT_CHARACTER_PATTERN_WITH_AGENT_GLYPHS;
-    if (!promptCharacter.test(text)) return false;
-    return getTrailingNonBlankLines(text, SHELL_IDENTITY_FALLBACK_SCAN_LINES).some((line) =>
-      isUnambiguousShellPromptLine(line, agentCommitted)
-    );
+  // Both readers exclude the agent composer glyphs. #10911
+  private hasUnambiguousShellPromptInText(text: string): boolean {
+    return getTrailingNonBlankLines(
+      text,
+      SHELL_IDENTITY_FALLBACK_SCAN_LINES,
+      PROMPT_CHARACTER_PATTERN
+    ).some((line) => isUnambiguousShellPromptLine(line, true));
   }
 
   private clearShellCommandEvidenceAfterPromptReturn(): void {
