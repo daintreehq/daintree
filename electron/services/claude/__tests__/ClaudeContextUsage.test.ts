@@ -4,6 +4,7 @@ import { tmpdir } from "os";
 import path from "path";
 
 import {
+  __contextUsageWaiters,
   readClaudePaneContextUsage,
   readClaudePaneContextUsageWithin,
 } from "../ClaudeContextUsage.js";
@@ -227,6 +228,24 @@ describe("readClaudePaneContextUsageWithin", () => {
 
     expect(await second).toEqual(fresh);
     expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  // A dead mount can stall a read for good; a turn's caller answered by its
+  // deadline must not stay queued behind it for as long as that lasts.
+  it("leaves no caller waiting behind a stalled read once its deadline answers", async () => {
+    const { read, settle } = stalled();
+    const options = { ...deps(), read, deadlineMs: 20 };
+
+    for (let turn = 0; turn < 5; turn += 1) {
+      expect(await readClaudePaneContextUsageWithin("t-1", options)).toEqual({
+        status: "unavailable",
+        reason: "store-unreadable",
+      });
+    }
+
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(__contextUsageWaiters("t-1")).toBe(0);
+    settle(OK);
   });
 
   it("answers the read's own result when it comes in time", async () => {

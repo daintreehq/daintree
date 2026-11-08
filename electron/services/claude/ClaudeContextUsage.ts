@@ -81,16 +81,29 @@ export async function readClaudePaneContextUsage(
 }
 
 /**
- * The last read queued per terminal. Reads of one terminal run one after
- * another, so a stalled store holds one read per pane rather than one per
- * turn, and a caller never takes an answer read before it asked.
+ * One read per terminal at a time. A terminal is in the map while a read of it
+ * runs, with the callers waiting for their turn; a read past its deadline keeps
+ * the slot until it settles, so a stalled store holds one read per pane, and a
+ * caller never takes an answer read before it asked.
  */
-const queued = new Map<string, Promise<AgentContextUsageResult>>();
+const lanes = new Map<string, Set<() => void>>();
+
+/** Hands the terminal's slot to the next caller still waiting, or frees it. */
+function release(terminalId: string): void {
+  const waiting = lanes.get(terminalId);
+  const next = waiting?.values().next().value;
+  if (!waiting || next === undefined) {
+    lanes.delete(terminalId);
+    return;
+  }
+  waiting.delete(next);
+  next();
+}
 
 /**
  * {@link readClaudePaneContextUsage} with a deadline that holds whether or not
- * the filesystem honours the abort. A caller the deadline has already answered
- * starts no read of its own.
+ * the filesystem honours the abort. A caller the deadline answers stops
+ * waiting for its turn, so nothing of it is left behind a stalled read.
  */
 export async function readClaudePaneContextUsageWithin(
   terminalId: string,
@@ -98,17 +111,27 @@ export async function readClaudePaneContextUsageWithin(
 ): Promise<AgentContextUsageResult> {
   const deadlineMs = deps.deadlineMs ?? CONTEXT_USAGE_HOST_DEADLINE_MS;
   let answered = false;
-  const work: Promise<AgentContextUsageResult> = (queued.get(terminalId) ?? Promise.resolve())
-    .then(() =>
-      answered
-        ? unavailable("store-unreadable")
-        : readClaudePaneContextUsage(terminalId, AbortSignal.timeout(deadlineMs), deps)
-    )
-    // Nothing is logged: a filesystem error names a path under the user's home.
-    .catch(() => unavailable("store-unreadable"));
-  queued.set(terminalId, work);
-  void work.finally(() => {
-    if (queued.get(terminalId) === work) queued.delete(terminalId);
+  let waiter: (() => void) | undefined;
+  const turn = new Promise<void>((resolve) => {
+    const waiting = lanes.get(terminalId);
+    if (!waiting) {
+      lanes.set(terminalId, new Set());
+      resolve();
+      return;
+    }
+    waiter = resolve;
+    waiting.add(resolve);
+  });
+  const work = turn.then(async (): Promise<AgentContextUsageResult> => {
+    try {
+      if (answered) return unavailable("store-unreadable");
+      return await readClaudePaneContextUsage(terminalId, AbortSignal.timeout(deadlineMs), deps);
+    } catch {
+      // Nothing is logged: a filesystem error names a path under the user's home.
+      return unavailable("store-unreadable");
+    } finally {
+      release(terminalId);
+    }
   });
 
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -120,5 +143,11 @@ export async function readClaudePaneContextUsageWithin(
   } finally {
     answered = true;
     clearTimeout(timer);
+    if (waiter) lanes.get(terminalId)?.delete(waiter);
   }
+}
+
+/** Test-only: how many callers are waiting behind a terminal's running read. */
+export function __contextUsageWaiters(terminalId: string): number {
+  return lanes.get(terminalId)?.size ?? 0;
 }
