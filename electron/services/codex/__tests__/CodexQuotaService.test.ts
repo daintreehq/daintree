@@ -516,15 +516,26 @@ describe("readCodexQuotaProfiles (#13686)", () => {
     });
 
     it("keeps the ids of the accounts in every home that folds into one login (#16407)", async () => {
+      const third = path.join(root, "third");
+      mkdirSync(third);
       agentSettings.value = {
         agents: {
-          codex: { accounts: [{ id: "company", name: "Company", configDir: second }] },
+          codex: {
+            accounts: [
+              { id: "company", name: "Company", configDir: second },
+              { id: "lab", name: "Lab", configDir: third },
+            ],
+          },
         },
       };
       respondAs(() => ({ accountId: "ws-1", email: "me@example.com" }));
       const profiles = await readCodexQuotaProfiles();
       expect(profiles).toHaveLength(1);
-      expect(profiles[0]).toMatchObject({ isDefault: true, accountIds: ["company"] });
+      expect(profiles[0]).toMatchObject({
+        isDefault: true,
+        accountIds: ["company", "lab"],
+        accountNames: ["Company", "Lab"],
+      });
     });
 
     it("keeps two users of one Team workspace apart", async () => {

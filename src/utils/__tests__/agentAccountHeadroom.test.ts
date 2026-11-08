@@ -276,9 +276,18 @@ describe("accountHeadroom for Codex (#16407)", () => {
     const weekday = new Date(tomorrow).toLocaleDateString(undefined, { weekday: "short" });
     expect(text(tomorrow)).toBe(`5-hour limit 50% used · resets ${weekday} ${clock(tomorrow)}`);
 
-    const later = AT(24 * 10);
-    const date = new Date(later).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-    expect(text(later)).toBe(`5-hour limit 50% used · resets ${date} ${clock(later)}`);
+    const dated = (at: number, verb: string) => {
+      const day = new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      return `5-hour limit 50% used · ${verb} ${day} ${clock(at)}`;
+    };
+    expect(text(AT(24 * 10))).toBe(dated(AT(24 * 10), "resets"));
+    // A week out to the minute is the same weekday again, so it names the date.
+    expect(text(AT(24 * 7))).toBe(dated(AT(24 * 7), "resets"));
+    // And a reset long past is dated too, in the past tense.
+    expect(text(AT(-24 * 10))).toMatch(/^Stale · 5-hour limit 50% used · reset /);
+    expect(text(AT(-24 * 10))).toContain(
+      new Date(AT(-24 * 10)).toLocaleDateString(undefined, { month: "short", day: "numeric" })
+    );
   });
 
   it("breaks a tie on use by the shorter window and leaves out a reset it wasn't told", () => {

@@ -340,7 +340,7 @@ export function AgentButton({
   // choose between (#16407).
   const hasSavedAccounts =
     !!getAgentConfigFolderAccount(type) &&
-    (agentSettings?.agents?.[type]?.accounts?.length ?? 0) > 0;
+    sanitizeAgentAccounts(agentSettings?.agents?.[type]?.accounts).length > 0;
   const accountHeadroom = useAgentAccountHeadroom(type, dropdownOpen && hasSavedAccounts);
 
   const config = getAgentConfig(type);
