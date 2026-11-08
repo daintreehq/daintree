@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import { keybindingService, type KeyScope } from "../services/KeybindingService";
 import { comboToAriaKeyshortcuts } from "../lib/kbdShortcut";
+import { useKeyLabels } from "../lib/keyboardLayout";
 import { isMac } from "../lib/platform";
 
 const subscribeToKeybindings = (listener: () => void): (() => void) =>
@@ -36,8 +37,9 @@ export function useEffectiveCombo(actionId: string): string | undefined {
  */
 export function useAriaKeyshortcuts(actionId: string): string | undefined {
   const combo = useEffectiveCombo(actionId);
+  const keyLabels = useKeyLabels();
   const mac = useMemo(() => isMac(), []);
-  return useMemo(() => comboToAriaKeyshortcuts(combo, mac), [combo, mac]);
+  return useMemo(() => comboToAriaKeyshortcuts(combo, mac, keyLabels), [combo, mac, keyLabels]);
 }
 
 export { keybindingService };

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useOverlayState } from "@/hooks";
 import { KbdChord } from "@/components/ui/Kbd";
 import { describeChord } from "@/lib/kbdShortcut";
+import { useKeyLabels, type KeyLabels } from "@/lib/keyboardLayout";
 import { isMac } from "@/lib/platform";
 import { keybindingService } from "../../services/KeybindingService";
 import { usePreferencesStore } from "@/store/preferencesStore";
@@ -37,14 +38,19 @@ function headingIdFor(prefix: string, category: string): string {
     .replace(/^-|-$/g, "")}`;
 }
 
-function spokenBinding(entry: ShortcutEntry, mac: boolean, groupScope: string | null): string {
+function spokenBinding(
+  entry: ShortcutEntry,
+  mac: boolean,
+  groupScope: string | null,
+  keyLabels: KeyLabels
+): string {
   const keys =
     entry.alternatives.length === 0
       ? "no shortcut set"
       : entry.alternatives
           .map((alt) => {
             const scope = alt.scope === groupScope ? null : scopeLabel(alt.scope);
-            const spoken = describeChord(alt.combo, mac);
+            const spoken = describeChord(alt.combo, mac, keyLabels);
             return scope ? `${spoken} (${scope.toLowerCase()})` : spoken;
           })
           .join(", or ");
@@ -61,6 +67,7 @@ interface ShortcutRowProps {
 }
 
 function ShortcutRow({ entry, mac, groupScope, categoryLabel }: ShortcutRowProps) {
+  const keyLabels = useKeyLabels();
   return (
     <div
       role="listitem"
@@ -94,7 +101,7 @@ function ShortcutRow({ entry, mac, groupScope, categoryLabel }: ShortcutRowProps
       )}
       {/* One spoken string for the whole cluster: read chip by chip, the scope
           and each "or" would arrive as disconnected fragments. */}
-      <span className="sr-only">{spokenBinding(entry, mac, groupScope)}</span>
+      <span className="sr-only">{spokenBinding(entry, mac, groupScope, keyLabels)}</span>
       <span
         aria-hidden="true"
         className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-x-2 gap-y-0.5 text-xs leading-5 text-text-secondary"
@@ -133,6 +140,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
   const resultsId = useId();
   const headingPrefix = useId();
   const mac = isMac();
+  const keyLabels = useKeyLabels();
 
   // Every opening is a fresh lookup. The dialog stays mounted between
   // openings, so without this a reopen lands on the last query — including a
@@ -168,9 +176,9 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
   const groups = useMemo(() => groupByCategory(entries), [entries]);
 
   const results = useMemo(() => {
-    const ranked = searchShortcuts(entries, searchQuery, mac);
+    const ranked = searchShortcuts(entries, searchQuery, mac, keyLabels);
     return ranked ? collapseNumberedSeries(ranked) : null;
-  }, [entries, searchQuery, mac]);
+  }, [entries, searchQuery, mac, keyLabels]);
 
   const rowCount = results
     ? results.length

@@ -74,6 +74,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { comboToAriaKeyshortcuts, describeKeyCap } from "@/lib/kbdShortcut";
+import { useKeyLabels } from "@/lib/keyboardLayout";
 import { isMac } from "@/lib/platform";
 import { SHORTCUT_ROW_GAP } from "@/lib/tooltipShortcut";
 import { cn } from "@/lib/utils";
@@ -354,6 +355,7 @@ function KitActionButton(props: PluginActionButtonProps) {
   const [revision, refresh] = useActionRevision();
   const [pending, setPending] = useState(false);
   const mounted = useMounted();
+  const keyLabels = useKeyLabels();
   const id = nonEmpty(actionId);
   if (!id) return null;
 
@@ -405,7 +407,9 @@ function KitActionButton(props: PluginActionButtonProps) {
       aria-label={authorLabel ?? (compact ? textLabel : undefined)}
       aria-disabled={blocked || undefined}
       aria-describedby={describedBy}
-      aria-keyshortcuts={state.combo ? comboToAriaKeyshortcuts(state.combo, isMac()) : undefined}
+      aria-keyshortcuts={
+        state.combo ? comboToAriaKeyshortcuts(state.combo, isMac(), keyLabels) : undefined
+      }
       data-action-id={id}
       onPointerEnter={refresh}
       onFocus={refresh}

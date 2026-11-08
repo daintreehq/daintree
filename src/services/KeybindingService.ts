@@ -8,6 +8,7 @@ import { combosFieldsEqual, normalizeKeyForBinding, parseCombo } from "./keybind
 import { DEFAULT_KEYBINDINGS, KEYBINDING_PRIORITY } from "./defaultKeybindings";
 import { isMac } from "@/lib/platform";
 import { formatChordText } from "@/lib/kbdShortcut";
+import { getKeyLabels, subscribeKeyLabels } from "@/lib/keyboardLayout";
 import { BUILT_IN_ACTION_IDS } from "@shared/config/actionIds";
 import { KEY_ACTION_VALUES } from "@shared/types/keymap";
 import { evaluateWhenClause } from "@shared/utils/whenClause/evaluateWhenClause";
@@ -52,6 +53,7 @@ class KeybindingService {
   private lastInvalidKey: string | null = null;
   private chordTimeout: NodeJS.Timeout | null = null;
   private listeners = new Set<() => void>();
+  private unsubscribeKeyLabels: (() => void) | null = null;
   private whenContext: WhenClauseContext = {};
   private whenContextProvider: ((event: KeyboardEvent) => WhenClauseContext) | null = null;
   private shortcutCaptures = 0;
@@ -280,8 +282,15 @@ class KeybindingService {
 
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
+    // Display strings carry the keyboard layout's labels, so a layout change
+    // is a change to every subscriber's snapshot.
+    this.unsubscribeKeyLabels ??= subscribeKeyLabels(() => this.notifyListeners());
     return () => {
       this.listeners.delete(listener);
+      if (this.listeners.size === 0) {
+        this.unsubscribeKeyLabels?.();
+        this.unsubscribeKeyLabels = null;
+      }
     };
   }
 
@@ -729,7 +738,7 @@ class KeybindingService {
    * hold a string. Never feed the result to `KbdChord` — give it the combo.
    */
   formatComboForDisplay(combo: string): string {
-    return formatChordText(combo, isMac());
+    return formatChordText(combo, isMac(), getKeyLabels());
   }
 
   /**

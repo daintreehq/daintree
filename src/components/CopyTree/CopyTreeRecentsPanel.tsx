@@ -24,6 +24,7 @@ import { DEFAULT_COPYTREE_FORMAT } from "@/lib/copyTreeFormat";
 import { formatBytes } from "@/lib/formatBytes";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { comboToAriaKeyshortcuts } from "@/lib/kbdShortcut";
+import { useKeyLabels } from "@/lib/keyboardLayout";
 import { isMac } from "@/lib/platform";
 import type { CopyTreeHistoryRecord } from "@shared/types";
 import { pluralize } from "@/lib/pluralize";
@@ -185,6 +186,7 @@ function CopyTreeMenuItems({
   const init = useCopyTreeHistoryStore((s) => s.init);
   const retry = useCopyTreeHistoryStore((s) => s.retry);
   const recentLabelId = useId();
+  const keyLabels = useKeyLabels();
 
   // Idempotent at the store: later opens re-run this and return immediately.
   // The subscription deliberately outlives the menu — an MCP or context-menu
@@ -269,7 +271,7 @@ function CopyTreeMenuItems({
     <>
       <DropdownMenuItem
         onSelect={onCopyFullContext}
-        aria-keyshortcuts={comboToAriaKeyshortcuts(shortcut, isMac())}
+        aria-keyshortcuts={comboToAriaKeyshortcuts(shortcut, isMac(), keyLabels)}
       >
         <Folders data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
         Copy full context

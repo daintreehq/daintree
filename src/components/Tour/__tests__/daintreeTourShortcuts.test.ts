@@ -36,6 +36,14 @@ describe("daintreeTourShortcuts", () => {
     }
   });
 
+  it("draws the caps the keyboard layout prints, while the narration keeps the US keys", () => {
+    const azerty = new Map([["/", "!"]]);
+    expect(daintreeTourShortcuts("mac", azerty).keycaps("help.shortcutsAlt")).toEqual(["⌘", "!"]);
+    expect(daintreeTourShortcuts("pc", azerty).hint("help.shortcutsAlt")).toBe("Ctrl+!");
+    expect(daintreeTourShortcuts("mac").keycaps("help.shortcutsAlt")).toEqual(["⌘", "/"]);
+    expect(tourCombo("help.shortcutsAlt")).toBe("Cmd+/");
+  });
+
   // Linux replaces New terminal's Ctrl+Alt+T, which the desktop opens its own
   // terminal on. The keycaps follow; the spoken "pc" recording can't.
   it("draws Linux's own default on Linux, leaving the spoken combo shared", () => {

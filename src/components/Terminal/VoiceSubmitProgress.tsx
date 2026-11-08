@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 import { describeChord, formatChordText } from "@/lib/kbdShortcut";
+import { useKeyLabels, type KeyLabels } from "@/lib/keyboardLayout";
 import { isMac } from "@/lib/platform";
 import type { VoiceWaitKeysReach } from "@/lib/voiceWaitKeys";
 import {
@@ -106,16 +107,27 @@ export interface VoiceSubmitWaitKeys extends Pick<VoiceWaitKeysReach, "enter" | 
  * What sends the wait as it stands, if anything does. Only the cleanup's wait
  * names one: the transcript still finishes first.
  */
-function sendNowKey(wait: VoiceSubmitWait, keys: VoiceSubmitWaitKeys, spoken: boolean) {
+function sendNowKey(
+  wait: VoiceSubmitWait,
+  keys: VoiceSubmitWaitKeys,
+  spoken: boolean,
+  keyLabels: KeyLabels | undefined
+) {
   if (wait.phase !== "polishing") return null;
   if (keys.skip)
-    return spoken ? describeChord(keys.skip, isMac()) : formatChordText(keys.skip, isMac());
+    return spoken
+      ? describeChord(keys.skip, isMac(), keyLabels)
+      : formatChordText(keys.skip, isMac(), keyLabels);
   return keys.enter ? "Enter" : null;
 }
 
 /** The wait's caption: what it waits on, and the ways out that work from where the keyboard is. */
-export function voiceSubmitWaitCaption(wait: VoiceSubmitWait, keys: VoiceSubmitWaitKeys): string {
-  const send = sendNowKey(wait, keys, false);
+export function voiceSubmitWaitCaption(
+  wait: VoiceSubmitWait,
+  keys: VoiceSubmitWaitKeys,
+  keyLabels?: KeyLabels
+): string {
+  const send = sendNowKey(wait, keys, false, keyLabels);
   return [
     wait.phase === "polishing" ? "Polishing…" : "Finishing…",
     send && `${send} to send as dictated`,
@@ -126,8 +138,12 @@ export function voiceSubmitWaitCaption(wait: VoiceSubmitWait, keys: VoiceSubmitW
 }
 
 /** The wait as a screen reader hears it, naming the same ways out as its caption. */
-export function voiceSubmitWaitStatus(wait: VoiceSubmitWait, keys: VoiceSubmitWaitKeys): string {
-  const send = sendNowKey(wait, keys, true);
+export function voiceSubmitWaitStatus(
+  wait: VoiceSubmitWait,
+  keys: VoiceSubmitWaitKeys,
+  keyLabels?: KeyLabels
+): string {
+  const send = sendNowKey(wait, keys, true, keyLabels);
   const ways = [
     send && `${send} to send it as dictated`,
     keys.escape && "Escape to cancel the send",
@@ -201,8 +217,9 @@ export function VoiceSubmitProgress({
   const active = wait !== null || handingOver;
   // Until the gate opens the shell alone says Enter landed.
   const shown = useDeferredLoading(active, UI_INLINE_LOADING_GATE_MS);
+  const keyLabels = useKeyLabels();
 
-  const waitCaption = wait ? voiceSubmitWaitCaption(wait, keys) : null;
+  const waitCaption = wait ? voiceSubmitWaitCaption(wait, keys, keyLabels) : null;
   if (waitCaption !== null && waitCaption !== lastWaitCaption) setLastWaitCaption(waitCaption);
   const caption =
     waitCaption ??

@@ -92,6 +92,7 @@ import {
   voiceSubmitWaitStatus,
   type VoiceSubmitWaitKeys,
 } from "./VoiceSubmitProgress";
+import { useKeyLabels } from "@/lib/keyboardLayout";
 import { voiceRecordingService } from "@/services/VoiceRecordingService";
 import {
   registerInputController,
@@ -1664,6 +1665,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // anywhere in the page, unless a dictation running elsewhere takes the
     // press first.
     const stopAndSendCombo = useEffectiveCombo("voiceInput.stopAndSend");
+    const keyLabels = useKeyLabels();
     const voiceSessionTakesStopAndSend = useVoiceRecordingStore(
       (s) => s.activeTarget !== null && s.status !== "finishing" && isActiveVoiceSession(s.status)
     );
@@ -1849,7 +1851,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // note shows: nothing else says the earlier words haven't gone (#15703).
     const voiceSubmitStatus = voiceSubmitWait
       ? showVoiceSubmitStatus
-        ? voiceSubmitWaitStatus(voiceSubmitWait, voiceSubmitKeys)
+        ? voiceSubmitWaitStatus(voiceSubmitWait, voiceSubmitKeys, keyLabels)
         : ""
       : voiceSendUncleaned
         ? VOICE_SEND_UNCLEANED_STATUS[voiceSendUncleaned]
@@ -1873,7 +1875,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const expandedSubmitLabel =
       voiceSubmitWait && showVoiceSubmitStatus ? (
         <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
-          {voiceSubmitWaitCaption(voiceSubmitWait, voiceSubmitKeys)}
+          {voiceSubmitWaitCaption(voiceSubmitWait, voiceSubmitKeys, keyLabels)}
         </span>
       ) : showScratchRefusalCaption ? (
         <span aria-hidden="true" className="ml-auto mr-3 text-xs text-text-secondary">
