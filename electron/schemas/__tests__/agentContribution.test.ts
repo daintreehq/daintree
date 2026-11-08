@@ -474,7 +474,9 @@ describe("discovery metadata (#16468)", () => {
       })
     );
   const errorCodes = (agent: Record<string, unknown>) =>
-    withAgent(agent).error?.issues.map((issue) => (issue as { params?: { errorCode?: string } }).params?.errorCode) ?? [];
+    withAgent(agent).error?.issues.map(
+      (issue) => (issue as { params?: { errorCode?: string } }).params?.errorCode
+    ) ?? [];
   const issuePaths = (agent: Record<string, unknown>) =>
     withAgent(agent).error?.issues.map((issue) => issue.path.join(".")) ?? [];
 

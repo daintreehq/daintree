@@ -2604,7 +2604,9 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
   "agents.packages": {
     npm: {
       mode: "derived-input",
-      consumers: [{ file: "electron/services/CliAvailabilityService.ts", symbol: "probeNpmGlobal" }],
+      consumers: [
+        { file: "electron/services/CliAvailabilityService.ts", symbol: "probeNpmGlobal" },
+      ],
       note: "Only switches the npm-global shim check on: the name reaches no path and no command.",
     },
     pypi: {

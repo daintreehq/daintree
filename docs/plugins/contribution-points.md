@@ -2158,7 +2158,7 @@ A plugin agent is launchable and selectable as a named entry in the effective re
 
 **Finding an install off `PATH`.** A bare `command` is looked up on `PATH`, which often misses an install that a person's shell finds but Daintree's inherited environment doesn't. `nativePaths` and `packages` add the locations a built-in agent falls back to, and a hit is the file the agent launches from:
 
-```jsonc
+```json
 {
   "contributes": {
     "agents": [
