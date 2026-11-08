@@ -1,0 +1,142 @@
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import canopyReaderModel from "./canopyReaderModel.cjs";
+
+const { contentMatches, gitBlobId, invalidFiles, prepareModel, readManifest } = canopyReaderModel;
+
+const sha256 = (content) => createHash("sha256").update(content).digest("hex");
+
+const WEIGHTS = Buffer.from("weights, pretend");
+const CONFIG = Buffer.from('{"max_len":512}');
+
+const manifest = {
+  id: "daintreehq/canopy-reader-17m",
+  revision: "0123456789abcdef0123456789abcdef01234567",
+  weights: "model.int8.onnx",
+  files: [
+    { name: "config.json", size: CONFIG.length, blobId: gitBlobId(CONFIG) },
+    { name: "model.int8.onnx", size: WEIGHTS.length, sha256: sha256(WEIGHTS) },
+  ],
+};
+
+const BODIES = { "config.json": CONFIG, "model.int8.onnx": WEIGHTS };
+
+function serving(bodies = BODIES) {
+  return vi.fn(async (url) => {
+    const name = url.slice(url.lastIndexOf("/") + 1);
+    const body = bodies[name];
+    if (!body) return new Response(null, { status: 404 });
+    return new Response(body, { status: 200 });
+  });
+}
+
+let dir;
+
+beforeEach(() => {
+  dir = mkdtempSync(path.join(tmpdir(), "canopy-reader-model-"));
+});
+
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+});
+
+describe("gitBlobId", () => {
+  it("is git's own blob id", () => {
+    // `printf 'hello\n' | git hash-object --stdin`
+    expect(gitBlobId(Buffer.from("hello\n"))).toBe("ce013625030ba8dba906f756967f9e9ca394464a");
+  });
+});
+
+describe("contentMatches", () => {
+  it("rejects a file of the right size whose bytes differ", () => {
+    const spec = manifest.files[1];
+    const same = Buffer.alloc(WEIGHTS.length, 0x61);
+    expect(contentMatches(WEIGHTS, spec)).toBe(true);
+    expect(contentMatches(same, spec)).toBe(false);
+  });
+
+  it("rejects a spec that pins no hash", () => {
+    expect(contentMatches(WEIGHTS, { name: "x", size: WEIGHTS.length })).toBe(false);
+  });
+});
+
+describe("invalidFiles", () => {
+  it("names the files missing, cut short or changed", () => {
+    writeFileSync(path.join(dir, "config.json"), CONFIG.subarray(1));
+    expect(invalidFiles(dir, manifest).map((f) => f.name)).toEqual([
+      "config.json",
+      "model.int8.onnx",
+    ]);
+
+    writeFileSync(path.join(dir, "config.json"), CONFIG);
+    writeFileSync(path.join(dir, "model.int8.onnx"), WEIGHTS);
+    expect(invalidFiles(dir, manifest)).toEqual([]);
+  });
+});
+
+describe("prepareModel", () => {
+  it("fetches every file from the pinned revision into an empty folder", async () => {
+    const fetchImpl = serving();
+
+    const { fetched } = await prepareModel({ dir, manifest, fetchImpl, log: () => {} });
+
+    expect(fetched).toEqual(["config.json", "model.int8.onnx"]);
+    expect(fetchImpl.mock.calls.map(([url]) => url)).toEqual([
+      `https://huggingface.co/${manifest.id}/resolve/${manifest.revision}/config.json`,
+      `https://huggingface.co/${manifest.id}/resolve/${manifest.revision}/model.int8.onnx`,
+    ]);
+    expect(readFileSync(path.join(dir, "model.int8.onnx")).equals(WEIGHTS)).toBe(true);
+    expect(invalidFiles(dir, manifest)).toEqual([]);
+  });
+
+  it("asks nothing of Hugging Face when the folder already matches", async () => {
+    writeFileSync(path.join(dir, "config.json"), CONFIG);
+    writeFileSync(path.join(dir, "model.int8.onnx"), WEIGHTS);
+    const fetchImpl = serving();
+
+    const { fetched } = await prepareModel({ dir, manifest, fetchImpl, log: () => {} });
+
+    expect(fetched).toEqual([]);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("fetches only the file that is wrong, keeping a good config.json", async () => {
+    writeFileSync(path.join(dir, "config.json"), CONFIG);
+    writeFileSync(path.join(dir, "model.int8.onnx"), Buffer.from("stale"));
+    const fetchImpl = serving();
+
+    await prepareModel({ dir, manifest, fetchImpl, log: () => {} });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchImpl.mock.calls[0][0]).toMatch(/\/model\.int8\.onnx$/);
+  });
+
+  it("never puts a file in place that doesn't match its pin", async () => {
+    const fetchImpl = serving({ ...BODIES, "model.int8.onnx": Buffer.alloc(WEIGHTS.length) });
+
+    await expect(prepareModel({ dir, manifest, fetchImpl, log: () => {} })).rejects.toThrow(
+      /model\.int8\.onnx doesn't match/
+    );
+    expect(existsSync(path.join(dir, "model.int8.onnx"))).toBe(false);
+    expect(readdirSync(dir).some((name) => name.endsWith(".part"))).toBe(false);
+  });
+
+  it("fails on an HTTP error", async () => {
+    const fetchImpl = serving({ "config.json": CONFIG });
+
+    await expect(prepareModel({ dir, manifest, fetchImpl, log: () => {} })).rejects.toThrow(
+      /model\.int8\.onnx failed: HTTP 404/
+    );
+  });
+});
+
+describe("the tracked manifest", () => {
+  it("pins a hash for every file, and names the weights among them", () => {
+    const real = readManifest();
+    expect(real.files.every((f) => Boolean(f.sha256 || f.blobId) && f.size > 0)).toBe(true);
+    expect(real.files.map((f) => f.name)).toContain(real.weights);
+  });
+});

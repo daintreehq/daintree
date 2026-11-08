@@ -7,6 +7,7 @@ import { pluginSdkRuntimeBuildConfig } from "./lib/plugin-sdk-runtime.mjs";
 import { mainBundlePlugins } from "./lib/main-bundle.mjs";
 import { MAIN_EXTERNAL, MAIN_PRELOAD_ENTRY, mainEsmEntryPoints } from "./main-build-entries.mjs";
 import { runProjectSync } from "./typecheck.mjs";
+import canopyReaderModel from "./lib/canopyReaderModel.cjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, "..");
@@ -641,6 +642,26 @@ function createReadyMarkerPlugin() {
   };
 }
 
+/**
+ * Canopy's reader model ships inside the app (#16415): fetched once per
+ * checkout from its pinned revision, and verified on every build. A build that
+ * can't get it fails, since a package without it can't read a screen; a dev
+ * watch only warns, so working offline still starts the app.
+ */
+async function prepareCanopyReaderModel() {
+  try {
+    const { fetched } = await canopyReaderModel.prepareModel();
+    if (fetched.length > 0)
+      console.log(`[Build] Fetched Canopy's reader model: ${fetched.join(", ")}`);
+  } catch (error) {
+    if (!isWatch) throw error;
+    console.warn(
+      `[Build] Canopy's reader model isn't ready (${error instanceof Error ? error.message : error}). ` +
+        "Canopy reads nothing until `npm run fetch:canopy-model` succeeds."
+    );
+  }
+}
+
 async function run() {
   console.log(`[Build] Starting build in ${isWatch ? "watch" : "single"} mode...`);
   removeBuildReadyMarker();
@@ -689,6 +710,7 @@ async function run() {
   const sdkConfig = pluginSdkRuntimeBuildConfig({ minify: isProd, absWorkingDir: root });
 
   try {
+    await prepareCanopyReaderModel();
     if (isWatch) {
       const ctxEsm = await context(esmConfig);
       const ctxCjs = await context(cjsConfig);
