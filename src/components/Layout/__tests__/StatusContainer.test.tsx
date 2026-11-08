@@ -34,6 +34,22 @@ vi.mock("@/components/Terminal/TerminalIcon", () => ({
   TerminalIcon: () => null,
 }));
 
+vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
+  TerminalContextMenu: ({
+    terminalId,
+    proxy,
+    children,
+  }: {
+    terminalId: string;
+    proxy?: boolean;
+    children: React.ReactNode;
+  }) => (
+    <div data-testid="terminal-menu" data-terminal-id={terminalId} data-proxy={String(!!proxy)}>
+      {children}
+    </div>
+  ),
+}));
+
 const config: StatusContainerConfig = {
   icon: AlertCircle,
   iconColor: "text-status-error",
@@ -83,5 +99,20 @@ describe("StatusContainer", () => {
     render(<StatusContainer config={config} terminals={[makeTerminal("t2", "Remote", "wt-2")]} />);
     expect(screen.queryByRole("group", { name: "This worktree" })).toBeNull();
     expect(screen.getByRole("group", { name: "Other worktrees" })).toBeTruthy();
+  });
+
+  it("wraps each row in the terminal context menu as a proxy", () => {
+    render(
+      <StatusContainer
+        config={config}
+        terminals={[makeTerminal("t1", "Local", "wt-1"), makeTerminal("t2", "Remote", "wt-2")]}
+      />
+    );
+    const menus = screen.getAllByTestId("terminal-menu");
+    expect(menus.map((m) => m.getAttribute("data-terminal-id")).sort()).toEqual(["t1", "t2"]);
+    for (const m of menus) {
+      expect(m.getAttribute("data-proxy")).toBe("true");
+      expect(m.querySelector("button[data-dock-row]")).not.toBeNull();
+    }
   });
 });
