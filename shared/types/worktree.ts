@@ -102,6 +102,25 @@ export interface WorktreeSetupStatus {
    * whose plugins declare none.
    */
   pluginSteps?: WorktreeSetupPluginStep[];
+  /**
+   * One record per directory the project's `cloneIgnored` names, in the order
+   * declared (#16392). Written once the `copy-config` stage has tried them all
+   * and kept by every later status, so a skipped clone stays visible after the
+   * setup script has run. Absent when the project names none.
+   */
+  clones?: WorktreeSetupClone[];
+}
+
+/**
+ * What became of one `cloneIgnored` directory. A skip never fails setup: the
+ * setup script still runs and installs what the clone would have carried.
+ */
+export interface WorktreeSetupClone {
+  /** The directory as the config names it, relative to the worktree. */
+  path: string;
+  outcome: "cloned" | "skipped";
+  /** Why it was skipped, one line. Absent when cloned. */
+  reason?: string;
 }
 
 /**

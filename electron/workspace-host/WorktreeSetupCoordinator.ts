@@ -124,6 +124,9 @@ export class WorktreeSetupCoordinator {
   // Plugin setup steps in flight, by the incarnation they run for, so removing
   // the worktree cancels the step instead of letting it run on unobserved.
   private pluginSetupRuns = new Map<WorktreeMonitor, AbortController>();
+  // `cloneIgnored` clones in flight, by incarnation, for the same reason: a
+  // removed worktree's clone must stop writing into the tree being deleted.
+  private cloneRuns = new Map<WorktreeMonitor, AbortController>();
   // Which plugin step declarations succeeded for an incarnation, so a resumed
   // setup skips them only while the declaration is the one that succeeded.
   private pluginStepSuccesses = new WeakMap<WorktreeMonitor, Set<string>>();
@@ -139,6 +142,25 @@ export class WorktreeSetupCoordinator {
   dispose(): void {
     for (const controller of this.pluginSetupRuns.values()) controller.abort();
     this.pluginSetupRuns.clear();
+    for (const controller of this.cloneRuns.values()) controller.abort();
+    this.cloneRuns.clear();
+  }
+
+  /** Track a `cloneIgnored` run for this incarnation; removing the worktree aborts it. */
+  beginCloneRun(monitor: WorktreeMonitor): AbortSignal {
+    const controller = new AbortController();
+    this.cloneRuns.set(monitor, controller);
+    return controller.signal;
+  }
+
+  endCloneRun(monitor: WorktreeMonitor, signal: AbortSignal): void {
+    if (this.cloneRuns.get(monitor)?.signal === signal) this.cloneRuns.delete(monitor);
+  }
+
+  /** Stop the `cloneIgnored` run for this incarnation, if any. */
+  cancelCloneRun(monitor: WorktreeMonitor): void {
+    this.cloneRuns.get(monitor)?.abort();
+    this.cloneRuns.delete(monitor);
   }
 
   /**

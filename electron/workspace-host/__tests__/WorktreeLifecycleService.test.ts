@@ -160,6 +160,26 @@ describe("WorktreeLifecycleService", () => {
       expect(result).toEqual(projectConfig);
     });
 
+    it("reads cloneIgnored, and drops a malformed one without losing the setup commands", async () => {
+      mockAccess.mockImplementation(async (p: string) => {
+        if (!n(p).endsWith("/project/.daintree/config.json")) throw new Error("ENOENT");
+        return undefined;
+      });
+
+      mockReadFile.mockResolvedValue(
+        JSON.stringify({ cloneIgnored: ["node_modules", ".venv"], setup: ["npm install"] })
+      );
+      const valid = await service.loadConfig("/path/to/worktree", "/path/to/project");
+      expect(valid?.cloneIgnored).toEqual(["node_modules", ".venv"]);
+
+      mockReadFile.mockResolvedValue(
+        JSON.stringify({ cloneIgnored: "node_modules", setup: ["npm install"] })
+      );
+      const malformed = await service.loadConfig("/path/to/worktree", "/path/to/project");
+      expect(malformed?.cloneIgnored).toBeUndefined();
+      expect(malformed?.setup).toEqual(["npm install"]);
+    });
+
     it("returns config with only setup or only teardown", async () => {
       const config = { teardown: ["docker compose down"] };
 
