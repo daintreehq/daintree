@@ -15,6 +15,7 @@ import { isTokenRelatedError, isTransientNetworkError } from "@/lib/forgeErrors"
 import {
   Button,
   EmptyState,
+  FilterChip,
   Icon,
   IconButton,
   SearchField,
@@ -36,8 +37,10 @@ import { useIssueSelectionStore } from "@/store/issueSelectionStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import {
+  prScopeQualifier,
   useGitHubFilterStore,
   type IssueStateFilter,
+  type PRScopeFilter,
   type PRStateFilter,
 } from "../stores/githubFilterStore";
 import { useGitHubConfigStore } from "../stores/githubConfigStore";
@@ -270,6 +273,10 @@ export function GitHubResourceList({
   const setFilterState = useGitHubFilterStore((s) =>
     type === "issue" ? s.setIssueFilter : s.setPrFilter
   ) as (f: StateFilter) => void;
+  const prScope = useGitHubFilterStore((s) => s.prScope);
+  const setPrScope = useGitHubFilterStore((s) => s.setPrScope);
+  const scope: PRScopeFilter = type === "pr" ? prScope : "all";
+  const scopeActive = scope !== "all";
   const sortOrder = useGitHubFilterStore((s) =>
     type === "issue" ? s.issueSortOrder : s.prSortOrder
   );
@@ -312,6 +319,7 @@ export function GitHubResourceList({
     projectPath,
     searchQuery,
     filterState,
+    scope,
     sortOrder,
     githubConfig,
     onFreshFetch,
@@ -441,7 +449,8 @@ export function GitHubResourceList({
   }, [onClose]);
 
   const handleOpenInGitHub = useCallback(() => {
-    const query = searchQuery.trim() || undefined;
+    const query =
+      [prScopeQualifier(scope), searchQuery.trim()].filter(Boolean).join(" ") || undefined;
     const state = filterState as string;
     // dispatch() never throws — failures come back as { ok: false }, so they
     // must be surfaced here or the click silently does nothing.
@@ -486,7 +495,7 @@ export function GitHubResourceList({
     };
     open();
     handleClose();
-  }, [searchQuery, filterState, type, projectPath, handleClose]);
+  }, [searchQuery, filterState, scope, type, projectPath, handleClose]);
 
   /**
    * Open the forge's compose page. This used to call `handleOpenInGitHub()`,
@@ -728,6 +737,7 @@ export function GitHubResourceList({
     exactNumberNotFound === null &&
     numberQuery === null &&
     debouncedSearch.trim().length === 0 &&
+    !scopeActive &&
     filterState === "open";
 
   // A background revalidation can rename an issue or move a PR's head ref
@@ -769,6 +779,7 @@ export function GitHubResourceList({
     !error &&
     !loading &&
     !debouncedSearch &&
+    !scopeActive &&
     lastUpdatedAt != null &&
     nowMs - lastUpdatedAt >= FRESHNESS_VISIBLE_AFTER_MS;
 
@@ -1046,14 +1057,20 @@ export function GitHubResourceList({
     // 1. A query that matched nothing — the way out is clearing the query, and
     //    the state tab too when that is also narrowing the view. The label says
     //    which, so the button never undoes more than it claims to.
-    if (exactNumberNotFound !== null || numberQuery !== null || trimmedSearch.length > 0) {
-      const stateAlsoNarrows = filterState !== "open";
+    const hasQuery =
+      exactNumberNotFound !== null || numberQuery !== null || trimmedSearch.length > 0;
+    if (hasQuery || scopeActive) {
+      const filtersNarrow = filterState !== "open" || scopeActive;
       const title =
         exactNumberNotFound !== null
           ? `No ${singular} #${exactNumberNotFound} in this view`
           : trimmedSearch.length > 0
             ? `No ${resourceLabel} match “${trimmedSearch}”`
-            : `No ${resourceLabel} in this view`;
+            : scope === "mine"
+              ? `No ${resourceLabel} opened by you in this view`
+              : scope === "needs-review"
+                ? `No ${resourceLabel} waiting on your review in this view`
+                : `No ${resourceLabel} in this view`;
       return (
         <EmptyState
           variant="filtered-empty"
@@ -1064,11 +1081,16 @@ export function GitHubResourceList({
               variant="ghost"
               size="sm"
               onClick={() => {
-                if (stateAlsoNarrows) setFilterState("open" as StateFilter);
-                handleClearSearch();
+                if (filterState !== "open") setFilterState("open" as StateFilter);
+                if (scopeActive) setPrScope("all");
+                if (hasQuery) handleClearSearch();
               }}
             >
-              {stateAlsoNarrows ? "Clear search and filters" : "Clear search"}
+              {!hasQuery
+                ? "Clear filters"
+                : filtersNarrow
+                  ? "Clear search and filters"
+                  : "Clear search"}
             </Button>
           }
           className="flex-1 justify-center"
@@ -1372,6 +1394,23 @@ export function GitHubResourceList({
           value={filterState}
           onValueChange={(value) => setFilterState(value as StateFilter)}
         />
+
+        {type === "pr" && (
+          <div role="group" aria-label="Filter by involvement" className="flex items-center gap-1.5">
+            <FilterChip
+              selected={scope === "mine"}
+              onSelectedChange={(on) => setPrScope(on ? "mine" : "all")}
+            >
+              Mine
+            </FilterChip>
+            <FilterChip
+              selected={scope === "needs-review"}
+              onSelectedChange={(on) => setPrScope(on ? "needs-review" : "all")}
+            >
+              Needs my review
+            </FilterChip>
+          </div>
+        )}
 
         {numberQuery !== null &&
           !loading &&

@@ -27,6 +27,7 @@ import { useSystemWakeStore } from "@/store/systemWakeStore";
 import { FixedDropdownVisibleContext } from "@/components/ui/fixed-dropdown";
 import type { Issue, ListOptions, PR } from "@shared/types/forge";
 import type { GitHubSortOrder } from "../../shared/types.js";
+import { prScopeQualifier, type PRScopeFilter } from "../stores/githubFilterStore";
 import { MULTI_FETCH_CAP, parseNumberQuery } from "@/lib/parseNumberQuery";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
@@ -133,6 +134,8 @@ interface UseGitHubResourceListSWRParams {
   projectPath: string;
   searchQuery: string;
   filterState: StateFilter;
+  /** PR-only narrowing to the signed-in user's PRs; ignored for issues. */
+  scope?: PRScopeFilter;
   sortOrder: GitHubSortOrder;
   githubConfig: { hasToken: boolean } | null;
   onFreshFetch?: () => void;
@@ -164,12 +167,17 @@ export function useGitHubResourceListSWR({
   projectPath,
   searchQuery,
   filterState,
+  scope = "all",
   sortOrder,
   githubConfig,
   onFreshFetch,
   onCountUpdate,
 }: UseGitHubResourceListSWRParams): UseGitHubResourceListSWRReturn {
   const debouncedSearch = useDebounce(searchQuery, 300);
+  // A scope is a search qualifier, so it takes the search path everywhere the
+  // typed query does: not cached, no count badge, no warm-slot hydration.
+  const scopeQualifier = type === "pr" ? prScopeQualifier(scope) : "";
+  const narrowed = debouncedSearch !== "" || scopeQualifier !== "";
 
   const cacheKey = useMemo(
     () => buildCacheKey(projectPath, type, filterState as string, sortOrder),
@@ -344,7 +352,9 @@ export function useGitHubResourceListSWR({
         // `merged` is a GitHub-supported PR state the provider accepts beyond
         // the contract's documented set — pass it through with a cast.
         const fetchOptions: ListOptions = {
-          search: searchOverride || debouncedSearch || undefined,
+          search:
+            [scopeQualifier, searchOverride || debouncedSearch].filter(Boolean).join(" ") ||
+            undefined,
           state: filterState as ListOptions["state"],
           cursor: currentCursor || undefined,
           bypassCache: usedBypass,
@@ -389,7 +399,7 @@ export function useGitHubResourceListSWR({
             setRecentlyHitRateLimit(false);
 
             // Write first-page results to cache (skip search-filtered results)
-            if (!append && options?.cacheKey && !debouncedSearch) {
+            if (!append && options?.cacheKey && !narrowed) {
               const now = Date.now();
               setCache(options.cacheKey, {
                 items: result.items,
@@ -514,6 +524,8 @@ export function useGitHubResourceListSWR({
     [
       projectPath,
       debouncedSearch,
+      scopeQualifier,
+      narrowed,
       filterState,
       type,
       sortOrder,
@@ -570,7 +582,7 @@ export function useGitHubResourceListSWR({
     // The cacheKey doesn't include `debouncedSearch` (search results aren't
     // cached). Combine them so a search-query change isn't mistaken for an
     // Activity reveal of the same key.
-    const effectKey = `${cacheKey}|${debouncedSearch}`;
+    const effectKey = `${cacheKey}|${scopeQualifier}|${debouncedSearch}`;
     // Activity reveal of identical inputs: effects re-fired but state (and
     // mountedRef) survived. Treat as a fresh-mount revalidate path so we
     // don't clear the rows that are already on screen.
@@ -597,7 +609,7 @@ export function useGitHubResourceListSWR({
         setLastUpdatedAt(cached.timestamp);
         setError(null);
         setExactNumberNotFound(null);
-        const plan = planWarmRevalidate(cached, type, filterState, debouncedSearch !== "");
+        const plan = planWarmRevalidate(cached, type, filterState, narrowed);
         if (plan === "skip") {
           // No fetch will run its `finally` cleanup — clear the activity
           // flags here. An Activity hide aborts an in-flight revalidate,
@@ -643,7 +655,7 @@ export function useGitHubResourceListSWR({
       // the unsearched view. Falling through to the cold path while a
       // search is active flashes unfiltered cached rows before the
       // searched fetch lands; gate hydration to non-search transitions.
-      const targetCached = !debouncedSearch ? getCache(cacheKey) : undefined;
+      const targetCached = !narrowed ? getCache(cacheKey) : undefined;
       if (targetCached) {
         // A previous cold fetch may have set `loading=true` and then been
         // aborted by this effect's cleanup, which skips its `setLoading(false)`
@@ -684,7 +696,17 @@ export function useGitHubResourceListSWR({
     lastLoadedEffectKeyRef.current = effectKey;
 
     return () => abortController.abort();
-  }, [debouncedSearch, filterState, projectPath, type, fetchData, numberQuery, cacheKey]);
+  }, [
+    debouncedSearch,
+    scopeQualifier,
+    narrowed,
+    filterState,
+    projectPath,
+    type,
+    fetchData,
+    numberQuery,
+    cacheKey,
+  ]);
 
   // Default `true` keeps non-dropdown callers and external mounts unaffected;
   // gate the focus + wake revalidation paths on the dropdown's real visibility (#10125).
@@ -859,7 +881,7 @@ export function useGitHubResourceListSWR({
 
         case "open-ended": {
           const options: ListOptions = {
-            search: `number:>=${numberQuery.from}`,
+            search: [scopeQualifier, `number:>=${numberQuery.from}`].filter(Boolean).join(" "),
             state: filterState as ListOptions["state"],
             bypassCache: true,
             sort: "created",
@@ -926,7 +948,16 @@ export function useGitHubResourceListSWR({
     return () => {
       abortController.abort();
     };
-  }, [numberQuery, projectPath, type, filterState, retryKey, githubConfig, rateLimitBlocked]);
+  }, [
+    numberQuery,
+    projectPath,
+    type,
+    filterState,
+    scopeQualifier,
+    retryKey,
+    githubConfig,
+    rateLimitBlocked,
+  ]);
 
   const handleLoadMore = useCallback(() => {
     if (!loadingMore && hasMore) {

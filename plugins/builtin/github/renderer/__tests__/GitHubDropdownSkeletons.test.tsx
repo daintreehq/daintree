@@ -153,6 +153,29 @@ describe("GitHubResourceListSkeleton header state", () => {
     expect(thumbs("pr")).toEqual(["merged"]);
   });
 
+  it("draws the scope chips for PRs only, with the stored scope selected", () => {
+    const chips = (type: "issue" | "pr") => {
+      const { container, unmount } = render(<GitHubResourceListSkeleton type={type} />);
+      const found = Array.from(container.querySelectorAll("[data-scope-chip]")).map((el) => [
+        el.getAttribute("data-scope-chip"),
+        el.hasAttribute("data-checked"),
+      ]);
+      unmount();
+      return found;
+    };
+    expect(chips("issue")).toEqual([]);
+    expect(chips("pr")).toEqual([
+      ["mine", false],
+      ["needs-review", false],
+    ]);
+    useGitHubFilterStore.setState({ prScope: "needs-review" });
+    expect(chips("issue")).toEqual([]);
+    expect(chips("pr")).toEqual([
+      ["mine", false],
+      ["needs-review", true],
+    ]);
+  });
+
   it("lifts the sort slot only under its own type's non-default sort", () => {
     expect([sortLifted("issue"), sortLifted("pr")]).toEqual([false, false]);
     useGitHubFilterStore.setState({ issueSortOrder: "updated" });
