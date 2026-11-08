@@ -84,6 +84,7 @@ describe("PERF-037 run", () => {
     expect(forwardingMisses(plan, observed)).toEqual({
       rendererDeliveryMisses: 0,
       forensicRingMisses: 0,
+      semanticRingMisses: 0,
       boundPayloadMisses: 0,
       unboundPayloadMisses: 0,
       attributionMisses: 0,
@@ -198,5 +199,10 @@ describe("PERF-037 predicates notice a broken path", () => {
     const staleRing = clone(observed);
     staleRing.terminals[flood]!.forensicTail = "";
     expect(forwardingMisses(plan, staleRing).forensicRingMisses).toBe(1);
+
+    // A terminal that forwards nothing still has to reach the pipeline's last stage.
+    const lostSemantic = clone(observed);
+    lostSemantic.terminals[flood]!.lastSemanticLine = "";
+    expect(forwardingMisses(plan, lostSemantic).semanticRingMisses).toBe(1);
   });
 });

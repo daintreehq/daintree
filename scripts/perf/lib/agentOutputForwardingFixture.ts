@@ -4,6 +4,7 @@ import { VirtualClock } from "./agentAnalysisSim";
 import {
   createPipelineHarness,
   EXPECTED_LIVE_AGENT_ID,
+  lastSemanticLine,
   OSC_11_QUERY,
   type PipelineFrame,
   type PipelineHarness,
@@ -209,6 +210,7 @@ export interface ForwardingTerminalObservation {
   emitCalls: number;
   emittedChars: number;
   forensicTail: string;
+  lastSemanticLine: string;
   /** `agent:output` emits for this terminal: one host-to-Main message each. */
   messages: number;
   forwardedBytes: number;
@@ -240,6 +242,7 @@ export async function runForwardingFleet(
       emitCalls: 0,
       emittedChars: 0,
       forensicTail: "",
+      lastSemanticLine: "",
       messages: 0,
       forwardedBytes: 0,
       forwarded: "",
@@ -300,6 +303,7 @@ export async function runForwardingFleet(
       observed.emitCalls = finished.emitCalls;
       observed.emittedChars = finished.emittedChars;
       observed.forensicTail = finished.forensicTail;
+      observed.lastSemanticLine = finished.semanticLines.at(-1) ?? "";
     });
   } finally {
     harnesses.forEach((harness) => harness.dispose());
@@ -318,6 +322,12 @@ export interface ForwardingMisses {
   rendererDeliveryMisses: number;
   /** The host-local 4,000-char forensics ring does not hold the stream's tail. */
   forensicRingMisses: number;
+  /**
+   * The semantic ring does not end on the stream's last line. Semantic capture
+   * is the last stage every terminal runs, so this also proves a terminal that
+   * forwards nothing still got through the whole pipeline.
+   */
+  semanticRingMisses: number;
   /**
    * An Assistant terminal whose forwarded output, once the coalescing window
    * has closed, is not its raw PTY output byte for byte and in order.
@@ -340,6 +350,7 @@ export function forwardingMisses(
   const misses: ForwardingMisses = {
     rendererDeliveryMisses: 0,
     forensicRingMisses: 0,
+    semanticRingMisses: 0,
     boundPayloadMisses: 0,
     unboundPayloadMisses: 0,
     attributionMisses: observed.strayMessages,
@@ -351,6 +362,9 @@ export function forwardingMisses(
     if (seen.emittedChars !== terminal.rendererChars) misses.rendererDeliveryMisses += 1;
     if (seen.forensicTail !== terminal.stream.slice(-4000)) {
       misses.forensicRingMisses += 1;
+    }
+    if (seen.lastSemanticLine !== lastSemanticLine(terminal.stream)) {
+      misses.semanticRingMisses += 1;
     }
     if (terminal.isAssistantTerminal) {
       if (seen.forwarded !== terminal.stream) misses.boundPayloadMisses += 1;

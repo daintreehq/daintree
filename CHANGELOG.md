@@ -4,7 +4,7 @@
 
 ### Breaking Changes
 
-- The `terminal.info.get` MCP tool no longer returns `outputBufferSize`, and Terminal Info no longer shows an Output buffer row: the number counted characters up to a 2,000 cap, so it read the same for any agent that had printed more than a screenful. Remove any read of it; nothing replaces it, and `terminal.getOutput` returns the output itself (#16426)
+- The `terminal.info.get` action no longer returns `outputBufferSize`, and Terminal Info no longer shows an Output buffer row: the number counted characters up to a 2,000 cap, so it read the same for any agent that had printed more than a screenful. Plugins that dispatch the action should drop any read of the field; nothing replaces it (#16426)
 
 ## [0.49.0] - 2026-11-06
 

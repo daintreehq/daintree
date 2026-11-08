@@ -2417,6 +2417,9 @@ describe("restored panes and the plugin hold (#14017)", () => {
         lastInputTime: 0,
         lastOutputTime: 5_100,
         activityTier: "focused",
+        // #16426: retired from the schema, so a host on an older build answering
+        // with this number doesn't reach the caller.
+        outputBufferSize: 2_000,
         semanticBufferLines: 2,
         restartCount: 0,
         hasPty: true,
@@ -2431,26 +2434,12 @@ describe("restored panes and the plugin hold (#14017)", () => {
         hasPty: true,
         restored: { at: 5_000, disposition: "resume", lastSeen },
       });
-      expect(def.resultSchema?.parse(info)).toMatchObject({
+      const parsed = def.resultSchema?.parse(info);
+      expect(parsed).toMatchObject({
+        semanticBufferLines: 2,
         restored: { at: 5_000, disposition: "resume", lastSeen },
       });
-    });
-
-    // #16426: it counted characters up to a 2,000 cap, not lines.
-    it("drops outputBufferSize from a host still answering with it", async () => {
-      setPanels({ live: { id: "live", kind: "terminal", location: "grid", cwd: "/repo" } });
-      getInfo.mockResolvedValue({
-        id: "live",
-        cwd: "/repo",
-        outputBufferSize: 2_000,
-        semanticBufferLines: 2,
-      });
-      const def = definition("terminal.info.get");
-
-      const parsed = def.resultSchema?.parse(await def.run({ terminalId: "live" }, {} as never));
-
       expect(parsed).not.toHaveProperty("outputBufferSize");
-      expect(parsed).toMatchObject({ semanticBufferLines: 2 });
     });
 
     it("reports no restore for a pane restore never rebuilt", async () => {

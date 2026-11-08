@@ -280,10 +280,10 @@ export const terminalScenarios: PerfScenario[] = [
     id: "PERF-032",
     name: "Terminal Output Pipeline - Large Retained History",
     description:
-      "1,800 chunks through one real PtyDataPipeline: long enough that both " +
-      "retention rings — the 4,000-char forensics ring and the 50-line " +
-      "semantic ring — are trimming on " +
-      "essentially every chunk. That trimming is the cost this scenario is " +
+      "1,800 chunks through one real PtyDataPipeline: long enough that the " +
+      "4,000-char forensics ring trims on essentially every chunk and the " +
+      "50-line semantic ring is over its cap when it flushes at the end. " +
+      "That trimming is the cost this scenario is " +
       "named for, and it is the one term that grows with history length, so " +
       "each ring is graded against the stream tail independently rather than " +
       "through a single aggregate.",
@@ -721,7 +721,7 @@ export const terminalScenarios: PerfScenario[] = [
       "per cohort as messages, messages per MiB of PTY output and forwarded UTF-8 bytes per MiB; " +
       "the fleet figures are the issue's workload. Counts, not time: they compare across " +
       "machines. Graded on what must not change: every chunk still reaches the renderer with " +
-      "its answered colour queries stripped, the host-local forensics ring still holds the tail, an " +
+      "its answered colour queries stripped, the host-local forensics and semantic rings still hold the tail, an " +
       "Assistant terminal forwards exactly its raw PTY output in order before any teardown flush, " +
       "any other terminal forwards all of its output or none of it, and every payload names the " +
       "right terminal and agent.",
@@ -732,6 +732,7 @@ export const terminalScenarios: PerfScenario[] = [
     correctness: [
       "rendererDeliveryMisses",
       "forensicRingMisses",
+      "semanticRingMisses",
       "boundPayloadMisses",
       "unboundPayloadMisses",
       "attributionMisses",

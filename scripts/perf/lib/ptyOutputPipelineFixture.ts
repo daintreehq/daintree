@@ -141,6 +141,20 @@ const OUTPUT_LINES = [
 ] as const;
 
 export const OSC_11_QUERY = "\x1b]11;?\x07";
+
+/** The final non-empty line of a stream, as the semantic ring stores it. */
+export function lastSemanticLine(stream: string): string {
+  const lines = stream.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i]!;
+    if (line.length > 0) {
+      return line.length > SEMANTIC_BUFFER_MAX_LINE_LENGTH
+        ? `${line.substring(0, SEMANTIC_BUFFER_MAX_LINE_LENGTH)}... [truncated]`
+        : line;
+    }
+  }
+  return "";
+}
 /** OSC 12 (cursor colour) — passes the `\x1b]1` gate, is not a colour query. */
 const OSC_12_DECOY = "\x1b]12;?\x07";
 
@@ -166,18 +180,6 @@ class PipelinePlanBuilder {
 
   build(): PipelinePlan {
     const stream = this.parts.join("");
-    const lines = stream.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-    let lastLine = "";
-    for (let i = lines.length - 1; i >= 0; i -= 1) {
-      const line = lines[i]!;
-      if (line.length > 0) {
-        lastLine =
-          line.length > SEMANTIC_BUFFER_MAX_LINE_LENGTH
-            ? `${line.substring(0, SEMANTIC_BUFFER_MAX_LINE_LENGTH)}... [truncated]`
-            : line;
-        break;
-      }
-    }
     return {
       frames: this.frames,
       stream,
@@ -186,7 +188,7 @@ class PipelinePlanBuilder {
       expectedPromptReturns: this.promptReturns,
       expectedPromptDecoys: this.promptDecoys,
       expectedForensicTail: stream.slice(-4000),
-      expectedLastSemanticLine: lastLine,
+      expectedLastSemanticLine: lastSemanticLine(stream),
       totalChars: this.chars,
     };
   }
