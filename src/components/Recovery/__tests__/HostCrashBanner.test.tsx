@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
 import type { CrashType } from "@shared/types/pty-host";
+import type { ActionDispatchResult } from "@shared/types/actions";
 
 vi.mock("@/services/ActionService", () => ({
   actionService: {
@@ -19,6 +20,7 @@ vi.mock("@/utils/logger", () => ({
 import { HostCrashBanner } from "../HostCrashBanner";
 import { usePanelStore } from "@/store/panelStore";
 import { actionService } from "@/services/ActionService";
+import { useDiagnosticsReviewStore } from "@/store/diagnosticsReviewStore";
 
 const mockedDispatch = vi.mocked(actionService.dispatch);
 
@@ -162,6 +164,112 @@ describe("HostCrashBanner", () => {
     });
     expect(button.getAttribute("aria-disabled")).toBeNull();
     expect(button.textContent).toMatch(/Restart service/);
+  });
+
+  describe("when the restart request fails", () => {
+    const refused: ActionDispatchResult = {
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "boom" },
+    };
+
+    const restartButton = () => screen.getByRole("button", { name: /Restart service/i });
+    const failureLine = () => screen.queryByTestId("host-crash-banner-restart-error");
+
+    beforeEach(() => {
+      usePanelStore.setState({ backendStatus: "disconnected", lastCrashType: null });
+      useDiagnosticsReviewStore.setState({ downloadError: null });
+    });
+
+    it("says so on the banner and keeps Restart service available", async () => {
+      mockedDispatch.mockResolvedValueOnce(refused);
+      render(<HostCrashBanner />);
+      expect(failureLine()).toBeNull();
+      await act(async () => {
+        fireEvent.click(restartButton());
+      });
+      expect(failureLine()?.textContent).toMatch(/Couldn't restart the terminal service/);
+      expect(restartButton().getAttribute("aria-disabled")).toBeNull();
+      // The pointer it names is on the same banner.
+      expect(screen.getByRole("button", { name: /Send diagnostics/i })).toBeTruthy();
+    });
+
+    it("reports a rejected dispatch the same way", async () => {
+      mockedDispatch.mockRejectedValueOnce(new Error("IPC closed"));
+      render(<HostCrashBanner />);
+      await act(async () => {
+        fireEvent.click(restartButton());
+      });
+      expect(failureLine()).not.toBeNull();
+      expect(restartButton().getAttribute("aria-disabled")).toBeNull();
+    });
+
+    it("clears the line when the retry starts, not when it ends", async () => {
+      mockedDispatch.mockResolvedValueOnce(refused);
+      render(<HostCrashBanner />);
+      await act(async () => {
+        fireEvent.click(restartButton());
+      });
+      expect(failureLine()).not.toBeNull();
+
+      let settle!: (value: ActionDispatchResult) => void;
+      mockedDispatch.mockReturnValueOnce(new Promise((resolve) => (settle = resolve)));
+      await act(async () => {
+        fireEvent.click(restartButton());
+      });
+      expect(mockedDispatch).toHaveBeenCalledTimes(2);
+      expect(failureLine()).toBeNull();
+      expect(restartButton().getAttribute("aria-disabled")).toBe("true");
+
+      await act(async () => settle({ ok: true, result: undefined }));
+      expect(failureLine()).toBeNull();
+    });
+
+    it("sits beside a diagnostics collection failure rather than replacing it", async () => {
+      mockedDispatch.mockResolvedValueOnce(refused);
+      useDiagnosticsReviewStore.setState({ downloadError: "disk full" });
+      render(<HostCrashBanner />);
+      await act(async () => {
+        fireEvent.click(restartButton());
+      });
+      expect(failureLine()).not.toBeNull();
+      expect(screen.getByTestId("host-crash-banner-diagnostics-error").textContent).toMatch(
+        /disk full/
+      );
+    });
+
+    it("returns from automatic recovery with neither the failure line nor a stuck button", async () => {
+      mockedDispatch.mockResolvedValueOnce(refused);
+      render(<HostCrashBanner />);
+      await act(async () => {
+        fireEvent.click(restartButton());
+      });
+      expect(failureLine()).not.toBeNull();
+
+      act(() => {
+        usePanelStore.setState({ backendStatus: "recovering" });
+      });
+      act(() => {
+        usePanelStore.setState({ backendStatus: "disconnected" });
+      });
+      expect(failureLine()).toBeNull();
+      expect(restartButton().getAttribute("aria-disabled")).toBeNull();
+    });
+
+    it("does not carry an accepted restart's loading state back from automatic recovery", async () => {
+      render(<HostCrashBanner />);
+      await act(async () => {
+        fireEvent.click(restartButton());
+      });
+      expect(restartButton().getAttribute("aria-disabled")).toBe("true");
+
+      act(() => {
+        usePanelStore.setState({ backendStatus: "recovering" });
+      });
+      act(() => {
+        usePanelStore.setState({ backendStatus: "disconnected" });
+      });
+      expect(restartButton().getAttribute("aria-disabled")).toBeNull();
+    });
   });
 
   it("disappears when backend transitions back to connected", () => {
