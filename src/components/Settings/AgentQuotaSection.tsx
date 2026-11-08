@@ -1,17 +1,21 @@
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { getMergedPresetIdentities, getMergedPresets, type AgentPreset } from "@/config/agents";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { pluralNoun } from "@/lib/pluralize";
-import { formatLastChecked } from "@/utils/timeAgo";
+import { formatLastChecked, formatTimeAgo } from "@/utils/timeAgo";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { useCodexQuota } from "@/hooks/useCodexQuota";
+import { useClaudeUsage } from "@/hooks/useClaudeUsage";
 import { windowLabel } from "@/utils/codexQuotaFormat";
 import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
 import {
   CODEX_QUOTA_STALE_AFTER_MS,
+  type ClaudeUsageAccount,
+  type ClaudeUsageReading,
   type CodexQuotaProfile,
   type CodexQuotaProfileHomeReason,
   type CodexQuotaUnavailableReason,
@@ -261,23 +265,190 @@ function CodexQuota() {
 }
 
 /**
- * Live account quota under the agent picker (#12797). Codex reports its own
- * through the app-server, once per distinct `CODEX_HOME` (#13686); Claude's is never read — its credentials and usage
- * endpoints are off limits to other apps — so it says so beside "View usage".
+ * What a message said, in its own terms: a percent only where it printed one,
+ * and "over" kept as a floor rather than turned into a remaining share.
+ */
+export function claudeStatementText(
+  reading: Pick<ClaudeUsageReading, "statement" | "usedPercent">
+): string {
+  const percent = reading.usedPercent === null ? null : Math.round(reading.usedPercent);
+  switch (reading.statement) {
+    case "used":
+      return percent === null ? "Approaching limit" : `${percent}% used`;
+    case "over":
+      return percent === null ? "Approaching limit" : `Over ${percent}% used`;
+    case "approaching":
+      return "Approaching limit";
+    case "reached":
+      return "Limit reached";
+  }
+}
+
+/** "weekly limit" as Claude Code names it, in sentence case for a row label. */
+export function claudeWindowLabel(window: ClaudeUsageReading["window"]): string {
+  return window.charAt(0).toUpperCase() + window.slice(1);
+}
+
+function paneSource(reading: ClaudeUsageReading): string {
+  const pane = reading.paneTitle ?? "a pane that's no longer open";
+  return reading.projectName ? `${pane} (${reading.projectName})` : pane;
+}
+
+function ClaudeUsageRow({
+  reading,
+  now,
+  group,
+}: {
+  reading: ClaudeUsageReading;
+  now: number;
+  /** Prefixes the meter's name once several logins each have one. */
+  group?: string;
+}) {
+  const label = claudeWindowLabel(reading.window);
+  const stale = reading.resetsAt !== null && reading.resetsAt <= now;
+  const reset =
+    reading.resetsAt === null
+      ? null
+      : stale
+        ? "Reset time has passed"
+        : formatReset(reading.resetsAt, now);
+  const seen = `Seen ${formatTimeAgo(reading.observedAt, now)} in ${paneSource(reading)}`;
+  const description = reset ? `${reset} · ${seen}` : seen;
+  const percent = reading.usedPercent === null ? null : Math.round(reading.usedPercent);
+
+  const statement = claudeStatementText(reading);
+  let control: ReactNode;
+  if (reading.statement === "used" && percent !== null) {
+    const meterLabel = group ? `${group} ${label.toLowerCase()} used` : `${label} used`;
+    control = (
+      <div className="flex w-52 items-center gap-2">
+        <div
+          role="meter"
+          aria-label={meterLabel}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={percent}
+          aria-valuetext={`${statement}, as a pane showed it${stale ? ", stale" : ""}`}
+          className="bg-overlay-emphasis h-1.5 flex-1 overflow-hidden rounded-full"
+        >
+          <div className="h-full rounded-full bg-text-secondary" style={{ width: `${percent}%` }} />
+        </div>
+        <span className="shrink-0 text-xs tabular-nums text-text-secondary">{statement}</span>
+      </div>
+    );
+  } else {
+    control = <span className="text-xs tabular-nums text-text-secondary">{statement}</span>;
+  }
+
+  return (
+    <SettingsRow
+      label={label}
+      accessory={stale ? <Badge size="xs">Stale</Badge> : undefined}
+      description={description}
+      control={control}
+    />
+  );
+}
+
+/**
+ * The group name for one login. A lone default-login group goes unnamed while
+ * no account is saved; any other group is named, so a reading never looks
+ * like it describes a login it doesn't.
+ */
+export function claudeUsageGroupLabels(
+  accounts: readonly ClaudeUsageAccount[],
+  hasSavedAccounts: boolean
+): (string | undefined)[] {
+  const others = accounts.filter((account) => account.kind === "other").length;
+  let otherIndex = 0;
+  const lone = accounts.length === 1 && accounts[0]!.kind === "default" && !hasSavedAccounts;
+  return accounts.map((account) => {
+    if (lone) return undefined;
+    const names = account.accountNames.join(", ");
+    switch (account.kind) {
+      case "default":
+        return names ? `Default login · ${names}` : "Default login";
+      case "account":
+        return names;
+      case "other":
+        otherIndex++;
+        return others > 1 ? `Other config folder ${otherIndex}` : "Other config folder";
+      case "unknown":
+        return "Unknown config folder";
+    }
+  });
+}
+
+/**
+ * What Claude Code's own usage messages said in the host's panes (#15727,
+ * #16370). Its credentials and usage endpoints are off limits to other apps,
+ * so this is never a live figure: each row is the latest message a pane showed
+ * for one limit, under the login that pane ran on.
+ */
+function ClaudeUsage() {
+  const { accounts, failed, refresh } = useClaudeUsage(true);
+  const now = useGlobalMinuteClock();
+  const hasSavedAccounts = useAgentSettingsStore(
+    (s) => (s.settings?.agents?.claude?.accounts?.length ?? 0) > 0
+  );
+  const labels = accounts ? claudeUsageGroupLabels(accounts, hasSavedAccounts) : [];
+
+  let body: ReactNode;
+  if (accounts === null) {
+    body = failed ? (
+      <SettingsGroup>
+        <SettingsRow
+          label="Usage unavailable"
+          description="Daintree couldn't read what its panes showed"
+          control={
+            <Button size="sm" variant="outline" onClick={refresh}>
+              Retry
+            </Button>
+          }
+        />
+      </SettingsGroup>
+    ) : (
+      <SettingsGroup>
+        <SettingsRow label="Checking…" />
+      </SettingsGroup>
+    );
+  } else if (accounts.length === 0) {
+    body = (
+      <SettingsGroup>
+        <SettingsRow
+          label="No usage seen yet"
+          description="Claude Code reports usage in a pane as a limit approaches, and the latest it showed appears here. Use View usage to check the account on claude.ai."
+        />
+      </SettingsGroup>
+    );
+  } else {
+    body = accounts.map((account, index) => (
+      <SettingsGroup key={account.key} label={labels[index]}>
+        {account.readings.map((reading) => (
+          <ClaudeUsageRow key={reading.window} reading={reading} now={now} group={labels[index]} />
+        ))}
+      </SettingsGroup>
+    ));
+  }
+
+  return (
+    <SettingsSection
+      title="Account quota"
+      description="Claude Code's own usage messages, as your panes showed them. Not a live account reading."
+    >
+      {body}
+    </SettingsSection>
+  );
+}
+
+/**
+ * Account quota under the agent picker (#12797). Codex reports its own
+ * through the app-server, once per distinct `CODEX_HOME` (#13686); Claude's is
+ * never read, so its section shows what its panes printed (#16370) beside
+ * "View usage".
  */
 export function AgentQuotaSection({ agentId }: { agentId: string }) {
   if (agentId === "codex") return <CodexQuota />;
-  if (agentId === "claude") {
-    return (
-      <SettingsSection title="Account quota">
-        <SettingsGroup>
-          <SettingsRow
-            label="Live quota unavailable"
-            description="Claude doesn't share usage with other apps. Use View usage to check it on claude.ai."
-          />
-        </SettingsGroup>
-      </SettingsSection>
-    );
-  }
+  if (agentId === "claude") return <ClaudeUsage />;
   return null;
 }
