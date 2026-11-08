@@ -15,6 +15,7 @@ import {
 } from "../utils/shellEscape.js";
 import { systemPromptArgPositions } from "../utils/agentSystemPrompt.js";
 import { hasUnclosedQuote, parseShellArgs } from "../utils/shellArgs.js";
+import { quoteLaunchPrompt } from "../utils/launchPromptArg.js";
 import { HOST_INBOX_DIR_NAME } from "./ipc/fileTransfer.js";
 
 /**
@@ -908,15 +909,6 @@ export interface GenerateAgentCommandOptions {
 }
 
 /**
- * The text an agent receives as its launch prompt: trimmed, with a multi-line
- * prompt normalized to a single line. Restore compares a pane's recorded first
- * prompt in this form against the first message the agent stored (#15269).
- */
-export function launchPromptArgText(prompt: string): string {
-  return prompt.trim().replace(/\r\n/g, " ").replace(/\n/g, " ");
-}
-
-/**
  * Generates a complete agent command string including base command, flags, and optional initial prompt.
  *
  * @param baseCommand - The base command for the agent (e.g., "claude", "gemini")
@@ -1033,7 +1025,7 @@ export function generateAgentCommand(
   const prompt = options?.initialPrompt?.trim();
   if (prompt) {
     const interactive = options?.interactive ?? true;
-    const escapedPrompt = quoteAgentArg(launchPromptArgText(prompt));
+    const escapedPrompt = quoteLaunchPrompt(prompt);
 
     switch (agentId) {
       case "claude":

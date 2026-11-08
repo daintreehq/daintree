@@ -35,10 +35,10 @@ import {
 import { parkIfSavedInBackground } from "./backgroundParking";
 import {
   buildResumeLatestCommand,
-  launchPromptArgText,
   resolveResumeOnRestart,
   supportsCrossDirectoryResume,
 } from "@shared/types/agentSettings";
+import { launchPromptMatchText } from "@shared/utils/launchPromptArg";
 import {
   findLaunchRoot,
   isFilingUnavailable,
@@ -502,7 +502,7 @@ function codexHomeOf(env: TerminalState["env"]): string | null | undefined {
 async function launchPromptHash(text: string): Promise<string> {
   const digest = await crypto.subtle.digest(
     "SHA-256",
-    new TextEncoder().encode(launchPromptArgText(text))
+    new TextEncoder().encode(launchPromptMatchText(text))
   );
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
@@ -642,7 +642,8 @@ function planCodexRestoreMatches(
       key: saved.id,
       at: prompt.at,
       text: prompt.text,
-      resolve: held && prompt.via === "launch" && !launchPromptArgText(prompt.text).startsWith("-"),
+      resolve:
+        held && prompt.via === "launch" && !launchPromptMatchText(prompt.text).startsWith("-"),
     });
   }
 

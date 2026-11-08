@@ -78,9 +78,10 @@ export interface LiveAttributionPane {
 }
 
 /**
- * The launch command trims the prompt and flattens its line breaks to spaces
- * before Codex sees it, and a handback instruction can follow it after a blank
- * line. Collapsing every run of whitespace on both sides makes the stored text
+ * The launch command trims the prompt before Codex sees it, a launch from before
+ * #16378 or through a shell that can't build line breaks has them as spaces, and
+ * a handback instruction can follow after a blank line. Collapsing every run of
+ * whitespace on both sides makes the stored text
  * and the received text compare as what they are: the same words in the same
  * order.
  */

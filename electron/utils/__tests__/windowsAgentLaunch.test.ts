@@ -14,6 +14,7 @@ import {
   parseWindowsAgentCommand,
   resolveWindowsAgentExecutable,
   serializeWindowsArgv,
+  windowsCommandWithPromptOnOneLine,
 } from "../windowsAgentLaunch.js";
 import { resolveWindowsCli, type WindowsCliResolveOptions } from "../windowsCliSpawn.js";
 import { fakeWindowsPathFs } from "./helpers/windowsPathFs.js";
@@ -60,6 +61,96 @@ describe("Windows agent argv", () => {
     } finally {
       setAgentCommandDialectResolver(null);
     }
+  });
+
+  describe("a prompt with line breaks (#16378)", () => {
+    const multiLine = [
+      "line one\nline two",
+      "# Heading\n\n- item\n\n\n1. numbered",
+      "func main() {\n\treturn\t1\n}",
+      `it's "quoted", ""doubled"" and 'single'\nsecond "line`,
+      "$(Write-Output DAINTREE_PROBE) $env:PATH `whoami` ``\n`n `t `$ %PATH%",
+      "“curly” „low” ‘single’ ‚low‛\nnext",
+      "C:\\path with space\\\nnext\\",
+      "--flag=$(Write-Output DAINTREE_PROBE)\n-x",
+    ];
+    const generated = (prompt: string) => {
+      setAgentCommandDialectResolver(() => "windows");
+      try {
+        return generateAgentCommand(`& ${quotePowerShellArg("C:\\agent.exe")}`, {}, "codex", {
+          initialPrompt: prompt,
+        });
+      } finally {
+        setAgentCommandDialectResolver(null);
+      }
+    };
+
+    it.each(multiLine)("decodes %j into one argv token", (prompt) => {
+      const command = generated(prompt);
+      // eslint-disable-next-line no-control-regex
+      expect(command).not.toMatch(/[\x00-\x1F\x7F]/);
+      expect(parseWindowsAgentCommand(command).at(-1)).toBe(prompt);
+    });
+
+    it("carries the line breaks onto the child's command line", async () => {
+      const script = await launchScript(generated("one\n\ntwo's"), {
+        env: { PATH: "C:\\tools", SystemRoot: "C:\\Windows" },
+        isFile: (file: string) => file.toLowerCase() === "c:\\agent.exe",
+        pathFs: fakeWindowsPathFs({ "C:\\agent.exe": "" }),
+      });
+      expect(script).toContain(`"one\n\ntwo''s"'\n`);
+    });
+
+    it("puts it on one line for a replay that runs the command directly in PowerShell", () => {
+      const command = generated(`one\n\n\ttwo's "x" $(id)`);
+      const replayed = windowsCommandWithPromptOnOneLine(command);
+      // eslint-disable-next-line no-control-regex
+      expect(replayed).not.toMatch(/[\x00-\x1F\x7F]/);
+      expect(replayed).not.toContain("`n");
+      expect(parseWindowsAgentCommand(replayed)).toEqual([
+        ...parseWindowsAgentCommand(command).slice(0, -1),
+        `one   two's "x" $(id)`,
+      ]);
+    });
+
+    it("touches no other argument of a replay", () => {
+      setAgentCommandDialectResolver(() => "windows");
+      try {
+        const command = generateAgentCommand(`& 'C:\\agent.exe'`, {}, "claude", {
+          presetArgs: ["--system-prompt", "  padded  ", "it's fine"],
+          initialPrompt: "one\ntwo",
+        });
+        expect(parseWindowsAgentCommand(windowsCommandWithPromptOnOneLine(command))).toEqual([
+          ...parseWindowsAgentCommand(command).slice(0, -1),
+          "one two",
+        ]);
+      } finally {
+        setAgentCommandDialectResolver(null);
+      }
+    });
+
+    it("leaves any other command as it was", () => {
+      const single = generated("one two");
+      expect(windowsCommandWithPromptOnOneLine(single)).toBe(single);
+      const unparsed = "agent --flag=$(Get-Date)";
+      expect(windowsCommandWithPromptOnOneLine(unparsed)).toBe(unparsed);
+    });
+
+    it("refuses to hand them to cmd.exe through a batch file it can't unwrap", async () => {
+      await expect(
+        launchScript(`agent ${generated("one\ntwo").split(" ").at(-1)}`, {
+          env: { PATH: "C:\\tools", SystemRoot: "C:\\Windows" },
+          isFile: (file: string) => file.toLowerCase() === "c:\\tools\\agent.bat",
+          readFile: () => "@echo off\r\ncustom.exe %*\r\n",
+          pathFs: fakeWindowsPathFs({ "C:\\tools\\agent.bat": "" }),
+        })
+      ).rejects.toThrow(/Cannot pass these launch arguments/);
+    });
+
+    it("keeps a backtick it didn't write as written", () => {
+      expect(parseWindowsAgentCommand('agent "a`xb"')).toEqual(["agent", "a`xb"]);
+      expect(parseWindowsAgentCommand("agent 'a`nb'")).toEqual(["agent", "a`nb"]);
+    });
   });
 
   it("preserves inert fused options that command generation leaves bare", () => {

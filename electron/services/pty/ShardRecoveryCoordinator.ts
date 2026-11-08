@@ -20,6 +20,7 @@ import {
 } from "../../utils/windowsTreeKill.js";
 import { stripAssignedSessionIdArgs } from "../../../shared/types/agentSettings.js";
 import { buildCommandLaunchShell } from "../../ipc/handlers/terminal/commandLaunch.js";
+import { windowsCommandWithPromptOnOneLine } from "../../utils/windowsAgentLaunch.js";
 import { getPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
 import { getPluginProcessToolRegistry } from "../../../shared/config/pluginProcessToolRegistry.js";
 import { claimShardLineageFile, reapClaimedLineageFile } from "../TerminalLineageLedger.js";
@@ -300,7 +301,10 @@ export class ShardRecoveryCoordinator {
     // `args` — PowerShell base64-encodes it there — so disarming `command`
     // alone would leave the spent flag running. Rebuild the carrier from the
     // disarmed command using the same pure builder that produced it.
-    const relaunch = buildCommandLaunchShell(command, stored.shell);
+    const relaunch = buildCommandLaunchShell(
+      process.platform === "win32" ? windowsCommandWithPromptOnOneLine(command) : command,
+      stored.shell
+    );
     if (relaunch) disarmed.args = relaunch.args;
     if (stored.postSpawnInput) {
       disarmed.postSpawnInput = stripAssignedSessionIdArgs(

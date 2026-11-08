@@ -7,6 +7,8 @@ import {
   TerminalRecipeSchema,
   filterValidTerminalEntries,
 } from "../ipc.js";
+import { quoteLaunchPrompt } from "../../../shared/utils/launchPromptArg.js";
+import { setAgentCommandDialectResolver } from "../../../shared/utils/shellEscape.js";
 
 describe("Terminal Entry Validation Schemas", () => {
   describe("AppStateTerminalEntrySchema", () => {
@@ -458,6 +460,21 @@ describe("Terminal Entry Validation Schemas", () => {
         if (!result.success) {
           expect(result.error.issues[0].message).toContain("control characters");
         }
+      }
+    });
+
+    it("admits the command a multi-line launch prompt generates, under either dialect (#16378)", () => {
+      const prompt = "# Plan\n\n- it's one\n\t- \"two\" $(id)\r\nend";
+      try {
+        for (const dialect of ["posix", "windows"] as const) {
+          setAgentCommandDialectResolver(() => dialect);
+          const command = `claude ${quoteLaunchPrompt(prompt)}`;
+          expect(TerminalSpawnOptionsSchema.safeParse({ ...baseOptions, command }).success).toBe(
+            true
+          );
+        }
+      } finally {
+        setAgentCommandDialectResolver(null);
       }
     });
   });

@@ -33,8 +33,7 @@ function isLineBreakOrControl(code: number): boolean {
  * Reduces a standing instruction to one line of plain text, or `undefined`
  * when nothing is left. A line break would end the launch command early and
  * other controls would reach the terminal as escape sequences, so each run of
- * them becomes one space — the same flattening `generateAgentCommand` applies
- * to the first-turn prompt. A lone surrogate is not text, and a TOML parser
+ * them becomes one space. A lone surrogate is not text, and a TOML parser
  * rejects its escape, so it becomes U+FFFD.
  */
 export function normalizeSystemPrompt(text: string | undefined): string | undefined {
