@@ -8,8 +8,11 @@ import { Spinner } from "@/components/ui/Spinner";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { InlineStatusBanner, type BannerAction } from "@/components/Terminal/InlineStatusBanner";
 import { projectClient, systemClient } from "@/clients";
+import { useDohertyGate } from "@/hooks";
 import { useProjectCloneJob } from "@/hooks/useProjectCloneJob";
 import { actionService } from "@/services/ActionService";
+import { useProjectStore } from "@/store/projectStore";
+import { reloadView } from "@/utils/reloadView";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { Project } from "@shared/types";
 import type { ProjectCloneJobSnapshot } from "@shared/types/ipc/projectClone";
@@ -68,13 +71,24 @@ function CloneOutput({ lines }: { lines: string[] }) {
 export function ProjectCloneView({ project }: { project: Project }) {
   const job = useProjectCloneJob(project.id);
   const [retrying, setRetrying] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<{ title: string; message: string } | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
 
   const state = viewState(project, job);
   const stages = job?.stages ?? [];
   const currentIndex = stages.findIndex((stage) => stage.key === job?.currentStageKey);
   const currentStage = currentIndex === -1 ? null : (stages[currentIndex] ?? null);
+  // A wait with nothing measured yet shows nothing for its first 400ms, so a
+  // view that is about to learn the phase never flashes "Connecting…".
+  const showConnecting = useDohertyGate(state === "running" && currentStage === null);
+
+  // The clone landed while this view held an older row (it hydrated from one
+  // read before the success, so the update that reloads views passed it by).
+  // Main keeps the finished job's answer for exactly this view.
+  const landed = job?.status === "succeeded";
+  useEffect(() => {
+    if (landed) reloadView();
+  }, [landed]);
   const completedStages =
     state === "running" ? (currentIndex === -1 ? [] : stages.slice(0, currentIndex)) : [];
   const source = job?.source ?? null;
@@ -84,8 +98,20 @@ export function ProjectCloneView({ project }: { project: Project }) {
   const stop = () => {
     setActionError(null);
     void projectClient.stopBackgroundClone(project.id).catch((error: unknown) => {
-      setActionError(formatErrorMessage(error, "Couldn't stop the clone"));
+      setActionError({
+        title: "Couldn't stop the clone",
+        message: formatErrorMessage(error, "Couldn't stop the clone"),
+      });
     });
+  };
+
+  // The project on screen is closed first, as the switcher closes the active
+  // project: its view's pending saves are dropped, so none can write back the
+  // state the removal deletes.
+  const remove = async () => {
+    const { currentProject, closeActiveProject } = useProjectStore.getState();
+    if (currentProject?.id === project.id) await closeActiveProject(project.id);
+    await actionService.dispatch("project.remove", { projectId: project.id }, { source: "user" });
   };
 
   const retry = () => {
@@ -95,7 +121,10 @@ export function ProjectCloneView({ project }: { project: Project }) {
     void projectClient
       .retryBackgroundClone(project.id)
       .catch((error: unknown) => {
-        setActionError(formatErrorMessage(error, "Couldn't retry the clone"));
+        setActionError({
+          title: "Couldn't retry the clone",
+          message: formatErrorMessage(error, "Couldn't retry the clone"),
+        });
       })
       .finally(() => setRetrying(false));
   };
@@ -145,7 +174,7 @@ export function ProjectCloneView({ project }: { project: Project }) {
           </div>
         </header>
 
-        {state === "running" && (
+        {state === "running" && (currentStage !== null || showConnecting) && (
           <div className="space-y-2">
             {/* The phase alone is announced, so percentage ticks stay quiet. */}
             <span className="sr-only" role="status" aria-live="polite">
@@ -206,7 +235,11 @@ export function ProjectCloneView({ project }: { project: Project }) {
             icon={CircleSlash}
             severity="neutral"
             title="Clone stopped"
-            description="The clone was stopped before it finished, and what it wrote was removed."
+            description={
+              job?.cleanupError
+                ? "The clone was stopped before it finished."
+                : "The clone was stopped before it finished, and what it wrote was removed."
+            }
             role="status"
             className="rounded-[var(--radius-md)]"
           />
@@ -217,8 +250,8 @@ export function ProjectCloneView({ project }: { project: Project }) {
         {actionError !== null && (
           <InlineStatusBanner
             severity="error"
-            title={state === "running" ? "Couldn't stop the clone" : "Couldn't retry the clone"}
-            description={actionError}
+            title={actionError.title}
+            description={actionError.message}
             onClose={() => setActionError(null)}
             closeAriaLabel="Dismiss"
             className="rounded-[var(--radius-md)]"
@@ -262,11 +295,12 @@ export function ProjectCloneView({ project }: { project: Project }) {
         variant="destructive"
         onConfirm={() => {
           setConfirmRemove(false);
-          void actionService.dispatch(
-            "project.remove",
-            { projectId: project.id },
-            { source: "user" }
-          );
+          void remove().catch((error: unknown) => {
+            setActionError({
+              title: "Couldn't remove the project",
+              message: formatErrorMessage(error, "Couldn't remove the project"),
+            });
+          });
         }}
       />
     </div>

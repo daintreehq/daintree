@@ -468,6 +468,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
           title: "Project still cloning",
           message: "Agents and terminals can start once the clone finishes.",
           replaceKey: "launch-project-cloning",
+          context: { eventKind: "agent" },
         });
         return decline("unavailable");
       }

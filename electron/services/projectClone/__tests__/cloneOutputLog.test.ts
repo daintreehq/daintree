@@ -54,3 +54,34 @@ describe("CloneOutputLog", () => {
     expect(log.snapshot()).toEqual(["Receiving objects: 60%", "Resolving deltas: 5%"]);
   });
 });
+
+describe("CloneOutputLog credentials across boundaries", () => {
+  const TOKEN = "ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+
+  it("never shows a URL's credentials while the line is still arriving", () => {
+    const log = new CloneOutputLog();
+    log.append(`fatal: unable to access 'https://x-access-token:${TOKEN.slice(0, 20)}`);
+    expect(log.snapshot().join("\n")).not.toContain(TOKEN.slice(0, 20));
+
+    log.append(`${TOKEN.slice(20)}@github.com/o/r.git/'\n`);
+    const shown = log.snapshot().join("\n");
+    expect(shown).not.toContain(TOKEN);
+    expect(shown).toContain("github.com/o/r.git");
+  });
+
+  it("scrubs a long line before cutting it to length", () => {
+    const log = new CloneOutputLog();
+    const padding = "x".repeat(380);
+    log.append(`${padding} https://user:${TOKEN}@example.com/repo.git\n`);
+    const [line] = log.snapshot();
+    expect(line).not.toContain(TOKEN.slice(0, 10));
+    expect(line!.startsWith(padding)).toBe(true);
+  });
+
+  it("redacts credentials a length cut left without their @", () => {
+    const log = new CloneOutputLog();
+    log.append(`remote: https://user:secretpass${"y".repeat(20_000)}`);
+    log.append("\n");
+    expect(log.snapshot().join("\n")).not.toContain("secretpass");
+  });
+});

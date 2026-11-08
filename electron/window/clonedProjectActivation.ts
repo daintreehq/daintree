@@ -1,5 +1,5 @@
 import type { Project } from "../../shared/types/project.js";
-import { projectStore } from "../services/ProjectStore.js";
+import { getPendingActivationProjectIds } from "./projectActivationClaims.js";
 import { getWorkspaceClientRef } from "./serviceRefs.js";
 import { getWindowRegistry } from "./windowRef.js";
 
@@ -9,6 +9,12 @@ import { getWindowRegistry } from "./windowRef.js";
  * workspace now; its view then reloads into a normal project and takes its
  * ports on ready, as any reloaded view does. A cached view still holding the
  * cloning page is let go, so the project opens fresh next time.
+ *
+ * A window with an activation in flight is left alone: that switch may already
+ * have asked for its own workspace, and a load issued here would supersede it.
+ * A switch landing on this project reconciles the load itself once its swap
+ * settles (`activateProjectView`). Any switch that starts after the load below
+ * asks for its workspace later, so it owns the window's mapping.
  */
 export async function loadClonedProjectInWindows(project: Project): Promise<void> {
   const registry = getWindowRegistry();
@@ -24,21 +30,11 @@ export async function loadClonedProjectInWindows(project: Project): Promise<void
         return;
       }
       if (!workspace) return;
+      if (getPendingActivationProjectIds(ctx.windowId).length > 0) return;
       try {
         await workspace.loadProject(project.path, ctx.windowId);
       } catch (error) {
         console.warn("[ProjectClone] Couldn't load the cloned project's workspace:", error);
-        return;
-      }
-      // The window moved on while the host loaded. The load just attached it to
-      // this project's workspace, so hand it back to whatever it shows now.
-      const nowActive = pvm.getActiveProjectId();
-      if (nowActive === project.id) return;
-      const nowPath = nowActive ? projectStore.getProjectById(nowActive)?.path : undefined;
-      if (nowPath) {
-        await workspace.loadProject(nowPath, ctx.windowId).catch(() => {});
-      } else {
-        workspace.unregisterWindow(ctx.windowId);
       }
     })
   );

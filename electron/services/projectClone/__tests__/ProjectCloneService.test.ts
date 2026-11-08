@@ -15,7 +15,13 @@ const h = vi.hoisted(() => {
     reject: (error: unknown) => void;
   }> = [];
   const events: string[] = [];
-  return { rows, calls, events };
+  /** When set, an aborted clone settles only once the test releases it. */
+  const control = {
+    holdTeardown: false,
+    releaseTeardown: [] as Array<() => void>,
+    destination: null as Promise<void> | null,
+  };
+  return { rows, calls, events, control };
 });
 
 vi.mock("../../../ipc/handlers/projectCrud/gitClone.js", async () => {
@@ -27,14 +33,19 @@ vi.mock("../../../ipc/handlers/projectCrud/gitClone.js", async () => {
       folderName: options.folderName.trim(),
       targetPath: `${options.parentPath}/${options.folderName.trim()}`,
     }),
-    assertCloneDestination: vi.fn(async () => {}),
+    assertCloneDestination: vi.fn(async () => {
+      if (h.control.destination) await h.control.destination;
+    }),
     executeClone: vi.fn(
       (options: ExecuteCloneOptions) =>
         new Promise<void>((resolve, reject) => {
           h.calls.push({ options, resolve, reject });
-          options.signal.addEventListener("abort", () =>
-            reject(new AppError({ code: "CANCELLED", message: "Clone cancelled" }))
-          );
+          options.signal.addEventListener("abort", () => {
+            const cancel = () =>
+              reject(new AppError({ code: "CANCELLED", message: "Clone cancelled" }));
+            if (h.control.holdTeardown) h.control.releaseTeardown.push(cancel);
+            else cancel();
+          });
         })
     ),
   };
@@ -138,6 +149,9 @@ describe("ProjectCloneService", () => {
     h.rows.clear();
     h.calls.length = 0;
     h.events.length = 0;
+    h.control.holdTeardown = false;
+    h.control.releaseTeardown.length = 0;
+    h.control.destination = null;
     resetCheckoutGateForTests();
     vi.clearAllMocks();
     service = new ProjectCloneService();
@@ -187,25 +201,32 @@ describe("ProjectCloneService", () => {
   });
 
   it("turns the project ready and loads its windows before any view hears about it", async () => {
-    const onCheckoutReady = vi.fn(async (ready: Project) => {
+    let finishLoading!: () => void;
+    const onCheckoutReady = vi.fn((ready: Project) => {
       h.events.push(`ready-hook:${ready.id}:${ready.cloneState ?? "ready"}`);
       expect(isCheckoutPendingProject(ready.id)).toBe(false);
+      return new Promise<void>((resolve) => (finishLoading = resolve));
     });
     service.setHooks({ onCheckoutReady });
     const { project } = await service.start(request("widgets"));
     h.events.length = 0;
+    vi.mocked(broadcastToProjectRenderers).mockClear();
 
     h.calls[0]!.resolve();
     await flush();
     await flush();
 
+    // The windows' workspaces are still loading: no view may hear it landed.
+    expect(h.events).toEqual([`complete:${project.id}`, `ready-hook:${project.id}:ready`]);
+    expect(broadcastToProjectRenderers).not.toHaveBeenCalled();
+
+    finishLoading();
+    await flush();
+
     expect(projectStore.classifyGitBacking).toHaveBeenCalledWith("/work/widgets");
-    expect(h.events).toEqual([
-      `complete:${project.id}`,
-      `ready-hook:${project.id}:ready`,
-      `broadcast:${CHANNELS.PROJECT_UPDATED}:${project.id}:ready`,
-    ]);
-    expect(service.getSnapshot(project.id)).toBeNull();
+    expect(h.events.at(-1)).toBe(`broadcast:${CHANNELS.PROJECT_UPDATED}:${project.id}:ready`);
+    // Kept for a view that hydrated from an older row and asks afterwards.
+    expect(service.getSnapshot(project.id)).toMatchObject({ status: "succeeded", canRetry: false });
   });
 
   it("stops only the clone it names when two run at once", async () => {
@@ -251,12 +272,18 @@ describe("ProjectCloneService", () => {
     expect(h.rows.get(project.id)!.project.cloneState).toBe("failed");
     expect(h.rows.get(project.id)!.job).toMatchObject({ error: failed.error });
 
+    expect(failed.error).toContain("Authentication failed");
+
     await service.retry(project.id);
 
     expect(h.calls).toHaveLength(2);
     expect(h.calls[1]!.options.targetPath).toBe("/work/widgets");
     expect(h.rows.get(project.id)!.project.cloneState).toBe("cloning");
-    expect(service.getSnapshot(project.id)).toMatchObject({ status: "running", error: null });
+    const retried = service.getSnapshot(project.id)!;
+    expect(retried).toMatchObject({ status: "running", error: null, stages: [], output: [] });
+    expect(retried.gitReason).toBeUndefined();
+    // Newer than anything the failed attempt published, so no view keeps it.
+    expect(retried.sequence).toBeGreaterThan(failed.sequence);
   });
 
   it("offers no retry while a partial clone is still on disk", async () => {
@@ -311,10 +338,91 @@ describe("ProjectCloneService", () => {
 
   it("waits for a running clone to tear down before its project is removed", async () => {
     const { project } = await service.start(request("widgets"));
-    await service.releaseForRemoval(project.id);
+    h.control.holdTeardown = true;
+    let released = false;
+    const removal = service.releaseForRemoval(project.id).then((end) => {
+      released = true;
+      return end;
+    });
+    await flush();
 
     expect(h.calls[0]!.options.signal.aborted).toBe(true);
+    // Git is still tearing down: the row must not go yet.
+    expect(released).toBe(false);
+
+    h.control.releaseTeardown.forEach((cancel) => cancel());
+    const end = await removal;
+    // Still gated until the row is actually gone.
+    expect(isCheckoutPendingProject(project.id)).toBe(true);
+    h.rows.delete(project.id);
+    end(true);
     expect(isCheckoutPendingProject(project.id)).toBe(false);
+    expect(service.getSnapshot(project.id)).toBeNull();
+  });
+
+  it("keeps a project gated when its removal fails", async () => {
+    const { project } = await service.start(request("widgets"));
+    const end = await service.releaseForRemoval(project.id);
+    end(false);
+    expect(isCheckoutPendingProject(project.id)).toBe(true);
+    expect(service.getSnapshot(project.id)!.status).toBe("cancelled");
+  });
+
+  it("lets a second Retry join the first instead of launching another clone", async () => {
+    const { project } = await service.start(request("widgets"));
+    h.calls[0]!.reject(new Error("boom"));
+    await flush();
+    let releaseCheck!: () => void;
+    h.control.destination = new Promise<void>((resolve) => (releaseCheck = resolve));
+
+    const first = service.retry(project.id);
+    const second = service.retry(project.id);
+    releaseCheck();
+    await Promise.all([first, second]);
+
+    expect(h.calls).toHaveLength(2);
+  });
+
+  it("starts no clone for a Retry that a removal overtook", async () => {
+    const { project } = await service.start(request("widgets"));
+    h.calls[0]!.reject(new Error("boom"));
+    await flush();
+    let releaseCheck!: () => void;
+    h.control.destination = new Promise<void>((resolve) => (releaseCheck = resolve));
+
+    const retrying = service.retry(project.id);
+    const removal = service.releaseForRemoval(project.id);
+    releaseCheck();
+
+    await expect(retrying).rejects.toThrow(/being removed/);
+    (await removal)(true);
+    expect(h.calls).toHaveLength(1);
+  });
+
+  it("launches nothing for a start that was still checking when quit began", async () => {
+    let releaseCheck!: () => void;
+    h.control.destination = new Promise<void>((resolve) => (releaseCheck = resolve));
+    const starting = service.start(request("widgets"));
+    await flush();
+
+    await service.shutdown(1000);
+    releaseCheck();
+
+    await expect(starting).rejects.toThrow(/quitting/);
+    expect(h.calls).toHaveLength(0);
+    expect(h.rows.size).toBe(0);
+  });
+
+  it("treats two spellings of one folder as one on a case-insensitive volume", async () => {
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      await service.start(request("widgets"));
+      await expect(service.start(request("Widgets"))).rejects.toThrow(/already exists/);
+      expect(h.calls).toHaveLength(1);
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
   });
 
   describe("recoverInterrupted", () => {

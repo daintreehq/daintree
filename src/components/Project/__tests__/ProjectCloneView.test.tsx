@@ -21,6 +21,20 @@ const m = vi.hoisted(() => ({
   retryBackgroundClone: vi.fn(),
   showItemInFolder: vi.fn(),
   dispatch: vi.fn(),
+  reloadView: vi.fn(),
+  closeActiveProject: vi.fn(),
+  currentProjectId: "p1" as string | null,
+}));
+
+vi.mock("@/utils/reloadView", () => ({ reloadView: m.reloadView }));
+
+vi.mock("@/store/projectStore", () => ({
+  useProjectStore: {
+    getState: () => ({
+      currentProject: m.currentProjectId ? { id: m.currentProjectId } : null,
+      closeActiveProject: m.closeActiveProject,
+    }),
+  },
 }));
 
 vi.mock("@/clients", () => ({
@@ -135,6 +149,9 @@ describe("ProjectCloneView", () => {
     m.getCloneJob.mockResolvedValue(snapshot());
     m.stopBackgroundClone.mockResolvedValue(undefined);
     m.retryBackgroundClone.mockResolvedValue(undefined);
+    m.closeActiveProject.mockResolvedValue({ processesKilled: 0, terminalsKilled: 0 });
+    m.dispatch.mockResolvedValue({ ok: true });
+    m.currentProjectId = "p1";
   });
 
   it("shows the live phase, its percentage, the phases done and git's output", async () => {
@@ -152,34 +169,44 @@ describe("ProjectCloneView", () => {
 
     await screen.findByText("37%");
     expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("37");
-    expect(screen.getByText("Receiving objects")).toBeTruthy();
-    expect(screen.getByLabelText("Git output").textContent).toContain("Cloning into 'widgets'...");
+    // Only the phases before the live one are checked off.
+    expect(screen.getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "Receiving objects",
+    ]);
+    expect(screen.getByLabelText("Git output").textContent).toBe(
+      "Cloning into 'widgets'...\nResolving deltas:  37% (37/100)"
+    );
     expect(screen.getByText("https://github.com/acme/widgets.git", { selector: "p" })).toBeTruthy();
   });
 
   it("subscribes before asking, so an update that beats the first answer wins", async () => {
     let answer!: (value: ProjectCloneJobSnapshot) => void;
-    m.getCloneJob.mockReturnValue(new Promise((resolve) => (answer = resolve)));
-    render(<ProjectCloneView project={project} />);
-    expect(m.onCloneJobUpdated).toHaveBeenCalled();
-
-    act(() =>
-      push!(
+    m.getCloneJob.mockImplementation(() => {
+      // Main publishes while the first answer is still on its way.
+      push?.(
         snapshot({
           sequence: 5,
           stages: [{ key: "receiving objects", label: "Receiving objects", percent: 80 }],
           currentStageKey: "receiving objects",
         })
-      )
-    );
+      );
+      return new Promise((resolve) => (answer = resolve));
+    });
+    render(<ProjectCloneView project={project} />);
     await act(async () => answer(snapshot({ sequence: 2 })));
 
     expect(screen.getByText("80%")).toBeTruthy();
   });
 
   it("ignores updates for another project's clone", async () => {
+    m.getCloneJob.mockResolvedValue(
+      snapshot({
+        stages: [{ key: "receiving objects", label: "Receiving objects", percent: 20 }],
+        currentStageKey: "receiving objects",
+      })
+    );
     render(<ProjectCloneView project={project} />);
-    await waitFor(() => expect(push).not.toBeNull());
+    await screen.findByText("20%");
     act(() =>
       push!(
         snapshot({
@@ -191,6 +218,30 @@ describe("ProjectCloneView", () => {
       )
     );
     expect(screen.queryByText("55%")).toBeNull();
+    expect(screen.getByText("20%")).toBeTruthy();
+  });
+
+  it("reloads into the project when main says its clone already landed", async () => {
+    m.getCloneJob.mockResolvedValue(snapshot({ status: "succeeded" }));
+    render(<ProjectCloneView project={project} />);
+    await waitFor(() => expect(m.reloadView).toHaveBeenCalledTimes(1));
+  });
+
+  it("doesn't flash Connecting before the first phase can plausibly arrive", async () => {
+    vi.useFakeTimers();
+    try {
+      render(<ProjectCloneView project={project} />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(screen.queryByText("Connecting…")).toBeNull();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(500);
+      });
+      expect(screen.getByText("Connecting…")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("stops this project's clone", async () => {
@@ -205,7 +256,8 @@ describe("ProjectCloneView", () => {
     m.getCloneJob.mockResolvedValue(
       snapshot({ status: "failed", error: "Repository not found", canRetry: true })
     );
-    render(<ProjectCloneView project={{ ...project, cloneState: "failed" }} />);
+    // The row read before the failure still says cloning; main's answer wins.
+    render(<ProjectCloneView project={project} />);
 
     await screen.findByText("Clone failed");
     expect(screen.getByText("Repository not found")).toBeTruthy();
@@ -217,7 +269,33 @@ describe("ProjectCloneView", () => {
     expect(m.retryBackgroundClone).toHaveBeenCalledWith("p1");
 
     fireEvent.click(screen.getByRole("button", { name: "Remove project" }));
-    fireEvent.click(screen.getByRole("button", { name: "confirm: Remove project" }));
+    expect(m.dispatch).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "confirm: Remove project" }));
+    });
+    // The project on screen is closed first, so its view's saves are dropped.
+    expect(m.closeActiveProject).toHaveBeenCalledWith("p1");
+    expect(m.dispatch).toHaveBeenCalledWith(
+      "project.remove",
+      { projectId: "p1" },
+      { source: "user" }
+    );
+    expect(m.closeActiveProject.mock.invocationCallOrder[0]).toBeLessThan(
+      m.dispatch.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("removes a project another window shows without closing this one's", async () => {
+    m.currentProjectId = "elsewhere";
+    m.getCloneJob.mockResolvedValue(snapshot({ status: "cancelled", canRetry: true }));
+    render(<ProjectCloneView project={{ ...project, cloneState: "cancelled" }} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Remove project" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "confirm: Remove project" }));
+    });
+
+    expect(m.closeActiveProject).not.toHaveBeenCalled();
     expect(m.dispatch).toHaveBeenCalledWith(
       "project.remove",
       { projectId: "p1" },
@@ -238,8 +316,19 @@ describe("ProjectCloneView", () => {
 
     await screen.findByText("Partial clone not removed");
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByText(/what it wrote was removed/)).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Show in folder" }));
     expect(m.showItemInFolder).toHaveBeenCalledWith("/work/widgets");
+  });
+
+  it("doesn't claim a stopped clone's folder was removed when it wasn't", async () => {
+    m.getCloneJob.mockResolvedValue(
+      snapshot({ status: "cancelled", cleanupError: "Couldn't remove", canRetry: false })
+    );
+    render(<ProjectCloneView project={{ ...project, cloneState: "cancelled" }} />);
+
+    await screen.findByText("Clone stopped");
+    expect(screen.queryByText(/what it wrote was removed/)).toBeNull();
   });
 
   it("says why a retry couldn't start", async () => {

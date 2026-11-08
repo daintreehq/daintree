@@ -149,8 +149,39 @@ export async function removeProjectWithCleanup(
   // (#16352). Nothing has used the service without a clone to release.
   const { peekProjectCloneService } =
     await import("../../../services/projectClone/ProjectCloneService.js");
-  await peekProjectCloneService()?.releaseForRemoval(projectId);
+  const endCloneRemoval = await peekProjectCloneService()?.releaseForRemoval(projectId);
+  try {
+    await removeProjectRow(projectId, deps);
+  } catch (error) {
+    endCloneRemoval?.(false);
+    throw error;
+  }
+  endCloneRemoval?.(true);
 
+  if (removedPath) {
+    pruneWindowStateForPath(removedPath);
+    // The project's file indexes are megabytes apiece and nothing will read
+    // them again — the worktree-delete path invalidates per worktree, but a
+    // project removed whole never goes through it (#12240). Best-effort, like
+    // the worktree lifecycle handlers: a cache drop must not fail a removal the
+    // user asked for and that has already deleted the row.
+    try {
+      fileSearchCacheInvalidator.handleProjectClosed(removedPath);
+    } catch (error) {
+      console.warn("[project.remove] Failed to invalidate file search cache:", error);
+    }
+  }
+  broadcastToRenderer(CHANNELS.PROJECT_REMOVED, projectId);
+  // The row is gone, so a window still bound to it no longer has a project open.
+  refreshProjectMenuState();
+  notificationService.refreshTitles();
+}
+
+/** The teardown that has to succeed before the row goes, then the row itself. */
+async function removeProjectRow(
+  projectId: string,
+  deps: Pick<HandlerDependencies, "ptyClient" | "worktreeService">
+): Promise<void> {
   if (deps.ptyClient) {
     // Gracefully tear down and journal each agent session before the row (and
     // its restoration state) is permanently deleted. Fail closed: if the host
@@ -177,23 +208,6 @@ export async function removeProjectWithCleanup(
   notifyProjectPluginsRemoved(projectId);
 
   await projectStore.removeProject(projectId);
-  if (removedPath) {
-    pruneWindowStateForPath(removedPath);
-    // The project's file indexes are megabytes apiece and nothing will read
-    // them again — the worktree-delete path invalidates per worktree, but a
-    // project removed whole never goes through it (#12240). Best-effort, like
-    // the worktree lifecycle handlers: a cache drop must not fail a removal the
-    // user asked for and that has already deleted the row.
-    try {
-      fileSearchCacheInvalidator.handleProjectClosed(removedPath);
-    } catch (error) {
-      console.warn("[project.remove] Failed to invalidate file search cache:", error);
-    }
-  }
-  broadcastToRenderer(CHANNELS.PROJECT_REMOVED, projectId);
-  // The row is gone, so a window still bound to it no longer has a project open.
-  refreshProjectMenuState();
-  notificationService.refreshTitles();
 }
 
 export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () => void {

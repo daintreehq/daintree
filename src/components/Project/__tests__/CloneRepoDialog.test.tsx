@@ -1616,6 +1616,43 @@ describe("CloneRepoDialog", () => {
       await screen.findByText("Clone failed");
       expect(screen.getByText(/already exists in this location/)).toBeTruthy();
       expect((screen.getByLabelText(/^url$/i) as HTMLInputElement).disabled).toBe(false);
+
+      // The busy guard cleared with the failure: Retry hands the request over again.
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+      });
+      expect(onStartBackground).toHaveBeenCalledTimes(2);
+    });
+
+    it("holds the form and Cancel while the clone is being handed over", async () => {
+      let accept!: () => void;
+      const onStartBackground = vi.fn(() => new Promise<void>((resolve) => (accept = resolve)));
+      const onCancel = vi.fn();
+      render(
+        <CloneRepoDialog
+          isOpen={true}
+          onSuccess={vi.fn()}
+          onStartBackground={onStartBackground}
+          onCancel={onCancel}
+        />
+      );
+
+      await fillAndClone();
+
+      const cancel = screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement;
+      expect(cancel.disabled).toBe(true);
+      fireEvent.click(cancel);
+      expect(onCancel).not.toHaveBeenCalled();
+      // A second press can't hand over a second clone.
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Clone" }));
+      });
+      expect(onStartBackground).toHaveBeenCalledTimes(1);
+
+      await act(async () => accept());
+      expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(
+        false
+      );
     });
 
     it("keeps waiting on the clone itself in a remote-bound view", async () => {

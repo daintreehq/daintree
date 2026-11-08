@@ -984,7 +984,13 @@ export function CloneRepoDialog({
           </div>
         ) : (
           <div className="flex shrink-0 items-center gap-3">
-            <Button variant="ghost" onClick={isCloning ? stopClone : onCancel} loading={isStopping}>
+            <Button
+              variant="ghost"
+              onClick={isCloning ? stopClone : onCancel}
+              loading={isStopping}
+              // A handed-off clone closes the dialog itself once it is accepted.
+              disabled={isStarting}
+            >
               {isCloning ? "Stop clone" : "Cancel"}
             </Button>
             <Button

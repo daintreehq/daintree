@@ -406,6 +406,15 @@ describe("getProjectRowStatus", () => {
       NOW
     );
 
+    expect(status).toMatchObject({ text: "Cloning…", tone: "running" });
+  });
+
+  it("puts the clone's state above any activity the row reports", () => {
+    const status = getProjectRowStatus(
+      project({ cloneState: "cloning", waitingAgentCount: 2, activeAgentCount: 1 }),
+      NOW
+    );
+
     expect(status.text).toBe("Cloning…");
   });
 
@@ -414,9 +423,10 @@ describe("getProjectRowStatus", () => {
       text: "Clone failed",
       tone: "blocked",
     });
-    expect(getProjectRowStatus(project({ cloneState: "cancelled" }), NOW).text).toBe(
-      "Clone stopped"
-    );
+    expect(getProjectRowStatus(project({ cloneState: "cancelled" }), NOW)).toMatchObject({
+      text: "Clone stopped",
+      tone: "muted",
+    });
   });
 
   it("names the auto-park reason instead of showing a bare time-ago", () => {

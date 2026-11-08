@@ -132,6 +132,25 @@ describe("WorkspaceClient with a project still awaiting its clone (#16352)", () 
     await tick();
   });
 
+  it("lets go of the window for good: a load it superseded can't come back later", async () => {
+    MockWorkspaceHostProcess.holdNextLoad = true;
+    const stale = client.loadProject(OTHER, WINDOW_A);
+    await tick();
+    markCheckoutPending("p-clone", PROJECT);
+    await expect(client.loadProject(PROJECT, WINDOW_A)).rejects.toMatchObject({
+      code: "PROJECT_NOT_READY",
+    });
+    const next = path.resolve("/srv/next-folder");
+    await client.loadProject(next, WINDOW_A);
+
+    hosts[0]!.releaseLoad();
+    await stale.catch(() => undefined);
+    await tick();
+
+    expect(client.isWindowAttached(WINDOW_A, next)).toBe(true);
+    expect(client.isWindowAttached(WINDOW_A, OTHER)).toBe(false);
+  });
+
   it("never prewarms a host for it", () => {
     markCheckoutPending("p-clone", PROJECT);
     client.prewarmProject(PROJECT);

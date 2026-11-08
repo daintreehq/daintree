@@ -22,7 +22,10 @@ import { getTerminalAppearanceSnapshot } from "@/hooks/useTerminalAppearance";
 import { getScrollbackForType, PERFORMANCE_MODE_SCROLLBACK } from "@/utils/scrollbackConfig";
 import { getXtermOptions, calculateTerminalDimensions } from "@/config/xtermConfig";
 import { deriveTerminalRuntimeIdentity } from "@/utils/terminalChrome";
-import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
+import {
+  getWorktreeSelectionSnapshot,
+  isCurrentProjectAwaitingClone,
+} from "@/store/storeAccessors";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelLimitStore, buildPanelLimitSnapshot } from "@/store/panelLimitStore";
 import { notify } from "@/lib/notify";
@@ -114,6 +117,25 @@ export const createAddPanelActions = (set: Set, get: Get): Pick<PanelRegistrySli
     commit: AddPanelCommitOptions | undefined
   ): Promise<string | null> => {
     const requestedKind = requestedOptions.kind ?? "terminal";
+
+    // A project still awaiting its clone has no folder to start anything in,
+    // and its grid is the clone's own view (#16352). Nothing new is put there
+    // until the checkout lands; main refuses the spawn as well. A reconnect or
+    // a held restore names an existing panel and is left to its own path.
+    if (
+      !requestedOptions.existingId &&
+      requestedOptions.restoreRecovery === undefined &&
+      isCurrentProjectAwaitingClone()
+    ) {
+      notify({
+        type: "info",
+        title: "Project still cloning",
+        message: "Agents and terminals can start once the clone finishes.",
+        replaceKey: "launch-project-cloning",
+        context: { eventKind: "uiFeedback" },
+      });
+      return null;
+    }
 
     // Handle panels that use custom UI (browser, dev-preview, extensions) separately
     if (!panelKindUsesTerminalUi(requestedKind)) {

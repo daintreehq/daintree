@@ -78,6 +78,15 @@ export interface ProjectCloneServiceHooks {
   onCheckoutReady?: (project: Project) => Promise<void>;
 }
 
+/**
+ * Whether two paths name one folder. macOS and Windows volumes are usually
+ * case-insensitive, and two clones aimed at `repo` and `Repo` there would each
+ * delete the other's checkout when theirs failed.
+ */
+function isSameFolder(a: string, b: string): boolean {
+  return process.platform === "linux" ? a === b : a.toLowerCase() === b.toLowerCase();
+}
+
 function isCancellation(error: unknown, signal: AbortSignal): boolean {
   if (signal.aborted) return true;
   return error instanceof AppError && error.code === "CANCELLED";
@@ -91,6 +100,10 @@ function isCancellation(error: unknown, signal: AbortSignal): boolean {
  */
 export class ProjectCloneService {
   private readonly jobs = new Map<string, CloneJob>();
+  /** One Retry at a time per project; a second request joins the first. */
+  private readonly pendingRetries = new Map<string, Promise<void>>();
+  /** Projects whose removal has begun: no retry may start a clone for them. */
+  private readonly removing = new Set<string>();
   private sealed = false;
   private hooks: ProjectCloneServiceHooks = {};
 
@@ -98,13 +111,17 @@ export class ProjectCloneService {
     this.hooks = hooks;
   }
 
+  private assertOpen(): void {
+    if (this.sealed) {
+      throw new AppError({ code: "CANCELLED", message: "Daintree is quitting" });
+    }
+  }
+
   async start(
     request: ProjectCloneStartRequest,
     creation: { identity?: ProjectCreationIdentity; groupId?: string } = {}
   ): Promise<{ project: Project }> {
-    if (this.sealed) {
-      throw new AppError({ code: "CANCELLED", message: "Daintree is quitting" });
-    }
+    this.assertOpen();
     const target = resolveCloneTarget(request);
     await assertCloneDestination(target.parentPath, target.targetPath, target.folderName);
 
@@ -117,10 +134,13 @@ export class ProjectCloneService {
     if (await projectStore.getProjectByPath(projectPath)) {
       throw new Error(`A project is already registered at ${projectPath}`);
     }
-    // Synchronous with the insert below: two clones into one folder would
-    // each delete the other's checkout when theirs failed.
+    // Nothing awaits from here to the launch. A quit that began during the
+    // checks above has already drained the clones it knew about, and two
+    // clones into one folder would each delete the other's checkout when
+    // theirs failed.
+    this.assertOpen();
     for (const job of this.jobs.values()) {
-      if (job.targetPath === projectPath) {
+      if (job.status !== "succeeded" && isSameFolder(job.targetPath, projectPath)) {
         throw new Error(`Folder "${target.folderName}" already exists in this location`);
       }
     }
@@ -157,13 +177,27 @@ export class ProjectCloneService {
     job.controller.abort();
   }
 
-  async retry(projectId: string): Promise<void> {
-    if (this.sealed) {
-      throw new AppError({ code: "CANCELLED", message: "Daintree is quitting" });
-    }
+  /**
+   * Clone a failed or stopped project again, under the same id. Admitted
+   * synchronously, so two requests can't both pass the folder check and
+   * launch two clones into one folder: the second joins the first.
+   */
+  retry(projectId: string): Promise<void> {
+    const pending = this.pendingRetries.get(projectId);
+    if (pending) return pending;
+    const attempt = this.runRetry(projectId).finally(() => {
+      if (this.pendingRetries.get(projectId) === attempt) this.pendingRetries.delete(projectId);
+    });
+    this.pendingRetries.set(projectId, attempt);
+    return attempt;
+  }
+
+  private async runRetry(projectId: string): Promise<void> {
+    this.assertOpen();
+    if (this.removing.has(projectId)) throw new Error("This project is being removed");
     const job = this.jobs.get(projectId) ?? this.restoreJob(projectId);
     if (!job) throw new Error("This project has no clone to retry");
-    if (job.status === "running") return;
+    if (job.status === "running" || job.status === "succeeded") return;
     if (job.request.url.length === 0) {
       throw new Error("The repository address wasn't kept. Remove the project and clone it again.");
     }
@@ -173,6 +207,12 @@ export class ProjectCloneService {
     const folderName = path.basename(job.targetPath);
     await assertCloneDestination(parentPath, job.targetPath, folderName);
 
+    // Nothing awaits from here to the launch: a quit or a removal that began
+    // during the checks above would otherwise miss this clone.
+    this.assertOpen();
+    if (this.removing.has(projectId) || !projectStore.getProjectById(projectId)) {
+      throw new Error("This project is being removed");
+    }
     const project = projectStore.setCloneState(projectId, "cloning", job.request);
     markCheckoutPending(projectId, job.targetPath);
     this.resetAttempt(job);
@@ -183,9 +223,17 @@ export class ProjectCloneService {
 
   /**
    * Stop a project's clone and wait until git and its partial checkout are
-   * gone, so removing the row can't leave a clone writing into the folder.
+   * gone, so removing the row can't leave a clone writing into the folder. No
+   * retry can start one from here on. The returned call ends the removal: the
+   * project's folder stays gated until its row is actually gone, since a
+   * removal that fails leaves a project that still has no checkout.
    */
-  async releaseForRemoval(projectId: string): Promise<void> {
+  async releaseForRemoval(projectId: string): Promise<(removed: boolean) => void> {
+    this.removing.add(projectId);
+    // A retry already past its folder check either sees the removal and stops
+    // or has launched, and is stopped below with the rest.
+    const retrying = this.pendingRetries.get(projectId);
+    if (retrying) await retrying.catch(() => {});
     const job = this.jobs.get(projectId);
     if (job) {
       if (job.status === "running") {
@@ -193,10 +241,15 @@ export class ProjectCloneService {
         job.controller?.abort();
       }
       if (job.run) await job.run.catch(() => {});
-      if (job.publishTimer) clearTimeout(job.publishTimer);
-      this.jobs.delete(projectId);
     }
-    clearCheckoutPending(projectId);
+    return (removed) => {
+      this.removing.delete(projectId);
+      if (!removed) return;
+      const current = this.jobs.get(projectId);
+      if (current?.publishTimer) clearTimeout(current.publishTimer);
+      this.jobs.delete(projectId);
+      clearCheckoutPending(projectId);
+    };
   }
 
   /**
@@ -386,8 +439,9 @@ export class ProjectCloneService {
     }
     job.controller = null;
     job.status = "succeeded";
+    // Kept, not dropped: a view that hydrated from a row read before the clone
+    // landed still asks, and the answer is what tells it to reload.
     this.publish(job, true);
-    this.jobs.delete(job.projectId);
     broadcastToRenderer(CHANNELS.PROJECT_UPDATED, project);
   }
 

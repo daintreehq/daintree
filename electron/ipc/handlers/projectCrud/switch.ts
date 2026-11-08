@@ -811,7 +811,9 @@ async function activateProjectView(
   // window lets go of whatever workspace it was attached to, so the previous
   // project's worktree events stop reaching this view; the clone's success
   // loads the workspace for every window then showing the project.
-  const awaitingClone = isAwaitingClone(project);
+  // Read again rather than from the captured row: the clone may have landed
+  // during the checks this switch awaited before getting here.
+  const awaitingClone = isAwaitingClone(projectStore.getProjectById(projectId) ?? project);
   if (awaitingClone && deps.worktreeService && windowId !== undefined) {
     deps.worktreeService.unregisterWindow(windowId);
   } else if (deps.worktreeService && windowId !== undefined) {
@@ -1066,6 +1068,30 @@ async function activateProjectView(
           projectId,
           worktreeLoadError,
         });
+      }
+    }
+
+    // The clone landed after this switch decided there was nothing to load. Its
+    // completion skipped this window because the switch was still in flight,
+    // so the load, and the ports a ready project's view needs, fall to the
+    // switch, unless a newer one has taken the window since.
+    if (
+      awaitingClone &&
+      windowId !== undefined &&
+      !isAwaitingClone(projectStore.getProjectById(projectId)) &&
+      windowSwitchEpochs.get(windowId) === switchEpoch
+    ) {
+      try {
+        await deps.worktreeService.loadProject(project.path, windowId);
+        if (windowSwitchEpochs.get(windowId) === switchEpoch && !view.webContents.isDestroyed()) {
+          deps.worktreeService.attachDirectPort(windowId, view.webContents);
+          const host = deps.worktreeService.getHostForProject(project.path);
+          if (host && deps.worktreePortBroker) {
+            deps.worktreePortBroker.brokerPort(host, view.webContents);
+          }
+        }
+      } catch (err) {
+        console.error(`${options.logPrefix} Failed to load the cloned project:`, err);
       }
     }
 

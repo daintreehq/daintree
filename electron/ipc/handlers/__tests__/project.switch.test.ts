@@ -488,6 +488,48 @@ describe("project switch/reopen refuses a row whose repository is gone (#11649)"
       expect(worktreeService.unregisterWindow).toHaveBeenCalledWith(1);
     });
 
+    it("loads the workspace itself when the clone lands while the switch is in flight", async () => {
+      let landed = false;
+      projectStoreMock.getProjectById.mockImplementation(
+        () =>
+          ({
+            id: "proj-gone",
+            name: "Gone",
+            path: "/projects/gone",
+            status: "background",
+            ...(landed ? {} : { cloneState: "cloning" }),
+          }) as never
+      );
+      const pvm = makePvm();
+      // The clone completes during the swap: its completion skipped this
+      // window, which still had an activation in flight.
+      pvm.switchTo.mockImplementation(async () => {
+        landed = true;
+        return {
+          view: { webContents: { id: 200, isDestroyed: () => false, send: vi.fn() } },
+          isNew: false,
+        };
+      });
+      const worktreeService = {
+        loadProject: vi.fn().mockResolvedValue("cold"),
+        unregisterWindow: vi.fn(),
+        resumeProject: vi.fn(),
+        attachDirectPort: vi.fn(),
+        getHostForProject: vi.fn().mockReturnValue({ id: "host" }),
+      };
+      const worktreePortBroker = { brokerPort: vi.fn() };
+
+      await handlerFor(channel, pvm, { worktreeService, worktreePortBroker })(
+        { sender: { id: 10 } },
+        "proj-gone"
+      );
+
+      expect(worktreeService.unregisterWindow).toHaveBeenCalledWith(1);
+      expect(worktreeService.loadProject).toHaveBeenCalledExactlyOnceWith("/projects/gone", 1);
+      expect(worktreeService.attachDirectPort).toHaveBeenCalledWith(1, expect.anything());
+      expect(worktreePortBroker.brokerPort).toHaveBeenCalledWith({ id: "host" }, expect.anything());
+    });
+
     it("activates without consulting git when the marker is there", async () => {
       registerProject();
       probeGitMarkerMock.mockResolvedValue("present");

@@ -8,13 +8,17 @@ import type {
   ProjectCreationIdentity,
 } from "@shared/types";
 import { isAwaitingClone } from "@shared/types/project";
+import { reloadView } from "@/utils/reloadView";
 import type { ProjectOpenDisposition } from "@shared/types/windowOpen";
 import type { ProjectCloneStartRequest } from "@shared/types/ipc/projectClone";
 import { projectClient, worktreeClient } from "@/clients";
 import type { NonGitFolderStep } from "@/components/Project/NonGitFolderDialog";
 import { notify } from "@/lib/notify";
 import { notifyPluginWorkStopped } from "@/lib/pluginWorkStoppedNotice";
-import { setProjectPathIndexAccessor } from "@/store/storeAccessors";
+import {
+  setCurrentProjectAwaitingCloneAccessor,
+  setProjectPathIndexAccessor,
+} from "@/store/storeAccessors";
 import { actionService } from "@/services/ActionService";
 import { logErrorWithContext } from "@/utils/errorContext";
 import { logDebug } from "@/utils/logger";
@@ -1799,6 +1803,10 @@ setProjectPathIndexAccessor(() => {
   return index;
 });
 
+setCurrentProjectAwaitingCloneAccessor(() =>
+  isAwaitingClone(useProjectStore.getState().currentProject)
+);
+
 // Break circular dependency by injecting project ID getter. Falls back to the
 // view's own workspace id so a scratch view — which has no Project row, and so
 // no `currentProject` — still persists its panel grid instead of silently
@@ -1850,7 +1858,7 @@ if (typeof window !== "undefined" && window.electron?.project) {
     // skipped for want of a folder, so the view starts over as a normal project.
     // Main loaded the window's workspace before saying so.
     if (cloneLanded) {
-      window.location.reload();
+      reloadView();
       return;
     }
     // A folder move/reattach keeps the id but changes the path (#11282); repoint

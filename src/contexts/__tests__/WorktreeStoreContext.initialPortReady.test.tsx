@@ -169,8 +169,8 @@ describe("WorktreeStoreProvider — initial worktree-port watchdog (#11818)", ()
   it("settles a project still awaiting its clone empty, with no banner (#16352)", async () => {
     vi.useFakeTimers();
     await act(async () => {
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- only the fields this suite reads
       const cloning = { id: "p1", name: "p1", path: "/repo/cloning", cloneState: "cloning" };
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- only the fields this suite reads
       useProjectStore.setState({ currentProject: cloning as unknown as Project });
     });
     const { store } = await renderProvider();
