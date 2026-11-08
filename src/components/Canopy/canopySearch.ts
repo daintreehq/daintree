@@ -57,15 +57,16 @@ export function textMatchesSearch(text: string, alternatives: CanopySearchAltern
 /**
  * Pasted text with its line breaks turned into the commas that separate a
  * search's alternatives, since a single-line field would otherwise glue the
- * lines of a pasted list into one word. Null when it has none to turn.
+ * lines of a pasted list into one word. Null when it has none to turn. A
+ * break at either end still separates the list from the text it lands beside
+ * (`before` and `after` the selection), and is dropped where there is none.
  */
-export function searchPasteText(text: string): string | null {
+export function searchPasteText(text: string, before = "", after = ""): string | null {
   if (!/[\r\n]/.test(text)) return null;
-  return text
-    .split(/\r\n|\r|\n/)
-    .map((line) => line.trim())
-    .filter((line) => line !== "")
-    .join(", ");
+  let list = text.replace(/\s*[\r\n]\s*/g, ", ");
+  if (!/[^\s,]\s*$/.test(before)) list = list.replace(/^, /, "");
+  if (!/^\s*[^\s,]/.test(after)) list = list.replace(/, $/, "");
+  return list;
 }
 
 /**
@@ -85,7 +86,8 @@ export function unmatchedAlternatives(
   for (const words of alternatives) {
     const missing = words.filter((word) => !text.includes(word));
     if (missing.length === 0) return null;
-    left.set(missing.join(" "), missing);
+    const key = [...missing].sort().join(" ");
+    if (!left.has(key)) left.set(key, missing);
   }
   return [...left.values()];
 }
@@ -167,12 +169,12 @@ export function canopySearchNotes(
   }
   if (plan.overWords) {
     notes.push(
-      `Terminals aren't searched for more than ${CANOPY_SEARCH_MAX_TERMS} words of one alternative`
+      `Terminals aren't searched for more than ${pluralize(CANOPY_SEARCH_MAX_TERMS, "word")} of one alternative`
     );
   }
   if (plan.overLength) {
     notes.push(
-      `Terminals aren't searched for words over ${CANOPY_SEARCH_MAX_TERM_LENGTH} characters`
+      `Terminals aren't searched for words over ${pluralize(CANOPY_SEARCH_MAX_TERM_LENGTH, "character")}`
     );
   }
   if (plan.overRuns) notes.push("Some terminals aren't searched: narrow the search to reach them");

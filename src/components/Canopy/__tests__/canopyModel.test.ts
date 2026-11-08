@@ -1005,7 +1005,29 @@ describe("unmatchedAlternatives", () => {
     expect(plan.targets).toEqual([
       { runId: "a", spawnedAt: item().row.run.spawnedAt, terms: words.slice(1) },
     ]);
+    // Exactly the ask a host from before alternatives takes.
+    expect(Object.hasOwn(plan.targets[0]!, "orTerms")).toBe(false);
     expect(plan.overWords).toBe(false);
+  });
+
+  it("asks the first alternative a terminal can take as the plain ask, past one it can't", () => {
+    const long = Array.from({ length: 17 }, (_, index) => `word${index}`).join(" ");
+    const longest = "x".repeat(200);
+    const plan = canopyScreenSearchPlan(
+      [item()],
+      parseCanopySearch(`${long}, ${longest}`).alternatives
+    );
+    expect(plan.targets).toEqual([
+      { runId: "a", spawnedAt: item().row.run.spawnedAt, terms: [longest] },
+    ]);
+    expect(Object.hasOwn(plan.targets[0]!, "orTerms")).toBe(false);
+    expect(plan).toMatchObject({ overWords: true, overLength: false, overRuns: false });
+  });
+
+  it("asks a terminal once for alternatives left the same words in another order", () => {
+    expect(left("needle-x needle-y login, needle-y needle-x staging")).toEqual([
+      ["needle-x", "needle-y"],
+    ]);
   });
 
   it("asks nothing of a run its names already match, and says nothing went unasked", () => {

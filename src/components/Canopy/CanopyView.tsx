@@ -1770,10 +1770,16 @@ function CanopyInbox({
                     // A pasted column would lose its line breaks to the
                     // single-line field and glue into one word: each line
                     // comes in as an alternative of its own.
-                    const list = searchPasteText(event.clipboardData.getData("text"));
+                    const input = event.currentTarget;
+                    const start = input.selectionStart ?? input.value.length;
+                    const end = input.selectionEnd ?? start;
+                    const list = searchPasteText(
+                      event.clipboardData.getData("text"),
+                      input.value.slice(0, start),
+                      input.value.slice(end)
+                    );
                     if (list === null) return;
                     event.preventDefault();
-                    const input = event.currentTarget;
                     // Typed in as the user would, so the field's own undo takes it back.
                     if (
                       typeof document.execCommand === "function" &&
@@ -1781,9 +1787,9 @@ function CanopyInbox({
                     ) {
                       return;
                     }
-                    const start = input.selectionStart ?? input.value.length;
-                    const end = input.selectionEnd ?? start;
-                    setQuery(input.value.slice(0, start) + list + input.value.slice(end));
+                    // Put in place with the caret after it, where React then leaves it.
+                    input.setRangeText(list, start, end, "end");
+                    setQuery(input.value);
                   }}
                   onClear={() => setQuery("")}
                   onKeyDown={onSearchKeyDown}

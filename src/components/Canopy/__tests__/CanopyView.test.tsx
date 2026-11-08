@@ -518,6 +518,8 @@ describe("CanopyView search", () => {
       ["segfault"],
       ["segfault"],
     ]);
+    // One alternative is the very ask a host from before alternatives takes.
+    expect(targets.some((target) => Object.hasOwn(target, "orTerms"))).toBe(false);
     expect(cards(container).map((card) => card.id)).toEqual(["canopy-card-asking"]);
     expect(selectedRun(container)).toBe("asking");
   });
@@ -634,14 +636,24 @@ describe("CanopyView search", () => {
     expect(paste("dfat-xth8\r\ncocto-claude\n\nfallback-review: dfat-vjv0\n")).toBe(true);
     expect(searchInput().value).toBe("dfat-xth8, cocto-claude, fallback-review: dfat-vjv0");
 
+    // Over a selection, in its place, with the caret after what went in.
+    await search("foo bar");
+    searchInput().setSelectionRange(3, 4);
+    expect(paste("\n")).toBe(true);
+    expect(searchInput().value).toBe("foo, bar");
+    expect([searchInput().selectionStart, searchInput().selectionEnd]).toEqual([5, 5]);
+
     // Where the editor can type it in, it goes in as typed, undo and all.
+    const own = Object.getOwnPropertyDescriptor(document, "execCommand");
     const insertText = vi.fn(() => true);
-    Object.assign(document, { execCommand: insertText });
+    Object.defineProperty(document, "execCommand", { value: insertText, configurable: true });
     try {
       expect(paste("a\nb")).toBe(true);
       expect(insertText).toHaveBeenCalledWith("insertText", false, "a, b");
+      expect(searchInput().value).toBe("foo, bar");
     } finally {
-      Reflect.deleteProperty(document, "execCommand");
+      if (own) Object.defineProperty(document, "execCommand", own);
+      else Reflect.deleteProperty(document, "execCommand");
     }
   });
 

@@ -436,28 +436,37 @@ describe("canopy IPC", () => {
 
     vi.mocked(readPluginTerminalScreen).mockClear();
     const tooMany = Array.from({ length: CANOPY_SEARCH_MAX_ALTERNATIVES }, (_, i) => [`x${i}`]);
-    for (const orTerms of [
-      "x",
-      [[]],
-      [["x".repeat(CANOPY_SEARCH_MAX_TERM_LENGTH + 1)]],
-      [Array.from({ length: CANOPY_SEARCH_MAX_TERMS + 1 }, () => "x")],
-      tooMany,
+    const run = { runId: "run-1", spawnedAt: 100 };
+    for (const target of [
+      { ...run, terms: ["x"], orTerms: "x" },
+      { ...run, terms: ["x"], orTerms: [[]] },
+      { ...run, terms: ["x"], orTerms: [["x".repeat(CANOPY_SEARCH_MAX_TERM_LENGTH + 1)]] },
+      {
+        ...run,
+        terms: ["x"],
+        orTerms: [Array.from({ length: CANOPY_SEARCH_MAX_TERMS + 1 }, () => "x")],
+      },
+      { ...run, terms: ["x"], orTerms: tooMany },
+      // Alternatives never stand in for the first: a host from before them needs it.
+      { ...run, orTerms: [["x"]] },
+      { ...run, terms: [], orTerms: [["x"]] },
     ]) {
-      const result = await outcome(
-        invoke(CANOPY_METHOD_CHANNELS.searchScreens, sender, [
-          { runId: "run-1", spawnedAt: 100, terms: ["x"], orTerms },
-        ])
-      );
-      expect(result.ok).toBe(false);
+      const result = await outcome(invoke(CANOPY_METHOD_CHANNELS.searchScreens, sender, [target]));
+      expect(result).toEqual({ ok: false, message: expect.stringContaining("Invalid search") });
     }
     expect(vi.mocked(readPluginTerminalScreen)).not.toHaveBeenCalled();
-    // As many as a query may offer still go through.
-    const result = await outcome(
-      invoke(CANOPY_METHOD_CHANNELS.searchScreens, sender, [
-        { runId: "run-1", spawnedAt: 100, terms: ["x"], orTerms: tooMany.slice(1) },
-      ])
+    // As many alternatives as a query may offer go through, each as large as it may be.
+    const widest = Array.from({ length: CANOPY_SEARCH_MAX_TERMS }, (_, i) =>
+      `${i}`.padEnd(CANOPY_SEARCH_MAX_TERM_LENGTH, "y")
     );
-    expect(result.ok).toBe(true);
+    for (const target of [
+      { ...run, terms: ["x"], orTerms: tooMany.slice(1) },
+      { ...run, terms: widest, orTerms: [widest] },
+      { ...run, terms: ["x"], orTerms: [] },
+    ]) {
+      const result = await outcome(invoke(CANOPY_METHOD_CHANNELS.searchScreens, sender, [target]));
+      expect(result.ok).toBe(true);
+    }
   });
 
   it("reads no branch for an id that isn't one", async () => {

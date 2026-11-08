@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { CANOPY_SEARCH_MAX_ALTERNATIVES } from "@shared/types/ipc/canopy";
+import {
+  CANOPY_SEARCH_MAX_ALTERNATIVES,
+  CANOPY_SEARCH_MAX_TERM_LENGTH,
+  CANOPY_SEARCH_MAX_TERMS,
+} from "@shared/types/ipc/canopy";
 import {
   canopySearchNotes,
   parseCanopySearch,
@@ -73,6 +77,17 @@ describe("searchPasteText", () => {
   it("leaves a single line to the field", () => {
     expect(searchPasteText("one line, as typed")).toBeNull();
   });
+
+  it("keeps a break at either end as a separator only where text lies beside it", () => {
+    // Pasted onto the end of what is typed, a leading break still starts a new item.
+    expect(searchPasteText("\ncocto\nfallback\n", "dfat-xth8", "")).toBe(", cocto, fallback");
+    expect(searchPasteText("cocto\n", "", "dfat-xth8")).toBe("cocto, ");
+    // A break pasted over the space between two words separates them.
+    expect(searchPasteText("\n", "foo", "bar")).toBe(", ");
+    // Beside a comma already typed, or nothing, it adds none.
+    expect(searchPasteText("\nb\n", "a, ", " ,c")).toBe("b");
+    expect(searchPasteText("\n", "", "")).toBe("");
+  });
 });
 
 describe("canopySearchNotes", () => {
@@ -84,14 +99,25 @@ describe("canopySearchNotes", () => {
     expect(canopySearchNotes(kept, 0, NONE_UNASKED)).toEqual([]);
   });
 
-  it("names each thing the search leaves out", () => {
-    const notes = canopySearchNotes(kept, 1_200, {
+  it("names each thing the search leaves out, one note for each", () => {
+    expect(canopySearchNotes(kept, 1_200, NONE_UNASKED)).toEqual([
+      expect.stringContaining(`first ${CANOPY_SEARCH_MAX_ALTERNATIVES} of 1,250 alternatives`),
+    ]);
+    expect(canopySearchNotes(kept, 0, { ...NONE_UNASKED, overWords: true })).toEqual([
+      expect.stringContaining(`${CANOPY_SEARCH_MAX_TERMS} words`),
+    ]);
+    expect(canopySearchNotes(kept, 0, { ...NONE_UNASKED, overLength: true })).toEqual([
+      expect.stringContaining(`${CANOPY_SEARCH_MAX_TERM_LENGTH} characters`),
+    ]);
+    expect(canopySearchNotes(kept, 0, { ...NONE_UNASKED, overRuns: true })).toEqual([
+      expect.stringContaining("Some terminals"),
+    ]);
+    const notes = canopySearchNotes(kept, 1, {
       overWords: true,
       overLength: true,
       overRuns: true,
     });
-    expect(notes).toHaveLength(4);
-    expect(notes[0]).toContain(`first ${CANOPY_SEARCH_MAX_ALTERNATIVES} of 1,250 alternatives`);
+    expect(new Set(notes).size).toBe(4);
     for (const note of notes) {
       expect(note).not.toMatch(/\.$/);
     }
