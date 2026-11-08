@@ -501,9 +501,32 @@ describe("in-repo dictation vocabulary", () => {
     expect(await fs.readFile(settingsPath(), "utf-8")).toBe(original);
   });
 
-  it("still replaces a settings file that reads but doesn't parse", async () => {
+  it("refuses a settings save when the read failed without an errno", async () => {
     await fs.mkdir(path.join(tmpDir, ".daintree"));
-    await fs.writeFile(settingsPath(), "{ not json");
+    const original = JSON.stringify({ version: 1, voiceDictionary: [{ term: "PtyClient" }] });
+    await fs.writeFile(settingsPath(), original);
+
+    // Node raises this one itself, with no syscall behind it.
+    const tooLarge = Object.assign(new RangeError("File size is greater than 2 GiB"), {
+      code: "ERR_FS_FILE_TOO_LARGE",
+    });
+    const readSpy = vi.spyOn(fs, "readFile").mockRejectedValueOnce(tooLarge);
+    try {
+      await expect(
+        identityFiles.writeInRepoSettings(tmpDir, makeSettings({ devServerCommand: "go" }))
+      ).rejects.toBe(tooLarge);
+    } finally {
+      readSpy.mockRestore();
+    }
+    expect(await fs.readFile(settingsPath(), "utf-8")).toBe(original);
+  });
+
+  it.each([
+    ["isn't JSON", "{ not json"],
+    ["isn't a settings object", "[1, 2]"],
+  ])("still replaces a settings file that reads but %s", async (_label, content) => {
+    await fs.mkdir(path.join(tmpDir, ".daintree"));
+    await fs.writeFile(settingsPath(), content);
     await identityFiles.writeInRepoSettings(tmpDir, makeSettings({ devServerCommand: "go" }));
     expect((await readFile()).devServerCommand).toBe("go");
   });
@@ -1373,6 +1396,39 @@ describe("readInRepoPresets", () => {
   it("returns empty object when presets directory is absent", async () => {
     const result = await identityFiles.readInRepoPresets(tmpDir);
     expect(result).toEqual({});
+  });
+
+  it("lists presets and recipes without readdir's withFileTypes", async () => {
+    // withFileTypes lstats every entry the filesystem leaves untyped at once,
+    // outside the project I/O gate's count (#16361).
+    const agentDir = path.join(tmpDir, PRESETS_DIR, "claude");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(
+      path.join(agentDir, "team.json"),
+      JSON.stringify({ id: "team", name: "Team" })
+    );
+    await identityFiles.writeInRepoRecipe(tmpDir, makeRecipe({ name: "Listed" }));
+
+    const realReaddir = fs.readdir;
+    const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation(((
+      dir: string,
+      options?: unknown
+    ) => {
+      if (options && typeof options === "object" && "withFileTypes" in options) {
+        return Promise.reject(new Error("withFileTypes fans out ungated lstats"));
+      }
+      return realReaddir(dir);
+    }) as typeof fs.readdir);
+    try {
+      expect((await identityFiles.readInRepoPresets(tmpDir)).claude?.map((p) => p.id)).toEqual([
+        "team",
+      ]);
+      const { recipes, scanComplete } = await identityFiles.readInRepoRecipesWithHashes(tmpDir);
+      expect(recipes.map((recipe) => recipe.name)).toEqual(["Listed"]);
+      expect(scanComplete).toBe(true);
+    } finally {
+      readdirSpy.mockRestore();
+    }
   });
 
   it("loads presets from per-agent subdirectories", async () => {

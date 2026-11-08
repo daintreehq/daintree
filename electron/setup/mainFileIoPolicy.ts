@@ -50,7 +50,6 @@ export function libuvThreadpoolSize(env: NodeJS.ProcessEnv = process.env): numbe
 }
 
 function loadAddon(): DatalessPolicyAddon {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
   return require("mac-phys-footprint") as DatalessPolicyAddon;
 }
 

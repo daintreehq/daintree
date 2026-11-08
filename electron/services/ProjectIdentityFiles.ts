@@ -181,17 +181,6 @@ function parseSuggestedThemeId(value: unknown): string | undefined {
   return BUILT_IN_APP_SCHEMES.some((scheme) => scheme.id === id) ? id : undefined;
 }
 
-/**
- * The file couldn't be read, as opposed to being read and found malformed:
- * filesystem errors carry the failing syscall, and the gate refuses on its own.
- */
-function isUnreadable(error: unknown): boolean {
-  return (
-    isProjectIoError(error) ||
-    (error instanceof Error && typeof (error as NodeJS.ErrnoException).syscall === "string")
-  );
-}
-
 export class ProjectIdentityFiles {
   private readonly settingsWriteQueues = new Map<string, Promise<void>>();
 
@@ -371,8 +360,9 @@ export class ProjectIdentityFiles {
       }
 
       const existing = await this.readSettingsFileObject(projectPath).catch((error: unknown) => {
-        if (isUnreadable(error)) throw error;
-        return null;
+        // Only a file that was read and found malformed may be replaced.
+        if (error instanceof AppError && error.code === "VALIDATION") return null;
+        throw error;
       });
       if (existing && Object.hasOwn(existing, "voiceDictionary")) {
         (payload as Record<string, unknown>).voiceDictionary = existing.voiceDictionary;
@@ -474,7 +464,10 @@ export class ProjectIdentityFiles {
       });
     }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new Error(`${DAINTREE_SETTINGS_JSON} is not a settings object`);
+      throw new AppError({
+        code: "VALIDATION",
+        message: `${DAINTREE_SETTINGS_JSON} is not a settings object`,
+      });
     }
     return parsed as Record<string, unknown>;
   }

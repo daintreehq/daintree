@@ -28,6 +28,7 @@ describe.skipIf(!canRun)("disableThreadPoolDatalessMaterialization", () => {
     const result = await addon.disableThreadPoolDatalessMaterialization(4, 1_000);
     expect(result).toMatchObject({ requested: 4, applied: 4, errors: [] });
     // The process-wide policy is what shells and agents would inherit.
+    expect(Number.isInteger(result.processPolicy)).toBe(true);
     expect(result.processPolicy).not.toBe(MATERIALIZE_OFF);
     expect(result.processPolicy).not.toBe(-1);
   });
