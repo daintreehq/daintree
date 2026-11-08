@@ -1355,7 +1355,13 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     // so the cached view is revealed on top straight away.
     expect(manager.destroyView("proj-b")).toBe(true);
     win.contentView.addChildView.mockClear();
-    initialWc.send.mockClear();
+    const order: string[] = [];
+    initialWc.send.mockImplementation((channel: string) => {
+      if (channel === CHANNELS.APP_VIEW_WARM_ACTIVATED) order.push("wake");
+    });
+    onViewWarmActivated.mockImplementation(() => {
+      order.push("hook");
+    });
 
     const result = await manager.switchTo("proj-a", "/path/a");
 
@@ -1365,9 +1371,7 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     );
     expect(reattach).toBeDefined();
     expect(reattach?.[1]).toBeUndefined();
-    expect(
-      initialWc.send.mock.calls.filter(([c]) => c === CHANNELS.APP_VIEW_WARM_ACTIVATED)
-    ).toHaveLength(1);
+    expect(order).toEqual(["wake", "hook"]);
     expect(onViewWarmActivated.mock.calls).toEqual([[initialWc]]);
   });
 
