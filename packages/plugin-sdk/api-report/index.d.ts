@@ -2051,6 +2051,44 @@ type AgentResumeTemplate = {
     args: string[];
     quitCommand?: string;
 };
+/**
+ * How a CLI takes the prompt a launch opens with, in one mode (#16367). Plain
+ * data, like {@link AgentResumeTemplate}, so a form survives the structured
+ * clone plugin agent configs go through.
+ */
+interface AgentPromptForm {
+    /**
+     * The arguments that carry the prompt, appended after every other launch
+     * argument. The element `{prompt}` stands for the prompt, quoted as one
+     * argument, and appears exactly once.
+     */
+    args: readonly string[];
+    /**
+     * A subcommand the prompted launch runs instead of one among the registry's
+     * own `args`: `name` takes the place of `replaces` there, or goes straight
+     * after the command when the registry carries no `replaces`. Goose's
+     * `session` takes no prompt, so a prompted launch runs `run` instead.
+     */
+    subcommand?: {
+        name: string;
+        replaces: string;
+    };
+    /**
+     * Set when the CLI is known not to open this mode on the prompt, as the
+     * CLI itself was observed to behave:
+     * - `may-be-ignored`: the CLI can start without acting on it (a TUI that
+     *   drops positionals, or one with no flag to pre-seed its input).
+     * - `exits-after-reply`: the CLI answers the prompt and exits instead of
+     *   staying in the mode.
+     * Omitted means no limitation is recorded, not that the form was verified.
+     */
+    caveat?: "may-be-ignored" | "exits-after-reply";
+}
+/** An agent's {@link AgentPromptForm} for each launch mode. */
+interface AgentInitialPromptForm {
+    interactive: AgentPromptForm;
+    headless: AgentPromptForm;
+}
 
 type ActionKind = "command" | "query";
 type ActionDanger = "safe" | "confirm" | "restricted";
@@ -4688,6 +4726,12 @@ interface PluginAgentContribution {
      * `continuity` tier.
      */
     resume?: AgentResumeTemplate;
+    /**
+     * How the CLI takes the prompt a launch opens with, interactive and headless
+     * (#16404). Plain data, the same form a built-in agent declares. Unset, the
+     * prompt goes last as a bare positional argument.
+     */
+    initialPromptForm?: AgentInitialPromptForm;
     /**
      * Optional additive launch mechanism (#13803): the CLI's own way of merging
      * extra MCP servers over the user's, which Daintree uses to hand the agent its
