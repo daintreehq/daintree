@@ -182,7 +182,14 @@ function previousAssigneeKey(op: Op, issueId: string): string {
 function rememberPreviousAssignee(key: string, previous: PreviousAssignee): void {
   const records = [...(previousAssignees.get(key) ?? []), previous];
   previousAssignees.delete(key);
-  previousAssignees.set(key, records.slice(-PREVIOUS_ASSIGNEES_PER_ISSUE));
+  // Past the cap, the oldest after the first go: the first is who the issue
+  // goes back to once every Undo has run.
+  previousAssignees.set(
+    key,
+    records.length > PREVIOUS_ASSIGNEES_PER_ISSUE
+      ? [records[0], ...records.slice(-(PREVIOUS_ASSIGNEES_PER_ISSUE - 1))]
+      : records
+  );
   if (previousAssignees.size > PREVIOUS_ASSIGNEES_LIMIT) {
     const oldest = previousAssignees.keys().next().value;
     if (oldest !== undefined) previousAssignees.delete(oldest);
@@ -195,6 +202,32 @@ function forgetPreviousAssignee(key: string, record: PreviousAssignee): void {
   if (!records || index < 0) return;
   records.splice(index, 1);
   if (records.length === 0) previousAssignees.delete(key);
+}
+
+const assignmentQueues = new Map<string, Promise<void>>();
+
+/**
+ * Runs an assign or Undo for one issue after any still under way for it, so
+ * each reads the assignee, writes and keeps its record without another landing
+ * in between and leaving the records out of order.
+ */
+function queueAssignment<T>(
+  op: Op,
+  repo: RepoRef,
+  issueNumber: number,
+  run: () => Promise<T>
+): Promise<T> {
+  const key = `${op.scope}\u0000${repo.repo}-${issueNumber}`;
+  const result = (assignmentQueues.get(key) ?? Promise.resolve()).then(run);
+  const settled = result.then(
+    () => undefined,
+    () => undefined
+  );
+  assignmentQueues.set(key, settled);
+  void settled.then(() => {
+    if (assignmentQueues.get(key) === settled) assignmentQueues.delete(key);
+  });
+  return result;
 }
 
 /** Normalize a stored project key, or `null` when it can't be one. */
@@ -540,48 +573,54 @@ export const jiraForgeProvider: ForgeIssueProviderImpl = {
   async assignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]> {
     const op = await beginOp();
     const viewer = await requireViewerFor(username, op);
-    const issue = await requireIssueNode(repo, issueNumber, ["assignee"], op);
-    const before = issue.fields?.assignee ?? null;
-    const key = previousAssigneeKey(op, issue.id);
-    if (before?.accountId === viewer.accountId) {
-      rememberPreviousAssignee(key, viewer);
-      return assigneesOf(issue);
-    }
-    await setAssignee(issue.id, viewer.accountId, op);
-    rememberPreviousAssignee(
-      key,
-      before?.accountId ? { accountId: before.accountId, user: mapUser(before) } : null
-    );
-    return [viewer.user];
+    return queueAssignment(op, repo, issueNumber, async () => {
+      const issue = await requireIssueNode(repo, issueNumber, ["assignee"], op);
+      const before = issue.fields?.assignee ?? null;
+      const key = previousAssigneeKey(op, issue.id);
+      if (before?.accountId === viewer.accountId) {
+        rememberPreviousAssignee(key, viewer);
+        return assigneesOf(issue);
+      }
+      await setAssignee(issue.id, viewer.accountId, op);
+      rememberPreviousAssignee(
+        key,
+        before?.accountId ? { accountId: before.accountId, user: mapUser(before) } : null
+      );
+      return [viewer.user];
+    });
   },
 
   async unassignIssue(repo: RepoRef, issueNumber: number, username: string): Promise<ForgeUser[]> {
     const op = await beginOp();
     const viewer = await requireViewerFor(username, op);
-    const issue = await requireIssueNode(repo, issueNumber, ["assignee"], op);
-    const key = previousAssigneeKey(op, issue.id);
-    // Someone else has picked the issue up since: nothing of ours is left to undo.
-    if (issue.fields?.assignee?.accountId !== viewer.accountId) {
-      previousAssignees.delete(key);
-      return assigneesOf(issue);
-    }
-    // `undefined` when nothing is remembered: then this only takes the issue
-    // off the viewer, which is what an agent's unassign asks for.
-    const previous = previousAssignees.get(key)?.at(-1);
-    if (previous === undefined) {
-      await setAssignee(issue.id, null, op);
-      return [];
-    }
-    // That assignment found the issue already the viewer's.
-    if (previous?.accountId === viewer.accountId) {
+    return queueAssignment(op, repo, issueNumber, async () => {
+      const issue = await requireIssueNode(repo, issueNumber, ["assignee"], op);
+      const key = previousAssigneeKey(op, issue.id);
+      // `undefined` when nothing is remembered.
+      const previous = previousAssignees.get(key)?.at(-1);
+      // Someone else has picked the issue up since: this Undo has nothing of
+      // ours left to undo, and its record goes with it.
+      if (issue.fields?.assignee?.accountId !== viewer.accountId) {
+        if (previous !== undefined) forgetPreviousAssignee(key, previous);
+        return assigneesOf(issue);
+      }
+      // With nothing remembered this only takes the issue off the viewer, which
+      // is what an agent's unassign asks for.
+      if (previous === undefined) {
+        await setAssignee(issue.id, null, op);
+        return [];
+      }
+      // That assignment found the issue already the viewer's.
+      if (previous?.accountId === viewer.accountId) {
+        forgetPreviousAssignee(key, previous);
+        return assigneesOf(issue);
+      }
+      // Hand it back to whoever "Assign to me" took it from. A failure keeps
+      // the record, so trying again still knows who that was.
+      await setAssignee(issue.id, previous?.accountId ?? null, op);
       forgetPreviousAssignee(key, previous);
-      return assigneesOf(issue);
-    }
-    // Hand it back to whoever "Assign to me" took it from. A failure keeps the
-    // record, so trying again still knows who that was.
-    await setAssignee(issue.id, previous?.accountId ?? null, op);
-    forgetPreviousAssignee(key, previous);
-    return previous ? [previous.user] : [];
+      return previous ? [previous.user] : [];
+    });
   },
   createIssue: () => notSupported("Creating issues"),
   closeIssue: () => notSupported("Closing issues"),

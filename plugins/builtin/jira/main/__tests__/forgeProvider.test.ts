@@ -75,9 +75,12 @@ function searches() {
  * Answers by path prefix, or by `"METHOD prefix"` to take one method only; a
  * request with no answer fails the test rather than hanging.
  */
-function route(answers: Record<string, (body: SearchBody & AssigneeBody) => Response>) {
+function route(
+  answers: Record<string, (body: SearchBody & AssigneeBody) => Response | Promise<Response>>
+) {
   fetchMock.mockImplementation(async (url: string, init: RequestInit) => {
-    const path = String(url).replace(`${SITE}/rest/api/3`, "");
+    // Any site, so a test can switch sites; `requests()` still names only SITE's.
+    const path = String(url).replace(/^https:\/\/[^/]+\/rest\/api\/3/, "");
     const method = init?.method ?? "GET";
     const key = Object.keys(answers).find((pattern) => {
       const [wanted, prefix] = pattern.includes(" ") ? pattern.split(" ") : [method, pattern];
@@ -732,6 +735,8 @@ describe("assignment", () => {
   const PEOPLE: Person[] = [ADA, BOB, CAROL];
   let assignees: Record<string, Person | null>;
   let failNextWrite: boolean;
+  /** While set, Jira applies a write at once but its answer waits on this. */
+  let writeGate: Promise<void> | null;
 
   function routeIssues(viewer: unknown = ADA) {
     const answers: Parameters<typeof route>[0] = { "GET /myself": () => json(viewer) };
@@ -743,7 +748,8 @@ describe("assignment", () => {
           return json({ errorMessages: ["That person cannot be assigned issues."] }, 400);
         }
         assignees[key] = PEOPLE.find((person) => person.accountId === body.accountId) ?? null;
-        return new Response(null, { status: 204 });
+        const answered = () => new Response(null, { status: 204 });
+        return writeGate ? writeGate.then(answered) : answered();
       };
     }
     route(answers);
@@ -752,6 +758,7 @@ describe("assignment", () => {
   beforeEach(() => {
     assignees = { "ENG-12": BOB, "ENG-13": CAROL };
     failNextWrite = false;
+    writeGate = null;
     routeIssues();
   });
 
@@ -810,6 +817,47 @@ describe("assignment", () => {
     ]);
   });
 
+  it("lets one assignment to an issue finish before another reads it", async () => {
+    let release: () => void = () => undefined;
+    writeGate = new Promise((resolve) => (release = resolve));
+    const first = assign();
+    await vi.waitFor(() => expect(writes()).toHaveLength(1));
+    const second = assign();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const reads = () => requests().filter((request) => request.path.startsWith("/issue/ENG-12?"));
+    expect(reads()).toHaveLength(1);
+    writeGate = null;
+    release();
+    await Promise.all([first, second]);
+    expect(reads()).toHaveLength(2);
+    // The second found the issue already the viewer's, so its Undo writes nothing.
+    await expect(undo()).resolves.toEqual([ADA_USER]);
+    await expect(undo()).resolves.toEqual([BOB_USER]);
+  });
+
+  it("still hands the issue back after more assignments than it keeps records for", async () => {
+    for (let i = 0; i < 11; i++) await assign();
+    for (let i = 0; i < 9; i++) await expect(undo()).resolves.toEqual([ADA_USER]);
+    await expect(undo()).resolves.toEqual([BOB_USER]);
+    await expect(undo()).resolves.toEqual([BOB_USER]);
+    expect(assignees["ENG-12"]).toBe(BOB);
+    expect(writes().map((write) => write.body)).toEqual([
+      { accountId: "acc-ada" },
+      { accountId: "acc-bob" },
+    ]);
+  });
+
+  it("uses up only its own record when someone else has the issue", async () => {
+    await assign();
+    await assign();
+    assignees["ENG-12"] = CAROL;
+    await expect(undo()).resolves.toEqual([CAROL_USER]);
+    // Back with the viewer: the other worktree's Undo still knows who had it first.
+    assignees["ENG-12"] = ADA;
+    await expect(undo()).resolves.toEqual([BOB_USER]);
+    expect(assignees["ENG-12"]).toBe(BOB);
+  });
+
   it("remembers each issue's previous assignee separately", async () => {
     await assign(12);
     await assign(13);
@@ -858,10 +906,14 @@ describe("assignment", () => {
     expect(assignees["ENG-12"]).toBeNull();
   });
 
-  it("doesn't carry what it remembers over to another site or email", async () => {
+  it.each([
+    ["site", { siteUrl: "https://other.atlassian.net", email: "ada@example.com" }],
+    ["email", { siteUrl: SITE, email: "ada@work.example" }],
+  ])("doesn't carry what it remembers over to another %s", async (_, next) => {
     await assign();
-    // Nothing is cleared: only the connection the history was kept for changes.
-    settings = { siteUrl: SITE, email: "ada@work.example" };
+    // Nothing is cleared: only the connection the history was kept for changes,
+    // while the account and the issue's id stay the same.
+    settings = next;
     await expect(undo()).resolves.toEqual([]);
     expect(assignees["ENG-12"]).toBeNull();
   });

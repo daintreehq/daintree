@@ -80,10 +80,17 @@ describe("jiraRequest", () => {
     expect(JSON.parse(init.body)).toEqual({ accountId: null });
   });
 
-  it("reads a 204 to a request that expected an answer as unreadable", async () => {
+  it.each([
+    ["GET", {}],
+    ["PUT", { method: "PUT" as const, body: {} }],
+    ["PUT", { method: "PUT" as const, body: {}, noContent: false }],
+  ])("reads a 204 to a %s that expected an answer as unreadable", async (_, options) => {
     fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
-    const error = await failure("/issue/ENG-12");
-    expect(error.message).toMatch(/couldn't read/);
+    const error = await jiraRequest(CONNECTION, "/issue/ENG-12", options).catch(
+      (err: unknown) => err
+    );
+    expect(error).toBeInstanceOf(JiraApiError);
+    expect((error as JiraApiError).message).toMatch(/couldn't read/);
   });
 
   it.each([
