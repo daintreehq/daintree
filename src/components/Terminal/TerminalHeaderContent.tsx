@@ -14,6 +14,7 @@ import {
 } from "@/store/resourceMonitoringStore";
 import { TerminalResourceSparkline } from "./TerminalResourceSparkline";
 import { SubagentChip } from "./SubagentChip";
+import { ClaudeContextUsageChip } from "./ClaudeContextUsageChip";
 import {
   HEADER_CHIP_CLASS,
   HEADER_CHIP_FOCUS_CLASS,
@@ -487,6 +488,11 @@ export function TerminalHeaderContent({
           <TooltipContent side="bottom">Input locked (read-only monitor mode)</TooltipContent>
         </Tooltip>
       )}
+
+      {/* Context of a Claude Code pane's last request, from its transcript —
+          self-gating. Ambient telemetry like the resource readout after it,
+          so it sits behind the chips a narrow pane should keep longest. */}
+      {hasPtyKind && <ClaudeContextUsageChip terminalId={id} />}
 
       {/* Resource monitoring badge — ambient telemetry, last. CPU and memory
           each carry their own band, marked in shape beside the reading it is
