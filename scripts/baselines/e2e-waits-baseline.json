@@ -1,6 +1,6 @@
 {
   "totals": {
-    "waitForTimeout": 28,
+    "waitForTimeout": 27,
     "isVisibleTimeout": 16
   },
   "files": {
@@ -17,7 +17,7 @@
       "waitForTimeout": 1
     },
     "e2e/full/platform/core-resource-settings-persistence.spec.ts": {
-      "waitForTimeout": 6,
+      "waitForTimeout": 5,
       "isVisibleTimeout": 1
     },
     "e2e/full/terminal/terminal-agent-state-latency.spec.ts": {
@@ -57,5 +57,5 @@
       "isVisibleTimeout": 1
     }
   },
-  "updatedAt": "2026-10-26T01:33:03.566Z"
+  "updatedAt": "2026-11-08T13:47:21.270Z"
 }
