@@ -575,13 +575,29 @@ export interface CanopyTrashTarget extends CanopyTarget {
 }
 
 /**
+ * What one search may ask of a terminal: the words of one alternative, how
+ * long each may be, and how many alternatives a query offers. Main refuses an
+ * ask past them; the panel names what it leaves out.
+ */
+export const CANOPY_SEARCH_MAX_TERMS = 16;
+export const CANOPY_SEARCH_MAX_TERM_LENGTH = 200;
+export const CANOPY_SEARCH_MAX_ALTERNATIVES = 50;
+
+/**
  * A run the panel's search asks about, with the words of the query nothing
  * else on the run held: main looks for them on its terminal, which never
  * leaves the machine it runs on.
  */
 export interface CanopyScreenSearchTarget extends CanopyTarget {
   runId: string;
+  /** The words left of the search's first alternative, all to be found. */
   terms: string[];
+  /**
+   * The words left of each further alternative (#16412): the run matches when
+   * its terminal holds every word of any one of them or of `terms`. A host
+   * from before alternatives ignores these and answers for `terms` alone.
+   */
+  orTerms?: string[][];
 }
 
 /**

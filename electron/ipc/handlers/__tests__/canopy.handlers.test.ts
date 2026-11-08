@@ -278,6 +278,11 @@ import type { ClientEndpoint } from "../../endpoint.js";
 import { CHANNELS } from "../../channels.js";
 import { readPluginTerminalScreen } from "../../../services/plugin/pluginTerminalScreenRead.js";
 import { redrawFor } from "../../../services/__tests__/answerRedraw.js";
+import {
+  CANOPY_SEARCH_MAX_ALTERNATIVES,
+  CANOPY_SEARCH_MAX_TERM_LENGTH,
+  CANOPY_SEARCH_MAX_TERMS,
+} from "../../../../shared/types/ipc/canopy.js";
 
 type Handler = (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>;
 
@@ -410,6 +415,49 @@ describe("canopy IPC", () => {
       expect(result.ok).toBe(false);
     }
     expect(vi.mocked(readPluginTerminalScreen)).not.toHaveBeenCalled();
+  });
+
+  it("searches a run for any of its alternatives, and refuses alternatives past their bounds", async () => {
+    state.runs = [{ runId: "run-1", spawnedAt: 100 }];
+    state.screen = "fallback-review: dfat-vjv0";
+    vi.mocked(readPluginTerminalScreen).mockClear();
+    const sender = fakeSender(5);
+    expect(
+      await invoke(CANOPY_METHOD_CHANNELS.searchScreens, sender, [
+        {
+          runId: "run-1",
+          spawnedAt: 100,
+          terms: ["dfat-xth8"],
+          orTerms: [["cocto"], ["fallback-review:", "dfat-vjv0"]],
+        },
+      ])
+    ).toEqual(["run-1"]);
+    expect(vi.mocked(readPluginTerminalScreen)).toHaveBeenCalledTimes(1);
+
+    vi.mocked(readPluginTerminalScreen).mockClear();
+    const tooMany = Array.from({ length: CANOPY_SEARCH_MAX_ALTERNATIVES }, (_, i) => [`x${i}`]);
+    for (const orTerms of [
+      "x",
+      [[]],
+      [["x".repeat(CANOPY_SEARCH_MAX_TERM_LENGTH + 1)]],
+      [Array.from({ length: CANOPY_SEARCH_MAX_TERMS + 1 }, () => "x")],
+      tooMany,
+    ]) {
+      const result = await outcome(
+        invoke(CANOPY_METHOD_CHANNELS.searchScreens, sender, [
+          { runId: "run-1", spawnedAt: 100, terms: ["x"], orTerms },
+        ])
+      );
+      expect(result.ok).toBe(false);
+    }
+    expect(vi.mocked(readPluginTerminalScreen)).not.toHaveBeenCalled();
+    // As many as a query may offer still go through.
+    const result = await outcome(
+      invoke(CANOPY_METHOD_CHANNELS.searchScreens, sender, [
+        { runId: "run-1", spawnedAt: 100, terms: ["x"], orTerms: tooMany.slice(1) },
+      ])
+    );
+    expect(result.ok).toBe(true);
   });
 
   it("reads no branch for an id that isn't one", async () => {

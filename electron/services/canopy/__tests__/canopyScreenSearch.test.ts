@@ -22,6 +22,31 @@ describe("searchScreens", () => {
     expect(found).toEqual([]);
   });
 
+  it("matches a run holding every word of any one alternative", async () => {
+    const screens: Record<string, string> = {
+      a: "Review of dfat-xth8 done",
+      b: "fallback-review: dfat-vjv0 waiting",
+      c: "fallback-review: something else",
+    };
+    const ask = (runId: string) => ({
+      ...target(runId, ["dfat-xth8"]),
+      orTerms: [["cocto-claude"], ["fallback-review:", "dfat-vjv0"]],
+    });
+    const read = vi.fn(async ({ runId }: { runId: string }) => screens[runId] ?? null);
+    const found = await searchScreens([ask("a"), ask("b"), ask("c")], read);
+    expect(found).toEqual(["a", "b"]);
+    // Each run's screen is read once, however many alternatives it is asked for.
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+
+  it("skips an empty alternative rather than letting it match everything", async () => {
+    const found = await searchScreens(
+      [{ ...target("a", ["missing"]), orTerms: [[], [""]] }],
+      async () => "anything at all"
+    );
+    expect(found).toEqual([]);
+  });
+
   it("treats a failed read as no match, and still answers for the rest", async () => {
     const found = await searchScreens(
       [target("a", ["ok"]), target("b", ["ok"])],
