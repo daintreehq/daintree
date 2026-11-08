@@ -2541,6 +2541,9 @@ describe("CliAvailabilityService", () => {
 
   describe("findCopies (#16409)", () => {
     const claudeConfig = () => getAgentConfig("claude")!;
+    // Mocking process.platform does not change the host's path.join implementation.
+    const nativeCopy = join("/Users/test", ".local", "bin", "claude");
+    const npmCopy = join("/npm-prefix", "bin", "claude");
 
     /** Claude on PATH at `onPath`, npm's global prefix at `npmPrefix`, and these files on disk. */
     async function arrange(options: {
@@ -2573,7 +2576,7 @@ describe("CliAvailabilityService", () => {
     it("goes through every layer, not just the first that answered, launching copy first", async () => {
       await arrange({
         onPath: ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"],
-        files: ["/Users/test/.local/bin/claude", "/npm-prefix/bin/claude"],
+        files: [nativeCopy, npmCopy],
         npmPrefix: "/npm-prefix",
       });
       await service.checkAvailability();
@@ -2581,36 +2584,36 @@ describe("CliAvailabilityService", () => {
       await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([
         "/opt/homebrew/bin/claude",
         "/usr/local/bin/claude",
-        "/Users/test/.local/bin/claude",
-        "/npm-prefix/bin/claude",
+        nativeCopy,
+        npmCopy,
       ]);
     });
 
     it("finds a copy the check never reached, when the launching one came from a later layer", async () => {
       // Nothing on PATH, so the native layer answered the check first.
       await arrange({
-        files: ["/Users/test/.local/bin/claude", "/npm-prefix/bin/claude"],
+        files: [nativeCopy, npmCopy],
         npmPrefix: "/npm-prefix",
       });
       await service.checkAvailability();
       expect(service.getDetails()!.claude?.via).toBe("native");
 
       await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([
-        "/Users/test/.local/bin/claude",
-        "/npm-prefix/bin/claude",
+        nativeCopy,
+        npmCopy,
       ]);
     });
 
     it("counts a symlink and its target as one copy across layers, keeping the launching spelling", async () => {
       await arrange({
         onPath: ["/opt/homebrew/bin/claude"],
-        files: ["/Users/test/.local/bin/claude", "/npm-prefix/bin/claude", "/real/claude"],
+        files: [nativeCopy, npmCopy, "/real/claude"],
         npmPrefix: "/npm-prefix",
       });
       const { realpath } = await import("fs/promises");
       const links: Record<string, string> = {
         "/opt/homebrew/bin/claude": "/real/claude",
-        "/npm-prefix/bin/claude": "/real/claude",
+        [npmCopy]: "/real/claude",
       };
       vi.mocked(realpath).mockImplementation(
         (async (path: string) => links[path] ?? path) as never
@@ -2619,7 +2622,7 @@ describe("CliAvailabilityService", () => {
 
       await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([
         "/opt/homebrew/bin/claude",
-        "/Users/test/.local/bin/claude",
+        nativeCopy,
       ]);
     });
 
@@ -2776,13 +2779,13 @@ describe("CliAvailabilityService", () => {
       // A Re-check asks again, and finds a copy under a prefix that has since moved.
       await arrange({
         onPath: ["/opt/homebrew/bin/claude"],
-        files: ["/moved-prefix/bin/claude"],
+        files: [join("/moved-prefix", "bin", "claude")],
         npmPrefix: "/moved-prefix",
       });
       await service.refresh();
       await expect(service.findCopies("claude", claudeConfig())).resolves.toEqual([
         "/opt/homebrew/bin/claude",
-        "/moved-prefix/bin/claude",
+        join("/moved-prefix", "bin", "claude"),
       ]);
       expect(npmCalls()).toHaveLength(2);
     });

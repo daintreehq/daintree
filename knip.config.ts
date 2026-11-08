@@ -54,6 +54,7 @@ const baseConfig: KnipConfig = {
     "scripts/readme/render-art.mjs",
     "scripts/readme/export-data.ts",
     "scripts/readme/art/glyphs.js",
+    "scripts/readme/art/frame.js",
 
     // The perf dispatcher launches these entry points by string path in
     // isolated subprocesses, so static analysis cannot follow those edges.
@@ -199,6 +200,8 @@ const baseConfig: KnipConfig = {
     "attrib",
     // The native supervisor tests compile their fixture with the host C compiler.
     "cc",
+    // macOS file-flag fixtures use the system utility to simulate dataless files.
+    "chflags",
     // Real-agent E2E fixtures invoke the separately installed agent CLI.
     "codex",
     "ditto",
