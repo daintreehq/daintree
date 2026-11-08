@@ -493,7 +493,7 @@ function hasOnlySafeSegments(rest: string, separator: string): boolean {
 
 const PluginAgentNativePathSchema = z.string().min(1).max(256).refine(isRootedNativePath, {
   message:
-    "A native path must start at ~/, / or %USERPROFILE%\\, %APPDATA%\\, %LOCALAPPDATA%\\, %ProgramFiles%\\, %ProgramFiles(x86)%\\ or %ProgramData%\\, use one kind of separator, and name only letters, digits, spaces and . _ + @ ( ) - with no . or .. segment",
+    "A native path must start at ~/, / or %USERPROFILE%\\, %APPDATA%\\, %LOCALAPPDATA%\\, %ProgramFiles%\\, %ProgramFiles(x86)%\\ or %ProgramData%\\, use one kind of separator, and name only letters, digits, spaces and . _ + @ ( ) -, with no . or .. segment and no name ending in a dot or a space",
 });
 
 /**

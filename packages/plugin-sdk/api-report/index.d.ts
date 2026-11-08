@@ -4615,10 +4615,10 @@ interface PluginAgentContribution {
     supportsContextInjection?: boolean;
     /**
      * Where the CLI's native installer puts it, for an install PATH doesn't reach
-     * (#16468). Each entry ends in this agent's own `command`, optionally with a
-     * Windows launcher suffix, and is rooted at `~/`, `/` or `%VAR%\` for a listed
-     * variable. Checked for existence and never run. Not allowed beside a `./`
-     * command, which is probed directly.
+     * (#16468). Each entry ends in this agent's own `command`, plus a Windows
+     * launcher suffix only when the command has none, and is rooted at `~/`, `/` or
+     * `%VAR%\` for a listed variable. Checked for existence and never run. Not
+     * allowed beside a `./` command, which is probed directly.
      */
     nativePaths?: string[];
     /**

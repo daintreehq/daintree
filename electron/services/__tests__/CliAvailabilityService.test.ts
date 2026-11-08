@@ -6,7 +6,11 @@ import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { homedir } from "os";
 import { join } from "path";
 import { CliAvailabilityService, isFullyQualifiedPath } from "../CliAvailabilityService.js";
-import { getAgentConfig, getAgentIds } from "../../../shared/config/agentRegistry.js";
+import {
+  getAgentConfig,
+  getAgentIds,
+  getEffectiveAgentConfig,
+} from "../../../shared/config/agentRegistry.js";
 import { resolveAgentLaunchBaseCommandFor } from "../../../shared/utils/agentLaunchCommand.js";
 import { execFile, execFileSync } from "child_process";
 import { refreshPath } from "../../setup/environment.js";
@@ -2956,7 +2960,7 @@ describe("CliAvailabilityService", () => {
           '@ECHO OFF\r\nSETLOCAL\r\n"%~dp0\\node.exe" "%~dp0\\npm-cli.js" %*\r\nCALL :x\r\n',
       });
       await contribute(PI);
-      const prefix = "C\\:\\Users\\test\\AppData\\Roaming\\npm";
+      const prefix = "C:\\Users\\test\\AppData\\Roaming\\npm";
       answerNpmPrefix(
         (file, args) =>
           /\\System32\\cmd\.exe$/i.test(file) &&
@@ -2974,12 +2978,13 @@ describe("CliAvailabilityService", () => {
     });
 
     it.each([
-      ["uv tool", "/Users/test/.local/share/uv/tools/mini-swe-agent/bin/mini"],
-      ["pipx", "/Users/test/.local/share/pipx/venvs/mini-swe-agent/bin/mini"],
-      ["legacy pipx", "/Users/test/.local/pipx/venvs/mini-swe-agent/bin/mini"],
-    ])("finds a %s install from the package and the command together", async (_name, path) => {
+      ["uv tool", ".local/share/uv/tools/mini-swe-agent/bin/mini"],
+      ["pipx", ".local/share/pipx/venvs/mini-swe-agent/bin/mini"],
+      ["legacy pipx", ".local/pipx/venvs/mini-swe-agent/bin/mini"],
+    ])("finds a %s install from the package and the command together", async (_name, relative) => {
       Object.defineProperty(process, "platform", { value: "darwin", writable: true });
       await contribute(MINI);
+      const path = join(homedir(), relative);
       await onlyExisting(path);
 
       const result = await service.checkAvailability();
@@ -3007,7 +3012,7 @@ describe("CliAvailabilityService", () => {
     it("finds a declared native path, and a launch starts from it", async () => {
       Object.defineProperty(process, "platform", { value: "darwin", writable: true });
       await contribute({ ...PI, packages: undefined, nativePaths: ["~/.pi/agent/bin/pi"] });
-      const path = "/Users/test/.pi/agent/bin/pi";
+      const path = join(homedir(), ".pi/agent/bin/pi");
       await onlyExisting(path);
 
       const result = await service.checkAvailability();
@@ -3021,17 +3026,29 @@ describe("CliAvailabilityService", () => {
       );
     });
 
-    it("tries native paths before the package layers", async () => {
+    it("stops at the first hit: native paths, then PyPI's, then npm's", async () => {
       Object.defineProperty(process, "platform", { value: "darwin", writable: true });
-      await contribute({ ...MINI, nativePaths: ["/opt/mini/bin/mini"] });
-      await onlyExisting(
-        "/opt/mini/bin/mini",
-        "/Users/test/.local/share/uv/tools/mini-swe-agent/bin/mini"
-      );
+      await contribute({
+        ...MINI,
+        packages: { npm: "mini-swe-agent", pypi: "mini-swe-agent" },
+        nativePaths: ["/opt/mini/bin/mini"],
+      });
+      answerNpmPrefix((file) => file === "npm", "/Users/test/.npm-custom");
+      const native = "/opt/mini/bin/mini";
+      const uv = join(homedir(), ".local/share/uv/tools/mini-swe-agent/bin/mini");
+      const shim = join("/Users/test/.npm-custom", "bin", "mini");
 
-      await service.checkAvailability();
-
-      expect(service.getDetails()!["mini-swe-agent"]?.resolvedPath).toBe("/opt/mini/bin/mini");
+      for (const [existing, via] of [
+        [[native, uv, shim], "native"],
+        [[uv, shim], "native"],
+        [[shim], "npm-global"],
+      ] as const) {
+        await onlyExisting(...existing);
+        await service.refresh();
+        const detail = service.getDetails()!["mini-swe-agent"];
+        expect(detail?.resolvedPath).toBe(existing[0]);
+        expect(detail?.via).toBe(via);
+      }
     });
 
     it("reports a declared file it can't execute as blocked", async () => {
@@ -3064,7 +3081,7 @@ describe("CliAvailabilityService", () => {
       expect(new Set(spawned())).toEqual(new Set(["npm config get prefix"]));
     });
 
-    it("never reaches the declared layers for a bundled command", async () => {
+    it("probes a bundled command directly, never reaching the declared layers", async () => {
       // The manifest refuses this pairing; the registry is handed it directly to
       // show the probe holds the invariant by itself.
       Object.defineProperty(process, "platform", { value: "darwin", writable: true });
@@ -3084,19 +3101,80 @@ describe("CliAvailabilityService", () => {
         ],
         "/tmp/daintree-plugins/acme"
       );
-      await onlyExisting(
-        "/Users/test/.bundled/bin/bundled",
-        "/Users/test/.local/share/uv/tools/bundled/bin/bundled"
-      );
+      const bundled = "/tmp/daintree-plugins/acme/bin/bundled";
+      const declared = [
+        join(homedir(), ".bundled/bin/bundled"),
+        join(homedir(), ".local/share/uv/tools/bundled/bin/bundled"),
+      ];
+      await onlyExisting(bundled, ...declared);
 
       const result = await service.checkAvailability();
 
-      expect(result.bundled).toBe("missing");
+      expect(result.bundled).toBe("ready");
+      expect(service.getDetails()!.bundled?.resolvedPath).toBe(bundled);
+
+      const { access } = await import("fs/promises");
+      vi.mocked(access).mockClear();
+      await onlyExisting(...declared);
+
+      const refreshed = await service.refresh();
+
+      expect(refreshed.bundled).toBe("missing");
+      const probed = vi.mocked(access).mock.calls.map(([path]) => String(path));
+      expect(probed).toContain(bundled);
+      for (const path of declared) expect(probed).not.toContain(path);
     });
 
     describe("on Windows", () => {
       beforeEach(() => {
         Object.defineProperty(process, "platform", { value: "win32", writable: true });
+      });
+
+      afterEach(() => {
+        vi.mocked(homedir).mockReturnValue("/Users/test");
+      });
+
+      it("expands a ~/ entry against a fully qualified home", async () => {
+        vi.mocked(homedir).mockReturnValue("C:\\Users\\test");
+        await contribute({ ...PI, packages: undefined, nativePaths: ["~/.pi/bin/pi"] });
+        const path = `${join("C:\\Users\\test", ".pi/bin/pi")}.cmd`;
+        await onlyExisting(path);
+
+        const result = await service.checkAvailability();
+
+        expect(result.pi).toBe("ready");
+        expect(service.getDetails()!.pi?.resolvedPath).toBe(path);
+      });
+
+      it("skips a ~/ entry when the home it expands to is relative", async () => {
+        vi.mocked(homedir).mockReturnValue("profiles");
+        await contribute({ ...PI, packages: undefined, nativePaths: ["~/.pi/bin/pi"] });
+        await onlyExisting(`${join("profiles", ".pi/bin/pi")}.cmd`);
+
+        const result = await service.checkAvailability();
+
+        expect(result.pi).toBe("missing");
+      });
+
+      it("leaves a /-rooted entry out of the copies it lists", async () => {
+        process.env.PATH = "C:\\tools";
+        process.env.LOCALAPPDATA = "C:\\Users\\test\\AppData\\Local";
+        virtualWindowsFiles.set({ "C:\\tools\\pi.exe": "" });
+        const declared = "C:\\Users\\test\\AppData\\Local\\Programs\\pi\\pi.exe";
+        await contribute({
+          ...PI,
+          packages: undefined,
+          nativePaths: ["/opt/pi/bin/pi", "%LOCALAPPDATA%\\Programs\\pi\\pi.exe"],
+        });
+        await onlyExisting("/opt/pi/bin/pi.cmd", declared);
+        await service.checkAvailability();
+
+        const copies = await service.findCopies("pi", getEffectiveAgentConfig("pi")!);
+
+        expect(copies.map((copy) => copy.toLowerCase())).toEqual([
+          "c:\\tools\\pi.exe",
+          declared.toLowerCase(),
+        ]);
       });
 
       it("skips a /-rooted entry, which would land on whichever drive is current", async () => {
@@ -3150,6 +3228,7 @@ describe("CliAvailabilityService", () => {
 
     beforeEach(() => {
       Object.defineProperty(process, "platform", { value: "win32", writable: true });
+      vi.mocked(homedir).mockReturnValue("C:\\Users\\test");
       for (const name of ["USERPROFILE", "LOCALAPPDATA"]) {
         savedWindowsEnv[name] = process.env[name];
         delete process.env[name];
@@ -3160,6 +3239,7 @@ describe("CliAvailabilityService", () => {
     });
 
     afterEach(() => {
+      vi.mocked(homedir).mockReturnValue("/Users/test");
       for (const [name, value] of Object.entries(savedWindowsEnv)) {
         if (value === undefined) delete process.env[name];
         else process.env[name] = value;

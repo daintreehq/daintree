@@ -565,7 +565,10 @@ describe("discovery metadata (#16468)", () => {
       ["NUL", "~/bin\0/acme"],
       ["a non-ASCII lookalike", "~/bіn/acme"],
     ])("refuses %s", (_name, entry) => {
-      expect(parses([entry])).toBe(false);
+      // The field alone, so the rule about the command's name can't refuse it instead.
+      expect(
+        AgentContributionSchema.safeParse({ ...VALID_AGENT, nativePaths: [entry] }).success
+      ).toBe(false);
     });
 
     it("caps the count and the length", () => {
@@ -590,6 +593,7 @@ describe("discovery metadata (#16468)", () => {
         ["acme.dev", "~/bin/acme.dev"],
         ["acme.dev", "~/bin/acme.dev.exe"],
         ["acme.cmd", "~/bin/acme.cmd"],
+        ["acme.ps1", "~/bin/acme.ps1"],
       ])("a %s command accepts %s", (command, entry) => {
         expect(parses([entry], command)).toBe(true);
       });
@@ -606,6 +610,7 @@ describe("discovery metadata (#16468)", () => {
         ["acme.cmd", "~/bin/acme"],
         ["acme.cmd", "~/bin/acme.exe"],
         ["acme.cmd", "~/bin/acme.cmd.cmd"],
+        ["acme.ps1", "~/bin/acme.ps1.exe"],
       ])("a %s command refuses %s", (command, entry) => {
         expect(parses([entry], command)).toBe(false);
       });
@@ -696,6 +701,10 @@ describe("discovery metadata (#16468)", () => {
       expect(parses({ pypi: "a".repeat(128) })).toBe(true);
     });
 
+    it("accepts both ecosystems together", () => {
+      expect(parses({ npm: "acme", pypi: "acme" })).toBe(true);
+    });
+
     it("refuses other ecosystems and an empty declaration", () => {
       expect(parses({})).toBe(false);
       expect(parses({ brew: "acme" })).toBe(false);
@@ -729,11 +738,14 @@ describe("discovery metadata (#16468)", () => {
   });
 
   describe("packages beside a command that already names its launcher", () => {
-    it("refuses them, since the package layers would look for acme.cmd.cmd", () => {
-      const agent = { command: "acme.cmd", packages: { npm: "acme" } };
-      expect(issuePaths(agent)).toEqual(["contributes.agents.0.packages"]);
-      expect(errorCodes(agent)).toEqual(["agent_discovery_suffixed_command"]);
-    });
+    it.each(["acme.cmd", "acme.EXE", "acme.bat", "acme.com", "acme.ps1"])(
+      "refuses them beside %s, since the package layers would add a second suffix",
+      (command) => {
+        const agent = { command, packages: { npm: "acme" } };
+        expect(issuePaths(agent)).toEqual(["contributes.agents.0.packages"]);
+        expect(errorCodes(agent)).toEqual(["agent_discovery_suffixed_command"]);
+      }
+    );
 
     it("leaves a dotted name that isn't a launcher alone", () => {
       expect(withAgent({ command: "acme.dev", packages: { npm: "acme" } }).success).toBe(true);

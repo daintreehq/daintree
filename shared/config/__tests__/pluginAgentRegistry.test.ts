@@ -209,6 +209,7 @@ describe("pluginAgentRegistry (issue #9560)", () => {
       registerPluginAgents("acme.plugin", [DISCOVERABLE]);
       registerPluginAgents("acme.plugin", [ACME_AGENT]);
       expect(getEffectiveAgentConfig("acme-agent")).not.toHaveProperty("nativePaths");
+      expect(getEffectiveAgentConfig("acme-agent")).not.toHaveProperty("packages");
       registerPluginAgents("acme.plugin", [DISCOVERABLE]);
       unregisterPluginAgents("acme.plugin");
       expect(getEffectiveAgentConfig("acme-agent")).toBeUndefined();

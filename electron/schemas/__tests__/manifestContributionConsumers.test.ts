@@ -1972,7 +1972,7 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       mode: "verbatim",
       consumers: [
         { file: AGENT_REGISTRY, symbol: "contributionToAgentConfig" },
-        { file: "electron/services/CliAvailabilityService.ts", symbol: "probeNativePaths" },
+        { file: "electron/services/CliAvailabilityService.ts", symbol: "probedNativePaths" },
       ],
       note: "Copied onto the agent config, where discovery checks each path for an executable file and launch starts from a hit; nothing is run to find it.",
     },
@@ -1981,6 +1981,7 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       consumers: [
         { file: AGENT_REGISTRY, symbol: "contributionToAgentConfig" },
         { file: "electron/services/CliAvailabilityService.ts", symbol: "probeCommand" },
+        { file: "electron/services/CliAvailabilityService.ts", symbol: "collectCopies" },
       ],
       note: "Copied onto the agent config, key by key (see agents.packages).",
     },
@@ -2605,7 +2606,8 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
     npm: {
       mode: "derived-input",
       consumers: [
-        { file: "electron/services/CliAvailabilityService.ts", symbol: "probeNpmGlobal" },
+        { file: "electron/services/CliAvailabilityService.ts", symbol: "probeCommand" },
+        { file: "electron/services/CliAvailabilityService.ts", symbol: "collectCopies" },
       ],
       note: "Only switches the npm-global shim check on: the name reaches no path and no command.",
     },

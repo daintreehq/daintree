@@ -108,6 +108,16 @@ export function isFullyQualifiedPath(
 }
 
 /**
+ * The declared native paths this platform can read. A `/x` entry names no drive
+ * on Windows, so it would land on whichever one is current, where any local user
+ * can create the folder.
+ */
+function probedNativePaths(config: AgentConfig): string[] {
+  const paths = config.nativePaths ?? [];
+  return process.platform === "win32" ? paths.filter((entry) => !entry.startsWith("/")) : paths;
+}
+
+/**
  * Synthesise probe paths for PyPI-distributed agents. Modern Python tool
  * installs land in well-known per-user locations: uv tool, pipx (current
  * and legacy layouts), and pip --user-shared `~/.local/bin`. We probe
@@ -459,7 +469,7 @@ export class CliAvailabilityService {
 
     const pypiPackage = config.packages?.pypi;
     const fixedPaths = [
-      ...(config.nativePaths ?? []),
+      ...probedNativePaths(config),
       ...(pypiPackage ? synthesisePypiProbePaths(command, pypiPackage) : []),
     ];
     for (const fixedPath of fixedPaths) {
@@ -717,13 +727,8 @@ export class CliAvailabilityService {
       return shellProbe;
     }
 
-    // A `/x` entry names no drive on Windows, so it would land on whichever one
-    // is current, where any local user can create the folder.
-    const nativePaths =
-      process.platform === "win32"
-        ? config.nativePaths?.filter((entry) => !entry.startsWith("/"))
-        : config.nativePaths;
-    if (nativePaths && nativePaths.length > 0) {
+    const nativePaths = probedNativePaths(config);
+    if (nativePaths.length > 0) {
       const nativeProbe = await this.probeNativePaths(nativePaths);
       if (nativeProbe.status !== "missing") {
         return nativeProbe;
@@ -1013,9 +1018,10 @@ export class CliAvailabilityService {
       // (env var not set) to avoid probing a literal path like
       // "%LOCALAPPDATA%\Microsoft\WinGet\Links\claude.exe".
       if (expanded.includes("%")) return null;
-      // A variable set to nothing or to a relative path would leave this
-      // resolving against the current drive or the working directory.
-      if (input.startsWith("%") && !isFullyQualifiedPath(expanded)) return null;
+      // A variable or home set to nothing or to a relative path would leave
+      // this resolving against the current drive or the working directory. A
+      // bundled command starts neither way, and registration already resolved it.
+      if (/^[%~]/.test(input) && !isFullyQualifiedPath(expanded)) return null;
     } else if (input.includes("\\")) {
       // Windows-only candidates should not be probed on Unix. Inspect the
       // original input rather than `expanded`, since `join(home, …)` on a

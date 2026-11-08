@@ -179,7 +179,9 @@ export function validateAgentPermissionBypass(
 }
 
 // The launchers the probe appends to an extensionless native path on Windows.
-const WINDOWS_LAUNCHER_SUFFIX = /\.(?:cmd|exe|bat|com)$/i;
+const APPENDED_LAUNCHER_SUFFIX = /\.(?:cmd|exe|bat|com)$/i;
+// What a command can already end in and be probed as written, so nothing is added.
+const COMMAND_LAUNCHER_SUFFIX = /\.(?:cmd|exe|bat|com|ps1)$/i;
 
 // A manifest declares where its own CLI lives, so a native path can't name some
 // other file (#16468). A `./` command is probed directly and never reaches
@@ -212,11 +214,11 @@ export function validateAgentDiscovery(manifest: ParsedPluginManifest, ctx: z.Re
       return;
     }
 
-    const hasLauncherSuffix = WINDOWS_LAUNCHER_SUFFIX.test(command);
+    const hasLauncherSuffix = COMMAND_LAUNCHER_SUFFIX.test(command);
     if (packages && hasLauncherSuffix) {
       issue(
         ["packages"],
-        `Agent "${agent.id}" declares packages, which need a command with no launcher suffix: write "${command.replace(WINDOWS_LAUNCHER_SUFFIX, "")}", not "${command}".`,
+        `Agent "${agent.id}" declares packages, which need a command with no launcher suffix: write "${command.replace(COMMAND_LAUNCHER_SUFFIX, "")}", not "${command}".`,
         "agent_discovery_suffixed_command"
       );
     }
@@ -225,7 +227,7 @@ export function validateAgentDiscovery(manifest: ParsedPluginManifest, ctx: z.Re
       const fileName = entry.split(/[\\/]/).at(-1) as string;
       const namesCommand =
         fileName === command ||
-        (!hasLauncherSuffix && fileName.replace(WINDOWS_LAUNCHER_SUFFIX, "") === command);
+        (!hasLauncherSuffix && fileName.replace(APPENDED_LAUNCHER_SUFFIX, "") === command);
       if (namesCommand) return;
       issue(
         ["nativePaths", pathIndex],
