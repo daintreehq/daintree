@@ -818,6 +818,51 @@ describe("HelpSessionController — newSession on a paused lane (#14981)", () =>
   });
 });
 
+describe("HelpSessionController — a fresh start over a kept conversation (#16495)", () => {
+  function freshLaunch() {
+    return {
+      agentId: "claude",
+      replaceExisting: true,
+      requestedId: `terminal-${crypto.randomUUID()}`,
+      checkVersion: true,
+      vacantOnly: true,
+    };
+  }
+
+  it("refuses an occupied lane rather than taking it, and keeps main's pointer through Retry", async () => {
+    const ctrl = new HelpSessionController();
+    syncWorkspaceInputs(ctrl, { id: "proj-1", path: "/repo" }, { terminalId: null });
+
+    ctrl.launch(freshLaunch());
+    helpPanelState.terminalId = vi.mocked(helpPanelState.setTerminal).mock.calls[0]?.[1] ?? null;
+    await vi.waitFor(() => {
+      expect(window.electron.help.provisionSession).toHaveBeenCalledTimes(1);
+    });
+    expect(window.electron.help.provisionSession).toHaveBeenCalledWith(
+      expect.objectContaining({ slot: 0, vacantOnly: true })
+    );
+    // Its own mirror goes, so nothing resumes it here; main's pointer stays until
+    // a new session spawns over it.
+    expect(helpPanelState.clearHibernateSession).toHaveBeenCalledWith("proj-1", 0);
+    expect(window.electron.help.takePendingHibernation).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(helpPanelState.clearTerminal).toHaveBeenCalledWith(0);
+    });
+
+    helpPanelState.terminalId = null;
+    ctrl.retryLaunch("claude");
+    await vi.waitFor(() => {
+      expect(window.electron.help.provisionSession).toHaveBeenCalledTimes(2);
+    });
+    expect(vi.mocked(window.electron.help.provisionSession).mock.calls[1]?.[0]).toMatchObject({
+      vacantOnly: true,
+    });
+    expect(window.electron.help.discardConversation).not.toHaveBeenCalled();
+    expect(window.electron.help.takePendingHibernation).not.toHaveBeenCalled();
+    ctrl.stop();
+  });
+});
+
 describe("HelpSessionController — terminal PTY exit slides the sidebar out (#10989)", () => {
   function bindLiveSession(
     ctrl: HelpSessionController,

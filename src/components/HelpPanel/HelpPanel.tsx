@@ -56,6 +56,7 @@ import { HelpPanelResizeHandle } from "./HelpPanelResizeHandle";
 import { useHelpPanelResize } from "./useHelpPanelResize";
 import { useHelpPanelRevealFocus } from "./useHelpPanelRevealFocus";
 import { useHelpSessionLanes, type PausedLane } from "./useHelpSessionLanes";
+import { claimedHelpLaneKeys } from "@/lib/helpLaneClaims";
 import {
   freshSessionLaunch,
   pickNewSessionSlot,
@@ -1032,27 +1033,36 @@ export function HelpPanel({
   // first input sync; with several agents and no default, the tab asks instead.
   //
   // A lane that only holds a captured conversation has no tab (#16495), so the
-  // tab opens in a slot nothing is kept for. With none of those left it starts a
-  // new conversation over one past sessions keeps. Any other tab holding a
-  // conversation, and every one when main couldn't be asked, is left to offer its
-  // own Resume: a plain launch there would resume it, or replace it.
+  // tab opens in a slot nothing is kept for, and one no launch has claimed. With
+  // none of those left it starts a new conversation over one past sessions keeps.
+  // Any other tab holding a conversation, and every one when main's lanes couldn't
+  // be read, is left to offer its own Resume or Start: a plain launch there would
+  // resume that conversation, or take its place.
   const handleNewSession = useCallback(() => {
     const workspaceId = activeWorkspaceId;
     const reading = workspaceId
-      ? readKeptLanes(workspaceId).catch((err: unknown) => {
+      ? readKeptLanes(workspaceId).catch((err) => {
           logWarn("HelpPanel: failed to read kept lanes for a new session", err);
-          return null;
+          return "unread" as const;
         })
       : Promise.resolve(null);
-    void reading.then((mainKept) => {
+    void reading.then((read) => {
+      const mainKept = read === "unread" ? null : read;
       const { sessions, hibernateSessions } = useHelpPanelStore.getState();
       const kept =
         mainKept && workspaceId
           ? withMirroredLanes(mainKept, workspaceId, hibernateSessions)
           : null;
-      const pick = kept ? pickNewSessionSlot(kept, (slot) => slot in sessions) : null;
+      const pick =
+        kept && workspaceId
+          ? pickNewSessionSlot(
+              kept,
+              (slot) =>
+                slot in sessions || claimedHelpLaneKeys.has(assistantSlotKey(workspaceId, slot))
+            )
+          : null;
       const slot = handleOpenParallelSession(pick?.slot);
-      if (slot === null || !launchableAgentId) return;
+      if (slot === null || !launchableAgentId || read === "unread") return;
       const controller = acquireHelpSessionController(slot);
       if (pick?.slot === slot) {
         controller.launchWhenReady(

@@ -26,6 +26,7 @@ import type { HelpPastSession } from "@shared/types/ipc/help";
 import type { HelpPastSessionPickOutcome } from "@/services/actions/definitions/helpActions";
 import type { HelpSessionTab } from "./HelpSessionTabs";
 import { sessionSlotLabel, trimSessionTabTitle } from "./sessionTabTitle";
+import { claimedHelpLaneKeys } from "@/lib/helpLaneClaims";
 import { isListedAssistantAgent, type PendingCloseCost } from "./pastSessionsNote";
 import { readKeptLanes } from "./keptLanes";
 
@@ -200,12 +201,25 @@ export function useHelpSessionLanes({
   );
 
   // The tabs discovery opened for a running assistant nobody had opened (#16495),
-  // until someone selects one. Once its assistant has stopped, such a tab goes
+  // until one is on screen. Once its assistant has stopped, such a tab goes
   // again: what it held is a captured conversation, which gets no tab of its own.
   const discoveredLanesRef = useRef<{ workspaceId: string | null; slots: Set<number> }>({
     workspaceId: null,
     slots: new Set(),
   });
+  // Bumped by every read of main's lanes, so only the latest one decides which
+  // lanes are running: an older answer can't bring back a lane stopped since.
+  const laneReadRef = useRef(0);
+
+  // A lane on screen is in use, however it got there: a pick, a reveal, the
+  // neighbour a close landed on. A closed tab is no longer one discovery opened.
+  useEffect(() => {
+    discoveredLanesRef.current.slots.delete(activeSlot);
+  }, [activeSlot]);
+  useEffect(() => {
+    const { slots } = discoveredLanesRef.current;
+    for (const slot of slots) if (!openSlots.includes(slot)) slots.delete(slot);
+  }, [openSlots]);
 
   // Give a running lane nobody opened a tab, which takes it over when selected.
   const openDiscoveredLane = useCallback((workspaceId: string, slot: number) => {
@@ -220,8 +234,9 @@ export function useHelpSessionLanes({
 
   // Close the tab of each discovered lane whose assistant is no longer running.
   // Only the renderer's tab goes, never main's pointer, so the conversation stays
-  // where it was. A lane on screen stays, and one with anything of its own (a
-  // terminal, a session, a conversation, a launch under way) is the person's now.
+  // where it was. A lane on screen stays, and so does one a launch has claimed;
+  // one with anything of its own (a terminal, a session, a conversation, a
+  // launch under way) is the person's now.
   const hideStoppedDiscoveredLanes = useCallback(
     (workspaceId: string, running: ReadonlySet<number>) => {
       const discovered = discoveredLanesRef.current;
@@ -230,6 +245,7 @@ export function useHelpSessionLanes({
         if (running.has(slot)) continue;
         const state = useHelpPanelStore.getState();
         if (slot === state.activeSlot) continue;
+        if (claimedHelpLaneKeys.has(assistantSlotKey(workspaceId, slot))) continue;
         discovered.slots.delete(slot);
         const lane = state.sessions[slot];
         if (
@@ -253,11 +269,10 @@ export function useHelpSessionLanes({
   // still running, or one captured from a view that went away with the panel
   // open in this run of the app, whose tabs the person had in front of them. A
   // lane that only holds a conversation from before (an earlier scheduled run's
-  // slot, a lane from a previous run of the app) gets no tab (#16495): it is
-  // reachable from past sessions, and the reads leave it in place. Nothing
-  // launches (or bills) until the user asks: background lanes report
-  // `isOpen: false` to their controller, so auto-launch can't fire behind the
-  // tab strip either.
+  // slot, a lane from a previous run of the app) gets no tab (#16495), and the
+  // reads leave its pointer in place. Nothing launches (or bills) until the user
+  // asks: background lanes report `isOpen: false` to their controller, so
+  // auto-launch can't fire behind the tab strip either.
   //
   // One-shot per workspace, and only while the view is genuinely cold — a
   // single, unbound lane — so it can never fight the user's own tab edits.
@@ -266,15 +281,21 @@ export function useHelpSessionLanes({
     if (!activeWorkspaceId || restoredLaneWorkspaceRef.current === activeWorkspaceId) return;
     if (openSlots.length > 1 || terminalId) return;
     let cancelled = false;
+    laneReadRef.current += 1;
+    const read = laneReadRef.current;
     readKeptLanes(activeWorkspaceId)
       .then((kept) => {
         // A missing binding degrades to the pre-lane behaviour rather than throwing.
         if (!kept || cancelled || restoredLaneWorkspaceRef.current === activeWorkspaceId) return;
         restoredLaneWorkspaceRef.current = activeWorkspaceId;
         const store = useHelpPanelStore.getState();
+        const latest = read === laneReadRef.current;
         for (const lane of kept) {
-          if (lane.live) openDiscoveredLane(activeWorkspaceId, lane.slot);
-          else if (lane.panelWasOpen) store.ensureSlot(lane.slot);
+          if (lane.live) {
+            if (latest) openDiscoveredLane(activeWorkspaceId, lane.slot);
+          } else if (lane.panelWasOpen) {
+            store.ensureSlot(lane.slot);
+          }
         }
       })
       .catch((err) => {
@@ -287,22 +308,20 @@ export function useHelpSessionLanes({
 
   // A schedule's Assistant (#16169) is started by main, with no view: as its
   // run is recorded, its lane gets a tab here too, which takes it over when
-  // opened. When the run ends, a tab this opened that nobody touched goes again
+  // opened. When the run ends, a tab this opened that nobody used goes again
   // (#16495). A lane the person opened is never closed or replaced, and hiding
   // one leaves its conversation where it is.
   useEffect(() => {
     // Optional-chained like the lane listing: a missing binding adds no tabs.
     if (!activeWorkspaceId || !window.electron?.events?.on) return;
     let disposed = false;
-    // Only the latest read acts, so an older answer can't bring back a lane
-    // whose run has ended since.
-    let latestRead = 0;
     const unsubscribe = schedulesClient.onRunsChanged(({ projectId }) => {
       if (projectId !== activeWorkspaceId) return;
-      const read = ++latestRead;
+      laneReadRef.current += 1;
+      const read = laneReadRef.current;
       readKeptLanes(activeWorkspaceId)
         .then((kept) => {
-          if (!kept || disposed || read !== latestRead) return;
+          if (!kept || disposed || read !== laneReadRef.current) return;
           const running = new Set(kept.filter((lane) => lane.live).map((lane) => lane.slot));
           for (const slot of running) openDiscoveredLane(activeWorkspaceId, slot);
           hideStoppedDiscoveredLanes(activeWorkspaceId, running);
@@ -335,8 +354,6 @@ export function useHelpSessionLanes({
   }, []);
 
   const handleSelectSlot = useCallback((slot: number) => {
-    // A discovered lane someone has opened is theirs, running or not.
-    discoveredLanesRef.current.slots.delete(slot);
     useHelpPanelStore.getState().setActiveSlot(slot);
     // A lane's xterm was hidden while it was in the background, so it has no
     // trustworthy geometry until it is measured on screen. `requestFocus`

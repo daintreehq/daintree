@@ -24,6 +24,7 @@ import { extractHelpSessionErrorCode } from "@/utils/clientHelpSessionError";
 import { getDefaultAgentId } from "@/lib/resolveAgentId";
 import { loadCustomLaunchFlags } from "@/lib/assistantLaunchFlags";
 import { ensureHelpPanelRuntime } from "@/lib/helpPanelRuntimeGate";
+import { claimedHelpLaneKeys } from "@/lib/helpLaneClaims";
 import { requestTour } from "@/components/Tour/tourRequests";
 import { readTourStatus, tourCandidates } from "@/components/Tour/tourStatus";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
@@ -57,12 +58,6 @@ import {
 } from "@/components/HelpPanel/keptLanes";
 
 type HelpPanelState = ReturnType<typeof useHelpPanelStore.getState>;
-
-// Slots an in-flight help launch has chosen but not yet bound. Provisioning a
-// slot displaces whatever holds it, so a second launch picking the same slot
-// before the first binds would kill the first. Module state is per V8 context,
-// i.e. per project view — the same scope as the store these slots index.
-const claimedHelpLaneKeys = new Set<string>();
 
 function isHeldHelpSlot(state: HelpPanelState, workspaceId: string, slot: number): boolean {
   const key = assistantSlotKey(workspaceId, slot);
@@ -517,13 +512,24 @@ async function startHelpSessionWithAgent(
               priority: "high",
               context: { eventKind: "uiFeedback" },
             }
-          : {
-              type: "warning",
-              title: "Assistant tabs full",
-              message: `All ${MAX_ASSISTANT_SLOTS} assistant tabs are in use. Close one to start another session.`,
-              priority: "high",
-              context: { eventKind: "uiFeedback" },
-            }
+          : Object.keys(state.sessions).length < MAX_ASSISTANT_SLOTS
+            ? {
+                // Slots with no tab, each holding a conversation a new session
+                // would take the place of with no way back to it (#16495).
+                type: "warning",
+                title: "No room for another session",
+                message:
+                  "The other assistant slots hold conversations that past sessions can't bring back. Close a session to start another.",
+                priority: "high",
+                context: { eventKind: "uiFeedback" },
+              }
+            : {
+                type: "warning",
+                title: "Assistant tabs full",
+                message: `All ${MAX_ASSISTANT_SLOTS} assistant tabs are in use. Close one to start another session.`,
+                priority: "high",
+                context: { eventKind: "uiFeedback" },
+              }
       );
       return { outcome: busy.size > 0 ? "unavailable" : "lanes-full" };
     }

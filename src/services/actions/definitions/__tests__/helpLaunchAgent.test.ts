@@ -1673,14 +1673,16 @@ describe("help.newSessionWithAgent (#13442)", () => {
     bindLane(0, "term-0", "claude");
     for (const slot of [1, 2, 3, 4, 5]) kept[slot] = "claude";
 
-    expect(await run("codex")).toEqual({ outcome: "started" });
+    expect(await run("claude")).toEqual({ outcome: "started" });
 
-    // Never a plain launch there, which would resume what the slot held.
+    // Never a plain launch there, which would resume the Claude conversation the
+    // slot held, nor one that takes the slot from whoever started in it since.
     expect(controllers.get(1)?.launchWhenReady).toHaveBeenCalledWith({
-      agentId: "codex",
+      agentId: "claude",
       replaceExisting: true,
       requestedId: expect.stringMatching(/^terminal-/),
       checkVersion: true,
+      vacantOnly: true,
       pinAgent: true,
     });
     expect(useHelpPanelStore.getState().sessions[1]).toBeDefined();
@@ -1693,6 +1695,10 @@ describe("help.newSessionWithAgent (#13442)", () => {
     expect(await run("codex")).toEqual({ outcome: "lanes-full" });
 
     expect(controllers.size).toBe(0);
+    // One tab is open, so it doesn't say all six are.
+    expect(mockNotify).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "No room for another session" })
+    );
   });
 
   it("holds the tab it chose until the launch settles", async () => {

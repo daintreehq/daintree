@@ -921,6 +921,7 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
       replaceExisting: true,
       requestedId: expect.stringMatching(/^terminal-/),
       checkVersion: true,
+      vacantOnly: true,
     });
   });
 
@@ -939,10 +940,28 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
       fireEvent.click(newSessionItem());
     });
 
-    // The tab still opens, left to offer that conversation's own Resume.
+    // The tab still opens, launching nothing over what its slot holds.
     expect(helpPanelState.openSlot).toHaveBeenCalledWith(undefined);
     expect(acquireHelpSessionController(1)["_queuedLaunch"]).toBeNull();
     expect(mockProvisionSession).not.toHaveBeenCalled();
+  });
+
+  it("opens the tab but launches nothing when main's lanes can't be read (#16495)", async () => {
+    setUpStripNewSession();
+    keepLanes({});
+    const help = (window as unknown as { electron: { help: Record<string, unknown> } }).electron
+      .help;
+    help.listPendingHibernationSlots = vi.fn(async () => {
+      throw new Error("ipc down");
+    });
+
+    render(<HelpPanel width={380} />);
+    await act(async () => {
+      fireEvent.click(newSessionItem());
+    });
+
+    expect(helpPanelState.openSlot).toHaveBeenCalledWith(undefined);
+    expect(acquireHelpSessionController(1)["_queuedLaunch"]).toBeNull();
   });
 
   it("first-run starter-prompt chip launches without turning on auto-start (#10699, #14976)", async () => {

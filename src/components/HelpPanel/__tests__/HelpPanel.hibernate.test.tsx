@@ -444,6 +444,7 @@ vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 import { HelpPanel } from "../HelpPanel";
 import { assistantSlotKey as slotKey } from "@shared/config/assistantSlots";
 import { __resetHelpSessionControllersForTests } from "@/controllers/helpSessionControllerRegistry";
+import { claimedHelpLaneKeys } from "@/lib/helpLaneClaims";
 
 // Drain the full async chain (pull-on-mount peek → setState → re-render →
 // fire-effect → async launch) by yielding to a macrotask: setTimeout(0) runs
@@ -2367,27 +2368,19 @@ describe("HelpPanel — cold-view lane restore (#12108)", () => {
   });
 
   it("gives a cold view no tab for a lane that only holds a captured conversation (#16495)", async () => {
-    // Slots 1 and 3 are where earlier scheduled runs ran and exited; slot 2's
-    // assistant is still running with no view. Only the running one is in use.
+    // Slots 1 and 3 are where earlier scheduled runs ran and exited (slot 3's
+    // never learned its conversation id); slot 2's assistant is still running
+    // with no view. Only the running one is in use.
     helpPanelState.terminalId = null;
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
     mockListPendingHibernationSlots.mockResolvedValue([1, 2, 3]);
-    mockPeekPendingHibernation.mockImplementation(async (_projectId: string, slot: number) =>
-      slot === 2
-        ? {
-            agentId: "claude",
-            agentSessionId: "",
-            cwd: "/tmp/help",
-            panelWasOpen: false,
-            live: true,
-          }
-        : {
-            agentId: "claude",
-            agentSessionId: `conv-${slot}`,
-            cwd: "/tmp/help",
-            panelWasOpen: false,
-          }
-    );
+    mockPeekPendingHibernation.mockImplementation(async (_projectId: string, slot: number) => ({
+      agentId: "claude",
+      agentSessionId: slot === 3 ? "" : `conv-${slot}`,
+      cwd: "/tmp/help",
+      panelWasOpen: false,
+      ...(slot === 2 ? { live: true } : {}),
+    }));
 
     await act(async () => {
       render(<HelpPanel width={380} />);
@@ -2411,18 +2404,16 @@ describe("HelpPanel — cold-view lane restore (#12108)", () => {
         return () => listeners.splice(listeners.indexOf(listener), 1);
       }),
     };
-    mockListPendingHibernationSlots.mockResolvedValue([1, 2]);
-    mockPeekPendingHibernation.mockImplementation(async (_projectId: string, slot: number) =>
-      slot === 2
-        ? {
-            agentId: "claude",
-            agentSessionId: "",
-            cwd: "/tmp/help",
-            panelWasOpen: false,
-            live: true,
-          }
-        : { agentId: "claude", agentSessionId: "conv-1", cwd: "/tmp/help", panelWasOpen: false }
-    );
+    // Slot 3 was captured from a view that went with the panel open: a cold
+    // view's tab to restore, never one a run change adds.
+    mockListPendingHibernationSlots.mockResolvedValue([1, 2, 3]);
+    mockPeekPendingHibernation.mockImplementation(async (_projectId: string, slot: number) => ({
+      agentId: "claude",
+      agentSessionId: `conv-${slot}`,
+      cwd: "/tmp/help",
+      panelWasOpen: slot === 3,
+      ...(slot === 2 ? { live: true } : {}),
+    }));
 
     try {
       await act(async () => {
@@ -2437,6 +2428,59 @@ describe("HelpPanel — cold-view lane restore (#12108)", () => {
 
       expect(helpPanelState.ensureSlot).toHaveBeenCalledWith(2);
       expect(helpPanelState.ensureSlot).not.toHaveBeenCalledWith(1);
+      expect(helpPanelState.ensureSlot).not.toHaveBeenCalledWith(3);
+    } finally {
+      delete electron.events;
+    }
+  });
+
+  it("lets a newer read win over a cold view's older one that saw the run still going (#16495)", async () => {
+    helpPanelState.terminalId = null;
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    const listeners: Array<(payload: { projectId: string; scheduleIds: string[] }) => void> = [];
+    const electron = (window as unknown as { electron: Record<string, unknown> }).electron;
+    electron.events = {
+      on: vi.fn((channel: string, listener: (typeof listeners)[number]) => {
+        if (channel === "scheduled-runs:changed") listeners.push(listener);
+        return () => listeners.splice(listeners.indexOf(listener), 1);
+      }),
+    };
+    const entry = {
+      agentId: "claude",
+      agentSessionId: "conv-1",
+      cwd: "/tmp/help",
+      panelWasOpen: false,
+    };
+    let answerColdRead: (value: typeof entry & { live: true }) => void = () => {};
+    let slotOnePeeks = 0;
+    mockListPendingHibernationSlots.mockResolvedValue([1]);
+    mockPeekPendingHibernation.mockImplementation(async (_projectId: string, slot: number) => {
+      if (slot !== 1) return null;
+      slotOnePeeks += 1;
+      // The cold view's read is answered last, and saw the run still going.
+      if (slotOnePeeks === 1) return new Promise((resolve) => (answerColdRead = resolve));
+      return entry;
+    });
+
+    try {
+      await act(async () => {
+        render(<HelpPanel width={380} />);
+      });
+      await flushAsyncWork();
+      expect(slotOnePeeks).toBe(1);
+
+      await act(async () => {
+        for (const listener of listeners) listener({ projectId: "proj-1", scheduleIds: ["s"] });
+      });
+      await flushAsyncWork();
+      expect(slotOnePeeks).toBe(2);
+
+      await act(async () => {
+        answerColdRead({ ...entry, live: true });
+      });
+      await flushAsyncWork();
+
+      expect(helpPanelState.ensureSlot).not.toHaveBeenCalledWith(1);
     } finally {
       delete electron.events;
     }
@@ -2446,9 +2490,10 @@ describe("HelpPanel — cold-view lane restore (#12108)", () => {
     ["nobody touched it", {}, true],
     ["it is on screen", { onScreen: true }, false],
     ["its conversation was touched", { touched: true }, false],
+    ["a launch has claimed it", { claimed: true }, false],
   ] as const)(
     "closes the tab it opened for a scheduled run once the run ends, unless %s (#16495)",
-    async (_case, lane: { onScreen?: boolean; touched?: boolean }, hidden) => {
+    async (_case, lane: { onScreen?: boolean; touched?: boolean; claimed?: boolean }, hidden) => {
       helpPanelState.terminalId = "term-live";
       helpPanelState.agentId = "claude";
       projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
@@ -2504,6 +2549,7 @@ describe("HelpPanel — cold-view lane restore (#12108)", () => {
         expect(helpPanelState.ensureSlot).toHaveBeenCalledWith(1);
 
         if (lane.onScreen) helpPanelState.activeSlot = 1;
+        if (lane.claimed) claimedHelpLaneKeys.add(slotKey("proj-1", 1));
         running = false;
         await runChanged();
 
@@ -2516,6 +2562,7 @@ describe("HelpPanel — cold-view lane restore (#12108)", () => {
         delete electron.events;
         helpPanelState.sessions = {};
         helpPanelState.activeSlot = 0;
+        claimedHelpLaneKeys.clear();
       }
     }
   );

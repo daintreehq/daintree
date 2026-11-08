@@ -102,8 +102,10 @@ export function pickNewSessionSlot(
 
 /**
  * A launch that starts a new conversation in a lane something is kept for.
- * Reserved, like "New session": it never adopts or resumes, and drops the lane's
- * pointer. Through the version gate, which a lane with no terminal hasn't passed.
+ * Reserved, like "New session", so it never adopts or resumes; vacant-only, so
+ * it refuses a lane someone has taken since and leaves the kept conversation's
+ * pointer until the new session spawns. Through the version gate, which a lane
+ * with no terminal hasn't passed.
  */
 export function freshSessionLaunch(agentId: string): HelpLaunchOptions {
   return {
@@ -111,5 +113,6 @@ export function freshSessionLaunch(agentId: string): HelpLaunchOptions {
     replaceExisting: true,
     requestedId: `terminal-${crypto.randomUUID()}`,
     checkVersion: true,
+    vacantOnly: true,
   };
 }

@@ -272,6 +272,14 @@ export interface HelpLaunchOptions {
   checkVersion?: boolean;
   /** For run-anyway: bypass missing-CLI guard. */
   force?: boolean;
+  /**
+   * Provision only while nothing holds the lane (#16495): a new session started
+   * over a conversation main keeps for a slot with no tab, where another view's
+   * assistant or a scheduled run may have started since. With `requestedId` the
+   * lane's pointer isn't discarded up front: main replaces it once the new session
+   * spawns, so a refusal or a failed launch leaves that conversation in place.
+   */
+  vacantOnly?: boolean;
   /** For new-session / run-anyway: ask the dispatcher to activate the dock. */
   activateDock?: boolean;
   /** Remove the existing terminal+session before launching the new one. */
@@ -438,6 +446,8 @@ export class HelpSessionController {
   private _lastResumeTarget: HelpLaunchOptions["resumeTarget"] = undefined;
   /** The agent the latest launch was pinned to (`pinAgent`), until it goes live. */
   private _lastPinnedAgentId: string | null = null;
+  /** The latest launch was a vacant-only fresh start, which Retry repeats as one. */
+  private _lastVacantFresh = false;
 
   private readonly _versionGate = new HelpVersionGate({
     getSnapshot: () => this._snapshot,
@@ -599,6 +609,19 @@ export class HelpSessionController {
   retryLaunch(agentId: string): void {
     const resumeTarget = this._lastResumeTarget;
     const pinAgent = this._lastPinnedAgentId === agentId;
+    // A plain relaunch would resume the conversation the fresh start was meant to
+    // leave alone, or take the lane from whoever holds it now.
+    if (this._lastVacantFresh) {
+      this.launch({
+        agentId,
+        replaceExisting: true,
+        requestedId: `terminal-${crypto.randomUUID()}`,
+        checkVersion: true,
+        vacantOnly: true,
+        ...(pinAgent ? { pinAgent } : {}),
+      });
+      return;
+    }
     this.launch(
       resumeTarget
         ? { agentId, replaceExisting: true, resumeTarget }
@@ -960,6 +983,7 @@ export class HelpSessionController {
     this._isLaunching = true;
     this._lastResumeTarget = options.resumeTarget;
     this._lastPinnedAgentId = options.pinAgent ? launchAgentId : null;
+    this._lastVacantFresh = options.vacantOnly === true && options.requestedId !== undefined;
 
     // A launch supersedes any revoked-session banner — the user is starting a
     // fresh session, so the prior session's revocation no longer applies (#10017).
@@ -996,7 +1020,7 @@ export class HelpSessionController {
       // a live read would strand the scratch's entry (#11068).
       if (reservedId) {
         useHelpPanelStore.getState().clearHibernateSession(launchProject.id, this.slot);
-        this._discardConversation(launchProject.id);
+        if (!options.vacantOnly) this._discardConversation(launchProject.id);
         this._patch({ showResumeBanner: false });
       }
     }
@@ -1636,7 +1660,8 @@ export class HelpSessionController {
         launchProject,
         launchAgentId,
         launchContext,
-        this.slot
+        this.slot,
+        options.vacantOnly === true
       );
       if (gen !== this._launchGen) {
         if (outcome.ok) session = outcome.session;

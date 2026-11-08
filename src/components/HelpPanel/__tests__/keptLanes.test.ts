@@ -26,30 +26,39 @@ describe("readKeptLanes", () => {
   });
 
   it("tells a running assistant from a captured conversation, dropping a slot gone since the listing", async () => {
+    const list = vi.fn(async () => [1, 2, 3, 4]);
+    const peek = vi.fn(async (_projectId: string, slot: number) => {
+      if (slot === 3) return null;
+      return {
+        agentId: "claude",
+        agentSessionId: slot === 4 ? "" : `conv-${slot}`,
+        cwd: "/help",
+        panelWasOpen: slot === 1,
+        ...(slot === 2 ? { live: true } : {}),
+      };
+    });
     (window as unknown as { electron: unknown }).electron = {
-      help: {
-        listPendingHibernationSlots: vi.fn(async () => [1, 2, 3]),
-        peekPendingHibernation: vi.fn(async (_projectId: string, slot: number) => {
-          if (slot === 3) return null;
-          return {
-            agentId: "claude",
-            agentSessionId: slot === 2 ? "" : "conv-1",
-            cwd: "/help",
-            panelWasOpen: slot === 1,
-            ...(slot === 2 ? { live: true } : {}),
-          };
-        }),
-      },
+      help: { listPendingHibernationSlots: list, peekPendingHibernation: peek },
     };
 
     expect(await readKeptLanes("proj-1")).toEqual([
-      lane(1, { agentSessionId: "conv-1", panelWasOpen: true }),
-      lane(2, { agentSessionId: "", live: true }),
+      lane(1, { panelWasOpen: true }),
+      lane(2, { live: true }),
+      lane(4, { agentSessionId: "" }),
+    ]);
+    expect(list).toHaveBeenCalledWith("proj-1");
+    expect(peek.mock.calls).toEqual([
+      ["proj-1", 1],
+      ["proj-1", 2],
+      ["proj-1", 3],
+      ["proj-1", 4],
     ]);
   });
 
   it("is null without the bindings, and rejects when a read fails", async () => {
-    (window as unknown as { electron: unknown }).electron = { help: {} };
+    (window as unknown as { electron: unknown }).electron = {
+      help: { listPendingHibernationSlots: vi.fn(async () => [1]) },
+    };
     expect(await readKeptLanes("proj-1")).toBeNull();
 
     (window as unknown as { electron: unknown }).electron = {
@@ -81,8 +90,8 @@ describe("pickNewSessionSlot", () => {
       open.includes(slot);
 
   it("takes the lowest slot with no tab that nothing is kept for", () => {
-    expect(pickNewSessionSlot([lane(1), lane(2)], tabs(0))).toEqual({
-      slot: 3,
+    expect(pickNewSessionSlot([lane(1), lane(2), lane(4)], tabs(0, 3))).toEqual({
+      slot: 5,
       replacesKept: false,
     });
   });
@@ -99,11 +108,13 @@ describe("pickNewSessionSlot", () => {
   });
 
   it("never takes a slot with a tab, and is null when nothing is left", () => {
-    expect(pickNewSessionSlot([lane(3)], tabs(0, 1, 2, 4, 5))).toEqual({
-      slot: 3,
+    // Slot 1's conversation is replaceable but its tab is open: never a target.
+    expect(pickNewSessionSlot([lane(1), lane(4)], tabs(0, 1, 2, 3, 5))).toEqual({
+      slot: 4,
       replacesKept: true,
     });
-    expect(pickNewSessionSlot([lane(3, { live: true })], tabs(0, 1, 2, 4, 5))).toBeNull();
+    expect(pickNewSessionSlot([lane(4, { live: true })], tabs(0, 1, 2, 3, 5))).toBeNull();
+    expect(pickNewSessionSlot([], tabs(0, 1, 2, 3, 4, 5))).toBeNull();
   });
 });
 

@@ -49,7 +49,9 @@ export async function provisionHelpSession(
    * prior session in this lane, so naming it is what lets sibling sessions
    * survive a launch.
    */
-  slot: number = DEFAULT_ASSISTANT_SLOT
+  slot: number = DEFAULT_ASSISTANT_SLOT,
+  /** Refuse, rather than displace, a session already in that lane. */
+  vacantOnly = false
 ): Promise<ProvisionOutcome> {
   try {
     const result = await window.electron.help.provisionSession({
@@ -58,6 +60,7 @@ export async function provisionHelpSession(
       agentId,
       slot,
       ...(context && { context }),
+      ...(vacantOnly && { vacantOnly: true }),
     });
     if (!result) {
       return {
