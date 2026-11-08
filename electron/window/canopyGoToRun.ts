@@ -121,7 +121,9 @@ function ownerRedirect(
 
 /**
  * Lands the intent in the window holding the workspace; false when none does.
- * Settles once a switch main makes to get it there has.
+ * A switch main makes to get it there fails the request if it fails in time.
+ * It is waited on for as long as a landing is, no longer: it can be held on a
+ * prompt in that window, and the run is on its way meanwhile.
  */
 async function landInHolder(
   registry: WindowRegistry,
@@ -133,7 +135,17 @@ async function landInHolder(
   const landed = landInOwner(registry, workspaceId, intent, (owner) => {
     pending.switching = redirect(owner);
   });
-  await pending.switching;
+  if (pending.switching) {
+    let timer: NodeJS.Timeout | undefined;
+    const waited = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, WORKSPACE_LANDING_TIMEOUT_MS);
+    });
+    try {
+      await Promise.race([pending.switching, waited]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
   return landed;
 }
 

@@ -57,6 +57,7 @@ import {
   goToCanopyRun,
   setCanopyRunWindowOpener,
 } from "../canopyGoToRun.js";
+import { WORKSPACE_LANDING_TIMEOUT_MS } from "../workspaceLanding.js";
 
 const PROJECT = "a".repeat(64);
 const OTHER = "b".repeat(64);
@@ -297,8 +298,13 @@ describe("Go to pane from the Canopy window (#16337)", () => {
         (error: { code?: string }) => error.code
       );
 
-    const first = attempt();
+    let firstOutcome: string | undefined;
+    const first = attempt().then((outcome) => {
+      firstOutcome = outcome;
+      return outcome;
+    });
     await vi.advanceTimersByTimeAsync(CANOPY_RUN_OPENING_TIMEOUT_MS - 1);
+    expect(firstOutcome).toBeUndefined();
     expect(opener).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(await first).toBe("PROJECT_OPEN_FAILED");
@@ -308,6 +314,34 @@ describe("Go to pane from the Canopy window (#16337)", () => {
     expect(opener).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(CANOPY_RUN_OPENING_TIMEOUT_MS);
     expect(await second).toBe("PROJECT_OPEN_FAILED");
+  });
+
+  it("opens afresh for a press that was waiting on an opening that stalled", async () => {
+    vi.useFakeTimers();
+    const opened: Array<ReturnType<typeof addWindow>> = [];
+    const opener = vi
+      .fn<(workspaceId: string) => Promise<number | null>>()
+      .mockImplementationOnce(() => new Promise<number | null>(() => {}))
+      .mockImplementation(async (workspaceId) => {
+        const window = addWindow(workspaceId);
+        nav.hydrated.add(window.appWebContents.id);
+        opened.push(window);
+        return window.windowId;
+      });
+    setCanopyRunWindowOpener(opener);
+
+    const first = goToCanopyRun({ workspaceId: PROJECT, runId: "agent-1" }).then(
+      () => "resolved",
+      (error: { code?: string }) => error.code
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    const second = goToCanopyRun({ workspaceId: PROJECT, runId: "agent-2" });
+    await vi.advanceTimersByTimeAsync(CANOPY_RUN_OPENING_TIMEOUT_MS);
+
+    expect(await first).toBe("PROJECT_OPEN_FAILED");
+    await second;
+    expect(opener).toHaveBeenCalledTimes(2);
+    expect(focusedPanes(opened[0]!.appWebContents)).toEqual(["agent-2"]);
   });
 
   it("opens nothing for a project that is gone, or whose folder is missing", async () => {
@@ -378,6 +412,23 @@ describe("Go to pane from the Canopy window, for a run in a scratch", () => {
     expect(owner.pvm.setPendingFocusIntent).toHaveBeenCalledWith(SCRATCH, FOCUS);
     expect(nav.switchToLocal).toHaveBeenCalledWith(owner.windowId, SCRATCH);
     expect(owner.appWebContents.send).not.toHaveBeenCalled();
+  });
+
+  it("stops waiting on that window's way back once a landing would have", async () => {
+    vi.useFakeTimers();
+    const owner = addWindow(null, [SCRATCH]);
+    nav.remoteWindows.add(owner.windowId);
+    nav.switchToLocal.mockImplementationOnce(() => new Promise(() => {}));
+
+    let settled = false;
+    const going = goToCanopyRun({ workspaceId: SCRATCH, runId: RUN }).then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(WORKSPACE_LANDING_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await going;
+    expect(settled).toBe(true);
   });
 
   it("says so when that window couldn't come back to this machine", async () => {

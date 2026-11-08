@@ -384,15 +384,22 @@ describe("a switch asked from a window with no project shell (#16337)", () => {
     async (_label, entry, error) => {
       registerHostProjectPickerHost();
       m.hosts = [entry];
-      m.switchWindowHost.mockRejectedValueOnce(error).mockResolvedValue({ outcome: "switched" });
+      // The retry fails the same way: its toast still offers only what runs here.
+      m.switchWindowHost.mockRejectedValue(error);
 
       await goTo();
 
       expect(labels()).toEqual(["Retry"]);
-      (
-        m.notify.mock.calls[0]![0] as { actions: Array<{ onClick: () => void }> }
-      ).actions[0]!.onClick();
-      await vi.waitFor(() => expect(m.switchWindowHost).toHaveBeenCalledTimes(2));
+      const retry = (m.notify.mock.calls[0]![0] as { actions: Array<{ onClick: () => void }> })
+        .actions[0]!;
+      retry.onClick();
+      await vi.waitFor(() => expect(m.notify).toHaveBeenCalledTimes(2));
+      expect(m.switchWindowHost).toHaveBeenCalledTimes(2);
+      expect(
+        (m.notify.mock.calls[1]![0] as { actions: Array<{ label: string }> }).actions.map(
+          (action) => action.label
+        )
+      ).toEqual(["Retry"]);
       expect(m.switchWindowHost.mock.calls[1]![0]).toEqual({
         hostId: "h1",
         newWindow: true,
@@ -405,6 +412,7 @@ describe("a switch asked from a window with no project shell (#16337)", () => {
   );
 
   it("still offers this machine's own update, which runs anywhere", async () => {
+    m.checkForUpdates.mockClear();
     m.hosts = [
       studio({
         status: "version-mismatch",
@@ -419,5 +427,11 @@ describe("a switch asked from a window with no project shell (#16337)", () => {
     await goTo();
 
     expect(labels()).toEqual(["Update this machine"]);
+    (
+      m.notify.mock.calls[0]![0] as { actions: Array<{ onClick: () => void }> }
+    ).actions[0]!.onClick();
+    expect(m.checkForUpdates).toHaveBeenCalledTimes(1);
+    expect(m.dispatchEvent).not.toHaveBeenCalled();
+    expect(takePendingHostUpdate()).toBeNull();
   });
 });
