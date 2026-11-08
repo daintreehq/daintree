@@ -331,6 +331,7 @@ beforeEach(() => {
   filterStore.setPrSearchQuery("");
   filterStore.setIssueFilter("open");
   filterStore.setPrFilter("open");
+  filterStore.setPrScope("all");
   filterStore.setIssueSortOrder("created");
   filterStore.setPrSortOrder("created");
   worktreeMap.clear();
@@ -4192,5 +4193,217 @@ describe("cold panel skeleton parity (#14415)", () => {
     expect(shape.checked).toBe("Closed");
     expect(shape.sortLifted).toBe(true);
     expect(shape.search).toMatchObject({ text: "skeleton", clear: true });
+  });
+});
+
+describe("GitHubResourceList — Mine and Needs my review (#16384)", () => {
+  const lastPRSearch = () => mockListPRs.mock.calls.at(-1)?.[0]?.search;
+  const chip = (name: string) => screen.getByRole("button", { name });
+
+  it("narrows to the user's own PRs with one click and returns to the full list on a second", async () => {
+    mockListPRs.mockResolvedValue(makeResponse([]));
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+    await waitFor(() => expect(mockListPRs).toHaveBeenCalled());
+    expect(lastPRSearch()).toBeUndefined();
+    expect(chip("Mine").getAttribute("aria-pressed")).toBe("false");
+
+    act(() => {
+      chip("Mine").click();
+    });
+    await waitFor(() => expect(lastPRSearch()).toBe("author:@me"));
+    expect(chip("Mine").getAttribute("aria-pressed")).toBe("true");
+    expect(useGitHubFilterStore.getState().prScope).toBe("mine");
+
+    act(() => {
+      chip("Mine").click();
+    });
+    await waitFor(() => expect(lastPRSearch()).toBeUndefined());
+    expect(chip("Mine").getAttribute("aria-pressed")).toBe("false");
+    expect(useGitHubFilterStore.getState().prScope).toBe("all");
+  });
+
+  it("asks for PRs requesting the user's review", async () => {
+    mockListPRs.mockResolvedValue(makeResponse([]));
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+    await waitFor(() => expect(mockListPRs).toHaveBeenCalled());
+
+    act(() => {
+      chip("Needs my review").click();
+    });
+    await waitFor(() => expect(lastPRSearch()).toBe("review-requested:@me"));
+  });
+
+  it("keeps the two scopes exclusive", async () => {
+    mockListPRs.mockResolvedValue(makeResponse([]));
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+    await waitFor(() => expect(mockListPRs).toHaveBeenCalled());
+
+    act(() => {
+      chip("Mine").click();
+    });
+    act(() => {
+      chip("Needs my review").click();
+    });
+    await waitFor(() => expect(lastPRSearch()).toBe("review-requested:@me"));
+    expect(chip("Mine").getAttribute("aria-pressed")).toBe("false");
+    expect(chip("Needs my review").getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("combines with the state filter and the search box", async () => {
+    mockListPRs.mockResolvedValue(makeResponse([]));
+    useGitHubFilterStore.getState().setPrFilter("merged");
+    useGitHubFilterStore.getState().setPrSearchQuery("retry");
+    useGitHubFilterStore.getState().setPrScope("mine");
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    await waitFor(() => expect(lastPRSearch()).toBe("author:@me retry"));
+    expect(mockListPRs.mock.calls.at(-1)?.[0]?.state).toBe("merged");
+  });
+
+  it("is not offered on the issue list, which ignores a stored PR scope", async () => {
+    mockListIssues.mockResolvedValue(makeResponse([]));
+    useGitHubFilterStore.getState().setPrScope("mine");
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => expect(mockListIssues).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "Mine" })).toBeNull();
+    expect(mockListIssues.mock.calls.at(-1)?.[0]?.search).toBeUndefined();
+  });
+
+  it("leaves the open-count badge alone, since a scoped page is not the open total", async () => {
+    mockListPRs.mockResolvedValue(makeResponse([], 7));
+    useGitHubFilterStore.getState().setPrScope("mine");
+    const onCountUpdate = vi.fn();
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" onCountUpdate={onCountUpdate} />);
+
+    await waitFor(() => expect(mockListPRs).toHaveBeenCalled());
+    await act(async () => {});
+    expect(onCountUpdate).not.toHaveBeenCalled();
+  });
+
+  it("never paints the unscoped cached page for a scoped view, nor writes the scoped page into it", async () => {
+    const prKey = buildCacheKey("/test/proj", "pr", "open", "created");
+    setCache(prKey, {
+      items: [makeIssue(40)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now(),
+    });
+    useGitHubFilterStore.getState().setPrScope("mine");
+    let release: (page: Page<Issue>) => void = () => {};
+    mockListPRs.mockReturnValue(new Promise<Page<Issue>>((resolve) => (release = resolve)));
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    await waitFor(() => expect(lastPRSearch()).toBe("author:@me"));
+    expect(screen.queryByTestId("item-40")).toBeNull();
+
+    await act(async () => {
+      release(makeResponse([makeIssue(41)]));
+    });
+    await waitFor(() => expect(screen.getByTestId("item-41")).toBeTruthy());
+    expect(getCache(prKey)?.items.map((i) => i.number)).toEqual([40]);
+  });
+
+  it("restores the unscoped cached page when the scope is cleared", async () => {
+    const prKey = buildCacheKey("/test/proj", "pr", "open", "created");
+    setCache(prKey, {
+      items: [makeIssue(40)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now(),
+    });
+    // Only the first unscoped request answers: the one after clearing the scope
+    // stays open, so item 40 can only come back from the cached slot.
+    let unscopedCalls = 0;
+    mockListPRs.mockImplementation((opts: ListOptions) => {
+      if (opts.search) return Promise.resolve(makeResponse([makeIssue(41)]));
+      unscopedCalls += 1;
+      return unscopedCalls === 1
+        ? Promise.resolve(makeResponse([makeIssue(40)]))
+        : new Promise<Page<Issue>>(() => {});
+    });
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+    await waitFor(() => expect(screen.getByTestId("item-40")).toBeTruthy());
+
+    act(() => {
+      chip("Mine").click();
+    });
+    await waitFor(() => expect(screen.getByTestId("item-41")).toBeTruthy());
+    expect(screen.queryByTestId("item-40")).toBeNull();
+
+    act(() => {
+      chip("Mine").click();
+    });
+    await waitFor(() => expect(screen.getByTestId("item-40")).toBeTruthy());
+  });
+
+  it("says an exact number lookup is not narrowed by the scope", async () => {
+    mockGetPRByNumber.mockResolvedValue(makeIssue(12));
+    useGitHubFilterStore.getState().setPrScope("mine");
+    useGitHubFilterStore.getState().setPrSearchQuery("#12");
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Showing PR #12 · Mine not applied")).toBeTruthy();
+    });
+  });
+
+  it("names the scope in the empty state and clears it with the action", async () => {
+    mockListPRs.mockResolvedValue(makeResponse([]));
+    useGitHubFilterStore.getState().setPrScope("needs-review");
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("No pull requests waiting on your review in this view")).toBeTruthy();
+    });
+    expect(screen.queryByText("No open pull requests")).toBeNull();
+    act(() => {
+      screen.getByRole("button", { name: "Clear filters" }).click();
+    });
+    expect(useGitHubFilterStore.getState().prScope).toBe("all");
+  });
+
+  it("leaves the scope off the browser query for an exact number lookup", async () => {
+    mockGetPRByNumber.mockResolvedValue(makeIssue(12));
+    dispatchMock.mockResolvedValue({ ok: true, result: undefined });
+    useGitHubFilterStore.getState().setPrScope("mine");
+    useGitHubFilterStore.getState().setPrSearchQuery("#12");
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+    await waitFor(() => expect(screen.getByText(/Mine not applied/)).toBeTruthy());
+
+    act(() => {
+      screen.getByRole("button", { name: "View on GitHub" }).click();
+    });
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "forge.openPRs",
+      { projectPath: "/test/proj", query: "#12", state: "open" },
+      { source: "user" }
+    );
+  });
+
+  it("hands the scope to GitHub with Open on GitHub", async () => {
+    mockListPRs.mockResolvedValue(makeResponse([]));
+    dispatchMock.mockResolvedValue({ ok: true, result: undefined });
+    useGitHubFilterStore.getState().setPrScope("mine");
+    useGitHubFilterStore.getState().setPrSearchQuery("retry");
+
+    render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
+    await waitFor(() => expect(mockListPRs).toHaveBeenCalled());
+
+    act(() => {
+      screen.getByRole("button", { name: "View on GitHub" }).click();
+    });
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "forge.openPRs",
+      { projectPath: "/test/proj", query: "author:@me retry", state: "open" },
+      { source: "user" }
+    );
   });
 });

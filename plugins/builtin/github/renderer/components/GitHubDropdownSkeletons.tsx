@@ -167,6 +167,11 @@ interface ResourceRowsSkeletonProps extends SkeletonProps {
   type: "issue" | "pr";
 }
 
+const SCOPE_CHIPS = [
+  { id: "mine", label: "Mine" },
+  { id: "needs-review", label: "Needs my review" },
+] as const;
+
 export function GitHubResourceListSkeleton({
   count,
   immediate,
@@ -181,6 +186,7 @@ export function GitHubResourceListSkeleton({
   const sortOrder = useGitHubFilterStore((s) =>
     type === "issue" ? s.issueSortOrder : s.prSortOrder
   );
+  const prScope = useGitHubFilterStore((s) => s.prScope);
   const searchQuery = useGitHubFilterStore((s) =>
     type === "issue" ? s.issueSearchQuery : s.prSearchQuery
   );
@@ -296,6 +302,29 @@ export function GitHubResourceListSkeleton({
             </div>
           ))}
         </div>
+
+        {/* The scope chips as the live panel draws them, selection weight
+            included, so the rows below do not move when the list lands. */}
+        {type === "pr" && (
+          <div className="flex items-center gap-1.5" aria-hidden="true">
+            {SCOPE_CHIPS.map((chip) => (
+              <div
+                key={chip.id}
+                data-scope-chip={chip.id}
+                data-checked={chip.id === prScope ? "" : undefined}
+                className={cn(
+                  "inline-flex items-center rounded-full border border-text-secondary px-2 py-0.5 text-2xs whitespace-nowrap",
+                  CONTROL_STAND_IN,
+                  chip.id === prScope
+                    ? "bg-filter-selected-bg-strong font-medium text-text-primary"
+                    : "bg-overlay-soft text-text-secondary"
+                )}
+              >
+                {chip.label}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* List skeleton rows */}
