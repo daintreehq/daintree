@@ -213,8 +213,7 @@ export const terminalScenarios: PerfScenario[] = [
         metrics: {
           chunkCount: burstObserved.chunksFed + sustainedObserved.chunksFed,
           forwardedBytes: burstObserved.emittedChars + sustainedObserved.emittedChars,
-          retainedBytes:
-            burstObserved.forensicTail.length + sustainedObserved.forensicTail.length,
+          retainedBytes: burstObserved.forensicTail.length + sustainedObserved.forensicTail.length,
           oscResponseCount: burstObserved.oscResponses + sustainedObserved.oscResponses,
           promptReturnCount: burstObserved.promptReturns + sustainedObserved.promptReturns,
           ...misses,
