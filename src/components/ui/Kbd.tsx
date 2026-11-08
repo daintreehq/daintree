@@ -2,6 +2,7 @@ import { Fragment } from "react";
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { describeChord, parseChord } from "@/lib/kbdShortcut";
+import { useKeyLabels } from "@/lib/keyboardLayout";
 import type { RootAttributes } from "@/components/ui/rootAttributes";
 
 export const KBD_CLASS =
@@ -100,7 +101,8 @@ export function KbdChord({
   rootAttributes,
 }: KbdChordProps) {
   const mac = isMacProp ?? isMac();
-  const steps = parseChord(shortcut, mac);
+  const keyLabels = useKeyLabels();
+  const steps = parseChord(shortcut, mac, keyLabels);
   if (steps.length === 0) return null;
   const compact = density === "compact";
   const bare = density === "bare";
@@ -129,7 +131,7 @@ export function KbdChord({
     >
       {/* Spoken, not the raw string: "Cmd+Shift+P" and the glyphs both read
           badly aloud; "Command Shift P" is what a listener needs. */}
-      <span className="sr-only">{ariaLabel ?? describeChord(shortcut, mac)}</span>
+      <span className="sr-only">{ariaLabel ?? describeChord(shortcut, mac, keyLabels)}</span>
       {steps.map((tokens, stepIndex) => (
         <Fragment key={stepIndex}>
           {/* In `bare` the comma reads as punctuation — attached to the step

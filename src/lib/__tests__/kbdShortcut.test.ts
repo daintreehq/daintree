@@ -7,6 +7,8 @@ import {
   isChordPrefix,
   normalizeQuery,
   comboToAriaKeyshortcuts,
+  formatChordText,
+  labelWithShortcut,
 } from "../kbdShortcut";
 import { buildDefaultKeybindings } from "@shared/config/defaultKeybindings";
 
@@ -468,5 +470,50 @@ describe("describeKeyCap", () => {
     expect(describeKeyCap("Ctrl++", false)).toMatch(/Plus$/);
     expect(describeKeyCap("⌘+", true)).toMatch(/Plus$/);
     expect(describeKeyCap("Page Up", true)).toBe("Page Up");
+  });
+});
+
+describe("layout key labels", () => {
+  // What AZERTY types on the keys the US layout prints / [ ; ' and -.
+  const azerty: ReadonlyMap<string, string> = new Map([
+    ["/", "!"],
+    ["[", "^"],
+    [";", "m"],
+    ["'", "ù"],
+    ["-", "ß"],
+  ]);
+
+  it("draws a physically matched key as the layout types it", () => {
+    expect(parseChord("Cmd+/", true, azerty)).toEqual([["⌘", "!"]]);
+    expect(parseChord("Cmd+Shift+[", false, azerty)).toEqual([["Ctrl", "Shift", "^"]]);
+    expect(parseChord("Cmd+K ;", true, azerty)).toEqual([["⌘", "K"], ["M"]]);
+    expect(formatChordText("Cmd+'", false, azerty)).toBe("Ctrl+Ù");
+    expect(labelWithShortcut("Toggle", "Cmd+/", true, azerty)).toBe("Toggle (⌘!)");
+  });
+
+  it("keeps a character a key cap can't uppercase to one character", () => {
+    expect(parseChord("Cmd+-", true, azerty)).toEqual([["⌘", "ß"]]);
+  });
+
+  it("leaves letters, named keys and unmapped punctuation alone", () => {
+    expect(parseChord("Cmd+Alt+.", true, azerty)).toEqual(parseChord("Cmd+Alt+.", true));
+    expect(parseChord("Cmd+P", false, azerty)).toEqual(parseChord("Cmd+P", false));
+    expect(parseChord("Ctrl+ArrowUp", false, azerty)).toEqual(parseChord("Ctrl+ArrowUp", false));
+    expect(parseChord("Ctrl++", false, azerty)).toEqual([["Ctrl", "+"]]);
+  });
+
+  it("is today's text with no labels or an empty map", () => {
+    for (const combo of ["Cmd+/", "Cmd+Shift+[", "Cmd+Alt+`", "Cmd+K ;"]) {
+      expect(parseChord(combo, true, new Map())).toEqual(parseChord(combo, true));
+      expect(formatChordText(combo, false, undefined)).toBe(formatChordText(combo, false));
+    }
+  });
+
+  it("speaks and names for ARIA the key that is drawn", () => {
+    expect(describeChord("Cmd+/", true)).toBe("Command Slash");
+    expect(describeChord("Cmd+/", true, azerty)).toBe("Command !");
+    expect(describeChord("Cmd+K ;", false, azerty)).toBe("Ctrl K, then M");
+    expect(comboToAriaKeyshortcuts("Cmd+/", true, azerty)).toBe("Meta+!");
+    expect(comboToAriaKeyshortcuts("Cmd+Shift+[", false, azerty)).toBe("Control+Shift+^");
   });
 });

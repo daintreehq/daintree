@@ -8,7 +8,12 @@
  *
  * `isMac` is injected as a parameter so the parser can be tested without
  * mutating the cached `navigator.platform` lookup in `src/lib/platform.ts`.
+ * `keyLabels` is injected the same way: the active layout's characters for
+ * the keys bindings match physically (see `src/lib/keyboardLayout.ts`), so a
+ * `Cmd+/` drawn on AZERTY names the key the user actually presses.
  */
+
+import type { KeyLabels } from "@/lib/keyboardLayout";
 
 const MAC_GLYPHS: Record<string, string> = {
   cmd: "⌘",
@@ -69,7 +74,23 @@ function ownLookup(table: Record<string, string>, key: string): string | undefin
   return Object.hasOwn(table, key) ? table[key] : undefined;
 }
 
-function mapToken(rawToken: string, isMac: boolean): string {
+/**
+ * The key a canonical token names on the active layout. Only single
+ * characters are physically matched punctuation; names and modifiers pass.
+ */
+function layoutToken(rawToken: string, keyLabels: KeyLabels | undefined): string {
+  if (!keyLabels || keyLabels.size === 0 || rawToken.length !== 1) return rawToken;
+  return keyLabels.get(rawToken) ?? rawToken;
+}
+
+/** A single key uppercased as a key cap prints it, unless that spells two ("ß" → "SS"). */
+function upperKey(key: string): string {
+  const upper = key.toUpperCase();
+  return [...upper].length === 1 ? upper : key;
+}
+
+function mapToken(canonicalToken: string, isMac: boolean, keyLabels?: KeyLabels): string {
+  const rawToken = layoutToken(canonicalToken, keyLabels);
   const lower = rawToken.toLowerCase();
   const arrow = ownLookup(ARROW_GLYPHS, lower);
   if (arrow) return arrow;
@@ -79,7 +100,7 @@ function mapToken(rawToken: string, isMac: boolean): string {
   // Single-char keys are uppercased ("p" → "P"). Multi-char unknowns keep
   // their original casing so labels like "PageUp" or "NumpadEnter" don't
   // get mangled to "Pageup".
-  if (rawToken.length === 1) return rawToken.toUpperCase();
+  if ([...rawToken].length === 1) return upperKey(rawToken);
   return rawToken;
 }
 
@@ -134,10 +155,13 @@ function splitChordSteps(shortcut: string): string[][] {
  * parseChord("Cmd+K T", true)        // [["⌘","K"],["T"]]
  * parseChord("Ctrl++", false)        // [["Ctrl","+"]]
  * parseChord("", true)               // []
+ * parseChord("Cmd+/", true, azerty)  // [["⌘","!"]]
  */
-export function parseChord(shortcut: string, isMac: boolean): string[][] {
+export function parseChord(shortcut: string, isMac: boolean, keyLabels?: KeyLabels): string[][] {
   if (!shortcut || !shortcut.trim()) return [];
-  return splitChordSteps(shortcut).map((tokens) => tokens.map((token) => mapToken(token, isMac)));
+  return splitChordSteps(shortcut).map((tokens) =>
+    tokens.map((token) => mapToken(token, isMac, keyLabels))
+  );
 }
 
 // ── Search utilities ──────────────────────────────────────────────────────
@@ -255,13 +279,18 @@ const ARIA_KEY_NAMES: Record<string, string> = {
   end: "End",
 };
 
-function mapAriaToken(rawToken: string, modifiers: Record<string, string>): string {
+function mapAriaToken(
+  canonicalToken: string,
+  modifiers: Record<string, string>,
+  keyLabels?: KeyLabels
+): string {
+  const rawToken = layoutToken(canonicalToken, keyLabels);
   const lower = rawToken.toLowerCase();
   const modifier = ownLookup(modifiers, lower);
   if (modifier) return modifier;
   const named = ownLookup(ARIA_KEY_NAMES, lower);
   if (named) return named;
-  if (rawToken.length === 1) return rawToken.toUpperCase();
+  if ([...rawToken].length === 1) return upperKey(rawToken);
   return rawToken;
 }
 
@@ -282,7 +311,8 @@ function mapAriaToken(rawToken: string, modifiers: Record<string, string>): stri
  */
 export function comboToAriaKeyshortcuts(
   combo: string | null | undefined,
-  isMac: boolean
+  isMac: boolean,
+  keyLabels?: KeyLabels
 ): string | undefined {
   if (!combo || !combo.trim()) return undefined;
 
@@ -290,7 +320,7 @@ export function comboToAriaKeyshortcuts(
   // The same step split the chips use, so a literal-plus chord is still seen
   // as two steps and omitted rather than merged into one wrong shortcut.
   const steps = splitChordSteps(combo).map((tokens) =>
-    tokens.map((token) => mapAriaToken(token, modifiers)).join("+")
+    tokens.map((token) => mapAriaToken(token, modifiers, keyLabels)).join("+")
   );
 
   if (steps.length === 0) return undefined;
@@ -398,7 +428,7 @@ function spokenToken(rawToken: string, isMac: boolean): string {
   // A key range such as "1–9" (a collapsed numbered family) reads as a range.
   const range = /^(\w)[–-](\w)$/.exec(rawToken);
   if (range) return `${range[1]!.toUpperCase()} through ${range[2]!.toUpperCase()}`;
-  if (rawToken.length === 1) return rawToken.toUpperCase();
+  if ([...rawToken].length === 1) return upperKey(rawToken);
   return rawToken;
 }
 
@@ -458,11 +488,13 @@ export function describeKeyCap(cap: string, isMac: boolean): string {
  * `"Command K, then Command S"` on macOS, `"Ctrl K, then Ctrl S"` elsewhere.
  * Returns `""` for an empty shortcut.
  */
-export function describeChord(shortcut: string, isMac: boolean): string {
+export function describeChord(shortcut: string, isMac: boolean, keyLabels?: KeyLabels): string {
   if (!shortcut || !shortcut.trim()) return "";
   // The same step split the chips use, so what is spoken is what is shown.
   return splitChordSteps(shortcut)
-    .map((tokens) => tokens.map((token) => spokenToken(token, isMac)).join(" "))
+    .map((tokens) =>
+      tokens.map((token) => spokenToken(layoutToken(token, keyLabels), isMac)).join(" ")
+    )
     .join(", then ");
 }
 
@@ -473,8 +505,8 @@ export function describeChord(shortcut: string, isMac: boolean): string {
  * a toast body — so the text form never drifts into a fourth format such as
  * `"⌘+⇧+P"` or `"Option+P"`. Not for accessible names: use `describeChord`.
  */
-export function formatChordText(shortcut: string, isMac: boolean): string {
-  return parseChord(shortcut, isMac)
+export function formatChordText(shortcut: string, isMac: boolean, keyLabels?: KeyLabels): string {
+  return parseChord(shortcut, isMac, keyLabels)
     .map((tokens) => tokens.join(isMac ? "" : "+"))
     .join(", ");
 }
@@ -483,8 +515,9 @@ export function formatChordText(shortcut: string, isMac: boolean): string {
 export function labelWithShortcut(
   label: string,
   shortcut: string | null | undefined,
-  isMac: boolean
+  isMac: boolean,
+  keyLabels?: KeyLabels
 ): string {
-  const text = shortcut ? formatChordText(shortcut, isMac) : "";
+  const text = shortcut ? formatChordText(shortcut, isMac, keyLabels) : "";
   return text ? `${label} (${text})` : label;
 }
