@@ -28,6 +28,7 @@ import {
   runDuration,
   runReferenceAt,
   runStartedAt,
+  runWorktreeNote,
   workerWords,
   type RunAction,
 } from "./runWords";
@@ -54,7 +55,8 @@ interface ScheduleRunsProps {
   onRetryRuns: () => void;
   /** Terminal ids that still have a pane in this view. */
   liveTerminalIds: ReadonlySet<string>;
-  worktreeIds: ReadonlySet<string>;
+  /** The project's worktree ids; null until they've loaded, so nothing reads as removed meanwhile. */
+  worktreeIds: ReadonlySet<string> | null;
   /** A Run now failure the history didn't record, so the page is the only place it can be said. */
   runNowError: string | null;
   /** Run now is waiting on main, so neither its button nor its Retry starts a second run. */
@@ -145,6 +147,7 @@ function RunRow({
   now,
   dayLabel,
   action,
+  worktreeIds,
   onOpen,
   onResume,
 }: {
@@ -153,6 +156,7 @@ function RunRow({
   now: number;
   dayLabel: string;
   action: RunAction;
+  worktreeIds: ReadonlySet<string> | null;
   onOpen: () => void;
   onResume: () => void;
 }) {
@@ -168,6 +172,7 @@ function RunRow({
       ? SCHEDULE_ASSISTANT_NAME
       : agentNameOf(run.resume?.agentId ?? schedule.launch.agentId);
   const workers = run.workers ?? [];
+  const worktree = runWorktreeNote(run, worktreeIds);
   const runName = `${dayLabel} at ${formatRunTime(reference, timeZone)}, ${words.label}`;
 
   return (
@@ -196,9 +201,11 @@ function RunRow({
               {detail.text}
             </p>
           )}
-          {run.newWorktree && run.newWorktree.worktreeId !== null && (
+          {worktree && (
             <p className="mt-0.5 break-words text-xs text-text-secondary">
-              In worktree <span className="font-mono">{run.newWorktree.branch}</span>
+              {worktree.removed ? "Worktree " : "In worktree "}
+              <span className="font-mono">{worktree.branch}</span>
+              {worktree.removed && " was removed"}
             </p>
           )}
           {workers.length > 0 && (
@@ -661,6 +668,7 @@ export function ScheduleRuns({
                           run.terminalId !== null && liveTerminalIds.has(run.terminalId),
                         worktreeIds,
                       })}
+                      worktreeIds={worktreeIds}
                       onOpen={() => onOpenRun(run)}
                       onResume={() => onResumeRun(run)}
                     />

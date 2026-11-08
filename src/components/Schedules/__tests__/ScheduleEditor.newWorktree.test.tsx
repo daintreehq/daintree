@@ -128,7 +128,7 @@ describe("ScheduleEditor: a new worktree each run (#16369)", () => {
 
   it("won't save the mode without a base branch, and says which field", async () => {
     renderEditor(existing());
-    await chooseWorktree("New worktree each run");
+    await chooseWorktree("New worktree for each run");
     await save();
 
     expect(clientMock.update).not.toHaveBeenCalled();
@@ -137,7 +137,7 @@ describe("ScheduleEditor: a new worktree each run (#16369)", () => {
 
   it("saves the chosen remote base, clearing any fixed worktree", async () => {
     renderEditor(existing({ worktreeId: "/wt" }));
-    await chooseWorktree("New worktree each run");
+    await chooseWorktree("New worktree for each run");
     await waitFor(() => expect(listBranches).toHaveBeenCalledWith("/repo"));
 
     await act(async () => fireEvent.click(screen.getByRole("combobox", { name: "Base branch" })));
@@ -195,7 +195,7 @@ describe("ScheduleEditor: a new worktree each run (#16369)", () => {
 
     await chooseWorktree("feature");
     expect(screen.queryByText("Base branch")).toBeNull();
-    await chooseWorktree("New worktree each run");
+    await chooseWorktree("New worktree for each run");
     await save();
 
     expect(clientMock.update).not.toHaveBeenCalled();
@@ -205,7 +205,7 @@ describe("ScheduleEditor: a new worktree each run (#16369)", () => {
 
   it("takes keyboard focus to the base when saving without one", async () => {
     renderEditor(existing());
-    await chooseWorktree("New worktree each run");
+    await chooseWorktree("New worktree for each run");
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Base branch" })).toBeTruthy());
 
     await save();

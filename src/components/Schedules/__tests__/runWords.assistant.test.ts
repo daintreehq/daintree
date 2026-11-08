@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ScheduledRun } from "@shared/types/scheduledRuns";
 import { MAX_ASSISTANT_SLOTS } from "@shared/config/assistantSlots";
-import { runAction, runDetail, workerWords } from "../runWords";
+import { runAction, runDetail, runWorktreeNote, workerWords } from "../runWords";
 
 function assistantRun(overrides: Partial<ScheduledRun> = {}): ScheduledRun {
   return {
@@ -130,6 +130,13 @@ describe("runAction: a run in its own new worktree (#16369)", () => {
     });
   });
 
+  it("can't tell a worktree is gone before the project's worktrees have loaded", () => {
+    expect(runAction(run({}), { terminalExists: false, worktreeIds: null })).toEqual({
+      kind: "resume",
+      sessionId: resume.agentSessionId,
+    });
+  });
+
   it("offers no conversation for a run refused with its worktree left standing", () => {
     const refused = run({
       resume: null,
@@ -147,5 +154,40 @@ describe("runAction: a run in its own new worktree (#16369)", () => {
     expect(
       runAction(refused, { terminalExists: false, worktreeIds: new Set(["/wt/new"]) })
     ).toMatchObject({ kind: "none", label: null });
+  });
+});
+
+describe("runWorktreeNote (#16406)", () => {
+  const newWorktree = { branch: "schedule-x", baseBranch: "main", worktreeId: "/wt/new" };
+  const run = (overrides: Partial<ScheduledRun>) =>
+    assistantRun({ assistant: undefined, resume: null, newWorktree, ...overrides });
+
+  it("names the branch while the worktree is still there", () => {
+    expect(runWorktreeNote(run({}), new Set(["/wt/new"]))).toEqual({
+      branch: "schedule-x",
+      removed: false,
+    });
+  });
+
+  it("says it was removed once the worktrees are known and it isn't among them, with or without a session", () => {
+    expect(runWorktreeNote(run({}), new Set(["/wt/other"]))).toEqual({
+      branch: "schedule-x",
+      removed: true,
+    });
+    expect(runWorktreeNote(run({}), new Set())).toMatchObject({ removed: true });
+  });
+
+  it("claims nothing removed before the worktrees have loaded", () => {
+    expect(runWorktreeNote(run({}), null)).toEqual({ branch: "schedule-x", removed: false });
+  });
+
+  it("names nothing for a run whose worktree was never made, or any other schedule's run", () => {
+    expect(
+      runWorktreeNote(
+        run({ newWorktree: { branch: "schedule-x", baseBranch: "main", worktreeId: null } }),
+        new Set()
+      )
+    ).toBeNull();
+    expect(runWorktreeNote(run({ newWorktree: undefined }), new Set())).toBeNull();
   });
 });

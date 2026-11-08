@@ -29,9 +29,13 @@ const reveal = vi.hoisted(() => vi.fn());
 vi.mock("@/services/scheduledRunLanding", () => ({ revealRunTerminal: reveal }));
 const worktreeList = vi.hoisted(() => ({
   current: [] as Array<{ id: string; path: string; name: string; isMainWorktree: boolean }>,
+  initialized: true,
 }));
 vi.mock("@/hooks/useWorktrees", () => ({
-  useWorktrees: () => ({ worktrees: worktreeList.current }),
+  useWorktrees: () => ({
+    worktrees: worktreeList.current,
+    isInitialized: worktreeList.initialized,
+  }),
 }));
 const resumeSession = vi.hoisted(() => vi.fn());
 vi.mock("@/hooks/useResumeAgentSession", () => ({ useResumeAgentSession: () => resumeSession }));
@@ -424,6 +428,7 @@ describe("ProjectSchedulesTab — a run in its own new worktree (#16369)", () =>
 
   afterEach(() => {
     worktreeList.current = [];
+    worktreeList.initialized = true;
     resumeSession.mockReset();
     client.listScheduleRuns.mockReset();
     client.listScheduleRuns.mockImplementation(async () => []);
@@ -441,13 +446,66 @@ describe("ProjectSchedulesTab — a run in its own new worktree (#16369)", () =>
         },
       ])
     );
+    worktreeList.current = [
+      { id: RUN_WORKTREE, path: RUN_WORKTREE, name: "run", isMainWorktree: false },
+    ];
     client.listScheduleRuns.mockResolvedValue([runAt(RUN_WORKTREE)]);
     renderTab();
     fireEvent.click(await screen.findByRole("button", { name: "Run history of Nightly audit" }));
 
     expect(await screen.findByText(/New worktree from origin\/develop/)).toBeTruthy();
     expect(await screen.findByText("schedule-nightly-a")).toBeTruthy();
+    expect(screen.getByText(/In worktree/)).toBeTruthy();
+    expect(screen.queryByText(/was removed/)).toBeNull();
     expect(screen.queryByText(/Main checkout/)).toBeNull();
+  });
+
+  it("says a run's worktree was removed even when no session was saved to resume", async () => {
+    client.list.mockResolvedValue(snapshot([NIGHTLY]));
+    client.listScheduleRuns.mockResolvedValue([
+      runAt(RUN_WORKTREE, {
+        resume: {
+          agentId: "claude",
+          agentSessionId: null,
+          cwd: RUN_WORKTREE,
+          worktreeId: RUN_WORKTREE,
+          agentLaunchFlags: [],
+          agentModelId: null,
+          agentPresetId: null,
+        },
+      }),
+    ]);
+    renderTab();
+    fireEvent.click(await screen.findByRole("button", { name: "Run history of Nightly audit" }));
+
+    expect(await screen.findByText("schedule-nightly-a")).toBeTruthy();
+    expect(screen.getByText(/was removed/)).toBeTruthy();
+    expect(screen.queryByText(/In worktree/)).toBeNull();
+    expect(screen.queryByText("Worktree removed")).toBeNull();
+  });
+
+  it("says a resumable run's worktree was removed in its row as well as in place of Resume", async () => {
+    client.list.mockResolvedValue(snapshot([NIGHTLY]));
+    client.listScheduleRuns.mockResolvedValue([runAt(RUN_WORKTREE)]);
+    renderTab();
+    fireEvent.click(await screen.findByRole("button", { name: "Run history of Nightly audit" }));
+
+    expect(await screen.findByText(/was removed/)).toBeTruthy();
+    expect(screen.getByText("Worktree removed")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /Resume run from/ })).toBeNull();
+  });
+
+  it("claims no worktree removed until the project's worktrees have loaded", async () => {
+    worktreeList.initialized = false;
+    client.list.mockResolvedValue(snapshot([NIGHTLY]));
+    client.listScheduleRuns.mockResolvedValue([runAt(RUN_WORKTREE)]);
+    renderTab();
+    fireEvent.click(await screen.findByRole("button", { name: "Run history of Nightly audit" }));
+
+    expect(await screen.findByText("schedule-nightly-a")).toBeTruthy();
+    expect(screen.getByText(/In worktree/)).toBeTruthy();
+    expect(screen.queryByText(/was removed/)).toBeNull();
+    expect(screen.queryByText("Worktree removed")).toBeNull();
   });
 
   it("names no branch on a run whose worktree was never made", async () => {
