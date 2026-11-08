@@ -6,6 +6,7 @@ import type { Project } from "../../../shared/types/project.js";
 import type { WorktreeListResult, WorktreeState } from "../../../shared/types/worktree.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { PartialSuccessError } from "../../../shared/utils/partialSuccess.js";
+import { pluralize } from "../../../shared/utils/pluralize.js";
 import {
   MAX_WAIT_FOR_PR_TIMEOUT_MS,
   MAX_WAIT_UNTIL_READY_TIMEOUT_MS,
@@ -19,7 +20,12 @@ import {
   formatTeardownPreviewLines,
   formatWorktreeDeleteNoteLines,
   formatWorktreeDeletePreviewLines,
+  submoduleCommitsAreCapped,
   summarizeWorktreeChanges,
+  worktreeDeleteRefusedBy,
+  type WorktreeDeletePreview,
+  type WorktreeDeletePreviewOutcome,
+  type WorktreeSubmoduleDeleteBlock,
   type WorktreeSubmoduleRiskState,
 } from "../../../shared/utils/worktreeDeletePreview.js";
 import type {
@@ -220,6 +226,24 @@ async function checkWorktreeDelete(
   }
 }
 
+/** Why a delete was refused before anyone was asked, and what clears it. */
+function refusalMessage(
+  block: WorktreeSubmoduleDeleteBlock,
+  submodules: WorktreeSubmoduleRiskState
+): string {
+  if (block === "unverified") {
+    return "Delete refused: this worktree's submodules couldn't be fully checked, and deleting it could destroy nested commits nothing has listed. Call again once the check can complete. Nothing was deleted.";
+  }
+  const commits = submodules.risk?.atRiskCommits ?? [];
+  const capped = submoduleCommitsAreCapped(submodules);
+  const one = commits.length === 1 && !capped;
+  const named = commits
+    .slice(0, 3)
+    .map((commit) => `${commit.oid.slice(0, 8)} ${commit.subject}`)
+    .join(", ");
+  return `Delete refused: ${capped ? "at least " : ""}${pluralize(commits.length, "submodule commit")} (${named}) ${one ? "is" : "are"} on no remote this clone knows about, and deleting the worktree would destroy ${one ? "it" : "them"}. Push ${one ? "it" : "them"} from inside the submodule, or fetch if ${one ? "it is" : "they are"} already on the remote, then call again. Nothing was deleted.`;
+}
+
 /**
  * What the person is shown before a delete the host runs itself (#13501):
  * the same lines a view's dialog shows, read fresh on this host from the
@@ -251,24 +275,38 @@ export async function previewWorktreeDelete(
     risk === "unreadable" || risk === null || risk.incomplete
       ? { status: "unverified", risk: risk === "unreadable" ? null : risk }
       : { status: "verified", risk };
+  const preview: WorktreeDeletePreview | null =
+    changes === null || changes === "unreadable"
+      ? null
+      : {
+          ...summarizeWorktreeChanges(changes.changes ?? [], changes.omittedUntrackedCount),
+          changes: changes.changes ?? [],
+          rootPath: changes.rootPath,
+          ...(changes.omittedUntrackedCount
+            ? { omittedUntrackedCount: changes.omittedUntrackedCount }
+            : {}),
+          ...(changes.ahead === undefined ? {} : { ahead: changes.ahead }),
+          submodules,
+        };
+  // The view this is asked in has the lines and nothing else, so it can't hold
+  // approval back on a refusal the way a view's own confirm does (#16436).
+  // Refused here instead, before anyone is asked: the host throws on these
+  // before it reads `force`, so an approval could only ever end in this error.
+  const outcome: WorktreeDeletePreviewOutcome =
+    changes === null
+      ? { state: "gone" }
+      : preview === null
+        ? { state: "failed", submodules }
+        : { state: "verified", preview };
+  const refusal = worktreeDeleteRefusedBy(outcome);
+  if (refusal !== null) {
+    return { ok: false, result: failure("EXECUTION_ERROR", refusalMessage(refusal, submodules)) };
+  }
   const lines =
     changes === null
       ? []
       : [
-          ...formatWorktreeDeletePreviewLines(
-            changes === "unreadable"
-              ? null
-              : {
-                  ...summarizeWorktreeChanges(changes.changes ?? [], changes.omittedUntrackedCount),
-                  changes: changes.changes ?? [],
-                  rootPath: changes.rootPath,
-                  ...(changes.omittedUntrackedCount
-                    ? { omittedUntrackedCount: changes.omittedUntrackedCount }
-                    : {}),
-                  ...(changes.ahead === undefined ? {} : { ahead: changes.ahead }),
-                  submodules,
-                }
-          ),
+          ...formatWorktreeDeletePreviewLines(preview),
           ...formatTeardownPreviewLines(teardown),
           ...formatWorktreeDeleteNoteLines(notes),
         ];

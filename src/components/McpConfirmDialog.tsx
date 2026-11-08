@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Clock,
   Plug,
+  RefreshCw,
   ShieldAlert,
   Sparkles,
   SquareTerminal,
@@ -45,6 +46,10 @@ import type { HelpAssistantDaintreeConfirmations } from "@shared/types/ipc/api";
 import { logError } from "@/utils/logger";
 import { showMcpRequester, useMcpRequesterLiveState } from "@/lib/mcpConfirmRequester";
 import type { McpRequester } from "@shared/types/ipc/mcpServer";
+import {
+  WORKTREE_DELETE_BLOCK_COPY,
+  type WorktreeSubmoduleDeleteBlock,
+} from "@shared/utils/worktreeDeletePreview";
 
 /**
  * Lower-bound read-time gate for destructive dispatches. `resolveOnce` guards
@@ -153,6 +158,7 @@ export function McpConfirmDialog() {
   const queueDepth = useMcpConfirmStore((state) => state.queue.length);
   const resolveCurrent = useMcpConfirmStore((state) => state.resolveCurrent);
   const markShown = useMcpConfirmStore((state) => state.markShown);
+  const retryPreview = useMcpConfirmStore((state) => state.retryPreview);
   const expire = useMcpConfirmStore((state) => state.expire);
   const dismiss = useMcpConfirmStore((state) => state.dismiss);
   const resetKey = current?.requestId ?? "null";
@@ -324,6 +330,47 @@ export function McpConfirmDialog() {
     return () => clearTimeout(timer);
   }, [resetKey, previewPending]);
 
+  // A delete the host refuses outright (#16436). An expired request keeps its
+  // own reason for the dead button and offers no Retry.
+  const blockedBy = current?.expired === true ? undefined : current?.worktreeDeleteBlock;
+
+  // A Retry says what it found once it lands, and if the control that had
+  // focus went away with the refusal it answered, focus goes to Cancel rather
+  // than to the page behind the dialog — as the local delete dialog does.
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const recheckingRef = useRef<string | null>(null);
+  useEffect(() => {
+    const recheckingId = recheckingRef.current;
+    if (recheckingId === null) return;
+    if (recheckingId !== currentRequestId) {
+      recheckingRef.current = null;
+      return;
+    }
+    if (previewPending) return;
+    recheckingRef.current = null;
+    useAnnouncerStore
+      .getState()
+      .announce(
+        blockedBy === undefined
+          ? "Checked again — deleting is no longer blocked"
+          : "Checked again — deleting is still blocked",
+        "polite"
+      );
+    const root = bodyRef.current?.closest<HTMLElement>('[role="dialog"],[role="alertdialog"]');
+    const active = document.activeElement;
+    if (!active || active === document.body || !active.isConnected || !root?.contains(active)) {
+      root?.querySelector<HTMLElement>('[data-confirm-role="cancel"]')?.focus();
+    }
+  }, [currentRequestId, previewPending, blockedBy]);
+  const recheck = useCallback(() => {
+    if (currentRequestId === null) return;
+    retryPreview(currentRequestId);
+    // Only a re-check that actually started has an answer to wait for.
+    if (useMcpConfirmStore.getState().current?.previewPending === true) {
+      recheckingRef.current = currentRequestId;
+    }
+  }, [currentRequestId, retryPreview]);
+
   const toggleTarget = useCallback((id: string) => {
     setSelectedIds((previous) => {
       const next = new Set(previous);
@@ -405,7 +452,8 @@ export function McpConfirmDialog() {
     previewSlow,
     current.typedNameTarget && !expired ? 0 : queueDepth,
     selectableTargets !== undefined && selectedCount === 0,
-    expired
+    expired,
+    blockedBy
   );
 
   const sharedProps = {
@@ -426,7 +474,7 @@ export function McpConfirmDialog() {
       : selectionConfirmLabel(current, selectedCount),
     cancelLabel: expired ? "Close" : "Cancel",
     onConfirm: () => {
-      if (expired) return;
+      if (expired || blockedBy !== undefined) return;
       const pressedFor = clickPressedForRef.current;
       if (pressedFor !== null && pressedFor !== current.requestId) return;
       resolveOnce(
@@ -439,9 +487,12 @@ export function McpConfirmDialog() {
     hasPreview: hasScrollableContent,
     // An empty selection is the same outcome as Cancel with an extra dispatch in
     // between, so it is not offered as an approval. An expired request keeps
-    // its button where it was, dead, beside the reason.
+    // its button where it was, dead, beside the reason, and so does a delete
+    // the host refuses: the button stays put, the hint says what clears it,
+    // and the way forward is Cancel or the banner's Retry.
     confirmDisabled:
       expired ||
+      blockedBy !== undefined ||
       previewState === "pending" ||
       (selectableTargets !== undefined && selectedCount === 0),
     confirmCooldownMs:
@@ -483,7 +534,7 @@ export function McpConfirmDialog() {
   // rationale: some actions carry a warning in one that the other doesn't
   // repeat (forge.dismissReview's merge-safety note).
   const body = (
-    <div className="space-y-4">
+    <div ref={bodyRef} className="space-y-4">
       {/* Mounted for the whole request, so the expiry is a change a screen
           reader announces rather than a live region that arrived already full. */}
       <span role="status" className="sr-only">
@@ -517,6 +568,14 @@ export function McpConfirmDialog() {
           targets={selectableTargets}
           selectedIds={selectedIds}
           onToggle={toggleTarget}
+        />
+      )}
+
+      {blockedBy !== undefined && (
+        <WorktreeDeleteBlockedCallout
+          block={blockedBy}
+          onRetry={current.previewRetryable === true ? recheck : undefined}
+          retrying={previewState === "pending"}
         />
       )}
 
@@ -579,7 +638,8 @@ export function McpConfirmDialog() {
           // (#12115). Resolved in the bridge from the renderer's own stores and
           // the same fresh fetch that produced the preview above — never from
           // the dispatch arguments, which are the one thing the caller controls.
-          typedNameTarget={current.typedNameTarget}
+          // Never on a refused delete: there is no consent for it to take.
+          typedNameTarget={blockedBy === undefined ? current.typedNameTarget : undefined}
         >
           {body}
         </ConfirmDialog>
@@ -1040,6 +1100,46 @@ function ConsequenceNote({
 }
 
 /**
+ * Why a worktree delete can't be approved (#16436): the host refuses it before
+ * it reads `force`, so no answer here would make it run. Titled the way the
+ * local delete dialog titles the same refusal; the evidence is the preview
+ * below, so this says only what is blocked and what clears it.
+ */
+function WorktreeDeleteBlockedCallout({
+  block,
+  onRetry,
+  retrying,
+}: {
+  block: WorktreeSubmoduleDeleteBlock;
+  onRetry?: () => void;
+  retrying: boolean;
+}) {
+  return (
+    <Callout
+      severity="error"
+      role="alert"
+      title={WORKTREE_DELETE_BLOCK_COPY[block].title}
+      action={
+        onRetry ? (
+          // Re-reads; it never pushes or deletes. Stays mounted through the
+          // re-check, which keeps the refusal on screen until the answer lands.
+          <Button variant="outline" size="xs" onClick={onRetry} disabled={retrying}>
+            <RefreshCw />
+            Retry
+          </Button>
+        ) : undefined
+      }
+    >
+      <p className="text-xs">
+        {block === "at-risk-commits"
+          ? "The submodule commits listed below are on no remote this clone knows about, so this worktree can't be deleted. Push them from inside the submodule — or fetch, if they're already on the remote — then retry."
+          : "Deleting it could destroy nested work that isn't listed here, so it can't be deleted until the check completes."}
+      </p>
+    </Callout>
+  );
+}
+
+/**
  * The actual content the dispatch would affect — the decisive evidence for a
  * D2 approval, so it gets the framed, headed, bounded card every sibling
  * destructive confirm already uses, rather than the same bare `<pre>` well the
@@ -1302,11 +1402,18 @@ function gateHintText(
   previewSlow: boolean,
   queueDepth: number,
   emptySelection: boolean,
-  expired = false
+  expired = false,
+  block?: WorktreeSubmoduleDeleteBlock
 ): string | null {
   const parts: string[] = [];
   if (expired) {
     parts.push(EXPIRED_HINT);
+  } else if (block !== undefined) {
+    // The local delete dialog's words for the same refusal, so one worktree
+    // reads the same wherever its delete is asked for.
+    parts.push(
+      previewState === "pending" ? "Checking again" : WORKTREE_DELETE_BLOCK_COPY[block].hint
+    );
   } else if (previewState === "pending") {
     parts.push(previewSlow ? "Still working…" : "Checking what this affects…");
   }

@@ -120,7 +120,9 @@ describe("mcpConfirmStore", () => {
       void requestMcpConfirmation(pendingFixture({ requestId: "b" }));
       expect(useMcpConfirmStore.getState().current?.requestId).toBe("a");
 
-      useMcpConfirmStore.getState().setPreview("b", ["  M src/app.ts"], "feature/x");
+      useMcpConfirmStore
+        .getState()
+        .setPreview("b", { lines: ["  M src/app.ts"], typedNameTarget: "feature/x" });
 
       const queued = useMcpConfirmStore.getState().queue[0];
       expect(queued?.requestId).toBe("b");
@@ -135,7 +137,7 @@ describe("mcpConfirmStore", () => {
 
     it("patches the current item's gate", () => {
       void requestMcpConfirmation(pendingFixture({ requestId: "a" }));
-      useMcpConfirmStore.getState().setPreview("a", [], "feature/x");
+      useMcpConfirmStore.getState().setPreview("a", { lines: [], typedNameTarget: "feature/x" });
       expect(useMcpConfirmStore.getState().current?.typedNameTarget).toBe("feature/x");
     });
 
@@ -143,8 +145,8 @@ describe("mcpConfirmStore", () => {
       void requestMcpConfirmation(pendingFixture({ requestId: "a" }));
       void requestMcpConfirmation(pendingFixture({ requestId: "b" }));
 
-      useMcpConfirmStore.getState().setPreview("a", ["No uncommitted changes."]);
-      useMcpConfirmStore.getState().setPreview("b", ["No uncommitted changes."]);
+      useMcpConfirmStore.getState().setPreview("a", { lines: ["No uncommitted changes."] });
+      useMcpConfirmStore.getState().setPreview("b", { lines: ["No uncommitted changes."] });
 
       expect(useMcpConfirmStore.getState().current).not.toHaveProperty("typedNameTarget");
       expect(useMcpConfirmStore.getState().queue[0]).not.toHaveProperty("typedNameTarget");
@@ -153,8 +155,118 @@ describe("mcpConfirmStore", () => {
     it("does not resurrect a settled request", () => {
       void requestMcpConfirmation(pendingFixture({ requestId: "a" }));
       useMcpConfirmStore.getState().resolveCurrent("approved");
-      useMcpConfirmStore.getState().setPreview("a", ["  M src/app.ts"], "feature/x");
+      useMcpConfirmStore
+        .getState()
+        .setPreview("a", { lines: ["  M src/app.ts"], typedNameTarget: "feature/x" });
       expect(useMcpConfirmStore.getState().current).toBeNull();
+    });
+  });
+
+  describe("a delete the host refuses outright (#16436)", () => {
+    it("replaces the last fetch's gate and refusal rather than merging them", () => {
+      void requestMcpConfirmation(pendingFixture({ requestId: "a" }));
+      const { setPreview } = useMcpConfirmStore.getState();
+
+      setPreview("a", { lines: ["  M src/app.ts"], typedNameTarget: "feature/x" });
+      setPreview("a", { lines: ["⚠ held"], worktreeDeleteBlock: "unverified" });
+      expect(useMcpConfirmStore.getState().current?.worktreeDeleteBlock).toBe("unverified");
+      expect(useMcpConfirmStore.getState().current).not.toHaveProperty("typedNameTarget");
+
+      setPreview("a", { lines: ["No uncommitted changes."] });
+      expect(useMcpConfirmStore.getState().current).not.toHaveProperty("worktreeDeleteBlock");
+      expect(useMcpConfirmStore.getState().current?.preview).toEqual(["No uncommitted changes."]);
+    });
+
+    it("never puts a gate beside a refusal", () => {
+      void requestMcpConfirmation(pendingFixture({ requestId: "a" }));
+      useMcpConfirmStore.getState().setPreview("a", {
+        lines: ["⚠ held"],
+        typedNameTarget: "feature/x",
+        worktreeDeleteBlock: "at-risk-commits",
+      });
+      expect(useMcpConfirmStore.getState().current?.worktreeDeleteBlock).toBe("at-risk-commits");
+      expect(useMcpConfirmStore.getState().current).not.toHaveProperty("typedNameTarget");
+    });
+
+    it("can't be approved while refused, and can still be cancelled", async () => {
+      const pending = requestMcpConfirmation(pendingFixture({ requestId: "a" }));
+      useMcpConfirmStore
+        .getState()
+        .setPreview("a", { lines: ["⚠ held"], worktreeDeleteBlock: "at-risk-commits" });
+
+      useMcpConfirmStore.getState().resolveCurrent("approved");
+      await expectStillPending(pending);
+      expect(useMcpConfirmStore.getState().current?.requestId).toBe("a");
+
+      useMcpConfirmStore.getState().resolveCurrent("rejected");
+      expect(await pending).toEqual({ decision: "rejected" });
+    });
+
+    it("re-runs the registered fetch once, keeping the refusal up while it reads", () => {
+      const retry = vi.fn();
+      void requestMcpConfirmation(pendingFixture({ requestId: "a" }), undefined, {
+        retryPreview: retry,
+      });
+      expect(useMcpConfirmStore.getState().current?.previewRetryable).toBe(true);
+
+      // Nothing to retry until there is a refusal.
+      useMcpConfirmStore.getState().retryPreview("a");
+      expect(retry).not.toHaveBeenCalled();
+
+      useMcpConfirmStore
+        .getState()
+        .setPreview("a", { lines: ["⚠ held"], worktreeDeleteBlock: "unverified" });
+      useMcpConfirmStore.getState().retryPreview("a");
+      useMcpConfirmStore.getState().retryPreview("a");
+      expect(retry).toHaveBeenCalledTimes(1);
+      const current = useMcpConfirmStore.getState().current;
+      expect(current?.previewPending).toBe(true);
+      expect(current?.worktreeDeleteBlock).toBe("unverified");
+    });
+
+    it("offers no retry for a request that registered none", () => {
+      void requestMcpConfirmation(pendingFixture({ requestId: "a" }));
+      useMcpConfirmStore
+        .getState()
+        .setPreview("a", { lines: ["⚠ held"], worktreeDeleteBlock: "unverified" });
+      useMcpConfirmStore.getState().retryPreview("a");
+      expect(useMcpConfirmStore.getState().current).not.toHaveProperty("previewRetryable");
+      expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+    });
+
+    it("forgets the retry once the request settles or expires", () => {
+      const settledRetry = vi.fn();
+      void requestMcpConfirmation(pendingFixture({ requestId: "a" }), undefined, {
+        retryPreview: settledRetry,
+      });
+      useMcpConfirmStore
+        .getState()
+        .setPreview("a", { lines: ["⚠ held"], worktreeDeleteBlock: "unverified" });
+      useMcpConfirmStore.getState().resolveCurrent("rejected");
+      // The same id asked again with no fetch of its own: a retry left behind
+      // by the settled request would be found and run here.
+      void requestMcpConfirmation(pendingFixture({ requestId: "a" }));
+      useMcpConfirmStore
+        .getState()
+        .setPreview("a", { lines: ["⚠ held"], worktreeDeleteBlock: "unverified" });
+      useMcpConfirmStore.getState().retryPreview("a");
+      expect(settledRetry).not.toHaveBeenCalled();
+      expect(useMcpConfirmStore.getState().current?.previewPending).toBe(false);
+      useMcpConfirmStore.getState().resolveCurrent("rejected");
+
+      const expiredRetry = vi.fn();
+      void requestMcpConfirmation(pendingFixture({ requestId: "b" }), undefined, {
+        retryPreview: expiredRetry,
+      });
+      useMcpConfirmStore
+        .getState()
+        .setPreview("b", { lines: ["⚠ held"], worktreeDeleteBlock: "unverified" });
+      useMcpConfirmStore.getState().markShown("b");
+      useMcpConfirmStore.getState().expire("b");
+      // Still on screen, inert, with nothing behind it.
+      expect(useMcpConfirmStore.getState().current?.expired).toBe(true);
+      useMcpConfirmStore.getState().retryPreview("b");
+      expect(expiredRetry).not.toHaveBeenCalled();
     });
   });
 

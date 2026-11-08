@@ -177,7 +177,7 @@ describe("useE2EBridges", () => {
     );
 
     window.__DAINTREE_E2E_SET_MCP_PREVIEW__?.("shot-1", ["M src/App.tsx"]);
-    expect(mcpConfirmState.setPreview).toHaveBeenCalledWith("shot-1", ["M src/App.tsx"]);
+    expect(mcpConfirmState.setPreview).toHaveBeenCalledWith("shot-1", { lines: ["M src/App.tsx"] });
 
     window.__DAINTREE_E2E_RESET_MCP_CONFIRM__?.();
     expect(mcpConfirmState.reset).toHaveBeenCalledTimes(1);
