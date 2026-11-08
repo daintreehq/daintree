@@ -5,7 +5,7 @@ import {
   type DetectionResult,
   type ProcessDetector,
 } from "../ProcessDetector.js";
-import { stripAnsi } from "./AgentPatternDetector.js";
+import { getTrailingNonBlankLines } from "./trailingOutputLines.js";
 import { detectPrompt, type PromptDetectorConfig } from "./PromptDetector.js";
 import { INITIAL_FOREGROUND_SENTINEL } from "./ForegroundProcessGroupProbe.js";
 import { MutableDisposable, toDisposable, type IDisposable } from "../../utils/lifecycle.js";
@@ -98,6 +98,13 @@ const UNAMBIGUOUS_SHELL_PROMPT_PATTERNS = [
   POWERSHELL_PROMPT_PATTERN,
   CMD_PROMPT_PATTERN,
 ] as const;
+
+// Every unambiguous prompt shape needs one of these on its line, and
+// stripping and splitting only remove characters, so a chunk with none of
+// them cannot carry a prompt. Cursor-addressed TUIs send whole repaints with
+// no line break to window on.
+const PROMPT_CHARACTER_PATTERN = /[#$%>➜➤➟➔]/;
+const PROMPT_CHARACTER_PATTERN_WITH_AGENT_GLYPHS = /[#$%>➜➤➟➔❯›]/;
 
 const ACTIVE_AGENT_PROMPT_PATTERN =
   /(?:welcome to claude code|claude code v\d|openai codex|tips for getting started|\?\s+for\s+shortcuts|welcome\s+back!)/i;
@@ -564,14 +571,16 @@ export class IdentityWatcher {
   }
 
   observeOutput(data: string): void {
+    let chunkHasPrompt: boolean | undefined;
     if (
       !this.stopped &&
+      !this.sawPromptAfterSubmit &&
       this.submittedAt !== null &&
       this.identity?.processIconId &&
-      !this.identity.agentType &&
-      this.hasUnambiguousShellPromptInText(data, true)
+      !this.identity.agentType
     ) {
-      this.sawPromptAfterSubmit = true;
+      chunkHasPrompt = this.hasUnambiguousShellPromptInText(data, true);
+      if (chunkHasPrompt) this.sawPromptAfterSubmit = true;
     }
     if (
       this.stopped ||
@@ -582,8 +591,11 @@ export class IdentityWatcher {
       return;
     }
 
-    const hasRecentCommandFailureOutput = this.hasRecentCommandFailureOutput();
-    const hasReturnedShellPromptOutput = this.hasUnambiguousShellPromptInText(data, true);
+    const hasReturnedShellPromptOutput =
+      chunkHasPrompt ?? this.hasUnambiguousShellPromptInText(data, true);
+    // Failure output only vetoes a returned prompt, which agent output rarely carries.
+    const hasRecentCommandFailureOutput =
+      hasReturnedShellPromptOutput && this.hasRecentCommandFailureOutput();
     if (
       !hasRecentCommandFailureOutput &&
       hasReturnedShellPromptOutput &&
@@ -715,17 +727,13 @@ export class IdentityWatcher {
   }
 
   private hasUnambiguousShellPromptInText(text: string, agentCommitted = false): boolean {
-    return this.getOutputTailLines(text).some((line) =>
+    const promptCharacter = agentCommitted
+      ? PROMPT_CHARACTER_PATTERN
+      : PROMPT_CHARACTER_PATTERN_WITH_AGENT_GLYPHS;
+    if (!promptCharacter.test(text)) return false;
+    return getTrailingNonBlankLines(text, SHELL_IDENTITY_FALLBACK_SCAN_LINES).some((line) =>
       isUnambiguousShellPromptLine(line, agentCommitted)
     );
-  }
-
-  private getOutputTailLines(text: string): string[] {
-    return stripAnsi(text)
-      .split(/\r\n|\r|\n/)
-      .map((line) => line.trimEnd())
-      .filter((line) => line.trim().length > 0)
-      .slice(-SHELL_IDENTITY_FALLBACK_SCAN_LINES);
   }
 
   private clearShellCommandEvidenceAfterPromptReturn(): void {

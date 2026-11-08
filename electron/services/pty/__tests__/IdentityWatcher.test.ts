@@ -10,6 +10,12 @@ import {
 } from "../IdentityWatcher.js";
 import type { ProcessDetector } from "../../ProcessDetector.js";
 import { INITIAL_FOREGROUND_SENTINEL } from "../ForegroundProcessGroupProbe.js";
+import { getTrailingNonBlankLines } from "../trailingOutputLines.js";
+
+vi.mock("../trailingOutputLines.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../trailingOutputLines.js")>();
+  return { ...actual, getTrailingNonBlankLines: vi.fn(actual.getTrailingNonBlankLines) };
+});
 
 interface FakeDelegateState {
   isExited: boolean;
@@ -2522,6 +2528,97 @@ describe("IdentityWatcher", () => {
 
       expect(watcher.pendingFallbackIdentity).toMatchObject({ agentType: "codex" });
       expect(clear).not.toHaveBeenCalledWith("prompt-return");
+      watcher.dispose();
+    });
+  });
+
+  describe("observeOutput per-chunk cost (#16425)", () => {
+    // A Claude-style repaint: hundreds of styled lines, each carrying a `%`
+    // so the chunk gets past the prompt-character check and is line-scanned.
+    function agentRepaint(lines: number, tail = ""): string {
+      let chunk = "";
+      for (let i = 0; i < lines; i++) {
+        chunk += `\x1b[2K\x1b[38;5;245m│ step ${i}: 42% of context used\x1b[0m\r\n`;
+      }
+      return chunk + tail;
+    }
+
+    const COLORED_PROMPT =
+      "\x1b]0;user@host: ~/repo\x07\x1b[01;32muser@host\x1b[00m:\x1b[01;34m~/repo\x1b[00m$ ";
+
+    async function makeCommittedClaude() {
+      const clear = vi.fn();
+      const fakeDetector = {
+        injectShellCommandEvidence: vi.fn(),
+        clearShellCommandEvidence: clear,
+      } as unknown as ProcessDetector;
+      const { delegate, state } = createFakeDelegate({
+        processDetector: fakeDetector,
+        visibleLines: ["claude", "FAKE_CLAUDE_READY"],
+        cursorLine: "FAKE_CLAUDE_READY",
+        ptyDescendantCount: 1,
+        foreground: { shellPgid: 123, foregroundPgid: 456 },
+      });
+      const watcher = new IdentityWatcher(delegate);
+      watcher.onShellSubmit("claude");
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(watcher.isFallbackCommitted).toBe(true);
+      return { delegate, state, clear, watcher };
+    }
+
+    it("does not read the mirror for failure output on agent chunks without a prompt", async () => {
+      const { delegate, watcher } = await makeCommittedClaude();
+      const readMirror = vi.spyOn(delegate, "getLastNLines");
+
+      watcher.observeOutput(agentRepaint(300));
+      watcher.observeOutput("\x1b[12;33H\x1b[38;2;105;105;105m⠁");
+
+      expect(readMirror).not.toHaveBeenCalled();
+      watcher.dispose();
+    });
+
+    it("demotes on a styled prompt that ends a large agent repaint", async () => {
+      const { state, clear, watcher } = await makeCommittedClaude();
+
+      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      state.visibleLines = ["│ step 299: 42% of context used", "user@host:~/repo$ "];
+      state.cursorLine = "user@host:~/repo$ ";
+      state.ptyDescendantCount = 0;
+      watcher.observeOutput(agentRepaint(300, COLORED_PROMPT));
+
+      expect(clear).toHaveBeenCalledWith("prompt-return");
+      watcher.dispose();
+    });
+
+    it("still lets failure output in the mirror veto a prompt that ends a large repaint", async () => {
+      const { state, clear, watcher } = await makeCommittedClaude();
+
+      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      state.visibleLines = ["bash: claude: command not found", "user@host:~/repo$ "];
+      state.cursorLine = "user@host:~/repo$ ";
+      state.ptyDescendantCount = 0;
+      watcher.observeOutput(agentRepaint(300, COLORED_PROMPT));
+
+      expect(clear).not.toHaveBeenCalledWith("prompt-return");
+      watcher.dispose();
+    });
+
+    it("scans a chunk once for a process-icon command while an agent is detected", () => {
+      const { delegate, state } = createFakeDelegate({
+        ptyDescendantCount: 1,
+        foreground: { shellPgid: 123, foregroundPgid: 456 },
+      });
+      const watcher = new IdentityWatcher(delegate);
+      watcher.onShellSubmit("pnpm dev");
+      expect(watcher.pendingFallbackIdentity).toMatchObject({ processIconId: "pnpm" });
+      expect(watcher.pendingFallbackIdentity?.agentType).toBeUndefined();
+      // The script starts an agent, which the process tree then detects.
+      state.detectedAgentId = "claude";
+
+      vi.mocked(getTrailingNonBlankLines).mockClear();
+      watcher.observeOutput(agentRepaint(50));
+
+      expect(getTrailingNonBlankLines).toHaveBeenCalledTimes(1);
       watcher.dispose();
     });
   });
