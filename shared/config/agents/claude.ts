@@ -194,6 +194,8 @@ export const config: AgentConfig = {
     // one), which makes the id stable for the life of the conversation. Until
     // the first message there is no conversation to resume, but the CLI accepts
     // the same id again, which is how spawn restores an untouched pane (#12371).
+    // The run can still leave it: `/resume` and `/clear` move the CLI to
+    // another id, which only the exit farewell names (#16377, 2.1.319).
     assignSessionIdArgs: (sessionId: string) => ["--session-id", sessionId],
   },
   help: {

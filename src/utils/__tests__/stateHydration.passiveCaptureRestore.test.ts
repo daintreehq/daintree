@@ -128,6 +128,11 @@ interface ElectronSide {
   disposeLifecycleLedger: () => void;
   writeBackCapturedSessionId: (capture: unknown) => Promise<string>;
   acceptObservedAgentSession: (observation: unknown) => Promise<string>;
+  noteTerminalLaunch: (
+    terminalId: string,
+    launch: { command?: string; agentSessionId?: string }
+  ) => void;
+  releaseSupersededCapturedSession: (terminalId: string, spawnedGeneration: number) => void;
   resetCapturedSessionPersistenceForTests: () => void;
   offerAgentRunArgvSession: (
     terminalId: string,
@@ -274,6 +279,82 @@ describe("passive exit capture → cold restore (#12433)", () => {
       const resumeArgs = resume.args(sessionId).map((arg) => quoteLaunchArgOptional(arg));
       expect(args?.command).toContain(resumeArgs.join(" "));
     }
+  });
+
+  // #16377: Claude Code takes its id at launch, and `/resume` inside the TUI
+  // moved the run to another conversation before it quit to the shell. Its
+  // farewell is the only record of where it ended.
+  it("resumes a Claude pane where its launched run ended, not where it began", async () => {
+    const LAUNCH_ID = "b385c7f7-e72d-476d-ae70-c608446c8b81";
+    const ENDED_ID = "af2ad2f5-cbb1-4eb8-a5cc-26f56d37b075";
+    await stateRef.manager!.saveProjectState(projectId, {
+      projectId,
+      sidebarWidth: 350,
+      terminals: [
+        {
+          id: "pane-a",
+          kind: "terminal",
+          launchAgentId: "claude",
+          title: "Claude",
+          cwd: "/project",
+          location: "grid",
+          command: "claude",
+          agentSessionId: LAUNCH_ID,
+        },
+      ],
+    });
+
+    const generation = main
+      .getLifecycleLedger()
+      .recordLaunch("pane-a", { projectId, launchAgentId: "claude" });
+    main.noteTerminalLaunch("pane-a", { command: "claude", agentSessionId: LAUNCH_ID });
+    main.releaseSupersededCapturedSession("pane-a", generation);
+    await expect(
+      main.writeBackCapturedSessionId({
+        terminalId: "pane-a",
+        launchGeneration: null,
+        boundary: "demotion",
+        run: { launchGeneration: generation, agentIncarnation: 0 },
+        record: {
+          sessionId: ENDED_ID,
+          agentId: "claude",
+          worktreeId: null,
+          title: "Claude",
+          projectId,
+          cwd: "/project",
+        },
+      })
+    ).resolves.toBe("superseded");
+
+    const reader = new main.ProjectStateManager(dir);
+    const persisted = await reader.getProjectState(projectId);
+    reader.dispose();
+    appClientMock.hydrate.mockResolvedValue({
+      appState: { terminals: persisted!.terminals, sidebarWidth: 350 },
+      terminalConfig: { scrollbackLines: 1000, performanceMode: false },
+      project: { id: projectId, path: "/project" },
+      agentSettings: { agents: {} },
+    });
+    const addPanel = vi.fn(async (_args: RespawnArgs) => "ok");
+
+    await hydrateAppState({
+      addPanel,
+      setActiveWorktree: vi.fn(),
+      loadRecipes: vi.fn().mockResolvedValue(undefined),
+      openDiagnosticsDock: vi.fn(),
+    });
+
+    const resume = getAgentConfig("claude")?.resume;
+    if (resume?.kind !== "session-id") throw new Error("claude must resume by session id");
+    const restored = addPanel.mock.calls.find(([args]) => args.requestedId === "pane-a")?.[0];
+    expect(restored?.agentSessionId).toBe(ENDED_ID);
+    expect(restored?.command).toContain(
+      resume
+        .args(ENDED_ID)
+        .map((arg) => quoteLaunchArgOptional(arg))
+        .join(" ")
+    );
+    expect(restored?.command).not.toContain(LAUNCH_ID);
   });
 
   // #15994: Codex quit to the shell, the user typed `codex resume <id>` to

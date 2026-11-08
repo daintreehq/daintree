@@ -164,10 +164,31 @@ interface PaneClaim {
   generation: number;
   projectId: string;
   source: "exit" | "demotion" | "live" | "argv";
-  /** `argv` and `demotion`: the agent run within the generation. */
+  /**
+   * `argv` and `demotion`, and `exit` when the capture says: the agent run
+   * within the generation.
+   */
   incarnation?: number;
   /** `live` and `argv`: `sessionIdentityRevision` from before the claim was made. */
   identityRevision?: number;
+}
+
+/**
+ * The id a farewell's run was launched on, when the farewell names another
+ * (#16377). An agent that takes its id at launch never has it written by a
+ * capture, yet `/resume` or `/clear` can move the run elsewhere, and the
+ * farewell is the only word on where it ended. Only the run the generation
+ * launched, read from the host-confirmed launch: the pane may replace it only
+ * while it still holds that id, since anything else there is a renderer edit.
+ */
+function launchIdLeftByFarewell(claim: PaneClaim): string | undefined {
+  if (claim.source !== "exit" && claim.source !== "demotion") return undefined;
+  if (claim.incarnation !== 0) return undefined;
+  const launch = confirmedLaunches.get(claim.terminalId);
+  if (launch?.generation !== claim.generation || launch.projectId !== claim.projectId) {
+    return undefined;
+  }
+  return launch.agentSessionId !== claim.sessionId ? launch.agentSessionId : undefined;
 }
 
 /** Whether the pane's id was written by this run's own argv: the one thing a demotion may correct. */
@@ -187,10 +208,14 @@ function decidePaneWriteback(state: ProjectState | null, claim: PaneClaim): Pane
   const authored = authoredIds.get(terminalId);
   // A demotion leaves a live shell that can host another conversation, so its
   // farewell never stands for the pane on its own. It only corrects an id the
-  // same run's argv wrote: `/resume` or `/new` inside the TUI switched
-  // conversations without touching argv. Read here, behind that argv write in
-  // the queue, never when the demotion arrived.
-  if (claim.source === "demotion" && !argvClaimOfRun(authored, claim)) {
+  // same run's argv wrote, or the one its launch handed it: `/resume` or `/new`
+  // inside the TUI switched conversations without touching argv. Read here,
+  // behind that argv write in the queue, never when the demotion arrived.
+  if (
+    claim.source === "demotion" &&
+    !argvClaimOfRun(authored, claim) &&
+    launchIdLeftByFarewell(claim) === undefined
+  ) {
     return "ineligible-boundary";
   }
 
@@ -225,7 +250,12 @@ function decidePaneWriteback(state: ProjectState | null, claim: PaneClaim): Pane
   if (claim.source === "demotion") {
     if (!pane.agentSessionId) return "ineligible-boundary";
     if (pane.agentSessionId === sessionId) return "unchanged";
-    if (!authored || !claimCovers(authored, pane.agentSessionId)) return "conflict";
+    if (launchIdLeftByFarewell(claim) === pane.agentSessionId) {
+      pane.agentSessionId = sessionId;
+      return "superseded";
+    }
+    if (!argvClaimOfRun(authored, claim)) return "ineligible-boundary";
+    if (!claimCovers(authored, pane.agentSessionId)) return "conflict";
     pane.agentSessionId = sessionId;
     return "superseded";
   }
@@ -242,6 +272,10 @@ function decidePaneWriteback(state: ProjectState | null, claim: PaneClaim): Pane
   // pane held from before the run. Once per run, so a later capture of the
   // same run still replaces it.
   if (claim.source === "argv") {
+    pane.agentSessionId = sessionId;
+    return "superseded";
+  }
+  if (launchIdLeftByFarewell(claim) === pane.agentSessionId) {
     pane.agentSessionId = sessionId;
     return "superseded";
   }
@@ -263,12 +297,14 @@ function decidePaneWriteback(state: ProjectState | null, claim: PaneClaim): Pane
  * cold restore resumes the exact conversation (#12433). Only a final PTY exit
  * qualifies: a demotion leaves a live shell that can host another
  * conversation, and trash expiry belongs to a pane already on its way out.
- * The one exception is a demotion correcting the id its own run's argv wrote
- * (#15994), which the run may have left for another conversation.
+ * The exceptions are a demotion correcting the id its own run's argv wrote
+ * (#15994) or its launch handed it (#16377), either of which the run may have
+ * left for another conversation.
  *
  * Goes through the project's serialized state queue like every other writer.
  * Fills an absent id, keeps an identical one, and never overwrites someone
- * else's — a conflict is reported, not resolved.
+ * else's — a conflict is reported, not resolved. The id the launched run was
+ * handed counts as its own: its farewell may replace it.
  */
 export async function writeBackCapturedSessionId(
   capture: CapturedAgentSession
@@ -298,6 +334,7 @@ export async function writeBackCapturedSessionId(
     generation,
     projectId,
     source: "exit",
+    ...(run?.launchGeneration === generation && { incarnation: run.agentIncarnation }),
   });
 }
 
