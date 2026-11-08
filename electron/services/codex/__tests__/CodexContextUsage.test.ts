@@ -48,12 +48,15 @@ const OK: AgentContextUsageResult = {
 };
 
 const getTerminalAsync = vi.fn<(id: string) => Promise<PaneRecord | null>>();
-const getTerminalInfo =
-  vi.fn<(id: string) => Promise<(PaneRecord & { ptyPid?: number }) | null>>();
+const getTerminalInfo = vi.fn<(id: string) => Promise<(PaneRecord & { ptyPid?: number }) | null>>();
 const observe = vi.fn<(pid: number) => Promise<CodexRolloutObservation>>();
-const read = vi.fn<
-  (rollout: CodexRolloutObservation, options: { signal?: AbortSignal }) => Promise<AgentContextUsageResult>
->();
+const read =
+  vi.fn<
+    (
+      rollout: CodexRolloutObservation,
+      options: { signal?: AbortSignal }
+    ) => Promise<AgentContextUsageResult>
+  >();
 
 function deps() {
   return {
@@ -85,7 +88,10 @@ describe("readCodexPaneContextUsage (#16408)", () => {
 
     // The process id comes from the host's record, never the caller.
     expect(observe).toHaveBeenCalledWith(4242);
-    expect(read).toHaveBeenCalledWith(OBSERVED, expect.objectContaining({ signal: expect.anything() }));
+    expect(read).toHaveBeenCalledWith(
+      OBSERVED,
+      expect.objectContaining({ signal: expect.anything() })
+    );
   });
 
   it("reads a Codex typed into a shell, with no session id on record", async () => {

@@ -202,7 +202,10 @@ describe("readCodexContextUsage record shapes", () => {
   it.each<[string, string]>([
     ["no info object", tokenCount("full" as unknown as Record<string, unknown>)],
     ["no last usage", tokenCount(info({ last_token_usage: undefined }))],
-    ["a missing total", tokenCount(info({ last_token_usage: usage(1, { total_tokens: undefined }) }))],
+    [
+      "a missing total",
+      tokenCount(info({ last_token_usage: usage(1, { total_tokens: undefined }) })),
+    ],
     ["a negative part", tokenCount(info({ last_token_usage: usage(4_000, { input_tokens: -1 }) }))],
     ["a fractional total", tokenCount(info({ last_token_usage: usage(4_000.5) }))],
     ["a window that isn't a number", tokenCount(info({ model_context_window: "475000" }))],
@@ -211,14 +214,17 @@ describe("readCodexContextUsage record shapes", () => {
     ["a time that won't parse", tokenCount(info(), "yesterday")],
     ["a line that won't parse", '{"type":"event_msg","payload":{"type":"token_count"'],
     ["an event with no payload", JSON.stringify({ type: "event_msg", payload: "token_count" })],
-  ])("answers unrecognized for a newest count with %s, never an older one", async (_label, line) => {
-    const rollout = await seed([tokenCount(info()), line]);
+  ])(
+    "answers unrecognized for a newest count with %s, never an older one",
+    async (_label, line) => {
+      const rollout = await seed([tokenCount(info()), line]);
 
-    expect(await readCodexContextUsage(rollout)).toEqual({
-      status: "unavailable",
-      reason: "unrecognized",
-    });
-  });
+      expect(await readCodexContextUsage(rollout)).toEqual({
+        status: "unavailable",
+        reason: "unrecognized",
+      });
+    }
+  );
 
   // `fill_to_context_window` writes the step up to the window as the last
   // usage, with every part zero and no reasoning flag: not the context.
@@ -262,9 +268,10 @@ describe("readCodexContextUsage record shapes", () => {
     const filler = JSON.stringify({ type: "response_item", payload: { text: "x".repeat(4_096) } });
     const rollout = await seed([tokenCount(info()), filler]);
 
-    expect(await readCodexContextUsage(rollout, { chunkBytes: 512, maxScanBytes: 2_048 })).toEqual(
-      { status: "unavailable", reason: "search-cap-reached" }
-    );
+    expect(await readCodexContextUsage(rollout, { chunkBytes: 512, maxScanBytes: 2_048 })).toEqual({
+      status: "unavailable",
+      reason: "search-cap-reached",
+    });
   });
 });
 

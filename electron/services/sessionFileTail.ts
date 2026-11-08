@@ -7,7 +7,11 @@
 
 import type { FileHandle } from "fs/promises";
 
-export async function readFully(handle: FileHandle, buffer: Buffer, position: number): Promise<void> {
+export async function readFully(
+  handle: FileHandle,
+  buffer: Buffer,
+  position: number
+): Promise<void> {
   let offset = 0;
   while (offset < buffer.length) {
     const { bytesRead } = await handle.read(

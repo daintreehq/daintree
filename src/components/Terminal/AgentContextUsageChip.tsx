@@ -59,8 +59,7 @@ export function AgentContextUsageChip({ terminalId }: { terminalId: string }) {
   const exact = reading.contextTokens.toLocaleString("en-US");
   const recorded = new Date(reading.recordedAt).toLocaleString();
   const window = reading.contextWindow;
-  const percent =
-    window === undefined ? null : Math.round((reading.contextTokens / window) * 100);
+  const percent = window === undefined ? null : Math.round((reading.contextTokens / window) * 100);
   const windowExact = window?.toLocaleString("en-US");
   const label =
     provider === "codex"
