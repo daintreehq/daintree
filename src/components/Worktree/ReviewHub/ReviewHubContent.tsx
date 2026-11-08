@@ -1879,11 +1879,15 @@ export function ReviewHubContent({
                     {/* One row, always: the heading truncates rather than
                         pushing the review-threads hand-off onto a row of its
                         own, which would outgrow the scroller's `scroll-pt-10`
-                        clearance. Only the hand-off's no-target hint wraps. */}
+                        clearance. Only the hand-off's no-target hint wraps.
+                        The heading's zero basis is what holds the row: a
+                        wrapping flex row breaks lines on each item's size
+                        before anything shrinks, so `min-w-0` alone would still
+                        let a long heading push the button down. */}
                     <div
                       className={cn(REVIEW_HUB_SECTION_BAND, "flex-wrap border-b border-divider")}
                     >
-                      <span className={cn(SECTION_LABEL_CLASS, "min-w-0 truncate")}>
+                      <span className={cn(SECTION_LABEL_CLASS, "min-w-0 flex-1 truncate")}>
                         Changed vs{" "}
                         <span className="font-mono font-medium normal-case tracking-normal">
                           {mainBranch}
