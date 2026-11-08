@@ -6,7 +6,7 @@ import {
   resolvePluginCategory,
 } from "@shared/config/pluginCategoryRegistry";
 import { PluginIconTile } from "./pluginIcons";
-import { CapabilityRow } from "./capabilityMeta";
+import { CapabilityRow, permissionBypassAgentNames } from "./capabilityMeta";
 import { PluginMcpServersSection } from "./PluginMcpServersSection";
 import { PluginLogsSection, usePluginLogs } from "./PluginLogsSection";
 import { PluginPerformanceSection, PluginStylesSection } from "./PluginPerformanceTab";
@@ -93,6 +93,7 @@ function PluginCapabilityList({
 }) {
   const allowedUrls = plugin.manifest.scopes?.network?.allowedUrls;
   const allowedSocketPaths = plugin.manifest.scopes?.socket?.allowedPaths;
+  const permissionBypassAgents = permissionBypassAgentNames(plugin.manifest.contributes.agents);
 
   return (
     <div className="space-y-2">
@@ -121,6 +122,7 @@ function PluginCapabilityList({
             capability={capability}
             allowedUrls={allowedUrls}
             allowedSocketPaths={allowedSocketPaths}
+            permissionBypassAgents={permissionBypassAgents}
           />
         ))}
       </ul>

@@ -1,4 +1,5 @@
 import {
+  getPluginBypassArgHistory,
   reconcileBypassFlags,
   reconcileDecorationFlags,
   reconcileInlineModeFlag,
@@ -51,7 +52,8 @@ export function reconcileResumeLaunchFlagsWith(
         base,
         session.agentId,
         effectiveBypass,
-        entry.dangerousArgs as string | undefined
+        entry.dangerousArgs as string | undefined,
+        getPluginBypassArgHistory(settings, session.agentId)
       ),
       session.agentId,
       effectiveInline

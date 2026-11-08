@@ -379,6 +379,8 @@ export type {
 export {
   DEFAULT_AGENT_SETTINGS,
   DEFAULT_DANGEROUS_ARGS,
+  getDefaultDangerousArgs,
+  getPluginBypassArgHistory,
   getAgentSettingsEntry,
   resolveEffectivePresetId,
   generateAgentFlags,

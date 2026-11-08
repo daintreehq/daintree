@@ -2698,6 +2698,14 @@ export interface PluginAgentContribution {
    * settings. Only the format is declared; Daintree owns any env var name.
    */
   launchMcp?: { format: LaunchMcpFormat };
+  /**
+   * The arguments the CLI takes to skip its permission prompts (#16374).
+   * Declaring them turns nothing on: they ride only a launch whose resolved
+   * bypass setting is on (the global switch, the agent's setting and its
+   * preset, an explicit "off" included), exactly as a built-in agent's flag
+   * does. Without them the agent is never eligible for the global switch.
+   */
+  permissionBypassArgs?: string[];
 }
 
 /**
@@ -3967,6 +3975,13 @@ export interface PluginArchiveManifestPreview {
    * install is where the user first hears about it.
    */
   projectTemplates: Array<{ title: string; projectPlugins: string[] }>;
+  /**
+   * Contributed agents, by name, that declare the flag their CLI takes to skip
+   * permission prompts (#16374). Declaring it turns nothing on, but the agent
+   * then runs without prompts whenever the person's Skip permission prompts
+   * setting says so, which install is the place to say.
+   */
+  permissionBypassAgents: string[];
 }
 
 /**
@@ -4015,6 +4030,12 @@ export type PluginCheckUpdateResult =
       version: string;
       displayName?: string;
       capabilities: PluginCapability[];
+      /**
+       * The new version's contributed agents, by name, that declare a flag for
+       * skipping permission prompts (#16374), so the update review can say so.
+       * Absent from a host that predates the field.
+       */
+      permissionBypassAgents?: string[];
       /**
        * SHA-256 of the archive this preview was read from. A confirmed update
        * passes it back as {@link PluginInstallExpectation.archiveHash} so the

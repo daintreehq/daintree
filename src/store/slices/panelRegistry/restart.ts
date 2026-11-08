@@ -22,6 +22,7 @@ import {
   stripAssignedSessionIdArgs,
   stripConversationSelectorFlags,
   supportsSessionIdAssignment,
+  getPluginBypassArgHistory,
   reconcileBypassFlags,
   reconcileDecorationFlags,
   reconcileInlineModeFlag,
@@ -188,6 +189,8 @@ interface LoadedAgentRuntimeSettings {
   globalSkipPermissions: boolean;
   /** Global "use alt-screen mode by default" override at restart time (#10876). */
   globalUseAltScreen: boolean;
+  /** Bypass args plugins have declared for this agent, stripped from saved flags (#16374). */
+  pluginBypassArgHistory: string[][];
 }
 
 function mergeSpawnEnv(
@@ -689,6 +692,7 @@ export const createRestartActions = (
           tmpDir,
           globalSkipPermissions: agentSettings?.globalSkipPermissions ?? false,
           globalUseAltScreen: agentSettings?.globalUseAltScreen ?? false,
+          pluginBypassArgHistory: getPluginBypassArgHistory(agentSettings, effectiveAgentId),
         };
         if (settings.presetWasStale) {
           nextAgentPresetId = undefined;
@@ -753,7 +757,13 @@ export const createRestartActions = (
         const reconcileFlags = (base: string[]): string[] =>
           reconcileDecorationFlags(
             reconcileInlineModeFlag(
-              reconcileBypassFlags(base, effectiveAgentId, effectiveBypass, dangerousArgs),
+              reconcileBypassFlags(
+                base,
+                effectiveAgentId,
+                effectiveBypass,
+                dangerousArgs,
+                runtimeForEnv.pluginBypassArgHistory
+              ),
               effectiveAgentId,
               effectiveInline
             ),

@@ -142,6 +142,58 @@ export function validateAgentIds(manifest: ParsedPluginManifest, ctx: z.Refineme
   });
 }
 
+// A declared bypass flag rides only a launch the person's setting turns it on
+// for (#16374). The same flag in args every launch or resume carries would
+// skip prompts past an "off" veto, so none of them may hold a declared option
+// (with its value, when it takes one). `--approval ask` beside a declared
+// `--approval never` is a different setting and stays allowed.
+export function validateAgentPermissionBypass(
+  manifest: ParsedPluginManifest,
+  ctx: z.RefinementCtx
+): void {
+  manifest.contributes.agents.forEach((agent, index) => {
+    if (!agent.permissionBypassArgs) return;
+    const groups = optionGroups(agent.permissionBypassArgs);
+    const carriers: Array<[readonly (string | number)[], readonly string[] | undefined]> = [
+      [["args"], agent.args],
+      [["resume", "args"], agent.resume?.args],
+      [
+        ["resume", "resumeLatestArgs"],
+        agent.resume?.kind === "session-id" ? agent.resume.resumeLatestArgs : undefined,
+      ],
+    ];
+    for (const [field, args] of carriers) {
+      if (!args) continue;
+      const carried = groups.find((group) =>
+        args.some((_, start) => group.every((token, offset) => args[start + offset] === token))
+      );
+      if (carried === undefined) continue;
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["contributes", "agents", index, ...field],
+        message: `Agent "${agent.id}" carries its permission-bypass arg "${carried.join(" ")}" in ${field.join(".")}, which would skip permission prompts whatever the person chose — declare it only in permissionBypassArgs.`,
+        params: { errorCode: "agent_permission_bypass_in_args" },
+      });
+    }
+  });
+}
+
+/** Pairs each option with the non-option value after it, as a launch reads bypass args. */
+function optionGroups(tokens: readonly string[]): string[][] {
+  const groups: string[][] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index] as string;
+    const next = tokens[index + 1];
+    if (token.startsWith("-") && next !== undefined && !next.startsWith("-")) {
+      groups.push([token, next]);
+      index += 1;
+    } else {
+      groups.push([token]);
+    }
+  }
+  return groups;
+}
+
 // Plugin process-tool commands are additive for new commands only (#11613).
 // A command already claimed by a built-in tool or by a built-in agent's CLI
 // would never win at runtime — the detector merges built-ins over the plugin

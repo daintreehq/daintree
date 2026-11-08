@@ -211,6 +211,12 @@ async function runPreviewWorker(): Promise<void> {
               title: clampPreviewText(template.title),
               projectPlugins: (templateProjectPlugins.get(template.id) ?? []).map(clampPreviewText),
             })),
+            // An agent declaring its CLI's bypass flag can run without
+            // permission prompts once the person's setting allows it, so it is
+            // named at install (#16374). Names are author-controlled.
+            permissionBypassAgents: (manifest.contributes?.agents ?? [])
+              .filter((agent) => (agent.permissionBypassArgs?.length ?? 0) > 0)
+              .map((agent) => clampPreviewText(agent.name)),
           },
         });
         flushArchiveInstallIntents();

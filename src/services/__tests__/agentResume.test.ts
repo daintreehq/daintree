@@ -30,6 +30,7 @@ vi.mock("@shared/types/agentSettings", () => ({
   buildResumeCommand: buildResumeCommandMock,
   buildResumeLatestCommand: buildResumeLatestCommandMock,
   reconcileBypassFlags: reconcileBypassFlagsMock,
+  getPluginBypassArgHistory: () => [],
   resolveEffectiveBypass: resolveEffectiveBypassMock,
   reconcileInlineModeFlag: reconcileInlineModeFlagMock,
   resolveEffectiveInlineMode: resolveEffectiveInlineModeMock,
@@ -110,7 +111,8 @@ describe("reconcileResumeLaunchFlags", () => {
       ["--dangerously-skip-permissions"],
       "claude",
       true,
-      "--dangerously-skip-permissions"
+      "--dangerously-skip-permissions",
+      []
     );
     expect(result).toEqual(["--dangerously-skip-permissions"]);
   });
@@ -121,14 +123,15 @@ describe("reconcileResumeLaunchFlags", () => {
       [],
       "claude",
       true,
-      "--dangerously-skip-permissions"
+      "--dangerously-skip-permissions",
+      []
     );
   });
 
   it("passes undefined dangerousArgs when the agent has no settings entry", () => {
     reconcileResumeLaunchFlags({ agentId: "gemini" });
     expect(resolveEffectiveBypassMock).toHaveBeenCalledWith({}, "gemini", true);
-    expect(reconcileBypassFlagsMock).toHaveBeenCalledWith([], "gemini", true, undefined);
+    expect(reconcileBypassFlagsMock).toHaveBeenCalledWith([], "gemini", true, undefined, []);
   });
 
   // #13046: the caller's verbatim tail never reaches the reconcile, and comes
@@ -144,7 +147,8 @@ describe("reconcileResumeLaunchFlags", () => {
       ["--dangerously-skip-permissions"],
       "claude",
       true,
-      "--dangerously-skip-permissions"
+      "--dangerously-skip-permissions",
+      []
     );
     expect(result).toEqual(["--dangerously-skip-permissions", "--effort", "high"]);
   });

@@ -155,6 +155,7 @@ import {
 import {
   clearPluginAgentRegistryForTests,
   getPluginAgentRegistry,
+  getPluginIdForAgent,
 } from "../../../shared/config/pluginAgentRegistry.js";
 import {
   clearPluginProcessToolRegistryForTests,
@@ -739,6 +740,43 @@ describe("PluginService integration — agent contributions (issue #9560)", () =
         payload: expect.objectContaining({ complete: true }),
       })
     );
+  });
+
+  it("records the bypass args of an agent promoted when the plugin shadowing it unloads (#16374)", async () => {
+    const agent = {
+      id: "hermes",
+      name: "Hermes",
+      command: "hermes",
+      color: "#3366ff",
+      iconId: "claude",
+    };
+    const declared: Record<string, string[]> = {
+      "acme.alpha": ["--yolo"],
+      "acme.beta": ["--trust-all"],
+    };
+    for (const [name, permissionBypassArgs] of Object.entries(declared)) {
+      await writePlugin(name, {
+        name,
+        version: "1.0.0",
+        capabilities: ["agent:register"],
+        contributes: { agents: [{ ...agent, permissionBypassArgs }] },
+      });
+    }
+
+    const service = new PluginService(tmpDir, "0.0.0");
+    await service.initialize();
+    const winner = getPluginIdForAgent("hermes") as string;
+    const shadowed = winner === "acme.alpha" ? "acme.beta" : "acme.alpha";
+    const recorded = () =>
+      (storeState.get("agentSettings.pluginBypassArgHistory") as Record<string, string[][]>)
+        ?.hermes ?? [];
+    expect(recorded()).toContainEqual(declared[winner]);
+    expect(recorded()).not.toContainEqual(declared[shadowed]);
+
+    service.unloadPlugin(winner);
+
+    expect(getPluginIdForAgent("hermes")).toBe(shadowed);
+    expect(recorded()).toContainEqual(declared[shadowed]);
   });
 
   it("does not register agents when the manifest omits the agent:register capability", async () => {

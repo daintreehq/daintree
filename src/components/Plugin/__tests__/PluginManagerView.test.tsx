@@ -789,6 +789,29 @@ describe("PluginManagerView", () => {
     );
   });
 
+  it("names the incoming agents that can skip permission prompts in the update review (#16374)", async () => {
+    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([urlPlugin()]);
+    (window.electron.plugin.checkForUpdate as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: "available",
+      name: "acme.demo",
+      version: "2.0.0",
+      capabilities: ["network:fetch", "agent:register"],
+      permissionBypassAgents: ["Hermes"],
+      archiveHash: REVIEWED_HASH,
+    });
+    renderDialog();
+    await selectPlugin();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Check Acme Demo for updates" }));
+
+    await waitFor(() => expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy());
+    expect(
+      screen.getAllByText(
+        "Hermes can run without permission prompts when you turn on Skip permission prompts"
+      )
+    ).toHaveLength(1);
+  });
+
   it("explains a refused install when the download no longer matches the preview", async () => {
     vi.mocked(window.electron.plugin.list).mockResolvedValue([urlPlugin()]);
     vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({

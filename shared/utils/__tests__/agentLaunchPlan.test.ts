@@ -6,6 +6,10 @@ import {
   type AgentSettings,
 } from "../../types/agentSettings.js";
 import { buildAgentLaunchPlan, type AgentLaunchPlanInput } from "../agentLaunchPlan.js";
+import {
+  clearPluginAgentRegistryForTests,
+  registerPluginAgents,
+} from "../../config/pluginAgentRegistry.js";
 
 function input(overrides: Partial<AgentLaunchPlanInput> = {}): AgentLaunchPlanInput {
   return {
@@ -502,6 +506,61 @@ describe("buildAgentLaunchPlan", () => {
     expect(plan.command).toBeUndefined();
     expect(plan.assignedSessionId).toBeUndefined();
     expect(plan.title).toBe("Terminal");
+  });
+});
+
+describe("a plugin agent's declared permission-bypass args (#16374)", () => {
+  afterEach(() => clearPluginAgentRegistryForTests());
+
+  async function plan(entry: Record<string, unknown>, globalSkipPermissions: boolean) {
+    registerPluginAgents("acme.agents", [
+      {
+        id: "hermes",
+        name: "Hermes",
+        command: "hermes",
+        color: "#3366ff",
+        iconId: "claude",
+        permissionBypassArgs: ["--approval", "never"],
+      },
+    ]);
+    return buildAgentLaunchPlan(
+      input({
+        agentId: "hermes",
+        agentConfig: getEffectiveAgentConfig("hermes"),
+        settings: {
+          agents: { hermes: { customPresets: PRESETS, ...entry } },
+          globalSkipPermissions,
+        } as unknown as AgentSettings,
+      })
+    );
+  }
+
+  it("launches and records them when the global switch is on", async () => {
+    const result = await plan({}, true);
+    expect(result.command).toBe("hermes --approval 'never'");
+    expect(result.launchFlags).toEqual(["--approval", "never"]);
+  });
+
+  it("leaves them off when the global switch is off", async () => {
+    const result = await plan({}, false);
+    expect(result.command).toBe("hermes");
+    expect(result.launchFlags).toEqual([]);
+  });
+
+  it("honours an agent setting of 'off' over the global switch", async () => {
+    const result = await plan({ dangerousMode: "off" }, true);
+    expect(result.command).toBe("hermes");
+    expect(result.launchFlags).toEqual([]);
+  });
+
+  it("honours a preset of 'off' over the global switch", async () => {
+    const result = await plan(
+      { presetId: "veto", customPresets: [{ id: "veto", name: "Veto", dangerousMode: "off" }] },
+      true
+    );
+    expect(result.preset?.id).toBe("veto");
+    expect(result.command).toBe("hermes");
+    expect(result.launchFlags).toEqual([]);
   });
 });
 

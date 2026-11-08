@@ -231,6 +231,15 @@ export interface AgentSettings {
    */
   globalSkipPermissions?: boolean;
   /**
+   * Every set of permission-bypass args a plugin agent has registered, by agent
+   * id (#16374). Strip-only: restore, restart and resume remove these from a
+   * pane's saved flags, because a plugin's own declaration can be missing there
+   * (its catalog loads after restore), changed by an update, or overlaid by a
+   * user agent with the same id. Written by main when a plugin agent registers,
+   * kept through a settings reset, and never a source of flags to add.
+   */
+  pluginBypassArgHistory?: Record<string, string[][]>;
+  /**
    * Global "use alt-screen mode by default" override (#10876). Controls what an
    * agent's `"inherit"` inline-mode resolves to when no per-agent/preset choice
    * and no curated registry default apply. Default off — so `inlineMode`
@@ -318,11 +327,46 @@ function ownEntry<T>(map: Readonly<Record<string, T>>, agentId: string | undefin
   return agentId !== undefined && Object.hasOwn(map, agentId) ? map[agentId] : undefined;
 }
 
+/**
+ * The bypass flag an agent launches with when its settings name none: a
+ * built-in's {@link DEFAULT_DANGEROUS_ARGS} entry, or the args a plugin agent
+ * declares for its CLI (#16374), space-separated as `dangerousArgs` is.
+ */
+export function getDefaultDangerousArgs(agentId: string | undefined): string {
+  if (agentId === undefined) return "";
+  const builtIn = ownEntry(DEFAULT_DANGEROUS_ARGS, agentId);
+  if (builtIn !== undefined) return builtIn.trim();
+  return getEffectiveAgentConfig(agentId)?.permissionBypassArgs?.join(" ") ?? "";
+}
+
+/**
+ * The bypass args plugins have declared for `agentId` (#16374), from
+ * {@link AgentSettings.pluginBypassArgHistory}: strip candidates for
+ * {@link reconcileBypassFlags}, never args to add. Malformed entries are dropped.
+ */
+export function getPluginBypassArgHistory(
+  settings: { pluginBypassArgHistory?: unknown } | null | undefined,
+  agentId: string
+): string[][] {
+  const history = settings?.pluginBypassArgHistory;
+  if (history === null || typeof history !== "object" || !Object.hasOwn(history, agentId)) {
+    return [];
+  }
+  const declarations = (history as Record<string, unknown>)[agentId];
+  if (!Array.isArray(declarations)) return [];
+  return declarations.filter(
+    (args): args is string[] =>
+      Array.isArray(args) &&
+      args.length > 0 &&
+      args.every((arg) => typeof arg === "string" && arg.length > 0)
+  );
+}
+
 /** The written `dangerousArgs`, or the agent's default when unset or retired. */
 function resolveDangerousArgs(written: string | undefined, agentId: string | undefined): string {
   const value = written?.trim() ?? "";
   if (value && !ownEntry(RETIRED_DANGEROUS_ARGS, agentId)?.includes(value)) return value;
-  return ownEntry(DEFAULT_DANGEROUS_ARGS, agentId)?.trim() ?? "";
+  return getDefaultDangerousArgs(agentId);
 }
 
 export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
@@ -347,14 +391,17 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
 };
 
 /**
- * Whether an agent opts into permission-bypass via its config
- * (`supports.permissionBypass === true`). Strict — agents that omit the field
- * or set it `false` are NOT bypass-supported, so the global skip-permissions
- * override must never inject their dangerous flag (#10432).
+ * Whether an agent opts into permission-bypass via its config: a built-in's
+ * `supports.permissionBypass === true`, or a plugin agent that declares its
+ * CLI's `permissionBypassArgs` (#16374). Strict — agents that declare neither
+ * are NOT bypass-supported, so the global skip-permissions override must never
+ * inject their dangerous flag (#10432).
  */
 export function isAgentBypassSupported(agentId: string | undefined): boolean {
   if (!agentId) return false;
-  const supports = getEffectiveAgentConfig(agentId)?.supports;
+  const config = getEffectiveAgentConfig(agentId);
+  if (config?.permissionBypassArgs?.length) return true;
+  const supports = config?.supports;
   // `supports` is `AssistantSupports | false | undefined`; only the structured
   // form carries `permissionBypass`.
   return supports !== false && supports?.permissionBypass === true;
@@ -628,7 +675,7 @@ function optionGroups(tokens: readonly string[]): string[][] {
  * to agents that don't declare `supports.permissionBypass`: their `"on"` flag
  * (e.g. Gemini's `--yolo`) is preserved when `effectiveBypass` is true, and an
  * explicit `"off"` veto strips a stale token when it is false. Agents with no
- * canonical token (no `DEFAULT_DANGEROUS_ARGS` entry and no `dangerousArgs`)
+ * canonical token (no default from {@link getDefaultDangerousArgs} and no `dangerousArgs`)
  * fall through the empty-strip-set guard below and are left untouched.
  *
  * Bypass args are matched one option group at a time — an option together with
@@ -639,28 +686,36 @@ function optionGroups(tokens: readonly string[]): string[][] {
  * whose other half another reconciler already rewrote is still recognised.
  *
  * @param bypassArgs - The agent's currently-resolved dangerous args (e.g.
- *   `entry.dangerousArgs`); falls back to `DEFAULT_DANGEROUS_ARGS[agentId]`.
+ *   `entry.dangerousArgs`); falls back to {@link getDefaultDangerousArgs}.
+ * @param pluginBypassArgHistory - Every bypass declaration a plugin has made for
+ *   the agent ({@link getPluginBypassArgHistory}), stripped but never re-added,
+ *   so a saved flag is recognised while the plugin's own declaration is absent.
  */
 export function reconcileBypassFlags(
   flags: readonly string[],
   agentId: string,
   effectiveBypass: boolean,
-  bypassArgs?: string
+  bypassArgs?: string,
+  pluginBypassArgHistory: readonly (readonly string[])[] = []
 ): string[] {
   const resolved = resolveDangerousArgs(bypassArgs, agentId);
   // Strip both the resolved args and the registry default: a snapshot may have
   // been captured before the user customized `dangerousArgs`, so cleaning only
   // the current value could leave a stale default flag behind.
   const groups: string[][] = [];
-  for (const source of [
-    resolved,
-    ownEntry(DEFAULT_DANGEROUS_ARGS, agentId),
-    ...(ownEntry(RETIRED_DANGEROUS_ARGS, agentId) ?? []),
-  ]) {
-    for (const group of optionGroups(source?.trim().split(/\s+/).filter(Boolean) ?? [])) {
+  const addGroups = (tokens: readonly string[]) => {
+    for (const group of optionGroups(tokens)) {
       if (!groups.some((known) => known.join(" ") === group.join(" "))) groups.push(group);
     }
+  };
+  for (const source of [
+    resolved,
+    getDefaultDangerousArgs(agentId),
+    ...(ownEntry(RETIRED_DANGEROUS_ARGS, agentId) ?? []),
+  ]) {
+    addGroups(source?.trim().split(/\s+/).filter(Boolean) ?? []);
   }
+  for (const declared of pluginBypassArgHistory) addGroups(declared);
   if (groups.length === 0) return [...flags];
   // Longest first, so an option/value pair wins over a lone token of its own.
   groups.sort((a, b) => b.length - a.length);

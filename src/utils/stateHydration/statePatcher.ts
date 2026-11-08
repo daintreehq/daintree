@@ -31,6 +31,7 @@ import {
   buildResumeLatestCommand,
   buildLaunchCommandFromFlags,
   mintAssignedSessionId,
+  getPluginBypassArgHistory,
   reconcileBypassFlags,
   reconcileDecorationFlags,
   reconcileInlineModeFlag,
@@ -356,6 +357,7 @@ interface AgentSettingsData {
   agents?: Record<string, Record<string, unknown>>;
   globalSkipPermissions?: boolean;
   globalUseAltScreen?: boolean;
+  pluginBypassArgHistory?: Record<string, string[][]>;
 }
 
 export const inferKind: (saved: SavedTerminalData, projectId?: string | null) => PanelKind =
@@ -821,7 +823,13 @@ export function buildArgsForRespawn(
     const reconcileFlags = (base: string[]): string[] =>
       reconcileDecorationFlags(
         reconcileInlineModeFlag(
-          reconcileBypassFlags(base, agentId, effectiveBypass, dangerousArgs),
+          reconcileBypassFlags(
+            base,
+            agentId,
+            effectiveBypass,
+            dangerousArgs,
+            getPluginBypassArgHistory(agentSettings, agentId)
+          ),
           agentId,
           effectiveInline
         ),

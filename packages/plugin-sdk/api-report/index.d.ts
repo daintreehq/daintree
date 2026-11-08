@@ -4623,6 +4623,14 @@ interface PluginAgentContribution {
     launchMcp?: {
         format: LaunchMcpFormat;
     };
+    /**
+     * The arguments the CLI takes to skip its permission prompts (#16374).
+     * Declaring them turns nothing on: they ride only a launch whose resolved
+     * bypass setting is on (the global switch, the agent's setting and its
+     * preset, an explicit "off" included), exactly as a built-in agent's flag
+     * does. Without them the agent is never eligible for the global switch.
+     */
+    permissionBypassArgs?: string[];
 }
 /**
  * A plugin-contributed terminal process detection (#11613). Maps one command

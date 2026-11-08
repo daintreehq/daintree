@@ -1,5 +1,6 @@
 import { OctagonAlert, AlertTriangle } from "lucide-react";
 import type { BuiltInPluginCapability } from "@shared/types/plugin";
+import { displaySafeText } from "@shared/utils/displaySafeText";
 
 /**
  * Per-capability display tier — a renderer-only visual grouping. `danger` is
@@ -159,16 +160,42 @@ export const SEVERITY_TEXT_CLASS: Record<CapabilitySeverity, string> = {
   neutral: "text-text-secondary",
 };
 
+/**
+ * The agents in `agents` that declare their CLI's flag for skipping permission
+ * prompts (#16374). Names are the plugin author's, so a bidi override can't
+ * reorder the sentence they sit in.
+ */
+export function permissionBypassAgentNames(
+  agents: readonly { name: string; permissionBypassArgs?: readonly string[] }[] | undefined
+): string[] {
+  return (agents ?? [])
+    .filter((agent) => (agent.permissionBypassArgs?.length ?? 0) > 0)
+    .map((agent) => displaySafeText(agent.name));
+}
+
+/** "Hermes", "Hermes and Acme", "Hermes, Acme and Zed". */
+function joinNames(names: readonly string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
 export function CapabilityRow({
   capability,
   allowedUrls,
   allowedSocketPaths,
+  permissionBypassAgents,
 }: {
   capability: BuiltInPluginCapability;
   allowedUrls?: string[];
   allowedSocketPaths?: string[];
+  /** Contributed agents that can skip permission prompts, named under `agent:register`. */
+  permissionBypassAgents?: readonly string[];
 }) {
   const meta = CAPABILITY_META[capability];
+  const bypassAgents =
+    capability === "agent:register" && permissionBypassAgents !== undefined
+      ? permissionBypassAgents
+      : [];
   // A capability with a declared scope renders the concrete endpoints beneath
   // it: "connects to local sockets" is close to meaningless next to
   // "/var/run/docker.sock". Each capability reads only its own scope bucket,
@@ -207,6 +234,12 @@ export function CapabilityRow({
               </li>
             ))}
           </ul>
+        )}
+        {bypassAgents.length > 0 && (
+          <div className="mt-0.5 text-2xs text-text-secondary break-words">
+            {joinNames(bypassAgents)} can run without permission prompts when you turn on Skip
+            permission prompts
+          </div>
         )}
       </div>
     </li>

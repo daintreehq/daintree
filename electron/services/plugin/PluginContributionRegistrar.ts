@@ -36,6 +36,7 @@ import { registerPluginDatabaseEndpoint } from "../pluginAgentMcp/databaseEndpoi
 import type { LoadedPlugin } from "./PluginServiceTypes.js";
 import type { ParsedPluginManifest } from "./pluginManifestLoad.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
+import { recordPluginAgentBypassArgs } from "./pluginAgentBypassHistory.js";
 import { makePluginTourId } from "../../../shared/utils/tourIds.js";
 import type { WorkspaceClient } from "../WorkspaceClient.js";
 import {
@@ -102,6 +103,7 @@ import {
   unregisterContextProviders,
 } from "../contextProviderRegistry.js";
 import {
+  getPluginAgentRegistry,
   getPluginIdForAgent,
   registerPluginAgents,
   unregisterPluginAgents,
@@ -563,6 +565,7 @@ export class PluginContributionRegistrar {
 
     if (manifest.contributes.agents.length > 0) {
       registerPluginAgents(pluginId, manifest.contributes.agents, pluginDir);
+      recordPluginAgentBypassArgs(Object.values(getPluginAgentRegistry()));
       this.deps.broadcaster.scheduleAgentsBroadcast(false);
       // Mirror the updated registry into the pty-host so its activity monitor
       // resolves this agent's detection patterns at spawn time (#10587). The
@@ -1290,7 +1293,12 @@ export class PluginContributionRegistrar {
       if (unregisterPluginHostedViews(pluginId))
         this.deps.broadcaster.scheduleHostedViewsBroadcast();
     });
-    runUnloadStep(pluginId, "unregisterPluginAgents", () => unregisterPluginAgents(pluginId));
+    runUnloadStep(pluginId, "unregisterPluginAgents", () => {
+      unregisterPluginAgents(pluginId);
+      // An unload can promote another plugin's same-id agent, whose declaration
+      // a launch can now carry.
+      recordPluginAgentBypassArgs(Object.values(getPluginAgentRegistry()));
+    });
     runUnloadStep(pluginId, "scheduleAgentsBroadcast", () =>
       this.deps.broadcaster.scheduleAgentsBroadcast(true)
     );

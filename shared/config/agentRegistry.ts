@@ -821,6 +821,14 @@ export interface AgentConfig {
    */
   supports?: AssistantSupports | false;
   /**
+   * A plugin agent's flag for skipping its CLI's permission prompts (#16374),
+   * standing in for a built-in's `DEFAULT_DANGEROUS_ARGS` entry. It makes the
+   * agent eligible for the global skip switch and is the default bypass a
+   * launch adds when the resolved setting is on. Kept apart from
+   * {@link supports}, whose other fields admit an agent to the assistant.
+   */
+  permissionBypassArgs?: readonly string[];
+  /**
    * Minimum installed CLI semver required for the Daintree Assistant launch
    * path. Compared against the live `AgentVersionService.getVersion()` probe
    * before `provisionHelpSession` runs — when the installed version is

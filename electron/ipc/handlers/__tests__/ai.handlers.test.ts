@@ -301,6 +301,43 @@ describe("ai handler payload validation", () => {
     expect(result.defaultAgent).toBe(expected);
   });
 
+  it("keeps the plugin bypass history across a full AGENT_SETTINGS_RESET (#16374)", async () => {
+    const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_RESET);
+    const history = { hermes: [["--yolo"]] };
+    (storeMock.get as Mock).mockImplementation((key: string) =>
+      key === "agentSettings"
+        ? {
+            agents: { hermes: { dangerousMode: "on" } },
+            globalSkipPermissions: true,
+            pluginBypassArgHistory: history,
+          }
+        : undefined
+    );
+
+    await handler({} as never);
+
+    const written = (storeMock.set as Mock).mock.calls.find(
+      ([key]) => key === "agentSettings"
+    )?.[1];
+    expect(written.pluginBypassArgHistory).toEqual(history);
+    expect(written.globalSkipPermissions).toBe(false);
+    expect(written.agents.hermes).toBeUndefined();
+  });
+
+  it("writes no plugin bypass history on a reset that had none (#16374)", async () => {
+    const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_RESET);
+    (storeMock.get as Mock).mockImplementation((key: string) =>
+      key === "agentSettings" ? { agents: {} } : undefined
+    );
+
+    await handler({} as never);
+
+    const written = (storeMock.set as Mock).mock.calls.find(
+      ([key]) => key === "agentSettings"
+    )?.[1];
+    expect(Object.hasOwn(written, "pluginBypassArgHistory")).toBe(false);
+  });
+
   it("leaves a never-set default unset on a full AGENT_SETTINGS_RESET (#13345)", async () => {
     const handler = getInvokeHandler(CHANNELS.AGENT_SETTINGS_RESET);
     (storeMock.get as Mock).mockImplementation((key: string) =>
