@@ -1092,6 +1092,38 @@ describe("doubleShiftOpensCanopy", () => {
   });
 });
 
+describe("includeIssueInFirstPrompt", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    storage = {};
+    installStorageMock();
+    _resetPersistedStoreRegistryForTests();
+  });
+
+  it("starts off and persists the user's choice", async () => {
+    const store = await loadStore();
+    expect(store.getState().includeIssueInFirstPrompt).toBe(false);
+    store.getState().setIncludeIssueInFirstPrompt(true);
+    await vi.waitFor(() => {
+      const parsed = JSON.parse(storageMock.getItem(STORAGE_KEY)!);
+      expect(parsed.state.includeIssueInFirstPrompt).toBe(true);
+    });
+  });
+
+  it("hydrates a saved choice, and a missing or malformed one as off", async () => {
+    const store = await loadStore();
+    const merge = store.persist.getOptions().merge!;
+    const current = store.getState();
+    expect(merge({ includeIssueInFirstPrompt: true }, current).includeIssueInFirstPrompt).toBe(
+      true
+    );
+    expect(merge({ dockDensity: "compact" }, current).includeIssueInFirstPrompt).toBe(false);
+    expect(merge({ includeIssueInFirstPrompt: "true" }, current).includeIssueInFirstPrompt).toBe(
+      false
+    );
+  });
+});
+
 /**
  * Cross-view write-merge coverage for the shared localStorage partition
  * (issue #11351). The two id-keyed maps are the primary victims —
@@ -1302,6 +1334,42 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
     const written = readBlob(backing);
     expect(written.state.projectSwitcherOtherSortMode).toBe("recent");
     expect(written.state.dockDensity).toBe("compact");
+  });
+
+  // A stale view writing something unrelated must not undo a sibling's opt-in
+  // to quoting issues, nor a sibling's opt-out once this view has opted in.
+  it("keeps a sibling's issue-quoting choice when this view changes an unrelated scalar", async () => {
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+
+    store.getState().setDockDensity("normal");
+
+    const disk = readBlob(backing);
+    disk.state.includeIssueInFirstPrompt = true;
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    store.getState().setDockDensity("compact");
+
+    const written = readBlob(backing);
+    expect(written.state.includeIssueInFirstPrompt).toBe(true);
+    expect(written.state.dockDensity).toBe("compact");
+  });
+
+  it("writes this view's own change to the issue-quoting choice over a sibling's", async () => {
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+
+    store.getState().setIncludeIssueInFirstPrompt(true);
+
+    const disk = readBlob(backing);
+    disk.state.reduceAnimations = true;
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    store.getState().setIncludeIssueInFirstPrompt(false);
+
+    const written = readBlob(backing);
+    expect(written.state.includeIssueInFirstPrompt).toBe(false);
+    expect(written.state.reduceAnimations).toBe(true);
   });
 
   it("keeps a sibling's folded band when this view folds a different one", async () => {

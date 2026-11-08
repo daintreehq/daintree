@@ -831,9 +831,10 @@ describe("registerForgeDataHandlers", () => {
       // an agent "nobody replied" when the truth is "nobody could look".
       registerForgeDataHandlers();
 
-      await expect(
-        findHandler("forge:list-issue-comments")(null, { cwd: "/repo", issueNumber: 7 })
-      ).rejects.toThrow(/does not support reading issue comments/i);
+      const read = findHandler("forge:list-issue-comments")(null, { cwd: "/repo", issueNumber: 7 });
+      await expect(read).rejects.toThrow(/does not support reading issue comments/i);
+      // Coded, so the renderer can tell a provider without comments from a failed read.
+      await expect(read).rejects.toMatchObject({ code: "UNSUPPORTED" });
     });
 
     it("strips option fields the read does not honor and drops malformed ones", async () => {

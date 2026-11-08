@@ -48,6 +48,8 @@ const mockGetRecentBranches = vi.fn();
 const mockGetCurrentUser = vi.fn();
 const mockAssignIssue = vi.fn();
 const mockUnassignIssue = vi.fn();
+const mockGetIssue = vi.fn();
+const mockListIssueComments = vi.fn();
 
 const mockAgentSettingsGet = vi.fn().mockResolvedValue({ agents: {} });
 vi.mock("@/clients", () => ({
@@ -63,6 +65,8 @@ vi.mock("@/clients", () => ({
     getCurrentUser: (...args: unknown[]) => mockGetCurrentUser(...args),
     assignIssue: (...args: unknown[]) => mockAssignIssue(...args),
     unassignIssue: (...args: unknown[]) => mockUnassignIssue(...args),
+    getIssue: (...args: unknown[]) => mockGetIssue(...args),
+    listIssueComments: (...args: unknown[]) => mockListIssueComments(...args),
   },
   agentSettingsClient: {
     get: (...args: unknown[]) => mockAgentSettingsGet(...args),
@@ -126,11 +130,15 @@ vi.mock("@/store/recipeStore", () => {
 });
 
 let mockAssignWorktreeToSelf = false;
+const issuePromptPreference = vi.hoisted(() => ({ include: false }));
+const mockSetIncludeIssueInFirstPrompt = vi.hoisted(() => vi.fn());
 vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: (selector: (s: Record<string, unknown>) => unknown) =>
     selector({
       assignWorktreeToSelf: mockAssignWorktreeToSelf,
       setAssignWorktreeToSelf: vi.fn(),
+      includeIssueInFirstPrompt: issuePromptPreference.include,
+      setIncludeIssueInFirstPrompt: mockSetIncludeIssueInFirstPrompt,
       lastSelectedWorktreeRecipeIdByProject: firstAgentFixtures.lastRecipeByProject,
       setLastSelectedWorktreeRecipeIdByProject: mockSetLastRecipe,
       lastSelectedWorktreeAgentIdByProject: firstAgentFixtures.lastAgentByProject,
@@ -1055,6 +1063,7 @@ describe("NewWorktreeDialog — Retry restores the failed request (#16261)", () 
       recipeId: null,
       agentId: null,
       prompt: "",
+      includeIssue: false,
     });
     renderDialog({ initialIssue: RETRY_ISSUE, restoreDraft: draft });
     // Past the branch list, the path suggestion and the settings that would
@@ -1127,6 +1136,7 @@ describe("NewWorktreeDialog — Retry restores the failed request (#16261)", () 
       recipeId: null,
       agentId: null,
       prompt: "",
+      includeIssue: false,
     });
     renderDialog({ restoreDraft: draft });
     await advanceTimersGradually(800);
@@ -1163,6 +1173,7 @@ describe("NewWorktreeDialog — Retry restores the failed request (#16261)", () 
       recipeId: null,
       agentId: null,
       prompt: "",
+      includeIssue: false,
     });
     renderDialog({ initialPR: RETRY_PR, restoreDraft: draft });
     await advanceTimersGradually(800);
@@ -3446,5 +3457,338 @@ describe("NewWorktreeDialog — setup remembered per opening (#16283)", () => {
     await advanceTimersGradually(500);
 
     expect(screen.getByTestId("first-agent-picker").getAttribute("data-selected")).toBe("");
+  });
+});
+
+describe("NewWorktreeDialog — the issue in the first prompt (#16380)", () => {
+  const PROMPT = "SENTINEL-PROMPT start with the tests";
+  const ISSUE: Issue = {
+    number: 42,
+    title: "Uploads fail on slow networks",
+    body: "ISSUE-BODY the upload times out",
+    state: "open",
+    rawState: "OPEN",
+    url: "https://github.com/acme/app/issues/42",
+    assignees: [],
+    labels: [{ name: "bug" }],
+    createdAt: 0,
+    updatedAt: 0,
+    rawData: null,
+  };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListBranches.mockResolvedValue(TEST_BRANCHES);
+    mockGetRecentBranches.mockResolvedValue([]);
+    mockGetAvailableBranch.mockImplementation((_root: string, name: string) =>
+      Promise.resolve(name)
+    );
+    mockGetDefaultPath.mockImplementation((_root: string, branch: string) =>
+      Promise.resolve(`/test/root-worktrees/${branch}`)
+    );
+    mockGetCurrentUser.mockResolvedValue(null);
+    mockGetIssue.mockResolvedValue(ISSUE);
+    mockListIssueComments.mockResolvedValue({
+      items: [
+        {
+          id: "1",
+          body: "COMMENT-ONE it only happens on 3G",
+          url: "",
+          author: { login: "ada", rawData: null },
+          createdAt: Date.UTC(2026, 10, 1),
+          rawData: null,
+        },
+      ],
+      nextCursor: null,
+      hasMore: false,
+    });
+    mockDispatch.mockImplementation(async (actionId: string) => {
+      switch (actionId) {
+        case "worktree.create":
+          return { ok: true, result: { worktreeId: "new-wt-id", branch: "feature/test" } };
+        case "worktree.waitUntilReady":
+          return {
+            ok: true,
+            result: {
+              worktreeId: "new-wt-id",
+              setupState: "ready",
+              stage: null,
+              error: null,
+              timedOut: false,
+            },
+          };
+        case "agent.launch":
+          return { ok: true, result: { launched: true, terminalId: "t-1" } };
+        default:
+          return { ok: true, result: undefined };
+      }
+    });
+  });
+
+  afterEach(() => {
+    issuePromptPreference.include = false;
+    recipePickerCalls.selected = null;
+    vi.useRealTimers();
+    cleanup();
+    vi.clearAllMocks();
+  });
+
+  async function openWithClaude(
+    props: Partial<React.ComponentProps<typeof NewWorktreeDialog>> = {}
+  ) {
+    renderDialog({ initialIssue: ISSUE, ...props });
+    await advanceTimersGradually(500);
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("branch-name-input"), {
+        target: { value: "feature/test" },
+      });
+    });
+    await advanceTimersGradually(500);
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("pick-agent-claude"));
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByTestId("first-agent-prompt"), { target: { value: PROMPT } });
+    });
+  }
+
+  async function toggleInclude() {
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("include-issue-in-prompt"));
+    });
+    await advanceTimersGradually(300);
+  }
+
+  async function submit() {
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("create-worktree-button"));
+    });
+    await advanceTimersGradually(300);
+  }
+
+  function launchedPrompt(): unknown {
+    const launch = mockDispatch.mock.calls.find(([id]) => id === "agent.launch");
+    const args: unknown = launch?.[1];
+    return args !== null && typeof args === "object" && "prompt" in args ? args.prompt : undefined;
+  }
+
+  it("offers the issue unchecked, and reads nothing until it is asked for", async () => {
+    await openWithClaude();
+
+    const option = screen.getByTestId("include-issue-in-prompt");
+    expect(option.getAttribute("aria-checked")).toBe("false");
+    expect(screen.queryByTestId("issue-prompt-status")).toBeNull();
+    expect(mockGetIssue).not.toHaveBeenCalled();
+
+    await submit();
+    expect(launchedPrompt()).toBe(PROMPT);
+    expect(mockSetIncludeIssueInFirstPrompt).not.toHaveBeenCalled();
+  });
+
+  it("doesn't offer the issue without an agent to hand it to", async () => {
+    renderDialog({ initialIssue: ISSUE });
+    await advanceTimersGradually(500);
+    expect(screen.queryByTestId("include-issue-in-prompt")).toBeNull();
+  });
+
+  it("shows what will be sent, then sends exactly that ahead of the user's prompt", async () => {
+    await openWithClaude();
+    await toggleInclude();
+
+    expect(mockGetIssue).toHaveBeenCalledWith("/test/root", 42);
+    expect(screen.getByTestId("issue-prompt-status").textContent).toBe(
+      "Goes ahead of your prompt, with its newest 1 comment"
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByTestId("issue-prompt-preview-toggle"));
+    });
+    const preview = screen.getByTestId("issue-prompt-preview").textContent ?? "";
+    expect(preview).toContain("ISSUE-BODY the upload times out");
+    expect(preview).toContain("COMMENT-ONE it only happens on 3G");
+
+    await submit();
+
+    expect(launchedPrompt()).toBe(`${preview}\n\n${PROMPT}`);
+    // The Retry draft keeps the user's own words and the choice, not the quote.
+    expect(mockAddPendingCreation).toHaveBeenCalledWith(
+      "/test/root-worktrees/feature/test",
+      expect.objectContaining({ prompt: PROMPT, includeIssue: true })
+    );
+    expect(mockSetIncludeIssueInFirstPrompt).toHaveBeenCalledWith(true);
+    // Never in a notification.
+    expect(JSON.stringify(mockNotify.mock.calls)).not.toContain("ISSUE-BODY");
+  });
+
+  it("says a failed read won't be sent, and creates with the user's prompt alone", async () => {
+    mockGetIssue.mockRejectedValue(new Error("Bad credentials"));
+    await openWithClaude();
+    await toggleInclude();
+
+    expect(screen.getByTestId("issue-prompt-error").textContent).toContain(
+      "Couldn't load #42, so it won't be sent — Bad credentials"
+    );
+
+    await submit();
+    expect(launchedPrompt()).toBe(PROMPT);
+  });
+
+  it("reads again on Retry after a failure", async () => {
+    mockGetIssue.mockRejectedValueOnce(new Error("offline"));
+    await openWithClaude();
+    await toggleInclude();
+
+    await act(async () => {
+      fireEvent.click(within(screen.getByTestId("issue-prompt-error")).getByText("Retry"));
+    });
+    await advanceTimersGradually(300);
+
+    expect(mockGetIssue).toHaveBeenCalledTimes(2);
+    expect(screen.queryByTestId("issue-prompt-error")).toBeNull();
+    expect(screen.getByTestId("issue-prompt-status").textContent).toContain(
+      "Goes ahead of your prompt"
+    );
+  });
+
+  it("starts checked when the user chose it before, and remembers turning it off", async () => {
+    issuePromptPreference.include = true;
+    await openWithClaude();
+    await advanceTimersGradually(300);
+
+    expect(screen.getByTestId("include-issue-in-prompt").getAttribute("aria-checked")).toBe("true");
+    expect(mockGetIssue).toHaveBeenCalledTimes(1);
+
+    await toggleInclude();
+    await submit();
+
+    expect(launchedPrompt()).toBe(PROMPT);
+    expect(mockSetIncludeIssueInFirstPrompt).toHaveBeenCalledWith(false);
+  });
+
+  it("restores a Retry's choice to include the issue", async () => {
+    await openWithClaude({
+      restoreDraft: retryDraft({ agentId: "claude", prompt: PROMPT, includeIssue: true }),
+    });
+    await advanceTimersGradually(300);
+
+    expect(screen.getByTestId("include-issue-in-prompt").getAttribute("aria-checked")).toBe("true");
+    expect(mockGetIssue).toHaveBeenCalled();
+  });
+
+  it("holds the issue back with the prompt when the recipe starts its own agent", async () => {
+    issuePromptPreference.include = true;
+    recipePickerCalls.selected = {
+      id: "r1",
+      name: "Agent recipe",
+      terminals: [{ type: "claude" }],
+    };
+    // A held draft keeps the blocked Prompt row on screen.
+    renderDialog({
+      initialIssue: ISSUE,
+      restoreDraft: retryDraft({ agentId: "claude", prompt: PROMPT, includeIssue: true }),
+    });
+    await advanceTimersGradually(800);
+
+    const option = screen.getByTestId("include-issue-in-prompt") as HTMLButtonElement;
+    expect(option.disabled).toBe(true);
+    expect(screen.queryByTestId("issue-prompt-status")).toBeNull();
+
+    await submit();
+    // The agent is handed back to start by hand, with the user's prompt only.
+    const { notify } = await import("@/lib/notify");
+    const handBack = vi
+      .mocked(notify)
+      .mock.calls.find(([payload]) => payload.action?.label === "Start Claude")?.[0].action;
+    expect(handBack).toBeDefined();
+    await act(async () => {
+      await handBack!.onClick();
+    });
+    await advanceTimersGradually(300);
+    expect(launchedPrompt()).toBe(PROMPT);
+  });
+
+  it("holds the issue back when the recipe shown starts an agent but the one run doesn't", async () => {
+    issuePromptPreference.include = true;
+    // What the dialog shows starts an agent, so the option is off and unseen;
+    // a shadowing recipe that runs instead has none, so the agent does start.
+    recipePickerCalls.selected = {
+      id: "r1",
+      name: "Agent recipe",
+      terminals: [{ type: "claude" }],
+    };
+    const shells = {
+      id: "r1",
+      name: "Team recipe",
+      terminals: [{ type: "terminal" }],
+      createdAt: 0,
+    };
+    const getState = useRecipeStore.getState;
+    const spy = vi.spyOn(useRecipeStore, "getState").mockImplementation(() => ({
+      ...getState(),
+      getRecipeById: () => shells,
+    }));
+    try {
+      renderDialog({
+        initialIssue: ISSUE,
+        restoreDraft: retryDraft({ agentId: "claude", prompt: PROMPT, includeIssue: true }),
+      });
+      await advanceTimersGradually(800);
+      await submit();
+
+      expect(launchedPrompt()).toBe(PROMPT);
+      expect(mockGetIssue).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("asks before discarding a changed choice", async () => {
+    // The remembered agent is preselected, so the choice is the only change.
+    firstAgentFixtures.lastIssueAgentByProject = { "test-project": "claude" };
+    const onClose = vi.fn();
+    try {
+      renderDialog({ initialIssue: ISSUE, onClose });
+      await advanceTimersGradually(500);
+      await toggleInclude();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      });
+
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Discard changes" })).toBeDefined();
+    } finally {
+      firstAgentFixtures.lastIssueAgentByProject = {};
+    }
+  });
+
+  it("doesn't remember a choice made where the option wasn't shown", async () => {
+    issuePromptPreference.include = true;
+    // A Retry without an agent: no option, so its stored `false` isn't a choice.
+    renderDialog({
+      initialIssue: ISSUE,
+      restoreDraft: retryDraft({ agentId: null, prompt: "", includeIssue: false }),
+    });
+    await advanceTimersGradually(800);
+    await submit();
+    expect(mockDispatch.mock.calls.some(([id]) => id === "worktree.create")).toBe(true);
+
+    cleanup();
+    // Nor without an issue.
+    renderDialog({
+      restoreDraft: retryDraft({ agentId: "claude", prompt: PROMPT, includeIssue: false }),
+    });
+    await advanceTimersGradually(800);
+    await submit();
+
+    expect(mockSetIncludeIssueInFirstPrompt).not.toHaveBeenCalled();
+  });
+
+  it("doesn't send an issue still loading at Create", async () => {
+    mockGetIssue.mockReturnValue(new Promise(() => {}));
+    await openWithClaude();
+    await toggleInclude();
+
+    await submit();
+    expect(launchedPrompt()).toBe(PROMPT);
   });
 });
