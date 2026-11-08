@@ -177,6 +177,12 @@ export interface ProjectViewManagerOptions {
   /** Called on every did-finish-load for any managed view (initial load and reloads) */
   onViewReady?: (webContents: Electron.WebContents) => void;
   /**
+   * Called when a cached view is reattached as the active one, right after its
+   * warm wake trigger. A warm view doesn't reload, so the onViewReady replays
+   * never reach it again, and a view that reloaded while cached never had them.
+   */
+  onViewWarmActivated?: (webContents: Electron.WebContents) => void;
+  /**
    * Called synchronously when the active view's renderer process is gone
    * (non-clean), before reload — the port-owning view only
    */
@@ -430,6 +436,7 @@ export class ProjectViewManager {
   onViewEvicted?: (webContentsId: number) => void;
   onViewCached?: (webContentsId: number) => void;
   onViewReady?: (webContents: Electron.WebContents) => void;
+  onViewWarmActivated?: (webContents: Electron.WebContents) => void;
   onViewCrashed?: (webContents: Electron.WebContents) => void;
   onViewRendererGone?: (webContents: Electron.WebContents) => void;
   assistantBackendsForProject?: (projectId: string) => Array<{
@@ -530,6 +537,7 @@ export class ProjectViewManager {
     this.onViewEvicted = opts.onViewEvicted;
     this.onViewCached = opts.onViewCached;
     this.onViewReady = opts.onViewReady;
+    this.onViewWarmActivated = opts.onViewWarmActivated;
     this.onViewCrashed = opts.onViewCrashed;
     this.onViewRendererGone = opts.onViewRendererGone;
     this.assistantBackendsForProject = opts.assistantBackendsForProject;

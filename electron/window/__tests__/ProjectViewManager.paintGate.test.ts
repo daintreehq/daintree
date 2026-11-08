@@ -1308,6 +1308,38 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     expect(win.contentView.removeChildView).toHaveBeenCalledTimes(1);
   });
 
+  it("runs the warm-activation hook for the reactivated view after its wake trigger", async () => {
+    const incomingWc = createMockWebContents();
+    wcQueue.push(incomingWc);
+    const order: string[] = [];
+    const onViewWarmActivated = vi.fn((wc: Electron.WebContents) => {
+      order.push(`hook:${wc.id}`);
+    });
+    manager.onViewWarmActivated = onViewWarmActivated;
+
+    const firstSwitch = manager.switchTo("proj-b", "/path/b");
+    await Promise.resolve();
+    await Promise.resolve();
+    manager.signalViewPainted(incomingWc.id);
+    await firstSwitch;
+    // A cold start replays through the ready hook, not this one.
+    expect(onViewWarmActivated).not.toHaveBeenCalled();
+
+    initialWc.send.mockImplementation((channel: string) => {
+      if (channel === CHANNELS.APP_VIEW_WARM_ACTIVATED) order.push(`wake:${initialWc.id}`);
+    });
+    const switchBack = manager.switchTo("proj-a", "/path/a");
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+
+    // A warm view reloads nothing, so this is its only replay point.
+    expect(onViewWarmActivated.mock.calls).toEqual([[initialWc]]);
+    expect(order).toEqual([`wake:${initialWc.id}`, `hook:${initialWc.id}`]);
+
+    manager.signalWarmViewPainted(initialWc.id);
+    await switchBack;
+    expect(onViewWarmActivated).toHaveBeenCalledTimes(1);
+  });
+
   it("hands a revived cached view the memory publish it missed while hidden (#13529)", async () => {
     const incomingWc = createMockWebContents();
     wcQueue.push(incomingWc);

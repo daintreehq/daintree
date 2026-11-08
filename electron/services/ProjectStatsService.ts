@@ -1,5 +1,5 @@
 import { CHANNELS } from "../ipc/channels.js";
-import { typedBroadcast } from "../ipc/utils.js";
+import { sendToWebContents, typedBroadcast } from "../ipc/utils.js";
 import type { ClientEndpoint } from "../ipc/endpoint.js";
 import { events } from "./events.js";
 import { projectStore } from "./ProjectStore.js";
@@ -142,15 +142,14 @@ export class ProjectStatsService {
    * Best-effort, not durable transport: the renderer attaches its listener from
    * a React effect, so this send can land first and be dropped. The palette's
    * open-time bulk pull remains the guaranteed hydration path.
+   *
+   * Also replayed on warm reactivation, which reloads nothing. Sent through the
+   * same view filter as the broadcast, so a view showing a remote host's
+   * project never gets this machine's map.
    */
   pushSnapshotTo(webContents: Electron.WebContents): void {
-    if (webContents.isDestroyed()) return;
     if (Object.keys(this.lastBroadcast).length === 0) return;
-    try {
-      webContents.send(CHANNELS.PROJECT_STATS_UPDATED, this.lastBroadcast);
-    } catch {
-      // Silently ignore send failures during window initialization/disposal.
-    }
+    sendToWebContents(webContents, CHANNELS.PROJECT_STATS_UPDATED, this.lastBroadcast);
   }
 
   /** {@link pushSnapshotTo} for a view attached over a link. */

@@ -281,6 +281,7 @@ export async function performSwitch(
         cached.view.webContents.send(CHANNELS.APP_VIEW_WARM_ACTIVATED, {
           switchId: switchTrace.switchId,
         });
+        host.onViewWarmActivated?.(cached.view.webContents);
       }
       let gateResult: Awaited<typeof warmGate>;
       let handoff: SwitchScreenHandoff | null = null;
@@ -385,6 +386,7 @@ export async function performSwitch(
         cached.view.webContents.send(CHANNELS.APP_VIEW_WARM_ACTIVATED, {
           switchId: switchTrace.switchId,
         });
+        host.onViewWarmActivated?.(cached.view.webContents);
       }
       mark(PERF_MARKS.PROJECT_SWITCH_REVEALED, { isNew: false });
     }

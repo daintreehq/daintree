@@ -812,6 +812,13 @@ if (!gotTheLock) {
           peekGlobalAssistantService()?.detachWebContents(wc.id)
         );
       },
+      onViewWarmActivated: (wc) => {
+        // A view that missed a stats push, or reloaded while cached and so
+        // skipped the ready hook's replay, would otherwise keep showing stale
+        // counts until they next move (#16418). A view already current drops
+        // the equal map without rerendering.
+        getProjectStatsService()?.pushSnapshotTo(wc);
+      },
       onViewReady: (wc) => {
         // Re-distribute PTY MessagePort on every view load/reload.
         // This ensures terminals work after view creation, crash recovery, or DevTools refresh.

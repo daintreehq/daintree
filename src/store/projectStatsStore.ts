@@ -19,7 +19,8 @@ interface ProjectStatsState {
 export const useProjectStatsStore = create<ProjectStatsState>((set) => ({
   stats: {},
   pushCount: 0,
-  setStats: (stats) => set((state) => (isSameProjectStatusMap(state.stats, stats) ? state : { stats })),
+  setStats: (stats) =>
+    set((state) => (isSameProjectStatusMap(state.stats, stats) ? state : { stats })),
 }));
 
 let statsUnsubscribe: (() => void) | null = null;
