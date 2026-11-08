@@ -19,7 +19,9 @@ import {
   removeStaleUpdates,
   type CanopyModelFileSpec,
   type CanopyModelRevision,
+  type CanopyModelsOptions,
 } from "../canopyModels.js";
+import type { CanopyModelState } from "../../../../shared/types/ipc/canopy.js";
 
 const META = JSON.stringify({
   max_len: 1024,
@@ -65,8 +67,11 @@ const META = JSON.stringify({
     gate_categories: [],
   },
 });
-/** A reader a later Daintree needs: a card mode this build doesn't know. */
-const FUTURE_META = JSON.stringify({ ...JSON.parse(META), thresholds: { card: "three-line" } });
+/** A reader a later Daintree needs: a card mode this build doesn't know, and nothing else changed. */
+const FUTURE_META = JSON.stringify({
+  ...JSON.parse(META),
+  thresholds: { ...JSON.parse(META).thresholds, card: "three-line" },
+});
 
 const blobId = (content: string) => {
   const bytes = Buffer.from(content);
@@ -75,9 +80,10 @@ const blobId = (content: string) => {
 const sha256 = (content: string) => createHash("sha256").update(content).digest("hex");
 
 const SHIPPED_REVISION = "a".repeat(40);
-const NEWER = "b".repeat(40);
-const NEWEST = "c".repeat(40);
-const OLDER = "9".repeat(40);
+// Commit ids sort against their dates, so nothing passes by ordering on the id.
+const NEWER = "c".repeat(40);
+const NEWEST = "b".repeat(40);
+const OLDER = "f".repeat(40);
 const SHIPPED_AT = Date.parse("2026-10-25T19:08:24.000Z");
 const DAY = 86_400_000;
 
@@ -127,7 +133,7 @@ function pins(r: Repo): CanopyModelFileSpec[] {
  * files at that revision, with Range support. `hold` keeps a file's body back
  * until released.
  */
-function hub(r: Repo | null, options: { hold?: string; rangeFromZero?: boolean } = {}) {
+function hub(r: Repo | null, options: { hold?: string; wrongRangeHeader?: boolean } = {}) {
   const requests: Array<{ url: string; range: string | null }> = [];
   let release: () => void = () => {};
   const held = new Promise<void>((resolve) => (release = resolve));
@@ -159,12 +165,13 @@ function hub(r: Repo | null, options: { hold?: string; rangeFromZero?: boolean }
       name === "model.int8.onnx" && r.servedWeights !== undefined ? r.servedWeights : r.files[name];
     if (content === undefined) return new Response("", { status: 404 });
     const bytes = Buffer.from(content);
-    const asked = range ? Number(/bytes=(\d+)-/.exec(range)![1]) : 0;
-    const from = options.rangeFromZero ? 0 : asked;
-    if (asked >= bytes.length && range) return new Response("", { status: 416 });
+    const from = range ? Number(/bytes=(\d+)-/.exec(range)![1]) : 0;
+    if (from >= bytes.length && range) return new Response("", { status: 416 });
     const body = bytes.subarray(from);
+    // The right bytes, said to start somewhere else: only the header is wrong.
+    const said = options.wrongRangeHeader ? 0 : from;
     const headers: Record<string, string> = range
-      ? { "Content-Range": `bytes ${from}-${bytes.length - 1}/${bytes.length}` }
+      ? { "Content-Range": `bytes ${said}-${bytes.length - 1}/${bytes.length}` }
       : {};
     if (options.hold === name) {
       // Half the file at once, the rest once released: a download under way.
@@ -204,8 +211,21 @@ const SHIPPED: CanopyModelRevision = {
   files: pins({ sha: SHIPPED_REVISION, at: SHIPPED_AT, files: SHIPPED_FILES }),
 };
 
-function models(changes: () => void = () => {}): CanopyModels {
-  return new CanopyModels(shippedDir, changes, { updates, shipped: SHIPPED });
+function models(
+  changes: () => void = () => {},
+  options: Partial<CanopyModelsOptions> = {}
+): CanopyModels {
+  return new CanopyModels(shippedDir, changes, { updates, shipped: SHIPPED, ...options });
+}
+
+/** Work a test leaves held: let go before the next test, whether or not this one passed. */
+const holding: Array<() => Promise<void>> = [];
+function hold(m: CanopyModels, ensuring: Promise<void>, release: () => void): void {
+  holding.push(async () => {
+    m.cancel();
+    release();
+    await ensuring;
+  });
 }
 
 /** A download an earlier launch started for `r` and stopped part way. */
@@ -218,6 +238,17 @@ function started(r: Repo): string {
     JSON.stringify({ id: CANOPY_MODEL, revision: r.sha, published: r.at, files: pins(r) })
   );
   return dir;
+}
+
+/** A revision an earlier launch fetched and couldn't run. */
+function rejected(r: Repo): string {
+  mkdirSync(updates, { recursive: true });
+  const marker = path.join(updates, `${r.sha}.rejected`);
+  writeFileSync(
+    marker,
+    JSON.stringify({ id: CANOPY_MODEL, revision: r.sha, published: r.at, files: pins(r) })
+  );
+  return marker;
 }
 
 /** An update an earlier launch fetched and put in place. */
@@ -247,7 +278,8 @@ beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
-afterEach(() => {
+afterEach(async () => {
+  for (const letGo of holding.splice(0)) await letGo();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   rmSync(root, { recursive: true, force: true });
@@ -258,16 +290,27 @@ describe("CanopyModels, updating the shipped model from Hugging Face", () => {
     const newer = repo(NEWER, SHIPPED_AT + DAY);
     const { fetchMock, requests, release } = hub(newer, { hold: "model.int8.onnx" });
     vi.stubGlobal("fetch", fetchMock);
-    const changes = vi.fn();
+    // What each change told Settings.
+    const told: Array<CanopyModelState | undefined> = [];
+    const changes = vi.fn(() => told.push(m.state()));
     const m = models(changes);
 
     const ensuring = m.ensure();
+    hold(m, ensuring, release);
     // The shipped copy reads at once, and on through the download.
     expect(await m.installedDir()).toBe(shippedDir);
-    await vi.waitFor(() => {
-      const state = m.state();
-      expect(state?.status === "ready" && state.update?.received).toBeGreaterThan(0);
-    });
+    // Settings is told of the update part way, not only once it is done.
+    await vi.waitFor(() =>
+      expect(
+        told.some(
+          (state) =>
+            state?.status === "ready" &&
+            state.update !== undefined &&
+            state.update.received > 0 &&
+            state.update.received < state.update.total
+        )
+      ).toBe(true)
+    );
     const during = m.state();
     expect(during).toMatchObject({
       status: "ready",
@@ -394,6 +437,35 @@ describe("CanopyModels, updating the shipped model from Hugging Face", () => {
     expect(existsSync(same)).toBe(false);
   });
 
+  it("never reads with an update older than the shipped copy, even one the sweep left alone", async () => {
+    vi.stubGlobal("fetch", offline());
+    // Reached through a link: the sweep deletes nothing there.
+    const shared = path.join(root, "shared");
+    mkdirSync(path.dirname(updates), { recursive: true });
+    mkdirSync(shared);
+    symlinkSync(shared, updates, process.platform === "win32" ? "junction" : "dir");
+    installed(repo(OLDER, SHIPPED_AT - DAY));
+    const m = models();
+
+    expect(await m.installedDir()).toBe(shippedDir);
+    expect(m.state()).toMatchObject({ revision: SHIPPED_REVISION, source: "bundled" });
+  });
+
+  it("stops a file at the size the Hub published", async () => {
+    const big = repo(NEWER, SHIPPED_AT + DAY);
+    big.servedWeights = `INT8-${NEWER}`.repeat(3);
+    const { fetchMock } = hub(big);
+    vi.stubGlobal("fetch", fetchMock);
+    const m = models();
+    await m.ensure();
+
+    expect(await m.installedDir()).toBe(shippedDir);
+    expect(console.warn).toHaveBeenCalledWith(
+      "[Canopy] Model update failed:",
+      expect.stringMatching(/model\.int8\.onnx is larger than Hugging Face published/)
+    );
+  });
+
   it("never offers a download older than the shipped copy as an update", async () => {
     const { fetchMock, requests } = hub(repo(OLDER, SHIPPED_AT - DAY));
     vi.stubGlobal("fetch", fetchMock);
@@ -456,6 +528,7 @@ describe("CanopyModels, updating the shipped model from Hugging Face", () => {
     vi.stubGlobal("fetch", first.fetchMock);
     const m = models();
     const ensuring = m.ensure();
+    hold(m, ensuring, first.release);
     await vi.waitFor(() => {
       const state = m.state();
       expect(state?.status === "ready" && state.update !== undefined).toBe(true);
@@ -490,14 +563,14 @@ describe("CanopyModels, updating the shipped model from Hugging Face", () => {
 
   it.each([
     ["what was kept isn't the file's start", { kept: "INT8-wrong" }],
-    ["the server sends some other part of the file", { kept: "INT8-", fromZero: true }],
-  ])(
+    ["the server says it sends some other part of the file", { kept: "INT8-", wrong: true }],
+  ] as const)(
     "starts a file again when %s, never putting it in place",
-    async (_label, { kept, fromZero }) => {
+    async (_label, fixture: { kept: string; wrong?: boolean }) => {
       const newer = repo(NEWER, SHIPPED_AT + DAY);
       const dir = started(newer);
-      writeFileSync(path.join(dir, "model.int8.onnx.part"), kept);
-      const first = hub(newer, { rangeFromZero: fromZero });
+      writeFileSync(path.join(dir, "model.int8.onnx.part"), fixture.kept);
+      const first = hub(newer, { wrongRangeHeader: fixture.wrong });
       vi.stubGlobal("fetch", first.fetchMock);
       const m = models();
       await m.ensure();
@@ -516,6 +589,104 @@ describe("CanopyModels, updating the shipped model from Hugging Face", () => {
       );
     }
   );
+
+  it("never reads with a revision whose config.json this build can't read, though its reader.json says it can, and never fetches it again", async () => {
+    const odd = repo(NEWER, SHIPPED_AT + DAY);
+    odd.files["config.json"] = FUTURE_META;
+    const first = hub(odd);
+    vi.stubGlobal("fetch", first.fetchMock);
+    const m = models();
+    await m.ensure();
+
+    expect(await m.installedDir()).toBe(shippedDir);
+    expect(m.state()).toMatchObject({ source: "bundled" });
+    expect(m.state()).not.toHaveProperty("update");
+    expect(existsSync(path.join(updates, NEWER))).toBe(false);
+    expect(existsSync(path.join(updates, `${NEWER}.download`))).toBe(false);
+
+    const second = hub(odd);
+    vi.stubGlobal("fetch", second.fetchMock);
+    await models().ensure();
+    expect(second.requests.map((r) => r.url)).toEqual([
+      `https://huggingface.co/api/models/${CANOPY_MODEL}?blobs=true`,
+    ]);
+  });
+
+  it("never reads with an update on this machine whose config this build can't read, though its hashes match", async () => {
+    vi.stubGlobal("fetch", offline());
+    const odd = repo(NEWER, SHIPPED_AT + DAY);
+    odd.files["config.json"] = FUTURE_META;
+    const dir = installed(odd);
+    const m = models();
+
+    expect(await m.installedDir()).toBe(shippedDir);
+    expect(existsSync(dir)).toBe(false);
+  });
+
+  it("runs a fetched revision where it was fetched before reading with it, the shipped copy reading meanwhile", async () => {
+    const { fetchMock } = hub(repo(NEWER, SHIPPED_AT + DAY));
+    vi.stubGlobal("fetch", fetchMock);
+    const tried: Array<{ dir: string; reading: string | null }> = [];
+    const m = models(() => {}, {
+      trial: async (dir) => {
+        tried.push({ dir, reading: m.currentDir() });
+      },
+    });
+    await m.ensure();
+
+    expect(tried).toEqual([{ dir: path.join(updates, `${NEWER}.download`), reading: shippedDir }]);
+    expect(await m.installedDir()).toBe(path.join(updates, NEWER));
+  });
+
+  it("never reads with a revision that fails its run here, and never fetches it again", async () => {
+    const newer = repo(NEWER, SHIPPED_AT + DAY);
+    const first = hub(newer);
+    vi.stubGlobal("fetch", first.fetchMock);
+    const trial = vi.fn(async () => {
+      throw new Error("Model took too long to load");
+    });
+    const m = models(() => {}, { trial });
+    await m.ensure();
+
+    expect(trial).toHaveBeenCalledTimes(1);
+    expect(await m.installedDir()).toBe(shippedDir);
+    expect(m.state()).toMatchObject({ source: "bundled" });
+    expect(m.state()).not.toHaveProperty("update");
+    expect(existsSync(path.join(updates, NEWER))).toBe(false);
+    expect(existsSync(path.join(updates, `${NEWER}.download`))).toBe(false);
+
+    // The next launch: the Hub names it still, and nothing of it is fetched or run.
+    const second = hub(newer);
+    vi.stubGlobal("fetch", second.fetchMock);
+    const next = models(() => {}, { trial });
+    await next.ensure();
+    expect(fetchedFiles(second.requests)).toEqual([]);
+    expect(trial).toHaveBeenCalledTimes(1);
+    expect(await next.installedDir()).toBe(shippedDir);
+  });
+
+  it("puts nothing in place once stopped while a fetched revision runs, and runs it again next time", async () => {
+    const newer = repo(NEWER, SHIPPED_AT + DAY);
+    const { fetchMock } = hub(newer);
+    vi.stubGlobal("fetch", fetchMock);
+    let m!: CanopyModels;
+    m = models(() => {}, {
+      trial: async () => {
+        m.cancel();
+      },
+    });
+    await m.ensure();
+
+    expect(m.currentDir()).toBe(shippedDir);
+    expect(existsSync(path.join(updates, NEWER))).toBe(false);
+    expect(existsSync(path.join(updates, `${NEWER}.rejected`))).toBe(false);
+
+    const trial = vi.fn(async () => {});
+    const next = models(() => {}, { trial });
+    await next.ensure();
+    expect(trial).toHaveBeenCalledTimes(1);
+    expect(await next.installedDir()).toBe(path.join(updates, NEWER));
+  });
 
   it("replaces an update with a newer one, deleting the one it replaced", async () => {
     const previous = installed(repo(NEWER, SHIPPED_AT + DAY));
@@ -560,12 +731,14 @@ describe("CanopyModels, updating the shipped model from Hugging Face", () => {
 });
 
 describe("removeStaleUpdates", () => {
-  it("deletes what the shipped copy has caught up with, finished or part way, reading only records", async () => {
+  it("deletes what the shipped copy has caught up with, finished, part way or failed, without a look online", async () => {
     const older = installed(repo(OLDER, SHIPPED_AT - DAY));
     const same = installed(repo(SHIPPED_REVISION, SHIPPED_AT));
     const olderStarted = started(repo("8".repeat(40), SHIPPED_AT - DAY));
     const keep = installed(repo(NEWER, SHIPPED_AT + DAY));
     const keepStarted = started(repo(NEWEST, SHIPPED_AT + 2 * DAY));
+    const olderRejected = rejected(repo("5".repeat(40), SHIPPED_AT - DAY));
+    const keepRejected = rejected(repo("4".repeat(40), SHIPPED_AT + DAY));
     // A finished folder whose record can't be read is no update.
     const broken = path.join(updates, "7".repeat(40));
     mkdirSync(broken);
@@ -577,8 +750,8 @@ describe("removeStaleUpdates", () => {
 
     await removeStaleUpdates(updates, undefined, SHIPPED);
 
-    expect([older, same, olderStarted, broken].filter(existsSync)).toEqual([]);
-    expect([keep, keepStarted, unrecorded].every(existsSync)).toBe(true);
+    expect([older, same, olderStarted, olderRejected, broken].filter(existsSync)).toEqual([]);
+    expect([keep, keepStarted, keepRejected, unrecorded].every(existsSync)).toBe(true);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

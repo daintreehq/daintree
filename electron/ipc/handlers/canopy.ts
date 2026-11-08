@@ -64,7 +64,7 @@ import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore
 import { searchScreens } from "../../services/canopy/canopyScreenSearch.js";
 import { readInputLines } from "../../services/canopy/canopyInputLines.js";
 import { isCanopyMode, readCanopyMode } from "../../services/canopy/canopyMode.js";
-import { CanopyLocalReader } from "../../services/canopy/canopyLocalReader.js";
+import { CanopyLocalReader, tryReaderModel } from "../../services/canopy/canopyLocalReader.js";
 import {
   CANOPY_MODEL,
   CanopyModels,
@@ -208,6 +208,9 @@ function modelUpdatesDir(): string | null {
 function getModels(): CanopyModels {
   models ??= new CanopyModels(bundledModelDir(), onModelsChanged, {
     updates: modelUpdatesDir(),
+    // An update is loaded and read with once in a reader of its own before
+    // the reader in use lets go of the copy that works.
+    trial: (dir) => tryReaderModel(dir),
   });
   return models;
 }

@@ -7,7 +7,11 @@
 import { CANOPY_CATEGORIES, type CanopyCategory } from "../../../shared/types/ipc/canopy.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { displayText, readerCard, type Reading, type ReaderState } from "./canopyReader.js";
-import { CanopyReaderError, CanopyReaderProcess } from "./canopyReaderProcess.js";
+import {
+  CanopyReaderError,
+  CanopyReaderProcess,
+  READER_RETIRE_KILL_MS,
+} from "./canopyReaderProcess.js";
 import {
   CanopyProviderError,
   toDescriberResult,
@@ -29,6 +33,9 @@ export interface CanopyReading {
 
 /** Rows above an approval's prompt that can hold the command it asks about. */
 const APPROVAL_LOOKBACK_ROWS = 8;
+
+/** How long past its kill backstop a trial reader is waited for before its folder is moved anyway. */
+const TRIAL_EXIT_GRACE_MS = 2_000;
 
 /** Times a reader may die in a row before Canopy stops starting new ones until the model changes. */
 const MAX_CRASHES = 3;
@@ -131,6 +138,35 @@ export function toCanopyReading(reading: Reading, input: CanopyScreenInput): Can
     );
   };
   return { classifier, words };
+}
+
+/**
+ * Loads the model in `dir` in a reader process of its own, reads one screen
+ * with it, and lets it go. Throws when either fails: an update that does is
+ * never read with, so the copy in use reads on (#16416).
+ */
+export async function tryReaderModel(
+  dir: string,
+  spawn: (dir: string, onExit: () => void) => CanopyReaderProcess = (d, onExit) =>
+    new CanopyReaderProcess(d, onExit)
+): Promise<void> {
+  const trial = spawn(dir, () => {});
+  try {
+    await trial.ready;
+    await trial.read({ agent_program: "shell", terminal_title: "" }, ["$ "]);
+  } finally {
+    trial.retire();
+    // Gone before its folder is moved: Windows holds the files of a live reader.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      trial.whenExited,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, READER_RETIRE_KILL_MS + TRIAL_EXIT_GRACE_MS);
+        timer.unref?.();
+      }),
+    ]);
+    clearTimeout(timer);
+  }
 }
 
 /**

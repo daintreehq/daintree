@@ -431,3 +431,45 @@ describe("CanopyLocalReader", () => {
     });
   });
 });
+
+describe("tryReaderModel", () => {
+  function trialProcess(outcome: { load?: Error; read?: Error }) {
+    let exited!: () => void;
+    const process = {
+      ready: outcome.load ? Promise.reject(outcome.load) : Promise.resolve(),
+      read: vi.fn(async () => {
+        if (outcome.read) throw outcome.read;
+        return { reading: reading(), ms: 9 };
+      }),
+      whenExited: new Promise<void>((resolve) => (exited = resolve)),
+      retire: vi.fn(() => exited()),
+    };
+    process.ready.catch(() => {});
+    return process;
+  }
+
+  it("loads the model in its own reader, reads one screen, and waits for that reader to go", async () => {
+    const { tryReaderModel } = await import("../canopyLocalReader.js");
+    const made: Array<ReturnType<typeof trialProcess>> = [];
+    const dirs: string[] = [];
+    await tryReaderModel("/updates/abc.download", (dir) => {
+      dirs.push(dir);
+      const p = trialProcess({});
+      made.push(p);
+      return p as never;
+    });
+    expect(dirs).toEqual(["/updates/abc.download"]);
+    expect(made[0]!.read).toHaveBeenCalledTimes(1);
+    expect(made[0]!.retire).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["can't load", { load: new Error("This model needs a newer version of Daintree") }],
+    ["can't read a screen", { read: new Error("Tokenizer has no [SEP]") }],
+  ])("throws for a model that %s, letting its reader go", async (_label, outcome) => {
+    const { tryReaderModel } = await import("../canopyLocalReader.js");
+    const p = trialProcess(outcome);
+    await expect(tryReaderModel("/updates/abc.download", () => p as never)).rejects.toThrow();
+    expect(p.retire).toHaveBeenCalledTimes(1);
+  });
+});

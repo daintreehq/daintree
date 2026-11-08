@@ -239,6 +239,7 @@ vi.mock("../../../services/canopy/canopyLocalReader.js", () => ({
   CanopyLocalReader: vi.fn(function CanopyLocalReader() {
     return localReader;
   }),
+  tryReaderModel: vi.fn(async () => {}),
 }));
 const models = vi.hoisted(() => ({
   ensure: vi.fn(async () => {}),
@@ -899,6 +900,7 @@ describe("canopy IPC", () => {
     // Updates go beside the user's data, never where earlier versions downloaded to.
     expect(vi.mocked(CanopyModels).mock.calls[0]?.[2]).toEqual({
       updates: path.join("/tmp", "canopy", "reader-updates"),
+      trial: expect.any(Function),
     });
     expect(models.cancel).not.toHaveBeenCalled();
     await invoke(CANOPY_METHOD_CHANNELS.setMode, sender, "unset");
@@ -919,7 +921,7 @@ describe("canopy IPC", () => {
     }
   );
 
-  it("lets the last copy's reader go once an update is in place, and not as one downloads", async () => {
+  it("lets the last copy's reader go and reads every screen again once an update is in place, and not as one downloads", async () => {
     let told: (() => void) | undefined;
     vi.mocked(CanopyModels).mockImplementationOnce(function (_dir: string, onChange: () => void) {
       told = onChange;
@@ -929,22 +931,33 @@ describe("canopy IPC", () => {
     await invoke(CANOPY_METHOD_CHANNELS.setActive, fakeSender(9), true);
     // A screen read starts the reader.
     await vi.waitFor(() => expect(localReader.read).toHaveBeenCalled());
-    // The shipped copy checks out, then an update's progress: the copy in use reads on.
+    // The shipped copy checks out: every screen is read with it.
+    localReader.read.mockClear();
+    told?.();
+    await vi.waitFor(() => expect(localReader.read).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // An update's progress: the copy in use reads on, and what it read stands.
+    localReader.read.mockClear();
     told?.();
     told?.();
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(localReader.release).not.toHaveBeenCalled();
+    expect(localReader.read).not.toHaveBeenCalled();
 
-    models.currentDir.mockReturnValue(
-      path.join("/tmp", "canopy", "reader-updates", "b".repeat(40))
-    );
+    const update = path.join("/tmp", "canopy", "reader-updates", "b".repeat(40));
+    models.currentDir.mockReturnValue(update);
+    models.installedDir.mockResolvedValue(update);
     try {
       told?.();
       expect(localReader.release).toHaveBeenCalledTimes(1);
+      // The screen is read again, by the update.
+      await vi.waitFor(() => expect(localReader.read).toHaveBeenCalled());
       // Told again with the same copy in use: nothing more to let go.
       told?.();
       expect(localReader.release).toHaveBeenCalledTimes(1);
     } finally {
       models.currentDir.mockReturnValue("/repo/electron/resources/canopy-reader");
+      models.installedDir.mockResolvedValue("/repo/electron/resources/canopy-reader");
     }
   });
 

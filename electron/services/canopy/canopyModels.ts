@@ -86,6 +86,10 @@ const STAGING = ".download";
 const INSTALL = "install.json";
 /** The same record in a download's folder, written first, so a download stopped part way says what it was. */
 const PENDING = "download.json";
+/** A revision this build fetched and couldn't run: the same record, beside the folders, so it isn't fetched again. */
+const REJECTED = ".rejected";
+/** Far past the reader's ~21 MB: a Hub answer naming more is not this model. */
+const MAX_MODEL_BYTES = 512 * 1024 * 1024;
 
 const DAMAGED =
   "The model that comes with Daintree is missing or damaged. Reinstalling Daintree puts it back.";
@@ -136,6 +140,7 @@ function isFileSpec(value: unknown): value is CanopyModelFileSpec {
     typeof spec.size === "number" &&
     Number.isSafeInteger(spec.size) &&
     spec.size >= 0 &&
+    spec.size <= MAX_MODEL_BYTES &&
     (typeof spec.sha256 === "string" || typeof spec.blobId === "string")
   );
 }
@@ -200,6 +205,7 @@ async function fetchNewest(signal: AbortSignal): Promise<CanopyModelRevision | n
     if (!isFileSpec(spec)) return null;
     files.push(spec);
   }
+  if (files.reduce((sum, file) => sum + file.size, 0) > MAX_MODEL_BYTES) return null;
   return { revision: detail.sha, published, files };
 }
 
@@ -237,6 +243,32 @@ async function readRecord(
   } catch {
     return null;
   }
+}
+
+/** One thing this code keeps in the updates folder for a revision. */
+interface Entry {
+  name: string;
+  revision: string;
+  kind: "update" | "download" | "rejected";
+}
+
+/** A name in the updates folder this code wrote; null for anything else, which is left alone. */
+function entryOf(name: string): Entry | null {
+  const kind = name.endsWith(STAGING)
+    ? "download"
+    : name.endsWith(REJECTED)
+      ? "rejected"
+      : "update";
+  const suffix = kind === "download" ? STAGING : kind === "rejected" ? REJECTED : "";
+  const revision = name.slice(0, name.length - suffix.length);
+  return REVISION.test(revision) ? { name, revision, kind } : null;
+}
+
+/** What an entry records of its revision: the record in its folder, or the marker itself. */
+function recordOf(root: string, entry: Entry): Promise<CanopyModelRevision | null> {
+  if (entry.kind === "rejected") return readRecord(root, entry.revision, entry.name);
+  const file = entry.kind === "download" ? PENDING : INSTALL;
+  return readRecord(path.join(root, entry.name), entry.revision, file);
 }
 
 /** Whether `root` or the folder holding it is missing or reached through a link: not ours to empty either way. */
@@ -293,6 +325,9 @@ interface Operation {
   done: Promise<void>;
 }
 
+/** Raised when a fetched revision can't be read with here, whatever its hashes say. */
+class Unrunnable extends Error {}
+
 export interface CanopyModelsOptions {
   /**
    * Where updates fetched from Hugging Face live, one folder per revision;
@@ -302,6 +337,11 @@ export interface CanopyModelsOptions {
   updates?: string | null;
   /** The revision the app ships in its folder, and its files' pins. */
   shipped?: CanopyModelRevision;
+  /**
+   * Runs a fetched revision before it is read with, from its folder: throws
+   * when it can't load or read here. A revision that throws is never used.
+   */
+  trial?: (dir: string) => Promise<void>;
 }
 
 export class CanopyModels {
@@ -319,6 +359,7 @@ export class CanopyModels {
   private disposed = false;
   private readonly updates: string | null;
   private readonly shipped: CanopyModelRevision;
+  private readonly trial: ((dir: string) => Promise<void>) | null;
 
   constructor(
     /** The folder the app ships the model in. */
@@ -329,6 +370,7 @@ export class CanopyModels {
   ) {
     this.updates = options.updates ?? null;
     this.shipped = options.shipped ?? SHIPPED;
+    this.trial = options.trial ?? null;
   }
 
   /**
@@ -349,9 +391,10 @@ export class CanopyModels {
       done: this.update(local, abort.signal, current?.done ?? null),
     };
     this.operation = operation;
-    void operation.done.finally(() => {
+    const settle = () => {
       if (this.operation === operation) this.operation = null;
-    });
+    };
+    operation.done.then(settle, settle);
     return operation.done;
   }
 
@@ -388,15 +431,17 @@ export class CanopyModels {
     const names = await readdir(root).catch(() => [] as string[]);
     const found: CanopyModelRevision[] = [];
     for (const name of names) {
-      const staging = name.endsWith(STAGING);
-      const revision = staging ? name.slice(0, -STAGING.length) : name;
-      if (!REVISION.test(revision)) continue;
-      const record = await readRecord(path.join(root, name), revision, staging ? PENDING : INSTALL);
-      if (staging) {
+      const entry = entryOf(name);
+      if (entry === null || entry.kind === "rejected") continue;
+      const record = await recordOf(root, entry);
+      if (entry.kind === "download") {
         // Nothing writes it before this check is done: no record means it never got started.
         if (record === null) await this.discard(name);
-      } else if (record !== null) {
+      } else if (record !== null && newer(record, this.shipped)) {
+        // Older than the shipped copy is never read, whether or not the sweep could delete it.
         found.push(record);
+      } else {
+        await this.discard(name);
       }
     }
     found.sort((a, b) => b.published - a.published);
@@ -427,7 +472,10 @@ export class CanopyModels {
         const timed = AbortSignal.any([signal, AbortSignal.timeout(CHECK_TIMEOUT_MS)]);
         const newest = await fetchNewest(timed);
         this.newest =
-          newest && newer(newest, this.floor()) && (await readable(newest.revision, timed))
+          newest &&
+          newer(newest, this.floor()) &&
+          !(await this.wasRejected(newest.revision)) &&
+          (await readable(newest.revision, timed))
             ? newest
             : null;
       } catch (error) {
@@ -450,13 +498,21 @@ export class CanopyModels {
     this.tell();
     try {
       const dir = await this.fetchInto(target, download, signal);
+      // Stopped or let go while it was moved into place: the next launch finds it there.
+      if (signal.aborted || this.disposed) return;
       const previous = this.inUse;
       this.inUse = { revision: target, dir, source: "update" };
       this.download = null;
       this.tell();
       if (previous?.source === "update") await this.discard(previous.revision.revision);
     } catch (error) {
-      if (!signal.aborted) {
+      if (error instanceof Unrunnable) {
+        console.warn(
+          `[Canopy] Model update ${target.revision} can't be read with here:`,
+          error.message
+        );
+        await this.reject(target);
+      } else if (!signal.aborted) {
         // The copy in use reads on; what was fetched is kept for the next try.
         console.warn("[Canopy] Model update failed:", formatErrorMessage(error, ""));
       }
@@ -536,8 +592,15 @@ export class CanopyModels {
       if (append) this.progress(download, have);
       if (response.status !== 416) {
         if (!response.body) throw new Error("Download failed (no data)");
+        let size = append ? have : 0;
         const count = new Transform({
           transform: (chunk: Buffer, _encoding, done) => {
+            size += chunk.length;
+            // Never a byte past what the Hub published: the file is wrong already.
+            if (size > file.size) {
+              done(new Error(`${file.name} is larger than Hugging Face published`));
+              return;
+            }
             this.progress(download, chunk.length);
             done(null, chunk);
           },
@@ -560,9 +623,17 @@ export class CanopyModels {
     // The reader.json the Hub served said this build reads it; the config.json
     // the reader opens has to say so too.
     const meta: unknown = JSON.parse(await readFile(path.join(staging, "config.json"), "utf8"));
-    if (!isReaderMeta(meta)) {
-      await removeDir(staging);
-      throw new Error("its config.json is not one this build reads");
+    if (!isReaderMeta(meta)) throw new Unrunnable("its config.json is not one this build reads");
+    if (signal.aborted) throw new Error("cancelled");
+    // Run where it was fetched, before anything reads with it: one stopped
+    // here is tried again, never put in place untried.
+    if (this.trial) {
+      try {
+        await this.trial(staging);
+      } catch (error) {
+        if (signal.aborted) throw new Error("cancelled");
+        throw new Unrunnable(formatErrorMessage(error, "it doesn't run"));
+      }
     }
     if (signal.aborted) throw new Error("cancelled");
     // The record goes last: until it is there, the folder is not an update.
@@ -579,6 +650,34 @@ export class CanopyModels {
     if (now - this.lastProgressAt < PROGRESS_INTERVAL_MS) return;
     this.lastProgressAt = now;
     this.tell();
+  }
+
+  /** A revision this build fetched and couldn't run, so it isn't fetched again. */
+  private async wasRejected(revision: string): Promise<boolean> {
+    return stat(path.join(this.updates!, `${revision}${REJECTED}`)).then(
+      () => true,
+      () => false
+    );
+  }
+
+  /**
+   * Remembers `target` as one this build can't run, and lets its files go.
+   * The record goes with it, so the sweep deletes it once the shipped copy
+   * has caught up.
+   */
+  private async reject(target: CanopyModelRevision): Promise<void> {
+    this.newest = null;
+    const root = this.updates!;
+    const record = JSON.stringify({
+      id: CANOPY_MODEL,
+      revision: target.revision,
+      published: target.published,
+      files: target.files,
+    });
+    await writeFile(path.join(root, `${target.revision}${REJECTED}`), record, "utf8").catch(
+      (error: unknown) => console.warn("[Canopy] Couldn't note a model update that failed:", error)
+    );
+    await this.discard(`${target.revision}${STAGING}`);
   }
 
   /** Partly fetched revisions other than `keep`: the Hub has moved on from them. */
@@ -691,8 +790,8 @@ export async function removeDownloadedModels(root: string, signal?: AbortSignal)
 /**
  * Deletes every update in `root` (`<userData>/canopy/reader-updates`) the
  * shipped copy has caught up with, as after an app update that ships a newer
- * revision: finished or part way, along with any finished one whose record
- * can't be read. Only records are read, nothing is hashed or fetched, so it
+ * revision: finished, part way, or noted as one this build couldn't run,
+ * along with any finished one whose record can't be read. Only records are read, nothing is hashed or fetched, so it
  * runs whatever Canopy's mode. A download with no record yet is left alone:
  * it may be being written.
  *
@@ -709,12 +808,13 @@ export async function removeStaleUpdates(
   if (names === null) return;
   for (const name of names) {
     if (signal?.aborted) return;
-    const staging = name.endsWith(STAGING);
-    const revision = staging ? name.slice(0, -STAGING.length) : name;
-    if (!REVISION.test(revision)) continue;
-    const record = await readRecord(path.join(root, name), revision, staging ? PENDING : INSTALL);
+    const entry = entryOf(name);
+    if (entry === null) continue;
+    const record = await recordOf(root, entry);
     const stale =
-      record !== null ? !newer(record, shipped) : !staging || revision === shipped.revision;
+      record !== null
+        ? !newer(record, shipped)
+        : entry.kind !== "download" || entry.revision === shipped.revision;
     if (stale) await removeUpdate(root, name);
   }
 }
