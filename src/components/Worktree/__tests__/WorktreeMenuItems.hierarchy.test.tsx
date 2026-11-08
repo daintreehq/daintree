@@ -1116,6 +1116,20 @@ describe("Git submenu — start rows", () => {
     expect(row.textContent).toContain("Checking status");
   });
 
+  it("says git status went unanswered rather than still checking", () => {
+    const { container } = renderWorktreeMenu({
+      worktree: makeWorktree({
+        baseBranchName: "develop",
+        baseBehindCount: 3,
+        gitStatusUnanswered: { reason: "timed-out", since: 1_700_000_000_000 },
+      }),
+    });
+    const row = gitRow(container, "Rebase onto");
+    expect(row.disabled).toBe(true);
+    expect(row.textContent).toContain("Git status not answered");
+    expect(row.textContent).not.toContain("Checking status");
+  });
+
   it("dispatches nothing from a disabled row", () => {
     const { container } = renderWorktreeMenu({ worktree: integrable({ baseBehindCount: 0 }) });
     gitRow(container, "Rebase onto").click();

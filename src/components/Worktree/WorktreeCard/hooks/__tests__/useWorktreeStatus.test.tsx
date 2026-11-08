@@ -263,6 +263,27 @@ describe("useWorktreeStatus — computedSubtitle", () => {
     });
   });
 
+  it("says git status went unanswered instead of still checking, ahead of a PR title", () => {
+    expect(
+      getSubtitle({
+        worktreeChanges: null,
+        gitStatusUnanswered: { reason: "timed-out", since: 1_700_000_000_000 },
+        prTitle: "feat: dark mode",
+        prState: "open",
+        ...prLinked({ prState: "open", prTitle: "feat: dark mode" }),
+      })
+    ).toEqual({ text: "Git status not answered", tone: "warning" });
+  });
+
+  it("keeps the last observed status when a later read goes unanswered", () => {
+    expect(
+      getSubtitle({
+        worktreeChanges: makeChanges({ lastCommitMessage: "Ship it" }),
+        gitStatusUnanswered: { reason: "previous-still-running", since: 1_700_000_000_000 },
+      })
+    ).toEqual({ text: "Ship it", tone: "muted" });
+  });
+
   it("still prefers an open PR title while git status is unresolved", () => {
     expect(
       getSubtitle({

@@ -218,6 +218,72 @@ describe("BaseDivergence", () => {
     expect((await divergence.compute(true))?.matchesUpstream).toBe(false);
   });
 
+  it("runs its git on the signal the caller hands it", async () => {
+    installRepo({
+      remoteBaseRefs: ["refs/remotes/origin/main"],
+      revList: { "origin/main...HEAD": "0\t0\n" },
+    });
+    const pass = new AbortController();
+    const divergence = new BaseDivergence(makeHost(), makeStatPrecheck());
+
+    await divergence.compute(false, pass.signal);
+
+    expect(mockCreateHardenedGit).toHaveBeenCalled();
+    for (const call of mockCreateHardenedGit.mock.calls) {
+      expect(call).toEqual(["/test/worktree", pass.signal]);
+    }
+  });
+
+  it("caches nothing a cancelled computation read", async () => {
+    installRepo({
+      remoteBaseRefs: ["refs/remotes/origin/main"],
+      revList: { "origin/main...HEAD": "0\t0\n" },
+      symbolicRefs: { "@{u}": "refs/remotes/origin/feature/x" },
+      revParsePair: "abc123\nabc123\n",
+    });
+    const answer = mockGitRaw.getMockImplementation()!;
+    const pass = new AbortController();
+    // The pass is abandoned while its git runs: the upstream comparison dies.
+    mockGitRaw.mockImplementation(async (args: string[]) => {
+      if (args[0] === "rev-parse" && args[1] !== "--symbolic-full-name") {
+        pass.abort();
+        throw new Error("Abort signal received");
+      }
+      return answer(args);
+    });
+    const divergence = new BaseDivergence(makeHost(), makeStatPrecheck());
+
+    expect(await divergence.compute(true, pass.signal)).toBeNull();
+
+    mockGitRaw.mockImplementation(answer);
+    expect((await divergence.compute(true))?.matchesUpstream).toBe(true);
+  });
+
+  it("keeps no remote resolution a cancelled computation read", async () => {
+    installRepo({
+      remotes: ["origin", "upstream"],
+      remoteBaseRefs: ["refs/remotes/origin/main", "refs/remotes/upstream/main"],
+      revList: { "upstream/main...HEAD": "0\t0\n", "main...HEAD": "0\t0\n" },
+    });
+    const answer = mockGitRaw.getMockImplementation()!;
+    const pass = new AbortController();
+    mockGitRaw.mockImplementation(async (args: string[]) => {
+      if (args[0] === "remote") {
+        pass.abort();
+        throw new Error("Abort signal received");
+      }
+      return answer(args);
+    });
+    const divergence = new BaseDivergence(makeHost(), makeStatPrecheck());
+
+    await divergence.compute(false, pass.signal);
+    expect(divergence.availableRemotes).toEqual([]);
+
+    mockGitRaw.mockImplementation(answer);
+    await divergence.compute(false);
+    expect(divergence.availableRemotes).toEqual(["origin", "upstream"]);
+  });
+
   it("reuses the cached result when the stat-derived key is unchanged", async () => {
     installRepo({
       remoteBaseRefs: ["refs/remotes/origin/main"],

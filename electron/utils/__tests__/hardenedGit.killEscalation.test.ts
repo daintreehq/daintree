@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { GitPluginError } from "simple-git";
 import { GIT_BLOCK_TIMEOUT_MS, GIT_KILL_GRACE_MS, createHardenedGit } from "../hardenedGit.js";
+import { hasStoppedGitChild } from "../gitProcessLifecycle.js";
 
 // A real child through the real simple-git: simple-git's own timeout and abort
 // only ever send SIGINT and then wait for `close`, so a git that ignores SIGINT
@@ -96,7 +97,8 @@ describe.skipIf(process.platform === "win32")("git child that ignores SIGINT", (
   it("is killed after an abort's SIGINT goes unanswered", async () => {
     const pidFile = installStubbornGit();
     const controller = new AbortController();
-    const git = await createHardenedGit(tempDir("daintree-kill-repo-"), controller.signal);
+    const repo = tempDir("daintree-kill-repo-");
+    const git = await createHardenedGit(repo, controller.signal);
 
     let settled: unknown = "pending";
     void git.raw(["status"]).then(
@@ -108,11 +110,14 @@ describe.skipIf(process.platform === "win32")("git child that ignores SIGINT", (
     controller.abort();
     await vi.advanceTimersByTimeAsync(GIT_KILL_GRACE_MS - 1);
     expect(isAlive(pid)).toBe(true);
+    // Stopped but still running: no new git should start against its files.
+    expect(hasStoppedGitChild(repo)).toBe(true);
 
     await vi.advanceTimersByTimeAsync(1);
     await vi.waitFor(() => expect(settled).not.toBe("pending"), { timeout: 5_000 });
 
     expect(settled).toBeInstanceOf(GitPluginError);
     expect(isAlive(pid)).toBe(false);
+    expect(hasStoppedGitChild(repo)).toBe(false);
   });
 });

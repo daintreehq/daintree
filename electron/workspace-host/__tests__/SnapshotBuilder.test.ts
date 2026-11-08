@@ -65,6 +65,7 @@ function makeHost(overrides: Partial<SnapshotBuilderHost> = {}): SnapshotBuilder
     pathMembershipChangedAt: 0,
     fetchAuthFailed: false,
     fetchNetworkFailed: false,
+    gitStatusUnanswered: null,
     hasRemote: undefined,
     isFetchInFlight: false,
     matchedForgeProviderId: null,
@@ -166,6 +167,14 @@ describe("SnapshotBuilder", () => {
 
     const trueHost = makeHost({ hasResourceConfig: true });
     expect(new SnapshotBuilder(trueHost).build().hasResourceConfig).toBe(true);
+  });
+
+  it("carries an unanswered git status only while one is outstanding", () => {
+    expect(new SnapshotBuilder(makeHost()).build().gitStatusUnanswered).toBeUndefined();
+    const unanswered = { reason: "timed-out" as const, since: 1_700_000_000_000 };
+    expect(
+      new SnapshotBuilder(makeHost({ gitStatusUnanswered: unanswered })).build().gitStatusUnanswered
+    ).toEqual(unanswered);
   });
 
   it("carries the command approval flag only when approval is outstanding", () => {
