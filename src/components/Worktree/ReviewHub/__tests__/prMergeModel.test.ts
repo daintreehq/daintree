@@ -1,19 +1,24 @@
 import { describe, expect, it } from "vitest";
 import type { PR } from "@shared/types/forge";
 import type { ForgeRepoMetadataPayload } from "@shared/types/ipc/forge";
+import type { ForgeCheckRun } from "@shared/types/ipc/forge";
 import {
   AUTO_MERGE_OFF_REASON,
+  BYPASS_NOT_ALLOWED_REASON,
   CANNOT_CANCEL_REASON,
   MERGE_SETTINGS_UNREAD_REASON,
   MERGE_STATUS_UNREPORTED_REASON,
   applyMergeOutcome,
+  canMergeWithoutWaiting,
   confirmBlockReason,
   derivePrMergeControl,
   describeMergeRejection,
+  describeUnmetRequirements,
   effectiveMergeMode,
   isMergeOutcomeReflected,
   mergeActionLabel,
 } from "../prMergeModel";
+import { preparePrChecks } from "../prChecks";
 
 function pr(overrides: Partial<PR> = {}): PR {
   return {
@@ -65,6 +70,7 @@ describe("derivePrMergeControl", () => {
       baseRef: "develop",
       mergeStatus: status,
       disabledReason: null,
+      bypass: false,
     });
   });
 
@@ -83,6 +89,7 @@ describe("derivePrMergeControl", () => {
       baseRef: "develop",
       mergeStatus: "clean",
       disabledReason: null,
+      bypass: false,
     });
   });
 
@@ -164,6 +171,16 @@ describe("derivePrMergeControl", () => {
     expect(effectiveMergeMode(pr({ mergeStatus: undefined }), "arm")).toBe("arm");
   });
 
+  it("keeps a bypass request through a fresh read, and never turns it into an arm", () => {
+    const admin = { viewerCanMergeAsAdmin: true };
+    expect(effectiveMergeMode(pr(admin), "bypass")).toBe("bypass");
+    // Allowed or not, it stays what was asked for, and the confirm blocks it.
+    expect(effectiveMergeMode(pr({ viewerCanMergeAsAdmin: false }), "bypass")).toBe("bypass");
+    expect(effectiveMergeMode(pr({ ...admin, mergeQueueRequired: true }), "bypass")).toBe("bypass");
+    // Nothing left to skip: the ordinary merge.
+    expect(effectiveMergeMode(pr({ ...admin, mergeStatus: "clean" }), "bypass")).toBe("merge");
+  });
+
   it("never guesses a method when the repository's list wasn't read", () => {
     expect(derivePrMergeControl(pr(), meta({ mergeSettings: undefined }))).toMatchObject({
       kind: "arm",
@@ -174,6 +191,160 @@ describe("derivePrMergeControl", () => {
     expect(
       derivePrMergeControl(pr({ mergeQueueRequired: true }), meta({ mergeSettings: undefined }))
     ).toMatchObject({ kind: "arm", disabledReason: null });
+  });
+});
+
+describe("merge without waiting", () => {
+  const admin = { viewerCanMergeAsAdmin: true };
+
+  it.each(["blocked", "behind"] as const)(
+    "is offered beside auto-merge when GitHub allows it on a %s PR",
+    (status) => {
+      expect(derivePrMergeControl(pr({ ...admin, mergeStatus: status }), meta())).toMatchObject({
+        kind: "arm",
+        disabledReason: null,
+        bypass: true,
+      });
+    }
+  );
+
+  it.each([
+    ["GitHub doesn't allow it", { viewerCanMergeAsAdmin: false }],
+    ["GitHub didn't say", {}],
+    ["the status is still being computed", { ...admin, mergeStatus: "unknown" as const }],
+    ["the branch has a merge queue", { ...admin, mergeQueueRequired: true }],
+    ["the merge queue went unreported", { ...admin, mergeQueueRequired: undefined }],
+  ])("isn't offered when %s", (_name, overrides) => {
+    expect(derivePrMergeControl(pr(overrides), meta())).toMatchObject({ bypass: false });
+    expect(canMergeWithoutWaiting(pr(overrides))).toBe(false);
+  });
+
+  it.each([
+    ["a draft", { isDraft: true }, "draft"],
+    ["a conflicting PR", { mergeStatus: "dirty" as const }, "conflicts"],
+  ])("isn't offered on %s", (_name, overrides, reason) => {
+    expect(derivePrMergeControl(pr({ ...admin, ...overrides }), meta())).toMatchObject({
+      kind: "unavailable",
+      reason,
+    });
+    expect(canMergeWithoutWaiting(pr({ ...admin, ...overrides }))).toBe(false);
+  });
+
+  it("isn't offered for a PR that can merge now, whatever GitHub allows", () => {
+    expect(derivePrMergeControl(pr({ ...admin, mergeStatus: "clean" }), meta())).toMatchObject({
+      kind: "merge",
+      bypass: false,
+    });
+  });
+
+  it("stays available when auto-merge is off, which only disables the arm", () => {
+    expect(
+      derivePrMergeControl(
+        pr(admin),
+        meta({ mergeSettings: { allowedMethods: ["squash"], autoMergeAllowed: false } })
+      )
+    ).toMatchObject({
+      kind: "arm",
+      disabledReason: AUTO_MERGE_OFF_REASON,
+      defaultMethod: "squash",
+      bypass: true,
+    });
+  });
+
+  it("isn't offered without a method to preview", () => {
+    expect(derivePrMergeControl(pr(admin), meta({ mergeSettings: undefined }))).toMatchObject({
+      disabledReason: MERGE_SETTINGS_UNREAD_REASON,
+      bypass: false,
+    });
+  });
+
+  it("is blocked on the confirm's read once it no longer applies", () => {
+    const ok = { repository: "o/r", method: "squash" as const };
+    const ready = { ...admin, commits: { totalCount: 0, items: [] } };
+    expect(confirmBlockReason(pr(ready), "bypass", ok)).toBeNull();
+    expect(confirmBlockReason(pr({ ...ready, viewerCanMergeAsAdmin: false }), "bypass", ok)).toBe(
+      BYPASS_NOT_ALLOWED_REASON
+    );
+    expect(confirmBlockReason(pr({ ...ready, mergeQueueRequired: true }), "bypass", ok)).toMatch(
+      /merge queue/
+    );
+    expect(
+      confirmBlockReason(pr({ ...ready, mergeQueueRequired: undefined }), "bypass", ok)
+    ).toMatch(/merge queue/);
+    expect(
+      confirmBlockReason(pr({ ...ready, mergeStatus: "unknown" }), "bypass", ok)
+    ).not.toBeNull();
+    expect(confirmBlockReason(pr(ready), "bypass", { ...ok, method: null })).toBe(
+      MERGE_SETTINGS_UNREAD_REASON
+    );
+  });
+
+  it("is worded as skipping the requirements", () => {
+    expect(mergeActionLabel("bypass")).toBe("Merge without waiting");
+  });
+});
+
+describe("describeUnmetRequirements", () => {
+  const run = (overrides: Partial<ForgeCheckRun>): ForgeCheckRun => ({
+    name: "build",
+    status: "completed",
+    conclusion: "success",
+    ...overrides,
+  });
+
+  it("names what GitHub reports is unmet, and only the required checks that haven't passed", () => {
+    const checks = preparePrChecks([
+      run({ name: "build", conclusion: "failure", required: true }),
+      run({ name: "e2e", status: "in_progress", conclusion: undefined, required: true }),
+      run({ name: "lint", conclusion: "failure", required: false }),
+      run({ name: "unit", conclusion: "success", required: true }),
+      run({ name: "docs", conclusion: "skipped", required: true }),
+    ]);
+    expect(
+      describeUnmetRequirements(
+        pr({ mergeStatus: "behind", reviewDecision: "REVIEW_REQUIRED" }),
+        checks
+      )
+    ).toEqual({
+      items: [
+        "Not up to date with develop",
+        "Approving review required",
+        "Required check build: Failed",
+        "Required check e2e: Running",
+      ],
+      checksUnread: false,
+    });
+  });
+
+  it("names requested changes", () => {
+    expect(
+      describeUnmetRequirements(pr({ reviewDecision: "CHANGES_REQUESTED" }), []).items
+    ).toEqual(["Changes requested"]);
+  });
+
+  it("counts the required checks past the first few rather than listing them all", () => {
+    const checks = preparePrChecks(
+      Array.from({ length: 7 }, (_, i) =>
+        run({ name: `job${i}`, conclusion: "failure", required: true })
+      )
+    );
+    const { items } = describeUnmetRequirements(pr(), checks);
+    expect(items).toHaveLength(6);
+    expect(items[5]).toBe("2 more required checks not passed");
+  });
+
+  it("says the branch rules aren't met when GitHub itemised nothing, never guessing which", () => {
+    expect(describeUnmetRequirements(pr({ reviewDecision: "APPROVED" }), [])).toEqual({
+      items: ["Branch rules on develop not met"],
+      checksUnread: false,
+    });
+  });
+
+  it("says when the checks couldn't be read", () => {
+    expect(describeUnmetRequirements(pr(), null)).toEqual({
+      items: ["Branch rules on develop not met"],
+      checksUnread: true,
+    });
   });
 });
 
@@ -259,6 +430,25 @@ describe("describeMergeRejection", () => {
     );
     expect(rejected.title).toBe("Branch rules blocked it");
     expect(rejected.summary).toMatch(/develop/);
+  });
+
+  it("says GitHub refused a merge without waiting, without blaming conflicts it didn't name", () => {
+    const message =
+      "Pull request #42 is not mergeable — it may be a draft, have conflicts, or fail required checks.";
+    expect(describeMergeRejection(message, "bypass", context).title).toBe(
+      "GitHub didn't allow merging without waiting"
+    );
+    // A moved head is still named for what it is.
+    expect(
+      describeMergeRejection(
+        "Head branch was modified. Review and try the merge again.",
+        "bypass",
+        context
+      ).title
+    ).toBe("New commits landed first");
+    expect(describeMergeRejection("something unexpected", "bypass", context).title).toBe(
+      "GitHub didn't merge it"
+    );
   });
 
   it("falls back to what didn't happen", () => {

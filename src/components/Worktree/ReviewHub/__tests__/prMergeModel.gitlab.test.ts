@@ -5,7 +5,7 @@ import {
   mergeRequestToForgePR,
 } from "../../../../../plugins/builtin/gitlab/main/mappers";
 import type { GitLabMergeRequest } from "../../../../../plugins/builtin/gitlab/shared/types";
-import { derivePrMergeControl } from "../prMergeModel";
+import { canMergeWithoutWaiting, derivePrMergeControl } from "../prMergeModel";
 
 const HOST = "gitlab.com";
 
@@ -90,6 +90,19 @@ describe("derivePrMergeControl for a GitLab merge request", () => {
         GITLAB_METADATA
       )
     ).toMatchObject({ kind: "unavailable", reason: "merged" });
+  });
+
+  // GitHub's admin bypass has no GitLab counterpart in the normalized PR (#16385).
+  it("never offers a merge without waiting, from either mapper", () => {
+    const blocked = [
+      mergeRequestToForgePR(restMR({ detailed_merge_status: "not_approved" }), HOST),
+      graphqlMergeRequestToForgePR(graphqlMR({ detailedMergeStatus: "NOT_APPROVED" }), HOST),
+    ];
+    for (const pr of blocked) {
+      expect("viewerCanMergeAsAdmin" in pr).toBe(false);
+      expect(canMergeWithoutWaiting(pr)).toBe(false);
+      expect(derivePrMergeControl(pr, GITLAB_METADATA)).toMatchObject({ kind: "unavailable" });
+    }
   });
 
   // The declaration is the only thing that ends the retry: a provider that

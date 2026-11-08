@@ -5,9 +5,12 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vite
 import { render, screen, fireEvent, cleanup, waitFor } from "@testing-library/react";
 import { primeRadix } from "@/components/ui/radix-loader";
 import type { PR } from "@shared/types/forge";
+import type { ForgeCheckRun } from "@shared/types/ipc/forge";
 
 const getPRMock =
   vi.fn<(cwd: string, prNumber: number, options?: { fresh?: boolean }) => Promise<PR | null>>();
+const getChecksMock =
+  vi.fn<(cwd: string, prNumber: number) => Promise<{ checks: ForgeCheckRun[] } | null>>();
 const dispatchMock =
   vi.fn<
     (
@@ -22,6 +25,7 @@ vi.mock("@/clients/forgeClient", () => ({
   forgeClient: {
     getPR: (cwd: string, prNumber: number, options?: { fresh?: boolean }) =>
       getPRMock(cwd, prNumber, options),
+    getChecks: (cwd: string, prNumber: number) => getChecksMock(cwd, prNumber),
   },
 }));
 vi.mock("@/clients", () => ({
@@ -74,6 +78,8 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.stubGlobal("ResizeObserver", StubResizeObserver);
   getPRMock.mockReset();
+  getChecksMock.mockReset();
+  getChecksMock.mockResolvedValue({ checks: [] });
   dispatchMock.mockReset();
   refreshMock.mockReset();
   refreshMock.mockResolvedValue(undefined);
@@ -147,6 +153,121 @@ describe("PrMergeConfirmDialog", () => {
       { source: "user" }
     );
     expect(refreshMock).toHaveBeenCalled();
+    // Only a merge without waiting has requirements to name.
+    expect(getChecksMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("pr-merge-bypass-requirements")).toBeNull();
+  });
+
+  describe("merge without waiting", () => {
+    const admin = { viewerCanMergeAsAdmin: true };
+
+    it("names what it skips and merges pinned to the previewed head with the chosen method", async () => {
+      getPRMock.mockResolvedValue(pr({ ...admin, reviewDecision: "REVIEW_REQUIRED" }));
+      getChecksMock.mockResolvedValue({
+        checks: [
+          { name: "build", status: "completed", conclusion: "failure", required: true },
+          { name: "e2e", status: "in_progress", required: true },
+          { name: "lint", status: "completed", conclusion: "failure", required: false },
+        ],
+      });
+      dispatchMock.mockResolvedValue({ ok: true, result: { prNumber: 42, merged: true } });
+      const { onClose, onComplete } = renderDialog(request({ mode: "bypass", method: "squash" }));
+
+      expect(await screen.findByText("Merge #42 into develop without waiting?")).toBeTruthy();
+      await waitFor(() => screen.getByTestId("pr-merge-bypass-requirements"));
+      expect(
+        screen.getAllByTestId("pr-merge-bypass-requirement").map((item) => item.textContent)
+      ).toEqual([
+        "Approving review required",
+        "Required check build: Failed",
+        "Required check e2e: Running",
+      ]);
+      expect(screen.queryByTestId("pr-merge-bypass-checks-unread")).toBeNull();
+      expect(screen.getByTestId("pr-merge-method").textContent).toBe("Squash");
+      expect(getChecksMock).toHaveBeenCalledWith("/tmp/wt", 42);
+
+      await clickConfirm("Merge without waiting");
+
+      await waitFor(() => expect(onClose).toHaveBeenCalled());
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+      expect(dispatchMock).toHaveBeenCalledWith(
+        "forge.mergePR",
+        {
+          worktreePath: "/tmp/wt",
+          prNumber: 42,
+          mergeMethod: "squash",
+          expectedHeadSha: HEAD,
+          expectedBaseRef: "develop",
+        },
+        { source: "user" }
+      );
+      expect(onComplete).toHaveBeenCalledWith({ kind: "merged", baseRef: "develop" });
+    });
+
+    it("still previews when the checks can't be read, and says so", async () => {
+      getPRMock.mockResolvedValue(pr(admin));
+      getChecksMock.mockRejectedValue(new Error("offline"));
+      renderDialog(request({ mode: "bypass", method: "squash" }));
+
+      expect(await screen.findByTestId("pr-merge-bypass-checks-unread")).toBeTruthy();
+      expect(
+        screen.getAllByTestId("pr-merge-bypass-requirement").map((item) => item.textContent)
+      ).toEqual(["Branch rules on develop not met"]);
+      const button = screen.getByRole("button", { name: "Merge without waiting" });
+      await waitFor(() => expect(isDisabled(button)).toBe(false));
+    });
+
+    it.each([
+      ["GitHub no longer allows it", { viewerCanMergeAsAdmin: false }, /doesn't let you/],
+      [
+        "the branch now merges through a queue",
+        { ...admin, mergeQueueRequired: true },
+        /merge queue/,
+      ],
+    ])("blocks rather than arming auto-merge when %s", async (_name, overrides, hint) => {
+      getPRMock.mockResolvedValue(pr(overrides));
+      renderDialog(request({ mode: "bypass", method: "squash" }));
+
+      const button = await screen.findByRole("button", { name: "Merge without waiting" });
+      await waitFor(() => expect(screen.getByTestId("app-dialog-hint").textContent).toMatch(hint));
+      expect(isDisabled(button)).toBe(true);
+      expect(screen.queryByRole("button", { name: "Enable auto-merge" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Merge when ready" })).toBeNull();
+    });
+
+    it("offers the ordinary merge, under a notice, once nothing is left to skip", async () => {
+      getPRMock.mockResolvedValue(pr({ ...admin, mergeStatus: "clean" }));
+      renderDialog(request({ mode: "bypass", method: "squash" }));
+
+      expect(await screen.findByRole("button", { name: "Merge pull request" })).toBeTruthy();
+      expect(screen.getByTestId("pr-merge-mode-changed").textContent).toMatch(/nothing to skip/);
+      expect(screen.queryByTestId("pr-merge-bypass-requirements")).toBeNull();
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps a refusal described as one, even after the re-read changes the mode", async () => {
+      getPRMock
+        .mockResolvedValueOnce(pr(admin))
+        .mockResolvedValueOnce(pr({ ...admin, mergeStatus: "clean" }));
+      dispatchMock.mockResolvedValue({
+        ok: false,
+        error: {
+          message:
+            "Pull request #42 is not mergeable — it may be a draft, have conflicts, or fail required checks.",
+        },
+      });
+      const { onClose } = renderDialog(request({ mode: "bypass", method: "squash" }));
+
+      await clickConfirm("Merge without waiting");
+
+      const notice = await screen.findByTestId("pr-merge-error");
+      expect(notice.textContent).toMatch(/GitHub didn't allow merging without waiting/);
+      expect(notice.textContent).not.toMatch(/Conflicts with/);
+      await screen.findByRole("button", { name: "Merge pull request" });
+      expect(screen.getByTestId("pr-merge-error").textContent).toMatch(/without waiting/);
+      expect(onClose).not.toHaveBeenCalled();
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("asks again as a Merge when GitHub declines to arm, and never merges on its own", async () => {

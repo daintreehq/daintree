@@ -742,6 +742,66 @@ describe("PrChecksPopover", () => {
       expect(screen.getByTestId("pr-merge-control-reason").textContent).toMatch(/Allow auto-merge/);
     });
 
+    describe("merge without waiting (#16385)", () => {
+      const adminPR = { ...openPR, mergeQueueRequired: false, viewerCanMergeAsAdmin: true };
+
+      it("offers it on its own control, leaving auto-merge the row's action", async () => {
+        getChecksMock.mockResolvedValue({ checks: [check()] });
+        getPRMock.mockResolvedValue(adminPR);
+        getRepoMetadataMock.mockResolvedValue(metadata);
+        renderPopover();
+
+        await openAndSettle();
+        expect((await screen.findByTestId("pr-merge-action")).textContent).toBe(
+          "Enable auto-merge"
+        );
+        const bypass = screen.getByTestId("pr-merge-bypass-action");
+        expect(bypass.textContent).toBe("Merge without waiting");
+        fireEvent.click(screen.getByTestId("pr-merge-method-merge"));
+        fireEvent.click(bypass);
+
+        // The confirm it opens is the bypass one, with the method picked here.
+        await waitFor(() => expect(screen.queryByTestId("pr-checks-popover")).toBeNull());
+        expect(await screen.findByText("Merge #42 into develop without waiting?")).toBeTruthy();
+        await waitFor(() =>
+          expect(screen.getByTestId("pr-merge-method").textContent).toBe("Merge commit")
+        );
+      });
+
+      it("stays reachable when auto-merge is off for the repository", async () => {
+        getChecksMock.mockResolvedValue({ checks: [check()] });
+        getPRMock.mockResolvedValue(adminPR);
+        getRepoMetadataMock.mockResolvedValue({
+          ...metadata,
+          mergeSettings: { ...metadata.mergeSettings, autoMergeAllowed: false },
+        });
+        renderPopover();
+
+        await openAndSettle();
+        expect((await screen.findByTestId("pr-merge-action")).hasAttribute("disabled")).toBe(true);
+        expect(screen.getByTestId("pr-merge-bypass-action").hasAttribute("disabled")).toBe(false);
+        // The method still has to be chosen for the merge that can go ahead.
+        expect(screen.getByTestId("pr-merge-method-squash").getAttribute("aria-checked")).toBe(
+          "true"
+        );
+      });
+
+      it.each([
+        ["GitHub doesn't allow it", { viewerCanMergeAsAdmin: false }],
+        ["GitHub didn't say", { viewerCanMergeAsAdmin: undefined }],
+        ["the PR can already merge", { mergeStatus: "clean" }],
+      ])("changes nothing when %s", async (_name, overrides) => {
+        getChecksMock.mockResolvedValue({ checks: [check()] });
+        getPRMock.mockResolvedValue({ ...adminPR, ...overrides });
+        getRepoMetadataMock.mockResolvedValue(metadata);
+        renderPopover();
+
+        await openAndSettle();
+        await screen.findByTestId("pr-merge-action");
+        expect(screen.queryByTestId("pr-merge-bypass")).toBeNull();
+      });
+    });
+
     it("shows no merge row when the PR can't be read", async () => {
       getChecksMock.mockResolvedValue({ checks: [check()] });
       renderPopover();
@@ -829,6 +889,22 @@ describe("PrChecksPopover", () => {
         const row = await screen.findByTestId("pr-merge-control");
         expect(row.textContent).toMatch(wording);
         expect(row.textContent).not.toMatch(/GitHub/);
+      });
+
+      it("never offers a merge without waiting, whatever the read carries", async () => {
+        getChecksMock.mockResolvedValue({ checks: [check()] });
+        getPRMock.mockResolvedValue({
+          ...gitlabMR({ detailed_merge_status: "not_approved" }),
+          mergeQueueRequired: false,
+          viewerCanMergeAsAdmin: true,
+        });
+        getRepoMetadataMock.mockResolvedValue(gitlabMetadata);
+        renderPopover({ prUrl: WEB_URL });
+
+        await openAndSettle();
+        await screen.findByTestId("pr-merge-control");
+        expect(screen.queryByTestId("pr-merge-bypass")).toBeNull();
+        expect(screen.queryByTestId("pr-merge-bypass-action")).toBeNull();
       });
 
       it("names no forge when the read fails", async () => {

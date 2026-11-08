@@ -23,6 +23,7 @@ import {
   derivePrMergeControl,
   mergeActionLabel,
   type PrMergeControlModel,
+  type PrMergeMode,
   type PrMergeRequest,
 } from "./prMergeModel";
 
@@ -103,6 +104,7 @@ export function PrMergeControl({
   const refocusActionRef = useRef(false);
   const rowRef = useRef<HTMLDivElement | null>(null);
   const statusId = useId();
+  const bypassNoteId = useId();
 
   const retryOwnsFocus = () => {
     const active = document.activeElement;
@@ -288,14 +290,24 @@ export function PrMergeControl({
     intent: model.kind === "cancel" ? model.intent : null,
   });
   const disabled = model.disabledReason !== null;
+  const bypass = model.kind !== "cancel" && model.bypass;
+  const request = (requested: PrMergeMode) =>
+    onRequest({
+      mode: requested,
+      method: model.kind === "cancel" ? null : method,
+      title: pr.title,
+      baseRef: pr.baseRef,
+      queue,
+      intent: model.kind === "cancel" ? model.intent : null,
+    });
 
   return (
     <div ref={rowRef} data-testid="pr-merge-control" data-merge-state={mode} className={ROW_CLASS}>
       {statusLine}
       <div className={ACTION_ROW_CLASS}>
-        {/* No method to pick while the action itself is unavailable. */}
+        {/* No method to pick while nothing here can merge. */}
         {model.kind !== "cancel" &&
-          !disabled &&
+          (!disabled || bypass) &&
           (model.methods.length > 0 && method !== null ? (
             <SegmentedRadioGroup
               aria-label="Merge method"
@@ -325,21 +337,33 @@ export function PrMergeControl({
           data-row-action=""
           disabled={disabled}
           aria-describedby={statusId}
-          onClick={() =>
-            onRequest({
-              mode,
-              method: model.kind === "cancel" ? null : method,
-              title: pr.title,
-              baseRef: pr.baseRef,
-              queue,
-              intent: model.kind === "cancel" ? model.intent : null,
-            })
-          }
+          onClick={() => request(mode)}
           className="ml-auto transition-colors"
         >
           {label}
         </Button>
       </div>
+      {/* Its own line and its own control, so the familiar action above never
+          turns into one that skips the branch's requirements. */}
+      {bypass && (
+        <div className={ACTION_ROW_CLASS} data-testid="pr-merge-bypass">
+          <span id={bypassNoteId} className="pl-1 text-text-secondary">
+            {forgeName ?? "The forge"} lets you skip its requirements
+          </span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            data-testid="pr-merge-bypass-action"
+            data-row-action=""
+            aria-describedby={bypassNoteId}
+            onClick={() => request("bypass")}
+            className="ml-auto transition-colors"
+          >
+            {mergeActionLabel("bypass")}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
