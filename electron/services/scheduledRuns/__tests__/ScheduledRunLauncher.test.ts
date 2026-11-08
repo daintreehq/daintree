@@ -1304,7 +1304,10 @@ describe("launchScheduledRun with schedules of one agent due together (#16395)",
     withSecondSchedule();
     deps.launchInView = guardedLauncher();
 
-    const outcomes = await Promise.all([launchSchedule("schedule-1"), launchSchedule("schedule-2")]);
+    const outcomes = await Promise.all([
+      launchSchedule("schedule-1"),
+      launchSchedule("schedule-2"),
+    ]);
 
     expect(outcomes).toEqual([
       expect.objectContaining({ status: "started" }),
@@ -1435,38 +1438,44 @@ describe("launchScheduledRun with schedules of one agent due together (#16395)",
       },
       refused: true,
     },
-  ])("asks for nothing when a launch waiting its turn $name", async ({ change, outcome, refused }) => {
-    withSecondSchedule();
-    quitting = false;
-    deps.isShuttingDown = () => quitting;
-    const { launch, answer } = heldLauncher();
-    deps.launchInView = launch;
+  ])(
+    "asks for nothing when a launch waiting its turn $name",
+    async ({ change, outcome, refused }) => {
+      withSecondSchedule();
+      quitting = false;
+      deps.isShuttingDown = () => quitting;
+      const { launch, answer } = heldLauncher();
+      deps.launchInView = launch;
 
-    const first = launchSchedule("schedule-1");
-    const second = launchSchedule("schedule-2");
-    await vi.waitFor(() => expect(launch).toHaveBeenCalledTimes(1));
-    change();
-    // No spawn: a quit or a sleep would refuse it, and the first run's fate is beside the point.
-    answer(false);
+      const first = launchSchedule("schedule-1");
+      const second = launchSchedule("schedule-2");
+      await vi.waitFor(() => expect(launch).toHaveBeenCalledTimes(1));
+      change();
+      // No spawn: a quit or a sleep would refuse it, and the first run's fate is beside the point.
+      answer(false);
 
-    await expect(second).resolves.toEqual(outcome);
-    expect(launch).toHaveBeenCalledTimes(1);
-    await first;
-    expect(hasPendingScheduledLaunch("project-1")).toBe(false);
-    const secondRefusals = recorder.registerRefusedLaunch.mock.calls.filter(
-      ([input]: [{ scheduleId: string }]) => input.scheduleId === "schedule-2"
-    );
-    expect(secondRefusals).toEqual(
-      refused ? [[expect.objectContaining({ terminalId: null, message: outcome.message })]] : []
-    );
-  });
+      await expect(second).resolves.toEqual(outcome);
+      expect(launch).toHaveBeenCalledTimes(1);
+      await first;
+      expect(hasPendingScheduledLaunch("project-1")).toBe(false);
+      const secondRefusals = recorder.registerRefusedLaunch.mock.calls.filter(
+        ([input]: [{ scheduleId: string }]) => input.scheduleId === "schedule-2"
+      );
+      expect(secondRefusals).toEqual(
+        refused ? [[expect.objectContaining({ terminalId: null, message: outcome.message })]] : []
+      );
+    }
+  );
 
   it("launches both in main when no view shows the project", async () => {
     withSecondSchedule();
     deps.findView = () => null;
     deps.launchWithoutView = guardedLauncher();
 
-    const outcomes = await Promise.all([launchSchedule("schedule-1"), launchSchedule("schedule-2")]);
+    const outcomes = await Promise.all([
+      launchSchedule("schedule-1"),
+      launchSchedule("schedule-2"),
+    ]);
 
     expect(outcomes).toEqual([
       expect.objectContaining({ status: "started" }),
