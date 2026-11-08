@@ -1294,6 +1294,93 @@ describe("canopy IPC", () => {
     expect(again.ok).toBe(false);
   });
 
+  describe("bulk trash", () => {
+    /** What a handler answered, out of its envelope. */
+    function answer<T>(result: unknown): T {
+      const envelope = result as { ok?: boolean; data?: unknown };
+      return (envelope && "ok" in envelope ? envelope.data : result) as T;
+    }
+
+    /** Runs the fleet holds, each its own terminal in the incarnation listed. */
+    function fleetOf(count: number): Array<{ runId: string; spawnedAt: number }> {
+      state.runs = Array.from({ length: count }, (_, index) => ({
+        runId: `run-${index}`,
+        spawnedAt: 100,
+        workspaceId: "project-1",
+      }));
+      return state.runs.map(({ runId, spawnedAt }) => ({ runId, spawnedAt }));
+    }
+
+    it("trashes a confirmed set past one-by-one trash's limit in one call, and takes it all back", async () => {
+      const targets = fleetOf(25);
+      const outcomes = answer<Array<{ runId: string; receipt?: number | null }>>(
+        await invoke(CANOPY_METHOD_CHANNELS.trashBatch, fakeSender(1), targets)
+      );
+      expect(outcomes).toHaveLength(25);
+      expect(outcomes.every((outcome) => typeof outcome.receipt === "number")).toBe(true);
+      expect(ptyClient.trash).toHaveBeenCalledTimes(25);
+
+      state.runs = [];
+      const receipts = outcomes.map((outcome) => outcome.receipt!);
+      const undone = answer<Array<{ receipt: number; error?: string }>>(
+        await invoke(CANOPY_METHOD_CHANNELS.untrashBatch, fakeSender(1), receipts)
+      );
+      expect(undone.filter((outcome) => outcome.error === undefined)).toHaveLength(25);
+      expect(ptyClient.restore).toHaveBeenCalledTimes(25);
+      // Spent: the same Undo again puts nothing back.
+      const again = answer<Array<{ receipt: number; error?: string }>>(
+        await invoke(CANOPY_METHOD_CHANNELS.untrashBatch, fakeSender(1), receipts.slice(0, 1))
+      );
+      expect(again[0]!.error).toBeTruthy();
+      expect(ptyClient.restore).toHaveBeenCalledTimes(25);
+    });
+
+    it("refuses alone a run respawned since, or in a project another screen drives", async () => {
+      const targets = fleetOf(3);
+      ptyClient.getTerminalAsync.mockImplementation(async (id?: string) =>
+        id === "run-1" ? { spawnedAt: 200 } : { spawnedAt: 100 }
+      );
+      ptyClient.getTerminalProjectId.mockImplementation((id: string) =>
+        id === "run-2" ? "project-2" : null
+      );
+      lease.holder = "other";
+      let outcomes: Array<{ runId: string; receipt?: number | null; error?: string }>;
+      try {
+        outcomes = answer(await invoke(CANOPY_METHOD_CHANNELS.trashBatch, fakeSender(1), targets));
+      } finally {
+        ptyClient.getTerminalAsync.mockImplementation(async () => state.record);
+        ptyClient.getTerminalProjectId.mockImplementation(() => state.terminalProject);
+      }
+      const byRun = new Map(outcomes.map((outcome) => [outcome.runId, outcome]));
+      expect(typeof byRun.get("run-0")!.receipt).toBe("number");
+      expect(byRun.get("run-1")!.error).toBeTruthy();
+      expect(byRun.get("run-2")!.error).toBe("This project is being driven from another screen.");
+      expect(ptyClient.trash).toHaveBeenCalledTimes(1);
+      expect(ptyClient.trash).toHaveBeenCalledWith("run-0");
+    });
+
+    it("refuses a set larger than the Trash lists, before trashing any of it", async () => {
+      const targets = fleetOf(51);
+      const refused = await outcome(
+        invoke(CANOPY_METHOD_CHANNELS.trashBatch, fakeSender(1), targets)
+      );
+      expect(refused.ok).toBe(false);
+      expect(ptyClient.trash).not.toHaveBeenCalled();
+    });
+
+    it("reads input lines only for runs the fleet holds in the incarnation named", async () => {
+      fleetOf(1);
+      const readings = answer<Array<{ runId: string; state: string }>>(
+        await invoke(CANOPY_METHOD_CHANNELS.readInputLines, fakeSender(1), [
+          { runId: "run-0", spawnedAt: 100 },
+          { runId: "run-0", spawnedAt: 99 },
+          { runId: "elsewhere", spawnedAt: 100 },
+        ])
+      );
+      expect(readings.map((reading) => reading.runId)).toEqual(["run-0"]);
+    });
+  });
+
   describe("Canopy's Trash", () => {
     const EXPIRES = Date.now() + TRASH_TTL_MS;
     const target = { spawnedAt: 100, expiresAt: EXPIRES };

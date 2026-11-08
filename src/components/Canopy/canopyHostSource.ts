@@ -4,8 +4,7 @@ import { remoteHostsClient } from "@/clients/remoteHostsClient";
 import { remoteHostOfView } from "@/services/terminal/remoteLoopbackLinks";
 import type { BulkTransport } from "@shared/utils/canopyBulkEnable";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import { clientErrorCode } from "@/utils/clientAppError";
-import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { clientErrorCode, clientErrorText } from "@/utils/clientAppError";
 import type { CanopyHostChannel } from "@shared/types/ipc/canopyHost";
 import type {
   CanopyRunTarget,
@@ -119,14 +118,15 @@ export function unlessHostDisconnected<T>(call: Promise<T>): Promise<T | undefin
 
 /** What a host's refusal of a whole bulk call says, in words for the person. */
 export function hostRefusal(error: unknown): string {
+  const text = clientErrorText(error, "It couldn't be reached.");
   // A host on a Daintree from before bulk trash refuses the call by name.
   if (
     clientErrorCode(error) === "VALIDATION" &&
-    formatErrorMessage(error, "").includes("can't be called on another host's Canopy")
+    text.includes("can't be called on another host's Canopy")
   ) {
     return "Its Daintree is too old to trash agents together. Update it, or trash them one at a time.";
   }
-  return formatErrorMessage(error, "It couldn't be reached.");
+  return text;
 }
 
 /** A whole host's refusal, said for every run it was asked to trash. */
