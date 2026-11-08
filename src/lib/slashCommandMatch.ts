@@ -5,6 +5,11 @@ type MatchScore = {
   detail: number;
 };
 
+type CommandScore = MatchScore & {
+  /** Whether only an alias scored this well, not the command's own name. */
+  viaAlias: boolean;
+};
+
 /** Trigger characters stripped from the front of a token before matching. */
 const TRIGGER_PREFIXES = ["/", "$", "@"] as const;
 
@@ -68,13 +73,12 @@ function scoreCandidate(normalizedCandidate: string, normalizedQuery: string): M
  * triggerless insert text, and any aliases — normalizing each exactly once.
  * Kind, badge text, and description are deliberately excluded.
  */
-function getMatchScore(command: SlashCommand, normalizedQuery: string): MatchScore | null {
-  const candidates = [command.label];
-  if (command.insertText) candidates.push(command.insertText);
-  if (command.aliases) candidates.push(...command.aliases);
+function getMatchScore(command: SlashCommand, normalizedQuery: string): CommandScore | null {
+  const names = command.insertText ? [command.label, command.insertText] : [command.label];
+  const candidates = [...names, ...(command.aliases ?? [])];
 
-  let best: MatchScore | null = null;
-  for (const candidate of candidates) {
+  let best: CommandScore | null = null;
+  for (const [index, candidate] of candidates.entries()) {
     const score = scoreCandidate(normalizeToken(candidate), normalizedQuery);
     if (
       score &&
@@ -82,7 +86,7 @@ function getMatchScore(command: SlashCommand, normalizedQuery: string): MatchSco
         score.rank < best.rank ||
         (score.rank === best.rank && score.detail < best.detail))
     ) {
-      best = score;
+      best = { ...score, viaAlias: index >= names.length };
     }
   }
   return best;
@@ -98,12 +102,15 @@ export function rankSlashCommands(commands: SlashCommand[], query: string): Slas
       return score ? { command, score, index } : null;
     })
     .filter(
-      (entry): entry is { command: SlashCommand; score: MatchScore; index: number } =>
+      (entry): entry is { command: SlashCommand; score: CommandScore; index: number } =>
         entry !== null
     )
     .sort((a, b) => {
       if (a.score.rank !== b.score.rank) return a.score.rank - b.score.rank;
       if (a.score.detail !== b.score.detail) return a.score.detail - b.score.detail;
+      // Enter takes the top row: someone's own `/new` must not lose to a `/clear`
+      // that merely answers to it, which would start them a new session.
+      if (a.score.viaAlias !== b.score.viaAlias) return a.score.viaAlias ? 1 : -1;
       const labelOrder = a.command.label.localeCompare(b.command.label);
       if (labelOrder !== 0) return labelOrder;
       return a.index - b.index;

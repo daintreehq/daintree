@@ -138,8 +138,63 @@ describe("rankSlashCommands over the Antigravity catalog", () => {
   });
 
   it("does not lend agy's aliases to another agent's menu", () => {
-    // Claude has a real /new; agy's `new` alias of /clear must not outrank it.
-    expect(rankSlashCommands(getBuiltinSlashCommands("claude"), "/new")[0]?.label).toBe("/new");
+    // Codex has a real /new; agy's `new` alias of /clear must not outrank it.
+    expect(
+      rankSlashCommands(getBuiltinSlashCommands("codex"), "/new").map((command) => command.label)
+    ).toEqual(["/new"]);
     expect(rankSlashCommands(getBuiltinSlashCommands("claude"), "/quota")).toEqual([]);
+  });
+});
+
+describe("rankSlashCommands for /new and /reset", () => {
+  it.each(["claude", "gemini"] as const)(
+    "takes /new to %s's /clear, the command it runs there",
+    (agentId) => {
+      const labels = rankSlashCommands(getBuiltinSlashCommands(agentId), "/new").map(
+        (command) => command.label
+      );
+      expect(labels[0]).toBe("/clear");
+      expect(labels).not.toContain("/new");
+    }
+  );
+
+  it("takes /reset to Claude's /clear", () => {
+    expect(rankSlashCommands(getBuiltinSlashCommands("claude"), "/reset")[0]?.label).toBe("/clear");
+  });
+
+  // Gemini's `new` is the first alias and Claude's the second, so the two
+  // together pin where the command's own names end and its aliases begin.
+  describe.each(["claude", "gemini"] as const)("with %s's /clear competing", (agentId) => {
+    const builtins = getBuiltinSlashCommands(agentId);
+    const ownCommand = (overrides: Partial<SlashCommand>): SlashCommand => ({
+      id: "project:new",
+      label: "/new",
+      description: "Scaffold a new page",
+      scope: "project",
+      agentId,
+      ...overrides,
+    });
+
+    it("puts someone's own /new above a /clear that only answers to it, whatever the order", () => {
+      const own = ownCommand({});
+      for (const commands of [
+        [...builtins, own],
+        [own, ...builtins],
+      ]) {
+        expect(rankSlashCommands(commands, "/new").map((command) => command.label)).toEqual([
+          "/new",
+          "/clear",
+        ]);
+      }
+    });
+
+    it("counts an insert text as the command's own name", () => {
+      // The label matches nothing and sorts after /clear, so only the insert
+      // text being a real name can put it first.
+      const own = ownCommand({ label: "Zed Scaffold", insertText: "/new" });
+      expect(rankSlashCommands([...builtins, own], "/new").map((command) => command.label)).toEqual(
+        ["Zed Scaffold", "/clear"]
+      );
+    });
   });
 });
