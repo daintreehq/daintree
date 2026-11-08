@@ -1,6 +1,5 @@
 import type * as pty from "node-pty";
 import type { TerminalInfo } from "./types.js";
-import { OUTPUT_BUFFER_SIZE } from "./types.js";
 import type { AnalysisBackend } from "./analysis/AnalysisBackend.js";
 import type { SessionSnapshotter } from "./SessionSnapshotter.js";
 import type { TerminalForensicsBuffer } from "./TerminalForensicsBuffer.js";
@@ -108,21 +107,12 @@ export class PtyDataPipeline {
     this.host.identityWatcher.observeOutput(data);
     this.host.semanticBufferManager.onData(data);
 
-    // Output mirror for agent consumers: keep a rolling recent-output buffer
-    // whenever an agent is live (launched hint or detection), and queue the
-    // chunk for Main's agent:output only when Main has a reader for it.
-    // Plain terminals skip both to save work.
-    if (this.host.isAgentLive) {
-      terminal.outputBuffer += data;
-      if (terminal.outputBuffer.length > OUTPUT_BUFFER_SIZE) {
-        terminal.outputBuffer = terminal.outputBuffer.slice(-OUTPUT_BUFFER_SIZE);
-      }
-
-      if (forwardsAgentOutput(terminal)) {
-        const liveId = getLiveAgentId(terminal);
-        if (liveId) {
-          this.host.queueAgentOutput(liveId, data);
-        }
+    // Queue the chunk for Main's agent:output only when an agent is live
+    // (launched hint or detection) and Main has a reader for it.
+    if (this.host.isAgentLive && forwardsAgentOutput(terminal)) {
+      const liveId = getLiveAgentId(terminal);
+      if (liveId) {
+        this.host.queueAgentOutput(liveId, data);
       }
     }
   }

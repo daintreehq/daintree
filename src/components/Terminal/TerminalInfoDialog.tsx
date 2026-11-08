@@ -671,7 +671,6 @@ Activity:
   Activity tier: ${info?.activityTier ?? UNAVAILABLE}
 
 Performance:
-  Output buffer: ${info?.outputBufferSize != null ? `${info.outputBufferSize} lines` : UNAVAILABLE}
   Semantic buffer: ${info?.semanticBufferLines != null ? `${info.semanticBufferLines} lines` : UNAVAILABLE}
   Synchronized output (DEC 2026): ${formatSyncMode(peekTerminalService()?.getSynchronizedOutputMode(terminalId) ?? null)}
 `;
@@ -1119,13 +1118,6 @@ Performance:
             expanded={performanceOpen}
             onToggle={() => setPerformanceOpen((v) => !v)}
           >
-            <Row
-              label="Output buffer"
-              value={info?.outputBufferSize != null ? `${info.outputBufferSize} lines` : undefined}
-              mono
-              pending={pending}
-              fallback={UNAVAILABLE}
-            />
             <Row
               label="Semantic buffer"
               value={

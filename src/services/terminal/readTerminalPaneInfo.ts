@@ -9,7 +9,6 @@ type ProcessMeasurement =
   | "lastInputTime"
   | "lastOutputTime"
   | "activityTier"
-  | "outputBufferSize"
   | "semanticBufferLines"
   | "restartCount";
 

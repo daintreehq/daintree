@@ -602,7 +602,6 @@ export function registerTerminalLifecycleActions(
       lastOutputTime: z.number().optional(),
       lastStateChange: z.number().optional(),
       activityTier: z.string().optional(),
-      outputBufferSize: z.number().optional(),
       semanticBufferLines: z.number().optional(),
       restartCount: z.number().optional(),
       agentIncarnation: z.number().int().nonnegative().optional(),

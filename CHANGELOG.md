@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Breaking Changes
+
+- The `terminal.info.get` action no longer returns `outputBufferSize`, and Terminal Info no longer shows an Output buffer row: the number counted characters up to a 2,000 cap, so it read the same for any agent that had printed more than a screenful. Plugins that dispatch the action should drop any read of the field; nothing replaces it (#16426)
+
 ## [0.49.0] - 2026-11-06
 
 Decisions lets agents ask you a question and take your answer later from your phone, end-to-end encrypted through a relay in your own Cloudflare account, and Schedules runs agents unattended on a plain-words schedule, Daintree closed or not. Amber now means an ask you haven't seen, accounts are a per-agent choice a pane can switch mid-conversation, folders dropped on a remote window go to the host, Compact worktree cards fit about eight where four and a half did, the Assistant runs six sessions, and Daintree moves to Electron 45 and macOS 13.

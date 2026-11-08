@@ -31,7 +31,6 @@ function createTerminal(overrides: Partial<TerminalInfo> = {}): TerminalInfo {
     launchAgentId: "claude",
     agentState: "idle",
     ptyProcess: {} as never,
-    outputBuffer: "",
     semanticBuffer: [],
     ...overrides,
   } as TerminalInfo;
@@ -1372,7 +1371,6 @@ describe("AgentStateService handback detection (#12488)", () => {
       launchAgentId: "claude",
       agentState: "working",
       ptyProcess: {} as never,
-      outputBuffer: "",
       semanticBuffer: [],
       ...overrides,
     } as TerminalInfo;

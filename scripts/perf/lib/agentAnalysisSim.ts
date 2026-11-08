@@ -463,7 +463,6 @@ export async function runAgentAnalysisSim(
           launchAgentId: agentId,
           agentState: "idle",
           ptyProcess: {} as never,
-          outputBuffer: "",
           semanticBuffer: [] as string[],
         } as unknown as TerminalInfo;
 

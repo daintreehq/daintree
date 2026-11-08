@@ -649,7 +649,6 @@ export async function replayCastThroughFsm(
     ...(opts.agentId ? { launchAgentId: opts.agentId } : {}),
     agentState: "idle",
     ptyProcess: {} as never,
-    outputBuffer: "",
     semanticBuffer: [],
   } as unknown as TerminalInfo;
 

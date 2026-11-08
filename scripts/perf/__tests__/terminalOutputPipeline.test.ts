@@ -45,7 +45,6 @@ function deadPipeline(plan: PipelinePlan): PipelineObservation {
     promptReturnsMissed: plan.expectedPromptReturns,
     promptReturnsSpurious: 0,
     forensicTail: "",
-    outputTail: "",
     semanticLines: [],
     chunksFed: 0,
   };
@@ -84,7 +83,6 @@ describe("pipeline correctness predicate", () => {
     expect(misses.oscResponseMisses).toBe(plan.expectedOscResponses);
     expect(misses.promptReturnMisses).toBe(plan.expectedPromptReturns);
     expect(misses.forensicRingMisses).toBe(1);
-    expect(misses.outputRingMisses).toBe(1);
     expect(misses.semanticRingMisses).toBeGreaterThan(0);
   });
 
@@ -93,10 +91,9 @@ describe("pipeline correctness predicate", () => {
     const observed = runPipelinePlan(plan);
     expect(pipelinePassMisses(plan, observed).forensicRingMisses).toBe(0);
     // An untrimmed ring holds the whole stream, not its tail.
-    const untrimmed = { ...observed, forensicTail: plan.stream, outputTail: plan.stream };
+    const untrimmed = { ...observed, forensicTail: plan.stream };
     const misses = pipelinePassMisses(plan, untrimmed);
     expect(misses.forensicRingMisses).toBe(1);
-    expect(misses.outputRingMisses).toBe(1);
   });
 
   it("catches a ring that drops the newest chunk", () => {
@@ -105,11 +102,9 @@ describe("pipeline correctness predicate", () => {
     const stale = {
       ...observed,
       forensicTail: observed.forensicTail.slice(0, -20),
-      outputTail: observed.outputTail.slice(0, -20),
     };
     const misses = pipelinePassMisses(plan, stale);
     expect(misses.forensicRingMisses).toBe(1);
-    expect(misses.outputRingMisses).toBe(1);
   });
 });
 

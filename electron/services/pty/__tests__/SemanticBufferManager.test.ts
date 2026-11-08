@@ -14,7 +14,6 @@ function createTerminalInfo(overrides: Partial<TerminalInfo> = {}): TerminalInfo
     lastCheckTime: 0,
     restartCount: 0,
     ptyProcess: {} as never,
-    outputBuffer: "",
     semanticBuffer: [],
     ...overrides,
   } as TerminalInfo;

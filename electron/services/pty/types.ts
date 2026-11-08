@@ -216,7 +216,6 @@ export interface TerminalRuntime {
   headlessTerminal?: HeadlessTerminal;
   serializeAddon?: SerializeAddon;
   processDetector?: ProcessDetector;
-  outputBuffer: string;
   semanticBuffer: string[];
 }
 
@@ -237,8 +236,6 @@ export interface TerminalInfo extends TerminalPublicState {
   serializeAddon?: SerializeAddon;
   /** @deprecated Internal to TerminalProcess */
   processDetector?: ProcessDetector;
-  /** @deprecated Use TerminalProcess.getOutputBuffer() */
-  outputBuffer: string;
   /** @deprecated Use TerminalProcess.getSemanticBuffer() */
   semanticBuffer: string[];
   /**
