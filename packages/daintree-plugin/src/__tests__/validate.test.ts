@@ -232,7 +232,7 @@ describe("runValidate", () => {
       await writeManifest(manifestWithIcon("./icons/missing.svg"));
       const result = await runValidate({ dir: tmpDir });
       expect(result.ok).toBe(false);
-      expect(result.errors).toHaveLength(3);
+      expect(result.errors).toHaveLength(4);
       expect(result.errors[0]).toMatch(/contributes\.panels\.0\.iconId: .*not found/);
       expect(result.errors.join("\n")).toMatch(/contributes\.processTools\.0\.iconId/);
       expect(result.errors.join("\n")).toMatch(/contributes\.agents\.0\.iconId/);
