@@ -81,6 +81,17 @@ describe("removeStartupSkeleton", () => {
     for (const cb of batch) cb(performance.now());
   }
 
+  it("marks startup ready before waiting on frames a hidden view may never paint", async () => {
+    const { removeStartupSkeleton } = await import("../removeStartupSkeleton");
+    const el = addSkeleton();
+    el.setAttribute("data-startup-stage", "hydrating");
+
+    removeStartupSkeleton();
+
+    expect(rafQueue.length).toBeGreaterThan(0);
+    expect(el.getAttribute("data-startup-stage")).toBe("ready");
+  });
+
   it("falls back to fade-out class + UI_EXIT_DURATION setTimeout when startViewTransition is unavailable", async () => {
     const { removeStartupSkeleton } = await import("../removeStartupSkeleton");
     const el = addSkeleton();

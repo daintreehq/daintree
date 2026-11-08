@@ -2,6 +2,7 @@ import { UI_EXIT_DURATION, UI_EXIT_EASING } from "../lib/animationUtils";
 import { prefersReducedMotion } from "../lib/appThemeViewTransition";
 import { flushFinalCls } from "./layoutShiftMonitor";
 import { flushPendingPerfMarks, startSteadyStatePerfFlush } from "./performance";
+import { markStartupStage } from "./startupStage";
 
 const SKELETON_ID = "startup-skeleton";
 
@@ -73,6 +74,9 @@ export function removeStartupSkeleton(): void {
     notifyFirstInteractive();
     return;
   }
+  // At once rather than after the frames below: a hidden view's frames wait for
+  // it to be shown, and the stuck card must not report a startup that finished.
+  markStartupStage("ready");
 
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {

@@ -30,6 +30,7 @@ import { assertIpcSecurityReady } from "./ipcGuard.js";
 import { isE2EFaultMode } from "../setup/runtimeFlags.js";
 import type { ClientEndpoint, EndpointGroup, HostFrame } from "./endpoint.js";
 import { getIpcDispatcher } from "./dispatcher.js";
+import { trackStartupInvoke } from "./startupInvokeTracker.js";
 import { getEndpointRegistry } from "./endpointRegistry.js";
 import { getLocalClientRef, getLocalEndpoint } from "./localEndpoint.js";
 
@@ -980,7 +981,9 @@ function registerInvokeHandler(
   local: (event: Electron.IpcMainInvokeEvent, args: unknown[]) => unknown,
   remote: (ctx: IpcContext, args: unknown[]) => unknown
 ): () => void {
-  ipcMain.handle(channel, (event, ...args) => local(event, args));
+  ipcMain.handle(channel, (event, ...args) =>
+    trackStartupInvoke(event?.sender, channel, () => local(event, args))
+  );
   const unregister = getIpcDispatcher().registerInvoke(channel, (ctx, ...args) =>
     remote(ctx, args)
   );

@@ -502,8 +502,14 @@
         line-height: 1.5;
         color: var(--theme-text-primary, #e4e4e7);
       }
-      .skeleton-stuck-btn {
+      .skeleton-stuck-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
         align-self: stretch;
+      }
+      .skeleton-stuck-btn {
+        flex: 1 1 auto;
         padding: 7px 14px;
         border-radius: 6px;
         border: 1px solid
@@ -534,6 +540,17 @@
       .skeleton-stuck-btn:focus-visible {
         outline: 2px solid var(--theme-text-primary, #e4e4e7);
         outline-offset: 2px;
+      }
+      .skeleton-stuck-btn:disabled {
+        opacity: 0.6;
+        cursor: default;
+        pointer-events: none;
+      }
+      .skeleton-stuck-error {
+        margin: 0;
+        font-size: 13px;
+        line-height: 1.5;
+        color: var(--theme-text-primary, #e4e4e7);
       }
 
       /* ── Recipes skeleton (the launcher hero) ── */
@@ -839,7 +856,8 @@
           );
           box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
         }
-        .skeleton-stuck-title {
+        .skeleton-stuck-title,
+        .skeleton-stuck-error {
           color: var(--theme-text-primary, #1e252e);
         }
         .skeleton-stuck-btn {
@@ -1263,7 +1281,16 @@
       <!-- Stuck-state card (CSS animation-delay reveals it at 6s) -->
       <div class="skeleton-stuck" role="status" aria-live="polite">
         <p class="skeleton-stuck-title">Daintree is taking longer than expected</p>
-        <button type="button" class="skeleton-stuck-btn" id="skeleton-stuck-btn">Reload app</button>
+        <div class="skeleton-stuck-actions">
+          <button type="button" class="skeleton-stuck-btn" id="skeleton-stuck-btn">Reload app</button>
+          <!-- Shown by skeleton-stuck.js when the bridge can restart into safe mode -->
+          <button type="button" class="skeleton-stuck-btn" id="skeleton-stuck-safe-mode-btn" hidden>
+            Restart in safe mode
+          </button>
+        </div>
+        <p class="skeleton-stuck-error" id="skeleton-stuck-error" role="alert" hidden>
+          Couldn't restart in safe mode. Try again, or quit and reopen Daintree.
+        </p>
       </div>
     </div>
     <script src="/skeleton-ready.js"></script>
