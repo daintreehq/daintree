@@ -18,6 +18,7 @@ import {
   buildAttachArgs,
   buildCancelArgs,
   buildCatArgs,
+  buildExitArgs,
   closeSshMaster,
   closeSshMasters,
   isStreamLocalRefusal,
@@ -1241,6 +1242,28 @@ describe("reconnecting to a host the transport already knows", () => {
     // The server's answer on socket forwarding is asked again too.
     expect(redial.filter((args) => args.includes("-W"))).toHaveLength(1);
     await third.dispose();
+    host.closeProxies();
+  });
+
+  it("retires the master the last link rode before dialling, when that route is suspect (#16386)", async () => {
+    const host = await knownHost();
+    const clientDir = path.join(root, "c");
+    const transport = new SshTransport({ target: "studio", clientDir, spawn: host.spawner });
+    const first = await transport.open(new AbortController().signal);
+    await first.dispose();
+
+    const before = host.calls.length;
+    const second = await transport.open(new AbortController().signal, { routeSuspect: true });
+    const redial = host.calls.slice(before);
+    // First, so nothing in this dial goes through it; what it then starts is on the network as it is.
+    expect(redial[0]).toEqual(buildExitArgs("studio", controlPathFor(clientDir, "studio")));
+    expect(redial.filter((args) => args.includes("exit"))).toHaveLength(1);
+    expect(second.remembered).toBeUndefined();
+    expect(redial.filter(isProbe)).toHaveLength(1);
+    expect(redial.filter(isRead)).toHaveLength(1);
+    // What the server said about socket forwarding still holds.
+    expect(redial.filter((args) => args.includes("-W"))).toEqual([]);
+    await second.dispose();
     host.closeProxies();
   });
 
