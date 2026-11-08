@@ -1,5 +1,6 @@
 import { afterAll, describe, expect, it } from "vitest";
 import { mkdtempSync, promises as fsPromises, realpathSync, rmSync, writeFileSync } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -243,16 +244,41 @@ describe("firstSightingReadMisses (PERF-113)", () => {
     expect(misses).toBe(1);
   });
 
-  it("scores a sniff followed by a whole read through the same handle", async () => {
+  it.each([
+    ["the handle's own readFile", (handle: FileHandle) => handle.readFile()],
+    ["fs.promises.readFile given the handle", (handle: FileHandle) => fsPromises.readFile(handle)],
+  ])("scores a sniff followed by a whole read through %s", async (_name, readWhole) => {
     const misses = await observe(async () => {
       for (const abs of binaries.slice(0, 2)) await sniff(abs);
       const handle = await fsPromises.open(binaries[2], "r");
       try {
         await handle.read(Buffer.alloc(BINARY_SNIFF_BYTES), 0, BINARY_SNIFF_BYTES, 0);
-        await fsPromises.readFile(handle);
+        await readWhole(handle);
       } finally {
         await handle.close();
       }
+    });
+    expect(misses).toBe(1);
+  });
+
+  it("scores a binary read past its sniff through one handle", async () => {
+    const misses = await observe(async () => {
+      for (const abs of binaries.slice(0, 2)) await sniff(abs);
+      const handle = await fsPromises.open(binaries[2], "r");
+      try {
+        const span = BINARY_SNIFF_BYTES * 2;
+        await handle.read(Buffer.alloc(span), 0, span, 0);
+      } finally {
+        await handle.close();
+      }
+    });
+    expect(misses).toBe(1);
+  });
+
+  it("scores a binary opened a second time without reading", async () => {
+    const misses = await observe(async () => {
+      for (const abs of binaries) await sniff(abs);
+      await (await fsPromises.open(binaries[1], "r")).close();
     });
     expect(misses).toBe(1);
   });

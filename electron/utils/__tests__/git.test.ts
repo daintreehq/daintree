@@ -35,6 +35,8 @@ const handleIo = vi.hoisted(() => {
     let snapshot: Promise<Buffer> | undefined;
     return {
       read: async (buffer: Buffer, offset: number, length: number, position: number) => {
+        // A cursor read would leave the handle short of byte 0 for `readFile`.
+        if (typeof position !== "number") throw new Error("handle reads must be positional");
         await wait(io.readDelay);
         snapshot ??= Promise.resolve(readFileMock(path) as Promise<Buffer>);
         const content = await snapshot;
@@ -103,6 +105,12 @@ import {
 import { createHardenedGit, createWslHardenedGit } from "../hardenedGit.js";
 import { logError, logWarn } from "../logger.js";
 import { promises as fs } from "fs";
+
+// Overrides on the fake handles never outlive a test, whatever order runs.
+beforeEach(() => {
+  handleIo.reset();
+  handleIo.open.mockReset();
+});
 
 describe("getLatestTrackedFileMtime", () => {
   beforeEach(() => {
@@ -1105,7 +1113,6 @@ describe("getWorktreeChangesWithStats binary file handling", () => {
     (fs.access as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
     (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 1000, size: 512 });
     readFileMock.mockResolvedValue(Buffer.from("line1\nline2\n"));
-    handleIo.reset();
     mockGit.raw.mockResolvedValue("");
     mockGit.diff.mockResolvedValue("");
   });
@@ -1300,30 +1307,38 @@ describe("getWorktreeChangesWithStats binary file handling", () => {
     expect(readFileMock).toHaveBeenCalledTimes(2);
   });
 
-  it.each([
-    ["shorter than the sniff", 0],
-    ["read only as far as its sniff", 64 * 1024],
-  ])(
-    "keeps no verdict when a binary %s is replaced at the same size during the read",
-    async (_name, size) => {
-      const cwd = "/binary-untracked-replaced/" + Math.random();
+  // An atomic rename lands a new inode (or device) within the same mtime tick;
+  // a write lands a new ctime, mtime or size.
+  const identityFields = ["ino", "dev", "ctimeMs", "mtimeMs", "size"] as const;
+  const readShapes: Array<[string, Buffer, number | null]> = [
+    ["a binary shorter than the sniff", BINARY, null],
+    ["a binary read only as far as its sniff", bigBinary(64 * 1024), null],
+    ["a text file read whole", textOf(SNIFF * 2), SNIFF],
+  ];
+  it.each(
+    readShapes.flatMap(([name, content, insertions]) =>
+      identityFields.map((field) => [name, field, content, insertions] as const)
+    )
+  )(
+    "keeps no verdict for %s whose %s changes during the read",
+    async (_name, field, content, insertions) => {
+      const cwd = "/untracked-replaced/" + Math.random();
       setupUntracked(cwd, ["shot.png"]);
-      const content = size ? bigBinary(size) : BINARY;
       const statMock = fs.stat as ReturnType<typeof vi.fn>;
       const before = { mtimeMs: 1000, ctimeMs: 1000, size: content.length, ino: 7, dev: 1 };
       statMock.mockResolvedValue(before);
       readFileMock.mockImplementation(async () => {
-        // An atomic rename lands a new inode within the same mtime tick.
-        statMock.mockResolvedValue({ ...before, ino: 8 });
+        statMock.mockResolvedValue({ ...before, [field]: before[field] + 1 });
         return content;
       });
 
-      expect((await getWorktreeChangesWithStats(cwd, true)).changes[0].insertions).toBeNull();
+      expect((await getWorktreeChangesWithStats(cwd, true)).changes[0].insertions).toBe(insertions);
 
       statMock.mockResolvedValue(before);
       readFileMock.mockReset().mockResolvedValue(content);
-      expect((await getWorktreeChangesWithStats(cwd, true)).changes[0].insertions).toBeNull();
-      expect(readFileMock).toHaveBeenCalledTimes(1);
+      handleIo.open.mockClear();
+      expect((await getWorktreeChangesWithStats(cwd, true)).changes[0].insertions).toBe(insertions);
+      expect(handleIo.open).toHaveBeenCalledTimes(1);
     }
   );
 
@@ -1483,6 +1498,19 @@ describe("getWorktreeChangesWithStats binary file handling", () => {
     handleIo.open.mockClear();
     expect((await getWorktreeChangesWithStats(cwd, true)).changes[0].insertions).toBe(SNIFF);
     expect(handleIo.open).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["one byte past the 10 MiB cap", 10 * 1024 * 1024 + 1, 0],
+    ["exactly at the 10 MiB cap", 10 * 1024 * 1024, 1],
+  ])("opens a file %s only when it is within the cap", async (_name, size, opens) => {
+    const cwd = "/untracked-size-cap/" + Math.random();
+    setupUntracked(cwd, ["huge.bin"]);
+    (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 1000, size });
+    readFileMock.mockResolvedValue(BINARY);
+
+    expect((await getWorktreeChangesWithStats(cwd, true)).changes[0].insertions).toBeNull();
+    expect(handleIo.open).toHaveBeenCalledTimes(opens);
   });
 
   it("closes the handle when the sniff read fails", async () => {
@@ -2215,13 +2243,12 @@ describe("getWorktreeChangesWithStats untracked totals past the enrichment cap (
       expect(result.changes.filter((c) => c.status === "modified")).toHaveLength(tracked.length);
       expect(listed + (result.omittedUntrackedCount ?? 0)).toBe(n);
       expect(result.changedFileCount).toBe(tracked.length + n);
-      // Enrichment stays bounded: only listed untracked files are opened.
-      const listedPaths = new Set(
-        result.changes.filter((c) => c.status === "untracked").map((c) => c.path)
-      );
+      // Enrichment stays bounded: each listed untracked file is opened once,
+      // and nothing else is.
+      const listedRows = result.changes.filter((c) => c.status === "untracked");
       const opened = handleIo.open.mock.calls.map(([path]) => path);
-      expect(opened).toHaveLength(listed);
-      expect(opened.every((path) => listedPaths.has(path))).toBe(true);
+      expect(opened.sort()).toEqual(listedRows.map((c) => c.path).sort());
+      expect(listedRows.every((c) => c.insertions === 2)).toBe(true);
     }
   );
 
@@ -2584,26 +2611,21 @@ describe("getWorktreeChangesWithStats on a stalled mount (#15645)", () => {
         Promise.resolve(args[0] === "rev-parse" ? `${OID}\n${cwd}\n` : "")
       );
       statMock().mockResolvedValue({ mtimeMs: 1000, size: longText.length, dev: 1, ino: 1 });
-      handleIo.reset();
       stall();
 
-      try {
-        const pending = getWorktreeChangesWithStats(cwd, { forceRefresh: true });
-        const flag = settledFlag(pending);
+      const pending = getWorktreeChangesWithStats(cwd, { forceRefresh: true });
+      const flag = settledFlag(pending);
 
-        await vi.advanceTimersByTimeAsync(5_000);
-        expect(flag.settled).toBe(true);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(flag.settled).toBe(true);
 
-        const result = await pending;
-        const untracked = result.changes.filter((change) => change.status === "untracked");
-        expect(untracked).toHaveLength(files.length);
-        expect(untracked.every((change) => change.insertions === null)).toBe(true);
-        expect(handleIo.open).toHaveBeenCalledTimes(10);
-        // A read that gave up still closes its handle; a stalled one cannot yet.
-        expect(handleIo.served.closes).toBe(closedHandles);
-      } finally {
-        handleIo.open.mockReset();
-      }
+      const result = await pending;
+      const untracked = result.changes.filter((change) => change.status === "untracked");
+      expect(untracked).toHaveLength(files.length);
+      expect(untracked.every((change) => change.insertions === null)).toBe(true);
+      expect(handleIo.open).toHaveBeenCalledTimes(10);
+      // A read that gave up still closes its handle; a stalled one cannot yet.
+      expect(handleIo.served.closes).toBe(closedHandles);
     }
   );
 
@@ -2619,7 +2641,6 @@ describe("getWorktreeChangesWithStats on a stalled mount (#15645)", () => {
         Promise.resolve(args[0] === "rev-parse" ? `${OID}\n${cwd}\n` : "")
       );
       statMock().mockResolvedValue({ mtimeMs: 1000, size: 12, dev: 1, ino: 1 });
-      handleIo.reset();
       Object.assign(handleIo.io, delays);
 
       const pending = getWorktreeChangesWithStats(cwd, { forceRefresh: true });
