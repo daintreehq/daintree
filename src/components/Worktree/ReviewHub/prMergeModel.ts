@@ -6,14 +6,18 @@ import type {
   PRMergeStatus,
 } from "@shared/types/forge";
 import type { ForgeRepoMetadataPayload } from "@shared/types/ipc/forge";
+import { pluralize } from "@/lib/pluralize";
+import { checkRowLabel, type PrCheckRow } from "./prChecks";
 
 /**
  * `arm`: ask GitHub to merge once requirements pass ("Enable auto-merge", or
  * "Merge when ready" on a merge-queue branch). `merge`: merge now, through the
- * existing immediate merge. `cancel`: cancel a pending auto-merge or take the
- * PR out of the merge queue.
+ * existing immediate merge. `bypass`: merge now although requirements aren't
+ * met, which GitHub allows some maintainers; the same immediate merge, only
+ * ever chosen on its own control. `cancel`: cancel a pending auto-merge or
+ * take the PR out of the merge queue.
  */
-export type PrMergeMode = "arm" | "merge" | "cancel";
+export type PrMergeMode = "arm" | "merge" | "bypass" | "cancel";
 
 export interface PrMergeRequest {
   mode: PrMergeMode;
@@ -63,7 +67,13 @@ export type PrMergeControlModel =
       defaultMethod: PRMergeMethod | null;
       baseRef: string;
       mergeStatus: PRMergeStatus | null;
+      /** Why the row's own action can't go ahead; the bypass has its own gate. */
       disabledReason: string | null;
+      /**
+       * GitHub reports the viewer may merge it now without waiting for its
+       * requirements. Offered beside the row's action, never as it.
+       */
+      bypass: boolean;
     };
 
 export const AUTO_MERGE_OFF_REASON = "Auto-merge is off for this repository";
@@ -89,13 +99,33 @@ export function isImmediatelyMergeable(pr: PR): boolean {
   );
 }
 
+/**
+ * Whether GitHub lets the viewer merge this PR now although its requirements
+ * aren't met ("Merge without waiting for requirements to be met"). Only for a
+ * PR that is waiting on them — blocked or behind — and never on a queue
+ * branch, where the queue is the only way in. A queue that went unreported
+ * doesn't count as no queue.
+ */
+export function canMergeWithoutWaiting(pr: PR): boolean {
+  return (
+    pr.state === "open" &&
+    !pr.merged &&
+    !pr.isDraft &&
+    pr.viewerCanMergeAsAdmin === true &&
+    pr.mergeQueueRequired === false &&
+    (pr.mergeStatus === "blocked" || pr.mergeStatus === "behind")
+  );
+}
+
 /** The mode a fresh read says the user's request now amounts to. */
 export function effectiveMergeMode(pr: PR, requested: PrMergeMode): PrMergeMode {
   if (requested === "cancel") return "cancel";
   // An unreported status decides nothing: the request stands, and the
   // confirm blocks on it rather than presenting a guess as a change.
   if (!pr.mergeStatus) return requested;
-  return isImmediatelyMergeable(pr) ? "merge" : "arm";
+  if (isImmediatelyMergeable(pr)) return "merge";
+  // A bypass the read no longer allows is blocked, never turned into an arm.
+  return requested === "bypass" ? "bypass" : "arm";
 }
 
 /**
@@ -145,6 +175,7 @@ export function derivePrMergeControl(
   const queue = pr.mergeQueueRequired === true;
   const immediate = isImmediatelyMergeable(pr);
   if (!immediate && !metadata.autoMergeSupported) return unavailable("no-auto-merge");
+  const bypass = !immediate && canMergeWithoutWaiting(pr);
 
   const settings = metadata.mergeSettings;
   // No silent default: without the repository's own list there is no method
@@ -158,6 +189,8 @@ export function derivePrMergeControl(
       baseRef,
       mergeStatus,
       disabledReason: MERGE_SETTINGS_UNREAD_REASON,
+      // It needs a method to preview as much as any merge does.
+      bypass: false,
     };
   }
   const allowed = settings?.allowedMethods ?? [];
@@ -180,6 +213,7 @@ export function derivePrMergeControl(
     baseRef,
     mergeStatus,
     disabledReason,
+    bypass,
   };
 }
 
@@ -206,7 +240,55 @@ export function confirmBlockReason(
   if (!context.repository) return "The repository couldn't be identified";
   if (pr.mergeQueueRequired !== true && context.method === null)
     return MERGE_SETTINGS_UNREAD_REASON;
+  if (mode === "bypass" && !canMergeWithoutWaiting(pr)) {
+    if (pr.mergeQueueRequired !== false) return "Its base branch merges through a merge queue";
+    if (pr.viewerCanMergeAsAdmin !== true) return BYPASS_NOT_ALLOWED_REASON;
+    return "GitHub doesn't report it as waiting on requirements";
+  }
   return null;
+}
+
+export const BYPASS_NOT_ALLOWED_REASON = "GitHub doesn't let you merge it without waiting";
+
+/** What GitHub reported about a PR's requirements, for a merge that skips them. */
+export interface UnmetRequirements {
+  /** Each unmet requirement GitHub itemised, in words. */
+  items: string[];
+  /** The checks read failed, so required checks may be missing from `items`. */
+  checksUnread: boolean;
+}
+
+const MAX_NAMED_CHECKS = 5;
+
+/**
+ * What a merge without waiting skips, from the confirm's own reads. Only what
+ * GitHub itemised: a blocked PR with nothing named is said to be blocked by
+ * its branch rules, never guessed at.
+ *
+ * @param checks The checks read with the PR, prepared; `null` when it failed.
+ */
+export function describeUnmetRequirements(
+  pr: PR,
+  checks: readonly PrCheckRow[] | null
+): UnmetRequirements {
+  const items: string[] = [];
+  if (pr.mergeStatus === "behind") items.push(`Not up to date with ${pr.baseRef}`);
+  if (pr.reviewDecision === "REVIEW_REQUIRED") items.push("Approving review required");
+  if (pr.reviewDecision === "CHANGES_REQUESTED") items.push("Changes requested");
+  const unmetChecks = (checks ?? []).filter(
+    (row) => row.required === true && row.group !== "settled"
+  );
+  for (const row of unmetChecks.slice(0, MAX_NAMED_CHECKS)) {
+    items.push(`Required check ${checkRowLabel(row)}: ${row.outcome.label}`);
+  }
+  if (unmetChecks.length > MAX_NAMED_CHECKS) {
+    const rest = unmetChecks.length - MAX_NAMED_CHECKS;
+    items.push(`${pluralize(rest, "more required check")} not passed`);
+  }
+  if (items.length === 0 && pr.mergeStatus === "blocked") {
+    items.push(`Branch rules on ${pr.baseRef} not met`);
+  }
+  return { items, checksUnread: checks === null };
 }
 
 /**
@@ -219,6 +301,7 @@ export function mergeActionLabel(
   options: { queue?: boolean; intent?: PRMergeIntent | null } = {}
 ): string {
   if (mode === "merge") return "Merge pull request";
+  if (mode === "bypass") return "Merge without waiting";
   if (mode === "arm") return options.queue ? "Merge when ready" : "Enable auto-merge";
   return options.intent?.kind === "queued" ? "Remove from queue" : "Cancel auto-merge";
 }
@@ -330,7 +413,7 @@ export function describeMergeRejection(
 ): { title: string; summary: string } {
   const text = message.toLowerCase();
   const failed =
-    mode === "merge"
+    mode === "merge" || mode === "bypass"
       ? "GitHub didn't merge it"
       : mode === "arm"
         ? context.queue
@@ -344,6 +427,15 @@ export function describeMergeRejection(
       title: "New commits landed first",
       summary:
         "The branch moved after the preview was read. Check the commits below before you try again.",
+    };
+  }
+  // Ahead of the conflict match: the provider's refusal lists conflicts among
+  // the reasons it might have refused, and doesn't say which applied.
+  if (mode === "bypass" && /not mergeable|base branch policy|protected branch/.test(text)) {
+    return {
+      title: "GitHub didn't allow merging without waiting",
+      summary:
+        "Its permissions or branch rules may have changed. Check the preview below before you try again.",
     };
   }
   if (/merge conflict|conflicts?/.test(text)) {

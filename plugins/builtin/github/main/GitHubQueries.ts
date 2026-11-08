@@ -605,6 +605,7 @@ export const GET_PR_QUERY = `
         mergeQueueEntry { position }
         autoMergeRequest { enabledAt mergeMethod enabledBy { login } }
         viewerCanDisableAutoMerge
+        viewerCanMergeAsAdmin
         commits(last: 100) {
           totalCount
           nodes { commit { oid messageHeadline author { name user { login } } } }

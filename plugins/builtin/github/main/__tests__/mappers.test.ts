@@ -394,6 +394,7 @@ describe("pending forge-side merges (#13747)", () => {
         headRefOid: "f".repeat(40),
         isMergeQueueEnabled: true,
         viewerCanDisableAutoMerge: false,
+        viewerCanMergeAsAdmin: true,
         commits: {
           totalCount: 120,
           nodes: [
@@ -418,6 +419,7 @@ describe("pending forge-side merges (#13747)", () => {
     expect(pr.headSha).toBe("f".repeat(40));
     expect(pr.mergeQueueRequired).toBe(true);
     expect(pr.viewerCanDisableAutoMerge).toBe(false);
+    expect(pr.viewerCanMergeAsAdmin).toBe(true);
     expect(pr.commits).toEqual({
       totalCount: 120,
       items: [
@@ -429,6 +431,20 @@ describe("pending forge-side merges (#13747)", () => {
       node({ commits: { nodes: [{ commit: { statusCheckRollup: { state: "SUCCESS" } } }] } })
     );
     expect("commits" in rollupOnly).toBe(false);
+    // Unreported is absent, never a denial the confirm would read as one.
+    expect("viewerCanMergeAsAdmin" in rollupOnly).toBe(false);
+  });
+
+  it("asks the single-PR read whether the viewer can merge without waiting", () => {
+    expect(GET_PR_QUERY).toContain("viewerCanMergeAsAdmin");
+  });
+
+  it("keeps GitHub's denial of a merge without waiting as a denial", () => {
+    expect(toForgePR(node({ viewerCanMergeAsAdmin: false })).viewerCanMergeAsAdmin).toBe(false);
+    // Anything but a boolean is unreported, not a grant.
+    expect("viewerCanMergeAsAdmin" in toForgePR(node({ viewerCanMergeAsAdmin: "true" }))).toBe(
+      false
+    );
   });
 
   it.each([
