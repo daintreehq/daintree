@@ -121,7 +121,9 @@ describe("ProjectIoGate", () => {
     expect(gate.isStalled("/cloud")).toBe(true);
 
     // Later reads of the stalled root fail without touching the filesystem.
-    expect(await codeOf(gate.run("/cloud", () => control.request("/cloud/other")))).toBe("PROJECT_IO_STALLED");
+    expect(await codeOf(gate.run("/cloud", () => control.request("/cloud/other")))).toBe(
+      "PROJECT_IO_STALLED"
+    );
     expect(control.issued()).toEqual(["/cloud/placeholder", "/local/file"]);
 
     control.settle("/local/file", "fine");
@@ -159,7 +161,9 @@ describe("ProjectIoGate", () => {
 
     advance(1_000);
     expect(await codeOf(waiting)).toBe("PROJECT_IO_BUSY");
-    expect(await codeOf(gate.run("/four", () => control.request("/four/x")))).toBe("PROJECT_IO_BUSY");
+    expect(await codeOf(gate.run("/four", () => control.request("/four/x")))).toBe(
+      "PROJECT_IO_BUSY"
+    );
     expect(control.issued()).toEqual(["/one/x", "/two/x"]);
 
     control.settle("/one/x");
@@ -171,12 +175,15 @@ describe("ProjectIoGate", () => {
 
   it("takes the earlier of a timeout and an absolute deadline", async () => {
     void gate.run("/p", () => control.request("/p/first"), { timeoutMs: 5_000 });
-    const queued = gate.run("/p", () => control.request("/p/second"), { timeoutMs: 5_000, deadline: clock + 50 });
+    const queued = gate.run("/p", () => control.request("/p/second"), {
+      timeoutMs: 5_000,
+      deadline: clock + 50,
+    });
     advance(50);
     expect(await codeOf(queued)).toBe("PROJECT_IO_TIMEOUT");
-    expect(await codeOf(gate.run("/p", () => control.request("/p/late"), { deadline: clock }))).toBe(
-      "PROJECT_IO_TIMEOUT"
-    );
+    expect(
+      await codeOf(gate.run("/p", () => control.request("/p/late"), { deadline: clock }))
+    ).toBe("PROJECT_IO_TIMEOUT");
   });
 
   it("caps how many requests one root may queue", async () => {

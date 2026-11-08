@@ -122,7 +122,9 @@ export class ProjectIoGate {
       this.queue.length >= this.limits.maxQueued ||
       (lane?.queued ?? 0) >= this.limits.maxQueuedPerRoot
     ) {
-      return Promise.reject(new ProjectIoError("PROJECT_IO_BUSY", key, "Project read queue is full"));
+      return Promise.reject(
+        new ProjectIoError("PROJECT_IO_BUSY", key, "Project read queue is full")
+      );
     }
 
     const budgetMs = this.budgetFor(options);
@@ -247,10 +249,13 @@ export class ProjectIoGate {
     lane.stalled++;
     this.stalled++;
     if (lane.stalled === 1) {
-      logWarn("[ProjectIo] A read under a project has not returned; skipping its reads until it does", {
-        root: key,
-        elapsedMs: Math.round(elapsedMs),
-      });
+      logWarn(
+        "[ProjectIo] A read under a project has not returned; skipping its reads until it does",
+        {
+          root: key,
+          elapsedMs: Math.round(elapsedMs),
+        }
+      );
     }
     this.failQueued(
       (waiter) => waiter.key === key,

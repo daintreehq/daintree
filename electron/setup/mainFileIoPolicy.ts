@@ -65,7 +65,9 @@ export async function applyMainFileIoPolicy(
       BARRIER_TIMEOUT_MS
     );
     if (!pending) {
-      logWarn("[FileIoPolicy] Dataless-file policy unavailable; cloud placeholders may stall reads");
+      logWarn(
+        "[FileIoPolicy] Dataless-file policy unavailable; cloud placeholders may stall reads"
+      );
       return;
     }
     const result = await pending;
