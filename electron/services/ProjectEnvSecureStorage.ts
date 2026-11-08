@@ -4,6 +4,9 @@ import { store } from "../store.js";
 /**
  * Per-project environment variable storage backed by electron-store.
  * Values are stored as plain text — the same security model as .env files.
+ *
+ * Every `store.set` rewrites all of config.json on Main's thread, so a
+ * project's variables are read and written together, never a key at a time.
  */
 class ProjectEnvSecureStorage {
   private makeKey(projectId: string, envKey: string): string {
@@ -25,39 +28,56 @@ class ProjectEnvSecureStorage {
     return normalized;
   }
 
-  public set(projectId: string, envKey: string, value: string | undefined): void {
-    const key = this.makeKey(projectId, envKey);
-    const projectEnv = this.getProjectEnvMap();
+  /**
+   * The stored values of `envKeys`, from one read of the map. A key with no
+   * stored value is absent. A Map, because the names come from settings.json
+   * and a name like "constructor" would resolve to a member of a plain object.
+   */
+  public getForProject(projectId: string, envKeys: readonly string[]): Map<string, string> {
+    const values = new Map<string, string>();
+    if (envKeys.length === 0) return values;
 
-    if (value === undefined) {
-      delete projectEnv[key];
-      store.set("projectEnv", projectEnv);
-      return;
+    const projectEnv = this.getProjectEnvMap();
+    for (const envKey of envKeys) {
+      const value = projectEnv[this.makeKey(projectId, envKey)];
+      if (value !== undefined) values.set(envKey, value);
     }
-
-    projectEnv[key] = value;
-    store.set("projectEnv", projectEnv);
+    return values;
   }
 
-  public get(projectId: string, envKey: string): string | undefined {
-    const key = this.makeKey(projectId, envKey);
-    const projectEnv = this.getProjectEnvMap();
-    return projectEnv[key] ?? undefined;
-  }
-
-  public delete(projectId: string, envKey: string): void {
-    const key = this.makeKey(projectId, envKey);
-    const projectEnv = this.getProjectEnvMap();
-    delete projectEnv[key];
-    store.set("projectEnv", projectEnv);
-  }
-
-  public listKeys(projectId: string): string[] {
+  /**
+   * Stores `values` as the project's variables and removes its other keys,
+   * except `retainedKeys`, whose stored values stay as they are. Writes the map
+   * at most once, and not at all when nothing differs. Entries the read
+   * normalised away don't count as a difference, since nothing ever reads them.
+   */
+  public replaceForProject(
+    projectId: string,
+    values: ReadonlyMap<string, string>,
+    retainedKeys: ReadonlySet<string>
+  ): void {
     const projectEnv = this.getProjectEnvMap();
     const prefix = `${projectId}:`;
-    return Object.keys(projectEnv)
-      .filter((key) => key.startsWith(prefix))
-      .map((key) => key.substring(prefix.length));
+    let changed = false;
+
+    for (const [envKey, value] of values) {
+      const key = this.makeKey(projectId, envKey);
+      if (projectEnv[key] !== value) {
+        projectEnv[key] = value;
+        changed = true;
+      }
+    }
+
+    for (const key of Object.keys(projectEnv)) {
+      if (!key.startsWith(prefix)) continue;
+      const envKey = key.substring(prefix.length);
+      if (!values.has(envKey) && !retainedKeys.has(envKey)) {
+        delete projectEnv[key];
+        changed = true;
+      }
+    }
+
+    if (changed) store.set("projectEnv", projectEnv);
   }
 
   public deleteAllForProject(projectId: string): void {

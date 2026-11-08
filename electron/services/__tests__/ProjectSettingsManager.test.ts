@@ -18,10 +18,8 @@ vi.mock("../../utils/fs.js", async (importOriginal) => {
 
 vi.mock("../ProjectEnvSecureStorage.js", () => ({
   projectEnvSecureStorage: {
-    get: vi.fn(() => undefined),
-    set: vi.fn(),
-    delete: vi.fn(),
-    listKeys: vi.fn(() => []),
+    getForProject: vi.fn(() => new Map()),
+    replaceForProject: vi.fn(),
     deleteAllForProject: vi.fn(),
     migrateAllForProject: vi.fn(),
   },
@@ -482,10 +480,8 @@ describe("ProjectSettingsManager caching", () => {
 
   it("preserves a blank secure env value through resolution rather than treating it as unresolved", async () => {
     const { projectEnvSecureStorage } = await import("../ProjectEnvSecureStorage.js");
-    const getMock = projectEnvSecureStorage.get as unknown as ReturnType<typeof vi.fn>;
-    getMock.mockImplementation((_pid: string, key: string) =>
-      key === "OPTIONAL_TOKEN" ? "" : undefined
-    );
+    const getMock = projectEnvSecureStorage.getForProject as unknown as ReturnType<typeof vi.fn>;
+    getMock.mockReturnValue(new Map([["OPTIONAL_TOKEN", ""]]));
 
     const settingsPath = path.join(tempDir, projectId, "settings.json");
     await fs.writeFile(
@@ -499,7 +495,7 @@ describe("ProjectSettingsManager caching", () => {
     expect(loaded.unresolvedSecureEnvironmentVariables).toBeUndefined();
 
     getMock.mockReset();
-    getMock.mockReturnValue(undefined);
+    getMock.mockReturnValue(new Map());
   });
 
   it("broadcasts a corruption toast when JSON.parse fails", async () => {

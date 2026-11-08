@@ -215,8 +215,9 @@ export class ProjectSettingsManager {
       }
     }
 
+    const secureValues = projectEnvSecureStorage.getForProject(projectId, secureEnvVarKeys);
     for (const key of secureEnvVarKeys) {
-      const secureValue = projectEnvSecureStorage.get(projectId, key);
+      const secureValue = secureValues.get(key);
       if (secureValue !== undefined) {
         resolvedEnvVars[key] = secureValue;
       } else {
@@ -446,28 +447,19 @@ export class ProjectSettingsManager {
     }
 
     const nonSensitiveEnvVars: Record<string, string> = {};
-    const secureEnvVarKeys: string[] = [];
-    const existingSecureKeys = projectEnvSecureStorage.listKeys(projectId);
+    const secureValues = new Map<string, string>();
 
     if (settings.environmentVariables) {
       for (const [key, value] of Object.entries(settings.environmentVariables)) {
         if (isSensitiveEnvKey(key)) {
-          try {
-            projectEnvSecureStorage.set(projectId, key, value);
-            secureEnvVarKeys.push(key);
-          } catch (error) {
-            console.error(
-              `[ProjectSettingsManager] Failed to store secure env var ${key} for project ${projectId}:`,
-              error
-            );
-            throw error;
-          }
+          secureValues.set(key, value);
         } else {
           nonSensitiveEnvVars[key] = value;
         }
       }
     }
 
+    const secureEnvVarKeys = [...secureValues.keys()];
     const unresolvedKeys = settings.unresolvedSecureEnvironmentVariables || [];
     for (const unresolvedKey of unresolvedKeys) {
       if (!secureEnvVarKeys.includes(unresolvedKey)) {
@@ -475,10 +467,14 @@ export class ProjectSettingsManager {
       }
     }
 
-    for (const existingKey of existingSecureKeys) {
-      if (!secureEnvVarKeys.includes(existingKey)) {
-        projectEnvSecureStorage.delete(projectId, existingKey);
-      }
+    try {
+      projectEnvSecureStorage.replaceForProject(projectId, secureValues, new Set(unresolvedKeys));
+    } catch (error) {
+      console.error(
+        `[ProjectSettingsManager] Failed to store secure env vars for project ${projectId}:`,
+        error
+      );
+      throw error;
     }
 
     // Build the runtime-canonical settings object, then run it through the
