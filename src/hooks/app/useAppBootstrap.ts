@@ -29,7 +29,6 @@ import {
   preloadQuickSwitcher,
   preloadProjectSwitcherPalette,
   preloadWorktreePalette,
-  preloadNewTerminalPalette,
   preloadPanelPalette,
   preloadSendToAgentPalette,
   preloadQuickCreatePalette,
@@ -167,7 +166,6 @@ export function useAppBootstrap() {
       void preloadQuickSwitcher();
       preloadProjectSwitcherPalette().catch(() => {});
       void preloadWorktreePalette();
-      void preloadNewTerminalPalette();
       void preloadPanelPalette();
       void preloadSendToAgentPalette();
       void preloadQuickCreatePalette();

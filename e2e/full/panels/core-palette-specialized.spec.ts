@@ -27,17 +27,6 @@ async function openQuickSwitcher(window: Page): Promise<void> {
   );
 }
 
-/**
- * Open the new-terminal palette. It has no production keyboard/toolbar trigger,
- * so it is opened via its dedicated event (see useAppEventListeners) — the same
- * programmatic pattern the app uses for the theme and log-level palettes.
- */
-async function openNewTerminalPalette(window: Page): Promise<void> {
-  await window.evaluate(() =>
-    globalThis.window.dispatchEvent(new CustomEvent("daintree:open-new-terminal-palette"))
-  );
-}
-
 async function openPanelPalette(window: Page): Promise<void> {
   await window.evaluate(() =>
     (
@@ -185,60 +174,20 @@ test.describe.serial("Core: Specialized Command Palettes", () => {
     await expect(window.locator(SEL.panelPalette.searchInput)).toHaveValue("");
   });
 
-  // ── New Terminal Palette (Cmd+Alt+T) ──────────────────────
+  // ── Panel Palette launch ──────────────────────────────────
 
-  test("new terminal palette opens with first option selected", async () => {
-    const { window } = ctx;
-    await ensureWindowFocused(ctx.app);
-
-    await openNewTerminalPalette(window);
-    const dialog = window.locator(SEL.newTerminalPalette.dialog);
-    await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
-
-    await expect(window.locator(SEL.newTerminalPalette.searchInput)).toBeFocused({
-      timeout: T_SHORT,
-    });
-
-    const options = window.locator(SEL.newTerminalPalette.options);
-    await expect(options.first()).toBeVisible({ timeout: T_MEDIUM });
-    await expect(options.first()).toHaveAttribute("aria-selected", "true");
-  });
-
-  test("new terminal palette resets its query between opens", async () => {
-    const { window } = ctx;
-    await ensureWindowFocused(ctx.app);
-
-    await openNewTerminalPalette(window);
-    const searchInput = window.locator(SEL.newTerminalPalette.searchInput);
-    const dialog = window.locator(SEL.newTerminalPalette.dialog);
-    await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
-
-    await searchInput.fill("browser");
-    await expect(searchInput).toHaveValue("browser");
-
-    await searchInput.press("Escape");
-    await expect(searchInput).toHaveValue("");
-    await searchInput.press("Escape");
-    await expect(dialog).not.toBeVisible({ timeout: T_MEDIUM });
-
-    // Reopening starts from a clean query (state isolation).
-    await openNewTerminalPalette(window);
-    await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
-    await expect(window.locator(SEL.newTerminalPalette.searchInput)).toHaveValue("");
-  });
-
-  test("new terminal palette launches a panel from a selected option", async () => {
+  test("panel palette launches a panel from a selected option", async () => {
     const { window } = ctx;
     await ensureWindowFocused(ctx.app);
 
     const before = await getGridPanelCount(window);
 
-    await openNewTerminalPalette(window);
-    await expect(window.locator(SEL.newTerminalPalette.dialog)).toBeVisible({ timeout: T_MEDIUM });
+    await openPanelPalette(window);
+    await expect(window.locator(SEL.panelPalette.dialog)).toBeVisible({ timeout: T_MEDIUM });
 
-    // The Terminal/Browser options are always present (agents are CLI-gated). The
-    // browser option launches a grid panel deterministically.
-    const browserOption = window.locator(SEL.newTerminalPalette.browserOption);
+    // The browser option is always present (agents are CLI-gated) and launches a
+    // grid panel deterministically.
+    const browserOption = window.locator(SEL.panelPalette.browserOption);
     await expect(browserOption).toBeVisible({ timeout: T_MEDIUM });
     await browserOption.click();
 

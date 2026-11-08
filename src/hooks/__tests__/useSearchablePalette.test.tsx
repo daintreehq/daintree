@@ -452,7 +452,7 @@ describe("useSearchablePalette", () => {
 
     it("opening palette B closes palette A", () => {
       const { result: paletteA } = renderHook(() =>
-        useSearchablePalette<PaletteItem>({ items, paletteId: "new-terminal" })
+        useSearchablePalette<PaletteItem>({ items, paletteId: "panel" })
       );
       const { result: paletteB } = renderHook(() =>
         useSearchablePalette<PaletteItem>({ items, paletteId: "action" })
@@ -469,7 +469,7 @@ describe("useSearchablePalette", () => {
 
     it("stale close from palette A does not close palette B", () => {
       const { result: paletteA } = renderHook(() =>
-        useSearchablePalette<PaletteItem>({ items, paletteId: "new-terminal" })
+        useSearchablePalette<PaletteItem>({ items, paletteId: "panel" })
       );
       const { result: paletteB } = renderHook(() =>
         useSearchablePalette<PaletteItem>({ items, paletteId: "action" })

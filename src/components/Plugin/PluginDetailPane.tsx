@@ -236,7 +236,7 @@ function PluginContributedAgents({ agents }: { agents: PluginAgentContribution[]
           <li key={agent.id} className="text-xs">
             <div className="text-text-primary">{agent.name}</div>
             <div className="text-2xs text-text-secondary mt-0.5">
-              Launch it from the new-terminal menu
+              Launch it from the New panel palette
             </div>
           </li>
         ))}

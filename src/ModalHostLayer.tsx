@@ -5,7 +5,6 @@ import type { ProjectOpenDisposition } from "@shared/types/windowOpen";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 import type { UseQuickSwitcherReturn } from "./hooks/useQuickSwitcher";
 import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
-import type { UseNewTerminalPaletteReturn } from "./hooks/useNewTerminalPalette";
 import { MORE_AGENTS_PANEL_ID, type UsePanelPaletteReturn } from "./hooks/usePanelPalette";
 import type { UseProjectSwitcherPaletteReturn } from "./hooks/useProjectSwitcherPalette";
 import type { UseActionPaletteReturn } from "./hooks/useActionPalette";
@@ -46,7 +45,6 @@ import { actionService } from "./services/ActionService";
 import {
   LazyQuickSwitcher,
   LazySendToAgentPalette,
-  LazyNewTerminalPalette,
   LazyWorktreePalette,
   LazyQuickCreatePalette,
   LazyPanelPalette,
@@ -100,8 +98,6 @@ interface ModalHostLayerProps {
   shouldMountQuickSwitcher: boolean;
   sendToAgentPalette: ReturnType<typeof useSendToAgentPalette>;
   shouldMountSendToAgentPalette: boolean;
-  newTerminalPalette: UseNewTerminalPaletteReturn;
-  shouldMountNewTerminalPalette: boolean;
   worktreePalette: UseWorktreePaletteReturn;
   shouldMountWorktreePalette: boolean;
   quickCreatePalette: UseQuickCreatePaletteReturn;
@@ -206,8 +202,6 @@ export function ModalHostLayer({
   shouldMountQuickSwitcher,
   sendToAgentPalette,
   shouldMountSendToAgentPalette,
-  newTerminalPalette,
-  shouldMountNewTerminalPalette,
   worktreePalette,
   shouldMountWorktreePalette,
   quickCreatePalette,
@@ -390,29 +384,6 @@ export function ModalHostLayer({
               selectItem={sendToAgentPalette.selectItem}
               confirmSelection={sendToAgentPalette.confirmSelection}
               setSelectedIndex={sendToAgentPalette.setSelectedIndex}
-            />
-          </Suspense>
-        )}
-      </ErrorBoundary>
-      <ErrorBoundary
-        variant="component"
-        componentName="NewTerminalPalette"
-        resetKeys={[Number(newTerminalPalette.isOpen)]}
-      >
-        {shouldMountNewTerminalPalette && (
-          <Suspense fallback={null}>
-            <LazyNewTerminalPalette
-              isOpen={newTerminalPalette.isOpen}
-              query={newTerminalPalette.query}
-              results={newTerminalPalette.results}
-              selectedIndex={newTerminalPalette.selectedIndex}
-              onQueryChange={newTerminalPalette.setQuery}
-              onSelectPrevious={newTerminalPalette.selectPrevious}
-              onSelectNext={newTerminalPalette.selectNext}
-              onSelect={newTerminalPalette.handleSelect}
-              onConfirm={newTerminalPalette.confirmSelection}
-              onClose={newTerminalPalette.close}
-              onHoverIndex={newTerminalPalette.setSelectedIndex}
             />
           </Suspense>
         )}

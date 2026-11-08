@@ -1,4 +1,4 @@
-import { SquareTerminal, Globe, Settings } from "lucide-react";
+import { SquareTerminal, Globe } from "lucide-react";
 import { getBrandColorHex } from "@/lib/colorUtils";
 import type { PanelKind } from "@/types";
 import { AGENT_REGISTRY } from "@/config/agents";
@@ -57,15 +57,4 @@ export function getLaunchOptions(): LaunchOption[] {
       icon: <Globe className="w-4 h-4 text-status-info" />,
     },
   ];
-}
-
-export const MORE_AGENTS_OPTION_ID = "more-agents";
-
-export function getMoreAgentsOption(): LaunchOption {
-  return {
-    id: MORE_AGENTS_OPTION_ID,
-    label: "More agents…",
-    description: "Configure which agents appear in this menu",
-    icon: <Settings className="w-4 h-4 text-text-secondary" />,
-  };
 }

@@ -507,22 +507,12 @@ export const SEL = {
     clearSearch: '[aria-label="Clear search"]',
     clearTraceId: '[aria-label="Clear trace ID filter"]',
   },
-  newTerminalPalette: {
-    dialog: '[role="dialog"][aria-label="New terminal palette"]',
-    searchInput: '[aria-label="Select terminal type"]',
-    list: "#new-terminal-list",
-    options: '#new-terminal-list [role="option"]',
-    terminalOption: "#new-terminal-option-terminal",
-    browserOption: "#new-terminal-option-browser",
-    // Hardcoded count live region inside the dialog (reliable, not announcer-driven).
-    liveRegion:
-      '[role="dialog"][aria-label="New terminal palette"] [role="status"][aria-live="polite"]',
-  },
   panelPalette: {
     dialog: '[role="dialog"][aria-label="Panel palette"]',
     searchInput: '[aria-label="Select panel type"]',
     list: "#panel-list",
     options: '#panel-list [role="option"]',
+    browserOption: "#panel-option-browser",
   },
   themePalette: {
     dialog: '[role="dialog"][aria-label="Theme palette"]',
