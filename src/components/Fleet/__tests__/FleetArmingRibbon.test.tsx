@@ -922,6 +922,8 @@ describe("FleetArmingRibbon", () => {
     });
 
     afterEach(() => {
+      // Releases the swallowing of a held answering key.
+      fireEvent.blur(window);
       pane.remove();
     });
 
@@ -962,14 +964,19 @@ describe("FleetArmingRibbon", () => {
       });
       const actionServiceModule = await import("@/services/ActionService");
       const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
+      const interrupts = () => dispatchSpy.mock.calls.filter((c) => c[0] === "fleet.interrupt");
       render(<FleetArmingRibbon />);
       textarea.focus();
 
       fireEvent.keyDown(textarea, { key: "Escape" });
+      fireEvent.keyUp(textarea, { key: "Escape" });
       fireEvent.keyDown(textarea, { key: "Escape" });
 
       expect(useFleetPendingActionStore.getState().pending).toBeNull();
-      expect(dispatchSpy.mock.calls.some((c) => c[0] === "fleet.interrupt")).toBe(false);
+      expect(interrupts()).toEqual([]);
+      // The double tap still works once the confirm is gone: this Escape completes it.
+      fireEvent.keyDown(textarea, { key: "Escape" });
+      expect(interrupts()).toHaveLength(1);
       dispatchSpy.mockRestore();
     });
   });
@@ -991,8 +998,8 @@ describe("FleetArmingRibbon", () => {
       fireEvent.pointerDown(confirm);
       fireEvent.click(confirm);
 
-      const match = dispatchSpy.mock.calls.find((c) => c[0] === "fleet.kill");
-      expect(match?.[1]).toEqual({ confirmed: true });
+      const kills = dispatchSpy.mock.calls.filter((c) => c[0] === "fleet.kill");
+      expect(kills.map((c) => c[1])).toEqual([{ confirmed: true }]);
       expect(useFleetPendingActionStore.getState().pending).toBeNull();
       dispatchSpy.mockRestore();
     });
@@ -1002,10 +1009,14 @@ describe("FleetArmingRibbon", () => {
       const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
       render(<FleetArmingRibbon />);
       const cancel = screen.getByRole("button", { name: /Cancel kill/ });
+      const asked = useFleetPendingActionStore.getState().pending;
 
       fireEvent.pointerDown(cancel);
+      expect(useFleetPendingActionStore.getState().pending).toBe(asked);
+      cancel.focus();
       // Enter on the focused Cancel is the button's own, never a confirm.
       expect(fireEvent.keyDown(cancel, { key: "Enter" })).toBe(true);
+      expect(useFleetPendingActionStore.getState().pending).toBe(asked);
       fireEvent.click(cancel);
 
       expect(dispatchSpy.mock.calls.find((c) => c[0] === "fleet.kill")).toBeUndefined();
@@ -1172,7 +1183,10 @@ describe("FleetArmingRibbon", () => {
       const actionServiceModule = await import("@/services/ActionService");
       const dispatchSpy = vi.spyOn(actionServiceModule.actionService, "dispatch");
       render(<FleetArmingRibbon />);
-      const el = document.body.appendChild(button());
+      const otherPane = document.createElement("div");
+      otherPane.setAttribute("data-panel-id", "b");
+      const el = otherPane.appendChild(button());
+      document.body.appendChild(otherPane);
       el.focus();
 
       const notPrevented = fireEvent.keyDown(el, { key: "Enter" });
@@ -1180,7 +1194,7 @@ describe("FleetArmingRibbon", () => {
       expect(notPrevented).toBe(true);
       expect(dispatchSpy.mock.calls.find((c) => c[0] === "fleet.kill")).toBeUndefined();
       expect(useFleetPendingActionStore.getState().pending).toBeNull();
-      el.remove();
+      otherPane.remove();
       dispatchSpy.mockRestore();
     });
 

@@ -19,10 +19,11 @@ describe("buildConfirmMessage", () => {
   });
 
   describe("buttons", () => {
-    it("name what the confirm does to how many, verb first", () => {
+    it("name what the confirm does, verb first, in the singular or plural", () => {
       expect(buildConfirmLabels("restart", 1).confirm).toBe("Restart agent");
       expect(buildConfirmLabels("restart", 3).confirm).toBe("Restart agents");
       expect(buildConfirmLabels("reject", 5).confirm).toBe("Reject prompts");
+      expect(buildConfirmLabels("kill", 1).confirm).toBe("Kill terminal");
     });
 
     it("name what the cancel calls off", () => {
@@ -32,6 +33,7 @@ describe("buildConfirmMessage", () => {
 
     it("say which confirmation lapsed, starting a sentence", () => {
       expect(buildConfirmLabels("trash", 5).expired).toBe("Trash confirmation expired");
+      expect(buildConfirmLabels("reject", 5).expired).toBe("Rejection confirmation expired");
     });
   });
 });

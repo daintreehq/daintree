@@ -18,10 +18,18 @@ export const FLEET_CONFIRM_TTL_MS = 30_000;
 const TERMINAL_INPUT_SELECTOR = ".xterm, [data-hybrid-input-editor]";
 const EDITABLE_SELECTOR =
   'input, textarea, select, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"]';
+// Custom fields (time pickers, sliders, comboboxes) take Enter as their own
+// commit even where nothing in them is editable.
 const CONTROL_SELECTOR = [
   "button",
   "a[href]",
   "summary",
+  '[role="textbox"]',
+  '[role="searchbox"]',
+  '[role="combobox"]',
+  '[role="listbox"]',
+  '[role="spinbutton"]',
+  '[role="slider"]',
   '[role="button"]',
   '[role="link"]',
   '[role="menuitem"]',
@@ -53,6 +61,35 @@ function classifyTarget(target: EventTarget | null, banner: HTMLElement | null):
   }
   if (target.closest(CONTROL_SELECTOR) !== null) return "control";
   return "page";
+}
+
+/**
+ * A held Enter or Escape keeps repeating after the press that answered the
+ * confirmation, when the confirmation (and its listeners) are already gone;
+ * each repeat would reach the terminal and the fleet. Swallow them until the
+ * key comes up.
+ */
+function swallowRepeatsOf(key: string): void {
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.key !== key || !e.repeat) {
+      release();
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  const onKeyUp = (e: KeyboardEvent) => {
+    if (e.key === key) release();
+  };
+  function release() {
+    window.removeEventListener("keydown", onKeyDown, true);
+    window.removeEventListener("keyup", onKeyUp, true);
+    window.removeEventListener("blur", release);
+  }
+  // Added while this key's own event is still dispatching, so that event never reaches them.
+  window.addEventListener("keydown", onKeyDown, true);
+  window.addEventListener("keyup", onKeyUp, true);
+  window.addEventListener("blur", release);
 }
 
 function isCurrent(snapshot: FleetPendingActionSnapshot): boolean {
@@ -101,7 +138,7 @@ export interface FleetPendingConfirmControls {
  * so the Enter and Escape the banner names are taken from the terminal before
  * xterm or the prompt editor sees them; anything that slipped through was
  * typed into every armed pane (#16435). The confirmation lapses once the user
- * moves on (a press elsewhere, typing, leaving the window) and after
+ * moves on (a press elsewhere, a key, leaving the window) and after
  * `FLEET_CONFIRM_TTL_MS` regardless, so a later Enter meant for something else
  * can't set it off. Focus changes alone don't count: Electron refocuses the
  * terminal on its own.
@@ -145,7 +182,9 @@ export function useFleetPendingConfirm(
         if (!plain || composing || inModal || target !== "terminal") return;
         e.preventDefault();
         e.stopPropagation();
-        if (!e.repeat) clearIfCurrent(pending);
+        if (e.repeat) return;
+        clearIfCurrent(pending);
+        swallowRepeatsOf(e.key);
         return;
       }
 
@@ -155,7 +194,9 @@ export function useFleetPendingConfirm(
         if (plain && !composing && !inModal && (target === "terminal" || target === "page")) {
           e.preventDefault();
           e.stopPropagation();
-          if (!e.repeat) confirm(pending, deadline, "keybinding");
+          if (e.repeat) return;
+          confirm(pending, deadline, "keybinding");
+          swallowRepeatsOf(e.key);
           return;
         }
         // An Enter for a field, a control or a modified send is the user's
@@ -164,9 +205,11 @@ export function useFleetPendingConfirm(
         return;
       }
 
-      if (MODIFIER_KEYS.has(e.key)) return;
-      // Shortcuts, the chord that asked for this confirmation among them.
-      if (e.metaKey || e.ctrlKey) return;
+      // A held key is no new move: the chord that asked for this confirmation,
+      // held, repeats here (its first press never does, since this listener
+      // only exists once that press has asked). Shortcuts and terminal control
+      // keys (Ctrl+C) otherwise count, as anything else typed does.
+      if (MODIFIER_KEYS.has(e.key) || e.repeat) return;
       if (target === "banner") return;
       // Tab outside a terminal is the keyboard's way to the banner's buttons.
       if (e.key === "Tab" && target !== "terminal") return;
