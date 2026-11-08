@@ -27,6 +27,7 @@ import type { HelpPastSessionPickOutcome } from "@/services/actions/definitions/
 import type { HelpSessionTab } from "./HelpSessionTabs";
 import { sessionSlotLabel, trimSessionTabTitle } from "./sessionTabTitle";
 import { isListedAssistantAgent, type PendingCloseCost } from "./pastSessionsNote";
+import { readKeptLanes } from "./keptLanes";
 
 /** How a closed lane's conversation comes back (#15385). */
 export type ClosedSessionRecovery =
@@ -198,14 +199,65 @@ export function useHelpSessionLanes({
     [openSlots, laneAgentStates, laneTaskTitles, laneAgentIds, laneIsLive, pausedLane]
   );
 
-  // Bring back the tabs for lanes whose conversations an eviction or crash
-  // captured (#12108). A cold view starts at slot 0 alone, so lanes 1+ — whose
-  // resume entries survived on disk — would have no tab to reach them from and
-  // their conversations would be stranded despite still being there. The
-  // listing is non-consuming, like the peeks: a recreated lane simply lands on
-  // its own "Resume assistant" empty state, and nothing launches (or bills)
-  // until the user asks. Background lanes report `isOpen: false` to their
-  // controller, so auto-launch can't fire behind the tab strip either.
+  // The tabs discovery opened for a running assistant nobody had opened (#16495),
+  // until someone selects one. Once its assistant has stopped, such a tab goes
+  // again: what it held is a captured conversation, which gets no tab of its own.
+  const discoveredLanesRef = useRef<{ workspaceId: string | null; slots: Set<number> }>({
+    workspaceId: null,
+    slots: new Set(),
+  });
+
+  // Give a running lane nobody opened a tab, which takes it over when selected.
+  const openDiscoveredLane = useCallback((workspaceId: string, slot: number) => {
+    const store = useHelpPanelStore.getState();
+    if (store.sessions[slot]) return;
+    store.ensureSlot(slot);
+    if (discoveredLanesRef.current.workspaceId !== workspaceId) {
+      discoveredLanesRef.current = { workspaceId, slots: new Set() };
+    }
+    discoveredLanesRef.current.slots.add(slot);
+  }, []);
+
+  // Close the tab of each discovered lane whose assistant is no longer running.
+  // Only the renderer's tab goes, never main's pointer, so the conversation stays
+  // where it was. A lane on screen stays, and one with anything of its own (a
+  // terminal, a session, a conversation, a launch under way) is the person's now.
+  const hideStoppedDiscoveredLanes = useCallback(
+    (workspaceId: string, running: ReadonlySet<number>) => {
+      const discovered = discoveredLanesRef.current;
+      if (discovered.workspaceId !== workspaceId) return;
+      for (const slot of [...discovered.slots]) {
+        if (running.has(slot)) continue;
+        const state = useHelpPanelStore.getState();
+        if (slot === state.activeSlot) continue;
+        discovered.slots.delete(slot);
+        const lane = state.sessions[slot];
+        if (
+          !lane ||
+          lane.terminalId ||
+          lane.sessionId ||
+          lane.conversationTouched ||
+          acquireHelpSessionController(slot).getSnapshot().phase !== "idle"
+        ) {
+          continue;
+        }
+        releaseHelpSessionController(slot);
+        state.closeSlot(slot);
+      }
+    },
+    []
+  );
+
+  // Bring back the tabs for lanes in use when a view comes up cold (#12108): a
+  // cold view starts at slot 0 alone. A lane in use is one whose assistant is
+  // still running, or one captured from a view that went away with the panel
+  // open in this run of the app, whose tabs the person had in front of them. A
+  // lane that only holds a conversation from before (an earlier scheduled run's
+  // slot, a lane from a previous run of the app) gets no tab (#16495): it is
+  // reachable from past sessions, and the reads leave it in place. Nothing
+  // launches (or bills) until the user asks: background lanes report
+  // `isOpen: false` to their controller, so auto-launch can't fire behind the
+  // tab strip either.
   //
   // One-shot per workspace, and only while the view is genuinely cold — a
   // single, unbound lane — so it can never fight the user's own tab edits.
@@ -213,17 +265,17 @@ export function useHelpSessionLanes({
   useEffect(() => {
     if (!activeWorkspaceId || restoredLaneWorkspaceRef.current === activeWorkspaceId) return;
     if (openSlots.length > 1 || terminalId) return;
-    // Optional-chained like the hibernation peeks: a missing binding degrades
-    // to the pre-lane behaviour rather than throwing.
-    const listing = window.electron.help.listPendingHibernationSlots?.(activeWorkspaceId);
-    if (!listing) return;
     let cancelled = false;
-    void listing
-      .then((slots) => {
-        if (cancelled || restoredLaneWorkspaceRef.current === activeWorkspaceId) return;
+    readKeptLanes(activeWorkspaceId)
+      .then((kept) => {
+        // A missing binding degrades to the pre-lane behaviour rather than throwing.
+        if (!kept || cancelled || restoredLaneWorkspaceRef.current === activeWorkspaceId) return;
         restoredLaneWorkspaceRef.current = activeWorkspaceId;
         const store = useHelpPanelStore.getState();
-        for (const slot of slots) store.ensureSlot(slot);
+        for (const lane of kept) {
+          if (lane.live) openDiscoveredLane(activeWorkspaceId, lane.slot);
+          else if (lane.panelWasOpen) store.ensureSlot(lane.slot);
+        }
       })
       .catch((err) => {
         logWarn("HelpPanel: failed to list pending hibernation lanes", err);
@@ -231,23 +283,29 @@ export function useHelpSessionLanes({
     return () => {
       cancelled = true;
     };
-  }, [activeWorkspaceId, openSlots.length, terminalId]);
+  }, [activeWorkspaceId, openSlots.length, terminalId, openDiscoveredLane]);
 
   // A schedule's Assistant (#16169) is started by main, with no view: as its
   // run is recorded, its lane gets a tab here too, which takes it over when
-  // opened. Only adds tabs; a lane's own tab is never closed or replaced.
+  // opened. When the run ends, a tab this opened that nobody touched goes again
+  // (#16495). A lane the person opened is never closed or replaced, and hiding
+  // one leaves its conversation where it is.
   useEffect(() => {
     // Optional-chained like the lane listing: a missing binding adds no tabs.
     if (!activeWorkspaceId || !window.electron?.events?.on) return;
     let disposed = false;
+    // Only the latest read acts, so an older answer can't bring back a lane
+    // whose run has ended since.
+    let latestRead = 0;
     const unsubscribe = schedulesClient.onRunsChanged(({ projectId }) => {
       if (projectId !== activeWorkspaceId) return;
-      const listing = window.electron.help.listPendingHibernationSlots?.(activeWorkspaceId);
-      void listing
-        ?.then((slots) => {
-          if (disposed) return;
-          const store = useHelpPanelStore.getState();
-          for (const slot of slots) store.ensureSlot(slot);
+      const read = ++latestRead;
+      readKeptLanes(activeWorkspaceId)
+        .then((kept) => {
+          if (!kept || disposed || read !== latestRead) return;
+          const running = new Set(kept.filter((lane) => lane.live).map((lane) => lane.slot));
+          for (const slot of running) openDiscoveredLane(activeWorkspaceId, slot);
+          hideStoppedDiscoveredLanes(activeWorkspaceId, running);
         })
         .catch((err) => {
           logWarn("HelpPanel: failed to list lanes after a scheduled run changed", err);
@@ -257,10 +315,10 @@ export function useHelpSessionLanes({
       disposed = true;
       unsubscribe();
     };
-  }, [activeWorkspaceId]);
+  }, [activeWorkspaceId, openDiscoveredLane, hideStoppedDiscoveredLanes]);
 
-  const handleOpenParallelSession = useCallback((): number | null => {
-    const slot = useHelpPanelStore.getState().openSlot();
+  const handleOpenParallelSession = useCallback((preferred?: number): number | null => {
+    const slot = useHelpPanelStore.getState().openSlot(preferred);
     if (slot === null) return null;
     useHelpPanelStore.getState().setOpen(true);
     useHelpPanelStore.getState().requestFocus();
@@ -277,6 +335,8 @@ export function useHelpSessionLanes({
   }, []);
 
   const handleSelectSlot = useCallback((slot: number) => {
+    // A discovered lane someone has opened is theirs, running or not.
+    discoveredLanesRef.current.slots.delete(slot);
     useHelpPanelStore.getState().setActiveSlot(slot);
     // A lane's xterm was hidden while it was in the background, so it has no
     // trustworthy geometry until it is measured on screen. `requestFocus`

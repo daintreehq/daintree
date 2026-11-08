@@ -1668,6 +1668,33 @@ describe("help.newSessionWithAgent (#13442)", () => {
     );
   });
 
+  it("starts afresh over a conversation past sessions keeps once every free slot holds one (#16495)", async () => {
+    // Slots an earlier scheduled run used, which have no tab of their own.
+    bindLane(0, "term-0", "claude");
+    for (const slot of [1, 2, 3, 4, 5]) kept[slot] = "claude";
+
+    expect(await run("codex")).toEqual({ outcome: "started" });
+
+    // Never a plain launch there, which would resume what the slot held.
+    expect(controllers.get(1)?.launchWhenReady).toHaveBeenCalledWith({
+      agentId: "codex",
+      replaceExisting: true,
+      requestedId: expect.stringMatching(/^terminal-/),
+      checkVersion: true,
+      pinAgent: true,
+    });
+    expect(useHelpPanelStore.getState().sessions[1]).toBeDefined();
+  });
+
+  it("says the tabs are full rather than start over a conversation past sessions can't bring back", async () => {
+    bindLane(0, "term-0", "claude");
+    for (const slot of [1, 2, 3, 4, 5]) kept[slot] = "gemini";
+
+    expect(await run("codex")).toEqual({ outcome: "lanes-full" });
+
+    expect(controllers.size).toBe(0);
+  });
+
   it("holds the tab it chose until the launch settles", async () => {
     bindLane(0, "term-0", "claude");
     await run("codex");

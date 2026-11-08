@@ -48,6 +48,13 @@ import { isPtyPanel } from "@shared/types/panel";
 import { usePaletteStore } from "@/store/paletteStore";
 import type { HelpSessionController } from "@/controllers/HelpSessionController";
 import type { HelpLaunchSnapshot } from "./helpLaunchSnapshot";
+import {
+  freshSessionLaunch,
+  pickNewSessionSlot,
+  readKeptLanes,
+  withMirroredLanes,
+  type KeptLane,
+} from "@/components/HelpPanel/keptLanes";
 
 type HelpPanelState = ReturnType<typeof useHelpPanelStore.getState>;
 
@@ -438,7 +445,8 @@ export type HelpNewSessionOutcome = "started" | "lanes-full" | "unavailable";
  * default, which later sessions keep starting on. It lands where a help launch
  * would — the active tab when it is empty, else another free one, else a new
  * tab — so it never displaces a conversation, including one main still keeps
- * for a tab this view hasn't restored yet.
+ * for a slot this view has no tab for. Only when every free slot holds one does
+ * it start afresh over a conversation past sessions keeps (#16495).
  */
 async function startHelpSessionWithAgent(
   agentId: string
@@ -455,10 +463,10 @@ async function startHelpSessionWithAgent(
   await ensureHelpPanelRuntime();
   // A read that fails can't prove a lane vacant, and a fresh session in a lane
   // main still keeps would take that conversation's place, so it stops here.
-  let kept: ReadonlySet<number>;
+  let kept: readonly KeptLane[];
   let acquireController: (slot: number) => HelpSessionController;
   try {
-    kept = new Set((await window.electron.help.listPendingHibernationSlots?.(workspace.id)) ?? []);
+    kept = (await readKeptLanes(workspace.id)) ?? [];
     ({ acquireHelpSessionController: acquireController } =
       await import("@/controllers/helpSessionControllerRegistry"));
   } catch (err) {
@@ -478,13 +486,27 @@ async function startHelpSessionWithAgent(
   // session, which would drop this launch on its re-entrancy guard, so a busy
   // one is passed over for the next free tab.
   const state = useHelpPanelStore.getState();
+  const keptSlots = new Set(kept.map((lane) => lane.slot));
   const busy = new Set<number>();
   for (;;) {
-    const target = pickHelpLaunchLane(
+    const free = pickHelpLaunchLane(
       state,
       workspace.id,
-      (slot) => kept.has(slot) || busy.has(slot)
+      (slot) => keptSlots.has(slot) || busy.has(slot)
     );
+    // The last resort is a slot whose conversation stays in past sessions
+    // (#16495). It has no tab, so it mustn't make the tabs read as full.
+    const replaceable = free
+      ? null
+      : pickNewSessionSlot(
+          withMirroredLanes(kept, workspace.id, state.hibernateSessions),
+          (slot) =>
+            slot in state.sessions ||
+            busy.has(slot) ||
+            claimedHelpLaneKeys.has(assistantSlotKey(workspace.id, slot))
+        );
+    const target =
+      free ?? (replaceable?.replacesKept ? { slot: replaceable.slot, isNew: true } : null);
     if (!target) {
       notify(
         busy.size > 0
@@ -521,7 +543,11 @@ async function startHelpSessionWithAgent(
     // Queued before a new tab appears, or its first input sync would auto-launch
     // the default into it. Pinned so a failed launch waits on Retry for this
     // agent rather than being replaced by the default's.
-    controller.launchWhenReady({ agentId, replaceExisting: true, pinAgent: true });
+    controller.launchWhenReady(
+      free
+        ? { agentId, replaceExisting: true, pinAgent: true }
+        : { ...freshSessionLaunch(agentId), pinAgent: true }
+    );
     if (target.isNew) useHelpPanelStore.getState().ensureSlot(target.slot);
     revealHelpLane(target.slot);
     holdLaneClaimUntilSettled(controller, claimKey);

@@ -16,6 +16,7 @@ import { logError } from "@/utils/logger";
 import { getAssistantSupportedAgentIds } from "../../shared/config/agentRegistry";
 import { isBuiltInAgentId, isRetiredAgentId } from "../../shared/config/agentIds";
 import {
+  ASSISTANT_SLOTS,
   DEFAULT_ASSISTANT_SLOT,
   MAX_ASSISTANT_SLOTS,
   assistantSlotKey,
@@ -264,11 +265,12 @@ interface HelpPanelActions {
   ) => void;
   clearTerminal: (slot: number) => void;
   /**
-   * Add an empty lane and focus it. Returns the slot taken, or null when every
-   * lane is occupied — the caller surfaces that rather than silently reusing
-   * one, since reuse would displace a session the user never named.
+   * Add an empty lane and focus it: `preferred` when no tab holds it, else the
+   * lowest free slot. Returns the slot taken, or null when every lane is
+   * occupied — the caller surfaces that rather than silently reusing one, since
+   * reuse would displace a session the user never named.
    */
-  openSlot: () => number | null;
+  openSlot: (preferred?: number) => number | null;
   /**
    * Open one specific lane if it isn't already, leaving the active lane alone.
    *
@@ -590,10 +592,14 @@ export const useHelpPanelStore = create<HelpPanelState & HelpPanelActions>()(
           }))
         ),
 
-      openSlot: () => {
+      openSlot: (preferred) => {
         let taken: number | null = null;
         set((s) => {
-          for (let slot = 0; slot < MAX_ASSISTANT_SLOTS; slot += 1) {
+          const candidates =
+            preferred !== undefined && isValidAssistantSlot(preferred)
+              ? [preferred, ...ASSISTANT_SLOTS]
+              : ASSISTANT_SLOTS;
+          for (const slot of candidates) {
             if (s.sessions[slot]) continue;
             taken = slot;
             return {

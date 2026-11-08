@@ -2339,12 +2339,18 @@ describe("HelpPanel — + New session clears hibernated entry", () => {
 });
 
 describe("HelpPanel — cold-view lane restore (#12108)", () => {
-  it("recreates a tab for every lane holding an eviction-captured conversation", async () => {
-    // A cold view knows only slot 0, so lanes 1+ would have no tab to reach
-    // their captured conversations from even though the entries are on disk.
+  it("recreates a tab for every lane captured from a view that went away with the panel open", async () => {
+    // A cold view knows only slot 0, so lanes 1+ the person had in front of them
+    // when an eviction or crash took the view would have no tab to reach them from.
     helpPanelState.terminalId = null;
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
     mockListPendingHibernationSlots.mockResolvedValue([0, 2]);
+    mockPeekPendingHibernation.mockImplementation(async (_projectId: string, slot: number) => ({
+      agentId: "claude",
+      agentSessionId: `conv-${slot}`,
+      cwd: "/tmp/help",
+      panelWasOpen: true,
+    }));
 
     await act(async () => {
       render(<HelpPanel width={380} />);
@@ -2359,6 +2365,144 @@ describe("HelpPanel — cold-view lane restore (#12108)", () => {
     // visible lane and follows the ordinary auto-launch consent path.)
     expect(mockProvisionSession).not.toHaveBeenCalledWith(expect.objectContaining({ slot: 2 }));
   });
+
+  it("gives a cold view no tab for a lane that only holds a captured conversation (#16495)", async () => {
+    // Slots 1 and 3 are where earlier scheduled runs ran and exited; slot 2's
+    // assistant is still running with no view. Only the running one is in use.
+    helpPanelState.terminalId = null;
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockListPendingHibernationSlots.mockResolvedValue([1, 2, 3]);
+    mockPeekPendingHibernation.mockImplementation(async (_projectId: string, slot: number) =>
+      slot === 2
+        ? { agentId: "claude", agentSessionId: "", cwd: "/tmp/help", panelWasOpen: false, live: true }
+        : { agentId: "claude", agentSessionId: `conv-${slot}`, cwd: "/tmp/help", panelWasOpen: false }
+    );
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+    await flushAsyncWork();
+
+    expect(helpPanelState.ensureSlot).toHaveBeenCalledWith(2);
+    expect(helpPanelState.ensureSlot).not.toHaveBeenCalledWith(1);
+    expect(helpPanelState.ensureSlot).not.toHaveBeenCalledWith(3);
+  });
+
+  it("adds no tab for a slot an earlier scheduled run used once the run is recorded (#16495)", async () => {
+    helpPanelState.terminalId = "term-live";
+    helpPanelState.agentId = "claude";
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    const listeners: Array<(payload: { projectId: string; scheduleIds: string[] }) => void> = [];
+    const electron = (window as unknown as { electron: Record<string, unknown> }).electron;
+    electron.events = {
+      on: vi.fn((channel: string, listener: (typeof listeners)[number]) => {
+        if (channel === "scheduled-runs:changed") listeners.push(listener);
+        return () => listeners.splice(listeners.indexOf(listener), 1);
+      }),
+    };
+    mockListPendingHibernationSlots.mockResolvedValue([1, 2]);
+    mockPeekPendingHibernation.mockImplementation(async (_projectId: string, slot: number) =>
+      slot === 2
+        ? { agentId: "claude", agentSessionId: "", cwd: "/tmp/help", panelWasOpen: false, live: true }
+        : { agentId: "claude", agentSessionId: "conv-1", cwd: "/tmp/help", panelWasOpen: false }
+    );
+
+    try {
+      await act(async () => {
+        render(<HelpPanel width={380} />);
+      });
+      await flushAsyncWork();
+
+      await act(async () => {
+        for (const listener of listeners) listener({ projectId: "proj-1", scheduleIds: ["s"] });
+      });
+      await flushAsyncWork();
+
+      expect(helpPanelState.ensureSlot).toHaveBeenCalledWith(2);
+      expect(helpPanelState.ensureSlot).not.toHaveBeenCalledWith(1);
+    } finally {
+      delete electron.events;
+    }
+  });
+
+  it.each([
+    ["nobody touched it", {}, true],
+    ["it is on screen", { onScreen: true }, false],
+    ["its conversation was touched", { touched: true }, false],
+  ] as const)(
+    "closes the tab it opened for a scheduled run once the run ends, unless %s (#16495)",
+    async (_case, lane: { onScreen?: boolean; touched?: boolean }, hidden) => {
+      helpPanelState.terminalId = "term-live";
+      helpPanelState.agentId = "claude";
+      projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+      const listeners: Array<(payload: { projectId: string; scheduleIds: string[] }) => void> =
+        [];
+      const electron = (window as unknown as { electron: Record<string, unknown> }).electron;
+      const help = electron.help as Record<string, unknown>;
+      const discard = vi.fn().mockResolvedValue(undefined);
+      help.discardConversation = discard;
+      electron.events = {
+        on: vi.fn((channel: string, listener: (typeof listeners)[number]) => {
+          if (channel === "scheduled-runs:changed") listeners.push(listener);
+          return () => listeners.splice(listeners.indexOf(listener), 1);
+        }),
+      };
+      helpPanelState.ensureSlot = vi.fn((slot: number) => {
+        helpPanelState.sessions = {
+          ...helpPanelState.sessions,
+          [slot]: {
+            terminalId: null,
+            agentId: null,
+            sessionId: null,
+            conversationTouched: lane.touched === true,
+          },
+        };
+      });
+      helpPanelState.closeSlot = vi.fn();
+      let running = true;
+      mockListPendingHibernationSlots.mockResolvedValue([1]);
+      mockPeekPendingHibernation.mockImplementation(async (_projectId: string, slot: number) =>
+        slot === 1
+          ? {
+              agentId: "claude",
+              agentSessionId: "conv-1",
+              cwd: "/tmp/help",
+              panelWasOpen: false,
+              ...(running ? { live: true } : {}),
+            }
+          : null
+      );
+      const runChanged = async () => {
+        await act(async () => {
+          for (const listener of listeners) listener({ projectId: "proj-1", scheduleIds: ["s"] });
+        });
+        await flushAsyncWork();
+      };
+
+      try {
+        await act(async () => {
+          render(<HelpPanel width={380} />);
+        });
+        await flushAsyncWork();
+        await runChanged();
+        expect(helpPanelState.ensureSlot).toHaveBeenCalledWith(1);
+
+        if (lane.onScreen) helpPanelState.activeSlot = 1;
+        running = false;
+        await runChanged();
+
+        if (hidden) expect(helpPanelState.closeSlot).toHaveBeenCalledWith(1);
+        else expect(helpPanelState.closeSlot).not.toHaveBeenCalled();
+        // Hiding a tab leaves its conversation where it was.
+        expect(discard).not.toHaveBeenCalledWith("proj-1", 1);
+        expect(helpPanelState.clearHibernateSession).not.toHaveBeenCalledWith("proj-1", 1);
+      } finally {
+        delete electron.events;
+        helpPanelState.sessions = {};
+        helpPanelState.activeSlot = 0;
+      }
+    }
+  );
 
   it("does not recreate lanes for a view that already holds a live session", async () => {
     helpPanelState.terminalId = "term-live";
@@ -2388,6 +2532,11 @@ describe("HelpPanel — cold-view lane restore (#12108)", () => {
       }),
     };
     mockListPendingHibernationSlots.mockResolvedValue([1]);
+    mockPeekPendingHibernation.mockImplementation(async (_projectId: string, slot: number) =>
+      slot === 1
+        ? { agentId: "claude", agentSessionId: "", cwd: "/tmp/help", panelWasOpen: false, live: true }
+        : null
+    );
 
     try {
       await act(async () => {

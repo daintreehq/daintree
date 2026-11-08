@@ -56,6 +56,12 @@ import { HelpPanelResizeHandle } from "./HelpPanelResizeHandle";
 import { useHelpPanelResize } from "./useHelpPanelResize";
 import { useHelpPanelRevealFocus } from "./useHelpPanelRevealFocus";
 import { useHelpSessionLanes, type PausedLane } from "./useHelpSessionLanes";
+import {
+  freshSessionLaunch,
+  pickNewSessionSlot,
+  readKeptLanes,
+  withMirroredLanes,
+} from "./keptLanes";
 import { useGlobalAssistantActivity } from "./useGlobalAssistantActivity";
 import { FigureRail } from "./FigureRail";
 import { useHelpPanelStore, selectSlot } from "@/store/helpPanelStore";
@@ -1024,17 +1030,44 @@ export function HelpPanel({
   // new tab itself rather than leaving that to the tab's auto-launch, which only
   // runs with "Start when the panel opens" on (#14976). Queued before the tab's
   // first input sync; with several agents and no default, the tab asks instead.
-  // A tab that turns out to hold a captured conversation (a cold view whose
-  // lanes are still being listed) is left to offer its own Resume: the default
-  // agent started there would replace that conversation.
+  //
+  // A lane that only holds a captured conversation has no tab (#16495), so the
+  // tab opens in a slot nothing is kept for. With none of those left it starts a
+  // new conversation over one past sessions keeps. Any other tab holding a
+  // conversation, and every one when main couldn't be asked, is left to offer its
+  // own Resume: a plain launch there would resume it, or replace it.
   const handleNewSession = useCallback(() => {
-    const slot = handleOpenParallelSession();
-    if (slot === null || !launchableAgentId) return;
-    const { hibernateSessions } = useHelpPanelStore.getState();
-    if (activeWorkspaceId && hibernateSessions[assistantSlotKey(activeWorkspaceId, slot)]) return;
-    acquireHelpSessionController(slot).launchWhenReady({
-      agentId: launchableAgentId,
-      replaceExisting: true,
+    const workspaceId = activeWorkspaceId;
+    const reading = workspaceId
+      ? readKeptLanes(workspaceId).catch((err: unknown) => {
+          logWarn("HelpPanel: failed to read kept lanes for a new session", err);
+          return null;
+        })
+      : Promise.resolve(null);
+    void reading.then((mainKept) => {
+      const { sessions, hibernateSessions } = useHelpPanelStore.getState();
+      const kept =
+        mainKept && workspaceId ? withMirroredLanes(mainKept, workspaceId, hibernateSessions) : null;
+      const pick = kept ? pickNewSessionSlot(kept, (slot) => slot in sessions) : null;
+      const slot = handleOpenParallelSession(pick?.slot);
+      if (slot === null || !launchableAgentId) return;
+      const controller = acquireHelpSessionController(slot);
+      if (pick?.slot === slot) {
+        controller.launchWhenReady(
+          pick.replacesKept
+            ? freshSessionLaunch(launchableAgentId)
+            : { agentId: launchableAgentId, replaceExisting: true }
+        );
+        return;
+      }
+      if (
+        workspaceId &&
+        (kept?.some((lane) => lane.slot === slot) ||
+          hibernateSessions[assistantSlotKey(workspaceId, slot)])
+      ) {
+        return;
+      }
+      controller.launchWhenReady({ agentId: launchableAgentId, replaceExisting: true });
     });
   }, [activeWorkspaceId, handleOpenParallelSession, launchableAgentId]);
 
