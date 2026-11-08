@@ -63,7 +63,8 @@ const BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommandEntry[] = [
     label: "/clear",
     description: "Clear the terminal display",
     descriptions: {
-      claude: "Reset display and attention buffer",
+      claude: "Clear conversation history and start a new conversation",
+      gemini: "Clear the screen and start a new session",
       codex: "Clear the terminal and start a new chat",
       antigravity: "Clear conversation and start a new one",
     },
@@ -133,12 +134,6 @@ const BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommandEntry[] = [
     label: "/init",
     description: "Initialize project configuration",
     descriptions: { codex: "Scaffold AGENTS.md instructions" },
-    supportedAgents: ["claude", "gemini", "codex"],
-  },
-  {
-    id: "new",
-    label: "/new",
-    description: "Reset conversation context",
     supportedAgents: ["claude", "gemini", "codex"],
   },
   {
@@ -536,6 +531,12 @@ const BUILTIN_SLASH_COMMANDS: readonly BuiltinSlashCommandEntry[] = [
     id: "mention",
     label: "/mention",
     description: "Mention a file",
+    supportedAgents: ["codex"],
+  },
+  {
+    id: "new",
+    label: "/new",
+    description: "Start a new session",
     supportedAgents: ["codex"],
   },
   {

@@ -346,3 +346,27 @@ describe("Antigravity upstream conformance", () => {
     }
   });
 });
+
+describe("slash commands descriptions and scope (#16453)", () => {
+  it("delivers CLI-aligned descriptions for /clear", () => {
+    const claudeClear = getBuiltinSlashCommands("claude").find((c) => c.id === "clear");
+    expect(claudeClear?.description).toBe(
+      "Clear conversation history and start a new conversation"
+    );
+
+    const geminiClear = getBuiltinSlashCommands("gemini").find((c) => c.id === "clear");
+    expect(geminiClear?.description).toBe("Clear the screen and start a new session");
+  });
+
+  it("scopes /new to codex only", () => {
+    const codexNew = getBuiltinSlashCommands("codex").find((c) => c.id === "new");
+    expect(codexNew).toBeDefined();
+    expect(codexNew?.description).toBe("Start a new session");
+
+    const claudeNew = getBuiltinSlashCommands("claude").find((c) => c.id === "new");
+    expect(claudeNew).toBeUndefined();
+
+    const geminiNew = getBuiltinSlashCommands("gemini").find((c) => c.id === "new");
+    expect(geminiNew).toBeUndefined();
+  });
+});
