@@ -24,6 +24,12 @@ import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const DEBOUNCE_MS = 200;
 
+function hasLiveUnownedTerminal(
+  terminals: ReadonlyArray<{ projectId?: string; isExited?: boolean }>
+): boolean {
+  return terminals.some((t) => !t.projectId && !t.isExited);
+}
+
 export class ProjectStatsService {
   private intervalSlot = new MutableDisposable<IDisposable>();
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -33,6 +39,8 @@ export class ProjectStatsService {
   private acknowledgeableCompletionAt = new Map<string, number>();
   private pollIntervalMs = DEFAULT_POLL_INTERVAL_MS;
   private generation = 0;
+  private inFlight: Promise<void> | null = null;
+  private rerunRequested = false;
 
   /**
    * `runAttention` is optional so the harness and any caller that only wants
@@ -102,7 +110,7 @@ export class ProjectStatsService {
   /** An explicit recompute, so it reads the host afresh rather than a sibling's snapshot. */
   refresh(): void {
     invalidateSharedTerminalSnapshot(this.ptyClient);
-    void this.computeAndBroadcast();
+    this.scheduleCompute();
   }
 
   /**
@@ -170,8 +178,11 @@ export class ProjectStatsService {
   stop(): void {
     // Always bump generation so an in-flight computeAndBroadcast — including
     // one started by a pre-start refresh() — is invalidated before any
-    // post-stop write or broadcast can fire.
+    // post-stop write or broadcast can fire. Its slot goes with it, so a restart
+    // reads at once rather than queueing behind a run that can no longer publish.
     this.generation++;
+    this.inFlight = null;
+    this.rerunRequested = false;
     if (!this.started) return;
     this.started = false;
 
@@ -190,7 +201,7 @@ export class ProjectStatsService {
 
   private armPollInterval(): void {
     const clear = setAlignedInterval(() => {
-      void this.computeAndBroadcast();
+      this.scheduleCompute();
     }, this.pollIntervalMs);
     this.intervalSlot.value = toDisposable(clear);
   }
@@ -201,8 +212,37 @@ export class ProjectStatsService {
     }
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;
-      void this.computeAndBroadcast();
+      this.scheduleCompute();
     }, DEBOUNCE_MS);
+  }
+
+  /**
+   * One compute at a time; triggers that arrive during it collapse into one more.
+   *
+   * The poll, the event debounce and `refresh()` fire independently, and a read
+   * can take a shard's whole RPC timeout. When each newer run cancelled the older
+   * one, reads outlasting the gap between triggers meant no run ever finished, and
+   * since unchanged payloads are suppressed, a change that was lost stayed lost
+   * until some count moved again (#16417).
+   *
+   * The re-run needs no invalidation of its own. Every trigger carrying host state
+   * has invalidated the shared snapshot by now, which keeps any older read out of
+   * the cache, and the rest read what they changed after the await.
+   */
+  private scheduleCompute(): void {
+    if (this.inFlight !== null) {
+      this.rerunRequested = true;
+      return;
+    }
+    const gen = this.generation;
+    this.inFlight = this.computeAndBroadcast().finally(() => {
+      // stop() retired this run and released its slot, which may be another's now.
+      if (this.generation !== gen) return;
+      this.inFlight = null;
+      if (!this.rerunRequested) return;
+      this.rerunRequested = false;
+      this.scheduleCompute();
+    });
   }
 
   private shallowEqual(a: ProjectStatusMap, b: ProjectStatusMap): boolean {
@@ -254,33 +294,39 @@ export class ProjectStatsService {
    * because the host's matcher runs on them before the trash filter does.
    *
    * A degraded snapshot is NOT a reason to fall back: the shard that just timed
-   * out on the fan-out would time out again per workspace, after it, and two
-   * back-to-back timeouts outlast the poll that would supersede this compute —
-   * starving every workspace's stats for the length of the outage. A missing
-   * shard reads as zero, which is what its failed per-workspace reads resolved
-   * to before.
+   * out on the fan-out would time out again per workspace, after it, and every
+   * trigger waits on this compute meanwhile — slowing every workspace's stats for
+   * the length of the outage. A missing shard reads as zero here, which is what
+   * its failed per-workspace reads resolved to before; the caller keeps any row
+   * it already has for one.
+   *
+   * An unowned terminal still falls back during an outage, because that query is
+   * what stamps its owner, and a run that exits unstamped never gets one.
    */
   private async getTerminalCounts(
     projectIds: readonly string[],
     terminals: ReadonlyArray<{ projectId?: string; isExited?: boolean; isTrashed?: boolean }>
   ): Promise<Map<string, number>> {
-    const counts = new Map<string, number>();
-    if (terminals.some((t) => !t.projectId && !t.isExited)) {
-      const results = await Promise.allSettled(
-        projectIds.map((id) => this.ptyClient!.getProjectStats(id).then((s) => [id, s] as const))
-      );
-      for (const result of results) {
-        if (result.status === "fulfilled") {
-          counts.set(result.value[0], result.value[1].terminalCount);
-        }
-      }
-      return counts;
-    }
-    for (const id of projectIds) counts.set(id, 0);
+    const tallied = new Map<string, number>();
+    for (const id of projectIds) tallied.set(id, 0);
     for (const terminal of terminals) {
       if (terminal.isExited || terminal.isTrashed || !terminal.projectId) continue;
-      const count = counts.get(terminal.projectId);
-      if (count !== undefined) counts.set(terminal.projectId, count + 1);
+      const count = tallied.get(terminal.projectId);
+      if (count !== undefined) tallied.set(terminal.projectId, count + 1);
+    }
+    if (!hasLiveUnownedTerminal(terminals)) return tallied;
+
+    const counts = new Map<string, number>();
+    const results = await Promise.allSettled(
+      projectIds.map((id) => this.ptyClient!.getProjectStats(id).then((s) => [id, s] as const))
+    );
+    for (const result of results) {
+      if (result.status === "fulfilled") {
+        const [id, stats] = result.value;
+        // `getProjectStats` reports a timeout as zero, which cannot outweigh what
+        // this snapshot saw.
+        counts.set(id, Math.max(stats.terminalCount, tallied.get(id) ?? 0));
+      }
     }
     return counts;
   }
@@ -288,7 +334,7 @@ export class ProjectStatsService {
   private async computeAndBroadcast(): Promise<void> {
     if (!this.ptyClient) return;
 
-    const gen = ++this.generation;
+    const gen = this.generation;
 
     try {
       // Scratches ride the same map: a scratch terminal is already stamped with
@@ -299,7 +345,6 @@ export class ProjectStatsService {
       const allScratches = scratchStore.getAllScratches();
       const projectIds = [...allProjects.map((p) => p.id), ...allScratches.map((s) => s.id)];
       if (projectIds.length === 0) {
-        if (this.generation !== gen) return;
         // Track the empty broadcast so a later non-empty result with the
         // same shape as the prior non-empty broadcast still fires
         // (shallowEqual would otherwise suppress it).
@@ -309,7 +354,7 @@ export class ProjectStatsService {
         return;
       }
 
-      const { terminals: allTerminals } = await getSharedTerminalSnapshot(this.ptyClient);
+      const { terminals: allTerminals, degraded } = await getSharedTerminalSnapshot(this.ptyClient);
       if (this.generation !== gen) return;
       const terminalCounts = await this.getTerminalCounts(projectIds, allTerminals);
       if (this.generation !== gen) return;
@@ -398,6 +443,22 @@ export class ProjectStatsService {
             ? { assistantStateSince: counts.assistantStateSince }
             : {}),
         };
+      }
+
+      // A shard that did not answer contributed no terminals, which is not a true
+      // zero, and a published zero lets the switcher sleep a project without asking.
+      // A project lives on one shard, so a zero is believed only for a workspace this
+      // read names, and only with no terminal's owner in doubt, since `getProjectStats`
+      // reports a timeout as zero too. Any other keeps its row until a complete read.
+      if (degraded) {
+        const named = new Set(allTerminals.map((terminal) => terminal.projectId));
+        const ownerInDoubt = hasLiveUnownedTerminal(allTerminals);
+        for (const id of Object.keys(statusMap)) {
+          const last = this.lastBroadcast[id];
+          if (last && !terminalCounts.get(id) && (ownerInDoubt || !named.has(id))) {
+            statusMap[id] = last;
+          }
+        }
       }
 
       // Not on the wire, so it is kept current whether or not the payload moved.
