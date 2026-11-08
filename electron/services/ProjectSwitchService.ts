@@ -259,7 +259,8 @@ export class ProjectSwitchService {
 
       if (inRepo.found && !project.daintreeConfigPresent) {
         updates.daintreeConfigPresent = true;
-      } else if (!inRepo.found && project.daintreeConfigPresent) {
+      } else if (!inRepo.found && !inRepo.unavailable && project.daintreeConfigPresent) {
+        // An unreadable file (a cloud placeholder, a stalled mount) isn't a removed one.
         updates.daintreeConfigPresent = false;
       }
 

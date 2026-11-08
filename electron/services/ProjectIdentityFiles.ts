@@ -17,6 +17,7 @@ import fs from "fs/promises";
 import { createHash } from "crypto";
 import { z } from "zod";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
+import { isProjectIoError, projectIo } from "./projectIoGate.js";
 import { UTF8_BOM, isValidProjectId } from "./projectStorePaths.js";
 import { safeRecipeFilename } from "../utils/recipeFilename.js";
 import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
@@ -157,6 +158,11 @@ export interface InRepoProjectIdentity {
   /** The theme the repository suggests: a built-in id or `plugin:{pluginId}:{themeId}`. */
   theme?: string;
   found: boolean;
+  /**
+   * Set when the file couldn't be read at all: not proof that it's absent, so
+   * nothing may be cleared on the strength of `found: false` (#16361).
+   */
+  unavailable?: true;
 }
 
 const MAX_THEME_ID_LENGTH = 200;
@@ -180,8 +186,16 @@ export class ProjectIdentityFiles {
 
   async readInRepoProjectIdentity(projectPath: string): Promise<InRepoProjectIdentity> {
     const filePath = path.join(projectPath, DAINTREE_PROJECT_JSON);
+    let content: string;
     try {
-      let content = await fs.readFile(filePath, "utf-8");
+      content = await projectIo.run(projectPath, () => fs.readFile(filePath, "utf-8"));
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code;
+      return code === "ENOENT" || code === "ENOTDIR"
+        ? { found: false }
+        : { found: false, unavailable: true };
+    }
+    try {
       if (content.startsWith(UTF8_BOM)) {
         content = content.slice(1);
       }
@@ -420,7 +434,9 @@ export class ProjectIdentityFiles {
   ): Promise<Record<string, unknown> | null> {
     let content: string;
     try {
-      content = await fs.readFile(path.join(projectPath, DAINTREE_SETTINGS_JSON), "utf-8");
+      content = await projectIo.run(projectPath, () =>
+        fs.readFile(path.join(projectPath, DAINTREE_SETTINGS_JSON), "utf-8")
+      );
     } catch (error) {
       if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
       throw error;
@@ -543,7 +559,7 @@ export class ProjectIdentityFiles {
   async getInRepoRecipeFileHash(projectPath: string, recipeName: string): Promise<string | null> {
     const filePath = path.join(projectPath, DAINTREE_RECIPES_DIR, safeRecipeFilename(recipeName));
     try {
-      const content = await fs.readFile(filePath, "utf-8");
+      const content = await projectIo.run(projectPath, () => fs.readFile(filePath, "utf-8"));
       return hashRecipePayload(content);
     } catch (error) {
       if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
@@ -571,7 +587,7 @@ export class ProjectIdentityFiles {
     const filePath = path.join(projectPath, DAINTREE_RECIPES_DIR, safeRecipeFilename(recipeName));
     let content: string;
     try {
-      content = await fs.readFile(filePath, "utf-8");
+      content = await projectIo.run(projectPath, () => fs.readFile(filePath, "utf-8"));
     } catch (error) {
       if (error instanceof Error && "code" in error && error.code === "ENOENT") return null;
       throw error;
@@ -613,7 +629,9 @@ export class ProjectIdentityFiles {
     const recipesDir = path.join(projectPath, DAINTREE_RECIPES_DIR);
     let entries;
     try {
-      entries = await fs.readdir(recipesDir, { withFileTypes: true });
+      entries = await projectIo.run(projectPath, () =>
+        fs.readdir(recipesDir, { withFileTypes: true })
+      );
     } catch (error) {
       if (error instanceof Error && "code" in error && error.code === "ENOENT")
         return { recipes: [], hashes: new Map(), dirExists: false, scanComplete: true };
@@ -634,7 +652,9 @@ export class ProjectIdentityFiles {
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
       try {
-        const content = await fs.readFile(path.join(recipesDir, entry.name), "utf-8");
+        const content = await projectIo.run(projectPath, () =>
+          fs.readFile(path.join(recipesDir, entry.name), "utf-8")
+        );
         const parsed = JSON.parse(stripUtf8Bom(content));
         if (typeof parsed !== "object" || parsed === null) {
           continue;
@@ -751,7 +771,9 @@ export class ProjectIdentityFiles {
     const presetsDir = path.join(projectPath, DAINTREE_PRESETS_DIR);
     let agentDirs;
     try {
-      agentDirs = await fs.readdir(presetsDir, { withFileTypes: true });
+      agentDirs = await projectIo.run(projectPath, () =>
+        fs.readdir(presetsDir, { withFileTypes: true })
+      );
     } catch (error) {
       if (error instanceof Error && "code" in error && error.code === "ENOENT") return {};
       throw error;
@@ -770,8 +792,12 @@ export class ProjectIdentityFiles {
       const agentDir = path.join(presetsDir, agentId);
       let fileEntries;
       try {
-        fileEntries = await fs.readdir(agentDir, { withFileTypes: true });
-      } catch {
+        fileEntries = await projectIo.run(projectPath, () =>
+          fs.readdir(agentDir, { withFileTypes: true })
+        );
+      } catch (error) {
+        // A refused read would fail every later one too; give up on the lot.
+        if (isProjectIoError(error)) throw error;
         continue;
       }
 
@@ -780,7 +806,9 @@ export class ProjectIdentityFiles {
       for (const entry of fileEntries) {
         if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
         try {
-          const content = await fs.readFile(path.join(agentDir, entry.name), "utf-8");
+          const content = await projectIo.run(projectPath, () =>
+            fs.readFile(path.join(agentDir, entry.name), "utf-8")
+          );
           const parsed = JSON.parse(stripUtf8Bom(content));
           if (
             typeof parsed !== "object" ||
@@ -820,6 +848,7 @@ export class ProjectIdentityFiles {
           seenIds.add(parsed.id);
           presets.push(parsed as AgentPreset);
         } catch (error) {
+          if (isProjectIoError(error)) throw error;
           console.warn(
             `[ProjectIdentityFiles] Skipping malformed preset file: ${agentId}/${entry.name}`,
             error

@@ -49,6 +49,21 @@ describe("readInRepoProjectIdentity", () => {
     expect(result).toEqual({ found: false });
   });
 
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "marks a file that exists but can't be read as unavailable, not absent",
+    async () => {
+      await writeProjectJson(JSON.stringify({ version: 1, name: "Locked" }));
+      const file = path.join(tmpDir, ".daintree", "project.json");
+      await fs.chmod(file, 0o000);
+      try {
+        const result = await identityFiles.readInRepoProjectIdentity(tmpDir);
+        expect(result).toEqual({ found: false, unavailable: true });
+      } finally {
+        await fs.chmod(file, 0o644);
+      }
+    }
+  );
+
   it("returns empty object when file contains invalid JSON", async () => {
     await writeProjectJson("not valid json {{{");
     const result = await identityFiles.readInRepoProjectIdentity(tmpDir);

@@ -465,6 +465,37 @@ describe("ProjectSwitchService", () => {
     );
   });
 
+  it("keeps the in-repo config flag when project.json can't be read", async () => {
+    const withConfig = (id: string) => ({
+      id,
+      name: id === "project-new" ? "new" : "Old Project",
+      path: id === "project-new" ? "/tmp/new" : "/tmp/old",
+      status: "active",
+      daintreeConfigPresent: true,
+    });
+    projectStoreMock.getProjectById.mockImplementation((id: string) =>
+      id === "project-new" || id === "project-old" ? withConfig(id) : null
+    );
+
+    projectStoreMock.readInRepoProjectIdentity.mockResolvedValue({
+      found: false,
+      unavailable: true,
+    });
+    const { service } = createService();
+    await service.switchProject("project-new");
+    expect(projectStoreMock.updateProject).not.toHaveBeenCalledWith(
+      "project-new",
+      expect.objectContaining({ daintreeConfigPresent: false })
+    );
+
+    projectStoreMock.readInRepoProjectIdentity.mockResolvedValue({ found: false });
+    await service.switchProject("project-new");
+    expect(projectStoreMock.updateProject).toHaveBeenCalledWith(
+      "project-new",
+      expect.objectContaining({ daintreeConfigPresent: false })
+    );
+  });
+
   it("proves save initiation precedes setCurrentProject via call-order log", async () => {
     const callLog: string[] = [];
     const getProjectStateOrig = projectStoreMock.getProjectState.getMockImplementation();

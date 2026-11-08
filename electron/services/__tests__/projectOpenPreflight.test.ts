@@ -19,6 +19,12 @@ const {
   PROJECT_DIRECTORY_STAT_TIMEOUT_MS,
   GIT_MARKER_STAT_TIMEOUT_MS,
 } = await import("../projectOpenPreflight.js");
+const { __resetProjectIoForTests } = await import("../projectIoGate.js");
+
+// Hung-filesystem tests leave requests unsettled on purpose.
+beforeEach(() => {
+  __resetProjectIoForTests();
+});
 
 const FOLDER = "/repos/alpha";
 
@@ -227,16 +233,26 @@ describe("probeGitMarker under a hung filesystem", () => {
     expect(lstatMock).toHaveBeenCalledTimes(1);
   });
 
-  it("lets a remounted drive be probed again after a timeout", async () => {
-    // Holding the timed-out probe would pin every later switch to the same
-    // doomed promise, so remounting the volume would never take effect.
-    lstatMock.mockReturnValue(new Promise<Stats>(() => {}));
+  it("answers a retry without a second lstat until the stuck one returns", async () => {
+    // Each fresh lstat against a dead mount would pin another of Main's four
+    // libuv workers, so a retry waits on the stuck call's slot (#16361).
+    let answer!: (stats: Stats) => void;
+    lstatMock.mockReturnValue(
+      new Promise<Stats>((resolve) => {
+        answer = resolve;
+      })
+    );
     const first = probeGitMarker(FOLDER);
     await vi.advanceTimersByTimeAsync(GIT_MARKER_STAT_TIMEOUT_MS + 1);
     expect(await first).toBe("unknown");
 
     lstatMock.mockResolvedValue(statsFor(true));
+    await expect(probeGitMarker(FOLDER)).resolves.toBe("unknown");
+    expect(lstatMock).toHaveBeenCalledTimes(1);
 
+    // The old mount answers (or errors) once it's torn down; a remount then takes effect.
+    answer(statsFor(true));
+    await vi.advanceTimersByTimeAsync(0);
     await expect(probeGitMarker(FOLDER)).resolves.toBe("present");
     expect(lstatMock).toHaveBeenCalledTimes(2);
   });
@@ -318,11 +334,16 @@ describe("assertProjectDirectory under a hung filesystem", () => {
     expect(statMock).toHaveBeenCalledTimes(2);
   });
 
-  it("retries a path with a fresh syscall after one timed out", async () => {
-    // The shared entry must not outlive its timeout: pinning later attempts to
-    // the same doomed promise would mean remounting the drive never takes
-    // effect and the folder stays unopenable until the app restarts.
-    statMock.mockReturnValue(new Promise<Stats>(() => {}));
+  it("issues a fresh stat once the timed-out one returns, and none before", async () => {
+    // A retry while the first stat is still stuck must not pin a second libuv
+    // worker (#16361), but once it returns the next attempt re-stats, so a
+    // remounted drive takes effect without restarting the app.
+    let answer!: (stats: Stats) => void;
+    statMock.mockReturnValue(
+      new Promise<Stats>((resolve) => {
+        answer = resolve;
+      })
+    );
     const first = expect(assertProjectDirectory(FOLDER)).rejects.toMatchObject({
       code: "PROJECT_OPEN_FAILED",
     });
@@ -330,8 +351,14 @@ describe("assertProjectDirectory under a hung filesystem", () => {
     await first;
 
     statMock.mockResolvedValue(statsFor(true));
-    await expect(assertProjectDirectory(FOLDER)).resolves.toBeUndefined();
+    await expect(assertProjectDirectory(FOLDER)).rejects.toMatchObject({
+      code: "PROJECT_OPEN_FAILED",
+    });
+    expect(statMock).toHaveBeenCalledTimes(1);
 
+    answer(statsFor(true));
+    await vi.advanceTimersByTimeAsync(0);
+    await expect(assertProjectDirectory(FOLDER)).resolves.toBeUndefined();
     expect(statMock).toHaveBeenCalledTimes(2);
   });
 

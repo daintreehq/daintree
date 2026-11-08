@@ -2,6 +2,14 @@ import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { stripUtf8Bom } from "../utils/stripUtf8Bom.js";
 import { holdsCredentialOrId } from "./voiceKeytermSecrets.js";
+import { projectIo } from "./projectIoGate.js";
+
+/**
+ * Issues one filesystem request through the project I/O gate (#16361), so the
+ * reads behind a dictation start hold at most the project's own slot of Main's
+ * libuv pool, and none outlives the caller's deadline in the queue.
+ */
+type ProjectRead = <T>(request: () => Promise<T>) => Promise<T>;
 
 // A manifest bigger than this is generated output, not something a person wrote.
 const MAX_MANIFEST_BYTES = 256 * 1024;
@@ -52,13 +60,17 @@ function isWithin(root: string, path: string): boolean {
 // Resolved before reading, so a symlinked manifest or package dir can't pull
 // names from outside the repo, and a FIFO or device (whose stat size is 0)
 // can't block the read or stream past the size cap.
-async function readManifest(realRoot: string, dir: string): Promise<Manifest | null> {
+async function readManifest(
+  io: ProjectRead,
+  realRoot: string,
+  dir: string
+): Promise<Manifest | null> {
   try {
-    const path = await realpath(join(dir, "package.json"));
+    const path = await io(() => realpath(join(dir, "package.json")));
     if (!isWithin(realRoot, path)) return null;
-    const info = await stat(path);
+    const info = await io(() => stat(path));
     if (!info.isFile() || info.size > MAX_MANIFEST_BYTES) return null;
-    const parsed: unknown = JSON.parse(stripUtf8Bom(await readFile(path, "utf8")));
+    const parsed: unknown = JSON.parse(stripUtf8Bom(await io(() => readFile(path, "utf8"))));
     return parsed && typeof parsed === "object" ? (parsed as Manifest) : null;
   } catch {
     return null;
@@ -91,6 +103,7 @@ export function workspacePatternSegments(pattern: string): string[] | null {
 // Only the common `dir/*` and literal `dir/pkg` forms; anything fancier is skipped
 // rather than globbed, because a hint isn't worth walking a monorepo for.
 async function workspaceDirs(
+  io: ProjectRead,
   realRoot: string,
   patterns: string[],
   spent: () => boolean
@@ -102,9 +115,9 @@ async function workspaceDirs(
     if (!segments) continue;
     if (segments.length === 2 && segments[1] === "*") {
       try {
-        const parent = await realpath(join(realRoot, segments[0]!));
+        const parent = await io(() => realpath(join(realRoot, segments[0]!)));
         if (!isWithin(realRoot, parent)) continue;
-        const entries = await readdir(parent, { withFileTypes: true });
+        const entries = await io(() => readdir(parent, { withFileTypes: true }));
         for (const entry of entries) {
           if (dirs.length >= MAX_WORKSPACE_PACKAGES) break;
           if (entry.isDirectory() && !entry.name.startsWith(".")) {
@@ -136,27 +149,33 @@ function objectKeys(value: unknown): string[] {
 export async function deriveRepoNames(root: string, deadline = Infinity): Promise<RepoNames> {
   const spent = () => performance.now() >= deadline;
   if (spent()) return { names: [] };
+  const io: ProjectRead = (request) => projectIo.run(root, request, { deadline });
   let realRoot: string;
   try {
-    realRoot = await realpath(root);
+    realRoot = await io(() => realpath(root));
   } catch {
     return { names: [] };
   }
 
-  const manifest = spent() ? null : await readManifest(realRoot, realRoot);
+  const manifest = spent() ? null : await readManifest(io, realRoot, realRoot);
   const names: string[] = [];
   if (typeof manifest?.name === "string") names.push(manifest.name);
 
-  const packageDirs = await workspaceDirs(realRoot, workspacePatterns(manifest?.workspaces), spent);
+  const packageDirs = await workspaceDirs(
+    io,
+    realRoot,
+    workspacePatterns(manifest?.workspaces),
+    spent
+  );
   const workspaceManifests = spent()
     ? []
-    : await Promise.all(packageDirs.map((dir) => readManifest(realRoot, dir)));
+    : await Promise.all(packageDirs.map((dir) => readManifest(io, realRoot, dir)));
   for (const m of workspaceManifests) {
     if (typeof m?.name === "string") names.push(m.name);
   }
 
   try {
-    const entries = spent() ? [] : await readdir(realRoot, { withFileTypes: true });
+    const entries = spent() ? [] : await io(() => readdir(realRoot, { withFileTypes: true }));
     for (const entry of entries.slice(0, MAX_TOP_LEVEL_ENTRIES)) {
       if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
       if (IGNORED_DIRECTORIES.has(entry.name.toLowerCase())) continue;

@@ -304,4 +304,12 @@ function laneKey(root: string): string {
   return path.resolve(root);
 }
 
-export const projectIo = new ProjectIoGate();
+export let projectIo = new ProjectIoGate();
+
+/**
+ * Tests that leave a mocked request unsettled on purpose would otherwise
+ * stall that root for every later test in the file.
+ */
+export function __resetProjectIoForTests(): void {
+  projectIo = new ProjectIoGate();
+}
