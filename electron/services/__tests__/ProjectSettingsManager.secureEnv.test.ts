@@ -14,11 +14,14 @@ vi.mock("../../utils/fs.js", async (importOriginal) => {
 const storeState = vi.hoisted(() => ({ projectEnv: {} as unknown }));
 
 // The real secure storage runs over this store, so the counts below are the
-// config.json reads and rewrites one settings read or save costs.
+// config.json reads and rewrites one settings read or save costs. A write is
+// a snapshot, as on disk: changing the object after store.set stores nothing.
 const storeMock = vi.hoisted(() => ({
-  get: vi.fn((key: string) => (key === "projectEnv" ? storeState.projectEnv : undefined)),
+  get: vi.fn((key: string) =>
+    key === "projectEnv" ? structuredClone(storeState.projectEnv) : undefined
+  ),
   set: vi.fn((key: string, value: unknown) => {
-    if (key === "projectEnv") storeState.projectEnv = value;
+    if (key === "projectEnv") storeState.projectEnv = JSON.parse(JSON.stringify(value));
   }),
 }));
 
@@ -175,6 +178,25 @@ describe("ProjectSettingsManager secure env storage costs", () => {
 
       expect(projectEnvWrites()).toBe(0);
       expect((await readSettingsFile()).secureEnvironmentVariables).toEqual(["RESTORED_TOKEN"]);
+    });
+
+    it("lists secure names in the order saved, with new unresolved names after them", async () => {
+      await manager.saveProjectSettings(projectId, {
+        runCommands: [],
+        environmentVariables: { Z_TOKEN: "z", A_TOKEN: "a" },
+        unresolvedSecureEnvironmentVariables: ["Y_TOKEN", "A_TOKEN", "B_TOKEN"],
+      });
+
+      expect((await readSettingsFile()).secureEnvironmentVariables).toEqual([
+        "Z_TOKEN",
+        "A_TOKEN",
+        "Y_TOKEN",
+        "B_TOKEN",
+      ]);
+      expect(storeState.projectEnv).toEqual({
+        [`${projectId}:Z_TOKEN`]: "z",
+        [`${projectId}:A_TOKEN`]: "a",
+      });
     });
 
     it("leaves the map and settings.json untouched when the one write fails", async () => {

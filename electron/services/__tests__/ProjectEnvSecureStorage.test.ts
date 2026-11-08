@@ -4,10 +4,11 @@ const storeState = vi.hoisted(() => ({
   data: {} as Record<string, unknown>,
 }));
 
+// A write is a snapshot, as on disk: changing the object after store.set stores nothing.
 const storeMock = vi.hoisted(() => ({
-  get: vi.fn((key: string) => storeState.data[key]),
+  get: vi.fn((key: string) => structuredClone(storeState.data[key])),
   set: vi.fn((key: string, value: unknown) => {
-    storeState.data[key] = value;
+    storeState.data[key] = JSON.parse(JSON.stringify(value));
   }),
 }));
 
