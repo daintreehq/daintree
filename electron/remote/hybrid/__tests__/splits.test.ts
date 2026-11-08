@@ -1158,6 +1158,7 @@ describe("opening host files", () => {
         "/srv/project (2)/",
         "/srv/foo(1)// ",
         "/srv/foo(1)\u0085", // Rust trims this and JavaScript's `\s` doesn't match it.
+        "/srv/foo(1,\u0662)", // Rust's `\d` matches this, and the row alone still parses.
       ]) {
         expect(zed("studio", path)).toBeNull();
         expect(zed("studio", path, 4)).toBeNull();

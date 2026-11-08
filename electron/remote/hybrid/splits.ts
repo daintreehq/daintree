@@ -369,7 +369,8 @@ const ZED_MISREAD_PATHS = [
   // Zed reads a position out of a file name: `a:5` at line 12 opens `a` at 5:12.
   /:[^/]*[\s\u0085/]*$/,
   // Likewise `a(1)`, if it has gone from the host by the time Zed looks. `(1)` alone is safe.
-  /[^/(]\(\d+(?:,\d+)?\)[\s\u0085/]*$/,
+  // Rust's `\d` is Unicode, and only a row Zed can parse needs refusing, whatever the column.
+  /[^/(]\(\d+(?:,\p{Nd}+)?\)[\s\u0085/]*$/u,
 ];
 
 /** Zed parses a line or column as a u32; a larger one would be taken as part of the file name. */
