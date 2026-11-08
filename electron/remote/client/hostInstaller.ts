@@ -636,21 +636,34 @@ export function stopScript(
 }
 
 /**
- * Where this install keeps the build it replaces. Named for the install, so
- * another install on the host can never remove or restore it.
+ * Where this install keeps the build it replaces and prepares the one it puts in
+ * place. Named for the install, so another install on the host can never remove
+ * or restore them. The candidate is outside `.old-*`, so a partial one is never
+ * taken for a backup.
  */
-function backupPaths(target: string, token: string): { image: string; info: string } {
+function backupPaths(
+  target: string,
+  token: string
+): { image: string; info: string; candidate: string } {
   return {
     image: `${target}.old-${token}`,
     info: `${target}${APPIMAGE_BUILD_INFO_SUFFIX}.old-${token}`,
+    candidate: `${target}.new-${token}`,
   };
 }
 
 /**
  * Put the staged build in place, keeping the previous one beside it until the
- * host is back. Backups other installs left (installs take turns, so theirs
- * are over) are removed first; a failure restores nothing itself, so the
- * rollback alone says what went back.
+ * host is back. A failure the script sees leaves the old or the new build at the
+ * target whether or not a rollback ever gets to run, since recovery needs the
+ * connection and the lock to last. So the new build is prepared beside the
+ * target first: the stage can be on another filesystem, where `mv` removes its
+ * destination and then copies. Files other installs left (installs take turns,
+ * so theirs are over) are removed first, best effort: they only cost disk.
+ *
+ * sh has no atomic exchange for a directory, so an app bundle whose rename fails
+ * has its old bundle put back here, which consumes the backup: the rollback then
+ * says none, meaning it found no backup, not that there was no previous build.
  */
 export function swapScript(
   plan: HostInstallPlan,
@@ -663,28 +676,33 @@ export function swapScript(
   if (plan.packaging === "app-bundle") {
     const app = remotePath(target);
     const old = remotePath(backup.image);
-    return `for b in ${app}.old-*; do if [ "$b" != ${old} ]; then rm -rf "$b"; fi; done; if [ -e ${old} ]; then exit 1; fi; if [ -d ${app} ]; then mv ${app} ${old} || exit 1; fi; mv ${remotePath(`${staged.dir}/x/Daintree.app`)} ${app} || exit 1; rm -rf ${remotePath(staged.dir)}`;
+    const next = remotePath(backup.candidate);
+    return `for b in ${app}.old-* ${app}.new-*; do if [ "$b" != ${old} ]; then rm -rf "$b"; fi; done; if [ -e ${old} ] || [ -e ${next} ]; then exit 1; fi; mv ${remotePath(`${staged.dir}/x/Daintree.app`)} ${next} || { rm -rf ${next}; exit 1; }; if [ -d ${app} ]; then mv ${app} ${old} || { rm -rf ${next}; exit 1; }; fi; if ! mv ${next} ${app}; then if [ -d ${old} ]; then mv ${old} ${app}; fi; rm -rf ${next}; exit 1; fi; rm -rf ${remotePath(staged.dir)}`;
   }
   const t = remotePath(target);
   const old = remotePath(backup.image);
+  const next = remotePath(backup.candidate);
   const info = remotePath(`${target}${APPIMAGE_BUILD_INFO_SUFFIX}`);
   const infoOld = remotePath(backup.info);
   // Copied under a temporary name first: only a whole copy of the image is a
   // backup to put back, and it lands after its marker's. The marker written
   // beside the new image is the one read out of it at staging.
-  return `mkdir -p ${remotePath(path.posix.dirname(target))} && for b in ${t}.old-* ${info}.old-*; do if [ "$b" != ${old} ] && [ "$b" != ${infoOld} ]; then rm -f "$b"; fi; done && rm -f ${old} ${infoOld} && if [ -f ${info} ]; then cp -p ${info} ${remotePath(`${backup.info}.part`)} && mv ${remotePath(`${backup.info}.part`)} ${infoOld}; fi && if [ -f ${t} ]; then cp -p ${t} ${remotePath(`${backup.image}.part`)} && mv ${remotePath(`${backup.image}.part`)} ${old}; fi && mv -f ${remotePath(staged.file)} ${t} && chmod 755 ${t} && printf '%s' ${sq(marker ?? "")} > ${info} && rm -rf ${remotePath(staged.dir)}`;
+  return `mkdir -p ${remotePath(path.posix.dirname(target))} && for b in ${t}.old-* ${info}.old-* ${t}.new-*; do if [ "$b" != ${old} ] && [ "$b" != ${infoOld} ]; then rm -f "$b"; fi; done && rm -f ${old} ${infoOld} && if [ -f ${info} ]; then cp -p ${info} ${remotePath(`${backup.info}.part`)} && mv ${remotePath(`${backup.info}.part`)} ${infoOld}; fi && if [ -f ${t} ]; then cp -p ${t} ${remotePath(`${backup.image}.part`)} && mv ${remotePath(`${backup.image}.part`)} ${old}; fi && { mv -f ${remotePath(staged.file)} ${next} && chmod 755 ${next} && mv -f ${next} ${t} || { rm -f ${next}; exit 1; }; } && printf '%s' ${sq(marker ?? "")} > ${info} && rm -rf ${remotePath(staged.dir)}`;
 }
 
 /**
  * Put this install's backup (and its marker) back. Says what it did, so a
- * restore is never assumed: yes only when all of it went back.
+ * restore is never assumed: yes only when all of it went back. An app bundle's
+ * current build is moved aside, not deleted, until the old one is back, so a
+ * restore that can't finish doesn't cost the host the build it has.
  */
 export function rollbackScript(plan: HostInstallPlan, target: string, token: string): string {
   const backup = backupPaths(target, token);
   if (plan.packaging === "app-bundle") {
     const app = remotePath(target);
     const old = remotePath(backup.image);
-    return `if [ -d ${old} ]; then if rm -rf ${app} && mv ${old} ${app}; then echo "${MARK}rolledback yes"; else echo "${MARK}rolledback failed"; fi; else echo "${MARK}rolledback none"; fi`;
+    const aside = remotePath(backup.candidate);
+    return `if [ -d ${old} ]; then if rm -rf ${aside} && { [ ! -e ${app} ] || mv ${app} ${aside}; }; then if mv ${old} ${app}; then rm -rf ${aside}; echo "${MARK}rolledback yes"; else if [ -e ${aside} ]; then mv ${aside} ${app}; fi; echo "${MARK}rolledback failed"; fi; else echo "${MARK}rolledback failed"; fi; else echo "${MARK}rolledback none"; fi`;
   }
   const t = remotePath(target);
   const old = remotePath(backup.image);
@@ -1094,7 +1112,10 @@ export async function runHostInstall(
         await dropStaged();
       }
       if (!wasRunning && !swapped) return "unchanged";
-      if (!wasRunning && !previous) return "no-previous";
+      // A rollback's none only says it found no backup: a failed swap can have put
+      // the previous build back itself, or never moved it. Below, the read-back
+      // decides what a stopped host with an earlier install is left with.
+      if (!wasRunning && !previous && !probe.install) return "no-previous";
       if (wasRunning) {
         if (!lock.held()) return "lock-lost";
         const started = await run(start!, 30_000);
@@ -1117,8 +1138,10 @@ export async function runHostInstall(
             probe.install?.commit == null ||
             live.commit === probe.install?.commit));
       if (!back.result.reachable || !running || !sameBuild || !sameRunning) return "not-restored";
-      // Put back only when the rollback said so; otherwise what runs was never moved.
-      return swapped && previous ? "restored" : "restarted";
+      // Put back only when the rollback said so; otherwise the swap never moved
+      // what's there, or put it back itself.
+      if (swapped && previous) return "restored";
+      return wasRunning ? "restarted" : "unchanged";
     };
 
     const RECOVERY_NOTE: Record<Exclude<Recovery, "unchanged">, string> = {

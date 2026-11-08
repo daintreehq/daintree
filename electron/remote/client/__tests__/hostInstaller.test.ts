@@ -10,19 +10,14 @@ import { probeHost } from "../hostProbe.js";
 import {
   busyAgents,
   exceedsConfirmed,
-  rollbackScript,
   runHostInstall,
   stopScript,
-  swapScript,
   type InstallProgress,
   type InstallerDeps,
 } from "../hostInstaller.js";
 import { debInstallCommand, type ClientBuild } from "../installPlan.js";
 import type { HostCommandChannel } from "../remoteShell.js";
-import type {
-  HostInstallPlan,
-  HostRestartImpact,
-} from "../../../../shared/types/ipc/remoteHosts.js";
+import type { HostRestartImpact } from "../../../../shared/types/ipc/remoteHosts.js";
 
 /** `n` terminals in one project, each with an agent working; null for a host that can't say. */
 function impactOf(value: number | null | HostRestartImpact): HostRestartImpact {
@@ -950,6 +945,60 @@ describe("runHostInstall", () => {
     await expect(install(deps, { whileWorking: "proceed" })).rejects.toThrow(
       /couldn't be restored on the host/
     );
+  });
+
+  describe("a swap that fails on a host Daintree wasn't running on", () => {
+    const failingSwap = (rollback: string) => {
+      const shell = fakeShell((script) =>
+        script.includes("mv '/tmp/daintree-stage.abc123/x/Daintree.app'")
+          ? { ...ok(), code: 1, stderr: "mv: rename failed" }
+          : ok()
+      );
+      const base = shell.exec;
+      shell.exec = async (script, options) =>
+        script.includes("@@dt:rolledback")
+          ? (shell.scripts.push(script), ok(`@@dt:rolledback ${rollback}\n`))
+          : base(script, options);
+      return shell;
+    };
+
+    it("doesn't call a previous build it left in place missing", async () => {
+      const deps = makeDeps({
+        shell: failingSwap("none"),
+        probes: [macProbe({ build: OLD_BUILD, hostMode: false })],
+      });
+      const failure = install(deps);
+      await expect(failure).rejects.toThrow(/Couldn't put the new build in place/);
+      await expect(failure).rejects.not.toThrow(/no previous build|put back|started again/);
+    });
+
+    it("says there was no previous build when the host had none", async () => {
+      const deps = makeDeps({
+        shell: failingSwap("none"),
+        probes: [macProbe({ build: null, hostMode: false })],
+      });
+      await expect(install(deps)).rejects.toThrow(/no previous build to put back/);
+    });
+
+    it("says it couldn't restore when the read-back doesn't find the previous build", async () => {
+      const deps = makeDeps({
+        shell: failingSwap("none"),
+        probes: [
+          macProbe({ build: OLD_BUILD, hostMode: false }),
+          macProbe({ build: OLD_BUILD, hostMode: false }),
+          macProbe({ build: null, hostMode: false }),
+        ],
+      });
+      await expect(install(deps)).rejects.toThrow(/couldn't be restored on the host/);
+    });
+
+    it("says it was put back when the rollback restored it", async () => {
+      const deps = makeDeps({
+        shell: failingSwap("yes"),
+        probes: [macProbe({ build: OLD_BUILD, hostMode: false })],
+      });
+      await expect(install(deps)).rejects.toThrow(/previous build was put back\.$/);
+    });
   });
 
   it("restarts the old build when cancelled right after the host stopped", async () => {
@@ -1982,77 +2031,3 @@ describe("runHostInstall: two Shells updating one host", () => {
     expect(shell.lock.owner).toBe("other-device");
   });
 });
-
-describe.runIf(process.platform === "darwin" || process.platform === "linux")(
-  "an install's backup, under the real sh",
-  () => {
-    let root: string;
-    beforeEach(async () => {
-      root = await fs.mkdtemp(path.join(os.tmpdir(), "dt-backup-"));
-    });
-    afterEach(async () => {
-      await fs.rm(root, { recursive: true, force: true });
-    });
-    const sh = (script: string) => spawnSync("sh", ["-c", script], { encoding: "utf8" });
-    const read = (file: string) => fs.readFile(file, "utf8");
-    const APP = { packaging: "app-bundle" } as HostInstallPlan;
-    const IMAGE = { packaging: "appimage" } as HostInstallPlan;
-
-    async function stageApp(name: string, build: string) {
-      const dir = path.join(root, `stage-${name}`);
-      await fs.mkdir(path.join(dir, "x/Daintree.app"), { recursive: true });
-      await fs.writeFile(path.join(dir, "x/Daintree.app/build"), build);
-      return { dir, file: path.join(dir, "bundle.zip") };
-    }
-
-    it("is this install's alone: a later install's rollback never restores it, and its own says none once it's gone", async () => {
-      const target = path.join(root, "Daintree.app");
-      await fs.mkdir(target);
-      await fs.writeFile(path.join(target, "build"), "running");
-      expect(sh(swapScript(APP, await stageApp("a", "a"), target, null, "aaaa")).status).toBe(0);
-      expect(await read(path.join(target, "build"))).toBe("a");
-      // Another install after it: the finished one's backup is cleared, its own kept.
-      expect(sh(swapScript(APP, await stageApp("b", "b"), target, null, "bbbb")).status).toBe(0);
-
-      expect(sh(rollbackScript(APP, target, "aaaa")).stdout.trim()).toBe("@@dt:rolledback none");
-      expect(await read(path.join(target, "build"))).toBe("b");
-      expect(sh(rollbackScript(APP, target, "bbbb")).stdout.trim()).toBe("@@dt:rolledback yes");
-      expect(await read(path.join(target, "build"))).toBe("a");
-      expect(sh(rollbackScript(APP, target, "bbbb")).stdout.trim()).toBe("@@dt:rolledback none");
-    });
-
-    it("leaves a failed swap's backup for the rollback to put back", async () => {
-      const target = path.join(root, "Daintree.app");
-      await fs.mkdir(target);
-      await fs.writeFile(path.join(target, "build"), "running");
-      const missing = { dir: path.join(root, "stage-gone"), file: path.join(root, "stage-gone/z") };
-      expect(sh(swapScript(APP, missing, target, null, "aaaa")).status).not.toBe(0);
-      expect(sh(rollbackScript(APP, target, "aaaa")).stdout.trim()).toBe("@@dt:rolledback yes");
-      expect(await read(path.join(target, "build"))).toBe("running");
-    });
-
-    it("puts an AppImage and its marker back together, and never a partial copy", async () => {
-      const target = path.join(root, "Applications/Daintree.AppImage");
-      const info = `${target}.build-info.json`;
-      await fs.mkdir(path.dirname(target));
-      await fs.writeFile(target, "old image");
-      await fs.writeFile(info, OLD_BUILD);
-      // Left by an install that died copying: not a backup anyone restores.
-      await fs.writeFile(`${target}.old-dead.part`, "half");
-      const stage = path.join(root, "stage");
-      await fs.mkdir(stage);
-      await fs.writeFile(path.join(stage, "Daintree.AppImage"), "new image");
-      const staged = { dir: stage, file: path.join(stage, "Daintree.AppImage") };
-
-      expect(sh(rollbackScript(IMAGE, target, "dead")).stdout.trim()).toBe("@@dt:rolledback none");
-      expect(sh(swapScript(IMAGE, staged, target, NEW_BUILD, "aaaa")).status).toBe(0);
-      expect(await read(target)).toBe("new image");
-      expect(await read(info)).toBe(NEW_BUILD);
-      await expect(fs.access(`${target}.old-dead.part`)).rejects.toThrow();
-
-      expect(sh(rollbackScript(IMAGE, target, "aaaa")).stdout.trim()).toBe("@@dt:rolledback yes");
-      expect(await read(target)).toBe("old image");
-      expect(await read(info)).toBe(OLD_BUILD);
-    });
-  }
-);

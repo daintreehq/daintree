@@ -49,7 +49,7 @@ Freeze behaviour is unobservable under Playwright's focus emulation — use `npm
 
 ## What CI actually runs
 
-On PRs and pushes: `npm run check` (split across the parallel `static` and `lint` jobs), vitest in 6 shards (the perf scenario liveness guard runs as its own `perf-liveness` job), and build + preload-backdoor check + smoke — Ubuntu only, no E2E. `ci-ok` is the sole required check.
+On PRs and pushes: `npm run check` (split across the parallel `static` and `lint` jobs), vitest in 6 shards (the perf scenario liveness guard runs as its own `perf-liveness` job), and build + preload-backdoor check + smoke — Ubuntu only, no E2E. The one exception is `host-scripts-macos`, which runs `hostInstaller.realShell.test.ts` on a Mac runner because those scripts run on a Mac host's BSD userland. `ci-ok` is the sole required check.
 
 Budget and perf scripts are intentionally out of CI pre-1.0 (dormancy note in `ci.yml`). `test-ratio` runs on PRs but is informational and always exits 0.
 
