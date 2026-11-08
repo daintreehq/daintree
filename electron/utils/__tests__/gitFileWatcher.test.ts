@@ -2915,6 +2915,458 @@ describe("GitFileWatcher", () => {
       expect(vi.mocked(logWarn).mock.calls.length).toBe(1);
     });
 
+    describe("paths already known to be relevant (#16424)", () => {
+      /** Teach the watcher that `path` is not ignored through one real classification. */
+      async function learn(cb: Parameters<typeof fireEvents>[0], path: string, type = "update") {
+        vi.mocked(checkIgnoredPaths).mockResolvedValueOnce(new Set());
+        fireEvents(cb, [{ type, path }]);
+        await vi.advanceTimersByTimeAsync(100);
+        await flushClassification();
+      }
+
+      /** A check-ignore that never answers, so anything waiting on it stays waiting. */
+      function hangCheckIgnore() {
+        vi.mocked(checkIgnoredPaths).mockImplementation(
+          () => new Promise<Set<string>>(() => {}) as never
+        );
+      }
+
+      it("starts the refresh without a spawn for a path git already reported as not ignored", async () => {
+        const onChange = vi.fn();
+        const { cb } = await startClassifyingWatcher({ onChange });
+        await learn(cb, TRACKED);
+        expect(onChange).toHaveBeenCalledTimes(1);
+        expect(checkIgnoredPaths).toHaveBeenCalledTimes(1);
+
+        hangCheckIgnore();
+        fireEvents(cb, [{ type: "update", path: TRACKED }]);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(onChange).toHaveBeenCalledTimes(2);
+        expect(checkIgnoredPaths).toHaveBeenCalledTimes(1);
+      });
+
+      it("refreshes a mixed burst on its remembered path alone", async () => {
+        const onChange = vi.fn();
+        const { cb } = await startClassifyingWatcher({ onChange });
+        await learn(cb, TRACKED);
+
+        hangCheckIgnore();
+        fireEvents(cb, [
+          { type: "create", path: IGNORED_A },
+          { type: "update", path: TRACKED },
+        ]);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(onChange).toHaveBeenCalledTimes(2);
+        expect(checkIgnoredPaths).toHaveBeenCalledTimes(1);
+      });
+
+      it("never remembers an ignored answer, so ignored-only bursts keep skipping", async () => {
+        const onChange = vi.fn();
+        const { cb } = await startClassifyingWatcher({ onChange });
+        // The same mixed burst that teaches TRACKED must not teach IGNORED_A.
+        vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([IGNORED_A]));
+        fireEvents(cb, [
+          { type: "create", path: IGNORED_A },
+          { type: "update", path: TRACKED },
+        ]);
+        await vi.advanceTimersByTimeAsync(100);
+        await flushClassification();
+        expect(onChange).toHaveBeenCalledTimes(1);
+
+        onChange.mockClear();
+        fireEvents(cb, [{ type: "create", path: IGNORED_A }]);
+        await vi.advanceTimersByTimeAsync(100);
+        await flushClassification();
+        expect(checkIgnoredPaths).toHaveBeenCalledTimes(2);
+        expect(onChange).not.toHaveBeenCalled();
+      });
+
+      /** Fire a change through the git-internal directory watcher on `dir`. */
+      function fireGitInternal(dir: string, name: string) {
+        const call = vi.mocked(watch).mock.calls.find(([path]) => path === dir) as
+          [unknown, unknown, (eventType: string, filename: string) => void] | undefined;
+        expect(call).toBeDefined();
+        call?.[2]("change", name);
+      }
+
+      const GIT_DIR = pathJoin("/repo", ".git");
+
+      it.each<[string, (cb: Parameters<typeof fireEvents>[0]) => void]>([
+        [".gitignore", (cb) => fireEvents(cb, [{ type: "update", path: p(".gitignore") }])],
+        [
+          "a nested .gitignore",
+          (cb) => fireEvents(cb, [{ type: "update", path: p("web", ".gitignore") }]),
+        ],
+        ["info/exclude", () => fireGitInternal(pathJoin(GIT_DIR, "info"), "exclude")],
+        ["the index", () => fireGitInternal(GIT_DIR, "index")],
+        ["index.lock", () => fireGitInternal(GIT_DIR, "index.lock")],
+        ["git config", () => fireGitInternal(GIT_DIR, "config")],
+        [
+          "an overflow that lost the events",
+          (cb) => fireError(cb, new Error("Events were dropped and must be re-scanned")),
+        ],
+        [
+          "a .gitignore inside a burst already unknown",
+          (cb) => {
+            fireEvents(cb, [{ type: "update" }]);
+            fireEvents(cb, [{ type: "update", path: p(".gitignore") }]);
+          },
+        ],
+      ])("stops trusting a remembered path after %s", async (_name, invalidate) => {
+        const onChange = vi.fn();
+        const { cb } = await startClassifyingWatcher({ onChange });
+        await learn(cb, TRACKED);
+
+        invalidate(cb);
+        await vi.advanceTimersByTimeAsync(300);
+        await flushClassification();
+
+        // The rule change really did make it ignored, so a remembered answer
+        // would refresh here where the fresh one skips.
+        onChange.mockClear();
+        vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([TRACKED]));
+        fireEvents(cb, [{ type: "update", path: TRACKED }]);
+        await vi.advanceTimersByTimeAsync(100);
+        await flushClassification();
+        expect(checkIgnoredPaths).toHaveBeenCalledTimes(2);
+        expect(onChange).not.toHaveBeenCalled();
+      });
+
+      it("re-asks the tracked-ignored probe after a rule edit hidden in an unknown burst", async () => {
+        const onChange = vi.fn();
+        vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([IGNORED_A]));
+        const { cb } = await startClassifyingWatcher({ onChange });
+
+        fireEvents(cb, [{ type: "create", path: IGNORED_A }]);
+        await vi.advanceTimersByTimeAsync(100);
+        await flushClassification();
+        expect(hasTrackedIgnoredPaths).toHaveBeenCalledTimes(1);
+
+        // Collection stops reading names once a burst is unknown, so this rule
+        // edit, which can create the hazard, is seen only by the flush.
+        fireEvents(cb, [{ type: "update" }]);
+        fireEvents(cb, [{ type: "update", path: p(".gitignore") }]);
+        await vi.advanceTimersByTimeAsync(100);
+        vi.mocked(hasTrackedIgnoredPaths).mockResolvedValue(true);
+
+        onChange.mockClear();
+        fireEvents(cb, [{ type: "create", path: IGNORED_A }]);
+        await vi.advanceTimersByTimeAsync(100);
+        await flushClassification();
+        expect(hasTrackedIgnoredPaths).toHaveBeenCalledTimes(2);
+        expect(onChange).toHaveBeenCalledTimes(1);
+      });
+
+      it("does not remember an answer that straddled an index write", async () => {
+        const onChange = vi.fn();
+        let release: ((ignored: Set<string>) => void) | undefined;
+        vi.mocked(checkIgnoredPaths).mockImplementationOnce(
+          () =>
+            new Promise<Set<string>>((resolve) => {
+              release = resolve;
+            }) as never
+        );
+        const { cb } = await startClassifyingWatcher({ onChange });
+        fireEvents(cb, [{ type: "update", path: TRACKED }]);
+        await vi.advanceTimersByTimeAsync(100);
+
+        fireGitInternal(GIT_DIR, "index");
+        release?.(new Set());
+        await flushClassification();
+        expect(onChange).toHaveBeenCalledTimes(1);
+
+        // Still inside the index write's own debounce, so anything further comes
+        // from this burst.
+        onChange.mockClear();
+        vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([TRACKED]));
+        fireEvents(cb, [{ type: "update", path: TRACKED }]);
+        await vi.advanceTimersByTimeAsync(100);
+        await flushClassification();
+        expect(checkIgnoredPaths).toHaveBeenCalledTimes(2);
+        expect(onChange).not.toHaveBeenCalled();
+      });
+
+      it("does not remember a path git answered for after it was deleted", async () => {
+        const onChange = vi.fn();
+        const { cb } = await startClassifyingWatcher({ onChange });
+        // git cannot type a missing path, so `.output/` reads as not ignored for
+        // a deleted `.output`, while the rebuilt directory is ignored.
+        const DIR = p(".output");
+        await learn(cb, DIR, "delete");
+        expect(onChange).toHaveBeenCalledTimes(1);
+
+        onChange.mockClear();
+        vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([DIR]));
+        fireEvents(cb, [{ type: "create", path: DIR }]);
+        await vi.advanceTimersByTimeAsync(100);
+        await flushClassification();
+        expect(checkIgnoredPaths).toHaveBeenCalledTimes(2);
+        expect(onChange).not.toHaveBeenCalled();
+      });
+
+      it("remembers a path that came back later in the same burst", async () => {
+        const onChange = vi.fn();
+        const { cb } = await startClassifyingWatcher({ onChange });
+        vi.mocked(checkIgnoredPaths).mockResolvedValueOnce(new Set());
+        fireEvents(cb, [{ type: "delete", path: TRACKED }]);
+        fireEvents(cb, [{ type: "create", path: TRACKED }]);
+        await vi.advanceTimersByTimeAsync(100);
+        await flushClassification();
+        expect(onChange).toHaveBeenCalledTimes(1);
+
+        hangCheckIgnore();
+        fireEvents(cb, [{ type: "update", path: TRACKED }]);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(onChange).toHaveBeenCalledTimes(2);
+        expect(checkIgnoredPaths).toHaveBeenCalledTimes(1);
+      });
+
+      it("forgets a remembered path when it is deleted", async () => {
+        const onChange = vi.fn();
+        const { cb } = await startClassifyingWatcher({ onChange });
+        await learn(cb, TRACKED);
+
+        vi.mocked(checkIgnoredPaths).mockResolvedValueOnce(new Set());
+        fireEvents(cb, [{ type: "delete", path: TRACKED }]);
+        await vi.advanceTimersByTimeAsync(100);
+        await flushClassification();
+        expect(onChange).toHaveBeenCalledTimes(2);
+        expect(checkIgnoredPaths).toHaveBeenCalledTimes(2);
+
+        onChange.mockClear();
+        vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([TRACKED]));
+        fireEvents(cb, [{ type: "create", path: TRACKED }]);
+        await vi.advanceTimersByTimeAsync(100);
+        await flushClassification();
+        expect(checkIgnoredPaths).toHaveBeenCalledTimes(3);
+        expect(onChange).not.toHaveBeenCalled();
+      });
+
+      it("forgets a path whose delete arrived while its classification was answering", async () => {
+        const onChange = vi.fn();
+        let release: ((ignored: Set<string>) => void) | undefined;
+        vi.mocked(checkIgnoredPaths).mockImplementationOnce(
+          () =>
+            new Promise<Set<string>>((resolve) => {
+              release = resolve;
+            }) as never
+        );
+        const { cb } = await startClassifyingWatcher({ onChange });
+        fireEvents(cb, [{ type: "update", path: TRACKED }]);
+        await vi.advanceTimersByTimeAsync(100);
+
+        // The delete sits unflushed while the older answer lands and teaches the
+        // path, so only the flush can take it back out.
+        fireEvents(cb, [{ type: "delete", path: TRACKED }]);
+        release?.(new Set());
+        await flushClassification();
+        vi.mocked(checkIgnoredPaths).mockResolvedValueOnce(new Set());
+        await vi.advanceTimersByTimeAsync(100);
+        await flushClassification();
+        expect(checkIgnoredPaths).toHaveBeenCalledTimes(2);
+
+        onChange.mockClear();
+        vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([TRACKED]));
+        fireEvents(cb, [{ type: "create", path: TRACKED }]);
+        await vi.advanceTimersByTimeAsync(100);
+        await flushClassification();
+        expect(checkIgnoredPaths).toHaveBeenCalledTimes(3);
+        expect(onChange).not.toHaveBeenCalled();
+      });
+
+      it("learns nothing from a failed classification", async () => {
+        const onChange = vi.fn();
+        const { cb } = await startClassifyingWatcher({ onChange });
+        vi.mocked(checkIgnoredPaths).mockRejectedValueOnce(new Error("exit 128"));
+        fireEvents(cb, [{ type: "update", path: TRACKED }]);
+        await vi.advanceTimersByTimeAsync(100);
+        await flushClassification();
+        expect(onChange).toHaveBeenCalledTimes(1);
+
+        onChange.mockClear();
+        vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([TRACKED]));
+        fireEvents(cb, [{ type: "update", path: TRACKED }]);
+        await vi.advanceTimersByTimeAsync(100);
+        await flushClassification();
+        expect(checkIgnoredPaths).toHaveBeenCalledTimes(2);
+        expect(onChange).not.toHaveBeenCalled();
+      });
+
+      it("learns nothing from a superseded classification", async () => {
+        const onChange = vi.fn();
+        let release: ((ignored: Set<string>) => void) | undefined;
+        vi.mocked(checkIgnoredPaths).mockImplementationOnce(
+          () =>
+            new Promise<Set<string>>((resolve) => {
+              release = resolve;
+            }) as never
+        );
+        const { cb } = await startClassifyingWatcher({ onChange });
+        fireEvents(cb, [{ type: "update", path: TRACKED }]);
+        await vi.advanceTimersByTimeAsync(100);
+        fireEvents(cb, [{ type: "update", path: IGNORED_A }]);
+        await vi.advanceTimersByTimeAsync(100);
+        release?.(new Set());
+        await flushClassification();
+        expect(onChange).toHaveBeenCalledTimes(1);
+
+        onChange.mockClear();
+        vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([TRACKED]));
+        fireEvents(cb, [{ type: "update", path: TRACKED }]);
+        await vi.advanceTimersByTimeAsync(100);
+        await flushClassification();
+        expect(checkIgnoredPaths).toHaveBeenCalledTimes(2);
+        expect(onChange).not.toHaveBeenCalled();
+      });
+
+      it("forgets its oldest answers once a wide burst outgrows the bound", async () => {
+        const onChange = vi.fn();
+        const { cb } = await startClassifyingWatcher({ onChange });
+        await learn(cb, TRACKED);
+
+        // The widest burst that still classifies, every path relevant.
+        vi.mocked(checkIgnoredPaths).mockResolvedValueOnce(new Set());
+        fireEvents(
+          cb,
+          Array.from({ length: 2048 }, (_, i) => ({ type: "create", path: p("gen", `f-${i}.ts`) }))
+        );
+        await vi.advanceTimersByTimeAsync(100);
+        await flushClassification();
+        expect(checkIgnoredPaths).toHaveBeenCalledTimes(2);
+
+        onChange.mockClear();
+        vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set());
+        fireEvents(cb, [{ type: "update", path: TRACKED }]);
+        await vi.advanceTimersByTimeAsync(100);
+        await flushClassification();
+        expect(checkIgnoredPaths).toHaveBeenCalledTimes(3);
+        expect(onChange).toHaveBeenCalledTimes(1);
+
+        // The newest of the wide burst is still remembered.
+        hangCheckIgnore();
+        fireEvents(cb, [{ type: "update", path: p("gen", "f-2047.ts") }]);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(onChange).toHaveBeenCalledTimes(2);
+        expect(checkIgnoredPaths).toHaveBeenCalledTimes(3);
+      });
+
+      it("judges a held answer by its own burst's deletes, not the burst collecting now", async () => {
+        const onChange = vi.fn();
+        let release: ((ignored: Set<string>) => void) | undefined;
+        vi.mocked(checkIgnoredPaths).mockImplementationOnce(
+          () =>
+            new Promise<Set<string>>((resolve) => {
+              release = resolve;
+            }) as never
+        );
+        const { cb } = await startClassifyingWatcher({ onChange });
+        const DIR = p(".output");
+        fireEvents(cb, [{ type: "delete", path: DIR }]);
+        await vi.advanceTimersByTimeAsync(100);
+
+        // The rebuild is still unflushed as the delete's answer lands. Reading the
+        // collecting burst's state would see no delete and learn the directory.
+        fireEvents(cb, [{ type: "create", path: DIR }]);
+        release?.(new Set());
+        await flushClassification();
+        expect(onChange).toHaveBeenCalledTimes(1);
+
+        onChange.mockClear();
+        vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([DIR]));
+        await vi.advanceTimersByTimeAsync(100);
+        await flushClassification();
+        expect(checkIgnoredPaths).toHaveBeenCalledTimes(2);
+        expect(onChange).not.toHaveBeenCalled();
+      });
+
+      it("forgets a deleted path even when its burst supersedes another classification", async () => {
+        const onChange = vi.fn();
+        const { cb } = await startClassifyingWatcher({ onChange });
+        await learn(cb, TRACKED);
+
+        vi.mocked(checkIgnoredPaths).mockImplementationOnce(
+          () => new Promise<Set<string>>(() => {}) as never
+        );
+        fireEvents(cb, [{ type: "update", path: IGNORED_A }]);
+        await vi.advanceTimersByTimeAsync(100);
+        fireEvents(cb, [{ type: "delete", path: TRACKED }]);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(onChange).toHaveBeenCalledTimes(2);
+        expect(checkIgnoredPaths).toHaveBeenCalledTimes(2);
+
+        onChange.mockClear();
+        vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([TRACKED]));
+        fireEvents(cb, [{ type: "create", path: TRACKED }]);
+        await vi.advanceTimersByTimeAsync(100);
+        await flushClassification();
+        expect(checkIgnoredPaths).toHaveBeenCalledTimes(3);
+        expect(onChange).not.toHaveBeenCalled();
+      });
+
+      it.each<
+        [
+          string,
+          (cb: Parameters<typeof fireEvents>[0]) => Promise<void>,
+          Parameters<typeof fireEvents>[1],
+        ]
+      >([
+        [
+          "a remembered path",
+          async (cb) => {
+            await learn(cb, TRACKED);
+            hangCheckIgnore();
+          },
+          [{ type: "update", path: TRACKED }],
+        ],
+        ["an unknown burst", async () => {}, [{ type: "update" }]],
+        [
+          "a superseding burst",
+          async (cb) => {
+            hangCheckIgnore();
+            fireEvents(cb, [{ type: "update", path: IGNORED_A }]);
+            await vi.advanceTimersByTimeAsync(100);
+          },
+          [{ type: "update", path: IGNORED_B }],
+        ],
+      ])(
+        "logs a refresh that throws on %s instead of escaping the timer",
+        async (_name, arrange, events) => {
+          const onChange = vi.fn();
+          const { cb } = await startClassifyingWatcher({ onChange });
+          await arrange(cb);
+
+          // An escape here would reach the workspace host's fatal uncaughtException
+          // handler, and fail this advance with it.
+          onChange.mockClear();
+          onChange.mockImplementationOnce(() => {
+            throw new Error("status pass failed to start");
+          });
+          fireEvents(cb, events);
+          await vi.advanceTimersByTimeAsync(100);
+          expect(onChange).toHaveBeenCalledTimes(1);
+          expect(logWarn).toHaveBeenCalledTimes(1);
+
+          fireEvents(cb, [{ type: "update" }]);
+          await vi.advanceTimersByTimeAsync(100);
+          expect(onChange).toHaveBeenCalledTimes(2);
+        }
+      );
+
+      it("keeps verifying membership on the fast path", async () => {
+        const onChange = vi.fn();
+        const onWorktreeFilesChanged = vi.fn();
+        const { cb } = await startClassifyingWatcher({ onChange, onWorktreeFilesChanged });
+        await learn(cb, TRACKED);
+        vi.mocked(lstat).mockClear();
+
+        hangCheckIgnore();
+        fireEvents(cb, [{ type: "update", path: TRACKED }]);
+        await vi.advanceTimersByTimeAsync(100);
+        expect(onWorktreeFilesChanged).toHaveBeenCalledTimes(2);
+        expect(lstat).toHaveBeenCalledWith(TRACKED);
+      });
+    });
+
     it("keeps the adaptive debounce ramp driven by raw event count", async () => {
       const onChange = vi.fn();
       const mock = setupSubscribeMock();

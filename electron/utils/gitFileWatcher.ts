@@ -94,6 +94,13 @@ const WORKTREE_EXCLUSION_CANDIDATES = [
 const WORKTREE_BURST_PATH_CAP = 2048;
 
 /**
+ * Most paths one watcher remembers as known to be relevant, oldest forgotten
+ * first. An editing session names far fewer. A wide burst pushing answers out
+ * costs only the check-ignore spawn each of them would have paid anyway.
+ */
+const KNOWN_RELEVANT_PATH_CAP = 1024;
+
+/**
  * Most paths an update-only burst may name and still be checked as content-only.
  * Past it the burst counts as a membership change without a single `lstat`: an
  * editor save or an agent's write touches a handful of files, while a burst this
@@ -277,6 +284,13 @@ export class GitFileWatcher {
    */
   private pendingWorktreePaths: Set<string> | null = new Set();
   /**
+   * Paths in the current (unflushed) burst whose latest event was a delete.
+   * git cannot type a path that is gone, so a directory-only rule (`.output/`)
+   * reads as not ignored for it. Remembering that answer would refresh for every
+   * later rebuild of a directory that is in fact ignored.
+   */
+  private pendingDeletedPaths = new Set<string>();
+  /**
    * Whether the current (unflushed) burst carried anything but `update` events.
    * Sticky like an unknown burst. Only half the proof of a content-only burst:
    * Parcel folds a delete and re-create of one path into `update`, so the flush
@@ -302,6 +316,17 @@ export class GitFileWatcher {
    * opportunity".
    */
   private trackedIgnoredProbe: Promise<boolean> | null = null;
+  /**
+   * Paths a completed check-ignore reported as not ignored, so a burst naming
+   * one can refresh without a spawn. Only this direction is remembered: a stale
+   * entry costs an extra refresh and can never skip one, which is also why the
+   * ignore sources nothing watches (`core.excludesFile`) are acceptable here.
+   *
+   * Replaced rather than cleared on invalidation: a classification holds the Set
+   * it started with, so an answer that straddled the change lands in the retired
+   * one.
+   */
+  private knownRelevantPaths = new Set<string>();
   /** Directory holding `.git/config` — always the common dir. */
   private gitConfigDir: string | null = null;
   private readonly onWatcherFailed: (() => void) | undefined;
@@ -625,7 +650,8 @@ export class GitFileWatcher {
     // to run out its deadline against a worktree nobody is watching.
     this.abortClassification();
     this.pendingWorktreePaths = new Set();
-    this.trackedIgnoredProbe = null;
+    this.pendingDeletedPaths = new Set();
+    this.invalidateIgnoreAnswers();
 
     for (const watcher of this.watchers) {
       try {
@@ -932,9 +958,9 @@ export class GitFileWatcher {
 
     // A git-internal write is where the tracked/ignored overlap can change:
     // `git add -f` of an ignored file writes the index, and a checkout can
-    // move a tracked file into an ignored directory. Drop the cached answer
+    // move a tracked file into an ignored directory. Drop the cached answers
     // rather than reasoning about which write it was.
-    this.trackedIgnoredProbe = null;
+    this.invalidateIgnoreAnswers();
 
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
@@ -1050,12 +1076,17 @@ export class GitFileWatcher {
         // Such a write can also create the tracked/ignored overlap the hazard
         // probe caches an answer about — newly ignoring a directory that holds
         // a tracked file — and that change reaches no watched git-internal
-        // file, so the cached answer has to be dropped here too.
-        this.trackedIgnoredProbe = null;
+        // file, so the cached answers have to be dropped here too.
+        this.invalidateIgnoreAnswers();
         this.pendingWorktreePaths = null;
         return;
       }
       pending.add(path);
+      if (event.type === "delete") {
+        this.pendingDeletedPaths.add(path);
+      } else {
+        this.pendingDeletedPaths.delete(path);
+      }
       if (pending.size > WORKTREE_BURST_PATH_CAP) {
         this.pendingWorktreePaths = null;
         return;
@@ -1181,6 +1212,32 @@ export class GitFileWatcher {
     return this.trackedIgnoredProbe;
   }
 
+  /**
+   * Stop trusting anything remembered about the ignore rules or the index. Only
+   * the remembering is fenced, not a burst decided by an answer already in
+   * flight: each event landing here brings its own later refresh, and that pass
+   * sees whatever such a burst wrote.
+   */
+  private invalidateIgnoreAnswers(): void {
+    this.trackedIgnoredProbe = null;
+    this.knownRelevantPaths = new Set();
+  }
+
+  /**
+   * A flush runs on a timer tick, where a throw would reach the workspace host's
+   * fatal `uncaughtException` handler. Logged, never retried.
+   */
+  private refreshAfterBurst(): void {
+    try {
+      this.onChange();
+    } catch (error) {
+      logWarn("Worktree status refresh threw while flushing a burst", {
+        path: this.worktreePath,
+        error: (error as Error)?.message ?? String(error),
+      });
+    }
+  }
+
   private abortClassification(): void {
     this.classifyGeneration += 1;
     if (this.classifyController) {
@@ -1205,6 +1262,8 @@ export class GitFileWatcher {
     // landing while they execute belongs to the next burst, not this one.
     const burst = this.pendingWorktreePaths;
     this.pendingWorktreePaths = new Set();
+    const deletedPaths = this.pendingDeletedPaths;
+    this.pendingDeletedPaths = new Set();
     const typedMembershipChange = this.pendingMembershipChange;
     this.pendingMembershipChange = false;
 
@@ -1216,6 +1275,10 @@ export class GitFileWatcher {
     this.abortClassification();
 
     if (this.disposed) return;
+
+    // An unknown burst may hold a rule edit nothing else reports: an overflow
+    // lost the event, and collection stops reading names once a burst is unknown.
+    if (burst === null) this.invalidateIgnoreAnswers();
 
     // Raw-filesystem signal first, and unconditionally: a browser subscriber
     // that only cares about files-on-disk shouldn't have to wait for the
@@ -1243,9 +1306,15 @@ export class GitFileWatcher {
       void this.verifyContentOnlyBurst([...burst], this.worktreeBurstStartedAt);
     }
 
+    // Dropped here, not as the delete arrives, so a classification answering
+    // between the two cannot put the path back after the fact.
+    const knownRelevant = this.knownRelevantPaths;
+    for (const path of deletedPaths) knownRelevant.delete(path);
+
+    // One relevant path decides the whole burst, so the rest need no answer.
     const paths = burst === null || superseded ? null : [...burst];
-    if (paths === null || paths.length === 0) {
-      this.onChange();
+    if (paths === null || paths.length === 0 || paths.some((path) => knownRelevant.has(path))) {
+      this.refreshAfterBurst();
       return;
     }
 
@@ -1270,6 +1339,13 @@ export class GitFileWatcher {
           // Skip only when EVERY path is provably irrelevant. A mixed burst
           // exits 0 too, so the exit code is not the test — membership is.
           if (!paths.every((path) => ignored.has(path))) {
+            for (const path of paths) {
+              if (!ignored.has(path) && !deletedPaths.has(path)) knownRelevant.add(path);
+            }
+            for (const oldest of knownRelevant) {
+              if (knownRelevant.size <= KNOWN_RELEVANT_PATH_CAP) break;
+              knownRelevant.delete(oldest);
+            }
             this.classifyController = null;
             this.onChange();
             return;
