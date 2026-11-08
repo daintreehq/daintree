@@ -257,9 +257,12 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
     mockSimpleGit.getRemotes.mockClear();
   }
 
-  /** Run a monitor's start probe (which must never seed the baseline). */
-  async function runStartProbe(monitor: WorktreeMonitor, remotes: Remote[]): Promise<void> {
-    mockSimpleGit.getRemotes.mockResolvedValue(remotes);
+  /**
+   * Run a monitor's start probe (which must never seed the baseline). It
+   * resolves from the shared table when one is held, so the remotes it sees are
+   * whatever the repo held at the last read — not a fresh mock value.
+   */
+  async function runStartProbe(monitor: WorktreeMonitor): Promise<void> {
     await service["probeForgeRemoteAsync"](monitor);
     mockSimpleGit.getRemotes.mockClear();
   }
@@ -273,8 +276,8 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
     it("probes the remote named by forgeRemote rather than origin", async () => {
       service["forgeRemoteName"] = "upstream";
       const main = registerMonitor("/test/main", { isMainWorktree: true });
-      await seedBaseline([]);
-      await runStartProbe(main, [ORIGIN_GITHUB, UPSTREAM_GITHUB]);
+      await seedBaseline([ORIGIN_GITHUB, UPSTREAM_GITHUB]);
+      await runStartProbe(main);
 
       expect(main.remoteFetchUrl).toBe("https://github.com/upstream/app.git");
     });
@@ -282,8 +285,8 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
     it("auto-detects a provider-matching remote when origin matches nothing", async () => {
       service["forgeRemoteName"] = null;
       const main = registerMonitor("/test/main", { isMainWorktree: true });
-      await seedBaseline([]);
-      await runStartProbe(main, [ORIGIN_INTERNAL, UPSTREAM_GITHUB]);
+      await seedBaseline([ORIGIN_INTERNAL, UPSTREAM_GITHUB]);
+      await runStartProbe(main);
 
       expect(main.getSnapshot().matchedForgeProviderId).toBe(GITHUB_PROVIDER_ID);
       expect(main.remoteFetchUrl).toBe("https://github.com/upstream/app.git");
@@ -294,17 +297,17 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
       // worktree PR badges must not read different repositories.
       service["forgeRemoteName"] = null;
       const main = registerMonitor("/test/main", { isMainWorktree: true });
-      await seedBaseline([]);
-      await runStartProbe(main, [ORIGIN_GITHUB, UPSTREAM_GITHUB]);
+      await seedBaseline([ORIGIN_GITHUB, UPSTREAM_GITHUB]);
+      await runStartProbe(main);
 
       expect(main.remoteFetchUrl).toBe("https://github.com/acme/app.git");
     });
 
     it("coalesces a burst of matcher pushes into one git read", async () => {
       // The relay fires on every registry change, so plugin init arrives as a
-      // burst — one `git remote -v` each would be pure waste.
+      // burst — one `git remote -v` each would be pure waste. No table is held
+      // yet, so the burst has to read once.
       registerMonitor("/test/main", { isMainWorktree: true });
-      await seedBaseline([]);
       mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
 
       for (let i = 0; i < 4; i++) {
@@ -326,12 +329,11 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
       service["forgeProviderMatchers"] = [];
       service["forgeRemoteName"] = null;
       const main = registerMonitor("/test/main", { isMainWorktree: true });
-      await seedBaseline([]);
-      await runStartProbe(main, [ORIGIN_INTERNAL, UPSTREAM_GITHUB]);
+      await seedBaseline([ORIGIN_INTERNAL, UPSTREAM_GITHUB]);
+      await runStartProbe(main);
       expect(main.remoteFetchUrl).toBe("https://git.internal.example/acme/app.git");
       expect(main.getSnapshot().matchedForgeProviderId).toBeFalsy();
 
-      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_INTERNAL, UPSTREAM_GITHUB]);
       service.setForgeProviderMatchers([
         { providerId: GITHUB_PROVIDER_ID, hostnames: ["github.com"] },
       ]);
@@ -340,6 +342,9 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
 
       expect(main.remoteFetchUrl).toBe("https://github.com/upstream/app.git");
       expect(main.getSnapshot().matchedForgeProviderId).toBe(GITHUB_PROVIDER_ID);
+      // Only the selection inputs moved, so the load's table still describes
+      // the repo: the matcher relay at plugin load costs no subprocess (#16427).
+      expect(mockSimpleGit.getRemotes).not.toHaveBeenCalled();
     });
 
     it("keeps the signature across ALL remotes, not just the selected one", async () => {
@@ -363,11 +368,10 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
       const MIRROR_GITHUB = remote("mirror", "https://github.com/mirror/app.git");
       service["forgeRemoteName"] = null;
       const main = registerMonitor("/test/main", { isMainWorktree: true });
-      await seedBaseline([]);
-      await runStartProbe(main, [ORIGIN_GITHUB, MIRROR_GITHUB]);
+      await seedBaseline([ORIGIN_GITHUB, MIRROR_GITHUB]);
+      await runStartProbe(main);
       expect(main.remoteFetchUrl).toBe("https://github.com/acme/app.git");
 
-      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB, MIRROR_GITHUB]);
       service.updateForgeSettings({
         forgeProviderOverride: null,
         forgeDefaultProviderId: null,
@@ -382,7 +386,7 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
   it("resolves the provider after an origin is added to a repo that had none", async () => {
     const main = registerMonitor("/test/main", { isMainWorktree: true });
     await seedBaseline([]);
-    await runStartProbe(main, []);
+    await runStartProbe(main);
     expect(main.getSnapshot().matchedForgeProviderId).toBeUndefined();
 
     mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
@@ -457,7 +461,7 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
     const main = registerMonitor("/test/main", { isMainWorktree: true });
     const gitlab = remote("origin", "https://gitlab.com/acme/app.git");
     await seedBaseline([gitlab]);
-    await runStartProbe(main, [gitlab]);
+    await runStartProbe(main);
     expect(main.getSnapshot().matchedForgeProviderId).toBeUndefined();
 
     mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
@@ -470,7 +474,7 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
   it("clears the provider when the origin is removed", async () => {
     const main = registerMonitor("/test/main", { isMainWorktree: true });
     await seedBaseline([ORIGIN_GITHUB]);
-    await runStartProbe(main, [ORIGIN_GITHUB]);
+    await runStartProbe(main);
     expect(main.getSnapshot().matchedForgeProviderId).toBe(GITHUB_PROVIDER_ID);
 
     mockSimpleGit.getRemotes.mockResolvedValue([]);
@@ -501,7 +505,7 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
   it("emits nothing when the git read fails", async () => {
     const main = registerMonitor("/test/main", { isMainWorktree: true });
     await seedBaseline([ORIGIN_GITHUB]);
-    await runStartProbe(main, [ORIGIN_GITHUB]);
+    await runStartProbe(main);
 
     mockSimpleGit.getRemotes.mockRejectedValue(new Error("not a git repository"));
     await fireConfigChange();
@@ -509,6 +513,459 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
     expect(sysRemoteChanged).not.toHaveBeenCalled();
     // The last-known provider survives a transient failure.
     expect(main.getSnapshot().matchedForgeProviderId).toBe(GITHUB_PROVIDER_ID);
+  });
+
+  describe("project load (#16427)", () => {
+    function loadWorktrees(ids: string[]): Worktree[] {
+      return ids.map((id, i) =>
+        createTestWorktree({ id, path: id, gitDir: `${id}/.git`, isMainWorktree: i === 0 })
+      );
+    }
+
+    beforeEach(() => {
+      service["gitBacked"] = true;
+    });
+
+    it("reads the remotes once for every worktree a load installs", async () => {
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      touchConfigFile();
+      service["startForgeRemoteDetection"]();
+
+      await service.syncMonitors(
+        loadWorktrees(["/test/main", "/test/feature-1", "/test/feature-2", "/test/feature-3"]),
+        null,
+        "main",
+        undefined,
+        true
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(1);
+      for (const monitor of service["monitors"].values()) {
+        expect(monitor.remoteFetchUrl).toBe("https://github.com/acme/app.git");
+        expect(monitor.getSnapshot().matchedForgeProviderId).toBe(GITHUB_PROVIDER_ID);
+      }
+    });
+
+    it("still resolves a worktree added after load", async () => {
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      touchConfigFile();
+      service["startForgeRemoteDetection"]();
+      await service.syncMonitors(loadWorktrees(["/test/main"]), null, "main", undefined, true);
+      await vi.advanceTimersByTimeAsync(0);
+      mockSimpleGit.getRemotes.mockClear();
+
+      await installLate();
+
+      const late = service["monitors"].get("/test/late")!;
+      expect(late.remoteFetchUrl).toBe("https://github.com/acme/app.git");
+      expect(late.getSnapshot().matchedForgeProviderId).toBe(GITHUB_PROVIDER_ID);
+      expect(mockSimpleGit.getRemotes).not.toHaveBeenCalled();
+    });
+
+    it("lets monitors installed mid-read join the load's pending read", async () => {
+      let releaseSeed: (remotes: Remote[]) => void = () => {};
+      mockSimpleGit.getRemotes.mockReturnValueOnce(
+        new Promise<Remote[]>((resolve) => {
+          releaseSeed = resolve;
+        })
+      );
+      touchConfigFile();
+      service["startForgeRemoteDetection"]();
+
+      await service.syncMonitors(
+        loadWorktrees(["/test/main", "/test/feature-1", "/test/feature-2"]),
+        null,
+        "main",
+        undefined,
+        true
+      );
+      expect(service["monitors"].size).toBe(3);
+      for (const monitor of service["monitors"].values()) {
+        expect(monitor.remoteFetchUrl).toBeUndefined();
+      }
+      releaseSeed([ORIGIN_GITHUB]);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(1);
+      for (const monitor of service["monitors"].values()) {
+        expect(monitor.remoteFetchUrl).toBe("https://github.com/acme/app.git");
+      }
+    });
+
+    async function loadThree(): Promise<void> {
+      await service.syncMonitors(
+        loadWorktrees(["/test/main", "/test/feature-1", "/test/feature-2"]),
+        null,
+        "main",
+        undefined,
+        true
+      );
+    }
+
+    it("shares one retry between every monitor when the load's read fails", async () => {
+      // A failure is never held as the table, so the monitors are not left
+      // unresolved — but they retry together, not once each.
+      let failSeed: () => void = () => {};
+      mockSimpleGit.getRemotes.mockReturnValueOnce(
+        new Promise<Remote[]>((_, reject) => {
+          failSeed = () => reject(new Error("git spawn failed"));
+        })
+      );
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      touchConfigFile();
+      service["startForgeRemoteDetection"]();
+      await loadThree();
+      expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(1);
+
+      failSeed();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(2);
+      for (const monitor of service["monitors"].values()) {
+        expect(monitor.remoteFetchUrl).toBe("https://github.com/acme/app.git");
+      }
+      // Only the load-time read may seed the baseline, and it failed.
+      expect(service["forgeRemoteSignature"]).toBeNull();
+    });
+
+    it("stops after one shared retry when git keeps failing", async () => {
+      let failSeed: () => void = () => {};
+      mockSimpleGit.getRemotes.mockReturnValueOnce(
+        new Promise<Remote[]>((_, reject) => {
+          failSeed = () => reject(new Error("not a git repository"));
+        })
+      );
+      mockSimpleGit.getRemotes.mockRejectedValue(new Error("not a git repository"));
+      touchConfigFile();
+      service["startForgeRemoteDetection"]();
+      await loadThree();
+
+      failSeed();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(2);
+      expect(service["forgeRemoteRead"]).toBeNull();
+    });
+
+    it("resolves monitors from a fresh read when the load's read is discarded", async () => {
+      // The config moved between the seed's two stats with no watcher event to
+      // say so: the seed's table may predate the change, so it is neither the
+      // baseline nor the table the monitors take.
+      let releaseSeed: (remotes: Remote[]) => void = () => {};
+      mockSimpleGit.getRemotes.mockReturnValueOnce(
+        new Promise<Remote[]>((resolve) => {
+          releaseSeed = resolve;
+        })
+      );
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      touchConfigFile();
+      service["startForgeRemoteDetection"]();
+      await loadThree();
+
+      touchConfigFile();
+      releaseSeed([]);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(service["forgeRemoteSignature"]).toBeNull();
+      expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(2);
+      for (const monitor of service["monitors"].values()) {
+        expect(monitor.remoteFetchUrl).toBe("https://github.com/acme/app.git");
+      }
+    });
+
+    it("moves a worktree added inside the reprobe window onto the new table", async () => {
+      await seedBaseline([]);
+      await service.syncMonitors(loadWorktrees(["/test/main"]), null, "main", undefined, true);
+      await vi.advanceTimersByTimeAsync(0);
+
+      // `git remote add` lands; the watcher sees it, and the worktree appears
+      // inside the reprobe's debounce window, before anything re-read git.
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      touchConfigFile();
+      service["scheduleForgeRemoteReprobe"]({ observedConfigWrite: true });
+      await installLate();
+      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(0);
+
+      for (const id of ["/test/main", "/test/late"]) {
+        expect(service["monitors"].get(id)!.remoteFetchUrl).toBe("https://github.com/acme/app.git");
+      }
+      expect(sysRemoteChanged).toHaveBeenCalledTimes(1);
+    });
+
+    async function installLate(): Promise<void> {
+      await service["addNewWorktreeMonitor"](
+        createTestWorktree({ id: "/test/late", path: "/test/late", gitDir: "/test/late/.git" }),
+        false,
+        true
+      );
+      await vi.advanceTimersByTimeAsync(0);
+    }
+  });
+
+  describe("shared remote table (#16427)", () => {
+    function holdNextRead(): (remotes: Remote[]) => void {
+      let release: (remotes: Remote[]) => void = () => {};
+      mockSimpleGit.getRemotes.mockReturnValueOnce(
+        new Promise<Remote[]>((resolve) => {
+          release = resolve;
+        })
+      );
+      return (remotes) => release(remotes);
+    }
+
+    it("a start read that lands after a newer reprobe cannot overwrite it", async () => {
+      const main = registerMonitor("/test/main", { isMainWorktree: true });
+      const releaseStart = holdNextRead();
+      const startProbe = service["probeForgeRemoteAsync"](main);
+
+      // The user adds the remote while the start read is still in git; the
+      // reprobe reads the new table and fans it out first.
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      await fireConfigChange();
+      expect(main.remoteFetchUrl).toBe("https://github.com/acme/app.git");
+
+      // The start read now returns the table from before the add.
+      releaseStart([]);
+      await startProbe;
+
+      expect(main.remoteFetchUrl).toBe("https://github.com/acme/app.git");
+      expect(main.getSnapshot().matchedForgeProviderId).toBe(GITHUB_PROVIDER_ID);
+    });
+
+    it("a start read superseded by a reprobe that fails still resolves", async () => {
+      // The reprobe took the slot and then failed, so it fanned nothing out:
+      // the stranded start read has to read again rather than give up.
+      const main = registerMonitor("/test/main", { isMainWorktree: true });
+      const releaseStart = holdNextRead();
+      const startProbe = service["probeForgeRemoteAsync"](main);
+
+      mockSimpleGit.getRemotes.mockRejectedValueOnce(new Error("git spawn failed"));
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      await fireConfigChange();
+
+      releaseStart([]);
+      await startProbe;
+
+      expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(3);
+      expect(main.remoteFetchUrl).toBe("https://github.com/acme/app.git");
+    });
+
+    it("an own start read that fails after a failed reprobe replaced it retries", async () => {
+      // Both reads failed, but only the reprobe's says anything about the repo
+      // now; the start read was stranded and nothing fanned out.
+      const main = registerMonitor("/test/main", { isMainWorktree: true });
+      let failStart: () => void = () => {};
+      mockSimpleGit.getRemotes.mockReturnValueOnce(
+        new Promise<Remote[]>((_, reject) => {
+          failStart = () => reject(new Error("git spawn failed"));
+        })
+      );
+      const startProbe = service["probeForgeRemoteAsync"](main);
+
+      mockSimpleGit.getRemotes.mockRejectedValueOnce(new Error("git spawn failed"));
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      await fireConfigChange();
+      failStart();
+      await startProbe;
+
+      expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(3);
+      expect(main.remoteFetchUrl).toBe("https://github.com/acme/app.git");
+    });
+
+    it("a reselect read started before the load's read cannot land over it", async () => {
+      // The load assigns the project root before it seeds, so a matcher push in
+      // that window starts a read the seed then replaces. Applying that older
+      // table after the seed consumed the fingerprint would stick for good.
+      const main = registerMonitor("/test/main", { isMainWorktree: true });
+      const releaseEarly = holdNextRead();
+      const reselect = service["reselectForgeRemote"]();
+
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      touchConfigFile();
+      service["startForgeRemoteDetection"]();
+      await vi.advanceTimersByTimeAsync(0);
+
+      releaseEarly([]);
+      await reselect;
+      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(main.remoteFetchUrl).toBe("https://github.com/acme/app.git");
+    });
+
+    it("a failed start read cannot clear the table a newer reprobe holds", async () => {
+      const main = registerMonitor("/test/main", { isMainWorktree: true });
+      let failStart: () => void = () => {};
+      mockSimpleGit.getRemotes.mockReturnValueOnce(
+        new Promise<Remote[]>((_, reject) => {
+          failStart = () => reject(new Error("git spawn failed"));
+        })
+      );
+      const startProbe = service["probeForgeRemoteAsync"](main);
+
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      await fireConfigChange();
+      failStart();
+      await startProbe;
+      mockSimpleGit.getRemotes.mockClear();
+
+      const late = registerMonitor("/test/late");
+      await service["probeForgeRemoteAsync"](late);
+
+      expect(mockSimpleGit.getRemotes).not.toHaveBeenCalled();
+      expect(late.remoteFetchUrl).toBe("https://github.com/acme/app.git");
+    });
+
+    it("a read landing for a monitor that was replaced is not applied to it", async () => {
+      const stale = registerMonitor("/test/main", { isMainWorktree: true });
+      const releaseStart = holdNextRead();
+      const startProbe = service["probeForgeRemoteAsync"](stale);
+
+      // Same id, new incarnation — the old one is still running.
+      registerMonitor("/test/main", { isMainWorktree: true });
+      releaseStart([ORIGIN_GITHUB]);
+      await startProbe;
+
+      expect(stale.remoteFetchUrl).toBeUndefined();
+    });
+
+    it("a replaced monitor does not retry a load read that failed", async () => {
+      let failSeed: () => void = () => {};
+      mockSimpleGit.getRemotes.mockReturnValueOnce(
+        new Promise<Remote[]>((_, reject) => {
+          failSeed = () => reject(new Error("git spawn failed"));
+        })
+      );
+      touchConfigFile();
+      service["startForgeRemoteDetection"]();
+      const stale = registerMonitor("/test/main", { isMainWorktree: true });
+      const startProbe = service["probeForgeRemoteAsync"](stale);
+
+      registerMonitor("/test/main", { isMainWorktree: true });
+      failSeed();
+      await startProbe;
+
+      expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(1);
+    });
+
+    it("a monitor's own failed read is final", async () => {
+      // As before the shared table: a repo whose enumeration keeps failing
+      // costs one read per monitor start, not one plus a retry.
+      const main = registerMonitor("/test/main", { isMainWorktree: true });
+      mockSimpleGit.getRemotes.mockRejectedValue(new Error("not a git repository"));
+
+      await service["probeForgeRemoteAsync"](main);
+
+      expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads the shared table at the project root, never a monitor's path", async () => {
+      // A monitor whose install straddled a project switch can still be
+      // running; a read from its path would hand its repo's remotes to every
+      // monitor of the incoming project.
+      const { createHardenedGit } = await import("../../utils/hardenedGit.js");
+      const straddler = registerMonitor("/old/main", { isMainWorktree: true });
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      vi.mocked(createHardenedGit).mockClear();
+
+      await service["probeForgeRemoteAsync"](straddler);
+
+      expect(vi.mocked(createHardenedGit).mock.calls.map((call) => call[0])).toEqual([
+        "/test/root",
+      ]);
+    });
+
+    it("reprobes at the project root, never a monitor's path", async () => {
+      const { createHardenedGit } = await import("../../utils/hardenedGit.js");
+      registerMonitor("/old/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      vi.mocked(createHardenedGit).mockClear();
+
+      await fireConfigChange();
+
+      expect(vi.mocked(createHardenedGit).mock.calls.map((call) => call[0])).toEqual([
+        "/test/root",
+      ]);
+    });
+
+    it("falls back to the listed main worktree once the project root is gone", async () => {
+      // The project root may be a linked worktree that is later removed; the
+      // main worktree outlives it. `/test/root` does not exist on disk.
+      const { createHardenedGit } = await import("../../utils/hardenedGit.js");
+      service["forgeMainWorktreePath"] = "/test/main";
+      registerMonitor("/old/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      vi.mocked(createHardenedGit).mockClear();
+
+      await fireConfigChange();
+      service["forgeRemoteRead"] = null;
+      await runStartProbe(registerMonitor("/test/late"));
+
+      expect(vi.mocked(createHardenedGit).mock.calls.map((call) => call[0])).toEqual([
+        "/test/main",
+        "/test/main",
+      ]);
+      service["projectRootPath"] = os.tmpdir();
+      vi.mocked(createHardenedGit).mockClear();
+      await fireConfigChange();
+      expect(vi.mocked(createHardenedGit).mock.calls[0]?.[0]).toBe(os.tmpdir());
+
+      service["stopForgeRemoteDetection"]();
+      expect(service["forgeMainWorktreePath"]).toBeNull();
+    });
+
+    it("a start read in flight across a project switch leaves no table behind", async () => {
+      const main = registerMonitor("/test/main", { isMainWorktree: true });
+      const releaseStart = holdNextRead();
+      const startProbe = service["probeForgeRemoteAsync"](main);
+
+      // `onProjectSwitch` stops and drops every monitor alongside the forge
+      // teardown.
+      service["monitors"].delete("/test/main");
+      main.stop();
+      service["stopForgeRemoteDetection"]();
+      releaseStart([ORIGIN_GITHUB]);
+      await startProbe;
+
+      expect(service["forgeRemoteRead"]).toBeNull();
+      expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(1);
+    });
+
+    it("a reselect in flight across a project switch does not retry", async () => {
+      // Its bounded retry would otherwise re-arm against the next project.
+      registerMonitor("/test/main", { isMainWorktree: true });
+      const releaseRead = holdNextRead();
+      const reselect = service["reselectForgeRemote"]();
+
+      service["stopForgeRemoteDetection"]();
+      releaseRead([ORIGIN_GITHUB]);
+      await reselect;
+      await vi.advanceTimersByTimeAsync(300 * 4);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(1);
+    });
+
+    it("re-reads git on a moved config even while a table is held", async () => {
+      const main = registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      await runStartProbe(main);
+
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      touchConfigFile();
+      // The backstop observes nothing, so nothing drops the table first.
+      service["scheduleForgeRemoteReprobe"]({ observedConfigWrite: false });
+      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(1);
+      expect(main.getSnapshot().matchedForgeProviderId).toBe(GITHUB_PROVIDER_ID);
+      expect(sysRemoteChanged).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("baseline seeding", () => {
@@ -525,7 +982,8 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
       touchConfigFile();
 
       // The start probe reads the post-add table (it lost the race with the user).
-      await runStartProbe(main, [ORIGIN_GITHUB]);
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      await runStartProbe(main);
       expect(main.getSnapshot().matchedForgeProviderId).toBe(GITHUB_PROVIDER_ID);
       expect(service["forgeRemoteSignature"]).toBeNull();
 

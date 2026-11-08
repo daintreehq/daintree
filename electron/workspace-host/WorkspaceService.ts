@@ -172,7 +172,10 @@ import {
   matchProviderForRemoteUrl,
   type ForgeProviderMatcher,
 } from "../../shared/utils/forgeHostnames.js";
-import { resolveForgeRemote } from "../../shared/utils/forgeRemoteSelection.js";
+import {
+  resolveForgeRemote,
+  type ForgeRemoteCandidate,
+} from "../../shared/utils/forgeRemoteSelection.js";
 import { applyResourceConfigToMonitor } from "./resourceConfigHelpers.js";
 import { ResourceActionExecutor } from "./ResourceActionExecutor.js";
 import { AttachmentService, type AttachmentActionResult } from "./AttachmentService.js";
@@ -304,6 +307,23 @@ const FORGE_CONFIG_POLL_INTERVAL_MS = 5 * 60 * 1000;
 // polling anyway. A stat on a dead mount never returns, and polling stranded
 // behind it would be worse than one check against a possibly stale provider.
 const FORGE_RESUME_SETTLE_TIMEOUT_MS = 5_000;
+
+// One read of the repo's remote table. Raw rather than the selected URL, so a
+// later `forgeRemote` or matcher change selects from it without re-reading git.
+interface ForgeRemoteTable {
+  remotes: ForgeRemoteCandidate[];
+  signature: string;
+}
+
+interface ForgeRemoteRead {
+  promise: Promise<ForgeRemoteTable | null>;
+  // Set once the read lands, and only while it still owns the slot.
+  table: ForgeRemoteTable | null;
+  // Lost the slot before landing. A stranded read's failure is not the repo's
+  // answer: the read that replaced it may itself have failed and fanned out
+  // nothing.
+  stranded: boolean;
+}
 
 // The fresh-base fetch a create can ask for (#15733), including any wait behind
 // a background fetch of the same repo. Under the 30s a workspace request and an
@@ -606,6 +626,18 @@ export class WorkspaceService {
   // config writes that already wake the watcher (`git push -u`,
   // `branch --set-upstream-to`) cost nothing and cannot churn the provider.
   private forgeRemoteSignature: string | null = null;
+  // The repo's remote table, shared by every consumer that only needs to know
+  // what the remotes ARE: monitor starts, reselects (#16427). Pending or
+  // landed. Kept apart from `forgeRemoteSignature`, which only the load-time
+  // read and the reprobe may set — a monitor-start read can race the user.
+  // Replaced by every reprobe that finds the config moved, so a read the slot
+  // no longer holds is stale and must not be applied.
+  private forgeRemoteRead: ForgeRemoteRead | null = null;
+  // The main worktree as this host's own enumeration listed it — never taken
+  // from a monitor, which may belong to a project being switched away from.
+  // Reads fall back to it once the project root, which can be a linked
+  // worktree, has been removed.
+  private forgeMainWorktreePath: string | null = null;
   // The project's selected forge remote *name* (#11408). Kept on the service
   // (not just handed to `pullRequestService`) because `readForgeRemotes` needs
   // it to pick the same remote the toolbar routes through — otherwise the
@@ -1278,6 +1310,7 @@ export class WorkspaceService {
       const rawWorktrees = await this.listService.list();
       const worktrees = await this.listService.mapToWorktrees(rawWorktrees);
       this.statusTiming.markEnumerated();
+      this.forgeMainWorktreePath = worktrees.find((wt) => wt.isMainWorktree)?.path ?? null;
 
       // Before the sync, so the holders it reconciles against are this
       // project's and every monitor it creates starts with its attachments.
@@ -2655,35 +2688,26 @@ export class WorkspaceService {
   }
 
   /**
-   * Read the repo's remote table once. Returns the selected remote's fetch URL
-   * plus a stable signature of every name→fetch-URL pair, used to tell
-   * a real remote change from an unrelated `.git/config` write. The signature
-   * stays in this process — remote URLs can carry embedded credentials.
+   * Read the repo's remote table once, with a stable signature of every
+   * name→fetch-URL pair, used to tell a real remote change from an unrelated
+   * `.git/config` write. Both stay in this process — remote URLs can carry
+   * embedded credentials.
    */
-  private async readForgeRemotes(
-    cwd: string
-  ): Promise<{ fetchUrl: string | undefined; signature: string } | null> {
+  private async readForgeRemotes(cwd: string): Promise<ForgeRemoteTable | null> {
     try {
       const git = await createHardenedGit(cwd);
-      const remotes = await git.getRemotes(true);
+      const remotes = (await git.getRemotes(true)).map((r) => ({
+        name: r.name,
+        fetchUrl: r.refs?.fetch ?? "",
+      }));
+      // Deliberately covers ALL remotes, not just the one selected: it answers
+      // "did the remote table change", independent of which entry we route
+      // through.
       const signature = remotes
-        .map((remote) => `${remote.name}\x00${remote.refs?.fetch ?? ""}`)
+        .map((remote) => `${remote.name}\x00${remote.fetchUrl}`)
         .sort()
         .join("\x01");
-      // Selection honours the project's `forgeRemote` setting (#11408). The
-      // signature above deliberately still covers ALL remotes: it answers "did
-      // the remote table change", independent of which entry we route through.
-      // A configured-but-missing remote selects nothing, leaving the
-      // affordance hidden rather than silently probing a different repo.
-      const { remote: selected } = resolveForgeRemote({
-        remotes: remotes.map((r) => ({ name: r.name, fetchUrl: r.refs?.fetch ?? "" })),
-        forgeRemote: this.forgeRemoteName,
-        // The host has no provider registry — it matches against the matcher
-        // table main relays via `setForgeProviderMatchers`.
-        isSupportedRemote: (url) =>
-          matchProviderForRemoteUrl(url, this.forgeProviderMatchers) !== null,
-      });
-      return { fetchUrl: selected?.fetchUrl, signature };
+      return { remotes, signature };
     } catch {
       // Remote probe is best-effort; keep the affordance hidden on failure.
       return null;
@@ -2691,22 +2715,116 @@ export class WorkspaceService {
   }
 
   /**
-   * Probe origin's fetch URL once at monitor start, remember it on the
-   * monitor, and resolve it against the relayed provider-matcher table. Runs
-   * off the critical path — failures are silent (the affordance simply stays
-   * hidden, which matches the unmatched-remote behavior). The remembered URL
-   * lets `setForgeProviderMatchers` re-match without re-probing git.
+   * Select the forge remote from a table and push it, with its matched
+   * provider, to the given monitors. Selection runs here rather than at read
+   * time so it always uses the current `forgeRemote` setting and matcher table.
+   */
+  private applyForgeRemoteTable(
+    table: ForgeRemoteTable,
+    monitors: Iterable<WorktreeMonitor>
+  ): void {
+    // Honours the project's `forgeRemote` setting (#11408). A
+    // configured-but-missing remote selects nothing, leaving the affordance
+    // hidden rather than silently probing a different repo.
+    const { remote: selected } = resolveForgeRemote({
+      remotes: table.remotes,
+      forgeRemote: this.forgeRemoteName,
+      // The host has no provider registry — it matches against the matcher
+      // table main relays via `setForgeProviderMatchers`.
+      isSupportedRemote: (url) =>
+        matchProviderForRemoteUrl(url, this.forgeProviderMatchers) !== null,
+    });
+    const fetchUrl = selected?.fetchUrl;
+    const matchedProviderId = fetchUrl
+      ? matchProviderForRemoteUrl(fetchUrl, this.forgeProviderMatchers)
+      : null;
+    for (const monitor of monitors) {
+      if (!monitor.isRunning) continue;
+      monitor.setRemoteFetchUrl(fetchUrl);
+      monitor.setMatchedForgeProviderId(matchedProviderId);
+    }
+  }
+
+  /**
+   * Install `read` as the shared remote table. The slot is taken
+   * synchronously, so a consumer arriving mid-read joins it instead of
+   * spawning a second `git remote`. A failed read frees the slot for the
+   * next consumer; a read that lost the slot publishes nothing.
+   */
+  private beginForgeRemoteRead(read: () => Promise<ForgeRemoteTable | null>): ForgeRemoteRead {
+    const settle = (table: ForgeRemoteTable | null): ForgeRemoteTable | null => {
+      if (this.forgeRemoteRead !== slot) slot.stranded = true;
+      else if (table) slot.table = table;
+      else this.forgeRemoteRead = null;
+      return table;
+    };
+    const slot: ForgeRemoteRead = {
+      promise: read().then(settle, () => settle(null)),
+      table: null,
+      stranded: false,
+    };
+    this.forgeRemoteRead = slot;
+    return slot;
+  }
+
+  /**
+   * Where remote reads run: never a monitor's path. An install that straddled
+   * a project switch can leave the old project's monitor running, and a read
+   * from its path would hand that repo's remotes to every incoming monitor.
+   */
+  private forgeRemoteCwd(): string | null {
+    const root = this.projectRootPath;
+    if (!root) return null;
+    // The root first: it is where the load-time read ran, and a linked
+    // worktree's own `config.worktree` can define remotes the main one lacks.
+    if (this.forgeMainWorktreePath && !existsSync(root)) return this.forgeMainWorktreePath;
+    return root;
+  }
+
+  /** The shared remote table, starting a read only when none is held. */
+  private sharedForgeRemoteRead(): ForgeRemoteRead | null {
+    if (this.forgeRemoteRead) return this.forgeRemoteRead;
+    const cwd = this.forgeRemoteCwd();
+    if (!cwd) return null;
+    return this.beginForgeRemoteRead(() => this.readForgeRemotes(cwd));
+  }
+
+  /**
+   * Resolve a newly started monitor's forge remote from the shared table,
+   * remember it on the monitor, and match it against the relayed
+   * provider-matcher table. Off the critical path — failures are silent (the
+   * affordance simply stays hidden, which matches the unmatched-remote
+   * behavior). The remembered URL lets `setForgeProviderMatchers` re-match
+   * without re-reading git.
+   *
+   * Every monitor of a load shares one read, and a worktree added later
+   * resolves from the table already held (#16427).
    */
   private async probeForgeRemoteAsync(monitor: WorktreeMonitor): Promise<void> {
-    const probed = await this.readForgeRemotes(monitor.path);
-    if (!probed) return;
-    monitor.setRemoteFetchUrl(probed.fetchUrl);
-    monitor.setMatchedForgeProviderId(
-      probed.fetchUrl
-        ? matchProviderForRemoteUrl(probed.fetchUrl, this.forgeProviderMatchers)
-        : null
-    );
-    // Deliberately does NOT seed `forgeRemoteSignature`. A monitor start probe
+    // A second pass covers a read that did not settle this monitor: one
+    // replaced while it waited (its table may predate the replacement's
+    // fan-out, so applying it would overwrite that), or one it only joined
+    // that came back empty — the load's read, failed or discarded. A failed
+    // read this monitor started itself, and still held, is final, as before,
+    // so a repo whose enumeration keeps failing costs one read per monitor.
+    for (let pass = 0; pass < 2; pass++) {
+      // Checked before every read: a monitor torn down by a project switch must
+      // not start one.
+      if (this.monitors.get(monitor.id) !== monitor || !monitor.isRunning) return;
+      if (this._shutdownController.signal.aborted) return;
+      const joined = this.forgeRemoteRead !== null;
+      const read = this.sharedForgeRemoteRead();
+      if (!read) return;
+      const table = await read.promise;
+      if (table && this.forgeRemoteRead === read) {
+        if (this.monitors.get(monitor.id) === monitor) {
+          this.applyForgeRemoteTable(table, [monitor]);
+        }
+        return;
+      }
+      if (!table && !joined && !read.stranded) return;
+    }
+    // Deliberately never seeds `forgeRemoteSignature`. A monitor start read
     // races the user: it can complete AFTER a `git remote add` and would then
     // record the post-change remotes as the "before" baseline, leaving the
     // reprobe with an equal signature and nothing to emit — the toolbar would
@@ -2763,7 +2881,7 @@ export class WorkspaceService {
   }
 
   private async runForgeRemoteReprobe(): Promise<void> {
-    const cwd = this.forgeProbeCwd();
+    const cwd = this.forgeRemoteCwd();
     if (!cwd) return;
     const seq = ++this.forgeRemoteProbeSeq;
 
@@ -2781,7 +2899,10 @@ export class WorkspaceService {
     if (seq !== this.forgeRemoteProbeSeq) return;
     if (fingerprint !== null && fingerprint === this.forgeConfigFingerprint) return;
 
-    const probed = await this.readForgeRemotes(cwd);
+    // Always a fresh read, never the shared table: the fingerprint just said
+    // the config moved. Replacing the slot also strands any older read still
+    // in flight, so it can no longer land on a monitor after this fan-out.
+    const probed = await this.beginForgeRemoteRead(() => this.readForgeRemotes(cwd)).promise;
     // A dispose (or a newer probe) landed while git ran: the monitors this one
     // would touch may already be stopped, and its read is no longer the truth.
     if (!probed || seq !== this.forgeRemoteProbeSeq) return;
@@ -2794,14 +2915,7 @@ export class WorkspaceService {
     // transient git failure would leave the change permanently marked as seen.
     this.forgeConfigFingerprint = fingerprint;
 
-    const matchedProviderId = probed.fetchUrl
-      ? matchProviderForRemoteUrl(probed.fetchUrl, this.forgeProviderMatchers)
-      : null;
-    for (const monitor of this.monitors.values()) {
-      if (!monitor.isRunning) continue;
-      monitor.setRemoteFetchUrl(probed.fetchUrl);
-      monitor.setMatchedForgeProviderId(matchedProviderId);
-    }
+    this.applyForgeRemoteTable(probed, this.monitors.values());
 
     if (probed.signature === this.forgeRemoteSignature) return;
     this.forgeRemoteSignature = probed.signature;
@@ -2813,21 +2927,6 @@ export class WorkspaceService {
     // provider resolution and re-runs the full precedence chain (per-project
     // override → global default → hostname match).
     this.sendEvent({ type: "forge-remote-changed" });
-  }
-
-  /**
-   * Any running monitor resolves the same remotes — they share one common dir.
-   * Prefer the main worktree (longest-lived), then any running monitor, then
-   * the project root for the window between load and the first monitor start.
-   */
-  private forgeProbeCwd(): string | null {
-    for (const monitor of this.monitors.values()) {
-      if (monitor.isRunning && monitor.isMainWorktree) return monitor.path;
-    }
-    for (const monitor of this.monitors.values()) {
-      if (monitor.isRunning) return monitor.path;
-    }
-    return this.projectRootPath;
   }
 
   /**
@@ -2866,9 +2965,18 @@ export class WorkspaceService {
     if (!rootPath) return;
     this.forgeRemoteDetectionActive = true;
 
-    const seq = this.forgeRemoteProbeSeq;
+    // Bumped, not just read: the seed replaces whatever holds the slot, and a
+    // reselect read started since the last stop (the load assigns the root
+    // before it gets here) would otherwise pass its sequence check and apply
+    // a table older than this one, after the seed has already consumed the
+    // fingerprint that would have flagged it.
+    const seq = ++this.forgeRemoteProbeSeq;
     const epoch = this.forgeConfigEpoch;
-    void (async () => {
+    // Held in the shared slot, so the monitors this load installs take their
+    // remotes from this one read rather than one `git remote` each (#16427).
+    // The table is published only when the baseline below is trustworthy; a
+    // discarded read frees the slot and the monitors share one fresh read.
+    this.beginForgeRemoteRead(async () => {
       // stat → read → stat. The remote table and the fingerprint must describe
       // the SAME config, or the pair is incoherent: pre-change remotes stamped
       // with a post-change fingerprint would make the backstop consider the
@@ -2883,11 +2991,12 @@ export class WorkspaceService {
       // already contain the change it is supposed to precede). Leaving the
       // baseline null is the safe failure — the next reprobe then sees
       // `signature !== null` and emits.
-      if (seq !== this.forgeRemoteProbeSeq || epoch !== this.forgeConfigEpoch) return;
-      if (before !== after) return;
+      if (seq !== this.forgeRemoteProbeSeq || epoch !== this.forgeConfigEpoch) return null;
+      if (before !== after) return null;
       if (probed) this.forgeRemoteSignature ??= probed.signature;
       this.forgeConfigFingerprint ??= after;
-    })();
+      return probed;
+    });
 
     if (!this.backgrounded) this.armForgeConfigBackstop();
   }
@@ -2928,6 +3037,11 @@ export class WorkspaceService {
     this.forgeRemoteProbeSeq++;
     this.forgeRemoteSignature = null;
     this.forgeConfigFingerprint = null;
+    this.forgeRemoteRead = null;
+    this.forgeMainWorktreePath = null;
+    // Ends an in-flight reselect outright: its bounded retry would otherwise
+    // re-arm against whatever project loads next.
+    this.forgeReselectSeq++;
   }
 
   /**
@@ -3590,6 +3704,7 @@ export class WorkspaceService {
     }
 
     const worktrees = await this.listService.mapToWorktrees(rawWorktrees);
+    this.forgeMainWorktreePath = worktrees.find((wt) => wt.isMainWorktree)?.path ?? null;
 
     await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true);
   }
@@ -6027,8 +6142,8 @@ export class WorkspaceService {
    * fingerprint and signature gates: neither moved, only the choice did.
    */
   private scheduleForgeReselect(): void {
-    // A folder with no repository has no remotes to reselect from, and
-    // `forgeProbeCwd` falls back to the project root — so without this the
+    // A folder with no repository has no remotes to reselect from, and the
+    // shared read falls back to the project root — so without this the
     // matcher relay would spawn `git remote -v` there and, on its bounded
     // re-arm, up to three more times per registry change (#11405 × #11408).
     // Left at `=== false` where the monitor-minting guards moved to `!== true`:
@@ -6049,8 +6164,6 @@ export class WorkspaceService {
     // Guarded here as well as in `scheduleForgeReselect`: `updateForgeSettings`
     // calls this one directly, so the debounced path is not the only way in.
     if (this.gitBacked === false) return;
-    const cwd = this.forgeProbeCwd();
-    if (!cwd) return;
     // Its OWN sequence — it only makes two rapid setting changes land in order.
     const seq = ++this.forgeReselectSeq;
     // Snapshot WITHOUT bumping: bumping `forgeRemoteProbeSeq` would cancel an
@@ -6061,7 +6174,12 @@ export class WorkspaceService {
     // settings change. The same check covers teardown and project switch,
     // which bump the probe seq in `stopForgeRemoteDetection`.
     const probeSeq = this.forgeRemoteProbeSeq;
-    const probed = await this.readForgeRemotes(cwd);
+    // The shared table, not a fresh read: only the selection inputs moved, and
+    // a matcher relay at plugin load would otherwise spawn `git remote` on top
+    // of the load's own read.
+    const read = this.sharedForgeRemoteRead();
+    if (!read) return;
+    const probed = await read.promise;
     // A newer reselect is already authoritative — drop this one outright.
     if (seq !== this.forgeReselectSeq) return;
     // The other two bail-outs are NOT terminal, so they re-arm the debounce
@@ -6084,14 +6202,7 @@ export class WorkspaceService {
     this.forgeReselectRetries = 0;
     if (this._shutdownController.signal.aborted) return;
 
-    const matchedProviderId = probed.fetchUrl
-      ? matchProviderForRemoteUrl(probed.fetchUrl, this.forgeProviderMatchers)
-      : null;
-    for (const monitor of this.monitors.values()) {
-      if (!monitor.isRunning) continue;
-      monitor.setRemoteFetchUrl(probed.fetchUrl);
-      monitor.setMatchedForgeProviderId(matchedProviderId);
-    }
+    this.applyForgeRemoteTable(probed, this.monitors.values());
   }
 
   /**
