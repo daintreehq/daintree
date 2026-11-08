@@ -324,7 +324,10 @@ const scratchSwitch: HybridSplit = async ({ hostId, webContentsId, args, remote 
   return scratch;
 };
 
-/** Editors that open a folder or file on an SSH host through the VS Code remote URL. */
+/**
+ * Editors that open a folder or file on an SSH host through the VS Code remote
+ * URL. Zed has its own form; see `remoteEditorRoot`.
+ */
 const REMOTE_EDITOR_SCHEMES: Partial<Record<EditorConfig["id"], string>> = {
   vscode: "vscode",
   "vscode-insiders": "vscode-insiders",
@@ -346,28 +349,68 @@ function remoteSshAuthority(sshTarget: string): string {
   return `ssh-remote+${encoded}`;
 }
 
+/**
+ * A target Zed's `zed://ssh/` link gives back as the same user and host. Stricter
+ * than the transport: Zed decodes `%` in a user, can't parse brackets that aren't
+ * an IPv6 address, and would read `@-x` as a host of `-x`. The target is a path
+ * segment of the link, so a bare `.` or `..` would be resolved away before Zed sees it.
+ */
+const ZED_SSH_TARGET = /^(?!\.\.?$)(?:[\w.+-]+@)*[\w.+][\w.+-]*$/;
+
+/** Host paths Zed wouldn't open as spelled. Encoding can't save them: it decodes before reading. */
+const ZED_MISREAD_PATHS = [
+  // Expanded on the host, as `~/x` or `~user/x`.
+  /^\/~/,
+  // Resolved in the link before Zed sees it, where `/../x` would replace the target.
+  /\/\.\.?(?:\/|$)/,
+  // Zed reads a position out of a file name: `a:5` at line 12 opens `a` at 5:12.
+  /:[^/]*\/*$/,
+  // Likewise `a(1)`, if it has gone from the host by the time Zed looks.
+  /\(\d+(?:,\d+)?\)\s*\/*$/,
+];
+
+/** Zed parses a line or column as a u32; a larger one would be taken as part of the file name. */
+const MAX_EDITOR_POSITION = 0xffffffff;
+
+type RemoteEditorHost = { sshTarget: string } | { wslDistro: string };
+
+/** The editor's remote URL up to the path, or null when it can't reach this host. */
+function remoteEditorRoot(editorId: EditorConfig["id"], host: RemoteEditorHost): string | null {
+  if (editorId === "zed") {
+    // Zed's WSL remote has no URL, only its CLI's `--wsl`.
+    if ("wslDistro" in host) return null;
+    if (!isValidSshTarget(host.sshTarget) || !ZED_SSH_TARGET.test(host.sshTarget)) return null;
+    return `zed://ssh/${host.sshTarget}`;
+  }
+  const scheme = REMOTE_EDITOR_SCHEMES[editorId];
+  if (!scheme) return null;
+  // The same grammar the connection itself accepts, so every host that connects can open files.
+  if ("wslDistro" in host) {
+    if (!isValidWslDistroName(host.wslDistro)) return null;
+    // The WSL remote's authority: `wsl+<distro>`, encoded so a space survives.
+    return `${scheme}://vscode-remote/wsl+${encodeURIComponent(host.wslDistro)}`;
+  }
+  if (!isValidSshTarget(host.sshTarget)) return null;
+  return `${scheme}://vscode-remote/${remoteSshAuthority(host.sshTarget)}`;
+}
+
 export function buildRemoteEditorUrl(
   options: {
     editorId: EditorConfig["id"] | null;
     path: string;
     line?: number;
     col?: number;
-  } & ({ sshTarget: string } | { wslDistro: string })
+  } & RemoteEditorHost
 ): string | null {
-  const scheme = REMOTE_EDITOR_SCHEMES[options.editorId ?? "vscode"];
-  if (!scheme) return null;
-  // The same grammar the connection itself accepts, so every host that connects can open files.
-  let authority: string;
-  if ("wslDistro" in options) {
-    if (!isValidWslDistroName(options.wslDistro)) return null;
-    // The WSL remote's authority: `wsl+<distro>`, encoded so a space survives.
-    authority = `wsl+${encodeURIComponent(options.wslDistro)}`;
-  } else {
-    if (!isValidSshTarget(options.sshTarget)) return null;
-    authority = remoteSshAuthority(options.sshTarget);
-  }
+  const editorId = options.editorId ?? "vscode";
+  const root = remoteEditorRoot(editorId, options);
+  if (!root) return null;
   if (!options.path.startsWith("/") || /[\0\r\n]/.test(options.path)) return null;
-  const isPosition = (n: number | undefined) => n === undefined || (Number.isInteger(n) && n > 0);
+  if (editorId === "zed" && ZED_MISREAD_PATHS.some((misread) => misread.test(options.path))) {
+    return null;
+  }
+  const isPosition = (n: number | undefined) =>
+    n === undefined || (Number.isInteger(n) && n > 0 && n <= MAX_EDITOR_POSITION);
   if (!isPosition(options.line) || !isPosition(options.col)) return null;
   // Per segment, so `?` and `#` in a file name stay part of the path.
   const encodedPath = options.path.split("/").map(encodeURIComponent).join("/");
@@ -375,7 +418,7 @@ export function buildRemoteEditorUrl(
     options.line !== undefined
       ? `:${options.line}${options.col !== undefined ? `:${options.col}` : ""}`
       : "";
-  return `${scheme}://vscode-remote/${authority}${encodedPath}${position}`;
+  return `${root}${encodedPath}${position}`;
 }
 
 /**
