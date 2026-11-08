@@ -8,6 +8,9 @@ import {
 import {
   getActiveCompletionContext,
   getDaintreeAtClaim,
+  getAllAtNotesTokens,
+  formatAtNotesToken,
+  matchesNotesPrefix,
   matchesDiffPrefix,
   matchesTerminalPrefix,
   matchesSelectionPrefix,
@@ -217,6 +220,89 @@ describe("getDaintreeAtClaim + prefix matchers", () => {
   it("falls through to file search for non-provider queries", () => {
     expect(getDaintreeAtClaim("src/")).toBeNull();
     expect(getDaintreeAtClaim("ters")).toBeNull();
+  });
+});
+
+describe("@notes", () => {
+  it("claims only while notes are on offer, from four chars in", () => {
+    expect(getDaintreeAtClaim("note")).toBeNull();
+    expect(getDaintreeAtClaim("notes:src")).toBeNull();
+    expect(getDaintreeAtClaim("not", true)).toBeNull();
+    expect(getDaintreeAtClaim("note", true)).toBe("notes");
+    expect(getDaintreeAtClaim("notes", true)).toBe("notes");
+    expect(getDaintreeAtClaim("notes:src/a", true)).toBe("notes");
+    // A file search once the letters stop spelling the word.
+    expect(getDaintreeAtClaim("notes.md", true)).toBeNull();
+    expect(getDaintreeAtClaim("notebook", true)).toBeNull();
+    // A bare `@` is still the diff rows' claim.
+    expect(getDaintreeAtClaim("", true)).toBe("diff");
+    expect(matchesNotesPrefix("no")).toBe(false);
+  });
+
+  it("reads the bare token and the per-file form, plain and quoted", () => {
+    expect(getAllAtNotesTokens("@notes")).toEqual([{ start: 0, end: 6, filePath: null }]);
+    expect(getAllAtNotesTokens("see @notes:src/a.ts now")).toEqual([
+      { start: 4, end: 19, filePath: "src/a.ts" },
+    ]);
+    expect(getAllAtNotesTokens('@notes:"my dir/a b.ts" now')).toEqual([
+      { start: 0, end: 22, filePath: "my dir/a b.ts" },
+    ]);
+    expect(getAllAtNotesTokens('@notes:"a \\"b\\".ts"')).toEqual([
+      { start: 0, end: 19, filePath: 'a "b".ts' },
+    ]);
+  });
+
+  it("leaves a sentence's punctuation outside a per-file token", () => {
+    const [token] = getAllAtNotesTokens("Fix @notes:src/a.ts, then stop");
+    expect(token).toEqual({ start: 4, end: 19, filePath: "src/a.ts" });
+  });
+
+  it("ignores what only looks like the token", () => {
+    for (const text of [
+      "me@notes",
+      "@notes.",
+      "@notes,",
+      "@notesy",
+      "@notes:",
+      '@notes:"',
+      '@notes:"unterminated path',
+      '@notes:""',
+      '@notes:"a\nb"',
+      "@Notes",
+    ]) {
+      expect(getAllAtNotesTokens(text), text).toEqual([]);
+    }
+  });
+
+  it("round-trips every path a worktree can hold", () => {
+    for (const filePath of [
+      "src/a.ts",
+      "my dir/a b.ts",
+      'quo"te.ts',
+      "ends-with.",
+      "comma,",
+      "paren)",
+      "colon:",
+      "with:colon.ts",
+    ]) {
+      const token = formatAtNotesToken(filePath);
+      expect(getAllAtNotesTokens(`Fix ${token} now`), token).toEqual([
+        { start: 4, end: 4 + token.length, filePath },
+      ]);
+    }
+    expect(formatAtNotesToken(null)).toBe("@notes");
+    expect(formatAtNotesToken("src/a.ts")).toBe("@notes:src/a.ts");
+    expect(formatAtNotesToken("a b.ts")).toBe('@notes:"a b.ts"');
+  });
+
+  it("keeps a real file named notes a path, and out of a chip's way", () => {
+    expect(formatAtFileToken("notes")).toBe("@./notes");
+    expect(getAllAtContextReferences("@notes:src/a.ts")).toEqual([]);
+  });
+
+  it("stays literal inside a handoff block", () => {
+    const handoff = formatAgentContextBlock({ text: "see @notes", title: "Card" });
+    expect(getAllAtNotesTokens(`Read this\n${handoff}`)).toEqual([]);
   });
 });
 

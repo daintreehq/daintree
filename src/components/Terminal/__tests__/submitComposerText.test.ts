@@ -18,6 +18,18 @@ beforeEach(() => {
 });
 
 describe("submitComposerText", () => {
+  it("carries a submission token only when given one", async () => {
+    client.submit.mockResolvedValue(undefined);
+    client.submitWithImages.mockResolvedValue(undefined);
+
+    await submitComposerText("t1", "plain", undefined);
+    expect(client.submit).toHaveBeenLastCalledWith("t1", "plain");
+    await submitComposerText("t1", "notes", undefined, "token-1");
+    expect(client.submit).toHaveBeenLastCalledWith("t1", "notes", "token-1");
+    await submitComposerText("t1", "notes", ["/a.png"], "token-2");
+    expect(client.submitWithImages).toHaveBeenLastCalledWith("t1", "notes", ["/a.png"], "token-2");
+  });
+
   it("says the terminal accepted it only once the submission resolves", async () => {
     let accept!: () => void;
     client.submit.mockReturnValue(

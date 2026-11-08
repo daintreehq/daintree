@@ -2,8 +2,8 @@ import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store/panelStore";
 import { selectDiffNotes, useDiffNotesStore } from "@/store/diffNotesStore";
+import { isAgentPasteTarget } from "@/components/Worktree/diffNoteAgentTarget";
 import { partitionPendingDiffNotes, type PendingDiffNotes } from "@/components/Worktree/diffNotes";
-import { isAgentPasteTarget } from "../diffNotesReference";
 
 /**
  * The pending notes a composer's `@notes` would take, or `null` where it can't

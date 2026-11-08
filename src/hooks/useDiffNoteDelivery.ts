@@ -15,7 +15,7 @@ import {
   sortDiffNotes,
   type DiffNote,
 } from "@/components/Worktree/diffNotes";
-import { isAgentPasteTarget } from "@/components/Terminal/diffNotesReference";
+import { isAgentPasteTarget } from "@/components/Worktree/diffNoteAgentTarget";
 
 export interface DiffNoteTarget {
   id: string;

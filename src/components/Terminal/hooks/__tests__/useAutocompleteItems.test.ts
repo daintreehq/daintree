@@ -6,6 +6,7 @@ import type { ActiveCompletionContext } from "../../hybridInputParsing";
 import type { AutocompleteItem } from "../../AutocompleteMenu";
 import type { CompletionTrigger } from "@shared/types";
 import type { ForgeReference } from "../../forgeReferences";
+import type { DiffNote, PendingDiffNotes } from "@/components/Worktree/diffNotes";
 
 function atContext(query: string): ActiveCompletionContext {
   return { triggerChar: "@", start: 0, tokenEnd: query.length + 1, query };
@@ -103,6 +104,94 @@ describe("useAutocompleteItems", () => {
     const items = result.current.autocompleteItems;
     expect(items).toHaveLength(3);
     expect(items.every((i) => i.key.startsWith("diff"))).toBe(true);
+  });
+
+  describe("@notes rows", () => {
+    const note = (filePath: string): DiffNote => ({
+      id: filePath,
+      worktreePath: "/repo",
+      filePath,
+      anchor: { kind: "file" },
+      body: "Note",
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    const items = (query: string, pendingDiffNotes: PendingDiffNotes | null) =>
+      renderHook(() =>
+        useAutocompleteItems({
+          ...baseParams,
+          activeCompletionContext: atContext(query),
+          autocompleteFiles: ["notes.md"],
+          pendingDiffNotes,
+        })
+      ).result.current.autocompleteItems;
+    const pending: PendingDiffNotes = {
+      sendable: [note("src/b.ts"), note("src/a.ts"), note("src/a.ts"), note("my dir/c d.ts")],
+      editing: [],
+    };
+
+    it("offers nothing while nothing is pending, or where notes can't go", () => {
+      const none: PendingDiffNotes = { sendable: [], editing: [] };
+      for (const absent of [null, none]) {
+        expect(items("", absent).map((i) => i.key)).toEqual(["diff", "diff:staged", "diff:head"]);
+        // The letters go on looking for a file.
+        expect(items("notes", absent).map((i) => i.key)).toEqual(["notes.md"]);
+        expect(items("notes:src", absent).map((i) => i.key)).toEqual(["notes.md"]);
+      }
+    });
+
+    it("shows on a bare @ after the diff rows, so @ and Enter still picks a diff", () => {
+      expect(items("", pending).map((i) => i.key)).toEqual([
+        "diff",
+        "diff:staged",
+        "diff:head",
+        "notes",
+        "notes:my dir/c d.ts",
+        "notes:src/a.ts",
+        "notes:src/b.ts",
+      ]);
+    });
+
+    it("says how many each row would send, and inserts a token that reads back whole", () => {
+      const rows = items("notes", pending);
+      expect(rows[0]).toMatchObject({
+        label: "@notes",
+        badge: "4 notes",
+        insertText: "@notes",
+        enterAction: "insert",
+        insert: { insert: "resolve", resolverId: "notes" },
+      });
+      expect(rows.find((i) => i.key === "notes:src/a.ts")).toMatchObject({
+        label: "@notes:a.ts",
+        description: "src",
+        descriptionKind: "path",
+        badge: "2 notes",
+        insertText: "@notes:src/a.ts",
+      });
+      expect(rows.find((i) => i.key === "notes:my dir/c d.ts")).toMatchObject({
+        insertText: '@notes:"my dir/c d.ts"',
+      });
+    });
+
+    it("narrows to matching files once a path is being typed", () => {
+      expect(items("notes:", pending).map((i) => i.key)).toEqual([
+        "notes:my dir/c d.ts",
+        "notes:src/a.ts",
+        "notes:src/b.ts",
+      ]);
+      expect(items("notes:SRC/A", pending).map((i) => i.key)).toEqual(["notes:src/a.ts"]);
+      expect(items('notes:"my', pending).map((i) => i.key)).toEqual(["notes:my dir/c d.ts"]);
+      expect(items("notes:zzz", pending)).toEqual([]);
+    });
+
+    it("still offers a note in an open editor, saying it won't go yet", () => {
+      const rows = items("notes", { sendable: [], editing: [note("src/a.ts")] });
+      expect(rows.map((i) => i.badge)).toEqual(["Being edited", "Being edited"]);
+    });
+
+    it("leaves a file search alone once the letters stop spelling the word", () => {
+      expect(items("notes.", pending).map((i) => i.key)).toEqual(["notes.md"]);
+    });
   });
 
   it("filters diff items by partial and carries the diff resolver + insert action", () => {

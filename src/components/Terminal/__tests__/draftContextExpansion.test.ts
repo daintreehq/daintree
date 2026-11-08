@@ -21,6 +21,14 @@ describe("listDraftContextTokens", () => {
     ]);
   });
 
+  it("names @notes and each per-file form as notes, so a fleet previews and refuses them", () => {
+    expect(listDraftContextTokens('@notes and @notes:src/a.ts and @notes:"my file.ts"')).toEqual([
+      { text: "@notes", kind: "notes" },
+      { text: "@notes:src/a.ts", kind: "notes" },
+      { text: '@notes:"my file.ts"', kind: "notes" },
+    ]);
+  });
+
   it("finds nothing in plain text, an email address, or a handed-off block", () => {
     expect(listDraftContextTokens("send it to me@diff.dev")).toEqual([]);
     const handoff = formatAgentContextBlock({ text: "see @diff", title: "Notes" });

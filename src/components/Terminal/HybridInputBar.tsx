@@ -1507,7 +1507,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           setSendNote(dictated ? null : { terminalId, refused: false });
           let accepted: boolean;
           try {
-            accepted = await submit(outgoing, submissionToken);
+            accepted = await (submissionToken === undefined
+              ? submit(outgoing)
+              : submit(outgoing, submissionToken));
           } catch {
             accepted = false;
           }
@@ -1555,7 +1557,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           // expansion awaited in between can outlast a lock or a restart.
           submit: notingRefusal(
             (outgoing, submissionToken) =>
-              submitTextRef.current?.(outgoing, imagePaths, submissionToken) ??
+              (submissionToken === undefined
+                ? submitTextRef.current?.(outgoing, imagePaths)
+                : submitTextRef.current?.(outgoing, imagePaths, submissionToken)) ??
               Promise.resolve(false),
             dictated
           ),

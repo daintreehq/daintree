@@ -15,6 +15,7 @@ import { act, renderHook } from "@testing-library/react";
 import { createRef, type RefObject } from "react";
 import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 import type { HybridInputBarHandle } from "../HybridInputBar";
+import type { ComposerSubmitOutcome } from "../hooks/useTokenResolution";
 import type { WorktreeMoveDeliveryRoute } from "../useWorktreeMoveBanner";
 
 const mockDispatch = vi.fn();
@@ -112,9 +113,11 @@ function noticeOf(id: string): string | undefined {
 const NOTICE = { worktreeMoveNotice: { destinationWorktreeId: "wt-b" } };
 
 /** A stand-in for the mounted bar. `submit` is the hook's own guarded callback. */
-function stubBar(behaviour: (submit: (text: string) => Promise<boolean>) => Promise<boolean>) {
-  const submitWithInstruction = vi.fn(
-    async (_instruction: string, submit: (text: string) => Promise<boolean>) => behaviour(submit)
+type BarSubmit = (text: string) => Promise<ComposerSubmitOutcome>;
+
+function stubBar(behaviour: (submit: BarSubmit) => Promise<ComposerSubmitOutcome>) {
+  const submitWithInstruction = vi.fn(async (_instruction: string, submit: BarSubmit) =>
+    Boolean(await behaviour(submit))
   );
   const ref = createRef<HybridInputBarHandle>() as RefObject<HybridInputBarHandle | null>;
   ref.current = {
@@ -285,6 +288,21 @@ describe("useWorktreeMoveBanner", () => {
   });
 
   describe("hybrid route", () => {
+    it("tells the bar the token the action minted, for the draft's notes to clear by", async () => {
+      seed(panel("t-1", NOTICE));
+      mockDispatch.mockResolvedValue({ ok: true, result: { submissionToken: "minted" } });
+      let outcome: unknown;
+      const { ref } = stubBar(async (submit) => {
+        outcome = await submit("INSTRUCTION");
+        return true;
+      });
+      const { result } = render("t-1", "hybrid", ref);
+
+      await tell(result);
+
+      expect(outcome).toEqual({ submissionToken: "minted" });
+    });
+
     it("delegates to the mounted bar and dispatches what the bar composed", async () => {
       seed(panel("t-1", NOTICE));
       const { ref, submitWithInstruction } = forwardingBar("look at this");

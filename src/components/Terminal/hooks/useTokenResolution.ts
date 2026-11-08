@@ -357,7 +357,9 @@ export function useTokenResolution({
           // Tracked only when notes depend on it: every token is a record the
           // terminal keeps, and an ordinary send costs nothing.
           const submissionToken = diffNotes.length > 0 ? crypto.randomUUID() : undefined;
-          const outcome = await options.submit(outgoing, submissionToken);
+          const outcome = await (submissionToken === undefined
+            ? options.submit(outgoing)
+            : options.submit(outgoing, submissionToken));
           // Nothing below this line runs on a refused submission — the draft the
           // user can still see is the draft they still have.
           if (!outcome) return false;
