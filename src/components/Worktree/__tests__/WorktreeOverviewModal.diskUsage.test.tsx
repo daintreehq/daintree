@@ -44,7 +44,7 @@ const worktrees = [
   makeWorktree(`${ROOT}-wt-pending`, "pending", 1_000),
 ];
 
-const SIZES: Record<string, number | null> = {
+const SIZES: Record<string, number> = {
   [ROOT]: 500,
   [`${ROOT}-wt-small`]: 10,
   [`${ROOT}-wt-big`]: 9_000,
@@ -101,7 +101,8 @@ describe("WorktreeOverviewModal ordered by size (#16393)", () => {
     expect(clientMock.measure.mock.calls.map(([r]) => r.worktreeId).sort()).toEqual(
       worktrees.map((w) => w.id).sort()
     );
-    const sessionId = clientMock.measure.mock.calls[0][0].sessionId;
+    const sessionId = clientMock.measure.mock.calls[0]?.[0].sessionId;
+    expect(sessionId).toBeTruthy();
     cleanup();
     await settle();
     expect(clientMock.cancel).toHaveBeenCalledWith({ sessionId });

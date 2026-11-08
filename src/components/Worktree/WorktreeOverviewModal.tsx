@@ -554,6 +554,18 @@ export function WorktreeOverviewModal({
     cell?.scrollIntoView({ block: "nearest", inline: "nearest" });
   }, [isOpen, activeDescendantId]);
 
+  // Sizes arriving while the list is ordered by them move rows under a cursor
+  // whose id doesn't change, so the effect above never runs. Keep it in view
+  // while the list holds focus; with focus in the field, the cursor isn't drawn.
+  useEffect(() => {
+    if (!sortBySize || !activeDescendantId) return;
+    const grid = gridRef.current;
+    if (!grid || document.activeElement !== grid) return;
+    grid
+      .querySelector<HTMLElement>(`[id="${CSS.escape(activeDescendantId)}"]`)
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [sortBySize, visibleIds, activeDescendantId]);
+
   // Reset the range anchor when the window loses focus (lesson #4591), so a
   // stuck Shift after Cmd+Tab cannot produce a phantom range on the next click.
   useEffect(() => {

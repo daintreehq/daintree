@@ -92,13 +92,18 @@ export const OVERVIEW_ROW_COLUMNS = "grid-cols-[minmax(0,1fr)_216px_104px_72px_4
 const OVERVIEW_ROW_GAP = "gap-x-5";
 const OVERVIEW_ROW_INSET = "px-4";
 
+const APPROXIMATE_SIZE_NOTE =
+  "Sizes are approximate. Hard links or copy-on-write clones shared with other folders, and compressed files, can mean deleting a worktree frees less. Nested worktrees and symlinked folders aren't counted.";
+
 /**
  * Names the sections once, above the list, in the palette's section-label
  * type — so the columns read as labelled zones rather than a spreadsheet, and
  * nobody has to decode a column from its contents.
  *
  * The labels are decorative (each row says what it holds); the Size heading is
- * the one control, ordering the list largest first while pressed.
+ * the one control, ordering the list largest first while pressed. Its tooltip
+ * carries the approximation caveat, where a keyboard reaches it — the rows'
+ * own size tooltips are hover-only, like the rest of a row's detail.
  */
 export function WorktreeOverviewColumnHeaders({
   sortBySize,
@@ -124,31 +129,38 @@ export function WorktreeOverviewColumnHeaders({
       <span aria-hidden="true" className="text-right">
         Changes
       </span>
-      <button
-        type="button"
-        aria-pressed={sortBySize}
-        aria-label="Order by size, largest first"
-        data-testid="worktree-overview-sort-size"
-        onClick={() => onSortBySizeChange(!sortBySize)}
-        className={cn(
-          "-my-0.5 inline-flex items-center justify-self-end gap-1 rounded-[var(--radius-sm)] px-1 py-0.5",
-          "uppercase tracking-wider transition-colors duration-150 ease-out",
-          "hover:text-text-primary aria-pressed:text-text-primary",
-          PALETTE_ROW_FOCUS_CLASS
-        )}
-      >
-        {sortBySize && <ArrowDownWideNarrow className="h-3 w-3" aria-hidden="true" />}
-        Size
-      </button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-pressed={sortBySize}
+            aria-label="Order by size, largest first"
+            data-testid="worktree-overview-sort-size"
+            onClick={() => onSortBySizeChange(!sortBySize)}
+            className={cn(
+              "-my-0.5 inline-flex items-center justify-self-end gap-1 rounded-[var(--radius-sm)] px-1 py-0.5",
+              "uppercase tracking-wider transition-colors duration-150 ease-out",
+              "hover:text-text-primary aria-pressed:text-text-primary",
+              PALETTE_ROW_FOCUS_CLASS
+            )}
+          >
+            {sortBySize && <ArrowDownWideNarrow className="h-3 w-3" aria-hidden="true" />}
+            Size
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-[280px] text-xs">
+          <span className="flex flex-col gap-1">
+            <span>Order by size, largest first</span>
+            <span className="text-text-secondary">{APPROXIMATE_SIZE_NOTE}</span>
+          </span>
+        </TooltipContent>
+      </Tooltip>
       <span aria-hidden="true" className="text-right">
         Active
       </span>
     </div>
   );
 }
-
-const APPROXIMATE_SIZE_NOTE =
-  "Approximate. Hard links or copy-on-write clones shared with other folders can mean deleting this worktree frees less. Nested worktrees and symlinked folders aren't counted.";
 
 /**
  * The worktree's size on disk. Every figure is marked approximate: no cheap

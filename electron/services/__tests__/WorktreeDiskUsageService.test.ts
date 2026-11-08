@@ -93,6 +93,7 @@ describe("WorktreeDiskUsageService", () => {
 
     service.cancel("view-1", "s1");
     expect(await queued).toEqual({ status: "unknown" });
+    expect(await running).toEqual({ status: "unknown" });
     expect(calls[0].signal.aborted).toBe(true);
     // The slot stays held until the scan has actually stopped.
     const other = service.measure(service.begin("view-2", "s2"), "/3", []);
@@ -100,7 +101,6 @@ describe("WorktreeDiskUsageService", () => {
     expect(calls).toHaveLength(1);
 
     calls[0].settle(123);
-    expect(await running).toEqual({ status: "unknown" });
     await flush();
     expect(calls.map((c) => c.root)).toEqual(["/1", "/3"]);
     calls[1].settle(1);
@@ -135,17 +135,27 @@ describe("WorktreeDiskUsageService", () => {
     expect(current.aborted).toBe(true);
   });
 
-  it("abandons a scan past its deadline as unknown, even when it later reports bytes", async () => {
+  it("answers unknown at the deadline even while a scan hangs, and frees its slot only when it stops", async () => {
     vi.useFakeTimers();
     const { calls, measure } = controllableMeasurer();
-    const service = new WorktreeDiskUsageService({ measure, timeoutMs: 1_000 });
-    const pending = service.measure(service.begin("view-1", "s1"), "/1", []);
+    const service = new WorktreeDiskUsageService({ measure, timeoutMs: 1_000, concurrency: 1 });
+    const signal = service.begin("view-1", "s1");
+    const hung = service.measure(signal, "/1", []);
+    const next = service.measure(signal, "/2", []);
     await flush();
 
     vi.advanceTimersByTime(1_000);
     expect(calls[0].signal.aborted).toBe(true);
+    // The scan never settles, yet the request has its answer.
+    expect(await hung).toEqual({ status: "unknown" });
+    await flush();
+    expect(calls).toHaveLength(1);
+
     calls[0].settle(999);
-    expect(await pending).toEqual({ status: "unknown" });
+    await flush();
+    expect(calls.map((c) => c.root)).toEqual(["/1", "/2"]);
+    calls[1].settle(5);
+    expect(await next).toEqual({ status: "measured", bytes: 5 });
   });
 
   it("answers unknown without scanning for an already-cancelled session", async () => {

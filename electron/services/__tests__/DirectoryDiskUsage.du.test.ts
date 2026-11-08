@@ -1,41 +1,55 @@
 // @vitest-environment node
+import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type ExecCallback = (error: Error | null, stdout: string, stderr: string) => void;
-
-const execFileMock = vi.hoisted(() => vi.fn());
+const spawnMock = vi.hoisted(() => vi.fn());
 const fsMock = vi.hoisted(() => ({
   lstat: vi.fn(async () => ({ isDirectory: () => true, blocks: 0 })),
   readdir: vi.fn(async () => []),
 }));
 
-vi.mock("node:child_process", () => ({ execFile: execFileMock }));
+vi.mock("node:child_process", () => ({ spawn: spawnMock }));
 vi.mock("node:fs/promises", () => ({ default: fsMock, ...fsMock }));
 
 import { measureDirectorySize } from "../DirectoryDiskUsage.js";
 
-function exitError(code: number): Error {
-  return Object.assign(new Error(`Command failed with ${code}`), { code });
+class FakeChild extends EventEmitter {
+  readonly stdout = Object.assign(new EventEmitter(), { setEncoding: vi.fn() });
+  readonly kill = vi.fn((_signal?: string) => true);
+  readonly pid: number | undefined;
+  /** `started: false` is a spawn that failed: no pid, and an `error` to come. */
+  constructor(started = true) {
+    super();
+    this.pid = started ? 1234 : undefined;
+  }
+  finish(code: number | null, stdout = ""): void {
+    if (stdout) this.stdout.emit("data", stdout);
+    this.emit("close", code);
+  }
 }
 
-function answerWith(error: Error | null, stdout: string, stderr = ""): void {
-  execFileMock.mockImplementation(
-    (_file: string, _args: string[], _opts: unknown, callback: ExecCallback) => {
-      queueMicrotask(() => callback(error, stdout, stderr));
-      return {};
-    }
-  );
+/** Each spawn answers with the next scripted exit. */
+function script(...runs: Array<{ code: number; stdout?: string }>): FakeChild[] {
+  const children: FakeChild[] = [];
+  spawnMock.mockImplementation(() => {
+    const child = new FakeChild();
+    children.push(child);
+    const run = runs[children.length - 1];
+    if (run) queueMicrotask(() => child.finish(run.code, run.stdout));
+    return child;
+  });
+  return children;
 }
 
 describe("measureDirectorySize — du outcomes", () => {
   beforeEach(() => {
-    execFileMock.mockReset();
+    spawnMock.mockReset();
   });
 
   it("runs one du over the root with a grand total, in the C locale, without following symlinks", async () => {
-    answerWith(null, "8\t/repo\n8\ttotal\n");
+    script({ code: 0, stdout: "8\t/repo\n8\ttotal\n" });
     expect(await measureDirectorySize("/repo", { platform: "linux" })).toBe(8 * 1024);
-    const [file, args, opts] = execFileMock.mock.calls[0] as [
+    const [file, args, opts] = spawnMock.mock.calls[0] as [
       string,
       string[],
       { env: NodeJS.ProcessEnv },
@@ -46,54 +60,64 @@ describe("measureDirectorySize — du outcomes", () => {
     expect(opts.env.LC_ALL).toBe("C");
   });
 
-  it("accepts a total when the only complaints are entries that vanished mid-scan", async () => {
-    answerWith(
-      exitError(1),
-      "8\t/repo\n8\ttotal\n",
-      "du: cannot access '/repo/.next/tmp': No such file or directory\ndu: /repo/dist/x: No such file or directory\n"
+  it("reads only the closing total, however long the per-operand output", async () => {
+    const perOperand = Array.from({ length: 2_000 }, (_, i) => `1\t/repo/f${i}\n`).join("");
+    script({ code: 0, stdout: `${perOperand}2000\ttotal\n` });
+    expect(await measureDirectorySize("/repo", { platform: "linux" })).toBe(2000 * 1024);
+  });
+
+  it("retries a du that skipped something, and takes the clean second run", async () => {
+    script(
+      { code: 1, stdout: "8\t/repo\n8\ttotal\n" },
+      { code: 0, stdout: "6\t/repo\n6\ttotal\n" }
     );
-    expect(await measureDirectorySize("/repo", { platform: "linux" })).toBe(8 * 1024);
+    expect(await measureDirectorySize("/repo", { platform: "linux" })).toBe(6 * 1024);
+    expect(spawnMock).toHaveBeenCalledTimes(2);
   });
 
-  it("answers null when part of the tree went uncounted", async () => {
-    answerWith(
-      exitError(1),
-      "8\t/repo\n8\ttotal\n",
-      "du: cannot read directory '/repo/secret': Permission denied\n"
+  it("answers null, not a partial total, when du keeps skipping part of the tree", async () => {
+    script(
+      { code: 1, stdout: "8\t/repo\n8\ttotal\n" },
+      { code: 1, stdout: "8\t/repo\n8\ttotal\n" }
     );
     expect(await measureDirectorySize("/repo", { platform: "linux" })).toBeNull();
+    expect(spawnMock).toHaveBeenCalledTimes(2);
   });
 
-  it("answers null when du fails without saying why, or prints no total", async () => {
-    answerWith(exitError(1), "8\t/repo\n8\ttotal\n", "");
-    expect(await measureDirectorySize("/repo", { platform: "linux" })).toBeNull();
-    answerWith(null, "8\t/repo\n");
-    expect(await measureDirectorySize("/repo", { platform: "linux" })).toBeNull();
-  });
-
-  it("answers null when du could not be started", async () => {
-    answerWith(Object.assign(new Error("spawn du ENOENT"), { code: "ENOENT" }), "", "");
+  it("answers null when du prints no total", async () => {
+    script({ code: 0, stdout: "8\t/repo\n" }, { code: 0, stdout: "" });
     expect(await measureDirectorySize("/repo", { platform: "linux" })).toBeNull();
   });
 
-  it("hands du the abort signal with a hard kill, and answers null once aborted", async () => {
+  it("answers null when du can't be started", async () => {
+    spawnMock.mockImplementation(() => {
+      const child = new FakeChild(false);
+      queueMicrotask(() => child.emit("error", new Error("spawn du ENOENT")));
+      return child;
+    });
+    expect(await measureDirectorySize("/repo", { platform: "linux" })).toBeNull();
+  });
+
+  it("kills du outright on abort and settles only once it has exited", async () => {
+    const children = script();
     const controller = new AbortController();
-    execFileMock.mockImplementation(
-      (_file: string, _args: string[], opts: { signal: AbortSignal }, callback: ExecCallback) => {
-        opts.signal.addEventListener("abort", () =>
-          callback(Object.assign(new Error("aborted"), { name: "AbortError" }), "", "")
-        );
-        return {};
-      }
-    );
+    let settled = false;
     const pending = measureDirectorySize("/repo", {
       platform: "linux",
       signal: controller.signal,
+    }).then((value) => {
+      settled = true;
+      return value;
     });
-    await vi.waitFor(() => expect(execFileMock).toHaveBeenCalled());
-    const opts = execFileMock.mock.calls[0][2] as { killSignal: string; signal: AbortSignal };
-    expect(opts.killSignal).toBe("SIGKILL");
+    await vi.waitFor(() => expect(children).toHaveLength(1));
+
     controller.abort();
+    expect(children[0].kill).toHaveBeenCalledWith("SIGKILL");
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    children[0].finish(null);
     expect(await pending).toBeNull();
+    expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 });

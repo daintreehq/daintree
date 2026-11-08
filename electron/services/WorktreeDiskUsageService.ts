@@ -33,7 +33,7 @@ interface Session {
  *
  * Each requesting view (`owner`) has at most one session — the overview's
  * current opening. Starting another, or cancelling, aborts the old one: its
- * queued measurements answer unknown at once and a running `du` is killed. A
+ * measurements answer unknown at once and a running `du` is killed. A
  * measurement keeps its slot until its scan has actually stopped, so repeated
  * open/close can't pile up abandoned scans.
  */
@@ -114,6 +114,12 @@ export class WorktreeDiskUsageService {
     }
   }
 
+  /**
+   * The request is answered unknown the moment its session stops or its
+   * deadline passes — a walk stuck on a dead mount can't be interrupted, and
+   * the overview mustn't wait on it — but the slot is freed only when the scan
+   * itself settles.
+   */
   private start(job: Job): void {
     this.running += 1;
     const deadline = new AbortController();
@@ -122,6 +128,14 @@ export class WorktreeDiskUsageService {
       this.options.timeoutMs ?? DISK_USAGE_TIMEOUT_MS
     );
     const signal = AbortSignal.any([job.signal, deadline.signal]);
+    let answered = false;
+    const answer = (result: WorktreeDiskUsageResult) => {
+      if (answered) return;
+      answered = true;
+      job.resolve(result);
+    };
+    const onStop = () => answer(UNKNOWN);
+    signal.addEventListener("abort", onStop, { once: true });
     const measure = this.options.measure ?? measureDirectorySize;
     Promise.resolve()
       .then(() => measure(job.root, { exclude: job.exclude, signal }))
@@ -132,8 +146,9 @@ export class WorktreeDiskUsageService {
       )
       .then((result) => {
         clearTimeout(timer);
+        signal.removeEventListener("abort", onStop);
         this.running -= 1;
-        job.resolve(result);
+        answer(result);
         this.pump();
       });
   }

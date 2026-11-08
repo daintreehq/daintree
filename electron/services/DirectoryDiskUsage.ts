@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import fsPromises from "node:fs/promises";
 import type { BigIntStats, Dirent, Stats } from "node:fs";
 import path from "node:path";
@@ -13,6 +13,13 @@ export const MAX_DU_OPERANDS = 2_000;
 /** Concurrent `lstat`s per directory in the walk. */
 const WALK_STAT_BATCH = 32;
 
+/**
+ * Tries per measurement. A scan that races a change in the tree (a build
+ * replacing its output, a directory renamed under it) fails rather than
+ * reporting a partial total, and usually succeeds when run again.
+ */
+const ATTEMPTS = 2;
+
 type Platform = NodeJS.Platform;
 
 export interface MeasureDirectoryOptions {
@@ -25,8 +32,9 @@ export interface MeasureDirectoryOptions {
 /**
  * The bytes `root` occupies on disk, with `exclude`d subtrees left out, or
  * null when the figure couldn't be completed. A partial total is never
- * returned: an unreadable directory, a cancelled run or a failed `du` all
- * answer null, so the caller can say "unknown" rather than an undercount.
+ * returned: an unreadable or vanished entry, a cancelled run or a failed `du`
+ * all answer null (after one retry), so the caller can say "unknown" rather
+ * than an undercount.
  *
  * POSIX runs `du` out of process, which keeps the traversal off this event
  * loop; Windows has no `du` and walks instead. Neither follows symlinks.
@@ -37,34 +45,54 @@ export async function measureDirectorySize(
 ): Promise<number | null> {
   const { signal } = options;
   const platform = options.platform ?? process.platform;
-  if (signal?.aborted) return null;
   const resolvedRoot = path.resolve(root);
-  try {
-    const stat = await fsPromises.lstat(resolvedRoot);
-    if (!stat.isDirectory()) return null;
-  } catch {
-    return null;
-  }
   const exclude = nearestNestedRoots(resolvedRoot, options.exclude ?? [], platform);
-
-  if (platform === "win32") {
-    return walkDirectorySize(resolvedRoot, exclude, platform, signal);
+  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    if (signal?.aborted) return null;
+    const outcome = await measureOnce(resolvedRoot, exclude, platform, signal);
+    if (outcome.kind === "measured") return outcome.bytes;
+    if (outcome.kind === "final") return null;
   }
+  return null;
+}
+
+/** `retry` when the scan may have raced a change in the tree; `final` when trying again can't help. */
+type Outcome = { kind: "measured"; bytes: number } | { kind: "retry" } | { kind: "final" };
+
+async function measureOnce(
+  root: string,
+  exclude: readonly string[],
+  platform: Platform,
+  signal: AbortSignal | undefined
+): Promise<Outcome> {
+  try {
+    const stat = await fsPromises.lstat(root);
+    if (!stat.isDirectory()) return { kind: "final" };
+  } catch {
+    return { kind: "final" };
+  }
+
+  const walk = async (): Promise<Outcome> => {
+    const bytes = await walkDirectorySize(root, exclude, platform, signal);
+    return bytes === null ? { kind: "retry" } : { kind: "measured", bytes };
+  };
+  if (platform === "win32") return walk();
 
   let frontier: Frontier | null;
   try {
-    frontier = await buildFrontier(resolvedRoot, exclude, platform, signal);
+    frontier = await buildFrontier(root, exclude, platform, signal);
   } catch {
-    return null;
+    return { kind: "retry" };
   }
-  if (signal?.aborted) return null;
-  if (frontier === null) {
-    return walkDirectorySize(resolvedRoot, exclude, platform, signal);
+  if (signal?.aborted) return { kind: "final" };
+  if (frontier === null) return walk();
+  if (frontier.operands.length === 0) {
+    return { kind: "measured", bytes: frontier.directoryBytes };
   }
-  if (frontier.operands.length === 0) return frontier.directoryBytes;
-  const duBytes = await runDu(frontier.operands, signal);
-  if (duBytes === null) return null;
-  return duBytes + frontier.directoryBytes;
+  const du = await runDu(frontier.operands, signal);
+  if (du.kind === "aborted") return { kind: "final" };
+  if (du.kind === "failed") return { kind: "retry" };
+  return { kind: "measured", bytes: du.kb * 1024 + frontier.directoryBytes };
 }
 
 function comparablePath(p: string, platform: Platform): string {
@@ -75,7 +103,9 @@ function comparablePath(p: string, platform: Platform): string {
 export function isStrictlyInside(parent: string, child: string, platform: Platform): boolean {
   const pathApi = platform === "win32" ? path.win32 : path.posix;
   const rel = pathApi.relative(comparablePath(parent, platform), comparablePath(child, platform));
-  return rel !== "" && !rel.startsWith("..") && !pathApi.isAbsolute(rel);
+  if (rel === "" || pathApi.isAbsolute(rel)) return false;
+  // `..` as a whole component, not a name that starts with two dots.
+  return rel !== ".." && !rel.startsWith(`..${pathApi.sep}`);
 }
 
 /**
@@ -154,8 +184,10 @@ async function buildFrontier(
   return { operands, directoryBytes };
 }
 
-/** stderr lines `du` writes when an entry vanished mid-scan (`LC_ALL=C`). */
-const VANISHED_ENTRY_LINE = /No such file or directory$/;
+type DuOutcome = { kind: "total"; kb: number } | { kind: "failed" } | { kind: "aborted" };
+
+/** Enough of `du`'s output to hold its closing line; per-operand lines before it are dropped. */
+const DU_TAIL_CHARS = 4096;
 
 /**
  * One `du -skc` over every operand, so hard links shared between operands are
@@ -163,56 +195,58 @@ const VANISHED_ENTRY_LINE = /No such file or directory$/;
  * `-s`, `-k` and `-c`; their exclusion flags don't, which is why exclusion is
  * done by choosing operands instead.
  *
- * A non-zero exit is accepted only when every complaint is an entry that
- * vanished mid-scan — a worktree with a build running churns files, and a file
- * that's gone takes no space. Anything else (permission denied, an I/O error)
- * means part of the tree went uncounted, and the answer is null.
+ * Only a clean exit counts: `du` exits non-zero whenever it skipped something
+ * — permission denied, an I/O error, or an entry that vanished between being
+ * listed and being read — and its total then leaves out bytes that may still
+ * be there. Settles only once the process has exited, so a caller holding a
+ * concurrency slot doesn't release it while `du` is still reading the disk;
+ * an abort kills it outright, since a read-only scan has nothing to clean up.
  */
-function runDu(
-  operands: readonly string[],
-  signal: AbortSignal | undefined
-): Promise<number | null> {
+function runDu(operands: readonly string[], signal: AbortSignal | undefined): Promise<DuOutcome> {
   return new Promise((resolve) => {
     if (signal?.aborted) {
-      resolve(null);
+      resolve({ kind: "aborted" });
       return;
     }
-    execFile(
-      "du",
-      ["-skc", "--", ...operands],
-      {
-        maxBuffer: 16 * 1024 * 1024,
+    let child: ChildProcess;
+    try {
+      child = spawn("du", ["-skc", "--", ...operands], {
         env: { ...process.env, LC_ALL: "C" },
-        signal,
-        killSignal: "SIGKILL",
+        stdio: ["ignore", "pipe", "ignore"],
         windowsHide: true,
-      },
-      (error, stdout, stderr) => {
-        if (signal?.aborted) {
-          resolve(null);
-          return;
-        }
-        const totalKb = parseDuGrandTotal(String(stdout));
-        if (totalKb === null) {
-          resolve(null);
-          return;
-        }
-        if (error) {
-          const exitedNonZero = typeof (error as { code?: unknown }).code === "number";
-          const complaints = String(stderr)
-            .split("\n")
-            .map((line) => line.trim())
-            .filter(Boolean);
-          const onlyVanished =
-            complaints.length > 0 && complaints.every((line) => VANISHED_ENTRY_LINE.test(line));
-          if (!exitedNonZero || !onlyVanished) {
-            resolve(null);
-            return;
-          }
-        }
-        resolve(totalKb * 1024);
+      });
+    } catch {
+      resolve({ kind: "failed" });
+      return;
+    }
+    let tail = "";
+    let settled = false;
+    const settle = (outcome: DuOutcome) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", onAbort);
+      resolve(signal?.aborted ? { kind: "aborted" } : outcome);
+    };
+    const onAbort = () => {
+      child.kill("SIGKILL");
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      tail = (tail + chunk).slice(-DU_TAIL_CHARS);
+    });
+    child.on("error", () => {
+      // Never started (no `du` on PATH): there will be no exit to wait for.
+      if (child.pid === undefined) settle({ kind: "failed" });
+    });
+    child.on("close", (code) => {
+      if (code !== 0) {
+        settle({ kind: "failed" });
+        return;
       }
-    );
+      const kb = parseDuGrandTotal(tail);
+      settle(kb === null ? { kind: "failed" } : { kind: "total", kb });
+    });
   });
 }
 
@@ -227,17 +261,12 @@ export function parseDuGrandTotal(stdout: string): number | null {
   return Number.isSafeInteger(kb) && Number.isSafeInteger(kb * 1024) ? kb : null;
 }
 
-function isVanished(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException | null)?.code;
-  return code === "ENOENT" || code === "ENOTDIR";
-}
-
 /**
  * The tree walked with `lstat`: Windows, where there is no `du`, and POSIX
  * trees whose frontier is too wide for one `du` call. Hard links are counted
  * once by device and inode; symlinks and junctions are counted as themselves
- * and never followed. An entry that vanished mid-walk is skipped; any other
- * failure abandons the figure.
+ * and never followed. Any entry that can't be read — vanished mid-walk
+ * included, as with `du` — abandons the figure.
  */
 async function walkDirectorySize(
   root: string,
@@ -253,41 +282,32 @@ async function walkDirectorySize(
     while (stack.length > 0) {
       if (signal?.aborted) return null;
       const dir = stack.pop()!;
-      let entries: Dirent[];
-      try {
-        entries = await fsPromises.readdir(dir, { withFileTypes: true });
-      } catch (error) {
-        if (dir !== root && isVanished(error)) continue;
-        return null;
-      }
+      const entries: Dirent[] = await fsPromises.readdir(dir, { withFileTypes: true });
       const targets = entries
-        .map((entry) => ({ entry, full: path.join(dir, entry.name) }))
-        .filter(({ full }) => !excluded.has(comparablePath(full, platform)));
+        .map((entry) => path.join(dir, entry.name))
+        .filter((full) => !excluded.has(comparablePath(full, platform)));
       for (let i = 0; i < targets.length; i += WALK_STAT_BATCH) {
         if (signal?.aborted) return null;
         const batch = targets.slice(i, i + WALK_STAT_BATCH);
         const stats = await Promise.all(
-          batch.map(({ full }) =>
-            fsPromises.lstat(full, { bigint: true }).catch((error: unknown) => {
-              if (isVanished(error)) return null;
-              throw error;
-            })
-          )
+          batch.map(async (full) => ({
+            full,
+            stat: await fsPromises.lstat(full, { bigint: true }),
+          }))
         );
-        stats.forEach((stat, index) => {
-          if (!stat) return;
+        for (const { full, stat } of stats) {
           if (stat.isDirectory()) {
-            stack.push(batch[index].full);
+            stack.push(full);
             if (platform !== "win32") total += allocatedBytes(stat, platform);
-            return;
+            continue;
           }
           if (stat.nlink > 1n && stat.ino !== 0n) {
             const key = `${stat.dev}:${stat.ino}`;
-            if (seenLinked.has(key)) return;
+            if (seenLinked.has(key)) continue;
             seenLinked.add(key);
           }
           total += allocatedBytes(stat, platform);
-        });
+        }
       }
     }
   } catch {

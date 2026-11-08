@@ -25,10 +25,22 @@ interface Pending {
 
 let pending: Pending[] = [];
 
+function pendingAt(index: number): Pending {
+  const entry = pending[index];
+  if (!entry) throw new Error(`no pending request at ${index}`);
+  return entry;
+}
+
+function sessionOf(call: number): string {
+  const request = clientMock.measure.mock.calls[call]?.[0];
+  if (!request) throw new Error(`no measure call ${call}`);
+  return request.sessionId;
+}
+
 function answer(worktreeId: string, result: WorktreeDiskUsageResult): Promise<void> {
   const index = pending.findIndex((p) => p.request.worktreeId === worktreeId);
-  if (index === -1) throw new Error(`no pending request for ${worktreeId}`);
-  const [entry] = pending.splice(index, 1);
+  const entry = pendingAt(index);
+  pending.splice(index, 1);
   return act(async () => {
     entry.resolve(result);
   });
@@ -79,7 +91,7 @@ describe("useWorktreeDiskUsage", () => {
     const { result } = renderHook(() => useWorktreeDiskUsage(true, [A]));
     await settle();
     await act(async () => {
-      pending[0].reject(new Error("IPC timeout"));
+      pendingAt(0).reject(new Error("IPC timeout"));
     });
     expect(result.current.get("a")).toEqual({ status: "unknown" });
   });
@@ -98,7 +110,7 @@ describe("useWorktreeDiskUsage", () => {
     expect(clientMock.measure.mock.calls.map(([r]) => r.worktreeId)).toEqual(["a", "b"]);
   });
 
-  it("measures again when a worktree's path changes, ignoring the stale answer", async () => {
+  it("measures again when a worktree's path changes, and a late answer for the old path can't overwrite the new", async () => {
     const { result, rerender } = renderHook(({ list }) => useWorktreeDiskUsage(true, list), {
       initialProps: { list: [A] },
     });
@@ -108,11 +120,11 @@ describe("useWorktreeDiskUsage", () => {
     expect(clientMock.measure).toHaveBeenCalledTimes(2);
 
     await act(async () => {
-      pending[0].resolve({ status: "measured", bytes: 1 });
+      pendingAt(1).resolve({ status: "measured", bytes: 2 });
     });
-    expect(result.current.get("a")).toEqual({ status: "pending" });
+    expect(result.current.get("a")).toEqual({ status: "measured", bytes: 2 });
     await act(async () => {
-      pending[1].resolve({ status: "measured", bytes: 2 });
+      pendingAt(0).resolve({ status: "measured", bytes: 1 });
     });
     expect(result.current.get("a")).toEqual({ status: "measured", bytes: 2 });
   });
@@ -122,7 +134,7 @@ describe("useWorktreeDiskUsage", () => {
       initialProps: { open: true },
     });
     await settle();
-    const sessionId = clientMock.measure.mock.calls[0][0].sessionId;
+    const sessionId = sessionOf(0);
 
     rerender({ open: false });
     await settle();
@@ -133,15 +145,14 @@ describe("useWorktreeDiskUsage", () => {
 
     rerender({ open: true });
     await settle();
-    const reopened = clientMock.measure.mock.calls[1][0];
-    expect(reopened.worktreeId).toBe("a");
-    expect(reopened.sessionId).not.toBe(sessionId);
+    expect(clientMock.measure.mock.calls[1]?.[0].worktreeId).toBe("a");
+    expect(sessionOf(1)).not.toBe(sessionId);
   });
 
   it("cancels the session when the overview unmounts", async () => {
     const { unmount } = renderHook(() => useWorktreeDiskUsage(true, [A]));
     await settle();
-    const sessionId = clientMock.measure.mock.calls[0][0].sessionId;
+    const sessionId = sessionOf(0);
     unmount();
     await settle();
     expect(clientMock.cancel).toHaveBeenCalledWith({ sessionId });

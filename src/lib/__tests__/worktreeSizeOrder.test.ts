@@ -62,13 +62,43 @@ describe("orderWorktreesBySize", () => {
     expect(after).toEqual(before);
   });
 
-  it("keeps equal sizes in their incoming order and doesn't mutate the input", () => {
-    const input = [{ id: "x" }, { id: "y" }];
+  it("keeps equal sizes in their incoming order", () => {
+    expect(
+      order([
+        ["x", measured(7)],
+        ["y", measured(7)],
+      ])
+    ).toEqual(["x", "y"]);
+  });
+
+  it("returns a new order and leaves the caller's list as it was", () => {
+    const input = [{ id: "small" }, { id: "big" }];
     const usage = new Map([
-      ["x", measured(7)],
-      ["y", measured(7)],
+      ["small", measured(1)],
+      ["big", measured(100)],
     ]);
-    expect(orderWorktreesBySize(input, usage).map((w) => w.id)).toEqual(["x", "y"]);
-    expect(input.map((w) => w.id)).toEqual(["x", "y"]);
+    expect(orderWorktreesBySize(input, usage).map((w) => w.id)).toEqual(["big", "small"]);
+    expect(input.map((w) => w.id)).toEqual(["small", "big"]);
+  });
+
+  it("keeps worktrees from outside the project below the project's own, ordering each side by size", () => {
+    const input = [
+      { id: "own-small" },
+      { id: "outside-huge", isExternal: true },
+      { id: "outside-small", isExternal: true },
+      { id: "own-big" },
+    ];
+    const usage = new Map([
+      ["own-small", measured(1)],
+      ["outside-huge", measured(1_000_000)],
+      ["outside-small", measured(2)],
+      ["own-big", measured(50)],
+    ]);
+    expect(orderWorktreesBySize(input, usage).map((w) => w.id)).toEqual([
+      "own-big",
+      "own-small",
+      "outside-huge",
+      "outside-small",
+    ]);
   });
 });

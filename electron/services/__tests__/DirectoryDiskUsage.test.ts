@@ -1,8 +1,15 @@
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// The real `spawn`, watched: the fallback test has to see that `du` never ran.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, spawn: vi.fn(actual.spawn) };
+});
+
 import {
   MAX_DU_OPERANDS,
   isStrictlyInside,
@@ -40,6 +47,8 @@ describe("parseDuGrandTotal", () => {
 describe("isStrictlyInside", () => {
   it("matches by path component, not by string prefix", () => {
     expect(isStrictlyInside("/repo", "/repo/.worktrees/a", "linux")).toBe(true);
+    expect(isStrictlyInside("/repo", "/repo/..feature", "linux")).toBe(true);
+    expect(isStrictlyInside("/repo", "/other", "linux")).toBe(false);
     expect(isStrictlyInside("/repo", "/repo-other/a", "linux")).toBe(false);
     expect(isStrictlyInside("/repo", "/repo", "linux")).toBe(false);
     expect(isStrictlyInside("/repo/a", "/repo", "linux")).toBe(false);
@@ -114,6 +123,15 @@ describe("measureDirectorySize", () => {
       expect(Math.abs(parent + child - whole)).toBeLessThan(64 * 1024);
     });
 
+    it("leaves out a nested worktree whose name starts with two dots", async () => {
+      const root = path.join(tmp, "root");
+      const nested = path.join(root, "..feature");
+      await writeBytes(path.join(nested, "data"), MB);
+      const parent = await measureDirectorySize(root, { exclude: [nested] });
+      expect(parent).not.toBeNull();
+      expect(parent).toBeLessThan(64 * 1024);
+    });
+
     it("ignores exclusions outside the root and lookalike prefixes", async () => {
       const root = path.join(tmp, "root");
       await writeBytes(path.join(root, "data"), MB);
@@ -177,9 +195,12 @@ describe("measureDirectorySize", () => {
       );
       await writeBytes(path.join(root, "f0"), 512 * 1024);
 
+      vi.mocked(spawn).mockClear();
       const walked = (await measureDirectorySize(root, { exclude: [nested] }))!;
+      expect(spawn).not.toHaveBeenCalled();
       await fs.rm(nested, { recursive: true });
       const viaDu = (await measureDirectorySize(root))!;
+      expect(spawn).toHaveBeenCalledTimes(1);
 
       expect(walked).toBeGreaterThanOrEqual(512 * 1024);
       expect(Math.abs(walked - viaDu)).toBeLessThan(64 * 1024);
