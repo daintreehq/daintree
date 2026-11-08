@@ -39,11 +39,14 @@ export class CloneOutputLog {
     }
   }
 
-  /** A whole line from somewhere other than git's stream, such as a provider's progress. */
+  /**
+   * Start a line from somewhere other than git's stream, such as a provider's
+   * progress. It stays the line being drawn, so {@link redrawLine} updates it.
+   */
   appendLine(line: string): void {
     if (this.current.length > 0) this.commit();
+    this.pendingCarriageReturn = false;
     this.current = line.slice(0, MAX_LINE_CHARS);
-    this.commit();
   }
 
   /** Replace the line being drawn, as git's own progress redraw does. */

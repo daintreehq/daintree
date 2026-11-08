@@ -312,7 +312,12 @@ export class ProjectCloneService {
         signal: controller.signal,
         onProgress: (stage, progress, message) => this.onProgress(job, stage, progress, message),
         onOutput: (chunk) => {
-          job.sawRawOutput = true;
+          // Progress can be parsed from a chunk before the chunk itself lands
+          // here; git's own text replaces what was drawn from it.
+          if (!job.sawRawOutput) {
+            job.sawRawOutput = true;
+            job.output = new CloneOutputLog();
+          }
           job.output.append(chunk);
           this.publish(job);
         },

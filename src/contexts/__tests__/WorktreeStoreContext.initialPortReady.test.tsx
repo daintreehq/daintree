@@ -166,6 +166,22 @@ describe("WorktreeStoreProvider — initial worktree-port watchdog (#11818)", ()
     expect(store.getState().isLoading).toBe(true);
   });
 
+  it("settles a project still awaiting its clone empty, with no banner (#16352)", async () => {
+    vi.useFakeTimers();
+    await act(async () => {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- only the fields this suite reads
+      const cloning = { id: "p1", name: "p1", path: "/repo/cloning", cloneState: "cloning" };
+      useProjectStore.setState({ currentProject: cloning as unknown as Project });
+    });
+    const { store } = await renderProvider();
+
+    await advance(60_000);
+
+    // Main brokers no port until the checkout lands, and the view reloads then.
+    expect(useProjectStore.getState().worktreeLoadError).toBeNull();
+    expect(store.getState().isLoading).toBe(false);
+  });
+
   it("arms once a project binds after mount", async () => {
     setCurrentProject(null);
     vi.useFakeTimers();
