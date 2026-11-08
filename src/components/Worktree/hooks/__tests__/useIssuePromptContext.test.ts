@@ -103,7 +103,11 @@ describe("loadIssuePromptContext", () => {
     mockGetIssue.mockResolvedValue(makeIssue(7));
     mockListIssueComments.mockRejectedValue(unsupportedError());
 
-    const read = await loadIssuePromptContext({ cwd: ROOT, issue: { number: 7 }, providerName: "GitLab" });
+    const read = await loadIssuePromptContext({
+      cwd: ROOT,
+      issue: { number: 7 },
+      providerName: "GitLab",
+    });
 
     expect(read).toMatchObject({ status: "ready", comments: "unsupported" });
   });
@@ -112,7 +116,11 @@ describe("loadIssuePromptContext", () => {
     mockGetIssue.mockResolvedValue(makeIssue(7));
     mockListIssueComments.mockRejectedValue(new Error("rate limited"));
 
-    const read = await loadIssuePromptContext({ cwd: ROOT, issue: { number: 7 }, providerName: "GitHub" });
+    const read = await loadIssuePromptContext({
+      cwd: ROOT,
+      issue: { number: 7 },
+      providerName: "GitHub",
+    });
 
     expect(read).toMatchObject({ status: "ready", comments: "failed" });
     if (read.status === "ready") expect(read.context.text).toContain("couldn't be read");
@@ -124,7 +132,11 @@ describe("loadIssuePromptContext", () => {
       Promise.resolve(page([makeComment(1)], `after-${opts.cursor ?? "start"}`))
     );
 
-    const read = await loadIssuePromptContext({ cwd: ROOT, issue: { number: 7 }, providerName: "GitHub" });
+    const read = await loadIssuePromptContext({
+      cwd: ROOT,
+      issue: { number: 7 },
+      providerName: "GitHub",
+    });
 
     expect(mockListIssueComments).toHaveBeenCalledTimes(ISSUE_COMMENT_MAX_PAGES);
     expect(read).toMatchObject({ status: "ready", comments: "too-long" });
@@ -135,7 +147,11 @@ describe("loadIssuePromptContext", () => {
     mockGetIssue.mockResolvedValue(makeIssue(7));
     mockListIssueComments.mockResolvedValue(page([makeComment(1)], "same"));
 
-    const read = await loadIssuePromptContext({ cwd: ROOT, issue: { number: 7 }, providerName: "GitHub" });
+    const read = await loadIssuePromptContext({
+      cwd: ROOT,
+      issue: { number: 7 },
+      providerName: "GitHub",
+    });
 
     expect(mockListIssueComments).toHaveBeenCalledTimes(2);
     expect(read).toMatchObject({ status: "ready", comments: "failed" });
@@ -157,7 +173,11 @@ describe("loadIssuePromptContext", () => {
   it("reports a failed issue read in the error's own words", async () => {
     mockGetIssue.mockRejectedValue(new Error("Bad credentials"));
 
-    const read = await loadIssuePromptContext({ cwd: ROOT, issue: { number: 7 }, providerName: "GitHub" });
+    const read = await loadIssuePromptContext({
+      cwd: ROOT,
+      issue: { number: 7 },
+      providerName: "GitHub",
+    });
 
     expect(read).toEqual({ status: "error", reason: "Bad credentials" });
   });
@@ -166,7 +186,11 @@ describe("loadIssuePromptContext", () => {
     vi.useFakeTimers();
     mockGetIssue.mockReturnValue(new Promise(() => {}));
 
-    const pending = loadIssuePromptContext({ cwd: ROOT, issue: { number: 7 }, providerName: "GitHub" });
+    const pending = loadIssuePromptContext({
+      cwd: ROOT,
+      issue: { number: 7 },
+      providerName: "GitHub",
+    });
     await vi.advanceTimersByTimeAsync(ISSUE_PROMPT_READ_TIMEOUT_MS);
 
     await expect(pending).resolves.toEqual({ status: "error", reason: "timed out" });

@@ -68,12 +68,7 @@ export function IssuePromptToggle({
         </label>
         {active && state.status !== "error" && (
           <span className="flex min-w-0 items-center gap-2 text-text-secondary">
-            <span
-              id={statusId}
-              role="status"
-              className="min-w-0"
-              data-testid="issue-prompt-status"
-            >
+            <span id={statusId} role="status" className="min-w-0" data-testid="issue-prompt-status">
               {ready ? readyStatus(ready) : showLoading ? `Loading ${issueRef}…` : null}
             </span>
             {ready?.comments === "failed" && (

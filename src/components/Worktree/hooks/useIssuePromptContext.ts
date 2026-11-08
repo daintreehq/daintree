@@ -65,7 +65,9 @@ async function readRecentComments(
         deadline
       );
     } catch (err) {
-      return clientErrorCode(err) === "UNSUPPORTED" ? { status: "unsupported" } : { status: "failed" };
+      return clientErrorCode(err) === "UNSUPPORTED"
+        ? { status: "unsupported" }
+        : { status: "failed" };
     }
     if (isCancelled()) return { status: "failed" };
     total += result.items.length;
@@ -154,12 +156,10 @@ export function useIssuePromptContext({
       providerName,
       isCancelled: () => cancelled,
     })
-      .catch(
-        (err: unknown): IssuePromptRead => ({
-          status: "error",
-          reason: clientErrorText(err, "the read failed"),
-        })
-      )
+      .catch((err: unknown): IssuePromptRead => ({
+        status: "error",
+        reason: clientErrorText(err, "the read failed"),
+      }))
       .then((read) => {
         if (!cancelled) setSettled({ key, read });
       });

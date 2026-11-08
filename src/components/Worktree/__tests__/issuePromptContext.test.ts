@@ -113,7 +113,9 @@ describe("formatIssuePromptContext", () => {
   });
 
   it("quotes the newest comments, oldest first, and says how many there are", () => {
-    const thread = Array.from({ length: 5 }, (_, i) => comment(`note ${i + 3}`, `user${i + 3}`, i + 3));
+    const thread = Array.from({ length: 5 }, (_, i) =>
+      comment(`note ${i + 3}`, `user${i + 3}`, i + 3)
+    );
     const result = formatIssuePromptContext(
       source({ comments: { status: "read", recent: thread, total: 7 } })
     );

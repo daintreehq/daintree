@@ -3533,7 +3533,9 @@ describe("NewWorktreeDialog — the issue in the first prompt (#16380)", () => {
     vi.clearAllMocks();
   });
 
-  async function openWithClaude(props: Partial<React.ComponentProps<typeof NewWorktreeDialog>> = {}) {
+  async function openWithClaude(
+    props: Partial<React.ComponentProps<typeof NewWorktreeDialog>> = {}
+  ) {
     renderDialog({ initialIssue: ISSUE, ...props });
     await advanceTimersGradually(500);
     await act(async () => {
@@ -3651,9 +3653,7 @@ describe("NewWorktreeDialog — the issue in the first prompt (#16380)", () => {
     await openWithClaude();
     await advanceTimersGradually(300);
 
-    expect(screen.getByTestId("include-issue-in-prompt").getAttribute("aria-checked")).toBe(
-      "true"
-    );
+    expect(screen.getByTestId("include-issue-in-prompt").getAttribute("aria-checked")).toBe("true");
     expect(mockGetIssue).toHaveBeenCalledTimes(1);
 
     await toggleInclude();
@@ -3669,9 +3669,7 @@ describe("NewWorktreeDialog — the issue in the first prompt (#16380)", () => {
     });
     await advanceTimersGradually(300);
 
-    expect(screen.getByTestId("include-issue-in-prompt").getAttribute("aria-checked")).toBe(
-      "true"
-    );
+    expect(screen.getByTestId("include-issue-in-prompt").getAttribute("aria-checked")).toBe("true");
     expect(mockGetIssue).toHaveBeenCalled();
   });
 
