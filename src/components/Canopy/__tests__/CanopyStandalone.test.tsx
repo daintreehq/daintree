@@ -1255,10 +1255,8 @@ describe("taking up a dialog popped out into the window (#16338)", () => {
         .getState()
         .receivePopOut(popOut({ query: "needle", selection: { kind: "worker", runId: other } }));
     });
-    // Past the search's wait on the typing: the terminals are asked, not yet answered.
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 250));
-    });
+    // The terminals are asked once the search's wait on the typing is over, not yet answered.
+    await vi.waitFor(() => expect(canopy.searchScreens).toHaveBeenCalled());
     expect(canopy.searchScreens).toHaveBeenCalled();
     expect(useCanopyStore.getState().popOutLanding).not.toBeNull();
 
