@@ -49,9 +49,14 @@ describe("userPromptTemplates handlers", () => {
   });
 
   it("answers a list with the folder as it stands", async () => {
-    const snapshot = { directory: "/me/.daintree/templates", templates: [], problems: [] };
+    const snapshot = {
+      directory: "/me/.daintree/templates",
+      templates: [{ id: "t", title: "T", description: "D", body: "B", args: [] }],
+      problems: [{ fileName: "bad.md", reason: "title is missing" }],
+    };
     service.readUserPromptTemplates.mockResolvedValue(snapshot);
     await expect(call("user-prompt-templates:list")).resolves.toEqual(snapshot);
+    expect(service.readUserPromptTemplates).toHaveBeenCalledTimes(1);
   });
 
   it("creates the folder before opening it, and says it opened", async () => {

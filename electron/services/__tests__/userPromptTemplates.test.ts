@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ensureUserPromptTemplatesDir,
   getUserPromptTemplatesDir,
@@ -257,9 +257,12 @@ describe("readUserPromptTemplates", () => {
     await Promise.all(
       Array.from({ length: 100 }, (_, i) => write(`t${String(i).padStart(3, "0")}.md`))
     );
-    // Reading it would report it, so its absence shows it was never opened.
     await write("t100.md", "not a template");
+    const open = vi.spyOn(fs, "open");
     const { templates, problems } = await readUserPromptTemplates(dir);
+    expect(open).toHaveBeenCalledTimes(100);
+    expect(open).not.toHaveBeenCalledWith(path.join(dir, "t100.md"), expect.anything());
+    open.mockRestore();
     expect(templates).toHaveLength(100);
     expect(templates.at(-1)?.id).toBe("t099");
     expect(problems).toEqual([{ fileName: null, reason: expect.stringContaining("first 100") }]);
