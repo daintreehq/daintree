@@ -209,6 +209,12 @@ async function inScheduleTurn<T>(key: string, work: () => Promise<T>): Promise<T
   }
 }
 
+/** @internal Tests only: forgets every turn, so one test's abandoned launch holds up no other. */
+export function _resetScheduledRunLauncherForTest(): void {
+  scheduleTurns.clear();
+  agentTurns.clear();
+}
+
 const CASE_INSENSITIVE_PATHS = process.platform === "darwin" || process.platform === "win32";
 
 function samePath(a: string, b: string): boolean {
@@ -518,8 +524,10 @@ async function launchInScheduleTurn<View>(
     try {
       if (passOnAgentTurn !== null) {
         // What may have changed while another launch of the agent was asked.
+        // A wait behind a slow view can outlast a cadence change, which
+        // cancels no reservation.
         if (reserved.state().kind !== "pending") return { status: "not-found" };
-        if (isShuttingDown()) {
+        if (isShuttingDown() || input.stillCurrent?.() === false) {
           reserved.withdraw();
           return { status: "not-found" };
         }
