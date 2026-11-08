@@ -417,6 +417,8 @@ function describeContextSource(token: DraftContextToken, cwd: string | undefined
   switch (token.kind) {
     case "diff":
       return `${token.text} from ${cwd || "its working directory"}`;
+    case "notes":
+      return `${token.text} from its own worktree`;
     case "terminal":
       return `${token.text} from its own output`;
     case "selection":

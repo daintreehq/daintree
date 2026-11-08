@@ -11,12 +11,21 @@ import { logWarn } from "@/utils/logger";
 export function submitComposerText(
   id: string,
   text: string,
-  imagePaths: string[] | undefined
+  imagePaths: string[] | undefined,
+  submissionToken?: string
 ): Promise<boolean> {
-  const submission =
-    imagePaths !== undefined && imagePaths.length > 0
-      ? terminalClient.submitWithImages(id, text, imagePaths)
-      : terminalClient.submit(id, text);
+  let submission: Promise<void>;
+  if (imagePaths !== undefined && imagePaths.length > 0) {
+    submission =
+      submissionToken === undefined
+        ? terminalClient.submitWithImages(id, text, imagePaths)
+        : terminalClient.submitWithImages(id, text, imagePaths, submissionToken);
+  } else {
+    submission =
+      submissionToken === undefined
+        ? terminalClient.submit(id, text)
+        : terminalClient.submit(id, text, submissionToken);
+  }
   return submission.then(
     () => true,
     (err: unknown) => {
@@ -36,14 +45,16 @@ export async function submitPaneComposerText(
   id: string,
   text: string,
   imagePaths: readonly string[] | undefined,
-  pane: { canTakeInput: () => boolean; onSending: () => void; onAccepted: () => void }
+  pane: { canTakeInput: () => boolean; onSending: () => void; onAccepted: () => void },
+  submissionToken?: string
 ): Promise<boolean> {
   if (!pane.canTakeInput()) return false;
   pane.onSending();
   const accepted = await submitComposerText(
     id,
     text,
-    imagePaths && imagePaths.length > 0 ? [...imagePaths] : undefined
+    imagePaths && imagePaths.length > 0 ? [...imagePaths] : undefined,
+    submissionToken
   );
   if (accepted) pane.onAccepted();
   return accepted;

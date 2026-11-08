@@ -36,7 +36,7 @@ const CATEGORY_LABEL: Partial<Record<CompletionKind, string>> = {
 export type AutocompleteEnterAction = "insert" | "execute";
 
 /** Daintree resolvers that expand a token to content at send time; `context` is a plugin's provider. */
-export type CompletionResolverId = "diff" | "terminal" | "selection" | "context";
+export type CompletionResolverId = "diff" | "terminal" | "selection" | "notes" | "context";
 
 /**
  * How the inserted token behaves at send time. `literal` passes through the PTY

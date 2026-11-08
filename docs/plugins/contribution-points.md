@@ -1437,7 +1437,7 @@ export async function activate(host: PluginHostApi) {
 | Field | Required | Notes |
 | --- | --- | --- |
 | `id` | yes | Unique within the plugin's `contextProviders`; `host.registerContextProvider` binds to it. |
-| `prefix` | yes | One to sixteen lowercase letters. Never `diff`, `terminal` or `selection`, which the composer reserves, and never two of the plugin's own providers' prefix. |
+| `prefix` | yes | One to sixteen lowercase letters. Never `diff`, `terminal`, `selection` or `notes`, which the composer reserves, and never two of the plugin's own providers' prefix. |
 | `label` | yes | What the provider offers ("Records"). Shown on its chips' card and in Project settings. At most 60 characters. |
 
 **The impl.** `search(query, { signal })` gets only what the user typed after `@{prefix}:` — never the rest of the draft — and returns at most 50 `{ id, label, description? }` rows, best first. `resolve(id, { signal })` returns `{ text, title? }`, or `null` when the item is gone. An item `id` is one draft token: up to 128 letters, digits and `_ - . : / # ~ + =`, not ending in `.` or `:`. Rows with any other id are dropped.

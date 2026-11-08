@@ -951,21 +951,31 @@ function TerminalPaneComponent({
 
   // Says whether the terminal took the composer's text: the composer keeps a
   // refused draft where it was typed (#14945).
-  const submitFromComposer = (text: string, imagePaths: readonly string[] | undefined) =>
-    submitPaneComposerText(id, text, imagePaths, {
-      canTakeInput: () => {
-        const panel = usePanelStore.getState().panelsById[id];
-        const pty = panel && isPtyPanel(panel) ? panel : undefined;
-        return (
-          !(isInputLockedOverride ?? pty?.isInputLocked === true) && pty?.isRestarting !== true
-        );
+  const submitFromComposer = (
+    text: string,
+    imagePaths: readonly string[] | undefined,
+    submissionToken?: string
+  ) =>
+    submitPaneComposerText(
+      id,
+      text,
+      imagePaths,
+      {
+        canTakeInput: () => {
+          const panel = usePanelStore.getState().panelsById[id];
+          const pty = panel && isPtyPanel(panel) ? panel : undefined;
+          return (
+            !(isInputLockedOverride ?? pty?.isInputLocked === true) && pty?.isRestarting !== true
+          );
+        },
+        onSending: () => withTerminalService((service) => service.notifyUserInput(id), id),
+        onAccepted: () => {
+          reportCanopySent(id);
+          handleInput(buildTerminalSendPayload(text).trackerData);
+        },
       },
-      onSending: () => withTerminalService((service) => service.notifyUserInput(id), id),
-      onAccepted: () => {
-        reportCanopySent(id);
-        handleInput(buildTerminalSendPayload(text).trackerData);
-      },
-    });
+      submissionToken
+    );
 
   useEffect(() => {
     const handleFindInPanel = () => {

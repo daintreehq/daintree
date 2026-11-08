@@ -1,11 +1,15 @@
 import { useMemo } from "react";
 import type { ContextProviderItem } from "@shared/types/pluginContextProvider";
 import { formatContextReference } from "@shared/utils/pluginContextReference";
+import { pluralize } from "@/lib/pluralize";
+import { hasPendingDiffNotes, type PendingDiffNotes } from "@/components/Worktree/diffNotes";
 import type { AutocompleteItem } from "../AutocompleteMenu";
 import { filterForgeReferences, type ForgeReference } from "../forgeReferences";
 import {
+  canSpellAtNotesPath,
   getDaintreeAtClaim,
   formatAtFileToken,
+  formatAtNotesToken,
   type ActiveCompletionContext,
 } from "../hybridInputParsing";
 
@@ -30,12 +34,15 @@ interface UseAutocompleteItemsParams {
   contextItems?: ContextProviderItem[];
   isContextLoading?: boolean;
   forgeReferences?: ForgeReference[];
+  /** The notes this composer's `@notes` would take; `null` where it can't take any. */
+  pendingDiffNotes?: PendingDiffNotes | null;
 }
 
 const NO_CONTEXT_ITEMS: ContextProviderItem[] = [];
 const NO_FORGE_REFERENCES: ForgeReference[] = [];
 const NO_TEMPLATE_ITEMS: AutocompleteItem[] = [];
 const FORGE_REFERENCE_LIMIT = 50;
+const NOTE_FILE_ROW_LIMIT = 50;
 
 /** What a `#` row says about its item: whether it's an issue or a PR, and its state. */
 export function forgeReferenceBadge(ref: Pick<ForgeReference, "kind" | "isDraft">): string {
@@ -93,11 +100,67 @@ const SELECTION_ITEM: AutocompleteItem = {
   insert: { insert: "resolve", resolverId: "selection" },
 };
 
+const NOTES_RESOLVER: AutocompleteItem["insert"] = { insert: "resolve", resolverId: "notes" };
+
+/** What a notes row would send, or that its notes wait on an open editor. */
+function noteCountBadge(sendable: number): string {
+  return sendable > 0 ? pluralize(sendable, "note") : "Being edited";
+}
+
+/**
+ * `@notes` and one row per file with notes, narrowed by what is typed after
+ * `@notes:`. Empty while nothing is pending, which is what makes the rows a
+ * reminder rather than a fixture of the menu.
+ */
+function diffNoteItems(pending: PendingDiffNotes | null, query: string): AutocompleteItem[] {
+  if (!pending) return [];
+  const sendableByFile = new Map<string, number>();
+  for (const { filePath } of pending.editing) sendableByFile.set(filePath, 0);
+  for (const { filePath } of pending.sendable) {
+    sendableByFile.set(filePath, (sendableByFile.get(filePath) ?? 0) + 1);
+  }
+  if (sendableByFile.size === 0) return [];
+
+  const narrowing = query.startsWith("notes:");
+  const needle = narrowing ? query.slice("notes:".length).replace(/^"/, "").toLowerCase() : "";
+  const items: AutocompleteItem[] = narrowing
+    ? []
+    : [
+        {
+          key: "notes",
+          label: "@notes",
+          description: "Every pending note, cleared on send",
+          badge: noteCountBadge(pending.sendable.length),
+          insertText: formatAtNotesToken(null),
+          enterAction: "insert",
+          insert: NOTES_RESOLVER,
+        },
+      ];
+  const filePaths = [...sendableByFile.keys()]
+    .filter((filePath) => canSpellAtNotesPath(filePath))
+    .filter((filePath) => filePath.toLowerCase().includes(needle))
+    .sort();
+  for (const filePath of filePaths.slice(0, NOTE_FILE_ROW_LIMIT)) {
+    const sep = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
+    items.push({
+      key: `notes:${filePath}`,
+      label: `@notes:${filePath.slice(sep + 1)}`,
+      description: sep >= 0 ? filePath.slice(0, sep) : undefined,
+      descriptionKind: "path",
+      badge: noteCountBadge(sendableByFile.get(filePath) ?? 0),
+      insertText: formatAtNotesToken(filePath),
+      enterAction: "insert",
+      insert: NOTES_RESOLVER,
+    });
+  }
+  return items;
+}
+
 /**
  * Merge the active trigger's completion items. `/` and `$` come pre-mapped from
  * discovery, and `/` adds the plugins' prompt templates after them; `#` narrows the project's open issues and pull requests; `@` is
- * served by Daintree's diff/terminal/selection providers (which claim their
- * prefixes ahead of file search) with `@file` fuzzy search as the fallback
+ * served by Daintree's diff/terminal/selection/notes providers (which claim
+ * their prefixes ahead of file search) with `@file` fuzzy search as the fallback
  * provider.
  */
 export function useAutocompleteItems({
@@ -111,6 +174,7 @@ export function useAutocompleteItems({
   contextItems = NO_CONTEXT_ITEMS,
   isContextLoading = false,
   forgeReferences = NO_FORGE_REFERENCES,
+  pendingDiffNotes = null,
 }: UseAutocompleteItemsParams) {
   const query = activeCompletionContext?.query ?? "";
   const contextPrefix = contextClaim?.prefix ?? null;
@@ -182,6 +246,11 @@ export function useAutocompleteItems({
     return DIFF_ITEMS.filter((item) => item.insertText.slice(1).startsWith(query));
   }, [query]);
 
+  const noteItems = useMemo(
+    (): AutocompleteItem[] => diffNoteItems(pendingDiffNotes, query),
+    [pendingDiffNotes, query]
+  );
+
   const { autocompleteItems, isLoading } = useMemo((): {
     autocompleteItems: AutocompleteItem[];
     isLoading: boolean;
@@ -205,10 +274,18 @@ export function useAutocompleteItems({
     if (contextPrefix !== null) {
       return { autocompleteItems: contextRows, isLoading: isContextLoading };
     }
-    const claim = getDaintreeAtClaim(ctx.query);
+    const claim = getDaintreeAtClaim(ctx.query, hasPendingDiffNotes(pendingDiffNotes));
     if (claim === "terminal") return { autocompleteItems: [TERMINAL_ITEM], isLoading: false };
     if (claim === "selection") return { autocompleteItems: [SELECTION_ITEM], isLoading: false };
-    if (claim === "diff") return { autocompleteItems: diffItems, isLoading: false };
+    if (claim === "notes") return { autocompleteItems: noteItems, isLoading: false };
+    if (claim === "diff") {
+      // A bare `@` is where the reminder shows, after the rows it has always
+      // led with, so `@` and Enter still picks a diff.
+      return {
+        autocompleteItems: ctx.query === "" ? [...diffItems, ...noteItems] : diffItems,
+        isLoading: false,
+      };
+    }
     return { autocompleteItems: fileItems, isLoading: isAutocompleteLoading };
   }, [
     activeCompletionContext,
@@ -216,6 +293,8 @@ export function useAutocompleteItems({
     isCommandsLoading,
     templateItems,
     diffItems,
+    pendingDiffNotes,
+    noteItems,
     fileItems,
     isAutocompleteLoading,
     contextPrefix,

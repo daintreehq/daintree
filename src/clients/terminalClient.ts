@@ -564,7 +564,12 @@ export const terminalClient = {
    * agent that takes a lone pasted path as an image attachment gets each one
    * that way, and every other agent gets `text` exactly as `submit` sends it.
    */
-  submitWithImages: (id: string, text: string, imagePaths: string[]): Promise<void> => {
+  submitWithImages: (
+    id: string,
+    text: string,
+    imagePaths: string[],
+    submissionToken?: string
+  ): Promise<void> => {
     // Main refuses the whole submission over one path it cannot attach, so a
     // chip that could never be an attachment (a UNC share, say) is dropped
     // here and simply stays text — the draft still goes out.
@@ -574,9 +579,12 @@ export const terminalClient = {
       return Promise.reject(terminalInputBlockedError(blocked));
     }
     const attachable = imagePaths.filter(isImageAttachmentPath).slice(0, MAX_SUBMIT_IMAGE_PATHS);
-    return attachable.length === 0
+    if (attachable.length > 0) {
+      return window.electron.terminal.submit(id, text, submissionToken, undefined, attachable);
+    }
+    return submissionToken === undefined
       ? window.electron.terminal.submit(id, text)
-      : window.electron.terminal.submit(id, text, undefined, undefined, attachable);
+      : window.electron.terminal.submit(id, text, submissionToken);
   },
 
   /**

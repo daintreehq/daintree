@@ -19,7 +19,7 @@ describe("context provider prefixes (#13795)", () => {
     expect(isContextProviderPrefix("Rec")).toBe(false);
     expect(isContextProviderPrefix("rec2")).toBe(false);
     expect(isContextProviderPrefix("")).toBe(false);
-    for (const reserved of ["diff", "terminal", "selection"]) {
+    for (const reserved of ["diff", "terminal", "selection", "notes"]) {
       expect(isContextProviderPrefix(reserved)).toBe(false);
     }
   });

@@ -1,9 +1,7 @@
 import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore, usePreferencesStore } from "@/store";
-import { isPtyPanel } from "@shared/types/panel";
-import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
-import { join, normalize } from "@shared/utils/path";
+import type { PtyPanelData } from "@shared/types/panel";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
 import { terminalClient } from "@/clients";
@@ -13,10 +11,11 @@ import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/ter
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useDiffNotesStore } from "@/store/diffNotesStore";
 import {
-  formatDiffNotesPrompt,
+  formatDiffNotesPromptForCwd,
   sortDiffNotes,
   type DiffNote,
 } from "@/components/Worktree/diffNotes";
+import { isAgentPasteTarget } from "@/components/Worktree/diffNoteAgentTarget";
 
 export interface DiffNoteTarget {
   id: string;
@@ -42,28 +41,6 @@ export function orderDiffNoteTargets(
     ...targets.filter((target) => target.worktreeId === worktreeId),
     ...targets.filter((target) => target.worktreeId !== worktreeId),
   ];
-}
-
-/**
- * A paste is only safe into an agent: in a plain shell each line of a
- * multi-line note would run as a command. `isAgent` is the observed identity
- * (detected, or the launch agent until an exit was seen), so a pane whose agent
- * quit back to its shell drops out.
- */
-function isAgentPasteTarget(panel: PanelInstance | undefined): panel is PtyPanelData {
-  if (!panel) return false;
-  if (
-    panel.location === "trash" ||
-    panel.location === "background" ||
-    panel.location === "overlay"
-  ) {
-    return false;
-  }
-  if (!isPtyPanel(panel) || panel.hasPty === false) return false;
-  // Mid-restart the pane keeps its agent identity but its instance is gone
-  // and the process is on its way out.
-  if (panel.isRestarting) return false;
-  return deriveTerminalChrome(panel).isAgent;
 }
 
 export function useDiffNoteTargets(worktreeId: string | null): DiffNoteTarget[] {
@@ -141,13 +118,7 @@ export function deliverDiffNotes(
   if (ordered.length === 0) {
     return { ok: false, message: "Finish editing your notes before sending them." };
   }
-  // Paths stay worktree-relative only for an agent sitting at that worktree's
-  // root. One in a subdirectory, or another checkout, would resolve them
-  // against the wrong base, so it gets them absolute.
-  const cwd = panel.cwd ? normalize(panel.cwd) : "";
-  const prompt = formatDiffNotesPrompt(ordered, (note) =>
-    cwd === normalize(note.worktreePath) ? note.filePath : join(note.worktreePath, note.filePath)
-  );
+  const prompt = formatDiffNotesPromptForCwd(ordered, panel.cwd);
   try {
     terminalClient.write(targetId, formatForTerminalPaste(prompt, { bracketedPasteMode: true }));
   } catch (error) {

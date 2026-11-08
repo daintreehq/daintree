@@ -15,6 +15,7 @@ export const CONTEXT_PROVIDER_RESERVED_PREFIXES: ReadonlySet<string> = new Set([
   "diff",
   "terminal",
   "selection",
+  "notes",
 ]);
 
 export const CONTEXT_ITEM_ID_MAX_LENGTH = 128;

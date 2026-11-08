@@ -11,6 +11,7 @@ import {
   createImageChipTooltip,
   createFileDropChipTooltip,
   createDiffChipTooltip,
+  createNotesChipTooltip,
   createTerminalChipTooltip,
   createSelectionChipTooltip,
   createContextReferenceChipTooltip,
@@ -61,6 +62,7 @@ interface UseCompartmentDriverParams {
   terminalChipTooltipCompartmentRef: React.RefObject<Compartment>;
   selectionChipTooltipCompartmentRef: React.RefObject<Compartment>;
   contextChipTooltipCompartmentRef: React.RefObject<Compartment>;
+  notesChipTooltipCompartmentRef: React.RefObject<Compartment>;
   forgeReferenceTooltipCompartmentRef: React.RefObject<Compartment>;
   isAutocompleteOpen: boolean;
 }
@@ -84,6 +86,7 @@ export function useCompartmentDriver({
   terminalChipTooltipCompartmentRef,
   selectionChipTooltipCompartmentRef,
   contextChipTooltipCompartmentRef,
+  notesChipTooltipCompartmentRef,
   forgeReferenceTooltipCompartmentRef,
   isAutocompleteOpen,
 }: UseCompartmentDriverParams) {
@@ -144,6 +147,7 @@ export function useCompartmentDriver({
         [terminalChipTooltipCompartmentRef, createTerminalChipTooltip],
         [selectionChipTooltipCompartmentRef, createSelectionChipTooltip],
         [contextChipTooltipCompartmentRef, createContextReferenceChipTooltip],
+        [notesChipTooltipCompartmentRef, createNotesChipTooltip],
         [forgeReferenceTooltipCompartmentRef, createForgeReferenceTooltip],
       ];
       for (const [ref, create] of chipTooltips) {
@@ -171,6 +175,7 @@ export function useCompartmentDriver({
     terminalChipTooltipCompartmentRef,
     selectionChipTooltipCompartmentRef,
     contextChipTooltipCompartmentRef,
+    notesChipTooltipCompartmentRef,
     forgeReferenceTooltipCompartmentRef,
   ]);
 }

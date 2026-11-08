@@ -8,6 +8,11 @@ import {
 import {
   getActiveCompletionContext,
   getDaintreeAtClaim,
+  getAllAtNotesTokens,
+  formatAtNotesToken,
+  canSpellAtNotesPath,
+  draftIsOnlyNotesTokens,
+  matchesNotesPrefix,
   matchesDiffPrefix,
   matchesTerminalPrefix,
   matchesSelectionPrefix,
@@ -217,6 +222,137 @@ describe("getDaintreeAtClaim + prefix matchers", () => {
   it("falls through to file search for non-provider queries", () => {
     expect(getDaintreeAtClaim("src/")).toBeNull();
     expect(getDaintreeAtClaim("ters")).toBeNull();
+  });
+});
+
+describe("@notes", () => {
+  it("claims only while notes are on offer, from four chars in", () => {
+    expect(getDaintreeAtClaim("note")).toBeNull();
+    expect(getDaintreeAtClaim("notes:src")).toBeNull();
+    expect(getDaintreeAtClaim("not", true)).toBeNull();
+    expect(getDaintreeAtClaim("note", true)).toBe("notes");
+    expect(getDaintreeAtClaim("notes", true)).toBe("notes");
+    expect(getDaintreeAtClaim("notes:src/a", true)).toBe("notes");
+    // A file search once the letters stop spelling the word.
+    expect(getDaintreeAtClaim("notes.md", true)).toBeNull();
+    expect(getDaintreeAtClaim("notebook", true)).toBeNull();
+    // A bare `@` is still the diff rows' claim.
+    expect(getDaintreeAtClaim("", true)).toBe("diff");
+    expect(matchesNotesPrefix("no")).toBe(false);
+  });
+
+  it("reads the bare token and the per-file form, plain and quoted", () => {
+    expect(getAllAtNotesTokens("@notes")).toEqual([{ start: 0, end: 6, filePath: null }]);
+    expect(getAllAtNotesTokens("see @notes:src/a.ts now")).toEqual([
+      { start: 4, end: 19, filePath: "src/a.ts" },
+    ]);
+    expect(getAllAtNotesTokens('@notes:"my dir/a b.ts" now')).toEqual([
+      { start: 0, end: 22, filePath: "my dir/a b.ts" },
+    ]);
+    expect(getAllAtNotesTokens('@notes:"a \\"b\\".ts"')).toEqual([
+      { start: 0, end: 19, filePath: 'a "b".ts' },
+    ]);
+  });
+
+  it("leaves a sentence's punctuation outside a per-file token", () => {
+    const [token] = getAllAtNotesTokens("Fix @notes:src/a.ts, then stop");
+    expect(token).toEqual({ start: 4, end: 19, filePath: "src/a.ts" });
+  });
+
+  it("reads a later token whole when an earlier quote never closed", () => {
+    expect(getAllAtNotesTokens('@notes:"src/a.ts then @notes:"other b.ts" now')).toEqual([
+      { start: 22, end: 41, filePath: "other b.ts" },
+    ]);
+    // A sentence can follow a closing quote directly.
+    for (const after of [", then", "…", "—ok", '"']) {
+      expect(getAllAtNotesTokens(`@notes:"a b.ts"${after}`), after).toEqual([
+        { start: 0, end: 15, filePath: "a b.ts" },
+      ]);
+    }
+  });
+
+  it("ignores what only looks like the token", () => {
+    for (const text of [
+      "me@notes",
+      "@notes.",
+      "@notes,",
+      "@notesy",
+      "@notes:",
+      '@notes:"',
+      '@notes:"unterminated path',
+      '@notes:""',
+      '@notes:"a\nb"',
+      "@Notes",
+    ]) {
+      expect(getAllAtNotesTokens(text), text).toEqual([]);
+    }
+  });
+
+  it("round-trips every path a worktree can hold", () => {
+    for (const filePath of [
+      "src/a.ts",
+      "my dir/a b.ts",
+      'quo"te.ts',
+      "ends-with.",
+      "comma,",
+      "paren)",
+      "colon:",
+      "with:colon.ts",
+    ]) {
+      const token = formatAtNotesToken(filePath);
+      expect(getAllAtNotesTokens(`Fix ${token} now`), token).toEqual([
+        { start: 4, end: 4 + token.length, filePath },
+      ]);
+    }
+    expect(formatAtNotesToken(null)).toBe("@notes");
+    expect(formatAtNotesToken("src/a.ts")).toBe("@notes:src/a.ts");
+    expect(formatAtNotesToken("a b.ts")).toBe('@notes:"a b.ts"');
+  });
+
+  it("won't offer a per-file token for a path it can't read back", () => {
+    for (const filePath of ["line\nbreak.ts", "my dir/ends-with\\"]) {
+      expect(canSpellAtNotesPath(filePath), filePath).toBe(false);
+    }
+    for (const filePath of ["src/a.ts", "my dir/a b.ts", "ends-with\\", 'quo"te.ts']) {
+      expect(canSpellAtNotesPath(filePath), filePath).toBe(true);
+    }
+  });
+
+  it("replaces a whole quoted path when completing inside it, however many spaces it has", () => {
+    const triggers = new Set<ComposerTrigger>(["@"]);
+    const text = '@notes:"my dir/a b.ts" then more';
+    expect(getActiveCompletionContext(text, 10, triggers)).toEqual({
+      triggerChar: "@",
+      start: 0,
+      tokenEnd: 22,
+      query: 'notes:"my',
+    });
+    // An unclosed quote, or the caret still before the path, runs to whitespace as ever.
+    expect(getActiveCompletionContext('@notes:"my dir', 10, triggers)?.tokenEnd).toBe(10);
+    expect(getActiveCompletionContext(text, 3, triggers)?.tokenEnd).toBe(10);
+    // Typed against a word, the token still ends there.
+    expect(getActiveCompletionContext(text, 10, triggers, 10)?.tokenEnd).toBe(10);
+    // A later token's opening quote isn't this one's end: nothing past the word goes.
+    const unclosed = '@notes:"src/a.ts then @notes:"other.ts"';
+    expect(getActiveCompletionContext(unclosed, 10, triggers)?.tokenEnd).toBe(16);
+  });
+
+  it("tells a draft of only @notes from one with something to say", () => {
+    expect(draftIsOnlyNotesTokens("@notes")).toBe(true);
+    expect(draftIsOnlyNotesTokens('  @notes @notes:a.ts\n@notes:"b c.ts" ')).toBe(true);
+    expect(draftIsOnlyNotesTokens("Fix @notes")).toBe(false);
+    expect(draftIsOnlyNotesTokens("")).toBe(false);
+    expect(draftIsOnlyNotesTokens("Just a prompt")).toBe(false);
+  });
+
+  it("keeps a real file named notes a path, and out of a chip's way", () => {
+    expect(formatAtFileToken("notes")).toBe("@./notes");
+    expect(getAllAtContextReferences("@notes:src/a.ts")).toEqual([]);
+  });
+
+  it("stays literal inside a handoff block", () => {
+    const handoff = formatAgentContextBlock({ text: "see @notes", title: "Card" });
+    expect(getAllAtNotesTokens(`Read this\n${handoff}`)).toEqual([]);
   });
 });
 
