@@ -244,6 +244,16 @@ describe("serializePtyPanel — worktreeMoveNotice is never persisted", () => {
   });
 });
 
+// Closing the full-screen notice (#16357) holds it back for the pane's lifetime,
+// not the app's: a restart is a new process that may well be full-screen again.
+describe("serializePtyPanel — altScreenNoticeDismissed is never persisted", () => {
+  it("omits altScreenNoticeDismissed even when the panel currently carries it", () => {
+    const panel = makePanel({ altScreenNoticeDismissed: true });
+    const snapshot = serializePtyPanel(panel) as Record<string, unknown>;
+    expect("altScreenNoticeDismissed" in snapshot).toBe(false);
+  });
+});
+
 // A session-id-assigning flag is spent the moment the CLI accepts it (#11782).
 // Persisting it would hand a rejected launch to any restore that replays the
 // stored command, so the command is persisted without it while the id itself

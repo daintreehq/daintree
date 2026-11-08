@@ -237,11 +237,15 @@ export function carryLivePaneRecords(
 ): CarrierPanel {
   if (!existing || !isPtyPanel(incoming)) return incoming;
   const firstPrompt = replacesRun ? undefined : existing.firstPrompt;
-  if (!existing.scratchpad && !firstPrompt) return incoming;
+  const altScreenNoticeDismissed = existing.altScreenNoticeDismissed === true;
+  if (!existing.scratchpad && !firstPrompt && !altScreenNoticeDismissed) return incoming;
   return {
     ...incoming,
     ...(existing.scratchpad && { scratchpad: existing.scratchpad }),
     ...(firstPrompt && { firstPrompt }),
+    // The user's close of the full-screen notice belongs to the pane, not to
+    // the process, so it outlasts a relaunch (#16357).
+    ...(altScreenNoticeDismissed && { altScreenNoticeDismissed }),
   };
 }
 

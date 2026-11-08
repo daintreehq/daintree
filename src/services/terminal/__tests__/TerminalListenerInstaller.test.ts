@@ -197,9 +197,10 @@ function makeMockManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTermi
 
 function installOnMock(
   terminal: ReturnType<typeof makeMockTerminal>,
-  deps: TerminalListenerInstallDeps
+  deps: TerminalListenerInstallDeps,
+  managedOverrides: Partial<ManagedTerminal> = {}
 ): ManagedTerminal {
-  const managed = makeMockManaged();
+  const managed = makeMockManaged(managedOverrides);
   const asXterm = terminal as unknown as ManagedTerminal["terminal"];
   managed.terminal = asXterm;
   installTerminalBoundListeners(asXterm, managed, "t1", deps);
@@ -2146,5 +2147,42 @@ describe("wheelEventToLineCount", () => {
     const carry = { partial: 0 };
     expect(wheelEventToLineCount(ev(10, 0), 24, carry)).toBe(0);
     expect(wheelEventToLineCount(ev(-20, 0), 24, carry)).toBe(-1);
+  });
+});
+
+describe("installTerminalBoundListeners buffer mode announcements", () => {
+  function install(initialType: "normal" | "alternate", previouslyAlt: boolean | undefined) {
+    const terminal = makeMockTerminal({ onTitleChangeHandlers: [] });
+    terminal.buffer.active.type = initialType;
+    const deps = makeDeps();
+    const managed = installOnMock(terminal, deps, { isAltBuffer: previouslyAlt });
+    return { managed, deps };
+  }
+
+  it("announces a terminal that is created on the alternate screen", () => {
+    const { managed, deps } = install("alternate", undefined);
+
+    expect(managed.isAltBuffer).toBe(true);
+    expect(deps.onBufferModeChange).toHaveBeenCalledExactlyOnceWith("t1", true);
+  });
+
+  it("stays quiet for a fresh terminal on the main screen", () => {
+    const { managed, deps } = install("normal", undefined);
+
+    expect(managed.isAltBuffer).toBe(false);
+    expect(deps.onBufferModeChange).not.toHaveBeenCalled();
+  });
+
+  it("tells subscribers when a rebuilt terminal comes back on the main screen", () => {
+    const { managed, deps } = install("normal", true);
+
+    expect(managed.isAltBuffer).toBe(false);
+    expect(deps.onBufferModeChange).toHaveBeenCalledExactlyOnceWith("t1", false);
+  });
+
+  it("announces again when a rebuilt terminal is still on the alternate screen", () => {
+    const { deps } = install("alternate", true);
+
+    expect(deps.onBufferModeChange).toHaveBeenCalledExactlyOnceWith("t1", true);
   });
 });

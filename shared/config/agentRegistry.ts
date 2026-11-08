@@ -942,6 +942,12 @@ export interface AgentConfig {
      */
     inlineModeEnv?: Readonly<Record<string, string>>;
     /**
+     * The command typed inside the CLI that switches its renderer back to the
+     * main screen, for a CLI that has one (#16357). Shown by the pane's
+     * full-screen notice; Daintree never sends it.
+     */
+    inlineModeCommand?: string;
+    /**
      * Purely decorative TUI effects the CLI draws regardless of work progress,
      * and the launch arguments that switch them off. Injected on every spawn,
      * restart and resume unless the user's per-agent `decorativeEffects`

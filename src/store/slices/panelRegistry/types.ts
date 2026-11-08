@@ -458,6 +458,12 @@ export interface PanelRegistrySlice {
    */
   dismissSessionLost: (id: string) => void;
   /**
+   * Hide the "running full-screen" notice for the rest of this panel's life
+   * (#16357). Kept on the panel, not in component state, so the grid dropping
+   * the pane on a worktree switch cannot bring the notice back.
+   */
+  dismissAltScreenNotice: (id: string) => void;
+  /**
    * Acknowledge the session-lost signal on every PTY panel carrying it, across
    * all worktrees in this project view (issue #11589). Scoping to the active
    * worktree would leave banners waiting behind a worktree switch — the exact

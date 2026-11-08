@@ -147,6 +147,8 @@ import {
   usePaneInputNotice,
 } from "./TerminalInputBlockBanner";
 import { WorktreeMoveBanner } from "./WorktreeMoveBanner";
+import { AgentAltScreenBanner } from "./AgentAltScreenBanner";
+import { altScreenNoticeAgentId, useAgentAltScreenBanner } from "./useAgentAltScreenBanner";
 import { CanopyPaneOffer, useCanopyPaneOffer } from "@/components/Canopy/CanopyPaneOffer";
 import { RelayDeployBanner } from "./RelayDeployBanner";
 import { RelayUpdateBanner } from "./RelayUpdateBanner";
@@ -883,6 +885,11 @@ function TerminalPaneComponent({
   // (#11445). `useReducer`'s dispatch identity is stable, so handing it
   // straight to XtermAdapter can't churn its attach effect.
   const [attachEpoch, bumpAttachEpoch] = useReducer((epoch: number) => epoch + 1, 0);
+
+  // The pane's current agent identity, built-in or contributed: a plain shell
+  // that runs `vim` or `htop` has none and is never told it is full-screen.
+  const altScreenAgentId = altScreenNoticeAgentId(chrome);
+  const agentAltScreenBanner = useAgentAltScreenBanner(id, altScreenAgentId, attachEpoch);
 
   // This mount is also what discharges the worktree-switch reveal obligation
   // (#11640): the switch's policy pass ran before React re-rendered, so its wake
@@ -1860,6 +1867,15 @@ function TerminalPaneComponent({
               state={canopyOffer}
               agentName={blockedAgentName}
               reason={askedOn ?? "question"}
+            />
+          )}
+        </BannerSlot>
+
+        <BannerSlot visible={agentAltScreenBanner.visible}>
+          {altScreenAgentId && (
+            <AgentAltScreenBanner
+              agentId={altScreenAgentId}
+              onDismiss={agentAltScreenBanner.dismiss}
             />
           )}
         </BannerSlot>
