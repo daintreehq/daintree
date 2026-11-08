@@ -1542,6 +1542,12 @@ export const CHANNELS = {
   TERMINAL_WHEN_DONE_IN_USE_QUERY: "terminal-when-done:in-use-query",
   TERMINAL_WHEN_DONE_IN_USE_REPLY: "terminal-when-done:in-use-reply",
 
+  // A pane composer's send held while its agent works (#16379)
+  COMPOSER_HOLD_HOLD: "composer-hold:hold",
+  COMPOSER_HOLD_WITHDRAW: "composer-hold:withdraw",
+  COMPOSER_HOLD_LIST: "composer-hold:list",
+  COMPOSER_HOLD_CHANGED: "composer-hold:changed",
+
   // Decisions, as main observes it (#16001). The owner's machine only.
   DECISIONS_GET_STATUS: "decisions:get-status",
   // One pane's Decisions state, for its chrome to show on mount (#16016).

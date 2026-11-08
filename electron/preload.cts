@@ -123,6 +123,7 @@ import { buildWindowOpeningPreloadBindings } from "./ipc/handlers/windowOpening.
 import { buildKeepAwakePreloadBindings } from "./ipc/handlers/keepAwake.preload.js";
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
 import { buildTerminalWhenDonePreloadBindings } from "./ipc/handlers/terminalWhenDone.preload.js";
+import { buildComposerHoldPreloadBindings } from "./ipc/handlers/composerHold.preload.js";
 import { buildIdleBackgroundAutoClosePreloadBindings } from "./ipc/handlers/idleBackgroundAutoClose.preload.js";
 import { buildSystemSleepPreloadBindings } from "./ipc/handlers/systemSleep.preload.js";
 import { buildAppVersionInfoPreloadBindings } from "./ipc/handlers/appVersionInfo.preload.js";
@@ -2073,6 +2074,14 @@ function buildElectronApi(): ElectronAPI {
       ) => {
         ipcRenderer.send(CHANNELS.TERMINAL_WHEN_DONE_IN_USE_REPLY, reply);
       },
+    },
+
+    // A pane composer's send held while its agent works (#16379)
+    composerHold: {
+      ...buildComposerHoldPreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: (change: IpcEventMap["composer-hold:changed"]) => void) =>
+        _typedOn(CHANNELS.COMPOSER_HOLD_CHANGED, callback),
     },
 
     // Decisions, as main observes it (#16001)

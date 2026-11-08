@@ -404,15 +404,7 @@ export class McpServerService {
     this.workerSteerQueue = new WorkerSteerQueue({
       enqueueWake: (pane, projectId, wake) =>
         this.terminalNotify.enqueueWake(pane, projectId, wake),
-      // The worker's own line, so a notice it arms later joins this one
-      // rather than replacing it.
-      paneFor: (terminalId) => {
-        const principal = this.workerPrincipalResolver?.(terminalId) ?? null;
-        return {
-          key: principal !== null ? paneNotifyKey(principal) : workerNotifyKey(terminalId),
-          terminalId,
-        };
-      },
+      paneFor: (terminalId) => this.workerNoticePane(terminalId),
       getLiveGeneration: (terminalId) => getPtyClient()?.getLiveGeneration(terminalId) ?? null,
       getTerminalProjectId: (terminalId) =>
         getPtyClient()?.getTerminalProjectId(terminalId) ?? null,
@@ -745,6 +737,18 @@ export class McpServerService {
   }
 
   /** Where the global Assistant's prompts for busy workers are held (#16187). */
+  /**
+   * A terminal's own notice line, for a wake no MCP call of its own queued: a
+   * notice it arms later joins this one rather than replacing it.
+   */
+  workerNoticePane(terminalId: string): OwnPane {
+    const principal = this.workerPrincipalResolver?.(terminalId) ?? null;
+    return {
+      key: principal !== null ? paneNotifyKey(principal) : workerNotifyKey(terminalId),
+      terminalId,
+    };
+  }
+
   getWorkerSteerQueue(): WorkerSteerQueue {
     return this.workerSteerQueue;
   }

@@ -646,6 +646,18 @@ export interface GeneratedIpcInvokeMap {
     args: [__0: { cwd: string }];
     result: string | null;
   };
+  "composer-hold:hold": {
+    args: [terminalId: string, text: string, imagePaths?: string[] | undefined];
+    result: import("./composerHold.js").ComposerHoldResult;
+  };
+  "composer-hold:list": {
+    args: [];
+    result: import("./composerHold.js").HeldComposerSend[];
+  };
+  "composer-hold:withdraw": {
+    args: [terminalId: string, token: string];
+    result: import("./composerHold.js").ComposerHoldWithdrawResult;
+  };
   "config-bundle:apply-import": {
     args: [payload: { bundleJson: string }];
     result: import("../configBundle.js").ConfigImportReport;

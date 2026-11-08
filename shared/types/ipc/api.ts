@@ -1201,6 +1201,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): () => void;
     sendInUseReply(reply: import("./terminalWhenDone.js").TerminalWhenDoneInUseReply): void;
   };
+  // hold / withdraw / list come from GeneratedElectronAPI (#16379).
+  composerHold: GeneratedElectronAPI["composerHold"] & {
+    onChanged(
+      callback: (change: import("./composerHold.js").ComposerHoldChange) => void
+    ): () => void;
+  };
   // ensure / restart / stop / getState etc. come from GeneratedElectronAPI;
   // onStateChanged is a renderer-only subscription.
   devPreview: GeneratedElectronAPI["devPreview"] & {
