@@ -275,26 +275,27 @@ describe("popping a dialog out into the Canopy window (#16338)", () => {
     expect(windowMock.popOutToCanopyWindow).not.toHaveBeenCalled();
   });
 
-  it.each([
+  const missing = [
+    "query",
+    "selection",
+    "roleFilter",
+    "unreadOnly",
+    "keptUnread",
+    "archivedExpanded",
+    "trashExpanded",
+    "workOf",
+  ] as const;
+  const refusedPlaces: Array<[string, unknown]> = [
     ["no host", { ...place, hostId: "" }],
     ["an unknown role", { ...place, roleFilter: "everyone" }],
     ["an unknown selection", { ...place, selection: { kind: "pane", runId: "r" } }],
-    ...(
-      [
-        "query",
-        "selection",
-        "roleFilter",
-        "unreadOnly",
-        "keptUnread",
-        "archivedExpanded",
-        "trashExpanded",
-        "workOf",
-      ] as const
-    ).map((key) => {
+    ...missing.map((key): [string, unknown] => {
       const { [key]: _dropped, ...rest } = place;
-      return [`no ${key}`, rest] as const;
+      return [`no ${key}`, rest];
     }),
-  ])("refuses a place with %s", async (_label, payload) => {
+  ];
+
+  it.each(refusedPlaces)("refuses a place with %s", async (_label, payload) => {
     expect(
       await refused(invokeFrom(PROJECT_VIEW_ID, CANOPY_WINDOW_METHOD_CHANNELS.popOut, payload))
     ).toBe(true);
