@@ -151,6 +151,7 @@ import { terminalAnswerOf, type TerminalAnswer } from "../../shared/utils/termin
 import type { TerminalHandback } from "../../shared/types/handback.js";
 import { withoutHandbackInstruction } from "../../shared/utils/handback.js";
 import { buildFirstPrompt, sanitizeFirstPrompt } from "../../shared/utils/firstPrompt.js";
+import { isCheckoutPendingProject } from "./projectClone/checkoutGate.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1536,6 +1537,22 @@ export class PtyClient extends EventEmitter {
         : undefined;
 
     const resolvedProjectId = normalizedProjectId ?? activeProjectId;
+    // Every launch path ends here: a project still awaiting its clone has no
+    // folder, and the pty-host would quietly fall back to another cwd (#16352).
+    // Only a named project is checked: a spawn naming none isn't asking for
+    // that project's folder, and every launch into a project names it.
+    if (isCheckoutPendingProject(normalizedProjectId)) {
+      const result: SpawnResult = {
+        success: false,
+        id,
+        error: {
+          code: "PROJECT_NOT_READY",
+          message: "This project is still being cloned. Wait for the clone to finish.",
+        },
+      };
+      this.emit("spawn-result", id, result);
+      return;
+    }
     const projectResolvedOptions: PtyHostSpawnOptions =
       resolvedProjectId !== undefined ? { ...options, projectId: resolvedProjectId } : options;
     // Mint the launch generation here — every spawn (fresh, restart, resume)

@@ -60,6 +60,7 @@ import {
 } from "../../../../shared/utils/layoutMerge.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
 import type { Project } from "../../../types/index.js";
+import { isAwaitingClone } from "../../../../shared/types/project.js";
 import type {
   ProjectSwitchOutgoingState,
   ProjectSwitchResult,
@@ -438,6 +439,8 @@ function trackOutgoingPersist(projectId: string | null, persist: Promise<void>):
  */
 async function assertProjectRepositoryIntact(project: Project): Promise<void> {
   if (project.gitBacked === false) return;
+  // A project still awaiting its clone has no folder yet by design (#16352).
+  if (isAwaitingClone(project)) return;
   if ((await probeGitMarker(project.path)) !== "missing") return;
 
   const classification = await projectStore.classifyGitBacking(project.path);
@@ -804,7 +807,14 @@ async function activateProjectView(
   // worktree IPC from the newly-active view.
   let loadWorktrees: Promise<HostLoadKind> | null = null;
   let statusTimingDeadlineAt: number | undefined;
-  if (deps.worktreeService && windowId !== undefined) {
+  // A project still awaiting its clone has no checkout to load (#16352). The
+  // window lets go of whatever workspace it was attached to, so the previous
+  // project's worktree events stop reaching this view; the clone's success
+  // loads the workspace for every window then showing the project.
+  const awaitingClone = isAwaitingClone(project);
+  if (awaitingClone && deps.worktreeService && windowId !== undefined) {
+    deps.worktreeService.unregisterWindow(windowId);
+  } else if (deps.worktreeService && windowId !== undefined) {
     statusTimingDeadlineAt = projectSwitchStatusTiming.begin(
       trace.switchId,
       projectId,
@@ -853,7 +863,7 @@ async function activateProjectView(
     // restore (first switch from the welcome view, or the previous project
     // was deleted mid-switch) release the window's mapping entirely, undoing
     // the early load's attachment.
-    if (loadWorktrees && deps.worktreeService && windowId !== undefined) {
+    if ((loadWorktrees || awaitingClone) && deps.worktreeService && windowId !== undefined) {
       const worktreeService = deps.worktreeService;
       // Restore THIS window's mapping to the project THIS window was showing —
       // from the captured operation, not the global pointer, which in a second
@@ -869,7 +879,7 @@ async function activateProjectView(
       const previousPath = outgoingProjectId
         ? projectStore.getProjectById(outgoingProjectId)?.path
         : undefined;
-      void loadWorktrees
+      void (loadWorktrees ?? Promise.resolve())
         .catch(() => {})
         .then(() => {
           if (windowSwitchEpochs.get(windowId) !== switchEpoch) return undefined;

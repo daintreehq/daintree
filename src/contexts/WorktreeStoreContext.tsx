@@ -8,6 +8,7 @@ import {
   type WorktreeViewStoreApi,
 } from "@/store/createWorktreeStore";
 import type { WorktreeSnapshot, WorktreeTick, WorktreeEventVersion } from "@shared/types";
+import { isAwaitingClone } from "@shared/types/project";
 import { applyWorktreeTick, worktreeTickMatches } from "@shared/utils/worktreeSnapshotTick";
 import type { CIStatusState } from "@shared/types/forge";
 import type { PluginWorktreeLinked } from "@shared/types/plugin";
@@ -1084,7 +1085,14 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
       // Only a window bound to a project ever has a port brokered for it — an
       // unbound picker view legitimately never sees one, so arming there would
       // raise a banner for working software.
-      if (!useProjectStore.getState().currentProject) return;
+      const currentProject = useProjectStore.getState().currentProject;
+      if (!currentProject) return;
+      // No checkout yet (#16352): main brokers no port until the clone lands,
+      // and the view reloads then. The sidebar settles empty, not loading.
+      if (isAwaitingClone(currentProject)) {
+        store.getState().setLoading(false);
+        return;
+      }
       if (settleForExistingLoadError()) return;
       initialPortTimer = setTimeout(() => {
         initialPortTimer = null;

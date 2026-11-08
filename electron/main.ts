@@ -456,6 +456,21 @@ if (!gotTheLock) {
   // Probe and recover the database before anything opens it.
   await initializeDatabaseForBoot(getCrashLoopGuard());
 
+  // Before any window restores a project: a clone the last session left
+  // running loses its partial checkout and ends as failed, and every project
+  // still awaiting its clone keeps its folder out of the workspace host (#16352).
+  try {
+    const [{ getProjectCloneService }, { loadClonedProjectInWindows }] = await Promise.all([
+      import("./services/projectClone/ProjectCloneService.js"),
+      import("./window/clonedProjectActivation.js"),
+    ]);
+    const cloneService = getProjectCloneService();
+    cloneService.setHooks({ onCheckoutReady: loadClonedProjectInWindows });
+    await cloneService.recoverInterrupted();
+  } catch (err) {
+    console.warn("[MAIN] Background clone recovery failed:", err);
+  }
+
   // GpuCrashMonitor must install its `child-process-gone` listener BEFORE the
   // GPU process spawns (first BrowserWindow creation), so it sees crashes in
   // the small window between createWindow() and renderer-first-interactive.

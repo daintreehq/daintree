@@ -780,6 +780,18 @@ export function getProjectRowStatus(project: SearchableProject, nowMs: number): 
     return finish({ text: "Directory not found", tone: "blocked" });
   }
 
+  // No checkout yet, so there is no activity to report and no folder to miss
+  // (#16352). The clone's own outcome is the row's line.
+  if (project.cloneState === "cloning") {
+    return finish({ text: "Cloning…", tone: "running" });
+  }
+  if (project.cloneState === "failed") {
+    return finish({ text: "Clone failed", tone: "blocked" });
+  }
+  if (project.cloneState === "cancelled") {
+    return finish({ text: "Clone stopped", tone: "muted" });
+  }
+
   const activity = classifyWorkspaceActivity(project, nowMs);
   if (activity) return finish(activity);
 

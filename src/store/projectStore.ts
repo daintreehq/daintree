@@ -7,7 +7,9 @@ import type {
   ProjectSleepResult,
   ProjectCreationIdentity,
 } from "@shared/types";
+import { isAwaitingClone } from "@shared/types/project";
 import type { ProjectOpenDisposition } from "@shared/types/windowOpen";
+import type { ProjectCloneStartRequest } from "@shared/types/ipc/projectClone";
 import { projectClient, worktreeClient } from "@/clients";
 import type { NonGitFolderStep } from "@/components/Project/NonGitFolderDialog";
 import { notify } from "@/lib/notify";
@@ -408,6 +410,15 @@ interface ProjectState {
     clonedPath: string,
     identity?: ProjectCreationIdentity,
     options?: { disposition?: ProjectOpenDisposition; groupId?: string }
+  ) => Promise<void>;
+  /**
+   * Register the project and clone it in the background (#16352), then close
+   * the dialog and open the project, which shows the clone in progress. Throws
+   * only when the clone couldn't start, so the dialog can show why.
+   */
+  startBackgroundClone: (
+    request: ProjectCloneStartRequest,
+    options?: { disposition?: ProjectOpenDisposition }
   ) => Promise<void>;
 }
 
@@ -1713,6 +1724,27 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       disposition: options?.disposition,
     });
   },
+
+  startBackgroundClone: async (request, options) => {
+    const { project } = await projectClient.startBackgroundClone(request);
+    get().closeCloneRepoDialog();
+    // The clone is running whatever happens next: an open that fails leaves it
+    // in the switcher, still cloning.
+    try {
+      await get().loadProjects();
+      if (options?.disposition === "new") {
+        await openInNewWindow(project.path);
+        return;
+      }
+      await get().switchProject(project.id);
+    } catch (error) {
+      logErrorWithContext(error, {
+        operation: "open_cloning_project",
+        component: "projectStore",
+        details: { projectId: project.id },
+      });
+    }
+  },
 });
 
 export const useProjectStore = create<ProjectState>()(
@@ -1799,10 +1831,13 @@ if (typeof window !== "undefined" && window.electron?.project) {
   listenerState.applyUpdated = (updated) => {
     let priorPath: string | undefined;
     let isCurrentView = false;
+    let cloneLanded = false;
     useProjectStore.setState((state) => {
       const prior = state.projects.find((p) => p.id === updated.id);
       priorPath = prior?.path;
       isCurrentView = state.currentProject?.id === updated.id;
+      cloneLanded =
+        isCurrentView && isAwaitingClone(state.currentProject) && !isAwaitingClone(updated);
       const projects = prior
         ? state.projects.map((p) => (p.id === updated.id ? updated : p))
         : [...state.projects, updated];
@@ -1810,6 +1845,14 @@ if (typeof window !== "undefined" && window.electron?.project) {
         state.currentProject?.id === updated.id ? updated : state.currentProject;
       return { projects, currentProject };
     });
+    // The clone this view was showing has its checkout now (#16352). Everything
+    // a project view loads at start (worktrees, recipes, presets, plugins) was
+    // skipped for want of a folder, so the view starts over as a normal project.
+    // Main loaded the window's workspace before saying so.
+    if (cloneLanded) {
+      window.location.reload();
+      return;
+    }
     // A folder move/reattach keeps the id but changes the path (#11282); repoint
     // the hibernated Assistant cwd so a later resume lands in the new folder.
     if (priorPath && priorPath !== updated.path) {

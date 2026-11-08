@@ -1467,6 +1467,7 @@ export type SpawnErrorCode =
   | "TERMINAL_ALREADY_LIVE" // Spawn rejected: the id already has a live owner (#11341)
   | "SPAWN_TIMEOUT" // No spawn result from the pty-host within the confirmation window (#12754)
   | "REQUIRED_PLUGIN_TOOLS" // Agent launch refused: plugin tools it requires weren't ready (#14096)
+  | "PROJECT_NOT_READY" // Spawn refused: the project's repository is still being cloned (#16352)
   | "UNKNOWN"; // Unknown error
 
 /** Result of a spawn operation */

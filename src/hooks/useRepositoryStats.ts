@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { ForgeRateLimitKind, ForgeRepositoryStats } from "@shared/types/ipc/forge";
-import type { ProjectRepoStats } from "@shared/types/project";
+import { isAwaitingClone, type ProjectRepoStats } from "@shared/types/project";
 import { projectClient } from "@/clients";
 import { forgeClient } from "@/clients/forgeClient";
 import { isTokenRelatedError } from "@/lib/forgeErrors";
@@ -663,6 +663,9 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   // commits-only pill — polling only waits out the resolution round-trip so
   // the first fetch doesn't race a provider that is about to resolve.
   const currentProjectId = useProjectStore((s) => s.currentProject?.id ?? null);
+  // No repository to count while the project's clone is running (#16352); the
+  // view reloads into a normal project once it lands.
+  const awaitingClone = useProjectStore((s) => isAwaitingClone(s.currentProject));
   const { providerId, loading: providerLoading } = useResolvedForgeProvider(currentProjectId);
 
   // Local git signals for the project's main worktree (#11151). The forge
@@ -711,7 +714,7 @@ export function useRepositoryStats(): UseRepositoryStatsReturn {
   const correctiveRefetchDoneRef = useRef(false);
 
   const polling = usePollingLifecycle({
-    enabled: !isWorkerInstance && currentProjectId !== null && !providerLoading,
+    enabled: !isWorkerInstance && currentProjectId !== null && !awaitingClone && !providerLoading,
     fetchFn: async ({ force, isInvalidated, reason }) => {
       // Capture the fetch epoch before the first await so a project switch that
       // fires mid-flight can be detected after each await (issue #10761).

@@ -3454,6 +3454,22 @@ export interface GeneratedIpcInvokeMap {
     args: [targets: import("../processes.js").ClosedProcessKillTarget[]];
     result: import("../processes.js").ClosedProcessKillResult;
   };
+  "project-clone:get-job": {
+    args: [projectId: string];
+    result: import("./projectClone.js").ProjectCloneJobSnapshot | null;
+  };
+  "project-clone:retry": {
+    args: [projectId: string];
+    result: void;
+  };
+  "project-clone:start": {
+    args: [request: import("./projectClone.js").ProjectCloneStartRequest];
+    result: import("./projectClone.js").ProjectCloneStartResult;
+  };
+  "project-clone:stop": {
+    args: [projectId: string];
+    result: void;
+  };
   "project-groups:create": {
     args: [name: string];
     result: import("../project.js").ProjectGroup;

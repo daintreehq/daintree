@@ -3,6 +3,7 @@ import { usePanelStore, type AddPanelOptions } from "@/store/panelStore";
 import { exitProjectHome } from "@/store/storeAccessors";
 import type { PanelLimitSnapshot } from "@/store/panelLimitStore";
 import type { PtyPanelData, ScheduledRunRef } from "@shared/types/panel";
+import { isAwaitingClone } from "@shared/types/project";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -456,6 +457,18 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
 
       if (!isElectronAvailable()) {
         console.warn("Electron API not available");
+        return decline("unavailable");
+      }
+
+      // No checkout to start in until the project's clone lands (#16352). Main
+      // refuses the spawn too; this says why before a panel is made for it.
+      if (isAwaitingClone(useProjectStore.getState().currentProject)) {
+        notify({
+          type: "info",
+          title: "Project still cloning",
+          message: "Agents and terminals can start once the clone finishes.",
+          replaceKey: "launch-project-cloning",
+        });
         return decline("unavailable");
       }
 

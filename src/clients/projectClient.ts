@@ -13,6 +13,11 @@ import type {
   TabGroup,
 } from "@shared/types";
 import type { NotificationSettings } from "@shared/types/ipc/api";
+import type {
+  ProjectCloneJobSnapshot,
+  ProjectCloneStartRequest,
+  ProjectCloneStartResult,
+} from "@shared/types/ipc/projectClone";
 import type { RelocationPreview, RelocationRequest } from "@shared/types/projectRelocation";
 import type { AgentPreset } from "@shared/config/agentRegistry";
 import type { ProjectTemplateSelection } from "@shared/types/plugin";
@@ -372,6 +377,27 @@ export const projectClient = {
 
   cancelClone: (opId?: string): Promise<void> => {
     return window.electron.project.cancelClone(opId);
+  },
+
+  /** Register the project and clone it in the background (#16352). */
+  startBackgroundClone: (request: ProjectCloneStartRequest): Promise<ProjectCloneStartResult> => {
+    return window.electron.projectClone.start(request);
+  },
+
+  getCloneJob: (projectId: string): Promise<ProjectCloneJobSnapshot | null> => {
+    return window.electron.projectClone.getJob(projectId);
+  },
+
+  stopBackgroundClone: (projectId: string): Promise<void> => {
+    return window.electron.projectClone.stop(projectId);
+  },
+
+  retryBackgroundClone: (projectId: string): Promise<void> => {
+    return window.electron.projectClone.retry(projectId);
+  },
+
+  onCloneJobUpdated: (callback: (snapshot: ProjectCloneJobSnapshot) => void): (() => void) => {
+    return window.electron.projectClone.onJobUpdated(callback);
   },
 
   getRecipes: (

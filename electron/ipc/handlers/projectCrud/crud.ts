@@ -95,7 +95,7 @@ const CONTROL_CHARS = /[\x00-\x1F\x7F]/;
  * Reads own properties only and returns a fresh object, so neither inherited
  * fields nor extra keys (`id`, `path`) can ride along into the insert.
  */
-function normalizeCreationIdentity(
+export function normalizeCreationIdentity(
   identity: ProjectCreationIdentity | undefined
 ): ProjectCreationIdentity | undefined {
   if (!identity || typeof identity !== "object" || Array.isArray(identity)) return undefined;
@@ -123,7 +123,7 @@ const MAX_CREATION_GROUP_ID_LENGTH = 128;
  * still exists is decided by `addProject` at the moment it writes the row, the
  * one point a group deleted mid-add can't slip past.
  */
-function normalizeCreationGroupId(groupId: unknown): string | undefined {
+export function normalizeCreationGroupId(groupId: unknown): string | undefined {
   if (typeof groupId !== "string") return undefined;
   if (groupId.length === 0 || groupId.length > MAX_CREATION_GROUP_ID_LENGTH) return undefined;
   return groupId;
@@ -143,6 +143,14 @@ export async function removeProjectWithCleanup(
   // Resolve the path before removeProject() deletes the row — the prune below
   // keys window-states.json by path, which is unrecoverable once the row is gone.
   const removedPath = projectStore.getProjectById(projectId)?.path ?? null;
+
+  // A clone still running for the project stops first, and its partial
+  // checkout goes with it, so nothing keeps writing a folder no row owns
+  // (#16352). Nothing has used the service without a clone to release.
+  const { peekProjectCloneService } = await import(
+    "../../../services/projectClone/ProjectCloneService.js"
+  );
+  await peekProjectCloneService()?.releaseForRemoval(projectId);
 
   if (deps.ptyClient) {
     // Gracefully tear down and journal each agent session before the row (and
@@ -266,6 +274,8 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     // (`project-groups:*`), which check the group exists and stamp the archive
     // time on the host's clock. A generic update could file a project under a
     // group that was never created.
+    // `cloneState` joins them: only the clone service knows whether a checkout
+    // exists, and a row claiming one it doesn't have would open onto nothing.
     const {
       id: _id,
       path: _path,
@@ -276,6 +286,7 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
       resumableAgentCount: _rac,
       archivedAt: _archivedAt,
       groupId: _groupId,
+      cloneState: _cloneState,
       ...safeUpdates
     } = updates;
     const updated = projectStore.updateProject(projectId, safeUpdates);

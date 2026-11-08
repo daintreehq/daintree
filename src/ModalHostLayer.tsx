@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { TourHost } from "@/components/Tour/TourHost";
 import type { WorktreeState, Project, ProjectCreationIdentity } from "@shared/types";
 import type { ProjectOpenDisposition } from "@shared/types/windowOpen";
+import type { ProjectCloneStartRequest } from "@shared/types/ipc/projectClone";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 import type { UseQuickSwitcherReturn } from "./hooks/useQuickSwitcher";
 import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
@@ -186,6 +187,10 @@ interface ModalHostLayerProps {
     identity?: ProjectCreationIdentity,
     options?: { disposition?: ProjectOpenDisposition; groupId?: string }
   ) => Promise<void>;
+  startBackgroundClone: (
+    request: ProjectCloneStartRequest,
+    options?: { disposition?: ProjectOpenDisposition }
+  ) => Promise<void>;
   closeCloneRepoDialog: () => void;
   reEntrySummary: ReEntrySummaryState;
   gettingStarted: GettingStartedChecklistState;
@@ -282,6 +287,7 @@ export function ModalHostLayer({
   cloneRepoDialogOpen,
   shouldMountCloneRepoDialog,
   handleCloneSuccess,
+  startBackgroundClone,
   closeCloneRepoDialog,
   reEntrySummary,
   gettingStarted,
@@ -928,6 +934,7 @@ export function ModalHostLayer({
             <LazyCloneRepoDialog
               isOpen={cloneRepoDialogOpen}
               onSuccess={handleCloneSuccess}
+              onStartBackground={startBackgroundClone}
               onCancel={closeCloneRepoDialog}
             />
           </Suspense>

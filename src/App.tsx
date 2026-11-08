@@ -226,6 +226,7 @@ function AppInner() {
   const cloneRepoDialogOpen = useProjectStore((state) => state.cloneRepoDialogOpen);
   const closeCloneRepoDialog = useProjectStore((state) => state.closeCloneRepoDialog);
   const handleCloneSuccess = useProjectStore((state) => state.handleCloneSuccess);
+  const startBackgroundClone = useProjectStore((state) => state.startBackgroundClone);
 
   const shouldMountCreateFolderDialog = useKeepMounted(createFolderDialogOpen);
   const shouldMountCloneRepoDialog = useKeepMounted(cloneRepoDialogOpen);
@@ -696,6 +697,7 @@ function AppInner() {
                 cloneRepoDialogOpen={cloneRepoDialogOpen}
                 shouldMountCloneRepoDialog={shouldMountCloneRepoDialog}
                 handleCloneSuccess={handleCloneSuccess}
+                startBackgroundClone={startBackgroundClone}
                 closeCloneRepoDialog={closeCloneRepoDialog}
                 reEntrySummary={reEntrySummary}
                 gettingStarted={gettingStarted}

@@ -118,6 +118,9 @@ export interface ShutdownDeps {
 // Remote Hosts stop before the graceful kill so no remote frontend is still
 // driving a terminal while it is journaled. Bounded like every other step here.
 const REMOTE_HOSTS_STOP_BUDGET_MS = 2_000;
+// Long enough for Windows' verified tree kill (3s) and the partial checkout's
+// removal; a clone still going past it is recovered as failed on next boot.
+const CLONE_STOP_BUDGET_MS = 4_000;
 
 let isConfirmingQuit = false;
 
@@ -446,6 +449,25 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
       "decisions stop"
     );
   }
+
+  // Background clones (#16352): git is stopped and each partial checkout
+  // removed while the database is still open to record the project as failed.
+  // Quitting without one imports nothing new: the service is already loaded
+  // by the IPC handlers, and an unused one holds no clones.
+  await settleWithin(
+    (async () => {
+      try {
+        const { peekProjectCloneService } = await import(
+          "../services/projectClone/ProjectCloneService.js"
+        );
+        await peekProjectCloneService()?.shutdown(CLONE_STOP_BUDGET_MS);
+      } catch (err) {
+        console.warn("[MAIN] Background clones stop failed:", err);
+      }
+    })(),
+    CLONE_STOP_BUDGET_MS + 500,
+    "background clones stop"
+  );
 
   const ptyClient = deps.getPtyClient();
   const workspaceClient = deps.getWorkspaceClient();

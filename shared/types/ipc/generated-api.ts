@@ -1641,6 +1641,20 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["processes:kill-closed-terminal-processes"]["args"]
     ): Promise<IpcInvokeMap["processes:kill-closed-terminal-processes"]["result"]>;
   };
+  projectClone: {
+    getJob(
+      ...args: IpcInvokeMap["project-clone:get-job"]["args"]
+    ): Promise<IpcInvokeMap["project-clone:get-job"]["result"]>;
+    retry(
+      ...args: IpcInvokeMap["project-clone:retry"]["args"]
+    ): Promise<IpcInvokeMap["project-clone:retry"]["result"]>;
+    start(
+      ...args: IpcInvokeMap["project-clone:start"]["args"]
+    ): Promise<IpcInvokeMap["project-clone:start"]["result"]>;
+    stop(
+      ...args: IpcInvokeMap["project-clone:stop"]["args"]
+    ): Promise<IpcInvokeMap["project-clone:stop"]["result"]>;
+  };
   projectGroups: {
     create(
       ...args: IpcInvokeMap["project-groups:create"]["args"]

@@ -1,11 +1,11 @@
 import { Suspense } from "react";
 import type { GettingStartedChecklistState } from "@/hooks/app/useGettingStartedChecklist";
-import { isGitBackedProject } from "@shared/types";
+import { isAwaitingClone, isGitBackedProject } from "@shared/types";
 import { useProjectStore } from "@/store";
 import { useScratchStore } from "@/store/scratchStore";
 import { ContentGridEmptyState } from "@/components/Terminal/ContentGridEmptyState";
 import { resolveEmptyCanvas } from "@/components/Terminal/emptyCanvas";
-import { LazyWelcomeScreen } from "@/lazyPanels";
+import { LazyProjectCloneView, LazyWelcomeScreen } from "@/lazyPanels";
 import { ProjectSurfaceView, useProjectSurface } from "@/components/Plugin/ProjectSurfaceView";
 
 /**
@@ -46,6 +46,18 @@ export function useEmptyCanvasContent(gettingStarted: GettingStartedChecklistSta
   const canvas = resolveEmptyCanvas(currentProject, currentScratch);
 
   if (canvas.kind === "project") {
+    // No checkout yet (#16352): the clone in progress, or the way out of one
+    // that ended without one, stands in for the launcher.
+    if (currentProject && isAwaitingClone(currentProject)) {
+      return {
+        emptyContent: (
+          <Suspense fallback={null}>
+            <LazyProjectCloneView project={currentProject} />
+          </Suspense>
+        ),
+        workspaceId: currentProject.id,
+      };
+    }
     if (surface !== null) {
       return {
         emptyContent: <ProjectSurfaceView config={surface.config} />,

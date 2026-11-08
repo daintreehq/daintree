@@ -430,6 +430,7 @@ export function toSearchableProject(
     isActive,
     isBackground,
     isMissing,
+    ...(p.cloneState ? { cloneState: p.cloneState } : {}),
     isPinned: p.pinned ?? false,
     isArchived: p.archivedAt !== undefined,
     groupId: group?.id,

@@ -29,6 +29,8 @@ const CREATE_TABLES_SQL = `
     git_backed INTEGER,
     archived_at INTEGER,
     never_auto_sleep INTEGER NOT NULL DEFAULT 0,
+    clone_state TEXT,
+    clone_job TEXT,
     group_id TEXT
   );
   CREATE TABLE app_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
