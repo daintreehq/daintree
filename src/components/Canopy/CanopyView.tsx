@@ -38,6 +38,7 @@ import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { Callout } from "@/components/ui/Callout";
 import { DismissButton } from "@/components/ui/DismissButton";
 import { itemNeedsAttention, repliedAt, type CanopyItem } from "./canopyModel";
+import { searchPasteText } from "./canopySearch";
 import { isWorkerEntry } from "./canopyInboxProjection";
 import { CanopyCard, REPLY_GO_TO_TERMINAL, canopyCardDomId } from "./CanopyCard";
 import { CanopyRow } from "./CanopyRow";

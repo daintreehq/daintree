@@ -1,13 +1,18 @@
 // @vitest-environment jsdom
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render as rtlRender, within } from "@testing-library/react";
+import { act, createEvent, fireEvent, render as rtlRender, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 /** The app root provides tooltips; the rows' action buttons need one. */
 const render = (ui: ReactElement) => rtlRender(ui, { wrapper: TooltipProvider });
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
-import type { CanopyCard, CanopySnapshot } from "@shared/types/ipc/canopy";
+import {
+  CANOPY_SEARCH_MAX_ALTERNATIVES,
+  CANOPY_SEARCH_MAX_TERMS,
+  type CanopyCard,
+  type CanopySnapshot,
+} from "@shared/types/ipc/canopy";
 
 class ResizeObserverStub {
   observe() {}
@@ -199,7 +204,9 @@ function installElectron(
     restoreReads: vi.fn(async (_restores: unknown[]) => {}),
     runBranch: vi.fn((runId: string, _target: { spawnedAt: number }) => branchOf(runId)),
     searchScreens: vi.fn(
-      async (_targets: Array<{ runId: string; spawnedAt: number; terms: string[] }>) =>
+      async (
+        _targets: Array<{ runId: string; spawnedAt: number; terms: string[]; orTerms?: string[][] }>
+      ) =>
         [] as string[]
     ),
     // No assistants: a full, empty directory of this machine.
@@ -390,6 +397,12 @@ function searchInput() {
   )!;
 }
 
+function searchNotes() {
+  return [
+    ...document.querySelectorAll<HTMLElement>("[data-testid=canopy-search-notes] p"),
+  ].map((note) => note.textContent);
+}
+
 function selectedRun(container: HTMLElement) {
   return cards(container)
     .find((card) => card.getAttribute("aria-selected") === "true")
@@ -537,6 +550,99 @@ describe("CanopyView search", () => {
     await screenSearchSettled();
     expect(canopy.searchScreens).not.toHaveBeenCalled();
     expect(cards(container)).toHaveLength(0);
+    // Said, not dropped unsaid, and tied to the field.
+    expect(searchNotes()).toEqual([
+      `Terminals aren't searched for more than ${CANOPY_SEARCH_MAX_TERMS} words of one alternative`,
+    ]);
+    expect(searchInput().getAttribute("aria-describedby")).toBe("canopy-search-notes");
+  });
+
+  it("lists the runs matching any item of a list, asking terminals for each item left", async () => {
+    const snapshot = {
+      ...canopySnapshot,
+      cards: [stuckCard("working"), { ...stuckCard("waiting"), headline: "Review of dfat-xth8" }],
+    };
+    useCanopyStore.setState({ snapshot });
+    const canopy = installElectron(snapshot);
+    canopy.searchScreens.mockImplementation(async (targets) =>
+      targets
+        .filter((target) => target.orTerms?.some((words) => words.includes("dfat-vjv0")))
+        .map((target) => target.runId)
+    );
+    const { container } = render(<CanopyView />);
+    await frames();
+
+    await search("dfat-xth8, failing install, fallback-review: dfat-vjv0");
+    // Each item on its own names a run: together they name both, not neither.
+    expect(cards(container).map((card) => card.id).sort()).toEqual([
+      "canopy-card-waiting",
+      "canopy-card-working",
+    ]);
+    await screenSearchSettled();
+    expect(canopy.searchScreens).toHaveBeenCalledTimes(1);
+    // Only the run whose names hold no item is asked, for every item.
+    expect(canopy.searchScreens.mock.calls[0]![0]).toEqual([
+      {
+        runId: "asking",
+        spawnedAt: expect.any(Number),
+        terms: ["dfat-xth8"],
+        orTerms: [
+          ["failing", "install"],
+          ["fallback-review:", "dfat-vjv0"],
+        ],
+      },
+    ]);
+    expect(cards(container)).toHaveLength(3);
+    expect(searchNotes()).toEqual([]);
+  });
+
+  it("names the items of a list past those a search takes", async () => {
+    const canopy = installElectron();
+    render(<CanopyView />);
+    await frames();
+    await search(
+      Array.from({ length: CANOPY_SEARCH_MAX_ALTERNATIVES + 2 }, (_, index) => `item${index}`).join(
+        ", "
+      )
+    );
+    await screenSearchSettled();
+    expect(searchNotes()).toEqual([
+      `Only the first ${CANOPY_SEARCH_MAX_ALTERNATIVES} of ${CANOPY_SEARCH_MAX_ALTERNATIVES + 2} alternatives are searched`,
+    ]);
+    const targets = canopy.searchScreens.mock.calls[0]![0];
+    expect(1 + (targets[0]!.orTerms?.length ?? 0)).toBe(CANOPY_SEARCH_MAX_ALTERNATIVES);
+  });
+
+  it("pastes a column of names as a list", async () => {
+    installElectron();
+    render(<CanopyView />);
+    await frames();
+    const input = searchInput();
+    input.focus();
+    const paste = (text: string) => {
+      const event = createEvent.paste(input, { clipboardData: { getData: () => text } });
+      act(() => {
+        fireEvent(input, event);
+      });
+      return event.defaultPrevented;
+    };
+
+    // A single line is the field's own to paste.
+    expect(paste("dfat-xth8")).toBe(false);
+    expect(searchInput().value).toBe("");
+
+    expect(paste("dfat-xth8\r\ncocto-claude\n\nfallback-review: dfat-vjv0\n")).toBe(true);
+    expect(searchInput().value).toBe("dfat-xth8, cocto-claude, fallback-review: dfat-vjv0");
+
+    // Where the editor can type it in, it goes in as typed, undo and all.
+    const insertText = vi.fn(() => true);
+    Object.assign(document, { execCommand: insertText });
+    try {
+      expect(paste("a\nb")).toBe(true);
+      expect(insertText).toHaveBeenCalledWith("insertText", false, "a, b");
+    } finally {
+      Reflect.deleteProperty(document, "execCommand");
+    }
   });
 
   it("comes back to the search with / from a row", async () => {

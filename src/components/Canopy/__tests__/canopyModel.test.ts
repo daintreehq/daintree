@@ -26,12 +26,11 @@ import {
   PUT_ASIDE_PRIORITY,
   QUIET_PRIORITY,
   shownPriority,
-  searchTerms,
   splitInbox,
-  unmatchedTerms,
   unseenLabelMs,
   type CanopyReadState,
 } from "../canopyModel";
+import { canopyScreenSearchPlan, parseCanopySearch, unmatchedAlternatives } from "../canopySearch";
 
 const NOW = 1_700_000_000_000;
 
@@ -933,7 +932,7 @@ describe("a run stalled behind its spinner", () => {
   });
 });
 
-describe("unmatchedTerms", () => {
+describe("unmatchedAlternatives", () => {
   const item = () =>
     inbox(
       [run("a", { title: "Fix login redirect", titleMode: "user" })],
@@ -944,31 +943,94 @@ describe("unmatchedTerms", () => {
         }),
       ]
     )[0]!;
-  const left = (query: string) => unmatchedTerms(item(), searchTerms(query));
+  const left = (query: string) =>
+    unmatchedAlternatives(item(), parseCanopySearch(query).alternatives);
 
-  it("asks nothing of a blank query, and each word once", () => {
-    expect(searchTerms("   ")).toEqual([]);
-    expect(searchTerms("Login login  LOGIN fix")).toEqual(["login", "fix"]);
-    expect(left("")).toEqual([]);
+  it("asks nothing of a blank query", () => {
+    expect(left("")).toBeNull();
+    expect(left(" , ,")).toBeNull();
   });
 
   it("finds the project name and the run's title, ignoring case", () => {
-    expect(left("APP")).toEqual([]);
-    expect(left("login  Redirect")).toEqual([]);
+    expect(left("APP")).toBeNull();
+    expect(left("login  Redirect")).toBeNull();
   });
 
   it("finds the readers' words and the screen's glance as written", () => {
-    expect(left("missing fixture")).toEqual([]);
-    expect(left("staging")).toEqual([]);
+    expect(left("missing fixture")).toBeNull();
+    expect(left("staging")).toBeNull();
   });
 
   it("leaves only the words nothing on the run holds, for its terminal", () => {
-    expect(left("login segfault staging")).toEqual(["segfault"]);
+    expect(left("login segfault staging")).toEqual([["segfault"]]);
+  });
+
+  it("matches on any one alternative, never on words gathered across them", () => {
+    expect(left("segfault, login redirect")).toBeNull();
+    // "login" is in one alternative and "staging" in another: neither alternative is whole.
+    expect(left("login segfault, staging econnreset")).toEqual([["segfault"], ["econnreset"]]);
+  });
+
+  it("asks a terminal once for alternatives its names leave the same", () => {
+    expect(left("login segfault, staging segfault")).toEqual([["segfault"]]);
   });
 
   it("never matches by scattered letters", () => {
     // Every letter of "cmtsf" appears in order in the summary, nowhere as written.
-    expect(left("cmtsf")).toEqual(["cmtsf"]);
+    expect(left("cmtsf")).toEqual([["cmtsf"]]);
+  });
+
+  it("asks a run's terminal for the alternatives it can carry, the first as the plain ask", () => {
+    const long = Array.from({ length: 17 }, (_, index) => `word${index}`).join(" ");
+    const plan = canopyScreenSearchPlan(
+      [item()],
+      parseCanopySearch(`dfat-xth8, ${long}, fallback-review: dfat-vjv0, ${"x".repeat(201)}`)
+        .alternatives
+    );
+    expect(plan.targets).toEqual([
+      {
+        runId: "a",
+        spawnedAt: item().row.run.spawnedAt,
+        terms: ["dfat-xth8"],
+        orTerms: [["fallback-review:", "dfat-vjv0"]],
+      },
+    ]);
+    expect(plan).toMatchObject({ overWords: true, overLength: true, overRuns: false });
+  });
+
+  it("asks one alternative as the plain ask, and counts words the names hold out of the limit", () => {
+    // Seventeen words, but the run's title holds one: sixteen are left for its terminal.
+    const words = ["login", ...Array.from({ length: 16 }, (_, index) => `word${index}`)];
+    const plan = canopyScreenSearchPlan([item()], parseCanopySearch(words.join(" ")).alternatives);
+    expect(plan.targets).toEqual([
+      { runId: "a", spawnedAt: item().row.run.spawnedAt, terms: words.slice(1) },
+    ]);
+    expect(plan.overWords).toBe(false);
+  });
+
+  it("asks nothing of a run its names already match, and says nothing went unasked", () => {
+    const long = Array.from({ length: 17 }, (_, index) => `word${index}`).join(" ");
+    const plan = canopyScreenSearchPlan([item()], parseCanopySearch(`${long}, login`).alternatives);
+    expect(plan).toEqual({ targets: [], overWords: false, overLength: false, overRuns: false });
+  });
+
+  it("stops asking once the ask is as large as a host's link carries, and says so", () => {
+    const items = inbox(Array.from({ length: 501 }, (_, index) => run(`r${index}`)));
+    const plan = canopyScreenSearchPlan(items, parseCanopySearch("segfault").alternatives);
+    expect(plan.targets).toHaveLength(500);
+    expect(plan.overRuns).toBe(true);
+    const heavy = canopyScreenSearchPlan(
+      items.slice(0, 200),
+      parseCanopySearch(
+        Array.from({ length: 50 }, (_, a) =>
+          Array.from({ length: 16 }, (_, w) => `${a}-${w}-${"y".repeat(180)}`).join(" ")
+        ).join(",")
+      ).alternatives
+    );
+    expect(heavy.overRuns).toBe(true);
+    expect(heavy.targets.length).toBeGreaterThan(0);
+    expect(heavy.targets.length).toBeLessThan(200);
+    expect(JSON.stringify(heavy.targets).length).toBeLessThan(16 * 1024 * 1024 / 3);
   });
 });
 

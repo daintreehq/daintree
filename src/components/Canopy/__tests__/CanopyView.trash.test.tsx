@@ -269,6 +269,25 @@ describe("CanopyView Trash", () => {
     expect(useCanopyStore.getState().trashExpanded).toBe(false);
   });
 
+  it("shows the trash rows matching any item of a list", async () => {
+    await open(TRASH);
+    const input = document.querySelector<HTMLInputElement>(
+      "[data-testid=canopy-dialog] input[role=combobox]"
+    )!;
+    const searchFor = async (value: string) => {
+      await act(async () => {
+        fireEvent.change(input, { target: { value } });
+      });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, SEARCH_SETTLE_MS));
+      });
+      return trashRows().map((row) => row.getAttribute("aria-label"));
+    };
+    expect(await searchFor("fix newer, nowhere, older")).toEqual(["Fix newer", "Fix older"]);
+    // Whitespace still asks for every word of one item.
+    expect(await searchFor("newer older")).toEqual([]);
+  });
+
   it("restores from the row's button, and selects the run once it is back in the inbox", async () => {
     const canopy = await open(TRASH);
     fireEvent.click(trashBar()!);

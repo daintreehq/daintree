@@ -429,10 +429,14 @@ describe("createAllHostsRoute", () => {
     const { api } = createAllHostsRoute("own", ["own", "remote"]);
     const hits = await api.searchScreens([
       { runId: allHostsKey("own", "t1"), spawnedAt: 1, terms: ["x"] },
-      { runId: allHostsKey("remote", "t1"), spawnedAt: 2, terms: ["x"] },
+      { runId: allHostsKey("remote", "t1"), spawnedAt: 2, terms: ["x"], orTerms: [["y", "z"]] },
     ]);
     expect(ownCalls.searchScreens).toHaveBeenCalledWith([
       { runId: "t1", spawnedAt: 1, terms: ["x"] },
+    ]);
+    // A run's further alternatives reach its host with it.
+    expect(invoke).toHaveBeenCalledWith("remote", "canopy:search-screens", [
+      { runId: "t1", spawnedAt: 2, terms: ["x"], orTerms: [["y", "z"]] },
     ]);
     expect(hits.sort()).toEqual([allHostsKey("own", "t1"), allHostsKey("remote", "t1")].sort());
   });

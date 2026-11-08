@@ -174,8 +174,8 @@ describe("buildAssistantItems", () => {
       "Unknown project · This Mac · Session 2",
       "Global",
     ]);
-    expect(assistantMatches(items[0]!, ["this mac"])).toBe(true);
-    expect(assistantMatches(items[2]!, ["global", "this mac"])).toBe(true);
+    expect(assistantMatches(items[0]!, [["this mac"]])).toBe(true);
+    expect(assistantMatches(items[2]!, [["global", "this mac"]])).toBe(true);
   });
 
   it("keeps the agent it runs on, unnamed when the directory doesn't know it", () => {
@@ -247,11 +247,14 @@ describe("assistantStatus and assistantMatches", () => {
 
   it("matches on its role, place and agent, never anything on its screen", () => {
     const [item] = buildAssistantItems(directory([live(1, { label: "Refactor" })]), options);
-    expect(assistantMatches(item!, ["assistant"])).toBe(true);
-    expect(assistantMatches(item!, ["alpha", "session", "2"])).toBe(true);
-    expect(assistantMatches(item!, ["claude"])).toBe(true);
-    expect(assistantMatches(item!, ["refactor"])).toBe(true);
-    expect(assistantMatches(item!, ["beta"])).toBe(false);
+    expect(assistantMatches(item!, [["assistant"]])).toBe(true);
+    expect(assistantMatches(item!, [["alpha", "session", "2"]])).toBe(true);
+    expect(assistantMatches(item!, [["claude"]])).toBe(true);
+    expect(assistantMatches(item!, [["refactor"]])).toBe(true);
+    expect(assistantMatches(item!, [["beta"]])).toBe(false);
+    // Any one alternative, all of its words.
+    expect(assistantMatches(item!, [["beta"], ["alpha", "claude"]])).toBe(true);
+    expect(assistantMatches(item!, [["beta", "alpha"], ["gamma"]])).toBe(false);
   });
 });
 
@@ -546,9 +549,9 @@ describe("assistant personas (#16213)", () => {
     );
 
     expect(assistantPlaceLabel(emojiOnly!)).toBe("🐶 Global");
-    expect(assistantMatches(named!, ["dwight"])).toBe(true);
-    expect(assistantMatches(emojiOnly!, ["dwight"])).toBe(false);
-    expect(assistantMatches(emojiOnly!, ["🐶"])).toBe(true);
+    expect(assistantMatches(named!, [["dwight"]])).toBe(true);
+    expect(assistantMatches(emojiOnly!, [["dwight"]])).toBe(false);
+    expect(assistantMatches(emojiOnly!, [["🐶"]])).toBe(true);
   });
 
   it("keeps only what a persona can be from another machine's directory", () => {
