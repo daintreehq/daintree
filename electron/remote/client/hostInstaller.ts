@@ -26,6 +26,7 @@ import {
   type ParsedProbe,
   type ProbeOutcome,
 } from "./hostProbe.js";
+import { acquireInstallLock, newInstallToken, type InstallLock } from "./hostInstallLock.js";
 import { type ClientBuild, debInstallCommand, planInstall } from "./installPlan.js";
 import { failureDetail, type HostCommandChannel } from "./remoteShell.js";
 
@@ -67,6 +68,10 @@ export interface InstallerDeps {
   comeBackTimeoutMs?: number;
   /** How long a Mac gets to install its downloaded update once Daintree there has quit. */
   stagedInstallTimeoutMs?: number;
+  /** How often a wait for another device's install looks at the host's install lock. */
+  lockPollMs?: number;
+  /** Names this install's lock and backups; random unless a test fixes it. */
+  installToken?: () => string;
 }
 
 /** Nothing would end: the host said so in full. A count alone can't say that (shells go unseen). */
@@ -630,44 +635,69 @@ export function stopScript(
   return `${unitStop}if pgrep -u "$(id -u)" -x ${name} >/dev/null 2>&1; then ${signalIt}; fi; i=0; while pgrep -u "$(id -u)" -x ${name} >/dev/null 2>&1 && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done; if pgrep -u "$(id -u)" -x ${name} >/dev/null 2>&1; then echo "${MARK}stopped no"; else echo "${MARK}stopped yes"; fi`;
 }
 
-/** Put the staged build in place, keeping the previous one beside it until the host is back. */
+/**
+ * Where this install keeps the build it replaces. Named for the install, so
+ * another install on the host can never remove or restore it.
+ */
+function backupPaths(target: string, token: string): { image: string; info: string } {
+  return {
+    image: `${target}.old-${token}`,
+    info: `${target}${APPIMAGE_BUILD_INFO_SUFFIX}.old-${token}`,
+  };
+}
+
+/**
+ * Put the staged build in place, keeping the previous one beside it until the
+ * host is back. Backups other installs left (installs take turns, so theirs
+ * are over) are removed first; a failure restores nothing itself, so the
+ * rollback alone says what went back.
+ */
 function swapScript(
   plan: HostInstallPlan,
   staged: { dir: string; file: string },
   target: string,
-  marker: string | null
+  marker: string | null,
+  token: string
 ): string {
+  const backup = backupPaths(target, token);
   if (plan.packaging === "app-bundle") {
     const app = remotePath(target);
-    const old = remotePath(`${target}.old`);
-    return `rm -rf ${old}; if [ -d ${app} ]; then mv ${app} ${old} || exit 1; fi; if mv ${remotePath(`${staged.dir}/x/Daintree.app`)} ${app}; then rm -rf ${remotePath(staged.dir)}; else if [ -d ${old} ]; then mv ${old} ${app}; fi; exit 1; fi`;
+    const old = remotePath(backup.image);
+    return `for b in ${app}.old-*; do if [ "$b" != ${old} ]; then rm -rf "$b"; fi; done; if [ -e ${old} ]; then exit 1; fi; if [ -d ${app} ]; then mv ${app} ${old} || exit 1; fi; mv ${remotePath(`${staged.dir}/x/Daintree.app`)} ${app} || exit 1; rm -rf ${remotePath(staged.dir)}`;
   }
   const t = remotePath(target);
-  const old = remotePath(`${target}.old`);
+  const old = remotePath(backup.image);
   const info = remotePath(`${target}${APPIMAGE_BUILD_INFO_SUFFIX}`);
-  const infoOld = remotePath(`${target}${APPIMAGE_BUILD_INFO_SUFFIX}.old`);
-  // The marker written beside the image is the one read out of it at staging.
-  return `mkdir -p ${remotePath(path.posix.dirname(target))} && rm -f ${old} ${infoOld} && if [ -f ${t} ]; then cp -p ${t} ${old}; fi && if [ -f ${info} ]; then cp -p ${info} ${infoOld}; fi && mv -f ${remotePath(staged.file)} ${t} && chmod 755 ${t} && printf '%s' ${sq(marker ?? "")} > ${info} && rm -rf ${remotePath(staged.dir)}`;
+  const infoOld = remotePath(backup.info);
+  // Copied under a temporary name first: only a whole copy of the image is a
+  // backup to put back, and it lands after its marker's. The marker written
+  // beside the new image is the one read out of it at staging.
+  return `mkdir -p ${remotePath(path.posix.dirname(target))} && for b in ${t}.old-* ${info}.old-*; do if [ "$b" != ${old} ] && [ "$b" != ${infoOld} ]; then rm -f "$b"; fi; done && rm -f ${old} ${infoOld} && if [ -f ${info} ]; then cp -p ${info} ${remotePath(`${backup.info}.part`)} && mv ${remotePath(`${backup.info}.part`)} ${infoOld}; fi && if [ -f ${t} ]; then cp -p ${t} ${remotePath(`${backup.image}.part`)} && mv ${remotePath(`${backup.image}.part`)} ${old}; fi && mv -f ${remotePath(staged.file)} ${t} && chmod 755 ${t} && printf '%s' ${sq(marker ?? "")} > ${info} && rm -rf ${remotePath(staged.dir)}`;
 }
 
-/** Put the previous build (and its marker) back. Says what it did, so a restore is never assumed. */
-function rollbackScript(plan: HostInstallPlan, target: string): string {
+/**
+ * Put this install's backup (and its marker) back. Says what it did, so a
+ * restore is never assumed: yes only when all of it went back.
+ */
+function rollbackScript(plan: HostInstallPlan, target: string, token: string): string {
+  const backup = backupPaths(target, token);
   if (plan.packaging === "app-bundle") {
     const app = remotePath(target);
-    const old = remotePath(`${target}.old`);
+    const old = remotePath(backup.image);
     return `if [ -d ${old} ]; then if rm -rf ${app} && mv ${old} ${app}; then echo "${MARK}rolledback yes"; else echo "${MARK}rolledback failed"; fi; else echo "${MARK}rolledback none"; fi`;
   }
   const t = remotePath(target);
-  const old = remotePath(`${target}.old`);
+  const old = remotePath(backup.image);
   const info = remotePath(`${target}${APPIMAGE_BUILD_INFO_SUFFIX}`);
-  const infoOld = remotePath(`${target}${APPIMAGE_BUILD_INFO_SUFFIX}.old`);
-  return `if [ -f ${old} ]; then if mv -f ${old} ${t}; then if [ -f ${infoOld} ]; then mv -f ${infoOld} ${info}; else rm -f ${info}; fi; echo "${MARK}rolledback yes"; else echo "${MARK}rolledback failed"; fi; else echo "${MARK}rolledback none"; fi`;
+  const infoOld = remotePath(backup.info);
+  return `if [ -f ${old} ]; then if mv -f ${old} ${t} && if [ -f ${infoOld} ]; then mv -f ${infoOld} ${info}; else rm -f ${info}; fi; then echo "${MARK}rolledback yes"; else echo "${MARK}rolledback failed"; fi; else echo "${MARK}rolledback none"; fi`;
 }
 
-function dropBackupScript(plan: HostInstallPlan, target: string): string {
+function dropBackupScript(plan: HostInstallPlan, target: string, token: string): string {
+  const backup = backupPaths(target, token);
   return plan.packaging === "app-bundle"
-    ? `rm -rf ${remotePath(`${target}.old`)}`
-    : `rm -f ${remotePath(`${target}.old`)} ${remotePath(`${target}${APPIMAGE_BUILD_INFO_SUFFIX}.old`)}`;
+    ? `rm -rf ${remotePath(backup.image)}`
+    : `rm -f ${remotePath(backup.image)} ${remotePath(backup.info)}`;
 }
 
 /** Where the probe found the Mac app, which is replaced and started where it is. */
@@ -719,6 +749,26 @@ async function recheckBeforeRestart(
     // An agent that went busy again since the wait saw it idle: wait for it too.
     if (whileWorking !== "wait-for-idle" || busyAgents(impact) === 0) return null;
   }
+}
+
+/** Take the host's install lock, saying so while another device holds it. */
+function takeInstallLock(
+  deps: InstallerDeps,
+  token: string,
+  signal: AbortSignal,
+  report: (p: InstallProgress) => void
+): Promise<InstallLock> {
+  return acquireInstallLock(
+    { shell: deps.shell, sleep: deps.sleep, pollMs: deps.lockPollMs },
+    token,
+    signal,
+    () =>
+      report({
+        stage: "waiting-for-host",
+        fraction: null,
+        message: "Another device is updating the host",
+      })
+  );
 }
 
 export async function runHostInstall(
@@ -818,247 +868,305 @@ export async function runHostInstall(
     }
   }
 
-  if (plan.restartsHost && confirmed) {
-    const dropStagedBuild = () =>
-      deps.shell.exec(`rm -rf ${remotePath(staged.dir)}`, { timeoutMs: 30_000 }).catch(() => {});
-    // Checked again right before the restart: work may have started while staging or waiting.
+  const dropStaged = () =>
+    deps.shell.exec(`rm -rf ${remotePath(staged.dir)}`, { timeoutMs: 30_000 }).catch(() => {});
+  /** Checked again right before the restart: work may have started while staging or waiting. */
+  const recheck = async (): Promise<InstallHostResult | null> => {
+    if (!plan.restartsHost || !confirmed) return null;
     let impact: HostRestartImpact | null;
     try {
       impact = await recheckBeforeRestart(deps, hostId, whileWorking, confirmed, signal, report);
     } catch (err) {
       // Nothing is left staged for an update that isn't going ahead.
-      await dropStagedBuild();
+      await dropStaged();
       throw err;
     }
-    if (impact) {
-      await dropStagedBuild();
-      return { status: "needs-confirmation", impact };
-    }
-  }
-  const dropStaged = () =>
-    deps.shell.exec(`rm -rf ${remotePath(staged.dir)}`, { timeoutMs: 30_000 }).catch(() => {});
+    if (!impact) return null;
+    await dropStaged();
+    return { status: "needs-confirmation", impact };
+  };
+  const reconfirm = await recheck();
+  if (reconfirm) return reconfirm;
   if (signal.aborted) {
     await dropStaged();
     throw cancelled();
   }
 
-  const platform = probe.platform!;
-  let parsed = before.parsed;
-  // Staging and waiting can take a while: the host may have downloaded an
-  // update meanwhile, which stopping it would install over this one, moved
-  // past this build on its own, or had its windows opened or closed. Looked
-  // at again here, and planned again from what is there now.
-  if (parsed.appRunning || parsed.hostModeListening) {
-    const fresh = await deps.probe(signal);
-    if (signal.aborted || !fresh.parsed) {
-      await dropStaged();
-      if (signal.aborted) throw cancelled();
-      throw failed("The host stopped answering right before the restart. Nothing was changed");
-    }
-    if (fresh.result.stagedUpdate?.installsOnQuit) {
-      await dropStaged();
-      throw refusal(
-        `The host has just downloaded Daintree ${fresh.result.stagedUpdate.version}, which installs when Daintree there restarts. Nothing was changed: install that update first.`
-      );
-    }
-    const now = planInstall({
-      client: deps.client,
-      probe: fresh.result,
-      linuxPackage: payload.linuxPackage,
-      appImageConflict: fresh.parsed.appImageConflict,
-      allowDowngrade: payload.allowDowngrade === true,
-    });
-    if (now.kind === "up-to-date" || now.kind === "host-newer") {
-      await dropStaged();
-      return { status: now.kind, probe: fresh.result };
-    }
-    if (now.kind !== "install" || now.packaging !== plan.packaging) {
-      await dropStaged();
-      throw refusal(
-        now.reason ??
-          "The host changed while the update was being prepared. Nothing was changed: check again."
-      );
-    }
-    probe = fresh.result;
-    parsed = fresh.parsed;
-  }
-  const hasUnit = parsed.advice.hostModeUnit === true;
-  const wasHostMode = parsed.hostModeListening;
-  const wasRunning = parsed.appRunning || wasHostMode;
-  // An app bundle or AppImage is replaced where it is, so a unit or login item that runs it keeps working.
-  let target = MAC_APP_PATH;
-  if (plan.packaging === "app-bundle") {
-    target = macAppPath(probe);
-  } else if (plan.packaging === "appimage") {
-    target =
-      probe.install?.packaging === "appimage"
-        ? probe.install.path
-        : `${await homeOf(deps, signal)}/Applications/Daintree.AppImage`;
-  }
-  const start = wasRunning ? startScript(platform, parsed, hasUnit, target) : null;
-  if (wasRunning && start === null) {
-    await dropStaged();
-    throw new AppError({
-      code: "UNSUPPORTED",
-      message: "No way to restart Daintree on the host",
-      userMessage:
-        "Daintree is running on the host without its Host mode service, so it couldn't be restarted from here. Quit it there and try again.",
-    });
-  }
-  if (signal.aborted) {
-    await dropStaged();
-    throw cancelled();
-  }
-
-  // From the first stop on, every step runs to completion whatever the
-  // cancel does, and any failure or cancel goes through `recover`, so the host
-  // is never left stopped or half-replaced.
-  const settle = new AbortController().signal;
-  const now = deps.now ?? Date.now;
-  let swapped = false;
-
-  const probeUntilBack = async (): Promise<ProbeOutcome> => {
-    let after = await deps.probe(settle);
-    if (wasHostMode) {
-      const deadline = now() + (deps.comeBackTimeoutMs ?? 90_000);
-      while (!after.result.hostModeListening && now() < deadline) {
-        await deps.sleep(2_000, settle);
-        after = await deps.probe(settle);
-      }
-    }
-    return after;
-  };
-
-  const run = (script: string, timeoutMs: number) =>
-    deps.shell.exec(script, { signal: settle, timeoutMs }).catch((err: unknown): CommandResult => ({
-      code: null,
-      stdout: "",
-      stderr: formatErrorMessage(err, "ssh failed"),
-      spawnError: null,
-      timedOut: false,
-    }));
-
-  type Recovery = "unchanged" | "restarted" | "restored" | "no-previous" | "not-restored";
-
-  /** Stop whatever the swap started, put the previous build back, start it, and check it. */
-  const recover = async (): Promise<Recovery> => {
-    let previous = true;
-    if (swapped) {
-      if (wasRunning) await run(stopScript(platform, null, hasUnit), 120_000);
-      const rolled = await run(rollbackScript(plan, target), 120_000);
-      const state = rolled.code === 0 ? markerValue(rolled.stdout, "rolledback") : null;
-      if (state !== "yes" && state !== "none") return "not-restored";
-      previous = state === "yes";
-    } else {
-      await dropStaged();
-    }
-    if (!wasRunning && !swapped) return "unchanged";
-    if (!wasRunning && !previous) return "no-previous";
-    if (wasRunning) {
-      const started = await run(start!, 30_000);
-      if (started.code !== 0) return "not-restored";
-    }
-    const back = await probeUntilBack();
-    const running =
-      !wasRunning || (wasHostMode ? back.result.hostModeListening : back.result.appRunning);
-    const sameBuild =
-      back.result.install?.version === probe.install?.version &&
-      back.result.install?.commit === probe.install?.commit;
-    if (!back.result.reachable || !running || !sameBuild) return "not-restored";
-    return swapped ? "restored" : "restarted";
-  };
-
-  const RECOVERY_NOTE: Record<Exclude<Recovery, "unchanged">, string> = {
-    restarted: "Daintree was started again on the host.",
-    restored: wasRunning
-      ? "The previous build was put back and is running again."
-      : "The previous build was put back.",
-    "no-previous": "There was no previous build to put back.",
-    "not-restored": "Daintree couldn't be restored on the host; check it at the machine.",
-  };
-
-  const withRecovery = async (err: unknown): Promise<never> => {
-    const outcome = await recover();
-    const base =
-      err instanceof AppError
-        ? err
-        : failed("The install failed", formatErrorMessage(err, "unknown error"));
-    if (outcome === "unchanged") throw base;
-    const note = RECOVERY_NOTE[outcome];
-    throw new AppError({
-      code: base.code,
-      message: `${base.message}. ${note}`,
-      userMessage: `${base.userMessage ?? base.message}. ${note}`,
-    });
-  };
-
-  let after: ProbeOutcome;
+  // One device at a time stops, replaces, starts and checks the host.
+  const token = (deps.installToken ?? newInstallToken)();
+  let lock: InstallLock;
   try {
-    if (wasRunning) {
-      report({ stage: "stopping", fraction: 0.7, message: "Stopping Daintree on the host" });
-      const out = await exec(
+    lock = await takeInstallLock(deps, token, signal, report);
+  } catch (err) {
+    await dropStaged();
+    throw err;
+  }
+  try {
+    // The other device restarted the host meanwhile: what runs there, and what
+    // would end, is looked at again before anything is stopped.
+    if (lock.waited) {
+      const again = await recheck();
+      if (again) return again;
+    }
+    if (signal.aborted) {
+      await dropStaged();
+      throw cancelled();
+    }
+    const platform = probe.platform!;
+    let parsed = before.parsed;
+    // Staging and waiting can take a while: the host may have downloaded an
+    // update meanwhile, which stopping it would install over this one, moved
+    // past this build on its own (or another device's install did), or had its
+    // windows opened or closed. Looked at again here, and planned again from
+    // what is there now.
+    if (lock.waited || parsed.appRunning || parsed.hostModeListening) {
+      const fresh = await deps.probe(signal);
+      if (signal.aborted || !fresh.parsed) {
+        await dropStaged();
+        if (signal.aborted) throw cancelled();
+        throw failed("The host stopped answering right before the restart. Nothing was changed");
+      }
+      if (fresh.result.stagedUpdate?.installsOnQuit) {
+        await dropStaged();
+        throw refusal(
+          `The host has just downloaded Daintree ${fresh.result.stagedUpdate.version}, which installs when Daintree there restarts. Nothing was changed: install that update first.`
+        );
+      }
+      const now = planInstall({
+        client: deps.client,
+        probe: fresh.result,
+        linuxPackage: payload.linuxPackage,
+        appImageConflict: fresh.parsed.appImageConflict,
+        allowDowngrade: payload.allowDowngrade === true,
+      });
+      if (now.kind === "up-to-date" || now.kind === "host-newer") {
+        await dropStaged();
+        return { status: now.kind, probe: fresh.result };
+      }
+      // A restart nobody was asked about isn't made: Daintree started there meanwhile.
+      if (
+        now.kind !== "install" ||
+        now.packaging !== plan.packaging ||
+        (now.restartsHost && !plan.restartsHost)
+      ) {
+        await dropStaged();
+        throw refusal(
+          now.reason ??
+            "The host changed while the update was being prepared. Nothing was changed: check again."
+        );
+      }
+      probe = fresh.result;
+      parsed = fresh.parsed;
+    }
+    const hasUnit = parsed.advice.hostModeUnit === true;
+    const wasHostMode = parsed.hostModeListening;
+    const wasRunning = parsed.appRunning || wasHostMode;
+    // An app bundle or AppImage is replaced where it is, so a unit or login item that runs it keeps working.
+    let target = MAC_APP_PATH;
+    if (plan.packaging === "app-bundle") {
+      target = macAppPath(probe);
+    } else if (plan.packaging === "appimage") {
+      target =
+        probe.install?.packaging === "appimage"
+          ? probe.install.path
+          : `${await homeOf(deps, signal)}/Applications/Daintree.AppImage`;
+    }
+    const start = wasRunning ? startScript(platform, parsed, hasUnit, target) : null;
+    if (wasRunning && start === null) {
+      await dropStaged();
+      throw new AppError({
+        code: "UNSUPPORTED",
+        message: "No way to restart Daintree on the host",
+        userMessage:
+          "Daintree is running on the host without its Host mode service, so it couldn't be restarted from here. Quit it there and try again.",
+      });
+    }
+    if (signal.aborted) {
+      await dropStaged();
+      throw cancelled();
+    }
+
+    // From the first stop on, every step runs to completion whatever the
+    // cancel does, and any failure or cancel goes through `recover`, so the host
+    // is never left stopped or half-replaced.
+    const settle = new AbortController().signal;
+    const now = deps.now ?? Date.now;
+    /** Daintree there was stopped or its build moved: from here a lost lock leaves the host as it is. */
+    let touched = false;
+    let swapped = false;
+    // A holder that has gone means another device may be updating the host: never go on blind.
+    const ensureHeld = () => {
+      if (!lock.held()) {
+        throw failed("This device lost its turn to update the host, so the install stopped");
+      }
+    };
+
+    const probeUntilBack = async (): Promise<ProbeOutcome> => {
+      let after = await deps.probe(settle);
+      if (wasHostMode) {
+        const deadline = now() + (deps.comeBackTimeoutMs ?? 90_000);
+        while (!after.result.hostModeListening && now() < deadline) {
+          await deps.sleep(2_000, settle);
+          after = await deps.probe(settle);
+        }
+      }
+      return after;
+    };
+
+    const run = (script: string, timeoutMs: number) =>
+      deps.shell
+        .exec(script, { signal: settle, timeoutMs })
+        .catch((err: unknown): CommandResult => ({
+          code: null,
+          stdout: "",
+          stderr: formatErrorMessage(err, "ssh failed"),
+          spawnError: null,
+          timedOut: false,
+        }));
+
+    type Recovery =
+      "unchanged" | "restarted" | "restored" | "no-previous" | "not-restored" | "lock-lost";
+
+    /** Stop whatever the swap started, put the previous build back, start it, and check it. */
+    const recover = async (): Promise<Recovery> => {
+      if (!lock.held()) {
+        if (!swapped) await dropStaged();
+        return touched ? "lock-lost" : "unchanged";
+      }
+      let previous = true;
+      if (swapped) {
+        if (wasRunning) await run(stopScript(platform, null, hasUnit), 120_000);
+        const rolled = await run(rollbackScript(plan, target, lock.token), 120_000);
+        const state = rolled.code === 0 ? markerValue(rolled.stdout, "rolledback") : null;
+        if (state !== "yes" && state !== "none") return "not-restored";
+        previous = state === "yes";
+      } else {
+        await dropStaged();
+      }
+      if (!wasRunning && !swapped) return "unchanged";
+      if (!wasRunning && !previous) return "no-previous";
+      if (wasRunning) {
+        if (!lock.held()) return "lock-lost";
+        const started = await run(start!, 30_000);
+        if (started.code !== 0) return "not-restored";
+      }
+      const back = await probeUntilBack();
+      const running =
+        !wasRunning || (wasHostMode ? back.result.hostModeListening : back.result.appRunning);
+      const sameBuild =
+        probe.install?.version != null &&
+        back.result.install?.version === probe.install.version &&
+        back.result.install?.commit === probe.install.commit;
+      if (!back.result.reachable || !running || !sameBuild) return "not-restored";
+      // Put back only when the rollback said so; otherwise what runs was never moved.
+      return swapped && previous ? "restored" : "restarted";
+    };
+
+    const RECOVERY_NOTE: Record<Exclude<Recovery, "unchanged">, string> = {
+      restarted: "Daintree was started again on the host.",
+      restored: wasRunning
+        ? "The previous build was put back and is running again."
+        : "The previous build was put back.",
+      "no-previous": "There was no previous build to put back.",
+      "not-restored": "Daintree couldn't be restored on the host; check it at the machine.",
+      "lock-lost":
+        "Another device may be updating the host now, so nothing more was changed there; check it at the machine.",
+    };
+
+    const withRecovery = async (err: unknown): Promise<never> => {
+      const outcome = await recover();
+      const base =
+        err instanceof AppError
+          ? err
+          : failed("The install failed", formatErrorMessage(err, "unknown error"));
+      if (outcome === "unchanged") throw base;
+      const note = RECOVERY_NOTE[outcome];
+      throw new AppError({
+        code: base.code,
+        message: `${base.message}. ${note}`,
+        userMessage: `${base.userMessage ?? base.message}. ${note}`,
+      });
+    };
+
+    let after: ProbeOutcome;
+    try {
+      if (wasRunning) {
+        report({ stage: "stopping", fraction: 0.7, message: "Stopping Daintree on the host" });
+        ensureHeld();
+        touched = true;
+        const out = await exec(
+          deps,
+          stopScript(platform, parsed.hostPid, hasUnit, parsed.hostStartedAt),
+          settle,
+          "Couldn't stop Daintree on the host"
+        );
+        if (markerValue(out, "stopped") !== "yes") {
+          throw failed("Daintree on the host didn't quit, so nothing was replaced");
+        }
+      }
+      if (signal.aborted) throw cancelled();
+
+      report({ stage: "installing", fraction: 0.8, message: "Installing the new build" });
+      ensureHeld();
+      touched = true;
+      swapped = true;
+      await exec(
         deps,
-        stopScript(platform, parsed.hostPid, hasUnit, parsed.hostStartedAt),
+        swapScript(plan, staged, target, marker, lock.token),
         settle,
-        "Couldn't stop Daintree on the host"
+        "Couldn't put the new build in place"
       );
-      if (markerValue(out, "stopped") !== "yes") {
-        throw failed("Daintree on the host didn't quit, so nothing was replaced");
+      if (signal.aborted) throw cancelled();
+      if (start) {
+        report({ stage: "restarting", fraction: 0.9, message: "Starting Daintree on the host" });
+        ensureHeld();
+        await exec(deps, start, settle, "Couldn't start Daintree on the host");
+      }
+
+      after = await probeUntilBack();
+      if (!after.result.reachable) {
+        throw failed("The host stopped answering after the install");
+      }
+      // The installed build must be read back as exactly this one; a build that
+      // can't be read is not taken on trust.
+      if (after.result.matchesClient !== true) {
+        throw failed(
+          after.result.matchesClient === false
+            ? "The host still reported a different build after installing"
+            : "The installed build couldn't be read back on the host"
+        );
+      }
+      if (wasHostMode && !after.result.hostModeListening) {
+        throw failed("Host mode didn't come back on the host after installing");
+      }
+    } catch (err) {
+      return await withRecovery(err);
+    }
+
+    // The running host is the final word: its handshake names the version and
+    // commit it actually runs. The backup stays until that passes.
+    let reconnected: boolean | null = null;
+    if (hostId && deps.reconnect && after.result.hostModeListening) {
+      report({ stage: "reconnecting", fraction: 0.95, message: "Reconnecting to the host" });
+      reconnected = await deps.reconnect(hostId).catch(() => null);
+      if (reconnected === false) {
+        return await withRecovery(
+          failed("The running host reported a different build after installing")
+        );
+      }
+      if (reconnected === null) {
+        throw failed(
+          "The new build is in place, but the host didn't answer a connection, so the build it runs couldn't be confirmed. The previous build is kept beside it."
+        );
       }
     }
-    if (signal.aborted) throw cancelled();
-
-    report({ stage: "installing", fraction: 0.8, message: "Installing the new build" });
-    swapped = true;
-    await exec(
-      deps,
-      swapScript(plan, staged, target, marker),
-      settle,
-      "Couldn't put the new build in place"
-    );
-    if (signal.aborted) throw cancelled();
-    if (start) {
-      report({ stage: "restarting", fraction: 0.9, message: "Starting Daintree on the host" });
-      await exec(deps, start, settle, "Couldn't start Daintree on the host");
-    }
-
-    after = await probeUntilBack();
-    if (!after.result.reachable) {
-      throw failed("The host stopped answering after the install");
-    }
-    // The installed build must be read back as exactly this one; a build that
-    // can't be read is not taken on trust.
-    if (after.result.matchesClient !== true) {
-      throw failed(
-        after.result.matchesClient === false
-          ? "The host still reported a different build after installing"
-          : "The installed build couldn't be read back on the host"
-      );
-    }
-    if (wasHostMode && !after.result.hostModeListening) {
-      throw failed("Host mode didn't come back on the host after installing");
-    }
-  } catch (err) {
-    return withRecovery(err);
+    await deps.shell
+      .exec(dropBackupScript(plan, target, lock.token), { timeoutMs: 120_000 })
+      .catch(() => {});
+    return { status: "installed", probe: after.result, reconnected };
+  } finally {
+    await lock.release();
   }
-
-  // The running host is the final word: its handshake names the version and
-  // commit it actually runs. The backup stays until that passes.
-  let reconnected: boolean | null = null;
-  if (hostId && deps.reconnect && after.result.hostModeListening) {
-    report({ stage: "reconnecting", fraction: 0.95, message: "Reconnecting to the host" });
-    reconnected = await deps.reconnect(hostId).catch(() => null);
-    if (reconnected === false) {
-      return withRecovery(failed("The running host reported a different build after installing"));
-    }
-    if (reconnected === null) {
-      throw failed(
-        "The new build is in place, but the host didn't answer a connection, so the build it runs couldn't be confirmed. The previous build is kept beside it."
-      );
-    }
-  }
-  await deps.shell.exec(dropBackupScript(plan, target), { timeoutMs: 120_000 }).catch(() => {});
-  return { status: "installed", probe: after.result, reconnected };
 }
 
 function refusal(userMessage: string): AppError {
@@ -1121,157 +1229,186 @@ async function applyStagedUpdate(
     }
     confirmed = impact;
   }
-  const reconfirm = await recheckBeforeRestart(
-    deps,
-    hostId,
-    whileWorking,
-    confirmed,
-    signal,
-    report
-  );
+  const confirmedImpact = confirmed;
+  const recheck = () =>
+    recheckBeforeRestart(deps, hostId, whileWorking, confirmedImpact, signal, report);
+  const reconfirm = await recheck();
   if (reconfirm) return { status: "needs-confirmation", impact: reconfirm };
   if (signal.aborted) throw cancelled();
 
-  // Waiting can take a while: the update, the process and its windows are
-  // looked at again right before the stop, and the restart follows what is there now.
-  const current = await deps.probe(signal);
-  if (signal.aborted) throw cancelled();
-  if (!current.parsed || !current.result.hostModeListening) {
-    throw failed("The host stopped answering right before the restart. Nothing was changed");
-  }
-  const changed = stagedProblem(current.result, version);
-  if (changed) throw refusal(changed);
-  const parsed = current.parsed;
-  const hasUnit = parsed.advice.hostModeUnit === true;
-  const start = startScript(platform, parsed, hasUnit, macAppPath(current.result));
-  if (start === null) throw refusal(NO_SERVICE_TO_RESTART);
-
-  // From the stop on, every step runs to completion whatever the cancel does,
-  // and any failure starts Daintree there again, so the host isn't left stopped.
-  const settle = new AbortController().signal;
-  const now = deps.now ?? Date.now;
-  let started = false;
-
-  const runStart = async (): Promise<CommandResult> => {
-    const result = await deps.shell
-      .exec(start, { signal: settle, timeoutMs: 30_000 })
-      .catch((err: unknown): CommandResult => ({
-        code: null,
-        stdout: "",
-        stderr: formatErrorMessage(err, "ssh failed"),
-        spawnError: null,
-        timedOut: false,
-      }));
-    if (result.code === 0) started = true;
-    return result;
-  };
-
-  const probeUntil = async (done: (seen: ProbeOutcome) => boolean): Promise<ProbeOutcome> => {
-    const deadline = now() + (deps.comeBackTimeoutMs ?? 90_000);
-    let seen = await deps.probe(settle);
-    while (!done(seen) && now() < deadline) {
-      await deps.sleep(2_000, settle);
-      seen = await deps.probe(settle);
-    }
-    return seen;
-  };
-  /** The process that came back, once it listens and has written its own record. */
-  const waitForNewListener = () =>
-    probeUntil(
-      (seen) =>
-        seen.parsed !== null &&
-        seen.result.hostModeListening &&
-        seen.parsed.hostPid !== parsed.hostPid &&
-        runningHostBuild(seen.parsed) !== null
-    );
-
-  let after: ProbeOutcome;
-  /** What the wait after a start last saw, so recovery doesn't wait it out again. */
-  let lastSeen: ProbeOutcome | null = null;
+  // One device at a time stops and starts the host.
+  const lock = await takeInstallLock(
+    deps,
+    (deps.installToken ?? newInstallToken)(),
+    signal,
+    report
+  );
   try {
-    report({ stage: "stopping", fraction: 0.3, message: "Stopping Daintree on the host" });
-    const stopped = await exec(
-      deps,
-      stopScript(platform, parsed.hostPid, hasUnit, parsed.hostStartedAt),
-      settle,
-      "Couldn't stop Daintree on the host"
-    );
-    if (markerValue(stopped, "stopped") !== "yes") {
-      throw failed("Daintree on the host didn't quit, so the update wasn't installed");
+    if (lock.waited) {
+      const again = await recheck();
+      if (again) return { status: "needs-confirmation", impact: again };
+      if (signal.aborted) throw cancelled();
     }
+    // Waiting can take a while: the update, the process and its windows are
+    // looked at again right before the stop, and the restart follows what is there now.
+    const current = await deps.probe(signal);
+    if (signal.aborted) throw cancelled();
+    if (!current.parsed || !current.result.hostModeListening) {
+      throw failed("The host stopped answering right before the restart. Nothing was changed");
+    }
+    const changed = stagedProblem(current.result, version);
+    if (changed) throw refusal(changed);
+    const parsed = current.parsed;
+    const hasUnit = parsed.advice.hostModeUnit === true;
+    const start = startScript(platform, parsed, hasUnit, macAppPath(current.result));
+    if (start === null) throw refusal(NO_SERVICE_TO_RESTART);
 
-    // macOS's updater replaces the app only after the process has gone:
-    // starting before it finishes would open the old one.
-    if (platform === "darwin") {
-      report({ stage: "installing", fraction: 0.5, message: "Waiting for the host to install it" });
-      const deadline = now() + (deps.stagedInstallTimeoutMs ?? 120_000);
+    // From the stop on, every step runs to completion whatever the cancel does,
+    // and any failure starts Daintree there again, so the host isn't left stopped.
+    const settle = new AbortController().signal;
+    const now = deps.now ?? Date.now;
+    let started = false;
+
+    const runStart = async (): Promise<CommandResult> => {
+      // Without the lock another device may be updating the host: it starts Daintree there itself.
+      if (!lock.held()) {
+        return {
+          code: null,
+          stdout: "",
+          stderr: "This device lost its turn to update the host",
+          spawnError: null,
+          timedOut: false,
+        };
+      }
+      const result = await deps.shell
+        .exec(start, { signal: settle, timeoutMs: 30_000 })
+        .catch((err: unknown): CommandResult => ({
+          code: null,
+          stdout: "",
+          stderr: formatErrorMessage(err, "ssh failed"),
+          spawnError: null,
+          timedOut: false,
+        }));
+      if (result.code === 0) started = true;
+      return result;
+    };
+
+    const probeUntil = async (done: (seen: ProbeOutcome) => boolean): Promise<ProbeOutcome> => {
+      const deadline = now() + (deps.comeBackTimeoutMs ?? 90_000);
       let seen = await deps.probe(settle);
-      while (seen.result.install?.version !== version && now() < deadline) {
+      while (!done(seen) && now() < deadline) {
         await deps.sleep(2_000, settle);
         seen = await deps.probe(settle);
       }
-    }
+      return seen;
+    };
+    /** The process that came back, once it listens and has written its own record. */
+    const waitForNewListener = () =>
+      probeUntil(
+        (seen) =>
+          seen.parsed !== null &&
+          seen.result.hostModeListening &&
+          seen.parsed.hostPid !== parsed.hostPid &&
+          runningHostBuild(seen.parsed) !== null
+      );
 
-    report({ stage: "restarting", fraction: 0.8, message: "Starting Daintree on the host" });
-    const result = await runStart();
-    if (result.code !== 0) {
-      throw failed("Couldn't start Daintree on the host", failureDetail(result, "ssh failed"));
+    let after: ProbeOutcome;
+    /** What the wait after a start last saw, so recovery doesn't wait it out again. */
+    let lastSeen: ProbeOutcome | null = null;
+    if (!lock.held()) {
+      throw failed("This device lost its turn to update the host, so nothing was changed");
     }
-    after = await waitForNewListener();
-    lastSeen = after;
-    if (!after.parsed || !after.result.hostModeListening) {
-      throw failed("Host mode didn't come back on the host after restarting");
-    }
-    const running = runningHostBuild(after.parsed);
-    if (running === null || after.parsed.hostPid === parsed.hostPid) {
-      throw failed(
-        "Daintree restarted on the host, but the build it runs couldn't be read, so the update can't be confirmed"
-      );
-    }
-    if (running.version !== version) {
-      throw failed(
-        `Daintree restarted on the host, but still runs ${running.version}: the downloaded update wasn't installed`
-      );
-    }
-  } catch (err) {
-    // Started once more if it isn't, whatever went wrong; never put back on an older build.
-    let back = false;
     try {
-      if (started && lastSeen) {
-        back = lastSeen.result.hostModeListening;
-      } else {
-        if (!started) await runStart();
-        // Any process listening will do: one that never quit counts as running.
-        if (started) {
-          back = (await probeUntil((seen) => seen.result.hostModeListening)).result
-            .hostModeListening;
+      report({ stage: "stopping", fraction: 0.3, message: "Stopping Daintree on the host" });
+      const stopped = await exec(
+        deps,
+        stopScript(platform, parsed.hostPid, hasUnit, parsed.hostStartedAt),
+        settle,
+        "Couldn't stop Daintree on the host"
+      );
+      if (markerValue(stopped, "stopped") !== "yes") {
+        throw failed("Daintree on the host didn't quit, so the update wasn't installed");
+      }
+
+      // macOS's updater replaces the app only after the process has gone:
+      // starting before it finishes would open the old one.
+      if (platform === "darwin") {
+        report({
+          stage: "installing",
+          fraction: 0.5,
+          message: "Waiting for the host to install it",
+        });
+        const deadline = now() + (deps.stagedInstallTimeoutMs ?? 120_000);
+        let seen = await deps.probe(settle);
+        while (seen.result.install?.version !== version && now() < deadline) {
+          await deps.sleep(2_000, settle);
+          seen = await deps.probe(settle);
         }
       }
-    } catch {
-      // Reported below as not started.
-    }
-    const base =
-      err instanceof AppError
-        ? err
-        : failed("The update failed", formatErrorMessage(err, "unknown error"));
-    const note = back
-      ? "Daintree is running on the host again."
-      : "Daintree couldn't be started again on the host; start it at the machine.";
-    throw new AppError({
-      code: base.code,
-      message: `${base.message}. ${note}`,
-      userMessage: `${base.userMessage ?? base.message}. ${note}`,
-    });
-  }
 
-  // The host now runs its own newer build, which may not be this client's: a
-  // link that reports the difference is still a host that updated.
-  let reconnected: boolean | null = null;
-  if (hostId && deps.reconnect) {
-    report({ stage: "reconnecting", fraction: 0.95, message: "Reconnecting to the host" });
-    reconnected = await deps.reconnect(hostId).catch(() => null);
+      report({ stage: "restarting", fraction: 0.8, message: "Starting Daintree on the host" });
+      const result = await runStart();
+      if (result.code !== 0) {
+        throw failed("Couldn't start Daintree on the host", failureDetail(result, "ssh failed"));
+      }
+      after = await waitForNewListener();
+      lastSeen = after;
+      if (!after.parsed || !after.result.hostModeListening) {
+        throw failed("Host mode didn't come back on the host after restarting");
+      }
+      const running = runningHostBuild(after.parsed);
+      if (running === null || after.parsed.hostPid === parsed.hostPid) {
+        throw failed(
+          "Daintree restarted on the host, but the build it runs couldn't be read, so the update can't be confirmed"
+        );
+      }
+      if (running.version !== version) {
+        throw failed(
+          `Daintree restarted on the host, but still runs ${running.version}: the downloaded update wasn't installed`
+        );
+      }
+    } catch (err) {
+      // Started once more if it isn't, whatever went wrong; never put back on an older build.
+      let back = false;
+      try {
+        if (started && lastSeen) {
+          back = lastSeen.result.hostModeListening;
+        } else {
+          if (!started) await runStart();
+          // Any process listening will do: one that never quit counts as running.
+          if (started) {
+            back = (await probeUntil((seen) => seen.result.hostModeListening)).result
+              .hostModeListening;
+          }
+        }
+      } catch {
+        // Reported below as not started.
+      }
+      const base =
+        err instanceof AppError
+          ? err
+          : failed("The update failed", formatErrorMessage(err, "unknown error"));
+      const note = back
+        ? "Daintree is running on the host again."
+        : "Daintree couldn't be started again on the host; start it at the machine.";
+      throw new AppError({
+        code: base.code,
+        message: `${base.message}. ${note}`,
+        userMessage: `${base.userMessage ?? base.message}. ${note}`,
+      });
+    }
+
+    // The host now runs its own newer build, which may not be this client's: a
+    // link that reports the difference is still a host that updated.
+    let reconnected: boolean | null = null;
+    if (hostId && deps.reconnect) {
+      report({ stage: "reconnecting", fraction: 0.95, message: "Reconnecting to the host" });
+      reconnected = await deps.reconnect(hostId).catch(() => null);
+    }
+    return { status: "staged-applied", probe: after.result, reconnected };
+  } finally {
+    await lock.release();
   }
-  return { status: "staged-applied", probe: after.result, reconnected };
 }
 
 async function homeOf(deps: InstallerDeps, signal: AbortSignal): Promise<string> {

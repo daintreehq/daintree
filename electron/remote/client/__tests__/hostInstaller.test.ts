@@ -113,8 +113,64 @@ const ok = (stdout = ""): CommandResult => ({
   timedOut: false,
 });
 
+/**
+ * The host's install lock as fake shells see it: one holder at a time, the
+ * others waiting, and a holder that lets go when released or stopped. Shared
+ * by two shells, it is one host two Shells update.
+ */
+class FakeHostLock {
+  owner: string | null = null;
+  private changed: Array<() => void> = [];
+  private letGo = new Map<string, () => void>();
+
+  private wake(): void {
+    for (const resolve of this.changed.splice(0)) resolve();
+  }
+
+  async hold(token: string, signal?: AbortSignal): Promise<CommandResult> {
+    const stopped = () => signal?.aborted === true;
+    while (this.owner !== null && this.owner !== token && !stopped()) {
+      await new Promise<void>((resolve) => {
+        this.changed.push(resolve);
+        signal?.addEventListener("abort", () => resolve(), { once: true });
+      });
+    }
+    if (stopped()) return { ...ok(), code: null };
+    this.owner = token;
+    await new Promise<void>((resolve) => {
+      this.letGo.set(token, resolve);
+      signal?.addEventListener("abort", () => resolve(), { once: true });
+    });
+    this.letGo.delete(token);
+    if (this.owner === token) this.owner = null;
+    this.wake();
+    return ok();
+  }
+
+  /** The holder ends on its own, as when its channel drops: the lock goes with it. */
+  drop(token: string): void {
+    this.letGo.get(token)?.();
+  }
+
+  answer(script: string, signal?: AbortSignal): Promise<CommandResult> | null {
+    if (!script.includes("host-install.lock")) return null;
+    if (script.includes("trap rel EXIT")) {
+      return this.hold(/t='([^']+)'/.exec(script)![1]!, signal);
+    }
+    const token = /= '([^']+)' \]/.exec(script)![1]!;
+    if (script.includes('"$L/release"')) {
+      if (this.owner === token) this.drop(token);
+      return Promise.resolve(ok());
+    }
+    const state = this.owner === token ? "held" : this.owner === null ? "free" : "other";
+    return Promise.resolve(ok(`@@dt:lock ${state}\n`));
+  }
+}
+
 interface FakeShell extends HostCommandChannel {
+  /** What ran on the host, the install lock's own commands aside. */
   scripts: string[];
+  lock: FakeHostLock;
   uploads: Array<[string, string]>;
   /** The sha256 of what each upload carried, by remote path, as the host would read it back. */
   received: Map<string, string>;
@@ -124,14 +180,20 @@ interface FakeShell extends HostCommandChannel {
   fetchedSha512: string;
 }
 
-function fakeShell(answer: (script: string) => CommandResult = () => ok()): FakeShell {
+function fakeShell(
+  answer: (script: string) => CommandResult = () => ok(),
+  lock = new FakeHostLock()
+): FakeShell {
   const shell: FakeShell = {
     scripts: [],
+    lock,
     uploads: [],
     received: new Map(),
     fetched: new Map(),
     fetchedSha512: Buffer.from(ARTIFACT_SHA512, "base64").toString("hex"),
-    exec: async (script) => {
+    exec: async (script, options) => {
+      const locking = shell.lock.answer(script, options?.signal);
+      if (locking) return locking;
       shell.scripts.push(script);
       const sha = /@@dt:sha256/.test(script) ? /sha256sum '([^']+)'/.exec(script)?.[1] : null;
       if (sha) return ok(`@@dt:sha256 ${shell.received.get(sha) ?? "missing"}\n`);
@@ -224,6 +286,7 @@ function makeDeps(params: {
     cacheDir,
     reconnect: vi.fn(async () => true),
     sleep: async () => {},
+    installToken: () => "t1",
     now: (() => {
       let t = 0;
       return () => (t += 1_000);
@@ -265,7 +328,7 @@ describe("runHostInstall", () => {
         ? "stage"
         : s.includes("@@dt:sha256")
           ? "check-copy"
-          : s === "rm -rf '/Applications/Daintree.app.old'"
+          : s === "rm -rf '/Applications/Daintree.app.old-t1'"
             ? "drop-backup"
             : s.includes("ditto -x")
               ? "verify"
@@ -579,7 +642,7 @@ describe("runHostInstall", () => {
     );
     // Its previous marker is kept beside it along with the image.
     expect(swap).toContain(
-      "cp -p '/home/greg/Applications/Daintree-1.3.0-x86_64.AppImage.build-info.json' '/home/greg/Applications/Daintree-1.3.0-x86_64.AppImage.build-info.json.old'"
+      "cp -p '/home/greg/Applications/Daintree-1.3.0-x86_64.AppImage.build-info.json' '/home/greg/Applications/Daintree-1.3.0-x86_64.AppImage.build-info.json.old-t1.part'"
     );
     expect(shell.scripts).toContain("systemctl --user start daintree-host.service");
   });
@@ -597,7 +660,7 @@ describe("runHostInstall", () => {
     );
     const rollback = shell.scripts.findIndex(
       (s) =>
-        s.includes("mv '/Applications/Daintree.app.old' '/Applications/Daintree.app'") &&
+        s.includes("mv '/Applications/Daintree.app.old-t1' '/Applications/Daintree.app'") &&
         s.startsWith("if [ -d")
     );
     expect(rollback).toBeGreaterThan(-1);
@@ -928,7 +991,7 @@ describe("runHostInstall", () => {
       /running host reported a different build/
     );
     expect(shell.scripts.some((s) => s.includes("@@dt:rolledback"))).toBe(true);
-    expect(shell.scripts).not.toContain("rm -rf '/Applications/Daintree.app.old'");
+    expect(shell.scripts).not.toContain("rm -rf '/Applications/Daintree.app.old-t1'");
   });
 
   it("keeps the backup when the running host's handshake can't be had", async () => {
@@ -946,7 +1009,7 @@ describe("runHostInstall", () => {
     await expect(install(deps, { hostId: "studio", whileWorking: "proceed" })).rejects.toThrow(
       /couldn't be confirmed/
     );
-    expect(shell.scripts).not.toContain("rm -rf '/Applications/Daintree.app.old'");
+    expect(shell.scripts).not.toContain("rm -rf '/Applications/Daintree.app.old-t1'");
     expect(shell.scripts.some((s) => s.includes("@@dt:rolledback"))).toBe(false);
   });
 
@@ -960,7 +1023,7 @@ describe("runHostInstall", () => {
     await expect(install(deps, { hostId: "box" })).rejects.toThrow();
     const rollback = shell.scripts.find((s) => s.includes("@@dt:rolledback"))!;
     expect(rollback).toContain(
-      "mv -f '/home/greg/Applications/Daintree-1.3.0-x86_64.AppImage.build-info.json.old' '/home/greg/Applications/Daintree-1.3.0-x86_64.AppImage.build-info.json'"
+      "mv -f '/home/greg/Applications/Daintree-1.3.0-x86_64.AppImage.build-info.json.old-t1' '/home/greg/Applications/Daintree-1.3.0-x86_64.AppImage.build-info.json'"
     );
   });
 
