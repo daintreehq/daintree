@@ -874,6 +874,15 @@ describe("assignment", () => {
     expect(assignees["ENG-12"]).toBeNull();
   });
 
+  it("hands back the previous assignee as Jira last showed them", async () => {
+    await assign();
+    const renamed = { ...BOB, displayName: "Robert Jones" };
+    assignees["ENG-12"] = renamed;
+    await assign();
+    assignees["ENG-12"] = ADA;
+    await expect(undo()).resolves.toEqual([{ ...BOB_USER, login: "Robert Jones" }]);
+  });
+
   it("uses up only its own record when someone else has the issue", async () => {
     await assign();
     await assign();

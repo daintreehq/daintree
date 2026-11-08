@@ -190,6 +190,8 @@ function rememberPreviousAssignee(key: string, previous: PreviousAssignee): void
   const runs = previousAssignees.get(key) ?? [];
   const latest = runs.at(-1);
   if (latest && (latest.previous?.accountId ?? null) === (previous?.accountId ?? null)) {
+    // The same account; its newest name and avatar are what an Undo hands back.
+    latest.previous = previous;
     latest.count++;
   } else {
     runs.push({ previous, count: 1 });
