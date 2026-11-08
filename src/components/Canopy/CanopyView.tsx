@@ -1787,9 +1787,10 @@ function CanopyInbox({
                     ) {
                       return;
                     }
-                    // Put in place with the caret after it, where React then leaves it.
+                    // Put in place with the caret after it, then said as an input so
+                    // React's own record of the value follows the field's.
                     input.setRangeText(list, start, end, "end");
-                    setQuery(input.value);
+                    input.dispatchEvent(new Event("input", { bubbles: true }));
                   }}
                   onClear={() => setQuery("")}
                   onKeyDown={onSearchKeyDown}

@@ -617,7 +617,7 @@ describe("CanopyView search", () => {
 
   it("pastes a column of names as a list", async () => {
     installElectron();
-    render(<CanopyView />);
+    const { container } = render(<CanopyView />);
     await frames();
     const input = searchInput();
     input.focus();
@@ -632,6 +632,13 @@ describe("CanopyView search", () => {
     // A single line is the field's own to paste.
     expect(paste("dfat-xth8")).toBe(false);
     expect(searchInput().value).toBe("");
+
+    // The field and the search stay one: clearing what was pasted clears the search.
+    expect(paste("zzz\n")).toBe(true);
+    expect(searchInput().value).toBe("zzz");
+    expect(cards(container)).toHaveLength(0);
+    await search("");
+    expect(cards(container)).toHaveLength(3);
 
     expect(paste("dfat-xth8\r\ncocto-claude\n\nfallback-review: dfat-vjv0\n")).toBe(true);
     expect(searchInput().value).toBe("dfat-xth8, cocto-claude, fallback-review: dfat-vjv0");
