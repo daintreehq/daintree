@@ -4,7 +4,7 @@
 //
 // Two files because the manifest schema is origin-keyed and the two origins
 // genuinely disagree: a project plugin must declare `scope` and is refused
-// seven contribution types an installed plugin may use. One merged file would
+// eight contribution types an installed plugin may use. One merged file would
 // have to accept the union, which is the one thing neither origin does.
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -37,7 +37,7 @@ const TARGETS: Target[] = [
     origin: "project",
     title: "Daintree project plugin manifest",
     intro:
-      'Manifest for a Daintree plugin committed into a project\'s .daintree/plugins/ directory. Such a plugin must declare "scope": "project", and seven contribution types available to installed plugins are refused here.',
+      'Manifest for a Daintree plugin committed into a project\'s .daintree/plugins/ directory. Such a plugin must declare "scope": "project", and eight contribution types available to installed plugins are refused here.',
   },
 ];
 
@@ -50,11 +50,12 @@ const TARGETS: Target[] = [
 const UNENCODED_RULES = [
   'A panel view\'s id must equal the id of a declared panel. A location: "settings" view is the exception: at most one per plugin, with an id no panel uses; so is a location: "fileEditor" view, with an id no panel uses. A surface\'s viewId must name a declared panel view whose panel is not a PTY panel.',
   "A toolbar button declares exactly one of actionId or popover. A popover's viewId must name a declared panel view whose panel is not a PTY panel.",
+  "A canopyViews entry's viewId must name a declared panel view whose panel is not a PTY panel, and no view may be named twice.",
   "A panel's menu may name only this plugin's own actions (written \"<plugin name>.<id>\", matching a declared command when the plugin declares commands), each at most once, and a hasPty panel may not have menu entries.",
   'A "project" database needs "scope": "project" and the "fs:project-write" capability; path applies only to a "project" database.',
   'A database query\'s sql must be one statement: for a "read" query, one SELECT, WITH or VALUES statement with no INSERT, UPDATE, DELETE or REPLACE; for a "write" query, one INSERT, REPLACE, UPDATE or DELETE statement, optionally after WITH. Its named placeholders must match its params exactly, and positional (?) placeholders are refused. Query names must be unique across all of a plugin\'s databases, may not be database_schema or database_query, and number at most 16 in all; with any tools the plugin registers, at most 16 together.',
   'A secret setting (type "secret" or secret: true) may not declare a default, since it would ship in plugin.json.',
-  'Under project scope, menuItems, agents, processTools, themes, forgeProviders and projectTemplates are refused, mcpServers are refused unless every one is named by a contributes.agentMcp[].source, and "scope": "project" is required.',
+  'Under project scope (and for an "instanceMode": "project" package), canopyViews is refused. Under project scope, menuItems, agents, processTools, themes, forgeProviders and projectTemplates are refused, mcpServers are refused unless every one is named by a contributes.agentMcp[].source, and "scope": "project" is required.',
   "An agentMcp source must name a declared mcpServers id; its tools may not repeat a name or a serverTool, may not use database_schema, database_query or a declared query name, and count toward the 16-tool budget with declared queries; on an endpoint with groups every tool names a declared group, and on one without, none does.",
   'A fileEditors entry names exactly one of slot or view. A slot is accepted only for built-in plugins and takes no mode or paths; a view must name one of the plugin\'s location: "fileEditor" views and needs a mode. Every entry declares extensions, paths or both, and paths are accepted only under "scope": "project". default is accepted only under "scope": "project", on a view-backed "mode": "edit" entry with paths, and a pattern may be the default for one entry of a plugin.',
   'A contextMenus entry may declare kind, extensions or paths only at location "file", and extensions may not be combined with kind "folder". Paths are globs relative to the worktree root.',
