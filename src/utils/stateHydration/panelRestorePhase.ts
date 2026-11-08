@@ -917,7 +917,7 @@ export async function restorePanelsPhase(
   const workspaceHasWorktrees = await workspaceHasWorktreesPromise;
   const effectiveActiveWorktreeId = workspaceHasWorktrees ? activeWorktreeId : null;
 
-  if (!safeMode) await loadSavedPanesPluginAgents(savedPanels, projectId);
+  await loadSavedPanesPluginAgents(savedPanels, projectId);
 
   const restoreTasks: TerminalRestoreTask[] = [];
   const savedIdToRestoredId = new Map<string, string>();

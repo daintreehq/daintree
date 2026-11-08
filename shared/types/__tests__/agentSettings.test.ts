@@ -2430,19 +2430,19 @@ describe("a plugin agent's assigned session id (#16470)", () => {
         resume,
       },
     ]);
-  const SAME_FLAG = {
+  const SAME_FLAG: NonNullable<AgentConfig["resumeTemplate"]> = {
     kind: "session-id",
     args: ["--session-id", "{sessionId}"],
     assignSessionIdArgs: ["--session-id", "{sessionId}"],
     resumeLatestArgs: ["--continue"],
-  } as const;
-  const OWN_RESUME_FLAG = {
+  };
+  const OWN_RESUME_FLAG: NonNullable<AgentConfig["resumeTemplate"]> = {
     kind: "session-id",
     args: ["--session", "{sessionId}"],
     assignSessionIdArgs: ["--session-id", "{sessionId}"],
     quitCommand: "/quit",
     resumeLatestArgs: ["--continue"],
-  } as const;
+  };
 
   afterEach(() => {
     clearPluginAgentRegistryForTests();
@@ -2450,7 +2450,7 @@ describe("a plugin agent's assigned session id (#16470)", () => {
   });
 
   it("assigns through the same lifecycle a built-in uses", () => {
-    pi({ ...OWN_RESUME_FLAG });
+    pi(OWN_RESUME_FLAG);
 
     expect(supportsSessionIdAssignment("pi")).toBe(true);
     expect(supportsExactSessionCapture("pi")).toBe(true);
@@ -2475,7 +2475,7 @@ describe("a plugin agent's assigned session id (#16470)", () => {
     ["a fused id", ["--session-id={sessionId}"]],
     ["two options before the id", ["--new", "--id", "{sessionId}"]],
   ])("strips %s back off the command a launch built, on every shell", (_label, assignArgs) => {
-    pi({ ...OWN_RESUME_FLAG, assignSessionIdArgs: assignArgs });
+    pi({ kind: "session-id", args: ["--session", "{sessionId}"], assignSessionIdArgs: assignArgs });
     for (const dialect of ["posix", "windows"] as const) {
       setAgentCommandDialectResolver(() => dialect);
       const command = generateAgentCommand("pi", {}, "pi", {
@@ -2491,10 +2491,10 @@ describe("a plugin agent's assigned session id (#16470)", () => {
   });
 
   it("tells a flag that also resumes from one with its own resume flag", () => {
-    pi({ ...SAME_FLAG });
+    pi(SAME_FLAG);
     expect(assignmentReopensSession("pi")).toBe(true);
 
-    pi({ ...OWN_RESUME_FLAG });
+    pi(OWN_RESUME_FLAG);
     expect(assignmentReopensSession("pi")).toBe(false);
 
     expect(assignmentReopensSession("claude")).toBe(false);
@@ -2508,24 +2508,28 @@ describe("a plugin agent's assigned session id (#16470)", () => {
       ["a resume by id", `pi --no-banner --session '${SESSION}'`],
       ["a resume of the latest", "pi --no-banner --continue"],
     ])("takes %s off a stored command", (_label, command) => {
-      pi({ ...OWN_RESUME_FLAG });
+      pi(OWN_RESUME_FLAG);
       expect(stripConversationSelectorArgs(command, "pi")).toBe("pi --no-banner");
     });
 
     it("leaves a prompt that only mentions a selector", () => {
-      pi({ ...OWN_RESUME_FLAG });
+      pi(OWN_RESUME_FLAG);
       const command = "pi --no-banner '--continue'";
       expect(stripConversationSelectorArgs(command, "pi")).toBe(command);
     });
 
-    it("never takes the binary, even for a resume of nothing but the id", () => {
-      pi({ kind: "session-id", args: ["{sessionId}"] });
-      const command = "pi --no-banner";
+    it("never takes the binary, even when a selector starts with its name", () => {
+      pi({
+        kind: "session-id",
+        args: ["--session", "{sessionId}"],
+        resumeLatestArgs: ["pi", "last"],
+      });
+      const command = "pi last --no-banner";
       expect(stripConversationSelectorArgs(command, "pi")).toBe(command);
     });
 
     it("returns a command with nothing to strip untouched, spacing and all", () => {
-      pi({ ...OWN_RESUME_FLAG });
+      pi(OWN_RESUME_FLAG);
       const command = "pi  --no-banner";
       expect(stripConversationSelectorArgs(command, "pi")).toBe(command);
       expect(stripConversationSelectorArgs("", "pi")).toBe("");

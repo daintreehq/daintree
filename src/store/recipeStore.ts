@@ -1540,6 +1540,14 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
                 ? terminal.whenDone
                 : undefined;
             const handbackCode = whenDone !== undefined ? mintHandbackCode() : undefined;
+            // What this launch's command will carry. The builder tokenises the
+            // recipe args exactly as the launch command does (#15637).
+            const launchFlags = buildAgentLaunchFlags(effectiveEntry, agentId, {
+              modelId: terminal.agentModelId,
+              presetArgs: preset?.args,
+              recipeArgs: terminal.args,
+              globalSkipPermissions,
+            });
             // Persist the process-level launch flags so restart/resume/continue
             // reproduce the same configuration. Without this the panel arrives
             // with `agentLaunchFlags: undefined` and the restart slice silently
@@ -1547,25 +1555,18 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             // `--dangerously-skip-permissions` and the recipe's args (#9650).
             // Preserve flags an in-memory recipe already carries; for disk
             // recipes the field is stripped (undefined), so compute from live
-            // settings (mirroring useAgentLauncher). The builder tokenises the
-            // recipe args exactly as the launch command does (#15637).
+            // settings (mirroring useAgentLauncher).
             const agentLaunchFlags = terminal.agentLaunchFlags ?? [
-              ...buildAgentLaunchFlags(effectiveEntry, agentId, {
-                modelId: terminal.agentModelId,
-                presetArgs: preset?.args,
-                recipeArgs: terminal.args,
-                globalSkipPermissions,
-              }),
+              ...launchFlags,
               // Last, where the launch command puts it, so restart replays it.
               ...step.systemPromptArgs,
             ];
             // One id per pane (#16470): a recipe often runs the same agent twice
             // in one worktree, where "latest in this directory" can't tell them
-            // apart after an abrupt end. Not for a recipe whose own args pick the
+            // apart after an abrupt end. Not for a launch whose own args pick the
             // conversation: Claude refuses `--session-id` beside `--continue`.
             const assignedSessionId =
-              stripConversationSelectorFlags(agentLaunchFlags, agentId).length ===
-              agentLaunchFlags.length
+              stripConversationSelectorFlags(launchFlags, agentId).length === launchFlags.length
                 ? mintAssignedSessionId(agentId)
                 : undefined;
             const command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {

@@ -3,6 +3,7 @@ import {
   clearPluginAgentRegistryForTests,
   registerPluginAgents,
 } from "../../../../shared/config/pluginAgentRegistry.js";
+import { buildResumeCommand } from "../../../../shared/types/agentSettings.js";
 import type { IPty } from "node-pty";
 import { TerminalProcess, type TerminalProcessCallbacks } from "../TerminalProcess.js";
 import { gracefulShutdown as runGracefulShutdown } from "../TerminalGracefulShutdown.js";
@@ -1891,10 +1892,13 @@ describe("TerminalProcess.gracefulShutdown — outcome logging", () => {
         const left = createAgentTerminalWithSession(handles, "pi", "pane-left");
         const right = createAgentTerminalWithSession(createMockPty(), "pi", "pane-right");
 
-        await expect(left.gracefulShutdown()).resolves.toBe("pane-left");
-        await expect(right.gracefulShutdown()).resolves.toBe("pane-right");
+        const leftId = await left.gracefulShutdown();
+        const rightId = await right.gracefulShutdown();
 
         expect(handles.writeMock).not.toHaveBeenCalled();
+        // What each pane's restore runs: two panes, two sessions, after a graceful exit.
+        expect(buildResumeCommand("pi", leftId ?? "")).toBe("pi --session-id pane-left");
+        expect(buildResumeCommand("pi", rightId ?? "")).toBe("pi --session-id pane-right");
       } finally {
         clearPluginAgentRegistryForTests();
       }

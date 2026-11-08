@@ -103,6 +103,74 @@ describe("duplicating a plugin agent's pane (#16470)", () => {
     warn.mockRestore();
   });
 
+  describe("when settings can't be read and the source's command is its resume", () => {
+    let warn: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      getSettings.mockRejectedValue(new Error("settings unavailable"));
+      warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      warn.mockRestore();
+    });
+
+    const withResume = (resume: PluginAgentContribution["resume"]) =>
+      registerPluginAgents("digitalfrontier.agents", [{ ...PI, resume }]);
+
+    it("drops a resume by id through the plugin's own flag", async () => {
+      withResume({
+        kind: "session-id",
+        args: ["--session", "{sessionId}"],
+        assignSessionIdArgs: ["--session-id", "{sessionId}"],
+      });
+
+      const options = await buildPanelDuplicateOptions(
+        piPane({ command: `pi --no-banner --session '${SOURCE_ID}'` }),
+        "grid"
+      );
+
+      expect(options.command).toBe("pi --no-banner");
+    });
+
+    it("drops a resume of the latest session, which would open the source's too", async () => {
+      withResume({
+        kind: "session-id",
+        args: ["--session", "{sessionId}"],
+        resumeLatestArgs: ["--continue"],
+      });
+
+      const options = await buildPanelDuplicateOptions(
+        piPane({ agentSessionId: undefined, command: "pi --no-banner --continue" }),
+        "grid"
+      );
+
+      expect(options.command).toBe("pi --no-banner");
+    });
+
+    it("refuses a copy when the source's id can't be recognised to strip", async () => {
+      withResume({ kind: "session-id", args: ["{sessionId}"] });
+
+      await expect(
+        buildPanelDuplicateOptions(piPane({ command: `pi '${SOURCE_ID}'` }), "grid")
+      ).rejects.toThrow(/Cannot duplicate agent terminal/);
+    });
+
+    it("refuses a copy whose resume has a quoted word no shape matches", async () => {
+      withResume({
+        kind: "session-id",
+        args: ["--profile", "main profile", "--session", "{sessionId}"],
+      });
+
+      await expect(
+        buildPanelDuplicateOptions(
+          piPane({ command: `pi --profile 'main profile' --session '${SOURCE_ID}'` }),
+          "grid"
+        )
+      ).rejects.toThrow(/Cannot duplicate agent terminal/);
+    });
+  });
+
   it("keeps the reopened pane off the closed one's id", () => {
     const options = buildPanelSnapshotOptions(piPane());
 

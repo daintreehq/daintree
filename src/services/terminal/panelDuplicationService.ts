@@ -72,6 +72,18 @@ export interface ResolvedCommand {
 }
 
 /**
+ * Whether a command meant for a copy still names the source's conversation. A
+ * pane's id only reaches its command as a selector, so this holds however the
+ * flag was written, including a form nothing could recognise to strip (#16470).
+ */
+function namesSourceSession(
+  command: string,
+  panel: import("@shared/types/panel").PtyPanelData
+): boolean {
+  return !!panel.agentSessionId && command.includes(panel.agentSessionId);
+}
+
+/**
  * The source's launch record for a pane that runs its stored command, which
  * carries the launch prompt; a prompt sent after launch never rides it (#14592).
  */
@@ -173,16 +185,17 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
         // Settings couldn't be read, but the source's account is on the pane
         // itself: the copy doesn't fall back to the default login (#16040).
         const accountEnv = paneAccountEnv(panel.launchAgentId, panel);
+        // Reusing the source's command verbatim would open its conversation
+        // too, through an assigned id (#11782) or the resume command a restore
+        // stored (#16470), so strip that back off and let this copy launch as
+        // the fresh conversation it is. One that can't be stripped is refused.
+        const copied = stripConversationSelectorArgs(
+          panel.command ?? agentConfig.command,
+          panel.launchAgentId
+        );
         return {
           agentAccountId: accountEnv ? panel.agentAccountId : undefined,
-          // Reusing the source's command verbatim would open its conversation
-          // too, through an assigned id (#11782) or the resume command a restore
-          // stored (#16470), so strip that back off and let this copy launch as
-          // the fresh conversation it is.
-          command: stripConversationSelectorArgs(
-            panel.command ?? agentConfig.command,
-            panel.launchAgentId
-          ),
+          command: namesSourceSession(copied, panel) ? undefined : copied,
           env: accountEnv,
           agentLaunchFlags: panel.agentLaunchFlags,
           callerLaunchFlags: panel.callerLaunchFlags,
@@ -201,8 +214,8 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
   const holdsSourceSession =
     isPtyPanel(panel) &&
     !!panel.launchAgentId &&
-    !!panel.agentSessionId &&
-    !!panel.command?.includes(panel.agentSessionId);
+    !!panel.command &&
+    namesSourceSession(panel.command, panel);
   return {
     command: isPtyPanel(panel) && !holdsSourceSession ? panel.command : undefined,
     env: undefined,

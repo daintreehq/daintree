@@ -1312,6 +1312,38 @@ describe("recipeStore", () => {
       expect(options.command).not.toContain("--session-id");
     });
 
+    it("reads the flags the launch carries, not the ones a recipe has captured (#16470)", async () => {
+      addTerminalMock.mockResolvedValue("terminal-1");
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-captured",
+            name: "Captured",
+            projectId: "project-1",
+            terminals: [
+              { type: "claude", title: "Picks", env: {}, args: "--continue", agentLaunchFlags: [] },
+              { type: "claude", title: "Fresh", env: {}, agentLaunchFlags: ["--continue"] },
+            ],
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+
+      await useRecipeStore
+        .getState()
+        .runRecipeWithResults("recipe-captured", "/tmp/worktree", "worktree-1");
+
+      const launched = addTerminalMock.mock.calls.map(
+        ([options]) => options as { agentSessionId?: string; command?: string }
+      );
+      expect(launched[0]?.agentSessionId).toBeUndefined();
+      expect(launched[0]?.command).not.toContain("--session-id");
+      expect(launched[1]?.agentSessionId).toBeTruthy();
+      expect(launched[1]?.command).toContain(launched[1]?.agentSessionId);
+    });
+
     it("reports partial failures with correct indices", async () => {
       let callIndex = 0;
       addTerminalMock.mockImplementation(() => {

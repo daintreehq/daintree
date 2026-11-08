@@ -1914,29 +1914,50 @@ describe("restorePanelsPhase — one resume-latest per agent+cwd (issue #11461)"
       expect(sessionAllowanceById(ctx).get("copy")).toBe(false);
     });
 
-    it("loads the plugin agents before deciding who resumes what, on a cold start", async () => {
-      const getAgents = vi.fn(async () => {
-        registerPluginAgents("digitalfrontier.agents", [PI]);
-        return getPluginAgentRegistry();
-      });
-      stubPluginAgents(getAgents);
+    it("waits for the plugin agents before restoring anything, on a cold start", async () => {
+      registerPluginAgents("digitalfrontier.agents", [PI]);
+      const answer = structuredClone(getPluginAgentRegistry());
+      clearPluginAgentRegistryForTests();
+      let respond: (agents: typeof answer) => void = () => {};
+      const getAgents = vi.fn(
+        () =>
+          new Promise<typeof answer>((resolve) => {
+            respond = resolve;
+          })
+      );
+      stubPluginAgents(getAgents as unknown as Mock);
       const ctx = makeContext();
 
-      await restorePanelsPhase(
+      const restored = restorePanelsPhase(
         [piPanel("older", { lastActiveAt: 1 }), piPanel("newer", { lastActiveAt: 2 })],
         ctx
       );
+      await vi.waitFor(() => expect(getAgents).toHaveBeenCalledWith({ forRestore: true }));
+      await new Promise((resolve) => setTimeout(resolve, 0));
 
-      expect(getAgents).toHaveBeenCalledWith({ forRestore: true });
+      expect(ctx.addPanel).not.toHaveBeenCalled();
+
+      respond(answer);
+      await restored;
+
       // Only a known agent has a resume-latest slot to elect over.
       expect(Object.fromEntries(allowanceById(ctx))).toEqual({ older: false, newer: true });
     });
 
-    it("doesn't start the plugin host for a safe-mode restore", async () => {
+    it("loads them for the panes a safe-mode restore keeps, which would lose their ids", async () => {
       const getAgents = vi.fn(async () => ({}));
       stubPluginAgents(getAgents);
 
       await restorePanelsPhase([piPanel("left")], makeContext({ safeMode: true }));
+
+      expect(getAgents).toHaveBeenCalledWith({ forRestore: true });
+    });
+
+    it("asks for nothing when no saved pane names an unknown agent", async () => {
+      const getAgents = vi.fn(async () => ({}));
+      stubPluginAgents(getAgents);
+
+      await restorePanelsPhase([codexPanel("solo"), panel("shell")], makeContext());
 
       expect(getAgents).not.toHaveBeenCalled();
     });
