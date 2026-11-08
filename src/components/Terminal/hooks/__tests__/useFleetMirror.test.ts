@@ -143,11 +143,14 @@ describe("useFleetMirror", () => {
     expect(draftOf("term-3")).toBe("test draft");
   });
 
-  it("does not re-render a non-primary pane when fleet membership changes", () => {
+  it.each([
+    ["not in the fleet", {}],
+    ["a follower", { isFleetFollower: true, value: "" }],
+  ])("does not re-render a pane that is %s when fleet membership changes", (_, overrides) => {
     let renders = 0;
     renderHook(() => {
       renders++;
-      return useFleetMirror(params());
+      return useFleetMirror(params(overrides));
     });
     const before = renders;
 

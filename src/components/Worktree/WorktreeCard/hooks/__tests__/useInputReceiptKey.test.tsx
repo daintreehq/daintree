@@ -13,6 +13,7 @@ describe("useInputReceiptKey", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     act(() => {
       vi.runOnlyPendingTimers();
     });
@@ -53,6 +54,25 @@ describe("useInputReceiptKey", () => {
     });
     expect(usePanelStore.getState().pingedId).toBeNull();
     expect(result.current).toBe(1);
+  });
+
+  it("ignores unrelated store updates while a ping for its terminal is still live", () => {
+    let renders = 0;
+    const { result } = renderHook(() => {
+      renders++;
+      return useInputReceiptKey(["t-1"]);
+    });
+
+    ping("t-1");
+    expect(result.current).toBe(1);
+    const rendersAfterPing = renders;
+
+    // `pingedId` still names this card's terminal, but no new ping happened.
+    act(() => {
+      usePanelStore.setState({ focusedId: "something-else" });
+    });
+    expect(result.current).toBe(1);
+    expect(renders).toBe(rendersAfterPing);
   });
 
   it("re-keys on back-to-back pings of the SAME terminal", () => {
@@ -126,10 +146,28 @@ describe("useInputReceiptKey", () => {
     expect(rendersB).toBe(baseB);
   });
 
-  it("stops listening once unmounted", () => {
-    const { result, unmount } = renderHook(() => useInputReceiptKey(["t-1"]));
+  it("drops its store subscription on unmount and when the terminal list changes", () => {
+    const subscribe = usePanelStore.subscribe;
+    const disposers: Array<ReturnType<typeof vi.fn>> = [];
+    vi.spyOn(usePanelStore, "subscribe").mockImplementation(
+      (...args: Parameters<typeof subscribe>) => {
+        const dispose = vi.fn(subscribe(...args));
+        disposers.push(dispose);
+        return dispose;
+      }
+    );
+
+    const { rerender, unmount } = renderHook(({ ids }) => useInputReceiptKey(ids), {
+      initialProps: { ids: ["t-1"] },
+    });
+    expect(disposers).toHaveLength(1);
+
+    rerender({ ids: ["t-1", "t-2"] });
+    expect(disposers).toHaveLength(2);
+    expect(disposers[0]).toHaveBeenCalledTimes(1);
+    expect(disposers[1]).not.toHaveBeenCalled();
+
     unmount();
-    ping("t-1");
-    expect(result.current).toBe(0);
+    expect(disposers[1]).toHaveBeenCalledTimes(1);
   });
 });

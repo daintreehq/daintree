@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import { panelStoreApi } from "@/store/panelStore";
 
 /**
@@ -23,7 +23,9 @@ import { panelStoreApi } from "@/store/panelStore";
 export function useInputReceiptKey(terminalIds: readonly string[]): number {
   const [receiptKey, setReceiptKey] = useState(0);
 
-  useEffect(() => {
+  // A layout effect, so the subscription is live before anything outside React
+  // can ping between this render committing and a passive effect flushing.
+  useLayoutEffect(() => {
     if (terminalIds.length === 0) return;
     return panelStoreApi.subscribe((state, prev) => {
       if (state.pingSeq === prev.pingSeq) return;
