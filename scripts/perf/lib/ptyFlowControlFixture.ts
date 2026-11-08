@@ -1104,7 +1104,9 @@ function ipcFallbackWrite(
 
   if (atCapacity) {
     const dropAt = performance.now();
-    queue.getUtilization(id);
+    // The host arms the pause on a rejected chunk too, so a ledger filled
+    // without one still gets a safety timer (#16497).
+    queue.applyBackpressure(id, queue.getUtilization(id));
     into.subjectMs += performance.now() - dropAt;
     into.timerSampleCount += 2;
     return false;
@@ -1246,14 +1248,20 @@ export function observeIpcFallbackSequences(): IpcFallbackSequences {
  * The ordered `ipcQueueManager` calls the IPC-fallback block in
  * `electron/pty-host/visualOutputRouter.ts` makes, as {@link runIpcFlood} mirrors them.
  *
- * Source order, including the drop branch's utilization read, which the arms
- * here never reach because nothing in them is at capacity:
+ * Source order, including the drop branch's utilization read and pause, which
+ * the arms here never reach because nothing in them is at capacity:
  *
- *   isAtCapacity → getUtilization (drop) → addBytes → getUtilization → applyBackpressure
+ *   isAtCapacity → getUtilization → applyBackpressure (drop)
+ *                → addBytes → getUtilization → applyBackpressure
+ *
+ * The hidden-project copy (#16497) is a separate block ahead of this one, on
+ * its own balance and never pausing; no arm here routes a project, so it is
+ * not mirrored.
  */
 export const IPC_FALLBACK_HOST_SEQUENCE: readonly string[] = [
   "isAtCapacity",
   "getUtilization",
+  "applyBackpressure",
   "addBytes",
   "getUtilization",
   "applyBackpressure",

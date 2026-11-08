@@ -489,35 +489,36 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
     // snapshot when its view returns.
     const isHiddenFallback = sendIpcFallback && !visualWritten && projectShownNowhere;
 
-    // Fallback: If ring buffer failed or isn't set up, use IPC with backpressure
-    // Skip IPC fallback for backgrounded or suspended terminals (wake will resync via snapshot)
     let ipcDataEmitted = false;
-    if (sendIpcFallback) {
+    // Its own block, ahead of the primary fallback below: a different delivery
+    // class with its own balance, and never a pause.
+    if (isHiddenFallback) {
+      const dataString = toStringForIpc(data);
+      const dataBytes = Buffer.byteLength(dataString, "utf8");
+      if (ipcQueueManager.getHiddenQueuedBytes(id) + dataBytes > IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES) {
+        // Nothing is lost: the host mirror holds every byte. The cached views
+        // only need to know they must repaint, once per run of skips.
+        if (ipcQueueManager.noteHiddenSkip(id)) {
+          sendEvent({
+            type: "terminal-status",
+            id,
+            status: "data-loss",
+            reason: HIDDEN_VIEW_SKIP_REASON,
+            timestamp: Date.now(),
+          });
+        }
+      } else {
+        ipcQueueManager.addHiddenBytes(id, dataBytes);
+        sendEvent({ type: "data", id, data: dataString, streamEnd });
+        ipcDataEmitted = true;
+      }
+    } else if (sendIpcFallback) {
+      // Fallback: If ring buffer failed or isn't set up, use IPC with backpressure
+      // Skip IPC fallback for backgrounded or suspended terminals (wake will resync via snapshot)
       const dataString = toStringForIpc(data);
       const dataBytes = Buffer.byteLength(dataString, "utf8");
 
-      if (isHiddenFallback) {
-        if (
-          ipcQueueManager.getHiddenQueuedBytes(id) + dataBytes >
-          IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES
-        ) {
-          // Nothing is lost: the host mirror holds every byte. The cached views
-          // only need to know they must repaint, once per run of skips.
-          if (ipcQueueManager.noteHiddenSkip(id)) {
-            sendEvent({
-              type: "terminal-status",
-              id,
-              status: "data-loss",
-              reason: HIDDEN_VIEW_SKIP_REASON,
-              timestamp: Date.now(),
-            });
-          }
-        } else {
-          ipcQueueManager.addHiddenBytes(id, dataBytes);
-          sendEvent({ type: "data", id, data: dataString, streamEnd });
-          ipcDataEmitted = true;
-        }
-      } else if (ipcQueueManager.isAtCapacity(id, dataBytes)) {
+      if (ipcQueueManager.isAtCapacity(id, dataBytes)) {
         // Enforce hard cap: drop data if adding it would exceed max queue size
         // This prevents unbounded memory growth when renderer is stalled
         const utilization = ipcQueueManager.getUtilization(id);
