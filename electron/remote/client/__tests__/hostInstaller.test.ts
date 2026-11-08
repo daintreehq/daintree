@@ -969,7 +969,9 @@ describe("runHostInstall", () => {
       });
       const failure = install(deps);
       await expect(failure).rejects.toThrow(/Couldn't put the new build in place/);
-      await expect(failure).rejects.not.toThrow(/no previous build|put back|started again/);
+      await expect(failure).rejects.not.toThrow(
+        /no previous build|put back|started again|couldn't be restored/
+      );
     });
 
     it("says there was no previous build when the host had none", async () => {
@@ -977,7 +979,9 @@ describe("runHostInstall", () => {
         shell: failingSwap("none"),
         probes: [macProbe({ build: null, hostMode: false })],
       });
-      await expect(install(deps)).rejects.toThrow(/no previous build to put back/);
+      await expect(install(deps)).rejects.toThrow(
+        /Couldn't put the new build in place.*no previous build to put back/s
+      );
     });
 
     it("says it couldn't restore when the read-back doesn't find the previous build", async () => {
@@ -989,7 +993,19 @@ describe("runHostInstall", () => {
           macProbe({ build: null, hostMode: false }),
         ],
       });
-      await expect(install(deps)).rejects.toThrow(/couldn't be restored on the host/);
+      await expect(install(deps)).rejects.toThrow(
+        /Couldn't put the new build in place.*couldn't be restored on the host/s
+      );
+    });
+
+    it("won't call a build unchanged when only its file name says which it is", async () => {
+      const deps = makeDeps({
+        shell: failingSwap("none"),
+        probes: [macProbe({ build: '{"daintreeBuildInfo":1,"version":"1.3.0"}', hostMode: false })],
+      });
+      await expect(install(deps)).rejects.toThrow(
+        /Couldn't put the new build in place.*couldn't be restored on the host/s
+      );
     });
 
     it("says it was put back when the rollback restored it", async () => {
@@ -997,7 +1013,9 @@ describe("runHostInstall", () => {
         shell: failingSwap("yes"),
         probes: [macProbe({ build: OLD_BUILD, hostMode: false })],
       });
-      await expect(install(deps)).rejects.toThrow(/previous build was put back\.$/);
+      await expect(install(deps)).rejects.toThrow(
+        /Couldn't put the new build in place.*previous build was put back\.$/s
+      );
     });
   });
 

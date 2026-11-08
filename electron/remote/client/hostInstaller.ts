@@ -1141,7 +1141,10 @@ export async function runHostInstall(
       // Put back only when the rollback said so; otherwise the swap never moved
       // what's there, or put it back itself.
       if (swapped && previous) return "restored";
-      return wasRunning ? "restarted" : "unchanged";
+      if (wasRunning) return "restarted";
+      // A build known only by its file name can't be told from what the swap just
+      // put at that name, so it isn't called unchanged.
+      return probe.install?.commit != null ? "unchanged" : "not-restored";
     };
 
     const RECOVERY_NOTE: Record<Exclude<Recovery, "unchanged">, string> = {

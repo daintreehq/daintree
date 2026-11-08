@@ -28,7 +28,7 @@ type Marker = "yes" | "none" | "failed";
 interface Fault {
   /** Which shimmed calls fail, counting from 1. */
   at: number[];
-  /** Whether a failing move out of the stage first leaves a partial destination. */
+  /** Whether a failing copy, or move out of the stage, first leaves a partial destination. */
   interrupt?: boolean;
 }
 interface Ran {
@@ -44,8 +44,8 @@ const SHIMMED = ["mv", "cp", "chmod", "rm", "mkdir"];
 /**
  * Runs the real command, except the calls the test asked to fail. GNU and BSD
  * `mv` both handle a move across filesystems by removing the destination and
- * copying, so one that dies there leaves a partial destination. A rename has no
- * such middle, so only a move out of the stage is interrupted.
+ * copying, so one that dies there leaves a partial destination, as a `cp` that
+ * dies does. A rename has no such middle, so only those two are interrupted.
  */
 const SHIM = `#!/bin/sh
 name=\${0##*/}
@@ -57,10 +57,10 @@ export PATH
 case ",$DT_FAULT_AT," in
   *,$n,*)
     echo "FAULT $name $*" >> "$DT_FAULT_LOG"
-    if [ "$name" = mv ] && [ "$DT_FAULT_INTERRUPT" = yes ]; then
+    if [ "$DT_FAULT_INTERRUPT" = yes ]; then
       for a; do src=$dst; dst=$a; done
-      case "$src" in
-        "$DT_STAGE"/*)
+      case "$name:$src" in
+        cp:*|mv:"$DT_STAGE"/*)
           rm -rf "$dst"
           if [ -d "$src" ]; then mkdir "$dst" && echo partial > "$dst/partial"; else echo partial > "$dst"; fi
           ;;
@@ -171,7 +171,8 @@ const APPIMAGE: Packaging = {
 
 function markerOf(ran: Ran): Marker {
   const match = /^@@dt:rolledback (yes|none|failed)\n$/.exec(ran.stdout);
-  if (!match) throw new Error(`Not a rollback marker: ${JSON.stringify(ran)}`);
+  // The installer only reads a marker from a script that exited 0, `failed` included.
+  if (!match || ran.status !== 0) throw new Error(`Not a rollback marker: ${JSON.stringify(ran)}`);
   return match[1] as Marker;
 }
 
@@ -442,7 +443,7 @@ describe.each([APP_BUNDLE, APPIMAGE])("$label scripts under the real /bin/sh", (
   });
 
   describe("a swap that fails partway", () => {
-    /** Every call the swap makes, failed alone; the move out of the stage also dies midway. */
+    /** Every call the swap makes, failed alone; a copy or a move out of the stage also dies midway. */
     function sweep(installed: boolean, check: (host: Host, label: string, ran: Ran) => void) {
       const clean = newHost({ installed });
       const steps = clean.swap().calls;
@@ -450,7 +451,8 @@ describe.each([APP_BUNDLE, APPIMAGE])("$label scripts under the real /bin/sh", (
       const isStageMove = (step: string) => step.startsWith("mv") && step.includes(clean.stageRoot);
       expect(steps.filter(isStageMove)).toHaveLength(1);
       for (let at = 1; at <= steps.length; at++) {
-        const ways = isStageMove(steps[at - 1]) ? [false, true] : [false];
+        const step = steps[at - 1];
+        const ways = isStageMove(step) || step.startsWith("cp") ? [false, true] : [false];
         for (const interrupt of ways) {
           const host = newHost({ installed });
           const ran = host.swap({ at: [at], interrupt });
@@ -517,6 +519,43 @@ describe.each([APP_BUNDLE, APPIMAGE])("$label scripts under the real /bin/sh", (
     describe("an app bundle failing twice", () => {
       const callAt = (ran: Ran, from: string, to: string) =>
         ran.calls.findIndex((call) => call === `mv ${from} ${to}`) + 1;
+
+      it("won't move a build into a candidate it couldn't clear", () => {
+        const clean = newHost({ installed: true });
+        fs.mkdirSync(clean.candidate());
+        const clear = clean.swap().calls.indexOf(`rm -rf ${clean.candidate()}`) + 1;
+        expect(clear).toBeGreaterThan(0);
+
+        const host = newHost({ installed: true });
+        fs.mkdirSync(host.candidate());
+        expect(host.swap({ at: [clear] }).status).not.toBe(0);
+        expect(host.placed()).toBe("old");
+        expect(fs.readdirSync(host.candidate())).toEqual([]);
+      });
+
+      it("won't move the old bundle into a backup that's already there", () => {
+        const host = newHost({ installed: true });
+        fs.mkdirSync(host.backup());
+        expect(host.swap().status).not.toBe(0);
+        expect(host.placed()).toBe("old");
+        expect(fs.readdirSync(host.backup())).toEqual([]);
+      });
+
+      it("doesn't put a stale folder at the target when a restore fails", () => {
+        const clean = newHost({ installed: true });
+        expect(clean.swap().status).toBe(0);
+        const restore = callAt(clean.rollback(), clean.backup(), clean.target);
+        expect(restore).toBeGreaterThan(0);
+
+        const host = newHost({ installed: true });
+        expect(host.swap().status).toBe(0);
+        fs.mkdirSync(path.join(host.candidate(), "stale"), { recursive: true });
+        const rolled = host.rollback({ at: [restore] });
+        expect(faulted(rolled)).toEqual([`FAULT mv ${host.backup()} ${host.target}`]);
+        expect(markerOf(rolled)).toBe("failed");
+        expect(host.placed()).toBe("new");
+        expect(host.backedUp()).toBe("old");
+      });
 
       it("leaves the rollback to restore it when the swap can't put the old bundle back", () => {
         const clean = newHost({ installed: true });
