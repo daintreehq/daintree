@@ -1,0 +1,132 @@
+#!/bin/sh
+# `systemctl --user` for a machine with no systemd as PID 1, which is out of this
+# target's scope. It runs what the unit says as a user manager would: the real
+# ExecStart with the unit's Environment and a clean environment otherwise, the
+# real ExecStop with $MAINPID set, Restart=on-failure counted in NRestarts.
+set -u
+
+state="/run/user/$(id -u)/standin-systemd"
+units="$HOME/.config/systemd/user"
+log="$state/journal.log"
+mkdir -p "$state"
+
+# systemd's quoting is the shell's once its own doubling of $ and % is undone.
+words() {
+  sed -n "s/^$1=//p" "$2" | head -n 1 | sed -e 's/\$\$/\\$/g' -e 's/%%/%/g'
+}
+
+active() {
+  [ -f "$state/supervisor.pid" ] && kill -0 "$(cat "$state/supervisor.pid")" 2>/dev/null
+}
+
+supervise() {
+  file="$units/$1"
+  echo $$ >"$state/supervisor.pid"
+  rm -f "$state/stopping"
+  while :; do
+    uid=$(id -u)
+    # Environment= lines: the values setup writes hold no spaces.
+    for pair in $(sed -n 's/^Environment=//p' "$file" | sed "s/%U/$uid/g"); do
+      export "$pair"
+    done
+    eval "set -- $(words ExecStart "$file")"
+    "$@" &
+    main=$!
+    echo "$main" >"$state/main.pid"
+    wait "$main"
+    code=$?
+    rm -f "$state/main.pid"
+    [ -f "$state/stopping" ] && break
+    [ "$code" -eq 0 ] && break
+    grep -q '^Restart=on-failure' "$file" || break
+    echo $(($(cat "$state/restarts" 2>/dev/null || echo 0) + 1)) >"$state/restarts"
+    echo "Scheduled restart job, restart counter is at $(cat "$state/restarts")."
+    sleep "$(sed -n 's/^RestartSec=//p' "$file" | head -n 1)"
+    [ -f "$state/stopping" ] && break
+  done
+  rm -f "$state/supervisor.pid"
+}
+
+start() {
+  [ -f "$units/$1" ] || { echo "Failed to start $1: Unit $1 not found." >&2; exit 5; }
+  active && return 0
+  env -i HOME="$HOME" USER="$(id -un)" LOGNAME="$(id -un)" SHELL=/bin/bash \
+    PATH=/usr/local/bin:/usr/bin:/bin LANG=C.UTF-8 \
+    setsid "$0" __supervise "$1" </dev/null >>"$log" 2>&1 &
+  i=0
+  while [ ! -f "$state/main.pid" ] && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+}
+
+stop() {
+  active || return 0
+  touch "$state/stopping"
+  main=$(cat "$state/main.pid" 2>/dev/null || true)
+  stop_words=$(words ExecStop "$units/$1")
+  if [ -n "$main" ] && [ -n "$stop_words" ]; then
+    (MAINPID=$main; export MAINPID; eval "set -- $stop_words"; "$@") >>"$log" 2>&1
+  fi
+  [ -n "$main" ] && kill -TERM "$main" 2>/dev/null
+  i=0
+  while active && [ "$i" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
+  if active; then
+    [ -n "$main" ] && kill -KILL "$main" 2>/dev/null
+    kill -KILL "$(cat "$state/supervisor.pid")" 2>/dev/null
+    rm -f "$state/supervisor.pid" "$state/main.pid"
+  fi
+}
+
+if [ "${1:-}" = __supervise ]; then
+  supervise "$2"
+  exit 0
+fi
+
+# `systemctl is-enabled sleep.target` and the like: nothing system-wide here.
+[ "${1:-}" = --user ] || exit 1
+shift
+command=${1:-}
+[ $# -gt 0 ] && shift
+now=no
+unit=
+for arg in "$@"; do
+  case "$arg" in
+    --now) now=yes ;;
+    -p | --value | NRestarts) ;;
+    *) unit=$arg ;;
+  esac
+done
+
+case "$command" in
+  daemon-reload) ;;
+  enable)
+    mkdir -p "$units/default.target.wants"
+    ln -sf "../$unit" "$units/default.target.wants/$unit"
+    ;;
+  disable)
+    rm -f "$units/default.target.wants/$unit"
+    [ "$now" = yes ] && stop "$unit"
+    ;;
+  is-enabled)
+    if [ -e "$units/default.target.wants/$unit" ]; then
+      echo enabled
+    else
+      echo disabled
+      exit 1
+    fi
+    ;;
+  is-active)
+    if active; then
+      echo active
+    else
+      echo inactive
+      exit 3
+    fi
+    ;;
+  start) start "$unit" ;;
+  stop) stop "$unit" ;;
+  show) cat "$state/restarts" 2>/dev/null || echo 0 ;;
+  *)
+    echo "stand-in systemctl: unknown command $command" >&2
+    exit 1
+    ;;
+esac
+exit 0

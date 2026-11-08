@@ -1,0 +1,11 @@
+#!/bin/sh
+# Lingering only means anything to systemd; this remembers that it was asked.
+state="/run/user/$(id -u)/standin-systemd"
+mkdir -p "$state"
+case "${1:-}" in
+  enable-linger) touch "$state/linger" ;;
+  show-user)
+    if [ -f "$state/linger" ]; then echo Linger=yes; else echo Linger=no; fi
+    ;;
+  *) exit 1 ;;
+esac
