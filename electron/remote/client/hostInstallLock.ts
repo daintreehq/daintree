@@ -143,7 +143,7 @@ export async function acquireInstallLock(
     .catch((err: unknown): CommandResult => ({
       code: null,
       stdout: "",
-      stderr: err instanceof Error ? err.message : "ssh failed",
+      stderr: formatErrorMessage(err, "ssh failed"),
       spawnError: null,
       timedOut: false,
     }))
