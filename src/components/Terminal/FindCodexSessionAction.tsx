@@ -36,6 +36,7 @@ import {
   siblingHeldSessionIds,
   type RestoreRecoveryLaunchResult,
 } from "@/services/terminal/restoreRecoveryLaunch";
+import { resolveCurrentAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 
 // Only the reasons `listCodexSessionsForCwd` can actually surface: it queries
 // the app-server directly rather than resolving a terminal, so the
@@ -434,7 +435,8 @@ export function FindCodexSessionAction({ panelId, onOpenSession }: FindCodexSess
     const command = buildResumeCommand(
       "codex",
       session.id,
-      reconcileResumeLaunchFlags({ agentId: "codex", agentLaunchFlags })
+      reconcileResumeLaunchFlags({ agentId: "codex", agentLaunchFlags }),
+      await resolveCurrentAgentLaunchBaseCommand("codex")
     );
     if (!command) return;
     setIsOpen(false);

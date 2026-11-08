@@ -76,6 +76,7 @@ import { initAgentSettingsSync } from "@/services/agentSettingsSync";
 import { initPanelGridConfigSync } from "@/services/panelGridConfigSync";
 import { initKeybindingOverridesSync } from "@/services/keybindingOverridesSync";
 import { initAgentToolbarPinsSync } from "@/services/agentToolbarPinsSync";
+import { initAgentCliChoiceSync } from "@/services/agentCliChoiceSync";
 import { initAssistantIdentitySync } from "@/services/assistantIdentitySync";
 import {
   isProjectViewCached,
@@ -722,6 +723,8 @@ export function initStoreOrchestrator(): () => void {
   disposables.add(toDisposable(initAgentToolbarPinsSync()));
   // The assistants' names and emoji (#16213), kept current across views.
   disposables.add(toDisposable(initAssistantIdentitySync()));
+  // Which copy of each agent's CLI launches (#16399), kept current across views.
+  disposables.add(toDisposable(initAgentCliChoiceSync()));
 
   // 7. The Daintree Assistant and the web chat Portal share the right edge, so
   //    only one is open at a time: opening either closes the other. Keyed on the

@@ -46,4 +46,25 @@ export const cliAvailabilityClient = {
   getCopies: (agentId: string): Promise<AgentCliCopy[]> => {
     return window.electron.agentCliCopies.list(agentId);
   },
+
+  /**
+   * Launch `path` for this agent from now on. It has to be one of the copies
+   * {@link getCopies} returned; the machine the agent runs on checks again.
+   */
+  chooseCopy: (agentId: string, path: string): Promise<void> => {
+    return window.electron.agentCliCopies.choose(agentId, path);
+  },
+
+  /** Back to launching whichever copy detection finds first. */
+  resetCopy: (agentId: string): Promise<void> => {
+    return window.electron.agentCliCopies.reset(agentId);
+  },
+
+  /**
+   * After the copy an agent launches changed, from any view, once the machine
+   * it runs on has checked again: {@link getDetails} already describes it.
+   */
+  onCopiesChanged: (callback: (change: { agentId: string }) => void): (() => void) => {
+    return window.electron.agentCliCopies.onChanged(callback);
+  },
 } as const;

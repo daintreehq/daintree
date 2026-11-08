@@ -6,6 +6,7 @@ import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { reconcileResumeLaunchFlagsWith } from "@shared/utils/agentResumeFlags";
+import { resolveCurrentAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 
 /**
  * {@link reconcileResumeLaunchFlagsWith} against the current global settings.
@@ -41,15 +42,17 @@ export function reconcileResumeLaunchFlags(session: {
  */
 export function buildResumePanelOptions(
   session: AgentSessionRecord,
-  target: { cwd: string; worktreeId?: string }
+  target: { cwd: string; worktreeId?: string },
+  /** The executable to start, from {@link resolveCurrentAgentLaunchBaseCommand}. */
+  baseCommand?: string
 ): AddPanelOptions | null {
   if (!session.agentId || !session.sessionId) return null;
   const agentConfig = getEffectiveAgentConfig(session.agentId);
   if (!agentConfig) return null;
   const resumeFlags = reconcileResumeLaunchFlags(session);
   const command =
-    buildResumeCommand(session.agentId, session.sessionId, resumeFlags) ??
-    buildResumeLatestCommand(session.agentId, resumeFlags);
+    buildResumeCommand(session.agentId, session.sessionId, resumeFlags, baseCommand) ??
+    buildResumeLatestCommand(session.agentId, resumeFlags, baseCommand);
   if (!command) return null;
   return {
     kind: "terminal",
@@ -204,7 +207,11 @@ export async function resumeSessionIntoPanel(
   });
   const run = gate.then(async (): Promise<ResumeSessionOutcome> => {
     options.onBeforeSpawn?.();
-    const panelOptions = buildResumePanelOptions(session, target);
+    const panelOptions = buildResumePanelOptions(
+      session,
+      target,
+      await resolveCurrentAgentLaunchBaseCommand(session.agentId)
+    );
     if (!panelOptions) throw new Error(RESUME_UNAVAILABLE_MESSAGE);
     const terminalId = await usePanelStore.getState().addPanel(panelOptions);
     // `addPanel` resolves null when the panel was removed during its async tail

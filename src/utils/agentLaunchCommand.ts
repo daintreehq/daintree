@@ -1,4 +1,5 @@
 import type { AgentCliDetail } from "@shared/types/ipc";
+import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { resolveAgentLaunchBaseCommandFor } from "@shared/utils/agentLaunchCommand";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { getHostPlatformInfo, hostShellDialect, isRemoteWindow } from "@/hooks/useHostPlatform";
@@ -44,4 +45,18 @@ export function resolveAgentLaunchBaseCommand(
     platform ?? hostShellDialect(),
     homeDir !== undefined ? homeDir : isRemoteWindow() ? getHostPlatformInfo().homeDir : undefined
   );
+}
+
+/**
+ * The executable a launch of `agentId` starts now, for a command built outside the
+ * launcher (a resume, a duplicate, a cloned layout): the copy the host detected or
+ * the one the user chose, never the bare registry command PATH would resolve.
+ * `undefined` for an agent with no registry entry.
+ */
+export async function resolveCurrentAgentLaunchBaseCommand(
+  agentId: string
+): Promise<string | undefined> {
+  const registryCommand = getEffectiveAgentConfig(agentId)?.command;
+  if (registryCommand === undefined) return undefined;
+  return resolveAgentLaunchBaseCommand(registryCommand, await getCurrentLaunchCliDetail(agentId));
 }

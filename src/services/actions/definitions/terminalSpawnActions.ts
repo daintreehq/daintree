@@ -10,6 +10,7 @@ import {
 import { flushOptimisticCloses } from "@/services/terminal/optimisticPanelClose";
 import { moveTerminalToWorktreeAndFollowRescue } from "@/services/terminal/crossWorktreeMove";
 import { buildResumePanelOptions } from "@/services/agentResume";
+import { resolveCurrentAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 import { getDefaultTitle } from "@/store/slices/panelRegistry/helpers";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
@@ -249,7 +250,11 @@ export function registerTerminalSpawnActions(
         const session = sessions[0];
         if (!session) return;
 
-        const options = buildResumePanelOptions(session, { cwd, worktreeId: activeWorktreeId });
+        const options = buildResumePanelOptions(
+          session,
+          { cwd, worktreeId: activeWorktreeId },
+          await resolveCurrentAgentLaunchBaseCommand(session.agentId)
+        );
         if (!options) return;
 
         // Records are non-destructive/unconsumed, so a repeat press would try to

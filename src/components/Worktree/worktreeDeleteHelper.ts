@@ -4,6 +4,7 @@ import { buildResumeCommand, stripAssignedSessionIdArgs } from "@shared/types";
 import { reconcileResumeLaunchFlags } from "@/services/agentResume";
 import { readSpawnProvenance } from "@shared/utils/scheduledRunProvenance";
 import { logWarn } from "@/utils/logger";
+import { resolveCurrentAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 
 const WORKTREE_DELETE_TERMINAL_CLOSE_TIMEOUT_MS = 10_000;
 const WORKTREE_DELETE_TERMINAL_CLOSE_POLL_MS = 100;
@@ -213,7 +214,8 @@ export async function restoreClosedTerminals(
             reconcileResumeLaunchFlags({
               agentId: snap.launchAgentId,
               agentLaunchFlags: snap.agentLaunchFlags,
-            })
+            }),
+            await resolveCurrentAgentLaunchBaseCommand(snap.launchAgentId)
           )
         : undefined;
 

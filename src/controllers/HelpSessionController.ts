@@ -24,6 +24,7 @@ import {
 } from "@shared/types/agentSettings";
 import { getAgentSettingsEntrySnapshot } from "@/store/storeAccessors";
 import { loadCustomLaunchFlags } from "@/lib/assistantLaunchFlags";
+import { resolveCurrentAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 import {
   type HelpSessionRef,
   provisionHelpSession,
@@ -1357,7 +1358,12 @@ export class HelpSessionController {
     // Resume in the session dir that owns the agent's config files.
     const cwd = session?.sessionPath ?? hibernated.cwd ?? folderPath;
 
-    const command = buildResumeCommand(launchAgentId, hibernated.sessionId, flags);
+    const command = buildResumeCommand(
+      launchAgentId,
+      hibernated.sessionId,
+      flags,
+      await resolveCurrentAgentLaunchBaseCommand(launchAgentId)
+    );
     if (!command) return null;
     // Bind the resumed session's project identity to the project captured at
     // launch, not live store state — otherwise a project switch mid-resume

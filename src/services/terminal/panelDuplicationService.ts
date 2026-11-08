@@ -32,6 +32,7 @@ import {
 } from "@/utils/agentRuntimeSettings";
 import { isRemoteWindow, resolveHostTmpDir } from "@/hooks/useHostPlatform";
 import { agentClipboardDirectory } from "@shared/types/agentSettings";
+import { resolveCurrentAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
 
 /**
  * Ownership rung for a duplicated panel's title. A duplicate keeps an
@@ -128,7 +129,7 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
         );
         const systemPromptArgs = extractSystemPromptArgs(base, panel.launchAgentId);
         const generatedCommand = generateAgentCommand(
-          agentConfig.command,
+          (await resolveCurrentAgentLaunchBaseCommand(panel.launchAgentId)) ?? agentConfig.command,
           effectiveEntry,
           panel.launchAgentId,
           {

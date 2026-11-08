@@ -10,7 +10,6 @@ import {
 } from "@/store";
 import { useSettingsRowOwnerNote } from "@/hooks/useSettingsOwner";
 import { agentToolbarPin } from "@shared/types/ipc/agentToolbarPins";
-import { cliAvailabilityClient } from "@/clients";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -24,7 +23,6 @@ import {
   DEFAULT_AGENT_SETTINGS,
   getAgentSettingsEntry,
   DEFAULT_DANGEROUS_ARGS,
-  type AgentCliDetails,
 } from "@shared/types";
 import { isAgentToolbarVisible } from "../../../shared/utils/agentPinned";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
@@ -212,8 +210,12 @@ export function AgentSettings({
   const isCliLoading = useCliAvailabilityStore((state) => state.isLoading);
   const isRefreshingCli = useCliAvailabilityStore((state) => state.isRefreshing);
   const cliError = useCliAvailabilityStore((state) => state.error);
+  // What launches read, so the page shows the copy they start, and a copy chosen
+  // in another window shows here too.
+  const cliDetails = useCliAvailabilityStore((state) => state.details);
   const initializeCliAvailability = useCliAvailabilityStore((state) => state.initialize);
   const refreshCliAvailability = useCliAvailabilityStore((state) => state.refresh);
+  const syncCliFromHost = useCliAvailabilityStore((state) => state.syncFromHost);
 
   // initialize() is singleflight via the store's `initPromise` — retries must
   // route through refresh() to issue a fresh IPC. The store catches load
@@ -230,29 +232,6 @@ export function AgentSettings({
     void initializeCliAvailability();
   }, [initializeCliAvailability]);
 
-  // Detail map (resolved path, probe source, block reason) is a separate,
-  // read-only IPC call populated by the same detection cycle as availability.
-  // Refetched after a user-initiated refresh so the surfaced path/blocked
-  // state stays in sync.
-  const [cliDetails, setCliDetails] = useState<AgentCliDetails>({});
-  const [hasCliDetails, setHasCliDetails] = useState(false);
-  const fetchCliDetails = useCallback(async () => {
-    try {
-      const details = await cliAvailabilityClient.getDetails();
-      setCliDetails(details);
-    } catch (error) {
-      logError("[AgentSettings] Failed to fetch CLI details", error);
-    } finally {
-      setHasCliDetails(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!isCliLoading) {
-      void fetchCliDetails();
-    }
-  }, [isCliLoading, fetchCliDetails]);
-
   const [recheckStatus, setRecheckStatus] = useState("");
   const pickerRowRef = useRef<HTMLDivElement>(null);
 
@@ -263,7 +242,6 @@ export function AgentSettings({
       // Explicit user gesture — bypass the 30s throttle that exists for
       // passive triggers (tray-open, window focus, visibility change).
       await refreshCliAvailability(true);
-      await fetchCliDetails();
       const agentId = activeAgentId;
       if (agentId) {
         const state = useCliAvailabilityStore.getState().availability[agentId];
@@ -588,20 +566,27 @@ export function AgentSettings({
           </InstallCommandHandoffContext.Provider>
 
           {/* Also while detection loads: the duplicate-install toast opens this section
-              by id, and only gets one chance to land on it. */}
-          {(isCliLoading || isAgentLaunchable(cliAvailability[activeAgent.id])) && (
+              by id, and only gets one chance to land on it. A chosen copy that can't
+              launch keeps it too, since the way back is choosing here. */}
+          {(isCliLoading ||
+            isAgentLaunchable(cliAvailability[activeAgent.id]) ||
+            cliDetails[activeAgent.id]?.chosenPath !== undefined) && (
             // Keyed so one agent's copies never show under another while it loads.
             <AgentCliCopiesSection
               key={activeAgent.id}
               agentId={activeAgent.id}
               launchPath={
-                !isCliLoading && hasCliDetails
-                  ? (cliDetails[activeAgent.id]?.resolvedPath ?? null)
-                  : undefined
+                isCliLoading
+                  ? undefined
+                  : isAgentLaunchable(cliAvailability[activeAgent.id])
+                    ? (cliDetails[activeAgent.id]?.resolvedPath ?? null)
+                    : null
               }
+              chosenPath={isCliLoading ? undefined : cliDetails[activeAgent.id]?.chosenPath}
               isActive={isActive}
               isRefreshing={isRefreshingCli}
               onRefresh={handleRefreshCliAvailability}
+              onChosen={syncCliFromHost}
             />
           )}
 
