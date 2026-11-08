@@ -1,6 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { projectClient } from "@/clients";
+import { withProjectSettingsWrite } from "@/clients/projectClient";
 import { useProjectStore } from "@/store/projectStore";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { useRecipeStore } from "@/store/recipeStore";
@@ -509,9 +510,13 @@ export function useProjectSettingsForm({ projectId, isOpen }: UseProjectSettings
       // must keep whatever they stored (#15573).
       if (force || hasFormEdits(baseline, draft)) {
         if (abandoned()) return undefined;
-        const stored = await projectClient.getSettings(projectId);
-        if (abandoned()) return undefined;
-        await saveProjectSettings(applyFormEdits(stored, baseline, draft));
+        const superseded = await withProjectSettingsWrite(projectId, async () => {
+          const stored = await projectClient.getSettings(projectId);
+          if (abandoned()) return true;
+          await saveProjectSettings(applyFormEdits(stored, baseline, draft));
+          return false;
+        });
+        if (superseded) return undefined;
       }
 
       lastSavedFieldsRef.current = draft;

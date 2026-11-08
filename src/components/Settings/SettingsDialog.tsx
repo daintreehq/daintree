@@ -640,9 +640,9 @@ function SettingsDialogInner({
   // or uses that page's Discard. The page shown wins over others that failed.
   const flushBeforeClose = async () => {
     // A cache or hide flush still running took its list of drafts when it
-    // started, so one made since isn't in it: let it finish, then flush again.
-    const lifecycleFlush = flushInFlightRef.current;
-    if (lifecycleFlush) await lifecycleFlush;
+    // started, so one made since isn't in it, and it left the writes only a close
+    // makes: let it finish, then flush again.
+    while (flushInFlightRef.current) await flushInFlightRef.current;
     const failed = await flushDialog("close");
     const shown = failed.find((f) => f.tab === activeTabRef.current) ?? failed[0];
     if (shown) {

@@ -163,7 +163,7 @@ async function hideWindow() {
 async function openOnIntegrations() {
   const onClose = vi.fn();
   render(<SettingsDialog isOpen onClose={onClose} defaultTab="integrations" />);
-  await screen.findByText(/^Saved:/);
+  await screen.findByText(/^Saved:/, {}, { timeout: 5_000 });
   const osRadio = await screen.findByRole("radio", { name: /Use OS default/i });
   await waitFor(() => expect((osRadio as HTMLInputElement).disabled).toBe(false));
   return onClose;
@@ -242,7 +242,7 @@ describe("SettingsDialog closed over an Integrations draft", () => {
     });
     const onClose = vi.fn();
     render(<SettingsDialog isOpen onClose={onClose} defaultTab="integrations" />);
-    await screen.findByText(/^Using default:/);
+    await screen.findByText(/^Using default:/, {}, { timeout: 5_000 });
     await screen.findByText(/^Not saved yet — images open/);
 
     await pressEscape();
@@ -344,6 +344,45 @@ describe("SettingsDialog holding a close on an Integrations draft", () => {
   });
 });
 
+describe("SettingsDialog closed while a hide is still flushing", () => {
+  it("waits for that flush, then makes the writes only a close makes", async () => {
+    let finishEditorSave!: () => void;
+    editor.setConfig.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (finishEditorSave = resolve))
+    );
+    const onClose = vi.fn();
+    render(<SettingsDialog isOpen onClose={onClose} defaultTab="mcp" />);
+    await screen.findByLabelText("MCP server port", {}, { timeout: 5_000 });
+    await act(async () => {
+      fireEvent.click(document.getElementById("settings-tab-integrations")!);
+    });
+    await screen.findByText(/^Saved:/, {}, { timeout: 5_000 });
+    chooseEditor("zed");
+    await act(async () => {
+      fireEvent.click(document.getElementById("settings-tab-mcp")!);
+    });
+    await waitFor(() =>
+      expect(screen.getByLabelText<HTMLInputElement>("Records kept").disabled).toBe(false)
+    );
+    fireEvent.change(screen.getByLabelText("MCP server port"), { target: { value: "9021" } });
+    fireEvent.change(screen.getByLabelText("Records kept"), { target: { value: "800" } });
+
+    await hideWindow();
+    await waitFor(() => expect(editor.setConfig).toHaveBeenCalledTimes(1));
+    expect(mcp.setPort).not.toHaveBeenCalled();
+
+    await pressEscape();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(mcp.setPort).not.toHaveBeenCalled();
+
+    await act(async () => finishEditorSave());
+
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(mcp.setPort).toHaveBeenCalledWith(9021);
+    expect(mcp.setAuditMaxRecords).toHaveBeenCalledWith(800);
+  });
+});
+
 describe("SettingsDialog hidden over an MCP draft", () => {
   it("applies nothing until the close", async () => {
     const onClose = await openOnMcp();
@@ -412,6 +451,19 @@ describe("SettingsDialog closed over an MCP draft", () => {
 
     expect(onClose).not.toHaveBeenCalled();
     expect(await screen.findByText(/Read-only file system/)).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByLabelText("MCP server port"));
+  });
+
+  it("stays open with the error when applying the cap fails", async () => {
+    mcp.setAuditMaxRecords.mockRejectedValue(new Error("Read-only file system"));
+    const onClose = await openOnMcp();
+    fireEvent.change(screen.getByLabelText("Records kept"), { target: { value: "800" } });
+
+    await pressEscape();
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(await screen.findByText(/Read-only file system/)).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByLabelText("Records kept"));
   });
 
   it("closes without applying anything when the page was only visited", async () => {

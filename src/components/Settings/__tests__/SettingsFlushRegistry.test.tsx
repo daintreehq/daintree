@@ -189,15 +189,15 @@ describe("SettingsFlushRegistry", () => {
     });
   });
 
-  it("starts each flush only after the one before it has settled", async () => {
-    let finishFirst: () => void = () => {};
-    const first = vi.fn(() => new Promise<void>((resolve) => (finishFirst = resolve)));
-    const second = vi.fn();
+  it("starts every flush as the close begins, so a slow page doesn't hold back another", async () => {
+    let finishSlow: () => void = () => {};
+    const slow = vi.fn(() => new Promise<void>((resolve) => (finishSlow = resolve)));
+    const other = vi.fn();
 
     const { result } = renderHook(
       () => {
-        useSettingsTabFlush("integrations", first, true);
-        useSettingsTabFlush("environment", second, true);
+        useSettingsTabFlush("integrations", slow, true);
+        useSettingsTabFlush("environment", other, true);
         return useContext(SettingsFlushContext);
       },
       { wrapper: wrap }
@@ -205,13 +205,29 @@ describe("SettingsFlushRegistry", () => {
 
     await act(async () => {
       const pending = result.current!.flushAll();
-      await Promise.resolve();
-      expect(first).toHaveBeenCalledTimes(1);
-      expect(second).not.toHaveBeenCalled();
-      finishFirst();
+      expect(slow).toHaveBeenCalledTimes(1);
+      expect(other).toHaveBeenCalledTimes(1);
+      finishSlow();
       await pending;
     });
-    expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it("tells each flush why it's running, and a bare flushAll means a close", async () => {
+    const fn = vi.fn();
+    const { result } = renderHook(
+      () => {
+        useSettingsTabFlush("mcp", fn, true);
+        return useContext(SettingsFlushContext);
+      },
+      { wrapper: wrap }
+    );
+
+    await act(async () => {
+      await result.current!.flushAll("hide");
+      await result.current!.flushAll();
+    });
+
+    expect(fn.mock.calls).toEqual([["hide"], ["close"]]);
   });
 
   it("invokes the latest callback after rerender", async () => {

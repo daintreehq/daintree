@@ -229,6 +229,29 @@ describe("ImageViewerTab flushed by a close", () => {
     expect((await flushing)[0]?.landOn).toBe("image-viewer");
   });
 
+  it("writes nothing over a stored command that only differs by whitespace", async () => {
+    const flush = await renderFlushable({
+      preferredImageViewer: { mode: "custom", customCommand: " gimp " },
+    });
+
+    await expect(flush()).resolves.toEqual([]);
+    expect(projectClient.saveSettings).not.toHaveBeenCalled();
+  });
+
+  it("clears a missing command's error on Discard", async () => {
+    const flush = await renderFlushable(CUSTOM_GIMP);
+    const command = screen.getByRole("textbox", { name: "Command" }) as HTMLInputElement;
+    fireEvent.change(command, { target: { value: "" } });
+    await flush();
+    expect(screen.getByText("Enter the command that opens images")).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Discard" }));
+
+    expect(command.value).toBe("gimp");
+    expect(screen.queryByText("Enter the command that opens images")).toBeNull();
+    expect(command.getAttribute("aria-invalid")).toBeNull();
+  });
+
   it("offers Discard only for a pending draft, and discarding clears the error", async () => {
     vi.mocked(projectClient.saveSettings).mockRejectedValue(new Error("disk full"));
     const flush = await renderFlushable(CUSTOM_GIMP);

@@ -130,6 +130,8 @@ export function McpServerSettingsTab() {
   const [auditCleared, setAuditCleared] = useState(false);
   const [portError, setPortError] = useState<string | null>(null);
   const [maxRecordsError, setMaxRecordsError] = useState<string | null>(null);
+  const [isApplyingPort, setIsApplyingPort] = useState(false);
+  const [isApplyingMaxRecords, setIsApplyingMaxRecords] = useState(false);
 
   const [showRotateConfirm, setShowRotateConfirm] = useState(false);
   const [isRotating, setIsRotating] = useState(false);
@@ -449,8 +451,10 @@ export function McpServerSettingsTab() {
   const portApplyRef = useRef<Promise<SettingsFlushFailure | undefined> | null>(null);
   const handlePortSave = () => {
     if (!portApplyRef.current) {
+      setIsApplyingPort(true);
       portApplyRef.current = applyPort().finally(() => {
         portApplyRef.current = null;
+        setIsApplyingPort(false);
       });
     }
     return portApplyRef.current;
@@ -532,8 +536,10 @@ export function McpServerSettingsTab() {
   const maxRecordsApplyRef = useRef<Promise<SettingsFlushFailure | undefined> | null>(null);
   const handleMaxRecordsSave = () => {
     if (!maxRecordsApplyRef.current) {
+      setIsApplyingMaxRecords(true);
       maxRecordsApplyRef.current = applyMaxRecords().finally(() => {
         maxRecordsApplyRef.current = null;
+        setIsApplyingMaxRecords(false);
       });
     }
     return maxRecordsApplyRef.current;
@@ -623,16 +629,23 @@ export function McpServerSettingsTab() {
   // minimizing the window or switching project mustn't do with a half-typed number. The
   // port row collapses with the server, and a draft it isn't showing can't hold a close.
   const portPending = status.enabled && !portUnchanged;
-  const maxRecordsPending = auditConfigLoaded && !maxRecordsUnchanged;
   useSettingsTabFlush(
     "mcp",
-    (reason) => (reason === "close" ? handlePortSave() : undefined),
-    portPending
+    (reason) => {
+      if (reason !== "close") return undefined;
+      return portApplyRef.current ?? (portPending ? handlePortSave() : undefined);
+    },
+    portPending || isApplyingPort
   );
   useSettingsTabFlush(
     "mcp",
-    (reason) => (reason === "close" ? handleMaxRecordsSave() : undefined),
-    maxRecordsPending
+    (reason) => {
+      if (reason !== "close") return undefined;
+      return (
+        maxRecordsApplyRef.current ?? (maxRecordsUnchanged ? undefined : handleMaxRecordsSave())
+      );
+    },
+    !maxRecordsUnchanged || isApplyingMaxRecords
   );
 
   const statusRow = !status.enabled ? null : loading ? (
@@ -963,6 +976,7 @@ export function McpServerSettingsTab() {
                         variant="outline"
                         size="sm"
                         onClick={handlePortDiscard}
+                        disabled={isApplyingPort}
                         aria-label="Discard port"
                       >
                         Discard
@@ -1103,11 +1117,12 @@ export function McpServerSettingsTab() {
                   >
                     Apply
                   </Button>
-                  {maxRecordsPending && (
+                  {!maxRecordsUnchanged && (
                     <Button
                       variant="outline"
                       size="sm"
                       onClick={handleMaxRecordsDiscard}
+                      disabled={isApplyingMaxRecords}
                       aria-label="Discard max records"
                     >
                       Discard

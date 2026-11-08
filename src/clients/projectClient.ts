@@ -57,6 +57,33 @@ const SETTINGS_TTL_MS = 500;
 const settingsInflight: Map<string, Promise<ProjectSettings>> = new Map();
 const settingsCache: Map<string, { value: ProjectSettings; expiresAt: number }> = new Map();
 
+// Per-project tail of the settings writes running in this view.
+const settingsWriteTails: Map<string, Promise<unknown>> = new Map();
+
+/**
+ * Runs a read-then-write of a project's settings file after any others from this
+ * view. Main queues each read and each write but not the pair, so two of these
+ * overlapping can write back a copy missing the other's change. The whole pair goes
+ * in here, reads included: queueing only the save would keep the stale read.
+ */
+export function withProjectSettingsWrite<T>(
+  projectId: string,
+  write: () => Promise<T>
+): Promise<T> {
+  const run = () => {
+    invalidateProjectSettingsCache(projectId);
+    return write();
+  };
+  // Both handlers: a write that failed answers its own caller, not the next in line.
+  const turn = (settingsWriteTails.get(projectId) ?? Promise.resolve()).then(run, run);
+  settingsWriteTails.set(projectId, turn);
+  const release = () => {
+    if (settingsWriteTails.get(projectId) === turn) settingsWriteTails.delete(projectId);
+  };
+  void turn.then(release, release);
+  return turn;
+}
+
 /**
  * Adds an approved host by reading the settings and saving them whole, as
  * builds before `project:add-browser-allowed-host` did. Only for a host that

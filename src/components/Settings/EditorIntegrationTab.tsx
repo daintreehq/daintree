@@ -23,7 +23,7 @@ import { editorClient } from "@/clients/editorClient";
 import type { EditorConfig, DiscoveredEditor, KnownEditorId } from "@shared/types/editor";
 import { KNOWN_EDITOR_IDS } from "@shared/types/editor";
 import { useProjectStore, patchCachedProjectSettings } from "@/store";
-import { invalidateProjectSettingsCache } from "@/clients/projectClient";
+import { invalidateProjectSettingsCache, withProjectSettingsWrite } from "@/clients/projectClient";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { cn } from "@/lib/utils";
 import { logError } from "@/utils/logger";
@@ -66,6 +66,16 @@ function draftFieldsOf(config: EditorConfig) {
     id: config.id,
     command: config.customCommand ?? "",
     template: config.id === "custom" ? (config.customTemplate ?? "") : DEFAULT_CUSTOM_TEMPLATE,
+  };
+}
+
+/** The config a draft's fields stand for, trimmed as every write sends them. */
+function configOf(fields: ReturnType<typeof draftFieldsOf>): EditorConfig {
+  const isCustom = fields.id === "custom";
+  return {
+    id: fields.id,
+    customCommand: isCustom ? fields.command.trim() || undefined : undefined,
+    customTemplate: isCustom ? fields.template.trim() || undefined : undefined,
   };
 }
 
@@ -144,7 +154,7 @@ export function EditorIntegrationTab() {
         setSelectedId(draft.id);
         setCustomCommand(draft.command);
         setCustomTemplate(draft.template);
-        setAcceptedDraft(start);
+        setAcceptedDraft(configOf(draft));
       })
       .catch((err) => {
         if (cancelled || !isMountedRef.current) return;
@@ -186,11 +196,11 @@ export function EditorIntegrationTab() {
     }
   };
 
-  const draftEditor: EditorConfig = {
+  const draftEditor = configOf({
     id: selectedId,
-    customCommand: selectedId === "custom" ? customCommand.trim() || undefined : undefined,
-    customTemplate: selectedId === "custom" ? customTemplate.trim() || undefined : undefined,
-  };
+    command: customCommand,
+    template: customTemplate,
+  });
 
   const isBusy = isSaving || isSettingDefault || isResetting;
 
@@ -211,12 +221,14 @@ export function EditorIntegrationTab() {
     setIsSaving(true);
     setSaveError(null);
     try {
-      await editorClient.setConfig({ editor, projectId });
-      // Main writes preferredEditor straight into the project settings file, so
-      // every renderer-side copy is now stale. Both must be refreshed before
-      // anything else reads or re-saves the whole settings object (#12326).
-      invalidateProjectSettingsCache(projectId);
-      patchCachedProjectSettings(projectId, { preferredEditor: editor });
+      await withProjectSettingsWrite(projectId, async () => {
+        await editorClient.setConfig({ editor, projectId });
+        // Main writes preferredEditor straight into the project settings file, so
+        // every renderer-side copy is now stale. Both must be refreshed before
+        // anything else reads or re-saves the whole settings object (#12326).
+        invalidateProjectSettingsCache(projectId);
+        patchCachedProjectSettings(projectId, { preferredEditor: editor });
+      });
       if (!isCurrentProject(projectId)) return undefined;
       setPreferredEditor(editor);
       setAcceptedDraft(editor);
@@ -266,15 +278,17 @@ export function EditorIntegrationTab() {
     // The user asked for no project choice, so a close must not save one over it.
     setAcceptedDraft(draftEditor);
     try {
-      await editorClient.clearProjectPreference({ projectId });
-      invalidateProjectSettingsCache(projectId);
-      patchCachedProjectSettings(projectId, { preferredEditor: undefined });
+      await withProjectSettingsWrite(projectId, async () => {
+        await editorClient.clearProjectPreference({ projectId });
+        invalidateProjectSettingsCache(projectId);
+        patchCachedProjectSettings(projectId, { preferredEditor: undefined });
+      });
       if (!isCurrentProject(projectId)) return undefined;
       setPreferredEditor(null);
       setCommandError(null);
       if (defaultEditor) {
         applyDraft(defaultEditor);
-        setAcceptedDraft(defaultEditor);
+        setAcceptedDraft(configOf(draftFieldsOf(defaultEditor)));
       }
       return undefined;
     } catch (err) {

@@ -60,6 +60,7 @@ vi.mock("@/store/recipeStore", () => ({
 }));
 
 import { projectClient } from "@/clients";
+import { withProjectSettingsWrite } from "@/clients/projectClient";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import type { ActionCallbacks, ActionRegistry } from "@/services/actions/actionTypes";
 import { registerProjectActions } from "@/services/actions/definitions/projectActions";
@@ -125,6 +126,47 @@ async function editDevServerCommandAndClose(hook: Awaited<ReturnType<typeof rend
   });
   expect(stored().devServerCommand).toBe("npm start");
 }
+
+describe("useProjectSettingsForm saving alongside another settings writer (#16437)", () => {
+  beforeEach(() => {
+    disk.clear();
+    disk.set(PROJECT_ID, JSON.parse(JSON.stringify(storedSettings)));
+    vi.clearAllMocks();
+    useProjectSettingsStore.getState().reset();
+  });
+
+  it("waits for a read-then-write already running, so neither undoes the other", async () => {
+    const hook = await renderClosedForm();
+    await openForm(hook);
+
+    let finishWrite!: () => void;
+    const gate = new Promise<void>((resolve) => (finishWrite = resolve));
+    const other = withProjectSettingsWrite(PROJECT_ID, async () => {
+      const settings = await projectClient.getSettings(PROJECT_ID);
+      await gate;
+      await projectClient.saveSettings(PROJECT_ID, { ...settings, daintreeMcpTier: "full" });
+    });
+
+    act(() => {
+      hook.result.current.setDevServerCommand("npm start");
+    });
+    let flushing!: Promise<unknown>;
+    await act(async () => {
+      flushing = hook.result.current.flush();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(stored().devServerCommand).toBe("npm run dev");
+
+    await act(async () => {
+      finishWrite();
+      await other;
+      await flushing;
+    });
+
+    expect(stored().devServerCommand).toBe("npm start");
+    expect(stored().daintreeMcpTier).toBe("full");
+  });
+});
 
 describe("useProjectSettingsForm with settings written outside the form (#15573)", () => {
   beforeEach(() => {

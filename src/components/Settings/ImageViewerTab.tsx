@@ -13,6 +13,7 @@ import {
 } from "@/components/Settings/SettingsGroup";
 import { useProjectStore, patchCachedProjectSettings } from "@/store";
 import { projectClient } from "@/clients";
+import { withProjectSettingsWrite } from "@/clients/projectClient";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
 import { useSettingsTabFlush, type SettingsFlushFailure } from "./SettingsFlushRegistry";
@@ -138,12 +139,14 @@ export function ImageViewerTab() {
         mode,
         customCommand: mode === "custom" ? customCommand.trim() : undefined,
       };
-      const settings = await projectClient.getSettings(activeProjectId);
-      await projectClient.saveSettings(activeProjectId, { ...settings, preferredImageViewer });
-      // Merge into whatever the cache holds now, not into the object fetched
-      // before the await — a concurrent write may have landed in between. A
-      // stale cache here is what reverts this save on dialog close (#12326).
-      patchCachedProjectSettings(activeProjectId, { preferredImageViewer });
+      await withProjectSettingsWrite(activeProjectId, async () => {
+        const settings = await projectClient.getSettings(activeProjectId);
+        await projectClient.saveSettings(activeProjectId, { ...settings, preferredImageViewer });
+        // Merge into whatever the cache holds now, not into the object fetched
+        // before the await — a concurrent write may have landed in between. A
+        // stale cache here is what reverts this save on dialog close (#12326).
+        patchCachedProjectSettings(activeProjectId, { preferredImageViewer });
+      });
       if (!isMountedRef.current) return undefined;
       setPersisted({ mode, customCommand: preferredImageViewer.customCommand ?? "" });
       return undefined;
@@ -188,7 +191,7 @@ export function ImageViewerTab() {
     !isLoading &&
     !loadError &&
     (accepted.mode !== mode ||
-      (mode === "custom" && accepted.customCommand !== customCommand.trim()));
+      (mode === "custom" && accepted.customCommand.trim() !== customCommand.trim()));
 
   useSettingsTabFlush(
     "integrations",

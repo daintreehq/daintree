@@ -67,21 +67,26 @@ export function SettingsFlushProvider({ children }: ProviderProps) {
     };
   }, []);
 
+  // All at once, so each sees what is running as the close begins and a slow page
+  // can't use up another's time. A write sharing a file with another page queues at
+  // that file (withProjectSettingsWrite).
   const flushAll = useCallback(async (reason: SettingsFlushReason = "close") => {
-    const failed: FailedSettingsFlush[] = [];
-    // One at a time: several of these rewrite the whole project settings file from a
-    // copy they read first, so two running together can undo each other's write.
-    for (const { tab, fn } of Array.from(flushersRef.current)) {
-      try {
-        const failure = await fn(reason);
-        if (failure) failed.push({ tab, landOn: failure.landOn });
-      } catch (err) {
-        // A flush that throws has no message on its page, so holding the dialog
-        // open on it would leave Settings unclosable with nothing saying why.
-        logError("Settings flush failed", err);
-      }
-    }
-    return failed;
+    const flushers = Array.from(flushersRef.current);
+    const outcomes = await Promise.all(
+      flushers.map(async ({ tab, fn }): Promise<FailedSettingsFlush | null> => {
+        let failure: SettingsFlushFailure | void;
+        try {
+          failure = await fn(reason);
+        } catch (err) {
+          // A flush that throws has no message on its page, so holding the dialog
+          // open on it would leave Settings unclosable with nothing saying why.
+          logError("Settings flush failed", err);
+          return null;
+        }
+        return failure ? { tab, landOn: failure.landOn } : null;
+      })
+    );
+    return outcomes.filter((outcome): outcome is FailedSettingsFlush => outcome !== null);
   }, []);
 
   const value = useMemo(() => ({ register, flushAll }), [register, flushAll]);
