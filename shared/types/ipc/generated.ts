@@ -40,6 +40,10 @@ export interface GeneratedIpcInvokeMap {
     args: [agentId: string];
     result: boolean;
   };
+  "agent-cli-copies:list": {
+    args: [agentId: string];
+    result: import("./system.js").AgentCliCopy[];
+  };
   "agent-defaults:get": {
     args: [];
     result: import("./agentDefaults.js").AgentDefaultsSnapshot;

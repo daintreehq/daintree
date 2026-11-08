@@ -1375,6 +1375,8 @@ export const SETTINGS_REGISTRY = [
     LazyComponent: LazyAgentSettings,
     needsSubtabs: true,
     needsOnSettingsChange: true,
+    // A hidden, prefetched tab must not run every copy of an agent's CLI.
+    needsIsActive: true,
     // A sign-in terminal opened from an agent's Accounts closes Settings first.
     needsOnClose: true,
     searchNavDescription: "Configure CLI agent settings",
@@ -1509,6 +1511,15 @@ export const SETTINGS_REGISTRY = [
         description:
           "Install commands, detected path and troubleshooting for an agent that isn't ready",
         keywords: ["install", "setup", "wizard", "cli", "download", "npm", "brew"],
+      },
+      {
+        id: "agents-cli-copies",
+        subtab: "claude",
+        subtabLabel: "Claude",
+        section: "Detected CLI",
+        title: "Detected CLI",
+        description: "Which copy of an agent's CLI launches, and the version each copy reports",
+        keywords: ["path", "version", "copy", "copies", "duplicate", "binary", "which", "update"],
       },
     ],
   } satisfies LazySettingsTabEntry,

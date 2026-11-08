@@ -330,6 +330,13 @@ export interface MainProcessToastPayload {
     code: import("../appError.js").AppErrorCode | null;
   };
   /**
+   * Several copies of this agent's CLI were found, on the machine that raised
+   * the toast. The renderer turns it into a button opening that agent's settings,
+   * and a remote view takes it from its host instead of this machine, since those
+   * settings show the host's copies (#16409).
+   */
+  agentCliCopies?: { agentId: string };
+  /**
    * Threaded through to `notify({ context })`: what a plugin's toast or
    * notification is about and which plugin raised it (#13818). Main sets every
    * field from the plugin's own binding and its checked target, never from

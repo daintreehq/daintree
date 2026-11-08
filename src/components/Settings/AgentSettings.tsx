@@ -45,6 +45,7 @@ import { AgentInputSettings } from "./AgentInputSettings";
 import { AgentInventorySection } from "./AgentInventorySection";
 import { AgentQuotaSection } from "./AgentQuotaSection";
 import { AgentAccountsSection } from "./AgentAccountsSection";
+import { AgentCliCopiesSection } from "./AgentCliCopiesSection";
 import type { SettingsTabClose } from "./settingsTabClose";
 import { isAgentLaunchable, isAgentReady } from "../../../shared/utils/agentAvailability";
 import { AgentShortcutCapture } from "@/components/KeyboardShortcuts";
@@ -179,6 +180,8 @@ interface AgentSettingsProps {
   onSettingsChange?: () => void;
   /** Closes Settings, so a sign-in terminal opened from here can be used. */
   onClose?: SettingsTabClose;
+  /** False while this tab is mounted but hidden, as a prefetched tab is. */
+  isActive?: boolean;
 }
 
 export function AgentSettings({
@@ -186,6 +189,7 @@ export function AgentSettings({
   onSubtabChange,
   onSettingsChange,
   onClose,
+  isActive = true,
 }: AgentSettingsProps) {
   const {
     settings,
@@ -230,12 +234,15 @@ export function AgentSettings({
   // Refetched after a user-initiated refresh so the surfaced path/blocked
   // state stays in sync.
   const [cliDetails, setCliDetails] = useState<AgentCliDetails>({});
+  const [hasCliDetails, setHasCliDetails] = useState(false);
   const fetchCliDetails = useCallback(async () => {
     try {
       const details = await cliAvailabilityClient.getDetails();
       setCliDetails(details);
     } catch (error) {
       logError("[AgentSettings] Failed to fetch CLI details", error);
+    } finally {
+      setHasCliDetails(true);
     }
   }, []);
 
@@ -584,6 +591,24 @@ export function AgentSettings({
             cliError={cliError}
             onRefresh={() => void handleRefreshCliAvailability()}
           />
+
+          {/* Also while detection loads: the duplicate-install toast opens this section
+              by id, and only gets one chance to land on it. */}
+          {(isCliLoading || isAgentLaunchable(cliAvailability[activeAgent.id])) && (
+            // Keyed so one agent's copies never show under another while it loads.
+            <AgentCliCopiesSection
+              key={activeAgent.id}
+              agentId={activeAgent.id}
+              launchPath={
+                !isCliLoading && hasCliDetails
+                  ? (cliDetails[activeAgent.id]?.resolvedPath ?? null)
+                  : undefined
+              }
+              isActive={isActive}
+              isRefreshing={isRefreshingCli}
+              onRefresh={handleRefreshCliAvailability}
+            />
+          )}
 
           <SettingsSection title="Launching">
             <SettingsGroup>

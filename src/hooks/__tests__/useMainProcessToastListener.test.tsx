@@ -41,6 +41,7 @@ type ToastCallback = (payload: {
   priority?: "high" | "low" | "watch";
   urgent?: boolean;
   action?: { label: string; ipcChannel: string; data?: string };
+  agentCliCopies?: { agentId: string };
   hostSwitchFailure?: { hostId: string; projectId: string; code: string | null };
   pluginActions?: Array<{ label: string; actionId: string; args?: Record<string, unknown> }>;
   replaceKey?: string;
@@ -86,6 +87,29 @@ describe("useMainProcessToastListener", () => {
     if (originalPlatformDescriptor) {
       Object.defineProperty(process, "platform", originalPlatformDescriptor);
     }
+  });
+
+  it("gives the duplicate-install toast a button to that agent's copies (#16409)", async () => {
+    dispatchMock.mockClear();
+    renderHook(() => useMainProcessToastListener());
+    act(() => {
+      capturedCallback!({
+        type: "warning",
+        title: "Multiple Codex installations found",
+        message: "Launches /a/codex. Also found: /b/codex.",
+        agentCliCopies: { agentId: "codex" },
+      });
+    });
+
+    const action = notifyMock.mock.calls[0]![0].action!;
+    const target = { tab: "agents", subtab: "codex", sectionId: "agents-cli-copies" };
+    expect(action.label).toBe("View copies");
+    // What keeps the button on the inbox row, where a startup toast can end up.
+    expect(action.actionId).toBe("app.settings.openTab");
+    expect(action.actionArgs).toEqual(target);
+
+    await action.onClick();
+    expect(dispatchMock).toHaveBeenCalledWith("app.settings.openTab", target, { source: "user" });
   });
 
   it("turns a plugin notification's actions into buttons that run them (#13505)", async () => {

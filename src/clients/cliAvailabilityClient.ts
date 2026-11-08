@@ -1,4 +1,5 @@
 import type { CliAvailability, AgentCliDetails } from "@shared/types";
+import type { AgentCliCopy } from "@shared/types/ipc/system";
 
 /**
  * @example
@@ -35,5 +36,14 @@ export const cliAvailabilityClient = {
    */
   getDetails: (): Promise<AgentCliDetails> => {
     return window.electron.system.getAgentCliDetails();
+  },
+
+  /**
+   * Every copy of one agent's CLI with the version each reports, the launching
+   * copy first. Runs each copy on the machine the agent runs on, so call it only
+   * while someone is looking at the answer.
+   */
+  getCopies: (agentId: string): Promise<AgentCliCopy[]> => {
+    return window.electron.agentCliCopies.list(agentId);
   },
 } as const;

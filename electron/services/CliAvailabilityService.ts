@@ -1,6 +1,6 @@
 // eager-import-allow: reads the CLI-availability cache via store.get synchronously
 import { execFile } from "child_process";
-import { access, constants } from "fs/promises";
+import { access, constants, realpath } from "fs/promises";
 import { delimiter, dirname, isAbsolute, join, win32 as pathWin32 } from "path";
 import { homedir } from "os";
 import type {
@@ -19,9 +19,10 @@ import {
 import { refreshPath, expandWindowsEnvVars } from "../setup/environment.js";
 import { store } from "../store.js";
 import { CHANNELS } from "../ipc/channels.js";
-import { broadcastToRenderer } from "../ipc/utils.js";
+import { broadcastToRenderer, hasBroadcastAudience } from "../ipc/utils.js";
 import { getDefaultWslDistro } from "../utils/wsl.js";
 import { findAllOnPath } from "../utils/findOnPath.js";
+import { createProbeLimiter } from "../utils/probeLimiter.js";
 import {
   findWindowsCommand,
   scanWindowsPath,
@@ -30,6 +31,7 @@ import {
 import { cliSpawnTarget } from "../utils/windowsCliSpawn.js";
 import { createLogger } from "../utils/logger.js";
 import { seedAgentToolbarPinsIfUnset } from "./agentToolbarPins.js";
+import { isAgentLaunchable } from "../../shared/utils/agentAvailability.js";
 
 const logger = createLogger("main:CliAvailabilityService");
 
@@ -82,6 +84,14 @@ const WINDOWS_EXECUTABLE_PRIORITY = new Map<string, number>([
 ]);
 
 const WINDOWS_APPENDED_EXTENSIONS = [".cmd", ".exe", ".bat", ".com"];
+
+/**
+ * File lookups for listing an agent's copies. One thread at most, so a location on
+ * a hung mount can't take the pool's four a page opening at a time. Not the PATH
+ * search's slots: losing those to this optional listing would read as every agent
+ * missing from then on.
+ */
+const copyLookups = createProbeLimiter(1);
 
 /**
  * Whether `p` names one location wherever it is resolved from. On Windows
@@ -179,6 +189,18 @@ function windowsLaunchCandidates(filePath: string): string[] {
   const extension = pathWin32.extname(filePath).toLowerCase();
   if (extension && WINDOWS_EXECUTABLE_PRIORITY.has(extension)) return [filePath];
   return WINDOWS_APPENDED_EXTENSIONS.map((appended) => `${filePath}${appended}`);
+}
+
+/**
+ * What makes two found paths one copy: the file they resolve to, so a symlink and
+ * its target are not two installs. Windows folds case, and also counts the found
+ * path's directory, since one install there is `claude.cmd` beside `claude.exe`
+ * (see {@link dedupePathsByDirectory}). Links into one shared directory stay apart.
+ */
+async function copyIdentities(candidate: string, signal: AbortSignal): Promise<string[]> {
+  const file = await copyLookups.withSlot(() => realpath(candidate), signal).catch(() => candidate);
+  if (process.platform !== "win32") return [file];
+  return [file.toLowerCase(), `${pathWin32.dirname(candidate).toLowerCase()}\\`];
 }
 
 export class CliAvailabilityService {
@@ -363,6 +385,92 @@ export class CliAvailabilityService {
     this.checkId++;
     this.inFlightCheck = null;
     return this.checkAvailability();
+  }
+
+  /**
+   * Every copy of an agent's CLI on this machine, the one launches start first.
+   * Empty unless the last check found a launchable copy.
+   *
+   * A check stops at the first layer that answers, so this goes through all of
+   * them. It stays out of the check because the npm layer spawns npm, which the
+   * startup probe has no reason to pay for on every machine with an agent on PATH.
+   *
+   * Only ever adds to the launching copy, so a location that never answers costs
+   * the copies behind it and not the one that matters most.
+   */
+  async findCopies(agentId: string, config: AgentConfig): Promise<string[]> {
+    if (this.details === null) await this.checkAvailability();
+    const detail = this.details?.[agentId];
+    const launchPath = detail && isAgentLaunchable(detail.state) ? detail.resolvedPath : null;
+    if (!launchPath) return [];
+
+    const copies = [launchPath];
+    const deadline = new AbortController();
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<void>((resolve) => {
+      timeoutHandle = setTimeout(() => {
+        deadline.abort();
+        resolve();
+      }, CliAvailabilityService.CHECK_TIMEOUT_MS);
+    });
+    const collected = this.collectCopies(config, launchPath, copies, deadline.signal).catch(
+      (error: unknown) => {
+        if (!deadline.signal.aborted) {
+          logger.warn("Couldn't finish listing CLI copies", { agentId, error: String(error) });
+        }
+      }
+    );
+    try {
+      await Promise.race([collected, timeoutPromise]);
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
+    return [...copies];
+  }
+
+  /**
+   * Appends to `copies` as each is confirmed, so a deadline keeps what was found by
+   * then, and nothing new starts once it has passed.
+   */
+  private async collectCopies(
+    config: AgentConfig,
+    launchPath: string,
+    copies: string[],
+    signal: AbortSignal
+  ): Promise<void> {
+    const seen = new Set(await copyIdentities(launchPath, signal));
+    const add = async (candidate: string): Promise<void> => {
+      const identities = await copyIdentities(candidate, signal);
+      if (signal.aborted || identities.some((identity) => seen.has(identity))) return;
+      for (const identity of identities) seen.add(identity);
+      copies.push(candidate);
+    };
+
+    const command = config.command;
+    // Waiting behind a hung lookup can use up the deadline before any layer starts.
+    if (signal.aborted) return;
+    // An absolute plugin command names its one file and has no layers to search.
+    if (isAbsolute(command) || !CliAvailabilityService.VALID_COMMAND_RE.test(command)) return;
+
+    const onPath = await this.probeViaShell(command);
+    if (onPath.status === "found") {
+      for (const candidate of onPath.allPaths ?? [onPath.path]) await add(candidate);
+    }
+
+    const pypiPackage = config.packages?.pypi;
+    const fixedPaths = [
+      ...(config.nativePaths ?? []),
+      ...(pypiPackage ? synthesisePypiProbePaths(command, pypiPackage) : []),
+    ];
+    for (const fixedPath of fixedPaths) {
+      const probe = await copyLookups.withSlot(() => this.probeNativePaths([fixedPath]), signal);
+      if (probe.status === "found") await add(probe.path);
+    }
+
+    if (config.packages?.npm ?? config.npmGlobalPackage) {
+      const probe = await copyLookups.withSlot(() => this.probeNpmGlobal(command), signal);
+      if (probe.status === "found") await add(probe.path);
+    }
   }
 
   /** A fresh install's first pins come from this machine's first complete check (#14702). */
@@ -913,7 +1021,8 @@ export class CliAvailabilityService {
    * Surface a one-time toast per agent when the shell probe found multiple
    * PATH-resolved binaries (#6054). Multiple installs typically come from a
    * mix of Homebrew, npm-global, and native installer paths and can leave
-   * the user confused about which copy is being launched.
+   * the user confused about which copy is being launched. The toast's button
+   * opens the agent's settings, which list each copy and the version it reports.
    *
    * Persistence reuses `orchestrationMilestones` keyed by agent ID, so the
    * notification fires exactly once per agent across app restarts. A user
@@ -934,10 +1043,7 @@ export class CliAvailabilityService {
 
       const milestoneKey = `duplicate-cli-warning:${agentId}`;
       if (milestones[milestoneKey]) continue;
-      // Claim the key before any await-free work below can broadcast it, so an
-      // overlapping pass that re-read the store cannot broadcast it too.
       if (this.notifiedDuplicateInstalls.has(milestoneKey)) continue;
-      this.notifiedDuplicateInstalls.add(milestoneKey);
 
       const config = configById.get(agentId);
       const agentName = config?.name ?? agentId;
@@ -946,13 +1052,23 @@ export class CliAvailabilityService {
       const preview = others.slice(0, PREVIEW_LIMIT).join(", ");
       const remainder = others.length - PREVIEW_LIMIT;
       const alsoFound = remainder > 0 ? `${preview}, and ${remainder} more` : preview;
+      const toast = {
+        type: "warning",
+        title: `Multiple ${agentName} installations found`,
+        message: `Launches ${active}. Also found: ${alsoFound}.`,
+        agentCliCopies: { agentId },
+      };
+
+      // The milestone records having told someone, so with nobody to tell (a window
+      // showing only a remote host, a host with no view attached) a later pass tries.
+      if (!hasBroadcastAudience(CHANNELS.NOTIFICATION_SHOW_TOAST, toast)) continue;
+
+      // Claim the key before any await-free work below can broadcast it, so an
+      // overlapping pass that re-read the store cannot broadcast it too.
+      this.notifiedDuplicateInstalls.add(milestoneKey);
 
       try {
-        broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
-          type: "warning",
-          title: `Multiple ${agentName} installations found`,
-          message: `Active: ${active}. Also found: ${alsoFound}. Pick one install method and remove the others so the most up-to-date version launches.`,
-        });
+        broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, toast);
       } catch (err) {
         logger.error("Failed to broadcast duplicate-install toast", err, { agentId });
         // Release the claim: a broadcast that never reached the renderer should

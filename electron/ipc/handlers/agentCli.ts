@@ -1,8 +1,11 @@
 // eager-import-allow: reads agent CLI config via store.get synchronously in the IPC handler
 import { CHANNELS } from "../channels.js";
+import { defineIpcNamespace, op } from "../define.js";
+import { AGENT_CLI_COPIES_METHOD_CHANNELS } from "./agentCliCopies.preload.js";
 import { getAgentIds } from "../../../shared/config/agentRegistry.js";
 import type {
   AgentAvailabilityState,
+  AgentCliCopy,
   AgentCliDetails,
   AgentInstallPayload,
 } from "../../../shared/types/ipc/system.js";
@@ -107,6 +110,23 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
   handlers.push(
     typedHandle(CHANNELS.SYSTEM_REFRESH_AGENT_VERSIONS, handleSystemRefreshAgentVersions)
   );
+
+  const agentCliCopiesNamespace = defineIpcNamespace({
+    name: "agentCliCopies",
+    ops: {
+      // Takes only an agent id: which files run is this machine's to decide.
+      list: op(
+        AGENT_CLI_COPIES_METHOD_CHANNELS.list,
+        async (agentId: string): Promise<AgentCliCopy[]> => {
+          if (typeof agentId !== "string" || !agentId) {
+            throw new Error("Invalid agentId");
+          }
+          return (await agentVersionService?.getCopies(agentId)) ?? [];
+        }
+      ),
+    },
+  });
+  handlers.push(agentCliCopiesNamespace.register());
 
   const handleSystemGetAgentUpdateSettings = async () => {
     const { store } = await import("../../store.js");

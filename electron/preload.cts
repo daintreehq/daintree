@@ -141,6 +141,7 @@ import { buildGlobalRecipesPreloadBindings } from "./ipc/handlers/globalRecipes.
 import { buildAgentDefaultsPreloadBindings } from "./ipc/handlers/agentDefaults.preload.js";
 import { buildAgentToolbarPinsPreloadBindings } from "./ipc/handlers/agentToolbarPins.preload.js";
 import { buildAgentAccountsPreloadBindings } from "./ipc/handlers/agentAccounts.preload.js";
+import { buildAgentCliCopiesPreloadBindings } from "./ipc/handlers/agentCliCopies.preload.js";
 import { buildEditorConfigPreloadBindings } from "./ipc/handlers/editorConfig.preload.js";
 import { buildWindowChromePreloadBindings } from "./ipc/handlers/windowChrome.preload.js";
 import { buildFleetPreloadBindings } from "./ipc/handlers/fleet.preload.js";
@@ -1971,6 +1972,7 @@ function buildElectronApi(): ElectronAPI {
 
     // An agent's accounts (#16040)
     agentAccounts: buildAgentAccountsPreloadBindings(_unwrappingInvoke),
+    agentCliCopies: buildAgentCliCopiesPreloadBindings(_unwrappingInvoke),
 
     // Per-service connectivity API
     connectivity: {

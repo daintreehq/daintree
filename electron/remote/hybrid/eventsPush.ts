@@ -34,8 +34,35 @@ export function eventsPushSource(args: readonly unknown[]): Source {
   return locality === "host" || locality === "shell" ? locality : null;
 }
 
+/**
+ * All such a toast may carry. A host's toast shows in a Shell's view and its
+ * buttons run with the user's source, so nothing that adds one crosses the link.
+ */
+const AGENT_CLI_COPIES_TOAST_FIELDS: ReadonlySet<string> = new Set([
+  "type",
+  "title",
+  "message",
+  "agentCliCopies",
+]);
+
+/**
+ * Toasts are this machine's to raise, except one reporting the agent CLIs found
+ * on a machine: a remote view's agent settings show the host's copies, so that
+ * view hears about the host's and never this machine's (#16409).
+ */
+function isAgentCliCopiesToast(args: readonly unknown[]): boolean {
+  const payload = args[0];
+  if (!payload || typeof payload !== "object") return false;
+  if (!Object.keys(payload).every((field) => AGENT_CLI_COPIES_TOAST_FIELDS.has(field))) {
+    return false;
+  }
+  const notice = (payload as { agentCliCopies?: { agentId?: unknown } }).agentCliCopies;
+  return typeof notice?.agentId === "string" && notice.agentId.length > 0;
+}
+
 function pushSource(channel: string, args: readonly unknown[]): Source {
   if (channel === CHANNELS.EVENTS_PUSH) return eventsPushSource(args);
+  if (channel === CHANNELS.NOTIFICATION_SHOW_TOAST && isAgentCliCopiesToast(args)) return "host";
   const locality = getChannelLocality(channel);
   if (locality === "host" || locality === "shell") return locality;
   if (locality === "hybrid") {

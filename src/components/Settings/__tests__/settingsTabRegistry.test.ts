@@ -14,6 +14,11 @@ const globalEntries = allEntries.filter((e) => e.scope === "global");
 const projectEntries = allEntries.filter((e) => e.scope === "project");
 
 describe("SETTINGS_REGISTRY", () => {
+  it("tells the agents tab when it's hidden, so a prefetched tab runs no CLI copies (#16409)", () => {
+    const agents = SETTINGS_REGISTRY.find((entry) => entry.id === "agents") as LazySettingsTabEntry;
+    expect(agents.needsIsActive).toBe(true);
+  });
+
   it("has no duplicate tab IDs", () => {
     const ids = SETTINGS_REGISTRY.map((e) => e.id);
     expect(new Set(ids).size).toBe(ids.length);

@@ -41,6 +41,11 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["agent-capabilities:is-agent-enabled"]["args"]
     ): Promise<IpcInvokeMap["agent-capabilities:is-agent-enabled"]["result"]>;
   };
+  agentCliCopies: {
+    list(
+      ...args: IpcInvokeMap["agent-cli-copies:list"]["args"]
+    ): Promise<IpcInvokeMap["agent-cli-copies:list"]["result"]>;
+  };
   agentDefaults: {
     get(
       ...args: IpcInvokeMap["agent-defaults:get"]["args"]

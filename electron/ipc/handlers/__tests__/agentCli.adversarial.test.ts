@@ -117,6 +117,49 @@ describe("agentCli IPC adversarial", () => {
     cleanup?.();
   });
 
+  describe("agent-cli-copies:list (#16409)", () => {
+    it("reads the named agent's copies from the version service", async () => {
+      const copies = [{ path: "/a/claude", version: "1.0.0", launches: true }];
+      const getCopies = vi.fn().mockResolvedValue(copies);
+      register({ agentVersionService: { getCopies } as never });
+
+      await expect(
+        getHandler(CHANNELS.AGENT_CLI_COPIES_LIST)(fakeEvent(), "claude")
+      ).resolves.toEqual(copies);
+      expect(getCopies).toHaveBeenCalledWith("claude");
+    });
+
+    it.each([[""], [undefined], [42], [{ path: "/bin/sh" }]])(
+      "refuses %j rather than treating it as an agent",
+      async (agentId) => {
+        const getCopies = vi.fn();
+        register({ agentVersionService: { getCopies } as never });
+
+        await expect(
+          getHandler(CHANNELS.AGENT_CLI_COPIES_LIST)(fakeEvent(), agentId)
+        ).rejects.toThrow("Invalid agentId");
+        expect(getCopies).not.toHaveBeenCalled();
+      }
+    );
+
+    it("takes nothing from the caller beyond the agent id", async () => {
+      const getCopies = vi.fn().mockResolvedValue([]);
+      register({ agentVersionService: { getCopies } as never });
+
+      await getHandler(CHANNELS.AGENT_CLI_COPIES_LIST)(fakeEvent(), "claude", "/bin/sh", ["-c"]);
+
+      expect(getCopies).toHaveBeenCalledWith("claude");
+    });
+
+    it("answers empty when the version service is absent", async () => {
+      register({ agentVersionService: undefined });
+
+      await expect(
+        getHandler(CHANNELS.AGENT_CLI_COPIES_LIST)(fakeEvent(), "claude")
+      ).resolves.toEqual([]);
+    });
+  });
+
   it("SYSTEM_GET_CLI_AVAILABILITY returns all agent ids as missing when the service is absent", async () => {
     register({ cliAvailabilityService: undefined });
 
