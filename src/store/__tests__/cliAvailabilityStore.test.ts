@@ -23,7 +23,11 @@ vi.mock("@/config/agents", () => ({
   getAgentIds: () => ["claude", "gemini", "codex", "opencode", "cursor"],
 }));
 
-import { useCliAvailabilityStore, cleanupCliAvailabilityStore } from "../cliAvailabilityStore";
+import {
+  useCliAvailabilityStore,
+  cleanupCliAvailabilityStore,
+  whenCliHostSynced,
+} from "../cliAvailabilityStore";
 
 const defaultAvail = {
   claude: "missing",
@@ -425,6 +429,62 @@ describe("cliAvailabilityStore", () => {
       await first;
 
       expect(useCliAvailabilityStore.getState().availability).toEqual(chosenAvail);
+    });
+
+    it("holds a launch that asks after the change was heard until the reread lands", async () => {
+      refreshMock.mockResolvedValueOnce(installedAvail);
+      await useCliAvailabilityStore.getState().initialize();
+      let answer!: (value: unknown) => void;
+      getMock.mockReturnValueOnce(
+        new Promise((resolve) => {
+          answer = resolve;
+        })
+      );
+      getDetailsMock.mockResolvedValueOnce(chosenDetails);
+
+      const syncing = useCliAvailabilityStore.getState().syncFromHost();
+      let landed = false;
+      const waiting = whenCliHostSynced().then(() => {
+        landed = true;
+      });
+      await vi.waitFor(() => expect(getMock).toHaveBeenCalled());
+      expect(landed).toBe(false);
+
+      answer(chosenAvail);
+      await waiting;
+      // The launch reads what the host launches now, not what this view held.
+      expect(useCliAvailabilityStore.getState().details).toEqual(chosenDetails);
+      await syncing;
+      await expect(whenCliHostSynced()).resolves.toBeUndefined();
+    });
+
+    it("starts a launch read after the change with the copy the host launches now", async () => {
+      const { getCurrentLaunchCliDetail } = await import("@/utils/agentLaunchCommand");
+      refreshMock.mockResolvedValueOnce(installedAvail);
+      getDetailsMock.mockResolvedValueOnce({
+        claude: { state: "ready", resolvedPath: "/a/claude", via: "which" },
+      });
+      await useCliAvailabilityStore.getState().initialize();
+      let answer!: (value: unknown) => void;
+      getMock.mockReturnValueOnce(
+        new Promise((resolve) => {
+          answer = resolve;
+        })
+      );
+      getDetailsMock.mockResolvedValueOnce({
+        claude: {
+          state: "ready",
+          resolvedPath: "/b/claude",
+          via: "chosen",
+          chosenPath: "/b/claude",
+        },
+      });
+
+      void useCliAvailabilityStore.getState().syncFromHost();
+      const detail = getCurrentLaunchCliDetail("claude");
+      answer(installedAvail);
+
+      expect((await detail)?.resolvedPath).toBe("/b/claude");
     });
 
     it("keeps what the view had when the host can't be read", async () => {

@@ -110,6 +110,8 @@ describe("AgentCliCopiesSection", () => {
   describe("choosing which copy launches (#16399)", () => {
     it("asks the host to launch the chosen copy, then reads what launches now", async () => {
       getCopies.mockResolvedValue([launching, stale]);
+      const applying = deferred<void>();
+      chooseCopy.mockReturnValueOnce(applying.promise);
       const { props } = renderSection();
       await screen.findByText("Reports 2.0.0");
 
@@ -117,6 +119,10 @@ describe("AgentCliCopiesSection", () => {
 
       expect(chooseCopy).toHaveBeenCalledWith("claude", "/b/claude");
       expect(resetCopy).not.toHaveBeenCalled();
+      // Read before the host recorded the choice, it would still name the old copy.
+      expect(props.onChosen).not.toHaveBeenCalled();
+
+      await act(async () => applying.resolve());
       expect(props.onChosen).toHaveBeenCalledTimes(1);
     });
 
@@ -152,12 +158,30 @@ describe("AgentCliCopiesSection", () => {
     });
 
     it("offers the way back while nothing else was found", async () => {
-      getCopies.mockResolvedValue([]);
+      const read = deferred<AgentCliCopy[]>();
+      getCopies.mockReturnValue(read.promise);
       renderSection({ launchPath: null, chosenPath: "/gone/claude" });
+      await act(async () => read.resolve([]));
 
-      expect(await screen.findByRole("radio", { name: "Default" })).toBeTruthy();
+      expect(getCopies).toHaveBeenCalledTimes(1);
       expect(choiceOf("/gone/claude").radio.checked).toBe(true);
       expect(screen.queryByText(/No copies found/)).toBeNull();
+
+      await act(async () => fireEvent.click(choiceOf("Default").radio));
+      expect(resetCopy).toHaveBeenCalledWith("claude");
+    });
+
+    it("shows a chosen copy found again before detection caught up as one row", async () => {
+      getCopies.mockResolvedValue([
+        { ...stale, launches: false },
+        { ...launching, launches: false },
+      ]);
+      renderSection({ launchPath: null, chosenPath: "/b/claude" });
+      await screen.findByText("Reports 2.0.0");
+
+      expect(screen.getAllByRole("radio", { name: "/b/claude" })).toHaveLength(1);
+      expect(choiceOf("/b/claude").radio.checked).toBe(true);
+      expect(screen.queryByText(/Not available now/)).toBeNull();
     });
 
     it("says why a choice didn't take, and retries it", async () => {
@@ -182,7 +206,7 @@ describe("AgentCliCopiesSection", () => {
       expect(props.onChosen).toHaveBeenCalledTimes(1);
     });
 
-    it("takes one choice at a time", async () => {
+    it("takes one choice at a time, keeping the group usable from the keyboard", async () => {
       getCopies.mockResolvedValue([launching, stale]);
       const applying = deferred<void>();
       chooseCopy.mockReturnValueOnce(applying.promise);
@@ -191,10 +215,15 @@ describe("AgentCliCopiesSection", () => {
 
       await act(async () => fireEvent.click(choiceOf("/b/claude").radio));
       expect(choiceOf("/b/claude").radio.checked).toBe(true);
-      expect(choiceOf("/a/claude").radio.disabled).toBe(true);
+      // Disabling the focused radio would drop focus out of the group.
+      expect(choiceOf("/b/claude").radio.disabled).toBe(false);
+      expect(choiceOf("/a/claude").radio.disabled).toBe(false);
+
+      await act(async () => fireEvent.click(choiceOf("/a/claude").radio));
+      expect(chooseCopy).toHaveBeenCalledTimes(1);
+      expect(choiceOf("/b/claude").radio.checked).toBe(true);
 
       await act(async () => applying.resolve());
-      expect(choiceOf("/a/claude").radio.disabled).toBe(false);
       expect(chooseCopy).toHaveBeenCalledTimes(1);
     });
 

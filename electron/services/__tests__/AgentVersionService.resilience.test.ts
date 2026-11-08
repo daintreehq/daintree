@@ -320,7 +320,7 @@ describe("AgentVersionService resilience", () => {
   function createService(checkAvailabilityImpl: () => Promise<Record<string, unknown>>) {
     const cliAvailabilityService = {
       checkAvailability: vi.fn(checkAvailabilityImpl),
-      getDetails: vi.fn(() => null),
+      getSettledDetails: vi.fn(async () => null),
     } as unknown as CliAvailabilityService;
 
     return {
@@ -1228,7 +1228,7 @@ describe("AgentVersionService resilience", () => {
       const state = detail.state as string;
       return new AgentVersionService({
         checkAvailability: vi.fn(async () => ({ claude: state })),
-        getDetails: vi.fn(() => ({ claude: detail })),
+        getSettledDetails: vi.fn(async () => ({ claude: detail })),
       } as unknown as CliAvailabilityService);
     }
 
@@ -1264,24 +1264,23 @@ describe("AgentVersionService resilience", () => {
       expect(spawnMock.mock.calls.map((call) => call[0])).toEqual(["/b/claude"]);
     });
 
-    it.each(["blocked", "missing"])(
-      "reports no version for a chosen copy that's %s, rather than another copy's",
-      async (state) => {
-        setVersions({ claude: "1.0.0\n" });
-        const service = createChosenService({
-          state,
-          resolvedPath: state === "blocked" ? "/locked/claude" : null,
-          via: state === "blocked" ? "chosen" : null,
-          chosenPath: state === "blocked" ? "/locked/claude" : "/gone/claude",
-        });
+    // Blocked counts as installed, so only the chosen copy's own check keeps the
+    // registry command, and the copy PATH finds, from answering for it.
+    it("reports no version for a chosen copy that can't run, rather than another copy's", async () => {
+      setVersions({ claude: "1.0.0\n" });
+      const service = createChosenService({
+        state: "blocked",
+        resolvedPath: "/locked/claude",
+        via: "chosen",
+        chosenPath: "/locked/claude",
+      });
 
-        const info = await service.getVersion("claude" as AgentId);
+      const info = await service.getVersion("claude" as AgentId);
 
-        expect(info.installedVersion).toBeNull();
-        expect(info.updateAvailable).toBe(false);
-        expect(spawnMock).not.toHaveBeenCalled();
-      }
-    );
+      expect(info.installedVersion).toBeNull();
+      expect(info.updateAvailable).toBe(false);
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
 
     it("keeps a version read before the choice changed out of the cache", async () => {
       let release!: () => void;

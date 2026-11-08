@@ -134,6 +134,16 @@ let epoch = 0;
 let initPromise: Promise<void> | null = null;
 let refreshPromise: Promise<void> | null = null;
 let syncSeq = 0;
+let pendingHostSync: Promise<void> | null = null;
+
+/**
+ * Settles once this view has read the host's latest check after being told the
+ * copy an agent launches changed. A launch waits on it, so it never starts the
+ * copy this view held before the change.
+ */
+export function whenCliHostSynced(): Promise<void> {
+  return pendingHostSync ?? Promise.resolve();
+}
 
 // Fetch availability and details in one pass so the UI never renders a
 // "Needs Setup" nudge for an agent whose availability already arrived as
@@ -285,27 +295,36 @@ export const useCliAvailabilityStore = create<CliAvailabilityStore>()(
       return refreshPromise;
     },
 
-    syncFromHost: async () => {
-      if (!isElectronAvailable()) return;
+    syncFromHost: () => {
+      if (!isElectronAvailable()) return Promise.resolve();
       const mySeq = ++syncSeq;
       const myEpoch = epoch;
       const isCurrent = () => mySeq === syncSeq && epoch === myEpoch;
-      // A check begun before the host's would answer after this read and put back
-      // what launched before.
-      await Promise.allSettled([initPromise, refreshPromise]);
-      if (!isCurrent()) return;
-      try {
-        const [availability, details] = await Promise.all([
-          cliAvailabilityClient.get(),
-          cliAvailabilityClient.getDetails(),
-        ]);
+      const run = (async () => {
+        // A check begun before the host's would answer after this read and put
+        // back what launched before.
+        await Promise.allSettled([initPromise, refreshPromise]);
         if (!isCurrent()) return;
-        const now = Date.now();
-        saveCache(availability, now);
-        set({ availability, details, lastCheckedAt: now, hasRealData: true });
-      } catch {
-        // The view keeps what it had until its next refresh, as after any failed read.
-      }
+        try {
+          const [availability, details] = await Promise.all([
+            cliAvailabilityClient.get(),
+            cliAvailabilityClient.getDetails(),
+          ]);
+          if (!isCurrent()) return;
+          const now = Date.now();
+          saveCache(availability, now);
+          set({ availability, details, lastCheckedAt: now, hasRealData: true });
+        } catch {
+          // The view keeps what it had until its next refresh, as after any failed read.
+        }
+      })();
+      // Set before the first await above returns control, so a launch begun
+      // after the change was heard waits for this read.
+      pendingHostSync = run;
+      void run.finally(() => {
+        if (pendingHostSync === run) pendingHostSync = null;
+      });
+      return run;
     },
   }))
 );
@@ -314,6 +333,7 @@ export function cleanupCliAvailabilityStore() {
   epoch++;
   initPromise = null;
   refreshPromise = null;
+  pendingHostSync = null;
   useCliAvailabilityStore.setState({
     availability: defaultAvailability(),
     details: {},

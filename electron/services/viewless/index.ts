@@ -59,7 +59,8 @@ async function loadLiveDeps(): Promise<ViewlessDeps> {
     getCliDetail: async (agentId) => {
       const service = getCliAvailabilityServiceRef();
       if (!service) return undefined;
-      const current = service.getDetails()?.[agentId];
+      // Settled, so a copy chosen a moment ago launches rather than the one before it.
+      const current = (await service.getSettledDetails())?.[agentId];
       if (
         (current?.state === "ready" || current?.state === "unauthenticated") &&
         current.resolvedPath?.trim()
@@ -71,7 +72,7 @@ async function loadLiveDeps(): Promise<ViewlessDeps> {
       } catch {
         // The registry command still launches; availability reports its own failure.
       }
-      return service.getDetails()?.[agentId];
+      return (await service.getSettledDetails())?.[agentId];
     },
     getAvailability: async () => {
       const service = getCliAvailabilityServiceRef();

@@ -22,7 +22,6 @@ import { findAllOnPath } from "../../utils/findOnPath.js";
 import { virtualWindowsFiles } from "../../utils/__tests__/helpers/virtualWindowsFs.js";
 import { resetWindowsExecutableCache } from "../../utils/windowsExecutable.js";
 import { isAgentLaunchable } from "../../../shared/utils/agentAvailability.js";
-import { resolveAgentLaunchBaseCommandFor } from "../../../shared/utils/agentLaunchCommand.js";
 
 // Mock child_process. The service's subprocess probes (npm-global, WSL) run
 // through async `execFile` — mock it or the probes will call `undefined(...)`
@@ -2955,6 +2954,60 @@ describe("CliAvailabilityService", () => {
       const detail = service.getDetails()!.claude!;
       expect(detail.resolvedPath).toBe("/opt/homebrew/bin/claude");
       expect(detail.chosenPath).toBeUndefined();
+    });
+
+    it("makes a read right after a choice wait for a check that has seen it", async () => {
+      await arrange({
+        onPath: ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"],
+        files: ["/usr/local/bin/claude"],
+      });
+      await service.checkAvailability();
+
+      service.setChosenCopy("claude", "/usr/local/bin/claude");
+
+      // Published before the choice, so it still names the copy that launched then.
+      expect(service.getDetails()!.claude?.resolvedPath).toBe("/opt/homebrew/bin/claude");
+      const settled = await service.getSettledDetails();
+      expect(settled!.claude).toMatchObject({
+        resolvedPath: "/usr/local/bin/claude",
+        chosenPath: "/usr/local/bin/claude",
+      });
+    });
+
+    it("never lets a check begun before a choice publish the copy it replaced", async () => {
+      await arrange({ onPath: ["/a/claude"], files: ["/chosen/claude"] });
+      await service.checkAvailability();
+      // The next check would find a different copy on PATH, if it were allowed to say so.
+      await arrange({ onPath: ["/b/claude"], files: ["/chosen/claude"] });
+      let releasePath!: () => void;
+      const heldPath = new Promise<void>((resolve) => {
+        releasePath = resolve;
+      });
+      mockedFindAllOnPath.mockImplementation(async (command) => {
+        if (command === "claude") await heldPath;
+        return pathFixtureLookup(command);
+      });
+      const before = service.checkAvailability();
+
+      service.setChosenCopy("claude", "/chosen/claude");
+      releasePath();
+      await before;
+
+      expect(service.getDetails()!.claude?.resolvedPath).toBe("/a/claude");
+      expect((await service.getSettledDetails())!.claude).toMatchObject({
+        resolvedPath: "/chosen/claude",
+        chosenPath: "/chosen/claude",
+      });
+    });
+
+    it("settles at once when no choice is waiting on a check", async () => {
+      await arrange({ onPath: ["/opt/homebrew/bin/claude"] });
+      await service.checkAvailability();
+      mockedFindAllOnPath.mockClear();
+
+      await service.getSettledDetails();
+
+      expect(mockedFindAllOnPath).not.toHaveBeenCalled();
     });
 
     it("records a choice per agent, leaving the others alone", () => {

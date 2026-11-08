@@ -1,13 +1,18 @@
 import type { AgentCliDetail } from "@shared/types/ipc";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
-import { resolveAgentLaunchBaseCommandFor } from "@shared/utils/agentLaunchCommand";
-import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
+import {
+  rebaseAgentLaunchCommand,
+  resolveAgentLaunchBaseCommandFor,
+} from "@shared/utils/agentLaunchCommand";
+import { useCliAvailabilityStore, whenCliHostSynced } from "@/store/cliAvailabilityStore";
 import { getHostPlatformInfo, hostShellDialect, isRemoteWindow } from "@/hooks/useHostPlatform";
 
 export async function getCurrentLaunchCliDetail(
   agentId: string,
   forceRefresh = false
 ): Promise<AgentCliDetail | undefined> {
+  // A change of which copy launches, already heard, lands before this reads.
+  await whenCliHostSynced();
   const current = useCliAvailabilityStore.getState().details[agentId];
   if (
     !forceRefresh &&
@@ -59,4 +64,19 @@ export async function resolveCurrentAgentLaunchBaseCommand(
   const registryCommand = getEffectiveAgentConfig(agentId)?.command;
   if (registryCommand === undefined) return undefined;
   return resolveAgentLaunchBaseCommand(registryCommand, await getCurrentLaunchCliDetail(agentId));
+}
+
+/**
+ * A saved launch command of `agentId`, replayed rather than rebuilt, started with
+ * the executable a launch starts now: the copy chosen since it was saved, say.
+ * Anything after the executable stays as it was.
+ */
+export async function rebaseToCurrentAgentLaunch(
+  command: string,
+  agentId: string
+): Promise<string> {
+  const registryCommand = getEffectiveAgentConfig(agentId)?.command;
+  const base = await resolveCurrentAgentLaunchBaseCommand(agentId);
+  if (registryCommand === undefined || base === undefined) return command;
+  return rebaseAgentLaunchCommand(command, registryCommand, base);
 }

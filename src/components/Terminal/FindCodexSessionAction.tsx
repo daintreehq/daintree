@@ -413,6 +413,11 @@ export function FindCodexSessionAction({ panelId, onOpenSession }: FindCodexSess
 
   const openSession = async (session: CodexFolderSession) => {
     if (!cwd) return;
+    // Resolved before the check below, which has to stay the last thing before
+    // the spawn: nothing may yield between them.
+    const baseCommand = onOpenSession
+      ? undefined
+      : await resolveCurrentAgentLaunchBaseCommand("codex");
     // A sibling can claim this exact conversation in the gap between the list
     // loading and the user picking a row — the popover can sit open for a
     // while. Re-check right before opening rather than trusting the snapshot
@@ -436,7 +441,7 @@ export function FindCodexSessionAction({ panelId, onOpenSession }: FindCodexSess
       "codex",
       session.id,
       reconcileResumeLaunchFlags({ agentId: "codex", agentLaunchFlags }),
-      await resolveCurrentAgentLaunchBaseCommand("codex")
+      baseCommand
     );
     if (!command) return;
     setIsOpen(false);

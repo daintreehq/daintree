@@ -172,6 +172,10 @@ describe("agentCli IPC adversarial", () => {
           order.push("refresh");
           return {};
         }),
+        getSettledDetails: vi.fn(async () => {
+          order.push("settled");
+          return {};
+        }),
       };
       const agentVersionService = { invalidate: vi.fn(() => order.push("invalidate")) };
       broadcastToRendererMock.mockImplementation(() => order.push("broadcast"));
@@ -207,7 +211,7 @@ describe("agentCli IPC adversarial", () => {
         agentId: "claude",
       });
       // Views reread only once the re-check has published what now launches.
-      expect(order).toEqual(["set", "invalidate", "refresh", "broadcast"]);
+      expect(order).toEqual(["set", "invalidate", "refresh", "settled", "broadcast"]);
     });
 
     it.each([
@@ -255,7 +259,36 @@ describe("agentCli IPC adversarial", () => {
 
       expect(cliAvailabilityService.setChosenCopy).toHaveBeenCalledWith("claude", null);
       expect(agentVersionService.invalidate).toHaveBeenCalledWith("claude");
-      expect(order).toEqual(["set", "invalidate", "refresh", "broadcast"]);
+      expect(order).toEqual(["set", "invalidate", "refresh", "settled", "broadcast"]);
+    });
+
+    it("tells no view until the host's re-check has published", async () => {
+      const { cliAvailabilityService } = registerChoice(["/usr/local/bin/claude"]);
+      let finishRefresh!: () => void;
+      cliAvailabilityService.refresh.mockReturnValueOnce(
+        new Promise((resolve) => {
+          finishRefresh = () => resolve({});
+        })
+      );
+      let settled = false;
+
+      const choosing = getHandler(CHANNELS.AGENT_CLI_COPIES_CHOOSE)(
+        fakeEvent(),
+        "claude",
+        "/usr/local/bin/claude"
+      ).then(() => {
+        settled = true;
+      });
+      await vi.waitFor(() => expect(cliAvailabilityService.refresh).toHaveBeenCalled());
+
+      expect(broadcastToRendererMock).not.toHaveBeenCalled();
+      expect(settled).toBe(false);
+
+      finishRefresh();
+      await choosing;
+      expect(broadcastToRendererMock).toHaveBeenCalledWith(CHANNELS.AGENT_CLI_COPIES_CHANGED, {
+        agentId: "claude",
+      });
     });
 
     it("still tells every view when the re-check fails, since the choice already changed", async () => {
@@ -323,7 +356,7 @@ describe("agentCli IPC adversarial", () => {
     register({
       cliAvailabilityService: {
         getAvailability: vi.fn().mockReturnValue({ claude: "ready" }),
-        getDetails: vi.fn().mockReturnValue(cached),
+        getSettledDetails: vi.fn().mockResolvedValue(cached),
         checkAvailability,
         refresh: vi.fn(),
       } as unknown as HandlerDependencies["cliAvailabilityService"],
@@ -346,11 +379,12 @@ describe("agentCli IPC adversarial", () => {
         via: "native" as const,
       },
     };
-    const getDetails = vi.fn().mockReturnValueOnce(null).mockReturnValueOnce(details);
+    const getDetails = vi.fn().mockReturnValueOnce(details);
     const checkAvailability = vi.fn().mockResolvedValue({ claude: "installed" });
     register({
       cliAvailabilityService: {
         getAvailability: vi.fn().mockReturnValue(null),
+        getSettledDetails: vi.fn().mockResolvedValue(null),
         getDetails,
         checkAvailability,
         refresh: vi.fn(),

@@ -59,7 +59,8 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
       return {};
     }
 
-    let details = cliAvailabilityService.getDetails();
+    // Settled: views reread this when told a choice changed, and must hear the new copy.
+    let details = await cliAvailabilityService.getSettledDetails();
     if (!details) {
       // Details are populated by the same cycle as availability. If nothing
       // is cached yet, kick off the check so renderers can lazy-load the
@@ -124,6 +125,7 @@ export function registerAgentCliHandlers(deps: HandlerDependencies): () => void 
     agentVersionService?.invalidate(agentId);
     try {
       await cliAvailabilityService.refresh();
+      await cliAvailabilityService.getSettledDetails();
     } finally {
       broadcastToRenderer(CHANNELS.AGENT_CLI_COPIES_CHANGED, { agentId });
     }

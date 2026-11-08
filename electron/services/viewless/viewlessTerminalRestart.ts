@@ -10,7 +10,10 @@ import {
   supportsSessionIdAssignment,
 } from "../../../shared/types/agentSettings.js";
 import { splitCallerLaunchFlags } from "../../../shared/utils/callerLaunchFlags.js";
-import { resolveAgentLaunchBaseCommandFor } from "../../../shared/utils/agentLaunchCommand.js";
+import {
+  rebaseAgentLaunchCommand,
+  resolveAgentLaunchBaseCommandFor,
+} from "../../../shared/utils/agentLaunchCommand.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { mergeTerminalLaunchEnv } from "../../../shared/utils/terminalLaunchOptions.js";
 import { readSpawnProvenance } from "../../../shared/utils/scheduledRunProvenance.js";
@@ -118,7 +121,7 @@ export async function restartTerminalWithoutView(
     // PATH resumes as it launched.
     const registryCommand = getEffectiveAgentConfig(agentId)?.command;
     const baseCommand =
-      sessionId && registryCommand !== undefined
+      registryCommand !== undefined
         ? resolveAgentLaunchBaseCommandFor(
             registryCommand,
             await deps.agents.getCliDetail(agentId).catch(() => undefined),
@@ -134,6 +137,11 @@ export async function restartTerminalWithoutView(
       resumedSessionId = sessionId;
     } else if (command) {
       command = stripAssignedSessionIdArgs(command, agentId);
+      // Starting over keeps the stored arguments and launch prompt, but starts the
+      // copy a launch starts now, which may since have been chosen (#16399).
+      if (registryCommand !== undefined && baseCommand !== undefined) {
+        command = rebaseAgentLaunchCommand(command, registryCommand, baseCommand);
+      }
     }
   }
   // The first prompt stays with the run it was handed to (#14592), as a view's

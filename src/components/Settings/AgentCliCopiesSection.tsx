@@ -105,6 +105,8 @@ export function AgentCliCopiesSection({
     if (isOnPage.current) await load();
   };
 
+  // One at a time. The radios stay enabled meanwhile, since disabling the focused
+  // one would drop keyboard focus out of the group.
   const choose = async (value: string) => {
     if (pending !== null) return;
     setPending(value);
@@ -137,8 +139,12 @@ export function AgentCliCopiesSection({
   // Only a choice to make, or one made, is worth a choice to show.
   const isChoosing = rows.length > 1 || chosenPath !== undefined;
   // A chosen copy that can't launch isn't among those found, but stays the choice.
+  // One found again before detection caught up is already a row of its own.
   const chosenUnavailable =
-    chosenPath !== undefined && launchPath !== undefined && launchPath !== chosenPath;
+    chosenPath !== undefined &&
+    launchPath !== undefined &&
+    launchPath !== chosenPath &&
+    !rows.some((copy) => copy.path === chosenPath);
   const selected = pending ?? chosenPath ?? DEFAULT_CHOICE;
 
   const where = remoteHostName === null ? "" : ` on ${remoteHostName}`;
@@ -178,7 +184,6 @@ export function AgentCliCopiesSection({
               value={DEFAULT_CHOICE}
               checked={selected === DEFAULT_CHOICE}
               onChange={() => void choose(DEFAULT_CHOICE)}
-              disabled={pending !== null}
               label="Default"
               description="Launches the first copy found"
               className={cn(
@@ -193,7 +198,6 @@ export function AgentCliCopiesSection({
                 value={chosenPath}
                 checked={selected === chosenPath}
                 onChange={() => {}}
-                disabled={pending !== null}
                 label={chosenPath}
                 description="Not available now. Launches fail until it's back or another copy is chosen."
                 className={cn(
@@ -211,7 +215,6 @@ export function AgentCliCopiesSection({
                 value={copy.path}
                 checked={selected === copy.path}
                 onChange={() => void choose(copy.path)}
-                disabled={pending !== null}
                 label={copy.path}
                 description={versionText(copy.version, showChecking)}
                 details={copy.launches ? "Launches" : undefined}
@@ -237,12 +240,7 @@ export function AgentCliCopiesSection({
         {chooseFailure && (
           <SettingsEmptyRow
             action={
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={pending !== null}
-                onClick={() => void choose(chooseFailure.value)}
-              >
+              <Button size="sm" variant="outline" onClick={() => void choose(chooseFailure.value)}>
                 Retry
               </Button>
             }

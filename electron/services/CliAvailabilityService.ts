@@ -243,6 +243,10 @@ export class CliAvailabilityService {
   private inFlightCheck: Promise<CliAvailability> | null = null;
   private npmPrefixCache: { promise: Promise<string | null>; checkId: number } | null = null;
   private checkId = 0;
+  /** Counts choices of which copy launches; see {@link getSettledDetails}. */
+  private choiceEpoch = 0;
+  /** The choices the published details have seen. */
+  private publishedChoiceEpoch = 0;
   /**
    * Duplicate-install warnings already broadcast in THIS process.
    *
@@ -273,6 +277,7 @@ export class CliAvailabilityService {
         const registry = getEffectiveRegistry();
         const entries = Object.entries(registry);
         const choices = readCliChoices();
+        const choiceEpoch = this.choiceEpoch;
         // Whatever this check can't confirm still names the chosen copy, so a
         // launch never falls back to whichever copy PATH reaches first.
         const chosen = (id: string) =>
@@ -359,6 +364,7 @@ export class CliAvailabilityService {
           // stand in for a later one.
           this.availabilityCheckedAt = pendingAgentIds.length === 0 ? Date.now() : null;
           this.availabilityRegistry = registry;
+          this.publishedChoiceEpoch = choiceEpoch;
           // Only a published check warns: a superseded one (the setup wizard
           // re-checks every 3s) would otherwise report results nobody sees.
           if (pendingAgentIds.length > 0) {
@@ -405,9 +411,25 @@ export class CliAvailabilityService {
   }
 
   /**
+   * The published details once they have seen every choice of which copy
+   * launches. Until a check begun after a choice publishes, the details still
+   * name the copy that launched before it, so anything about to launch, or to
+   * describe what launches, reads through this.
+   */
+  async getSettledDetails(): Promise<AgentCliDetails | null> {
+    // Each pass waits on a check that has seen the choice; one superseded by a
+    // newer check leaves that one to wait on, and three passes bound the rest.
+    for (let pass = 0; pass < 3 && this.publishedChoiceEpoch < this.choiceEpoch; pass++) {
+      await this.checkAvailability().catch(() => {});
+    }
+    return this.details;
+  }
+
+  /**
    * Records the copy launches start for an agent, or with `null` returns it to
    * whichever copy detection finds first. Takes effect with the next check, so
-   * follow it with {@link refresh}. The caller vouches that `path` is one
+   * follow it with {@link refresh}; until that publishes,
+   * {@link getSettledDetails} waits. The caller vouches that `path` is one
    * {@link findCopies} returned.
    */
   setChosenCopy(agentId: string, path: string | null): void {
@@ -419,6 +441,10 @@ export class CliAvailabilityService {
       choices[agentId] = path;
     }
     store.set("agentCliChoices", choices);
+    this.choiceEpoch++;
+    // A check begun before the choice would publish the copy it replaced.
+    this.checkId++;
+    this.inFlightCheck = null;
   }
 
   async refresh(): Promise<CliAvailability> {
@@ -450,7 +476,7 @@ export class CliAvailabilityService {
    */
   async findCopies(agentId: string, config: AgentConfig): Promise<string[]> {
     if (this.details === null) await this.checkAvailability();
-    const detail = this.details?.[agentId];
+    const detail = (await this.getSettledDetails())?.[agentId];
     const launchPath = detail && isAgentLaunchable(detail.state) ? detail.resolvedPath : null;
     if (!launchPath && detail?.chosenPath === undefined) return [];
 

@@ -24,6 +24,7 @@ vi.mock("@/utils/agentLaunchCommand", () => ({
   resolveCurrentAgentLaunchBaseCommand: vi.fn(async () => undefined),
   getCurrentLaunchCliDetail: vi.fn(async () => undefined),
   resolveAgentLaunchBaseCommand: vi.fn((registryCommand: string) => registryCommand),
+  rebaseToCurrentAgentLaunch: vi.fn(async (command: string) => command),
 }));
 
 vi.mock("@/store/panelStore", () => ({
@@ -48,7 +49,10 @@ import {
   restoreClosedTerminals,
   getLiveTerminalIdsForWorktree,
 } from "@/components/Worktree/worktreeDeleteHelper";
-import { resolveCurrentAgentLaunchBaseCommand } from "@/utils/agentLaunchCommand";
+import {
+  rebaseToCurrentAgentLaunch,
+  resolveCurrentAgentLaunchBaseCommand,
+} from "@/utils/agentLaunchCommand";
 
 const getInfoMock = vi.fn<(id: string) => Promise<{ hasPty: boolean }>>();
 // `waitForTerminalsToClose` reads `window.electron.terminal.getInfo`; stub just
@@ -70,6 +74,8 @@ beforeEach(() => {
   removePanelMock.mockReset();
   addPanelMock.mockReset().mockResolvedValue("ok");
   buildResumeCommandMock.mockReset();
+  vi.mocked(rebaseToCurrentAgentLaunch).mockClear();
+  vi.mocked(resolveCurrentAgentLaunchBaseCommand).mockClear();
   // `waitForTerminalsToClose` treats a terminal as closed only once `getInfo`
   // rejects (the backend has fully forgotten it) — `hasPty: false` alone is
   // deliberately insufficient (the Windows cwd-lock window). Reject to simulate
@@ -193,6 +199,25 @@ describe("restoreClosedTerminals", () => {
         focusPolicy: "preserve",
       })
     );
+  });
+
+  // Starting over keeps the stored arguments but starts the copy a launch starts
+  // now, which may have been chosen since the pane launched (#16399).
+  it("starts the stored launch command with the copy a launch starts now", async () => {
+    vi.mocked(rebaseToCurrentAgentLaunch).mockResolvedValueOnce("/chosen/claude --model opus");
+    await restoreClosedTerminals([
+      { id: "agent", location: "grid", command: "claude --model opus", launchAgentId: "claude" },
+    ]);
+    expect(rebaseToCurrentAgentLaunch).toHaveBeenCalledWith("claude --model opus", "claude");
+    expect(addPanelMock).toHaveBeenCalledWith(
+      expect.objectContaining({ command: "/chosen/claude --model opus" })
+    );
+  });
+
+  it("replays a plain terminal's command untouched", async () => {
+    await restoreClosedTerminals([{ id: "shell", location: "grid", command: "npm run dev" }]);
+    expect(rebaseToCurrentAgentLaunch).not.toHaveBeenCalled();
+    expect(addPanelMock).toHaveBeenCalledWith(expect.objectContaining({ command: "npm run dev" }));
   });
 
   it("falls back to the stored launch command when there is no session id", async () => {

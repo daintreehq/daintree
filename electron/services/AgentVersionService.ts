@@ -305,7 +305,7 @@ export class AgentVersionService {
     // A chosen copy is asked by its path, and only while it can launch: the
     // registry command would answer for whichever copy PATH reaches first.
     let command = config.command;
-    const detail = this.cliAvailabilityService.getDetails()?.[agentId];
+    const detail = (await this.cliAvailabilityService.getSettledDetails())?.[agentId];
     if (detail?.chosenPath !== undefined) {
       if (!isAgentLaunchable(detail.state) || !detail.resolvedPath) return null;
       command = detail.resolvedPath;
