@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { RefObject } from "react";
-import type { CanopyReadMark } from "@shared/types/ipc/canopy";
+import type { CanopyReadMark, CanopyTrashOutcome } from "@shared/types/ipc/canopy";
 import type { HostId } from "@shared/types/remoteHosts";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { useCanopyStore } from "@/store/canopyStore";
@@ -16,7 +16,13 @@ import {
   type CanopyPaneFocus,
 } from "./CanopyCard";
 import type { CanopyRowMenuActions } from "./CanopyRowMenu";
-import type { CanopyApi, CanopyTerminalApi } from "./canopyHostSource";
+import {
+  hostRefusal,
+  refusedOutcomes,
+  type CanopyApi,
+  type CanopyTerminalApi,
+} from "./canopyHostSource";
+import { bulkTrashTarget } from "./canopyBulkTrash";
 import { useCanopyFrame } from "./canopyFrame";
 import { placeOf } from "./canopyInboxPlace";
 
@@ -387,6 +393,58 @@ export function useCanopyInboxActions({
     );
   };
 
+  /**
+   * Trash the runs a bulk trash confirmed, one call per host, and answer what
+   * became of each. One Undo, Z or the line, takes back every run it trashed,
+   * on the host that trashed it, whichever host the panel shows by then.
+   */
+  const trashMany = (items: readonly CanopyItem[]): Promise<CanopyTrashOutcome[]> => {
+    const trashedOn = api;
+    const targets = items.map(bulkTrashTarget);
+    const undo = reserveUndo();
+    return trashedOn
+      .trashBatch(targets)
+      .catch((error: unknown) => refusedOutcomes(targets, error))
+      .then((outcomes) => {
+        const trashed = outcomes.filter((outcome) => "receipt" in outcome);
+        const receipts = trashed.flatMap((outcome) =>
+          "receipt" in outcome && outcome.receipt !== null ? [outcome.receipt] : []
+        );
+        if (receipts.length === 0) {
+          undo.forget();
+          return outcomes;
+        }
+        undo.land(
+          () =>
+            safeFireAndForget(
+              trashedOn
+                .untrashBatch(receipts)
+                .then((restored) => restored.filter((outcome) => outcome.error !== undefined))
+                .catch((error: unknown) => {
+                  const reason = hostRefusal(error);
+                  return receipts.map((receipt) => ({ receipt, error: reason }));
+                })
+                .then((failed) => {
+                  if (failed.length === 0) return;
+                  // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+                  notify({
+                    type: "error",
+                    title: "Couldn't restore terminals",
+                    message:
+                      failed.length === 1
+                        ? failed[0]!.error!
+                        : `${pluralize(failed.length, "terminal")} weren't restored. ${failed[0]!.error!}`,
+                    context: { eventKind: "agent" },
+                    duration: 6000,
+                  });
+                })
+            ),
+          { line: `Trashed ${pluralize(trashed.length, "agent")}` }
+        );
+        return outcomes;
+      });
+  };
+
   // Trash from a row's menu arms it as its first press does; the pane's
   // button or ⌘⌫ confirms. Bumped per request, for the run it names.
   const [trashArm, setTrashArm] = useState<{ runId: string; request: number } | null>(null);
@@ -520,6 +578,7 @@ export function useCanopyInboxActions({
     handlers,
     toggleRead,
     markAllRead,
+    trashMany,
     askRename,
     rowMenu,
     setAside,

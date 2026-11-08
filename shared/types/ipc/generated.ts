@@ -186,6 +186,7 @@ export interface GeneratedIpcInvokeMap {
         | "canopy:get-snapshot"
         | "canopy:mark-all-read"
         | "canopy:mark-seen"
+        | "canopy:read-input-lines"
         | "canopy:refresh"
         | "canopy:remove-trashed"
         | "canopy:rename"
@@ -206,8 +207,10 @@ export interface GeneratedIpcInvokeMap {
         | "canopy:terminal-send-key"
         | "canopy:terminal-submit"
         | "canopy:trash"
+        | "canopy:trash-batch"
         | "canopy:unarchive"
         | "canopy:untrash"
+        | "canopy:untrash-batch"
         | "canopy:unwatch-terminal"
         | "canopy:watch-terminal"
         | "fleet:get-snapshot",
@@ -224,6 +227,9 @@ export interface GeneratedIpcInvokeMap {
       | import("./canopy.js").CanopyReadMark[]
       | import("./fleet.js").FleetSnapshot
       | import("./canopy.js").CanopyRestoreOutcome
+      | import("./canopy.js").CanopyInputLineReading[]
+      | import("./canopy.js").CanopyTrashOutcome[]
+      | import("./canopy.js").CanopyUntrashOutcome[]
       | null;
   };
   "canopy-host:list-assistants": {
@@ -383,6 +389,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../assistantWork.js").AssistantWorkReading;
   };
+  "canopy:read-input-lines": {
+    args: [targets: import("./canopy.js").CanopyRunTarget[]];
+    result: import("./canopy.js").CanopyInputLineReading[];
+  };
   "canopy:refresh": {
     args: [];
     result: void;
@@ -509,6 +519,10 @@ export interface GeneratedIpcInvokeMap {
     args: [runId: string, target: import("./canopy.js").CanopyTarget];
     result: number | null;
   };
+  "canopy:trash-batch": {
+    args: [targets: import("./canopy.js").CanopyRunTarget[]];
+    result: import("./canopy.js").CanopyTrashOutcome[];
+  };
   "canopy:unarchive": {
     args: [runId: string, target: import("./canopy.js").CanopyTarget];
     result: void;
@@ -516,6 +530,10 @@ export interface GeneratedIpcInvokeMap {
   "canopy:untrash": {
     args: [receipt: number];
     result: void;
+  };
+  "canopy:untrash-batch": {
+    args: [receipts: number[]];
+    result: import("./canopy.js").CanopyUntrashOutcome[];
   };
   "canopy:unwatch-terminal": {
     args: [watchId?: number | undefined];

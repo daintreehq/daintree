@@ -110,6 +110,9 @@ export interface GeneratedElectronAPI {
     readAssistantWork(
       ...args: IpcInvokeMap["canopy:read-assistant-work"]["args"]
     ): Promise<IpcInvokeMap["canopy:read-assistant-work"]["result"]>;
+    readInputLines(
+      ...args: IpcInvokeMap["canopy:read-input-lines"]["args"]
+    ): Promise<IpcInvokeMap["canopy:read-input-lines"]["result"]>;
     refresh(
       ...args: IpcInvokeMap["canopy:refresh"]["args"]
     ): Promise<IpcInvokeMap["canopy:refresh"]["result"]>;
@@ -188,12 +191,18 @@ export interface GeneratedElectronAPI {
     trash(
       ...args: IpcInvokeMap["canopy:trash"]["args"]
     ): Promise<IpcInvokeMap["canopy:trash"]["result"]>;
+    trashBatch(
+      ...args: IpcInvokeMap["canopy:trash-batch"]["args"]
+    ): Promise<IpcInvokeMap["canopy:trash-batch"]["result"]>;
     unarchive(
       ...args: IpcInvokeMap["canopy:unarchive"]["args"]
     ): Promise<IpcInvokeMap["canopy:unarchive"]["result"]>;
     untrash(
       ...args: IpcInvokeMap["canopy:untrash"]["args"]
     ): Promise<IpcInvokeMap["canopy:untrash"]["result"]>;
+    untrashBatch(
+      ...args: IpcInvokeMap["canopy:untrash-batch"]["args"]
+    ): Promise<IpcInvokeMap["canopy:untrash-batch"]["result"]>;
     unwatchTerminal(
       ...args: IpcInvokeMap["canopy:unwatch-terminal"]["args"]
     ): Promise<IpcInvokeMap["canopy:unwatch-terminal"]["result"]>;

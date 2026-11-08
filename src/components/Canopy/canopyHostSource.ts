@@ -5,8 +5,13 @@ import { remoteHostOfView } from "@/services/terminal/remoteLoopbackLinks";
 import type { BulkTransport } from "@shared/utils/canopyBulkEnable";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { clientErrorCode } from "@/utils/clientAppError";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { CanopyHostChannel } from "@shared/types/ipc/canopyHost";
-import type { CanopySnapshot } from "@shared/types/ipc/canopy";
+import type {
+  CanopyRunTarget,
+  CanopySnapshot,
+  CanopyTrashOutcome,
+} from "@shared/types/ipc/canopy";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 import type { IpcInvokeMap } from "@shared/types/ipc/maps";
 import { LOCAL_HOST_ID, type HostId } from "@shared/types/remoteHosts";
@@ -32,10 +37,13 @@ export type CanopyApi = Pick<
   | "reread"
   | "runBranch"
   | "searchScreens"
+  | "readInputLines"
   | "setMode"
   | "rename"
   | "trash"
+  | "trashBatch"
   | "untrash"
+  | "untrashBatch"
   | "restoreTrashed"
   | "removeTrashed"
   | "emptyTrash"
@@ -54,10 +62,13 @@ export const ownCanopyApi: CanopyApi = {
   reread: (...args) => window.electron.canopy.reread(...args),
   runBranch: (...args) => window.electron.canopy.runBranch(...args),
   searchScreens: (...args) => window.electron.canopy.searchScreens(...args),
+  readInputLines: (...args) => window.electron.canopy.readInputLines(...args),
   setMode: (...args) => window.electron.canopy.setMode(...args),
   rename: (...args) => window.electron.canopy.rename(...args),
   trash: (...args) => window.electron.canopy.trash(...args),
+  trashBatch: (...args) => window.electron.canopy.trashBatch(...args),
   untrash: (...args) => window.electron.canopy.untrash(...args),
+  untrashBatch: (...args) => window.electron.canopy.untrashBatch(...args),
   restoreTrashed: (...args) => window.electron.canopy.restoreTrashed(...args),
   removeTrashed: (...args) => window.electron.canopy.removeTrashed(...args),
   emptyTrash: (...args) => window.electron.canopy.emptyTrash(...args),
@@ -81,10 +92,13 @@ export function remoteCanopyApi(hostId: HostId): CanopyApi {
     reread: on("canopy:reread"),
     runBranch: on("canopy:run-branch"),
     searchScreens: on("canopy:search-screens"),
+    readInputLines: on("canopy:read-input-lines"),
     setMode: on("canopy:set-mode"),
     rename: on("canopy:rename"),
     trash: on("canopy:trash"),
+    trashBatch: on("canopy:trash-batch"),
     untrash: on("canopy:untrash"),
+    untrashBatch: on("canopy:untrash-batch"),
     restoreTrashed: on("canopy:restore-trashed"),
     removeTrashed: on("canopy:remove-trashed"),
     emptyTrash: on("canopy:empty-trash"),
@@ -101,6 +115,27 @@ export function unlessHostDisconnected<T>(call: Promise<T>): Promise<T | undefin
     if (clientErrorCode(error) === "HOST_DISCONNECTED") return undefined;
     throw error;
   });
+}
+
+/** What a host's refusal of a whole bulk call says, in words for the person. */
+export function hostRefusal(error: unknown): string {
+  // A host on a Daintree from before bulk trash refuses the call by name.
+  if (
+    clientErrorCode(error) === "VALIDATION" &&
+    formatErrorMessage(error, "").includes("can't be called on another host's Canopy")
+  ) {
+    return "Its Daintree is too old to trash agents together. Update it, or trash them one at a time.";
+  }
+  return formatErrorMessage(error, "It couldn't be reached.");
+}
+
+/** A whole host's refusal, said for every run it was asked to trash. */
+export function refusedOutcomes(
+  targets: readonly CanopyRunTarget[],
+  error: unknown
+): CanopyTrashOutcome[] {
+  const reason = hostRefusal(error);
+  return targets.map((target) => ({ runId: target.runId, error: reason }));
 }
 
 /** How long a bulk run waits on a saved host it had to dial. */

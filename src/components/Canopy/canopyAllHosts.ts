@@ -1,7 +1,9 @@
 import { canopyHostClient } from "@/clients/canopyHostClient";
 import {
+  hostRefusal,
   ownCanopyApi,
   ownCanopyTerminalApi,
+  refusedOutcomes,
   remoteCanopyApi,
   remoteCanopyTerminalApi,
   type CanopyApi,
@@ -14,6 +16,8 @@ import {
   type CanopySnapshot,
   type CanopyTerminalData,
   type CanopyTerminalView,
+  type CanopyTrashOutcome,
+  type CanopyUntrashOutcome,
 } from "@shared/types/ipc/canopy";
 import type { FleetSnapshot } from "@shared/types/ipc/fleet";
 import { CANOPY_TRASH_LIMIT } from "@shared/config/trash";
@@ -356,7 +360,50 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
       // A host that can't search still matches what the panel holds of it.
       return settled.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
     },
+    // A host that can't read its input lines leaves its runs unread.
+    readInputLines: async (targets) => {
+      const groups = groupByHost(targets, (target) => target.runId);
+      const settled = await mapLimited(
+        [...groups].filter(([hostId]) => known.has(hostId)),
+        SEARCH_CONCURRENCY,
+        aliveNow(),
+        ([hostId, group]) =>
+          apiFor(hostId)
+            .readInputLines(group.map(({ item, id }) => ({ ...item, runId: id })))
+            .then((readings) => readings.map((reading) => keyed(hostId, reading)))
+      );
+      return settled.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
+    },
     setMode: () => Promise.reject(new Error("Canopy is turned on one host at a time.")),
+    // Each host trashes its own runs; a host that refuses or can't be reached
+    // says so for each of its runs, and the others' still go.
+    trashBatch: async (targets) => {
+      const groups = groupByHost(targets, (target) => target.runId);
+      const settled = await Promise.all(
+        [...groups].map(async ([hostId, group]): Promise<CanopyTrashOutcome[]> => {
+          const keys = group.map(({ item }) => item);
+          if (!known.has(hostId)) {
+            return refusedOutcomes(keys, new Error("That host isn't shown here."));
+          }
+          try {
+            const outcomes = await apiFor(hostId).trashBatch(
+              group.map(({ item, id }) => ({ ...item, runId: id }))
+            );
+            return outcomes.map((outcome): CanopyTrashOutcome => {
+              const runId = allHostsKey(hostId, outcome.runId);
+              if ("error" in outcome) return { runId, error: outcome.error };
+              if (outcome.receipt === null) return { runId, receipt: null };
+              const mine = ++receipt;
+              trashed.set(mine, { hostId, receipt: outcome.receipt });
+              return { runId, receipt: mine };
+            });
+          } catch (error) {
+            return refusedOutcomes(keys, error);
+          }
+        })
+      );
+      return settled.flat();
+    },
     trash: async (key, target) => {
       const parsed = parseAllHostsKey(key);
       if (!parsed || !known.has(parsed.hostId)) return unknownRun();
@@ -371,6 +418,39 @@ export function createAllHostsRoute(ownHostId: HostId, hostIds: readonly HostId[
       if (!entry) return unknownRun();
       trashed.delete(mine);
       await apiFor(entry.hostId).untrash(entry.receipt);
+    },
+    untrashBatch: async (receipts) => {
+      const outcomes: CanopyUntrashOutcome[] = [];
+      const byHost = new Map<HostId, Array<{ mine: number; receipt: number }>>();
+      for (const mine of receipts) {
+        const entry = trashed.get(mine);
+        if (!entry) {
+          outcomes.push({ receipt: mine, error: "That terminal has left the trash." });
+          continue;
+        }
+        trashed.delete(mine);
+        const group = byHost.get(entry.hostId);
+        if (group) group.push({ mine, receipt: entry.receipt });
+        else byHost.set(entry.hostId, [{ mine, receipt: entry.receipt }]);
+      }
+      const settled = await Promise.all(
+        [...byHost].map(async ([hostId, group]): Promise<CanopyUntrashOutcome[]> => {
+          const mineOf = new Map(group.map(({ mine, receipt }) => [receipt, mine]));
+          try {
+            const answered = await apiFor(hostId).untrashBatch(
+              group.map(({ receipt }) => receipt)
+            );
+            return answered.flatMap((outcome) => {
+              const mine = mineOf.get(outcome.receipt);
+              return mine === undefined ? [] : [{ ...outcome, receipt: mine }];
+            });
+          } catch (error) {
+            const reason = hostRefusal(error);
+            return group.map(({ mine }) => ({ receipt: mine, error: reason }));
+          }
+        })
+      );
+      return [...outcomes, ...settled.flat()];
     },
     // What comes back is named as its host knows it: the inbox holds it by key.
     restoreTrashed: (key, ...rest) =>

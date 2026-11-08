@@ -28,6 +28,13 @@ function agentStepOf(event: KeyboardEvent<HTMLElement>): -1 | 1 | null {
   return event.key === "ArrowUp" ? -1 : 1;
 }
 
+/** ⌘A on macOS, Ctrl+A elsewhere, and nothing more held. */
+function isSelectAll(event: KeyboardEvent<HTMLElement>): boolean {
+  if (event.key !== "a" && event.key !== "A") return false;
+  if (event.shiftKey || event.altKey) return false;
+  return isMac() ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+}
+
 /** Where the keyboard is inside the pane: the reply composer, the live terminal, or neither. */
 export function paneFocusOf(element: Element | null): CanopyPaneFocus {
   if (!element) return null;
@@ -62,6 +69,7 @@ export function useCanopyInboxKeyboard({
   askRename,
   toggleRead,
   markAllRead,
+  onSelectAll,
   onPastEnd,
 }: {
   /** What the keyboard walks: the list, then the archived runs once shown. */
@@ -86,6 +94,8 @@ export function useCanopyInboxKeyboard({
   askRename: (item: CanopyItem) => void;
   toggleRead: (item: CanopyItem) => void;
   markAllRead: () => void;
+  /** ⌘A in the list: every result of the search, to review for the Trash. Absent with no search. */
+  onSelectAll?: () => void;
   /** Down off the inbox's last row, into the Trash below it: false when there is none. */
   onPastEnd?: () => boolean;
 }) {
@@ -230,6 +240,14 @@ export function useCanopyInboxKeyboard({
     if (event.code === "KeyU" && event.altKey && !event.metaKey && !event.ctrlKey) {
       event.preventDefault();
       if (!event.repeat) markAllRead();
+      return;
+    }
+    // ⌘A with a search: all of its results, reviewed before they're trashed.
+    // Only from a row: in the search, ⌘A selects the words typed.
+    if (onSelectAll && isSelectAll(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!event.repeat) onSelectAll();
       return;
     }
     if (event.metaKey || event.ctrlKey || event.altKey) return;

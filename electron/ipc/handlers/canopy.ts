@@ -9,7 +9,9 @@ import type {
   CanopyPlan,
   CanopyReadMark,
   CanopyReadRestore,
+  CanopyInputLineReading,
   CanopyReadTarget,
+  CanopyRunTarget,
   CanopyScreenSearchTarget,
   CanopySnapshot,
   CanopyTarget,
@@ -23,7 +25,9 @@ import type {
   CanopyResumeRequest,
   CanopyTrashEntry,
   CanopyTrashRequest,
+  CanopyTrashOutcome,
   CanopyTrashTarget,
+  CanopyUntrashOutcome,
 } from "../../../shared/types/ipc/canopy.js";
 import {
   CANOPY_SEARCH_MAX_ALTERNATIVES,
@@ -58,6 +62,7 @@ import { getLifecycleLedger } from "../../services/pty/lifecycleLedger.js";
 import { attributeClose } from "../../services/pty/closeAttribution.js";
 import { getAgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
 import { searchScreens } from "../../services/canopy/canopyScreenSearch.js";
+import { readInputLines } from "../../services/canopy/canopyInputLines.js";
 import { isCanopyMode, readCanopyMode } from "../../services/canopy/canopyMode.js";
 import { CanopyLocalReader } from "../../services/canopy/canopyLocalReader.js";
 import {
@@ -126,7 +131,7 @@ import { projectStore } from "../../services/ProjectStore.js";
 import { getDefaultPanelTitle } from "../../../shared/config/panelKindRegistry.js";
 import type { FleetRunRow } from "../../../shared/types/ipc/fleet.js";
 import type { PanelLocation } from "../../../shared/types/panel.js";
-import { TRASH_TTL_MS } from "../../../shared/config/trash.js";
+import { CANOPY_TRASH_LIMIT, TRASH_TTL_MS } from "../../../shared/config/trash.js";
 
 const MAX_INPUT_LENGTH = 64_000;
 const MAX_SUBMIT_LENGTH = 100_000;
@@ -575,6 +580,30 @@ function assertTarget(value: unknown): asserts value is CanopyTarget {
   if (typeof target.spawnedAt !== "number" || !Number.isFinite(target.spawnedAt)) {
     throw new Error("Invalid target");
   }
+}
+
+/**
+ * The most runs one bulk trash, its Undo or its input-line check may name: the
+ * Trash lists no more than this, so more would leave some with no way back.
+ */
+const MAX_BULK_TRASH = CANOPY_TRASH_LIMIT;
+
+function assertRunTargets(value: unknown): asserts value is CanopyRunTarget[] {
+  if (!Array.isArray(value) || value.length > MAX_BULK_TRASH) throw new Error("Invalid runs");
+  for (const target of value) {
+    if (typeof target !== "object" || target === null || Array.isArray(target)) {
+      throw new Error("Invalid run");
+    }
+    assertRunId((target as Record<string, unknown>).runId);
+    assertTarget(target);
+  }
+}
+
+/** Why one run of a bulk action was refused, in the words the user sees. */
+function refusalOf(error: unknown, fallback: string): string {
+  if (error instanceof AppError && error.userMessage) return error.userMessage;
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
 }
 
 /**
@@ -2075,6 +2104,61 @@ export const canopyNamespace = defineIpcNamespace({
     ),
 
     /**
+     * Trash a set of runs the person reviewed and confirmed in the panel, each
+     * as `trash` would. One call for the set: `trash`'s own limit is for a key
+     * held down, and a set past it would stop halfway. A run this caller
+     * doesn't drive, or that has gone or respawned, is refused alone and named
+     * as such; the rest are trashed.
+     */
+    trashBatch: op(
+      CANOPY_METHOD_CHANNELS.trashBatch,
+      async (ctx, targets: CanopyRunTarget[]): Promise<CanopyTrashOutcome[]> => {
+        checkRateLimit(CANOPY_METHOD_CHANNELS.trashBatch, 10, 10_000);
+        assertRunTargets(targets);
+        const outcomes: CanopyTrashOutcome[] = [];
+        const seen = new Set<string>();
+        for (const target of targets) {
+          if (seen.has(target.runId)) continue;
+          seen.add(target.runId);
+          try {
+            if (!drivesRun(ctx, target.runId)) {
+              throw drivenElsewhere(requirePtyClient().getTerminalProjectId(target.runId));
+            }
+            await assertSameIncarnation(target.runId, target);
+            outcomes.push({
+              runId: target.runId,
+              receipt: trashThroughOwningViews(target.runId, target.spawnedAt),
+            });
+          } catch (error) {
+            outcomes.push({ runId: target.runId, error: refusalOf(error, "It wasn't trashed.") });
+          }
+        }
+        return outcomes;
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * What each run's input box holds, so the panel's bulk trash can leave a
+     * typed draft unticked. Read here, on the machine the terminal runs on:
+     * only the state goes back, never the text. Only runs the fleet holds in
+     * the same incarnation are read.
+     */
+    readInputLines: op(
+      CANOPY_METHOD_CHANNELS.readInputLines,
+      async (targets: CanopyRunTarget[]): Promise<CanopyInputLineReading[]> => {
+        checkRateLimit(CANOPY_METHOD_CHANNELS.readInputLines, 10, 10_000);
+        assertRunTargets(targets);
+        const runs = getFleetSnapshotService()?.getLastBroadcast()?.runs ?? [];
+        const live = new Set(runs.map((run) => `${run.runId}\u0000${run.spawnedAt}`));
+        const known = targets.filter((target) =>
+          live.has(`${target.runId}\u0000${target.spawnedAt}`)
+        );
+        return readInputLines(requirePtyClient(), known);
+      }
+    ),
+
+    /**
      * Read one run again, its words included, for a reading the user thinks
      * is wrong: a screen that hasn't moved is otherwise never read again.
      */
@@ -2115,6 +2199,42 @@ export const canopyNamespace = defineIpcNamespace({
           throw drivenElsewhere(trashed.workspaceId);
         }
         await restoreThroughOwningViews(receipt, (held) => drivesProject(ctx, held.workspaceId));
+      },
+      { withContext: true }
+    ),
+
+    /**
+     * Take back a bulk trash, by the receipts `trashBatch` gave, each as
+     * `untrash` would. A receipt that has left the trash, or whose project
+     * another screen drives, is refused alone; the rest come back.
+     */
+    untrashBatch: op(
+      CANOPY_METHOD_CHANNELS.untrashBatch,
+      async (ctx, receipts: number[]): Promise<CanopyUntrashOutcome[]> => {
+        checkRateLimit(CANOPY_METHOD_CHANNELS.untrashBatch, 10, 10_000);
+        if (
+          !Array.isArray(receipts) ||
+          receipts.length > MAX_BULK_TRASH ||
+          !receipts.every((receipt) => Number.isSafeInteger(receipt) && receipt > 0)
+        ) {
+          throw new Error("Invalid trash receipts");
+        }
+        const outcomes: CanopyUntrashOutcome[] = [];
+        for (const receipt of new Set(receipts)) {
+          try {
+            const trashed = recentlyTrashed.get(receipt);
+            if (trashed && !drivesProject(ctx, trashed.workspaceId)) {
+              throw drivenElsewhere(trashed.workspaceId);
+            }
+            await restoreThroughOwningViews(receipt, (held) =>
+              drivesProject(ctx, held.workspaceId)
+            );
+            outcomes.push({ receipt });
+          } catch (error) {
+            outcomes.push({ receipt, error: refusalOf(error, "It wasn't restored.") });
+          }
+        }
+        return outcomes;
       },
       { withContext: true }
     ),
