@@ -518,12 +518,7 @@ function RunRow({
         />
       </span>
 
-      <span
-        className={cn(
-          "min-w-0 flex-1 truncate text-sm leading-tight",
-          isSelected ? "text-text-primary" : "text-text-secondary"
-        )}
-      >
+      <span className="min-w-0 flex-1 truncate text-sm leading-tight text-text-primary">
         {row.title}
       </span>
 
