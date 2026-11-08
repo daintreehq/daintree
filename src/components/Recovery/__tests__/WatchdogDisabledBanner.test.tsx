@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
+import type { ActionDispatchResult } from "@shared/types/actions";
 import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
 
 vi.mock("@/services/ActionService", () => ({
@@ -120,10 +121,10 @@ describe("WatchdogDisabledBanner", () => {
   });
 
   describe("when the restart request fails", () => {
-    const refused = {
+    const refused: ActionDispatchResult = {
       ok: false,
       error: { code: "EXECUTION_ERROR", message: "boom" },
-    } as never;
+    };
 
     const restartButton = () => screen.getByRole("button", { name: /Restart watchdog/i });
     const failureLine = () => screen.queryByTestId("watchdog-banner-restart-error");
@@ -171,7 +172,7 @@ describe("WatchdogDisabledBanner", () => {
       expect(useDiagnosticsStore.getState().activeTab).toBe("logs");
     });
 
-    it("clears the line and the pointer when the retry starts", async () => {
+    it("clears the line and the pointer when the retry starts, not when it ends", async () => {
       mockedDispatch.mockResolvedValueOnce(refused);
       render(<WatchdogDisabledBanner />);
       await act(async () => {
@@ -179,46 +180,18 @@ describe("WatchdogDisabledBanner", () => {
       });
       expect(failureLine()).not.toBeNull();
 
+      let settle!: (value: ActionDispatchResult) => void;
+      mockedDispatch.mockReturnValueOnce(new Promise((resolve) => (settle = resolve)));
       await act(async () => {
         fireEvent.click(restartButton());
       });
       expect(mockedDispatch).toHaveBeenCalledTimes(2);
       expect(failureLine()).toBeNull();
       expect(screen.queryByRole("button", { name: "Open Diagnostics" })).toBeNull();
-    });
-
-    it("starts the next disable with neither the failure line nor a stuck button", async () => {
-      mockedDispatch.mockResolvedValueOnce(refused);
-      render(<WatchdogDisabledBanner />);
-      await act(async () => {
-        fireEvent.click(restartButton());
-      });
-      expect(failureLine()).not.toBeNull();
-
-      act(() => {
-        usePanelStore.setState({ watchdogStatus: "active" });
-      });
-      act(() => {
-        usePanelStore.setState({ watchdogStatus: "disabled" });
-      });
-      expect(failureLine()).toBeNull();
-      expect(restartButton().getAttribute("aria-disabled")).toBeNull();
-    });
-
-    it("does not carry a successful restart's loading state into the next disable", async () => {
-      render(<WatchdogDisabledBanner />);
-      await act(async () => {
-        fireEvent.click(restartButton());
-      });
       expect(restartButton().getAttribute("aria-disabled")).toBe("true");
 
-      act(() => {
-        usePanelStore.setState({ watchdogStatus: "active" });
-      });
-      act(() => {
-        usePanelStore.setState({ watchdogStatus: "disabled" });
-      });
-      expect(restartButton().getAttribute("aria-disabled")).toBeNull();
+      await act(async () => settle({ ok: true, result: undefined }));
+      expect(failureLine()).toBeNull();
     });
   });
 

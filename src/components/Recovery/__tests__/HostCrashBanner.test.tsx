@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, cleanup, act } from "@testing-library/react";
 import type { CrashType } from "@shared/types/pty-host";
+import type { ActionDispatchResult } from "@shared/types/actions";
 
 vi.mock("@/services/ActionService", () => ({
   actionService: {
@@ -166,10 +167,10 @@ describe("HostCrashBanner", () => {
   });
 
   describe("when the restart request fails", () => {
-    const refused = {
+    const refused: ActionDispatchResult = {
       ok: false,
       error: { code: "EXECUTION_ERROR", message: "boom" },
-    } as never;
+    };
 
     const restartButton = () => screen.getByRole("button", { name: /Restart service/i });
     const failureLine = () => screen.queryByTestId("host-crash-banner-restart-error");
@@ -202,7 +203,7 @@ describe("HostCrashBanner", () => {
       expect(restartButton().getAttribute("aria-disabled")).toBeNull();
     });
 
-    it("clears the line when the retry starts and leaves none after it succeeds", async () => {
+    it("clears the line when the retry starts, not when it ends", async () => {
       mockedDispatch.mockResolvedValueOnce(refused);
       render(<HostCrashBanner />);
       await act(async () => {
@@ -210,10 +211,16 @@ describe("HostCrashBanner", () => {
       });
       expect(failureLine()).not.toBeNull();
 
+      let settle!: (value: ActionDispatchResult) => void;
+      mockedDispatch.mockReturnValueOnce(new Promise((resolve) => (settle = resolve)));
       await act(async () => {
         fireEvent.click(restartButton());
       });
       expect(mockedDispatch).toHaveBeenCalledTimes(2);
+      expect(failureLine()).toBeNull();
+      expect(restartButton().getAttribute("aria-disabled")).toBe("true");
+
+      await act(async () => settle({ ok: true, result: undefined }));
       expect(failureLine()).toBeNull();
     });
 
@@ -230,7 +237,7 @@ describe("HostCrashBanner", () => {
       );
     });
 
-    it("starts the next crash with neither the failure line nor a stuck button", async () => {
+    it("returns from automatic recovery with neither the failure line nor a stuck button", async () => {
       mockedDispatch.mockResolvedValueOnce(refused);
       render(<HostCrashBanner />);
       await act(async () => {
@@ -239,7 +246,7 @@ describe("HostCrashBanner", () => {
       expect(failureLine()).not.toBeNull();
 
       act(() => {
-        usePanelStore.setState({ backendStatus: "connected" });
+        usePanelStore.setState({ backendStatus: "recovering" });
       });
       act(() => {
         usePanelStore.setState({ backendStatus: "disconnected" });
@@ -248,7 +255,7 @@ describe("HostCrashBanner", () => {
       expect(restartButton().getAttribute("aria-disabled")).toBeNull();
     });
 
-    it("does not carry a successful restart's loading state into the next crash", async () => {
+    it("does not carry an accepted restart's loading state back from automatic recovery", async () => {
       render(<HostCrashBanner />);
       await act(async () => {
         fireEvent.click(restartButton());
@@ -256,7 +263,7 @@ describe("HostCrashBanner", () => {
       expect(restartButton().getAttribute("aria-disabled")).toBe("true");
 
       act(() => {
-        usePanelStore.setState({ backendStatus: "connected" });
+        usePanelStore.setState({ backendStatus: "recovering" });
       });
       act(() => {
         usePanelStore.setState({ backendStatus: "disconnected" });

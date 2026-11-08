@@ -277,21 +277,32 @@ describe("SafeModeBanner", () => {
       await openAndConfirm();
       expect(dialogHint()).not.toBeNull();
 
-      resetAndRelaunch.mockReturnValueOnce(new Promise(() => {}));
+      let accept!: () => void;
+      resetAndRelaunch.mockReturnValueOnce(new Promise<void>((resolve) => (accept = resolve)));
       await act(async () => {
         fireEvent.click(confirmButton());
       });
       expect(resetAndRelaunch).toHaveBeenCalledTimes(2);
       expect(dialogHint()).toBeNull();
+      expect(screen.getByRole("status").textContent).not.toMatch(/Couldn't restart Daintree/);
+      expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
+
+      await act(async () => accept());
+      expect(dialogHint()).toBeNull();
+      expect(screen.getByRole("status").textContent).not.toMatch(/Couldn't restart Daintree/);
+      // The relaunch is under way: the dialog stays locked and nothing more is said.
       expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
       expect(useAnnouncerStore.getState().nextId).toBe(2);
     });
 
     it("says nothing when the restart is accepted", async () => {
-      resetAndRelaunch.mockReturnValueOnce(new Promise(() => {}));
+      let accept!: () => void;
+      resetAndRelaunch.mockReturnValueOnce(new Promise<void>((resolve) => (accept = resolve)));
       render(<SafeModeBanner />);
       await openAndConfirm();
+      await act(async () => accept());
       expect(dialogHint()).toBeNull();
+      expect(screen.getByRole("status").textContent).not.toMatch(/Couldn't restart Daintree/);
       expect(useAnnouncerStore.getState().nextId).toBe(1);
     });
   });

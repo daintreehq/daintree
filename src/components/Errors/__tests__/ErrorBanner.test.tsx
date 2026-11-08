@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { ReactElement } from "react";
-import { act, fireEvent, render as rtlRender, screen } from "@testing-library/react";
+import { act, fireEvent, render as rtlRender, screen, within } from "@testing-library/react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { primeRadix } from "@/components/ui/radix-loader";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -380,9 +380,16 @@ describe("ErrorBanner", () => {
       } as const;
       const failure = { ok: false, error: { code: "EXECUTION_ERROR", message: "git exploded" } };
 
+      const deferred = () => {
+        let settle!: (value: unknown) => void;
+        const promise = new Promise((resolve) => (settle = resolve));
+        return { promise, settle };
+      };
+
+      const recoveryButton = () => screen.getByRole("button", { name: "Pull and rebase" });
       const clickRecovery = async () => {
         await act(async () => {
-          fireEvent.click(screen.getByRole("button", { name: "Pull and rebase" }));
+          fireEvent.click(recoveryButton());
         });
       };
 
@@ -402,22 +409,24 @@ describe("ErrorBanner", () => {
 
         expect(screen.getByText(/Recovery failed/)).toBeTruthy();
         expect(screen.queryByText("Pull the remote changes first")).toBeNull();
-        const button = screen.getByRole("button", { name: "Pull and rebase" });
-        expect(button.getAttribute("aria-disabled")).toBeNull();
+        expect(recoveryButton().getAttribute("aria-disabled")).toBeNull();
 
         await clickRecovery();
         expect(mockDispatch).toHaveBeenCalledTimes(2);
       });
 
-      it("treats a rejected dispatch the same as a refused one", async () => {
+      it("treats a rejected dispatch the same as a refused one, and stays retryable", async () => {
         mockDispatch.mockRejectedValueOnce(new Error("IPC closed"));
         render(<ErrorBanner error={makeError(withHint)} onDismiss={onDismiss} />);
         await clickRecovery();
         expect(screen.getByText(/Recovery failed/)).toBeTruthy();
-        expect(screen.getByRole("button", { name: "Pull and rebase" })).toBeTruthy();
+        expect(recoveryButton().getAttribute("aria-disabled")).toBeNull();
+
+        await clickRecovery();
+        expect(mockDispatch).toHaveBeenCalledTimes(2);
       });
 
-      it("logs the cause without the recovery arguments", async () => {
+      it("logs the cause without the recovery arguments anywhere in the call", async () => {
         mockDispatch.mockResolvedValueOnce(failure);
         const secret = { ...recoveryAction, args: { branch: "feature/private-name" } };
         render(
@@ -428,10 +437,10 @@ describe("ErrorBanner", () => {
         );
         await clickRecovery();
         expect(logError).toHaveBeenCalledTimes(1);
-        const [, cause, context] = vi.mocked(logError).mock.calls[0];
-        expect(cause).toBe(failure.error);
-        expect(context).toEqual({ errorId: "err-1", actionId: "git.pullRebase" });
-        expect(JSON.stringify(context)).not.toContain("private-name");
+        const call = vi.mocked(logError).mock.calls[0];
+        expect(call?.[1]).toBe(failure.error);
+        expect(call?.[2]).toEqual({ errorId: "err-1", actionId: "git.pullRebase" });
+        expect(JSON.stringify([call?.[0], call?.[2]])).not.toContain("private-name");
       });
 
       it("announces each failed attempt once, since the row itself stays quiet", async () => {
@@ -451,30 +460,38 @@ describe("ErrorBanner", () => {
         expect(screen.queryByText(/Recovery failed/)).toBeNull();
       });
 
-      it("clears the line when the retry starts and when it succeeds", async () => {
+      it("clears the line when the retry starts, not when it ends", async () => {
         mockDispatch.mockResolvedValueOnce(failure);
         render(<ErrorBanner error={makeError(withHint)} onDismiss={onDismiss} />);
         await clickRecovery();
         expect(screen.getByText(/Recovery failed/)).toBeTruthy();
 
-        let settle!: (value: unknown) => void;
-        mockDispatch.mockReturnValueOnce(new Promise((resolve) => (settle = resolve)));
+        const retry = deferred();
+        mockDispatch.mockReturnValueOnce(retry.promise);
         await clickRecovery();
         expect(screen.queryByText(/Recovery failed/)).toBeNull();
+        expect(screen.queryByRole("button", { name: "Open Diagnostics" })).toBeNull();
         expect(screen.getByText("Pull the remote changes first")).toBeTruthy();
 
-        await act(async () => settle({ ok: true }));
+        await act(async () => retry.settle({ ok: true }));
         expect(screen.queryByText(/Recovery failed/)).toBeNull();
       });
 
-      it("holds a second click until the first request settles", async () => {
-        let settle!: (value: unknown) => void;
-        mockDispatch.mockReturnValueOnce(new Promise((resolve) => (settle = resolve)));
+      it("shows the button busy and takes one dispatch from two clicks before it paints", async () => {
+        const first = deferred();
+        mockDispatch.mockReturnValueOnce(first.promise);
         render(<ErrorBanner error={makeError(withHint)} onDismiss={onDismiss} />);
-        await clickRecovery();
-        await clickRecovery();
+        // One batch: the second click lands before the first one's loading state
+        // has rendered, so only the handler's own guard can stop it.
+        await act(async () => {
+          fireEvent.click(recoveryButton());
+          fireEvent.click(recoveryButton());
+        });
         expect(mockDispatch).toHaveBeenCalledTimes(1);
-        await act(async () => settle({ ok: true }));
+        expect(recoveryButton().getAttribute("aria-disabled")).toBe("true");
+
+        await act(async () => first.settle({ ok: true }));
+        expect(recoveryButton().getAttribute("aria-disabled")).toBeNull();
         await clickRecovery();
         expect(mockDispatch).toHaveBeenCalledTimes(2);
       });
@@ -487,6 +504,8 @@ describe("ErrorBanner", () => {
           retryability: "user-gated",
           recoveryAction,
         });
+        // Anywhere but Problems, so opening it is the pointer's doing.
+        useDiagnosticsStore.setState({ isOpen: false, activeTab: "logs" });
         render(
           <ErrorBanner
             error={useErrorStore.getState().errors.find((e) => e.id === id)!}
@@ -519,23 +538,93 @@ describe("ErrorBanner", () => {
         expect(screen.getByText("Pull the remote changes first")).toBeTruthy();
       });
 
-      it("keeps the failure to the row whose button failed", async () => {
+      it("drops the line when the recovery action changes under the same timestamp", async () => {
         mockDispatch.mockResolvedValueOnce(failure);
-        render(
-          <>
-            <ErrorBanner error={makeError({ ...withHint, id: "a" })} onDismiss={onDismiss} />
-            <ErrorBanner
-              error={makeError({
-                ...withHint,
-                id: "b",
-                recoveryAction: { label: "Sign in", actionId: "auth.signIn" },
-              })}
-              onDismiss={onDismiss}
-            />
-          </>
+        const error = makeError({ ...withHint, timestamp: 1000 });
+        const { rerender } = render(<ErrorBanner error={error} onDismiss={onDismiss} />);
+        await clickRecovery();
+        expect(screen.getByText(/Recovery failed/)).toBeTruthy();
+
+        rerender(
+          <ErrorBanner
+            error={{
+              ...error,
+              recoveryAction: { label: "Pull and rebase", actionId: "git.other" },
+            }}
+            onDismiss={onDismiss}
+          />
+        );
+        expect(screen.queryByText(/Recovery failed/)).toBeNull();
+      });
+
+      it("ignores a failure that lands after the occurrence changed, but stays busy until then", async () => {
+        const slow = deferred();
+        mockDispatch.mockReturnValueOnce(slow.promise);
+        const error = makeError({ ...withHint, timestamp: 1000 });
+        const { rerender } = render(<ErrorBanner error={error} onDismiss={onDismiss} />);
+        await clickRecovery();
+
+        rerender(<ErrorBanner error={{ ...error, timestamp: 2000 }} onDismiss={onDismiss} />);
+        // The request that is still running keeps the button busy rather than
+        // leaving a live-looking button that swallows its clicks.
+        expect(recoveryButton().getAttribute("aria-disabled")).toBe("true");
+
+        await act(async () => slow.settle(failure));
+        expect(screen.queryByText(/Recovery failed/)).toBeNull();
+        expect(useAnnouncerStore.getState().nextId).toBe(1);
+        expect(recoveryButton().getAttribute("aria-disabled")).toBeNull();
+
+        await clickRecovery();
+        expect(mockDispatch).toHaveBeenCalledTimes(2);
+      });
+
+      it("does not announce a failure that settles after the row is gone", async () => {
+        const slow = deferred();
+        mockDispatch.mockReturnValueOnce(slow.promise);
+        const { unmount } = render(
+          <ErrorBanner error={makeError(withHint)} onDismiss={onDismiss} />
         );
         await clickRecovery();
-        expect(screen.getAllByText(/Recovery failed/)).toHaveLength(1);
+        unmount();
+        await act(async () => slow.settle(failure));
+        expect(useAnnouncerStore.getState().nextId).toBe(1);
+        expect(logError).toHaveBeenCalledTimes(1);
+      });
+
+      it("keeps the failure to the row whose button failed", async () => {
+        mockDispatch.mockResolvedValueOnce(failure);
+        // Same action and timestamp, so only the row itself tells them apart.
+        const shared = { ...withHint, timestamp: 1000 };
+        render(
+          <>
+            <div data-testid="row-a">
+              <ErrorBanner error={makeError({ ...shared, id: "a" })} onDismiss={onDismiss} />
+            </div>
+            <div data-testid="row-b">
+              <ErrorBanner error={makeError({ ...shared, id: "b" })} onDismiss={onDismiss} />
+            </div>
+          </>
+        );
+        await act(async () => {
+          fireEvent.click(
+            within(screen.getByTestId("row-a")).getByRole("button", { name: "Pull and rebase" })
+          );
+        });
+        expect(within(screen.getByTestId("row-a")).queryByText(/Recovery failed/)).not.toBeNull();
+        expect(within(screen.getByTestId("row-b")).queryByText(/Recovery failed/)).toBeNull();
+      });
+
+      it("shows no failure or pointer once the dock owns recovery", async () => {
+        mockDispatch.mockResolvedValueOnce(failure);
+        const error = makeError(withHint);
+        const { rerender } = render(<ErrorBanner error={error} onDismiss={onDismiss} />);
+        await clickRecovery();
+        expect(screen.getByRole("button", { name: "Open Diagnostics" })).toBeTruthy();
+
+        rerender(<ErrorBanner error={{ ...error, promotedToDock: true }} onDismiss={onDismiss} />);
+        expect(screen.queryByText(/Recovery failed/)).toBeNull();
+        expect(screen.queryByRole("button", { name: "Open Diagnostics" })).toBeNull();
+        expect(screen.getByRole("button", { name: "View errors" })).toBeTruthy();
       });
 
       it("lets an automatic retry's progress take the description back", async () => {
@@ -550,6 +639,7 @@ describe("ErrorBanner", () => {
           />
         );
         expect(screen.queryByText(/Recovery failed/)).toBeNull();
+        expect(screen.queryByRole("button", { name: "Open Diagnostics" })).toBeNull();
         expect(screen.getByText("Retrying 1 of 3…")).toBeTruthy();
       });
     });

@@ -13,18 +13,7 @@ export function WatchdogDisabledBanner() {
   const info = usePanelStore((s) => s.watchdogDisabledInfo);
   const [isRestarting, setIsRestarting] = useState(false);
   const [restartFailed, setRestartFailed] = useState(false);
-  const [seenStatus, setSeenStatus] = useState(watchdogStatus);
   const dismiss = useGlobalBannerDismissalStore((s) => s.dismiss);
-
-  // The component stays mounted while it renders nothing, so a restart that
-  // cleared the condition would leave its loading button on the next disable.
-  if (seenStatus !== watchdogStatus) {
-    setSeenStatus(watchdogStatus);
-    if (watchdogStatus !== "disabled") {
-      setIsRestarting(false);
-      setRestartFailed(false);
-    }
-  }
 
   if (watchdogStatus !== "disabled") return null;
 

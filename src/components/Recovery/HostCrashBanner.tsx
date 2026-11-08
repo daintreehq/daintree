@@ -24,9 +24,10 @@ export function HostCrashBanner() {
   const [seenStatus, setSeenStatus] = useState(backendStatus);
   const recoveringShown = useDohertyGate(backendStatus === "recovering");
 
-  // The component stays mounted while it renders nothing, so a manual attempt
-  // from one crash would otherwise leave its loading button or failure line on
-  // the next. Only a settled disconnect owns them.
+  // The coordinator keeps this mounted from the crash through the automatic
+  // recovery after it, so a restart that was accepted but didn't hold comes
+  // back to "disconnected" with the button still loading, or a failure line
+  // from the attempt before. Only a settled disconnect owns them.
   if (seenStatus !== backendStatus) {
     setSeenStatus(backendStatus);
     if (backendStatus !== "disconnected") {

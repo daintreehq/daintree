@@ -123,32 +123,34 @@ export function ErrorBanner({
     useErrorStore.getState().promoteErrors([error.id]);
   }, [error.id]);
 
-  // Keyed to the occurrence it ran against: a repeat of the same error keeps
-  // the id but replaces the timestamp (and may replace the recovery action), so
-  // a result that lands after the row has moved on is dropped rather than shown
-  // against something it never ran for.
+  // A repeat of the same error keeps the id but replaces the timestamp (and may
+  // replace the recovery action), so a failure is keyed to the occurrence it ran
+  // against and a result that lands after the row has moved on is dropped. The
+  // in-flight state is the row's, not the occurrence's: the button is busy, and
+  // looks it, for as long as the request it started is.
   const recoveryKey = error.recoveryAction
     ? `${error.recoveryAction.actionId}@${error.timestamp}`
     : null;
-  const [recovery, setRecovery] = useState<{
-    key: string;
-    status: "pending" | "failed";
-  } | null>(null);
+  const [recoveryPending, setRecoveryPending] = useState(false);
+  const [failedKey, setFailedKey] = useState<string | null>(null);
   const recoveryInFlight = useRef(false);
-  const mounted = useRef(true);
+  // The occurrence on screen now; null once the row is gone.
+  const liveKey = useRef<string | null>(recoveryKey);
   useEffect(() => {
-    mounted.current = true;
+    liveKey.current = recoveryKey;
+  }, [recoveryKey]);
+  useEffect(() => {
     return () => {
-      mounted.current = false;
+      liveKey.current = null;
     };
   }, []);
-  const recoveryStatus = recovery && recovery.key === recoveryKey ? recovery.status : "idle";
 
   const handleRecovery = useCallback(async () => {
     const recoveryAction = error.recoveryAction;
     if (!recoveryAction || recoveryKey === null || recoveryInFlight.current) return;
     recoveryInFlight.current = true;
-    setRecovery({ key: recoveryKey, status: "pending" });
+    setRecoveryPending(true);
+    setFailedKey(null);
     let failure: unknown;
     try {
       const result = await actionService.dispatch(recoveryAction.actionId, recoveryAction.args, {
@@ -159,21 +161,18 @@ export function ErrorBanner({
       failure = err;
     }
     recoveryInFlight.current = false;
-    if (failure === undefined) {
-      setRecovery((current) => (current?.key === recoveryKey ? null : current));
-      return;
-    }
+    setRecoveryPending(false);
+    if (failure === undefined) return;
     // The arguments are left out: they can carry paths and branch names.
     logError("Recovery action failed from error banner", failure, {
       errorId: error.id,
       actionId: recoveryAction.actionId,
     });
-    setRecovery((current) =>
-      current?.key === recoveryKey ? { key: recoveryKey, status: "failed" } : current
-    );
+    if (liveKey.current !== recoveryKey) return;
+    setFailedKey(recoveryKey);
     // The row stays quiet by design, so a failure after the arrival has been
     // announced needs its own, once per attempt.
-    if (mounted.current) useAnnouncerStore.getState().announce(RECOVERY_FAILED_COPY, "polite");
+    useAnnouncerStore.getState().announce(RECOVERY_FAILED_COPY, "polite");
   }, [error.id, error.recoveryAction, recoveryKey]);
 
   const handleOpenDiagnostics = useCallback(() => {
@@ -203,12 +202,12 @@ export function ErrorBanner({
       // Only while the button that failed is still the one on screen: once the
       // row hands recovery to the dock, a failure line would describe a
       // button that is gone.
-      recoveryFailed = recoveryStatus === "failed";
+      recoveryFailed = failedKey === recoveryKey;
       action = {
         id: "recovery",
         label: error.recoveryAction.label,
         onClick: () => void handleRecovery(),
-        loading: recoveryStatus === "pending",
+        loading: recoveryPending,
       };
     } else {
       action = { id: "view-errors", label: "View errors", onClick: handleViewErrors };
