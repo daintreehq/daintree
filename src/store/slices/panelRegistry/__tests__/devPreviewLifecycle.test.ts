@@ -4,6 +4,8 @@ import type { PanelInstance } from "@shared/types/panel";
 
 const mockStopByPanel = vi.fn().mockResolvedValue(undefined);
 
+import { onDevPreviewStopRequested } from "@/store/devPreviewStopSignal";
+
 vi.mock("@/clients", () => ({
   terminalClient: {
     spawn: vi.fn(),
@@ -183,6 +185,31 @@ describe("dev-preview lifecycle integration", () => {
     expect(mockStopByPanel).toHaveBeenCalledWith({ panelId: "dev-panel-a" });
     expect(mockStopByPanel).toHaveBeenCalledWith({ panelId: "dev-panel-b" });
     expect(mockStopByPanel).toHaveBeenCalledTimes(2);
+  });
+
+  it("tells the view's hooks a stop was requested, so a panel that comes back ensures again", () => {
+    const requested: string[] = [];
+    const off = onDevPreviewStopRequested((panelId) => requested.push(panelId));
+    usePanelStore.setState({
+      panelsById: {
+        "dev-panel-signal": {
+          id: "dev-panel-signal",
+          kind: "dev-preview",
+          title: "Dev Preview",
+          cwd: "/repo",
+          cols: 80,
+          rows: 24,
+          location: "grid",
+          devCommand: "npm run dev",
+        } as PanelInstance,
+      },
+      panelIds: ["dev-panel-signal"],
+    });
+
+    usePanelStore.getState().backgroundTerminal("dev-panel-signal");
+    off();
+
+    expect(requested).toEqual(["dev-panel-signal"]);
   });
 
   it("stops dev-preview runtime when panel is backgrounded", () => {

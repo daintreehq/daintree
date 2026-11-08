@@ -3,7 +3,7 @@ import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import type { WorktreeSnapshot } from "@shared/types";
-import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
+import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 import { getNarrowPanels } from "@/store/slices/panelRegistry/selectors";
 import { panelMatchesWorktreeScope } from "@/store/slices/panelRegistry/worktreeIndex";
 import { isTerminalOrphaned, isTerminalVisible } from "@/lib/terminalVisibility";
@@ -178,15 +178,20 @@ export function useErrorTerminals(): PtyPanelData[] {
   );
 }
 
-export function useBackgroundedTerminals(): PtyPanelData[] {
+/**
+ * Every panel parked in the background, whatever its kind: any of them can be
+ * sent there, and this list is the way back. It reads the raw records because
+ * `getNarrowPanels` drops file browsers, diffs and plugin panels.
+ */
+export function useBackgroundedTerminals(): PanelInstance[] {
   const worktreeIds = useWorktreeIds();
 
   return usePanelStore(
     useShallow((state) => {
-      const out: PtyPanelData[] = [];
-      for (const panel of getNarrowPanels(state.panelsById, state.panelIds)) {
-        if (!isPtyPanel(panel)) continue;
-        if (panel.location !== "background") continue;
+      const out: PanelInstance[] = [];
+      for (const id of state.panelIds) {
+        const panel = state.panelsById[id];
+        if (panel?.location !== "background") continue;
         if (isTerminalOrphaned(panel, worktreeIds)) continue;
         out.push(panel);
       }

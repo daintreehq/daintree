@@ -1556,10 +1556,8 @@ export async function restorePanelsPhase(
                   nonPtyArgs.pendingDockWorktreeId = null;
                 }
               }
-              // Not re-parked: there is no process to keep alive, and the
-              // background list shows only terminals, so a parked browser or
-              // preview would be left with no way back. It returns to the
-              // grid/dock target the builder resolved.
+              // Not re-parked: there is no process to keep alive, so it returns
+              // to the grid/dock target the builder resolved.
               const nonPtyId = await addPanel(nonPtyArgs);
               restoredIdsByIndex.set(capturedIndex, nonPtyId);
             }

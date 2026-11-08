@@ -115,10 +115,13 @@ export function UrlPanelMenuItems({
   const copy = URL_PANEL_COPY[variant];
   return (
     <>
-      <ContextMenuItem onSelect={() => onAction("reload-browser")}>
-        <RotateCw className={ICON_CLASS} aria-hidden="true" />
-        {copy.reload}
-      </ContextMenuItem>
+      {/* A parked pane is unmounted, so nothing is listening for the reload. */}
+      {!isBackgrounded && (
+        <ContextMenuItem onSelect={() => onAction("reload-browser")}>
+          <RotateCw className={ICON_CLASS} aria-hidden="true" />
+          {copy.reload}
+        </ContextMenuItem>
+      )}
       <ContextMenuItem disabled={!hasUrl} onSelect={() => onAction("open-external")}>
         <Globe className={ICON_CLASS} aria-hidden="true" />
         Open in external browser

@@ -483,6 +483,28 @@ describe("getGenericPanelMenuGroups", () => {
   });
 });
 
+describe("getGenericPanelMenuGroups for a backgrounded panel", () => {
+  const ids = (input: Partial<GenericPanelMenuInput> = {}) =>
+    groups({ location: "background", canMoveToWorktree: false, ...input }).map((group) =>
+      group.map((command) => command.id)
+    );
+
+  it("offers nothing that moves it or parks it again", () => {
+    const offered = ids().flat();
+    for (const id of ["move-to-dock", "move-to-grid", "toggle-maximize", "background"] as const) {
+      expect(offered).not.toContain(id);
+    }
+  });
+
+  it("still lets it be renamed, trashed or removed", () => {
+    expect(ids().flat()).toEqual(expect.arrayContaining(["rename", "trash", "kill"]));
+  });
+
+  it("leaves no empty group, which would draw a stray separator", () => {
+    for (const group of ids()) expect(group.length).toBeGreaterThan(0);
+  });
+});
+
 describe("canReloadPanelKind (#12611)", () => {
   it("offers reload to plugin kinds, registered or gone missing", () => {
     registerPluginKind(VIEW_PLUGIN_KIND);

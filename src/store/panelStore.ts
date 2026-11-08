@@ -1076,6 +1076,10 @@ export const usePanelStore = create<PanelGridState>()(
           get().exitMaximize();
           if (isGridPanelLocation(restored.location)) exitProjectHome();
         }
+        // A group comes back whole, and its tabs prefer the one saved over the
+        // focused one, so the member asked for would be focused but hidden.
+        const group = get().getPanelGroup(id);
+        if (group) get().setActiveTab(group.id, id);
       },
 
       restoreBackgroundGroup: (groupRestoreId: string, targetWorktreeId?: string) => {

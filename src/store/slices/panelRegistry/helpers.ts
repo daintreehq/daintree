@@ -11,6 +11,7 @@ import { isPtyPanel } from "@shared/types/panel";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { terminalClient } from "@/clients";
 import { getNarrowPanel } from "./selectors";
+import { notifyDevPreviewStopRequested } from "@/store/devPreviewStopSignal";
 
 /**
  * Record a deliberate, user-initiated worktree filing on the lifecycle ledger.
@@ -298,6 +299,7 @@ export function computeRestoredTabGroup(
 }
 
 export function stopDevPreviewByPanelId(panelId: string): void {
+  notifyDevPreviewStopRequested(panelId);
   if (typeof window === "undefined") return;
   const stopByPanel = window.electron?.devPreview?.stopByPanel;
   if (!stopByPanel) return;

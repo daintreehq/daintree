@@ -48,6 +48,7 @@ function buildState(overrides: Partial<DevPreviewSessionState>): DevPreviewSessi
 }
 
 import { useDevServer, _resetPersistedEnsureCacheForTests } from "../useDevServer";
+import { notifyDevPreviewStopRequested } from "@/store/devPreviewStopSignal";
 import { notifyHostResync } from "@/store/hostResyncSignal";
 import { resumeDevPreviews } from "@/store/devPreviewResumeSignal";
 
@@ -1175,6 +1176,120 @@ describe("useDevServer adversarial races", () => {
     expect(ensureMock).toHaveBeenCalledTimes(1);
     // getState() was called on both mounts
     expect(getStateMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("starts again on remount after a stop this view requested, whatever Main reports by then", async () => {
+    // Sending to background: the store asks for the stop, the pane unmounts, and
+    // Main's stopped event lands with no subscriber to hear it.
+    let running = false;
+    const runningState = (projectId: string) =>
+      buildState({
+        panelId: "panel-1",
+        projectId,
+        status: "running",
+        terminalId: "term-1",
+        url: "http://localhost:3000/",
+      });
+    ensureMock.mockImplementation((request: { projectId: string }) => {
+      running = true;
+      return Promise.resolve(runningState(request.projectId));
+    });
+    getStateMock.mockImplementation((request: { projectId: string }) =>
+      Promise.resolve(
+        running
+          ? runningState(request.projectId)
+          : buildState({ panelId: "panel-1", projectId: request.projectId, status: "stopped" })
+      )
+    );
+
+    const props = { panelId: "panel-1", devCommand: "npm run dev", cwd: "/repo" };
+
+    const { unmount, result } = renderHook(() => useDevServer(props));
+    await waitFor(() => {
+      expect(ensureMock).toHaveBeenCalledTimes(1);
+      expect(result.current.status).toBe("running");
+    });
+
+    unmount();
+    notifyDevPreviewStopRequested("panel-1");
+    running = false;
+
+    const { result: restored } = renderHook(() => useDevServer(props));
+    await waitFor(() => {
+      expect(ensureMock).toHaveBeenCalledTimes(2);
+      expect(restored.current.status).toBe("running");
+    });
+  });
+
+  it("ensures on a restore that beats the stop, while Main still reports the server running", async () => {
+    const runningState = (projectId: string) =>
+      buildState({
+        panelId: "panel-1",
+        projectId,
+        status: "running",
+        terminalId: "term-1",
+        url: "http://localhost:3000/",
+      });
+    ensureMock.mockImplementation((request: { projectId: string }) =>
+      Promise.resolve(runningState(request.projectId))
+    );
+    getStateMock.mockImplementation((request: { projectId: string }) =>
+      Promise.resolve(runningState(request.projectId))
+    );
+
+    const props = { panelId: "panel-1", devCommand: "npm run dev", cwd: "/repo" };
+
+    const { unmount, result } = renderHook(() => useDevServer(props));
+    await waitFor(() => {
+      expect(ensureMock).toHaveBeenCalledTimes(1);
+      expect(result.current.status).toBe("running");
+    });
+
+    unmount();
+    notifyDevPreviewStopRequested("panel-1");
+
+    renderHook(() => useDevServer(props));
+    await waitFor(() => expect(ensureMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("stays down on a remount when Main stopped it unasked, as for a worktree delete", async () => {
+    // The delete may still be running, and a server started now would hold the
+    // directory it's trying to remove. Its own resume restarts it if abandoned.
+    let running = false;
+    const runningState = (projectId: string) =>
+      buildState({
+        panelId: "panel-1",
+        projectId,
+        status: "running",
+        terminalId: "term-1",
+        url: "http://localhost:3000/",
+      });
+    ensureMock.mockImplementation((request: { projectId: string }) => {
+      running = true;
+      return Promise.resolve(runningState(request.projectId));
+    });
+    getStateMock.mockImplementation((request: { projectId: string }) =>
+      Promise.resolve(
+        running
+          ? runningState(request.projectId)
+          : buildState({ panelId: "panel-1", projectId: request.projectId, status: "stopped" })
+      )
+    );
+
+    const props = { panelId: "panel-1", devCommand: "npm run dev", cwd: "/repo" };
+
+    const { unmount, result } = renderHook(() => useDevServer(props));
+    await waitFor(() => {
+      expect(ensureMock).toHaveBeenCalledTimes(1);
+      expect(result.current.status).toBe("running");
+    });
+
+    unmount();
+    running = false;
+
+    const { result: remounted } = renderHook(() => useDevServer(props));
+    await waitFor(() => expect(remounted.current.status).toBe("stopped"));
+    expect(ensureMock).toHaveBeenCalledTimes(1);
   });
 
   it("remount after stop() sends only a non-resume ensure, which Main refuses (#13169)", async () => {

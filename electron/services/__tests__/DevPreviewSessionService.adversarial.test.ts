@@ -231,6 +231,29 @@ describe("DevPreviewSessionService adversarial", () => {
     expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
   });
 
+  it("stops the restarted session when a second stopByPanel queues behind the restart", async () => {
+    const started = await service.ensure(baseRequest);
+    const firstTerminalId = started.terminalId!;
+    ptyClient.holdOnKill(firstTerminalId);
+
+    // Sent to background, restored, and sent back before the first stop lands.
+    const firstStop = service.stopByPanel({ panelId: baseRequest.panelId });
+    const restart = service.ensure(baseRequest);
+    const secondStop = service.stopByPanel({ panelId: baseRequest.panelId });
+
+    await vi.advanceTimersByTimeAsync(200);
+    ptyClient.releaseHeldTerminal(firstTerminalId);
+    await vi.advanceTimersByTimeAsync(400);
+    await Promise.all([firstStop, restart, secondStop]);
+
+    expect(ptyClient.spawn).toHaveBeenCalledTimes(2);
+    const replacementId = ptyClient.spawn.mock.calls[1]![0];
+    expect(ptyClient.hasTerminal(replacementId)).toBe(false);
+    expect(
+      service.getState({ panelId: baseRequest.panelId, projectId: baseRequest.projectId })
+    ).toMatchObject({ status: "stopped", terminalId: null });
+  });
+
   it("does not let a stale install exit respawn after restart", async () => {
     scanOutputMock.mockImplementation((data, buffer) => {
       if (data.includes("missing deps")) {
