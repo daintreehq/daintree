@@ -24,6 +24,12 @@ import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 const DEFAULT_POLL_INTERVAL_MS = 5_000;
 const DEBOUNCE_MS = 200;
 
+function hasLiveUnownedTerminal(
+  terminals: ReadonlyArray<{ projectId?: string; isExited?: boolean }>
+): boolean {
+  return terminals.some((t) => !t.projectId && !t.isExited);
+}
+
 export class ProjectStatsService {
   private intervalSlot = new MutableDisposable<IDisposable>();
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -309,7 +315,7 @@ export class ProjectStatsService {
       const count = tallied.get(terminal.projectId);
       if (count !== undefined) tallied.set(terminal.projectId, count + 1);
     }
-    if (!terminals.some((t) => !t.projectId && !t.isExited)) return tallied;
+    if (!hasLiveUnownedTerminal(terminals)) return tallied;
 
     const counts = new Map<string, number>();
     const results = await Promise.allSettled(
@@ -442,14 +448,17 @@ export class ProjectStatsService {
 
       // A shard that did not answer contributed no terminals, which is not a true
       // zero, and a published zero lets the switcher sleep a project without asking.
-      // A project lives on one shard, so a workspace with terminals in this read, or
-      // a count from the host, was answered; any other keeps its row until a complete
-      // read says otherwise.
+      // A project lives on one shard, so a zero is believed only for a workspace this
+      // read names, and only with no terminal's owner in doubt, since `getProjectStats`
+      // reports a timeout as zero too. Any other keeps its row until a complete read.
       if (degraded) {
-        const answered = new Set(allTerminals.map((terminal) => terminal.projectId));
+        const named = new Set(allTerminals.map((terminal) => terminal.projectId));
+        const ownerInDoubt = hasLiveUnownedTerminal(allTerminals);
         for (const id of Object.keys(statusMap)) {
           const last = this.lastBroadcast[id];
-          if (last && !answered.has(id) && !terminalCounts.get(id)) statusMap[id] = last;
+          if (last && !terminalCounts.get(id) && (ownerInDoubt || !named.has(id))) {
+            statusMap[id] = last;
+          }
         }
       }
 

@@ -1595,6 +1595,26 @@ describe("ProjectStatsService terminal counts from the shared snapshot", () => {
       svc.stop();
     });
 
+    it.each([
+      { name: "keeps the row while an owner is in doubt", doubt: [{ id: "u" }], expected: 2 },
+      { name: "publishes the zero with no owner in doubt", doubt: [], expected: 0 },
+    ])("for a workspace named only by a trashed terminal, $name", async ({ doubt, expected }) => {
+      const ptyClient = makePtyClient();
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
+      const svc = new ProjectStatsService(ptyClient as never);
+      await seenHealthy(ptyClient, svc);
+
+      const trashed = { ...terminal("b", "p2"), isTrashed: true };
+      ptyClient.getAllTerminalsWithCompletenessAsync.mockResolvedValue(
+        read([terminal("a", "p1"), trashed, ...doubt], true)
+      );
+      svc.refresh();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(payload().p2.processCount).toBe(expected);
+      svc.stop();
+    });
+
     it("believes the zero once a complete read reports it", async () => {
       const ptyClient = makePtyClient();
       projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }, { id: "p2" }]);
