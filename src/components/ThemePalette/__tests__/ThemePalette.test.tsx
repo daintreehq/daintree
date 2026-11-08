@@ -7,10 +7,13 @@ import { flushPendingTheme, useAppThemeStore } from "@/store/appThemeStore";
 vi.mock("@/clients/appThemeClient", () => ({
   appThemeClient: {
     setColorScheme: vi.fn().mockResolvedValue(undefined),
+    setFollowSystem: vi.fn().mockResolvedValue(undefined),
+    setRecentSchemeIds: vi.fn().mockResolvedValue(undefined),
   },
 }));
 
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { appThemeClient } from "@/clients/appThemeClient";
 import { ThemePalette } from "../ThemePalette";
 
 const COMMITTED = BUILT_IN_APP_SCHEMES.find((s) => s.type === "light")!;
@@ -149,5 +152,30 @@ describe("ThemePalette", () => {
     await act(async () => {});
     flushPendingTheme();
     expect(document.documentElement.dataset.theme).toBe(COMMITTED.id);
+  });
+
+  it("turns Match system off and saves recents when a theme is chosen", async () => {
+    vi.clearAllMocks();
+    useAppThemeStore.setState({ followSystem: true });
+    const onClose = vi.fn();
+    render(<ThemePalette isOpen onClose={onClose} />, { wrapper: TooltipProvider });
+    await act(async () => {});
+    fireEvent.keyDown(input(), { key: "ArrowDown" });
+    await act(async () => {});
+    const targetId = rows()
+      .find((o) => o.getAttribute("aria-selected") === "true")!
+      .id.replace("theme-option-", "");
+    expect(targetId).not.toBe(COMMITTED.id);
+    fireEvent.keyDown(input(), { key: "Enter" });
+    await act(async () => {});
+
+    expect(onClose).toHaveBeenCalled();
+    expect(useAppThemeStore.getState().followSystem).toBe(false);
+    expect(useAppThemeStore.getState().selectedSchemeId).toBe(targetId);
+    expect(appThemeClient.setFollowSystem).toHaveBeenCalledWith(false);
+    expect(appThemeClient.setColorScheme).toHaveBeenCalledWith(targetId);
+    expect(appThemeClient.setRecentSchemeIds).toHaveBeenCalledWith(
+      expect.arrayContaining([targetId])
+    );
   });
 });
