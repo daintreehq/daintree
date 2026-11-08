@@ -13,8 +13,13 @@ import {
 } from "@/components/Settings/SettingsGroup";
 import { useProjectStore, patchCachedProjectSettings } from "@/store";
 import { projectClient } from "@/clients";
+import { withProjectSettingsWrite } from "@/clients/projectClient";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { logError } from "@/utils/logger";
+import { useSettingsTabFlush, type SettingsFlushFailure } from "./SettingsFlushRegistry";
+
+const IMAGE_VIEWER_SECTION_ID = "image-viewer";
+const IMAGE_VIEWER_COMMAND_ID = "image-viewer-command";
 
 type ImageViewerMode = "os" | "custom";
 
@@ -28,6 +33,9 @@ const ROW_CLASSES =
   "px-4 py-3 transition-colors has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:-outline-offset-2 has-[input:focus-visible]:outline-accent-primary";
 const ROW_SELECTED = "bg-overlay-selected";
 const ROW_UNSELECTED = "hover:bg-overlay-soft";
+
+/** What a project with no preference shows: a suggestion, which only Save pins. */
+const SUGGESTED_VIEWER: PersistedImageViewer = { mode: "os", customCommand: "" };
 
 function describeViewer(viewer: PersistedImageViewer): string {
   return viewer.mode === "os" ? "OS default" : `Custom (${viewer.customCommand})`;
@@ -106,18 +114,20 @@ export function ImageViewerTab() {
 
   const handleModeChange = (newMode: ImageViewerMode) => {
     setMode(newMode);
+    setSaveError(null);
   };
 
   const handleCommandChange = (value: string) => {
     setCustomCommand(value);
     setCommandError(null);
+    setSaveError(null);
   };
 
-  const handleSave = async () => {
-    if (!activeProjectId || isSaving || isLoading || loadError) return;
+  const save = async (): Promise<SettingsFlushFailure | undefined> => {
+    if (!activeProjectId || isLoading || loadError) return undefined;
     if (mode === "custom" && !customCommand.trim()) {
       setCommandError("Enter the command that opens images");
-      return;
+      return { landOn: IMAGE_VIEWER_COMMAND_ID };
     }
     setIsSaving(true);
     setSaveError(null);
@@ -129,26 +139,65 @@ export function ImageViewerTab() {
         mode,
         customCommand: mode === "custom" ? customCommand.trim() : undefined,
       };
-      const settings = await projectClient.getSettings(activeProjectId);
-      await projectClient.saveSettings(activeProjectId, { ...settings, preferredImageViewer });
-      // Merge into whatever the cache holds now, not into the object fetched
-      // before the await — a concurrent write may have landed in between. A
-      // stale cache here is what reverts this save on dialog close (#12326).
-      patchCachedProjectSettings(activeProjectId, { preferredImageViewer });
-      if (!isMountedRef.current) return;
+      await withProjectSettingsWrite(activeProjectId, async () => {
+        const settings = await projectClient.getSettings(activeProjectId);
+        await projectClient.saveSettings(activeProjectId, { ...settings, preferredImageViewer });
+        // Merge into whatever the cache holds now, not into the object fetched
+        // before the await — a concurrent write may have landed in between. A
+        // stale cache here is what reverts this save on dialog close (#12326).
+        patchCachedProjectSettings(activeProjectId, { preferredImageViewer });
+      });
+      if (!isMountedRef.current) return undefined;
       setPersisted({ mode, customCommand: preferredImageViewer.customCommand ?? "" });
+      return undefined;
     } catch (err) {
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current) return undefined;
       setSaveError(formatErrorMessage(err, "Failed to save image viewer preference"));
+      return { landOn: IMAGE_VIEWER_SECTION_ID };
     } finally {
       if (isMountedRef.current) setIsSaving(false);
     }
+  };
+
+  // A close that lands during a Save reports that Save's outcome, not a success
+  // for a write that can still fail.
+  const saveInFlightRef = useRef<Promise<SettingsFlushFailure | undefined> | null>(null);
+  const handleSave = () => {
+    if (!saveInFlightRef.current) {
+      saveInFlightRef.current = save().finally(() => {
+        saveInFlightRef.current = null;
+      });
+    }
+    return saveInFlightRef.current;
+  };
+
+  const accepted = persisted ?? SUGGESTED_VIEWER;
+
+  const handleDiscard = () => {
+    setMode(accepted.mode);
+    setCustomCommand(accepted.customCommand);
+    setCommandError(null);
+    setSaveError(null);
   };
 
   const isDirty =
     !persisted ||
     persisted.mode !== mode ||
     (mode === "custom" && persisted.customCommand !== customCommand.trim());
+
+  // Not the same as isDirty: Save may pin the suggestion shown to a project with no
+  // preference, but only a choice the user made is a draft a close should keep.
+  const hasPendingDraft =
+    !isLoading &&
+    !loadError &&
+    (accepted.mode !== mode ||
+      (mode === "custom" && accepted.customCommand.trim() !== customCommand.trim()));
+
+  useSettingsTabFlush(
+    "integrations",
+    () => saveInFlightRef.current ?? (hasPendingDraft ? handleSave() : undefined),
+    hasPendingDraft || isSaving
+  );
 
   if (!activeProjectId) {
     return (
@@ -160,7 +209,7 @@ export function ImageViewerTab() {
 
   return (
     <SettingsSection
-      id="image-viewer"
+      id={IMAGE_VIEWER_SECTION_ID}
       title="Image viewer"
       description={`For ${activeProject?.name ?? "this project"} only. The app "Open in image viewer" launches from the file viewer.`}
     >
@@ -203,7 +252,10 @@ export function ImageViewerTab() {
               className={ROW_CLASSES}
             />
             {mode === "custom" && (
-              <div className={cn("px-4 pb-3 space-y-1.5", CHOICE_LABEL_INSET)}>
+              <div
+                id={IMAGE_VIEWER_COMMAND_ID}
+                className={cn("px-4 pb-3 space-y-1.5", CHOICE_LABEL_INSET)}
+              >
                 <label
                   htmlFor={commandFieldId}
                   className="block text-xs font-medium text-text-secondary"
@@ -258,6 +310,11 @@ export function ImageViewerTab() {
           {loadError && (
             <Button variant="outline" size="sm" onClick={() => setLoadAttempt((n) => n + 1)}>
               Retry
+            </Button>
+          )}
+          {hasPendingDraft && (
+            <Button variant="outline" size="sm" onClick={handleDiscard} disabled={isSaving}>
+              Discard
             </Button>
           )}
           <Button

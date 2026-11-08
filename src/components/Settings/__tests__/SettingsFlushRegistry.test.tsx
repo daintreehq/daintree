@@ -144,6 +144,92 @@ describe("SettingsFlushRegistry", () => {
     });
   });
 
+  it("keeps every flush a tab registers, and drops only the one that unregisters", async () => {
+    const editor = vi.fn();
+    const imageViewer = vi.fn();
+
+    const { result, rerender } = renderHook(
+      ({ editorPending }: { editorPending: boolean }) => {
+        useSettingsTabFlush("integrations", editor, editorPending);
+        useSettingsTabFlush("integrations", imageViewer, true);
+        return useContext(SettingsFlushContext);
+      },
+      { wrapper: wrap, initialProps: { editorPending: true } }
+    );
+
+    await act(async () => {
+      await result.current!.flushAll();
+    });
+    expect(editor).toHaveBeenCalledTimes(1);
+    expect(imageViewer).toHaveBeenCalledTimes(1);
+
+    rerender({ editorPending: false });
+    await act(async () => {
+      await result.current!.flushAll();
+    });
+    expect(editor).toHaveBeenCalledTimes(1);
+    expect(imageViewer).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports both failures when one tab's two flushes each keep a draft", async () => {
+    const { result } = renderHook(
+      () => {
+        useSettingsTabFlush("integrations", () => ({ landOn: "editor-external" }), true);
+        useSettingsTabFlush("integrations", () => ({ landOn: "image-viewer" }), true);
+        return useContext(SettingsFlushContext);
+      },
+      { wrapper: wrap }
+    );
+
+    await act(async () => {
+      await expect(result.current!.flushAll()).resolves.toEqual([
+        { tab: "integrations", landOn: "editor-external" },
+        { tab: "integrations", landOn: "image-viewer" },
+      ]);
+    });
+  });
+
+  it("starts every flush as the close begins, so a slow page doesn't hold back another", async () => {
+    let finishSlow: () => void = () => {};
+    const slow = vi.fn(() => new Promise<void>((resolve) => (finishSlow = resolve)));
+    const other = vi.fn();
+
+    const { result } = renderHook(
+      () => {
+        useSettingsTabFlush("integrations", slow, true);
+        useSettingsTabFlush("environment", other, true);
+        return useContext(SettingsFlushContext);
+      },
+      { wrapper: wrap }
+    );
+
+    await act(async () => {
+      const pending = result.current!.flushAll();
+      expect(slow).toHaveBeenCalledTimes(1);
+      expect(other).toHaveBeenCalledTimes(1);
+      finishSlow();
+      await pending;
+    });
+  });
+
+  it("tells each flush why it's running, and a bare flushAll means a close", async () => {
+    const fn = vi.fn();
+    const { result } = renderHook(
+      () => {
+        useSettingsTabFlush("mcp", fn, true);
+        return useContext(SettingsFlushContext);
+      },
+      { wrapper: wrap }
+    );
+
+    await act(async () => {
+      await result.current!.flushAll("hide");
+      await result.current!.flushAll();
+    });
+
+    expect(fn.mock.calls).toEqual([["hide"], ["close"]]);
+  });
+
   it("invokes the latest callback after rerender", async () => {
     const first = vi.fn();
     const second = vi.fn();

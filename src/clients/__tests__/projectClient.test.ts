@@ -474,3 +474,80 @@ describe("projectClient.addBrowserAllowedHost", () => {
     expect(saveSettingsMock).not.toHaveBeenCalled();
   });
 });
+
+describe("withProjectSettingsWrite", () => {
+  let write: typeof import("../projectClient").withProjectSettingsWrite;
+  let getSettingsMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    getSettingsMock = vi.fn();
+    typedGlobal.window = {
+      electron: { project: { onSwitch: vi.fn(() => () => {}), getSettings: getSettingsMock } },
+    };
+    const mod = await import("../projectClient");
+    projectClient = mod.projectClient;
+    write = mod.withProjectSettingsWrite;
+  });
+
+  afterEach(() => {
+    delete typedGlobal.window;
+  });
+
+  function deferred() {
+    let resolve!: () => void;
+    const promise = new Promise<void>((res) => {
+      resolve = res;
+    });
+    return { promise, resolve };
+  }
+
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+  it("starts a project's next write only once the one before it has finished", async () => {
+    const first = deferred();
+    const second = vi.fn(async () => "second");
+
+    const running = write("p1", () => first.promise);
+    const queued = write("p1", second);
+    await settle();
+    expect(second).not.toHaveBeenCalled();
+
+    first.resolve();
+    await running;
+    await expect(queued).resolves.toBe("second");
+    expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers a failed write's own caller and still runs the next one", async () => {
+    const running = write("p1", () => Promise.reject(new Error("disk full")));
+    const queued = write("p1", async () => "after");
+
+    await expect(running).rejects.toThrow("disk full");
+    await expect(queued).resolves.toBe("after");
+  });
+
+  it("doesn't make one project wait for another", async () => {
+    const other = deferred();
+    const running = write("p1", () => other.promise);
+
+    await expect(write("p2", async () => "done")).resolves.toBe("done");
+
+    other.resolve();
+    await running;
+  });
+
+  it("reads what the write before it stored, past the settings cache", async () => {
+    let onDisk = { devServerCommand: "old" };
+    getSettingsMock.mockImplementation(async () => onDisk);
+    await projectClient.getSettings("p1");
+
+    await write("p1", async () => {
+      // A write that lands on disk without passing through this client, as main's does.
+      onDisk = { devServerCommand: "new" };
+    });
+    const read = await write("p1", () => projectClient.getSettings("p1"));
+
+    expect(read.devServerCommand).toBe("new");
+  });
+});

@@ -91,6 +91,7 @@ import {
   SettingsFlushProvider,
   SettingsFlushContext,
   type FailedSettingsFlush,
+  type SettingsFlushReason,
 } from "./SettingsFlushRegistry";
 import { useProgressiveRenderLimit } from "@/hooks/useProgressiveRenderLimit";
 import { COUNT_BADGE_CLASS } from "@/components/ui/badge";
@@ -532,10 +533,10 @@ function SettingsDialogInner({
   // Coalesced: a cache or hide landing mid-close would otherwise re-issue
   // every registered tab flusher alongside the one already in flight.
   const flushInFlightRef = useRef<Promise<FailedSettingsFlush[]> | null>(null);
-  const flushDialog = () => {
+  const flushDialog = (reason: SettingsFlushReason) => {
     if (flushInFlightRef.current) return flushInFlightRef.current;
     const pending = (async () => {
-      const failed = flushAllTabs ? await flushAllTabs() : [];
+      const failed = flushAllTabs ? await flushAllTabs(reason) : [];
       if (await projectForm.flush()) {
         // The project page shown, else the one last shown: that is where the
         // edit was made, and every project page carries the form's error.
@@ -560,7 +561,7 @@ function SettingsDialogInner({
   // waits for the whole sequence on the cached edge. Unlike a close, neither
   // keeps Settings open, so a page that couldn't save is left as it is.
   useFlushOnHide(async () => {
-    await flushDialog();
+    await flushDialog("hide");
   }, isOpen);
 
   const [globalEnvVars, setGlobalEnvVars] = useState<Record<string, string>>({});
@@ -639,10 +640,10 @@ function SettingsDialogInner({
   // or uses that page's Discard. The page shown wins over others that failed.
   const flushBeforeClose = async () => {
     // A cache or hide flush still running took its list of drafts when it
-    // started, so one made since isn't in it: let it finish, then flush again.
-    const lifecycleFlush = flushInFlightRef.current;
-    if (lifecycleFlush) await lifecycleFlush;
-    const failed = await flushDialog();
+    // started, so one made since isn't in it, and it left the writes only a close
+    // makes: let it finish, then flush again.
+    while (flushInFlightRef.current) await flushInFlightRef.current;
+    const failed = await flushDialog("close");
     const shown = failed.find((f) => f.tab === activeTabRef.current) ?? failed[0];
     if (shown) {
       revealFailedFlush(shown);

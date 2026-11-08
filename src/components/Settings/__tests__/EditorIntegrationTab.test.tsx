@@ -14,10 +14,12 @@
  * `useProjectStore` and `patchCachedProjectSettings` from the same `@/store`
  * barrel, and a wholesale module mock would have to restate both halves of it.
  */
+import { useContext, type ContextType } from "react";
 import type React from "react";
 import { afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EditorIntegrationTab } from "../EditorIntegrationTab";
+import { SettingsFlushContext, SettingsFlushProvider } from "../SettingsFlushRegistry";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useProjectStore } from "@/store/projectStore";
 import { cleanupProjectSettingsStore, useProjectSettingsStore } from "@/store/projectSettingsStore";
@@ -454,6 +456,403 @@ describe("EditorIntegrationTab", () => {
 
   // A project with no editor of its own follows this machine's default; Set
   // default changes that fallback without touching any project's choice (#16162).
+  describe("flushed by a close", () => {
+    const FOUND = [
+      { id: "vscode", available: true, executablePath: "/usr/bin/code" },
+      { id: "zed", available: true, executablePath: "/usr/bin/zed" },
+    ];
+
+    async function renderFlushable(config: Record<string, unknown> | Error, statusText: RegExp) {
+      if (config instanceof Error) getConfigMock.mockRejectedValue(config);
+      else getConfigMock.mockResolvedValue({ discoveredEditors: FOUND, ...config });
+      useProjectStore.setState({ currentProject: TEST_PROJECT });
+      let registry: ContextType<typeof SettingsFlushContext> = null;
+      const Capture = () => {
+        registry = useContext(SettingsFlushContext);
+        return null;
+      };
+      render(
+        <SettingsFlushProvider>
+          <Capture />
+          <TooltipProvider>
+            <EditorIntegrationTab />
+          </TooltipProvider>
+        </SettingsFlushProvider>
+      );
+      await screen.findByText(statusText);
+      return async () => {
+        let failed: Array<{ tab: string; landOn: string }> = [];
+        await act(async () => {
+          failed = await registry!.flushAll();
+        });
+        return failed;
+      };
+    }
+
+    const button = (name: string | RegExp) =>
+      screen.getByRole("button", { name }) as HTMLButtonElement;
+
+    function deferred() {
+      let resolve!: () => void;
+      let reject!: (reason: Error) => void;
+      const promise = new Promise<void>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    it("writes nothing over the default a project is only following, while Save still pins it", async () => {
+      const flush = await renderFlushable(
+        { preferredEditor: null, defaultEditor: { id: "zed" } },
+        /Using default:/
+      );
+
+      await expect(flush()).resolves.toEqual([]);
+      expect(setConfigMock).not.toHaveBeenCalled();
+
+      fireEvent.click(button(/^save$/i));
+      await waitFor(() =>
+        expect(setConfigMock).toHaveBeenCalledWith(
+          expect.objectContaining({ editor: expect.objectContaining({ id: "zed" }) })
+        )
+      );
+    });
+
+    it("writes nothing over the editor picked automatically, even after picking it again", async () => {
+      const flush = await renderFlushable(
+        { preferredEditor: null, defaultEditor: null },
+        /Not saved yet/
+      );
+
+      await expect(flush()).resolves.toEqual([]);
+      selectEditor("zed");
+      selectEditor("vscode");
+      await expect(flush()).resolves.toEqual([]);
+
+      expect(setConfigMock).not.toHaveBeenCalled();
+    });
+
+    it("writes nothing when a draft comes back to the saved choice", async () => {
+      const flush = await renderFlushable(
+        { preferredEditor: { id: "vscode" }, defaultEditor: null },
+        /Saved:/
+      );
+      selectEditor("zed");
+      selectEditor("vscode");
+
+      await expect(flush()).resolves.toEqual([]);
+      expect(setConfigMock).not.toHaveBeenCalled();
+    });
+
+    it("writes nothing over a custom editor saved without a template", async () => {
+      const flush = await renderFlushable(
+        {
+          preferredEditor: { id: "custom", customCommand: "hx" },
+          defaultEditor: null,
+        },
+        /Saved:/
+      );
+
+      await expect(flush()).resolves.toEqual([]);
+      expect(setConfigMock).not.toHaveBeenCalled();
+    });
+
+    it("saves a chosen editor for the project and never as the default", async () => {
+      const flush = await renderFlushable(
+        { preferredEditor: null, defaultEditor: { id: "vscode" } },
+        /Using default:/
+      );
+      selectEditor("zed");
+
+      await expect(flush()).resolves.toEqual([]);
+
+      expect(setConfigMock).toHaveBeenCalledTimes(1);
+      expect(setConfigMock.mock.calls[0]![0]).toMatchObject({
+        editor: { id: "zed" },
+        projectId: "proj-1",
+      });
+      expect(setDefaultMock).not.toHaveBeenCalled();
+      // Saved now, so the next close has nothing to do.
+      await expect(flush()).resolves.toEqual([]);
+      expect(setConfigMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("lands on the command row when a custom editor has no command", async () => {
+      const flush = await renderFlushable(
+        { preferredEditor: { id: "vscode" }, defaultEditor: null },
+        /Saved:/
+      );
+      selectEditor("custom");
+
+      const [failure] = await flush();
+
+      expect(setConfigMock).not.toHaveBeenCalled();
+      expect(screen.getByText("Enter the command that opens your editor")).toBeTruthy();
+      const row = document.getElementById(failure!.landOn)!;
+      expect(row.contains(screen.getByRole("textbox", { name: "Command" }))).toBe(true);
+    });
+
+    it("keeps the draft and its error when the save fails, and tries again on the next close", async () => {
+      setConfigMock.mockRejectedValueOnce(new Error("disk full"));
+      const flush = await renderFlushable(
+        { preferredEditor: { id: "vscode" }, defaultEditor: null },
+        /Saved:/
+      );
+      selectEditor("zed");
+
+      const [failure] = await flush();
+
+      expect(document.getElementById(failure!.landOn)).not.toBeNull();
+      expect(await screen.findByText(/disk full/)).toBeTruthy();
+      expect((screen.getByLabelText("Editor") as HTMLSelectElement).value).toBe("zed");
+
+      await expect(flush()).resolves.toEqual([]);
+      expect(setConfigMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("writes nothing while the editor config failed to load", async () => {
+      const flush = await renderFlushable(new Error("unreadable"), /unreadable/);
+      selectEditor("zed");
+
+      await expect(flush()).resolves.toEqual([]);
+      expect(setConfigMock).not.toHaveBeenCalled();
+    });
+
+    it("writes nothing over a stored custom editor whose command only differs by whitespace", async () => {
+      const flush = await renderFlushable(
+        {
+          preferredEditor: null,
+          defaultEditor: { id: "custom", customCommand: " hx ", customTemplate: "{file}" },
+        },
+        /Using default:/
+      );
+
+      await expect(flush()).resolves.toEqual([]);
+      expect(setConfigMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["command", "Command", "nvim", { customCommand: "nvim", customTemplate: "{file}" }],
+      [
+        "template",
+        "Arguments template",
+        "{file}:{line}",
+        { customCommand: "hx", customTemplate: "{file}:{line}" },
+      ],
+    ])(
+      "saves an edit to a saved custom editor's %s alone",
+      async (_field, label, value, expected) => {
+        const flush = await renderFlushable(
+          {
+            preferredEditor: { id: "custom", customCommand: "hx", customTemplate: "{file}" },
+            defaultEditor: null,
+          },
+          /Saved:/
+        );
+        fireEvent.change(screen.getByRole("textbox", { name: label }), { target: { value } });
+
+        await expect(flush()).resolves.toEqual([]);
+
+        expect(setConfigMock).toHaveBeenCalledWith({
+          editor: { id: "custom", ...expected },
+          projectId: "proj-1",
+        });
+      }
+    );
+
+    it("leaves a successful reset alone, rather than pinning the default back to the project", async () => {
+      const flush = await renderFlushable(
+        { preferredEditor: { id: "vscode" }, defaultEditor: { id: "zed" } },
+        /Saved:/
+      );
+
+      fireEvent.click(button("Reset editor to default"));
+      await screen.findByText(/Using default:/);
+      expect((screen.getByLabelText("Editor") as HTMLSelectElement).value).toBe("zed");
+
+      await expect(flush()).resolves.toEqual([]);
+      await expect(flush()).resolves.toEqual([]);
+
+      expect(clearProjectPreferenceMock).toHaveBeenCalledTimes(1);
+      expect(setConfigMock).not.toHaveBeenCalled();
+    });
+
+    it("doesn't pin a draft to the project after sending it to the default", async () => {
+      const flush = await renderFlushable(
+        { preferredEditor: { id: "vscode" }, defaultEditor: null },
+        /Saved:/
+      );
+      selectEditor("zed");
+      fireEvent.click(button("Set default"));
+      await screen.findByText("Saved for this project. Default on this machine: Zed");
+
+      await expect(flush()).resolves.toEqual([]);
+      expect(setConfigMock).not.toHaveBeenCalled();
+
+      // Back at the project's own choice there is nothing to write either.
+      selectEditor("vscode");
+      await expect(flush()).resolves.toEqual([]);
+      expect(setConfigMock).not.toHaveBeenCalled();
+
+      // A new choice after that is a new draft.
+      selectEditor("custom");
+      fireEvent.change(screen.getByRole("textbox", { name: "Command" }), {
+        target: { value: "hx" },
+      });
+      await expect(flush()).resolves.toEqual([]);
+      expect(setConfigMock).toHaveBeenCalledTimes(1);
+      expect(setConfigMock.mock.calls[0]![0]).toMatchObject({
+        editor: { id: "custom", customCommand: "hx" },
+        projectId: "proj-1",
+      });
+      expect(setDefaultMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("doesn't turn a failed Set default into a project save", async () => {
+      setDefaultMock.mockRejectedValueOnce(new Error("disk full"));
+      const flush = await renderFlushable(
+        { preferredEditor: { id: "vscode" }, defaultEditor: null },
+        /Saved:/
+      );
+      selectEditor("zed");
+      fireEvent.click(button("Set default"));
+      expect(await screen.findByText(/disk full/)).toBeTruthy();
+
+      await expect(flush()).resolves.toEqual([]);
+      expect(setConfigMock).not.toHaveBeenCalled();
+    });
+
+    it("doesn't save a draft over a reset the user asked for, even one that failed", async () => {
+      clearProjectPreferenceMock.mockRejectedValueOnce(new Error("disk full"));
+      const flush = await renderFlushable(
+        { preferredEditor: { id: "vscode" }, defaultEditor: null },
+        /Saved:/
+      );
+      selectEditor("zed");
+      fireEvent.click(button("Reset editor to automatic selection"));
+      expect(await screen.findByText(/disk full/)).toBeTruthy();
+
+      await expect(flush()).resolves.toEqual([]);
+      expect(setConfigMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["Save", () => button(/^save$/i), setConfigMock],
+      ["Set default", () => button("Set default"), setDefaultMock],
+      ["Reset", () => button("Reset editor to automatic selection"), clearProjectPreferenceMock],
+    ] as const)(
+      "reports the outcome of a %s still running, without starting another write",
+      async (_name, control, write) => {
+        const pending = deferred();
+        write.mockImplementationOnce(() => pending.promise);
+        const flush = await renderFlushable(
+          { preferredEditor: { id: "vscode" }, defaultEditor: null },
+          /Saved:/
+        );
+        selectEditor("zed");
+        fireEvent.click(control());
+        await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+
+        const flushing = flush();
+        await act(async () => pending.reject(new Error("disk full")));
+        const [failure] = await flushing;
+
+        expect(failure?.landOn).toBe("editor-external");
+        expect(write).toHaveBeenCalledTimes(1);
+        const writes = [setConfigMock, setDefaultMock, clearProjectPreferenceMock];
+        expect(writes.filter((w) => w !== write && w.mock.calls.length > 0)).toEqual([]);
+      }
+    );
+
+    it.each([
+      ["Save", () => button(/^save$/i), setConfigMock],
+      ["Set default", () => button("Set default"), setDefaultMock],
+    ] as const)(
+      "waits for a %s still running and succeeds with it, without writing again",
+      async (_name, control, write) => {
+        const pending = deferred();
+        write.mockImplementationOnce(() => pending.promise);
+        const flush = await renderFlushable(
+          { preferredEditor: { id: "vscode" }, defaultEditor: null },
+          /Saved:/
+        );
+        selectEditor("zed");
+        fireEvent.click(control());
+        await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+
+        let settled = false;
+        const flushing = flush().then((failed) => {
+          settled = true;
+          return failed;
+        });
+        await act(async () => {});
+        expect(settled).toBe(false);
+
+        await act(async () => pending.resolve());
+
+        await expect(flushing).resolves.toEqual([]);
+        expect(setConfigMock.mock.calls.length + setDefaultMock.mock.calls.length).toBe(1);
+      }
+    );
+
+    it("waits for a Save of the default a project was only following", async () => {
+      const pending = deferred();
+      setConfigMock.mockImplementationOnce(() => pending.promise);
+      const flush = await renderFlushable(
+        { preferredEditor: null, defaultEditor: { id: "zed" } },
+        /Using default:/
+      );
+      fireEvent.click(button(/^save$/i));
+      await waitFor(() => expect(setConfigMock).toHaveBeenCalledTimes(1));
+
+      const flushing = flush();
+      await act(async () => pending.reject(new Error("disk full")));
+
+      expect((await flushing)[0]?.landOn).toBe("editor-external");
+      expect(setConfigMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("clears a missing command's error on Discard", async () => {
+      const flush = await renderFlushable(
+        { preferredEditor: { id: "custom", customCommand: "hx" }, defaultEditor: null },
+        /Saved:/
+      );
+      const command = screen.getByRole("textbox", { name: "Command" }) as HTMLInputElement;
+      fireEvent.change(command, { target: { value: "" } });
+      await flush();
+      expect(screen.getByText("Enter the command that opens your editor")).toBeTruthy();
+
+      fireEvent.click(button("Discard"));
+
+      expect(command.value).toBe("hx");
+      expect(screen.queryByText("Enter the command that opens your editor")).toBeNull();
+      expect(command.getAttribute("aria-invalid")).toBeNull();
+    });
+
+    it("offers Discard only for a pending draft, and discarding leaves nothing to save", async () => {
+      setConfigMock.mockRejectedValue(new Error("disk full"));
+      const flush = await renderFlushable(
+        { preferredEditor: { id: "vscode" }, defaultEditor: null },
+        /Saved:/
+      );
+      expect(screen.queryByRole("button", { name: "Discard" })).toBeNull();
+
+      selectEditor("zed");
+      await flush();
+      expect(await screen.findByText(/disk full/)).toBeTruthy();
+
+      fireEvent.click(button("Discard"));
+
+      expect((screen.getByLabelText("Editor") as HTMLSelectElement).value).toBe("vscode");
+      expect(screen.queryByText(/disk full/)).toBeNull();
+      expect(screen.queryByRole("button", { name: "Discard" })).toBeNull();
+      setConfigMock.mockClear();
+      await expect(flush()).resolves.toEqual([]);
+      expect(setConfigMock).not.toHaveBeenCalled();
+    });
+  });
+
   describe("default editor", () => {
     const DISCOVERED = [
       { id: "vscode", available: true, executablePath: "/usr/bin/code" },
@@ -512,8 +911,10 @@ describe("EditorIntegrationTab", () => {
         await screen.findByText("Saved for this project. Default on this machine: Antigravity IDE")
       ).toBeTruthy();
       expect(setConfigMock).not.toHaveBeenCalled();
-      // The project keeps its own choice, and the draft is still unsaved against it.
-      expect(screen.getByText(/Unsaved changes/)).toBeTruthy();
+      // The project keeps its own choice. The draft went to the default, so nothing is
+      // left for a close to keep, though Save can still pin it here.
+      expect(screen.queryByText(/Unsaved changes/)).toBeNull();
+      expect(isOff(button(/^save$/i))).toBe(false);
       expect(useProjectSettingsStore.getState().settings).toEqual(SEEDED_SETTINGS);
     });
 
