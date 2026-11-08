@@ -588,6 +588,7 @@ export const CHANNELS = {
   CODEX_MATCH_RESTORE_SESSIONS: "codex:match-restore-sessions",
   CODEX_READ_QUOTA: "codex:read-quota",
   CODEX_REFRESH_QUOTA: "codex:refresh-quota",
+  CODEX_READ_CONTEXT_USAGE: "codex:read-context-usage",
 
   CLAUDE_LIST_SUBAGENTS: "claude:list-subagents",
   CLAUDE_READ_SUBAGENT_TRANSCRIPT: "claude:read-subagent-transcript",

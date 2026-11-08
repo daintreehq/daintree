@@ -8,6 +8,7 @@ export const CODEX_METHOD_CHANNELS = {
   matchRestoreSessions: "codex:match-restore-sessions",
   readQuota: "codex:read-quota",
   refreshQuota: "codex:refresh-quota",
+  readContextUsage: "codex:read-context-usage",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof CODEX_METHOD_CHANNELS;

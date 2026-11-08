@@ -299,6 +299,9 @@ export interface GeneratedElectronAPI {
     matchRestoreSessions(
       ...args: IpcInvokeMap["codex:match-restore-sessions"]["args"]
     ): Promise<IpcInvokeMap["codex:match-restore-sessions"]["result"]>;
+    readContextUsage(
+      ...args: IpcInvokeMap["codex:read-context-usage"]["args"]
+    ): Promise<IpcInvokeMap["codex:read-context-usage"]["result"]>;
     readQuota(
       ...args: IpcInvokeMap["codex:read-quota"]["args"]
     ): Promise<IpcInvokeMap["codex:read-quota"]["result"]>;

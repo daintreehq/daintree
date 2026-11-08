@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { claudeClient } from "@/clients/claudeClient";
+import { codexClient } from "@/clients/codexClient";
 import { isElectronAvailable } from "./useElectron";
 import type { AgentState } from "@/types";
+import type {
+  AgentContextUsageProvider,
+  AgentContextUsageResult,
+} from "@shared/types/ipc/agentContextUsage";
 
 /**
- * After a turn, the first read waits this long for Claude Code to finish
+ * After a turn, the first read waits this long for the agent to finish
  * writing the turn's records, and the second catches a write that took longer.
  */
 export const CONTEXT_USAGE_FIRST_READ_MS = 500;
@@ -32,15 +37,38 @@ const SETTLED_STATES: ReadonlySet<AgentState> = new Set<AgentState>([
   "completed",
 ]);
 
-export interface ClaudeContextUsageReading {
+export interface AgentContextUsageReading {
   contextTokens: number;
-  /** When the transcript says the request's reply was written, epoch ms. */
+  /** The context window the record states, when it states one (Codex only). */
+  contextWindow?: number;
+  /** When the session file says the reading was written, epoch ms. */
   recordedAt: number;
 }
 
 interface CachedReading {
   at: number;
-  reading: ClaudeContextUsageReading | null;
+  reading: AgentContextUsageReading | null;
+}
+
+const READERS: Record<
+  AgentContextUsageProvider,
+  (payload: { terminalId: string }) => Promise<AgentContextUsageResult>
+> = {
+  claude: (payload) => claudeClient.readContextUsage(payload),
+  codex: (payload) => codexClient.readContextUsage(payload),
+};
+
+/** The reading an answer carries, if it is an answer about the agent that was asked. */
+function toReading(
+  provider: AgentContextUsageProvider,
+  result: AgentContextUsageResult
+): AgentContextUsageReading | null {
+  if (result.status !== "ok" || result.provider !== provider) return null;
+  const { contextTokens, recordedAt } = result;
+  if (result.provider === "codex" && result.contextWindow !== undefined) {
+    return { contextTokens, contextWindow: result.contextWindow, recordedAt };
+  }
+  return { contextTokens, recordedAt };
 }
 
 /**
@@ -55,7 +83,7 @@ const cache = new Map<string, CachedReading>();
  */
 const inFlight = new Map<
   string,
-  { at: number; request: Promise<ClaudeContextUsageReading | null> }
+  { at: number; request: Promise<AgentContextUsageReading | null> }
 >();
 
 function remember(key: string, entry: CachedReading): void {
@@ -74,25 +102,25 @@ function remember(key: string, entry: CachedReading): void {
  * caller has stopped wanting one by then.
  */
 function read(
+  provider: AgentContextUsageProvider,
   terminalId: string,
   key: string,
   due: number,
   wanted: () => boolean
-): Promise<ClaudeContextUsageReading | null> {
+): Promise<AgentContextUsageReading | null> {
   const pending = inFlight.get(key);
   if (pending) {
     if (pending.at >= due) return pending.request;
-    return pending.request.then(() => (wanted() ? read(terminalId, key, due, wanted) : null));
+    return pending.request.then(() =>
+      wanted() ? read(provider, terminalId, key, due, wanted) : null
+    );
   }
   const at = Date.now();
   // Started inside the chain so a bridge that throws outright still settles.
   const request = Promise.resolve()
-    .then(() => claudeClient.readContextUsage({ terminalId }))
+    .then(() => READERS[provider]({ terminalId }))
     .then(
-      (result) =>
-        result.status === "ok"
-          ? { contextTokens: result.contextTokens, recordedAt: result.recordedAt }
-          : null,
+      (result) => toReading(provider, result),
       // The failure says nothing a person could act on, and the chip simply
       // isn't there; a host path in the message is no reason to log it.
       () => null
@@ -109,8 +137,9 @@ function read(
 }
 
 /**
- * The context a Claude Code pane's most recent main-conversation request
- * carried, read from its transcript on the host (#16371).
+ * How much context an agent pane carries, read on the host from the session
+ * file its CLI writes: a Claude Code transcript (#16371) or a Codex rollout
+ * (#16408).
  *
  * Reads follow turn boundaries, never output: two reads each time the pane
  * settles after working, and one when a pane mounts already settled. Changes
@@ -118,37 +147,39 @@ function read(
  * boundary, and work resuming cancels the reads still pending. The reading
  * stays on screen through the next turn, since its time says how old it is.
  */
-export function useClaudeContextUsage(
+export function useAgentContextUsage(
   terminalId: string,
   options: {
+    provider: AgentContextUsageProvider;
     enabled: boolean;
     agentState?: AgentState;
     /** Anything that changes when the process or agent session behind the pane does. */
     generation: string;
   }
-): ClaudeContextUsageReading | null {
-  const { enabled, agentState, generation } = options;
-  const key = `${terminalId}:${generation}`;
+): AgentContextUsageReading | null {
+  const { provider, enabled, agentState, generation } = options;
+  const key = `${provider}:${terminalId}:${generation}`;
   const settled = agentState !== undefined && SETTLED_STATES.has(agentState);
   const [entry, setEntry] = useState<{
     key: string;
-    reading: ClaudeContextUsageReading | null;
+    reading: AgentContextUsageReading | null;
   } | null>(() => {
     const cached = cache.get(key);
     return cached ? { key, reading: cached.reading } : null;
   });
-  // Set while the agent works and spent by the settle that ends the turn, so
-  // that settle reads even when the last reading is seconds old.
-  const workedRef = useRef(false);
+  // The key the agent worked under, spent by the settle that ends the turn, so
+  // that settle reads even when the last reading is seconds old. A turn of
+  // another agent or run in the same pane is not this one's.
+  const workedRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (agentState === "working") workedRef.current = true;
-  }, [agentState]);
+    if (agentState === "working") workedRef.current = key;
+  }, [agentState, key]);
 
   useEffect(() => {
     if (!enabled || !settled || !isElectronAvailable()) return;
-    const afterTurn = workedRef.current;
-    workedRef.current = false;
+    const afterTurn = workedRef.current === key;
+    workedRef.current = null;
     const cached = cache.get(key);
     if (cached) {
       setEntry((current) => (current?.key === key ? current : { key, reading: cached.reading }));
@@ -159,7 +190,7 @@ export function useClaudeContextUsage(
     const schedule = (delay: number) => {
       const due = Date.now() + delay;
       return setTimeout(() => {
-        void read(terminalId, key, due, () => live).then((reading) => {
+        void read(provider, terminalId, key, due, () => live).then((reading) => {
           if (live) setEntry({ key, reading });
         });
       }, delay);
@@ -170,7 +201,7 @@ export function useClaudeContextUsage(
       live = false;
       for (const timer of timers) clearTimeout(timer);
     };
-  }, [enabled, settled, terminalId, key]);
+  }, [enabled, settled, provider, terminalId, key]);
 
   // A reading for another session, or one the pane can no longer have, is not
   // this pane's: nothing shows until its own read answers.
@@ -178,7 +209,7 @@ export function useClaudeContextUsage(
 }
 
 /** Test-only: the cache is module state and outlives a render tree. */
-export function __resetClaudeContextUsageCache(): void {
+export function __resetAgentContextUsageCache(): void {
   cache.clear();
   inFlight.clear();
 }
