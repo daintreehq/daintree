@@ -38,7 +38,15 @@ function harness(listing: () => readonly RunWorktreeListing[] | null) {
       sleep,
       now: () => time,
     });
-  return { host, sleep, prepare };
+  return {
+    host,
+    sleep,
+    prepare,
+    elapsed: () => time,
+    holdClaim: (next: ScheduledRunWorktreeClaim) => {
+      claim = next;
+    },
+  };
 }
 
 const running: RunWorktreeListing = {
@@ -69,13 +77,15 @@ describe("prepareRunWorktree", () => {
   });
 
   it("gives up on a setup still running at the deadline, saying so", async () => {
-    const { prepare } = harness(() => [running]);
+    const { prepare, elapsed } = harness(() => [running]);
 
     await expect(prepare()).resolves.toMatchObject({
       status: "refused",
       message: expect.stringContaining("still running after 10 minutes"),
       worktree: { worktreeId: "/worktrees/new" },
     });
+    // Waited the whole budget, and not a poll past it.
+    expect(elapsed()).toBe(10 * 60_000);
   });
 
   it("stops looking once told to, launching nothing later", async () => {
@@ -115,6 +125,12 @@ describe("prepareRunWorktree", () => {
     });
     const { prepare, host } = harness(() => [
       {
+        id: "/worktrees/unrelated",
+        path: "/worktrees/unrelated",
+        branch: "unrelated",
+        setupStatus: { state: "ready", startedAt: 1 },
+      },
+      {
         id: "/worktrees/new",
         path: "/worktrees/new",
         branch,
@@ -126,10 +142,28 @@ describe("prepareRunWorktree", () => {
     await expect(prepare()).resolves.toMatchObject({ status: "ready" });
     await expect(prepare()).resolves.toMatchObject({
       status: "ready",
+      worktreeId: "/worktrees/new",
       worktree: { branch },
     });
 
     expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts afresh for a claim on the same name from a different kind of base", async () => {
+    const { prepare, host, holdClaim } = harness(() => [
+      { ...running, setupStatus: { state: "ready", startedAt: 1 } },
+    ]);
+    holdClaim({
+      scheduleId: "schedule-1",
+      projectId: "project-1",
+      branch: "schedule-old",
+      baseBranch: "main",
+      fromRemote: true,
+    });
+
+    await prepare();
+
+    expect(vi.mocked(host.create).mock.calls[0]![1].branch).not.toBe("schedule-old");
   });
 
   it("caps a create failure's reason, which is git's own text", async () => {

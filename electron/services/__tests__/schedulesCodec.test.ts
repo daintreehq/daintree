@@ -45,12 +45,12 @@ function file(schedules: unknown[], extra: Record<string, unknown> = {}): string
 }
 
 /** A record as builds before new-worktree runs (#16369) wrote it. */
-function legacy(record: Schedule): unknown {
+function legacy<T extends Pick<Schedule, "launch">>(record: T): unknown {
   const { newWorktree: _newWorktree, ...launch } = record.launch;
   return { ...record, launch };
 }
 
-function v1File(schedules: Schedule[]): string {
+function v1File(schedules: Array<Pick<Schedule, "launch">>): string {
   return JSON.stringify({ _schemaVersion: 1, schedules: schedules.map(legacy) });
 }
 

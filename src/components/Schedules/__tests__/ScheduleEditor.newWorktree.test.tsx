@@ -157,11 +157,93 @@ describe("ScheduleEditor: a new worktree each run (#16369)", () => {
     );
   });
 
-  it("says a stored base the project no longer has is missing, and keeps it", async () => {
-    renderEditor(existing({ newWorktree: { baseBranch: "gone", fromRemote: false } }));
-
-    await waitFor(() => expect(screen.getByText("gone (missing)")).toBeTruthy());
+  it("counts a change of base alone as a change, the kind of base included", async () => {
+    renderEditor(existing({ newWorktree: { baseBranch: "main", fromRemote: false } }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Base branch" })).toBeTruthy());
     expect(screen.queryByText("No changes to save")).not.toBeNull();
+
+    await act(async () => fireEvent.click(screen.getByRole("combobox", { name: "Base branch" })));
+    await act(async () =>
+      fireEvent.click(await screen.findByRole("option", { name: /origin\/develop/ }))
+    );
+
+    expect(screen.queryByText("No changes to save")).toBeNull();
+    await save();
+    expect(clientMock.update).toHaveBeenCalledWith(
+      "s1",
+      expect.anything(),
+      expect.objectContaining({
+        launch: expect.objectContaining({
+          newWorktree: { baseBranch: "origin/develop", fromRemote: true },
+        }),
+      })
+    );
+  });
+
+  it("keeps the base when the choice moves away and back", async () => {
+    renderEditor(existing({ newWorktree: { baseBranch: "main", fromRemote: false } }));
+
+    await chooseWorktree("feature");
+    expect(screen.queryByText("Base branch")).toBeNull();
+    await chooseWorktree("New worktree each run");
+    await save();
+
+    expect(clientMock.update).not.toHaveBeenCalled();
+    expect(screen.queryByText("No changes to save")).not.toBeNull();
+    expect(screen.getByText("Base branch")).toBeTruthy();
+  });
+
+  it("takes keyboard focus to the base when saving without one", async () => {
+    renderEditor(existing());
+    await chooseWorktree("New worktree each run");
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Base branch" })).toBeTruthy());
+
+    await save();
+
+    expect(document.activeElement).toBe(screen.getByRole("combobox", { name: "Base branch" }));
+  });
+
+  it("shows main's refusal on the base field", async () => {
+    clientMock.update.mockResolvedValue({
+      status: "invalid",
+      issues: [
+        {
+          path: "launch.newWorktree.baseBranch",
+          message: "Choose a base branch",
+        },
+      ],
+    });
+    renderEditor(existing({ newWorktree: { baseBranch: "main", fromRemote: false } }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Base branch" })).toBeTruthy());
+    await act(async () => fireEvent.click(screen.getByRole("combobox", { name: "Base branch" })));
+    await act(async () =>
+      fireEvent.click(await screen.findByRole("option", { name: /origin\/develop/ }))
+    );
+
+    await save();
+
+    expect(screen.getByText("Choose a base branch")).toBeTruthy();
+  });
+
+  it("says a stored base the project no longer has is missing, and saves it unchanged", async () => {
+    renderEditor(existing({ newWorktree: { baseBranch: "gone", fromRemote: true } }));
+    await waitFor(() => expect(screen.getByText("gone (missing)")).toBeTruthy());
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Name" }), {
+      target: { value: "Renamed" },
+    });
+    await save();
+
+    expect(clientMock.update).toHaveBeenCalledWith(
+      "s1",
+      expect.anything(),
+      expect.objectContaining({
+        name: "Renamed",
+        launch: expect.objectContaining({
+          newWorktree: { baseBranch: "gone", fromRemote: true },
+        }),
+      })
+    );
   });
 
   it("says where the check runs, since no worktree exists yet", async () => {

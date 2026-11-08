@@ -547,6 +547,9 @@ async function launchInScheduleTurn<View>(
           prepared.status === "refused" ? prepared.message : "The run's new worktree wasn't ready."
         );
       }
+      if (samePath(prepared.path, project.path)) {
+        return refuseBeforeLaunch("The run's new worktree turned out to be the project's folder.");
+      }
       launchTarget = prepared.path;
       launchWorktreeId = prepared.worktreeId;
       if (deps.isProjectSleeping(projectId)) {
@@ -701,7 +704,8 @@ async function launchInScheduleTurn<View>(
     // the claim goes and its worktree stays for review, or the next run would
     // start in a worktree as old as the switch-off. A quit's stays, for the
     // occurrence the next startup catches up.
-    if (newWorktree && reserved.state().kind === "cancelled" && !isShuttingDown()) {
+    const cancelled = reserved.state().kind === "cancelled" || reserved.removed();
+    if (newWorktree && cancelled && !isShuttingDown()) {
       try {
         recorder.dropWorktreeClaim(scheduleId, newWorktree.branch);
       } catch (error) {

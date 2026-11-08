@@ -338,6 +338,27 @@ describe("worktree claims (#16369)", () => {
     expect(store.get("run-1")).toBeNull();
   });
 
+  it("commits with the run or not at all, the evaluation point included", () => {
+    const store = new ScheduledRunStore(sqlite);
+    store.saveWorktreeClaim(claim);
+    sqlite.exec(`
+      CREATE TRIGGER refuse_claim_delete BEFORE DELETE ON scheduled_run_worktree_claims
+      BEGIN SELECT RAISE(ABORT, 'disk full'); END;
+    `);
+    const origin = {
+      trigger: "scheduled" as const,
+      dueAt: T0,
+      occurrenceKey: occurrenceKeyFor(T0),
+      coalesced: null,
+    };
+
+    expect(() => store.insert({ ...madeRun("run-1"), origin })).toThrow("disk full");
+
+    expect(store.get("run-1")).toBeNull();
+    expect(store.evaluationPoint("schedule-1")).toBeNull();
+    expect(store.worktreeClaim("schedule-1")).toEqual(claim);
+  });
+
   it("leaves a claim for another branch alone", () => {
     const store = new ScheduledRunStore(sqlite);
     store.saveWorktreeClaim(claim);

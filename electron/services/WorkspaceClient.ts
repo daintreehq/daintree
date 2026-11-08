@@ -156,11 +156,12 @@ export class WorkspaceClient extends EventEmitter {
       },
       // Views register under their workspace id, which for a project is the
       // same id the pool resolves from the host's path; a scratch workspace
-      // never has a pool entry, so it can't be mistaken for one. A scheduled
-      // launch still waiting to spawn holds the host too: a run's new worktree
-      // sets up in it, with no window at all when an OS job started Daintree.
-      hasLiveProjectView: (projectId) =>
-        getWebContentsForProject(projectId).length > 0 || hasPendingScheduledLaunch(projectId),
+      // never has a pool entry, so it can't be mistaken for one.
+      hasLiveProjectView: (projectId) => getWebContentsForProject(projectId).length > 0,
+      // A run's new worktree sets up in the host while its launch waits to spawn
+      // (#16369), with no window at all when an OS job started Daintree, and
+      // setup status goes with the host.
+      isHostBusy: hasPendingScheduledLaunch,
     });
 
     this.copyTree = new WorkspaceCopyTreeClient({

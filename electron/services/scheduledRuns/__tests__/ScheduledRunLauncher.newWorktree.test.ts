@@ -305,7 +305,7 @@ describe("a schedule that runs each time in a new worktree (#16369)", () => {
       });
       deps.launchInView = vi.fn(async () => ({
         ok: false as const,
-        error: { code: "EXECUTION_ERROR", message: "No" },
+        error: { code: "EXECUTION_ERROR" as const, message: "No" },
       }));
 
       await expect(launch(occurrence(T0))).resolves.toMatchObject({
@@ -342,6 +342,57 @@ describe("a schedule that runs each time in a new worktree (#16369)", () => {
         message: expect.stringContaining("already exists"),
       });
       expect(host.worktrees.size).toBe(1);
+    });
+
+    it("never starts in a main checkout switched to the run's branch since", async () => {
+      store.saveWorktreeClaim({
+        scheduleId: SCHEDULE_ID,
+        projectId: PROJECT_ID,
+        branch: "schedule-x",
+        baseBranch: "main",
+        fromRemote: false,
+      });
+      host.worktrees.set("schedule-x", {
+        id: "/repo",
+        path: "/repo",
+        branch: "schedule-x",
+        setupStatus: READY,
+        isMainWorktree: true,
+      });
+
+      const outcome = await launch();
+
+      expect(outcome).toMatchObject({
+        status: "failed",
+        message: expect.stringContaining("checked out in the main checkout"),
+      });
+      expect(host.create).not.toHaveBeenCalled();
+      expectNothingLaunched();
+      expect(store.worktreeClaim(SCHEDULE_ID)).toBeNull();
+    });
+
+    it("never starts in the project's folder, however the host labels it", async () => {
+      store.saveWorktreeClaim({
+        scheduleId: SCHEDULE_ID,
+        projectId: PROJECT_ID,
+        branch: "schedule-x",
+        baseBranch: "main",
+        fromRemote: false,
+      });
+      host.worktrees.set("schedule-x", {
+        id: "/repo",
+        path: "/repo",
+        branch: "schedule-x",
+        setupStatus: READY,
+      });
+
+      const outcome = await launch();
+
+      expect(outcome).toMatchObject({
+        status: "failed",
+        message: expect.stringContaining("the project's folder"),
+      });
+      expectNothingLaunched();
     });
 
     it("never launches when the claim can't be written, and creates nothing", async () => {
@@ -459,7 +510,7 @@ describe("a schedule that runs each time in a new worktree (#16369)", () => {
         } catch (error) {
           return {
             ok: false as const,
-            error: { code: "EXECUTION_ERROR", message: (error as Error).message },
+            error: { code: "EXECUTION_ERROR" as const, message: (error as Error).message },
           };
         }
         return { ok: true as const, result: { launched: true } };
@@ -559,6 +610,27 @@ describe("a schedule that runs each time in a new worktree (#16369)", () => {
       expect(host.worktrees.size).toBe(1);
     });
 
+    it("lets the claim go when a spawn was refused and the schedule then went off", async () => {
+      host.setupAfterCreate = READY;
+      vi.spyOn(recorder, "registerLaunch").mockImplementationOnce(() => {
+        throw new Error("disk full");
+      });
+      deps.launchInView = vi.fn(async (_view, request) => {
+        try {
+          launched(request);
+        } catch {
+          // The refused spawn: the reservation now reads refused, not cancelled.
+        }
+        cancelScheduledLaunches({ scheduleId: SCHEDULE_ID, automaticOnly: true });
+        return { ok: true as const, result: { launched: false } };
+      });
+
+      await expect(launch(occurrence(T0))).resolves.toEqual({ status: "not-found" });
+
+      expect(recorder.listBySchedule(SCHEDULE_ID)).toEqual([]);
+      expect(store.worktreeClaim(SCHEDULE_ID)).toBeNull();
+    });
+
     it("keeps the claim on a quit, for the occurrence the next startup catches up", async () => {
       host.list.mockImplementationOnce(async () => {
         shuttingDown = true;
@@ -574,17 +646,18 @@ describe("a schedule that runs each time in a new worktree (#16369)", () => {
   });
 
   it("forgets the claim when the schedule is deleted, and never touches the worktree", async () => {
-    store.saveWorktreeClaim({
-      scheduleId: SCHEDULE_ID,
-      projectId: PROJECT_ID,
-      branch: "schedule-x",
-      baseBranch: "main",
-      fromRemote: false,
+    host.setupAfterCreate = { state: "running", startedAt: 1 };
+    host.list.mockImplementationOnce(async () => {
+      shuttingDown = true;
+      return [...host.worktrees.values()];
     });
+    await launch(occurrence(T0));
+    expect(store.worktreeClaim(SCHEDULE_ID)).not.toBeNull();
 
     recorder.deleteForSchedule(SCHEDULE_ID);
 
     expect(store.worktreeClaim(SCHEDULE_ID)).toBeNull();
+    expect(host.worktrees.size).toBe(1);
   });
 
   it("never asks the host for anything on a schedule with a fixed target", async () => {

@@ -24,7 +24,10 @@ export interface ScheduledRunWorktreeHost {
   ) => Promise<string>;
 }
 
-export type RunWorktreeListing = Pick<WorktreeState, "id" | "path" | "branch" | "setupStatus">;
+export type RunWorktreeListing = Pick<
+  WorktreeState,
+  "id" | "path" | "branch" | "setupStatus" | "isMainWorktree"
+>;
 
 export type RunWorktreePreparation =
   | { status: "ready"; worktree: ScheduledRunNewWorktree; worktreeId: string; path: string }
@@ -96,26 +99,26 @@ export async function prepareRunWorktree(input: {
   const sleep =
     input.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
-  let branch: string;
-  let claimedEarlier = false;
-  try {
+  const claim = (): { branch: string; claimedEarlier: boolean } => {
     const held = recorder.worktreeClaim(scheduleId);
     // A base edited since it was claimed isn't what this run was asked for, so
     // the earlier attempt's worktree, if it got one, stays behind for review.
-    claimedEarlier =
-      held !== null && held.baseBranch === base.baseBranch && held.fromRemote === base.fromRemote;
-    if (held !== null && claimedEarlier) {
-      branch = held.branch;
-    } else {
-      branch = scheduledRunBranchName(scheduleName, now(), input.newId());
-      recorder.saveWorktreeClaim({
-        scheduleId,
-        projectId: project.id,
-        branch,
-        baseBranch: base.baseBranch,
-        fromRemote: base.fromRemote,
-      });
+    if (held?.baseBranch === base.baseBranch && held.fromRemote === base.fromRemote) {
+      return { branch: held.branch, claimedEarlier: true };
     }
+    const next = scheduledRunBranchName(scheduleName, now(), input.newId());
+    recorder.saveWorktreeClaim({
+      scheduleId,
+      projectId: project.id,
+      branch: next,
+      baseBranch: base.baseBranch,
+      fromRemote: base.fromRemote,
+    });
+    return { branch: next, claimedEarlier: false };
+  };
+  let claimed: { branch: string; claimedEarlier: boolean };
+  try {
+    claimed = claim();
   } catch {
     return {
       status: "refused",
@@ -123,6 +126,7 @@ export async function prepareRunWorktree(input: {
       message: "The run's new worktree couldn't be noted down, so nothing was created.",
     };
   }
+  const { branch, claimedEarlier } = claimed;
 
   let worktree: ScheduledRunNewWorktree = {
     branch,
@@ -148,6 +152,13 @@ export async function prepareRunWorktree(input: {
       return refused(`${listed}, so the run's new worktree couldn't be found.`);
     }
     const found = listed.find((candidate) => candidate.branch === branch);
+    // Someone switched the main checkout to the run's branch since. It's the one
+    // place a run in this mode must never start, whatever its setup reads.
+    if (found?.isMainWorktree) {
+      return refused(
+        "The run's branch is checked out in the main checkout now, so the agent wasn't launched."
+      );
+    }
     if (found) worktree = { ...worktree, worktreeId: found.id };
   }
   if (shouldStop()) return { status: "stopped", worktree };

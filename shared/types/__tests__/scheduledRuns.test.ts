@@ -141,6 +141,16 @@ describe("ScheduledRunSchema", () => {
         registered({ newWorktree: { ...newWorktree, worktreeId: null } })
       ).success
     ).toBe(true);
+    for (const bad of [
+      { ...newWorktree, branch: "" },
+      { ...newWorktree, baseBranch: "" },
+      { ...newWorktree, worktreeId: "" },
+      { ...newWorktree, extra: true },
+    ]) {
+      expect(ScheduledRunSchema.safeParse({ ...registered(), newWorktree: bad }).success).toBe(
+        false
+      );
+    }
   });
 
   it("accepts a run registered before anything spawns", () => {

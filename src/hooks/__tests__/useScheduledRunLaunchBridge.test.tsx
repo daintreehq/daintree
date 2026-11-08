@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { createStore } from "zustand";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionDispatchOptions, ActionDispatchResult } from "@shared/types/actions";
 import type {
@@ -29,7 +28,8 @@ vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: () => panels }
 
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { useScheduledRunLaunchBridge } from "@/hooks/useScheduledRunLaunchBridge";
-import type { WorktreeViewStoreApi } from "@/store/createWorktreeStore";
+import { createWorktreeStore } from "@/store/createWorktreeStore";
+import type { WorktreeSnapshot } from "@shared/types/workspace-host";
 
 let requestLaunch: ((request: ScheduledLaunchViewRequest) => void) | null = null;
 let runClosed: ((push: ScheduledRunClosedPush) => void) | null = null;
@@ -163,14 +163,21 @@ describe("useScheduledRunLaunchBridge", () => {
       newWorktree: true,
     };
 
+    const hostSnapshot = (id: string): WorktreeSnapshot => ({
+      id,
+      worktreeId: id,
+      name: id,
+      path: id,
+      branch: "schedule-x",
+      isCurrent: false,
+    });
+
+    /** The view's real store, which hears of a worktree the way a view does. */
     function worktreeStore(initial: readonly string[] = []) {
-      const store = createStore(() => ({
-        worktrees: new Map(initial.map((id) => [id, { id }])),
-      }));
+      const store = createWorktreeStore();
+      store.getState().applySnapshot(initial.map(hostSnapshot), { epoch: "e1", seq: 1 });
       const wrapper = ({ children }: { children: ReactNode }) => (
-        <WorktreeStoreContext.Provider value={store as unknown as WorktreeViewStoreApi}>
-          {children}
-        </WorktreeStoreContext.Provider>
+        <WorktreeStoreContext.Provider value={store}>{children}</WorktreeStoreContext.Provider>
       );
       return { store, wrapper };
     }
@@ -194,7 +201,10 @@ describe("useScheduledRunLaunchBridge", () => {
       await settle();
       expect(dispatch).not.toHaveBeenCalled();
 
-      store.setState({ worktrees: new Map([["/wt/new", { id: "/wt/new" }]]) });
+      const timers = vi.getTimerCount();
+      act(() => {
+        store.getState().applyUpdate(hostSnapshot("/wt/new"), { epoch: "e1", seq: 2 });
+      });
       await settle();
 
       expect(dispatch).toHaveBeenCalledTimes(1);
@@ -202,6 +212,13 @@ describe("useScheduledRunLaunchBridge", () => {
         requestId: "request-1",
         result: { ok: true, result: { launched: true } },
       });
+      // Its deadline went with the wait; a later update finds nothing listening.
+      expect(vi.getTimerCount()).toBeLessThan(timers);
+      act(() => {
+        store.getState().applyUpdate(hostSnapshot("/wt/new"), { epoch: "e1", seq: 3 });
+      });
+      await settle();
+      expect(dispatch).toHaveBeenCalledTimes(1);
     });
 
     it("launches at once when the view already knows it", async () => {
@@ -219,8 +236,10 @@ describe("useScheduledRunLaunchBridge", () => {
       renderHook(() => useScheduledRunLaunchBridge(), { wrapper });
 
       requestLaunch!(newWorktreeRequest);
-      await act(async () => vi.advanceTimersByTimeAsync(20_000));
+      await act(async () => vi.advanceTimersByTimeAsync(19_999));
+      expect(dispatch).not.toHaveBeenCalled();
 
+      await act(async () => vi.advanceTimersByTimeAsync(1));
       expect(dispatch).toHaveBeenCalledTimes(1);
     });
 
