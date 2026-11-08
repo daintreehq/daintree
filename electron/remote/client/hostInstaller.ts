@@ -771,6 +771,54 @@ function takeInstallLock(
   );
 }
 
+/**
+ * Take the host's install lock once nothing the user didn't confirm runs
+ * there. Waiting for idle happens outside the lock, so another device is never
+ * held up by it; under the lock the host is looked at once more without
+ * waiting, since a restart by another device may have ended or started work
+ * meanwhile. Returns the lock, or what needs confirming (and the lock let go).
+ */
+async function lockWhenSettled(
+  deps: InstallerDeps,
+  hostId: HostId | null,
+  whileWorking: NonNullable<InstallHostPayload["whileWorking"]>,
+  confirmed: HostRestartImpact | null,
+  token: string,
+  signal: AbortSignal,
+  report: (p: InstallProgress) => void
+): Promise<{ lock: InstallLock } | { impact: HostRestartImpact }> {
+  for (;;) {
+    if (confirmed) {
+      const impact = await recheckBeforeRestart(
+        deps,
+        hostId,
+        whileWorking,
+        confirmed,
+        signal,
+        report
+      );
+      if (impact) return { impact };
+    }
+    if (signal.aborted) throw cancelled();
+    const lock = await takeInstallLock(deps, token, signal, report);
+    if (!confirmed) return { lock };
+    let impact: HostRestartImpact;
+    try {
+      impact = await deps.restartImpact(hostId);
+    } catch (err) {
+      await lock.release();
+      throw err;
+    }
+    if (exceedsConfirmed(impact, confirmed)) {
+      await lock.release();
+      return { impact };
+    }
+    if (whileWorking !== "wait-for-idle" || busyAgents(impact) === 0) return { lock };
+    // An agent went busy again: it is waited out without holding the lock.
+    await lock.release();
+  }
+}
+
 export async function runHostInstall(
   payload: InstallHostPayload,
   deps: InstallerDeps,
@@ -870,44 +918,30 @@ export async function runHostInstall(
 
   const dropStaged = () =>
     deps.shell.exec(`rm -rf ${remotePath(staged.dir)}`, { timeoutMs: 30_000 }).catch(() => {});
-  /** Checked again right before the restart: work may have started while staging or waiting. */
-  const recheck = async (): Promise<InstallHostResult | null> => {
-    if (!plan.restartsHost || !confirmed) return null;
-    let impact: HostRestartImpact | null;
-    try {
-      impact = await recheckBeforeRestart(deps, hostId, whileWorking, confirmed, signal, report);
-    } catch (err) {
-      // Nothing is left staged for an update that isn't going ahead.
-      await dropStaged();
-      throw err;
-    }
-    if (!impact) return null;
-    await dropStaged();
-    return { status: "needs-confirmation", impact };
-  };
-  const reconfirm = await recheck();
-  if (reconfirm) return reconfirm;
-  if (signal.aborted) {
-    await dropStaged();
-    throw cancelled();
-  }
-
-  // One device at a time stops, replaces, starts and checks the host.
-  const token = (deps.installToken ?? newInstallToken)();
-  let lock: InstallLock;
+  // One device at a time stops, replaces, starts and checks the host, once
+  // nothing the user didn't confirm has started there while staging or waiting.
+  let settled: Awaited<ReturnType<typeof lockWhenSettled>>;
   try {
-    lock = await takeInstallLock(deps, token, signal, report);
+    settled = await lockWhenSettled(
+      deps,
+      hostId,
+      whileWorking,
+      plan.restartsHost ? confirmed : null,
+      (deps.installToken ?? newInstallToken)(),
+      signal,
+      report
+    );
   } catch (err) {
+    // Nothing is left staged for an update that isn't going ahead.
     await dropStaged();
     throw err;
   }
+  if ("impact" in settled) {
+    await dropStaged();
+    return { status: "needs-confirmation", impact: settled.impact };
+  }
+  const lock = settled.lock;
   try {
-    // The other device restarted the host meanwhile: what runs there, and what
-    // would end, is looked at again before anything is stopped.
-    if (lock.waited) {
-      const again = await recheck();
-      if (again) return again;
-    }
     if (signal.aborted) {
       await dropStaged();
       throw cancelled();
@@ -916,17 +950,22 @@ export async function runHostInstall(
     let parsed = before.parsed;
     // Staging and waiting can take a while: the host may have downloaded an
     // update meanwhile, which stopping it would install over this one, moved
-    // past this build on its own (or another device's install did), or had its
-    // windows opened or closed. Looked at again here, and planned again from
-    // what is there now.
-    if (lock.waited || parsed.appRunning || parsed.hostModeListening) {
+    // past this build on its own (or another device's install did), had
+    // Daintree started or stopped (another device's install may have been
+    // midway when it was first looked at), or had its windows opened or closed.
+    // Looked at again here, under the lock, and planned again from what is
+    // there now.
+    {
       const fresh = await deps.probe(signal);
       if (signal.aborted || !fresh.parsed) {
         await dropStaged();
         if (signal.aborted) throw cancelled();
         throw failed("The host stopped answering right before the restart. Nothing was changed");
       }
-      if (fresh.result.stagedUpdate?.installsOnQuit) {
+      if (
+        (parsed.appRunning || parsed.hostModeListening) &&
+        fresh.result.stagedUpdate?.installsOnQuit
+      ) {
         await dropStaged();
         throw refusal(
           `The host has just downloaded Daintree ${fresh.result.stagedUpdate.version}, which installs when Daintree there restarts. Nothing was changed: install that update first.`
@@ -1035,7 +1074,14 @@ export async function runHostInstall(
       }
       let previous = true;
       if (swapped) {
-        if (wasRunning) await run(stopScript(platform, null, hasUnit), 120_000);
+        if (wasRunning) {
+          const stopped = await run(stopScript(platform, null, hasUnit), 120_000);
+          // Files are never put back under a build that is still running.
+          if (stopped.code !== 0 || markerValue(stopped.stdout, "stopped") !== "yes") {
+            return "not-restored";
+          }
+        }
+        if (!lock.held()) return "lock-lost";
         const rolled = await run(rollbackScript(plan, target, lock.token), 120_000);
         const state = rolled.code === 0 ? markerValue(rolled.stdout, "rolledback") : null;
         if (state !== "yes" && state !== "none") return "not-restored";
@@ -1057,7 +1103,14 @@ export async function runHostInstall(
         probe.install?.version != null &&
         back.result.install?.version === probe.install.version &&
         back.result.install?.commit === probe.install.commit;
-      if (!back.result.reachable || !running || !sameBuild) return "not-restored";
+      // A listening host's own record says what it runs, whatever is installed.
+      const live = back.result.hostBuild;
+      const sameRunning =
+        !wasHostMode ||
+        live === null ||
+        (live.version === probe.install?.version &&
+          (live.commit === null || live.commit === probe.install?.commit));
+      if (!back.result.reachable || !running || !sameBuild || !sameRunning) return "not-restored";
       // Put back only when the rollback said so; otherwise what runs was never moved.
       return swapped && previous ? "restored" : "restarted";
     };
@@ -1229,26 +1282,20 @@ async function applyStagedUpdate(
     }
     confirmed = impact;
   }
-  const confirmedImpact = confirmed;
-  const recheck = () =>
-    recheckBeforeRestart(deps, hostId, whileWorking, confirmedImpact, signal, report);
-  const reconfirm = await recheck();
-  if (reconfirm) return { status: "needs-confirmation", impact: reconfirm };
-  if (signal.aborted) throw cancelled();
-
   // One device at a time stops and starts the host.
-  const lock = await takeInstallLock(
+  const settled = await lockWhenSettled(
     deps,
+    hostId,
+    whileWorking,
+    confirmed,
     (deps.installToken ?? newInstallToken)(),
     signal,
     report
   );
+  if ("impact" in settled) return { status: "needs-confirmation", impact: settled.impact };
+  const lock = settled.lock;
   try {
-    if (lock.waited) {
-      const again = await recheck();
-      if (again) return { status: "needs-confirmation", impact: again };
-      if (signal.aborted) throw cancelled();
-    }
+    if (signal.aborted) throw cancelled();
     // Waiting can take a while: the update, the process and its windows are
     // looked at again right before the stop, and the restart follows what is there now.
     const current = await deps.probe(signal);

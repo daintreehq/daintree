@@ -4,8 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { defaultCommandRunner } from "../commandRunner.js";
+import { processStartTime } from "../../host/hostSocketLock.js";
 import {
   acquireInstallLock,
+  installLockBreakScript,
   installLockHoldScript,
   installLockReleaseScript,
   installLockStatusScript,
@@ -28,12 +30,21 @@ afterEach(() => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-const lockDir = () =>
+const lockFolder = () =>
   path.join(
     home,
-    process.platform === "darwin" ? "Library/Application Support/Daintree" : ".cache/daintree",
-    "host-install.lock"
+    process.platform === "darwin" ? "Library/Application Support/Daintree" : ".cache/daintree"
   );
+const lockLink = () => path.join(lockFolder(), "host-install.lock");
+const record = (token: string) => path.join(lockFolder(), `owner.${token}`);
+/** What the lock names, or null when there is none. */
+const lockTarget = () => {
+  try {
+    return fs.readlinkSync(lockLink());
+  } catch {
+    return null;
+  }
+};
 
 const env = () => ({ ...process.env, HOME: home });
 
@@ -116,19 +127,27 @@ describe.runIf(supported)("the host's install lock", () => {
     // No exit trap runs: the lock stays behind, naming a pid that no longer exists.
     first.kill("SIGKILL");
     await exited(first);
-    expect(fs.existsSync(path.join(lockDir(), "owner"))).toBe(true);
+    expect(lockTarget()).toBe("owner.aaaa");
 
     holder("bbbb");
     await until(() => status("bbbb") === "@@dt:lock held");
+    // The dead holder's record went with its lock.
+    expect(fs.existsSync(record("aaaa"))).toBe(false);
   }, 20_000);
 
   it("takes over when the recorded pid now belongs to a process that started at another time", async () => {
     const first = holder("aaaa");
     await until(() => status("aaaa") === "@@dt:lock held");
+    // The record names the holder by when it really started, not a fixed stand-in.
+    const [pid, identity] = fs.readFileSync(record("aaaa"), "utf8").split("\n");
+    expect(Number(pid)).toBe(first.pid);
+    const started = processStartTime(first.pid!)?.replace(/\s+/g, " ");
+    expect(started).toBeTruthy();
+    expect(identity!.startsWith(started!)).toBe(true);
     first.kill("SIGKILL");
     await exited(first);
     // A live process (this one) under the recorded pid, but not the one that wrote the lock.
-    fs.writeFileSync(path.join(lockDir(), "owner"), `${process.pid}\nnot when it started\naaaa\n`);
+    fs.writeFileSync(record("aaaa"), `${process.pid}\nnot when it started\n`);
 
     holder("bbbb");
     await until(() => status("bbbb") === "@@dt:lock held");
@@ -139,7 +158,20 @@ describe.runIf(supported)("the host's install lock", () => {
     await until(() => status("aaaa") === "@@dt:lock held");
     first.stdout?.destroy();
     await exited(first);
-    expect(fs.existsSync(lockDir())).toBe(false);
+    expect(lockTarget()).toBeNull();
+    expect(fs.existsSync(record("aaaa"))).toBe(false);
+  }, 20_000);
+
+  it("never removes a newer holder's lock when breaking one it judged stale earlier", async () => {
+    holder("live");
+    await until(() => status("live") === "@@dt:lock held");
+    // A waiter that judged an earlier holder gone, then paused while the lock changed hands.
+    spawnSync("sh", ["-c", installLockBreakScript("late", "owner.dead")], { env: env() });
+    expect(lockTarget()).toBe("owner.live");
+    expect(status("live")).toBe("@@dt:lock held");
+    // The same break, for the lock it names, removes it.
+    spawnSync("sh", ["-c", installLockBreakScript("late", "owner.live")], { env: env() });
+    expect(lockTarget()).toBeNull();
   }, 20_000);
 
   it("waits for another device, says so once, and holds the lock until released", async () => {
@@ -156,13 +188,13 @@ describe.runIf(supported)("the host's install lock", () => {
     spawnSync("sh", ["-c", installLockReleaseScript("other1")], { env: env() });
     const lock = await acquiring;
     expect(waiting).toBe(1);
-    expect(lock.waited).toBe(true);
     expect(lock.held()).toBe(true);
     expect(status("mine")).toBe("@@dt:lock held");
 
     await lock.release();
     expect(lock.held()).toBe(false);
-    expect(fs.existsSync(lockDir())).toBe(false);
+    expect(lockTarget()).toBeNull();
+    expect(fs.existsSync(record("mine"))).toBe(false);
   }, 20_000);
 
   it("stops waiting when cancelled, leaving the other device's lock alone", async () => {

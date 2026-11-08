@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AppError } from "../../utils/errorTypes.js";
 import type { CommandResult } from "./commandRunner.js";
 import { LINUX_RUNTIME_DIR_NAME, MAC_APP_DIR_NAME } from "../host/hostSocketPath.js";
@@ -7,21 +8,25 @@ import { failureDetail, type HostCommandChannel } from "./remoteShell.js";
 
 /**
  * One install or update at a time on a host, whichever Shell runs it. Shells
- * don't talk to each other, so the lock lives on the host: a directory made
- * with `mkdir` (atomic everywhere) in the ssh user's own Daintree folder,
- * held by a process there that this install keeps running for as long as it
- * needs the lock. That process writes a byte every few seconds, so it dies
- * soon after its ssh channel goes (a cancel, a crash or a dropped link here),
- * and its exit removes the lock. The byte comes from /bin/echo: a builtin echo
- * that hits the closed pipe keeps the byte and spills it into the next
- * `$(...)`, which then misreads the lock's owner.
+ * don't talk to each other, so the lock lives on the host, in the ssh user's
+ * own Daintree folder: a symlink `host-install.lock` naming its holder's
+ * record (`owner.<token>`, its pid and when it started). The record is written
+ * first and the link made with `ln -sn`, which fails while any link is there,
+ * so a lock always names a complete record. The holder is a process there
+ * that this install keeps running for as long as it needs the lock. It writes
+ * a byte every few seconds, so it dies soon after its ssh channel goes (a
+ * cancel, a crash or a dropped link here), and its exit removes the lock.
  *
  * A lock is broken only when its holder is verifiably gone: its pid no longer
  * exists, or that pid now belongs to a process started at another time (on
- * Linux, in another boot). Age decides only for a lock naming no owner yet (a
- * holder that died between creating and filling it). Breaking is done by one
- * waiter at a time, which checks again that the lock is still the one judged
- * stale before removing it, as `hostSocketLock.ts` does on the host itself.
+ * Linux, in another boot). Age never breaks one. Removing a link is always a
+ * rename to a name of the remover's own first, then a look at what was moved:
+ * the lock judged stale is deleted, anything else is put back. So two waiters
+ * breaking the same stale lock, or one that paused for a while, never remove
+ * the lock a newer holder has since taken.
+ *
+ * The byte comes from /bin/echo: a builtin echo that hits the closed pipe
+ * keeps the byte and spills it into the next `$(...)`.
  */
 
 const MARK = "@@dt:";
@@ -35,8 +40,6 @@ const RELEASE_WAIT_MS = (HOLD_CHECK_SECONDS + 2) * 1_000;
 export interface InstallLock {
   /** Unique to this install: names its lock and its backups. */
   token: string;
-  /** Whether another device held the lock first, so the host may have changed since it was looked at. */
-  waited: boolean;
   /** Still held: the holder on the host is running. */
   held(): boolean;
   release(): Promise<void>;
@@ -56,25 +59,22 @@ export function newInstallToken(): string {
   return crypto.randomBytes(8).toString("hex");
 }
 
-/** Sets `$L` to the lock: the same path for every login as this user. */
-function lockPath(): string {
-  return `if [ "$(uname -s)" = Darwin ]; then d="$HOME/Library/Application Support/${MAC_APP_DIR_NAME}"; else d="$HOME/.cache/${LINUX_RUNTIME_DIR_NAME}"; fi; L="$d/host-install.lock"`;
+/** Sets `$d` to the lock's folder, `$L` to the lock and `$o` to this token's record: the same for every login as this user. */
+function lockVars(token: string): string {
+  return `t=${sq(token)}; if [ "$(uname -s)" = Darwin ]; then d="$HOME/Library/Application Support/${MAC_APP_DIR_NAME}"; else d="$HOME/.cache/${LINUX_RUNTIME_DIR_NAME}"; fi; L="$d/host-install.lock"; o="owner.$t"`;
 }
 
-/** The lock's owner record: pid, start identity, token, one per line. */
-const OWNER_TOKEN = `sed -n 3p "$L/owner" 2>/dev/null`;
-
 /**
- * `ident <pid var>` sets `$n` to when that process started, with Linux's boot
+ * `ident <pid>` sets `$n` to when that process started, with Linux's boot
  * id, whose /proc start ticks repeat across boots. Empty when it can't be read.
  */
 const IDENT = `ident() { ${processStartShell("1", "n")}; if [ -n "$n" ] && [ -r /proc/sys/kernel/random/boot_id ]; then n="$n@$(cat /proc/sys/kernel/random/boot_id)"; fi; }`;
 
-/** `gone` succeeds when the lock's owner verifiably no longer runs. */
-const GONE = `gone() { p=$(sed -n 1p "$L/owner" 2>/dev/null); s=$(sed -n 2p "$L/owner" 2>/dev/null); if [ -z "$p" ]; then [ -n "$(find "$L" -maxdepth 0 -mmin +1 2>/dev/null)" ]; return; fi; case "$p" in *[!0-9]*) return 1 ;; esac; kill -0 "$p" 2>/dev/null || return 0; [ -n "$s" ] || return 1; ident "$p"; [ -n "$n" ] && [ "$n" != "$s" ]; }`;
+/** `gone` succeeds when the lock's holder verifiably no longer runs, leaving the record it judged in `$r`. */
+const GONE = `gone() { r=$(readlink "$L" 2>/dev/null); [ -n "$r" ] || return 1; p=$(sed -n 1p "$d/$r" 2>/dev/null); s=$(sed -n 2p "$d/$r" 2>/dev/null); [ -n "$p" ] || return 0; case "$p" in *[!0-9]*) return 1 ;; esac; kill -0 "$p" 2>/dev/null || return 0; [ -n "$s" ] || return 1; ident "$p"; [ -n "$n" ] && [ "$n" != "$s" ]; }`;
 
-/** `brk` removes a stale lock, one breaker at a time, only while it is still the lock judged stale. */
-const BREAK = `brk() { o=$(${OWNER_TOKEN}); if mkdir "$L.break" 2>/dev/null; then if gone && [ "$(${OWNER_TOKEN})" = "$o" ]; then rm -rf "$L"; fi; rmdir "$L.break" 2>/dev/null; elif [ -n "$(find "$L.break" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then rmdir "$L.break" 2>/dev/null; fi; }`;
+/** `take <record>` removes the lock only while it names that record, and puts back whatever else it moved. */
+const TAKE = `take() { mv "$L" "$d/moving.$t" 2>/dev/null || return 0; m=$(readlink "$d/moving.$t" 2>/dev/null); if [ "$m" = "$1" ]; then rm -f "$d/moving.$t" "$d/$m"; else ln -sn "$m" "$L" 2>/dev/null; rm -f "$d/moving.$t"; fi; }`;
 
 /**
  * Takes the lock and holds it until released, the channel goes or the hold's
@@ -82,33 +82,37 @@ const BREAK = `brk() { o=$(${OWNER_TOKEN}); if mkdir "$L.break" 2>/dev/null; the
  * when the lock can't be made at all.
  */
 export function installLockHoldScript(token: string): string {
-  const t = sq(token);
   return [
     `umask 077`,
-    lockPath(),
-    `t=${t}`,
+    lockVars(token),
     IDENT,
     GONE,
-    BREAK,
-    `rel() { if [ "$(${OWNER_TOKEN})" = "$t" ]; then rm -rf "$L"; fi; }`,
+    TAKE,
+    // Only this holder makes the link name its record, so seeing it there means it is still this holder's.
+    `rel() { if [ "$(readlink "$L" 2>/dev/null)" = "$o" ]; then take "$o"; fi; rm -f "$d/$o" "$d/release-$t"; }`,
     `trap rel EXIT`,
     `trap 'exit 1' HUP INT TERM PIPE`,
     `mkdir -p "$d" || exit 1`,
-    `until mkdir "$L" 2>/dev/null; do [ -d "$d" ] || exit 1; if gone; then brk; fi; sleep 1; /bin/echo . || exit 1; done`,
     `ident $$`,
-    `printf '%s\\n%s\\n%s\\n' "$$" "$n" "$t" > "$L/owner.tmp" && mv "$L/owner.tmp" "$L/owner" || { rm -rf "$L"; exit 1; }`,
-    `i=0; while [ "$(${OWNER_TOKEN})" = "$t" ] && [ ! -f "$L/release" ] && [ $i -lt ${HOLD_CHECKS} ]; do sleep ${HOLD_CHECK_SECONDS}; /bin/echo . || exit 1; i=$((i+1)); done`,
+    `printf '%s\\n%s\\n' "$$" "$n" > "$d/$o.tmp" && mv "$d/$o.tmp" "$d/$o" || exit 1`,
+    `until ln -sn "$o" "$L" 2>/dev/null; do if gone; then take "$r"; fi; sleep 1; /bin/echo . || exit 1; done`,
+    `i=0; while [ "$(readlink "$L" 2>/dev/null)" = "$o" ] && [ ! -f "$d/release-$t" ] && [ $i -lt ${HOLD_CHECKS} ]; do sleep ${HOLD_CHECK_SECONDS}; /bin/echo . || exit 1; i=$((i+1)); done`,
   ].join("; ");
+}
+
+/** What a waiter runs once it judged `record`'s holder gone: the lock goes only while it still names that record. */
+export function installLockBreakScript(token: string, record: string): string {
+  return `${lockVars(token)}; ${TAKE}; take ${sq(record)}`;
 }
 
 /** Whether the lock is this token's, another's, or no one's. */
 export function installLockStatusScript(token: string): string {
-  return `${lockPath()}; o=$(${OWNER_TOKEN}); if [ "$o" = ${sq(token)} ]; then echo "${MARK}lock held"; elif [ -d "$L" ]; then echo "${MARK}lock other"; else echo "${MARK}lock free"; fi`;
+  return `${lockVars(token)}; r=$(readlink "$L" 2>/dev/null); if [ "$r" = "$o" ]; then echo "${MARK}lock held"; elif [ -n "$r" ]; then echo "${MARK}lock other"; else echo "${MARK}lock free"; fi`;
 }
 
-/** Asks this token's holder to let go; only the holder removes the lock. */
+/** Asks this token's holder, and only it, to let go: it removes the lock itself. */
 export function installLockReleaseScript(token: string): string {
-  return `${lockPath()}; if [ "$(${OWNER_TOKEN})" = ${sq(token)} ]; then : > "$L/release"; fi`;
+  return `${lockVars(token)}; if [ -f "$d/$o" ]; then : > "$d/release-$t"; fi`;
 }
 
 function lockState(stdout: string): "held" | "other" | "free" | null {
@@ -152,7 +156,7 @@ export async function acquireInstallLock(
     await hold;
   };
 
-  let waited = false;
+  let waiting = false;
   for (;;) {
     if (signal.aborted) {
       await letGo();
@@ -173,8 +177,8 @@ export async function acquireInstallLock(
       });
     }
     if (state === "held") break;
-    if (state === "other" && !waited) {
-      waited = true;
+    if (state === "other" && !waiting) {
+      waiting = true;
       onWaiting();
     }
     try {
@@ -190,7 +194,6 @@ export async function acquireInstallLock(
   let released = false;
   return {
     token,
-    waited,
     held: () => run.ended === null && !released,
     async release() {
       if (released) return;

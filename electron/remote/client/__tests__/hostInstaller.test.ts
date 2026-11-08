@@ -159,11 +159,9 @@ class FakeHostLock {
 
   answer(script: string, signal?: AbortSignal): Promise<CommandResult> | null {
     if (!script.includes("host-install.lock")) return null;
-    if (script.includes("trap rel EXIT")) {
-      return this.hold(/t='([^']+)'/.exec(script)![1]!, signal);
-    }
-    const token = /= '([^']+)' \]/.exec(script)![1]!;
-    if (script.includes('"$L/release"')) {
+    const token = /t='([^']+)'/.exec(script)![1]!;
+    if (script.includes("trap rel EXIT")) return this.hold(token, signal);
+    if (script.includes('"$d/release-$t"')) {
       if (this.owner === token) this.drop(token);
       return Promise.resolve(ok());
     }
@@ -319,6 +317,8 @@ describe("runHostInstall", () => {
     const deps = makeDeps({
       shell,
       probes: [
+        macProbe({ build: null, hostMode: false }),
+        // Looked at again under the install lock.
         macProbe({ build: null, hostMode: false }),
         macProbe({ build: NEW_BUILD, hostMode: false }),
       ],
@@ -1140,6 +1140,8 @@ describe("what a downloaded build has to prove", () => {
     const signedHere = runAs({ stderr: "Identifier=x\nTeamIdentifier=TEAM123456\n" });
     const probes = [
       macProbe({ build: null, hostMode: false }),
+      // Looked at again under the install lock.
+      macProbe({ build: null, hostMode: false }),
       macProbe({ build: NEW_BUILD, hostMode: false }),
     ];
 
@@ -1326,6 +1328,8 @@ describe("runHostInstall: a host on a later release", () => {
     const deps = makeDeps({
       shell,
       probes: [
+        macProbe({ build: NEWER_BUILD, hostMode: false }),
+        // Looked at again under the install lock.
         macProbe({ build: NEWER_BUILD, hostMode: false }),
         macProbe({ build: NEW_BUILD, hostMode: false }),
       ],
@@ -1847,6 +1851,74 @@ describe("runHostInstall: two Shells updating one host", () => {
     expect(stoppedAt).toBeGreaterThan(-1);
     const afterStop = shell.scripts.slice(stoppedAt + 1);
     expect(afterStop.some((s) => s.includes(".old-") || s.startsWith("open "))).toBe(false);
+  });
+
+  it("doesn't replace a host it first saw stopped once Daintree is running there", async () => {
+    // First looked at while another device's install had Daintree stopped there.
+    const stopped = macProbe({ build: OLD_BUILD, hostMode: false });
+    const shell = fakeShell();
+    const deps = makeDeps({ shell, probes: [stopped, running()] });
+    await expect(install(deps, { hostId: "studio" })).rejects.toThrow(/host changed/);
+    expect(shell.scripts.some((s) => s.includes("@@dt:stopped") || s.includes(".old-"))).toBe(
+      false
+    );
+    expect(shell.lock.owner).toBeNull();
+  });
+
+  /** A Mac whose new build won't start, so recovery runs after the swap. */
+  function failingStart(onRecoveryStop?: (shell: FakeShell) => Promise<CommandResult | null>) {
+    let opens = 0;
+    let stops = 0;
+    const shell = fakeShell((script) =>
+      script.startsWith("open ") && opens++ === 0
+        ? { ...ok(), code: 1, stderr: "LSOpenURLsWithRole() failed" }
+        : ok()
+    );
+    const base = shell.exec;
+    shell.exec = async (script, options) => {
+      if (script.includes("@@dt:stopped") && stops++ === 1 && onRecoveryStop) {
+        shell.scripts.push(script);
+        const answer = await onRecoveryStop(shell);
+        if (answer) return answer;
+      }
+      return base(script, options);
+    };
+    return shell;
+  }
+
+  it("puts nothing back once its turn is lost during recovery", async () => {
+    const shell = failingStart(async (s) => {
+      s.lock.drop("t1");
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return ok("@@dt:stopped yes\n");
+    });
+    const deps = makeDeps({ shell, probes: [running(), running()] });
+    await expect(install(deps, { whileWorking: "proceed" })).rejects.toThrow(
+      /Another device may be updating the host/
+    );
+    expect(shell.scripts.some((s) => s.includes("@@dt:rolledback"))).toBe(false);
+  });
+
+  it("puts nothing back under a new build that wouldn't stop", async () => {
+    const shell = failingStart(async () => ok("@@dt:stopped no\n"));
+    const deps = makeDeps({ shell, probes: [running(), running()] });
+    await expect(install(deps, { whileWorking: "proceed" })).rejects.toThrow(
+      /couldn't be restored on the host/
+    );
+    expect(shell.scripts.some((s) => s.includes("@@dt:rolledback"))).toBe(false);
+  });
+
+  it("doesn't call the previous build running when the host's own record says another runs", async () => {
+    const shell = failingStart();
+    const stillNew = macProbe({
+      build: OLD_BUILD,
+      hostMode: true,
+      record: { build: { version: "1.4.0", commit: "abcdef0123" } },
+    });
+    const deps = makeDeps({ shell, probes: [running(), running(), stillNew] });
+    const failure = install(deps, { whileWorking: "proceed" });
+    await expect(failure).rejects.toThrow(/couldn't be restored on the host/);
+    await expect(failure).rejects.not.toThrow(/put back/);
   });
 
   it("lets go of the lock when the new build can't be confirmed", async () => {
