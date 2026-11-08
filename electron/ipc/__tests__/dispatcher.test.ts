@@ -1202,17 +1202,18 @@ describe("remote scope gate", () => {
     expect((await ask(endpoint, "claude:list-subagents", [{ terminalId: "t1" }])).ok).toBe(true);
   });
 
-  it("holds a remote view's context reading to its own project's panes", async () => {
-    installScope();
-    const read = handle("claude:read-context-usage");
-    const { endpoint } = makeRemoteEndpoint(-3, "proj-1");
-    expect((await ask(endpoint, "claude:read-context-usage", [{ terminalId: "t1" }])).ok).toBe(
-      true
-    );
-    const other = await ask(endpoint, "claude:read-context-usage", [{ terminalId: "t2" }]);
-    expect(other.ok ? null : other.error.code).toBe("PERMISSION");
-    expect(read).toHaveBeenCalledTimes(1);
-  });
+  it.each(["claude:read-context-usage", "codex:read-context-usage"])(
+    "holds a remote view's %s to its own project's panes",
+    async (channel) => {
+      installScope();
+      const read = handle(channel);
+      const { endpoint } = makeRemoteEndpoint(-3, "proj-1");
+      expect((await ask(endpoint, channel, [{ terminalId: "t1" }])).ok).toBe(true);
+      const other = await ask(endpoint, channel, [{ terminalId: "t2" }]);
+      expect(other.ok ? null : other.error.code).toBe("PERMISSION");
+      expect(read).toHaveBeenCalledTimes(1);
+    }
+  );
 
   it("leaves terminal info host-wide, for the processes list", async () => {
     installScope();
