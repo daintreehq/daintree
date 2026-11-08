@@ -279,12 +279,8 @@ import {
 import { isWorktreeDeleteNotesMuted } from "./plugin/pluginWorktreeDeleteNoteMutes.js";
 import { toPluginWorktreeSnapshot } from "../../shared/utils/pluginWorktreeSnapshot.js";
 import { unregisterWorktreeSetupStepHandlers } from "./worktreeSetupStepRegistry.js";
-import {
-  arbitrateContextProviders,
-  getRegisteredContextProviders,
-  unregisterContextProviderImpls,
-} from "./contextProviderRegistry.js";
-import { getContextProvidersOff } from "./plugin/contextProvidersOff.js";
+import { unregisterContextProviderImpls } from "./contextProviderRegistry.js";
+import { listContextProvidersForProject } from "./plugin/projectContextProviders.js";
 import type { ContextProviderEntry } from "../../shared/types/pluginContextProvider.js";
 import { reconcilePluginThemeSelection } from "./appThemePluginSelection.js";
 import {
@@ -3633,19 +3629,9 @@ export class PluginService {
     };
   }
 
-  /**
-   * The `@` context providers a view of `projectId` sees (#13795), each with
-   * whether it holds its prefix there, was refused it, or is switched off.
-   */
+  /** The `@` context providers a view of `projectId` sees (#13795, #16382). */
   getContextProvidersForProject(projectId: string | null): ContextProviderEntry[] {
-    const visible = selectContributionsForProject(
-      getRegisteredContextProviders(),
-      (entry) => entry.pluginId,
-      projectId
-    );
-    if (visible.length === 0) return [];
-    const off = getContextProvidersOff();
-    return arbitrateContextProviders(visible, (pluginId) => off.has(pluginId));
+    return listContextProvidersForProject(projectId);
   }
 
   /**
