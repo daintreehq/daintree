@@ -7,6 +7,9 @@ import { useMissingPrerequisiteStore } from "@/store/missingPrerequisiteStore";
 import { detectOS, isBlockExecutable } from "@/lib/agentInstall";
 import { systemClient } from "@/clients";
 import { actionService } from "@/services/ActionService";
+import { useInstallCommandRunner } from "@/hooks/terminal/useInstallCommandRunner";
+import { installLineForCommands } from "@/services/terminal/installCommandHandoff";
+import { recheckMissingPrerequisites } from "@/lib/recheckMissingPrerequisites";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -104,6 +107,7 @@ export function MissingPrerequisiteBanner() {
   const install = useMissingPrerequisiteStore((s) => s.install);
   const setInstall = useMissingPrerequisiteStore((s) => s.setInstall);
 
+  const runInTerminal = useInstallCommandRunner();
   const [packageManagerReady, setPackageManagerReady] = useState(false);
   const [stillWorking, setStillWorking] = useState(false);
   const [isRechecking, setIsRechecking] = useState(false);
@@ -256,11 +260,7 @@ export function MissingPrerequisiteBanner() {
     if (useMissingPrerequisiteStore.getState().install?.status === "running") return;
     setIsRechecking(true);
     try {
-      const health = await systemClient.healthCheck({ fatalOnly: true, force: true });
-      useMissingPrerequisiteStore
-        .getState()
-        .setMissing(health.prerequisites.filter((p) => !p.available || !p.meetsMinVersion));
-      if (useMissingPrerequisiteStore.getState().install?.status !== "running") setInstall(null);
+      await recheckMissingPrerequisites();
     } catch (err) {
       logError("Prerequisite re-check failed", err);
       if (useMissingPrerequisiteStore.getState().install?.status === "running") return;
@@ -291,6 +291,17 @@ export function MissingPrerequisiteBanner() {
   const handedOff = install?.status === "handed-off";
   const canInstall = guidance?.autoInstallable === true && packageManagerReady;
   const command = guidance?.block?.commands?.join(" && ");
+  // Only a command Daintree won't run itself (a sudo, a pipe to a shell) goes to
+  // a terminal: one it can run but whose package manager is missing would only
+  // fail there too.
+  const terminalLine =
+    guidance?.block && !guidance.autoInstallable
+      ? installLineForCommands(guidance.block.commands, detectOS())
+      : null;
+  const openInTerminal =
+    runInTerminal && terminalLine && guidance
+      ? () => runInTerminal(terminalLine, { kind: "prerequisite", tool: guidance.result.tool })
+      : null;
 
   const description = handedOff
     ? "Finish the macOS installer, then re-check"
@@ -328,24 +339,34 @@ export function MissingPrerequisiteBanner() {
           disabled: isRechecking,
           onClick: () => void runInstall(),
         }
-      : // Nothing we can run: send them to the docs when we have them, since
-        // Re-check alone is no help when the command on screen needs a package
-        // manager they don't have.
-        !canInstall && guidance?.result.installUrl && !handedOff
+      : // A terminal is where a sudo prompt works: the command goes there typed
+        // but not run, and the tool is re-checked once it has finished.
+        openInTerminal && !handedOff
         ? {
-            id: "install-docs",
-            label: "View install guide",
+            id: "open-in-terminal",
+            label: "Open in terminal",
             variant: "primary" as const,
-            onClick: openInstallUrl,
-          }
-        : {
-            id: "recheck",
-            label: "Re-check",
-            variant: "primary" as const,
-            loading: isRechecking,
             disabled: isRechecking,
-            onClick: () => void recheck(),
-          };
+            onClick: openInTerminal,
+          }
+        : // Nothing we can run: send them to the docs when we have them, since
+          // Re-check alone is no help when the command on screen needs a package
+          // manager they don't have.
+          !canInstall && guidance?.result.installUrl && !handedOff
+          ? {
+              id: "install-docs",
+              label: "View install guide",
+              variant: "primary" as const,
+              onClick: openInstallUrl,
+            }
+          : {
+              id: "recheck",
+              label: "Re-check",
+              variant: "primary" as const,
+              loading: isRechecking,
+              disabled: isRechecking,
+              onClick: () => void recheck(),
+            };
 
   // Re-check beside any other action while nothing is installing: the
   // automatic re-probe waits for window focus, which never comes when the
@@ -404,6 +425,21 @@ export function MissingPrerequisiteBanner() {
     );
   }
 
+  const showGuideBesideTerminal =
+    action.id === "open-in-terminal" && Boolean(guidance?.result.installUrl);
+  const trailingSlot =
+    isRunning || action.id === "recheck" ? undefined : showGuideBesideTerminal ? (
+      <>
+        {/* The terminal is the way forward; the guide stays the way out. */}
+        <Button variant="ghost" size="sm" onClick={openInstallUrl}>
+          View install guide
+        </Button>
+        {recheckButton}
+      </>
+    ) : (
+      recheckButton
+    );
+
   return (
     <InlineStatusBanner
       title={title(missing)}
@@ -417,7 +453,7 @@ export function MissingPrerequisiteBanner() {
       ariaLive={isRunning ? "off" : undefined}
       onClose={dismiss}
       closeAriaLabel="Dismiss missing tool warning"
-      trailingSlot={!isRunning && action.id !== "recheck" ? recheckButton : undefined}
+      trailingSlot={trailingSlot}
       actions={[action]}
     />
   );

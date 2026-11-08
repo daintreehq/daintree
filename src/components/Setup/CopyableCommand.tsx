@@ -1,5 +1,6 @@
 import { Fragment } from "react";
 import { ExternalLink } from "lucide-react";
+import { SquareTerminal } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { CopyButton } from "@/components/ui/CopyButton";
@@ -23,6 +24,7 @@ export function CopyableCommand({
   command,
   inspectUrl,
   wrap = false,
+  onOpenInTerminal,
 }: {
   command: string;
   inspectUrl?: string;
@@ -32,6 +34,8 @@ export function CopyableCommand({
    * matters (the package name sits at the end of an install line).
    */
   wrap?: boolean;
+  /** Types the command into a new terminal, unsubmitted. Absent where no terminal can open. */
+  onOpenInTerminal?: () => void;
 }) {
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-sm)] bg-overlay-subtle border border-border-default font-mono text-xs select-text group">
@@ -59,6 +63,22 @@ export function CopyableCommand({
             </Button>
           </TooltipTrigger>
           <TooltipContent>Inspect install script</TooltipContent>
+        </Tooltip>
+      )}
+      {onOpenInTerminal && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              onClick={onOpenInTerminal}
+              className="-my-1 shrink-0 [&_svg]:size-3.5"
+              aria-label="Open command in a new terminal"
+            >
+              <SquareTerminal aria-hidden="true" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Open in a new terminal</TooltipContent>
         </Tooltip>
       )}
       <CopyButton
