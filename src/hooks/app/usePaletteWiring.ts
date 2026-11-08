@@ -1,9 +1,5 @@
 import { useState } from "react";
-import {
-  useWorktrees,
-  usePanelPalette,
-  useProjectSwitcherPalette,
-} from "@/hooks";
+import { useWorktrees, usePanelPalette, useProjectSwitcherPalette } from "@/hooks";
 import { useActionPalette } from "@/hooks/useActionPalette";
 import { useQuickSwitcher } from "@/hooks/useQuickSwitcher";
 import { useWorktreePalette } from "@/hooks/useWorktreePalette";
