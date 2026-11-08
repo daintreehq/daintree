@@ -87,22 +87,30 @@ import { formatBytes } from "@/lib/formatBytes";
 import { selectDiffNotes, useDiffNotesStore } from "@/store/diffNotesStore";
 import {
   buildDiffLineIndex,
+  changeKeysForLines,
   hashLineRange,
   lineForChange,
   placeDiffNote,
   sortDiffNotes,
   type DiffNote,
   type DiffNoteAnchor,
+  type DiffNoteLines,
   type DiffNoteSide,
 } from "./diffNotes";
 import {
   clearComposerDraft,
   DiffNoteCard,
   DiffNoteComposer,
+  nameAnchor,
   returnFocusTo,
   type DiffNoteCardPlacement,
   type DiffNoteCloseVia,
 } from "./DiffNoteWidgets";
+import {
+  selectionLines,
+  useDiffNoteGutterKeys,
+  type DiffNoteLineSelection,
+} from "./useDiffNoteGutterKeys";
 import { pluralize } from "@/lib/pluralize";
 
 export { _resetLangStateForTests, _flushLangLoadsForTests } from "./diffRefractor";
@@ -242,19 +250,62 @@ const renderGutterWithMarker: RenderGutter = ({ change, side, renderDefault, wra
   </>
 );
 
-/** Moved-aware variant: adds screen-reader text so relocation isn't styling-only. */
-function makeGutterRenderer(movedKeys: ReadonlySet<string>): RenderGutter {
-  if (movedKeys.size === 0) return renderGutterWithMarker;
-  const render: RenderGutter = ({ change, side, renderDefault, wrapInAnchor }) => {
+/**
+ * What a line number carries while notes are on. Every number says what a click
+ * does, since every gutter cell takes the click, but only the cell the note would
+ * anchor to is a keyboard target: a unified row draws two numbers for one context
+ * line, and both land on its new-side line. The attributes go on the existing span
+ * so a table of tens of thousands of rows gains no nodes or tooltip instances.
+ */
+function noteNumberProps(change: ChangeData, side: Side, keysHintId: string) {
+  const title = "Click to add a note";
+  const target = lineForChange(change);
+  if (target?.side !== side) return { title };
+  return {
+    title,
+    role: "button",
+    tabIndex: -1,
+    "aria-label": `Add ${nameAnchor({
+      kind: "lines",
+      side,
+      startLine: target.line,
+      endLine: target.line,
+    })}`,
+    "aria-describedby": keysHintId,
+    "data-note-side": side,
+    "data-note-line": target.line,
+  };
+}
+
+/**
+ * Variant for a row that needs more than its number and marker: screen-reader
+ * text so relocation isn't styling-only, and the note affordance. The glyph is
+ * only drawn on a hovered row, where the library is re-rendering anyway; CSS then
+ * shows it on the hovered cell.
+ */
+function makeGutterRenderer(
+  movedKeys: ReadonlySet<string> | null,
+  noteKeysHintId: string | null
+): RenderGutter {
+  if (!movedKeys?.size && noteKeysHintId === null) return renderGutterWithMarker;
+  const render: RenderGutter = ({ change, side, inHoverState, renderDefault, wrapInAnchor }) => {
     // A non-empty marker means this cell owns the change, which is also the one
     // cell that should announce the relocation — otherwise both gutters say it.
     const marker = getGutterMarker(change, side);
     return (
       <>
-        <span className="diff-line-number">{wrapInAnchor(renderDefault())}</span>
+        <span
+          className="diff-line-number"
+          {...(noteKeysHintId !== null ? noteNumberProps(change, side, noteKeysHintId) : undefined)}
+        >
+          {wrapInAnchor(renderDefault())}
+        </span>
         <span className="diff-line-marker">{marker}</span>
-        {marker !== "" && movedKeys.has(getChangeKey(change)) && (
+        {marker !== "" && movedKeys?.has(getChangeKey(change)) && (
           <span className="sr-only">moved</span>
+        )}
+        {noteKeysHintId !== null && inHoverState && (
+          <MessageSquarePlus className="diff-note-gutter-glyph" aria-hidden="true" />
         )}
       </>
     );
@@ -941,8 +992,7 @@ interface ExpandedHunks {
   hunks: HunkData[];
 }
 
-type DiffNoteDraft =
-  { kind: "file" } | { kind: "lines"; side: DiffNoteSide; startLine: number; endLine: number };
+type DiffNoteDraft = { kind: "file" } | DiffNoteLines;
 
 function FileDiff({
   file,
@@ -1044,11 +1094,6 @@ function FileDiff({
     [visibleHunks, isCollapsed, isLargeRender]
   );
 
-  const renderGutter = useMemo(
-    () => (movedKeys ? makeGutterRenderer(movedKeys) : renderGutterWithMarker),
-    [movedKeys]
-  );
-
   const generateLineClassName = useCallback(
     ({ changes, defaultGenerate }: { changes: ChangeData[]; defaultGenerate: () => string }) => {
       const base = defaultGenerate();
@@ -1071,9 +1116,16 @@ function FileDiff({
       notesEnabled ? selectDiffNotes(state, notesWorktree, relPath) : EMPTY_NOTES
     )
   );
+  const noteKeysHintId = useId();
+  const renderGutter = useMemo(
+    () => makeGutterRenderer(movedKeys, notesEnabled ? noteKeysHintId : null),
+    [movedKeys, notesEnabled, noteKeysHintId]
+  );
   const [noteDraft, setNoteDraft] = useState<DiffNoteDraft | null>(null);
-  // Whatever held focus when the composer opened — the diff region after a
-  // gutter click, or the Add file note button — so closing it hands focus back.
+  const [lineSelection, setLineSelection] = useState<DiffNoteLineSelection | null>(null);
+  // Whatever held focus when the composer opened — a line number, the diff region
+  // after a click beside one, or the Add file note button — so closing it hands
+  // focus back.
   const draftOpenerRef = useRef<HTMLElement | null>(null);
   const rememberDraftOpener = useCallback(() => {
     const active = document.activeElement;
@@ -1082,6 +1134,7 @@ function FileDiff({
   const draftOwnerId = useId();
   useEffect(() => {
     setNoteDraft(null);
+    setLineSelection(null);
     clearComposerDraft(draftOwnerId);
   }, [file, draftOwnerId]);
   useEffect(() => () => clearComposerDraft(draftOwnerId), [draftOwnerId]);
@@ -1111,13 +1164,10 @@ function FileDiff({
     const { side, startLine, endLine } = noteDraft;
     const contentHash = hashLineRange(renderedLineIndex, side, startLine, endLine);
     if (contentHash === null) return null;
-    const lines = side === "old" ? renderedLineIndex.old : renderedLineIndex.new;
-    const keys: string[] = [];
-    for (let line = startLine; line <= endLine; line++) {
-      const info = lines.get(line);
-      if (info) keys.push(info.key);
-    }
-    return { anchor: { kind: "lines", side, startLine, endLine, contentHash }, keys };
+    return {
+      anchor: { kind: "lines", side, startLine, endLine, contentHash },
+      keys: changeKeysForLines(renderedLineIndex, side, startLine, endLine),
+    };
   }, [noteDraft, renderedLineIndex]);
 
   const closeNoteDraft = useCallback(
@@ -1201,32 +1251,60 @@ function FileDiff({
 
   // Click a line number to note that line; shift-click extends the open draft
   // across a contiguous run of rows on the same side.
+  const startLineDraft = useCallback(
+    ({ side: noteSide, line }: { side: DiffNoteSide; line: number }, extend: boolean) => {
+      rememberDraftOpener();
+      setLineSelection(null);
+      setNoteDraft((current) => {
+        if (extend && current?.kind === "lines" && current.side === noteSide) {
+          const startLine = Math.min(current.startLine, line);
+          const endLine = Math.max(current.endLine, line);
+          if (
+            renderedLineIndex &&
+            hashLineRange(renderedLineIndex, noteSide, startLine, endLine) !== null
+          ) {
+            return { kind: "lines", side: noteSide, startLine, endLine };
+          }
+        }
+        return { kind: "lines", side: noteSide, startLine: line, endLine: line };
+      });
+    },
+    [renderedLineIndex, rememberDraftOpener]
+  );
+  const openLineDraft = useCallback(
+    (lines: DiffNoteLines) => {
+      rememberDraftOpener();
+      setNoteDraft(lines);
+    },
+    [rememberDraftOpener]
+  );
   const gutterEvents = useMemo<EventMap | undefined>(() => {
     if (!notesEnabled) return undefined;
     return {
       onClick: ({ change }, event) => {
         const target = change ? lineForChange(change) : null;
-        if (!target) return;
-        const { side: noteSide, line } = target;
-        rememberDraftOpener();
-        setNoteDraft((current) => {
-          if (event.shiftKey && current?.kind === "lines" && current.side === noteSide) {
-            const startLine = Math.min(current.startLine, line);
-            const endLine = Math.max(current.endLine, line);
-            if (
-              renderedLineIndex &&
-              hashLineRange(renderedLineIndex, noteSide, startLine, endLine) !== null
-            ) {
-              return { kind: "lines", side: noteSide, startLine, endLine };
-            }
-          }
-          return { kind: "lines", side: noteSide, startLine: line, endLine: line };
-        });
+        if (target) startLineDraft(target, event.shiftKey);
       },
     };
-  }, [notesEnabled, renderedLineIndex, rememberDraftOpener]);
+  }, [notesEnabled, startLineDraft]);
 
-  const selectedChanges = draftPlacement?.keys.length ? draftPlacement.keys : EMPTY_KEYS;
+  const gutterKeys = useDiffNoteGutterKeys({
+    enabled: notesEnabled,
+    columns: viewType === "split" && isTwoColumnDiff(diffType),
+    lineIndex: renderedLineIndex,
+    selection: lineSelection,
+    setSelection: setLineSelection,
+    onStartDraft: startLineDraft,
+    onOpenLines: openLineDraft,
+  });
+
+  const selectionKeys = useMemo(() => {
+    if (!lineSelection || !renderedLineIndex) return null;
+    const { side, startLine, endLine } = selectionLines(lineSelection);
+    return changeKeysForLines(renderedLineIndex, side, startLine, endLine);
+  }, [lineSelection, renderedLineIndex]);
+  const selectedChanges =
+    selectionKeys ?? (draftPlacement?.keys.length ? draftPlacement.keys : EMPTY_KEYS);
 
   const searchRanges = useMemo(
     () => (searchQuery && !isCollapsed ? computeSearchRanges(visibleHunks, searchQuery) : null),
@@ -1780,7 +1858,16 @@ function FileDiff({
   );
 
   return (
-    <div className="mb-2" style={fileStyle} data-diff-file="">
+    <div
+      ref={gutterKeys.rootRef}
+      className="mb-2"
+      style={fileStyle}
+      data-diff-file=""
+      data-notes-enabled={notesEnabled || undefined}
+      onKeyDown={gutterKeys.onKeyDown}
+      onFocus={gutterKeys.onFocus}
+      onBlur={gutterKeys.onBlur}
+    >
       {relPath && (
         <div className="sticky top-0 z-10">
           <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-surface-sidebar border-b border-border-default text-xs font-mono">
@@ -1822,7 +1909,12 @@ function FileDiff({
                       <MessageSquarePlus aria-hidden="true" />
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom">Add file note</TooltipContent>
+                  <TooltipContent side="bottom">
+                    Add file note
+                    <span className="mt-0.5 block text-text-secondary">
+                      Click a line number to note that line
+                    </span>
+                  </TooltipContent>
                 </Tooltip>
               )}
               {rawText && (
@@ -1856,6 +1948,15 @@ function FileDiff({
               labels={sideLabels}
               columns={viewType === "split" && isTwoColumnDiff(diffType) && !isCollapsed}
             />
+          )}
+          {/* In the sticky header so it stays in view however far the line
+              numbers have roved. Every number's description, so it stays in the
+              DOM while hidden. */}
+          {notesEnabled && (
+            <p ref={gutterKeys.hintRef} id={noteKeysHintId} className="diff-note-keys">
+              Arrow keys move · Shift+arrows select lines · Enter adds a note
+              {noteDraft?.kind === "lines" && " · Shift+Enter extends the open note"}
+            </p>
           )}
         </div>
       )}

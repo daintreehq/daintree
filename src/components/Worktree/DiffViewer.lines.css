@@ -101,6 +101,61 @@
   white-space: nowrap;
 }
 
+/* With review notes on, a gutter cell starts a line note (#16447). Every cell
+   the library drew events for takes the click, the blank old cell of a unified
+   insert included; only split's placeholders don't. The fill is an inset shadow
+   because these sticky cells' backgrounds are load-bearing: opaque, and carrying
+   the insert/delete tint as an image. */
+.diff-viewer [data-notes-enabled] td.diff-gutter:not(.diff-gutter-omit) {
+  cursor: pointer;
+}
+
+.diff-viewer [data-notes-enabled] td.diff-gutter:not(.diff-gutter-omit):hover {
+  box-shadow: inset 0 0 0 100vmax var(--color-overlay-soft);
+}
+
+.diff-viewer [data-notes-enabled] td.diff-gutter:not(.diff-gutter-omit):hover .diff-line-number {
+  color: var(--color-text-primary);
+}
+
+/* The Add file note glyph, in the +/- marker's slot, the only free room in a
+   gutter sized exactly to its widest number. The marker keeps its width so the
+   number doesn't shift. No pointer events: the cell underneath takes the click. */
+.diff-viewer .diff-note-gutter-glyph {
+  display: none;
+  position: absolute;
+  top: calc((1lh - 12px) / 2);
+  right: 4px;
+  width: 12px;
+  height: 12px;
+  color: var(--color-text-primary);
+  pointer-events: none;
+}
+
+.diff-viewer td.diff-gutter:hover .diff-note-gutter-glyph {
+  display: block;
+}
+
+.diff-viewer [data-notes-enabled] td.diff-gutter:hover .diff-line-marker {
+  visibility: hidden;
+}
+
+/* A line number that takes keyboard focus. Filling the line box keeps its ring
+   inside the row: the next row's opaque sticky cell paints over anything that
+   reaches past it. The padding is cancelled so numbers still line up with
+   untargeted ones, and the scroll margin clears the sticky file header. */
+.diff-viewer .diff-line-number[data-note-line] {
+  display: inline-block;
+  margin-inline: -4px;
+  padding-inline: 4px;
+  border-radius: var(--radius-xs);
+  scroll-margin-block: 56px;
+}
+
+.diff-viewer .diff-line-number[data-note-line]:focus-visible {
+  outline-offset: -2px;
+}
+
 /* Code content styling. white-space: pre alone suppresses wrapping (nowrap
    leaves no soft-wrap opportunities), but react-diff-view's vendor sheet sets
    word-break: break-all and word-wrap: break-word on .diff-code — reset all
