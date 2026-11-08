@@ -934,7 +934,9 @@ describe("canopy IPC", () => {
     told?.();
     expect(localReader.release).not.toHaveBeenCalled();
 
-    models.currentDir.mockReturnValue(path.join("/tmp", "canopy", "reader-updates", "b".repeat(40)));
+    models.currentDir.mockReturnValue(
+      path.join("/tmp", "canopy", "reader-updates", "b".repeat(40))
+    );
     try {
       told?.();
       expect(localReader.release).toHaveBeenCalledTimes(1);

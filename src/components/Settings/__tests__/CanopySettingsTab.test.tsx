@@ -216,9 +216,9 @@ describe("CanopySettingsTab", () => {
     expect(container.textContent).toContain("5 MB of 20 MB");
     expect(container.textContent).toContain("reads with revision eb00edf until it's in place");
     const bar = getByRole("progressbar");
-    expect(Number(bar.getAttribute("aria-valuenow")) / Number(bar.getAttribute("aria-valuemax"))).toBe(
-      0.25
-    );
+    expect(
+      Number(bar.getAttribute("aria-valuenow")) / Number(bar.getAttribute("aria-valuemax"))
+    ).toBe(0.25);
     expect(queryByRole("button")).toBeNull();
   });
 

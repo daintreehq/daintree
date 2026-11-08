@@ -15,7 +15,17 @@
  */
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { lstat, mkdir, readFile, readdir, rename, rm, rmdir, stat, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  rmdir,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -199,7 +209,9 @@ async function fetchNewest(signal: AbortSignal): Promise<CanopyModelRevision | n
  * Hugging Face counts as a download.
  */
 async function readable(revision: string, signal: AbortSignal): Promise<boolean> {
-  return isReaderMeta(await fetchJson(`${HF}/${CANOPY_MODEL}/resolve/${revision}/reader.json`, signal));
+  return isReaderMeta(
+    await fetchJson(`${HF}/${CANOPY_MODEL}/resolve/${revision}/reader.json`, signal)
+  );
 }
 
 /** What `folder` records of `revision` in `file`, or null when that isn't a record of it. */
@@ -395,7 +407,8 @@ export class CanopyModels {
         picked = { revision, dir, source: "update" };
         continue;
       }
-      if (picked === null) console.warn(`[Canopy] Model update ${revision.revision} fails its check`);
+      if (picked === null)
+        console.warn(`[Canopy] Model update ${revision.revision} fails its check`);
       await this.discard(revision.revision);
     }
     return picked;
@@ -428,7 +441,11 @@ export class CanopyModels {
     }
     const target = this.newest;
     if (target === null || signal.aborted || !newer(target, this.floor())) return;
-    const download: Download = { revision: target.revision, received: 0, total: totalBytes(target) };
+    const download: Download = {
+      revision: target.revision,
+      received: 0,
+      total: totalBytes(target),
+    };
     this.download = download;
     this.tell();
     try {
@@ -497,10 +514,13 @@ export class CanopyModels {
         have = 0;
       }
       const timed = AbortSignal.any([signal, AbortSignal.timeout(FILE_TIMEOUT_MS)]);
-      const response = await fetch(`${HF}/${CANOPY_MODEL}/resolve/${target.revision}/${file.name}`, {
-        headers: { "User-Agent": USER_AGENT, ...(have > 0 ? { Range: `bytes=${have}-` } : {}) },
-        signal: timed,
-      });
+      const response = await fetch(
+        `${HF}/${CANOPY_MODEL}/resolve/${target.revision}/${file.name}`,
+        {
+          headers: { "User-Agent": USER_AGENT, ...(have > 0 ? { Range: `bytes=${have}-` } : {}) },
+          signal: timed,
+        }
+      );
       let append = false;
       if (response.status === 206 && have > 0 && rangeFrom(response) === have) append = true;
       else if (response.status === 416 && have === file.size) append = true;

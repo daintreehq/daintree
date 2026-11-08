@@ -57,7 +57,13 @@ const META = JSON.stringify({
     failure_repeats: ["a"],
     score: ["a"],
   },
-  thresholds: { summary_first: 0.5, summary_more: 0.6, option: 0.5, gate: 0.4, gate_categories: [] },
+  thresholds: {
+    summary_first: 0.5,
+    summary_more: 0.6,
+    option: 0.5,
+    gate: 0.4,
+    gate_categories: [],
+  },
 });
 /** A reader a later Daintree needs: a card mode this build doesn't know. */
 const FUTURE_META = JSON.stringify({ ...JSON.parse(META), thresholds: { card: "three-line" } });
@@ -276,7 +282,12 @@ describe("CanopyModels, updating the shipped model from Hugging Face", () => {
     const dir = path.join(updates, NEWER);
     expect(await m.installedDir()).toBe(dir);
     expect(m.currentDir()).toBe(dir);
-    expect(m.state()).toEqual({ id: CANOPY_MODEL, status: "ready", revision: NEWER, source: "update" });
+    expect(m.state()).toEqual({
+      id: CANOPY_MODEL,
+      status: "ready",
+      revision: NEWER,
+      source: "update",
+    });
     expect(readFileSync(path.join(dir, "model.int8.onnx"), "utf8")).toBe(`INT8-${NEWER}`);
     expect(readFileSync(path.join(dir, "config.json"), "utf8")).toBe(META);
     // Only what the reader opens, from the revision the Hub named.
