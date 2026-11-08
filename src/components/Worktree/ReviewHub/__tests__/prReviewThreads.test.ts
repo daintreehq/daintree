@@ -36,7 +36,10 @@ function parsePayload(text: string): Payload {
   return JSON.parse(text.slice(start, end + 1)) as Payload;
 }
 
-function compose(files: ReviewThreadFile[], overrides: { prUrl?: string; worktreePath?: string } = {}) {
+function compose(
+  files: ReviewThreadFile[],
+  overrides: { prUrl?: string; worktreePath?: string } = {}
+) {
   return composePrReviewThreadsAgentText({
     prNumber: 42,
     prUrl: overrides.prUrl ?? "https://github.com/o/r/pull/42",
@@ -169,7 +172,9 @@ describe("composePrReviewThreadsAgentText", () => {
     )!;
     expect(text).not.toMatch(/[$`!]/);
     // eslint-disable-next-line no-control-regex, no-misleading-character-class
-    expect(text).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060\u2066-\u2069\ufeff]/);
+    expect(text).not.toMatch(
+      /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060\u2066-\u2069\ufeff]/
+    );
     expect(text).toContain("routes/\\u0024(touch pwned)/\\u0060id\\u0060/\\u0021\\u0021.ts");
     expect(text).toContain('Worktree: "/tmp/wt-\\u0024USER/\\u0060hostname\\u0060\\u0021"');
   });
