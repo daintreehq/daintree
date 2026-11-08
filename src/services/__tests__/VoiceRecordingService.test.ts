@@ -886,7 +886,10 @@ describe("VoiceRecordingService — background recording", () => {
 
     function trackedStream() {
       const track = { stop: vi.fn(), readyState: "live" };
-      return { track, stream: fakeStream({ getTracks: () => [track], getAudioTracks: () => [track] }) };
+      return {
+        track,
+        stream: fakeStream({ getTracks: () => [track], getAudioTracks: () => [track] }),
+      };
     }
 
     async function loadHarness() {
