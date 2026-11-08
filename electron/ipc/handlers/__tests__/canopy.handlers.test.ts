@@ -2368,6 +2368,52 @@ describe("canopy IPC", () => {
       expect(state.writes).toEqual(["a"]);
     });
 
+    describe("shown in the Canopy window (#16339)", () => {
+      const marked: Array<ReturnType<typeof fakeSender>> = [];
+      function canopyWindowSender(id: number) {
+        const sender = fakeSender(id);
+        markProjectlessView(
+          sender as unknown as Electron.WebContents,
+          new EventEmitter() as unknown as Electron.BrowserWindow
+        );
+        marked.push(sender);
+        return sender;
+      }
+
+      afterEach(() => {
+        for (const sender of marked.splice(0)) sender.emit("destroyed");
+      });
+
+      async function sizedOnlyOnUse(sender: unknown, watchId: number | null, terminalId: string) {
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+        expect(ptyClient.resize).not.toHaveBeenCalled();
+
+        await invoke(CANOPY_METHOD_CHANNELS.terminalClaimSize, sender, watchId);
+        await invoke(CANOPY_METHOD_CHANNELS.terminalResize, sender, watchId, 100, 30);
+        expect(ptyClient.resize.mock.calls).toEqual([[terminalId, 100, 30]]);
+      }
+
+      it("sizes a lane's assistant only once the user works in it there", async () => {
+        const { sender, watchId } = await openAssistant(canopyWindowSender(9));
+        await sizedOnlyOnUse(sender, watchId, "assistant-1");
+      });
+
+      it("sizes the global session only once the user works in it there", async () => {
+        assistants.global = {
+          terminalId: "global-1",
+          generation: 5,
+          owner: 9,
+          holder: { attachmentId: "a9", epoch: 2 },
+        };
+        const { sender, watchId } = await openAssistant(
+          canopyWindowSender(9),
+          { hostId: "local", scope: { kind: "global" }, terminalId: "global-1", incarnation: 1 },
+          { attachmentId: "a9", inputEpoch: 2 }
+        );
+        await sizedOnlyOnUse(sender, watchId, "global-1");
+      });
+    });
+
     describe("holding the global session's size (#16333)", () => {
       const globalSubject = {
         hostId: "local",
@@ -2666,6 +2712,23 @@ describe("canopy IPC", () => {
         },
       };
     }
+
+    it("never treats a view from another machine as the Canopy window, whatever its handle (#16339)", async () => {
+      const local = fakeSender(-41);
+      markProjectlessView(
+        local as unknown as Electron.WebContents,
+        new EventEmitter() as unknown as Electron.BrowserWindow
+      );
+      try {
+        const opened = (await remoteView(-41).call(CANOPY_METHOD_CHANNELS.watchTerminal, "run-1", {
+          spawnedAt: 100,
+        })) as { ok: boolean; data: CanopyTerminalView };
+        expect(opened.ok).toBe(true);
+        expect(opened.data.following).toBeUndefined();
+      } finally {
+        local.emit("destroyed");
+      }
+    });
 
     describe("a Canopy panel reading this host from another machine (#13387)", () => {
       const viewer = (handle: number) => remoteView(handle, `canopy-viewer:v${-handle}`);
@@ -3133,6 +3196,7 @@ describe("canopy IPC", () => {
     });
 
     describe("in the Canopy window, which sizes nothing until used (#16339)", () => {
+      const marked: Array<ReturnType<typeof fakeSender>> = [];
       /** A Canopy window's one view: no project, open all day. */
       function canopyWindowView(id: number) {
         const win = fakeWindow();
@@ -3142,8 +3206,14 @@ describe("canopy IPC", () => {
           sender as unknown as Electron.WebContents,
           win as unknown as Electron.BrowserWindow
         );
+        marked.push(sender);
         return { win, sender };
       }
+
+      // The mark is the app's, not the test's: a view left marked would follow in every later case.
+      afterEach(() => {
+        for (const sender of marked.splice(0)) sender.emit("destroyed");
+      });
 
       const select = async (sender: unknown, runId: string) => {
         const view = (await invoke(CANOPY_METHOD_CHANNELS.watchTerminal, sender, runId, {
@@ -3162,7 +3232,7 @@ describe("canopy IPC", () => {
         ];
       });
 
-      it("moves the PTY once when the user types there, and once more when the pane takes it back", async () => {
+      it("moves the PTY only when the user types there, and leaves taking it back to the pane's own fit", async () => {
         const first = canopyWindowView(9);
         await invoke(CANOPY_METHOD_CHANNELS.setActive, first.sender, true);
         const opened = await select(first.sender, "run-1");
@@ -3210,7 +3280,7 @@ describe("canopy IPC", () => {
       });
 
       it.each([
-        ["a key from the composer", CANOPY_METHOD_CHANNELS.terminalSendKey, ["escape"]],
+        ["a key from the composer", CANOPY_METHOD_CHANNELS.terminalSendKey, ["up"]],
         ["a message from the composer", CANOPY_METHOD_CHANNELS.terminalSubmit, ["navy"]],
       ] as const)("takes the size on %s", async (_case, channel, args) => {
         const { sender } = canopyWindowView(9);

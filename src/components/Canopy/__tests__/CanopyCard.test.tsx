@@ -11,7 +11,8 @@ import { bandForRun } from "@shared/utils/fleetBands";
 import { usePanelStore } from "@/store/panelStore";
 import type { PtyPanelData } from "@shared/types/panel";
 import { buildCanopyInbox, type CanopyItem } from "../canopyModel";
-import { CanopyFrameContext, standaloneCanopyFrame } from "../canopyFrame";
+import { CanopyFrameContext } from "../canopyFrame";
+import { CANOPY_WINDOW_FRAME } from "@/canopyWindow/canopyWindowFrame";
 import { useVoiceRecordingStore, type VoiceRecordingTarget } from "@/store/voiceRecordingStore";
 import { DICTATION_OWNER_ATTR, canopyReplyVoiceId } from "@/services/canopyReplyDictation";
 import {
@@ -1071,13 +1072,6 @@ describe("CanopyCard", () => {
   });
 
   describe("in a window where only use takes the size (#16339)", () => {
-    const WINDOW_FRAME = standaloneCanopyFrame({
-      close: () => {},
-      goToRun: null,
-      restoreElsewhere: () => {},
-      openAssistant: async () => null,
-      takesTerminalSize: "on-use",
-    });
     const RISKY = {
       options: ["Yes", "Yes, allow all edits during this session"],
       risk: "caution" as const,
@@ -1089,7 +1083,7 @@ describe("CanopyCard", () => {
       const h = handlers();
       const ref = createRef<CanopyCardHandle>();
       render(
-        <CanopyFrameContext value={WINDOW_FRAME}>
+        <CanopyFrameContext value={CANOPY_WINDOW_FRAME}>
           <CanopyCard ref={ref} item={itemFor("approval", RISKY)} {...PROPS} {...h} />
         </CanopyFrameContext>
       );

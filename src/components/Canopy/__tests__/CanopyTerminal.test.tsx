@@ -842,6 +842,24 @@ describe("CanopyTerminal", () => {
 
         fireEvent.mouseDown(view.frame, { button: 0 });
         expect(terminalClaimSize).toHaveBeenCalledWith(7);
+        // Main says the size is the panel's now, and it asks for its grid.
+        await act(async () =>
+          pushChunk({ kind: "resize", watchId: 7, runId: "run-1", cols: 200, rows: 60 })
+        );
+        await settle();
+        expect(terminalResize).toHaveBeenCalledTimes(1);
+        expect(terminalResize).toHaveBeenCalledWith(7, 99, 30);
+      });
+
+      it("claims once the stream opens for a click made while it was opening", async () => {
+        cell.current = { width: 8, height: 16 };
+        const view = mount();
+        view.frame.getBoundingClientRect = paneRect;
+        fireEvent.mouseDown(view.frame, { button: 0 });
+        expect(terminalClaimSize).not.toHaveBeenCalled();
+
+        await open({ watchId: 7, snapshot: { data: "", cols: 200, rows: 60 }, following: true });
+        expect(terminalClaimSize).toHaveBeenCalledWith(7);
       });
     });
 
@@ -1105,6 +1123,16 @@ describe("CanopyTerminal", () => {
         expect(remote.api.terminalResize).toHaveBeenCalledWith(3, 99, 30);
       });
 
+      it("counts a send made while the stream was opening, once it opens", async () => {
+        const remote = remoteApi();
+        const view = mountUnused(remote, 2);
+        view.setUses(3);
+        await openSizable(remote);
+        await pastSettle();
+        expect(remote.api.terminalResize).toHaveBeenCalledTimes(1);
+        expect(remote.api.terminalResize).toHaveBeenCalledWith(3, 99, 30);
+      });
+
       it("waits for a use again on a stream opened afresh when the link comes back", async () => {
         const remote = remoteApi();
         const view = mountUnused(remote);
@@ -1117,6 +1145,11 @@ describe("CanopyTerminal", () => {
         await openSizable(remote, 1);
         await pastSettle();
         expect(remote.api.terminalResize).toHaveBeenCalledTimes(1);
+
+        view.setUses(1);
+        await pastSettle();
+        expect(remote.api.terminalResize).toHaveBeenCalledTimes(2);
+        expect(remote.api.terminalResize).toHaveBeenLastCalledWith(4, 99, 30);
       });
     });
 

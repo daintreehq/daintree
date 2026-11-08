@@ -1336,6 +1336,11 @@ describe("a view that takes the size only once used (#16339)", () => {
 
     expect(pty.resize).not.toHaveBeenCalled();
     expect(sizeHolds()).toEqual([]);
+
+    claimWatchedSize(1, opened.watchId!);
+    resizeWatchedTerminal(pty, 1, opened.watchId!, 100, 30);
+    expect(resizes(pty)).toEqual([[100, 30]]);
+    expect(sizeHolds()).toEqual(["run-1"]);
   });
 
   it("takes a dialog's hold across on use, so no pane fits in between", async () => {

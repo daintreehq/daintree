@@ -632,8 +632,15 @@ export function CanopyTerminal({
       frame.scrollLeft += event.deltaX;
     };
     frame.addEventListener("wheel", sideways, { capture: true, passive: false });
+    // A use made while the stream was still opening, such as an answer sent
+    // by the run: it counts once the stream opens.
+    let usedWhileOpening = false;
     // The user's first use asks another host for the size this pane fits.
     const markUsed = () => {
+      if (view === null) {
+        usedWhileOpening = true;
+        return;
+      }
       if (!awaitingUse || stream.watchId === null) return;
       awaitingUse = false;
       mustHold = true;
@@ -850,7 +857,7 @@ export function CanopyTerminal({
       // A new stream is a new selection, which takes the size as a first one
       // does, unless it is shown where only use does: main says so for its own runs.
       following = opened.following === true;
-      awaitingUse = localId === null && sizesOnUseRef.current;
+      awaitingUse = localId === null && sizesOnUseRef.current && !usedWhileOpening;
       mustHold = true;
       const snapshot = opened.snapshot;
       ptySize = { cols: snapshot.cols, rows: snapshot.rows };
@@ -884,6 +891,8 @@ export function CanopyTerminal({
       }
       publish({ watchId: opened.watchId });
       setStatus("live");
+      // Main may have opened the stream after that use reached it, and found nothing to claim.
+      if (usedWhileOpening) claimSize();
       requestPanelSize();
     };
     const onOpenFailed = (error: unknown) => {
