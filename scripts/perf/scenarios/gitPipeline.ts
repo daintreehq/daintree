@@ -35,6 +35,7 @@ import {
   type LargeChangesetShape,
 } from "../lib/largeChangesetFixture";
 import {
+  binarySniffBytes,
   flipClassifications,
   getUntrackedBinaryFixture,
   measureWorkload,
@@ -507,16 +508,19 @@ const UNTRACKED_REPEAT_PASSES = 5;
  * Every reading is paired with the same evidence:
  *  - `rowOracleMisses`: every row of every pass carries its constructed line
  *    count or binary `null`, and `changedFileCount` covers every file.
- *  - `readObserverMisses`: the first pass must hand every binary's full size
- *    back through the observer, which is what lets a zero repeat reading mean
- *    "not read" rather than "the observer went blind".
+ *  - `readObserverMisses`: the first pass must read every binary exactly
+ *    once, and hand back through the observer exactly each one's leading
+ *    sniff (its first 8 KiB, or less when it is shorter): a first sighting is
+ *    bounded, and a zero repeat reading means "not read" rather than "the
+ *    observer went blind".
  *  - `classificationFlipMisses`: after the timed passes, a cached binary
  *    rewritten as text and a cached text file rewritten as binary at the same
  *    size must both flip on the next pass.
  *  - `statusPassMisses`: one `git status` per pass, so a pass answered from
  *    the result cache cannot read as a cheap one.
  *
- * Bytes are those `readFile` returned to the line counter, not disk I/O. CPU
+ * Bytes are those reads on a file handle returned to the line counter, not
+ * disk I/O. CPU
  * is `process.cpuUsage` over the same bracket as the wall time: this process,
  * threadpool reads included, git children excluded.
  */
@@ -525,6 +529,7 @@ async function runUntrackedBinaryRound(): Promise<ScenarioSample> {
     await loadGitStatusModule();
   const fixture = getUntrackedBinaryFixture();
   const workload = measureWorkload(fixture);
+  const sniffBytes = binarySniffBytes(fixture);
   const pass = () => getWorktreeChangesWithStats(fixture.repoPath, { forceRefresh: true });
   const cpuMs = (usage: NodeJS.CpuUsage) => (usage.user + usage.system) / 1000;
 
@@ -601,7 +606,7 @@ async function runUntrackedBinaryRound(): Promise<ScenarioSample> {
         rowOracleMisses: rowMisses,
         readObserverMisses:
           firstReads.binaryReads === workload.binaryFileCount &&
-          firstReads.binaryBytes === workload.binaryFixtureBytes
+          firstReads.binaryBytes === sniffBytes
             ? 0
             : 1,
         classificationFlipMisses: flipMisses,
@@ -1287,7 +1292,7 @@ export const gitPipelineScenarios: PerfScenario[] = [
     id: "PERF-113",
     name: "Git Repeated Status Passes (untracked binaries)",
     description:
-      "Forced full passes over a worktree with ~54 MB of untracked binaries (1 B, 8 KiB, 2 MiB, 9.5 MiB and 20 x 2 MiB) and untracked text: bytes the untracked line counter reads once nothing has changed.",
+      "Forced full passes over a worktree with ~54 MB of untracked binaries (1 B, 8 KiB, 2 MiB, 9.5 MiB and 20 x 2 MiB) and untracked text: bytes the untracked line counter reads on first sighting and once nothing has changed.",
     tier: "heavy",
     modes: ["smoke", "ci", "nightly"],
     iterations: { smoke: 5, ci: 8, nightly: 12 },
