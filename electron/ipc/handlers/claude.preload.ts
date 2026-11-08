@@ -4,6 +4,7 @@ export const CLAUDE_METHOD_CHANNELS = {
   listSubagents: "claude:list-subagents",
   readSubagentTranscript: "claude:read-subagent-transcript",
   findReplySpan: "claude:find-reply-span",
+  readUsage: "claude:read-usage",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof CLAUDE_METHOD_CHANNELS;

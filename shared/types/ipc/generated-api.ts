@@ -243,6 +243,9 @@ export interface GeneratedElectronAPI {
     readSubagentTranscript(
       ...args: IpcInvokeMap["claude:read-subagent-transcript"]["args"]
     ): Promise<IpcInvokeMap["claude:read-subagent-transcript"]["result"]>;
+    readUsage(
+      ...args: IpcInvokeMap["claude:read-usage"]["args"]
+    ): Promise<IpcInvokeMap["claude:read-usage"]["result"]>;
   };
   cli: {
     getStatus(

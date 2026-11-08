@@ -2070,6 +2070,7 @@ export class TerminalProcess {
         usedPercent: message.usedPercent,
         resetsAt: resolveResetsAt(message.resetText, now),
         observedAt: now,
+        configDir: this.terminalInfo.claudeConfigDir ?? null,
         timestamp: now,
       });
     }

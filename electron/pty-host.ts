@@ -1174,6 +1174,7 @@ events.on("agent:claude-usage-observed", (payload) => {
     usedPercent: payload.usedPercent,
     resetsAt: payload.resetsAt,
     observedAt: payload.observedAt,
+    configDir: payload.configDir,
     timestamp: payload.timestamp,
   });
 });

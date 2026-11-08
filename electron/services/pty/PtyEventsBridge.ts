@@ -21,9 +21,11 @@ import type {
 import {
   CLAUDE_USAGE_STATEMENTS,
   CLAUDE_USAGE_WINDOWS,
-  type ClaudeUsageObservation,
 } from "../../../shared/types/ipc/agentQuota.js";
-import { recordClaudeUsageObservation } from "../claude/ClaudeUsageObservations.js";
+import {
+  recordClaudeUsageObservation,
+  type ClaudeUsageRecord,
+} from "../claude/ClaudeUsageObservations.js";
 
 const FALLBACK_REASONS: ReadonlySet<AgentFallbackReason> = new Set([
   "connection",
@@ -89,8 +91,11 @@ const isFiniteNumber = (value: unknown): value is number =>
  */
 function claudeUsageObservation(
   event: Extract<PtyHostEvent, { type: "agent-claude-usage-observed" }>
-): ClaudeUsageObservation | null {
+): ClaudeUsageRecord | null {
   const { terminalId, window, statement, usedPercent, resetsAt, observedAt } = event;
+  // Anything but a folder is an unknown account, never the default one.
+  const configDir =
+    typeof event.configDir === "string" && event.configDir !== "" ? event.configDir : null;
   if (typeof terminalId !== "string" || terminalId === "") return null;
   if (!(CLAUDE_USAGE_WINDOWS as readonly string[]).includes(window)) return null;
   if (!(CLAUDE_USAGE_STATEMENTS as readonly string[]).includes(statement)) return null;
@@ -102,7 +107,7 @@ function claudeUsageObservation(
   }
   if (resetsAt !== null && !isFiniteNumber(resetsAt)) return null;
   if (!isFiniteNumber(observedAt)) return null;
-  return { terminalId, window, statement, usedPercent, resetsAt, observedAt };
+  return { terminalId, window, statement, usedPercent, resetsAt, observedAt, configDir };
 }
 
 /** The terminal an agent event is about, wherever its shape carries it. */
@@ -238,8 +243,8 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
       });
       return true;
 
-    // Main's record for `agent.readQuota`, not the bus: no renderer, plugin or
-    // notice has a use for it.
+    // Main's record for `agent.readQuota` and Settings, not the bus: no
+    // plugin or notice has a use for it.
     case "agent-claude-usage-observed": {
       const observation = claudeUsageObservation(event);
       if (observation !== null) recordClaudeUsageObservation(observation);
