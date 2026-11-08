@@ -40,6 +40,7 @@ import { SettingsLoadErrorBanner } from "./SettingsLoadErrorBanner";
 import { actionService } from "@/services/ActionService";
 import { AgentHelpOutput } from "./AgentHelpOutput";
 import { AgentInstallSection } from "@/components/agents/AgentCard";
+import { InstallCommandHandoffContext } from "@/hooks/terminal/installCommandHandoffContext";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { AgentInputSettings } from "./AgentInputSettings";
 import { UserPromptTemplatesSection } from "./UserPromptTemplatesSection";
@@ -584,16 +585,30 @@ export function AgentSettings({
         <>
           {/* First on the page when it renders at all: an agent that is missing,
               blocked or has no credentials is usually why this page was opened. */}
-          <AgentInstallSection
-            agentId={activeAgent.id}
-            agentName={activeAgent.name}
-            availability={cliAvailability[activeAgent.id]}
-            detail={cliDetails[activeAgent.id]}
-            isCliLoading={isCliLoading}
-            isRefreshingCli={isRefreshingCli}
-            cliError={cliError}
-            onRefresh={() => void handleRefreshCliAvailability()}
-          />
+          {/* Settings closes before an install command opens in a terminal, so
+              the terminal can be typed into; without a way to close, the
+              commands stay copy-only. */}
+          <InstallCommandHandoffContext.Provider
+            value={
+              onClose
+                ? (open) =>
+                    void onClose((closed) => {
+                      if (closed) open();
+                    })
+                : null
+            }
+          >
+            <AgentInstallSection
+              agentId={activeAgent.id}
+              agentName={activeAgent.name}
+              availability={cliAvailability[activeAgent.id]}
+              detail={cliDetails[activeAgent.id]}
+              isCliLoading={isCliLoading}
+              isRefreshingCli={isRefreshingCli}
+              cliError={cliError}
+              onRefresh={() => void handleRefreshCliAvailability()}
+            />
+          </InstallCommandHandoffContext.Provider>
 
           {/* Also while detection loads: the duplicate-install toast opens this section
               by id, and only gets one chance to land on it. */}

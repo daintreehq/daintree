@@ -95,7 +95,11 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
       {installBlocks && (
         <div id={`install-panel-${spec.tool}`} hidden={!showSteps} className="px-3 pb-3 space-y-2">
           {installBlocks.map((block, i) => (
-            <InstallBlock key={i} block={block} />
+            <InstallBlock
+              key={i}
+              block={block}
+              target={{ kind: "prerequisite", tool: spec.tool }}
+            />
           ))}
         </div>
       )}

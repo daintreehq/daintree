@@ -3,7 +3,7 @@ import { ExternalLink, KeyRound, RefreshCw, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PaneState, PaneStateActions } from "@/components/ui/PaneState";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
-import { CopyableCommand } from "@/components/Setup/CopyableCommand";
+import { InstallCommandRows } from "@/components/Setup/InstallCommandRows";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { systemClient } from "@/clients/systemClient";
 import { getAgentConfig } from "@/config/agents";
@@ -122,7 +122,7 @@ function getGateCopy(agentName: string, detail: AgentCliDetail, hostName: string
   }
 }
 
-function InstallCommands({ blocks }: { blocks: AgentInstallBlock[] }) {
+function InstallCommands({ agentId, blocks }: { agentId: string; blocks: AgentInstallBlock[] }) {
   return (
     <div className="space-y-3">
       {blocks.map((block, i) => (
@@ -139,9 +139,12 @@ function InstallCommands({ blocks }: { blocks: AgentInstallBlock[] }) {
           )}
           {block.commands && (
             <div className="space-y-1.5">
-              {block.commands.map((cmd) => (
-                <CopyableCommand key={cmd} command={cmd} wrap />
-              ))}
+              <InstallCommandRows
+                commands={block.commands}
+                target={{ kind: "agent", agentId }}
+                inspect={false}
+                wrap
+              />
             </div>
           )}
           {block.notes && (
@@ -295,7 +298,7 @@ export function MissingCliGate({
                     then check again.
                   </p>
                 </div>
-                <InstallCommands blocks={installBlocks} />
+                <InstallCommands agentId={agentId} blocks={installBlocks} />
               </section>
             )}
             {/* Beside the commands it belongs to; alone, it centres under the

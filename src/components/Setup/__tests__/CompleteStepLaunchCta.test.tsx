@@ -8,6 +8,10 @@ const { dispatchMock, getDisplayComboMock } = vi.hoisted(() => ({
   getDisplayComboMock: vi.fn<(actionId: string) => string>(() => ""),
 }));
 
+// No grid to open a terminal in: install commands stay copy-only here.
+vi.mock("@/hooks/terminal/useInstallCommandRunner", () => ({
+  useInstallCommandRunner: () => null,
+}));
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: dispatchMock },
 }));

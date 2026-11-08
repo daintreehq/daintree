@@ -14,8 +14,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { RefreshCw, ExternalLink, TriangleAlert } from "lucide-react";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { getInstallBlocksForCurrentOS } from "@/lib/agentInstall";
-import { CopyableCommand } from "@/components/Setup/InstallBlock";
-import { extractInspectUrl } from "@/lib/agentInstall";
+import { InstallCommandRows } from "@/components/Setup/InstallCommandRows";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsEmptyRow, SettingsGroup, SettingsRow } from "@/components/Settings/SettingsGroup";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
@@ -348,13 +347,12 @@ export function AgentInstallSection({
                   (block.commands && block.commands.length > 0) ||
                   (block.notes && block.notes.length > 0) ? (
                     <div className="grid gap-1.5">
-                      {block.commands?.map((cmd) => (
-                        <CopyableCommand
-                          key={cmd}
-                          command={cmd}
-                          inspectUrl={extractInspectUrl(cmd)}
+                      {block.commands && block.commands.length > 0 && (
+                        <InstallCommandRows
+                          commands={block.commands}
+                          target={{ kind: "agent", agentId }}
                         />
-                      ))}
+                      )}
                       {block.notes && block.notes.length > 0 && (
                         <div className="text-xs text-text-secondary space-y-0.5 select-text">
                           {block.notes.map((note, i) => (

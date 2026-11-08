@@ -7,6 +7,7 @@ import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { AgentCliStep } from "./AgentCliStep";
 import { AgentInputStep } from "./AgentInputStep";
 import { SystemRequirementsSection } from "./SystemRequirementsSection";
+import { InstallCommandHandoffContext } from "@/hooks/terminal/installCommandHandoffContext";
 import { AGENT_REGISTRY } from "@/config/agents";
 import { BrandMark } from "@/components/icons";
 import { AgentCard } from "@/components/agents/AgentCard";
@@ -510,7 +511,8 @@ export function wizardReducer(state: WizardState, action: WizardAction): WizardS
 
 interface AgentSetupWizardProps {
   isOpen: boolean;
-  onClose: () => void;
+  /** `"handoff"` when it closed to show a terminal an install command was opened in. */
+  onClose: (reason?: "handoff") => void;
   initialAvailability?: CliAvailability;
   isFirstRun?: boolean;
   /**
@@ -905,6 +907,21 @@ export function AgentSetupWizard({
     return true;
   }, [isFirstRun, state.step.type, commitTelemetry, notifyTelemetryDefault]);
 
+  // A terminal opened behind the dialog can't be typed into, so the wizard
+  // closes first, the way its close button does.
+  const handleInstallHandoff = useCallback(
+    (open: () => void) => {
+      void (async () => {
+        if (isFirstRun && !(await handleBeforeClose())) return;
+        onClose("handoff");
+        open();
+      })();
+    },
+    [isFirstRun, handleBeforeClose, onClose]
+  );
+  // Closing mid-install would stop a batch before its remaining agents.
+  const installHandoff = isSaving || isInstalling ? null : handleInstallHandoff;
+
   const agentsContinueBlocked =
     selectedAgentIds.length === 0 || isSaving || hasFatalHealthFailure || isHealthChecking;
 
@@ -973,17 +990,19 @@ export function AgentSetupWizard({
                 />
               )}
               {state.step.type === "agents" && (
-                <AgentsStep
-                  availability={state.availability}
-                  selections={state.selections}
-                  isLoading={showLoadingSelections}
-                  isSaving={isSaving}
-                  onToggle={(id, checked) =>
-                    dispatch({ type: "TOGGLE_SELECTION", agentId: id, checked })
-                  }
-                  onFatalFailureChange={setHasFatalHealthFailure}
-                  onCheckingChange={setIsHealthChecking}
-                />
+                <InstallCommandHandoffContext.Provider value={installHandoff}>
+                  <AgentsStep
+                    availability={state.availability}
+                    selections={state.selections}
+                    isLoading={showLoadingSelections}
+                    isSaving={isSaving}
+                    onToggle={(id, checked) =>
+                      dispatch({ type: "TOGGLE_SELECTION", agentId: id, checked })
+                    }
+                    onFatalFailureChange={setHasFatalHealthFailure}
+                    onCheckingChange={setIsHealthChecking}
+                  />
+                </InstallCommandHandoffContext.Provider>
               )}
               {state.step.type === "privacy" && (
                 <PrivacyStep
@@ -992,19 +1011,21 @@ export function AgentSetupWizard({
                 />
               )}
               {state.step.type === "cli" && (
-                <AgentCliStep
-                  availability={state.availability}
-                  selections={state.selections}
-                  isFirstRun={isFirstRun}
-                  onBusyChange={setIsInstalling}
-                  onInstallComplete={() => {
-                    void cliAvailabilityClient.refresh().then((result) => {
-                      if (isOpenRef.current) {
-                        dispatch({ type: "SET_AVAILABILITY", payload: result });
-                      }
-                    });
-                  }}
-                />
+                <InstallCommandHandoffContext.Provider value={installHandoff}>
+                  <AgentCliStep
+                    availability={state.availability}
+                    selections={state.selections}
+                    isFirstRun={isFirstRun}
+                    onBusyChange={setIsInstalling}
+                    onInstallComplete={() => {
+                      void cliAvailabilityClient.refresh().then((result) => {
+                        if (isOpenRef.current) {
+                          dispatch({ type: "SET_AVAILABILITY", payload: result });
+                        }
+                      });
+                    }}
+                  />
+                </InstallCommandHandoffContext.Provider>
               )}
               {state.step.type === "permissions" && (
                 <PermissionsStep
