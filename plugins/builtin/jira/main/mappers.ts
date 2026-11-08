@@ -1,4 +1,5 @@
 import type { ForgeUser, Issue, NormalizedIssueState } from "../../../../shared/types/forge.js";
+import { siteHostOf } from "../shared/connection.js";
 import { adfToText } from "./adf.js";
 
 /** Jira's search returns only ids unless the fields are named. */
@@ -88,6 +89,15 @@ export function mapUser(node: JiraUserNode): ForgeUser {
   };
 }
 
+/**
+ * The id a link stores. Jira's own is only unique within a site, and a link
+ * prefers it to the key, so a bare `10042` would open an unrelated issue after
+ * the connection moves to another site.
+ */
+export function stableIssueId(siteUrl: string, jiraId: string): string {
+  return `${siteHostOf(siteUrl)}/${jiraId}`;
+}
+
 export function mapIssue(node: JiraIssueNode, siteUrl: string): Issue {
   const fields = node.fields ?? {};
   const state = normalizeIssueState(fields.status?.statusCategory?.key);
@@ -105,7 +115,7 @@ export function mapIssue(node: JiraIssueNode, siteUrl: string): Issue {
     createdAt: toEpoch(fields.created) ?? 0,
     updatedAt: toEpoch(fields.updated) ?? 0,
     closedAt: state === "closed" ? toEpoch(fields.resolutiondate) : null,
-    id: node.id,
+    id: stableIssueId(siteUrl, node.id),
     key: node.key,
     branchName: suggestBranchName(node.key, title),
     // Not the node: a description's document tree can dwarf everything else here.

@@ -51,7 +51,15 @@ const DONE = { status: { name: "Done", statusCategory: { key: "done" } } };
 let fetchMock: Mock;
 let settings: { siteUrl?: unknown; email?: unknown };
 
-function requests(): Array<{ path: string; method: string; body: any }> {
+interface SearchBody {
+  jql?: string;
+  fields?: string[];
+  maxResults?: number;
+  nextPageToken?: string;
+  startAt?: number;
+}
+
+function requests(): Array<{ path: string; method: string; body: SearchBody }> {
   return fetchMock.mock.calls.map(([url, init]) => ({
     path: String(url).replace(`${SITE}/rest/api/3`, ""),
     method: init.method,
@@ -191,57 +199,44 @@ describe("resolveIssueRepo", () => {
     await expect(jiraForgeProvider.resolveIssueRepo!("/p")).resolves.toBeNull();
     setProjectKeyReader(async () => "not a key");
     await expect(jiraForgeProvider.resolveIssueRepo!("/p")).resolves.toBeNull();
-    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("reads the key for the project it was asked about", async () => {
     const reader = vi.fn(async () => "eng");
     setProjectKeyReader(reader);
-    route({ "/project/": () => json({ id: "10000", key: "ENG" }) });
     await jiraForgeProvider.resolveIssueRepo!("/projects/background");
     expect(reader).toHaveBeenCalledWith("/projects/background");
   });
 
-  it("addresses the project on its site", async () => {
-    route({ "/project/ENG": () => json({ id: "10000", key: "ENG" }) });
-    await expect(jiraForgeProvider.resolveIssueRepo!("/p")).resolves.toEqual({
+  it("addresses the project on its site, in the key's canonical case", async () => {
+    await expect(jiraForgeProvider.resolveIssueRepo!("/p")).resolves.toMatchObject({
       host: "acme.atlassian.net",
       owner: "acme",
       repo: "ENG",
-      rawData: { projectId: "10000" },
     });
   });
 
-  it("names the key Jira doesn't know", async () => {
-    route({ "/project/": () => json({}, 404) });
-    await expect(jiraForgeProvider.resolveIssueRepo!("/p")).rejects.toThrow(
-      /no project ENG .*Project settings/
-    );
+  it("follows the site setting", async () => {
+    settings = { siteUrl: "https://other.atlassian.net", email: "ada@example.com" };
+    await expect(jiraForgeProvider.resolveIssueRepo!("/p")).resolves.toMatchObject({
+      host: "other.atlassian.net",
+    });
   });
 
-  it("explains that Jira isn't connected rather than calling it", async () => {
-    settings = {};
-    await expect(jiraForgeProvider.resolveIssueRepo!("/p")).rejects.toThrow(/isn't connected/);
+  it("never needs Jira, so a network failure can't lose the branch claims", async () => {
+    fetchMock.mockRejectedValue(new Error("offline"));
+    await expect(jiraForgeProvider.resolveIssueRepo!("/p")).resolves.toMatchObject({ repo: "ENG" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("checks the project once per connection", async () => {
-    route({ "/project/": () => json({ id: "10000", key: "ENG" }) });
-    await jiraForgeProvider.resolveIssueRepo!("/p");
-    await jiraForgeProvider.resolveIssueRepo!("/p");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+  it("doesn't need a token, so a project can claim branches before signing in", async () => {
+    jiraForgeProvider.setCredentials?.(null);
+    await expect(jiraForgeProvider.resolveIssueRepo!("/p")).resolves.toMatchObject({ repo: "ENG" });
+  });
 
-    settings = { siteUrl: "https://other.atlassian.net", email: "ada@example.com" };
-    fetchMock.mockImplementation(async () => json({ id: "20000", key: "ENG" }));
-    await expect(jiraForgeProvider.resolveIssueRepo!("/p")).resolves.toMatchObject({
-      host: "other.atlassian.net",
-      rawData: { projectId: "20000" },
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-
-    jiraForgeProvider.setCredentials?.({ kind: "bearer", value: "token-2" });
-    await jiraForgeProvider.resolveIssueRepo!("/p");
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+  it("explains that Jira isn't connected when there's no site", async () => {
+    settings = {};
+    await expect(jiraForgeProvider.resolveIssueRepo!("/p")).rejects.toThrow(/isn't connected/);
   });
 });
 
@@ -419,12 +414,22 @@ describe("issue lookup", () => {
     await expect(jiraForgeProvider.getIssue(REPO, 12)).resolves.toBeNull();
   });
 
-  it("accepts the stable id a link stores, and follows a moved issue", async () => {
-    route({ "/issue/10042": () => json(node("OPS-3")) });
-    await expect(jiraForgeProvider.getIssueById!(REPO, "10042")).resolves.toMatchObject({
+  it("accepts the stable id it hands out, and follows a moved issue", async () => {
+    route({ "/issue/10042": () => json({ ...node("OPS-3"), id: "10042" }) });
+    const issue = await jiraForgeProvider.getIssueById!(REPO, "acme.atlassian.net/10042");
+    expect(issue).toMatchObject({ key: "OPS-3", url: `${SITE}/browse/OPS-3` });
+    // The id it returns finds the same issue again.
+    await expect(jiraForgeProvider.getIssueById!(REPO, issue!.id!)).resolves.toMatchObject({
       key: "OPS-3",
-      url: `${SITE}/browse/OPS-3`,
     });
+  });
+
+  it("doesn't open another site's issue for a stored id", async () => {
+    settings = { siteUrl: "https://other.atlassian.net", email: "ada@example.com" };
+    await expect(
+      jiraForgeProvider.getIssueById!(REPO, "acme.atlassian.net/10042")
+    ).resolves.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("accepts the full key a claimed branch carries, in any case", async () => {
@@ -434,7 +439,7 @@ describe("issue lookup", () => {
     });
   });
 
-  it.each(["../../myself", "..", "ENG-12/comment", "ENG 12", ""])(
+  it.each(["../../myself", "..", "ENG-12/comment", "ENG 12", "", "10042", "acme.atlassian.net/.."])(
     "won't send %s to Jira as an issue id",
     async (id) => {
       await expect(jiraForgeProvider.getIssueById!(REPO, id)).resolves.toBeNull();
@@ -529,12 +534,63 @@ describe("repoStats", () => {
     await expect(jiraForgeProvider.repoStats!.getRepoStats(REPO)).resolves.toMatchObject({
       source: "network",
     });
+
+    settings = { siteUrl: SITE, email: "grace@example.com" };
+    await expect(jiraForgeProvider.repoStats!.getRepoStats(REPO)).resolves.toMatchObject({
+      source: "network",
+    });
+  });
+
+  it("counts each project separately", async () => {
+    await jiraForgeProvider.repoStats!.getRepoStats(REPO);
+    await expect(
+      jiraForgeProvider.repoStats!.getRepoStats({ ...REPO, repo: "OPS" })
+    ).resolves.toMatchObject({ source: "network" });
+    expect(requests().at(-1)?.body.jql).toContain('project = "OPS"');
   });
 
   it("counts as unknown when Jira doesn't say", async () => {
     route({ "/search/approximate-count": () => json({}) });
     const snapshot = await jiraForgeProvider.repoStats!.getRepoStats(REPO, { bypassCache: true });
     expect(snapshot.counts.issueCount).toBeNull();
+  });
+});
+
+describe("when Jira refuses the connection", () => {
+  it("stops asking, so polling can't keep failing logins against the account", async () => {
+    route({ "/issue/": () => json({}, 401) });
+    await expect(jiraForgeProvider.getIssue(REPO, 12)).rejects.toThrow(/rejected/);
+    await expect(jiraForgeProvider.getIssue(REPO, 13)).rejects.toThrow(/rejected/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("goes out again for a deliberate check, and a good answer resumes everything", async () => {
+    route({ "/issue/": () => json({}, 401) });
+    await expect(jiraForgeProvider.getIssue(REPO, 12)).rejects.toThrow(/rejected/);
+
+    route({
+      "/myself": () => json({ accountId: "abc", displayName: "Ada" }),
+      "/issue/": () => json(node("ENG-12")),
+    });
+    await expect(jiraForgeProvider.validateCredentials()).resolves.toMatchObject({ valid: true });
+    await expect(jiraForgeProvider.getIssue(REPO, 12)).resolves.toMatchObject({ key: "ENG-12" });
+  });
+
+  it("gives a new token its own chance", async () => {
+    route({ "/issue/": () => json({}, 401) });
+    await expect(jiraForgeProvider.getIssue(REPO, 12)).rejects.toThrow(/rejected/);
+
+    jiraForgeProvider.setCredentials?.({ kind: "bearer", value: "token-2" });
+    route({ "/issue/": () => json(node("ENG-12")) });
+    await expect(jiraForgeProvider.getIssue(REPO, 12)).resolves.toMatchObject({ key: "ENG-12" });
+  });
+
+  it("surfaces Jira's own words for a project key it doesn't know", async () => {
+    route({
+      "/search/jql": () =>
+        json({ errorMessages: ["The value 'ENG' does not exist for the field 'project'."] }, 400),
+    });
+    await expect(jiraForgeProvider.listIssues(REPO, {})).rejects.toThrow(/does not exist/);
   });
 });
 

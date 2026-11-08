@@ -35,6 +35,11 @@ export function normalizeSiteUrl(value: unknown): string | null {
   return SITE_HOST_PATTERN.test(host) ? `https://${host}` : null;
 }
 
+/** `acme.atlassian.net` from a normalized site URL. */
+export function siteHostOf(siteUrl: string): string {
+  return new URL(siteUrl).hostname;
+}
+
 export function normalizeEmail(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();

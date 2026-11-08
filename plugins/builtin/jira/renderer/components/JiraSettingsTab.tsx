@@ -23,6 +23,18 @@ import {
 
 const API_TOKENS_URL = "https://id.atlassian.com/manage-profile/security/api-tokens";
 
+const NOT_RESTORED_MESSAGE =
+  "Daintree couldn't put the previous site and email back, so check them before saving again.";
+
+interface Connection {
+  siteUrl: string;
+  email: string;
+}
+
+function saveFailureMessage(reason: string, restored: boolean): string {
+  return restored ? reason : `${reason.replace(/\.$/, "")}. ${NOT_RESTORED_MESSAGE}`;
+}
+
 function stringSetting(values: Record<string, unknown>, key: string): string {
   const value = values[key];
   return typeof value === "string" ? value : "";
@@ -49,8 +61,9 @@ export function JiraSettingsTab() {
   const [emailError, setEmailError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [signedInAs, setSignedInAs] = useState<string | null>(null);
-  // Set the moment the user types, so a slow load can't clobber the edit.
-  const editedRef = useRef(false);
+  // Set the moment the user types in that field, so a slow load can't clobber it.
+  const siteEditedRef = useRef(false);
+  const emailEditedRef = useRef(false);
   // Save and Clear share one synchronous guard: state updates are deferred, so
   // two quick activations could both pass a check on `isSaving`.
   const busyRef = useRef(false);
@@ -64,10 +77,8 @@ export function JiraSettingsTab() {
     ])
       .then(([snapshot, status]) => {
         if (cancelled) return;
-        if (!editedRef.current) {
-          setSiteUrl(stringSetting(snapshot.values, SITE_URL_SETTING));
-          setEmail(stringSetting(snapshot.values, EMAIL_SETTING));
-        }
+        if (!siteEditedRef.current) setSiteUrl(stringSetting(snapshot.values, SITE_URL_SETTING));
+        if (!emailEditedRef.current) setEmail(stringSetting(snapshot.values, EMAIL_SETTING));
         setHasCredential(status.hasCredential);
         setLoadError(null);
         setLoaded(true);
@@ -82,36 +93,37 @@ export function JiraSettingsTab() {
   }, [loadAttempt]);
 
   const clearResult = () => {
-    editedRef.current = true;
     setSaveError(null);
     setSignedInAs(null);
   };
 
-  const writeConnection = async (nextSiteUrl: string, nextEmail: string) => {
-    await window.electron.plugin.setSettingValue(
-      JIRA_PLUGIN_ID,
-      SITE_URL_SETTING,
-      nextSiteUrl,
-      "user",
-      null
-    );
-    await window.electron.plugin.setSettingValue(
-      JIRA_PLUGIN_ID,
-      EMAIL_SETTING,
-      nextEmail,
-      "user",
-      null
-    );
-  };
+  const writeSetting = (key: string, value: string) =>
+    window.electron.plugin.setSettingValue(JIRA_PLUGIN_ID, key, value, "user", null);
 
-  // A connection that didn't check out must not replace one that did: the saved
-  // token would go on working against settings it was never checked with.
-  const restoreConnection = async (previous: { siteUrl: string; email: string } | null) => {
-    if (!previous) return;
+  /**
+   * A connection that didn't check out must not replace one that did: the saved
+   * token would go on running against settings it was never checked with. Only
+   * what's still this save's is undone, so a save from another window survives.
+   * Says whether that worked.
+   */
+  const restoreConnection = async (previous: Connection | null, written: Connection) => {
+    if (!previous) return true;
     try {
-      await writeConnection(previous.siteUrl, previous.email);
+      const { values } = await window.electron.plugin.getSettingValues(
+        JIRA_PLUGIN_ID,
+        "user",
+        null
+      );
+      if (stringSetting(values, SITE_URL_SETTING) === written.siteUrl) {
+        await writeSetting(SITE_URL_SETTING, previous.siteUrl);
+      }
+      if (stringSetting(values, EMAIL_SETTING) === written.email) {
+        await writeSetting(EMAIL_SETTING, previous.email);
+      }
+      return true;
     } catch (err) {
       logError("Failed to restore the Jira connection", err);
+      return false;
     }
   };
 
@@ -129,14 +141,16 @@ export function JiraSettingsTab() {
 
     busyRef.current = true;
     setIsSaving(true);
-    let previous: { siteUrl: string; email: string } | null = null;
+    const written: Connection = { siteUrl: nextSiteUrl, email: nextEmail };
+    let previous: Connection | null = null;
     try {
       const snapshot = await window.electron.plugin.getSettingValues(JIRA_PLUGIN_ID, "user", null);
       previous = {
         siteUrl: stringSetting(snapshot.values, SITE_URL_SETTING),
         email: stringSetting(snapshot.values, EMAIL_SETTING),
       };
-      await writeConnection(nextSiteUrl, nextEmail);
+      await writeSetting(SITE_URL_SETTING, nextSiteUrl);
+      await writeSetting(EMAIL_SETTING, nextEmail);
       const validation = await window.electron.forge.setCredential(BUILTIN_JIRA_PROVIDER_ID, {
         token: token.trim(),
       });
@@ -148,13 +162,15 @@ export function JiraSettingsTab() {
         setSignedInAs(validation.account ?? null);
         void actionService.dispatch("worktree.refresh", undefined, { source: "user" });
       } else {
-        await restoreConnection(previous);
-        setSaveError(validation.error || "Jira didn't accept these details");
+        const restored = await restoreConnection(previous, written);
+        setSaveError(
+          saveFailureMessage(validation.error || "Jira didn't accept these details", restored)
+        );
       }
     } catch (err) {
       logError("Failed to save the Jira connection", err);
-      await restoreConnection(previous);
-      setSaveError("Couldn't save the Jira connection");
+      const restored = await restoreConnection(previous, written);
+      setSaveError(saveFailureMessage("Couldn't save the Jira connection", restored));
     } finally {
       busyRef.current = false;
       setIsSaving(false);
@@ -235,6 +251,7 @@ export function JiraSettingsTab() {
                 type="text"
                 value={siteUrl}
                 onValueChange={(value) => {
+                  siteEditedRef.current = true;
                   setSiteUrl(value);
                   setSiteError(null);
                   clearResult();
@@ -262,6 +279,7 @@ export function JiraSettingsTab() {
                 type="text"
                 value={email}
                 onValueChange={(value) => {
+                  emailEditedRef.current = true;
                   setEmail(value);
                   setEmailError(null);
                   clearResult();

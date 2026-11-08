@@ -9,7 +9,8 @@ describe("normalizeIssueState", () => {
     expect(normalizeIssueState("done")).toBe("closed");
     expect(normalizeIssueState("new")).toBe("open");
     expect(normalizeIssueState("indeterminate")).toBe("open");
-    expect(normalizeIssueState("undefined")).toBe("open");
+    expect(normalizeIssueState("a-new-category")).toBe("open");
+    expect(normalizeIssueState(undefined)).toBe("open");
     expect(normalizeIssueState(null)).toBe("open");
   });
 });
@@ -80,7 +81,7 @@ describe("mapIssue", () => {
     const issue = mapIssue(node, SITE);
     expect(issue.number).toBe(12);
     expect(issue.key).toBe("ENG-12");
-    expect(issue.id).toBe("10042");
+    expect(issue.id).toBe("acme.atlassian.net/10042");
     expect(issue.url).toBe("https://acme.atlassian.net/browse/ENG-12");
     expect(issue.branchName).toBe("ENG-12-fix-the-login");
   });

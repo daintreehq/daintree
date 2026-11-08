@@ -39,6 +39,20 @@ async function readProjectKey(projectPath: string): Promise<string | undefined> 
 }
 
 /**
+ * The workspace hosts ask for a project's branch keys when it loads and when its
+ * forge settings change, and a plugin setting is neither, so a key entered after
+ * binding the provider would claim nothing until the next reload.
+ */
+async function refreshBranchClaims(): Promise<void> {
+  try {
+    const { getWorkspaceClient } = await import("../../../../electron/services/WorkspaceClient.js");
+    await getWorkspaceClient().updateForgeSettingsForAllProjects();
+  } catch {
+    // WorkspaceClient may not be initialized yet; hosts read the keys when they load.
+  }
+}
+
+/**
  * Plugin activation entry point. Registers the issues-only `jira` provider. The
  * API token lives in the host's `forgeCredentials` store and is replayed into
  * `setCredentials` during registration; the site and email it authenticates with
@@ -54,9 +68,15 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
     return { siteUrl, email };
   });
   setProjectKeyReader(readProjectKey);
+  const disposeSettings = await Promise.all(
+    [PROJECT_KEY_SETTING, SITE_URL_SETTING].map((key) =>
+      host.settings.onDidChange(key, () => void refreshBranchClaims()).catch(() => () => undefined)
+    )
+  );
   const disposeForge = await host.registerForgeProvider({ id: "jira" }, jiraForgeProvider);
   return () => {
     disposeForge();
+    for (const dispose of disposeSettings) dispose();
     setConnectionSettingsReader(null);
     setProjectKeyReader(null);
     // Re-enable replays the durable credential via setCredentials.

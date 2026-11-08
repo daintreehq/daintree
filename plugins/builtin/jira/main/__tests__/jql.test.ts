@@ -92,12 +92,20 @@ describe("buildIssueJql", () => {
     expect(buildIssueJql("ENG", { state })).toBe(expected);
   });
 
-  it("serves both sorts in both directions", () => {
+  it.each([
+    ["created", "asc", "ORDER BY created ASC"],
+    ["created", "desc", "ORDER BY created DESC"],
+    ["updated", "asc", "ORDER BY updated ASC"],
+    ["updated", "desc", "ORDER BY updated DESC"],
+  ] as const)("serves sort %s %s", (sort, direction, expected) => {
+    expect(buildIssueJql("ENG", { state: "all", sort, direction })).toBe(
+      `project = "ENG" ${expected}`
+    );
+  });
+
+  it("sorts newest first when no direction is given", () => {
     expect(buildIssueJql("ENG", { state: "all", sort: "updated" })).toBe(
       'project = "ENG" ORDER BY updated DESC'
-    );
-    expect(buildIssueJql("ENG", { state: "all", sort: "created", direction: "asc" })).toBe(
-      'project = "ENG" ORDER BY created ASC'
     );
   });
 

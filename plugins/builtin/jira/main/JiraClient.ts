@@ -8,6 +8,15 @@ const FAILED_LOGIN_REASONS = ["AUTHENTICATED_FAILED", "AUTHENTICATION_DENIED"];
 
 const MAX_ERROR_MESSAGE_LENGTH = 300;
 
+/**
+ * How long a connection is left alone after Jira refuses it. Lookups repeat on
+ * every poll for as long as a worktree's issue is unresolved, so without this a
+ * revoked token would keep failing logins against the account in the background.
+ */
+const REJECTED_COOLDOWN_MS = 5 * 60_000;
+const DEFAULT_RATE_LIMIT_COOLDOWN_MS = 60_000;
+const MAX_RATE_LIMIT_COOLDOWN_MS = 60 * 60_000;
+
 /** Jira API failure. Messages never carry the credential or the request's headers. */
 export class JiraApiError extends Error {
   readonly status: number | undefined;
@@ -45,7 +54,19 @@ export function setMemoryToken(token: string | null): void {
   tokenVersion++;
 }
 
-function errorFromBody(payload: unknown): string | null {
+let cooldown: { connectionKey: string; until: number; status: number; message: string } | null =
+  null;
+
+export function clearJiraCooldown(): void {
+  cooldown = null;
+}
+
+function connectionKeyOf(connection: JiraConnection): string {
+  return `${connection.siteUrl}\u0000${connection.email}\u0000${connection.token}`;
+}
+
+/** Jira's explanation of a failure, with anything of the credential taken back out. */
+function errorFromBody(payload: unknown, secrets: string[]): string | null {
   if (!payload || typeof payload !== "object") return null;
   const { errorMessages, errors } = payload as { errorMessages?: unknown; errors?: unknown };
   const candidates = [
@@ -53,14 +74,17 @@ function errorFromBody(payload: unknown): string | null {
     ...(errors && typeof errors === "object" ? Object.values(errors) : []),
   ];
   const message = candidates.find((c): c is string => typeof c === "string" && c.length > 0);
-  return message ? message.slice(0, MAX_ERROR_MESSAGE_LENGTH) : null;
+  if (!message) return null;
+  // Before truncating, or a cut through the middle of one would survive this.
+  const redacted = secrets.reduce((text, secret) => text.split(secret).join("[redacted]"), message);
+  return redacted.slice(0, MAX_ERROR_MESSAGE_LENGTH);
 }
 
-function rateLimitMessage(response: Response): string {
+const RATE_LIMITED_MESSAGE = "Jira's rate limit was reached. Try again shortly.";
+
+function retryAfterSeconds(response: Response): number | null {
   const seconds = Number(response.headers.get("retry-after"));
-  return seconds > 0
-    ? `Jira's rate limit was reached. Try again in ${Math.ceil(seconds)}s.`
-    : "Jira's rate limit was reached. Try again shortly.";
+  return seconds > 0 ? seconds : null;
 }
 
 /**
@@ -71,8 +95,22 @@ function rateLimitMessage(response: Response): string {
 export async function jiraRequest<T>(
   connection: JiraConnection,
   path: string,
-  options: { method?: "GET" | "POST"; body?: unknown; timeoutMs?: number } = {}
+  options: {
+    method?: "GET" | "POST";
+    body?: unknown;
+    timeoutMs?: number;
+    /** A deliberate check, like saving a token: goes out whatever the cooldown says. */
+    ignoreCooldown?: boolean;
+  } = {}
 ): Promise<T> {
+  const connectionKey = connectionKeyOf(connection);
+  if (
+    !options.ignoreCooldown &&
+    cooldown?.connectionKey === connectionKey &&
+    Date.now() < cooldown.until
+  ) {
+    throw new JiraApiError(cooldown.message, cooldown.status);
+  }
   const authorization = Buffer.from(`${connection.email}:${connection.token}`).toString("base64");
   let response: Response;
   try {
@@ -100,10 +138,37 @@ export async function jiraRequest<T>(
     response.status === 401 ||
     FAILED_LOGIN_REASONS.some((reason) => loginReason.includes(reason))
   ) {
+    if (!options.ignoreCooldown) {
+      cooldown = {
+        connectionKey,
+        until: Date.now() + REJECTED_COOLDOWN_MS,
+        status: response.status,
+        message: REJECTED_MESSAGE,
+      };
+    }
     throw new JiraApiError(REJECTED_MESSAGE, response.status);
   }
   if (response.status === 429) {
-    throw new JiraApiError(rateLimitMessage(response), 429);
+    const seconds = retryAfterSeconds(response);
+    if (!options.ignoreCooldown) {
+      cooldown = {
+        connectionKey,
+        until:
+          Date.now() +
+          Math.min(
+            seconds ? seconds * 1000 : DEFAULT_RATE_LIMIT_COOLDOWN_MS,
+            MAX_RATE_LIMIT_COOLDOWN_MS
+          ),
+        status: 429,
+        message: RATE_LIMITED_MESSAGE,
+      };
+    }
+    throw new JiraApiError(
+      seconds
+        ? `Jira's rate limit was reached. Try again in ${Math.ceil(seconds)}s.`
+        : RATE_LIMITED_MESSAGE,
+      429
+    );
   }
   if (response.status >= 300 && response.status < 400) {
     throw new JiraApiError(
@@ -116,12 +181,15 @@ export async function jiraRequest<T>(
   const payload = (await response.json().catch(() => null)) as unknown;
   if (!response.ok) {
     throw new JiraApiError(
-      errorFromBody(payload) ?? `Jira request failed (HTTP ${response.status})`,
+      errorFromBody(payload, [authorization, connection.token, connection.email]) ??
+        `Jira request failed (HTTP ${response.status})`,
       response.status
     );
   }
   if (payload === null) {
     throw new JiraApiError("Jira sent a response Daintree couldn't read", response.status);
   }
+  // Jira answered, so whatever the cooldown was about has passed.
+  if (cooldown?.connectionKey === connectionKey) cooldown = null;
   return payload as T;
 }

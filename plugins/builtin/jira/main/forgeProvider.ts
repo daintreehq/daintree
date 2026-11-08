@@ -11,9 +11,10 @@ import type {
   RepoStatsSnapshot,
 } from "../../../../shared/types/forge.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
-import { normalizeEmail, normalizeSiteUrl } from "../shared/connection.js";
+import { normalizeEmail, normalizeSiteUrl, siteHostOf } from "../shared/connection.js";
 import {
   JiraApiError,
+  clearJiraCooldown,
   getToken,
   getTokenVersion,
   jiraRequest,
@@ -29,8 +30,9 @@ const MAX_PAGE_SIZE = 100;
 
 /** Jira project keys: letters and digits, starting with a letter. */
 const PROJECT_KEY_PATTERN = /^[A-Z][A-Z0-9_]{0,15}$/;
-/** What Jira's issue endpoint is addressed by: its stable id or a full key. */
-const ISSUE_ID_PATTERN = /^(?:\d+|[A-Z][A-Z0-9_]*-\d+)$/;
+const ISSUE_KEY_PATTERN = /^[A-Z][A-Z0-9_]*-\d+$/;
+/** What `stableIssueId` hands out: `acme.atlassian.net/10042`. */
+const STABLE_ISSUE_ID_PATTERN = /^([a-z0-9.-]+)\/(\d+)$/;
 
 /**
  * The host polls stats every 30s while visible, against a rate limit shared with
@@ -96,17 +98,13 @@ async function beginOp(): Promise<Op> {
   };
 }
 
-interface JiraProject {
-  id: string;
-  key: string;
-}
-
-const projectCache = new Map<string, JiraProject>();
 const statsCache = new Map<string, { at: number; issueCount: number | null }>();
+let statsCacheScope: string | null = null;
 
 export function clearJiraCaches(): void {
-  projectCache.clear();
   statsCache.clear();
+  statsCacheScope = null;
+  clearJiraCooldown();
 }
 
 /** Normalize a stored project key, or `null` when it can't be one. */
@@ -186,7 +184,7 @@ async function validateWithToken(token: string): Promise<AuthValidation> {
       accountId?: string;
       displayName?: string;
       emailAddress?: string;
-    }>({ siteUrl, email, token }, "/myself");
+    }>({ siteUrl, email, token }, "/myself", { ignoreCooldown: true });
     if (!me.accountId) return { valid: false, error: "Jira didn't recognize this account" };
     return { valid: true, account: me.displayName || me.emailAddress || me.accountId };
   } catch (err) {
@@ -203,7 +201,12 @@ async function validateWithToken(token: string): Promise<AuthValidation> {
 const repoStatsCapability: RepoStatsCapability = {
   async getRepoStats(repo: RepoRef, opts?: { bypassCache?: boolean }): Promise<RepoStatsSnapshot> {
     const op = await beginOp();
-    const key = `${op.scope}\u0000${repo.repo}`;
+    // Entries for a connection that's gone can never be read again.
+    if (statsCacheScope !== op.scope) {
+      statsCache.clear();
+      statsCacheScope = op.scope;
+    }
+    const key = repo.repo;
     const now = Date.now();
     const cached = statsCache.get(key);
     if (!opts?.bypassCache && cached && now - cached.at < STATS_CACHE_TTL_MS) {
@@ -258,35 +261,19 @@ export const jiraForgeProvider: ForgeIssueProviderImpl = {
     return validateWithToken(token.trim());
   },
 
+  /**
+   * Answered from settings alone, on purpose. Branch claims hang off this, and the
+   * host reads a failure here as "no claim" without trying again, so a network
+   * blip at project load would lose them until the next reload. A key that doesn't
+   * exist comes back in Jira's own words from the first search.
+   */
   async resolveIssueRepo(projectPath: string): Promise<RepoRef | null> {
     const projectKey = normalizeProjectKey(await projectKeyReader?.(projectPath));
     if (!projectKey) return null;
-    const op = await beginOp();
-    const cacheKey = `${op.scope}\u0000${projectKey}`;
-    let project = projectCache.get(cacheKey);
-    if (!project) {
-      try {
-        project = await jiraRequest<JiraProject>(
-          op.connection,
-          `/project/${encodeURIComponent(projectKey)}`
-        );
-      } catch (err) {
-        if (err instanceof JiraApiError && err.status === 404) {
-          throw new Error(
-            `Jira has no project ${projectKey} on this site, or this account can't see it. Check the project key in Project settings.`
-          );
-        }
-        throw err;
-      }
-      projectCache.set(cacheKey, project);
-    }
-    const host = new URL(op.connection.siteUrl).hostname;
-    return {
-      host,
-      owner: host.split(".")[0],
-      repo: project.key,
-      rawData: { projectId: project.id },
-    };
+    const { siteUrl } = await readConnectionSettings();
+    if (!siteUrl) throw new JiraApiError(NOT_CONNECTED_MESSAGE);
+    const host = siteHostOf(siteUrl);
+    return { host, owner: host.split(".")[0], repo: projectKey, rawData: null };
   },
 
   async listIssues(repo: RepoRef, opts: ListOptions): Promise<Page<Issue>> {
@@ -309,9 +296,14 @@ export const jiraForgeProvider: ForgeIssueProviderImpl = {
   },
 
   async getIssueById(_repo: RepoRef, id: string, _options?: FetchOptions): Promise<Issue | null> {
-    const idOrKey = id.trim().toUpperCase();
-    if (!ISSUE_ID_PATTERN.test(idOrKey)) return null;
-    return fetchIssue(idOrKey, await beginOp());
+    const trimmed = id.trim();
+    const stable = STABLE_ISSUE_ID_PATTERN.exec(trimmed);
+    if (stable) {
+      const op = await beginOp();
+      return stable[1] === siteHostOf(op.connection.siteUrl) ? fetchIssue(stable[2], op) : null;
+    }
+    const key = trimmed.toUpperCase();
+    return ISSUE_KEY_PATTERN.test(key) ? fetchIssue(key, await beginOp()) : null;
   },
 
   async getIssueBranchKeys(repo: RepoRef): Promise<string[]> {

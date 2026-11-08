@@ -14,6 +14,13 @@ vi.mock("../../../../../electron/services/ProjectStore.js", () => ({
   projectStore: { getProjectByPath: (p: string) => getProjectByPath(p) },
 }));
 
+const updateForgeSettingsForAllProjects = vi.fn(async () => undefined);
+vi.mock("../../../../../electron/services/WorkspaceClient.js", () => ({
+  getWorkspaceClient: () => ({
+    updateForgeSettingsForAllProjects: () => updateForgeSettingsForAllProjects(),
+  }),
+}));
+
 vi.mock("../../../../../electron/services/PluginService.js", () => ({
   pluginService: {
     getSettingValuesForUi: (...args: unknown[]) => getSettingValuesForUi(...args),
@@ -26,16 +33,27 @@ import { getToken } from "../JiraClient.js";
 
 function makeHost(settings: Record<string, unknown> = {}) {
   const register = vi.fn(async () => () => undefined);
+  const listeners = new Map<string, () => void>();
+  const disposed: string[] = [];
+  const onDidChange = vi.fn(async (key: string, callback: () => void) => {
+    listeners.set(key, callback);
+    return () => {
+      disposed.push(key);
+      listeners.delete(key);
+    };
+  });
+  const get = vi.fn(async (key: string) => settings[key]);
   const host = {
     registerForgeProvider: register,
-    settings: { get: vi.fn(async (key: string) => settings[key]) },
+    settings: { get, onDidChange },
   } as unknown as PluginHostApi;
-  return { host, register };
+  return { host, register, listeners, disposed, get };
 }
 
 beforeEach(() => {
   getProjectByPath.mockReset();
   getSettingValuesForUi.mockReset();
+  updateForgeSettingsForAllProjects.mockClear();
   vi.stubGlobal("fetch", vi.fn());
 });
 
@@ -64,13 +82,11 @@ describe("manifest", () => {
     expect(DEFAULT_DISABLED_PLUGIN_IDS).toContain(manifest.name);
   });
 
-  it("only ever hands the provider the token as its credential, and never stores it as a setting", () => {
-    const secretField = provider.credentialFields.find(
-      (field: { type: string }) => field.type === "password"
-    );
-    expect(secretField.id).toBe(provider.credentialFields[0].id);
+  it("never stores the credential as a setting", () => {
     const settingIds = manifest.contributes.settings.map((s: { id: string }) => s.id);
-    expect(settingIds).not.toContain(secretField.id);
+    for (const field of provider.credentialFields) {
+      expect(settingIds).not.toContain(field.id);
+    }
   });
 });
 
@@ -85,12 +101,8 @@ describe("activate", () => {
   it("reads the project key of the project the host asked about, by its id", async () => {
     const { host } = makeHost({ siteUrl: "https://acme.atlassian.net", email: "ada@example.com" });
     const dispose = await activate(host);
-    jiraForgeProvider.setCredentials?.({ kind: "bearer", value: "token" });
     getProjectByPath.mockResolvedValue({ id: "project-id" });
     getSettingValuesForUi.mockResolvedValue({ values: { projectKey: "eng" } });
-    vi.mocked(fetch).mockResolvedValue(
-      new Response(JSON.stringify({ id: "10000", key: "ENG" }), { status: 200 })
-    );
 
     await expect(jiraForgeProvider.resolveIssueRepo!("/projects/one")).resolves.toMatchObject({
       repo: "ENG",
@@ -123,19 +135,53 @@ describe("activate", () => {
     dispose();
   });
 
-  it("forgets the token and readers on disposal", async () => {
-    const { host } = makeHost();
+  it.each(["projectKey", "siteUrl"])(
+    "has the workspace hosts re-read their branch keys when %s changes",
+    async (key) => {
+      const { host, listeners } = makeHost();
+      const dispose = await activate(host);
+      expect(updateForgeSettingsForAllProjects).not.toHaveBeenCalled();
+
+      listeners.get(key)?.();
+
+      await vi.waitFor(() => expect(updateForgeSettingsForAllProjects).toHaveBeenCalledTimes(1));
+      dispose();
+    }
+  );
+
+  it("activates even when it can't subscribe to a setting", async () => {
+    const { host, register } = makeHost();
+    vi.mocked(host.settings.onDidChange).mockRejectedValueOnce(new Error("revoked"));
+    const dispose = await activate(host);
+    expect(register).toHaveBeenCalled();
+    expect(() => dispose()).not.toThrow();
+  });
+
+  it("lets go of the token, readers and subscriptions on disposal", async () => {
+    const { host, disposed, get } = makeHost({
+      siteUrl: "https://acme.atlassian.net",
+      email: "ada@example.com",
+    });
     const dispose = await activate(host);
     jiraForgeProvider.setCredentials?.({ kind: "bearer", value: "token" });
+    getProjectByPath.mockResolvedValue({ id: "project-id" });
+    getSettingValuesForUi.mockResolvedValue({ values: { projectKey: "ENG" } });
+    // Working up to here, so what follows is down to the disposal.
+    await expect(jiraForgeProvider.resolveIssueRepo!("/p")).resolves.toMatchObject({ repo: "ENG" });
     expect(getToken()).toBe("token");
 
     dispose();
+    get.mockClear();
+    getProjectByPath.mockClear();
 
     expect(getToken()).toBeNull();
+    expect(disposed.sort()).toEqual(["projectKey", "siteUrl"]);
     await expect(jiraForgeProvider.resolveIssueRepo!("/p")).resolves.toBeNull();
     await expect(jiraForgeProvider.validateToken("candidate")).resolves.toMatchObject({
       valid: false,
     });
+    expect(get).not.toHaveBeenCalled();
+    expect(getProjectByPath).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
   });
 });
