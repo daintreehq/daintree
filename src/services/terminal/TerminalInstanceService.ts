@@ -250,6 +250,9 @@ class TerminalInstanceService {
   /** Held, but the PTY's grid is still unknown; retried on the next lease event. */
   private watchUnseeded = new Set<string>();
   private watchEpoch = 0;
+  /** Panes the host skipped output for while no window showed this project. */
+  private hiddenSkipRepaints = new Set<string>();
+  private hiddenSkipRepaintRunning = false;
   private exitHandlers = new Map<string, (exitCode: number) => void>();
   private offViewLifecycle: () => void;
   private offViewObservability: () => void;
@@ -602,6 +605,7 @@ class TerminalInstanceService {
     for (const managed of this.instances.values()) {
       resumeXtermRender(managed.terminal);
     }
+    this.repaintHiddenSkips();
   }
 
   /**
@@ -1474,6 +1478,50 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (!managed) return;
     writeLocal(managed, `\x18\x1b]57301;${droppedBytes};backpressure\x07`);
+  }
+
+  /**
+   * The host stopped sending this pane live output while no window showed
+   * its project (#16497). Nothing is lost — the host mirror has it — so the
+   * pane repaints from the host snapshot once this view is back, instead of
+   * carrying a discontinuity marker. A view already back repaints now: the
+   * notice can trail the reactivation, and a skip after a repaint's snapshot
+   * request is reported again.
+   */
+  noteHiddenOutputSkipped(id: string): void {
+    if (!this.instances.has(id)) return;
+    this.hiddenSkipRepaints.add(id);
+    if (!isProjectViewCached()) this.repaintHiddenSkips();
+  }
+
+  /**
+   * One repaint at a time: a reveal can find every busy pane of the project
+   * marked, and each restore writes a whole snapshot into its xterm.
+   */
+  private repaintHiddenSkips(): void {
+    if (this.hiddenSkipRepaintRunning) return;
+    this.hiddenSkipRepaintRunning = true;
+    void (async () => {
+      try {
+        // Set iteration also visits ids marked while an earlier one restores.
+        for (const id of this.hiddenSkipRepaints) {
+          if (isProjectViewCached()) break;
+          this.hiddenSkipRepaints.delete(id);
+          if (!this.instances.has(id)) continue;
+          try {
+            if (!(await this.fetchAndRestore(id))) {
+              logWarn(`[TerminalInstanceService] ${id}: repaint after hidden-view skip failed`);
+            }
+          } catch (error) {
+            logWarn(`[TerminalInstanceService] ${id}: repaint after hidden-view skip threw`, {
+              error,
+            });
+          }
+        }
+      } finally {
+        this.hiddenSkipRepaintRunning = false;
+      }
+    })();
   }
 
   /**
@@ -3772,6 +3820,7 @@ class TerminalInstanceService {
 
     this.offscreenManager.removeOffscreenSlot(id);
     this.suppressedExitUntil.delete(id);
+    this.hiddenSkipRepaints.delete(id);
     this.cwdProviders.delete(id);
     this.cachedSelections.delete(id);
     this.rendererPolicy.clearTierState(id);

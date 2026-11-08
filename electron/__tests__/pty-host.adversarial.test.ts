@@ -1,5 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { SharedRingBuffer } from "../../shared/utils/SharedRingBuffer.js";
+import { HIDDEN_VIEW_SKIP_REASON } from "../../shared/types/pty-host.js";
+import { IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES } from "../services/pty/types.js";
 
 type TestMock = Mock;
 
@@ -136,6 +138,10 @@ interface InspectableIpcQueueManager {
   addBytes: TestMock;
   getUtilization: TestMock;
   applyBackpressure: TestMock;
+  getQueuedBytes: TestMock;
+  isPaused: TestMock;
+  noteHiddenSkip: TestMock;
+  clearHiddenSkip: TestMock;
   dispose: TestMock;
 }
 
@@ -601,6 +607,17 @@ vi.mock("../pty-host/index.js", async () => {
     });
     getUtilization = vi.fn(() => 0);
     applyBackpressure = vi.fn();
+    getQueuedBytes = vi.fn((id: string) => this.queuedBytes.get(id) ?? 0);
+    isPaused = vi.fn(() => false);
+    hiddenSkipNotified = new Set<string>();
+    noteHiddenSkip = vi.fn((id: string) => {
+      if (this.hiddenSkipNotified.has(id)) return false;
+      this.hiddenSkipNotified.add(id);
+      return true;
+    });
+    clearHiddenSkip = vi.fn((id: string) => {
+      this.hiddenSkipNotified.delete(id);
+    });
     dispose = vi.fn();
     getQueueSnapshot = vi.fn(() => ({ totalPendingBytes: 0, perTerminal: [] }));
     deps: { emitReliabilityMetric?: (payload: Record<string, unknown>) => void } | undefined;
@@ -1588,7 +1605,34 @@ describe("pty-host adversarial", () => {
 
   it("PRIMARY_FALLBACK_STILL_APPLIES_BACKPRESSURE (#12557)", async () => {
     // The guard above must be scoped to the supplementary case: when the IPC
-    // copy is the ONLY delivery, its ledger is the real flow control again.
+    // copy is the ONLY delivery to the view on screen (its port is saturated),
+    // its ledger is the real flow control again.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const port = createRendererPort();
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(false);
+    const ipcQueue = hostState.ipcQueueManagers[0];
+    ipcQueue.applyBackpressure.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    await flushMicrotasks();
+
+    expect(dataPayloads(parentPort)).toHaveLength(1);
+    expect(ipcQueue.applyBackpressure).toHaveBeenCalled();
+  });
+
+  it("HIDDEN_PROJECT_FALLBACK_NEVER_APPLIES_BACKPRESSURE (#16497)", async () => {
+    // Project-filtered away from the only window: the IPC copy reaches cached
+    // views alone, which may drain on throttled timers or never. Pausing for
+    // them would hold a busy agent in back-to-back safety-timer cycles.
     const parentPort = await loadHost();
     hostState.terminals.set("t1", createTerminal("t1", "project-1"));
 
@@ -1604,14 +1648,53 @@ describe("pty-host adversarial", () => {
     });
     await flushMicrotasks();
 
-    // Project-filtered away from the only window, so nothing takes it on a port.
     const ipcQueue = hostState.ipcQueueManagers[0];
     ipcQueue.applyBackpressure.mockClear();
 
     (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
     await flushMicrotasks();
 
-    expect(ipcQueue.applyBackpressure).toHaveBeenCalled();
+    expect(dataPayloads(parentPort)).toHaveLength(1);
+    expect(ipcQueue.addBytes).toHaveBeenCalledWith("t1", "step\r\n".length);
+    expect(ipcQueue.applyBackpressure).not.toHaveBeenCalled();
+  });
+
+  it("HIDDEN_PROJECT_OVER_BUDGET_SKIPS_WITH_ONE_REPAINT_NOTICE (#16497)", async () => {
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const port = createRendererPort();
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-2" });
+    await flushMicrotasks();
+
+    const ipcQueue = hostState.ipcQueueManagers[0];
+    ipcQueue.queuedBytes.set("t1", IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES);
+    parentPort.postMessage.mockClear();
+
+    for (let i = 0; i < 3; i++) {
+      (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    }
+    await flushMicrotasks();
+
+    expect(dataPayloads(parentPort)).toHaveLength(0);
+    expect(ipcQueue.applyBackpressure).not.toHaveBeenCalled();
+    const statuses = terminalStatusPayloads(parentPort);
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0]).toMatchObject({
+      id: "t1",
+      status: "data-loss",
+      reason: HIDDEN_VIEW_SKIP_REASON,
+    });
+
+    // Showing the project again clears what its cached views never acked.
+    parentPort.emit("message", { type: "project-switch", windowId: 1, projectId: "project-1" });
+    await flushMicrotasks();
+    expect(ipcQueue.clearQueue).toHaveBeenCalledWith("t1");
+    expect(ipcQueue.queuedBytes.get("t1")).toBeUndefined();
   });
 
   it("SUPPLEMENTARY_FALLBACK_AT_CAPACITY_KEEPS_THE_TERMINAL_LIVE (#12557)", async () => {

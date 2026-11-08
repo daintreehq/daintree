@@ -105,6 +105,8 @@ type ViewCacheTestService = {
     releaseContext: (id: string) => void;
     pinFocus: (id: string, managed: ManagedTerminal) => void;
   };
+  noteHiddenOutputSkipped: (id: string) => void;
+  fetchAndRestore: (id: string) => Promise<boolean>;
   dispose: () => void;
 };
 
@@ -580,5 +582,111 @@ describe("TerminalInstanceService built inside a cached or hidden view (#14267)"
 
     service.instances.clear();
     service.dispose();
+  });
+});
+
+describe("TerminalInstanceService repaint after a hidden-view skip (#16497)", () => {
+  let service: ViewCacheTestService;
+  let restores: Array<{ id: string; settle: (ok: boolean) => void }>;
+
+  async function settleMicrotasks(): Promise<void> {
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+  }
+
+  beforeEach(async () => {
+    vi.resetModules();
+    viewCache.cached = false;
+    viewCache.hidden = false;
+    viewCache.listeners.clear();
+    viewCache.visibilityListeners.clear();
+    service = (await (
+      await import("../terminalInstanceServiceAccessor")
+    ).load()) as unknown as ViewCacheTestService;
+    service.instances.clear();
+    restores = [];
+    // Each restore stays open until the test settles it, so the order and
+    // overlap of restores is observable.
+    vi.spyOn(service, "fetchAndRestore").mockImplementation(
+      (id: string) =>
+        new Promise<boolean>((resolve) => {
+          restores.push({ id, settle: resolve });
+        })
+    );
+  });
+
+  afterEach(() => {
+    service.instances.clear();
+    vi.restoreAllMocks();
+    service.dispose();
+  });
+
+  it("waits for the view to come back, then repaints each skipped pane once, one at a time", async () => {
+    service.instances.set("a", makeManaged());
+    service.instances.set("b", makeManaged());
+    service.instances.set("c", makeManaged());
+    emit("cached");
+
+    service.noteHiddenOutputSkipped("a");
+    service.noteHiddenOutputSkipped("b");
+    service.noteHiddenOutputSkipped("a");
+    await settleMicrotasks();
+    expect(restores).toHaveLength(0);
+
+    emit("active");
+    emit("revealed");
+    await settleMicrotasks();
+    expect(restores.map((r) => r.id)).toEqual(["a"]);
+
+    restores[0]!.settle(true);
+    await settleMicrotasks();
+    expect(restores.map((r) => r.id)).toEqual(["a", "b"]);
+
+    restores[1]!.settle(true);
+    await settleMicrotasks();
+    emit("revealed");
+    await settleMicrotasks();
+    expect(restores.map((r) => r.id)).toEqual(["a", "b"]);
+  });
+
+  it("repaints at once when the notice reaches a view that is already back", async () => {
+    service.instances.set("a", makeManaged());
+
+    service.noteHiddenOutputSkipped("a");
+    await settleMicrotasks();
+
+    expect(restores.map((r) => r.id)).toEqual(["a"]);
+  });
+
+  it("leaves the rest for the next reactivation when the view is cached mid-repaint", async () => {
+    service.instances.set("a", makeManaged());
+    service.instances.set("b", makeManaged());
+    emit("cached");
+    service.noteHiddenOutputSkipped("a");
+    service.noteHiddenOutputSkipped("b");
+
+    emit("active");
+    await settleMicrotasks();
+    emit("cached");
+    restores[0]!.settle(true);
+    await settleMicrotasks();
+    expect(restores.map((r) => r.id)).toEqual(["a"]);
+
+    emit("active");
+    await settleMicrotasks();
+    expect(restores.map((r) => r.id)).toEqual(["a", "b"]);
+  });
+
+  it("skips a pane that went away before its view came back", async () => {
+    service.instances.set("a", makeManaged());
+    service.instances.set("b", makeManaged());
+    emit("cached");
+    service.noteHiddenOutputSkipped("a");
+    service.noteHiddenOutputSkipped("b");
+    service.instances.delete("a");
+
+    emit("active");
+    await settleMicrotasks();
+
+    expect(restores.map((r) => r.id)).toEqual(["b"]);
   });
 });

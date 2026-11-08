@@ -724,6 +724,10 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     this.plane(id).injectDataLossMarker(id, droppedBytes);
   }
 
+  noteHiddenOutputSkipped(id: string): void {
+    this.plane(id).noteHiddenOutputSkipped(id);
+  }
+
   async getOrCreate(
     id: string,
     launchAgentId: string | undefined,

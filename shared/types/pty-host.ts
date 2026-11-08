@@ -1502,6 +1502,14 @@ export interface SpawnError {
 export type CrashType =
   "OUT_OF_MEMORY" | "ASSERTION_FAILURE" | "SIGNAL_TERMINATED" | "UNKNOWN_CRASH" | "CLEAN_EXIT";
 
+/**
+ * `reason` on a `data-loss` status when the only views that missed the bytes
+ * were cached: the host skipped live output for a project no window shows.
+ * The pane repaints from the host snapshot once its view is back, so it gets
+ * no discontinuity marker.
+ */
+export const HIDDEN_VIEW_SKIP_REASON = "hidden-view-skip";
+
 /** Payload for terminal status events (flow control) */
 export interface TerminalStatusPayload {
   id: string;

@@ -16,6 +16,7 @@ function makeCtx(stateRef: {
     write: vi.fn(),
     mayDriveFrom: vi.fn(() => true),
     setDriveLeases: vi.fn(),
+    getTerminalsForProject: vi.fn(() => []),
   } as unknown as HostContext["ptyManager"];
 
   return {
@@ -25,7 +26,10 @@ function makeCtx(stateRef: {
     processTreeCache: {} as HostContext["processTreeCache"],
     terminalResourceMonitor: {} as HostContext["terminalResourceMonitor"],
     backpressureManager: {} as HostContext["backpressureManager"],
-    ipcQueueManager: {} as HostContext["ipcQueueManager"],
+    ipcQueueManager: {
+      isPaused: vi.fn(() => false),
+      clearQueue: vi.fn(),
+    } as unknown as HostContext["ipcQueueManager"],
     resourceGovernor: {} as HostContext["resourceGovernor"],
     packetFramer: {} as HostContext["packetFramer"],
     pauseCoordinators: new Map(),

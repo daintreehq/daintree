@@ -1,12 +1,14 @@
 import { selectShard } from "../../shared/utils/shardSelection.js";
 import type { PacketFramer, SharedRingBuffer } from "../../shared/utils/SharedRingBuffer.js";
-import type {
-  PtyHostEvent,
-  TerminalReliabilityMetricPayload,
+import {
+  HIDDEN_VIEW_SKIP_REASON,
+  type PtyHostEvent,
+  type TerminalReliabilityMetricPayload,
 } from "../../shared/types/pty-host.js";
 import { isSmokeTestTerminalId } from "../../shared/utils/smokeTestTerminals.js";
 import type { PtyManager } from "../services/PtyManager.js";
 import {
+  IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES,
   PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS,
   PORT_BATCH_RECENT_INPUT_WINDOW_MS,
 } from "../services/pty/types.js";
@@ -146,6 +148,9 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
     const needsEligibleFallback =
       termProjectId !== null && fallbackEligibleProjects.has(termProjectId);
     const portDeliveredWebContentsIds: number[] = [];
+    // Every connected window shows some other project, so the IPC fallback
+    // below can only reach cached views of this one.
+    let projectShownNowhere = false;
 
     if (
       !isSuspended &&
@@ -160,6 +165,7 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
         if (filtered) continue;
         targets.push({ windowId, conn });
       }
+      projectShownNowhere = termProjectId !== null && targets.length === 0;
 
       // Encode only when a target window remains after project filtering — a
       // fully-filtered chunk falls through to the IPC fallback's original string.
@@ -457,6 +463,13 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
     // indefinitely. Letting that reach `applyBackpressure` would pause the PTY
     // and stall the healthy primary window on a background view's progress.
     const isSupplementaryFallback = sendIpcFallback && visualWritten;
+    // The other case where only cached views receive the copy: no window shows
+    // the project at all. Pausing for them holds the agent itself, in
+    // back-to-back IPC_MAX_PAUSE_MS cycles while its hidden view drains on
+    // throttled timers or not at all (#16497). These copies get their own
+    // budget instead, and a pane that missed output repaints from the host
+    // snapshot when its view returns.
+    const isHiddenFallback = sendIpcFallback && !visualWritten && projectShownNowhere;
 
     // Fallback: If ring buffer failed or isn't set up, use IPC with backpressure
     // Skip IPC fallback for backgrounded or suspended terminals (wake will resync via snapshot)
@@ -465,9 +478,27 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
       const dataString = toStringForIpc(data);
       const dataBytes = Buffer.byteLength(dataString, "utf8");
 
-      // Enforce hard cap: drop data if adding it would exceed max queue size
-      // This prevents unbounded memory growth when renderer is stalled
-      if (ipcQueueManager.isAtCapacity(id, dataBytes)) {
+      if (isHiddenFallback) {
+        if (ipcQueueManager.getQueuedBytes(id) + dataBytes > IPC_HIDDEN_VIEW_MAX_QUEUE_BYTES) {
+          // Nothing is lost: the host mirror holds every byte. The cached views
+          // only need to know they must repaint, once per run of skips.
+          if (ipcQueueManager.noteHiddenSkip(id)) {
+            sendEvent({
+              type: "terminal-status",
+              id,
+              status: "data-loss",
+              reason: HIDDEN_VIEW_SKIP_REASON,
+              timestamp: Date.now(),
+            });
+          }
+        } else {
+          ipcQueueManager.addBytes(id, dataBytes);
+          sendEvent({ type: "data", id, data: dataString, streamEnd });
+          ipcDataEmitted = true;
+        }
+      } else if (ipcQueueManager.isAtCapacity(id, dataBytes)) {
+        // Enforce hard cap: drop data if adding it would exceed max queue size
+        // This prevents unbounded memory growth when renderer is stalled
         const utilization = ipcQueueManager.getUtilization(id);
         console.warn(
           `[PtyHost] IPC queue full (${utilization.toFixed(1)}%). Dropping ${dataBytes} bytes for terminal ${id}`
@@ -514,6 +545,10 @@ export function createVisualOutputRouter(deps: VisualOutputRouterDeps): VisualOu
             droppedBytes: dataBytes,
             timestamp: Date.now(),
           });
+          // A full ledger never reaches the applyBackpressure below, so one
+          // filled by copies that charge without pausing (supplementary ones)
+          // would drop every later chunk with no safety timer left to clear it.
+          ipcQueueManager.applyBackpressure(id, utilization);
           return; // Drop this chunk to prevent OOM
         }
       } else {

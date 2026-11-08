@@ -52,7 +52,9 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   // (high-frequency binary — keeping it off the event bus avoids envelope overhead
   // and JSON/base64 churn; see lessons #4899/#4862/#4639). Project-scoped: only
   // the owning project's views host a panel for the terminal, and its cached
-  // views must still get every byte, since there is no resync on reactivation.
+  // views must get every byte the host sends. (A project no window shows is
+  // capped host-side; panes that missed output repaint from the host snapshot
+  // when their view returns, signalled by a `hidden-view-skip` status.)
   const handlePtyData = (
     id: string,
     data: string | Uint8Array,

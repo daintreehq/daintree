@@ -33,6 +33,9 @@ export class IpcQueueManager {
   private readonly queuedBytes = new Map<string, number>();
   private readonly pausedTerminals = new Map<string, ReturnType<typeof setInterval>>();
   private readonly pauseStartTimes = new Map<string, number>();
+  // Terminals whose cached views were already told they missed output, so a
+  // sustained skip sends one notice rather than one per chunk.
+  private readonly hiddenSkipNotified = new Set<string>();
   private totalQueuedBytes = 0;
 
   constructor(private readonly deps: IpcQueueDeps) {}
@@ -113,6 +116,25 @@ export class IpcQueueManager {
 
   isPaused(id: string): boolean {
     return this.pausedTerminals.has(id);
+  }
+
+  /**
+   * Records that a chunk for `id` was skipped for its cached views. True only
+   * for the first skip since the last {@link clearHiddenSkip}, which is when
+   * those views need telling.
+   */
+  noteHiddenSkip(id: string): boolean {
+    if (this.hiddenSkipNotified.has(id)) return false;
+    this.hiddenSkipNotified.add(id);
+    return true;
+  }
+
+  /**
+   * A snapshot of `id` is being taken, and a view repainting from it has
+   * everything skipped so far. Any later skip is news to that view again.
+   */
+  clearHiddenSkip(id: string): void {
+    this.hiddenSkipNotified.delete(id);
   }
 
   applyBackpressure(id: string, utilization: number): boolean {
@@ -272,6 +294,7 @@ export class IpcQueueManager {
     this.totalQueuedBytes = Math.max(0, this.totalQueuedBytes - removed);
     this.pausedTerminals.delete(id);
     this.pauseStartTimes.delete(id);
+    this.hiddenSkipNotified.delete(id);
     // A cleared terminal (exit, force-resume) can be the one holding most of
     // the aggregate — sweep so aggregate-paused siblings resume now instead of
     // waiting out their safety timeouts.
@@ -289,6 +312,7 @@ export class IpcQueueManager {
     this.pausedTerminals.clear();
     this.pauseStartTimes.clear();
     this.queuedBytes.clear();
+    this.hiddenSkipNotified.clear();
     this.totalQueuedBytes = 0;
   }
 }

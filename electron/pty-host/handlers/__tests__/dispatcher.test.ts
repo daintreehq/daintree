@@ -82,6 +82,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
       removeBytes: vi.fn(),
       tryResume: vi.fn(),
       clearQueue: vi.fn(),
+      clearHiddenSkip: vi.fn(),
     } as unknown as HostContext["ipcQueueManager"],
     resourceGovernor: {} as HostContext["resourceGovernor"],
     packetFramer: {} as HostContext["packetFramer"],
