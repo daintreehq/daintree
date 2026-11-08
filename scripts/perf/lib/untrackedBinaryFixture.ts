@@ -9,8 +9,8 @@ import { createPerfTempRoot } from "./tempRoots";
  * Fixture, read observer and oracle for PERF-113: a worktree carrying
  * untracked binaries (1 byte, 8 KiB, 2 MiB, 9.5 MiB and a 40 MiB batch of
  * 2 MiB screenshots) beside untracked text and one tracked edit, so repeated
- * forced status passes show how many bytes untracked line counting reads when
- * nothing has changed.
+ * forced status passes show how many bytes untracked line counting reads on
+ * first sighting and when nothing has changed.
  *
  * Built lazily, once per process, outside the shared git-pipeline fixture.
  * Setup uses execFileSync, which does not route through the ChildProcess spawn
@@ -20,7 +20,7 @@ import { createPerfTempRoot } from "./tempRoots";
 const MiB = 1024 * 1024;
 const BATCH_FILES = 20;
 
-interface FixtureFile {
+export interface FixtureFile {
   rel: string;
   content: Buffer;
   /** What the status pass must report: a line count, or null for binary. */
@@ -223,11 +223,21 @@ export function rowOracleMisses(f: UntrackedBinaryFixture, result: WorktreeChang
   return misses;
 }
 
+export interface PathReads {
+  /** Handles opened on the path, plus path-based `readFile` calls. */
+  acquisitions: number;
+  bytes: number;
+  /** Whole-file reads: `readFile` on a handle or on the path. */
+  wholeReads: number;
+}
+
 export interface ReadTally {
   binaryBytes: number;
   untrackedBytes: number;
+  /** Acquisitions, so one per file read however many reads it took. */
   binaryReads: number;
   untrackedReads: number;
+  byPath: Map<string, PathReads>;
 }
 
 export interface ReadObserver {
@@ -239,46 +249,138 @@ export interface ReadObserver {
 let activeObserver: ReadObserver | null = null;
 
 /**
- * Wraps the shared `fs.promises.readFile`, which the status utility calls
- * through the same object, and tallies bytes returned for the fixture's
- * untracked files. This is bytes handed back to the line counter, not disk
- * I/O. The original is restored by `dispose()`.
+ * The line counter's binary sniff window. The fixture's `sniff-8k.bin` and
+ * `late-nul.log` sit on its edge.
+ */
+export const BINARY_SNIFF_BYTES = 8 * 1024;
+
+const emptyTally = (): ReadTally => ({
+  binaryBytes: 0,
+  untrackedBytes: 0,
+  binaryReads: 0,
+  untrackedReads: 0,
+  byPath: new Map(),
+});
+
+type HandleRead = (...args: unknown[]) => Promise<{ bytesRead: number }>;
+type HandleReadFile = (...args: unknown[]) => Promise<Buffer | string>;
+type FileHandle = Awaited<ReturnType<typeof fsPromises.open>>;
+
+const byteLength = (result: Buffer | string) =>
+  typeof result === "string" ? Buffer.byteLength(result) : result.length;
+
+/**
+ * Wraps the shared `fs.promises.open` and `fs.promises.readFile`, which the
+ * status utility calls through the same objects, and tallies per path what
+ * reads of the fixture's untracked files returned: `read` and `readFile` on a
+ * handle opened on one, and `readFile` given one's path or such a handle.
+ * This is bytes handed back to the line counter, not disk I/O. The originals
+ * are restored by `dispose()`.
  */
 export function observeUntrackedReads(f: UntrackedBinaryFixture): ReadObserver {
   if (activeObserver) throw new Error("untracked read observer already installed");
-  const original = fsPromises.readFile;
-  let tally: ReadTally = { binaryBytes: 0, untrackedBytes: 0, binaryReads: 0, untrackedReads: 0 };
-  const wrapped = async function (this: unknown, ...args: Parameters<typeof original>) {
-    const result = await (original as (...a: unknown[]) => Promise<Buffer | string>).apply(
+  const originalOpen = fsPromises.open;
+  const originalReadFile = fsPromises.readFile;
+  const handlePaths = new WeakMap<FileHandle, string>();
+  let tally = emptyTally();
+
+  const pathReads = (abs: string): PathReads => {
+    let reads = tally.byPath.get(abs);
+    if (!reads) {
+      reads = { acquisitions: 0, bytes: 0, wholeReads: 0 };
+      tally.byPath.set(abs, reads);
+    }
+    return reads;
+  };
+  const acquired = (abs: string) => {
+    pathReads(abs).acquisitions++;
+    tally.untrackedReads++;
+    if (f.untracked.get(abs)!.binary) tally.binaryReads++;
+  };
+  const returned = (abs: string, bytes: number, whole: boolean) => {
+    const reads = pathReads(abs);
+    reads.bytes += bytes;
+    if (whole) reads.wholeReads++;
+    tally.untrackedBytes += bytes;
+    if (f.untracked.get(abs)!.binary) tally.binaryBytes += bytes;
+  };
+
+  const open = async function (this: unknown, ...args: Parameters<typeof originalOpen>) {
+    const handle = await originalOpen.apply(this, args);
+    const abs = typeof args[0] === "string" && f.untracked.has(args[0]) ? args[0] : undefined;
+    if (!abs) return handle;
+    acquired(abs);
+    handlePaths.set(handle, abs);
+    const read = handle.read.bind(handle) as HandleRead;
+    const readFile = handle.readFile.bind(handle) as HandleReadFile;
+    Object.assign(handle, {
+      read: async (...readArgs: unknown[]) => {
+        const result = await read(...readArgs);
+        returned(abs, result.bytesRead, false);
+        return result;
+      },
+      readFile: async (...readArgs: unknown[]) => {
+        const result = await readFile(...readArgs);
+        returned(abs, byteLength(result), true);
+        return result;
+      },
+    });
+    return handle;
+  };
+  const readFile = async function (this: unknown, ...args: Parameters<typeof originalReadFile>) {
+    const result = (await (originalReadFile as (...a: unknown[]) => Promise<Buffer | string>).apply(
       this,
       args
-    );
-    const file = typeof args[0] === "string" ? f.untracked.get(args[0]) : undefined;
-    if (file) {
-      const bytes = typeof result === "string" ? Buffer.byteLength(result) : result.length;
-      tally.untrackedBytes += bytes;
-      tally.untrackedReads++;
-      if (file.binary) {
-        tally.binaryBytes += bytes;
-        tally.binaryReads++;
-      }
+    )) as Buffer | string;
+    const target = args[0];
+    const abs =
+      typeof target === "string"
+        ? f.untracked.has(target)
+          ? target
+          : undefined
+        : handlePaths.get(target as FileHandle);
+    if (abs) {
+      if (typeof target === "string") acquired(abs);
+      returned(abs, byteLength(result), true);
     }
     return result;
   };
-  fsPromises.readFile = wrapped as typeof original;
+  fsPromises.open = open as typeof originalOpen;
+  fsPromises.readFile = readFile as typeof originalReadFile;
   const observer: ReadObserver = {
     take() {
       const out = tally;
-      tally = { binaryBytes: 0, untrackedBytes: 0, binaryReads: 0, untrackedReads: 0 };
+      tally = emptyTally();
       return out;
     },
     dispose() {
-      if (fsPromises.readFile === wrapped) fsPromises.readFile = original;
+      if (fsPromises.open === open) fsPromises.open = originalOpen;
+      if (fsPromises.readFile === readFile) fsPromises.readFile = originalReadFile;
       activeObserver = null;
     },
   };
   activeObserver = observer;
   return observer;
+}
+
+/**
+ * Binaries a first-sighting pass did not read once, and only as far as their
+ * sniff: each must be acquired exactly once, never read whole, and hand back
+ * exactly `min(size, BINARY_SNIFF_BYTES)` bytes. Checked per path, so one
+ * binary skipped and another read twice cannot balance out, and an observer
+ * that saw nothing misses every binary.
+ */
+export function firstSightingReadMisses(f: UntrackedBinaryFixture, tally: ReadTally): number {
+  let misses = 0;
+  for (const [abs, file] of f.untracked) {
+    if (!file.binary) continue;
+    const reads = tally.byPath.get(abs);
+    const sniff = Math.min(file.content.length, BINARY_SNIFF_BYTES);
+    if (!reads || reads.acquisitions !== 1 || reads.wholeReads !== 0 || reads.bytes !== sniff) {
+      misses++;
+    }
+  }
+  return misses;
 }
 
 /**

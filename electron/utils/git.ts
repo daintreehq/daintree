@@ -53,13 +53,11 @@ function realpathBounded(path: string): Promise<string> {
 
 // The signal reclaims the read's buffers once it times out; the race settles
 // the call even when the open itself never returns.
-async function readFileBounded(path: string): Promise<Buffer>;
-async function readFileBounded(path: string, encoding: "utf-8"): Promise<string>;
-async function readFileBounded(path: string, encoding?: "utf-8"): Promise<Buffer | string> {
+async function readFileBounded(path: string, encoding: "utf-8"): Promise<string> {
   const { signal, dispose } = timeoutSignal(FS_OP_TIMEOUT_MS);
   try {
-    return await withTimeout<Buffer | string>(
-      encoding ? fs.readFile(path, { encoding, signal }) : fs.readFile(path, { signal }),
+    return await withTimeout(
+      fs.readFile(path, { encoding, signal }),
       FS_OP_TIMEOUT_MS,
       "readFile timed out"
     );
@@ -70,6 +68,54 @@ async function readFileBounded(path: string, encoding?: "utf-8"): Promise<Buffer
     throw error;
   } finally {
     dispose();
+  }
+}
+
+// The leading span the untracked line counter sniffs for a NUL byte.
+const BINARY_SNIFF_BYTES = 8192;
+
+interface UntrackedRead {
+  bytes: Buffer;
+  /** Only the sniff was read: it held a NUL and filled, so more may follow. */
+  sniffOnly: boolean;
+}
+
+// Bounded as a whole, as `readFileBounded` is, so a stalled open, read or
+// close costs one bound rather than one each.
+async function readUntrackedBounded(path: string): Promise<UntrackedRead> {
+  const { signal, dispose } = timeoutSignal(FS_OP_TIMEOUT_MS);
+  try {
+    return await withTimeout(readUntracked(path, signal), FS_OP_TIMEOUT_MS, "readFile timed out");
+  } catch (error) {
+    if (signal.aborted && signal.reason instanceof TimeoutError) throw signal.reason;
+    throw error;
+  } finally {
+    dispose();
+  }
+}
+
+// A sniff holding a NUL ends the read, so a binary costs one sniff-sized read
+// however large it is. The sniff is positional, which leaves the handle at
+// byte 0, so the whole-file read after it starts at the first byte. A short
+// read is not EOF (network mounts return them), so the sniff fills until a
+// read returns nothing. `open`, `read` and `close` take no signal: a stalled
+// one is abandoned by the bound, and the handle is still closed once it
+// returns, without starting another read.
+async function readUntracked(path: string, signal: AbortSignal): Promise<UntrackedRead> {
+  const handle = await fs.open(path, "r");
+  try {
+    const sniff = Buffer.alloc(BINARY_SNIFF_BYTES);
+    let filled = 0;
+    while (filled < sniff.length) {
+      signal.throwIfAborted();
+      const { bytesRead } = await handle.read(sniff, filled, sniff.length - filled, filled);
+      if (bytesRead === 0) return { bytes: sniff.subarray(0, filled), sniffOnly: false };
+      filled += bytesRead;
+    }
+    if (sniff.indexOf(0) !== -1) return { bytes: sniff, sniffOnly: true };
+    return { bytes: await handle.readFile({ signal }), sniffOnly: false };
+  } finally {
+    await handle.close();
   }
 }
 
@@ -1152,27 +1198,26 @@ export async function getWorktreeChangesWithStats(
           // Untracked line counts and binary verdicts (`null`) are a pure
           // function of file content, so their identity deliberately excludes
           // HEAD OID: commits must not discard them. Remembering the binary
-          // verdict is what keeps an unchanged binary from being read whole on
-          // every pass.
+          // verdict is what keeps an unchanged binary from being sniffed again
+          // on every pass.
           const cached = diffStatPass.lookupUntracked(filePath, stats.mtimeMs, stats.size);
           if (cached !== undefined) {
             diffStatPass.keepUntracked(filePath, stats.mtimeMs, stats.size, cached);
             return cached;
           }
 
-          const buffer = await perFile(() => readFileBounded(filePath));
+          const { bytes, sniffOnly } = await perFile(() => readUntrackedBounded(filePath));
 
           let verdict: number | null = null;
-          const sampleSize = Math.min(buffer.length, 8192);
-          if (buffer.subarray(0, sampleSize).indexOf(0) === -1) {
+          if (bytes.subarray(0, BINARY_SNIFF_BYTES).indexOf(0) === -1) {
             // Count newline bytes directly — decoding up to 10MB to a string
             // would double the allocation for no benefit (0x0A is unambiguous
             // in UTF-8).
             verdict = 0;
-            for (let i = 0; i < buffer.length; i++) {
-              if (buffer[i] === 0x0a) verdict++;
+            for (let i = 0; i < bytes.length; i++) {
+              if (bytes[i] === 0x0a) verdict++;
             }
-            if (buffer.length > 0 && buffer[buffer.length - 1] !== 0x0a) {
+            if (bytes.length > 0 && bytes[bytes.length - 1] !== 0x0a) {
               verdict++;
             }
           }
@@ -1180,8 +1225,9 @@ export async function getWorktreeChangesWithStats(
           // A read that raced a writer (or a replacement) still gives this
           // pass its best answer, but the bytes may not belong to the identity
           // the first stat saw, so it is kept only when the read returned
-          // exactly that many bytes and the file still stats the same after.
-          if (buffer.length === stats.size) {
+          // exactly what that size implies (the whole file, or a full sniff of
+          // a file at least that long) and the file still stats the same after.
+          if (sniffOnly ? stats.size >= bytes.length : bytes.length === stats.size) {
             const after = await perFile(() => statBounded(filePath)).catch(() => undefined);
             if (after && isSameFileVersion(stats, after)) {
               diffStatPass.keepUntracked(filePath, stats.mtimeMs, stats.size, verdict);

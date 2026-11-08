@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
+import { mkdtempSync, promises as fsPromises, realpathSync, rmSync, writeFileSync } from "node:fs";
+import type { FileHandle } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   makeTerminalStream,
   simulateTerminalOutputPass,
@@ -8,6 +12,13 @@ import {
 import type { AgentAnalysisSimResult } from "../lib/agentAnalysisSim";
 import { analysisSweepMisses } from "../scenarios/agentAnalysis";
 import { leakWorkloadMisses } from "../scenarios/soak";
+import {
+  BINARY_SNIFF_BYTES,
+  firstSightingReadMisses,
+  observeUntrackedReads,
+  type FixtureFile,
+  type UntrackedBinaryFixture,
+} from "../lib/untrackedBinaryFixture";
 
 /**
  * The three predicates a review found were satisfiable by a subject that did
@@ -153,5 +164,122 @@ describe("leakWorkloadMisses", () => {
 
   it("scores interval samples that were never taken", () => {
     expect(leakWorkloadMisses({ ...leakObservation(), heapSamples: [1, 2] })).toBeGreaterThan(0);
+  });
+});
+
+describe("firstSightingReadMisses (PERF-113)", () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "perf113-oracle-")));
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
+
+  const files: Array<[string, Buffer, boolean]> = [
+    ["one-byte.bin", Buffer.from([0]), true],
+    // Two binaries of one size, so a skipped one and a twice-read one balance out in totals.
+    ["a.bin", Buffer.concat([Buffer.from([0]), Buffer.alloc(20_000, 7)]), true],
+    ["b.bin", Buffer.concat([Buffer.from([0]), Buffer.alloc(20_000, 9)]), true],
+    ["notes.txt", Buffer.from("a\nb\n"), false],
+  ];
+  const untracked = new Map<string, FixtureFile>();
+  for (const [rel, content, binary] of files) {
+    const abs = join(root, rel);
+    writeFileSync(abs, content);
+    untracked.set(abs, { rel, content, insertions: binary ? null : 2, binary, batch: false });
+  }
+  const fixture = { root, repoPath: root, untracked } as UntrackedBinaryFixture;
+  const binaries = [...untracked].filter(([, file]) => file.binary).map(([abs]) => abs);
+
+  async function sniff(abs: string): Promise<void> {
+    const handle = await fsPromises.open(abs, "r");
+    try {
+      const buffer = Buffer.alloc(BINARY_SNIFF_BYTES);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      if (buffer.subarray(0, bytesRead).indexOf(0) === -1) await handle.readFile();
+    } finally {
+      await handle.close();
+    }
+  }
+
+  async function observe(subject: () => Promise<void>): Promise<number> {
+    const reads = observeUntrackedReads(fixture);
+    try {
+      await subject();
+      return firstSightingReadMisses(fixture, reads.take());
+    } finally {
+      reads.dispose();
+    }
+  }
+
+  it("clears on a pass that sniffed every file once", async () => {
+    const misses = await observe(async () => {
+      await Promise.all([...untracked.keys()].map(sniff));
+    });
+    expect(misses).toBe(0);
+  });
+
+  it("scores every binary when the pass read each one whole", async () => {
+    const misses = await observe(async () => {
+      for (const abs of untracked.keys()) await fsPromises.readFile(abs);
+    });
+    expect(misses).toBe(binaries.length);
+  });
+
+  it("scores every binary when the observer saw nothing", async () => {
+    expect(await observe(async () => {})).toBe(binaries.length);
+  });
+
+  it("scores a skipped binary and a twice-read one even when the totals balance", async () => {
+    const [oneByte, , b] = binaries;
+    const misses = await observe(async () => {
+      await sniff(oneByte);
+      await sniff(b);
+      await sniff(b);
+    });
+    expect(misses).toBe(2);
+  });
+
+  it("scores a sniff followed by a whole read through the path", async () => {
+    const misses = await observe(async () => {
+      for (const abs of binaries) await sniff(abs);
+      await fsPromises.readFile(binaries[1]);
+    });
+    expect(misses).toBe(1);
+  });
+
+  it.each([
+    ["the handle's own readFile", (handle: FileHandle) => handle.readFile()],
+    ["fs.promises.readFile given the handle", (handle: FileHandle) => fsPromises.readFile(handle)],
+  ])("scores a sniff followed by a whole read through %s", async (_name, readWhole) => {
+    const misses = await observe(async () => {
+      for (const abs of binaries.slice(0, 2)) await sniff(abs);
+      const handle = await fsPromises.open(binaries[2], "r");
+      try {
+        await handle.read(Buffer.alloc(BINARY_SNIFF_BYTES), 0, BINARY_SNIFF_BYTES, 0);
+        await readWhole(handle);
+      } finally {
+        await handle.close();
+      }
+    });
+    expect(misses).toBe(1);
+  });
+
+  it("scores a binary read past its sniff through one handle", async () => {
+    const misses = await observe(async () => {
+      for (const abs of binaries.slice(0, 2)) await sniff(abs);
+      const handle = await fsPromises.open(binaries[2], "r");
+      try {
+        const span = BINARY_SNIFF_BYTES * 2;
+        await handle.read(Buffer.alloc(span), 0, span, 0);
+      } finally {
+        await handle.close();
+      }
+    });
+    expect(misses).toBe(1);
+  });
+
+  it("scores a binary opened a second time without reading", async () => {
+    const misses = await observe(async () => {
+      for (const abs of binaries) await sniff(abs);
+      await (await fsPromises.open(binaries[1], "r")).close();
+    });
+    expect(misses).toBe(1);
   });
 });
