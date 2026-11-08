@@ -956,14 +956,18 @@ export class DevPreviewSessionService {
 
   async stopByPanel(request: DevPreviewStopByPanelRequest): Promise<void> {
     validateStopByPanelRequest(request);
-    const targets = [...this.sessions.values()].filter(
-      (session) => session.panelId === request.panelId
-    );
+    const keys = [...this.sessions.values()]
+      .filter((session) => session.panelId === request.panelId)
+      .map((session) => createSessionKey(session.projectId, session.panelId));
 
     await Promise.all(
-      targets.map(async (session) => {
-        const key = createSessionKey(session.projectId, session.panelId);
+      keys.map(async (key) => {
         await this.runLocked(key, async () => {
+          // Read under the lock: a restart queued ahead of this stop has replaced
+          // the session seen above, and stopping that one would drop the map entry
+          // of the replacement and leave its server running untracked.
+          const session = this.sessions.get(key);
+          if (!session) return;
           try {
             await this.stopAndRemoveSession(session, "panel-closed");
           } catch (err) {
