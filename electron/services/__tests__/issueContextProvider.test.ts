@@ -1,4 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const boundary = vi.hoisted(() => ({
+  getProjectById: vi.fn(),
+  resolveForCwd: vi.fn(),
+  checkRateLimit: vi.fn(),
+  auditForgeCall: vi.fn(),
+}));
+
+vi.mock("../ProjectStore.js", () => ({
+  projectStore: { getProjectById: boundary.getProjectById },
+}));
+vi.mock("../../ipc/handlers/forgeResolution.js", () => ({
+  resolveForCwd: boundary.resolveForCwd,
+}));
+vi.mock("../../ipc/utils.js", () => ({ checkRateLimit: boundary.checkRateLimit }));
+vi.mock("../forge/forgeAuditService.js", () => ({ auditForgeCall: boundary.auditForgeCall }));
+
 import {
   ISSUE_CONTEXT_PLUGIN_ID,
   createIssueContextProvider,
@@ -14,9 +31,12 @@ import type {
   Issue,
   IssueComment,
   Page,
+  RepoRef,
 } from "../../../shared/types/forge.js";
 import { AGENT_CONTEXT_MAX_TEXT_LENGTH } from "../../../shared/utils/agentContextDrag.js";
 import { sanitizeContextProviderContent } from "../../../shared/utils/pluginContextSanitize.js";
+
+const REPO: RepoRef = { host: "example.test", owner: "acme", repo: "app", rawData: null };
 
 function issue(overrides: Partial<Issue> = {}): Issue {
   return {
@@ -59,18 +79,17 @@ function provider(overrides: Partial<ForgeIssueProviderImpl> = {}): ForgeIssuePr
 }
 
 function deps(impl: ForgeIssueProviderImpl, overrides: Partial<IssueContextDeps> = {}) {
-  const source: IssueSource = {
-    impl,
-    repo: { host: "example.test", owner: "acme", repo: "app", rawData: null },
-    namespaceId: "acme.forge",
-  };
+  const source: IssueSource = { impl, repo: REPO, namespaceId: "acme.forge" };
   return {
     resolveSource: vi.fn(async () => source),
     checkRateLimit: vi.fn(async () => {}),
     audit: vi.fn(async (_meta: unknown, run: () => Promise<unknown>) => run()),
     now: () => Date.now(),
     ...overrides,
-  } as IssueContextDeps & { resolveSource: ReturnType<typeof vi.fn> };
+  } as IssueContextDeps & {
+    resolveSource: ReturnType<typeof vi.fn>;
+    checkRateLimit: ReturnType<typeof vi.fn>;
+  };
 }
 
 const signal = () => new AbortController().signal;
@@ -118,8 +137,9 @@ describe("withHostContextProviders (#16382)", () => {
     expect(entries.map((e) => e.status)).toEqual(["off", "active"]);
   });
 
-  it("offers nothing of its own to a view with no project", () => {
-    expect(withHostContextProviders([], null)).toEqual([]);
+  it("adds nothing of its own to a view with no project, keeping the plugins' entries", () => {
+    const visible = [plugin("acme.wiki", "page")];
+    expect(withHostContextProviders(visible, null)).toEqual(visible);
   });
 });
 
@@ -153,20 +173,25 @@ describe("issue search (#16382)", () => {
       { id: "7", label: "#7 Crash on save", description: "Closed issue" },
     ]);
     expect(d.resolveSource).toHaveBeenCalledWith("p1");
-    expect(impl.listIssues).toHaveBeenCalledWith(expect.anything(), { state: "open", perPage: 50 });
+    expect(d.checkRateLimit).toHaveBeenCalledWith("search");
+    expect(impl.listIssues).toHaveBeenCalledWith(REPO, { state: "open", perPage: 50 });
     expect(impl.getIssue).not.toHaveBeenCalled();
   });
 
-  it("puts the exact number first and searches every state for it", async () => {
+  it("puts the exact number first, as the forge read it, and searches every state", async () => {
     const impl = provider({
       getIssue: vi.fn(async () => issue({ number: 123, title: "Old one", state: "closed" })),
-      listIssues: vi.fn(async () => page([issue(), issue({ number: 123, title: "Old one" })])),
+      listIssues: vi.fn(async () =>
+        page([issue(), issue({ number: 123, title: "Listed copy", state: "open" })])
+      ),
     });
     const p = createIssueContextProvider("p1", { deadlineAt: Infinity, deps: deps(impl) });
-    const rows = await search(p, "#123");
-    expect(rows.map((r) => r.id)).toEqual(["123", "12"]);
-    expect(impl.getIssue).toHaveBeenCalledWith(expect.anything(), 123);
-    expect(impl.listIssues).toHaveBeenCalledWith(expect.anything(), {
+    expect(await search(p, "#123")).toEqual([
+      { id: "123", label: "#123 Old one", description: "Closed issue" },
+      { id: "12", label: "#12 Fix login", description: "Open issue" },
+    ]);
+    expect(impl.getIssue).toHaveBeenCalledWith(REPO, 123);
+    expect(impl.listIssues).toHaveBeenCalledWith(REPO, {
       state: "all",
       perPage: 50,
       search: "123",
@@ -185,66 +210,121 @@ describe("issue search (#16382)", () => {
       ["ENG-5", "ENG-5 Ship it"],
       ["ENG-9", "ENG-9 Fix login"],
     ]);
-    expect(impl.getIssueById).toHaveBeenCalledWith(expect.anything(), "ENG-5");
+    expect(impl.getIssueById).toHaveBeenCalledWith(REPO, "ENG-5");
     expect(impl.getIssue).not.toHaveBeenCalled();
   });
 
-  it("answers only the newest search in a project, without reaching the forge for the rest", async () => {
-    const impl = provider({ listIssues: vi.fn(async () => page([issue()])) });
-    const d = deps(impl);
-    const p = createIssueContextProvider("p1", { deadlineAt: Infinity, deps: d });
-    const first = p.search("f", { signal: signal() });
-    const second = p.search("fi", { signal: signal() });
-    await vi.advanceTimersByTimeAsync(250);
-    expect(await first).toEqual([]);
-    expect(await second).toHaveLength(1);
-    expect(d.resolveSource).toHaveBeenCalledTimes(1);
+  it("addresses a key made only of digits by number, which is how it reads back", async () => {
+    const impl = provider({
+      getIssueById: vi.fn(async () => null),
+      listIssues: vi.fn(async () => page([issue({ number: 88, key: "123", title: "Bead" })])),
+    });
+    const p = createIssueContextProvider("p1", { deadlineAt: Infinity, deps: deps(impl) });
+    expect((await search(p, "")).map((r) => r.id)).toEqual(["88"]);
   });
 
-  it("keeps the exact hit when the list fails, and fails when nothing answers", async () => {
-    const impl = provider({
+  it("answers only the newest search typed in a view, without reaching the forge for the rest", async () => {
+    const impl = provider({ listIssues: vi.fn(async () => page([issue()])) });
+    const d = deps(impl);
+    const view = (projectId: string, requester: string) =>
+      createIssueContextProvider(projectId, { deadlineAt: Infinity, requester, deps: d });
+    const first = view("p1", "1").search("f", { signal: signal() });
+    const second = view("p1", "1").search("fi", { signal: signal() });
+    const otherView = view("p1", "2").search("x", { signal: signal() });
+    const otherProject = view("p2", "1").search("y", { signal: signal() });
+    await vi.advanceTimersByTimeAsync(249);
+    expect(d.resolveSource).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await first).toEqual([]);
+    expect(await second).toHaveLength(1);
+    expect(await otherView).toHaveLength(1);
+    expect(await otherProject).toHaveLength(1);
+    expect(d.resolveSource.mock.calls).toEqual([["p1"], ["p1"], ["p2"]]);
+  });
+
+  it("keeps whichever read answered when the other fails or stalls past its cutoff", async () => {
+    const failingList = provider({
       getIssue: vi.fn(async () => issue({ number: 4 })),
       listIssues: vi.fn(async () => {
         throw new Error("rate limited");
       }),
     });
-    const p = createIssueContextProvider("p1", { deadlineAt: Infinity, deps: deps(impl) });
+    const p = createIssueContextProvider("p1", { deadlineAt: Infinity, deps: deps(failingList) });
     expect((await search(p, "4")).map((r) => r.id)).toEqual(["4"]);
-    const failing = search(p, "login");
-    await expect(failing).rejects.toThrow("rate limited");
+
+    const stalledList = provider({
+      getIssue: vi.fn(async () => issue({ number: 4 })),
+      listIssues: vi.fn(() => new Promise<never>(() => {})),
+    });
+    const deadlineAt = Date.now() + 3_000;
+    const q = createIssueContextProvider("p1", { deadlineAt, deps: deps(stalledList) });
+    const pending = q.search("4", { signal: signal() });
+    await vi.advanceTimersByTimeAsync(2_700);
+    expect((await pending).map((r) => r.id)).toEqual(["4"]);
+
+    const failingLookup = provider({
+      getIssue: vi.fn(async () => {
+        throw new Error("lookup failed");
+      }),
+      listIssues: vi.fn(async () => page([issue({ number: 40 })])),
+    });
+    const r = createIssueContextProvider("p1", { deadlineAt: Infinity, deps: deps(failingLookup) });
+    expect((await search(r, "4")).map((row) => row.id)).toEqual(["40"]);
   });
 
-  it("stops when the host stops waiting", async () => {
+  it("fails with the list's error when neither read answers", async () => {
+    const impl = provider({
+      getIssue: vi.fn(async () => {
+        throw new Error("lookup failed");
+      }),
+      listIssues: vi.fn(async () => {
+        throw new Error("list failed");
+      }),
+    });
+    const p = createIssueContextProvider("p1", { deadlineAt: Infinity, deps: deps(impl) });
+    await expect(search(p, "4")).rejects.toThrow("list failed");
+  });
+
+  it("stops when the host stops waiting, leaving nothing scheduled", async () => {
     const d = deps(provider());
     const p = createIssueContextProvider("p1", { deadlineAt: Infinity, deps: d });
     const controller = new AbortController();
     const pending = p.search("x", { signal: controller.signal });
     controller.abort(new Error("timed out"));
     await expect(pending).rejects.toThrow("timed out");
+    expect(vi.getTimerCount()).toBe(0);
     expect(d.resolveSource).not.toHaveBeenCalled();
+
+    const aborted = new AbortController();
+    aborted.abort(new Error("gone"));
+    await expect(p.search("x", { signal: aborted.signal })).rejects.toThrow("gone");
   });
 });
 
 describe("issue resolve (#16382)", () => {
   it("reads an issue by number, with its whole discussion when it fits", async () => {
+    const listIssueComments = vi.fn(async () => page([comment(1), comment(2)]));
     const impl = provider({
       getIssue: vi.fn(async () => issue({ commentCount: 2 })),
-      issueComments: {
-        listIssueComments: vi.fn(async () => page([comment(1), comment(2)])),
-      },
+      issueComments: { listIssueComments },
     });
-    const p = createIssueContextProvider("p1", { deadlineAt: Infinity, deps: deps(impl) });
+    const d = deps(impl);
+    const p = createIssueContextProvider("p1", { deadlineAt: Infinity, deps: d });
     const content = await p.resolve("12", { signal: signal() });
+    expect(impl.getIssue).toHaveBeenCalledWith(REPO, 12);
+    expect(listIssueComments).toHaveBeenCalledWith(REPO, 12, { perPage: 100 });
+    expect(d.checkRateLimit.mock.calls).toEqual([["read"], ["comments"]]);
     expect(content?.title).toBe("#12 Fix login");
     const text = content!.text;
     expect(text.split("\n")[0]).toMatch(/untrusted/i);
     expect(text).toContain("Issue: #12 Fix login");
     expect(text).toContain("Link: https://example.test/acme/app/issues/12");
     expect(text).toContain("State: open");
-    expect(text).toContain("Steps to reproduce");
+    expect(text).toContain("Description:\nSteps to reproduce");
     expect(text).toContain("Comments (all 2):");
+    expect(text).toContain("--- user1 · 2026-11-01 12:01 UTC\ncomment 1");
+    expect(text).toContain("--- user2 · 2026-11-01 12:02 UTC\ncomment 2");
     expect(text.indexOf("comment 1")).toBeLessThan(text.indexOf("comment 2"));
-    expect(text).toContain("--- user1 · 2026-11-01 12:01 UTC");
   });
 
   it("reads a keyed issue by key and says when the provider shares no comments", async () => {
@@ -255,7 +335,8 @@ describe("issue resolve (#16382)", () => {
     });
     const p = createIssueContextProvider("p1", { deadlineAt: Infinity, deps: deps(impl) });
     const text = (await p.resolve("ENG-5", { signal: signal() }))!.text;
-    expect(impl.getIssueById).toHaveBeenCalledWith(expect.anything(), "ENG-5");
+    expect(impl.getIssueById).toHaveBeenCalledWith(REPO, "ENG-5");
+    expect(text).toContain("Issue: ENG-5 Fix login");
     expect(text).toContain("State: open (In Progress)");
     expect(text).toContain("Link: none");
     expect(text).toContain("doesn't share them (the issue has 3)");
@@ -267,14 +348,18 @@ describe("issue resolve (#16382)", () => {
   });
 
   it("is not found when the issue is gone", async () => {
-    const p = createIssueContextProvider("p1", { deadlineAt: Infinity, deps: deps(provider()) });
+    const impl = provider({
+      getIssue: vi.fn(async (_repo: RepoRef, n: number) => (n === 12 ? issue() : null)),
+    });
+    const p = createIssueContextProvider("p1", { deadlineAt: Infinity, deps: deps(impl) });
     expect(await p.resolve("99", { signal: signal() })).toBeNull();
+    expect(impl.getIssue).toHaveBeenCalledWith(REPO, 99);
   });
 
   it("keeps the latest comments once the thread's end is reached", async () => {
     const all = Array.from({ length: 25 }, (_, i) => comment(i + 1));
     const listIssueComments = vi.fn(async (_r: unknown, _n: number, opts: { cursor?: string }) =>
-      opts.cursor ? page(all.slice(20)) : page(all.slice(0, 20), "next")
+      opts.cursor === "next" ? page(all.slice(20)) : page(all.slice(0, 20), "next")
     );
     const impl = provider({
       getIssue: vi.fn(async () => issue()),
@@ -282,11 +367,14 @@ describe("issue resolve (#16382)", () => {
     });
     const p = createIssueContextProvider("p1", { deadlineAt: Infinity, deps: deps(impl) });
     const text = (await p.resolve("12", { signal: signal() }))!.text;
+    expect(listIssueComments.mock.calls).toEqual([
+      [REPO, 12, { perPage: 100 }],
+      [REPO, 12, { perPage: 100, cursor: "next" }],
+    ]);
     expect(text).toContain("Comments (latest 10 of 25):");
-    expect(text).toContain("comment 25");
-    expect(text).toContain("comment 16");
-    expect(text).not.toContain("comment 15\n");
-    expect(listIssueComments).toHaveBeenCalledTimes(2);
+    expect(text).toContain("\ncomment 25");
+    expect(text).toContain("\ncomment 16");
+    expect(text).not.toContain("\ncomment 15\n");
   });
 
   it("says the discussion is partial when paging stops before its end", async () => {
@@ -314,9 +402,8 @@ describe("issue resolve (#16382)", () => {
     expect(listIssueComments).toHaveBeenCalledTimes(2);
   });
 
-  it("still attaches the issue when its comments can't be read, or run out of time", async () => {
-    vi.useFakeTimers();
-    const failing = provider({
+  it("still attaches the issue when its comments fail", async () => {
+    const impl = provider({
       getIssue: vi.fn(async () => issue()),
       issueComments: {
         listIssueComments: vi.fn(async () => {
@@ -324,27 +411,94 @@ describe("issue resolve (#16382)", () => {
         }),
       },
     });
-    const p = createIssueContextProvider("p1", { deadlineAt: Infinity, deps: deps(failing) });
-    expect((await p.resolve("12", { signal: signal() }))!.text).toContain(
-      "Comments: couldn't be read"
-    );
+    const p = createIssueContextProvider("p1", { deadlineAt: Infinity, deps: deps(impl) });
+    const text = (await p.resolve("12", { signal: signal() }))!.text;
+    expect(text).toContain("Issue: #12 Fix login");
+    expect(text).toContain("Steps to reproduce");
+    expect(text).toContain("Comments: couldn't be read");
+  });
 
-    const slow = provider({
+  it("stops reading comments short of the resolve deadline, keeping the issue", async () => {
+    vi.useFakeTimers();
+    const listIssueComments = vi.fn(() => new Promise<never>(() => {}));
+    const impl = provider({
+      getIssue: vi.fn(async () => issue()),
+      issueComments: { listIssueComments },
+    });
+    const deadlineAt = Date.now() + 1_000;
+    const p = createIssueContextProvider("p1", { deadlineAt, deps: deps(impl) });
+    let settled = false;
+    const pending = p.resolve("12", { signal: signal() }).finally(() => (settled = true));
+    await vi.advanceTimersByTimeAsync(699);
+    expect(listIssueComments).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    const text = (await pending)!.text;
+    expect(text).toContain("Issue: #12 Fix login");
+    expect(text).toContain("Comments: couldn't be read");
+  });
+
+  it("gives comments two seconds however far off the deadline is", async () => {
+    vi.useFakeTimers();
+    const impl = provider({
       getIssue: vi.fn(async () => issue()),
       issueComments: { listIssueComments: vi.fn(() => new Promise<never>(() => {})) },
     });
-    const deadlineAt = Date.now() + 1_000;
-    const q = createIssueContextProvider("p1", { deadlineAt, deps: deps(slow) });
-    const pending = q.resolve("12", { signal: signal() });
-    await vi.advanceTimersByTimeAsync(700);
+    const p = createIssueContextProvider("p1", {
+      deadlineAt: Date.now() + 60_000,
+      deps: deps(impl),
+    });
+    let settled = false;
+    const pending = p.resolve("12", { signal: signal() }).finally(() => (settled = true));
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
     expect((await pending)!.text).toContain("Comments: couldn't be read");
   });
 
-  it("asks for nothing past the rate limit", async () => {
+  it("stops paging once the host stops waiting", async () => {
+    let release!: (value: Page<IssueComment>) => void;
+    const listIssueComments = vi.fn(
+      () => new Promise<Page<IssueComment>>((resolve) => (release = resolve))
+    );
+    const impl = provider({
+      getIssue: vi.fn(async () => issue()),
+      issueComments: { listIssueComments },
+    });
+    const controller = new AbortController();
+    const p = createIssueContextProvider("p1", { deadlineAt: Infinity, deps: deps(impl) });
+    const pending = p.resolve("12", { signal: controller.signal });
+    await vi.waitFor(() => expect(listIssueComments).toHaveBeenCalledTimes(1));
+    controller.abort(new Error("timed out"));
+    release(page([comment(1)], "more"));
+    await pending;
+    expect(listIssueComments).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the comments read so far when the comments rate limit runs out", async () => {
+    const listIssueComments = vi.fn(async () => page([comment(1)], "more"));
+    const impl = provider({
+      getIssue: vi.fn(async () => issue()),
+      issueComments: { listIssueComments },
+    });
+    let commentChecks = 0;
+    const d = deps(impl, {
+      checkRateLimit: vi.fn(async (bucket: string) => {
+        if (bucket === "comments" && ++commentChecks > 1) throw new Error("Rate limit exceeded");
+      }),
+    });
+    const p = createIssueContextProvider("p1", { deadlineAt: Infinity, deps: d });
+    const text = (await p.resolve("12", { signal: signal() }))!.text;
+    expect(listIssueComments).toHaveBeenCalledTimes(1);
+    expect(text).toContain("Comments (1 of the first 1 read; newer comments may be missing):");
+    expect(text).toContain("\ncomment 1");
+  });
+
+  it("reads nothing once the read rate limit is spent", async () => {
     const impl = provider({ getIssue: vi.fn(async () => issue()) });
     const d = deps(impl, {
-      checkRateLimit: vi.fn(async () => {
-        throw new Error("Rate limit exceeded");
+      checkRateLimit: vi.fn(async (bucket: string) => {
+        if (bucket === "read") throw new Error("Rate limit exceeded");
       }),
     });
     const p = createIssueContextProvider("p1", { deadlineAt: Infinity, deps: d });
@@ -353,19 +507,61 @@ describe("issue resolve (#16382)", () => {
   });
 });
 
+describe("issue reads through the project's issues provider (#16382)", () => {
+  beforeEach(() => {
+    boundary.checkRateLimit.mockReset();
+    boundary.auditForgeCall.mockReset();
+    boundary.auditForgeCall.mockImplementation(async (_meta, run: () => Promise<unknown>) => run());
+  });
+
+  it("resolves the project's own path for the issues role and audits under its provider", async () => {
+    const impl = provider({ getIssue: vi.fn(async () => issue()) });
+    boundary.getProjectById.mockReturnValue({ path: "/work/app" });
+    boundary.resolveForCwd.mockResolvedValue({
+      impl,
+      repoRef: REPO,
+      namespaceId: "acme.linear",
+      providerId: "linear",
+      viaIssueOverride: true,
+    });
+    const p = createIssueContextProvider("p1", { deadlineAt: Infinity });
+    expect((await p.resolve("12", { signal: signal() }))?.title).toBe("#12 Fix login");
+    expect(boundary.getProjectById).toHaveBeenCalledWith("p1");
+    expect(boundary.resolveForCwd).toHaveBeenCalledWith("/work/app", "issues");
+    expect(impl.getIssue).toHaveBeenCalledWith(REPO, 12);
+    expect(boundary.checkRateLimit).toHaveBeenCalledWith("context-provider:issue-read", 25, 10_000);
+    expect(boundary.auditForgeCall).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: "acme.linear", methodName: "getIssue" }),
+      expect.any(Function)
+    );
+  });
+
+  it("fails for a project that isn't open", async () => {
+    boundary.getProjectById.mockReturnValue(null);
+    const p = createIssueContextProvider("gone", { deadlineAt: Infinity });
+    await expect(p.resolve("12", { signal: signal() })).rejects.toThrow("the project isn't open");
+  });
+});
+
 describe("formatIssueContext (#16382)", () => {
   it("marks a cut description and stays within the content limit however long the thread", () => {
     const big = "x".repeat(50_000);
-    const comments = Array.from({ length: 10 }, (_, i) => comment(i + 1, big));
+    const comments = Array.from({ length: 10 }, (_, i) => comment(i + 1, `marker-${i + 1} ${big}`));
     const content = formatIssueContext(issue({ body: big }), {
       kind: "complete",
       comments,
       total: 40,
     });
-    expect(content.text.length).toBeLessThanOrEqual(AGENT_CONTEXT_MAX_TEXT_LENGTH);
-    expect(content.text).toContain("[… description cut short: 16,000 of 50,000 characters]");
-    expect(content.text).toContain("[… comment cut short");
-    expect(content.text).toMatch(/Comments \(latest \d of 40\):/);
+    const text = content.text;
+    expect(text.length).toBeLessThanOrEqual(AGENT_CONTEXT_MAX_TEXT_LENGTH);
+    expect(text).toContain("[… description cut short: 16,000 of 50,000 characters]");
+    expect(text).toContain("[… comment cut short");
+    const shown = [...text.matchAll(/marker-(\d+)/g)].map((m) => Number(m[1]));
+    expect(shown.length).toBeGreaterThan(0);
+    expect(shown).toEqual(
+      Array.from({ length: shown.length }, (_, i) => 10 - shown.length + 1 + i)
+    );
+    expect(text).toContain(`Comments (latest ${shown.length} of 40):`);
     expect(sanitizeContextProviderContent(content).ok).toBe(true);
   });
 

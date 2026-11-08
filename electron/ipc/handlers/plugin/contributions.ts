@@ -229,7 +229,13 @@ export async function handleContextProvidersSearch(
   prefix: string,
   query: string
 ): Promise<ContextProviderItem[]> {
-  return searchContextProvider(await getPluginService(), ctx.projectId, prefix, query);
+  return searchContextProvider(
+    await getPluginService(),
+    ctx.projectId,
+    prefix,
+    query,
+    String(ctx.webContentsId)
+  );
 }
 
 /** A draft's references, read now in the sender's project, in the order sent. */

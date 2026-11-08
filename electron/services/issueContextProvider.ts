@@ -8,6 +8,7 @@ import type {
   Issue,
   IssueComment,
   ListOptions,
+  Page,
   RepoRef,
 } from "../../shared/types/forge.js";
 import { AGENT_CONTEXT_MAX_TEXT_LENGTH } from "../../shared/utils/agentContextDrag.js";
@@ -54,6 +55,8 @@ export function withHostContextProviders(
 
 /** A pause the composer's own debounce is too short to give a forge. */
 const SEARCH_SETTLE_MS = 250;
+/** Left of the search deadline once its reads are cut off, to answer with what came back. */
+const SEARCH_DEADLINE_MARGIN_MS = 300;
 const SEARCH_PAGE_SIZE = 50;
 const COMMENT_PAGE_SIZE = 100;
 const COMMENT_PAGES_MAX = 3;
@@ -131,8 +134,9 @@ const defaultDeps: IssueContextDeps = {
   now: () => Date.now(),
 };
 
-// The newest search per project; an older one still settling answers nothing,
-// since the composer has already dropped it.
+// The newest search per project and asking view; an older one still settling
+// answers nothing, since the composer has already dropped it. An entry lives
+// only while its newest search is settling.
 const latestSearch = new Map<string, number>();
 let searchSeq = 0;
 
@@ -166,6 +170,7 @@ const TIMED_OUT = Symbol("timed out");
 
 /** `promise`, or {@link TIMED_OUT} once `ms` passes; a late rejection is swallowed. */
 async function within<T>(promise: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
+  if (!Number.isFinite(ms)) return promise;
   let timer: ReturnType<typeof setTimeout> | undefined;
   promise.catch(() => {});
   try {
@@ -177,6 +182,18 @@ async function within<T>(promise: Promise<T>, ms: number): Promise<T | typeof TI
     ]);
   } finally {
     clearTimeout(timer);
+  }
+}
+
+/** How `promise` settled, counting no answer within `ms` as a failure. */
+async function settledWithin<T>(promise: Promise<T>, ms: number): Promise<PromiseSettledResult<T>> {
+  try {
+    const value = await within(promise, ms);
+    return value === TIMED_OUT
+      ? { status: "rejected", reason: new Error("timed out") }
+      : { status: "fulfilled", value };
+  } catch (reason) {
+    return { status: "rejected", reason };
   }
 }
 
@@ -211,12 +228,14 @@ function bounded(text: string, max: number, what: string): string {
 /**
  * The row for an issue. A provider that can look issues up by key is handed
  * the key back, since a tracker's number is only a display counter; any other
- * is addressed by number.
+ * is addressed by number. An id of digits always reads back as a number, so a
+ * key made only of digits goes by the number the provider gave it instead.
  */
 function itemFor(issue: Issue, byKey: boolean): ContextProviderItem | null {
-  const id = byKey && issue.key ? issue.key : String(issue.number);
+  const key = byKey && issue.key && !DIGITS.test(issue.key) ? issue.key : null;
+  const id = key ?? String(issue.number);
   if (!isContextItemId(id)) return null;
-  if (!(byKey && issue.key) && positiveIssueNumber(id) === null) return null;
+  if (key === null && positiveIssueNumber(id) === null) return null;
   return {
     id,
     label: `${displayId(issue)} ${oneLine(issue.title, TITLE_MAX)}`.trim(),
@@ -283,7 +302,7 @@ async function readComments(
       return stopped();
     }
     const opts: ListOptions = { perPage: COMMENT_PAGE_SIZE, ...(cursor ? { cursor } : {}) };
-    let result;
+    let result: Page<IssueComment> | typeof TIMED_OUT;
     try {
       result = await within(
         deps.audit(
@@ -309,7 +328,7 @@ async function readComments(
       kept.push(comment);
       if (kept.length > COMMENTS_KEPT_MAX) kept.shift();
     }
-    const next = result.hasMore ? result.nextCursor : null;
+    const next: string | null = result.hasMore ? result.nextCursor : null;
     if (!next) return { kind: "complete", comments: kept, total: read };
     if (seenCursors.has(next)) return stopped();
     seenCursors.add(next);
@@ -401,18 +420,30 @@ export function formatIssueContext(
 
 /**
  * The `@issue:` provider for one project, for one call: `deadlineAt` is when
- * the host stops waiting, so comment paging leaves itself time to answer.
+ * the host stops waiting, so its reads leave themselves time to answer, and
+ * `requester` is the view a search is typed in.
  */
 export function createIssueContextProvider(
   projectId: string,
-  { deadlineAt, deps = defaultDeps }: { deadlineAt: number; deps?: IssueContextDeps }
+  {
+    deadlineAt,
+    requester = "",
+    deps = defaultDeps,
+  }: { deadlineAt: number; requester?: string; deps?: IssueContextDeps }
 ): ContextProviderImpl {
   return {
     async search(query, { signal }) {
+      const stream = `${projectId}\0${requester}`;
       const seq = ++searchSeq;
-      latestSearch.set(projectId, seq);
-      await settle(SEARCH_SETTLE_MS, signal);
-      if (latestSearch.get(projectId) !== seq) return [];
+      latestSearch.set(stream, seq);
+      let newest: boolean;
+      try {
+        await settle(SEARCH_SETTLE_MS, signal);
+        newest = latestSearch.get(stream) === seq;
+      } finally {
+        if (latestSearch.get(stream) === seq) latestSearch.delete(stream);
+      }
+      if (!newest) return [];
       const source = await deps.resolveSource(projectId);
       throwIfAborted(signal);
       await deps.checkRateLimit("search");
@@ -427,15 +458,21 @@ export function createIssueContextProvider(
       const opts: ListOptions = text
         ? { state: "all", perPage: SEARCH_PAGE_SIZE, search: text }
         : { state: "open", perPage: SEARCH_PAGE_SIZE };
-      const [exact, listed] = await Promise.allSettled([
-        exactLookup,
-        deps.audit(
-          {
-            source,
-            methodName: "listIssues",
-            argsSummary: JSON.stringify({ state: opts.state, perPage: opts.perPage }),
-          },
-          () => source.impl.listIssues(source.repo, opts)
+      // Each read is cut off short of the deadline, so one that stalls can't
+      // take the other's answer down with it.
+      const cutoffMs = deadlineAt - SEARCH_DEADLINE_MARGIN_MS - deps.now();
+      const [exact, listed] = await Promise.all([
+        settledWithin(exactLookup, cutoffMs),
+        settledWithin(
+          deps.audit(
+            {
+              source,
+              methodName: "listIssues",
+              argsSummary: JSON.stringify({ state: opts.state, perPage: opts.perPage }),
+            },
+            () => source.impl.listIssues(source.repo, opts)
+          ),
+          cutoffMs
         ),
       ]);
       if (listed.status === "rejected" && (exact.status === "rejected" || !exact.value)) {

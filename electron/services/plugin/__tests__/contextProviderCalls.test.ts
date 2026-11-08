@@ -215,36 +215,70 @@ describe("the host's @issue: provider (#16382)", () => {
     label: "Issues",
   });
 
-  it("answers for the asking project without starting any plugin", async () => {
+  it("answers for the asking project and view without starting any plugin", async () => {
     const impl: ContextProviderImpl = {
-      search: vi.fn(async () => [{ id: "12", label: "#12 Fix login" }]),
-      resolve: vi.fn(async () => ({ text: "issue text", title: "#12 Fix login" })),
+      search: vi.fn(async (query: string) => [{ id: "12", label: `#12 ${query}` }]),
+      resolve: vi.fn(async (id: string) => ({ text: `issue ${id}`, title: `#${id}` })),
     };
     issueProvider.create.mockReturnValue(impl);
     const h = host([issueEntry]);
 
-    expect(await searchContextProvider(h, "p1", "issue", "fix")).toEqual([
-      { id: "12", label: "#12 Fix login" },
+    expect(await searchContextProvider(h, "p2", "issue", "fix", "7")).toEqual([
+      { id: "12", label: "#12 fix" },
     ]);
-    const [result] = await resolveContextReferences(h, "p1", [{ prefix: "issue", id: "12" }]);
+    const [result] = await resolveContextReferences(h, "p2", [{ prefix: "issue", id: "34" }]);
 
     expect(result).toEqual({
       status: "resolved",
       pluginId: ISSUE_CONTEXT_PLUGIN_ID,
       pluginName: "Daintree",
-      text: "issue text",
-      title: "#12 Fix login",
+      text: "issue 34",
+      title: "#34",
     });
-    expect(issueProvider.create).toHaveBeenCalledWith("p1", { deadlineAt: expect.any(Number) });
+    expect(issueProvider.create.mock.calls).toEqual([
+      ["p2", { deadlineAt: expect.any(Number), requester: "7" }],
+      ["p2", { deadlineAt: expect.any(Number) }],
+    ]);
+    expect(impl.search).toHaveBeenCalledWith("fix", { signal: expect.any(AbortSignal) });
+    expect(impl.resolve).toHaveBeenCalledWith("34", { signal: expect.any(AbortSignal) });
     expect(h.activatePlugin).not.toHaveBeenCalled();
   });
 
-  it("hands the provider the resolve deadline so its reads can stop in time", async () => {
+  it("leaves a plugin's own provider named `issues` on the plugin path", async () => {
+    const impl = bind(
+      { resolve: vi.fn(async () => ({ text: "plugin text" })) },
+      "acme.kanban",
+      "issues"
+    );
+    const h = host([entry({ providerId: "issues" })]);
+    const [result] = await resolveContextReferences(h, "p1", [{ prefix: "rec", id: "1" }]);
+    expect(result).toMatchObject({ status: "resolved", text: "plugin text" });
+    expect(h.activatePlugin).toHaveBeenCalledWith("acme.kanban");
+    expect(impl.resolve).toHaveBeenCalled();
+    expect(issueProvider.create).not.toHaveBeenCalled();
+  });
+
+  it("hands the provider the deadline the send started with, after a slow startup", async () => {
     vi.useFakeTimers();
+    const h = host([issueEntry]);
+    let ready!: () => void;
+    h.waitForCatalog.mockReturnValue(new Promise<void>((resolve) => (ready = resolve)));
     issueProvider.create.mockReturnValue({ search: vi.fn(), resolve: vi.fn(async () => null) });
     const start = Date.now();
-    await resolveContextReferences(host([issueEntry]), "p1", [{ prefix: "issue", id: "1" }]);
+    const pending = resolveContextReferences(h, "p1", [{ prefix: "issue", id: "1" }]);
+    await vi.advanceTimersByTimeAsync(4_000);
+    ready();
+    await pending;
     const [, { deadlineAt }] = issueProvider.create.mock.calls[0]!;
     expect(deadlineAt).toBe(start + CONTEXT_RESOLVE_TIMEOUT_MS);
+  });
+
+  it("answers nothing for a view with no project", async () => {
+    const h = host([issueEntry]);
+    expect(await searchContextProvider(h, null, "issue", "fix")).toEqual([]);
+    const [result] = await resolveContextReferences(h, null, [{ prefix: "issue", id: "1" }]);
+    expect(result).toMatchObject({ status: "failed", reason: "issues need a project" });
+    expect(issueProvider.create).not.toHaveBeenCalled();
+    expect(h.activatePlugin).not.toHaveBeenCalled();
   });
 });

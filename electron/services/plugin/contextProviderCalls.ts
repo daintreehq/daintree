@@ -50,19 +50,28 @@ export interface ContextProviderCallHost {
 
 type CallOutcome<T> = { ok: true; value: T } | { ok: false; reason: string };
 
+/** Who is asking: the project, and for a search, the view typing it. */
+interface CallScope {
+  projectId: string | null;
+  requester?: string;
+}
+
 /**
  * The impl answering for `entry`: the host's own `@issue:` provider for the
  * asking project, or the plugin's, started first if it hasn't run yet.
  */
 async function implFor(
   host: ContextProviderCallHost,
-  projectId: string | null,
+  { projectId, requester }: CallScope,
   entry: ContextProviderEntry,
   deadlineAt: number
 ): Promise<ContextProviderImpl> {
   if (isIssueContextProvider(entry.pluginId, entry.providerId)) {
     if (projectId === null) throw new Error("issues need a project");
-    return createIssueContextProvider(projectId, { deadlineAt });
+    return createIssueContextProvider(projectId, {
+      deadlineAt,
+      ...(requester !== undefined ? { requester } : {}),
+    });
   }
   await host.activatePlugin(entry.pluginId);
   const impl = getContextProviderImpl(entry.pluginId, entry.providerId);
@@ -72,7 +81,7 @@ async function implFor(
 
 async function callProvider<T>(
   host: ContextProviderCallHost,
-  projectId: string | null,
+  scope: CallScope,
   entry: ContextProviderEntry,
   call: (impl: ContextProviderImpl, signal: AbortSignal) => Promise<T>,
   timeoutMs: number
@@ -91,7 +100,7 @@ async function callProvider<T>(
     );
   });
   const work = (async () => {
-    const impl = await implFor(host, projectId, entry, deadlineAt);
+    const impl = await implFor(host, scope, entry, deadlineAt);
     return await call(impl, controller.signal);
   })();
   // The loser of the race still settles; its rejection is already accounted for.
@@ -116,13 +125,15 @@ async function callProvider<T>(
  * Matches for `query` from whichever provider holds `prefix` in the project.
  * The provider is handed the query and nothing else. A provider that fails or
  * misses the deadline offers nothing this time; the failure is logged, and the
- * next keystroke asks again.
+ * next keystroke asks again. `requester` names the view typing, so a provider
+ * that waits out a burst of keystrokes waits out that view's alone.
  */
 export async function searchContextProvider(
   host: ContextProviderCallHost,
   projectId: string | null,
   prefix: unknown,
-  query: unknown
+  query: unknown,
+  requester?: string
 ): Promise<ContextProviderItem[]> {
   if (!isContextProviderPrefix(prefix) || typeof query !== "string") return [];
   const entry = host
@@ -131,7 +142,7 @@ export async function searchContextProvider(
   if (!entry) return [];
   const outcome = await callProvider(
     host,
-    projectId,
+    { projectId, requester },
     entry,
     (impl, signal) => impl.search(query.slice(0, CONTEXT_QUERY_MAX_LENGTH), { signal }),
     CONTEXT_SEARCH_TIMEOUT_MS
@@ -216,7 +227,7 @@ export async function resolveContextReferences(
     [...pending.values()].map(async ({ entry, id, indices }) => {
       const outcome = await callProvider(
         host,
-        projectId,
+        { projectId },
         entry,
         (impl, signal) => impl.resolve(id, { signal }),
         deadlineAt - Date.now()
