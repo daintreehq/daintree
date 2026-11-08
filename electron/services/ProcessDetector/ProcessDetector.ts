@@ -1,4 +1,4 @@
-import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
+import type { AgentId } from "../../../shared/types/agent.js";
 import type { ProcessInfo, ProcessTreeCache } from "../ProcessTreeCache.js";
 import type { ImagePathProbe } from "../pty/ImagePathProbe.js";
 import { toExecutableBasename } from "../../utils/executableBasename.js";
@@ -20,6 +20,7 @@ import type { AgentProcessObserver, DetectionCallback } from "./types.js";
 import type { DetectionEvidenceSource } from "./types.js";
 import { isChromiumChildProcess, redactArgv } from "./commandParser.js";
 import { buildDetectedCandidate, selectPreferredCandidate } from "./candidateHelpers.js";
+import { isDetectableAgentId } from "./registries.js";
 import { parseE2ETimerOverrideMs } from "../../../shared/config/e2eTimerOverrides.js";
 
 export { type DetectionResult } from "./types.js";
@@ -103,7 +104,7 @@ export class ProcessDetector {
   private ptyPid: number;
   private callback: DetectionCallback;
   private agentProcessObserver: AgentProcessObserver | null = null;
-  private lastDetected: BuiltInAgentId | null = null;
+  private lastDetected: AgentId | null = null;
   private lastProcessIconId: string | null = null;
   private lastBusyState: boolean | null = null;
   private lastCurrentCommand: string | undefined;
@@ -119,7 +120,7 @@ export class ProcessDetector {
   private isStarted: boolean = false;
   private onStreak: number = 0;
   private offStreak: number = 0;
-  private pendingDetected: { agentType?: BuiltInAgentId; processIconId?: string } | null = null;
+  private pendingDetected: { agentType?: AgentId; processIconId?: string } | null = null;
   private lastUnknownSignature: string | null = null;
   private lastPassSignature: string | null = null;
   private lastShellEvidenceRetentionSignature: string | null = null;
@@ -194,6 +195,12 @@ export class ProcessDetector {
     commandText?: string,
     observedAt: number = Date.now()
   ): void {
+    // A command resolved before its plugin agent lost its name (#16469) is no
+    // longer evidence of that agent; whatever else it named still counts.
+    if (identity.agentType !== undefined && !isDetectableAgentId(identity.agentType)) {
+      if (identity.processIconId === undefined) return;
+      identity = { processIconId: identity.processIconId, processName: identity.processName };
+    }
     this.shellCommandIdentity = identity;
     this.shellCommandText = commandText;
     this.shellCommandStickyUntil = observedAt + this.shellCommandTimers.stickyMs;
@@ -285,6 +292,48 @@ export class ProcessDetector {
         );
       }
     }
+  }
+
+  /**
+   * Forget agent evidence the registry no longer backs (#16469): committed,
+   * pending and shell-command evidence for a plugin agent whose plugin
+   * unloaded, or whose only name another plugin now claims. Silent — the
+   * terminal demotes itself, without the exit a natural end reports. Its
+   * process may still be running; it stays a plain process unless the name is
+   * registered again and fresh passes confirm it. Returns whether anything
+   * was dropped.
+   */
+  dropRevokedAgentEvidence(): boolean {
+    let dropped = false;
+    const shellAgent = this.shellCommandIdentity?.agentType;
+    if (shellAgent !== undefined && !isDetectableAgentId(shellAgent)) {
+      this.shellCommandIdentity = null;
+      this.shellCommandText = undefined;
+      this.shellCommandStickyUntil = 0;
+      this.shellCommandExpiresAt = 0;
+      this.lastShellEvidenceRetentionSignature = null;
+      dropped = true;
+    }
+    const pendingAgent = this.pendingDetected?.agentType;
+    if (pendingAgent !== undefined && !isDetectableAgentId(pendingAgent)) {
+      this.pendingDetected = null;
+      this.onStreak = 0;
+      dropped = true;
+    }
+    if (this.lastDetected !== null && !isDetectableAgentId(this.lastDetected)) {
+      logIdentityDebug(
+        `[IdentityDebug] agent-evidence-revoked term=${this.logTag} agent=${this.lastDetected}`
+      );
+      this.lastDetected = null;
+      this.lastProcessIconId = null;
+      this.lastEvidenceSource = null;
+      this.onStreak = 0;
+      this.offStreak = 0;
+      this.pendingDetected = null;
+      dropped = true;
+    }
+    if (dropped) this.lastPassSignature = null;
+    return dropped;
   }
 
   start(): void {
@@ -988,7 +1037,7 @@ export class ProcessDetector {
    * inline (`claude --api-key=…`) and this line is persisted to disk.
    */
   private logAgentCommit(
-    agentType: BuiltInAgentId,
+    agentType: AgentId,
     evidenceSource: DetectionEvidenceSource,
     treeMatch: DetectedProcessCandidate | null
   ): void {
@@ -1005,7 +1054,7 @@ export class ProcessDetector {
     );
   }
 
-  getLastDetected(): BuiltInAgentId | null {
+  getLastDetected(): AgentId | null {
     return this.lastDetected;
   }
 

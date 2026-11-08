@@ -5,7 +5,6 @@ import type { AgentState, AgentId, WaitingReason } from "../../../shared/types/a
 import type { TerminalCheckResult } from "../../../shared/types/checkResult.js";
 import type { TerminalHandback } from "../../../shared/types/handback.js";
 import type { PanelKind, PanelTitleMode, ScheduledRunRef } from "../../../shared/types/panel.js";
-import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import type {
   OwnedTypedInput,
   PtyHostSpawnOptions,
@@ -107,7 +106,7 @@ export interface TerminalPublicState {
    * field that drives chrome. Cleared when the detected agent exits.
    * Not persisted. See `docs/architecture/terminal-identity.md`.
    */
-  detectedAgentId?: BuiltInAgentId;
+  detectedAgentId?: AgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, python, etc.). Cleared when the process exits. */
   detectedProcessIconId?: string;
   /**

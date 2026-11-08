@@ -98,6 +98,7 @@ function contributionToAgentConfig(
   // `packages` (#16468) stop at what discovery reads: the built-ins' `version`,
   // `update`, `install` and `supportsWsl` run something, so none has a way in.
   const { npm, pypi } = contribution.packages ?? {};
+  const executableNames = claimedExecutableNames(contribution);
   return {
     id: contribution.id,
     name: contribution.name,
@@ -119,7 +120,62 @@ function contributionToAgentConfig(
     ...(contribution.permissionBypassArgs?.length
       ? { permissionBypassArgs: [...contribution.permissionBypassArgs] }
       : {}),
+    ...(executableNames.length > 0 ? { executableNames } : {}),
   };
+}
+
+/**
+ * The executable names a contribution claims, lowercased and deduplicated
+ * (the detector lower-cases every process name before lookup). Main resolves
+ * them before registering (`resolveAgentExecutableNames`), so an omitted list
+ * here means the agent claims no name.
+ */
+function claimedExecutableNames(contribution: PluginAgentContribution): string[] {
+  const names = new Set<string>();
+  for (const name of contribution.executableNames ?? []) {
+    if (typeof name === "string" && name.length > 0) names.add(name.toLowerCase());
+  }
+  return [...names];
+}
+
+/**
+ * Executable names more than one registered agent claims (#16469), counting
+ * every plugin's declarations — including an agent that lost its id to an
+ * earlier plugin, which would otherwise make the winner's claim look sole.
+ * Neither claimant keeps a contested name: ambiguity leaves a plain terminal.
+ */
+function findContestedExecutableNames(): Set<string> {
+  const claimants = new Map<string, string>();
+  const contested = new Set<string>();
+  for (const [pluginId, agents] of byPlugin) {
+    for (const [agentId, config] of agents) {
+      const claimant = `${pluginId}\0${agentId}`;
+      for (const name of config.executableNames ?? []) {
+        const previous = claimants.get(name);
+        if (previous === undefined) {
+          claimants.set(name, claimant);
+        } else if (previous !== claimant) {
+          contested.add(name);
+        }
+      }
+    }
+  }
+  return contested;
+}
+
+function withoutContestedNames(config: AgentConfig, contested: Set<string>): AgentConfig {
+  const names = config.executableNames;
+  if (!names || contested.size === 0 || !names.some((name) => contested.has(name))) {
+    return config;
+  }
+  const kept = names.filter((name) => !contested.has(name));
+  const next: AgentConfig = { ...config };
+  if (kept.length > 0) {
+    next.executableNames = kept;
+  } else {
+    delete next.executableNames;
+  }
+  return Object.freeze(next);
 }
 
 /**
@@ -133,6 +189,12 @@ function rebuildSnapshot(): void {
   // property rather than reassigning the prototype (defense in depth — the
   // manifest schema also rejects reserved ids before they reach here).
   const next: Record<string, AgentConfig> = Object.create(null) as Record<string, AgentConfig>;
+  const contested = findContestedExecutableNames();
+  for (const name of contested) {
+    console.warn(
+      `[pluginAgentRegistry] More than one plugin agent claims the executable name "${name}" — neither keeps it`
+    );
+  }
   for (const [pluginId, agents] of byPlugin) {
     for (const [agentId, config] of agents) {
       if (Object.prototype.hasOwnProperty.call(next, agentId)) {
@@ -141,7 +203,7 @@ function rebuildSnapshot(): void {
         );
         continue;
       }
-      next[agentId] = config;
+      next[agentId] = withoutContestedNames(config, contested);
     }
   }
   snapshot = next;

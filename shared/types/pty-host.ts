@@ -18,7 +18,6 @@ import type {
 } from "./panel.js";
 import type { ResourceProfile } from "./resourceProfile.js";
 import type { PowerPolicyLevel } from "./powerPolicy.js";
-import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { AgentConfig } from "../config/agentRegistry.js";
 import type { AgentSessionRecord } from "./ipc/agentSessionHistory.js";
 import type { AgentEndObservation, AgentFallbackTriggeredPayload } from "./ipc/agent.js";
@@ -1390,7 +1389,7 @@ export interface PtyHostTerminalInfo {
   /** Lifecycle-ledger generation this record belongs to, so a reader can tell it from a relaunch's. */
   launchGeneration?: number;
   /** Runtime-detected agent identity (cleared when the agent exits). */
-  detectedAgentId?: BuiltInAgentId;
+  detectedAgentId?: AgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
   detectedProcessId?: string;
   /**

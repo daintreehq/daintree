@@ -1,4 +1,4 @@
-import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
+import type { AgentId } from "../../../shared/types/agent.js";
 
 export interface ChildProcess {
   pid: number;
@@ -24,7 +24,7 @@ export interface CandidateProvenance {
 }
 
 export interface DetectedProcessCandidate {
-  agentType?: BuiltInAgentId;
+  agentType?: AgentId;
   processIconId?: string;
   processName: string;
   processCommand?: string;
@@ -35,7 +35,7 @@ export interface DetectedProcessCandidate {
 }
 
 export interface CommandIdentity {
-  agentType?: BuiltInAgentId;
+  agentType?: AgentId;
   processIconId?: string;
   processName: string;
 }
@@ -56,7 +56,7 @@ export interface DetectionResult {
   detectionState: DetectionState;
   /** @deprecated Use `detectionState === "agent"`. Retained for legacy consumers. */
   detected: boolean;
-  agentType?: BuiltInAgentId;
+  agentType?: AgentId;
   processIconId?: string;
   processName?: string;
   isBusy?: boolean;
@@ -72,7 +72,7 @@ export type DetectionCallback = (result: DetectionResult, spawnedAt: number) => 
  * forwarded.
  */
 export interface AgentProcessObservation {
-  agentType: BuiltInAgentId;
+  agentType: AgentId;
   command: string;
   /** The process itself, so a row a run left in the census isn't read as its successor's. */
   pid?: number;
@@ -97,7 +97,7 @@ export interface DetectionPass {
 }
 
 export function makeAgentResult(params: {
-  agentType?: BuiltInAgentId;
+  agentType?: AgentId;
   processIconId?: string;
   processName?: string;
   isBusy?: boolean;

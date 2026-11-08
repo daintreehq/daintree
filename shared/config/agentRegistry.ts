@@ -895,6 +895,14 @@ export interface AgentConfig {
    */
   permissionBypassArgs?: readonly string[];
   /**
+   * A plugin agent's executable names (#16469): the process names that promote
+   * a plain terminal running them to this agent. Already resolved by main, so
+   * the names here are the ones this agent holds alone — a name two plugins
+   * claim is in neither's list. Built-in agents are matched through their
+   * command instead and never carry this.
+   */
+  executableNames?: readonly string[];
+  /**
    * Minimum installed CLI semver required for the Daintree Assistant launch
    * path. Compared against the live `AgentVersionService.getVersion()` probe
    * before `provisionHelpSession` runs — when the installed version is

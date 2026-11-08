@@ -96,6 +96,7 @@ export {
   AgentResumeConfigSchema,
   AgentPackagesContributionSchema,
   AgentContributionSchema,
+  resolveAgentExecutableNames,
 } from "./plugin/agents.js";
 export {
   DATABASE_QUERY_MAX_PARAMS,

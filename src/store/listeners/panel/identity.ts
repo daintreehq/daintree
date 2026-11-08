@@ -1,5 +1,4 @@
 import type { AgentStateChangePayload } from "@shared/types";
-import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { isPtyPanel } from "@shared/types/panel";
 import { terminalRegistryController } from "@/controllers";
 import { with as withTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
@@ -276,7 +275,11 @@ export function setupIdentityListeners(): DisposableStore {
         recordIdentityEventDev("detected", terminalId, { agentType, processIconId });
 
         const nextEverDetectedAgent = agentType ? true : undefined;
-        const nextDetectedAgentId = isBuiltInAgentId(agentType) ? agentType : undefined;
+        // The host only sends an agent it recognises — a built-in, or a plugin
+        // agent holding an executable name (#16469) — and this view's copy of
+        // the plugin registry may not have arrived yet, so it isn't re-checked.
+        const nextDetectedAgentId =
+          typeof agentType === "string" && agentType.length > 0 ? agentType : undefined;
         const nextDetectedProcessId = processIconId ?? nextDetectedAgentId;
         if (!nextDetectedProcessId && !nextEverDetectedAgent && !nextDetectedAgentId) {
           logIdentityDebugDev(

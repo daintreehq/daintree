@@ -94,6 +94,7 @@ import { useTerminalLogic } from "@/hooks/useTerminalLogic";
 import { errorsClient } from "@/clients";
 import type { AgentState } from "@/types";
 import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
+import type { AgentId } from "@shared/types/agent";
 import {
   load as loadTerminalService,
   peek as peekTerminalService,
@@ -382,7 +383,7 @@ export interface TerminalPaneProps {
   /** Launch hint — the agent this terminal was launched to run, if any. */
   agentId?: string;
   /** Runtime-detected agent identity (cleared on agent exit). Drives panel chrome (icons, badges). */
-  detectedAgentId?: BuiltInAgentId;
+  detectedAgentId?: AgentId;
   runtimeIdentity?: TerminalRuntimeIdentity;
   chrome?: TerminalChromeDescriptor;
   /** Sticky flag: has an agent ever been live-detected. Drives the chrome demotion rule. */

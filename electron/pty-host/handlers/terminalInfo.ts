@@ -1,12 +1,17 @@
-import { isBuiltInAgentId, type BuiltInAgentId } from "../../../shared/config/agentIds.js";
+import type { AgentId } from "../../../shared/types/agent.js";
+import { isDetectableAgentId } from "../../services/ProcessDetector/registries.js";
 import { readPtyDimension } from "../../services/pty/TerminalProcess.js";
 import type { HostContext } from "./types.js";
 
 type TerminalInfoLike = ReturnType<HostContext["ptyManager"]["getTerminal"]>;
 
-/** Narrow a backend TerminalType-valued detection field to BuiltInAgentId for IPC. */
-export function narrowDetectedAgentId(value: unknown): BuiltInAgentId | undefined {
-  return isBuiltInAgentId(value) ? value : undefined;
+/**
+ * Narrow a backend detection field for IPC to an agent the host still
+ * recognises: a built-in, or a plugin agent holding an executable name
+ * (#16469). Anything else is stale or malformed and reads as no agent.
+ */
+export function narrowDetectedAgentId(value: unknown): AgentId | undefined {
+  return typeof value === "string" && isDetectableAgentId(value) ? value : undefined;
 }
 
 /**

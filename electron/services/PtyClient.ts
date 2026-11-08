@@ -230,7 +230,7 @@ interface TerminalInfoResponse {
   /** Lifecycle-ledger generation of the record that answered. */
   launchGeneration?: number;
   /** Runtime-detected agent identity (cleared when the agent exits). */
-  detectedAgentId?: BuiltInAgentId;
+  detectedAgentId?: AgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
   detectedProcessId?: string;
   /** Capability mode — sealed-at-spawn agent capability surface. Set when the terminal was cold-launched as a built-in agent. */

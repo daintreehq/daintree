@@ -12,9 +12,13 @@ import {
 import { LAUNCH_MCP_FORMATS } from "../../../shared/config/launchMcp.js";
 import {
   BINARY_EXEC_SUBCOMMANDS,
+  isLauncherCommandName,
   stripCommandExecutableExtension,
 } from "../../services/ProcessDetector/commandParser.js";
 import { isSafeShellOption } from "../../../shared/utils/shellEscape.js";
+import { AGENT_CLI_NAMES } from "../../services/ProcessDetector/registries.js";
+import { PROCESS_TOOL_ICON_BY_COMMAND } from "../../../shared/config/processToolRegistry.js";
+import type { PluginAgentContribution } from "../../../shared/types/plugin.js";
 import { utf8Length } from "./common.js";
 
 /**
@@ -190,6 +194,48 @@ const RESERVED_PROCESS_TOOL_LAUNCHERS = new Set([
 ]);
 
 /**
+ * A bare executable name as the detector looks it up: the key space of the
+ * built-in `PROCESS_TOOL_REGISTRY` commands and of a plugin agent's
+ * `executableNames`.
+ */
+const ProcessCommandNameSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(PROCESS_TOOL_COMMAND_PATTERN, {
+    message:
+      "command must be a bare lowercase executable name (letters, digits, dot, dash, underscore)",
+  })
+  .refine((command) => !RESERVED_PROCESS_TOOL_COMMANDS.has(command), {
+    message: "command cannot be a reserved key (__proto__, constructor, prototype)",
+  })
+  // The detector strips launcher/script extensions off a process name before
+  // looking it up, so `acme.exe` or `serve.py` would register under a key
+  // nothing is ever looked up by — a detection that validates and then
+  // silently never fires. Reject the non-canonical form and name the one
+  // that works, rather than rewriting the author's value behind their back.
+  .refine((command) => stripCommandExecutableExtension(command) === command, {
+    message:
+      'command must omit the executable/script extension (write "acme", not "acme.exe" or "acme.py") — detection strips it before matching',
+  })
+  // `npm exec vite` puts the launcher subcommand at argv[1] and the real
+  // binary at argv[2]. A plugin owning `exec` would match first and win the
+  // equal-tier tie by being leftmost, reporting itself for a process it
+  // never launched.
+  .refine((command) => !BINARY_EXEC_SUBCOMMANDS.has(command), {
+    message:
+      "command cannot be a package-manager exec subcommand (exec, dlx, x) — those name the launcher, not a tool",
+  })
+  // Same failure, wider blast radius: a shell or prefix runner sits to the
+  // left of the real binary in argv and above it in the process tree, so a
+  // plugin owning one wins the equal-tier tie for commands it never
+  // launched — every pane, in the `bash` case.
+  .refine((command) => !RESERVED_PROCESS_TOOL_LAUNCHERS.has(command), {
+    message:
+      "command cannot be a shell or launcher wrapper (sh, bash, zsh, cmd, env, sudo, xargs, …) — those name the process that runs a tool, not the tool",
+  });
+
+/**
  * `contributes.processTools` manifest entry (#11613). One command name mapped
  * to the icon a terminal tab shows while that command runs. `iconId` is a
  * generic plugin icon id (`shared/config/pluginIconIds.ts`) — advisory, matching
@@ -201,45 +247,47 @@ const RESERVED_PROCESS_TOOL_LAUNCHERS = new Set([
  */
 export const ProcessToolContributionSchema = z
   .object({
-    command: z
-      .string()
-      .min(1)
-      .max(64)
-      .regex(PROCESS_TOOL_COMMAND_PATTERN, {
-        message:
-          "command must be a bare lowercase executable name (letters, digits, dot, dash, underscore)",
-      })
-      .refine((command) => !RESERVED_PROCESS_TOOL_COMMANDS.has(command), {
-        message: "command cannot be a reserved key (__proto__, constructor, prototype)",
-      })
-      // The detector strips launcher/script extensions off a process name before
-      // looking it up, so `acme.exe` or `serve.py` would register under a key
-      // nothing is ever looked up by — a detection that validates and then
-      // silently never fires. Reject the non-canonical form and name the one
-      // that works, rather than rewriting the author's value behind their back.
-      .refine((command) => stripCommandExecutableExtension(command) === command, {
-        message:
-          'command must omit the executable/script extension (write "acme", not "acme.exe" or "acme.py") — detection strips it before matching',
-      })
-      // `npm exec vite` puts the launcher subcommand at argv[1] and the real
-      // binary at argv[2]. A plugin owning `exec` would match first and win the
-      // equal-tier tie by being leftmost, reporting itself for a process it
-      // never launched.
-      .refine((command) => !BINARY_EXEC_SUBCOMMANDS.has(command), {
-        message:
-          "command cannot be a package-manager exec subcommand (exec, dlx, x) — those name the launcher, not a tool",
-      })
-      // Same failure, wider blast radius: a shell or prefix runner sits to the
-      // left of the real binary in argv and above it in the process tree, so a
-      // plugin owning one wins the equal-tier tie for commands it never
-      // launched — every pane, in the `bash` case.
-      .refine((command) => !RESERVED_PROCESS_TOOL_LAUNCHERS.has(command), {
-        message:
-          "command cannot be a shell or launcher wrapper (sh, bash, zsh, cmd, env, sudo, xargs, …) — those name the process that runs a tool, not the tool",
-      }),
+    command: ProcessCommandNameSchema,
     iconId: z.string().min(1).max(64),
   })
   .strict();
+
+/**
+ * One `contributes.agents[].executableNames` entry (#16469): a process-tool
+ * command name that the command parser also never reads as a launcher. A
+ * process tool may brand `mise` or `npx`; an agent may not, because a
+ * launcher's name says nothing about which program it is running.
+ */
+const AgentExecutableNameSchema = ProcessCommandNameSchema.refine(
+  (name) => !isLauncherCommandName(name),
+  {
+    message:
+      "an agent's executable name cannot be a launcher (npx, uvx, mise, direnv, node, python, …) — it runs another program rather than naming one",
+  }
+);
+
+/** Most names one agent may claim: its CLI and a few aliases, never a catalogue. */
+const MAX_AGENT_EXECUTABLE_NAMES = 16;
+
+/**
+ * The executable names a contributed agent claims (#16469). Declared names are
+ * taken as written (the schema and the manifest-level checks have vetted them).
+ * Without a declaration a bare `command` claims its own lowercased name, the
+ * way a built-in agent's command does, unless that name fails the same rules
+ * or a built-in agent or tool already owns it. A plugin-relative `./` command
+ * claims nothing: the process it starts is named after its interpreter.
+ */
+export function resolveAgentExecutableNames(
+  agent: Pick<PluginAgentContribution, "command" | "executableNames">
+): string[] {
+  if (agent.executableNames) return [...agent.executableNames];
+  const name = agent.command.toLowerCase();
+  if (!AgentExecutableNameSchema.safeParse(name).success) return [];
+  if (Object.hasOwn(AGENT_CLI_NAMES, name) || Object.hasOwn(PROCESS_TOOL_ICON_BY_COMMAND, name)) {
+    return [];
+  }
+  return [name];
+}
 
 /**
  * One `contributes.agents` entry (#9560). `id` and `command` use the shared
@@ -668,6 +716,13 @@ export const AgentContributionSchema = z
           ),
         { message: "permissionBypassArgs must be options, each followed by at most one value" }
       )
+      .optional(),
+    executableNames: z
+      .array(AgentExecutableNameSchema)
+      .max(MAX_AGENT_EXECUTABLE_NAMES)
+      .refine((names) => new Set(names).size === names.length, {
+        message: "executableNames must not repeat a name",
+      })
       .optional(),
   })
   .strict();

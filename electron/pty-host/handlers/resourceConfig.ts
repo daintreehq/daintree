@@ -92,6 +92,14 @@ export function createResourceConfigHandlers(ctx: HostContext): HandlerMap {
       // Analysis workers resolve detection patterns on their own thread —
       // mirror the registry there too (new workers receive it at spawn).
       ctx.analysisWorkerPool?.setPluginAgentRegistry(registry);
+      // After the replace, so a terminal promoted to an agent whose plugin just
+      // unloaded (or lost its only name) is demoted against the new registry,
+      // and its old evidence can't promote it again (#16469).
+      try {
+        ctx.ptyManager.revokeUnregisteredAgents();
+      } catch (err) {
+        console.warn("[PtyHost] Revoking unregistered agents failed:", err);
+      }
     },
 
     // Mirror main's plugin process-tool registry so `getProcessIconMap` resolves

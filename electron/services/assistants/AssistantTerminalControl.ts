@@ -10,8 +10,7 @@ import {
   type AssistantStartResult,
   type GlobalAssistantEntry,
 } from "../../../shared/types/assistantControl.js";
-import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
-import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
+import type { AgentId, AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalHandback } from "../../../shared/types/handback.js";
 import { readTailSnapshot, tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
 import {
@@ -90,7 +89,7 @@ export interface AssistantTarget {
 
 /** The pty-host record fields the control reads. */
 export interface AssistantTerminalRecord {
-  detectedAgentId?: BuiltInAgentId;
+  detectedAgentId?: AgentId;
   launchAgentId?: string;
   agentState?: AgentState;
   waitingReason?: WaitingReason;
