@@ -579,6 +579,13 @@ describe("a plugin agent's declared prompt form", () => {
     const argvOf = (command: string) =>
       execFileSync("/bin/sh", ["-c", command], { encoding: "utf8" }).split("\0").slice(0, -1);
 
+    const printfAgent = (initialPromptForm: PluginAgentContribution["initialPromptForm"]) => {
+      declare({ id: "printf", command: "printf", args: ["%s\\0"], initialPromptForm });
+      setAgentCommandDialectResolver(() => "posix");
+    };
+    const launch = (initialPrompt: string, interactive: boolean) =>
+      argvOf(generateAgentCommand("printf", {}, "printf", { interactive, initialPrompt }));
+
     it.each([
       ["spaces", "fix  the   bug"],
       ["single quotes", "it's 'quoted'"],
@@ -587,28 +594,22 @@ describe("a plugin agent's declared prompt form", () => {
       ["a leading double hyphen", "--version"],
       ["shell syntax", "$(whoami) `id` $HOME ; rm -rf * | cat > x"],
       ["line breaks", "one\n\n  two\tthree"],
-    ])("passes a prompt with %s as one literal argument", (_name, prompt) => {
-      declare({
-        id: "printf",
-        command: "printf",
-        args: ["%s\\0"],
-        initialPromptForm: {
-          interactive: { args: ["--task", PROMPT_FORM_PLACEHOLDER, "--"] },
-          headless: { args: ["--", PROMPT_FORM_PLACEHOLDER] },
-        },
+    ])("passes a prompt with %s as one literal argument in both forms", (_name, prompt) => {
+      printfAgent({
+        interactive: { args: [PROMPT_FORM_PLACEHOLDER] },
+        headless: { args: ["--print", PROMPT_FORM_PLACEHOLDER] },
       });
-      setAgentCommandDialectResolver(() => "posix");
-      expect(
-        argvOf(generateAgentCommand("printf", {}, "printf", { initialPrompt: prompt }))
-      ).toEqual(["--task", prompt, "--"]);
-      expect(
-        argvOf(
-          generateAgentCommand("printf", {}, "printf", {
-            interactive: false,
-            initialPrompt: prompt,
-          })
-        )
-      ).toEqual(["--", prompt]);
+      expect(launch(prompt, true)).toEqual([prompt]);
+      expect(launch(prompt, false)).toEqual(["--print", prompt]);
+    });
+
+    it("keeps a leading-hyphen prompt whole after a flag and after a terminator", () => {
+      printfAgent({
+        interactive: { args: ["--task", PROMPT_FORM_PLACEHOLDER] },
+        headless: { args: ["--", PROMPT_FORM_PLACEHOLDER] },
+      });
+      expect(launch("--version -x", true)).toEqual(["--task", "--version -x"]);
+      expect(launch("--version -x", false)).toEqual(["--", "--version -x"]);
     });
   });
 });

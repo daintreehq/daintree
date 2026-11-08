@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { PROMPT_FORM_PLACEHOLDER } from "../../../shared/config/agentRegistry.js";
-import { LAUNCH_MCP_FORMATS } from "../../../shared/config/launchMcp.js";
+import {
+  LAUNCH_MCP_ENV_ONLY_FORMATS,
+  LAUNCH_MCP_FORMATS,
+} from "../../../shared/config/launchMcp.js";
 import { AgentContributionSchema, getPluginManifestSchema } from "../plugin.js";
 
 const VALID_AGENT = {
@@ -18,6 +21,52 @@ function manifestWith(overrides: Record<string, unknown>) {
     ...overrides,
   };
 }
+
+describe("a prompt form's -- beside launchMcp (#16404)", () => {
+  const schema = getPluginManifestSchema("installed");
+  const terminated = { args: ["--", "{prompt}"] };
+  const flagged = { args: ["--task", "{prompt}"] };
+  const issues = (agent: Record<string, unknown>) =>
+    schema
+      .safeParse(
+        manifestWith({
+          capabilities: ["agent:register"],
+          contributes: { agents: [{ ...VALID_AGENT, ...agent }] },
+        })
+      )
+      .error?.issues.map((issue) => issue.path.join(".")) ?? [];
+
+  it("refuses it in either mode with a format that adds flags", () => {
+    const launchMcp = { format: "claude-mcp-config" };
+    expect(
+      issues({ launchMcp, initialPromptForm: { interactive: terminated, headless: flagged } })
+    ).toEqual(["contributes.agents.0.initialPromptForm.interactive.args"]);
+    expect(
+      issues({ launchMcp, initialPromptForm: { interactive: flagged, headless: terminated } })
+    ).toEqual(["contributes.agents.0.initialPromptForm.headless.args"]);
+  });
+
+  it.each([...LAUNCH_MCP_ENV_ONLY_FORMATS])("allows it with %s, which adds no flags", (format) => {
+    expect(
+      issues({
+        launchMcp: { format },
+        initialPromptForm: { interactive: terminated, headless: terminated },
+      })
+    ).toEqual([]);
+  });
+
+  it("allows it without launchMcp, and any other form with it", () => {
+    expect(
+      issues({ initialPromptForm: { interactive: terminated, headless: terminated } })
+    ).toEqual([]);
+    expect(
+      issues({
+        launchMcp: { format: "claude-mcp-config" },
+        initialPromptForm: { interactive: flagged, headless: flagged },
+      })
+    ).toEqual([]);
+  });
+});
 
 describe("AgentContributionSchema (issue #9560)", () => {
   it("accepts a minimal agent contribution and defaults supportsContextInjection to false", () => {
@@ -165,12 +214,27 @@ describe("AgentContributionSchema (issue #9560)", () => {
       expect(parse({}).success).toBe(false);
     });
 
-    it("rejects an unknown field at every level", () => {
-      expect(parse({ interactive: FORM, headless: FORM, oneShot: FORM }).success).toBe(false);
-      expect(withInteractive({ ...FORM, build: "--task {prompt}" }).success).toBe(false);
-      expect(
-        withInteractive({ ...FORM, subcommand: { name: "run", replaces: "chat", at: 1 } }).success
-      ).toBe(false);
+    it.each([
+      ["the declaration", { interactive: FORM, headless: FORM, oneShot: FORM }, [], "oneShot"],
+      [
+        "a mode",
+        { interactive: { ...FORM, build: "--task {prompt}" }, headless: FORM },
+        ["interactive"],
+        "build",
+      ],
+      [
+        "a subcommand",
+        {
+          interactive: { ...FORM, subcommand: { name: "run", replaces: "chat", at: 1 } },
+          headless: FORM,
+        },
+        ["interactive", "subcommand"],
+        "at",
+      ],
+    ])("names an unknown field on %s and where it is", (_level, declared, path, key) => {
+      const issue = parse(declared).error?.issues[0];
+      expect(issue?.path).toEqual(["initialPromptForm", ...path]);
+      expect(issue?.message).toContain(key);
     });
 
     it("rejects anything but plain data for the args", () => {
@@ -201,11 +265,15 @@ describe("AgentContributionSchema (issue #9560)", () => {
 
     it("bounds the args and their length", () => {
       expect(withInteractive({ args: ["a".repeat(256), "{prompt}"] }).success).toBe(true);
-      expect(withInteractive({ args: ["a".repeat(257), "{prompt}"] }).success).toBe(false);
+      const tooLong = withInteractive({ args: ["a".repeat(257), "{prompt}"] }).error?.issues[0];
+      expect(tooLong?.path).toEqual(["initialPromptForm", "interactive", "args", 0]);
+      expect(tooLong?.message).toContain("256");
       expect(withInteractive({ args: ["", "{prompt}"] }).success).toBe(false);
       const padding = Array.from({ length: 19 }, (_, index) => `-${index}`);
       expect(withInteractive({ args: [...padding, "{prompt}"] }).success).toBe(true);
-      expect(withInteractive({ args: [...padding, "-x", "{prompt}"] }).success).toBe(false);
+      const tooMany = withInteractive({ args: [...padding, "-x", "{prompt}"] }).error?.issues[0];
+      expect(tooMany?.path).toEqual(["initialPromptForm", "interactive", "args"]);
+      expect(tooMany?.message).toContain("20");
     });
 
     it.each(["--id={sessionId}", "--token=${settings:apiToken}", "${HOME}"])(

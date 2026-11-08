@@ -54,6 +54,13 @@ export const LAUNCH_MCP_ENV_VARS = {
   "opencode-config-content": "OPENCODE_CONFIG_CONTENT",
 } as const;
 
+/** The formats that reach the CLI only through its environment, adding no flags to the command. */
+export const LAUNCH_MCP_ENV_ONLY_FORMATS: ReadonlySet<LaunchMcpFormat> = new Set<LaunchMcpFormat>([
+  "gemini-system-defaults",
+  "opencode-config-content",
+  "vibe-mcp-servers-env",
+]);
+
 export function buildLaunchMcpInjection(format: LaunchMcpFormat): LaunchMcpInjection {
   switch (format) {
     case "gemini-system-defaults":
