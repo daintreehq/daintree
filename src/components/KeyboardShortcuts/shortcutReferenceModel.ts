@@ -485,8 +485,15 @@ export function searchShortcuts(
   }
 
   // One character is as likely a key as the start of a word: a row bound to
-  // exactly that key, unmodified (the worktree grid's X), leads.
-  const bareKeyName = [...trimmed].length === 1 ? canonicalKey(trimmed, mac).key : undefined;
+  // exactly that key, unmodified (the worktree grid's X), leads. So is a lone
+  // named key ("space", "up"), which the fixed shortcuts are bound to.
+  const lowered = trimmed.toLowerCase();
+  const bareKeyName =
+    [...trimmed].length === 1
+      ? canonicalKey(trimmed, mac).key
+      : KEY_NAMES.has(lowered)
+        ? KEY_NAMES.get(lowered)
+        : undefined;
   const bareKey: KeyStep[] | null = bareKeyName
     ? [{ modifiers: new Set<string>(), key: bareKeyName }]
     : null;

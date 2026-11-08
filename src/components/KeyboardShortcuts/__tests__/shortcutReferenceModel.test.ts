@@ -376,5 +376,7 @@ describe("buildFixedShortcutEntries", () => {
     expect(names("j")).toContain("Move through the worktree list");
     expect(names("⌥↓")).toEqual(["Reorder worktree"]);
     expect(names("panels")).toEqual(["Reorder panel", "Reorder tab"]);
+    expect(names("space")).toEqual(["Open worktree", "Reorder panel", "Reorder tab"]);
+    expect(names("up")).toEqual(["Move through the worktree list"]);
   });
 });
