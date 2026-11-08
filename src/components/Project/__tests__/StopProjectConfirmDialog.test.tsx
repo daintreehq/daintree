@@ -95,7 +95,7 @@ describe("StopProjectConfirmDialog", () => {
     rerender(<StopProjectConfirmDialog projectId="p1" {...props} />);
     expect(document.body.textContent).toContain("1 terminal");
     statsState.stats = { p1: { processCount: 5, activeAgentCount: 0, waitingAgentCount: 0 } };
-    rerender(<StopProjectConfirmDialog projectId="p1" isStopping {...props} />);
+    rerender(<StopProjectConfirmDialog projectId="p1" {...props} onClose={vi.fn()} />);
     expect(document.body.textContent).toContain("1 terminal");
     expect(document.body.textContent).not.toContain("5 terminals");
     rerender(<StopProjectConfirmDialog projectId={null} {...props} />);
