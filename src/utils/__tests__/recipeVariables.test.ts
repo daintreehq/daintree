@@ -240,3 +240,43 @@ describe("plugin recipe variables (#13797)", () => {
     ]);
   });
 });
+
+describe("tracker issues (#16381)", () => {
+  const linear: RecipeContext = {
+    issueNumber: 42,
+    issueKey: "ENG-42",
+    issueTitle: "Fix the login race",
+    branchName: "eng-42-fix-login",
+  };
+
+  it("names a provider-served issue by its tracker key", () => {
+    expect(replaceRecipeVariables("Work on {{issue_number}}", linear)).toBe("Work on ENG-42");
+    expect(replaceRecipeVariables("Work on {{number}}", { ...linear, prNumber: 7 })).toBe(
+      "Work on ENG-42"
+    );
+  });
+
+  it("still renders a code-forge issue as #n", () => {
+    expect(replaceRecipeVariables("{{issue_number}} {{number}}", { issueNumber: 42 })).toBe(
+      "#42 #42"
+    );
+  });
+
+  it("fills {{issue_title}} from the linked issue", () => {
+    expect(replaceRecipeVariables("{{number}}: {{issue_title}}", linear)).toBe(
+      "ENG-42: Fix the login race"
+    );
+    expect(replaceRecipeVariables("[{{issue_title}}]", { issueNumber: 1 })).toBe("[]");
+    expect(detectUnresolvedVariables("{{issue_title}}", { issueNumber: 1 })).toEqual([
+      "issue_title",
+    ]);
+    expect(detectUnresolvedVariables("{{issue_title}} {{issue_number}}", linear)).toEqual([]);
+  });
+
+  it("previews {{issue_title}} as a known variable", () => {
+    expect(segmentRecipePrompt("About {{issue_title}}", linear)).toEqual([
+      { kind: "text", text: "About " },
+      { kind: "value", text: "Fix the login race", name: "issue_title" },
+    ]);
+  });
+});

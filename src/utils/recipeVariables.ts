@@ -1,5 +1,13 @@
 export interface RecipeContext {
   issueNumber?: number;
+  /**
+   * The issues provider's own name for the linked issue (`ENG-42`), set only
+   * when a provider served it (#16381). `{{issue_number}}` names the issue by
+   * it: `issueNumber` is then the provider's display counter or a hash, and
+   * `#42` would read as the code forge's issue.
+   */
+  issueKey?: string;
+  issueTitle?: string;
   prNumber?: number;
   worktreePath?: string;
   branchName?: string;
@@ -24,7 +32,8 @@ function pluginVariableValue(name: string, context: RecipeContext): string | und
 }
 
 const VARIABLE_DEFINITIONS = [
-  { name: "issue_number", description: "Issue number" },
+  { name: "issue_number", description: "Issue number, or the tracker's key (ENG-42)" },
+  { name: "issue_title", description: "Linked issue's title" },
   { name: "pr_number", description: "PR number" },
   { name: "number", description: "Issue or PR number (whichever is set)" },
   { name: "worktree_path", description: "Absolute path to worktree directory" },
@@ -35,6 +44,11 @@ const VARIABLE_DEFINITIONS = [
 // in it is not a replacement pattern, and a `{{...}}` in it is never expanded.
 const VARIABLE_PATTERN = /\{\{(\w+|plugin\.\w+)\}\}/gi;
 
+function issueReference(context: RecipeContext): string | undefined {
+  if (context.issueKey) return context.issueKey;
+  return context.issueNumber != null ? `#${context.issueNumber}` : undefined;
+}
+
 export function replaceRecipeVariables(text: string, context: RecipeContext): string {
   return text.replace(VARIABLE_PATTERN, (match, name: string) => {
     const lowered = name.toLowerCase();
@@ -44,13 +58,15 @@ export function replaceRecipeVariables(text: string, context: RecipeContext): st
     }
     switch (lowered) {
       case "issue_number":
-        return context.issueNumber != null ? `#${context.issueNumber}` : "";
+        return issueReference(context) ?? "";
+      case "issue_title":
+        return context.issueTitle ?? "";
       case "pr_number":
         return context.prNumber != null ? `#${context.prNumber}` : "";
-      case "number": {
-        const num = context.issueNumber ?? context.prNumber;
-        return num != null ? `#${num}` : "";
-      }
+      case "number":
+        return (
+          issueReference(context) ?? (context.prNumber != null ? `#${context.prNumber}` : "")
+        );
       case "worktree_path":
         return context.worktreePath ?? "";
       case "branch_name":
@@ -62,7 +78,7 @@ export function replaceRecipeVariables(text: string, context: RecipeContext): st
 }
 
 const VARIABLE_CONTEXT_MAP: Record<string, keyof RecipeContext> = {
-  issue_number: "issueNumber",
+  issue_title: "issueTitle",
   pr_number: "prNumber",
   worktree_path: "worktreePath",
   branch_name: "branchName",
@@ -86,10 +102,9 @@ export function detectUnresolvedVariables(text: string, context: RecipeContext):
       }
       continue;
     }
-    if (name === "number") {
-      if (context.issueNumber == null && context.prNumber == null) {
-        unresolved.push(name);
-      }
+    if (name === "issue_number" || name === "number") {
+      const prFills = name === "number" && context.prNumber != null;
+      if (issueReference(context) === undefined && !prFills) unresolved.push(name);
       continue;
     }
     const contextKey = VARIABLE_CONTEXT_MAP[name];
