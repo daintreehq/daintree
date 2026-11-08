@@ -858,6 +858,7 @@ describe("canopy IPC", () => {
     // A check that hasn't finished: nothing waits on it.
     models.ensure.mockReturnValueOnce(new Promise(() => {}));
     models.state.mockReturnValue(undefined as never);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       state.mode = "on";
       const result = (await invoke(CANOPY_METHOD_CHANNELS.getSnapshot, fakeSender(9))) as {
@@ -867,18 +868,23 @@ describe("canopy IPC", () => {
       expect(first.activated).toBe(true);
       expect(first.model).toBeUndefined();
       expect(models.ensure).toHaveBeenCalled();
+      // Whatever the service's own start broadcasts has gone out.
+      await vi.advanceTimersByTimeAsync(1_000);
 
       broadcasts.mockClear();
       const failed = { id: "daintreehq/canopy-reader-17m", status: "failed", error: "damaged" };
       models.state.mockReturnValue(failed as never);
+      // Nothing tells the views until the check says it is done.
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(broadcasts).not.toHaveBeenCalled();
       checked?.();
-      await vi.waitFor(() =>
-        expect(broadcasts).toHaveBeenCalledWith(
-          "canopy:snapshot-updated",
-          expect.objectContaining({ model: failed })
-        )
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(broadcasts).toHaveBeenCalledWith(
+        "canopy:snapshot-updated",
+        expect.objectContaining({ model: failed })
       );
     } finally {
+      vi.useRealTimers();
       models.state.mockImplementation(ready!);
     }
   });

@@ -166,25 +166,47 @@ describe("removeDownloadedModels", () => {
     await expect(removeDownloadedModels(path.join(dir, "absent"))).resolves.toBeUndefined();
   });
 
-  it("leaves a folder reached through a link alone: another profile or build may share it", async () => {
+  const LINK = process.platform === "win32" ? "junction" : "dir";
+
+  it("leaves a models folder reached through a link alone: another profile or build may share it", async () => {
     const shared = path.join(dir, "shared");
     mkdirSync(path.join(shared, "canopy-reader-17m"), { recursive: true });
     mkdirSync(path.join(dir, "canopy"));
-    symlinkSync(shared, path.join(dir, "canopy", "models"), "dir");
+    symlinkSync(shared, path.join(dir, "canopy", "models"), LINK);
 
     await removeDownloadedModels(path.join(dir, "canopy", "models"));
 
     expect(existsSync(path.join(shared, "canopy-reader-17m"))).toBe(true);
   });
 
+  it("leaves a canopy folder reached through a link alone, and the models in it", async () => {
+    const shared = path.join(dir, "shared");
+    mkdirSync(path.join(shared, "models", "canopy-reader-17m"), { recursive: true });
+    symlinkSync(shared, path.join(dir, "canopy"), LINK);
+
+    await removeDownloadedModels(path.join(dir, "canopy", "models"));
+
+    expect(existsSync(path.join(shared, "models", "canopy-reader-17m"))).toBe(true);
+  });
+
   it("stops between folders once told to", async () => {
     mkdirSync(path.join(dir, "canopy-reader-17m"));
+    mkdirSync(path.join(dir, "canopy-reader-68m"));
     const stop = new AbortController();
     stop.abort();
-
     await removeDownloadedModels(dir, stop.signal);
+    expect(readdirSync(dir).sort()).toEqual(["canopy-reader-17m", "canopy-reader-68m"]);
 
-    expect(existsSync(path.join(dir, "canopy-reader-17m"))).toBe(true);
+    // Told while the first folder goes: the next one stays.
+    let looks = 0;
+    const midway = {
+      get aborted() {
+        looks += 1;
+        return looks > 1;
+      },
+    } as AbortSignal;
+    await removeDownloadedModels(dir, midway);
+    expect(readdirSync(dir)).toHaveLength(1);
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(

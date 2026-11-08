@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -73,10 +81,9 @@ describe("contentMatches", () => {
     expect(contentMatches(CONFIG, manifest.files[0])).toBe(true);
   });
 
-  it("rejects a file of another size before hashing it", () => {
-    expect(contentMatches(Buffer.concat([WEIGHTS, Buffer.from("!")]), manifest.files[1])).toBe(
-      false
-    );
+  it("rejects a file whose size isn't the one pinned, even when its hash is", () => {
+    const spec = manifest.files[1];
+    expect(contentMatches(WEIGHTS, { ...spec, size: spec.size + 1 })).toBe(false);
   });
 
   it("rejects a spec that pins no hash", () => {
@@ -151,6 +158,17 @@ describe("prepareModel", () => {
     );
     expect(existsSync(path.join(dir, "model.int8.onnx"))).toBe(false);
     expect(readdirSync(dir).some((name) => name.endsWith(".part"))).toBe(false);
+  });
+
+  it("leaves no staging file behind when a fetched file can't be put in place", async () => {
+    // A folder where the weights belong: the rename over it fails.
+    mkdirSync(path.join(dir, "model.int8.onnx"));
+    writeFileSync(path.join(dir, "model.int8.onnx", "keep"), "x");
+    const fetchImpl = serving();
+
+    await expect(prepareModel({ dir, manifest, fetchImpl, log: () => {} })).rejects.toThrow();
+    expect(existsSync(path.join(dir, "model.int8.onnx.part"))).toBe(false);
+    expect(existsSync(path.join(dir, "model.int8.onnx", "keep"))).toBe(true);
   });
 
   it("fails on an HTTP error", async () => {
