@@ -406,6 +406,13 @@ export const githubForgeProvider: ForgeProviderImpl = {
     return `https://github.com/${repo.owner}/${repo.repo}`;
   },
 
+  // Each ref is encoded on its own so the `...` separator stays literal, and a
+  // `#` or `%` in a branch name can't end or corrupt the path.
+  buildNewPRUrl(repo: RepoRef, refs: { base: string; head: string }): string {
+    const range = `${encodeURIComponent(refs.base)}...${encodeURIComponent(refs.head)}`;
+    return `https://github.com/${repo.owner}/${repo.repo}/compare/${range}?expand=1`;
+  },
+
   // GitHub's `Files changed` view deep-links to a specific file via a
   // `#diff-<sha256-of-utf8-path>` anchor (the SHA-256 is computed from the
   // file's UTF-8 path bytes, not the URL-encoded form). The hash input must

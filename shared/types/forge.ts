@@ -1563,6 +1563,9 @@ export interface ForgeIssueProviderImpl extends ForgeProviderBaseImpl {
   tooltips?: Pick<TooltipCapability, "getIssueTooltip">;
 }
 
+/** See {@link ForgeCodeProviderImpl.pullRequestTerm}. */
+export type ForgePullRequestTerm = "pull-request" | "merge-request";
+
 /**
  * The code role: everything addressed through the git remote. See
  * {@link ForgeProviderRole}.
@@ -1600,6 +1603,19 @@ export interface ForgeCodeProviderImpl extends ForgeProviderBaseImpl {
    * rejects rather than guessing a URL.
    */
   buildRepoUrl?(repo: RepoRef): string;
+  /**
+   * Optional. Build the forge's page for opening a new pull request from the
+   * branch `refs.head` into `refs.base`, what the Review Hub's "No PR" chip
+   * opens. Both are raw branch names on this repository, so encode them here.
+   * The host only asks once it has seen the head on this repository; omit the
+   * field and the chip stays a static badge.
+   */
+  buildNewPRUrl?(repo: RepoRef, refs: { base: string; head: string }): string;
+  /**
+   * Optional. What this forge calls a pull request, for the words the host
+   * shows beside {@link buildNewPRUrl}. Omit it for `"pull-request"`.
+   */
+  pullRequestTerm?: ForgePullRequestTerm;
   /**
    * Optional. Build a deep-link to a specific file's entry on a PR's
    * "Files changed" view. The provider knows its own anchor algorithm

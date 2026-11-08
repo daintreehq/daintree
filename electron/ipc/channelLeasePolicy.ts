@@ -275,6 +275,7 @@ export const CHANNEL_LEASE_POLICY = {
   "forge:get-repo-key": "free",
   "forge:get-repo-metadata": "free",
   "forge:get-repo-stats": "free",
+  "forge:get-new-pr-link": "free",
   "forge:get-repo-url": "free",
   "forge:get-settings": "free",
   "forge:get-token-health": "free",

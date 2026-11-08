@@ -1997,6 +1997,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { cwd: string; numbers: number[] }];
     result: import("../forge.js").Issue[];
   };
+  "forge:get-new-pr-link": {
+    args: [payload: import("./forge.js").ForgeNewPRLinkRequest];
+    result: import("./forge.js").ForgeNewPRLink;
+  };
   "forge:get-pr-review-threads": {
     args: [payload: { cwd: string; prNumber: number }];
     result: import("../forge.js").ReviewThread[];

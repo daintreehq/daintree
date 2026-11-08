@@ -3967,6 +3967,30 @@ describe("buildIssuesUrl", () => {
   });
 });
 
+describe("buildNewPRUrl", () => {
+  it("opens the compare page with the base first and the form expanded", () => {
+    expect(githubForgeProvider.buildNewPRUrl?.(repo, { base: "develop", head: "topic" })).toBe(
+      "https://github.com/owner/repo/compare/develop...topic?expand=1"
+    );
+  });
+
+  it.each(["feature/fix#1", "100%done", "a+b&c", "häagen/dazs", "dots...in/name"])(
+    "keeps the branch %s intact through the URL",
+    (head) => {
+      const url = new URL(
+        githubForgeProvider.buildNewPRUrl?.(repo, { base: "release/1.0", head }) ?? ""
+      );
+
+      expect(url.hash).toBe("");
+      expect(url.searchParams.get("expand")).toBe("1");
+      const range = url.pathname.split("/compare/")[1] ?? "";
+      const separator = range.indexOf("...");
+      expect(decodeURIComponent(range.slice(0, separator))).toBe("release/1.0");
+      expect(decodeURIComponent(range.slice(separator + 3))).toBe(head);
+    }
+  );
+});
+
 describe("buildPRsUrl", () => {
   it("returns the bare /pulls path with no q param when no options are given", () => {
     const { path, q } = parseBuiltUrl(githubForgeProvider.buildPRsUrl(repo));

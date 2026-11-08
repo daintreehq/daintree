@@ -51,6 +51,7 @@ import {
 } from "./useReviewHubStagingActions";
 import { PushErrorBanner } from "./PushErrorBanner";
 import { PrStatusChip } from "./PrStatusChip";
+import { useNewPRLink } from "./useNewPRLink";
 import { ReviewHubContext } from "./ReviewHubContext";
 import { CommitPanel } from "./CommitPanel";
 import { ConflictPanel } from "./ConflictPanel";
@@ -863,6 +864,42 @@ export function ReviewHubContent({
     return undefined;
   });
 
+  const newPRLinkInputs = useWorktreeStore(
+    useShallow((state) => {
+      for (const wt of state.worktrees.values()) {
+        if (wt.path === worktreePath) {
+          return {
+            baseRef: wt.baseCompareRef ?? null,
+            isMainWorktree: wt.isMainWorktree === true,
+            upstreamRef: wt.upstreamRef,
+            upstreamHeadSha: wt.upstreamHeadSha,
+            lastFetchedAt: wt.lastFetchedAt,
+          };
+        }
+      }
+      return null;
+    })
+  );
+  const newPRLink = useNewPRLink({
+    enabled: isOpen && status?.hasRemote === true && worktreePR === null,
+    cwd: worktreePath,
+    head: status?.currentBranch ?? null,
+    baseRef: newPRLinkInputs?.baseRef ?? null,
+    isMainWorktree: newPRLinkInputs?.isMainWorktree ?? false,
+    // A push from here shows in `isPushing`. One from a terminal shows in the
+    // upstream fields, but the main worktree has no base divergence to carry
+    // those, so `aheadCount` covers it: an unpushed branch has none until it
+    // gains an upstream. A fetch catches a push that set no upstream at all.
+    revision: JSON.stringify([
+      isPushing,
+      aheadCount,
+      newPRLinkInputs?.upstreamRef,
+      newPRLinkInputs?.upstreamHeadSha,
+      newPRLinkInputs?.lastFetchedAt,
+      status?.pushDestination,
+    ]),
+  });
+
   const forgeHealthProviderId = useWorktreeStore((state) => {
     for (const wt of state.worktrees.values()) {
       if (wt.path === worktreePath) {
@@ -1559,6 +1596,7 @@ export function ReviewHubContent({
                 hasRemote={status?.hasRemote}
                 worktreePR={worktreePR}
                 worktreePath={worktreePath}
+                newPRLink={newPRLink}
                 onOpenExternal={(url) => void systemClient.openExternal(url)}
               />
             </div>
