@@ -1406,9 +1406,11 @@ describe("readClaudeContextUsage (#16371)", () => {
     expect(await readUsage()).toEqual({ status: "unavailable", reason: "no-request" });
   });
 
+  // Whole and parseable, but with no newline yet: Claude Code may still be
+  // writing it, so it isn't taken as written.
   it("skips a last line still being written", async () => {
     await seed([request("msg_1", usage(1, 1, 1))], {
-      trailing: request("msg_2", usage(5, 5, 5)).slice(0, 40),
+      trailing: request("msg_2", usage(5, 5, 5)),
     });
 
     expect(await readUsage()).toMatchObject({ status: "ok", contextTokens: 3 });
@@ -1449,7 +1451,6 @@ describe("readClaudeContextUsage (#16371)", () => {
 
     await readUsage();
 
-    expect(fsHook.opened).toHaveLength(1);
-    await expect(fsHook.opened[0]!.stat()).rejects.toThrow();
+    expect(fsHook.opened.map((handle) => handle.fd)).toEqual([-1]);
   });
 });

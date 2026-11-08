@@ -20,8 +20,8 @@ const usageMock = vi.hoisted(() => ({
 vi.mock("../../../services/claude/ClaudeUsageService.js", () => usageMock);
 
 const contextUsageMock = vi.hoisted(() => ({
-  readClaudePaneContextUsage: vi.fn(
-    async (_terminalId: string, _signal: AbortSignal): Promise<AgentContextUsageResult> => ({
+  readClaudePaneContextUsageWithin: vi.fn(
+    async (_terminalId: string): Promise<AgentContextUsageResult> => ({
       status: "ok",
       provider: "claude",
       contextTokens: 126_717,
@@ -165,33 +165,13 @@ describe("claude.readContextUsage", () => {
       contextTokens: 126_717,
       recordedAt: 1_700_000_000_000,
     });
-    expect(contextUsageMock.readClaudePaneContextUsage).toHaveBeenCalledWith(
-      "t-1",
-      expect.any(AbortSignal)
-    );
-  });
-
-  it("answers store-unreadable once the host's deadline passes mid-read", async () => {
-    const deadline = new AbortController();
-    vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
-    contextUsageMock.readClaudePaneContextUsage.mockImplementationOnce(
-      (_terminalId, signal: AbortSignal) =>
-        new Promise<AgentContextUsageResult>((_resolve, reject) =>
-          signal.addEventListener("abort", () => reject(signal.reason))
-        )
-    );
-
-    const pending = readContextUsage({ terminalId: "t-1" });
-    await vi.waitFor(() => expect(contextUsageMock.readClaudePaneContextUsage).toHaveBeenCalled());
-    deadline.abort(new DOMException("timed out", "TimeoutError"));
-
-    await expect(pending).resolves.toEqual({ status: "unavailable", reason: "store-unreadable" });
+    expect(contextUsageMock.readClaudePaneContextUsageWithin).toHaveBeenCalledWith("t-1");
   });
 
   it("answers store-unreadable for a failed read and logs nothing of it", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    contextUsageMock.readClaudePaneContextUsage.mockRejectedValueOnce(
+    contextUsageMock.readClaudePaneContextUsageWithin.mockRejectedValueOnce(
       new Error("EACCES: /Users/x/.claude/projects/secret.jsonl")
     );
 

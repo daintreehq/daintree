@@ -31,13 +31,6 @@ const replySpanSchema = z.object({
 });
 
 /**
- * A context reading that hasn't answered by now answers that the store
- * couldn't be read. The read is bounded, so only a stalled filesystem gets
- * here.
- */
-const CONTEXT_USAGE_HOST_TIMEOUT_MS = 3_000;
-
-/**
  * A view on another machine reads the host's transcripts over the link, and
  * a reply's text stays on the machine it was written on: that view copies what
  * it drew instead.
@@ -101,14 +94,11 @@ export const claudeNamespace = defineIpcNamespace({
       CLAUDE_METHOD_CHANNELS.readContextUsage,
       contextUsageSchema,
       async ({ terminalId }): Promise<AgentContextUsageResult> => {
-        const { readClaudePaneContextUsage } =
+        const { readClaudePaneContextUsageWithin } =
           await import("../../services/claude/ClaudeContextUsage.js");
         // Nothing is logged: a filesystem error names a path under the user's home.
         try {
-          return await readClaudePaneContextUsage(
-            terminalId,
-            AbortSignal.timeout(CONTEXT_USAGE_HOST_TIMEOUT_MS)
-          );
+          return await readClaudePaneContextUsageWithin(terminalId);
         } catch {
           return { status: "unavailable", reason: "store-unreadable" };
         }

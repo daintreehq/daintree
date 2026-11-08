@@ -20,6 +20,13 @@ import { subagentTerminalAgentId } from "../subagentTerminalAgent.js";
 import { readClaudeContextUsage } from "./ClaudeSessionReader.js";
 import { getClaudePaneProjectsRoot } from "./ClaudeSessionStore.js";
 
+/**
+ * A reading that hasn't answered by now answers that the store couldn't be
+ * read. Only a stalled filesystem gets here: the read itself is bounded, but a
+ * read on a dead mount never returns, signal or not.
+ */
+export const CONTEXT_USAGE_HOST_DEADLINE_MS = 3_000;
+
 type TerminalQueries = Pick<PtyClient, "getTerminalAsync">;
 type TerminalRecord = NonNullable<Awaited<ReturnType<PtyClient["getTerminalAsync"]>>>;
 
@@ -71,4 +78,47 @@ export async function readClaudePaneContextUsage(
   if (result.status !== "ok") return result;
   const after = await queries.getTerminalAsync(terminalId);
   return sameRun(record, after) ? result : unavailable("pane-changed");
+}
+
+/**
+ * Reads still running, one per terminal. A read past its deadline keeps its
+ * slot until it settles, so a stalled store holds one read per pane rather
+ * than one per turn.
+ */
+const running = new Map<string, Promise<AgentContextUsageResult>>();
+
+/**
+ * {@link readClaudePaneContextUsage} with a deadline that holds whether or not
+ * the filesystem honours the abort.
+ */
+export async function readClaudePaneContextUsageWithin(
+  terminalId: string,
+  deps: ClaudeContextUsageDeps & { deadlineMs?: number } = {}
+): Promise<AgentContextUsageResult> {
+  const deadlineMs = deps.deadlineMs ?? CONTEXT_USAGE_HOST_DEADLINE_MS;
+  let work = running.get(terminalId);
+  if (!work) {
+    const signal = AbortSignal.timeout(deadlineMs);
+    const started: Promise<AgentContextUsageResult> = readClaudePaneContextUsage(
+      terminalId,
+      signal,
+      deps
+    )
+      // Nothing is logged: a filesystem error names a path under the user's home.
+      .catch(() => unavailable("store-unreadable"))
+      .finally(() => {
+        if (running.get(terminalId) === started) running.delete(terminalId);
+      });
+    running.set(terminalId, started);
+    work = started;
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<AgentContextUsageResult>((resolve) => {
+    timer = setTimeout(() => resolve(unavailable("store-unreadable")), deadlineMs);
+  });
+  try {
+    return await Promise.race([work, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
 }

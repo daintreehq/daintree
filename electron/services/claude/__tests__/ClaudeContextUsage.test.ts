@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "fs/promi
 import { tmpdir } from "os";
 import path from "path";
 
-import { readClaudePaneContextUsage } from "../ClaudeContextUsage.js";
+import {
+  readClaudePaneContextUsage,
+  readClaudePaneContextUsageWithin,
+} from "../ClaudeContextUsage.js";
+import type { AgentContextUsageResult } from "../../../../shared/types/ipc/agentContextUsage.js";
 import { deriveProjectSlug } from "../ClaudeSubagentReader.js";
 
 const SESSION = "1ad2578c-b710-4302-90c1-b222c4c29aa2";
@@ -156,5 +160,59 @@ describe("readClaudePaneContextUsage", () => {
 
     await expect(readClaudePaneContextUsage("t-1", controller.signal, deps())).rejects.toThrow();
     expect(getTerminalAsync).not.toHaveBeenCalled();
+  });
+});
+
+describe("readClaudePaneContextUsageWithin", () => {
+  const OK: AgentContextUsageResult = {
+    status: "ok",
+    provider: "claude",
+    contextTokens: 10,
+    recordedAt: 1,
+  };
+
+  // A read on a dead mount never returns, abort or not.
+  function stalled() {
+    let settle: (value: AgentContextUsageResult) => void = () => {};
+    const read = vi.fn(() => new Promise<AgentContextUsageResult>((resolve) => (settle = resolve)));
+    return { read, settle: (value: AgentContextUsageResult) => settle(value) };
+  }
+
+  it("answers at the deadline even when the read ignores its abort", async () => {
+    const { read, settle } = stalled();
+
+    const result = await readClaudePaneContextUsageWithin("t-1", {
+      ...deps(),
+      read,
+      deadlineMs: 20,
+    });
+
+    expect(result).toEqual({ status: "unavailable", reason: "store-unreadable" });
+    expect(read).toHaveBeenCalledTimes(1);
+    settle(OK);
+  });
+
+  it("holds one read per terminal while a stalled one is still running", async () => {
+    const { read, settle } = stalled();
+    const options = { ...deps(), read, deadlineMs: 20 };
+
+    await readClaudePaneContextUsageWithin("t-1", options);
+    await readClaudePaneContextUsageWithin("t-1", options);
+    expect(read).toHaveBeenCalledTimes(1);
+
+    // Once it settles, the next call reads afresh.
+    settle(OK);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const fresh: AgentContextUsageResult = { ...OK, contextTokens: 20 };
+    read.mockResolvedValueOnce(fresh);
+    expect(await readClaudePaneContextUsageWithin("t-1", options)).toEqual(fresh);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it("answers the read's own result when it comes in time", async () => {
+    expect(await readClaudePaneContextUsageWithin("t-1", deps())).toMatchObject({
+      status: "ok",
+      contextTokens: 126_717,
+    });
   });
 });

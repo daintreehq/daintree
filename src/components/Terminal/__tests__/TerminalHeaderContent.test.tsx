@@ -762,7 +762,7 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
   // The context reading is telemetry too: the controls ahead of it outlast it
   // in a narrow pane, and the resource readout clips first.
   it("places the context reading after the row's controls and before the resource readout", () => {
-    mockTerminal = { id: "t1" };
+    mockTerminal = { id: "t1", isInputLocked: true };
     mockSubagentChipVisible = true;
     mockContextChipVisible = true;
     mockResourceEnabled = true;
@@ -772,13 +772,19 @@ describe("TerminalHeaderContent — chip vocabulary and order (#9814)", () => {
     );
     const subagent = screen.getByTestId("subagent-chip");
     const context = screen.getByTestId("terminal-context-usage");
+    const lock = screen
+      .getAllByTestId("tooltip-content")
+      .find((el) => el.textContent?.includes("Input locked"))
+      ?.parentElement?.querySelector('[role="status"]');
     const resource = container.querySelector<HTMLElement>(
       '[data-testid="terminal-resource-badge"]'
     );
+    expect(lock).toBeTruthy();
     expect(resource).toBeTruthy();
     expect(
       subagent.compareDocumentPosition(context) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
+    expect(lock!.compareDocumentPosition(context) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(
       context.compareDocumentPosition(resource!) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();

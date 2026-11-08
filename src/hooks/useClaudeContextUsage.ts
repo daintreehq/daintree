@@ -20,10 +20,15 @@ export const CONTEXT_USAGE_MOUNT_FLOOR_MS = 5_000;
 /** Hard bound on the cache — a long session cycles through many terminals. */
 const MAX_CACHED_SESSIONS = 64;
 
-/** States where the agent has stopped producing output, so its turn's records are on disk. */
+/**
+ * States where the agent has stopped producing output, so its turn's records
+ * are on disk. `directing` is someone typing to a paused agent: still the same
+ * boundary, so starting a reply doesn't cancel the reads the turn scheduled.
+ */
 const SETTLED_STATES: ReadonlySet<AgentState> = new Set<AgentState>([
   "idle",
   "waiting",
+  "directing",
   "completed",
 ]);
 
@@ -44,8 +49,14 @@ interface CachedReading {
  * is kept as null: it replaces the reading rather than leaving an older one up.
  */
 const cache = new Map<string, CachedReading>();
-/** Requests in flight, shared so two instances for one session ask once. */
-const inFlight = new Map<string, Promise<ClaudeContextUsageReading | null>>();
+/**
+ * Requests in flight, shared so two instances for one session ask once. One per
+ * session at a time, so answers land in the order they were asked.
+ */
+const inFlight = new Map<
+  string,
+  { at: number; request: Promise<ClaudeContextUsageReading | null> }
+>();
 
 function remember(key: string, entry: CachedReading): void {
   cache.delete(key);
@@ -56,9 +67,22 @@ function remember(key: string, entry: CachedReading): void {
   }
 }
 
-function read(terminalId: string, key: string): Promise<ClaudeContextUsageReading | null> {
+/**
+ * A reading asked for no earlier than `due`. A request already in flight that
+ * started before then may have read the transcript before the turn's last
+ * records reached it, so it is waited out and a fresh one asked.
+ */
+function read(
+  terminalId: string,
+  key: string,
+  due: number
+): Promise<ClaudeContextUsageReading | null> {
   const pending = inFlight.get(key);
-  if (pending) return pending;
+  if (pending) {
+    return pending.at >= due
+      ? pending.request
+      : pending.request.then(() => read(terminalId, key, due));
+  }
   const at = Date.now();
   // Started inside the chain so a bridge that throws outright still settles.
   const request = Promise.resolve()
@@ -77,9 +101,9 @@ function read(terminalId: string, key: string): Promise<ClaudeContextUsageReadin
       return reading;
     })
     .finally(() => {
-      if (inFlight.get(key) === request) inFlight.delete(key);
+      if (inFlight.get(key)?.request === request) inFlight.delete(key);
     });
-  inFlight.set(key, request);
+  inFlight.set(key, { at, request });
   return request;
 }
 
@@ -89,8 +113,8 @@ function read(terminalId: string, key: string): Promise<ClaudeContextUsageReadin
  *
  * Reads follow turn boundaries, never output: two reads each time the pane
  * settles after working, and one when a pane mounts already settled. Changes
- * between settled states (waiting, then completed) are the same boundary, and
- * work resuming cancels the reads still pending. The reading stays on screen
+ * between settled states (waiting, typing a reply, completed) are the same
+ * boundary, and work resuming cancels the reads still pending. The reading stays on screen
  * through the next turn, since its time says how old it is.
  */
 export function useClaudeContextUsage(
@@ -131,13 +155,16 @@ export function useClaudeContextUsage(
     if (!afterTurn && cached && Date.now() - cached.at < CONTEXT_USAGE_MOUNT_FLOOR_MS) return;
 
     let live = true;
-    const fetchReading = () => {
-      void read(terminalId, key).then((reading) => {
-        if (live) setEntry({ key, reading });
-      });
+    const schedule = (delay: number) => {
+      const due = Date.now() + delay;
+      return setTimeout(() => {
+        void read(terminalId, key, due).then((reading) => {
+          if (live) setEntry({ key, reading });
+        });
+      }, delay);
     };
-    const timers = [setTimeout(fetchReading, CONTEXT_USAGE_FIRST_READ_MS)];
-    if (afterTurn) timers.push(setTimeout(fetchReading, CONTEXT_USAGE_FOLLOW_UP_READ_MS));
+    const timers = [schedule(CONTEXT_USAGE_FIRST_READ_MS)];
+    if (afterTurn) timers.push(schedule(CONTEXT_USAGE_FOLLOW_UP_READ_MS));
     return () => {
       live = false;
       for (const timer of timers) clearTimeout(timer);

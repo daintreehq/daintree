@@ -117,6 +117,18 @@ describe("ClaudeContextUsageChip", () => {
     expect(container.innerHTML).toBe("");
   });
 
+  it("takes the reading down as soon as the agent exits", async () => {
+    const { container, rerender } = render(<ClaudeContextUsageChip terminalId="t1" />);
+    await settle();
+    expect(screen.getByTestId("terminal-context-usage")).toBeTruthy();
+
+    // Detection still names Claude: the exit itself is what takes it down.
+    mockPanel = { ...mockPanel, agentState: "exited" };
+    rerender(<ClaudeContextUsageChip terminalId="t1" />);
+
+    expect(container.innerHTML).toBe("");
+  });
+
   it.each<[string, Record<string, unknown>]>([
     ["another agent", { detectedAgentId: "codex" }],
     ["a plain shell", { detectedAgentId: undefined }],

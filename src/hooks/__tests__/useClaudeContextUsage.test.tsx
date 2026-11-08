@@ -109,6 +109,52 @@ describe("useClaudeContextUsage", () => {
     expect(readContextUsage).toHaveBeenCalledTimes(2);
   });
 
+  // Starting to type a reply is not the agent working again: the turn's reads
+  // still happen.
+  it("keeps the turn's reads when someone starts typing a reply", async () => {
+    const { rerender } = mount({ agentState: "working" });
+    rerender({ enabled: true, agentState: "waiting", generation: "1:0" });
+    await advance(100);
+    rerender({ enabled: true, agentState: "directing", generation: "1:0" });
+    await advance(CONTEXT_USAGE_FOLLOW_UP_READ_MS);
+
+    expect(readContextUsage).toHaveBeenCalledTimes(2);
+  });
+
+  // The follow-up exists to catch records the first read was too early for; a
+  // first read still out when it fires may have been, so it is not reused.
+  it("asks again for the follow-up rather than reusing a first read still out", async () => {
+    const answers: ((value: AgentContextUsageResult) => void)[] = [];
+    readContextUsage.mockImplementation(
+      () => new Promise<AgentContextUsageResult>((resolve) => answers.push(resolve))
+    );
+    const { result, rerender } = mount({ agentState: "working" });
+    rerender({ enabled: true, agentState: "waiting", generation: "1:0" });
+    await advance(CONTEXT_USAGE_FOLLOW_UP_READ_MS);
+    expect(readContextUsage).toHaveBeenCalledTimes(1);
+
+    await act(async () => answers[0]!(ok(80_000)));
+    expect(readContextUsage).toHaveBeenCalledTimes(2);
+    await act(async () => answers[1]!(ok(81_000)));
+
+    expect(result.current?.contextTokens).toBe(81_000);
+  });
+
+  // A turn's reads are spent once its cycle runs: going quiet and coming back
+  // without working again is no new turn.
+  it("doesn't count one turn twice", async () => {
+    const { rerender } = mount({ agentState: "working" });
+    rerender({ enabled: true, agentState: "waiting", generation: "1:0" });
+    await advance(CONTEXT_USAGE_FOLLOW_UP_READ_MS);
+    expect(readContextUsage).toHaveBeenCalledTimes(2);
+
+    rerender({ enabled: false, agentState: "waiting", generation: "1:0" });
+    rerender({ enabled: true, agentState: "waiting", generation: "1:0" });
+    await advance(CONTEXT_USAGE_FOLLOW_UP_READ_MS);
+
+    expect(readContextUsage).toHaveBeenCalledTimes(2);
+  });
+
   it("cancels the reads still pending when work resumes", async () => {
     const { rerender } = mount({ agentState: "working" });
     rerender({ enabled: true, agentState: "waiting", generation: "1:0" });
@@ -140,9 +186,14 @@ describe("useClaudeContextUsage", () => {
     expect(result.current).toBeNull();
   });
 
-  it("shows nothing when the read itself fails", async () => {
+  it("drops the reading when the next read itself fails", async () => {
+    const { result, rerender } = mount();
+    await advance(CONTEXT_USAGE_FIRST_READ_MS);
+    expect(result.current).not.toBeNull();
+
     readContextUsage.mockRejectedValue(new Error("EACCES: /Users/x/.claude/projects/a.jsonl"));
-    const { result } = mount();
+    rerender({ enabled: true, agentState: "working", generation: "1:0" });
+    rerender({ enabled: true, agentState: "waiting", generation: "1:0" });
     await advance(CONTEXT_USAGE_FIRST_READ_MS);
 
     expect(result.current).toBeNull();
