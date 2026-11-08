@@ -1420,6 +1420,10 @@ export function HelpPanel({
               {showHybridInputBar && (
                 <Suspense fallback={null}>
                   <LazyHybridInputBar
+                    // Each session's own composer, so what's in flight at a
+                    // switch stays with the session it was typed or dictated
+                    // into, and a send waiting on it goes there or not at all.
+                    key={terminalId}
                     ref={inputBarRef}
                     terminalId={terminalId}
                     cwd={terminalPty?.cwd ?? ""}

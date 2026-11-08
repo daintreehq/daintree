@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useState } from "react";
 import { render, fireEvent, act, screen, cleanup } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -335,21 +336,24 @@ vi.mock("@/components/Terminal/XtermAdapter", () => ({
   XtermAdapter: () => <div data-testid="xterm-adapter" />,
 }));
 
-vi.mock("@/components/Terminal/HybridInputBar", () => ({
-  HybridInputBar: ({
-    terminalId,
-    onSend,
-    onSendKey,
-    disabled,
-  }: {
-    terminalId: string;
-    onSend?: (payload: { data: string; trackerData: string; text: string }) => void;
-    onSendKey?: (key: string) => void;
-    disabled?: boolean;
-  }) => (
+function ComposerStub({
+  terminalId,
+  onSend,
+  onSendKey,
+  disabled,
+}: {
+  terminalId: string;
+  onSend?: (payload: { data: string; trackerData: string; text: string }) => void;
+  onSendKey?: (key: string) => void;
+  disabled?: boolean;
+}) {
+  // The terminal this instance was mounted for, which a reused one outlives.
+  const [mountedFor] = useState(terminalId);
+  return (
     <div
       data-testid="hybrid-input-bar"
       data-terminal-id={terminalId}
+      data-mounted-for={mountedFor}
       data-disabled={disabled ? "true" : "false"}
     >
       <button
@@ -363,7 +367,11 @@ vi.mock("@/components/Terminal/HybridInputBar", () => ({
         key
       </button>
     </div>
-  ),
+  );
+}
+
+vi.mock("@/components/Terminal/HybridInputBar", () => ({
+  HybridInputBar: ComposerStub,
 }));
 
 vi.mock("@/clients", () => ({
@@ -1576,6 +1584,23 @@ describe("HelpPanel — closing one parallel lane (#12108)", () => {
     if (!button) throw new Error(`no close button for ${label}`);
     return button;
   }
+
+  it("gives each session its own composer across a switch and back (#16571)", async () => {
+    setupTwoLanes();
+    const { findByTestId } = renderPanel();
+    const composer = await findByTestId("hybrid-input-bar");
+    expect(composer.getAttribute("data-mounted-for")).toBe("term-1");
+
+    selectLane(1);
+    const switched = await findByTestId("hybrid-input-bar");
+    expect(switched.getAttribute("data-terminal-id")).toBe("term-2");
+    expect(switched.getAttribute("data-mounted-for")).toBe("term-2");
+
+    selectLane(0);
+    const returned = await findByTestId("hybrid-input-bar");
+    expect(returned.getAttribute("data-terminal-id")).toBe("term-1");
+    expect(returned.getAttribute("data-mounted-for")).toBe("term-1");
+  });
 
   it("labels lanes by durable slot and names the body after the selected lane", () => {
     // Sparse slots on purpose: lanes 0 and 2 with 1 closed. Position-based labels would
