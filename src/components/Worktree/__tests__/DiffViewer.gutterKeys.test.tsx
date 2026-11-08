@@ -266,6 +266,12 @@ describe("the line number tab stop", () => {
     expect(targets?.[0]?.getAttribute("data-note-side")).toBe("new");
   });
 
+  it("opts out of the frame high contrast modes put on every button", () => {
+    expect(readDiffViewerCss()).toMatch(
+      /\.diff-viewer \.diff-line-number\[data-note-line\]\s*\{[^}]*border:\s*none/
+    );
+  });
+
   it("names the line, and says when it was removed", () => {
     const { container } = renderUnified();
     expect(lineNumber(container, "new", 2).getAttribute("aria-label")).toBe("Add note on line 2");
@@ -789,18 +795,21 @@ describe("extending an open draft from the keyboard", () => {
   it.each([
     ["past hidden lines", "new", 3, "new", 40, "New note on line 40"],
     ["onto the other side", "new", 1, "old", 2, "New note on line 2 (removed lines)"],
-  ] as const)("moves the draft rather than extending %s", (_case, side, line, toSide, toLine, label) => {
-    const { container } = renderUnified();
-    lineNumber(container, side, line).focus();
-    press("Enter");
-    fireEvent.change(document.activeElement!, { target: { value: "Kept" } });
+  ] as const)(
+    "moves the draft rather than extending %s",
+    (_case, side, line, toSide, toLine, label) => {
+      const { container } = renderUnified();
+      lineNumber(container, side, line).focus();
+      press("Enter");
+      fireEvent.change(document.activeElement!, { target: { value: "Kept" } });
 
-    lineNumber(container, toSide, toLine).focus();
-    press("Enter", { shiftKey: true });
+      lineNumber(container, toSide, toLine).focus();
+      press("Enter", { shiftKey: true });
 
-    const moved = screen.getByLabelText(label);
-    expect(moved instanceof HTMLTextAreaElement && moved.value).toBe("Kept");
-  });
+      const moved = screen.getByLabelText(label);
+      expect(moved instanceof HTMLTextAreaElement && moved.value).toBe("Kept");
+    }
+  );
 
   it("starts fresh when there is no draft to extend", () => {
     const { container } = renderUnified();

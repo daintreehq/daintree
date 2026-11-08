@@ -143,11 +143,14 @@
 /* A line number that takes keyboard focus. Filling the line box keeps its ring
    inside the row: the next row's opaque sticky cell paints over anything that
    reaches past it. The padding is cancelled so numbers still line up with
-   untargeted ones, and the scroll margin clears the sticky file header. */
+   untargeted ones, and the scroll margin clears the sticky file header. No
+   border: both high contrast modes frame every [role="button"], which would turn
+   the gutter into a column of boxes wider than it was sized for. */
 .diff-viewer .diff-line-number[data-note-line] {
   display: inline-block;
   margin-inline: -3px;
   padding-inline: 3px;
+  border: none;
   border-radius: var(--radius-xs);
   scroll-margin-block: 56px;
 }
