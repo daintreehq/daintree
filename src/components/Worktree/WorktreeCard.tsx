@@ -17,7 +17,7 @@ import { GripVertical } from "lucide-react";
 import { CheckboxGlyph } from "@/components/ui/checkbox";
 import { useErrorStore, usePanelStore, type RetryAction } from "../../store";
 import { isDevPreviewPanel, type PtyPanelData } from "@shared/types/panel";
-import { useRecipeStore } from "../../store/recipeStore";
+import { useWorktreeRecipes } from "../../hooks/useWorktreeRecipes";
 import { useWorktreeSelectionStore } from "../../store/worktreeStore";
 import { suppressShiftClickTextSelection } from "@/utils/shiftClickSelection";
 import {
@@ -215,9 +215,8 @@ export function WorktreeCard({
   );
   const trackTerminalFocus = useWorktreeSelectionStore((state) => state.trackTerminalFocus);
 
-  const getRecipesForWorktree = useRecipeStore((state) => state.getRecipesForWorktree);
   const agentPins = useAgentToolbarPinsStore((state) => state.pins);
-  const recipes = getRecipesForWorktree(worktree.id);
+  const recipes = useWorktreeRecipes(worktree.id);
 
   const resourceEnvironments = useProjectSettingsStore(
     (state) => state.settings?.resourceEnvironments
