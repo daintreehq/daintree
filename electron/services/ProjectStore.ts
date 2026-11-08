@@ -491,8 +491,13 @@ export class ProjectStore {
     return this.recipeSynchronizer.writeInRepoRecipeChecked(projectPath, recipe, options);
   }
 
-  async writeInRepoRecipeMirror(projectId: string, recipe: TerminalRecipe): Promise<void> {
-    return this.recipeSynchronizer.writeInRepoRecipeMirror(projectId, recipe);
+  async saveInRepoRecipe(
+    projectPath: string,
+    projectId: string,
+    recipe: TerminalRecipe,
+    options: { force?: boolean; previousName?: string } = {}
+  ): Promise<void> {
+    return this.recipeSynchronizer.saveInRepoRecipe(projectPath, projectId, recipe, options);
   }
 
   async assertInRepoRecipesForwardCompatible(

@@ -105,17 +105,29 @@ export class ProjectRecipeSynchronizer {
   }
 
   /**
-   * Stores this machine's copy of a team recipe the renderer just wrote to
-   * `.daintree/recipes/`, env values included (#16446). The committed file
-   * blanks every value and reconciliation restores them only from this mirror,
-   * so without it a value set in the editor is gone on the next load.
+   * A renderer-driven save of a team recipe: the checked write to
+   * `.daintree/recipes/`, a rename's old-name delete, and this machine's copy
+   * of the recipe in the mirror, env values included (#16446). The committed
+   * file blanks every value and reconciliation restores them only from the
+   * mirror, so without the mirror write a value set in the editor is gone on
+   * the next load.
    *
-   * The entry takes the shape reconciliation would give it, so the next
-   * reconcile changes nothing but what the canonical file changed: the
-   * machine-local scope and usage fields stay those of the existing entry, and a
-   * new entry carries none, as a backfilled one doesn't.
+   * All three run in one turn of the project's recipe queue, as reconciliation
+   * does, so a second save of the same recipe or a reconcile can't land between
+   * the file and the mirror and leave one save's values under the other's file.
+   * A refused write throws out of the turn before the mirror is touched.
+   *
+   * The mirror entry takes the shape reconciliation would give it, so the next
+   * reconcile changes nothing but what the file changed: an existing entry keeps
+   * its machine-local scope and usage fields, and a new one carries none, as a
+   * backfilled one doesn't.
    */
-  async writeInRepoRecipeMirror(projectId: string, recipe: TerminalRecipe): Promise<void> {
+  async saveInRepoRecipe(
+    projectPath: string,
+    projectId: string,
+    recipe: TerminalRecipe,
+    options: { force?: boolean; previousName?: string } = {}
+  ): Promise<void> {
     const {
       projectId: _p,
       worktreeId: _w,
@@ -125,6 +137,16 @@ export class ProjectRecipeSynchronizer {
       ...shared
     } = recipe;
     await this.fileStore.enqueueRecipesUpdate(projectId, async (readFileStoreRecipes) => {
+      await this.writeInRepoRecipeChecked(projectPath, recipe, options);
+      if (
+        options.previousName &&
+        safeRecipeFilename(options.previousName) !== safeRecipeFilename(recipe.name)
+      ) {
+        // The checked write above compared the old-name file against its
+        // load-time hash before writing, so the rename is authorized. The
+        // cache entry for the old id self-heals on the next read.
+        await this.deleteInRepoRecipe(projectPath, options.previousName);
+      }
       const recipes = await readFileStoreRecipes();
       const index = recipes.findIndex((r) => r.id === recipe.id);
       if (index === -1) return [...recipes, shared];

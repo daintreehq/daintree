@@ -4,13 +4,14 @@ import { Button } from "@/components/ui/button";
 import { EnvVarRow, type EnvVarDraft } from "@/components/Settings/EnvVarRow";
 import { useRowFocus } from "@/components/Settings/useRowFocus";
 import { isSecretEnvEntry } from "@/utils/secretDetection";
+import type { RecipeEnvRowError } from "./recipeStepEnv";
 
 interface RecipeStepEnvironmentProps {
   /** 1-based, so each step's add action has its own name. */
   step: number;
   rows: readonly EnvVarDraft[];
   /** By row id, from `validateRecipeEnvRows`. */
-  errors: Record<string, string>;
+  errors: Record<string, RecipeEnvRowError>;
   /**
    * A team recipe's values live only on this machine, so an empty one is a
    * value not set here yet rather than one chosen to be empty.
@@ -77,7 +78,8 @@ export function RecipeStepEnvironment({
           key={row.id}
           row={row}
           position={index + 1}
-          error={errors[row.id]}
+          error={errors[row.id]?.message}
+          invalidField={errors[row.id]?.field}
           sensitive={isSecretEnvEntry(row.key, row.value)}
           revealed={revealed.has(row.id)}
           onToggleReveal={() => toggleReveal(row.id)}

@@ -32,7 +32,21 @@ describe("recipeStepEnv", () => {
       row("ok", "Y", "fine"),
     ]);
     expect(Object.keys(errors).sort()).toEqual(["bad", "dup", "first"]);
-    expect(errors.first).not.toBe(errors.dup);
+    expect([errors.bad?.field, errors.dup?.field, errors.first?.field]).toEqual([
+      "key",
+      "key",
+      "value",
+    ]);
+    expect(errors.first?.message).not.toBe(errors.dup?.message);
+  });
+
+  it("saves a name that is also an Object.prototype key as the variable it is", () => {
+    const env = draftsToEnv([row("p", "__proto__", "x"), row("c", "constructor", "y")]);
+    expect(Object.hasOwn(env, "__proto__")).toBe(true);
+    expect(Object.entries(env)).toEqual([
+      ["__proto__", "x"],
+      ["constructor", "y"],
+    ]);
   });
 
   it("compares rows by content, not order, counting invalid ones and ignoring blank ones", () => {

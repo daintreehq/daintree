@@ -56,6 +56,8 @@ interface EnvVarRowProps {
   /** 1-based, so two rows holding the same name still get distinct action names. */
   position: number;
   error?: string;
+  /** The field `error` is about, which is the one marked invalid. Defaults to the name. */
+  invalidField?: "key" | "value";
   /** Mask the value behind a reveal toggle. */
   sensitive: boolean;
   revealed: boolean;
@@ -80,6 +82,7 @@ export function EnvVarRow({
   row,
   position,
   error,
+  invalidField = "key",
   sensitive,
   revealed,
   onToggleReveal,
@@ -110,7 +113,7 @@ export function EnvVarRow({
             spellCheck={false}
             autoCapitalize="none"
             autoComplete="off"
-            invalid={!!error}
+            invalid={!!error && invalidField === "key"}
             aria-describedby={error ? errorId : undefined}
             className={cn("font-mono", storageBadge && "pr-8")}
             placeholder="VARIABLE_NAME"
@@ -132,6 +135,7 @@ export function EnvVarRow({
             spellCheck={false}
             autoCapitalize="none"
             autoComplete={sensitive ? "new-password" : "off"}
+            invalid={!!error && invalidField === "value"}
             className={cn("font-mono", sensitive && "pr-9")}
             placeholder={valuePlaceholder}
             aria-label={valueLabel}

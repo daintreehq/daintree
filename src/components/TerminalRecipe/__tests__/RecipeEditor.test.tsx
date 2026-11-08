@@ -541,6 +541,14 @@ describe("RecipeEditor", () => {
       expect(within(card(3)).queryByText(ENV_KEY_DUPLICATE_MESSAGE)).toBeTruthy();
       expect(within(card(1)).queryByText(ENV_KEY_DUPLICATE_MESSAGE)).toBeNull();
       expect(document.activeElement).toBe(nameField(3, 2));
+
+      fireEvent.change(nameField(3, 2), { target: { value: "TRACE" } });
+      await save();
+      expect(savedTerminals().map((t) => Object.keys(t.env ?? {}))).toEqual([
+        ["PORT", "NODE_ENV", "DEBUG"],
+        [],
+        ["DEBUG", "TRACE"],
+      ]);
     });
 
     it("refuses a value holding a control character, which would drop the step on load", async () => {
@@ -549,10 +557,15 @@ describe("RecipeEditor", () => {
       await save();
       expect(updateRecipe).not.toHaveBeenCalled();
       expect(within(card(3)).queryByText(ENV_VALUE_CONTROL_CHAR_MESSAGE)).toBeTruthy();
+      // The value is what's wrong, so it is the field marked and focused.
+      expect(document.activeElement).toBe(valueField(3, 1));
+      expect(valueField(3, 1).getAttribute("aria-invalid")).toBe("true");
+      expect(nameField(3, 1).getAttribute("aria-invalid")).toBeNull();
     });
 
     it("keeps a step's variables through a type switch and the removal of a step above it", async () => {
       renderEditor(ENV_RECIPE);
+      fireEvent.change(valueField(3, 1), { target: { value: "2" } });
       const trigger = document.getElementById("terminal-type-2")!;
       fireEvent.keyDown(trigger, { key: "ArrowDown" });
       const option = await screen.findByRole("option", { name: "Terminal" });
@@ -562,11 +575,11 @@ describe("RecipeEditor", () => {
       act(() => {
         screen.getByRole("button", { name: "Remove terminal 1" }).click();
       });
-      expect(variables(2)).toEqual([["DEBUG", "1"]]);
+      expect(variables(2)).toEqual([["DEBUG", "2"]]);
       await save();
       expect(savedTerminals().map((t) => [t.type, t.env])).toEqual([
         ["terminal", {}],
-        ["terminal", { DEBUG: "1" }],
+        ["terminal", { DEBUG: "2" }],
       ]);
     });
 

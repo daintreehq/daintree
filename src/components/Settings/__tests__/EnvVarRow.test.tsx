@@ -61,6 +61,18 @@ describe("EnvVarRow", () => {
     expect(described).toContain("Broken name");
   });
 
+  it("marks the value instead of the name when the error is about the value", () => {
+    renderRow({ error: "Bad value", invalidField: "value" });
+    const name = screen.getByLabelText(/^Name of variable \d+$/);
+    const value = screen.getByLabelText(/^Value of /);
+    expect(value.getAttribute("aria-invalid")).toBe("true");
+    expect(name.getAttribute("aria-invalid")).not.toBe("true");
+    const ids = (value.getAttribute("aria-describedby") ?? "").split(" ").filter(Boolean);
+    expect(ids.map((id) => document.getElementById(id)?.textContent).join(" ")).toContain(
+      "Bad value"
+    );
+  });
+
   it("describes nothing and claims nothing invalid when there is no error", () => {
     renderRow();
     const input = screen.getByLabelText(/^Name of variable \d+$/);

@@ -267,24 +267,12 @@ export function registerProjectRecipesHandlers(_deps: HandlerDependencies): () =
       throw new Error(`Project not found: ${projectId}`);
     }
     assertNoSecretEnvValues(recipe.terminals);
-    await projectStore.writeInRepoRecipeChecked(project.path, recipe, {
+    // The file keeps env names only; this machine's values go to the mirror in
+    // the same queued turn, which reconciliation reads them back from (#16446).
+    await projectStore.saveInRepoRecipe(project.path, projectId, recipe, {
       force: force === true,
       previousName: typeof previousName === "string" ? previousName : undefined,
     });
-    if (
-      previousName &&
-      typeof previousName === "string" &&
-      safeRecipeFilename(previousName) !== safeRecipeFilename(recipe.name)
-    ) {
-      // Delete the old-name file. The staleness of the old file is checked
-      // inside writeInRepoRecipeChecked before the new write runs, so by the
-      // time we reach here the rename has been authorized. The cache entry
-      // for the old recipe id self-heals on the next loadRecipes.
-      await projectStore.deleteInRepoRecipe(project.path, previousName);
-    }
-    // The file just written keeps env names only; this machine's values live
-    // in the mirror, which reconciliation reads them back from (#16446).
-    await projectStore.writeInRepoRecipeMirror(projectId, recipe);
   };
   handlers.push(
     typedHandle(CHANNELS.PROJECT_UPDATE_INREPO_RECIPE, handleProjectUpdateInRepoRecipe)

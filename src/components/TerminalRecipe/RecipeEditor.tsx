@@ -437,7 +437,11 @@ export function RecipeEditor({
     const removedKey = cardKeys[index];
     if (removedKey !== undefined) {
       typeStashRef.current.delete(removedKey);
-      setEnvDrafts(({ [removedKey]: _removed, ...rest }) => rest);
+      setEnvDrafts((prev) => {
+        const next = { ...prev };
+        delete next[removedKey];
+        return next;
+      });
     }
     setCardKeys(cardKeys.filter((_, i) => i !== index));
     // The card that slid into this slot, or the new last one.
@@ -514,16 +518,23 @@ export function RecipeEditor({
       return;
     }
 
-    const firstInvalidEnvRow = envRows
+    const firstEnvError = envRows
       .flatMap((rows) => {
         const errors = validateRecipeEnvRows(rows);
-        return rows.filter((row) => errors[row.id]);
+        return rows.flatMap((row) => {
+          const error = errors[row.id];
+          return error ? [{ rowId: row.id, field: error.field }] : [];
+        });
       })
       .at(0);
-    if (firstInvalidEnvRow) {
+    if (firstEnvError) {
       useAnnouncerStore.getState().announce("Fix the variables to save the recipe", "assertive");
       setEnvAttempted(true);
-      document.getElementById(firstInvalidEnvRow.id)?.querySelector("input")?.focus();
+      // The row's inputs are the name, then the value.
+      document
+        .getElementById(firstEnvError.rowId)
+        ?.querySelectorAll("input")
+        [firstEnvError.field === "value" ? 1 : 0]?.focus();
       return;
     }
     const savedTerminals = terminals.map((terminal, i) => ({
