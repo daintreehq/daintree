@@ -1,4 +1,4 @@
-import { EditorView, Decoration, WidgetType } from "@codemirror/view";
+import { EditorView, Decoration, WidgetType, closeHoverTooltips } from "@codemirror/view";
 import { StateEffect, StateField, type EditorState } from "@codemirror/state";
 import { pluralize } from "@/lib/pluralize";
 import { createTrustedHTML, setTrustedInnerHTML } from "@/lib/trustedTypesPolicy";
@@ -25,7 +25,8 @@ const appliedSources = new WeakMap<EditorView, PendingDiffNotes | null>();
 
 export function applyDiffNotesChipSource(view: EditorView, source: PendingDiffNotes | null): void {
   appliedSources.set(view, source);
-  view.dispatch({ effects: setDiffNotesChipSource.of(source) });
+  // An open card would go on promising what the notes were when it opened.
+  view.dispatch({ effects: [setDiffNotesChipSource.of(source), closeHoverTooltips] });
 }
 
 /**
@@ -64,7 +65,7 @@ function describeToken(
   const names = (note: DiffNote) => token.filePath === null || note.filePath === token.filePath;
   const editing = source.editing.filter(names).length;
   const editingStays = `${pluralize(editing, "note being edited stays", "notes being edited stay")} pending`;
-  const fileName = token.filePath?.split("/").pop();
+  const fileName = token.filePath?.split(/[\\/]/).pop();
 
   let status: string;
   let description: string;

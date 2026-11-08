@@ -6,6 +6,7 @@ import { hasPendingDiffNotes, type PendingDiffNotes } from "@/components/Worktre
 import type { AutocompleteItem } from "../AutocompleteMenu";
 import { filterForgeReferences, type ForgeReference } from "../forgeReferences";
 import {
+  canSpellAtNotesPath,
   getDaintreeAtClaim,
   formatAtFileToken,
   formatAtNotesToken,
@@ -41,6 +42,7 @@ const NO_CONTEXT_ITEMS: ContextProviderItem[] = [];
 const NO_FORGE_REFERENCES: ForgeReference[] = [];
 const NO_TEMPLATE_ITEMS: AutocompleteItem[] = [];
 const FORGE_REFERENCE_LIMIT = 50;
+const NOTE_FILE_ROW_LIMIT = 50;
 
 /** What a `#` row says about its item: whether it's an issue or a PR, and its state. */
 export function forgeReferenceBadge(ref: Pick<ForgeReference, "kind" | "isDraft">): string {
@@ -134,9 +136,12 @@ function diffNoteItems(pending: PendingDiffNotes | null, query: string): Autocom
           insert: NOTES_RESOLVER,
         },
       ];
-  for (const filePath of [...sendableByFile.keys()].sort()) {
-    if (!filePath.toLowerCase().includes(needle)) continue;
-    const sep = filePath.lastIndexOf("/");
+  const filePaths = [...sendableByFile.keys()]
+    .filter((filePath) => canSpellAtNotesPath(filePath))
+    .filter((filePath) => filePath.toLowerCase().includes(needle))
+    .sort();
+  for (const filePath of filePaths.slice(0, NOTE_FILE_ROW_LIMIT)) {
+    const sep = Math.max(filePath.lastIndexOf("/"), filePath.lastIndexOf("\\"));
     items.push({
       key: `notes:${filePath}`,
       label: `@notes:${filePath.slice(sep + 1)}`,

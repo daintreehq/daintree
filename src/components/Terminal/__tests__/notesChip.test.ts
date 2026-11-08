@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { describe, expect, it, onTestFinished } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { EditorState } from "@codemirror/state";
-import { EditorView } from "@codemirror/view";
+import { EditorView, closeHoverTooltips } from "@codemirror/view";
 import type { DiffNote, PendingDiffNotes } from "@/components/Worktree/diffNotes";
 import {
   applyDiffNotesChipSource,
@@ -81,6 +81,15 @@ describe("notesChipField", () => {
 
     applyDiffNotesChipSource(view, source([]));
     expect(chips(view)[0]!.label).toBe("No notes");
+  });
+
+  it("closes an open card when the notes change, so it can't promise a stale count", () => {
+    const view = mount("Fix @notes now");
+    const dispatch = vi.spyOn(view, "dispatch");
+    applyDiffNotesChipSource(view, source([note("a", "a.ts")]));
+    expect(dispatch.mock.calls[0]![0]).toMatchObject({
+      effects: expect.arrayContaining([closeHoverTooltips]),
+    });
   });
 
   it("leaves out notes in an open editor, and says they stay pending", () => {

@@ -199,11 +199,40 @@ describe("useTokenResolution with @notes", () => {
     const { sendText } = setup({ takesDiffNotes: false });
 
     await act(async () => {
-      await sendText("@notes", { submit });
+      await sendText("Fix @notes", { submit });
     });
 
-    expect(submit).toHaveBeenCalledWith("[Diff notes aren't available here]");
+    expect(submit).toHaveBeenCalledWith("Fix [Diff notes aren't available here]");
     expect(clearDiffNotesOnceWritten).not.toHaveBeenCalled();
+  });
+
+  it("won't send a draft that is only @notes with nothing behind it, and keeps the draft", async () => {
+    useDiffNotesStore.setState({ notes: {} });
+    const submit = vi.fn(async () => true);
+    const { sendText, addToHistory } = setup();
+
+    let sent!: boolean;
+    await act(async () => {
+      sent = await sendText("@notes", { submit });
+    });
+
+    expect(sent).toBe(false);
+    expect(submit).not.toHaveBeenCalled();
+    expect(addToHistory).not.toHaveBeenCalled();
+  });
+
+  it("still sends @notes with nothing behind it once there's something else to say", async () => {
+    useDiffNotesStore.setState({ notes: {} });
+    const submit = vi.fn(async () => true);
+    const { sendText } = setup();
+
+    await act(async () => {
+      await sendText("@notes", { submit, compose: (draft) => `${draft}\n\nINSTRUCTION` });
+      await sendText("Fix @notes", { submit });
+    });
+
+    expect(submit).toHaveBeenCalledWith("[No pending diff notes]\n\nINSTRUCTION");
+    expect(submit).toHaveBeenCalledWith("Fix [No pending diff notes]");
   });
 
   it("sends the token as typed from a composer on another host", async () => {

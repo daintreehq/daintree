@@ -10,6 +10,8 @@ import {
   getDaintreeAtClaim,
   getAllAtNotesTokens,
   formatAtNotesToken,
+  canSpellAtNotesPath,
+  draftIsOnlyNotesTokens,
   matchesNotesPrefix,
   matchesDiffPrefix,
   matchesTerminalPrefix,
@@ -293,6 +295,39 @@ describe("@notes", () => {
     expect(formatAtNotesToken(null)).toBe("@notes");
     expect(formatAtNotesToken("src/a.ts")).toBe("@notes:src/a.ts");
     expect(formatAtNotesToken("a b.ts")).toBe('@notes:"a b.ts"');
+  });
+
+  it("won't offer a per-file token for a path it can't read back", () => {
+    for (const filePath of ["line\nbreak.ts", "my dir/ends-with\\"]) {
+      expect(canSpellAtNotesPath(filePath), filePath).toBe(false);
+    }
+    for (const filePath of ["src/a.ts", "my dir/a b.ts", "ends-with\\", 'quo"te.ts']) {
+      expect(canSpellAtNotesPath(filePath), filePath).toBe(true);
+    }
+  });
+
+  it("replaces a whole quoted path when completing inside it, however many spaces it has", () => {
+    const triggers = new Set<ComposerTrigger>(["@"]);
+    const text = '@notes:"my dir/a b.ts" then more';
+    expect(getActiveCompletionContext(text, 10, triggers)).toEqual({
+      triggerChar: "@",
+      start: 0,
+      tokenEnd: 22,
+      query: 'notes:"my',
+    });
+    // An unclosed quote, or the caret still before the path, runs to whitespace as ever.
+    expect(getActiveCompletionContext('@notes:"my dir', 10, triggers)?.tokenEnd).toBe(10);
+    expect(getActiveCompletionContext(text, 3, triggers)?.tokenEnd).toBe(10);
+    // Typed against a word, the token still ends there.
+    expect(getActiveCompletionContext(text, 10, triggers, 10)?.tokenEnd).toBe(10);
+  });
+
+  it("tells a draft of only @notes from one with something to say", () => {
+    expect(draftIsOnlyNotesTokens("@notes")).toBe(true);
+    expect(draftIsOnlyNotesTokens('  @notes @notes:a.ts\n@notes:"b c.ts" ')).toBe(true);
+    expect(draftIsOnlyNotesTokens("Fix @notes")).toBe(false);
+    expect(draftIsOnlyNotesTokens("")).toBe(false);
+    expect(draftIsOnlyNotesTokens("Just a prompt")).toBe(false);
   });
 
   it("keeps a real file named notes a path, and out of a chip's way", () => {

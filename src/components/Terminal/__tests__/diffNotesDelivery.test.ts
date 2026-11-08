@@ -48,10 +48,13 @@ describe("clearDiffNotesOnceWritten", () => {
     expect(stillPending(note)).toBe(true);
 
     await vi.advanceTimersByTimeAsync(250);
+    expect(getSubmissions).toHaveBeenCalledTimes(1);
     expect(stillPending(note)).toBe(true);
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(getSubmissions).toHaveBeenCalledTimes(2);
     expect(stillPending(note)).toBe(true);
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(getSubmissions).toHaveBeenCalledTimes(3);
     expect(stillPending(note)).toBe(false);
     expect(getSubmissions).toHaveBeenCalledWith(["t1"], "tok");
   });
@@ -90,7 +93,7 @@ describe("clearDiffNotesOnceWritten", () => {
       .mockResolvedValueOnce({ t1: { status: "absent" } })
       .mockResolvedValue(found("pty_written"));
     clearDiffNotesOnceWritten("t1", "tok", [arrives]);
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(750);
     expect(stillPending(arrives)).toBe(false);
 
     getSubmissions.mockReset();
@@ -102,14 +105,40 @@ describe("clearDiffNotesOnceWritten", () => {
     expect(getSubmissions).toHaveBeenCalledTimes(5);
   });
 
+  it("keeps watching a submission the lane is still holding, however long", async () => {
+    const note = pendingNote();
+    getSubmissions.mockResolvedValue(found("queued"));
+
+    clearDiffNotesOnceWritten("t1", "tok", [note]);
+    await vi.advanceTimersByTimeAsync(20 * 60_000);
+    const reads = getSubmissions.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(getSubmissions.mock.calls.length).toBeGreaterThan(reads);
+    expect(stillPending(note)).toBe(true);
+
+    getSubmissions.mockResolvedValue(found("pty_written"));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(stillPending(note)).toBe(false);
+  });
+
+  it("eases off while it waits, rather than polling a stuck lane at full rate", async () => {
+    getSubmissions.mockResolvedValue(found("queued"));
+
+    clearDiffNotesOnceWritten("t1", "tok", [pendingNote()]);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    // Every 250ms would be 240 reads.
+    expect(getSubmissions.mock.calls.length).toBeLessThan(40);
+  });
+
   it("gives up on a submission that never settles, leaving its notes pending", async () => {
     const note = pendingNote();
     getSubmissions.mockResolvedValue(found("queued"));
 
     clearDiffNotesOnceWritten("t1", "tok", [note]);
-    await vi.advanceTimersByTimeAsync(2 * 60_000 + 1_000);
+    await vi.advanceTimersByTimeAsync(31 * 60_000);
     const reads = getSubmissions.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(60_000);
 
     expect(stillPending(note)).toBe(true);
     expect(getSubmissions).toHaveBeenCalledTimes(reads);

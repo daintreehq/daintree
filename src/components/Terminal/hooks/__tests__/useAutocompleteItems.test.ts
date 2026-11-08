@@ -107,8 +107,9 @@ describe("useAutocompleteItems", () => {
   });
 
   describe("@notes rows", () => {
+    let noteId = 0;
     const note = (filePath: string): DiffNote => ({
-      id: filePath,
+      id: `note-${++noteId}`,
       worktreePath: "/repo",
       filePath,
       anchor: { kind: "file" },
@@ -187,6 +188,26 @@ describe("useAutocompleteItems", () => {
     it("still offers a note in an open editor, saying it won't go yet", () => {
       const rows = items("notes", { sendable: [], editing: [note("src/a.ts")] });
       expect(rows.map((i) => i.badge)).toEqual(["Being edited", "Being edited"]);
+    });
+
+    it("caps the file rows, leaving the rest a narrower query away", () => {
+      const many: PendingDiffNotes = {
+        sendable: Array.from({ length: 60 }, (_, i) => note(`f${String(i).padStart(2, "0")}.ts`)),
+        editing: [],
+      };
+      const rows = items("notes", many);
+      expect(rows).toHaveLength(51);
+      expect(rows[0]!.badge).toBe("60 notes");
+      expect(items("notes:f59", many).map((i) => i.key)).toEqual(["notes:f59.ts"]);
+    });
+
+    it("leaves out a file a token can't name, which @notes still takes", () => {
+      const rows = items("notes", {
+        sendable: [note("line\nbreak.ts"), note("src/a.ts")],
+        editing: [],
+      });
+      expect(rows.map((i) => i.key)).toEqual(["notes", "notes:src/a.ts"]);
+      expect(rows[0]!.badge).toBe("2 notes");
     });
 
     it("leaves a file search alone once the letters stop spelling the word", () => {

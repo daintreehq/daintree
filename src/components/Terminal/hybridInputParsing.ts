@@ -187,6 +187,13 @@ export function getActiveCompletionContext(
 
   let tokenEnd = caret;
   while (tokenEnd < text.length && !/\s/.test(text[tokenEnd]!)) tokenEnd++;
+  // A quoted `@notes:` path runs past its spaces: completing it replaces all of
+  // it, or the words after the first space are left behind the new token.
+  const quotedPathStart = start + 2 + NOTES_FILE_PREFIX.length;
+  if (caret >= quotedPathStart && text.startsWith(`@${NOTES_FILE_PREFIX}"`, start)) {
+    const close = closingNotesQuote(text, quotedPathStart);
+    if (close >= caret) tokenEnd = close + 1;
+  }
   if (typedAgainst !== undefined && typedAgainst >= caret && typedAgainst < tokenEnd) {
     tokenEnd = typedAgainst;
   }
@@ -418,6 +425,24 @@ export function formatAtNotesToken(filePath: string | null): string {
 }
 
 /**
+ * Whether a per-file token can name a file at all. A line break ends a quoted
+ * path, and a final backslash escapes its closing quote; `@notes` still takes
+ * such a file's notes.
+ */
+export function canSpellAtNotesPath(filePath: string): boolean {
+  return getAllAtNotesTokens(formatAtNotesToken(filePath))[0]?.filePath === filePath;
+}
+
+/** Where a quoted `@notes:` path closes, or -1 if it doesn't on its line. */
+function closingNotesQuote(text: string, pathStart: number): number {
+  let close = pathStart;
+  while (close < text.length && text[close] !== '"' && !/[\n\r]/.test(text[close]!)) {
+    close += text[close] === "\\" && text[close + 1] === '"' ? 2 : 1;
+  }
+  return text[close] === '"' ? close : -1;
+}
+
+/**
  * `@notes`, and `@notes:src/a.ts` or `@notes:"src/my file.ts"` for one file's.
  * The quoted form is what the whitespace-delimited readers above can't take: a
  * path in a worktree can hold a space.
@@ -442,11 +467,8 @@ export function getAllAtNotesTokens(text: string): AtNotesToken[] {
 
     if (text.startsWith(`${NOTES_FILE_PREFIX}"`, i)) {
       const pathStart = i + NOTES_FILE_PREFIX.length + 1;
-      let close = pathStart;
-      while (close < text.length && text[close] !== '"' && !/[\n\r]/.test(text[close]!)) {
-        close += text[close] === "\\" && text[close + 1] === '"' ? 2 : 1;
-      }
-      if (text[close] === '"') {
+      const close = closingNotesQuote(text, pathStart);
+      if (close >= 0) {
         const filePath = text.slice(pathStart, close).replace(/\\"/g, '"');
         if (filePath.length > 0) tokens.push({ start: atStart, end: close + 1, filePath });
         i = close + 1;
@@ -477,6 +499,22 @@ export function getAllAtNotesTokens(text: string): AtNotesToken[] {
   }
 
   return outsideHandoffBlocks(text, tokens);
+}
+
+/**
+ * Whether a draft says nothing but `@notes`. With no notes behind it there is
+ * no prompt there, only a placeholder an agent would spend a turn on.
+ */
+export function draftIsOnlyNotesTokens(text: string): boolean {
+  const tokens = getAllAtNotesTokens(text);
+  if (tokens.length === 0) return false;
+  let rest = "";
+  let cursor = 0;
+  for (const { start, end } of tokens) {
+    rest += text.slice(cursor, start);
+    cursor = end;
+  }
+  return (rest + text.slice(cursor)).trim().length === 0;
 }
 
 // --- @file token ---

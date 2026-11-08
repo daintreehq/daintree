@@ -9,7 +9,11 @@ import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useDictionaryLearnPromptStore } from "@/store/dictionaryLearnPromptStore";
 import { mapSpanKeepingEdits, minimalDocChange } from "@/lib/textRangeMapping";
 import type { DiffNote } from "@/components/Worktree/diffNotes";
-import { resolveTokenExpansions, type ActiveCompletionContext } from "../hybridInputParsing";
+import {
+  draftIsOnlyNotesTokens,
+  resolveTokenExpansions,
+  type ActiveCompletionContext,
+} from "../hybridInputParsing";
 import { expandDraftContext } from "../draftContextExpansion";
 import { isDiffNotesTarget } from "../diffNotesReference";
 import { clearDiffNotesOnceWritten } from "../diffNotesDelivery";
@@ -189,8 +193,9 @@ export interface SendTextOptions {
    *
    * `submissionToken` is given for a send carrying `@notes`, whose notes clear
    * only once the terminal reports that token written. An adapter that holds
-   * text back for later submits it under the token when it delivers it, so a
-   * hold that is withdrawn or dropped leaves the notes pending.
+   * text back for later submits it under the token when it delivers it, and
+   * resolves only then, so a hold that is withdrawn or dropped leaves the notes
+   * pending.
    */
   submit?: (text: string, submissionToken?: string) => Promise<ComposerSubmitOutcome>;
   /**
@@ -348,6 +353,14 @@ export function useTokenResolution({
         // Checked on the composed result rather than the raw draft: an empty
         // draft is a perfectly good send once an instruction has been appended.
         if (outgoing.trim().length === 0) return false;
+        if (
+          expandContext &&
+          !options?.compose &&
+          diffNotes.length === 0 &&
+          draftIsOnlyNotesTokens(text)
+        ) {
+          return false;
+        }
         // The expansion's awaits can outlast the agent: a shell is behind the
         // pane now, and each line of a note would run as a command.
         if (diffNotes.length > 0 && !isDiffNotesTarget(terminalId)) return false;

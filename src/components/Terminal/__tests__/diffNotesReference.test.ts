@@ -107,6 +107,14 @@ describe("@notes expansion", () => {
     expect(plain.out).toContain('"Plain"\n, then stop');
   });
 
+  it("stays out of a code fence the draft left open, and reopens it after", async () => {
+    addNote("/repo/a", "src/a.ts", "Body with ``` ticks\nand a second line");
+    const { out } = await expand("```\ncode\n@notes\nmore\n```");
+    expect(out).toBe(
+      '```\ncode\n```\nFile: src/a.ts\nLine(s): whole file\n"Body with ``` ticks\\nand a second line"\n```\nmore\n```'
+    );
+  });
+
   it("resolves paths absolute for an agent outside the worktree's root", async () => {
     seedPanels(agent("a", { cwd: "/repo/a/packages/ui" }));
     addNote("/repo/a", "src/a.ts", "Absolute");

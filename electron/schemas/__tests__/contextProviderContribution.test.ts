@@ -26,7 +26,7 @@ describe("contributes.contextProviders schema (#13795)", () => {
   });
 
   it("refuses the composer's own words and anything but a short lowercase word", () => {
-    for (const prefix of ["diff", "terminal", "selection"]) {
+    for (const prefix of ["diff", "terminal", "selection", "notes"]) {
       expect(issues(parse([{ id: "x", prefix, label: "X" }])).join()).toContain("reserves");
     }
     for (const prefix of ["Rec", "rec1", "re-c", "", "a".repeat(17)]) {

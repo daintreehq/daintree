@@ -162,11 +162,29 @@ describe("executeFleetBroadcast with @notes", () => {
       agent("shell", "wt-1", { detectedAgentId: undefined, launchAgentId: undefined }),
     ]);
 
-    await executeFleetBroadcast("@notes", ["agent", "shell"]);
+    await executeFleetBroadcast("Fix @notes", ["agent", "shell"]);
 
-    expect(sentTo("shell")).toEqual(["shell", "[Diff notes aren't available here]"]);
+    expect(sentTo("shell")).toEqual(["shell", "Fix [Diff notes aren't available here]"]);
     expect(clearDiffNotesOnceWritten).toHaveBeenCalledTimes(1);
     expect(clearDiffNotesOnceWritten).toHaveBeenCalledWith("agent", sentTo("agent")![2], [note]);
+  });
+
+  it("skips a target with no notes when @notes is all the text says", async () => {
+    const note = addNote("wt-1", "For one");
+    seedFleet([
+      agent("a", "wt-1"),
+      agent("b", "wt-2"),
+      agent("shell", "wt-1", { detectedAgentId: undefined, launchAgentId: undefined }),
+    ]);
+
+    const result = await executeFleetBroadcast("@notes", ["a", "b", "shell"]);
+
+    expect(sentTo("a")![1]).toContain('"For one"');
+    expect(sentTo("b")).toBeUndefined();
+    expect(sentTo("shell")).toBeUndefined();
+    expect(result.skippedCount).toBe(2);
+    expect(result.successCount).toBe(1);
+    expect(clearDiffNotesOnceWritten).toHaveBeenCalledWith("a", sentTo("a")![2], [note]);
   });
 
   it("clears nothing for a send cancelled before it went out", async () => {

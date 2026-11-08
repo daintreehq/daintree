@@ -31,6 +31,7 @@ import {
   listDraftContextTokens,
   shareContextReferenceResolutions,
 } from "@/components/Terminal/draftContextExpansion";
+import { draftIsOnlyNotesTokens } from "@/components/Terminal/hybridInputParsing";
 import { isDiffNotesTarget } from "@/components/Terminal/diffNotesReference";
 import { clearDiffNotesOnceWritten } from "@/components/Terminal/diffNotesDelivery";
 import type { DiffNote } from "@/components/Worktree/diffNotes";
@@ -235,6 +236,8 @@ interface ResolvedSubmission {
   imagePaths: readonly string[];
   /** The pending notes its `@notes` took, and the token that says when they went. */
   sentNotes?: { notes: readonly DiffNote[]; token: string };
+  /** Its text is only `@notes` and none are pending for it: no prompt to take a turn on. */
+  nothingToSend?: boolean;
 }
 
 function resolveSubmissions(
@@ -300,8 +303,11 @@ async function expandSubmissionContext(
         resolveReferences,
         onDiffNotesTaken: (taken) => notes.push(...taken),
       });
-      return notes.length > 0
-        ? { ...submission, payload, sentNotes: { notes, token: crypto.randomUUID() } }
+      if (notes.length > 0) {
+        return { ...submission, payload, sentNotes: { notes, token: crypto.randomUUID() } };
+      }
+      return draftIsOnlyNotesTokens(submission.payload)
+        ? { ...submission, payload, nothingToSend: true }
         : { ...submission, payload };
     })
   );
@@ -407,7 +413,9 @@ export async function executeFleetBroadcast(
   // A pane whose agent quit while its context was read has a shell behind it,
   // and a fleet keeps sending to shells: notes must not follow.
   const canDispatch = (r: ResolvedSubmission) =>
-    isStillRecipient(r.terminalId) && (!r.sentNotes || isDiffNotesTarget(r.terminalId));
+    !r.nothingToSend &&
+    isStillRecipient(r.terminalId) &&
+    (!r.sentNotes || isDiffNotesTarget(r.terminalId));
   const results: PromiseSettledResult<void>[] = [];
   // Parallel to `results`: what was actually sent, since a target that stops
   // being a recipient mid-broadcast drops out of its batch.
