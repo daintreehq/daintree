@@ -34,6 +34,22 @@ function hasBeenFed(managed: ManagedTerminal): boolean {
 export type MissingOutputRecoveryOutcome =
   "recovered" | "no-host-output" | "live-output" | "stale" | "failed";
 
+export interface FetchAndRestoreOptions {
+  /**
+   * Hold the reset until every write xterm already accepted has parsed. A
+   * pane resynced while live output is backed up has chunks in xterm's write
+   * buffer that `reset()` does not discard, so they would land on the cleared
+   * grid ahead of the snapshot. The restore window stops new writes reaching
+   * xterm, so one barrier write settles the backlog. If it doesn't parse in
+   * time the restore is abandoned rather than painted over stale output.
+   */
+  settlePendingWrites?: boolean;
+}
+
+// Bounds the barrier `settlePendingWrites` waits on. A parser that can't get
+// through the backlog in this long won't paint a snapshot either.
+const PENDING_WRITES_SETTLE_TIMEOUT_MS = 5000;
+
 export interface RestoreControllerDeps {
   getInstance: (id: string) => ManagedTerminal | undefined;
   // chunkCount travels with each replayed deferred batch: the batch's pending
@@ -560,7 +576,24 @@ export class TerminalRestoreController {
     return Promise.resolve(this.restoreFromSerialized(id, "\x1bc", captureGeometry, continuation));
   }
 
-  async fetchAndRestore(id: string): Promise<boolean> {
+  private settlePendingWrites(managed: ManagedTerminal): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), PENDING_WRITES_SETTLE_TIMEOUT_MS);
+      try {
+        // An empty write parses to nothing but queues behind everything already
+        // in the buffer, so its callback means the backlog has parsed.
+        managed.terminal.write("", () => {
+          clearTimeout(timer);
+          resolve(true);
+        });
+      } catch {
+        clearTimeout(timer);
+        resolve(false);
+      }
+    });
+  }
+
+  async fetchAndRestore(id: string, options: FetchAndRestoreOptions = {}): Promise<boolean> {
     const managed = this.deps.getInstance(id);
     if (!managed) {
       logWarn(`Cannot fetch-and-restore: terminal ${id} not found`);
@@ -586,12 +619,26 @@ export class TerminalRestoreController {
     };
 
     try {
-      const snapshot = await terminalClient.getSerializedState(id);
+      // Opened after the window, so nothing new can queue behind the barrier.
+      const writesSettled = options.settlePendingWrites
+        ? this.settlePendingWrites(managed)
+        : Promise.resolve(true);
+      const [snapshot, settled] = await Promise.all([
+        terminalClient.getSerializedState(id),
+        writesSettled,
+      ]);
 
       // Check staleness after IPC round-trip
       const current = this.deps.getInstance(id);
       if (current !== managed || managed.restoreGeneration !== restoreGeneration) {
         releaseIfStillOwned();
+        return false;
+      }
+
+      if (!settled) {
+        logWarn(`Abandoned fetch-and-restore for ${id}: accepted writes did not parse in time`);
+        releaseIfStillOwned();
+        this.replayDeferred(id, managed);
         return false;
       }
 

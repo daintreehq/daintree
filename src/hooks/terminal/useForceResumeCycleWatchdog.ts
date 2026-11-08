@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useEffectEvent } from "react";
 import type { TerminalReliabilityMetricPayload } from "@shared/types/pty-host";
-import { terminalClient } from "@/clients";
-import { notify } from "@/lib/notify";
-import { panelNotificationAddress } from "@/lib/notificationAddress";
+import { peek as peekTerminalService } from "@/services/terminal/terminalInstanceServiceAccessor";
+import { isProjectViewObservable, subscribeProjectViewObservability } from "@/lib/viewCacheState";
 import { logWarn } from "@/utils/logger";
+import { clearTerminalStallEscalation, reportTerminalStallEscalated } from "./terminalStallNotice";
 
 /**
  * A `pause-end` reliability metric whose `durationMs` reaches this threshold was
@@ -22,86 +21,240 @@ import { logWarn } from "@/utils/logger";
 const FORCE_RESUME_THRESHOLD_MS = 9900;
 
 /**
- * Consecutive force-resume cycles that promote the terminal from the ambient
- * Tier-1 flow-status pill to a Tier-3 recovery banner. Three in a row means the
- * renderer is genuinely stuck (JS deadlock, GC thrash) rather than briefly
- * backpressured — the bounded-pause safety has fired repeatedly with no natural
- * recovery in between.
+ * Consecutive force-resumes that count as a stall rather than a burst of
+ * backpressure. The first streak triggers an automatic resync; a second one
+ * after that resync escalates to the pane's error banner.
  */
-const FORCE_RESUME_TIER_3_COUNT = 3;
+const FORCE_RESUME_STREAK = 3;
+
+/** Bounds one resync so a host that never answers can't hold a pane in recovery. */
+const RECOVERY_TIMEOUT_MS = 15_000;
 
 export interface ForceResumeCycleWatchdog {
-  /** True once the terminal has been force-resumed `FORCE_RESUME_TIER_3_COUNT` times in a row. */
+  /** True once automatic recovery has been tried and output still stalls. */
   showBanner: boolean;
-  /** Clears the watchdog state and force-resumes the terminal's paused queue. */
-  resetQueue: () => void;
+  /** True while a Retry from the banner is running. */
+  isRetrying: boolean;
+  /** Forced redraw plus a resync from the host's copy of the terminal. */
+  retry: () => void;
 }
 
 /**
- * Watches the `terminal:reliability-metric` event bus for a terminal that is
- * being force-resumed in a tight loop — the renderer never drains the IPC queue
- * before the pty-host's bounded-pause safety timer fires, so output keeps
- * stalling. After three consecutive force-resumes it surfaces a Tier-3 recovery
- * banner (see CLAUDE.md "Runtime Signals") and emits a one-shot low-priority
- * grid-bar warning. A single confirmed natural drain re-arms the watchdog.
+ * - `watching` — counting force-resumes; automatic recovery is still unspent.
+ * - `recovering` — an automatic resync is queued or running.
+ * - `recovered` — a resync ran; the next streak escalates instead of retrying it.
+ * - `escalated` — the banner is up and the terminal counts toward the grid-bar notice.
  */
-export function useForceResumeCycleWatchdog(id: string): ForceResumeCycleWatchdog {
-  // Counter is hook-instance-local by design: if the pane unmounts/remounts for
-  // the same id (LRU eviction → re-activation) the streak restarts from zero.
-  // That's the intended trade-off — a stall that survives a remount re-proves
-  // itself over three fresh cycles rather than persisting state in a store.
-  const consecutiveRef = useRef(0);
-  const notifyFiredRef = useRef(false);
-  const [showBanner, setShowBanner] = useState(false);
+type StallStage = "watching" | "recovering" | "recovered" | "escalated";
 
-  const onMetric = useEffectEvent((payload: TerminalReliabilityMetricPayload) => {
-    if (payload.terminalId !== id || payload.metricType !== "pause-end") return;
+function withTimeout(work: Promise<boolean>, ms: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), ms);
+    work.then(
+      (result) => {
+        clearTimeout(timer);
+        resolve(result);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(false);
+      }
+    );
+  });
+}
+
+/**
+ * Redraws the pane from the host's headless copy. The restore's stream fence
+ * then skips the queued output the snapshot already covers, which is what lets
+ * a backed-up pane catch up. A manual retry also forces the renderer repair
+ * the automatic path leaves to its shared budget.
+ */
+async function resyncFromHost(id: string, manual: boolean): Promise<boolean> {
+  const service = peekTerminalService();
+  if (!service) return false;
+  try {
+    if (manual) service.resetRenderer(id, { force: true });
+    return await withTimeout(
+      service.fetchAndRestore(id, { settlePendingWrites: true }),
+      RECOVERY_TIMEOUT_MS
+    );
+  } catch (error) {
+    logWarn("Terminal stall resync failed", { terminalId: id, error: String(error) });
+    return false;
+  }
+}
+
+// Automatic resyncs run one at a time: several panes stalling together is the
+// common case, and replaying every snapshot at once would add to whatever load
+// stalled them. Each job is bounded by RECOVERY_TIMEOUT_MS, so the chain moves.
+let automaticResyncChain: Promise<unknown> = Promise.resolve();
+
+function queueAutomaticResync(id: string, isCurrent: () => boolean): Promise<boolean> {
+  const job = () => (isCurrent() ? resyncFromHost(id, false) : Promise.resolve(false));
+  const run = automaticResyncChain.then(job, job);
+  automaticResyncChain = run.catch(() => undefined);
+  return run;
+}
+
+export function __resetAutomaticResyncQueueForTests(): void {
+  automaticResyncChain = Promise.resolve();
+}
+
+interface StallUi {
+  setShowBanner: (show: boolean) => void;
+  setIsRetrying: (retrying: boolean) => void;
+}
+
+class ForceResumeStallWatch {
+  private streak = 0;
+  private stage: StallStage = "watching";
+  // Only pauses that begin after this count. Moved on mount, on every
+  // visibility change and after each resync, so a pause that spans time the
+  // pane was hidden or being resynced never adds to a streak.
+  private epochStart = Date.now();
+  // Bumped whenever the episode resets, so a resync that settles afterwards
+  // can't act on state it no longer owns.
+  private attempt = 0;
+  private retrying = false;
+  private disposed = false;
+
+  constructor(
+    private readonly id: string,
+    private readonly ui: StallUi
+  ) {}
+
+  readonly handleMetric = (payload: TerminalReliabilityMetricPayload): void => {
+    if (this.disposed || payload.terminalId !== this.id || payload.metricType !== "pause-end") {
+      return;
+    }
     const { durationMs } = payload;
     // Ambiguous metric (pause-start time was lost upstream, or a non-finite
     // delta): don't count it as a force-resume, but don't reset either —
     // resetting on an unknown outcome would mask a genuine stall loop (lesson #8558).
     if (durationMs === undefined || !Number.isFinite(durationMs)) return;
+    // Nobody can see this view, and the visibility edge already cleared the
+    // episode. Stalls are judged only on what happens while it's on screen.
+    if (!isProjectViewObservable()) return;
 
-    if (durationMs >= FORCE_RESUME_THRESHOLD_MS) {
-      consecutiveRef.current += 1;
-      if (consecutiveRef.current < FORCE_RESUME_TIER_3_COUNT) return;
-      setShowBanner(true);
-      if (notifyFiredRef.current) return;
-      notifyFiredRef.current = true;
-      notify({
-        type: "warning",
-        priority: "low",
-        placement: "grid-bar",
-        title: "Terminal output stalled",
-        message: "Reset the queue from the terminal banner to recover.",
-        supersedeKey: `terminal-force-resume-stalled:${id}`,
-        context: { eventKind: "recovery", ...panelNotificationAddress(id) },
-      });
-    } else {
-      // Confirmed natural drain — the renderer caught up on its own. Re-arm.
-      consecutiveRef.current = 0;
-      notifyFiredRef.current = false;
-      setShowBanner(false);
+    if (durationMs < FORCE_RESUME_THRESHOLD_MS) {
+      // Confirmed natural drain — the renderer caught up on its own.
+      this.resetEpisode(false);
+      return;
     }
-  });
+    // Measured against this renderer's clock with the duration alone, so a
+    // remote host's clock skew can't move it.
+    if (Date.now() - durationMs < this.epochStart) return;
+    if (this.stage === "recovering" || this.stage === "escalated") return;
+
+    this.streak += 1;
+    if (this.streak < FORCE_RESUME_STREAK) return;
+    this.streak = 0;
+    if (this.stage === "watching") {
+      this.recoverAutomatically();
+    } else {
+      this.escalate();
+    }
+  };
+
+  readonly handleObservabilityChange = (): void => {
+    if (this.disposed) return;
+    // Either edge starts over: a hidden view's stall is no longer shown, and a
+    // view coming back is judged only on what happens from now on.
+    this.resetEpisode(true);
+  };
+
+  retry(): void {
+    if (this.disposed || this.retrying) return;
+    this.retrying = true;
+    this.ui.setIsRetrying(true);
+    const attempt = this.attempt;
+    void resyncFromHost(this.id, true).then((recovered) => {
+      if (this.disposed) return;
+      this.retrying = false;
+      this.ui.setIsRetrying(false);
+      // A drain or visibility change already cleared the episode meanwhile.
+      if (attempt !== this.attempt || !recovered) return;
+      this.markRecovered();
+      this.ui.setShowBanner(false);
+      clearTerminalStallEscalation(this.id);
+    });
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.attempt += 1;
+    this.ui.setShowBanner(false);
+    this.ui.setIsRetrying(false);
+    clearTerminalStallEscalation(this.id);
+  }
+
+  private resetEpisode(newEpoch: boolean): void {
+    this.attempt += 1;
+    this.streak = 0;
+    this.stage = "watching";
+    if (newEpoch) this.epochStart = Date.now();
+    this.ui.setShowBanner(false);
+    clearTerminalStallEscalation(this.id);
+  }
+
+  private markRecovered(): void {
+    this.stage = "recovered";
+    this.streak = 0;
+    this.epochStart = Date.now();
+  }
+
+  private recoverAutomatically(): void {
+    this.stage = "recovering";
+    const attempt = ++this.attempt;
+    const isCurrent = () => !this.disposed && attempt === this.attempt;
+    void queueAutomaticResync(this.id, isCurrent).then((recovered) => {
+      if (!isCurrent()) return;
+      if (recovered) {
+        this.markRecovered();
+      } else {
+        this.escalate();
+      }
+    });
+  }
+
+  private escalate(): void {
+    this.stage = "escalated";
+    this.ui.setShowBanner(true);
+    reportTerminalStallEscalated(this.id);
+  }
+}
+
+/**
+ * Watches the `terminal:reliability-metric` event bus for a terminal the
+ * pty-host keeps force-resuming because the renderer never drained its output
+ * in time. Recovery is automatic first: three consecutive force-resumes while
+ * the project view is on screen resync the pane from the host's headless copy.
+ * Only if that resync fails, or three more force-resumes follow it, does the
+ * pane show its error banner and join the shared grid-bar notice
+ * (`terminalStallNotice`). A natural drain, or the view being hidden or shown,
+ * clears everything.
+ */
+export function useForceResumeCycleWatchdog(id: string): ForceResumeCycleWatchdog {
+  const [showBanner, setShowBanner] = useState(false);
+  const [isRetrying, setIsRetrying] = useState(false);
+  const watchRef = useRef<ForceResumeStallWatch | null>(null);
 
   useEffect(() => {
-    consecutiveRef.current = 0;
-    notifyFiredRef.current = false;
-    setShowBanner(false);
-    return window.electron.events.on("terminal:reliability-metric", onMetric);
-    // `onMetric` is a stable `useEffectEvent` ref — intentionally excluded from
-    // deps so a new `id` tears down the old subscription and resets the counter.
+    const watch = new ForceResumeStallWatch(id, { setShowBanner, setIsRetrying });
+    watchRef.current = watch;
+    const offMetric = window.electron.events.on("terminal:reliability-metric", watch.handleMetric);
+    const offObservability = subscribeProjectViewObservability(watch.handleObservabilityChange);
+    return () => {
+      offMetric();
+      offObservability();
+      watch.dispose();
+      if (watchRef.current === watch) watchRef.current = null;
+    };
   }, [id]);
 
-  const resetQueue = useCallback(() => {
-    consecutiveRef.current = 0;
-    notifyFiredRef.current = false;
-    setShowBanner(false);
-    void terminalClient.forceResume(id).catch((err: unknown) => {
-      logWarn("Force-resume from stall banner failed", { terminalId: id, error: String(err) });
-    });
-  }, [id]);
+  const retry = useCallback(() => {
+    watchRef.current?.retry();
+  }, []);
 
-  return { showBanner, resetQueue };
+  return { showBanner, isRetrying, retry };
 }

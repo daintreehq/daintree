@@ -67,6 +67,23 @@ describe("PaintFabricCompositor", () => {
     }
   );
 
+  it.each([true, false])(
+    "carries host-resync options to the owning plane and returns its verdict (%s)",
+    async (verdict) => {
+      const { compositor, a, b } = makeCompositor();
+      await compositor.getOrCreate("t1-b", undefined, {});
+      b.fetchAndRestore.mockResolvedValue(verdict);
+
+      // A stall resync that lost `settlePendingWrites` here would reset the
+      // pane under writes xterm hasn't parsed yet, with nothing failing.
+      await expect(compositor.fetchAndRestore("t1-b", { settlePendingWrites: true })).resolves.toBe(
+        verdict
+      );
+      expect(b.fetchAndRestore).toHaveBeenCalledWith("t1-b", { settlePendingWrites: true });
+      expect(a.fetchAndRestore).not.toHaveBeenCalled();
+    }
+  );
+
   it("routes unplaced terminals to the default surface", () => {
     const { compositor, a, b } = makeCompositor();
     compositor.focus("never-created");
