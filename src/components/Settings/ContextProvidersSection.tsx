@@ -33,7 +33,8 @@ function groupContextProviders(entries: readonly ContextProviderEntry[]): Contex
 
 /**
  * The plugins offering `@` context in this project's agent composer (#13795),
- * one switch each for all of a plugin's providers. An installed plugin's
+ * with Daintree's own `@issue:` (#16382) listed as one of them, one switch
+ * each for all of a plugin's providers. An installed plugin's
  * switch is the same in every project; a project plugin's is this project's.
  * A prefix another plugin already holds is named here, since this is where
  * turning that plugin off hands it over.
@@ -56,7 +57,7 @@ export function ContextProvidersSection() {
     <div data-testid="project-plugins-context-providers">
       <SettingsSection
         title="Context providers"
-        description="What plugins offer in the agent input bar's @ menu, attached when you send"
+        description="What the agent input bar's @ menu offers, attached when you send"
       >
         <SettingsGroup>
           {plugins.map(({ pluginId, pluginName, scope, providers }) => {

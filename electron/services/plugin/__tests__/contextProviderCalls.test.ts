@@ -1,4 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const issueProvider = vi.hoisted(() => ({
+  create: vi.fn(),
+}));
+
+vi.mock("../../issueContextProvider.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../issueContextProvider.js")>();
+  return { ...actual, createIssueContextProvider: issueProvider.create };
+});
 import {
   CONTEXT_RESOLVE_TIMEOUT_MS,
   resolveContextReferences,
@@ -13,6 +22,10 @@ import type {
   ContextProviderEntry,
   ContextProviderImpl,
 } from "../../../../shared/types/pluginContextProvider.js";
+import {
+  ISSUE_CONTEXT_PLUGIN_ID,
+  ISSUE_CONTEXT_PROVIDER_ID,
+} from "../../issueContextProvider.js";
 
 function entry(overrides: Partial<ContextProviderEntry> = {}): ContextProviderEntry {
   return {
@@ -54,6 +67,7 @@ beforeEach(() => {
 
 afterEach(() => {
   clearContextProviderImplRegistry();
+  issueProvider.create.mockReset();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -192,5 +206,48 @@ describe("resolveContextReferences (#13795)", () => {
     const results = await resolveContextReferences(h, "p1", references);
     expect(impl.resolve).toHaveBeenCalledTimes(20);
     expect(results.slice(20).every((r) => r.status === "failed")).toBe(true);
+  });
+});
+
+describe("the host's @issue: provider (#16382)", () => {
+  const issueEntry = entry({
+    pluginId: ISSUE_CONTEXT_PLUGIN_ID,
+    pluginName: "Daintree",
+    providerId: ISSUE_CONTEXT_PROVIDER_ID,
+    prefix: "issue",
+    label: "Issues",
+  });
+
+  it("answers for the asking project without starting any plugin", async () => {
+    const impl: ContextProviderImpl = {
+      search: vi.fn(async () => [{ id: "12", label: "#12 Fix login" }]),
+      resolve: vi.fn(async () => ({ text: "issue text", title: "#12 Fix login" })),
+    };
+    issueProvider.create.mockReturnValue(impl);
+    const h = host([issueEntry]);
+
+    expect(await searchContextProvider(h, "p1", "issue", "fix")).toEqual([
+      { id: "12", label: "#12 Fix login" },
+    ]);
+    const [result] = await resolveContextReferences(h, "p1", [{ prefix: "issue", id: "12" }]);
+
+    expect(result).toEqual({
+      status: "resolved",
+      pluginId: ISSUE_CONTEXT_PLUGIN_ID,
+      pluginName: "Daintree",
+      text: "issue text",
+      title: "#12 Fix login",
+    });
+    expect(issueProvider.create).toHaveBeenCalledWith("p1", { deadlineAt: expect.any(Number) });
+    expect(h.activatePlugin).not.toHaveBeenCalled();
+  });
+
+  it("hands the provider the resolve deadline so its reads can stop in time", async () => {
+    vi.useFakeTimers();
+    issueProvider.create.mockReturnValue({ search: vi.fn(), resolve: vi.fn(async () => null) });
+    const start = Date.now();
+    await resolveContextReferences(host([issueEntry]), "p1", [{ prefix: "issue", id: "1" }]);
+    const [, { deadlineAt }] = issueProvider.create.mock.calls[0]!;
+    expect(deadlineAt).toBe(start + CONTEXT_RESOLVE_TIMEOUT_MS);
   });
 });
