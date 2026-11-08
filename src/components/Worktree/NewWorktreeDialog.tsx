@@ -68,6 +68,8 @@ import {
   type FirstAgentLaunch,
 } from "./worktreeAgentLaunch";
 import { useFirstAgentOptions } from "./hooks/useFirstAgentOptions";
+import { useIssuePromptContext } from "./hooks/useIssuePromptContext";
+import { composeIssueFirstPrompt, issuePromptRef } from "./issuePromptContext";
 import { Textarea } from "@/components/ui/textarea";
 import { LazyWorktreePlacementRow } from "@/components/Hosts/Overview/LazyHostOverviewParts";
 import type {
@@ -91,6 +93,7 @@ import {
   EnvironmentHint,
   RecipePickerPopover,
   AgentPickerPopover,
+  IssuePromptToggle,
   type RecipeOption,
   FormGrid,
   FormSection,
@@ -176,6 +179,8 @@ export function NewWorktreeDialog({
 
   const assignWorktreeToSelf = usePreferencesStore((s) => s.assignWorktreeToSelf);
   const setAssignWorktreeToSelf = usePreferencesStore((s) => s.setAssignWorktreeToSelf);
+  const includeIssueInFirstPrompt = usePreferencesStore((s) => s.includeIssueInFirstPrompt);
+  const setIncludeIssueInFirstPrompt = usePreferencesStore((s) => s.setIncludeIssueInFirstPrompt);
   // Issue and bare creates each remember their own setup. The mode is how the
   // dialog was opened, not whether an issue gets linked inside it — for a
   // Retry, how the failed request's dialog was opened.
@@ -232,6 +237,8 @@ export function NewWorktreeDialog({
   const agentOptions = useFirstAgentOptions();
   const [firstAgentId, setFirstAgentId] = useState<string | null>(null);
   const [firstPrompt, setFirstPrompt] = useState("");
+  // This dialog's choice, seeded once per open; Create makes it the remembered one.
+  const [includeIssue, setIncludeIssue] = useState(false);
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
   // A recipe picked while another host is chosen is that host's, so this
   // window's own choice (and the one it remembers) comes back untouched when
@@ -335,14 +342,24 @@ export function NewWorktreeDialog({
       restoreDraft ? (restoreDraft.agentId ?? null) : (lastSelectedWorktreeAgentId ?? null)
     );
     setFirstPrompt(restoreDraft?.prompt ?? "");
+    setIncludeIssue(restoreDraft ? restoreDraft.includeIssue === true : includeIssueInFirstPrompt);
     setAgentPickerOpen(false);
-  }, [isOpen, projectId, restoreDraft, lastSelectedWorktreeAgentId]);
+  }, [isOpen, projectId, restoreDraft, lastSelectedWorktreeAgentId, includeIssueInFirstPrompt]);
 
   const isExistingMode = branchMode === "existing" && !initialPR;
 
   // Create only assigns when it makes the branch, so the toggle is offered only
   // then — a checked "Assign to me" that silently did nothing was the alternative.
   const canAssignIssue = Boolean(currentUser && selectedIssue) && !isExistingMode;
+
+  // Read only once the user has asked for it and there's an agent to hand it to.
+  const issuePrompt = useIssuePromptContext({
+    enabled: isOpen && includeIssue && selectedIssue !== null && firstAgent !== undefined,
+    cwd: rootPath,
+    issue: selectedIssue,
+    providerId: issueForge.providerId,
+    providerName: forgeName,
+  });
 
   const {
     isCheckingBranch,
@@ -825,6 +842,13 @@ export function NewWorktreeDialog({
       }
     }
     const snapFirstPrompt = snapFirstAgent ? firstPrompt : "";
+    const snapIncludeIssue = includeIssue;
+    // Only what the dialog showed as going ahead of the prompt: an issue still
+    // loading, or one that failed, is not sent behind the user's back later.
+    const snapIssuePromptText =
+      snapFirstAgent && snapIssue && includeIssue && issuePrompt.state.status === "ready"
+        ? issuePrompt.state.context.text
+        : null;
     // Anchor the sidebar placeholder by the path the host will normalize to as
     // the worktree id. Relative paths can't anchor a placeholder because the
     // host resolves them server-side, so the renderer-keyed Map entry would
@@ -844,6 +868,11 @@ export function NewWorktreeDialog({
         setLastSelectedWorktreeAgentIdByProject(projectId, firstAgentId);
       }
     }
+    // Only a choice the user could see and make: the option shows with an
+    // issue and an agent.
+    if (snapFirstAgent && snapIssue && snapIncludeIssue !== includeIssueInFirstPrompt) {
+      setIncludeIssueInFirstPrompt(snapIncludeIssue);
+    }
 
     if (placeholderPath) {
       selectionStore.addPendingCreation(placeholderPath, {
@@ -857,7 +886,9 @@ export function NewWorktreeDialog({
         worktreeMode: snapWorktreeMode,
         recipeId: snapRecipeId,
         agentId: snapFirstAgent?.id ?? null,
+        // The user's own words; a Retry reads the issue afresh.
         prompt: snapFirstPrompt,
+        includeIssue: snapIncludeIssue,
       });
     }
 
@@ -1126,7 +1157,11 @@ export function NewWorktreeDialog({
           const launch: FirstAgentLaunch = {
             agentId: snapFirstAgent.id,
             agentName: snapFirstAgent.name,
-            prompt: snapFirstPrompt,
+            // A layout with its own agent hands this launch back for the user
+            // to start, and the dialog showed the issue as not going then.
+            prompt: layoutAgentConflict
+              ? snapFirstPrompt
+              : composeIssueFirstPrompt(snapIssuePromptText, snapFirstPrompt),
             worktreeId,
             cwd: placeholderPath ?? undefined,
           };
@@ -1916,6 +1951,18 @@ export function NewWorktreeDialog({
                       htmlFor="first-agent-prompt"
                       // On the first line of text, not the middle of three.
                       labelClassName="self-start mt-2.5"
+                      hint={
+                        selectedIssue && (
+                          <IssuePromptToggle
+                            issueRef={issuePromptRef(selectedIssue)}
+                            checked={includeIssue}
+                            onCheckedChange={setIncludeIssue}
+                            disabled={promptBlocked || placementElsewhere}
+                            state={issuePrompt.state}
+                            onRetry={issuePrompt.retry}
+                          />
+                        )
+                      }
                     >
                       <Textarea
                         id="first-agent-prompt"

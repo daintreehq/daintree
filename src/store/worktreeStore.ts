@@ -70,7 +70,10 @@ export interface PendingCreationDraft {
   worktreeMode?: string;
   recipeId?: string | null;
   agentId?: string | null;
+  /** What the user typed, without the issue quote it may have gone with. */
   prompt?: string;
+  /** Whether the issue was to be quoted ahead of `prompt`. */
+  includeIssue?: boolean;
 }
 
 export interface PendingCreation extends PendingCreationDraft {
