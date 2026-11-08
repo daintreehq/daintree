@@ -174,7 +174,7 @@ import {
   installHostControlLinkClient,
   installRetiredSendsNotice,
 } from "../install.js";
-import type { ThrowawayCallAnswer } from "../linkMethods.js";
+import type { McpCallAnswer, ThrowawayCallAnswer } from "../linkMethods.js";
 import type { HostDescriptor } from "../../../../shared/types/remoteHosts.js";
 import { TEST_HANDSHAKE } from "../../link/__tests__/linkTestUtils.js";
 import { HostRegistry } from "../../client/HostRegistry.js";
@@ -519,7 +519,7 @@ describe("assistantsUseHost (#15878)", () => {
   });
 
   /** A Shell whose only link to a host no window shows is its assistant's, with idle release as shipped. */
-  function windowlessHost() {
+  function windowlessLink(): string {
     let saved: { hosts: HostDescriptor[] } | undefined;
     const registry = new HostRegistry({
       get: () => saved,
@@ -538,6 +538,11 @@ describe("assistantsUseHost (#15878)", () => {
       views: { send: () => true, watch: () => () => {}, resync: () => {} },
       backoff: { initialMs: 60_000, maxMs: 60_000, jitter: 0 },
     });
+    return studio.id;
+  }
+
+  function windowlessHost() {
+    const hostId = windowlessLink();
     const launched: ThrowawayCallAnswer = {
       status: "done",
       result: {
@@ -564,25 +569,69 @@ describe("assistantsUseHost (#15878)", () => {
     teardown.push(
       registerRemoteService("hostControlLinkClient", client as unknown as HostControlLinkClient),
       installHostControl({
-        observeHosts: () => [host(studio.id, "connected")],
+        observeHosts: () => [host(hostId, "connected")],
         isHostControlEnabled: () => true,
       }),
-      manager.addUseCheck(assistantsUseHost)
+      manager!.addUseCheck(assistantsUseHost)
     );
     runLocally("proj-1", 0, "a");
-    manager.connect(studio.id);
+    manager!.connect(hostId);
     const launch = () =>
       (hostControl.runtime as HostCallRuntime).call(
         "a",
         {
-          hostId: studio.id,
+          hostId,
           throwaway: true,
           tool: "throwaway.launch",
           args: { agentId: "claude", timeLimitMs: TEN_MINUTES },
         },
         { tier: "core" }
       );
-    return { hostId: studio.id, launch, throwawayRelease };
+    return { hostId, launch, throwawayRelease };
+  }
+
+  /** The same Shell, its assistant having launched an agent in the host's copy of a project (#16492). */
+  function agentLaunchedOnHost(tool = "agent.launch") {
+    const hostId = windowlessLink();
+    let listed = ["t-1"];
+    const listAgentTargets = vi.fn(async () => ({
+      targets: listed.map((terminalId) => ({
+        hostId,
+        terminalId,
+        title: "Claude",
+        projectId: "proj-2",
+        projectName: "helios",
+        agentId: "claude",
+        agentState: "idle" as const,
+      })),
+      complete: true,
+    }));
+    const answer: McpCallAnswer = {
+      status: "done",
+      result: { isError: false, structured: { launched: true, terminalId: "t-1" }, text: null },
+    };
+    const client = { relayCall: vi.fn(async () => answer), throwawayCall: vi.fn() };
+    teardown.push(
+      registerRemoteService("hostControlLinkClient", client as unknown as HostControlLinkClient),
+      installHostControl({
+        observeHosts: () => [host(hostId, "connected")],
+        isHostControlEnabled: () => true,
+        listAgentTargets,
+      }),
+      manager!.addUseCheck(assistantsUseHost)
+    );
+    runLocally("proj-1", 0, "a");
+    manager!.connect(hostId);
+    const launch = () =>
+      (hostControl.runtime as HostCallRuntime).call(
+        "a",
+        { hostId, projectId: "proj-2", tool, args: { agentId: "claude", prompt: "Fix it" } },
+        { tier: "core" }
+      );
+    const agentEnds = () => {
+      listed = [];
+    };
+    return { hostId, launch, agentEnds, listAgentTargets };
   }
 
   it("is the link client's use check, until it is uninstalled", () => {
@@ -637,6 +686,30 @@ describe("assistantsUseHost (#15878)", () => {
     expect(manager!.get(h.hostId)).toBeDefined();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(manager!.get(h.hostId)).toBeUndefined();
+  });
+
+  it("keeps the link to a windowless host while an agent its assistant launched there is listed (#16492)", async () => {
+    const h = agentLaunchedOnHost();
+    await expect(h.launch()).resolves.toMatchObject({ ok: true, value: { outcome: "ok" } });
+    // No notice was asked for and nothing calls the host again: only the agent uses it.
+    await vi.advanceTimersByTimeAsync(3 * IDLE_RELEASE_MS);
+    expect(manager!.get(h.hostId)).toBeDefined();
+    expect(h.listAgentTargets).toHaveBeenCalledWith(h.hostId);
+    // Once the host stops listing it, the link goes after the usual window
+    // unused, counted from the last sweep that found it held.
+    h.agentEnds();
+    await vi.advanceTimersByTimeAsync(IDLE_RELEASE_MS);
+    expect(manager!.get(h.hostId)).toBeDefined();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(manager!.get(h.hostId)).toBeUndefined();
+  });
+
+  it("releases a link the assistant only read through as usual, with no agents launched there", async () => {
+    const h = agentLaunchedOnHost("terminal.list");
+    await h.launch();
+    await vi.advanceTimersByTimeAsync(IDLE_RELEASE_MS + 30_000);
+    expect(manager!.get(h.hostId)).toBeUndefined();
+    expect(h.listAgentTargets).not.toHaveBeenCalled();
   });
 
   it("releases the link as usual once the session that launched the run ends", async () => {
