@@ -1,15 +1,15 @@
 import { homedir } from "node:os";
 import { detectCloudSyncService } from "../../../shared/utils/cloudSyncDetection.js";
 import type { ProjectOnlineOnlyFiles } from "../../../shared/types/onlineOnlyFiles.js";
-import type { ProjectOnlineOnlyService } from "../../services/ProjectOnlineOnlyService.js";
+import { ProjectOnlineOnlyService } from "../../services/ProjectOnlineOnlyService.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { resolveScopedProjectForIpcContext } from "../projectContext.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import { ONLINE_ONLY_FILES_METHOD_CHANNELS } from "./onlineOnlyFiles.preload.js";
 
 export function createOnlineOnlyFilesNamespace(deps: HandlerDependencies) {
-  // Loaded by the first project that can use it. Everything else answers before this.
-  let service: ProjectOnlineOnlyService | null = null;
+  // Holds nothing and starts nothing until a project in a cloud folder is watched.
+  const service = new ProjectOnlineOnlyService();
 
   const namespace = defineIpcNamespace({
     name: "onlineOnlyFiles",
@@ -24,17 +24,13 @@ export function createOnlineOnlyFilesNamespace(deps: HandlerDependencies) {
           const location = project ? detectCloudSyncService(project.path, homedir(), "mac") : null;
           if (!project || !location) {
             // A view rebound away from a cloud project stops holding it.
-            service?.release(ctx.endpoint);
+            service.release(ctx.endpoint);
             return null;
           }
 
-          if (!service) {
-            const { ProjectOnlineOnlyService } =
-              await import("../../services/ProjectOnlineOnlyService.js");
-            service ??= new ProjectOnlineOnlyService();
-          }
           return service.watch(
-            { id: project.id, path: project.path, service: location },
+            // find prints a root without its trailing slash, and the probe compares against that.
+            { id: project.id, path: project.path.replace(/\/+$/, ""), service: location },
             ctx.endpoint
           );
         },
@@ -43,14 +39,14 @@ export function createOnlineOnlyFilesNamespace(deps: HandlerDependencies) {
       unwatch: op(
         ONLINE_ONLY_FILES_METHOD_CHANNELS.unwatch,
         async (ctx: IpcContext): Promise<void> => {
-          service?.release(ctx.endpoint);
+          service.release(ctx.endpoint);
         },
         { withContext: true }
       ),
     },
   });
 
-  return { namespace, dispose: () => service?.dispose() };
+  return { namespace, dispose: () => service.dispose() };
 }
 
 export function registerOnlineOnlyFilesHandlers(deps: HandlerDependencies): () => void {

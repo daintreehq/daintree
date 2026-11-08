@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { detectCloudSyncService } from "../cloudSyncDetection";
+import { detectCloudSyncService } from "../cloudSyncDetection.js";
 
 describe("detectCloudSyncService", () => {
   describe("macOS", () => {

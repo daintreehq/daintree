@@ -16,8 +16,6 @@ const budgetMs = 10_000;
 
 const flag = (...paths: string[]) => execFileSync("/usr/bin/chflags", [FLAG, ...paths]);
 const unflag = (...paths: string[]) => execFileSync("/usr/bin/chflags", ["dump", ...paths]);
-const flagsOf = (path: string) =>
-  execFileSync("/usr/bin/stat", ["-f", "%Xf", path], { encoding: "utf8" }).trim();
 
 describe.runIf(process.platform === "darwin")("online-only scan with the real find", () => {
   let base: string;
@@ -104,16 +102,15 @@ describe.runIf(process.platform === "darwin")("online-only scan with the real fi
 
   it("never opens a flagged file", async () => {
     // A FIFO blocks whoever opens it with no writer, as a placeholder blocks a
-    // read, and a mode-000 file fails. Finishing clean means neither was opened.
+    // read, so opening this would run the walk out of budget and fail the assert.
     const fifo = join(root, "pipe");
     execFileSync("/usr/bin/mkfifo", [fifo]);
-    const locked = await file("locked.bin");
-    await chmod(locked, 0o000);
-    flag(fifo, locked);
-    const before = [flagsOf(fifo), flagsOf(locked)];
+    flag(fifo);
 
-    expect(await scan("workingTree")).toEqual({ files: 2, directories: 0, complete: true });
-    expect([flagsOf(fifo), flagsOf(locked)]).toEqual(before);
+    const seen = await startOnlineOnlyScan(root, "workingTree", { budgetMs: 3_000, flag: FLAG })
+      .result;
+
+    expect(seen).toEqual({ files: 1, directories: 0, complete: true });
   });
 
   it("answers a flagged root once, from the working tree, without entering it", async () => {
@@ -142,6 +139,18 @@ describe.runIf(process.platform === "darwin")("online-only scan with the real fi
 
     expect(await probe()).toBe("git-pointer");
     expect(await scan("git")).toEqual({ files: 1, directories: 0, complete: true });
+  });
+
+  it("reports a .git symlink as a pointer and never walks what it points at", async () => {
+    const elsewhere = join(base, "elsewhere.git");
+    await mkdir(elsewhere);
+    const inside = join(elsewhere, "HEAD");
+    await writeFile(inside, "content");
+    flag(inside);
+    await symlink(elsewhere, join(root, ".git"));
+
+    expect(await probe()).toBe("git-pointer");
+    expect(await scan("git")).toEqual({ files: 0, directories: 0, complete: true });
   });
 
   it("walks a symlinked root instead of reporting it empty", async () => {

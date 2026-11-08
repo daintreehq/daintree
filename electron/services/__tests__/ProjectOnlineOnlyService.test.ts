@@ -14,7 +14,7 @@ interface FakePass<T> extends OnlineOnlyPass<T> {
   /** Settles the result while the child stays alive, as a killed find in a kernel wait does. */
   answerButStayAlive(value: T): void;
   exit(): void;
-  cancel: ReturnType<typeof vi.fn>;
+  cancel: ReturnType<typeof vi.fn<() => void>>;
 }
 
 function side(files: number, directories = 0, complete = true): OnlineOnlyFilesSide {
@@ -23,6 +23,8 @@ function side(files: number, directories = 0, complete = true): OnlineOnlyFilesS
 
 class FakeScanner implements OnlineOnlyScanner {
   passes: FakePass<never>[] = [];
+  /** A killed find can stay alive in a kernel wait: cancelling settles the result, nothing more. */
+  cancelLeavesChildAlive = false;
   /** Kinds answered as soon as they start, for tests about what happens between walks. */
   auto: {
     probe?: OnlineOnlyRootShape;
@@ -41,7 +43,7 @@ class FakeScanner implements OnlineOnlyScanner {
       // The real pass settles on cancel too, which is what frees the walk slot.
       cancel: vi.fn(() => {
         resolveResult(whenCancelled);
-        resolveExited();
+        if (!this.cancelLeavesChildAlive) resolveExited();
       }),
       answer(value: T) {
         resolveResult(value);
@@ -80,9 +82,11 @@ class FakeScanner implements OnlineOnlyScanner {
 function fakeEndpoint(id = "view-1") {
   const closeListeners = new Set<() => void>();
   const pushes: ProjectOnlineOnlyFiles[] = [];
+  const frames: unknown[] = [];
   const endpoint = {
     endpointId: id,
     send: vi.fn((frame: { args: unknown[] }) => {
+      frames.push(frame);
       pushes.push(frame.args[0] as ProjectOnlineOnlyFiles);
     }),
     onClose(cb: () => void) {
@@ -94,6 +98,7 @@ function fakeEndpoint(id = "view-1") {
     endpoint: endpoint as unknown as ClientEndpoint,
     send: endpoint.send,
     pushes,
+    frames,
     closeListeners,
     close: () => [...closeListeners].forEach((cb) => cb()),
   };
@@ -154,10 +159,50 @@ describe("ProjectOnlineOnlyService", () => {
   it("pushes each side as it's seen, split between .git and the working tree", async () => {
     const view = fakeEndpoint();
     service.watch(project(), view.endpoint);
+    await tick();
+    scanner.pass<OnlineOnlyRootShape>("probe").answer("git-directory");
+    await tick();
 
-    await answerFirstRound(side(479), side(206));
+    scanner.pass<OnlineOnlyFilesSide>("workingTree").answer(side(206));
+    await tick();
+    expect(view.pushes.at(-1)).toMatchObject({ git: null, workingTree: side(206) });
 
+    scanner.pass<OnlineOnlyFilesSide>("git").answer(side(479));
+    await tick();
     expect(view.pushes.at(-1)).toMatchObject({ git: side(479), workingTree: side(206) });
+  });
+
+  it("pushes on the channel the renderer listens to", async () => {
+    const view = fakeEndpoint();
+    scanner.auto = { probe: "no-git", workingTree: side(1) };
+    service.watch(project(), view.endpoint);
+    await tick();
+
+    expect(view.frames.at(-1)).toEqual({
+      type: "event",
+      channel: "online-only-files:changed",
+      args: [view.pushes.at(-1)],
+    });
+  });
+
+  it("pushes when only the folders or only the completeness moved", async () => {
+    const view = fakeEndpoint();
+    scanner.auto = { probe: "no-git", workingTree: side(1) };
+    service.watch(project(), view.endpoint);
+    await tick();
+    const revisions = () => view.pushes.map((p) => p.revision);
+    const before = revisions().length;
+
+    scanner.auto.workingTree = side(1, 1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(view.pushes.at(-1)?.workingTree).toEqual(side(1, 1));
+    expect(revisions().length).toBe(before + 1);
+
+    scanner.auto.workingTree = side(1, 1, false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(view.pushes.at(-1)?.workingTree).toEqual(side(1, 1, false));
+    expect(revisions().length).toBe(before + 2);
+    expect(revisions()).toEqual([...revisions()].sort((a, b) => a - b));
   });
 
   it("pushes the move to zero on both sides", async () => {
@@ -313,10 +358,10 @@ describe("ProjectOnlineOnlyService", () => {
       await tick();
       scanner.pass<OnlineOnlyFilesSide>("workingTree").answer(side(0));
       await tick();
-      scanner.pass<OnlineOnlyFilesSide>("git").answer(side(0));
+      scanner.pass<OnlineOnlyFilesSide>("git").answer(side(1));
       await tick();
 
-      expect(view.pushes.at(-1)?.git).toEqual(side(0, 0, false));
+      expect(view.pushes.at(-1)?.git).toEqual(side(1, 0, false));
     });
 
     it("keeps an interrupted walk's count without calling it finished", async () => {
@@ -346,6 +391,26 @@ describe("ProjectOnlineOnlyService", () => {
       scanner.pass<OnlineOnlyRootShape>("probe", "/cloud/a").answer("no-git");
       await tick();
       expect(scanner.pass("probe", "/cloud/b")).toBeDefined();
+    });
+
+    it("starts no second child beside one that outlived its holders", async () => {
+      scanner.cancelLeavesChildAlive = true;
+      const view = fakeEndpoint();
+      service.watch(project(), view.endpoint);
+      await tick();
+      expect(scanner.count("workingTree")).toBe(1);
+      const firstTree = scanner.pass("workingTree");
+
+      for (let round = 0; round < 3; round++) {
+        service.release(view.endpoint);
+        service.watch(project(), view.endpoint);
+        await tick();
+      }
+      expect(scanner.count("workingTree")).toBe(1);
+
+      firstTree.exit();
+      await tick();
+      expect(scanner.count("workingTree")).toBe(2);
     });
 
     it("lets a walk of .git run while another project's tree is walking", async () => {
@@ -397,10 +462,10 @@ describe("ProjectOnlineOnlyService", () => {
       expect(scanner.count("workingTree")).toBe(1);
 
       service.release(first.endpoint);
-      expect(scanner.passes[0]!.cancel).not.toHaveBeenCalled();
+      for (const pass of scanner.passes) expect(pass.cancel).not.toHaveBeenCalled();
 
       service.release(second.endpoint);
-      expect(scanner.passes[0]!.cancel).toHaveBeenCalled();
+      for (const pass of scanner.passes) expect(pass.cancel).toHaveBeenCalled();
     });
 
     it("leaves no timer or walk behind when released", async () => {
@@ -425,7 +490,8 @@ describe("ProjectOnlineOnlyService", () => {
 
       view.close();
 
-      expect(scanner.passes[0]!.cancel).toHaveBeenCalled();
+      expect(scanner.passes.length).toBeGreaterThan(1);
+      for (const pass of scanner.passes) expect(pass.cancel).toHaveBeenCalled();
     });
 
     it("doesn't restart the walk when a view watches the same project again", async () => {
@@ -468,6 +534,27 @@ describe("ProjectOnlineOnlyService", () => {
       expect(scanner.pass("probe", "/cloud/after")).toBeDefined();
     });
 
+    it("keeps the other views of a project that moved", async () => {
+      const noticed = fakeEndpoint("noticed");
+      const other = fakeEndpoint("other");
+      service.watch(project("p", "/cloud/before"), noticed.endpoint);
+      service.watch(project("p", "/cloud/before"), other.endpoint);
+      await tick();
+
+      service.watch(project("p", "/cloud/after"), noticed.endpoint);
+      await tick();
+      scanner.pass<OnlineOnlyRootShape>("probe", "/cloud/after").answer("no-git");
+      await tick();
+
+      expect(other.pushes.at(-1)?.git).toEqual(side(0));
+
+      service.release(noticed.endpoint);
+      const after = scanner.pass("workingTree", "/cloud/after");
+      expect(after.cancel).not.toHaveBeenCalled();
+      service.release(other.endpoint);
+      expect(after.cancel).toHaveBeenCalled();
+    });
+
     it("never goes back on a revision when a project is watched afresh", async () => {
       const view = fakeEndpoint();
       service.watch(project(), view.endpoint);
@@ -501,7 +588,8 @@ describe("ProjectOnlineOnlyService", () => {
 
       service.dispose();
 
-      expect(scanner.passes[0]!.cancel).toHaveBeenCalled();
+      expect(scanner.passes.length).toBeGreaterThan(1);
+      for (const pass of scanner.passes) expect(pass.cancel).toHaveBeenCalled();
       expect(vi.getTimerCount()).toBe(0);
       expect(view.closeListeners.size).toBe(0);
     });

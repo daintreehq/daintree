@@ -43,8 +43,8 @@ describe("online-only scan process handling", () => {
     startOnlineOnlyScan(root, "git", { budgetMs: 1_000 });
 
     const [command, args] = spawnMock.mock.calls[0] as [string, string[]];
-    expect(command.startsWith("/")).toBe(true);
-    expect(args[1]?.startsWith("/")).toBe(true);
+    expect(command).toBe("/usr/sbin/taskpolicy");
+    expect(args.slice(0, 2)).toEqual(["-b", "/usr/bin/find"]);
   });
 
   it("looks for the dataless flag unless a test says otherwise", () => {
@@ -57,6 +57,48 @@ describe("online-only scan process handling", () => {
     expect(buildOnlineOnlyProbeArgs(root)).not.toContain(`${root}/.git`);
     expect(buildOnlineOnlyFindArgs(root, "workingTree")).not.toContain(`${root}/.git`);
     expect(buildOnlineOnlyFindArgs(root, "git")).toContain(`${root}/.git`);
+  });
+
+  // CI's Ubuntu can't run the real find, so the safety of each expression is pinned here too.
+  describe("the expressions that keep a walk out of dataless directories", () => {
+    const joined = (args: string[]) => args.join(" ");
+
+    it.each(["git", "workingTree"] as const)(
+      "prunes a flagged directory on the %s side",
+      (side) => {
+        expect(joined(buildOnlineOnlyFindArgs(root, side))).toContain(
+          "-flags +dataless ( -type d -print -prune -o -print0 )"
+        );
+      }
+    );
+
+    it("leaves the top-level .git out of the working tree", () => {
+      expect(joined(buildOnlineOnlyFindArgs(root, "workingTree"))).toContain(
+        "-depth 1 -name .git -prune -o"
+      );
+    });
+
+    it("doesn't follow a .git symlink through folders nothing has checked", () => {
+      const args = buildOnlineOnlyFindArgs(root, "git");
+      expect(args[0]).toBe("-P");
+      expect(args).not.toContain("-H");
+    });
+
+    it("tests the root's flag first, and goes no deeper than the root's own entries", () => {
+      const probe = joined(buildOnlineOnlyProbeArgs(root));
+      expect(probe).toContain(`${root} -depth 0 -flags +dataless -print0 -prune -o`);
+      expect(probe.endsWith("-depth 1 -prune")).toBe(true);
+    });
+
+    it("never stops at a mount, which would claim a count of what it skipped", () => {
+      for (const args of [
+        buildOnlineOnlyProbeArgs(root),
+        buildOnlineOnlyFindArgs(root, "git"),
+        buildOnlineOnlyFindArgs(root, "workingTree"),
+      ]) {
+        expect(args).not.toContain("-x");
+      }
+    });
   });
 
   it("counts files and directories across chunks, even where a path is split", async () => {

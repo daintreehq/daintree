@@ -7,9 +7,8 @@ const ipcMainMock = vi.hoisted(() => ({
   removeHandler: vi.fn((channel: string) => ipcHandlers.delete(channel)),
 }));
 const resolveProject = vi.hoisted(() => vi.fn());
-const serviceLoaded = vi.hoisted(() => vi.fn());
 const serviceMock = vi.hoisted(() => ({
-  watch: vi.fn(() => ({ projectId: "p1", revision: 1 })),
+  watch: vi.fn((_project: unknown, _endpoint: unknown) => ({ projectId: "p1", revision: 1 })),
   release: vi.fn(),
   dispose: vi.fn(),
 }));
@@ -21,35 +20,44 @@ vi.mock("electron", () => ({
 vi.mock("../../projectContext.js", () => ({
   resolveScopedProjectForIpcContext: resolveProject,
 }));
-vi.mock("../../../services/ProjectOnlineOnlyService.js", () => {
-  serviceLoaded();
-  return {
-    ProjectOnlineOnlyService: vi.fn(function () {
-      return serviceMock;
-    }),
-  };
-});
+vi.mock("../../../services/ProjectOnlineOnlyService.js", () => ({
+  ProjectOnlineOnlyService: vi.fn(function () {
+    return serviceMock;
+  }),
+}));
 
 import { registerOnlineOnlyFilesHandlers } from "../onlineOnlyFiles.js";
 
 type Handler = (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => Promise<unknown>;
 
-function invoke(channel: string, senderId = 1): Promise<unknown> {
-  const fn = ipcHandlers.get(channel) as Handler;
-  const sender = { id: senderId, isDestroyed: () => false, once: vi.fn(), send: vi.fn() };
-  return fn({ sender } as unknown as Electron.IpcMainInvokeEvent);
+// One object per view, because a view's endpoint is cached against its sender.
+const senders = new Map<number, unknown>();
+function senderFor(id: number): unknown {
+  let sender = senders.get(id);
+  if (!sender) {
+    sender = { id, isDestroyed: () => false, once: vi.fn(), send: vi.fn() };
+    senders.set(id, sender);
+  }
+  return sender;
 }
 
-const unwrapped = (result: unknown) =>
-  result && typeof result === "object" && "data" in result
-    ? (result as { data: unknown }).data
-    : result;
+function invoke(channel: string, senderId = 1): Promise<unknown> {
+  const fn = ipcHandlers.get(channel) as Handler;
+  return fn({ sender: senderFor(senderId) } as unknown as Electron.IpcMainInvokeEvent);
+}
 
 const cloudPath = `${homedir()}/Library/CloudStorage/Dropbox/Video Editor`;
+const plainPath = `${homedir()}/Projects/plain`;
 
 function setPlatform(platform: NodeJS.Platform): void {
   Object.defineProperty(process, "platform", { value: platform, configurable: true });
 }
+
+function resolvesTo(path: string, id = "p1"): void {
+  resolveProject.mockReturnValue({ project: { id, path }, workspaceId: id });
+}
+
+const endpointOfWatch = (call: number) => serviceMock.watch.mock.calls[call]?.[1];
 
 describe("online-only files IPC", () => {
   const realPlatform = process.platform;
@@ -58,8 +66,9 @@ describe("online-only files IPC", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     ipcHandlers.clear();
+    senders.clear();
     setPlatform("darwin");
-    resolveProject.mockReturnValue({ project: { id: "p1", path: cloudPath }, workspaceId: "p1" });
+    resolvesTo(cloudPath);
     cleanup = registerOnlineOnlyFilesHandlers({});
   });
 
@@ -73,7 +82,7 @@ describe("online-only files IPC", () => {
     async (platform) => {
       setPlatform(platform);
 
-      expect(unwrapped(await invoke("online-only-files:watch"))).toBeNull();
+      expect(await invoke("online-only-files:watch")).toBeNull();
 
       expect(resolveProject).not.toHaveBeenCalled();
       expect(serviceMock.watch).not.toHaveBeenCalled();
@@ -81,12 +90,9 @@ describe("online-only files IPC", () => {
   );
 
   it("answers null for a project outside the cloud roots without starting anything", async () => {
-    resolveProject.mockReturnValue({
-      project: { id: "p1", path: `${homedir()}/Projects/plain` },
-      workspaceId: "p1",
-    });
+    resolvesTo(plainPath);
 
-    expect(unwrapped(await invoke("online-only-files:watch"))).toBeNull();
+    expect(await invoke("online-only-files:watch")).toBeNull();
 
     expect(serviceMock.watch).not.toHaveBeenCalled();
   });
@@ -94,50 +100,51 @@ describe("online-only files IPC", () => {
   it("answers null for a view that holds no project", async () => {
     resolveProject.mockReturnValue({ project: null, workspaceId: null });
 
-    expect(unwrapped(await invoke("online-only-files:watch"))).toBeNull();
+    expect(await invoke("online-only-files:watch")).toBeNull();
 
     expect(serviceMock.watch).not.toHaveBeenCalled();
   });
 
   it("watches the sender's own project, naming its provider", async () => {
-    const snapshot = unwrapped(await invoke("online-only-files:watch"));
+    expect(await invoke("online-only-files:watch")).toEqual({ projectId: "p1", revision: 1 });
 
-    expect(snapshot).toEqual({ projectId: "p1", revision: 1 });
     expect(serviceMock.watch).toHaveBeenCalledWith(
       { id: "p1", path: cloudPath, service: "Dropbox" },
       expect.anything()
     );
   });
 
-  it("lets go of the old project when a view rebinds to one outside the cloud roots", async () => {
-    await invoke("online-only-files:watch");
-    resolveProject.mockReturnValue({
-      project: { id: "p2", path: `${homedir()}/Projects/plain` },
-      workspaceId: "p2",
-    });
+  it("hands the service a root find will print back the same way", async () => {
+    resolvesTo(`${cloudPath}/`);
 
     await invoke("online-only-files:watch");
+
+    expect(serviceMock.watch.mock.calls[0]?.[0]).toMatchObject({ path: cloudPath });
+  });
+
+  it("releases only the rebound view when it moves outside the cloud roots", async () => {
+    await invoke("online-only-files:watch", 1);
+    await invoke("online-only-files:watch", 2);
+    resolvesTo(plainPath, "p2");
+
+    await invoke("online-only-files:watch", 1);
 
     expect(serviceMock.release).toHaveBeenCalledTimes(1);
+    expect(serviceMock.release).toHaveBeenCalledWith(endpointOfWatch(0));
+    expect(endpointOfWatch(0)).not.toBe(endpointOfWatch(1));
   });
 
-  it("releases on unwatch", async () => {
-    await invoke("online-only-files:watch");
+  it("releases only the view that unwatched", async () => {
+    await invoke("online-only-files:watch", 1);
+    await invoke("online-only-files:watch", 2);
 
-    await invoke("online-only-files:unwatch");
+    await invoke("online-only-files:unwatch", 2);
 
     expect(serviceMock.release).toHaveBeenCalledTimes(1);
+    expect(serviceMock.release).toHaveBeenCalledWith(endpointOfWatch(1));
   });
 
-  it("treats an unwatch before any watch as nothing to do", async () => {
-    await invoke("online-only-files:unwatch");
-
-    expect(serviceMock.release).not.toHaveBeenCalled();
-  });
-
-  it("disposes the service with the handlers", async () => {
-    await invoke("online-only-files:watch");
-
+  it("disposes the service with the handlers", () => {
     cleanup();
     cleanup = () => {};
 

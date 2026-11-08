@@ -56,22 +56,26 @@ function flaggedEntryClause(flag: string): string[] {
  * path up would download the listing of a dataless root.
  */
 export function buildOnlineOnlyProbeArgs(root: string, flag = "dataless"): string[] {
-  return ["-H", "-x", root]
+  return ["-H", root]
     .concat(["-depth", "0", "-flags", `+${flag}`, "-print0", "-prune", "-o"])
     .concat(["-depth", "1", "-name", ".git", "(", "-type", "d", "-print", "-o", "-print0", ")"])
     .concat(["-prune", "-o", "-depth", "1", "-prune"]);
 }
 
+/**
+ * `.git` is walked with -P because following a symlink there would resolve its
+ * target through folders nothing has checked, downloading their listings. No
+ * walk uses -x: it skips a mount inside the tree and still exits 0, which would
+ * claim a complete count of something it never saw. The budget is the bound.
+ */
 export function buildOnlineOnlyFindArgs(
   root: string,
   side: OnlineOnlyScanSide,
   flag = "dataless"
 ): string[] {
   return side === "git"
-    ? ["-H", "-x", `${root}/.git`, ...flaggedEntryClause(flag)]
-    : ["-H", "-x", root, "-depth", "1", "-name", ".git", "-prune", "-o"].concat(
-        flaggedEntryClause(flag)
-      );
+    ? ["-P", `${root}/.git`, ...flaggedEntryClause(flag)]
+    : ["-H", root, "-depth", "1", "-name", ".git", "-prune", "-o"].concat(flaggedEntryClause(flag));
 }
 
 /**

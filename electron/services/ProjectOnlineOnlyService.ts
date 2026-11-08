@@ -50,7 +50,6 @@ interface WatchedProject {
   holders: Map<string, ClientEndpoint>;
   timers: Map<OnlineOnlyScanSide, ReturnType<typeof setTimeout>>;
   running: Set<OnlineOnlyPass<unknown>>;
-  lastExit: Record<OnlineOnlyScanSide, Promise<void>>;
   walkedMs: Record<OnlineOnlyScanSide, number>;
   stopped: boolean;
 }
@@ -92,6 +91,9 @@ export class ProjectOnlineOnlyService {
     git: { busy: false, waiting: [] },
     workingTree: { busy: false, waiting: [] },
   };
+  // Outlives a project's holders, so releasing and watching again can't start a
+  // child beside one that won't die. An entry goes when its child really exits.
+  private readonly childGone = new Map<string, Promise<void>>();
   private revision = 0;
 
   constructor(
@@ -109,10 +111,10 @@ export class ProjectOnlineOnlyService {
 
     let watched = this.projects.get(project.id);
     if (watched && watched.root !== project.path) {
-      this.stop(watched);
-      watched = undefined;
+      watched = this.moveTo(watched, project);
+    } else if (!watched) {
+      watched = this.begin(project);
     }
-    if (!watched) watched = this.begin(project);
 
     watched.holders.set(endpoint.endpointId, endpoint);
     this.held.set(endpoint.endpointId, {
@@ -150,13 +152,24 @@ export class ProjectOnlineOnlyService {
       holders: new Map(),
       timers: new Map(),
       running: new Set(),
-      lastExit: { git: Promise.resolve(), workingTree: Promise.resolve() },
       walkedMs: { git: 0, workingTree: 0 },
       stopped: false,
     };
     this.projects.set(project.id, watched);
     for (const side of SIDES) void this.walkSide(watched, side);
     return watched;
+  }
+
+  /** A project that moved keeps every view that was holding it, not only the one that noticed. */
+  private moveTo(previous: WatchedProject, project: OnlineOnlyProject): WatchedProject {
+    this.stop(previous);
+    const moved = this.begin(project);
+    for (const [endpointId, endpoint] of previous.holders) {
+      moved.holders.set(endpointId, endpoint);
+      const held = this.held.get(endpointId);
+      if (held) held.project = moved;
+    }
+    return moved;
   }
 
   private stop(project: WatchedProject): void {
@@ -225,7 +238,8 @@ export class ProjectOnlineOnlyService {
     side: OnlineOnlyScanSide,
     start: () => OnlineOnlyPass<T>
   ): Promise<T | null> {
-    await project.lastExit[side];
+    const childKey = `${side}\0${project.root}`;
+    await this.childGone.get(childKey);
     if (project.stopped) return null;
     const slot = this.walkSlots[side];
     await this.takeWalkSlot(slot);
@@ -234,9 +248,11 @@ export class ProjectOnlineOnlyService {
       if (project.stopped) return null;
       const pass = start();
       project.running.add(pass);
-      project.lastExit[side] = pass.exited.then(() => {
+      const gone: Promise<void> = pass.exited.then(() => {
         project.running.delete(pass);
+        if (this.childGone.get(childKey) === gone) this.childGone.delete(childKey);
       });
+      this.childGone.set(childKey, gone);
       return await pass.result;
     } finally {
       // Time spent queueing isn't walking, or a busy machine would slow every side's rests.
