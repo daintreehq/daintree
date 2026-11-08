@@ -59,6 +59,15 @@ describe("CanopyStatusBar", () => {
       (span) => span.textContent === said && span.role !== "status"
     );
     expect(shown?.getAttribute("aria-hidden")).toBe("true");
+    rerender(
+      <CanopyStatusBar
+        host="studio-01"
+        reader={READER}
+        model={{ id: READY.id, status: "missing" }}
+        waiting={undefined}
+      />
+    );
+    expect(container.querySelector("[role=status]")?.textContent).toBe(said);
     rerender(<CanopyStatusBar reader={READER} model={READY} waiting={undefined} />);
     expect(container.querySelector("[role=status]")?.textContent).toBe("");
   });

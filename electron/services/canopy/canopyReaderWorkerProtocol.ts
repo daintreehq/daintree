@@ -8,7 +8,7 @@ import type { Reading, ReaderState } from "./canopyReader.js";
 /** Main → reader process. */
 export type ReaderWorkerInbound =
   | {
-      /** Load the model in `dir`: reader.json, tokenizer files and model.int8.onnx. */
+      /** Load the model in `dir`: config.json, the tokenizer files and the pinned INT8 weights. */
       type: "load";
       dir: string;
     }

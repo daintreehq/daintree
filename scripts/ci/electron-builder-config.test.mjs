@@ -541,7 +541,7 @@ describe("electron-builder config — AppImage runtime", () => {
 describe("electron-builder config — Canopy reader model (#16415)", () => {
   const canopyReaderModel = require("../lib/canopyReaderModel.cjs");
 
-  it("copies exactly the manifest's files from where the build fetches them, on every platform", async () => {
+  it("copies exactly the manifest's files from where the build fetches them, as a top-level resource", async () => {
     const config = await buildConfig();
     const entry = config.extraResources.find((r) => r.to === canopyReaderModel.RESOURCES_NAME);
     expect(entry).toBeDefined();

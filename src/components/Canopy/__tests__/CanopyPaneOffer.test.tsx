@@ -7,7 +7,8 @@ import type { CanopySnapshot } from "@shared/types/ipc/canopy";
 
 const dispatchMock = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: dispatchMock } }));
-vi.mock("@/hooks/useHostPlatform", () => ({ useHostPlatform: () => ({ hostName: null }) }));
+const host = vi.hoisted(() => ({ name: null as string | null }));
+vi.mock("@/hooks/useHostPlatform", () => ({ useHostPlatform: () => ({ hostName: host.name }) }));
 
 import { CanopyPaneOffer } from "../CanopyPaneOffer";
 
@@ -15,6 +16,7 @@ afterEach(() => {
   cleanup();
   dispatchMock.mockClear();
   useCanopyStore.setState({ isOpen: false, snapshot: null });
+  host.name = null;
 });
 
 const MODEL_ID = "daintreehq/canopy-reader-17m";
@@ -63,14 +65,19 @@ describe("CanopyPaneOffer", () => {
     expect(useCanopyStore.getState().isOpen).toBe(false);
   });
 
-  it("says Canopy is reading once it is on, with nothing to wait for", () => {
-    for (const model of [{ id: MODEL_ID, status: "ready" as const }, undefined]) {
-      withModel(model);
-      const container = turnedOn();
-      expect(container.textContent).toContain("It's reading your agents' screens.");
-      expect(container.textContent).not.toMatch(/download/i);
-      cleanup();
-    }
+  it("says Canopy is reading once its model is ready, and not before", () => {
+    withModel({ id: MODEL_ID, status: "ready" });
+    let container = turnedOn();
+    expect(container.textContent).toContain("It's reading your agents' screens.");
+    expect(container.textContent).not.toMatch(/download/i);
+    cleanup();
+
+    // Still being checked: on, but nothing is read yet.
+    withModel(undefined);
+    container = turnedOn();
+    expect(container.textContent).toContain("Canopy is on");
+    expect(container.textContent).toContain("once its model is ready");
+    expect(container.textContent).not.toContain("It's reading");
   });
 
   it("says a model that isn't available, offering no download to retry", () => {
@@ -79,6 +86,17 @@ describe("CanopyPaneOffer", () => {
     expect(container.textContent).toContain("Canopy's model isn't available");
     expect(container.textContent).toContain("Reinstalling Daintree puts it back");
     expect(container.textContent).not.toMatch(/download|connection/i);
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  });
+
+  it("never tells another host's user its download failed, nor to retry one", () => {
+    // That host may be on a Daintree from before the model shipped with it.
+    host.name = "studio-01";
+    withModel({ id: MODEL_ID, status: "failed", error: "HTTP 503" });
+    const container = turnedOn();
+    expect(container.textContent).toContain("isn't available");
+    expect(container.textContent).toContain("Updating or reinstalling Daintree there");
+    expect(container.textContent).not.toMatch(/download|HTTP|missing or damaged/i);
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 

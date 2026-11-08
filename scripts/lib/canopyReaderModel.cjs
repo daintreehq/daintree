@@ -69,27 +69,36 @@ async function prepareModel({
   if (missing.length === 0) return { fetched: [] };
   fs.mkdirSync(dir, { recursive: true });
   for (const spec of missing) {
-    const url = `${HF}/${manifest.id}/resolve/${manifest.revision}/${spec.name}`;
-    log(
-      `[canopy-reader] Fetching ${spec.name} (${spec.size} bytes) at ${manifest.revision.slice(0, 12)}`
-    );
-    const response = await fetchImpl(url, {
-      headers: { "User-Agent": USER_AGENT },
-      signal: AbortSignal.timeout(FILE_TIMEOUT_MS),
-    });
-    if (!response.ok) throw new Error(`Fetching ${spec.name} failed: HTTP ${response.status}`);
-    const content = Buffer.from(await response.arrayBuffer());
-    if (!contentMatches(content, spec)) {
-      throw new Error(
-        `${spec.name} doesn't match the hash pinned in ${path.relative(ROOT, MANIFEST_PATH)}`
-      );
-    }
-    const target = path.join(dir, spec.name);
-    const part = `${target}.part`;
-    fs.writeFileSync(part, content);
-    fs.renameSync(part, target);
+    await fetchFile(dir, manifest, spec, fetchImpl, log);
   }
   return { fetched: missing.map((spec) => spec.name) };
+}
+
+/** One pinned file into place: checked before it is written, staged beside it, then renamed over it. */
+async function fetchFile(dir, manifest, spec, fetchImpl, log) {
+  const url = `${HF}/${manifest.id}/resolve/${manifest.revision}/${spec.name}`;
+  log(
+    `[canopy-reader] Fetching ${spec.name} (${spec.size} bytes) at ${manifest.revision.slice(0, 12)}`
+  );
+  const response = await fetchImpl(url, {
+    headers: { "User-Agent": USER_AGENT },
+    signal: AbortSignal.timeout(FILE_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`Fetching ${spec.name} failed: HTTP ${response.status}`);
+  const content = Buffer.from(await response.arrayBuffer());
+  if (!contentMatches(content, spec)) {
+    throw new Error(
+      `${spec.name} doesn't match the hash pinned in ${path.relative(ROOT, MANIFEST_PATH)}`
+    );
+  }
+  const target = path.join(dir, spec.name);
+  const part = `${target}.part`;
+  try {
+    fs.writeFileSync(part, content);
+    fs.renameSync(part, target);
+  } finally {
+    fs.rmSync(part, { force: true });
+  }
 }
 
 module.exports = {

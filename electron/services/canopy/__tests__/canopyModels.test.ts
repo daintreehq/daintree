@@ -1,5 +1,14 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -114,7 +123,7 @@ describe("CanopyModels, the model that ships with Daintree", () => {
 });
 
 describe("the tracked manifest", () => {
-  it("is the reader Canopy names, with its INT8 weights pinned by SHA-256", () => {
+  it("is the reader Canopy names, with the weights the worker loads pinned by SHA-256", () => {
     expect(manifest.id).toBe(CANOPY_MODEL);
     const weights = manifest.files.find((file) => file.name === CANOPY_READER_WEIGHTS);
     expect(weights && "sha256" in weights && weights.sha256).toMatch(/^[0-9a-f]{64}$/);
@@ -156,4 +165,45 @@ describe("removeDownloadedModels", () => {
   it("does nothing when no model was ever downloaded", async () => {
     await expect(removeDownloadedModels(path.join(dir, "absent"))).resolves.toBeUndefined();
   });
+
+  it("leaves a folder reached through a link alone: another profile or build may share it", async () => {
+    const shared = path.join(dir, "shared");
+    mkdirSync(path.join(shared, "canopy-reader-17m"), { recursive: true });
+    mkdirSync(path.join(dir, "canopy"));
+    symlinkSync(shared, path.join(dir, "canopy", "models"), "dir");
+
+    await removeDownloadedModels(path.join(dir, "canopy", "models"));
+
+    expect(existsSync(path.join(shared, "canopy-reader-17m"))).toBe(true);
+  });
+
+  it("stops between folders once told to", async () => {
+    mkdirSync(path.join(dir, "canopy-reader-17m"));
+    const stop = new AbortController();
+    stop.abort();
+
+    await removeDownloadedModels(dir, stop.signal);
+
+    expect(existsSync(path.join(dir, "canopy-reader-17m"))).toBe(true);
+  });
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "goes on to the next folder when one can't be deleted yet",
+    async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      // A folder whose contents can't be removed, as a file held open on Windows.
+      const stuck = path.join(dir, "canopy-reader-17m", "locked");
+      mkdirSync(stuck, { recursive: true });
+      writeFileSync(path.join(stuck, "model.int8.onnx"), WEIGHTS);
+      chmodSync(stuck, 0o555);
+      mkdirSync(path.join(dir, "canopy-reader-68m"));
+      try {
+        await removeDownloadedModels(dir);
+        expect(existsSync(path.join(dir, "canopy-reader-68m"))).toBe(false);
+        expect(existsSync(path.join(stuck, "model.int8.onnx"))).toBe(true);
+      } finally {
+        chmodSync(stuck, 0o755);
+      }
+    }
+  );
 });

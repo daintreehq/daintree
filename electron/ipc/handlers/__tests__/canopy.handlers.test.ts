@@ -249,7 +249,9 @@ const models = vi.hoisted(() => ({
   })),
   installedDir: vi.fn(async () => "/repo/electron/resources/canopy-reader"),
 }));
-const removeDownloadedModels = vi.hoisted(() => vi.fn(async () => {}));
+const removeDownloadedModels = vi.hoisted(() =>
+  vi.fn(async (_root: string, _signal?: AbortSignal) => {})
+);
 vi.mock("../../../services/canopy/canopyModels.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../services/canopy/canopyModels.js")>()),
   CanopyModels: vi.fn(function CanopyModels() {
@@ -273,6 +275,7 @@ import { _resetRateLimitQueuesForTest, getProjectPushTargets } from "../../utils
 import { events } from "../../../services/events.js";
 import { getDefaultPanelTitle } from "../../../../shared/config/panelKindRegistry.js";
 import { canopyPanelsListing, registerCanopyHandlers } from "../canopy.js";
+import type { CanopySnapshot } from "../../../../shared/types/ipc/canopy.js";
 import { CanopyModels } from "../../../services/canopy/canopyModels.js";
 import { CANOPY_METHOD_CHANNELS } from "../canopy.preload.js";
 import { activeTerminalWatches, sizeHolds } from "../canopyTerminalWatch.js";
@@ -845,35 +848,107 @@ describe("canopy IPC", () => {
     expect(result.data ?? result).toEqual(info);
   });
 
-  it("refuses an older Shell's delete of the model, which ships with Daintree, leaving Canopy on", async () => {
-    state.mode = "on";
-    const result = await outcome(invoke(CANOPY_METHOD_CHANNELS.removeModels, fakeSender(9)));
-    expect(result).toEqual({ ok: false, message: expect.stringMatching(/ships with Daintree/) });
-    expect(state.mode).toBe("on");
-  });
-
-  it("deletes the models earlier versions downloaded, after launch and whatever the mode", async () => {
-    cleanup();
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  it("answers at once while the shipped model is checked, and tells every view when the check lands", async () => {
+    let checked: (() => void) | undefined;
+    vi.mocked(CanopyModels).mockImplementationOnce(function (_dir: string, onChange: () => void) {
+      checked = onChange;
+      return models as unknown as CanopyModels;
+    } as never);
+    const ready = models.state.getMockImplementation();
+    // A check that hasn't finished: nothing waits on it.
+    models.ensure.mockReturnValueOnce(new Promise(() => {}));
+    models.state.mockReturnValue(undefined as never);
     try {
-      state.mode = "hidden";
-      cleanup = registerCanopyHandlers();
-      // Not on the launch's own path.
-      expect(removeDownloadedModels).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(removeDownloadedModels).toHaveBeenCalledWith(path.join("/tmp", "canopy", "models"));
+      state.mode = "on";
+      const result = (await invoke(CANOPY_METHOD_CHANNELS.getSnapshot, fakeSender(9))) as {
+        data?: CanopySnapshot;
+      };
+      const first = (result.data ?? result) as CanopySnapshot;
+      expect(first.activated).toBe(true);
+      expect(first.model).toBeUndefined();
+      expect(models.ensure).toHaveBeenCalled();
 
-      // Torn down before it is due: nothing is deleted.
-      cleanup();
-      removeDownloadedModels.mockClear();
-      registerCanopyHandlers()();
-      cleanup = () => {};
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(removeDownloadedModels).not.toHaveBeenCalled();
+      broadcasts.mockClear();
+      const failed = { id: "daintreehq/canopy-reader-17m", status: "failed", error: "damaged" };
+      models.state.mockReturnValue(failed as never);
+      checked?.();
+      await vi.waitFor(() =>
+        expect(broadcasts).toHaveBeenCalledWith(
+          "canopy:snapshot-updated",
+          expect.objectContaining({ model: failed })
+        )
+      );
     } finally {
-      vi.useRealTimers();
+      models.state.mockImplementation(ready!);
     }
   });
+
+  it("reads the shipped model from the app's resources once packaged", async () => {
+    const resources = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+    Object.defineProperty(process, "resourcesPath", {
+      value: "/Applications/Daintree.app/Contents/Resources",
+      configurable: true,
+    });
+    try {
+      state.packaged = true;
+      state.mode = "on";
+      await invoke(CANOPY_METHOD_CHANNELS.getSnapshot, fakeSender(9));
+      expect(vi.mocked(CanopyModels).mock.calls[0]?.[0]).toBe(
+        path.join("/Applications/Daintree.app/Contents/Resources", "canopy-reader")
+      );
+    } finally {
+      if (resources) Object.defineProperty(process, "resourcesPath", resources);
+      else delete (process as { resourcesPath?: string }).resourcesPath;
+    }
+  });
+
+  it("refuses an older Shell's delete of the model, which ships with Daintree, leaving Canopy on", async () => {
+    state.mode = "on";
+    const error = await invoke(CANOPY_METHOD_CHANNELS.removeModels, fakeSender(9)).then(
+      () => null,
+      (thrown: unknown) => thrown
+    );
+    expect(error).toMatchObject({
+      code: "UNSUPPORTED",
+      userMessage: expect.stringMatching(/comes with Daintree/),
+    });
+    expect(state.mode).toBe("on");
+    expect(removeDownloadedModels).not.toHaveBeenCalled();
+  });
+
+  it.each(["on", "unset", "hidden"] as const)(
+    "deletes the models earlier versions downloaded, after launch, with Canopy %s",
+    async (mode) => {
+      cleanup();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        state.mode = mode;
+        cleanup = registerCanopyHandlers();
+        // Not on the launch's own path.
+        await vi.advanceTimersByTimeAsync(29_999);
+        expect(removeDownloadedModels).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(removeDownloadedModels).toHaveBeenCalledWith(
+          path.join("/tmp", "canopy", "models"),
+          expect.any(AbortSignal)
+        );
+        // Torn down while it runs: it is told to stop.
+        const signal = removeDownloadedModels.mock.calls[0]![1] as AbortSignal;
+        expect(signal.aborted).toBe(false);
+        cleanup();
+        cleanup = () => {};
+        expect(signal.aborted).toBe(true);
+
+        // Torn down before it is due: nothing is deleted.
+        removeDownloadedModels.mockClear();
+        registerCanopyHandlers()();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(removeDownloadedModels).not.toHaveBeenCalled();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
 
   it("watches a view's lifecycle once however often the panel reopens", async () => {
     const sender = fakeSender(7);

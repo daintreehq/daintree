@@ -2603,15 +2603,18 @@ export function registerCanopyHandlers(): () => void {
     })
   );
   // Whatever Canopy's mode: a user who hid it has a downloaded model too.
+  const stopCleanup = new AbortController();
   const downloadedModelsCleanup = setTimeout(() => {
-    removeDownloadedModels(path.join(app.getPath("userData"), "canopy", "models")).catch(
-      (error: unknown) => console.warn("[Canopy] Couldn't delete downloaded models:", error)
-    );
+    removeDownloadedModels(
+      path.join(app.getPath("userData"), "canopy", "models"),
+      stopCleanup.signal
+    ).catch((error: unknown) => console.warn("[Canopy] Couldn't delete downloaded models:", error));
   }, DOWNLOADED_MODELS_CLEANUP_DELAY_MS);
   downloadedModelsCleanup.unref?.();
   return () => {
     unregister();
     clearTimeout(downloadedModelsCleanup);
+    stopCleanup.abort();
     offTrashed();
     offTrashCleared();
     offRestored();

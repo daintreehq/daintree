@@ -102,8 +102,10 @@ export function CanopyPaneOffer({
           severity="error"
           title="Canopy's model isn't available"
           description={keepWhole(
+            // Another host may be on a Daintree from before the model shipped
+            // with it, whose download failed: updating it there helps either way.
             hostName
-              ? `Canopy is on, but the model it reads with on ${hostName} is missing or damaged. Reinstalling Daintree there puts it back.`
+              ? `Canopy is on, but the model it reads with on ${hostName} isn't available. Updating or reinstalling Daintree there puts it back.`
               : "Canopy is on, but the model it reads with is missing or damaged. Reinstalling Daintree puts it back.",
             hostName
           )}
@@ -113,15 +115,16 @@ export function CanopyPaneOffer({
         />
       );
     }
-    // A host from before the model shipped with Daintree may still be fetching it.
-    const waiting = model === "missing" || model === "downloading";
-    const now = waiting
-      ? hostName
-        ? `It starts reading agents' screens on ${hostName} once its model is ready.`
-        : "It starts reading your agents' screens once its model is ready."
-      : hostName
-        ? `It's reading agents' screens on ${hostName}.`
-        : "It's reading your agents' screens.";
+    // Reading only once the model is ready: until then it is being checked,
+    // or a host from before the model shipped with Daintree is fetching it.
+    const now =
+      model === "ready"
+        ? hostName
+          ? `It's reading agents' screens on ${hostName}.`
+          : "It's reading your agents' screens."
+        : hostName
+          ? `It starts reading agents' screens on ${hostName} once its model is ready.`
+          : "It starts reading your agents' screens once its model is ready.";
     return (
       <InlineStatusBanner
         severity="success"

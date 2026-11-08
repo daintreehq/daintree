@@ -136,10 +136,23 @@ describe("CanopySettingsTab", () => {
   });
 
   it("offers no choice of model and nothing to download or delete: the model ships with Daintree", () => {
+    const models: CanopySnapshot["model"][] = [
+      undefined,
+      { id: MODEL_ID, status: "ready" },
+      // Only a host from before the model shipped with Daintree says these.
+      { id: MODEL_ID, status: "missing" },
+      { id: MODEL_ID, status: "downloading", received: 8_200_000, total: 20_900_000 },
+    ];
     for (const mode of ["unset", "on", "hidden"] as const) {
-      for (const model of [undefined, { id: MODEL_ID, status: "ready" as const }]) {
+      for (const model of models) {
         const api = install(mode, { model });
         const { container, queryByRole, unmount } = render(<CanopySettingsTab />);
+        expect(switchFor(container, "Show Canopy").getAttribute("aria-checked")).toBe(
+          String(mode !== "hidden")
+        );
+        expect(switchFor(container, "Read agent terminals").getAttribute("aria-checked")).toBe(
+          String(mode === "on")
+        );
         expect(queryByRole("radio")).toBeNull();
         expect(queryByRole("radiogroup")).toBeNull();
         // The two switches, and no other control.

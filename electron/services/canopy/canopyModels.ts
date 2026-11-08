@@ -7,7 +7,7 @@
  */
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { readdir, rm, rmdir, stat } from "node:fs/promises";
+import { lstat, readdir, rm, rmdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import {
@@ -128,21 +128,36 @@ export class CanopyModels {
  * Deletes what earlier versions of Daintree downloaded into `root`
  * (`<userData>/canopy/models`): every reader model folder, with its
  * half-finished `.download` and set-aside `.old` copies, then `root` itself
- * once nothing else is in it.
+ * once nothing else is in it. A model fetched later as an update (#16416)
+ * must live elsewhere, or this deletes it on every launch.
+ *
+ * A `root` reached through a link is left alone: it may be a folder another
+ * profile or build shares. One folder that can't go yet (Windows holds files
+ * open until the process reading them exits) doesn't stop the rest; it goes
+ * on a later launch. Stops between folders once `signal` aborts.
  */
-export async function removeDownloadedModels(root: string): Promise<void> {
+export async function removeDownloadedModels(root: string, signal?: AbortSignal): Promise<void> {
+  for (const folder of [path.dirname(root), root]) {
+    const link = await lstat(folder).then(
+      (s) => s.isSymbolicLink(),
+      () => null
+    );
+    if (link !== false) return;
+  }
   const names = await readdir(root).catch(() => null);
   if (names === null) return;
   for (const name of names) {
+    if (signal?.aborted) return;
     const base = name.replace(/\.(download|old)$/, "");
     if (!isCanopyModelId(`${CANOPY_MODEL_AUTHOR}/${base}`)) continue;
-    // Windows holds a file open until the process reading it has exited.
     await rm(path.join(root, name), {
       recursive: true,
       force: true,
       maxRetries: 10,
       retryDelay: 300,
-    });
+    }).catch((error: unknown) =>
+      console.warn(`[Canopy] Couldn't delete the downloaded model ${name}:`, error)
+    );
   }
   await rmdir(root).catch(() => {});
 }

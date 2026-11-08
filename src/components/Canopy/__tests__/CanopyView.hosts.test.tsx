@@ -1757,7 +1757,9 @@ describe("All hosts", () => {
       await gate(1_000);
       expect(document.body.textContent).toContain("Canopy's model isn't available on studio-01");
       expect(document.body.textContent).not.toMatch(/download|HTTP/i);
-      expect(channelsCalled()).not.toContain("studio canopy:retry-model");
+      expect(
+        [...document.querySelectorAll("button")].filter((b) => b.textContent === "Retry")
+      ).toEqual([]);
     });
   });
 

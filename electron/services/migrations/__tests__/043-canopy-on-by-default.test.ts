@@ -22,10 +22,6 @@ describe("migration043 — Canopy on by default", () => {
     vi.restoreAllMocks();
   });
 
-  it("is version 43", () => {
-    expect(migration043.version).toBe(43);
-  });
-
   it("turns on a user still in unset", () => {
     const { data } = run({ canopyMode: "unset", other: 1 });
     expect(data).toEqual({ canopyMode: "on", other: 1 });

@@ -17,7 +17,12 @@ const manifest = {
   revision: "0123456789abcdef0123456789abcdef01234567",
   weights: "model.int8.onnx",
   files: [
-    { name: "config.json", size: CONFIG.length, blobId: gitBlobId(CONFIG) },
+    // `printf '{"max_len":512}' | git hash-object --stdin`
+    {
+      name: "config.json",
+      size: CONFIG.length,
+      blobId: "c0b091bfc9043c63ce183d096acc27bf89ae0632",
+    },
     { name: "model.int8.onnx", size: WEIGHTS.length, sha256: sha256(WEIGHTS) },
   ],
 };
@@ -45,8 +50,12 @@ afterEach(() => {
 
 describe("gitBlobId", () => {
   it("is git's own blob id", () => {
-    // `printf 'hello\n' | git hash-object --stdin`
+    // `printf 'hello\n' | git hash-object --stdin`, and the same for each below.
     expect(gitBlobId(Buffer.from("hello\n"))).toBe("ce013625030ba8dba906f756967f9e9ca394464a");
+    expect(gitBlobId(Buffer.from("hello world\n"))).toBe(
+      "3b18e512dba79e4c8300dd08aeb37f8e728b8dad"
+    );
+    expect(gitBlobId(CONFIG)).toBe(manifest.files[0].blobId);
   });
 });
 
@@ -56,6 +65,18 @@ describe("contentMatches", () => {
     const same = Buffer.alloc(WEIGHTS.length, 0x61);
     expect(contentMatches(WEIGHTS, spec)).toBe(true);
     expect(contentMatches(same, spec)).toBe(false);
+  });
+
+  it("rejects a blob-pinned file of the right size whose bytes differ", () => {
+    // Same length, one digit apart.
+    expect(contentMatches(Buffer.from('{"max_len":513}'), manifest.files[0])).toBe(false);
+    expect(contentMatches(CONFIG, manifest.files[0])).toBe(true);
+  });
+
+  it("rejects a file of another size before hashing it", () => {
+    expect(contentMatches(Buffer.concat([WEIGHTS, Buffer.from("!")]), manifest.files[1])).toBe(
+      false
+    );
   });
 
   it("rejects a spec that pins no hash", () => {
@@ -74,6 +95,10 @@ describe("invalidFiles", () => {
     writeFileSync(path.join(dir, "config.json"), CONFIG);
     writeFileSync(path.join(dir, "model.int8.onnx"), WEIGHTS);
     expect(invalidFiles(dir, manifest)).toEqual([]);
+
+    // Changed on disk without changing size: only the hash can tell.
+    writeFileSync(path.join(dir, "model.int8.onnx"), Buffer.alloc(WEIGHTS.length, 0x61));
+    expect(invalidFiles(dir, manifest).map((f) => f.name)).toEqual(["model.int8.onnx"]);
   });
 });
 
@@ -112,6 +137,10 @@ describe("prepareModel", () => {
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(fetchImpl.mock.calls[0][0]).toMatch(/\/model\.int8\.onnx$/);
+    expect(readFileSync(path.join(dir, "model.int8.onnx")).equals(WEIGHTS)).toBe(true);
+    expect(readFileSync(path.join(dir, "config.json")).equals(CONFIG)).toBe(true);
+    expect(invalidFiles(dir, manifest)).toEqual([]);
+    expect(readdirSync(dir).sort()).toEqual(["config.json", "model.int8.onnx"]);
   });
 
   it("never puts a file in place that doesn't match its pin", async () => {
