@@ -3000,6 +3000,31 @@ describe("CliAvailabilityService", () => {
       });
     });
 
+    it("never names the replaced copy when no check that saw the choice could publish", async () => {
+      await arrange({
+        onPath: ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"],
+        files: ["/usr/local/bin/claude"],
+      });
+      await service.checkAvailability();
+      service.setChosenCopy("claude", "/usr/local/bin/claude");
+      // Every check is superseded before it publishes (a poller re-checking faster than checks finish).
+      const checks = vi.spyOn(service, "checkAvailability").mockResolvedValue({});
+
+      const settled = await service.getSettledDetails();
+
+      expect(checks).toHaveBeenCalledTimes(3);
+      expect(settled!.claude).toMatchObject({
+        state: "missing",
+        resolvedPath: null,
+        chosenPath: "/usr/local/bin/claude",
+      });
+      expect(resolveAgentLaunchBaseCommandFor("claude", settled!.claude, "posix", undefined)).toBe(
+        "/usr/local/bin/claude"
+      );
+      // Agents whose choice didn't change keep what was published.
+      expect(settled!.gemini).toEqual(service.getDetails()!.gemini);
+    });
+
     it("settles at once when no choice is waiting on a check", async () => {
       await arrange({ onPath: ["/opt/homebrew/bin/claude"] });
       await service.checkAvailability();

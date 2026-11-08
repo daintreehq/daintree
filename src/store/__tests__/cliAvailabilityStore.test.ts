@@ -484,6 +484,35 @@ describe("cliAvailabilityStore", () => {
       expect((await detail)?.resolvedPath).toBe("/b/claude");
     });
 
+    it("holds a waiting launch through a reread that a later one superseded", async () => {
+      const answers: Array<(value: unknown) => void> = [];
+      getMock.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            answers.push(resolve);
+          })
+      );
+      getDetailsMock.mockResolvedValue(chosenDetails);
+
+      void useCliAvailabilityStore.getState().syncFromHost();
+      let landed = false;
+      const waiting = whenCliHostSynced().then(() => {
+        landed = true;
+      });
+      await vi.waitFor(() => expect(answers).toHaveLength(1));
+      void useCliAvailabilityStore.getState().syncFromHost();
+      await vi.waitFor(() => expect(answers).toHaveLength(2));
+
+      answers[0]!(installedAvail);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(landed).toBe(false);
+
+      answers[1]!(chosenAvail);
+      await waiting;
+      expect(useCliAvailabilityStore.getState().availability).toEqual(chosenAvail);
+      getMock.mockReset();
+    });
+
     it("keeps what the view had when the host can't be read", async () => {
       refreshMock.mockResolvedValueOnce(installedAvail);
       await useCliAvailabilityStore.getState().initialize();

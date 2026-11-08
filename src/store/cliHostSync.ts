@@ -16,8 +16,14 @@ export function trackCliHostSync(run: Promise<void>): void {
  * Settles once the reread recorded last has landed. A launch waits on it, so it
  * never starts the copy this view held before the change.
  */
-export function whenCliHostSynced(): Promise<void> {
-  return pending ?? Promise.resolve();
+export async function whenCliHostSynced(): Promise<void> {
+  // A reread superseded by a later one settles without landing, so follow the
+  // replacement until the latest has.
+  let current = pending;
+  while (current) {
+    await current;
+    current = pending === current ? null : pending;
+  }
 }
 
 export function resetCliHostSync(): void {

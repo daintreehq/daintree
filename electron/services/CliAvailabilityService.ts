@@ -422,7 +422,24 @@ export class CliAvailabilityService {
     for (let pass = 0; pass < 3 && this.publishedChoiceEpoch < this.choiceEpoch; pass++) {
       await this.checkAvailability().catch(() => {});
     }
-    return this.details;
+    if (this.details === null || this.publishedChoiceEpoch >= this.choiceEpoch) return this.details;
+    // Checks kept being superseded before one could publish. An agent whose
+    // choice changed since then reads as unconfirmed rather than by the copy
+    // the choice replaced.
+    const choices = readCliChoices();
+    const settled: AgentCliDetails = { ...this.details };
+    for (const [agentId, detail] of Object.entries(this.details)) {
+      const chosenPath = Object.hasOwn(choices, agentId) ? choices[agentId] : undefined;
+      if (!detail || detail.chosenPath === chosenPath) continue;
+      settled[agentId] = {
+        state: "missing",
+        resolvedPath: null,
+        via: null,
+        message: CHECK_TIMED_OUT_MESSAGE,
+        ...(chosenPath !== undefined ? { chosenPath } : {}),
+      };
+    }
+    return settled;
   }
 
   /**
@@ -442,9 +459,11 @@ export class CliAvailabilityService {
     }
     store.set("agentCliChoices", choices);
     this.choiceEpoch++;
-    // A check begun before the choice would publish the copy it replaced.
+    // A check begun before the choice would publish the copy it replaced, and
+    // one published before it can't stand in for a new one.
     this.checkId++;
     this.inFlightCheck = null;
+    this.availabilityCheckedAt = null;
   }
 
   async refresh(): Promise<CliAvailability> {
