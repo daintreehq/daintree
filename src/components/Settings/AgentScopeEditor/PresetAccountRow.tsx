@@ -1,4 +1,6 @@
+import { useState } from "react";
 import type { AgentPreset } from "@/config/agents";
+import { useAgentAccountHeadroom } from "@/hooks/useAgentAccountHeadroom";
 import { getAgentConfigFolderAccount } from "@shared/config/agentRegistry";
 import { sanitizeAgentAccounts } from "@shared/utils/agentAccounts";
 import { SettingsSelect } from "../SettingsSelect";
@@ -27,6 +29,9 @@ export function PresetAccountRow({
   accounts,
   onChange,
 }: PresetAccountRowProps) {
+  // Quota is read only while the list of accounts is showing (#16407).
+  const [listOpen, setListOpen] = useState(false);
+  const headroomFor = useAgentAccountHeadroom(agentId, listOpen);
   if (!getAgentConfigFolderAccount(agentId)) return null;
   const saved = sanitizeAgentAccounts(accounts);
   const pin = selectedPreset.accountId;
@@ -46,9 +51,14 @@ export function PresetAccountRow({
       }
       value={pinned?.id ?? NOT_PINNED}
       onValueChange={(value) => onChange(value === NOT_PINNED ? undefined : value)}
+      onOpenChange={setListOpen}
       options={[
         { value: NOT_PINNED, label: "Not pinned" },
-        ...saved.map((account) => ({ value: account.id, label: account.name })),
+        ...saved.map((account) => ({
+          value: account.id,
+          label: account.name,
+          description: headroomFor({ kind: "account", accountId: account.id })?.text,
+        })),
       ]}
       isModified={pin !== undefined}
       onReset={() => onChange(undefined)}

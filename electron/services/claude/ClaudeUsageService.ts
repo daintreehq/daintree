@@ -113,6 +113,7 @@ interface Group {
   identity: string | null;
   kind: ClaudeUsageAccountKind;
   accountNames: string[];
+  accountIds: string[];
   /** The first saved account's position, so accounts keep their order. */
   order: number;
   byWindow: Map<ClaudeUsageWindow, ClaudeUsageRecord>;
@@ -178,6 +179,7 @@ export async function readClaudeUsageAccounts(
         identity,
         kind,
         accountNames: named.map((account) => account.name),
+        accountIds: named.map((account) => account.id),
         order: firstIndex < 0 ? Number.MAX_SAFE_INTEGER : firstIndex,
         byWindow: new Map(),
       };
@@ -208,6 +210,7 @@ export async function readClaudeUsageAccounts(
     key: accountKey(group.identity),
     kind: group.kind,
     accountNames: group.accountNames,
+    accountIds: group.accountIds,
     readings: [...group.byWindow.values()]
       .sort((a, b) => WINDOW_ORDER.get(a.window)! - WINDOW_ORDER.get(b.window)!)
       .map((record): ClaudeUsageReading => {

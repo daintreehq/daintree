@@ -83,6 +83,11 @@ export interface CodexQuotaProfile {
   presetNames: string[];
   /** Names of the Codex accounts kept in this home (#16040), in account order. */
   accountNames?: string[];
+  /**
+   * Ids of those same accounts. Names aren't unique, so a choice is matched to
+   * its reading by id (#16407). Absent from a host that predates it.
+   */
+  accountIds?: string[];
   result: CodexQuotaProfileResult;
 }
 
@@ -163,6 +168,12 @@ export interface ClaudeUsageAccount {
   kind: ClaudeUsageAccountKind;
   /** Names of the saved accounts (#16040) whose folder this is, in account order. */
   accountNames: string[];
+  /**
+   * Ids of those same accounts, so a choice is matched to its readings by id
+   * rather than by a name that may repeat (#16407). Absent from a host that
+   * predates it.
+   */
+  accountIds?: string[];
   /** Latest per limit, in {@link CLAUDE_USAGE_WINDOWS} order. */
   readings: ClaudeUsageReading[];
 }
