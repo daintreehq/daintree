@@ -1938,7 +1938,9 @@ export class WorktreeMonitor {
     }
     // A user refresh skips the unanswered-read backoff, never the check that
     // the git stopped last time has exited.
-    await this.updateGitStatus(true, { userInitiated: !options?.automatic });
+    await (options?.automatic
+      ? this.updateGitStatus(true)
+      : this.updateGitStatus(true, { userInitiated: true }));
   }
 
   /**
