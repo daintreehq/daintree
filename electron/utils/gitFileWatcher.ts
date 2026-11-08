@@ -1215,7 +1215,7 @@ export class GitFileWatcher {
   /**
    * Stop trusting anything remembered about the ignore rules or the index. Only
    * the remembering is fenced, not a burst decided by an answer already in
-   * flight: every caller's event brings its own later refresh, and that pass
+   * flight: each event landing here brings its own later refresh, and that pass
    * sees whatever such a burst wrote.
    */
   private invalidateIgnoreAnswers(): void {

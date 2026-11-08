@@ -3250,26 +3250,107 @@ describe("GitFileWatcher", () => {
         expect(checkIgnoredPaths).toHaveBeenCalledTimes(3);
       });
 
-      it("logs a refresh that throws on the fast path instead of escaping the timer", async () => {
+      it("judges a held answer by its own burst's deletes, not the burst collecting now", async () => {
+        const onChange = vi.fn();
+        let release: ((ignored: Set<string>) => void) | undefined;
+        vi.mocked(checkIgnoredPaths).mockImplementationOnce(
+          () =>
+            new Promise<Set<string>>((resolve) => {
+              release = resolve;
+            }) as never
+        );
+        const { cb } = await startClassifyingWatcher({ onChange });
+        const DIR = p(".output");
+        fireEvents(cb, [{ type: "delete", path: DIR }]);
+        await vi.advanceTimersByTimeAsync(100);
+
+        // The rebuild is still unflushed as the delete's answer lands. Reading the
+        // collecting burst's state would see no delete and learn the directory.
+        fireEvents(cb, [{ type: "create", path: DIR }]);
+        release?.(new Set());
+        await flushClassification();
+        expect(onChange).toHaveBeenCalledTimes(1);
+
+        onChange.mockClear();
+        vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([DIR]));
+        await vi.advanceTimersByTimeAsync(100);
+        await flushClassification();
+        expect(checkIgnoredPaths).toHaveBeenCalledTimes(2);
+        expect(onChange).not.toHaveBeenCalled();
+      });
+
+      it("forgets a deleted path even when its burst supersedes another classification", async () => {
         const onChange = vi.fn();
         const { cb } = await startClassifyingWatcher({ onChange });
         await learn(cb, TRACKED);
 
-        // An escape here would reach the workspace host's fatal uncaughtException
-        // handler, and fail this advance with it.
-        onChange.mockImplementationOnce(() => {
-          throw new Error("status pass failed to start");
-        });
-        hangCheckIgnore();
-        fireEvents(cb, [{ type: "update", path: TRACKED }]);
+        vi.mocked(checkIgnoredPaths).mockImplementationOnce(
+          () => new Promise<Set<string>>(() => {}) as never
+        );
+        fireEvents(cb, [{ type: "update", path: IGNORED_A }]);
+        await vi.advanceTimersByTimeAsync(100);
+        fireEvents(cb, [{ type: "delete", path: TRACKED }]);
         await vi.advanceTimersByTimeAsync(100);
         expect(onChange).toHaveBeenCalledTimes(2);
-        expect(logWarn).toHaveBeenCalledTimes(1);
+        expect(checkIgnoredPaths).toHaveBeenCalledTimes(2);
 
-        fireEvents(cb, [{ type: "update", path: TRACKED }]);
+        onChange.mockClear();
+        vi.mocked(checkIgnoredPaths).mockResolvedValue(new Set([TRACKED]));
+        fireEvents(cb, [{ type: "create", path: TRACKED }]);
         await vi.advanceTimersByTimeAsync(100);
-        expect(onChange).toHaveBeenCalledTimes(3);
+        await flushClassification();
+        expect(checkIgnoredPaths).toHaveBeenCalledTimes(3);
+        expect(onChange).not.toHaveBeenCalled();
       });
+
+      it.each<
+        [
+          string,
+          (cb: Parameters<typeof fireEvents>[0]) => Promise<void>,
+          Parameters<typeof fireEvents>[1],
+        ]
+      >([
+        [
+          "a remembered path",
+          async (cb) => {
+            await learn(cb, TRACKED);
+            hangCheckIgnore();
+          },
+          [{ type: "update", path: TRACKED }],
+        ],
+        ["an unknown burst", async () => {}, [{ type: "update" }]],
+        [
+          "a superseding burst",
+          async (cb) => {
+            hangCheckIgnore();
+            fireEvents(cb, [{ type: "update", path: IGNORED_A }]);
+            await vi.advanceTimersByTimeAsync(100);
+          },
+          [{ type: "update", path: IGNORED_B }],
+        ],
+      ])(
+        "logs a refresh that throws on %s instead of escaping the timer",
+        async (_name, arrange, events) => {
+          const onChange = vi.fn();
+          const { cb } = await startClassifyingWatcher({ onChange });
+          await arrange(cb);
+
+          // An escape here would reach the workspace host's fatal uncaughtException
+          // handler, and fail this advance with it.
+          onChange.mockClear();
+          onChange.mockImplementationOnce(() => {
+            throw new Error("status pass failed to start");
+          });
+          fireEvents(cb, events);
+          await vi.advanceTimersByTimeAsync(100);
+          expect(onChange).toHaveBeenCalledTimes(1);
+          expect(logWarn).toHaveBeenCalledTimes(1);
+
+          fireEvents(cb, [{ type: "update" }]);
+          await vi.advanceTimersByTimeAsync(100);
+          expect(onChange).toHaveBeenCalledTimes(2);
+        }
+      );
 
       it("keeps verifying membership on the fast path", async () => {
         const onChange = vi.fn();

@@ -1,8 +1,8 @@
-import { describe, it, expect, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { checkIgnoredPaths } from "../gitCheckIgnore.js";
 import { GitFileWatcher } from "../gitFileWatcher.js";
 import { buildHardenedGitEnv } from "../hardenedGit.js";
@@ -216,6 +216,14 @@ describe("worktree burst ignore classification against real git", () => {
 });
 
 describe("remembered relevant paths against real git (#16424)", () => {
+  type Probe = Awaited<ReturnType<typeof arm>>;
+
+  // The integration config keeps mocks across tests, so a lifetime count could be
+  // satisfied by a test that ran earlier.
+  beforeEach(() => {
+    vi.mocked(checkIgnoredPaths).mockClear();
+  });
+
   /** A repo holding a tracked file, an untracked visible one, and an ignored directory. */
   function seedRepo() {
     const repo = makeRepo();
@@ -229,14 +237,47 @@ describe("remembered relevant paths against real git (#16424)", () => {
     return repo;
   }
 
+  /** How many check-ignore spawns so far were asked about `name`. */
+  function classificationsOf(name: string): number {
+    return vi
+      .mocked(checkIgnoredPaths)
+      .mock.calls.filter(([, paths]) => paths.some((path) => path.endsWith(sep + name))).length;
+  }
+
+  /**
+   * Prove `save` is remembered: classified, then refreshing with no further spawn.
+   * A refresh alone proves nothing, because an unknown or failed burst also
+   * refreshes without learning. The classification may predate the first save, as
+   * FSEvents can deliver the fixture's own write once the watcher is armed.
+   */
+  async function expectRemembered(probe: Probe, save: () => void, name: string): Promise<void> {
+    expect((await probe(save)).changes).toBeGreaterThan(0);
+    const learned = classificationsOf(name);
+    expect(learned).toBeGreaterThan(0);
+
+    expect((await probe(save)).changes).toBeGreaterThan(0);
+    expect(classificationsOf(name)).toBe(learned);
+  }
+
+  /**
+   * Prove `act` was heard, answered afresh and skipped. Zero refreshes alone would
+   * also pass for an event that never arrived.
+   */
+  async function expectFreshSkip(probe: Probe, act: () => void, name: string): Promise<void> {
+    const before = classificationsOf(name);
+    const observed = await probe(act);
+    expect(observed.fileSignals).toBeGreaterThan(0);
+    expect(classificationsOf(name)).toBeGreaterThan(before);
+    expect(observed.changes).toBe(0);
+  }
+
   it("asks git once for repeated saves, across Daintree's own status passes", async () => {
     const { root } = seedRepo();
     const probe = await arm(root);
+    const save = () => writeFileSync(join(root, "src.txt"), `${Math.random()}\n`);
 
-    const first = await probe(() => writeFileSync(join(root, "src.txt"), "one\n"));
-    expect(first.changes).toBeGreaterThan(0);
-    const spawns = vi.mocked(checkIgnoredPaths).mock.calls.length;
-    expect(spawns).toBeGreaterThan(0);
+    await expectRemembered(probe, save, "src.txt");
+    const spawns = classificationsOf("src.txt");
 
     // The status pass runs under the hardened env: if it wrote the index, every
     // pass would wipe what the save just taught the watcher.
@@ -246,9 +287,8 @@ describe("remembered relevant paths against real git (#16424)", () => {
       env: { ...GIT_ENV, ...buildHardenedGitEnv() },
     });
 
-    const second = await probe(() => writeFileSync(join(root, "src.txt"), "two\n"));
-    expect(second.changes).toBeGreaterThan(0);
-    expect(vi.mocked(checkIgnoredPaths).mock.calls.length).toBe(spawns);
+    expect((await probe(save)).changes).toBeGreaterThan(0);
+    expect(classificationsOf("src.txt")).toBe(spawns);
   });
 
   it("keeps skipping a rebuilt ignored directory after its delete was refreshed", async () => {
@@ -256,16 +296,20 @@ describe("remembered relevant paths against real git (#16424)", () => {
     const probe = await arm(root);
 
     // git reports a deleted `.output` as not ignored, because `.output/` only
-    // matches a directory, so this burst does refresh.
+    // matches a directory. That is this test's premise, so the burst has to have
+    // asked about the directory itself.
     const deleted = await probe(() => rmSync(join(root, ".output"), { recursive: true }));
     expect(deleted.changes).toBeGreaterThan(0);
+    expect(classificationsOf(".output")).toBeGreaterThan(0);
 
-    const rebuilt = await probe(() => {
-      mkdirSync(join(root, ".output"));
-      writeFileSync(join(root, ".output", "chunk.js"), "build\n");
-    });
-    expect(rebuilt.changes).toBe(0);
-    expect(rebuilt.fileSignals).toBeGreaterThan(0);
+    await expectFreshSkip(
+      probe,
+      () => {
+        mkdirSync(join(root, ".output"));
+        writeFileSync(join(root, ".output", "chunk.js"), "build\n");
+      },
+      ".output"
+    );
   });
 
   it("skips a remembered path once a .gitignore rule ignores it", async () => {
@@ -273,13 +317,13 @@ describe("remembered relevant paths against real git (#16424)", () => {
     const probe = await arm(root);
     const save = () => writeFileSync(join(root, "scratch.txt"), `${Math.random()}\n`);
 
-    expect((await probe(save)).changes).toBeGreaterThan(0);
+    await expectRemembered(probe, save, "scratch.txt");
     expect(
       (await probe(() => appendFileSync(join(root, ".gitignore"), "scratch.txt\n"))).changes
     ).toBeGreaterThan(0);
     expect(status(root)).not.toContain("scratch.txt");
 
-    expect((await probe(save)).changes).toBe(0);
+    await expectFreshSkip(probe, save, "scratch.txt");
   });
 
   it("skips a remembered path once .git/info/exclude ignores it", async () => {
@@ -288,14 +332,14 @@ describe("remembered relevant paths against real git (#16424)", () => {
     const probe = await arm(root);
     const save = () => writeFileSync(join(root, "scratch.txt"), `${Math.random()}\n`);
 
-    expect((await probe(save)).changes).toBeGreaterThan(0);
+    await expectRemembered(probe, save, "scratch.txt");
     expect(
       (await probe(() => appendFileSync(join(root, ".git", "info", "exclude"), "scratch.txt\n")))
         .changes
     ).toBeGreaterThan(0);
     expect(status(root)).not.toContain("scratch.txt");
 
-    expect((await probe(save)).changes).toBe(0);
+    await expectFreshSkip(probe, save, "scratch.txt");
   });
 
   it("stops trusting a remembered path in a linked worktree when the shared exclude changes", async () => {
@@ -310,36 +354,40 @@ describe("remembered relevant paths against real git (#16424)", () => {
     const probe = await arm(linked);
     const save = () => writeFileSync(join(linked, "scratch.txt"), `${Math.random()}\n`);
 
-    expect((await probe(save)).changes).toBeGreaterThan(0);
+    await expectRemembered(probe, save, "scratch.txt");
     expect(
       (await probe(() => appendFileSync(join(root, ".git", "info", "exclude"), "scratch.txt\n")))
         .changes
     ).toBeGreaterThan(0);
     expect(status(linked)).not.toContain("scratch.txt");
 
-    expect((await probe(save)).changes).toBe(0);
+    await expectFreshSkip(probe, save, "scratch.txt");
   });
 
   it("stops trusting a remembered path once the index changes", async () => {
     const { root, git } = seedRepo();
-    const probe = await arm(root);
-    const save = () => writeFileSync(join(root, ".output", "forced.js"), `${Math.random()}\n`);
-
+    const forced = join(".output", "forced.js");
+    const save = () => writeFileSync(join(root, forced), `${Math.random()}\n`);
     // Force-added, so it is tracked though a rule matches it, and git says relevant.
     save();
-    git(["add", "-f", ".output/forced.js"]);
+    git(["add", "-f", forced]);
     git(["commit", "-m", "force"]);
-    await settleParcelWatcherLifecycle();
-    expect((await probe(save)).changes).toBeGreaterThan(0);
 
-    // `git rm --cached` leaves it untracked and ignored, which only the index shows.
-    expect(
-      (await probe(() => git(["rm", "--cached", "-q", ".output/forced.js"]))).changes
-    ).toBeGreaterThan(0);
-    git(["commit", "-m", "unforce"]);
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const probe = await arm(root);
+    await expectRemembered(probe, save, forced);
 
-    expect((await probe(save)).changes).toBe(0);
+    // Only the index moves here: `git rm --cached` leaves it untracked and ignored
+    // and touches no ref, so nothing but the index event can drop the answer. It
+    // also ends the tracked/ignored overlap, which would force a refresh by itself.
+    expect((await probe(() => git(["rm", "--cached", "-q", forced]))).changes).toBeGreaterThan(0);
+    const overlap = execFileSync("git", ["ls-files", "-i", "-c", "--exclude-standard"], {
+      cwd: root,
+      encoding: "utf8",
+      env: GIT_ENV,
+    });
+    expect(overlap).toBe("");
+
+    await expectFreshSkip(probe, save, forced);
   });
 });
 
