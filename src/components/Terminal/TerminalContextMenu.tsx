@@ -394,7 +394,7 @@ function TerminalContextMenuBody({
   const whenDoneChoice = useTerminalWhenDoneStore((s) =>
     isMenuLive ? s.choices[terminalId] : undefined
   );
-  const fleetSize = useFleetArmingStore((s) => s.armedIds.size);
+  const fleetSize = useFleetArmingStore((s) => (isMenuLive ? s.armedIds.size : 0));
   const isVoiceLockedHere = useVoiceRecordingStore((s) => s.lockedTarget?.panelId === terminalId);
   const hybridInputEnabled = useTerminalInputStore((s) => isMenuLive && s.hybridInputEnabled);
   const recentVoiceTargets = useVoiceRecordingStore((s) => s.recentTargets);

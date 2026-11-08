@@ -37,7 +37,9 @@ export function useFleetMirror({
   isolated = false,
 }: UseFleetMirrorParams) {
   const isApplyingExternalValueRef = useRef(false);
-  const armedIds = useFleetArmingStore((s) => s.armedIds);
+  // Only the primary re-mirrors when membership changes; every other pane
+  // reads a constant, so a fleet change doesn't re-render its composer.
+  const armedIds = useFleetArmingStore((s) => (isFleetPrimary ? s.armedIds : null));
 
   // Primary → followers: write our current draft to each other armed pane's
   // draft slot, holding each one's own draft the first time it's replaced.
