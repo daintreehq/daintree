@@ -319,6 +319,10 @@ interface ForgeRemoteRead {
   promise: Promise<ForgeRemoteTable | null>;
   // Set once the read lands, and only while it still owns the slot.
   table: ForgeRemoteTable | null;
+  // Lost the slot before landing. A stranded read's failure is not the repo's
+  // answer: the read that replaced it may itself have failed and fanned out
+  // nothing.
+  stranded: boolean;
 }
 
 // The fresh-base fetch a create can ask for (#15733), including any wait behind
@@ -2743,25 +2747,26 @@ export class WorkspaceService {
    */
   private beginForgeRemoteRead(read: () => Promise<ForgeRemoteTable | null>): ForgeRemoteRead {
     const settle = (table: ForgeRemoteTable | null): ForgeRemoteTable | null => {
-      if (this.forgeRemoteRead === slot) {
-        if (table) slot.table = table;
-        else this.forgeRemoteRead = null;
-      }
+      if (this.forgeRemoteRead !== slot) slot.stranded = true;
+      else if (table) slot.table = table;
+      else this.forgeRemoteRead = null;
       return table;
     };
     const slot: ForgeRemoteRead = {
       promise: read().then(settle, () => settle(null)),
       table: null,
+      stranded: false,
     };
     this.forgeRemoteRead = slot;
     return slot;
   }
 
   /**
-   * The shared remote table, starting a read only when none is held. Reads at
-   * the project root rather than `forgeProbeCwd()`: an install that straddled a
-   * project switch can leave the old project's monitor running, and a read
-   * from its path would hand that repo's remotes to every incoming monitor.
+   * The shared remote table, starting a read only when none is held. Every
+   * read of it runs at the project root, never a monitor's path: an install
+   * that straddled a project switch can leave the old project's monitor
+   * running, and a read from its path would hand that repo's remotes to every
+   * incoming monitor.
    */
   private sharedForgeRemoteRead(): ForgeRemoteRead | null {
     if (this.forgeRemoteRead) return this.forgeRemoteRead;
@@ -2782,12 +2787,12 @@ export class WorkspaceService {
    * resolves from the table already held (#16427).
    */
   private async probeForgeRemoteAsync(monitor: WorktreeMonitor): Promise<void> {
-    // A second pass covers a read that did not settle this monitor: one a
-    // reprobe replaced while it waited (its table may predate the reprobe's
+    // A second pass covers a read that did not settle this monitor: one
+    // replaced while it waited (its table may predate the replacement's
     // fan-out, so applying it would overwrite that), or one it only joined
     // that came back empty — the load's read, failed or discarded. A failed
-    // read this monitor started itself is final, as before, so a repo whose
-    // enumeration keeps failing still costs one read per monitor.
+    // read this monitor started itself, and still held, is final, as before,
+    // so a repo whose enumeration keeps failing costs one read per monitor.
     for (let pass = 0; pass < 2; pass++) {
       // Checked before every read: a monitor torn down by a project switch must
       // not start one.
@@ -2803,7 +2808,7 @@ export class WorkspaceService {
         }
         return;
       }
-      if (!table && !joined) return;
+      if (!table && !joined && !read.stranded) return;
     }
     // Deliberately never seeds `forgeRemoteSignature`. A monitor start read
     // races the user: it can complete AFTER a `git remote add` and would then
@@ -2862,7 +2867,8 @@ export class WorkspaceService {
   }
 
   private async runForgeRemoteReprobe(): Promise<void> {
-    const cwd = this.forgeProbeCwd();
+    // The project root, like the fingerprint below: see `sharedForgeRemoteRead`.
+    const cwd = this.projectRootPath;
     if (!cwd) return;
     const seq = ++this.forgeRemoteProbeSeq;
 
@@ -2911,21 +2917,6 @@ export class WorkspaceService {
   }
 
   /**
-   * Any running monitor resolves the same remotes — they share one common dir.
-   * Prefer the main worktree (longest-lived), then any running monitor, then
-   * the project root for the window between load and the first monitor start.
-   */
-  private forgeProbeCwd(): string | null {
-    for (const monitor of this.monitors.values()) {
-      if (monitor.isRunning && monitor.isMainWorktree) return monitor.path;
-    }
-    for (const monitor of this.monitors.values()) {
-      if (monitor.isRunning) return monitor.path;
-    }
-    return this.projectRootPath;
-  }
-
-  /**
    * Identity fingerprint of `<commonDir>/config`, or null when it can't be read.
    * Includes the inode: git writes config lock-then-rename, so every real
    * `git remote` mutation lands a NEW inode. That makes the fingerprint a
@@ -2961,7 +2952,12 @@ export class WorkspaceService {
     if (!rootPath) return;
     this.forgeRemoteDetectionActive = true;
 
-    const seq = this.forgeRemoteProbeSeq;
+    // Bumped, not just read: the seed replaces whatever holds the slot, and a
+    // reselect read started since the last stop (the load assigns the root
+    // before it gets here) would otherwise pass its sequence check and apply
+    // a table older than this one, after the seed has already consumed the
+    // fingerprint that would have flagged it.
+    const seq = ++this.forgeRemoteProbeSeq;
     const epoch = this.forgeConfigEpoch;
     // Held in the shared slot, so the monitors this load installs take their
     // remotes from this one read rather than one `git remote` each (#16427).
@@ -6131,9 +6127,8 @@ export class WorkspaceService {
    * fingerprint and signature gates: neither moved, only the choice did.
    */
   private scheduleForgeReselect(): void {
-    // A folder with no repository has no remotes to reselect from, and
-    // `forgeProbeCwd` falls back to the project root — so without this the
-    // matcher relay would spawn `git remote -v` there and, on its bounded
+    // A folder with no repository has no remotes to reselect from, and the
+    // shared read runs at the project root — so without this the matcher relay would spawn `git remote -v` there and, on its bounded
     // re-arm, up to three more times per registry change (#11405 × #11408).
     // Left at `=== false` where the monitor-minting guards moved to `!== true`:
     // a matcher push reaching a host whose probe failed can still spawn one
