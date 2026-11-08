@@ -130,6 +130,25 @@ vi.mock("@/services/assistantSubject", async (importOriginal) => ({
   openInAssistant: openInAssistantMock,
 }));
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
+// The plugin's own module loads over `plugin://` and has its own suites: here
+// the pane records what Canopy mounted, with a control of the view's own.
+const pluginMounts = vi.hoisted(
+  () => [] as Array<{ host: string; mountId: string; viewId: string }>
+);
+const installKitHost = vi.hoisted(() => vi.fn());
+vi.mock("@/components/Plugin/PluginHostedView", () => ({
+  PluginHostedView: (props: { host: string; mountId: string; source: { view: { id: string } } }) => {
+    pluginMounts.push({ host: props.host, mountId: props.mountId, viewId: props.source.view.id });
+    return (
+      <div data-testid="plugin-view">
+        <input aria-label="Plugin filter" />
+      </div>
+    );
+  },
+}));
+vi.mock("@/services/plugin/appPluginKitHost", () => ({
+  installAppPluginKitHost: installKitHost,
+}));
 const lifecycle = vi.hoisted(() => new Set<(phase: string) => void>());
 vi.mock("@/lib/viewCacheState", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/viewCacheState")>()),
@@ -153,6 +172,11 @@ import { useCanopyStore } from "@/store/canopyStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useUIStore } from "@/store/uiStore";
+import {
+  _resetPluginHostedViewsStoreForTest,
+  usePluginHostedViewsStore,
+} from "@/store/pluginHostedViewsStore";
+import type { PluginCanopyHostedViewDescriptor } from "@shared/types/plugin";
 
 // The service mock never evaluates the real module, so nothing builds it.
 await loadTerminalService();
@@ -861,5 +885,146 @@ describe("Canopy's inbox with no dialog and no project", () => {
       fireEvent.keyDown(document.body, { key: "Escape" });
     });
     expect(host.close).not.toHaveBeenCalled();
+  });
+});
+
+function canopyPluginView(viewId: string, title: string): PluginCanopyHostedViewDescriptor {
+  return {
+    id: `plugin-view:acme.beads/${viewId}`,
+    pluginId: "acme.beads",
+    viewId,
+    location: "canopy",
+    name: `Beads ${title}`,
+    title,
+    pluginName: "Beads",
+    iconId: "list",
+    componentPath: `plugin://acme.beads/__dtv-1/${viewId}.js`,
+  };
+}
+
+describe("app-wide plugin views in the Canopy window (#16344)", () => {
+  const TRIAGE = canopyPluginView("triage", "Triage");
+
+  function offer(views: PluginCanopyHostedViewDescriptor[]) {
+    act(() => usePluginHostedViewsStore.setState({ views }));
+  }
+
+  function pluginRow(title: string) {
+    return within(surface()!).getByRole("option", { name: new RegExp(title) });
+  }
+
+  async function showPlugin(title: string) {
+    await act(async () => {
+      fireEvent.click(pluginRow(title));
+    });
+    await vi.waitFor(() => expect(screen.queryByTestId("plugin-view")).not.toBeNull());
+  }
+
+  beforeEach(() => {
+    pluginMounts.length = 0;
+    _resetPluginHostedViewsStoreForTest();
+  });
+  afterEach(() => _resetPluginHostedViewsStoreForTest());
+
+  it("adds nothing while no plugin offers a view", async () => {
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+    expect(document.querySelector("[data-canopy-plugins]")).toBeNull();
+  });
+
+  it("lists the offered views and fills the pane with the one chosen, as Canopy's own", async () => {
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+    offer([canopyPluginView("timesheet", "Timesheet"), TRIAGE]);
+
+    const rows = within(surface()!)
+      .getAllByRole("option")
+      .filter((row) => row.hasAttribute("data-canopy-plugin-row"));
+    expect(rows.map((row) => row.textContent)).toEqual(["TimesheetBeads", "TriageBeads"]);
+    // Focus alone starts nothing: the view mounts when it is chosen.
+    act(() => pluginRow("Triage").focus());
+    expect(pluginMounts).toEqual([]);
+
+    await showPlugin("Triage");
+    expect(pluginMounts.at(-1)).toEqual({
+      host: "canopy",
+      mountId: `canopy:${TRIAGE.id}`,
+      viewId: TRIAGE.id,
+    });
+    expect(installKitHost).toHaveBeenCalled();
+    expect(pluginRow("Triage").getAttribute("aria-selected")).toBe("true");
+    // No run reads as the one in the pane while the plugin's view is.
+    expect(selectedRun()).toBeUndefined();
+    expect(document.querySelector("[data-canopy-detail]")).toBeNull();
+  });
+
+  it("gives the pane back to the run the person picks, or to a search", async () => {
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+    offer([TRIAGE]);
+    await showPlugin("Triage");
+
+    await act(async () => {
+      fireEvent.click(card("second"));
+    });
+    expect(screen.queryByTestId("plugin-view")).toBeNull();
+    expect(selectedRun()).toBe("canopy-card-second");
+    expect(pluginRow("Triage").getAttribute("aria-selected")).toBe("false");
+
+    await showPlugin("Triage");
+    const search = within(surface()!).getByRole("combobox", { name: "Search agents" });
+    await act(async () => {
+      fireEvent.change(search, { target: { value: "site" } });
+    });
+    expect(screen.queryByTestId("plugin-view")).toBeNull();
+  });
+
+  it("gives the pane back when the plugin stops offering the view", async () => {
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+    offer([TRIAGE]);
+    await showPlugin("Triage");
+
+    offer([]);
+    expect(screen.queryByTestId("plugin-view")).toBeNull();
+    expect(document.querySelector("[data-canopy-plugins]")).toBeNull();
+    expect(document.querySelector("[data-canopy-detail]")).not.toBeNull();
+  });
+
+  it("keeps Escape from closing Canopy, handing the keyboard back to the view's row", async () => {
+    const host = hostFrame();
+    render(<CanopyView frame={host.frame} />);
+    await settle();
+    offer([TRIAGE]);
+    await showPlugin("Triage");
+
+    const input = screen.getByRole("textbox", { name: "Plugin filter" });
+    act(() => input.focus());
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Escape" });
+    });
+    expect(host.close).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(pluginRow("Triage"));
+    expect(screen.queryByTestId("plugin-view")).not.toBeNull();
+    // Z there is the view's letter, not Canopy's undo.
+    const press = new KeyboardEvent("keydown", { key: "z", bubbles: true, cancelable: true });
+    act(() => {
+      screen.getByTestId("plugin-view").dispatchEvent(press);
+    });
+    expect(press.defaultPrevented).toBe(false);
+  });
+
+  it("lists the views with no agent running, and says how to start one beside them", async () => {
+    useFleetSnapshotStore.setState({ snapshot: { ...FLEET, runs: [] } });
+    render(<CanopyView frame={hostFrame().frame} />);
+    await settle();
+    offer([TRIAGE]);
+
+    expect(pluginRow("Triage")).not.toBeNull();
+    expect(
+      within(surface()!).getAllByText("Launch an agent from the toolbar and it shows up here.")
+    ).toHaveLength(1);
+    await showPlugin("Triage");
+    expect(screen.queryByText("Launch an agent from the toolbar and it shows up here.")).toBeNull();
   });
 });

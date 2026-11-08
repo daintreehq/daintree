@@ -444,6 +444,40 @@ describe("PluginHostedView", () => {
       expect(h.mounts.at(-1)?.initialArgs).toEqual({ layout: "wide" });
     });
 
+    it("keeps the Canopy window's bag with no project, judged by its panel's version", () => {
+      const canopyView = {
+        id: "plugin-view:acme.tools/triage",
+        pluginId: "acme.tools",
+        viewId: "triage",
+        location: "canopy",
+        name: "Acme Triage",
+        title: "Triage",
+        pluginName: "Acme",
+        stateVersion: 2,
+        componentPath: "plugin://acme.tools/__dtv-1/triage.js",
+      } satisfies PluginHostedViewDescriptor;
+      serve([canopyView]);
+      const canopy = () => (
+        <PluginHostedView
+          source={{ from: "hosted", view: canopyView }}
+          host="canopy"
+          mountId={`canopy:${canopyView.id}`}
+        />
+      );
+      // The Canopy window has no workspace of its own.
+      delete win.__DAINTREE_INITIAL_PROJECT__;
+      const first = render(canopy());
+      const mount = h.mounts.at(-1)!;
+      expect(mount.hostContext?.kind).toBe("canopy");
+      expect(mount.offerUnsavedChanges).toBe(true);
+      expect(mount.stateVersion).toBe(2);
+      expect(mount.persistState?.({ filter: "open" })).toBe(true);
+      first.unmount();
+
+      render(canopy());
+      expect(h.mounts.at(-1)?.initialArgs).toEqual({ filter: "open" });
+    });
+
     it("hands a view with no declared version no stateVersion, as a panel would", () => {
       const { unmount } = render(sidebar());
       h.mounts.at(-1)!.persistState?.({ tab: 1 });

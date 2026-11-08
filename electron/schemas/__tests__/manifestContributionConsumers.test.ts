@@ -12,6 +12,7 @@ import {
   AgentMcpContributionSchema,
   AgentMcpToolGroupSchema,
   AgentPackagesContributionSchema,
+  CanopyViewContributionSchema,
   CommandContributionSchema,
   ContextMenuContributionSchema,
   CredentialFieldSchema,
@@ -134,6 +135,7 @@ const AGENT_REGISTRY = "shared/config/pluginAgentRegistry.ts";
 const MCP_SUPERVISOR = "electron/services/PluginMcpSupervisor.ts";
 const PLUGIN_SCHEMA = "electron/schemas/plugin.ts";
 const PLUGIN_TOOLBAR_POPOVER = "src/components/Layout/PluginToolbarPopover.tsx";
+const CANOPY_PLUGIN_SECTION = "src/components/Canopy/CanopyPluginSection.tsx";
 const SKILL_REGISTRY = "electron/services/plugin/PluginSkillRegistry.ts";
 const ASSISTANT_PLUGIN_KNOWLEDGE = "electron/services/AssistantPluginKnowledge.ts";
 const PROMPT_TEMPLATE_UTIL = "shared/utils/pluginPromptTemplates.ts";
@@ -207,6 +209,7 @@ const SERVICE_BROKER = "electron/services/plugin/PluginServiceBroker.ts";
 const SWEPT_SCHEMAS = {
   panels: PanelContributionObjectSchema,
   toolbarButtons: ToolbarButtonContributionSchema,
+  canopyViews: CanopyViewContributionSchema,
   launchEntries: LaunchEntryContributionSchema,
   layouts: LayoutContributionSchema,
   searchProviders: SearchProviderContributionSchema,
@@ -292,6 +295,7 @@ type SweptGroup = keyof typeof SWEPT_SCHEMAS;
 const TOP_LEVEL_GROUPS = [
   "panels",
   "toolbarButtons",
+  "canopyViews",
   "launchEntries",
   "layouts",
   "searchProviders",
@@ -348,6 +352,7 @@ type ForgeSlots = NonNullable<z.infer<typeof ForgeProviderContributionSchema>["s
 type FieldConsumerCoverage = {
   panels: Record<keyof z.infer<typeof PanelContributionObjectSchema>, ConsumerDescriptor>;
   toolbarButtons: Record<keyof z.infer<typeof ToolbarButtonContributionSchema>, ConsumerDescriptor>;
+  canopyViews: Record<keyof z.infer<typeof CanopyViewContributionSchema>, ConsumerDescriptor>;
   launchEntries: Record<keyof z.infer<typeof LaunchEntryContributionSchema>, ConsumerDescriptor>;
   "launchEntries.panel": Record<
     keyof z.infer<typeof LaunchEntryPanelTargetSchema>,
@@ -2917,6 +2922,24 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: SERVICE_BROKER, symbol: "PluginServiceBroker.status (required)" },
       ],
       note: "A required import that can't be reached is written to the plugin's log once; optional ones aren't.",
+    },
+  },
+  canopyViews: {
+    viewId: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: PLUGIN_SCHEMA,
+          symbol: "getPluginManifestSchema superRefine (canopy_view_unknown)",
+        },
+        {
+          file: PLUGIN_CONTRIBUTION_REGISTRAR,
+          symbol: "PluginContributionRegistrar (canopy hosted view → registerPluginHostedViews)",
+        },
+        { file: PLUGIN_SERVICE, symbol: "findHostedView (activatePluginForHostedView)" },
+        { file: CANOPY_PLUGIN_SECTION, symbol: "CanopyPluginSection (the Canopy window's rows)" },
+      ],
+      note: "Names the panel view Canopy shows; the panel lends its name, icon and stateVersion.",
     },
   },
   "toolbarButtons.popover": {
