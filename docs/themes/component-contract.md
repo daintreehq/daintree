@@ -123,7 +123,7 @@ An action that recurs across the app wears one glyph everywhere, so a user who h
 | Glyph | Means | Labels it goes with |
 | --- | --- | --- |
 | `RefreshCw` | Do it again, or fetch it again. The thing stays what it was. | Retry, Try again, Refresh, Check again, Re-check, Re-scan, Fetch, Redraw |
-| `RotateCw` | Reload a page, view or panel, or restart a process, session or server. | Reload, Reload preview, Reload from folder, Restart terminal, Restart dev server, Restart conversation, Auto-restart |
+| `RotateCw` | Reload a page, view or panel, or restart a process, session or server. | Reload, Reload preview, Reload from folder, Restart terminal, Restart dev server, Auto-restart |
 | `RotateCcw` | Go back to an earlier state. | Restore, Reset, Revert, Undo, Replay, Resume session |
 
 Never `RotateCcw` for a retry or a restart: the counter-clockwise arrow promises the user they are going back, and a retry does not undo anything. A control with a busy state spins the same glyph through `SpinningIcon`, which only turns clockwise; that is one more reason restart is `RotateCw`.
@@ -132,6 +132,7 @@ The other concepts that had split:
 
 | Concept | Glyph | Not |
 | --- | --- | --- |
+| Clear a conversation (the assistant's Clear conversation) | `Eraser` | `RotateCw`, which would read as restart: `terminal.restart` keeps the conversation, clearing ends it |
 | Copy (a URL, a path, a link address) | `Copy`, swapping to `Check` for the copied beat | `Link` / `Link2`, which mean linking something (attach an issue, linked work) |
 | Edit | `Pencil` | `Edit`, `Edit2`, `Edit3` (deprecated Lucide aliases) |
 | Project settings | `Settings` | `Settings2`, which stays the General settings tab and the manage-presets rows |

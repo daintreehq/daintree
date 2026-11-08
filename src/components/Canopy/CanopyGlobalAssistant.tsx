@@ -199,8 +199,8 @@ export function CanopyGlobalAssistant({
         ) : terminal === null ? (
           // Running with no terminal to watch: its PTY is being brought back, or couldn't be.
           <p role="status" className="px-6 py-8 text-center text-xs text-text-secondary">
-            The global assistant's terminal isn't available. Restart it from the Assistant panel if
-            it doesn't come back.
+            The global assistant's terminal isn't available. Clear the conversation from the
+            Assistant panel if it doesn't come back.
           </p>
         ) : (
           terminal

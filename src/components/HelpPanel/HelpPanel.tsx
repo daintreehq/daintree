@@ -9,7 +9,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { ExternalLink, History, MessageCircle, RotateCw, Settings2, Sparkles } from "lucide-react";
+import { Eraser, ExternalLink, History, MessageCircle, Settings2, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { reportCanopySent } from "@/lib/canopySeen";
 import { Button } from "@/components/ui/button";
@@ -1541,8 +1541,8 @@ export function HelpPanel({
                       onClick={handleRestartActiveSlot}
                       data-testid="help-restart-paused-conversation"
                     >
-                      <RotateCw aria-hidden="true" />
-                      Restart conversation
+                      <Eraser aria-hidden="true" />
+                      Clear conversation
                     </Button>
                   )}
                 </div>
@@ -1670,9 +1670,9 @@ export function HelpPanel({
         // old wording ("Start a new session?") described the outcome as a gain when
         // the thing being confirmed is a loss, and it collided with the strip's own
         // new-session control.
-        title="Restart this conversation?"
+        title="Clear this conversation?"
         description={restartDescription}
-        confirmLabel="Restart conversation"
+        confirmLabel="Clear conversation"
         onConfirm={handleConfirmRestartSlot}
         onClose={handleCancelRestartSlot}
         variant="destructive"

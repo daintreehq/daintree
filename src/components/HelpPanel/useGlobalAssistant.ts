@@ -203,7 +203,7 @@ export function useGlobalAssistant(
     (generation: number) =>
       run(
         () => window.electron.help.restartGlobalAssistant(generation),
-        "The global assistant didn't restart."
+        "Daintree couldn't clear the global assistant's conversation."
       ),
     [run]
   );

@@ -308,13 +308,13 @@ describe("HelpPanelHeader", () => {
     // And never mirrored here: the strip's "+" is that action's single home.
     expect(queryByText("Open parallel session")).toBeNull();
 
-    fireEvent.click(getByText("Restart conversation"));
+    fireEvent.click(getByText("Clear conversation"));
     expect(onRestartConversation).toHaveBeenCalledTimes(1);
   });
 
   it("hides the restart item when there is no conversation to restart", () => {
     const { queryByText } = renderHeader({ canRestartConversation: false });
-    expect(queryByText("Restart conversation")).toBeNull();
+    expect(queryByText("Clear conversation")).toBeNull();
   });
 
   it("shows the Stop assistant item only when canEndSession is true", () => {
