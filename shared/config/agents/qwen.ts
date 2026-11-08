@@ -4,6 +4,12 @@ export const config: AgentConfig = {
   id: "qwen",
   name: "Qwen Code",
   command: "qwen",
+  // Qwen Code (Gemini CLI fork): explicit -i/-p flags. Bare-positional
+  // semantics have drifted between fork generations; the flags are stable.
+  initialPromptForm: {
+    interactive: { args: ["-i", "{prompt}"] },
+    headless: { args: ["-p", "{prompt}"] },
+  },
   npmGlobalPackage: "@qwen-code/qwen-code",
   color: "#615CED",
   iconId: "qwen",

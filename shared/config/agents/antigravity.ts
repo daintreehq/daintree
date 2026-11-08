@@ -4,6 +4,12 @@ export const config: AgentConfig = {
   id: "antigravity",
   name: "Antigravity",
   command: "agy",
+  // agy rejects a bare positional prompt ("Error: empty prompt"), so the
+  // mode flag is mandatory: -i (--prompt-interactive) or -p (--print).
+  initialPromptForm: {
+    interactive: { args: ["-i", "{prompt}"] },
+    headless: { args: ["-p", "{prompt}"] },
+  },
   // Where Google's standalone installers put the binary. They add it to the
   // user PATH, so these only cover a stale PATH: Electron's often misses
   // ~/.local/bin, and Windows hands the new PATH only to new processes.

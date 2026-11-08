@@ -4,6 +4,12 @@ export const config: AgentConfig = {
   id: "kiro",
   name: "Kiro",
   command: "kiro-cli",
+  // A bare positional seeds the implicit chat TUI; headless needs the
+  // explicit `chat --no-interactive` form.
+  initialPromptForm: {
+    interactive: { args: ["{prompt}"] },
+    headless: { args: ["chat", "--no-interactive", "{prompt}"] },
+  },
   color: "#7C3AED",
   iconId: "kiro",
   supportsContextInjection: true,

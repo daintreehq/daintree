@@ -4,6 +4,12 @@ export const config: AgentConfig = {
   id: "grok",
   name: "Grok",
   command: "grok",
+  // A bare positional seeds the TUI (`grok "fix the bug"`, per
+  // `grok --help`); headless one-shot uses -p/--single.
+  initialPromptForm: {
+    interactive: { args: ["{prompt}"] },
+    headless: { args: ["-p", "{prompt}"] },
+  },
   // xAI's installer (`curl -fsSL https://x.ai/cli/install.sh | bash`) places the
   // launcher at ~/.local/bin/grok on macOS/Linux. Probe it directly so users
   // who installed via the script aren't mis-reported as "missing" when

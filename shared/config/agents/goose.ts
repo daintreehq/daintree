@@ -5,6 +5,16 @@ export const config: AgentConfig = {
   name: "Goose",
   command: "goose",
   args: ["session"],
+  // `goose session` accepts no prompt (verified on 1.33.1), so a prompted
+  // launch runs `run -t` instead, staying interactive after the first input
+  // when asked to.
+  initialPromptForm: {
+    interactive: {
+      subcommand: { name: "run", replaces: "session" },
+      args: ["-t", "{prompt}", "--interactive"],
+    },
+    headless: { subcommand: { name: "run", replaces: "session" }, args: ["-t", "{prompt}"] },
+  },
   // Goose's curl installer drops the binary at ~/.local/bin/goose on POSIX.
   // The PS1 installer (download_cli.ps1) defaults GOOSE_BIN_DIR to
   // $env:USERPROFILE\.local\bin so the binary lands at

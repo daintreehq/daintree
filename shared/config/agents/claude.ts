@@ -5,6 +5,11 @@ export const config: AgentConfig = {
   id: "claude",
   name: "Claude",
   command: "claude",
+  // Claude: a bare positional seeds the TUI; -p is print mode.
+  initialPromptForm: {
+    interactive: { args: ["{prompt}"] },
+    headless: { args: ["-p", "{prompt}"] },
+  },
   // Anthropic's native installer places the symlink at ~/.local/bin/claude
   // on macOS/Linux (with a versioned binary under ~/.local/share/claude) and
   // the binary at %USERPROFILE%\.local\bin\claude.exe on Windows. The first

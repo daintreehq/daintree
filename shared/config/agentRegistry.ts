@@ -627,6 +627,63 @@ function expandResumeTemplate(template: AgentResumeTemplate): AgentResume {
   };
 }
 
+/** The argv element of an {@link AgentPromptForm} that stands for the prompt itself. */
+export const PROMPT_FORM_PLACEHOLDER = "{prompt}";
+
+/**
+ * How a CLI takes the prompt a launch opens with, in one mode (#16367). Plain
+ * data, like {@link AgentResumeTemplate}, so a form survives the structured
+ * clone plugin agent configs go through.
+ */
+export interface AgentPromptForm {
+  /**
+   * The arguments that carry the prompt, appended after every other launch
+   * argument. The element `{prompt}` stands for the prompt, quoted as one
+   * argument, and appears exactly once.
+   */
+  args: readonly string[];
+  /**
+   * A subcommand the prompted launch runs instead of one among the registry's
+   * own `args`: `name` takes the place of `replaces` there, or goes straight
+   * after the command when the registry carries no `replaces`. Goose's
+   * `session` takes no prompt, so a prompted launch runs `run` instead.
+   */
+  subcommand?: { name: string; replaces: string };
+  /**
+   * Set when the CLI is known not to open this mode on the prompt, as the
+   * CLI itself was observed to behave:
+   * - `may-ignore`: the CLI can start without acting on it (a TUI that drops
+   *   positionals, or one with no flag to pre-seed its input).
+   * - `exits-after-reply`: the CLI answers the prompt and exits instead of
+   *   staying in the mode.
+   * Omitted means nothing is known against it.
+   */
+  shortfall?: "may-ignore" | "exits-after-reply";
+}
+
+/** An agent's {@link AgentPromptForm} for each launch mode. */
+export interface AgentInitialPromptForm {
+  interactive: AgentPromptForm;
+  headless: AgentPromptForm;
+}
+
+const POSITIONAL_PROMPT_FORM: AgentPromptForm = Object.freeze({
+  args: Object.freeze([PROMPT_FORM_PLACEHOLDER]),
+});
+
+/**
+ * How `agentId` takes a launch prompt in the given mode: its declared
+ * {@link AgentConfig.initialPromptForm}, or a bare positional argument for an
+ * agent that declares none.
+ */
+export function getAgentPromptForm(
+  agentId: string | undefined,
+  mode: "interactive" | "headless"
+): AgentPromptForm {
+  const declared = agentId ? getEffectiveAgentConfig(agentId)?.initialPromptForm : undefined;
+  return declared?.[mode] ?? POSITIONAL_PROMPT_FORM;
+}
+
 /**
  * How an agent's conversation history fares when its project folder is moved or
  * renamed (#11282, phase 5). Surfaced in the relocation preview so the user is
@@ -1037,6 +1094,12 @@ export interface AgentConfig {
    * process census, never off typed input.
    */
   resumeArgv?: AgentResumeArgv;
+  /**
+   * How the CLI takes the prompt a launch opens with, interactive and headless
+   * (#16367). Unset, the prompt goes last as a bare positional argument. Read
+   * through {@link getAgentPromptForm}.
+   */
+  initialPromptForm?: AgentInitialPromptForm;
   /**
    * How this agent's conversation history fares across a project-folder move
    * (#11282, phase 5). Read live by the relocation preview via

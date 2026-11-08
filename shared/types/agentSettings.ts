@@ -2,9 +2,12 @@ import {
   AGENT_REGISTRY,
   canSelectAgentModel,
   getAgentDisplayTitle,
+  getAgentPromptForm,
   getEffectiveAgentConfig,
   isRetiredAgentModel,
+  PROMPT_FORM_PLACEHOLDER,
 } from "../config/agentRegistry.js";
+import type { AgentPromptForm } from "../config/agentRegistry.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import {
   agentCommandDialect,
@@ -937,6 +940,7 @@ export function generateAgentCommand(
     globalSkipPermissions: options?.globalSkipPermissions,
   });
   const parts: string[] = [baseCommand];
+  let registryArgsEnd = parts.length;
 
   // Add default args from agent registry (before user flags)
   if (agentId) {
@@ -951,6 +955,7 @@ export function generateAgentCommand(
         }
       }
     }
+    registryArgsEnd = parts.length;
 
     // Add the screen-mode flag matching the resolved tri-state, when the agent
     // declares one for that direction (#10876, #11423). resolveEffectiveInlineMode
@@ -1021,162 +1026,48 @@ export function generateAgentCommand(
     parts.push(isSafeShellOption(arg) ? arg : quoteAgentArg(arg));
   }
 
-  // Add initial prompt if provided
   const prompt = options?.initialPrompt?.trim();
   if (prompt) {
-    const interactive = options?.interactive ?? true;
-    const escapedPrompt = quoteLaunchPrompt(prompt);
-
-    switch (agentId) {
-      case "claude":
-        // Claude: -p for print mode (non-interactive), otherwise just the prompt
-        if (!interactive) {
-          parts.push("-p");
-        }
-        parts.push(escapedPrompt);
-        break;
-
-      case "gemini":
-        // Gemini: -i for interactive with prompt; bare positional launches
-        // the interactive TUI (verified on 0.41.2), so headless needs -p
-        if (interactive) {
-          parts.push("-i", escapedPrompt);
-        } else {
-          parts.push("-p", escapedPrompt);
-        }
-        break;
-
-      case "qwen":
-        // Qwen Code (Gemini-CLI fork): explicit -i/-p flags — bare-positional
-        // semantics have drifted between fork generations, flags are stable
-        if (interactive) {
-          parts.push("-i", escapedPrompt);
-        } else {
-          parts.push("-p", escapedPrompt);
-        }
-        break;
-
-      case "antigravity":
-        // Antigravity (agy): rejects bare positional prompts ("Error: empty
-        // prompt"), so the mode flag is mandatory — -i (--prompt-interactive)
-        // or -p (--print)
-        if (interactive) {
-          parts.push("-i", escapedPrompt);
-        } else {
-          parts.push("-p", escapedPrompt);
-        }
-        break;
-
-      case "codex":
-        // Codex: "exec" subcommand for non-interactive, otherwise just the prompt
-        if (!interactive) {
-          parts.push("exec");
-        }
-        parts.push(escapedPrompt);
-        break;
-
-      case "copilot":
-        // Copilot: -i for interactive prompt injection, -p for one-shot
-        if (interactive) {
-          parts.push("-i", escapedPrompt);
-        } else {
-          parts.push("-p", escapedPrompt);
-        }
-        break;
-
-      case "opencode":
-        // opencode: bare positional is a project PATH (verified on 1.14.48);
-        // --prompt seeds the TUI, the run subcommand is the one-shot path
-        if (interactive) {
-          parts.push("--prompt", escapedPrompt);
-        } else {
-          parts.push("run", escapedPrompt);
-        }
-        break;
-
-      case "aider":
-        // Aider: positionals are filenames; -m sends one message then exits
-        // (no interactive-with-prompt mode exists)
-        parts.push("-m", escapedPrompt);
-        break;
-
-      case "goose": {
-        // goose session accepts no prompt (verified on 1.33.1) — swap the
-        // registry's `session` arg (pushed shell-escaped above) for `run -t`,
-        // staying interactive after the initial input when requested
-        const sessionIdx = parts.findIndex(
-          (p) => p === "session" || p === quoteAgentArg("session")
-        );
-        if (sessionIdx !== -1) {
-          parts[sessionIdx] = "run";
-        } else {
-          parts.splice(1, 0, "run");
-        }
-        parts.push("-t", escapedPrompt);
-        if (interactive) {
-          parts.push("--interactive");
-        }
-        break;
-      }
-
-      case "amp":
-        // Amp: -x/--execute runs one-shot; the TUI ignores positionals, so
-        // interactive launches keep the (best-effort) positional form
-        if (!interactive) {
-          parts.push("-x");
-        }
-        parts.push(escapedPrompt);
-        break;
-
-      case "crush":
-        // Crush: the run subcommand is the only prompt path; the root TUI
-        // has no pre-seed flag, so interactive keeps the positional form
-        if (!interactive) {
-          parts.push("run");
-        }
-        parts.push(escapedPrompt);
-        break;
-
-      case "kimi":
-        // Kimi: no bare-positional prompt form; --prompt/-p runs the query
-        // in both modes
-        parts.push("-p", escapedPrompt);
-        break;
-
-      case "mistral":
-        // Vibe: bare positional seeds the TUI; headless needs --prompt
-        if (!interactive) {
-          parts.push("--prompt");
-        }
-        parts.push(escapedPrompt);
-        break;
-
-      case "kiro":
-        // Kiro: bare positional seeds the implicit chat TUI; headless needs
-        // the explicit chat --no-interactive form
-        if (!interactive) {
-          parts.push("chat", "--no-interactive");
-        }
-        parts.push(escapedPrompt);
-        break;
-
-      case "grok":
-        // Grok Build: a bare positional seeds the interactive TUI
-        // (`grok "fix the bug"`, per `grok --help`); headless one-shot uses
-        // -p/--single.
-        if (!interactive) {
-          parts.push("-p");
-        }
-        parts.push(escapedPrompt);
-        break;
-
-      default:
-        // Generic agent: just append the prompt
-        parts.push(escapedPrompt);
-    }
+    const form = getAgentPromptForm(
+      agentId,
+      (options?.interactive ?? true) ? "interactive" : "headless"
+    );
+    appendPromptForm(parts, registryArgsEnd, form, quoteLaunchPrompt(prompt));
   }
 
   return parts.join(" ");
+}
+
+/**
+ * Adds a launch prompt to `parts` in the agent's declared form. A form word is
+ * quoted unless it is an option or a plain word, so every built-in form stays
+ * bare and a declared word can never reach the shell unquoted.
+ */
+function appendPromptForm(
+  parts: string[],
+  registryArgsEnd: number,
+  form: AgentPromptForm,
+  quotedPrompt: string
+): void {
+  const word = (arg: string) => (isSafeShellOption(arg) ? arg : quoteAgentArgOptional(arg));
+  if (form.subcommand) {
+    // Only the registry's own args are searched: the same word in a preset,
+    // recipe or settings arg is a value there, not the subcommand.
+    const { name, replaces } = form.subcommand;
+    const quoted = quoteAgentArg(replaces);
+    const at = parts.findIndex(
+      (part, index) =>
+        index > 0 && index < registryArgsEnd && (part === replaces || part === quoted)
+    );
+    if (at !== -1) {
+      parts[at] = word(name);
+    } else {
+      parts.splice(1, 0, word(name));
+    }
+  }
+  for (const arg of form.args) {
+    parts.push(arg === PROMPT_FORM_PLACEHOLDER ? quotedPrompt : word(arg));
+  }
 }
 
 /**
