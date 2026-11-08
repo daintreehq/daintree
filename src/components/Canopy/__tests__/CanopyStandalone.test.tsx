@@ -312,6 +312,12 @@ function installElectron() {
       fleet: {},
       terminal: { restore: vi.fn() },
       system: { openExternal: vi.fn() },
+      // The docked global assistant, still attaching: enough to draw its pane.
+      help: {
+        onGlobalAssistantChanged: vi.fn(() => () => {}),
+        attachGlobalAssistant: vi.fn(() => new Promise(() => {})),
+        detachGlobalAssistant: vi.fn(async () => {}),
+      },
     },
     configurable: true,
     writable: true,
@@ -940,7 +946,10 @@ describe("app-wide plugin views in the Canopy window (#16344)", () => {
     pluginMounts.length = 0;
     _resetPluginHostedViewsStoreForTest();
   });
-  afterEach(() => _resetPluginHostedViewsStoreForTest());
+  afterEach(() => {
+    _resetPluginHostedViewsStoreForTest();
+    useCanopyStore.setState({ globalDocked: false });
+  });
 
   it("adds nothing while no plugin offers a view", async () => {
     render(<CanopyView frame={hostFrame().frame} />);
@@ -1013,13 +1022,22 @@ describe("app-wide plugin views in the Canopy window (#16344)", () => {
       expect(press.defaultPrevented).toBe(false);
       expect(screen.queryByTestId("plugin-view")).not.toBeNull();
     }
-    // From the list beside it they still step through the agents.
-    const search = within(surface()!).getByRole("combobox", { name: "Search agents" });
-    await act(async () => {
-      fireEvent.keyDown(search, step);
-    });
-    expect(screen.queryByTestId("plugin-view")).toBeNull();
-    expect(selectedRun()).toBeDefined();
+    // From the search, the list and the docked global assistant they still
+    // step through the agents, taking the pane back.
+    act(() => useCanopyStore.setState({ globalDocked: true }));
+    const from = [
+      within(surface()!).getByRole("combobox", { name: "Search agents" }),
+      document.querySelector<HTMLElement>("[data-canopy-list]")!,
+      document.querySelector<HTMLElement>("[data-canopy-global]")!,
+    ];
+    for (const target of from) {
+      await showPlugin("Triage");
+      await act(async () => {
+        fireEvent.keyDown(target, step);
+      });
+      expect(screen.queryByTestId("plugin-view")).toBeNull();
+      expect(selectedRun()).toBeDefined();
+    }
   });
 
   it("keeps the view up when the keyboard drops out of it", async () => {

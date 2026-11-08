@@ -1684,13 +1684,14 @@ function CanopyInbox({
         className="canopy-frame flex min-h-0 flex-1 flex-col"
         onKeyDownCapture={(event) => {
           // While a plugin's view is in the pane, ⌘↑/⌘↓ step the agents only
-          // from the search and the list: anywhere else they are the view's,
-          // its dialogs and menus too, which sit outside this box.
+          // from the search, the list and the docked global assistant:
+          // anywhere else they are the view's, its dialogs and menus too,
+          // which sit outside this box.
           if (
             shownPluginView !== null &&
             !(
               event.target instanceof Element &&
-              event.target.closest("[data-canopy-list], [data-canopy-search]")
+              event.target.closest("[data-canopy-list], [data-canopy-search], [data-canopy-global]")
             )
           ) {
             return;
