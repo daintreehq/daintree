@@ -8,12 +8,12 @@ import {
   recordComposerBindings,
 } from "../inputEditorExtensions/composerBindings";
 
-function composer(doc = "") {
+function composer(doc = "", editableAtBuild = true) {
   const onUpdate = vi.fn();
   const compartment = new Compartment();
   const extensions: Extension[] = [
     history(),
-    compartment.of(EditorView.editable.of(true)),
+    compartment.of(EditorView.editable.of(editableAtBuild)),
     EditorView.updateListener.of(onUpdate),
   ];
   const view = new EditorView({
@@ -46,21 +46,24 @@ describe("rebindToComposer", () => {
     expect(gone.onUpdate).not.toHaveBeenCalled();
   });
 
-  it("brings the composer's compartments along as they stand, not as they were built", () => {
-    const gone = composer();
-    const kept = gone.view.state;
+  it.each([
+    ["locked since it was built", true, false],
+    ["unlocked since it was built", false, true],
+  ])("brings a compartment along as it stands: %s", (_name, editableAtBuild, editableNow) => {
+    const kept = composer("", !editableNow).view.state;
 
-    const now = composer();
+    const now = composer("", editableAtBuild);
     now.view.dispatch({
-      effects: now.compartment.reconfigure(EditorView.editable.of(false)),
+      effects: now.compartment.reconfigure(EditorView.editable.of(editableNow)),
     });
     now.view.setState(rebindToComposer(now.view, kept));
 
-    expect(now.view.state.facet(EditorView.editable)).toBe(false);
+    expect(now.view.state.facet(EditorView.editable)).toBe(editableNow);
+    // Still this composer's own to change, not only copied in.
     now.view.dispatch({
-      effects: now.compartment.reconfigure(EditorView.editable.of(true)),
+      effects: now.compartment.reconfigure(EditorView.editable.of(!editableNow)),
     });
-    expect(now.view.state.facet(EditorView.editable)).toBe(true);
+    expect(now.view.state.facet(EditorView.editable)).toBe(!editableNow);
   });
 
   it("leaves a state alone in an editor no composer built", () => {

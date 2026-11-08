@@ -415,6 +415,7 @@ describe("HybridInputBar, one per Assistant session (#16571)", () => {
     await act(async () => {
       triggerStashInput(LANE_A);
     });
+    expect(draftOf(LANE_A)).toBe("");
     await act(async () => {
       triggerPopStash(LANE_A);
     });
@@ -423,6 +424,41 @@ describe("HybridInputBar, one per Assistant session (#16571)", () => {
     await show(LANE_B);
     await show(LANE_A);
     expect(shownText(container)).toBe("half a prompt");
+  });
+
+  it("leaves a stash stashed while a send waits on the draft, which goes as it stood", async () => {
+    const pending = deferred<CorrectResult>();
+    correct.mockReturnValueOnce(pending.promise);
+    const { container } = await showing(LANE_A);
+    await typeInto(editorIn(container), "old prompt");
+    await act(async () => {
+      triggerStashInput(LANE_A);
+    });
+    await act(async () => {
+      dictateInto(LANE_A, "hello wrld");
+    });
+    await pressEnter(editorIn(container));
+    const restore = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Restore stashed input"]'
+    )!;
+    expect(restore.disabled).toBe(true);
+
+    await act(async () => {
+      triggerPopStash(LANE_A);
+    });
+
+    expect(useTerminalInputStore.getState().hasStashedEditorState(LANE_A)).toBe(true);
+    expect(shownText(container)).toBe("hello wrld");
+    expect(draftOf(LANE_A)).toBe("hello wrld");
+    expect(editorIn(container).state.facet(EditorView.editable)).toBe(false);
+
+    await act(async () => {
+      pending.resolve({ action: "replace", correctedText: "Hello world." });
+    });
+
+    expect(sends).toEqual([{ to: LANE_A, text: "Hello world." }]);
+    expect(useTerminalInputStore.getState().hasStashedEditorState(LANE_A)).toBe(true);
+    expect(restore.disabled).toBe(false);
   });
 
   it("pops a stash onto the composer showing it now, whose typing and Enter are its own", async () => {
@@ -441,6 +477,7 @@ describe("HybridInputBar, one per Assistant session (#16571)", () => {
 
     const view = editorIn(container);
     expect(view.state.doc.toString()).toBe("half a prompt");
+    expect(draftOf(LANE_A)).toBe("half a prompt");
     expect(undoDepth(view.state)).toBeGreaterThan(0);
 
     await typeInto(view, ", finished");

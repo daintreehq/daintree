@@ -2369,6 +2369,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       // A popped stash replaces the editor's state outright, past the
       // document-change listener that drops the note.
       popStashedEditorState: (terminalId, projectId) => {
+        // A send waiting on this draft reads it when it goes: restored now, the
+        // stash would go in place of what Enter was pressed on. It stays stashed.
+        if (useTerminalInputStore.getState().isVoiceSubmitting(voiceId)) return undefined;
         const stashed = popStashedEditorState(terminalId, projectId);
         if (stashed) dropSendRefusal();
         return stashed;
@@ -2968,7 +2971,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                     <button
                       type="button"
                       onClick={handlePopStash}
-                      disabled={disabled}
+                      disabled={disabled || isVoiceSubmitting}
                       // 24px to clear the WCAG 2.5.8 floor. The spacing
                       // exception cannot rescue a smaller one here — its circle
                       // overlaps the attach and mic targets either side.
