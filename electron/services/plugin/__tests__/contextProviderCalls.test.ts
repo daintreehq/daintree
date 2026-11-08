@@ -22,10 +22,7 @@ import type {
   ContextProviderEntry,
   ContextProviderImpl,
 } from "../../../../shared/types/pluginContextProvider.js";
-import {
-  ISSUE_CONTEXT_PLUGIN_ID,
-  ISSUE_CONTEXT_PROVIDER_ID,
-} from "../../issueContextProvider.js";
+import { ISSUE_CONTEXT_PLUGIN_ID, ISSUE_CONTEXT_PROVIDER_ID } from "../../issueContextProvider.js";
 
 function entry(overrides: Partial<ContextProviderEntry> = {}): ContextProviderEntry {
   return {

@@ -93,7 +93,10 @@ describe("withHostContextProviders (#16382)", () => {
 
   it("holds `issue` ahead of any plugin that claims it, naming itself as the holder", () => {
     const entries = arbitrateContextProviders(
-      withHostContextProviders([plugin("acme.tracker", "issue"), plugin("acme.wiki", "page")], "p1"),
+      withHostContextProviders(
+        [plugin("acme.tracker", "issue"), plugin("acme.wiki", "page")],
+        "p1"
+      ),
       () => false
     );
     expect(entries.map((e) => [e.pluginId, e.prefix, e.status, e.scope])).toEqual([
@@ -101,7 +104,10 @@ describe("withHostContextProviders (#16382)", () => {
       ["acme.tracker", "issue", "refused", "global"],
       ["acme.wiki", "page", "active", "global"],
     ]);
-    expect(entries[1]?.heldBy).toEqual({ pluginId: ISSUE_CONTEXT_PLUGIN_ID, pluginName: "Daintree" });
+    expect(entries[1]?.heldBy).toEqual({
+      pluginId: ISSUE_CONTEXT_PLUGIN_ID,
+      pluginName: "Daintree",
+    });
   });
 
   it("hands `issue` to the next plugin in line when switched off", () => {
@@ -270,7 +276,10 @@ describe("issue resolve (#16382)", () => {
     const listIssueComments = vi.fn(async (_r: unknown, _n: number, opts: { cursor?: string }) =>
       opts.cursor ? page(all.slice(20)) : page(all.slice(0, 20), "next")
     );
-    const impl = provider({ getIssue: vi.fn(async () => issue()), issueComments: { listIssueComments } });
+    const impl = provider({
+      getIssue: vi.fn(async () => issue()),
+      issueComments: { listIssueComments },
+    });
     const p = createIssueContextProvider("p1", { deadlineAt: Infinity, deps: deps(impl) });
     const text = (await p.resolve("12", { signal: signal() }))!.text;
     expect(text).toContain("Comments (latest 10 of 25):");
@@ -283,7 +292,10 @@ describe("issue resolve (#16382)", () => {
   it("says the discussion is partial when paging stops before its end", async () => {
     let n = 0;
     const listIssueComments = vi.fn(async () => page([comment(++n)], `c${n}`));
-    const impl = provider({ getIssue: vi.fn(async () => issue()), issueComments: { listIssueComments } });
+    const impl = provider({
+      getIssue: vi.fn(async () => issue()),
+      issueComments: { listIssueComments },
+    });
     const p = createIssueContextProvider("p1", { deadlineAt: Infinity, deps: deps(impl) });
     const text = (await p.resolve("12", { signal: signal() }))!.text;
     expect(text).toContain("Comments (3 of the first 3 read; newer comments may be missing):");
@@ -292,7 +304,10 @@ describe("issue resolve (#16382)", () => {
 
   it("stops on a cursor it has already followed", async () => {
     const listIssueComments = vi.fn(async () => page([comment(1)], "same"));
-    const impl = provider({ getIssue: vi.fn(async () => issue()), issueComments: { listIssueComments } });
+    const impl = provider({
+      getIssue: vi.fn(async () => issue()),
+      issueComments: { listIssueComments },
+    });
     const p = createIssueContextProvider("p1", { deadlineAt: Infinity, deps: deps(impl) });
     const text = (await p.resolve("12", { signal: signal() }))!.text;
     expect(text).toContain("newer comments may be missing");

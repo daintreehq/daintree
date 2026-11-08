@@ -231,8 +231,9 @@ async function fetchIssue(
 ): Promise<Issue | null> {
   const number = positiveIssueNumber(id);
   if (number !== null) {
-    return deps.audit({ source, methodName: "getIssue", argsSummary: JSON.stringify({ number }) }, () =>
-      source.impl.getIssue(source.repo, number)
+    return deps.audit(
+      { source, methodName: "getIssue", argsSummary: JSON.stringify({ number }) },
+      () => source.impl.getIssue(source.repo, number)
     );
   }
   if (DIGITS.test(id)) return null;
@@ -355,11 +356,16 @@ function commentsHeading(read: IssueCommentsRead, shown: number, issue: Issue): 
  * {@link AGENT_CONTEXT_MAX_TEXT_LENGTH} characters with every cut marked, and
  * opened by a notice that none of it is the user's instruction.
  */
-export function formatIssueContext(issue: Issue, comments: IssueCommentsRead): ContextProviderContent {
+export function formatIssueContext(
+  issue: Issue,
+  comments: IssueCommentsRead
+): ContextProviderContent {
   const title = oneLine(issue.title ?? "", TITLE_MAX);
   const rawState = oneLine(issue.rawState ?? "", 60);
   const state =
-    rawState && rawState.toLowerCase() !== issue.state ? `${issue.state} (${rawState})` : issue.state;
+    rawState && rawState.toLowerCase() !== issue.state
+      ? `${issue.state} (${rawState})`
+      : issue.state;
   const url = typeof issue.url === "string" ? oneLine(issue.url, 2_000) : "";
   const body = typeof issue.body === "string" ? issue.body.trim() : "";
   const head = [
@@ -447,7 +453,8 @@ export function createIssueContextProvider(
       };
       if (exact.status === "fulfilled") add(exact.value);
       if (listed.status === "fulfilled") {
-        for (const issue of Array.isArray(listed.value?.items) ? listed.value.items : []) add(issue);
+        for (const issue of Array.isArray(listed.value?.items) ? listed.value.items : [])
+          add(issue);
       }
       return items;
     },
