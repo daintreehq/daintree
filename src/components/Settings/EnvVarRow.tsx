@@ -72,6 +72,8 @@ interface EnvVarRowProps {
   keyRef?: Ref<HTMLInputElement>;
   /** Held while a save of the set it belongs to is in flight. */
   disabled?: boolean;
+  /** Replaces the list-row padding where the row sits in a form column instead of a settings group. */
+  className?: string;
 }
 
 export function EnvVarRow({
@@ -88,6 +90,7 @@ export function EnvVarRow({
   valuePlaceholder = "value",
   keyRef,
   disabled,
+  className,
 }: EnvVarRowProps) {
   const errorId = `${row.id}-error`;
   const name = row.key.trim();
@@ -95,7 +98,7 @@ export function EnvVarRow({
   const valueLabel = name ? `Value of ${name} (row ${position})` : `Value of variable ${position}`;
   return (
     // The id is what a close blocked on this row's error lands on.
-    <div id={row.id} className="px-4 py-2.5" data-env-row="">
+    <div id={row.id} className={cn("px-4 py-2.5", className)} data-env-row="">
       <div className={ENV_ROW_GRID}>
         <div className="relative min-w-0">
           <Input

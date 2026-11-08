@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, act, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, act, cleanup, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 
 interface MockAction {
@@ -41,6 +41,11 @@ import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { getAgentDisplayTitle } from "@/config/agents";
 import type { Project, RecipeTerminal, TerminalRecipe } from "@/types";
 import { getAvailableVariables } from "@/utils/recipeVariables";
+import {
+  ENV_KEY_DUPLICATE_MESSAGE,
+  ENV_KEY_INVALID_MESSAGE,
+} from "@/components/Settings/EnvVarRow";
+import { ENV_VALUE_CONTROL_CHAR_MESSAGE } from "../recipeStepEnv";
 
 const RECIPE: TerminalRecipe = {
   id: "r1",
@@ -414,6 +419,201 @@ describe("RecipeEditor", () => {
       );
       await pickType(0, "Dev server");
       expect(value("terminal-dev-command-0")).toBe("");
+    });
+  });
+
+  describe("environment variables (#16446)", () => {
+    const ENV_RECIPE: TerminalRecipe = {
+      ...RECIPE,
+      terminals: [
+        { ...RECIPE.terminals[0]!, env: { PORT: "3000", NODE_ENV: "development" } },
+        RECIPE.terminals[1]!,
+        { ...RECIPE.terminals[2]!, env: { DEBUG: "1" } },
+      ],
+    };
+    const card = (step: number) =>
+      screen
+        .getByRole("button", { name: `Remove terminal ${step}` })
+        .closest<HTMLElement>('[role="group"][aria-labelledby^="terminal-heading-"]')!;
+    const variables = (step: number) =>
+      [...card(step).querySelectorAll<HTMLElement>("[data-env-row]")].map((row) => {
+        const [name, value] = row.querySelectorAll("input");
+        return [name!.value, value!.value];
+      });
+    const nameField = (step: number, row: number) =>
+      within(card(step)).getByRole("textbox", { name: `Name of variable ${row}` });
+    const valueField = (step: number, row: number) =>
+      card(step)
+        .querySelectorAll<HTMLElement>("[data-env-row]")
+        [row - 1]!.querySelectorAll("input")[1]!;
+    const addVariable = (step: number) =>
+      act(() => {
+        screen.getByRole("button", { name: `Add variable to terminal ${step}` }).click();
+      });
+    const save = async (label = "Update recipe") => {
+      await act(async () => {
+        screen.getByRole("button", { name: label }).click();
+      });
+    };
+    const savedTerminals = () => updateRecipe.mock.calls.at(-1)?.[1].terminals ?? [];
+
+    it("shows each step's variables by name and value, whatever the step's type", () => {
+      renderEditor(ENV_RECIPE);
+      expect(variables(1)).toEqual([
+        ["PORT", "3000"],
+        ["NODE_ENV", "development"],
+      ]);
+      expect(variables(2)).toEqual([]);
+      expect(variables(3)).toEqual([["DEBUG", "1"]]);
+      for (const step of [1, 2, 3]) {
+        expect(
+          within(card(step)).getByRole("button", { name: `Add variable to terminal ${step}` })
+        ).toBeTruthy();
+      }
+    });
+
+    it("draws a variable's fields in the family chrome", () => {
+      renderEditor(ENV_RECIPE);
+      const family = chrome(document.getElementById("auto-assign")!);
+      const fields = document.querySelectorAll("[data-env-row] input");
+      expect(fields.length).toBe(6);
+      for (const field of fields) {
+        expect(chrome(field).join(" ")).toEqual(family.join(" "));
+      }
+    });
+
+    it("adds, edits and removes variables, saving each on its own step", async () => {
+      renderEditor(ENV_RECIPE);
+      addVariable(2);
+      expect(document.activeElement).toBe(nameField(2, 1));
+      fireEvent.change(nameField(2, 1), { target: { value: " API_URL " } });
+      fireEvent.change(valueField(2, 1), { target: { value: "http://localhost:4000" } });
+      // A named variable with no value is kept: it still overrides an inherited one.
+      addVariable(2);
+      fireEvent.change(nameField(2, 2), { target: { value: "CI" } });
+      // A row left without a name is dropped, as the settings editors drop one.
+      addVariable(2);
+
+      fireEvent.change(valueField(1, 1), { target: { value: "4000" } });
+      act(() => {
+        within(card(1)).getByRole("button", { name: "Delete NODE_ENV (row 2)" }).click();
+      });
+      expect(document.activeElement).toBe(nameField(1, 1));
+      act(() => {
+        within(card(3)).getByRole("button", { name: "Delete DEBUG (row 1)" }).click();
+      });
+      expect(document.activeElement).toBe(
+        within(card(3)).getByRole("button", { name: "Add variable to terminal 3" })
+      );
+
+      await save();
+      expect(savedTerminals().map((t) => t.env)).toEqual([
+        { PORT: "4000" },
+        { API_URL: "http://localhost:4000", CI: "" },
+        {},
+      ]);
+    });
+
+    it("refuses a name the shell can't export, on the row that holds it, and saves once fixed", async () => {
+      renderEditor(ENV_RECIPE);
+      fireEvent.change(nameField(1, 2), { target: { value: "2FAST" } });
+      await save();
+      expect(updateRecipe).not.toHaveBeenCalled();
+      expect(document.activeElement).toBe(nameField(1, 2));
+      expect(nameField(1, 2).getAttribute("aria-invalid")).toBe("true");
+      const describedBy = nameField(1, 2).getAttribute("aria-describedby") ?? "";
+      expect(document.getElementById(describedBy)?.textContent).toBe(ENV_KEY_INVALID_MESSAGE);
+
+      fireEvent.change(nameField(1, 2), { target: { value: "FAST" } });
+      expect(nameField(1, 2).getAttribute("aria-invalid")).toBeNull();
+      await save();
+      expect(savedTerminals()[0]?.env).toEqual({ PORT: "3000", FAST: "development" });
+    });
+
+    it("refuses a name used twice in one step, but not the same name in two steps", async () => {
+      renderEditor(ENV_RECIPE);
+      addVariable(3);
+      fireEvent.change(nameField(3, 2), { target: { value: "DEBUG" } });
+      addVariable(1);
+      fireEvent.change(nameField(1, 3), { target: { value: "DEBUG" } });
+      await save();
+      expect(updateRecipe).not.toHaveBeenCalled();
+      expect(within(card(3)).queryByText(ENV_KEY_DUPLICATE_MESSAGE)).toBeTruthy();
+      expect(within(card(1)).queryByText(ENV_KEY_DUPLICATE_MESSAGE)).toBeNull();
+      expect(document.activeElement).toBe(nameField(3, 2));
+    });
+
+    it("refuses a value holding a control character, which would drop the step on load", async () => {
+      renderEditor(ENV_RECIPE);
+      fireEvent.change(valueField(3, 1), { target: { value: "a\tb" } });
+      await save();
+      expect(updateRecipe).not.toHaveBeenCalled();
+      expect(within(card(3)).queryByText(ENV_VALUE_CONTROL_CHAR_MESSAGE)).toBeTruthy();
+    });
+
+    it("keeps a step's variables through a type switch and the removal of a step above it", async () => {
+      renderEditor(ENV_RECIPE);
+      const trigger = document.getElementById("terminal-type-2")!;
+      fireEvent.keyDown(trigger, { key: "ArrowDown" });
+      const option = await screen.findByRole("option", { name: "Terminal" });
+      await act(async () => {
+        option.click();
+      });
+      act(() => {
+        screen.getByRole("button", { name: "Remove terminal 1" }).click();
+      });
+      expect(variables(2)).toEqual([["DEBUG", "1"]]);
+      await save();
+      expect(savedTerminals().map((t) => [t.type, t.env])).toEqual([
+        ["terminal", {}],
+        ["terminal", { DEBUG: "1" }],
+      ]);
+    });
+
+    it("says a team recipe's values stay on this machine, and shows a value not set here as empty", () => {
+      renderEditor({
+        ...ENV_RECIPE,
+        id: "inrepo-full-stack",
+        scope: "inrepo",
+        terminals: [{ ...ENV_RECIPE.terminals[0]!, env: { PORT: "", NODE_ENV: "development" } }],
+      });
+      const help = document.getElementById("terminal-env-help-0")!.textContent ?? "";
+      expect(help).toMatch(/this machine/);
+      expect(valueField(1, 1).value).toBe("");
+      expect(valueField(1, 1).getAttribute("placeholder")).toMatch(/this machine/);
+
+      cleanup();
+      renderEditor(ENV_RECIPE);
+      expect(document.getElementById("terminal-env-help-0")!.textContent).not.toMatch(
+        /this machine/
+      );
+      expect(valueField(1, 1).getAttribute("placeholder")).not.toMatch(/this machine/);
+    });
+
+    it("tells a new recipe's steps where values go by the scope it will be saved to", async () => {
+      renderEditor();
+      expect(document.getElementById("terminal-env-help-0")!.textContent).toMatch(/this machine/);
+      const scope = document.getElementById("recipe-scope")!;
+      fireEvent.keyDown(scope, { key: "ArrowDown" });
+      const global = await screen.findByRole("option", { name: /^Global/ });
+      await act(async () => {
+        global.click();
+      });
+      expect(document.getElementById("terminal-env-help-0")!.textContent).not.toMatch(
+        /this machine/
+      );
+    });
+
+    it("creates a recipe with the variables its steps were given", async () => {
+      renderEditor();
+      fireEvent.change(document.getElementById("recipe-name")!, { target: { value: "Build" } });
+      addVariable(1);
+      fireEvent.change(nameField(1, 1), { target: { value: "PORT" } });
+      fireEvent.change(valueField(1, 1), { target: { value: "5173" } });
+      await save("Create recipe");
+      expect(createRecipe.mock.calls[0]?.[3]).toEqual([
+        expect.objectContaining({ type: "terminal", env: { PORT: "5173" } }),
+      ]);
     });
   });
 
