@@ -1,8 +1,14 @@
-import type { BrowserWindow, WebContentsView } from "electron";
+import type { BrowserWindow, WebContents, WebContentsView } from "electron";
+import type { CanopyPendingPopOut, CanopyPopOut } from "../../shared/types/ipc/canopy.js";
+import { CHANNELS } from "../ipc/channels.js";
+import { AppError } from "../utils/errorTypes.js";
 import type { CreateWindowResult, SetupBrowserWindowOptions } from "./createWindow.js";
 import { setCanopyWindowOpen } from "./openWindowsTracker.js";
 
 const CANOPY_WINDOW_TITLE = "Canopy";
+
+/** How long a pop-out waits for the window to take it up: a new one boots first. */
+export const CANOPY_POP_OUT_TIMEOUT_MS = 20_000;
 
 type CanopyRevealMode = NonNullable<SetupBrowserWindowOptions["revealMode"]>;
 
@@ -13,7 +19,7 @@ type CanopyBrowserWindowFactory = (
 let createBrowserWindow: CanopyBrowserWindowFactory | null = null;
 let canopyWindow: BrowserWindow | null = null;
 /** The window's one view, which a WebContents id is checked against. */
-let canopyViewWebContentsId: number | null = null;
+let canopyViewWebContents: WebContents | null = null;
 let stopWatchingMode: (() => void) | null = null;
 /** A Canopy window has stood this session, whether or not it still does. */
 let openedThisSession = false;
@@ -42,7 +48,7 @@ export function focusCanopyWindow(): boolean {
  * may ask for, like going to a run's pane in the window that has it.
  */
 export function isCanopyWindowView(webContentsId: number): boolean {
-  return liveCanopyWindow() !== null && canopyViewWebContentsId === webContentsId;
+  return liveCanopyWindow() !== null && canopyViewWebContents?.id === webContentsId;
 }
 
 export function closeCanopyWindow(): void {
@@ -126,10 +132,14 @@ export function openCanopyWindow(
 
   const { win, appView, loadRenderer } = createBrowserWindow(revealMode);
   canopyWindow = win;
-  canopyViewWebContentsId = appView.webContents.id;
+  canopyViewWebContents = appView.webContents;
   openedThisSession = true;
   keepViewFillingWindow(win, appView);
   detachGlobalAssistantWithView(appView);
+  // A reload asks again as it boots; a renderer gone can't take anything up.
+  appView.webContents.on("render-process-gone", () =>
+    failPendingPopOut("Its window stopped before Canopy moved.")
+  );
   win.setTitle(CANOPY_WINDOW_TITLE);
   // The page's own <title> would otherwise replace it on load.
   win.on("page-title-updated", (event) => event.preventDefault());
@@ -139,10 +149,99 @@ export function openCanopyWindow(
     stopWatchingMode = null;
     if (canopyWindow === win) {
       canopyWindow = null;
-      canopyViewWebContentsId = null;
+      canopyViewWebContents = null;
       setCanopyWindowOpen(false);
     }
+    failPendingPopOut("Its window closed before Canopy moved.");
   });
   setCanopyWindowOpen(true);
   loadRenderer("canopy window");
+}
+
+interface PendingPopOut extends CanopyPendingPopOut {
+  settle: (error: AppError | null) => void;
+}
+
+/** The one pop-out under way: a second waits its turn rather than replace the first's place. */
+let pendingPopOut: PendingPopOut | null = null;
+let popOutSeq = 0;
+
+function failPendingPopOut(userMessage: string): void {
+  pendingPopOut?.settle(
+    new AppError({ code: "CANCELLED", message: "The Canopy window didn't take the pop-out up", userMessage })
+  );
+}
+
+/**
+ * Open the Canopy window, or bring it forward, with a dialog's place for it to
+ * take up (#16338). Settles once the window has the place, so the dialog
+ * closes only then; refused while another is under way, and failed when the
+ * window closes, stops, or never takes it up in time, leaving the dialog as it
+ * was. A window already standing is told; a new one asks as it boots.
+ */
+export function popOutToCanopyWindow(
+  popOut: CanopyPopOut,
+  watchMode: (close: () => void) => () => void
+): Promise<void> {
+  if (pendingPopOut) {
+    return Promise.reject(
+      new AppError({
+        code: "UNSUPPORTED",
+        message: "A pop-out is already under way",
+        userMessage: "Canopy is already moving to its window.",
+      })
+    );
+  }
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(
+      () => failPendingPopOut("Its window didn't answer in time."),
+      CANOPY_POP_OUT_TIMEOUT_MS
+    );
+    const entry: PendingPopOut = {
+      id: ++popOutSeq,
+      popOut,
+      settle: (error) => {
+        if (pendingPopOut !== entry) return;
+        pendingPopOut = null;
+        clearTimeout(timer);
+        if (error) reject(error);
+        else resolve();
+      },
+    };
+    pendingPopOut = entry;
+    const standing = liveCanopyWindow() !== null;
+    try {
+      openCanopyWindow(watchMode);
+    } catch (error) {
+      entry.settle(
+        new AppError({
+          code: "CANCELLED",
+          message: "The Canopy window didn't open",
+          userMessage: "Its window didn't open.",
+          cause: error instanceof Error ? error : undefined,
+        })
+      );
+      return;
+    }
+    const view = canopyViewWebContents;
+    if (standing && view && !view.isDestroyed()) {
+      try {
+        view.send(CHANNELS.CANOPY_WINDOW_POP_OUT_WAITING);
+      } catch {
+        // A view torn down mid-send closes its window, which fails the pop-out.
+      }
+    }
+  });
+}
+
+/** The pop-out waiting for the window, kept until the window says it has it. */
+export function peekPendingPopOut(): CanopyPendingPopOut | null {
+  return pendingPopOut ? { id: pendingPopOut.id, popOut: pendingPopOut.popOut } : null;
+}
+
+/** The window has the pop-out's place. False for one no longer waiting. */
+export function acknowledgePopOut(id: number): boolean {
+  if (pendingPopOut?.id !== id) return false;
+  pendingPopOut.settle(null);
+  return true;
 }

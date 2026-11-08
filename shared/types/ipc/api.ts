@@ -283,6 +283,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   canopyHost: GeneratedElectronAPI["canopyHost"] & {
     onEvent(callback: (event: import("./canopyHost.js").CanopyHostEvent) => void): () => void;
   };
+  canopyWindow: GeneratedElectronAPI["canopyWindow"] & {
+    /** The Canopy window has a pop-out waiting for it to take up (#16338). */
+    onPopOutWaiting(callback: () => void): () => void;
+    /** Another view's dialog moved into the Canopy window: this one's closes too. */
+    onPoppedOut(callback: () => void): () => void;
+  };
   portForwards: GeneratedElectronAPI["portForwards"] & {
     onEvent(callback: (event: import("./portForwards.js").PortForwardsEvent) => void): () => void;
   };
