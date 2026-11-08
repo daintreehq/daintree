@@ -461,7 +461,7 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
     const main = registerMonitor("/test/main", { isMainWorktree: true });
     const gitlab = remote("origin", "https://gitlab.com/acme/app.git");
     await seedBaseline([gitlab]);
-    await runStartProbe(main, [gitlab]);
+    await runStartProbe(main);
     expect(main.getSnapshot().matchedForgeProviderId).toBeUndefined();
 
     mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
@@ -474,7 +474,7 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
   it("clears the provider when the origin is removed", async () => {
     const main = registerMonitor("/test/main", { isMainWorktree: true });
     await seedBaseline([ORIGIN_GITHUB]);
-    await runStartProbe(main, [ORIGIN_GITHUB]);
+    await runStartProbe(main);
     expect(main.getSnapshot().matchedForgeProviderId).toBe(GITHUB_PROVIDER_ID);
 
     mockSimpleGit.getRemotes.mockResolvedValue([]);
@@ -505,7 +505,7 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
   it("emits nothing when the git read fails", async () => {
     const main = registerMonitor("/test/main", { isMainWorktree: true });
     await seedBaseline([ORIGIN_GITHUB]);
-    await runStartProbe(main, [ORIGIN_GITHUB]);
+    await runStartProbe(main);
 
     mockSimpleGit.getRemotes.mockRejectedValue(new Error("not a git repository"));
     await fireConfigChange();
@@ -580,6 +580,10 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
         undefined,
         true
       );
+      expect(service["monitors"].size).toBe(3);
+      for (const monitor of service["monitors"].values()) {
+        expect(monitor.remoteFetchUrl).toBeUndefined();
+      }
       releaseSeed([ORIGIN_GITHUB]);
       await vi.advanceTimersByTimeAsync(0);
 
@@ -589,14 +593,7 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
       }
     });
 
-    it("shares one retry between every monitor when the load's read fails", async () => {
-      // A failure is never held as the table, so the monitors are not left
-      // unresolved — but they retry together, not once each.
-      mockSimpleGit.getRemotes.mockRejectedValueOnce(new Error("git spawn failed"));
-      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
-      touchConfigFile();
-      service["startForgeRemoteDetection"]();
-
+    async function loadThree(): Promise<void> {
       await service.syncMonitors(
         loadWorktrees(["/test/main", "/test/feature-1", "/test/feature-2"]),
         null,
@@ -604,6 +601,24 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
         undefined,
         true
       );
+    }
+
+    it("shares one retry between every monitor when the load's read fails", async () => {
+      // A failure is never held as the table, so the monitors are not left
+      // unresolved — but they retry together, not once each.
+      let failSeed: () => void = () => {};
+      mockSimpleGit.getRemotes.mockReturnValueOnce(
+        new Promise<Remote[]>((_, reject) => {
+          failSeed = () => reject(new Error("git spawn failed"));
+        })
+      );
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      touchConfigFile();
+      service["startForgeRemoteDetection"]();
+      await loadThree();
+      expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(1);
+
+      failSeed();
       await vi.advanceTimersByTimeAsync(0);
 
       expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(2);
@@ -614,21 +629,69 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
       expect(service["forgeRemoteSignature"]).toBeNull();
     });
 
-    it("does not hand a worktree a table read before an observed config write", async () => {
+    it("stops after one shared retry when git keeps failing", async () => {
+      let failSeed: () => void = () => {};
+      mockSimpleGit.getRemotes.mockReturnValueOnce(
+        new Promise<Remote[]>((_, reject) => {
+          failSeed = () => reject(new Error("not a git repository"));
+        })
+      );
+      mockSimpleGit.getRemotes.mockRejectedValue(new Error("not a git repository"));
+      touchConfigFile();
+      service["startForgeRemoteDetection"]();
+      await loadThree();
+
+      failSeed();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(2);
+      expect(service["forgeRemoteRead"]).toBeNull();
+    });
+
+    it("resolves monitors from a fresh read when the load's read is discarded", async () => {
+      // The config moved between the seed's two stats with no watcher event to
+      // say so: the seed's table may predate the change, so it is neither the
+      // baseline nor the table the monitors take.
+      let releaseSeed: (remotes: Remote[]) => void = () => {};
+      mockSimpleGit.getRemotes.mockReturnValueOnce(
+        new Promise<Remote[]>((resolve) => {
+          releaseSeed = resolve;
+        })
+      );
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      touchConfigFile();
+      service["startForgeRemoteDetection"]();
+      await loadThree();
+
+      touchConfigFile();
+      releaseSeed([]);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(service["forgeRemoteSignature"]).toBeNull();
+      expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(2);
+      for (const monitor of service["monitors"].values()) {
+        expect(monitor.remoteFetchUrl).toBe("https://github.com/acme/app.git");
+      }
+    });
+
+    it("moves a worktree added inside the reprobe window onto the new table", async () => {
       await seedBaseline([]);
       await service.syncMonitors(loadWorktrees(["/test/main"]), null, "main", undefined, true);
       await vi.advanceTimersByTimeAsync(0);
 
       // `git remote add` lands; the watcher sees it, and the worktree appears
-      // inside the reprobe's debounce window.
+      // inside the reprobe's debounce window, before anything re-read git.
       mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
       touchConfigFile();
       service["scheduleForgeRemoteReprobe"]({ observedConfigWrite: true });
       await installLate();
+      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(0);
 
-      expect(service["monitors"].get("/test/late")!.remoteFetchUrl).toBe(
-        "https://github.com/acme/app.git"
-      );
+      for (const id of ["/test/main", "/test/late"]) {
+        expect(service["monitors"].get(id)!.remoteFetchUrl).toBe("https://github.com/acme/app.git");
+      }
+      expect(sysRemoteChanged).toHaveBeenCalledTimes(1);
     });
 
     async function installLate(): Promise<void> {
@@ -671,6 +734,106 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
       expect(main.getSnapshot().matchedForgeProviderId).toBe(GITHUB_PROVIDER_ID);
     });
 
+    it("a start read superseded by a reprobe that fails still resolves", async () => {
+      // The reprobe took the slot and then failed, so it fanned nothing out:
+      // the stranded start read has to read again rather than give up.
+      const main = registerMonitor("/test/main", { isMainWorktree: true });
+      const releaseStart = holdNextRead();
+      const startProbe = service["probeForgeRemoteAsync"](main);
+
+      mockSimpleGit.getRemotes.mockRejectedValueOnce(new Error("git spawn failed"));
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      await fireConfigChange();
+
+      releaseStart([]);
+      await startProbe;
+
+      expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(3);
+      expect(main.remoteFetchUrl).toBe("https://github.com/acme/app.git");
+    });
+
+    it("a failed start read cannot clear the table a newer reprobe holds", async () => {
+      const main = registerMonitor("/test/main", { isMainWorktree: true });
+      let failStart: () => void = () => {};
+      mockSimpleGit.getRemotes.mockReturnValueOnce(
+        new Promise<Remote[]>((_, reject) => {
+          failStart = () => reject(new Error("git spawn failed"));
+        })
+      );
+      const startProbe = service["probeForgeRemoteAsync"](main);
+
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      await fireConfigChange();
+      failStart();
+      await startProbe;
+      mockSimpleGit.getRemotes.mockClear();
+
+      const late = registerMonitor("/test/late");
+      await service["probeForgeRemoteAsync"](late);
+
+      expect(mockSimpleGit.getRemotes).not.toHaveBeenCalled();
+      expect(late.remoteFetchUrl).toBe("https://github.com/acme/app.git");
+    });
+
+    it("a read landing for a monitor that was replaced is not applied to it", async () => {
+      const stale = registerMonitor("/test/main", { isMainWorktree: true });
+      const releaseStart = holdNextRead();
+      const startProbe = service["probeForgeRemoteAsync"](stale);
+
+      // Same id, new incarnation — the old one is still running.
+      registerMonitor("/test/main", { isMainWorktree: true });
+      releaseStart([ORIGIN_GITHUB]);
+      await startProbe;
+
+      expect(stale.remoteFetchUrl).toBeUndefined();
+    });
+
+    it("a replaced monitor does not retry a load read that failed", async () => {
+      let failSeed: () => void = () => {};
+      mockSimpleGit.getRemotes.mockReturnValueOnce(
+        new Promise<Remote[]>((_, reject) => {
+          failSeed = () => reject(new Error("git spawn failed"));
+        })
+      );
+      touchConfigFile();
+      service["startForgeRemoteDetection"]();
+      const stale = registerMonitor("/test/main", { isMainWorktree: true });
+      const startProbe = service["probeForgeRemoteAsync"](stale);
+
+      registerMonitor("/test/main", { isMainWorktree: true });
+      failSeed();
+      await startProbe;
+
+      expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(1);
+    });
+
+    it("a monitor's own failed read is final", async () => {
+      // As before the shared table: a repo whose enumeration keeps failing
+      // costs one read per monitor start, not one plus a retry.
+      const main = registerMonitor("/test/main", { isMainWorktree: true });
+      mockSimpleGit.getRemotes.mockRejectedValue(new Error("not a git repository"));
+
+      await service["probeForgeRemoteAsync"](main);
+
+      expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(1);
+    });
+
+    it("reads the shared table at the project root, never a monitor's path", async () => {
+      // A monitor whose install straddled a project switch can still be
+      // running; a read from its path would hand its repo's remotes to every
+      // monitor of the incoming project.
+      const { createHardenedGit } = await import("../../utils/hardenedGit.js");
+      const straddler = registerMonitor("/old/main", { isMainWorktree: true });
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      vi.mocked(createHardenedGit).mockClear();
+
+      await service["probeForgeRemoteAsync"](straddler);
+
+      expect(vi.mocked(createHardenedGit).mock.calls.map((call) => call[0])).toEqual([
+        "/test/root",
+      ]);
+    });
+
     it("a start read in flight across a project switch leaves no table behind", async () => {
       const main = registerMonitor("/test/main", { isMainWorktree: true });
       const releaseStart = holdNextRead();
@@ -685,6 +848,21 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
       await startProbe;
 
       expect(service["forgeRemoteRead"]).toBeNull();
+      expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(1);
+    });
+
+    it("a reselect in flight across a project switch does not retry", async () => {
+      // Its bounded retry would otherwise re-arm against the next project.
+      registerMonitor("/test/main", { isMainWorktree: true });
+      const releaseRead = holdNextRead();
+      const reselect = service["reselectForgeRemote"]();
+
+      service["stopForgeRemoteDetection"]();
+      releaseRead([ORIGIN_GITHUB]);
+      await reselect;
+      await vi.advanceTimersByTimeAsync(300 * 4);
+      await vi.advanceTimersByTimeAsync(0);
+
       expect(mockSimpleGit.getRemotes).toHaveBeenCalledTimes(1);
     });
 

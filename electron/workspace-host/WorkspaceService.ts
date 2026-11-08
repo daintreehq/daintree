@@ -626,8 +626,8 @@ export class WorkspaceService {
   // what the remotes ARE: monitor starts, reselects (#16427). Pending or
   // landed. Kept apart from `forgeRemoteSignature`, which only the load-time
   // read and the reprobe may set — a monitor-start read can race the user.
-  // Dropped on an observed config write and replaced by every reprobe read, so
-  // a read the slot no longer holds is stale and must not be applied.
+  // Replaced by every reprobe that finds the config moved, so a read the slot
+  // no longer holds is stale and must not be applied.
   private forgeRemoteRead: ForgeRemoteRead | null = null;
   // The project's selected forge remote *name* (#11408). Kept on the service
   // (not just handed to `pullRequestService`) because `readForgeRemotes` needs
@@ -2757,10 +2757,15 @@ export class WorkspaceService {
     return slot;
   }
 
-  /** The shared remote table, starting a read only when none is held. */
+  /**
+   * The shared remote table, starting a read only when none is held. Reads at
+   * the project root rather than `forgeProbeCwd()`: an install that straddled a
+   * project switch can leave the old project's monitor running, and a read
+   * from its path would hand that repo's remotes to every incoming monitor.
+   */
   private sharedForgeRemoteRead(): ForgeRemoteRead | null {
     if (this.forgeRemoteRead) return this.forgeRemoteRead;
-    const cwd = this.forgeProbeCwd();
+    const cwd = this.projectRootPath;
     if (!cwd) return null;
     return this.beginForgeRemoteRead(() => this.readForgeRemotes(cwd));
   }
@@ -2777,15 +2782,18 @@ export class WorkspaceService {
    * resolves from the table already held (#16427).
    */
   private async probeForgeRemoteAsync(monitor: WorktreeMonitor): Promise<void> {
-    // A second pass follows a read that was dropped or replaced while this
-    // monitor waited: its result may predate a newer read already fanned out,
-    // and applying it would overwrite that. Bounded, so a repo whose
-    // enumeration keeps failing costs at most one extra shared read.
+    // A second pass covers a read that did not settle this monitor: one a
+    // reprobe replaced while it waited (its table may predate the reprobe's
+    // fan-out, so applying it would overwrite that), or one it only joined
+    // that came back empty — the load's read, failed or discarded. A failed
+    // read this monitor started itself is final, as before, so a repo whose
+    // enumeration keeps failing still costs one read per monitor.
     for (let pass = 0; pass < 2; pass++) {
       // Checked before every read: a monitor torn down by a project switch must
-      // not start one, or it would install its old repo's table in the slot.
+      // not start one.
       if (this.monitors.get(monitor.id) !== monitor || !monitor.isRunning) return;
       if (this._shutdownController.signal.aborted) return;
+      const joined = this.forgeRemoteRead !== null;
       const read = this.sharedForgeRemoteRead();
       if (!read) return;
       const table = await read.promise;
@@ -2795,6 +2803,7 @@ export class WorkspaceService {
         }
         return;
       }
+      if (!table && !joined) return;
     }
     // Deliberately never seeds `forgeRemoteSignature`. A monitor start read
     // races the user: it can complete AFTER a `git remote add` and would then
@@ -2815,13 +2824,7 @@ export class WorkspaceService {
     // marks an in-flight baseline seed as spanning the write, so it can't record
     // a snapshot that already absorbed the change. The backstop tick observes
     // nothing, so it must not invalidate the seed.
-    // It also drops the shared table at once, not when the debounced reprobe
-    // reads: a monitor starting inside that window must not take a table the
-    // write may already have changed.
-    if (opts.observedConfigWrite) {
-      this.forgeConfigEpoch++;
-      this.forgeRemoteRead = null;
-    }
+    if (opts.observedConfigWrite) this.forgeConfigEpoch++;
     if (this.forgeRemoteReprobeTimer) return;
     this.forgeRemoteReprobeTimer = setTimeout(() => {
       this.forgeRemoteReprobeTimer = null;
@@ -2880,15 +2883,11 @@ export class WorkspaceService {
     // Always a fresh read, never the shared table: the fingerprint just said
     // the config moved. Replacing the slot also strands any older read still
     // in flight, so it can no longer land on a monitor after this fan-out.
-    const read = this.beginForgeRemoteRead(() => this.readForgeRemotes(cwd));
-    const probed = await read.promise;
+    const probed = await this.beginForgeRemoteRead(() => this.readForgeRemotes(cwd)).promise;
     // A dispose (or a newer probe) landed while git ran: the monitors this one
     // would touch may already be stopped, and its read is no longer the truth.
     if (!probed || seq !== this.forgeRemoteProbeSeq) return;
     if (this._shutdownController.signal.aborted) return;
-    // A config write observed while git ran dropped this read; the reprobe that
-    // write scheduled reads again, so this one leaves the fingerprint unspent.
-    if (this.forgeRemoteRead !== read) return;
 
     // Consume the fingerprint only now that this probe has actually READ the
     // remotes that go with it. Recording it up front (before the git read) loses
@@ -6172,14 +6171,14 @@ export class WorkspaceService {
     const probed = await read.promise;
     // A newer reselect is already authoritative — drop this one outright.
     if (seq !== this.forgeReselectSeq) return;
-    // The other bail-outs are NOT terminal, so they re-arm the debounce
-    // instead of returning. A config probe that superseded us (or the config
-    // write that dropped our table) may itself have exited at its fingerprint
-    // gate without ever reading the remotes, and a failed enumeration leaves
-    // monitors pointing at the previously selected remote. Either way the new selection would otherwise never be applied,
+    // The other two bail-outs are NOT terminal, so they re-arm the debounce
+    // instead of returning. A config probe that superseded us may itself have
+    // exited at its fingerprint gate without ever reading the remotes, and a
+    // failed enumeration leaves monitors pointing at the previously selected
+    // remote. Either way the new selection would otherwise never be applied,
     // and nothing else would retry: `.git/config` did not change, so the
     // fingerprint-gated backstop skips this repo entirely.
-    if (!probed || probeSeq !== this.forgeRemoteProbeSeq || this.forgeRemoteRead !== read) {
+    if (!probed || probeSeq !== this.forgeRemoteProbeSeq) {
       // Bounded: a repo that was deleted under us fails enumeration forever,
       // and an unbounded re-arm would spawn a git process every debounce tick
       // for the life of the host.
