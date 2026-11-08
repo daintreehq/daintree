@@ -1025,7 +1025,11 @@ describe("VoiceRecordingService — background recording", () => {
       void service.start({ panelId: "panel-2", panelTitle: "Other" });
       // The first deadline retires the stuck context; the second, on the start
       // sharing it, is still to come when a healthy start builds a new one.
-      for (let waited = 0; waited < PAST_ANY_DEADLINE_MS && timeouts().length === 0; waited += 100) {
+      for (
+        let waited = 0;
+        waited < PAST_ANY_DEADLINE_MS && timeouts().length === 0;
+        waited += 100
+      ) {
         await vi.advanceTimersByTimeAsync(100);
       }
       expect(timeouts()).toHaveLength(1);
