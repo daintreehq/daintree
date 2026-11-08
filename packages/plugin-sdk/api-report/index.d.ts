@@ -4750,6 +4750,15 @@ interface PluginAgentContribution {
      * does. Without them the agent is never eligible for the global switch.
      */
     permissionBypassArgs?: string[];
+    /**
+     * Bare executable names that identify this agent when someone runs it in a
+     * plain terminal (#16469), the same key space as a built-in agent's command.
+     * Omitted, a bare lowercase `command` claims its own name; `[]` claims none.
+     * Only an exact executable identity counts: a name never matches output text,
+     * and a launcher (`npx`, `mise`, `uvx`, a shell) is never an agent's name.
+     * Two enabled plugins claiming one name both lose it.
+     */
+    executableNames?: string[];
 }
 /**
  * A plugin-contributed terminal process detection (#11613). Maps one command

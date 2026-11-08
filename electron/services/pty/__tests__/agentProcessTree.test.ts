@@ -1,10 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   classifyAgentTree,
   hasAgentProcess,
   isPlainShellName,
   type AgentTreeCensus,
 } from "../agentProcessTree.js";
+import {
+  clearPluginAgentRegistryForTests,
+  setPluginAgentRegistry,
+} from "../../../../shared/config/pluginAgentRegistry.js";
 
 interface Proc {
   pid: number;
@@ -236,5 +240,24 @@ describe("hasAgentProcess", () => {
   it("cannot say when the census has no row for the terminal's root", () => {
     expect(hasAgentProcess(census([CLAUDE_EXE]), PWSH.pid, "claude")).toBeUndefined();
     expect(hasAgentProcess(census([]), PWSH.pid, "claude")).toBeUndefined();
+  });
+});
+
+describe("plugin agents (#16469)", () => {
+  const ZSH: Proc = { pid: 30, ppid: 1, comm: "zsh", command: "-zsh" };
+  const PI: Proc = { pid: 31, ppid: 30, comm: "pi", command: "pi --model fast" };
+
+  afterEach(() => {
+    clearPluginAgentRegistryForTests();
+  });
+
+  it("finds a plugin agent by its executable name while the name is held", () => {
+    const pi = { id: "pi", name: "Pi", command: "pi", color: "#3366ff", iconId: "terminal" };
+    expect(hasAgentProcess(census([ZSH, PI]), ZSH.pid, "pi")).toBe(false);
+
+    setPluginAgentRegistry({ pi: { ...pi, executableNames: ["pi"] } });
+    expect(hasAgentProcess(census([ZSH, PI]), ZSH.pid, "pi")).toBe(true);
+    // A tree no one has verified for this agent can't be classified.
+    expect(classifyAgentTree(census([ZSH, PI]), ZSH.pid, "pi")).toBe("unknown");
   });
 });
