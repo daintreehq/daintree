@@ -76,7 +76,7 @@ function swallowRepeatsOf(key: string): void {
       return;
     }
     e.preventDefault();
-    e.stopPropagation();
+    e.stopImmediatePropagation();
   };
   const onKeyUp = (e: KeyboardEvent) => {
     if (e.key === key) release();
@@ -178,10 +178,13 @@ export function useFleetPendingConfirm(
       // so it holds the keys only while focus is inside it (#15037).
       const inModal = hasAppModal() || isInPaneDialog(e.target);
 
+      // A consumed key stops here, later window listeners included: React can
+      // commit the cleared confirm between listeners, and useFleetEscapeChords
+      // would then take the cancelling Escape as the first tap of an interrupt.
       if (e.key === "Escape") {
         if (!plain || composing || inModal || target !== "terminal") return;
         e.preventDefault();
-        e.stopPropagation();
+        e.stopImmediatePropagation();
         if (e.repeat) return;
         clearIfCurrent(pending);
         swallowRepeatsOf(e.key);
@@ -193,7 +196,7 @@ export function useFleetPendingConfirm(
         if (target === "banner") return;
         if (plain && !composing && !inModal && (target === "terminal" || target === "page")) {
           e.preventDefault();
-          e.stopPropagation();
+          e.stopImmediatePropagation();
           if (e.repeat) return;
           confirm(pending, deadline, "keybinding");
           swallowRepeatsOf(e.key);

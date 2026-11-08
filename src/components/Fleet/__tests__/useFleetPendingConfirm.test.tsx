@@ -131,7 +131,8 @@ describe("useFleetPendingConfirm", () => {
         expect(paneKeys).toEqual([]);
 
         fireEvent.keyUp(terminal, { key });
-        expect(fireEvent.keyDown(terminal, { key })).toBe(true);
+        // Up means released: a repeat after it is no longer the answer's.
+        expect(fireEvent.keyDown(terminal, { key, repeat: true })).toBe(true);
         expect(paneKeys).toEqual([key]);
         expect(restartDispatches().length).toBe(key === "Enter" ? 1 : 0);
       }
@@ -190,6 +191,19 @@ describe("useFleetPendingConfirm", () => {
 
       expect(paneKeys).toEqual([init.key]);
       expect(pending()).not.toBeNull();
+    });
+
+    it.each(["Enter", "Escape"])("keeps an answering %s from later window listeners", (key) => {
+      render(<Harness />);
+      request();
+      const later = vi.fn();
+      window.addEventListener("keydown", later, true);
+
+      fireEvent.keyDown(terminal, { key });
+      window.removeEventListener("keydown", later, true);
+
+      expect(pending()).toBeNull();
+      expect(later).not.toHaveBeenCalled();
     });
 
     it("cancels on Escape without a word", () => {

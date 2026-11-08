@@ -124,6 +124,8 @@ function resetStores() {
   useAnnouncerStore.setState({ polite: null, assertive: null });
   useFleetSnapshotStore.setState({ snapshot: null });
   resetEscapeStack();
+  // Releases the swallowing of a held answering key a previous test left behind.
+  fireEvent.blur(window);
 }
 
 function pushFleet(runs: Array<Partial<FleetRunRow> & { runId: string }>): void {
@@ -922,8 +924,6 @@ describe("FleetArmingRibbon", () => {
     });
 
     afterEach(() => {
-      // Releases the swallowing of a held answering key.
-      fireEvent.blur(window);
       pane.remove();
     });
 
