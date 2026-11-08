@@ -392,15 +392,29 @@ async function listCensus(run: ListingRunner, args: string[]) {
   return ps.exitCode === 0 ? parseCensus(ps.stdout) : null;
 }
 
+/** Which file the probe saw: its path, and the device and inode `lsof` listed for it. */
+export interface CodexRolloutIdentity {
+  path: string;
+  /** As `lsof` prints it: hex, `0x…`. */
+  device: string;
+  /** As `lsof` prints it: decimal. */
+  inode: string;
+}
+
+export type CodexRolloutObservation =
+  | ({ status: "observed"; sessionId: string } & CodexRolloutIdentity)
+  | Extract<AgentSessionFileResult, { status: "unknown" }>;
+
 /**
  * The rollout the pane's Codex under `rootPid` is writing: observed when that
  * process holds exactly one root session's rollout open for writing, unknown
- * otherwise.
+ * otherwise. Host-side only: it carries the file's identity, so a reader can
+ * open it and check that it holds the same file.
  */
-export async function probeCodexSessionFile(
+export async function observeCodexRollout(
   rootPid: number,
   deps: CodexSessionFileProbeDeps = {}
-): Promise<AgentSessionFileResult> {
+): Promise<CodexRolloutObservation> {
   const platform = deps.platform ?? process.platform;
   const run = deps.run ?? runListing;
   if (platform === "win32") return unknownSessionFile("unsupported-platform");
@@ -483,9 +497,25 @@ export async function probeCodexSessionFile(
   }
   return {
     status: "observed",
-    agentId: "codex",
     sessionId: root.threadId,
     path: root.record.name,
+    device: root.record.device,
+    inode: root.record.inode,
+  };
+}
+
+/** {@link observeCodexRollout} as the session-file answer a plugin gets (#16097). */
+export async function probeCodexSessionFile(
+  rootPid: number,
+  deps: CodexSessionFileProbeDeps = {}
+): Promise<AgentSessionFileResult> {
+  const observed = await observeCodexRollout(rootPid, deps);
+  if (observed.status !== "observed") return observed;
+  return {
+    status: "observed",
+    agentId: "codex",
+    sessionId: observed.sessionId,
+    path: observed.path,
     observedBy: "open-for-writing",
   };
 }

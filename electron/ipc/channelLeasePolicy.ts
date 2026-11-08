@@ -147,6 +147,7 @@ export const CHANNEL_LEASE_POLICY = {
   "codex:match-restore-sessions": "free",
   "codex:read-quota": "free",
   "codex:refresh-quota": "free",
+  "codex:read-context-usage": "free",
   "codex:read-subagent-transcript": "free",
   "codex:resolve-resume-latest-session": "free",
   "config-bundle:apply-import": "free",

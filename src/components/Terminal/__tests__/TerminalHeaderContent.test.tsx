@@ -73,8 +73,8 @@ vi.mock("../SubagentChip", () => ({
 let mockContextChipVisible = false;
 
 // The real chip only renders once the host reads a Claude transcript.
-vi.mock("../ClaudeContextUsageChip", () => ({
-  ClaudeContextUsageChip: () =>
+vi.mock("../AgentContextUsageChip", () => ({
+  AgentContextUsageChip: () =>
     mockContextChipVisible ? <span data-testid="terminal-context-usage" /> : null,
 }));
 

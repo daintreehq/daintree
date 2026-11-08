@@ -47,6 +47,7 @@ export const CHANNEL_REMOTE_SCOPE: Readonly<Record<string, RemoteScopeTarget>> =
   "claude:read-context-usage": TERMINAL_FIELD,
   "codex:list-subagents": TERMINAL_FIELD,
   "codex:read-subagent-transcript": TERMINAL_FIELD,
+  "codex:read-context-usage": TERMINAL_FIELD,
   // A folder in no project is anyone's to ask about; another project's is not.
   "codex:find-sessions": [{ from: "path", at: [0, "cwd"], unowned: "allow" }],
   "codex:resolve-resume-latest-session": [{ from: "path", at: [0, "cwd"], unowned: "allow" }],

@@ -8,6 +8,7 @@ import type {
   CodexRestoreMatchResult,
 } from "../../../shared/types/ipc/agentSubagents.js";
 import type { CodexQuotaProfile } from "../../../shared/types/ipc/agentQuota.js";
+import type { AgentContextUsageResult } from "../../../shared/types/ipc/agentContextUsage.js";
 
 // The renderer names a terminal, never a folder or a bare thread id. Main
 // resolves the cwd and the owning Codex thread from the pty-host record and
@@ -20,6 +21,7 @@ const id = z.string().trim().min(1).max(ID_MAX);
 
 const listSchema = z.object({ terminalId: id });
 const readSchema = z.object({ terminalId: id, subagentId: id });
+const contextUsageSchema = z.object({ terminalId: id });
 
 // Bound to a plausible absolute path so a malformed payload is refused at the
 // boundary instead of being carried into a protocol query. Shared by every op
@@ -153,6 +155,20 @@ export const codexNamespace = defineIpcNamespace({
         await import("../../services/codex/CodexQuotaService.js");
       return refreshCodexQuotaProfiles();
     }),
+    readContextUsage: opValidated(
+      CODEX_METHOD_CHANNELS.readContextUsage,
+      contextUsageSchema,
+      async ({ terminalId }): Promise<AgentContextUsageResult> => {
+        const { readCodexPaneContextUsageWithin } =
+          await import("../../services/codex/CodexContextUsage.js");
+        // Nothing is logged: a filesystem error names a path under the user's home.
+        try {
+          return await readCodexPaneContextUsageWithin(terminalId);
+        } catch {
+          return { status: "unavailable", reason: "store-unreadable" };
+        }
+      }
+    ),
   },
 });
 

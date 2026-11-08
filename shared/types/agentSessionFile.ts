@@ -65,6 +65,8 @@ export type AgentSessionFileResult =
     }
   | { status: "unknown"; reason: AgentSessionFileUnknownReason };
 
-export function unknownSessionFile(reason: AgentSessionFileUnknownReason): AgentSessionFileResult {
+export function unknownSessionFile(
+  reason: AgentSessionFileUnknownReason
+): Extract<AgentSessionFileResult, { status: "unknown" }> {
   return { status: "unknown", reason };
 }

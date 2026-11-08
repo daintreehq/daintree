@@ -142,7 +142,7 @@ describe("pane header chip row", () => {
     "src/components/Terminal/TerminalHandOver.tsx",
     "src/components/Terminal/TerminalNotifyChip.tsx",
     "src/components/Terminal/SubagentChip.tsx",
-    "src/components/Terminal/ClaudeContextUsageChip.tsx",
+    "src/components/Terminal/AgentContextUsageChip.tsx",
     "src/components/Panel/PluginPanelBadges.tsx",
     "src/components/Panel/PanelHeader.tsx",
   ];

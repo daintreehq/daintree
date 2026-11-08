@@ -630,6 +630,10 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("./agentSubagents.js").CodexRestoreMatchResult;
   };
+  "codex:read-context-usage": {
+    args: [__0: { terminalId: string }];
+    result: import("./agentContextUsage.js").AgentContextUsageResult;
+  };
   "codex:read-quota": {
     args: [];
     result: import("./agentQuota.js").CodexQuotaProfile[];

@@ -3,20 +3,28 @@ import { renderHook, act } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const readContextUsage = vi.hoisted(() => vi.fn());
+const readCodexContextUsage = vi.hoisted(() => vi.fn());
 
 vi.mock("@/clients/claudeClient", () => ({
   claudeClient: { readContextUsage },
+}));
+
+vi.mock("@/clients/codexClient", () => ({
+  codexClient: { readContextUsage: readCodexContextUsage },
 }));
 
 import {
   CONTEXT_USAGE_FIRST_READ_MS,
   CONTEXT_USAGE_FOLLOW_UP_READ_MS,
   CONTEXT_USAGE_MOUNT_FLOOR_MS,
-  __resetClaudeContextUsageCache,
-  useClaudeContextUsage,
-} from "../useClaudeContextUsage";
+  __resetAgentContextUsageCache,
+  useAgentContextUsage,
+} from "../useAgentContextUsage";
 import type { AgentState } from "@/types";
-import type { AgentContextUsageResult } from "@shared/types/ipc/agentContextUsage";
+import type {
+  AgentContextUsageProvider,
+  AgentContextUsageResult,
+} from "@shared/types/ipc/agentContextUsage";
 
 const STAMP = Date.parse("2026-09-18T10:00:00.000Z");
 
@@ -25,15 +33,18 @@ function ok(contextTokens: number, recordedAt = STAMP): AgentContextUsageResult 
 }
 
 interface Props {
+  provider?: AgentContextUsageProvider;
   enabled: boolean;
   agentState?: AgentState;
   generation: string;
 }
 
 function mount(initial: Partial<Props> = {}) {
-  return renderHook((props: Props) => useClaudeContextUsage("t-1", props), {
-    initialProps: { enabled: true, agentState: "waiting", generation: "1:0", ...initial },
-  });
+  return renderHook(
+    ({ provider = "claude", ...props }: Props) =>
+      useAgentContextUsage("t-1", { provider, ...props }),
+    { initialProps: { enabled: true, agentState: "waiting", generation: "1:0", ...initial } }
+  );
 }
 
 async function advance(ms: number): Promise<void> {
@@ -46,8 +57,16 @@ beforeEach(() => {
   vi.useFakeTimers();
   readContextUsage.mockReset();
   readContextUsage.mockResolvedValue(ok(126_717));
+  readCodexContextUsage.mockReset();
+  readCodexContextUsage.mockResolvedValue({
+    status: "ok",
+    provider: "codex",
+    contextTokens: 192_480,
+    contextWindow: 475_000,
+    recordedAt: STAMP,
+  });
   Reflect.set(window, "electron", {});
-  __resetClaudeContextUsageCache();
+  __resetAgentContextUsageCache();
 });
 
 afterEach(() => {
@@ -55,7 +74,7 @@ afterEach(() => {
   Reflect.deleteProperty(window, "electron");
 });
 
-describe("useClaudeContextUsage", () => {
+describe("useAgentContextUsage", () => {
   it("reads once when a pane mounts settled", async () => {
     const { result } = mount();
 
@@ -281,5 +300,85 @@ describe("useClaudeContextUsage", () => {
 
     expect(readContextUsage).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+describe("useAgentContextUsage for Codex", () => {
+  it("asks the Codex reader and keeps the window the rollout states", async () => {
+    const { result } = mount({ provider: "codex" });
+    await advance(CONTEXT_USAGE_FIRST_READ_MS);
+
+    expect(readContextUsage).not.toHaveBeenCalled();
+    expect(readCodexContextUsage).toHaveBeenCalledWith({ terminalId: "t-1" });
+    expect(result.current).toEqual({
+      contextTokens: 192_480,
+      contextWindow: 475_000,
+      recordedAt: STAMP,
+    });
+  });
+
+  it("takes no window when the rollout states none", async () => {
+    readCodexContextUsage.mockResolvedValue({
+      status: "ok",
+      provider: "codex",
+      contextTokens: 25_757,
+      recordedAt: STAMP,
+    });
+    const { result } = mount({ provider: "codex" });
+    await advance(CONTEXT_USAGE_FIRST_READ_MS);
+
+    expect(result.current).toEqual({ contextTokens: 25_757, recordedAt: STAMP });
+  });
+
+  it("refuses an answer about another agent than the one it asked about", async () => {
+    readCodexContextUsage.mockResolvedValue(ok(126_717));
+    const { result } = mount({ provider: "codex" });
+    await advance(CONTEXT_USAGE_FIRST_READ_MS);
+
+    expect(readCodexContextUsage).toHaveBeenCalledTimes(1);
+    expect(result.current).toBeNull();
+  });
+
+  it("keeps each agent's reading of the same pane apart", async () => {
+    const { result, rerender } = mount();
+    await advance(CONTEXT_USAGE_FIRST_READ_MS);
+    expect(result.current?.contextTokens).toBe(126_717);
+
+    rerender({ provider: "codex", enabled: true, agentState: "waiting", generation: "1:0" });
+    expect(result.current).toBeNull();
+    await advance(CONTEXT_USAGE_FIRST_READ_MS);
+
+    expect(readCodexContextUsage).toHaveBeenCalledTimes(1);
+    expect(result.current?.contextTokens).toBe(192_480);
+  });
+
+  it("never hands one agent's read still in flight to the other", async () => {
+    let answerClaude: (result: AgentContextUsageResult) => void = () => {};
+    readContextUsage.mockImplementation(
+      () => new Promise<AgentContextUsageResult>((resolve) => (answerClaude = resolve))
+    );
+    const { result, rerender } = mount();
+    await advance(CONTEXT_USAGE_FIRST_READ_MS);
+    expect(readContextUsage).toHaveBeenCalledTimes(1);
+
+    rerender({ provider: "codex", enabled: true, agentState: "waiting", generation: "1:0" });
+    await advance(CONTEXT_USAGE_FIRST_READ_MS);
+    expect(readCodexContextUsage).toHaveBeenCalledTimes(1);
+    expect(result.current?.contextTokens).toBe(192_480);
+
+    await act(async () => {
+      answerClaude(ok(126_717));
+    });
+    expect(result.current?.contextTokens).toBe(192_480);
+  });
+
+  it("doesn't take one agent's turn as the next one's", async () => {
+    const { rerender } = mount({ agentState: "working" });
+    rerender({ provider: "codex", enabled: true, agentState: "waiting", generation: "1:0" });
+    await advance(CONTEXT_USAGE_FOLLOW_UP_READ_MS * 5);
+
+    // A pane that settled under another agent reads once, as a mount would.
+    expect(readCodexContextUsage).toHaveBeenCalledTimes(1);
+    expect(readContextUsage).not.toHaveBeenCalled();
   });
 });

@@ -208,6 +208,7 @@ export const CHANNEL_LOCALITY = {
   // Quota is the Codex account on the machine the agents run on.
   "codex:read-quota": "host",
   "codex:refresh-quota": "host",
+  "codex:read-context-usage": "host",
   "codex:read-subagent-transcript": "host",
   "codex:resolve-resume-latest-session": "host",
   // Held by this machine's main for its own terminals (#16379), pushed to its
