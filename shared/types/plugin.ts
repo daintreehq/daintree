@@ -2698,6 +2698,14 @@ export interface PluginAgentContribution {
    * settings. Only the format is declared; Daintree owns any env var name.
    */
   launchMcp?: { format: LaunchMcpFormat };
+  /**
+   * The arguments the CLI takes to skip its permission prompts (#16374).
+   * Declaring them turns nothing on: they ride only a launch whose resolved
+   * bypass setting is on (the global switch, the agent's setting and its
+   * preset, an explicit "off" included), exactly as a built-in agent's flag
+   * does. Without them the agent is never eligible for the global switch.
+   */
+  permissionBypassArgs?: string[];
 }
 
 /**

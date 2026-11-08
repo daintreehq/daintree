@@ -318,11 +318,23 @@ function ownEntry<T>(map: Readonly<Record<string, T>>, agentId: string | undefin
   return agentId !== undefined && Object.hasOwn(map, agentId) ? map[agentId] : undefined;
 }
 
+/**
+ * The bypass flag an agent launches with when its settings name none: a
+ * built-in's {@link DEFAULT_DANGEROUS_ARGS} entry, or the args a plugin agent
+ * declares for its CLI (#16374), space-separated as `dangerousArgs` is.
+ */
+export function getDefaultDangerousArgs(agentId: string | undefined): string {
+  if (agentId === undefined) return "";
+  const builtIn = ownEntry(DEFAULT_DANGEROUS_ARGS, agentId);
+  if (builtIn !== undefined) return builtIn.trim();
+  return getEffectiveAgentConfig(agentId)?.permissionBypassArgs?.join(" ") ?? "";
+}
+
 /** The written `dangerousArgs`, or the agent's default when unset or retired. */
 function resolveDangerousArgs(written: string | undefined, agentId: string | undefined): string {
   const value = written?.trim() ?? "";
   if (value && !ownEntry(RETIRED_DANGEROUS_ARGS, agentId)?.includes(value)) return value;
-  return ownEntry(DEFAULT_DANGEROUS_ARGS, agentId)?.trim() ?? "";
+  return getDefaultDangerousArgs(agentId);
 }
 
 export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
@@ -347,14 +359,17 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
 };
 
 /**
- * Whether an agent opts into permission-bypass via its config
- * (`supports.permissionBypass === true`). Strict — agents that omit the field
- * or set it `false` are NOT bypass-supported, so the global skip-permissions
- * override must never inject their dangerous flag (#10432).
+ * Whether an agent opts into permission-bypass via its config: a built-in's
+ * `supports.permissionBypass === true`, or a plugin agent that declares its
+ * CLI's `permissionBypassArgs` (#16374). Strict — agents that declare neither
+ * are NOT bypass-supported, so the global skip-permissions override must never
+ * inject their dangerous flag (#10432).
  */
 export function isAgentBypassSupported(agentId: string | undefined): boolean {
   if (!agentId) return false;
-  const supports = getEffectiveAgentConfig(agentId)?.supports;
+  const config = getEffectiveAgentConfig(agentId);
+  if (config?.permissionBypassArgs?.length) return true;
+  const supports = config?.supports;
   // `supports` is `AssistantSupports | false | undefined`; only the structured
   // form carries `permissionBypass`.
   return supports !== false && supports?.permissionBypass === true;
@@ -628,7 +643,7 @@ function optionGroups(tokens: readonly string[]): string[][] {
  * to agents that don't declare `supports.permissionBypass`: their `"on"` flag
  * (e.g. Gemini's `--yolo`) is preserved when `effectiveBypass` is true, and an
  * explicit `"off"` veto strips a stale token when it is false. Agents with no
- * canonical token (no `DEFAULT_DANGEROUS_ARGS` entry and no `dangerousArgs`)
+ * canonical token (no default from {@link getDefaultDangerousArgs} and no `dangerousArgs`)
  * fall through the empty-strip-set guard below and are left untouched.
  *
  * Bypass args are matched one option group at a time — an option together with
@@ -639,7 +654,7 @@ function optionGroups(tokens: readonly string[]): string[][] {
  * whose other half another reconciler already rewrote is still recognised.
  *
  * @param bypassArgs - The agent's currently-resolved dangerous args (e.g.
- *   `entry.dangerousArgs`); falls back to `DEFAULT_DANGEROUS_ARGS[agentId]`.
+ *   `entry.dangerousArgs`); falls back to {@link getDefaultDangerousArgs}.
  */
 export function reconcileBypassFlags(
   flags: readonly string[],
@@ -654,7 +669,7 @@ export function reconcileBypassFlags(
   const groups: string[][] = [];
   for (const source of [
     resolved,
-    ownEntry(DEFAULT_DANGEROUS_ARGS, agentId),
+    getDefaultDangerousArgs(agentId),
     ...(ownEntry(RETIRED_DANGEROUS_ARGS, agentId) ?? []),
   ]) {
     for (const group of optionGroups(source?.trim().split(/\s+/).filter(Boolean) ?? [])) {

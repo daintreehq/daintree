@@ -373,6 +373,18 @@ const PluginAgentStaticArgArraySchema = PluginAgentArgArraySchema.refine(
   { message: `Only a session-id resume's args can carry ${SESSION_ID_TOKEN}` }
 );
 
+/**
+ * One token of the flag a CLI takes to skip its permission prompts (#16374).
+ * Launches carry it as the agent setting's space-separated bypass string, so a
+ * token holding whitespace would come back as two; and it is a fixed flag, so
+ * no template a launch would expand.
+ */
+const PluginAgentBypassArgSchema = PluginAgentArgSchema.min(1)
+  .refine((arg) => !/\s/.test(arg), { message: "A permission-bypass arg can't contain whitespace" })
+  .refine((arg) => !arg.includes(SESSION_ID_TOKEN) && !arg.includes("${"), {
+    message: `A permission-bypass arg can't carry ${SESSION_ID_TOKEN} or a \${settings:…} template`,
+  });
+
 /** Count the capture groups in a regex source, or `null` when it doesn't compile. */
 function countCaptureGroups(source: string): number | null {
   try {
@@ -458,5 +470,6 @@ export const AgentContributionSchema = z
       .object({ format: z.enum(LAUNCH_MCP_FORMATS) })
       .strict()
       .optional(),
+    permissionBypassArgs: z.array(PluginAgentBypassArgSchema).min(1).max(20).optional(),
   })
   .strict();

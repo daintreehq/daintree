@@ -25,6 +25,7 @@ import {
   supportsExactSessionCapture,
   DEFAULT_AGENT_SETTINGS,
   DEFAULT_DANGEROUS_ARGS,
+  getDefaultDangerousArgs,
   agentClipboardDirectory,
 } from "../agentSettings.js";
 import { setUserRegistry } from "../../config/agentRegistry.js";
@@ -2261,6 +2262,93 @@ describe("plugin-declared resume (#13687)", () => {
     expect(buildResumeLatestCommand("pi", ["--profile", "latest", "--fast"])).toBe(
       "pi --profile 'latest' --fast --resume latest"
     );
+  });
+});
+
+describe("plugin-declared permission bypass (#16374)", () => {
+  forcePosixPlatform();
+  afterEach(() => clearPluginAgentRegistryForTests());
+
+  const plugin = {
+    name: "Plugin",
+    color: "#3366ff",
+    iconId: "terminal",
+  };
+
+  function registerHermes(permissionBypassArgs?: string[]) {
+    registerPluginAgents("me.extra-agents", [
+      {
+        ...plugin,
+        id: "hermes",
+        command: "hermes",
+        args: ["--tui"],
+        ...(permissionBypassArgs ? { permissionBypassArgs } : {}),
+      },
+    ]);
+  }
+
+  it("makes a declaring plugin agent eligible for the global switch", () => {
+    registerHermes(["--yes-to-all"]);
+    expect(isAgentBypassSupported("hermes")).toBe(true);
+    expect(getDefaultDangerousArgs("hermes")).toBe("--yes-to-all");
+  });
+
+  it("launches with the declared args only when the global switch is on", () => {
+    registerHermes(["--yes-to-all"]);
+    expect(generateAgentCommand("hermes", {}, "hermes", { globalSkipPermissions: true })).toBe(
+      "hermes --tui --yes-to-all"
+    );
+    expect(generateAgentCommand("hermes", {}, "hermes", { globalSkipPermissions: false })).toBe(
+      "hermes --tui"
+    );
+    expect(generateAgentCommand("hermes", {}, "hermes")).toBe("hermes --tui");
+  });
+
+  it("lets an agent or preset 'off' veto the global switch", () => {
+    registerHermes(["--yes-to-all"]);
+    expect(
+      generateAgentFlags({ dangerousMode: "off" }, "hermes", { globalSkipPermissions: true })
+    ).toEqual([]);
+    const presetVeto = combineDangerousModes("on", "off");
+    expect(
+      generateAgentFlags({ dangerousMode: presetVeto }, "hermes", { globalSkipPermissions: true })
+    ).toEqual([]);
+  });
+
+  it("adds the declared args for an agent setting of 'on' with the global switch off", () => {
+    registerHermes(["--yes-to-all"]);
+    expect(
+      generateAgentFlags({ dangerousMode: "on" }, "hermes", { globalSkipPermissions: false })
+    ).toEqual(["--yes-to-all"]);
+  });
+
+  it("keeps a declared option and its value together", () => {
+    registerHermes(["--approval", "never"]);
+    expect(generateAgentFlags({}, "hermes", { globalSkipPermissions: true })).toEqual([
+      "--approval",
+      "never",
+    ]);
+    expect(reconcileBypassFlags(["--approval", "never", "--fast"], "hermes", false)).toEqual([
+      "--fast",
+    ]);
+  });
+
+  it("leaves a plugin agent that declares nothing ineligible and its flags untouched", () => {
+    registerHermes();
+    expect(isAgentBypassSupported("hermes")).toBe(false);
+    expect(getDefaultDangerousArgs("hermes")).toBe("");
+    expect(generateAgentFlags({}, "hermes", { globalSkipPermissions: true })).toEqual([]);
+    expect(reconcileBypassFlags(["--yes-to-all"], "hermes", true)).toEqual(["--yes-to-all"]);
+  });
+
+  it("reconciles a resumed launch's flags against the declared args", () => {
+    registerHermes(["--yes-to-all"]);
+    expect(reconcileBypassFlags(["--yes-to-all", "--fast"], "hermes", false)).toEqual(["--fast"]);
+    expect(reconcileBypassFlags(["--fast"], "hermes", true)).toEqual(["--fast", "--yes-to-all"]);
+    // A custom bypass the user wrote still strips the plugin's own flag.
+    expect(
+      reconcileBypassFlags(["--yes-to-all", "--fast"], "hermes", true, "--trust-everything")
+    ).toEqual(["--trust-everything", "--fast"]);
   });
 });
 

@@ -108,6 +108,9 @@ function contributionToAgentConfig(
     ...(contribution.launchMcp
       ? { capabilities: { launchMcp: buildLaunchMcpInjection(contribution.launchMcp.format) } }
       : {}),
+    ...(contribution.permissionBypassArgs?.length
+      ? { permissionBypassArgs: [...contribution.permissionBypassArgs] }
+      : {}),
   };
 }
 

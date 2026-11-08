@@ -341,3 +341,71 @@ describe("manifest-level agent contribution gates (issue #9560)", () => {
     expect(result.success).toBe(false);
   });
 });
+
+describe("permissionBypassArgs (#16374)", () => {
+  const parses = (permissionBypassArgs: unknown) =>
+    AgentContributionSchema.safeParse({ ...VALID_AGENT, permissionBypassArgs }).success;
+
+  it("accepts a flag, or an option with its value", () => {
+    expect(parses(["--yes-to-all"])).toBe(true);
+    expect(parses(["--approval", "never"])).toBe(true);
+    expect(parses(["-c", "approval_policy=never"])).toBe(true);
+  });
+
+  it("is optional and maps through unchanged", () => {
+    const parsed = AgentContributionSchema.safeParse({
+      ...VALID_AGENT,
+      permissionBypassArgs: ["--yolo"],
+    });
+    expect(parsed.success && parsed.data.permissionBypassArgs).toEqual(["--yolo"]);
+    expect(AgentContributionSchema.safeParse(VALID_AGENT).success).toBe(true);
+  });
+
+  it("bounds the args like other agent args", () => {
+    expect(parses([])).toBe(false);
+    expect(parses(Array.from({ length: 21 }, (_, i) => `--flag${i}`))).toBe(false);
+    expect(parses(Array.from({ length: 20 }, (_, i) => `--flag${i}`))).toBe(true);
+    expect(parses([`--${"a".repeat(255)}`])).toBe(false);
+    expect(parses(["--bad\nflag"])).toBe(false);
+    expect(parses(["--bad\0flag"])).toBe(false);
+    expect(parses("--yolo")).toBe(false);
+  });
+
+  it("rejects an empty token, whitespace inside one, or a template a launch would expand", () => {
+    expect(parses([""])).toBe(false);
+    expect(parses(["--approval never"])).toBe(false);
+    expect(parses(["--approval\tnever"])).toBe(false);
+    expect(parses(["--session={sessionId}"])).toBe(false);
+    expect(parses(["--token=${settings:apiToken}"])).toBe(false);
+  });
+
+  it("rejects a manifest whose default args already carry the declared flag", () => {
+    const schema = getPluginManifestSchema("user");
+    const withAgent = (agent: Record<string, unknown>) =>
+      schema.safeParse(
+        manifestWith({
+          capabilities: ["agent:register"],
+          contributes: { agents: [{ ...VALID_AGENT, ...agent }] },
+        })
+      );
+
+    const carried = withAgent({ args: ["--tui", "--yolo"], permissionBypassArgs: ["--yolo"] });
+    expect(carried.success).toBe(false);
+    expect(carried.error?.issues.map((issue) => issue.path.join("."))).toContain(
+      "contributes.agents.0.args"
+    );
+    expect(
+      withAgent({
+        args: ["--approval", "never"],
+        permissionBypassArgs: ["--approval", "never"],
+      }).success
+    ).toBe(false);
+
+    expect(
+      withAgent({ args: ["--approval", "ask"], permissionBypassArgs: ["--approval", "never"] })
+        .success
+    ).toBe(true);
+    expect(withAgent({ args: ["--tui"], permissionBypassArgs: ["--yolo"] }).success).toBe(true);
+    expect(withAgent({ permissionBypassArgs: ["--yolo"] }).success).toBe(true);
+  });
+});
