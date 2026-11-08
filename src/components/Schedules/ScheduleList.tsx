@@ -22,7 +22,13 @@ import { lastRunWords } from "./lastRunWords";
 import { RunGlyph } from "./RunGlyph";
 import { scheduleAgentName } from "./scheduleAgent";
 import { SCHEDULE_STARTERS, type ScheduleStarter } from "./scheduleStarters";
-import { cadenceWords, formatNextRunRelative, formatRunInstant, nextRunAt } from "./scheduleWords";
+import {
+  cadenceWords,
+  formatNextRunRelative,
+  formatRunInstant,
+  nextRunAt,
+  scheduleWorktreeLabel,
+} from "./scheduleWords";
 
 /** The controls a row offers, each findable by schedule for handing focus back to it. */
 export type ScheduleRowAction = "run" | "history" | "edit" | "delete";
@@ -455,11 +461,7 @@ export function ScheduleList({
                 schedule={schedule}
                 now={now}
                 schedulesOn={schedulesOn}
-                worktreeLabel={
-                  schedule.launch.worktreeId === null
-                    ? null
-                    : (worktreeLabels.get(schedule.launch.worktreeId) ?? "Missing worktree")
-                }
+                worktreeLabel={scheduleWorktreeLabel(schedule.launch, worktreeLabels)}
                 enabledPending={pendingEnabled.has(schedule.id)}
                 runNowPending={pendingRunNow.has(schedule.id)}
                 lastRun={lastRuns.byScheduleId.get(schedule.id)}

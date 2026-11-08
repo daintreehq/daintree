@@ -132,6 +132,7 @@ describe("ScheduleEditor: the Daintree Assistant (#16169)", () => {
           presetId: null,
           prompt: "Go.",
           worktreeId: null,
+          newWorktree: null,
         },
       })
     );
@@ -140,7 +141,13 @@ describe("ScheduleEditor: the Daintree Assistant (#16169)", () => {
   it("switching an agent's schedule to the Assistant drops its preset, worktree and background", async () => {
     const schedule = {
       ...existing("claude", "background"),
-      launch: { agentId: "claude", presetId: "fast", prompt: "Go.", worktreeId: "/wt" },
+      launch: {
+        agentId: "claude",
+        presetId: "fast",
+        prompt: "Go.",
+        worktreeId: "/wt",
+        newWorktree: null,
+      },
     };
     clientMock.update.mockResolvedValue({
       status: "saved",
@@ -173,6 +180,7 @@ describe("ScheduleEditor: the Daintree Assistant (#16169)", () => {
           presetId: null,
           prompt: "Go.",
           worktreeId: null,
+          newWorktree: null,
         },
         policies: expect.objectContaining({ onDone: "keep" }),
       })

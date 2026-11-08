@@ -1,6 +1,7 @@
 import type {
   Schedule,
   ScheduleCadence,
+  ScheduleNewWorktree,
   SchedulePolicies,
   ScheduledRunEvidence,
   ScheduledRunOutcome,
@@ -33,6 +34,31 @@ export function isScheduleAssistantAgentId(agentId: string | null | undefined): 
   return agentId === SCHEDULE_ASSISTANT_AGENT_ID;
 }
 
+const SCHEDULE_BRANCH_SLUG_MAX = 40;
+const SCHEDULE_BRANCH_FALLBACK_SLUG = "run";
+
+/**
+ * The branch a run of a new-worktree schedule starts (#16369), recognisably the
+ * schedule's and unique to the run: `schedule-nightly-triage-20261108-0900-a1b2c3d4`.
+ * Flat rather than `schedule/...`, which git refuses in a repository that has a
+ * branch called `schedule`. The time is UTC, and the id is what makes it unique.
+ */
+export function scheduledRunBranchName(scheduleName: string, at: number, id: string): string {
+  const slug = scheduleName
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .slice(0, SCHEDULE_BRANCH_SLUG_MAX)
+    .replace(/^-+|-+$/g, "");
+  const time = new Date(at).toISOString().slice(0, 16).replace(/[-:]/g, "").replace("T", "-");
+  const unique = id
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .slice(0, 8)
+    .toLowerCase();
+  return `schedule-${slug || SCHEDULE_BRANCH_FALLBACK_SLUG}-${time}-${unique}`;
+}
+
 export interface NewScheduleInput {
   readonly id: string;
   readonly projectId: string;
@@ -42,6 +68,7 @@ export interface NewScheduleInput {
     readonly prompt: string;
     readonly presetId?: string | null;
     readonly worktreeId?: string | null;
+    readonly newWorktree?: ScheduleNewWorktree | null;
   };
   readonly cron?: string;
   readonly timeZone?: string;
@@ -74,6 +101,7 @@ export function createSchedule(input: NewScheduleInput, now: number = Date.now()
       presetId: input.launch.presetId ?? null,
       prompt: input.launch.prompt,
       worktreeId: input.launch.worktreeId ?? null,
+      newWorktree: input.launch.newWorktree ?? null,
     },
     policies: {
       missedRuns: policies?.missedRuns ?? "run-once-late",

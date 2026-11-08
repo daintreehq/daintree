@@ -63,6 +63,8 @@ const PoliciesShape = z.strictObject({
   runWhenClosed: z.boolean(),
 });
 
+const NewWorktreeShape = z.strictObject({ baseBranch: z.string(), fromRemote: z.boolean() });
+
 const CreateInputShape = z.strictObject({
   name: z.string(),
   launch: z.strictObject({
@@ -70,6 +72,7 @@ const CreateInputShape = z.strictObject({
     prompt: z.string(),
     presetId: z.string().nullable().optional(),
     worktreeId: z.string().nullable().optional(),
+    newWorktree: NewWorktreeShape.nullable().optional(),
   }),
   cron: z.string().optional(),
   timeZone: z.string().optional(),
@@ -86,6 +89,7 @@ const UpdatePatchShape = z.strictObject({
       presetId: z.string().nullable(),
       prompt: z.string(),
       worktreeId: z.string().nullable(),
+      newWorktree: NewWorktreeShape.nullable(),
     })
     .optional(),
   policies: PoliciesShape.optional(),

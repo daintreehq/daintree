@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { createStore } from "zustand";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionDispatchOptions, ActionDispatchResult } from "@shared/types/actions";
 import type {
@@ -25,7 +27,9 @@ const panels = vi.hoisted(() => ({
 
 vi.mock("@/store/panelStore", () => ({ usePanelStore: { getState: () => panels } }));
 
+import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { useScheduledRunLaunchBridge } from "@/hooks/useScheduledRunLaunchBridge";
+import type { WorktreeViewStoreApi } from "@/store/createWorktreeStore";
 
 let requestLaunch: ((request: ScheduledLaunchViewRequest) => void) | null = null;
 let runClosed: ((push: ScheduledRunClosedPush) => void) | null = null;
@@ -149,6 +153,98 @@ describe("useScheduledRunLaunchBridge", () => {
 
     expect(panels.removePanel).toHaveBeenCalledExactlyOnceWith("terminal-1", {
       backendAlreadyClosed: true,
+    });
+  });
+
+  describe("a worktree main just made for the run (#16369)", () => {
+    const newWorktreeRequest: ScheduledLaunchViewRequest = {
+      ...request,
+      args: { ...request.args, worktreeId: "/wt/new" },
+      newWorktree: true,
+    };
+
+    function worktreeStore(initial: readonly string[] = []) {
+      const store = createStore(() => ({
+        worktrees: new Map(initial.map((id) => [id, { id }])),
+      }));
+      const wrapper = ({ children }: { children: ReactNode }) => (
+        <WorktreeStoreContext.Provider value={store as unknown as WorktreeViewStoreApi}>
+          {children}
+        </WorktreeStoreContext.Provider>
+      );
+      return { store, wrapper };
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      dispatch.mockResolvedValue({ ok: true, result: { launched: true } });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const settle = () => act(async () => vi.advanceTimersByTimeAsync(0));
+
+    it("waits to hear of the worktree before launching in it", async () => {
+      const { store, wrapper } = worktreeStore();
+      renderHook(() => useScheduledRunLaunchBridge(), { wrapper });
+
+      requestLaunch!(newWorktreeRequest);
+      await settle();
+      expect(dispatch).not.toHaveBeenCalled();
+
+      store.setState({ worktrees: new Map([["/wt/new", { id: "/wt/new" }]]) });
+      await settle();
+
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(sendLaunchResponse).toHaveBeenCalledWith({
+        requestId: "request-1",
+        result: { ok: true, result: { launched: true } },
+      });
+    });
+
+    it("launches at once when the view already knows it", async () => {
+      const { wrapper } = worktreeStore(["/wt/new"]);
+      renderHook(() => useScheduledRunLaunchBridge(), { wrapper });
+
+      requestLaunch!(newWorktreeRequest);
+      await settle();
+
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves it to the launcher to refuse one that never arrives", async () => {
+      const { wrapper } = worktreeStore();
+      renderHook(() => useScheduledRunLaunchBridge(), { wrapper });
+
+      requestLaunch!(newWorktreeRequest);
+      await act(async () => vi.advanceTimersByTimeAsync(20_000));
+
+      expect(dispatch).toHaveBeenCalledTimes(1);
+    });
+
+    it("launches nothing for a view that went away while it waited", async () => {
+      const { wrapper } = worktreeStore();
+      const { unmount } = renderHook(() => useScheduledRunLaunchBridge(), { wrapper });
+
+      requestLaunch!(newWorktreeRequest);
+      await settle();
+      unmount();
+      await act(async () => vi.advanceTimersByTimeAsync(20_000));
+
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(sendLaunchResponse).not.toHaveBeenCalled();
+    });
+
+    it("never waits on a launch that doesn't ask it to", async () => {
+      const { wrapper } = worktreeStore();
+      renderHook(() => useScheduledRunLaunchBridge(), { wrapper });
+
+      requestLaunch!({ ...request, args: { ...request.args, worktreeId: "/wt/fixed" } });
+      await settle();
+
+      expect(dispatch).toHaveBeenCalledTimes(1);
     });
   });
 });

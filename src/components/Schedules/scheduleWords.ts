@@ -4,9 +4,20 @@ import { validateCadence } from "@shared/utils/scheduledRuns";
 import type {
   ScheduleCadence,
   ScheduleDonePolicy,
+  ScheduleLaunch,
   ScheduleMissedRunPolicy,
   ScheduleOverlapPolicy,
 } from "@shared/types/scheduledRuns";
+
+/** Where a schedule's runs start, in words; null for the main checkout. */
+export function scheduleWorktreeLabel(
+  launch: Pick<ScheduleLaunch, "worktreeId" | "newWorktree">,
+  labels: ReadonlyMap<string, string>
+): string | null {
+  if (launch.newWorktree) return `New worktree from ${launch.newWorktree.baseBranch}`;
+  if (launch.worktreeId === null) return null;
+  return labels.get(launch.worktreeId) ?? "Missing worktree";
+}
 
 /** The cadence in words, or null when it has no short reading and the expression has to speak for itself. */
 export function cadenceWords(cadence: ScheduleCadence): string | null {

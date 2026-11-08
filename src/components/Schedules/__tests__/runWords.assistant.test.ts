@@ -99,3 +99,53 @@ describe("an Assistant's run in the history (#16169)", () => {
     ).toBe("An agent on Studio, in project-1");
   });
 });
+
+describe("runAction: a run in its own new worktree (#16369)", () => {
+  const resume = {
+    agentId: "claude",
+    agentSessionId: "0b6e3f9c-0d3e-4a55-8a0e-4b6ad8d6e9a1",
+    cwd: "/wt/new",
+    worktreeId: "/wt/new",
+    agentLaunchFlags: [],
+    agentModelId: null,
+    agentPresetId: null,
+  };
+  const newWorktree = { branch: "schedule-x", baseBranch: "main", worktreeId: "/wt/new" };
+  const run = (overrides: Partial<ScheduledRun>) =>
+    assistantRun({ assistant: undefined, resume, newWorktree, ...overrides });
+
+  it("opens the terminal while it's there, and resumes in the run's worktree after", () => {
+    expect(runAction(run({}), { terminalExists: true, worktreeIds: new Set() })).toEqual({
+      kind: "open",
+    });
+    expect(
+      runAction(run({}), { terminalExists: false, worktreeIds: new Set(["/wt/new"]) })
+    ).toEqual({ kind: "resume", sessionId: resume.agentSessionId });
+  });
+
+  it("says its worktree was removed once it's been deleted", () => {
+    expect(runAction(run({}), { terminalExists: false, worktreeIds: new Set() })).toMatchObject({
+      kind: "none",
+      label: "Worktree removed",
+    });
+  });
+
+  it("offers no conversation for a run refused with its worktree left standing", () => {
+    const refused = run({
+      resume: null,
+      terminalId: null,
+      terminalSpawnedAt: null,
+      process: { agent: { state: "not-started" }, pty: { state: "not-started" } },
+      settlement: {
+        state: "settled",
+        settledAt: 9,
+        outcome: "failed",
+        evidence: { kind: "launch-error", message: "The setup failed." },
+      },
+    });
+
+    expect(
+      runAction(refused, { terminalExists: false, worktreeIds: new Set(["/wt/new"]) })
+    ).toMatchObject({ kind: "none", label: null });
+  });
+});

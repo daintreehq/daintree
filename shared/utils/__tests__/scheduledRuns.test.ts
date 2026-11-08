@@ -5,9 +5,11 @@ import {
   createSchedule,
   occurrenceKeyFor,
   outcomeForEvidence,
+  scheduledRunBranchName,
   validateCadence,
   type NewScheduleInput,
 } from "../scheduledRuns.js";
+import { validateBranchName } from "../pathPattern.js";
 
 const NOW = Date.parse("2026-06-01T12:00:00Z");
 
@@ -40,7 +42,19 @@ describe("createSchedule", () => {
       presetId: null,
       prompt: "Triage new issues",
       worktreeId: null,
+      newWorktree: null,
     });
+  });
+
+  it("keeps a new-worktree launch as given", () => {
+    const newWorktree = { baseBranch: "origin/develop", fromRemote: true };
+    const schedule = createSchedule(
+      { ...minimal, launch: { ...minimal.launch, newWorktree } },
+      NOW
+    );
+    expect(ScheduleSchema.safeParse(schedule).success).toBe(true);
+    expect(schedule.launch.newWorktree).toEqual(newWorktree);
+    expect(schedule.launch.worktreeId).toBeNull();
   });
 
   it("fixes the machine's zone at creation unless one is given", () => {
@@ -148,5 +162,39 @@ describe("validateCadence", () => {
       ok: true,
       timeZone: "Europe/London",
     });
+  });
+});
+
+describe("scheduledRunBranchName", () => {
+  const AT = Date.UTC(2026, 10, 8, 9, 5);
+
+  it("reads as the schedule's, and carries the run's id", () => {
+    expect(scheduledRunBranchName("Nightly Bug Hunt", AT, "a1b2c3d4-e5f6-7890")).toBe(
+      "schedule-nightly-bug-hunt-20261108-0905-a1b2c3d4"
+    );
+  });
+
+  it("differs per run, even at the same minute", () => {
+    expect(scheduledRunBranchName("Nightly", AT, "aaaa1111")).not.toBe(
+      scheduledRunBranchName("Nightly", AT, "bbbb2222")
+    );
+  });
+
+  it("always makes a name git takes, from any schedule name", () => {
+    for (const name of [
+      "Nightly",
+      "  --weird//name..lock~^:?*[\\ ",
+      "日本語のスケジュール",
+      "Crème brûlée",
+      "x".repeat(200),
+      "-",
+    ]) {
+      const branch = scheduledRunBranchName(name, AT, "a1b2c3d4");
+      expect(validateBranchName(branch).valid, branch).toBe(true);
+      expect(branch.startsWith("schedule-")).toBe(true);
+      expect(branch.length).toBeLessThan(80);
+    }
+    expect(scheduledRunBranchName("Crème brûlée", AT, "a1b2c3d4")).toContain("creme-brulee");
+    expect(scheduledRunBranchName("日本語", AT, "a1b2c3d4")).toContain("schedule-run-");
   });
 });

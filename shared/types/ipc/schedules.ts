@@ -3,6 +3,7 @@ import type {
   Schedule,
   ScheduleCadence,
   ScheduleLaunch,
+  ScheduleNewWorktree,
   SchedulePolicies,
   ScheduledRunSkipReason,
 } from "../scheduledRuns.js";
@@ -32,6 +33,7 @@ export interface ScheduleCreateInput {
     prompt: string;
     presetId?: string | null;
     worktreeId?: string | null;
+    newWorktree?: ScheduleNewWorktree | null;
   };
   cron?: string;
   timeZone?: string;
@@ -170,6 +172,12 @@ export interface ScheduledLaunchViewRequest {
   requestId: string;
   args: Record<string, unknown>;
   scheduledRun: ScheduledRunRef;
+  /**
+   * Main just made `args.worktreeId` for the run (#16369), and the view hears of
+   * a new worktree on its own port: it waits for it before launching, rather
+   * than refusing an id it hasn't heard of yet.
+   */
+  newWorktree?: true;
 }
 
 export interface ScheduledLaunchViewResponse {

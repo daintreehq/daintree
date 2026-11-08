@@ -207,6 +207,58 @@ export async function runScheduledAgentLaunchLive(
   );
 }
 
+/** The worktrees the project's workspace host lists, or null with no host. */
+export async function listProjectWorktreesLive(
+  project: Project
+): Promise<import("../../../shared/types/worktree.js").WorktreeState[] | null> {
+  const [{ readProjectWorktrees }, deps] = await Promise.all([
+    import("./viewlessWorktrees.js"),
+    loadLiveDeps(),
+  ]);
+  return readProjectWorktrees(project, deps);
+}
+
+/**
+ * Create a scheduled run's new worktree (#16369), the way main creates one for
+ * any caller with no view, on the exact branch the run claimed: a name taken is
+ * refused, never suffixed or checked out, so a retry can't make a second one.
+ * The worktree's id, or a rejection with the reason.
+ */
+export async function createScheduledRunWorktreeLive(
+  project: Project,
+  request: { branch: string; baseBranch: string; fromRemote: boolean }
+): Promise<string> {
+  const [{ runWorktreeCreateWithRecipe }, deps] = await Promise.all([
+    import("./viewlessWorktreeCreation.js"),
+    loadLiveDeps(),
+  ]);
+  const result = await runWorktreeCreateWithRecipe(
+    {
+      workspaceId: project.id,
+      actionId: "worktree.createWithRecipe",
+      args: {
+        source: {
+          kind: "newBranch",
+          branchName: request.branch,
+          baseBranch: request.baseBranch,
+          fromRemote: request.fromRemote,
+          collisionPolicy: "error",
+        },
+      },
+      confirmed: true,
+    },
+    project,
+    deps
+  );
+  if (!result.ok) throw new Error(result.error.message);
+  const worktreeId: unknown =
+    typeof result.result === "object" && result.result !== null
+      ? Reflect.get(result.result, "worktreeId")
+      : undefined;
+  if (typeof worktreeId !== "string") throw new Error("The create answered with no worktree.");
+  return worktreeId;
+}
+
 /** Restart a terminal of a project no frontend is attached to (#14703); see `restartTerminalWithoutView`. */
 export async function restartTerminalWithoutViewLive(
   projectId: string,

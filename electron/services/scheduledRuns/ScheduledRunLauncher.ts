@@ -8,6 +8,7 @@ import type {
   ProjectScheduleSwitches,
   Schedule,
   ScheduledRun,
+  ScheduledRunNewWorktree,
   ScheduledRunOrigin,
   ScheduledRunSkipReason,
 } from "../../../shared/types/scheduledRuns.js";
@@ -19,6 +20,7 @@ import type { ScheduledRunRecorder } from "./ScheduledRunRecorder.js";
 import { reserveScheduledLaunch } from "./scheduledRunAdmission.js";
 import type { ArmedScheduledRun } from "./ScheduledRunDonePolicy.js";
 import type { PreconditionSkipReason } from "./scheduledRunPrecondition.js";
+import { prepareRunWorktree, type ScheduledRunWorktreeHost } from "./scheduledRunWorktree.js";
 
 /** The `agent.launch` arguments a scheduled run launches with; never its provenance. */
 export interface ScheduledLaunchArgs {
@@ -40,6 +42,8 @@ export interface ScheduledLaunchArgs {
 export interface ScheduledLaunchRequest {
   args: ScheduledLaunchArgs;
   scheduledRun: ScheduledRunRef;
+  /** The launch's worktree was just made for the run, and a view may not have heard yet. */
+  newWorktree?: true;
 }
 
 /** A schedule's run of the project's Daintree Assistant (#16169), which main always starts. */
@@ -102,6 +106,10 @@ export interface ScheduledRunLauncherDeps<View> {
     project: Project,
     request: ScheduledAssistantLaunchRequest
   ) => Promise<ScheduledAssistantLaunchResult>;
+  /** Where a run of a new-worktree schedule (#16369) gets its worktree. */
+  worktreeHost: ScheduledRunWorktreeHost;
+  /** Between looks at a new worktree's setup. */
+  sleep?: (ms: number) => Promise<void>;
   /**
    * Runs the schedule's precondition in `cwd`, ending it when `signal`
    * aborts. Null when it exited 0; otherwise the skip the history records.
@@ -323,7 +331,14 @@ async function launchInScheduleTurn<View>(
   const runId = deps.newId();
   const terminalId = `terminal-${deps.newId()}`;
   const { launch } = schedule;
+  // A new-worktree schedule (#16369) has its check in the project's folder and
+  // its launch in the worktree made for the run, once there is one.
   const target = launch.worktreeId ?? project.path;
+  let launchTarget = target;
+  let launchWorktreeId = launch.worktreeId;
+  let newWorktree = null as ScheduledRunNewWorktree | null;
+  const newWorktreeFields = (): { newWorktree?: ScheduledRunNewWorktree } =>
+    newWorktree ? { newWorktree } : {};
   // The Assistant (#16169) starts in its own session folder, with its own
   // settings, under whichever CLI they pick.
   const assistant = isScheduleAssistantAgentId(launch.agentId);
@@ -399,13 +414,14 @@ async function launchInScheduleTurn<View>(
         if (launch.presetId !== null && resume.agentPresetId !== launch.presetId) {
           throw new Error("The schedule's preset isn't available any more.");
         }
-        if (launch.worktreeId !== null && resume.worktreeId !== launch.worktreeId) {
-          throw new Error("The schedule's worktree isn't part of the project any more.");
+        const worktreeWords = newWorktree ? "The run's new worktree" : "The schedule's worktree";
+        if (launchWorktreeId !== null && resume.worktreeId !== launchWorktreeId) {
+          throw new Error(`${worktreeWords} isn't part of the project any more.`);
         }
-        if (!samePath(resume.cwd, target)) {
+        if (!samePath(resume.cwd, launchTarget)) {
           throw new Error(
-            launch.worktreeId !== null
-              ? "The schedule's worktree couldn't be found."
+            launchWorktreeId !== null
+              ? `${worktreeWords} couldn't be found.`
               : "The project's folder couldn't be found."
           );
         }
@@ -420,6 +436,7 @@ async function launchInScheduleTurn<View>(
         resume,
         handbackCode,
         ...(assistant ? { assistant: true } : {}),
+        ...newWorktreeFields(),
       });
       try {
         deps.markProjectRunning(projectId);
@@ -447,6 +464,7 @@ async function launchInScheduleTurn<View>(
           origin,
           terminalId: reservedId,
           message,
+          ...newWorktreeFields(),
         });
         return { status: "failed", runId, message };
       } catch (error) {
@@ -499,6 +517,38 @@ async function launchInScheduleTurn<View>(
         }
         return recordSkip(skipped, terminalId);
       }
+      if (deps.isProjectSleeping(projectId)) {
+        return refuseBeforeLaunch("The project was going to sleep.");
+      }
+    }
+
+    if (launch.newWorktree !== null) {
+      // Before any open run is replaced: one that can't get a worktree closes nothing.
+      const prepared = await prepareRunWorktree({
+        project,
+        scheduleId,
+        scheduleName: schedule.name,
+        base: launch.newWorktree,
+        recorder,
+        host: deps.worktreeHost,
+        newId: deps.newId,
+        sleep: deps.sleep,
+        shouldStop: () => reserved.state().kind !== "pending" || isShuttingDown(),
+      });
+      newWorktree = prepared.worktree;
+      if (reserved.state().kind !== "pending") return { status: "not-found" };
+      if (isShuttingDown()) {
+        reserved.withdraw();
+        return { status: "not-found" };
+      }
+      // Only a ready worktree goes on, or the launch would fall to the main checkout.
+      if (prepared.status !== "ready") {
+        return refuseBeforeLaunch(
+          prepared.status === "refused" ? prepared.message : "The run's new worktree wasn't ready."
+        );
+      }
+      launchTarget = prepared.path;
+      launchWorktreeId = prepared.worktreeId;
       if (deps.isProjectSleeping(projectId)) {
         return refuseBeforeLaunch("The project was going to sleep.");
       }
@@ -561,12 +611,13 @@ async function launchInScheduleTurn<View>(
             prompt: launch.prompt,
             handback: true,
             presetId: launch.presetId,
-            worktreeId: launch.worktreeId ?? "",
+            worktreeId: launchWorktreeId ?? "",
             location: "grid",
             focusPolicy: "preserve",
             requestedId: terminalId,
           },
           scheduledRun,
+          ...(newWorktree ? { newWorktree: true as const } : {}),
         };
         const view = deps.findView(projectId, input.preferredWebContentsId);
         // A view's bridge keeps its own deadline; main's launch waits on the
@@ -646,6 +697,17 @@ async function launchInScheduleTurn<View>(
     }
     return outcome;
   } finally {
+    // A switch-off or a removal cancelled it, and nothing replays this attempt:
+    // the claim goes and its worktree stays for review, or the next run would
+    // start in a worktree as old as the switch-off. A quit's stays, for the
+    // occurrence the next startup catches up.
+    if (newWorktree && reserved.state().kind === "cancelled" && !isShuttingDown()) {
+      try {
+        recorder.dropWorktreeClaim(scheduleId, newWorktree.branch);
+      } catch (error) {
+        logWarn(`[ScheduledRuns] Couldn't drop run ${runId}'s worktree claim:`, error);
+      }
+    }
     reserved.finish();
   }
 }

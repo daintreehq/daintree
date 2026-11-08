@@ -988,6 +988,7 @@ export class ProjectStore {
         const result = tx.delete(projectsTable).where(eq(projectsTable.id, projectId)).run();
         const runs = tx.run(sql`DELETE FROM scheduled_runs WHERE project_id = ${projectId}`);
         tx.run(sql`DELETE FROM schedule_evaluation_points WHERE project_id = ${projectId}`);
+        tx.run(sql`DELETE FROM scheduled_run_worktree_claims WHERE project_id = ${projectId}`);
         return { removed: result, runsRemoved: runs.changes };
       },
       { behavior: "immediate" }

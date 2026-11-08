@@ -22,6 +22,7 @@ import {
 } from "./workspace-client/index.js";
 import type { WorkspaceHostProcess } from "./WorkspaceHostProcess.js";
 import { getWebContentsForProject } from "../window/webContentsRegistry.js";
+import { hasPendingScheduledLaunch } from "./scheduledRuns/scheduledRunAdmission.js";
 import type { ForgeProviderMatcher } from "../../shared/utils/forgeHostnames.js";
 import type {
   WorkspaceClientConfig,
@@ -155,8 +156,11 @@ export class WorkspaceClient extends EventEmitter {
       },
       // Views register under their workspace id, which for a project is the
       // same id the pool resolves from the host's path; a scratch workspace
-      // never has a pool entry, so it can't be mistaken for one.
-      hasLiveProjectView: (projectId) => getWebContentsForProject(projectId).length > 0,
+      // never has a pool entry, so it can't be mistaken for one. A scheduled
+      // launch still waiting to spawn holds the host too: a run's new worktree
+      // sets up in it, with no window at all when an OS job started Daintree.
+      hasLiveProjectView: (projectId) =>
+        getWebContentsForProject(projectId).length > 0 || hasPendingScheduledLaunch(projectId),
     });
 
     this.copyTree = new WorkspaceCopyTreeClient({
