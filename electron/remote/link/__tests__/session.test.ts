@@ -588,9 +588,10 @@ describe("LinkSession liveness", () => {
     while (Date.now() < stalledUntil) {
       // Busy: the event loop runs nothing meanwhile.
     }
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    // Settled either way: the answer read, or the session given up before it was.
+    await waitFor(() => !session.probing);
+    await new Promise((resolve) => setImmediate(resolve));
     expect(session.isOpen).toBe(true);
-    expect(session.probing).toBe(false);
     b.destroy();
   });
 

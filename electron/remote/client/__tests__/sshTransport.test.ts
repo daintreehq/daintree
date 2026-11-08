@@ -1266,6 +1266,20 @@ describe("reconnecting to a host the transport already knows", () => {
     // What the server said about socket forwarding still holds.
     expect(redial.filter((args) => args.includes("-W"))).toEqual([]);
     await second.dispose();
+
+    // A person's Retry right after: dialling afresh doesn't excuse the master.
+    const third = await transport.open(new AbortController().signal);
+    expect(third.remembered).toBe(true);
+    await third.dispose();
+    const beforeRetry = host.calls.length;
+    const retried = await transport.open(new AbortController().signal, {
+      fresh: true,
+      routeSuspect: true,
+    });
+    expect(host.calls[beforeRetry]).toEqual(
+      buildExitArgs("studio", controlPathFor(clientDir, "studio"))
+    );
+    await retried.dispose();
     host.closeProxies();
   });
 

@@ -765,12 +765,8 @@ export class SshTransport implements LinkTransport {
   }
 
   async open(signal: AbortSignal, options?: LinkOpenOptions): Promise<LinkTransportConnection> {
-    if (options?.fresh) {
-      this.known = null;
-      this.streamLocal = "unverified";
-    }
     // Only a link that rode the master (`known` is kept from an open through
-    // it or the bridge) says anything about it.
+    // it or the bridge) says anything about it; before `fresh` forgets that.
     if (options?.routeSuspect && this.known) {
       // The link through this master just stopped answering, and a master
       // whose connection died stays up until its keepalives give out, taking
@@ -779,6 +775,10 @@ export class SshTransport implements LinkTransport {
       // same host over the same connection.
       this.known = null;
       await this.exitMaster(controlPathFor(this.options.clientDir, this.options.target), 1_500);
+    }
+    if (options?.fresh) {
+      this.known = null;
+      this.streamLocal = "unverified";
     }
     let known = this.known;
     if (known && known.configStamp !== (await this.configStamp())) {
