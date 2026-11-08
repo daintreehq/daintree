@@ -95,6 +95,7 @@ import { distributePortsToView, getRemoteViewHooks } from "./window/portDistribu
 import { findOtherProjectOwner, type ProjectOwner } from "./window/projectOwnership.js";
 import { openFolderInNewWindow } from "./window/newWindowOpen.js";
 import { setScheduledRunWindowOpener } from "./window/scheduledRunNotificationNavigation.js";
+import { setCanopyRunWindowOpener } from "./window/canopyGoToRun.js";
 import {
   hasOpenScheduledRun,
   onScheduledRunClosed,
@@ -1300,19 +1301,22 @@ if (!gotTheLock) {
 
   setAttachedShellsProvider(() => getRemoteService("hostMode")?.getAttachedClients() ?? []);
 
-  // A scheduled run's banner, clicked with no window on this machine (a
-  // windowless Host, or macOS after the last window closed), opens one on the
-  // run's project (#15988).
-  setScheduledRunWindowOpener(async (projectId) => {
+  const openWindowOnWorkspace = async (workspaceId: string): Promise<number | null> => {
     if (headlessOzone || !app.isReady()) return null;
     let windowId: number | null = null;
-    const result = await createWindow(undefined, projectId, {
+    const result = await createWindow(undefined, workspaceId, {
       onRegistered: (id) => {
         windowId = id;
       },
     });
     return result === "ok" ? windowId : null;
-  });
+  };
+  // A scheduled run's banner, clicked with no window on this machine (a
+  // windowless Host, or macOS after the last window closed), opens one on the
+  // run's project (#15988).
+  setScheduledRunWindowOpener(openWindowOnWorkspace);
+  // Go to pane from the Canopy window, for a run no window holds (#16337).
+  setCanopyRunWindowOpener(openWindowOnWorkspace);
 
   // Remote Hosts' start at launch (#15888): as soon as the focused window is up
   // when restored windows need a host, otherwise once the restore has settled,

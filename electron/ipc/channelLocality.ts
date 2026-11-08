@@ -131,6 +131,7 @@ export const CHANNEL_LOCALITY = {
   "canopy-host:resolve-assistant": "shell",
   "canopy-host:watch-assistant": "shell",
   "canopy-window:focus": "shell",
+  "canopy-window:go-to-run": "shell",
   "canopy-window:open": "shell",
   // Canopy reads the agents of the machine it runs on, which for a remote
   // window is the host.

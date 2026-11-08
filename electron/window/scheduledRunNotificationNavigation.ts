@@ -1,20 +1,21 @@
-import type { WebContents } from "electron";
-import { CHANNELS } from "../ipc/channels.js";
 import { getActiveShutdown } from "../lifecycle/shutdownCoordinator.js";
 import { projectStore } from "../services/ProjectStore.js";
 import type { ProjectFocusOnActivateIntent } from "../../shared/types/ipc/project.js";
-import type { Project } from "../../shared/types/project.js";
 import {
-  findOtherProjectOwner,
   redirectToProjectOwner,
   requestProjectSwitchInWindow,
-  revealWindow,
+  type ProjectOwner,
 } from "./projectOwnership.js";
-import { isViewHydrated, whenViewHydrated } from "./viewHydration.js";
-import { getAppWebContents } from "./webContentsRegistry.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { getWindowRegistry } from "./windowRef.js";
 import { isWindowOnRemoteHost } from "./windowHost.js";
+import {
+  activeWebContents,
+  afterHydrated,
+  landInOwner,
+  untilWindowHydrated,
+  WORKSPACE_LANDING_TIMEOUT_MS,
+} from "./workspaceLanding.js";
 
 /**
  * Opens a window on this machine showing the project and resolves with its
@@ -33,7 +34,7 @@ export interface ScheduledRunNotificationTarget {
 }
 
 /** How long a view may take to hydrate before a landing waiting on it is dropped. */
-export const SCHEDULED_RUN_LANDING_TIMEOUT_MS = 60_000;
+export const SCHEDULED_RUN_LANDING_TIMEOUT_MS = WORKSPACE_LANDING_TIMEOUT_MS;
 
 /** How long a window opened for a click may take to open and hydrate before later clicks stop waiting on it. */
 export const SCHEDULED_RUN_OPENING_TIMEOUT_MS = 2 * SCHEDULED_RUN_LANDING_TIMEOUT_MS;
@@ -64,94 +65,6 @@ function localWindow(registry: WindowRegistry): WindowContext | null {
     }
   }
   return null;
-}
-
-/**
- * Runs `then(true)` once the renderer has hydrated, at once if it has: before
- * that it has no listener for an intent or a switch request, and preload
- * buffers nothing. `then(false)` if it closes, doesn't hydrate within a
- * minute, or Daintree starts quitting first.
- */
-function afterHydrated(webContents: WebContents, then: (hydrated: boolean) => void): void {
-  if (isViewHydrated(webContents.id)) {
-    then(getActiveShutdown() === null);
-    return;
-  }
-  let settled = false;
-  const finish = (hydrated: boolean): void => {
-    if (settled) return;
-    settled = true;
-    cancel();
-    clearTimeout(timer);
-    webContents.removeListener("destroyed", dropped);
-    then(hydrated && getActiveShutdown() === null);
-  };
-  const dropped = (): void => finish(false);
-  const timer = setTimeout(dropped, SCHEDULED_RUN_LANDING_TIMEOUT_MS);
-  webContents.once("destroyed", dropped);
-  // Not hydrated yet (checked above), so this never runs synchronously.
-  const cancel = whenViewHydrated(webContents, () => finish(true));
-}
-
-/**
- * The renderer a window is showing. A window bound to no workspace yet (the
- * project picker) has no active view, and `orStartup` falls back to the
- * renderer it started with, which hydrates like any other.
- */
-function activeWebContents(
-  context: WindowContext,
-  { orStartup = false }: { orStartup?: boolean } = {}
-): WebContents | null {
-  try {
-    const webContents =
-      context.services.projectViewManager?.getActiveView()?.webContents ??
-      (orStartup ? getAppWebContents(context.browserWindow) : undefined);
-    return webContents && !webContents.isDestroyed() ? webContents : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Lands the intent in the window holding the project; false when none does.
- * A view showing it is sent the intent once it has hydrated, and only if it
- * still shows the project then: a hydrated view is listening even while a
- * cold switch still holds the outgoing view over it, where a parked intent
- * would wait for a later switch. A cached or activating owner gets it through
- * the switch it runs.
- */
-function landInOwner(
-  registry: WindowRegistry,
-  project: Project,
-  intent: ProjectFocusOnActivateIntent
-): boolean {
-  const owner = findOtherProjectOwner(registry, project.id, {});
-  if (!owner) return false;
-  const webContents = owner.state === "foreground" ? activeWebContents(owner.context) : null;
-  if (!webContents) {
-    redirectToProjectOwner(owner, project, intent);
-    return true;
-  }
-  const { projectViewManager } = owner;
-  revealWindow(owner.context.browserWindow);
-  afterHydrated(webContents, (hydrated) => {
-    if (!hydrated || webContents.isDestroyed()) return;
-    if (projectViewManager.getActiveProjectId() !== project.id) return;
-    if (projectViewManager.getActiveView()?.webContents !== webContents) return;
-    webContents.focus();
-    webContents.send(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, intent);
-  });
-  return true;
-}
-
-/** Resolves with the window once its view has hydrated, or null when it never does. */
-function untilWindowHydrated(windowId: number): Promise<number | null> {
-  const context = getWindowRegistry()?.getByWindowId(windowId);
-  const webContents = context ? activeWebContents(context, { orStartup: true }) : null;
-  if (!webContents) return Promise.resolve(context ? windowId : null);
-  return new Promise((resolve) => {
-    afterHydrated(webContents, (hydrated) => resolve(hydrated ? windowId : null));
-  });
 }
 
 function openWindowFor(target: ScheduledRunNotificationTarget): void {
@@ -216,7 +129,10 @@ export function openScheduledRunFromNotification(target: ScheduledRunNotificatio
     scheduleId: target.scheduleId,
     panelId: target.terminalId,
   };
-  if (landInOwner(registry, project, intent)) return;
+  const redirect = (owner: ProjectOwner): void => {
+    redirectToProjectOwner(owner, project, intent);
+  };
+  if (landInOwner(registry, project.id, intent, redirect)) return;
 
   const context = localWindow(registry);
   if (!context) {
@@ -226,7 +142,7 @@ export function openScheduledRunFromNotification(target: ScheduledRunNotificatio
   const switchIn = (): void => {
     if (context.browserWindow.isDestroyed()) return;
     // Another click, or the user, may have brought the project up meanwhile.
-    if (landInOwner(registry, project, intent)) return;
+    if (landInOwner(registry, project.id, intent, redirect)) return;
     const projectViewManager = context.services.projectViewManager;
     if (projectViewManager) {
       requestProjectSwitchInWindow(context, projectViewManager, project, intent);

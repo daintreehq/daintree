@@ -229,6 +229,9 @@ export interface GeneratedElectronAPI {
     focus(
       ...args: IpcInvokeMap["canopy-window:focus"]["args"]
     ): Promise<IpcInvokeMap["canopy-window:focus"]["result"]>;
+    goToRun(
+      ...args: IpcInvokeMap["canopy-window:go-to-run"]["args"]
+    ): Promise<IpcInvokeMap["canopy-window:go-to-run"]["result"]>;
     open(
       ...args: IpcInvokeMap["canopy-window:open"]["args"]
     ): Promise<IpcInvokeMap["canopy-window:open"]["result"]>;

@@ -3,6 +3,7 @@ import type { IpcInvokeMap } from "../../types/index.js";
 export const CANOPY_WINDOW_METHOD_CHANNELS = {
   open: "canopy-window:open",
   focus: "canopy-window:focus",
+  goToRun: "canopy-window:go-to-run",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof CANOPY_WINDOW_METHOD_CHANNELS;

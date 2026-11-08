@@ -1774,6 +1774,7 @@ export const CHANNELS = {
   CANOPY_HOST_EVENT: "canopy-host:event",
   CANOPY_WINDOW_OPEN: "canopy-window:open",
   CANOPY_WINDOW_FOCUS: "canopy-window:focus",
+  CANOPY_WINDOW_GO_TO_RUN: "canopy-window:go-to-run",
 
   // Remote Hosts: portForwards (shell).
   PORT_FORWARDS_LIST: "port-forwards:list",

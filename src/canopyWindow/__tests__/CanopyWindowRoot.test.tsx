@@ -19,6 +19,7 @@ const loadOverrides = vi.hoisted(() => vi.fn(async () => {}));
 const projectShell = vi.hoisted(() => vi.fn());
 const hydrateNotifications = vi.hoisted(() => vi.fn(async () => {}));
 const toasterProps = vi.hoisted(() => [] as Array<{ standalone: boolean | undefined }>);
+const switchToHost = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("@/components/Canopy/CanopyView", () => ({
   CanopyView: ({ frame }: { frame: CanopyFrame }) => {
@@ -35,6 +36,7 @@ vi.mock("@/components/ui/toaster", () => ({
 vi.mock("@/hooks/useAppThemeConfig", () => ({ useAppThemeConfig: vi.fn() }));
 vi.mock("@/hooks/useTerminalConfig", () => ({ useTerminalConfig: vi.fn() }));
 vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
+vi.mock("@/components/Hosts/hostSwitching", () => ({ switchToHost }));
 vi.mock("@/services/terminalConfigSync", () => ({
   initTerminalConfigSync: () => stops.terminalConfig,
 }));
@@ -65,6 +67,7 @@ import { CANOPY_WINDOW_FRAME } from "../canopyWindowFrame";
 let pushSnapshot: (snapshot: CanopySnapshot) => void = () => {};
 const offSnapshot = vi.fn();
 const closeWindow = vi.fn(async () => {});
+const goToRun = vi.fn(async (_target: { workspaceId: string; runId: string }) => {});
 
 function snapshot(mode: CanopySnapshot["mode"]): CanopySnapshot {
   return {
@@ -99,6 +102,7 @@ beforeEach(() => {
         getSnapshot: vi.fn(async () => snapshot("on")),
       },
       window: { close: closeWindow },
+      canopyWindow: { goToRun },
     },
     configurable: true,
     writable: true,
@@ -164,24 +168,89 @@ describe("the Canopy window's frame", () => {
     expect(closeWindow).toHaveBeenCalledTimes(1);
   });
 
-  it("offers no way to a pane until Go to pane lands", () => {
-    expect(CANOPY_WINDOW_FRAME.goToRun).toBeNull();
-  });
+  describe("Go to pane (#16337)", () => {
+    const panel = () => ({
+      stillShows: vi.fn(() => true),
+      closeForTerminal: vi.fn(),
+      captureFocusAfterClose: vi.fn(),
+    });
+    const go = (
+      place: { hostId: string | null; runId: string; workspaceId: string },
+      hold: ReturnType<typeof panel>,
+      newWindow = false
+    ) => CANOPY_WINDOW_FRAME.goToRun!({ place, listedRunId: place.runId, newWindow }, hold);
 
-  it("says what a restore needs rather than moving anything", () => {
-    const panel = { stillShows: vi.fn(() => true), closeForTerminal: vi.fn() };
+    it.each([false, true])(
+      "asks main for a run on this machine, and stays open on it (new window: %s)",
+      async (newWindow) => {
+        const hold = panel();
 
-    Reflect.apply(CANOPY_WINDOW_FRAME.restoreElsewhere, undefined, [undefined, undefined, panel]);
+        go({ hostId: null, runId: "agent-1", workspaceId: "project-a" }, hold, newWindow);
+        await act(async () => {});
 
-    expect(notifyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Project isn't open" })
+        expect(goToRun).toHaveBeenCalledWith({ workspaceId: "project-a", runId: "agent-1" });
+        expect(switchToHost).not.toHaveBeenCalled();
+        expect(hold.closeForTerminal).not.toHaveBeenCalled();
+        expect(hold.captureFocusAfterClose).not.toHaveBeenCalled();
+        expect(closeWindow).not.toHaveBeenCalled();
+      }
     );
-    expect(panel.closeForTerminal).not.toHaveBeenCalled();
-  });
 
-  it("refuses to open an assistant in words, for its pane to show", async () => {
-    const refusal: unknown = await Reflect.apply(CANOPY_WINDOW_FRAME.openAssistant, undefined, []);
+    it("sends another host's run to a window on that host, never this one", async () => {
+      const hold = panel();
 
-    expect(refusal).toMatch(/Assistant panel/);
+      go({ hostId: "host-1", runId: "agent-2", workspaceId: "project-b" }, hold);
+      await act(async () => {});
+
+      expect(switchToHost).toHaveBeenCalledWith("host-1", true, "project-b", {
+        focusIntent: { intent: "focus-panel", panelId: "agent-2" },
+        standalone: true,
+      });
+      expect(goToRun).not.toHaveBeenCalled();
+      expect(hold.closeForTerminal).not.toHaveBeenCalled();
+      expect(closeWindow).not.toHaveBeenCalled();
+    });
+
+    it("says why a run on this machine wasn't reached, and tries again from there", async () => {
+      goToRun.mockRejectedValueOnce(new Error("The window for Alpha didn't come up in time."));
+
+      go({ hostId: null, runId: "agent-1", workspaceId: "project-a" }, panel());
+      await act(async () => {});
+
+      expect(notifyMock).toHaveBeenCalledTimes(1);
+      const toast = notifyMock.mock.calls[0]![0] as {
+        type: string;
+        title: string;
+        message: string;
+        actions: Array<{ label: string; onClick: () => void }>;
+      };
+      expect(toast).toMatchObject({
+        type: "error",
+        title: "Couldn't open agent",
+        message: "The window for Alpha didn't come up in time.",
+      });
+      expect(toast.actions.map((action) => action.label)).toEqual(["Try again"]);
+
+      toast.actions[0]!.onClick();
+      await act(async () => {});
+      expect(goToRun).toHaveBeenCalledTimes(2);
+      expect(goToRun.mock.calls[1]![0]).toEqual({ workspaceId: "project-a", runId: "agent-1" });
+    });
+
+    it("offers no retry for a run whose workspace is gone, as main says it over IPC", async () => {
+      // What reaches a renderer: the code and words survive only in the message prefix.
+      goToRun.mockRejectedValueOnce(
+        new Error(
+          `[AppError|NOT_FOUND|${encodeURIComponent("Its project or scratch has been removed.")}] gone`
+        )
+      );
+
+      go({ hostId: null, runId: "agent-1", workspaceId: "project-a" }, panel());
+      await act(async () => {});
+
+      const toast = notifyMock.mock.calls[0]![0] as { message: string; actions?: unknown };
+      expect(toast.message).toBe("Its project or scratch has been removed.");
+      expect(toast.actions).toBeUndefined();
+    });
   });
 });

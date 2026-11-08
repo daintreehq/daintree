@@ -9,7 +9,10 @@ const windowMock = vi.hoisted(() => ({
   openCanopyWindow: vi.fn(),
   focusCanopyWindow: vi.fn(() => false),
   hasCanopyWindowOpenedThisSession: vi.fn(() => false),
+  isCanopyWindowView: vi.fn((id: number) => id === CANOPY_VIEW_ID),
 }));
+const goToCanopyRun = vi.hoisted(() => vi.fn(async () => {}));
+const CANOPY_VIEW_ID = vi.hoisted(() => 7);
 const ipcHandlers = vi.hoisted(() => new Map<string, (...args: unknown[]) => unknown>());
 
 vi.mock("electron", () => ({
@@ -22,6 +25,7 @@ vi.mock("electron", () => ({
 }));
 vi.mock("../../../services/canopy/canopyMode.js", () => ({ readCanopyMode: () => state.mode }));
 vi.mock("../../../window/canopyWindow.js", () => windowMock);
+vi.mock("../../../window/canopyGoToRun.js", () => ({ goToCanopyRun }));
 vi.mock("../canopy.js", () => ({
   observeCanopySnapshots: (observer: (snapshot: CanopySnapshot) => void) => {
     state.observers.add(observer);
@@ -29,13 +33,18 @@ vi.mock("../canopy.js", () => ({
   },
 }));
 
+import { AppError } from "../../../utils/errorTypes.js";
 import { registerCanopyWindowHandlers, restoreCanopyWindow } from "../canopyWindow.js";
 import { CANOPY_WINDOW_METHOD_CHANNELS } from "../canopyWindow.preload.js";
 
 registerCanopyWindowHandlers();
 
-function invoke(channel: string) {
-  return ipcHandlers.get(channel)!({ sender: { id: 1 } });
+function invoke(channel: string, ...args: unknown[]) {
+  return ipcHandlers.get(channel)!({ sender: { id: 1 } }, ...args);
+}
+
+function invokeFrom(senderId: number, channel: string, ...args: unknown[]) {
+  return ipcHandlers.get(channel)!({ sender: { id: senderId } }, ...args);
 }
 
 /** Handlers answer `{ ok, data }` or `{ ok: false, error }` envelopes. */
@@ -55,6 +64,8 @@ beforeEach(() => {
   windowMock.focusCanopyWindow.mockReset();
   windowMock.hasCanopyWindowOpenedThisSession.mockReset();
   windowMock.hasCanopyWindowOpenedThisSession.mockReturnValue(false);
+  goToCanopyRun.mockReset();
+  goToCanopyRun.mockResolvedValue(undefined);
 });
 
 describe("the Canopy window's IPC", () => {
@@ -93,6 +104,49 @@ describe("the Canopy window's IPC", () => {
     windowMock.focusCanopyWindow.mockReturnValue(true);
     const answer = (await invoke(CANOPY_WINDOW_METHOD_CHANNELS.focus)) as { data?: boolean };
     expect(answer?.data ?? answer).toBe(true);
+  });
+});
+
+describe("Go to pane from the Canopy window (#16337)", () => {
+  const target = { workspaceId: "a".repeat(64), runId: "agent-1" };
+
+  it("goes to the run when the Canopy window asks", async () => {
+    expect(
+      await refused(invokeFrom(CANOPY_VIEW_ID, CANOPY_WINDOW_METHOD_CHANNELS.goToRun, target))
+    ).toBe(false);
+    expect(goToCanopyRun).toHaveBeenCalledWith(target);
+  });
+
+  it("refuses any other view, which moves itself to a run instead", async () => {
+    expect(await refused(invokeFrom(3, CANOPY_WINDOW_METHOD_CHANNELS.goToRun, target))).toBe(true);
+    expect(goToCanopyRun).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["no run", { workspaceId: "w" }],
+    ["an empty workspace", { workspaceId: "", runId: "r" }],
+    ["nothing", undefined],
+  ])("refuses a request with %s", async (_label, payload) => {
+    expect(
+      await refused(invokeFrom(CANOPY_VIEW_ID, CANOPY_WINDOW_METHOD_CHANNELS.goToRun, payload))
+    ).toBe(true);
+    expect(goToCanopyRun).not.toHaveBeenCalled();
+  });
+
+  it("passes on why a run couldn't be reached, in the words its toast shows", async () => {
+    goToCanopyRun.mockRejectedValue(
+      new AppError({
+        code: "NOT_FOUND",
+        message: "The run's workspace no longer exists",
+        userMessage: "Its project or scratch has been removed.",
+      })
+    );
+    const answer = invokeFrom(CANOPY_VIEW_ID, CANOPY_WINDOW_METHOD_CHANNELS.goToRun, target);
+
+    await expect(answer).rejects.toMatchObject({
+      code: "NOT_FOUND",
+      userMessage: "Its project or scratch has been removed.",
+    });
   });
 });
 
