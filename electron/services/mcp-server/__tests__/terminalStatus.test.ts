@@ -334,6 +334,48 @@ describe("buildViewlessTerminalStatus results", () => {
       expect(refused.terminals[0]?.error).toBe("Terminal not found or status unavailable");
     });
 
+    it("never discloses a record the backend places elsewhere, whatever the ledger said", async () => {
+      const d = deps([globalRecord({ projectId: "ws-other" })], {
+        owners: { g: GLOBAL_ASSISTANT_ID },
+      });
+      const result = await buildViewlessTerminalStatus(
+        d,
+        WORKSPACE,
+        { terminalIds: ["g"] },
+        new Set(["g"]),
+        "g"
+      );
+      expect(d.ptyClient.getTerminalAsync).toHaveBeenCalledTimes(1);
+      expect(result.terminals[0]?.error).toBe("Terminal not found or status unavailable");
+    });
+
+    it("keeps the screen its submission captured out of the answer, and the rest in", async () => {
+      const d = deps([globalRecord()], {
+        owners: { g: GLOBAL_ASSISTANT_ID },
+        submissions: {
+          g: {
+            mine: {
+              token: "mine",
+              phase: "pty_written",
+              output: { text: "the person's conversation", lineCount: 1, truncated: false },
+            } as never,
+          },
+        },
+      });
+      const result = await buildViewlessTerminalStatus(
+        d,
+        WORKSPACE,
+        { terminalIds: ["g"], submissionToken: "mine" },
+        new Set(["g"]),
+        "g"
+      );
+      expect(result.terminals[0]?.submission).toMatchObject({
+        token: "mine",
+        phase: "pty_written",
+      });
+      expect(JSON.stringify(result)).not.toContain("the person's conversation");
+    });
+
     it("never admits another workspace's terminal under the global's id", async () => {
       const d = deps([globalRecord({ projectId: "ws-other" })], { owners: { g: "ws-other" } });
       const result = await buildViewlessTerminalStatus(
@@ -375,6 +417,8 @@ describe("buildViewlessTerminalStatus results", () => {
       );
       expect(d.ptyClient.getSerializedStateAsync).not.toHaveBeenCalled();
       expect(JSON.stringify(result)).not.toContain("the person's conversation");
+      expect(result.terminals[0]).toMatchObject({ terminalId: "g", agentState: "waiting" });
+      expect(result.terminals[0]?.error).toBeUndefined();
     });
   });
 

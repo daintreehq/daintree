@@ -919,7 +919,7 @@ describe("AssistantTerminalControl (#13496)", () => {
       projectId: GLOBAL_ASSISTANT_ID,
       machineName: "studio-01",
     };
-    const addGlobal = (options: Partial<Omit<Lane, "lane" | "running">> = {}) =>
+    const addGlobal = (options: Parameters<typeof addLane>[2] = {}) =>
       addLane(GLOBAL_ASSISTANT_SLOT, "t-global", {
         projectId: GLOBAL_ASSISTANT_ID,
         sessionId: "global-session",

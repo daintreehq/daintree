@@ -2168,23 +2168,39 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               });
               continue;
             }
-            // The global Assistant takes one plain send at a time (#16410):
-            // a batch's waits and notices would quote its screen.
-            if (
-              assistantCaller !== null &&
-              assistantControl?.resolve(assistantCaller, item.target)?.scope === "global"
-            ) {
-              waits.push(undefined);
-              results.push({
-                target: item.target,
-                ok: false,
-                error: {
-                  code: ASSISTANT_TARGET_REFUSALS.globalSendOnly,
-                  message:
-                    "The global Assistant isn't sent to in a batch. Nothing was sent to it; use `terminal.sendCommand`.",
-                },
-              });
-              continue;
+            // An assistant this caller can't reach as one of its project's is
+            // refused before its wait exists, since a wait can end, and read
+            // the screen, before the item's own call is refused. The global
+            // Assistant takes one plain send at a time (#16410): a batch's
+            // waits and notices would quote its screen.
+            if (isAssistantId(item.target)) {
+              const reached =
+                assistantCaller === null
+                  ? null
+                  : (assistantControl?.resolve(assistantCaller, item.target) ?? null);
+              const refusal =
+                reached?.scope === "global"
+                  ? {
+                      code: ASSISTANT_TARGET_REFUSALS.globalSendOnly,
+                      message:
+                        "The global Assistant isn't sent to in a batch. Nothing was sent to it; use `terminal.sendCommand`.",
+                    }
+                  : reached === null
+                    ? assistantCaller === null
+                      ? {
+                          code: "NOT_FOUND",
+                          message: `No terminal '${item.target}' is available to this connection.`,
+                        }
+                      : {
+                          code: ASSISTANT_TARGET_REFUSALS.notFound,
+                          message: `No assistant in this project runs as terminal '${item.target}'. List them with 'assistant.list'.`,
+                        }
+                    : null;
+              if (refusal !== null) {
+                waits.push(undefined);
+                results.push({ target: item.target, ok: false, error: refusal });
+                continue;
+              }
             }
             const wait =
               batchArgs.waitForReply === true && replyWaiter !== undefined
@@ -2247,7 +2263,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           const replyBudget = Math.floor(BATCH_REPLY_TEXT_BUDGET / Math.max(1, replies.length));
           replies.forEach((reply, index) => {
             const entry = results[index];
-            if (entry !== undefined && reply !== undefined && reply.terminalId !== "") {
+            // A refused item's wait can have ended before the refusal; its read never goes out.
+            if (entry?.ok === true && reply !== undefined && reply.terminalId !== "") {
               const text = reply.reply?.text;
               entry.reply =
                 text !== undefined && text.length > replyBudget

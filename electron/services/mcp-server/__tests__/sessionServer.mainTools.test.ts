@@ -735,6 +735,8 @@ describe("one assistant addressing another (#13496)", () => {
             "terminal.getStatus",
             "terminal.getOutput",
             "terminal.waitUntilIdle",
+            "terminal.waitUntilIdleBatch",
+            "terminal.notifyWhenIdle",
             "terminal.list",
           ].map(makeManifestEntry)
         ),
@@ -1102,18 +1104,54 @@ describe("one assistant addressing another (#13496)", () => {
   describe("this machine's global Assistant (#16410)", () => {
     it("sends to it in main, with the generation and handback it was given", async () => {
       const { deps, control } = assistantDeps({ caller: CALLER });
+      control.submit.mockResolvedValueOnce({
+        terminalId: GLOBAL_TERMINAL,
+        submissionToken: "tok-up",
+        command: "Raise",
+      });
       const server = await serve(deps);
       const result = await callTool(server, {
         name: "terminal.sendCommand",
         arguments: { terminalId: GLOBAL_TERMINAL, command: "Raise", generation: 2, handback: true },
       });
       expect(result.isError).toBeFalsy();
+      // The token is what its handback is read back by.
+      const [first] = result.content as Array<{ text: string }>;
+      expect(JSON.parse(first!.text)).toMatchObject({
+        terminalId: GLOBAL_TERMINAL,
+        submissionToken: "tok-up",
+      });
       expect(control.submit).toHaveBeenCalledWith(CALLER, GLOBAL_TARGET, {
         command: "Raise",
         generation: 2,
         handback: true,
       });
       expect(deps.dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("holds a send up to the drive rule of the caller's own project", async () => {
+      const send = async (refuseWrite: SessionServerDeps["refuseWrite"]) => {
+        const { deps, control } = assistantDeps({ caller: CALLER });
+        deps.refuseWrite = refuseWrite;
+        const server = await serve(deps);
+        const result = await callTool(server, {
+          name: "terminal.sendCommand",
+          arguments: { terminalId: GLOBAL_TERMINAL, command: "x", generation: 2 },
+        });
+        return { result, control };
+      };
+      const driven = { code: "DRIVEN_ELSEWHERE", message: "Another machine drives it." };
+
+      const refused = await send(vi.fn((projectId) => (projectId === "proj-1" ? driven : null)));
+      expect(toolErrorPayload(refused.result).code).toBe("DRIVEN_ELSEWHERE");
+      expect(refused.control.submit).not.toHaveBeenCalled();
+
+      // The global's own id names no project, so it is never what is checked.
+      const sent = await send(
+        vi.fn((projectId) => (projectId === GLOBAL_ASSISTANT_ID ? driven : null))
+      );
+      expect(sent.result.isError).toBeFalsy();
+      expect(sent.control.submit).toHaveBeenCalledTimes(1);
     });
 
     it.each([
@@ -1131,24 +1169,26 @@ describe("one assistant addressing another (#13496)", () => {
     });
 
     it.each([
-      ["terminal.sendKeys", { keys: ["Enter"], generation: 2 }],
-      ["terminal.interruptOwned", {}],
-      ["terminal.close", {}],
-      ["terminal.readLastMessageOwned", {}],
-      ["terminal.getOutput", {}],
-      ["terminal.waitUntilIdle", {}],
-    ])("refuses %s on it before anything runs", async (name, extra) => {
-      const { deps, control } = assistantDeps({ caller: CALLER });
+      ["terminal.sendKeys", { terminalId: GLOBAL_TERMINAL, keys: ["Enter"], generation: 2 }],
+      ["terminal.interruptOwned", { terminalId: GLOBAL_TERMINAL }],
+      ["terminal.close", { terminalId: GLOBAL_TERMINAL }],
+      ["terminal.readLastMessageOwned", { terminalId: GLOBAL_TERMINAL }],
+      ["terminal.getOutput", { terminalId: GLOBAL_TERMINAL }],
+      ["terminal.waitUntilIdle", { terminalId: GLOBAL_TERMINAL }],
+      ["terminal.waitUntilIdleBatch", { terminalIds: [ASSISTANT_TERMINAL, GLOBAL_TERMINAL] }],
+      ["terminal.notifyWhenIdle", { terminalId: GLOBAL_TERMINAL }],
+    ])("refuses %s on it before anything runs", async (name, args) => {
+      // Full, so no tier refusal stands in for this one.
+      const { deps, control } = assistantDeps({ caller: CALLER, tier: "full" });
       const server = await serve(deps);
-      const result = await callTool(server, {
-        name,
-        arguments: { terminalId: GLOBAL_TERMINAL, ...extra },
-      });
+      const result = await callTool(server, { name, arguments: args });
       expect(toolErrorPayload(result).code).toBe("ASSISTANT_GLOBAL_SEND_ONLY");
       for (const method of ["sendKeys", "interrupt", "close", "readReply"] as const) {
         expect(control[method]).not.toHaveBeenCalled();
       }
       expect(deps.handleWaitUntilIdle).not.toHaveBeenCalled();
+      expect(deps.handleWaitUntilIdleBatch).not.toHaveBeenCalled();
+      expect(deps.handleTerminalGetStatusViewless).not.toHaveBeenCalled();
       expect(deps.dispatchAction).not.toHaveBeenCalled();
     });
 
@@ -1167,11 +1207,13 @@ describe("one assistant addressing another (#13496)", () => {
       );
 
       vi.mocked(deps.handleTerminalGetStatusViewless).mockClear();
-      const withOutput = await callTool(server, {
-        name: "terminal.getStatus",
-        arguments: { terminalIds: [GLOBAL_TERMINAL], includeOutput: true },
-      });
-      expect(toolErrorPayload(withOutput).code).toBe("ASSISTANT_GLOBAL_SEND_ONLY");
+      for (const includeOutput of [true, { lines: 10 }]) {
+        const withOutput = await callTool(server, {
+          name: "terminal.getStatus",
+          arguments: { terminalIds: [GLOBAL_TERMINAL], includeOutput },
+        });
+        expect(toolErrorPayload(withOutput).code).toBe("ASSISTANT_GLOBAL_SEND_ONLY");
+      }
       expect(deps.handleTerminalGetStatusViewless).not.toHaveBeenCalled();
     });
 
@@ -1195,6 +1237,55 @@ describe("one assistant addressing another (#13496)", () => {
       });
       expect(control.submit).toHaveBeenCalledTimes(1);
       expect(control.submit).toHaveBeenCalledWith(CALLER, TARGET, expect.anything());
+    });
+
+    it("never waits on it, or on an assistant out of reach, in a batch that waits for replies", async () => {
+      const { deps, control } = assistantDeps({ caller: CALLER });
+      const wait = vi.fn((options: { terminalId?: string }) => ({
+        bind: vi.fn(),
+        cancel: vi.fn(),
+        // Already ended, as a wait past the outstanding cap is: its read must not go out.
+        promise: Promise.resolve({
+          terminalId: options.terminalId ?? "",
+          outcome: "timeout" as const,
+          reply: { text: "the person's conversation", lineCount: 1, truncated: false },
+        }),
+      }));
+      deps.replyWaiter = { wait } as unknown as SessionServerDeps["replyWaiter"];
+      const server = await serve(deps);
+      const result = await callTool(server, {
+        name: "terminal.sendCommandMany",
+        arguments: {
+          sends: [
+            { terminalId: GLOBAL_TERMINAL, command: "x", generation: 2 },
+            { terminalId: ASSISTANT_TERMINAL, command: "y", generation: 4 },
+          ],
+          waitForReply: true,
+        },
+      });
+      const waited = wait.mock.calls.map(([options]) => options.terminalId);
+      expect(waited).toEqual([ASSISTANT_TERMINAL]);
+      const results = (result.structuredContent as { results: Array<Record<string, unknown>> })
+        .results;
+      expect(results[0]).toMatchObject({ target: GLOBAL_TERMINAL, ok: false });
+      expect(results[0]).not.toHaveProperty("reply");
+      expect(results[1]).toMatchObject({ target: ASSISTANT_TERMINAL, ok: true });
+      expect(control.submit).toHaveBeenCalledTimes(1);
+
+      // Out of reach reads the same, and is refused before its wait too.
+      wait.mockClear();
+      control.resolve.mockReturnValue(null);
+      const unreachable = await callTool(server, {
+        name: "terminal.sendCommandMany",
+        arguments: {
+          sends: [{ terminalId: GLOBAL_TERMINAL, command: "x", generation: 2 }],
+          waitForReply: true,
+        },
+      });
+      expect(wait).not.toHaveBeenCalled();
+      expect(unreachable.structuredContent).toMatchObject({
+        results: [{ target: GLOBAL_TERMINAL, ok: false, error: { code: "ASSISTANT_NOT_FOUND" } }],
+      });
     });
 
     it("keeps its scrollback and prompt context from a project's assistant", async () => {

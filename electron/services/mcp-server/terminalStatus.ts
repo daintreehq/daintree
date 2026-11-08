@@ -406,12 +406,20 @@ export async function buildViewlessTerminalStatus(
       };
     }
     const entry = buildEntry(record, submissionToken);
-    // Its handback is shown only to the send that asked for it, by that send's token.
-    if (
-      id === admittedGlobal &&
-      (submissionToken === undefined || entry.lastHandback?.submissionToken !== submissionToken)
-    ) {
-      delete entry.lastHandback;
+    if (id === admittedGlobal) {
+      // Its handback is shown only to the send that asked for it, by that
+      // send's token, and never the screen a submission's capture kept.
+      if (
+        submissionToken === undefined ||
+        entry.lastHandback?.submissionToken !== submissionToken
+      ) {
+        delete entry.lastHandback;
+      }
+      if (entry.submission?.output !== undefined) {
+        const submission = { ...entry.submission };
+        delete submission.output;
+        entry.submission = submission;
+      }
     }
     if (includeOutput) {
       const tail = outputs.get(id) ?? null;
