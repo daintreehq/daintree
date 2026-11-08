@@ -1,0 +1,193 @@
+{
+  "migrations": [
+    {
+      "idx": 0,
+      "tag": "0000_baseline",
+      "when": 1777409077501,
+      "breakpoints": true,
+      "sha256": "c7c6a45c8f0f9f2068877baff49f576ba00d572a97cf509493bc260095e91c2c"
+    },
+    {
+      "idx": 1,
+      "tag": "0001_add_scratches",
+      "when": 1777962339910,
+      "breakpoints": true,
+      "sha256": "22f7c1f073d84af539eaf6f4a52c66f01db0ec99aa2f360755a14088dbfd3caa"
+    },
+    {
+      "idx": 2,
+      "tag": "0002_add_scratch_deleted_at",
+      "when": 1777971986182,
+      "breakpoints": true,
+      "sha256": "443740828e5971816590e7061e4a5cd42358639ff6c92d669e413e86e1238dac"
+    },
+    {
+      "idx": 3,
+      "tag": "0003_drop_tasks",
+      "when": 1779148800000,
+      "breakpoints": true,
+      "sha256": "553afc85b7a47664b8309961de2fec1ffd9e865a4423326d869ed2db8017d51b"
+    },
+    {
+      "idx": 4,
+      "tag": "0004_audit_rings",
+      "when": 1781277645000,
+      "breakpoints": true,
+      "sha256": "2cc50541f7d82b86febc520f1479ea6ff87cb325bb6521a23acbd38be7f87da2"
+    },
+    {
+      "idx": 5,
+      "tag": "0005_add_auto_parked_at",
+      "when": 1782000000000,
+      "breakpoints": true,
+      "sha256": "e62f16092fe94deb518323ba49b07458be3f1dbf2a71fb56309ff8cddf85fe76"
+    },
+    {
+      "idx": 6,
+      "tag": "0006_daffy_kid_colt",
+      "when": 1782980261485,
+      "breakpoints": true,
+      "sha256": "1807f99070a4d591a62c6a6a86900772d475a6db97a060436cb44853595ee78c"
+    },
+    {
+      "idx": 7,
+      "tag": "0007_add_project_stats",
+      "when": 1783900000000,
+      "breakpoints": true,
+      "sha256": "4adef29086ac6b3ac1fe3eecbf272a381108e6b792959407894232b96c84e085"
+    },
+    {
+      "idx": 8,
+      "tag": "0008_add_project_git_backed",
+      "when": 1784500000000,
+      "breakpoints": true,
+      "sha256": "a3dab3d84a377aa5973ffddc22d272c1d6e71da7b98f84dedd5fdbdf18e801e2"
+    },
+    {
+      "idx": 9,
+      "tag": "0009_completion_seen_and_frecency_rebase",
+      "when": 1785050000000,
+      "breakpoints": true,
+      "sha256": "47cdaeaafb0f95174572f1ed93a519cd086452bc7cce702590ebc3874d9f935c"
+    },
+    {
+      "idx": 10,
+      "tag": "0010_add_scratch_completion_seen",
+      "when": 1785468253694,
+      "breakpoints": true,
+      "sha256": "b808cd9aa1688a69f9e50564fc0d192964927d9cc08a7c1a3220f4ad11930952"
+    },
+    {
+      "idx": 11,
+      "tag": "0011_add_project_recently_closed_at",
+      "when": 1786786208480,
+      "breakpoints": true,
+      "sha256": "73ffb3503c75b5d9b5c2460e8c6d8d6653b63d17450d687bce57d86f1fabbf08"
+    },
+    {
+      "idx": 12,
+      "tag": "0012_replace_project_recency_with_resumable_agents",
+      "when": 1786861242046,
+      "breakpoints": true,
+      "sha256": "66f40325ab054e99bc00471d8d7a5d60d41545c1538b983d23ddc7c1aaf179eb"
+    },
+    {
+      "idx": 13,
+      "tag": "0013_add_scratch_resumable_agent_count",
+      "when": 1786880380226,
+      "breakpoints": true,
+      "sha256": "f62e17ab98e98d5a16f8997594d8dedb52ef4e6a22a685e04134bbf72c5dfd43"
+    },
+    {
+      "idx": 14,
+      "tag": "0014_assistant_exchange_records",
+      "when": 1791985059012,
+      "breakpoints": true,
+      "sha256": "8fa651c28cd1907450b49f88f9f9419062057b7a1cbb1b039c06829f4746efd6"
+    },
+    {
+      "idx": 15,
+      "tag": "0015_assistant_exchange_link",
+      "when": 1792000000000,
+      "breakpoints": true,
+      "sha256": "89d81ef3ae789243636b8c51bd2730d4833968c79077385d5936e75843e729bc"
+    },
+    {
+      "idx": 16,
+      "tag": "0016_add_project_archive_and_group",
+      "when": 1792050000000,
+      "breakpoints": true,
+      "sha256": "997ebbf156e2fdd5514593844abcb0a9e6a32a097b5fbbe03d0ee5c9cc82ea47"
+    },
+    {
+      "idx": 17,
+      "tag": "0017_assistant_sender_credentials",
+      "when": 1792100000000,
+      "breakpoints": true,
+      "sha256": "ea107c2874df4e9adcfe841c64a6ed0052c798b34de41a2af8e71678a448dc59"
+    },
+    {
+      "idx": 18,
+      "tag": "0018_audit_ring_record_ids",
+      "when": 1792150000000,
+      "breakpoints": true,
+      "sha256": "19e73fa383f63b6b9ca87beab7247647b77f6011eb25677773297e12aecda86d"
+    },
+    {
+      "idx": 19,
+      "tag": "0019_add_project_never_auto_sleep",
+      "when": 1792200000000,
+      "breakpoints": true,
+      "sha256": "2731aef2927f9f77f008a70d662547e23ee30a6de0cd7f387930158337d29b93"
+    },
+    {
+      "idx": 20,
+      "tag": "0020_scheduled_runs",
+      "when": 1793491200000,
+      "breakpoints": true,
+      "sha256": "c1472f48af72099dff4f26dcd6b2804ab71f27395cd68fe20bb129cac01f40a3"
+    },
+    {
+      "idx": 21,
+      "tag": "0021_schedule_evaluation_points",
+      "when": 1793577600000,
+      "breakpoints": true,
+      "sha256": "c6cb711d7945f88d9639939dfe65988a5d299fff8d8c823c684e33f1b902965a"
+    },
+    {
+      "idx": 22,
+      "tag": "0022_decisions_store",
+      "when": 1793664000000,
+      "breakpoints": true,
+      "sha256": "9b482e001d91efdf6cb7264f896182d3f9af4d2439508d898de7b7552fcc05dc"
+    },
+    {
+      "idx": 23,
+      "tag": "0023_scheduled_run_inbox",
+      "when": 1793750400000,
+      "breakpoints": true,
+      "sha256": "55aefaad6926d621f64ebe991d75f8b25a184e77e67d7e3a209d70d717b39b2f"
+    },
+    {
+      "idx": 24,
+      "tag": "0024_decisions_pending_delivery",
+      "when": 1793836800000,
+      "breakpoints": true,
+      "sha256": "7e1a9c118f896af586900c5b915094277f34756c2334bacdc89b2b82faa069b5"
+    },
+    {
+      "idx": 25,
+      "tag": "0025_decisions_thread_messages",
+      "when": 1793923200000,
+      "breakpoints": true,
+      "sha256": "f01b3f8de19c59ac3b6acdfdf7714c157390eeb3089bc3f63dc12ba57f9c49a6"
+    },
+    {
+      "idx": 26,
+      "tag": "0026_decisions_waiting_messages",
+      "when": 1794009600000,
+      "breakpoints": true,
+      "sha256": "caba9cc2cff5eaf42d994941467a2a671d9f801cfe0cb1be683f964e356c9bd0"
+    }
+  ]
+}
