@@ -5,6 +5,7 @@ import { isAgentInstalled } from "@shared/utils/agentAvailability";
 import { terminalClient } from "@/clients";
 import { notify } from "@/lib/notify";
 import { sanitizeForClipboard } from "@/lib/clipboardSanitize";
+import { copyWithToast } from "@/lib/copyWithToast";
 import { recheckPrerequisite } from "@/lib/recheckMissingPrerequisites";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { usePanelStore } from "@/store/panelStore";
@@ -206,7 +207,7 @@ function notifyNotTyped(line: string): void {
     context: { eventKind: "host" },
     action: {
       label: "Copy command",
-      onClick: () => void navigator.clipboard.writeText(sanitizeForClipboard(line)).catch(() => {}),
+      onClick: () => copyWithToast("Command", sanitizeForClipboard(line)),
     },
   });
 }
@@ -263,8 +264,7 @@ export async function openInstallCommandInTerminal(
       context: { eventKind: "host" },
       action: {
         label: "Copy command",
-        onClick: () =>
-          void navigator.clipboard.writeText(sanitizeForClipboard(line)).catch(() => {}),
+        onClick: () => copyWithToast("Command", sanitizeForClipboard(line)),
       },
     });
     return null;
