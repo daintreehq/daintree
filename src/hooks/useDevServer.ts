@@ -6,6 +6,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { onHostResync } from "@/store/hostResyncSignal";
 import { onDevPreviewResume } from "@/store/devPreviewResumeSignal";
+import { onDevPreviewStopRequested } from "@/store/devPreviewStopSignal";
 
 export type DevPreviewStatus =
   "stopped" | "starting" | "installing" | "running" | "stopping" | "error" | "restored-stopped";
@@ -99,8 +100,16 @@ const offDevPreviewResume = onDevPreviewResume(({ panelIds }) => {
   for (const panelId of panelIds) persistedEnsureCache.delete(panelId);
 });
 
+// Module scope for the same reason: the pane is gone before Main's stopped event
+// lands, and a panel that comes back must ensure again. Its ensure queues behind
+// the stop in Main, so a restore while the server is still going down is covered.
+const offDevPreviewStopRequested = onDevPreviewStopRequested((panelId) => {
+  persistedEnsureCache.delete(panelId);
+});
+
 if (import.meta.hot) {
   import.meta.hot.dispose(offDevPreviewResume);
+  import.meta.hot.dispose(offDevPreviewStopRequested);
 }
 
 function serializeEnv(env?: Record<string, string>): string {
@@ -563,13 +572,7 @@ export function useDevServer({
     window.electron.devPreview
       .getState({ panelId, projectId: currentProjectId })
       .then((state) => {
-        if (cancelled) return;
-        // Main stopped this server while no pane was subscribed (sending the
-        // panel to background unmounts it before the stop lands), so the
-        // stopped event that drops the cache went unheard. Left cached, the
-        // restored panel would skip its ensure and stay stopped.
-        if (state.status === "stopped") persistedEnsureCache.delete(panelId);
-        applyState(state);
+        if (!cancelled) applyState(state);
       })
       .catch((err) => {
         if (!cancelled) applyInvokeError(err);

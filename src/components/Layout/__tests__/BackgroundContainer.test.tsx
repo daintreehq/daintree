@@ -30,6 +30,7 @@ let mockBackgroundedTerminals = new Map<
   { groupRestoreId?: string; groupMetadata?: TrashedTerminalGroupMetadata }
 >();
 let mockWatchedPanels = new Set<string>();
+let lastConfirmTitle: React.ReactNode = null;
 
 vi.mock("@/hooks/useTerminalSelectors", () => ({
   useBackgroundedTerminals: () => mockTerminals,
@@ -43,22 +44,24 @@ vi.mock("@/hooks/useWorktrees", () => ({
     ]),
 }));
 
-vi.mock("@/store", () => ({
-  usePanelStore: (selector?: (state: unknown) => unknown) => {
-    const state = {
-      backgroundedTerminals: mockBackgroundedTerminals,
-      watchedPanels: mockWatchedPanels,
-      restoreBackgroundTerminal: restoreBackgroundTerminalMock,
-      restoreBackgroundGroup: restoreBackgroundGroupMock,
-      activateTerminal: activateTerminalMock,
-      pingTerminal: pingTerminalMock,
-      removePanel: removePanelMock,
-      watchPanel: watchPanelMock,
-      unwatchPanel: unwatchPanelMock,
-    };
-    return selector ? selector(state) : state;
-  },
-}));
+vi.mock("@/store", () => {
+  const getState = () => ({
+    backgroundedTerminals: mockBackgroundedTerminals,
+    watchedPanels: mockWatchedPanels,
+    restoreBackgroundTerminal: restoreBackgroundTerminalMock,
+    restoreBackgroundGroup: restoreBackgroundGroupMock,
+    activateTerminal: activateTerminalMock,
+    pingTerminal: pingTerminalMock,
+    removePanel: removePanelMock,
+    watchPanel: watchPanelMock,
+    unwatchPanel: unwatchPanelMock,
+    panelsById: Object.fromEntries(mockTerminals.map((panel) => [panel.id, panel])),
+  });
+  const usePanelStore = (selector?: (state: unknown) => unknown) =>
+    selector ? selector(getState()) : getState();
+  usePanelStore.getState = getState;
+  return { usePanelStore };
+});
 
 vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: (selector: (s: unknown) => unknown) =>
@@ -78,13 +81,15 @@ vi.mock("@/components/Terminal/TerminalIcon", () => ({
 }));
 
 vi.mock("@/utils/terminalChrome", () => ({
+  // As the real one: a registered non-PTY kind names itself, anything else,
+  // an unavailable plugin's kind included, falls through to a terminal's chrome.
   deriveTerminalChrome: (panel?: { kind?: string }) => ({
     iconId: null,
     label: panel?.kind === "file" ? "File viewer" : "Terminal",
     isAgent: false,
     agentId: null,
     processId: null,
-    runtimeKind: "none",
+    runtimeKind: panel?.kind === "file" ? "panel" : "none",
   }),
 }));
 
@@ -169,20 +174,25 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
   ConfirmDialog: ({
     isOpen,
     title,
+    description,
     confirmLabel,
     onConfirm,
     onClose,
   }: {
     isOpen: boolean;
     title: React.ReactNode;
+    description: React.ReactNode;
     confirmLabel: string;
     onConfirm: () => void;
     onClose: () => void;
   }) => {
+    // The real dialog keeps drawing these through its exit animation.
+    lastConfirmTitle = title;
     if (!isOpen) return null;
     return (
       <div role="dialog" data-testid="kill-confirm-dialog">
         <div data-testid="confirm-title">{title}</div>
+        <div data-testid="confirm-description">{description}</div>
         <button type="button" onClick={onConfirm}>
           {confirmLabel}
         </button>
@@ -752,6 +762,13 @@ describe("BackgroundContainer", () => {
       expect(screen.getByRole("button", { name: "Restore File viewer" })).toBeTruthy();
     });
 
+    it("is never called a terminal when an unavailable plugin's panel has no title", () => {
+      mockTerminals = [makeFilePanel({ kind: "acme.gone", title: "" })];
+      render(<BackgroundContainer />);
+      expect(screen.getByRole("button", { name: "Restore Panel" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Remove Panel" })).toBeTruthy();
+    });
+
     it("restores to its own worktree, as a terminal does", () => {
       mockTerminals = [makeFilePanel({ worktreeId: "wt-2" })];
       render(<BackgroundContainer />);
@@ -772,6 +789,32 @@ describe("BackgroundContainer", () => {
       fireEvent.click(screen.getByRole("button", { name: "Remove panel" }));
       expect(removePanelMock).toHaveBeenCalledWith("f1");
       expect(screen.queryByTestId("kill-confirm-dialog")).toBeNull();
+    });
+
+    it("says the consequence, asks about the row pressed, and holds it through the close", () => {
+      mockTerminals = [
+        makeFilePanel(),
+        makeFilePanel({ id: "f2", title: "todo.md" }),
+        makeTerminal({ id: "t1", title: "claude" }),
+      ];
+      render(<BackgroundContainer />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Remove notes.md" }));
+      expect(screen.getByTestId("confirm-description").textContent).toContain("can't be restored");
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(screen.queryByTestId("kill-confirm-dialog")).toBeNull();
+      expect(lastConfirmTitle).toBe("Remove 'notes.md'?");
+
+      fireEvent.click(screen.getByRole("button", { name: "Remove todo.md" }));
+      expect(screen.getByTestId("confirm-title").textContent).toBe("Remove 'todo.md'?");
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+      fireEvent.click(screen.getByRole("button", { name: "Kill claude" }));
+      expect(screen.getByTestId("confirm-title").textContent).toBe("Kill terminal?");
+      expect(screen.getByTestId("confirm-description").textContent).toContain("claude");
+      fireEvent.click(screen.getByRole("button", { name: "Kill terminal" }));
+      expect(removePanelMock).toHaveBeenCalledTimes(1);
+      expect(removePanelMock).toHaveBeenCalledWith("t1");
     });
 
     it("keeps a terminal's Kill wording beside it", () => {
@@ -832,6 +875,29 @@ describe("BackgroundContainer", () => {
       const afterwards = vi.fn();
       popoverHandlers.onPointerDownOutside?.({ preventDefault: afterwards });
       expect(afterwards).not.toHaveBeenCalled();
+    });
+
+    it("leaves a panel another path moved while its prompt was up", async () => {
+      let answer!: (verdict: "proceed" | "cancel") => void;
+      const guard = vi.fn(
+        () =>
+          new Promise<"proceed" | "cancel">((resolve) => {
+            answer = resolve;
+          })
+      );
+      registerPanelCloseGuard("f1", guard);
+      mockTerminals = [makeFilePanel()];
+      render(<BackgroundContainer />);
+      fireEvent.click(screen.getByRole("button", { name: "Remove notes.md" }));
+      await vi.waitFor(() => expect(guard).toHaveBeenCalledTimes(1));
+
+      mockTerminals = [makeFilePanel({ location: "trash" })];
+      await act(async () => {
+        answer("proceed");
+        await Promise.resolve();
+      });
+
+      expect(removePanelMock).not.toHaveBeenCalled();
     });
 
     it("asks once when Remove is pressed again while the prompt is up", async () => {

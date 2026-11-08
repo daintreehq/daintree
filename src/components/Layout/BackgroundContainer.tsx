@@ -307,7 +307,11 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
       setIsUnsavedWorkPromptOpen(true);
       void consultPanelCloseGuards([id]).then((proceed) => {
         setIsUnsavedWorkPromptOpen(false);
-        if (proceed) removePanel(id);
+        if (!proceed) return;
+        // The prompt took time, and another path may have restored or trashed
+        // the panel meanwhile: removing it now would take what it moved to.
+        if (usePanelStore.getState().panelsById[id]?.location !== "background") return;
+        removePanel(id);
       });
     },
     [removePanel]
@@ -508,7 +512,9 @@ function BackgroundSingleItem({
   const StateIcon = agentState ? SESSION_ICONS[agentState] : null;
   const stateLabel = agentState ? SESSION_LABELS[agentState] : null;
   const stateColor = agentState ? SESSION_COLORS[agentState] : null;
-  const title = panel.title || chrome.label;
+  // A kind whose plugin is gone falls through to a terminal's chrome.
+  const title =
+    panel.title || (terminal || chrome.runtimeKind === "panel" ? chrome.label : "Panel");
   // The task is what tells two backgrounded "Claude" rows apart, as on the
   // Waiting and Unread rows.
   const task = terminal ? getTerminalTaskTitle(terminal) : null;

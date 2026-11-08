@@ -432,9 +432,21 @@ describe("useBackgroundedTerminals", () => {
       { id: "b", kind: "terminal", location: "background" },
       { id: "c", kind: "acme.widget", location: "background" },
     ]);
+    // The order is panelIds', which the records' own insertion order doesn't share.
+    const state = {
+      panelsById: {
+        a: { id: "a", kind: "diff", location: "background" },
+        b: { id: "b", kind: "terminal", location: "background" },
+        c: { id: "c", kind: "acme.widget", location: "background" },
+      },
+      panelIds: ["c", "a", "b"],
+    };
+    usePanelStoreMock.mockImplementation((selector: (s: typeof state) => unknown) =>
+      selector(state)
+    );
 
     const { result } = renderHook(() => useBackgroundedTerminals());
-    expect(result.current.map((p) => p.id)).toEqual(["a", "b", "c"]);
+    expect(result.current.map((p) => p.id)).toEqual(["c", "a", "b"]);
   });
 
   it("holds a non-terminal panel to the same orphan rule as a terminal", () => {
