@@ -707,6 +707,8 @@ export class WorkspaceHostPool {
         // restarted after its last pause.
         this.backgroundIfDormant(projectPath, entry);
         this.armDormantTimer(projectPath, entry);
+        // A host a busy hold kept out of the cap's count comes back into it here.
+        this.enforceDormantCap();
         return;
       }
       entry.host.dispose("idle-grace");

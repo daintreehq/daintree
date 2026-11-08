@@ -180,6 +180,16 @@ describe("ScheduleEditor: a new worktree each run (#16369)", () => {
     );
   });
 
+  it("counts a change of the base's kind alone as a change", async () => {
+    renderEditor(existing({ newWorktree: { baseBranch: "origin/develop", fromRemote: false } }));
+    await act(async () => fireEvent.click(screen.getByRole("combobox", { name: "Base branch" })));
+    await act(async () =>
+      fireEvent.click(await screen.findByRole("option", { name: /origin\/develop/ }))
+    );
+
+    expect(screen.queryByText("No changes to save")).toBeNull();
+  });
+
   it("keeps the base when the choice moves away and back", async () => {
     renderEditor(existing({ newWorktree: { baseBranch: "main", fromRemote: false } }));
 

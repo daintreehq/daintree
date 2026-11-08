@@ -195,6 +195,15 @@ describe("useScheduledRunLaunchBridge", () => {
 
     it("waits to hear of the worktree before launching in it", async () => {
       const { store, wrapper } = worktreeStore();
+      const stopListening = vi.fn();
+      const subscribe = store.subscribe;
+      store.subscribe = (listener) => {
+        const off = subscribe(listener);
+        return () => {
+          stopListening();
+          off();
+        };
+      };
       renderHook(() => useScheduledRunLaunchBridge(), { wrapper });
 
       requestLaunch!(newWorktreeRequest);
@@ -212,13 +221,9 @@ describe("useScheduledRunLaunchBridge", () => {
         requestId: "request-1",
         result: { ok: true, result: { launched: true } },
       });
-      // Its deadline went with the wait; a later update finds nothing listening.
+      // Its deadline and its subscription went with the wait.
       expect(vi.getTimerCount()).toBeLessThan(timers);
-      act(() => {
-        store.getState().applyUpdate(hostSnapshot("/wt/new"), { epoch: "e1", seq: 3 });
-      });
-      await settle();
-      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(stopListening).toHaveBeenCalledTimes(1);
     });
 
     it("launches at once when the view already knows it", async () => {

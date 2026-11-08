@@ -2800,6 +2800,29 @@ describe("WorkspaceClient multi-process manager", () => {
         expect(h(0).dispose).toHaveBeenCalledWith("idle-grace");
       });
 
+      it("holds the warm cap again within a grace period of a hold ending (#16369)", async () => {
+        for (let i = 0; i < 5; i++) {
+          await loadOn(`/project-${i}`, i + 1, i);
+          liveViewProjectIds.add(projectIdFor(`/project-${i}`));
+        }
+        const reservation = reserveScheduledLaunch({
+          runId: "run-1",
+          scheduleId: "schedule-1",
+          projectId: projectIdFor("/project-0"),
+          terminalId: "terminal-1",
+          agentId: "claude",
+          admit: () => {},
+        });
+        for (let i = 1; i <= 5; i++) client.unregisterWindow(i);
+        expect(h(0).dispose).not.toHaveBeenCalled();
+
+        reservation.withdraw();
+        reservation.finish();
+        await vi.advanceTimersByTimeAsync(180_000);
+
+        expect(h(0).dispose).toHaveBeenCalledWith("warm-cap");
+      });
+
       it("a warm load does not re-attach a host reclaimed while it waited on readiness", async () => {
         client.prewarmProject("/project-a");
         const load = client.loadProject("/project-a", 1);
