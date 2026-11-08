@@ -191,6 +191,17 @@ describe("AgentContextUsageChip for Codex", () => {
     );
   });
 
+  it("takes the share from the window the rollout states, whatever it is", async () => {
+    readCodexContextUsage.mockResolvedValue(codex(192_480, 200_000));
+    render(<AgentContextUsageChip terminalId="t1" />);
+    await settle();
+
+    expect(screen.getByTestId("terminal-context-usage").textContent).toBe("192k context · 96%");
+    expect(screen.getByTestId("tooltip-content").textContent).toContain(
+      "96% of the 200,000-token window the rollout states"
+    );
+  });
+
   it("shows the count alone when the rollout states no window", async () => {
     readCodexContextUsage.mockResolvedValue(codex(25_757));
     render(<AgentContextUsageChip terminalId="t1" />);

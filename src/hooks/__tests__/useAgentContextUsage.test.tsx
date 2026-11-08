@@ -352,6 +352,26 @@ describe("useAgentContextUsage for Codex", () => {
     expect(result.current?.contextTokens).toBe(192_480);
   });
 
+  it("never hands one agent's read still in flight to the other", async () => {
+    let answerClaude: (result: AgentContextUsageResult) => void = () => {};
+    readContextUsage.mockImplementation(
+      () => new Promise<AgentContextUsageResult>((resolve) => (answerClaude = resolve))
+    );
+    const { result, rerender } = mount();
+    await advance(CONTEXT_USAGE_FIRST_READ_MS);
+    expect(readContextUsage).toHaveBeenCalledTimes(1);
+
+    rerender({ provider: "codex", enabled: true, agentState: "waiting", generation: "1:0" });
+    await advance(CONTEXT_USAGE_FIRST_READ_MS);
+    expect(readCodexContextUsage).toHaveBeenCalledTimes(1);
+    expect(result.current?.contextTokens).toBe(192_480);
+
+    await act(async () => {
+      answerClaude(ok(126_717));
+    });
+    expect(result.current?.contextTokens).toBe(192_480);
+  });
+
   it("doesn't take one agent's turn as the next one's", async () => {
     const { rerender } = mount({ agentState: "working" });
     rerender({ provider: "codex", enabled: true, agentState: "waiting", generation: "1:0" });

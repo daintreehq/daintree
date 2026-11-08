@@ -209,7 +209,11 @@ describe("readCodexPaneContextUsageWithin", () => {
     });
     expect(observe).toHaveBeenCalledTimes(1);
     expect(__codexContextUsageWaiters("t-1")).toBe(0);
+
+    // The probe coming back late reads nothing for a caller long answered.
     settle(OBSERVED);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(read).not.toHaveBeenCalled();
   });
 
   it("answers the read's own result when it comes in time", async () => {

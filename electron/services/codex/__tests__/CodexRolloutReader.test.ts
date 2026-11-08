@@ -4,15 +4,26 @@ import { mkdtemp, rename, rm, stat, symlink, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 
-const fsHook = vi.hoisted(() => ({ opened: [] as { fd: number }[] }));
+const fsHook = vi.hoisted(() => ({
+  opened: [] as { fd: number }[],
+  /** Bytes asked for by each read through an opened handle. */
+  reads: [] as number[],
+  beforeOpen: undefined as ((target: string) => Promise<void>) | undefined,
+}));
 
 vi.mock("fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("fs/promises")>();
   return {
     ...actual,
     open: async (target: string, flags?: string | number, mode?: number) => {
+      await fsHook.beforeOpen?.(target);
       const handle = await actual.open(target, flags, mode);
       fsHook.opened.push(handle);
+      const read = handle.read.bind(handle) as (...args: unknown[]) => unknown;
+      handle.read = ((...args: unknown[]) => {
+        if (typeof args[2] === "number") fsHook.reads.push(args[2]);
+        return read(...args);
+      }) as typeof handle.read;
       return handle;
     },
   };
@@ -81,6 +92,8 @@ let dir: string;
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "codex-rollout-"));
   fsHook.opened = [];
+  fsHook.reads = [];
+  fsHook.beforeOpen = undefined;
 });
 
 afterEach(async () => {
@@ -113,7 +126,9 @@ describe("readCodexContextUsage against real rollouts (#16408)", () => {
   });
 
   it("reads a 0.165.0 rollout, written before the reasoning flag", async () => {
-    const rollout = await seed(fixture("codex-0.165.0-turn-end.jsonl"));
+    const lines = fixture("codex-0.165.0-turn-end.jsonl");
+    expect(lines.some((line) => line.includes("last_usage_includes_reasoning"))).toBe(false);
+    const rollout = await seed(lines);
 
     expect(await readCodexContextUsage(rollout)).toEqual({
       status: "ok",
@@ -130,6 +145,8 @@ describe("readCodexContextUsage against real rollouts (#16408)", () => {
     expect(await readCodexContextUsage(rollout, { chunkBytes: 7 })).toMatchObject({
       contextTokens: 192_480,
     });
+    expect(fsHook.reads.length).toBeGreaterThan(1);
+    expect(Math.max(...fsHook.reads)).toBeLessThanOrEqual(7);
   });
 
   it("answers no-request before the session's first count", async () => {
@@ -151,6 +168,18 @@ describe("readCodexContextUsage against real rollouts (#16408)", () => {
   });
 
   it("reads Codex's own estimate of what a compaction left", async () => {
+    const estimate = JSON.parse(COMPACTION.find((line) => ordinalOf(line) === 1602) ?? "{}");
+    const { last_token_usage: last, last_usage_includes_reasoning: flag } = estimate.payload.info;
+    expect(flag).toBe(true);
+    expect(
+      [
+        last.input_tokens,
+        last.cached_input_tokens,
+        last.cache_write_input_tokens,
+        last.output_tokens,
+        last.reasoning_output_tokens,
+      ].every((part: number) => part === 0)
+    ).toBe(true);
     const rollout = await seed(compactionUpTo(1611));
 
     expect(await readCodexContextUsage(rollout)).toMatchObject({
@@ -180,6 +209,15 @@ describe("readCodexContextUsage record shapes", () => {
     const result = await readCodexContextUsage(rollout);
     expect(result).toMatchObject({ status: "ok", contextTokens: 4_000 });
     expect(result).not.toHaveProperty("contextWindow");
+  });
+
+  it("reads whatever window the record states", async () => {
+    const rollout = await seed([tokenCount(info({ model_context_window: 200_000 }))]);
+
+    expect(await readCodexContextUsage(rollout)).toMatchObject({
+      contextTokens: 4_000,
+      contextWindow: 200_000,
+    });
   });
 
   it("reads a count written before Codex recorded cache writes", async () => {
@@ -227,21 +265,30 @@ describe("readCodexContextUsage record shapes", () => {
   );
 
   // `fill_to_context_window` writes the step up to the window as the last
-  // usage, with every part zero and no reasoning flag: not the context.
-  it("answers unrecognized for the count Codex fills to the window after an overflow", async () => {
-    const zero = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 };
-    const filled = info({
-      total_token_usage: usage(475_000, { ...zero, reasoning_output_tokens: 0 }),
-      last_token_usage: usage(1_200, { ...zero, reasoning_output_tokens: 0 }),
-      last_usage_includes_reasoning: undefined,
-    });
-    const rollout = await seed([tokenCount(info()), tokenCount(filled)]);
+  // usage, with every part zero and no reasoning flag: not the context. Only
+  // Codex's own estimate carries the flag, set to true.
+  it.each([
+    ["absent", undefined],
+    ["false", false],
+    ["null", null],
+    ["a string", "true"],
+  ])(
+    "answers unrecognized for a count with every part zero and the reasoning flag %s",
+    async (_label, flag) => {
+      const zero = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 };
+      const filled = info({
+        total_token_usage: usage(475_000, { ...zero, reasoning_output_tokens: 0 }),
+        last_token_usage: usage(1_200, { ...zero, reasoning_output_tokens: 0 }),
+        last_usage_includes_reasoning: flag,
+      });
+      const rollout = await seed([tokenCount(info()), tokenCount(filled)]);
 
-    expect(await readCodexContextUsage(rollout)).toEqual({
-      status: "unavailable",
-      reason: "unrecognized",
-    });
-  });
+      expect(await readCodexContextUsage(rollout)).toEqual({
+        status: "unavailable",
+        reason: "unrecognized",
+      });
+    }
+  );
 
   it("steps over records that say nothing about the context", async () => {
     const rollout = await seed([
@@ -272,6 +319,7 @@ describe("readCodexContextUsage record shapes", () => {
       status: "unavailable",
       reason: "search-cap-reached",
     });
+    expect(fsHook.reads.reduce((sum, bytes) => sum + bytes, 0)).toBeLessThanOrEqual(2_048);
   });
 });
 
@@ -286,6 +334,33 @@ describe("readCodexContextUsage file checks", () => {
       status: "unavailable",
       reason: "rollout-unknown",
     });
+    expect(fsHook.opened).toHaveLength(0);
+  });
+
+  it("refuses a file swapped in between its check and its open", async () => {
+    const rollout = await seed([tokenCount(info())]);
+    const replacement = path.join(dir, "replacement.jsonl");
+    await writeFile(replacement, `${tokenCount(info({ last_token_usage: usage(9) }))}\n`);
+    fsHook.beforeOpen = () => rename(replacement, rollout.path);
+
+    expect(await readCodexContextUsage(rollout)).toEqual({
+      status: "unavailable",
+      reason: "rollout-unknown",
+    });
+    expect(fsHook.opened.map((handle) => handle.fd)).toEqual([-1]);
+  });
+
+  // The link leads back to the very file the probe saw, so only refusing to
+  // follow it keeps the open off a path someone else controls.
+  it("refuses a symlink swapped in between its check and its open", async () => {
+    const rollout = await seed([tokenCount(info())]);
+    const moved = path.join(dir, "moved.jsonl");
+    fsHook.beforeOpen = async () => {
+      await rename(rollout.path, moved);
+      await symlink(moved, rollout.path);
+    };
+
+    expect(await readCodexContextUsage(rollout)).toMatchObject({ status: "unavailable" });
     expect(fsHook.opened).toHaveLength(0);
   });
 
