@@ -1,6 +1,6 @@
 import type { PanelInstance, PtyPanelData, TerminalInstance } from "../types/panel.js";
 import { isPtyPanel } from "../types/panel.js";
-import { AGENT_REGISTRY } from "../config/agentRegistry.js";
+import { getEffectiveAgentConfig } from "../config/agentRegistry.js";
 import { isUselessTitle } from "./isUselessTitle.js";
 import { cleanTaskTitle, stripIdentityAffixes } from "./taskTitle.js";
 
@@ -95,8 +95,9 @@ interface ObservedTask {
 // Bounded memo over the exact fields `computeObservedTask` reads. Title
 // surfaces (tab strips, headers, dock rows) re-derive titles on every
 // panel-store flush — per animation frame during agent output — while the
-// inputs only change on real title/identity transitions. AGENT_REGISTRY is
-// static, so the six fields fully determine the result. FIFO eviction: the
+// inputs only change on real title/identity transitions. An agent's name and
+// command only change when its plugin reloads, so the six fields determine
+// the result (a reload can at worst keep an old affix filter). FIFO eviction: the
 // live working set is panels × recent titles, far below the cap.
 const OBSERVED_TASK_CACHE_MAX = 500;
 const observedTaskCache = new Map<string, ObservedTask | null>();
@@ -156,7 +157,7 @@ function computeObservedTask(panel: TitledPanel): ObservedTask | null {
   if (panel.detectedAgentId === undefined || panel.agentState === "exited") return null;
   const cleaned = cleanTaskTitle(panel.lastObservedTitle);
   if (!cleaned || isUselessTitle(cleaned)) return null;
-  const agent = AGENT_REGISTRY[panel.detectedAgentId];
+  const agent = getEffectiveAgentConfig(panel.detectedAgentId);
   const identity = new Set([
     ...titleTokens(panel.title),
     ...titleTokens(agent?.name),

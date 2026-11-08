@@ -93,7 +93,7 @@ import { selectMicNoticeForPanel, useVoiceRecordingStore } from "@/store/voiceRe
 import { useTerminalLogic } from "@/hooks/useTerminalLogic";
 import { errorsClient } from "@/clients";
 import type { AgentState } from "@/types";
-import { isBuiltInAgentId, type BuiltInAgentId } from "@shared/config/agentIds";
+import { isBuiltInAgentId } from "@shared/config/agentIds";
 import type { AgentId } from "@shared/types/agent";
 import {
   load as loadTerminalService,

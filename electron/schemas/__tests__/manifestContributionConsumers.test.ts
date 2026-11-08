@@ -2040,6 +2040,15 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
       ],
       note: "Names the CLI's bypass flag only: it is the agent's default bypass args and its eligibility for the global skip switch, added to a launch only when the resolved setting is on; every declaration is also recorded as strip-only history for restore, and the agents declaring it are named in the install and update consent.",
     },
+    executableNames: {
+      mode: "derived-input",
+      consumers: [
+        { file: "electron/schemas/plugin/agents.ts", symbol: "resolveAgentExecutableNames" },
+        { file: AGENT_REGISTRY, symbol: "findContestedExecutableNames" },
+        { file: PROCESS_DETECTOR_REGISTRIES, symbol: "getAgentCliNames" },
+      ],
+      note: "Resolved in main (a bare command claims its own name when the list is omitted), stripped of any name two plugin agents claim, then keyed into the pty-host detector's name → agent map, which promotes a plain terminal running that executable (#16469).",
+    },
   },
   processTools: {
     command: {

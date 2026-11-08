@@ -19,6 +19,7 @@ import {
 } from "../../../shared/utils/assistantProvenance.js";
 import { appendHandbackInstruction, mintHandbackCode } from "../../../shared/utils/handback.js";
 import { assessInterruptCandidate } from "../../../shared/utils/terminalInterrupt.js";
+import { isBuiltInAgentId } from "../../../shared/config/agentIds.js";
 import { buildTerminalSendCommandReceipt } from "../../../shared/utils/terminalSendCommandResult.js";
 import { planChoice } from "../../../shared/utils/terminalChoice.js";
 import {
@@ -699,7 +700,8 @@ export class AssistantTerminalControl {
             trashed: record.isTrashed === true,
             ...(record.hasPty !== undefined ? { hasPty: record.hasPty } : {}),
             exited: record.isExited === true,
-            agentId: record.detectedAgentId,
+            // Interrupt keys are a built-in capability; a plugin agent has none.
+            agentId: isBuiltInAgentId(record.detectedAgentId) ? record.detectedAgentId : undefined,
             ...(record.agentState !== undefined ? { agentState: record.agentState } : {}),
             ...(record.waitingReason !== undefined ? { waitingReason: record.waitingReason } : {}),
           }
