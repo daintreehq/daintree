@@ -14,6 +14,8 @@ npm run rebuild      # Rebuild node-pty for Electron
 npm run package      # Build + electron-builder
 ```
 
+Commits use scoped [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): summary`, imperative, under about 70 characters, with a scope matching the area touched (`ipc`, `terminal`, `pty`, `worktree`, `mcp`, `plugins`, and so on).
+
 ## Worktrees
 
 Every worktree of this repo shares the main checkout's install through a `node_modules` link. Daintree's worktree setup makes it: `.daintree/config.json` runs `scripts/link-shared-node-modules.mjs`, which links a new worktree's `node_modules` to the main checkout's, then checks that each package the worktree's `package-lock.json` expects in the root install is there at its locked version. It is a presence and version check, not an integrity check: a missing `optional` package is skipped, since npm leaves out other platforms' binaries, and neither `resolved`/`integrity` nor extra packages are compared. It never replaces a `node_modules` that is already there. When the shared install is only behind, because the main checkout's `package-lock.json` is the worktree's but `npm ci` hasn't run there since it changed (the usual state after pulling a dependency bump), setup refreshes it: it runs `npm ci` in the main checkout and checks again. The install runs detached, so setup's 120-second limit can't cut it off halfway, under a lock in the main checkout's `.tmp/shared-install-refresh/`, so worktrees set up at once share one refresh rather than racing. Its output is in `npm-ci.log` there. Setup waits up to 100 seconds; an install still going after that ends setup `failed` with "Run setup again once it finishes", and the refresh carries on. A refresh whose `npm ci` failed ends setup `failed` even when every package checks out, since the native-module rebuild runs last, and every later setup says so too until an install in the main checkout replaces it. Other worktrees lose their `node_modules` while it reinstalls. It never refreshes on Windows, where a running app's open files can stop `npm ci` partway through removing the install. On any other mismatch setup ends `failed`, and the error that `worktree.waitUntilReady` returns and the worktree card shows leads with the fix, `npm ci` in the main checkout (after bringing its `package-lock.json` and the worktree's level when they differ), then lists the packages that differ. Never run `npm ci` inside a worktree; through the link it rebuilds the install every other worktree is using. The check doesn't cover native-module ABI, `.bin` links or a workspace package's own `node_modules`. A worktree made outside Daintree needs the link by hand: `DAINTREE_PROJECT_ROOT=<main checkout> node scripts/link-shared-node-modules.mjs` from the worktree.
@@ -120,7 +122,7 @@ npm run test:watch -- <path>  # Watch mode
 
 Don't run the whole suite locally (15-20 minutes): CI runs it on every PR, sharded 6 ways behind `ci-ok`, together with `npm run check`. E2E does not run on PRs. Fix failures outside your files from the CI log.
 
-Tests live in `__tests__/` directories adjacent to source. Use Vitest. Mock IPC via `vi.mock()`.
+Tests live in `__tests__/` directories adjacent to source. Use Vitest. Bug fixes need a regression test that fails without the fix. Mock the dependencies of the code under test, never the seam being fixed: an IPC bug gets a real IPC round-trip, a PTY spawn bug a real spawn. Elsewhere, mock IPC via `vi.mock()`.
 
 ## Remote hosts
 
@@ -250,6 +252,10 @@ Note that a **third**, separate compiler signal exists: CI ratchets `react-compi
 **Error handling**: Services throw typed errors. IPC handlers catch and return error objects. UI displays via `errorStore`. That is the _recoverable_ path; crashes, hung shutdown and the dirty-exit marker are a separate spine — see [architecture/fatal-error-spine.md](./architecture/fatal-error-spine.md).
 
 **Cross-store reads**: never dereference a partner store's binding at module-evaluation time — route through `src/store/storeAccessors.ts`. See [architecture/store-init-order.md](./architecture/store-init-order.md).
+
+## Demo development
+
+Demo authoring (the Stage DSL, scene runner, and recording pipeline) lives in a separate repo, [`daintreehq/demo-studio`](https://github.com/daintreehq/demo-studio). Clone it into `demo/` at the root of this repo with `git clone https://github.com/daintreehq/demo-studio.git demo`. `demo/` is gitignored and excluded from packaged builds. The app-side surface demo-studio drives (the `--demo-mode` flag, IPC handlers, and the `DemoCursor`/`DemoOverlay` components) lives in this repo. See the demo-studio README for the authoring workflow.
 
 ## Plugins
 
