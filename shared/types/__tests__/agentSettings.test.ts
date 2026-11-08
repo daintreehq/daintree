@@ -16,6 +16,7 @@ import {
   reconcileInlineModeFlag,
   reconcileDecorationFlags,
   isAgentBypassSupported,
+  isAgentTerminalBypassSupported,
   buildAssignedSessionIdArgs,
   supportsSessionIdAssignment,
   mintAssignedSessionId,
@@ -1044,8 +1045,9 @@ describe("buildLaunchCommandFromFlags", () => {
 });
 
 // #10432 — global skip-permissions override. claude/codex declare
-// supports.permissionBypass === true; gemini declares false but still has a
-// per-agent dangerous flag (--yolo) in DEFAULT_DANGEROUS_ARGS.
+// supports.permissionBypass === true for the assistant; gemini declares false
+// there but still has a terminal bypass flag (--yolo) in DEFAULT_DANGEROUS_ARGS,
+// which is what the global switch follows (#16414).
 describe("isAgentBypassSupported", () => {
   it("is true only for agents declaring supports.permissionBypass", () => {
     expect(isAgentBypassSupported("claude")).toBe(true);
@@ -1061,8 +1063,8 @@ describe("resolveEffectiveBypass", () => {
     expect(resolveEffectiveBypass({ dangerousEnabled: false }, "codex", true)).toBe(true);
   });
 
-  it("does not force bypass for an unsupported agent when the global is on", () => {
-    expect(resolveEffectiveBypass({ dangerousEnabled: false }, "gemini", true)).toBe(false);
+  it("does not force bypass for an agent with no terminal bypass flag when the global is on", () => {
+    expect(resolveEffectiveBypass({ dangerousEnabled: false }, "opencode", true)).toBe(false);
   });
 
   it("keeps the per-agent toggle working regardless of bypass support (unguarded)", () => {
@@ -1088,11 +1090,11 @@ describe("resolveEffectiveBypass", () => {
     expect(resolveEffectiveBypass({ dangerousMode: "on" }, "claude", false)).toBe(true);
   });
 
-  it("'inherit' defers to the global override, gated by bypass support", () => {
+  it("'inherit' defers to the global override, gated by a terminal bypass flag", () => {
     expect(resolveEffectiveBypass({ dangerousMode: "inherit" }, "claude", true)).toBe(true);
     expect(resolveEffectiveBypass({ dangerousMode: "inherit" }, "claude", false)).toBe(false);
-    // Unsupported agent never inherits the global flag.
-    expect(resolveEffectiveBypass({ dangerousMode: "inherit" }, "gemini", true)).toBe(false);
+    // An agent with no bypass flag never inherits the global switch.
+    expect(resolveEffectiveBypass({ dangerousMode: "inherit" }, "opencode", true)).toBe(false);
   });
 
   it("prefers the tri-state field over the legacy boolean when both are present", () => {
@@ -1100,6 +1102,98 @@ describe("resolveEffectiveBypass", () => {
     expect(
       resolveEffectiveBypass({ dangerousMode: "off", dangerousEnabled: true }, "claude", true)
     ).toBe(false);
+  });
+});
+
+// #16414 — the global switch reaches every agent with a terminal bypass flag,
+// not just the ones whose Daintree Assistant wiring declares bypass support.
+describe("global skip-permissions reaches every agent with a terminal bypass flag", () => {
+  afterEach(() => {
+    setUserRegistry({});
+  });
+
+  it("injects the registry bypass flag for an agent with no assistant wiring", () => {
+    expect(isAgentBypassSupported("antigravity")).toBe(false);
+    expect(resolveEffectiveBypass({}, "antigravity", true)).toBe(true);
+    expect(generateAgentFlags({}, "antigravity", { globalSkipPermissions: true })).toContain(
+      DEFAULT_DANGEROUS_ARGS.antigravity
+    );
+  });
+
+  it("injects every registered bypass flag for an agent left on Default", () => {
+    for (const [agentId, flag] of Object.entries(DEFAULT_DANGEROUS_ARGS)) {
+      const off = generateAgentFlags({}, agentId);
+      const on = generateAgentFlags({}, agentId, { globalSkipPermissions: true });
+      expect(isAgentTerminalBypassSupported(agentId), agentId).toBe(true);
+      expect(on.join(" "), agentId).toContain(flag);
+      expect(off.join(" "), agentId).not.toContain(flag);
+    }
+  });
+
+  it("gives Gemini --yolo: its assistant permissionBypass opt-out doesn't reach terminals", () => {
+    expect(isAgentBypassSupported("gemini")).toBe(false);
+    expect(isAgentTerminalBypassSupported("gemini")).toBe(true);
+    expect(resolveEffectiveBypass({ dangerousMode: "inherit" }, "gemini", true)).toBe(true);
+    expect(generateAgentFlags({}, "gemini", { globalSkipPermissions: true })).toContain(
+      DEFAULT_DANGEROUS_ARGS.gemini
+    );
+  });
+
+  it("never reaches an agent with no registered bypass flag, even with written dangerousArgs", () => {
+    for (const agentId of ["opencode", "copilot", "goose", "mistral", "toString", "unknown"]) {
+      expect(isAgentTerminalBypassSupported(agentId), agentId).toBe(false);
+      expect(resolveEffectiveBypass({}, agentId, true), agentId).toBe(false);
+    }
+    const entry = { dangerousArgs: "--dangerously-skip-permissions" };
+    expect(resolveEffectiveBypass(entry, "opencode", true)).toBe(false);
+    expect(generateAgentFlags(entry, "opencode", { globalSkipPermissions: true })).not.toContain(
+      "--dangerously-skip-permissions"
+    );
+    expect(isAgentTerminalBypassSupported(undefined)).toBe(false);
+  });
+
+  it("keeps a user-defined agent that opts in through supports.permissionBypass", () => {
+    setUserRegistry({
+      "my-agent": {
+        id: "my-agent",
+        name: "My Agent",
+        command: "my-agent",
+        color: "#123456",
+        iconId: "terminal",
+        supportsContextInjection: false,
+        supports: {
+          mcpInjection: "project-config",
+          settingsOverlay: false,
+          permissionBypass: true,
+          trustDialog: false,
+          versionProbe: false,
+          tier: "experimental",
+        },
+      },
+    });
+    expect(isAgentTerminalBypassSupported("my-agent")).toBe(true);
+    expect(
+      generateAgentFlags({ dangerousArgs: "--auto" }, "my-agent", { globalSkipPermissions: true })
+    ).toContain("--auto");
+  });
+
+  it("still lets an explicit agent or preset Off veto the global switch", () => {
+    expect(resolveEffectiveBypass({ dangerousMode: "off" }, "antigravity", true)).toBe(false);
+    const merged = combineDangerousModes("inherit", "off");
+    expect(resolveEffectiveBypass({ dangerousMode: merged }, "gemini", true)).toBe(false);
+  });
+
+  it("reconciles a resumed snapshot to carry the flag while the global is on", () => {
+    const flag = DEFAULT_DANGEROUS_ARGS.antigravity as string;
+    const bypass = resolveEffectiveBypass({}, "antigravity", true);
+    expect(reconcileBypassFlags(["--model", "x"], "antigravity", bypass)).toEqual([
+      "--model",
+      "x",
+      flag,
+    ]);
+    expect(
+      reconcileBypassFlags([flag], "antigravity", resolveEffectiveBypass({}, "antigravity", false))
+    ).toEqual([]);
   });
 });
 
@@ -1338,11 +1432,11 @@ describe("generateAgentFlags with globalSkipPermissions", () => {
     expect(flags).toContain(DEFAULT_DANGEROUS_ARGS.claude);
   });
 
-  it("does not inject the dangerous flag for an unsupported agent when the global is on", () => {
-    const flags = generateAgentFlags({ dangerousEnabled: false }, "gemini", {
+  it("injects no bypass flag for an agent that has none when the global is on", () => {
+    const flags = generateAgentFlags({ dangerousEnabled: false }, "opencode", {
       globalSkipPermissions: true,
     });
-    expect(flags).not.toContain(DEFAULT_DANGEROUS_ARGS.gemini);
+    expect(flags).toEqual(generateAgentFlags({ dangerousEnabled: false }, "opencode"));
   });
 
   it("still honours the per-agent toggle for an unsupported agent when the global is off", () => {
@@ -1368,11 +1462,11 @@ describe("buildAgentLaunchFlags with globalSkipPermissions", () => {
     expect(flags).toContain(DEFAULT_DANGEROUS_ARGS.claude);
   });
 
-  it("does not capture the dangerous flag for an unsupported agent when the global is on", () => {
+  it("captures Gemini's flag when the global is on, despite its assistant opt-out (#16414)", () => {
     const flags = buildAgentLaunchFlags({ dangerousEnabled: false }, "gemini", {
       globalSkipPermissions: true,
     });
-    expect(flags).not.toContain(DEFAULT_DANGEROUS_ARGS.gemini);
+    expect(flags).toContain(DEFAULT_DANGEROUS_ARGS.gemini);
   });
 });
 
@@ -2290,7 +2384,7 @@ describe("plugin-declared permission bypass (#16374)", () => {
 
   it("makes a declaring plugin agent eligible for the global switch", () => {
     registerHermes(["--yes-to-all"]);
-    expect(isAgentBypassSupported("hermes")).toBe(true);
+    expect(isAgentTerminalBypassSupported("hermes")).toBe(true);
     expect(getDefaultDangerousArgs("hermes")).toBe("--yes-to-all");
   });
 
@@ -2336,7 +2430,7 @@ describe("plugin-declared permission bypass (#16374)", () => {
 
   it("leaves a plugin agent that declares nothing ineligible and its flags untouched", () => {
     registerHermes();
-    expect(isAgentBypassSupported("hermes")).toBe(false);
+    expect(isAgentTerminalBypassSupported("hermes")).toBe(false);
     expect(getDefaultDangerousArgs("hermes")).toBe("");
     expect(generateAgentFlags({}, "hermes", { globalSkipPermissions: true })).toEqual([]);
     expect(reconcileBypassFlags(["--yes-to-all"], "hermes", true)).toEqual(["--yes-to-all"]);

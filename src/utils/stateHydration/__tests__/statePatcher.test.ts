@@ -1255,7 +1255,7 @@ describe("buildArgsForRespawn", () => {
     ]);
   });
 
-  it("does not inject a bypass flag for an unsupported agent even when the global override is on (#10432)", () => {
+  it("re-adds the bypass flag for an agent with no assistant bypass when the global override is on (#16414)", () => {
     buildResumeCommandMock.mockClear();
     buildArgsForRespawn(
       {
@@ -1273,7 +1273,35 @@ describe("buildArgsForRespawn", () => {
       false,
       undefined
     );
-    expect(buildResumeCommandMock).toHaveBeenCalledWith("gemini", "sess-1", ["--model", "flash"]);
+    expect(buildResumeCommandMock).toHaveBeenCalledWith("gemini", "sess-1", [
+      "--model",
+      "flash",
+      "--yolo",
+    ]);
+  });
+
+  it("does not inject a bypass flag for an agent that has none even when the global override is on (#10432)", () => {
+    const resumeFlags = (globalSkipPermissions: boolean) => {
+      buildResumeCommandMock.mockClear();
+      buildArgsForRespawn(
+        {
+          id: "t1",
+          kind: "terminal" as const,
+          agentId: "opencode",
+          cwd: "/p",
+          location: "grid",
+          agentSessionId: "sess-1",
+          agentLaunchFlags: ["--model", "x"],
+        },
+        "agent",
+        "/p",
+        { agents: { opencode: { dangerousEnabled: false } }, globalSkipPermissions },
+        false,
+        undefined
+      );
+      return buildResumeCommandMock.mock.calls[0]?.[2];
+    };
+    expect(resumeFlags(true)).toEqual(resumeFlags(false));
   });
 
   it("injects the bypass flag into an empty snapshot at resume when the global override is on (#10432)", () => {

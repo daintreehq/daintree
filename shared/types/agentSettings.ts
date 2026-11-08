@@ -218,16 +218,16 @@ export interface AgentSettings {
    */
   settingsVersion?: number;
   /**
-   * Global "skip permission prompts" override (#10432). When `true`, every
-   * agent whose config declares `supports.permissionBypass === true` launches
-   * in permission-bypass mode regardless of its per-agent/preset
-   * `dangerousEnabled` toggle. Default off — this is a high-blast-radius,
-   * opt-in switch. It is a *live override*, not a default: it is OR-ed into
-   * the effective bypass at flag-generation time (see {@link resolveEffectiveBypass})
-   * and never mutates per-agent `dangerousEnabled`, so toggling it off
-   * immediately stops injecting bypass flags on future spawns/restarts/resumes.
-   * Scoped to normal agent terminals; Daintree Assistant / help sessions keep
-   * their own independent bypass setting.
+   * Global "skip permission prompts" switch (#10432, #16414). When `true`,
+   * every agent with a terminal bypass flag (see
+   * {@link isAgentTerminalBypassSupported}) whose agent and preset modes are
+   * left on Default launches in permission-bypass mode; an explicit agent or
+   * preset `"off"` still vetoes it. Default off — this is a high-blast-radius,
+   * opt-in switch. It is resolved live at flag-generation time (see
+   * {@link resolveEffectiveBypass}) and never mutates per-agent settings, so
+   * toggling it off immediately stops injecting bypass flags on future
+   * spawns/restarts/resumes. Scoped to normal agent terminals; Daintree
+   * Assistant / help sessions keep their own independent bypass setting.
    */
   globalSkipPermissions?: boolean;
   /**
@@ -391,20 +391,32 @@ export const DEFAULT_AGENT_SETTINGS: AgentSettings = {
 };
 
 /**
- * Whether an agent opts into permission-bypass via its config: a built-in's
- * `supports.permissionBypass === true`, or a plugin agent that declares its
- * CLI's `permissionBypassArgs` (#16374). Strict — agents that declare neither
- * are NOT bypass-supported, so the global skip-permissions override must never
- * inject their dangerous flag (#10432).
+ * Whether an agent's Daintree Assistant wiring opts into permission bypass
+ * (`supports.permissionBypass === true`). Strict — agents that omit the field
+ * or set it `false` are NOT bypass-supported. This is the help-session
+ * capability; terminal launches ask {@link isAgentTerminalBypassSupported}.
  */
 export function isAgentBypassSupported(agentId: string | undefined): boolean {
   if (!agentId) return false;
-  const config = getEffectiveAgentConfig(agentId);
-  if (config?.permissionBypassArgs?.length) return true;
-  const supports = config?.supports;
+  const supports = getEffectiveAgentConfig(agentId)?.supports;
   // `supports` is `AssistantSupports | false | undefined`; only the structured
   // form carries `permissionBypass`.
   return supports !== false && supports?.permissionBypass === true;
+}
+
+/**
+ * Whether the global "Skip permission prompts" switch reaches an agent's
+ * terminal launches (#16414): it has a default bypass flag from
+ * {@link getDefaultDangerousArgs} (a built-in's {@link DEFAULT_DANGEROUS_ARGS}
+ * entry, Gemini's `--yolo` included whatever its retired assistant wiring
+ * declares, or a plugin agent's `permissionBypassArgs`, #16374), or it opts in
+ * through `supports.permissionBypass`, the only way a user-defined agent can. A
+ * written `dangerousArgs` alone never makes an agent eligible, so OpenCode,
+ * whose bare TUI has no bypass flag, never gets one from the global switch.
+ */
+export function isAgentTerminalBypassSupported(agentId: string | undefined): boolean {
+  if (!agentId) return false;
+  return !!getDefaultDangerousArgs(agentId) || isAgentBypassSupported(agentId);
 }
 
 /**
@@ -618,12 +630,13 @@ export function reconcileDecorationFlags(
  * Resolves the effective permission-bypass decision for a launch from the
  * (already preset-merged) effective entry's tri-state mode:
  *
- * - `"on"`  → bypass (unguarded — preserves per-agent toggles like Gemini's
- *   `--yolo` even for agents that don't declare `supports.permissionBypass`).
+ * - `"on"`  → bypass (unguarded — honours an explicit choice even for an
+ *   agent the global switch doesn't reach).
  * - `"off"` → no bypass; an explicit veto that beats the global override.
- * - `"inherit"` → defer to the global "Skip permission prompts for agents"
- *   switch, which only applies to agents that declare bypass support so it
- *   can't inject a dangerous flag into an agent that rejects it.
+ * - `"inherit"` → defer to the global "Skip permission prompts" switch, which
+ *   only applies to agents with a terminal bypass flag
+ *   ({@link isAgentTerminalBypassSupported}) so it can't inject a dangerous
+ *   flag into an agent that has none.
  *
  * Callers that resolve a launch from a preset must bake the combined mode onto
  * the entry first (see `applyPresetBehaviorOverrides`) so this single chokepoint
@@ -639,7 +652,7 @@ export function resolveEffectiveBypass(
   const mode = resolveDangerousMode(entry);
   if (mode === "on") return true;
   if (mode === "off") return false;
-  return !!globalSkipPermissions && isAgentBypassSupported(agentId);
+  return !!globalSkipPermissions && isAgentTerminalBypassSupported(agentId);
 }
 
 /** Splits args into options, each paired with the non-option value after it. */
@@ -671,9 +684,8 @@ function optionGroups(tokens: readonly string[]): string[][] {
  *
  * `effectiveBypass` is the single source of truth — it already encodes the full
  * tri-state decision (preset/agent `"on"`/`"off"` and the support-gated global
- * inherit, via {@link resolveEffectiveBypass}). So this applies uniformly even
- * to agents that don't declare `supports.permissionBypass`: their `"on"` flag
- * (e.g. Gemini's `--yolo`) is preserved when `effectiveBypass` is true, and an
+ * inherit, via {@link resolveEffectiveBypass}). So this applies uniformly to
+ * every agent: its flag is preserved when `effectiveBypass` is true, and an
  * explicit `"off"` veto strips a stale token when it is false. Agents with no
  * canonical token (no default from {@link getDefaultDangerousArgs} and no `dangerousArgs`)
  * fall through the empty-strip-set guard below and are left untouched.
@@ -791,9 +803,9 @@ export interface GenerateAgentFlagsOptions {
   /** Absolute path to the clipboard temp directory (e.g. /tmp/daintree-clipboard) */
   clipboardDirectory?: string;
   /**
-   * Global skip-permissions override (#10432). When true, OR-ed into the
-   * effective bypass for agents that declare `supports.permissionBypass`, so
-   * the agent's dangerous flag is injected even when its per-agent toggle is off.
+   * Global skip-permissions switch (#10432). When true, an agent whose
+   * agent/preset mode is left on Default and that has a terminal bypass flag
+   * launches with it; see {@link resolveEffectiveBypass}.
    */
   globalSkipPermissions?: boolean;
 }

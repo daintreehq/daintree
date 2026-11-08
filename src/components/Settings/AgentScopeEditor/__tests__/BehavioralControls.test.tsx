@@ -13,7 +13,7 @@ function makeProps(overrides: Partial<Props> = {}): Props {
     dangerousMode: "inherit",
     effectiveSkipPerms: false,
     inheritResolvesToOn: true,
-    inheritOriginLabel: "global setting",
+    inheritHint: "Inherited from global setting",
     inlineMode: "inherit",
     inlineInheritResolvesToInline: true,
     inlineInheritOriginLabel: "global setting",

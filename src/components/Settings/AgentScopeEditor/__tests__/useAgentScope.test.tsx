@@ -110,6 +110,55 @@ describe("useAgentScope — inline-mode inherit origin label (#10894)", () => {
   });
 });
 
+describe("useAgentScope — skip-permissions Default follows the global switch (#16414)", () => {
+  function setGlobalSkip(globalSkipPermissions: boolean) {
+    useAgentSettingsStore.setState({
+      settings: { ...DEFAULT_AGENT_SETTINGS, globalSkipPermissions },
+    });
+  }
+  afterEach(() => {
+    useAgentSettingsStore.setState({ settings: DEFAULT_AGENT_SETTINGS });
+  });
+
+  it("resolves Default to On for agents with a bypass flag and no assistant bypass", () => {
+    setGlobalSkip(true);
+    for (const agentId of ["antigravity", "gemini"]) {
+      const { result } = renderHook(() => useAgentScope(makeProps(agentId)));
+      expect(result.current.inheritResolvesToOn, agentId).toBe(true);
+      expect(result.current.effectiveSkipPerms, agentId).toBe(true);
+      expect(result.current.inheritHint, agentId).toBe("Inherited from global setting");
+    }
+  });
+
+  it("keeps Default off and says the global doesn't apply for an agent with no bypass flag", () => {
+    setGlobalSkip(true);
+    const { result } = renderHook(() => useAgentScope(makeProps("opencode")));
+    expect(result.current.inheritResolvesToOn).toBe(false);
+    expect(result.current.effectiveSkipPerms).toBe(false);
+    expect(result.current.inheritHint).toBe("The global setting doesn't apply to this agent");
+  });
+
+  it("lets the agent's own Off veto the global switch", () => {
+    setGlobalSkip(true);
+    const { result } = renderHook(() =>
+      useAgentScope(makeProps("antigravity", { dangerousMode: "off" }))
+    );
+    expect(result.current.effectiveSkipPerms).toBe(false);
+    expect(result.current.inheritResolvesToOn).toBe(true);
+  });
+
+  it("attributes a custom preset's Default to the agent default", () => {
+    setGlobalSkip(true);
+    const entry: AgentSettingsEntry = {
+      customPresets: [{ id: "user-1", name: "My preset" }],
+      presetId: "user-1",
+    };
+    const { result } = renderHook(() => useAgentScope(makeProps("opencode", entry)));
+    expect(result.current.scopeKind).toBe("custom");
+    expect(result.current.inheritHint).toBe("Inherited from agent default");
+  });
+});
+
 describe("useAgentScope — screen-mode control gating (#11423)", () => {
   const withCapabilities = (
     id: string,

@@ -2,8 +2,8 @@ import type { AgentPreset } from "@/config/agents";
 import { isPresetAbsenceSettled, type PresetInventoryState } from "@shared/utils/agentPresets";
 import {
   combineDangerousModes,
-  isAgentBypassSupported,
   resolveDangerousMode,
+  resolveEffectiveBypass,
   type AgentSettingsEntry,
 } from "@shared/types";
 
@@ -87,7 +87,7 @@ export function resolveScopeKind(
 /**
  * Whether a launch skips permission prompts, resolved the way launching resolves it:
  * the preset's own mode wins unless it defers, then the agent's, and an agent left on
- * Default follows the global switch for agents that support bypass at all.
+ * Default follows the global switch when it has a terminal bypass flag.
  */
 export function resolveSkipPermissions(
   agentId: string,
@@ -99,7 +99,5 @@ export function resolveSkipPermissions(
     resolveDangerousMode(entry),
     preset ? resolveDangerousMode(preset) : undefined
   );
-  if (mode === "on") return true;
-  if (mode === "off") return false;
-  return globalSkipPermissions && isAgentBypassSupported(agentId);
+  return resolveEffectiveBypass({ dangerousMode: mode }, agentId, globalSkipPermissions);
 }
