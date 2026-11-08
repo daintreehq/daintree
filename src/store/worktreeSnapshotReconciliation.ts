@@ -329,6 +329,8 @@ export function snapshotsEqual(a: WorktreeSnapshot, b: WorktreeSnapshot): boolea
     a.lastFetchedAt === b.lastFetchedAt &&
     a.fetchAuthFailed === b.fetchAuthFailed &&
     a.fetchNetworkFailed === b.fetchNetworkFailed &&
+    a.gitStatusUnanswered?.reason === b.gitStatusUnanswered?.reason &&
+    a.gitStatusUnanswered?.since === b.gitStatusUnanswered?.since &&
     a.hasRemote === b.hasRemote &&
     a.isFetchInFlight === b.isFetchInFlight &&
     a.matchedForgeProviderId === b.matchedForgeProviderId &&

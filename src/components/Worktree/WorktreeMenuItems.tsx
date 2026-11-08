@@ -599,7 +599,9 @@ export function WorktreeMenuItems({
     : worktree?.isDetached
       ? "No branch checked out"
       : isStatusUnknown
-        ? "Checking status…"
+        ? worktree?.gitStatusUnanswered
+          ? "Git status not answered"
+          : "Checking status…"
         : hasUncommittedChanges
           ? "Commit or stash first"
           : baseBehind === 0

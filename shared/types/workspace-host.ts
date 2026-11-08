@@ -16,6 +16,7 @@ import type {
   BranchInfo,
   CreateWorktreeOptions,
   GitDiffSide,
+  GitStatusUnanswered,
   RepoState,
   WorktreeChanges,
 } from "./git.js";
@@ -275,6 +276,13 @@ export interface WorktreeSnapshot {
 
   /** True when the most recent fetch failed for a transient (non-auth) reason. */
   fetchNetworkFailed?: boolean;
+
+  /**
+   * The last git status read for this worktree ended without an answer: it
+   * timed out, or a git already stopped there had not exited. Absent once a
+   * read answers. `worktreeChanges` still holds whatever was last observed.
+   */
+  gitStatusUnanswered?: GitStatusUnanswered;
 
   /**
    * `false` when `git remote` lists nothing: a local-only repo, which has

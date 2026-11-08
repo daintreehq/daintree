@@ -130,7 +130,14 @@ export class BaseDivergence {
     return this.resolution?.upstreamRef ?? null;
   }
 
-  async compute(hasUpstream: boolean): Promise<BaseDivergenceResult | null> {
+  /**
+   * `signal` stops this computation's git: the status pass passes its own, so
+   * a pass the watchdog gives up on takes its divergence git down with it.
+   */
+  async compute(
+    hasUpstream: boolean,
+    signal: AbortSignal = this.host.abortSignal
+  ): Promise<BaseDivergenceResult | null> {
     const branch = this.host.branch;
     if (!branch || this.host.isMainWorktree) return null;
 
@@ -148,7 +155,7 @@ export class BaseDivergence {
     // only re-derived when that stamp moves (or ages out), which keeps the
     // key-matched fast path below entirely spawn-free.
     const resolution = dirs
-      ? await this.resolveRemotes(branch, baseBranch, hasUpstream, dirs)
+      ? await this.resolveRemotes(branch, baseBranch, hasUpstream, dirs, signal)
       : null;
 
     // Divergence only moves when refs move, never on working-tree edits, so
@@ -161,7 +168,7 @@ export class BaseDivergence {
       return this.lastResult;
     }
 
-    const git = await this.createGit();
+    const git = await this.createGit(signal);
 
     try {
       // Resolve base ref via the rev-list itself: try the resolved remote ref
@@ -225,6 +232,12 @@ export class BaseDivergence {
         upstreamRef: hasUpstream ? (resolution?.upstreamRef ?? null) : null,
         upstreamHeadSha,
       };
+      // A cancelled git reads as a failed probe above (no upstream match, no
+      // head), which must not be cached as this key's answer.
+      if (signal.aborted) {
+        this.lastKey = null;
+        return null;
+      }
       this.lastKey = key;
       this.lastResult = divergence;
       return divergence;
@@ -234,11 +247,11 @@ export class BaseDivergence {
     }
   }
 
-  private async createGit(): Promise<GitRunner> {
+  private async createGit(signal: AbortSignal): Promise<GitRunner> {
     const wsl = this.host.wslInvocation;
     return wsl
-      ? await createWslHardenedGit(wsl, this.host.abortSignal)
-      : await createHardenedGit(this.host.path, this.host.abortSignal);
+      ? await createWslHardenedGit(wsl, signal)
+      : await createHardenedGit(this.host.path, signal);
   }
 
   private async resolveDirs(): Promise<GitDirs | null> {
@@ -262,7 +275,8 @@ export class BaseDivergence {
     branch: string,
     baseBranch: string,
     hasUpstream: boolean,
-    dirs: GitDirs
+    dirs: GitDirs,
+    signal: AbortSignal
   ): Promise<RemoteResolution | null> {
     const stamp = await this.buildResolutionStamp(branch, baseBranch, hasUpstream, dirs);
     // The age ceiling only earns its spawns where the answer is genuinely
@@ -284,7 +298,7 @@ export class BaseDivergence {
       return this.resolution;
     }
 
-    const git = await this.createGit();
+    const git = await this.createGit(signal);
     // Shared with the rebase/merge handlers (#12092) so the ref an operation
     // acts on is the ref the behind count was measured against.
     const { inputs, remotesReadSucceeded } = await gatherBaseCompareRefInputsWithRemoteStatus(
@@ -293,6 +307,9 @@ export class BaseDivergence {
     );
     const { availableRemotes } = inputs;
     const upstreamRef = hasUpstream ? await readSymbolicRef(git, "@{u}") : null;
+    // Cancelled reads come back as "no remotes" and "no upstream"; keep the
+    // last real answer instead of caching those.
+    if (signal.aborted) return this.resolution;
 
     const { compareRef, remote } = resolveBaseCompareRef(inputs);
 

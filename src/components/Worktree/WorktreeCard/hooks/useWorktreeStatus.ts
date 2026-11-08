@@ -172,6 +172,13 @@ export function useWorktreeStatus({
       return { text: firstLineLastCommitMessage, tone: "muted" };
     }
 
+    // Git was asked and never answered: "Checking status…" would claim a
+    // check is still underway, and a PR title would hide that nothing has
+    // been read at all.
+    if (worktree.worktreeChanges == null && worktree.gitStatusUnanswered) {
+      return { text: "Git status not answered", tone: "warning" };
+    }
+
     const prTitle = worktree.linked?.pr?.title?.trim();
     const prState = worktree.linked?.pr?.state;
     if (prTitle && prState !== "closed" && prState !== "declined") {
