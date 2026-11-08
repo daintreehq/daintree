@@ -4956,7 +4956,7 @@ export interface GeneratedIpcInvokeMap {
           sourcePrUrl?: string | undefined;
           sourcePrState?: "open" | "merged" | "closed" | undefined;
           sourcePrLinkedIssueNumber?: number | undefined;
-          submoduleInit?: "none" | "inherit" | "all" | undefined;
+          submoduleInit?: "all" | "none" | "inherit" | undefined;
           collisionPolicy?: "error" | "suffix" | undefined;
           fetchBase?: boolean | undefined;
         };
