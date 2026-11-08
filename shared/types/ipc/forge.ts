@@ -3,6 +3,7 @@ import type {
   CheckRunStatus,
   CIStatusState,
   CredentialImportFailureReason,
+  ForgePullRequestTerm,
   ForgeTokenHealthState,
   Issue,
   PR,
@@ -273,6 +274,30 @@ export interface ForgeFirstPageCachePayload {
    */
   stats?: { commitCount: number; issueCount: number; prCount: number; lastUpdated: number };
 }
+
+/** What `forge:get-new-pr-link` is asked about one worktree's branch. */
+export interface ForgeNewPRLinkRequest {
+  cwd: string;
+  /** The checked-out branch; `null` on a detached HEAD. */
+  head: string | null;
+  /** The worktree's base branch; `null` when none has been worked out for it. */
+  base: string | null;
+  /** The ref that base was measured against, `upstream/main` or a bare `main`. */
+  baseRef: string | null;
+}
+
+/**
+ * What the Review Hub's "No PR" chip can offer for a branch with no pull
+ * request. `unpushed` means the forge's own remote answered and has no such
+ * branch; a remote that couldn't be asked is `unavailable`, never `unpushed`.
+ */
+export type ForgeNewPRLinkState =
+  | { state: "ready"; url: string }
+  | { state: "unpushed" }
+  | { state: "unavailable" };
+
+/** {@link ForgeNewPRLinkState} with the forge's word for what it would open. */
+export type ForgeNewPRLink = ForgeNewPRLinkState & { term: ForgePullRequestTerm };
 
 /**
  * Project-health payload returned by `forge:get-project-health`. The

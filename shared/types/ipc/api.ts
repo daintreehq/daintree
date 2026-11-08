@@ -167,6 +167,8 @@ import type {
   ForgeFirstPageCachePayload,
   ForgeProjectHealthPayload,
   IssueLinkTarget,
+  ForgeNewPRLink,
+  ForgeNewPRLinkRequest,
 } from "./forge.js";
 import type { TerminalConfig } from "./config.js";
 import type { KeepAwakeState } from "./keepAwake.js";
@@ -1932,6 +1934,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * or `null` when the provider doesn't implement the optional `buildRepoUrl`.
      */
     getRepoUrl(payload: { cwd: string }): Promise<string | null>;
+    /**
+     * What the "No PR" chip can offer for a branch: the forge's new pull
+     * request page, the fact that the branch isn't pushed, or nothing.
+     */
+    getNewPRLink(payload: ForgeNewPRLinkRequest): Promise<ForgeNewPRLink>;
     /**
      * Assign an issue to a user via the resolved forge provider, returning the
      * issue's resulting assignee list. Forges may silently drop an assignee the

@@ -49,6 +49,7 @@ import {
 } from "./useReviewHubStagingActions";
 import { PushErrorBanner } from "./PushErrorBanner";
 import { PrStatusChip } from "./PrStatusChip";
+import { useNewPRLink } from "./useNewPRLink";
 import { ReviewHubContext } from "./ReviewHubContext";
 import { CommitPanel } from "./CommitPanel";
 import { ConflictPanel } from "./ConflictPanel";
@@ -824,6 +825,38 @@ export function ReviewHubContent({
     })
   );
 
+  const worktreeBaseAndRemote = useWorktreeStore(
+    useShallow((state) => {
+      for (const wt of state.worktrees.values()) {
+        if (wt.path === worktreePath) {
+          return {
+            base: wt.baseBranchName ?? null,
+            baseRef: wt.baseCompareRef ?? null,
+            upstreamRef: wt.upstreamRef,
+            upstreamHeadSha: wt.upstreamHeadSha,
+            lastFetchedAt: wt.lastFetchedAt,
+          };
+        }
+      }
+      return null;
+    })
+  );
+  const newPRLink = useNewPRLink({
+    enabled: isOpen && status?.hasRemote === true && worktreePR === null,
+    cwd: worktreePath,
+    head: status?.currentBranch ?? null,
+    base: worktreeBaseAndRemote?.base ?? null,
+    baseRef: worktreeBaseAndRemote?.baseRef ?? null,
+    // Whether the branch is on the remote changes with a push or a fetch, and
+    // which remote that means changes with the destination.
+    revision: JSON.stringify([
+      worktreeBaseAndRemote?.upstreamRef,
+      worktreeBaseAndRemote?.upstreamHeadSha,
+      worktreeBaseAndRemote?.lastFetchedAt,
+      status?.pushDestination,
+    ]),
+  });
+
   // Per-file review-thread badges now come from the generic plugin
   // file-decoration system (the active provider plugin contributes the
   // `worktree-diff:*` provider) rather than a direct `getPRReviewThreads`
@@ -1553,6 +1586,7 @@ export function ReviewHubContent({
                 hasRemote={status?.hasRemote}
                 worktreePR={worktreePR}
                 worktreePath={worktreePath}
+                newPRLink={newPRLink}
                 onOpenExternal={(url) => void systemClient.openExternal(url)}
               />
             </div>

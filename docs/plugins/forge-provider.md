@@ -160,6 +160,8 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
 | `buildPRsUrl(repo, opts?)` | `string` | — |
 | `buildCommitsUrl(repo, branch?)` | `string` | — |
 | `buildRepoUrl?(repo)` | `string` | Optional. The repository's home page. Omit it and the host leaves "View repository" out of the toolbar's forge stats menu, and `forge.openRepo` rejects. |
+| `buildNewPRUrl?(repo, refs)` | `string` | Optional. The forge's page for opening a new pull request from `refs.head` into `refs.base`, both raw branch names on this repository: encode them yourself. The host only asks once it has seen the head on this repository. Omit it and the Review Hub's "No PR" chip stays a static badge. |
+| `pullRequestTerm?` | `"pull-request" \| "merge-request"` | Optional property. What your forge calls a pull request, for the words the host shows beside `buildNewPRUrl`. Omit it for `"pull-request"`. |
 | `validateToken(token)` | `Promise<AuthValidation>` | Validate a freshly entered credential before it is stored. `token` is the value of the primary [credential field](#credential-fields), never the whole record. |
 | `getRateLimit?()` | `Promise<RateLimitInfo>` | Optional. Project your transport's rate-limit signal into the uniform shape. `null` per dimension the provider doesn't report. |
 

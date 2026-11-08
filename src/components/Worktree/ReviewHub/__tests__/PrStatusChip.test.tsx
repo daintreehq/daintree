@@ -2,8 +2,9 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, cleanup } from "@testing-library/react";
+import { render, cleanup, fireEvent } from "@testing-library/react";
 import type { CIStatusState, NormalizedPRState } from "@shared/types/forge";
+import type { ForgeNewPRLink } from "@shared/types/ipc/forge";
 
 vi.mock("@/clients/forgeClient", () => ({
   forgeClient: {
@@ -48,6 +49,7 @@ describe("PrStatusChip", () => {
           <PrStatusChip
             hasRemote
             worktreePath="/tmp/wt"
+            newPRLink={null}
             onOpenExternal={() => undefined}
             worktreePR={{
               prNumber: 42,
@@ -76,6 +78,7 @@ describe("PrStatusChip", () => {
       <PrStatusChip
         hasRemote
         worktreePath="/tmp/wt"
+        newPRLink={null}
         onOpenExternal={() => undefined}
         worktreePR={{
           prNumber: 42,
@@ -99,6 +102,7 @@ describe("PrStatusChip", () => {
       <PrStatusChip
         hasRemote
         worktreePath="/tmp/wt"
+        newPRLink={null}
         onOpenExternal={() => undefined}
         worktreePR={{
           prNumber: 42,
@@ -119,6 +123,7 @@ describe("PrStatusChip", () => {
       <PrStatusChip
         hasRemote
         worktreePath="/tmp/wt"
+        newPRLink={null}
         onOpenExternal={() => undefined}
         worktreePR={{
           prNumber: 42,
@@ -138,6 +143,7 @@ describe("PrStatusChip", () => {
       <PrStatusChip
         hasRemote
         worktreePath="/tmp/wt"
+        newPRLink={null}
         onOpenExternal={() => undefined}
         worktreePR={{
           prNumber: 42,
@@ -148,5 +154,76 @@ describe("PrStatusChip", () => {
       />
     );
     expect(queryByTestId("pr-merge-intent")).toBeNull();
+  });
+
+  describe("with no pull request", () => {
+    function renderNoPr(newPRLink: ForgeNewPRLink | null, hasRemote = true) {
+      const onOpenExternal = vi.fn();
+      const view = render(
+        <PrStatusChip
+          hasRemote={hasRemote}
+          worktreePath="/tmp/wt"
+          worktreePR={null}
+          newPRLink={newPRLink}
+          onOpenExternal={onOpenExternal}
+        />
+      );
+      return { ...view, onOpenExternal };
+    }
+
+    it("opens the forge's page when the branch can have one", () => {
+      const url = "https://github.com/o/r/compare/develop...topic?expand=1";
+      const { getByRole, onOpenExternal } = renderNoPr({
+        state: "ready",
+        term: "pull-request",
+        url,
+      });
+
+      fireEvent.click(getByRole("button", { name: /^No PR\s*open new pull request$/ }));
+
+      expect(onOpenExternal).toHaveBeenCalledWith(url);
+    });
+
+    it("uses the forge's own word for it", () => {
+      const { getByRole, queryByText } = renderNoPr({
+        state: "ready",
+        term: "merge-request",
+        url: "https://gitlab.com/o/r/-/merge_requests/new",
+      });
+
+      getByRole("button", { name: /^No MR\s*open new merge request$/ });
+      expect(queryByText("No PR")).toBeNull();
+    });
+
+    it("says an unpushed branch isn't pushed, and offers no link", () => {
+      const { getByText, queryByRole } = renderNoPr({ state: "unpushed", term: "pull-request" });
+
+      getByText("No PR");
+      getByText("not pushed");
+      expect(queryByRole("button")).toBeNull();
+    });
+
+    it("stays a static badge when there is nothing to offer", () => {
+      const { getByText, queryByText, queryByRole } = renderNoPr({
+        state: "unavailable",
+        term: "pull-request",
+      });
+
+      getByText("No PR");
+      expect(queryByText("not pushed")).toBeNull();
+      expect(queryByRole("button")).toBeNull();
+    });
+
+    it("stays out of the way until the answer is in", () => {
+      const { container } = renderNoPr(null);
+
+      expect(container.textContent).toBe("");
+    });
+
+    it("shows nothing without a remote, whatever the answer", () => {
+      const { container } = renderNoPr({ state: "unpushed", term: "pull-request" }, false);
+
+      expect(container.textContent).toBe("");
+    });
   });
 });

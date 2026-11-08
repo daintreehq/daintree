@@ -1,12 +1,16 @@
 // eager-import-allow: reads forge config via store.get synchronously in the IPC handler
 import { CHANNELS } from "../channels.js";
 import { canOpenExternalUrl, openExternalUrl } from "../../utils/openExternal.js";
+import { deriveNewPRLink } from "../../utils/forgeNewPRLink.js";
+import { createAuthenticatedGit, createHardenedGit } from "../../utils/hardenedGit.js";
+import { logDebug } from "../../utils/logger.js";
 import { checkRateLimit, typedHandle, typedHandleWithContext } from "../utils.js";
 import type { IpcContext } from "../types.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { getRegisteredForgeProviders } from "../../services/forgeProviderRegistry.js";
 import {
   resolveForCwd,
+  resolveForgeRemoteNameForCwd,
   getImplForNamespace,
   getImplForNamespaceActivating,
   getIssueImplForNamespace,
@@ -16,7 +20,11 @@ import {
   stampIssueProvider,
   type ResolvedForgeContext,
 } from "./forgeResolution.js";
-import type { IssueLinkTarget } from "../../../shared/types/ipc/forge.js";
+import type {
+  ForgeNewPRLink,
+  ForgeNewPRLinkRequest,
+  IssueLinkTarget,
+} from "../../../shared/types/ipc/forge.js";
 import { auditForgeCall, summarizeForgeArgs } from "../../services/forge/forgeAuditService.js";
 import type {
   CreateIssueInput,
@@ -595,11 +603,56 @@ async function handleForgeGetRepoUrl(payload: { cwd: string }): Promise<string |
   return repoUrlFor(await resolveForCwd(payload.cwd));
 }
 
+function isBranchNameOrNull(value: unknown): value is string | null {
+  return value === null || (typeof value === "string" && value.length > 0);
+}
+
+// Asked every time the Review Hub shows a branch with no pull request, and a
+// remote no provider recognises is a normal place to be. So failing to find out
+// answers `unavailable`, which the chip renders as today's static badge, rather
+// than a rejection logged on every open.
+async function handleForgeGetNewPRLink(payload: ForgeNewPRLinkRequest): Promise<ForgeNewPRLink> {
+  checkRateLimit(CHANNELS.FORGE_GET_NEW_PR_LINK, 20, 10_000);
+  if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
+  assertCwd(payload.cwd);
+  const { cwd, head, base, baseRef } = payload;
+  if (!isBranchNameOrNull(head) || !isBranchNameOrNull(base) || !isBranchNameOrNull(baseRef)) {
+    throw new Error("Invalid payload");
+  }
+
+  let term: ForgeNewPRLink["term"] = "pull-request";
+  try {
+    const { impl, repoRef } = await resolveForCwd(cwd);
+    term = impl.pullRequestTerm ?? term;
+    if (!impl.buildNewPRUrl || head === null) return { state: "unavailable", term };
+    const forgeRemote = await resolveForgeRemoteNameForCwd(cwd);
+    if (forgeRemote === null) return { state: "unavailable", term };
+
+    const link = await deriveNewPRLink({
+      git: await createHardenedGit(cwd),
+      openNetworkGit: () => createAuthenticatedGit(cwd),
+      forgeRemote,
+      head,
+      base,
+      baseRef,
+      buildUrl: (refs) => {
+        const url: unknown = impl.buildNewPRUrl?.(repoRef, refs);
+        return typeof url === "string" && canOpenExternalUrl(url) ? url : null;
+      },
+    });
+    return { ...link, term };
+  } catch (error) {
+    logDebug("Couldn't work out a new pull request link", { error });
+    return { state: "unavailable", term };
+  }
+}
+
 export const forgeRepoLinkNamespace = defineIpcNamespace({
   name: "forgeRepoLink",
   ops: {
     openRepo: op(CHANNELS.FORGE_OPEN_REPO, handleForgeOpenRepo, { withContext: true }),
     getRepoUrl: op(CHANNELS.FORGE_GET_REPO_URL, handleForgeGetRepoUrl),
+    getNewPRLink: op(CHANNELS.FORGE_GET_NEW_PR_LINK, handleForgeGetNewPRLink),
   },
 });
 

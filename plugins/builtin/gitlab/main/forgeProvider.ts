@@ -279,6 +279,16 @@ export const gitlabForgeProvider: ForgeProviderImpl = {
     return repoWebUrl(repo);
   },
 
+  buildNewPRUrl(repo: RepoRef, refs: { base: string; head: string }): string {
+    const params = new URLSearchParams({
+      "merge_request[source_branch]": refs.head,
+      "merge_request[target_branch]": refs.base,
+    });
+    return `${repoWebUrl(repo)}/-/merge_requests/new?${params.toString()}`;
+  },
+
+  pullRequestTerm: "merge-request",
+
   /**
    * GitLab publishes merge-request heads under `refs/merge-requests/<iid>/head`,
    * not GitHub's `pull/<n>/head`, so without this the host's default refspec

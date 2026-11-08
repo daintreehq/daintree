@@ -34,6 +34,7 @@ import type {
 } from "../shared/types/ipc/mcpServer.js";
 import type { ActionContext, ActionDispatchResult } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
+import type { ForgeNewPRLinkRequest } from "../shared/types/ipc/forge.js";
 import type { KeybindingOverridesSnapshot } from "../shared/types/ipc/api.js";
 import type { GitPushReview } from "../shared/types/git.js";
 import type { PluginPerfSnapshot } from "../shared/types/pluginMetrics.js";
@@ -2990,6 +2991,8 @@ function buildElectronApi(): ElectronAPI {
       openRepo: (payload: { cwd: string }) => _unwrappingInvoke(CHANNELS.FORGE_OPEN_REPO, payload),
       getRepoUrl: (payload: { cwd: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_GET_REPO_URL, payload),
+      getNewPRLink: (payload: ForgeNewPRLinkRequest) =>
+        _unwrappingInvoke(CHANNELS.FORGE_GET_NEW_PR_LINK, payload),
       assignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>
         _unwrappingInvoke(CHANNELS.FORGE_ASSIGN_ISSUE, payload),
       unassignIssue: (payload: { cwd: string; issueNumber: number; username: string }) =>

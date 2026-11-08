@@ -1073,6 +1073,7 @@ export const CHANNELS = {
   FORGE_OPEN_ISSUE: "forge:open-issue",
   FORGE_GET_ISSUE_URL: "forge:get-issue-url",
   FORGE_GET_REPO_URL: "forge:get-repo-url",
+  FORGE_GET_NEW_PR_LINK: "forge:get-new-pr-link",
   FORGE_ASSIGN_ISSUE: "forge:assign-issue",
   FORGE_UNASSIGN_ISSUE: "forge:unassign-issue",
   FORGE_APPROVE_PR: "forge:approve-pr",

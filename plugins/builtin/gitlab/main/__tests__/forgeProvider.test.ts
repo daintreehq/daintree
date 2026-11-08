@@ -1715,6 +1715,26 @@ describe("URL builders", () => {
     expect(gitlabForgeProvider.buildRepoUrl?.(repo)).toBe("https://gitlab.com/group/sub/project");
   });
 
+  it("calls what it opens a merge request", () => {
+    expect(gitlabForgeProvider.pullRequestTerm).toBe("merge-request");
+  });
+
+  it.each(["feature/fix#1", "100%done", "a+b&c", "häagen/dazs"])(
+    "opens the new merge request form for the branch %s",
+    (head) => {
+      const url = new URL(
+        gitlabForgeProvider.buildNewPRUrl?.(repo, { base: "release/1.0", head }) ?? ""
+      );
+
+      expect(url.origin + url.pathname).toBe(
+        "https://gitlab.com/group/sub/project/-/merge_requests/new"
+      );
+      expect(url.hash).toBe("");
+      expect(url.searchParams.get("merge_request[source_branch]")).toBe(head);
+      expect(url.searchParams.get("merge_request[target_branch]")).toBe("release/1.0");
+    }
+  );
+
   it("maps the open state to GitLab's 'opened' in list URLs", () => {
     expect(gitlabForgeProvider.buildIssuesUrl(repo, { state: "open" })).toContain("state=opened");
     expect(gitlabForgeProvider.buildPRsUrl(repo, { query: "search term" })).toContain(

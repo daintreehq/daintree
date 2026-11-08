@@ -13,6 +13,7 @@ const {
   debounceCancelSpy,
   compareWorktreesMock,
   openExternalMock,
+  getNewPRLinkMock,
   classifyPushErrorMock,
   getChecksMock,
   abortRepositoryOperationMock,
@@ -37,6 +38,7 @@ const {
   onDecorationsChangedMock,
   worktreeStoreData,
 } = vi.hoisted(() => ({
+  getNewPRLinkMock: vi.fn(),
   getStagingStatusMock: vi.fn(),
   onUpdateMock: vi.fn(),
   debounceCancelSpy: vi.fn(),
@@ -121,6 +123,7 @@ vi.mock("@/clients/forgeClient", () => ({
     getChecks: getChecksMock,
     getPR: () => Promise.resolve(null),
     getRepoMetadata: () => Promise.resolve(null),
+    getNewPRLink: getNewPRLinkMock,
   },
 }));
 
@@ -327,6 +330,8 @@ describe("ReviewHub", () => {
   const mockUnsubscribe = vi.fn();
 
   beforeEach(() => {
+    getNewPRLinkMock.mockReset();
+    getNewPRLinkMock.mockResolvedValue({ state: "unavailable", term: "pull-request" });
     capturedUpdateCallback = null;
     capturedTickCallback = null;
     debounceCancelSpy.mockReset();
@@ -1519,6 +1524,47 @@ describe("ReviewHub", () => {
       await waitFor(() => {
         screen.getByText("No PR");
       });
+    });
+
+    it("asks about the worktree's own branch and base, and opens what comes back", async () => {
+      const url = "https://github.com/test/repo/compare/develop...feature/test?expand=1";
+      getNewPRLinkMock.mockResolvedValue({ state: "ready", term: "pull-request", url });
+      const existing = worktreeStoreData.current.get("main-wt")!;
+      worktreeStoreData.current.set("main-wt", {
+        ...existing,
+        baseBranchName: "develop",
+        baseCompareRef: "origin/develop",
+      });
+      getStagingStatusMock.mockResolvedValue(
+        makeStatus({ hasRemote: true, currentBranch: "feature/test" })
+      );
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      const link = await screen.findByRole("button", { name: /^No PR\s*open new pull request$/ });
+      expect(getNewPRLinkMock).toHaveBeenCalledWith({
+        cwd: WORKTREE_PATH,
+        head: "feature/test",
+        base: "develop",
+        baseRef: "origin/develop",
+      });
+
+      fireEvent.click(link);
+      expect(openExternalMock).toHaveBeenCalledWith(url);
+    });
+
+    it("does not ask about a new pull request while the branch has one", async () => {
+      setWorktreePR({
+        prNumber: 42,
+        prUrl: "https://github.com/test/repo/pull/42",
+        prState: "open",
+      });
+      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+
+      await waitFor(() => screen.getByText("#42"));
+      expect(getNewPRLinkMock).not.toHaveBeenCalled();
     });
 
     it("does not show PR indicator when branch has no remote, even with PR data", async () => {

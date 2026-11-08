@@ -62,6 +62,8 @@ const fakeImpl = vi.hoisted(() => ({
 }));
 
 const resolveForCwdMock = vi.hoisted(() => vi.fn());
+const resolveForgeRemoteNameMock = vi.hoisted(() => vi.fn());
+const deriveNewPRLinkMock = vi.hoisted(() => vi.fn());
 
 const storeMock = vi.hoisted(() => ({
   get: vi.fn(),
@@ -105,8 +107,18 @@ vi.mock("../../../utils/openExternal.js", () => ({
   openExternalUrl: openExternalUrlMock,
 }));
 
+vi.mock("../../../utils/forgeNewPRLink.js", () => ({
+  deriveNewPRLink: deriveNewPRLinkMock,
+}));
+
+vi.mock("../../../utils/hardenedGit.js", () => ({
+  createHardenedGit: vi.fn(async () => ({})),
+  createAuthenticatedGit: vi.fn(async () => ({})),
+}));
+
 vi.mock("../forgeResolution.js", () => ({
   resolveForCwd: resolveForCwdMock,
+  resolveForgeRemoteNameForCwd: resolveForgeRemoteNameMock,
   getImplForNamespace: () => fakeImpl,
   getIssueImplForNamespace: () => fakeImpl,
   getImplForNamespaceActivating: () => Promise.resolve(fakeImpl),
@@ -319,6 +331,86 @@ describe("forge handlers — rate limiting", () => {
         expect(openExternalUrlMock).not.toHaveBeenCalled();
       }
     );
+  });
+
+  describe("new pull request link", () => {
+    const request = { cwd: "/tmp/project", head: "topic", base: "develop", baseRef: null };
+    const ask = (payload: unknown = request) =>
+      getInvokeHandler(CHANNELS.FORGE_GET_NEW_PR_LINK)({}, payload);
+
+    function resolveWith(impl: Record<string, unknown>) {
+      resolveForCwdMock.mockResolvedValue({
+        namespaceId: "fake-plugin.fake",
+        providerId: "fake",
+        repoRef,
+        impl: { ...fakeImpl, ...impl },
+      });
+    }
+
+    beforeEach(() => {
+      resolveForgeRemoteNameMock.mockResolvedValue("origin");
+      deriveNewPRLinkMock.mockReset();
+      deriveNewPRLinkMock.mockResolvedValue({ state: "unpushed" });
+    });
+
+    it("keeps today's static badge for a provider with no builder", async () => {
+      resolveWith({ buildNewPRUrl: undefined });
+
+      await expect(ask()).resolves.toEqual({ state: "unavailable", term: "pull-request" });
+      expect(deriveNewPRLinkMock).not.toHaveBeenCalled();
+    });
+
+    it("carries the forge's word on every answer", async () => {
+      resolveWith({ buildNewPRUrl: () => "https://fake.test/new", pullRequestTerm: "merge-request" });
+
+      await expect(ask()).resolves.toEqual({ state: "unpushed", term: "merge-request" });
+      await expect(ask({ ...request, head: null })).resolves.toEqual({
+        state: "unavailable",
+        term: "merge-request",
+      });
+    });
+
+    it("hands the builder through, refusing a URL the host won't open", async () => {
+      const buildNewPRUrl = vi.fn(() => "https://fake.test/new");
+      resolveWith({ buildNewPRUrl });
+      await ask();
+
+      const { buildUrl, forgeRemote, head, base } = deriveNewPRLinkMock.mock.calls[0][0];
+      expect({ forgeRemote, head, base }).toEqual({
+        forgeRemote: "origin",
+        head: "topic",
+        base: "develop",
+      });
+      const refs = { base: "develop", head: "topic" };
+      expect(buildUrl(refs)).toBe("https://fake.test/new");
+      expect(buildNewPRUrl).toHaveBeenCalledWith(repoRef, refs);
+
+      buildNewPRUrl.mockReturnValue("file:///tmp/new");
+      expect(buildUrl(refs)).toBeNull();
+    });
+
+    it("answers rather than rejects for a repository no provider recognises", async () => {
+      resolveForCwdMock.mockRejectedValue(new Error("No forge provider registered"));
+
+      await expect(ask()).resolves.toEqual({ state: "unavailable", term: "pull-request" });
+    });
+
+    it("keeps the forge's word when git fails partway", async () => {
+      resolveWith({ buildNewPRUrl: () => "https://fake.test/new", pullRequestTerm: "merge-request" });
+      deriveNewPRLinkMock.mockRejectedValue(new Error("not a git repository"));
+
+      await expect(ask()).resolves.toEqual({ state: "unavailable", term: "merge-request" });
+    });
+
+    it.each([
+      { payload: null, error: "Invalid payload" },
+      { payload: { ...request, cwd: "" }, error: "Invalid working directory" },
+      { payload: { ...request, head: 7 }, error: "Invalid payload" },
+      { payload: { ...request, base: "" }, error: "Invalid payload" },
+    ])("rejects $payload before resolving a provider", async ({ payload, error }) => {
+      await expect(ask(payload)).rejects.toThrow(error);
+      expect(resolveForCwdMock).not.toHaveBeenCalled();
+    });
   });
 
   describe("PR write family (forge:*-pr)", () => {
@@ -600,6 +692,11 @@ describe("forge handlers — rate limiting", () => {
       // repo URL read: 20/10s like the open it gates — a local URL build, no forge round trip
       { channel: CHANNELS.FORGE_GET_REPO_URL, maxCalls: 20, invoke: (h) => h({}, { cwd }) },
       {
+        channel: CHANNELS.FORGE_GET_NEW_PR_LINK,
+        maxCalls: 20,
+        invoke: (h) => h({}, { cwd, head: "topic", base: "develop", baseRef: null }),
+      },
+      {
         channel: CHANNELS.FORGE_OPEN_ISSUE,
         maxCalls: 20,
         invoke: (h) => h({}, { cwd, issueNumber: 1 }),
@@ -820,12 +917,12 @@ describe("forge handlers — rate limiting", () => {
       },
     ];
 
-    it("registers all forge channels (53 rate-limited + 2 unrated probes)", () => {
-      expect(specs).toHaveLength(53);
+    it("registers all forge channels (54 rate-limited + 2 unrated probes)", () => {
+      expect(specs).toHaveLength(54);
       // FORGE_GET_CURRENT_USER and FORGE_GET_TOKEN_HEALTH are intentionally
       // unrated replay/identity probes with no checkRateLimit, so they register
       // handlers but stay out of `specs`.
-      expect(ipcMainMock.handle).toHaveBeenCalledTimes(55);
+      expect(ipcMainMock.handle).toHaveBeenCalledTimes(56);
     });
 
     it.each(specs)(

@@ -25,6 +25,7 @@ import type {
   ForgeTokenHealthState,
   RateLimitDetails,
 } from "@shared/types/forge";
+import type { ForgeNewPRLink, ForgeNewPRLinkRequest } from "@shared/types/ipc/forge";
 import type {
   ForgeCheckRun,
   ForgeCIStatusSummary,
@@ -72,6 +73,10 @@ export const forgeClient = {
 
   getRepoUrl: (cwd: string): Promise<string | null> => {
     return window.electron.forge.getRepoUrl({ cwd });
+  },
+
+  getNewPRLink: (request: ForgeNewPRLinkRequest): Promise<ForgeNewPRLink> => {
+    return window.electron.forge.getNewPRLink(request);
   },
 
   assignIssue: (cwd: string, issueNumber: number, username: string): Promise<ForgeUser[]> => {
