@@ -66,11 +66,32 @@ describe("jiraRequest", () => {
     expect(JSON.parse(init.body)).toEqual({ jql: 'project = "ENG"' });
   });
 
+  it("sends a PUT and reads a 204 as success with nothing to return", async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+    await expect(
+      jiraRequest(CONNECTION, "/issue/ENG-12/assignee", {
+        method: "PUT",
+        body: { accountId: null },
+      })
+    ).resolves.toBeUndefined();
+    const [, init] = fetchMock.mock.calls[0];
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body)).toEqual({ accountId: null });
+  });
+
   it("reads a 401 as a rejected credential", async () => {
     fetchMock.mockResolvedValue(json({}, { status: 401 }));
     const error = await failure();
     expect(error.status).toBe(401);
     expect(error.message).toMatch(/rejected the email and API token/);
+    expect(error.credentialRejected).toBe(true);
+  });
+
+  it("doesn't read a refused request as a refused credential", async () => {
+    fetchMock.mockResolvedValueOnce(json({ errorMessages: ["No permission"] }, { status: 403 }));
+    expect((await failure()).credentialRejected).toBe(false);
+    fetchMock.mockResolvedValueOnce(json({}, { status: 429 }));
+    expect((await failure()).credentialRejected).toBe(false);
   });
 
   it.each(["AUTHENTICATED_FAILED", "AUTHENTICATION_DENIED"])(
@@ -197,6 +218,7 @@ describe("jiraRequest", () => {
       const repeat = await failure();
       expect(repeat.message).toMatch(/rejected/);
       expect(repeat.status).toBe(401);
+      expect(repeat.credentialRejected).toBe(true);
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
       vi.advanceTimersByTime(5 * 60_000);
