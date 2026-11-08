@@ -407,10 +407,7 @@ describe.skipIf(!ENABLED)(
             expect(before.listeningPid).not.toBeNull();
 
             // Another commit of this version: the running host isn't up to date for it.
-            const { setup, stages } = setupFor(
-              host,
-              clientBuild({ kind: "none" }, secondCommit)
-            );
+            const { setup, stages } = setupFor(host, clientBuild({ kind: "none" }, secondCommit));
             await expect(install(setup, host)).rejects.toThrow(
               /doesn't match the release feed's checksum/
             );
@@ -490,7 +487,13 @@ describe.skipIf(!ENABLED)(
               /still reported a different build.*previous build was put back and is running again/s
             );
             expect(stages).toEqual(
-              expect.arrayContaining(["copying", "verifying", "stopping", "installing", "restarting"])
+              expect.arrayContaining([
+                "copying",
+                "verifying",
+                "stopping",
+                "installing",
+                "restarting",
+              ])
             );
 
             const after = await hostState(host);

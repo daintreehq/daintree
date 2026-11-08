@@ -17,12 +17,12 @@ function text(file, args) {
 }
 
 /** Where electron-builder puts the AppImage: x64's name carries no arch. */
-export function appImageFileName(version, arch) {
+function appImageFileName(version, arch) {
   return arch === "x64" ? `Daintree-${version}.AppImage` : `Daintree-${version}-${arch}.AppImage`;
 }
 
 /** The script that builds a packaged AppImage from the tree on its stdin. */
-export function packageScript(nodeArch) {
+function packageScript(nodeArch) {
   return [
     "set -eux",
     "mkdir /src",
@@ -92,7 +92,7 @@ async function packageCurrentCommit() {
   return out;
 }
 
-async function main() {
+try {
   const appImage = process.env.DAINTREE_CONTAINER_E2E_APPIMAGE || (await packageCurrentCommit());
   const run = spawnSync("npx", ["vitest", "run", SUITE], {
     cwd: root,
@@ -104,11 +104,7 @@ async function main() {
     },
   });
   process.exit(run.status ?? 1);
-}
-
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch((err) => {
-    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
-    process.exit(1);
-  });
+} catch (err) {
+  process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+  process.exit(1);
 }

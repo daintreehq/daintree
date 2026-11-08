@@ -38,14 +38,18 @@ const ALIAS = "daintree-e2e-linux";
 function exec(
   file: string,
   args: string[],
-  timeoutMs = 120_000,
-  maxBuffer = 16 * 1024 * 1024
+  timeoutMs = 120_000
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    execFile(file, args, { timeout: timeoutMs, maxBuffer }, (err, stdout, stderr) => {
-      const code = err ? (typeof err.code === "number" ? err.code : 1) : 0;
-      resolve({ code, stdout, stderr: stderr || (err && code !== 0 ? err.message : "") });
-    });
+    execFile(
+      file,
+      args,
+      { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        const code = err ? (typeof err.code === "number" ? err.code : 1) : 0;
+        resolve({ code, stdout, stderr: stderr || (err && code !== 0 ? err.message : "") });
+      }
+    );
   });
 }
 
@@ -418,7 +422,9 @@ export async function readAppImageMarker(appImage: string): Promise<string> {
     await docker(["cp", appImage, `${id}:/tmp/in.AppImage`], 5 * 60_000);
     const script =
       'cd /tmp && chmod 755 in.AppImage && ./in.AppImage --appimage-extract resources/app.asar >/dev/null 2>&1; grep -a -o -m 1 -E \'[{]"daintreeBuildInfo":1,"version":"[^"]+","commit":"[0-9a-f]+"[}]\' squashfs-root/resources/app.asar | head -n 1';
-    return await docker(["exec", id, "sh", "-c", script], 5 * 60_000);
+    const marker = await docker(["exec", id, "sh", "-c", script], 5 * 60_000);
+    if (!marker) throw new Error(`${appImage} carries no build marker`);
+    return marker;
   } finally {
     await exec("docker", ["rm", "--force", id], 30_000);
     live.delete(id);
