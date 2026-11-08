@@ -325,6 +325,26 @@ export function hasStreamingWrites(managed: ManagedTerminal, now: number): boole
   );
 }
 
+/**
+ * True while an alt-screen pane's output has not all reached xterm's buffer —
+ * a batch still parsing or ingest bytes still held — or a DEC 2026 frame is
+ * open (#16359). xterm's `resize()` parses pending writes before it moves the
+ * grid, so a resize now would land wherever those bytes leave the pane: inside
+ * a synchronized frame the app sized for the old grid, or on a buffer they
+ * switched to, after every check here had passed. Unlike
+ * {@link hasStreamingWrites} this asks only that the parser be caught up, not
+ * that the app be quiet; a full-screen TUI redraws too often to wait for a
+ * quiet window. Shared with the watchdog so a deferral there burns no breaker
+ * attempt.
+ */
+export function altFrameInFlight(managed: ManagedTerminal, queuedBytes: number): boolean {
+  return (
+    (managed.pendingWrites ?? 0) > 0 ||
+    queuedBytes > 0 ||
+    managed.terminal.modes?.synchronizedOutputMode === true
+  );
+}
+
 interface SettledResizeRequest {
   timer: number;
   cols: number;
@@ -1251,11 +1271,13 @@ export class TerminalResizeController {
     // An alt-screen pane has no scrollback to re-wrap, and a full-screen TUI
     // redraws often enough that waiting for quiet would never end, so it skips
     // this gate (#16359). What it must never do is move the grid in the middle
-    // of a frame: an open DEC 2026 block is a paint the app sized for the old
-    // grid, so wait for it to close.
+    // of a frame, so it waits instead for the parser to catch up and any DEC
+    // 2026 block to close — even under `force`.
     const gridChanges = managed.terminal.cols !== cols || managed.terminal.rows !== rows;
     if (managed.isAltBuffer) {
-      if (gridChanges && managed.terminal.modes?.synchronizedOutputMode === true) return false;
+      if (gridChanges && altFrameInFlight(managed, this.deps.dataBuffer.getQueuedBytes(id))) {
+        return false;
+      }
     } else if (!options.force && gridChanges && hasStreamingWrites(managed, Date.now())) {
       return false;
     }
@@ -1279,10 +1301,11 @@ export class TerminalResizeController {
     // so the flush has to be explicit here.
     //
     // For an alt-screen pane this is the whole of what #10805 allows: the same
-    // xterm-then-PTY pair the ResizeObserver path commits, and only when the
-    // grid really moved. The alternate buffer has no scrollback, so xterm
-    // crops or pads the frame rather than reflowing it, and the app's SIGWINCH
-    // redraw repaints it at the new size.
+    // xterm-then-PTY pair the ResizeObserver path commits, only when the grid
+    // really moved, and with nothing left to parse (the gate above), so the
+    // frame on screen is a finished one. The alternate buffer has no
+    // scrollback, so xterm crops or pads that frame rather than reflowing it,
+    // and the app's SIGWINCH redraw repaints it at the new size.
     let heldBytesFlushed = true;
     if (gridChanges) {
       heldBytesFlushed = this.flushHeldBytesBeforeResize(id);

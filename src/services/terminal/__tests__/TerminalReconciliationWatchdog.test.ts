@@ -921,13 +921,41 @@ describe("TerminalReconciliationWatchdog", () => {
       const alt = makeManaged({ isAltBuffer: true });
       setRenderPaused(alt, false);
       setGrid(alt, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
-      alt.pendingWrites = 3;
       instances.set("alt", alt);
       const deps = makeDeps(instances);
       watchdog = new TerminalReconciliationWatchdog(deps);
 
+      alt.lastWriteAt = Date.now() + WATCHDOG_INTERVAL_MS;
       vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
       expect(deps.reconcileRevealGeometry).toHaveBeenCalledWith("alt");
+    });
+
+    it("waits for an alt-buffer pane's output to reach xterm without burning a breaker attempt", () => {
+      // reconcileGeometryFresh refuses to move an alt pane's grid while bytes
+      // are still parsing or held, so issuing the repair then would count a
+      // guaranteed refusal as a failed convergence and trip the breaker on a
+      // busy TUI. The tick defers instead, and the next quiet one repairs.
+      const alt = makeManaged({ isAltBuffer: true });
+      setRenderPaused(alt, false);
+      setGrid(alt, { cols: 137, rows: 40 }, { cols: 100, rows: 40 });
+      alt.pendingWrites = 1;
+      instances.set("alt", alt);
+      let queuedBytes = 0;
+      const deps = makeDeps(instances, { getQueuedBytes: vi.fn(() => queuedBytes) });
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      for (let i = 0; i < 6; i++) vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      alt.pendingWrites = 0;
+      queuedBytes = 2048;
+      for (let i = 0; i < 6; i++) vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).not.toHaveBeenCalled();
+      expect(alt.geometryRepairAttempts ?? 0).toBe(0);
+      expect(alt.geometryRepairGaveUp).toBeFalsy();
+
+      queuedBytes = 0;
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).toHaveBeenCalledWith("alt");
+      expect(alt.geometryRepairAttempts).toBe(1);
     });
 
     it("does not reconcile geometry while a synchronized-output block is open", () => {

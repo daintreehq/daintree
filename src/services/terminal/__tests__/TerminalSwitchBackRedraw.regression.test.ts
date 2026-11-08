@@ -395,26 +395,28 @@ describe("#10632 switch-back redraw — closed-loop convergence", () => {
     expect(managed.revealPendingRepair).toBe(false);
   });
 
-  it("rapid switches: an alt-screen pane lands once, on the size it is finally shown at", () => {
-    // A run of switches, each resizing the window while the project is hidden
-    // and coming back inside the project-switch suppression window. Nothing
-    // may resize the pane for a size the user never sees settle; once the
-    // last suppression clears, both grids land on the final container.
+  it("rapid switches inside the suppression window: the watchdog resizes an alt-screen pane once, to the final size", () => {
+    // Watchdog lane only: each switch-away arms the project-switch suppression
+    // (as `detachTerminalsForProjectSwitch` does) and each return lands inside
+    // it, so the watchdog must not chase intermediate sizes the user never sees
+    // settle. Once the last suppression clears, both grids land on the final
+    // container in one resize. The reveal sweep and the suppression-clear
+    // redraw are separate lanes, covered by their own suites.
     const agent = mount("goose", { altBuffer: true });
     const managed = instances.get("goose")!;
     deps = buildDeps(instances, agents);
     watchdog = new TerminalReconciliationWatchdog(deps);
 
     for (const cols of [90, 140, 100]) {
+      managed.isResizeSuppressed = true;
       agent.onScreen = false;
       agent.containerCols = cols;
       vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
       agent.onScreen = true;
       managed.attachGeneration += 1;
-      managed.isResizeSuppressed = true;
       vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(agent.sigwinch).toEqual([]);
     }
-    expect(agent.sigwinch).toEqual([]);
     expect(agent.cols).toBe(120);
 
     managed.isResizeSuppressed = false;

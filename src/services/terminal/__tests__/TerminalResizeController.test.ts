@@ -3358,17 +3358,66 @@ describe("TerminalResizeController", () => {
     it("does not hold a streaming alt-screen pane to the main buffer's quiet window (#16359)", () => {
       // The quiescence gate guards scrollback re-wrap, which the alternate
       // buffer has none of — and a full-screen TUI redraws often enough that
-      // waiting for quiet would strand it at the old size indefinitely.
+      // waiting for quiet would strand it at the old size indefinitely. A
+      // batch that landed a moment ago is parsed, so the frame is finished.
       const managed = createManagedTerminal();
       managed.isAltBuffer = true;
       managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
-      (managed as { pendingWrites?: number }).pendingWrites = 3;
+      (managed as { lastWriteAt?: number }).lastWriteAt = Date.now();
 
       const controller = makeController(managed);
 
       expect(controller.reconcileGeometryFresh("term-1")).toBe(true);
       expect(managed.terminal.resize).toHaveBeenCalledWith(100, 30);
       expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
+    });
+
+    it.each([
+      ["a batch still parsing", { pendingWrites: 1, queuedBytes: 0 }],
+      ["ingest bytes still held", { pendingWrites: 0, queuedBytes: 512 }],
+    ])(
+      "waits for an alt-screen pane's output to reach xterm before moving its grid: %s",
+      (_label, { pendingWrites, queuedBytes }) => {
+        // xterm's resize() parses pending writes before it moves the grid, so
+        // bytes not yet parsed could open a synchronized frame (or leave the
+        // alternate buffer) after the block check passed. Nothing may be left
+        // to parse when an alt pane's grid moves.
+        const managed = createManagedTerminal();
+        managed.isAltBuffer = true;
+        managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+        (managed as { pendingWrites?: number }).pendingWrites = pendingWrites;
+        const dataBuffer = {
+          flushForTerminal: vi.fn(),
+          resetForTerminal: vi.fn(),
+          getQueuedBytes: vi.fn(() => queuedBytes),
+          resumeFlush: vi.fn(),
+        };
+        const controller = new TerminalResizeController({
+          getInstance: vi.fn(() => managed),
+          dataBuffer: dataBuffer as any,
+        });
+
+        expect(controller.reconcileGeometryFresh("term-1", { force: true })).toBe(false);
+        expect(managed.terminal.resize).not.toHaveBeenCalled();
+        expect(dataBuffer.flushForTerminal).not.toHaveBeenCalled();
+        expect(resizeMock).not.toHaveBeenCalled();
+        expect(managed.latestCols).toBe(80);
+      }
+    );
+
+    it("still reflows a main-buffer pane while a synchronized block is open", () => {
+      // The block wait is an alt-screen rule. The main buffer's callers gate
+      // on the block themselves, and an explicit Redraw must still land.
+      const managed = createManagedTerminal();
+      managed.fitAddon.proposeDimensions = vi.fn(() => ({ cols: 100, rows: 30 }));
+      Object.assign(managed.terminal, { modes: { synchronizedOutputMode: true } });
+
+      const controller = makeController(managed);
+
+      expect(controller.reconcileGeometryFresh("term-1")).toBe(true);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(100, 30);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
+      expect(managed.terminal.scrollToBottom).toHaveBeenCalledOnce();
     });
 
     it("waits out an open synchronized block on an alt-screen pane, even under force", () => {

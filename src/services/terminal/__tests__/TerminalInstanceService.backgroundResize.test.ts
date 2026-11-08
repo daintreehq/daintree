@@ -186,6 +186,23 @@ describe("TerminalInstanceService applyBackgroundWindowResize", () => {
     expect(main.revealPendingRepair).toBeFalsy();
   });
 
+  it("owes an alt-buffer pane the reveal repair in a minimized, never-cached window too", () => {
+    const alt = makeManaged({ lastWidth: 800, lastHeight: 600, isAltBuffer: true });
+    alt.attachGeneration = 3;
+    service.instances.set("alt", alt);
+
+    // A live view whose real layout owns geometry again owes nothing.
+    setCached(false);
+    setViewport(1000, 700, "visible");
+    service.applyBackgroundWindowResize(1200, 840);
+    expect(alt.revealPendingRepair).toBeFalsy();
+
+    setViewport(1000, 700, "hidden");
+    service.applyBackgroundWindowResize(1200, 840);
+    expect(alt.revealPendingRepair).toBe(true);
+    expect(alt.revealPendingGeneration).toBe(3);
+  });
+
   it("scales a pane that leaves the alternate screen mid-session from its pre-background size", () => {
     // The origin is captured on first eligibility, not on session start, so a
     // pane skipped while alt-screen still lands on an absolute target anchored

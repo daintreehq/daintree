@@ -4,7 +4,7 @@ import { isSidebarMeasurementLocked } from "@/lib/layoutTransitionLock";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import { logDebug, logWarn } from "@/utils/logger";
 import { normalizeTerminalGridDimension } from "@shared/types/terminal";
-import { hasStreamingWrites } from "./TerminalResizeController";
+import { altFrameInFlight, hasStreamingWrites } from "./TerminalResizeController";
 import {
   MAX_RENDERER_UNPAUSE_ATTEMPTS,
   attemptRendererUnpause,
@@ -470,9 +470,11 @@ export class TerminalReconciliationWatchdog {
     // the 6s repair cooldown and spend heavy budget on a guaranteed no-op, so
     // both geometry branches below skip the attempt and fall through to the
     // cheaper render-pause / WebGL layers, retrying once the stream pauses.
-    // Main-buffer only: reconcileGeometryFresh applies that gate to the main
-    // buffer alone, so an alt-buffer reconcile is never deferred by writes.
-    const streamingDeferred = !managed.isAltBuffer && hasStreamingWrites(managed, now);
+    // An alt-buffer pane is deferred only while its output is still reaching
+    // xterm, the narrower wait reconcileGeometryFresh applies to it (#16359).
+    const streamingDeferred = managed.isAltBuffer
+      ? altFrameInFlight(managed, this.deps.getQueuedBytes(id))
+      : hasStreamingWrites(managed, now);
 
     // Reveal-pending guaranteed redraw (#10632). The project-switch suppression
     // window cleared while this host was still detached/occluded, so its one-shot
