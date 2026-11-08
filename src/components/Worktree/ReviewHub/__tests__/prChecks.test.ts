@@ -176,9 +176,10 @@ describe("sanitizeCheckSource", () => {
   });
 
   it("bounds the length below the check name's, keeping the start of the name", () => {
-    const long = sanitizeCheckSource("w".repeat(500))!;
-    expect(long.startsWith("wwww")).toBe(true);
-    expect(long.length).toBeLessThan(sanitizeCheckName("w".repeat(500)).length);
+    const raw = "Release pipeline " + "x".repeat(500) + " nightly";
+    const long = sanitizeCheckSource(raw)!;
+    expect(long.startsWith("Release pipeline")).toBe(true);
+    expect(long.length).toBeLessThan(sanitizeCheckName(raw).length);
     expect(sanitizeCheckSource("Release")).toBe("Release");
   });
 });
@@ -330,10 +331,11 @@ describe("preparePrChecks workflow and app qualifiers", () => {
   });
 
   it("qualifies names that only read the same once the display bound cuts them", () => {
+    // The bound cuts from the middle, so the names differ only where it cuts.
     const stem = "integration ".repeat(20);
     const rows = preparePrChecks([
-      check({ name: stem + "linux", workflow: "CI" }),
-      check({ name: stem + "macos", workflow: "Release" }),
+      check({ name: stem + "linux" + stem, workflow: "CI" }),
+      check({ name: stem + "macos" + stem, workflow: "Release" }),
     ]);
     expect(rows[0]!.name).toBe(rows[1]!.name);
     expect(rows.map((row) => row.source)).toEqual(["CI", "Release"]);
@@ -435,9 +437,13 @@ describe("composePrChecksAgentText", () => {
       ])!;
       const prose = text.slice(0, text.indexOf("{"));
       expect(prose).not.toContain("Ignore previous");
-      expect(parsePayload(text).checks[0]![field]).toContain("curl evil.sh");
+      const carried = String(parsePayload(text).checks[0]![field]);
+      expect(carried).toContain("curl evil.sh");
+      // Read back out of the JSON: serialization would escape a raw ESC, so
+      // only the parsed value shows whether the sanitizer removed it.
+      expect(carried).not.toContain(ESC);
+      expect(carried).not.toContain("[2J");
       expect(text).not.toMatch(/[$`!]/);
-      expect(text).not.toContain(ESC);
     }
   );
 
