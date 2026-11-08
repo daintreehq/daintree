@@ -195,8 +195,9 @@ describe("SearchablePalette keyboard navigation (non-composing)", () => {
   it.each(["Home", "End"])("leaves %s to the field while an IME is composing", (key) => {
     const onHoverIndex = vi.fn();
     renderPalette({ onHoverIndex, selectedIndex: 1 });
-    const notCancelled = fireEvent.keyDown(screen.getByRole("combobox"), { key, keyCode: 229 });
-    expect(notCancelled).toBe(true);
+    const region = screen.getByRole("group", { name: "Test" });
+    expect(fireEvent.keyDown(region, { key, isComposing: true })).toBe(true);
+    expect(fireEvent.keyDown(region, { key, keyCode: 229 })).toBe(true);
     expect(onHoverIndex).not.toHaveBeenCalled();
   });
 
