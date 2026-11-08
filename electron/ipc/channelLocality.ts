@@ -186,6 +186,8 @@ export const CHANNEL_LOCALITY = {
   "claude:list-subagents": "host",
   "claude:read-subagent-transcript": "host",
   "claude:find-reply-span": "host",
+  // What the host's own panes showed, under the host's own accounts.
+  "claude:read-usage": "host",
   "cli:get-status": "shell",
   "cli:install": "shell",
   "clipboard:pick-attachments": "hybrid",

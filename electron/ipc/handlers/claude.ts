@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineIpcNamespace, opValidated } from "../define.js";
+import { defineIpcNamespace, op, opValidated } from "../define.js";
 import type { IpcContext } from "../types.js";
 import { CLAUDE_METHOD_CHANNELS } from "./claude.preload.js";
 import {
@@ -10,6 +10,7 @@ import type {
   AgentSubagentsResult,
   AgentSubagentTranscriptResult,
 } from "../../../shared/types/ipc/agentSubagents.js";
+import type { ClaudeUsageAccount } from "../../../shared/types/ipc/agentQuota.js";
 
 // The renderer names a terminal, never a folder or a bare session id. Main
 // resolves the cwd and the owning Claude session from the pty-host record and
@@ -80,6 +81,13 @@ export const claudeNamespace = defineIpcNamespace({
       },
       { withContext: true }
     ),
+    // Argument-free: the readings are whatever this machine's panes showed
+    // (#16370), and the renderer can't name a folder to read.
+    readUsage: op(CLAUDE_METHOD_CHANNELS.readUsage, async (): Promise<ClaudeUsageAccount[]> => {
+      const { readClaudeUsageAccounts } =
+        await import("../../services/claude/ClaudeUsageService.js");
+      return readClaudeUsageAccounts();
+    }),
   },
 });
 

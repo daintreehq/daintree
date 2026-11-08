@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { bridgePtyEvent } from "../PtyEventsBridge.js";
 import { events } from "../../events.js";
 import { HANDBACK_MESSAGE_MAX_CHARS } from "../../../../shared/types/handback.js";
 import {
   clearClaudeUsageObservations,
-  readClaudeUsageObservations,
+  readClaudeUsageRecords,
 } from "../../claude/ClaudeUsageObservations.js";
 
 describe("bridgePtyEvent", () => {
@@ -446,10 +446,12 @@ describe("bridgePtyEvent", () => {
       usedPercent: 87,
       resetsAt: 1_793_599_200_000,
       observedAt: 1_793_590_000_000,
+      configDir: "/home/me/.claude-work",
+      shell: "/bin/zsh",
       timestamp: 1_793_590_000_000,
     } as const;
 
-    it("records the parsed fields for agent.readQuota and keeps them off the bus", () => {
+    it("records the parsed fields for agent.readQuota and keeps them off the bus", async () => {
       const heard: unknown[] = [];
       events.on("agent:claude-usage-observed", (payload) => heard.push(payload));
 
@@ -457,7 +459,9 @@ describe("bridgePtyEvent", () => {
       expect(bridgePtyEvent({ ...observed, line: "You've used 87%…" } as never)).toBe(true);
 
       expect(heard).toEqual([]);
-      expect(readClaudeUsageObservations()).toEqual([
+      // Recorded once the folder is resolved; this one doesn't exist, so its spelling stands.
+      await vi.waitFor(() => expect(readClaudeUsageRecords()).toHaveLength(1));
+      expect(readClaudeUsageRecords()).toEqual([
         {
           terminalId: "term-4",
           window: "weekly limit",
@@ -465,7 +469,33 @@ describe("bridgePtyEvent", () => {
           usedPercent: 87,
           resetsAt: 1_793_599_200_000,
           observedAt: 1_793_590_000_000,
+          configDir: "/home/me/.claude-work",
+          shell: "/bin/zsh",
         },
+      ]);
+    });
+
+    it.each([
+      ["no folder", { configDir: undefined }],
+      ["an empty folder", { configDir: "" }],
+      ["a folder that isn't a string", { configDir: 42 }],
+    ])("files one with %s under no account (#16370)", async (_name, change) => {
+      expect(bridgePtyEvent({ ...observed, ...change } as never)).toBe(true);
+      await vi.waitFor(() => expect(readClaudeUsageRecords()).toHaveLength(1));
+      expect(readClaudeUsageRecords()).toEqual([
+        expect.objectContaining({ terminalId: "term-4", configDir: null }),
+      ]);
+    });
+
+    it.each([
+      ["no shell", { shell: undefined }],
+      ["an empty shell", { shell: "" }],
+      ["a shell that isn't a string", { shell: 7 }],
+    ])("records one with %s as of unknown shell (#16370)", async (_name, change) => {
+      expect(bridgePtyEvent({ ...observed, ...change } as never)).toBe(true);
+      await vi.waitFor(() => expect(readClaudeUsageRecords()).toHaveLength(1));
+      expect(readClaudeUsageRecords()).toEqual([
+        expect.objectContaining({ terminalId: "term-4", shell: null }),
       ]);
     });
 
@@ -478,12 +508,12 @@ describe("bridgePtyEvent", () => {
       ["no pane", { terminalId: "" }],
     ])("drops one with %s", (_name, change) => {
       expect(bridgePtyEvent({ ...observed, ...change } as never)).toBe(true);
-      expect(readClaudeUsageObservations()).toEqual([]);
+      expect(readClaudeUsageRecords()).toEqual([]);
     });
 
     it("leaves a host throwaway run's out (#14445)", () => {
       bridgePtyEvent({ ...observed, terminalId: "daintree-throwaway-1" });
-      expect(readClaudeUsageObservations()).toEqual([]);
+      expect(readClaudeUsageRecords()).toEqual([]);
     });
   });
 

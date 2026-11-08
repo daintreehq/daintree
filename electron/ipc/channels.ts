@@ -592,6 +592,7 @@ export const CHANNELS = {
   CLAUDE_LIST_SUBAGENTS: "claude:list-subagents",
   CLAUDE_READ_SUBAGENT_TRANSCRIPT: "claude:read-subagent-transcript",
   CLAUDE_FIND_REPLY_SPAN: "claude:find-reply-span",
+  CLAUDE_READ_USAGE: "claude:read-usage",
 
   TERMINAL_SESSION_FILE_GET: "terminal-session-file:get",
 

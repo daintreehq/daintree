@@ -542,6 +542,10 @@ export interface GeneratedIpcInvokeMap {
     args: [__0: { terminalId: string; subagentId: string }];
     result: import("./agentSubagents.js").AgentSubagentTranscriptResult;
   };
+  "claude:read-usage": {
+    args: [];
+    result: import("./agentQuota.js").ClaudeUsageAccount[];
+  };
   "cli:get-status": {
     args: [];
     result: import("./system.js").CliInstallStatus;

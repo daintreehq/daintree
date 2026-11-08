@@ -886,6 +886,14 @@ export type PtyHostEvent =
       usedPercent: number | null;
       resetsAt: number | null;
       observedAt: number;
+      /**
+       * The Claude Code config folder the pane launched on, as its
+       * `claudeConfigDir`: which account the reading is for (#16370). Null
+       * when the launch env named one that can't be resolved.
+       */
+      configDir: string | null;
+      /** The shell the pane started, whose startup files may have changed that folder. */
+      shell: string | null;
       timestamp: number;
     }
   | {

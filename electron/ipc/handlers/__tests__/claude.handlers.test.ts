@@ -10,6 +10,14 @@ const replyCopyMock = vi.hoisted(() => ({
 
 vi.mock("../../../services/claude/ClaudeReplyCopy.js", () => replyCopyMock);
 
+const usageMock = vi.hoisted(() => ({
+  readClaudeUsageAccounts: vi.fn(async () => [
+    { key: "k1", kind: "default", accountNames: [], readings: [] },
+  ]),
+}));
+
+vi.mock("../../../services/claude/ClaudeUsageService.js", () => usageMock);
+
 import { claudeNamespace } from "../claude.js";
 import { REPLY_SPAN_HOST_TIMEOUT_MS } from "../../../../shared/config/replySpanLimits.js";
 
@@ -106,5 +114,16 @@ describe("claude.findReplySpan", () => {
     expect(
       schema.safeParse({ terminalId: "t-1", selection: "x".repeat(256 * 1024 + 1) }).success
     ).toBe(false);
+  });
+});
+
+describe("claude.readUsage (#16370)", () => {
+  it("answers with the readings main grouped by login, taking nothing from the caller", async () => {
+    const read = claudeNamespace.ops.readUsage.handler as unknown as () => Promise<unknown>;
+
+    await expect(read()).resolves.toEqual([
+      { key: "k1", kind: "default", accountNames: [], readings: [] },
+    ]);
+    expect(usageMock.readClaudeUsageAccounts).toHaveBeenCalledWith();
   });
 });
