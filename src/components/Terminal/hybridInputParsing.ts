@@ -444,8 +444,7 @@ function closingNotesQuote(text: string, pathStart: number): number {
     close += text[close] === "\\" && text[close + 1] === '"' ? 2 : 1;
   }
   if (text[close] !== '"') return -1;
-  const after = text[close + 1];
-  return after === undefined || /[\s.,;:!?)\]}'"]/.test(after) ? close : -1;
+  return /^[\p{L}\p{N}_/\\-]/u.test(text.slice(close + 1)) ? -1 : close;
 }
 
 /**

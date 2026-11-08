@@ -1542,7 +1542,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     };
     const noteNoDiffNotes = () => {
       ++submitAttemptRef.current;
-      setSendNote({ terminalId, refused: true, noDiffNotes: true });
+      const retires = standingVoiceNote(voiceId);
+      setSendNote({ terminalId, refused: true, noDiffNotes: true, retires });
     };
 
     // Every way this composer sends — Enter, a picked slash command, a prompt

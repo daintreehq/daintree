@@ -264,9 +264,11 @@ describe("@notes", () => {
       { start: 22, end: 41, filePath: "other b.ts" },
     ]);
     // A sentence can follow a closing quote directly.
-    expect(getAllAtNotesTokens('@notes:"a b.ts", then')).toEqual([
-      { start: 0, end: 15, filePath: "a b.ts" },
-    ]);
+    for (const after of [", then", "…", "—ok", '"']) {
+      expect(getAllAtNotesTokens(`@notes:"a b.ts"${after}`), after).toEqual([
+        { start: 0, end: 15, filePath: "a b.ts" },
+      ]);
+    }
   });
 
   it("ignores what only looks like the token", () => {
