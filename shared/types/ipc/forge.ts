@@ -280,10 +280,13 @@ export interface ForgeNewPRLinkRequest {
   cwd: string;
   /** The checked-out branch; `null` on a detached HEAD. */
   head: string | null;
-  /** The worktree's base branch; `null` when none has been worked out for it. */
-  base: string | null;
-  /** The ref that base was measured against, `upstream/main` or a bare `main`. */
+  /**
+   * The ref the worktree's base was measured against, `upstream/main` or a bare
+   * `main`; `null` when no base has been worked out for it.
+   */
   baseRef: string | null;
+  /** The main worktree has no base of its own, by design rather than by failure. */
+  isMainWorktree: boolean;
 }
 
 /**

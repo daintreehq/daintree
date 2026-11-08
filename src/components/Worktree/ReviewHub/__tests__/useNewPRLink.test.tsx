@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, renderHook, waitFor } from "@testing-library/react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import type { ForgeNewPRLink } from "@shared/types/ipc/forge";
 
 const getNewPRLinkMock = vi.hoisted(() => vi.fn());
@@ -26,9 +26,9 @@ const OPTIONS = {
   enabled: true,
   revision: "r1",
   cwd: "/repo/wt",
-  head: "topic",
-  base: "develop",
-  baseRef: "origin/develop",
+  head: "topic" as string | null,
+  baseRef: "origin/develop" as string | null,
+  isMainWorktree: false,
 };
 
 function deferred<T>() {
@@ -62,12 +62,12 @@ describe("useNewPRLink", () => {
     expect(getNewPRLinkMock).toHaveBeenCalledWith({
       cwd: "/repo/wt",
       head: "topic",
-      base: "develop",
       baseRef: "origin/develop",
+      isMainWorktree: false,
     });
 
-    reply.resolve(READY);
-    await waitFor(() => expect(result.current).toEqual(READY));
+    await act(async () => reply.resolve(READY));
+    expect(result.current).toEqual(READY);
   });
 
   it("asks nothing while disabled", () => {
@@ -85,27 +85,30 @@ describe("useNewPRLink", () => {
     const { result, rerender } = setup();
     rerender({ ...OPTIONS, head: "other" });
 
-    second.resolve(UNPUSHED);
-    await waitFor(() => expect(result.current).toEqual(UNPUSHED));
+    await act(async () => second.resolve(UNPUSHED));
+    expect(result.current).toEqual(UNPUSHED);
 
-    first.resolve(READY);
-    await first.promise;
-    await Promise.resolve();
+    // Without the cancellation this overwrites the newer answer, and the
+    // identity check then turns the result back into null.
+    await act(async () => first.resolve(READY));
     expect(result.current).toEqual(UNPUSHED);
   });
 
-  it("drops the answer the moment the branch or base changes", async () => {
+  it.each([
+    { name: "worktree", change: { cwd: "/repo/other" } },
+    { name: "branch", change: { head: "other" } },
+    { name: "base", change: { baseRef: "origin/main" } },
+    { name: "worktree kind", change: { isMainWorktree: true } },
+  ])("drops the answer the moment the $name changes", async ({ change }) => {
     getNewPRLinkMock.mockResolvedValueOnce(READY);
     const { result, rerender } = setup();
     await waitFor(() => expect(result.current).toEqual(READY));
 
     getNewPRLinkMock.mockReturnValue(new Promise(() => undefined));
-    rerender({ ...OPTIONS, head: "other" });
-    expect(result.current).toBeNull();
+    rerender({ ...OPTIONS, ...change });
 
-    getNewPRLinkMock.mockResolvedValueOnce(READY);
-    rerender({ ...OPTIONS, head: "other", base: "main" });
     expect(result.current).toBeNull();
+    expect(getNewPRLinkMock).toHaveBeenCalledTimes(2);
   });
 
   it("leaves the last answer standing while a push or fetch asks again", async () => {
@@ -120,8 +123,8 @@ describe("useNewPRLink", () => {
     expect(getNewPRLinkMock).toHaveBeenCalledTimes(2);
     expect(result.current).toEqual(UNPUSHED);
 
-    again.resolve(READY);
-    await waitFor(() => expect(result.current).toEqual(READY));
+    await act(async () => again.resolve(READY));
+    expect(result.current).toEqual(READY);
   });
 
   it("reads a failed lookup as nothing to offer, not as an unpushed branch", async () => {
@@ -142,10 +145,8 @@ describe("useNewPRLink", () => {
     const again = deferred<ForgeNewPRLink>();
     getNewPRLinkMock.mockReturnValueOnce(again.promise);
     rerender({ ...OPTIONS, revision: "r2" });
-    again.reject(new Error("rate limited"));
-    await again.promise.catch(() => undefined);
-    await Promise.resolve();
 
+    await act(async () => again.reject(new Error("rate limited")));
     expect(result.current).toEqual(READY);
   });
 });

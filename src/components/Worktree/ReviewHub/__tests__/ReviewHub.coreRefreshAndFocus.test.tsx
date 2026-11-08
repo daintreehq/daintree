@@ -1532,6 +1532,7 @@ describe("ReviewHub", () => {
       const existing = worktreeStoreData.current.get("main-wt")!;
       worktreeStoreData.current.set("main-wt", {
         ...existing,
+        isMainWorktree: false,
         baseBranchName: "develop",
         baseCompareRef: "origin/develop",
       });
@@ -1545,12 +1546,35 @@ describe("ReviewHub", () => {
       expect(getNewPRLinkMock).toHaveBeenCalledWith({
         cwd: WORKTREE_PATH,
         head: "feature/test",
-        base: "develop",
         baseRef: "origin/develop",
+        isMainWorktree: false,
       });
 
       fireEvent.click(link);
       expect(openExternalMock).toHaveBeenCalledWith(url);
+    });
+
+    it("asks again when a push made outside the hub gives the main worktree an upstream", async () => {
+      getNewPRLinkMock.mockResolvedValue({ state: "unpushed", term: "pull-request" });
+      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+      // A new element each time: the store mock has no subscription, and React
+      // skips rendering an element it was just handed.
+      const hub = () => (
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+      );
+      const { rerender } = render(hub());
+      await screen.findByText("not pushed");
+      expect(getNewPRLinkMock).toHaveBeenCalledTimes(1);
+
+      const url = "https://github.com/test/repo/compare/main...topic?expand=1";
+      getNewPRLinkMock.mockResolvedValue({ state: "ready", term: "pull-request", url });
+      const existing = worktreeStoreData.current.get("main-wt")!;
+      worktreeStoreData.current.set("main-wt", { ...existing, aheadCount: 0 });
+      rerender(hub());
+
+      await screen.findByRole("button", { name: /^No PR\s*open new pull request$/ });
+      expect(getNewPRLinkMock).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText("not pushed")).toBeNull();
     });
 
     it("does not ask about a new pull request while the branch has one", async () => {

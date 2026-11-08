@@ -214,16 +214,20 @@ describe("PrStatusChip", () => {
       expect(queryByRole("button")).toBeNull();
     });
 
-    it("stays out of the way until the answer is in", () => {
+    it("renders nothing at all until the answer is in", () => {
       const { container } = renderNoPr(null);
 
-      expect(container.textContent).toBe("");
+      expect(container.firstChild).toBeNull();
     });
 
-    it("shows nothing without a remote, whatever the answer", () => {
-      const { container } = renderNoPr({ state: "unpushed", term: "pull-request" }, false);
+    it.each<ForgeNewPRLink>([
+      { state: "ready", term: "pull-request", url: "https://github.com/o/r/compare/a...b" },
+      { state: "unpushed", term: "pull-request" },
+      { state: "unavailable", term: "pull-request" },
+    ])("renders nothing without a remote when the answer is $state", (link) => {
+      const { container } = renderNoPr(link, false);
 
-      expect(container.textContent).toBe("");
+      expect(container.firstChild).toBeNull();
     });
   });
 });

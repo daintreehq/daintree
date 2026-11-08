@@ -14,8 +14,8 @@ export interface NewPRLinkInput {
   /** The remote the forge provider resolved this repository from. */
   forgeRemote: string;
   head: string;
-  base: string | null;
   baseRef: string | null;
+  isMainWorktree: boolean;
   buildUrl: (refs: { base: string; head: string }) => string | null;
 }
 
@@ -57,10 +57,15 @@ async function resolveRemoteHead(
   if (push.status === "resolved") {
     return push.destination.remote === forgeRemote ? push.destination.branch : null;
   }
+  if (push.reason !== "ambiguous") return null;
   // Several remotes and no config naming one is every fresh branch in a fork
-  // setup. Nothing says it went elsewhere, so the forge's remote can still be
-  // asked about it under its own name.
-  return push.reason === "ambiguous" ? head : null;
+  // setup, so the forge's remote can still be asked about it under its own
+  // name, unless a ref shows the branch went to one of the others.
+  const others = remotes.filter((remote) => remote !== forgeRemote);
+  const elsewhere = await Promise.all(
+    others.map((remote) => refExists(git, `refs/remotes/${remote}/${head}`))
+  );
+  return elsewhere.includes(true) ? null : head;
 }
 
 /**
@@ -78,12 +83,17 @@ async function resolveRemoteBase(
   input: NewPRLinkInput,
   remotes: readonly string[]
 ): Promise<string | null> {
-  const { git, forgeRemote, base, baseRef } = input;
-  if (base !== null) {
+  const { git, forgeRemote, baseRef, isMainWorktree } = input;
+  if (baseRef !== null) {
+    // A bare ref means the base was only found locally, so nothing says the
+    // forge's repository has it. The ref's own branch is the name to use: a
+    // local base can track a differently named branch.
     const measuredOn = parseKnownRemoteBranch(baseRef, remotes);
-    return measuredOn && measuredOn.remote !== forgeRemote ? null : base;
+    return measuredOn?.remote === forgeRemote ? measuredOn.branch : null;
   }
-  // The main worktree gets no base divergence, so it has no base of its own.
+  // No ref on a linked worktree means its divergence failed, and its base needn't
+  // be the remote's default. Only the main worktree goes without one by design.
+  if (!isMainWorktree) return null;
   // Git's record of what the remote calls its default is the one local answer
   // that isn't a guess; without it there is no target to name.
   const prefix = `refs/remotes/${forgeRemote}/`;

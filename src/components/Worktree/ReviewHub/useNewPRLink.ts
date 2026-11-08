@@ -25,10 +25,10 @@ export function useNewPRLink({
   revision,
   cwd,
   head,
-  base,
   baseRef,
+  isMainWorktree,
 }: UseNewPRLinkOptions): ForgeNewPRLink | null {
-  const identity = JSON.stringify([cwd, head, base, baseRef]);
+  const identity = JSON.stringify([cwd, head, baseRef, isMainWorktree]);
   const [stored, setStored] = useState<{ identity: string; link: ForgeNewPRLink } | null>(null);
 
   useEffect(() => {
@@ -36,7 +36,7 @@ export function useNewPRLink({
     let cancelled = false;
     void (async () => {
       try {
-        const link = await forgeClient.getNewPRLink({ cwd, head, base, baseRef });
+        const link = await forgeClient.getNewPRLink({ cwd, head, baseRef, isMainWorktree });
         if (!cancelled) setStored({ identity, link });
       } catch (error) {
         logDebug("New pull request link lookup failed", { error });
@@ -47,7 +47,7 @@ export function useNewPRLink({
     return () => {
       cancelled = true;
     };
-  }, [enabled, revision, identity, cwd, head, base, baseRef]);
+  }, [enabled, revision, identity, cwd, head, baseRef, isMainWorktree]);
 
   return stored?.identity === identity ? stored.link : null;
 }

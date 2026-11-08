@@ -2,7 +2,8 @@
 import { CHANNELS } from "../channels.js";
 import { canOpenExternalUrl, openExternalUrl } from "../../utils/openExternal.js";
 import { deriveNewPRLink } from "../../utils/forgeNewPRLink.js";
-import { createAuthenticatedGit, createHardenedGit } from "../../utils/hardenedGit.js";
+import { createBackgroundFetchGit, createHardenedGit } from "../../utils/hardenedGit.js";
+import { REMOTE_BRANCH_TIP_TIMEOUT_MS } from "../../utils/remoteBranchTip.js";
 import { logDebug } from "../../utils/logger.js";
 import { checkRateLimit, typedHandle, typedHandleWithContext } from "../utils.js";
 import type { IpcContext } from "../types.js";
@@ -615,8 +616,12 @@ async function handleForgeGetNewPRLink(payload: ForgeNewPRLinkRequest): Promise<
   checkRateLimit(CHANNELS.FORGE_GET_NEW_PR_LINK, 20, 10_000);
   if (!payload || typeof payload !== "object") throw new Error("Invalid payload");
   assertCwd(payload.cwd);
-  const { cwd, head, base, baseRef } = payload;
-  if (!isBranchNameOrNull(head) || !isBranchNameOrNull(base) || !isBranchNameOrNull(baseRef)) {
+  const { cwd, head, baseRef, isMainWorktree } = payload;
+  if (
+    !isBranchNameOrNull(head) ||
+    !isBranchNameOrNull(baseRef) ||
+    typeof isMainWorktree !== "boolean"
+  ) {
     throw new Error("Invalid payload");
   }
 
@@ -630,11 +635,16 @@ async function handleForgeGetNewPRLink(payload: ForgeNewPRLinkRequest): Promise<
 
     const link = await deriveNewPRLink({
       git: await createHardenedGit(cwd),
-      openNetworkGit: () => createAuthenticatedGit(cwd),
+      // Nobody asked for this read, so it can't raise a credential prompt, and
+      // the deadline has to stop git itself rather than only stop waiting for it.
+      openNetworkGit: () =>
+        createBackgroundFetchGit(cwd, {
+          signal: AbortSignal.timeout(REMOTE_BRANCH_TIP_TIMEOUT_MS),
+        }),
       forgeRemote,
       head,
-      base,
       baseRef,
+      isMainWorktree,
       buildUrl: (refs) => {
         const url: unknown = impl.buildNewPRUrl?.(repoRef, refs);
         return typeof url === "string" && canOpenExternalUrl(url) ? url : null;

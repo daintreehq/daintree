@@ -64,6 +64,7 @@ const fakeImpl = vi.hoisted(() => ({
 const resolveForCwdMock = vi.hoisted(() => vi.fn());
 const resolveForgeRemoteNameMock = vi.hoisted(() => vi.fn());
 const deriveNewPRLinkMock = vi.hoisted(() => vi.fn());
+const createBackgroundFetchGitMock = vi.hoisted(() => vi.fn(async () => ({})));
 
 const storeMock = vi.hoisted(() => ({
   get: vi.fn(),
@@ -113,7 +114,7 @@ vi.mock("../../../utils/forgeNewPRLink.js", () => ({
 
 vi.mock("../../../utils/hardenedGit.js", () => ({
   createHardenedGit: vi.fn(async () => ({})),
-  createAuthenticatedGit: vi.fn(async () => ({})),
+  createBackgroundFetchGit: createBackgroundFetchGitMock,
 }));
 
 vi.mock("../forgeResolution.js", () => ({
@@ -334,7 +335,12 @@ describe("forge handlers — rate limiting", () => {
   });
 
   describe("new pull request link", () => {
-    const request = { cwd: "/tmp/project", head: "topic", base: "develop", baseRef: null };
+    const request = {
+      cwd: "/tmp/project",
+      head: "topic",
+      baseRef: "origin/develop",
+      isMainWorktree: false,
+    };
     const ask = (payload: unknown = request) =>
       getInvokeHandler(CHANNELS.FORGE_GET_NEW_PR_LINK)({}, payload);
 
@@ -373,23 +379,53 @@ describe("forge handlers — rate limiting", () => {
       });
     });
 
-    it("hands the builder through, refusing a URL the host won't open", async () => {
+    it("hands the renderer the ready link, with the forge's word", async () => {
+      resolveWith({
+        buildNewPRUrl: () => "https://fake.test/new",
+        pullRequestTerm: "merge-request",
+      });
+      deriveNewPRLinkMock.mockResolvedValue({ state: "ready", url: "https://fake.test/new" });
+
+      await expect(ask()).resolves.toEqual({
+        state: "ready",
+        url: "https://fake.test/new",
+        term: "merge-request",
+      });
+    });
+
+    it("passes the request through and refuses a URL the host won't open", async () => {
       const buildNewPRUrl = vi.fn(() => "https://fake.test/new");
       resolveWith({ buildNewPRUrl });
       await ask();
 
-      const { buildUrl, forgeRemote, head, base } = deriveNewPRLinkMock.mock.calls[0][0];
-      expect({ forgeRemote, head, base }).toEqual({
+      const input = deriveNewPRLinkMock.mock.calls[0][0];
+      expect(input).toMatchObject({
         forgeRemote: "origin",
         head: "topic",
-        base: "develop",
+        baseRef: "origin/develop",
+        isMainWorktree: false,
       });
       const refs = { base: "develop", head: "topic" };
-      expect(buildUrl(refs)).toBe("https://fake.test/new");
+      expect(input.buildUrl(refs)).toBe("https://fake.test/new");
       expect(buildNewPRUrl).toHaveBeenCalledWith(repoRef, refs);
 
       buildNewPRUrl.mockReturnValue("file:///tmp/new");
-      expect(buildUrl(refs)).toBeNull();
+      expect(input.buildUrl(refs)).toBeNull();
+    });
+
+    it("gives the network read a deadline that stops git itself", async () => {
+      resolveWith({ buildNewPRUrl: () => "https://fake.test/new" });
+      await ask();
+      expect(createBackgroundFetchGitMock).not.toHaveBeenCalled();
+
+      await deriveNewPRLinkMock.mock.calls[0][0].openNetworkGit();
+
+      const [cwd, options] = createBackgroundFetchGitMock.mock.calls[0] as unknown as [
+        string,
+        { signal: AbortSignal },
+      ];
+      expect(cwd).toBe("/tmp/project");
+      expect(options.signal).toBeInstanceOf(AbortSignal);
     });
 
     it("answers rather than rejects for a repository no provider recognises", async () => {
@@ -412,7 +448,8 @@ describe("forge handlers — rate limiting", () => {
       { payload: null, error: "Invalid payload" },
       { payload: { ...request, cwd: "" }, error: "Invalid working directory" },
       { payload: { ...request, head: 7 }, error: "Invalid payload" },
-      { payload: { ...request, base: "" }, error: "Invalid payload" },
+      { payload: { ...request, baseRef: "" }, error: "Invalid payload" },
+      { payload: { ...request, isMainWorktree: "yes" }, error: "Invalid payload" },
     ])("rejects $payload before resolving a provider", async ({ payload, error }) => {
       await expect(ask(payload)).rejects.toThrow(error);
       expect(resolveForCwdMock).not.toHaveBeenCalled();
@@ -700,7 +737,7 @@ describe("forge handlers — rate limiting", () => {
       {
         channel: CHANNELS.FORGE_GET_NEW_PR_LINK,
         maxCalls: 20,
-        invoke: (h) => h({}, { cwd, head: "topic", base: "develop", baseRef: null }),
+        invoke: (h) => h({}, { cwd, head: "topic", baseRef: null, isMainWorktree: false }),
       },
       {
         channel: CHANNELS.FORGE_OPEN_ISSUE,

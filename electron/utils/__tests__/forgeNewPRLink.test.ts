@@ -66,8 +66,8 @@ function derive(repo: string, overrides: Partial<NewPRLinkInput> = {}) {
     openNetworkGit,
     forgeRemote: "origin",
     head: "topic",
-    base: "develop",
     baseRef: "origin/develop",
+    isMainWorktree: false,
     buildUrl,
     ...overrides,
   });
@@ -162,6 +162,17 @@ describe("deriveNewPRLink", () => {
       await expect(derive(repo).answer).resolves.toMatchObject({ state: "ready" });
     });
 
+    it("won't call a branch unpushed when a ref shows it went to another remote", async () => {
+      const repo = makeRepo();
+      git(repo, ["remote", "add", "fork", makeBare()]);
+      git(repo, ["push", "-q", "fork", "topic"]);
+
+      const { answer, openNetworkGit } = derive(repo);
+
+      await expect(answer).resolves.toEqual({ state: "unavailable" });
+      expect(openNetworkGit).not.toHaveBeenCalled();
+    });
+
     it("offers nothing for a branch that pushes to a different repository", async () => {
       const repo = makeRepo();
       git(repo, ["remote", "add", "fork", makeBare()]);
@@ -181,11 +192,25 @@ describe("deriveNewPRLink", () => {
       return repo;
     }
 
-    it("takes a base measured on a local ref", async () => {
-      const { answer, buildUrl } = derive(pushedRepo(), { baseRef: "develop" });
+    it("targets the base the worktree measured itself against", async () => {
+      const { answer, buildUrl } = derive(pushedRepo(), { baseRef: "origin/develop" });
 
       await expect(answer).resolves.toMatchObject({ state: "ready" });
       expect(buildUrl).toHaveBeenCalledWith({ base: "develop", head: "topic" });
+    });
+
+    it("uses the base's name on the remote, not a local name for it", async () => {
+      const { answer, buildUrl } = derive(pushedRepo(), { baseRef: "origin/release/1.0" });
+
+      await expect(answer).resolves.toMatchObject({ state: "ready" });
+      expect(buildUrl).toHaveBeenCalledWith({ base: "release/1.0", head: "topic" });
+    });
+
+    it("offers nothing when the base was only found locally", async () => {
+      const { answer, buildUrl } = derive(pushedRepo(), { baseRef: "develop" });
+
+      await expect(answer).resolves.toEqual({ state: "unavailable" });
+      expect(buildUrl).not.toHaveBeenCalled();
     });
 
     it("offers nothing when the base was measured on another repository", async () => {
@@ -198,18 +223,28 @@ describe("deriveNewPRLink", () => {
       expect(buildUrl).not.toHaveBeenCalled();
     });
 
-    it("targets the remote's own default branch when the worktree has no base", async () => {
+    it("targets the remote's own default branch from the main worktree", async () => {
       const repo = pushedRepo();
       git(repo, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
 
-      const { answer, buildUrl } = derive(repo, { base: null, baseRef: null });
+      const { answer, buildUrl } = derive(repo, { baseRef: null, isMainWorktree: true });
 
       await expect(answer).resolves.toMatchObject({ state: "ready" });
       expect(buildUrl).toHaveBeenCalledWith({ base: "main", head: "topic" });
     });
 
+    it("never falls back to the default on a linked worktree whose base failed", async () => {
+      const repo = pushedRepo();
+      git(repo, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+
+      const { answer, buildUrl } = derive(repo, { baseRef: null, isMainWorktree: false });
+
+      await expect(answer).resolves.toEqual({ state: "unavailable" });
+      expect(buildUrl).not.toHaveBeenCalled();
+    });
+
     it("never guesses a target when git has no record of the remote's default", async () => {
-      const { answer, buildUrl } = derive(pushedRepo(), { base: null, baseRef: null });
+      const { answer, buildUrl } = derive(pushedRepo(), { baseRef: null, isMainWorktree: true });
 
       await expect(answer).resolves.toEqual({ state: "unavailable" });
       expect(buildUrl).not.toHaveBeenCalled();
@@ -220,7 +255,11 @@ describe("deriveNewPRLink", () => {
       git(repo, ["checkout", "-q", "main"]);
       git(repo, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
 
-      const { answer, buildUrl } = derive(repo, { head: "main", base: null, baseRef: null });
+      const { answer, buildUrl } = derive(repo, {
+        head: "main",
+        baseRef: null,
+        isMainWorktree: true,
+      });
 
       await expect(answer).resolves.toEqual({ state: "unavailable" });
       expect(buildUrl).not.toHaveBeenCalled();
