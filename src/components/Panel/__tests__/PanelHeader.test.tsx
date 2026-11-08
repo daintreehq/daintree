@@ -847,7 +847,7 @@ describe("PanelHeader", () => {
     });
   });
 
-  describe("Restart session", () => {
+  describe("Restart terminal", () => {
     const agentPanel = (agentState: string) => ({
       id: "test-panel",
       kind: "terminal",
@@ -905,7 +905,7 @@ describe("PanelHeader", () => {
       const item = screen.getByTestId("panel-restart");
       fireEvent.click(item);
       const after = screen.getByTestId("panel-restart");
-      expect(after.textContent).toBe("Restart session");
+      expect(after.textContent).toBe("Restart terminal");
       expect(after.getAttribute("class") ?? "").not.toMatch(/status-warning/);
     });
   });
