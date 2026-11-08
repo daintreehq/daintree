@@ -184,6 +184,7 @@ describe("deriveNewPRLink", () => {
       git(repo, ["remote", "add", "fork", makeBare()]);
       git(repo, ["push", "-q", "fork", "topic"]);
       git(repo, ["config", "branch.topic.pushRemote", "origin"]);
+      git(repo, ["config", "push.default", "current"]);
 
       await expect(derive(repo).answer).resolves.toEqual({ state: "unpushed" });
     });
