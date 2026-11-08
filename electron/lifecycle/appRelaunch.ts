@@ -33,11 +33,7 @@ import { armRelaunch } from "./armRelaunch.js";
 
 /** Why the app is restarting itself. Diagnostic only — no behaviour keys off it. */
 export type AppRelaunchReason =
-  | "gpu-toggle"
-  | "gpu-mitigation"
-  | "state-reset"
-  | "bundle-replaced"
-  | "safe-mode-request";
+  "gpu-toggle" | "gpu-mitigation" | "state-reset" | "bundle-replaced" | "safe-mode-request";
 
 /**
  * Restart the app, keeping the session.

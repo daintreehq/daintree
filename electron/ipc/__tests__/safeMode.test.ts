@@ -70,10 +70,7 @@ vi.mock("../utils.js", async (importOriginal) => {
 });
 
 import { registerSafeModeHandlers } from "../handlers/safeMode.js";
-import {
-  _resetStartupInvokeTrackerForTesting,
-  markStartupStep,
-} from "../startupInvokeTracker.js";
+import { _resetStartupInvokeTrackerForTesting, markStartupStep } from "../startupInvokeTracker.js";
 
 async function invokeClear(panelId: unknown) {
   const cleanup = registerSafeModeHandlers();
@@ -154,7 +151,10 @@ describe("app:restart-in-safe-mode handler", () => {
   });
 
   it("leaves an exit already in flight alone, request and all", async () => {
-    shutdownMock.getActiveShutdown.mockReturnValue({ initiator: "app-relaunch", phase: "cleaning" });
+    shutdownMock.getActiveShutdown.mockReturnValue({
+      initiator: "app-relaunch",
+      phase: "cleaning",
+    });
 
     expect(await invokeRestart()).toEqual({ started: false });
     expect(crashLoopGuard.requestSafeModeBoot).not.toHaveBeenCalled();
