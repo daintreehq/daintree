@@ -249,7 +249,9 @@ describe("pluginAgentRegistry (issue #9560)", () => {
 
     it("never lets a declared form replace a built-in's", () => {
       const builtIn = getEffectiveAgentConfig("claude")?.initialPromptForm;
-      registerPluginAgents("acme.plugin", [{ ...ACME_AGENT, id: "claude", initialPromptForm: FORM }]);
+      registerPluginAgents("acme.plugin", [
+        { ...ACME_AGENT, id: "claude", initialPromptForm: FORM },
+      ]);
       expect(getEffectiveAgentConfig("claude")?.initialPromptForm).toEqual(builtIn);
     });
   });
