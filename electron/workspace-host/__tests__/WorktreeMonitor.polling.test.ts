@@ -2565,4 +2565,200 @@ describe("WorktreeMonitor", () => {
       monitor.stop();
     });
   });
+  describe("download gate (#16364)", () => {
+    const changes = (lastCommitMessage = "real") => ({
+      worktreeId: TEST_WORKTREE.id,
+      rootPath: TEST_WORKTREE.path,
+      changes: [],
+      changedFileCount: 0,
+      tracking: null,
+      lastCommitMessage,
+    });
+
+    function startedMonitor(callbacks = makeCallbacks()) {
+      mockGetWorktreeChangesWithStats.mockReset().mockResolvedValue(changes());
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, TEST_CONFIG, callbacks, "main");
+      return { monitor, callbacks };
+    }
+
+    it("runs no status git on any path while held, the user's refresh included", async () => {
+      const { monitor } = startedMonitor();
+      monitor.setStatusDownloadGate("held");
+      monitor.startWithoutGitStatus();
+
+      await monitor.updateGitStatus(true);
+      await monitor.updateGitStatus(true, { userInitiated: true });
+      await monitor.refresh();
+      await monitor.refresh({ automatic: true });
+      monitor.triggerRefreshIfUpdating();
+      // Polls, the first-status recovery and its retries.
+      await vi.advanceTimersByTimeAsync(120_000);
+
+      expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+      expect(monitor.getSnapshot().gitStatusWaitingForDownload).toBe(true);
+      monitor.stop();
+    });
+
+    it("runs none during the first walk either, and doesn't call that waiting", async () => {
+      const { monitor } = startedMonitor();
+      monitor.setStatusDownloadGate("pending");
+      monitor.startWithoutGitStatus();
+
+      await monitor.refresh({ automatic: true });
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+      expect(monitor.getSnapshot().gitStatusWaitingForDownload).toBeUndefined();
+      monitor.stop();
+    });
+
+    it("produces a real status by itself once the gate opens", async () => {
+      const { monitor, callbacks } = startedMonitor();
+      monitor.setStatusDownloadGate("held");
+      monitor.startWithoutGitStatus();
+      expect(monitor.getSnapshot().worktreeChanges).toBeNull();
+
+      monitor.setStatusDownloadGate("open");
+      // The card stops saying it's waiting straight away, ahead of the read.
+      expect(callbacks.onUpdate).toHaveBeenLastCalledWith(
+        expect.not.objectContaining({ gitStatusWaitingForDownload: true })
+      );
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledTimes(1);
+      expect(mockGetWorktreeChangesWithStats.mock.calls[0]?.[1]).toMatchObject({
+        forceRefresh: true,
+      });
+      expect(monitor.getSnapshot().worktreeChanges?.lastCommitMessage).toBe("real");
+      expect(monitor.getSnapshot().gitStatusWaitingForDownload).toBeUndefined();
+      monitor.stop();
+    });
+
+    it("produces the first status when the first walk finds nothing", async () => {
+      const { monitor } = startedMonitor();
+      monitor.setStatusDownloadGate("pending");
+      monitor.startWithoutGitStatus();
+
+      monitor.setStatusDownloadGate("open");
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(monitor.getSnapshot().worktreeChanges?.lastCommitMessage).toBe("real");
+      monitor.stop();
+    });
+
+    it("stops the pass already running when the gate closes", async () => {
+      let seenSignal: AbortSignal | undefined;
+      const { monitor, callbacks } = startedMonitor();
+      mockGetWorktreeChangesWithStats.mockReset().mockImplementation(
+        (_path: string, options: { abandonSignal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            seenSignal = options.abandonSignal;
+            options.abandonSignal?.addEventListener("abort", () => reject(new Error("killed")));
+          })
+      );
+      (monitor as unknown as { _isRunning: boolean })._isRunning = true;
+      const pass = monitor.updateGitStatus(true);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(seenSignal?.aborted).toBe(false);
+
+      monitor.setStatusDownloadGate("held");
+      await pass;
+
+      expect(seenSignal?.aborted).toBe(true);
+      expect((monitor as unknown as { _isUpdating: boolean })._isUpdating).toBe(false);
+      // Killed on purpose: not an error, and not "git didn't answer".
+      expect(callbacks.onError).not.toHaveBeenCalled();
+      expect(monitor.getSnapshot().gitStatusUnanswered).toBeUndefined();
+      expect(monitor.getSnapshot().mood).not.toBe("error");
+      monitor.stop();
+    });
+
+    it("keeps the last status on the card, marked stale, while held", async () => {
+      const { monitor } = startedMonitor();
+      (monitor as unknown as { _isRunning: boolean })._isRunning = true;
+      await monitor.updateGitStatus(true);
+      expect(monitor.getSnapshot().worktreeChanges?.lastCommitMessage).toBe("real");
+
+      monitor.setStatusDownloadGate("held");
+
+      expect(monitor.getSnapshot().worktreeChanges?.lastCommitMessage).toBe("real");
+      expect(monitor.getSnapshot().mood).toBe("stale");
+      expect(monitor.getSnapshot().gitStatusWaitingForDownload).toBe(true);
+      monitor.stop();
+    });
+
+    it("forgets a backoff built against placeholders, so the status isn't delayed", async () => {
+      const { monitor } = startedMonitor();
+      (monitor as unknown as { _isRunning: boolean })._isRunning = true;
+      mockGetWorktreeChangesWithStats.mockReset().mockReturnValueOnce(new Promise(() => {}));
+      vi.spyOn(
+        monitor as unknown as { scheduleNextPoll: () => void },
+        "scheduleNextPoll"
+      ).mockImplementation(() => {});
+      const expired = monitor.updateGitStatus(true).catch(() => {});
+      await vi.advanceTimersByTimeAsync(45_000);
+      await expired;
+      expect(monitor.getSnapshot().gitStatusUnanswered?.reason).toBe("timed-out");
+
+      monitor.setStatusDownloadGate("held");
+      expect(monitor.getSnapshot().gitStatusUnanswered).toBeUndefined();
+
+      mockGetWorktreeChangesWithStats.mockResolvedValue(changes());
+      monitor.setStatusDownloadGate("open");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(monitor.getSnapshot().worktreeChanges?.lastCommitMessage).toBe("real");
+      monitor.stop();
+    });
+
+    it("clears a tripped circuit breaker on release", async () => {
+      const { monitor } = startedMonitor();
+      const strategy = (
+        monitor as unknown as {
+          pollingStrategy: { isCircuitBreakerTripped(): boolean; reset(): void };
+        }
+      ).pollingStrategy;
+      monitor.setStatusDownloadGate("held");
+      monitor.startWithoutGitStatus();
+      vi.spyOn(strategy, "isCircuitBreakerTripped").mockReturnValueOnce(true);
+      const reset = vi.spyOn(strategy, "reset");
+
+      monitor.setStatusDownloadGate("open");
+
+      expect(reset).toHaveBeenCalledTimes(1);
+      monitor.stop();
+    });
+
+    it("leaves a paused monitor's status to resume's catch-up", async () => {
+      const { monitor } = startedMonitor();
+      monitor.setStatusDownloadGate("held");
+      monitor.startWithoutGitStatus();
+      monitor.pausePolling();
+
+      monitor.setStatusDownloadGate("open");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+
+      monitor.resumePolling();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(monitor.getSnapshot().worktreeChanges?.lastCommitMessage).toBe("real");
+      monitor.stop();
+    });
+
+    it("starts nothing for a monitor that has already stopped", async () => {
+      const { monitor } = startedMonitor();
+      monitor.setStatusDownloadGate("held");
+      monitor.setStatusDownloadGate("open");
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+    });
+
+    it("refuses a fresh read while held, so a delete preview fails closed", async () => {
+      const { monitor } = startedMonitor();
+      monitor.setStatusDownloadGate("held");
+
+      await expect(monitor.getFreshChanges()).rejects.toThrow("waiting for downloads");
+      expect(mockGetWorktreeChangesWithStats).not.toHaveBeenCalled();
+    });
+  });
 });

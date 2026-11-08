@@ -1638,6 +1638,25 @@ describe("createWorktreeStore — external classification updates", () => {
   });
 });
 
+describe("createWorktreeStore — waiting for a download", () => {
+  it("surfaces an update whose only change is the wait, and its end", () => {
+    const store = createWorktreeStore();
+    store.getState().applyUpdate(makeSnapshot("wt-1"), nextV());
+    const clearMap = store.getState().worktrees;
+
+    store
+      .getState()
+      .applyUpdate(makeSnapshot("wt-1", { gitStatusWaitingForDownload: true }), nextV());
+    expect(store.getState().worktrees).not.toBe(clearMap);
+    expect(store.getState().worktrees.get("wt-1")?.gitStatusWaitingForDownload).toBe(true);
+
+    const waitingMap = store.getState().worktrees;
+    store.getState().applyUpdate(makeSnapshot("wt-1"), nextV());
+    expect(store.getState().worktrees).not.toBe(waitingMap);
+    expect(store.getState().worktrees.get("wt-1")?.gitStatusWaitingForDownload).toBeUndefined();
+  });
+});
+
 // Pins the unanswered git status observation into `snapshotsEqual`: it changes
 // nothing else in the snapshot, so an unpinned field would never reach the card.
 describe("createWorktreeStore — unanswered git status", () => {

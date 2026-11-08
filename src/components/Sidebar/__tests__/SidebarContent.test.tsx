@@ -859,6 +859,19 @@ describe("SidebarContent disconnected project — issue #12576", () => {
     );
   });
 
+  it("says it's waiting, without Retry or the nudge, when .git hasn't downloaded", () => {
+    const start = source.indexOf("if (worktrees.length === 0 && gitWaitsForDownload) {");
+    const end = source.indexOf("if (worktrees.length === 0) {");
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const branch = source.slice(start, end);
+
+    expect(branch).toContain("title={WAITING_FOR_DOWNLOAD_LABEL}");
+    expect(branch).toContain("{errorBanner}");
+    expect(branch).not.toContain("{worktreeLoadErrorBanner}");
+    expect(branch).not.toContain("Open a Git repository");
+  });
+
   it("never offers the Open a Git repository nudge to a disconnected project", () => {
     // Retry used to clear the timeout banner over a sidebar with no port, and
     // the zero-worktree branch then told a user with an open project to open one.

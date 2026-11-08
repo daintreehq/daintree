@@ -8,20 +8,35 @@ import {
   useOnlineOnlyFilesStore,
 } from "@/store/onlineOnlyFilesStore";
 import { useProjectStore } from "@/store/projectStore";
-import { selectViewProject } from "@/store/viewWorkspace";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { getOnlineOnlyFilesInboxCopy } from "@/utils/onlineOnlyFilesCopy";
+import type { Project } from "@shared/types";
 import { gitStatusWaitsForDownload } from "@shared/utils/onlineOnlyFiles";
 
 /**
- * Holds this view's project under watch and keeps the store current. Keyed on
- * the view's own seeded project rather than `currentProject`, which is broadcast
- * to every view and would move a cached one off the project it shows. Main
- * decides whether any of this applies, so a project it doesn't apply to costs
- * one `watch` answering null.
+ * The view's own seeded workspace rather than `currentProject`, which is broadcast
+ * to every view and would move a cached one off the project it shows. It doesn't
+ * wait for the project list, or the path-based warning could get in first: Main
+ * answers `watch` from the sender, and null for anything that isn't a project.
+ */
+function selectWatchedWorkspaceId(state: {
+  projects: readonly Project[];
+  currentProject: Project | null;
+}): string | null {
+  const viewId = getViewWorkspaceId();
+  if (viewId === null) return state.currentProject?.id ?? null;
+  return state.projects.find((project) => project.id === viewId)?.status === "closed"
+    ? null
+    : viewId;
+}
+
+/**
+ * Holds this view's project under watch and keeps the store current. Main decides
+ * whether any of this applies, so a project it doesn't apply to costs one `watch`
+ * answering null.
  */
 export function useOnlineOnlyFilesSync(): void {
-  const projectId = useProjectStore((s) => selectViewProject(getViewWorkspaceId(), s)?.id ?? null);
+  const projectId = useProjectStore(selectWatchedWorkspaceId);
 
   useEffect(() => {
     const store = useOnlineOnlyFilesStore.getState();

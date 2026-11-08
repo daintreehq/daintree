@@ -771,11 +771,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // loading: a stalled reconnect during the first hydration leaves `isLoading`
   // up for good, and the skeleton would hide the only recovery.
   const showSkeleton = (isLoading || sidebarFailure !== null) && !isFailureSettled;
-  // A load that failed on `.git` placeholders retries itself once they're down,
-  // so Retry and "Couldn't load" would only send the user after the wrong thing.
   const gitWaitsForDownload = useOnlineOnlyFilesStore((s) => gitStatusWaitsForDownload(s.files));
   const worktreeLoadErrorBanner =
-    loadFailure !== null && error === null && isFailureSettled && !gitWaitsForDownload ? (
+    loadFailure !== null && error === null && isFailureSettled ? (
       <WorktreeLoadErrorBanner error={loadFailure} />
     ) : null;
 
@@ -914,6 +912,31 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     );
   }
 
+  // A load that failed on `.git` placeholders retries itself once they're down,
+  // so neither its Retry nor the nudge to open a repository is the next step.
+  if (worktrees.length === 0 && gitWaitsForDownload) {
+    return (
+      <>
+        <div className="flex flex-col h-full">
+          <div className={cn(SIDEBAR_HEADER_ROW, "border-b border-divider")}>
+            <SidebarViewHeading className="truncate text-text-primary font-semibold text-sm tracking-wide">
+              Worktrees
+            </SidebarViewHeading>
+          </div>
+          {errorBanner}
+          <EmptyState
+            variant="zero-data"
+            scale="sidebar"
+            icon={<CloudDownload />}
+            title={WAITING_FOR_DOWNLOAD_LABEL}
+            className="flex-1"
+          />
+        </div>
+        {restartConfirmDialog}
+      </>
+    );
+  }
+
   if (worktrees.length === 0) {
     return (
       <>
@@ -929,15 +952,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           {/* A failed load or a missing connection already has an open
               project — the "Open a Git repository" nudge would contradict the
               banner, so the banner stands alone as the actionable state. */}
-          {gitWaitsForDownload && (
-            <EmptyState
-              variant="zero-data"
-              scale="sidebar"
-              icon={<CloudDownload />}
-              title={WAITING_FOR_DOWNLOAD_LABEL}
-            />
-          )}
-          {!gitWaitsForDownload && loadFailure === null && !isProjectDisconnected && (
+          {loadFailure === null && !isProjectDisconnected && (
             <EmptyState
               variant="zero-data"
               scale="sidebar"

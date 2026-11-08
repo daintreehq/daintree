@@ -194,6 +194,16 @@ describe("WorkspaceService.applyFetchThrottle", () => {
     });
   });
 
+  it("passes a status download gate to every monitor", () => {
+    const a = vi.spyOn(registerMonitor("/wt/a"), "setStatusDownloadGate");
+    const b = vi.spyOn(registerMonitor("/wt/b"), "setStatusDownloadGate");
+
+    service.setStatusDownloadGate("held");
+
+    expect(a).toHaveBeenCalledWith("held");
+    expect(b).toHaveBeenCalledWith("held");
+  });
+
   it("does not compound when the same multiplier is applied twice", () => {
     const a = registerMonitor("/wt/a");
     const updateA = vi.spyOn(a, "updateConfig");
