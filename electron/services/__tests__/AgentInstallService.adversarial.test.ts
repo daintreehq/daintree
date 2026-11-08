@@ -234,14 +234,34 @@ describe("AgentInstallService adversarial", () => {
       ["linux", "linux"],
       ["win32", "windows"],
     ] as const;
-    const pipesIntoShell = (command: string) => /\|\s*(?:bash|iex)\b/.test(command);
+    // Identified by where it is fetched from, not by the syntax that keeps it
+    // copy-only: rewriting it into a form that runs here must fail these cases.
+    const isNative = (command: string) => /\bhttps:\/\/claude\.ai\/install\./.test(command);
     const methods = platforms.flatMap(([platform, os]) =>
       (claudeConfig.install?.byOs?.[os] ?? []).map(
         (block, methodIndex) => [platform, block.label ?? "", methodIndex, block] as const
       )
     );
+    const nativeMethods = methods.filter(([, , , block]) => block.commands?.some(isNative));
+    const methodRunning = (os: "macos" | "windows", program: string) => {
+      const blocks = claudeConfig.install?.byOs?.[os] ?? [];
+      const methodIndex = blocks.findIndex((block) =>
+        block.commands?.every((command) => command.trim().split(/\s+/)[0] === program)
+      );
+      expect(methodIndex, `${os} has a ${program} method`).toBeGreaterThanOrEqual(0);
+      return {
+        methodIndex,
+        argv: blocks[methodIndex]!.commands![0]!.trim().split(/\s+/).slice(1),
+      };
+    };
 
-    it.each(methods.filter(([, , , block]) => block.commands?.some(pipesIntoShell)))(
+    it("covers the native installer on every OS", () => {
+      expect(new Set(nativeMethods.map(([platform]) => platform))).toEqual(
+        new Set(["darwin", "linux", "win32"])
+      );
+    });
+
+    it.each(nativeMethods)(
       "%s %s is copy-only and never spawns",
       async (platform, _label, methodIndex, block) => {
         expect(isBlockExecutable(block)).toBe(false);
@@ -262,11 +282,7 @@ describe("AgentInstallService adversarial", () => {
     it("runs the Homebrew cask install without a shell", async () => {
       setPlatform("darwin");
       getAgentConfigMock.mockReturnValue(claudeConfig);
-      const methodIndex = claudeConfig.install!.byOs!.macos!.findIndex(
-        (block) => block.label === "Homebrew"
-      );
-      const [brew, ...args] =
-        claudeConfig.install!.byOs!.macos![methodIndex]!.commands![0]!.split(" ");
+      const { methodIndex, argv } = methodRunning("macos", "brew");
       const child = makeFakeChild();
       spawnMock.mockReturnValue(child);
 
@@ -276,8 +292,8 @@ describe("AgentInstallService adversarial", () => {
 
       expect((await pending).success).toBe(true);
       expect(spawnMock).toHaveBeenCalledTimes(1);
-      expect(spawnMock.mock.calls[0]?.[0]).toBe(brew);
-      expect(spawnMock.mock.calls[0]?.[1]).toEqual(args);
+      expect(spawnMock.mock.calls[0]?.[0]).toBe("brew");
+      expect(spawnMock.mock.calls[0]?.[1]).toEqual(argv);
       expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({ shell: false });
     });
 
@@ -285,11 +301,7 @@ describe("AgentInstallService adversarial", () => {
       setPlatform("win32");
       windowsInstallPath();
       getAgentConfigMock.mockReturnValue(claudeConfig);
-      const methodIndex = claudeConfig.install!.byOs!.windows!.findIndex(
-        (block) => block.label === "winget"
-      );
-      const [, ...args] =
-        claudeConfig.install!.byOs!.windows![methodIndex]!.commands![0]!.split(" ");
+      const { methodIndex, argv } = methodRunning("windows", "winget");
       const child = makeFakeChild();
       spawnMock.mockReturnValue(child);
 
@@ -299,7 +311,7 @@ describe("AgentInstallService adversarial", () => {
 
       expect((await pending).success).toBe(true);
       expect(spawnMock.mock.calls[0]?.[0]).toBe(`${WINDOWS_APPS}\\winget.exe`);
-      expect(spawnMock.mock.calls[0]?.[1]).toEqual(args);
+      expect(spawnMock.mock.calls[0]?.[1]).toEqual(argv);
       expect(spawnMock.mock.calls[0]?.[1]).toEqual(
         expect.arrayContaining(["--accept-source-agreements", "--accept-package-agreements"])
       );

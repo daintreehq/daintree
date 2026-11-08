@@ -60,32 +60,40 @@ export const config: AgentConfig = {
   update: {
     npm: "npm install -g @anthropic-ai/claude-code@latest",
   },
-  // The commands follow https://code.claude.com/docs/en/setup. Agent Setup
-  // defaults to a platform's first block, which is a one-click install, so each
-  // list opens with the first method that needs no Node: Homebrew and WinGet
-  // run without a shell, while the native installer's pipe into a shell keeps it
-  // copy-only. Linux has no such package manager, so npm stays its default.
-  // The native installer is a standalone binary in ~/.local/bin, no npm and no
-  // root, so it also works where a system Node (apt, NodeSource) keeps its
-  // global packages in a root-owned folder.
+  // The commands follow https://code.claude.com/docs/en/setup. npm stays each
+  // platform's first block, which is Agent Setup's one-click default, so an
+  // install that worked keeps working. The native installer comes next: a
+  // standalone binary in ~/.local/bin that needs no Node, no Homebrew and no
+  // root, which makes it what the npm permission callout offers when a system
+  // Node (apt, NodeSource, the nodejs.org installer) keeps its global packages
+  // in a root-owned folder. It pipes into a shell, so it stays copy-only. The
+  // platform's package manager, which runs without a shell, comes last.
   install: {
     docsUrl: "https://code.claude.com/docs/en/setup",
     byOs: {
       macos: [
         {
-          label: "Homebrew",
-          commands: ["brew install --cask claude-code"],
+          label: "npm",
+          commands: ["npm install -g @anthropic-ai/claude-code"],
         },
         {
           label: "curl",
           commands: ["curl -fsSL https://claude.ai/install.sh | bash"],
         },
         {
-          label: "npm",
-          commands: ["npm install -g @anthropic-ai/claude-code"],
+          label: "Homebrew",
+          commands: ["brew install --cask claude-code"],
         },
       ],
       windows: [
+        {
+          label: "npm",
+          commands: ["npm install -g @anthropic-ai/claude-code"],
+        },
+        {
+          label: "PowerShell",
+          commands: ["irm https://claude.ai/install.ps1 | iex"],
+        },
         {
           label: "winget",
           // The agreement flags are part of the canonical command, as for every
@@ -95,14 +103,6 @@ export const config: AgentConfig = {
           commands: [
             "winget install --id Anthropic.ClaudeCode -e --source winget --accept-source-agreements --accept-package-agreements",
           ],
-        },
-        {
-          label: "PowerShell",
-          commands: ["irm https://claude.ai/install.ps1 | iex"],
-        },
-        {
-          label: "npm",
-          commands: ["npm install -g @anthropic-ai/claude-code"],
         },
       ],
       linux: [

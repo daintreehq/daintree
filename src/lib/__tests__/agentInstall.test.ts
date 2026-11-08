@@ -645,27 +645,35 @@ describe("agentInstall", () => {
   // the gate lists every block, and Setup runs the first one on a click.
   describe("Claude install help (#16375)", () => {
     const oses = ["macos", "linux", "windows"] as const;
-    const load = async (os: (typeof oses)[number]) => {
+    type Os = (typeof oses)[number];
+    const load = async (os: Os) => {
       const { getAgentConfig } = await import("../../../shared/config/agentRegistry");
       return getAgentConfig("claude")!.install!.byOs![os]!;
     };
     const commandsOf = (blocks: readonly { commands?: string[] }[]) =>
       blocks.flatMap((block) => block.commands ?? []);
+    // What identifies the native installer, whatever shell syntax it is written in.
+    const isNative = (command: string) => /\bhttps:\/\/claude\.ai\/install\./.test(command);
+    const nativeBlocks = async (os: Os) =>
+      (await load(os)).filter((block) => (block.commands ?? []).some(isNative));
 
     it.each([
-      ["macos", /^curl -fsSL https:\/\/claude\.ai\/install\.sh \| bash$/],
-      ["linux", /^curl -fsSL https:\/\/claude\.ai\/install\.sh \| bash$/],
-      ["windows", /^irm https:\/\/claude\.ai\/install\.ps1 \| iex$/],
+      ["macos", /^curl\b.*\bhttps:\/\/claude\.ai\/install\.sh\s*\|\s*bash$/],
+      ["linux", /^curl\b.*\bhttps:\/\/claude\.ai\/install\.sh\s*\|\s*bash$/],
+      ["windows", /^irm\s+https:\/\/claude\.ai\/install\.ps1\s*\|\s*iex$/],
     ] as const)("%s offers Anthropic's native installer beside npm", async (os, installer) => {
       const { isNpmGlobalInstall } = await import("../agentInstall");
+      const { getAgentConfig } = await import("../../../shared/config/agentRegistry");
+      const npmPackage = getAgentConfig("claude")!.npmGlobalPackage!;
       const commands = commandsOf(await load(os));
-      expect(commands.some((command) => installer.test(command))).toBe(true);
-      expect(commands.some(isNpmGlobalInstall)).toBe(true);
+      expect(commands.filter(isNative)).toHaveLength(1);
+      expect(commands.filter(isNative)[0]).toMatch(installer);
+      expect(commands.some((c) => isNpmGlobalInstall(c) && c.includes(npmPackage))).toBe(true);
     });
 
     it("offers a package manager only on the OS that has it", async () => {
-      const uses = (os: (typeof oses)[number], tool: string) =>
-        load(os).then((blocks) => commandsOf(blocks).some((c) => c.startsWith(`${tool} `)));
+      const uses = async (os: Os, tool: string) =>
+        commandsOf(await load(os)).some((c) => c.startsWith(`${tool} `));
       expect(await uses("macos", "brew")).toBe(true);
       expect(await uses("windows", "winget")).toBe(true);
       expect(await uses("linux", "brew")).toBe(false);
@@ -677,7 +685,9 @@ describe("agentInstall", () => {
     it("installs the Homebrew cask, not a formula of the same name", async () => {
       const brew = commandsOf(await load("macos")).filter((c) => c.startsWith("brew "));
       expect(brew.length).toBeGreaterThan(0);
-      for (const command of brew) expect(command).toMatch(/^brew install --cask claude-code$/);
+      for (const command of brew) {
+        expect(command).toMatch(/^brew install\s+--cask\s+claude-code(?:@latest)?$/);
+      }
     });
 
     it("lets WinGet install unattended, under the id Anthropic documents", async () => {
@@ -690,24 +700,45 @@ describe("agentInstall", () => {
       }
     });
 
-    it("keeps every shell-syntax installer copy-only and every other method one-click", async () => {
+    it.each(oses)("%s keeps the native installer copy-only, whatever its syntax", async (os) => {
       const { isBlockExecutable } = await import("../agentInstall");
-      for (const os of oses) {
-        for (const block of await load(os)) {
-          const pipesIntoShell = (block.commands ?? []).some((c) => /\|\s*(?:bash|iex)\b/.test(c));
-          expect(isBlockExecutable(block), `${os} ${block.label}`).toBe(!pipesIntoShell);
-        }
-      }
+      const native = await nativeBlocks(os);
+      expect(native.length).toBeGreaterThan(0);
+      for (const block of native) expect(isBlockExecutable(block), block.label).toBe(false);
     });
 
-    it.each(oses)("%s opens on a one-click method that works without a shell", async (os) => {
+    it.each(oses)("%s keeps every other method one-click", async (os) => {
       const { isBlockExecutable } = await import("../agentInstall");
-      expect(isBlockExecutable((await load(os))[0]!)).toBe(true);
+      const native = await nativeBlocks(os);
+      const others = (await load(os)).filter((block) => !native.includes(block));
+      expect(others.length).toBeGreaterThan(0);
+      for (const block of others) expect(isBlockExecutable(block), block.label).toBe(true);
+    });
+
+    // Agent Setup runs the first block on a click, so a reorder changes what
+    // every Claude install starts with.
+    it.each(oses)("%s keeps npm as the one-click default", async (os) => {
+      const { isBlockExecutable, isNpmGlobalInstall } = await import("../agentInstall");
+      const first = (await load(os))[0]!;
+      expect(isBlockExecutable(first)).toBe(true);
+      expect((first.commands ?? []).every(isNpmGlobalInstall)).toBe(true);
     });
 
     it.each(oses)("%s has a fallback that avoids npm's global folder", async (os) => {
+      const { findNonNpmInstallBlock, isNpmGlobalInstall } = await import("../agentInstall");
+      const blocks = await load(os);
+      const fallback = findNonNpmInstallBlock(blocks);
+      expect(fallback).not.toBeNull();
+      expect(blocks).toContain(fallback);
+      expect(fallback!.commands?.length).toBeGreaterThan(0);
+      expect(fallback!.commands!.some(isNpmGlobalInstall)).toBe(false);
+    });
+
+    // npm's global folder refusing the install is the case that needs this: the
+    // fallback must not itself depend on Homebrew, which a Mac may not have.
+    it.each(["macos", "linux"] as const)("%s falls back to the native installer", async (os) => {
       const { findNonNpmInstallBlock } = await import("../agentInstall");
-      expect(findNonNpmInstallBlock(await load(os))).not.toBeNull();
+      expect(findNonNpmInstallBlock(await load(os))?.commands?.some(isNative)).toBe(true);
     });
   });
 });
