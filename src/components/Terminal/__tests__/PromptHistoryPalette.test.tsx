@@ -4,6 +4,8 @@ import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import type { PromptHistoryEntry } from "@/store/commandHistoryStore";
 import type { PromptHistoryItem } from "@/hooks/usePromptHistoryPalette";
 import { PREVIEW_MAX_CHARS, toPromptPreview } from "@/utils/promptHistoryPreview";
+import { setPluginCustomIcons } from "@/components/icons/pluginCustomIconStore";
+import { setPluginAgentRegistry } from "@shared/config/pluginAgentRegistry";
 
 // jsdom ships neither, and the palette body's scroll-shadow hook and the
 // dialog's motion query both reach for them on mount.
@@ -423,6 +425,36 @@ describe("PromptHistoryRow", () => {
   it("names no agent when none was recorded", () => {
     const { container } = renderRow(makeEntry({ agentId: null }));
     expect(optionText(container)).not.toMatch(/sent to/i);
+  });
+
+  it("gives a plugin agent's own mark the agent treatment (#16467)", () => {
+    const key = "plugin-icon:acme.agents:./icons/pi.svg";
+    setPluginCustomIcons([
+      {
+        key,
+        pluginId: "acme.agents",
+        pluginName: "Acme",
+        svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/></svg>',
+      },
+    ]);
+    setPluginAgentRegistry({
+      pi: {
+        id: "pi",
+        name: "Pi",
+        command: "pi",
+        color: "#3366ff",
+        iconId: key,
+        supportsContextInjection: false,
+      },
+    });
+    try {
+      const { container } = renderRow(makeEntry({ agentId: "pi" }));
+      const mark = container.querySelector(`[data-plugin-icon="${key}"]`);
+      expect(mark?.getAttribute("class")).toContain("brand-mark");
+    } finally {
+      setPluginCustomIcons([]);
+      setPluginAgentRegistry({});
+    }
   });
 
   it("shows words from every line of a prompt that opens with blank lines or a code fence", () => {

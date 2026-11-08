@@ -90,6 +90,7 @@ describe("collectPluginManifestAssets", () => {
     expect(assets.has("views[1].iconId")).toBe(false);
     expect(assets.has("processTools[0].iconId")).toBe(false);
     expect(assets.get("agents[0].iconId")?.path).toBe("icons/a.svg");
+    expect(assets.get("agents[0].iconId")?.required).toBe(true);
     expect(assets.has("agents[1].iconId")).toBe(false);
   });
 

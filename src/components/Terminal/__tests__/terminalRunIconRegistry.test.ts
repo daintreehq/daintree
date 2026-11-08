@@ -43,22 +43,22 @@ describe("resolveTerminalRunIcon", () => {
     }
   });
 
-  it("resolves an agent's own SVG by registry id, but not one it failed to load", () => {
+  it("leaves an agent's own SVG to TerminalIcon, whichever id names it", () => {
+    // Only an agent's chrome may wear the mark. Resolving the registry id here
+    // would hand it to a panel or process tool that happens to share that id.
     const key = "plugin-icon:acme.agents:./icons/pi.svg";
-    const agent = {
-      name: "Pi",
-      command: "pi",
-      color: "#3366ff",
-      supportsContextInjection: false,
-    };
     setPluginAgentRegistry({
-      pi: { ...agent, id: "pi", iconId: key },
-      broken: { ...agent, id: "broken", iconId: "./icons/missing.svg" },
+      puzzle: {
+        id: "puzzle",
+        name: "Pi",
+        command: "pi",
+        color: "#3366ff",
+        iconId: key,
+        supportsContextInjection: false,
+      },
     });
     try {
-      expect(resolveTerminalRunIcon("pi")).toBe(getAgentConfig("pi")?.icon);
-      expect(resolveTerminalRunIcon("broken")).toBeUndefined();
-      // The key alone names no agent: `TerminalIcon` decides how it is tinted.
+      expect(resolveTerminalRunIcon("puzzle")).toBeUndefined();
       expect(resolveTerminalRunIcon(key)).toBeUndefined();
     } finally {
       setPluginAgentRegistry({});

@@ -1960,7 +1960,7 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: AGENT_REGISTRY, symbol: "contributionToAgentConfig" },
         { file: "src/config/agentIcons.ts", symbol: "resolveAgentIcon" },
       ],
-      note: "A loaded `./…svg` reference is rewritten to the plugin's custom-icon key before the agent registers. The renderer draws that key or a bundled brand mark, and the neutral terminal glyph for anything else, never another agent's mark.",
+      note: "A loaded `./…svg` reference is rewritten to the plugin's custom-icon key before the agent registers. The renderer draws that key or a bundled brand mark, and a generic glyph for anything else, never another agent's mark.",
     },
     supportsContextInjection: {
       mode: "verbatim",

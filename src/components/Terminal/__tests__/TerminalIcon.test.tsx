@@ -377,6 +377,21 @@ describe("TerminalIcon", () => {
         expect(svg.getAttribute("class")).not.toContain("brand-mark");
       });
 
+      it("keeps a panel or process tool on its own glyph when an agent shares its id", () => {
+        setPluginAgentRegistry({ puzzle: { ...agent, id: "puzzle", iconId: KEY } });
+
+        expect(glyph("puzzle")).toBe(registryGlyph("puzzle"));
+
+        const { container } = render(
+          <TerminalIcon
+            kind="terminal"
+            chrome={deriveTerminalChrome({ detectedProcessId: "puzzle" })}
+          />
+        );
+        expect(container.querySelector("[data-plugin-icon]")).toBeNull();
+        expect(container.querySelector("svg")!.innerHTML).toBe(registryGlyph("puzzle"));
+      });
+
       it("keeps an agent on the terminal glyph when its SVG failed to load", () => {
         const { container } = render(
           <TerminalIcon kind="agent" chrome={deriveTerminalChrome({ launchAgentId: "broken" })} />
