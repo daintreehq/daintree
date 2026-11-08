@@ -156,7 +156,7 @@ export function useMemoryLeakDetection(enabled: boolean): void {
             },
             actions: [
               {
-                label: "Restart",
+                label: "Restart terminal",
                 actionId: "terminal.restart" as const,
                 actionArgs: { terminalId: id },
                 onClick: () => {

@@ -183,7 +183,7 @@ describe("ProjectAgentToolsSection", () => {
       const group = await screen.findByTestId("project-agent-tools-relaunch");
       expect(group.textContent).toContain("Fix the ledger");
       expect(group.textContent).toContain("Ledger");
-      const restarts = within(group).getAllByRole("button", { name: "Restart" });
+      const restarts = within(group).getAllByRole("button", { name: "Restart terminal" });
       expect(restarts).toHaveLength(1);
 
       fireEvent.click(restarts[0]!);

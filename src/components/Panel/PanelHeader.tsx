@@ -1813,7 +1813,7 @@ function PanelHeaderComponent({
                   {canRestart && onRestart && (
                     <DropdownMenuItem onSelect={handleRestartSelect} data-testid="panel-restart">
                       <RotateCw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                      Restart session
+                      Restart terminal
                     </DropdownMenuItem>
                   )}
 
