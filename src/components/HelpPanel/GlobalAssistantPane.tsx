@@ -309,10 +309,10 @@ export function GlobalAssistantPane({
         </p>
       ) : !shown || paneKey === null ? (
         // Running with no terminal to watch: its PTY is being brought back, or
-        // couldn't be. Restart stays in the menu above either way.
+        // couldn't be. Clear conversation stays in the menu above either way.
         <p role="status" className="px-6 py-8 text-center text-xs text-text-secondary">
-          The global assistant's terminal isn't available. Restart it from the menu if it doesn't
-          come back.
+          The global assistant's terminal isn't available. Clear the conversation from the menu if
+          it doesn't come back.
         </p>
       ) : canopyOpen ? (
         <p className="px-6 py-8 text-center text-xs text-text-secondary">
