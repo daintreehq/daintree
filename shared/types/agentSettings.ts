@@ -1412,17 +1412,26 @@ export function stripConversationSelectorArgs(
 }
 
 /**
- * Whether a stored command's arguments name `sessionId`, as a word of its own or
- * as `--option=<id>`: the forms a selector takes when nothing could recognise it
- * to strip (#16470). A captured id can be short, so it is never looked for inside
- * a longer word, and a prompt that mentions it is one word of prose.
+ * Whether a stored command's arguments name `sessionId`, in any form a selector
+ * can take when nothing could recognise it to strip (#16470). A captured id can
+ * be short, so it only counts with no id character beside it, and a prompt that
+ * mentions it is prose rather than a selector.
  */
 export function commandNamesSession(command: string, sessionId: string | undefined): boolean {
   if (!sessionId) return false;
   const [, ...args] = splitShellWords(command);
   return args.some((word) => {
     const bare = unquoteShellWord(word);
-    return bare === sessionId || bare.endsWith(`=${sessionId}`);
+    if (bare === sessionId || bare.endsWith(`=${sessionId}`)) return true;
+    return (
+      !/\s/.test(bare) &&
+      bare
+        .split(sessionId)
+        .some(
+          (before, i, parts) =>
+            i < parts.length - 1 && !/[\w-]$/.test(before) && !/^[\w-]/.test(parts[i + 1] ?? "")
+        )
+    );
   });
 }
 

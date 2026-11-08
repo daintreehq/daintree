@@ -2510,6 +2510,8 @@ describe("a plugin agent's assigned session id (#16470)", () => {
       ["a fused option", `pi --session=${SESSION}`],
       ["a quoted fused option", `pi '--session=${SESSION}'`],
       ["a bare positional", `pi ${SESSION}`],
+      ["a prefix with no equals sign", `pi 'session:${SESSION}'`],
+      ["a suffix after the id", `pi --session=${SESSION}.json`],
     ])("finds %s", (_label, command) => {
       expect(commandNamesSession(command, SESSION)).toBe(true);
     });
@@ -2524,8 +2526,8 @@ describe("a plugin agent's assigned session id (#16470)", () => {
     });
 
     it("finds nothing with no id", () => {
-      expect(commandNamesSession("pi --session", undefined)).toBe(false);
-      expect(commandNamesSession("pi --session", "")).toBe(false);
+      expect(commandNamesSession("pi --session=undefined", undefined)).toBe(false);
+      expect(commandNamesSession("pi ''", "")).toBe(false);
     });
   });
 
