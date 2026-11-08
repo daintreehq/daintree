@@ -601,6 +601,7 @@ describe("assistantsUseHost (#15878)", () => {
         hasCallInFlight: () => false,
         awaitsNotices: () => false,
         holdsThrowawayRuns: (hostId: string) => holding.has(hostId),
+        holdsLaunchedAgents: () => false,
       } as never)
     );
     let check: ((hostId: string) => boolean) | undefined;

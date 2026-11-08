@@ -389,6 +389,15 @@ function startClient(options: StartRemoteHostsOptions): void {
       // What an agent `host.watch` hears of hosts (#16188): only links already up.
       watchHostAgents: (listener) =>
         getRemoteService("hostMetrics")?.onAgentWaiting(listener) ?? (() => {}),
+      // Whether agents an assistant launched on a host still run there (#16492):
+      // read only over a link already up, so it never dials one.
+      listAgentTargets: async (hostId) => {
+        const metrics = getRemoteService("hostMetrics");
+        if (!metrics || client.manager.connectionState(hostId).status !== "connected") {
+          return { targets: [], complete: false };
+        }
+        return metrics.listFleetTargets({ hostId });
+      },
     })
   );
   // The sender each session proves to a host before a call is relayed there.
