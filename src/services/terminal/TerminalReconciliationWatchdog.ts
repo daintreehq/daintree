@@ -263,6 +263,24 @@ export class TerminalReconciliationWatchdog {
   }
 
   /**
+   * Whether `reconcileGeometryFresh` would refuse this alt-screen pane right
+   * now: its grid has to move and its output is still reaching xterm. Issuing
+   * a repair then spends the heavy budget and the cooldown on a guaranteed
+   * refusal, and skips the cheaper layers below. With no proposal to compare,
+   * the reconcile measures from cell metrics and may still refuse, so a pane
+   * with output in flight defers then too.
+   */
+  private altGridChangeDeferred(id: string, managed: ManagedTerminal): boolean {
+    if (!altFrameInFlight(managed, this.deps.getQueuedBytes(id))) return false;
+    const proposal = managed.fitAddon.proposeDimensions?.();
+    if (!proposal || proposal.cols <= 1 || proposal.rows <= 1) return true;
+    return (
+      normalizeTerminalGridDimension(proposal.cols) !== managed.terminal.cols ||
+      normalizeTerminalGridDimension(proposal.rows) !== managed.terminal.rows
+    );
+  }
+
+  /**
    * Diagnostic for the project-switch garble bug: an on-screen, settled
    * terminal whose xterm grid (`terminal.cols/rows`) disagrees with the
    * dimensions the container can actually hold (`fitAddon.proposeDimensions()`)
@@ -279,22 +297,6 @@ export class TerminalReconciliationWatchdog {
    * agreement clears it. A missing proposal or a thrown measurement proves
    * nothing about convergence and must leave the signature standing.
    */
-  /**
-   * Whether `reconcileGeometryFresh` would refuse this alt-screen pane right
-   * now: its grid has to move and its output is still reaching xterm. Issuing
-   * a repair then spends the heavy budget and the cooldown on a guaranteed
-   * refusal, and skips the cheaper layers below.
-   */
-  private altGridChangeDeferred(id: string, managed: ManagedTerminal): boolean {
-    if (!altFrameInFlight(managed, this.deps.getQueuedBytes(id))) return false;
-    const proposal = managed.fitAddon.proposeDimensions?.();
-    if (!proposal || proposal.cols <= 1 || proposal.rows <= 1) return false;
-    return (
-      normalizeTerminalGridDimension(proposal.cols) !== managed.terminal.cols ||
-      normalizeTerminalGridDimension(proposal.rows) !== managed.terminal.rows
-    );
-  }
-
   private diagnoseGeometryDivergence(id: string, managed: ManagedTerminal): void {
     this.diagnosePtyGeometryDivergence(id, managed);
     try {

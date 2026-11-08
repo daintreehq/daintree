@@ -1201,9 +1201,11 @@ export class TerminalResizeController {
    * cached dims can equal the now-stale xterm grid), which applyDeferredResize's
    * cache==current early-return would miss.
    *
-   * @param options `force: true` skips ONLY the streaming-quiescence gate below
-   * (#11638) — the explicit user Redraw path. Every other guard here still
-   * applies. Automatic callers must omit it.
+   * @param options `force: true` skips ONLY the write wait below (#11638) — the
+   * main buffer's quiet window, or an alt-screen pane's wait for in-flight
+   * output — for the explicit user Redraw path. Every other guard here still
+   * applies, an alt pane's open-block wait included. Automatic callers must
+   * omit it.
    *
    * @returns true once a fresh measurement landed (whether or not a resize was
    * needed); false when the box is not measurable yet (zero/occluded/transitional
