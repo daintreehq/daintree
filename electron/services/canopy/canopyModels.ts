@@ -631,8 +631,8 @@ export class CanopyModels {
       try {
         await this.trial(staging);
       } catch (error) {
-        if (signal.aborted) throw new Error("cancelled");
-        throw new Unrunnable(formatErrorMessage(error, "it doesn't run"));
+        if (signal.aborted) throw new Error("cancelled", { cause: error });
+        throw new Unrunnable(formatErrorMessage(error, "it doesn't run"), { cause: error });
       }
     }
     if (signal.aborted) throw new Error("cancelled");

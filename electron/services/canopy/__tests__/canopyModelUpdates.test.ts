@@ -669,8 +669,7 @@ describe("CanopyModels, updating the shipped model from Hugging Face", () => {
     const newer = repo(NEWER, SHIPPED_AT + DAY);
     const { fetchMock } = hub(newer);
     vi.stubGlobal("fetch", fetchMock);
-    let m!: CanopyModels;
-    m = models(() => {}, {
+    const m: CanopyModels = models(() => {}, {
       trial: async () => {
         m.cancel();
       },
