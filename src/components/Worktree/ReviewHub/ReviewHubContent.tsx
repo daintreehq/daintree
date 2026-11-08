@@ -43,6 +43,8 @@ import { useWorktreeIdForPath } from "@/panels/diff/useWorktreeIdForPath";
 import { type FileStageRowSection } from "./FileStageRow";
 import { FileSection } from "./FileSection";
 import { BaseBranchFileList } from "./BaseBranchFileList";
+import { ReviewThreadsHandoff } from "./ReviewThreadsHandoff";
+import { collectReviewThreadFiles } from "./prReviewThreads";
 import {
   useReviewHubStagingActions,
   type ReviewHubActionFailure,
@@ -838,6 +840,10 @@ export function ReviewHubContent({
     [sortedBaseBranchFiles]
   );
   const reviewDecorations = useFileDecorations(decorationScope, decorationPaths);
+  const reviewThreadFiles = useMemo(
+    () => collectReviewThreadFiles(decorationPaths, reviewDecorations),
+    [decorationPaths, reviewDecorations]
+  );
 
   const behindCount = useWorktreeStore((state) => {
     for (const wt of state.worktrees.values()) {
@@ -1870,8 +1876,18 @@ export function ReviewHubContent({
               ) : sortedBaseBranchFiles !== null ? (
                 <div>
                   <div className={REVIEW_HUB_STICKY_BAND}>
-                    <div className={cn(REVIEW_HUB_SECTION_BAND, "border-b border-divider")}>
-                      <span className={SECTION_LABEL_CLASS}>
+                    {/* One row, always: the heading truncates rather than
+                        pushing the review-threads hand-off onto a row of its
+                        own, which would outgrow the scroller's `scroll-pt-10`
+                        clearance. Only the hand-off's no-target hint wraps.
+                        The heading's zero basis is what holds the row: a
+                        wrapping flex row breaks lines on each item's size
+                        before anything shrinks, so `min-w-0` alone would still
+                        let a long heading push the button down. */}
+                    <div
+                      className={cn(REVIEW_HUB_SECTION_BAND, "flex-wrap border-b border-divider")}
+                    >
+                      <span className={cn(SECTION_LABEL_CLASS, "min-w-0 flex-1 truncate")}>
                         Changed vs{" "}
                         <span className="font-mono font-medium normal-case tracking-normal">
                           {mainBranch}
@@ -1888,6 +1904,15 @@ export function ReviewHubContent({
                           className="ml-2 font-normal normal-case tracking-normal"
                         />
                       </span>
+                      {worktreePR && reviewThreadFiles.length > 0 && (
+                        <ReviewThreadsHandoff
+                          key={`${worktreePath}#${worktreePR.prNumber}`}
+                          worktreePath={worktreePath}
+                          prNumber={worktreePR.prNumber}
+                          prUrl={worktreePR.prUrl}
+                          files={reviewThreadFiles}
+                        />
+                      )}
                     </div>
                   </div>
                   <BaseBranchFileList
