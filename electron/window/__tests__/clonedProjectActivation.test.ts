@@ -85,7 +85,8 @@ describe("loadClonedProjectInWindows (#16352)", () => {
     h.workspace = {
       loadProject: vi.fn().mockResolvedValue("cold"),
       unregisterWindow: vi.fn(),
-      isWindowAttached: vi.fn(() => false),
+      // A load that resolves leaves the window attached, as the pool does.
+      isWindowAttached: vi.fn(() => true),
       attachDirectPort: vi.fn(),
       getHostForProject: vi.fn(() => ({ id: "host" })),
     };
@@ -159,17 +160,27 @@ describe("loadClonedProjectInWindows (#16352)", () => {
       expect(h.workspace!.loadProject).not.toHaveBeenCalled();
     });
 
-    it("leaves the window to a switch that landed here and loaded it", async () => {
-      h.windows = [windowOf(1, pvm("p-other"))];
-      h.pending.set(1, ["p-clone"]);
-      h.workspace!.isWindowAttached.mockReturnValue(true);
-
+    it("tries again when a newer switch overtook its load", async () => {
+      h.windows = [windowOf(1, pvm("p-clone"))];
+      h.pending.set(1, ["p-next"]);
       await loadClonedProjectInWindows(project);
-      h.windows[0]!.services.projectViewManager = pvm("p-clone");
+      // The first load is superseded: another switch claims the window meanwhile.
+      h.workspace!.loadProject.mockImplementationOnce(async () => {
+        h.pending.set(1, ["p-other"]);
+        return "cold";
+      });
+
+      settleClaims(1);
+      await flush();
+      expect(h.workspace!.attachDirectPort).not.toHaveBeenCalled();
+
+      // That switch fails and rolls back: the window still shows the clone.
       settleClaims(1);
       await flush();
 
-      expect(h.workspace!.loadProject).not.toHaveBeenCalled();
+      expect(h.workspace!.loadProject).toHaveBeenCalledTimes(2);
+      expect(h.workspace!.attachDirectPort).toHaveBeenCalledExactlyOnceWith(1, VIEW);
+      expect(h.presenceListeners.size).toBe(0);
     });
   });
 });

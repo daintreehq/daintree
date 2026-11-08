@@ -8,6 +8,8 @@ import { getWindowRegistry } from "./windowRef.js";
 
 /** How long a window's in-flight switch may hold the reconciliation back. */
 const SETTLE_TIMEOUT_MS = 60_000;
+/** Reconciliations a window may need when switches keep overtaking its load. */
+const MAX_RECONCILE_ATTEMPTS = 3;
 
 function hasActivationInFlight(ctx: WindowContext): boolean {
   return getPendingActivationProjectIds(ctx.windowId).length > 0;
@@ -17,10 +19,17 @@ function hasActivationInFlight(ctx: WindowContext): boolean {
  * Load the project's workspace for a window still showing it once that
  * window's in-flight switch has settled, and hand the view its ports: its
  * reload into the ready project has usually happened by then, and it found no
- * workspace to take them from. A switch that went elsewhere, or one that
- * landed here and loaded the workspace itself, leaves nothing to do.
+ * workspace to take them from. A switch that went elsewhere leaves nothing to
+ * do. A load that a newer switch overtook is tried again once that switch
+ * settles: the window can end up attached to the workspace (a failed swap's
+ * rollback re-points it) without this view's port ever being registered.
  */
-function reconcileWhenSettled(ctx: WindowContext, project: Project, workspace: WorkspaceClient) {
+function reconcileWhenSettled(
+  ctx: WindowContext,
+  project: Project,
+  workspace: WorkspaceClient,
+  attempt = 1
+) {
   let done = false;
   const finish = () => {
     done = true;
@@ -32,11 +41,16 @@ function reconcileWhenSettled(ctx: WindowContext, project: Project, workspace: W
     finish();
     const pvm = ctx.services.projectViewManager;
     if (ctx.browserWindow.isDestroyed() || pvm?.getActiveProjectId() !== project.id) return;
-    if (workspace.isWindowAttached(ctx.windowId, project.path)) return;
     void workspace
       .loadProject(project.path, ctx.windowId)
       .then(() => {
         if (pvm.getActiveProjectId() !== project.id) return;
+        if (hasActivationInFlight(ctx) || !workspace.isWindowAttached(ctx.windowId, project.path)) {
+          if (attempt < MAX_RECONCILE_ATTEMPTS) {
+            reconcileWhenSettled(ctx, project, workspace, attempt + 1);
+          }
+          return;
+        }
         const webContents = pvm.getActiveView()?.webContents;
         if (!webContents || webContents.isDestroyed()) return;
         workspace.attachDirectPort(ctx.windowId, webContents);
