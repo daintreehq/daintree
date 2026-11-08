@@ -50,6 +50,14 @@ export interface FetchAndRestoreOptions {
    * replay already under way finishes; it is writing a snapshot that is good.
    */
   signal?: AbortSignal;
+  /**
+   * The host snapshot is the pane's truth and the pane may be streaming:
+   * settles pending writes as `settlePendingWrites` does, and takes an empty
+   * snapshot as a blank screen rather than as nothing to restore. Never
+   * starts while another restore owns the pane (its writer could still queue
+   * a chunk behind the barrier); the caller retries.
+   */
+  authoritative?: boolean;
 }
 
 // Bounds the barrier `settlePendingWrites` waits on. A parser that can't get
@@ -625,6 +633,7 @@ export class TerminalRestoreController {
       logWarn(`Cannot fetch-and-restore: terminal ${id} not found`);
       return false;
     }
+    if (options.authoritative && managed.isSerializedRestoreInProgress) return false;
 
     // Deliberately does NOT bump restoreGeneration: that would cancel any
     // in-flight replay, and a fetch that then came back null would have killed
@@ -664,7 +673,8 @@ export class TerminalRestoreController {
       fetching.catch(() => undefined);
 
       // Queued after the window opened, so nothing new can land behind it.
-      if (options.settlePendingWrites && !(await this.settlePendingWrites(managed))) {
+      const settle = options.settlePendingWrites || options.authoritative;
+      if (settle && !(await this.settlePendingWrites(managed))) {
         logWarn(`Abandoned fetch-and-restore for ${id}: accepted writes did not parse in time`);
         return abandon();
       }
@@ -688,9 +698,11 @@ export class TerminalRestoreController {
       if (options.signal?.aborted) return abandon();
 
       // restoreFetchedState will take over the isSerializedRestoreInProgress flag
+      const data = snapshot?.data ?? null;
       const result = await this.restoreFetchedState(
         id,
-        snapshot?.data ?? null,
+        // A blank screen as RIS through the ordinary restore, as applyReset does.
+        options.authoritative && data === "" ? "\x1bc" : data,
         snapshot ?? undefined,
         snapshot?.continuation
       );

@@ -5,6 +5,8 @@ import { usePanelStore } from "@/store/panelStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
+import type { TerminalStatusPayload } from "@shared/types";
+import { HIDDEN_VIEW_SKIP_REASON } from "@shared/types/pty-host";
 
 const dispatchMock = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
 vi.mock("@/services/ActionService", () => ({
@@ -44,6 +46,7 @@ const reliabilityMetricHandlers = vi.hoisted(
 const reduceScrollbackHandlers = vi.hoisted(
   () => [] as Array<(data: { targetLines: number }) => void>
 );
+const statusHandlers = vi.hoisted(() => [] as Array<(data: TerminalStatusPayload) => void>);
 vi.mock("@/controllers", () => {
   const noopSub = () => () => {};
   return {
@@ -61,7 +64,10 @@ vi.mock("@/controllers", () => {
         exitHandlers.push(handler);
         return () => {};
       }),
-      onStatus: vi.fn(noopSub),
+      onStatus: vi.fn((handler: (data: TerminalStatusPayload) => void) => {
+        statusHandlers.push(handler);
+        return () => {};
+      }),
       onReliabilityMetric: vi.fn(
         (
           handler: (payload: {
@@ -1604,6 +1610,57 @@ describe("memory-pressure scrollback reduce (#14215)", () => {
       expect(reduceHidden).toHaveBeenCalledWith(500);
     } finally {
       reduceHidden.mockRestore();
+    }
+  });
+});
+
+describe("onStatus — data-loss routing (#16497)", () => {
+  function getStatusHandler(): (data: TerminalStatusPayload) => void {
+    statusHandlers.length = 0;
+    setupLifecycleListeners();
+    const handler = statusHandlers.at(-1);
+    if (!handler) throw new Error("onStatus handler was not registered");
+    return handler;
+  }
+
+  it("repaints a pane skipped while no window showed its project, with no marker", () => {
+    const repaint = vi
+      .spyOn(terminalInstanceService, "noteHiddenOutputSkipped")
+      .mockImplementation(() => {});
+    const marker = vi
+      .spyOn(terminalInstanceService, "injectDataLossMarker")
+      .mockImplementation(() => {});
+    try {
+      getStatusHandler()({
+        id: "term-1",
+        status: "data-loss",
+        reason: HIDDEN_VIEW_SKIP_REASON,
+        timestamp: 1,
+      });
+
+      expect(repaint).toHaveBeenCalledWith("term-1");
+      expect(marker).not.toHaveBeenCalled();
+    } finally {
+      repaint.mockRestore();
+      marker.mockRestore();
+    }
+  });
+
+  it("still marks a real drop on the pane", () => {
+    const repaint = vi
+      .spyOn(terminalInstanceService, "noteHiddenOutputSkipped")
+      .mockImplementation(() => {});
+    const marker = vi
+      .spyOn(terminalInstanceService, "injectDataLossMarker")
+      .mockImplementation(() => {});
+    try {
+      getStatusHandler()({ id: "term-1", status: "data-loss", droppedBytes: 64, timestamp: 1 });
+
+      expect(marker).toHaveBeenCalledWith("term-1", 64);
+      expect(repaint).not.toHaveBeenCalled();
+    } finally {
+      repaint.mockRestore();
+      marker.mockRestore();
     }
   });
 });

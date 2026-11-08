@@ -133,6 +133,11 @@ function canAutoInitializeTerminalIngest(): boolean {
  * reason.
  */
 const SUPPRESSED_VIEW_WEBGL_RELEASE_DELAY_MS = 20_000;
+// A repaint after a hidden-view skip that fails (null snapshot, a timeout, a
+// competing restore taking the pane) is retried on a timer this many times;
+// past that it waits for the next reactivation or its own next skip notice.
+const HIDDEN_SKIP_REPAINT_TIMED_ATTEMPTS = 3;
+const HIDDEN_SKIP_REPAINT_RETRY_MS = 1000;
 
 // Cached (#12514) or in a hidden window (#12798): either way nobody can see
 // these terminals, so no foreground tier, burst or WebGL context is earned.
@@ -250,6 +255,16 @@ class TerminalInstanceService {
   /** Held, but the PTY's grid is still unknown; retried on the next lease event. */
   private watchUnseeded = new Set<string>();
   private watchEpoch = 0;
+  /**
+   * Panes owed a repaint because the host skipped their output while no
+   * window showed this project, with how many attempts have failed.
+   */
+  private hiddenSkipRepaints = new Map<string, number>();
+  private hiddenSkipRepaintRunning = false;
+  // A pass requested while one runs, run when it ends: the running pass may
+  // already be past the pane the request was for.
+  private hiddenSkipRepaintRerun: { includeExhausted: boolean } | null = null;
+  private hiddenSkipRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private exitHandlers = new Map<string, (exitCode: number) => void>();
   private offViewLifecycle: () => void;
   private offViewObservability: () => void;
@@ -602,6 +617,7 @@ class TerminalInstanceService {
     for (const managed of this.instances.values()) {
       resumeXtermRender(managed.terminal);
     }
+    this.repaintHiddenSkips(true);
   }
 
   /**
@@ -1474,6 +1490,89 @@ class TerminalInstanceService {
     const managed = this.instances.get(id);
     if (!managed) return;
     writeLocal(managed, `\x18\x1b]57301;${droppedBytes};backpressure\x07`);
+  }
+
+  /**
+   * The host stopped sending this pane live output while no window showed
+   * its project (#16497). Nothing is lost — the host mirror has it — so the
+   * pane repaints from the host snapshot once this view is back, instead of
+   * carrying a discontinuity marker. A view already back repaints now: the
+   * notice can trail the reactivation, and a skip after a repaint's snapshot
+   * request is reported again.
+   */
+  noteHiddenOutputSkipped(id: string): void {
+    if (!this.instances.has(id)) return;
+    this.hiddenSkipRepaints.set(id, 0);
+    if (!isProjectViewCached()) this.repaintHiddenSkips();
+  }
+
+  /**
+   * One repaint at a time: a reveal can find every busy pane of the project
+   * marked, and each restore writes a whole snapshot into its xterm. A pane
+   * whose repaint fails keeps its obligation.
+   */
+  private repaintHiddenSkips(includeExhausted = false): void {
+    if (this.hiddenSkipRepaintRunning) {
+      this.hiddenSkipRepaintRerun = {
+        includeExhausted: includeExhausted || !!this.hiddenSkipRepaintRerun?.includeExhausted,
+      };
+      return;
+    }
+    this.hiddenSkipRepaintRunning = true;
+    // Keyed by the instance the attempt ran against, so a failure never
+    // carries over to a pane recreated under the same id.
+    const failed = new Map<string, { managed: ManagedTerminal; failures: number }>();
+    void (async () => {
+      try {
+        // Map iteration also visits ids marked while an earlier one restores.
+        for (const [id, failures] of this.hiddenSkipRepaints) {
+          if (isProjectViewCached()) break;
+          // Only a reactivation retries a pane out of timed attempts; a timer or
+          // another pane's notice leaves it for that (or its own next notice).
+          if (!includeExhausted && failures >= HIDDEN_SKIP_REPAINT_TIMED_ATTEMPTS) continue;
+          this.hiddenSkipRepaints.delete(id);
+          // The latest attempt's outcome is the one that counts.
+          failed.delete(id);
+          const managed = this.instances.get(id);
+          if (!managed) continue;
+          // The worker mirror paints its own snapshots, which a host repaint
+          // would race; history release stays out of worker mode for the same
+          // reason.
+          if (this.workerIngestController.getIngest(id)?.shouldDivert()) continue;
+          let restored = false;
+          try {
+            restored = await this.restoreController.fetchAndRestore(id, { authoritative: true });
+          } catch (error) {
+            logWarn(`[TerminalInstanceService] ${id}: repaint after hidden-view skip threw`, {
+              error,
+            });
+          }
+          if (!restored) failed.set(id, { managed, failures: failures + 1 });
+        }
+      } finally {
+        this.hiddenSkipRepaintRunning = false;
+        let retry = false;
+        for (const [id, { managed, failures }] of failed) {
+          // A fresh notice meanwhile already re-marked it with a clean count.
+          if (this.hiddenSkipRepaints.has(id) || this.instances.get(id) !== managed) continue;
+          logWarn(`[TerminalInstanceService] ${id}: repaint after hidden-view skip failed`);
+          this.hiddenSkipRepaints.set(id, failures);
+          if (failures < HIDDEN_SKIP_REPAINT_TIMED_ATTEMPTS) retry = true;
+        }
+        const rerun = this.hiddenSkipRepaintRerun;
+        this.hiddenSkipRepaintRerun = null;
+        if (rerun && !isProjectViewCached()) this.repaintHiddenSkips(rerun.includeExhausted);
+        else if (retry) this.scheduleHiddenSkipRetry();
+      }
+    })();
+  }
+
+  private scheduleHiddenSkipRetry(): void {
+    if (this.hiddenSkipRetryTimer !== null) return;
+    this.hiddenSkipRetryTimer = setTimeout(() => {
+      this.hiddenSkipRetryTimer = null;
+      if (!isProjectViewCached()) this.repaintHiddenSkips();
+    }, HIDDEN_SKIP_REPAINT_RETRY_MS);
   }
 
   /**
@@ -3772,6 +3871,7 @@ class TerminalInstanceService {
 
     this.offscreenManager.removeOffscreenSlot(id);
     this.suppressedExitUntil.delete(id);
+    this.hiddenSkipRepaints.delete(id);
     this.cwdProviders.delete(id);
     this.cachedSelections.delete(id);
     this.rendererPolicy.clearTierState(id);
@@ -3784,6 +3884,10 @@ class TerminalInstanceService {
     this.projectSwitchRedrawQueue.clear();
     this.offViewLifecycle();
     this.offViewObservability();
+    if (this.hiddenSkipRetryTimer !== null) {
+      clearTimeout(this.hiddenSkipRetryTimer);
+      this.hiddenSkipRetryTimer = null;
+    }
     this.offBufferSampleRequest?.();
     this.offBufferSampleRequest = null;
     TerminalInstanceService.liveServices.delete(this);

@@ -689,6 +689,14 @@ function disconnectWindow(windowId: number, reason: string): void {
     }
   }
 
+  // Before the early return too: a window whose port failed first has no
+  // connection left when it closes, and a mapping that outlives it keeps its
+  // project counting as on screen (#16497).
+  if (reason === "explicit-disconnect") {
+    windowProjectMap.delete(windowId);
+    windowFocusedTerminalMap.delete(windowId);
+  }
+
   const conn = rendererConnections.get(windowId);
   if (!conn) return;
 
@@ -748,11 +756,7 @@ function disconnectWindow(windowId: number, reason: string): void {
   // Without it, a multi-view window whose MessagePort just failed falls back
   // to the single-consumer SAB path and another cached view can consume/drop
   // the active terminal's bytes. Explicit window teardown is the only case
-  // that should forget the project context.
-  if (reason === "explicit-disconnect") {
-    windowProjectMap.delete(windowId);
-    windowFocusedTerminalMap.delete(windowId);
-  }
+  // that forgets the project context, at the top of this function.
   // A disconnect never grows scope (no project gains a viewer), so this is
   // intentionally a no-op today — kept as the single chokepoint all 3
   // recompute call sites route through, for discoverability.

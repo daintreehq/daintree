@@ -45,7 +45,26 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
     createPortQueueManager,
     createTerminalWorkerPortQueueManager,
     sendEvent,
+    ipcQueueManager,
   } = ctx;
+
+  // A project coming back on screen after no window showed it. Its output now
+  // reaches the shown view on that view's port, and whatever its IPC ledger
+  // still holds was charged by copies to cached views that may never ack it
+  // (frozen, evicted, or repainted from a snapshot). Left in place, the next
+  // background stretch would start from a full queue (#16497). Acks still on
+  // their way clamp at zero.
+  const showProjectInWindow = (windowId: number, projectId: string | null): void => {
+    const shownBefore = projectId !== null && [...windowProjectMap.values()].includes(projectId);
+    windowProjectMap.set(windowId, projectId);
+    if (projectId === null || shownBefore) return;
+    for (const id of ptyManager.getTerminalsForProject(projectId)) {
+      // A held pause keeps its safety timer, which clears the ledger itself
+      // and reports the resume; clearing here would release it silently.
+      if (ipcQueueManager.isPaused(id)) continue;
+      ipcQueueManager.clearQueue(id);
+    }
+  };
 
   return {
     "connect-port": (msg, ports) => {
@@ -480,7 +499,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
     },
 
     "set-active-project": (msg) => {
-      windowProjectMap.set(msg.windowId, msg.projectId);
+      showProjectInWindow(msg.windowId, msg.projectId);
       recomputeActivityTiers(msg.projectId);
       const pool = ctx.ptyPool;
       if (!msg.projectPath && pool && ctx.initialPoolWarmDeferred) {
@@ -538,7 +557,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
     },
 
     "project-switch": (msg) => {
-      windowProjectMap.set(msg.windowId, msg.projectId);
+      showProjectInWindow(msg.windowId, msg.projectId);
       recomputeActivityTiers(msg.projectId);
       const pool = ctx.ptyPool;
       if (!msg.projectPath && pool && ctx.initialPoolWarmDeferred) {

@@ -889,6 +889,98 @@ describe("TerminalRestoreController", () => {
         expect(mockTerminal.reset).toHaveBeenCalledTimes(1);
       });
     });
+
+    it("lets writes xterm already accepted parse before an authoritative reset (#16497)", async () => {
+      vi.mocked(terminalClient.getSerializedState).mockResolvedValue(snapshot("state"));
+      // xterm still holds a live chunk from before the restore window opened,
+      // so the barrier write behind it doesn't call back until it parses.
+      let parseQueued!: () => void;
+      mockTerminal.write.mockImplementation((data: string, callback?: () => void) => {
+        if (data === "" && callback) {
+          parseQueued = callback;
+          return;
+        }
+        baseWriteImpl(data, callback);
+      });
+      instances.set("t1", makeManagedTerminal());
+
+      const promise = controller.fetchAndRestore("t1", { authoritative: true });
+      await flushMicrotasks();
+      expect(mockTerminal.reset).not.toHaveBeenCalled();
+
+      parseQueued();
+      await flushMicrotasks();
+      expect(mockTerminal.reset).toHaveBeenCalledTimes(1);
+      expect(await promise).toBe(true);
+    });
+
+    it("gives up an authoritative restore when accepted writes don't settle, without waiting on the fetch (#16497)", async () => {
+      // The snapshot request never answers: the give-up must not wait for it.
+      vi.mocked(terminalClient.getSerializedState).mockImplementation(() => new Promise(() => {}));
+      mockTerminal.write.mockImplementation((data: string, callback?: () => void) => {
+        if (data === "") return;
+        baseWriteImpl(data, callback);
+      });
+      const managed = makeManagedTerminal();
+      instances.set("t1", managed);
+
+      const promise = controller.fetchAndRestore("t1", { authoritative: true });
+      await flushMicrotasks();
+      managed.deferredOutput.push({ data: "held-output", chunkCount: 2 });
+      await vi.advanceTimersByTimeAsync(5000);
+
+      expect(await promise).toBe(false);
+      expect(mockTerminal.reset).not.toHaveBeenCalled();
+      expect(managed.isSerializedRestoreInProgress).toBe(false);
+      expect(writeDataSpy).toHaveBeenCalledWith("t1", "held-output", 2);
+      expect(managed.deferredOutput).toHaveLength(0);
+    });
+
+    it("gives up an authoritative restore when the barrier write throws (#16497)", async () => {
+      vi.mocked(terminalClient.getSerializedState).mockResolvedValue(snapshot("state"));
+      mockTerminal.write.mockImplementation((data: string, callback?: () => void) => {
+        if (data === "") throw new Error("disposed");
+        baseWriteImpl(data, callback);
+      });
+      instances.set("t1", makeManagedTerminal());
+
+      expect(await controller.fetchAndRestore("t1", { authoritative: true })).toBe(false);
+      expect(mockTerminal.reset).not.toHaveBeenCalled();
+    });
+
+    it("leaves a pane another restore owns to that restore (#16497)", async () => {
+      vi.mocked(terminalClient.getSerializedState).mockClear();
+      const managed = makeManagedTerminal({
+        isSerializedRestoreInProgress: true,
+        restoreWindowToken: 7,
+        restoreGeneration: 3,
+      });
+      managed.deferredOutput.push({ data: "held-output", chunkCount: 1 });
+      instances.set("t1", managed);
+
+      expect(await controller.fetchAndRestore("t1", { authoritative: true })).toBe(false);
+      expect(terminalClient.getSerializedState).not.toHaveBeenCalled();
+      expect(mockTerminal.reset).not.toHaveBeenCalled();
+      expect(managed.isSerializedRestoreInProgress).toBe(true);
+      expect(managed.restoreWindowToken).toBe(7);
+      expect(managed.restoreGeneration).toBe(3);
+      expect(managed.deferredOutput).toHaveLength(1);
+    });
+
+    it("paints an empty snapshot as a blank screen only when authoritative (#16497)", async () => {
+      vi.mocked(terminalClient.getSerializedState).mockResolvedValue(snapshot(""));
+      instances.set("t1", makeManagedTerminal());
+
+      expect(await controller.fetchAndRestore("t1")).toBe(false);
+      expect(mockTerminal.reset).not.toHaveBeenCalled();
+
+      const promise = controller.fetchAndRestore("t1", { authoritative: true });
+      await flushMicrotasks();
+      expect(await promise).toBe(true);
+      expect(mockTerminal.reset).toHaveBeenCalledTimes(1);
+      const payloads = mockTerminal.write.mock.calls.map((c: unknown[]) => String(c[0]));
+      expect(payloads).toContain(PARSER_GROUND + "\x1bc");
+    });
   });
 
   describe("recoverMissingOutput (#12754)", () => {
