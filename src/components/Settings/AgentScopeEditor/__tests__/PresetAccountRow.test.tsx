@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import type { CodexQuotaProfile } from "@shared/types/ipc/agentQuota";
 
 const readQuota = vi.hoisted(() => vi.fn<() => Promise<CodexQuotaProfile[]>>());
@@ -101,15 +101,17 @@ describe("PresetAccountRow (#16133)", () => {
         },
       },
     ]);
-    renderRow({ id: "work", name: "Work" }, [COMPANY, PERSONAL]);
+    renderRow({ id: "work", name: "Work", accountId: "company" }, [COMPANY, PERSONAL]);
     expect(readQuota).not.toHaveBeenCalled();
 
     const select = screen.getByRole("combobox", { name: "Account" });
     fireEvent.keyDown(select, { key: "ArrowDown" });
-    expect(await screen.findByText("Weekly limit 82% used")).toBeTruthy();
+    const company = await screen.findByRole("option", { name: /Company/ });
+    expect(within(company).getByText("Weekly limit 82% used")).toBeTruthy();
     expect(readQuota).toHaveBeenCalled();
-    // Names stay the options' names, and an account with no reading says nothing more.
-    expect(screen.getByRole("option", { name: /Company/ })).toBeTruthy();
+    // An account with no reading says nothing more, and the pinned one's trigger keeps only its name.
+    expect(screen.getByRole("option", { name: "Personal" }).textContent).toBe("Personal");
     expect(screen.getAllByText(/% used/)).toHaveLength(1);
+    expect(select.textContent).toBe("Company");
   });
 });

@@ -336,6 +336,13 @@ export function AgentButton({
     })
   );
 
+  // Quota is read only while the picker is open and the agent has accounts to
+  // choose between (#16407).
+  const hasSavedAccounts =
+    !!getAgentConfigFolderAccount(type) &&
+    (agentSettings?.agents?.[type]?.accounts?.length ?? 0) > 0;
+  const accountHeadroom = useAgentAccountHeadroom(type, dropdownOpen && hasSavedAccounts);
+
   const config = getAgentConfig(type);
   if (!config) return null;
   // The agent's own mark, as the launcher's agent rows draw it.
@@ -379,10 +386,8 @@ export function AgentButton({
     : resolveEffectiveAccountId(entry, null);
   const savedAccount =
     savedAccountId === null ? undefined : accounts.find((account) => account.id === savedAccountId);
-  // Quota is read only while the picker is open (#16407). A launch on the
-  // default login still runs the preset it settles on, whose own folder, if it
-  // names one, is the login's.
-  const accountHeadroom = useAgentAccountHeadroom(type, dropdownOpen && hasAccounts);
+  // A launch on the default login still runs the preset it settles on, whose
+  // own folder, if it names one, is the login's (#16407).
   const defaultLoginHeadroom = accountHeadroom({
     kind: "default",
     presetNamesFolder: presetNamesAccountFolder(

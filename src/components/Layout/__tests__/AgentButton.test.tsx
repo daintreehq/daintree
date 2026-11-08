@@ -541,12 +541,14 @@ describe("AgentButton preset UX", () => {
       });
 
       it("shows each account's tightest window beneath its name, and nothing for one with none", () => {
-        const { getByText, queryByText } = renderCodex();
+        const { getAllByRole } = renderCodex();
         act(() => dropdownOnOpenChange!(true));
-        expect(getByText("Weekly limit 82% used")).toBeTruthy();
-        expect(getByText("5-hour limit 10% used")).toBeTruthy();
-        expect(getByText("Personal")).toBeTruthy();
-        expect(queryByText(/Personal.*% used/)).toBeNull();
+        const rows = getAllByRole("menuitemradio").map((row) => row.textContent);
+        expect(rows).toEqual([
+          "Default login5-hour limit 10% used",
+          "CompanyWeekly limit 82% used",
+          "Personal",
+        ]);
       });
 
       it("takes the default login's window from the preset a launch settles on", () => {

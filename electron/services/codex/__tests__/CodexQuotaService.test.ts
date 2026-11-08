@@ -515,6 +515,18 @@ describe("readCodexQuotaProfiles (#13686)", () => {
       expect(JSON.stringify(profiles)).not.toMatch(/ws-1|example\.com/);
     });
 
+    it("keeps the ids of the accounts in every home that folds into one login (#16407)", async () => {
+      agentSettings.value = {
+        agents: {
+          codex: { accounts: [{ id: "company", name: "Company", configDir: second }] },
+        },
+      };
+      respondAs(() => ({ accountId: "ws-1", email: "me@example.com" }));
+      const profiles = await readCodexQuotaProfiles();
+      expect(profiles).toHaveLength(1);
+      expect(profiles[0]).toMatchObject({ isDefault: true, accountIds: ["company"] });
+    });
+
     it("keeps two users of one Team workspace apart", async () => {
       presets({ id: "a", name: "Colleague", env: { CODEX_HOME: second } });
       respondAs((home) => ({

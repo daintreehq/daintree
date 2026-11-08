@@ -111,6 +111,25 @@ describe("useAgentAccountHeadroom (#16407)", () => {
     expect(readCodex).toHaveBeenCalledTimes(2);
   });
 
+  it("marks what an earlier opening read as stale when the surface reopens before the new read lands", async () => {
+    const fresh = { ...codexProfile };
+    fresh.result = { ...codexProfile.result, fetchedAt: Date.now() } as typeof codexProfile.result;
+    readCodex.mockResolvedValueOnce([fresh]).mockReturnValue(new Promise(() => {}));
+    const { result, rerender } = renderHook(
+      ({ open }: { open: boolean }) => useAgentAccountHeadroom("codex", open),
+      { initialProps: { open: true } }
+    );
+    await act(async () => {});
+    expect(result.current(work)?.stale).toBe(false);
+
+    rerender({ open: false });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(MINUTE * 10);
+    });
+    rerender({ open: true });
+    expect(result.current(work)?.stale).toBe(true);
+  });
+
   it("ages a reading while the surface stays open", async () => {
     const { result } = renderHook(() => useAgentAccountHeadroom("claude", true));
     await act(async () => {});

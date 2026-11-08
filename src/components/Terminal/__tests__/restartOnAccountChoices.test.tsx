@@ -11,6 +11,7 @@ vi.mock("@/clients/claudeClient", () => ({ claudeClient: { readUsage: vi.fn(asyn
 
 import { useRestartAccountChoices } from "../RestartOnAccount";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import type { AgentAccount, AgentSettings } from "@shared/types";
 
 const ACCOUNTS: AgentAccount[] = [
@@ -45,6 +46,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   useAgentSettingsStore.setState({ settings: null });
+  useProjectPresetsStore.setState({ presetsByAgent: {}, hydratedProjectId: null });
 });
 
 describe("useRestartAccountChoices (#16040)", () => {
@@ -110,6 +112,44 @@ describe("useRestartAccountChoices quota headroom (#16407)", () => {
       [null, "Weekly limit 10% used"],
       ["lab", "Weekly limit 35% used"],
     ]);
+  });
+
+  it("hands back the same choices on a rerender while closed", () => {
+    withAccounts("codex", ACCOUNTS);
+    const { result, rerender } = renderHook(() => useRestartAccountChoices("codex", "company"));
+    const first = result.current;
+    rerender();
+    expect(result.current).toBe(first);
+  });
+
+  it("reads nothing for an open menu that has no account to move to", async () => {
+    withAccounts("codex", []);
+    renderHook(() => useRestartAccountChoices("codex", undefined, true));
+    await act(async () => {});
+    expect(readQuota).not.toHaveBeenCalled();
+  });
+
+  it("follows a project preset that comes to name its own folder, as the pane's preset", async () => {
+    withAccounts("codex", ACCOUNTS);
+    useProjectPresetsStore.setState({
+      presetsByAgent: { codex: [{ id: "shared", name: "Shared" }] },
+    });
+    readQuota.mockResolvedValue(profiles);
+    const { result } = renderHook(() =>
+      useRestartAccountChoices("codex", "company", true, "shared")
+    );
+    await act(async () => {});
+    expect(result.current[0]?.headroom?.text).toBe("Weekly limit 10% used");
+
+    act(() => {
+      useProjectPresetsStore.setState({
+        presetsByAgent: {
+          codex: [{ id: "shared", name: "Shared", env: { CODEX_HOME: "/Users/me/.codex-shared" } }],
+        },
+      });
+    });
+    expect(result.current[0]?.headroom).toBeUndefined();
+    expect(result.current[1]?.headroom?.text).toBe("Weekly limit 35% used");
   });
 
   it("adds nothing to an account with no reading", async () => {

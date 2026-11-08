@@ -129,11 +129,15 @@ describe("accountHeadroom for Codex (#16407)", () => {
 
   it("takes the default login from the default profile, unless its preset names a folder", () => {
     const sources = codexOnly(
-      codexProfile({ isDefault: true, key: "d" }),
+      codexProfile({
+        isDefault: true,
+        key: "d",
+        windows: [{ usedPercent: 15, windowDurationMins: 300, resetsAt: null }],
+      }),
       codexProfile({ key: "other", accountIds: ["work"] })
     );
-    expect(accountHeadroom("codex", { kind: "default" }, sources, NOW)?.text).toMatch(
-      /^5-hour limit 40% used/
+    expect(accountHeadroom("codex", { kind: "default" }, sources, NOW)?.text).toBe(
+      "5-hour limit 15% used"
     );
     expect(
       accountHeadroom("codex", { kind: "default", presetNamesFolder: true }, sources, NOW)
@@ -184,6 +188,97 @@ describe("accountHeadroom for Codex (#16407)", () => {
     );
     expect(stale?.stale).toBe(true);
     expect(stale?.text).toMatch(/^Stale · 5-hour limit 95% used · reset /);
+  });
+
+  it("picks the tightest window whichever order the windows arrive in", () => {
+    const windows: CodexQuotaWindow[] = [
+      { usedPercent: 82, windowDurationMins: 10080, resetsAt: null },
+      { usedPercent: 30, windowDurationMins: 300, resetsAt: null },
+    ];
+    for (const ordered of [windows, [...windows].reverse()]) {
+      const profile = codexProfile({ accountIds: ["work"], windows: ordered });
+      expect(
+        accountHeadroom("codex", { kind: "account", accountId: "work" }, codexOnly(profile), NOW)
+          ?.text
+      ).toBe("Weekly limit 82% used");
+    }
+  });
+
+  it("breaks a tie on use by the shorter window, whichever order they arrive in", () => {
+    const windows: CodexQuotaWindow[] = [
+      { usedPercent: 50, windowDurationMins: 10080, resetsAt: null },
+      { usedPercent: 50, windowDurationMins: 300, resetsAt: null },
+    ];
+    for (const ordered of [windows, [...windows].reverse()]) {
+      const profile = codexProfile({ accountIds: ["work"], windows: ordered });
+      expect(
+        accountHeadroom("codex", { kind: "account", accountId: "work" }, codexOnly(profile), NOW)
+          ?.text
+      ).toBe("5-hour limit 50% used");
+    }
+  });
+
+  it("treats a reset at exactly now as passed, and a fetch exactly at the threshold as current", () => {
+    const profile = (patch: Parameters<typeof codexProfile>[0]) =>
+      accountHeadroom(
+        "codex",
+        { kind: "account", accountId: "work" },
+        codexOnly(codexProfile({ accountIds: ["work"], ...patch })),
+        NOW
+      );
+    expect(
+      profile({ windows: [{ usedPercent: 50, windowDurationMins: 300, resetsAt: NOW }] })?.stale
+    ).toBe(true);
+    expect(profile({ fetchedAt: NOW - CODEX_QUOTA_STALE_AFTER_MS })?.stale).toBe(false);
+  });
+
+  it("shows nothing for a profile without windows, or when two profiles claim one account", () => {
+    expect(
+      accountHeadroom(
+        "codex",
+        { kind: "account", accountId: "work" },
+        codexOnly(codexProfile({ accountIds: ["work"], windows: [] })),
+        NOW
+      )
+    ).toBeUndefined();
+    expect(
+      accountHeadroom(
+        "codex",
+        { kind: "account", accountId: "work" },
+        codexOnly(
+          codexProfile({ key: "a", accountIds: ["work"] }),
+          codexProfile({ key: "b", accountIds: ["work"] })
+        ),
+        NOW
+      )
+    ).toBeUndefined();
+  });
+
+  it("names the reset in the viewer's clock, with the weekday beyond today and the date beyond a week", () => {
+    const text = (resetsAt: number) =>
+      accountHeadroom(
+        "codex",
+        { kind: "account", accountId: "work" },
+        codexOnly(
+          codexProfile({
+            accountIds: ["work"],
+            windows: [{ usedPercent: 50, windowDurationMins: 300, resetsAt }],
+          })
+        ),
+        NOW
+      )?.text;
+    const clock = (at: number) =>
+      new Date(at).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    const sameDay = NOW + 12 * 60_000;
+    expect(text(sameDay)).toBe(`5-hour limit 50% used · resets ${clock(sameDay)}`);
+
+    const tomorrow = AT(30);
+    const weekday = new Date(tomorrow).toLocaleDateString(undefined, { weekday: "short" });
+    expect(text(tomorrow)).toBe(`5-hour limit 50% used · resets ${weekday} ${clock(tomorrow)}`);
+
+    const later = AT(24 * 10);
+    const date = new Date(later).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    expect(text(later)).toBe(`5-hour limit 50% used · resets ${date} ${clock(later)}`);
   });
 
   it("breaks a tie on use by the shorter window and leaves out a reset it wasn't told", () => {
@@ -239,6 +334,60 @@ describe("accountHeadroom for Claude Code (#16407)", () => {
     expect(accountHeadroom("claude", target, claudeOnly(reached), NOW)?.text).toBe(
       "Limit reached · observed 3h ago"
     );
+  });
+
+  it("breaks ties on a figure by a floor over an exact one, then the newer message, then the window order", () => {
+    const pick = (readings: ClaudeUsageReading[]) =>
+      accountHeadroom(
+        "claude",
+        target,
+        claudeOnly(claudeAccount({ accountIds: ["work"], readings })),
+        NOW
+      )?.text;
+    // A higher exact figure beats a lower floor.
+    expect(
+      pick([
+        reading({ window: "Opus limit", statement: "over", usedPercent: 90 }),
+        reading({ window: "Sonnet limit", statement: "used", usedPercent: 95 }),
+      ])
+    ).toMatch(/^Sonnet limit 95% used/);
+    // On an equal figure the floor wins even though the other window sorts first.
+    expect(
+      pick([
+        reading({ window: "Opus limit", statement: "used", usedPercent: 90 }),
+        reading({ window: "Sonnet limit", statement: "over", usedPercent: 90 }),
+      ])
+    ).toMatch(/^Sonnet limit over 90% used/);
+    // Equal in force, the newer message stands even though the other window sorts first.
+    expect(
+      pick([
+        reading({ window: "Opus limit", usedPercent: 50, observedAt: NOW - 5 * HOUR }),
+        reading({ window: "Sonnet limit", usedPercent: 50, observedAt: NOW - HOUR }),
+      ])
+    ).toMatch(/^Sonnet limit 50% used.* observed 1h ago$/);
+    // Equal in everything else, the window order decides, whichever arrives first.
+    const same = [
+      reading({ window: "Sonnet limit", usedPercent: 50 }),
+      reading({ window: "Opus limit", usedPercent: 50 }),
+    ];
+    expect(pick(same)).toMatch(/^Opus limit 50% used/);
+    expect(pick([...same].reverse())).toMatch(/^Opus limit 50% used/);
+  });
+
+  it("treats a reset at exactly now as passed, and shows nothing for a login with no readings", () => {
+    const edge = claudeAccount({
+      accountIds: ["work"],
+      readings: [reading({ resetsAt: NOW })],
+    });
+    expect(accountHeadroom("claude", target, claudeOnly(edge), NOW)?.stale).toBe(true);
+    expect(
+      accountHeadroom(
+        "claude",
+        target,
+        claudeOnly(claudeAccount({ accountIds: ["work"], readings: [] })),
+        NOW
+      )
+    ).toBeUndefined();
   });
 
   it("picks the strongest reading: a hit limit, then the highest figure, a floor over an exact one", () => {

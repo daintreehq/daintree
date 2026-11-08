@@ -219,6 +219,7 @@ let mockMergedPresets: Array<{
   displayTitle?: string;
   color?: string;
   accountId?: string;
+  env?: Record<string, string>;
 }> = [];
 vi.mock("@/config/agents", () => ({
   getMergedPresets: () => mockMergedPresets,
