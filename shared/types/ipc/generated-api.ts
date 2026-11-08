@@ -321,6 +321,17 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["codex:resolve-resume-latest-session"]["args"]
     ): Promise<IpcInvokeMap["codex:resolve-resume-latest-session"]["result"]>;
   };
+  composerHold: {
+    hold(
+      ...args: IpcInvokeMap["composer-hold:hold"]["args"]
+    ): Promise<IpcInvokeMap["composer-hold:hold"]["result"]>;
+    list(
+      ...args: IpcInvokeMap["composer-hold:list"]["args"]
+    ): Promise<IpcInvokeMap["composer-hold:list"]["result"]>;
+    withdraw(
+      ...args: IpcInvokeMap["composer-hold:withdraw"]["args"]
+    ): Promise<IpcInvokeMap["composer-hold:withdraw"]["result"]>;
+  };
   configBundle: {
     applyImport(
       ...args: IpcInvokeMap["config-bundle:apply-import"]["args"]

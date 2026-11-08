@@ -127,6 +127,9 @@ import {
 import { decideChromeAction } from "./multiSelectGestures";
 import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry";
 import { submitPaneComposerText } from "./submitComposerText";
+import { HeldComposerSendRow } from "./HeldComposerSend";
+import { hasHeldComposerSend, useHeldComposerSendStore } from "@/store/heldComposerSendStore";
+import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import {
   captureFocusEpoch,
   holdPaneFocus,
@@ -972,6 +975,23 @@ function TerminalPaneComponent({
         onAccepted: () => {
           reportCanopySent(id);
           handleInput(buildTerminalSendPayload(text).trackerData);
+          useHeldComposerSendStore.getState().clearDropped(id);
+        },
+        // Mid-turn, a CLI not declared to queue input keeps it for its next
+        // prompt rather than risk losing it (#16379); main has the last word.
+        hold: {
+          isHolding: () => hasHeldComposerSend(id),
+          mayHold: () => {
+            const panel = usePanelStore.getState().panelsById[id];
+            if (!panel || !isPtyPanel(panel) || panel.agentState !== "working") return false;
+            const agentId = panel.detectedAgentId;
+            return (
+              agentId !== undefined &&
+              getEffectiveAgentConfig(agentId)?.capabilities?.queuesInputWhileWorking !== true
+            );
+          },
+          onHeld: (send) => useHeldComposerSendStore.getState().noteHeld(send),
+          onRefused: () => useHeldComposerSendStore.getState().noteRefused(id),
         },
       },
       submissionToken
@@ -2041,6 +2061,12 @@ function TerminalPaneComponent({
                 )}
               </div>
 
+              {/* Outlives the composer: an agent that exited still says what became of the send. */}
+              <HeldComposerSendRow
+                terminalId={id}
+                agentId={effectiveAgentId}
+                canEdit={showHybridInputBar && !isHybridInputDisabled}
+              />
               {showHybridInputBar && (
                 <Suspense fallback={null}>
                   <LazyHybridInputBar

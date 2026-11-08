@@ -45,6 +45,7 @@ import type {
   TerminalSubmissionRecord,
 } from "../../../../shared/types/terminalSubmission.js";
 import type { TerminalSubmitGuard } from "../../../../shared/types/pty-host.js";
+import { COMPOSER_PROMPT_OWNER } from "../../../../shared/utils/terminalInputProvenance.js";
 
 const PROJECT = "project-1";
 const OTHER_PROJECT = "project-2";
@@ -57,6 +58,7 @@ interface Submitted {
   token?: string;
   handback?: string;
   guard?: TerminalSubmitGuard;
+  imagePaths?: readonly string[];
   promptAsWritten?: string | null;
   promptOwner?: string;
 }
@@ -87,7 +89,7 @@ class FakePtyClient implements TerminalNotifyPtyClient {
     token?: string,
     handback?: string,
     guard?: TerminalSubmitGuard,
-    _imagePaths?: readonly string[],
+    imagePaths?: readonly string[],
     promptAsWritten?: string | null,
     _handbackInstruction?: "run",
     promptOwner?: string
@@ -98,6 +100,7 @@ class FakePtyClient implements TerminalNotifyPtyClient {
       token,
       ...(handback !== undefined ? { handback } : {}),
       guard,
+      ...(imagePaths !== undefined ? { imagePaths: [...imagePaths] } : {}),
       promptAsWritten,
       ...(promptOwner !== undefined ? { promptOwner } : {}),
     });
@@ -3382,5 +3385,116 @@ describe("held prompts on a worker's line (#16187)", () => {
 
     await vi.advanceTimersByTimeAsync(LANE_WAKE_LONGEST_PENDING_MS - LANE_WAKE_MAX_PENDING_MS * 3);
     expect(greedy.outcomes.at(-1)?.outcome).toEqual({ kind: "unavailable", reason: "expired" });
+  });
+});
+
+describe("held composer sends (#16379)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-03T10:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const flushWake = () => vi.advanceTimersByTimeAsync(NOTIFY_COALESCE_MS + 600);
+
+  function composerWake(id: string, text: string, imagePaths: string[] = []) {
+    const outcomes: Array<{ outcome: LaneWakeOutcome; evidence?: LaneWakeEvidence }> = [];
+    let check: LaneWakeCheck = { kind: "ready" };
+    const wake: LaneWake = {
+      id,
+      kind: "composer",
+      composer: { text, imagePaths },
+      recheck: () => check,
+      beforeType: () => true,
+      report: (outcome, evidence) => outcomes.push({ outcome, evidence }),
+    };
+    return {
+      wake,
+      outcomes,
+      setCheck: (next: LaneWakeCheck) => {
+        check = next;
+      },
+    };
+  }
+
+  const atGeminiPrompt = (h: ReturnType<typeof setup>) =>
+    h.client.terminals.set(OWN, {
+      ...atPrompt(Date.now() - 60_000),
+      detectedAgentId: "gemini",
+      agentIncarnation: 2,
+    });
+
+  it("types it alone, past the exact guard, as the person's prompt with its images", async () => {
+    const h = setup();
+    atGeminiPrompt(h);
+    const notice = fakeWake("retired-1");
+    const held = composerWake("held-1", "look at /tmp/a.png", ["/tmp/a.png"]);
+    h.service.enqueueWake(PANE, PROJECT, notice.wake);
+    h.service.enqueueWake(PANE, PROJECT, held.wake);
+
+    await flushWake();
+    expect(h.client.submitted).toEqual([
+      {
+        id: OWN,
+        text: "look at /tmp/a.png",
+        token: expect.any(String),
+        guard: { kind: "settled-prompt-exact", agentIncarnation: 2 },
+        imagePaths: ["/tmp/a.png"],
+        promptAsWritten: "look at /tmp/a.png",
+        promptOwner: COMPOSER_PROMPT_OWNER,
+      },
+    ]);
+    expect(held.outcomes.map(({ outcome }) => outcome.kind)).toEqual(["delivered"]);
+    // The notice waits for the pane's next turn rather than riding the person's words.
+    expect(notice.outcomes).toEqual([]);
+    expect(notice.reserved).toEqual([]);
+  });
+
+  it("goes before an Assistant's held prompt waiting for the same prompt", async () => {
+    const h = setup();
+    atGeminiPrompt(h);
+    const steer: LaneWake = {
+      id: "steer-1",
+      kind: "steer",
+      steer: { text: "steer", promptAsWritten: "steer", principal: "principal-assistant" },
+      recheck: () => ({ kind: "ready" }),
+      beforeType: () => true,
+      report: () => {},
+    };
+    const held = composerWake("held-1", "mine");
+    h.service.enqueueWake(PANE, PROJECT, steer);
+    h.service.enqueueWake(PANE, PROJECT, held.wake);
+
+    await flushWake();
+    expect(h.client.submitted.map((line) => line.text)).toEqual(["mine"]);
+  });
+
+  it("leaves it out of the pane's notice chip", () => {
+    const h = setup();
+    h.client.terminals.set(OWN, { ...working(), detectedAgentId: "gemini" });
+    const held = composerWake("held-1", "mine");
+    held.setCheck({ kind: "held", reason: "working" });
+    h.service.enqueueWake(PANE, PROJECT, held.wake);
+    const notice = fakeWake("retired-1");
+    notice.setCheck({ kind: "held", reason: "working" });
+    h.service.enqueueWake(PANE, PROJECT, notice.wake);
+
+    expect(h.service.getPaneState(OWN)?.readyCount).toBe(1);
+  });
+
+  it("keeps a queuing CLI's notices out of the turn while it waits", async () => {
+    const h = setup();
+    h.client.terminals.set(OWN, { ...working(), lastStateChange: Date.now() - 60_000 });
+    const notice = fakeWake("retired-1");
+    const held = composerWake("held-1", "mine");
+    held.setCheck({ kind: "held", reason: "working" });
+    h.service.enqueueWake(PANE, PROJECT, held.wake);
+    h.service.enqueueWake(PANE, PROJECT, notice.wake);
+
+    await vi.advanceTimersByTimeAsync(NOTIFY_RECHECK_MIN_MS + 1_000);
+    expect(h.client.submitted).toEqual([]);
   });
 });

@@ -1752,6 +1752,8 @@ export interface IpcEventMap {
 
   // An agent terminal's When done choice changed (#16171); main sends it to every view of that project.
   "terminal-when-done:changed": import("./terminalWhenDone.js").TerminalWhenDoneChange;
+  // A pane's held composer send changed (#16379); this machine's views of its project.
+  "composer-hold:changed": import("./composerHold.js").ComposerHoldChange;
   // Main asks every local view of a project to move or remove an armed terminal's pane (#16171).
   "terminal-when-done:finish-request": import("./terminalWhenDone.js").TerminalWhenDoneFinishRequest;
   /**

@@ -38,6 +38,7 @@ import { store } from "../../../store.js";
 import { decisionsHostServes, loadDecisionsModule } from "../../../window/serviceRefs.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import { armSpawnConfirmation, settleSpawnConfirmation } from "./spawnConfirmation.js";
+import { peekComposerSendHold } from "../../../services/composerHold/composerSendHoldLive.js";
 import type {
   AgentSessionBookmarkMetadata,
   AgentSessionRecord,
@@ -1663,12 +1664,21 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
     }
   };
 
+  // Said before the kill, which ends the pane's line without saying why (#16379).
+  const dropHeldComposerSend = (id: string, options?: TerminalKillOptions): void => {
+    peekComposerSendHold()?.endForTerminal(
+      id,
+      options?.forRestart === true ? "restarted" : "closed"
+    );
+  };
+
   const handleTerminalKill = async (id: string, options?: TerminalKillOptions): Promise<void> => {
     try {
       if (typeof id !== "string") {
         throw new Error("Invalid terminal ID: must be a string");
       }
       if (options?.forRestart === true) ptyClient.suppressExitForRestart(id);
+      dropHeldComposerSend(id, options);
       // Before any await: a restart's respawn arms a fresh window for this id,
       // and it must not be the one this kill clears.
       settleSpawnConfirmation(id);
@@ -1706,6 +1716,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       throw new Error("Invalid terminal ID: must be a string");
     }
     if (options?.forRestart === true) ptyClient.suppressExitForRestart(id);
+    dropHeldComposerSend(id, options);
     const info = await ptyClient.getTerminalAsync(id).catch(() => null);
     const generation = getLifecycleLedger().currentGeneration(id);
     const sessionId = await ptyClient.gracefulKill(id);
@@ -1723,6 +1734,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       if (typeof id !== "string") {
         throw new Error("Invalid terminal ID: must be a string");
       }
+      peekComposerSendHold()?.endForTerminal(id, "closed");
       ptyClient.trash(id);
     } catch (error) {
       const errorMessage = formatErrorMessage(error, "Failed to trash terminal");

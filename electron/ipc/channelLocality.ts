@@ -210,6 +210,12 @@ export const CHANNEL_LOCALITY = {
   "codex:refresh-quota": "host",
   "codex:read-subagent-transcript": "host",
   "codex:resolve-resume-latest-session": "host",
+  // Held by this machine's main for its own terminals (#16379), pushed to its
+  // own views: a project on a Remote Host sends as before.
+  "composer-hold:changed": "shell",
+  "composer-hold:hold": "shell",
+  "composer-hold:list": "shell",
+  "composer-hold:withdraw": "shell",
   "config-bundle:apply-import": "hybrid",
   "config-bundle:export": "hybrid",
   "config-bundle:imported": "hybrid",

@@ -9,11 +9,29 @@ vi.mock("@/clients", () => ({ terminalClient: client }));
 const logWarn = vi.hoisted(() => vi.fn());
 vi.mock("@/utils/logger", () => ({ logWarn }));
 
+const holdClient = vi.hoisted(() => ({
+  hold: vi.fn<
+    (
+      id: string,
+      text: string,
+      imagePaths?: string[]
+    ) => Promise<import("@shared/types/ipc/composerHold").ComposerHoldResult>
+  >(),
+}));
+vi.mock("@/clients/composerHoldClient", () => ({ composerHoldClient: holdClient }));
+
+const inputBlock = vi.hoisted(() => ({ blocked: null as null | { kind: string } }));
+vi.mock("@/services/terminal/inputGate", () => ({
+  getTerminalInputBlock: () => inputBlock.blocked,
+}));
+
 import { submitComposerText, submitPaneComposerText } from "../submitComposerText";
 
 beforeEach(() => {
   client.submit.mockReset();
   client.submitWithImages.mockReset();
+  holdClient.hold.mockReset();
+  inputBlock.blocked = null;
   logWarn.mockReset();
 });
 
@@ -135,5 +153,136 @@ describe("submitPaneComposerText", () => {
     const passed = client.submitWithImages.mock.calls[0]![2];
     expect(passed).toEqual(["/a.png"]);
     expect(passed).not.toBe(imagePaths);
+  });
+});
+
+describe("submitPaneComposerText holding for a busy agent (#16379)", () => {
+  const SEND = {
+    terminalId: "t1",
+    token: "token-1",
+    text: "ship it",
+    imagePaths: [],
+    heldAt: 1,
+    expiresAt: 2,
+    status: "held" as const,
+  };
+
+  const pane = (hold: {
+    isHolding?: boolean;
+    mayHold?: boolean;
+    canTakeInput?: () => boolean;
+  }) => ({
+    canTakeInput: vi.fn(hold.canTakeInput ?? (() => true)),
+    onSending: vi.fn(),
+    onAccepted: vi.fn(),
+    hold: {
+      isHolding: vi.fn(() => hold.isHolding ?? false),
+      mayHold: vi.fn(() => hold.mayHold ?? true),
+      onHeld: vi.fn(),
+      onRefused: vi.fn(),
+    },
+  });
+
+  it("holds the send instead of typing it, and counts it as taken", async () => {
+    holdClient.hold.mockResolvedValue({ held: true, send: SEND });
+    const hooks = pane({});
+
+    await expect(submitPaneComposerText("t1", "ship it", [], hooks)).resolves.toBe(true);
+    expect(holdClient.hold).toHaveBeenCalledWith("t1", "ship it", undefined);
+    expect(hooks.hold.onHeld).toHaveBeenCalledWith(SEND);
+    expect(client.submit).not.toHaveBeenCalled();
+    // Nothing reached the terminal, so nothing counts as input to it yet.
+    expect(hooks.onSending).not.toHaveBeenCalled();
+    expect(hooks.onAccepted).not.toHaveBeenCalled();
+  });
+
+  it("refuses a second send while one is held, without asking main or typing", async () => {
+    const hooks = pane({ isHolding: true });
+
+    await expect(submitPaneComposerText("t1", "again", [], hooks)).resolves.toBe(false);
+    expect(hooks.hold.onRefused).toHaveBeenCalledTimes(1);
+    expect(holdClient.hold).not.toHaveBeenCalled();
+    expect(client.submit).not.toHaveBeenCalled();
+  });
+
+  it("refuses when main already holds one this view hadn't heard of", async () => {
+    holdClient.hold.mockResolvedValue({ held: false, reason: "already-held" });
+    const hooks = pane({});
+
+    await expect(submitPaneComposerText("t1", "again", [], hooks)).resolves.toBe(false);
+    expect(hooks.hold.onRefused).toHaveBeenCalledTimes(1);
+    expect(client.submit).not.toHaveBeenCalled();
+  });
+
+  it("neither holds nor types a send main couldn't hold", async () => {
+    holdClient.hold.mockResolvedValue({ held: false, reason: "unavailable" });
+    const hooks = pane({});
+
+    await expect(submitPaneComposerText("t1", "ship it", [], hooks)).resolves.toBe(false);
+    expect(client.submit).not.toHaveBeenCalled();
+    expect(hooks.hold.onHeld).not.toHaveBeenCalled();
+  });
+
+  it("neither holds nor types a send when main can't be asked", async () => {
+    holdClient.hold.mockRejectedValue(new Error("no handler"));
+    const hooks = pane({});
+
+    await expect(submitPaneComposerText("t1", "ship it", [], hooks)).resolves.toBe(false);
+    expect(client.submit).not.toHaveBeenCalled();
+  });
+
+  it("sends at once when main finds the agent no longer busy", async () => {
+    holdClient.hold.mockResolvedValue({ held: false, reason: "not-busy" });
+    client.submit.mockResolvedValue(undefined);
+    const hooks = pane({});
+
+    await expect(submitPaneComposerText("t1", "ship it", [], hooks)).resolves.toBe(true);
+    expect(client.submit).toHaveBeenCalledWith("t1", "ship it");
+    expect(hooks.onAccepted).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps today's immediate send when the agent isn't one to hold for", async () => {
+    client.submit.mockResolvedValue(undefined);
+    const hooks = pane({ mayHold: false });
+
+    await expect(submitPaneComposerText("t1", "ship it", [], hooks)).resolves.toBe(true);
+    expect(holdClient.hold).not.toHaveBeenCalled();
+    expect(client.submit).toHaveBeenCalledWith("t1", "ship it");
+  });
+
+  it("leaves blocked input to be refused the way it always was", async () => {
+    inputBlock.blocked = { kind: "memory" };
+    client.submit.mockRejectedValue(new Error("blocked"));
+    const hooks = pane({});
+
+    await expect(submitPaneComposerText("t1", "ship it", [], hooks)).resolves.toBe(false);
+    expect(holdClient.hold).not.toHaveBeenCalled();
+  });
+
+  it("holds only the images that can be attachments", async () => {
+    holdClient.hold.mockResolvedValue({ held: true, send: SEND });
+
+    await submitPaneComposerText(
+      "t1",
+      "look /a.png relative.png",
+      ["/a.png", "relative.png"],
+      pane({})
+    );
+    expect(holdClient.hold).toHaveBeenCalledWith("t1", "look /a.png relative.png", ["/a.png"]);
+  });
+
+  it("reads again whether the pane takes input once main has answered", async () => {
+    holdClient.hold.mockResolvedValue({ held: false, reason: "not-busy" });
+    let open = true;
+    const hooks = pane({
+      canTakeInput: () => {
+        const was = open;
+        open = false;
+        return was;
+      },
+    });
+
+    await expect(submitPaneComposerText("t1", "ship it", [], hooks)).resolves.toBe(false);
+    expect(client.submit).not.toHaveBeenCalled();
   });
 });
