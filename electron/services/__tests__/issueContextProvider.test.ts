@@ -323,6 +323,7 @@ describe("issue search (#16382)", () => {
     controller.abort(new Error("timed out"));
     await expect(pending).rejects.toThrow("timed out");
     expect(vi.getTimerCount()).toBe(0);
+    expect(pendingIssueSearchesForTests()).toBe(0);
     expect(d.resolveSource).not.toHaveBeenCalled();
 
     const aborted = new AbortController();
