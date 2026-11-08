@@ -25,6 +25,7 @@ import {
   getProjectLayoutSeed,
 } from "../../../services/plugin/projectLayoutSeeds.js";
 import { relaunchApp } from "../../../lifecycle/appRelaunch.js";
+import { endStartupTracking, startupStepper } from "../../startupInvokeTracker.js";
 import { getDatabaseMaintenanceService } from "../../../services/DatabaseMaintenanceService.js";
 import { noteDatabaseNoticeRendererReady } from "../../../services/databaseBackupNotice.js";
 import { USAGE_WINDOW_MS, MAX_USES_PER_ENTRY } from "../../../../shared/utils/actionUsage.js";
@@ -308,10 +309,14 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     // The GPU half of the answer is kept by the view for its lifetime; read
     // before the GPU process reports it is the provisional all-disabled status.
     // Only the first few hundred milliseconds of a session ever wait here.
+    // Each awaited step is labelled for the stuck card's report (#16401).
+    const step = startupStepper(ctx?.webContentsId);
+    step("gpu-report");
     await whenGpuReported(GPU_REPORT_WAIT_MS);
     const { project: currentProject, workspaceId } = resolveWorkspaceForHydration(ctx);
     // Before any read of the saved panes, the prefetch cache included: agents an
     // unclean end cut short come back held, whichever screen restores them.
+    step("host-end-hold");
     const hostEnds = await applyHostEndHold(workspaceId);
     // A remote Shell merges only this machine's host half of the answer, so
     // nothing addressed to this machine's own windows may be consumed for it.
@@ -536,6 +541,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
     let draftInputsToUse: Record<string, string> | undefined;
 
     if (workspaceId) {
+      step("project-state-read");
       const {
         state: projectState,
         quarantinedPath,
@@ -605,6 +611,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
           focusPanelStateToUse = globalAppState.focusPanelState;
 
           // Save the migrated focus mode to per-project state
+          step("project-state-write");
           await projectStore.enqueueProjectStateUpdate(workspaceId, (existing) => ({
             ...(existing ?? projectState),
             focusMode: focusModeToUse,
@@ -673,6 +680,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             : undefined;
 
           // Include focus mode in migration
+          step("project-state-write");
           await projectStore.enqueueProjectStateUpdate(workspaceId, (existing) => ({
             ...(existing ?? {}),
             projectId: workspaceId,
@@ -702,6 +710,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
             : undefined;
 
           // No terminals to migrate but still save empty state to mark migration complete
+          step("project-state-write");
           await projectStore.enqueueProjectStateUpdate(workspaceId, (existing) => ({
             ...(existing ?? {}),
             projectId: workspaceId,
@@ -732,6 +741,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         // every other row starts clean, or the record it never owned would be
         // written straight onto its first save (#11651). `sidebarWidth` is a
         // genuinely app-global preference and rides along either way.
+        step("project-state-write");
         await projectStore.enqueueProjectStateUpdate(
           workspaceId,
           (existing) =>
@@ -878,6 +888,8 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
       `[AppHydrate] Project: ${currentProject?.name ?? (workspaceId ? "scratch" : "none")} - terminals from ${terminalsSource} (${terminalsToUse.length} valid), focusMode: ${focusModeToUse}`
     );
 
+    // The only await left is the in-repo presets read in the payload below.
+    step("project-presets");
     return {
       ...readShellHydrateFields({ consumeOneShots: !leavesOneShots }),
       ...readHostPlatformFields(),
@@ -1308,6 +1320,7 @@ export function registerAppStateHandlers(deps?: HandlerDependencies): () => void
         webContentsId: ctx.webContentsId,
       });
       signalFirstInteractive(ctx.webContentsId);
+      endStartupTracking(ctx.webContentsId);
       // A backup suspension raised while no window could show it waits for this one.
       noteDatabaseNoticeRendererReady(ctx.webContentsId);
       // So does the notice explaining why this view just reloaded.

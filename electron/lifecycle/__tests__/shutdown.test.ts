@@ -2889,6 +2889,16 @@ describe("registerShutdownHandler", () => {
       return relaunchApp;
     }
 
+    it("reports a claimed exit, and refuses a second relaunch without arming it", async () => {
+      const relaunchApp = await setupRelaunch();
+
+      expect(relaunchApp("safe-mode-request")).toBe("started");
+      expect(armRelaunchMock).toHaveBeenCalledTimes(1);
+      expect(relaunchApp("safe-mode-request")).toBe("already-shutting-down");
+      expect(armRelaunchMock).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalledWith(0));
+    });
+
     it("records a clean exit once the chain settles clean, before exiting into the relaunch", async () => {
       const relaunchApp = await setupRelaunch();
 

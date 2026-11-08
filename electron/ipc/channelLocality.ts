@@ -103,7 +103,10 @@ export const CHANNEL_LOCALITY = {
   "app:panel-grid-config-changed": "shell",
   "app:quit": "shell",
   "app:reload-config": "hybrid",
+  // The startup report describes this machine's view and main process.
+  "app:report-startup-stuck": "shell",
   "app:reset-and-relaunch": "shell",
+  "app:restart-in-safe-mode": "shell",
   "app:set-state": "hybrid",
   "app:skeleton-parsed": "shell",
   "app:view-cached": "shell",

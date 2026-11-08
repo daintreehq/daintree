@@ -4,6 +4,7 @@ import { isElectronAvailable } from "../useElectron";
 import { setStartupQuietPeriod } from "@/lib/notify";
 import { releaseBootPayload } from "@/lib/bootPromise";
 import { logError } from "@/utils/logger";
+import { markStartupStage } from "@/utils/startupStage";
 import type { HydrateResult } from "@shared/types/ipc/app";
 
 export { pickBootFocusPanelId } from "../../utils/stateHydration/restoreViewState";
@@ -21,6 +22,7 @@ export function useAppHydration(
     }
 
     hasRestoredState.current = true;
+    markStartupStage("hydrating");
 
     const restoreState = async () => {
       try {

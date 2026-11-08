@@ -27,12 +27,13 @@
 import { app } from "electron";
 import { logInfo, logWarn } from "../utils/logger.js";
 import { closeTelemetry } from "../services/TelemetryService.js";
-import { startShutdown } from "./shutdownCoordinator.js";
+import { startShutdown, type ShutdownRequestResult } from "./shutdownCoordinator.js";
 import { stripLaunchTargets } from "./launchIntent.js";
 import { armRelaunch } from "./armRelaunch.js";
 
 /** Why the app is restarting itself. Diagnostic only — no behaviour keys off it. */
-export type AppRelaunchReason = "gpu-toggle" | "gpu-mitigation" | "state-reset" | "bundle-replaced";
+export type AppRelaunchReason =
+  "gpu-toggle" | "gpu-mitigation" | "state-reset" | "bundle-replaced" | "safe-mode-request";
 
 /**
  * Restart the app, keeping the session.
@@ -53,9 +54,10 @@ export type AppRelaunchReason = "gpu-toggle" | "gpu-mitigation" | "state-reset" 
  * cancelled, and would bring a deliberate Quit back up. `"already-shutting-down"`
  * means an in-flight quit or update install owns the exit, and that process is
  * ending anyway. `"unavailable"` means no shutdown handler is registered yet, so
- * nothing exits at all.
+ * nothing exits at all. The result says which, for a caller that staged
+ * something for the next launch and must take it back when there is none.
  */
-export function relaunchApp(reason: AppRelaunchReason): void {
+export function relaunchApp(reason: AppRelaunchReason): ShutdownRequestResult {
   // Claim the shutdown BEFORE arming the relaunch. Electron offers no way to
   // cancel an armed relaunch, so arming first and then being refused would
   // leave one queued against whatever exit the current owner is heading for —
@@ -75,7 +77,7 @@ export function relaunchApp(reason: AppRelaunchReason): void {
     // that is about to replace this binary. That process is ending anyway, and
     // the caller's reason for restarting is served by it.
     logWarn("app.relaunch.refused", { reason, result });
-    return;
+    return result;
   }
 
   const args = stripLaunchTargets(process.argv.slice(1));
@@ -84,4 +86,5 @@ export function relaunchApp(reason: AppRelaunchReason): void {
   // an absolute deadline that forces the terminal action even on a wedged
   // chain, and the relaunch only takes effect at process exit.
   armRelaunch({ args });
+  return result;
 }

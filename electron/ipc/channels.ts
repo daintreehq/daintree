@@ -183,6 +183,8 @@ export const CHANNELS = {
   APP_QUIT: "app:quit",
   APP_FORCE_QUIT: "app:force-quit",
   APP_RESET_AND_RELAUNCH: "app:reset-and-relaunch",
+  APP_RESTART_IN_SAFE_MODE: "app:restart-in-safe-mode",
+  APP_REPORT_STARTUP_STUCK: "app:report-startup-stuck",
   APP_CLEAR_QUARANTINED_PANEL: "app:clear-quarantined-panel",
   APP_SKELETON_PARSED: "app:skeleton-parsed",
   APP_FIRST_INTERACTIVE: "app:first-interactive",

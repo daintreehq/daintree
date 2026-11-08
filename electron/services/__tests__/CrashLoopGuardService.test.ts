@@ -806,3 +806,109 @@ describe("CrashLoopGuardService adversarial", () => {
     expect((readStateFile(statePath).launches as unknown[]).length).toBe(5);
   });
 });
+
+describe("CrashLoopGuardService requested safe mode", () => {
+  let tmpDir: string;
+  let statePath: string;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "crash-guard-request-"));
+    appMock.getPath.mockReturnValue(tmpDir);
+    statePath = path.join(tmpDir, "crash-loop-state.json");
+    utilsMock.resilientAtomicWriteFileSync.mockImplementation(
+      (fp: string, data: string, enc?: BufferEncoding) => {
+        fs.writeFileSync(fp, data, enc ?? "utf-8");
+      }
+    );
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    vi.clearAllMocks();
+  });
+
+  it("boots the next launch in safe mode with no prior crashes, through a clean exit", () => {
+    const requesting = new CrashLoopGuardService();
+    requesting.initialize();
+    requesting.requestSafeModeBoot();
+    // The relaunch runs the shutdown chain, which marks the exit clean.
+    requesting.markCleanExit();
+
+    expect(isSafeModeActive(tmpDir)).toBe(true);
+
+    const next = new CrashLoopGuardService();
+    next.initialize();
+
+    expect(next.isSafeMode()).toBe(true);
+    expect(next.getCrashCount()).toBe(0);
+    expect(next.shouldRelaunch()).toBe(true);
+  });
+
+  it("boots in safe mode when the requesting launch dies before marking a clean exit", () => {
+    const requesting = new CrashLoopGuardService();
+    requesting.initialize();
+    requesting.requestSafeModeBoot();
+
+    const next = new CrashLoopGuardService();
+    next.initialize();
+
+    expect(next.isSafeMode()).toBe(true);
+  });
+
+  it("applies the request to one launch only", () => {
+    const requesting = new CrashLoopGuardService();
+    requesting.initialize();
+    requesting.requestSafeModeBoot();
+    requesting.markCleanExit();
+
+    const safe = new CrashLoopGuardService();
+    safe.initialize();
+    expect(safe.isSafeMode()).toBe(true);
+    expect(isSafeModeActive(tmpDir)).toBe(false);
+    safe.markCleanExit();
+
+    const after = new CrashLoopGuardService();
+    after.initialize();
+    expect(after.isSafeMode()).toBe(false);
+  });
+
+  it("drops the request when the user restarts normally", () => {
+    const requesting = new CrashLoopGuardService();
+    requesting.initialize();
+    requesting.requestSafeModeBoot();
+    requesting.resetForNormalBoot();
+
+    expect(isSafeModeActive(tmpDir)).toBe(false);
+
+    const next = new CrashLoopGuardService();
+    next.initialize();
+    expect(next.isSafeMode()).toBe(false);
+  });
+
+  it("throws when the request can't be written, leaving the state file as it was", () => {
+    const requesting = new CrashLoopGuardService();
+    requesting.initialize();
+    const before = fs.readFileSync(statePath, "utf8");
+    utilsMock.resilientAtomicWriteFileSync.mockImplementationOnce(() => {
+      throw new Error("ENOSPC");
+    });
+
+    expect(() => requesting.requestSafeModeBoot()).toThrow("ENOSPC");
+    expect(fs.readFileSync(statePath, "utf8")).toBe(before);
+    expect(isSafeModeActive(tmpDir)).toBe(false);
+  });
+
+  it("can withdraw a request whose relaunch never happened", () => {
+    const requesting = new CrashLoopGuardService();
+    requesting.initialize();
+    requesting.requestSafeModeBoot();
+    requesting.cancelSafeModeBootRequest();
+    requesting.markCleanExit();
+
+    const next = new CrashLoopGuardService();
+    next.initialize();
+    expect(next.isSafeMode()).toBe(false);
+  });
+});

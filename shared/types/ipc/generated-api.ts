@@ -64,6 +64,12 @@ export interface GeneratedElectronAPI {
     getVersionInfo(
       ...args: IpcInvokeMap["app:get-version-info"]["args"]
     ): Promise<IpcInvokeMap["app:get-version-info"]["result"]>;
+    reportStartupStuck(
+      ...args: IpcInvokeMap["app:report-startup-stuck"]["args"]
+    ): Promise<IpcInvokeMap["app:report-startup-stuck"]["result"]>;
+    restartInSafeMode(
+      ...args: IpcInvokeMap["app:restart-in-safe-mode"]["args"]
+    ): Promise<IpcInvokeMap["app:restart-in-safe-mode"]["result"]>;
   };
   canopy: {
     answer(

@@ -124,6 +124,7 @@ import { buildTerminalWhenDonePreloadBindings } from "./ipc/handlers/terminalWhe
 import { buildIdleBackgroundAutoClosePreloadBindings } from "./ipc/handlers/idleBackgroundAutoClose.preload.js";
 import { buildSystemSleepPreloadBindings } from "./ipc/handlers/systemSleep.preload.js";
 import { buildAppVersionInfoPreloadBindings } from "./ipc/handlers/appVersionInfo.preload.js";
+import { buildSafeModePreloadBindings } from "./ipc/handlers/safeMode.preload.js";
 import { buildResourceProfilePreloadBindings } from "./ipc/handlers/resourceProfile.preload.js";
 import { buildWhySlowPreloadBindings } from "./ipc/handlers/whySlow.preload.js";
 import { buildMemoryPressurePreloadBindings } from "./ipc/handlers/memoryPressure.preload.js";
@@ -1479,6 +1480,8 @@ function buildElectronApi(): ElectronAPI {
 
       clearQuarantinedPanel: (panelId: string) =>
         _unwrappingInvoke(CHANNELS.APP_CLEAR_QUARANTINED_PANEL, panelId),
+
+      ...buildSafeModePreloadBindings(_unwrappingInvoke),
 
       skeletonParsed: () => ipcRenderer.send(CHANNELS.APP_SKELETON_PARSED),
 

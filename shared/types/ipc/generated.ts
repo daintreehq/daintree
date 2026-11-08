@@ -138,6 +138,14 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./app.js").AppVersionInfo;
   };
+  "app:report-startup-stuck": {
+    args: [rendererStage: string];
+    result: void;
+  };
+  "app:restart-in-safe-mode": {
+    args: [];
+    result: { started: boolean };
+  };
   "artifact:apply-patch": {
     args: [options: import("./agent.js").ApplyPatchOptions];
     result: import("./agent.js").ApplyPatchResult;
@@ -3629,9 +3637,9 @@ export interface GeneratedIpcInvokeMap {
       status:
         | "cancelled"
         | "unreachable"
+        | "started"
         | "connected"
         | "woken"
-        | "started"
         | "not_wakeable"
         | "not_startable"
         | "version_mismatch"
