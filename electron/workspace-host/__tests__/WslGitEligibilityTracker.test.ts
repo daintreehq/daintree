@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { Worktree } from "../../../shared/types/worktree.js";
 import {
   WslGitEligibilityTracker,
@@ -18,12 +18,17 @@ vi.mock("../../utils/wsl.js", () => ({
 const POLL_MS = 60_000;
 
 interface StubMonitor extends WslTrackedMonitor {
-  setWslEligible: ReturnType<typeof vi.fn>;
-  setWslOptIn: ReturnType<typeof vi.fn>;
+  setWslEligible: Mock<WslTrackedMonitor["setWslEligible"]>;
+  setWslOptIn: Mock<WslTrackedMonitor["setWslOptIn"]>;
 }
 
 function stubMonitor(isWslPath: boolean, wslDistro: string | undefined): StubMonitor {
-  return { isWslPath, wslDistro, setWslEligible: vi.fn(), setWslOptIn: vi.fn() };
+  return {
+    isWslPath,
+    wslDistro,
+    setWslEligible: vi.fn<WslTrackedMonitor["setWslEligible"]>(),
+    setWslOptIn: vi.fn<WslTrackedMonitor["setWslOptIn"]>(),
+  };
 }
 
 function worktree(id: string): Worktree {
@@ -61,6 +66,14 @@ describe("WslGitEligibilityTracker", () => {
     monitors.set("debian-wt", debian);
     monitors.set("local-wt", nonWsl);
     return { ubuntu, debian, nonWsl };
+  }
+
+  /** The opt-in a later enrichment of `id` would carry, read without changing it. */
+  async function storedOptIn(id: string): Promise<{ enabled: boolean; dismissed: boolean }> {
+    detectWslPathMock.mockReturnValue({ distro: "Ubuntu", posixPath: "/" });
+    getDefaultWslDistroMock.mockResolvedValue("Ubuntu");
+    const enriched = await tracker.enrichWorktree(worktree(id));
+    return { enabled: Boolean(enriched.wslGitOptIn), dismissed: Boolean(enriched.wslGitDismissed) };
   }
 
   /** Paths under `\\wsl$\<distro>\` read as WSL mounts; anything else does not. */
@@ -209,6 +222,13 @@ describe("WslGitEligibilityTracker", () => {
       expect(ubuntu.setWslEligible).toHaveBeenLastCalledWith("ineligible");
       expect(debian.setWslEligible).toHaveBeenLastCalledWith("eligible");
       expect(nonWsl.setWslEligible).not.toHaveBeenCalled();
+
+      // The change became the new baseline: the same answer again refreshes nothing.
+      ubuntu.setWslEligible.mockClear();
+      debian.setWslEligible.mockClear();
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+      expect(ubuntu.setWslEligible).not.toHaveBeenCalled();
+      expect(debian.setWslEligible).not.toHaveBeenCalled();
     });
 
     it("updates the cached distro a later enrichment reads after a poll change", async () => {
@@ -250,10 +270,12 @@ describe("WslGitEligibilityTracker", () => {
 
       tracker.pause();
       tracker.pause();
-      tracker.resume();
       getDefaultWslDistroMock.mockClear();
-      await vi.advanceTimersByTimeAsync(POLL_MS);
+      await vi.advanceTimersByTimeAsync(10 * POLL_MS);
+      expect(getDefaultWslDistroMock).not.toHaveBeenCalled();
 
+      tracker.resume();
+      await vi.advanceTimersByTimeAsync(POLL_MS);
       expect(getDefaultWslDistroMock).toHaveBeenCalledTimes(1);
     });
 
@@ -436,6 +458,11 @@ describe("WslGitEligibilityTracker", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(ubuntu.setWslEligible).not.toHaveBeenCalled();
 
+      // The baseline is still the reprobe's: the next tick seeing Debian is no change.
+      getDefaultWslDistroMock.mockResolvedValueOnce("Debian");
+      await vi.advanceTimersByTimeAsync(POLL_MS);
+      expect(ubuntu.setWslEligible).not.toHaveBeenCalled();
+
       // The cache still holds the reprobe's answer, not the stale poll's.
       const later = await tracker.enrichWorktree(worktree("\\\\wsl$\\Debian\\b"));
       expect(later.wslGitEligible).toBe("eligible");
@@ -451,12 +478,13 @@ describe("WslGitEligibilityTracker", () => {
       monitors.set(id, monitor);
 
       tracker.setOptIn(id, true, false);
-      tracker.setOptIn("no-monitor-yet", false, true);
+      expect(monitor.setWslOptIn).toHaveBeenLastCalledWith(true, false);
+      tracker.setOptIn(id, false, true);
+      expect(monitor.setWslOptIn).toHaveBeenLastCalledWith(false, true);
+      tracker.setOptIn("no-monitor-yet", true, true);
 
-      expect(monitor.setWslOptIn).toHaveBeenCalledWith(true, false);
-      const enriched = await tracker.enrichWorktree(worktree(id));
-      expect(enriched.wslGitOptIn).toBe(true);
-      expect(enriched.wslGitDismissed).toBe(false);
+      expect(await storedOptIn(id)).toEqual({ enabled: false, dismissed: true });
+      expect(await storedOptIn("no-monitor-yet")).toEqual({ enabled: true, dismissed: true });
     });
 
     it("lets an in-memory toggle win over the persisted map merged later", async () => {
@@ -502,18 +530,23 @@ describe("WslGitEligibilityTracker", () => {
     // load, prewarm or host restart.
     const liveKey = "/test/root/.worktrees/live";
 
-    it("keeps live keys and keys belonging to other projects", () => {
+    it("keeps live keys and keys belonging to other projects", async () => {
       tracker.mergePersistedOptIns({
         [liveKey]: { enabled: true, dismissed: false },
-        "/other-projects/repo/wt": { enabled: true, dismissed: false },
+        "/other-projects/repo/wt": { enabled: false, dismissed: true },
       });
 
       tracker.pruneStale([worktree(liveKey)], "/test/root");
 
       expect(clearedIds()).toEqual([]);
+      expect(await storedOptIn(liveKey)).toEqual({ enabled: true, dismissed: false });
+      expect(await storedOptIn("/other-projects/repo/wt")).toEqual({
+        enabled: false,
+        dismissed: true,
+      });
     });
 
-    it("clears stale keys at or under the project's parent directory", () => {
+    it("clears stale keys at or under the project's parent directory", async () => {
       tracker.mergePersistedOptIns({
         [liveKey]: { enabled: true, dismissed: false },
         "/test/root/.worktrees/old-feature": { enabled: true, dismissed: false },
@@ -523,6 +556,7 @@ describe("WslGitEligibilityTracker", () => {
 
       tracker.pruneStale([worktree(liveKey)], "/test/root");
 
+      expect(await storedOptIn(liveKey)).toEqual({ enabled: true, dismissed: false });
       expect(clearedIds().sort()).toEqual(
         ["/test/root", "/test/root/.worktrees/old-feature", "/test/sibling-worktree"].sort()
       );
@@ -544,19 +578,21 @@ describe("WslGitEligibilityTracker", () => {
       expect(clearedIds()).toEqual(["/test/"]);
     });
 
-    it("handles Windows-style keys without relying on the host OS separator", () => {
+    it("handles Windows-style keys without relying on the host OS separator", async () => {
       const winLive = "C:\\test\\root";
       const winStale = "C:\\test\\root\\.worktrees\\old-feature";
       const winForeign = "D:\\other-projects\\repo\\wt";
       tracker.mergePersistedOptIns({
         [winLive]: { enabled: true, dismissed: false },
         [winStale]: { enabled: true, dismissed: false },
-        [winForeign]: { enabled: true, dismissed: false },
+        [winForeign]: { enabled: false, dismissed: true },
       });
 
       tracker.pruneStale([worktree(winLive)], winLive);
 
       expect(clearedIds()).toEqual([winStale]);
+      expect(await storedOptIn(winLive)).toEqual({ enabled: true, dismissed: false });
+      expect(await storedOptIn(winForeign)).toEqual({ enabled: false, dismissed: true });
     });
 
     it("matches Windows keys case-insensitively on win32", () => {

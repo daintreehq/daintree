@@ -191,13 +191,9 @@ describe("WorkspaceService WSL git opt-in pruning (#9926)", () => {
     vi.restoreAllMocks();
   });
 
-  /** True when the tracker still holds an opt-in for `id`: forgetting it sends a clear. */
-  function optInRetained(id: string): boolean {
-    mockSendEvent.mockClear();
-    service["wslGit"].forgetWorktree(id);
-    return mockSendEvent.mock.calls.some(
-      ([arg]) => (arg as { type: string }).type === "clear-wsl-git-opt-in"
-    );
+  /** The tracker's in-memory opt-in for `id`, read without changing it. */
+  function storedOptIn(id: string): { enabled: boolean; dismissed: boolean } | undefined {
+    return service["wslGit"]["optIns"][id];
   }
 
   function createAndRegisterMonitor(overrides: Partial<Worktree> = {}): WorktreeMonitor {
@@ -244,7 +240,7 @@ describe("WorkspaceService WSL git opt-in pruning (#9926)", () => {
       const clearIdx = mockSendEvent.mock.calls.indexOf(clearCall!);
       const removedIdx = mockSendEvent.mock.calls.indexOf(removedCall!);
       expect(clearIdx).toBeLessThan(removedIdx);
-      expect(optInRetained(TEST_WORKTREE_PATH)).toBe(false);
+      expect(storedOptIn(TEST_WORKTREE_PATH)).toBeUndefined();
     });
 
     it("does not emit clear-wsl-git-opt-in when no wsl entry exists", () => {
@@ -276,7 +272,7 @@ describe("WorkspaceService WSL git opt-in pruning (#9926)", () => {
       expect(clearOrRemoved).toHaveLength(0);
       // Monitor and wsl entry both untouched.
       expect(service["monitors"].has(TEST_WORKTREE_PATH)).toBe(true);
-      expect(optInRetained(TEST_WORKTREE_PATH)).toBe(true);
+      expect(storedOptIn(TEST_WORKTREE_PATH)).toEqual({ enabled: true, dismissed: false });
     });
 
     it("is idempotent — calling twice on the same id is a no-op the second time", () => {
@@ -309,7 +305,27 @@ describe("WorkspaceService WSL git opt-in pruning (#9926)", () => {
       );
       expect(clearCall).toBeDefined();
       expect((clearCall![0] as { worktreeId: string }).worktreeId).toBe(TEST_WORKTREE_PATH);
-      expect(optInRetained(TEST_WORKTREE_PATH)).toBe(false);
+      expect(storedOptIn(TEST_WORKTREE_PATH)).toBeUndefined();
+    });
+
+    it("installs new monitors from the tracker's WSL enrichment", async () => {
+      const wt = createTestWorktree();
+      const enrich = vi.spyOn(service["wslGit"], "enrichWorktree").mockResolvedValue({
+        ...wt,
+        isWslPath: true,
+        wslDistro: "Ubuntu",
+        wslPosixPath: "/home/me/repo",
+        wslGitEligible: "eligible",
+        wslGitOptIn: true,
+        wslGitDismissed: false,
+      });
+
+      await service["syncMonitors"]([wt], null, "main", undefined, true);
+
+      expect(enrich).toHaveBeenCalledWith(expect.objectContaining({ id: wt.id }));
+      const monitor = service["monitors"].get(wt.id);
+      expect(monitor?.isWslPath).toBe(true);
+      expect(monitor?.wslDistro).toBe("Ubuntu");
     });
   });
 });

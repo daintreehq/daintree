@@ -7,6 +7,7 @@ import type { Worktree } from "../../../shared/types/worktree.js";
 
 const mockSimpleGit = {
   raw: vi.fn(),
+  checkIsRepo: vi.fn().mockResolvedValue(true),
   branch: vi.fn().mockResolvedValue({ current: "main" }),
 };
 
@@ -117,6 +118,7 @@ const WSL_WORKTREE: Worktree = {
 // background, unload and project-switch lifecycle.
 describe("WorkspaceService WSL eligibility wiring (#9924)", () => {
   let service: WorkspaceService;
+  let clearedOptIns: string[];
   const originalPlatform = process.platform;
 
   beforeEach(async () => {
@@ -125,8 +127,11 @@ describe("WorkspaceService WSL eligibility wiring (#9924)", () => {
     getDefaultWslDistroMock.mockReset().mockResolvedValue("Ubuntu");
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });
     vi.spyOn(os, "setPriority").mockImplementation(() => {});
+    clearedOptIns = [];
     const workspaceModule = await import("../WorkspaceService.js");
-    service = new workspaceModule.WorkspaceService((_event: WorkspaceHostEvent) => {});
+    service = new workspaceModule.WorkspaceService((event: WorkspaceHostEvent) => {
+      if (event.type === "clear-wsl-git-opt-in") clearedOptIns.push(event.worktreeId);
+    });
   });
 
   afterEach(() => {
@@ -147,8 +152,8 @@ describe("WorkspaceService WSL eligibility wiring (#9924)", () => {
   }
 
   /** Arms the distro poll the way a first WSL monitor install does. */
-  function enrichWslWorktree(): Promise<Worktree> {
-    return service["wslGit"].enrichWorktree(WSL_WORKTREE);
+  function enrichWslWorktree(wt: Worktree = WSL_WORKTREE): Promise<Worktree> {
+    return service["wslGit"].enrichWorktree(wt);
   }
 
   it("reprobe refreshes the service's own WSL monitors", async () => {
@@ -167,9 +172,56 @@ describe("WorkspaceService WSL eligibility wiring (#9924)", () => {
     (service["monitors"] as unknown as Map<string, StubMonitor>).set(WSL_WORKTREE.id, monitor);
 
     service.setWslOptIn(WSL_WORKTREE.id, true, false);
+    expect(monitor.setWslOptIn).toHaveBeenLastCalledWith(true, false);
+    service.setWslOptIn(WSL_WORKTREE.id, false, true);
+    expect(monitor.setWslOptIn).toHaveBeenLastCalledWith(false, true);
 
-    expect(monitor.setWslOptIn).toHaveBeenCalledWith(true, false);
-    expect((await enrichWslWorktree()).wslGitOptIn).toBe(true);
+    const enriched = await enrichWslWorktree();
+    expect(enriched.wslGitOptIn).toBe(false);
+    expect(enriched.wslGitDismissed).toBe(true);
+  });
+
+  it("load merges main's opt-ins under in-memory toggles, then prunes stale in-project keys", async () => {
+    const root = "/projects/repo";
+    const live: Worktree = {
+      id: `${root}/.worktrees/live`,
+      path: `${root}/.worktrees/live`,
+      name: "live",
+      isCurrent: false,
+    };
+    const listService = service["listService"] as unknown as {
+      list: unknown;
+      mapToWorktrees: unknown;
+    };
+    listService.list = vi.fn().mockResolvedValue([]);
+    listService.mapToWorktrees = vi.fn().mockResolvedValue([live]);
+    vi.spyOn(service, "syncMonitors").mockResolvedValue(undefined);
+    vi.spyOn(
+      service["topologyWatcher"] as unknown as { startWatcher: () => Promise<void> },
+      "startWatcher"
+    ).mockResolvedValue(undefined);
+    const internals = service as unknown as {
+      sweepPrunableWorktreeEntries: () => Promise<void>;
+      initializePRService: () => Promise<void>;
+      refreshAll: (force?: boolean) => Promise<void>;
+    };
+    vi.spyOn(internals, "sweepPrunableWorktreeEntries").mockResolvedValue(undefined);
+    // The post-load PR and status work is fire-and-forget and outside this wiring.
+    vi.spyOn(internals, "initializePRService").mockResolvedValue(undefined);
+    vi.spyOn(internals, "refreshAll").mockResolvedValue(undefined);
+
+    // A toggle that landed before main's persisted map must survive the merge.
+    service.setWslOptIn(live.id, false, true);
+    await service.loadProject("req-load", root, "project-id", undefined, {
+      [live.id]: { enabled: true, dismissed: false },
+      [`${root}/.worktrees/stale`]: { enabled: true, dismissed: false },
+      "/elsewhere/repo/wt": { enabled: true, dismissed: false },
+    });
+
+    expect(clearedOptIns).toEqual([`${root}/.worktrees/stale`]);
+    const enriched = await enrichWslWorktree(live);
+    expect(enriched.wslGitOptIn).toBe(false);
+    expect(enriched.wslGitDismissed).toBe(true);
   });
 
   it("stops the distro poll while backgrounded and restarts it on resume (#12519)", async () => {
