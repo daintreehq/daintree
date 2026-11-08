@@ -1,6 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const broadcastMock = vi.hoisted(() => vi.fn());
+// The real one also withholds host-local channels from a remote-bound view;
+// utils.test.ts covers that. Here it keeps the rest of its contract.
+const sendToWebContentsMock = vi.hoisted(() =>
+  vi.fn(
+    (
+      wc: { isDestroyed(): boolean; send(channel: string, ...args: unknown[]): void } | null,
+      channel: string,
+      ...args: unknown[]
+    ): boolean => {
+      if (!wc || wc.isDestroyed()) return false;
+      try {
+        wc.send(channel, ...args);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+  )
+);
 const projectStoreMock = vi.hoisted(() => ({
   getAllProjects: vi.fn<() => Array<{ id: string; lastCompletionSeenAt?: number }>>(() => []),
 }));
@@ -38,6 +57,7 @@ const helpSessionMock = vi.hoisted(() => ({
 
 vi.mock("../../ipc/utils.js", () => ({
   typedBroadcast: broadcastMock,
+  sendToWebContents: sendToWebContentsMock,
 }));
 
 vi.mock("../events.js", () => ({ events: eventEmitter }));
@@ -649,6 +669,22 @@ describe("ProjectStatsService adversarial", () => {
     // Same channel and same payload as the live broadcast, so the replay lands
     // on the listener the renderer already has attached.
     expect(wc.send.mock.calls).toEqual([[liveChannel, livePayload]]);
+    svc.stop();
+  });
+
+  it("replays through the view filter, so a remote-bound view can be left out", async () => {
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    const svc = new ProjectStatsService(makePtyClient() as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    const [liveChannel, livePayload] = broadcastMock.mock.calls[0]!;
+
+    const wc = makeWebContents();
+    sendToWebContentsMock.mockReturnValueOnce(false);
+    svc.pushSnapshotTo(wc as never);
+
+    expect(sendToWebContentsMock).toHaveBeenCalledWith(wc, liveChannel, livePayload);
+    expect(wc.send).not.toHaveBeenCalled();
     svc.stop();
   });
 
