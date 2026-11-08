@@ -35,14 +35,15 @@ const LOADING: IssuePromptContextState = { status: "loading" };
 
 class ReadTimeout extends Error {}
 
-function beforeDeadline<T>(read: Promise<T>, deadline: number): Promise<T> {
+/** Starts `read` only with time left, so no request is left running unobserved past the deadline. */
+function beforeDeadline<T>(read: () => Promise<T>, deadline: number): Promise<T> {
   const remaining = deadline - Date.now();
   if (remaining <= 0) return Promise.reject(new ReadTimeout());
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expiry = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new ReadTimeout()), remaining);
   });
-  return Promise.race([read, expiry]).finally(() => clearTimeout(timer));
+  return Promise.race([read(), expiry]).finally(() => clearTimeout(timer));
 }
 
 async function readRecentComments(
@@ -54,14 +55,17 @@ async function readRecentComments(
   const recent: IssueComment[] = [];
   let total = 0;
   let cursor: string | null = null;
+  const seenCursors = new Set<string>();
   for (let page = 0; page < ISSUE_COMMENT_MAX_PAGES; page++) {
     let result;
     try {
+      const pageCursor = cursor;
       result = await beforeDeadline(
-        forgeClient.listIssueComments(cwd, issueNumber, {
-          perPage: ISSUE_COMMENT_PAGE_SIZE,
-          ...(cursor ? { cursor } : {}),
-        }),
+        () =>
+          forgeClient.listIssueComments(cwd, issueNumber, {
+            perPage: ISSUE_COMMENT_PAGE_SIZE,
+            ...(pageCursor ? { cursor: pageCursor } : {}),
+          }),
         deadline
       );
     } catch (err) {
@@ -78,7 +82,9 @@ async function readRecentComments(
     if (!result.hasMore) return { status: "read", recent, total };
     // More pages it can't reach: the end of the thread, and so its newest
     // comments, are unknown.
-    if (!result.nextCursor || result.nextCursor === cursor) return { status: "failed" };
+    // A cursor seen before goes round in a loop rather than to the end.
+    if (!result.nextCursor || seenCursors.has(result.nextCursor)) return { status: "failed" };
+    seenCursors.add(result.nextCursor);
     cursor = result.nextCursor;
   }
   return { status: "too-long", read: total };
@@ -104,7 +110,7 @@ export async function loadIssuePromptContext({
   const deadline = Date.now() + ISSUE_PROMPT_READ_TIMEOUT_MS;
   let fresh: Issue | null;
   try {
-    fresh = await beforeDeadline(forgeClient.getIssue(cwd, issue.number), deadline);
+    fresh = await beforeDeadline(() => forgeClient.getIssue(cwd, issue.number), deadline);
   } catch (err) {
     return {
       status: "error",
@@ -142,17 +148,18 @@ export function useIssuePromptContext({
 }): { state: IssuePromptContextState; retry: () => void } {
   const [attempt, setAttempt] = useState(0);
   const [settled, setSettled] = useState<{ key: string; read: IssuePromptRead } | null>(null);
+  const issueNumber = issue?.number ?? null;
   const key =
     enabled && issue
       ? [attempt, cwd, providerId ?? "", issue.id ?? "", issue.number].join("\u0000")
       : null;
 
   useEffect(() => {
-    if (key === null || !issue) return;
+    if (key === null || issueNumber === null) return;
     let cancelled = false;
     void loadIssuePromptContext({
       cwd,
-      issue,
+      issue: { number: issueNumber },
       providerName,
       isCancelled: () => cancelled,
     })
@@ -165,8 +172,11 @@ export function useIssuePromptContext({
       });
     return () => {
       cancelled = true;
+      // Turned off, closed or moved on: a later read starts from loading, never
+      // from this one's result, which may be long out of date by then.
+      setSettled(null);
     };
-  }, [key, cwd, issue, providerName]);
+  }, [key, cwd, issueNumber, providerName]);
 
   const state = key === null ? OFF : settled?.key === key ? settled.read : LOADING;
   return { state, retry: () => setAttempt((n) => n + 1) };

@@ -82,7 +82,8 @@ export function IssuePromptToggle({
                 size="xs"
                 onClick={() => setPreviewOpen((open) => !open)}
                 aria-expanded={previewOpen}
-                aria-controls={previewId}
+                // Only while it exists: an id that resolves to nothing is a broken relation.
+                aria-controls={previewOpen ? previewId : undefined}
                 className="-my-1 shrink-0"
                 data-testid="issue-prompt-preview-toggle"
               >

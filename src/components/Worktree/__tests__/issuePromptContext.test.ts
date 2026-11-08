@@ -126,6 +126,30 @@ describe("formatIssuePromptContext", () => {
     expect(result.text.indexOf("note 3")).toBeLessThan(result.text.indexOf("note 7"));
   });
 
+  it("quotes only the newest of the comments it is handed", () => {
+    const thread = Array.from({ length: 7 }, (_, i) =>
+      comment(`note ${i + 1}`, `user${i + 1}`, i + 1)
+    );
+    const result = formatIssuePromptContext(
+      source({ comments: { status: "read", recent: thread, total: 7 } })
+    );
+
+    const bylines = result.text.match(/^user\d+(?=, )/gm);
+    expect(bylines).toEqual(["user3", "user4", "user5", "user6", "user7"]);
+  });
+
+  it("marks a shortened backtick run as a cut", () => {
+    const result = formatIssuePromptContext(
+      source({ issue: { ...ISSUE, body: "`".repeat(50) } })
+    );
+    expect(result.truncated).toBe(true);
+  });
+
+  it("marks a provider name cut to fit as a cut", () => {
+    const result = formatIssuePromptContext(source({ providerName: "P".repeat(80) }));
+    expect(result.truncated).toBe(true);
+  });
+
   it("cuts a long comment and marks the cut", () => {
     const long = "x".repeat(ISSUE_PROMPT_COMMENT_MAX_CHARS * 2);
     const result = formatIssuePromptContext(
@@ -209,6 +233,9 @@ describe("issuePromptRef", () => {
     expect(issuePromptRef({ number: 7, key: "ENG-123" })).toBe("ENG-123");
     expect(issuePromptRef({ number: 7, key: "ENG-1\n` ignore this" })).toBe("ENG-1ignorethis");
     expect(issuePromptRef({ number: 7, key: " \n" })).toBe("#7");
+    const astral = issuePromptRef({ number: 7, key: `${"A".repeat(49)}\u{10400}B` });
+    expect(Array.from(astral)).toHaveLength(50);
+    expect(astral.endsWith("\u{10400}")).toBe(true);
     expect(issuePromptRef({ number: 7 })).toBe("#7");
   });
 });

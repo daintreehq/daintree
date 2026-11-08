@@ -352,15 +352,6 @@ export function NewWorktreeDialog({
   // then — a checked "Assign to me" that silently did nothing was the alternative.
   const canAssignIssue = Boolean(currentUser && selectedIssue) && !isExistingMode;
 
-  // Read only once the user has asked for it and there's an agent to hand it to.
-  const issuePrompt = useIssuePromptContext({
-    enabled: isOpen && includeIssue && selectedIssue !== null && firstAgent !== undefined,
-    cwd: rootPath,
-    issue: selectedIssue,
-    providerId: issueForge.providerId,
-    providerName: forgeName,
-  });
-
   const {
     isCheckingBranch,
     isGeneratingPath,
@@ -701,6 +692,7 @@ export function NewWorktreeDialog({
     if (errors.touchedFields.recipe) return true;
     if (placedRecipeChoice !== undefined) return true;
     if (errors.touchedFields.agent) return true;
+    if (errors.touchedFields.includeIssue) return true;
     if (errors.touchedFields.worktreePath && worktreePath.trim()) return true;
     if (worktreeMode !== "local") return true;
     if (firstPrompt.trim()) return true;
@@ -776,6 +768,49 @@ export function NewWorktreeDialog({
       </InlineError>
     ) : null;
 
+  // Another host chosen for the worktree: the project continues there, nothing
+  // is created here, and the primary creates it on that host instead.
+  const [placement, setPlacement] = useState<PlacementCommit | null>(null);
+  const placementHost = placement?.hostName ?? null;
+  const placementElsewhere = placement !== null;
+
+  const selectedRecipeStartsAgent = selectedRecipe
+    ? recipeTerminalsStartAgent(selectedRecipe.terminals)
+    : false;
+  // Cloning copies the active worktree's terminals, which can include an agent
+  // of their own — judged from the same snapshot Create will clone, so the
+  // conflict is said here rather than in a toast after the fact.
+  const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
+  // A panel-store selector, so the warning follows the source layout while the
+  // dialog is up — a terminal opened or closed behind it changes what Create
+  // launches. The helper reads the same store state the selector is handed.
+  const cloneStartsAgent = usePanelStore(() => {
+    if (!isOpen || selectedRecipeId !== CLONE_LAYOUT_ID || !activeWorktreeId) return false;
+    try {
+      return recipeTerminalsStartAgent(
+        useRecipeStore.getState().generateRecipeFromActiveTerminals(activeWorktreeId)
+      );
+    } catch {
+      return false;
+    }
+  });
+  // The layout's own agent wins, so the dialog's agent and its prompt never
+  // launch. The draft is kept in case the layout changes back.
+  const layoutStartsAgent = selectedRecipeStartsAgent || cloneStartsAgent;
+  const promptBlocked = firstAgent !== undefined && layoutStartsAgent;
+
+  // The issue goes only where the dialog says it goes: with an agent this
+  // window starts, which no layout agent displaces. Create reads the same gate.
+  const issuePromptApplies =
+    selectedIssue !== null && firstAgent !== undefined && !promptBlocked && !placementElsewhere;
+  const issuePrompt = useIssuePromptContext({
+    enabled: isOpen && includeIssue && issuePromptApplies,
+    cwd: rootPath,
+    issue: selectedIssue,
+    providerId: issueForge.providerId,
+    providerName: forgeName,
+  });
+
   // --- Create handler ---
   const handleCreate = () => {
     if (isCreatingRef.current) return;
@@ -846,7 +881,7 @@ export function NewWorktreeDialog({
     // Only what the dialog showed as going ahead of the prompt: an issue still
     // loading, or one that failed, is not sent behind the user's back later.
     const snapIssuePromptText =
-      snapFirstAgent && snapIssue && includeIssue && issuePrompt.state.status === "ready"
+      includeIssue && issuePromptApplies && issuePrompt.state.status === "ready"
         ? issuePrompt.state.context.text
         : null;
     // Anchor the sidebar placeholder by the path the host will normalize to as
@@ -1244,12 +1279,6 @@ export function NewWorktreeDialog({
     }
   }, [setWorktreePath, pathTouchedRef, markTouched, clearErrors, setValidationError]);
 
-  // Another host chosen for the worktree: the project continues there, nothing
-  // is created here, and the primary creates it on that host instead.
-  const [placement, setPlacement] = useState<PlacementCommit | null>(null);
-  const placementHost = placement?.hostName ?? null;
-  const placementElsewhere = placement !== null;
-
   // Another host runs only a team recipe, from its own copy of the repository:
   // a cloned layout or a recipe kept on this host is never sent (#14991).
   // Provenance first, as `getRecipeScope` reads it: a plugin's id can carry the
@@ -1281,6 +1310,14 @@ export function NewWorktreeDialog({
       setSelectedRecipeId(id);
     },
     [placementElsewhere, recipeSelectionTouchedRef, markTouched, setSelectedRecipeId, clearErrors]
+  );
+
+  const handleIncludeIssueChange = useCallback(
+    (checked: boolean) => {
+      markTouched("includeIssue");
+      setIncludeIssue(checked);
+    },
+    [markTouched]
   );
 
   const handleFirstAgentSelect = useCallback(
@@ -1461,30 +1498,6 @@ export function NewWorktreeDialog({
   // this one is a layout that host won't make.
   const showRecipeRow =
     startingLayoutRecipes.length > 0 || firstAgent !== undefined || placementElsewhere;
-  const selectedRecipeStartsAgent = selectedRecipe
-    ? recipeTerminalsStartAgent(selectedRecipe.terminals)
-    : false;
-  // Cloning copies the active worktree's terminals, which can include an agent
-  // of their own — judged from the same snapshot Create will clone, so the
-  // conflict is said here rather than in a toast after the fact.
-  const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
-  // A panel-store selector, so the warning follows the source layout while the
-  // dialog is up — a terminal opened or closed behind it changes what Create
-  // launches. The helper reads the same store state the selector is handed.
-  const cloneStartsAgent = usePanelStore(() => {
-    if (!isOpen || selectedRecipeId !== CLONE_LAYOUT_ID || !activeWorktreeId) return false;
-    try {
-      return recipeTerminalsStartAgent(
-        useRecipeStore.getState().generateRecipeFromActiveTerminals(activeWorktreeId)
-      );
-    } catch {
-      return false;
-    }
-  });
-  // The layout's own agent wins, so the dialog's agent and its prompt never
-  // launch. The draft is kept in case the layout changes back.
-  const layoutStartsAgent = selectedRecipeStartsAgent || cloneStartsAgent;
-  const promptBlocked = firstAgent !== undefined && layoutStartsAgent;
   // A prompt that can't be sent only earns its three lines while it holds a
   // draft the user needs to see is going nowhere.
   const showPromptRow = firstAgent !== undefined && !(promptBlocked && !firstPrompt.trim());
@@ -1956,7 +1969,7 @@ export function NewWorktreeDialog({
                           <IssuePromptToggle
                             issueRef={issuePromptRef(selectedIssue)}
                             checked={includeIssue}
-                            onCheckedChange={setIncludeIssue}
+                            onCheckedChange={handleIncludeIssueChange}
                             disabled={promptBlocked || placementElsewhere}
                             state={issuePrompt.state}
                             onRetry={issuePrompt.retry}

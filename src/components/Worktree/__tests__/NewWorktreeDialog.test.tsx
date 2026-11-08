@@ -3704,6 +3704,78 @@ describe("NewWorktreeDialog — the issue in the first prompt (#16380)", () => {
     expect(launchedPrompt()).toBe(PROMPT);
   });
 
+  it("holds the issue back when the recipe shown starts an agent but the one run doesn't", async () => {
+    issuePromptPreference.include = true;
+    // What the dialog shows starts an agent, so the option is off and unseen;
+    // a shadowing recipe that runs instead has none, so the agent does start.
+    recipePickerCalls.selected = {
+      id: "r1",
+      name: "Agent recipe",
+      terminals: [{ type: "claude" }],
+    };
+    const shells = { id: "r1", name: "Team recipe", terminals: [{ type: "terminal" }] };
+    const getState = useRecipeStore.getState;
+    const spy = vi.spyOn(useRecipeStore, "getState").mockImplementation(() => ({
+      ...getState(),
+      getRecipeById: () => shells,
+    }));
+    try {
+      renderDialog({
+        initialIssue: ISSUE,
+        restoreDraft: retryDraft({ agentId: "claude", prompt: PROMPT, includeIssue: true }),
+      });
+      await advanceTimersGradually(800);
+      await submit();
+
+      expect(launchedPrompt()).toBe(PROMPT);
+      expect(mockGetIssue).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("asks before discarding a changed choice", async () => {
+    // The remembered agent is preselected, so the choice is the only change.
+    firstAgentFixtures.lastIssueAgentByProject = { "test-project": "claude" };
+    const onClose = vi.fn();
+    try {
+      renderDialog({ initialIssue: ISSUE, onClose });
+      await advanceTimersGradually(500);
+      await toggleInclude();
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      });
+
+      expect(onClose).not.toHaveBeenCalled();
+      expect(screen.getByRole("button", { name: "Discard changes" })).toBeDefined();
+    } finally {
+      firstAgentFixtures.lastIssueAgentByProject = {};
+    }
+  });
+
+  it("doesn't remember a choice made where the option wasn't shown", async () => {
+    issuePromptPreference.include = true;
+    // A Retry without an agent: no option, so its stored `false` isn't a choice.
+    renderDialog({
+      initialIssue: ISSUE,
+      restoreDraft: retryDraft({ agentId: null, prompt: "", includeIssue: false }),
+    });
+    await advanceTimersGradually(800);
+    await submit();
+    expect(mockDispatch.mock.calls.some(([id]) => id === "worktree.create")).toBe(true);
+
+    cleanup();
+    // Nor without an issue.
+    renderDialog({
+      restoreDraft: retryDraft({ agentId: "claude", prompt: PROMPT, includeIssue: false }),
+    });
+    await advanceTimersGradually(800);
+    await submit();
+
+    expect(mockSetIncludeIssueInFirstPrompt).not.toHaveBeenCalled();
+  });
+
   it("doesn't send an issue still loading at Create", async () => {
     mockGetIssue.mockReturnValue(new Promise(() => {}));
     await openWithClaude();

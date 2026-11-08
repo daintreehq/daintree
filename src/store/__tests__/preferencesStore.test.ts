@@ -1336,6 +1336,42 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
     expect(written.state.dockDensity).toBe("compact");
   });
 
+  // A stale view writing something unrelated must not undo a sibling's opt-in
+  // to quoting issues, nor a sibling's opt-out once this view has opted in.
+  it("keeps a sibling's issue-quoting choice when this view changes an unrelated scalar", async () => {
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+
+    store.getState().setDockDensity("normal");
+
+    const disk = readBlob(backing);
+    disk.state.includeIssueInFirstPrompt = true;
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    store.getState().setDockDensity("compact");
+
+    const written = readBlob(backing);
+    expect(written.state.includeIssueInFirstPrompt).toBe(true);
+    expect(written.state.dockDensity).toBe("compact");
+  });
+
+  it("writes this view's own change to the issue-quoting choice over a sibling's", async () => {
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+
+    store.getState().setIncludeIssueInFirstPrompt(true);
+
+    const disk = readBlob(backing);
+    disk.state.reduceAnimations = true;
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    store.getState().setIncludeIssueInFirstPrompt(false);
+
+    const written = readBlob(backing);
+    expect(written.state.includeIssueInFirstPrompt).toBe(false);
+    expect(written.state.reduceAnimations).toBe(true);
+  });
+
   it("keeps a sibling's folded band when this view folds a different one", async () => {
     // Per-key, not whole-field: two project views each fold the bands they read
     // past, and a whole-map write from either would take the other's fold with

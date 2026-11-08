@@ -92,7 +92,8 @@ describe("loadIssuePromptContext", () => {
     expect(read.context.text).toContain("fresh body");
     expect(read.context.text).toContain("Comments (newest 5 of 150):");
     expect(read.context.text).toContain("comment 150");
-    expect(read.context.text).not.toContain("comment 145\n");
+    expect(read.context.text).toContain("comment 146");
+    expect(read.context.text).not.toMatch(/comment 145(?!\d)/);
     expect(mockListIssueComments).toHaveBeenNthCalledWith(2, ROOT, 7, {
       perPage: 100,
       cursor: "c2",
@@ -141,6 +142,22 @@ describe("loadIssuePromptContext", () => {
     expect(mockListIssueComments).toHaveBeenCalledTimes(ISSUE_COMMENT_MAX_PAGES);
     expect(read).toMatchObject({ status: "ready", comments: "too-long" });
     if (read.status === "ready") expect(read.context.commentsIncluded).toBe(0);
+  });
+
+  it("stops on a cursor that comes round again", async () => {
+    mockGetIssue.mockResolvedValue(makeIssue(7));
+    mockListIssueComments
+      .mockResolvedValueOnce(page([makeComment(1)], "A"))
+      .mockResolvedValueOnce(page([makeComment(2)], "B"))
+      .mockResolvedValueOnce(page([makeComment(3)], "A"));
+
+    const read = await loadIssuePromptContext({
+      cwd: ROOT,
+      issue: { number: 7 },
+      providerName: "GitHub",
+    });
+
+    expect(read).toMatchObject({ status: "ready", comments: "failed" });
   });
 
   it("stops on a cursor that doesn't move", async () => {
@@ -249,6 +266,33 @@ describe("useIssuePromptContext", () => {
 
     const state = result.current.state;
     expect(state.status === "ready" && state.context.text).toContain("Issue #2 from GitHub");
+  });
+
+  it("reads afresh when turned back on, never offering the last read meanwhile", async () => {
+    mockGetIssue.mockResolvedValueOnce(makeIssue(1)).mockReturnValue(new Promise(() => {}));
+    mockListIssueComments.mockResolvedValue(page([], null));
+    const issue = makeIssue(1);
+
+    const { result, rerender } = render({ enabled: true, issue });
+    await waitFor(() => expect(result.current.state.status).toBe("ready"));
+
+    rerender({ enabled: false, issue });
+    rerender({ enabled: true, issue });
+
+    expect(result.current.state).toEqual({ status: "loading" });
+    expect(mockGetIssue).toHaveBeenCalledTimes(2);
+  });
+
+  it("doesn't read again for the same issue handed over as a new object", async () => {
+    mockGetIssue.mockResolvedValue(makeIssue(1));
+    mockListIssueComments.mockResolvedValue(page([], null));
+
+    const { result, rerender } = render({ enabled: true, issue: makeIssue(1) });
+    await waitFor(() => expect(result.current.state.status).toBe("ready"));
+    rerender({ enabled: true, issue: makeIssue(1) });
+
+    expect(result.current.state.status).toBe("ready");
+    expect(mockGetIssue).toHaveBeenCalledTimes(1);
   });
 
   it("reads again on retry", async () => {
