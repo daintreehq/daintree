@@ -5,6 +5,7 @@ import { actionService } from "@/services/ActionService";
 import { useMenuActionSource } from "@/components/ui/menu-source";
 import { useRecipeStore } from "@/store/recipeStore";
 import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
+import { recipeIssueContext } from "@/utils/recipeVariables";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { SECTION_LABEL_CLASS } from "@/components/ui/sectionLabel";
@@ -84,7 +85,12 @@ export function useWorktreeActions({
       setRunningRecipeId(recipeId);
       const recipeState = useRecipeStore.getState();
       return runRecipeWithResults(recipeId, worktree.path, worktree.id, {
-        issueNumber: worktree.issueNumber,
+        ...recipeIssueContext({
+          issueNumber: worktree.issueNumber,
+          issueTitle: worktree.issueTitle,
+          issueProviderId: worktree.issueProviderId,
+          issueKey: worktree.issueKey,
+        }),
         prNumber: worktree.linked?.pr?.ref.number,
         worktreePath: worktree.path,
         branchName: worktree.branch,
@@ -108,6 +114,9 @@ export function useWorktreeActions({
       worktree.path,
       worktree.id,
       worktree.issueNumber,
+      worktree.issueTitle,
+      worktree.issueProviderId,
+      worktree.issueKey,
       worktree.linked?.pr?.ref.number,
       worktree.branch,
       runningRecipeId,

@@ -18,6 +18,7 @@ import { logError } from "@/utils/logger";
 import { partialSuccessError, slugifyForBranch } from "./workflowHelpers";
 import { issueBranchName } from "@shared/utils/issueBranchName";
 import { linkProviderIssue } from "@/utils/linkProviderIssue";
+import { recipeIssueContextFromIssue } from "@/utils/recipeVariables";
 import { resolveAgentLaunchKind } from "@/utils/agentLaunchValidation";
 // The shared registry helper rather than `isRegisteredAgent` from
 // `@/config/agents`: identical result (that one is a one-line delegation to
@@ -460,10 +461,12 @@ export const workflowCreationActionRuns = {
     let failedTerminalCount = 0;
     if (recipeId) {
       try {
+        // From the issue itself: linkProviderIssue's attach hasn't reached the
+        // worktree's snapshot yet.
         const recipeContext = {
+          ...recipeIssueContextFromIssue(issue),
           worktreePath,
           branchName: availableBranch,
-          issueNumber: issue.number,
         };
         // Forward dispatchSource so runRecipeWithResults applies the
         // agent-source terminal cap to MCP-driven worktree+recipe combos,

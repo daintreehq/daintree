@@ -391,7 +391,9 @@ vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
 }));
 
-const mockNotify = vi.hoisted(() => vi.fn<(payload: { title?: string }) => void>());
+const mockNotify = vi.hoisted(() =>
+  vi.fn<(payload: { title?: string; actions?: { label: string; onClick: () => void }[] }) => void>()
+);
 vi.mock("@/lib/notify", () => ({
   notify: mockNotify,
 }));
@@ -2644,6 +2646,64 @@ describe("NewWorktreeDialog — first agent and prompt (#12796)", () => {
     expect(mockNotify.mock.calls.some(([payload]) => /recipe/i.test(payload.title ?? ""))).toBe(
       false
     );
+  });
+
+  it("runs and retries a recipe with a provider issue's key and title (#16381)", async () => {
+    recipePickerCalls.selected = {
+      id: "r1",
+      name: "Shell recipe",
+      terminals: [{ type: "terminal" }],
+    };
+    const runRecipe = vi.mocked(useRecipeStore((s) => s.runRecipeWithResults));
+    runRecipe.mockRejectedValueOnce(new Error("panel limit")).mockResolvedValue({
+      spawned: [],
+      failed: [],
+    });
+    mockDispatch.mockImplementation(async (actionId: string) =>
+      actionId === "worktree.create"
+        ? { ok: true, result: { worktreeId: "new-wt-id", branch: "feature/test" } }
+        : { ok: true, result: undefined }
+    );
+    renderDialog({
+      initialIssue: {
+        number: 4019283746519283,
+        title: "Fix the login race",
+        body: "",
+        state: "open",
+        rawState: "Todo",
+        url: "https://linear.app/acme/issue/ENG-42",
+        assignees: [],
+        labels: [],
+        createdAt: 0,
+        updatedAt: 0,
+        rawData: null,
+        providerId: "linear",
+        key: "ENG-42",
+      },
+    });
+    await advanceTimersGradually(500);
+    await nameBranch();
+    await submit();
+
+    expect(runRecipe).toHaveBeenCalledTimes(1);
+    const context = runRecipe.mock.calls[0]![3];
+    expect(context).toEqual({
+      issueNumber: 4019283746519283,
+      issueKey: "ENG-42",
+      issueTitle: "Fix the login race",
+      prNumber: undefined,
+      worktreePath: "/test/root-worktrees/feature/test",
+      branchName: "feature/test",
+    });
+    const retry = mockNotify.mock.calls
+      .flatMap(([payload]) => payload.actions ?? [])
+      .find((action) => action.label === "Retry recipe");
+    await act(async () => {
+      retry!.onClick();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(runRecipe).toHaveBeenCalledTimes(2);
+    expect(runRecipe.mock.calls[1]![3]).toEqual(context);
   });
 
   it("hands back a recipe that starts an agent when setup is waiting for approval", async () => {

@@ -40,6 +40,7 @@ import type { RecipeLayoutOmissions } from "@/store/recipeStore";
 import { BUILT_IN_AGENT_IDS } from "@shared/config/agentIds";
 import { getAgentDisplayTitle } from "@/config/agents";
 import type { Project, RecipeTerminal, TerminalRecipe } from "@/types";
+import { getAvailableVariables } from "@/utils/recipeVariables";
 
 const RECIPE: TerminalRecipe = {
   id: "r1",
@@ -123,6 +124,14 @@ describe("RecipeEditor", () => {
     expect(new Set(names).size).toBe(3);
     const removes = screen.getAllByRole("button", { name: /^Remove terminal / });
     expect(new Set(removes.map((b) => b.getAttribute("aria-label"))).size).toBe(3);
+  });
+
+  it("lists every recipe variable under an agent's initial prompt (#16381)", () => {
+    renderEditor(RECIPE);
+    const hint = document.getElementById("terminal-initial-prompt-help-2")!;
+    const listed = [...hint.querySelectorAll("code")].map((el) => el.textContent);
+    expect(listed).toEqual(getAvailableVariables().map((v) => `{{${v.name}}}`));
+    expect(listed).toContain("{{issue_title}}");
   });
 
   it("submits on Enter from a single-line field, never from the prompt", async () => {

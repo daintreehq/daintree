@@ -13,7 +13,7 @@ import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { usePanelStore } from "@/store/panelStore";
 import { actionService } from "@/services/ActionService";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import type { RecipeContext } from "@/utils/recipeVariables";
+import { recipeContextFromWorktree, type RecipeContext } from "@/utils/recipeVariables";
 import { missingRecipeVariables } from "@/utils/recipeAgentStep";
 import { recipeApprovalDigest } from "@/utils/recipeApprovalDigest";
 import { getAgentConfig } from "@/config/agents";
@@ -242,10 +242,8 @@ export function useRecipeRunner({
         ? getCurrentViewStore().getState().worktrees.get(activeWorktreeId)
         : null;
       return {
-        issueNumber: worktreeData?.issueNumber,
-        prNumber: worktreeData?.linked?.pr?.ref.number,
+        ...(worktreeData ? recipeContextFromWorktree(worktreeData) : {}),
         worktreePath: cwd,
-        branchName: worktreeData?.branch,
       };
     },
     [activeWorktreeId]

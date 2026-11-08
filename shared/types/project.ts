@@ -568,7 +568,7 @@ export interface RecipeTerminal {
   command?: string;
   /** Environment variables to set (optional) */
   env?: Record<string, string>;
-  /** Initial prompt to send to agent terminals after boot (optional). Supports {{issue_number}}, {{pr_number}}, {{worktree_path}}, {{branch_name}} variables replaced at runtime, and a plugin recipe's {{plugin.<name>}} variables. */
+  /** Initial prompt to send to agent terminals after boot (optional). Supports {{issue_number}}, {{issue_title}}, {{pr_number}}, {{number}}, {{worktree_path}}, {{branch_name}} variables replaced at runtime, and a plugin recipe's {{plugin.<name>}} variables. */
   initialPrompt?: string;
   /**
    * Standing instruction appended to an agent's system prompt (#13797). Plugin
