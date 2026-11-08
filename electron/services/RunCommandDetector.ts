@@ -149,14 +149,18 @@ class DetectionRun {
     return this.present.has(name);
   }
 
-  /** The file's text, or null when the gate refused the read. */
+  /**
+   * The file's text, or null when the gate refused the read. Any failed read
+   * leaves the pass incomplete: on macOS an online-only placeholder fails with
+   * EDEADLK, and that file's commands must not be cached as absent.
+   */
   async read(name: string): Promise<string | null> {
     try {
       return await projectIo.run(this.root, () => fs.readFile(path.join(this.root, name), "utf-8"));
     } catch (error) {
-      if (!isProjectIoError(error)) throw error;
       this.incomplete = true;
-      return null;
+      if (isProjectIoError(error)) return null;
+      throw error;
     }
   }
 }
