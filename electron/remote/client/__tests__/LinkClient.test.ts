@@ -1872,7 +1872,10 @@ describe("LinkClient network change and focus (#16386)", () => {
     };
   }
 
-  function linkTo(transport: LinkTransport, probes: { networkProbeMs?: number; wakeProbeMs?: number }) {
+  function linkTo(
+    transport: LinkTransport,
+    probes: { networkProbeMs?: number; wakeProbeMs?: number }
+  ) {
     client = new LinkClient({
       transport,
       handshake: TEST_HANDSHAKE,
