@@ -3206,7 +3206,7 @@ describe("CliAvailabilityService", () => {
         ["is unset", undefined, "%LOCALAPPDATA%\\Programs\\pi\\pi.exe"],
         ["is relative", "relative\\dir", "relative\\dir\\Programs\\pi\\pi.exe"],
         ["is empty", "", "\\Programs\\pi\\pi.exe"],
-      ])("skips a %%VAR%%\\ root whose variable %s", async (_name, value, expanded) => {
+      ])("skips an environment root whose variable %s", async (_name, value, expanded) => {
         if (value === undefined) delete process.env.LOCALAPPDATA;
         else process.env.LOCALAPPDATA = value;
         await contribute({
