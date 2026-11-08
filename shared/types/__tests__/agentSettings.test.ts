@@ -1533,7 +1533,10 @@ describe("inline-only launches (#16356)", () => {
       for (const entry of storedChoices) {
         const label = `${agentId} ${JSON.stringify(entry)}`;
         const flags = buildAgentLaunchFlags(entry, agentId);
-        expect(flags.filter((f) => f === capabilities.inlineModeFlag), label).toHaveLength(1);
+        expect(
+          flags.filter((f) => f === capabilities.inlineModeFlag),
+          label
+        ).toHaveLength(1);
         const command = generateAgentCommand(agentId, entry, agentId);
         expect(command.split(" "), label).toContain(capabilities.inlineModeFlag);
         if (capabilities.altScreenFlag) {
@@ -1552,7 +1555,8 @@ describe("inline-only launches (#16356)", () => {
         interactive: false,
       }).split(" ");
       expect(tokens, agentId).not.toContain(capabilities.inlineModeFlag);
-      if (capabilities.altScreenFlag) expect(tokens, agentId).not.toContain(capabilities.altScreenFlag);
+      if (capabilities.altScreenFlag)
+        expect(tokens, agentId).not.toContain(capabilities.altScreenFlag);
     }
   });
 

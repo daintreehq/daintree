@@ -18,7 +18,10 @@ describe("reconcileResumeLaunchFlagsWith", () => {
       )
     ).toEqual(["--model", "grok-build", "--no-alt-screen"]);
     expect(
-      reconcileResumeLaunchFlagsWith({ agentId: "codex" }, settings(saved as Partial<AgentSettings>))
+      reconcileResumeLaunchFlagsWith(
+        { agentId: "codex" },
+        settings(saved as Partial<AgentSettings>)
+      )
     ).toContain("--no-alt-screen");
   });
 

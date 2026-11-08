@@ -308,7 +308,11 @@ describe("agent.updatePreset", () => {
         { agentId: "codex", presetId: WORK.id, inlineMode },
         sources({ customPresets: [WORK] })
       );
-      refusal("agent.createPreset", { agentId: "codex", name: "Alt", inlineMode }, sources(undefined));
+      refusal(
+        "agent.createPreset",
+        { agentId: "codex", name: "Alt", inlineMode },
+        sources(undefined)
+      );
     }
     const legacy = { ...WORK, inlineMode: "off" } as AgentPreset;
     const mutation = plan(
