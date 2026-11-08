@@ -493,6 +493,7 @@ describe("layout key labels", () => {
 
   it("keeps a character a key cap can't uppercase to one character", () => {
     expect(parseChord("Cmd+-", true, azerty)).toEqual([["⌘", "ß"]]);
+    expect(describeChord("Cmd+-", true, azerty)).toBe("Command ß");
   });
 
   it("leaves letters, named keys and unmapped punctuation alone", () => {
@@ -511,6 +512,8 @@ describe("layout key labels", () => {
 
   it("speaks and names for ARIA the key that is drawn", () => {
     expect(describeChord("Cmd+/", true)).toBe("Command Slash");
+    expect(describeChord("Cmd+/", true, new Map([["/", "."]]))).toBe("Command Period");
+    expect(comboToAriaKeyshortcuts("Cmd+=", true, new Map([["=", "+"]]))).toBe("Meta+Plus");
     expect(describeChord("Cmd+/", true, azerty)).toBe("Command !");
     expect(describeChord("Cmd+K ;", false, azerty)).toBe("Ctrl K, then M");
     expect(comboToAriaKeyshortcuts("Cmd+/", true, azerty)).toBe("Meta+!");

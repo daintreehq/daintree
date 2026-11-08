@@ -29,6 +29,13 @@ function getKeyboard(): KeyboardLike | undefined {
 // One printable character: no control, separator or lone combining mark.
 const LABEL_CHAR = /^[^\p{C}\p{Z}\p{M}]$/u;
 
+/** The layout's character as a key cap can print it, or undefined. */
+function readableLabel(produced: string | undefined): string | undefined {
+  if (produced === undefined) return undefined;
+  const composed = produced.normalize("NFC");
+  return LABEL_CHAR.test(composed) ? composed : undefined;
+}
+
 // The codes behind each canonical character, in CODE_TO_KEY order, so
 // Backslash comes before IntlBackslash for "\".
 const CODES_BY_CHAR = new Map<string, string[]>();
@@ -38,33 +45,16 @@ for (const [code, char] of Object.entries(CODE_TO_KEY)) {
   else CODES_BY_CHAR.set(char, [code]);
 }
 
-const LETTER_CODES = Array.from({ length: 26 }, (_, i) => `Key${String.fromCharCode(65 + i)}`);
-
-/**
- * A layout whose letter keys type another script. Shortcuts there go through
- * the Latin legends the keys also carry (macOS menus keep "⌘," on Russian),
- * and the letter bindings are drawn in Latin, so the punctuation stays Latin
- * too rather than mixing scripts in one chord.
- */
-function isNonLatinLayout(layout: LayoutMapLike): boolean {
-  return LETTER_CODES.some((code) => {
-    const produced = layout.get(code);
-    return produced !== undefined && /\p{L}/u.test(produced) && !/\p{Script=Latin}/u.test(produced);
-  });
-}
-
 /** The labels a layout map gives the physically matched keys. */
 export function deriveKeyLabels(layout: LayoutMapLike): KeyLabels {
-  if (isNonLatinLayout(layout)) return US_KEY_LABELS;
   const labels = new Map<string, string>();
   for (const [char, codes] of CODES_BY_CHAR) {
-    const produced = codes.map((code) => layout.get(code));
+    const produced = codes.map((code) => readableLabel(layout.get(code)));
     // A binding on "\" fires from Backslash and IntlBackslash alike: if either
-    // key types "\" on this layout, the US label already names a findable key.
+    // key types "\" on this layout, the US label already names a key that fires.
     if (produced.includes(char)) continue;
-    const label = produced[0];
-    if (label === undefined || !LABEL_CHAR.test(label)) continue;
-    labels.set(char, label);
+    const label = produced.find((value) => value !== undefined);
+    if (label !== undefined) labels.set(char, label);
   }
   return labels.size === 0 ? US_KEY_LABELS : labels;
 }
@@ -80,10 +70,12 @@ function sameLabels(a: KeyLabels, b: KeyLabels): boolean {
 let keyLabels: KeyLabels = US_KEY_LABELS;
 // Every code the last read reported, for spotting a layout switch from typing.
 let layoutChars: ReadonlyMap<string, string> | null = null;
-// Keystrokes that disagreed with a fresh read, so typing on a layout the read
-// doesn't report (a non-Latin input source) asks the OS once per key, not per
-// keystroke.
-const unresolvedMismatches = new Set<string>();
+// Keystrokes that disagreed with a fresh read, and when. Typing on a layout the
+// read doesn't report (a non-Latin input source, which Chromium answers with
+// the ASCII-capable layout behind it) then asks the OS about each key once a
+// minute rather than on every keystroke.
+const unresolvedMismatches = new Map<string, number>();
+const MISMATCH_RECHECK_MS = 60_000;
 const listeners = new Set<() => void>();
 let readGeneration = 0;
 let stopWatching: (() => void) | null = null;
@@ -125,15 +117,18 @@ async function readLayout(): Promise<void> {
 
 function onKeyDown(event: KeyboardEvent): void {
   if (!layoutChars) return;
-  if (event.isComposing || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+  if (event.repeat || event.isComposing) return;
+  if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
   if (event.getModifierState?.("AltGraph")) return;
   const key = event.key;
   if (typeof key !== "string" || [...key].length !== 1) return;
   const expected = layoutChars.get(event.code);
   if (expected === undefined || expected.toLowerCase() === key.toLowerCase()) return;
   const signature = `${event.code}\u0000${key}`;
-  if (unresolvedMismatches.has(signature)) return;
-  unresolvedMismatches.add(signature);
+  const now = Date.now();
+  const askedAt = unresolvedMismatches.get(signature);
+  if (askedAt !== undefined && now - askedAt < MISMATCH_RECHECK_MS) return;
+  unresolvedMismatches.set(signature, now);
   void readLayout();
 }
 

@@ -6,6 +6,7 @@ import {
 } from "@/services/KeybindingService";
 import { isMac } from "@/lib/platform";
 import { parseChord } from "@/lib/kbdShortcut";
+import { useKeyLabels, type KeyLabels } from "@/lib/keyboardLayout";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -231,8 +232,8 @@ function matchesQuery(query: string, ...fields: (string | undefined)[]): boolean
 }
 
 /** The keys as the rail draws them: "⌘K ⌘R" on macOS, "CtrlK CtrlR" elsewhere. */
-function displayedKeys(combo: string, mac: boolean): string {
-  return parseChord(combo, mac)
+function displayedKeys(combo: string, mac: boolean, keyLabels?: KeyLabels): string {
+  return parseChord(combo, mac, keyLabels)
     .map((step) => step.join(""))
     .join(" ");
 }
@@ -313,6 +314,20 @@ export function KeyboardShortcutsTab() {
   const searchRef = useRef<HTMLInputElement>(null);
   const query = searchQuery.trim().toLowerCase();
 
+  // The keys as the rail draws them on this keyboard layout ("⌘!" for Cmd+/ on
+  // AZERTY), searched beside the US spelling `searchKeys` already holds.
+  const keyLabels = useKeyLabels();
+  const layoutSearchKeys = useMemo(() => {
+    if (keyLabels.size === 0) return null;
+    const mac = isMac();
+    return new Map(
+      bindings.map((b) => [
+        b.rowId,
+        b.effectiveCombos.map((combo) => displayedKeys(combo, mac, keyLabels)).join(" "),
+      ])
+    );
+  }, [bindings, keyLabels]);
+
   const filteredBindings = useMemo(() => {
     return bindings.filter(
       (b) =>
@@ -326,9 +341,10 @@ export function KeyboardShortcutsTab() {
             b.scopeNote,
             b.category
           ) ||
-          matchesKeys(query, b.searchKeys))
+          matchesKeys(query, b.searchKeys) ||
+          matchesKeys(query, layoutSearchKeys?.get(b.rowId) ?? ""))
     );
-  }, [bindings, query, filterMode]);
+  }, [bindings, query, filterMode, layoutSearchKeys]);
 
   // Fixed keys have no default to depart from, so the Modified filter hides them.
   const filteredFixed = useMemo(() => {

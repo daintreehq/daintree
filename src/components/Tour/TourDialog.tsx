@@ -10,6 +10,7 @@ import { TourPlayerContext, useTourPlayerState } from "@daintreehq/tour/react";
 import { TourShortcutsContext } from "@daintreehq/tour/kit";
 import { EMPTY_MOCK_KIT, MockKitContext } from "@daintreehq/tour/mock-app";
 import { daintreeTourShortcuts } from "./daintreeTourShortcuts";
+import { useKeyLabels } from "@/lib/keyboardLayout";
 
 export interface TourDialogProps {
   isOpen: boolean;
@@ -238,6 +239,7 @@ export function TourDialog({
   keyboard = currentTourKeyboard(),
 }: TourDialogProps) {
   const [player, setPlayer] = useState<TourPlayer | null>(null);
+  const keyLabels = useKeyLabels();
   // Set only when the project's view stopped the tour (or kept it from starting),
   // so being seen again resumes that and never undoes the user's own pause.
   const resumeWhenSeenRef = useRef(false);
@@ -292,7 +294,7 @@ export function TourDialog({
       {player && (
         <MockKitContext.Provider value={tour.mockKit ?? EMPTY_MOCK_KIT}>
           <TourPlayerContext.Provider value={player}>
-            <TourShortcutsContext.Provider value={daintreeTourShortcuts(keyboard)}>
+            <TourShortcutsContext.Provider value={daintreeTourShortcuts(keyboard, keyLabels)}>
               <TourBody
                 tour={tour}
                 player={player}

@@ -75,22 +75,24 @@ function ownLookup(table: Record<string, string>, key: string): string | undefin
 }
 
 /**
- * The key a canonical token names on the active layout. Only single
- * characters are physically matched punctuation; names and modifiers pass.
+ * What the active layout prints on the key a token names, or undefined when
+ * the token draws as itself. Only single punctuation characters are matched
+ * physically; names, letters and modifiers never have a label.
  */
-function layoutToken(rawToken: string, keyLabels: KeyLabels | undefined): string {
-  if (!keyLabels || keyLabels.size === 0 || rawToken.length !== 1) return rawToken;
-  return keyLabels.get(rawToken) ?? rawToken;
+function layoutLabel(token: string, keyLabels: KeyLabels | undefined): string | undefined {
+  if (!keyLabels || token.length !== 1) return undefined;
+  return keyLabels.get(token);
 }
 
-/** A single key uppercased as a key cap prints it, unless that spells two ("ß" → "SS"). */
-function upperKey(key: string): string {
-  const upper = key.toUpperCase();
-  return [...upper].length === 1 ? upper : key;
+/** A layout label uppercased like a letter key, unless that spells two ("ß" → "SS"). */
+function labelCap(label: string): string {
+  const upper = label.toUpperCase();
+  return [...upper].length === 1 ? upper : label;
 }
 
-function mapToken(canonicalToken: string, isMac: boolean, keyLabels?: KeyLabels): string {
-  const rawToken = layoutToken(canonicalToken, keyLabels);
+function mapToken(rawToken: string, isMac: boolean, keyLabels?: KeyLabels): string {
+  const label = layoutLabel(rawToken, keyLabels);
+  if (label !== undefined) return labelCap(label);
   const lower = rawToken.toLowerCase();
   const arrow = ownLookup(ARROW_GLYPHS, lower);
   if (arrow) return arrow;
@@ -100,7 +102,7 @@ function mapToken(canonicalToken: string, isMac: boolean, keyLabels?: KeyLabels)
   // Single-char keys are uppercased ("p" → "P"). Multi-char unknowns keep
   // their original casing so labels like "PageUp" or "NumpadEnter" don't
   // get mangled to "Pageup".
-  if ([...rawToken].length === 1) return upperKey(rawToken);
+  if (rawToken.length === 1) return rawToken.toUpperCase();
   return rawToken;
 }
 
@@ -280,17 +282,18 @@ const ARIA_KEY_NAMES: Record<string, string> = {
 };
 
 function mapAriaToken(
-  canonicalToken: string,
+  rawToken: string,
   modifiers: Record<string, string>,
   keyLabels?: KeyLabels
 ): string {
-  const rawToken = layoutToken(canonicalToken, keyLabels);
+  const label = layoutLabel(rawToken, keyLabels);
+  if (label !== undefined) return ownLookup(ARIA_KEY_NAMES, label) ?? labelCap(label);
   const lower = rawToken.toLowerCase();
   const modifier = ownLookup(modifiers, lower);
   if (modifier) return modifier;
   const named = ownLookup(ARIA_KEY_NAMES, lower);
   if (named) return named;
-  if ([...rawToken].length === 1) return upperKey(rawToken);
+  if (rawToken.length === 1) return rawToken.toUpperCase();
   return rawToken;
 }
 
@@ -428,8 +431,13 @@ function spokenToken(rawToken: string, isMac: boolean): string {
   // A key range such as "1–9" (a collapsed numbered family) reads as a range.
   const range = /^(\w)[–-](\w)$/.exec(rawToken);
   if (range) return `${range[1]!.toUpperCase()} through ${range[2]!.toUpperCase()}`;
-  if ([...rawToken].length === 1) return upperKey(rawToken);
+  if (rawToken.length === 1) return rawToken.toUpperCase();
   return rawToken;
+}
+
+/** A layout label read aloud: its name when it has one ("." → "Period"). */
+function spokenLabel(label: string): string {
+  return ownLookup(SPOKEN_KEY_NAMES, label) ?? labelCap(label);
 }
 
 // The glyphs a literal key cap draws, as the token names the spoken tables use.
@@ -493,7 +501,12 @@ export function describeChord(shortcut: string, isMac: boolean, keyLabels?: KeyL
   // The same step split the chips use, so what is spoken is what is shown.
   return splitChordSteps(shortcut)
     .map((tokens) =>
-      tokens.map((token) => spokenToken(layoutToken(token, keyLabels), isMac)).join(" ")
+      tokens
+        .map((token) => {
+          const label = layoutLabel(token, keyLabels);
+          return label !== undefined ? spokenLabel(label) : spokenToken(token, isMac);
+        })
+        .join(" ")
     )
     .join(", then ");
 }

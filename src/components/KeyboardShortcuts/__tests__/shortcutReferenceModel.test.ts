@@ -230,6 +230,19 @@ describe("searchShortcuts", () => {
     for (const entry of results.slice(0, 3)) expect(entry.description).toMatch(/focused terminal/i);
   });
 
+  it("finds a key by what the keyboard layout prints on it as well as its US name", () => {
+    const azerty = new Map([["/", "!"]]);
+    const isSlash = (entry: (typeof entries)[number]) =>
+      entry.alternatives.some((alt) => alt.combo === "Cmd+/");
+    const drawn = searchShortcuts(entries, "⌘!", true, azerty)!;
+    expect(drawn.some(isSlash)).toBe(true);
+    expect(drawn.every((entry) => entry.alternatives.some((alt) => alt.combo.includes("/")))).toBe(
+      true
+    );
+    expect(searchShortcuts(entries, "⌘/", true, azerty)!.some(isSlash)).toBe(true);
+    expect(searchShortcuts(entries, "⌘!", true)!.some(isSlash)).toBe(false);
+  });
+
   it("filters by key prefix when the query reads as keys", () => {
     const results = searchShortcuts(entries, "⌘K", true)!;
     expect(results.length).toBeGreaterThan(0);

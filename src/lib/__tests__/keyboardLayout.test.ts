@@ -109,8 +109,23 @@ describe("deriveKeyLabels", () => {
     expect(deriveKeyLabels(US)).toBe(US_KEY_LABELS);
   });
 
-  it("keeps the US labels for a layout whose letters type another script", () => {
-    expect(deriveKeyLabels(RUSSIAN)).toBe(US_KEY_LABELS);
+  it("takes a non-Latin layout's characters as the OS reports them", () => {
+    const labels = deriveKeyLabels(RUSSIAN);
+    expect(labels.get("/")).toBe(".");
+    expect(labels.get(".")).toBe("ю");
+    expect(labels.get(",")).toBe("б");
+  });
+
+  it("labels backslash from the second key only when the first can't be read", () => {
+    const iso = layout({ ...US_LETTERS, Backslash: "", IntlBackslash: "<" });
+    expect(deriveKeyLabels(iso).get("\\")).toBe("<");
+    const german = layout({ ...US_LETTERS, Backslash: "#", IntlBackslash: "<" });
+    expect(deriveKeyLabels(german).get("\\")).toBe("#");
+  });
+
+  it("composes a decomposed character into the one it prints", () => {
+    const decomposed = layout({ ...US_LETTERS, Quote: "ù" });
+    expect(deriveKeyLabels(decomposed).get("'")).toBe("ù");
   });
 
   it('keeps "\\" when the second backslash key types it', () => {
@@ -133,6 +148,7 @@ describe("keyboard layout store", () => {
   afterEach(() => {
     resetKeyboardLayoutForTests();
     Reflect.deleteProperty(navigator, "keyboard");
+    vi.restoreAllMocks();
   });
 
   it("stays on the US labels when the layout can't be read", async () => {
@@ -203,6 +219,7 @@ describe("keyboard layout store", () => {
     press("KeyQ", "Q", { shiftKey: true });
     press("KeyQ", "œ", { metaKey: true });
     press("KeyQ", "x", { isComposing: true });
+    press("KeyQ", "x", { repeat: true });
     press("BracketLeft", "Dead");
     await flush();
     expect(getLayoutMap).toHaveBeenCalledTimes(1);
@@ -215,9 +232,11 @@ describe("keyboard layout store", () => {
     unsubscribe();
   });
 
-  it("asks once per disagreeing key when the read doesn't follow the typing", async () => {
+  it("asks about a disagreeing key once a minute when the read doesn't follow the typing", async () => {
     // A non-Latin input source can be typed while the read reports the
     // ASCII-capable layout behind it.
+    let now = 1_000_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
     const getLayoutMap = vi.fn(async () => US);
     installKeyboard(getLayoutMap);
     const unsubscribe = subscribeKeyLabels(() => {});
@@ -233,6 +252,31 @@ describe("keyboard layout store", () => {
     press("KeyB", "и");
     await flush();
     expect(getLayoutMap).toHaveBeenCalledTimes(3);
+
+    now += 60_000;
+    press("KeyA", "ф");
+    await flush();
+    expect(getLayoutMap).toHaveBeenCalledTimes(4);
+    unsubscribe();
+  });
+
+  it("re-reads every key once the layout it disagreed with has changed", async () => {
+    let current = US;
+    const getLayoutMap = vi.fn(async () => current);
+    installKeyboard(getLayoutMap);
+    const unsubscribe = subscribeKeyLabels(() => {});
+    await flush();
+
+    press("KeyA", "ф");
+    await flush();
+    expect(getLayoutMap).toHaveBeenCalledTimes(2);
+
+    current = AZERTY;
+    window.dispatchEvent(new Event("focus"));
+    await flush();
+    press("KeyA", "ф");
+    await flush();
+    expect(getLayoutMap).toHaveBeenCalledTimes(4);
     unsubscribe();
   });
 

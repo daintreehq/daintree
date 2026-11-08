@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { render, screen, act, fireEvent } from "@testing-library/react";
 
 Object.defineProperty(window, "matchMedia", {
@@ -82,6 +82,14 @@ vi.mock("@/services/KeybindingService", () => ({
         effectiveCombo: "Cmd+S",
         effectiveCombos: ["Cmd+S"],
       },
+      {
+        actionId: "help.shortcutsAlt",
+        description: "Show shortcut reference",
+        category: "Help",
+        scope: "global",
+        effectiveCombo: "Cmd+/",
+        effectiveCombos: ["Cmd+/"],
+      },
     ],
     hasOverride: () => false,
     formatComboForDisplay: (combo: string) => combo,
@@ -91,6 +99,9 @@ vi.mock("@/services/KeybindingService", () => ({
 }));
 
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { resetKeyboardLayoutForTests } from "@/lib/keyboardLayout";
+import { parseChord } from "@/lib/kbdShortcut";
+import { isMac } from "@/lib/platform";
 import { KeyboardShortcutsTab } from "../KeyboardShortcutsTab";
 
 // The class pair HighlightedText puts on a match; the segmented filter control
@@ -175,5 +186,31 @@ describe("KeyboardShortcutsTab search highlighting", () => {
   it("marks nothing without a search", async () => {
     await renderTab();
     expect(document.querySelectorAll(MARK)).toHaveLength(0);
+  });
+});
+
+describe("KeyboardShortcutsTab search on another keyboard layout", () => {
+  afterEach(() => {
+    resetKeyboardLayoutForTests();
+    Reflect.deleteProperty(navigator, "keyboard");
+  });
+
+  const rowLabels = () =>
+    Array.from(document.querySelectorAll("[data-settings-row-label]")).map((n) => n.textContent);
+
+  it("finds a binding by the key its layout prints and still by the US key", async () => {
+    Object.defineProperty(navigator, "keyboard", {
+      value: { getLayoutMap: async () => new Map([["Slash", "!"]]) },
+      configurable: true,
+    });
+    await renderTab();
+    const modifier = parseChord("Cmd", isMac()).flat().join("");
+
+    await search(`${modifier}!`);
+    expect(rowLabels()).toContain("Show shortcut reference");
+    expect(rowLabels()).not.toContain("Save file");
+
+    await search(`${modifier}/`);
+    expect(rowLabels()).toContain("Show shortcut reference");
   });
 });

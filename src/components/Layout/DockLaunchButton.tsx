@@ -48,6 +48,7 @@ import {
 import { cn } from "@/lib/utils";
 import { isMac } from "@/lib/platform";
 import { comboToAriaKeyshortcuts, describeChord } from "@/lib/kbdShortcut";
+import { useKeyLabels } from "@/lib/keyboardLayout";
 import { notify } from "@/lib/notify";
 import { deriveAgentAttentionStates } from "@/lib/agentAttentionStates";
 import { useFleetBandRunIds } from "@/hooks/useRunFleetBand";
@@ -1593,6 +1594,7 @@ function DockLaunchOption({
   // per-key chips and `describeChord` speaks. `displayCombo` is already
   // formatted for the platform and stays the human-readable tooltip string.
   const effectiveCombo = useEffectiveCombo(comboActionId);
+  const keyLabels = useKeyLabels();
 
   // A filtered row must carry the same warnings as its unfiltered twin: an
   // agent that lands on the recovery panel instead of a session, or a shadowed
@@ -1899,7 +1901,7 @@ function DockLaunchOption({
         // name — with an `aria-label` present it computes as the description, so
         // the warning is announced once and still shows as the mouse tooltip.
         aria-label={optionLabel}
-        aria-keyshortcuts={comboToAriaKeyshortcuts(effectiveCombo, isMac())}
+        aria-keyshortcuts={comboToAriaKeyshortcuts(effectiveCombo, isMac(), keyLabels)}
         aria-expanded={
           (row.kind === "item" && rowHasPresets(row)) || isMore ? isExpanded : undefined
         }

@@ -1,5 +1,6 @@
 import Fuse from "fuse.js";
 import { KEYBINDING_CATEGORY_ORDER } from "@shared/config/defaultKeybindings";
+import type { KeyLabels } from "@/lib/keyboardLayout";
 import type { FixedShortcut } from "./fixedShortcuts";
 
 /** The slice of a registered binding the reference needs. */
@@ -303,8 +304,11 @@ function canonicalKey(token: string, mac: boolean): { modifier?: string; key?: s
   return { key: KEY_NAMES.get(lower) ?? lower };
 }
 
-/** A stored combo ("Cmd+K Cmd+S") as comparable steps. */
-function comboSteps(combo: string, mac: boolean): KeyStep[] {
+/**
+ * A stored combo ("Cmd+K Cmd+S") as comparable steps; with `keyLabels`, each
+ * physically matched key as the active layout prints it.
+ */
+function comboSteps(combo: string, mac: boolean, keyLabels?: KeyLabels): KeyStep[] {
   return combo
     .trim()
     .replace(/\s*\+\s*/g, "+")
@@ -316,7 +320,7 @@ function comboSteps(combo: string, mac: boolean): KeyStep[] {
       const parts = (literalPlus ? step.slice(0, -1) : step).split("+").filter(Boolean);
       if (literalPlus) parts.push("+");
       for (const part of parts) {
-        const canonical = canonicalKey(part, mac);
+        const canonical = canonicalKey(keyLabels?.get(part) ?? part, mac);
         if (canonical.modifier) modifiers.add(canonical.modifier);
         else key = canonical.key ?? null;
       }
@@ -421,8 +425,7 @@ function sameModifiers(a: Set<string>, b: Set<string>): boolean {
  * held with at least those modifiers, while a step with its key must match
  * exactly, so "⌘K" finds the ⌘K family and not ⌘⇧K.
  */
-function comboMatches(combo: string, query: KeyStep[], mac: boolean): boolean {
-  const steps = comboSteps(combo, mac);
+function stepsMatch(steps: KeyStep[], query: KeyStep[]): boolean {
   if (query.length > steps.length) return false;
   return query.every((q, i) => {
     const step = steps[i]!;
@@ -433,6 +436,19 @@ function comboMatches(combo: string, query: KeyStep[], mac: boolean): boolean {
     }
     return q.key === step.key && sameModifiers(q.modifiers, step.modifiers);
   });
+}
+
+/** A combo matches by its US spelling or by the keys the active layout prints. */
+function comboMatches(
+  combo: string,
+  query: KeyStep[],
+  mac: boolean,
+  keyLabels: KeyLabels | undefined
+): boolean {
+  if (stepsMatch(comboSteps(combo, mac), query)) return true;
+  return keyLabels !== undefined && keyLabels.size > 0
+    ? stepsMatch(comboSteps(combo, mac, keyLabels), query)
+    : false;
 }
 
 function searchKeywords(entry: ShortcutEntry): string {
@@ -460,7 +476,8 @@ function wordStarts(haystack: string, needle: string): boolean {
 export function searchShortcuts(
   entries: readonly ShortcutEntry[],
   query: string,
-  mac: boolean
+  mac: boolean,
+  keyLabels?: KeyLabels
 ): ShortcutEntry[] | null {
   const trimmed = query.trim();
   if (!trimmed) return null;
@@ -468,7 +485,7 @@ export function searchShortcuts(
   const keys = parseKeyQuery(trimmed, mac);
   if (keys) {
     return entries.filter((entry) =>
-      entry.alternatives.some((alt) => comboMatches(alt.combo, keys, mac))
+      entry.alternatives.some((alt) => comboMatches(alt.combo, keys, mac, keyLabels))
     );
   }
 
@@ -499,7 +516,7 @@ export function searchShortcuts(
     : null;
   const keyed = bareKey
     ? entries.filter((entry) =>
-        entry.alternatives.some((alt) => comboMatches(alt.combo, bareKey, mac))
+        entry.alternatives.some((alt) => comboMatches(alt.combo, bareKey, mac, keyLabels))
       )
     : [];
   const ranked = [...new Set([...keyed, ...tiers.flat()])];
