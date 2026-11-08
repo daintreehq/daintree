@@ -404,6 +404,7 @@ describe("Go to pane from the Canopy window, for a run in a scratch", () => {
   });
 
   it("brings a window that moved to a host back to this machine, onto the scratch", async () => {
+    vi.useFakeTimers();
     const owner = addWindow(null, [SCRATCH]);
     nav.remoteWindows.add(owner.windowId);
 
@@ -412,6 +413,8 @@ describe("Go to pane from the Canopy window, for a run in a scratch", () => {
     expect(owner.pvm.setPendingFocusIntent).toHaveBeenCalledWith(SCRATCH, FOCUS);
     expect(nav.switchToLocal).toHaveBeenCalledWith(owner.windowId, SCRATCH);
     expect(owner.appWebContents.send).not.toHaveBeenCalled();
+    // Back in time: nothing is left waiting on it.
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("stops waiting on that window's way back once a landing would have", async () => {
@@ -435,10 +438,12 @@ describe("Go to pane from the Canopy window, for a run in a scratch", () => {
     const owner = addWindow(null, [SCRATCH]);
     nav.remoteWindows.add(owner.windowId);
     nav.switchToLocal.mockRejectedValueOnce(new Error("The host went away"));
+    vi.useFakeTimers();
 
     await expect(goToCanopyRun({ workspaceId: SCRATCH, runId: RUN })).rejects.toThrow(
       "The host went away"
     );
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("opens a window on a scratch no window has, and nothing for one that is gone", async () => {
