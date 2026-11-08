@@ -3397,11 +3397,17 @@ describe("TerminalResizeController", () => {
           dataBuffer: dataBuffer as any,
         });
 
-        expect(controller.reconcileGeometryFresh("term-1", { force: true })).toBe(false);
+        expect(controller.reconcileGeometryFresh("term-1")).toBe(false);
         expect(managed.terminal.resize).not.toHaveBeenCalled();
         expect(dataBuffer.flushForTerminal).not.toHaveBeenCalled();
         expect(resizeMock).not.toHaveBeenCalled();
         expect(managed.latestCols).toBe(80);
+
+        // An explicit Redraw is the escape hatch for a pane whose output never
+        // lets the parser catch up: it lands, both grids together.
+        expect(controller.reconcileGeometryFresh("term-1", { force: true })).toBe(true);
+        expect(managed.terminal.resize).toHaveBeenCalledWith(100, 30);
+        expect(resizeMock).toHaveBeenCalledWith("term-1", 100, 30);
       }
     );
 

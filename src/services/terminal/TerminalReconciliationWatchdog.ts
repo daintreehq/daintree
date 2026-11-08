@@ -470,11 +470,13 @@ export class TerminalReconciliationWatchdog {
     // the 6s repair cooldown and spend heavy budget on a guaranteed no-op, so
     // both geometry branches below skip the attempt and fall through to the
     // cheaper render-pause / WebGL layers, retrying once the stream pauses.
-    // An alt-buffer pane is deferred only while its output is still reaching
-    // xterm, the narrower wait reconcileGeometryFresh applies to it (#16359).
-    const streamingDeferred = managed.isAltBuffer
-      ? altFrameInFlight(managed, this.deps.getQueuedBytes(id))
-      : hasStreamingWrites(managed, now);
+    // Main-buffer only. An alt-buffer pane waits for nothing but its in-flight
+    // output, and only in the convergence branch, where a refusal would count
+    // against the breaker (#16359). The reveal-pending branch counts nothing
+    // and also carries the paint repair, which needs no resize, so an alt pane
+    // runs it regardless and simply keeps the obligation if its grid had to
+    // wait.
+    const streamingDeferred = !managed.isAltBuffer && hasStreamingWrites(managed, now);
 
     // Reveal-pending guaranteed redraw (#10632). The project-switch suppression
     // window cleared while this host was still detached/occluded, so its one-shot
@@ -575,8 +577,12 @@ export class TerminalReconciliationWatchdog {
           // issue the repair or burn a breaker attempt on it (see the
           // streamingDeferred declaration above); the render-pause / WebGL
           // layers below still run so a streaming pane with a paused renderer
-          // gets its unpause.
-          if (!managed.geometryRepairGaveUp && !streamingDeferred) {
+          // gets its unpause. An alt pane defers on the narrower wait
+          // reconcileGeometryFresh applies to it.
+          const geometryDeferred = managed.isAltBuffer
+            ? altFrameInFlight(managed, this.deps.getQueuedBytes(id))
+            : streamingDeferred;
+          if (!managed.geometryRepairGaveUp && !geometryDeferred) {
             const attempts = managed.geometryRepairAttempts ?? 0;
             if (attempts >= WATCHDOG_MAX_GEOMETRY_REPAIR_ATTEMPTS) {
               managed.geometryRepairGaveUp = true;

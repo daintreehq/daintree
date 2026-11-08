@@ -1272,12 +1272,16 @@ export class TerminalResizeController {
     // redraws often enough that waiting for quiet would never end, so it skips
     // this gate (#16359). What it must never do is move the grid in the middle
     // of a frame, so it waits instead for the parser to catch up and any DEC
-    // 2026 block to close — even under `force`.
+    // 2026 block to close. `force` drops the parser wait for the same reason
+    // it drops the quiet window above — a pane whose output never lets the
+    // parser catch up would otherwise strand Redraw too — but still waits out
+    // a block it can see open.
     const gridChanges = managed.terminal.cols !== cols || managed.terminal.rows !== rows;
     if (managed.isAltBuffer) {
-      if (gridChanges && altFrameInFlight(managed, this.deps.dataBuffer.getQueuedBytes(id))) {
-        return false;
-      }
+      const midFrame = options.force
+        ? managed.terminal.modes?.synchronizedOutputMode === true
+        : altFrameInFlight(managed, this.deps.dataBuffer.getQueuedBytes(id));
+      if (gridChanges && midFrame) return false;
     } else if (!options.force && gridChanges && hasStreamingWrites(managed, Date.now())) {
       return false;
     }

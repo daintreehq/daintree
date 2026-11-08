@@ -45,9 +45,11 @@ export type PostCompleteHook = (output: string) => void | Promise<void>;
  * without the bypass the one load-bearing step of Redraw is dead on exactly the
  * terminals it exists for.
  *
- * Still enforced under `force`: an alt-screen pane's wait for its output to
- * reach xterm and any synchronized-output block to close (#10805, #16359),
- * host visibility, the
+ * For an alt-screen pane the guard it bypasses is the twin of that one: the
+ * wait for in-flight output to reach xterm (#16359).
+ *
+ * Still enforced under `force`: an alt-screen pane's wait for an open
+ * synchronized-output block to close (#10805), host visibility, the
  * >=50px box floor, cell-metric availability, the serialized-restore parking,
  * and the pre-resize drain of held ingest bytes.
  *

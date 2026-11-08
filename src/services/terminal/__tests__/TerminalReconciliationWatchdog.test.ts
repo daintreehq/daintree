@@ -958,6 +958,25 @@ describe("TerminalReconciliationWatchdog", () => {
       expect(alt.geometryRepairAttempts).toBe(1);
     });
 
+    it("runs an alt-buffer pane's reveal-pending paint repair while its output is in flight", () => {
+      // The reveal obligation also carries the atlas repair, which moves no
+      // grid. Waiting for a busy TUI's parser to catch up would hold that
+      // repaint back for as long as the app keeps writing.
+      const alt = makeManaged({ isAltBuffer: true });
+      setRenderPaused(alt, false);
+      setGrid(alt, { cols: 100, rows: 40 }, { cols: 100, rows: 40 });
+      alt.pendingWrites = 1;
+      alt.revealPendingRepair = true;
+      alt.revealPendingGeneration = alt.attachGeneration;
+      instances.set("alt", alt);
+      const deps = makeDeps(instances, { getQueuedBytes: vi.fn(() => 4096) });
+      watchdog = new TerminalReconciliationWatchdog(deps);
+
+      vi.advanceTimersByTime(WATCHDOG_INTERVAL_MS);
+      expect(deps.reconcileRevealGeometry).toHaveBeenCalledWith("alt");
+      expect(alt.revealPendingRepair).toBe(false);
+    });
+
     it("does not reconcile geometry while a synchronized-output block is open", () => {
       const managed = makeManaged({ isAltBuffer: false });
       (
