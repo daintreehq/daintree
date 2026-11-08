@@ -131,10 +131,10 @@ followed by the full section, so the user can read exactly what ships. Carry on 
 
 In `WT`, on `release/vX.Y.Z`:
 
-1. `npm version X.Y.Z --no-git-tag-version` (updates `package.json` and both version fields in `package-lock.json`).
+1. `npm version X.Y.Z --no-git-tag-version` (updates `package.json` and both version fields in `package-lock.json`), then `npm run db:freeze`, which records every database migration this release ships in `electron/services/persistence/frozen-migrations.json` so a later edit to one fails CI. It prints "No new migrations to freeze." when the release adds none, and changes nothing then. If it refuses because a frozen migration drifted, that drift is a release blocker: restore the shipped migration rather than re-freezing it.
 2. Write the section into `CHANGELOG.md` directly under `# Changelog`, replacing the `## [Unreleased]` section. Date it today. If a fix made during readiness was user-visible, add it.
-3. `npx prettier --check CHANGELOG.md package.json package-lock.json`, trusting the exit code over the summary.
-4. Commit `chore(release): release vX.Y.Z` with those three files only and no attribution trailers. It's the release's own bookkeeping commit, so it doesn't go through the `commit` skill. Push the release branch.
+3. `npx prettier --check CHANGELOG.md package.json package-lock.json electron/services/persistence/frozen-migrations.json`, trusting the exit code over the summary.
+4. Commit `chore(release): release vX.Y.Z` with those files only (the ledger only when `db:freeze` changed it) and no attribution trailers. It's the release's own bookkeeping commit, so it doesn't go through the `commit` skill. Push the release branch.
 5. Merge, tag and push, building `main` and `develop` on detached heads:
 
    ```bash
