@@ -191,9 +191,10 @@ export class WorktreeSetupCoordinator {
    */
   async cancelCloneRun(monitor: WorktreeMonitor, waitMs = CLONE_CANCEL_WAIT_MS): Promise<void> {
     this.cancelledClones.add(monitor);
+    // Left registered until the run itself ends, so a second canceller (a
+    // retried delete, `removeMonitor` after teardown) waits on it too.
     const entry = this.cloneRuns.get(monitor);
     if (!entry) return;
-    this.cloneRuns.delete(monitor);
     entry.controller.abort();
     let timer: ReturnType<typeof setTimeout> | undefined;
     await Promise.race([

@@ -1,9 +1,8 @@
 import { spawn } from "child_process";
 import { randomUUID } from "crypto";
-import type { Dirent } from "fs";
+import type { Dirent, Stats } from "fs";
 import { chmod, lstat, mkdir, readdir, realpath, rename, rm, stat, writeFile } from "fs/promises";
 import { join as pathJoin } from "path";
-import { getSystemErrorName } from "util";
 import type { WorktreeSetupClone } from "../../shared/types/worktree.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { checkIgnoredPaths } from "../utils/gitCheckIgnore.js";
@@ -116,18 +115,17 @@ function runChild(
   });
 }
 
+// Darwin's numbers, spelled out: `util.getSystemErrorName` decodes with the
+// host's table, and these only ever come from a macOS kernel.
+const DARWIN_ERRNO_REASONS: Record<number, string> = {
+  17: "It already exists in the worktree", // EEXIST
+  18: "It's on a different volume from the worktree", // EXDEV
+  45: "This volume doesn't support copy-on-write clones", // ENOTSUP
+  102: "This volume doesn't support copy-on-write clones", // EOPNOTSUPP
+};
+
 function describeErrno(errno: number): string {
-  switch (getSystemErrorName(-errno)) {
-    case "EXDEV":
-      return "It's on a different volume from the worktree";
-    case "ENOTSUP":
-    case "EOPNOTSUPP":
-      return "This volume doesn't support copy-on-write clones";
-    case "EEXIST":
-      return "It already exists in the worktree";
-    default:
-      return `clonefile failed: ${getSystemErrorName(-errno)}`;
-  }
+  return DARWIN_ERRNO_REASONS[errno] ?? `clonefile failed with errno ${errno}`;
 }
 
 async function cloneWithClonefile(
@@ -194,7 +192,7 @@ function errorCode(err: unknown): string | undefined {
   return (err as NodeJS.ErrnoException | undefined)?.code;
 }
 
-async function lstatOrNull(path: string): Promise<Awaited<ReturnType<typeof lstat>> | null> {
+async function lstatOrNull(path: string): Promise<Stats | null> {
   try {
     return await lstat(path);
   } catch (err) {

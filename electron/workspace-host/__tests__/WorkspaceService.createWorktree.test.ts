@@ -769,13 +769,20 @@ describe("WorkspaceService.createWorktree", () => {
     const teardown = service["runLifecycleTeardown"](monitor.path, monitor, false).then(() => {
       tornDown = true;
     });
+    // A second canceller, as a retried delete would be, waits on the same run.
+    let secondDone = false;
+    const second = service["setupCoordinator"].cancelCloneRun(monitor).then(() => {
+      secondDone = true;
+    });
     await flushAsyncTail();
     await flushAsyncTail();
     expect(tornDown).toBe(false);
+    expect(secondDone).toBe(false);
 
     windDown();
-    await teardown;
+    await Promise.all([teardown, second]);
     expect(tornDown).toBe(true);
+    expect(secondDone).toBe(true);
   });
 
   it("logs async tail failure without firing a second create-worktree-result event", async () => {

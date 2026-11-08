@@ -4538,7 +4538,10 @@ export class WorkspaceService {
         });
         return undefined;
       }
+      // A project switch drops monitors without cancelling, so the read can
+      // outlive the incarnation it was started for.
       if (!entries || entries.length === 0 || signal.aborted) return undefined;
+      if (this.monitors.get(worktreeId) !== monitor) return undefined;
       return cloneIgnoredDirectories(rootPath, worktreePath, entries, { signal });
     });
   }

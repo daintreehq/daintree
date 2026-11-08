@@ -256,6 +256,47 @@ describe("cloneIgnoredDirectories", () => {
     expect(stagingDirs(dest)).toEqual([]);
   });
 
+  it("publishes nothing when a folder further up is swapped for a symlink mid-clone", async () => {
+    const { src, dest } = makeCheckouts();
+    write(src, "packages/app/node_modules/x.js", "x");
+    const outside = tempDir("daintree-wtclone-outside-");
+    mkdirSync(join(outside, "app"));
+    const cloneTree: CloneTree = async (from, to, signal) => {
+      await plainCopy(from, to, signal);
+      rmSync(join(dest, "packages"), { recursive: true, force: true });
+      symlinkSync(outside, join(dest, "packages"));
+      return { ok: true };
+    };
+
+    const results = await cloneIgnoredDirectories(src, dest, ["packages/app/node_modules"], {
+      cloneTree,
+    });
+
+    expect(results[0].reason).toBe("Its parent folder changed while it was being cloned");
+    expect(readdirSync(join(outside, "app"))).toEqual([]);
+  });
+
+  it("publishes nothing when setup is cancelled during the last checks before the rename", async () => {
+    const { src, dest } = makeCheckouts();
+    write(src, "node_modules/a.js", "a");
+    const controller = new AbortController();
+    const cloneTree: CloneTree = async (from, to, signal) => {
+      await plainCopy(from, to, signal);
+      // Fires on a later turn of the loop: after the backend's result has been
+      // read, while the destination and its parent are being looked at again.
+      setImmediate(() => controller.abort());
+      return { ok: true };
+    };
+
+    const results = await cloneIgnoredDirectories(src, dest, ["node_modules"], {
+      cloneTree,
+      signal: controller.signal,
+    });
+
+    expect(results[0].reason).toBe("Setup was cancelled");
+    expect(existsSync(join(dest, "node_modules"))).toBe(false);
+  });
+
   it("clones a nested path only when its parent folder exists in the worktree", async () => {
     const { src, dest } = makeCheckouts();
     write(src, "packages/app/node_modules/x.js", "x");
@@ -317,7 +358,9 @@ describe("cloneIgnoredDirectories", () => {
     expect(stagingDirs(dest)).toEqual([]);
   });
 
-  it.runIf(process.platform !== "win32")(
+  // Root unlinks inside a read-only folder anyway, so only an ordinary user
+  // proves the repair pass runs.
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
     "removes a failed partial tree even when it holds read-only folders",
     async () => {
       const { src, dest } = makeCheckouts();
