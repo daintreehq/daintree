@@ -391,7 +391,6 @@ export class TerminalProcess {
       // terminals have no agent state.
       agentState: hasLaunchHint ? "idle" : undefined,
       lastStateChange: hasLaunchHint ? spawnedAt : undefined,
-      outputBuffer: "",
       lastInputTime: spawnedAt,
       lastOutputTime: spawnedAt,
       lastCheckTime: spawnedAt,
@@ -1910,7 +1909,7 @@ export class TerminalProcess {
    * Mirrors the data sinks of the live `onData` handler in `setupPtyHandlers`
    * (firstByteAt, lastOutputTime, headless write, renderer emit, forensics,
    * semantic buffer, snapshotter). Skips agent-only state (activityMonitor,
-   * agent:output, outputBuffer) — by the time an agent CLI is launched into
+   * agent:output) — by the time an agent CLI is launched into
    * the PTY the prelude is overwritten on screen anyway, and feeding shell-
    * prompt bytes into agent state machines would mis-classify the session.
    */

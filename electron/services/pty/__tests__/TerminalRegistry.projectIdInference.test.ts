@@ -38,7 +38,6 @@ function createMockTerminalProcess(options: {
     lastCheckTime: Date.now(),
     restartCount: 0,
     worktreeId: options.worktreeId,
-    outputBuffer: "",
     semanticBuffer: [],
     ptyProcess: { pid: 12345 },
   };

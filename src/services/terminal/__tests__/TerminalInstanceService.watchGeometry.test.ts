@@ -125,7 +125,6 @@ function info(id: string, ptyCols?: number, ptyRows?: number): TerminalInfoPaylo
     lastInputTime: 0,
     lastOutputTime: 0,
     activityTier: "focused",
-    outputBufferSize: 0,
     semanticBufferLines: 0,
     restartCount: 0,
     ptyCols,

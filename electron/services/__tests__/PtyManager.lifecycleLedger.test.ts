@@ -54,7 +54,6 @@ class MockTerminalProcess {
     spawnedAt: number;
     isExited: boolean;
     wasKilled: boolean;
-    outputBuffer: string;
     semanticBuffer: string[];
     restartCount: number;
   };
@@ -108,7 +107,6 @@ class MockTerminalProcess {
       spawnedAt: Date.now(),
       isExited: false,
       wasKilled: false,
-      outputBuffer: "",
       semanticBuffer: [],
       restartCount: 0,
     };

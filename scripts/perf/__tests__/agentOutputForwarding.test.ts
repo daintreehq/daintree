@@ -83,7 +83,7 @@ describe("PERF-037 run", () => {
 
     expect(forwardingMisses(plan, observed)).toEqual({
       rendererDeliveryMisses: 0,
-      outputRingMisses: 0,
+      forensicRingMisses: 0,
       boundPayloadMisses: 0,
       unboundPayloadMisses: 0,
       attributionMisses: 0,
@@ -196,7 +196,7 @@ describe("PERF-037 predicates notice a broken path", () => {
     expect(forwardingMisses(plan, shortRenderer).rendererDeliveryMisses).toBe(2);
 
     const staleRing = clone(observed);
-    staleRing.terminals[flood]!.outputTail = "";
-    expect(forwardingMisses(plan, staleRing).outputRingMisses).toBe(1);
+    staleRing.terminals[flood]!.forensicTail = "";
+    expect(forwardingMisses(plan, staleRing).forensicRingMisses).toBe(1);
   });
 });

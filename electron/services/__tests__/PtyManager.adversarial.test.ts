@@ -43,7 +43,6 @@ interface TerminalInfoShape {
   spawnedAt: number;
   isExited: boolean;
   wasKilled: boolean;
-  outputBuffer: string;
   semanticBuffer: string[];
   restartCount: number;
   shell?: string;
@@ -113,7 +112,6 @@ class MockTerminalProcess {
       spawnedAt: options.spawnedAt ?? Date.now(),
       isExited: false,
       wasKilled: false,
-      outputBuffer: "",
       semanticBuffer: [],
       restartCount: 0,
       lastInputTime: 0,

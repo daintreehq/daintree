@@ -1,6 +1,5 @@
 import { AgentOutputForwarder } from "../../../electron/services/pty/AgentOutputForwarder";
 import { events } from "../../../electron/services/events";
-import { OUTPUT_BUFFER_SIZE } from "../../../electron/services/pty/types";
 import { VirtualClock } from "./agentAnalysisSim";
 import {
   createPipelineHarness,
@@ -20,7 +19,7 @@ import {
  * message per emit, so the counts are what Main would receive.
  *
  * Time is virtual. The forwarder flushes on a 50 ms timer or when its pending
- * text reaches `OUTPUT_BUFFER_SIZE`, so how many messages a stream becomes
+ * text reaches its 2,000-char size trigger, so how many messages a stream becomes
  * depends on when its chunks arrive. Arrivals are scheduled from a declared
  * rate and the `VirtualClock` fires the forwarder's own timer between them,
  * which makes the counts deterministic and comparable across machines.
@@ -209,7 +208,7 @@ export interface ForwardingTerminalObservation {
   chunksFed: number;
   emitCalls: number;
   emittedChars: number;
-  outputTail: string;
+  forensicTail: string;
   /** `agent:output` emits for this terminal: one host-to-Main message each. */
   messages: number;
   forwardedBytes: number;
@@ -240,7 +239,7 @@ export async function runForwardingFleet(
       chunksFed: 0,
       emitCalls: 0,
       emittedChars: 0,
-      outputTail: "",
+      forensicTail: "",
       messages: 0,
       forwardedBytes: 0,
       forwarded: "",
@@ -300,7 +299,7 @@ export async function runForwardingFleet(
       observed.chunksFed = finished.chunksFed;
       observed.emitCalls = finished.emitCalls;
       observed.emittedChars = finished.emittedChars;
-      observed.outputTail = finished.outputTail;
+      observed.forensicTail = finished.forensicTail;
     });
   } finally {
     harnesses.forEach((harness) => harness.dispose());
@@ -317,8 +316,8 @@ export async function runForwardingFleet(
 export interface ForwardingMisses {
   /** Chunks or characters that did not reach the renderer. */
   rendererDeliveryMisses: number;
-  /** The host-local 2,000-char agent output ring does not hold the stream's tail. */
-  outputRingMisses: number;
+  /** The host-local 4,000-char forensics ring does not hold the stream's tail. */
+  forensicRingMisses: number;
   /**
    * An Assistant terminal whose forwarded output, once the coalescing window
    * has closed, is not its raw PTY output byte for byte and in order.
@@ -340,7 +339,7 @@ export function forwardingMisses(
 ): ForwardingMisses {
   const misses: ForwardingMisses = {
     rendererDeliveryMisses: 0,
-    outputRingMisses: 0,
+    forensicRingMisses: 0,
     boundPayloadMisses: 0,
     unboundPayloadMisses: 0,
     attributionMisses: observed.strayMessages,
@@ -350,8 +349,8 @@ export function forwardingMisses(
     if (seen.chunksFed !== terminal.frames.length) misses.rendererDeliveryMisses += 1;
     if (seen.emitCalls !== terminal.frames.length) misses.rendererDeliveryMisses += 1;
     if (seen.emittedChars !== terminal.rendererChars) misses.rendererDeliveryMisses += 1;
-    if (seen.outputTail !== terminal.stream.slice(-OUTPUT_BUFFER_SIZE)) {
-      misses.outputRingMisses += 1;
+    if (seen.forensicTail !== terminal.stream.slice(-4000)) {
+      misses.forensicRingMisses += 1;
     }
     if (terminal.isAssistantTerminal) {
       if (seen.forwarded !== terminal.stream) misses.boundPayloadMisses += 1;

@@ -413,7 +413,6 @@ export interface TerminalInfoPayload {
   lastOutputTime: number;
   lastStateChange?: number;
   activityTier: "focused" | "visible" | "background";
-  outputBufferSize: number;
   semanticBufferLines: number;
   restartCount: number;
   /** Whether this terminal has an active PTY process (false for orphaned terminals that exited) */

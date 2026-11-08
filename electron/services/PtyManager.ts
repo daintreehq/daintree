@@ -1253,7 +1253,6 @@ export class PtyManager extends EventEmitter {
       lastOutputTime: terminalInfo.lastOutputTime,
       lastStateChange: terminalInfo.lastStateChange,
       activityTier: terminal.getActivityTier() === "active" ? "focused" : "background",
-      outputBufferSize: terminalInfo.outputBuffer.length,
       semanticBufferLines: terminalInfo.semanticBuffer.length,
       restartCount: terminalInfo.restartCount,
       agentIncarnation: terminalInfo.agentIncarnation,
