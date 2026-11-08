@@ -43,6 +43,8 @@ import { useWorktreeIdForPath } from "@/panels/diff/useWorktreeIdForPath";
 import { type FileStageRowSection } from "./FileStageRow";
 import { FileSection } from "./FileSection";
 import { BaseBranchFileList } from "./BaseBranchFileList";
+import { ReviewThreadsHandoff } from "./ReviewThreadsHandoff";
+import { collectReviewThreadFiles } from "./prReviewThreads";
 import {
   useReviewHubStagingActions,
   type ReviewHubActionFailure,
@@ -838,6 +840,10 @@ export function ReviewHubContent({
     [sortedBaseBranchFiles]
   );
   const reviewDecorations = useFileDecorations(decorationScope, decorationPaths);
+  const reviewThreadFiles = useMemo(
+    () => collectReviewThreadFiles(decorationPaths, reviewDecorations),
+    [decorationPaths, reviewDecorations]
+  );
 
   const behindCount = useWorktreeStore((state) => {
     for (const wt of state.worktrees.values()) {
@@ -1870,7 +1876,11 @@ export function ReviewHubContent({
               ) : sortedBaseBranchFiles !== null ? (
                 <div>
                   <div className={REVIEW_HUB_STICKY_BAND}>
-                    <div className={cn(REVIEW_HUB_SECTION_BAND, "border-b border-divider")}>
+                    {/* Wraps so the review-threads hand-off drops under the
+                        heading on a narrow hub instead of crushing it. */}
+                    <div
+                      className={cn(REVIEW_HUB_SECTION_BAND, "flex-wrap border-b border-divider")}
+                    >
                       <span className={SECTION_LABEL_CLASS}>
                         Changed vs{" "}
                         <span className="font-mono font-medium normal-case tracking-normal">
@@ -1888,6 +1898,15 @@ export function ReviewHubContent({
                           className="ml-2 font-normal normal-case tracking-normal"
                         />
                       </span>
+                      {worktreePR && reviewThreadFiles.length > 0 && (
+                        <ReviewThreadsHandoff
+                          key={`${worktreePath}#${worktreePR.prNumber}`}
+                          worktreePath={worktreePath}
+                          prNumber={worktreePR.prNumber}
+                          prUrl={worktreePR.prUrl}
+                          files={reviewThreadFiles}
+                        />
+                      )}
                     </div>
                   </div>
                   <BaseBranchFileList

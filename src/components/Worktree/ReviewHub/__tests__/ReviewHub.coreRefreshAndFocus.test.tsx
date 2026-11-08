@@ -35,6 +35,7 @@ const {
   actionDispatchMock,
   getDecorationsMock,
   onDecorationsChangedMock,
+  openSendToAgentPaletteWithTextMock,
   worktreeStoreData,
 } = vi.hoisted(() => ({
   getStagingStatusMock: vi.fn(),
@@ -73,6 +74,7 @@ const {
   actionDispatchMock: vi.fn().mockResolvedValue({ ok: true }),
   getDecorationsMock: vi.fn().mockResolvedValue({}),
   onDecorationsChangedMock: vi.fn().mockReturnValue(vi.fn()),
+  openSendToAgentPaletteWithTextMock: vi.fn().mockReturnValue(true),
   worktreeStoreData: {
     current: new Map<string, Partial<WorktreeState>>([
       [
@@ -126,6 +128,10 @@ vi.mock("@/clients/forgeClient", () => ({
 
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: actionDispatchMock },
+}));
+
+vi.mock("@/hooks/useSendToAgentPalette", () => ({
+  openSendToAgentPaletteWithText: openSendToAgentPaletteWithTextMock,
 }));
 
 vi.mock("@/components/ui/button", () => ({
@@ -403,6 +409,7 @@ describe("ReviewHub", () => {
     });
     getDecorationsMock.mockReset().mockResolvedValue({});
     onDecorationsChangedMock.mockReset().mockReturnValue(vi.fn());
+    openSendToAgentPaletteWithTextMock.mockReset().mockReturnValue(true);
 
     Object.defineProperty(window, "electron", {
       value: {
@@ -1872,6 +1879,101 @@ describe("ReviewHub", () => {
       // Click still routes through the deep-link.
       fireEvent.click(badge);
       expect(openExternalMock).toHaveBeenCalledWith(deepLinkA);
+    });
+
+    // #16397: the badges are the only per-file thread data the host holds, so
+    // the hand-off offers exactly the files that carry one.
+    describe("review-threads hand-off", () => {
+      async function settleDecorations() {
+        await waitFor(() => expect(getDecorationsMock).toHaveBeenCalled());
+        await act(async () => {
+          await Promise.resolve();
+        });
+      }
+
+      it("sends the badged files to an agent through the palette, under the PR's name", async () => {
+        getDecorationsMock.mockResolvedValueOnce({
+          "src/component.tsx": {
+            badge: "3",
+            tooltip: "3 unresolved review comments (partial count)",
+            color: "text-status-warning",
+            url: deepLinkA,
+          },
+        });
+
+        await switchToBaseBranchWithPR();
+        fireEvent.click(await screen.findByTestId("review-threads-send"));
+
+        expect(openSendToAgentPaletteWithTextMock).toHaveBeenCalledTimes(1);
+        // No source terminal: nothing sent from the hub is an agent's own output.
+        expect(openSendToAgentPaletteWithTextMock.mock.calls[0]).toHaveLength(1);
+        const [content] = openSendToAgentPaletteWithTextMock.mock.calls[0] as [
+          { text: string; title: string; sourceLabel: string },
+        ];
+        expect(content.title).toBe("Unresolved review threads");
+        expect(content.sourceLabel).toBe("PR #42");
+        const payload = JSON.parse(
+          content.text.slice(content.text.indexOf("{"), content.text.lastIndexOf("}") + 1)
+        );
+        expect(payload).toEqual({
+          pullRequest: { number: 42, url: "https://github.com/test/repo/pull/42" },
+          files: [
+            {
+              path: "src/component.tsx",
+              count: "3",
+              label: "3 unresolved review comments (partial count)",
+            },
+          ],
+        });
+        expect(content.text).toContain(`Worktree: "${WORKTREE_PATH}"`);
+      });
+
+      it("is absent when no listed file carries a badge", async () => {
+        getDecorationsMock.mockResolvedValueOnce({
+          "src/component.tsx": { tooltip: "3 unresolved review comments", url: deepLinkA },
+          "src/not-in-the-diff.ts": { badge: "2", tooltip: "2 unresolved review comments" },
+        });
+
+        await switchToBaseBranchWithPR();
+        await settleDecorations();
+
+        expect(screen.queryByTestId("review-threads-send")).toBeNull();
+      });
+
+      it("is absent when the worktree has no linked pull request", async () => {
+        getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+        render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+        await waitFor(() => screen.getByText("index.ts"));
+        act(() => {
+          fireEvent.click(screen.getByRole("radio", { name: /vs main/i }));
+        });
+        await waitFor(() => screen.getByText("component.tsx"));
+
+        expect(getDecorationsMock).not.toHaveBeenCalled();
+        expect(screen.queryByTestId("review-threads-send")).toBeNull();
+      });
+
+      it("explains inline when there is no agent to send to, and clears once a send lands", async () => {
+        getDecorationsMock.mockResolvedValueOnce({
+          "src/component.tsx": { badge: "3", tooltip: "3 unresolved review comments" },
+        });
+        openSendToAgentPaletteWithTextMock.mockReturnValueOnce(false);
+
+        await switchToBaseBranchWithPR();
+        const send = await screen.findByTestId("review-threads-send");
+        fireEvent.click(send);
+
+        const hint = await screen.findByTestId("review-threads-send-hint");
+        expect(hint.textContent).toBe("Open an agent terminal, then try sending again.");
+        // Announced through a region mounted with the button, not only painted.
+        expect(
+          screen.getAllByRole("status").some((region) => region.textContent === hint.textContent)
+        ).toBe(true);
+
+        fireEvent.click(send);
+        expect(openSendToAgentPaletteWithTextMock).toHaveBeenCalledTimes(2);
+        expect(screen.queryByTestId("review-threads-send-hint")).toBeNull();
+      });
     });
   });
 });

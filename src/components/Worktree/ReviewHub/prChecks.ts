@@ -441,6 +441,6 @@ export function composePrChecksAgentText({
  * path and this function's own prose all end up on those lines, and a per-field
  * guard is one forgotten field away from being no guard at all.
  */
-function stripShellExpansion(text: string): string {
+export function stripShellExpansion(text: string): string {
   return text.replace(/[$`!]/g, "");
 }
