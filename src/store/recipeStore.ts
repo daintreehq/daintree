@@ -35,6 +35,8 @@ import { getAgentConfig, getMergedPreset } from "@/config/agents";
 import { isRetiredAgentId } from "@shared/config/agentIds";
 import {
   generateAgentCommand,
+  mintAssignedSessionId,
+  stripConversationSelectorFlags,
   buildAgentLaunchFlags,
   resolveEffectivePresetId,
 } from "@shared/types";
@@ -1538,6 +1540,35 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
                 ? terminal.whenDone
                 : undefined;
             const handbackCode = whenDone !== undefined ? mintHandbackCode() : undefined;
+            // What this launch's command will carry. The builder tokenises the
+            // recipe args exactly as the launch command does (#15637).
+            const launchFlags = buildAgentLaunchFlags(effectiveEntry, agentId, {
+              modelId: terminal.agentModelId,
+              presetArgs: preset?.args,
+              recipeArgs: terminal.args,
+              globalSkipPermissions,
+            });
+            // Persist the process-level launch flags so restart/resume/continue
+            // reproduce the same configuration. Without this the panel arrives
+            // with `agentLaunchFlags: undefined` and the restart slice silently
+            // regenerates the command from current settings, dropping
+            // `--dangerously-skip-permissions` and the recipe's args (#9650).
+            // Preserve flags an in-memory recipe already carries; for disk
+            // recipes the field is stripped (undefined), so compute from live
+            // settings (mirroring useAgentLauncher).
+            const agentLaunchFlags = terminal.agentLaunchFlags ?? [
+              ...launchFlags,
+              // Last, where the launch command puts it, so restart replays it.
+              ...step.systemPromptArgs,
+            ];
+            // One id per pane (#16470): a recipe often runs the same agent twice
+            // in one worktree, where "latest in this directory" can't tell them
+            // apart after an abrupt end. Not for a launch whose own args pick the
+            // conversation: Claude refuses `--session-id` beside `--continue`.
+            const assignedSessionId =
+              stripConversationSelectorFlags(launchFlags, agentId).length === launchFlags.length
+                ? mintAssignedSessionId(agentId)
+                : undefined;
             const command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
               initialPrompt:
                 handbackCode !== undefined && initialPrompt
@@ -1551,26 +1582,8 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               recipeArgs: terminal.args?.trim() || undefined,
               presetArgs: preset?.args,
               globalSkipPermissions,
+              sessionId: assignedSessionId,
             });
-            // Persist the process-level launch flags so restart/resume/continue
-            // reproduce the same configuration. Without this the panel arrives
-            // with `agentLaunchFlags: undefined` and the restart slice silently
-            // regenerates the command from current settings, dropping
-            // `--dangerously-skip-permissions` and the recipe's args (#9650).
-            // Preserve flags an in-memory recipe already carries; for disk
-            // recipes the field is stripped (undefined), so compute from live
-            // settings (mirroring useAgentLauncher). The builder tokenises the
-            // recipe args exactly as the launch command does (#15637).
-            const agentLaunchFlags = terminal.agentLaunchFlags ?? [
-              ...buildAgentLaunchFlags(effectiveEntry, agentId, {
-                modelId: terminal.agentModelId,
-                presetArgs: preset?.args,
-                recipeArgs: terminal.args,
-                globalSkipPermissions,
-              }),
-              // Last, where the launch command puts it, so restart replays it.
-              ...step.systemPromptArgs,
-            ];
             // Only a first turn the command actually sends is recorded (#14592).
             const firstPrompt = initialPrompt
               ? buildFirstPrompt(step.promptAsWritten, "launch", Date.now())
@@ -1588,6 +1601,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               agentModelId: terminal.agentModelId,
               agentPresetId: preset?.id,
               agentPresetColor: preset?.color,
+              ...(assignedSessionId && { agentSessionId: assignedSessionId }),
               env: finalEnv,
               exitBehavior: terminal.exitBehavior,
               ...(firstPrompt && { launchPrompt: firstPrompt }),

@@ -230,12 +230,84 @@ describe("AgentContributionSchema (issue #9560)", () => {
     });
 
     it("rejects unknown resume fields (strict)", () => {
-      expect(
-        parses({ kind: "session-id", args: ["{sessionId}"], assignSessionIdArgs: ["--id"] })
-      ).toBe(false);
+      expect(parses({ kind: "session-id", args: ["{sessionId}"], shutdownSignal: "ctrl-c" })).toBe(
+        false
+      );
       expect(
         parses({ kind: "project-scoped", args: ["--continue"], sessionIdPattern: "(x)" })
       ).toBe(false);
+      expect(
+        parses({
+          kind: "project-scoped",
+          args: ["--continue"],
+          assignSessionIdArgs: ["--session-id", "{sessionId}"],
+        })
+      ).toBe(false);
+    });
+
+    describe("assignSessionIdArgs (#16470)", () => {
+      const assigning = (assignSessionIdArgs: unknown) =>
+        parses({ kind: "session-id", args: ["--resume", "{sessionId}"], assignSessionIdArgs });
+
+      it("accepts a flag followed by the id, or a flag fused to it", () => {
+        expect(assigning(["--session-id", "{sessionId}"])).toBe(true);
+        expect(assigning(["--session-id={sessionId}"])).toBe(true);
+        expect(assigning(["-s", "{sessionId}"])).toBe(true);
+        expect(assigning(["--new", "--id", "{sessionId}"])).toBe(true);
+      });
+
+      it("keeps today's declarations valid without it", () => {
+        expect(
+          parses({
+            kind: "session-id",
+            args: ["--session", "{sessionId}"],
+            quitCommand: "/quit",
+            resumeLatestArgs: ["--continue"],
+          })
+        ).toBe(true);
+      });
+
+      it("accepts the same args as resume, for a CLI whose flag opens or creates", () => {
+        expect(
+          parses({
+            kind: "session-id",
+            args: ["--session-id", "{sessionId}"],
+            assignSessionIdArgs: ["--session-id", "{sessionId}"],
+          })
+        ).toBe(true);
+      });
+
+      it("needs the placeholder exactly once", () => {
+        expect(assigning(["--session-id"])).toBe(false);
+        expect(assigning(["--session-id", "{sessionId}", "{sessionId}"])).toBe(false);
+        expect(assigning(["--a={sessionId}", "--b={sessionId}"])).toBe(false);
+        expect(assigning([])).toBe(false);
+      });
+
+      it("refuses a placeholder with no flag to anchor it, which would match any word", () => {
+        expect(assigning(["{sessionId}"])).toBe(false);
+        expect(assigning(["{sessionId}", "--session-id"])).toBe(false);
+      });
+
+      it("refuses a fused form that isn't --option={sessionId}", () => {
+        expect(assigning(["--{sessionId}"])).toBe(false);
+        expect(assigning(["--session-{sessionId}"])).toBe(false);
+        expect(assigning(["--session-id={sessionId}.json"])).toBe(false);
+        expect(assigning(["session={sessionId}"])).toBe(false);
+      });
+
+      it("refuses a word a launch would quote, which couldn't be stripped back off", () => {
+        expect(assigning(["session", "--id", "{sessionId}"])).toBe(false);
+        expect(assigning(["--session id", "{sessionId}"])).toBe(false);
+        expect(assigning(["--session-id", "{sessionId}", "$(whoami)"])).toBe(false);
+      });
+
+      it("refuses control characters and oversized templates like any resume arg", () => {
+        expect(assigning(["--session-id\n", "{sessionId}"])).toBe(false);
+        expect(assigning([...Array.from({ length: 20 }, () => "-x"), "--id", "{sessionId}"])).toBe(
+          false
+        );
+      });
     });
   });
 
@@ -444,6 +516,16 @@ describe("permissionBypassArgs (#16374)", () => {
           resume: { kind: "session-id", args: ["--resume", "{sessionId}", "--yolo"] },
         })
       ).toEqual(["contributes.agents.0.resume.args"]);
+      expect(
+        issuePaths({
+          permissionBypassArgs: ["--yolo"],
+          resume: {
+            kind: "session-id",
+            args: ["--resume", "{sessionId}"],
+            assignSessionIdArgs: ["--yolo", "--session-id", "{sessionId}"],
+          },
+        })
+      ).toEqual(["contributes.agents.0.resume.assignSessionIdArgs"]);
     });
 
     it("allows the same option with another value, and a shared option prefix", () => {

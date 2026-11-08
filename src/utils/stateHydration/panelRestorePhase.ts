@@ -50,6 +50,7 @@ import { sanitizeConversationCwd, sanitizeRestoreRecovery } from "@/utils/restor
 import { normalize as normalizePath } from "@shared/utils/path";
 import type { HydrationOptions } from "./";
 import { getAgentConfig } from "@/config/agents";
+import { loadSavedPanesPluginAgents } from "./savedPluginAgents";
 import {
   getCurrentLaunchCliDetail,
   resolveAgentLaunchBaseCommand,
@@ -915,6 +916,8 @@ export async function restorePanelsPhase(
   // them to another project's worktree.
   const workspaceHasWorktrees = await workspaceHasWorktreesPromise;
   const effectiveActiveWorktreeId = workspaceHasWorktrees ? activeWorktreeId : null;
+
+  await loadSavedPanesPluginAgents(savedPanels, projectId);
 
   const restoreTasks: TerminalRestoreTask[] = [];
   const savedIdToRestoredId = new Map<string, string>();

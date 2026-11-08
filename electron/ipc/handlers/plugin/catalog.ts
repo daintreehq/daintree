@@ -33,8 +33,23 @@ export async function handleForgeProvidersGet(): Promise<RegisteredForgeProvider
   return getRegisteredForgeProviders();
 }
 
-export async function handleAgentsGet(): Promise<Record<string, AgentConfig>> {
-  await (await getPluginService()).waitForCatalog();
+// Holds a view's hydration, so past this the restore goes on with what it has.
+const AGENT_RESTORE_CATALOG_WAIT_MS = 5_000;
+
+export async function handleAgentsGet(options?: {
+  forRestore?: boolean;
+}): Promise<Record<string, AgentConfig>> {
+  const service = await getPluginService();
+  if (options?.forRestore !== true) {
+    await service.waitForCatalog();
+    return getPluginAgentRegistry();
+  }
+  // Only a saved pane naming an unknown agent asks this way (#16470). The plugin
+  // host normally starts on the renderer's first-interactive, which comes after
+  // the restore waiting here, so that restore has to start it.
+  const { startPluginHostOnce } = await import("../../../window/globalServicesInit.js");
+  void startPluginHostOnce();
+  await service.waitForCatalogWithin(AGENT_RESTORE_CATALOG_WAIT_MS);
   return getPluginAgentRegistry();
 }
 

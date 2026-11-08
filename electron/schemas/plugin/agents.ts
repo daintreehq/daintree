@@ -14,6 +14,7 @@ import {
   BINARY_EXEC_SUBCOMMANDS,
   stripCommandExecutableExtension,
 } from "../../services/ProcessDetector/commandParser.js";
+import { isSafeShellOption } from "../../../shared/utils/shellEscape.js";
 import { utf8Length } from "./common.js";
 
 /**
@@ -373,6 +374,38 @@ const PluginAgentStaticArgArraySchema = PluginAgentArgArraySchema.refine(
   { message: `Only a session-id resume's args can carry ${SESSION_ID_TOKEN}` }
 );
 
+function holdsSessionIdTokenOnce(args: readonly string[]): boolean {
+  return args.join("\0").split(SESSION_ID_TOKEN).length === 2;
+}
+
+/**
+ * An entry of the flag that assigns a CLI its session id at launch (#16470). A
+ * launch writes an option bare on every shell and quotes anything else, and a
+ * copied or replayed pane loses the flag by matching those bare words, so only
+ * these three forms can always come back off again. A placeholder with no flag
+ * to anchor it would match any word of a stored command, the binary included.
+ */
+const PluginAgentAssignSessionIdArgsSchema = PluginAgentArgArraySchema.min(1)
+  .refine(holdsSessionIdTokenOnce, {
+    message: `assignSessionIdArgs must contain ${SESSION_ID_TOKEN} exactly once`,
+  })
+  .refine(
+    (args) =>
+      args.every(
+        (arg) =>
+          arg === SESSION_ID_TOKEN ||
+          (arg.endsWith(`=${SESSION_ID_TOKEN}`) &&
+            isSafeShellOption(arg.slice(0, -SESSION_ID_TOKEN.length))) ||
+          isSafeShellOption(arg)
+      ),
+    {
+      message: `Each assignSessionIdArgs entry must be an option, --option=${SESSION_ID_TOKEN}, or ${SESSION_ID_TOKEN} on its own`,
+    }
+  )
+  .refine((args) => args[0] !== SESSION_ID_TOKEN, {
+    message: `assignSessionIdArgs needs an option before ${SESSION_ID_TOKEN}`,
+  });
+
 /**
  * One token of the flag a CLI takes to skip its permission prompts (#16374).
  * Launches carry it as the agent setting's space-separated bypass string, so a
@@ -402,7 +435,7 @@ function countCaptureGroups(source: string): number | null {
  * `{sessionId}` template stays a string all the way into every process that
  * mirrors the plugin agent snapshot, and is expanded where a resume command is
  * built (`getEffectiveRegistry`). Only the two kinds a plugin CLI has needed are
- * exposed; `named-target` and launch-time id assignment wait for a real case.
+ * exposed; `named-target` waits for a real case.
  */
 export const AgentResumeConfigSchema = z.discriminatedUnion("kind", [
   z
@@ -410,10 +443,10 @@ export const AgentResumeConfigSchema = z.discriminatedUnion("kind", [
       kind: z.literal("session-id"),
       // One occurrence across the whole template, so the id is substituted
       // exactly once whether the token is a whole arg or part of one.
-      args: PluginAgentArgArraySchema.min(1).refine(
-        (args) => args.join("\0").split(SESSION_ID_TOKEN).length === 2,
-        { message: `A session-id resume's args must contain ${SESSION_ID_TOKEN} exactly once` }
-      ),
+      args: PluginAgentArgArraySchema.min(1).refine(holdsSessionIdTokenOnce, {
+        message: `A session-id resume's args must contain ${SESSION_ID_TOKEN} exactly once`,
+      }),
+      assignSessionIdArgs: PluginAgentAssignSessionIdArgsSchema.optional(),
       // Same bounds as a detection pattern, plus the single capture group the
       // teardown scrape reads the id from.
       sessionIdPattern: PluginDetectionPatternSchema.refine(

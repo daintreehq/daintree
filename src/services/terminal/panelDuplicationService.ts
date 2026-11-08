@@ -8,9 +8,11 @@ import {
 } from "@shared/types/panel";
 import type { TabGroupLocation } from "@/types";
 import {
+  commandNamesSession,
   generateAgentCommand,
   mintAssignedSessionId,
   stripAssignedSessionIdArgs,
+  stripConversationSelectorArgs,
 } from "@shared/types";
 import { getAgentConfig, isRegisteredAgent } from "@/config/agents";
 import { agentSettingsClient, systemClient } from "@/clients";
@@ -172,15 +174,17 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
         // Settings couldn't be read, but the source's account is on the pane
         // itself: the copy doesn't fall back to the default login (#16040).
         const accountEnv = paneAccountEnv(panel.launchAgentId, panel);
+        // Reusing the source's command verbatim would open its conversation
+        // too, through an assigned id (#11782) or the resume command a restore
+        // stored (#16470), so strip that back off and let this copy launch as
+        // the fresh conversation it is. One that can't be stripped is refused.
+        const copied = stripConversationSelectorArgs(
+          panel.command ?? agentConfig.command,
+          panel.launchAgentId
+        );
         return {
           agentAccountId: accountEnv ? panel.agentAccountId : undefined,
-          // Reusing the source's command verbatim would clone its assigned
-          // session id along with it, so strip that back off (#11782) and let
-          // this copy launch as the fresh conversation it is.
-          command: stripAssignedSessionIdArgs(
-            panel.command ?? agentConfig.command,
-            panel.launchAgentId
-          ),
+          command: commandNamesSession(copied, panel.agentSessionId) ? undefined : copied,
           env: accountEnv,
           agentLaunchFlags: panel.agentLaunchFlags,
           callerLaunchFlags: panel.callerLaunchFlags,
@@ -192,15 +196,24 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
       }
     }
   }
+  // Only an agent no longer registered gets here with one: its plugin has gone,
+  // and the shape of its id flag with it, so the id can't be taken back off the
+  // command. Leaving the command out refuses the copy, which would otherwise
+  // open the same conversation as its source (#16470).
+  const holdsSourceSession =
+    isPtyPanel(panel) &&
+    !!panel.launchAgentId &&
+    !!panel.command &&
+    commandNamesSession(panel.command, panel.agentSessionId);
   return {
-    command: isPtyPanel(panel) ? panel.command : undefined,
+    command: isPtyPanel(panel) && !holdsSourceSession ? panel.command : undefined,
     env: undefined,
     agentLaunchFlags: isPtyPanel(panel) ? panel.agentLaunchFlags : undefined,
     callerLaunchFlags: isPtyPanel(panel) ? panel.callerLaunchFlags : undefined,
     preset: undefined,
     presetWasStale: false,
     agentSessionId: undefined,
-    replaysSourceCommand: isPtyPanel(panel) && panel.command !== undefined,
+    replaysSourceCommand: isPtyPanel(panel) && !holdsSourceSession && panel.command !== undefined,
   };
 }
 
@@ -500,6 +513,11 @@ export async function buildPanelDuplicateOptions(
   }
 
   if (isPtyPanel(sourcePanel)) {
+    // A pane saved with no kind gets here too, and a refused copy of an agent
+    // must not come back as a bare shell wearing that agent's identity.
+    if (sourcePanel.launchAgentId && !command) {
+      throw new Error(`Cannot duplicate agent terminal: command is missing`);
+    }
     return {
       kind: "terminal",
       launchAgentId: sourcePanel.launchAgentId,

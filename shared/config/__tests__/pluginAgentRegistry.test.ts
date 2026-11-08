@@ -258,6 +258,43 @@ describe("pluginAgentRegistry (issue #9560)", () => {
       expect(resume.args("a$&b$1")).toEqual(["--session=a$&b$1"]);
     });
 
+    it("expands a declared assignment into the same hook a built-in uses (#16470)", () => {
+      registerPluginAgents("me.extra-agents", [
+        {
+          ...HERMES,
+          resume: {
+            kind: "session-id",
+            args: ["--session-id", "{sessionId}"],
+            assignSessionIdArgs: ["--session-id={sessionId}"],
+            resumeLatestArgs: ["--continue"],
+          },
+        },
+      ]);
+      const config = getEffectiveAgentConfig("hermes");
+      const resume = config?.resume;
+      if (resume?.kind !== "session-id") throw new Error("expected session-id resume");
+      expect(resume.assignSessionIdArgs?.("a$&b$1")).toEqual(["--session-id=a$&b$1"]);
+      // The id can't survive folder moves on the strength of this alone.
+      expect(config?.continuity).toBeUndefined();
+    });
+
+    it("keeps a declared assignment as data across a mirrored snapshot", () => {
+      const assignSessionIdArgs = ["--session-id", "{sessionId}"];
+      registerPluginAgents("me.extra-agents", [
+        {
+          ...HERMES,
+          resume: { kind: "session-id", args: ["--resume", "{sessionId}"], assignSessionIdArgs },
+        },
+      ]);
+      const mirrored = structuredClone(getPluginAgentRegistry());
+      expect(mirrored.hermes?.resumeTemplate).toMatchObject({ assignSessionIdArgs });
+      clearPluginAgentRegistryForTests();
+      setPluginAgentRegistry(mirrored);
+      const resume = getEffectiveAgentConfig("hermes")?.resume;
+      if (resume?.kind !== "session-id") throw new Error("expected session-id resume");
+      expect(resume.assignSessionIdArgs?.("abc")).toEqual(["--session-id", "abc"]);
+    });
+
     it("expands a project-scoped resume in a mirrored (renderer/pty-host) snapshot", () => {
       registerPluginAgents("me.extra-agents", [
         {

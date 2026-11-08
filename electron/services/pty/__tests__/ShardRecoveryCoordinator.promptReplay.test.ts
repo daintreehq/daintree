@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PtyHostSpawnOptions } from "../../../../shared/types/pty-host.js";
 import {
+  clearPluginAgentRegistryForTests,
+  registerPluginAgents,
+} from "../../../../shared/config/pluginAgentRegistry.js";
+import {
   ShardRecoveryCoordinator,
   type ShardRecoveryCoordinatorDeps,
 } from "../ShardRecoveryCoordinator.js";
@@ -75,5 +79,52 @@ describe("the carrier a replay rebuilds after spending a session assignment (#16
     });
 
     expect(replay.args?.at(-1)).toContain(`claude ${prompt}`);
+  });
+});
+
+describe("replaying a plugin agent's assigned session (#16470)", () => {
+  const pi = (resumeArgs: string[]) =>
+    registerPluginAgents("digitalfrontier.agents", [
+      {
+        id: "pi",
+        name: "Pi",
+        command: "pi",
+        color: "#3366ff",
+        iconId: "terminal",
+        resume: {
+          kind: "session-id",
+          args: resumeArgs,
+          assignSessionIdArgs: ["--session-id", "{sessionId}"],
+        },
+      },
+    ]);
+  const launched = {
+    launchAgentId: "pi",
+    shell: "/bin/bash",
+    agentSessionId: SESSION,
+    command: `pi --session-id ${SESSION}`,
+  };
+
+  afterEach(() => {
+    clearPluginAgentRegistryForTests();
+    Object.defineProperty(process, "platform", { value: ORIGINAL_PLATFORM, configurable: true });
+  });
+
+  it("keeps the id when the same flag also resumes, so the pane reopens its own session", () => {
+    pi(["--session-id", "{sessionId}"]);
+
+    const replay = replayedAfterDelivery("linux", launched);
+
+    expect(replay.command).toBe(launched.command);
+    expect(replay.agentSessionId).toBe(SESSION);
+  });
+
+  it("disarms a flag that isn't known to resume, as for any one-shot assignment", () => {
+    pi(["--session", "{sessionId}"]);
+
+    const replay = replayedAfterDelivery("linux", launched);
+
+    expect(replay.command).toBe("pi");
+    expect(replay.agentSessionId).toBeUndefined();
   });
 });

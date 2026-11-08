@@ -449,6 +449,11 @@ interface AgentSessionIdResumeBase {
    * resume by id forever after, and mint a DISTINCT id for a duplicated
    * pane (see `buildAssignedSessionIdArgs`).
    *
+   * A plugin's CLI can differ (#16470): Pi's `--session-id` opens the id's
+   * conversation or creates it, and declares the same args for both, which
+   * {@link assignmentReopensSession} reads. A copy still gets its own id: a
+   * flag that won't refuse a shared id only makes sharing one quieter.
+   *
    * Omit for CLIs that only hand out their own ids — those keep the
    * `sessionIdPattern` teardown scrape as their sole capture path.
    */
@@ -581,6 +586,8 @@ export type AgentResumeTemplate =
   | {
       kind: "session-id";
       args: string[];
+      /** Expands into {@link AgentResume} `assignSessionIdArgs` (#16470). */
+      assignSessionIdArgs?: string[];
       sessionIdPattern?: string;
       quitCommand?: string;
       resumeLatestArgs?: string[];
@@ -593,6 +600,12 @@ export type AgentResumeTemplate =
 
 const SESSION_ID_PLACEHOLDER = "{sessionId}";
 
+function fillSessionIdPlaceholder(args: readonly string[], sessionId: string): string[] {
+  // A replacer function, so `$&` or `$1` inside a captured id is inserted
+  // literally instead of being read as a replacement pattern.
+  return args.map((arg) => arg.replace(SESSION_ID_PLACEHOLDER, () => sessionId));
+}
+
 function expandResumeTemplate(template: AgentResumeTemplate): AgentResume {
   const args = [...template.args];
   if (template.kind === "project-scoped") {
@@ -603,11 +616,16 @@ function expandResumeTemplate(template: AgentResumeTemplate): AgentResume {
     };
   }
   const resumeLatestArgs = template.resumeLatestArgs ? [...template.resumeLatestArgs] : undefined;
+  const assignArgs = template.assignSessionIdArgs ? [...template.assignSessionIdArgs] : undefined;
   return {
     kind: "session-id",
-    // A replacer function, so `$&` or `$1` inside a captured id is inserted
-    // literally instead of being read as a replacement pattern.
-    args: (sessionId) => args.map((arg) => arg.replace(SESSION_ID_PLACEHOLDER, () => sessionId)),
+    args: (sessionId) => fillSessionIdPlaceholder(args, sessionId),
+    ...(assignArgs
+      ? {
+          assignSessionIdArgs: (sessionId: string) =>
+            fillSessionIdPlaceholder(assignArgs, sessionId),
+        }
+      : {}),
     ...(template.sessionIdPattern ? { sessionIdPattern: template.sessionIdPattern } : {}),
     ...(resumeLatestArgs ? { resumeLatestArgs } : {}),
     // The type wants a quit command on every non-escalating `session-id`
