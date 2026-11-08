@@ -176,20 +176,36 @@ const DEFAULT_REPLACE_EXIT_TIMEOUT_MS = 10_000;
  */
 const scheduleTurns = new Map<string, Promise<void>>();
 
-async function inScheduleTurn<T>(key: string, work: () => Promise<T>): Promise<T> {
-  const previous = scheduleTurns.get(key) ?? Promise.resolve();
+/**
+ * One ask of an agent's launch at a time in a project, from the ask to its
+ * answer (#16395): a view's launcher declines a launch of an agent while
+ * another is still starting, so schedules of one agent due together take
+ * turns instead of refusing each other.
+ */
+const agentTurns = new Map<string, Promise<void>>();
+
+/** Waits for `key`'s turn in `turns`; the function it resolves with passes it on. */
+async function takeTurn(turns: Map<string, Promise<void>>, key: string): Promise<() => void> {
+  const previous = turns.get(key) ?? Promise.resolve();
   let release!: () => void;
   const mine = new Promise<void>((resolve) => {
     release = resolve;
   });
   const tail = previous.then(() => mine);
-  scheduleTurns.set(key, tail);
+  turns.set(key, tail);
   await previous;
+  return () => {
+    release();
+    if (turns.get(key) === tail) turns.delete(key);
+  };
+}
+
+async function inScheduleTurn<T>(key: string, work: () => Promise<T>): Promise<T> {
+  const passOn = await takeTurn(scheduleTurns, key);
   try {
     return await work();
   } finally {
-    release();
-    if (scheduleTurns.get(key) === tail) scheduleTurns.delete(key);
+    passOn();
   }
 }
 
@@ -249,7 +265,9 @@ function declineReason(result: ActionDispatchResult): string {
  *
  * Every trigger goes through here: Run now, and the scheduler (#15979) with
  * `scheduled` and `catch-up` origins. Each first meets the schedule's overlap
- * policy and precondition (#15980), one launch of a schedule at a time.
+ * policy and precondition (#15980), one launch of a schedule at a time, and
+ * asks for its agent's launch once no other launch of that agent in the
+ * project is being asked (#16395).
  */
 export function launchScheduledRun<View>(
   input: ScheduledRunLaunchInput,
@@ -491,7 +509,24 @@ async function launchInScheduleTurn<View>(
     // What the launch answered: started, or why not. Null when it didn't answer.
     let answer: { launched: true } | { launched: false; reason: string } | null = null;
     let unanswered: string | null = null;
+    // Taken after the run's own slow steps, so another schedule's launch of
+    // the agent never waits on this one's precondition or replacement. The
+    // Assistant starts in main, and claims its session without a view.
+    const passOnAgentTurn = assistant
+      ? null
+      : await takeTurn(agentTurns, `${projectId}\0${launch.agentId}`);
     try {
+      if (passOnAgentTurn !== null) {
+        // What may have changed while another launch of the agent was asked.
+        if (reserved.state().kind !== "pending") return { status: "not-found" };
+        if (isShuttingDown()) {
+          reserved.withdraw();
+          return { status: "not-found" };
+        }
+        if (deps.isProjectSleeping(projectId)) {
+          return refuseBeforeLaunch("The project was going to sleep.");
+        }
+      }
       if (assistant) {
         // Main's own start, bounded like main's agent launch.
         const started = await withDeadline(
@@ -541,6 +576,9 @@ async function launchInScheduleTurn<View>(
       }
     } catch (error) {
       unanswered = formatErrorMessage(error, "The launch didn't answer.");
+    } finally {
+      // The view's launcher is free once it answers, before the spawn reaches main.
+      passOnAgentTurn?.();
     }
 
     // A view answers once its pane is committed, which can be before the
