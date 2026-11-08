@@ -77,7 +77,7 @@ export function WorkspaceRootRow({
         <ContextMenuTrigger asChild>
           <div className="flex flex-col gap-1 px-4 py-3 border-b border-divider">
             <div className="flex items-center gap-2 min-w-0">
-              <KindIcon className="w-4 h-4 shrink-0 text-daintree-text/60" aria-hidden="true" />
+              <KindIcon className="w-4 h-4 shrink-0 text-text-secondary" aria-hidden="true" />
               <TruncatedTooltip content={workspace.name}>
                 <span className="truncate min-w-0 text-sm leading-[inherit] font-medium text-text-primary">
                   {workspace.name}

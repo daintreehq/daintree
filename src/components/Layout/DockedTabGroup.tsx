@@ -905,7 +905,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
 
         <PopoverContent
           aria-label={`Preview: ${fullTitle} (${pluralize(panels.length, "tab")})`}
-          className="w-[700px] max-w-[90vw] max-h-[80vh] p-0 bg-daintree-bg/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden"
+          className="w-[700px] max-w-[90vw] max-h-[80vh] p-0 bg-surface-canvas/95 backdrop-blur-sm border border-[var(--border-dock-popup)] shadow-[var(--shadow-dock-panel-popover)] rounded-[var(--radius-lg)] overflow-hidden"
           style={{ height: popoverHeight }}
           side="top"
           align="start"
@@ -1068,7 +1068,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                               <ChevronDown aria-hidden="true" />
                               {activeTabIsHidden && (
                                 <span
-                                  className="status-mark absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-daintree-text/70"
+                                  className="status-mark absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-text-primary/70"
                                   aria-hidden="true"
                                 />
                               )}

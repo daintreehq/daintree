@@ -356,7 +356,7 @@ function GroupHeader({
         <ChevronRight
           aria-hidden="true"
           data-testid="pilot-group-drill"
-          className="h-3 w-3 shrink-0 text-daintree-text/25"
+          className="h-3 w-3 shrink-0 text-text-muted"
         />
       )}
     </div>
@@ -521,7 +521,7 @@ function RunRow({
       <span
         className={cn(
           "min-w-0 flex-1 truncate text-sm leading-tight",
-          isSelected ? "text-text-primary" : "text-daintree-text/85"
+          isSelected ? "text-text-primary" : "text-text-secondary"
         )}
       >
         {row.title}
@@ -1934,7 +1934,7 @@ export function PilotView() {
                   <ChevronLeft aria-hidden="true" />
                   All agents
                 </Button>
-                <span aria-hidden="true" className="shrink-0 text-daintree-text/25">
+                <span aria-hidden="true" className="shrink-0 text-text-muted">
                   /
                 </span>
                 <span data-testid="pilot-scope-name" className="min-w-0 truncate text-text-primary">
