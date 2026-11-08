@@ -225,10 +225,18 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
   const cachedProjectViews = useCachedProjectViewsStore((s) => s.cachedProjectViews);
 
   const [hardwareInfo, setHardwareInfo] = useState<HardwareInfo | null>(null);
-  // What the user is typing into the threshold while it is out of range. The
-  // store keeps the value in effect; the field shows the draft and says why it
-  // isn't applied, and leaving the field puts the effective value back.
+  // What the user has typed into the threshold. Nothing is checked or saved until
+  // blur or Enter; an entry outside the range stays in the field with the reason
+  // it wasn't applied, and the store keeps the value in effect.
   const [thresholdDraft, setThresholdDraft] = useState<string | null>(null);
+  const [thresholdRejected, setThresholdRejected] = useState(false);
+  const [seenThreshold, setSeenThreshold] = useState(autoRestartThresholdMb);
+  // A change from elsewhere wins over a half-typed entry, as in useCommittedNumberDraft.
+  if (seenThreshold !== autoRestartThresholdMb) {
+    setSeenThreshold(autoRestartThresholdMb);
+    setThresholdDraft(null);
+    setThresholdRejected(false);
+  }
 
   useEffect(() => {
     void initializeFromHardware();
@@ -374,6 +382,19 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
     );
   };
 
+  const settleThreshold = () => {
+    if (thresholdDraft === null) return;
+    const raw = thresholdDraft.trim();
+    const val = raw === "" ? NaN : Number(raw);
+    if (Number.isInteger(val) && val >= 1024 && val <= 32768) {
+      setThresholdDraft(null);
+      setThresholdRejected(false);
+      if (val !== autoRestartThresholdMb) saveAutoRestartThreshold(val, autoRestartThresholdMb);
+    } else {
+      setThresholdRejected(true);
+    }
+  };
+
   const handleScreenReaderModeChange = (mode: ScreenReaderMode) =>
     persist(
       "accessibility",
@@ -477,26 +498,25 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                     step={1024}
                     suffix="MB"
                     value={thresholdDraft ?? autoRestartThresholdMb}
-                    error={
-                      thresholdDraft !== null ? "Enter a value from 1,024 to 32,768 MB" : undefined
-                    }
-                    onBlur={() => setThresholdDraft(null)}
+                    error={thresholdRejected ? "Enter a value from 1,024 to 32,768 MB" : undefined}
+                    onBlur={settleThreshold}
+                    onKeyDown={(e) => {
+                      if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
+                      e.preventDefault();
+                      settleThreshold();
+                    }}
                     isModified={autoRestartThresholdMb !== DEFAULT_AUTO_RESTART_THRESHOLD_MB}
                     onReset={() => {
                       setThresholdDraft(null);
+                      setThresholdRejected(false);
                       saveAutoRestartThreshold(
                         DEFAULT_AUTO_RESTART_THRESHOLD_MB,
                         autoRestartThresholdMb
                       );
                     }}
                     onChange={(e) => {
-                      const val = parseInt(e.target.value, 10);
-                      if (!isNaN(val) && val >= 1024 && val <= 32768) {
-                        setThresholdDraft(null);
-                        saveAutoRestartThreshold(val, autoRestartThresholdMb);
-                      } else {
-                        setThresholdDraft(e.target.value);
-                      }
+                      setThresholdDraft(e.target.value);
+                      setThresholdRejected(false);
                     }}
                   />
                 </SettingsDependents>
