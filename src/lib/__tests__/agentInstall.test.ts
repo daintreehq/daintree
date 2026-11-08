@@ -658,8 +658,8 @@ describe("agentInstall", () => {
       (await load(os)).filter((block) => (block.commands ?? []).some(isNative));
 
     it.each([
-      ["macos", /^curl\b.*\bhttps:\/\/claude\.ai\/install\.sh\s*\|\s*bash$/],
-      ["linux", /^curl\b.*\bhttps:\/\/claude\.ai\/install\.sh\s*\|\s*bash$/],
+      ["macos", /^curl\s+-fsSL\s+https:\/\/claude\.ai\/install\.sh\s*\|\s*bash$/],
+      ["linux", /^curl\s+-fsSL\s+https:\/\/claude\.ai\/install\.sh\s*\|\s*bash$/],
       ["windows", /^irm\s+https:\/\/claude\.ai\/install\.ps1\s*\|\s*iex$/],
     ] as const)("%s offers Anthropic's native installer beside npm", async (os, installer) => {
       const { isNpmGlobalInstall } = await import("../agentInstall");
@@ -668,7 +668,15 @@ describe("agentInstall", () => {
       const commands = commandsOf(await load(os));
       expect(commands.filter(isNative)).toHaveLength(1);
       expect(commands.filter(isNative)[0]).toMatch(installer);
-      expect(commands.some((c) => isNpmGlobalInstall(c) && c.includes(npmPackage))).toBe(true);
+      const npmPackageOf = (command: string) =>
+        command
+          .trim()
+          .split(/\s+/)
+          .at(-1)!
+          .replace(/(?<!^)@[^@/]*$/, "");
+      expect(commands.some((c) => isNpmGlobalInstall(c) && npmPackageOf(c) === npmPackage)).toBe(
+        true
+      );
     });
 
     it("offers a package manager only on the OS that has it", async () => {

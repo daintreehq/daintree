@@ -66,8 +66,9 @@ export const config: AgentConfig = {
   // standalone binary in ~/.local/bin that needs no Node, no Homebrew and no
   // root, which makes it what the npm permission callout offers when a system
   // Node (apt, NodeSource, the nodejs.org installer) keeps its global packages
-  // in a root-owned folder. It pipes into a shell, so it stays copy-only. The
-  // platform's package manager, which runs without a shell, comes last.
+  // in a root-owned folder. It pipes into a shell, so it stays copy-only. On
+  // macOS and Windows the package manager (Homebrew, WinGet), which runs without
+  // a shell, comes last.
   install: {
     docsUrl: "https://code.claude.com/docs/en/setup",
     byOs: {
