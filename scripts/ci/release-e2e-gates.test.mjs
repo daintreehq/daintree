@@ -66,11 +66,14 @@ const suitesOf = (job) => {
   return suite.includes("${{") ? [] : [suite];
 };
 
-// Jobs that actually ship bits, found by the action they run rather than by
-// name — a second publisher added under any other job id still gets traced.
+// Jobs that actually ship bits, found by what they run rather than by name — a
+// second publisher added under any other job id still gets traced. A job that
+// pushes to another repository (the Homebrew tap) publishes too.
 const publishersOf = (jobs) =>
   Object.keys(jobs).filter((id) =>
-    (jobs[id].steps ?? []).some((step) => step.uses?.includes("/publish-daintree"))
+    (jobs[id].steps ?? []).some(
+      (step) => step.uses?.includes("/publish-daintree") || /\bgit push\b/.test(step.run ?? "")
+    )
   );
 
 // A job with no `if:` is implicitly `if: success()`, which is what makes a

@@ -26,7 +26,13 @@ Claude Code, Codex, Antigravity, OpenCode and [13&nbsp;more](#agent-clis) run as
 
 ## Download
 
-Get the latest build at **[daintree.org/download](https://daintree.org/download)**.
+Get the latest build at **[daintree.org/download](https://daintree.org/download)**, or on macOS install it with [Homebrew](https://brew.sh):
+
+```bash
+brew install --cask daintreehq/tap/daintree
+```
+
+Daintree updates itself, and Homebrew never reinstalls over a copy that already has.
 
 | Platform | Package |
 | --- | --- |

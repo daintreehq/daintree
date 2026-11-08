@@ -6,7 +6,7 @@ The release runbook is [`docs/release.md`](../../docs/release.md): signing, nota
 
 | File | Purpose |
 | --- | --- |
-| `release-macos.yml` | App release for macOS (universal build, Developer ID signing, notarization, R2 publish) |
+| `release-macos.yml` | App release for macOS (universal build, Developer ID signing, notarization, R2 publish, Homebrew tap update on stable tags) |
 | `release-linux.yml` | App release for Linux (x64 and arm64, R2 publish) |
 | `release-windows.yml` | App release for Windows (x64 and arm64 NSIS installers, x64 Store package, R2 publish, Microsoft Store submission) |
 | `release-packages.yml` | npm publish for the plugin-ecosystem packages, triggered by per-package tags (not `v*`) |
@@ -71,6 +71,7 @@ Other secrets the release and nightly workflows read:
 | `WEBSITE_WEBHOOK_SECRET` | Release publish jobs | Notifies the website of a new release |
 | `SENTRY_DSN` | Release builds | Error reporting DSN baked into the build |
 | `PARTNER_CENTER_TENANT_ID`, `PARTNER_CENTER_SELLER_ID`, `PARTNER_CENTER_CLIENT_ID`, `PARTNER_CENTER_CLIENT_SECRET`, `STORE_PRODUCT_ID` | Windows release | Microsoft Store submission; skipped with a notice unless all five exist (see [`docs/distribution/microsoft-store.md`](../../docs/distribution/microsoft-store.md)) |
+| `HOMEBREW_TAP_TOKEN` | macOS release | Fine-grained token with Contents read and write on `daintreehq/homebrew-tap`, which `publish-homebrew-tap` pushes the cask to on stable tags; skipped with a notice when missing (see [`docs/release.md`](../../docs/release.md#homebrew-tap)) |
 
 ### 4. Publish URL
 

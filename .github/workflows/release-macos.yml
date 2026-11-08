@@ -450,3 +450,115 @@ jobs:
           r2_endpoint: ${{ secrets.R2_ENDPOINT }}
           r2_bucket: ${{ secrets.DAINTREE_R2_BUCKET }}
           website_webhook_secret: ${{ secrets.WEBSITE_WEBHOOK_SECRET }}
+
+  # Points the daintreehq/homebrew-tap cask at the version just published
+  # (#16419). A job of its own after publish-daintree, so nothing here can hold
+  # back the R2 publish: a failure leaves the tap on the previous version and
+  # re-runs alone with `gh run rerun --failed`. Stable tags only, since rc and
+  # beta tags publish to feeds the cask never installs from, and never a
+  # skip_notarization run, whose DMGs Gatekeeper would refuse.
+  publish-homebrew-tap:
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') && inputs.dry_run != true &&
+      inputs.skip_notarization != true &&
+      !contains(github.ref_name, '-') && !contains(github.ref_name, '+')
+    needs: [publish-daintree]
+    name: Update Homebrew tap
+    # brew audit loads the cask the way a Mac does: both arches, the live feed.
+    runs-on: macos-15
+    timeout-minutes: 30
+    # One tap writer across every tag, so two releases never race on its branch.
+    concurrency:
+      group: homebrew-tap
+      cancel-in-progress: false
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_ANALYTICS: "1"
+      HOMEBREW_NO_ENV_HINTS: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+    steps:
+      - name: Check Homebrew tap token
+        id: tap-secret
+        shell: bash
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [[ -n "$HOMEBREW_TAP_TOKEN" ]]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Homebrew tap update skipped — HOMEBREW_TAP_TOKEN secret not configured. The release is still published to R2."
+          fi
+
+      - name: Check out repository
+        if: steps.tap-secret.outputs.configured == 'true'
+        uses: actions/checkout@v6
+        with:
+          clean: true
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Check out Homebrew tap
+        if: steps.tap-secret.outputs.configured == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: daintreehq/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        if: steps.tap-secret.outputs.configured == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Hashes the DMGs users download, not this run's artifact: a re-run of a
+      # tag that is already live rebuilds a DMG the publish never uploads.
+      - name: Generate cask
+        id: cask
+        if: steps.tap-secret.outputs.configured == 'true'
+        shell: bash
+        run: |
+          node scripts/ci/homebrew-cask.mjs \
+            --version "${GITHUB_REF_NAME#v}" \
+            --existing homebrew-tap/Casks/daintree.rb \
+            --out "$RUNNER_TEMP/daintree.rb"
+
+      - name: Audit cask
+        if: steps.cask.outputs.written == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew --version
+          # brew audit takes only tap names, never a path to a .rb file.
+          brew tap-new --no-git daintree-release/audit
+          tap_dir="$(brew --repository daintree-release/audit)"
+          mkdir -p "$tap_dir/Casks"
+          cp "$RUNNER_TEMP/daintree.rb" "$tap_dir/Casks/daintree.rb"
+          # Homebrew 7 refuses to load a cask from an untrusted third-party tap.
+          if brew trust --help >/dev/null 2>&1; then
+            brew trust --cask daintree-release/audit/daintree
+          fi
+          brew style --cask daintree-release/audit/daintree
+          brew audit --cask --strict --online --arch=all daintree-release/audit/daintree
+          brew livecheck --cask daintree-release/audit/daintree
+
+      - name: Push cask to the tap
+        if: steps.cask.outputs.written == 'true'
+        shell: bash
+        working-directory: homebrew-tap
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p Casks
+          cp "$RUNNER_TEMP/daintree.rb" Casks/daintree.rb
+          if [[ -z "$(git status --porcelain -- Casks/daintree.rb)" ]]; then
+            echo "::notice::Homebrew tap already carries daintree $version."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/daintree.rb
+          git commit -m "daintree $version"
+          git push origin HEAD
