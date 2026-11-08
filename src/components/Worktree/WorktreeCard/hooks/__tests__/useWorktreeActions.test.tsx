@@ -94,6 +94,29 @@ describe("useWorktreeActions — running a recipe from the card (#16381)", () =>
     });
   });
 
+  it("runs with the issue the worktree is linked to now, not at first render", async () => {
+    const { result, rerender } = renderHook(
+      ({ worktree }: { worktree: WorktreeState }) =>
+        useWorktreeActions({ worktree, teardownCommands: [] }),
+      { initialProps: { worktree: makeWorktree({ issueNumber: 42 }) } }
+    );
+    rerender({
+      worktree: makeWorktree({
+        issueNumber: 42,
+        issueTitle: "Linked later",
+        issueProviderId: "linear",
+        issueKey: "ENG-42",
+      }),
+    });
+
+    await act(() => result.current.handleRunRecipe("recipe-1"));
+
+    expect(runRecipeWithResults.mock.calls[0]![3]).toMatchObject({
+      issueKey: "ENG-42",
+      issueTitle: "Linked later",
+    });
+  });
+
   it("drops a key no provider owns, leaving the code forge's number", async () => {
     const { result } = renderActions({ issueNumber: 42, issueKey: "ENG-42" });
 

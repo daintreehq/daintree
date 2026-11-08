@@ -391,7 +391,9 @@ vi.mock("@/lib/utils", () => ({
   cn: (...args: unknown[]) => args.filter(Boolean).join(" "),
 }));
 
-const mockNotify = vi.hoisted(() => vi.fn<(payload: { title?: string }) => void>());
+const mockNotify = vi.hoisted(() =>
+  vi.fn<(payload: { title?: string; actions?: { label: string; onClick: () => void }[] }) => void>()
+);
 vi.mock("@/lib/notify", () => ({
   notify: mockNotify,
 }));
@@ -2694,10 +2696,7 @@ describe("NewWorktreeDialog — first agent and prompt (#12796)", () => {
       branchName: "feature/test",
     });
     const retry = mockNotify.mock.calls
-      .flatMap(
-        ([payload]) =>
-          (payload as { actions?: Array<{ label: string; onClick: () => void }> }).actions ?? []
-      )
+      .flatMap(([payload]) => payload.actions ?? [])
       .find((action) => action.label === "Retry recipe");
     await act(async () => {
       retry!.onClick();

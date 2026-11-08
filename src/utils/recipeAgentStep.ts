@@ -40,7 +40,9 @@ function leadingWordIsAuthored(rawPrompt: string, context: RecipeContext): boole
     if (segment.kind === "missing") continue;
     const text = started ? segment.text : segment.text.trimStart();
     if (text === "") continue;
-    if (segment.kind === "value" || segment.kind === "variable") return false;
+    if (segment.kind === "value" || segment.kind === "variable") {
+      return started && /^\s/.test(text);
+    }
     started = true;
     if (/\s/.test(text)) return true;
   }

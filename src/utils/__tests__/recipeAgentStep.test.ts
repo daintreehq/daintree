@@ -119,6 +119,18 @@ describe("resolveRecipeAgentStep (#13797)", () => {
     }
   );
 
+  it("launches an authored option that a value only follows", () => {
+    const terminal: RecipeTerminal = { type: "claude", initialPrompt: "--help{{branch_name}}" };
+    const step = resolveRecipeAgentStep(userRecipe(terminal), terminal, "claude", {
+      branchName: " next",
+    });
+    expect(step.ok && step.initialPrompt).toBe("--help next");
+    const joined = resolveRecipeAgentStep(userRecipe(terminal), terminal, "claude", {
+      branchName: "-x",
+    });
+    expect(joined.ok).toBe(false);
+  });
+
   it("launches an authored option that an empty variable leaves in front, and a title past it", () => {
     const terminal: RecipeTerminal = { type: "claude", initialPrompt: "{{issue_title}} --help" };
     const empty = resolveRecipeAgentStep(userRecipe(terminal), terminal, "claude", {});
