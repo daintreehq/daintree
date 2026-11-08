@@ -108,7 +108,7 @@ function RelaunchNeededGroup({
                   .then(onRestarted)
               }
             >
-              Restart
+              Restart terminal
             </Button>
           }
         />
