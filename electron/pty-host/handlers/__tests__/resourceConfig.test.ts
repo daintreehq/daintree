@@ -85,7 +85,10 @@ describe("set-plugin-agent-registry (#16469)", () => {
 
   it("still installs the registry when a revocation sweep throws", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const registry = {};
+    // Non-empty: replacing an empty registry with another is a no-op.
+    const registry = {
+      pi: { id: "pi", name: "Pi", command: "pi", color: "#3366ff", iconId: "terminal" },
+    };
     const revokeUnregisteredAgents = vi.fn(() => {
       throw new Error("boom");
     });
