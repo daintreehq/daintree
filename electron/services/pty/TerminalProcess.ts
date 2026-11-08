@@ -2254,28 +2254,28 @@ export class TerminalProcess {
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
     return {
-        id: this.id,
-        terminalInfo: this.terminalInfo,
-        agentStateService: this.deps.agentStateService,
-        headlineGenerator: this.headlineGenerator,
-        semanticBufferManager: this.semanticBufferManager,
-        get forensicsBuffer() {
-          return self.forensicsBuffer;
-        },
-        get hasActivityMonitor() {
-          return self.analysis.hasMonitor();
-        },
-        reconfigureActivityMonitor: (agentId, patternConfig) =>
-          this.analysis.reconfigureMonitor(agentId, patternConfig),
-        get lastDetectedProcessIconId() {
-          return self.lastDetectedProcessIconId;
-        },
-        set lastDetectedProcessIconId(v) {
-          self.lastDetectedProcessIconId = v;
-        },
-        startActivityMonitor: () => this.startActivityMonitor(),
-        stopActivityMonitor: () => this.stopActivityMonitor(),
-        growScrollback: (lines) => this.growScrollback(lines),
+      id: this.id,
+      terminalInfo: this.terminalInfo,
+      agentStateService: this.deps.agentStateService,
+      headlineGenerator: this.headlineGenerator,
+      semanticBufferManager: this.semanticBufferManager,
+      get forensicsBuffer() {
+        return self.forensicsBuffer;
+      },
+      get hasActivityMonitor() {
+        return self.analysis.hasMonitor();
+      },
+      reconfigureActivityMonitor: (agentId, patternConfig) =>
+        this.analysis.reconfigureMonitor(agentId, patternConfig),
+      get lastDetectedProcessIconId() {
+        return self.lastDetectedProcessIconId;
+      },
+      set lastDetectedProcessIconId(v) {
+        self.lastDetectedProcessIconId = v;
+      },
+      startActivityMonitor: () => this.startActivityMonitor(),
+      stopActivityMonitor: () => this.stopActivityMonitor(),
+      growScrollback: (lines) => this.growScrollback(lines),
     };
   }
 }

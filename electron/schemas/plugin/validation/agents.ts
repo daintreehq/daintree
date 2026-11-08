@@ -156,7 +156,10 @@ export function validateAgentExecutableNames(
   manifest.contributes.agents.forEach((agent, index) => {
     agent.executableNames?.forEach((name, nameIndex) => {
       const path = ["contributes", "agents", index, "executableNames", nameIndex];
-      if (Object.hasOwn(AGENT_CLI_NAMES, name) || Object.hasOwn(PROCESS_TOOL_ICON_BY_COMMAND, name)) {
+      if (
+        Object.hasOwn(AGENT_CLI_NAMES, name) ||
+        Object.hasOwn(PROCESS_TOOL_ICON_BY_COMMAND, name)
+      ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path,

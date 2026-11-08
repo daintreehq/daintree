@@ -1621,7 +1621,9 @@ describe("TerminalProcess plugin agent typed into a plain terminal (#16469)", ()
       await vi.advanceTimersByTimeAsync(600);
 
       expect(terminal.getInfo().detectedAgentId).toBeUndefined();
-      expect(exited).toEqual([expect.objectContaining({ agentType: "pi", exitKind: "subcommand" })]);
+      expect(exited).toEqual([
+        expect.objectContaining({ agentType: "pi", exitKind: "subcommand" }),
+      ]);
     } finally {
       terminal.dispose();
     }
