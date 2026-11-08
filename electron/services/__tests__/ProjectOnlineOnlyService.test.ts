@@ -24,8 +24,11 @@ function side(files: number, directories = 0, complete = true): OnlineOnlyFilesS
 class FakeScanner implements OnlineOnlyScanner {
   passes: FakePass<never>[] = [];
   /** Kinds answered as soon as they start, for tests about what happens between walks. */
-  auto: { probe?: OnlineOnlyRootShape; git?: OnlineOnlyFilesSide; workingTree?: OnlineOnlyFilesSide } =
-    {};
+  auto: {
+    probe?: OnlineOnlyRootShape;
+    git?: OnlineOnlyFilesSide;
+    workingTree?: OnlineOnlyFilesSide;
+  } = {};
 
   private add<T>(kind: string, root: string, whenCancelled: T): OnlineOnlyPass<T> {
     let resolveResult!: (value: T) => void;

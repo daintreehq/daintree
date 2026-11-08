@@ -16,11 +16,7 @@ export type OnlineOnlyScanSide = "git" | "workingTree";
  * Only `git-directory` means a walk of `.git` can say all there is to say.
  */
 export type OnlineOnlyRootShape =
-  | "root-online-only"
-  | "git-directory"
-  | "git-pointer"
-  | "no-git"
-  | "unknown";
+  "root-online-only" | "git-directory" | "git-pointer" | "no-git" | "unknown";
 
 export interface OnlineOnlyPass<T> {
   /** Settles by the budget even if find never exits, so a stuck child can't hold up other projects. */

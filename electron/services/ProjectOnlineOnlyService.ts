@@ -67,7 +67,10 @@ const realScanner: OnlineOnlyScanner = {
 
 function sameSide(a: OnlineOnlyFilesSide | null, b: OnlineOnlyFilesSide): boolean {
   return (
-    a !== null && a.files === b.files && a.directories === b.directories && a.complete === b.complete
+    a !== null &&
+    a.files === b.files &&
+    a.directories === b.directories &&
+    a.complete === b.complete
   );
 }
 

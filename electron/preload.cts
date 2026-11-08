@@ -1998,7 +1998,9 @@ function buildElectronApi(): ElectronAPI {
       ...buildOnlineOnlyFilesPreloadBindings(_unwrappingInvoke),
 
       onChanged: (
-        callback: (files: import("../shared/types/onlineOnlyFiles.js").ProjectOnlineOnlyFiles) => void
+        callback: (
+          files: import("../shared/types/onlineOnlyFiles.js").ProjectOnlineOnlyFiles
+        ) => void
       ) => _typedOn(CHANNELS.ONLINE_ONLY_FILES_CHANGED, callback),
     },
 
