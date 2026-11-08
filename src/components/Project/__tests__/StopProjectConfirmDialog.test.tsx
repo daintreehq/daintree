@@ -70,15 +70,37 @@ describe("StopProjectConfirmDialog", () => {
     expect(text).toContain("1 waiting agent");
   });
 
-  it("shows no count lines for zero counts or missing stats", () => {
+  it("shows only the nonzero lines", () => {
     statsState.stats = { p1: { processCount: 2, activeAgentCount: 0, waitingAgentCount: 0 } };
     renderDialog("p1");
+    expect(document.body.textContent).toContain("2 terminals");
     expect(document.body.textContent).not.toContain("active agent");
     expect(document.body.textContent).not.toContain("waiting agent");
+  });
+
+  it("shows no count block when nothing runs or stats are missing", () => {
+    statsState.stats = { p1: { processCount: 0, activeAgentCount: 0, waitingAgentCount: 0 } };
+    renderDialog("p1");
+    expect(document.querySelector("[data-stop-counts]")).toBeNull();
     cleanup();
     statsState.stats = {};
     renderDialog("p1");
     expect(document.querySelector("[data-stop-counts]")).toBeNull();
+  });
+
+  it("reads counts when it opens and keeps them until it reopens", () => {
+    statsState.stats = { p1: { processCount: 1, activeAgentCount: 0, waitingAgentCount: 0 } };
+    const props = { isStopping: false, onClose: vi.fn(), onConfirm: vi.fn() };
+    const { rerender } = render(<StopProjectConfirmDialog projectId={null} {...props} />);
+    rerender(<StopProjectConfirmDialog projectId="p1" {...props} />);
+    expect(document.body.textContent).toContain("1 terminal");
+    statsState.stats = { p1: { processCount: 5, activeAgentCount: 0, waitingAgentCount: 0 } };
+    rerender(<StopProjectConfirmDialog projectId="p1" isStopping {...props} />);
+    expect(document.body.textContent).toContain("1 terminal");
+    expect(document.body.textContent).not.toContain("5 terminals");
+    rerender(<StopProjectConfirmDialog projectId={null} {...props} />);
+    rerender(<StopProjectConfirmDialog projectId="p1" {...props} />);
+    expect(document.body.textContent).toContain("5 terminals");
   });
 
   it("names every kind of terminal that ends, not just agents", () => {

@@ -12,6 +12,18 @@ interface StopProjectConfirmDialogProps {
   onConfirm: () => void | Promise<void>;
 }
 
+// Outside the component: the compiler rejects a store hook referenced as a value inside one.
+function readStopCounts(projectId: string | null | undefined) {
+  if (projectId == null) return null;
+  const entry = useProjectStatsStore.getState().stats[projectId];
+  if (!entry) return null;
+  return {
+    terminals: entry.processCount,
+    active: entry.activeAgentCount,
+    waiting: entry.waitingAgentCount,
+  };
+}
+
 /**
  * The one confirm for stopping a project's sessions. The toolbar switcher and
  * the modal palette each hold their own `useProjectSwitcherPalette`, so each
@@ -31,16 +43,7 @@ export function StopProjectConfirmDialog({
   );
 
   // Read once when the dialog opens, so the figures don't shift under the cursor.
-  const counts = useMemo(() => {
-    if (projectId == null) return null;
-    const entry = useProjectStatsStore.getState().stats[projectId];
-    if (!entry) return null;
-    return {
-      terminals: entry.processCount,
-      active: entry.activeAgentCount,
-      waiting: entry.waitingAgentCount,
-    };
-  }, [projectId]);
+  const counts = useMemo(() => readStopCounts(projectId), [projectId]);
   const hasCounts =
     counts != null && (counts.terminals > 0 || counts.active > 0 || counts.waiting > 0);
 
