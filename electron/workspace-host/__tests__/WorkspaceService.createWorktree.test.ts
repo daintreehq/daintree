@@ -131,6 +131,10 @@ vi.mock("../worktreeInclude.js", () => ({
   copyWorktreeIncludeFiles: vi.fn(),
 }));
 
+vi.mock("../worktreeClone.js", () => ({
+  cloneIgnoredDirectories: vi.fn().mockResolvedValue([]),
+}));
+
 // Default to "exists" so pre-existing tests don't exercise the parent mkdir
 // path unless they opt in by toggling the mock.
 vi.mock("fs", () => ({
@@ -556,6 +560,229 @@ describe("WorkspaceService.createWorktree", () => {
       vi.mocked(copyWorktreeIncludeFiles).mock.invocationCallOrder[0]
     );
     expect(statuses).toEqual(["copy-config"]);
+  });
+
+  it("clones cloneIgnored directories in copy-config, before submodules and setup, and keeps the result", async () => {
+    const { copyWorktreeIncludeFiles } = await import("../worktreeInclude.js");
+    const { cloneIgnoredDirectories } = await import("../worktreeClone.js");
+    const worktreePath = path.resolve("/test/worktree-clone");
+    const monitorFor = () => service["monitors"].get(worktreePath);
+    vi.spyOn(service["lifecycleService"], "loadConfig").mockResolvedValue({
+      cloneIgnored: ["node_modules", ".venv"],
+      setup: ["npm install"],
+    });
+    const stageAtClone: Array<string | undefined> = [];
+    vi.mocked(cloneIgnoredDirectories).mockImplementationOnce(async () => {
+      stageAtClone.push(monitorFor()?.setupStatus?.stage);
+      return [
+        { path: "node_modules", outcome: "cloned" },
+        {
+          path: ".venv",
+          outcome: "skipped",
+          reason: "This volume doesn't support copy-on-write clones",
+        },
+      ];
+    });
+    let clonesAtSubmodules: unknown;
+    const submodulesSpy = vi
+      .spyOn(
+        service as unknown as {
+          initWorktreeSubmodules: (...args: unknown[]) => Promise<unknown>;
+        },
+        "initWorktreeSubmodules"
+      )
+      .mockImplementation(async () => {
+        clonesAtSubmodules = monitorFor()?.setupStatus?.clones;
+        return { ok: true };
+      });
+    const setupSpy = vi
+      .spyOn(service["lifecycleService"], "runLifecycleSetup")
+      .mockResolvedValue({ shouldProvision: false, needsApproval: false });
+
+    await service.createWorktree("req-clone", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/clone",
+      path: "/test/worktree-clone",
+    });
+    await flushAsyncTail();
+
+    expect(cloneIgnoredDirectories).toHaveBeenCalledWith(
+      "/test/root",
+      worktreePath,
+      ["node_modules", ".venv"],
+      { signal: expect.any(AbortSignal) }
+    );
+    expect(stageAtClone).toEqual(["copy-config"]);
+    const cloneOrder = vi.mocked(cloneIgnoredDirectories).mock.invocationCallOrder[0];
+    expect(vi.mocked(copyWorktreeIncludeFiles).mock.invocationCallOrder[0]).toBeLessThan(
+      cloneOrder
+    );
+    expect(cloneOrder).toBeLessThan(submodulesSpy.mock.invocationCallOrder[0]);
+    expect(cloneOrder).toBeLessThan(setupSpy.mock.invocationCallOrder[0]);
+    const expectedClones = [
+      { path: "node_modules", outcome: "cloned" },
+      {
+        path: ".venv",
+        outcome: "skipped",
+        reason: "This volume doesn't support copy-on-write clones",
+      },
+    ];
+    expect(clonesAtSubmodules).toEqual(expectedClones);
+    // A skipped clone is not a setup failure, and it outlives the stage.
+    expect(monitorFor()?.setupStatus).toMatchObject({ state: "ready", clones: expectedClones });
+  });
+
+  it("does not run the clone step when the config names no directories", async () => {
+    const { cloneIgnoredDirectories } = await import("../worktreeClone.js");
+    vi.spyOn(service["lifecycleService"], "loadConfig").mockResolvedValue({
+      setup: ["npm install"],
+    });
+
+    await service.createWorktree("req-no-clone", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/no-clone",
+      path: "/test/worktree-no-clone",
+    });
+    await flushAsyncTail();
+
+    expect(cloneIgnoredDirectories).not.toHaveBeenCalled();
+    const status = service["monitors"].get(path.resolve("/test/worktree-no-clone"))?.setupStatus;
+    expect(status).toBeDefined();
+    expect(status && "clones" in status).toBe(false);
+  });
+
+  it("aborts an in-flight clone when the worktree's monitor is removed", async () => {
+    const { cloneIgnoredDirectories } = await import("../worktreeClone.js");
+    const worktreePath = path.resolve("/test/worktree-clone-removed");
+    vi.spyOn(service["lifecycleService"], "loadConfig").mockResolvedValue({
+      cloneIgnored: ["node_modules"],
+    });
+    let cloneSignal: AbortSignal | undefined;
+    let releaseClone!: () => void;
+    vi.mocked(cloneIgnoredDirectories).mockImplementationOnce(async (_src, _dest, _e, opts) => {
+      cloneSignal = opts?.signal;
+      await new Promise<void>((resolve) => {
+        releaseClone = resolve;
+      });
+      return [{ path: "node_modules", outcome: "skipped", reason: "Setup was cancelled" }];
+    });
+
+    await service.createWorktree("req-clone-removed", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/clone-removed",
+      path: "/test/worktree-clone-removed",
+    });
+    await flushAsyncTail();
+    expect(cloneSignal?.aborted).toBe(false);
+
+    service["removeMonitor"](worktreePath);
+
+    expect(cloneSignal?.aborted).toBe(true);
+    releaseClone();
+    await flushAsyncTail();
+  });
+
+  it("never starts a clone once teardown has begun, even mid config read or before the step", async () => {
+    const { copyWorktreeIncludeFiles } = await import("../worktreeInclude.js");
+    const { cloneIgnoredDirectories } = await import("../worktreeClone.js");
+    vi.spyOn(service["lifecycleService"], "runLifecycleTeardown").mockResolvedValue(undefined);
+
+    // Teardown arrives while the config naming the clones is still being read.
+    let releaseConfig!: () => void;
+    vi.spyOn(service["lifecycleService"], "loadConfig").mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        releaseConfig = resolve;
+      });
+      return { cloneIgnored: ["node_modules"] };
+    });
+    await service.createWorktree("req-clone-mid-config", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/clone-mid-config",
+      path: "/test/worktree-clone-mid-config",
+    });
+    await flushAsyncTail();
+    const midConfig = service["monitors"].get(path.resolve("/test/worktree-clone-mid-config"))!;
+    expect(releaseConfig).toBeDefined();
+    const teardown = service["runLifecycleTeardown"](midConfig.path, midConfig, false);
+    releaseConfig();
+    await teardown;
+    await flushAsyncTail();
+
+    // Teardown arrives before the tail even reaches its clone step.
+    let releaseInclude!: () => void;
+    vi.mocked(copyWorktreeIncludeFiles).mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        releaseInclude = resolve;
+      });
+      return {
+        copied: 0,
+        skippedExisting: 0,
+        skippedUnsafe: 0,
+        skippedOversized: 0,
+        skippedOverLimit: 0,
+      };
+    });
+    vi.spyOn(service["lifecycleService"], "loadConfig").mockResolvedValue({
+      cloneIgnored: ["node_modules"],
+    });
+    await service.createWorktree("req-clone-before-step", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/clone-before-step",
+      path: "/test/worktree-clone-before-step",
+    });
+    await flushAsyncTail();
+    const beforeStep = service["monitors"].get(path.resolve("/test/worktree-clone-before-step"))!;
+    await service["runLifecycleTeardown"](beforeStep.path, beforeStep, false);
+    releaseInclude();
+    await flushAsyncTail();
+    await flushAsyncTail();
+
+    expect(cloneIgnoredDirectories).not.toHaveBeenCalled();
+  });
+
+  it("holds teardown until a cancelled clone has wound down", async () => {
+    const { cloneIgnoredDirectories } = await import("../worktreeClone.js");
+    vi.spyOn(service["lifecycleService"], "runLifecycleTeardown").mockResolvedValue(undefined);
+    vi.spyOn(service["lifecycleService"], "loadConfig").mockResolvedValue({
+      cloneIgnored: ["node_modules"],
+    });
+    let windDown!: () => void;
+    vi.mocked(cloneIgnoredDirectories).mockImplementationOnce(async (_src, _dest, _e, opts) => {
+      await new Promise<void>((resolve) =>
+        opts?.signal?.addEventListener("abort", () => resolve(), { once: true })
+      );
+      // The child is killed but has not exited, and staging is not yet gone.
+      await new Promise<void>((resolve) => {
+        windDown = resolve;
+      });
+      return [{ path: "node_modules", outcome: "skipped", reason: "Setup was cancelled" }];
+    });
+
+    await service.createWorktree("req-clone-teardown", "/test/root", {
+      baseBranch: "main",
+      newBranch: "feature/clone-teardown",
+      path: "/test/worktree-clone-teardown",
+    });
+    await flushAsyncTail();
+    const monitor = service["monitors"].get(path.resolve("/test/worktree-clone-teardown"))!;
+    let tornDown = false;
+    const teardown = service["runLifecycleTeardown"](monitor.path, monitor, false).then(() => {
+      tornDown = true;
+    });
+    // A second canceller, as a retried delete would be, waits on the same run.
+    let secondDone = false;
+    const second = service["setupCoordinator"].cancelCloneRun(monitor).then(() => {
+      secondDone = true;
+    });
+    await flushAsyncTail();
+    await flushAsyncTail();
+    expect(tornDown).toBe(false);
+    expect(secondDone).toBe(false);
+
+    windDown();
+    await Promise.all([teardown, second]);
+    expect(tornDown).toBe(true);
+    expect(secondDone).toBe(true);
   });
 
   it("logs async tail failure without firing a second create-worktree-result event", async () => {

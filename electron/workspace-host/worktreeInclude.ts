@@ -34,7 +34,7 @@ export interface WorktreeIncludeOptions {
   maxFiles?: number;
 }
 
-function isInside(root: string, candidate: string): boolean {
+export function isInside(root: string, candidate: string): boolean {
   const rel = pathRelative(root, candidate);
   return rel === "" || (rel.split(sep)[0] !== ".." && !isAbsolute(rel));
 }

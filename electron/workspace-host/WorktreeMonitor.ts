@@ -1447,8 +1447,21 @@ export class WorktreeMonitor {
       this._setupStatus = undefined;
       return;
     }
+    // Clone results are written once, during `copy-config`, and every later
+    // writer (submodules, the setup script, plugin steps, a retry) builds a
+    // fresh status without them. Carried here so no writer has to know.
+    const clones = status.clones ?? this._setupStatus?.clones;
     this._setupStatus = {
       ...status,
+      ...(clones
+        ? {
+            clones: clones.map((clone) =>
+              clone.reason !== undefined
+                ? { ...clone, reason: clone.reason.slice(0, WORKTREE_SETUP_ERROR_MAX_LENGTH) }
+                : { ...clone }
+            ),
+          }
+        : {}),
       ...(status.error !== undefined
         ? { error: status.error.slice(0, WORKTREE_SETUP_ERROR_MAX_LENGTH) }
         : {}),

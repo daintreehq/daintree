@@ -27,6 +27,7 @@ import { runWithCappedStdout } from "../utils/cappedGitOutput.js";
 import { readRemotesWithStatus } from "../utils/baseCompareRef.js";
 import { createRemoteInventoryReader } from "./remoteInventory.js";
 import { copyWorktreeIncludeFiles } from "./worktreeInclude.js";
+import { cloneIgnoredDirectories } from "./worktreeClone.js";
 import { FileDiffCache } from "./fileDiffCache.js";
 import {
   classifyGitError,
@@ -41,6 +42,7 @@ import { isBinaryDiffOutput } from "../../shared/utils/gitDiffParsing.js";
 import type {
   LifecycleCommandReview,
   Worktree,
+  WorktreeSetupClone,
   WorktreeSetupStatus,
   WorktreeSetupState,
   WorktreeTeardownPreview,
@@ -1750,6 +1752,7 @@ export class WorkspaceService {
     this.resourceActionExecutor.cleanupResourceActionState(id);
     this.attachmentService.handleWorktreeRemoved(id);
     this.setupCoordinator.cancelPluginSetup(monitor);
+    void this.setupCoordinator.cancelCloneRun(monitor);
     monitor.stop();
     this.monitors.delete(id);
     this.emitGate.forget(monitor);
@@ -4324,6 +4327,23 @@ export class WorkspaceService {
         // Same stage: `WorktreeSetupStage` is part of the MCP output schema.
         // Never throws — a bad `.worktreeinclude` must not fail the setup.
         await copyWorktreeIncludeFiles(rootPath, canonicalPath);
+        // Before the setup script, so it finds `node_modules` (or whatever the
+        // project names) already there and can refresh instead of install.
+        // Never throws, and a skip does not fail setup: the script still runs.
+        const clones = await this.cloneIgnoredIntoWorktree(
+          rootPath,
+          canonicalPath,
+          canonicalWorktreeId,
+          setupGeneration
+        );
+        if (clones) {
+          setSetupStatus({
+            state: "running",
+            stage: "copy-config",
+            startedAt: setupStartedAt,
+            clones,
+          });
+        }
 
         // Awaited, and awaited HERE: the setup script below must not start
         // against an unpopulated submodule tree — the original "worktree is
@@ -4605,14 +4625,52 @@ export class WorkspaceService {
     return this.setupCoordinator.approveLifecycleCommands(worktreeId, fingerprint);
   }
 
+  /**
+   * Clone the directories the lifecycle config's `cloneIgnored` names into a
+   * new worktree, from the same config file its setup commands come from.
+   * Resolves `undefined` when the project names none (the status then carries
+   * no `clones` at all), or when the incarnation it was started for is gone.
+   */
+  private async cloneIgnoredIntoWorktree(
+    rootPath: string,
+    worktreePath: string,
+    worktreeId: string,
+    generation: number | undefined
+  ): Promise<WorktreeSetupClone[] | undefined> {
+    const monitor = this.monitors.get(worktreeId);
+    if (!monitor || monitor.generation !== generation) return undefined;
+
+    // The config read runs under the same signal as the clone, so a delete
+    // that starts while it is pending still stops the clone from starting.
+    return this.setupCoordinator.runCloneRun(monitor, async (signal) => {
+      let entries: string[] | undefined;
+      try {
+        entries = (await this.lifecycleService.loadConfig(worktreePath, rootPath))?.cloneIgnored;
+      } catch (err) {
+        logWarn("[WorkspaceHost] could not read cloneIgnored; nothing cloned", {
+          worktreePath,
+          error: formatErrorMessage(err, "config read failed"),
+        });
+        return undefined;
+      }
+      // A project switch drops monitors without cancelling, so the read can
+      // outlive the incarnation it was started for.
+      if (!entries || entries.length === 0 || signal.aborted) return undefined;
+      if (this.monitors.get(worktreeId) !== monitor) return undefined;
+      return cloneIgnoredDirectories(rootPath, worktreePath, entries, { signal });
+    });
+  }
+
   private async runLifecycleTeardown(
     worktreeId: string,
     monitor: WorktreeMonitor,
     force: boolean
   ): Promise<void> {
     // A plugin step still setting the worktree up is setting up one that is
-    // about to be gone.
+    // about to be gone. A clone would still be writing into it, so its child
+    // must have exited and its staging gone before git removes the tree.
     this.setupCoordinator.cancelPluginSetup(monitor);
+    await this.setupCoordinator.cancelCloneRun(monitor);
     // First, while the worktree's own stack is still up for its detach to talk to.
     await this.attachmentService.detachForDelete(worktreeId);
     const ctx = this.getLifecycleContext();
