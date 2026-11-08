@@ -293,8 +293,8 @@ export function mapRollupContextToCheckRun(node: RollupContextNode): CheckRun | 
 
   // Reporter identity exists only on check runs: a legacy status has no suite,
   // so it returned above with neither field, exactly as before these existed.
-  const workflowName = node.checkSuite?.workflowRun?.workflow?.name?.trim() || undefined;
-  const appName = node.checkSuite?.app?.name?.trim() || undefined;
+  const workflow = node.checkSuite?.workflowRun?.workflow?.name?.trim() || undefined;
+  const app = node.checkSuite?.app?.name?.trim() || undefined;
 
   let status: CheckRunStatus;
   if (rawConclusion) {
@@ -321,8 +321,8 @@ export function mapRollupContextToCheckRun(node: RollupContextNode): CheckRun | 
     ...(conclusion ? { conclusion } : {}),
     ...(required !== undefined ? { required } : {}),
     ...(detailsUrl ? { detailsUrl } : {}),
-    ...(workflowName ? { workflowName } : {}),
-    ...(appName ? { appName } : {}),
+    ...(workflow ? { workflow } : {}),
+    ...(app ? { app } : {}),
     rawData: node,
   };
 }

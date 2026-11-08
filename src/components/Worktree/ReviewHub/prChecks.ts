@@ -48,9 +48,9 @@ export interface PrCheckRow {
   /** Absent when the provider had no URL, or when the one it gave failed validation. */
   detailsUrl?: string;
   /** Sanitized workflow that ran the check, when the provider reported one. */
-  workflowName?: string;
+  workflow?: string;
   /** Sanitized app that reported the check, when the provider reported one. */
-  appName?: string;
+  app?: string;
   /**
    * What the row is qualified with on screen: the workflow, else the app. Set
    * only when another check in the response has the same name, since that is
@@ -255,16 +255,16 @@ export function preparePrChecks(checks: readonly ForgeCheckRun[]): PrCheckRow[] 
   const rows = checks.map((check, index) => {
     const { visual, isFailure } = getCheckOutcomeVisual(check);
     const sortKey = rank(isFailure, check);
-    const workflowName = sanitizeCheckSource(check.workflowName);
-    const appName = sanitizeCheckSource(check.appName);
+    const workflow = sanitizeCheckSource(check.workflow);
+    const app = sanitizeCheckSource(check.app);
     const row: PrCheckRow = {
       key: String(index),
       name: sanitizeCheckName(check.name),
       outcome: visual,
       required: check.required,
       detailsUrl: safeDetailsUrl(check.detailsUrl),
-      ...(workflowName ? { workflowName } : {}),
-      ...(appName ? { appName } : {}),
+      ...(workflow ? { workflow } : {}),
+      ...(app ? { app } : {}),
       isFailure,
       group: groupFor(sortKey),
     };
@@ -274,7 +274,7 @@ export function preparePrChecks(checks: readonly ForgeCheckRun[]): PrCheckRow[] 
   const nameCounts = new Map<string, number>();
   for (const { row } of rows) nameCounts.set(row.name, (nameCounts.get(row.name) ?? 0) + 1);
   for (const { row } of rows) {
-    const source = row.workflowName ?? row.appName;
+    const source = row.workflow ?? row.app;
     if (source && nameCounts.get(row.name)! > 1) row.source = source;
   }
 
@@ -403,8 +403,8 @@ export function composePrChecksAgentText({
     // hands off exactly the payload it always did.
     checks: failing.map((row) => ({
       name: row.name,
-      ...(row.workflowName ? { workflow: row.workflowName } : {}),
-      ...(row.appName ? { app: row.appName } : {}),
+      ...(row.workflow ? { workflow: row.workflow } : {}),
+      ...(row.app ? { app: row.app } : {}),
       outcome: row.outcome.label,
       required: row.required ?? null,
       detailsUrl: row.detailsUrl ?? null,

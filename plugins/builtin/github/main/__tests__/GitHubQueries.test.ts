@@ -728,11 +728,22 @@ describe("buildBatchPRsQuery", () => {
   });
 });
 
+/** The full body of the first `{ ... }` selection after `marker`, nested selections included. */
+function selectionAfter(query: string, marker: string): string {
+  const start = query.indexOf("{", query.indexOf(marker));
+  if (query.indexOf(marker) === -1 || start === -1) return "";
+  let depth = 0;
+  for (let i = start; i < query.length; i++) {
+    if (query[i] === "{") depth++;
+    else if (query[i] === "}" && --depth === 0) return query.slice(start + 1, i);
+  }
+  return "";
+}
+
 describe("PR_CI_STATUS_QUERY", () => {
   const contextsArgs = /contexts\(([^)]*)\)/.exec(PR_CI_STATUS_QUERY)?.[1] ?? "";
-  const checkRunSelection = /\.\.\. on CheckRun\s*\{([^}]*)\}/.exec(PR_CI_STATUS_QUERY)?.[1] ?? "";
-  const statusContextSelection =
-    /\.\.\. on StatusContext\s*\{([^}]*)\}/.exec(PR_CI_STATUS_QUERY)?.[1] ?? "";
+  const checkRunSelection = selectionAfter(PR_CI_STATUS_QUERY, "... on CheckRun");
+  const statusContextSelection = selectionAfter(PR_CI_STATUS_QUERY, "... on StatusContext");
 
   it("pages the contexts connection forward with a cursor", () => {
     expect(contextsArgs).toContain("first: 100");
@@ -772,6 +783,20 @@ describe("PR_CI_STATUS_QUERY", () => {
     for (const variable of used) {
       expect(declared).toContain(variable);
     }
+  });
+
+  it("selects check identity only behind a flag that defaults off", () => {
+    // `workflowRun` needs Actions read access some tokens lack, and GitHub then
+    // reports an error the client throws on. The roll-up never sends the flag,
+    // so its read keeps asking for nothing that permission gates.
+    const declared = /query GetPRCIStatus\(([^)]*)\)/.exec(PR_CI_STATUS_QUERY)?.[1] ?? "";
+    expect(declared).toMatch(/\$withIdentity:\s*Boolean!\s*=\s*false/);
+    expect(checkRunSelection).toMatch(/checkSuite\s+@include\(if:\s*\$withIdentity\)\s*\{/);
+    const suite = selectionAfter(checkRunSelection, "checkSuite");
+    expect(selectionAfter(suite, "app")).toContain("name");
+    expect(selectionAfter(selectionAfter(suite, "workflowRun"), "workflow")).toContain("name");
+    expect(PR_CI_STATUS_QUERY.match(/checkSuite/g)).toHaveLength(1);
+    expect(statusContextSelection).not.toContain("checkSuite");
   });
 
   it("keeps the cursor optional so the first page needs no argument value", () => {

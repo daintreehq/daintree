@@ -196,6 +196,18 @@ interface CheckRun {
     required?: boolean;
     /** Provider URL for this check's output or job log — the link that turns a diagnosis into a next step. */
     detailsUrl?: string;
+    /**
+     * Display name of the workflow or pipeline that ran this check (a GitHub
+     * Actions workflow), when the provider reports one. Two workflows can each
+     * own a job with the same `name`; this is what tells them apart.
+     */
+    workflow?: string;
+    /**
+     * Display name of the app or integration that reported this check (a GitHub
+     * App such as "GitHub Actions"), when the provider reports one. Absent on
+     * legacy commit statuses, which carry no reporter identity.
+     */
+    app?: string;
     rawData: unknown;
 }
 /**

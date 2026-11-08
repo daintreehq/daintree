@@ -4459,6 +4459,133 @@ describe("checks.getChecks", () => {
     expect(result?.checks.map((c) => c.name)).toEqual(["added-later"]);
     expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
   });
+
+  describe("workflow and app identity", () => {
+    const NODES_PATH = [
+      "repository",
+      "pullRequest",
+      "commits",
+      "nodes",
+      0,
+      "commit",
+      "statusCheckRollup",
+      "contexts",
+      "nodes",
+    ];
+
+    const actionsRun = (name: string, workflow: string | null) => ({
+      __typename: "CheckRun",
+      name,
+      status: "COMPLETED",
+      conclusion: "FAILURE",
+      checkSuite: {
+        app: { name: "GitHub Actions" },
+        workflowRun: workflow === null ? null : { workflow: { name: workflow } },
+      },
+    });
+
+    /** What octokit throws for a response that carried `errors` beside its `data`. */
+    function partialResponseError(data: unknown, paths: Array<unknown[] | undefined>) {
+      return Object.assign(new Error("Resource not accessible by personal access token"), {
+        name: "GraphqlResponseError",
+        data,
+        errors: paths.map((path) => ({
+          type: "FORBIDDEN",
+          message: "Resource not accessible by personal access token",
+          ...(path ? { path } : {}),
+        })),
+      });
+    }
+
+    it("asks for identity on every page of the check read and never on the roll-up", async () => {
+      mockGraphQLClient
+        .mockResolvedValueOnce(
+          checksResponse([actionsRun("build", "CI")], { hasNextPage: true, endCursor: "C1" })
+        )
+        .mockResolvedValueOnce(checksResponse([actionsRun("build", "Release")]));
+      const result = await githubForgeProvider.checks!.getChecks(repo, 40);
+      expect(result?.checks.map((c) => [c.workflow, c.app])).toEqual([
+        ["CI", "GitHub Actions"],
+        ["Release", "GitHub Actions"],
+      ]);
+      expect(mockGraphQLClient.mock.calls[0][1]).toMatchObject({ withIdentity: true });
+      expect(mockGraphQLClient.mock.calls[1][1]).toMatchObject({ withIdentity: true });
+
+      mockGraphQLClient.mockResolvedValueOnce(ciResponse());
+      await githubForgeProvider.getCIStatus(repo, 41);
+      expect(mockGraphQLClient.mock.calls[2][1]).not.toHaveProperty("withIdentity");
+    });
+
+    it("serves the whole list without workflow names when only workflowRun was withheld", async () => {
+      // A fine-grained or App token without Actions read gets every field but
+      // workflowRun. Failing the read over that would cost the user the list.
+      mockGraphQLClient
+        .mockResolvedValueOnce(
+          checksResponse([actionsRun("lint", "CI")], { hasNextPage: true, endCursor: "C1" })
+        )
+        .mockRejectedValueOnce(
+          partialResponseError(
+            checksResponse([
+              actionsRun("build", null),
+              { __typename: "StatusContext", context: "legacy", state: "SUCCESS" },
+              actionsRun("test", null),
+            ]),
+            [
+              [...NODES_PATH, 0, "checkSuite", "workflowRun"],
+              [...NODES_PATH, 2, "checkSuite", "workflowRun", "workflow"],
+            ]
+          )
+        );
+      const result = await githubForgeProvider.checks!.getChecks(repo, 42);
+      expect(result?.checks.map((c) => c.name)).toEqual(["lint", "build", "legacy", "test"]);
+      expect(result?.checks[0]).toMatchObject({ workflow: "CI" });
+      expect(result?.checks[1]).toMatchObject({ app: "GitHub Actions" });
+      expect(result?.checks[1]).not.toHaveProperty("workflow");
+      expect(result?.checks[2]).not.toHaveProperty("app");
+    });
+
+    it.each([
+      ["an error on the check suite itself", [[...NODES_PATH, 0, "checkSuite"]]],
+      ["an error on a core field", [[...NODES_PATH, 0, "isRequired"]]],
+      ["an error with no path", [undefined]],
+      [
+        "a workflowRun error alongside an unrelated one",
+        [
+          [...NODES_PATH, 0, "checkSuite", "workflowRun"],
+          ["repository", "pullRequest", "commits"],
+        ],
+      ],
+      ["a workflowRun error outside the check list", [["repository", "checkSuite", "workflowRun"]]],
+    ])("still fails on %s", async (_label, paths) => {
+      mockGraphQLClient.mockRejectedValueOnce(
+        partialResponseError(checksResponse([actionsRun("build", null)]), paths)
+      );
+      await expect(githubForgeProvider.checks!.getChecks(repo, 43)).rejects.toThrow();
+    });
+
+    it("never reads a recovered response that lost its PR or a check as a smaller answer", async () => {
+      const workflowRunError = [[...NODES_PATH, 0, "checkSuite", "workflowRun"]];
+      mockGraphQLClient.mockRejectedValueOnce(
+        partialResponseError(
+          { repository: { pullRequest: null }, rateLimit: { cost: 1, remaining: 1, resetAt: "" } },
+          workflowRunError
+        )
+      );
+      await expect(githubForgeProvider.checks!.getChecks(repo, 44)).rejects.toThrow();
+
+      mockGraphQLClient.mockRejectedValueOnce(
+        partialResponseError(checksResponse([null, actionsRun("build", "CI")]), workflowRunError)
+      );
+      await expect(githubForgeProvider.checks!.getChecks(repo, 45)).rejects.toThrow();
+    });
+
+    it("does not recover the roll-up, which never asked for workflowRun", async () => {
+      mockGraphQLClient.mockRejectedValueOnce(
+        partialResponseError(ciResponse(), [[...NODES_PATH, 0, "checkSuite", "workflowRun"]])
+      );
+      await expect(githubForgeProvider.getCIStatus(repo, 46)).rejects.toThrow();
+    });
+  });
 });
 
 describe("avatars capability (#13598)", () => {
