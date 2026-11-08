@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { GitPluginError } from "simple-git";
 import { GIT_BLOCK_TIMEOUT_MS, GIT_KILL_GRACE_MS, createHardenedGit } from "../hardenedGit.js";
-import { hasStoppedGitChild } from "../gitProcessLifecycle.js";
+import { _resetGitProcessLifecycleForTesting, hasStoppedGitChild } from "../gitProcessLifecycle.js";
 
 // A real child through the real simple-git: simple-git's own timeout and abort
 // only ever send SIGINT and then wait for `close`, so a git that ignores SIGINT
@@ -88,6 +88,7 @@ afterEach(async () => {
       await gone;
     })
   );
+  _resetGitProcessLifecycleForTesting();
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
@@ -114,9 +115,11 @@ describe.skipIf(process.platform === "win32")("git child that ignores SIGINT", (
     expect(task.settled).toBe("pending");
 
     await vi.advanceTimersByTimeAsync(1);
-    await settle(task);
-
+    // Exactly at the deadline, with the clock held there.
+    await until(() => exited(child));
     expect(child.signalCode).toBe("SIGKILL");
+
+    await settle(task);
     expect(task.settled).toBeInstanceOf(GitPluginError);
     expect((task.settled as GitPluginError).message).toBe("block timeout reached");
     expect(hasStoppedGitChild(repo)).toBe(false);
@@ -145,9 +148,10 @@ describe.skipIf(process.platform === "win32")("git child that ignores SIGINT", (
     expect(exited(child)).toBe(false);
 
     await vi.advanceTimersByTimeAsync(1);
-    await settle(task);
-
+    await until(() => exited(child));
     expect(child.signalCode).toBe("SIGKILL");
+
+    await settle(task);
     expect(task.settled).toBeInstanceOf(GitPluginError);
     expect(hasStoppedGitChild(repo)).toBe(false);
   });

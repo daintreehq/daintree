@@ -145,18 +145,15 @@ describe("superviseGitChildren", () => {
     expect(child.kill("SIGINT")).toBe(false);
   });
 
-  it.each([["exit"], ["close"]] as const)(
-    "takes `%s` alone as exit evidence",
-    (event) => {
-      const child = supervised();
-      child.kill("SIGINT");
-      child.exit("SIGINT", [event]);
+  it.each([["exit"], ["close"]] as const)("takes `%s` alone as exit evidence", (event) => {
+    const child = supervised();
+    child.kill("SIGINT");
+    child.exit("SIGINT", [event]);
 
-      expect(hasStoppedGitChild("/repo")).toBe(false);
-      vi.advanceTimersByTime(GIT_KILL_GRACE_MS);
-      expect(child.signals).toEqual(["SIGINT"]);
-    }
-  );
+    expect(hasStoppedGitChild("/repo")).toBe(false);
+    vi.advanceTimersByTime(GIT_KILL_GRACE_MS);
+    expect(child.signals).toEqual(["SIGINT"]);
+  });
 
   it("keeps a directory on record until its last stopped child exits", () => {
     const { git, spawn } = makeGit();

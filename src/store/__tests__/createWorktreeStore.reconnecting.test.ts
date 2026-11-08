@@ -1680,9 +1680,7 @@ describe("createWorktreeStore — unanswered git status", () => {
       nextV()
     );
     expect(store.getState().worktrees).not.toBe(earlierStreakMap);
-    expect(store.getState().worktrees.get("wt-1")?.gitStatusUnanswered?.since).toBe(
-      since + 60_000
-    );
+    expect(store.getState().worktrees.get("wt-1")?.gitStatusUnanswered?.since).toBe(since + 60_000);
 
     const stillRunningMap = store.getState().worktrees;
     store.getState().applyUpdate(makeSnapshot("wt-1"), nextV());
